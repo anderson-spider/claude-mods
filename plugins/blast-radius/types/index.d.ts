@@ -1,16 +1,16 @@
-/** O que o comando mudaria: uma frase, e os itens que a sustentam. */
+/** What the command would change: a sentence, and the items that support it. */
 export type BlastRadiusReport = {
-  /** O risco pelo nome: `rm -rf`, `git clean`. */
+  /** The risk by name: `rm -rf`, `git clean`. */
   title: string
   summary: string
   lines: string[]
-  /** Quantos itens existem ao todo; `lines` guarda só os primeiros. */
+  /** How many items exist in total; `lines` holds only the first ones. */
   total: number
-  /** Rodapé: os alvos como foram escritos (`Caminhos: build`) ou o tamanho da perda. */
+  /** Footer: the targets as written (`Caminhos: build`) or the size of the loss. */
   notes: string[]
 }
 
-/** O comando segurado, com o relatório desenhado acima do prompt. */
+/** The held command, with the report drawn above the prompt. */
 export type BlastRadiusHeld = {
   id: string
   command: string

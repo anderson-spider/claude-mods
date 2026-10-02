@@ -15,8 +15,8 @@ const ran = (stdout: string, exitCode = 0) => ({
   isStderrTruncated: false,
 })
 
-// O host por baixo dos testes: o que cada comando do git responde, por subcomando e por pasta.
-// /proj está na main, /work em andersonsilva/x e /detached sem branch; /empty não tem nada staged.
+// The host under the tests: what each git command answers, by subcommand and by folder.
+// /proj is on main, /work on andersonsilva/x and /detached has no branch; /empty has nothing staged.
 const answer = (argv: readonly string[], cwd = '/proj') => {
   const [, sub, second] = argv
 
@@ -85,7 +85,7 @@ const world = (on: On) => {
 
     return { value: answer(e.argv, e.init?.cwd) }
   })
-  // O que a faixa mostra quando o mod não tem nada a desenhar.
+  // What the band shows when the mod has nothing to draw.
   on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'Text', children: ['idle'] }))
   on('tool.call', { tool: 'Bash' }, (_$, e) => {
     seen.ran.push(e.command)

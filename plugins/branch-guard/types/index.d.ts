@@ -1,16 +1,16 @@
-/** O que o comando faria: uma frase, e os itens que a sustentam. */
+/** What the command would do: a sentence, and the items that support it. */
 export type BranchGuardReport = {
-  /** O comando pelo nome: `git commit`, `git push`. */
+  /** The command by name: `git commit`, `git push`. */
   title: string
   summary: string
   lines: string[]
-  /** Quantos itens existem ao todo; `lines` guarda só os primeiros. */
+  /** How many items exist in total; `lines` holds only the first ones. */
   total: number
-  /** Rodapé: o resumo do que mudou no índice. */
+  /** Footer: the summary of what changed in the index. */
   notes: string[]
 }
 
-/** O comando segurado, com o relatório desenhado acima do prompt. */
+/** The held command, with the report drawn above the prompt. */
 export type BranchGuardHeld = {
   id: string
   command: string

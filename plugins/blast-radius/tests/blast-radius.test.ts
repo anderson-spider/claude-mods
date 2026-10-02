@@ -16,11 +16,11 @@ const ran = (stdout: string, exitCode = 0) => ({
 })
 const BUILD = Array.from({ length: 9 }, (_, at) => `/proj/build/file-${at}.o`).join('\n')
 
-// O host por baixo dos testes: o que cada dry run responde, por executável e subcomando.
+// The host under the tests: what each dry run answers, by executable and subcommand.
 const answer = (argv: readonly string[], cwd = '/proj') => {
   const [tool, sub] = argv
 
-  // Onde o repositório fica: /tmp/worktree é um worktree ligado a um repositório de fora.
+  // Where the repository is: /tmp/worktree is a worktree linked to an outside repository.
   if (argv.includes('--show-toplevel')) {
     const root = cwd.replace(/^\/tmp/, '/private/tmp')
     const common = cwd.startsWith('/tmp/worktree') ? '/home/me/project/.git' : `${root}/.git`
@@ -97,7 +97,7 @@ const world = (on: On) => {
 
     return { value: answer(e.argv, e.init?.cwd) }
   })
-  // O que a faixa mostra quando o mod não tem nada a desenhar.
+  // What the band shows when the mod has nothing to draw.
   on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'Text', children: ['idle'] }))
   on('tool.call', { tool: 'Bash' }, (_$, e) => {
     seen.ran.push(e.command)

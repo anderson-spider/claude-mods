@@ -2,20 +2,20 @@ import type { FsEntry, ProcessRunInit, ProcessRunResult } from 'claude-code'
 
 import type { BlastRadiusReport } from '../types'
 
-/** Uma palavra do comando, já sem aspas, e o que o shell ainda faria com ela. */
+/** A word of the command, already unquoted, and what the shell would still do with it. */
 export type Word = {
   text: string
-  /** Tem `$`, crase ou chaves: só o shell sabe no que vira. */
+  /** Has `$`, a backtick or braces: only the shell knows what it becomes. */
   isUnknown: boolean
-  /** Tem `*`, `?` ou `[` fora de aspas. */
+  /** Has `*`, `?` or `[` outside quotes. */
   isGlob: boolean
-  /** Começa com `~` fora de aspas. */
+  /** Starts with `~` outside quotes. */
   isHome: boolean
 }
 
-export type Risk = { /** Um `cd` ilegível veio antes: `dir` não é confiável. */ isAdrift?: boolean } & (
+export type Risk = { /** An unreadable `cd` came before: `dir` is not reliable. */ isAdrift?: boolean } & (
   | { kind: 'rm'; dir: string; targets: Word[] }
-  // `isElsewhere`: um --git-dir ou --work-tree aponta o git para fora de `dir`.
+  // `isElsewhere`: a --git-dir or --work-tree points git outside `dir`.
   | { kind: 'reset'; dir: string; ref: string | undefined; isElsewhere: boolean }
   | { kind: 'clean'; dir: string; args: string[]; isElsewhere: boolean }
   | { kind: 'push'; dir: string; remote: string | undefined; refspecs: string[] }
@@ -29,12 +29,12 @@ export type Risk = { /** Um `cd` ilegível veio antes: `dir` não é confiável.
     }
 )
 
-/** O que a medição precisa do host; quem tem o `$` é o módulo de hooks, que o entrega assim. */
+/** What the measurement needs from the host; the hooks module owns `$` and hands it over this way. */
 export type Probe = {
   run: (argv: readonly string[], init: ProcessRunInit) => Promise<ProcessRunResult>
   list: (path: string) => Promise<FsEntry[]>
   home: () => Promise<string | undefined>
-  /** O caminho com todo link simbólico resolvido; `undefined` quando ele não existe. */
+  /** The path with every symlink resolved; `undefined` when it does not exist. */
   real: (path: string) => Promise<string | undefined>
 }
 
@@ -50,10 +50,10 @@ const GLOB = /[*?[]/
 const IN_HOME = /^~(\/|$)/
 const SEQUENCE = new Set(['', ';', '\n', '&&'])
 const KEYWORDS = new Set(['if', 'then', 'else', 'elif', 'fi', 'for', 'while', 'until', 'do', 'done', 'case', 'esac', 'function', '{', '}'])
-// Comandos que mudam variáveis de um jeito que o texto não mostra.
+// Commands that change variables in a way the text does not show.
 const FORGETS = new Set(['unset', 'read', 'export', 'declare', 'local', 'typeset', 'eval', 'source', '.'])
 
-// `anchor` acha a ferramenta, `after` o verbo que a segue; `status` é o dry run dela.
+// `anchor` finds the tool, `after` the verb that follows it; `status` is its dry run.
 const MIGRATIONS = [
   {
     tool: 'Django',
@@ -89,9 +89,9 @@ const MIGRATIONS = [
   },
 ]
 
-type Command = { words: Word[]; /** O separador que veio antes: `;`, `&&`, `|`, `(`… */ before: string }
+type Command = { words: Word[]; /** The separator that came before: `;`, `&&`, `|`, `(`… */ before: string }
 
-// Os comandos simples da linha, vazios inclusive, cada um com o separador que o antecede.
+// The simple commands on the line, empty ones included, each with the separator before it.
 const parse = (command: string): Command[] => {
   const commands: Command[] = [{ words: [], before: '' }]
   let text = ''
@@ -160,13 +160,13 @@ const parse = (command: string): Command[] => {
   return commands
 }
 
-/** As palavras de cada comando simples da linha; `$(…)` e scripts passam sem ser lidos. */
+/** The words of each simple command on the line; `$(…)` and scripts pass without being read. */
 export const split = (command: string): Word[][] =>
   parse(command)
     .map(one => one.words)
     .filter(words => words.length > 0)
 
-/** `path` a partir de `base`, sem `.` nem `..` no meio. */
+/** `path` from `base`, with no `.` or `..` in the middle. */
 export const resolve = (base: string, path: string): string => {
   const whole = path.startsWith('/') ? path : `${base}/${path}`
   const isAbsolute = whole.startsWith('/')
@@ -183,10 +183,10 @@ export const resolve = (base: string, path: string): string => {
   return `${isAbsolute ? '/' : ''}${parts.join('/')}` || '.'
 }
 
-// `dir` depois de um `cd to`; um destino na home fica como `~/…` até alguém saber onde ela é.
+// `dir` after a `cd to`; a destination in the home stays as `~/…` until someone knows where it is.
 const enter = (dir: string, to: string) => resolve(IN_HOME.test(to) ? '.' : dir, to)
 
-/** Onde `dir` fica de verdade: a partir da home quando começa com `~`, senão a partir de `cwd`. */
+/** Where `dir` really is: from the home when it starts with `~`, otherwise from `cwd`. */
 export const locate = (cwd: string, dir: string, home: string | undefined): string | undefined => {
   if (!IN_HOME.test(dir)) {
     return resolve(cwd, dir)
@@ -301,8 +301,8 @@ const migrate = (dir: string, env: Record<string, string>, words: readonly strin
   return undefined
 }
 
-// Troca `$NOME` e `${NOME}` pelo valor que a própria linha atribuiu; sobrando algo que
-// só o shell sabe, a palavra fica como estava.
+// Replaces `$NAME` and `${NAME}` with the value the line itself assigned; if something is left that
+// only the shell knows, the word stays as it was.
 const fill = (word: Word, values: ReadonlyMap<string, string>): Word => {
   if (!word.isUnknown) {
     return word
@@ -316,18 +316,18 @@ const fill = (word: Word, values: ReadonlyMap<string, string>): Word => {
   return /[$`{]/.test(text) ? word : { ...word, text, isUnknown: false }
 }
 
-/** Os riscos que a linha de comando carrega, na ordem; vazio para todo o resto. */
+/** The risks the command line carries, in order; empty for everything else. */
 export const classify = (command: string): Risk[] => {
   const risks: Risk[] = []
   const parsed = parse(command)
-  // Com `if`, `for` e afins não dá para saber, só pelo texto, quais atribuições rodam.
+  // With `if`, `for` and the like, the text alone cannot tell which assignments run.
   const isStraight = !parsed.some(one => KEYWORDS.has(one.words[0]?.text ?? ''))
   const values = new Map<string, string>()
   let dir = '.'
   let isAdrift = false
 
   for (const [at, one] of parsed.entries()) {
-    // Uma atribuição feita num subshell não sai dele.
+    // An assignment made in a subshell does not leave it.
     if (one.before === '(' || one.before === ')') {
       values.clear()
     }
@@ -337,7 +337,7 @@ export const classify = (command: string): Risk[] => {
     const args = argv.slice(1)
 
     if (argv.length === 0) {
-      // Só atribuições: valem daqui em diante quando o comando roda sempre e no próprio shell.
+      // Assignments only: they hold from here on when the command always runs and in the shell itself.
       const isCertain = isStraight && SEQUENCE.has(one.before) && SEQUENCE.has(parsed[at + 1]?.before ?? '')
 
       for (const word of one.words) {
@@ -361,7 +361,7 @@ export const classify = (command: string): Risk[] => {
 
     if (name === 'cd' || name === 'pushd' || name === 'popd') {
       const to = args[0]?.text ?? ''
-      // Um `~` entre aspas é um nome de pasta, e `~fulano` é a home de outra pessoa.
+      // A quoted `~` is a folder name, and `~someone` is another person's home.
       const isHomePath = args[0]?.isHome === true && IN_HOME.test(to)
       const isKnown =
         name === 'cd' && args.length === 1 && args[0]?.isUnknown === false && to !== '-' && (isHomePath || !to.startsWith('~'))
@@ -398,7 +398,7 @@ export const size = (kib: number) => {
   return kib < 1024 * 1024 ? `${(kib / 1024).toFixed(1)} MB` : `${(kib / 1024 / 1024).toFixed(1)} GB`
 }
 
-// Um dry run que não sai (comando ausente, tempo esgotado) vira "não medido", nunca um erro do hook.
+// A dry run that fails to run (command missing, timeout) becomes "not measured", never a hook error.
 const run = async (
   probe: Probe,
   argv: readonly string[],
@@ -421,7 +421,7 @@ const globToRegExp = (pattern: string) =>
       .replace(/\[!/g, '[^')}$`,
   )
 
-/** Os caminhos que o shell entregaria ao `rm` para esse alvo; `undefined` quando só ele sabe. */
+/** The paths the shell would hand to `rm` for this target; `undefined` when only it knows. */
 const expand = async (probe: Probe, target: Word, dir: string, home: string | undefined) => {
   const isHomePath = target.isHome && (target.text === '~' || target.text.startsWith('~/'))
 
@@ -451,15 +451,15 @@ const expand = async (probe: Probe, target: Word, dir: string, home: string | un
     .map(entry => `${parent === '/' ? '' : parent}/${entry.name}`)
 }
 
-// Onde tudo é descartável, e de que nível abaixo da raiz em diante: em /var/folders o
-// temporário de cada usuário é xx/<hash>/T, então só o que está dentro dele conta.
+// Where everything is disposable, and from which level below the root on: in /var/folders the
+// each user's temp directory is xx/<hash>/T, so only what is inside it counts.
 const TEMP_ROOTS = [
   { root: '/tmp', floor: 1 },
   { root: '/private/tmp', floor: 1 },
   { root: '/var/folders', floor: 4 },
   { root: '/private/var/folders', floor: 4 },
 ]
-// O temporário do próprio Claude Code guarda scratchpads e skills de todas as sessões.
+// Claude Code's own temp directory holds scratchpads and skills for all sessions.
 const SHARED = /^claude-[^/]*$/
 
 const isInTemp = (real: string) =>
@@ -469,7 +469,7 @@ const isInTemp = (real: string) =>
     return below.length >= floor && !(below.length === 1 && SHARED.test(below[0] ?? ''))
   })
 
-// Um alvo que não existe vale onde o pai dele fica de verdade.
+// A target that does not exist counts where its parent really is.
 const realOf = async (probe: Probe, path: string) => {
   const cut = path.lastIndexOf('/')
   const real = await probe.real(path)
@@ -478,8 +478,8 @@ const realOf = async (probe: Probe, path: string) => {
   return real ?? (parent === undefined ? undefined : `${parent}${path.slice(cut)}`)
 }
 
-// O repositório inteiro num temporário: a árvore de trabalho e o .git comum, que num
-// worktree ligado fica no repositório de origem e guarda os branches dele.
+// The whole repository in a temp directory: the working tree and the common .git, which in a
+// linked worktree lives in the origin repository and holds its branches.
 const isTempRepo = async (probe: Probe, dir: string) => {
   const asked = await run(probe, ['git', 'rev-parse', '--path-format=absolute', '--show-toplevel', '--git-common-dir'], dir)
   const places = asked?.exitCode === 0 ? rows(asked.stdout) : []
@@ -496,8 +496,8 @@ const isTempRepo = async (probe: Probe, dir: string) => {
 }
 
 /**
- * Um risco que só toca um temporário do sistema: um `rm -rf` cujos alvos, com os links
- * resolvidos, ficam todos lá, ou um `git reset --hard` / `git clean` num repositório de lá.
+ * A risk that only touches a system temp directory: an `rm -rf` whose targets, with links
+ * resolved, are all there, or a `git reset --hard` / `git clean` in a repository there.
  */
 export const isDisposable = async (probe: Probe, risk: Risk, cwd: string): Promise<boolean> => {
   const home = await probe.home()
@@ -518,7 +518,7 @@ export const isDisposable = async (probe: Probe, risk: Risk, cwd: string): Promi
   for (const target of risk.targets) {
     for (const path of (await expand(probe, target, dir, home)) ?? [undefined]) {
       const real = path === undefined ? undefined : await realOf(probe, path)
-      // Um glob direto na raiz do temporário (`/tmp/*`) é a raiz com outro nome.
+      // A glob directly in the temp root (`/tmp/*`) is the root by another name.
       const scope = target.isGlob ? real?.slice(0, real.lastIndexOf('/')) : real
 
       if (real === undefined || scope === undefined || !isInTemp(real) || !isInTemp(scope)) {
@@ -545,7 +545,7 @@ const measureRm = async (probe: Probe, risk: Risk & { kind: 'rm' }, dir: string)
     }
   }
 
-  // A raiz, um diretório de primeiro nível ou a home: o find não termina a tempo.
+  // The root, a top-level directory or the home: find does not finish in time.
   const isHuge = (path: string) => depth(path) < 2 || path === home
   const measured = paths.filter(path => !isHuge(path))
   notes.push(...paths.filter(isHuge).map(path => `${path}: grande demais para medir`))
@@ -701,7 +701,7 @@ const measureOne = (probe: Probe, risk: Risk, dir: string): Promise<Part> => {
   }
 }
 
-// O nome do risco no título do painel e a linha de rodapé com o alvo dele.
+// The risk name in the panel title and the footer line with its target.
 const describe = (risk: Risk): { title: string; note: string | undefined } => {
   switch (risk.kind) {
     case 'rm':
@@ -717,7 +717,7 @@ const describe = (risk: Risk): { title: string; note: string | undefined } => {
   }
 }
 
-/** O que os riscos mudariam, medido com os dry runs das próprias ferramentas. */
+/** What the risks would change, measured with the tools' own dry runs. */
 export const measure = async (
   probe: Probe,
   risks: readonly Risk[],
@@ -727,7 +727,7 @@ export const measure = async (
   const home = await probe.home()
 
   for (const risk of risks) {
-    // Sem home conhecida, o caminho com `~` segue como está e a medição diz que não achou nada.
+    // Without a known home, the path with `~` stays as is and the measurement says it found nothing.
     parts.push(await measureOne(probe, risk, locate(cwd, risk.dir, home) ?? resolve(cwd, risk.dir)))
   }
 
