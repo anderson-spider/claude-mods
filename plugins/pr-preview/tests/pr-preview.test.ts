@@ -129,6 +129,16 @@ test('classify reads the options of each platform, including -d and -b that mean
   expect(first('gh pr create -tfeat:x').title?.text).toBe('feat:x')
 })
 
+test('classify holds gh pr edit and glab mr update, and reads their options', () => {
+  expect(first('gh pr edit 12 --title "feat: x"')).toMatchObject({ platform: 'github', action: 'edit', name: 'gh pr edit' })
+  expect(first('glab-work mr update 3 -t "feat: x"')).toMatchObject({ platform: 'gitlab', action: 'edit', name: 'glab-work mr update' })
+  expect(first('gh pr create -t x').action).toBe('create')
+  expect(first('glab mr new -t x').action).toBe('create')
+  expect(classify('gh pr view 1 && glab mr view 3 && glab mr merge 3')).toEqual([])
+  expect(first('gh pr edit 12 -b "body" --add-label bug').description?.text).toBe('body')
+  expect(first('glab mr update 3 -d "body" -l bug').description?.text).toBe('body')
+})
+
 test('classify follows cd', () => {
   expect(first('cd sub && gh pr create -t x').dir).toBe('sub')
   expect(first('cd "$X" && gh pr create -t x').isAdrift).toBe(true)
@@ -177,6 +187,42 @@ test('check flags the title, the description, the assignee, the label and any me
   expect(problems('gh pr create --body "' + GOOD_EN + '"')).toEqual(['There is no title.'])
   expect(problems(`${GITLAB} --description "${GOOD_PT}\n\nCo-Authored-By: Claude"`)).toEqual(['The text mentions AI.'])
   expect(problems(`${GITLAB} --title "feat: add AI support" --description "${GOOD_PT}"`)).toEqual(['The text mentions AI.'])
+})
+
+test('check on an edit flags only what it is given: title, description and any mention of AI', () => {
+  expect(problems('gh pr edit 12 --add-label bug')).toEqual([])
+  expect(problems('glab mr update 3 --draft')).toEqual([])
+  expect(problems('gh pr edit 12 --title "Add it"')).toEqual(['The title is not Conventional Commits: "Add it".'])
+  expect(problems('gh pr edit 12 --title "feat: adiciona o plugin novo"')).toEqual(['The title is not in English.'])
+  expect(problems(`gh pr edit 12 --body "${GOOD_PT}"`)).toEqual([
+    'The description looks like Brazilian Portuguese, and GitHub asks for English.',
+  ])
+  expect(problems(`glab mr update 3 --description "${GOOD_EN}"`)).toEqual([
+    'The description looks like English, and GitLab asks for Brazilian Portuguese.',
+  ])
+  expect(problems('gh pr edit 12 --title "feat: x" --body "Generated with Claude Code"')).toEqual(['The text mentions AI.'])
+})
+
+test('measure previews an edit with only what it changes', async () => {
+  const calls: string[] = []
+  const { report } = await measure(probe(calls), classify('gh pr edit 12 --title "feat: x" --body-file body.md --base main'), '/proj')
+
+  expect(report.title).toBe('gh pr edit')
+  expect(report.summary).toBe('edit a pull request on GitHub')
+  expect(report.lines[0]).toBe('Title     feat: x')
+  expect(report.lines).toContain('Base      main')
+  expect(report.lines).toContain(GOOD_EN)
+  expect(calls.some(call => call.startsWith('git'))).toBe(false)
+
+  const gitlab = await measure(probe(), classify('glab mr update 3 --label bug'), '/proj')
+
+  expect(gitlab.report.summary).toBe('update a merge request on GitLab')
+  expect(gitlab.report.lines).toEqual(['Labels    bug'])
+
+  const bare = await measure(probe(), classify('gh pr edit 12 --add-reviewer someone'), '/proj')
+
+  expect(bare.report.lines).toEqual(['No title or description change'])
+  expect(gitlab.report.problems).toEqual([])
 })
 
 test('check trusts what only the shell knows, and --fill takes the text from the commits', () => {
@@ -231,7 +277,7 @@ test('measure tells what it could not read and how many creations it left out', 
 
   expect(report.lines[0]).toMatch(/not readable/)
   expect(report.lines.at(-1)).toMatch(/Description not readable/)
-  expect(report.notes).toEqual(['1 other creation on this line is not previewed.'])
+  expect(report.notes).toEqual(['1 other command on this line is not previewed.'])
 })
 
 test('a command that is not a pull request or merge request creation runs untouched', async ($, on) => {

@@ -8,7 +8,7 @@ Marketplace of [Claude Code](https://claude.com/claude-code) plugins made by and
 | --- | --- |
 | [blast-radius](plugins/blast-radius) | Holds a risky Bash command and shows what it would change before it runs. |
 | [branch-guard](plugins/branch-guard) | Holds a `git commit` or `git push` on the protected branch and shows what would go in. |
-| [pr-preview](plugins/pr-preview) | Holds a `gh pr create` or `glab mr create`, previews the title and description and flags what breaks the conventions. |
+| [pr-preview](plugins/pr-preview) | Holds a `gh pr create`, `gh pr edit`, `glab mr create` or `glab mr update`, previews the title and description and flags what breaks the conventions. |
 | [tailscale](plugins/tailscale) | Lets Claude query and modify your tailnet through the Tailscale API. |
 
 ## Install
@@ -57,7 +57,9 @@ Limitations: the plugin reads the command text, so `merge`, `cherry-pick`, `reba
 
 ## pr-preview
 
-When Claude calls Bash with `gh pr create` or `glab mr create` (also `glab-work`, `glab-personal` and other `glab-*` wrappers), PR Preview holds the call and shows in the band above the prompt what would be opened: the title, the branches, the assignee, the labels and the start of the description, with `Proceed` (key `1`), `Fix` (key `2`, only when something is wrong) and `Cancel` (key `3`). On `Fix`, Claude gets the list of problems with what to change and reruns the command; on `Cancel`, it gets the refusal.
+When Claude calls Bash with `gh pr create`, `gh pr edit`, `glab mr create` or `glab mr update` (also `glab-work`, `glab-personal` and other `glab-*` wrappers), PR Preview holds the call and shows in the band above the prompt what would be opened or changed: the title, the branches, the assignee, the labels and the start of the description, with `Proceed` (key `1`), `Fix` (key `2`, only when something is wrong) and `Cancel` (key `3`). On `Fix`, Claude gets the list of problems with what to change and reruns the command; on `Cancel`, it gets the refusal.
+
+An edit (`gh pr edit`, `glab mr update`) only changes what it is given, so the title, the description and any mention of AI are checked when present, and a missing title, description, assignee or label is not a problem.
 
 It flags what breaks these conventions, in red under the preview:
 
@@ -71,7 +73,7 @@ It flags what breaks these conventions, in red under the preview:
 
 The conventions live in `RULES` and the regexes of `hooks/guard.ts`. The description is read from `--body`/`--description`, from a `"$(cat <<'EOF' … EOF)"` heredoc or, for `--body-file`, with `cat`; with `--fill` the title and description come from the commits and are not checked. The language is guessed from common words and stays silent when the text says too little.
 
-Limitations: the plugin reads the command text, so aliases, `bash -c "gh pr create"` and a title or description that only the shell expands (`$VAR`) are previewed as "not readable" and not checked; only the first creation on a line is previewed; it only sees what Claude types, not your terminal.
+Limitations: the plugin reads the command text, so aliases, `bash -c "gh pr create"` and a title or description that only the shell expands (`$VAR`) are previewed as "not readable" and not checked; only the first command on a line is previewed; it only sees what Claude types, not your terminal.
 
 ## tailscale
 
