@@ -60,4 +60,4 @@ When a plugin's behavior changes, update `version` in its `plugin.json`.
 
 ## Pull requests
 
-Titles follow Conventional Commits in English, and descriptions are written in English.
+Titles follow Conventional Commits in English, and descriptions are written in English. `.github/pull_request_template.md` holds the default description template.
