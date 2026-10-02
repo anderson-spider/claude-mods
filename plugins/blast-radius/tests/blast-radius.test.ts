@@ -196,8 +196,8 @@ test('measure reports what each risk would change, from the tools own dry runs',
 
   expect(await report('rm -rf build')).toEqual({
     title: 'rm -rf',
-    notes: ['Caminhos: build'],
-    summary: 'apagar 9 arquivos (1.1 MB)',
+    notes: ['Paths: build'],
+    summary: 'delete 9 files (1.1 MB)',
     lines: Array.from({ length: 9 }, (_, at) => `build/file-${at}.o`),
     total: 9,
   })
@@ -212,25 +212,25 @@ test('measure reports what each risk would change, from the tools own dry runs',
   await report('cd logs && rm -rf *.log')
   expect(calls[0]).toBe('find /proj/logs/a.log ! -type d')
 
-  expect((await report('rm -rf / "$DIR"')).summary).toBe('apagar recursivamente alvos que não consegui medir')
+  expect((await report('rm -rf / "$DIR"')).summary).toBe('recursively delete targets I could not measure')
   expect((await report('git reset --hard HEAD~2')).summary).toBe(
-    'descartar alterações não commitadas em 2 arquivos e tirar 2 commits do branch',
+    'discard uncommitted changes in 2 files and drop 2 commits from the branch',
   )
   expect(await report('git clean -fd')).toEqual({
     title: 'git clean',
     notes: [],
-    summary: 'apagar 2 itens não rastreados',
+    summary: 'delete 2 untracked items',
     lines: ['dist/', 'tmp.log'],
     total: 2,
   })
 
   calls.length = 0
-  expect((await report('git push --force')).summary).toBe('sobrescrever 2 commits de origin/main')
+  expect((await report('git push --force')).summary).toBe('overwrite 2 commits from origin/main')
   expect(calls.at(-1)).toBe('git log --oneline HEAD..origin/main')
   expect(await report('python manage.py migrate')).toEqual({
-    title: 'migração Django',
+    title: 'Django migration',
     notes: [],
-    summary: 'aplicar 2 migrações no banco (Django)',
+    summary: 'apply 2 migrations to the database (Django)',
     lines: ['shop.0002_prices', 'shop.0003_stock'],
     total: 2,
   })
@@ -325,20 +325,20 @@ test('the band holds a risky command: Cancel refuses it, Proceed runs it', async
     await pause(50)
     const ui = await $.ui.mount({ ...BAND, surface })
     expect(await ui.find({ type: 'Text', text: '⚠ Blast Radius · rm -rf' })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: 'apagar 9 arquivos (1.1 MB)' })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: 'Caminhos: build' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'delete 9 files (1.1 MB)' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'Paths: build' })).toBeDefined()
     expect(await ui.findAll({ type: 'Button' })).toHaveLength(2)
     await ui.press({ key: 'cancel' })
 
-    expect((await refused).deny).toMatch(/pressionou Cancelar\. Ele iria apagar 9 arquivos \(1\.1 MB\)\./)
+    expect((await refused).deny).toMatch(/pressed Cancel\. It would delete 9 files \(1\.1 MB\)\./)
     expect(seen.ran).toEqual([])
     expect(await ui.findAll({ type: 'Button' })).toHaveLength(0)
 
     const allowed = $.tool.call({ tool: 'Bash', command: 'git reset --hard' })
     await pause(50)
-    expect(await ui.find({ type: 'Text', text: 'descartar alterações não commitadas em 2 arquivos' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'discard uncommitted changes in 2 files' })).toBeDefined()
     expect(
-      await ui.find({ text: '2 files changed, 2 insertions(+), 1 deletion(-). Alterações não commitadas' }),
+      await ui.find({ text: '2 files changed, 2 insertions(+), 1 deletion(-). Uncommitted changes' }),
     ).toBeDefined()
     await ui.press({ key: 'proceed' })
 

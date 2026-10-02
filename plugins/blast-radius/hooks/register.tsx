@@ -12,7 +12,7 @@ type Slot = { id: string; decision: Decision | null }
 const TITLE = 'Blast Radius'
 // Waiting inside a `$` call does not use up the hook's time; `$.clock.sleep` would.
 const POLL = ['sleep', '0.25']
-// Border, title, Comando, Iria, the two blank lines, the footer, the 'e mais N' and the buttons.
+// Border, title, Command, Would, the two blank lines, the footer, the 'and N more' and the buttons.
 const CHROME_ROWS = 10
 const MAX_LINES = 8
 
@@ -87,13 +87,13 @@ const draw = ({ Box, Text, Button }: Kit, now: BlastRadiusHeld, room: number): R
         ⚠ {TITLE} · {report.title}
       </Text>
       <Box>
-        <Text dimColor>{'Comando  '}</Text>
+        <Text dimColor>{'Command  '}</Text>
         <Text bold wrap="truncate-end">
           {now.command}
         </Text>
       </Box>
       <Box>
-        <Text dimColor>{'Iria     '}</Text>
+        <Text dimColor>{'Would    '}</Text>
         <Text bold color="error">
           {report.summary}
         </Text>
@@ -102,7 +102,7 @@ const draw = ({ Box, Text, Button }: Kit, now: BlastRadiusHeld, room: number): R
         {shown.map(line => (
           <Text wrap="truncate-end">{line}</Text>
         ))}
-        {hidden > 0 && <Text dimColor>{`… e mais ${hidden}`}</Text>}
+        {hidden > 0 && <Text dimColor>{`… and ${hidden} more`}</Text>}
       </Box>
       {report.notes.map(note => (
         <Text dimColor italic wrap="truncate-end">
@@ -110,9 +110,9 @@ const draw = ({ Box, Text, Button }: Kit, now: BlastRadiusHeld, room: number): R
         </Text>
       ))}
       <Box marginTop={1} gap={2}>
-        <Button key="proceed" label="Prosseguir" hotkey="1" plain onPress={() => decide('proceed')} />
-        <Button key="cancel" label="Cancelar" hotkey="2" plain autoFocus onPress={() => decide('cancel')} />
-        <Text dimColor>Claude aguarda sua resposta</Text>
+        <Button key="proceed" label="Proceed" hotkey="1" plain onPress={() => decide('proceed')} />
+        <Button key="cancel" label="Cancel" hotkey="2" plain autoFocus onPress={() => decide('cancel')} />
+        <Text dimColor>Claude is waiting for your answer</Text>
       </Box>
     </Box>
   )
@@ -163,8 +163,8 @@ export const register: Register = on => {
     return {
       deny:
         outcome === 'cancel'
-          ? `Blast Radius segurou este comando: a pessoa pressionou Cancelar. Ele iria ${report.summary}.`
-          : `Blast Radius segurou este comando e a espera foi interrompida antes de uma decisão. Ele iria ${report.summary}.`,
+          ? `Blast Radius held this command: the person pressed Cancel. It would ${report.summary}.`
+          : `Blast Radius held this command and the wait was interrupted before a decision. It would ${report.summary}.`,
     }
   })
 

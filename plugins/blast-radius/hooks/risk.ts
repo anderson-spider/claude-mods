@@ -539,7 +539,7 @@ const measureRm = async (probe: Probe, risk: Risk & { kind: 'rm' }, dir: string)
     const found = await expand(probe, target, dir, home)
 
     if (found === undefined) {
-      notes.push(`${target.text}: não medido (só o shell sabe o que é)`)
+      notes.push(`${target.text}: not measured (only the shell knows what it is)`)
     } else {
       paths.push(...found)
     }
@@ -548,11 +548,11 @@ const measureRm = async (probe: Probe, risk: Risk & { kind: 'rm' }, dir: string)
   // The root, a top-level directory or the home: find does not finish in time.
   const isHuge = (path: string) => depth(path) < 2 || path === home
   const measured = paths.filter(path => !isHuge(path))
-  notes.push(...paths.filter(isHuge).map(path => `${path}: grande demais para medir`))
+  notes.push(...paths.filter(isHuge).map(path => `${path}: too large to measure`))
 
   if (measured.length === 0) {
     return {
-      summary: notes.length > 0 ? 'apagar recursivamente alvos que não consegui medir' : 'apagar nada: sem alvos',
+      summary: notes.length > 0 ? 'recursively delete targets I could not measure' : 'delete nothing: no targets',
       lines: notes,
     }
   }
@@ -561,19 +561,19 @@ const measureRm = async (probe: Probe, risk: Risk & { kind: 'rm' }, dir: string)
   const sized = await run(probe, ['du', '-skc', ...measured], dir)
 
   if (found === undefined) {
-    return { summary: 'apagar recursivamente alvos que não consegui medir (o find falhou ou demorou demais)', lines: [...measured, ...notes] }
+    return { summary: 'recursively delete targets I could not measure (find failed or took too long)', lines: [...measured, ...notes] }
   }
 
   const files = rows(found.stdout).map(path => (path.startsWith(`${dir}/`) ? path.slice(dir.length + 1) : path))
   const kib = Number(rows(sized?.stdout ?? '').at(-1)?.split(/\s+/)[0] ?? 0) || 0
-  const many = `${found.isStdoutTruncated ? 'mais de ' : ''}${count(files.length, 'arquivo')}`
-  const unmeasured = notes.length > 0 ? `, mais ${count(notes.length, 'alvo')} que não medi` : ''
+  const many = `${found.isStdoutTruncated ? 'more than ' : ''}${count(files.length, 'file')}`
+  const unmeasured = notes.length > 0 ? `, plus ${count(notes.length, 'target')} I did not measure` : ''
 
   return {
     summary:
       files.length === 0
-        ? `apagar nada: os alvos não existem ou estão vazios${unmeasured}`
-        : `apagar ${many} (${size(kib)})${unmeasured}`,
+        ? `delete nothing: the targets do not exist or are empty${unmeasured}`
+        : `delete ${many} (${size(kib)})${unmeasured}`,
     lines: [...notes, ...files],
   }
 }
@@ -582,23 +582,23 @@ const measureReset = async (probe: Probe, risk: Risk & { kind: 'reset' }, dir: s
   const status = await run(probe, ['git', 'status', '--porcelain'], dir)
 
   if (status === undefined || status.exitCode !== 0) {
-    return { summary: 'descartar as alterações locais (não consegui ler o git status)', lines: [] }
+    return { summary: 'discard local changes (could not read git status)', lines: [] }
   }
 
   const changed = rows(status.stdout).filter(line => !line.startsWith('??'))
   const log = risk.ref === undefined ? undefined : await run(probe, ['git', 'log', '--oneline', `${risk.ref}..HEAD`], dir)
   const commits = rows(log?.stdout ?? '')
-  const dropped = commits.length > 0 ? ` e tirar ${count(commits.length, 'commit')} do branch` : ''
+  const dropped = commits.length > 0 ? ` and drop ${count(commits.length, 'commit')} from the branch` : ''
   const stat = (await run(probe, ['git', 'diff', '--shortstat', 'HEAD'], dir))?.stdout.trim() ?? ''
 
   return {
     summary:
       changed.length === 0 && commits.length === 0
-        ? 'descartar nada: a árvore está limpa'
-        : `descartar alterações não commitadas em ${count(changed.length, 'arquivo')}${dropped}`,
+        ? 'discard nothing: the working tree is clean'
+        : `discard uncommitted changes in ${count(changed.length, 'file')}${dropped}`,
     lines: [...changed, ...commits],
     ...(changed.length > 0 && {
-      note: `${stat === '' ? '' : `${stat}. `}Alterações não commitadas não podem ser recuperadas.`,
+      note: `${stat === '' ? '' : `${stat}. `}Uncommitted changes cannot be recovered.`,
     }),
   }
 }
@@ -607,13 +607,13 @@ const measureClean = async (probe: Probe, risk: Risk & { kind: 'clean' }, dir: s
   const dry = await run(probe, ['git', ...risk.args], dir)
 
   if (dry === undefined || dry.exitCode !== 0) {
-    return { summary: 'apagar arquivos não rastreados (o git clean -n falhou)', lines: rows(dry?.stderr ?? '') }
+    return { summary: 'delete untracked files (git clean -n failed)', lines: rows(dry?.stderr ?? '') }
   }
 
   const removed = rows(dry.stdout).map(line => line.replace(/^Would remove /, ''))
 
   return {
-    summary: `apagar ${count(removed.length, 'item não rastreado', 'itens não rastreados')}`,
+    summary: `delete ${count(removed.length, 'untracked item')}`,
     lines: removed,
   }
 }
@@ -642,7 +642,7 @@ const measurePush = async (probe: Probe, risk: Risk & { kind: 'push' }, dir: str
     const log = await output('log', '--oneline', `${pair.local}..${pair.remote}`)
 
     if (log === undefined) {
-      notes.push(`${pair.remote}: ref desconhecida aqui, nada a comparar`)
+      notes.push(`${pair.remote}: ref unknown here, nothing to compare`)
     } else {
       lost.push(...rows(log))
     }
@@ -653,8 +653,8 @@ const measurePush = async (probe: Probe, risk: Risk & { kind: 'push' }, dir: str
   return {
     summary:
       lost.length > 0
-        ? `sobrescrever ${count(lost.length, 'commit')} de ${names}`
-        : `forçar o push para ${names} sem perder commit conhecido (comparado sem fetch)`,
+        ? `overwrite ${count(lost.length, 'commit')} from ${names}`
+        : `force-push to ${names} without losing any known commit (compared without fetching)`,
     lines: [...notes, ...lost],
   }
 }
@@ -664,7 +664,7 @@ const measureMigrate = async (probe: Probe, risk: Risk & { kind: 'migrate' }, di
 
   if (ran === undefined || ran.exitCode !== 0) {
     return {
-      summary: `aplicar migrações de banco (${risk.tool}; não consegui ler o estado)`,
+      summary: `apply database migrations (${risk.tool}; could not read the state)`,
       lines: rows(ran?.stderr ?? '').slice(-3),
     }
   }
@@ -672,7 +672,7 @@ const measureMigrate = async (probe: Probe, risk: Risk & { kind: 'migrate' }, di
   const { pending } = risk
 
   if (pending === undefined) {
-    return { summary: `aplicar migrações de banco (${risk.tool}); o estado atual está abaixo`, lines: rows(ran.stdout) }
+    return { summary: `apply database migrations (${risk.tool}); the current state is below`, lines: rows(ran.stdout) }
   }
 
   const names = rows(ran.stdout).flatMap(line => pending.exec(line)?.[1] ?? [])
@@ -680,8 +680,8 @@ const measureMigrate = async (probe: Probe, risk: Risk & { kind: 'migrate' }, di
   return {
     summary:
       names.length === 0
-        ? `aplicar nenhuma migração: nada pendente (${risk.tool})`
-        : `aplicar ${count(names.length, 'migração', 'migrações')} no banco (${risk.tool})`,
+        ? `apply no migrations: nothing pending (${risk.tool})`
+        : `apply ${count(names.length, 'migration')} to the database (${risk.tool})`,
     lines: names,
   }
 }
@@ -705,15 +705,15 @@ const measureOne = (probe: Probe, risk: Risk, dir: string): Promise<Part> => {
 const describe = (risk: Risk): { title: string; note: string | undefined } => {
   switch (risk.kind) {
     case 'rm':
-      return { title: 'rm -rf', note: `Caminhos: ${risk.targets.map(target => target.text).join(' ')}` }
+      return { title: 'rm -rf', note: `Paths: ${risk.targets.map(target => target.text).join(' ')}` }
     case 'reset':
       return { title: 'git reset --hard', note: undefined }
     case 'clean':
       return { title: 'git clean', note: undefined }
     case 'push':
-      return { title: 'git push --force', note: risk.remote === undefined ? undefined : `Remoto: ${risk.remote}` }
+      return { title: 'git push --force', note: risk.remote === undefined ? undefined : `Remote: ${risk.remote}` }
     case 'migrate':
-      return { title: `migração ${risk.tool}`, note: undefined }
+      return { title: `${risk.tool} migration`, note: undefined }
   }
 }
 

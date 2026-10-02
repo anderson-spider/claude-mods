@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Claude Code plugin marketplace (`anderson-spider/spider-marketplace`). It currently has three plugins: `blast-radius` (holds destructive commands), `branch-guard` (holds commit and push on the protected branch) and `tailscale` (tools to query and modify the tailnet). The README and other documentation are in English; code comments are in English, while user-facing messages stay in Brazilian Portuguese. Pull request titles and descriptions are in English.
+Claude Code plugin marketplace (`anderson-spider/spider-marketplace`). It currently has three plugins: `blast-radius` (holds destructive commands), `branch-guard` (holds commit and push on the protected branch) and `tailscale` (tools to query and modify the tailnet). The README and other documentation are in English; code comments and user-facing messages are in English too. Pull request titles and descriptions are in English.
 
 ## Structure
 
@@ -34,7 +34,8 @@ Details that only make sense when reading both sides:
 - The decision travels through the module variable `waiting`, not through state: reads of `$.state` in a dispatch see a single moment. The state holds only what the band draws.
 - The wait uses `$.process.run(['sleep', '0.25'])` and not `$.clock.sleep`, so it does not use up the hook's time. Only one call is held at a time.
 - `hold()` never rejects: an error becomes `'aborted'` and denies the command.
-- `CHROME_ROWS` in `register.tsx` must follow the band's fixed rows when the layout changes.
+- `CHROME_ROWS` in `register.tsx` must follow the band's fixed rows when the layout changes (border, title, `Command`, `Would`, the two blank lines, the footer, the `… and N more` line and the buttons).
+- The band's strings are in English: labels `Command` and `Would`, buttons `Proceed` (key 1) and `Cancel` (key 2), overflow `… and N more`, and summaries such as `delete 9 files (1.1 MB)`. The tests assert on them, so change both together.
 - It is a safety net that reads text, not a permission system (`$(…)`, aliases and scripts get through).
 
 ## branch-guard

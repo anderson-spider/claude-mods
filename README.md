@@ -31,11 +31,11 @@ The plugins here are function hooks mods, a Claude Code API still in early acces
 
 ## blast-radius
 
-When Claude calls Bash with a destructive command, Blast Radius holds the call, measures what it would change using the tools' own dry runs, and shows the report in a band above the prompt, with `1: Prosseguir` (proceed) and `2: Cancelar` (cancel). On cancel, Claude gets the refusal along with a summary of what the command would do.
+When Claude calls Bash with a destructive command, Blast Radius holds the call, measures what it would change using the tools' own dry runs, and shows the report in a band above the prompt: a `Command` row, a `Would` row with the summary (e.g. "delete 9 files (1.1 MB)"), the affected items (`… and N more` when the list is cut), and the `Proceed` (key `1`) and `Cancel` (key `2`) buttons. On cancel, Claude gets the refusal along with a summary of what the command would do.
 
 | Command | How it is measured |
 | --- | --- |
-| `rm -r`, `rm -rf` | `find` and `du` on the targets: "apagar 9 arquivos (1.1 MB)" |
+| `rm -r`, `rm -rf` | `find` and `du` on the targets: "delete 9 files (1.1 MB)" |
 | `git reset --hard` | `git status --porcelain`, `git diff --shortstat` and `git log <ref>..HEAD` |
 | `git clean -f` | `git clean -n` with the same flags |
 | force push (`-f`, `--force`, `--force-with-lease`, `+ref`) | `git log HEAD..<remote>/<branch>`, without a fetch |
@@ -47,7 +47,7 @@ It is a safety net, not a permission system: the plugin reads the command text, 
 
 ## branch-guard
 
-When Claude calls Bash with `git commit` or `git push` and the target branch is `main`, `master`, `develop`, `release` or `release/*` (also `release-*` and `release_*`), Branch Guard holds the call and shows in the band above the prompt what would go in: the commit's files or the commits that would be pushed, with `1: Prosseguir` (proceed) and `2: Cancelar` (cancel). On cancel, Claude gets the refusal with guidance to open a working branch (`git switch -c`) and redo the command there, or to open a PR when the push is `HEAD:<protected>` from another branch.
+When Claude calls Bash with `git commit` or `git push` and the target branch is `main`, `master`, `develop`, `release` or `release/*` (also `release-*` and `release_*`), Branch Guard holds the call and shows in the band above the prompt what would go in: the commit's files or the commits that would be pushed, in the same band layout (`Command`, `Would`, `… and N more`, `Proceed` on key `1`, `Cancel` on key `2`). On cancel, Claude gets the refusal with guidance to open a working branch (`git switch -c`) and redo the command there, or to open a PR when the push is `HEAD:<protected>` from another branch.
 
 Passes without asking: commits and pushes on other branches, on a detached HEAD, in a repository inside `/tmp`, `git commit --dry-run`, `git push --dry-run`, tag-only pushes and commits with nothing staged. Force push is not handled here: it belongs to blast-radius. To turn the warning off, disable only this plugin.
 
