@@ -17,10 +17,14 @@ export type Word = {
 
 export type Platform = 'github' | 'gitlab'
 
-/** A `gh pr create` or `glab mr create` on the command line, with the options the checks need. */
+/** `create` opens a pull or merge request; `edit` is `gh pr edit` or `glab mr update`, which only changes what it is given. */
+export type Action = 'create' | 'edit'
+
+/** A `gh pr create`, `gh pr edit`, `glab mr create` or `glab mr update` on the command line, with the options the checks need. */
 export type Draft = {
   platform: Platform
-  /** The command as typed: `gh pr create`, `glab-work mr create`. */
+  action: Action
+  /** The command as typed: `gh pr create`, `glab-work mr update`. */
   name: string
   dir: string
   /** An unreadable `cd` came before: `dir` is not reliable. */
@@ -286,7 +290,14 @@ const options = (platform: Platform, args: readonly Word[]) => {
   return { values, flags }
 }
 
-const draft = (platform: Platform, name: string, dir: string, isAdrift: boolean, args: readonly Word[]): Draft => {
+const draft = (
+  platform: Platform,
+  action: Action,
+  name: string,
+  dir: string,
+  isAdrift: boolean,
+  args: readonly Word[],
+): Draft => {
   const { values, flags } = options(platform, args)
   // The last occurrence of a single-valued option wins, as it does in the CLIs.
   const first = (key: string) => values.get(key)?.at(-1)
@@ -299,6 +310,7 @@ const draft = (platform: Platform, name: string, dir: string, isAdrift: boolean,
 
   return {
     platform,
+    action,
     name,
     dir,
     isAdrift,
@@ -314,7 +326,7 @@ const draft = (platform: Platform, name: string, dir: string, isAdrift: boolean,
   }
 }
 
-/** The `gh pr create` and `glab mr create` the command line carries, in order; empty for everything else. */
+/** The `gh pr create`, `gh pr edit`, `glab mr create` and `glab mr update` the command line carries, in order; empty for everything else. */
 export const classify = (command: string): Draft[] => {
   const drafts: Draft[] = []
   let dir = '.'
@@ -334,10 +346,17 @@ export const classify = (command: string): Draft[] => {
 
       isAdrift = isKnown ? isAdrift && !to.startsWith('/') && !isHomePath : true
       dir = isKnown ? enter(dir, to) : dir
-    } else if (name === 'gh' && args[0]?.text === 'pr' && args[1]?.text === 'create') {
-      drafts.push(draft('github', 'gh pr create', dir, isAdrift, args.slice(2)))
-    } else if (/^glab(-[a-z]+)*$/.test(name) && args[0]?.text === 'mr' && (args[1]?.text === 'create' || args[1]?.text === 'new')) {
-      drafts.push(draft('gitlab', `${name} mr create`, dir, isAdrift, args.slice(2)))
+    } else if (name === 'gh' && args[0]?.text === 'pr' && (args[1]?.text === 'create' || args[1]?.text === 'edit')) {
+      const action = args[1]?.text === 'edit' ? 'edit' : 'create'
+
+      drafts.push(draft('github', action, `gh pr ${action}`, dir, isAdrift, args.slice(2)))
+    } else if (/^glab(-[a-z]+)*$/.test(name) && args[0]?.text === 'mr') {
+      const sub = args[1]?.text
+      const action = sub === 'update' ? 'edit' : sub === 'create' || sub === 'new' ? 'create' : undefined
+
+      if (action !== undefined) {
+        drafts.push(draft('gitlab', action, `${name} mr ${action === 'edit' ? 'update' : 'create'}`, dir, isAdrift, args.slice(2)))
+      }
     }
   }
 
@@ -383,8 +402,10 @@ export const check = (one: Draft, description: string | undefined): Problem[] =>
   const title = textOf(one.title)
   const lang = description === undefined ? undefined : language(description)
   const spoken = rules.description === 'pt' ? 'Brazilian Portuguese' : 'English'
+  // An edit changes only what it is given: a missing title, description, assignee or label is not a fault.
+  const isCreate = one.action === 'create'
 
-  if (one.title === undefined && !one.isFill) {
+  if (one.title === undefined && !one.isFill && isCreate) {
     problems.push({ message: 'There is no title.', fix: 'Pass `--title` in Conventional Commits, in English.' })
   } else if (title !== undefined && title !== '') {
     if (!CONVENTIONAL.test(title)) {
@@ -399,7 +420,7 @@ export const check = (one: Draft, description: string | undefined): Problem[] =>
     }
   }
 
-  if (one.description === undefined && one.bodyFile === undefined && !one.isFill) {
+  if (one.description === undefined && one.bodyFile === undefined && !one.isFill && isCreate) {
     problems.push({
       message: 'There is no description.',
       fix: `Pass ${one.platform === 'github' ? '`--body`' : '`--description`'}, in ${spoken}.`,
@@ -411,11 +432,11 @@ export const check = (one: Draft, description: string | undefined): Problem[] =>
     })
   }
 
-  if (rules.assignee && !one.assignees.some(word => word.isUnknown || word.text === '@me')) {
+  if (isCreate && rules.assignee && !one.assignees.some(word => word.isUnknown || word.text === '@me')) {
     problems.push({ message: 'You are not the assignee.', fix: 'Add `--assignee @me`.' })
   }
 
-  if (rules.label && one.labels.length === 0) {
+  if (isCreate && rules.label && one.labels.length === 0) {
     problems.push({
       message: 'There is no label.',
       fix: 'Add `--label <label>`: an existing one that fits the change, or create it in the project.',
@@ -447,7 +468,7 @@ const out = async (probe: Probe, argv: readonly string[], cwd: string, timeoutMs
   }
 }
 
-/** What the command would open, with the preview and what breaks the conventions, measured with git itself. */
+/** What the command would open or change, with the preview and what breaks the conventions, measured with git itself. */
 export const measure = async (
   probe: Probe,
   drafts: readonly Draft[],
@@ -468,19 +489,26 @@ export const measure = async (
     description = file.text === '-' ? undefined : await out(probe, ['cat', resolve(where, file.text)], where, BODY_MS)
   }
 
-  const current = where === undefined ? undefined : await out(probe, ['git', 'branch', '--show-current'], where, GIT_MS)
+  const isCreate = one.action === 'create'
+  const current =
+    where === undefined || !isCreate ? undefined : await out(probe, ['git', 'branch', '--show-current'], where, GIT_MS)
   const head = one.head ?? (current === undefined || current === '' ? undefined : current)
   const title = textOf(one.title)
+  const hasDescription = one.description !== undefined || one.bodyFile !== undefined
   const lines = [
-    `Title     ${title ?? (one.isFill ? 'taken from the commits' : 'not readable (only the shell knows what it is)')}`,
-    `Branches  ${head ?? 'current'} → ${one.base ?? 'default branch'}`,
+    ...(isCreate || one.title !== undefined
+      ? [`Title     ${title ?? (one.isFill ? 'taken from the commits' : 'not readable (only the shell knows what it is)')}`]
+      : []),
+    ...(isCreate ? [`Branches  ${head ?? 'current'} → ${one.base ?? 'default branch'}`] : one.base === undefined ? [] : [`Base      ${one.base}`]),
     ...(one.assignees.length > 0 ? [`Assignee  ${one.assignees.map(word => word.text).join(', ')}`] : []),
     ...(one.labels.length > 0 ? [`Labels    ${one.labels.map(word => word.text).join(', ')}`] : []),
   ]
   const body = (description ?? '').split('\n')
 
   if (description === undefined) {
-    lines.push(one.isFill ? 'Description taken from the commits' : 'Description not readable (only the shell knows what it is)')
+    if (isCreate || hasDescription) {
+      lines.push(one.isFill ? 'Description taken from the commits' : 'Description not readable (only the shell knows what it is)')
+    }
   } else if (description.trim() !== '') {
     lines.push('', ...body.slice(0, SHOWN_DESCRIPTION))
 
@@ -489,8 +517,12 @@ export const measure = async (
     }
   }
 
+  if (!isCreate && lines.length === 0) {
+    lines.push('No title or description change')
+  }
+
   if (drafts.length > 1) {
-    notes.push(`${count(drafts.length - 1, 'other creation')} on this line ${drafts.length === 2 ? 'is' : 'are'} not previewed.`)
+    notes.push(`${count(drafts.length - 1, 'other command')} on this line ${drafts.length === 2 ? 'is' : 'are'} not previewed.`)
   }
 
   const problems = check(one, description)
@@ -498,7 +530,7 @@ export const measure = async (
   return {
     report: {
       title: one.name,
-      summary: `open a ${one.platform === 'github' ? 'pull request on GitHub' : 'merge request on GitLab'}${one.isDraft ? ' as a draft' : ''}`,
+      summary: `${isCreate ? 'open' : one.platform === 'github' ? 'edit' : 'update'} a ${one.platform === 'github' ? 'pull request on GitHub' : 'merge request on GitLab'}${isCreate && one.isDraft ? ' as a draft' : ''}`,
       lines,
       total: lines.length,
       problems: problems.map(problem => problem.message),
