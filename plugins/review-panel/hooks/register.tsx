@@ -143,7 +143,9 @@ const ago = (readAt: number, now: number): string => {
   return seconds < 60 ? `read ${seconds}s ago` : `read ${Math.round(seconds / 60)}m ago`
 }
 
-export const register: Register = on => {
+export const register: Register = (on, options) => {
+  const background = typeof options.background === 'string' && options.background.trim() !== '' ? options.background.trim() : undefined
+
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'review-panel',
@@ -178,7 +180,7 @@ export const register: Register = on => {
     const scroll = (by: number) => update($, view, one => ({ ...one, offset: Math.max(0, top + by) }))
 
     return (
-      <Box flexDirection="column">
+      <Box flexDirection="column" backgroundColor={background} height={e.viewport?.rows} paddingX={1}>
         <Box gap={2}>
           <Button key="diff" label={now.tab === 'diff' ? '[Diff]' : 'Diff'} hotkey="1" plain onPress={() => setTab('diff')} />
           <Button key="pr" label={now.tab === 'pr' ? '[PR]' : 'PR'} hotkey="2" plain onPress={() => setTab('pr')} />
