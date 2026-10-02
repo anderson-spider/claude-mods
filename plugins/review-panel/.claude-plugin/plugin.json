@@ -1,0 +1,7 @@
+{
+  "name": "review-panel",
+  "version": "0.1.0",
+  "description": "Opens a read-only pane with the worktree diff, the open pull or merge request, its CI jobs and the comments already made.",
+  "author": { "name": "anderson-spider" },
+  "types": "./types/index.d.ts"
+}

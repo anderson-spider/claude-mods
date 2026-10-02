@@ -9,6 +9,7 @@ Marketplace of [Claude Code](https://claude.com/claude-code) plugins made by and
 | [blast-radius](plugins/blast-radius) | Holds a risky Bash command and shows what it would change before it runs. |
 | [branch-guard](plugins/branch-guard) | Holds a `git commit` or `git push` on the protected branch and shows what would go in. |
 | [pr-preview](plugins/pr-preview) | Holds a `gh pr create`, `gh pr edit`, `glab mr create` or `glab mr update`, previews the title and description and flags what breaks the conventions. |
+| [review-panel](plugins/review-panel) | Opens a read-only pane with the worktree diff, the open pull or merge request, its CI jobs and the comments already made. |
 | [tailscale](plugins/tailscale) | Lets Claude query and modify your tailnet through the Tailscale API. |
 
 ## Install
@@ -20,6 +21,7 @@ Inside Claude Code, add the marketplace and install the plugin:
 /plugin install blast-radius@spider-marketplace
 /plugin install branch-guard@spider-marketplace
 /plugin install pr-preview@spider-marketplace
+/plugin install review-panel@spider-marketplace
 /plugin install tailscale@spider-marketplace
 ```
 
@@ -75,6 +77,14 @@ The conventions live in `RULES` and the regexes of `hooks/guard.ts`. The descrip
 
 Limitations: the plugin reads the command text, so aliases, `bash -c "gh pr create"` and a title or description that only the shell expands (`$VAR`) are previewed as "not readable" and not checked; only the first command on a line is previewed; it only sees what Claude types, not your terminal.
 
+## review-panel
+
+`/review-panel` opens a pane beside the conversation that only reads, never writes. The **Diff** tab (key `1`) shows what changed against `HEAD` (staged, unstaged and untracked), file by file, with `+` and `-` lines in colour. The **PR** tab (key `2`) shows the pull or merge request of the current branch: title, state, branches, merge blockers, description, the CI checks or jobs (one line each) and the comments already made (reviews, plain comments and inline ones, newest first, with `resolved`/`outdated` marks). `Refresh` (key `r`) reads again; it also reads every 30 seconds while the pane is open. `▲`/`▼` (keys `k`/`j`) scroll.
+
+It reads the forge from the `origin` remote: `gh` for GitHub, `glab api --hostname <host>` for any other host (so `gitlab.com` and a self-hosted GitLab work with the same `glab`, as long as it is authenticated for that host). Only `GET` reads run. The pane takes keys after a click on it; `Esc` gives the focus back.
+
+Limitations: GitHub's REST inline comments do not say whether a thread is resolved, so only `outdated` shows there; each list is capped (100 rows from the forge, the newest 30 comments shown); a GitLab merge request is found by its source branch, so a branch with several shows the most recently updated.
+
 ## tailscale
 
 Registers two tools for Claude to talk to the Tailscale API (`https://api.tailscale.com/api/v2`), authenticated by the `TS_API_KEY` environment variable, which must be exported when Claude Code starts:
@@ -112,6 +122,8 @@ claude plugin validate plugins/branch-guard
 claude plugin test plugins/branch-guard
 claude plugin validate plugins/pr-preview
 claude plugin test plugins/pr-preview
+claude plugin validate plugins/review-panel
+claude plugin test plugins/review-panel
 claude plugin validate plugins/tailscale
 claude plugin test plugins/tailscale
 ```
