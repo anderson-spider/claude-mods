@@ -180,7 +180,7 @@ export const register: Register = (on, options) => {
     const scroll = (by: number) => update($, view, one => ({ ...one, offset: Math.max(0, top + by) }))
 
     return (
-      <Box flexDirection="column" backgroundColor={background} height={e.viewport?.rows} paddingX={1}>
+      <Box flexDirection="column" backgroundColor={background} flexGrow={1} minHeight={e.viewport?.rows} paddingX={1}>
         <Box gap={2}>
           <Button key="diff" label={now.tab === 'diff' ? '[Diff]' : 'Diff'} hotkey="1" plain onPress={() => setTab('diff')} />
           <Button key="pr" label={now.tab === 'pr' ? '[PR]' : 'PR'} hotkey="2" plain onPress={() => setTab('pr')} />
