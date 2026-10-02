@@ -37,12 +37,12 @@ export const parseRemote = (url: string): Remote | undefined => {
   const scp = /^[\w.-]+@([^:/\s]+):(.+?)(?:\.git)?\/?$/.exec(text)
 
   if (scp !== null) {
-    return { host: scp[1], path: scp[2] }
+    return { host: scp[1] ?? '', path: scp[2] ?? '' }
   }
 
   const web = /^(?:https?|ssh|git):\/\/(?:[^@/\s]+@)?([^/:\s]+)(?::\d+)?\/(.+?)(?:\.git)?\/?$/.exec(text)
 
-  return web === null ? undefined : { host: web[1], path: web[2] }
+  return web === null ? undefined : { host: web[1] ?? '', path: web[2] ?? '' }
 }
 
 /** `github.com` and GitHub Enterprise hosts name `github`; every other host is taken as GitLab. */
@@ -57,7 +57,7 @@ export const parseDiff = (text: string): DiffFile[] => {
   for (const line of text.split('\n')) {
     if (line.startsWith('diff --git ')) {
       const named = /^diff --git a\/(.+?) b\/(.+)$/.exec(line)
-      current = { path: named === null ? line.slice(11) : named[2], added: 0, removed: 0, lines: [], isUntracked: false }
+      current = { path: named?.[2] ?? line.slice(11), added: 0, removed: 0, lines: [], isUntracked: false }
       files.push(current)
       inHunk = false
     } else if (current === undefined) {

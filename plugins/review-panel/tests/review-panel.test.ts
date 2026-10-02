@@ -51,7 +51,7 @@ test('parseDiff counts changed lines per file and keeps the hunks', () => {
     ['src/a.ts', 1, 1],
     ['b.md', 1, 0],
   ])
-  expect(files[0].lines).toEqual(['@@ -1,2 +1,2 @@', ' keep', '-old', '+new'])
+  expect(files[0]?.lines).toEqual(['@@ -1,2 +1,2 @@', ' keep', '-old', '+new'])
 })
 
 test('foldGithub maps checks, comments and merge state', () => {
@@ -181,7 +181,7 @@ test('readAll reads the diff, untracked files and a GitHub pull request', async 
 
   expect(found.branch).toBe('f')
   expect(found.diff.map(file => file.path)).toEqual(['src/a.ts', 'b.md', 'new.txt'])
-  expect(found.diff[2].isUntracked).toBe(true)
+  expect(found.diff[2]?.isUntracked).toBe(true)
   expect(found.pr.kind).toBe('pr')
 })
 

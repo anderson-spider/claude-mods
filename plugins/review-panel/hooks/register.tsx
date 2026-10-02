@@ -26,7 +26,7 @@ const view = atom({ plugin: 'review-panel', key: 'view' } as const, INITIAL)
 
 type Row = { text: string; color?: 'success' | 'error' | 'warning'; isDim?: boolean; isBold?: boolean }
 
-let timer: (() => void) | undefined
+let isPolling = false
 
 const probe = ($: EngineInterface): Probe => ({ run: (argv, init) => $.process.run(argv, init) })
 
@@ -155,7 +155,11 @@ export const register: Register = on => {
 
   on('command.run', { command: 'review-panel' }, async $ => {
     await $.ui.open({ id: PANE, title: TITLE })
-    timer ??= $.clock.every(POLL_MS, () => void refresh($))
+    if (!isPolling) {
+      isPolling = true
+      $.clock.every(POLL_MS, () => void refresh($))
+    }
+
     void refresh($)
 
     return { text: 'Review pane opened.' }
