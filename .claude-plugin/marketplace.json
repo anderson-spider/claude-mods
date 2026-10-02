@@ -18,6 +18,11 @@
       "description": "Holds a git commit or git push on the protected branch and shows what would go in, with Proceed and Cancel."
     },
     {
+      "name": "pr-preview",
+      "source": "./plugins/pr-preview",
+      "description": "Holds a gh pr create or glab mr create, previews the title and description and flags what breaks the conventions, with Proceed, Fix and Cancel."
+    },
+    {
       "name": "tailscale",
       "source": "./plugins/tailscale",
       "description": "Lets Claude query and modify the tailnet through the Tailscale API, using TS_API_KEY."
