@@ -1,6 +1,7 @@
 {
   "name": "blast-radius",
   "version": "0.1.1",
+  "author": { "name": "anderson-spider" },
   "description": "Segura um comando arriscado do Bash e mostra o que ele mudaria, com Prosseguir e Cancelar.",
   "types": "./types/index.d.ts"
 }
