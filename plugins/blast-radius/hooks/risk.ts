@@ -47,6 +47,7 @@ const BREAKS = new Set([';', '\n', '(', ')'])
 const WRAPPERS = new Set(['sudo', 'command', 'exec', 'time', 'nohup', 'env'])
 const ASSIGNMENT = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/s
 const GLOB = /[*?[]/
+const IN_HOME = /^~(\/|$)/
 const SEQUENCE = new Set(['', ';', '\n', '&&'])
 const KEYWORDS = new Set(['if', 'then', 'else', 'elif', 'fi', 'for', 'while', 'until', 'do', 'done', 'case', 'esac', 'function', '{', '}'])
 // Comandos que mudam variáveis de um jeito que o texto não mostra.
@@ -182,6 +183,18 @@ export const resolve = (base: string, path: string): string => {
   return `${isAbsolute ? '/' : ''}${parts.join('/')}` || '.'
 }
 
+// `dir` depois de um `cd to`; um destino na home fica como `~/…` até alguém saber onde ela é.
+const enter = (dir: string, to: string) => resolve(IN_HOME.test(to) ? '.' : dir, to)
+
+/** Onde `dir` fica de verdade: a partir da home quando começa com `~`, senão a partir de `cwd`. */
+export const locate = (cwd: string, dir: string, home: string | undefined): string | undefined => {
+  if (!IN_HOME.test(dir)) {
+    return resolve(cwd, dir)
+  }
+
+  return home === undefined ? undefined : resolve(home, `.${dir.slice(1)}`)
+}
+
 const bare = (words: readonly Word[]) => {
   const env: Record<string, string> = {}
   let start = 0
@@ -223,7 +236,7 @@ const git = (dir: string, words: readonly string[]): Risk | undefined => {
   while ((words[at] ?? '').startsWith('-')) {
     const takesValue = words[at] === '-C' || words[at] === '-c'
     isElsewhere ||= /^--(git-dir|work-tree)\b/.test(words[at] ?? '')
-    where = words[at] === '-C' ? resolve(where, words[at + 1] ?? '.') : where
+    where = words[at] === '-C' ? enter(where, words[at + 1] ?? '.') : where
     at += takesValue ? 2 : 1
   }
 
@@ -347,11 +360,14 @@ export const classify = (command: string): Risk[] => {
     }
 
     if (name === 'cd' || name === 'pushd' || name === 'popd') {
-      const isKnown = name === 'cd' && args.length === 1 && args[0]?.isUnknown === false && args[0].text !== '-'
       const to = args[0]?.text ?? ''
+      // Um `~` entre aspas é um nome de pasta, e `~fulano` é a home de outra pessoa.
+      const isHomePath = args[0]?.isHome === true && IN_HOME.test(to)
+      const isKnown =
+        name === 'cd' && args.length === 1 && args[0]?.isUnknown === false && to !== '-' && (isHomePath || !to.startsWith('~'))
 
-      isAdrift = isKnown ? isAdrift && !to.startsWith('/') : true
-      dir = isKnown ? resolve(dir, to) : dir
+      isAdrift = isKnown ? isAdrift && !to.startsWith('/') && !isHomePath : true
+      dir = isKnown ? enter(dir, to) : dir
       continue
     }
 
@@ -484,9 +500,10 @@ const isTempRepo = async (probe: Probe, dir: string) => {
  * resolvidos, ficam todos lá, ou um `git reset --hard` / `git clean` num repositório de lá.
  */
 export const isDisposable = async (probe: Probe, risk: Risk, cwd: string): Promise<boolean> => {
-  const dir = resolve(cwd, risk.dir)
+  const home = await probe.home()
+  const dir = locate(cwd, risk.dir, home)
 
-  if (risk.isAdrift === true) {
+  if (risk.isAdrift === true || dir === undefined) {
     return false
   }
 
@@ -497,8 +514,6 @@ export const isDisposable = async (probe: Probe, risk: Risk, cwd: string): Promi
   if (risk.kind !== 'rm' || risk.targets.length === 0) {
     return false
   }
-
-  const home = await probe.home()
 
   for (const target of risk.targets) {
     for (const path of (await expand(probe, target, dir, home)) ?? [undefined]) {
@@ -546,7 +561,7 @@ const measureRm = async (probe: Probe, risk: Risk & { kind: 'rm' }, dir: string)
   const sized = await run(probe, ['du', '-skc', ...measured], dir)
 
   if (found === undefined) {
-    return { summary: 'apagar recursivamente alvos que demoraram demais para medir', lines: [...measured, ...notes] }
+    return { summary: 'apagar recursivamente alvos que não consegui medir (o find falhou ou demorou demais)', lines: [...measured, ...notes] }
   }
 
   const files = rows(found.stdout).map(path => (path.startsWith(`${dir}/`) ? path.slice(dir.length + 1) : path))
@@ -709,9 +724,11 @@ export const measure = async (
   cwd: string,
 ): Promise<BlastRadiusReport> => {
   const parts: Part[] = []
+  const home = await probe.home()
 
   for (const risk of risks) {
-    parts.push(await measureOne(probe, risk, resolve(cwd, risk.dir)))
+    // Sem home conhecida, o caminho com `~` segue como está e a medição diz que não achou nada.
+    parts.push(await measureOne(probe, risk, locate(cwd, risk.dir, home) ?? resolve(cwd, risk.dir)))
   }
 
   const lines = parts.flatMap(part => part.lines)

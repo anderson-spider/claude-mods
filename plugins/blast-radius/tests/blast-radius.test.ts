@@ -183,6 +183,9 @@ test('classify follows cd and git -C, and keeps what only the shell can expand a
     },
   ])
   expect(classify('cd "$X" && rm -rf build')[0]).toMatchObject({ dir: '.', isAdrift: true })
+  expect(classify('cd /tmp/x && cd ~/dev/app && cd src && rm -rf build')[0]).toMatchObject({ dir: '~/dev/app/src' })
+  expect(classify('cd "~/dev" && rm -rf build')[0]).toMatchObject({ isAdrift: true })
+  expect(classify('cd ~other/dev && rm -rf build')[0]).toMatchObject({ isAdrift: true })
   expect(resolve('/proj', '../other/./x')).toBe('/other/x')
   expect(size(1126)).toBe('1.1 MB')
 })
@@ -199,6 +202,11 @@ test('measure reports what each risk would change, from the tools own dry runs',
     total: 9,
   })
   expect(calls).toEqual(['find /proj/build ! -type d', 'du -skc /proj/build'])
+
+  calls.length = 0
+  await report('cd ~/dev/app && rm -rf build')
+  await report('git -C ~/dev/app clean -fd')
+  expect(calls).toEqual(['find /home/me/dev/app/build ! -type d', 'du -skc /home/me/dev/app/build', 'git clean -n -d'])
 
   calls.length = 0
   await report('cd logs && rm -rf *.log')
@@ -282,6 +290,7 @@ test('rm -rf, git reset --hard and git clean pass unasked only inside a system t
     'S=~/project; rm -rf $S',
     'cd /tmp/demo && cd $OTHER && rm -rf build',
     'cd /tmp/demo && cd - && rm -rf build',
+    'cd /tmp/demo && cd ~/dev/app && rm -rf build',
   ]) {
     expect(`${command}: ${await passes(command)}`).toBe(`${command}: false`)
   }
