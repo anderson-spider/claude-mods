@@ -1,18 +1,18 @@
 # Spider Marketplace
 
-Marketplace de plugins do [Claude Code](https://claude.com/claude-code) feitos por anderson-spider. Cada plugin fica em uma pasta de `plugins/` e é listado em `.claude-plugin/marketplace.json`.
+Marketplace of [Claude Code](https://claude.com/claude-code) plugins made by anderson-spider. Each plugin lives in a folder under `plugins/` and is listed in `.claude-plugin/marketplace.json`.
 
 ## Plugins
 
-| Plugin | O que faz |
+| Plugin | What it does |
 | --- | --- |
-| [blast-radius](plugins/blast-radius) | Segura um comando arriscado do Bash e mostra o que ele mudaria antes de rodar. |
-| [branch-guard](plugins/branch-guard) | Segura um `git commit` ou `git push` na branch protegida e mostra o que entraria. |
-| [tailscale](plugins/tailscale) | Deixa o Claude consultar e modificar a sua tailnet pela API da Tailscale. |
+| [blast-radius](plugins/blast-radius) | Holds a risky Bash command and shows what it would change before it runs. |
+| [branch-guard](plugins/branch-guard) | Holds a `git commit` or `git push` on the protected branch and shows what would go in. |
+| [tailscale](plugins/tailscale) | Lets Claude query and modify your tailnet through the Tailscale API. |
 
-## Instalar
+## Install
 
-Dentro do Claude Code, adicione o marketplace e instale o plugin:
+Inside Claude Code, add the marketplace and install the plugin:
 
 ```
 /plugin marketplace add anderson-spider/spider-marketplace
@@ -21,66 +21,66 @@ Dentro do Claude Code, adicione o marketplace e instale o plugin:
 /plugin install tailscale@spider-marketplace
 ```
 
-Para usar uma cópia local em vez do GitHub, passe o caminho da pasta:
+To use a local copy instead of GitHub, pass the folder path:
 
 ```
 /plugin marketplace add ~/dev/personal/spider-marketplace
 ```
 
-Os plugins daqui são mods de function hooks, uma API do Claude Code ainda em acesso antecipado, que pode mudar entre versões.
+The plugins here are function hooks mods, a Claude Code API still in early access that may change between versions.
 
 ## blast-radius
 
-Quando o Claude chama o Bash com um comando destrutivo, o Blast Radius segura a chamada, mede o que ela mudaria com os dry runs das próprias ferramentas e mostra o relatório em uma faixa acima do prompt, com `1: Prosseguir` e `2: Cancelar`. Ao cancelar, o Claude recebe a recusa com o resumo do que o comando faria.
+When Claude calls Bash with a destructive command, Blast Radius holds the call, measures what it would change using the tools' own dry runs, and shows the report in a band above the prompt, with `1: Prosseguir` (proceed) and `2: Cancelar` (cancel). On cancel, Claude gets the refusal along with a summary of what the command would do.
 
-| Comando | Como é medido |
+| Command | How it is measured |
 | --- | --- |
-| `rm -r`, `rm -rf` | `find` e `du` nos alvos: "apagar 9 arquivos (1.1 MB)" |
-| `git reset --hard` | `git status --porcelain`, `git diff --shortstat` e `git log <ref>..HEAD` |
-| `git clean -f` | `git clean -n` com as mesmas flags |
-| force push (`-f`, `--force`, `--force-with-lease`, `+ref`) | `git log HEAD..<remoto>/<branch>`, sem fetch |
-| migração de banco (Django, Rails, Prisma, Laravel) | o comando de status de cada ferramenta |
+| `rm -r`, `rm -rf` | `find` and `du` on the targets: "apagar 9 arquivos (1.1 MB)" |
+| `git reset --hard` | `git status --porcelain`, `git diff --shortstat` and `git log <ref>..HEAD` |
+| `git clean -f` | `git clean -n` with the same flags |
+| force push (`-f`, `--force`, `--force-with-lease`, `+ref`) | `git log HEAD..<remote>/<branch>`, without a fetch |
+| database migration (Django, Rails, Prisma, Laravel) | each tool's status command |
 
-Passam sem perguntar o `rm -rf`, o `git reset --hard` e o `git clean` que só tocam um diretório temporário do sistema (`/tmp`, `/private/tmp`, `/var/folders`), inclusive quando o caminho vem de uma variável atribuída na mesma linha (`S=/tmp/x; rm -rf $S`). A raiz do temporário, alvos mistos, alvos que só o shell sabe resolver e worktrees ligados a um repositório de fora continuam segurados.
+`rm -rf`, `git reset --hard` and `git clean` pass without asking when they only touch a system temporary directory (`/tmp`, `/private/tmp`, `/var/folders`), including when the path comes from a variable assigned on the same line (`S=/tmp/x; rm -rf $S`). The temp root itself, mixed targets, targets only the shell can resolve, and worktrees linked to an outside repository are still held.
 
-É uma rede de segurança, não um sistema de permissões: o plugin lê o texto do comando, então `$(…)`, aliases e scripts que chamam `rm` por dentro passam por ele. Para um bloqueio de verdade, use as regras de permissão do Claude Code.
+It is a safety net, not a permission system: the plugin reads the command text, so `$(…)`, aliases and scripts that call `rm` internally get past it. For a real block, use Claude Code's permission rules.
 
 ## branch-guard
 
-Quando o Claude chama o Bash com `git commit` ou `git push` e a branch alvo é `main`, `master`, `develop`, `release` ou `release/*` (também `release-*` e `release_*`), o Branch Guard segura a chamada e mostra na faixa acima do prompt o que entraria: os arquivos do commit ou os commits que subiriam, com `1: Prosseguir` e `2: Cancelar`. Ao cancelar, o Claude recebe a recusa com a orientação de abrir uma branch de trabalho (`git switch -c`) e refazer o comando nela, ou de abrir um PR quando o push é `HEAD:<protegida>` a partir de outra branch.
+When Claude calls Bash with `git commit` or `git push` and the target branch is `main`, `master`, `develop`, `release` or `release/*` (also `release-*` and `release_*`), Branch Guard holds the call and shows in the band above the prompt what would go in: the commit's files or the commits that would be pushed, with `1: Prosseguir` (proceed) and `2: Cancelar` (cancel). On cancel, Claude gets the refusal with guidance to open a working branch (`git switch -c`) and redo the command there, or to open a PR when the push is `HEAD:<protected>` from another branch.
 
-Passam sem perguntar: commits e pushes em outras branches, em HEAD solto, em repositório dentro de `/tmp`, `git commit --dry-run`, `git push --dry-run`, push só de tags e commit sem nada staged. O force push não é daqui: é do blast-radius. Para desligar o aviso, desabilite só este plugin.
+Passes without asking: commits and pushes on other branches, on a detached HEAD, in a repository inside `/tmp`, `git commit --dry-run`, `git push --dry-run`, tag-only pushes and commits with nothing staged. Force push is not handled here: it belongs to blast-radius. To turn the warning off, disable only this plugin.
 
-Limitações: o plugin lê o texto do comando, então `merge`, `cherry-pick`, `rebase`, `pull`, aliases e `bash -c "git commit"` não passam por ele; um `"` ou `'` solto no corpo de um `-m "$(cat <<EOF …)"` pode confundir a leitura; só vê o que o Claude digita, não o seu terminal.
+Limitations: the plugin reads the command text, so `merge`, `cherry-pick`, `rebase`, `pull`, aliases and `bash -c "git commit"` do not go through it; a stray `"` or `'` in the body of a `-m "$(cat <<EOF …)"` can confuse the parsing; it only sees what Claude types, not your terminal.
 
 ## tailscale
 
-Registra duas tools para o Claude falar com a API da Tailscale (`https://api.tailscale.com/api/v2`), autenticadas pela variável de ambiente `TS_API_KEY`, que precisa estar exportada quando o Claude Code abre:
+Registers two tools for Claude to talk to the Tailscale API (`https://api.tailscale.com/api/v2`), authenticated by the `TS_API_KEY` environment variable, which must be exported when Claude Code starts:
 
-| Tool | O que faz |
+| Tool | What it does |
 | --- | --- |
-| `mcp__tailscale__tailscale_get` | Só leitura (`GET`): dispositivos, ACL, DNS, chaves, usuários, convites, configurações, webhooks, logs, device posture, services, OAuth apps e contatos. Ex.: `/tailnet/-/devices`. Aceita `fields` para trazer só as chaves pedidas (a API não pagina, então a lista vem inteira). Tira `machineKey`, `nodeKey`, `tailnetLockKey`, `secret`, `s3SecretAccessKey` e `token` da resposta e mostra o `ETag` quando há. |
-| `mcp__tailscale__tailscale_write` | Modifica a tailnet (`POST`, `PUT`, `PATCH`, `DELETE`): tags, rotas, ACL, DNS, apagar dispositivos, chaves, webhooks. Aceita `ifMatch`. A resposta vem completa, porque a API mostra o segredo de uma chave nova uma vez só. |
+| `mcp__tailscale__tailscale_get` | Read-only (`GET`): devices, ACL, DNS, keys, users, invites, settings, webhooks, logs, device posture, services, OAuth apps and contacts. E.g. `/tailnet/-/devices`. Accepts `fields` to return only the requested keys (the API does not paginate, so the whole list comes back). Strips `machineKey`, `nodeKey`, `tailnetLockKey`, `secret`, `s3SecretAccessKey` and `token` from the response and shows the `ETag` when there is one. |
+| `mcp__tailscale__tailscale_write` | Modifies the tailnet (`POST`, `PUT`, `PATCH`, `DELETE`): tags, routes, ACL, DNS, deleting devices, keys, webhooks. Accepts `ifMatch`. The response comes back complete, because the API shows a new key's secret only once. |
 
-As duas são separadas para você liberar só a leitura sem prompt e manter a escrita pedindo confirmação. O `path` precisa ser relativo à API e começar com `/`; `//host`, `..`, `%2e`, `%2f`, `%5c` e URLs completas são recusados. O `-` no lugar da tailnet vale para a padrão.
+They are separate so you can allow read-only without a prompt and keep write asking for confirmation. The `path` must be relative to the API and start with `/`; `//host`, `..`, `%2e`, `%2f`, `%5c` and full URLs are rejected. A `-` in place of the tailnet means the default one.
 
-Para atualizar a ACL sem sobrescrever uma edição de outra pessoa: faça um `GET /tailnet/-/acl`, guarde o `ETag` da resposta e passe-o em `ifMatch` no `POST /tailnet/-/acl` (a API responde 412 se a ACL mudou). Um `body` em string que não seja JSON válido vai como HuJSON, então a política com comentários passa. `DELETE /tailnet/{tailnet}`, que apaga a tailnet inteira, é recusado pela tool.
+To update the ACL without overwriting someone else's edit: do a `GET /tailnet/-/acl`, keep the response's `ETag` and pass it in `ifMatch` on the `POST /tailnet/-/acl` (the API responds 412 if the ACL changed). A string `body` that is not valid JSON is sent as HuJSON, so a policy with comments works. `DELETE /tailnet/{tailnet}`, which deletes the whole tailnet, is refused by the tool.
 
-`TS_API_KEY` precisa ser uma chave `tskey-api-...`. Um segredo OAuth `tskey-client-...` não vale como Bearer sem uma troca por token, que o plugin não faz.
+`TS_API_KEY` must be a `tskey-api-...` key. An OAuth secret `tskey-client-...` is not valid as a Bearer without a token exchange, which the plugin does not do.
 
-## Desenvolver
+## Development
 
-Para editar um plugin com recarga automática, aponte o Claude Code direto para a pasta dele, com `claude --plugin-dir` ou no `env` do `~/.claude/settings.json`:
+To edit a plugin with automatic reload, point Claude Code straight at its folder, with `claude --plugin-dir` or in the `env` of `~/.claude/settings.json`:
 
 ```json
 {
   "env": {
-    "CLAUDE_CODE_PLUGIN_DIRS": "/caminho/para/spider-marketplace/plugins/blast-radius"
+    "CLAUDE_CODE_PLUGIN_DIRS": "/path/to/spider-marketplace/plugins/blast-radius"
   }
 }
 ```
 
-Para validar e testar:
+To validate and test:
 
 ```
 claude plugin validate .

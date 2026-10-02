@@ -4,23 +4,23 @@
     "name": "anderson-spider"
   },
   "metadata": {
-    "description": "Plugins e mods do Claude Code feitos por anderson-spider."
+    "description": "Claude Code plugins and mods made by anderson-spider."
   },
   "plugins": [
     {
       "name": "blast-radius",
       "source": "./plugins/blast-radius",
-      "description": "Segura um comando arriscado do Bash e mostra o que ele mudaria, com Prosseguir e Cancelar."
+      "description": "Holds a risky Bash command and shows what it would change, with Proceed and Cancel."
     },
     {
       "name": "branch-guard",
       "source": "./plugins/branch-guard",
-      "description": "Segura um git commit ou git push na branch protegida e mostra o que entraria, com Prosseguir e Cancelar."
+      "description": "Holds a git commit or git push on the protected branch and shows what would go in, with Proceed and Cancel."
     },
     {
       "name": "tailscale",
       "source": "./plugins/tailscale",
-      "description": "Deixa o Claude consultar e modificar a tailnet pela API da Tailscale, usando TS_API_KEY."
+      "description": "Lets Claude query and modify the tailnet through the Tailscale API, using TS_API_KEY."
     }
   ]
 }
