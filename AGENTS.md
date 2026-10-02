@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Marketplace de plugins do Claude Code (`anderson-spider/spider-marketplace`). Hoje tem dois plugins, `blast-radius` (segura comandos destrutivos) e `branch-guard` (segura commit e push na branch protegida). O README e o código estão em português do Brasil; comentários e mensagens seguem no mesmo idioma.
+Marketplace de plugins do Claude Code (`anderson-spider/spider-marketplace`). Hoje tem três plugins, `blast-radius` (segura comandos destrutivos), `branch-guard` (segura commit e push na branch protegida) e `tailscale` (tools para consultar e modificar a tailnet). O README e o código estão em português do Brasil; comentários e mensagens seguem no mesmo idioma.
 
 ## Estrutura
 
@@ -15,6 +15,7 @@ claude plugin validate .                       # valida o marketplace
 claude plugin validate plugins/blast-radius    # valida o plugin
 claude plugin test plugins/blast-radius        # roda tests/blast-radius.test.ts
 claude plugin test plugins/branch-guard        # idem, para o branch-guard
+claude plugin test plugins/tailscale           # idem, para o tailscale
 claude --plugin-dir plugins/blast-radius       # carrega o plugin com recarga automática
 ```
 
@@ -39,6 +40,15 @@ Detalhes que só se entendem lendo os dois lados:
 ## branch-guard
 
 Mesmo desenho do blast-radius (`hooks/guard.ts` puro com `Probe` injetado, `hooks/register.tsx` com `hold`/`draw`), com estado próprio (`branch-guard`/`held`). `classify` levanta `commit` e `publish`; `isProtectedTarget` decide, de forma assíncrona, se a branch alvo é protegida. O parser (`parse`, `resolve`, `locate`, `isTempRepo`) é **cópia** do de `blast-radius/hooks/risk.ts`, porque um plugin não importa código de outro: uma correção em um lado precisa ser levada ao outro. O force push fica fora de propósito, por ser do blast-radius.
+
+## tailscale
+
+Não segura nada: registra duas tools com `$.tool.register` no `session.start` (`tailscale_get` e `tailscale_write`, listadas como `mcp__tailscale__<nome>`) e as atende em hooks `tool.call`. `hooks/api.ts` é puro: `buildUrl` só aceita caminho relativo à API (sem `..`, `//`, `%2e`, `%2f`, `%5c`), `forbidden` recusa `DELETE /tailnet/{tailnet}`, e `call(fetch, key, req)` recebe o `fetch` injetado. `transform` aplica, só no `tailscale_get`, `redact` (tira `REDACTED_FIELDS`: `machineKey`, `nodeKey`, `tailnetLockKey`, `secret`, `s3SecretAccessKey`, `token`) e `fields` (projeta as chaves pedidas); o `write` não filtra, porque a resposta de uma chave nova traz o segredo uma única vez. O `call` também devolve o `ETag` da resposta, manda `If-Match` quando há `ifMatch` e escolhe `application/hujson` quando o `body` é uma string que não é JSON. A spec da API é a OpenAPI de `https://api.tailscale.com/api/v2?outputOpenapiSchema=true` (a página `/api-docs` é renderizada por JS e o `WebFetch` não a lê); ela se declara instável. Detalhes que só se entendem lendo a API do host:
+
+- A chave vem de `$.env.get('TS_API_KEY')` a cada chamada, nunca de `options` nem do código.
+- O `validate` recusa `$.http.fetch` passado como valor; por isso o `register.tsx` o envolve em `(url, init) => $.http.fetch(url, init)`.
+- `result` do `tool.call` de uma tool própria é string ou array, não objeto, e `isError` só aceita `true` (omita em vez de `false`).
+- O teste usa só as funções de `hooks/api.ts` com um `fetch` falso; não há host falso.
 
 ## Testes
 

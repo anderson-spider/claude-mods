@@ -16,6 +16,11 @@
       "name": "branch-guard",
       "source": "./plugins/branch-guard",
       "description": "Segura um git commit ou git push na branch protegida e mostra o que entraria, com Prosseguir e Cancelar."
+    },
+    {
+      "name": "tailscale",
+      "source": "./plugins/tailscale",
+      "description": "Deixa o Claude consultar e modificar a tailnet pela API da Tailscale, usando TS_API_KEY."
     }
   ]
 }

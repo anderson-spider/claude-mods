@@ -8,6 +8,7 @@ Marketplace de plugins do [Claude Code](https://claude.com/claude-code) feitos p
 | --- | --- |
 | [blast-radius](plugins/blast-radius) | Segura um comando arriscado do Bash e mostra o que ele mudaria antes de rodar. |
 | [branch-guard](plugins/branch-guard) | Segura um `git commit` ou `git push` na branch protegida e mostra o que entraria. |
+| [tailscale](plugins/tailscale) | Deixa o Claude consultar e modificar a sua tailnet pela API da Tailscale. |
 
 ## Instalar
 
@@ -17,6 +18,7 @@ Dentro do Claude Code, adicione o marketplace e instale o plugin:
 /plugin marketplace add anderson-spider/spider-marketplace
 /plugin install blast-radius@spider-marketplace
 /plugin install branch-guard@spider-marketplace
+/plugin install tailscale@spider-marketplace
 ```
 
 Para usar uma cópia local em vez do GitHub, passe o caminho da pasta:
@@ -51,6 +53,21 @@ Passam sem perguntar: commits e pushes em outras branches, em HEAD solto, em rep
 
 Limitações: o plugin lê o texto do comando, então `merge`, `cherry-pick`, `rebase`, `pull`, aliases e `bash -c "git commit"` não passam por ele; um `"` ou `'` solto no corpo de um `-m "$(cat <<EOF …)"` pode confundir a leitura; só vê o que o Claude digita, não o seu terminal.
 
+## tailscale
+
+Registra duas tools para o Claude falar com a API da Tailscale (`https://api.tailscale.com/api/v2`), autenticadas pela variável de ambiente `TS_API_KEY`, que precisa estar exportada quando o Claude Code abre:
+
+| Tool | O que faz |
+| --- | --- |
+| `mcp__tailscale__tailscale_get` | Só leitura (`GET`): dispositivos, ACL, DNS, chaves, usuários, convites, configurações, webhooks, logs, device posture, services, OAuth apps e contatos. Ex.: `/tailnet/-/devices`. Aceita `fields` para trazer só as chaves pedidas (a API não pagina, então a lista vem inteira). Tira `machineKey`, `nodeKey`, `tailnetLockKey`, `secret`, `s3SecretAccessKey` e `token` da resposta e mostra o `ETag` quando há. |
+| `mcp__tailscale__tailscale_write` | Modifica a tailnet (`POST`, `PUT`, `PATCH`, `DELETE`): tags, rotas, ACL, DNS, apagar dispositivos, chaves, webhooks. Aceita `ifMatch`. A resposta vem completa, porque a API mostra o segredo de uma chave nova uma vez só. |
+
+As duas são separadas para você liberar só a leitura sem prompt e manter a escrita pedindo confirmação. O `path` precisa ser relativo à API e começar com `/`; `//host`, `..`, `%2e`, `%2f`, `%5c` e URLs completas são recusados. O `-` no lugar da tailnet vale para a padrão.
+
+Para atualizar a ACL sem sobrescrever uma edição de outra pessoa: faça um `GET /tailnet/-/acl`, guarde o `ETag` da resposta e passe-o em `ifMatch` no `POST /tailnet/-/acl` (a API responde 412 se a ACL mudou). Um `body` em string que não seja JSON válido vai como HuJSON, então a política com comentários passa. `DELETE /tailnet/{tailnet}`, que apaga a tailnet inteira, é recusado pela tool.
+
+`TS_API_KEY` precisa ser uma chave `tskey-api-...`. Um segredo OAuth `tskey-client-...` não vale como Bearer sem uma troca por token, que o plugin não faz.
+
 ## Desenvolver
 
 Para editar um plugin com recarga automática, aponte o Claude Code direto para a pasta dele, com `claude --plugin-dir` ou no `env` do `~/.claude/settings.json`:
@@ -71,4 +88,6 @@ claude plugin validate plugins/blast-radius
 claude plugin test plugins/blast-radius
 claude plugin validate plugins/branch-guard
 claude plugin test plugins/branch-guard
+claude plugin validate plugins/tailscale
+claude plugin test plugins/tailscale
 ```
