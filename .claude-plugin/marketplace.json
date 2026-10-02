@@ -11,6 +11,11 @@
       "name": "blast-radius",
       "source": "./plugins/blast-radius",
       "description": "Segura um comando arriscado do Bash e mostra o que ele mudaria, com Prosseguir e Cancelar."
+    },
+    {
+      "name": "branch-guard",
+      "source": "./plugins/branch-guard",
+      "description": "Segura um git commit ou git push na branch protegida e mostra o que entraria, com Prosseguir e Cancelar."
     }
   ]
 }

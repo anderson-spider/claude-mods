@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Marketplace de plugins do Claude Code (`anderson-spider/spider-marketplace`). Hoje tem um plugin, `blast-radius`. O README e o código estão em português do Brasil; comentários e mensagens seguem no mesmo idioma.
+Marketplace de plugins do Claude Code (`anderson-spider/spider-marketplace`). Hoje tem dois plugins, `blast-radius` (segura comandos destrutivos) e `branch-guard` (segura commit e push na branch protegida). O README e o código estão em português do Brasil; comentários e mensagens seguem no mesmo idioma.
 
 ## Estrutura
 
@@ -14,6 +14,7 @@ Marketplace de plugins do Claude Code (`anderson-spider/spider-marketplace`). Ho
 claude plugin validate .                       # valida o marketplace
 claude plugin validate plugins/blast-radius    # valida o plugin
 claude plugin test plugins/blast-radius        # roda tests/blast-radius.test.ts
+claude plugin test plugins/branch-guard        # idem, para o branch-guard
 claude --plugin-dir plugins/blast-radius       # carrega o plugin com recarga automática
 ```
 
@@ -35,10 +36,14 @@ Detalhes que só se entendem lendo os dois lados:
 - `CHROME_ROWS` em `register.tsx` precisa acompanhar as linhas fixas da faixa ao mudar o layout.
 - É uma rede de segurança que lê texto, não um sistema de permissões (`$(…)`, aliases e scripts passam).
 
+## branch-guard
+
+Mesmo desenho do blast-radius (`hooks/guard.ts` puro com `Probe` injetado, `hooks/register.tsx` com `hold`/`draw`), com estado próprio (`branch-guard`/`held`). `classify` levanta `commit` e `publish`; `isProtectedTarget` decide, de forma assíncrona, se a branch alvo é protegida. O parser (`parse`, `resolve`, `locate`, `isTempRepo`) é **cópia** do de `blast-radius/hooks/risk.ts`, porque um plugin não importa código de outro: uma correção em um lado precisa ser levada ao outro. O force push fica fora de propósito, por ser do blast-radius.
+
 ## Testes
 
 `tests/blast-radius.test.ts` usa `claude-code/testing` e um host falso (`answer`) que responde por executável e subcomando. Um novo tipo de risco precisa de resposta nesse host.
 
 ## Versão
 
-Ao mudar o comportamento do plugin, atualize `version` em `plugins/blast-radius/.claude-plugin/plugin.json`.
+Ao mudar o comportamento de um plugin, atualize `version` no `plugin.json` dele.
