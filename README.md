@@ -8,6 +8,7 @@ Marketplace of [Claude Code](https://claude.com/claude-code) plugins made by and
 | --- | --- |
 | [blast-radius](plugins/blast-radius) | Holds a risky Bash command and shows what it would change before it runs. |
 | [branch-guard](plugins/branch-guard) | Holds a `git commit` or `git push` on the protected branch and shows what would go in. |
+| [pr-preview](plugins/pr-preview) | Holds a `gh pr create` or `glab mr create`, previews the title and description and flags what breaks the conventions. |
 | [tailscale](plugins/tailscale) | Lets Claude query and modify your tailnet through the Tailscale API. |
 
 ## Install
@@ -18,6 +19,7 @@ Inside Claude Code, add the marketplace and install the plugin:
 /plugin marketplace add anderson-spider/spider-marketplace
 /plugin install blast-radius@spider-marketplace
 /plugin install branch-guard@spider-marketplace
+/plugin install pr-preview@spider-marketplace
 /plugin install tailscale@spider-marketplace
 ```
 
@@ -52,6 +54,24 @@ When Claude calls Bash with `git commit` or `git push` and the target branch is 
 Passes without asking: commits and pushes on other branches, on a detached HEAD, in a repository inside `/tmp`, `git commit --dry-run`, `git push --dry-run`, tag-only pushes and commits with nothing staged. Force push is not handled here: it belongs to blast-radius. To turn the warning off, disable only this plugin.
 
 Limitations: the plugin reads the command text, so `merge`, `cherry-pick`, `rebase`, `pull`, aliases and `bash -c "git commit"` do not go through it; a stray `"` or `'` in the body of a `-m "$(cat <<EOF …)"` can confuse the parsing; it only sees what Claude types, not your terminal.
+
+## pr-preview
+
+When Claude calls Bash with `gh pr create` or `glab mr create` (also `glab-work`, `glab-personal` and other `glab-*` wrappers), PR Preview holds the call and shows in the band above the prompt what would be opened: the title, the branches, the assignee, the labels and the start of the description, with `Proceed` (key `1`), `Fix` (key `2`, only when something is wrong) and `Cancel` (key `3`). On `Fix`, Claude gets the list of problems with what to change and reruns the command; on `Cancel`, it gets the refusal.
+
+It flags what breaks these conventions, in red under the preview:
+
+| Rule | GitHub | GitLab |
+| --- | --- | --- |
+| Title | Conventional Commits, in English | Conventional Commits, in English |
+| Description | English | Brazilian Portuguese |
+| Assignee | not required | `--assignee @me` |
+| Label | not required | at least one `--label` |
+| Mentions of AI (`Co-Authored-By`, "Generated with", Claude, ChatGPT…) | flagged | flagged |
+
+The conventions live in `RULES` and the regexes of `hooks/guard.ts`. The description is read from `--body`/`--description`, from a `"$(cat <<'EOF' … EOF)"` heredoc or, for `--body-file`, with `cat`; with `--fill` the title and description come from the commits and are not checked. The language is guessed from common words and stays silent when the text says too little.
+
+Limitations: the plugin reads the command text, so aliases, `bash -c "gh pr create"` and a title or description that only the shell expands (`$VAR`) are previewed as "not readable" and not checked; only the first creation on a line is previewed; it only sees what Claude types, not your terminal.
 
 ## tailscale
 
@@ -88,6 +108,8 @@ claude plugin validate plugins/blast-radius
 claude plugin test plugins/blast-radius
 claude plugin validate plugins/branch-guard
 claude plugin test plugins/branch-guard
+claude plugin validate plugins/pr-preview
+claude plugin test plugins/pr-preview
 claude plugin validate plugins/tailscale
 claude plugin test plugins/tailscale
 ```

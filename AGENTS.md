@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Claude Code plugin marketplace (`anderson-spider/spider-marketplace`). It currently has three plugins: `blast-radius` (holds destructive commands), `branch-guard` (holds commit and push on the protected branch) and `tailscale` (tools to query and modify the tailnet). The README and other documentation are in English; code comments and user-facing messages are in English too. Pull request titles and descriptions are in English.
+Claude Code plugin marketplace (`anderson-spider/spider-marketplace`). It currently has four plugins: `blast-radius` (holds destructive commands), `branch-guard` (holds commit and push on the protected branch), `pr-preview` (holds `gh pr create` and `glab mr create` and previews them) and `tailscale` (tools to query and modify the tailnet). The README and other documentation are in English; code comments and user-facing messages are in English too. Pull request titles and descriptions are in English.
 
 ## Structure
 
@@ -15,6 +15,7 @@ claude plugin validate .                       # validates the marketplace
 claude plugin validate plugins/blast-radius    # validates the plugin
 claude plugin test plugins/blast-radius        # runs tests/blast-radius.test.ts
 claude plugin test plugins/branch-guard        # same, for branch-guard
+claude plugin test plugins/pr-preview          # same, for pr-preview
 claude plugin test plugins/tailscale           # same, for tailscale
 claude --plugin-dir plugins/blast-radius       # loads the plugin with automatic reload
 ```
@@ -41,6 +42,10 @@ Details that only make sense when reading both sides:
 ## branch-guard
 
 Same design as blast-radius (pure `hooks/guard.ts` with an injected `Probe`, `hooks/register.tsx` with `hold`/`draw`), with its own state (`branch-guard`/`held`). `classify` raises `commit` and `publish`; `isProtectedTarget` decides, asynchronously, whether the target branch is protected. The parser (`parse`, `resolve`, `locate`, `isTempRepo`) is a **copy** of the one in `blast-radius/hooks/risk.ts`, because a plugin cannot import code from another: a fix on one side must be carried to the other. Force push is left out on purpose, since it belongs to blast-radius.
+
+## pr-preview
+
+Same design as branch-guard (pure `hooks/guard.ts` with an injected `Probe`, `hooks/register.tsx` with `hold`/`draw`), with its own state (`pr-preview`/`held`). It holds every `gh pr create` and `glab mr create`, not only risky ones, because opening a PR is outward-facing. `classify` returns a `Draft` per creation (options read per platform: `-d` is `--draft` on GitHub and `--description` on GitLab, `-b` is `--body` on GitHub and `--target-branch` on GitLab; the last occurrence of a single-valued option wins). `check` returns the `Problem`s against `RULES` (per platform: assignee, label, description language) plus the title, AI-mention and description checks; `textOf` pulls a heredoc description out of `"$(cat <<'EOF' … EOF)"`; `language` guesses `pt` or `en` from stopwords. `measure` reads `--body-file` with `cat` and the branch with `git branch --show-current`, and returns the report plus the `advice` text sent to Claude on `Fix`. The parser (`parse`, `resolve`, `locate`, `enter`, `bare`) is a **copy** of the one in `branch-guard/hooks/guard.ts`: a fix on one side must be carried to the other. The band has an extra `Fix` button, and `CHROME_ROWS` does not count the problem and note rows, which `register.tsx` subtracts from the room.
 
 ## tailscale
 
