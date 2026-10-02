@@ -1,0 +1,16 @@
+{
+  "name": "spider-marketplace",
+  "owner": {
+    "name": "anderson-spider"
+  },
+  "metadata": {
+    "description": "Plugins e mods do Claude Code feitos por anderson-spider."
+  },
+  "plugins": [
+    {
+      "name": "blast-radius",
+      "source": "./plugins/blast-radius",
+      "description": "Segura um comando arriscado do Bash e mostra o que ele mudaria, com Prosseguir e Cancelar."
+    }
+  ]
+}

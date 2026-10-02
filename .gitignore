@@ -1,0 +1,2 @@
+# Tipagens que o Claude Code grava ao carregar cada plugin
+plugins/*/.claude-plugin/types/
