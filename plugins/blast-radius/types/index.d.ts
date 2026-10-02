@@ -6,7 +6,7 @@ export type BlastRadiusReport = {
   lines: string[]
   /** How many items exist in total; `lines` holds only the first ones. */
   total: number
-  /** Footer: the targets as written (`Caminhos: build`) or the size of the loss. */
+  /** Footer: the targets as written (`Paths: build`) or the size of the loss. */
   notes: string[]
 }
 

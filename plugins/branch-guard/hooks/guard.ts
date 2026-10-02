@@ -502,7 +502,7 @@ const measureCommit = async (probe: Probe, risk: Risk & { kind: 'commit' }, dir:
 
   if (risk.isAmend) {
     return {
-      summary: `reescrever o último commit de ${branch}${files.length > 0 ? ` com mais ${count(files.length, 'arquivo')}` : ''}`,
+      summary: `rewrite the last commit on ${branch}${files.length > 0 ? ` with ${count(files.length, 'more file')}` : ''}`,
       lines: files,
       ...(stat !== '' && { note: stat }),
     }
@@ -511,8 +511,8 @@ const measureCommit = async (probe: Probe, risk: Risk & { kind: 'commit' }, dir:
   return {
     summary:
       files.length === 0
-        ? `commitar direto em ${branch}, sem alterações que eu consiga ver`
-        : `commitar ${count(files.length, 'arquivo')} direto em ${branch}`,
+        ? `commit directly on ${branch}, with no changes I can see`
+        : `commit ${count(files.length, 'file')} directly on ${branch}`,
     lines: files,
     ...(stat !== '' && { note: stat }),
   }
@@ -520,7 +520,7 @@ const measureCommit = async (probe: Probe, risk: Risk & { kind: 'commit' }, dir:
 
 const measurePublish = async (probe: Probe, risk: Risk & { kind: 'publish' }, dir: string): Promise<Part> => {
   if (risk.isAllRefs) {
-    return { summary: 'enviar todas as branches locais para o remoto (--all/--mirror)', lines: [] }
+    return { summary: 'push all local branches to the remote (--all/--mirror)', lines: [] }
   }
 
   const here = (await currentOf(probe, risk, dir)) || 'HEAD'
@@ -534,21 +534,21 @@ const measurePublish = async (probe: Probe, risk: Risk & { kind: 'publish' }, di
     const ref = `${remote}/${target.name}`
 
     if (target.local === undefined && risk.refspecs.length > 0) {
-      notes.push(`${ref}: será apagada`)
+      notes.push(`${ref}: will be deleted`)
       continue
     }
 
     const log = await out(probe, ['git', 'log', '--oneline', `${ref}..${target.local ?? 'HEAD'}`], dir)
 
     if (log === undefined) {
-      notes.push(`${ref}: ref desconhecida aqui, nada a comparar`)
+      notes.push(`${ref}: unknown ref here, nothing to compare`)
     } else {
       commits.push(...rows(log))
     }
   }
 
   if (risk.hasUnknownRef) {
-    notes.push('destino não medido (só o shell sabe qual é)')
+    notes.push('target not measured (only the shell knows which it is)')
   }
 
   const names = targets.map(target => `${remote}/${target.name}`).join(', ') || remote
@@ -556,8 +556,8 @@ const measurePublish = async (probe: Probe, risk: Risk & { kind: 'publish' }, di
   return {
     summary:
       commits.length > 0
-        ? `enviar ${count(commits.length, 'commit')} para ${names}`
-        : `enviar nada novo para ${names} (comparado sem fetch)`,
+        ? `push ${count(commits.length, 'commit')} to ${names}`
+        : `push nothing new to ${names} (compared without fetch)`,
     lines: [...notes, ...commits],
   }
 }

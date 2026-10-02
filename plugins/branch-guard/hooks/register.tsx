@@ -12,7 +12,7 @@ type Slot = { id: string; decision: Decision | null }
 const TITLE = 'Branch Guard'
 // Waiting inside a `$` call does not use up the hook's time; `$.clock.sleep` would.
 const POLL = ['sleep', '0.25']
-// Border, title, Comando, Iria, the two blank lines, the footer, the 'e mais N' and the buttons.
+// Border, title, Command, Would, the two blank lines, the footer, the 'and N more' and the buttons.
 const CHROME_ROWS = 10
 const MAX_LINES = 8
 
@@ -75,8 +75,8 @@ const hold = async (
   }
 }
 
-const BRANCH = 'Abra uma branch de trabalho com `git switch -c <nome>` (mantém as alterações e os commits), siga a convenção de nome do projeto e refaça o comando nela.'
-const REVIEW = 'Enviar para a branch protegida a partir de outra branch é caso de PR: abra um em vez de empurrar direto.'
+const BRANCH = 'Open a working branch with `git switch -c <name>` (keeps your changes and commits), follow the project naming convention and rerun the command on it.'
+const REVIEW = 'Pushing to the protected branch from another branch is a PR case: open one instead of pushing directly.'
 
 const advise = (risks: readonly Risk[]) =>
   risks.some(risk => risk.kind === 'publish' && risk.refspecs.some(spec => spec.includes(':'))) ? REVIEW : BRANCH
@@ -92,13 +92,13 @@ const draw = ({ Box, Text, Button }: Kit, now: BranchGuardHeld, room: number): R
         ⚠ {TITLE} · {report.title}
       </Text>
       <Box>
-        <Text dimColor>{'Comando  '}</Text>
+        <Text dimColor>{'Command  '}</Text>
         <Text bold wrap="truncate-end">
           {now.command.replace(/\s*\n\s*/g, ' ')}
         </Text>
       </Box>
       <Box>
-        <Text dimColor>{'Iria     '}</Text>
+        <Text dimColor>{'Would    '}</Text>
         <Text bold color="error">
           {report.summary}
         </Text>
@@ -107,7 +107,7 @@ const draw = ({ Box, Text, Button }: Kit, now: BranchGuardHeld, room: number): R
         {shown.map(line => (
           <Text wrap="truncate-end">{line}</Text>
         ))}
-        {hidden > 0 && <Text dimColor>{`… e mais ${hidden}`}</Text>}
+        {hidden > 0 && <Text dimColor>{`… and ${hidden} more`}</Text>}
       </Box>
       {report.notes.map(note => (
         <Text dimColor italic wrap="truncate-end">
@@ -115,9 +115,9 @@ const draw = ({ Box, Text, Button }: Kit, now: BranchGuardHeld, room: number): R
         </Text>
       ))}
       <Box marginTop={1} gap={2}>
-        <Button key="proceed" label="Prosseguir" hotkey="1" plain onPress={() => decide('proceed')} />
-        <Button key="cancel" label="Cancelar" hotkey="2" plain autoFocus onPress={() => decide('cancel')} />
-        <Text dimColor>Claude aguarda sua resposta</Text>
+        <Button key="proceed" label="Proceed" hotkey="1" plain onPress={() => decide('proceed')} />
+        <Button key="cancel" label="Cancel" hotkey="2" plain autoFocus onPress={() => decide('cancel')} />
+        <Text dimColor>Claude is waiting for your answer</Text>
       </Box>
     </Box>
   )
@@ -168,8 +168,8 @@ export const register: Register = on => {
     return {
       deny:
         outcome === 'cancel'
-          ? `Branch Guard segurou este comando: a pessoa pressionou Cancelar. Ele iria ${report.summary}. ${advise(risks)}`
-          : `Branch Guard segurou este comando e a espera foi interrompida antes de uma decisão. Ele iria ${report.summary}.`,
+          ? `Branch Guard held this command: the person pressed Cancel. It would ${report.summary}. ${advise(risks)}`
+          : `Branch Guard held this command and the wait was interrupted before a decision. It would ${report.summary}.`,
     }
   })
 

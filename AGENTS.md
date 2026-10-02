@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Claude Code plugin marketplace (`anderson-spider/spider-marketplace`). It currently has three plugins: `blast-radius` (holds destructive commands), `branch-guard` (holds commit and push on the protected branch) and `tailscale` (tools to query and modify the tailnet). The README and other documentation are in English; code comments are in English, while user-facing messages stay in Brazilian Portuguese. Pull request titles and descriptions are in English.
+Claude Code plugin marketplace (`anderson-spider/spider-marketplace`). It currently has three plugins: `blast-radius` (holds destructive commands), `branch-guard` (holds commit and push on the protected branch) and `tailscale` (tools to query and modify the tailnet). The README and other documentation are in English; code comments and user-facing messages are in English too. Pull request titles and descriptions are in English.
 
 ## Structure
 

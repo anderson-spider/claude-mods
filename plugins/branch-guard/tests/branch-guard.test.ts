@@ -188,25 +188,25 @@ test('measure reports what the commit or the push would do, from git itself', as
   expect(await report('git commit -m x')).toEqual({
     title: 'git commit',
     notes: ['2 files changed, 3 insertions(+)'],
-    summary: 'commitar 2 arquivos direto em main',
+    summary: 'commit 2 files directly on main',
     lines: ['src/a.ts', 'src/b.ts'],
     total: 2,
   })
   expect(calls).toContain('git diff --cached --name-only')
 
-  expect((await report('git commit -am x')).summary).toBe('commitar 2 arquivos direto em main')
+  expect((await report('git commit -am x')).summary).toBe('commit 2 files directly on main')
   expect(calls.at(-1)).toBe('git status --porcelain')
   expect((await report('git add -A && git commit -m x')).lines).toEqual([' M src/a.ts', ' M src/b.ts', '?? notes.txt'])
-  expect((await report('git commit --amend --no-edit')).summary).toBe('reescrever o último commit de main com mais 2 arquivos')
+  expect((await report('git commit --amend --no-edit')).summary).toBe('rewrite the last commit on main with 2 more files')
 
   calls.length = 0
-  expect((await report('git push origin main')).summary).toBe('enviar 2 commits para origin/main')
+  expect((await report('git push origin main')).summary).toBe('push 2 commits to origin/main')
   expect(calls.at(-1)).toBe('git log --oneline origin/main..main')
-  expect((await report('git push')).summary).toBe('enviar 2 commits para origin/main')
-  expect((await report('git push origin HEAD:main', '/work')).summary).toBe('enviar 2 commits para origin/main')
+  expect((await report('git push')).summary).toBe('push 2 commits to origin/main')
+  expect((await report('git push origin HEAD:main', '/work')).summary).toBe('push 2 commits to origin/main')
   expect(calls.at(-1)).toBe('git log --oneline origin/main..HEAD')
-  expect(await report('git push origin :main', '/work')).toMatchObject({ summary: 'enviar nada novo para origin/main (comparado sem fetch)', lines: ['origin/main: será apagada'] })
-  expect((await report('git push --all')).summary).toBe('enviar todas as branches locais para o remoto (--all/--mirror)')
+  expect(await report('git push origin :main', '/work')).toMatchObject({ summary: 'push nothing new to origin/main (compared without fetch)', lines: ['origin/main: will be deleted'] })
+  expect((await report('git push --all')).summary).toBe('push all local branches to the remote (--all/--mirror)')
   expect((await report('git commit -m x && git push origin main')).title).toBe('git commit + git push')
 })
 
@@ -232,21 +232,21 @@ test('the band holds a commit on main: Cancel refuses it with advice, Proceed ru
     await pause(50)
     const ui = await $.ui.mount({ ...BAND, surface })
     expect(await ui.find({ type: 'Text', text: '⚠ Branch Guard · git commit' })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: 'commitar 2 arquivos direto em main' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'commit 2 files directly on main' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: 'src/a.ts' })).toBeDefined()
     expect(await ui.findAll({ type: 'Button' })).toHaveLength(2)
     await ui.press({ key: 'cancel' })
 
     const denied = (await refused).deny
 
-    expect(denied).toMatch(/pressionou Cancelar\. Ele iria commitar 2 arquivos direto em main\./)
-    expect(denied).toMatch(/git switch -c <nome>/)
+    expect(denied).toMatch(/pressed Cancel\. It would commit 2 files directly on main\./)
+    expect(denied).toMatch(/git switch -c <name>/)
     expect(seen.ran).toEqual([])
     expect(await ui.findAll({ type: 'Button' })).toHaveLength(0)
 
     const allowed = $.tool.call({ tool: 'Bash', command: 'git push origin main' })
     await pause(50)
-    expect(await ui.find({ type: 'Text', text: 'enviar 2 commits para origin/main' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'push 2 commits to origin/main' })).toBeDefined()
     await ui.press({ key: 'proceed' })
 
     expect((await allowed).deny).toBeUndefined()

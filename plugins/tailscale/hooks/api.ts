@@ -33,7 +33,7 @@ export function buildUrl(path: unknown): string | undefined {
 export function forbidden(method: string, path: string): string | undefined {
   const bare = (path.split('?')[0] ?? '').replace(/\/+$/, '')
   if (method === 'DELETE' && /^\/tailnet\/[^/]+$/.test(bare)) {
-    return 'Apagar a tailnet inteira (DELETE /tailnet/{tailnet}) não é feito por esta tool. Faça pelo console de administração.'
+    return 'Deleting the entire tailnet (DELETE /tailnet/{tailnet}) is not done by this tool. Use the admin console.'
   }
   return undefined
 }
@@ -110,10 +110,10 @@ export async function call(
   key: string | undefined,
   req: Request,
 ): Promise<{ text: string; isError: boolean }> {
-  if (!key) return { text: 'TS_API_KEY não está definida no ambiente do Claude Code.', isError: true }
+  if (!key) return { text: 'TS_API_KEY is not set in the Claude Code environment.', isError: true }
   const url = buildUrl(req.path)
   if (!url) {
-    return { text: `Caminho inválido: ${String(req.path)}. Use algo como /tailnet/-/devices.`, isError: true }
+    return { text: `Invalid path: ${String(req.path)}. Use something like /tailnet/-/devices.`, isError: true }
   }
   const blocked = forbidden(req.method, req.path as string)
   if (blocked) return { text: blocked, isError: true }
@@ -135,11 +135,11 @@ export async function call(
   try {
     const res = await fetch(url, { method: req.method, headers, body: payload })
     const raw = transform(res.text, req)
-    const text = raw.length > MAX_CHARS ? raw.slice(0, MAX_CHARS) + '\n…(cortado; use "fields" para pedir menos)' : raw
+    const text = raw.length > MAX_CHARS ? raw.slice(0, MAX_CHARS) + '\n…(truncated; use "fields" to request less)' : raw
     const etag = res.headers?.etag
     return { text: `HTTP ${res.status}\n${etag ? `ETag: ${etag}\n` : ''}${text}`, isError: !res.ok }
   } catch (err) {
-    return { text: `Falha na chamada: ${err instanceof Error ? err.message : String(err)}`, isError: true }
+    return { text: `Call failed: ${err instanceof Error ? err.message : String(err)}`, isError: true }
   }
 }
 
