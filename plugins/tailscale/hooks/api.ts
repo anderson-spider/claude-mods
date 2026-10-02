@@ -12,24 +12,24 @@ export type Request = {
   method: string
   path: unknown
   body?: unknown
-  /** Valor do ETag de um GET /acl anterior, para o POST /acl não sobrescrever edição alheia. */
+  /** ETag value from a previous GET /acl, so the POST /acl does not overwrite someone else's edit. */
   ifMatch?: string
-  /** Tira os campos de REDACTED_FIELDS da resposta. */
+  /** Strips the REDACTED_FIELDS fields from the response. */
   redact?: boolean
-  /** Mantém só estas chaves (em qualquer nível) da resposta JSON. */
+  /** Keeps only these keys (at any level) of the JSON response. */
   fields?: readonly string[]
 }
 
-/** Aceita só caminhos relativos da API (ex.: /tailnet/-/devices), sem escapar do host. */
+/** Accepts only paths relative to the API (e.g. /tailnet/-/devices), without escaping the host. */
 export function buildUrl(path: unknown): string | undefined {
   if (typeof path !== 'string' || !path.startsWith('/')) return undefined
   if (path.startsWith('//') || path.includes('..') || /[\s\\#]/.test(path)) return undefined
-  // um servidor poderia normalizar o ponto, a barra ou a barra invertida codificados
+  // a server could normalize the encoded dot, slash or backslash
   if (/%(2e|2f|5c)/i.test(path)) return undefined
   return BASE + path
 }
 
-/** Operações que a tool de escrita nunca faz: apagar a tailnet inteira (DELETE /tailnet/{tailnet}). */
+/** Operations the write tool never performs: deleting the whole tailnet (DELETE /tailnet/{tailnet}). */
 export function forbidden(method: string, path: string): string | undefined {
   const bare = (path.split('?')[0] ?? '').replace(/\/+$/, '')
   if (method === 'DELETE' && /^\/tailnet\/[^/]+$/.test(bare)) {
@@ -38,7 +38,7 @@ export function forbidden(method: string, path: string): string | undefined {
   return undefined
 }
 
-/** Campos de segredo que não devem chegar ao modelo nas respostas de leitura. */
+/** Secret fields that must not reach the model in read responses. */
 export const REDACTED_FIELDS = new Set([
   'machineKey',
   'nodeKey',
@@ -70,7 +70,7 @@ function isEmpty(value: unknown): boolean {
   return isObject(value) && Object.keys(value).length === 0
 }
 
-/** Mantém só as chaves de `fields`; o que não cabe sai, e o que sobra vazio some. */
+/** Keeps only the `fields` keys; what does not fit is dropped, and what is left empty disappears. */
 function pick(value: unknown, fields: ReadonlySet<string>): unknown {
   if (Array.isArray(value)) {
     return value.map((v) => pick(v, fields)).filter((v) => !isEmpty(v))
@@ -87,12 +87,12 @@ function pick(value: unknown, fields: ReadonlySet<string>): unknown {
   return out
 }
 
-/** Remove os REDACTED_FIELDS em qualquer nível; texto que não é JSON passa intacto. */
+/** Removes the REDACTED_FIELDS at any level; text that is not JSON passes through intact. */
 export function redact(text: string): string {
   return transform(text, { redact: true })
 }
 
-/** Aplica `redact` e `fields` ao corpo; texto que não é JSON passa intacto. */
+/** Applies `redact` and `fields` to the body; text that is not JSON passes through intact. */
 export function transform(text: string, opts: { redact?: boolean; fields?: readonly string[] }): string {
   if (!opts.redact && !opts.fields?.length) return text
   try {
@@ -124,7 +124,7 @@ export async function call(
   if (req.body !== undefined) {
     if (typeof req.body === 'string') {
       payload = req.body
-      // política de ACL escrita à mão (comentários, vírgula sobrando) é HuJSON, não JSON
+      // a hand-written ACL policy (comments, trailing comma) is HuJSON, not JSON
       headers['Content-Type'] = isJson(payload) ? 'application/json' : 'application/hujson'
     } else {
       payload = JSON.stringify(req.body)

@@ -10,17 +10,17 @@ type Decision = 'proceed' | 'cancel'
 type Slot = { id: string; decision: Decision | null }
 
 const TITLE = 'Blast Radius'
-// Esperar dentro de uma chamada de `$` não gasta o tempo do hook; `$.clock.sleep` gastaria.
+// Waiting inside a `$` call does not use up the hook's time; `$.clock.sleep` would.
 const POLL = ['sleep', '0.25']
-// Borda, título, Comando, Iria, as duas linhas em branco, o rodapé, o 'e mais N' e os botões.
+// Border, title, Comando, Iria, the two blank lines, the footer, the 'e mais N' and the buttons.
 const CHROME_ROWS = 10
 const MAX_LINES = 8
 
 const ref = { plugin: 'blast-radius', key: 'held' } as const
 const held = atom(ref, null)
 
-// As leituras de `$.state` de um dispatch veem um só momento: a decisão que o hook
-// espera não chegaria por lá, então ela viaja por aqui e o estado guarda só o desenho.
+// Reads of `$.state` in a dispatch see a single moment: the decision the hook
+// is waiting for would not arrive that way, so it travels here and the state holds only the drawing.
 let waiting: Slot | undefined
 
 const probe = ($: EngineInterface): Probe => ({
@@ -40,7 +40,7 @@ const decide = (decision: Decision) => {
   }
 }
 
-/** Segura a chamada até a pessoa decidir; nunca rejeita, para o comando não escapar por um erro. */
+/** Holds the call until the person decides; never rejects, so the command cannot slip through on an error. */
 const hold = async (
   $: EngineInterface,
   mine: BlastRadiusHeld,
@@ -49,7 +49,7 @@ const hold = async (
   const slot: Slot = { id: mine.id, decision: null }
 
   try {
-    // Uma chamada segurada por vez: a segunda espera a primeira ser decidida.
+    // One held call at a time: the second waits for the first to be decided.
     while (waiting !== undefined) {
       if (signal.aborted) {
         return 'aborted'
@@ -119,7 +119,7 @@ const draw = ({ Box, Text, Button }: Kit, now: BlastRadiusHeld, room: number): R
 }
 
 export const register: Register = on => {
-  // Um reload no meio de uma espera deixaria o valor preso e seguraria tudo depois dele.
+  // A reload in the middle of a wait would leave the value stuck and hold everything after it.
   on('session.start', async ($, e, next) => {
     waiting = undefined
     await $.state.set(ref, null)
@@ -138,7 +138,7 @@ export const register: Register = on => {
     const cwd = await $.session.cwd()
     const risks: Risk[] = []
 
-    // O que só toca um temporário do sistema passa sem perguntar.
+    // Anything that only touches a system temp directory passes without asking.
     for (const risk of found) {
       if (!(await isDisposable(host, risk, cwd))) {
         risks.push(risk)
@@ -168,7 +168,7 @@ export const register: Register = on => {
     }
   })
 
-  // O relatório fica na faixa acima do prompt, em qualquer largura.
+  // The report goes in the band above the prompt, at any width.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const now = await read($, held)
 

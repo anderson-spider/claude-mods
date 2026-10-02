@@ -2,26 +2,26 @@ import type { ProcessRunInit, ProcessRunResult } from 'claude-code'
 
 import type { BranchGuardReport } from '../types'
 
-// O parser, `resolve`, `locate` e a checagem de repositório temporário são cópias enxutas dos
-// de plugins/blast-radius/hooks/risk.ts: um plugin não importa código de outro. Uma correção
-// lá precisa ser levada para cá.
+// The parser, `resolve`, `locate` and the temp repository check are trimmed copies of those
+// in plugins/blast-radius/hooks/risk.ts: a plugin does not import code from another. A fix
+// there must be carried over here.
 
-/** Uma palavra do comando, já sem aspas, e o que o shell ainda faria com ela. */
+/** A word of the command, already unquoted, and what the shell would still do with it. */
 export type Word = {
   text: string
-  /** Tem `$`, crase ou chaves: só o shell sabe no que vira. */
+  /** Has `$`, a backtick or braces: only the shell knows what it becomes. */
   isUnknown: boolean
-  /** Tem `~` fora de aspas. */
+  /** Has `~` outside quotes. */
   isHome: boolean
 }
 
 export type Risk = {
   dir: string
-  /** Um `cd` ilegível veio antes: `dir` não é confiável. */
+  /** An unreadable `cd` came before: `dir` is not reliable. */
   isAdrift?: boolean
-  /** Um --git-dir ou --work-tree aponta o git para fora de `dir`. */
+  /** A --git-dir or --work-tree points git outside `dir`. */
   isElsewhere: boolean
-  /** A branch que um `checkout`/`switch` da mesma linha deixa ativa; `unknown` quando o texto não revela. */
+  /** The branch a `checkout`/`switch` on the same line leaves active; `unknown` when the text does not reveal it. */
   branchAfter?: string
 } & (
   | {
@@ -30,7 +30,7 @@ export type Risk = {
       isAmend: boolean
       isAllowEmpty: boolean
       hasPathspec: boolean
-      /** Um `git add` veio antes na linha: o índice de agora não é o do commit. */
+      /** A `git add` came earlier on the line: the current index is not the commit's. */
       stagesFirst: boolean
     }
   | {
@@ -42,17 +42,17 @@ export type Risk = {
     }
 )
 
-/** O que a checagem precisa do host; quem tem o `$` é o módulo de hooks, que o entrega assim. */
+/** What the check needs from the host; the hooks module owns `$` and hands it over this way. */
 export type Probe = {
   run: (argv: readonly string[], init: ProcessRunInit) => Promise<ProcessRunResult>
   home: () => Promise<string | undefined>
-  /** O caminho com todo link simbólico resolvido; `undefined` quando ele não existe. */
+  /** The path with every symlink resolved; `undefined` when it does not exist. */
   real: (path: string) => Promise<string | undefined>
 }
 
 type Part = { summary: string; lines: string[]; note?: string }
 
-/** As branches em que um commit ou push direto merece uma pergunta. */
+/** The branches where a direct commit or push deserves a question. */
 export const PROTECTED = /^(main|master|develop|release([/_-].*)?)$/
 
 const KEPT_LINES = 40
@@ -83,9 +83,9 @@ const COMMIT_LONG = [
 const PUSH_LONG = ['--push-option', '--repo', '--receive-pack', '--exec']
 const FORCES = ['-f', '--force', '--force-with-lease', '--force-if-includes']
 
-type Command = { words: Word[]; /** O separador que veio antes: `;`, `&&`, `|`, `(`… */ before: string }
+type Command = { words: Word[]; /** The separator that came before: `;`, `&&`, `|`, `(`… */ before: string }
 
-// Os comandos simples da linha, vazios inclusive, cada um com o separador que o antecede.
+// The simple commands on the line, empty ones included, each with the separator before it.
 const parse = (command: string): Command[] => {
   const commands: Command[] = [{ words: [], before: '' }]
   let text = ''
@@ -151,7 +151,7 @@ const parse = (command: string): Command[] => {
   return commands
 }
 
-/** `path` a partir de `base`, sem `.` nem `..` no meio. */
+/** `path` from `base`, with no `.` or `..` in the middle. */
 export const resolve = (base: string, path: string): string => {
   const whole = path.startsWith('/') ? path : `${base}/${path}`
   const isAbsolute = whole.startsWith('/')
@@ -168,10 +168,10 @@ export const resolve = (base: string, path: string): string => {
   return `${isAbsolute ? '/' : ''}${parts.join('/')}` || '.'
 }
 
-// `dir` depois de um `cd to`; um destino na home fica como `~/…` até alguém saber onde ela é.
+// `dir` after a `cd to`; a destination in the home stays as `~/…` until someone knows where it is.
 const enter = (dir: string, to: string) => resolve(IN_HOME.test(to) ? '.' : dir, to)
 
-/** Onde `dir` fica de verdade: a partir da home quando começa com `~`, senão a partir de `cwd`. */
+/** Where `dir` really is: from the home when it starts with `~`, otherwise from `cwd`. */
 export const locate = (cwd: string, dir: string, home: string | undefined): string | undefined => {
   if (!IN_HOME.test(dir)) {
     return resolve(cwd, dir)
@@ -194,7 +194,7 @@ const bare = (words: readonly Word[]) => {
   return words.slice(start)
 }
 
-/** Separa as flags dos argumentos soltos; `shortValued` e `longValued` levam um valor ao lado. */
+/** Splits flags from loose arguments; `shortValued` and `longValued` take a value next to them. */
 const scan = (args: readonly Word[], shortValued: string, longValued: readonly string[]) => {
   const flags = new Set<string>()
   const positional: Word[] = []
@@ -244,13 +244,13 @@ type State = {
   isStraight: boolean
 }
 
-// Onde um `checkout`/`switch` deixa a pessoa: o nome quando o texto o revela, `unknown` quando não.
+// Where a `checkout`/`switch` leaves the person: the name when the text reveals it, `unknown` when not.
 const move = (state: State, sub: string, args: readonly Word[], isSure: boolean) => {
   const makers = ['-b', '-B', '-c', '-C', '--orphan', '--create', '--force-create']
   const at = args.findIndex(arg => makers.includes(arg.text))
   const named = at >= 0 ? args[at + 1] : undefined
   const plain = args.filter(arg => !arg.text.startsWith('-') || arg.text === '-')
-  // Um `checkout` solto pode ser de arquivo; só uma branch protegida por nome conta como troca.
+  // A bare `checkout` may be of a file; only a protected branch by name counts as a switch.
   const loose = sub === 'switch' || PROTECTED.test(plain[0]?.text ?? '') ? plain[0] : undefined
   const target = at >= 0 ? named : args.some(arg => arg.text === '--') ? undefined : loose
 
@@ -308,7 +308,7 @@ const git = (state: State, words: readonly Word[], isSure: boolean): Risk | unde
 
   if (sub === 'push') {
     const { flags, positional } = scan(args, 'o', PUSH_LONG)
-    // O force push e o dry run não são daqui: o primeiro é do blast-radius, o segundo não envia nada.
+    // Force push and dry run are not handled here: the first belongs to blast-radius, the second sends nothing.
     const isOther = [...FORCES, '-n', '--dry-run'].some(flag => flags.has(flag)) || positional.some(word => word.text.startsWith('+'))
 
     if (isOther) {
@@ -327,7 +327,7 @@ const git = (state: State, words: readonly Word[], isSure: boolean): Risk | unde
       }
     }
 
-    // Só tags saindo: não mexe em branch nenhuma.
+    // Only tags going out: touches no branch.
     if ((flags.has('--tags') || positional.some(word => word.text === 'tag') || positional.slice(1).some(word => word.text.startsWith('refs/tags/'))) && named.length === 0) {
       return undefined
     }
@@ -345,11 +345,11 @@ const git = (state: State, words: readonly Word[], isSure: boolean): Risk | unde
   return undefined
 }
 
-/** Os commits e pushes que a linha de comando carrega, na ordem; vazio para todo o resto. */
+/** The commits and pushes the command line carries, in order; empty for everything else. */
 export const classify = (command: string): Risk[] => {
   const risks: Risk[] = []
   const parsed = parse(command)
-  // Com `if`, `for` e afins não dá para saber, só pelo texto, quais trocas de branch rodam.
+  // With `if`, `for` and the like, the text alone cannot tell which branch switches run.
   const isStraight = !parsed.some(one => KEYWORDS.has(one.words[0]?.text ?? ''))
   const state: State = { dir: '.', isAdrift: false, branch: undefined, isStaged: false, isStraight }
 
@@ -360,7 +360,7 @@ export const classify = (command: string): Risk[] => {
 
     if (name === 'cd' || name === 'pushd' || name === 'popd') {
       const to = args[0]?.text ?? ''
-      // Um `~` entre aspas é um nome de pasta, e `~fulano` é a home de outra pessoa.
+      // A quoted `~` is a folder name, and `~someone` is another person's home.
       const isHomePath = args[0]?.isHome === true && IN_HOME.test(to)
       const isKnown =
         name === 'cd' && args.length === 1 && args[0]?.isUnknown === false && to !== '-' && (isHomePath || !to.startsWith('~'))
@@ -383,7 +383,7 @@ export const classify = (command: string): Risk[] => {
 const rows = (text: string) => text.split('\n').filter(line => line.trim() !== '')
 const count = (many: number, one: string, plural = `${one}s`) => `${many} ${many === 1 ? one : plural}`
 
-// Um comando que não sai (git ausente, tempo esgotado) vira `undefined`, nunca um erro do hook.
+// A command that fails to run (git missing, timeout) becomes `undefined`, never a hook error.
 const out = async (probe: Probe, argv: readonly string[], cwd: string) => {
   try {
     const ran = await probe.run(argv, { cwd, timeoutMs: GIT_MS })
@@ -394,15 +394,15 @@ const out = async (probe: Probe, argv: readonly string[], cwd: string) => {
   }
 }
 
-// Onde tudo é descartável, e de que nível abaixo da raiz em diante: em /var/folders o
-// temporário de cada usuário é xx/<hash>/T, então só o que está dentro dele conta.
+// Where everything is disposable, and from which level below the root on: in /var/folders the
+// each user's temp directory is xx/<hash>/T, so only what is inside it counts.
 const TEMP_ROOTS = [
   { root: '/tmp', floor: 1 },
   { root: '/private/tmp', floor: 1 },
   { root: '/var/folders', floor: 4 },
   { root: '/private/var/folders', floor: 4 },
 ]
-// O temporário do próprio Claude Code guarda scratchpads e skills de todas as sessões.
+// Claude Code's own temp directory holds scratchpads and skills for all sessions.
 const SHARED = /^claude-[^/]*$/
 
 const isInTemp = (real: string) =>
@@ -412,7 +412,7 @@ const isInTemp = (real: string) =>
     return below.length >= floor && !(below.length === 1 && SHARED.test(below[0] ?? ''))
   })
 
-// Um alvo que não existe vale onde o pai dele fica de verdade.
+// A target that does not exist counts where its parent really is.
 const realOf = async (probe: Probe, path: string) => {
   const cut = path.lastIndexOf('/')
   const real = await probe.real(path)
@@ -421,7 +421,7 @@ const realOf = async (probe: Probe, path: string) => {
   return real ?? (parent === undefined ? undefined : `${parent}${path.slice(cut)}`)
 }
 
-// O repositório inteiro num temporário: a árvore de trabalho e o .git comum.
+// The whole repository in a temp directory: the working tree and the common .git.
 const isTempRepo = async (probe: Probe, dir: string) => {
   const asked = await out(probe, ['git', 'rev-parse', '--path-format=absolute', '--show-toplevel', '--git-common-dir'], dir)
   const places = rows(asked ?? '')
@@ -437,7 +437,7 @@ const isTempRepo = async (probe: Probe, dir: string) => {
   return places.length === 2
 }
 
-// A branch que o push atualizaria, por refspec: `src`, `src:dst`, `:dst`, `refs/heads/x`.
+// The branch the push would update, by refspec: `src`, `src:dst`, `:dst`, `refs/heads/x`.
 const pushed = (risk: Risk & { kind: 'publish' }, here: string, upstream: string | undefined) => {
   if (risk.refspecs.length === 0) {
     const tracked = risk.remote === undefined ? upstream?.replace(/^[^/]+\//, '') : undefined
@@ -459,7 +459,7 @@ const upstreamOf = (probe: Probe, dir: string) => out(probe, ['git', 'rev-parse'
 const currentOf = (probe: Probe, risk: Risk, dir: string) =>
   risk.branchAfter === undefined ? out(probe, ['git', 'branch', '--show-current'], dir) : Promise.resolve(risk.branchAfter)
 
-/** Um commit ou push cuja branch alvo é protegida; o resto passa sem perguntar. */
+/** A commit or push whose target branch is protected; everything else passes without asking. */
 export const isProtectedTarget = async (probe: Probe, risk: Risk, cwd: string): Promise<boolean> => {
   const dir = locate(cwd, risk.dir, await probe.home())
 
@@ -474,7 +474,7 @@ export const isProtectedTarget = async (probe: Probe, risk: Risk, cwd: string): 
       return false
     }
 
-    // Sem nada staged o git recusa o commit: não há o que segurar.
+    // With nothing staged git refuses the commit: there is nothing to hold.
     const isSure = risk.isAll || risk.isAmend || risk.isAllowEmpty || risk.hasPathspec || risk.stagesFirst
     const staged = isSure ? 'sure' : await out(probe, ['git', 'diff', '--cached', '--name-only'], dir)
 
@@ -565,7 +565,7 @@ const measurePublish = async (probe: Probe, risk: Risk & { kind: 'publish' }, di
 const measureOne = (probe: Probe, risk: Risk, dir: string): Promise<Part> =>
   risk.kind === 'commit' ? measureCommit(probe, risk, dir) : measurePublish(probe, risk, dir)
 
-/** O que os commits e pushes fariam, medido com o próprio git. */
+/** What the commits and pushes would do, measured with git itself. */
 export const measure = async (
   probe: Probe,
   risks: readonly Risk[],
