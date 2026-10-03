@@ -90,9 +90,9 @@ const draw = ({ Box, Text, Button }: Kit, now: PrPreviewHeld, room: number): Ren
   const hidden = report.total - shown.length
 
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor="warning" paddingX={1}>
-      <Text bold color="warning">
-        ⚠ {TITLE} · {report.title}
+    <Box flexDirection="column" borderStyle="round" borderColor="info" paddingX={1}>
+      <Text bold color="info">
+        ℹ {TITLE} · {report.title}
       </Text>
       <Box>
         <Text dimColor>{'Command  '}</Text>
@@ -102,7 +102,7 @@ const draw = ({ Box, Text, Button }: Kit, now: PrPreviewHeld, room: number): Ren
       </Box>
       <Box>
         <Text dimColor>{'Would    '}</Text>
-        <Text bold color={report.problems.length > 0 ? 'error' : 'warning'}>
+        <Text bold color={report.problems.length > 0 ? 'error' : 'info'}>
           {report.summary}
         </Text>
       </Box>

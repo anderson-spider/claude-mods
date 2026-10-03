@@ -302,7 +302,7 @@ test('the band holds a creation: Cancel refuses it, Fix hands the problems back,
     const refused = $.tool.call({ tool: 'Bash', command: bad })
     await pause(50)
     const ui = await $.ui.mount({ ...BAND, surface })
-    expect(await ui.find({ type: 'Text', text: '⚠ PR Preview · glab mr create' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'ℹ PR Preview · glab mr create' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: 'open a merge request on GitLab' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: '✗ You are not the assignee.' })).toBeDefined()
     expect(await ui.findAll({ type: 'Button' })).toHaveLength(3)
