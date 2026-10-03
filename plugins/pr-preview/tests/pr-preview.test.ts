@@ -335,3 +335,21 @@ test('the band holds a creation: Cancel refuses it, Fix hands the problems back,
     await ui.unmount()
   }
 })
+
+test('the band proceeds on its own after 10 seconds without an answer, even with problems', async ($, on) => {
+  const seen = world(on)
+  const bad = 'glab mr create --title "Add it" --description "' + GOOD_EN + '"'
+  const held = $.tool.call({ tool: 'Bash', command: bad })
+  await pause(50)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+
+  expect(await ui.find({ type: 'Text', text: '✗ You are not the assignee.' })).toBeDefined()
+  // The fake host sleeps 5 ms per poll, so the 10 seconds pass in about 200 ms here.
+  expect(await ui.find({ type: 'Text', text: /^Proceeds on its own in \d+s$/ })).toBeDefined()
+  expect(seen.ran).toEqual([])
+
+  expect((await held).deny).toBeUndefined()
+  expect(seen.ran).toEqual([bad])
+  expect(await ui.findAll({ type: 'Button' })).toHaveLength(0)
+  await ui.unmount()
+})

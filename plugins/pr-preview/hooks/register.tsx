@@ -12,6 +12,9 @@ type Slot = { id: string; decision: Decision | null }
 const TITLE = 'PR Preview'
 // Waiting inside a `$` call does not use up the hook's time; `$.clock.sleep` would.
 const POLL = ['sleep', '0.25']
+const POLLS_PER_SECOND = 4
+// With no answer in this many seconds the band proceeds as proposed.
+const AUTO_PROCEED_SECONDS = 10
 // Border, title, Command, Would, the two blank lines, the 'and N more' and the buttons; the problems and notes are counted apart.
 const CHROME_ROWS = 9
 const MAX_LINES = 14
@@ -37,7 +40,7 @@ const decide = (decision: Decision) => {
 /** Holds the call until the person decides; never rejects, so the command cannot slip through on an error. */
 const hold = async (
   $: EngineInterface,
-  mine: PrPreviewHeld,
+  mine: Omit<PrPreviewHeld, 'remaining'>,
   signal: AbortSignal,
 ): Promise<Decision | 'aborted'> => {
   const slot: Slot = { id: mine.id, decision: null }
@@ -53,10 +56,21 @@ const hold = async (
     }
 
     waiting = slot
-    await $.state.set(ref, mine)
+    await $.state.set(ref, { ...mine, remaining: AUTO_PROCEED_SECONDS })
+
+    let polls = 0
 
     while (slot.decision === null && !signal.aborted) {
+      if (polls >= AUTO_PROCEED_SECONDS * POLLS_PER_SECOND) {
+        return 'proceed'
+      }
+
       await $.process.run(POLL)
+      polls += 1
+
+      if (polls % POLLS_PER_SECOND === 0 && slot.decision === null) {
+        await $.state.set(ref, { ...mine, remaining: AUTO_PROCEED_SECONDS - polls / POLLS_PER_SECOND })
+      }
     }
 
     return slot.decision ?? 'aborted'
@@ -112,7 +126,7 @@ const draw = ({ Box, Text, Button }: Kit, now: PrPreviewHeld, room: number): Ren
         <Button key="proceed" label="Proceed" hotkey="1" plain onPress={() => decide('proceed')} />
         {report.problems.length > 0 && <Button key="fix" label="Fix" hotkey="2" plain onPress={() => decide('fix')} />}
         <Button key="cancel" label="Cancel" hotkey="3" plain autoFocus onPress={() => decide('cancel')} />
-        <Text dimColor>Claude is waiting for your answer</Text>
+        <Text dimColor>{`Proceeds on its own in ${now.remaining}s`}</Text>
       </Box>
     </Box>
   )

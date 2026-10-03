@@ -18,6 +18,8 @@ export type PrPreviewHeld = {
   id: string
   command: string
   report: PrPreviewReport
+  /** Seconds left before the band proceeds on its own. */
+  remaining: number
 }
 
 declare module 'claude-code' {

@@ -1,7 +1,7 @@
 {
   "name": "pr-preview",
-  "version": "0.2.0",
-  "description": "Holds a gh pr create, gh pr edit, glab mr create or glab mr update, previews the title and description and flags what breaks the conventions, with Proceed, Fix and Cancel.",
+  "version": "0.3.0",
+  "description": "Holds a gh pr create, gh pr edit, glab mr create or glab mr update, previews the title and description and flags what breaks the conventions, with Proceed, Fix and Cancel; proceeds on its own after 10 seconds without an answer.",
   "author": { "name": "anderson-spider" },
   "types": "./types/index.d.ts"
 }
