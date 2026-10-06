@@ -1,8 +1,0 @@
-{
-  "name": "usage-line",
-  "version": "0.8.0",
-  "description": "Keeps the context fill and the 5h and 7d rate-limit windows above the prompt, in three cards with the diff's green and red.",
-  "author": {
-    "name": "anderson-spider"
-  }
-}
