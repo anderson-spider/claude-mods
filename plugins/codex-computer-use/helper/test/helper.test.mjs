@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { request } from 'node:http'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
@@ -342,4 +343,23 @@ test('socket API routes calls, approvals, settings and rejects bad callers', asy
     server.close()
     hub.close()
   }
+})
+
+test('install.sh --check writes nothing', () => {
+  const home = mkdtempSync(join(tmpdir(), 'codex-cu-install-'))
+  const script = fileURLToPath(new URL('../install.sh', import.meta.url))
+  const ran = spawnSync('/bin/sh', [script, '--check'], { env: { ...process.env, HOME: home }, encoding: 'utf8' })
+
+  if (ran.status === 0) {
+    assert.match(ran.stdout, /ready to install/)
+  } else {
+    assert.equal(ran.status, 1)
+    assert.match(ran.stderr, /codex-cu:/)
+  }
+
+  assert.deepEqual(readdirSync(home), [])
+
+  const both = spawnSync('/bin/sh', [script, '--check', '--plugin-dir', home], { env: { ...process.env, HOME: home }, encoding: 'utf8' })
+  assert.equal(both.status, 2)
+  assert.deepEqual(readdirSync(home), [])
 })

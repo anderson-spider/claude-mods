@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
 import { callerOf, post } from '../hooks/helper'
-import { isOwnDesktopTool, parseCommand, toAnswer } from '../hooks/routing'
+import { isOwnDesktopTool, limitMs, parseCommand, toAnswer } from '../hooks/routing'
 
 declare const setTimeout: (fn: () => void, ms: number) => unknown
 const pause = (ms: number) => new Promise<void>(done => setTimeout(() => done(), ms))
@@ -224,4 +224,15 @@ test('/codex-cu forget <app> asks the helper to drop it from both always-allow l
 
   const failed = await $.command.run({ command: 'codex-cu', args: 'forget Nowhere' } as never)
   expect(failed.text).toMatch(/could not forget Nowhere: no app found/)
+})
+
+test('limitMs reads minutes, falls back and caps', () => {
+  expect(limitMs(undefined, 5)).toBe(300_000)
+  expect(limitMs('abc', 5)).toBe(300_000)
+  expect(limitMs(0, 5)).toBe(300_000)
+  expect(limitMs(-3, 5)).toBe(300_000)
+  expect(limitMs(NaN, 5)).toBe(300_000)
+  expect(limitMs(0.5, 5)).toBe(30_000)
+  expect(limitMs('12', 5)).toBe(720_000)
+  expect(limitMs(1e9, 5)).toBe(86_400_000)
 })

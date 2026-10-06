@@ -4,7 +4,7 @@ import type { Elements, EngineInterface, Register, RenderElement } from 'claude-
 import type { CodexAsking } from '../types'
 import { callerOf, kickstart, post, socketOf } from './helper'
 import type { Probe, Reply } from './helper'
-import { BRIDGE, DESCRIPTION, HELP, INPUT_SCHEMA, PROMPT, denyOwn, forgetText, isOwnDesktopTool, parseCommand, toAnswer } from './routing'
+import { BRIDGE, DESCRIPTION, HELP, INPUT_SCHEMA, PROMPT, denyOwn, forgetText, isOwnDesktopTool, limitMs, parseCommand, toAnswer } from './routing'
 import type { ToolAnswer } from './routing'
 
 type Kit = Pick<Elements['terminal'], 'Box' | 'Text' | 'Button'>
@@ -16,7 +16,8 @@ const TOOL = `mcp__${PLUGIN}__${BRIDGE}`
 const COMMAND = 'codex-cu'
 // Waiting inside a `$` call does not use up the hook's time; `$.clock.sleep` would.
 const POLL = ['sleep', '0.25']
-const ASK_LIMIT_MS = 5 * 60_000
+// The `approvalMinutes` setting, refreshed by each register.
+let askLimitMs = limitMs(undefined, 5)
 // A call may need several apps approved, one after another.
 const MAX_APPROVALS = 5
 
@@ -65,7 +66,7 @@ const helper = async ($: EngineInterface, route: string, body: unknown): Promise
 /** Holds the bridge call until the person answers; never rejects, so a failure is never an approval. */
 const ask = async ($: EngineInterface, question: CodexAsking, signal: AbortSignal): Promise<Choice | 'aborted' | 'timeout'> => {
   const slot: Slot = { id: question.id, choice: null }
-  const deadline = Date.now() + ASK_LIMIT_MS
+  const deadline = Date.now() + askLimitMs
 
   try {
     // One question at a time: a second caller waits for the first to be answered.
@@ -135,7 +136,9 @@ const statusText = async ($: EngineInterface) => {
   return lines.join('\n')
 }
 
-export const register: Register = on => {
+export const register: Register = (on, options) => {
+  askLimitMs = limitMs(options?.approvalMinutes, 5)
+
   // A reload in the middle of a question would leave the band stuck.
   on('session.start', async ($, e, next) => {
     waiting = undefined

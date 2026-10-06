@@ -1,9 +1,17 @@
 {
   "name": "codex-computer-use",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "Routes desktop app control on this Mac through Codex computer use (the codex-cu helper) instead of Claude's own computer use; /codex-cu on|off.",
   "author": {
     "name": "anderson-spider"
   },
-  "types": "./types/index.d.ts"
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "approvalMinutes": {
+      "type": "number",
+      "title": "App approval wait (minutes)",
+      "description": "How long a call waits for you to allow or deny an app before it is refused.",
+      "default": 5
+    }
+  }
 }
