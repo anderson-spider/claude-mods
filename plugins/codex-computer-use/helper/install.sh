@@ -6,6 +6,8 @@
 #   install.sh                     helper only (plugin installed from the marketplace)
 #   install.sh --plugin-dir <dir>  also load the plugin from <dir> through
 #                                  CLAUDE_CODE_PLUGIN_DIRS in ~/.claude/settings.json
+#   install.sh --check             only check the prerequisites; changes nothing
+#                                  (not combined with --plugin-dir)
 set -eu
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -14,13 +16,20 @@ LABEL=com.anderson-spider.codex-cu
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 NODE=/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node
 PLUGIN_DIR=
+CHECK=
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --plugin-dir) PLUGIN_DIR=$(cd "$2" && pwd); shift 2 ;;
-    *) echo "usage: install.sh [--plugin-dir <dir>]" >&2; exit 2 ;;
+    --check) CHECK=1; shift ;;
+    *) echo "usage: install.sh [--plugin-dir <dir> | --check]" >&2; exit 2 ;;
   esac
 done
+
+if [ -n "$CHECK" ] && [ -n "$PLUGIN_DIR" ]; then
+  echo "usage: install.sh [--plugin-dir <dir> | --check]" >&2
+  exit 2
+fi
 
 if [ ! -x "$NODE" ]; then
   echo "codex-cu: $NODE is missing. Install the ChatGPT desktop app and turn on Computer Use in Codex first." >&2
@@ -31,6 +40,11 @@ fi
   echo "codex-cu: the Codex computer-use configuration failed its check; run: $NODE $HERE/launch.mjs --check" >&2
   exit 1
 }
+
+if [ -n "$CHECK" ]; then
+  echo "codex-cu: ready to install"
+  exit 0
+fi
 
 mkdir -p "$TARGET/state" "$TARGET/run" "$HOME/Library/LaunchAgents"
 chmod 700 "$TARGET/state" "$TARGET/run"
