@@ -360,6 +360,55 @@ async function readAnswer(browser: Browser, tabId: string): Promise<Answer> {
   return { url: read.url, markdown: read.markdown || read.text }
 }
 
+type Watch<E extends string> = {
+  /** How many answers the chat had before this run; a later one is the run's. */
+  before: number
+  pollMs: number
+  timeoutMs: number
+  /** How the run ended, or false while it goes on; `settled` is a new answer whose length held across two reads. */
+  until: (page: PageState, settled: boolean) => E | false
+  /** Called with each page read that is not the end yet. */
+  onPoll: (page: PageState) => void
+}
+
+// Checks the page as it stands, then polls it until `until` names an end, a
+// hard blocker shows, or time runs out.
+async function watch<E extends string>(
+  browser: Browser,
+  tabId: string,
+  page: PageState,
+  o: Watch<E>,
+): Promise<{ end: E | 'blocked' | 'timeout'; page: PageState }> {
+  const started = Date.now()
+  const script = stateScript(o.pollMs)
+  const lengthOf = (p: PageState) => (p.count > o.before ? p.length : -1)
+  let lastLength = lengthOf(page)
+  const settledOf = (p: PageState) => p.count > o.before && !p.stop && p.length > 0 && p.length === lastLength
+  let end = o.until(page, settledOf(page))
+  while (!end) {
+    page = parseOutput<PageState>(await browser.js(tabId, script))
+    end = o.until(page, settledOf(page))
+    if (end) break
+    if (page.blocker && !page.stop && isHardBlocker(page.blocker)) return { end: 'blocked', page }
+    lastLength = lengthOf(page)
+    if (Date.now() - started > o.timeoutMs) return { end: 'timeout', page }
+    o.onPoll(page)
+  }
+  return { end, page }
+}
+
+const stopped = (page: PageState) => ({ ok: false as const, url: page.href, error: `ChatGPT stopped: "${page.blocker}".` })
+
+// A run that ran out of time at `url`; `timedOut` when the chat may still finish there.
+function unfinished(url: string, page: PageState, timeoutMs: number, what: string, doing: string) {
+  return {
+    ok: false as const,
+    url,
+    timedOut: isChatUrl(url),
+    error: `No ${what} after ${Math.round(timeoutMs / 1000)} s; it may still be ${doing} at ${url}.${blocked(page)}`,
+  }
+}
+
 export async function ask(browser: Browser, input: AskInput, options: AskOptions = {}): Promise<AskResult> {
   const timeoutMs = options.timeoutMs ?? 6 * 60_000
   const pollMs = options.pollMs ?? 3000
@@ -369,8 +418,7 @@ export async function ask(browser: Browser, input: AskInput, options: AskOptions
   if (input.saveOnly && input.chatUrl === undefined) return { ok: false, error: 'saveOnly needs the chatUrl of the chat with the answer.' }
   const ready = await prepare(browser, input, { progress, tab, busy: input.saveOnly })
   if (!ready.ok) return ready
-  const { tabId } = ready
-  let page = ready.page
+  const { tabId, page } = ready
 
   // Saving what the chat holds: its last answer counts as the new one.
   const before = input.saveOnly ? page.count - 1 : page.count
@@ -382,28 +430,18 @@ export async function ask(browser: Browser, input: AskInput, options: AskOptions
   }
 
   progress('waiting for the answer')
-  const started = Date.now()
-  let lastLength = input.saveOnly && !page.stop ? page.length : -1
-  for (;;) {
-    if (input.saveOnly && !page.stop && page.length > 0 && page.length === lastLength) break
-    page = parseOutput<PageState>(await browser.js(tabId, stateScript(pollMs)))
-    const done = page.count > before && !page.stop && page.length > 0 && page.length === lastLength
-    if (done) break
-    if (page.blocker && !page.stop && isHardBlocker(page.blocker)) {
-      return { ok: false, url: page.href, error: `ChatGPT stopped: "${page.blocker}".` }
-    }
-    lastLength = page.count > before ? page.length : -1
-    if (Date.now() - started > timeoutMs) {
-      const partial = await readAnswer(browser, tabId)
-      return {
-        ok: false,
-        url: partial.url,
-        markdown: page.count > before ? partial.markdown : undefined,
-        timedOut: isChatUrl(partial.url),
-        error: `No complete answer after ${Math.round(timeoutMs / 1000)} s; it may still be streaming at ${partial.url}.${blocked(page)}`,
-      }
-    }
-    progress(page.count > before ? `receiving (${page.length} chars)` : 'waiting for the answer')
+  const watched = await watch(browser, tabId, page, {
+    before,
+    pollMs,
+    timeoutMs,
+    until: (_page, settled) => settled && 'answer',
+    onPoll: p => progress(p.count > before ? `receiving (${p.length} chars)` : 'waiting for the answer'),
+  })
+  if (watched.end === 'blocked') return stopped(watched.page)
+  if (watched.end === 'timeout') {
+    const partial = await readAnswer(browser, tabId)
+    const markdown = watched.page.count > before ? partial.markdown : undefined
+    return { ...unfinished(partial.url, watched.page, timeoutMs, 'complete answer', 'streaming'), markdown }
   }
 
   const { url, markdown } = await readAnswer(browser, tabId)
@@ -483,60 +521,49 @@ export async function generateImage(browser: Browser, input: ImageInput, options
   if (!ready.ok) return ready
   const { tabId } = ready
 
-  let state = ready.page
+  const start = ready.page
   // Saving what the chat holds: wait while it still generates, then take the last image.
   if (input.saveOnly) {
-    const started = Date.now()
-    while (state.stop && Date.now() - started <= timeoutMs) {
-      progress('waiting for the image to finish')
-      state = parseOutput<PageState>(await browser.js(tabId, stateScript(pollMs)))
-    }
-    if (state.stop) return { ok: false, url: state.href, timedOut: true, error: `The image is still generating at ${state.href}.` }
+    const { end, page: state } = await watch(browser, tabId, start, {
+      before: start.count,
+      pollMs,
+      timeoutMs,
+      until: p => !p.stop && 'finished',
+      onPoll: () => progress('waiting for the image to finish'),
+    })
+    if (end !== 'finished') return unfinished(state.href, state, timeoutMs, 'finished image', 'generating')
     // A freshly opened chat shows the composer before its images load.
     await browser.waitFor(tabId, `${GENERATED}.length > 0`, LOAD_MS)
     return readImages(browser, tabId, state.href, 1, progress)
   }
 
   const failed = await compose(browser, tabId, input, progress)
-  if (failed) return { ok: false, url: ready.page.href, error: failed }
+  if (failed) return { ok: false, url: start.href, error: failed }
 
-  const before = state
   const sent = parseOutput<{ sent: boolean; reason?: string }>(await browser.js(tabId, sendScript(input.prompt)))
-  if (!sent.sent) return { ok: false, url: state.href, error: `Could not send the prompt: ${sent.reason}.` }
+  if (!sent.sent) return { ok: false, url: start.href, error: `Could not send the prompt: ${sent.reason}.` }
 
   progress('waiting for the image')
-  const started = Date.now()
-  let lastLength = -1
-  for (;;) {
-    state = parseOutput<PageState>(await browser.js(tabId, stateScript(pollMs)))
-    if (state.images > before.images && !state.stop) break
-    if (state.blocker && !state.stop && isHardBlocker(state.blocker)) {
-      return { ok: false, url: state.href, error: `ChatGPT stopped: "${state.blocker}".` }
+  const { end, page: state } = await watch(browser, tabId, start, {
+    before: start.count,
+    pollMs,
+    timeoutMs,
+    until: (p, settled) => (p.images > start.images && !p.stop ? 'image' : settled && 'text'),
+    onPoll: p => progress(p.stop ? 'generating the image' : 'waiting for the image'),
+  })
+  if (end === 'blocked') return stopped(state)
+  if (end === 'timeout') return unfinished(state.href, state, timeoutMs, 'image', 'generating')
+  // No image, and a settled text answer: a refusal or a question back.
+  if (end === 'text') {
+    const read = await readAnswer(browser, tabId)
+    return {
+      ok: false,
+      url: read.url,
+      markdown: read.markdown,
+      error: 'ChatGPT answered with text instead of an image (a refusal or a question); relay it, do not rephrase around a refusal.',
     }
-    // No image, and a settled text answer: a refusal or a question back.
-    const texted = state.count > before.count && !state.stop && state.length > 0 && state.length === lastLength
-    if (texted) {
-      const read = await readAnswer(browser, tabId)
-      return {
-        ok: false,
-        url: read.url,
-        markdown: read.markdown,
-        error: 'ChatGPT answered with text instead of an image (a refusal or a question); relay it, do not rephrase around a refusal.',
-      }
-    }
-    lastLength = state.count > before.count ? state.length : -1
-    if (Date.now() - started > timeoutMs) {
-      return {
-        ok: false,
-        url: state.href,
-        timedOut: isChatUrl(state.href),
-        error: `No image after ${Math.round(timeoutMs / 1000)} s; it may still be generating at ${state.href}.${blocked(state)}`,
-      }
-    }
-    progress(state.stop ? 'generating the image' : 'waiting for the image')
   }
-
-  return readImages(browser, tabId, state.href, state.images - before.images, progress)
+  return readImages(browser, tabId, state.href, state.images - start.images, progress)
 }
 
 // Reads the chat's last `count` generated images back, oldest first.
