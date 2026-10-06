@@ -1,6 +1,6 @@
 import type { EngineInterface, Register } from 'claude-code'
 
-import { emptyRegistry, reconcile } from './registry'
+import { emptyRegistry, liveOf, reconcile } from './registry'
 import type { Registry, Thread } from './registry'
 import { agentList } from './herdr'
 import { readSettings } from './settings'
@@ -106,9 +106,10 @@ const portsOf = ($: EngineInterface): Ports => ({
       const found = theirs.threads.find(t => t.id === id)
 
       if (found !== undefined) {
+        const announcements = theirs.pending.filter(p => p.threadId === id)
         await $.store.set(`${STORE_PREFIX}${owner}`, { ...theirs, threads: theirs.threads.filter(t => t.id !== id), pending: theirs.pending.filter(p => p.threadId !== id) } as never)
 
-        return found
+        return { thread: found, pending: announcements }
       }
     }
 
@@ -146,6 +147,16 @@ const unavailable = async ($: EngineInterface): Promise<string | undefined> => {
   const asked = await $.process.run(['herdr', 'status'], { timeoutMs: 15_000 }).catch(() => undefined)
 
   return asked?.exitCode === 0 ? undefined : 'The herdr CLI did not answer. Nothing was done.'
+}
+
+/** Whether this chat has a live helper, or an announcement still to deliver: either one needs the polling running. */
+const hasWork = async ($: EngineInterface): Promise<boolean> => {
+  const ports = portsOf($)
+  const owner = await ports.owner()
+  const registry = await ports.load()
+  const own = new Set(registry.threads.filter(t => t.owner === owner).map(t => t.id))
+
+  return liveOf(registry, owner).length > 0 || registry.pending.some(p => own.has(p.threadId))
 }
 
 const ensurePolling = ($: EngineInterface, settings: Settings) => {
@@ -236,7 +247,7 @@ export const register: Register = (on, options) => {
 
       await ports.save(reconcile(await ports.load(), owner, listed.ok ? listed.value : undefined))
 
-      if ((await ports.load()).threads.some(t => t.owner === owner && ['starting', 'working', 'idle', 'blocked'].includes(t.status))) {
+      if (await hasWork($)) {
         ensurePolling($, settings)
       }
     }
@@ -260,7 +271,8 @@ export const register: Register = (on, options) => {
 
     const done = await start(portsOf($), settings, { task: String(e.task ?? ''), title: e.title, model: e.model, effort: e.effort })
 
-    if (done.isError !== true) {
+    // A start can fail after the helper exists (its task unconfirmed): what is live is watched whatever the result says.
+    if (await hasWork($)) {
       ensurePolling($, settings)
     }
 
@@ -301,7 +313,7 @@ export const register: Register = (on, options) => {
       case 'adopt': {
         const done = await takeOver(ports, id)
 
-        if (done.isError !== true) {
+        if (await hasWork($)) {
           ensurePolling($, settings)
         }
 

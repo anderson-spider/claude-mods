@@ -57,7 +57,11 @@ export const capError = (r: Registry, owner: string, max: number): string | unde
  * Brings the owner's records in line with Herdr's agents: a live record whose agent is gone is `exited`, or
  * `orphan` when it never got as far as starting one. `agents` undefined (a failed list) changes nothing.
  */
-export const reconcile = (r: Registry, owner: string, agents: Agent[] | undefined): Registry => {
+export const reconcile = (input: Registry, owner: string, agents: Agent[] | undefined): Registry => {
+  // A session that is starting has no close in flight: a flag left by one that ended mid-close would hide the helper from the polling for good.
+  const isMidClose = input.threads.some(t => t.owner === owner && t.closing === true)
+  const r = isMidClose ? { ...input, threads: input.threads.map(t => (t.owner === owner && t.closing === true ? { ...t, closing: undefined } : t)) } : input
+
   if (agents === undefined) {
     return r
   }

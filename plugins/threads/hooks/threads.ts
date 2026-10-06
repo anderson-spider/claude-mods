@@ -18,8 +18,8 @@ export type Ports = {
   owner: () => Promise<string>
   /** The helpers other chats started, read-only. */
   others: () => Promise<Thread[]>
-  /** Removes a helper from the chat that holds it and returns it, or `undefined` when no other chat has it. */
-  take: (id: string) => Promise<Thread | undefined>
+  /** Removes a helper, and the announcements still waiting about it, from the chat that holds them and returns both; `undefined` when no other chat has it. */
+  take: (id: string) => Promise<{ thread: Thread; pending: Pending[] } | undefined>
   cwd: () => Promise<string>
   /** The lead's model, for an empty `defaultModel`. */
   leadModel: () => Promise<string>
@@ -414,10 +414,15 @@ export const answer = async (ports: Ports, a: { id: string; keys?: string[]; tex
     return { text: `Sent the follow-up to ${t.id}; you will be told when it finishes.` }
   }
 
-  // Put back what it was, so the helper is not left waiting for an answer that was never asked for.
+  // Herdr saw no activity in time, but the helper may have taken the text and finish before the next look: keep tracking it.
+  if (sent.error.code === 'agent_prompt_stalled' || sent.error.code === 'timeout') {
+    return fail(`Delivery of the follow-up to ${t.id} is unconfirmed (${sent.error.code}: ${sent.error.message}). The helper may have taken it, so it is being watched for an answer; it was not sent again.`)
+  }
+
+  // A definite refusal: put back what it was, so the helper is not left waiting for an answer that was never asked for.
   await patch(ports, t.id, one => ({ ...one, status: t.status, marker: t.marker, idleSince: t.idleSince, blockedNoticed: t.blockedNoticed, awaitingAnswer: t.awaitingAnswer }))
 
-  return fail(`Delivery of the follow-up to ${t.id} is unconfirmed (${sent.error.code}: ${sent.error.message}); it was not sent again, and the helper is as it was.`)
+  return fail(`The follow-up to ${t.id} was refused (${sent.error.code}: ${sent.error.message}); the helper is as it was.`)
 }
 
 const keptReport = (t: Thread): string => {
@@ -447,85 +452,92 @@ export const close = async (ports: Ports, id: string): Promise<ToolResult> => {
   const release = (status?: Thread['status']) => patch(ports, t.id, one => ({ ...one, closing: undefined, ...(status === undefined ? {} : { status }) }))
   await patch(ports, t.id, one => ({ ...one, closing: true }))
 
-  if (t.status !== 'exited' && t.status !== 'orphan') {
-    const check = await revalidate(ports, t)
+  try {
+    if (t.status !== 'exited' && t.status !== 'orphan') {
+      const check = await revalidate(ports, t)
 
-    if (!check.ok) {
-      await release()
+      if (!check.ok) {
+        await release()
 
-      return fail(`Not closing ${t.id}: ${check.reason}.`)
-    }
+        return fail(`Not closing ${t.id}: ${check.reason}.`)
+      }
 
-    const closed = t.paneId === undefined ? undefined : await paneClose(ports.probe, t.paneId)
+      const closed = t.paneId === undefined ? undefined : await paneClose(ports.probe, t.paneId)
 
-    if (closed !== undefined && !closed.ok) {
-      await release()
+      if (closed !== undefined && !closed.ok) {
+        await release()
 
-      return fail(`Could not close the pane of ${t.id}: ${closed.error.message}. Nothing was removed.`)
-    }
+        return fail(`Could not close the pane of ${t.id}: ${closed.error.message}. Nothing was removed.`)
+      }
 
-    let isGone = false
+      let isGone = false
 
-    for (let tries = 0; tries < 5 && !isGone; tries += 1) {
-      const listed = await agentList(ports.probe)
-      isGone = listed.ok && !listed.value.some(a => a.name === t.agentName)
+      for (let tries = 0; tries < 5 && !isGone; tries += 1) {
+        const listed = await agentList(ports.probe)
+        isGone = listed.ok && !listed.value.some(a => a.name === t.agentName)
+
+        if (!isGone) {
+          await ports.sleep(500)
+        }
+      }
 
       if (!isGone) {
-        await ports.sleep(500)
+        await release()
+
+        return fail(`${t.agentName} is still running after its pane was closed. Nothing was removed.`)
       }
     }
 
-    if (!isGone) {
-      await release()
-
-      return fail(`${t.agentName} is still running after its pane was closed. Nothing was removed.`)
-    }
-  }
-
-  if (t.path === undefined) {
-    await forget(ports, t.id)
-
-    return { text: `Closed ${t.id}; it never got a worktree.` }
-  }
-
-  const repo = (await repoParent(ports.probe, t.path)) ?? (await repoParent(ports.probe, await ports.cwd()))
-
-  if (repo === undefined) {
-    await release('exited')
-
-    return fail(`Closed ${t.id}'s pane, but the repository could not be found, so its worktree at ${t.path} was kept.`)
-  }
-
-  const dropped = await discard(ports, t, repo)
-
-  switch (dropped.kind) {
-    case 'removed':
+    if (t.path === undefined) {
       await forget(ports, t.id)
 
-      return { text: `Closed ${t.id}: it had made no changes, so its worktree and branch ${t.branch} were removed.` }
-    case 'branch-left':
-      await settle(ports, t.id, one => ({ ...one, status: 'branch-left', closing: undefined }))
+      return { text: `Closed ${t.id}; it never got a worktree.` }
+    }
 
-      return { text: `Closed ${t.id} and removed its empty worktree, but branch ${t.branch} could not be deleted (${dropped.why}); delete it with: git branch -d ${t.branch}` }
-    case 'failed':
+    const repo = (await repoParent(ports.probe, t.path)) ?? (await repoParent(ports.probe, await ports.cwd()))
+
+    if (repo === undefined) {
       await release('exited')
 
-      return fail(`Closed ${t.id}'s pane, but its empty worktree was not removed (${dropped.why}). It is still at ${t.path}; try threads_close again.`)
-    case 'kept': {
-      const o = dropped.outcome
+      return fail(`Closed ${t.id}'s pane, but the repository could not be found, so its worktree at ${t.path} was kept.`)
+    }
 
-      // What is in the worktree could not be read (a lock, a timeout): not a verdict, so the close can be tried again.
-      if (o.kind === 'unknown') {
+    const dropped = await discard(ports, t, repo)
+
+    switch (dropped.kind) {
+      case 'removed':
+        await forget(ports, t.id)
+
+        return { text: `Closed ${t.id}: it had made no changes, so its worktree and branch ${t.branch} were removed.` }
+      case 'branch-left':
+        await settle(ports, t.id, one => ({ ...one, status: 'branch-left', closing: undefined }))
+
+        return { text: `Closed ${t.id} and removed its empty worktree, but branch ${t.branch} could not be deleted (${dropped.why}); delete it with: git branch -d ${t.branch}` }
+      case 'failed':
         await release('exited')
 
-        return fail(`Closed ${t.id}'s pane, but the state of its worktree at ${t.path} could not be read (${o.reason}), so it was kept; try threads_close again.`)
+        return fail(`Closed ${t.id}'s pane, but its empty worktree was not removed (${dropped.why}). It is still at ${t.path}; try threads_close again.`)
+      case 'kept': {
+        const o = dropped.outcome
+
+        // What is in the worktree could not be read (a lock, a timeout): not a verdict, so the close can be tried again.
+        if (o.kind === 'unknown') {
+          await release('exited')
+
+          return fail(`Closed ${t.id}'s pane, but the state of its worktree at ${t.path} could not be read (${o.reason}), so it was kept; try threads_close again.`)
+        }
+
+        const kept = o.kind === 'commits' ? { commits: o.commits, dirty: o.dirty } : { commits: 0, dirty: true }
+        await settle(ports, t.id, one => ({ ...one, status: 'closed' as const, kept, closing: undefined }))
+
+        return { text: keptReport({ ...t, status: 'closed', kept }) }
       }
-
-      const kept = o.kind === 'commits' ? { commits: o.commits, dirty: o.dirty } : { commits: 0, dirty: true }
-      await settle(ports, t.id, one => ({ ...one, status: 'closed' as const, kept, closing: undefined }))
-
-      return { text: keptReport({ ...t, status: 'closed', kept }) }
     }
+  } catch (error) {
+    // Whatever threw, the helper must not stay hidden from the polling.
+    await release().catch(() => undefined)
+
+    return fail(`Closing ${t.id} failed: ${error instanceof Error ? error.message : String(error)}. Check threads_status ${t.id} and try again.`)
   }
 }
 
@@ -727,7 +739,10 @@ export const takeOver = async (ports: Ports, id: string): Promise<ToolResult> =>
     return fail(`No helper of another chat with id ${id}.`)
   }
 
-  await withRegistry(ports, async r => ({ registry: { ...r, threads: [...r.threads.filter(t => t.id !== id), { ...taken, owner }] }, value: undefined }))
+  await withRegistry(ports, async r => ({
+    registry: { ...r, threads: [...r.threads.filter(t => t.id !== id), { ...taken.thread, owner }], pending: [...r.pending, ...taken.pending] },
+    value: undefined,
+  }))
 
   return { text: `This chat now owns helper ${id}.` }
 }

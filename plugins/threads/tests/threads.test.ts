@@ -22,7 +22,7 @@ import { PROMPT, startPolling } from '../hooks/register'
 import { claudeAnswerAfter, claudeTranscriptPath, lineCount } from '../hooks/transcript'
 import { branchFor, classify, currentCommit, repoParent } from '../hooks/worktree'
 import { SETTLE_MS, advance, capError, emptyRegistry, liveOf, newId, reconcile } from '../hooks/registry'
-import type { Registry, Thread } from '../hooks/registry'
+import type { Pending, Registry, Thread } from '../hooks/registry'
 import { readSettings } from '../hooks/settings'
 import { answer, briefing, clip, close, overview, poll, revalidate, start, status, takeOver } from '../hooks/threads'
 import type { Ports } from '../hooks/threads'
@@ -161,7 +161,7 @@ test('herdr results are parsed from success and error JSON', async () => {
 const gitProbe = (answers: Record<string, RunResult>): Probe => probeOf(argv => answers[argv.join(' ')] ?? out('', 128, 'fatal'))
 
 const CLEAN: Record<string, RunResult> = {
-  'git --no-optional-locks status --porcelain --ignored': out(''),
+  'git --no-optional-locks status --porcelain --ignored --untracked-files=all': out(''),
   'git rev-parse HEAD': out('aaa\n'),
   'git rev-parse --abbrev-ref HEAD': out('threads/abc123\n'),
   'git rev-list --count aaa..HEAD': out('0\n'),
@@ -186,10 +186,10 @@ test('classify says a worktree is empty only with nothing at all in it', async (
 
   const ahead = { ...CLEAN, 'git rev-parse HEAD': out('bbb\n'), 'git rev-list --count aaa..HEAD': out('2\n') }
   expect(await classify(gitProbe(ahead), WORKTREE)).toEqual({ kind: 'commits', commits: 2, dirty: false })
-  expect(await classify(gitProbe({ ...ahead, 'git --no-optional-locks status --porcelain --ignored': out(' M a.ts\n') }), WORKTREE)).toEqual({ kind: 'commits', commits: 2, dirty: true })
+  expect(await classify(gitProbe({ ...ahead, 'git --no-optional-locks status --porcelain --ignored --untracked-files=all': out(' M a.ts\n') }), WORKTREE)).toEqual({ kind: 'commits', commits: 2, dirty: true })
 
   for (const line of [' M a.ts\n', '?? notes.txt\n', '!! dist/\n']) {
-    expect(await classify(gitProbe({ ...CLEAN, 'git --no-optional-locks status --porcelain --ignored': out(line) }), WORKTREE)).toEqual({ kind: 'dirty' })
+    expect(await classify(gitProbe({ ...CLEAN, 'git --no-optional-locks status --porcelain --ignored --untracked-files=all': out(line) }), WORKTREE)).toEqual({ kind: 'dirty' })
   }
 
   expect(await classify(gitProbe({ ...CLEAN, 'git submodule status': out(' 1a2b3c sub (heads/main)\n') }), WORKTREE)).toEqual({ kind: 'dirty' })
@@ -204,7 +204,7 @@ test('classify keeps the worktree when anything is off or fails', async () => {
     expect(await kind({ ...CLEAN, [command]: out('', 128, 'fatal') })).toBe('unknown')
   }
 
-  const reason = await classify(gitProbe({ ...CLEAN, 'git --no-optional-locks status --porcelain --ignored': out('', 128, 'fatal: not a repo') }), WORKTREE)
+  const reason = await classify(gitProbe({ ...CLEAN, 'git --no-optional-locks status --porcelain --ignored --untracked-files=all': out('', 128, 'fatal: not a repo') }), WORKTREE)
   expect(reason.kind === 'unknown' && reason.reason).toMatch(/git status/)
 })
 
@@ -402,7 +402,7 @@ const harness = (over: Record<string, RunResult> = {}, registry: Registry = empt
   const calls: string[][] = []
   const files: Record<string, string> = {}
   let counter = 0
-  const state = { registry, others: [] as Thread[] }
+  const state = { registry, others: [] as Thread[], othersPending: [] as Pending[] }
   const ports: Ports = {
     probe: probeOf(argv => route(argv, over), calls, files),
     load: async () => state.registry,
@@ -414,9 +414,11 @@ const harness = (over: Record<string, RunResult> = {}, registry: Registry = empt
     others: async () => state.others,
     take: async id => {
       const found = state.others.find(one => one.id === id)
+      const pending = state.othersPending.filter(one => one.threadId === id)
       state.others = state.others.filter(one => one.id !== id)
+      state.othersPending = state.othersPending.filter(one => one.threadId !== id)
 
-      return found
+      return found === undefined ? undefined : { thread: found, pending }
     },
     cwd: async () => '/lead',
     leadModel: async () => 'claude-opus-5-5',
@@ -959,7 +961,7 @@ test('/threads lists helpers, attaches after revalidating and adopts another cha
   const mine = owned({ status: 'working' })
   const theirs = thread({ id: 'zzz999', owner: 'lead-2', agentName: 't-zzz999', status: 'working' })
   world.store.set('threads:lead-1', registryOf(mine))
-  world.store.set('threads:lead-2', registryOf(theirs))
+  world.store.set('threads:lead-2', { ...registryOf(theirs), pending: [{ threadId: 'zzz999', kind: 'finished' as const, text: 'result not yet delivered', tries: 1 }] })
   world.store.set('threads:owners', ['lead-1', 'lead-2'])
   on('clock.every', () => ({ value: { cancel: () => {} } as never }))
 
@@ -974,6 +976,8 @@ test('/threads lists helpers, attaches after revalidating and adopts another cha
   expect(String((await $.command.run({ command: 'threads', args: 'adopt zzz999' } as never)).text)).toMatch(/now owns/)
   expect((world.store.get('threads:lead-1') as Registry).threads.find(one => one.id === 'zzz999')?.owner).toBe('lead-1')
   expect((world.store.get('threads:lead-2') as Registry).threads).toEqual([])
+  expect((world.store.get('threads:lead-1') as Registry).pending.map(one => one.text)).toEqual(['result not yet delivered'])
+  expect((world.store.get('threads:lead-2') as Registry).pending).toEqual([])
 })
 
 test('a chat writes only its own registry, so another chat\'s changes cannot be overwritten', async ($, on) => {
@@ -1026,9 +1030,22 @@ test('a follow-up that looks like an option is sent as an instruction, and a fai
   expect(idle.herdr()).toEqual([])
 
   const marker = { at: 5, completionSeq: 1, transcriptLines: 3, seenWorking: true }
-  const stalled = holding(owned({ status: 'idle', marker }), { prompt: failure('agent_prompt_stalled', 'no') })
-  expect((await answer(stalled.ports, { id: '012345', text: 'go' })).isError).toBe(true)
-  expect(stalled.state.registry.threads[0]).toMatchObject({ status: 'idle', marker })
+  const refused = holding(owned({ status: 'idle', marker }), { prompt: failure('agent_blocked', 'blocked') })
+  expect((await answer(refused.ports, { id: '012345', text: 'go' })).isError).toBe(true)
+  expect(refused.state.registry.threads[0]).toMatchObject({ status: 'idle', marker })
+})
+
+test('a follow-up whose delivery is uncertain stays tracked, so its completion is not lost', async () => {
+  for (const code of ['agent_prompt_stalled', 'timeout']) {
+    const marker = { at: 5, completionSeq: 1, transcriptLines: 3, seenWorking: true }
+    const world = holding(owned({ status: 'idle', marker }), { prompt: failure(code, 'no activity seen') })
+    const result = await answer(world.ports, { id: '012345', text: 'go' })
+
+    expect(result.isError, code).toBe(true)
+    expect(result.text, code).toMatch(/may have/)
+    expect(world.state.registry.threads[0], code).toMatchObject({ status: 'working', marker: { completionSeq: 2, seenWorking: false } })
+    expect(world.herdr().filter(call => call[2] === 'prompt').length, code).toBe(1)
+  }
 })
 
 test('poll learns the session id of a helper that started without one', async () => {
@@ -1092,11 +1109,14 @@ test('a helper being closed is left alone by the polling, and its pending announ
 test('takeOver moves a helper of another chat into this one, and overview lists the others read-only', async () => {
   const world = harness()
   world.state.others = [thread({ id: 'zzz999', owner: 'lead-2', agentName: 't-zzz999' })]
+  world.state.othersPending = [{ threadId: 'zzz999', kind: 'finished', text: 'result not yet delivered', tries: 2 }]
 
   expect((await overview(world.ports)).text).toMatch(/other chats[\s\S]*zzz999/)
   expect((await takeOver(world.ports, 'zzz999')).isError).toBeUndefined()
   expect(world.state.registry.threads.map(one => [one.id, one.owner])).toEqual([['zzz999', 'lead-1']])
+  expect(world.state.registry.pending.map(one => one.text)).toEqual(['result not yet delivered'])
   expect(world.state.others).toEqual([])
+  expect(world.state.othersPending).toEqual([])
   expect((await takeOver(world.ports, 'nope00')).isError).toBe(true)
 })
 
@@ -1148,4 +1168,69 @@ test('threads_close reports a branch deletion that throws instead of failing', a
   expect(result.text).toMatch(/branch threads\/012345 could not be deleted/)
   expect(world.state.registry.threads[0]).toMatchObject({ status: 'branch-left' })
   expect(world.state.registry.threads[0]?.closing).toBeUndefined()
+})
+
+test('classify asks git for every untracked and ignored file, whatever the user\'s status config says', async () => {
+  const calls: string[][] = []
+  const base = gitProbe(CLEAN)
+  const probe: Probe = { ...base, run: async (argv, init) => (calls.push([...argv]), base.run(argv, init)) }
+
+  expect((await classify(probe, WORKTREE)).kind).toBe('empty')
+  expect(calls.find(call => call.includes('status'))).toEqual(['git', '--no-optional-locks', 'status', '--porcelain', '--ignored', '--untracked-files=all'])
+})
+
+test('threads_close releases the helper when a command throws', async () => {
+  const throwing: Array<[string, (argv: readonly string[]) => boolean]> = [
+    ['agent get', argv => argv[1] === 'agent' && argv[2] === 'get'],
+    ['pane close', argv => argv[1] === 'pane' && argv[2] === 'close'],
+    ['worktree remove', argv => argv[1] === 'worktree' && argv[2] === 'remove'],
+  ]
+
+  for (const [label, hits] of throwing) {
+    const world = holding(owned(), { list: GONE })
+    const run = world.ports.probe.run
+    world.ports.probe.run = async (argv, init) => {
+      if (argv[0] === 'herdr' && hits(argv)) throw new Error('timed out')
+
+      return run(argv, init)
+    }
+
+    const result = await close(world.ports, '012345')
+    expect(result.isError, label).toBe(true)
+    expect(result.text, label).toMatch(/timed out/)
+    expect(world.state.registry.threads[0]?.closing, label).toBeUndefined()
+  }
+})
+
+test('reconcile clears a closing flag left by a session that ended mid-close', () => {
+  const reg = registryOf(owned({ status: 'working', closing: true }), thread({ id: 'zzz999', owner: 'lead-2', agentName: 't-zzz999', closing: true }))
+  const next = reconcile(reg, 'lead-1', [agentNamed('t-012345')])
+
+  expect(next.threads[0]?.closing).toBeUndefined()
+  expect(next.threads[1]?.closing).toBe(true)
+  expect(reconcile(reg, 'lead-1', undefined).threads[0]?.closing).toBeUndefined()
+})
+
+test('polling starts whenever a helper is live, even when its task could not be confirmed', async ($, on) => {
+  hostFor(on, { prompt: failure('agent_prompt_stalled', 'no activity') })
+  const asked: number[] = []
+  on('clock.every', (_$, e) => (asked.push(e.ms), { value: { cancel: () => {} } as never }))
+
+  const result = await call($, 'threads_start', { task: 'Fix the bug' })
+  expect(result.isError).toBe(true)
+  expect(asked).toEqual([3000])
+})
+
+test('session.start restarts the polling when only an announcement is still pending', async ($, on) => {
+  const world = hostFor(on)
+  const asked: number[] = []
+  on('tool.register', () => ({ value: undefined as never }))
+  on('command.register', () => ({ value: undefined as never }))
+  on('clock.every', (_$, e) => (asked.push(e.ms), { value: { cancel: () => {} } as never }))
+  on('session.start', (_$, e) => e)
+  world.store.set('threads:owners', ['lead-1'])
+  world.store.set('threads:lead-1', { ...registryOf(owned({ status: 'exited' })), pending: [{ threadId: '012345', kind: 'exited' as const, text: 'gone', tries: 1 }] })
+
+  await $.session.start({ cwd: '/lead' } as never)
+  expect(asked).toEqual([3000])
 })

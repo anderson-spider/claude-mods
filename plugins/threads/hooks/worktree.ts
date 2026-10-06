@@ -40,8 +40,9 @@ export const currentCommit = async (probe: Probe, cwd: string): Promise<string |
  * untracked, no submodule, still on its own branch at the commit it started from. Any doubt is `unknown`.
  */
 export const classify = async (probe: Probe, a: { path: string; base: string; branch: string }): Promise<Outcome> => {
-  // No optional locks: a status taken while the helper commits must not hold its index.
-  const status = await git(probe, ['--no-optional-locks', 'status', '--porcelain', '--ignored'], a.path)
+  // No optional locks: a status taken while the helper commits must not hold its index. `--untracked-files=all` because
+  // `status.showUntrackedFiles=no` in the user's git config would otherwise hide untracked and ignored files alike.
+  const status = await git(probe, ['--no-optional-locks', 'status', '--porcelain', '--ignored', '--untracked-files=all'], a.path)
   const head = await git(probe, ['rev-parse', 'HEAD'], a.path)
   const branch = await git(probe, ['rev-parse', '--abbrev-ref', 'HEAD'], a.path)
   const ahead = await git(probe, ['rev-list', '--count', `${a.base}..HEAD`], a.path)
