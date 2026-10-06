@@ -33,6 +33,8 @@ To use a local copy instead of GitHub, pass the folder path:
 
 The plugins here are function hooks mods, a Claude Code API still in early access that may change between versions.
 
+See [Privacy and permissions](docs/PRIVACY.md) for what each plugin reads and saves, and [Verification](docs/VERIFICATION.md) for what the tests cover and what they do not.
+
 ## blast-radius
 
 When Claude calls Bash with a destructive command, Blast Radius holds the call, measures what it would change using the tools' own dry runs, and shows the report in a band above the prompt: a `Command` row, a `Would` row with the summary (e.g. "delete 9 files (1.1 MB)"), the affected items (`… and N more` when the list is cut), and the `Proceed` (key `1`) and `Cancel` (key `2`) buttons. On cancel, Claude gets the refusal along with a summary of what the command would do.
