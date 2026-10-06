@@ -10,9 +10,7 @@ Marketplace of [Claude Code](https://claude.com/claude-code) plugins made by and
 | [branch-guard](plugins/branch-guard) | Holds a `git commit` or `git push` on the protected branch and shows what would go in. |
 | [chatgpt](plugins/chatgpt) | Lets Claude ask your logged-in ChatGPT, or have it generate an image, in terminal-browser, and saves the result locally. |
 | [codex-computer-use](plugins/codex-computer-use) | Routes native Mac app control through Codex computer use from the ChatGPT app instead of Claude's own computer use, asking before each new app. |
-| [review-panel](plugins/review-panel) | Opens a read-only pane with the worktree diff, the open pull or merge request, its CI jobs and the comments already made. |
 | [tailscale](plugins/tailscale) | Lets Claude query and modify your tailnet through the Tailscale API. |
-| [usage-line](plugins/usage-line) | Keeps the context fill and the 5h and 7d rate-limit windows above the prompt, as the status line shows them. |
 
 ## Install
 
@@ -24,9 +22,7 @@ Inside Claude Code, add the marketplace and install the plugin:
 /plugin install branch-guard@spider-marketplace
 /plugin install chatgpt@spider-marketplace
 /plugin install codex-computer-use@spider-marketplace
-/plugin install review-panel@spider-marketplace
 /plugin install tailscale@spider-marketplace
-/plugin install usage-line@spider-marketplace
 ```
 
 To use a local copy instead of GitHub, pass the folder path:
@@ -120,14 +116,6 @@ It copies the helper to `~/.claude/mcp/codex-cu` (keeping `state/`, where the ap
 
 Limitations: ownership is checked for apps named as string literals in `cua.getApp(...)` and for the app each result reports, so an app reached through a variable is owned only after its first call; Codex refuses an action when the app changed since it was last read ("The user changed …"), so read and act in the same call.
 
-## review-panel
-
-`/review-panel` opens a pane beside the conversation that only reads, never writes. The **Diff** tab (key `1`) shows what changed against `HEAD` (staged, unstaged and untracked), file by file, with `+` and `-` lines in colour. The **PR** tab (key `2`) shows the pull or merge request of the current branch: title, state, branches, merge blockers, description, the CI checks or jobs (one line each) and the comments already made (reviews, plain comments and inline ones, newest first, with `resolved`/`outdated` marks). `Refresh` (key `r`) reads again; it also reads every 30 seconds while the pane is open. `▲`/`▼` (keys `k`/`j`) scroll.
-
-It reads the forge from the `origin` remote: `gh` for GitHub, `glab api --hostname <host>` for any other host (so `gitlab.com` and a self-hosted GitLab work with the same `glab`, as long as it is authenticated for that host). Only `GET` reads run. The pane takes keys after a click on it; `Esc` gives the focus back.
-
-Limitations: GitHub's REST inline comments do not say whether a thread is resolved, so only `outdated` shows there; each list is capped (100 rows from the forge, the newest 30 comments shown); a GitLab merge request is found by its source branch, so a branch with several shows the most recently updated.
-
 ## tailscale
 
 Registers two tools for Claude to talk to the Tailscale API (`https://api.tailscale.com/api/v2`), authenticated by the `TS_API_KEY` environment variable, which must be exported when Claude Code starts:
@@ -142,16 +130,6 @@ They are separate so you can allow read-only without a prompt and keep write ask
 To update the ACL without overwriting someone else's edit: do a `GET /tailnet/-/acl`, keep the response's `ETag` and pass it in `ifMatch` on the `POST /tailnet/-/acl` (the API responds 412 if the ACL changed). A string `body` that is not valid JSON is sent as HuJSON, so a policy with comments works. `DELETE /tailnet/{tailnet}`, which deletes the whole tailnet, is refused by the tool.
 
 `TS_API_KEY` must be a `tskey-api-...` key. An OAuth secret `tskey-client-...` is not valid as a Bearer without a token exchange, which the plugin does not do.
-
-## usage-line
-
-Keeps three cards above the prompt with what the status line's second row shows. Each card has the label and the percent on the left and the detail on the right: `ctx 24%` with the context window's tokens (`244k / 1M`), `5h 23% ▼50` and `7d 7% ●` with the time to the window's reset (`1h 21m`, `6d 14h`).
-
-The pace is the use minus the share of the window already gone, in points: `▼50` in green has room to spare, `▲17` in red is spending fast, and `●` is within 5 points of the pace either way; it is left out in the window's first 1%. Only the percent is bold: it stays in the text colour below 50%, turns amber from 50% and red from 80%, and the card's border shows in that colour; at rest a card is a plain fill with no border. The green and red are the desktop diff's (`#2FD84C`, `#FF2B56`); each colour has a dark-theme and a light-theme shade, picked from the `theme` in `/config`. On the desktop app the text is drawn as SVG in the monospace font the diff header uses, so it cannot be selected.
-
-The figures are the ones Claude Code hands the status line (`$.session.usage()`); they refresh after each turn, when a window moves a point, and every 30 seconds for the countdown. On a band too narrow or too short for the cards it falls back to one line, `ctx 24% · 244k / 1M  │  5h 23% ▼50 · 1h 21m  │  7d 7% ● · 6d 14h`. It gives way to another plugin's band (blast-radius, branch-guard) and to surveys.
-
-Limitations: off a subscription there are no rate-limit windows, so only `ctx` shows; with the `auto` theme, or when the desktop app's theme differs from `/config`'s, it uses the dark shades.
 
 ## Development
 
@@ -178,10 +156,6 @@ claude plugin test plugins/chatgpt
 claude plugin validate plugins/codex-computer-use
 claude plugin test plugins/codex-computer-use
 /Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node --test plugins/codex-computer-use/helper/test/helper.test.mjs
-claude plugin validate plugins/review-panel
-claude plugin test plugins/review-panel
 claude plugin validate plugins/tailscale
 claude plugin test plugins/tailscale
-claude plugin validate plugins/usage-line
-claude plugin test plugins/usage-line
 ```

@@ -28,19 +28,9 @@
       "description": "Routes native Mac app control through Codex computer use from the ChatGPT app, with per-app approval, one Codex session per Claude session or subagent, and /codex-cu on|off."
     },
     {
-      "name": "review-panel",
-      "source": "./plugins/review-panel",
-      "description": "Opens a read-only pane with the worktree diff, the open pull or merge request, its CI jobs and the comments already made."
-    },
-    {
       "name": "tailscale",
       "source": "./plugins/tailscale",
       "description": "Lets Claude query and modify the tailnet through the Tailscale API, using TS_API_KEY."
-    },
-    {
-      "name": "usage-line",
-      "source": "./plugins/usage-line",
-      "description": "Keeps the context fill and the 5h and 7d rate-limit windows above the prompt, in three cards with the diff's green and red."
     }
   ]
 }

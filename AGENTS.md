@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Claude Code plugin marketplace (`anderson-spider/spider-marketplace`). It currently has seven plugins: `blast-radius` (holds destructive commands), `branch-guard` (holds commit and push on the protected branch), `chatgpt` (asks the user's ChatGPT, or has it generate an image, in terminal-browser), `codex-computer-use` (routes native Mac app control through Codex computer use, with a local helper), `review-panel` (read-only pane with the diff, the open PR, its CI jobs and its comments), `tailscale` (tools to query and modify the tailnet) and `usage-line` (context and rate-limit usage above the prompt). The README and other documentation are in English; code comments and user-facing messages are in English too. Pull request titles and descriptions are in English.
+Claude Code plugin marketplace (`anderson-spider/spider-marketplace`). It currently has five plugins: `blast-radius` (holds destructive commands), `branch-guard` (holds commit and push on the protected branch), `chatgpt` (asks the user's ChatGPT, or has it generate an image, in terminal-browser), `codex-computer-use` (routes native Mac app control through Codex computer use, with a local helper) and `tailscale` (tools to query and modify the tailnet). The README and other documentation are in English; code comments and user-facing messages are in English too. Pull request titles and descriptions are in English.
 
 ## Structure
 
@@ -18,9 +18,7 @@ claude plugin test plugins/branch-guard        # same, for branch-guard
 claude plugin test plugins/chatgpt             # same, for chatgpt
 claude plugin test plugins/codex-computer-use  # same, for codex-computer-use (the plugin side)
 /Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node --test plugins/codex-computer-use/helper/test/helper.test.mjs   # its helper
-claude plugin test plugins/review-panel        # same, for review-panel
 claude plugin test plugins/tailscale           # same, for tailscale
-claude plugin test plugins/usage-line          # same, for usage-line
 claude --plugin-dir plugins/blast-radius       # loads the plugin with automatic reload
 ```
 
@@ -60,10 +58,6 @@ Two halves that talk over a Unix socket: the plugin (`hooks/`, runs in the hooks
 - The enabled switch lives in `$.store` (`enabled`, default on). `prompt.compose` runs at every render, so it needs no invalidation.
 - Helper tests drive the real hub and client against `helper/test/fake-server.mjs` and always point `codexApprovals` at a temp file; never let a test reach the real `ComputerUseAppApprovals.json`.
 
-## review-panel
-
-Holds nothing: `/review-panel` (`$.command.register`, answered in `command.run`) opens a pane with `$.ui.open`, drawn by a `ui.render` hook on `{ component: 'Pane', requestId: 'review-panel' }`. `hooks/panel.ts` is pure (injected `Probe`, same design as the other plugins): `readAll` returns the branch, the diff (`git diff HEAD` plus `git ls-files --others`) and a `PrView` read from `origin`: `gh pr view --json …` plus `gh api repos/<path>/pulls/<n>/comments` for GitHub, `glab api --hostname <host>` (merge request by `source_branch`, `/discussions`, `/pipelines/<id>/jobs`) for every other host. `foldGithub` and `foldGitlab` normalise both into `PrSnapshot` (the shape follows herdr-reviewr's `PrSnapshot`). The view lives in `$.state` (`review-panel`/`view`); the 30 s poll is a `$.clock.every` started once in `command.run`, kept in a module variable (a reload starts it over). `register.tsx` flattens each tab into rows and scrolls by an `offset` held in the state. `readAll` never rejects: an error becomes `diffError` or `{ kind: 'error' }`.
-
 ## chatgpt
 
 Holds nothing: it registers the `ask`, `image` and `jobs` tools (listed as `mcp__chatgpt__<name>`; their inputs are declared in `types/index.d.ts` for the matchers, kept in step with the `inputSchema`) and the `/chatgpt-ask`, `/chatgpt-image` and `/chatgpt-doctor` commands in `session.start`. It drives chatgpt.com in terminal-browser behind the injected `Browser` (`tabs`, `openTab`, `waitFor`, `js`, `upload`); `register.tsx`'s `browserOf` checks it per request: `terminal-browser ls --json` must answer, which needs Claude Code running directly in a Ghostty or kitty pane (not tmux, Herdr or a background session). The desktop app's browser pane was supported until 2026-10 and dropped to keep one backend. In `terminalBrowserOf` everything goes through `$.process.run`: `ls --json` (`listTabs`; a tab id is `<browser key>:<tab>`, `splitTabId`), `new-tab <url>` for `openTab` (`openedTab` reads the tab it names; when none is open it starts a browser in a split and names no tab, so the new browser's first tab is taken; a fresh tab answers `no CDP target yet` for a moment, which `terminalBrowser` retries), `action --browser --tab -- eval` for scripts, `action -- wait --fn <expr> --timeout <ms>` for `waitFor` (it waits inside the browser and survives a navigation), `action -- upload <selector> <paths>` for files. `action -- open` opens a new tab instead of navigating, so `findTab` moves the plugin's tab with `leaveScript` (marks the page, then `location.assign`) and waits for `LANDED` (the mark gone), then for the composer or a login page. `eval` refuses top-level `await` but waits for a returned promise.
@@ -83,17 +77,6 @@ Holds nothing: it registers two tools with `$.tool.register` in `session.start` 
 - `validate` rejects `$.http.fetch` passed as a value; that is why `register.tsx` wraps it in `(url, init) => $.http.fetch(url, init)`.
 - `result` of the `tool.call` of a custom tool is a string or array, not an object, and `isError` only accepts `true` (omit it instead of `false`).
 - The test uses only the functions in `hooks/api.ts` with a fake `fetch`; there is no fake host.
-
-## usage-line
-
-Holds nothing and keeps no state: a `ui.render` hook on `{ component: 'AbovePrompt' }` reads `$.session.usage()`, `$.clock.now()` and the `theme` row of `$.config.list()` on every draw, and `session.measure` and a 30 s `$.clock.every` (started once in `session.start`) call `$.ui.invalidate('ui.render')` to redraw. `hooks/usage.ts` is pure: `items` turns the usage into one `Item` per reading (`ctx`, `5h`, `7d`), each with a `left` side (label, percent, pace) and a `right` one (tokens or the time to the reset) as toned `Segment`s, with the same figures as the user's status line script (`formatTokens`, `formatReset`, `paceOf`: use minus the elapsed share of the window, left out in its first 1%). `paceSegment` reads the pace in points (`▼N`, `▲N`) and as `●` within `PACE_TOLERANCE` (5). `segments` joins the cards into the one-line fallback; `cardWidth` splits `bodyColumns` evenly and returns undefined when a card's two sides do not fit or the band has under 3 rows. `PALETTE` holds a dark and a light shade per colour (raw colours do not follow the theme), chosen by `isLightTheme`. Details:
-
-- The hook calls `next(e)` first and returns its result when it is not `{ type: 'engine' }`: another plugin's band (blast-radius, branch-guard) or a survey wins.
-- A card is a filled `Box` (`fillOf`) with `justifyContent: 'space-between'`. Its round border is always drawn, in the fill's own colour at rest (`borderOf`), so a card that crosses 50% shows its border without changing height.
-- Only the percent is bold (`styleOf`); the label and the details share the muted gray.
-- `session.start` calls `$.ui.status(undefined)` to clear the status line an early build pinned; the host keeps it across reloads until cleared.
-- On `desktop` each side is an `Svg` from `svgLine` (monospace `<text>` with one coloured `<tspan>` per segment, its width measured generously by `svgWidth`, wider for `▼`, `▲`, `●` and `│`, which the font may lack); the `Svg` gets no `width` prop, so a side wider than its room scales down instead of being cut. `Text` takes no font prop and the desktop draws it in its UI font, not the diff header's monospace; the terminal keeps `Text`.
-- No progress bars: the desktop surface does not draw `█`/`░` at a fixed cell width, so a bar sized in columns breaks there.
 
 ## Tests
 
