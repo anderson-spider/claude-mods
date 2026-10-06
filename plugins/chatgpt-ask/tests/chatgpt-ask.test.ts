@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { ask, fileName, parseOutput, parseTabId, parseTabs, sendScript, summary } from '../hooks/chatgpt'
+import { ask, fallbackRouter, fileName, isRefusal, parseOutput, parseTabId, parseTabs, sendScript, summary } from '../hooks/chatgpt'
 import type { Browser, BrowserTab } from '../hooks/chatgpt'
 
 // The javascript_tool prints a string result as a JSON literal plus tab notes.
@@ -123,6 +123,57 @@ test('ask refuses a logged-out page without sending anything', async () => {
   expect(result.ok).toBe(false)
   expect(!result.ok && result.error).toContain('log in')
   expect(calls.some(call => call.startsWith('send'))).toBe(false)
+})
+
+// The words the engine used when auto mode refused a plugin's browser call.
+const REFUSED =
+  'chatgpt-ask: $.mcp.call(Claude_Browser, navigate) refused: The server-side auto mode classifier gave no verdict'
+
+test('isRefusal tells a refused call from one that failed after running', () => {
+  expect(isRefusal(new Error(REFUSED))).toBe(true)
+  expect(isRefusal(REFUSED)).toBe(true)
+  expect(isRefusal(new Error('javascript_tool: socket hang up'))).toBe(false)
+  expect(isRefusal(new Error('navigate: refused to connect'))).toBe(false)
+})
+
+test('fallbackRouter falls back only on a refusal, and stays on the fallback after one', async () => {
+  const route = fallbackRouter()
+  const seen: string[] = []
+  const direct = (fail?: string) => async () => {
+    seen.push('direct')
+    if (fail) throw new Error(fail)
+    return 'direct'
+  }
+  const fallback = async () => {
+    seen.push('fallback')
+    return 'fallback'
+  }
+
+  expect(await route(direct(), fallback)).toBe('direct')
+  await expect(route(direct('javascript_tool: socket hang up'), fallback)).rejects.toThrow('socket hang up')
+  expect(seen).toEqual(['direct', 'direct'])
+
+  expect(await route(direct(REFUSED), fallback)).toBe('fallback')
+  expect(await route(direct(), fallback)).toBe('fallback')
+  expect(seen).toEqual(['direct', 'direct', 'direct', 'fallback', 'fallback'])
+})
+
+test('ask sends the prompt once even when the send fails after running', async () => {
+  const { browser, calls } = fakeBrowser({
+    open: true,
+    tabs: [{ tabId: 'seed', origin: 'https://chatgpt.com', isActive: true }],
+    pages: [{}],
+    markdown: '',
+  })
+  const send = browser.js
+  browser.js = async (tabId, code) => {
+    const output = await send(tabId, code)
+    if (code.includes('ClipboardEvent')) throw new Error('javascript_tool: socket hang up')
+    return output
+  }
+
+  await expect(ask(browser, { prompt: 'hi', newChat: true }, { pollMs: 0 })).rejects.toThrow('socket hang up')
+  expect(calls.filter(call => call.startsWith('send'))).toEqual(['send seed'])
 })
 
 test('ask reports a prompt it could not send', async () => {

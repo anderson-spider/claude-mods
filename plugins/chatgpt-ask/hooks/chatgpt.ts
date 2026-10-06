@@ -59,6 +59,35 @@ export function parseTabs(text: string): { browserOpen: boolean; tabs: BrowserTa
   return { browserOpen: parsed.browserOpen === true, tabs: parsed.tabs ?? [] }
 }
 
+// How the engine words a `$.mcp.call` it refused before the tool ran
+// (`<plugin>: $.mcp.call(<server>, <tool>) refused: <reason>`).
+const REFUSED = /\$\.mcp\.call\([^)]*\) refused\b/
+
+/** Whether `$.mcp.call` was refused, so the tool never ran. */
+export function isRefusal(error: unknown): boolean {
+  return REFUSED.test(error instanceof Error ? error.message : String(error))
+}
+
+/**
+ * Runs each call `direct` until one is refused, then `fallback` from then on.
+ * Any other failure is thrown as is: it may come after the tool ran (a prompt
+ * already sent), so the call is never repeated.
+ */
+export function fallbackRouter(): <T>(direct: () => Promise<T>, fallback: () => Promise<T>) => Promise<T> {
+  let refused = false
+  return async (direct, fallback) => {
+    if (!refused) {
+      try {
+        return await direct()
+      } catch (error) {
+        if (!isRefusal(error)) throw error
+        refused = true
+      }
+    }
+    return fallback()
+  }
+}
+
 export function parseTabId(text: string): string | undefined {
   return /"?tabId"?\s*[:=]\s*"?([\w-]+)/.exec(text)?.[1]
 }

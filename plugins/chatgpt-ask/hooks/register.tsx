@@ -1,5 +1,5 @@
 import type { EngineInterface, Register } from 'claude-code'
-import { ask, fileName, parseTabId, parseTabs, summary } from './chatgpt'
+import { ask, fallbackRouter, fileName, parseTabId, parseTabs, summary } from './chatgpt'
 import type { AskResult, Browser } from './chatgpt'
 
 // The desktop app's built-in browser pane, as its MCP tools name it.
@@ -13,26 +13,28 @@ const BOUNDARIES =
 // Only one question at a time: they share the same browser tab.
 let busy = false
 
-// $.mcp.call talks to the server directly; when it is refused (the engine
+// $.mcp.call talks to the server directly; once it is refused (the engine
 // does not list the pane's server, or auto mode's classifier cannot judge a
-// call no prompt asked for), fall back to calling the tool like the model
-// does, through the permission check where the user's allow rules apply.
-let viaTool = false
+// call no prompt asked for), calls go to the tool like the model's do,
+// through the permission check where the user's allow rules apply. Only a
+// refusal falls back: any other failure may come after the tool ran.
+const route = fallbackRouter()
 
 async function call($: EngineInterface, name: string, args: Record<string, unknown>): Promise<string> {
-  if (!viaTool) {
-    let result
-    try {
-      result = await $.mcp.call(BROWSER_SERVER, name, args)
-    } catch {
-      viaTool = true
-    }
-    if (result) {
-      const text = result.content.map(block => block.text ?? '').join('\n')
-      if (result.isError) throw new Error(`${name}: ${text}`)
-      return text
-    }
-  }
+  return route(
+    () => callDirect($, name, args),
+    () => callViaTool($, name, args),
+  )
+}
+
+async function callDirect($: EngineInterface, name: string, args: Record<string, unknown>): Promise<string> {
+  const result = await $.mcp.call(BROWSER_SERVER, name, args)
+  const text = result.content.map(block => block.text ?? '').join('\n')
+  if (result.isError) throw new Error(`${name}: ${text}`)
+  return text
+}
+
+async function callViaTool($: EngineInterface, name: string, args: Record<string, unknown>): Promise<string> {
   const answer = await $.tool.call({ tool: `mcp__${BROWSER_SERVER}__${name}`, ...args })
   if ('deny' in answer && answer.deny) {
     // Say what the engine's permission decision was, so a missing allow
