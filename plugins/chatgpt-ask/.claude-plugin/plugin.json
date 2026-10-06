@@ -1,0 +1,8 @@
+{
+  "name": "chatgpt-ask",
+  "version": "0.1.0",
+  "description": "Asks the user's logged-in ChatGPT through Claude Code's built-in browser pane and saves the answer as Markdown.",
+  "author": {
+    "name": "anderson-spider"
+  }
+}

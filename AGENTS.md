@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Claude Code plugin marketplace (`anderson-spider/spider-marketplace`). It currently has five plugins: `blast-radius` (holds destructive commands), `branch-guard` (holds commit and push on the protected branch), `pr-preview` (holds `gh pr create`, `gh pr edit`, `glab mr create` and `glab mr update` and previews them), `review-panel` (read-only pane with the diff, the open PR, its CI jobs and its comments) and `tailscale` (tools to query and modify the tailnet). The README and other documentation are in English; code comments and user-facing messages are in English too. Pull request titles and descriptions are in English.
+Claude Code plugin marketplace (`anderson-spider/spider-marketplace`). It currently has six plugins: `blast-radius` (holds destructive commands), `branch-guard` (holds commit and push on the protected branch), `chatgpt-ask` (asks the user's ChatGPT in the browser pane), `pr-preview` (holds `gh pr create`, `gh pr edit`, `glab mr create` and `glab mr update` and previews them), `review-panel` (read-only pane with the diff, the open PR, its CI jobs and its comments) and `tailscale` (tools to query and modify the tailnet). The README and other documentation are in English; code comments and user-facing messages are in English too. Pull request titles and descriptions are in English.
 
 ## Structure
 
@@ -15,6 +15,7 @@ claude plugin validate .                       # validates the marketplace
 claude plugin validate plugins/blast-radius    # validates the plugin
 claude plugin test plugins/blast-radius        # runs tests/blast-radius.test.ts
 claude plugin test plugins/branch-guard        # same, for branch-guard
+claude plugin test plugins/chatgpt-ask         # same, for chatgpt-ask
 claude plugin test plugins/pr-preview          # same, for pr-preview
 claude plugin test plugins/review-panel        # same, for review-panel
 claude plugin test plugins/tailscale           # same, for tailscale
@@ -51,6 +52,15 @@ Same design as branch-guard (pure `hooks/guard.ts` with an injected `Probe`, `ho
 ## review-panel
 
 Holds nothing: `/review-panel` (`$.command.register`, answered in `command.run`) opens a pane with `$.ui.open`, drawn by a `ui.render` hook on `{ component: 'Pane', requestId: 'review-panel' }`. `hooks/panel.ts` is pure (injected `Probe`, same design as the other plugins): `readAll` returns the branch, the diff (`git diff HEAD` plus `git ls-files --others`) and a `PrView` read from `origin`: `gh pr view --json …` plus `gh api repos/<path>/pulls/<n>/comments` for GitHub, `glab api --hostname <host>` (merge request by `source_branch`, `/discussions`, `/pipelines/<id>/jobs`) for every other host. `foldGithub` and `foldGitlab` normalise both into `PrSnapshot` (the shape follows herdr-reviewr's `PrSnapshot`). The view lives in `$.state` (`review-panel`/`view`); the 30 s poll is a `$.clock.every` started once in `command.run`, kept in a module variable (a reload starts it over). `register.tsx` flattens each tab into rows and scrolls by an `offset` held in the state. `readAll` never rejects: an error becomes `diffError` or `{ kind: 'error' }`.
+
+## chatgpt-ask
+
+Holds nothing: it registers the `chatgpt_ask` tool (listed as `mcp__chatgpt-ask__chatgpt_ask`) and the `/chatgpt-ask` command in `session.start`, and serves both from the same `run`. It drives chatgpt.com in the desktop app's built-in browser pane through that pane's MCP tools (server `Claude_Browser`: `tabs_context`, `preview_start`, `tabs_create`, `navigate`, `javascript_tool`), so it only works where that pane exists. `hooks/chatgpt.ts` is pure, with an injected `Browser` (same design as the other plugins): `ask` finds or opens the chatgpt.com tab, waits for the composer, sends the prompt with `sendScript` (a synthetic paste into the ProseMirror composer, so line breaks do not press Enter, then a click on the send button), polls `stateScript` until the stop button is gone and the answer length is the same on two reads, and reads it with `READ_SCRIPT`, which turns the answer's DOM back into Markdown. `register.tsx` writes the answer to `$TMPDIR/chatgpt-ask/` and returns the path, the chat URL and the first `maxChars` (3000) chars. Details that only make sense when reading the host:
+
+- Each page script returns `JSON.stringify(...)`: `javascript_tool` prints a string result as a JSON literal followed by notes about the tab, which `parseOutput` reads back.
+- `call` tries `$.mcp.call` first and falls back to `$.tool.call` when it is refused; only the latter goes through the permission check. The pane's tools ask for permission themselves, so the plugin needs a session outside auto mode: there the classifier cannot judge a call no prompt asked for and refuses it. A `tool.check` hook that allows the plugin's own calls was considered and left out on purpose, since it would bypass that classifier.
+- The selectors follow chatgpt.com as of 2026-10: answers under `[data-markdown-text-style]`, the composer `.ProseMirror[contenteditable=true]`, the send button by `aria-label` (`Enviar`/`Send`), the stop button by `aria-label` (`Parar`/`Stop`), code blocks as `[data-markdown-copy=code-block]` (an editor with `data-language` and one div per line, or a `code` element with the language only in the header), inline code as `[data-markdown-copy=inline-code]`. When the UI changes, fix the scripts in `hooks/chatgpt.ts` and check them in the pane with `javascript_tool` before trusting the tests, which only cover the flow.
+- Only one question runs at a time (`busy`): they share the tab.
 
 ## tailscale
 
