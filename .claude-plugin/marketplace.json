@@ -18,6 +18,11 @@
       "description": "Holds a git commit or git push on the protected branch and shows what would go in, with Proceed and Cancel."
     },
     {
+      "name": "chatgpt",
+      "source": "./plugins/chatgpt",
+      "description": "Lets Claude ask your logged-in ChatGPT, or have it generate an image, through terminal-browser, and saves the result locally."
+    },
+    {
       "name": "codex-computer-use",
       "source": "./plugins/codex-computer-use",
       "description": "Routes native Mac app control through Codex computer use from the ChatGPT app, with per-app approval, one Codex session per Claude session or subagent, and /codex-cu on|off."

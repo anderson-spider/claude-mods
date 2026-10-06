@@ -8,6 +8,7 @@ Marketplace of [Claude Code](https://claude.com/claude-code) plugins made by and
 | --- | --- |
 | [blast-radius](plugins/blast-radius) | Holds a risky Bash command and shows what it would change before it runs. |
 | [branch-guard](plugins/branch-guard) | Holds a `git commit` or `git push` on the protected branch and shows what would go in. |
+| [chatgpt](plugins/chatgpt) | Lets Claude ask your logged-in ChatGPT, or have it generate an image, in terminal-browser, and saves the result locally. |
 | [codex-computer-use](plugins/codex-computer-use) | Routes native Mac app control through Codex computer use from the ChatGPT app instead of Claude's own computer use, asking before each new app. |
 | [pr-preview](plugins/pr-preview) | Holds a `gh pr create`, `gh pr edit`, `glab mr create` or `glab mr update`, previews the title and description and flags what breaks the conventions. |
 | [review-panel](plugins/review-panel) | Opens a read-only pane with the worktree diff, the open pull or merge request, its CI jobs and the comments already made. |
@@ -22,6 +23,7 @@ Inside Claude Code, add the marketplace and install the plugin:
 /plugin marketplace add anderson-spider/spider-marketplace
 /plugin install blast-radius@spider-marketplace
 /plugin install branch-guard@spider-marketplace
+/plugin install chatgpt@spider-marketplace
 /plugin install codex-computer-use@spider-marketplace
 /plugin install pr-preview@spider-marketplace
 /plugin install review-panel@spider-marketplace
@@ -60,6 +62,34 @@ When Claude calls Bash with `git commit` or `git push` and the target branch is 
 Passes without asking: commits and pushes on other branches, on a detached HEAD, in a repository inside `/tmp`, `git commit --dry-run`, `git push --dry-run`, tag-only pushes and commits with nothing staged. Force push is not handled here: it belongs to blast-radius. To turn the warning off, disable only this plugin.
 
 Limitations: the plugin reads the command text, so `merge`, `cherry-pick`, `rebase`, `pull`, aliases and `bash -c "git commit"` do not go through it; a stray `"` or `'` in the body of a `-m "$(cat <<EOF …)"` can confuse the parsing; it only sees what Claude types, not your terminal.
+
+## chatgpt
+
+Sends a self-contained question to your own ChatGPT, already logged in at chatgpt.com in terminal-browser, waits for the answer and saves it as Markdown; it can also have ChatGPT generate or edit an image, optionally from a local reference, and save it. It saves Claude's tokens when the question needs little context and the answer is long (research, explanations, drafts, translations, a second opinion); for work that needs the repository it does not pay off, since the context would go out and the answer would come back anyway.
+
+The browser is [terminal-browser](https://terminal-browser.sh) when Claude Code runs in a terminal pane it supports (Ghostty, kitty). The plugin opens its own tab with `terminal-browser new-tab`, which opens the browser in a split beside Claude Code when none is open. The Claude desktop app is not supported.
+
+| Entry | What it does |
+| --- | --- |
+| `mcp__chatgpt__ask` | Tool for Claude: `prompt` (required), `chatUrl` (the chat link a previous call returned, to continue that chat), `model` (a model menu entry, by the start of its label), `files` (absolute paths to attach), `wait` (`false` runs it in the background), `saveOnly` (with `chatUrl`: save the last answer, waiting while it streams), `out` and `maxChars` (how much of the answer comes back inline, default 3000). |
+| `mcp__chatgpt__image` | Tool for Claude: `prompt` (required), `reference` (an image of at most 4 MiB to attach), and the same `chatUrl`, `model`, `files`, `wait`, `saveOnly` and `out`. Saves every variant ChatGPT draws and returns their paths, sizes, the chat link and a preview of each; when ChatGPT answers with text instead (a refusal or a question), returns that text. |
+| `mcp__chatgpt__jobs` | Tool for Claude: the requests that ran or run in the background, with their status, chat link and files. |
+| `/chatgpt-ask <question>` | Asks from the prompt and shows the whole answer. |
+| `/chatgpt-image <prompt>` | Generates an image from the prompt and saves it. |
+| `/chatgpt-doctor [chat link]` | Opens ChatGPT and reports which page parts the plugin relies on are where it expects them (login, composer, file inputs, model menu, and with a chat link the answers, images and code blocks). |
+
+Every request starts a new chat (the home page is one), unless a `chatUrl` brings Claude back to an earlier one. The plugin works in a tab of its own, kept across requests, and never touches another tab; requests take turns there. A request still going after 6 minutes moves to the background (up to 30), and a message arrives in the conversation when it is saved; `wait: false` does that from the start. When the page shows a usage limit, a human verification or another blocking dialog, the plugin stops and quotes it.
+
+The answer goes to `$TMPDIR/chatgpt/<date>-<subject>.md`, with the chat URL on the first line; Claude gets the path, the URL and the start of the answer, and reads the rest from the file when it needs it. Code blocks keep their language, and lists, tables, quotes and math come back as Markdown. The tool's description tells Claude not to send credentials, secrets, private personal data or work data, and to treat the answer as ChatGPT's unverified opinion.
+
+Images go to `$TMPDIR/chatgpt/<date>-<subject>.png` (or the type ChatGPT served, with `-1`, `-2` for variants), decoded with `openssl`; the preview is a 768 px JPEG made with `sips`. Image tools spend your ChatGPT image quota, so Claude is told to use them only when you ask for an image, to attach only references you asked for or that it made for the task, and to label the result as an AI concept.
+
+Requirements:
+
+- terminal-browser, with Claude Code running directly in a Ghostty or kitty pane (not inside tmux, Herdr or a background session), logged in to chatgpt.com in that browser. The plugin never types credentials: when the page asks for a login, it stops and says so.
+- Nothing else for permissions, in any mode, auto mode included: terminal-browser runs as a process, not as tool calls. Add `mcp__chatgpt__*` to `permissions.allow` in `~/.claude/settings.json` to skip the prompt for the tools themselves.
+
+Limitations: it reads chatgpt.com's page, so a change in ChatGPT's interface can break sending or reading until the selectors in `hooks/chatgpt.ts` are updated (`/chatgpt-doctor` says which); a generated image is recognised by its alt text ("Imagem 1 gerada", "Generated image 1"); background jobs live in the session and are lost on a plugin reload.
 
 ## codex-computer-use
 
@@ -165,6 +195,8 @@ claude plugin validate plugins/blast-radius
 claude plugin test plugins/blast-radius
 claude plugin validate plugins/branch-guard
 claude plugin test plugins/branch-guard
+claude plugin validate plugins/chatgpt
+claude plugin test plugins/chatgpt
 claude plugin validate plugins/codex-computer-use
 claude plugin test plugins/codex-computer-use
 /Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node --test plugins/codex-computer-use/helper/test/helper.test.mjs
