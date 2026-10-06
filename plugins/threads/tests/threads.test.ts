@@ -19,7 +19,7 @@ import {
 import type { Probe, RunResult } from '../hooks/probe'
 import { claudeAnswerAfter, claudeTranscriptPath, lineCount } from '../hooks/transcript'
 import { branchFor, classify, currentCommit, repoParent } from '../hooks/worktree'
-import { adopt, capError, emptyRegistry, liveOf, newId, reconcile } from '../hooks/registry'
+import { SETTLE_MS, adopt, advance, capError, emptyRegistry, liveOf, newId, reconcile } from '../hooks/registry'
 import type { Registry, Thread } from '../hooks/registry'
 import { readSettings } from '../hooks/settings'
 
@@ -301,4 +301,64 @@ test('newId gives 6 base36 characters that are not taken', () => {
 
   expect(newId(new Set(['aaaaaa']), random)).toBe('bbbbbb')
   expect(newId(new Set())).toMatch(/^[0-9a-z]{6}$/)
+})
+
+const watched = (over: Partial<Thread> = {}): Thread =>
+  thread({ status: 'starting', marker: { at: 0, completionSeq: 4, transcriptLines: 0, seenWorking: false }, ...over })
+const seen = (status: string, over: Record<string, unknown> = {}) => ({ ...agentNamed('t-abc123'), status, completionSeq: 4, ...over })
+
+test('advance leaves unwatched and finished-with records alone', () => {
+  const lost = advance(thread({ marker: undefined }), undefined, 5, false)
+  expect(lost.events).toEqual([])
+  expect(lost.thread.status).toBe('working')
+
+  for (const status of ['exited', 'closed', 'orphan', 'branch-left'] as const) {
+    expect(advance(watched({ status }), undefined, 5, false)).toEqual({ thread: watched({ status }), events: [] })
+  }
+})
+
+test('advance: a helper that vanished has exited, once', () => {
+  const first = advance(watched({ status: 'working' }), undefined, 5, false)
+  expect(first.thread.status).toBe('exited')
+  expect(first.events).toEqual([{ threadId: 'abc123', kind: 'exited' }])
+  expect(advance(first.thread, undefined, 6, false).events).toEqual([])
+})
+
+test('advance: finished means idle after work, or a newer completion, or a settled idle with an answer', () => {
+  const started = advance(watched(), seen('idle'), 100, false)
+  expect(started.events).toEqual([])
+  expect(started.thread.idleSince).toBe(100)
+
+  const working = advance(started.thread, seen('working'), 200, false)
+  expect(working.thread.status).toBe('working')
+  expect(working.thread.marker?.seenWorking).toBe(true)
+  expect(working.thread.idleSince).toBeUndefined()
+
+  const done = advance(working.thread, seen('idle', { completionSeq: 5 }), 300, false)
+  expect(done.events).toEqual([{ threadId: 'abc123', kind: 'finished' }])
+  expect(done.thread.status).toBe('idle')
+  expect(advance(done.thread, seen('done', { completionSeq: 5 }), 400, false).events).toEqual([])
+
+  // Finished between two ticks: working was never seen, but the completion counter moved.
+  const quick = advance(watched(), seen('done', { completionSeq: 5 }), 100, false)
+  expect(quick.events).toEqual([{ threadId: 'abc123', kind: 'finished' }])
+
+  // Neither signal: only a settled idle with an answer on disk counts.
+  const waiting = watched({ idleSince: 1000 })
+  expect(advance(waiting, seen('idle'), 1000 + SETTLE_MS, false).events).toEqual([])
+  expect(advance(waiting, seen('idle'), 1000 + SETTLE_MS - 1, true).events).toEqual([])
+  expect(advance(waiting, seen('idle'), 1000 + SETTLE_MS, true).events).toEqual([{ threadId: 'abc123', kind: 'finished' }])
+})
+
+test('advance: blocked is announced once per episode and unknown changes nothing', () => {
+  const first = advance(watched({ status: 'working' }), seen('blocked'), 10, false)
+  expect(first.events).toEqual([{ threadId: 'abc123', kind: 'blocked' }])
+  expect(first.thread.status).toBe('blocked')
+  expect(advance(first.thread, seen('blocked'), 11, false).events).toEqual([])
+
+  const resumed = advance(first.thread, seen('working'), 12, false)
+  expect(advance(resumed.thread, seen('blocked'), 13, false).events).toEqual([{ threadId: 'abc123', kind: 'blocked' }])
+
+  const odd = watched({ status: 'working' })
+  expect(advance(odd, seen('unknown'), 14, false)).toEqual({ thread: odd, events: [] })
 })

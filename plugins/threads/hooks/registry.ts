@@ -89,3 +89,54 @@ export const newId = (taken: ReadonlySet<string>, random: () => number = Math.ra
     }
   }
 }
+
+export type Event = { threadId: string; kind: 'finished' | 'blocked' | 'exited' }
+
+/** How long a helper must stay idle before that alone, with an answer on disk, counts as finished. */
+export const SETTLE_MS = 20_000
+
+/**
+ * What one `agent list` snapshot says about a helper. `finished` needs a signal that the prompt it was
+ * given has been worked: `working` seen since, a completion counter that moved, or a settled idle with an
+ * answer already on disk, so the idle of a helper that has not started yet is never announced.
+ */
+export const advance = (t: Thread, agent: Agent | undefined, now: number, answerReady: boolean): { thread: Thread; events: Event[] } => {
+  const marker = t.marker
+
+  if (marker === undefined || !LIVE.includes(t.status)) {
+    return { thread: t, events: [] }
+  }
+
+  if (agent === undefined) {
+    return { thread: { ...t, status: 'exited' }, events: [{ threadId: t.id, kind: 'exited' }] }
+  }
+
+  if (agent.status === 'blocked') {
+    return {
+      thread: { ...t, status: 'blocked', blockedNoticed: true },
+      events: t.blockedNoticed === true ? [] : [{ threadId: t.id, kind: 'blocked' }],
+    }
+  }
+
+  if (agent.status === 'working') {
+    return { thread: { ...t, status: 'working', blockedNoticed: false, idleSince: undefined, marker: { ...marker, seenWorking: true } }, events: [] }
+  }
+
+  if (agent.status !== 'idle' && agent.status !== 'done') {
+    return { thread: t, events: [] }
+  }
+
+  if (t.status === 'idle') {
+    return { thread: { ...t, blockedNoticed: false }, events: [] }
+  }
+
+  const idleSince = t.idleSince ?? now
+  const moved = agent.completionSeq !== undefined && marker.completionSeq !== undefined && agent.completionSeq > marker.completionSeq
+  const isFinished = marker.seenWorking || moved || (now - idleSince >= SETTLE_MS && answerReady)
+
+  if (isFinished) {
+    return { thread: { ...t, status: 'idle', idleSince: undefined, blockedNoticed: false }, events: [{ threadId: t.id, kind: 'finished' }] }
+  }
+
+  return { thread: { ...t, status: t.status === 'blocked' ? 'working' : t.status, idleSince, blockedNoticed: false }, events: [] }
+}
