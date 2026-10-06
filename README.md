@@ -59,7 +59,7 @@ Limitations: the plugin reads the command text, so `merge`, `cherry-pick`, `reba
 
 ## chatgpt
 
-Sends a self-contained question to your own ChatGPT, already logged in at chatgpt.com in terminal-browser, waits for the answer and saves it as Markdown; it can also have ChatGPT generate or edit an image, optionally from a local reference, and save it. It saves Claude's tokens when the question needs little context and the answer is long (research, explanations, drafts, translations, a second opinion); for work that needs the repository it does not pay off, since the context would go out and the answer would come back anyway.
+Sends a self-contained question to your own ChatGPT, already logged in at chatgpt.com in terminal-browser, waits for the answer and saves it as Markdown; it can also have ChatGPT generate or edit an image, optionally from a local reference, and save it. It saves Claude's tokens when the question needs little context and the answer is long (research, explanations, drafts, translations, a second opinion); for work that needs the repository it does not pay off, since the context would go out and the answer would come back anyway. The plugin adds a section to Claude's system prompt so it asks ChatGPT on its own in those cases, saying so in one line first; images still need your request.
 
 The browser is [terminal-browser](https://terminal-browser.sh) when Claude Code runs in a terminal pane it supports (Ghostty, kitty). The plugin opens its own tab with `terminal-browser new-tab`, which opens the browser in a split beside Claude Code when none is open. The Claude desktop app is not supported.
 
