@@ -1,0 +1,41 @@
+{
+  "name": "threads",
+  "version": "0.1.0",
+  "description": "Starts background Claude Code helpers, each in its own Herdr git worktree, and tells you when one finishes or needs you.",
+  "author": {
+    "name": "anderson-spider"
+  },
+  "userConfig": {
+    "maxThreads": {
+      "type": "number",
+      "title": "Live helpers allowed",
+      "description": "How many helpers may be live at once. A helper that finished but was not closed still counts.",
+      "default": 3
+    },
+    "defaultModel": {
+      "type": "string",
+      "title": "Default Claude model",
+      "description": "Model of a Claude helper when the call gives none: an alias (haiku, sonnet, opus, fable) or a full name. Empty means the model of the chat that starts it.",
+      "default": "sonnet"
+    },
+    "defaultPermissionMode": {
+      "type": "string",
+      "title": "Default permission mode",
+      "description": "Permission mode of Claude helpers. acceptEdits lets them edit and commit and stops them at anything else until you answer; default and plan stop them sooner; auto leaves the decision to Claude's classifier; bypassPermissions lets them run anything without asking, so only their briefing keeps them from pushing.",
+      "default": "acceptEdits",
+      "options": [
+        "acceptEdits",
+        "default",
+        "plan",
+        "auto",
+        "bypassPermissions"
+      ]
+    },
+    "pollSeconds": {
+      "type": "number",
+      "title": "Status check interval (seconds)",
+      "description": "How often live helpers are checked.",
+      "default": 3
+    }
+  }
+}
