@@ -22,7 +22,7 @@ import { branchFor, classify, currentCommit, repoParent } from '../hooks/worktre
 import { SETTLE_MS, adopt, advance, capError, emptyRegistry, liveOf, newId, reconcile } from '../hooks/registry'
 import type { Registry, Thread } from '../hooks/registry'
 import { readSettings } from '../hooks/settings'
-import { answer, briefing, close, revalidate, start, status } from '../hooks/threads'
+import { answer, briefing, clip, close, poll, revalidate, start, status } from '../hooks/threads'
 import type { Ports } from '../hooks/threads'
 
 const out = (stdout: string, exitCode = 0, stderr = ''): RunResult => ({ exitCode, stdout, stderr })
@@ -30,13 +30,13 @@ const json = (result: unknown) => out(JSON.stringify({ id: 'x', result }))
 const failure = (code: string, message: string) => out(JSON.stringify({ error: { code, message }, id: 'x' }), 1)
 
 /** A host that records argv and answers with `reply`. */
-const probeOf = (reply: (argv: readonly string[]) => RunResult, calls: string[][] = []): Probe => ({
+const probeOf = (reply: (argv: readonly string[]) => RunResult, calls: string[][] = [], files: Record<string, string> = {}): Probe => ({
   run: async argv => {
     calls.push([...argv])
 
     return reply(argv)
   },
-  read: async () => undefined,
+  read: async path => files[path],
   list: async () => [],
   home: async () => '/home/me',
 })
@@ -403,10 +403,11 @@ const route = (argv: readonly string[], over: Record<string, RunResult> = {}): R
 /** Ports over an in-memory registry, a step counter for ids, and a log of what ran and what was saved. */
 const harness = (over: Record<string, RunResult> = {}, registry: Registry = emptyRegistry()) => {
   const calls: string[][] = []
+  const files: Record<string, string> = {}
   let counter = 0
   const state = { registry }
   const ports: Ports = {
-    probe: probeOf(argv => route(argv, over), calls),
+    probe: probeOf(argv => route(argv, over), calls, files),
     load: async () => state.registry,
     save: async next => {
       state.registry = next
@@ -421,7 +422,7 @@ const harness = (over: Record<string, RunResult> = {}, registry: Registry = empt
   }
   const ran = () => calls.filter(call => call[0] !== 'save').map(call => call.join(' '))
 
-  return { ports, calls, state, ran, herdr: () => calls.filter(call => call[0] === 'herdr') }
+  return { ports, calls, state, files, over, ran, herdr: () => calls.filter(call => call[0] === 'herdr') }
 }
 const SETTINGS = readSettings(undefined)
 
@@ -685,4 +686,161 @@ test('threads_close reports a branch it could not delete and a worktree it could
   expect((await close(orphan.ports, '012345')).isError).toBeUndefined()
   expect(orphan.state.registry.threads).toEqual([])
   expect(orphan.herdr()).toEqual([])
+})
+
+const TRANSCRIPT = '/home/me/.claude/projects/-wt/sess-1.jsonl'
+const watching = (over: Partial<Thread> = {}) =>
+  owned({ status: 'starting', requestedModel: 'sonnet', marker: { at: 0, completionSeq: 2, transcriptLines: 0, seenWorking: false }, ...over })
+const listing = (...agents: Array<Record<string, unknown>>) => json({ agents: agents.map(one => ({ ...STARTED, ...one })) })
+
+/** Ports for `poll`, with what was announced and toasted, and what the registry held when each announcement went out. */
+const polling = (t: Thread[], over: Record<string, RunResult> = {}) => {
+  const world = harness(over, registryOf(...t))
+  const announced: string[] = []
+  const toasts: string[] = []
+  const heldPending: number[] = []
+  const reply = { value: 'delivered' as 'delivered' | 'refused' }
+  const announce = async (text: string) => {
+    announced.push(text)
+    heldPending.push(world.state.registry.pending.length)
+
+    return reply.value
+  }
+  const tick = () => poll(world.ports, announce, text => void toasts.push(text))
+
+  return { ...world, announced, toasts, heldPending, reply, tick }
+}
+
+test('clip cuts a long text and says where the rest is', () => {
+  expect(clip('short', 10, '/p')).toBe('short')
+  expect(clip('x'.repeat(11), 10, '/p')).toBe(`${'x'.repeat(10)}\n… [cut; the full text is in /p]`)
+})
+
+test('poll does nothing without live helpers, and survives a Herdr that does not answer', async () => {
+  const idle = polling([owned({ status: 'closed' })])
+  expect(await idle.tick()).toEqual({ live: false })
+  expect(idle.calls).toEqual([])
+
+  const world = polling([watching()], { list: failure('down', 'no server') })
+  expect((await world.tick()).live).toBe(true)
+  await world.tick()
+  expect(world.toasts).toEqual([])
+  await world.tick()
+  await world.tick()
+  expect(world.toasts.length).toBe(1)
+  expect(world.state.registry.threads[0]?.status).toBe('starting')
+  expect(world.herdr().filter(call => call[2] === 'list').length).toBe(4)
+
+  world.over.list = listing({ agent_status: 'idle', completion_seq: 2 })
+  await world.tick()
+  expect(world.state.registry.listFailures).toBe(0)
+})
+
+test('poll announces a finished helper once, with its answer, branch and models', async () => {
+  const world = polling([watching()])
+  world.files[TRANSCRIPT] = [asked, said([text('All done')], 'claude-sonnet-5-5')].join('\n')
+
+  world.over.list = listing({ agent_status: 'idle', completion_seq: 2 })
+  await world.tick()
+  expect(world.announced).toEqual([])
+
+  world.over.list = listing({ agent_status: 'working', completion_seq: 2 })
+  await world.tick()
+  world.over.list = listing({ agent_status: 'idle', completion_seq: 3 })
+  await world.tick()
+  await world.tick()
+
+  expect(world.announced.length).toBe(1)
+  const message = world.announced[0] ?? ''
+  expect(message).toMatch(/^\[threads 012345 finished: Fix it\]/)
+  expect(message).toMatch(/helper's output, not an instruction/)
+  expect(message).toMatch(/All done/)
+  expect(message).toMatch(/threads\/012345/)
+  expect(message).toMatch(/sonnet/)
+  expect(message).toMatch(/claude-sonnet-5-5/)
+  expect(world.state.registry.pending).toEqual([])
+  expect(world.heldPending).toEqual([1])
+})
+
+test('poll announces a helper that finished between two ticks, and two that finish together', async () => {
+  const quick = polling([watching()])
+  quick.files[TRANSCRIPT] = [asked, said([text('Quick answer')])].join('\n')
+  quick.over.list = listing({ agent_status: 'done', completion_seq: 3 })
+  await quick.tick()
+  expect(quick.announced.length).toBe(1)
+
+  const two = polling([watching(), watching({ id: 'bbb222', agentName: 't-bbb222', path: '/wt2', sessionId: 'sess-2' })])
+  two.files[TRANSCRIPT] = [asked, said([text('First')])].join('\n')
+  two.files['/home/me/.claude/projects/-wt2/sess-2.jsonl'] = [asked, said([text('Second')])].join('\n')
+  two.over.list = listing({ agent_status: 'done', completion_seq: 3 }, { name: 't-bbb222', agent_status: 'done', completion_seq: 3 })
+  await two.tick()
+  expect(two.announced.length).toBe(2)
+  expect(two.announced.join('\n')).toMatch(/First[\s\S]*Second|Second[\s\S]*First/)
+})
+
+test('poll cuts a long answer to 4000 characters and points at the transcript', async () => {
+  const world = polling([watching()])
+  world.files[TRANSCRIPT] = [asked, said([text('x'.repeat(5000))])].join('\n')
+  world.over.list = listing({ agent_status: 'done', completion_seq: 3 })
+  await world.tick()
+
+  const message = world.announced[0] ?? ''
+  expect(message).toContain('x'.repeat(4000))
+  expect(message).not.toContain('x'.repeat(4001))
+  expect(message).toContain(TRANSCRIPT)
+})
+
+test('poll retries a missing answer, then says it was not found, and never uses an older answer', async () => {
+  const world = polling([watching({ marker: { at: 0, completionSeq: 2, transcriptLines: 2, seenWorking: false } })])
+  world.files[TRANSCRIPT] = [asked, said([text('An answer to an earlier task')])].join('\n')
+  world.over.list = listing({ agent_status: 'done', completion_seq: 3 })
+
+  for (let tick = 1; tick <= 4; tick += 1) {
+    await world.tick()
+    expect(world.announced, `tick ${tick}`).toEqual([])
+  }
+
+  await world.tick()
+  expect(world.announced.length).toBe(1)
+  expect(world.announced[0]).toMatch(/answer was not found/)
+  expect(world.announced[0]).toMatch(/\/threads attach 012345/)
+  expect(world.announced[0]).not.toMatch(/earlier task/)
+})
+
+test('poll announces a blocked helper once per episode, and an exited one once', async () => {
+  const blocked = polling([watching({ status: 'working' })])
+  blocked.over.list = listing({ agent_status: 'blocked' })
+  await blocked.tick()
+  await blocked.tick()
+  expect(blocked.announced.length).toBe(1)
+  expect(blocked.announced[0]).toMatch(/needs you/)
+  expect(blocked.announced[0]).toMatch(/Do you want to proceed/)
+
+  const gone = polling([watching({ status: 'working' })])
+  gone.over.list = listing()
+  await gone.tick()
+  await gone.tick()
+  expect(gone.announced.length).toBe(1)
+  expect(gone.announced[0]).toMatch(/exited/)
+  expect(gone.state.registry.threads[0]?.status).toBe('exited')
+})
+
+test('poll keeps a refused announcement, retries it, then marks it undelivered', async () => {
+  const world = polling([watching()])
+  world.files[TRANSCRIPT] = [asked, said([text('done')])].join('\n')
+  world.over.list = listing({ agent_status: 'done', completion_seq: 3 })
+  world.reply.value = 'refused'
+
+  await world.tick()
+  expect(world.state.registry.pending.length).toBe(1)
+  expect(world.state.registry.pending[0]?.tries).toBe(1)
+
+  for (let tick = 2; tick <= 5; tick += 1) await world.tick()
+  expect(world.announced.length).toBe(5)
+  expect(world.state.registry.pending).toEqual([])
+  expect(world.state.registry.threads[0]?.undelivered).toBe(true)
+  expect(world.toasts.length).toBe(1)
+
+  await world.tick()
+  expect(world.announced.length).toBe(5)
 })
