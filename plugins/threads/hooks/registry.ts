@@ -32,8 +32,8 @@ export type Thread = {
   undelivered?: boolean
   /** Set while `threads_close` works on it, so the polling leaves it alone. */
   closing?: boolean
-  /** What was found in a worktree that `threads_close` left in place; `reason` when its state could not be read. */
-  kept?: { commits: number; dirty: boolean; reason?: string }
+  /** What was found in a worktree that `threads_close` left in place. */
+  kept?: { commits: number; dirty: boolean }
 }
 
 export type Pending = { threadId: string; kind: 'finished' | 'blocked' | 'exited' | 'orphan'; text: string; tries: number }

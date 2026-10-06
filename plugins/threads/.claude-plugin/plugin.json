@@ -21,7 +21,7 @@
     "defaultPermissionMode": {
       "type": "string",
       "title": "Default permission mode",
-      "description": "Permission mode of Claude helpers. acceptEdits lets them edit and commit; anything else stops them as blocked until you answer.",
+      "description": "Permission mode of Claude helpers. acceptEdits lets them edit and commit and stops them at anything else until you answer; default and plan stop them sooner; auto leaves the decision to Claude's classifier; bypassPermissions lets them run anything without asking, so only their briefing keeps them from pushing.",
       "default": "acceptEdits",
       "options": [
         "acceptEdits",

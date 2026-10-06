@@ -654,12 +654,10 @@ test('threads_close removes only a provably empty worktree', async () => {
   expect(again.text).toMatch(/2 commits/)
   expect(ahead.herdr().length).toBe(before)
 
-  for (const over of [{ status: out(' M a.ts\n') }, { status: out('', 128, 'fatal') }]) {
-    const world = holding(owned(), { list: GONE, ...over })
-    await close(world.ports, '012345')
-    expect(world.ran().some(line => line.startsWith('herdr worktree remove'))).toBe(false)
-    expect(world.state.registry.threads[0]?.status).toBe('closed')
-  }
+  const dirty = holding(owned(), { list: GONE, status: out(' M a.ts\n') })
+  await close(dirty.ports, '012345')
+  expect(dirty.ran().some(line => line.startsWith('herdr worktree remove'))).toBe(false)
+  expect(dirty.state.registry.threads[0]?.status).toBe('closed')
 })
 
 test('threads_close refuses and removes nothing when the helper cannot be vouched for or stopped', async () => {
@@ -1100,4 +1098,54 @@ test('takeOver moves a helper of another chat into this one, and overview lists 
   expect(world.state.registry.threads.map(one => [one.id, one.owner])).toEqual([['zzz999', 'lead-1']])
   expect(world.state.others).toEqual([])
   expect((await takeOver(world.ports, 'nope00')).isError).toBe(true)
+})
+
+test('threads_close can be retried after a git failure, and then removes an empty worktree', async () => {
+  const flaky = { value: out('', 128, 'fatal: unable to lock') }
+  const world = holding(owned(), { list: GONE, status: flaky.value })
+  const first = await close(world.ports, '012345')
+
+  expect(first.isError).toBe(true)
+  expect(first.text).toMatch(/try threads_close again/)
+  expect(world.ran().some(line => line.startsWith('herdr worktree remove'))).toBe(false)
+  expect(world.state.registry.threads[0]).toMatchObject({ status: 'exited' })
+  expect(world.state.registry.threads[0]?.closing).toBeUndefined()
+
+  world.over.status = out('')
+  const second = await close(world.ports, '012345')
+  expect(second.isError).toBeUndefined()
+  expect(world.ran()).toContain('herdr worktree remove --workspace w2')
+  expect(world.state.registry.threads).toEqual([])
+})
+
+test('threads_start cleans the title before it becomes a --label', async () => {
+  const label = async (input: { task: string; title?: string }) => {
+    const world = harness()
+    await start(world.ports, SETTINGS, input)
+    const create = world.calls.find(call => call[2] === 'create') ?? []
+
+    return create[create.indexOf('--label') + 1]
+  }
+
+  expect(await label({ task: 't', title: '- fix it\nnow' })).toBe('fix it now')
+  expect(await label({ task: 't', title: '--help' })).toBe('help')
+  expect(await label({ task: 'Do the thing', title: '---' })).toBe('Do the thing')
+  expect(await label({ task: '- first item\n- second' })).toBe('first item')
+  expect(await label({ task: '---' })).toBe('helper')
+})
+
+test('threads_close reports a branch deletion that throws instead of failing', async () => {
+  const world = holding(owned(), { list: GONE })
+  const run = world.ports.probe.run
+  world.ports.probe.run = async (argv, init) => {
+    if (argv[0] === 'git' && argv[1] === 'branch') throw new Error('spawn timed out')
+
+    return run(argv, init)
+  }
+
+  const result = await close(world.ports, '012345')
+  expect(result.isError).toBeUndefined()
+  expect(result.text).toMatch(/branch threads\/012345 could not be deleted/)
+  expect(world.state.registry.threads[0]).toMatchObject({ status: 'branch-left' })
+  expect(world.state.registry.threads[0]?.closing).toBeUndefined()
 })

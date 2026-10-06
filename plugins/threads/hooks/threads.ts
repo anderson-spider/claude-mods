@@ -156,10 +156,18 @@ export const discard = async (ports: Ports, t: Thread, repo: string): Promise<Di
     return { kind: 'failed', why: gone.error.message }
   }
 
-  const branch = await ports.probe.run(['git', 'branch', '-d', t.branch], { cwd: repo, timeoutMs: GIT_MS })
+  try {
+    const branch = await ports.probe.run(['git', 'branch', '-d', t.branch], { cwd: repo, timeoutMs: GIT_MS })
 
-  return branch.exitCode === 0 ? { kind: 'removed' } : { kind: 'branch-left', why: branch.stderr.trim() || `exit ${branch.exitCode}` }
+    return branch.exitCode === 0 ? { kind: 'removed' } : { kind: 'branch-left', why: branch.stderr.trim() || `exit ${branch.exitCode}` }
+  } catch (error) {
+    // The worktree is already gone: say the branch is left rather than leave the record pointing at nothing.
+    return { kind: 'branch-left', why: error instanceof Error ? error.message : 'git could not run' }
+  }
 }
+
+/** A title as a single line that cannot be read as an option: whitespace collapsed, leading dashes dropped. */
+const labelOf = (raw: string | undefined): string => (raw ?? '').replace(/\s+/g, ' ').trim().replace(/^[-\s]+/, '')
 
 const describe = (t: Thread) => `${t.agentName} "${t.title}" (${t.agent}${t.requestedModel ? `, ${t.requestedModel}` : ''})`
 
@@ -188,7 +196,7 @@ export const start = async (ports: Ports, settings: Settings, input: StartInput)
   }
 
   const owner = await ports.owner()
-  const title = input.title?.trim() || task.split('\n')[0]?.slice(0, 60) || 'helper'
+  const title = labelOf(input.title) || labelOf(task.split('\n')[0]?.slice(0, 60)) || 'helper'
   const made = await withRegistry<Thread | string>(ports, async r => {
     const refused = capError(r, owner, settings.maxThreads)
 
@@ -415,7 +423,7 @@ export const answer = async (ports: Ports, a: { id: string; keys?: string[]; tex
 const keptReport = (t: Thread): string => {
   const kept = t.kept
   const base = t.base.slice(0, 7)
-  const found = kept?.reason !== undefined ? `its state could not be read (${kept.reason})` : `${plural(kept?.commits ?? 0, 'commit')} ahead of ${base}${kept?.dirty ? ', with uncommitted changes' : ''}`
+  const found = `${plural(kept?.commits ?? 0, 'commit')} ahead of ${base}${kept?.dirty ? ', with uncommitted changes' : ''}`
 
   return `Closed ${t.id}. Its worktree was kept, not removed: ${t.path} on branch ${t.branch}; ${found}. Review with: git -C ${t.path} log --oneline ${base}..HEAD. To merge, from your own checkout: git merge ${t.branch}. The plugin never merges or pushes.`
 }
@@ -505,7 +513,15 @@ export const close = async (ports: Ports, id: string): Promise<ToolResult> => {
       return fail(`Closed ${t.id}'s pane, but its empty worktree was not removed (${dropped.why}). It is still at ${t.path}; try threads_close again.`)
     case 'kept': {
       const o = dropped.outcome
-      const kept = o.kind === 'commits' ? { commits: o.commits, dirty: o.dirty } : o.kind === 'unknown' ? { commits: 0, dirty: true, reason: o.reason } : { commits: 0, dirty: true }
+
+      // What is in the worktree could not be read (a lock, a timeout): not a verdict, so the close can be tried again.
+      if (o.kind === 'unknown') {
+        await release('exited')
+
+        return fail(`Closed ${t.id}'s pane, but the state of its worktree at ${t.path} could not be read (${o.reason}), so it was kept; try threads_close again.`)
+      }
+
+      const kept = o.kind === 'commits' ? { commits: o.commits, dirty: o.dirty } : { commits: 0, dirty: true }
       await settle(ports, t.id, one => ({ ...one, status: 'closed' as const, kept, closing: undefined }))
 
       return { text: keptReport({ ...t, status: 'closed', kept }) }
