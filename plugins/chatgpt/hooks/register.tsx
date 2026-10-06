@@ -8,6 +8,7 @@ import {
   chatUrlError,
   isChatUrl,
   jobsReport,
+  limitMs,
   listTabs,
   mimeOf,
   openedTab,
@@ -77,8 +78,9 @@ const queue = taskQueue()
 const tab: TabHolder = {}
 
 // A foreground request waits this long; past it the work goes on in the background.
-const FOREGROUND_MS = 6 * 60_000
-const BACKGROUND_MS = 30 * 60_000
+// The `foregroundMinutes` and `backgroundMinutes` settings, refreshed by each register.
+let foregroundMs = limitMs(undefined, 6)
+let backgroundMs = limitMs(undefined, 30)
 // The longest side of the preview the image tool hands back with the file.
 const PREVIEW_SIDE = 768
 
@@ -293,7 +295,7 @@ async function saveImages($: EngineInterface, result: ImageResult, request: Requ
 }
 
 // Queues `request` as a background job; a message arrives when it ends.
-function startJob($: EngineInterface, request: Request, timeoutMs = BACKGROUND_MS): Job {
+function startJob($: EngineInterface, request: Request, timeoutMs = backgroundMs): Job {
   const job: Job = { id: nextJob++, kind: request.kind, prompt: request.input.prompt, status: 'queued', startedAt: Date.now() }
   jobs.push(job)
   void (async () => {
@@ -316,7 +318,7 @@ function startJob($: EngineInterface, request: Request, timeoutMs = BACKGROUND_M
 
 // A foreground request; past its wait, a chat that is still going is saved in the background.
 async function runNow($: EngineInterface, request: Request): Promise<Outcome> {
-  const outcome = await perform($, request, FOREGROUND_MS)
+  const outcome = await perform($, request, foregroundMs)
   if (!outcome.timedOut || !outcome.chatUrl || !isChatUrl(outcome.chatUrl)) return outcome
   const follow = startJob($, {
     ...request,
@@ -369,7 +371,10 @@ async function serve($: EngineInterface, kind: 'ask' | 'image', e: Record<string
   return answerOf(await runNow($, request))
 }
 
-export const register: Register = on => {
+export const register: Register = (on, options) => {
+  foregroundMs = limitMs(options?.foregroundMinutes, 6)
+  backgroundMs = limitMs(options?.backgroundMinutes, 30)
+
   on('prompt.compose', async ($, e, next) => {
     const composed = await next(e)
 
