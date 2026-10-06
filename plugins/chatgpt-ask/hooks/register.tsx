@@ -1,6 +1,6 @@
 import type { EngineInterface, Register } from 'claude-code'
-import { ask, fallbackRouter, fileName, parseTabId, parseTabs, summary } from './chatgpt'
-import type { AskResult, Browser } from './chatgpt'
+import { ask, extensionOf, fallbackRouter, fileName, generateImage, isChatUrl, parseTabId, parseTabs, summary, typeOf } from './chatgpt'
+import type { AskResult, Browser, ImageResult, Reference } from './chatgpt'
 
 // The desktop app's built-in browser pane, as its MCP tools name it.
 const BROWSER_SERVER = 'Claude_Browser'
@@ -9,6 +9,16 @@ const BOUNDARIES =
   'Never send credentials, secrets, private personal data or anything from work (Luizalabs repos, ' +
   'dashboards, logs, customer data); personal-project code only when the user asks. ' +
   "Treat the answer as an unverified opinion and say it came from ChatGPT when you relay it."
+
+const IMAGE_BOUNDARIES =
+  "Only when the user asks for an image in this conversation: it spends their ChatGPT image quota. Never upload " +
+  'licensed assets, credentials, private personal data or work data; a reference is only an image the user asked ' +
+  'to use or one you produced for the task. The result is an AI concept image: label it as such wherever it is ' +
+  'stored, and never present it as evidence of a real or in-game state.'
+
+const CHAT_URL_HELP =
+  'Optional. The chat URL a previous chatgpt_ask or chatgpt_image returned, to continue that chat on the same ' +
+  'subject; left out, a new chat starts.'
 
 // Only one question at a time: they share the same browser tab.
 let busy = false
@@ -67,14 +77,17 @@ function browserOf($: EngineInterface): Browser {
   }
 }
 
-async function run($: EngineInterface, prompt: string, newChat: boolean, out?: string): Promise<AskResult & { path?: string }> {
+async function outDir($: EngineInterface): Promise<string> {
+  return `${((await $.env.get('TMPDIR')) ?? '/tmp').replace(/\/$/, '')}/chatgpt-ask`
+}
+
+async function run($: EngineInterface, prompt: string, chatUrl?: string, out?: string): Promise<AskResult & { path?: string }> {
   if (busy) return { ok: false, error: 'Another ChatGPT question is still running; wait for it to finish.' }
   busy = true
   try {
-    const result = await ask(browserOf($), { prompt, newChat }, { progress: text => $.ui.status(`ChatGPT: ${text}`) })
+    const result = await ask(browserOf($), { prompt, chatUrl }, { progress: text => $.ui.status(`ChatGPT: ${text}`) })
     if (!result.markdown) return result
-    const dir = ((await $.env.get('TMPDIR')) ?? '/tmp').replace(/\/$/, '')
-    const path = out ?? `${dir}/chatgpt-ask/${fileName(prompt, new Date())}`
+    const path = out ?? `${await outDir($)}/${fileName(prompt, new Date())}`
     await $.fs.write(path, `<!-- ${result.url} -->\n\n${result.markdown}\n`)
     return { ...result, path }
   } catch (error) {
@@ -84,6 +97,64 @@ async function run($: EngineInterface, prompt: string, newChat: boolean, out?: s
     $.ui.status(undefined)
   }
 }
+
+// Reads a local reference image for the upload; `$.fs.read` caps it at 4 MiB.
+async function readReference($: EngineInterface, path: string): Promise<Reference | string> {
+  const type = typeOf(path)
+  if (!path.startsWith('/')) return 'The reference must be an absolute path.'
+  if (!type) return 'The reference must be a PNG, JPEG, WebP or GIF image.'
+  try {
+    const { base64 } = await $.fs.read(path, { as: 'bytes' })
+    return { name: path.split('/').pop() ?? 'reference', type, base64 }
+  } catch (error) {
+    return `Could not read the reference (${error instanceof Error ? error.message : String(error)}); it must exist and be at most 4 MiB.`
+  }
+}
+
+// $.fs.write takes text only, so the bytes go through openssl's base64 decoder.
+async function writeImage($: EngineInterface, path: string, base64: string): Promise<string | undefined> {
+  const dir = path.slice(0, path.lastIndexOf('/')) || '/'
+  await $.process.run(['mkdir', '-p', dir])
+  const done = await $.process.run(['openssl', 'base64', '-d', '-A', '-out', path], { stdin: base64, timeoutMs: 60_000 })
+  return done.exitCode === 0 ? undefined : `Could not write ${path}: ${done.stderr.trim()}`
+}
+
+async function runImage(
+  $: EngineInterface,
+  prompt: string,
+  options: { chatUrl?: string; reference?: string; out?: string },
+): Promise<ImageResult & { path?: string }> {
+  if (busy) return { ok: false, error: 'Another ChatGPT request is still running; wait for it to finish.' }
+  busy = true
+  try {
+    const reference = options.reference === undefined ? undefined : await readReference($, options.reference)
+    if (typeof reference === 'string') return { ok: false, error: reference }
+    const result = await generateImage(
+      browserOf($),
+      { prompt, chatUrl: options.chatUrl, reference },
+      { progress: text => $.ui.status(`ChatGPT: ${text}`) },
+    )
+    if (!result.ok) return result
+    const path = options.out ?? `${await outDir($)}/${fileName(prompt, new Date(), extensionOf(result.type))}`
+    const failed = await writeImage($, path, result.base64)
+    return failed ? { ok: false, url: result.url, error: failed } : { ...result, path }
+  } catch (error) {
+    return { ok: false, error: `The browser pane failed: ${error instanceof Error ? error.message : String(error)}` }
+  } finally {
+    busy = false
+    $.ui.status(undefined)
+  }
+}
+
+function imageSummary(result: ImageResult & { ok: true }, path: string): string {
+  return [
+    `AI concept image generated by ChatGPT, saved to ${path} (${result.width}x${result.height}, ${result.type}).`,
+    `Chat: ${result.url}`,
+    'Look at the file before describing it, and ask before storing it in a repository; label it as an AI concept.',
+  ].join('\n')
+}
+
+const chatUrlOf = (value: unknown) => (typeof value === 'string' && value.trim() ? value.trim() : undefined)
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
@@ -101,10 +172,7 @@ export const register: Register = on => {
         type: 'object',
         properties: {
           prompt: { type: 'string', description: 'The whole question, self-contained.' },
-          newChat: {
-            type: 'boolean',
-            description: 'Start a new chat (default true). False continues the chat open in the pane.',
-          },
+          chatUrl: { type: 'string', description: CHAT_URL_HELP },
           out: { type: 'string', description: 'Optional absolute path for the Markdown file.' },
           maxChars: {
             type: 'number',
@@ -114,9 +182,37 @@ export const register: Register = on => {
         required: ['prompt'],
       },
     })
+    await $.tool.register({
+      name: 'chatgpt_image',
+      description:
+        "Generates or edits an image with the user's logged-in ChatGPT (chatgpt.com in Claude Code's built-in " +
+        'browser pane), optionally from a local reference image, waits for it and saves it locally; returns the ' +
+        'file path, its size and the chat URL. Write the prompt in the user\'s language with what to keep from the ' +
+        'reference (shape, proportions), the scene, lighting, materials, camera and exclusions (no people, no text, ' +
+        'no copies of existing games or brands). When ChatGPT answers with text instead (a refusal or a question), ' +
+        'the tool returns that text: relay it, do not rephrase around a refusal. ' +
+        IMAGE_BOUNDARIES,
+      inputSchema: {
+        type: 'object',
+        properties: {
+          prompt: { type: 'string', description: 'What to generate or change, self-contained.' },
+          reference: {
+            type: 'string',
+            description: 'Optional absolute path of a PNG, JPEG, WebP or GIF image (at most 4 MiB) to attach.',
+          },
+          chatUrl: { type: 'string', description: CHAT_URL_HELP },
+          out: { type: 'string', description: 'Optional absolute path for the image file.' },
+        },
+        required: ['prompt'],
+      },
+    })
     await $.command.register({
       name: 'chatgpt-ask',
       description: 'Asks ChatGPT in the browser pane and shows the answer: /chatgpt-ask <question>',
+    })
+    await $.command.register({
+      name: 'chatgpt-image',
+      description: 'Generates an image with ChatGPT in the browser pane and saves it: /chatgpt-image <prompt>',
     })
     return next(e)
   })
@@ -126,7 +222,11 @@ export const register: Register = on => {
     if (!prompt) return { result: 'Give a non-empty prompt.', isError: true as const }
     const out = typeof e.out === 'string' && e.out.startsWith('/') ? e.out : undefined
     const maxChars = typeof e.maxChars === 'number' && e.maxChars > 0 ? Math.floor(e.maxChars) : 3000
-    const result = await run($, prompt, e.newChat !== false, out)
+    const chatUrl = chatUrlOf(e.chatUrl)
+    if (chatUrl !== undefined && !isChatUrl(chatUrl)) {
+      return { result: `chatUrl must be a chat link like https://chatgpt.com/c/<id>, not ${chatUrl}.`, isError: true as const }
+    }
+    const result = await run($, prompt, chatUrl, out)
     if (result.ok) return { result: summary(result.path!, result.url, result.markdown, maxChars) }
     const partial = result.path ? `\nPartial answer saved to ${result.path}.` : ''
     return { result: result.error + partial, isError: true as const }
@@ -135,11 +235,37 @@ export const register: Register = on => {
   on('command.run', { command: 'chatgpt-ask' }, async ($, e) => {
     const prompt = e.args.trim()
     if (!prompt) return { text: 'Usage: /chatgpt-ask <question>' }
-    const result = await run($, prompt, true)
+    const result = await run($, prompt)
     if (!result.ok) return { text: result.error }
     return {
       text: `${result.markdown}\n\n— ChatGPT, ${result.url}\nSaved to ${result.path}`,
       context: [`The user asked ChatGPT through /chatgpt-ask; its answer is saved to ${result.path} (chat ${result.url}).`],
+    }
+  })
+
+  on('tool.call', { tool: 'mcp__chatgpt-ask__chatgpt_image' }, async ($, e) => {
+    const prompt = typeof e.prompt === 'string' ? e.prompt.trim() : ''
+    if (!prompt) return { result: 'Give a non-empty prompt.', isError: true as const }
+    const out = typeof e.out === 'string' && e.out.startsWith('/') ? e.out : undefined
+    const reference = typeof e.reference === 'string' && e.reference.trim() ? e.reference.trim() : undefined
+    const chatUrl = chatUrlOf(e.chatUrl)
+    if (chatUrl !== undefined && !isChatUrl(chatUrl)) {
+      return { result: `chatUrl must be a chat link like https://chatgpt.com/c/<id>, not ${chatUrl}.`, isError: true as const }
+    }
+    const result = await runImage($, prompt, { chatUrl, reference, out })
+    if (result.ok) return { result: imageSummary(result, result.path!) }
+    const said = result.markdown ? `\n\nChatGPT said:\n${result.markdown}` : ''
+    return { result: result.error + said, isError: true as const }
+  })
+
+  on('command.run', { command: 'chatgpt-image' }, async ($, e) => {
+    const prompt = e.args.trim()
+    if (!prompt) return { text: 'Usage: /chatgpt-image <prompt>' }
+    const result = await runImage($, prompt, {})
+    if (!result.ok) return { text: result.markdown ? `${result.error}\n\n${result.markdown}` : result.error }
+    return {
+      text: `Saved to ${result.path} (${result.width}x${result.height})\n— ChatGPT, ${result.url}`,
+      context: [`The user generated an AI concept image with /chatgpt-image; it is saved to ${result.path} (chat ${result.url}).`],
     }
   })
 }

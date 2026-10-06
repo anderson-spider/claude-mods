@@ -8,7 +8,7 @@ Marketplace of [Claude Code](https://claude.com/claude-code) plugins made by and
 | --- | --- |
 | [blast-radius](plugins/blast-radius) | Holds a risky Bash command and shows what it would change before it runs. |
 | [branch-guard](plugins/branch-guard) | Holds a `git commit` or `git push` on the protected branch and shows what would go in. |
-| [chatgpt-ask](plugins/chatgpt-ask) | Lets Claude ask your logged-in ChatGPT in the built-in browser pane and saves the answer as Markdown. |
+| [chatgpt-ask](plugins/chatgpt-ask) | Lets Claude ask your logged-in ChatGPT, or have it generate an image, in the built-in browser pane, and saves the result locally. |
 | [pr-preview](plugins/pr-preview) | Holds a `gh pr create`, `gh pr edit`, `glab mr create` or `glab mr update`, previews the title and description and flags what breaks the conventions. |
 | [review-panel](plugins/review-panel) | Opens a read-only pane with the worktree diff, the open pull or merge request, its CI jobs and the comments already made. |
 | [tailscale](plugins/tailscale) | Lets Claude query and modify your tailnet through the Tailscale API. |
@@ -61,21 +61,25 @@ Limitations: the plugin reads the command text, so `merge`, `cherry-pick`, `reba
 
 ## chatgpt-ask
 
-Sends a self-contained question to your own ChatGPT, already logged in at chatgpt.com in the Claude desktop app's built-in browser pane, waits for the answer and saves it as Markdown. It saves Claude's tokens when the question needs little context and the answer is long (research, explanations, drafts, translations, a second opinion); for work that needs the repository it does not pay off, since the context would go out and the answer would come back anyway.
+Sends a self-contained question to your own ChatGPT, already logged in at chatgpt.com in the Claude desktop app's built-in browser pane, waits for the answer and saves it as Markdown; it can also have ChatGPT generate or edit an image, optionally from a local reference, and save it. It saves Claude's tokens when the question needs little context and the answer is long (research, explanations, drafts, translations, a second opinion); for work that needs the repository it does not pay off, since the context would go out and the answer would come back anyway.
 
 | Entry | What it does |
 | --- | --- |
-| `mcp__chatgpt-ask__chatgpt_ask` | Tool for Claude: `prompt` (required), `newChat` (default `true`; `false` continues the chat open in the pane), `out` (an absolute path for the file) and `maxChars` (how much of the answer comes back inline, default 3000). |
+| `mcp__chatgpt-ask__chatgpt_ask` | Tool for Claude: `prompt` (required), `chatUrl` (the chat link a previous call returned, to continue that chat on the same subject; left out, a new chat starts), `out` (an absolute path for the file) and `maxChars` (how much of the answer comes back inline, default 3000). |
+| `mcp__chatgpt-ask__chatgpt_image` | Tool for Claude: `prompt` (required), `reference` (an absolute path of a PNG, JPEG, WebP or GIF of at most 4 MiB to attach), `chatUrl` and `out`. Returns the image's path, size and chat link; when ChatGPT answers with text instead (a refusal or a question), returns that text. |
 | `/chatgpt-ask <question>` | Asks from the prompt and shows the whole answer. |
+| `/chatgpt-image <prompt>` | Generates an image from the prompt and saves it. |
 
-The answer goes to `$TMPDIR/chatgpt-ask/<date>-<subject>.md`, with the chat URL on the first line; Claude gets the path, the URL and the start of the answer, and reads the rest from the file when it needs it. Code blocks keep their language, and lists, tables, quotes and math come back as Markdown. The tool's description tells Claude not to send credentials, secrets, private personal data or work data, and to treat the answer as ChatGPT's unverified opinion.
+Every request starts a new chat (the home page is one), unless a `chatUrl` brings Claude back to an earlier one. The plugin only uses a tab already on chatgpt.com, or opens one; it never touches a tab on another site. The answer goes to `$TMPDIR/chatgpt-ask/<date>-<subject>.md`, with the chat URL on the first line; Claude gets the path, the URL and the start of the answer, and reads the rest from the file when it needs it. Code blocks keep their language, and lists, tables, quotes and math come back as Markdown. The tool's description tells Claude not to send credentials, secrets, private personal data or work data, and to treat the answer as ChatGPT's unverified opinion.
+
+Images go to `$TMPDIR/chatgpt-ask/<date>-<subject>.png` (or the type ChatGPT served), decoded with `openssl`. Image tools spend your ChatGPT image quota, so Claude is told to use them only when you ask for an image, to attach only references you asked for or that it made for the task, and to label the result as an AI concept.
 
 Requirements:
 
 - The Claude desktop app (the built-in browser pane is not in the terminal), logged in to chatgpt.com in that pane. The plugin never types credentials: when the page asks for a login, it stops and says so.
 - A session outside auto mode. The pane's tools ask for permission on their own, and auto mode's classifier refuses calls that come from a plugin instead of a prompt. Adding `mcp__Claude_Browser__*` and `mcp__chatgpt-ask__chatgpt_ask` to `permissions.allow` in `~/.claude/settings.json` was enough in testing to run without prompts in the default mode.
 
-Limitations: it reads chatgpt.com's page, so a change in ChatGPT's interface can break sending or reading until the selectors in `hooks/chatgpt.ts` are updated; it waits up to 6 minutes for an answer; only one question runs at a time.
+Limitations: it reads chatgpt.com's page, so a change in ChatGPT's interface can break sending or reading until the selectors in `hooks/chatgpt.ts` are updated; a generated image is recognised by its alt text ("Imagem 1 gerada", "Generated image 1"); it waits up to 6 minutes for an answer or an image; only one request runs at a time.
 
 ## pr-preview
 

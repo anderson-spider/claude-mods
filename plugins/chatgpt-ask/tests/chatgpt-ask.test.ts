@@ -1,6 +1,21 @@
 import { expect, test } from 'claude-code/testing'
 
-import { ask, fallbackRouter, fileName, isRefusal, parseOutput, parseTabId, parseTabs, sendScript, summary } from '../hooks/chatgpt'
+import {
+  CHUNK,
+  ask,
+  extensionOf,
+  fallbackRouter,
+  fileName,
+  generateImage,
+  isChatUrl,
+  isRefusal,
+  parseOutput,
+  parseTabId,
+  parseTabs,
+  sendScript,
+  summary,
+  typeOf,
+} from '../hooks/chatgpt'
 import type { Browser, BrowserTab } from '../hooks/chatgpt'
 
 // The javascript_tool prints a string result as a JSON literal plus tab notes.
@@ -78,7 +93,7 @@ test('ask reuses the chatgpt tab, starts a new chat and waits until the answer s
     ],
     markdown: '## Answer',
   })
-  const result = await ask(browser, { prompt: 'hi', newChat: true }, { pollMs: 0 })
+  const result = await ask(browser, { prompt: 'hi' }, { pollMs: 0 })
 
   expect(result).toEqual({ ok: true, url: 'https://chatgpt.com/c/abc', markdown: '## Answer' })
   expect(calls).toEqual(['tabs', 'navigate seed https://chatgpt.com/', 'send seed', 'read seed'])
@@ -87,7 +102,7 @@ test('ask reuses the chatgpt tab, starts a new chat and waits until the answer s
 test('ask opens the pane when it is closed and a tab when chatgpt has none', async () => {
   const settled = [{ count: 0 }, { count: 1, length: 5 }, { count: 1, length: 5 }]
   const closed = fakeBrowser({ open: false, tabs: [], pages: settled, markdown: 'a' })
-  await ask(closed.browser, { prompt: 'hi', newChat: true }, { pollMs: 0 })
+  await ask(closed.browser, { prompt: 'hi' }, { pollMs: 0 })
   expect(closed.calls[1]).toBe('open https://chatgpt.com/')
 
   const other = fakeBrowser({
@@ -96,19 +111,29 @@ test('ask opens the pane when it is closed and a tab when chatgpt has none', asy
     pages: settled,
     markdown: 'a',
   })
-  await ask(other.browser, { prompt: 'hi', newChat: false }, { pollMs: 0 })
+  await ask(other.browser, { prompt: 'hi' }, { pollMs: 0 })
   expect(other.calls.slice(0, 3)).toEqual(['tabs', 'create', 'navigate t2 https://chatgpt.com/'])
 })
 
-test('ask keeps the open chat when newChat is false', async () => {
+test('ask continues the chat at chatUrl', async () => {
   const { browser, calls } = fakeBrowser({
     open: true,
     tabs: [{ tabId: 'seed', origin: 'https://chatgpt.com', isActive: true }],
     pages: [{ count: 1 }, { count: 2, length: 3 }, { count: 2, length: 3 }],
     markdown: 'ok',
   })
-  await ask(browser, { prompt: 'more', newChat: false }, { pollMs: 0 })
-  expect(calls).not.toContain('navigate seed https://chatgpt.com/')
+  await ask(browser, { prompt: 'more', chatUrl: 'https://chatgpt.com/c/6ac52f21-493c' }, { pollMs: 0 })
+  expect(calls[1]).toBe('navigate seed https://chatgpt.com/c/6ac52f21-493c')
+})
+
+test('ask refuses a chatUrl that is not a chat link, before touching the pane', async () => {
+  const { browser, calls } = fakeBrowser({ open: true, tabs: [], pages: [{}], markdown: '' })
+  const result = await ask(browser, { prompt: 'more', chatUrl: 'https://evil.example/c/1' }, { pollMs: 0 })
+
+  expect(!result.ok && result.error).toContain('chatUrl must be a chat link')
+  expect(calls).toEqual([])
+  expect(isChatUrl('https://chatgpt.com/c/abc-123')).toBe(true)
+  expect(isChatUrl('https://chatgpt.com/')).toBe(false)
 })
 
 test('ask refuses a logged-out page without sending anything', async () => {
@@ -118,7 +143,7 @@ test('ask refuses a logged-out page without sending anything', async () => {
     pages: [{ composer: false, login: true }],
     markdown: '',
   })
-  const result = await ask(browser, { prompt: 'hi', newChat: true }, { pollMs: 0 })
+  const result = await ask(browser, { prompt: 'hi' }, { pollMs: 0 })
 
   expect(result.ok).toBe(false)
   expect(!result.ok && result.error).toContain('log in')
@@ -172,7 +197,7 @@ test('ask sends the prompt once even when the send fails after running', async (
     return output
   }
 
-  await expect(ask(browser, { prompt: 'hi', newChat: true }, { pollMs: 0 })).rejects.toThrow('socket hang up')
+  await expect(ask(browser, { prompt: 'hi' }, { pollMs: 0 })).rejects.toThrow('socket hang up')
   expect(calls.filter(call => call.startsWith('send'))).toEqual(['send seed'])
 })
 
@@ -184,7 +209,7 @@ test('ask reports a prompt it could not send', async () => {
     markdown: '',
     sent: false,
   })
-  const result = await ask(browser, { prompt: 'hi', newChat: true }, { pollMs: 0 })
+  const result = await ask(browser, { prompt: 'hi' }, { pollMs: 0 })
   expect(!result.ok && result.error).toContain('send button not found')
 })
 
@@ -195,7 +220,7 @@ test('ask gives up after the timeout and returns what streamed so far', async ()
     pages: [{ count: 0 }, { count: 1, stop: true, length: 10 }],
     markdown: 'partial',
   })
-  const result = await ask(browser, { prompt: 'hi', newChat: true }, { pollMs: 0, timeoutMs: -1 })
+  const result = await ask(browser, { prompt: 'hi' }, { pollMs: 0, timeoutMs: -1 })
 
   expect(result.ok).toBe(false)
   expect(!result.ok && result.markdown).toBe('partial')
@@ -211,4 +236,98 @@ test('fileName and summary', () => {
   expect(short.endsWith('abc')).toBe(true)
   const long = summary('/tmp/a.md', 'https://chatgpt.com/c/1', 'x'.repeat(50), 10)
   expect(long).toContain('first 10 of 50 chars')
+})
+
+type Shot = { stop?: boolean; images?: number; count?: number; length?: number }
+
+// A fake pane for images: each image poll returns the next shot (the last one repeats).
+function fakeImagePane(options: { shots: Shot[]; base64: string; attached?: boolean; text?: string }) {
+  const calls: string[] = []
+  const uploaded: string[] = []
+  let poll = 0
+  const browser: Browser = {
+    tabs: async () => ({ browserOpen: true, tabs: [{ tabId: 'seed', origin: 'https://chatgpt.com', isActive: true }] }),
+    open: async () => 'seed',
+    create: async () => 't2',
+    navigate: async (tabId, url) => {
+      calls.push(`navigate ${url}`)
+    },
+    js: async (_tabId, code) => {
+      if (code.includes('__chatgptAskUpload.push')) {
+        uploaded.push(JSON.parse(/push\((".*")\);/s.exec(code)![1]!))
+        return printed({ chunks: uploaded.length })
+      }
+      if (code.includes('input.files')) {
+        calls.push('attach')
+        return printed(options.attached === false ? { attached: false, reason: 'image input not found' } : { attached: true })
+      }
+      if (code.includes('ClipboardEvent')) {
+        calls.push('send')
+        return printed({ sent: true })
+      }
+      if (code.includes('__chatgptAskImage = b64')) {
+        calls.push('image')
+        return printed({ found: true, url: 'https://chatgpt.com/c/img', type: 'image/png', length: options.base64.length, width: 1024, height: 1024, alt: 'Imagem 1 gerada' })
+      }
+      if (code.includes('chunk:')) {
+        const [, from, to] = /slice\((\d+), (\d+)\)/.exec(code)!
+        return printed({ chunk: options.base64.slice(Number(from), Number(to)) })
+      }
+      if (code.includes('delete window.__chatgptAskImage')) return printed({ done: true })
+      if (code.includes('function convert')) return printed({ url: 'https://chatgpt.com/c/img', markdown: options.text ?? '', text: options.text ?? '' })
+      if (code.includes('images:')) {
+        const shot = options.shots[Math.min(poll++, options.shots.length - 1)]!
+        return printed({ href: 'https://chatgpt.com/c/img', stop: false, images: 0, count: 0, length: 0, ...shot })
+      }
+      return printed({ href: 'https://chatgpt.com/', composer: true, login: false, stop: false, count: 0, length: 0 })
+    },
+  }
+  return { browser, calls, uploaded }
+}
+
+test('generateImage uploads the reference in chunks, waits for a finished image and reads it back whole', async () => {
+  const reference = { name: 'ref.png', type: 'image/png', base64: 'A'.repeat(CHUNK * 2 + 10) }
+  const image = 'B'.repeat(CHUNK + 5)
+  const { browser, calls, uploaded } = fakeImagePane({
+    shots: [{}, { stop: true }, { stop: true, images: 1 }, { images: 1 }],
+    base64: image,
+  })
+  const result = await generateImage(browser, { prompt: 'a lamp', reference }, { pollMs: 0 })
+
+  expect(uploaded.join('')).toBe(reference.base64)
+  expect(uploaded.length).toBe(3)
+  expect(calls).toEqual(['navigate https://chatgpt.com/', 'attach', 'send', 'image'])
+  expect(result.ok && result.base64).toBe(image)
+  expect(result.ok && [result.width, result.type]).toEqual([1024, 'image/png'])
+})
+
+test('generateImage returns the text when ChatGPT answers without an image', async () => {
+  const { browser, calls } = fakeImagePane({
+    shots: [{}, { count: 1, length: 20 }, { count: 1, length: 20 }],
+    base64: '',
+    text: 'I cannot create that image.',
+  })
+  const result = await generateImage(browser, { prompt: 'a logo of a brand' }, { pollMs: 0 })
+
+  expect(result.ok).toBe(false)
+  expect(!result.ok && result.markdown).toBe('I cannot create that image.')
+  expect(!result.ok && result.error).toContain('instead of an image')
+  expect(calls).not.toContain('image')
+})
+
+test('generateImage stops before sending when the reference does not attach', async () => {
+  const { browser, calls } = fakeImagePane({ shots: [{}], base64: '', attached: false })
+  const reference = { name: 'ref.png', type: 'image/png', base64: 'AAAA' }
+  const result = await generateImage(browser, { prompt: 'a lamp', reference }, { pollMs: 0 })
+
+  expect(!result.ok && result.error).toContain('image input not found')
+  expect(calls).not.toContain('send')
+})
+
+test('image file names and types', () => {
+  expect(fileName('Uma luminária de mesa', new Date('2026-10-06T12:00:00Z'), 'png')).toBe('20261006-120000-uma-luminaria-de-mesa.png')
+  expect(extensionOf('image/webp')).toBe('webp')
+  expect(extensionOf('image/unknown')).toBe('png')
+  expect(typeOf('/x/Ref.JPG')).toBe('image/jpeg')
+  expect(typeOf('/x/ref.bmp')).toBeUndefined()
 })

@@ -20,7 +20,7 @@
     {
       "name": "chatgpt-ask",
       "source": "./plugins/chatgpt-ask",
-      "description": "Lets Claude ask your logged-in ChatGPT through the built-in browser pane and saves the answer as Markdown."
+      "description": "Lets Claude ask your logged-in ChatGPT, or have it generate an image, through the built-in browser pane, and saves the result locally."
     },
     {
       "name": "pr-preview",

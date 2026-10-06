@@ -18,7 +18,7 @@ export type Browser = {
   js(tabId: string, code: string): Promise<string>
 }
 
-export type AskInput = { prompt: string; newChat: boolean }
+export type AskInput = { prompt: string; chatUrl?: string }
 
 export type AskResult =
   | { ok: true; url: string; markdown: string }
@@ -234,32 +234,38 @@ JSON.stringify({
   text: last ? last.innerText : (document.querySelector('main')?.innerText || ''),
 });`
 
-async function findTab(browser: Browser, newChat: boolean): Promise<string> {
+/** Whether `url` names one of the user's chats (`https://chatgpt.com/c/<id>`). */
+export function isChatUrl(url: string): boolean {
+  return /^https:\/\/chatgpt\.com\/c\/[\w-]+\/?$/.test(url)
+}
+
+// Goes to `target` in the chatgpt.com tab, opening the pane or a tab when
+// there is none; never touches a tab on another site. The home page is a new
+// chat, so going there is what the "New chat" button does.
+async function findTab(browser: Browser, target: string): Promise<string> {
   const { browserOpen, tabs } = await browser.tabs()
-  if (!browserOpen) return browser.open(CHATGPT_URL)
+  if (!browserOpen) return browser.open(target)
   const tab = tabs.find(t => t.origin === ORIGIN && t.isActive) ?? tabs.find(t => t.origin === ORIGIN)
-  if (tab) {
-    if (newChat) await browser.navigate(tab.tabId, CHATGPT_URL)
-    return tab.tabId
-  }
-  const tabId = await browser.create()
-  await browser.navigate(tabId, CHATGPT_URL)
+  const tabId = tab ? tab.tabId : await browser.create()
+  await browser.navigate(tabId, target)
   return tabId
 }
 
-export async function ask(browser: Browser, input: AskInput, options: AskOptions = {}): Promise<AskResult> {
-  const timeoutMs = options.timeoutMs ?? 6 * 60_000
-  const pollMs = options.pollMs ?? 3000
-  const progress = options.progress ?? (() => {})
-  const state = async (tabId: string, waitMs: number) =>
-    parseOutput<PageState>(await browser.js(tabId, stateScript(waitMs)))
+type Ready = { ok: true; tabId: string; page: PageState } | { ok: false; error: string; url?: string }
 
+// Opens a new chat, or `chatUrl` to continue one, and waits for the composer.
+async function prepare(browser: Browser, chatUrl: string | undefined, progress: (text: string) => void): Promise<Ready> {
+  if (chatUrl !== undefined && !isChatUrl(chatUrl)) {
+    return { ok: false, error: `chatUrl must be a chat link like https://chatgpt.com/c/<id>, not ${chatUrl}.` }
+  }
   progress('opening chatgpt.com')
-  const tabId = await findTab(browser, input.newChat)
+  const tabId = await findTab(browser, chatUrl ?? CHATGPT_URL)
 
   // The page may still be loading after a navigation: wait for the composer.
-  let page = await state(tabId, 0)
-  for (let i = 0; i < 10 && !page.composer && !page.login; i++) page = await state(tabId, 1500)
+  let page = parseOutput<PageState>(await browser.js(tabId, stateScript(0)))
+  for (let i = 0; i < 10 && !page.composer && !page.login; i++) {
+    page = parseOutput<PageState>(await browser.js(tabId, stateScript(1500)))
+  }
   if (!page.href.startsWith(ORIGIN) || page.login || !page.composer) {
     return {
       ok: false,
@@ -270,6 +276,18 @@ export async function ask(browser: Browser, input: AskInput, options: AskOptions
     }
   }
   if (page.stop) return { ok: false, url: page.href, error: 'ChatGPT is still answering in that chat; wait and try again.' }
+  return { ok: true, tabId, page }
+}
+
+export async function ask(browser: Browser, input: AskInput, options: AskOptions = {}): Promise<AskResult> {
+  const timeoutMs = options.timeoutMs ?? 6 * 60_000
+  const pollMs = options.pollMs ?? 3000
+  const progress = options.progress ?? (() => {})
+
+  const ready = await prepare(browser, input.chatUrl, progress)
+  if (!ready.ok) return ready
+  const { tabId } = ready
+  let page = ready.page
 
   const before = page.count
   const sent = parseOutput<{ sent: boolean; reason?: string }>(await browser.js(tabId, sendScript(input.prompt)))
@@ -279,7 +297,7 @@ export async function ask(browser: Browser, input: AskInput, options: AskOptions
   const started = Date.now()
   let lastLength = -1
   for (;;) {
-    page = await state(tabId, pollMs)
+    page = parseOutput<PageState>(await browser.js(tabId, stateScript(pollMs)))
     const done = page.count > before && !page.stop && page.length > 0 && page.length === lastLength
     if (done) break
     lastLength = page.count > before ? page.length : -1
@@ -301,8 +319,182 @@ export async function ask(browser: Browser, input: AskInput, options: AskOptions
   return { ok: true, url: read.url, markdown }
 }
 
-/** A file name for the answer: timestamp plus a slug of the prompt. */
-export function fileName(prompt: string, now: Date): string {
+// Images cross the page boundary as base64 in slices, so neither the script
+// text nor the tool's output carries a whole file at once.
+export const CHUNK = 512 * 1024
+
+export type Reference = { name: string; type: string; base64: string }
+
+export type ImageInput = { prompt: string; chatUrl?: string; reference?: Reference }
+
+export type ImageResult =
+  | { ok: true; url: string; base64: string; type: string; width: number; height: number; alt: string }
+  | { ok: false; error: string; url?: string; markdown?: string }
+
+type ImageState = { href: string; stop: boolean; images: number; count: number; length: number }
+
+// A generated image: a large picture whose alt says so ("Imagem 1 gerada",
+// "Generated image 1"); an attached reference has its file name instead.
+const GENERATED = `[...document.querySelectorAll('main img')].filter(i => i.naturalWidth > 500 && /gerad|generated/i.test(i.alt || ''))`
+
+export function imageStateScript(waitMs: number): string {
+  return `
+await new Promise(r => setTimeout(r, ${Math.max(0, Math.floor(waitMs))}));
+const answers = [...document.querySelectorAll('[data-markdown-text-style]')];
+JSON.stringify({
+  href: location.href,
+  stop: !!document.querySelector('[data-testid=stop-button]') ||
+    [...document.querySelectorAll('button')].some(b => ${STOP_LABELS}.test(b.getAttribute('aria-label') || '')),
+  images: ${GENERATED}.length,
+  count: answers.length,
+  length: (answers.pop()?.innerText || '').length,
+})`
+}
+
+export function uploadChunkScript(index: number, chunk: string): string {
+  return `
+if (${index} === 0) window.__chatgptAskUpload = [];
+window.__chatgptAskUpload.push(${JSON.stringify(chunk)});
+JSON.stringify({ chunks: window.__chatgptAskUpload.length })`
+}
+
+// Attaches the uploaded bytes to the composer through its image input.
+export function attachScript(name: string, type: string): string {
+  return `
+const b64 = (window.__chatgptAskUpload || []).join('');
+delete window.__chatgptAskUpload;
+const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+const file = new File([bytes], ${JSON.stringify(name)}, { type: ${JSON.stringify(type)} });
+const input = [...document.querySelectorAll('input[type=file]')].find(i => i.accept === 'image/*') ||
+  document.querySelector('input[type=file][accept*="image"]');
+if (!input) JSON.stringify({ attached: false, reason: 'image input not found' }); else {
+  const data = new DataTransfer();
+  data.items.add(file);
+  input.files = data.files;
+  input.dispatchEvent(new Event('change', { bubbles: true }));
+  const label = b => /^(Remover|Remove) /.test(b.getAttribute('aria-label') || '') && (b.getAttribute('aria-label') || '').endsWith(${JSON.stringify(name)});
+  let chip = false;
+  for (let i = 0; i < 40 && !chip; i++) {
+    await new Promise(r => setTimeout(r, 250));
+    chip = [...document.querySelectorAll('button')].some(label);
+  }
+  JSON.stringify(chip ? { attached: true } : { attached: false, reason: 'the attachment did not show up in the composer' });
+}`
+}
+
+// Reads the last generated image's bytes into the page, as the server sent
+// them when the page may fetch it, else redrawn as PNG.
+export const IMAGE_SCRIPT = `
+const img = ${GENERATED}.pop();
+if (!img) JSON.stringify({ found: false }); else {
+  let type = 'image/png', b64 = '';
+  try {
+    const blob = await (await fetch(img.currentSrc || img.src, { credentials: 'include' })).blob();
+    if (!/^image\\//.test(blob.type)) throw new Error(blob.type);
+    type = blob.type;
+    b64 = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  } catch {
+    const copy = new Image();
+    copy.crossOrigin = 'anonymous';
+    copy.src = img.currentSrc || img.src;
+    await copy.decode();
+    const canvas = document.createElement('canvas');
+    canvas.width = copy.naturalWidth;
+    canvas.height = copy.naturalHeight;
+    canvas.getContext('2d').drawImage(copy, 0, 0);
+    type = 'image/png';
+    b64 = canvas.toDataURL('image/png').split(',')[1] || '';
+  }
+  window.__chatgptAskImage = b64;
+  JSON.stringify({ found: true, url: location.href, type, length: b64.length, width: img.naturalWidth, height: img.naturalHeight, alt: img.alt || '' });
+}`
+
+export function imageChunkScript(offset: number, size: number): string {
+  return `JSON.stringify({ chunk: (window.__chatgptAskImage || '').slice(${offset}, ${offset + size}) })`
+}
+
+export const IMAGE_CLEANUP_SCRIPT = `delete window.__chatgptAskImage; JSON.stringify({ done: true })`
+
+export async function generateImage(browser: Browser, input: ImageInput, options: AskOptions = {}): Promise<ImageResult> {
+  const timeoutMs = options.timeoutMs ?? 6 * 60_000
+  const pollMs = options.pollMs ?? 5000
+  const progress = options.progress ?? (() => {})
+
+  const ready = await prepare(browser, input.chatUrl, progress)
+  if (!ready.ok) return ready
+  const { tabId } = ready
+
+  if (input.reference) {
+    progress('attaching the reference')
+    const { base64, name, type } = input.reference
+    for (let offset = 0, index = 0; offset < base64.length || index === 0; offset += CHUNK, index++) {
+      await browser.js(tabId, uploadChunkScript(index, base64.slice(offset, offset + CHUNK)))
+    }
+    const attached = parseOutput<{ attached: boolean; reason?: string }>(await browser.js(tabId, attachScript(name, type)))
+    if (!attached.attached) return { ok: false, url: ready.page.href, error: `Could not attach the reference: ${attached.reason}.` }
+  }
+
+  let state = parseOutput<ImageState>(await browser.js(tabId, imageStateScript(0)))
+  const before = state
+  const sent = parseOutput<{ sent: boolean; reason?: string }>(await browser.js(tabId, sendScript(input.prompt)))
+  if (!sent.sent) return { ok: false, url: state.href, error: `Could not send the prompt: ${sent.reason}.` }
+
+  progress('waiting for the image')
+  const started = Date.now()
+  let lastLength = -1
+  for (;;) {
+    state = parseOutput<ImageState>(await browser.js(tabId, imageStateScript(pollMs)))
+    if (state.images > before.images && !state.stop) break
+    // No image, and a settled text answer: a refusal or a question back.
+    const texted = state.count > before.count && !state.stop && state.length > 0 && state.length === lastLength
+    if (texted) {
+      const read = parseOutput<{ url: string; markdown: string; text: string }>(await browser.js(tabId, READ_SCRIPT))
+      return {
+        ok: false,
+        url: read.url,
+        markdown: read.markdown || read.text,
+        error: 'ChatGPT answered with text instead of an image (a refusal or a question); relay it, do not rephrase around a refusal.',
+      }
+    }
+    lastLength = state.count > before.count ? state.length : -1
+    if (Date.now() - started > timeoutMs) {
+      return { ok: false, url: state.href, error: `No image after ${Math.round(timeoutMs / 1000)} s; it may still be generating at ${state.href}.` }
+    }
+    progress(state.stop ? 'generating the image' : 'waiting for the image')
+  }
+
+  progress('saving the image')
+  const found = parseOutput<{ found: boolean; url: string; type: string; length: number; width: number; height: number; alt: string }>(
+    await browser.js(tabId, IMAGE_SCRIPT),
+  )
+  if (!found.found || found.length === 0) return { ok: false, url: state.href, error: 'The generated image could not be read from the page.' }
+  let base64 = ''
+  for (let offset = 0; offset < found.length; offset += CHUNK) {
+    base64 += parseOutput<{ chunk: string }>(await browser.js(tabId, imageChunkScript(offset, CHUNK))).chunk
+  }
+  await browser.js(tabId, IMAGE_CLEANUP_SCRIPT)
+  if (base64.length !== found.length) return { ok: false, url: found.url, error: 'The image came back incomplete; try again.' }
+  return { ok: true, url: found.url, base64, type: found.type, width: found.width, height: found.height, alt: found.alt }
+}
+
+/** The extension for an image MIME type. */
+export function extensionOf(type: string): string {
+  return { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif' }[type] ?? 'png'
+}
+
+/** The MIME type of a reference image, by its extension. */
+export function typeOf(path: string): string | undefined {
+  const ext = path.toLowerCase().split('.').pop() ?? ''
+  return { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif' }[ext]
+}
+
+/** A file name for an answer or image: timestamp plus a slug of the prompt. */
+export function fileName(prompt: string, now: Date, extension = 'md'): string {
   const stamp = now.toISOString().replace(/[-:]/g, '').replace(/\..*$/, '').replace('T', '-')
   const slug = prompt
     .normalize('NFD')
@@ -312,7 +504,7 @@ export function fileName(prompt: string, now: Date): string {
     .replace(/^-|-$/g, '')
     .slice(0, 40)
     .replace(/-$/, '')
-  return `${stamp}-${slug || 'answer'}.md`
+  return `${stamp}-${slug || 'answer'}.${extension}`
 }
 
 /** What the model reads: where the answer is and how much of it. */
