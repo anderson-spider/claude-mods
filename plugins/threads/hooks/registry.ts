@@ -30,6 +30,8 @@ export type Thread = {
   /** How many ticks a finished helper's answer has been looked for in vain. */
   awaitingAnswer?: number
   undelivered?: boolean
+  /** Set while `threads_close` works on it, so the polling leaves it alone. */
+  closing?: boolean
   /** What was found in a worktree that `threads_close` left in place; `reason` when its state could not be read. */
   kept?: { commits: number; dirty: boolean; reason?: string }
 }

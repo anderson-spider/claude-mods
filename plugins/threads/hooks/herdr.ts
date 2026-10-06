@@ -133,8 +133,22 @@ export const agentList = async (probe: Probe): Promise<Result<Agent[]>> => {
   return done.ok ? { ok: true, value: ((done.value.agents ?? []) as Json[]).map(agentOf) } : done
 }
 
-/** Sends the text without `--wait`: whether the helper took it is seen later, from its status. */
-export const agentPrompt = (probe: Probe, target: string, text: string) => one(probe, ['agent', 'prompt', target, text])
+/**
+ * Sends the text without `--wait`: whether the helper took it is seen later, from its status. A text that
+ * starts with `-` would be read as an option, so it is introduced.
+ */
+export const agentPrompt = (probe: Probe, target: string, text: string) => one(probe, ['agent', 'prompt', target, text.trimStart().startsWith('-') ? `Instruction: ${text}` : text])
+
+export type WorktreeInfo = { path: string; branch: string; workspaceId?: string }
+
+/** The repository's worktrees as Herdr knows them, with the workspace each one is open in. */
+export const worktreeList = async (probe: Probe, cwd: string): Promise<Result<WorktreeInfo[]>> => {
+  const done = await call(probe, ['worktree', 'list', '--cwd', cwd])
+
+  return done.ok
+    ? { ok: true, value: ((done.value.worktrees ?? []) as Json[]).map(w => ({ path: String(w.path), branch: String(w.branch), workspaceId: w.open_workspace_id ?? undefined })) }
+    : done
+}
 
 export const sendKeys = (probe: Probe, target: string, keys: string[]) => nothing(probe, ['agent', 'send-keys', target, ...keys])
 

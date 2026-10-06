@@ -10,13 +10,15 @@ const GIT_MS = 15_000
 
 export const branchFor = (id: string): string => `threads/${id}`
 
+const verb = (args: string[]) => args.find(arg => !arg.startsWith('--')) ?? args[0]
+
 const git = async (probe: Probe, args: string[], cwd: string): Promise<{ ok: true; out: string } | { ok: false; reason: string }> => {
   try {
     const done = await probe.run(['git', ...args], { cwd, timeoutMs: GIT_MS })
 
-    return done.exitCode === 0 ? { ok: true, out: done.stdout.trim() } : { ok: false, reason: `git ${args[0]} failed (exit ${done.exitCode})` }
+    return done.exitCode === 0 ? { ok: true, out: done.stdout.trim() } : { ok: false, reason: `git ${verb(args)} failed (exit ${done.exitCode})` }
   } catch {
-    return { ok: false, reason: `git ${args[0]} could not run` }
+    return { ok: false, reason: `git ${verb(args)} could not run` }
   }
 }
 
@@ -38,7 +40,8 @@ export const currentCommit = async (probe: Probe, cwd: string): Promise<string |
  * untracked, no submodule, still on its own branch at the commit it started from. Any doubt is `unknown`.
  */
 export const classify = async (probe: Probe, a: { path: string; base: string; branch: string }): Promise<Outcome> => {
-  const status = await git(probe, ['status', '--porcelain', '--ignored'], a.path)
+  // No optional locks: a status taken while the helper commits must not hold its index.
+  const status = await git(probe, ['--no-optional-locks', 'status', '--porcelain', '--ignored'], a.path)
   const head = await git(probe, ['rev-parse', 'HEAD'], a.path)
   const branch = await git(probe, ['rev-parse', '--abbrev-ref', 'HEAD'], a.path)
   const ahead = await git(probe, ['rev-list', '--count', `${a.base}..HEAD`], a.path)

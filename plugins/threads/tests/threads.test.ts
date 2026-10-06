@@ -161,7 +161,7 @@ test('herdr results are parsed from success and error JSON', async () => {
 const gitProbe = (answers: Record<string, RunResult>): Probe => probeOf(argv => answers[argv.join(' ')] ?? out('', 128, 'fatal'))
 
 const CLEAN: Record<string, RunResult> = {
-  'git status --porcelain --ignored': out(''),
+  'git --no-optional-locks status --porcelain --ignored': out(''),
   'git rev-parse HEAD': out('aaa\n'),
   'git rev-parse --abbrev-ref HEAD': out('threads/abc123\n'),
   'git rev-list --count aaa..HEAD': out('0\n'),
@@ -186,10 +186,10 @@ test('classify says a worktree is empty only with nothing at all in it', async (
 
   const ahead = { ...CLEAN, 'git rev-parse HEAD': out('bbb\n'), 'git rev-list --count aaa..HEAD': out('2\n') }
   expect(await classify(gitProbe(ahead), WORKTREE)).toEqual({ kind: 'commits', commits: 2, dirty: false })
-  expect(await classify(gitProbe({ ...ahead, 'git status --porcelain --ignored': out(' M a.ts\n') }), WORKTREE)).toEqual({ kind: 'commits', commits: 2, dirty: true })
+  expect(await classify(gitProbe({ ...ahead, 'git --no-optional-locks status --porcelain --ignored': out(' M a.ts\n') }), WORKTREE)).toEqual({ kind: 'commits', commits: 2, dirty: true })
 
   for (const line of [' M a.ts\n', '?? notes.txt\n', '!! dist/\n']) {
-    expect(await classify(gitProbe({ ...CLEAN, 'git status --porcelain --ignored': out(line) }), WORKTREE)).toEqual({ kind: 'dirty' })
+    expect(await classify(gitProbe({ ...CLEAN, 'git --no-optional-locks status --porcelain --ignored': out(line) }), WORKTREE)).toEqual({ kind: 'dirty' })
   }
 
   expect(await classify(gitProbe({ ...CLEAN, 'git submodule status': out(' 1a2b3c sub (heads/main)\n') }), WORKTREE)).toEqual({ kind: 'dirty' })
@@ -204,7 +204,7 @@ test('classify keeps the worktree when anything is off or fails', async () => {
     expect(await kind({ ...CLEAN, [command]: out('', 128, 'fatal') })).toBe('unknown')
   }
 
-  const reason = await classify(gitProbe({ ...CLEAN, 'git status --porcelain --ignored': out('', 128, 'fatal: not a repo') }), WORKTREE)
+  const reason = await classify(gitProbe({ ...CLEAN, 'git --no-optional-locks status --porcelain --ignored': out('', 128, 'fatal: not a repo') }), WORKTREE)
   expect(reason.kind === 'unknown' && reason.reason).toMatch(/git status/)
 })
 
@@ -215,6 +215,7 @@ const asked = JSON.stringify({ type: 'user', message: { content: 'go' } })
 
 test('claudeTranscriptPath turns the cwd into the project folder name', () => {
   expect(claudeTranscriptPath('/home/me', '/Users/a/.herdr/worktrees/x/y', 'sid')).toBe('/home/me/.claude/projects/-Users-a--herdr-worktrees-x-y/sid.jsonl')
+  expect(claudeTranscriptPath('/home/me', '/Users/a b/my_repo@x/.wt', 'sid')).toBe('/home/me/.claude/projects/-Users-a-b-my-repo-x--wt/sid.jsonl')
 })
 
 test('lineCount counts non-empty lines', () => {
@@ -230,12 +231,13 @@ test('claudeAnswerAfter returns the last answer after the marker, never an older
   expect(claudeAnswerAfter(log, 4)).toBeUndefined()
 })
 
-test('claudeAnswerAfter skips tool-only messages and corrupt lines, and finds nothing when only tools ran', () => {
-  const log = [asked, said([text('working on it')]), 'not json {', said([tool])].join('\n')
+test('claudeAnswerAfter answers only from the last assistant message, and finds nothing when that one has no text', () => {
+  const corrupt = [asked, said([text('working on it')]), 'not json {', said([tool])].join('\n')
 
-  expect(claudeAnswerAfter(log, 0)).toEqual({ text: 'working on it', model: 'claude-sonnet-5-5' })
-  expect(claudeAnswerAfter([asked, said([tool])].join('\n'), 1)).toBeUndefined()
+  expect(claudeAnswerAfter(corrupt, 0)).toBeUndefined()
+  expect(claudeAnswerAfter([asked, said([tool]), said([text('the real answer')])].join('\n'), 0)).toEqual({ text: 'the real answer', model: 'claude-sonnet-5-5' })
   expect(claudeAnswerAfter([asked, said([text('old')]), asked, said([tool])].join('\n'), 2)).toBeUndefined()
+  expect(claudeAnswerAfter([asked, said([text('done')]), 'not json {'].join('\n'), 0)?.text).toBe('done')
 })
 
 const thread = (over: Partial<Thread> = {}): Thread => ({
@@ -386,12 +388,13 @@ const route = (argv: readonly string[], over: Record<string, RunResult> = {}): R
     if (line === 'git rev-parse --abbrev-ref HEAD') return out('threads/012345\n')
     if (a === 'branch') return over.branch ?? out('')
 
-    if (a === 'status') return over.status ?? out('')
+    if (a === '--no-optional-locks') return over.status ?? out('')
 
     return a === 'rev-list' ? (over.count ?? out('0\n')) : out('')
   }
 
   if (a === 'worktree' && b === 'create') return over.create ?? CREATED
+  if (a === 'worktree' && b === 'list') return over.wtlist ?? json({ worktrees: [{ path: '/wt', branch: 'threads/012345', open_workspace_id: 'w2' }] })
   if (a === 'worktree' && b === 'remove') return over.remove ?? json({ type: 'worktree_removed' })
   if (a === 'agent' && b === 'start') return over.start ?? json({ agent: STARTED })
   if (a === 'agent' && b === 'prompt') return over.prompt ?? json({ agent: STARTED })
@@ -521,7 +524,7 @@ test('two simultaneous starts cannot exceed the cap', async () => {
 })
 
 test('threads_start rolls back an empty worktree when the helper cannot start', async () => {
-  const world = harness({ start: failure('boom', 'could not start') })
+  const world = harness({ start: failure('boom', 'could not start'), list: json({ agents: [] }) })
   const result = await start(world.ports, SETTINGS, { task: 't' })
 
   expect(result.isError).toBe(true)
@@ -530,7 +533,7 @@ test('threads_start rolls back an empty worktree when the helper cannot start', 
   expect(world.ran()).toContain('git branch -d threads/012345')
   expect(world.state.registry.threads).toEqual([])
 
-  const stuck = harness({ start: failure('boom', 'could not start'), remove: failure('busy', 'in use') })
+  const stuck = harness({ start: failure('boom', 'could not start'), remove: failure('busy', 'in use'), list: json({ agents: [] }) })
   const left = await start(stuck.ports, SETTINGS, { task: 't' })
   expect(left.isError).toBe(true)
   expect(left.text).toMatch(/\/wt/)
@@ -992,4 +995,81 @@ test('polling starts with the configured interval once a helper is started', { o
   await call($, 'threads_start', { task: 'Fix the bug' })
   await call($, 'threads_start', { task: 'Another' })
   expect(asked).toEqual([5000])
+})
+
+test('a follow-up that looks like an option is sent as an instruction, and a failed send is undone', async () => {
+  const calls: string[][] = []
+  const probe = probeOf(() => json({ agent: AGENT }), calls)
+  await agentPrompt(probe, 't', '- fix tests\n- run lint')
+  await agentPrompt(probe, 't', 'plain text')
+  expect(calls.map(call => call.at(-1))).toEqual(['Instruction: - fix tests\n- run lint', 'plain text'])
+
+  const idle = holding(owned({ status: 'idle' }))
+  for (const input of [{ id: '012345', text: '   ' }, { id: '012345', keys: [] }]) {
+    expect((await answer(idle.ports, input)).isError).toBe(true)
+  }
+  expect(idle.herdr()).toEqual([])
+
+  const marker = { at: 5, completionSeq: 1, transcriptLines: 3, seenWorking: true }
+  const stalled = holding(owned({ status: 'idle', marker }), { prompt: failure('agent_prompt_stalled', 'no') })
+  expect((await answer(stalled.ports, { id: '012345', text: 'go' })).isError).toBe(true)
+  expect(stalled.state.registry.threads[0]).toMatchObject({ status: 'idle', marker })
+})
+
+test('poll learns the session id of a helper that started without one', async () => {
+  const world = polling([watching({ sessionId: undefined })])
+  world.files[TRANSCRIPT] = [asked, said([text('Found it')])].join('\n')
+  world.over.list = listing({ agent_status: 'done', completion_seq: 3 })
+  await world.tick()
+
+  expect(world.announced[0]).toMatch(/Found it/)
+  expect(world.state.registry.threads[0]?.sessionId).toBe('sess-1')
+})
+
+test('threads_close checks Herdr again before removing a worktree, also for helpers already marked exited', async () => {
+  const refused = async (over: Record<string, RunResult>) => {
+    const world = holding(owned({ status: 'exited' }), over)
+    const result = await close(world.ports, '012345')
+
+    expect(result.isError).toBe(true)
+    expect(world.ran().some(line => line.startsWith('herdr worktree remove'))).toBe(false)
+    expect(world.state.registry.threads[0]?.closing).toBeUndefined()
+  }
+
+  await refused({ list: listing({ name: 't-other', cwd: '/wt' }) })
+  await refused({ list: GONE, wtlist: json({ worktrees: [{ path: '/wt', branch: 'threads/012345', open_workspace_id: 'w9' }] }) })
+  await refused({ list: GONE, wtlist: json({ worktrees: [{ path: '/wt', branch: 'other-branch', open_workspace_id: 'w2' }] }) })
+  await refused({ list: GONE, wtlist: failure('x', 'cannot list') })
+
+  const fine = holding(owned({ status: 'exited' }), { list: GONE })
+  expect((await close(fine.ports, '012345')).isError).toBeUndefined()
+  expect(fine.ran()).toContain('herdr worktree remove --workspace w2')
+})
+
+test('a helper being closed is left alone by the polling, and its pending announcements go with it', async () => {
+  const world = polling([watching({ status: 'working', closing: true })])
+  world.over.list = listing()
+  await world.tick()
+  expect(world.announced).toEqual([])
+  expect(world.state.registry.threads[0]?.status).toBe('working')
+
+  const stale = [
+    { threadId: '012345', kind: 'exited' as const, text: 'stale', tries: 0 },
+    { threadId: 'other1', kind: 'exited' as const, text: 'keep', tries: 0 },
+  ]
+  const removed = holding(owned(), { list: GONE })
+  removed.state.registry = { ...removed.state.registry, pending: stale }
+  await close(removed.ports, '012345')
+  expect(removed.state.registry.pending.map(one => one.text)).toEqual(['keep'])
+
+  const kept = holding(owned(), { list: GONE, head: out('bbb\n'), count: out('1\n') })
+  kept.state.registry = { ...kept.state.registry, pending: stale }
+  await close(kept.ports, '012345')
+  expect(kept.state.registry.pending.map(one => one.text)).toEqual(['keep'])
+  expect(kept.state.registry.threads[0]).toMatchObject({ status: 'closed' })
+  expect(kept.state.registry.threads[0]?.closing).toBeUndefined()
+
+  const running = holding(owned())
+  await close(running.ports, '012345')
+  expect(running.state.registry.threads[0]?.closing).toBeUndefined()
 })

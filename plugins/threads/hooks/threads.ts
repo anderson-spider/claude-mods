@@ -1,4 +1,4 @@
-import { agentFocus, agentGet, agentList, agentPrompt, agentStart, effortError, modelError, nativeArgs, paneClose, readScreen, sendKeys, worktreeCreate, worktreeRemove } from './herdr'
+import { agentFocus, agentGet, agentList, agentPrompt, agentStart, effortError, modelError, nativeArgs, paneClose, readScreen, sendKeys, worktreeCreate, worktreeList, worktreeRemove } from './herdr'
 import type { Agent, AgentKind } from './herdr'
 import type { Probe } from './probe'
 import { adopt, advance, capError, liveOf, newId } from './registry'
@@ -48,7 +48,12 @@ export const withRegistry = <T>(ports: Ports, fn: (r: Registry) => Promise<{ reg
 const patch = (ports: Ports, id: string, change: (t: Thread) => Thread) =>
   withRegistry(ports, async r => ({ registry: { ...r, threads: r.threads.map(t => (t.id === id ? change(t) : t)) }, value: undefined }))
 
-const forget = (ports: Ports, id: string) => withRegistry(ports, async r => ({ registry: { ...r, threads: r.threads.filter(t => t.id !== id) }, value: undefined }))
+const forget = (ports: Ports, id: string) =>
+  withRegistry(ports, async r => ({ registry: { ...r, threads: r.threads.filter(t => t.id !== id), pending: r.pending.filter(p => p.threadId !== id) }, value: undefined }))
+
+/** The final change to a helper's record; whatever was still waiting to be announced about it goes too. */
+const settle = (ports: Ports, id: string, change: (t: Thread) => Thread) =>
+  withRegistry(ports, async r => ({ registry: { ...r, threads: r.threads.map(t => (t.id === id ? change(t) : t)), pending: r.pending.filter(p => p.threadId !== id) }, value: undefined }))
 
 /** The first prompt: where the helper works and what is expected of it, then the task. It never starts with `-`. */
 export const briefing = (a: { branch: string; base: string; task: string }): string =>
@@ -93,6 +98,36 @@ export type Discard =
   | { kind: 'kept'; outcome: Outcome }
   | { kind: 'failed'; why: string }
 
+/**
+ * Why a worktree should not be removed even though it is empty, or `undefined` when Herdr agrees it is this
+ * helper's: no agent runs in the folder, and the folder is still open as the recorded workspace on the recorded branch.
+ */
+const removalDoubt = async (ports: Ports, t: Thread, repo: string): Promise<string | undefined> => {
+  const agents = await agentList(ports.probe)
+
+  if (!agents.ok) {
+    return `Herdr could not list its agents (${agents.error.code})`
+  }
+
+  const holder = agents.value.find(a => a.cwd === t.path)
+
+  if (holder !== undefined) {
+    return `${holder.name ?? holder.paneId} is still running in ${t.path}`
+  }
+
+  const trees = await worktreeList(ports.probe, repo)
+
+  if (!trees.ok) {
+    return `Herdr could not list its worktrees (${trees.error.code})`
+  }
+
+  const own = trees.value.find(w => w.path === t.path)
+
+  return own !== undefined && own.branch === t.branch && own.workspaceId === t.workspaceId
+    ? undefined
+    : `Herdr no longer shows ${t.path} as workspace ${t.workspaceId} on ${t.branch}`
+}
+
 /** Removes a helper's worktree and branch, but only when it is provably empty. */
 export const discard = async (ports: Ports, t: Thread, repo: string): Promise<Discard> => {
   if (t.path === undefined || t.workspaceId === undefined) {
@@ -103,6 +138,12 @@ export const discard = async (ports: Ports, t: Thread, repo: string): Promise<Di
 
   if (outcome.kind !== 'empty') {
     return { kind: 'kept', outcome }
+  }
+
+  const doubt = await removalDoubt(ports, t, repo)
+
+  if (doubt !== undefined) {
+    return { kind: 'failed', why: doubt }
   }
 
   const gone = await worktreeRemove(ports.probe, t.workspaceId)
@@ -323,6 +364,10 @@ export const answer = async (ports: Ports, a: { id: string; keys?: string[]; tex
     return fail('threads_answer needs either keys (to answer a blocked helper) or text (a follow-up for an idle one), not both.')
   }
 
+  if ((a.text !== undefined && a.text.trim() === '') || (a.keys !== undefined && a.keys.length === 0)) {
+    return fail('threads_answer needs some text, or at least one key.')
+  }
+
   const t = await mine(ports, a.id)
 
   if (t === undefined) {
@@ -353,9 +398,14 @@ export const answer = async (ports: Ports, a: { id: string; keys?: string[]; tex
   await patch(ports, t.id, one => ({ ...one, status: 'working', marker, idleSince: undefined, blockedNoticed: false, awaitingAnswer: undefined }))
   const sent = await agentPrompt(ports.probe, t.agentName, a.text ?? '')
 
-  return sent.ok
-    ? { text: `Sent the follow-up to ${t.id}; you will be told when it finishes.` }
-    : fail(`Delivery of the follow-up to ${t.id} is unconfirmed (${sent.error.code}: ${sent.error.message}); it was not sent again.`)
+  if (sent.ok) {
+    return { text: `Sent the follow-up to ${t.id}; you will be told when it finishes.` }
+  }
+
+  // Put back what it was, so the helper is not left waiting for an answer that was never asked for.
+  await patch(ports, t.id, one => ({ ...one, status: t.status, marker: t.marker, idleSince: t.idleSince, blockedNoticed: t.blockedNoticed, awaitingAnswer: t.awaitingAnswer }))
+
+  return fail(`Delivery of the follow-up to ${t.id} is unconfirmed (${sent.error.code}: ${sent.error.message}); it was not sent again, and the helper is as it was.`)
 }
 
 const keptReport = (t: Thread): string => {
@@ -381,16 +431,24 @@ export const close = async (ports: Ports, id: string): Promise<ToolResult> => {
     return { text: `${t.id} was closed and its empty worktree removed, but branch ${t.branch} is still there; delete it with: git branch -d ${t.branch}` }
   }
 
+  // The polling leaves a helper alone while it is being closed, so its pane going away is not announced as an exit.
+  const release = (status?: Thread['status']) => patch(ports, t.id, one => ({ ...one, closing: undefined, ...(status === undefined ? {} : { status }) }))
+  await patch(ports, t.id, one => ({ ...one, closing: true }))
+
   if (t.status !== 'exited' && t.status !== 'orphan') {
     const check = await revalidate(ports, t)
 
     if (!check.ok) {
+      await release()
+
       return fail(`Not closing ${t.id}: ${check.reason}.`)
     }
 
     const closed = t.paneId === undefined ? undefined : await paneClose(ports.probe, t.paneId)
 
     if (closed !== undefined && !closed.ok) {
+      await release()
+
       return fail(`Could not close the pane of ${t.id}: ${closed.error.message}. Nothing was removed.`)
     }
 
@@ -406,6 +464,8 @@ export const close = async (ports: Ports, id: string): Promise<ToolResult> => {
     }
 
     if (!isGone) {
+      await release()
+
       return fail(`${t.agentName} is still running after its pane was closed. Nothing was removed.`)
     }
   }
@@ -419,7 +479,7 @@ export const close = async (ports: Ports, id: string): Promise<ToolResult> => {
   const repo = (await repoParent(ports.probe, t.path)) ?? (await repoParent(ports.probe, await ports.cwd()))
 
   if (repo === undefined) {
-    await patch(ports, t.id, one => ({ ...one, status: 'exited' }))
+    await release('exited')
 
     return fail(`Closed ${t.id}'s pane, but the repository could not be found, so its worktree at ${t.path} was kept.`)
   }
@@ -432,20 +492,19 @@ export const close = async (ports: Ports, id: string): Promise<ToolResult> => {
 
       return { text: `Closed ${t.id}: it had made no changes, so its worktree and branch ${t.branch} were removed.` }
     case 'branch-left':
-      await patch(ports, t.id, one => ({ ...one, status: 'branch-left' }))
+      await settle(ports, t.id, one => ({ ...one, status: 'branch-left', closing: undefined }))
 
       return { text: `Closed ${t.id} and removed its empty worktree, but branch ${t.branch} could not be deleted (${dropped.why}); delete it with: git branch -d ${t.branch}` }
     case 'failed':
-      await patch(ports, t.id, one => ({ ...one, status: 'exited' }))
+      await release('exited')
 
-      return fail(`Closed ${t.id}'s pane, but its empty worktree could not be removed (${dropped.why}). It is still at ${t.path}; try threads_close again.`)
+      return fail(`Closed ${t.id}'s pane, but its empty worktree was not removed (${dropped.why}). It is still at ${t.path}; try threads_close again.`)
     case 'kept': {
       const o = dropped.outcome
       const kept = o.kind === 'commits' ? { commits: o.commits, dirty: o.dirty } : o.kind === 'unknown' ? { commits: 0, dirty: true, reason: o.reason } : { commits: 0, dirty: true }
-      const closed = { ...t, status: 'closed' as const, kept }
-      await patch(ports, t.id, () => closed)
+      await settle(ports, t.id, one => ({ ...one, status: 'closed' as const, kept, closing: undefined }))
 
-      return { text: keptReport(closed) }
+      return { text: keptReport({ ...t, status: 'closed', kept }) }
     }
   }
 }
@@ -516,15 +575,17 @@ const step = (ports: Ports, owner: string, toast: (text: string) => void) =>
     const threads: Thread[] = []
 
     for (const t of r.threads) {
-      if (t.owner !== owner || !liveOf(r, owner).includes(t)) {
+      if (t.owner !== owner || !liveOf(r, owner).includes(t) || t.closing === true) {
         threads.push(t)
         continue
       }
 
       const agent = listed.value.find(a => a.name === t.agentName)
-      const isSettling = agent !== undefined && (agent.status === 'idle' || agent.status === 'done') && t.status !== 'idle'
-      const ready = isSettling && t.marker !== undefined ? (await readAnswer(ports, t)) !== undefined : false
-      const moved = advance(t, agent, ports.now(), ready)
+      // A helper that started before its session was known: the transcript can only be found with it.
+      const known = agent?.sessionId !== undefined && t.sessionId === undefined ? { ...t, sessionId: agent.sessionId } : t
+      const isSettling = agent !== undefined && (agent.status === 'idle' || agent.status === 'done') && known.status !== 'idle'
+      const ready = isSettling && known.marker !== undefined ? (await readAnswer(ports, known)) !== undefined : false
+      const moved = advance(known, agent, ports.now(), ready)
       let next = moved.thread
 
       for (const event of moved.events) {
