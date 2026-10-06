@@ -1,5 +1,5 @@
-import { agentPrompt, agentStart, effortError, modelError, nativeArgs, readScreen, worktreeCreate, worktreeRemove } from './herdr'
-import type { AgentKind } from './herdr'
+import { agentGet, agentList, agentPrompt, agentStart, effortError, modelError, nativeArgs, paneClose, readScreen, sendKeys, worktreeCreate, worktreeRemove } from './herdr'
+import type { Agent, AgentKind } from './herdr'
 import type { Probe } from './probe'
 import { capError, newId } from './registry'
 import type { Registry, Thread } from './registry'
@@ -238,5 +238,210 @@ export const start = async (ports: Ports, settings: Settings, input: StartInput)
 
   return {
     text: `Started ${describe(current)} in ${current.path} on branch ${current.branch}. Id: ${current.id}. You will be told when it finishes or needs you; threads_status shows it meanwhile.`,
+  }
+}
+
+const mine = async (ports: Ports, id: string): Promise<Thread | undefined> => {
+  const owner = await ports.owner()
+
+  return (await ports.load()).threads.find(t => t.id === id && t.owner === owner)
+}
+
+/** Whether Herdr still shows the helper this record describes: same pane, same agent, same folder. */
+export const revalidate = async (ports: Ports, t: Thread): Promise<{ ok: true; agent: Agent } | { ok: false; reason: string }> => {
+  const got = await agentGet(ports.probe, t.agentName)
+
+  if (!got.ok) {
+    return { ok: false, reason: `${t.agentName} could not be read from Herdr (${got.error.code})` }
+  }
+
+  const a = got.value
+
+  if (a.paneId !== t.paneId) {
+    return { ok: false, reason: `${t.agentName} is now in pane ${a.paneId}, not ${t.paneId}` }
+  }
+
+  if (a.kind !== t.agent) {
+    return { ok: false, reason: `${t.agentName} is a ${a.kind} agent now, not ${t.agent}` }
+  }
+
+  return a.cwd === t.path ? { ok: true, agent: a } : { ok: false, reason: `${t.agentName} is in folder ${a.cwd}, not ${t.path}` }
+}
+
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
+
+const outcomeText = (o: Outcome): string => {
+  switch (o.kind) {
+    case 'empty':
+      return 'no commits, nothing changed'
+    case 'commits':
+      return `${plural(o.commits, 'commit')} ahead${o.dirty ? ', with uncommitted changes' : ''}`
+    case 'dirty':
+      return 'no commits, but uncommitted changes'
+    case 'unknown':
+      return `state unknown (${o.reason})`
+  }
+}
+
+const line = (t: Thread) =>
+  `${t.id}  ${t.status}  ${t.agent}  ${t.branch}  ${t.title}${t.requestedModel ? `  (${t.requestedModel})` : ''}${t.undelivered === true ? '  [last announcement not delivered]' : ''}`
+
+export const status = async (ports: Ports, id?: string): Promise<ToolResult> => {
+  const owner = await ports.owner()
+  const all = (await ports.load()).threads.filter(t => t.owner === owner)
+
+  if (id === undefined) {
+    return { text: all.length === 0 ? 'No helpers.' : all.map(line).join('\n') }
+  }
+
+  const t = all.find(one => one.id === id)
+
+  if (t === undefined) {
+    return fail(`No helper with id ${id}.`)
+  }
+
+  const rows = [line(t), `base ${t.base.slice(0, 7)}${t.path ? `, worktree ${t.path}` : ''}`]
+
+  if (t.path !== undefined && t.status !== 'closed' && t.status !== 'branch-left') {
+    rows.push(`worktree: ${outcomeText(await classify(ports.probe, { path: t.path, base: t.base, branch: t.branch }))}`)
+  }
+
+  if (t.status === 'blocked') {
+    const screen = await readScreen(ports.probe, t.agentName)
+    rows.push(`screen:\n${screen.ok ? screen.value.trim() : '(unreadable)'}`)
+  }
+
+  return { text: rows.join('\n') }
+}
+
+export const answer = async (ports: Ports, a: { id: string; keys?: string[]; text?: string }): Promise<ToolResult> => {
+  if ((a.keys === undefined) === (a.text === undefined)) {
+    return fail('threads_answer needs either keys (to answer a blocked helper) or text (a follow-up for an idle one), not both.')
+  }
+
+  const t = await mine(ports, a.id)
+
+  if (t === undefined) {
+    return fail(`No helper with id ${a.id}.`)
+  }
+
+  const check = await revalidate(ports, t)
+
+  if (!check.ok) {
+    return fail(`Not answering ${t.id}: ${check.reason}.`)
+  }
+
+  if (a.keys !== undefined) {
+    if (check.agent.status !== 'blocked') {
+      return fail(`${t.id} is not blocked (it is ${check.agent.status}); keys are only for answering a prompt it is stopped at.`)
+    }
+
+    const sent = await sendKeys(ports.probe, t.agentName, a.keys)
+
+    return sent.ok ? { text: `Sent ${a.keys.join(' ')} to ${t.id}.` } : fail(`Could not send keys to ${t.id}: ${sent.error.message}`)
+  }
+
+  if (check.agent.status !== 'idle' && check.agent.status !== 'done') {
+    return fail(`${t.id} is ${check.agent.status}; a follow-up can only go to an idle helper.`)
+  }
+
+  const marker = { at: ports.now(), completionSeq: check.agent.completionSeq, stateChangeSeq: check.agent.stateChangeSeq, transcriptLines: await transcriptLines(ports, t), seenWorking: false }
+  await patch(ports, t.id, one => ({ ...one, status: 'working', marker, idleSince: undefined, blockedNoticed: false, awaitingAnswer: undefined }))
+  const sent = await agentPrompt(ports.probe, t.agentName, a.text ?? '')
+
+  return sent.ok
+    ? { text: `Sent the follow-up to ${t.id}; you will be told when it finishes.` }
+    : fail(`Delivery of the follow-up to ${t.id} is unconfirmed (${sent.error.code}: ${sent.error.message}); it was not sent again.`)
+}
+
+const keptReport = (t: Thread): string => {
+  const kept = t.kept
+  const base = t.base.slice(0, 7)
+  const found = kept?.reason !== undefined ? `its state could not be read (${kept.reason})` : `${plural(kept?.commits ?? 0, 'commit')} ahead of ${base}${kept?.dirty ? ', with uncommitted changes' : ''}`
+
+  return `Closed ${t.id}. Its worktree was kept, not removed: ${t.path} on branch ${t.branch}; ${found}. Review with: git -C ${t.path} log --oneline ${base}..HEAD. To merge, from your own checkout: git merge ${t.branch}. The plugin never merges or pushes.`
+}
+
+export const close = async (ports: Ports, id: string): Promise<ToolResult> => {
+  const t = await mine(ports, id)
+
+  if (t === undefined) {
+    return fail(`No helper with id ${id}.`)
+  }
+
+  if (t.status === 'closed') {
+    return { text: keptReport(t) }
+  }
+
+  if (t.status === 'branch-left') {
+    return { text: `${t.id} was closed and its empty worktree removed, but branch ${t.branch} is still there; delete it with: git branch -d ${t.branch}` }
+  }
+
+  if (t.status !== 'exited' && t.status !== 'orphan') {
+    const check = await revalidate(ports, t)
+
+    if (!check.ok) {
+      return fail(`Not closing ${t.id}: ${check.reason}.`)
+    }
+
+    const closed = t.paneId === undefined ? undefined : await paneClose(ports.probe, t.paneId)
+
+    if (closed !== undefined && !closed.ok) {
+      return fail(`Could not close the pane of ${t.id}: ${closed.error.message}. Nothing was removed.`)
+    }
+
+    let isGone = false
+
+    for (let tries = 0; tries < 5 && !isGone; tries += 1) {
+      const listed = await agentList(ports.probe)
+      isGone = listed.ok && !listed.value.some(a => a.name === t.agentName)
+
+      if (!isGone) {
+        await ports.sleep(500)
+      }
+    }
+
+    if (!isGone) {
+      return fail(`${t.agentName} is still running after its pane was closed. Nothing was removed.`)
+    }
+  }
+
+  if (t.path === undefined) {
+    await forget(ports, t.id)
+
+    return { text: `Closed ${t.id}; it never got a worktree.` }
+  }
+
+  const repo = (await repoParent(ports.probe, t.path)) ?? (await repoParent(ports.probe, await ports.cwd()))
+
+  if (repo === undefined) {
+    await patch(ports, t.id, one => ({ ...one, status: 'exited' }))
+
+    return fail(`Closed ${t.id}'s pane, but the repository could not be found, so its worktree at ${t.path} was kept.`)
+  }
+
+  const dropped = await discard(ports, t, repo)
+
+  switch (dropped.kind) {
+    case 'removed':
+      await forget(ports, t.id)
+
+      return { text: `Closed ${t.id}: it had made no changes, so its worktree and branch ${t.branch} were removed.` }
+    case 'branch-left':
+      await patch(ports, t.id, one => ({ ...one, status: 'branch-left' }))
+
+      return { text: `Closed ${t.id} and removed its empty worktree, but branch ${t.branch} could not be deleted (${dropped.why}); delete it with: git branch -d ${t.branch}` }
+    case 'failed':
+      await patch(ports, t.id, one => ({ ...one, status: 'exited' }))
+
+      return fail(`Closed ${t.id}'s pane, but its empty worktree could not be removed (${dropped.why}). It is still at ${t.path}; try threads_close again.`)
+    case 'kept': {
+      const o = dropped.outcome
+      const kept = o.kind === 'commits' ? { commits: o.commits, dirty: o.dirty } : o.kind === 'unknown' ? { commits: 0, dirty: true, reason: o.reason } : { commits: 0, dirty: true }
+      const closed = { ...t, status: 'closed' as const, kept }
+      await patch(ports, t.id, () => closed)
+
+      return { text: keptReport(closed) }
+    }
   }
 }

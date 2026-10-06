@@ -30,7 +30,8 @@ export type Thread = {
   /** How many ticks a finished helper's answer has been looked for in vain. */
   awaitingAnswer?: number
   undelivered?: boolean
-  kept?: { commits: number; dirty: boolean }
+  /** What was found in a worktree that `threads_close` left in place; `reason` when its state could not be read. */
+  kept?: { commits: number; dirty: boolean; reason?: string }
 }
 
 export type Pending = { threadId: string; kind: 'finished' | 'blocked' | 'exited' | 'orphan'; text: string; tries: number }

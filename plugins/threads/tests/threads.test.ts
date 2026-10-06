@@ -22,7 +22,7 @@ import { branchFor, classify, currentCommit, repoParent } from '../hooks/worktre
 import { SETTLE_MS, adopt, advance, capError, emptyRegistry, liveOf, newId, reconcile } from '../hooks/registry'
 import type { Registry, Thread } from '../hooks/registry'
 import { readSettings } from '../hooks/settings'
-import { briefing, start } from '../hooks/threads'
+import { answer, briefing, close, revalidate, start, status } from '../hooks/threads'
 import type { Ports } from '../hooks/threads'
 
 const out = (stdout: string, exitCode = 0, stderr = ''): RunResult => ({ exitCode, stdout, stderr })
@@ -380,11 +380,13 @@ const route = (argv: readonly string[], over: Record<string, RunResult> = {}): R
 
   if (tool === 'git') {
     if (line === 'git rev-parse --path-format=absolute --git-common-dir') return over.common ?? out('/repo/.git\n')
-    if (line === 'git rev-parse HEAD') return out('base123\n')
+    if (line === 'git rev-parse HEAD') return over.head ?? out('base123\n')
     if (line === 'git rev-parse --abbrev-ref HEAD') return out('threads/012345\n')
     if (a === 'branch') return over.branch ?? out('')
 
-    return a === 'rev-list' ? out('0\n') : out('')
+    if (a === 'status') return over.status ?? out('')
+
+    return a === 'rev-list' ? (over.count ?? out('0\n')) : out('')
   }
 
   if (a === 'worktree' && b === 'create') return over.create ?? CREATED
@@ -392,7 +394,8 @@ const route = (argv: readonly string[], over: Record<string, RunResult> = {}): R
   if (a === 'agent' && b === 'start') return over.start ?? json({ agent: STARTED })
   if (a === 'agent' && b === 'prompt') return over.prompt ?? json({ agent: STARTED })
   if (a === 'agent' && b === 'read') return out('Do you want to proceed?\n')
-  if (a === 'agent' && b === 'get') return json({ agent: STARTED })
+  if (a === 'agent' && b === 'get') return over.get ?? json({ agent: STARTED })
+  if (a === 'agent' && b === 'list') return over.list ?? json({ agents: [STARTED] })
 
   return json({ type: 'ok', agents: [STARTED] })
 }
@@ -548,4 +551,138 @@ test('threads_start keeps a helper that is stuck at startup, and one whose promp
     expect(world.state.registry.threads.length).toBe(1)
     expect(world.herdr().filter(call => call[2] === 'prompt').length).toBe(1)
   }
+})
+
+const owned = (over: Partial<Thread> = {}): Thread =>
+  thread({
+    id: '012345',
+    agentName: 't-012345',
+    branch: 'threads/012345',
+    base: 'base123',
+    sessionId: 'sess-1',
+    marker: { at: 0, completionSeq: 2, transcriptLines: 0, seenWorking: true },
+    ...over,
+  })
+const holding = (t: Thread, over: Record<string, RunResult> = {}) => harness(over, registryOf(t))
+const GONE = json({ agents: [] })
+
+test('revalidate refuses a pane, an agent or a folder that is not the helper that was started', async () => {
+  const check = (over: Record<string, RunResult> = {}) => revalidate(holding(owned(), over).ports, owned())
+
+  expect((await check()).ok).toBe(true)
+
+  const elsewhere = await check({ get: json({ agent: { ...STARTED, pane_id: 'w9:p9' } }) })
+  expect(!elsewhere.ok && elsewhere.reason).toMatch(/pane/)
+  const other = await check({ get: json({ agent: { ...STARTED, agent: 'codex' } }) })
+  expect(!other.ok && other.reason).toMatch(/agent/)
+  const foreign = await check({ get: json({ agent: { ...STARTED, cwd: '/somewhere/else' } }) })
+  expect(!foreign.ok && foreign.reason).toMatch(/folder/)
+  expect((await check({ get: failure('not_found', 'no such agent') })).ok).toBe(false)
+})
+
+test('threads_status lists the owner\'s helpers and details one, with the screen of a blocked one', async () => {
+  const world = holding(owned({ status: 'blocked' }))
+  world.state.registry = registryOf(owned({ status: 'blocked' }), thread({ id: 'zzz999', owner: 'lead-2', agentName: 't-zzz999' }))
+
+  const all = await status(world.ports)
+  expect(all.text).toMatch(/012345.*blocked.*claude.*threads\/012345/)
+  expect(all.text).not.toMatch(/zzz999/)
+
+  const one = await status(world.ports, '012345')
+  expect(one.text).toMatch(/Do you want to proceed/)
+  expect(one.text).toMatch(/no commits/)
+
+  const missing = harness()
+  const nope = await status(missing.ports, 'nope00')
+  expect(nope.isError).toBe(true)
+  expect(missing.herdr()).toEqual([])
+})
+
+test('threads_answer sends keys only to a blocked helper and text only to an idle one', async () => {
+  const blocked = holding(owned({ status: 'blocked' }), { get: json({ agent: { ...STARTED, agent_status: 'blocked' } }) })
+  const approved = await answer(blocked.ports, { id: '012345', keys: ['1', 'enter'] })
+  expect(approved.isError).toBeUndefined()
+  expect(blocked.ran()).toContain('herdr agent send-keys t-012345 1 enter')
+
+  const notBlocked = holding(owned())
+  expect((await answer(notBlocked.ports, { id: '012345', keys: ['1'] })).isError).toBe(true)
+  expect(notBlocked.ran().some(line => line.includes('send-keys'))).toBe(false)
+
+  const idle = holding(owned({ status: 'idle' }))
+  const sent = await answer(idle.ports, { id: '012345', text: 'now add tests' })
+  expect(sent.isError).toBeUndefined()
+  expect(idle.ran()).toContain('herdr agent prompt t-012345 now add tests')
+  expect(idle.state.registry.threads[0]).toMatchObject({ status: 'working', marker: { completionSeq: 2, seenWorking: false } })
+
+  const busy = holding(owned({ status: 'working' }), { get: json({ agent: { ...STARTED, agent_status: 'working' } }) })
+  expect((await answer(busy.ports, { id: '012345', text: 'x' })).isError).toBe(true)
+
+  for (const input of [{ id: '012345' }, { id: '012345', keys: ['1'], text: 'x' }]) {
+    expect((await answer(holding(owned()).ports, input)).isError).toBe(true)
+  }
+
+  const moved = holding(owned({ status: 'blocked' }), { get: json({ agent: { ...STARTED, pane_id: 'w9:p9', agent_status: 'blocked' } }) })
+  expect((await answer(moved.ports, { id: '012345', keys: ['1'] })).isError).toBe(true)
+  expect(moved.ran().some(line => line.includes('send-keys'))).toBe(false)
+})
+
+test('threads_close removes only a provably empty worktree', async () => {
+  const empty = holding(owned(), { list: GONE })
+  const removed = await close(empty.ports, '012345')
+
+  expect(removed.isError).toBeUndefined()
+  expect(removed.text).toMatch(/removed/)
+  expect(empty.ran()).toEqual(expect.arrayContaining(['herdr pane close w2:p1', 'herdr worktree remove --workspace w2', 'git branch -d threads/012345']))
+  expect(empty.state.registry.threads).toEqual([])
+
+  const ahead = holding(owned(), { list: GONE, head: out('bbb\n'), count: out('2\n') })
+  const kept = await close(ahead.ports, '012345')
+  expect(kept.text).toMatch(/\/wt/)
+  expect(kept.text).toMatch(/threads\/012345/)
+  expect(kept.text).toMatch(/2 commits/)
+  expect(kept.text).toMatch(/git merge/)
+  expect(ahead.ran().some(line => line.startsWith('herdr worktree remove'))).toBe(false)
+  expect(ahead.state.registry.threads[0]).toMatchObject({ status: 'closed', kept: { commits: 2, dirty: false } })
+
+  const before = ahead.herdr().length
+  const again = await close(ahead.ports, '012345')
+  expect(again.text).toMatch(/2 commits/)
+  expect(ahead.herdr().length).toBe(before)
+
+  for (const over of [{ status: out(' M a.ts\n') }, { status: out('', 128, 'fatal') }]) {
+    const world = holding(owned(), { list: GONE, ...over })
+    await close(world.ports, '012345')
+    expect(world.ran().some(line => line.startsWith('herdr worktree remove'))).toBe(false)
+    expect(world.state.registry.threads[0]?.status).toBe('closed')
+  }
+})
+
+test('threads_close refuses and removes nothing when the helper cannot be vouched for or stopped', async () => {
+  const wrong = holding(owned(), { list: GONE, get: json({ agent: { ...STARTED, pane_id: 'w9:p9' } }) })
+  expect((await close(wrong.ports, '012345')).isError).toBe(true)
+  expect(wrong.ran().some(line => line.includes('pane close') || line.includes('worktree remove'))).toBe(false)
+
+  const running = holding(owned())
+  expect((await close(running.ports, '012345')).isError).toBe(true)
+  expect(running.ran().some(line => line.startsWith('herdr worktree remove'))).toBe(false)
+
+  const unknown = harness()
+  expect((await close(unknown.ports, 'nope00')).isError).toBe(true)
+  expect(unknown.herdr()).toEqual([])
+})
+
+test('threads_close reports a branch it could not delete and a worktree it could not remove', async () => {
+  const left = holding(owned(), { list: GONE, branch: out('', 1, 'error: not fully merged') })
+  const result = await close(left.ports, '012345')
+  expect(result.text).toMatch(/branch/)
+  expect(left.state.registry.threads[0]?.status).toBe('branch-left')
+
+  const stuck = holding(owned(), { list: GONE, remove: failure('busy', 'in use') })
+  expect((await close(stuck.ports, '012345')).isError).toBe(true)
+  expect(stuck.state.registry.threads[0]?.status).toBe('exited')
+
+  const orphan = holding(owned({ status: 'orphan', path: undefined, workspaceId: undefined, stage: 'creating' }))
+  expect((await close(orphan.ports, '012345')).isError).toBeUndefined()
+  expect(orphan.state.registry.threads).toEqual([])
+  expect(orphan.herdr()).toEqual([])
 })
