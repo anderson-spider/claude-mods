@@ -10,7 +10,6 @@ Marketplace of [Claude Code](https://claude.com/claude-code) plugins made by and
 | [branch-guard](plugins/branch-guard) | Holds a `git commit` or `git push` on the protected branch and shows what would go in. |
 | [chatgpt](plugins/chatgpt) | Lets Claude ask your logged-in ChatGPT, or have it generate an image, in terminal-browser, and saves the result locally. |
 | [codex-computer-use](plugins/codex-computer-use) | Routes native Mac app control through Codex computer use from the ChatGPT app instead of Claude's own computer use, asking before each new app. |
-| [pr-preview](plugins/pr-preview) | Holds a `gh pr create`, `gh pr edit`, `glab mr create` or `glab mr update`, previews the title and description and flags what breaks the conventions. |
 | [review-panel](plugins/review-panel) | Opens a read-only pane with the worktree diff, the open pull or merge request, its CI jobs and the comments already made. |
 | [tailscale](plugins/tailscale) | Lets Claude query and modify your tailnet through the Tailscale API. |
 | [usage-line](plugins/usage-line) | Keeps the context fill and the 5h and 7d rate-limit windows above the prompt, as the status line shows them. |
@@ -25,7 +24,6 @@ Inside Claude Code, add the marketplace and install the plugin:
 /plugin install branch-guard@spider-marketplace
 /plugin install chatgpt@spider-marketplace
 /plugin install codex-computer-use@spider-marketplace
-/plugin install pr-preview@spider-marketplace
 /plugin install review-panel@spider-marketplace
 /plugin install tailscale@spider-marketplace
 /plugin install usage-line@spider-marketplace
@@ -122,26 +120,6 @@ It copies the helper to `~/.claude/mcp/codex-cu` (keeping `state/`, where the ap
 
 Limitations: ownership is checked for apps named as string literals in `cua.getApp(...)` and for the app each result reports, so an app reached through a variable is owned only after its first call; Codex refuses an action when the app changed since it was last read ("The user changed …"), so read and act in the same call.
 
-## pr-preview
-
-When Claude calls Bash with `gh pr create`, `gh pr edit`, `glab mr create` or `glab mr update` (also `glab-work`, `glab-personal` and other `glab-*` wrappers), PR Preview holds the call and shows in the band above the prompt what would be opened or changed: the title, the branches, the assignee, the labels and the start of the description, with `Proceed` (key `1`), `Fix` (key `2`, only when something is wrong) and `Cancel` (key `3`). On `Fix`, Claude gets the list of problems with what to change and reruns the command; on `Cancel`, it gets the refusal.
-
-An edit (`gh pr edit`, `glab mr update`) only changes what it is given, so the title, the description and any mention of AI are checked when present, and a missing title, description, assignee or label is not a problem.
-
-It flags what breaks these conventions, in red under the preview:
-
-| Rule | GitHub | GitLab |
-| --- | --- | --- |
-| Title | Conventional Commits, in English | Conventional Commits, in English |
-| Description | English | Brazilian Portuguese |
-| Assignee | not required | `--assignee @me` |
-| Label | not required | at least one `--label` |
-| Mentions of AI (`Co-Authored-By`, "Generated with", Claude, ChatGPT…) | flagged | flagged |
-
-The conventions live in `RULES` and the regexes of `hooks/guard.ts`. The description is read from `--body`/`--description`, from a `"$(cat <<'EOF' … EOF)"` heredoc or, for `--body-file`, with `cat`; with `--fill` the title and description come from the commits and are not checked. The language is guessed from common words and stays silent when the text says too little.
-
-Limitations: the plugin reads the command text, so aliases, `bash -c "gh pr create"` and a title or description that only the shell expands (`$VAR`) are previewed as "not readable" and not checked; only the first command on a line is previewed; it only sees what Claude types, not your terminal.
-
 ## review-panel
 
 `/review-panel` opens a pane beside the conversation that only reads, never writes. The **Diff** tab (key `1`) shows what changed against `HEAD` (staged, unstaged and untracked), file by file, with `+` and `-` lines in colour. The **PR** tab (key `2`) shows the pull or merge request of the current branch: title, state, branches, merge blockers, description, the CI checks or jobs (one line each) and the comments already made (reviews, plain comments and inline ones, newest first, with `resolved`/`outdated` marks). `Refresh` (key `r`) reads again; it also reads every 30 seconds while the pane is open. `▲`/`▼` (keys `k`/`j`) scroll.
@@ -171,7 +149,7 @@ Keeps three cards above the prompt with what the status line's second row shows.
 
 The pace is the use minus the share of the window already gone, in points: `▼50` in green has room to spare, `▲17` in red is spending fast, and `●` is within 5 points of the pace either way; it is left out in the window's first 1%. Only the percent is bold: it stays in the text colour below 50%, turns amber from 50% and red from 80%, and the card's border shows in that colour; at rest a card is a plain fill with no border. The green and red are the desktop diff's (`#2FD84C`, `#FF2B56`); each colour has a dark-theme and a light-theme shade, picked from the `theme` in `/config`. On the desktop app the text is drawn as SVG in the monospace font the diff header uses, so it cannot be selected.
 
-The figures are the ones Claude Code hands the status line (`$.session.usage()`); they refresh after each turn, when a window moves a point, and every 30 seconds for the countdown. On a band too narrow or too short for the cards it falls back to one line, `ctx 24% · 244k / 1M  │  5h 23% ▼50 · 1h 21m  │  7d 7% ● · 6d 14h`. It gives way to another plugin's band (blast-radius, branch-guard, pr-preview) and to surveys.
+The figures are the ones Claude Code hands the status line (`$.session.usage()`); they refresh after each turn, when a window moves a point, and every 30 seconds for the countdown. On a band too narrow or too short for the cards it falls back to one line, `ctx 24% · 244k / 1M  │  5h 23% ▼50 · 1h 21m  │  7d 7% ● · 6d 14h`. It gives way to another plugin's band (blast-radius, branch-guard) and to surveys.
 
 Limitations: off a subscription there are no rate-limit windows, so only `ctx` shows; with the `auto` theme, or when the desktop app's theme differs from `/config`'s, it uses the dark shades.
 
@@ -200,8 +178,6 @@ claude plugin test plugins/chatgpt
 claude plugin validate plugins/codex-computer-use
 claude plugin test plugins/codex-computer-use
 /Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node --test plugins/codex-computer-use/helper/test/helper.test.mjs
-claude plugin validate plugins/pr-preview
-claude plugin test plugins/pr-preview
 claude plugin validate plugins/review-panel
 claude plugin test plugins/review-panel
 claude plugin validate plugins/tailscale
