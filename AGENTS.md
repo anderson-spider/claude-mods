@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Claude Code plugin marketplace (`anderson-spider/spider-marketplace`). It currently has seven plugins: `blast-radius` (holds destructive commands), `branch-guard` (holds commit and push on the protected branch), `chatgpt` (asks the user's ChatGPT, or has it generate an image, in terminal-browser), `codex-computer-use` (routes native Mac app control through Codex computer use, with a local helper), `review-panel` (read-only pane with the diff, the open PR, its CI jobs and its comments), `tailscale` (tools to query and modify the tailnet) and `usage-line` (context and rate-limit usage above the prompt). The README and other documentation are in English; code comments and user-facing messages are in English too. Pull request titles and descriptions are in English.
+Claude Code plugin marketplace (`anderson-spider/spider-marketplace`). It currently has six plugins: `blast-radius` (holds destructive commands), `branch-guard` (holds commit and push on the protected branch), `chatgpt` (asks the user's ChatGPT, or has it generate an image, in terminal-browser), `codex-computer-use` (routes native Mac app control through Codex computer use, with a local helper), `tailscale` (tools to query and modify the tailnet) and `usage-line` (context and rate-limit usage above the prompt). The README and other documentation are in English; code comments and user-facing messages are in English too. Pull request titles and descriptions are in English.
 
 ## Structure
 
@@ -18,7 +18,6 @@ claude plugin test plugins/branch-guard        # same, for branch-guard
 claude plugin test plugins/chatgpt             # same, for chatgpt
 claude plugin test plugins/codex-computer-use  # same, for codex-computer-use (the plugin side)
 /Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node --test plugins/codex-computer-use/helper/test/helper.test.mjs   # its helper
-claude plugin test plugins/review-panel        # same, for review-panel
 claude plugin test plugins/tailscale           # same, for tailscale
 claude plugin test plugins/usage-line          # same, for usage-line
 claude --plugin-dir plugins/blast-radius       # loads the plugin with automatic reload
@@ -59,10 +58,6 @@ Two halves that talk over a Unix socket: the plugin (`hooks/`, runs in the hooks
 - A declined approval comes back as `needs_approval`; the call is run again only after the person allows, so the retried code runs from the start.
 - The enabled switch lives in `$.store` (`enabled`, default on). `prompt.compose` runs at every render, so it needs no invalidation.
 - Helper tests drive the real hub and client against `helper/test/fake-server.mjs` and always point `codexApprovals` at a temp file; never let a test reach the real `ComputerUseAppApprovals.json`.
-
-## review-panel
-
-Holds nothing: `/review-panel` (`$.command.register`, answered in `command.run`) opens a pane with `$.ui.open`, drawn by a `ui.render` hook on `{ component: 'Pane', requestId: 'review-panel' }`. `hooks/panel.ts` is pure (injected `Probe`, same design as the other plugins): `readAll` returns the branch, the diff (`git diff HEAD` plus `git ls-files --others`) and a `PrView` read from `origin`: `gh pr view --json …` plus `gh api repos/<path>/pulls/<n>/comments` for GitHub, `glab api --hostname <host>` (merge request by `source_branch`, `/discussions`, `/pipelines/<id>/jobs`) for every other host. `foldGithub` and `foldGitlab` normalise both into `PrSnapshot` (the shape follows herdr-reviewr's `PrSnapshot`). The view lives in `$.state` (`review-panel`/`view`); the 30 s poll is a `$.clock.every` started once in `command.run`, kept in a module variable (a reload starts it over). `register.tsx` flattens each tab into rows and scrolls by an `offset` held in the state. `readAll` never rejects: an error becomes `diffError` or `{ kind: 'error' }`.
 
 ## chatgpt
 
