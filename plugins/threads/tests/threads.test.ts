@@ -17,6 +17,7 @@ import {
   worktreeRemove,
 } from '../hooks/herdr'
 import type { Probe, RunResult } from '../hooks/probe'
+import { branchFor, classify, currentCommit, repoParent } from '../hooks/worktree'
 import { readSettings } from '../hooks/settings'
 
 const out = (stdout: string, exitCode = 0, stderr = ''): RunResult => ({ exitCode, stdout, stderr })
@@ -147,4 +148,55 @@ test('herdr results are parsed from success and error JSON', async () => {
   expect(!broken.ok && broken.error.message.length).toBeLessThanOrEqual(300)
 
   expect(await readScreen(probeOf(() => out('line one\nline two\n')), 't')).toEqual({ ok: true, value: 'line one\nline two\n' })
+})
+
+/** Answers `git` by its full command line; anything not listed fails like a broken repository. */
+const gitProbe = (answers: Record<string, RunResult>): Probe => probeOf(argv => answers[argv.join(' ')] ?? out('', 128, 'fatal'))
+
+const CLEAN: Record<string, RunResult> = {
+  'git status --porcelain --ignored': out(''),
+  'git rev-parse HEAD': out('aaa\n'),
+  'git rev-parse --abbrev-ref HEAD': out('threads/abc123\n'),
+  'git rev-list --count aaa..HEAD': out('0\n'),
+  'git submodule status': out(''),
+}
+const WORKTREE = { path: '/wt', base: 'aaa', branch: 'threads/abc123' }
+
+test('repoParent finds the main checkout, also from a linked worktree', async () => {
+  const at = (stdout: string, exitCode = 0) => gitProbe({ 'git rev-parse --path-format=absolute --git-common-dir': out(stdout, exitCode) })
+
+  expect(await repoParent(at('/r/proj/.git\n'), '/r/proj')).toBe('/r/proj')
+  expect(await repoParent(at('/r/proj/.git\n'), '/home/me/.herdr/worktrees/proj/wt')).toBe('/r/proj')
+  expect(await repoParent(at('', 128), '/tmp')).toBeUndefined()
+  expect(await repoParent(at('/r/proj.git\n'), '/r')).toBeUndefined()
+  expect(await currentCommit(gitProbe({ 'git rev-parse HEAD': out('abc123\n') }), '/r')).toBe('abc123')
+  expect(await currentCommit(gitProbe({}), '/r')).toBeUndefined()
+  expect(branchFor('abc123')).toBe('threads/abc123')
+})
+
+test('classify says a worktree is empty only with nothing at all in it', async () => {
+  expect(await classify(gitProbe(CLEAN), WORKTREE)).toEqual({ kind: 'empty' })
+
+  const ahead = { ...CLEAN, 'git rev-parse HEAD': out('bbb\n'), 'git rev-list --count aaa..HEAD': out('2\n') }
+  expect(await classify(gitProbe(ahead), WORKTREE)).toEqual({ kind: 'commits', commits: 2, dirty: false })
+  expect(await classify(gitProbe({ ...ahead, 'git status --porcelain --ignored': out(' M a.ts\n') }), WORKTREE)).toEqual({ kind: 'commits', commits: 2, dirty: true })
+
+  for (const line of [' M a.ts\n', '?? notes.txt\n', '!! dist/\n']) {
+    expect(await classify(gitProbe({ ...CLEAN, 'git status --porcelain --ignored': out(line) }), WORKTREE)).toEqual({ kind: 'dirty' })
+  }
+
+  expect(await classify(gitProbe({ ...CLEAN, 'git submodule status': out(' 1a2b3c sub (heads/main)\n') }), WORKTREE)).toEqual({ kind: 'dirty' })
+})
+
+test('classify keeps the worktree when anything is off or fails', async () => {
+  const kind = async (answers: Record<string, RunResult>) => (await classify(gitProbe(answers), WORKTREE)).kind
+
+  expect(await kind({ ...CLEAN, 'git rev-parse --abbrev-ref HEAD': out('main\n') })).toBe('unknown')
+  expect(await kind({ ...CLEAN, 'git rev-parse HEAD': out('bbb\n') })).toBe('unknown')
+  for (const command of Object.keys(CLEAN)) {
+    expect(await kind({ ...CLEAN, [command]: out('', 128, 'fatal') })).toBe('unknown')
+  }
+
+  const reason = await classify(gitProbe({ ...CLEAN, 'git status --porcelain --ignored': out('', 128, 'fatal: not a repo') }), WORKTREE)
+  expect(reason.kind === 'unknown' && reason.reason).toMatch(/git status/)
 })
