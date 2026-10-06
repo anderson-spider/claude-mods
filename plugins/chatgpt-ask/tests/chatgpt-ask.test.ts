@@ -1,7 +1,8 @@
 import { expect, test } from 'claude-code/testing'
 
 import {
-  CHUNK,
+  DOWNLOAD_CHUNK,
+  UPLOAD_CHUNK,
   ask,
   extensionOf,
   fallbackRouter,
@@ -9,6 +10,7 @@ import {
   generateImage,
   isChatUrl,
   isRefusal,
+  pngSize,
   parseOutput,
   parseTabId,
   parseTabs,
@@ -17,7 +19,7 @@ import {
   summary,
   typeOf,
 } from '../hooks/chatgpt'
-import type { Browser, BrowserTab } from '../hooks/chatgpt'
+import type { Browser, BrowserTab, Clipboard } from '../hooks/chatgpt'
 
 // The javascript_tool prints a string result as a JSON literal plus tab notes.
 const printed = (value: unknown) => `${JSON.stringify(JSON.stringify(value))}\n\n(captured at origin https://chatgpt.com)`
@@ -73,6 +75,10 @@ test('parseTabs and parseTabId read the pane tools output', () => {
   expect(tabs.browserOpen).toBe(true)
   expect(tabs.tabs[0]?.tabId).toBe('seed')
   expect(parseTabs('nothing').browserOpen).toBe(false)
+  const closed = parseTabs(
+    '{\n  "browserOpen": false,\n  "tabs": []\n}\nThe Browser pane isn\'t open yet. Call preview_start or navigate with {"url": "https://…"} to open it.',
+  )
+  expect(closed).toEqual({ browserOpen: false, tabs: [] })
   expect(parseTabId('{ "serverId": "x", "tabId": "seed", "reused": false }')).toBe('seed')
 })
 
@@ -256,7 +262,7 @@ test('fileName and summary', () => {
 type Shot = { stop?: boolean; images?: number; count?: number; length?: number }
 
 // A fake pane for images: each image poll returns the next shot (the last one repeats).
-function fakeImagePane(options: { shots: Shot[]; base64: string; attached?: boolean; text?: string }) {
+function fakeImagePane(options: { shots: Shot[]; base64: string; attached?: boolean; text?: string; copied?: boolean }) {
   const calls: string[] = []
   const uploaded: string[] = []
   let poll = 0
@@ -280,6 +286,10 @@ function fakeImagePane(options: { shots: Shot[]; base64: string; attached?: bool
         calls.push('send')
         return printed({ sent: true })
       }
+      if (code.includes('navigator.clipboard.write')) {
+        calls.push('copy')
+        return printed({ found: true, copied: options.copied ?? true, reason: '', url: 'https://chatgpt.com/c/img', size: 10, width: 1254, height: 1254, alt: 'Imagem 1 gerada' })
+      }
       if (code.includes('__chatgptAskImage = b64')) {
         calls.push('image')
         return printed({ found: true, url: 'https://chatgpt.com/c/img', type: 'image/png', length: options.base64.length, width: 1024, height: 1024, alt: 'Imagem 1 gerada' })
@@ -301,8 +311,8 @@ function fakeImagePane(options: { shots: Shot[]; base64: string; attached?: bool
 }
 
 test('generateImage uploads the reference in chunks, waits for a finished image and reads it back whole', async () => {
-  const reference = { name: 'ref.png', type: 'image/png', base64: 'A'.repeat(CHUNK * 2 + 10) }
-  const image = 'B'.repeat(CHUNK + 5)
+  const reference = { name: 'ref.png', type: 'image/png', base64: 'A'.repeat(UPLOAD_CHUNK * 2 + 10) }
+  const image = 'B'.repeat(DOWNLOAD_CHUNK * 3 + 5)
   const { browser, calls, uploaded } = fakeImagePane({
     shots: [{}, { stop: true }, { stop: true, images: 1 }, { images: 1 }],
     base64: image,
@@ -345,4 +355,72 @@ test('image file names and types', () => {
   expect(extensionOf('image/unknown')).toBe('png')
   expect(typeOf('/x/Ref.JPG')).toBe('image/jpeg')
   expect(typeOf('/x/ref.bmp')).toBeUndefined()
+})
+
+test('generateImage with saveOnly reads the chat\'s last image without sending anything', async () => {
+  const { browser, calls } = fakeImagePane({ shots: [{}], base64: 'C'.repeat(DOWNLOAD_CHUNK + 1) })
+  const chatUrl = 'https://chatgpt.com/c/6ac53b54-ec00'
+  const result = await generateImage(browser, { prompt: 'lamp', chatUrl, saveOnly: true }, { pollMs: 0 })
+
+  expect(calls).toEqual([`navigate ${chatUrl}`, 'image'])
+  expect(result.ok && result.base64.length).toBe(DOWNLOAD_CHUNK + 1)
+  const missing = await generateImage(browser, { prompt: 'lamp', saveOnly: true }, { pollMs: 0 })
+  expect(!missing.ok && missing.error).toContain('saveOnly needs the chatUrl')
+})
+
+test('a download slice stays under the host\'s output cap', () => {
+  // The host caps a tool's output at about 25,000 tokens; base64 runs about 3 chars a token.
+  expect(DOWNLOAD_CHUNK / 3).toBeLessThan(20_000)
+})
+
+// The first bytes of a 1254x1254 PNG, as the clipboard would hand them back.
+const PNG_1254 = 'iVBORw0KGgoAAAANSUhEUgAABOYAAATmCAYAAAA=' + 'A'.repeat(100)
+
+function fakeClipboard(image: string | undefined) {
+  const seen: string[] = []
+  const clipboard: Clipboard = {
+    save: async () => {
+      seen.push('save')
+    },
+    readImage: async () => {
+      seen.push('read')
+      return image
+    },
+    restore: async () => {
+      seen.push('restore')
+    },
+  }
+  return { clipboard, seen }
+}
+
+test('pngSize reads the width and height from a PNG header', () => {
+  expect(pngSize(PNG_1254)).toEqual({ width: 1254, height: 1254 })
+  expect(pngSize('R0lGODlhAQABAAAAACw=')).toBeUndefined()
+})
+
+test('readImage takes the clipboard path when the copy works, and restores the clipboard', async () => {
+  const { browser, calls } = fakeImagePane({ shots: [{}], base64: 'B'.repeat(DOWNLOAD_CHUNK * 3) })
+  const { clipboard, seen } = fakeClipboard(PNG_1254)
+  const chatUrl = 'https://chatgpt.com/c/6ac53b54-ec00'
+  const result = await generateImage(browser, { prompt: 'lamp', chatUrl, saveOnly: true }, { pollMs: 0, clipboard })
+
+  expect(result.ok && result.base64).toBe(PNG_1254)
+  expect(calls).toEqual([`navigate ${chatUrl}`, 'copy'])
+  expect(seen).toEqual(['save', 'read', 'restore'])
+})
+
+test('readImage falls back to slices when the page cannot copy or the clipboard holds another image', async () => {
+  const chatUrl = 'https://chatgpt.com/c/6ac53b54-ec00'
+  const refused = fakeImagePane({ shots: [{}], base64: 'B'.repeat(10), copied: false })
+  const first = fakeClipboard(PNG_1254)
+  const viaSlices = await generateImage(refused.browser, { prompt: 'lamp', chatUrl, saveOnly: true }, { pollMs: 0, clipboard: first.clipboard })
+  expect(viaSlices.ok && viaSlices.base64).toBe('B'.repeat(10))
+  expect(refused.calls).toEqual([`navigate ${chatUrl}`, 'copy', 'image'])
+  expect(first.seen).toEqual(['save', 'restore'])
+
+  const other = fakeImagePane({ shots: [{}], base64: 'B'.repeat(10) })
+  const small = fakeClipboard('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ')
+  const mismatch = await generateImage(other.browser, { prompt: 'lamp', chatUrl, saveOnly: true }, { pollMs: 0, clipboard: small.clipboard })
+  expect(mismatch.ok && mismatch.base64).toBe('B'.repeat(10))
+  expect(small.seen).toEqual(['save', 'read', 'restore'])
 })

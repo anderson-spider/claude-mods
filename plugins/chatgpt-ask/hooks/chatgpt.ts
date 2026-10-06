@@ -50,13 +50,22 @@ export function parseOutput<T>(text: string): T {
   return JSON.parse(JSON.parse(match[1]!)) as T
 }
 
-// tabs_context prints a JSON object followed by a line about the pane.
+// tabs_context prints a JSON object followed by a line about the pane, which
+// may hold braces of its own (`navigate with {"url": …}`): only the first
+// object is read.
 export function parseTabs(text: string): { browserOpen: boolean; tabs: BrowserTab[] } {
   const start = text.indexOf('{')
-  const end = text.lastIndexOf('}')
-  if (start < 0 || end < start) return { browserOpen: false, tabs: [] }
-  const parsed = JSON.parse(text.slice(start, end + 1)) as { browserOpen?: boolean; tabs?: BrowserTab[] }
-  return { browserOpen: parsed.browserOpen === true, tabs: parsed.tabs ?? [] }
+  if (start < 0) return { browserOpen: false, tabs: [] }
+  for (let end = text.indexOf('}', start); end >= 0; end = text.indexOf('}', end + 1)) {
+    let parsed: { browserOpen?: boolean; tabs?: BrowserTab[] }
+    try {
+      parsed = JSON.parse(text.slice(start, end + 1))
+    } catch {
+      continue
+    }
+    return { browserOpen: parsed.browserOpen === true, tabs: parsed.tabs ?? [] }
+  }
+  return { browserOpen: false, tabs: [] }
 }
 
 // How the engine words a `$.mcp.call` it refused before the tool ran
@@ -342,13 +351,29 @@ export async function ask(browser: Browser, input: AskInput, options: AskOptions
   return { ok: true, url: read.url, markdown }
 }
 
-// Images cross the page boundary as base64 in slices, so neither the script
-// text nor the tool's output carries a whole file at once.
-export const CHUNK = 512 * 1024
+// Images cross the page boundary as base64 in slices. A reference goes in as
+// script text; an image comes back as the tool's output, which the host caps
+// at about 25,000 tokens, so those slices are much smaller.
+export const UPLOAD_CHUNK = 512 * 1024
+export const DOWNLOAD_CHUNK = 40_000
 
 export type Reference = { name: string; type: string; base64: string }
 
-export type ImageInput = { prompt: string; chatUrl?: string; reference?: Reference }
+/** `saveOnly` saves the last image already generated in `chatUrl`, sending nothing. */
+export type ImageInput = { prompt: string; chatUrl?: string; reference?: Reference; saveOnly?: boolean }
+
+/**
+ * The host's clipboard, for the short path: the page copies the image and the
+ * host reads it back in one go. `save` and `restore` keep what the user had
+ * copied; `readImage` answers the clipboard's PNG as base64, or undefined.
+ */
+export type Clipboard = {
+  save(): Promise<void>
+  readImage(): Promise<string | undefined>
+  restore(): Promise<void>
+}
+
+export type ImageOptions = AskOptions & { clipboard?: Clipboard }
 
 export type ImageResult =
   | { ok: true; url: string; base64: string; type: string; width: number; height: number; alt: string }
@@ -437,26 +462,60 @@ if (!img) JSON.stringify({ found: false }); else {
   JSON.stringify({ found: true, url: location.href, type, length: b64.length, width: img.naturalWidth, height: img.naturalHeight, alt: img.alt || '' });
 }`
 
+// Copies the last generated image to the clipboard as PNG, the one image
+// type the clipboard takes from a page.
+export const COPY_IMAGE_SCRIPT = `
+const img = ${GENERATED}.pop();
+if (!img) JSON.stringify({ found: false }); else {
+  let png;
+  try {
+    const blob = await (await fetch(img.currentSrc || img.src, { credentials: 'include' })).blob();
+    if (blob.type !== 'image/png') throw new Error(blob.type);
+    png = blob;
+  } catch {
+    const copy = new Image();
+    copy.crossOrigin = 'anonymous';
+    copy.src = img.currentSrc || img.src;
+    await copy.decode();
+    const canvas = document.createElement('canvas');
+    canvas.width = copy.naturalWidth;
+    canvas.height = copy.naturalHeight;
+    canvas.getContext('2d').drawImage(copy, 0, 0);
+    png = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+  }
+  let copied = false, reason = '';
+  try {
+    window.focus();
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': png })]);
+    copied = true;
+  } catch (error) {
+    reason = String(error && error.message || error);
+  }
+  JSON.stringify({ found: true, copied, reason, url: location.href, size: png.size, width: img.naturalWidth, height: img.naturalHeight, alt: img.alt || '' });
+}`
+
 export function imageChunkScript(offset: number, size: number): string {
   return `JSON.stringify({ chunk: (window.__chatgptAskImage || '').slice(${offset}, ${offset + size}) })`
 }
 
 export const IMAGE_CLEANUP_SCRIPT = `delete window.__chatgptAskImage; JSON.stringify({ done: true })`
 
-export async function generateImage(browser: Browser, input: ImageInput, options: AskOptions = {}): Promise<ImageResult> {
+export async function generateImage(browser: Browser, input: ImageInput, options: ImageOptions = {}): Promise<ImageResult> {
   const timeoutMs = options.timeoutMs ?? 6 * 60_000
   const pollMs = options.pollMs ?? 5000
   const progress = options.progress ?? (() => {})
 
+  if (input.saveOnly && input.chatUrl === undefined) return { ok: false, error: 'saveOnly needs the chatUrl of the chat with the image.' }
   const ready = await prepare(browser, input.chatUrl, progress)
   if (!ready.ok) return ready
   const { tabId } = ready
+  if (input.saveOnly) return readImage(browser, tabId, ready.page.href, progress, options.clipboard)
 
   if (input.reference) {
     progress('attaching the reference')
     const { base64, name, type } = input.reference
-    for (let offset = 0, index = 0; offset < base64.length || index === 0; offset += CHUNK, index++) {
-      await browser.js(tabId, uploadChunkScript(index, base64.slice(offset, offset + CHUNK)))
+    for (let offset = 0, index = 0; offset < base64.length || index === 0; offset += UPLOAD_CHUNK, index++) {
+      await browser.js(tabId, uploadChunkScript(index, base64.slice(offset, offset + UPLOAD_CHUNK)))
     }
     const attached = parseOutput<{ attached: boolean; reason?: string }>(await browser.js(tabId, attachScript(name, type)))
     if (!attached.attached) return { ok: false, url: ready.page.href, error: `Could not attach the reference: ${attached.reason}.` }
@@ -491,18 +550,72 @@ export async function generateImage(browser: Browser, input: ImageInput, options
     progress(state.stop ? 'generating the image' : 'waiting for the image')
   }
 
+  return readImage(browser, tabId, state.href, progress, options.clipboard)
+}
+
+// Reads the chat's last generated image back: through the clipboard when the
+// host has one and the copy works, else slice by slice.
+async function readImage(
+  browser: Browser,
+  tabId: string,
+  href: string,
+  progress: (text: string) => void,
+  clipboard?: Clipboard,
+): Promise<ImageResult> {
   progress('saving the image')
+  if (clipboard) {
+    const copied = await viaClipboard(browser, tabId, clipboard)
+    if (copied) return copied
+  }
   const found = parseOutput<{ found: boolean; url: string; type: string; length: number; width: number; height: number; alt: string }>(
     await browser.js(tabId, IMAGE_SCRIPT),
   )
-  if (!found.found || found.length === 0) return { ok: false, url: state.href, error: 'The generated image could not be read from the page.' }
+  if (!found.found || found.length === 0) return { ok: false, url: href, error: 'No generated image could be read from the page.' }
   let base64 = ''
-  for (let offset = 0; offset < found.length; offset += CHUNK) {
-    base64 += parseOutput<{ chunk: string }>(await browser.js(tabId, imageChunkScript(offset, CHUNK))).chunk
+  for (let offset = 0; offset < found.length; offset += DOWNLOAD_CHUNK) {
+    base64 += parseOutput<{ chunk: string }>(await browser.js(tabId, imageChunkScript(offset, DOWNLOAD_CHUNK))).chunk
+    progress(`saving the image (${Math.min(100, Math.round(((offset + DOWNLOAD_CHUNK) / found.length) * 100))}%)`)
   }
   await browser.js(tabId, IMAGE_CLEANUP_SCRIPT)
   if (base64.length !== found.length) return { ok: false, url: found.url, error: 'The image came back incomplete; try again.' }
   return { ok: true, url: found.url, base64, type: found.type, width: found.width, height: found.height, alt: found.alt }
+}
+
+const BASE64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+
+/** A PNG's width and height, from its IHDR header; undefined when it is not a PNG. */
+export function pngSize(base64: string): { width: number; height: number } | undefined {
+  const bytes: number[] = []
+  const head = base64.slice(0, 32)
+  for (let i = 0; i + 3 < head.length; i += 4) {
+    const n = [0, 1, 2, 3].reduce((acc, k) => (acc << 6) | Math.max(0, BASE64.indexOf(head[i + k]!)), 0)
+    bytes.push((n >> 16) & 255, (n >> 8) & 255, n & 255)
+  }
+  const signature = [137, 80, 78, 71, 13, 10, 26, 10]
+  if (bytes.length < 24 || signature.some((b, i) => bytes[i] !== b)) return undefined
+  const word = (at: number) => ((bytes[at]! << 24) | (bytes[at + 1]! << 16) | (bytes[at + 2]! << 8) | bytes[at + 3]!) >>> 0
+  return { width: word(16), height: word(20) }
+}
+
+type Copied = { found: boolean; copied: boolean; reason: string; url: string; size: number; width: number; height: number; alt: string }
+
+// The short path; undefined sends the caller to the slices.
+async function viaClipboard(browser: Browser, tabId: string, clipboard: Clipboard): Promise<ImageResult | undefined> {
+  await clipboard.save()
+  try {
+    const copied = parseOutput<Copied>(await browser.js(tabId, COPY_IMAGE_SCRIPT))
+    if (!copied.found || !copied.copied) return undefined
+    const base64 = await clipboard.readImage()
+    // The clipboard re-encodes the PNG, so the bytes differ; its size must not.
+    // A clipboard that changed in between would hand back another image.
+    const size = base64 ? pngSize(base64) : undefined
+    if (!base64 || !size || size.width !== copied.width || size.height !== copied.height) return undefined
+    return { ok: true, url: copied.url, base64, type: 'image/png', width: copied.width, height: copied.height, alt: copied.alt }
+  } catch {
+    return undefined
+  } finally {
+    await clipboard.restore()
+  }
 }
 
 /** The extension for an image MIME type. */

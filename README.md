@@ -66,13 +66,13 @@ Sends a self-contained question to your own ChatGPT, already logged in at chatgp
 | Entry | What it does |
 | --- | --- |
 | `mcp__chatgpt-ask__chatgpt_ask` | Tool for Claude: `prompt` (required), `chatUrl` (the chat link a previous call returned, to continue that chat on the same subject; left out, a new chat starts), `out` (an absolute path for the file) and `maxChars` (how much of the answer comes back inline, default 3000). |
-| `mcp__chatgpt-ask__chatgpt_image` | Tool for Claude: `prompt` (required), `reference` (an absolute path of a PNG, JPEG, WebP or GIF of at most 4 MiB to attach), `chatUrl` and `out`. Returns the image's path, size and chat link; when ChatGPT answers with text instead (a refusal or a question), returns that text. |
+| `mcp__chatgpt-ask__chatgpt_image` | Tool for Claude: `prompt` (required), `reference` (an absolute path of a PNG, JPEG, WebP or GIF of at most 4 MiB to attach), `chatUrl`, `out` and `saveOnly` (with `chatUrl`: only save the last image already in that chat, sending nothing, e.g. after a timeout). Returns the image's path, size and chat link; when ChatGPT answers with text instead (a refusal or a question), returns that text. |
 | `/chatgpt-ask <question>` | Asks from the prompt and shows the whole answer. |
 | `/chatgpt-image <prompt>` | Generates an image from the prompt and saves it. |
 
 Every request starts a new chat (the home page is one), unless a `chatUrl` brings Claude back to an earlier one. The plugin only uses a tab already on chatgpt.com, or opens one; it never touches a tab on another site. The answer goes to `$TMPDIR/chatgpt-ask/<date>-<subject>.md`, with the chat URL on the first line; Claude gets the path, the URL and the start of the answer, and reads the rest from the file when it needs it. Code blocks keep their language, and lists, tables, quotes and math come back as Markdown. The tool's description tells Claude not to send credentials, secrets, private personal data or work data, and to treat the answer as ChatGPT's unverified opinion.
 
-Images go to `$TMPDIR/chatgpt-ask/<date>-<subject>.png` (or the type ChatGPT served), decoded with `openssl`. Image tools spend your ChatGPT image quota, so Claude is told to use them only when you ask for an image, to attach only references you asked for or that it made for the task, and to label the result as an AI concept.
+Images go to `$TMPDIR/chatgpt-ask/<date>-<subject>.png` (or the type ChatGPT served), decoded with `openssl`. On macOS the image comes back through the clipboard (the page copies it, `osascript` writes it out); text you had copied is put back afterwards, anything else on the clipboard is replaced. When the copy does not work, the image is read from the page in slices instead. Image tools spend your ChatGPT image quota, so Claude is told to use them only when you ask for an image, to attach only references you asked for or that it made for the task, and to label the result as an AI concept.
 
 Requirements:
 

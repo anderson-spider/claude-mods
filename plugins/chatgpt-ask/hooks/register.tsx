@@ -1,6 +1,6 @@
 import type { EngineInterface, Register } from 'claude-code'
 import { ask, extensionOf, fallbackRouter, fileName, generateImage, isChatUrl, parseTabId, parseTabs, staysOnChatgpt, summary, typeOf } from './chatgpt'
-import type { AskResult, Browser, ImageResult, Reference } from './chatgpt'
+import type { AskResult, Browser, Clipboard, ImageResult, Reference } from './chatgpt'
 
 const PLUGIN = 'chatgpt-ask'
 
@@ -119,6 +119,45 @@ async function readReference($: EngineInterface, path: string): Promise<Referenc
   }
 }
 
+// The macOS clipboard: the PNG a page copied comes out through osascript into a
+// temporary file, read back as bytes. Only text the user had copied is kept;
+// anything else on the clipboard is replaced by the image.
+function clipboardOf($: EngineInterface): Clipboard {
+  let saved = ''
+  return {
+    save: async () => {
+      const pasted = await $.process.run(['pbpaste']).catch(() => undefined)
+      saved = pasted?.exitCode === 0 ? pasted.stdout : ''
+    },
+    readImage: async () => {
+      const path = `${await outDir($)}/.clipboard-${Date.now()}.png`
+      await $.process.run(['mkdir', '-p', path.slice(0, path.lastIndexOf('/'))])
+      const script = [
+        'on run argv',
+        'set f to POSIX file (item 1 of argv)',
+        'set d to the clipboard as «class PNGf»',
+        'set h to open for access f with write permission',
+        'set eof h to 0',
+        'write d to h',
+        'close access h',
+        'end run',
+      ].flatMap(line => ['-e', line])
+      try {
+        const done = await $.process.run(['osascript', ...script, path], { timeoutMs: 30_000 })
+        if (done.exitCode !== 0) return undefined
+        return (await $.fs.read(path, { as: 'bytes' })).base64
+      } catch {
+        return undefined
+      } finally {
+        await $.process.run(['rm', '-f', path]).catch(() => undefined)
+      }
+    },
+    restore: async () => {
+      if (saved) await $.process.run(['pbcopy'], { stdin: saved }).catch(() => undefined)
+    },
+  }
+}
+
 // $.fs.write takes text only, so the bytes go through openssl's base64 decoder.
 async function writeImage($: EngineInterface, path: string, base64: string): Promise<string | undefined> {
   const dir = path.slice(0, path.lastIndexOf('/')) || '/'
@@ -130,7 +169,7 @@ async function writeImage($: EngineInterface, path: string, base64: string): Pro
 async function runImage(
   $: EngineInterface,
   prompt: string,
-  options: { chatUrl?: string; reference?: string; out?: string },
+  options: { chatUrl?: string; reference?: string; out?: string; saveOnly?: boolean },
 ): Promise<ImageResult & { path?: string }> {
   if (busy) return { ok: false, error: 'Another ChatGPT request is still running; wait for it to finish.' }
   busy = true
@@ -139,8 +178,8 @@ async function runImage(
     if (typeof reference === 'string') return { ok: false, error: reference }
     const result = await generateImage(
       browserOf($),
-      { prompt, chatUrl: options.chatUrl, reference },
-      { progress: text => $.ui.status(`ChatGPT: ${text}`) },
+      { prompt, chatUrl: options.chatUrl, reference, saveOnly: options.saveOnly },
+      { progress: text => $.ui.status(`ChatGPT: ${text}`), clipboard: clipboardOf($) },
     )
     if (!result.ok) return result
     const path = options.out ?? `${await outDir($)}/${fileName(prompt, new Date(), extensionOf(result.type))}`
@@ -210,6 +249,12 @@ export const register: Register = on => {
           },
           chatUrl: { type: 'string', description: CHAT_URL_HELP },
           out: { type: 'string', description: 'Optional absolute path for the image file.' },
+          saveOnly: {
+            type: 'boolean',
+            description:
+              'Optional. Only save the last image already generated in chatUrl, sending nothing and spending no quota ' +
+              '(e.g. after a timeout said it may still be generating); prompt only names the file.',
+          },
         },
         required: ['prompt'],
       },
@@ -271,7 +316,8 @@ export const register: Register = on => {
     if (chatUrl !== undefined && !isChatUrl(chatUrl)) {
       return { result: `chatUrl must be a chat link like https://chatgpt.com/c/<id>, not ${chatUrl}.`, isError: true as const }
     }
-    const result = await runImage($, prompt, { chatUrl, reference, out })
+    const saveOnly = e.saveOnly === true
+    const result = await runImage($, prompt, { chatUrl, reference, out, saveOnly })
     if (result.ok) return { result: imageSummary(result, result.path!) }
     const said = result.markdown ? `\n\nChatGPT said:\n${result.markdown}` : ''
     return { result: result.error + said, isError: true as const }
