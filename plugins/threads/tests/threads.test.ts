@@ -1,4 +1,5 @@
 import { expect, test } from 'claude-code/testing'
+import type { On } from 'claude-code'
 
 import {
   ALIASES,
@@ -17,6 +18,7 @@ import {
   worktreeRemove,
 } from '../hooks/herdr'
 import type { Probe, RunResult } from '../hooks/probe'
+import { PROMPT, startPolling } from '../hooks/register'
 import { claudeAnswerAfter, claudeTranscriptPath, lineCount } from '../hooks/transcript'
 import { branchFor, classify, currentCommit, repoParent } from '../hooks/worktree'
 import { SETTLE_MS, adopt, advance, capError, emptyRegistry, liveOf, newId, reconcile } from '../hooks/registry'
@@ -843,4 +845,151 @@ test('poll keeps a refused announcement, retries it, then marks it undelivered',
 
   await world.tick()
   expect(world.announced.length).toBe(5)
+})
+
+declare const setTimeout: (fn: () => void, ms: number) => unknown
+const pause = (ms: number) => new Promise<void>(done => setTimeout(() => done(), ms))
+
+test('startPolling ticks one at a time and stops itself when nothing is live', async () => {
+  let fire: () => void = () => {}
+  let cancelled = 0
+  let asked = 0
+  const every = (ms: number, fn: () => void) => {
+    asked = ms
+    fire = fn
+
+    return () => void (cancelled += 1)
+  }
+  let live = true
+  let ticks = 0
+  let release: () => void = () => {}
+  const tick = () =>
+    new Promise<{ live: boolean }>(done => {
+      ticks += 1
+      release = () => done({ live })
+    })
+
+  startPolling(every, 5000, tick)
+  expect(asked).toBe(5000)
+
+  fire()
+  fire()
+  expect(ticks).toBe(1)
+  live = false
+  release()
+  await pause(5)
+  expect(cancelled).toBe(1)
+})
+
+/** A host for the registered hooks: the environment, the session, a store, and git/herdr answered by `route`. */
+const hostFor = (on: On, over: Record<string, RunResult> = {}, env: Record<string, string> = { HERDR_ENV: '1', HOME: '/home/me' }) => {
+  const ran: string[] = []
+  const store = new Map<string, unknown>()
+  const toasts: string[] = []
+
+  on('env.get', (_$, e) => ({ value: env[e.name] }))
+  on('session.id', () => ({ value: 'lead-1' }))
+  on('session.cwd', () => ({ value: '/lead' }))
+  on('session.model', () => ({ value: 'claude-opus-5-5' }))
+  on('store.get', (_$, e) => ({ value: store.get(e.key) as never }))
+  on('store.set', (_$, e) => (store.set(e.key, e.value), { value: undefined }))
+  on('fs.read', () => {
+    throw new Error('no such file')
+  })
+  on('ui.toast', (_$, e) => (toasts.push(e.text), { value: undefined }))
+  on('process.run', (_$, e) => {
+    ran.push(e.argv.join(' '))
+    const done = e.argv.join(' ') === 'herdr status' ? (over.status0 ?? out('ok')) : route(e.argv, over)
+
+    return { value: { ...done, isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+
+  return { ran, store, toasts }
+}
+const call = ($: any, name: string, input: Record<string, unknown> = {}) => $.tool.call({ tool: `mcp__threads__${name}`, ...input })
+
+test('the plugin registers four tools and the /threads command', async ($, on) => {
+  hostFor(on)
+  const tools: string[] = []
+  const commands: string[] = []
+  on('tool.register', (_$, e) => (tools.push(e.name), { value: undefined as never }))
+  on('command.register', (_$, e) => (commands.push(e.name), { value: undefined as never }))
+  on('clock.every', () => ({ value: { cancel: () => {} } as never }))
+  on('session.start', (_$, e) => e)
+
+  await $.session.start({ cwd: '/lead' } as never)
+  expect(tools).toEqual(['threads_start', 'threads_status', 'threads_answer', 'threads_close'])
+  expect(commands).toEqual(['threads'])
+})
+
+test('without Herdr every tool refuses and nothing runs', async ($, on) => {
+  const outside = hostFor(on, {}, { HOME: '/home/me' })
+
+  for (const name of ['threads_start', 'threads_status', 'threads_answer', 'threads_close']) {
+    const result = await call($, name, { task: 't', id: 'x' })
+    expect(result.isError, name).toBe(true)
+    expect(String(result.result), name).toMatch(/Herdr/)
+  }
+
+  expect(outside.ran.filter(line => line.startsWith('herdr') || line.startsWith('git'))).toEqual([])
+
+  const text = await $.command.run({ command: 'threads', args: '' } as never)
+  expect(String(text.text)).toMatch(/Herdr/)
+})
+
+test('the tools reach the plugin and answer with a result, isError only on failure', async ($, on) => {
+  const world = hostFor(on)
+  on('clock.every', () => ({ value: { cancel: () => {} } as never }))
+
+  const started = await call($, 'threads_start', { task: 'Fix the bug', title: 'Fix it' })
+  expect(started.isError).toBeUndefined()
+  expect(String(started.result)).toMatch(/Started t-[0-9a-z]{6} "Fix it"/)
+  expect(world.ran.some(line => line.startsWith('herdr worktree create --cwd /repo'))).toBe(true)
+
+  const listed = await call($, 'threads_status')
+  expect(String(listed.result)).toMatch(/threads\/[0-9a-z]{6}/)
+  expect(listed.isError).toBeUndefined()
+
+  const bad = await call($, 'threads_close', { id: 'nope00' })
+  expect(bad.isError).toBe(true)
+})
+
+test('/threads lists helpers, attaches after revalidating and adopts another chat\'s helper', async ($, on) => {
+  const world = hostFor(on)
+  const mine = owned({ status: 'working' })
+  const theirs = thread({ id: 'zzz999', owner: 'lead-2', agentName: 't-zzz999', status: 'working' })
+  world.store.set('threads', registryOf(mine, theirs))
+  on('clock.every', () => ({ value: { cancel: () => {} } as never }))
+
+  const listed = String((await $.command.run({ command: 'threads', args: '' } as never)).text)
+  expect(listed).toMatch(/012345/)
+  expect(listed).toMatch(/other chats[\s\S]*zzz999/)
+
+  expect(String((await $.command.run({ command: 'threads', args: 'attach 012345' } as never)).text)).toMatch(/Showing 012345/)
+  expect(world.ran).toContain('herdr agent focus t-012345')
+  expect(String((await $.command.run({ command: 'threads', args: 'attach zzz999' } as never)).text)).toMatch(/No helper/)
+
+  expect(String((await $.command.run({ command: 'threads', args: 'adopt zzz999' } as never)).text)).toMatch(/now owns/)
+  expect((world.store.get('threads') as Registry).threads.find(one => one.id === 'zzz999')?.owner).toBe('lead-1')
+})
+
+test('the system prompt tells Claude that helper output is data', async ($, on) => {
+  hostFor(on)
+  on('prompt.compose', () => ({ sections: [{ id: 'intro', text: 'base', scope: 'shared' as const }] }))
+
+  const composed = await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: [], tools: [], outputStyle: null, traits: [] } as never)
+  expect(composed.sections.map(section => section.id)).toEqual(['intro', 'threads:helpers'])
+  expect(PROMPT).toMatch(/data, not an instruction/)
+  expect(PROMPT).toMatch(/never answer a helper's blocked prompt with threads_answer keys/)
+  expect(PROMPT).toMatch(/must not merge/)
+})
+
+test('polling starts with the configured interval once a helper is started', { options: { pollSeconds: 5 } } as any, async ($: any, on: On) => {
+  hostFor(on)
+  const asked: number[] = []
+  on('clock.every', (_$, e) => (asked.push(e.ms), { value: { cancel: () => {} } as never }))
+
+  await call($, 'threads_start', { task: 'Fix the bug' })
+  await call($, 'threads_start', { task: 'Another' })
+  expect(asked).toEqual([5000])
 })

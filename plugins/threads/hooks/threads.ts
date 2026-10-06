@@ -1,7 +1,7 @@
-import { agentGet, agentList, agentPrompt, agentStart, effortError, modelError, nativeArgs, paneClose, readScreen, sendKeys, worktreeCreate, worktreeRemove } from './herdr'
+import { agentFocus, agentGet, agentList, agentPrompt, agentStart, effortError, modelError, nativeArgs, paneClose, readScreen, sendKeys, worktreeCreate, worktreeRemove } from './herdr'
 import type { Agent, AgentKind } from './herdr'
 import type { Probe } from './probe'
-import { advance, capError, liveOf, newId } from './registry'
+import { adopt, advance, capError, liveOf, newId } from './registry'
 import type { Pending, Registry, Thread } from './registry'
 import type { Settings } from './settings'
 import { claudeAnswerAfter, claudeTranscriptPath, lineCount } from './transcript'
@@ -608,4 +608,44 @@ export const poll = async (ports: Ports, announce: Announce, toast: (text: strin
   await deliver(ports, owner, announce, toast)
 
   return { live: isLive(await ports.load()) }
+}
+
+/** The owner's helpers, then those of other owners, read-only. */
+export const overview = async (ports: Ports): Promise<ToolResult> => {
+  const owner = await ports.owner()
+  const others = (await ports.load()).threads.filter(t => t.owner !== owner)
+  const own = await status(ports)
+
+  return { text: others.length === 0 ? own.text : `${own.text}\n\nHelpers of other chats (read-only; /threads adopt <id> takes one over):\n${others.map(line).join('\n')}` }
+}
+
+/** Brings the helper's pane into view, after checking that it is still the helper that was started. */
+export const attach = async (ports: Ports, id: string): Promise<ToolResult> => {
+  const t = await mine(ports, id)
+
+  if (t === undefined) {
+    return fail(`No helper with id ${id}.`)
+  }
+
+  const check = await revalidate(ports, t)
+
+  if (!check.ok) {
+    return fail(`Not attaching to ${t.id}: ${check.reason}.`)
+  }
+
+  const focused = await agentFocus(ports.probe, t.agentName)
+
+  return focused.ok ? { text: `Showing ${t.id} (${t.agentName}).` } : fail(`Could not focus ${t.id}: ${focused.error.message}`)
+}
+
+/** Makes this chat the owner of a helper that another chat started. */
+export const takeOver = async (ports: Ports, id: string): Promise<ToolResult> => {
+  const owner = await ports.owner()
+  const moved = await withRegistry<boolean>(ports, async r => {
+    const next = adopt(r, id, owner)
+
+    return { registry: next ?? r, value: next !== undefined }
+  })
+
+  return moved ? { text: `This chat now owns helper ${id}.` } : fail(`No helper with id ${id}.`)
 }
