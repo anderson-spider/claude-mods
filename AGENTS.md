@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Claude Code plugin marketplace (`anderson-spider/spider-marketplace`). It currently has five plugins: `blast-radius` (holds destructive commands), `branch-guard` (holds commit and push on the protected branch), `pr-preview` (holds `gh pr create`, `gh pr edit`, `glab mr create` and `glab mr update` and previews them), `review-panel` (read-only pane with the diff, the open PR, its CI jobs and its comments) and `tailscale` (tools to query and modify the tailnet). The README and other documentation are in English; code comments and user-facing messages are in English too. Pull request titles and descriptions are in English.
+Claude Code plugin marketplace (`anderson-spider/spider-marketplace`). It currently has six plugins: `blast-radius` (holds destructive commands), `branch-guard` (holds commit and push on the protected branch), `pr-preview` (holds `gh pr create`, `gh pr edit`, `glab mr create` and `glab mr update` and previews them), `review-panel` (read-only pane with the diff, the open PR, its CI jobs and its comments), `tailscale` (tools to query and modify the tailnet) and `usage-line` (context and rate-limit usage above the prompt). The README and other documentation are in English; code comments and user-facing messages are in English too. Pull request titles and descriptions are in English.
 
 ## Structure
 
@@ -18,6 +18,7 @@ claude plugin test plugins/branch-guard        # same, for branch-guard
 claude plugin test plugins/pr-preview          # same, for pr-preview
 claude plugin test plugins/review-panel        # same, for review-panel
 claude plugin test plugins/tailscale           # same, for tailscale
+claude plugin test plugins/usage-line          # same, for usage-line
 claude --plugin-dir plugins/blast-radius       # loads the plugin with automatic reload
 ```
 
@@ -60,6 +61,17 @@ Holds nothing: it registers two tools with `$.tool.register` in `session.start` 
 - `validate` rejects `$.http.fetch` passed as a value; that is why `register.tsx` wraps it in `(url, init) => $.http.fetch(url, init)`.
 - `result` of the `tool.call` of a custom tool is a string or array, not an object, and `isError` only accepts `true` (omit it instead of `false`).
 - The test uses only the functions in `hooks/api.ts` with a fake `fetch`; there is no fake host.
+
+## usage-line
+
+Holds nothing and keeps no state: a `ui.render` hook on `{ component: 'AbovePrompt' }` reads `$.session.usage()`, `$.clock.now()` and the `theme` row of `$.config.list()` on every draw, and `session.measure` and a 30 s `$.clock.every` (started once in `session.start`) call `$.ui.invalidate('ui.render')` to redraw. `hooks/usage.ts` is pure: `items` turns the usage into one `Item` per reading (`ctx`, `5h`, `7d`), each with a `left` side (label, percent, pace) and a `right` one (tokens or the time to the reset) as toned `Segment`s, with the same figures as the user's status line script (`formatTokens`, `formatReset`, `paceOf`: use minus the elapsed share of the window, left out in its first 1%). `paceSegment` reads the pace in points (`▼N`, `▲N`) and as `●` within `PACE_TOLERANCE` (5). `segments` joins the cards into the one-line fallback; `cardWidth` splits `bodyColumns` evenly and returns undefined when a card's two sides do not fit or the band has under 3 rows. `PALETTE` holds a dark and a light shade per colour (raw colours do not follow the theme), chosen by `isLightTheme`. Details:
+
+- The hook calls `next(e)` first and returns its result when it is not `{ type: 'engine' }`: another plugin's band (blast-radius, branch-guard, pr-preview) or a survey wins.
+- A card is a filled `Box` (`fillOf`) with `justifyContent: 'space-between'`. Its round border is always drawn, in the fill's own colour at rest (`borderOf`), so a card that crosses 50% shows its border without changing height.
+- Only the percent is bold (`styleOf`); the label and the details share the muted gray.
+- `session.start` calls `$.ui.status(undefined)` to clear the status line an early build pinned; the host keeps it across reloads until cleared.
+- On `desktop` each side is an `Svg` from `svgLine` (monospace `<text>` with one coloured `<tspan>` per segment, its width measured generously by `svgWidth`, wider for `▼`, `▲`, `●` and `│`, which the font may lack); the `Svg` gets no `width` prop, so a side wider than its room scales down instead of being cut. `Text` takes no font prop and the desktop draws it in its UI font, not the diff header's monospace; the terminal keeps `Text`.
+- No progress bars: the desktop surface does not draw `█`/`░` at a fixed cell width, so a bar sized in columns breaks there.
 
 ## Tests
 
