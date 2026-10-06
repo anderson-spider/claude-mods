@@ -17,6 +17,7 @@ import {
   worktreeRemove,
 } from '../hooks/herdr'
 import type { Probe, RunResult } from '../hooks/probe'
+import { claudeAnswerAfter, claudeTranscriptPath, lineCount } from '../hooks/transcript'
 import { branchFor, classify, currentCommit, repoParent } from '../hooks/worktree'
 import { readSettings } from '../hooks/settings'
 
@@ -199,4 +200,34 @@ test('classify keeps the worktree when anything is off or fails', async () => {
 
   const reason = await classify(gitProbe({ ...CLEAN, 'git status --porcelain --ignored': out('', 128, 'fatal: not a repo') }), WORKTREE)
   expect(reason.kind === 'unknown' && reason.reason).toMatch(/git status/)
+})
+
+const said = (blocks: unknown[], model = 'claude-sonnet-5-5') => JSON.stringify({ type: 'assistant', message: { model, content: blocks } })
+const text = (value: string) => ({ type: 'text', text: value })
+const tool = { type: 'tool_use', name: 'Bash', input: {} }
+const asked = JSON.stringify({ type: 'user', message: { content: 'go' } })
+
+test('claudeTranscriptPath turns the cwd into the project folder name', () => {
+  expect(claudeTranscriptPath('/home/me', '/Users/a/.herdr/worktrees/x/y', 'sid')).toBe('/home/me/.claude/projects/-Users-a--herdr-worktrees-x-y/sid.jsonl')
+})
+
+test('lineCount counts non-empty lines', () => {
+  expect(lineCount('')).toBe(0)
+  expect(lineCount(`${asked}\n\n${said([text('a')])}\n`)).toBe(2)
+})
+
+test('claudeAnswerAfter returns the last answer after the marker, never an older one', () => {
+  const log = [asked, said([text('first task answer')]), asked, said([text('part one'), text('part two')], 'claude-opus-5-5')].join('\n')
+
+  expect(claudeAnswerAfter(log, 2)).toEqual({ text: 'part one\n\npart two', model: 'claude-opus-5-5' })
+  expect(claudeAnswerAfter(log, 0)?.text).toBe('part one\n\npart two')
+  expect(claudeAnswerAfter(log, 4)).toBeUndefined()
+})
+
+test('claudeAnswerAfter skips tool-only messages and corrupt lines, and finds nothing when only tools ran', () => {
+  const log = [asked, said([text('working on it')]), 'not json {', said([tool])].join('\n')
+
+  expect(claudeAnswerAfter(log, 0)).toEqual({ text: 'working on it', model: 'claude-sonnet-5-5' })
+  expect(claudeAnswerAfter([asked, said([tool])].join('\n'), 1)).toBeUndefined()
+  expect(claudeAnswerAfter([asked, said([text('old')]), asked, said([tool])].join('\n'), 2)).toBeUndefined()
 })
