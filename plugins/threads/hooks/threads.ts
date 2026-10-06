@@ -1,7 +1,7 @@
 import { agentFocus, agentGet, agentList, agentPrompt, agentStart, effortError, modelError, nativeArgs, paneClose, readScreen, sendKeys, worktreeCreate, worktreeList, worktreeRemove } from './herdr'
 import type { Agent, AgentKind } from './herdr'
 import type { Probe } from './probe'
-import { adopt, advance, capError, liveOf, newId } from './registry'
+import { advance, capError, liveOf, newId } from './registry'
 import type { Pending, Registry, Thread } from './registry'
 import type { Settings } from './settings'
 import { claudeAnswerAfter, claudeTranscriptPath, lineCount } from './transcript'
@@ -14,8 +14,12 @@ export type Ports = {
   probe: Probe
   load: () => Promise<Registry>
   save: (r: Registry) => Promise<void>
-  /** The session id of the lead chat. */
+  /** The session id of the lead chat. `load` and `save` are this chat's own registry: each chat writes only its own. */
   owner: () => Promise<string>
+  /** The helpers other chats started, read-only. */
+  others: () => Promise<Thread[]>
+  /** Removes a helper from the chat that holds it and returns it, or `undefined` when no other chat has it. */
+  take: (id: string) => Promise<Thread | undefined>
   cwd: () => Promise<string>
   /** The lead's model, for an empty `defaultModel`. */
   leadModel: () => Promise<string>
@@ -673,8 +677,7 @@ export const poll = async (ports: Ports, announce: Announce, toast: (text: strin
 
 /** The owner's helpers, then those of other owners, read-only. */
 export const overview = async (ports: Ports): Promise<ToolResult> => {
-  const owner = await ports.owner()
-  const others = (await ports.load()).threads.filter(t => t.owner !== owner)
+  const others = await ports.others()
   const own = await status(ports)
 
   return { text: others.length === 0 ? own.text : `${own.text}\n\nHelpers of other chats (read-only; /threads adopt <id> takes one over):\n${others.map(line).join('\n')}` }
@@ -702,11 +705,13 @@ export const attach = async (ports: Ports, id: string): Promise<ToolResult> => {
 /** Makes this chat the owner of a helper that another chat started. */
 export const takeOver = async (ports: Ports, id: string): Promise<ToolResult> => {
   const owner = await ports.owner()
-  const moved = await withRegistry<boolean>(ports, async r => {
-    const next = adopt(r, id, owner)
+  const taken = await ports.take(id)
 
-    return { registry: next ?? r, value: next !== undefined }
-  })
+  if (taken === undefined) {
+    return fail(`No helper of another chat with id ${id}.`)
+  }
 
-  return moved ? { text: `This chat now owns helper ${id}.` } : fail(`No helper with id ${id}.`)
+  await withRegistry(ports, async r => ({ registry: { ...r, threads: [...r.threads.filter(t => t.id !== id), { ...taken, owner }] }, value: undefined }))
+
+  return { text: `This chat now owns helper ${id}.` }
 }

@@ -53,10 +53,6 @@ export const capError = (r: Registry, owner: string, max: number): string | unde
   return live.length < max ? undefined : `Live helpers: ${live.map(t => t.id).join(', ')} (limit ${max}). Close one with threads_close first.`
 }
 
-/** The registry with the helper's owner changed; `undefined` when there is no such helper. */
-export const adopt = (r: Registry, id: string, owner: string): Registry | undefined =>
-  r.threads.some(t => t.id === id) ? { ...r, threads: r.threads.map(t => (t.id === id ? { ...t, owner } : t)) } : undefined
-
 /**
  * Brings the owner's records in line with Herdr's agents: a live record whose agent is gone is `exited`, or
  * `orphan` when it never got as far as starting one. `agents` undefined (a failed list) changes nothing.

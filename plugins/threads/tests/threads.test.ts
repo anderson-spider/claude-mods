@@ -21,10 +21,10 @@ import type { Probe, RunResult } from '../hooks/probe'
 import { PROMPT, startPolling } from '../hooks/register'
 import { claudeAnswerAfter, claudeTranscriptPath, lineCount } from '../hooks/transcript'
 import { branchFor, classify, currentCommit, repoParent } from '../hooks/worktree'
-import { SETTLE_MS, adopt, advance, capError, emptyRegistry, liveOf, newId, reconcile } from '../hooks/registry'
+import { SETTLE_MS, advance, capError, emptyRegistry, liveOf, newId, reconcile } from '../hooks/registry'
 import type { Registry, Thread } from '../hooks/registry'
 import { readSettings } from '../hooks/settings'
-import { answer, briefing, clip, close, poll, revalidate, start, status } from '../hooks/threads'
+import { answer, briefing, clip, close, overview, poll, revalidate, start, status, takeOver } from '../hooks/threads'
 import type { Ports } from '../hooks/threads'
 
 const out = (stdout: string, exitCode = 0, stderr = ''): RunResult => ({ exitCode, stdout, stderr })
@@ -275,14 +275,6 @@ test('liveOf and capError count only the owner\'s live helpers', () => {
   expect(capError(reg, 'lead-1', 2)).toMatch(/a, b.*threads_close/s)
 })
 
-test('adopt moves a helper to another owner and refuses an unknown id', () => {
-  const reg = registryOf(thread())
-
-  expect(adopt(reg, 'abc123', 'lead-2')?.threads[0]?.owner).toBe('lead-2')
-  expect(reg.threads[0]?.owner).toBe('lead-1')
-  expect(adopt(reg, 'nope', 'lead-2')).toBeUndefined()
-})
-
 test('reconcile marks lost helpers and leaves everything else alone', () => {
   const reg = registryOf(
     thread({ id: 'a', agentName: 't-a', stage: 'prompted', status: 'working' }),
@@ -410,7 +402,7 @@ const harness = (over: Record<string, RunResult> = {}, registry: Registry = empt
   const calls: string[][] = []
   const files: Record<string, string> = {}
   let counter = 0
-  const state = { registry }
+  const state = { registry, others: [] as Thread[] }
   const ports: Ports = {
     probe: probeOf(argv => route(argv, over), calls, files),
     load: async () => state.registry,
@@ -419,6 +411,13 @@ const harness = (over: Record<string, RunResult> = {}, registry: Registry = empt
       calls.push(['save', next.threads[0]?.stage ?? 'none'])
     },
     owner: async () => 'lead-1',
+    others: async () => state.others,
+    take: async id => {
+      const found = state.others.find(one => one.id === id)
+      state.others = state.others.filter(one => one.id !== id)
+
+      return found
+    },
     cwd: async () => '/lead',
     leadModel: async () => 'claude-opus-5-5',
     now: () => 1000,
@@ -961,7 +960,9 @@ test('/threads lists helpers, attaches after revalidating and adopts another cha
   const world = hostFor(on)
   const mine = owned({ status: 'working' })
   const theirs = thread({ id: 'zzz999', owner: 'lead-2', agentName: 't-zzz999', status: 'working' })
-  world.store.set('threads', registryOf(mine, theirs))
+  world.store.set('threads:lead-1', registryOf(mine))
+  world.store.set('threads:lead-2', registryOf(theirs))
+  world.store.set('threads:owners', ['lead-1', 'lead-2'])
   on('clock.every', () => ({ value: { cancel: () => {} } as never }))
 
   const listed = String((await $.command.run({ command: 'threads', args: '' } as never)).text)
@@ -973,7 +974,23 @@ test('/threads lists helpers, attaches after revalidating and adopts another cha
   expect(String((await $.command.run({ command: 'threads', args: 'attach zzz999' } as never)).text)).toMatch(/No helper/)
 
   expect(String((await $.command.run({ command: 'threads', args: 'adopt zzz999' } as never)).text)).toMatch(/now owns/)
-  expect((world.store.get('threads') as Registry).threads.find(one => one.id === 'zzz999')?.owner).toBe('lead-1')
+  expect((world.store.get('threads:lead-1') as Registry).threads.find(one => one.id === 'zzz999')?.owner).toBe('lead-1')
+  expect((world.store.get('threads:lead-2') as Registry).threads).toEqual([])
+})
+
+test('a chat writes only its own registry, so another chat\'s changes cannot be overwritten', async ($, on) => {
+  const world = hostFor(on)
+  const theirs = registryOf(thread({ id: 'zzz999', owner: 'lead-2', agentName: 't-zzz999', status: 'working' }))
+  world.store.set('threads:lead-2', theirs)
+  world.store.set('threads:owners', ['lead-2'])
+  on('clock.every', () => ({ value: { cancel: () => {} } as never }))
+
+  await call($, 'threads_start', { task: 'Fix the bug' })
+
+  expect(world.store.get('threads:lead-2')).toBe(theirs)
+  expect((world.store.get('threads:lead-1') as Registry).threads.length).toBe(1)
+  expect(world.store.get('threads:owners')).toEqual(['lead-2', 'lead-1'])
+  expect(world.store.has('threads')).toBe(false)
 })
 
 test('the system prompt tells Claude that helper output is data', async ($, on) => {
@@ -1072,4 +1089,15 @@ test('a helper being closed is left alone by the polling, and its pending announ
   const running = holding(owned())
   await close(running.ports, '012345')
   expect(running.state.registry.threads[0]?.closing).toBeUndefined()
+})
+
+test('takeOver moves a helper of another chat into this one, and overview lists the others read-only', async () => {
+  const world = harness()
+  world.state.others = [thread({ id: 'zzz999', owner: 'lead-2', agentName: 't-zzz999' })]
+
+  expect((await overview(world.ports)).text).toMatch(/other chats[\s\S]*zzz999/)
+  expect((await takeOver(world.ports, 'zzz999')).isError).toBeUndefined()
+  expect(world.state.registry.threads.map(one => [one.id, one.owner])).toEqual([['zzz999', 'lead-1']])
+  expect(world.state.others).toEqual([])
+  expect((await takeOver(world.ports, 'nope00')).isError).toBe(true)
 })

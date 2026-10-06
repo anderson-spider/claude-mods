@@ -1,7 +1,7 @@
 import type { EngineInterface, Register } from 'claude-code'
 
 import { emptyRegistry, reconcile } from './registry'
-import type { Registry } from './registry'
+import type { Registry, Thread } from './registry'
 import { agentList } from './herdr'
 import { readSettings } from './settings'
 import type { Settings } from './settings'
@@ -9,7 +9,9 @@ import { answer, attach, close, overview, poll, start, status, takeOver } from '
 import type { Announce, Ports, ToolResult } from './threads'
 
 const COMMAND = 'threads'
-const STORE_KEY = 'threads'
+// One registry per chat (`threads:<session id>`), so a chat never overwrites another's; the index only says whose exist.
+const STORE_PREFIX = 'threads:'
+const OWNERS_KEY = 'threads:owners'
 
 export const PROMPT = [
   'The threads plugin starts background helpers: separate Claude Code sessions, each in its own git worktree, visible in a Herdr pane (threads_start, threads_status, threads_answer, threads_close). You are told when one finishes or is stopped.',
@@ -72,11 +74,46 @@ const portsOf = ($: EngineInterface): Ports => ({
     },
     home: () => $.env.get('HOME'),
   },
-  load: async () => ((await $.store.get(STORE_KEY)) as Registry | undefined) ?? emptyRegistry(),
+  load: async () => ((await $.store.get(`${STORE_PREFIX}${await $.session.id()}`)) as Registry | undefined) ?? emptyRegistry(),
   save: async registry => {
-    await $.store.set(STORE_KEY, registry as never)
+    const owner = await $.session.id()
+    const owners = ((await $.store.get(OWNERS_KEY)) as string[] | undefined) ?? []
+
+    await $.store.set(`${STORE_PREFIX}${owner}`, registry as never)
+
+    if (!owners.includes(owner)) {
+      await $.store.set(OWNERS_KEY, [...owners, owner] as never)
+    }
   },
   owner: () => $.session.id(),
+  others: async () => {
+    const me = await $.session.id()
+    const owners = ((await $.store.get(OWNERS_KEY)) as string[] | undefined) ?? []
+    const found: Thread[] = []
+
+    for (const owner of owners.filter(one => one !== me)) {
+      found.push(...(((await $.store.get(`${STORE_PREFIX}${owner}`)) as Registry | undefined)?.threads ?? []))
+    }
+
+    return found
+  },
+  take: async id => {
+    const me = await $.session.id()
+    const owners = ((await $.store.get(OWNERS_KEY)) as string[] | undefined) ?? []
+
+    for (const owner of owners.filter(one => one !== me)) {
+      const theirs = ((await $.store.get(`${STORE_PREFIX}${owner}`)) as Registry | undefined) ?? emptyRegistry()
+      const found = theirs.threads.find(t => t.id === id)
+
+      if (found !== undefined) {
+        await $.store.set(`${STORE_PREFIX}${owner}`, { ...theirs, threads: theirs.threads.filter(t => t.id !== id), pending: theirs.pending.filter(p => p.threadId !== id) } as never)
+
+        return found
+      }
+    }
+
+    return undefined
+  },
   cwd: () => $.session.cwd(),
   leadModel: () => $.session.model(),
   now: () => Date.now(),
