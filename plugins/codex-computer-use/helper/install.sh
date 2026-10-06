@@ -66,8 +66,29 @@ cat >"$PLIST" <<EOF
 </plist>
 EOF
 
-launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
-launchctl bootstrap "gui/$(id -u)" "$PLIST"
+DOMAIN="gui/$(id -u)"
+
+# bootout returns before a running helper has exited, and a bootstrap in that
+# window fails with "5: Input/output error": wait for the old one to go.
+launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
+tries=0
+while launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1 && [ $tries -lt 50 ]; do
+  sleep 0.2
+  tries=$((tries + 1))
+done
+
+tries=0
+until launchctl bootstrap "$DOMAIN" "$PLIST" 2>/dev/null; do
+  tries=$((tries + 1))
+
+  # The last try shows launchctl's error, and `set -e` stops on it.
+  if [ $tries -ge 5 ]; then
+    launchctl bootstrap "$DOMAIN" "$PLIST"
+    break
+  fi
+
+  sleep 1
+done
 echo "helper: $LABEL loaded from $PLIST"
 
 [ -n "$PLUGIN_DIR" ] || exit 0
