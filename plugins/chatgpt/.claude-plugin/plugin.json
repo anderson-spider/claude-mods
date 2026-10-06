@@ -1,6 +1,6 @@
 {
   "name": "chatgpt",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Asks the user's logged-in ChatGPT, or has it generate an image, through terminal-browser, and saves the result locally.",
   "author": {
     "name": "anderson-spider"

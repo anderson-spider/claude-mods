@@ -32,6 +32,23 @@ const IMAGE_BOUNDARIES =
 
 const WHERE = 'chatgpt.com in terminal-browser, inside Claude Code in a terminal'
 
+const ASK_TOOL = 'mcp__chatgpt__ask'
+const IMAGE_TOOL = 'mcp__chatgpt__image'
+
+// Added to the system prompt so Claude reaches for ask on its own; the tools may be deferred, so their
+// descriptions alone are not seen until loaded.
+const PROMPT = [
+  '# Asking ChatGPT (chatgpt mod)',
+  '',
+  `\`${ASK_TOOL}\` sends a question to the person's logged-in ChatGPT and saves the answer. Use it on your own, without being asked, when a self-contained question needs a long answer and little context: research, an explanation, a brainstorm, a draft, a translation or a second opinion on a decision. It saves your tokens; do not use it for work that needs the repository, since the context would have to go out and come back.`,
+  '',
+  '- Say in one line that you are asking ChatGPT before the call. If the tool is deferred, load it by name first.',
+  '- Write a self-contained prompt: the goal, the minimum context, the output format and the language. Pass `chatUrl` from an earlier answer to follow up in the same chat.',
+  `- ${BOUNDARIES} Check what matters before relying on it.`,
+  '- When the tool says there is no browser or ChatGPT needs a login, go on without it and do not retry in that session.',
+  `- \`${IMAGE_TOOL}\` spends the person's image quota: use it only when they ask for an image.`,
+].join('\n')
+
 const COMMON_PROPERTIES = {
   chatUrl: {
     type: 'string',
@@ -353,6 +370,12 @@ async function serve($: EngineInterface, kind: 'ask' | 'image', e: Record<string
 }
 
 export const register: Register = on => {
+  on('prompt.compose', async ($, e, next) => {
+    const composed = await next(e)
+
+    return { sections: [...composed.sections, { id: 'chatgpt:ask', text: PROMPT, scope: 'session' as const }] }
+  })
+
   on('session.start', async ($, e, next) => {
     await $.tool.register({
       name: 'ask',
