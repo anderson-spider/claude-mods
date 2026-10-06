@@ -12,6 +12,7 @@ import {
   inputFor,
   isHardBlocker,
   jobsReport,
+  limitMs,
   listTabs,
   mimeOf,
   openedTab,
@@ -485,4 +486,15 @@ test('the system prompt tells Claude to reach for ask on its own', async ($, on)
   expect(section).toMatch(/on your own, without being asked/)
   expect(section).toMatch(/Luizalabs/)
   expect(section).toMatch(/`mcp__chatgpt__image` spends the person's image quota/)
+})
+
+test('limitMs reads minutes, falls back and caps', () => {
+  expect(limitMs(undefined, 6)).toBe(360_000)
+  expect(limitMs('abc', 6)).toBe(360_000)
+  expect(limitMs(0, 6)).toBe(360_000)
+  expect(limitMs(-3, 6)).toBe(360_000)
+  expect(limitMs(NaN, 6)).toBe(360_000)
+  expect(limitMs(0.5, 6)).toBe(30_000)
+  expect(limitMs('12', 6)).toBe(720_000)
+  expect(limitMs(1e9, 6)).toBe(86_400_000)
 })

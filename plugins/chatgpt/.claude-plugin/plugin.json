@@ -1,8 +1,22 @@
 {
   "name": "chatgpt",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Asks the user's logged-in ChatGPT, or has it generate an image, through terminal-browser, and saves the result locally.",
   "author": {
     "name": "anderson-spider"
+  },
+  "userConfig": {
+    "foregroundMinutes": {
+      "type": "number",
+      "title": "Foreground wait (minutes)",
+      "description": "How long a request waits for ChatGPT's answer before it keeps going as a background job.",
+      "default": 6
+    },
+    "backgroundMinutes": {
+      "type": "number",
+      "title": "Background job limit (minutes)",
+      "description": "How long a background job keeps waiting for ChatGPT before it gives up.",
+      "default": 30
+    }
   }
 }
