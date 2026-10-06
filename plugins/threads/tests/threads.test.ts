@@ -19,6 +19,8 @@ import {
 import type { Probe, RunResult } from '../hooks/probe'
 import { claudeAnswerAfter, claudeTranscriptPath, lineCount } from '../hooks/transcript'
 import { branchFor, classify, currentCommit, repoParent } from '../hooks/worktree'
+import { adopt, capError, emptyRegistry, liveOf, newId, reconcile } from '../hooks/registry'
+import type { Registry, Thread } from '../hooks/registry'
 import { readSettings } from '../hooks/settings'
 
 const out = (stdout: string, exitCode = 0, stderr = ''): RunResult => ({ exitCode, stdout, stderr })
@@ -230,4 +232,73 @@ test('claudeAnswerAfter skips tool-only messages and corrupt lines, and finds no
   expect(claudeAnswerAfter(log, 0)).toEqual({ text: 'working on it', model: 'claude-sonnet-5-5' })
   expect(claudeAnswerAfter([asked, said([tool])].join('\n'), 1)).toBeUndefined()
   expect(claudeAnswerAfter([asked, said([text('old')]), asked, said([tool])].join('\n'), 2)).toBeUndefined()
+})
+
+const thread = (over: Partial<Thread> = {}): Thread => ({
+  id: 'abc123',
+  owner: 'lead-1',
+  title: 'Fix it',
+  agent: 'claude',
+  stage: 'prompted',
+  status: 'working',
+  workspaceId: 'w2',
+  paneId: 'w2:p1',
+  agentName: 't-abc123',
+  path: '/wt',
+  branch: 'threads/abc123',
+  base: 'aaa',
+  createdAt: 1000,
+  ...over,
+})
+const registryOf = (...threads: Thread[]): Registry => ({ ...emptyRegistry(), threads })
+const agentNamed = (name: string) => ({ name, kind: 'claude', status: 'idle', paneId: 'p', workspaceId: 'w', cwd: '/wt' })
+
+test('liveOf and capError count only the owner\'s live helpers', () => {
+  const reg = registryOf(
+    thread({ id: 'a', status: 'working' }),
+    thread({ id: 'b', status: 'idle' }),
+    thread({ id: 'c', status: 'exited' }),
+    thread({ id: 'd', status: 'closed' }),
+    thread({ id: 'e', status: 'orphan' }),
+    thread({ id: 'f', status: 'branch-left' }),
+    thread({ id: 'g', owner: 'lead-2', status: 'working' }),
+  )
+
+  expect(liveOf(reg, 'lead-1').map(one => one.id)).toEqual(['a', 'b'])
+  expect(capError(reg, 'lead-1', 3)).toBeUndefined()
+  expect(capError(reg, 'lead-1', 2)).toMatch(/a, b.*threads_close/s)
+})
+
+test('adopt moves a helper to another owner and refuses an unknown id', () => {
+  const reg = registryOf(thread())
+
+  expect(adopt(reg, 'abc123', 'lead-2')?.threads[0]?.owner).toBe('lead-2')
+  expect(reg.threads[0]?.owner).toBe('lead-1')
+  expect(adopt(reg, 'nope', 'lead-2')).toBeUndefined()
+})
+
+test('reconcile marks lost helpers and leaves everything else alone', () => {
+  const reg = registryOf(
+    thread({ id: 'a', agentName: 't-a', stage: 'prompted', status: 'working' }),
+    thread({ id: 'b', agentName: 't-b', stage: 'creating', status: 'starting' }),
+    thread({ id: 'c', agentName: 't-c', stage: 'worktree', status: 'starting' }),
+    thread({ id: 'd', agentName: 't-d', stage: 'agent', status: 'starting' }),
+    thread({ id: 'e', agentName: 't-e', owner: 'lead-2', status: 'working' }),
+    thread({ id: 'f', agentName: 't-f', status: 'working' }),
+    thread({ id: 'g', agentName: 't-g', status: 'closed' }),
+  )
+  const next = reconcile(reg, 'lead-1', [agentNamed('t-f'), agentNamed('stranger')])
+  const statuses = Object.fromEntries(next.threads.map(one => [one.id, one.status]))
+
+  expect(statuses).toEqual({ a: 'exited', b: 'orphan', c: 'orphan', d: 'exited', e: 'working', f: 'working', g: 'closed' })
+  expect(next.threads.some(one => one.agentName === 'stranger')).toBe(false)
+  expect(reconcile(reg, 'lead-1', undefined)).toBe(reg)
+})
+
+test('newId gives 6 base36 characters that are not taken', () => {
+  const picks = [...Array(6).fill(10), ...Array(6).fill(11)]
+  const random = () => ((picks.shift() ?? 0) + 0.5) / 36
+
+  expect(newId(new Set(['aaaaaa']), random)).toBe('bbbbbb')
+  expect(newId(new Set())).toMatch(/^[0-9a-z]{6}$/)
 })
