@@ -159,7 +159,7 @@ test('ask refuses a logged-out page without sending anything', async () => {
 
 // The words the engine used when auto mode refused a plugin's browser call.
 const REFUSED =
-  'chatgpt-ask: $.mcp.call(Claude_Browser, navigate) refused: The server-side auto mode classifier gave no verdict'
+  'chatgpt: $.mcp.call(Claude_Browser, navigate) refused: The server-side auto mode classifier gave no verdict'
 
 test('isRefusal tells a refused call from one that failed after running', () => {
   expect(isRefusal(new Error(REFUSED))).toBe(true)

@@ -18,8 +18,8 @@
       "description": "Holds a git commit or git push on the protected branch and shows what would go in, with Proceed and Cancel."
     },
     {
-      "name": "chatgpt-ask",
-      "source": "./plugins/chatgpt-ask",
+      "name": "chatgpt",
+      "source": "./plugins/chatgpt",
       "description": "Lets Claude ask your logged-in ChatGPT, or have it generate an image, through the built-in browser pane, and saves the result locally."
     },
     {

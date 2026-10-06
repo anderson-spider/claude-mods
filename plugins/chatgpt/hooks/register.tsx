@@ -2,7 +2,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import { ask, extensionOf, fallbackRouter, fileName, generateImage, isChatUrl, parseTabId, parseTabs, staysOnChatgpt, summary, typeOf } from './chatgpt'
 import type { AskResult, Browser, Clipboard, ImageResult, Reference } from './chatgpt'
 
-const PLUGIN = 'chatgpt-ask'
+const PLUGIN = 'chatgpt'
 
 // The desktop app's built-in browser pane, as its MCP tools name it.
 const BROWSER_SERVER = 'Claude_Browser'
@@ -19,7 +19,7 @@ const IMAGE_BOUNDARIES =
   'stored, and never present it as evidence of a real or in-game state.'
 
 const CHAT_URL_HELP =
-  'Optional. The chat URL a previous chatgpt_ask or chatgpt_image returned, to continue that chat on the same ' +
+  'Optional. The chat URL a previous ask or image call returned, to continue that chat on the same ' +
   'subject; left out, a new chat starts.'
 
 // Only one question at a time: they share the same browser tab.
@@ -86,7 +86,7 @@ function browserOf($: EngineInterface): Browser {
 }
 
 async function outDir($: EngineInterface): Promise<string> {
-  return `${((await $.env.get('TMPDIR')) ?? '/tmp').replace(/\/$/, '')}/chatgpt-ask`
+  return `${((await $.env.get('TMPDIR')) ?? '/tmp').replace(/\/$/, '')}/chatgpt`
 }
 
 async function run($: EngineInterface, prompt: string, chatUrl?: string, out?: string): Promise<AskResult & { path?: string }> {
@@ -206,7 +206,7 @@ const chatUrlOf = (value: unknown) => (typeof value === 'string' && value.trim()
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.tool.register({
-      name: 'chatgpt_ask',
+      name: 'ask',
       description:
         "Sends a self-contained question to the user's logged-in ChatGPT (chatgpt.com in Claude Code's built-in " +
         'browser pane), waits for the answer, saves it as Markdown and returns the file path, the chat URL and ' +
@@ -230,7 +230,7 @@ export const register: Register = on => {
       },
     })
     await $.tool.register({
-      name: 'chatgpt_image',
+      name: 'image',
       description:
         "Generates or edits an image with the user's logged-in ChatGPT (chatgpt.com in Claude Code's built-in " +
         'browser pane), optionally from a local reference image, waits for it and saves it locally; returns the ' +
@@ -278,10 +278,10 @@ export const register: Register = on => {
     const prefix = `mcp__${BROWSER_SERVER}__`
     if (next.origin.plugin !== PLUGIN || !e.tool.startsWith(prefix)) return next(e)
     if (!staysOnChatgpt(e.tool.slice(prefix.length), e.input, chatTabs)) return next(e)
-    return { decision: 'allow' as const, reason: 'chatgpt-ask driving chatgpt.com in the browser pane' }
+    return { decision: 'allow' as const, reason: 'chatgpt plugin driving chatgpt.com in the browser pane' }
   })
 
-  on('tool.call', { tool: 'mcp__chatgpt-ask__chatgpt_ask' }, async ($, e) => {
+  on('tool.call', { tool: 'mcp__chatgpt__ask' }, async ($, e) => {
     const prompt = typeof e.prompt === 'string' ? e.prompt.trim() : ''
     if (!prompt) return { result: 'Give a non-empty prompt.', isError: true as const }
     const out = typeof e.out === 'string' && e.out.startsWith('/') ? e.out : undefined
@@ -307,7 +307,7 @@ export const register: Register = on => {
     }
   })
 
-  on('tool.call', { tool: 'mcp__chatgpt-ask__chatgpt_image' }, async ($, e) => {
+  on('tool.call', { tool: 'mcp__chatgpt__image' }, async ($, e) => {
     const prompt = typeof e.prompt === 'string' ? e.prompt.trim() : ''
     if (!prompt) return { result: 'Give a non-empty prompt.', isError: true as const }
     const out = typeof e.out === 'string' && e.out.startsWith('/') ? e.out : undefined
