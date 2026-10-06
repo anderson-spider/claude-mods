@@ -1,0 +1,9 @@
+{
+  "name": "codex-computer-use",
+  "version": "0.3.1",
+  "description": "Routes desktop app control on this Mac through Codex computer use (the codex-cu helper) instead of Claude's own computer use; /codex-cu on|off.",
+  "author": {
+    "name": "anderson-spider"
+  },
+  "types": "./types/index.d.ts"
+}

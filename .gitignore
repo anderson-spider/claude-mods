@@ -1,2 +1,8 @@
 # Tipagens que o Claude Code grava ao carregar cada plugin
 plugins/*/.claude-plugin/types/
+
+# Estado e socket do helper do codex-computer-use, se ele rodar direto da pasta
+plugins/codex-computer-use/helper/state/
+plugins/codex-computer-use/helper/run/
+# O código do helper fica em helper/lib/, que um ignore global de lib/ esconderia
+!plugins/codex-computer-use/helper/lib/

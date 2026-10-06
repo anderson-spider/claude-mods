@@ -9,9 +9,11 @@ Marketplace of [Claude Code](https://claude.com/claude-code) plugins made by and
 | [blast-radius](plugins/blast-radius) | Holds a risky Bash command and shows what it would change before it runs. |
 | [branch-guard](plugins/branch-guard) | Holds a `git commit` or `git push` on the protected branch and shows what would go in. |
 | [chatgpt](plugins/chatgpt) | Lets Claude ask your logged-in ChatGPT, or have it generate an image, in the built-in browser pane, and saves the result locally. |
+| [codex-computer-use](plugins/codex-computer-use) | Routes native Mac app control through Codex computer use from the ChatGPT app instead of Claude's own computer use, asking before each new app. |
 | [pr-preview](plugins/pr-preview) | Holds a `gh pr create`, `gh pr edit`, `glab mr create` or `glab mr update`, previews the title and description and flags what breaks the conventions. |
 | [review-panel](plugins/review-panel) | Opens a read-only pane with the worktree diff, the open pull or merge request, its CI jobs and the comments already made. |
 | [tailscale](plugins/tailscale) | Lets Claude query and modify your tailnet through the Tailscale API. |
+| [usage-line](plugins/usage-line) | Keeps the context fill and the 5h and 7d rate-limit windows above the prompt, as the status line shows them. |
 
 ## Install
 
@@ -22,9 +24,11 @@ Inside Claude Code, add the marketplace and install the plugin:
 /plugin install blast-radius@spider-marketplace
 /plugin install branch-guard@spider-marketplace
 /plugin install chatgpt@spider-marketplace
+/plugin install codex-computer-use@spider-marketplace
 /plugin install pr-preview@spider-marketplace
 /plugin install review-panel@spider-marketplace
 /plugin install tailscale@spider-marketplace
+/plugin install usage-line@spider-marketplace
 ```
 
 To use a local copy instead of GitHub, pass the folder path:
@@ -81,6 +85,37 @@ Requirements:
 
 Limitations: it reads chatgpt.com's page, so a change in ChatGPT's interface can break sending or reading until the selectors in `hooks/chatgpt.ts` are updated; a generated image is recognised by its alt text ("Imagem 1 gerada", "Generated image 1"); it waits up to 6 minutes for an answer or an image; only one request runs at a time.
 
+## codex-computer-use
+
+Lets Claude control native Mac apps (Calculator, TextEdit, Finder…) through Codex computer use, the engine bundled with the ChatGPT desktop app, which clicks and types inside apps in the background without taking over the mouse. Claude still decides what to do; Codex carries out the clicks and typing.
+
+It has three pieces:
+
+| Piece | What it does |
+| --- | --- |
+| `helper/launch.mjs` (the `codex-cu` connection) | Reads `mcpServers.cua_repl` from the newest `~/.codex/plugins/cache/openai-bundled/unified-computer-use/<version>/.mcp.json` and starts it with the desktop surface only, so a ChatGPT update needs no edit (a protocol change can still break it). `--check` lists what it would start, without env values. |
+| `helper/helper.mjs` (LaunchAgent `com.anderson-spider.codex-cu`) | MCP client of that connection, served on `~/.claude/mcp/codex-cu/run/helper.sock` (directory `0700`, socket `0600`). One Codex session per caller (a Claude session, or `<session>/<agent>` for a subagent), calls serialized per caller, app approvals answered only from your choices, an app owned by one caller until 2 minutes after its last call, at most 8 Codex sessions (the quietest idle one makes room), 15 minutes idle expiry. |
+| the plugin | The `mcp__codex-computer-use__codex_cu` tool, the approval band, the `/codex-cu` command, a system-prompt section on how to drive the API, and a block on Claude's own desktop computer-use tools (`mcp__computer-use__*`, `mcp__remote-devices__computer*`) while on. Browsers, CLIs and purpose-built tools stay available. |
+
+The first use of an app asks in a band above the prompt: `This session` (key `1`), `Always` (key `2`, also saved in Codex's own `ComputerUseAppApprovals.json`) or `No` (key `3`). A `No` is kept for that caller and the call is refused without asking again; organization and safety blocks from Codex pass through as they are. The first call of a new or reset Codex session must be one documented entry call (`await cua.getState();` or `let app = await cua.getApp("Calculator");`), whose result carries the API documentation.
+
+```
+/codex-cu on | off | status
+/codex-cu forget            drop this session's answers (This session / No)
+/codex-cu forget <app>      take <app> off "always allow" in the helper and in Codex
+/codex-cu auto-approve on | off
+```
+
+Requirements: macOS, the ChatGPT desktop app with Computer Use turned on in Codex (`/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node` and the `.mcp.json` above). After installing the plugin, install the helper once from a clone:
+
+```
+plugins/codex-computer-use/helper/install.sh
+```
+
+It copies the helper to `~/.claude/mcp/codex-cu` (keeping `state/`, where the approvals and the log live) and loads the LaunchAgent; run it again after a helper change. `uninstall.sh` removes the LaunchAgent and leaves the files. To load the plugin from the folder instead of the marketplace, pass `--plugin-dir plugins/codex-computer-use`, which adds it to `CLAUDE_CODE_PLUGIN_DIRS`.
+
+Limitations: ownership is checked for apps named as string literals in `cua.getApp(...)` and for the app each result reports, so an app reached through a variable is owned only after its first call; Codex refuses an action when the app changed since it was last read ("The user changed …"), so read and act in the same call.
+
 ## pr-preview
 
 When Claude calls Bash with `gh pr create`, `gh pr edit`, `glab mr create` or `glab mr update` (also `glab-work`, `glab-personal` and other `glab-*` wrappers), PR Preview holds the call and shows in the band above the prompt what would be opened or changed: the title, the branches, the assignee, the labels and the start of the description, with `Proceed` (key `1`), `Fix` (key `2`, only when something is wrong) and `Cancel` (key `3`). On `Fix`, Claude gets the list of problems with what to change and reruns the command; on `Cancel`, it gets the refusal.
@@ -124,6 +159,16 @@ To update the ACL without overwriting someone else's edit: do a `GET /tailnet/-/
 
 `TS_API_KEY` must be a `tskey-api-...` key. An OAuth secret `tskey-client-...` is not valid as a Bearer without a token exchange, which the plugin does not do.
 
+## usage-line
+
+Keeps three cards above the prompt with what the status line's second row shows. Each card has the label and the percent on the left and the detail on the right: `ctx 24%` with the context window's tokens (`244k / 1M`), `5h 23% ▼50` and `7d 7% ●` with the time to the window's reset (`1h 21m`, `6d 14h`).
+
+The pace is the use minus the share of the window already gone, in points: `▼50` in green has room to spare, `▲17` in red is spending fast, and `●` is within 5 points of the pace either way; it is left out in the window's first 1%. Only the percent is bold: it stays in the text colour below 50%, turns amber from 50% and red from 80%, and the card's border shows in that colour; at rest a card is a plain fill with no border. The green and red are the desktop diff's (`#2FD84C`, `#FF2B56`); each colour has a dark-theme and a light-theme shade, picked from the `theme` in `/config`. On the desktop app the text is drawn as SVG in the monospace font the diff header uses, so it cannot be selected.
+
+The figures are the ones Claude Code hands the status line (`$.session.usage()`); they refresh after each turn, when a window moves a point, and every 30 seconds for the countdown. On a band too narrow or too short for the cards it falls back to one line, `ctx 24% · 244k / 1M  │  5h 23% ▼50 · 1h 21m  │  7d 7% ● · 6d 14h`. It gives way to another plugin's band (blast-radius, branch-guard, pr-preview) and to surveys.
+
+Limitations: off a subscription there are no rate-limit windows, so only `ctx` shows; with the `auto` theme, or when the desktop app's theme differs from `/config`'s, it uses the dark shades.
+
 ## Development
 
 To edit a plugin with automatic reload, point Claude Code straight at its folder, with `claude --plugin-dir` or in the `env` of `~/.claude/settings.json`:
@@ -146,10 +191,15 @@ claude plugin validate plugins/branch-guard
 claude plugin test plugins/branch-guard
 claude plugin validate plugins/chatgpt
 claude plugin test plugins/chatgpt
+claude plugin validate plugins/codex-computer-use
+claude plugin test plugins/codex-computer-use
+/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node --test plugins/codex-computer-use/helper/test/helper.test.mjs
 claude plugin validate plugins/pr-preview
 claude plugin test plugins/pr-preview
 claude plugin validate plugins/review-panel
 claude plugin test plugins/review-panel
 claude plugin validate plugins/tailscale
 claude plugin test plugins/tailscale
+claude plugin validate plugins/usage-line
+claude plugin test plugins/usage-line
 ```

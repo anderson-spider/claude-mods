@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Claude Code plugin marketplace (`anderson-spider/spider-marketplace`). It currently has six plugins: `blast-radius` (holds destructive commands), `branch-guard` (holds commit and push on the protected branch), `chatgpt` (asks the user's ChatGPT, or has it generate an image, in the browser pane), `pr-preview` (holds `gh pr create`, `gh pr edit`, `glab mr create` and `glab mr update` and previews them), `review-panel` (read-only pane with the diff, the open PR, its CI jobs and its comments) and `tailscale` (tools to query and modify the tailnet). The README and other documentation are in English; code comments and user-facing messages are in English too. Pull request titles and descriptions are in English.
+Claude Code plugin marketplace (`anderson-spider/spider-marketplace`). It currently has eight plugins: `blast-radius` (holds destructive commands), `branch-guard` (holds commit and push on the protected branch), `chatgpt` (asks the user's ChatGPT, or has it generate an image, in the browser pane), `codex-computer-use` (routes native Mac app control through Codex computer use, with a local helper), `pr-preview` (holds `gh pr create`, `gh pr edit`, `glab mr create` and `glab mr update` and previews them), `review-panel` (read-only pane with the diff, the open PR, its CI jobs and its comments), `tailscale` (tools to query and modify the tailnet) and `usage-line` (context and rate-limit usage above the prompt). The README and other documentation are in English; code comments and user-facing messages are in English too. Pull request titles and descriptions are in English.
 
 ## Structure
 
@@ -16,9 +16,12 @@ claude plugin validate plugins/blast-radius    # validates the plugin
 claude plugin test plugins/blast-radius        # runs tests/blast-radius.test.ts
 claude plugin test plugins/branch-guard        # same, for branch-guard
 claude plugin test plugins/chatgpt             # same, for chatgpt
+claude plugin test plugins/codex-computer-use  # same, for codex-computer-use (the plugin side)
+/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node --test plugins/codex-computer-use/helper/test/helper.test.mjs   # its helper
 claude plugin test plugins/pr-preview          # same, for pr-preview
 claude plugin test plugins/review-panel        # same, for review-panel
 claude plugin test plugins/tailscale           # same, for tailscale
+claude plugin test plugins/usage-line          # same, for usage-line
 claude --plugin-dir plugins/blast-radius       # loads the plugin with automatic reload
 ```
 
@@ -44,6 +47,19 @@ Details that only make sense when reading both sides:
 ## branch-guard
 
 Same design as blast-radius (pure `hooks/guard.ts` with an injected `Probe`, `hooks/register.tsx` with `hold`/`draw`), with its own state (`branch-guard`/`held`). `classify` raises `commit` and `publish`; `isProtectedTarget` decides, asynchronously, whether the target branch is protected. The parser (`parse`, `resolve`, `locate`, `isTempRepo`) is a **copy** of the one in `blast-radius/hooks/risk.ts`, because a plugin cannot import code from another: a fix on one side must be carried to the other. Force push is left out on purpose, since it belongs to blast-radius.
+
+## codex-computer-use
+
+Two halves that talk over a Unix socket: the plugin (`hooks/`, runs in the hooks environment) and `helper/` (plain Node ESM, run by the ChatGPT app's own `node`, installed by `helper/install.sh` into `~/.claude/mcp/codex-cu` as LaunchAgent `com.anderson-spider.codex-cu`). The plugin cannot answer an MCP elicitation, which is why the helper exists: it is the MCP client of Codex's `cua_repl` server and answers its "Allow Computer Use to use <app>?" questions from the person's choices.
+
+- `helper/launch.mjs` + `lib/config.mjs`: the `codex-cu` connection. Picks the newest `~/.codex/plugins/cache/openai-bundled/unified-computer-use/<version>/.mcp.json`, starts `mcpServers.cua_repl` with `CUA_REPL_ENABLED_SURFACES=computer` (the browser surface needs Codex turn metadata Claude cannot send). Never prints env values.
+- `lib/mcp-client.mjs`: newline-delimited JSON-RPC over stdio; declares `elicitation: { form: {} }` (without it node_repl refuses `getApp`) and hands `elicitation/create` to a callback.
+- `lib/hub.mjs`: one session per caller (`<session>` or `<session>/<agent>`), a promise queue per caller, the entry-call check for a fresh session, ownership (`lib/owners.mjs`, by bundle id, lapsing `LEASE_MS` after the holder's last call), `MAX_SESSIONS`, idle sweep, `forget`. Apps are known before a call from `getApp("…")` literals resolved with Spotlight (`lib/apps.mjs`) and after it from the result's `_meta["codex/toolSurface"].app.appId`.
+- `lib/approvals.mjs`: `decide` returns `deny`, `session`, `always`, `auto` or `ask` in that order; only the first three answers and the auto-approve switch accept. Answering `_meta.persist: "always"` makes node_repl save the app in Codex's `ComputerUseAppApprovals.json`, which node_repl then answers by itself; `lib/codex-approvals.mjs` only ever removes from that file.
+- The plugin: `hooks/helper.ts` posts with `$.http.fetch({ socketPath })` and asks launchd to `kickstart` the helper when nothing listens; `hooks/routing.ts` is pure (prompt section, deny text, command parsing, model-facing answers); `hooks/register.tsx` registers `codex_cu` and `/codex-cu`, holds a `needs_approval` call with the same `waiting`/`hold` design as blast-radius (band in `AbovePrompt`, 5 minute limit) and retries after an allow.
+- A declined approval comes back as `needs_approval`; the call is run again only after the person allows, so the retried code runs from the start.
+- The enabled switch lives in `$.store` (`enabled`, default on). `prompt.compose` runs at every render, so it needs no invalidation.
+- Helper tests drive the real hub and client against `helper/test/fake-server.mjs` and always point `codexApprovals` at a temp file; never let a test reach the real `ComputerUseAppApprovals.json`.
 
 ## pr-preview
 
@@ -71,6 +87,17 @@ Holds nothing: it registers two tools with `$.tool.register` in `session.start` 
 - `validate` rejects `$.http.fetch` passed as a value; that is why `register.tsx` wraps it in `(url, init) => $.http.fetch(url, init)`.
 - `result` of the `tool.call` of a custom tool is a string or array, not an object, and `isError` only accepts `true` (omit it instead of `false`).
 - The test uses only the functions in `hooks/api.ts` with a fake `fetch`; there is no fake host.
+
+## usage-line
+
+Holds nothing and keeps no state: a `ui.render` hook on `{ component: 'AbovePrompt' }` reads `$.session.usage()`, `$.clock.now()` and the `theme` row of `$.config.list()` on every draw, and `session.measure` and a 30 s `$.clock.every` (started once in `session.start`) call `$.ui.invalidate('ui.render')` to redraw. `hooks/usage.ts` is pure: `items` turns the usage into one `Item` per reading (`ctx`, `5h`, `7d`), each with a `left` side (label, percent, pace) and a `right` one (tokens or the time to the reset) as toned `Segment`s, with the same figures as the user's status line script (`formatTokens`, `formatReset`, `paceOf`: use minus the elapsed share of the window, left out in its first 1%). `paceSegment` reads the pace in points (`▼N`, `▲N`) and as `●` within `PACE_TOLERANCE` (5). `segments` joins the cards into the one-line fallback; `cardWidth` splits `bodyColumns` evenly and returns undefined when a card's two sides do not fit or the band has under 3 rows. `PALETTE` holds a dark and a light shade per colour (raw colours do not follow the theme), chosen by `isLightTheme`. Details:
+
+- The hook calls `next(e)` first and returns its result when it is not `{ type: 'engine' }`: another plugin's band (blast-radius, branch-guard, pr-preview) or a survey wins.
+- A card is a filled `Box` (`fillOf`) with `justifyContent: 'space-between'`. Its round border is always drawn, in the fill's own colour at rest (`borderOf`), so a card that crosses 50% shows its border without changing height.
+- Only the percent is bold (`styleOf`); the label and the details share the muted gray.
+- `session.start` calls `$.ui.status(undefined)` to clear the status line an early build pinned; the host keeps it across reloads until cleared.
+- On `desktop` each side is an `Svg` from `svgLine` (monospace `<text>` with one coloured `<tspan>` per segment, its width measured generously by `svgWidth`, wider for `▼`, `▲`, `●` and `│`, which the font may lack); the `Svg` gets no `width` prop, so a side wider than its room scales down instead of being cut. `Text` takes no font prop and the desktop draws it in its UI font, not the diff header's monospace; the terminal keeps `Text`.
+- No progress bars: the desktop surface does not draw `█`/`░` at a fixed cell width, so a bar sized in columns breaks there.
 
 ## Tests
 
