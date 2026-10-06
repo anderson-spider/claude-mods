@@ -11,6 +11,7 @@ Marketplace of [Claude Code](https://claude.com/claude-code) plugins made by and
 | [pr-preview](plugins/pr-preview) | Holds a `gh pr create`, `gh pr edit`, `glab mr create` or `glab mr update`, previews the title and description and flags what breaks the conventions. |
 | [review-panel](plugins/review-panel) | Opens a read-only pane with the worktree diff, the open pull or merge request, its CI jobs and the comments already made. |
 | [tailscale](plugins/tailscale) | Lets Claude query and modify your tailnet through the Tailscale API. |
+| [usage-line](plugins/usage-line) | Keeps the context fill and the 5h and 7d rate-limit windows above the prompt, as the status line shows them. |
 
 ## Install
 
@@ -23,6 +24,7 @@ Inside Claude Code, add the marketplace and install the plugin:
 /plugin install pr-preview@spider-marketplace
 /plugin install review-panel@spider-marketplace
 /plugin install tailscale@spider-marketplace
+/plugin install usage-line@spider-marketplace
 ```
 
 To use a local copy instead of GitHub, pass the folder path:
@@ -100,6 +102,16 @@ To update the ACL without overwriting someone else's edit: do a `GET /tailnet/-/
 
 `TS_API_KEY` must be a `tskey-api-...` key. An OAuth secret `tskey-client-...` is not valid as a Bearer without a token exchange, which the plugin does not do.
 
+## usage-line
+
+Keeps three cards above the prompt with what the status line's second row shows. Each card has the label and the percent on the left and the detail on the right: `ctx 24%` with the context window's tokens (`244k / 1M`), `5h 23% ▼50` and `7d 7% ●` with the time to the window's reset (`1h 21m`, `6d 14h`).
+
+The pace is the use minus the share of the window already gone, in points: `▼50` in green has room to spare, `▲17` in red is spending fast, and `●` is within 5 points of the pace either way; it is left out in the window's first 1%. Only the percent is bold: it stays in the text colour below 50%, turns amber from 50% and red from 80%, and the card's border shows in that colour; at rest a card is a plain fill with no border. The green and red are the desktop diff's (`#2FD84C`, `#FF2B56`); each colour has a dark-theme and a light-theme shade, picked from the `theme` in `/config`. On the desktop app the text is drawn as SVG in the monospace font the diff header uses, so it cannot be selected.
+
+The figures are the ones Claude Code hands the status line (`$.session.usage()`); they refresh after each turn, when a window moves a point, and every 30 seconds for the countdown. On a band too narrow or too short for the cards it falls back to one line, `ctx 24% · 244k / 1M  │  5h 23% ▼50 · 1h 21m  │  7d 7% ● · 6d 14h`. It gives way to another plugin's band (blast-radius, branch-guard, pr-preview) and to surveys.
+
+Limitations: off a subscription there are no rate-limit windows, so only `ctx` shows; with the `auto` theme, or when the desktop app's theme differs from `/config`'s, it uses the dark shades.
+
 ## Development
 
 To edit a plugin with automatic reload, point Claude Code straight at its folder, with `claude --plugin-dir` or in the `env` of `~/.claude/settings.json`:
@@ -126,4 +138,6 @@ claude plugin validate plugins/review-panel
 claude plugin test plugins/review-panel
 claude plugin validate plugins/tailscale
 claude plugin test plugins/tailscale
+claude plugin validate plugins/usage-line
+claude plugin test plugins/usage-line
 ```

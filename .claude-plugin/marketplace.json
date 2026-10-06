@@ -31,6 +31,11 @@
       "name": "tailscale",
       "source": "./plugins/tailscale",
       "description": "Lets Claude query and modify the tailnet through the Tailscale API, using TS_API_KEY."
+    },
+    {
+      "name": "usage-line",
+      "source": "./plugins/usage-line",
+      "description": "Keeps the context fill and the 5h and 7d rate-limit windows above the prompt, in three cards with the diff's green and red."
     }
   ]
 }
