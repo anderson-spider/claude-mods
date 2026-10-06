@@ -13,6 +13,7 @@ import {
   parseTabId,
   parseTabs,
   sendScript,
+  staysOnChatgpt,
   summary,
   typeOf,
 } from '../hooks/chatgpt'
@@ -181,6 +182,20 @@ test('fallbackRouter falls back only on a refusal, and stays on the fallback aft
   expect(await route(direct(REFUSED), fallback)).toBe('fallback')
   expect(await route(direct(), fallback)).toBe('fallback')
   expect(seen).toEqual(['direct', 'direct', 'direct', 'fallback', 'fallback'])
+})
+
+test('staysOnChatgpt allows only pane calls that stay on chatgpt.com', () => {
+  const tabs = new Set(['seed'])
+  expect(staysOnChatgpt('tabs_context', {}, tabs)).toBe(true)
+  expect(staysOnChatgpt('tabs_create', {}, tabs)).toBe(true)
+  expect(staysOnChatgpt('preview_start', { url: 'https://chatgpt.com/' }, tabs)).toBe(true)
+  expect(staysOnChatgpt('navigate', { tabId: 't1', url: 'https://chatgpt.com/c/abc-123' }, tabs)).toBe(true)
+  expect(staysOnChatgpt('navigate', { tabId: 't1', url: 'https://example.com/' }, tabs)).toBe(false)
+  expect(staysOnChatgpt('navigate', { tabId: 't1', url: 'https://chatgpt.com.evil.io/' }, tabs)).toBe(false)
+  expect(staysOnChatgpt('preview_start', { name: 'dev' }, tabs)).toBe(false)
+  expect(staysOnChatgpt('javascript_tool', { action: 'javascript_exec', tabId: 'seed', text: '1' }, tabs)).toBe(true)
+  expect(staysOnChatgpt('javascript_tool', { action: 'javascript_exec', tabId: 'other', text: '1' }, tabs)).toBe(false)
+  expect(staysOnChatgpt('computer', { action: 'left_click' }, tabs)).toBe(false)
 })
 
 test('ask sends the prompt once even when the send fails after running', async () => {

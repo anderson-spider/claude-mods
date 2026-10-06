@@ -1,6 +1,6 @@
 {
   "name": "chatgpt-ask",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Asks the user's logged-in ChatGPT, or has it generate an image, through Claude Code's built-in browser pane, and saves the result locally.",
   "author": {
     "name": "anderson-spider"

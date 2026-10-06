@@ -1,6 +1,8 @@
 import type { EngineInterface, Register } from 'claude-code'
-import { ask, extensionOf, fallbackRouter, fileName, generateImage, isChatUrl, parseTabId, parseTabs, summary, typeOf } from './chatgpt'
+import { ask, extensionOf, fallbackRouter, fileName, generateImage, isChatUrl, parseTabId, parseTabs, staysOnChatgpt, summary, typeOf } from './chatgpt'
 import type { AskResult, Browser, ImageResult, Reference } from './chatgpt'
+
+const PLUGIN = 'chatgpt-ask'
 
 // The desktop app's built-in browser pane, as its MCP tools name it.
 const BROWSER_SERVER = 'Claude_Browser'
@@ -57,12 +59,17 @@ async function callViaTool($: EngineInterface, name: string, args: Record<string
   return answer.text ?? ''
 }
 
+// The tabs this plugin opened or sent to chatgpt.com: the only ones its
+// `tool.check` hook lets a script run in.
+const chatTabs = new Set<string>()
+
 function browserOf($: EngineInterface): Browser {
   return {
     tabs: async () => parseTabs(await call($, 'tabs_context', {})),
     open: async url => {
       const id = parseTabId(await call($, 'preview_start', { url }))
       if (!id) throw new Error('preview_start did not name a tab')
+      chatTabs.add(id)
       return id
     },
     create: async () => {
@@ -72,6 +79,7 @@ function browserOf($: EngineInterface): Browser {
     },
     navigate: async (tabId, url) => {
       await call($, 'navigate', { tabId, url })
+      chatTabs.add(tabId)
     },
     js: (tabId, text) => call($, 'javascript_tool', { action: 'javascript_exec', tabId, text }),
   }
@@ -215,6 +223,17 @@ export const register: Register = on => {
       description: 'Generates an image with ChatGPT in the browser pane and saves it: /chatgpt-image <prompt>',
     })
     return next(e)
+  })
+
+  // Auto mode's classifier gives no verdict on the pane calls this plugin makes
+  // (no prompt asked for each one), and the pane's tools ask on their own: allow
+  // this plugin's calls that stay on chatgpt.com. The model's own calls, and
+  // anything else, keep the engine's decision.
+  on('tool.check', async (_$, e, next) => {
+    const prefix = `mcp__${BROWSER_SERVER}__`
+    if (next.origin.plugin !== PLUGIN || !e.tool.startsWith(prefix)) return next(e)
+    if (!staysOnChatgpt(e.tool.slice(prefix.length), e.input, chatTabs)) return next(e)
+    return { decision: 'allow' as const, reason: 'chatgpt-ask driving chatgpt.com in the browser pane' }
   })
 
   on('tool.call', { tool: 'mcp__chatgpt-ask__chatgpt_ask' }, async ($, e) => {

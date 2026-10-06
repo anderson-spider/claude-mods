@@ -88,6 +88,29 @@ export function fallbackRouter(): <T>(direct: () => Promise<T>, fallback: () => 
   }
 }
 
+/**
+ * Whether the plugin's own call to the pane's `tool` stays on chatgpt.com, so
+ * its `tool.check` hook may allow it: auto mode's classifier gives no verdict
+ * on a call no prompt asked for. `chatTabs` are the tabs the plugin opened or
+ * sent to chatgpt.com; a script runs only there.
+ */
+export function staysOnChatgpt(tool: string, input: unknown, chatTabs: ReadonlySet<string>): boolean {
+  const args = (input ?? {}) as Record<string, unknown>
+  const onChatgpt = (url: unknown) => typeof url === 'string' && (url === CHATGPT_URL || isChatUrl(url))
+  switch (tool) {
+    case 'tabs_context':
+    case 'tabs_create':
+      return true
+    case 'preview_start':
+    case 'navigate':
+      return onChatgpt(args.url)
+    case 'javascript_tool':
+      return args.action === 'javascript_exec' && typeof args.tabId === 'string' && chatTabs.has(args.tabId)
+    default:
+      return false
+  }
+}
+
 export function parseTabId(text: string): string | undefined {
   return /"?tabId"?\s*[:=]\s*"?([\w-]+)/.exec(text)?.[1]
 }
