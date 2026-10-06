@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Claude Code plugin marketplace (`anderson-spider/spider-marketplace`). It currently has five plugins: `blast-radius` (holds destructive commands), `branch-guard` (holds commit and push on the protected branch), `chatgpt` (asks the user's ChatGPT, or has it generate an image, in terminal-browser), `codex-computer-use` (routes native Mac app control through Codex computer use, with a local helper) and `tailscale` (tools to query and modify the tailnet). The README and other documentation are in English; code comments and user-facing messages are in English too. Pull request titles and descriptions are in English.
+Claude Code plugin marketplace (`anderson-spider/spider-marketplace`). It currently has six plugins: `blast-radius` (holds destructive commands), `branch-guard` (holds commit and push on the protected branch), `chatgpt` (asks the user's ChatGPT, or has it generate an image, in terminal-browser), `codex-computer-use` (routes native Mac app control through Codex computer use, with a local helper), `tailscale` (tools to query and modify the tailnet) and `threads` (background Claude Code helpers in Herdr worktrees). The README and other documentation are in English; code comments and user-facing messages are in English too. Pull request titles and descriptions are in English.
 
 ## Structure
 
@@ -19,6 +19,7 @@ claude plugin test plugins/chatgpt             # same, for chatgpt
 claude plugin test plugins/codex-computer-use  # same, for codex-computer-use (the plugin side)
 /Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node --test plugins/codex-computer-use/helper/test/helper.test.mjs   # its helper
 claude plugin test plugins/tailscale           # same, for tailscale
+claude plugin test plugins/threads             # same, for threads
 claude --plugin-dir plugins/blast-radius       # loads the plugin with automatic reload
 ```
 
@@ -78,6 +79,18 @@ Holds nothing: it registers two tools with `$.tool.register` in `session.start` 
 - `validate` rejects `$.http.fetch` passed as a value; that is why `register.tsx` wraps it in `(url, init) => $.http.fetch(url, init)`.
 - `result` of the `tool.call` of a custom tool is a string or array, not an object, and `isError` only accepts `true` (omit it instead of `false`).
 - The test uses only the functions in `hooks/api.ts` with a fake `fetch`; there is no fake host.
+
+## threads
+
+Starts background Claude Code helpers, each in its own Herdr worktree, and announces when one finishes or needs the person. Same design as blast-radius: pure modules in `hooks/` behind an injected `Probe` (`hooks/probe.ts`: `run`, `read`, `list`, `home`), and `hooks/register.tsx` as the only file that uses `$`.
+
+- `herdr.ts`: argv and JSON of the `herdr` CLI (`worktree create/remove`, `agent start/get/list/prompt/send-keys/read/focus`, `pane close`); errors come back as `{ ok: false, error: { code, message } }` and may be on stdout or stderr. `nativeArgs` builds what goes after `--` in `agent start`: Claude gets `--model --permission-mode [--effort]`, Codex nothing unless a model is given.
+- `worktree.ts`: `repoParent` (the main checkout, which `herdr worktree create --cwd` requires; a linked worktree is refused with `linked_worktree_source`) and `classify`, which says `empty` only when status including ignored files is clean, `HEAD` is the recorded base, the branch is the recorded one and there are no submodules. `herdr worktree remove` deletes the directory even with commits and keeps the branch, so the plugin decides emptiness itself and uses `git branch -d`, never `-D`.
+- `transcript.ts`: `~/.claude/projects/<cwd with / and . as ->/<session>.jsonl`; a prompt's answer is what comes after its **marker** (the transcript's line count when it was sent), so an older answer is never returned.
+- `registry.ts`: the records in `$.store` (key `threads`), shared by every session of the plugin, so each carries its `owner` (the lead's session id); a chat only polls, counts and acts on its own, and `/threads adopt` moves one. `advance` is the per-helper state machine: finished needs `working` seen, a moved `completion_seq`, or a settled idle with an answer on disk, so the initial idle is never announced.
+- `threads.ts`: `start` (records `creating` before the first mutation, rolls back an empty worktree if the helper cannot start), `status`, `answer`, `close` (revalidates pane, agent and folder with `agent get` before acting, closes only its own pane, removes only an `empty` worktree), `poll` (one `agent list` per tick; announcements are saved as `pending` before they are sent and retried if `$.prompt.submit` refuses them) and the `withRegistry` queue.
+- The announcement text of a helper is untrusted: it is delimited as helper output, cut to 4000 characters, and `prompt.compose` adds the `threads:helpers` section telling Claude not to follow it or answer a blocked helper's prompt on its own.
+- `$.clock.every` takes milliseconds. The register-level tests cover the registration, the Herdr gate, the tools, `/threads` and the interval handed to `$.clock.every`; the announcer (`$.prompt.submit`) and a real tick are only exercised by the manual checklist in `docs/VERIFICATION.md`.
 
 ## Tests
 

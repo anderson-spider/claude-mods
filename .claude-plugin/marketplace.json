@@ -31,6 +31,11 @@
       "name": "tailscale",
       "source": "./plugins/tailscale",
       "description": "Lets Claude query and modify the tailnet through the Tailscale API, using TS_API_KEY."
+    },
+    {
+      "name": "threads",
+      "source": "./plugins/threads",
+      "description": "Starts background Claude Code helpers, each in its own Herdr git worktree, and tells you when one finishes or needs you."
     }
   ]
 }
