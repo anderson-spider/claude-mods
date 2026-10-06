@@ -22,6 +22,8 @@ import { branchFor, classify, currentCommit, repoParent } from '../hooks/worktre
 import { SETTLE_MS, adopt, advance, capError, emptyRegistry, liveOf, newId, reconcile } from '../hooks/registry'
 import type { Registry, Thread } from '../hooks/registry'
 import { readSettings } from '../hooks/settings'
+import { briefing, start } from '../hooks/threads'
+import type { Ports } from '../hooks/threads'
 
 const out = (stdout: string, exitCode = 0, stderr = ''): RunResult => ({ exitCode, stdout, stderr })
 const json = (result: unknown) => out(JSON.stringify({ id: 'x', result }))
@@ -361,4 +363,189 @@ test('advance: blocked is announced once per episode and unknown changes nothing
 
   const odd = watched({ status: 'working' })
   expect(advance(odd, seen('unknown'), 14, false)).toEqual({ thread: odd, events: [] })
+})
+
+const CREATED = json({
+  type: 'worktree_created',
+  root_pane: { pane_id: 'w2:p1' },
+  workspace: { workspace_id: 'w2' },
+  worktree: { path: '/wt', branch: 'threads/012345' },
+})
+const STARTED = { ...AGENT, agent_status: 'idle', pane_id: 'w2:p1', workspace_id: 'w2', cwd: '/wt', name: 't-012345', completion_seq: 2, state_change_seq: 3 }
+
+/** What git and herdr answer, by command line; `over` replaces one answer by a short key. */
+const route = (argv: readonly string[], over: Record<string, RunResult> = {}): RunResult => {
+  const [tool, a, b] = argv
+  const line = argv.join(' ')
+
+  if (tool === 'git') {
+    if (line === 'git rev-parse --path-format=absolute --git-common-dir') return over.common ?? out('/repo/.git\n')
+    if (line === 'git rev-parse HEAD') return out('base123\n')
+    if (line === 'git rev-parse --abbrev-ref HEAD') return out('threads/012345\n')
+    if (a === 'branch') return over.branch ?? out('')
+
+    return a === 'rev-list' ? out('0\n') : out('')
+  }
+
+  if (a === 'worktree' && b === 'create') return over.create ?? CREATED
+  if (a === 'worktree' && b === 'remove') return over.remove ?? json({ type: 'worktree_removed' })
+  if (a === 'agent' && b === 'start') return over.start ?? json({ agent: STARTED })
+  if (a === 'agent' && b === 'prompt') return over.prompt ?? json({ agent: STARTED })
+  if (a === 'agent' && b === 'read') return out('Do you want to proceed?\n')
+  if (a === 'agent' && b === 'get') return json({ agent: STARTED })
+
+  return json({ type: 'ok', agents: [STARTED] })
+}
+
+/** Ports over an in-memory registry, a step counter for ids, and a log of what ran and what was saved. */
+const harness = (over: Record<string, RunResult> = {}, registry: Registry = emptyRegistry()) => {
+  const calls: string[][] = []
+  let counter = 0
+  const state = { registry }
+  const ports: Ports = {
+    probe: probeOf(argv => route(argv, over), calls),
+    load: async () => state.registry,
+    save: async next => {
+      state.registry = next
+      calls.push(['save', next.threads[0]?.stage ?? 'none'])
+    },
+    owner: async () => 'lead-1',
+    cwd: async () => '/lead',
+    leadModel: async () => 'claude-opus-5-5',
+    now: () => 1000,
+    random: () => ((counter++ % 36) + 0.5) / 36,
+    sleep: async () => {},
+  }
+  const ran = () => calls.filter(call => call[0] !== 'save').map(call => call.join(' '))
+
+  return { ports, calls, state, ran, herdr: () => calls.filter(call => call[0] === 'herdr') }
+}
+const SETTINGS = readSettings(undefined)
+
+test('threads_start creates the worktree, starts the helper and sends the briefing, in that order', async () => {
+  const { ports, calls, state, herdr } = harness()
+  const result = await start(ports, SETTINGS, { task: 'Fix the bug', title: 'Fix it' })
+  const prompt = calls.find(call => call.slice(0, 3).join(' ') === 'herdr agent prompt')?.[4] ?? ''
+
+  expect(result.isError).toBeUndefined()
+  expect(result.text).toMatch(/012345/)
+  expect(result.text).toMatch(/threads\/012345/)
+  expect(result.text).toMatch(/\/wt/)
+  expect(calls.filter(call => call[0] !== 'save')).toEqual([
+    ['git', 'rev-parse', '--path-format=absolute', '--git-common-dir'],
+    ['git', 'rev-parse', 'HEAD'],
+    ['herdr', 'worktree', 'create', '--cwd', '/repo', '--branch', 'threads/012345', '--base', 'base123', '--label', 'Fix it', '--no-focus'],
+    ['herdr', 'agent', 'start', 't-012345', '--kind', 'claude', '--pane', 'w2:p1', '--timeout', '60000', '--', '--model', 'sonnet', '--permission-mode', 'acceptEdits'],
+    ['herdr', 'agent', 'prompt', 't-012345', prompt],
+  ])
+  expect(prompt).toBe(briefing({ branch: 'threads/012345', base: 'base123', task: 'Fix the bug' }))
+  expect(prompt.startsWith('-')).toBe(false)
+  expect(prompt).toMatch(/own git worktree/)
+  expect(prompt).toMatch(/never push/i)
+  expect(prompt).toMatch(/short summary/)
+  expect(prompt).toMatch(/base123/)
+  expect(prompt).toMatch(/Fix the bug$/)
+
+  const saved = calls.filter(call => call[0] === 'save')
+  expect(saved[0]).toEqual(['save', 'creating'])
+  expect(calls.findIndex(call => call[0] === 'save')).toBeLessThan(calls.findIndex(call => call[0] === 'herdr'))
+  expect(herdr().length).toBe(3)
+
+  expect(state.registry.threads[0]).toMatchObject({
+    id: '012345',
+    owner: 'lead-1',
+    stage: 'prompted',
+    status: 'starting',
+    base: 'base123',
+    branch: 'threads/012345',
+    path: '/wt',
+    workspaceId: 'w2',
+    paneId: 'w2:p1',
+    agentName: 't-012345',
+    sessionId: 'sess-1',
+    marker: { completionSeq: 2, seenWorking: false },
+  })
+})
+
+test('threads_start resolves the model and keeps the title out of the branch', async () => {
+  const modelArgs = (calls: string[][]) => calls.find(call => call[1] === 'agent' && call[2] === 'start')?.slice(11) ?? []
+
+  const given = harness()
+  await start(given.ports, SETTINGS, { task: 't', model: 'opus', effort: 'high' })
+  expect(modelArgs(given.calls)).toEqual(['--model', 'opus', '--permission-mode', 'acceptEdits', '--effort', 'high'])
+
+  const inherited = harness()
+  await start(inherited.ports, readSettings({ defaultModel: '' }), { task: 't' })
+  expect(modelArgs(inherited.calls).slice(0, 2)).toEqual(['--model', 'claude-opus-5-5'])
+
+  const odd = harness()
+  await start(odd.ports, SETTINGS, { task: 't', title: 'Fix "it" 🚀 now' })
+  const create = odd.calls.find(call => call[2] === 'create') ?? []
+  expect(create[create.indexOf('--label') + 1]).toBe('Fix "it" 🚀 now')
+  expect(create[create.indexOf('--branch') + 1]).toBe('threads/012345')
+})
+
+test('threads_start refuses before any side effect', async () => {
+  const live = { ...emptyRegistry(), threads: [thread({ id: 'old111', status: 'idle' })] }
+  const cases: Array<[string, ReturnType<typeof harness>, Parameters<typeof start>[2], Parameters<typeof start>[1]?]> = [
+    ['empty task', harness(), { task: '   ' }, undefined],
+    ['bad model', harness(), { task: 't', model: 'gpt-5' }, undefined],
+    ['bad effort', harness(), { task: 't', effort: 'ultra' }, undefined],
+    ['cap reached', harness({}, live), { task: 't' }, readSettings({ maxThreads: 1 })],
+    ['not a git repository', harness({ common: out('', 128, 'fatal') }), { task: 't' }, undefined],
+  ]
+
+  for (const [label, world, input, settings] of cases) {
+    const result = await start(world.ports, settings ?? SETTINGS, input)
+    expect(result.isError, label).toBe(true)
+    expect(world.herdr(), label).toEqual([])
+  }
+
+  expect((await start(cases[3]![1].ports, readSettings({ maxThreads: 1 }), { task: 't' })).text).toMatch(/old111.*limit 1/s)
+})
+
+test('two simultaneous starts cannot exceed the cap', async () => {
+  const world = harness()
+  const settings = readSettings({ maxThreads: 1 })
+  const results = await Promise.all([start(world.ports, settings, { task: 'a' }), start(world.ports, settings, { task: 'b' })])
+
+  expect(results.filter(one => one.isError).length).toBe(1)
+  expect(results.find(one => one.isError)?.text).toMatch(/limit 1/)
+  expect(world.herdr().filter(call => call[2] === 'create').length).toBe(1)
+})
+
+test('threads_start rolls back an empty worktree when the helper cannot start', async () => {
+  const world = harness({ start: failure('boom', 'could not start') })
+  const result = await start(world.ports, SETTINGS, { task: 't' })
+
+  expect(result.isError).toBe(true)
+  expect(result.text).toMatch(/rolled back/)
+  expect(world.ran()).toContain('herdr worktree remove --workspace w2')
+  expect(world.ran()).toContain('git branch -d threads/012345')
+  expect(world.state.registry.threads).toEqual([])
+
+  const stuck = harness({ start: failure('boom', 'could not start'), remove: failure('busy', 'in use') })
+  const left = await start(stuck.ports, SETTINGS, { task: 't' })
+  expect(left.isError).toBe(true)
+  expect(left.text).toMatch(/\/wt/)
+  expect(stuck.state.registry.threads[0]?.status).toBe('orphan')
+})
+
+test('threads_start keeps a helper that is stuck at startup, and one whose prompt is unconfirmed', async () => {
+  const stuck = harness({ start: failure('agent_not_ready', 'blocked at startup') })
+  const waiting = await start(stuck.ports, SETTINGS, { task: 't' })
+
+  expect(waiting.text).toMatch(/Do you want to proceed/)
+  expect(stuck.state.registry.threads[0]?.status).toBe('blocked')
+  expect(stuck.ran().some(line => line.startsWith('herdr worktree remove'))).toBe(false)
+
+  for (const code of ['agent_prompt_stalled', 'agent_blocked', 'timeout']) {
+    const world = harness({ prompt: failure(code, 'no') })
+    const result = await start(world.ports, SETTINGS, { task: 't' })
+
+    expect(result.isError, code).toBe(true)
+    expect(result.text).toMatch(/unconfirmed/)
+    expect(world.state.registry.threads.length).toBe(1)
+    expect(world.herdr().filter(call => call[2] === 'prompt').length).toBe(1)
+  }
 })
