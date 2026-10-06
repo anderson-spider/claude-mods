@@ -8,6 +8,7 @@ Marketplace of [Claude Code](https://claude.com/claude-code) plugins made by and
 | --- | --- |
 | [blast-radius](plugins/blast-radius) | Holds a risky Bash command and shows what it would change before it runs. |
 | [branch-guard](plugins/branch-guard) | Holds a `git commit` or `git push` on the protected branch and shows what would go in. |
+| [codex-computer-use](plugins/codex-computer-use) | Routes native Mac app control through Codex computer use from the ChatGPT app instead of Claude's own computer use, asking before each new app. |
 | [pr-preview](plugins/pr-preview) | Holds a `gh pr create`, `gh pr edit`, `glab mr create` or `glab mr update`, previews the title and description and flags what breaks the conventions. |
 | [review-panel](plugins/review-panel) | Opens a read-only pane with the worktree diff, the open pull or merge request, its CI jobs and the comments already made. |
 | [tailscale](plugins/tailscale) | Lets Claude query and modify your tailnet through the Tailscale API. |
@@ -21,6 +22,7 @@ Inside Claude Code, add the marketplace and install the plugin:
 /plugin marketplace add anderson-spider/spider-marketplace
 /plugin install blast-radius@spider-marketplace
 /plugin install branch-guard@spider-marketplace
+/plugin install codex-computer-use@spider-marketplace
 /plugin install pr-preview@spider-marketplace
 /plugin install review-panel@spider-marketplace
 /plugin install tailscale@spider-marketplace
@@ -58,6 +60,37 @@ When Claude calls Bash with `git commit` or `git push` and the target branch is 
 Passes without asking: commits and pushes on other branches, on a detached HEAD, in a repository inside `/tmp`, `git commit --dry-run`, `git push --dry-run`, tag-only pushes and commits with nothing staged. Force push is not handled here: it belongs to blast-radius. To turn the warning off, disable only this plugin.
 
 Limitations: the plugin reads the command text, so `merge`, `cherry-pick`, `rebase`, `pull`, aliases and `bash -c "git commit"` do not go through it; a stray `"` or `'` in the body of a `-m "$(cat <<EOF …)"` can confuse the parsing; it only sees what Claude types, not your terminal.
+
+## codex-computer-use
+
+Lets Claude control native Mac apps (Calculator, TextEdit, Finder…) through Codex computer use, the engine bundled with the ChatGPT desktop app, which clicks and types inside apps in the background without taking over the mouse. Claude still decides what to do; Codex carries out the clicks and typing.
+
+It has three pieces:
+
+| Piece | What it does |
+| --- | --- |
+| `helper/launch.mjs` (the `codex-cu` connection) | Reads `mcpServers.cua_repl` from the newest `~/.codex/plugins/cache/openai-bundled/unified-computer-use/<version>/.mcp.json` and starts it with the desktop surface only, so a ChatGPT update needs no edit (a protocol change can still break it). `--check` lists what it would start, without env values. |
+| `helper/helper.mjs` (LaunchAgent `com.anderson-spider.codex-cu`) | MCP client of that connection, served on `~/.claude/mcp/codex-cu/run/helper.sock` (directory `0700`, socket `0600`). One Codex session per caller (a Claude session, or `<session>/<agent>` for a subagent), calls serialized per caller, app approvals answered only from your choices, an app owned by one caller until 2 minutes after its last call, at most 8 Codex sessions (the quietest idle one makes room), 15 minutes idle expiry. |
+| the plugin | The `mcp__codex-computer-use__codex_cu` tool, the approval band, the `/codex-cu` command, a system-prompt section on how to drive the API, and a block on Claude's own desktop computer-use tools (`mcp__computer-use__*`, `mcp__remote-devices__computer*`) while on. Browsers, CLIs and purpose-built tools stay available. |
+
+The first use of an app asks in a band above the prompt: `This session` (key `1`), `Always` (key `2`, also saved in Codex's own `ComputerUseAppApprovals.json`) or `No` (key `3`). A `No` is kept for that caller and the call is refused without asking again; organization and safety blocks from Codex pass through as they are. The first call of a new or reset Codex session must be one documented entry call (`await cua.getState();` or `let app = await cua.getApp("Calculator");`), whose result carries the API documentation.
+
+```
+/codex-cu on | off | status
+/codex-cu forget            drop this session's answers (This session / No)
+/codex-cu forget <app>      take <app> off "always allow" in the helper and in Codex
+/codex-cu auto-approve on | off
+```
+
+Requirements: macOS, the ChatGPT desktop app with Computer Use turned on in Codex (`/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node` and the `.mcp.json` above). After installing the plugin, install the helper once from a clone:
+
+```
+plugins/codex-computer-use/helper/install.sh
+```
+
+It copies the helper to `~/.claude/mcp/codex-cu` (keeping `state/`, where the approvals and the log live) and loads the LaunchAgent; run it again after a helper change. `uninstall.sh` removes the LaunchAgent and leaves the files. To load the plugin from the folder instead of the marketplace, pass `--plugin-dir plugins/codex-computer-use`, which adds it to `CLAUDE_CODE_PLUGIN_DIRS`.
+
+Limitations: ownership is checked for apps named as string literals in `cua.getApp(...)` and for the app each result reports, so an app reached through a variable is owned only after its first call; Codex refuses an action when the app changed since it was last read ("The user changed …"), so read and act in the same call.
 
 ## pr-preview
 
@@ -132,6 +165,9 @@ claude plugin validate plugins/blast-radius
 claude plugin test plugins/blast-radius
 claude plugin validate plugins/branch-guard
 claude plugin test plugins/branch-guard
+claude plugin validate plugins/codex-computer-use
+claude plugin test plugins/codex-computer-use
+/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node --test plugins/codex-computer-use/helper/test/helper.test.mjs
 claude plugin validate plugins/pr-preview
 claude plugin test plugins/pr-preview
 claude plugin validate plugins/review-panel

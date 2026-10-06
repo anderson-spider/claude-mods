@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Claude Code plugin marketplace (`anderson-spider/spider-marketplace`). It currently has six plugins: `blast-radius` (holds destructive commands), `branch-guard` (holds commit and push on the protected branch), `pr-preview` (holds `gh pr create`, `gh pr edit`, `glab mr create` and `glab mr update` and previews them), `review-panel` (read-only pane with the diff, the open PR, its CI jobs and its comments), `tailscale` (tools to query and modify the tailnet) and `usage-line` (context and rate-limit usage above the prompt). The README and other documentation are in English; code comments and user-facing messages are in English too. Pull request titles and descriptions are in English.
+Claude Code plugin marketplace (`anderson-spider/spider-marketplace`). It currently has seven plugins: `blast-radius` (holds destructive commands), `branch-guard` (holds commit and push on the protected branch), `codex-computer-use` (routes native Mac app control through Codex computer use, with a local helper), `pr-preview` (holds `gh pr create`, `gh pr edit`, `glab mr create` and `glab mr update` and previews them), `review-panel` (read-only pane with the diff, the open PR, its CI jobs and its comments), `tailscale` (tools to query and modify the tailnet) and `usage-line` (context and rate-limit usage above the prompt). The README and other documentation are in English; code comments and user-facing messages are in English too. Pull request titles and descriptions are in English.
 
 ## Structure
 
@@ -15,6 +15,8 @@ claude plugin validate .                       # validates the marketplace
 claude plugin validate plugins/blast-radius    # validates the plugin
 claude plugin test plugins/blast-radius        # runs tests/blast-radius.test.ts
 claude plugin test plugins/branch-guard        # same, for branch-guard
+claude plugin test plugins/codex-computer-use  # same, for codex-computer-use (the plugin side)
+/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node --test plugins/codex-computer-use/helper/test/helper.test.mjs   # its helper
 claude plugin test plugins/pr-preview          # same, for pr-preview
 claude plugin test plugins/review-panel        # same, for review-panel
 claude plugin test plugins/tailscale           # same, for tailscale
@@ -44,6 +46,19 @@ Details that only make sense when reading both sides:
 ## branch-guard
 
 Same design as blast-radius (pure `hooks/guard.ts` with an injected `Probe`, `hooks/register.tsx` with `hold`/`draw`), with its own state (`branch-guard`/`held`). `classify` raises `commit` and `publish`; `isProtectedTarget` decides, asynchronously, whether the target branch is protected. The parser (`parse`, `resolve`, `locate`, `isTempRepo`) is a **copy** of the one in `blast-radius/hooks/risk.ts`, because a plugin cannot import code from another: a fix on one side must be carried to the other. Force push is left out on purpose, since it belongs to blast-radius.
+
+## codex-computer-use
+
+Two halves that talk over a Unix socket: the plugin (`hooks/`, runs in the hooks environment) and `helper/` (plain Node ESM, run by the ChatGPT app's own `node`, installed by `helper/install.sh` into `~/.claude/mcp/codex-cu` as LaunchAgent `com.anderson-spider.codex-cu`). The plugin cannot answer an MCP elicitation, which is why the helper exists: it is the MCP client of Codex's `cua_repl` server and answers its "Allow Computer Use to use <app>?" questions from the person's choices.
+
+- `helper/launch.mjs` + `lib/config.mjs`: the `codex-cu` connection. Picks the newest `~/.codex/plugins/cache/openai-bundled/unified-computer-use/<version>/.mcp.json`, starts `mcpServers.cua_repl` with `CUA_REPL_ENABLED_SURFACES=computer` (the browser surface needs Codex turn metadata Claude cannot send). Never prints env values.
+- `lib/mcp-client.mjs`: newline-delimited JSON-RPC over stdio; declares `elicitation: { form: {} }` (without it node_repl refuses `getApp`) and hands `elicitation/create` to a callback.
+- `lib/hub.mjs`: one session per caller (`<session>` or `<session>/<agent>`), a promise queue per caller, the entry-call check for a fresh session, ownership (`lib/owners.mjs`, by bundle id, lapsing `LEASE_MS` after the holder's last call), `MAX_SESSIONS`, idle sweep, `forget`. Apps are known before a call from `getApp("…")` literals resolved with Spotlight (`lib/apps.mjs`) and after it from the result's `_meta["codex/toolSurface"].app.appId`.
+- `lib/approvals.mjs`: `decide` returns `deny`, `session`, `always`, `auto` or `ask` in that order; only the first three answers and the auto-approve switch accept. Answering `_meta.persist: "always"` makes node_repl save the app in Codex's `ComputerUseAppApprovals.json`, which node_repl then answers by itself; `lib/codex-approvals.mjs` only ever removes from that file.
+- The plugin: `hooks/helper.ts` posts with `$.http.fetch({ socketPath })` and asks launchd to `kickstart` the helper when nothing listens; `hooks/routing.ts` is pure (prompt section, deny text, command parsing, model-facing answers); `hooks/register.tsx` registers `codex_cu` and `/codex-cu`, holds a `needs_approval` call with the same `waiting`/`hold` design as blast-radius (band in `AbovePrompt`, 5 minute limit) and retries after an allow.
+- A declined approval comes back as `needs_approval`; the call is run again only after the person allows, so the retried code runs from the start.
+- The enabled switch lives in `$.store` (`enabled`, default on). `prompt.compose` runs at every render, so it needs no invalidation.
+- Helper tests drive the real hub and client against `helper/test/fake-server.mjs` and always point `codexApprovals` at a temp file; never let a test reach the real `ComputerUseAppApprovals.json`.
 
 ## pr-preview
 
