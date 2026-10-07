@@ -33,6 +33,25 @@ test('buildPrompt for execute carries the task, the files, the report path and t
   expect(prompt).toContain('answer with only that path')
 })
 
+test('buildPrompt for execute asks for the fixed report sections in order', () => {
+  const prompt = buildPrompt('execute', { task: 'add X' }, '/tmp/codex-team/1.md')
+  const at = (heading: string) => prompt.indexOf(heading)
+  expect(at('## Report')).toBeGreaterThan(-1)
+  expect(at('## Report')).toBeLessThan(at('## Checks'))
+  expect(at('## Checks')).toBeLessThan(at('## Next'))
+  expect(at('## Next')).toBeLessThan(at('## Remember'))
+  expect(prompt).toContain('CHECKS: PASS')
+  expect(prompt).toContain('CHECKS: NOT RUN')
+})
+
+test('buildPrompt for review asks for findings then next, without the execute sections', () => {
+  const prompt = buildPrompt('review', {}, '/tmp/codex-team/2.md')
+  expect(prompt.indexOf('## Findings')).toBeGreaterThan(-1)
+  expect(prompt.indexOf('## Findings')).toBeLessThan(prompt.indexOf('## Next'))
+  expect(prompt).not.toContain('## Checks')
+  expect(prompt).not.toContain('## Remember')
+})
+
 test('buildPrompt for review carries the target and focus and forbids edits', () => {
   const prompt = buildPrompt('review', { target: 'main', focus: 'races' }, '/tmp/codex-team/2.md')
   expect(prompt).toContain('main')
@@ -63,7 +82,7 @@ test('qaFocus uses the task as acceptance criteria and ends with the exact verdi
   expect(focus).toContain('Acceptance criteria:\nadd X and check Y')
   expect(focus).toContain('actionable findings')
   expect(focus).toContain('Do not edit any file')
-  expect(focus.endsWith('End the report with exactly one last line: VERDICT: APPROVED or VERDICT: CHANGES.')).toBe(true)
+  expect(focus.endsWith('After the last section, end the report with exactly one last line: VERDICT: APPROVED or VERDICT: CHANGES.')).toBe(true)
 })
 
 test('fixTask carries the original task and the previous QA report path', () => {
