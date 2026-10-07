@@ -1,7 +1,7 @@
 import { reportPath } from './names'
 import { buildPrompt, codexArgs } from './prompts'
 import { HerdrError } from './model'
-import type { AgentState, Deps, Herdr, Job, Request, Status } from './model'
+import type { AgentSession, AgentState, Deps, Herdr, Job, Request, Status } from './model'
 
 /** Terminal cells are about twice as tall as wide: split a wide pane to the right, a narrow or tall one down. */
 export const splitDirection = (size: { width: number; height: number }): 'right' | 'down' => (size.width >= size.height * 2 ? 'right' : 'down')
@@ -12,7 +12,7 @@ export const WAIT_CHUNK_MS = 540_000
 const SUMMARY_CHARS = 600
 const LEFT_BLOCKED: AgentState[] = ['working', 'idle', 'done']
 
-type JobDeps = Omit<Deps, 'herdr'> & { herdr: Pick<Herdr, 'size' | 'split' | 'start' | 'prompt' | 'wait' | 'read'> }
+type JobDeps = Omit<Deps, 'herdr'> & { herdr: Pick<Herdr, 'size' | 'split' | 'rename' | 'start' | 'prompt' | 'wait' | 'read'> }
 
 // A cancel from outside wins: nothing the run learns afterwards changes a cancelled job.
 const setStatus = (job: Job, status: Status) => {
@@ -72,11 +72,13 @@ function errorText(code: string, message: string, pane: string): string {
       : `${message}${pane}`
 }
 
+export type JobOptions = { limitMs?: number; chunkMs?: number; freshReport?: boolean; session?: AgentSession; reportPath?: string; paneName?: string }
+
 /**
- * Runs one job in its own Herdr pane. Never rejects: an error becomes `failed`.
+ * Runs one job in its own Herdr pane, or reuses the supplied role session. Never rejects: an error becomes `failed`.
  * Mutates `job`; `deps.notify` hears about each blocked episode and the end.
  */
-export async function runJob(deps: JobDeps, job: Job, request: Request, options: { limitMs?: number; chunkMs?: number; freshReport?: boolean } = {}): Promise<void> {
+export async function runJob(deps: JobDeps, job: Job, request: Request, options: JobOptions = {}): Promise<void> {
   const { herdr } = deps
   const limit = options.limitMs ?? JOB_LIMIT_MS
   const chunk = options.chunkMs ?? WAIT_CHUNK_MS
@@ -84,7 +86,8 @@ export async function runJob(deps: JobDeps, job: Job, request: Request, options:
   const where = () => (job.pane ? ` (pane ${job.pane})` : '')
   const set = (status: Status) => setStatus(job, status)
   const cancelled = () => job.status === 'cancelled'
-  const path = reportPath(deps.tmpdir, job.id)
+  const path = options.reportPath ?? reportPath(deps.tmpdir, job.id)
+  const session = options.session
   const { settle, whileBlocked } = waits(deps, job, { deadline, limit, chunk })
 
   try {
@@ -94,21 +97,31 @@ export async function runJob(deps: JobDeps, job: Job, request: Request, options:
       if (cancelled()) return
     }
     set('starting')
-    job.pane = await herdr.split(splitDirection(await herdr.size()))
-    // Cancelled while the pane was opening: the empty pane stays for the person to close.
+    job.pane = session?.pane
+    if (!job.pane) {
+      job.pane = await herdr.split(splitDirection(await herdr.size()))
+      if (session) session.pane = job.pane
+      await herdr.rename(job.pane, options.paneName ?? `${job.agent} ${job.kind}`).catch(() => undefined)
+    }
+    // Cancelled while opening or naming the pane: never send a task afterwards.
     if (cancelled()) return
 
-    try {
-      await herdr.start(job.agent, job.pane, codexArgs(request.kind))
-    } catch (error) {
-      if (!(error instanceof HerdrError) || error.code !== 'agent_not_ready') throw error
-      if (cancelled()) return
-      await whileBlocked('blocked')
+    if (!session?.ready) {
+      try {
+        await herdr.start(job.agent, job.pane, codexArgs(request.kind))
+      } catch (error) {
+        if (!(error instanceof HerdrError) || error.code !== 'agent_not_ready') throw error
+        if (cancelled()) return
+        await whileBlocked('blocked')
+      }
+      if (session) session.ready = true
     }
 
     if (cancelled()) return
     set('working')
+    if (session) session.active = true
     await whileBlocked(await settle(timeoutMs => herdr.prompt(job.agent, buildPrompt(request.kind, request, path), timeoutMs)))
+    if (session) session.active = false
     if (cancelled()) return
 
     const written = await deps.files.read(path)

@@ -1,6 +1,6 @@
 {
   "name": "codex-team",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Lets Claude lead Codex agents: execute, review and dev/QA loops run Codex in Herdr panes as background jobs.",
   "author": {
     "name": "anderson-spider"

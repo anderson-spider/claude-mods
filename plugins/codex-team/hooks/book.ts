@@ -1,5 +1,6 @@
 import { agentName, nextFreeId } from './names'
-import { runJob } from './job'
+import { runJob, type JobOptions } from './job'
+import { waitForStop } from './stopping'
 import type { Deps, Job, Kind, Notify, Request, Status } from './model'
 
 /** Runs `task` after the ones queued before it: execute jobs share the working directory, so they take turns. */
@@ -39,19 +40,21 @@ export function createBook(deps: Deps) {
 
   return {
     /** Registers the job and starts it (an execute one after the others); answers at once. */
-    async start(request: Request, options: { quiet?: boolean; owned?: boolean } = {}): Promise<Job> {
+    async start(request: Request, options: JobOptions & { quiet?: boolean; owned?: boolean; notify?: Notify } = {}): Promise<Job> {
       const id = await reserveId()
-      const job: Job = { id, kind: request.kind, title: kinds[request.kind].title(request), status: 'queued', agent: agentName(id), startedAt: deps.now() }
+      const job: Job = { id, kind: request.kind, title: kinds[request.kind].title(request), status: 'queued', agent: options.session?.agent ?? agentName(id), startedAt: deps.now() }
       jobs.push(job)
       completions.set(id, new Promise<Job>(done => resolve.set(id, done)))
       const run = async () => {
         running.add(id)
+        const cancelled = () => job.status === 'cancelled'
         try {
-          if (job.status !== 'cancelled') {
+          if (!cancelled()) {
             const notify: Notify = (event, job) => {
-              if (!options.quiet || event === 'blocked') deps.notify(event, job)
+              if (!options.quiet || event === 'blocked') (options.notify ?? deps.notify)(event, job)
             }
-            await runJob({ ...deps, notify }, job, request, { freshReport: options.quiet })
+            await runJob({ ...deps, notify }, job, request, { ...options, freshReport: options.freshReport ?? options.quiet })
+            if (cancelled() && options.session?.active) await waitForStop(deps.herdr, options.session)
           }
         } finally {
           running.delete(id)

@@ -61,6 +61,9 @@ export const snapshot = (loops: readonly Loop[], jobs: readonly Job[], now: () =
 
 const SUMMARY_LINES = 12
 
+export const blockedText = (job: Job, loop?: Loop) =>
+  `[codex-team ${loop ? `loop-${loop.id} ${job.agent}` : job.agent} blocked in pane ${job.pane}] The person must answer in the pane. The lead must NOT answer for them.`
+
 export const finishedText = (job: Job) =>
   [
     `[codex-team job ${job.agent} ${job.status}: ${job.kind}]`,
@@ -92,7 +95,7 @@ export const orphanText = (orphans: readonly { name: string; pane: string }[]) =
 export function loopReport(loop: Loop, book: Pick<Book, 'get'>, findings?: string): string {
   const child = (phase: string, id: number) => {
     const job = book.get(id)
-    return `${phase}: ct-${id}${job?.report ? ` — report: ${job.report}` : ' — no report'}`
+    return `${phase}: ${job?.agent ?? `ct-${id}`} (job ct-${id})${job?.report ? ` — report: ${job.report}` : ' — no report'}`
   }
   return [
     `# Codex Team loop-${loop.id}`,

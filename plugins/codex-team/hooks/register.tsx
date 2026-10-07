@@ -5,7 +5,7 @@ import type { BandJob } from '../types'
 import { herdrAvailable, herdrOf } from './herdr'
 import { createBook } from './book'
 import { PROMPT } from './prompts'
-import { allJobs, bandRows, finishedText, loopFinishedText, orphanText, snapshot } from './presentation'
+import { allJobs, bandRows, blockedText, finishedText, loopFinishedText, orphanText, snapshot } from './presentation'
 import { checkDoctor } from './doctor'
 import { NOT_READY, failure, jobsTool, refusal, startJob, startLoop } from './tools'
 import type { Job, Loop, LoopDeps } from './model'
@@ -42,14 +42,20 @@ const notifier = ($: EngineInterface) => (event: 'blocked' | 'finished', job: Jo
   void publish($)
   if (event === 'blocked') {
     $.ui.toast(`Codex Team: ${job.agent} needs you in pane ${job.pane}`)
+    void $.prompt.submit({ text: blockedText(job) }).catch(() => undefined)
     return
   }
   $.ui.toast(`Codex Team: ${job.agent} ${job.status}`)
   void $.prompt.submit({ text: finishedText(job) }).catch(() => undefined)
 }
 
-const loopNotifier = ($: EngineInterface) => (_event: 'finished', loop: Loop) => {
+const loopNotifier = ($: EngineInterface) => (event: 'blocked' | 'finished', loop: Loop, job?: Job) => {
   void publish($)
+  if (event === 'blocked' && job) {
+    $.ui.toast(`Codex Team: loop-${loop.id} ${job.agent} needs you in pane ${job.pane}`)
+    void $.prompt.submit({ text: blockedText(job, loop) }).catch(() => undefined)
+    return
+  }
   $.ui.toast(`Codex Team: loop-${loop.id} ${loop.status}`)
   void $.prompt.submit({ text: loopFinishedText(loop) }).catch(() => undefined)
 }

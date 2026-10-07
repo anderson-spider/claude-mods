@@ -64,6 +64,10 @@ export function herdrOf(run: Run, options: { pane: string; cwd: string }): Herdr
       return id
     },
 
+    async rename(pane, name) {
+      await exec(['pane', 'rename', pane, name])
+    },
+
     async start(name, pane, args) {
       await exec(['agent', 'start', name, '--kind', 'codex', '--pane', pane, '--', ...args])
     },
