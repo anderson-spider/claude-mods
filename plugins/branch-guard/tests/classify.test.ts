@@ -169,3 +169,11 @@ test('classify reads a shell body when the shell has valued options but no scrip
   expect(kinds("bash -o pipefail -c 'echo hi' <<EOF\ngit commit -m x\nEOF")).toEqual([])
   expect(kinds('bash -o pipefail script.sh <<EOF\ngit commit -m x\nEOF')).toEqual([])
 })
+
+test('classify reads a shell body when a combined option cluster ends in a valued one', () => {
+  for (const head of ['bash -eo pipefail', 'sh -xo errexit', 'bash -euxo pipefail', 'bash +eo pipefail']) {
+    expect(kinds(`${head} <<EOF\ngit commit -m x\nEOF`)).toEqual(['commit'])
+  }
+
+  expect(kinds('bash -eo pipefail script.sh <<EOF\ngit commit -m x\nEOF')).toEqual([])
+})

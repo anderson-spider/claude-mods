@@ -121,7 +121,7 @@ const readsCommands = (words: readonly Word[]) => {
     for (let at = 0; at < rest.length; at += 1) {
       const text = rest[at] ?? ''
 
-      if (SHELL_VALUED.has(text)) {
+      if (SHELL_VALUED.has(text) || (/^[-+][A-Za-z]+[oO]$/.test(text) && !/^-[A-Za-z]*c/.test(text))) {
         at += 1
       } else if (!(/^[-+]/.test(text)) || /^-[A-Za-z]*c/.test(text)) {
         return false
