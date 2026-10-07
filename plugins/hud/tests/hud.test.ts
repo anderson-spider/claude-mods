@@ -1156,9 +1156,9 @@ test("picking: a press from an older, longer offer picks nothing", async ($, on)
 
 // A fake git by subcommand; `repo: false` answers every one as outside a repository, and `dirty`
 // puts that many changed files and a diff of 70 added and 4 removed lines in the working tree.
-function hostInfo(on: any, { branch = "andersonsilva/feat", model = "claude-sonnet-5-5", repo = true, dirty = 0 } = {}) {
+function hostInfo(on: any, { branch = "andersonsilva/feat", model = "claude-sonnet-5-5" as string | (() => string), repo = true, dirty = 0 } = {}) {
   on("session.cwd", () => ({ value: "/work/spider-marketplace" }));
-  on("session.model", () => ({ value: model }));
+  on("session.model", () => ({ value: typeof model === "function" ? model() : model }));
   on("process.run", (_$: any, e: any) => {
     const out = (exitCode: number, stdout = "") => ({ value: { exitCode, stdout, stderr: "", isStdoutTruncated: false, isStderrTruncated: false } });
     if (!repo) return out(128);
@@ -1202,6 +1202,28 @@ test("info: effort and speed come from the last request", async ($, on) => {
   expect(texts).toContain("Opus 5.5");
   expect(texts).toContain("high");
   expect(texts).toContain("72 tok/s");
+});
+
+test("info: a /model switch shows within the 10 s tick, and the old effort goes", async ($, on) => {
+  const clock = world(on);
+  withUsage(on, LIMITS);
+  let model = "claude-sonnet-5-5";
+  hostInfo(on, { model: () => model });
+  slowStep(on, clock, 5000, 360);
+  await $.session.start({ source: "startup", cwd: "/work/spider-marketplace" } as any);
+  const stream = $.turn.step({ turnId: "t", index: 0, model: "claude-sonnet-5-5", effort: "high", messageCount: 2 } as any);
+  for await (const _ of stream) {
+  }
+  expect((await band($, "terminal")).texts).toContain("high");
+  // Same model: the request's own id and effort stay.
+  await clock.advance(10_000);
+  expect((await band($, "terminal")).texts).toContain("high");
+  model = "claude-opus-5-5";
+  await clock.advance(10_000);
+  const { texts } = await band($, "terminal");
+  expect(texts).toContain("Opus 5.5");
+  expect(texts).not.toContain("Sonnet 5.5");
+  expect(texts).not.toContain("high");
 });
 
 test("info: a request too short to measure leaves no speed", async ($, on) => {

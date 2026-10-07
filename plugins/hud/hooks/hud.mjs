@@ -190,6 +190,9 @@ let cacheEnv = {};
 let cacheTicker = null;
 let cacheKey = "";
 
+// What `$.session.model()` answered last: a change in it is a /model switch, whatever the request
+// ids look like.
+let sessionModel = "";
 // What the info line above the usage line shows: the model and effort of the last main-loop
 // request, the speed of the last one that wrote anything, the folder and its git branch.
 let info = { model: "", effort: "", speed: null, dir: "", branch: "", files: 0, added: 0, removed: 0 };
@@ -272,6 +275,7 @@ export function register(on, options) {
     cacheKey = "";
     suggestions = { kind: "hidden" };
     info = { model: "", effort: "", speed: null, dir: "", branch: "", files: 0, added: 0, removed: 0 };
+    sessionModel = "";
     await refreshInfo($);
     cacheEnv = await cacheEnvOf($);
     turnsKey = TURNS_PREFIX + (await $.session.id());
@@ -951,7 +955,7 @@ function recordSpeed(tokens, ms) {
 // Unity's YAML assets swell the line counts and slow the diff: left out of them.
 const DIFF_EXCLUDES = ["*.unity", "*.prefab", "*.asset", "*.meta", "*.mat", "*.anim", "*.controller", "*.physicMaterial", "*.lighting"].map((g) => `:(exclude)${g}`);
 
-// The folder, its branch, the files changed and, before the first request, the model; true when
+// The folder, its branch, the files changed and the model (a /model switch shows within 10 s); true when
 // something changed.
 async function refreshInfo($) {
   const before = JSON.stringify(info);
@@ -973,7 +977,13 @@ async function refreshInfo($) {
         }
       }
     }
-    if (!info.model) info.model = await $.session.model();
+    // The host has no effort getter, so a switch with /model shows no effort until the next request.
+    const model = await $.session.model();
+    if (model !== sessionModel) {
+      if (sessionModel !== "") info.effort = "";
+      sessionModel = model;
+      info.model = model;
+    }
   } catch {
     // No folder or git here: the line shows what it has.
   }
