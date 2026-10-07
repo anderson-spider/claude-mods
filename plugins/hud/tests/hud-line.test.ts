@@ -1,5 +1,5 @@
 import { test, expect, mock } from "claude-code/testing";
-import { NOW, at, LIMITS, world, withUsage, band, cardOf, cardNodes, step, engineStep, HIT, ITEMS, suggesting, turnDone } from "./helpers";
+import { NOW, at, LIMITS, world, withUsage, band, cardOf, cardNodes, step, engineStep, HIT } from "./helpers";
 
 for (const surface of ["terminal", "desktop"] as const) {
   test(`band ${surface}`, async ($, on) => {
@@ -58,18 +58,6 @@ for (const surface of ["terminal", "desktop"] as const) {
     expect(texts).not.toContain("turns");
   });
 }
-
-test("keeps what later mods draw, above the suggestions and the line", async ($, on) => {
-  world(on, {}, {}, "drawn after this mod");
-  withUsage(on, LIMITS);
-  suggesting(on, ITEMS);
-  await $.session.start({ source: "startup", cwd: "/tmp" } as any);
-  await turnDone($);
-  const { texts } = await band($, "terminal");
-  expect(texts).toContain("drawn after this mod");
-  expect(texts.indexOf("drawn after this mod")).toBeLessThan(texts.indexOf("next:"));
-  expect(texts.indexOf("next:")).toBeLessThan(texts.indexOf("107k"));
-});
 
 for (const surface of ["terminal", "desktop"] as const) {
   test(`pace mark: ▲ ahead in amber, ▼ behind in green, with the gap in points ${surface}`, async ($, on) => {

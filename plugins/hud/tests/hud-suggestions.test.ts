@@ -353,3 +353,15 @@ test("filling: a press from an older, longer offer fills nothing", async ($, on)
   expect(await labels((await band($, "terminal")).ui)).toEqual(["Run the tests", "dismiss"]);
   expect(filled).toEqual([]);
 });
+
+test("keeps what later mods draw, above the suggestions and the line", async ($, on) => {
+  world(on, {}, {}, "drawn after this mod");
+  withUsage(on, LIMITS);
+  suggesting(on, ITEMS);
+  await $.session.start({ source: "startup", cwd: "/tmp" } as any);
+  await turnDone($);
+  const { texts } = await band($, "terminal");
+  expect(texts).toContain("drawn after this mod");
+  expect(texts.indexOf("drawn after this mod")).toBeLessThan(texts.indexOf("next:"));
+  expect(texts.indexOf("next:")).toBeLessThan(texts.indexOf("107k"));
+});
