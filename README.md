@@ -19,12 +19,12 @@ Inside Claude Code, add the marketplace and install the plugin:
 
 ```
 /plugin marketplace add anderson-spider/claude-mods
-/plugin install branch-guard@spider-marketplace
-/plugin install chatgpt@spider-marketplace
-/plugin install codex-computer-use@spider-marketplace
-/plugin install codex-team@spider-marketplace
-/plugin install tailscale@spider-marketplace
-/plugin install hud@spider-marketplace
+/plugin install branch-guard@spider-claude-mods
+/plugin install chatgpt@spider-claude-mods
+/plugin install codex-computer-use@spider-claude-mods
+/plugin install codex-team@spider-claude-mods
+/plugin install tailscale@spider-claude-mods
+/plugin install hud@spider-claude-mods
 ```
 
 To use a local copy instead of GitHub, pass the folder path:
