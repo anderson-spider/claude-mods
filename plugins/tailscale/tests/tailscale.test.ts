@@ -1,5 +1,5 @@
 import { test, expect } from 'claude-code/testing'
-import { buildUrl, call, forbidden, redact, transform } from '../hooks/api'
+import { buildUrl, call, forbidden, transform } from '../hooks/api'
 
 type Seen = { url: string; init: { method: string; headers: Record<string, string>; body?: string } }
 
@@ -117,17 +117,17 @@ test('call returns an error on 412', async () => {
 })
 
 test('redact removes secret fields at any level', () => {
-  const out = JSON.parse(redact(devices))
+  const out = JSON.parse(transform(devices, { redact: true }))
   expect(out.devices[0]).toEqual({ id: '1', hostname: 'a', os: 'linux', addresses: ['100.1.1.1'], tags: ['tag:t'] })
 })
 
 test('redact removes secret, s3SecretAccessKey and token', () => {
-  const out = JSON.parse(redact('{"a":{"secret":"s","s3SecretAccessKey":"k","token":"t","ok":1}}'))
+  const out = JSON.parse(transform('{"a":{"secret":"s","s3SecretAccessKey":"k","token":"t","ok":1}}', { redact: true }))
   expect(out).toEqual({ a: { ok: 1 } })
 })
 
 test('redact leaves non-JSON text intact', () => {
-  expect(redact('not json')).toBe('not json')
+  expect(transform('not json', { redact: true })).toBe('not json')
 })
 
 test('call with redact:true filters the response', async () => {

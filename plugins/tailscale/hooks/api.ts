@@ -39,7 +39,7 @@ export function forbidden(method: string, path: string): string | undefined {
 }
 
 /** Secret fields that must not reach the model in read responses. */
-export const REDACTED_FIELDS = new Set([
+const REDACTED_FIELDS = new Set([
   'machineKey',
   'nodeKey',
   'tailnetLockKey',
@@ -85,11 +85,6 @@ function pick(value: unknown, fields: ReadonlySet<string>): unknown {
     }
   }
   return out
-}
-
-/** Removes the REDACTED_FIELDS at any level; text that is not JSON passes through intact. */
-export function redact(text: string): string {
-  return transform(text, { redact: true })
 }
 
 /** Applies `redact` and `fields` to the body; text that is not JSON passes through intact. */
