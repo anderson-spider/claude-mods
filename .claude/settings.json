@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__ccd_pr__get_status",
+      "mcp__ccd_session_mgmt__get_session"
+    ]
+  }
+}
