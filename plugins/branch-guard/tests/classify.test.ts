@@ -102,6 +102,12 @@ test('classify treats a heredoc body as data and the rest of the line and what f
   expect(kinds('echo "<<EOF"; git commit -m x')).toEqual(['commit'])
 })
 
+test('classify does not read a shift inside arithmetic as a heredoc', () => {
+  expect(kinds('x=$((1<<2))\ngit commit -m x')).toEqual(['commit'])
+  expect(kinds('(( y = 1<<2 ))\ngit commit -m x')).toEqual(['commit'])
+  expect(kinds('x=$(( (1<<2) + 1 ))\ngit commit -m x')).toEqual(['commit'])
+})
+
 test('classify sees through case arms and still reads subshells', () => {
   expect(kinds('case $x in a) git commit -m x ;; esac')).toEqual(['commit'])
   expect(kinds('case $x in (a) git commit -m x ;; esac')).toEqual(['commit'])

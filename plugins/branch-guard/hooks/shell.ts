@@ -100,6 +100,8 @@ export const parse = (command: string): Command[] => {
   let isAwaitingIn = false
   let isPattern = false
   let patternFrom = 0
+  // Parentheses still open in `$((…))` or `((…))`, where `<<` is a shift and not a heredoc.
+  let arithmetic = 0
 
   const endPattern = () => {
     commands.length = patternFrom + 1
@@ -164,6 +166,14 @@ export const parse = (command: string): Command[] => {
     const char = command[at] ?? ''
     const following = command[at + 1] ?? ''
 
+    if (quote === undefined) {
+      if (arithmetic > 0) {
+        arithmetic += char === '(' ? 1 : char === ')' ? -1 : 0
+      } else if (char === '(' && following === '(' && (command[at - 1] === '$' || (!isOpen && commands.at(-1)?.words.length === 0))) {
+        arithmetic = 1
+      }
+    }
+
     if (quote !== undefined) {
       if (char === quote) {
         quote = undefined
@@ -185,7 +195,9 @@ export const parse = (command: string): Command[] => {
       at += 1
     } else if (char === ' ' || char === '\t') {
       endWord()
-    } else if (char === '<' && following === '<') {
+    } else if (char === '<' && following === '<' && arithmetic === 0) {
+      // Heredoc bodies are treated as data, so `bash <<EOF` and `ssh host <<EOF` bodies are not classified:
+      // a known trade-off of a text safety net.
       endWord()
 
       if (command[at + 2] === '<') {

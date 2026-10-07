@@ -22,7 +22,7 @@ Claude Code plugin marketplace `spider-claude-mods` (`anderson-spider/claude-mod
 ```
 claude plugin validate .                       # validates the marketplace
 claude plugin validate plugins/branch-guard    # validates the plugin
-claude plugin test plugins/branch-guard        # runs tests/branch-guard.test.ts
+claude plugin test plugins/branch-guard        # runs tests/*.test.ts
 claude plugin test plugins/chatgpt             # same, for chatgpt
 claude plugin test plugins/codex-computer-use  # same, for codex-computer-use (the plugin side)
 /Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node --test plugins/codex-computer-use/helper/test/*.test.mjs   # its helper

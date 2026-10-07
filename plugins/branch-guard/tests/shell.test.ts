@@ -52,6 +52,12 @@ test('parse skips heredoc bodies and keeps the command line and what follows the
   expect(full('cat <<EOF\nEOF2\nEOF\nls')).toEqual([['cat'], ['ls']])
 })
 
+test('parse keeps a shift inside $((…)) or ((…)) from opening a heredoc', () => {
+  expect(full('x=$((1<<2))\nls').at(-1)).toEqual(['ls'])
+  expect(full('(( y = 1<<2 ))\nls').at(-1)).toEqual(['ls'])
+  expect(full('cat <<EOF\nbody\nEOF\nls').at(-1)).toEqual(['ls'])
+})
+
 test('parse reads a here-string as one word of data and a quoted << as text', () => {
   expect(texts('cat <<< hello; git commit -m x')).toEqual([['cat'], ['git', 'commit', '-m', 'x']])
   expect(texts('cat <<<hello; ls')).toEqual([['cat'], ['ls']])
