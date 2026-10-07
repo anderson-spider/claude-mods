@@ -8,7 +8,9 @@ import { callerOf, kickstart, post, socketOf } from './helper'
 import type { Probe } from './helper'
 import { ROUTES } from './model'
 import type { Choice, Reply } from './model'
-import { BRIDGE, DESCRIPTION, HELP, INPUT_SCHEMA, PROMPT, denyOwn, forgetText, isOwnDesktopTool, limitMs, parseCommand, statusReport } from './routing'
+import { forgetText, statusReport } from './presentation'
+import { DESCRIPTION, HELP, INPUT_SCHEMA, PROMPT, denyOwn } from './prompts'
+import { BRIDGE, isOwnDesktopTool, limitMs, parseCommand } from './routing'
 
 type Kit = Pick<Elements['terminal'], 'Box' | 'Text' | 'Button'>
 type Slot = { id: string; choice: Choice | null }
