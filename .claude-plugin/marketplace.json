@@ -28,9 +28,9 @@
       "description": "Lets Claude query and modify the tailnet through the Tailscale API, using TS_API_KEY."
     },
     {
-      "name": "token-weather-usage",
-      "source": "./plugins/token-weather-usage",
-      "description": "One line above the prompt: context with a weather icon, 5-hour and 7-day limits against the clock, the prompt cache and the subagents running."
+      "name": "hud",
+      "source": "./plugins/hud",
+      "description": "A usage line above the prompt (context, 5-hour and 7-day limits against the clock, the prompt cache, the subagents running) and suggested next prompts you can pick, in order, into one draft."
     }
   ]
 }

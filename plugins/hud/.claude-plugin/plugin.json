@@ -1,0 +1,51 @@
+{
+  "name": "hud",
+  "version": "1.0.0",
+  "description": "A usage line above the prompt (the context as a weather icon, share and tokens, your 5-hour and 7-day limits against the time elapsed, the prompt cache with its lifetime and time left, the subagents running) and suggested next prompts you can pick, in order, into one draft. Built on Token Weather Usage, usage-meter, prompt-cache-control and next-steps; see NOTICE.",
+  "author": {
+    "name": "anderson-spider"
+  },
+  "license": "Apache-2.0",
+  "repository": "https://github.com/anderson-spider/spider-marketplace",
+  "displayName": "HUD",
+  "homepage": "https://github.com/anderson-spider/spider-marketplace/tree/main/plugins/hud",
+  "keywords": [
+    "mod",
+    "hud",
+    "statusline",
+    "usage",
+    "rate-limits",
+    "prompt-cache",
+    "context",
+    "suggestions",
+    "next-steps"
+  ],
+  "userConfig": {
+    "paceStart": {
+      "type": "number",
+      "title": "Pace start (points)",
+      "description": "How many points of the 5-hour and 7-day limits you may be ahead of the clock before the bar turns amber with a ▲ (up to it, the mark is a green ▬). 0 flags any lead; 5 ignores a lead of up to 5 points. Red still starts beyond 15 points ahead, or at 90% used.",
+      "default": 0,
+      "min": 0,
+      "max": 50
+    },
+    "showCost": {
+      "type": "boolean",
+      "title": "Show cost",
+      "description": "Show dollar amounts: the session cost and the last prompt's share (\"≈ $11.28 (+$0.67 · +1% 5h)\"), and what the prompt cache would cost to write again. Off by default (the cache then shows tokens); on a subscription they are API-price equivalents, not a bill.",
+      "default": false
+    },
+    "minAnswerChars": {
+      "type": "number",
+      "title": "Shortest answer to suggest after",
+      "description": "Skip suggestions after answers shorter than this many characters.",
+      "default": 80
+    },
+    "suggestSkills": {
+      "type": "boolean",
+      "title": "Suggest skills and slash commands",
+      "description": "Tell the suggester which skills and slash commands this session has, so a suggestion can be one of them.",
+      "default": true
+    }
+  }
+}

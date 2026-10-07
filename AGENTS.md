@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Claude Code plugin marketplace (`anderson-spider/spider-marketplace`). It currently has five plugins: `branch-guard` (holds commit and push on the protected branch), `chatgpt` (asks the user's ChatGPT, or has it generate an image, in terminal-browser), `codex-computer-use` (routes native Mac app control through Codex computer use, with a local helper), `tailscale` (tools to query and modify the tailnet) and `token-weather-usage` (a usage line above the prompt). The README and other documentation are in English; code comments and user-facing messages are in English too. Pull request titles and descriptions are in English.
+Claude Code plugin marketplace (`anderson-spider/spider-marketplace`). It currently has five plugins: `branch-guard` (holds commit and push on the protected branch), `chatgpt` (asks the user's ChatGPT, or has it generate an image, in terminal-browser), `codex-computer-use` (routes native Mac app control through Codex computer use, with a local helper), `tailscale` (tools to query and modify the tailnet) and `hud` (a usage line above the prompt, and suggested next prompts). The README and other documentation are in English; code comments and user-facing messages are in English too. Pull request titles and descriptions are in English.
 
 ## Structure
 
@@ -18,7 +18,7 @@ claude plugin test plugins/chatgpt             # same, for chatgpt
 claude plugin test plugins/codex-computer-use  # same, for codex-computer-use (the plugin side)
 /Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node --test plugins/codex-computer-use/helper/test/helper.test.mjs   # its helper
 claude plugin test plugins/tailscale           # same, for tailscale
-claude plugin test plugins/token-weather-usage # same, for token-weather-usage
+claude plugin test plugins/hud # same, for hud
 claude --plugin-dir plugins/branch-guard       # loads the plugin with automatic reload
 ```
 
@@ -75,14 +75,15 @@ Holds nothing: it registers two tools with `$.tool.register` in `session.start` 
 - `result` of the `tool.call` of a custom tool is a string or array, not an object, and `isError` only accepts `true` (omit it instead of `false`).
 - The test uses only the functions in `hooks/api.ts` with a fake `fetch`; there is no fake host.
 
-## token-weather-usage
+## hud
 
-A usage line above the prompt, adapted from `plugins/token-weather-usage` 3.10.7 in `augiefra/claude-mods` (Apache-2.0: keep `LICENSE`, and list changes in `NOTICE`). It is plain ESM (`hooks/token-weather-usage.mjs`), not TypeScript, and has no `types/`: everything lives in one file, with `drawLine` as the only place that draws and `register(on, options)` as the only place that reads the settings (`paceStart`, `showCost`). Labels are in English only; the upstream French labels and language option were removed.
+A usage line above the prompt and suggested next prompts, named `token-weather-usage` until 1.0.0 and adapted from `plugins/token-weather-usage` 3.10.7 in `augiefra/claude-mods` (Apache-2.0: keep `LICENSE`, and list changes and credits in `NOTICE`). It is plain ESM (`hooks/hud.mjs`), not TypeScript, and has no `types/`: everything lives in one file, with `drawLine` and `drawSuggestions` as the only places that draw and `register(on, options)` as the only place that reads the settings (`paceStart`, `showCost`, `minAnswerChars`, `suggestSkills`). Labels are in English only; the upstream French labels and language option were removed.
 
 - Limits: `gaugeOf` turns a window into a gauge; `pace` is used minus elapsed (points), `paceStart` (setting) is the lead still counted as on pace, red starts beyond `PACE_ALERT` (15) or at `USED_ALERT` (90). The mark (`▲ n`, `▼ n`, `▬`) comes from `pace`; the percentage is drawn only where no bar is (the narrow `nobar` and `none` modes).
 - Layout: on a terminal that is too narrow `drawLine` gives up detail in steps (`textWidth(gauges, cacheNow, level)`): the cache's lifetime and lapse price, then the bars, then the reset times. A new field on the line has to be counted in `textWidth`.
 - Cache: the lifetime is inferred (`ttlMs`: 1 hour with plan limits, 5 minutes otherwise); `CACHE_SOON_SHARE` makes the yellow threshold a sixth of it; the `5 min TTL · x1.25` label shows only for the short lifetime. Every dollar amount depends on the `showCost` setting (`cacheState` takes no price without it).
-- Tests: `tests/token-weather-usage.test.ts` can pass settings with `test(name, { options }, body)`; dollar tests use `SHOW_COST`.
+- Next steps: adapted from `next-steps` 1.0.0 of `claude-community` (MIT: its text and credit are in `NOTICE`). `turn.complete` forks the session (`startSuggestions`, detached) and `parseSuggestions` turns the reply into `suggestions` (module variable: `hidden`, `loading`, `offer` with `picked` in pick order); every label and prompt goes through `clean` because it is model output. The one `AbovePrompt` hook composes `[what mods after us draw, drawSuggestions, drawLine]`, so the line is always last; the block draws on the terminal only and not while `isWorking`. `1`/`2`/`3` toggle picks, `4` calls `combine` and `$.prompt.fill`; the mod never submits. Tests mock `model.fork`, `command.list` and `prompt.fill` through `suggesting` and `picking` in the test file; a hook for an event must be registered before the first `$` call.
+- Tests: `tests/hud.test.ts` can pass settings with `test(name, { options }, body)`; dollar tests use `SHOW_COST`.
 
 ## Tests
 

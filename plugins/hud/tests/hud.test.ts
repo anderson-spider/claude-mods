@@ -31,7 +31,7 @@ function withUsage(on: any, rateLimits: unknown[], context = { tokens: 107_000, 
 }
 
 async function band($: any, surface: "terminal" | "desktop", columns = 200) {
-  const ui = await $.ui.mount({ plugin: "token-weather-usage", surface, component: "AbovePrompt", props: { bodyColumns: columns } as any });
+  const ui = await $.ui.mount({ plugin: "hud", surface, component: "AbovePrompt", props: { bodyColumns: columns } as any });
   // The hover cards' lines are hidden until hovered: left out of the band's texts.
   const hidden = ((await ui.findAll({ type: "Box" })) as any[])
     .filter((b) => b.props?.position === "absolute")
@@ -127,13 +127,16 @@ for (const surface of ["terminal", "desktop"] as const) {
   });
 }
 
-test("keeps what later mods draw under the line", async ($, on) => {
+test("keeps what later mods draw, above the suggestions and the line", async ($, on) => {
   world(on, {}, {}, "drawn after this mod");
   withUsage(on, LIMITS);
+  suggesting(on, ITEMS);
   await $.session.start({ source: "startup", cwd: "/tmp" } as any);
+  await turnDone($);
   const { texts } = await band($, "terminal");
   expect(texts).toContain("drawn after this mod");
-  expect(texts.indexOf("107k")).toBeLessThan(texts.indexOf("drawn after this mod"));
+  expect(texts.indexOf("drawn after this mod")).toBeLessThan(texts.indexOf("next:"));
+  expect(texts.indexOf("next:")).toBeLessThan(texts.indexOf("107k"));
 });
 
 for (const surface of ["terminal", "desktop"] as const) {
@@ -915,4 +918,371 @@ test("cache savings: kept in the store, back on a resumed session", SHOW_COST, a
   // Restarted: the figure comes back from the store, not from new requests.
   await $.session.start({ source: "resume", cwd: "/tmp" } as any);
   expect(String(await boltTip((await band($, "desktop")).ui))).toContain(`This thread: ≈ ${en$(2 * savedBy(287_000))} saved by the cache.`);
+});
+
+// ---------- Next steps: the suggestions after a turn ----------
+
+const COMMANDS = [
+  { name: "review-pr", description: "Review a pull request", source: "plugin" },
+  { name: "clear", description: "Clear the conversation", source: "builtin" },
+];
+const ITEMS = [
+  { label: "Run the tests", prompt: "run the tests you just wrote" },
+  { label: "Commit", prompt: "commit the change" },
+  { label: "Open the PR", prompt: "open a pull request" },
+];
+const ANSWER = "x".repeat(200);
+
+// The detached fork finishes some ticks after the turn does.
+async function settle() {
+  for (let i = 0; i < 10; i++) await new Promise((r) => setTimeout(r, 0));
+}
+
+// What the fork answers; fork prompts and ghost texts are recorded.
+function suggesting(on: any, reply: unknown, options: { commands?: unknown[]; fork?: () => Promise<unknown> } = {}) {
+  const seen = { forks: [] as string[], ghosts: [] as string[] };
+  on("command.list", () => ({ value: options.commands ?? COMMANDS }));
+  on("ui.log", () => ({ value: undefined }));
+  on("model.fork", async (_$: any, e: any) => {
+    seen.forks.push(e.prompt);
+    if (options.fork) return { value: await options.fork() };
+    return { value: { isAnswered: true, text: typeof reply === "string" ? reply : JSON.stringify(reply), usage: {} } };
+  });
+  on("prompt.suggest", (_$: any, e: any) => {
+    seen.ghosts.push(e.text);
+    return { isShown: true };
+  });
+  on("turn.complete", () => ({ text: "" }));
+  on("turn.start", (_$: any, e: any) => ({ turnId: e.turnId }));
+  return seen;
+}
+
+async function turnDone($: any, extra: Record<string, unknown> = {}) {
+  await ($ as any).turn.complete({ reason: "answer", answer: ANSWER, turnId: "t1", durationMs: 1, isAborted: false, ...extra } as any);
+  await settle();
+}
+
+test("suggestions: a long answer forks and offers the first prompt as ghost text", async ($, on) => {
+  world(on);
+  withUsage(on, LIMITS);
+  const seen = suggesting(on, ITEMS);
+  await $.session.start({ source: "startup", cwd: "/tmp" } as any);
+  await turnDone($);
+  expect(seen.forks.length).toBe(1);
+  expect(seen.ghosts).toEqual(["run the tests you just wrote"]);
+});
+
+test("suggestions: an answer under minAnswerChars makes no fork", async ($, on) => {
+  world(on);
+  withUsage(on, LIMITS);
+  const seen = suggesting(on, ITEMS);
+  await $.session.start({ source: "startup", cwd: "/tmp" } as any);
+  await turnDone($, { answer: "x".repeat(20) });
+  expect(seen.forks.length).toBe(0);
+});
+
+test("suggestions: minAnswerChars is a setting", { options: { minAnswerChars: 10 } } as any, async ($, on) => {
+  world(on);
+  withUsage(on, LIMITS);
+  const seen = suggesting(on, ITEMS);
+  await $.session.start({ source: "startup", cwd: "/tmp" } as any);
+  await turnDone($, { answer: "x".repeat(20) });
+  expect(seen.forks.length).toBe(1);
+});
+
+test("suggestions: a subagent's turn makes no fork", async ($, on) => {
+  world(on);
+  withUsage(on, LIMITS);
+  const seen = suggesting(on, ITEMS);
+  await $.session.start({ source: "startup", cwd: "/tmp" } as any);
+  await turnDone($, { agentId: "a1" });
+  expect(seen.forks.length).toBe(0);
+});
+
+test("suggestions: the fork is told the session's skills", async ($, on) => {
+  world(on);
+  withUsage(on, LIMITS);
+  const seen = suggesting(on, ITEMS);
+  await $.session.start({ source: "startup", cwd: "/tmp" } as any);
+  await turnDone($);
+  expect(seen.forks[0]).toContain("/review-pr: Review a pull request");
+  expect(seen.forks[0]).not.toContain("/clear");
+});
+
+test("suggestions: without suggestSkills the fork gets no skill list", { options: { suggestSkills: false } } as any, async ($, on) => {
+  world(on);
+  withUsage(on, LIMITS);
+  const seen = suggesting(on, ITEMS);
+  await $.session.start({ source: "startup", cwd: "/tmp" } as any);
+  await turnDone($);
+  expect(seen.forks[0]).not.toContain("<available-skills>");
+});
+
+test("suggestions: a slash prompt naming an unknown command is dropped", async ($, on) => {
+  world(on);
+  withUsage(on, LIMITS);
+  const seen = suggesting(on, [
+    { label: "Made up", prompt: "/made-up now" },
+    { label: "Review", prompt: "/review-pr 12" },
+  ]);
+  await $.session.start({ source: "startup", cwd: "/tmp" } as any);
+  await turnDone($);
+  expect(seen.ghosts).toEqual(["/review-pr 12"]);
+});
+
+test("suggestions: unsafe text is cleaned, and a tag character drops the suggestion", async ($, on) => {
+  world(on);
+  withUsage(on, LIMITS);
+  const seen = suggesting(on, [
+    { label: "Hidden", prompt: `fix it\u{E0041}\u{E0042}` },
+    { label: "Clean\u001b[31m me", prompt: "run \u001b[31mthe\u0007 tests\n  now" },
+  ]);
+  await $.session.start({ source: "startup", cwd: "/tmp" } as any);
+  await turnDone($);
+  expect(seen.ghosts).toEqual(["run the tests now"]);
+});
+
+test("suggestions: prose, bad JSON, an unanswered or a failing fork offer nothing", async ($, on) => {
+  world(on);
+  withUsage(on, LIMITS);
+  const seen = suggesting(on, "I would suggest running the tests.");
+  await $.session.start({ source: "startup", cwd: "/tmp" } as any);
+  await turnDone($);
+  expect(seen.forks.length).toBe(1);
+  expect(seen.ghosts).toEqual([]);
+});
+
+test("suggestions: a fork that throws offers nothing and does not break the turn", async ($, on) => {
+  world(on);
+  withUsage(on, LIMITS);
+  const seen = suggesting(on, ITEMS, { fork: () => Promise.reject(new Error("boom")) });
+  await $.session.start({ source: "startup", cwd: "/tmp" } as any);
+  await turnDone($);
+  expect(seen.ghosts).toEqual([]);
+});
+
+test("suggestions: a result that arrives after a newer turn is dropped", async ($, on) => {
+  world(on);
+  withUsage(on, LIMITS);
+  let release: (v: unknown) => void = () => {};
+  const held = new Promise((r) => (release = r));
+  let call = 0;
+  const seen = suggesting(on, ITEMS, {
+    fork: () => (call++ === 0 ? held : Promise.resolve({ isAnswered: true, text: JSON.stringify([{ label: "Second", prompt: "second prompt" }]), usage: {} })),
+  });
+  await $.session.start({ source: "startup", cwd: "/tmp" } as any);
+  await turnDone($, { turnId: "t1" });
+  await turnDone($, { turnId: "t2" });
+  release({ isAnswered: true, text: JSON.stringify(ITEMS), usage: {} });
+  await settle();
+  expect(seen.ghosts).toEqual(["second prompt"]);
+});
+
+// The labels of the buttons a mounted band draws, in order.
+async function labels(ui: any): Promise<string[]> {
+  return ((await ui.findAll({ type: "Button" })) as any[]).map((b) => String(b.props?.label ?? ""));
+}
+
+async function offered($: any, on: any, extra: { below?: string; usage?: boolean } = {}) {
+  world(on, {}, {}, extra.below);
+  if (extra.usage !== false) withUsage(on, LIMITS);
+  else withUsage(on, [], { tokens: 0, window: 0, percent: 0 });
+  const seen = suggesting(on, ITEMS);
+  await $.session.start({ source: "startup", cwd: "/tmp" } as any);
+  await turnDone($);
+  return seen;
+}
+
+test("suggestions: the offer lists the labels, then dismiss, and the usage line comes last", async ($, on) => {
+  await offered($, on);
+  const { ui, texts } = await band($, "terminal");
+  expect(texts).toContain("next:");
+  expect(await labels(ui)).toEqual(["Run the tests", "Commit", "Open the PR", "dismiss"]);
+  expect(texts.indexOf("next:")).toBeLessThan(texts.indexOf("107k"));
+});
+
+test("suggestions: draw without any usage reading", async ($, on) => {
+  await offered($, on, { usage: false });
+  const { ui, texts } = await band($, "terminal");
+  expect(texts).toContain("next:");
+  expect(await labels(ui)).toContain("Commit");
+});
+
+test("suggestions: hidden while the model works, the line still draws", async ($, on) => {
+  await offered($, on);
+  const ui: any = await $.ui.mount({ plugin: "hud", surface: "terminal", component: "AbovePrompt", props: { bodyColumns: 200, isWorking: true } as any });
+  const texts = ((await ui.findAll({ type: "Text" })) as any[]).map((t) => t.text);
+  expect(texts).not.toContain("next:");
+  expect(texts).toContain("107k");
+});
+
+test("suggestions: nothing from this mod during a survey", async ($, on) => {
+  await offered($, on);
+  const ui: any = await $.ui.mount({ plugin: "hud", surface: "terminal", component: "AbovePrompt", props: { bodyColumns: 200, hasSurvey: true } as any });
+  const texts = ((await ui.findAll({ type: "Text" })) as any[]).map((t) => t.text);
+  expect(texts).not.toContain("next:");
+  expect(texts).not.toContain("107k");
+});
+
+test("suggestions: a wait line while the fork runs", async ($, on) => {
+  world(on);
+  withUsage(on, LIMITS);
+  suggesting(on, ITEMS, { fork: () => new Promise(() => {}) });
+  await $.session.start({ source: "startup", cwd: "/tmp" } as any);
+  await turnDone($);
+  const { texts } = await band($, "terminal");
+  expect(texts).toContain("next steps…");
+  expect(texts).not.toContain("next:");
+});
+
+test("suggestions: the next turn hides the block; a subagent's start does not", async ($, on) => {
+  await offered($, on);
+  await ($ as any).turn.start({ text: "go", turnId: "t2", agentId: "a1" } as any);
+  expect((await band($, "terminal")).texts).toContain("next:");
+  await ($ as any).turn.start({ text: "go", turnId: "t3" } as any);
+  expect((await band($, "terminal")).texts).not.toContain("next:");
+});
+
+test("suggestions: pressing dismiss hides the block", async ($, on) => {
+  await offered($, on);
+  const { ui } = await band($, "terminal");
+  await ui.press({ key: "dismiss" } as any);
+  expect((await band($, "terminal")).texts).not.toContain("next:");
+});
+
+test("suggestions: the desktop draws no block, only the line", async ($, on) => {
+  await offered($, on);
+  const { texts } = await band($, "desktop");
+  expect(texts).not.toContain("next:");
+  expect(texts).toContain("107k");
+});
+
+// ---------- Next steps: picking several into one draft ----------
+
+// An offer with prompt.fill answering as told; the filled texts and the toasts are recorded.
+async function picking($: any, on: any, fill: "filled" | "refused" | "rejects" = "filled", items: unknown[] = ITEMS) {
+  const filled: string[] = [];
+  const toasts: string[] = [];
+  on("prompt.fill", (_$: any, e: any) => {
+    if (fill === "rejects") throw new Error("boom");
+    filled.push(e.text);
+    return { isFilled: fill === "filled" };
+  });
+  on("ui.toast", (_$: any, e: any) => {
+    toasts.push(e.text);
+    return { value: undefined };
+  });
+  world(on);
+  withUsage(on, LIMITS);
+  suggesting(on, items);
+  await $.session.start({ source: "startup", cwd: "/tmp" } as any);
+  await turnDone($);
+  return { filled, toasts };
+}
+
+async function press($: any, ...keys: string[]) {
+  for (const key of keys) await (await band($, "terminal")).ui.press({ key } as any);
+  return labels((await band($, "terminal")).ui);
+}
+
+test("picking: marks follow the order of choice, and write shows how many", async ($, on) => {
+  await picking($, on);
+  expect(await press($, "pick-1", "pick-3")).toEqual(["[1] Run the tests", "Commit", "[2] Open the PR", "write 2 to prompt", "dismiss"]);
+  expect(await press($, "pick-3")).toEqual(["[1] Run the tests", "Commit", "Open the PR", "write 1 to prompt", "dismiss"]);
+  expect(await press($, "pick-1")).toEqual(["Run the tests", "Commit", "Open the PR", "dismiss"]);
+});
+
+test("picking: choosing 3 before 1 keeps that order in the draft", async ($, on) => {
+  const { filled } = await picking($, on);
+  expect(await press($, "pick-3", "pick-1")).toEqual(["[2] Run the tests", "Commit", "[1] Open the PR", "write 2 to prompt", "dismiss"]);
+  await press($, "write");
+  expect(filled).toEqual(["Do these in order, one after the other:\n1. open a pull request\n2. run the tests you just wrote"]);
+});
+
+test("picking: one pick fills the prompt as it is", async ($, on) => {
+  const { filled } = await picking($, on);
+  await press($, "pick-2", "write");
+  expect(filled).toEqual(["commit the change"]);
+});
+
+test("picking: writing hides the block", async ($, on) => {
+  await picking($, on);
+  await press($, "pick-1", "write");
+  expect((await band($, "terminal")).texts).not.toContain("next:");
+});
+
+test("picking: a new offer starts with no picks", async ($, on) => {
+  await picking($, on);
+  await press($, "pick-1");
+  await turnDone($, { turnId: "t2" });
+  expect(await labels((await band($, "terminal")).ui)).toEqual(["Run the tests", "Commit", "Open the PR", "dismiss"]);
+});
+
+test("picking: a fill that is not accepted shows a toast", async ($, on) => {
+  const { toasts } = await picking($, on, "refused");
+  await press($, "pick-1", "write");
+  expect(toasts).toEqual(["could not fill the prompt box"]);
+});
+
+test("picking: a fill that rejects shows a toast", async ($, on) => {
+  const { toasts } = await picking($, on, "rejects");
+  await press($, "pick-1", "write");
+  expect(toasts.length).toBe(1);
+  expect(toasts[0]).toContain("could not fill:");
+});
+
+test("picking: a slash suggestion alone is filled as it is, inside a combination it is plain text", async ($, on) => {
+  const { filled } = await picking($, on, "filled", [
+    { label: "Review", prompt: "/review-pr 12" },
+    { label: "Commit", prompt: "commit the change" },
+  ]);
+  await press($, "pick-1", "write");
+  expect(filled[0]).toBe("/review-pr 12");
+  await turnDone($, { turnId: "t2" });
+  await press($, "pick-1", "pick-2", "write");
+  expect(filled[1]).toBe("Do these in order, one after the other:\n1. /review-pr 12\n2. commit the change");
+});
+
+// ---------- Next steps: the deferred review minors ----------
+
+test("suggestions: invalid JSON offers nothing", async ($, on) => {
+  world(on);
+  withUsage(on, LIMITS);
+  const seen = suggesting(on, '[{"label": "Run", "prompt": "run the tests"');
+  await $.session.start({ source: "startup", cwd: "/tmp" } as any);
+  await turnDone($);
+  expect(seen.forks.length).toBe(1);
+  expect(seen.ghosts).toEqual([]);
+  expect((await band($, "terminal")).texts).not.toContain("next:");
+});
+
+test("suggestions: a fork that is not answered offers nothing", async ($, on) => {
+  world(on);
+  withUsage(on, LIMITS);
+  const seen = suggesting(on, ITEMS, { fork: async () => ({ isAnswered: false, reason: "api-error" }) });
+  await $.session.start({ source: "startup", cwd: "/tmp" } as any);
+  await turnDone($);
+  expect(seen.forks.length).toBe(1);
+  expect(seen.ghosts).toEqual([]);
+  expect((await band($, "terminal")).texts).not.toContain("next:");
+});
+
+test("picking: a press from an older, longer offer picks nothing", async ($, on) => {
+  const filled: string[] = [];
+  on("prompt.fill", (_$: any, e: any) => {
+    filled.push(e.text);
+    return { isFilled: true };
+  });
+  world(on);
+  withUsage(on, LIMITS);
+  let call = 0;
+  // The first offer has three items, the second only one.
+  suggesting(on, null, { fork: async () => ({ isAnswered: true, text: JSON.stringify(call++ === 0 ? ITEMS : [ITEMS[0]]), usage: {} }) });
+  await $.session.start({ source: "startup", cwd: "/tmp" } as any);
+  await turnDone($);
+  const old = (await band($, "terminal")).ui;
+  await turnDone($, { turnId: "t2" });
+  await old.press({ key: "pick-3" } as any).catch(() => undefined);
+  expect(await labels((await band($, "terminal")).ui)).toEqual(["Run the tests", "dismiss"]);
+  expect(filled).toEqual([]);
 });

@@ -1,0 +1,61 @@
+hud
+Copyright 2026 anderson-spider
+
+hud is built on the projects below; their notices are kept as they came.
+
+claude-mods
+Copyright 2026 Eric Cologni
+
+hud includes code adapted from the Token Weather example mod
+(context weather, context tokens, recent turns chart) in
+https://github.com/anthropics/claude-code-playground
+Copyright 2026 Anthropic PBC, licensed under the Apache License, Version 2.0.
+Changes: English labels, one-line layout, merged with the usage gauges below.
+
+hud was named token-weather-usage until 1.0.0, when the suggested next prompts
+were added. It is adapted from plugins/token-weather-usage 3.10.7 of
+https://github.com/augiefra/claude-mods (Apache License, Version 2.0) by
+anderson-spider. Changes from that version: the new name; English only (the French labels and
+the language option are gone); the limits' bars are block characters in the
+terminal and the app, without the percentage while a bar is shown; a mark and
+the gap in points against the clock beside each limit (▲ ahead, ▼ behind,
+▬ on pace) and the Pace start option; the cache shows its time left with the
+x1.25 write multiplier for the 5-minute lifetime, the yellow threshold follows
+the lifetime, and dollar amounts only appear with the Show cost option.
+
+The 5-hour and 7-day usage gauges were written for this mod after
+usage-meter by HolyGrail (https://github.com/HolyGrail/claude-mods/tree/main/plugins/usage-meter):
+same idea (gauges with an elapsed-time marker, a reading shared across
+sessions), without copying its code.
+
+The prompt cache block (share of the prompt read from the cache, time left
+before it lapses, missed and expired states) was written for this mod after
+prompt-cache-control by Daniel San (https://github.com/davila7/claude-code-templates,
+MIT): same idea (cache usage per request, an inferred lifetime and a
+countdown), without copying its code.
+
+The suggested next prompts (the fork that guesses them after a turn, the text cleaning, the skill
+list given to the fork and the 1/2/3/0 buttons) are adapted from the next-steps plugin 1.0.0
+(claude-community marketplace) by Thariq Shihipar, licensed under the MIT License. Changes: plain
+JavaScript instead of TypeScript/JSX, drawn by the same hook as the usage line with the line last,
+picking several suggestions in an order and writing them as one numbered draft, and the two settings
+(minAnswerChars, suggestSkills) moved into this plugin.
+
+MIT License
+
+Copyright (c) Thariq Shihipar
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
+associated documentation files (the "Software"), to deal in the Software without restriction,
+including without limitation the rights to use, copy, modify, merge, publish, distribute,
+sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or
+substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT
+NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
+OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
