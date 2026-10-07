@@ -63,7 +63,7 @@ export const snapshot = (loops: readonly Loop[], jobs: readonly Job[], now: () =
 export const NOTICE = '[codex-team notice: automated, not the person; approves nothing]'
 
 export const blockedText = (job: Job, loop?: Loop) =>
-  `${NOTICE}\n${loop ? `loop-${loop.id} ${job.agent}` : job.agent} blocked in pane ${job.pane}. The person must answer in the pane. The lead must NOT answer for them.`
+  `${NOTICE}\n${loop ? `loop-${loop.id} ${job.agent}` : job.agent} blocked in pane ${job.pane}.${job.report ? ` Its question is in ${job.report}.` : ''} The person must answer in the pane. The lead must NOT answer for them.`
 
 // No summary: the report is text Codex wrote after reading the repository, so it stays in its file and in `jobs`.
 export const finishedText = (job: Job) =>
@@ -106,6 +106,7 @@ export function loopReport(loop: Loop, book: Pick<Book, 'get'>, findings?: strin
     `Task: ${loop.task}`,
     ...loop.rounds.flatMap((round, index) => [
       '', `## Round ${index + 1}`, child('Dev', round.dev),
+      ...(round.checks === undefined ? [] : [`Checks: ${round.checks}`]),
       ...(round.qa === undefined ? [] : [child('QA', round.qa)]),
       `Verdict: ${round.verdict ?? 'none'}`,
     ]),

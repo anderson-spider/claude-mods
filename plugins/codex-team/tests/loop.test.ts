@@ -276,6 +276,53 @@ test('loop reviews a dev with no report and keeps the note', async () => {
   expect(loop.error).toContain('no report')
 })
 
+test('a dev whose CHECKS fail skips QA and sends the dev back with its own report', async () => {
+  const state = loopWith(['dev\nCHECKS: FAIL — 2 failing', 'dev fixed\nCHECKS: PASS — claude plugin test', 'A finding\nVERDICT: APPROVED'])
+  const loop = await loopStart(state.deps, state.book, loopRequest())
+  await state.finished(loop)
+  expect(loop.status).toBe('approved')
+  expect(loop.rounds).toEqual([{ dev: 2, checks: 'fail' }, { dev: 3, qa: 4, verdict: 'approved', checks: 'pass' }])
+  expect(state.prompts.length).toBe(3)
+  expect(state.prompts[1]).toContain(fixTask('add X', '/tmp/codex-team/1-dev1.md', 'checks'))
+  expect(state.prompts[2]).toContain(qaFocus('add X'))
+  expect(loop.error).toContain('dev 1: CHECKS: FAIL, QA skipped')
+  expect(state.files[loop.report!]).toContain('Checks: fail')
+  expect(state.files[loop.report!]).toContain('Checks: pass')
+  expect(state.events).toEqual(['loop 1 approved'])
+})
+
+test('a dev whose CHECKS are not run still runs QA and notes it', async () => {
+  const state = loopWith(['dev\nCHECKS: NOT RUN — no tests here', 'VERDICT: APPROVED'])
+  const loop = await loopStart(state.deps, state.book, loopRequest())
+  await state.finished(loop)
+  expect(loop.status).toBe('approved')
+  expect(loop.rounds).toEqual([{ dev: 2, qa: 3, verdict: 'approved', checks: 'not run' }])
+  expect(state.prompts.length).toBe(2)
+  expect(loop.error).toContain('dev 1: CHECKS: NOT RUN')
+  expect(state.files[loop.report!]).toContain('Checks: not run')
+})
+
+test('failed CHECKS on the last round exhaust the loop without starting QA', async () => {
+  const state = loopWith(['dev\nCHECKS: FAIL — broken'])
+  const loop = await loopStart(state.deps, state.book, loopRequest(1))
+  await state.finished(loop)
+  expect(loop.status).toBe('exhausted')
+  expect(loop.rounds).toEqual([{ dev: 2, checks: 'fail' }])
+  expect(state.prompts.length).toBe(1)
+  expect(loop.error).toContain('CHECKS: FAIL, QA skipped')
+  expect(state.files[loop.report!]).not.toContain('Last QA findings')
+})
+
+test('failed CHECKS do not show QA findings from an earlier round', async () => {
+  const state = loopWith(['dev', 'stale finding\nVERDICT: CHANGES', 'dev again\nCHECKS: FAIL — broken'])
+  const loop = await loopStart(state.deps, state.book, loopRequest(2))
+  await state.finished(loop)
+  expect(loop.status).toBe('exhausted')
+  expect(state.prompts.length).toBe(3)
+  expect(state.files[loop.report!]).not.toContain('stale finding')
+  expect(state.files[loop.report!]).not.toContain('Last QA findings')
+})
+
 test('loop children still notify when blocked without finishing messages', async () => {
   const state = loopWith(['dev', 'VERDICT: APPROVED'], { prompt: ['blocked', 'blocked'], wait: ['idle', 'idle'] })
   const loop = await loopStart(state.deps, state.book, loopRequest())

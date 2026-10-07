@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 import { agentName, nextFreeId, reportPath } from '../hooks/names'
 import { buildPrompt, codexArgs, fixTask, qaFocus } from '../hooks/prompts'
 import { requestOf, loopOf } from '../hooks/requests'
-import { verdictOf } from '../hooks/loop'
+import { checksOf, isWaiting, verdictOf } from '../hooks/report'
 
 test('agentName prefixes the job id', () => {
   expect(agentName(3)).toBe('ct-3')
@@ -77,6 +77,24 @@ test('verdictOf accepts only the exact last non-empty line', () => {
   }
 })
 
+test('isWaiting accepts only an exact first non-empty line', () => {
+  expect(isWaiting('STATUS: WAITING\nWhich port?')).toBe(true)
+  expect(isWaiting('\n  STATUS: WAITING  \r\nWhich port?')).toBe(true)
+  for (const report of [undefined, '', '## Report\nSTATUS: WAITING', 'status: waiting', 'STATUS: WAITING now']) {
+    expect(isWaiting(report)).toBe(false)
+  }
+})
+
+test('checksOf reads the first CHECKS line', () => {
+  expect(checksOf('## Checks\nCHECKS: PASS — claude plugin test')).toBe('pass')
+  expect(checksOf('CHECKS: FAIL — 2 failing')).toBe('fail')
+  expect(checksOf('CHECKS: NOT RUN')).toBe('not run')
+  expect(checksOf('CHECKS: FAIL\nCHECKS: PASS')).toBe('fail')
+  for (const report of [undefined, '', 'checks: pass', 'CHECKS: PASSED', 'CHECKS: maybe']) {
+    expect(checksOf(report)).toBe(undefined)
+  }
+})
+
 test('qaFocus uses the task as acceptance criteria and ends with the exact verdict rule', () => {
   const focus = qaFocus('add X and check Y')
   expect(focus).toContain('Acceptance criteria:\nadd X and check Y')
@@ -90,6 +108,10 @@ test('fixTask carries the original task and the previous QA report path', () => 
   expect(task).toContain('add X')
   expect(task).toContain('/tmp/codex-team/3.md')
   expect(task).toContain('fix the findings')
+  const checks = fixTask('add X', '/tmp/codex-team/1-dev1.md', 'checks')
+  expect(checks).toContain('add X')
+  expect(checks).toContain('/tmp/codex-team/1-dev1.md')
+  expect(checks).toContain('checks failed')
 })
 
 test('loopOf requires a task, trims files and defaults maxRounds to three', () => {

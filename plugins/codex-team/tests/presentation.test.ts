@@ -63,6 +63,11 @@ test('every notice submitted as a turn starts with the automated label', () => {
   }
 })
 
+test('blockedText points at the question report only when the job has one', () => {
+  expect(blockedText({ ...job, report: '/tmp/codex-team/1.md' })).toContain('Its question is in /tmp/codex-team/1.md. The person must answer in the pane.')
+  expect(blockedText({ ...job, report: undefined })).not.toContain('Its question')
+})
+
 test('finishedText points at the report and never pastes what Codex wrote', () => {
   const text = finishedText(job)
   expect(text).toContain('job ct-1 done: execute')

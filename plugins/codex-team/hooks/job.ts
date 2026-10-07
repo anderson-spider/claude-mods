@@ -1,6 +1,7 @@
 import { reportPath } from './names'
 import { buildPrompt, codexArgs } from './prompts'
 import { HerdrError } from './model'
+import { isWaiting } from './report'
 import type { AgentSession, AgentState, Deps, Herdr, Job, Request, Status } from './model'
 
 export const JOB_LIMIT_MS = 30 * 60_000
@@ -22,8 +23,8 @@ function waits(deps: Pick<Deps, 'now' | 'notify'> & { herdr: Pick<Herdr, 'wait'>
   const set = (status: Status) => setStatus(job, status)
   const cancelled = () => job.status === 'cancelled'
 
-  // Runs `step` in chunks until it settles or the job limit passes; a chunk's own timeout carries on with `wait`.
-  const settle = async <T extends AgentState>(first: (timeoutMs: number) => Promise<T>): Promise<AgentState> => {
+  // Runs `step` in chunks until it settles or the job limit passes; a chunk's own timeout carries on with `wait`, for the same `until`.
+  const settle = async <T extends AgentState>(first: (timeoutMs: number) => Promise<T>, until?: AgentState[]): Promise<AgentState> => {
     let step: (timeoutMs: number) => Promise<AgentState> = first
     for (;;) {
       const remaining = deadline - deps.now()
@@ -32,7 +33,7 @@ function waits(deps: Pick<Deps, 'now' | 'notify'> & { herdr: Pick<Herdr, 'wait'>
         return await step(Math.min(chunk, remaining))
       } catch (error) {
         if (!(error instanceof HerdrError) || error.code !== 'timeout') throw error
-        step = timeoutMs => herdr.wait(job.agent, timeoutMs)
+        step = timeoutMs => herdr.wait(job.agent, timeoutMs, until)
       }
     }
   }
@@ -42,7 +43,7 @@ function waits(deps: Pick<Deps, 'now' | 'notify'> & { herdr: Pick<Herdr, 'wait'>
     while (state === 'blocked') {
       set('blocked')
       if (!cancelled()) deps.notify('blocked', job)
-      state = await settle(timeoutMs => herdr.wait(job.agent, timeoutMs, LEFT_BLOCKED))
+      state = await settle(timeoutMs => herdr.wait(job.agent, timeoutMs, LEFT_BLOCKED), LEFT_BLOCKED)
       if (state === 'working') {
         set('working')
         state = await settle(timeoutMs => herdr.wait(job.agent, timeoutMs))
@@ -124,8 +125,23 @@ export async function runJob(deps: JobDeps, job: Job, request: Request, options:
     if (session) session.active = false
     if (cancelled()) return
 
-    const written = await deps.files.read(path)
-    const report = options.freshReport && written === '' ? undefined : written
+    let written = await deps.files.read(path)
+    let report = options.freshReport && written === '' ? undefined : written
+    // A report that opens with `STATUS: WAITING` holds a question: the agent waits for the person in its pane, then writes the real report.
+    while (isWaiting(report)) {
+      job.report = path
+      set('blocked')
+      if (!cancelled()) deps.notify('blocked', job)
+      await settle(timeoutMs => herdr.wait(job.agent, timeoutMs, ['working']), ['working'])
+      if (cancelled()) return
+      set('working')
+      // Answered: a later blocked episode (an approval) has no question in the report.
+      job.report = undefined
+      await whileBlocked(await settle(timeoutMs => herdr.wait(job.agent, timeoutMs)))
+      if (cancelled()) return
+      written = await deps.files.read(path)
+      report = options.freshReport && written === '' ? undefined : written
+    }
     if (!recordReport(job, path, report)) {
       job.summary = await herdr.read(job.agent, 200)
       job.error = `no report was written to ${path}; the summary is the text of the pane${where()}`
