@@ -11,7 +11,6 @@ Marketplace of [Claude Code](https://claude.com/claude-code) plugins made by and
 | [chatgpt](plugins/chatgpt) | Lets Claude ask your logged-in ChatGPT, or have it generate an image, in terminal-browser, and saves the result locally. |
 | [codex-computer-use](plugins/codex-computer-use) | Routes native Mac app control through Codex computer use from the ChatGPT app instead of Claude's own computer use, asking before each new app. |
 | [tailscale](plugins/tailscale) | Lets Claude query and modify your tailnet through the Tailscale API. |
-| [threads](plugins/threads) | Starts background Claude Code helpers, each in its own Herdr git worktree, and tells you when one finishes or needs you. |
 
 ## Install
 
@@ -24,7 +23,6 @@ Inside Claude Code, add the marketplace and install the plugin:
 /plugin install chatgpt@spider-marketplace
 /plugin install codex-computer-use@spider-marketplace
 /plugin install tailscale@spider-marketplace
-/plugin install threads@spider-marketplace
 ```
 
 To use a local copy instead of GitHub, pass the folder path:
@@ -135,20 +133,6 @@ To update the ACL without overwriting someone else's edit: do a `GET /tailnet/-/
 
 `TS_API_KEY` must be a `tskey-api-...` key. An OAuth secret `tskey-client-...` is not valid as a Bearer without a token exchange, which the plugin does not do.
 
-## threads
-
-Lets Claude start background helpers for coding tasks: each one is a separate Claude Code session in its own git worktree (a Herdr worktree created from your current commit), shown in a Herdr pane next to the chat. A helper edits and commits on its own branch, never pushes and never merges. The plugin watches the helpers and tells the chat when one finishes (with its final answer) or is stopped at a prompt. It needs Claude Code running inside Herdr (`HERDR_ENV=1`) and the `herdr` CLI.
-
-| Tool or command | What it does |
-| --- | --- |
-| `mcp__threads__threads_start` | Starts a helper for a `task` (optional `title`, `model`, `effort`) in a new worktree and branch `threads/<id>`. |
-| `mcp__threads__threads_status` | Lists the helpers of this chat, or details one: status, branch, commits, and the prompt a blocked helper is stopped at. |
-| `mcp__threads__threads_answer` | Answers a blocked helper with `keys`, or sends an idle helper a follow-up `text`. |
-| `mcp__threads__threads_close` | Stops a helper and closes its pane. Its worktree and branch are removed only if it changed nothing; otherwise they are kept and the result says where and how to review and merge them. |
-| `/threads` | Lists helpers (also those of other chats, read-only); `/threads attach <id>` shows a helper's pane; `/threads adopt <id>` takes over a helper another chat started. |
-
-Helpers run with `acceptEdits`, so editing and committing go ahead and anything else (a Bash command outside the allowlist) stops them as blocked until you answer, in their pane or with `threads_answer`. Settings (`/plugin`): `maxThreads` (live helpers, default 3), `defaultModel` (default `sonnet`; empty means the chat's model), `defaultPermissionMode` and `pollSeconds`. Only a Claude helper is supported for now.
-
 ## Development
 
 To edit a plugin with automatic reload, point Claude Code straight at its folder, with `claude --plugin-dir` or in the `env` of `~/.claude/settings.json`:
@@ -176,6 +160,4 @@ claude plugin test plugins/codex-computer-use
 /Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node --test plugins/codex-computer-use/helper/test/helper.test.mjs
 claude plugin validate plugins/tailscale
 claude plugin test plugins/tailscale
-claude plugin validate plugins/threads
-claude plugin test plugins/threads
 ```

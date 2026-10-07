@@ -21,13 +21,6 @@ They read the text of the Bash command Claude is about to run, run the tools' ow
 - **Not stored:** what you see in the apps. The helper passes screen content between Claude and the computer-use server and keeps none of it.
 - The helper listens on a Unix socket under `~/.claude/mcp/codex-cu/run/`, readable by your user only. Auto-approve is off by default.
 
-## threads
-
-- **Read:** the transcript of each helper under `~/.claude/projects/<folder>/<session>.jsonl`, to find its final answer, and the visible screen of a helper (`herdr agent read`) when it is blocked.
-- **Saved:** the helper registry in the plugin's own store (ids, titles, branches, paths, session ids and pending announcements). Helpers' worktrees and branches stay on disk until you remove them.
-- **Sent:** nothing leaves the machine by the plugin itself, but each announcement is submitted to the chat as a new turn, so a helper's final answer (up to 4000 characters), its branch and, for a blocked helper, a screen excerpt reach the model provider of that chat. No redaction is applied.
-- **Helpers** are ordinary Claude Code sessions: they send what they read to the model provider as any session does.
-
 ## tailscale
 
 - **Read:** `TS_API_KEY`, on every call. It is never taken from tool input.
