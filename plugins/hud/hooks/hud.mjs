@@ -31,48 +31,27 @@ const TEXT = {
     missed: "missed",
     causes: { model: "model changed", lapsed: "lapsed", prefix: "start changed" },
     underMinute: "< 1 min",
-    cost: (usd) => (usd >= 100 ? `≈ $${Math.round(usd)}` : `≈ $${usd.toFixed(2)}`),
     resetsAt: (time) => `Resets at ${time}`,
-    lastPrompt: (usd) => `+$${usd.toFixed(2)}`,
-    lastPrompt5h: (points) => `+${decimal(points)}% 5h`,
     toRewrite: (tokens) => `${tokens} to rewrite`,
     newThread: "new thread",
-    // $2.32, $182 from 100 dollars, < $0.01 under a cent.
-    money: (usd) => (usd < 0.01 ? "< $0.01" : `$${amount(usd)}`),
     times: (n) => `x${n}`,
     atStake: (what) => `${what} at stake`,
-    // Beside a warm cache: what letting it lapse would cost.
-    ifExpires: (what) => `${what} if it lapses`,
     // The cache's tooltip in the app, one line per item.
     tips: {
       warm: (time, oneHour, observed) => `Cache warm until ${time} (${oneHour ? "1-hour" : "5-minute"} lifetime, ${observed ? "observed" : "assumed"}).`,
       lastRead: (share, tokens) => `Last message: ${share} read from the cache (${tokens}).`,
-      costs: (read, rewrite) => `Reading the context: ${read} a message. If it expires: ${rewrite} to write it again.`,
-      saved: (usd) => `This thread: ${usd} saved by the cache.`,
-      soon: (time, tokens, costs) =>
-        `The cache expires at ${time}. Send your next message before then, or it writes ${tokens} tokens again${costs ? ` (${costs.rewrite} instead of ${costs.read})` : ""}.`,
-      expired: (tokens, cost) => `The next message writes the whole context (${tokens}) again at full price${cost ? `, ${cost}` : ""}.`,
+      soon: (time, tokens) => `The cache expires at ${time}. Send your next message before then, or it writes ${tokens} tokens again.`,
+      expired: (tokens) => `The next message writes the whole context (${tokens}) again at full price.`,
       compact: "/compact before going on: the context written again will be smaller.",
       newThread: "A new thread avoids this rewrite; a compaction would read it all again.",
-      missed: (share, cause, tokens, surcharge) =>
-        `This message read only ${share} from the cache (${cause}): it wrote ${tokens} tokens again${surcharge ? `, ${surcharge} more than a message served by the cache` : ""}.`,
+      missed: (share, cause, tokens) => `This message read only ${share} from the cache (${cause}): it wrote ${tokens} tokens again.`,
       compacted: "Compacted: the next message writes a new, smaller cache.",
     },
     agents: (n) => (n === 1 ? "1 agent" : `${n} agents`),
-    icons: { five_hour: "5-hour limit", seven_day: "7-day limit", spend_limit: "Spend limit", reset: "Resets in", cache: "Prompt cache", cost: "Session cost", lastPrompt: "Last prompt", agents: "Agents running" },
+    icons: { five_hour: "5-hour limit", seven_day: "7-day limit", spend_limit: "Spend limit", reset: "Resets in", cache: "Prompt cache", agents: "Agents running" },
   },
 };
 let T = TEXT.en;
-
-// 2.32, or 182 from 100 dollars (cents dropped).
-function amount(usd) {
-  return Math.round(usd * 100) >= 10_000 ? String(Math.round(usd)) : usd.toFixed(2);
-}
-
-// "≈ $2.32"; under a cent, "< $0.01" alone.
-function approx(usd) {
-  return usd < 0.01 ? T.money(usd) : `≈ ${T.money(usd)}`;
-}
 
 // ---------- Context ----------
 
@@ -161,9 +140,6 @@ const PACE_ALERT = 15;
 const PACE_START_MAX = 50;
 // How many points ahead of the clock a window may run before it is flagged.
 let paceStart = 0;
-// Every dollar amount (the session cost block "≈ $11.28 (+$0.67 · +1% 5h)", and the cache's lapse and
-// rewrite prices): off unless the Show cost setting is on; the cache then speaks in tokens.
-let showCost = false;
 
 // The pace start setting: a number (or numeric text) from 0 to 50; 0 when it is anything else.
 function paceStartOf(raw) {
@@ -209,41 +185,10 @@ let cache = null;
 let compacted = false;
 // Lifetime seen in the traffic ("5m" | "1h"), which beats the rules.
 let seenTtl = null;
-// What the cache saved this session, in dollars: each request's tokens read from the cache,
-// at the input price minus the cache-read price.
-let savedUsd = 0;
-
-// Anthropic first-party list prices, USD per million tokens, as of 2026-09-25: input and cache
-// read. Cache writes follow from input: 1.25× for the 5-minute lifetime, 2× for 1 hour.
-// Update this table, and its date, when the prices change. A model missing here shows tokens only.
-const PRICES = {
-  "claude-fable-5-1": { input: 10, read: 0.25 },
-  "claude-mythos-5-1": { input: 10, read: 0.25 },
-  "claude-fable-5": { input: 10, read: 1 },
-  "claude-opus-5-5": { input: 4, read: 0.2 },
-  "claude-opus-5": { input: 5, read: 0.5 },
-  "claude-opus-4-8": { input: 5, read: 0.5 },
-  "claude-opus-4-7": { input: 5, read: 0.5 },
-  "claude-opus-4-6": { input: 5, read: 0.5 },
-  "claude-sonnet-5-5": { input: 2, read: 0.2 },
-  "claude-sonnet-5": { input: 2, read: 0.2 },
-  "claude-sonnet-4-6": { input: 3, read: 0.3 },
-  "claude-haiku-4-5": { input: 1, read: 0.1 },
-};
 // Environment switches read at session start.
 let cacheEnv = {};
 let cacheTicker = null;
 let cacheKey = "";
-
-// Session cost in dollars, as /cost totals it; null where the host keeps no ledger.
-let cost = null;
-// What the last prompt added to it (its subagents included), and the total it started from.
-let lastPrompt = null;
-let promptBase = null;
-// The same in points of the 5-hour limit (an account figure: other sessions running at the
-// same time count in it), and the reading it started from.
-let lastPrompt5h = null;
-let promptBase5h = null;
 
 // What the info line above the usage line shows: the model and effort of the last main-loop
 // request, the speed of the last one that wrote anything, the folder and its git branch.
@@ -283,7 +228,6 @@ const TINTS = {
   calm: ["rgba(27,161,196,0.11)", "rgba(27,161,196,0.30)"],
   fast: ["rgba(217,150,43,0.14)", "rgba(217,150,43,0.36)"],
   alert: ["rgba(214,69,69,0.12)", "rgba(214,69,69,0.36)"],
-  cost: ["rgba(184,140,40,0.13)", "rgba(184,140,40,0.34)"],
   agents: ["rgba(196,80,127,0.11)", "rgba(196,80,127,0.32)"],
 };
 // Small outlined icons in the app, each in its pill's color (the alt text is required: a
@@ -291,7 +235,7 @@ const TINTS = {
 const ICON_SIZE = 16;
 const SMALL_ICON = 14;
 const ICONS = {
-  // Gauge and speech bubble are drawn around y=11.5: half a unit down centres them like the others.
+  // The gauge is drawn around y=11.5: half a unit down centres them like the others.
   gauge: (c) =>
     `<g transform="translate(0 0.5)"><path d="M3.6 18.5a9.5 9.5 0 1 1 16.8 0" fill="none" stroke="${c}" stroke-width="2.2" stroke-linecap="round"/><path d="M12 14.5l4.3-4.6" fill="none" stroke="${c}" stroke-width="2.2" stroke-linecap="round"/><circle cx="12" cy="14.5" r="1.7" fill="${c}"/></g>`,
   calendar: (c) =>
@@ -302,22 +246,18 @@ const ICONS = {
   bolt: (c) => `<path d="M13.2 2 4 13.6h7.2L10.4 22l9.2-11.6h-7.2z" fill="${c}" fill-opacity="0.18" stroke="${c}" stroke-width="2" stroke-linejoin="round"/>`,
   coin: (c) =>
     `<circle cx="12" cy="12" r="9.5" fill="${c}" fill-opacity="0.16" stroke="${c}" stroke-width="2"/><path d="M15 8.8c-.5-1-1.6-1.6-3-1.6-1.7 0-3 .9-3 2.2s1.3 1.8 3 2.1 3 .9 3 2.2-1.3 2.3-3 2.3c-1.4 0-2.5-.6-3.1-1.6M12 5.6v1.6M12 16.8v1.6" fill="none" stroke="${c}" stroke-width="1.9" stroke-linecap="round"/>`,
-  // A speech bubble: what the last prompt cost.
-  prompt: (c) =>
-    `<g transform="translate(0 0.5)"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v8a2.5 2.5 0 0 1-2.5 2.5H10l-4.5 4v-4H6.5A2.5 2.5 0 0 1 4 13.5z" fill="${c}" fill-opacity="0.14" stroke="${c}" stroke-width="2" stroke-linejoin="round"/><path d="M8.5 8.5h7M8.5 11.5h4.5" fill="none" stroke="${c}" stroke-width="2" stroke-linecap="round"/></g>`,
   // A small robot: subagents at work.
   agents: (c) =>
     `<rect x="4" y="7.5" width="16" height="12.5" rx="3.5" fill="${c}" fill-opacity="0.14" stroke="${c}" stroke-width="2"/><path d="M12 7.5V4M2 12.5v3M22 12.5v3" fill="none" stroke="${c}" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="3.2" r="1.3" fill="${c}"/><circle cx="9" cy="13" r="1.5" fill="${c}"/><circle cx="15" cy="13" r="1.5" fill="${c}"/><path d="M9.5 16.8h5" fill="none" stroke="${c}" stroke-width="1.8" stroke-linecap="round"/>`,
 };
 // Icon color per block: deeper than the pill's tint, readable on light and dark backgrounds.
-const ICON_COLORS = { five_hour: "#3a9a62", seven_day: "#8a5fd0", spend_limit: "#b8892a", calm: "#1b9cbe", fast: "#d9962b", alert: "#d64545", cost: "#b8892a", agents: "#c4507f" };
+const ICON_COLORS = { five_hour: "#3a9a62", seven_day: "#8a5fd0", spend_limit: "#b8892a", calm: "#1b9cbe", fast: "#d9962b", alert: "#d64545", agents: "#c4507f" };
 const LIMIT_ICONS = { five_hour: "gauge", seven_day: "calendar", spend_limit: "coin" };
 // Columns the terminal may cover at the end of the band.
 const RESERVED_COLUMNS = 2;
 
 export function register(on, options) {
   paceStart = paceStartOf(options?.paceStart);
-  showCost = options?.showCost === true || options?.showCost === "true";
   minAnswerChars = typeof options?.minAnswerChars === "number" ? options.minAnswerChars : 80;
   suggestSkills = options?.suggestSkills !== false && options?.suggestSkills !== "false";
 
@@ -329,9 +269,6 @@ export function register(on, options) {
     cache = null;
     compacted = false;
     seenTtl = null;
-    savedUsd = 0;
-    lastPrompt = null;
-    lastPrompt5h = null;
     cacheKey = "";
     suggestions = { kind: "hidden" };
     info = { model: "", effort: "", speed: null, dir: "", branch: "", files: 0, added: 0, removed: 0 };
@@ -341,9 +278,6 @@ export function register(on, options) {
     await restoreTurns($);
     const usage = await $.session.usage();
     pushReading(usage.context);
-    cost = usage.cost?.usd ?? null;
-    promptBase = cost;
-    promptBase5h = fiveHourOf(usage.rateLimits);
     agents = [];
     agentsKey = "";
     await refreshAgents($);
@@ -415,17 +349,6 @@ export function register(on, options) {
     try {
       const usage = await $.session.usage();
       pushReading(usage.context);
-      if (usage.cost) {
-        cost = usage.cost.usd;
-        if (promptBase !== null && cost >= promptBase) lastPrompt = cost - promptBase;
-        promptBase = cost;
-      }
-      // A window that reset in between gives no share.
-      const now5h = fiveHourOf(usage.rateLimits);
-      if (now5h !== null) {
-        lastPrompt5h = promptBase5h !== null && now5h >= promptBase5h ? Math.round((now5h - promptBase5h) * 10) / 10 : null;
-        promptBase5h = now5h;
-      }
       await saveTurns($);
       $.ui.invalidate("ui.render");
     } catch {
@@ -458,7 +381,6 @@ export function register(on, options) {
 
   on("session.measure", async ($, e, next) => {
     if (e.changed.includes("rateLimits") && e.rateLimits.length > 0) await shareLimits($, e.rateLimits);
-    if (e.cost) cost = e.cost.usd;
     $.ui.invalidate("ui.render");
     return next(e);
   });
@@ -702,9 +624,6 @@ async function restoreTurns($) {
         if (saved.cache && Number.isFinite(saved.cache.at)) cache = saved.cache;
         compacted = saved.compacted === true;
         if (saved.seenTtl === "5m" || saved.seenTtl === "1h") seenTtl = saved.seenTtl;
-        if (Number.isFinite(saved.saved) && saved.saved >= 0) savedUsd = saved.saved;
-        if (Number.isFinite(saved.lastPrompt)) lastPrompt = saved.lastPrompt;
-        if (Number.isFinite(saved.lastPrompt5h)) lastPrompt5h = saved.lastPrompt5h;
       } else if (!saved || !(now - saved.at < TURNS_KEEP_MS)) await $.store.delete(key);
     }
   } catch {
@@ -715,7 +634,7 @@ async function restoreTurns($) {
 async function saveTurns($) {
   if (!turnsKey) return;
   try {
-    await $.store.set(turnsKey, { at: await $.clock.now(), readings, cache, compacted, seenTtl, saved: savedUsd, lastPrompt, lastPrompt5h });
+    await $.store.set(turnsKey, { at: await $.clock.now(), readings, cache, compacted, seenTtl });
   } catch {
     // Not saved this turn: the bars come back on the next one.
   }
@@ -791,17 +710,6 @@ function clockTime(ms) {
   }
 }
 
-// The 5-hour window's share used, or null without one.
-function fiveHourOf(list) {
-  const w = (list ?? []).find((l) => l.kind === "five_hour");
-  return w && Number.isFinite(w.percentUsed) ? w.percentUsed : null;
-}
-
-// 6.5, 12, 0.4: one decimal under 10.
-function decimal(x) {
-  return x >= 10 ? String(Math.round(x)) : String(Math.round(x * 10) / 10);
-}
-
 function bound(percent) {
   return Math.min(100, Math.max(0, percent));
 }
@@ -838,8 +746,7 @@ function hitOf(r) {
   return total > 0 ? Math.round(((r.read ?? 0) / total) * 100) : 0;
 }
 
-// Notes a main-loop request, names the cause when it missed the cache, learns the lifetime, and
-// adds what the tokens read from the cache saved. The model comes from the usage, else the request.
+// Notes a main-loop request, names the cause when it missed the cache, learns the lifetime. The model comes from the usage, else the request.
 function recordRequest(at, usage, model) {
   const cur = {
     at,
@@ -863,23 +770,7 @@ function recordRequest(at, usage, model) {
     else if (missed && gap > TTL["5m"] && gap < TTL["1h"] && cur.model === prev.model && promptOf(cur) >= promptOf(prev)) seenTtl = "5m";
     if (missed) cur.cause = cur.model !== prev.model ? "model" : gap >= ttlMs() ? "lapsed" : "prefix";
   }
-  const price = priceOf(cur.model);
-  if (price) savedUsd += (cur.read * (price.input - price.read)) / 1e6;
   cache = cur;
-}
-
-// List prices of a model id: lowercase, without a "[1m]"-style suffix, a trailing date or a
-// provider prefix ("anthropic.", "us.anthropic.", ".../"); null when the table lacks it.
-function priceOf(model) {
-  let id = String(model ?? "").trim().toLowerCase();
-  id = id.replace(/\[[^\]]*\]$/, "").replace(/-20\d{6}$/, "");
-  id = id.slice(Math.max(id.lastIndexOf("."), id.lastIndexOf("/")) + 1);
-  return Object.prototype.hasOwnProperty.call(PRICES, id) ? PRICES[id] : null;
-}
-
-// Price of a cache write, per million tokens, for the lifetime in use.
-function writePrice(price, ttl) {
-  return (ttl === TTL["1h"] ? 2 : 1.25) * price.input;
 }
 
 // Claude Code's rules for the main conversation, after what the traffic showed.
@@ -904,30 +795,24 @@ function cacheState(now) {
   const tokens = readings.length > 0 ? readings[readings.length - 1].tokens : promptOf(cache);
   const ttl = ttlMs();
   const ttlLabel = ttlLabelOf(ttl);
-  // In dollars, at list prices, for the context the next message reads: from the cache, and
-  // written again once it lapsed. Null for a model missing from PRICES: tokens only.
-  const price = showCost ? priceOf(cache.model) : null;
-  const costs = price ? { read: (tokens * price.read) / 1e6, rewrite: (tokens * writePrice(price, ttl)) / 1e6 } : null;
   // Expired: say what the next message writes again, and the way out: from 300k a new thread
   // (it avoids rewriting the whole context at full price), from 100k /compact. In the app the
   // way out goes to the tooltip; the terminal, without one, keeps it on the line.
   if (left <= 0) {
     const rewrite = T.toRewrite(short(tokens));
-    const detail = tokens < COMPACT_AT ? "" : costs ? `${rewrite} ${approx(costs.rewrite)}` : rewrite;
+    const detail = tokens < COMPACT_AT ? "" : rewrite;
     const advice = tokens >= LARGE_CONTEXT ? T.newThread : tokens >= COMPACT_AT ? "/compact" : "";
-    const tip = [T.tips.expired(short(tokens), costs && approx(costs.rewrite))];
+    const tip = [T.tips.expired(short(tokens))];
     if (tokens >= LARGE_CONTEXT) tip.push(T.tips.newThread);
     else if (tokens >= COMPACT_AT) tip.push(T.tips.compact);
     return { tone: "alert", value: T.expired, detail, advice, ttlLabel, tip: tip.join("\n") };
   }
   const share = hitOf(cache);
-  // A miss: what writing the cache again cost above a message served by it.
+  // A miss: the cache was written again.
   if (cache.cause) {
     const cause = T.causes[cache.cause];
-    const surcharge = price ? ((cache.write ?? 0) * (writePrice(price, ttl) - price.read)) / 1e6 : null;
-    const extra = surcharge !== null && surcharge >= 0.01 ? ` · +${T.money(surcharge)}` : "";
-    const tip = T.tips.missed(T.percent(share), cause, short(cache.write ?? 0), surcharge !== null && approx(surcharge));
-    return { tone: "fast", value: T.percent(share), detail: `${T.missed} · ${cause}${extra}`, tip };
+    const tip = T.tips.missed(T.percent(share), cause, short(cache.write ?? 0));
+    return { tone: "fast", value: T.percent(share), detail: `${T.missed} · ${cause}`, tip };
   }
   const time = left < MINUTE ? T.underMinute : duration(left);
   const soon = left < ttl * CACHE_SOON_SHARE;
@@ -935,20 +820,14 @@ function cacheState(now) {
   // A cache that served the message (90% or more), or one just rebuilt after a compaction,
   // shows its time alone; below, the share first.
   const shown = share >= GOOD_HIT || cache.rebuilt ? { value: time, detail: "" } : { value: T.percent(share), detail: time };
-  // Under a sixth of the lifetime: what letting it lapse would cost.
+  // Under a sixth of the lifetime: what letting it lapse would write again.
   if (soon) {
-    const stake = T.atStake(costs ? T.money(costs.rewrite) : short(tokens));
-    const tip = T.tips.soon(expiry, short(tokens), costs && { read: approx(costs.read), rewrite: approx(costs.rewrite) });
+    const stake = T.atStake(short(tokens));
+    const tip = T.tips.soon(expiry, short(tokens));
     return { tone: "fast", ...shown, urgent: true, ttlLabel, stake, tip };
   }
   const tip = [T.tips.warm(expiry, ttl === TTL["1h"], seenTtl !== null), T.tips.lastRead(T.percent(share), short(cache.read ?? 0))];
-  if (costs) {
-    tip.push(T.tips.costs(approx(costs.read), approx(costs.rewrite)));
-    if (savedUsd >= 0.01) tip.push(T.tips.saved(approx(savedUsd)));
-  }
-  // Warm and calm: what a lapse would cost, in sight all the time (under a cent it still reads "< $0.01").
-  const lapse = costs ? T.ifExpires(T.money(costs.rewrite)) : "";
-  return { tone: "calm", ...shown, urgent: false, ttlLabel, lapse, tip: tip.join("\n") };
+  return { tone: "calm", ...shown, urgent: false, ttlLabel, tip: tip.join("\n") };
 }
 
 // ---------- Agents ----------
@@ -969,11 +848,11 @@ async function refreshAgents($) {
   return true;
 }
 
-// The cache block as the terminal writes it: "cache 8 min · $2.32 at stake".
-// `compact` drops the lifetime and the calm cache's lapse cost: what a narrow line gives up first.
+// The cache block as the terminal writes it: "cache 8 min · 289k at stake".
+// `compact` drops the lifetime: what a narrow line gives up first.
 function cacheText(state, compact = false) {
   if (!state) return "";
-  const extras = compact ? [] : [state.ttlLabel, state.lapse];
+  const extras = compact ? [] : [state.ttlLabel];
   return [`${T.cache} ${state.value}`, state.detail, ...extras, state.stake, state.advice].filter(Boolean).join(" · ");
 }
 
@@ -1026,13 +905,13 @@ function cacheBlock({ Text, Svg }, mode, state, compact = false) {
   // terminal the advice the app keeps for the tooltip).
   if (mode !== "none") {
     const lead = state.urgent ? state.detail : "";
-    const rest = [state.urgent ? "" : state.detail, ...(compact ? [] : [state.ttlLabel, state.lapse]), state.stake, mode !== "svg" ? state.advice : ""].filter(Boolean).join(" · ");
+    const rest = [state.urgent ? "" : state.detail, ...(compact ? [] : [state.ttlLabel]), state.stake, mode !== "svg" ? state.advice : ""].filter(Boolean).join(" · ");
     if (mode === "svg" && (lead || rest)) parts.push(divider(Text, "s"));
     if (lead) parts.push(Text({ key: "d", bold: true, color: ink("fast", mode), children: mode === "svg" ? lead : `· ${lead}` }));
     if (rest) parts.push(Text({ key: "e", dimColor: true, children: mode === "svg" && !lead ? rest : `· ${rest}` }));
   }
   const tint = TINTS[state.tone] ?? TINTS.calm;
-  // Hover the pill for the expiry time, the share read, the costs and the advice.
+  // Hover the pill for the expiry time, the share read and the advice.
   return { key: "cache", tint, parts, tip: state.tip ?? "" };
 }
 
@@ -1147,7 +1026,7 @@ function drawLine(elements, surface, columns, now) {
   const gauges = limits.list.filter((limit) => !(Date.parse(limit.resetsAt ?? "") <= now)).map((limit) => gaugeOf(limit, now));
   const cacheNow = cacheState(now);
   // Block-character bars in the app. In the terminal the line gives up detail in steps until it fits:
-  // the cache's lifetime and lapse cost (compact), then the bars (nobar: the reset times stay),
+  // the cache's lifetime (compact), then the bars (nobar: the reset times stay),
   // then the reset times too (none).
   let mode = "svg";
   let compact = false;
@@ -1183,17 +1062,6 @@ function drawLine(elements, surface, columns, now) {
   }
   for (const g of gauges) blocks.push(gaugeBlock(elements, mode, g));
   if (cacheNow) blocks.push(cacheBlock(elements, mode, cacheNow, compact));
-  // The cost goes first when the terminal is short of room.
-  if (showCost && cost !== null && cost >= 0.005 && mode !== "none") {
-    const parts = [Text({ key: "v", bold: true, children: T.cost(cost) })];
-    if (desktop) parts.unshift(icon(Svg, "i", "coin", ICON_COLORS.cost, T.icons.cost));
-    const share = lastPromptText();
-    if (share) {
-      if (desktop) parts.push(divider(Text, "s"), icon(Svg, "p", "prompt", ICON_COLORS.cost, T.icons.lastPrompt, SMALL_ICON));
-      parts.push(Text({ key: "d", dimColor: true, children: desktop ? share : `(${share})` }));
-    }
-    blocks.push({ key: "cost", tint: TINTS.cost, parts });
-  }
   // Agents last, shown only while some run: the blocks before them stay in place.
   if (agents.length > 0) {
     const parts = [];
@@ -1249,11 +1117,6 @@ function textWidth(gauges, cacheNow, level = 0) {
     width += cacheText(cacheNow, level >= 1).length;
     blocks++;
   }
-  if (showCost && cost !== null && cost >= 0.005) {
-    const share = lastPromptText();
-    width += T.cost(cost).length + (share ? 3 + share.length : 0);
-    blocks++;
-  }
   if (agents.length > 0) {
     width += T.agents(agents.length).length;
     blocks++;
@@ -1270,15 +1133,6 @@ function isBlank(node) {
   if (typeof node === "object" && (node.type === "Box" || node.type === "Text")) return isBlank(node.children ?? node.props?.children);
   return false;
 }
-
-// "+1,07 $ · +2 % 5h": what the last prompt cost, in dollars and in points of the 5-hour limit.
-function lastPromptText() {
-  const parts = [];
-  if (lastPrompt !== null && lastPrompt >= 0.005) parts.push(T.lastPrompt(lastPrompt));
-  if (lastPrompt5h !== null && lastPrompt5h >= 0.1) parts.push(T.lastPrompt5h(lastPrompt5h));
-  return parts.join(" · ");
-}
-
 
 // ---------- Context readings ----------
 

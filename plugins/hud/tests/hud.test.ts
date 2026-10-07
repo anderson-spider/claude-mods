@@ -1,8 +1,5 @@
 import { test, expect, mock } from "claude-code/testing";
 
-// Dollar amounts are off by default: tests that need them turn the Show cost setting on.
-const SHOW_COST = { options: { showCost: true } } as any
-
 // October 2, 2026, 13:00 UTC.
 const NOW = Date.UTC(2026, 9, 2, 13, 0);
 // The 5-hour reset time is shown in the machine's time zone.
@@ -221,8 +218,9 @@ test("pace start: a lead beyond the start is flagged", { options: { paceStart: 1
   expect(texts).not.toContain("▬");
 });
 
-test("narrow terminal: gives up the cache extras, then the bars, and the reset times last", SHOW_COST, async ($, on) => {
-  world(on);
+test("narrow terminal: gives up the cache extras, then the bars, and the reset times last", async ($, on) => {
+  // The 5-minute lifetime is the one with extras (its label) to give up.
+  world(on, { CLAUDE_CODE_PROMPT_CACHE_TTL: "5m" });
   withUsage(on, LIMITS);
   engineStep(on, [HIT]);
   await $.session.start({ source: "startup", cwd: "/tmp" } as any);
@@ -232,7 +230,7 @@ test("narrow terminal: gives up the cache extras, then the bars, and the reset t
     const { texts } = await band($, "terminal", columns);
     const bar = texts.includes("█");
     const reset = texts.includes("· 3h00") && texts.includes("· 3d00h");
-    const extras = texts.some((t) => t.includes("if it lapses"));
+    const extras = texts.some((t) => t.includes("TTL"));
     // Each piece of detail only ever appears when every more important one does.
     if (extras) expect(bar && reset).toBe(true);
     if (bar) expect(reset).toBe(true);
@@ -409,7 +407,7 @@ for (const surface of ["terminal", "desktop"] as const) {
   });
 }
 
-// ---------- Prompt cache and cost ----------
+// ---------- Prompt cache ----------
 
 // One main-loop request answered with this usage.
 async function step($: any, usage: Record<string, unknown>, model = "claude-opus-5-5") {
@@ -429,20 +427,6 @@ function engineStep(on: any, usages: Record<string, unknown>[]) {
 
 const HIT = { model: "claude-opus-5-5", input_tokens: 300, cache_read_input_tokens: 98_000, cache_creation_input_tokens: 1_700, output_tokens: 500 };
 const MISS = { model: "claude-opus-5-5", input_tokens: 300, cache_read_input_tokens: 0, cache_creation_input_tokens: 99_700, output_tokens: 500 };
-
-// The mod's list prices for the models used here, USD per million tokens (Anthropic, 2026-09-25).
-const PRICE: Record<string, { input: number; read: number }> = {
-  "claude-opus-5-5": { input: 4, read: 0.2 },
-  "claude-sonnet-5-5": { input: 2, read: 0.2 },
-  "claude-haiku-4-5": { input: 1, read: 0.1 },
-};
-// LIMITS means a subscription within its plan: the 1-hour lifetime, whose cache writes cost 2× input.
-const write1h = (model = "claude-opus-5-5") => 2 * PRICE[model].input;
-const readCost = (tokens: number, model = "claude-opus-5-5") => (tokens * PRICE[model].read) / 1e6;
-const rewriteCost = (tokens: number, model = "claude-opus-5-5") => (tokens * write1h(model)) / 1e6;
-const savedBy = (read: number, model = "claude-opus-5-5") => (read * (PRICE[model].input - PRICE[model].read)) / 1e6;
-// The mod's money format, for amounts between a cent and 100 dollars.
-const en$ = (usd: number) => `$${usd.toFixed(2)}`;
 
 // The cache pill's hover card in the app; null without one.
 async function boltTip(ui: any): Promise<string | null> {
@@ -465,7 +449,7 @@ test("cache: share read and time left on a subscription (1 hour)", async ($, on)
   expect(time?.props?.color).toBeUndefined();
 });
 
-test("cache: yellow under 10 minutes, then expired with /compact", SHOW_COST, async ($, on) => {
+test("cache: yellow under 10 minutes, then expired with /compact", async ($, on) => {
   const clock = mock.clock(on, { now: NOW });
   mock.store(on, {});
   mock.env(on, {});
@@ -485,21 +469,21 @@ test("cache: yellow under 10 minutes, then expired with /compact", SHOW_COST, as
   // Under 10 minutes: signaled by color alone, no warning mark.
   expect(soon?.props?.bold).toBe(true);
   expect(texts).not.toContain("⚠");
-  // What letting it lapse costs: the 107k context written again (1 hour lifetime), dim.
-  const stake: any = await ui.find({ type: "Text", text: `· ${en$(rewriteCost(107_000))} at stake` });
+  // What letting it lapse writes again: the 107k context, dim.
+  const stake: any = await ui.find({ type: "Text", text: "· 107k at stake" });
   expect(stake?.props?.dimColor).toBe(true);
   const desktop = await band($, "desktop");
-  expect(desktop.texts).toContain(`${en$(rewriteCost(107_000))} at stake`);
+  expect(desktop.texts).toContain("107k at stake");
   const yellow: any = await desktop.ui.find({ type: "Text", text: "5 min" });
   expect(yellow?.props?.color).toBe("#a8690a");
   expect(await boltTip(desktop.ui)).toBe(
-    `The cache expires at ${at(NOW + 3_600_000)}. Send your next message before then, or it writes 107k tokens again (≈ ${en$(rewriteCost(107_000))} instead of ≈ ${en$(readCost(107_000))}).`,
+    `The cache expires at ${at(NOW + 3_600_000)}. Send your next message before then, or it writes 107k tokens again.`,
   );
   await (clock as any).advance(6 * 60_000);
   ({ ui, texts } = await band($, "terminal"));
   expect(texts).toContain("expired");
-  // 107k of context: past 100k, what gets written again, its price, and /compact before going on.
-  expect(texts).toContain(`· 107k to rewrite ≈ ${en$(rewriteCost(107_000))} · /compact`);
+  // 107k of context: past 100k, what gets written again, and /compact before going on.
+  expect(texts).toContain("· 107k to rewrite · /compact");
   const expired: any = await ui.find({ type: "Text", text: "expired" });
   expect(expired?.props?.color).toBe("#ff6b6b");
   expect(expired?.props?.bold).toBe(true);
@@ -507,7 +491,7 @@ test("cache: yellow under 10 minutes, then expired with /compact", SHOW_COST, as
   expect(texts).not.toContain("⚠");
 });
 
-test("cache: a miss after a model change names the cause", SHOW_COST, async ($, on) => {
+test("cache: a miss after a model change names the cause", async ($, on) => {
   world(on);
   withUsage(on, LIMITS);
   engineStep(on, [HIT, { ...MISS, model: "claude-sonnet-5-5" }]);
@@ -516,14 +500,10 @@ test("cache: a miss after a model change names the cause", SHOW_COST, async ($, 
   await step($, MISS, "claude-sonnet-5-5");
   const { texts } = await band($, "terminal");
   expect(texts).toContain("0%");
-  // The surcharge: 99.7k tokens written (Sonnet 5.5, 1 hour) instead of read from the cache.
-  const surcharge = (99_700 * (write1h("claude-sonnet-5-5") - PRICE["claude-sonnet-5-5"].read)) / 1e6;
-  expect(texts).toContain(`· missed · model changed · +${en$(surcharge)}`);
+  expect(texts).toContain("· missed · model changed");
   const desktop = await band($, "desktop");
-  expect(desktop.texts).toContain(`missed · model changed · +${en$(surcharge)}`);
-  expect(await boltTip(desktop.ui)).toBe(
-    `This message read only 0% from the cache (model changed): it wrote 99.7k tokens again, ≈ ${en$(surcharge)} more than a message served by the cache.`,
-  );
+  expect(desktop.texts).toContain("missed · model changed");
+  expect(await boltTip(desktop.ui)).toBe("This message read only 0% from the cache (model changed): it wrote 99.7k tokens again.");
 });
 
 test("cache: 5 minutes on an API key (no plan window)", async ($, on) => {
@@ -571,23 +551,6 @@ test("cache: the yellow threshold is a sixth of the lifetime (50 s of 5 minutes)
   expect(((await ui.find({ type: "Text", text: "< 1 min" })) as any)?.props?.color).toBe("#a8690a");
 });
 
-test("cost: the last prompt's share next to the total", SHOW_COST, async ($, on) => {
-  world(on);
-  on("turn.complete", () => ({ text: "" }));
-  const costs = [4.0, 4.84];
-  let call = 0;
-  on("session.usage", () => ({ value: { startedAt: NOW, context: { tokens: 107_000 + call * 1_000, window: 1_000_000, percent: 11 }, rateLimits: LIMITS, cost: { usd: costs[Math.min(call++, costs.length - 1)] } } }));
-  await $.session.start({ source: "startup", cwd: "/tmp" } as any);
-  await ($ as any).turn.complete({ answer: "ok" } as any);
-  const terminal = await band($, "terminal");
-  expect(terminal.texts).toContain("≈ $4.84");
-  expect(terminal.texts).toContain("(+$0.84)");
-  const desktop = await band($, "desktop");
-  expect(desktop.texts).toContain("+$0.84");
-  const svgs = (await desktop.ui.findAll({ type: "Svg" })) as any[];
-  expect(svgs.some((s) => s.props?.alt === "Last prompt")).toBe(true);
-});
-
 test("agents: a pill while subagents run, gone once they finish", async ($, on) => {
   world(on);
   withUsage(on, LIMITS);
@@ -608,22 +571,17 @@ test("agents: a pill while subagents run, gone once they finish", async ($, on) 
   expect(after.texts.some((t: string) => t.includes("agent"))).toBe(false);
 });
 
-test("desktop icons: gauge and speech bubble centred at y=12", SHOW_COST, async ($, on) => {
+test("desktop icons: gauge centred at y=12", async ($, on) => {
   world(on);
-  on("turn.complete", () => ({ text: "" }));
-  const costs = [4.0, 4.84];
-  let call = 0;
-  on("session.usage", () => ({ value: { startedAt: NOW, context: { tokens: 400_000 + call * 1_000, window: 1_000_000, percent: 40 }, rateLimits: LIMITS, cost: { usd: costs[Math.min(call++, costs.length - 1)] } } }));
+  withUsage(on, LIMITS, { tokens: 400_000, window: 1_000_000, percent: 40 });
   await $.session.start({ source: "resume", cwd: "/tmp" } as any);
-  await ($ as any).turn.complete({ answer: "ok" } as any);
   const { ui } = await band($, "desktop");
   const svgs = (await ui.findAll({ type: "Svg" })) as any[];
   const source = (alt: string) => String(svgs.find((s) => s.props?.alt === alt)?.props?.source);
   expect(source("5-hour limit")).toContain('<g transform="translate(0 0.5)"><path d="M3.6 18.5');
-  expect(source("Last prompt")).toContain('<g transform="translate(0 0.5)"><path d="M4 5.5');
 });
 
-test("cache expired from 300k: what gets written again, and a new thread", SHOW_COST, async ($, on) => {
+test("cache expired from 300k: what gets written again, and a new thread", async ($, on) => {
   const clock = mock.clock(on, { now: NOW });
   mock.store(on, {});
   mock.env(on, {});
@@ -639,37 +597,19 @@ test("cache expired from 300k: what gets written again, and a new thread", SHOW_
   const { texts } = await band($, "terminal");
   // A new thread avoids rewriting the whole context; a compaction would read it all again.
   // The terminal has no tooltip: the advice stays on the line.
-  expect(texts).toContain(`· 741k to rewrite ≈ ${en$(rewriteCost(741_000))} · new thread`);
+  expect(texts).toContain("· 741k to rewrite · new thread");
   expect(texts.join(" ")).not.toContain("/compact");
   // In the app the advice moves to the bolt's tooltip.
   const desktop = await band($, "desktop");
-  expect(desktop.texts).toContain(`741k to rewrite ≈ ${en$(rewriteCost(741_000))}`);
+  expect(desktop.texts).toContain("741k to rewrite");
   expect(desktop.texts.join(" ")).not.toContain("new thread");
   const tip = String(await boltTip(desktop.ui));
-  expect(tip).toContain(`The next message writes the whole context (741k) again at full price, ≈ ${en$(rewriteCost(741_000))}.`);
+  expect(tip).toContain("The next message writes the whole context (741k) again at full price.");
   expect(tip).toContain("A new thread avoids this rewrite; a compaction would read it all again.");
   expect(tip).not.toContain("/compact");
 });
 
-test("last prompt: its share of the 5-hour limit next to its cost", SHOW_COST, async ($, on) => {
-  world(on);
-  on("turn.complete", () => ({ text: "" }));
-  const steps = [
-    { usd: 4.0, five: 30 },
-    { usd: 5.07, five: 32.5 },
-  ];
-  let call = 0;
-  on("session.usage", () => {
-    const s = steps[Math.min(call++, steps.length - 1)];
-    return { value: { startedAt: NOW, context: { tokens: 107_000 + call * 1_000, window: 1_000_000, percent: 11 }, rateLimits: [{ ...LIMITS[1], percentUsed: s.five }, LIMITS[0]], cost: { usd: s.usd } } };
-  });
-  await $.session.start({ source: "startup", cwd: "/tmp" } as any);
-  await ($ as any).turn.complete({ answer: "ok" } as any);
-  const { texts } = await band($, "terminal");
-  expect(texts).toContain("(+$1.07 · +2.5% 5h)");
-});
-
-test("cache: below 90% served, the share before the time", SHOW_COST, async ($, on) => {
+test("cache: below 90% served, the share before the time", async ($, on) => {
   world(on);
   withUsage(on, LIMITS);
   const PART = { ...HIT, cache_read_input_tokens: 72_000, cache_creation_input_tokens: 0, input_tokens: 28_000 };
@@ -678,25 +618,8 @@ test("cache: below 90% served, the share before the time", SHOW_COST, async ($, 
   await step($, PART);
   const { texts } = await band($, "terminal");
   expect(texts).toContain("72%");
-  // After the time: the lifetime and what a lapse would cost, dim.
-  expect(texts).toContain(`· 1h00 · ${en$(rewriteCost(107_000))} if it lapses`);
-});
-
-test("cost: hidden by default", async ($, on) => {
-  world(on);
-  on("session.usage", () => ({ value: { startedAt: NOW, context: { tokens: 107_000, window: 1_000_000, percent: 11 }, rateLimits: LIMITS, cost: { usd: 11.28 } } }));
-  await $.session.start({ source: "startup", cwd: "/tmp" } as any);
-  const { texts } = await band($, "terminal");
-  expect(texts.join(" ")).not.toContain("≈ $");
-  expect(texts).toContain("107k");
-});
-
-test("cost: no cents from 100 dollars", SHOW_COST, async ($, on) => {
-  world(on);
-  on("session.usage", () => ({ value: { startedAt: NOW, context: { tokens: 107_000, window: 1_000_000, percent: 11 }, rateLimits: LIMITS, cost: { usd: 134.69 } } }));
-  await $.session.start({ source: "startup", cwd: "/tmp" } as any);
-  const { texts } = await band($, "terminal");
-  expect(texts).toContain("≈ $135");
+  // After the time, dim.
+  expect(texts).toContain("· 1h00");
 });
 
 test("desktop: pills never shrink, and the 5-hour reset time sits in the pill's hover card", async ($, on) => {
@@ -734,12 +657,12 @@ async function largeExpired($: any, on: any, compaction: Record<string, unknown>
   return clock;
 }
 
-test("compaction: the context drops at once, no expired cache", SHOW_COST, async ($, on) => {
+test("compaction: the context drops at once, no expired cache", async ($, on) => {
   await largeExpired($, on, { messages: [{ role: "user", text: "Summary of the thread", toolUses: [] }], tokensBefore: 784_000, tokensAfter: 48_000 });
   const before = await band($, "terminal");
   expect(before.texts).toContain("784k");
   expect(before.texts).toContain("expired");
-  expect(before.texts).toContain(`· 784k to rewrite ≈ ${en$(rewriteCost(784_000))} · new thread`);
+  expect(before.texts).toContain("· 784k to rewrite · new thread");
   await ($ as any).session.compact({ trigger: "manual", messages: [{ role: "user", text: "Go on", toolUses: [] }, { role: "assistant", text: "Done", toolUses: [] }] });
   const after = await band($, "terminal");
   expect(after.texts).toContain("48k");
@@ -765,38 +688,13 @@ test("compaction: a skipped one changes nothing", async ($, on) => {
   expect(texts).not.toContain("compacted");
 });
 
-// ---------- Cache prices ----------
+// ---------- Cache tooltip ----------
 
 // A large thread: 289k of context, 287k of it read from the cache by the last message.
 const BIG = { tokens: 289_000, window: 1_000_000, percent: 29 };
 const BIG_HIT = { model: "claude-opus-5-5", input_tokens: 300, cache_read_input_tokens: 287_000, cache_creation_input_tokens: 1_700, output_tokens: 500 };
 
-// Model ids as providers spell them, and the list price each one should find.
-for (const [model, family] of [
-  ["claude-opus-5-5", "claude-opus-5-5"],
-  ["claude-opus-5-5[1m]", "claude-opus-5-5"],
-  ["us.anthropic.claude-sonnet-5-5", "claude-sonnet-5-5"],
-  ["claude-haiku-4-5-20251001", "claude-haiku-4-5"],
-  ["claude-unknown-9", null],
-] as const) {
-  test(`cache price of ${model}`, SHOW_COST, async ($, on) => {
-    world(on);
-    withUsage(on, LIMITS, BIG);
-    engineStep(on, [{ ...BIG_HIT, model }]);
-    await $.session.start({ source: "startup", cwd: "/tmp" } as any);
-    await step($, { ...BIG_HIT, model }, model);
-    const tip = String(await boltTip((await band($, "desktop")).ui));
-    if (family) {
-      expect(tip).toContain(`Reading the context: ≈ ${en$(readCost(289_000, family))} a message. If it expires: ≈ ${en$(rewriteCost(289_000, family))} to write it again.`);
-    } else {
-      // Unknown: tokens only, no price anywhere.
-      expect(tip).toContain("Last message: 99% read from the cache (287k).");
-      expect(tip).not.toContain("$");
-    }
-  });
-}
-
-test("cache tooltip, warm, English: lifetime assumed", SHOW_COST, async ($, on) => {
+test("cache tooltip, warm, English: lifetime assumed", async ($, on) => {
   world(on);
   withUsage(on, LIMITS, BIG);
   engineStep(on, [BIG_HIT]);
@@ -807,13 +705,11 @@ test("cache tooltip, warm, English: lifetime assumed", SHOW_COST, async ($, on) 
     [
       `Cache warm until ${at(NOW + 3_600_000)} (1-hour lifetime, assumed).`,
       "Last message: 99% read from the cache (287k).",
-      `Reading the context: ≈ ${en$(readCost(289_000))} a message. If it expires: ≈ ${en$(rewriteCost(289_000))} to write it again.`,
-      `This thread: ≈ ${en$(2 * savedBy(287_000))} saved by the cache.`,
     ].join("\n"),
   );
 });
 
-test("cache: under 10 minutes and under 90% served, the stake after the time", SHOW_COST, async ($, on) => {
+test("cache: under 10 minutes and under 90% served, the stake after the time", async ($, on) => {
   const clock = world(on);
   withUsage(on, LIMITS);
   const PART = { ...HIT, cache_read_input_tokens: 72_000, cache_creation_input_tokens: 0, input_tokens: 28_000 };
@@ -829,11 +725,11 @@ test("cache: under 10 minutes and under 90% served, the stake after the time", S
   const share: any = await ui.find({ type: "Text", text: "72%" });
   expect(share?.props?.color).toBe("#a8690a");
   expect(share?.props?.bold).toBe(true);
-  expect(texts).toContain(`· ${en$(rewriteCost(107_000))} at stake`);
-  expect(texts.indexOf("· 5 min")).toBeLessThan(texts.indexOf(`· ${en$(rewriteCost(107_000))} at stake`));
+  expect(texts).toContain("· 107k at stake");
+  expect(texts.indexOf("· 5 min")).toBeLessThan(texts.indexOf("· 107k at stake"));
 });
 
-test("cache expired at 150k: the price in the pill, /compact in the tooltip", SHOW_COST, async ($, on) => {
+test("cache expired at 150k: the size in the pill, /compact in the tooltip", async ($, on) => {
   const clock = world(on);
   withUsage(on, LIMITS, { tokens: 150_000, window: 1_000_000, percent: 15 });
   engineStep(on, [HIT]);
@@ -841,24 +737,24 @@ test("cache expired at 150k: the price in the pill, /compact in the tooltip", SH
   await step($, HIT);
   await clock.advance(61 * 60_000);
   const desktop = await band($, "desktop");
-  expect(desktop.texts).toContain(`150k to rewrite ≈ ${en$(rewriteCost(150_000))}`);
+  expect(desktop.texts).toContain("150k to rewrite");
   expect(desktop.texts.join(" ")).not.toContain("/compact");
   expect(await boltTip(desktop.ui)).toBe(
-    `The next message writes the whole context (150k) again at full price, ≈ ${en$(rewriteCost(150_000))}.\n/compact before going on: the context written again will be smaller.`,
+    "The next message writes the whole context (150k) again at full price.\n/compact before going on: the context written again will be smaller.",
   );
   // The terminal, without a tooltip, keeps the advice on the line.
   const { texts } = await band($, "terminal");
-  expect(texts).toContain(`· 150k to rewrite ≈ ${en$(rewriteCost(150_000))} · /compact`);
+  expect(texts).toContain("· 150k to rewrite · /compact");
 });
 
-test("cache: without Show cost, tokens only, never dollars", async ($, on) => {
+test("cache: speaks in tokens, never dollars", async ($, on) => {
   const clock = world(on);
   withUsage(on, LIMITS);
   engineStep(on, [HIT]);
   await $.session.start({ source: "startup", cwd: "/tmp" } as any);
   await step($, HIT);
   let desktop = await band($, "desktop");
-  // Warm: the lifetime stays, no lapse price.
+  // Warm: no lifetime label on 1 hour, no price.
   expect(desktop.texts.join(" ")).not.toContain("TTL");
   expect(desktop.texts.join(" ")).not.toContain("$");
   expect(desktop.texts.join(" ")).not.toContain("if it lapses");
@@ -871,53 +767,6 @@ test("cache: without Show cost, tokens only, never dollars", async ($, on) => {
   const { texts } = await band($, "terminal");
   expect(texts).toContain("· 107k to rewrite · /compact");
   expect(texts.join(" ")).not.toContain("$");
-});
-
-test("cache: an unknown model shows tokens, never dollars", async ($, on) => {
-  const clock = world(on);
-  withUsage(on, LIMITS);
-  const OTHER = { ...HIT, model: "claude-unknown-9" };
-  engineStep(on, [OTHER]);
-  await $.session.start({ source: "startup", cwd: "/tmp" } as any);
-  await step($, OTHER, "claude-unknown-9");
-  await clock.advance(55 * 60_000);
-  let desktop = await band($, "desktop");
-  expect(desktop.texts).toContain("107k at stake");
-  expect(desktop.texts.join(" ")).not.toContain("$");
-  expect(await boltTip(desktop.ui)).toBe(`The cache expires at ${at(NOW + 3_600_000)}. Send your next message before then, or it writes 107k tokens again.`);
-  await clock.advance(6 * 60_000);
-  desktop = await band($, "desktop");
-  expect(desktop.texts).toContain("107k to rewrite");
-  expect(desktop.texts.join(" ")).not.toContain("$");
-  expect(String(await boltTip(desktop.ui))).not.toContain("$");
-  const { texts } = await band($, "terminal");
-  expect(texts).toContain("· 107k to rewrite · /compact");
-});
-
-test("cache savings: kept in the store, back on a resumed session", SHOW_COST, async ($, on) => {
-  mock.clock(on, { now: NOW });
-  mock.env(on, {});
-  const store = new Map<string, unknown>();
-  on("store.get", (_$: any, e: any) => ({ value: store.get(e.key) }));
-  on("store.set", (_$: any, e: any) => (store.set(e.key, e.value), { value: undefined }));
-  on("store.delete", (_$: any, e: any) => (store.delete(e.key), { value: undefined }));
-  on("store.keys", () => ({ value: [...store.keys()] }));
-  on("session.id", () => ({ value: "session-1" }));
-  on("session.start", (_$: any, e: any) => ({ cwd: e.cwd ?? "/tmp" }));
-  on("ui.invalidate", () => ({ value: undefined }));
-  on("ui.render", ($: any, e: any) => $.ui.resolve(e).Box({ children: [] }));
-  on("turn.complete", () => ({ text: "" }));
-  withUsage(on, LIMITS, BIG);
-  engineStep(on, [BIG_HIT]);
-  await $.session.start({ source: "startup", cwd: "/tmp" } as any);
-  await step($, BIG_HIT);
-  await step($, BIG_HIT);
-  await ($ as any).turn.complete({ answer: "ok" } as any);
-  const saved = (store.get("turns:session-1") as any)?.saved;
-  expect(Math.abs(saved - 2 * savedBy(287_000))).toBeLessThan(1e-9);
-  // Restarted: the figure comes back from the store, not from new requests.
-  await $.session.start({ source: "resume", cwd: "/tmp" } as any);
-  expect(String(await boltTip((await band($, "desktop")).ui))).toContain(`This thread: ≈ ${en$(2 * savedBy(287_000))} saved by the cache.`);
 });
 
 // ---------- Next steps: the suggestions after a turn ----------

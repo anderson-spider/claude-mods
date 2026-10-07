@@ -21,7 +21,7 @@ terminal and the app, without the percentage while a bar is shown; a mark and
 the gap in points against the clock beside each limit (▲ ahead, ▼ behind,
 ▬ on pace) and the Pace start option; the cache shows its time left with the
 x1.25 write multiplier for the 5-minute lifetime, the yellow threshold follows
-the lifetime, and dollar amounts only appear with the Show cost option.
+the lifetime.
 
 The 5-hour and 7-day usage gauges were written for this mod after
 usage-meter by HolyGrail (https://github.com/HolyGrail/claude-mods/tree/main/plugins/usage-meter):
