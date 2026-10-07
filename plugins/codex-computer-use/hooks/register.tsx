@@ -2,13 +2,14 @@ import { atom, read } from 'claude-code'
 import type { Elements, EngineInterface, Register, RenderElement } from 'claude-code'
 
 import type { CodexAsking } from '../types'
+import { serve } from './bridge'
+import type { BridgeInput, Choice } from './bridge'
 import { callerOf, kickstart, post, socketOf } from './helper'
 import type { Probe, Reply } from './helper'
-import { BRIDGE, DESCRIPTION, HELP, INPUT_SCHEMA, PROMPT, denyOwn, forgetText, isOwnDesktopTool, limitMs, parseCommand, toAnswer } from './routing'
-import type { ToolAnswer } from './routing'
+import { BRIDGE, DESCRIPTION, HELP, INPUT_SCHEMA, PROMPT, denyOwn, forgetText, isOwnDesktopTool, limitMs, parseCommand, statusReport } from './routing'
+import type { StatusReply } from './routing'
 
 type Kit = Pick<Elements['terminal'], 'Box' | 'Text' | 'Button'>
-type Choice = 'session' | 'always' | 'deny'
 type Slot = { id: string; choice: Choice | null }
 
 const PLUGIN = 'codex-computer-use'
@@ -18,8 +19,6 @@ const COMMAND = 'codex-cu'
 const POLL = ['sleep', '0.25']
 // The `approvalMinutes` setting, refreshed by each register.
 let askLimitMs = limitMs(undefined, 5)
-// A call may need several apps approved, one after another.
-const MAX_APPROVALS = 5
 
 const ref = { plugin: 'codex-computer-use', key: 'asking' } as const
 const asking = atom(ref, null)
@@ -115,25 +114,9 @@ const draw = ({ Box, Text, Button }: Kit, now: CodexAsking): RenderElement => (
 
 const statusText = async ($: EngineInterface) => {
   const enabled = await isEnabled($)
-  const reply = (await helper($, '/status', {})) as Reply & {
-    version?: string
-    callers?: { caller: string; apps: string[] }[]
-    settings?: { autoApprove: boolean; always: string[] }
-  }
-  const lines = [`Route: ${enabled ? 'Codex computer use (on)' : "Claude's own computer use (off)"}`]
+  const reply = (await helper($, '/status', {})) as StatusReply
 
-  if (reply.status === 'unreachable' || reply.status === 'error') {
-    lines.push(`Helper: not reachable (${reply.message})`)
-  } else {
-    lines.push(`Helper: ${reply.version ?? '?'} running, ${reply.callers?.length ?? 0} Codex session(s)`)
-    lines.push(`Auto-approve: ${reply.settings?.autoApprove === true ? 'on (no questions)' : 'off (asks first)'}`)
-
-    for (const caller of reply.callers ?? []) {
-      lines.push(`  ${caller.caller}: ${caller.apps.length === 0 ? 'no apps' : caller.apps.join(', ')}`)
-    }
-  }
-
-  return lines.join('\n')
+  return statusReport(enabled, reply)
 }
 
 export const register: Register = (on, options) => {
@@ -229,7 +212,13 @@ export const register: Register = (on, options) => {
   })
 
   on('tool.call', { tool: TOOL }, ($, e, next) =>
-    serve($, e as unknown as BridgeInput, next.signal).catch((error: unknown) => ({
+    serve({
+      enabled: () => isEnabled($),
+      sessionId: () => $.session.id(),
+      helper: (route, body) => helper($, route, body),
+      ask: (question, signal) => ask($, question, signal),
+      limitMs: askLimitMs,
+    }, e as unknown as BridgeInput, next.signal).catch((error: unknown) => ({
       result: `codex-cu: the bridge failed: ${error instanceof Error ? error.message : String(error)}`,
       isError: true as const,
     })),
@@ -244,55 +233,4 @@ export const register: Register = (on, options) => {
 
     return draw($.ui.resolve(e), now)
   })
-}
-
-type BridgeInput = { tool_use_id: string; code?: string; title?: string; timeout_ms?: number; reset?: boolean; agentId?: string }
-
-/** One bridge call: run the code, asking the person for each new app on the way. */
-const serve = async ($: EngineInterface, input: BridgeInput, signal: AbortSignal): Promise<ToolAnswer> => {
-    if (!(await isEnabled($))) {
-      return { result: 'codex-computer-use is off (/codex-cu off): use the default desktop route, or ask the person to type /codex-cu on.', isError: true as const }
-    }
-
-    const caller = callerOf(await $.session.id(), input.agentId)
-
-    if (input.reset === true) {
-      const reply = (await helper($, '/reset', { caller })) as Reply & { message?: string }
-
-      return reply.status === 'ok' ? { result: reply.message ?? 'reset' } : toAnswer(reply)
-    }
-
-    const body = { caller, code: input.code, title: input.title, timeout_ms: input.timeout_ms }
-
-    for (let round = 0; round <= MAX_APPROVALS; round++) {
-      const reply = await helper($, '/call', body)
-
-      if (reply.status !== 'needs_approval') {
-        return toAnswer(reply)
-      }
-
-      const question: CodexAsking = {
-        id: input.tool_use_id,
-        bundleId: reply.app.bundleId,
-        displayName: reply.app.displayName,
-        canAlways: reply.app.canAlways === true,
-        who: input.agentId === undefined ? 'main session' : `subagent ${input.agentId}`,
-      }
-      const choice = await ask($, question, signal)
-
-      if (choice === 'aborted' || choice === 'timeout') {
-        return {
-          result: `The person did not answer whether Codex may use ${reply.app.displayName}${choice === 'timeout' ? ' within 5 minutes' : ''}; nothing was done with it.`,
-          isError: true as const,
-        }
-      }
-
-      await helper($, '/approve', { caller, bundleId: reply.app.bundleId, choice })
-
-      if (choice === 'deny') {
-        return toAnswer({ status: 'denied', app: reply.app })
-      }
-    }
-
-    return { result: 'codex-cu: too many approval rounds for one call.', isError: true as const }
 }
