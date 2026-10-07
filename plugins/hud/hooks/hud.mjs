@@ -31,7 +31,8 @@ import { refreshInfo as refreshInfoReading } from "./info-refresh.mjs";
 import { renderHud } from "./render.mjs";
 
 // Tickers and keys belong to the host integration, as do the subagents running now.
-const freshAgents = () => ({ agents: [], agentsKey: "" });
+// `agentModels` keeps each subagent's last request model, by agent id, while it runs.
+const freshAgents = () => ({ agents: [], agentsKey: "", agentModels: {} });
 const hudData ={ ticker: null, cacheTicker: null, turnsKey: null, ...freshAgents() };
 
 export function register(on, options) {
@@ -90,7 +91,17 @@ export function register(on, options) {
 
   // Each main-loop request: how much of its prompt the cache served (subagents have their own).
   on("turn.step", async function* ($, e, next) {
-    if (e.agentId) return yield* next(e);
+    // A subagent's request: only its model, for the info line; the main model stays the session's.
+    if (e.agentId) {
+      if (e.model && hudData.agentModels[e.agentId] !== e.model) {
+        hudData.agentModels[e.agentId] = e.model;
+        if (hudData.agents.some((a) => a.id === e.agentId)) {
+          hudData.agents = hudData.agents.map((a) => (a.id === e.agentId ? { ...a, model: e.model } : a));
+          $.ui.invalidate("ui.render");
+        }
+      }
+      return yield* next(e);
+    }
     const at = await $.clock.now();
     const result = yield* next(e);
     infoData.current.model = e.model || infoData.current.model;
@@ -255,11 +266,13 @@ async function refreshAgents($) {
   } catch {
     return false;
   }
-  const running = (list ?? []).filter((a) => a && a.status === "running").map((a) => ({ id: a.id, type: a.type ?? "", description: a.description ?? "" }));
+  const running = (list ?? []).filter((a) => a && a.status === "running").map((a) => ({ id: a.id, type: a.type ?? "", description: a.description ?? "", model: hudData.agentModels[a.id] ?? "" }));
   const key = running.map((a) => a.id).join(",");
   if (key === hudData.agentsKey) return false;
   hudData.agentsKey = key;
   hudData.agents = running;
+  // Agents listed as no longer running drop their model; one not listed yet may already have made a request.
+  for (const a of list ?? []) if (a && a.status !== "running") delete hudData.agentModels[a.id];
   return true;
 }
 
