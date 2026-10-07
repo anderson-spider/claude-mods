@@ -29,6 +29,29 @@ test('classify names commits and plain pushes, and leaves force pushes alone', (
   expect(kinds('git push origin refs/tags/v1.2.0')).toEqual([])
 })
 
+test('classify sees through brace groups, subshells and the keywords of if', () => {
+  expect(kinds('{ git commit -m x; }')).toEqual(['commit'])
+  expect(kinds('{ git push origin main; }')).toEqual(['publish'])
+  expect(kinds('{ git commit -m x; } 2>&1')).toEqual(['commit'])
+  expect(kinds('( git commit -m x )')).toEqual(['commit'])
+  expect(kinds('(git commit -m x)')).toEqual(['commit'])
+  expect(kinds('if true; then git commit -m x; fi')).toEqual(['commit'])
+  expect(kinds('if git commit -m x; then echo ok; else git push origin main; fi')).toEqual(['commit', 'publish'])
+  expect(kinds('{ ls; }')).toEqual([])
+  expect(classify('{ git commit -m x; }')).toEqual(classify('git commit -m x'))
+})
+
+test('classify reads redirections as redirections, not refspecs', () => {
+  for (const tail of ['&> log', '> log 2>&1', '>log', '2>/dev/null', '>> log', '&>> log']) {
+    expect(classify(`git push origin main ${tail}`)).toMatchObject([{ kind: 'publish', remote: 'origin', refspecs: ['main'] }])
+  }
+
+  expect(classify('git push origin main 2>&1 | tail')).toMatchObject([{ refspecs: ['main'] }])
+  expect(kinds('git commit -m x > log')).toEqual(['commit'])
+  expect(kinds('echo ">"')).toEqual([])
+  expect(classify('git push ">" main')).toMatchObject([{ remote: '>', refspecs: ['main'] }])
+})
+
 test('classify keeps a push that mixes a tag and a branch', () => {
   expect(classify('git push origin tag v1 main')).toEqual([
     { dir: '.', isElsewhere: false, kind: 'publish', remote: 'origin', refspecs: ['main'], isAllRefs: false, hasUnknownRef: false },

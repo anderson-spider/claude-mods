@@ -33,7 +33,7 @@ export const PROTECTED = /^(main|master|develop|release([/_-].*)?)$/
 
 const SEQUENCE = new Set(['', ';', '\n', '&&'])
 
-const KEYWORDS = new Set(['if', 'then', 'else', 'elif', 'fi', 'for', 'while', 'until', 'do', 'done', 'case', 'esac', 'function', '{', '}'])
+const KEYWORDS = new Set(['if', 'then', 'else', 'elif', 'fi', 'for', 'while', 'until', 'do', 'done', 'case', 'esac', 'function'])
 
 const GIT_VALUED = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--super-prefix'])
 

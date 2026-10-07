@@ -14,6 +14,12 @@ const BREAKS = new Set([';', '\n', '(', ')'])
 
 const WRAPPERS = new Set(['sudo', 'command', 'exec', 'time', 'nohup', 'env'])
 
+// Words that open a command without being part of it: `{ git commit; }`, `if …; then git commit; fi`.
+const OPENERS = new Set(['{', '!', 'if', 'then', 'else', 'elif', 'while', 'until', 'do'])
+
+// An unquoted redirection operator (`>`, `>>`, `2>`, `&>`, `>&`, `<`…), with the target when it is attached (`>log`, `2>&1`).
+const REDIRECTION = /^(?:\d*|&)(?:>>?|<)&?(.*)$/s
+
 const ASSIGNMENT = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/s
 
 export const IN_HOME = /^~(\/|$)/
@@ -27,20 +33,31 @@ export const parse = (command: string): Command[] => {
   let isOpen = false
   let isUnknown = false
   let isHome = false
+  let isQuoted = false
+  // A bare operator (`>`) is waiting for its target word.
+  let isTargetNext = false
   let quote: string | undefined
 
   const endWord = () => {
-    if (isOpen) {
+    const redirection = isOpen && !isQuoted ? REDIRECTION.exec(text) : null
+
+    if (isOpen && isTargetNext) {
+      isTargetNext = false
+    } else if (redirection !== null) {
+      isTargetNext = redirection[1] === ''
+    } else if (isOpen) {
       commands.at(-1)?.words.push({ text, isUnknown, isHome })
     }
 
     text = ''
+    isQuoted = false
     isOpen = false
     isUnknown = false
     isHome = false
   }
   const endCommand = (before: string) => {
     endWord()
+    isTargetNext = false
     commands.push({ words: [], before })
   }
 
@@ -61,9 +78,11 @@ export const parse = (command: string): Command[] => {
     } else if (char === "'" || char === '"') {
       quote = char
       isOpen = true
+      isQuoted = true
     } else if (char === '\\') {
       text += following === '\n' ? '' : following
       isOpen ||= following !== '\n'
+      isQuoted ||= following !== '\n'
       at += 1
     } else if (char === ' ' || char === '\t') {
       endWord()
@@ -121,7 +140,7 @@ export const bare = (words: readonly Word[]) => {
   for (; start < words.length; start += 1) {
     const text = words[start]?.text ?? ''
 
-    if (!ASSIGNMENT.test(text) && !WRAPPERS.has(text)) {
+    if (!ASSIGNMENT.test(text) && !WRAPPERS.has(text) && !OPENERS.has(text)) {
       break
     }
   }

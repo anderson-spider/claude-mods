@@ -10,10 +10,28 @@ test('parse keeps a quoted argument as one word and splits commands on the seque
   expect(parse('cd repo && git push')[1]?.before).toBe('&&')
 })
 
-test('parse reads today\'s split of redirections and brace groups', () => {
-  // `&>` stays a word of the command, so `out` is still an argument.
-  expect(texts('git push &> out')).toEqual([['git', 'push', '&>', 'out']])
-  // The `{` and `}` are words of their commands, which `classify` does not see as `git`.
+test('parse drops redirection operators and their targets from the words', () => {
+  expect(texts('git push origin main &> log')).toEqual([['git', 'push', 'origin', 'main']])
+  expect(texts('git push origin main &>> log')).toEqual([['git', 'push', 'origin', 'main']])
+  expect(texts('git push origin main > log 2>&1')).toEqual([['git', 'push', 'origin', 'main']])
+  expect(texts('git push origin main >log')).toEqual([['git', 'push', 'origin', 'main']])
+  expect(texts('git push origin main >> log')).toEqual([['git', 'push', 'origin', 'main']])
+  expect(texts('git push origin main 2>/dev/null')).toEqual([['git', 'push', 'origin', 'main']])
+  expect(texts('git push origin main 2> err')).toEqual([['git', 'push', 'origin', 'main']])
+  expect(texts('git push origin main >& log')).toEqual([['git', 'push', 'origin', 'main']])
+  expect(texts('git push origin main < in')).toEqual([['git', 'push', 'origin', 'main']])
+  // The redirection comes first, and `&` next to it never splits the command.
+  expect(texts('>log git push origin main')).toEqual([['git', 'push', 'origin', 'main']])
+  expect(parse('git push origin main 2>&1 && ls')).toHaveLength(2)
+})
+
+test('parse keeps a quoted operator as a normal word', () => {
+  expect(texts('echo ">"')).toEqual([['echo', '>']])
+  expect(texts("echo '2>&1' x")).toEqual([['echo', '2>&1', 'x']])
+  expect(texts('git commit -m "a > b"')).toEqual([['git', 'commit', '-m', 'a > b']])
+})
+
+test('parse leaves the braces of a group as words of their commands', () => {
   expect(texts('{ git commit; }')).toEqual([['{', 'git', 'commit'], ['}']])
 })
 
