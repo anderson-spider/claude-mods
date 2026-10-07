@@ -7,7 +7,7 @@ import type { BridgeInput } from './bridge'
 import { callerOf, kickstart, post, socketOf } from './helper'
 import type { Probe } from './helper'
 import { ROUTES } from './model'
-import type { Choice, Reply } from './model'
+import type { Choice, Failure, Reply, StatusReply } from './model'
 import { forgetText, statusReport } from './presentation'
 import { DESCRIPTION, HELP, INPUT_SCHEMA, PROMPT, denyOwn } from './prompts'
 import { BRIDGE, isOwnDesktopTool, limitMs, parseCommand } from './routing'
@@ -119,7 +119,8 @@ const draw = ({ Box, Text, Button }: Kit, now: CodexAsking): RenderElement => (
 
 const statusText = async ($: EngineInterface) => {
   const enabled = await isEnabled($)
-  const reply = await helper($, ROUTES.status, {})
+  // `/status` answers the helper's own report, or a failure.
+  const reply = (await helper($, ROUTES.status, {})) as StatusReply | Failure
 
   return statusReport(enabled, reply)
 }

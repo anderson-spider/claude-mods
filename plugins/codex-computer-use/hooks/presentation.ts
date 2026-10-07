@@ -1,4 +1,4 @@
-import type { ContentBlock, Reply, StatusReply } from './model'
+import type { CallResult, ContentBlock, Failure, Reply, StatusReply } from './model'
 import { LEASE_MINUTES } from './routing'
 
 // What the model and the person are told about a helper reply. Pure.
@@ -8,16 +8,16 @@ export type ToolAnswer = { result: string | ContentBlock[]; isError?: true }
 const withNotes = (text: string, notes: readonly string[] | undefined) =>
   notes === undefined || notes.length === 0 ? text : `${notes.join('\n')}\n\n${text}`
 
-/** The model-facing answer for a helper reply that needs no person. */
-export const toAnswer = (reply: Reply): ToolAnswer => {
+/** The model-facing answer for a `/call` reply that needs no person. */
+export const toAnswer = (reply: CallResult): ToolAnswer => {
   switch (reply.status) {
     case 'ok': {
-      const blocks = ('content' in reply ? reply.content : []).filter(block => block.type === 'text' || block.type === 'image')
-      const notes = 'notes' in reply ? (reply.notes ?? []) : []
+      const blocks = reply.content.filter(block => block.type === 'text' || block.type === 'image')
+      const notes = reply.notes ?? []
       const result: ContentBlock[] = notes.length === 0 ? blocks : [{ type: 'text', text: notes.join('\n') }, ...blocks]
       const answer = result.every(block => block.type === 'text') ? result.map(block => block.text ?? '').join('\n') : result
 
-      return 'isError' in reply && reply.isError ? { result: answer, isError: true } : { result: answer }
+      return reply.isError ? { result: answer, isError: true } : { result: answer }
     }
     case 'denied':
       return {
@@ -45,9 +45,6 @@ export const toAnswer = (reply: Reply): ToolAnswer => {
       }
     case 'error':
       return { result: withNotes(`codex-cu: ${reply.message}`, reply.notes), isError: true }
-    case undefined:
-      // A status report is not an answer to a call.
-      return { result: 'codex-cu: the helper answered with a status report instead of a result.', isError: true }
   }
 }
 
@@ -67,18 +64,16 @@ export const forgetText = (app: string, reply: Reply) => {
 }
 
 /** What `/codex-cu status` tells the person. */
-export const statusReport = (enabled: boolean, reply: Reply): string => {
+export const statusReport = (enabled: boolean, reply: StatusReply | Failure): string => {
   const lines = [`Route: ${enabled ? 'Codex computer use (on)' : "Claude's own computer use (off)"}`]
 
   if (reply.status === 'unreachable' || reply.status === 'error') {
     lines.push(`Helper: not reachable (${reply.message})`)
   } else {
-    const report: StatusReply = 'version' in reply ? reply : {}
+    lines.push(`Helper: ${reply.version ?? '?'} running, ${reply.callers?.length ?? 0} Codex session(s)`)
+    lines.push(`Auto-approve: ${reply.settings?.autoApprove === true ? 'on (no questions)' : 'off (asks first)'}`)
 
-    lines.push(`Helper: ${report.version ?? '?'} running, ${report.callers?.length ?? 0} Codex session(s)`)
-    lines.push(`Auto-approve: ${report.settings?.autoApprove === true ? 'on (no questions)' : 'off (asks first)'}`)
-
-    for (const caller of report.callers ?? []) {
+    for (const caller of reply.callers ?? []) {
       lines.push(`  ${caller.caller}: ${caller.apps.length === 0 ? 'no apps' : caller.apps.join(', ')}`)
     }
   }

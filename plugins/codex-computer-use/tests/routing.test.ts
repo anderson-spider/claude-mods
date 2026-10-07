@@ -3,7 +3,7 @@ import { expect, test } from 'claude-code/testing'
 import { callerOf } from '../hooks/helper'
 import { isOwnDesktopTool, limitMs, parseCommand } from '../hooks/routing'
 
-test('routing pieces: commands, own desktop tools and callers', () => {
+test('routing pieces: commands, own desktop tools, callers and answers', () => {
   expect(parseCommand('on')).toEqual({ kind: 'on' })
   expect(parseCommand(' OFF ')).toEqual({ kind: 'off' })
   expect(parseCommand('')).toEqual({ kind: 'status' })

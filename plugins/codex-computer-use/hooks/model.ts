@@ -21,14 +21,14 @@ export type AppRef = { bundleId: string; displayName: string; canAlways?: boolea
 export type ContentBlock = { type: string; text?: string; data?: string; mimeType?: string }
 
 /** Replies a `/call` can end in, besides `ok`. */
-type Held =
+export type Held =
   | { status: 'needs_approval'; app: AppRef; text?: string }
   | { status: 'denied'; app: AppRef; text?: string }
   | { status: 'busy'; app: AppRef; owner: string; idleSeconds?: number; text?: string }
   | { status: 'full'; message: string }
 
 /** What the helper answers when something went wrong, plus `unreachable` when nothing listens. */
-type Failure =
+export type Failure =
   | { status: 'error'; message: string; notes?: string[] }
   | { status: 'unreachable'; message: string }
 
@@ -44,9 +44,14 @@ export type StatusReply = {
   status?: undefined
   version?: string
   pid?: number
-  callers?: { caller: string; apps: string[] }[]
+  callers?: { caller: string; apps: string[]; isFresh?: boolean; idleSeconds?: number }[]
+  /** Who holds each app now, by bundle id. */
+  owners?: Record<string, { owner: string; idleSeconds: number }>
   settings?: { autoApprove: boolean; always: string[] }
 }
+
+/** What a `/call` answers: a result, or why there is none. */
+export type CallResult = CallReply | Held | Failure
 
 /** Everything the helper sends, plus `unreachable` when nothing listens. */
 export type Reply = CallReply | ResetReply | ReleaseReply | ForgetReply | SettingsReply | StatusReply | Held | Failure

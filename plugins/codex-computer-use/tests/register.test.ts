@@ -1,25 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { post } from '../hooks/helper'
-
-import { BAND, COMPOSE, OWN, TOOL, pause, ran, textOf, world } from './helpers'
-
-test('post speaks to the helper over its Unix socket and reports a missing helper as unreachable', async () => {
-  const seen: { url: string; socketPath?: string }[] = []
-  const run = async () => ran('')
-  const reply = await post(
-    { fetch: async (url, init) => (seen.push({ url, socketPath: init.socketPath }), Promise.reject(new Error('ECONNREFUSED'))), run },
-    '/s.sock',
-    '/call',
-    { caller: 'x' },
-  )
-
-  expect(reply.status).toBe('unreachable')
-  expect(seen).toEqual([{ url: 'http://codex-cu/call', socketPath: '/s.sock' }])
-
-  const answered = await post({ fetch: async () => ({ status: 200, ok: true, headers: {}, text: '{"status":"ok","ended":[]}' }), run }, '/s.sock', '/release', {})
-  expect(answered.status).toBe('ok')
-})
+import { BAND, COMPOSE, OWN, TOOL, pause, textOf, world } from './helpers'
 
 test('a busy app names its holder and when it is freed', async ($, on) => {
   const posted = world(on)

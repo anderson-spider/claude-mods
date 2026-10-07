@@ -1,7 +1,7 @@
 import type { CodexAsking } from '../types'
 import { callerOf } from './helper'
 import { ROUTES } from './model'
-import type { Choice, Reply } from './model'
+import type { CallResult, Choice, Failure, ResetReply } from './model'
 import { approvalWaitText, toAnswer } from './presentation'
 import type { ToolAnswer } from './presentation'
 
@@ -27,15 +27,17 @@ export const serve = async (deps: BridgeDeps, input: BridgeInput, signal: AbortS
   const caller = callerOf(await deps.sessionId(), input.agentId)
 
   if (input.reset === true) {
-    const reply = await deps.helper(ROUTES.reset, { caller })
+    // `/reset` answers its message, or a failure.
+    const reply = (await deps.helper(ROUTES.reset, { caller })) as ResetReply | Failure
 
-    return reply.status === 'ok' ? { result: 'message' in reply ? reply.message : 'reset' } : toAnswer(reply)
+    return reply.status === 'ok' ? { result: reply.message ?? 'reset' } : toAnswer(reply)
   }
 
   const body = { caller, code: input.code, title: input.title, timeout_ms: input.timeout_ms }
 
   for (let round = 0; round <= MAX_APPROVALS; round++) {
-    const reply = await deps.helper(ROUTES.call, body)
+    // `/call` answers a result, a held call or a failure.
+    const reply = (await deps.helper(ROUTES.call, body)) as CallResult
 
     if (reply.status !== 'needs_approval') {
       return toAnswer(reply)
