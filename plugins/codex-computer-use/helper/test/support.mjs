@@ -17,7 +17,7 @@ export const hubWith = (approved = 'Calculator', extra = {}) => {
     // Never the real ComputerUseAppApprovals.json.
     codexApprovals: join(temp(), 'codex-approvals.json'),
     resolve: async name => `com.fake.${name}`,
-    createClient: (_caller, onElicit) => {
+    createClient: onElicit => {
       const client = new McpStdioClient({
         command: process.execPath,
         args: [FAKE],

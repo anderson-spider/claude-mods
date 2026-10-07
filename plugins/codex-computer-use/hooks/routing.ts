@@ -5,7 +5,8 @@ import type { ContentBlock, Reply } from './helper'
 // native app control goes through the bridge tool. Pure.
 
 export const BRIDGE = 'codex_cu'
-/** How long an app stays with the caller that last used it; the helper's LEASE_MS. */
+// Must match LEASE_MS in helper/lib/hub.mjs.
+/** How long an app stays with the caller that last used it. */
 export const LEASE_MINUTES = 2
 
 /**

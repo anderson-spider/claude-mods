@@ -34,7 +34,7 @@ const textOf = result =>
 
 export class Hub {
   /**
-   * @param createClient (caller, onElicit) => an McpStdioClient-like object, not yet started
+   * @param createClient (onElicit) => an McpStdioClient-like object, not yet started
    * @param approvals an Approvals
    */
   constructor({
@@ -250,7 +250,7 @@ export class Hub {
     }
 
     const restarted = session.client !== undefined
-    session.client = this.createClient(caller, params => this.#elicit(caller, session, params))
+    session.client = this.createClient(params => this.#elicit(caller, session, params))
     session.isFresh = true
     await session.client.start()
 

@@ -17,6 +17,8 @@ const TOOL = `mcp__${PLUGIN}__${BRIDGE}`
 const COMMAND = 'codex-cu'
 // Waiting inside a `$` call does not use up the hook's time; `$.clock.sleep` would.
 const POLL = ['sleep', '0.25']
+// How many polls `helper()` makes for the helper launchd was asked to start.
+const HELPER_RETRIES = 20
 // The `approvalMinutes` setting, refreshed by each register.
 let askLimitMs = limitMs(undefined, 5)
 
@@ -50,8 +52,8 @@ const helper = async ($: EngineInterface, route: string, body: unknown): Promise
     return first
   }
 
-  for (let i = 0; i < 20; i++) {
-    await $.process.run(['sleep', '0.25'])
+  for (let i = 0; i < HELPER_RETRIES; i++) {
+    await $.process.run(POLL)
     const again = await post(host, socket, route, body)
 
     if (again.status !== 'unreachable') {

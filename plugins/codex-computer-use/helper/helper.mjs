@@ -15,8 +15,9 @@ import { McpStdioClient } from './lib/mcp-client.mjs'
 const HERE = dirname(fileURLToPath(import.meta.url))
 const RUN = process.env.CODEX_CU_RUN_DIR ?? join(HERE, 'run')
 const STATE = process.env.CODEX_CU_STATE_DIR ?? join(HERE, 'state')
-export const SOCKET = join(RUN, 'helper.sock')
+const SOCKET = join(RUN, 'helper.sock')
 const MAX_BODY = 1_000_000
+// The helper/protocol version, independent of plugin.json.
 const VERSION = '0.1.0'
 
 const log = message => process.stderr.write(`${new Date().toISOString()} ${message}\n`)
@@ -128,7 +129,7 @@ const main = async () => {
 
   const hub = new Hub({
     approvals: new Approvals(join(STATE, 'approvals.json')),
-    createClient: (caller, onElicit) =>
+    createClient: onElicit =>
       new McpStdioClient({ command: process.execPath, args: [join(HERE, 'launch.mjs')], onElicit }),
   })
   const sweeper = setInterval(() => hub.sweep(), 60_000)
