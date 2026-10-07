@@ -15,24 +15,20 @@
 // Pure code lives beside it: constants.mjs (labels, palette, icons), formatting.mjs (numbers and
 // time), context.mjs (readings and charts), limits.mjs (windows), cache.mjs (requests and TTL),
 // suggestions.mjs (prompts and their block), info.mjs (info state and line), drawing.mjs (usage line).
+// Injected flows: suggestion-flow.mjs (fork and picks), history.mjs (stored readings),
+// info-refresh.mjs (folder, git and model readings), render.mjs (AbovePrompt composition).
 // Shared mutable groups export stable state objects; resets reuse fresh...() factories.
 
 import { MINUTE } from "./formatting.mjs";
-import { HISTORY, contextData, freshContext, pushReading } from "./context.mjs";
-import { limitData, freshLimits, paceStartOf, sortLimits } from "./limits.mjs";
+import { contextData, freshContext, pushReading } from "./context.mjs";
+import { limitData, freshLimits, paceStartOf } from "./limits.mjs";
 import { cacheData, freshCache, isOn, recordRequest, cacheState, cacheText } from "./cache.mjs";
-import {
-  suggestionData, freshSuggestions, skillList, forkPrompt, parseSuggestions, combine, drawSuggestions,
-} from "./suggestions.mjs";
-import { infoData, freshInfo, recordSpeed, drawInfo } from "./info.mjs";
-import { drawLine, isBlank } from "./drawing.mjs";
-
-// Each session's readings are kept in $.store, so the bars come back after a restart.
-const TURNS_PREFIX = "turns:";
-const TURNS_KEEP_MS = 8 * 24 * 3_600_000;
-
-// Limits belong to the account: the latest reading, across sessions, lives in $.store.
-const SHARED_KEY = "limits";
+import { suggestionData, freshSuggestions } from "./suggestions.mjs";
+import { infoData, freshInfo, recordSpeed } from "./info.mjs";
+import { startSuggestions as startSuggestionFlow, togglePick as toggleSuggestionPick, writePicks as writeSuggestionPicks } from "./suggestion-flow.mjs";
+import { TURNS_PREFIX, restoreTurns as restoreHistory, saveTurns as saveHistory, shareLimits as shareReading, adoptShared as adoptReading } from "./history.mjs";
+import { refreshInfo as refreshInfoReading } from "./info-refresh.mjs";
+import { renderHud } from "./render.mjs";
 
 // Tickers and keys belong to the host integration, as do the subagents running now.
 const freshAgents = () => ({ agents: [], agentsKey: "" });
@@ -168,28 +164,13 @@ export function register(on, options) {
     const below = await next(e);
     if (props.hasSurvey) return below;
     const elements = $.ui.resolve(e);
-    // Top to bottom: what mods placed after us draw, the suggestions, and the usage line last, so it
-    // stays next to the prompt however the block above comes and goes. An empty drawing adds no blank line.
-    const parts = [];
-    if (!isBlank(below)) parts.push(below);
-    const block = e.surface === "terminal" && !props.isWorking
-      ? drawSuggestions(elements, {
-          pick: (index) => togglePick($, index),
-          write: () => writePicks($),
-          dismiss: () => showSuggestions($, freshSuggestions()),
-        })
-      : null;
-    if (block) parts.push(block);
-    const infoLine = e.surface === "terminal" ? drawInfo(elements, props.bodyColumns ?? 80) : null;
-    const hasLine = contextData.readings.length > 0 || limitData.reading.list.length > 0;
-    // A blank line keeps the suggestions apart from what follows them.
-    if (block && (infoLine || hasLine)) parts.push(elements.Box({ key: "gap-usage", marginTop: 1, children: [] }));
-    if (infoLine) parts.push(infoLine);
-    if (hasLine) {
-      parts.push(drawLine(elements, e.surface, props.bodyColumns ?? 80, await $.clock.now(), hudData.agents));
-    }
-    if (parts.length === 0) return below;
-    return parts.length === 1 ? parts[0] : elements.Box({ flexDirection: "column", children: parts });
+    return renderHud(elements, e, props, below, {
+      pick: (index) => togglePick($, index),
+      write: () => writePicks($),
+      dismiss: () => showSuggestions($, freshSuggestions()),
+      now: () => $.clock.now(),
+      agents: () => hudData.agents,
+    });
   });
 }
 
@@ -200,109 +181,54 @@ function showSuggestions($, next) {
   $.ui.invalidate("ui.render");
 }
 
-// Turn over: ask the fork, detached, so the turn's completion never waits on it.
+// Turn over: the detached flow receives only the host actions it needs.
 function startSuggestions($, e) {
-  if (e.reason !== "answer" || (e.answer ?? "").trim().length < suggestionData.minAnswerChars) return;
-  const turnId = e.turnId;
-  showSuggestions($, { kind: "loading", turnId });
-  void (async () => {
-    let items = [];
-    try {
-      // Without the list the fork still suggests; slash prompts go unchecked.
-      const commands = await $.command.list().catch(() => null);
-      const known = commands === null ? null : new Set(commands.map((command) => command.name));
-      const skills = suggestionData.suggestSkills && commands !== null ? skillList(commands) : "";
-      const reply = await $.model.fork({ prompt: forkPrompt(skills) });
-      items = reply.isAnswered ? parseSuggestions(reply.text, known) : [];
-    } catch (error) {
-      $.ui.log(`fork failed: ${String(error)}`);
-    }
-    // A newer turn started (or another completed) while we waited: drop ours.
-    if (suggestionData.current.kind !== "loading" || suggestionData.current.turnId !== turnId) return;
-    showSuggestions($, items.length === 0 ? freshSuggestions() : { kind: "offer", items, picked: [] });
-    if (items[0]) void $.prompt.suggest({ text: items[0].prompt }).catch(() => undefined);
-  })();
+  startSuggestionFlow({
+    show: (next) => showSuggestions($, next),
+    commands: () => $.command.list(),
+    fork: (request) => $.model.fork(request),
+    log: (text) => $.ui.log(text),
+    suggest: (request) => $.prompt.suggest(request),
+  }, e);
 }
 
-// Picks an item, or drops it from the picks when it is already there. A press from an older, longer
-// offer names an item the current one does not have: ignored.
 function togglePick($, index) {
-  if (suggestionData.current.kind !== "offer") return;
-  const { items, picked } = suggestionData.current;
-  if (!(index >= 0 && index < items.length)) return;
-  showSuggestions($, { kind: "offer", items, picked: picked.includes(index) ? picked.filter((i) => i !== index) : [...picked, index] });
+  toggleSuggestionPick((next) => showSuggestions($, next), index);
 }
 
-// Writes the picks to the prompt box as a draft and hides the block; the person edits and sends it.
 function writePicks($) {
-  if (suggestionData.current.kind !== "offer") return;
-  const text = combine(suggestionData.current.items, suggestionData.current.picked);
-  showSuggestions($, freshSuggestions());
-  if (text === "") return;
-  $.prompt.fill({ text }).then(
-    (r) => r.isFilled || $.ui.toast("could not fill the prompt box"),
-    (error) => $.ui.toast(`could not fill: ${String(error)}`),
-  );
+  writeSuggestionPicks({
+    show: (next) => showSuggestions($, next),
+    fill: (request) => $.prompt.fill(request),
+    toast: (text) => $.ui.toast(text),
+  });
 }
-// ---------- Turns: readings kept per session ----------
 
-// Restores this session's readings and cache, and deletes sessions idle for more than 8 days.
+// ---------- Stored readings: host calls ----------
+
 async function restoreTurns($) {
-  const now = await $.clock.now();
-  try {
-    for (const key of await $.store.keys()) {
-      if (!key.startsWith(TURNS_PREFIX)) continue;
-      const saved = await $.store.get(key);
-      if (key === hudData.turnsKey && saved && Array.isArray(saved.readings)) {
-        contextData.readings = saved.readings.filter((r) => r && r.window > 0).slice(-HISTORY);
-        if (saved.cache && Number.isFinite(saved.cache.at)) cacheData.request = saved.cache;
-        cacheData.compacted = saved.compacted === true;
-        if (saved.seenTtl === "5m" || saved.seenTtl === "1h") cacheData.seenTtl = saved.seenTtl;
-      } else if (!saved || !(now - saved.at < TURNS_KEEP_MS)) await $.store.delete(key);
-    }
-  } catch {
-    // Unreadable store: the line starts from scratch.
-  }
+  return restoreHistory({
+    now: () => $.clock.now(),
+    keys: () => $.store.keys(),
+    get: (key) => $.store.get(key),
+    remove: (key) => $.store.delete(key),
+  }, () => hudData.turnsKey);
 }
 
 async function saveTurns($) {
-  if (!hudData.turnsKey) return;
-  try {
-    await $.store.set(hudData.turnsKey, {
-      at: await $.clock.now(),
-      readings: contextData.readings,
-      cache: cacheData.request,
-      compacted: cacheData.compacted,
-      seenTtl: cacheData.seenTtl,
-    });
-  } catch {
-    // Not saved this turn: the bars come back on the next one.
-  }
+  return saveHistory({ now: () => $.clock.now(), set: (key, value) => $.store.set(key, value) }, () => hudData.turnsKey);
 }
 
-// ---------- Limits: shared reading ----------
-
-// Keeps this session's reading and publishes it if it is the most recent known.
 async function shareLimits($, list) {
-  const at = await $.clock.now();
-  limitData.reading = { at, list: sortLimits(list) };
-  let stored = null;
-  try {
-    stored = await $.store.get(SHARED_KEY);
-  } catch {
-    stored = null;
-  }
-  if (!stored || !(stored.at > at)) await $.store.set(SHARED_KEY, limitData.reading);
+  return shareReading({
+    now: () => $.clock.now(),
+    get: (key) => $.store.get(key),
+    set: (key, value) => $.store.set(key, value),
+  }, list);
 }
 
-// Takes another session's reading when it is newer than ours.
 async function adoptShared($) {
-  try {
-    const stored = await $.store.get(SHARED_KEY);
-    if (stored && Array.isArray(stored.list) && stored.at > limitData.reading.at) limitData.reading = { at: stored.at, list: sortLimits(stored.list) };
-  } catch {
-    // Unreadable store: keep the local reading.
-  }
+  return adoptReading((key) => $.store.get(key));
 }
 
 // ---------- Prompt cache: requests and lifetime ----------
@@ -344,40 +270,10 @@ async function refreshAgents($) {
 
 // ---------- Info line: host readings ----------
 
-// Unity's YAML assets swell the line counts and slow the diff: left out of them.
-const DIFF_EXCLUDES = ["*.unity", "*.prefab", "*.asset", "*.meta", "*.mat", "*.anim", "*.controller", "*.physicMaterial", "*.lighting"].map((g) => `:(exclude)${g}`);
-
-// The folder, its branch, the files changed and the model (a /model switch shows within 10 s); true when
-// something changed.
 async function refreshInfo($) {
-  const before = JSON.stringify(infoData.current);
-  try {
-    const cwd = await $.session.cwd();
-    infoData.current.dir = cwd.split("/").filter(Boolean).pop() ?? "";
-    const git = await $.process.run(["git", "--no-optional-locks", "branch", "--show-current"], { cwd, timeoutMs: 3000 });
-    infoData.current.branch = git.exitCode === 0 ? git.stdout.trim() : "";
-    infoData.current.files = infoData.current.added = infoData.current.removed = 0;
-    if (git.exitCode === 0) {
-      const status = await $.process.run(["git", "--no-optional-locks", "status", "--porcelain"], { cwd, timeoutMs: 3000 });
-      infoData.current.files = status.exitCode === 0 ? status.stdout.split("\n").filter(Boolean).length : 0;
-      if (infoData.current.files > 0) {
-        const diff = await $.process.run(["git", "--no-optional-locks", "diff", "HEAD", "--numstat", "--", ".", ...DIFF_EXCLUDES], { cwd, timeoutMs: 3000 });
-        for (const line of diff.exitCode === 0 ? diff.stdout.split("\n") : []) {
-          const [a, r] = line.split("\t");
-          infoData.current.added += Number(a) || 0;
-          infoData.current.removed += Number(r) || 0;
-        }
-      }
-    }
-    // The host has no effort getter, so a switch with /model shows no effort until the next request.
-    const model = await $.session.model();
-    if (model !== infoData.sessionModel) {
-      if (infoData.sessionModel !== "") infoData.current.effort = "";
-      infoData.sessionModel = model;
-      infoData.current.model = model;
-    }
-  } catch {
-    // No folder or git here: the line shows what it has.
-  }
-  return JSON.stringify(infoData.current) !== before;
+  return refreshInfoReading({
+    cwd: () => $.session.cwd(),
+    run: (argv, options) => $.process.run(argv, options),
+    model: () => $.session.model(),
+  });
 }
