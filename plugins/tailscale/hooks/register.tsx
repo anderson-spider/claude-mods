@@ -21,7 +21,7 @@ export const register: Register = (on) => {
         `Queries the Tailscale API (GET, read-only): ${AREAS}. ` +
         'Examples: /tailnet/-/devices, /tailnet/-/acl, /device/{id}, /tailnet/-/keys, /tailnet/-/settings. ' +
         'The API does not paginate: the full list comes back. Use "fields" to return only the keys that matter. ' +
-        'Secret fields (machineKey, nodeKey, tailnetLockKey, secret, token) are removed. ' +
+        'Secret fields (machineKey, nodeKey, tailnetLockKey, secret, token, and any field named *Key, *Secret or *Token) are removed. ' +
         'A GET on /tailnet/-/acl shows the ETag in the response: keep it for the POST ifMatch.',
       inputSchema: {
         type: 'object',

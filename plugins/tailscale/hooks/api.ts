@@ -50,6 +50,11 @@ const REDACTED_FIELDS = new Set([
   'token',
 ])
 
+/** The API is unstable, so a field it adds later that is named like a secret (authKey, clientSecret, accessToken) is dropped too. */
+const SECRET_NAME = /(Key|Secret|Token)$/
+
+const isSecret = (name: string): boolean => REDACTED_FIELDS.has(name) || SECRET_NAME.test(name)
+
 function isObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
@@ -59,7 +64,7 @@ function strip(value: unknown): unknown {
   if (isObject(value)) {
     return Object.fromEntries(
       Object.entries(value)
-        .filter(([k]) => !REDACTED_FIELDS.has(k))
+        .filter(([k]) => !isSecret(k))
         .map(([k, v]) => [k, strip(v)]),
     )
   }

@@ -126,6 +126,12 @@ test('redact removes secret, s3SecretAccessKey and token', () => {
   expect(out).toEqual({ a: { ok: 1 } })
 })
 
+test('redact also drops new fields named like a secret and keeps look-alikes', () => {
+  const body = '{"authKey":"a","clientSecret":"c","accessToken":"t","keyExpiryDisabled":true,"sshHostKeys":["k"],"hostname":"h"}'
+  const out = JSON.parse(transform(body, { redact: true }))
+  expect(out).toEqual({ keyExpiryDisabled: true, sshHostKeys: ['k'], hostname: 'h' })
+})
+
 test('redact leaves non-JSON text intact', () => {
   expect(transform('not json', { redact: true })).toBe('not json')
 })
