@@ -550,7 +550,7 @@ test("cache: the yellow threshold is a sixth of the lifetime (50 s of 5 minutes)
   expect(((await ui.find({ type: "Text", text: "< 1 min" })) as any)?.props?.color).toBe("#a8690a");
 });
 
-test("agents: a pill while subagents run, gone once they finish", async ($, on) => {
+test("agents: a desktop pill while subagents run, gone once they finish", async ($, on) => {
   world(on);
   withUsage(on, LIMITS);
   let list = [
@@ -564,6 +564,8 @@ test("agents: a pill while subagents run, gone once they finish", async ($, on) 
   const desktop = await band($, "desktop");
   expect(desktop.texts).toContain("2 agents");
   expect(String(await cardOf(desktop.ui, "agents"))).toContain("Plan · Review the diff");
+  // The terminal shows them on the info line, by model, not as a count.
+  expect((await band($, "terminal")).texts.some((t: string) => t.includes("2 agents"))).toBe(false);
   list = list.map((a) => ({ ...a, status: "completed" }));
   await ($ as any).turn.complete({ answer: "ok", agentId: "a1" } as any);
   const after = await band($, "terminal");

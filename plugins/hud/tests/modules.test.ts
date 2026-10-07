@@ -185,5 +185,6 @@ test("render: reads the clock and live agents only for a usage line", async () =
   const result = await renderHud(elements, { surface: "terminal" }, {}, below, deps);
   expect(reads).toEqual(["clock", "agents"]);
   expect(result.children[0]).toBe(below);
-  expect(JSON.stringify(result)).toContain("1 agent");
+  // The terminal's info line lists the agents by model: no count on the usage line.
+  expect(JSON.stringify(result)).not.toContain("1 agent");
 });
