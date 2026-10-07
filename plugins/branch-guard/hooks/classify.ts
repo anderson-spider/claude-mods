@@ -28,7 +28,7 @@ export type Risk = {
     }
 )
 
-/** The branches where a direct commit or push deserves a question. */
+/** The branches where a direct commit or push deserves a question. Shared with measure.ts, which decides on the same pattern. */
 export const PROTECTED = /^(main|master|develop|release([/_-].*)?)$/
 
 const SEQUENCE = new Set(['', ';', '\n', '&&'])
@@ -217,7 +217,10 @@ const git = (state: State, words: readonly Word[], isSure: boolean): Risk | unde
   return undefined
 }
 
-/** The commits and pushes the command line carries, in order; empty for everything else. */
+/**
+ * The commits and pushes the command line carries, in order; empty for everything else.
+ * A safety net that reads text, not a permission system: `$(…)`, aliases and scripts get through.
+ */
 export const classify = (command: string): Risk[] => {
   const risks: Risk[] = []
   const parsed = parse(command)

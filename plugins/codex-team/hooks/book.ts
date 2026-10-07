@@ -46,6 +46,7 @@ export function createBook(deps: Deps) {
   }
 
   const live = async () => (await deps.herdr.list().catch(() => [])).map(agent => agent.name)
+  // Jobs and loops share one id space; live agent names are checked so a reload cannot reuse an id.
   const reserveId = async () => {
     const names = await live()
     const id = nextFreeId(counter, names)
@@ -65,6 +66,7 @@ export function createBook(deps: Deps) {
         const cancelled = () => job.status === 'cancelled'
         try {
           if (!cancelled()) {
+            // Quiet children (loop phases) drop only `finished`: blocked episodes still reach the person and the lead.
             const notify: Notify = (event, job) => {
               if (!options.quiet || event === 'blocked') (options.notify ?? deps.notify)(event, job)
             }
@@ -85,6 +87,7 @@ export function createBook(deps: Deps) {
           resolve.delete(id)
         }
       }
+      // `owned`: the caller already holds the execute slot (a loop's dev), so it must not queue behind itself.
       runs.set(id, kinds[request.kind].queued && !options.owned ? queue(run) : run())
       return job
     },

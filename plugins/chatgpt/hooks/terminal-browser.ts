@@ -86,7 +86,7 @@ function terminalBrowserOf(run: ProcessRunner, listed?: string): Browser {
 }
 
 // terminal-browser answers only where Claude Code runs in a terminal pane it
-// can find (Ghostty, kitty).
+// can find (Ghostty, kitty); not under tmux, Herdr or a background session.
 export async function browserOf(run: ProcessRunner): Promise<Browser | string> {
   const listed = await run([TERMINAL_BROWSER, 'ls', '--json'], { timeoutMs: 15_000 }).catch(() => undefined)
   if (listed?.exitCode === 0) return terminalBrowserOf(run, listed.stdout)

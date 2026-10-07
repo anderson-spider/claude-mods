@@ -3,7 +3,7 @@ export type Browser = {
   tabs(): Promise<string[]>
   /** Opens a tab at `url` (and the browser, when none is open) and returns its id. */
   openTab(url: string): Promise<string>
-  /** Waits, inside the browser, until the JS expression `fn` is truthy; false on a timeout. */
+  /** Waits, inside the browser, until the JS expression `fn` is truthy; false on a timeout. It survives a navigation. */
   waitFor(tabId: string, fn: string, timeoutMs: number): Promise<boolean>
   /**
    * Runs `body` in the tab and returns the raw output: a function body that

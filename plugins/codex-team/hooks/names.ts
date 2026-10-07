@@ -6,13 +6,14 @@ export const agentName = (id: number) => `${PREFIX}${id}`
 /** Whether a Herdr agent name belongs to a job or loop of this plugin. */
 export const isAgentName = (name: string): boolean => name.startsWith(PREFIX)
 
-/** The smallest id from `from` whose agent name is not among the live ones. */
+/** The smallest id from `from` whose agent name is not among the live ones: a live `ct-<id>-dev` or `-qa` reserves that loop id after a reload. */
 export function nextFreeId(from: number, live: readonly string[]): number {
   let id = from
   while (live.some(name => name === agentName(id) || name === loopAgentName(id, 'dev') || name === loopAgentName(id, 'qa'))) id++
   return id
 }
 
+// A timeout ends the job's wait, not Codex: the agent keeps running in its pane.
 export const JOB_LIMIT_MS = 30 * 60_000
 // `$.process.run` kills a child after 10 minutes at most: every wait runs in chunks below that.
 export const WAIT_CHUNK_MS = 540_000

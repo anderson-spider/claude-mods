@@ -11,7 +11,8 @@
 //   (https://github.com/davila7/claude-code-templates, MIT), without copying its code.
 //
 // The engine reads on(...) and $.noun.method(...) from the source: they stay spelled out,
-// and the functions that take $ live at the top level in this file.
+// and the functions that take $ live at the top level in this file. It is also the only place that
+// reads the settings (paceStart, minAnswerChars, suggestSkills).
 // Pure code lives beside it: constants.mjs (labels, palette, icons), formatting.mjs (numbers and
 // time), context.mjs (readings and charts), limits.mjs (windows), cache.mjs (requests and TTL),
 // suggestions.mjs (prompts and their block), info.mjs (info state and line), drawing.mjs (usage line).

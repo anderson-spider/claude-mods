@@ -1,3 +1,5 @@
+// The OpenAPI spec is at https://api.tailscale.com/api/v2?outputOpenapiSchema=true (the /api-docs page is
+// rendered by JS, so WebFetch cannot read it). The API declares itself unstable.
 export const BASE = 'https://api.tailscale.com/api/v2'
 export const WRITE_METHODS = ['POST', 'PUT', 'PATCH', 'DELETE'] as const
 
@@ -14,7 +16,7 @@ export type Request = {
   body?: unknown
   /** ETag value from a previous GET /acl, so the POST /acl does not overwrite someone else's edit. */
   ifMatch?: string
-  /** Strips the REDACTED_FIELDS fields from the response. */
+  /** Strips the REDACTED_FIELDS fields from the response. Only reads set it: a write response for a new key carries the secret once, and must reach the caller whole. */
   redact?: boolean
   /** Keeps only these keys (at any level) of the JSON response. */
   fields?: readonly string[]

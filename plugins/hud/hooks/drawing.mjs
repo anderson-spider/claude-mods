@@ -197,7 +197,7 @@ export function drawLine(elements, surface, columns, now, agents) {
   return Box({ flexDirection: "row", alignItems: "center", paddingX: 1, children });
 }
 
-// Width of the terminal line in characters, with the bars and details.
+// Width of the terminal line in characters, with the bars and details. A new field on the line has to be counted here.
 // `level`: 0 everything, 1 a compact cache, 2 also no bars, (3: no reset times either, never measured).
 function textWidth(gauges, cacheNow, level = 0) {
   let width = 0;

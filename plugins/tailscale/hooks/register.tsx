@@ -8,7 +8,7 @@ const AREAS =
   'devices, ACL (policy file), DNS, API and auth keys, users, invites, tailnet settings, ' +
   'webhooks, logs, device posture, services, OAuth apps and contacts'
 
-/** Shapes a call's output for the host: `isError` is set only when true (the host rejects `false`). */
+/** Shapes a call's output for the host: the result of a custom tool is a string, and `isError` is set only when true (the host rejects `false`). */
 function reply(out: { text: string; isError: boolean }): { result: string } | { result: string; isError: true } {
   return out.isError ? { result: out.text, isError: true as const } : { result: out.text }
 }
@@ -63,9 +63,11 @@ export const register: Register = (on) => {
   })
 
   on('tool.call', { tool: 'mcp__tailscale__tailscale_get' }, async ($, e) => {
+    // The key is read on every call, never from options or the code.
     const key = await $.env.get('TS_API_KEY')
     const fields = Array.isArray(e.fields) ? e.fields.filter((f): f is string => typeof f === 'string') : undefined
     return reply(
+      // $.http.fetch is wrapped, not passed as a value: the engine's validate rejects the latter.
       await call((url, init) => $.http.fetch(url, init), key, {
         method: 'GET',
         path: e.path,

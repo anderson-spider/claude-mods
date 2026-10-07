@@ -100,6 +100,7 @@ async function startAgent({ deps, job, request, options, whileBlocked }: Phase):
   if (!job.pane) {
     job.pane = await deps.layout.open(herdr)
     if (session) session.pane = job.pane
+    // Best effort: a rename failure never fails the job.
     await herdr.rename(job.pane, options.paneName ?? `${job.agent} ${job.kind}`).catch(() => undefined)
   }
   // Cancelled while opening or naming the pane: never send a task afterwards.

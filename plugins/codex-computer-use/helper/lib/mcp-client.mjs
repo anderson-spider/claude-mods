@@ -39,6 +39,7 @@ export class McpStdioClient {
       'initialize',
       {
         protocolVersion: PROTOCOL,
+        // Without form elicitation node_repl refuses `getApp`.
         capabilities: { elicitation: { form: {} } },
         clientInfo: { name: 'codex-cu-helper', version: VERSION },
       },

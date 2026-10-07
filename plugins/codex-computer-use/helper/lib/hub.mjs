@@ -393,6 +393,7 @@ export class Hub {
     }
 
     if (ctx.needs !== undefined) {
+      // The call is run again only after the person allows, so the retried code runs from the start.
       return { status: 'needs_approval', app: ctx.needs, text: textOf(result) }
     }
 

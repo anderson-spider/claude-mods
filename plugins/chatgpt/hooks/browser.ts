@@ -20,7 +20,8 @@ export function chatUrlError(url: string): string | undefined {
 // Goes to `target` in the plugin's own tab, opening one when it is gone, and
 // waits for the composer (or a login page); never touches a tab it did not
 // open. The home page is a new chat, so going there is what the "New chat"
-// button does.
+// button does. The browser's `open` action would open a new tab instead of navigating, so the tab
+// is moved by script (`leaveScript`).
 export async function findTab(browser: Pick<Browser, 'tabs' | 'openTab' | 'js' | 'waitFor'>, target: string, holder: TabHolder): Promise<string> {
   if (holder.id && (await browser.tabs()).includes(holder.id)) {
     await browser.js(holder.id, leaveScript(target))

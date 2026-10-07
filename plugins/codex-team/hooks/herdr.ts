@@ -30,6 +30,7 @@ function errorOf(stderr: string, stdout: string, exitCode: number): HerdrError {
 
 /** The Herdr interface over `run`, acting on `pane` (the calling pane) and `cwd` (the session's directory). */
 export function herdrOf(run: Run, options: { pane: string; cwd: string }): Herdr {
+  // Pane names and prompts each go as one argv element, never through a shell.
   const exec = async (argv: string[], timeoutMs?: number): Promise<string> => {
     let result: Awaited<ReturnType<Run>>
     try {
