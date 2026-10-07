@@ -76,7 +76,7 @@ export type Loop = LoopRequest & {
 }
 
 export type Book = ReturnType<typeof createBook>
-export type LoopDeps = Pick<Deps, 'layout' | 'files' | 'tmpdir' | 'now'> & { herdr: Pick<Herdr, 'close' | 'wait'>; notify: (event: 'blocked' | 'finished', loop: Loop, job?: Job) => void }
+export type LoopDeps = Pick<Deps, 'layout' | 'files' | 'tmpdir' | 'now'> & { herdr: Pick<Herdr, 'close' | 'wait' | 'list'>; notify: (event: 'blocked' | 'finished', loop: Loop, job?: Job) => void }
 
 export type Check = { name: string; ok: boolean; detail: string }
 

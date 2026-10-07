@@ -1,4 +1,5 @@
 import { HerdrError } from './model'
+import { owns } from './identity'
 import type { Herdr } from './model'
 
 /** One row of agent panes below the lead, shared by every job and loop of the session. */
@@ -31,11 +32,16 @@ export function createPaneLayout() {
       })
     },
 
-    close(herdr: Pick<Herdr, 'close'>, pane: string): Promise<void> {
+    close(herdr: Pick<Herdr, 'close' | 'list'>, pane: string, agent: string): Promise<'closed' | 'skipped'> {
       // Closing and opening share the queue so a split cannot target a pane being closed.
       return serial(async () => {
-        await herdr.close(pane)
-        if (last === pane) last = undefined
+        try {
+          if (!await owns(herdr, agent, pane).catch(() => false)) return 'skipped'
+          await herdr.close(pane)
+          return 'closed'
+        } finally {
+          if (last === pane) last = undefined
+        }
       })
     },
   }

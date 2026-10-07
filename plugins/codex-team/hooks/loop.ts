@@ -94,7 +94,7 @@ export async function runLoop(deps: LoopDeps, loop: Loop, book: Pick<Book, 'excl
   for (const session of sessions) {
     if (!session.pane) continue
     try {
-      await deps.layout.close(deps.herdr, session.pane)
+      await deps.layout.close(deps.herdr, session.pane, session.agent)
     } catch {
       // Closing panes is best effort: the report, notification and status stand.
     }
