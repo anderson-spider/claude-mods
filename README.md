@@ -10,6 +10,7 @@ Marketplace of [Claude Code](https://claude.com/claude-code) plugins made by and
 | [chatgpt](plugins/chatgpt) | Lets Claude ask your logged-in ChatGPT, or have it generate an image, in terminal-browser, and saves the result locally. |
 | [codex-computer-use](plugins/codex-computer-use) | Routes native Mac app control through Codex computer use from the ChatGPT app instead of Claude's own computer use, asking before each new app. |
 | [tailscale](plugins/tailscale) | Lets Claude query and modify your tailnet through the Tailscale API. |
+| [token-weather-usage](plugins/token-weather-usage) | One line above the prompt: context with a weather icon, 5-hour and 7-day limits against the clock, the prompt cache and the subagents running. |
 
 ## Install
 
@@ -21,6 +22,7 @@ Inside Claude Code, add the marketplace and install the plugin:
 /plugin install chatgpt@spider-marketplace
 /plugin install codex-computer-use@spider-marketplace
 /plugin install tailscale@spider-marketplace
+/plugin install token-weather-usage@spider-marketplace
 ```
 
 To use a local copy instead of GitHub, pass the folder path:
@@ -114,6 +116,10 @@ They are separate so you can allow read-only without a prompt and keep write ask
 To update the ACL without overwriting someone else's edit: do a `GET /tailnet/-/acl`, keep the response's `ETag` and pass it in `ifMatch` on the `POST /tailnet/-/acl` (the API responds 412 if the ACL changed). A string `body` that is not valid JSON is sent as HuJSON, so a policy with comments works. `DELETE /tailnet/{tailnet}`, which deletes the whole tailnet, is refused by the tool.
 
 `TS_API_KEY` must be a `tskey-api-...` key. An OAuth secret `tskey-client-...` is not valid as a Bearer without a token exchange, which the plugin does not do.
+
+## token-weather-usage
+
+One line above the prompt, adapted from [token-weather-usage](https://github.com/augiefra/claude-mods/tree/main/plugins/token-weather-usage) (Apache-2.0): the context with a weather icon, one bar per recent prompt and the last prompt's change; the 5-hour and 7-day limits as block bars with a mark against the clock (`▲` ahead, `▼` behind, `▬` on pace) and the time left; the prompt cache with its time left, yellow near the end and red once expired; and the subagents running. Options (`/plugin`): **Pace start** (how many points ahead of the clock still count as on pace) and **Show cost** (dollar amounts, off by default). See [its README](plugins/token-weather-usage/README.md) and its [NOTICE](plugins/token-weather-usage/NOTICE).
 
 ## Development
 
