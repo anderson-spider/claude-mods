@@ -1,21 +1,21 @@
 # HUD
 
-One band above the Claude Code prompt, with suggested next prompts above it: the context in tokens, your 5-hour and 7-day limits against the clock, whether the prompt cache is still warm, what the session and the last prompt cost, and which agents are running.
+One band above the Claude Code prompt, with suggested next prompts above it: the context in tokens, your 5-hour and 7-day limits against the clock, whether the prompt cache is still warm, and which agents are running.
 
-![One session, step by step](https://raw.githubusercontent.com/augiefra/claude-mods/main/docs/band-story.gif)
+```
+next:
+  1: Run the tests
+  2: Commit the change
+  3: Open the PR
+  0: dismiss
 
-![All clear](https://raw.githubusercontent.com/augiefra/claude-mods/main/docs/situations/calm.png)
-
-![Agents at work](https://raw.githubusercontent.com/augiefra/claude-mods/main/docs/situations/agents.png)
-
-![Cache about to lapse](https://raw.githubusercontent.com/augiefra/claude-mods/main/docs/situations/soon.png)
-
-![Slow down](https://raw.githubusercontent.com/augiefra/claude-mods/main/docs/situations/alert.png)
+ Sonnet 5.5 | medium | 72 tok/s | hud | worktree/lucky-field-9754* · 2 files +70 -4
+ ☂ 634k ▃▄▂█▆ ▲ +6.3k │ 5h ████▓░ ▲ 3 · 24 min │ 7d ████░░ ▼ 4 · 2d20h │ cache 52 min │ 2 agents
+```
 
 - **Context**: tokens in the context with a weather icon (hover the pill for the weather and the share of the window), one bar per recent prompt, the last prompt's change. The icon follows the share, as in Token Weather: ☀ clear (under 25%), ☁ cloudy (25%), ☂ showers (50%), ☇ storm (75%), ↯ compact soon (90%).
 - **5h / 7d**: the share of your account's limits already used, in green, yellow or red by pace. The gap with the time elapsed is shaded (▒ grey while you have margin, ▓, in the bar's color when you use faster than time passes). After the percentage, a mark and the gap in points against the clock: ▲ ahead (amber, red beyond 15 points or at 90% used), ▼ behind (green), ▬ on pace. A lead of up to the **Pace start** option (0 points by default) counts as on pace. Then the time left; in the app, hover the 5-hour pill for the reset time (machine's time zone).
-- **Cache**: the time before the prompt cache lapses (1 hour on a subscription, 5 minutes on an API key, inferred), behind a bolt in the app. The share of the last message read from the cache shows only under 90%. Beside the time, on the short 5-minute lifetime only: `5 min TTL · x1.25`, what writing the cache again costs against the input price, also when it is expired (the usual 1 hour goes unsaid); and what a lapse would cost ("$2.32 if it lapses"). Yellow under a sixth of the lifetime (10 minutes of 1 hour, 50 seconds of 5 minutes), with what is at stake ("$2.32 at stake"); "missed" with its cause and what it cost above a hit ("+$2.10"); red "expired" with the cost of writing the context again ("289k to rewrite ≈ $2.32"), and the way out from 100k tokens: `/compact`, or a new thread from 300k (on the line in the terminal, in the hover card in the app). In the app, hover the cache pill for the expiry time, the share read, what the context costs a message from the cache against writing it again, and what the cache saved in this thread. Every dollar amount here (and the Cost block below) shows only with **Show cost** on; otherwise the cache speaks in tokens ("107k at stake"). The dollars come from Anthropic's list prices (dated 2026-09-25); on a subscription they are API-price equivalents, hence the "≈". A model missing from the price table shows tokens only. After a compaction the band updates at once: the context drops, and the cache reads "compacted" until the next message writes a new one.
-- **Cost** (off by default; turn on **Show cost** in the options): the session cost as `/cost` totals it (whole dollars from $100), and what the last prompt added, in dollars and in points of the 5-hour limit. On a subscription, an API-price equivalent, not a bill.
+- **Cache**: the time before the prompt cache lapses (1 hour on a subscription, 5 minutes on an API key, inferred), behind a bolt in the app. The share of the last message read from the cache shows only under 90%. Beside the time, on the short 5-minute lifetime only: `5 min TTL · x1.25`, what writing the cache again costs against the input price, also when it is expired (the usual 1 hour goes unsaid). Yellow under a sixth of the lifetime (10 minutes of 1 hour, 50 seconds of 5 minutes), with what is at stake ("107k at stake"); "missed" with its cause; red "expired" with the size of the context to write again ("289k to rewrite"), and the way out from 100k tokens: `/compact`, or a new thread from 300k (on the line in the terminal, in the hover card in the app). In the app, hover the cache pill for the expiry time, the share read and the advice. The cache speaks in tokens, never dollars. After a compaction the band updates at once: the context drops, and the cache reads "compacted" until the next message writes a new one.
 - **Agents**: shown while subagents run; hover the pill for their tasks.
 
 In the terminal:
