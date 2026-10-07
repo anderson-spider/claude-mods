@@ -9,7 +9,7 @@ Marketplace of [Claude Code](https://claude.com/claude-code) plugins made by and
 | [branch-guard](plugins/branch-guard) | Holds a `git commit` or `git push` on the protected branch and shows what would go in. |
 | [chatgpt](plugins/chatgpt) | Lets Claude ask your logged-in ChatGPT, or have it generate an image, in terminal-browser, and saves the result locally. |
 | [codex-computer-use](plugins/codex-computer-use) | Routes native Mac app control through Codex computer use from the ChatGPT app instead of Claude's own computer use, asking before each new app. |
-| [codex-team](plugins/codex-team) | Lets Claude lead Codex agents: `execute` and `review` run Codex in Herdr panes as background jobs, with a band above the prompt and a report per job. |
+| [codex-team](plugins/codex-team) | Lets Claude lead Codex agents: `execute`, `review` and dev/QA `loop` rounds run in Herdr panes as background jobs, with a band above the prompt and reports. |
 | [tailscale](plugins/tailscale) | Lets Claude query and modify your tailnet through the Tailscale API. |
 | [hud](plugins/hud) | One line above the prompt (context, 5-hour and 7-day limits against the clock, the prompt cache, the subagents running) and suggested next prompts you can pick, in order, into one draft. |
 
@@ -112,11 +112,14 @@ Lets Claude lead Codex agents. Each job runs [Codex](https://github.com/openai/c
 | --- | --- |
 | `mcp__codex-team__execute` | Tool for Claude: `task` (required, self-contained) and `files` (where Codex should start). Codex runs with `workspace-write` in the current directory and never commits. One `execute` runs at a time; the next ones wait in a queue. |
 | `mcp__codex-team__review` | Tool for Claude: `target` (a branch or commit; the uncommitted diff when empty) and `focus`. Codex reads and does not edit. Reviews run in parallel. |
-| `mcp__codex-team__jobs` | Tool for Claude: lists the jobs of the session, shows one with `id`, or cancels it with `action: "cancel"` (sends `ctrl+c`; the pane stays open). |
-| `/codex-team` | Lists the jobs and any `ct-*` agents left in panes by a reload. |
+| `mcp__codex-team__loop` | Tool for Claude: `task` (required, self-contained), optional `files` and `maxRounds` (integer at least 1, default 3). Runs dev then read-only QA rounds, returning a loop id at once and one message at the end with the verdict and report path. `execute` and `review` remain available for manual control. |
+| `mcp__codex-team__jobs` | Tool for Claude: lists the jobs and loops of the session, shows one with `id`, or cancels it with `action: "cancel"` (sends `ctrl+c` to the active child; the pane stays open and a cancelled loop starts no further rounds). Jobs and loops share one numeric id space. |
+| `/codex-team` | Lists the jobs, loops and any `ct-*` agents left in panes by a reload. |
 | `/codex-team-doctor` | Checks that Herdr and Codex are in place. |
 
-The band above the prompt shows one row per active job (status, time elapsed and pane). A job that is `blocked` is waiting for you in its pane. A job has 30 minutes to finish. The reports are saved in a `codex-team` folder of `$TMPDIR`. Jobs live in the session: a reload forgets them and leaves their panes open.
+The band above the prompt shows one row per active job (status, time elapsed and pane) and loop (phase and round, such as `loop-1 reviewing 2/3`). A job that is `blocked` is waiting for you in its pane. Each child job has 30 minutes to finish; a loop is bounded by `maxRounds`. The reports are saved in a `codex-team` folder of `$TMPDIR`; the loop's final report is `loop-<id>.md`, with the child ids and report paths. Jobs and loops live in the session: a reload forgets them and leaves their panes open.
+
+A loop holds the execute queue across all dev and QA rounds, so another `execute` waits until it ends. QA reviews the current uncommitted diff against the original task and ends its report with exactly `VERDICT: APPROVED` or `VERDICT: CHANGES` as the last non-empty line. Approval ends the loop; changes send the original task and QA report path back to dev. Changes at `maxRounds` leave the loop `exhausted`, with the last findings in its report. A missing or invalid verdict ends it `failed`. Child finish messages are silent; only the loop's final message reaches Claude, while blocked children still ask you in their panes.
 
 ## tailscale
 

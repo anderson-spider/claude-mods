@@ -5,6 +5,8 @@ import type { BandJob } from '../types'
 import { herdrAvailable, herdrOf } from './herdr'
 import { PROMPT, bandRows, createBook, doctorReport, jobDetail, jobsReport, requestOf } from './team'
 import type { Check, Job, Kind } from './team'
+import { cancelLoop, loopOf, loopReport, loopStart } from './loop'
+import type { Loop, LoopDeps } from './loop'
 
 type Kit = Pick<Elements['terminal'], 'Box' | 'Text'>
 
@@ -18,6 +20,8 @@ const jobsAtom = atom({ plugin: 'codex-team', key: 'jobs' } as const, [] as Band
 // Jobs run long after the hook that started them returned, so the module keeps the
 // book of this session; a reload starts it over. `$` is only ever passed on, never stored.
 let book: ReturnType<typeof createBook> | undefined
+let loops: Loop[] = []
+let loopDeps: LoopDeps | undefined
 let unavailable: string | undefined
 let ticker: { cancel: () => void } | undefined
 
@@ -25,9 +29,13 @@ const FINISHED: Job['status'][] = ['done', 'failed', 'cancelled']
 const NOT_READY = 'codex-team is not ready: the session has not started it yet.'
 
 const snapshot = (): BandJob[] =>
-  (book?.jobs() ?? [])
+  [
+    ...loops.filter(loop => loop.status === 'developing' || loop.status === 'reviewing')
+      .map((loop): BandJob => ({ id: `loop-${loop.id}`, kind: 'loop', status: loop.status, round: loop.rounds.length, maxRounds: loop.maxRounds, pane: '…', elapsedSeconds: Math.floor((Date.now() - loop.startedAt) / 1000) })),
+    ...(book?.jobs() ?? [])
     .filter(job => !FINISHED.includes(job.status))
-    .map(job => ({ id: job.agent, kind: job.kind, status: job.status, pane: job.pane ?? '…', elapsedSeconds: Math.floor((Date.now() - job.startedAt) / 1000) }))
+    .map(job => ({ id: job.agent, kind: job.kind, status: job.status, pane: job.pane ?? '…', elapsedSeconds: Math.floor((Date.now() - job.startedAt) / 1000) })),
+  ]
 
 // The band draws what `$.state` holds; a one-second tick keeps the elapsed time moving while a job is active.
 async function publish($: EngineInterface) {
@@ -62,6 +70,17 @@ const notifier = ($: EngineInterface) => (event: 'blocked' | 'finished', job: Jo
   void $.prompt.submit({ text: finishedText(job) }).catch(() => undefined)
 }
 
+const loopNotifier = ($: EngineInterface) => (_event: 'finished', loop: Loop) => {
+  void publish($)
+  $.ui.toast(`Codex Team: loop-${loop.id} ${loop.status}`)
+  void $.prompt.submit({ text: [
+    `[codex-team loop-${loop.id} ${loop.status}]`, loop.task,
+    `Rounds: ${loop.rounds.length}/${loop.maxRounds}`,
+    loop.report ? `Report: ${loop.report}` : '',
+    loop.error ? `Note: ${loop.error}` : '',
+  ].filter(Boolean).join('\n') }).catch(() => undefined)
+}
+
 const draw = ({ Box, Text }: Kit, jobs: BandJob[], room: number): RenderElement => {
   const { rows, hidden } = bandRows(jobs, room)
 
@@ -92,19 +111,36 @@ async function start($: EngineInterface, kind: Kind, e: Record<string, unknown>)
   return { result: `Started job ${job.agent} (${kind}). A message arrives when it finishes; the jobs tool lists it meanwhile.` }
 }
 
+async function startLoop($: EngineInterface, e: Record<string, unknown>) {
+  if (!book || !loopDeps) return refusal(unavailable ?? NOT_READY)
+  const request = loopOf(e)
+  if (typeof request === 'string') return refusal(request)
+  const loop = await loopStart(loopDeps, book, request)
+  loops.push(loop)
+  await publish($)
+  return { result: `Started loop-${loop.id}. One message arrives at the end with the verdict and report path; the jobs tool lists it meanwhile.` }
+}
+
+const allJobs = () => [
+  ...[...loops].reverse().map(loop => `loop-${loop.id} ${loop.status} ${loop.rounds.length}/${loop.maxRounds}: ${loop.task.slice(0, 60)}${loop.report ? `\n  report ${loop.report}` : loop.error ? `\n  ${loop.error}` : ''}`),
+  !loops.length || book?.jobs().length ? jobsReport(book?.jobs() ?? [], Date.now()) : '',
+].filter(Boolean).join('\n')
+
 async function jobsTool($: EngineInterface, e: Record<string, unknown>) {
   if (!book) return refusal(unavailable ?? NOT_READY)
+  const loop = typeof e.id === 'number' ? loops.find(loop => loop.id === e.id) : undefined
   if (e.action === 'cancel') {
     if (typeof e.id !== 'number') return refusal('Give the id of the job to cancel.')
-    const answer = await book.cancel(e.id)
+    const answer = loop ? await cancelLoop({ now: Date.now }, book, loop) : await book.cancel(e.id)
     await publish($)
     return { result: answer }
   }
   if (typeof e.id === 'number') {
+    if (loop) return { result: [loopReport(loop, book), loop.report ? `Report: ${loop.report}` : ''].filter(Boolean).join('\n') }
     const job = book.get(e.id)
     return job ? { result: jobDetail(job) } : refusal(`No job ct-${e.id} in this session.`)
   }
-  return { result: jobsReport(book.jobs(), Date.now()) }
+  return { result: allJobs() }
 }
 
 async function doctor($: EngineInterface): Promise<string> {
@@ -133,6 +169,8 @@ export const register: Register = on => {
     ticker?.cancel()
     ticker = undefined
     book = undefined
+    loops = []
+    loopDeps = undefined
     await update($, jobsAtom, () => [])
 
     await $.tool.register({
@@ -164,15 +202,30 @@ export const register: Register = on => {
       },
     })
     await $.tool.register({
-      name: 'jobs',
+      name: 'loop',
       description:
-        'Lists the Codex jobs of this session (status, pane, report path), reads one by id, or cancels one with action: "cancel". ' +
-        'A cancel sends ctrl+c to its Codex and leaves the pane open.',
+        'Runs dev then read-only QA rounds for a self-contained task, holding the execute queue across all rounds. Returns a loop id at once; ' +
+        'one message arrives at the end with the verdict and report path. maxRounds defaults to 3. Use execute and review for manual control.',
       inputSchema: {
         type: 'object',
         properties: {
-          id: { type: 'number', description: 'Optional job id, the number after "ct-".' },
-          action: { type: 'string', enum: ['cancel'], description: 'Optional: cancel the job named by id.' },
+          task: { type: 'string', description: 'The whole task, self-contained.' },
+          files: { type: 'array', items: { type: 'string' }, description: 'Optional files or folders Codex should start from.' },
+          maxRounds: { type: 'integer', minimum: 1, default: 3, description: 'Maximum dev and QA rounds.' },
+        },
+        required: ['task'],
+      },
+    })
+    await $.tool.register({
+      name: 'jobs',
+      description:
+        'Lists the Codex jobs and loops of this session (status, pane, report path), reads one by id, or cancels one with action: "cancel". ' +
+        'A cancel sends ctrl+c to its active Codex and leaves the pane open; a cancelled loop starts no further rounds.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          id: { type: 'number', description: 'Optional job or loop id, the number after "ct-" or "loop-" (one shared id space).' },
+          action: { type: 'string', enum: ['cancel'], description: 'Optional: cancel the job or loop named by id.' },
         },
       },
     })
@@ -186,13 +239,14 @@ export const register: Register = on => {
     if (unavailable === undefined && pane) {
       const cwd = await $.session.cwd()
       const tmpdir = await $.env.get('TMPDIR')
-      book = createBook({
+      const deps = {
         herdr: herdrOf((argv, init) => $.process.run(argv, init), { pane, cwd }),
-        files: { read: path => $.fs.read(path).catch(() => undefined) },
+        files: { read: (path: string) => $.fs.read(path).catch(() => undefined), write: (path: string, text: string) => $.fs.write(path, text) },
         tmpdir,
         now: Date.now,
-        notify: notifier($),
-      })
+      }
+      book = createBook({ ...deps, notify: notifier($) })
+      loopDeps = { ...deps, notify: loopNotifier($) }
     }
 
     return next(e)
@@ -202,13 +256,16 @@ export const register: Register = on => {
 
   on('tool.call', { tool: 'mcp__codex-team__review' }, ($, e) => start($, 'review', e).catch(failure))
 
+  on('tool.call', { tool: 'mcp__codex-team__loop' }, ($, e) => startLoop($, e).catch(failure))
+    .catch(() => refusal('codex-team loop failed before it could answer.'))
+
   on('tool.call', { tool: 'mcp__codex-team__jobs' }, ($, e) => jobsTool($, e).catch(failure))
 
   on('command.run', { command: 'codex-team' }, async ($, e) => {
     if (!book) return { text: unavailable ?? NOT_READY }
     const orphans = await book.orphans()
     const left = orphans.length ? `\n\nct-* agents left from before a reload (their panes are still open):\n${orphans.map(o => `  ${o.name} in ${o.pane}`).join('\n')}` : ''
-    return { text: jobsReport(book.jobs(), Date.now()) + left }
+    return { text: allJobs() + left }
   })
 
   on('command.run', { command: 'codex-team-doctor' }, async ($, e) => ({ text: await doctor($) }))
