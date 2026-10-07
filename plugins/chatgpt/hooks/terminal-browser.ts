@@ -77,7 +77,7 @@ function terminalBrowserOf(run: ProcessRunner, listed?: string): Browser {
         () => true,
         () => false,
       ),
-    // Every page script is a function body; eval waits for the promise it returns.
+    // Every page script is a function body; eval refuses a top-level `await` but waits for a returned promise, hence the async wrapper.
     js: (tabId, body) => terminalBrowser(run, [...select(tabId), 'eval', `(async () => {\n${body}\n})()`]),
     upload: async (tabId, selector, paths) => {
       await terminalBrowser(run, [...select(tabId), 'upload', selector, ...paths])
