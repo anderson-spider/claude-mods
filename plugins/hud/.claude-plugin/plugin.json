@@ -6,9 +6,9 @@
     "name": "anderson-spider"
   },
   "license": "Apache-2.0",
-  "repository": "https://github.com/anderson-spider/spider-marketplace",
+  "repository": "https://github.com/anderson-spider/claude-mods",
   "displayName": "HUD",
-  "homepage": "https://github.com/anderson-spider/spider-marketplace/tree/main/plugins/hud",
+  "homepage": "https://github.com/anderson-spider/claude-mods/tree/main/plugins/hud",
   "keywords": [
     "mod",
     "hud",
