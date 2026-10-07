@@ -1,3 +1,5 @@
+import type { BandJob } from '../types'
+
 // Pure logic of the codex-team plugin: names, Codex arguments, prompts and the
 // job lifecycle, all against an injected `Herdr` so tests need no real host.
 
@@ -302,4 +304,48 @@ export function jobDetail(job: Job): string {
   ]
     .filter(Boolean)
     .join('\n')
+}
+
+// --- The band, the prompt section and the doctor ---
+
+const clock = (seconds: number) => `${Math.floor(seconds / 60)}m${String(seconds % 60).padStart(2, '0')}s`
+
+/** The band's rows, at most `room` of them, and how many jobs did not fit. */
+export function bandRows(jobs: readonly BandJob[], room: number): { rows: string[]; hidden: number } {
+  const shown = jobs.slice(0, Math.max(0, room))
+  const rows = shown.map(
+    job => `${job.id} ${job.kind}  ${job.status}  ${clock(job.elapsedSeconds)}  ${job.pane}${job.status === 'blocked' ? '  ← answer in the pane' : ''}`,
+  )
+  return { rows, hidden: jobs.length - shown.length }
+}
+
+const EXECUTE_TOOL = 'mcp__codex-team__execute'
+const REVIEW_TOOL = 'mcp__codex-team__review'
+const JOBS_TOOL = 'mcp__codex-team__jobs'
+
+// Added to the system prompt so Claude leads on its own; the tools may be deferred, so their descriptions
+// alone are not seen until loaded.
+export const PROMPT = [
+  '# Leading Codex agents (codex-team mod)',
+  '',
+  'You can delegate work to Codex agents that run in their own Herdr panes as background jobs; the person can watch each pane.',
+  '',
+  `- \`${EXECUTE_TOOL}\` { task, files? }: Codex implements a well-bounded task in the current directory (sandbox workspace-write, it never commits). One execute runs at a time: a second waits in the queue, so do not start a second while one is running or queued in the same directory.`,
+  `- \`${REVIEW_TOOL}\` { target?, focus? }: Codex reviews the current diff (or the target) read-only; reviews run in parallel.`,
+  `- \`${JOBS_TOOL}\` { id?, action? }: lists the jobs, reads one, or cancels it (\`action: "cancel"\`).`,
+  '',
+  '- Say in one line what you delegate before the call. If the tools are deferred, load them by name first.',
+  '- Write a self-contained task: the goal, the files, the constraints and how to check it.',
+  '- A call answers with a job id at once: keep working on something else. A message arrives when the job ends; read the job\'s report file (its path is in the message), not the pane, and check the work (run the tests, read the diff) before building on it.',
+  '- Call review before integrating an execute result.',
+  '- A blocked job waits for the person in its pane: never answer for them.',
+].join('\n')
+
+export type Check = { name: string; ok: boolean; detail: string }
+
+/** The doctor's report, one line per check. */
+export function doctorReport(checks: readonly Check[]): string {
+  const failed = checks.filter(check => !check.ok).length
+  const lines = checks.map(check => `${check.ok ? '✓' : '✗'} ${check.name}: ${check.detail}`)
+  return [...lines, '', failed ? `${failed} check(s) failed.` : 'Everything codex-team relies on is in place.'].join('\n')
 }
