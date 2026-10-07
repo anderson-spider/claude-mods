@@ -107,7 +107,6 @@ type State = {
   isAdrift: boolean
   branch: string | undefined
   isStaged: boolean
-  isStraight: boolean
 }
 
 // Where a `checkout`/`switch` leaves the person: the name when the text reveals it, `unknown` when not.
@@ -125,6 +124,67 @@ const move = (state: State, sub: string, args: readonly Word[], isSure: boolean)
   }
 
   state.branch = isSure && !target.isUnknown && target.text !== '-' ? target.text : 'unknown'
+}
+
+type Base = { dir: string; isElsewhere: boolean; branchAfter?: string }
+
+const commitRisk = (base: Base, args: readonly Word[], state: State): Risk | undefined => {
+  const { flags, positional } = scan(args, COMMIT_SHORT, COMMIT_LONG)
+
+  return flags.has('--dry-run')
+    ? undefined
+    : {
+        ...base,
+        kind: 'commit',
+        isAll: flags.has('--all') || flags.has('-a'),
+        isAmend: flags.has('--amend'),
+        isAllowEmpty: flags.has('--allow-empty'),
+        hasPathspec: positional.length > 0,
+        stagesFirst: state.isStaged,
+      }
+}
+
+// The refs a push names after the remote, without the tags: `tag <name>` and `refs/tags/...` touch no branch.
+const branchRefs = (positional: readonly Word[]): Word[] => {
+  const named: Word[] = []
+
+  for (let index = 1; index < positional.length; index += 1) {
+    const word = positional[index]
+
+    if (word?.text === 'tag') {
+      index += 1
+    } else if (word !== undefined && !word.text.startsWith('refs/tags/')) {
+      named.push(word)
+    }
+  }
+
+  return named
+}
+
+const pushRisk = (base: Base, args: readonly Word[]): Risk | undefined => {
+  const { flags, positional } = scan(args, 'o', PUSH_LONG)
+  // Force push and dry run are not handled here: the first is left alone on purpose, the second sends nothing.
+  const isOther = [...FORCES, '-n', '--dry-run'].some(flag => flags.has(flag)) || positional.some(word => word.text.startsWith('+'))
+
+  if (isOther) {
+    return undefined
+  }
+
+  const named = branchRefs(positional)
+
+  // Only tags going out: touches no branch.
+  if ((flags.has('--tags') || positional.some(word => word.text === 'tag') || positional.slice(1).some(word => word.text.startsWith('refs/tags/'))) && named.length === 0) {
+    return undefined
+  }
+
+  return {
+    ...base,
+    kind: 'publish',
+    remote: positional[0]?.text,
+    refspecs: named.map(word => word.text),
+    isAllRefs: flags.has('--all') || flags.has('--mirror') || flags.has('--branches'),
+    hasUnknownRef: named.some(word => word.isUnknown),
+  }
 }
 
 const git = (state: State, words: readonly Word[], isSure: boolean): Risk | undefined => {
@@ -146,66 +206,12 @@ const git = (state: State, words: readonly Word[], isSure: boolean): Risk | unde
 
   if (STAGERS.has(sub)) {
     state.isStaged = true
-
-    return undefined
-  }
-
-  if (sub === 'checkout' || sub === 'switch') {
+  } else if (sub === 'checkout' || sub === 'switch') {
     move(state, sub, args, isSure)
-
-    return undefined
-  }
-
-  if (sub === 'commit') {
-    const { flags, positional } = scan(args, COMMIT_SHORT, COMMIT_LONG)
-
-    return flags.has('--dry-run')
-      ? undefined
-      : {
-          ...base,
-          kind: 'commit',
-          isAll: flags.has('--all') || flags.has('-a'),
-          isAmend: flags.has('--amend'),
-          isAllowEmpty: flags.has('--allow-empty'),
-          hasPathspec: positional.length > 0,
-          stagesFirst: state.isStaged,
-        }
-  }
-
-  if (sub === 'push') {
-    const { flags, positional } = scan(args, 'o', PUSH_LONG)
-    // Force push and dry run are not handled here: the first is left alone on purpose, the second sends nothing.
-    const isOther = [...FORCES, '-n', '--dry-run'].some(flag => flags.has(flag)) || positional.some(word => word.text.startsWith('+'))
-
-    if (isOther) {
-      return undefined
-    }
-
-    const named: Word[] = []
-
-    for (let index = 1; index < positional.length; index += 1) {
-      const word = positional[index]
-
-      if (word?.text === 'tag') {
-        index += 1
-      } else if (word !== undefined && !word.text.startsWith('refs/tags/')) {
-        named.push(word)
-      }
-    }
-
-    // Only tags going out: touches no branch.
-    if ((flags.has('--tags') || positional.some(word => word.text === 'tag') || positional.slice(1).some(word => word.text.startsWith('refs/tags/'))) && named.length === 0) {
-      return undefined
-    }
-
-    return {
-      ...base,
-      kind: 'publish',
-      remote: positional[0]?.text,
-      refspecs: named.map(word => word.text),
-      isAllRefs: flags.has('--all') || flags.has('--mirror') || flags.has('--branches'),
-      hasUnknownRef: named.some(word => word.isUnknown),
-    }
+  } else if (sub === 'commit') {
+    return commitRisk(base, args, state)
+  } else if (sub === 'push') {
+    return pushRisk(base, args)
   }
 
   return undefined
@@ -217,7 +223,7 @@ export const classify = (command: string): Risk[] => {
   const parsed = parse(command)
   // With `if`, `for` and the like, the text alone cannot tell which branch switches run.
   const isStraight = !parsed.some(one => KEYWORDS.has(one.words[0]?.text ?? ''))
-  const state: State = { dir: '.', isAdrift: false, branch: undefined, isStaged: false, isStraight }
+  const state: State = { dir: '.', isAdrift: false, branch: undefined, isStaged: false }
 
   for (const [at, one] of parsed.entries()) {
     const argv = bare(one.words)
@@ -234,7 +240,7 @@ export const classify = (command: string): Risk[] => {
       state.isAdrift = isKnown ? state.isAdrift && !to.startsWith('/') && !isHomePath : true
       state.dir = isKnown ? enter(state.dir, to) : state.dir
     } else if (name === 'git') {
-      const isSure = state.isStraight && SEQUENCE.has(one.before) && SEQUENCE.has(parsed[at + 1]?.before ?? '')
+      const isSure = isStraight && SEQUENCE.has(one.before) && SEQUENCE.has(parsed[at + 1]?.before ?? '')
       const risk = git(state, args, isSure)
 
       if (risk !== undefined) {
