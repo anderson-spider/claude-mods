@@ -29,6 +29,15 @@ test('classify names commits and plain pushes, and leaves force pushes alone', (
   expect(kinds('git push origin refs/tags/v1.2.0')).toEqual([])
 })
 
+test('classify keeps a push that mixes a tag and a branch', () => {
+  expect(classify('git push origin tag v1 main')).toEqual([
+    { dir: '.', isElsewhere: false, kind: 'publish', remote: 'origin', refspecs: ['main'], isAllRefs: false, hasUnknownRef: false },
+  ])
+  expect(classify('git push origin v1.2 main')).toEqual([
+    { dir: '.', isElsewhere: false, kind: 'publish', remote: 'origin', refspecs: ['v1.2', 'main'], isAllRefs: false, hasUnknownRef: false },
+  ])
+})
+
 test('classify follows cd, git -C and the branch a checkout leaves active', () => {
   expect(classify('cd web && git commit -m x')[0]).toMatchObject({ kind: 'commit', dir: 'web' })
   expect(classify('git -C ../other commit -m x')[0]).toMatchObject({ kind: 'commit', dir: '../other' })

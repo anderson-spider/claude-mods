@@ -197,6 +197,13 @@ test('buildInit sets auth, If-Match and no Content-Type without a body', () => {
   expect(init.body).toBeUndefined()
 })
 
+test('buildInit sends an object body as JSON together with If-Match', () => {
+  const init = buildInit({ method: 'POST', path: '/x', body: { a: 1 }, ifMatch: 'etag' }, 'k')
+  expect(init.headers['Content-Type']).toBe('application/json')
+  expect(init.headers['If-Match']).toBe('etag')
+  expect(init.body).toBe('{"a":1}')
+})
+
 test('format keeps the ETag line, the error flag and truncates long text', () => {
   const ok = format({ status: 200, ok: true, text: 'hi', headers: { etag: '"e"' } }, { method: 'GET', path: '/x' })
   expect(ok).toEqual({ text: 'HTTP 200\nETag: "e"\nhi', isError: false })

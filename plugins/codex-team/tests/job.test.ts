@@ -122,6 +122,19 @@ test('runJob treats agent_not_ready at start as blocked and then prompts', async
   expect(j.status).toBe('done')
 })
 
+test('a cancel while the agent is blocked at startup never sends the prompt', async () => {
+  const j = job()
+  const { deps, calls, events } = setup({ start: new HerdrError('agent_not_ready', 'blocked at startup') })
+  deps.herdr.wait = async () => {
+    j.status = 'cancelled'
+    return 'idle'
+  }
+  await runJob(deps, j, request())
+  expect(j.status).toBe('cancelled')
+  expect(calls.some(call => call.startsWith('prompt'))).toBe(false)
+  expect(events).toEqual(['blocked blocked'])
+})
+
 test('runJob falls back to the pane text when Codex wrote no report', async () => {
   const { deps } = setup({ read: 'what the pane shows' }, {})
   const j = job()
