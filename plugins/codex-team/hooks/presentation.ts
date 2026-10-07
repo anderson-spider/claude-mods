@@ -114,3 +114,10 @@ export function loopReport(loop: Loop, book: Pick<Book, 'get'>, findings?: strin
     ...(loop.status === 'exhausted' && findings !== undefined ? ['', '## Last QA findings', findings] : []),
   ].join('\n')
 }
+
+/** The Herdr notification's title for a blocked job or loop phase: seen outside Claude's window. */
+export const herdrNoticeTitle = (job: Job, loop?: Loop) =>
+  loop ? `codex-team: loop-${loop.id} ${job.agent} needs you` : `codex-team: ${job.agent} needs you`
+
+/** The Herdr notification's body: where the person must answer, and the question's report when there is one. */
+export const herdrNoticeBody = (job: Job) => `pane ${job.pane}${job.report ? `\nQuestion in ${job.report}` : ''}`

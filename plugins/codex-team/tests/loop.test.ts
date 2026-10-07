@@ -4,6 +4,7 @@ import { HerdrError } from '../hooks/model'
 import type { Job, Loop } from '../hooks/model'
 import { createBook } from '../hooks/book'
 import { cancelLoop, loopStart, runLoop } from '../hooks/loop'
+import { loopAgentName } from '../hooks/names'
 import { loopReport } from '../hooks/presentation'
 import { request, pause, loopWith, loopRequest } from './helpers'
 import type { Script } from './helpers'
@@ -742,7 +743,9 @@ test('a cancelled loop keeps waiting through stop timeouts and permits Esc retri
 test('a loop preserves its status and report when its panes no longer match', async () => {
   for (const [verdict, status] of [['VERDICT: APPROVED', 'approved'], ['VERDICT: CHANGES', 'exhausted'], ['no verdict', 'failed']]) {
     const state = loopWith(['dev', verdict])
-    state.deps.herdr.list = async () => [{ name: 'ct-other', pane: 'w1:p2' }, { name: 'ct-1-qa', pane: 'w9:p9' }]
+    const list = state.deps.herdr.list
+    // The panes stop matching only after both phases ran: the final closes must then be skipped.
+    state.deps.herdr.list = async () => (state.prompts.length < 2 ? list() : [{ name: 'ct-other', pane: 'w1:p2' }, { name: 'ct-1-qa', pane: 'w9:p9' }])
     const loop: Loop = { id: 1, ...loopRequest(1), status: 'developing', rounds: [], startedAt: 0 }
     await runLoop(state.deps, loop, state.book)
     expect(loop.status).toBe(status)
@@ -752,4 +755,20 @@ test('a loop preserves its status and report when its panes no longer match', as
     await state.deps.layout.open(state.deps.herdr)
     expect(state.calls.filter(call => call.startsWith('split')).at(-1)).toBe('split down')
   }
+})
+
+test('a loop fails before the next dev round when its dev pane now runs another terminal', async () => {
+  const state = loopWith(['dev report', 'A finding above the verdict\nVERDICT: CHANGES'])
+  const list = state.deps.herdr.list
+  // Once QA has started, the dev agent's pane runs another terminal (a Herdr restart reused the pane id).
+  state.deps.herdr.list = async () => {
+    const agents = await list()
+    return state.prompts.length < 2 ? agents : agents.map(agent => (agent.name.endsWith('-dev') ? { ...agent, terminal: 'term-moved' } : agent))
+  }
+  const loop = await loopStart(state.deps, state.book, loopRequest())
+  await state.finished(loop)
+  expect(loop.status).toBe('failed')
+  expect(state.prompts).toHaveLength(2)
+  expect(loop.error).toContain(`dev 2: ${loopAgentName(loop.id, 'dev')} failed: pane`)
+  expect(loop.error).toContain('the prompt was not sent.')
 })

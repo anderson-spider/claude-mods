@@ -9,6 +9,8 @@ const SETTLED: readonly string[] = ['idle', 'blocked', 'done']
 // A herdr wait that gives up by itself answers `timeout`; the process gets a little longer than the wait it asked for.
 const GRACE_MS = 20_000
 const PREFIX = 'ct-'
+// Marks the pane metadata this plugin reports, so it never touches what others set.
+const SOURCE = 'codex-team'
 
 type Json = { result?: any; error?: { code?: string; message?: string } }
 
@@ -96,8 +98,23 @@ export function herdrOf(run: Run, options: { pane: string; cwd: string }): Herdr
     },
 
     async list() {
-      const agents: { name?: string; pane_id?: string }[] = (await json(['agent', 'list'])).result?.agents ?? []
-      return agents.flatMap(agent => (agent.name?.startsWith(PREFIX) && agent.pane_id ? [{ name: agent.name, pane: agent.pane_id }] : []))
+      const agents: { name?: string; pane_id?: string; terminal_id?: string }[] = (await json(['agent', 'list'])).result?.agents ?? []
+      return agents.flatMap(agent => (agent.name?.startsWith(PREFIX) && agent.pane_id
+        ? [{ name: agent.name, pane: agent.pane_id, ...(typeof agent.terminal_id === 'string' ? { terminal: agent.terminal_id } : {}) }]
+        : []))
+    },
+
+    async notify(title, body) {
+      await exec(['notification', 'show', title, '--body', body, '--sound', 'request'])
+    },
+
+    async annotate(pane, meta) {
+      await exec([
+        'pane', 'report-metadata', pane, '--source', SOURCE,
+        ...(meta.title ? ['--title', meta.title] : []),
+        ...(meta.stateLabel ? ['--state-label', `blocked=${meta.stateLabel}`] : []),
+        '--ttl-ms', String(meta.ttlMs),
+      ])
     },
   }
 }
