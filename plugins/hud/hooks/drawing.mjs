@@ -93,7 +93,6 @@ function cacheBlock({ Text, Svg }, mode, state, compact = false) {
 // ---------- Limits: gauges ----------
 
 // Character bar of full blocks, the same in the terminal and the app: solid █ up to the share used; the gap with elapsed time shaded (▓ in the bar's color when ahead of time, ▒ grey as margin), ░ for the empty track.
-// in the bar's color when using faster than time, grey otherwise.
 function textGauge(Box, Text, g) {
   const used = Math.round((g.used / 100) * TEXT_CELLS);
   const time = g.elapsed === null ? used : Math.round((g.elapsed / 100) * TEXT_CELLS);
@@ -140,10 +139,10 @@ export function drawLine(elements, surface, columns, now, agents) {
     // second turn the bars of the recent prompts with the last one's change.
     const f = ctxBand(Math.round(cur.percent));
     const title = T.contextAlt(T.weather[f.id], T.percent(Math.round(cur.percent)), short(cur.window));
-    const icon = desktop
+    const lead = desktop
       ? Svg({ key: "icon", source: weatherSvg(f), alt: title, width: WEATHER_ICON_SIZE, height: WEATHER_ICON_SIZE })
       : Text({ key: "icon", color: f.term, bold: true, children: f.icon });
-    const parts = [icon, Text({ key: "tokens", bold: true, children: short(cur.tokens) })];
+    const parts = [lead, Text({ key: "tokens", bold: true, children: short(cur.tokens) })];
     // A single reading draws no trend: the bars wait for the second turn.
     if (contextData.readings.length >= 2) {
       if (desktop) {
@@ -163,7 +162,7 @@ export function drawLine(elements, surface, columns, now, agents) {
   // info line already lists them by model, so the pill is the desktop's alone.
   if (desktop && agents.length > 0) {
     const parts = [];
-    if (desktop) parts.push(icon(Svg, "i", "agents", ICON_COLORS.agents, T.icons.agents));
+    parts.push(icon(Svg, "i", "agents", ICON_COLORS.agents, T.icons.agents));
     parts.push(Text({ key: "v", bold: true, children: T.agents(agents.length) }));
     // The hover card lists what each one is doing.
     blocks.push({ key: "agents", tint: TINTS.agents, parts, tip: agents.map((a) => `${a.type} · ${a.description}`).join("\n") });
