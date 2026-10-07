@@ -212,3 +212,10 @@ test('classify closes a substitution after a case arm and keeps each one at its 
   expect(classify('cd /a && echo $(git commit -m x)')).toMatchObject([{ kind: 'commit', dir: '/a' }])
   expect(classify('echo $(cd /tmp); git commit -m x')).toMatchObject([{ kind: 'commit', dir: '.' }])
 })
+
+test('classify keeps the substitutions in every alternative of a case pattern', () => {
+  expect(kinds('case a in $(git commit -m x)) ls;; esac')).toEqual(['commit'])
+  expect(kinds('case a in a|$(git commit -m x)) ls;; esac')).toEqual(['commit'])
+  expect(kinds('case a in (x|$(git commit -m x)) ls;; esac')).toEqual(['commit'])
+  expect(kinds('case a in b) ls;; a|`git commit -m x`) ls;; esac')).toEqual(['commit'])
+})

@@ -221,6 +221,7 @@ const closeParen = (command: string, from: number): number => {
 
     word = ''
 
+    // In a pattern, the optional leading `(` opens nothing and the `)` ends the pattern instead of closing anything.
     if (cases.at(-1) === 'pattern' && (char === '(' || char === ')')) {
       if (char === ')') {
         cases[cases.length - 1] = 'body'
@@ -367,11 +368,16 @@ export const parse = (command: string): Command[] => {
     return { raw: command.slice(at, close + 1), end: Math.min(close, command.length - 1) }
   }
   const endPattern = () => {
-    commands.length = patternFrom + 1
+    // The pattern's words are dropped, but the substitutions in any of its alternatives (`a|$(…)`) still run.
+    const dropped = commands.splice(patternFrom + 1).flatMap(one => one.sub ?? [])
     const first = commands[patternFrom]
 
     if (first !== undefined) {
       first.words = []
+    }
+
+    if (dropped.length > 0) {
+      attach(patternFrom, dropped)
     }
 
     isPattern = false
