@@ -19,7 +19,7 @@ claude plugin test plugins/codex-computer-use  # same, for codex-computer-use (t
 /Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node --test plugins/codex-computer-use/helper/test/*.test.mjs   # its helper
 claude plugin test plugins/codex-team          # runs tests/*.test.ts; tests/helpers.ts holds shared fakes
 claude plugin test plugins/tailscale           # same, for tailscale
-claude plugin test plugins/hud                  # same, for hud
+claude plugin test plugins/hud                 # same, for hud
 claude --plugin-dir plugins/branch-guard       # loads the plugin with automatic reload
 ```
 
@@ -95,8 +95,8 @@ Every page script is a function body that ends in `return JSON.stringify(...)`; 
 Registers the `execute`, `review`, `loop` and `jobs` tools (`mcp__codex-team__<name>`; inputs declared in `types/index.d.ts` for the matchers, kept in step with the `inputSchema`) and the `/codex-team` and `/codex-team-doctor` commands in `session.start`. A `prompt.compose` hook adds the `codex-team:lead` section (`PROMPT` in `hooks/prompts.ts`). The pure modules depend on injected interfaces; only `register.tsx` calls the host:
 
 - `hooks/model.ts`: shared job and loop types, the `Herdr`, `PaneLayout`, `Files`, `Deps`, `Run` and notification contracts, and `HerdrError` and `isFinished` (done, failed or cancelled). `Book` derives its shape from `createBook`; consumers take only the methods they need.
-- `hooks/names.ts`: `PREFIX`, `isAgentName`, `agentName`, `loopAgentName`, `nextFreeId`, `reportPath`, `loopReportPath` and `phaseReportPath` keep agent names, the shared id space and report paths together, with the timing constants `JOB_LIMIT_MS`, `WAIT_CHUNK_MS` and `STOP_WAIT_MS`.
-- `hooks/text.ts`: `messageOf` (error text) and `appendNote` (adds a note to a job's `error`). A live `ct-<id>-dev` or `ct-<id>-qa` reserves that loop id after a reload.
+- `hooks/names.ts`: `PREFIX`, `isAgentName`, `agentName`, `loopAgentName`, `nextFreeId`, `reportPath`, `loopReportPath` and `phaseReportPath` keep agent names, the shared id space and report paths together, with the timing constants `JOB_LIMIT_MS`, `WAIT_CHUNK_MS` and `STOP_WAIT_MS`. A live `ct-<id>-dev` or `ct-<id>-qa` reserves that loop id after a reload.
+- `hooks/text.ts`: `messageOf` (error text) and `appendNote` (adds a note to a job's `error`).
 - `hooks/prompts.ts`: `buildPrompt`, `REPORT_RULE` and `PROMPT` hold the agent instructions; an execute report has fixed sections (`## Report`, `## Checks` with `CHECKS: PASS|FAIL|NOT RUN`, `## Next`, optional `## Remember`) and a review report `## Findings` then `## Next`, read by Claude; the plugin parses only `STATUS: WAITING`, `CHECKS:` and the QA verdict line (still last), in `hooks/report.ts`. `REPORT_RULE` tells Codex to start the report with `STATUS: WAITING` and its question when it needs the person; `codexArgs` picks the sandbox (`workspace-write` for execute, `read-only` for review, `-a on-request`). `qaFocus` adds the task as acceptance criteria and the verdict rule; `fixTask` carries the original task and the previous QA report path, or with `'checks'` the dev's own report whose checks failed.
 - `hooks/schemas.ts`: the execute, review, loop and jobs tool definitions, including their descriptions and input schemas. `register.tsx` registers these definitions with literal `$.tool.register(...)` calls.
 - `hooks/requests.ts`: `requestOf` validates and trims job inputs; `loopOf` reuses the execute rules and reads `maxRounds` (integer at least 1, default 3).
