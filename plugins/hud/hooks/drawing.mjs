@@ -128,7 +128,7 @@ export function drawLine(elements, surface, columns, now, agents) {
   let mode = "svg";
   let compact = false;
   if (!desktop) {
-    const step = [0, 1, 2].find((level) => textWidth(gauges, cacheNow, level, agents) <= columns - RESERVED_COLUMNS) ?? 3;
+    const step = [0, 1, 2].find((level) => textWidth(gauges, cacheNow, level) <= columns - RESERVED_COLUMNS) ?? 3;
     mode = ["text", "text", "nobar", "none"][step];
     compact = step >= 1;
   }
@@ -159,8 +159,9 @@ export function drawLine(elements, surface, columns, now, agents) {
   }
   for (const g of gauges) blocks.push(gaugeBlock(elements, mode, g));
   if (cacheNow) blocks.push(cacheBlock(elements, mode, cacheNow, compact));
-  // Agents last, shown only while some run: the blocks before them stay in place.
-  if (agents.length > 0) {
+  // Agents last, shown only while some run: the blocks before them stay in place. The terminal's
+  // info line already lists them by model, so the pill is the desktop's alone.
+  if (desktop && agents.length > 0) {
     const parts = [];
     if (desktop) parts.push(icon(Svg, "i", "agents", ICON_COLORS.agents, T.icons.agents));
     parts.push(Text({ key: "v", bold: true, children: T.agents(agents.length) }));
@@ -199,7 +200,7 @@ export function drawLine(elements, surface, columns, now, agents) {
 
 // Width of the terminal line in characters, with the bars and details.
 // `level`: 0 everything, 1 a compact cache, 2 also no bars, (3: no reset times either, never measured).
-function textWidth(gauges, cacheNow, level = 0, agents) {
+function textWidth(gauges, cacheNow, level = 0) {
   let width = 0;
   let blocks = 0;
   if (contextData.readings.length > 0) {
@@ -212,10 +213,6 @@ function textWidth(gauges, cacheNow, level = 0, agents) {
   blocks += gauges.length;
   if (cacheNow) {
     width += cacheText(cacheNow, level >= 1).length;
-    blocks++;
-  }
-  if (agents.length > 0) {
-    width += T.agents(agents.length).length;
     blocks++;
   }
   return width + 3 * Math.max(0, blocks - 1) + 2;
