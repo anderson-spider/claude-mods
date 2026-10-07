@@ -126,7 +126,7 @@ const move = (state: State, sub: string, args: readonly Word[], isSure: boolean)
   state.branch = isSure && !target.isUnknown && target.text !== '-' ? target.text : 'unknown'
 }
 
-type Base = { dir: string; isElsewhere: boolean; branchAfter?: string }
+type Base = Pick<Risk, 'dir' | 'isElsewhere' | 'branchAfter'>
 
 const commitRisk = (base: Base, args: readonly Word[], state: State): Risk | undefined => {
   const { flags, positional } = scan(args, COMMIT_SHORT, COMMIT_LONG)

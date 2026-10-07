@@ -20,7 +20,6 @@ const kinds: Record<Kind, { title: (request: Request) => string; queued: boolean
   review: { title: request => `review of ${request.target ?? 'the current diff'}`, queued: false },
 }
 
-
 /** The jobs of this session: ids, the execute queue, cancel and the lists the person and Claude read. */
 export function createBook(deps: Deps) {
   const jobs: Job[] = []

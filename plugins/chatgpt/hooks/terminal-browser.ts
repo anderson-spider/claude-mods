@@ -5,9 +5,6 @@ export const TERMINAL_BROWSER = 'terminal-browser'
 // A tab new-tab just opened takes a moment to accept automation.
 export const STARTING = /no CDP target yet/
 
-// terminal-browser names a tab by its browser's key and its own number; the
-// plugin carries both as one id, `<key>:<tab>`.
-
 // The JSON object a terminal-browser command prints, after any banner.
 export function jsonOf<T>(text: string): T | undefined {
   try {
@@ -17,7 +14,11 @@ export function jsonOf<T>(text: string): T | undefined {
   }
 }
 
-/** The ids of every browser's tabs, from `terminal-browser ls --json`. */
+/**
+ * The ids of every browser's tabs, from `terminal-browser ls --json`.
+ * terminal-browser names a tab by its browser's key and its own number; the
+ * plugin carries both as one id, `<key>:<tab>`.
+ */
 export function listTabs(text: string): string[] {
   const parsed = jsonOf<{ browsers?: { key: string; tabs?: { id: number }[] }[] }>(text)
   return (parsed?.browsers ?? []).flatMap(b => (b.tabs ?? []).map(t => `${b.key}:${t.id}`))
