@@ -127,13 +127,16 @@ for (const surface of ["terminal", "desktop"] as const) {
   });
 }
 
-test("keeps what later mods draw under the line", async ($, on) => {
+test("keeps what later mods draw, above the suggestions and the line", async ($, on) => {
   world(on, {}, {}, "drawn after this mod");
   withUsage(on, LIMITS);
+  suggesting(on, ITEMS);
   await $.session.start({ source: "startup", cwd: "/tmp" } as any);
+  await turnDone($);
   const { texts } = await band($, "terminal");
   expect(texts).toContain("drawn after this mod");
-  expect(texts.indexOf("107k")).toBeLessThan(texts.indexOf("drawn after this mod"));
+  expect(texts.indexOf("drawn after this mod")).toBeLessThan(texts.indexOf("next:"));
+  expect(texts.indexOf("next:")).toBeLessThan(texts.indexOf("107k"));
 });
 
 for (const surface of ["terminal", "desktop"] as const) {
@@ -950,6 +953,7 @@ function suggesting(on: any, reply: unknown, options: { commands?: unknown[]; fo
     return { isShown: true };
   });
   on("turn.complete", () => ({ text: "" }));
+  on("turn.start", (_$: any, e: any) => ({ turnId: e.turnId }));
   return seen;
 }
 
@@ -1072,4 +1076,83 @@ test("suggestions: a result that arrives after a newer turn is dropped", async (
   release({ isAnswered: true, text: JSON.stringify(ITEMS), usage: {} });
   await settle();
   expect(seen.ghosts).toEqual(["second prompt"]);
+});
+
+// The labels of the buttons a mounted band draws, in order.
+async function labels(ui: any): Promise<string[]> {
+  return ((await ui.findAll({ type: "Button" })) as any[]).map((b) => String(b.props?.label ?? ""));
+}
+
+async function offered($: any, on: any, extra: { below?: string; usage?: boolean } = {}) {
+  world(on, {}, {}, extra.below);
+  if (extra.usage !== false) withUsage(on, LIMITS);
+  else withUsage(on, [], { tokens: 0, window: 0, percent: 0 });
+  const seen = suggesting(on, ITEMS);
+  await $.session.start({ source: "startup", cwd: "/tmp" } as any);
+  await turnDone($);
+  return seen;
+}
+
+test("suggestions: the offer lists the labels, then dismiss, and the usage line comes last", async ($, on) => {
+  await offered($, on);
+  const { ui, texts } = await band($, "terminal");
+  expect(texts).toContain("next:");
+  expect(await labels(ui)).toEqual(["Run the tests", "Commit", "Open the PR", "dismiss"]);
+  expect(texts.indexOf("next:")).toBeLessThan(texts.indexOf("107k"));
+});
+
+test("suggestions: draw without any usage reading", async ($, on) => {
+  await offered($, on, { usage: false });
+  const { ui, texts } = await band($, "terminal");
+  expect(texts).toContain("next:");
+  expect(await labels(ui)).toContain("Commit");
+});
+
+test("suggestions: hidden while the model works, the line still draws", async ($, on) => {
+  await offered($, on);
+  const ui: any = await $.ui.mount({ plugin: "token-weather-usage", surface: "terminal", component: "AbovePrompt", props: { bodyColumns: 200, isWorking: true } as any });
+  const texts = ((await ui.findAll({ type: "Text" })) as any[]).map((t) => t.text);
+  expect(texts).not.toContain("next:");
+  expect(texts).toContain("107k");
+});
+
+test("suggestions: nothing from this mod during a survey", async ($, on) => {
+  await offered($, on);
+  const ui: any = await $.ui.mount({ plugin: "token-weather-usage", surface: "terminal", component: "AbovePrompt", props: { bodyColumns: 200, hasSurvey: true } as any });
+  const texts = ((await ui.findAll({ type: "Text" })) as any[]).map((t) => t.text);
+  expect(texts).not.toContain("next:");
+  expect(texts).not.toContain("107k");
+});
+
+test("suggestions: a wait line while the fork runs", async ($, on) => {
+  world(on);
+  withUsage(on, LIMITS);
+  suggesting(on, ITEMS, { fork: () => new Promise(() => {}) });
+  await $.session.start({ source: "startup", cwd: "/tmp" } as any);
+  await turnDone($);
+  const { texts } = await band($, "terminal");
+  expect(texts).toContain("next steps…");
+  expect(texts).not.toContain("next:");
+});
+
+test("suggestions: the next turn hides the block; a subagent's start does not", async ($, on) => {
+  await offered($, on);
+  await ($ as any).turn.start({ text: "go", turnId: "t2", agentId: "a1" } as any);
+  expect((await band($, "terminal")).texts).toContain("next:");
+  await ($ as any).turn.start({ text: "go", turnId: "t3" } as any);
+  expect((await band($, "terminal")).texts).not.toContain("next:");
+});
+
+test("suggestions: pressing dismiss hides the block", async ($, on) => {
+  await offered($, on);
+  const { ui } = await band($, "terminal");
+  await ui.press({ key: "dismiss" } as any);
+  expect((await band($, "terminal")).texts).not.toContain("next:");
+});
+
+test("suggestions: the desktop draws no block, only the line", async ($, on) => {
+  await offered($, on);
+  const { texts } = await band($, "desktop");
+  expect(texts).not.toContain("next:");
+  expect(texts).toContain("107k");
 });

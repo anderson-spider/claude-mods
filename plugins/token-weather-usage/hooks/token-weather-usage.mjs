@@ -455,13 +455,20 @@ export function register(on, options) {
 
   on("ui.render", { component: "AbovePrompt" }, async ($, e, next) => {
     const props = e.props ?? e;
-    if (props.hasSurvey || (readings.length === 0 && limits.list.length === 0)) return next(e);
-    const elements = $.ui.resolve(e);
-    const now = await $.clock.now();
-    const line = drawLine(elements, e.surface, props.bodyColumns ?? 80, now);
-    // Mods placed after us draw below our line; an empty drawing adds no blank line.
     const below = await next(e);
-    return isBlank(below) ? line : elements.Box({ flexDirection: "column", children: [line, below] });
+    if (props.hasSurvey) return below;
+    const elements = $.ui.resolve(e);
+    // Top to bottom: what mods placed after us draw, the suggestions, and the usage line last, so it
+    // stays next to the prompt however the block above comes and goes. An empty drawing adds no blank line.
+    const parts = [];
+    if (!isBlank(below)) parts.push(below);
+    const block = e.surface === "terminal" && !props.isWorking ? drawSuggestions($, elements) : null;
+    if (block) parts.push(block);
+    if (readings.length > 0 || limits.list.length > 0) {
+      parts.push(drawLine(elements, e.surface, props.bodyColumns ?? 80, await $.clock.now()));
+    }
+    if (parts.length === 0) return below;
+    return parts.length === 1 ? parts[0] : elements.Box({ flexDirection: "column", children: parts });
   });
 }
 
@@ -612,6 +619,22 @@ function startSuggestions($, e) {
     showSuggestions($, items.length === 0 ? { kind: "hidden" } : { kind: "offer", items, picked: [] });
     if (items[0]) void $.prompt.suggest({ text: items[0].prompt }).catch(() => undefined);
   })();
+}
+
+// The block above the usage line: nothing, the wait for the fork, or the offer. Terminal only.
+function drawSuggestions($, elements) {
+  if (suggestions.kind === "hidden") return null;
+  const { Box, Text, Button } = elements;
+  const gap = Box({ key: "gap", marginTop: 1, children: [] });
+  if (suggestions.kind === "loading") {
+    return Box({ key: "next", flexDirection: "column", children: [gap, Text({ key: "wait", dimColor: true, children: "next steps…" })] });
+  }
+  const children = [gap, Text({ key: "title", dimColor: true, children: "next:" })];
+  suggestions.items.forEach((item, i) => {
+    children.push(Box({ key: "row" + i, marginLeft: 2, children: [Button({ key: "pick-" + (i + 1), hotkey: String(i + 1), plain: true, label: item.label, onPress: () => {} })] }));
+  });
+  children.push(Box({ key: "rowx", marginLeft: 2, children: [Button({ key: "dismiss", hotkey: "0", plain: true, label: "dismiss", onPress: () => showSuggestions($, { kind: "hidden" }) })] }));
+  return Box({ key: "next", flexDirection: "column", children });
 }
 
 // ---------- Turns: readings kept per session ----------
