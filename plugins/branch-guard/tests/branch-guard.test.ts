@@ -1,8 +1,9 @@
 import { expect, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-import { classify, isProtectedTarget, measure } from '../hooks/guard'
-import type { Probe } from '../hooks/guard'
+import { classify } from '../hooks/classify'
+import { isProtectedTarget, measure } from '../hooks/measure'
+import type { Probe } from '../hooks/measure'
 
 declare const setTimeout: (fn: () => void, ms: number) => unknown
 const pause = (ms: number) => new Promise<void>(done => setTimeout(() => done(), ms))
