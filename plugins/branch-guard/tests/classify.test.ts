@@ -151,3 +151,11 @@ test('classify reads a shell body through wrapper options and through a pipe', (
   expect(kinds('cat <<EOF | grep x\ngit commit -m x\nEOF')).toEqual([])
   expect(kinds("cat <<EOF | ssh host 'ls'\ngit commit -m x\nEOF")).toEqual([])
 })
+
+test('classify checks the whole pipeline and over-holds on an unknown wrapper option', () => {
+  expect(kinds('cat <<EOF | tee x | bash\ngit commit -m x\nEOF')).toEqual(['commit'])
+  expect(kinds('cat <<EOF | tee x | grep y\ngit commit -m x\nEOF')).toEqual([])
+  expect(kinds('sudo --chroot=/x bash <<EOF\ngit commit -m x\nEOF')).toEqual(['commit'])
+  expect(kinds('sudo -X foo bash <<EOF\ngit commit -m x\nEOF')).toEqual(['commit'])
+  expect(kinds('sudo -X foo cat <<EOF\ngit commit -m x\nEOF')).toEqual([])
+})

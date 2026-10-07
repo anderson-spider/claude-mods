@@ -67,11 +67,16 @@ const VALUED: Record<string, string> = {
   env: 'uS,--unset,--split-string,',
 }
 
+// The options of a wrapper that take no value; any other option is unknown.
+const FLAGS: Record<string, string> = { sudo: 'AbEHiKklnPSsVvB', env: 'i0vPC' }
+
 const base = (text: string) => text.slice(text.lastIndexOf('/') + 1)
 
 // Whether what a command reads on stdin is run as commands: a shell with no `-c` and no script, or `ssh host` with no remote command.
 const readsCommands = (words: readonly Word[]) => {
   let start = 0
+  // An option of a wrapper this does not know: its value, if any, is not known, so any later shell counts.
+  let isUnsure = false
 
   while (start < words.length) {
     const text = words[start]?.text ?? ''
@@ -89,11 +94,18 @@ const readsCommands = (words: readonly Word[]) => {
         const option = words[start]?.text ?? ''
         const isLong = option.startsWith('--')
 
+        const known = `${short}${FLAGS[name] ?? ''}`
+
+        isUnsure ||= !(isLong ? option.includes('=') || long.includes(option) : [...option.slice(1)].every(char => known.includes(char)))
         start += 1 + ((isLong ? long.includes(option) : option.length === 2 && short.includes(option[1] ?? '-')) ? 1 : 0)
       }
     } else {
       break
     }
+  }
+
+  if (isUnsure) {
+    return words.slice(start).some(word => SHELLS.has(base(word.text)) || base(word.text) === 'ssh')
   }
 
   const name = base(words[start]?.text ?? '')
@@ -316,8 +328,12 @@ export const parse = (command: string): Command[] => {
 
         for (const [index, body] of bodies.entries()) {
           const heredoc = pending[index]
-          const next = heredoc === undefined ? undefined : commands[heredoc.owner + 1]
-          const isPiped = (next?.before === '|' || next?.before === '|&') && readsCommands(next.words)
+          let isPiped = false
+
+          // Any later command of the same pipeline may run the body.
+          for (let at = (heredoc?.owner ?? commands.length) + 1; commands[at]?.before === '|' || commands[at]?.before === '|&'; at += 1) {
+            isPiped ||= readsCommands(commands[at]?.words ?? [])
+          }
 
           if (heredoc?.isShell === true || isPiped) {
             commands.push(...parse(body).map((one, position) => (position === 0 ? { ...one, before: '\n' } : one)), { words: [], before: '\n' })
