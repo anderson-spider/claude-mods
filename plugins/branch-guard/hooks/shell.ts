@@ -54,12 +54,18 @@ const delimiterAt = (command: string, from: number) => {
   return { word, end: at }
 }
 
-type Heredoc = { word: string; isTabbed: boolean; /** Fed to a shell or ssh: the body is commands. */ isShell: boolean }
+type Heredoc = { word: string; /** Index of the command that opened it. */ owner: number; isTabbed: boolean; /** Fed to a shell or ssh: the body is commands. */ isShell: boolean }
 
 const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh'])
 
 // The ssh options that take a value as the next word (`-p 22`); attached values (`-p22`) are one word.
 const SSH_VALUED = new Set(['b', 'c', 'D', 'E', 'e', 'F', 'I', 'i', 'J', 'L', 'l', 'm', 'O', 'o', 'p', 'Q', 'R', 'S', 'W', 'w'])
+
+// The options of a wrapper that take the next word as their value.
+const VALUED: Record<string, string> = {
+  sudo: 'ugChprtUDRT,--user,--group,--close-from,--host,--prompt,--role,--type,--other-user,--chdir,--chroot,--command-timeout,',
+  env: 'uS,--unset,--split-string,',
+}
 
 const base = (text: string) => text.slice(text.lastIndexOf('/') + 1)
 
@@ -67,12 +73,25 @@ const base = (text: string) => text.slice(text.lastIndexOf('/') + 1)
 const readsCommands = (words: readonly Word[]) => {
   let start = 0
 
-  for (; start < words.length; start += 1) {
+  while (start < words.length) {
     const text = words[start]?.text ?? ''
     const name = base(text)
-    const isSkipped = ASSIGNMENT.test(text) || WRAPPERS.has(name) || OPENERS.has(text) || (start > 0 && text.startsWith('-'))
 
-    if (!isSkipped) {
+    if (ASSIGNMENT.test(text) || OPENERS.has(text)) {
+      start += 1
+    } else if (WRAPPERS.has(name)) {
+      const [short = '', ...long] = (VALUED[name] ?? '').split(',')
+
+      start += 1
+
+      // The wrapper's own options, and the value of those that take one.
+      while (start < words.length && (words[start]?.text ?? '').startsWith('-')) {
+        const option = words[start]?.text ?? ''
+        const isLong = option.startsWith('--')
+
+        start += 1 + ((isLong ? long.includes(option) : option.length === 2 && short.includes(option[1] ?? '-')) ? 1 : 0)
+      }
+    } else {
       break
     }
   }
@@ -275,7 +294,7 @@ export const parse = (command: string): Command[] => {
         const start = at + (isTabbed ? 3 : 2)
         const { word, end } = delimiterAt(command, start + (/^[ \t]*/.exec(command.slice(start))?.[0].length ?? 0))
 
-        pending.push({ word, isTabbed, isShell })
+        pending.push({ word, isTabbed, isShell, owner: commands.length - 1 })
         at = end - 1
       }
     } else if (char === ')' && isPattern) {
@@ -296,7 +315,11 @@ export const parse = (command: string): Command[] => {
         const { end, bodies } = afterBodies(command, at + 1, pending)
 
         for (const [index, body] of bodies.entries()) {
-          if (pending[index]?.isShell === true) {
+          const heredoc = pending[index]
+          const next = heredoc === undefined ? undefined : commands[heredoc.owner + 1]
+          const isPiped = (next?.before === '|' || next?.before === '|&') && readsCommands(next.words)
+
+          if (heredoc?.isShell === true || isPiped) {
             commands.push(...parse(body).map((one, position) => (position === 0 ? { ...one, before: '\n' } : one)), { words: [], before: '\n' })
           }
         }

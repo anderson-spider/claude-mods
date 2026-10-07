@@ -139,3 +139,15 @@ test('classify keeps a heredoc body as data for other commands, and when the she
   expect(kinds("ssh host 'ls' <<EOF\ngit commit -m x\nEOF")).toEqual([])
   expect(kinds('echo $((1<<2)) && git status')).toEqual([])
 })
+
+test('classify reads a shell body through wrapper options and through a pipe', () => {
+  for (const head of ['sudo -u root bash', 'sudo -E -u deploy sh', 'sudo --user=root bash', 'env -i PATH=/bin bash', 'env -u HOME bash', 'nohup bash', 'exec bash']) {
+    expect(kinds(`${head} <<EOF\ngit commit -m x\nEOF`)).toEqual(['commit'])
+  }
+
+  expect(kinds('cat <<EOF | bash\ngit commit -m x\nEOF')).toEqual(['commit'])
+  expect(kinds("cat <<'EOF' | sudo sh\ngit commit -m x\nEOF")).toEqual(['commit'])
+  expect(kinds('cat <<EOF | ssh host\ngit commit -m x\nEOF')).toEqual(['commit'])
+  expect(kinds('cat <<EOF | grep x\ngit commit -m x\nEOF')).toEqual([])
+  expect(kinds("cat <<EOF | ssh host 'ls'\ngit commit -m x\nEOF")).toEqual([])
+})
