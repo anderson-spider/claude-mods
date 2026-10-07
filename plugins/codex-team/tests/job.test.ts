@@ -287,3 +287,31 @@ test('a cancelled phase holds the execute slot after its deadline until the agen
     expect(state.calls.filter(call => call.startsWith('close'))).toEqual(['close w1:p2', 'close w1:p3'])
   } finally { releasePrompt(); releaseStop() }
 })
+
+test('a cancel while the agent starts never sends the prompt', async () => {
+  const j = job()
+  const { deps, calls, events } = setup({})
+  const start = deps.herdr.start
+  deps.herdr.start = async (name, pane, args) => {
+    await start(name, pane, args)
+    await pause(1)
+    j.status = 'cancelled'
+  }
+  await runJob(deps, j, request())
+  expect(j.status).toBe('cancelled')
+  expect(calls.some(call => call.startsWith('prompt'))).toBe(false)
+  expect(events).toEqual([])
+})
+
+test('a cancel while the fresh report is cleared never opens a pane or sends the prompt', async () => {
+  const j = job()
+  const { deps, calls, events } = setup({})
+  deps.files.write = async () => {
+    await pause(1)
+    j.status = 'cancelled'
+  }
+  await runJob(deps, j, request(), { freshReport: true })
+  expect(j.status).toBe('cancelled')
+  expect(calls).toEqual([])
+  expect(events).toEqual([])
+})
