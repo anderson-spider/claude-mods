@@ -2,9 +2,8 @@ import type { ProcessRunInit, ProcessRunResult } from 'claude-code'
 
 import type { BranchGuardReport } from '../types'
 
-// The parser, `resolve`, `locate` and the temp repository check are trimmed copies of those
-// in plugins/blast-radius/hooks/risk.ts: a plugin does not import code from another. A fix
-// there must be carried over here.
+// The parser, `resolve`, `locate` and the temp repository check are trimmed from the blast-radius
+// plugin, which has since been removed; they live only here now.
 
 /** A word of the command, already unquoted, and what the shell would still do with it. */
 export type Word = {
@@ -308,7 +307,7 @@ const git = (state: State, words: readonly Word[], isSure: boolean): Risk | unde
 
   if (sub === 'push') {
     const { flags, positional } = scan(args, 'o', PUSH_LONG)
-    // Force push and dry run are not handled here: the first belongs to blast-radius, the second sends nothing.
+    // Force push and dry run are not handled here: the first is left alone on purpose, the second sends nothing.
     const isOther = [...FORCES, '-n', '--dry-run'].some(flag => flags.has(flag)) || positional.some(word => word.text.startsWith('+'))
 
     if (isOther) {

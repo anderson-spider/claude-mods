@@ -2,9 +2,9 @@
 
 What each plugin reads, saves and sends. Everything stays on your machine except where a section says otherwise.
 
-## blast-radius and branch-guard
+## branch-guard
 
-They read the text of the Bash command Claude is about to run, run the tools' own dry runs (`git`, `rm`, and similar) to measure it, and show the result in a band. They save nothing and send nothing out. State lives in the session only and is cleared on reload.
+It reads the text of the Bash command Claude is about to run, runs `git` commands to measure it, and shows the result in a band. It saves nothing and sends nothing out. State lives in the session only and is cleared on reload.
 
 ## chatgpt
 

@@ -8,11 +8,6 @@
   },
   "plugins": [
     {
-      "name": "blast-radius",
-      "source": "./plugins/blast-radius",
-      "description": "Holds a risky Bash command and shows what it would change, with Proceed and Cancel."
-    },
-    {
       "name": "branch-guard",
       "source": "./plugins/branch-guard",
       "description": "Holds a git commit or git push on the protected branch and shows what would go in, with Proceed and Cancel."

@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Claude Code plugin marketplace (`anderson-spider/spider-marketplace`). It currently has five plugins: `blast-radius` (holds destructive commands), `branch-guard` (holds commit and push on the protected branch), `chatgpt` (asks the user's ChatGPT, or has it generate an image, in terminal-browser), `codex-computer-use` (routes native Mac app control through Codex computer use, with a local helper) and `tailscale` (tools to query and modify the tailnet). The README and other documentation are in English; code comments and user-facing messages are in English too. Pull request titles and descriptions are in English.
+Claude Code plugin marketplace (`anderson-spider/spider-marketplace`). It currently has four plugins: `branch-guard` (holds commit and push on the protected branch), `chatgpt` (asks the user's ChatGPT, or has it generate an image, in terminal-browser), `codex-computer-use` (routes native Mac app control through Codex computer use, with a local helper) and `tailscale` (tools to query and modify the tailnet). The README and other documentation are in English; code comments and user-facing messages are in English too. Pull request titles and descriptions are in English.
 
 ## Structure
 
@@ -12,25 +12,24 @@ Claude Code plugin marketplace (`anderson-spider/spider-marketplace`). It curren
 
 ```
 claude plugin validate .                       # validates the marketplace
-claude plugin validate plugins/blast-radius    # validates the plugin
-claude plugin test plugins/blast-radius        # runs tests/blast-radius.test.ts
-claude plugin test plugins/branch-guard        # same, for branch-guard
+claude plugin validate plugins/branch-guard    # validates the plugin
+claude plugin test plugins/branch-guard        # runs tests/branch-guard.test.ts
 claude plugin test plugins/chatgpt             # same, for chatgpt
 claude plugin test plugins/codex-computer-use  # same, for codex-computer-use (the plugin side)
 /Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node --test plugins/codex-computer-use/helper/test/helper.test.mjs   # its helper
 claude plugin test plugins/tailscale           # same, for tailscale
-claude --plugin-dir plugins/blast-radius       # loads the plugin with automatic reload
+claude --plugin-dir plugins/branch-guard       # loads the plugin with automatic reload
 ```
 
 Inside a session, `/reload-plugins` reloads the hooks.
 
-## blast-radius architecture
+## branch-guard
 
 `hooks/hooks.json` only points to `./register.tsx`. The flow crosses three files:
 
-- `hooks/risk.ts`: pure logic, no `$`. `classify(command)` reads the Bash text (`split`, `cd`, `git -C`, variables assigned on the line) and returns `Risk[]` (`rm`, `reset`, `clean`, `push`, `migrate`). `isDisposable` clears targets only in system temp directories. `measure` runs the tools' own dry runs and returns a `BlastRadiusReport`. Everything that touches the host goes through the injected `Probe`, which makes it testable without a real process.
+- `hooks/guard.ts`: pure logic, no `$`. `classify(command)` reads the Bash text (`split`, `cd`, `git -C`, variables assigned on the line) and returns the `commit` and `publish` risks; `isProtectedTarget` decides, asynchronously, whether the target branch is protected; `measure` reports what would go in. Everything that touches the host goes through the injected `Probe`, which makes it testable without a real process. The parser (`parse`, `resolve`, `locate`, `isTempRepo`) came trimmed from the removed blast-radius plugin and now lives only here. Force push is left out on purpose.
 - `hooks/register.tsx`: wires to the host. `tool.call` (Bash) classifies, measures and **holds** the call in `hold()` until the person decides (`proceed` releases it, otherwise it returns `deny` with the summary); `ui.render` in `AbovePrompt` draws the band; `session.start` clears state stuck from a reload.
-- `types/index.d.ts`: shape of the report and of the plugin state (`BlastRadiusHeld`), declared in `PluginState`.
+- `types/index.d.ts`: shape of the report and of the plugin state (`BranchGuardHeld`, key `branch-guard`/`held`), declared in `PluginState`.
 
 Details that only make sense when reading both sides:
 
@@ -38,12 +37,8 @@ Details that only make sense when reading both sides:
 - The wait uses `$.process.run(['sleep', '0.25'])` and not `$.clock.sleep`, so it does not use up the hook's time. Only one call is held at a time.
 - `hold()` never rejects: an error becomes `'aborted'` and denies the command.
 - `CHROME_ROWS` in `register.tsx` must follow the band's fixed rows when the layout changes (border, title, `Command`, `Would`, the two blank lines, the footer, the `… and N more` line and the buttons).
-- The band's strings are in English: labels `Command` and `Would`, buttons `Proceed` (key 1) and `Cancel` (key 2), overflow `… and N more`, and summaries such as `delete 9 files (1.1 MB)`. The tests assert on them, so change both together.
+- The band's strings are in English: labels `Command` and `Would`, buttons `Proceed` (key 1) and `Cancel` (key 2) and the overflow `… and N more`. The tests assert on them, so change both together.
 - It is a safety net that reads text, not a permission system (`$(…)`, aliases and scripts get through).
-
-## branch-guard
-
-Same design as blast-radius (pure `hooks/guard.ts` with an injected `Probe`, `hooks/register.tsx` with `hold`/`draw`), with its own state (`branch-guard`/`held`). `classify` raises `commit` and `publish`; `isProtectedTarget` decides, asynchronously, whether the target branch is protected. The parser (`parse`, `resolve`, `locate`, `isTempRepo`) is a **copy** of the one in `blast-radius/hooks/risk.ts`, because a plugin cannot import code from another: a fix on one side must be carried to the other. Force push is left out on purpose, since it belongs to blast-radius.
 
 ## codex-computer-use
 
@@ -53,7 +48,7 @@ Two halves that talk over a Unix socket: the plugin (`hooks/`, runs in the hooks
 - `lib/mcp-client.mjs`: newline-delimited JSON-RPC over stdio; declares `elicitation: { form: {} }` (without it node_repl refuses `getApp`) and hands `elicitation/create` to a callback.
 - `lib/hub.mjs`: one session per caller (`<session>` or `<session>/<agent>`), a promise queue per caller, the entry-call check for a fresh session, ownership (`lib/owners.mjs`, by bundle id, lapsing `LEASE_MS` after the holder's last call), `MAX_SESSIONS`, idle sweep, `forget`. Apps are known before a call from `getApp("…")` literals resolved with Spotlight (`lib/apps.mjs`) and after it from the result's `_meta["codex/toolSurface"].app.appId`.
 - `lib/approvals.mjs`: `decide` returns `deny`, `session`, `always`, `auto` or `ask` in that order; only the first three answers and the auto-approve switch accept. Answering `_meta.persist: "always"` makes node_repl save the app in Codex's `ComputerUseAppApprovals.json`, which node_repl then answers by itself; `lib/codex-approvals.mjs` only ever removes from that file.
-- The plugin: `hooks/helper.ts` posts with `$.http.fetch({ socketPath })` and asks launchd to `kickstart` the helper when nothing listens; `hooks/routing.ts` is pure (prompt section, deny text, command parsing, model-facing answers); `hooks/register.tsx` registers `codex_cu` and `/codex-cu`, holds a `needs_approval` call with the same `waiting`/`hold` design as blast-radius (band in `AbovePrompt`, 5 minute limit) and retries after an allow.
+- The plugin: `hooks/helper.ts` posts with `$.http.fetch({ socketPath })` and asks launchd to `kickstart` the helper when nothing listens; `hooks/routing.ts` is pure (prompt section, deny text, command parsing, model-facing answers); `hooks/register.tsx` registers `codex_cu` and `/codex-cu`, holds a `needs_approval` call with the same `waiting`/`hold` design as branch-guard (band in `AbovePrompt`, 5 minute limit) and retries after an allow.
 - A declined approval comes back as `needs_approval`; the call is run again only after the person allows, so the retried code runs from the start.
 - `helper/install.sh --check` only checks the prerequisites (ChatGPT's `node`, `launch.mjs --check`) and installs nothing. The approval wait is the `approvalMinutes` `userConfig` setting (default 5), read through `register(on, options)` and `limitMs` in `hooks/routing.ts`.
 - The enabled switch lives in `$.store` (`enabled`, default on). `prompt.compose` runs at every render, so it needs no invalidation.
@@ -81,7 +76,7 @@ Holds nothing: it registers two tools with `$.tool.register` in `session.start` 
 
 ## Tests
 
-`tests/blast-radius.test.ts` uses `claude-code/testing` and a fake host (`answer`) that responds by executable and subcommand. A new risk type needs an answer in that host.
+`tests/branch-guard.test.ts` uses `claude-code/testing` and a fake host (`answer`) that responds by executable and subcommand. A new git command the plugin measures needs an answer in that host.
 
 ## Version
 
