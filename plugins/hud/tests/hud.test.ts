@@ -1101,6 +1101,22 @@ test("suggestions: the offer lists the labels, then dismiss, and the usage line 
   expect(texts.indexOf("next:")).toBeLessThan(texts.indexOf("107k"));
 });
 
+test("suggestions: a blank line separates the offer from the usage line", async ($, on) => {
+  await offered($, on);
+  const { ui } = await band($, "terminal");
+  const gaps = ((await ui.findAll({ type: "Box" })) as any[]).filter((b) => b.key === "gap-usage");
+  expect(gaps.length).toBe(1);
+  expect(gaps[0].props?.marginTop).toBe(1);
+});
+
+test("suggestions: no extra blank line without the offer", async ($, on) => {
+  world(on);
+  withUsage(on, LIMITS);
+  await $.session.start({ source: "startup", cwd: "/tmp" } as any);
+  const { ui } = await band($, "terminal");
+  expect(((await ui.findAll({ type: "Box" })) as any[]).some((b) => b.key === "gap-usage")).toBe(false);
+});
+
 test("suggestions: draw without any usage reading", async ($, on) => {
   await offered($, on, { usage: false });
   const { ui, texts } = await band($, "terminal");

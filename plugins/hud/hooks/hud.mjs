@@ -465,6 +465,8 @@ export function register(on, options) {
     const block = e.surface === "terminal" && !props.isWorking ? drawSuggestions($, elements) : null;
     if (block) parts.push(block);
     if (readings.length > 0 || limits.list.length > 0) {
+      // A blank line keeps the suggestions apart from the usage line.
+      if (block) parts.push(elements.Box({ key: "gap-usage", marginTop: 1, children: [] }));
       parts.push(drawLine(elements, e.surface, props.bodyColumns ?? 80, await $.clock.now()));
     }
     if (parts.length === 0) return below;
