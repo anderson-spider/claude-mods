@@ -1,17 +1,15 @@
-import { reportPath } from './names'
+import { JOB_LIMIT_MS, WAIT_CHUNK_MS, reportPath } from './names'
 import { buildPrompt, codexArgs } from './prompts'
 import { HerdrError } from './model'
 import { isWaiting } from './report'
 import { owns } from './identity'
-import type { AgentSession, AgentState, Deps, Herdr, Job, Request, Status } from './model'
+import { messageOf } from './text'
+import type { AgentSession, AgentState, Deps, Herdr, JobHerdr, Job, Request, Status } from './model'
 
-export const JOB_LIMIT_MS = 30 * 60_000
-// `$.process.run` kills a child after 10 minutes at most: every wait runs in chunks below that.
-export const WAIT_CHUNK_MS = 540_000
 const SUMMARY_CHARS = 600
 const LEFT_BLOCKED: AgentState[] = ['working', 'idle', 'done']
 
-type JobDeps = Omit<Deps, 'herdr'> & { herdr: Pick<Herdr, 'split' | 'rename' | 'start' | 'prompt' | 'wait' | 'read' | 'list'> }
+type JobDeps = Omit<Deps, 'herdr'> & { herdr: JobHerdr }
 
 // A cancel from outside wins: nothing the run learns afterwards changes a cancelled job.
 const setStatus = (job: Job, status: Status) => {
@@ -75,6 +73,57 @@ function errorText(code: string, message: string, pane: string): string {
 
 export type JobOptions = { limitMs?: number; chunkMs?: number; freshReport?: boolean; session?: AgentSession; reportPath?: string; paneName?: string }
 
+type Phase = {
+  deps: JobDeps
+  job: Job
+  request: Request
+  options: JobOptions
+  whileBlocked: (state: AgentState) => Promise<AgentState>
+}
+
+/**
+ * Opens the pane, starts the agent (or reuses the session's) and records its terminal.
+ * Answers false when the job was cancelled meanwhile: nothing may be sent afterwards.
+ */
+async function startAgent({ deps, job, request, options, whileBlocked }: Phase): Promise<boolean> {
+  const { herdr } = deps
+  const session = options.session
+  const cancelled = () => job.status === 'cancelled'
+  // The agent's terminal is read once it runs in its pane; a failed list leaves it unknown and does not fail the job.
+  const recordTerminal = async () => {
+    const terminal = await herdr.list().then(agents => agents.find(agent => agent.name === job.agent && agent.pane === job.pane)?.terminal, () => undefined)
+    job.terminal = terminal
+    if (session) session.terminal = terminal
+  }
+  setStatus(job, 'starting')
+  job.pane = session?.pane
+  if (!job.pane) {
+    job.pane = await deps.layout.open(herdr)
+    if (session) session.pane = job.pane
+    await herdr.rename(job.pane, options.paneName ?? `${job.agent} ${job.kind}`).catch(() => undefined)
+  }
+  // Cancelled while opening or naming the pane: never send a task afterwards.
+  if (cancelled()) return false
+
+  if (!session?.ready) {
+    try {
+      await herdr.start(job.agent, job.pane, codexArgs(request.kind))
+    } catch (error) {
+      // A startup error does not prove the role stopped.
+      if (session) session.active = true
+      if (!(error instanceof HerdrError) || error.code !== 'agent_not_ready') throw error
+      if (cancelled()) return false
+      await whileBlocked('blocked')
+      if (session) session.active = false
+    }
+    if (session) session.ready = true
+    await recordTerminal()
+  } else {
+    job.terminal = session.terminal
+  }
+  return true
+}
+
 /**
  * Runs one job in its own Herdr pane, or reuses the supplied role session. Never rejects: an error becomes `failed`.
  * Mutates `job`; `deps.notify` hears about each blocked episode and the end.
@@ -90,11 +139,10 @@ export async function runJob(deps: JobDeps, job: Job, request: Request, options:
   const path = options.reportPath ?? reportPath(deps.tmpdir, job.id)
   const session = options.session
   const { settle, whileBlocked } = waits(deps, job, { deadline, limit, chunk })
-  // The agent's terminal is read once it runs in its pane; a failed list leaves it unknown and does not fail the job.
-  const recordTerminal = async () => {
-    const terminal = await herdr.list().then(agents => agents.find(agent => agent.name === job.agent && agent.pane === job.pane)?.terminal, () => undefined)
-    job.terminal = terminal
-    if (session) session.terminal = terminal
+  // Loop children read an empty file as no report, so an old verdict cannot approve a new task.
+  const readReport = async () => {
+    const written = await deps.files.read(path)
+    return options.freshReport && written === '' ? undefined : written
   }
 
   try {
@@ -103,32 +151,7 @@ export async function runJob(deps: JobDeps, job: Job, request: Request, options:
       await deps.files.write(path, '')
       if (cancelled()) return
     }
-    set('starting')
-    job.pane = session?.pane
-    if (!job.pane) {
-      job.pane = await deps.layout.open(herdr)
-      if (session) session.pane = job.pane
-      await herdr.rename(job.pane, options.paneName ?? `${job.agent} ${job.kind}`).catch(() => undefined)
-    }
-    // Cancelled while opening or naming the pane: never send a task afterwards.
-    if (cancelled()) return
-
-    if (!session?.ready) {
-      try {
-        await herdr.start(job.agent, job.pane, codexArgs(request.kind))
-      } catch (error) {
-        // A startup error does not prove the role stopped.
-        if (session) session.active = true
-        if (!(error instanceof HerdrError) || error.code !== 'agent_not_ready') throw error
-        if (cancelled()) return
-        await whileBlocked('blocked')
-        if (session) session.active = false
-      }
-      if (session) session.ready = true
-      await recordTerminal()
-    } else {
-      job.terminal = session.terminal
-    }
+    if (!await startAgent({ deps, job, request, options, whileBlocked })) return
 
     if (cancelled()) return
     // The prompt goes only to the agent that still runs in this pane: a reload or a Herdr restart can reuse the pane id.
@@ -141,8 +164,7 @@ export async function runJob(deps: JobDeps, job: Job, request: Request, options:
     if (session) session.active = false
     if (cancelled()) return
 
-    let written = await deps.files.read(path)
-    let report = options.freshReport && written === '' ? undefined : written
+    let report = await readReport()
     // A report that opens with `STATUS: WAITING` holds a question: the agent waits for the person in its pane, then writes the real report.
     while (isWaiting(report)) {
       job.report = path
@@ -155,8 +177,7 @@ export async function runJob(deps: JobDeps, job: Job, request: Request, options:
       job.report = undefined
       await whileBlocked(await settle(timeoutMs => herdr.wait(job.agent, timeoutMs)))
       if (cancelled()) return
-      written = await deps.files.read(path)
-      report = options.freshReport && written === '' ? undefined : written
+      report = await readReport()
     }
     if (!recordReport(job, path, report)) {
       job.summary = await herdr.read(job.agent, 200)
@@ -164,7 +185,7 @@ export async function runJob(deps: JobDeps, job: Job, request: Request, options:
     }
     set('done')
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
+    const message = messageOf(error)
     const code = error instanceof HerdrError ? error.code : ''
     set('failed')
     job.error = errorText(code, message, where())
@@ -173,4 +194,17 @@ export async function runJob(deps: JobDeps, job: Job, request: Request, options:
   if (cancelled()) return
   job.endedAt = deps.now()
   deps.notify('finished', job)
+}
+
+/** A cancelled loop keeps its execute slot until its active agent is known to have stopped. */
+export async function waitForStop(herdr: Pick<Herdr, 'wait'>, session: AgentSession): Promise<void> {
+  while (session.active) {
+    try {
+      const state = await herdr.wait(session.agent, WAIT_CHUNK_MS, ['idle', 'done'])
+      if (state === 'idle' || state === 'done') session.active = false
+    } catch (error) {
+      if (error instanceof HerdrError && ['agent_not_found', 'pane_not_found'].includes(error.code)) session.active = false
+      // A timeout or transport failure proves nothing; another cancel can retry Esc meanwhile.
+    }
+  }
 }

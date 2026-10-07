@@ -18,7 +18,7 @@ declare module 'claude-code' {
   // The inputs of the tools this plugin registers in session.start, in the shape
   // the engine lays for connected MCP tools (.claude-plugin/types/claude-code-mcp),
   // so `{ tool: 'mcp__codex-team__execute' }` matchers type `e` before a save
-  // regenerates that file. Keep them in step with the inputSchema in hooks/register.tsx.
+  // regenerates that file. Keep them in step with the inputSchema in hooks/schemas.ts.
   interface McpToolInputs {
     'mcp__codex-team__execute': {
       task: string
