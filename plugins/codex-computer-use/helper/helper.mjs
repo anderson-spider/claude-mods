@@ -15,8 +15,9 @@ import { McpStdioClient } from './lib/mcp-client.mjs'
 const HERE = dirname(fileURLToPath(import.meta.url))
 const RUN = process.env.CODEX_CU_RUN_DIR ?? join(HERE, 'run')
 const STATE = process.env.CODEX_CU_STATE_DIR ?? join(HERE, 'state')
-export const SOCKET = join(RUN, 'helper.sock')
+const SOCKET = join(RUN, 'helper.sock')
 const MAX_BODY = 1_000_000
+// The helper/protocol version, independent of plugin.json.
 const VERSION = '0.1.0'
 
 const log = message => process.stderr.write(`${new Date().toISOString()} ${message}\n`)
@@ -46,6 +47,8 @@ const readBody = request =>
     request.on('error', reject)
   })
 
+// The routes and replies of this file are declared in plugins/codex-computer-use/hooks/model.ts
+// (`ROUTES`, `Reply`); keep the two in step.
 const isCaller = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}(\/[A-Za-z0-9][A-Za-z0-9._:-]{0,127})?$/.test(value)
 
 export const handler = hub => async (request, response) => {
@@ -128,7 +131,7 @@ const main = async () => {
 
   const hub = new Hub({
     approvals: new Approvals(join(STATE, 'approvals.json')),
-    createClient: (caller, onElicit) =>
+    createClient: onElicit =>
       new McpStdioClient({ command: process.execPath, args: [join(HERE, 'launch.mjs')], onElicit }),
   })
   const sweeper = setInterval(() => hub.sweep(), 60_000)
