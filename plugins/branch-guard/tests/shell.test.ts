@@ -102,3 +102,8 @@ test('locate resolves a home path from the home, or gives up without one', () =>
   expect(locate('/a', '~/repo', '/home/u')).toBe('/home/u/repo')
   expect(locate('/a', '~/repo', undefined)).toBeUndefined()
 })
+
+test('parse reads a heredoc body fed to a shell as commands and keeps one fed to cat as data', () => {
+  expect(full('bash <<EOF\ngit commit -m x\nEOF')).toEqual([['bash'], ['git', 'commit', '-m', 'x']])
+  expect(full('cat <<EOF\ngit commit -m x\nEOF')).toEqual([['cat']])
+})

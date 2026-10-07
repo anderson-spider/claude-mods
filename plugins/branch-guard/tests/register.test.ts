@@ -86,3 +86,17 @@ test('the band holds a commit inside a case arm', async ($, on) => {
   expect(seen.ran).toEqual([])
   await ui.unmount()
 })
+
+test('the band holds a commit read from a heredoc fed to a shell', async ($, on) => {
+  const seen = world(on)
+
+  const refused = $.tool.call({ tool: 'Bash', command: 'bash <<EOF\ngit commit -m x\nEOF' })
+  await pause(50)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: '⚠ Branch Guard · git commit' })).toBeDefined()
+  await ui.press({ key: 'cancel' })
+
+  expect((await refused).deny).toMatch(/pressed Cancel/)
+  expect(seen.ran).toEqual([])
+  await ui.unmount()
+})

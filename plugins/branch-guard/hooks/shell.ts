@@ -54,30 +54,85 @@ const delimiterAt = (command: string, from: number) => {
   return { word, end: at }
 }
 
-type Heredoc = { word: string; isTabbed: boolean }
+type Heredoc = { word: string; isTabbed: boolean; /** Fed to a shell or ssh: the body is commands. */ isShell: boolean }
 
-// Where the line after the bodies starts: each body runs to its closing delimiter, or to the end when it never comes.
+const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh'])
+
+// The ssh options that take a value as the next word (`-p 22`); attached values (`-p22`) are one word.
+const SSH_VALUED = new Set(['b', 'c', 'D', 'E', 'e', 'F', 'I', 'i', 'J', 'L', 'l', 'm', 'O', 'o', 'p', 'Q', 'R', 'S', 'W', 'w'])
+
+const base = (text: string) => text.slice(text.lastIndexOf('/') + 1)
+
+// Whether what a command reads on stdin is run as commands: a shell with no `-c` and no script, or `ssh host` with no remote command.
+const readsCommands = (words: readonly Word[]) => {
+  let start = 0
+
+  for (; start < words.length; start += 1) {
+    const text = words[start]?.text ?? ''
+    const name = base(text)
+    const isSkipped = ASSIGNMENT.test(text) || WRAPPERS.has(name) || OPENERS.has(text) || (start > 0 && text.startsWith('-'))
+
+    if (!isSkipped) {
+      break
+    }
+  }
+
+  const name = base(words[start]?.text ?? '')
+  const rest = words.slice(start + 1).map(word => word.text)
+
+  if (SHELLS.has(name)) {
+    return rest.every(text => text.startsWith('-') && !/^-[A-Za-z]*c/.test(text))
+  }
+
+  if (name === 'ssh') {
+    let hosts = 0
+
+    for (let at = 0; at < rest.length; at += 1) {
+      const text = rest[at] ?? ''
+
+      if (text.startsWith('-')) {
+        at += text.length === 2 && SSH_VALUED.has(text.slice(1)) ? 1 : 0
+      } else {
+        hosts += 1
+      }
+    }
+
+    return hosts === 1
+  }
+
+  return false
+}
+
+// Where the line after the bodies starts, and the text of each body: it runs to its closing delimiter, or to the end when it never comes.
 const afterBodies = (command: string, from: number, pending: readonly Heredoc[]) => {
   let at = from
+  const bodies: string[] = []
 
   for (const { word, isTabbed } of pending) {
+    const begin = at
+    let end = at
+
     for (;;) {
       if (at >= command.length) {
-        return command.length
+        end = command.length
+        break
       }
 
       const newline = command.indexOf('\n', at)
       const line = command.slice(at, newline === -1 ? command.length : newline)
 
+      end = at
       at = newline === -1 ? command.length : newline + 1
 
       if ((isTabbed ? line.replace(/^\t+/, '') : line) === word) {
         break
       }
     }
+
+    bodies.push(command.slice(begin, Math.max(begin, end)))
   }
 
-  return at
+  return { end: at, bodies }
 }
 
 type Command = { words: Word[]; /** The separator that came before: `;`, `&&`, `|`, `(`… */ before: string }
@@ -92,6 +147,8 @@ export const parse = (command: string): Command[] => {
   let isQuoted = false
   // A bare operator (`>`) is waiting for its target word.
   let isTargetNext = false
+  // The pending target is a here-string fed to a shell: it is commands.
+  let isHereShell = false
   let quote: string | undefined
   // Heredocs opened on this line, whose bodies start after its newline.
   let pending: Heredoc[] = []
@@ -123,6 +180,11 @@ export const parse = (command: string): Command[] => {
 
     if (isOpen && isTargetNext) {
       isTargetNext = false
+
+      if (isHereShell) {
+        isHereShell = false
+        commands.push(...parse(text).map((one, at) => (at === 0 ? { ...one, before: ';' } : one)), { words: [], before: ';' })
+      }
     } else if (redirection !== null) {
       isTargetNext = redirection[1] === ''
     } else if (isOpen) {
@@ -196,20 +258,24 @@ export const parse = (command: string): Command[] => {
     } else if (char === ' ' || char === '\t') {
       endWord()
     } else if (char === '<' && following === '<' && arithmetic === 0) {
-      // Heredoc bodies are treated as data, so `bash <<EOF` and `ssh host <<EOF` bodies are not classified:
-      // a known trade-off of a text safety net.
+      // A heredoc body (or here-string) is data for `cat`, `tee`, `python`…, but commands for a shell
+      // (`bash`, `sh`, `zsh`, `dash`, `ksh`, with no `-c` and no script) or `ssh host` with no remote command:
+      // then it is parsed as if typed on the line. Quoting the delimiter only changes expansion, not execution.
       endWord()
 
+      const isShell = readsCommands(commands.at(-1)?.words ?? [])
+
       if (command[at + 2] === '<') {
-        // A here-string: the next word is data.
+        // A here-string: the next word is data, or commands for a shell.
         isTargetNext = true
+        isHereShell = isShell
         at += 2
       } else {
         const isTabbed = command[at + 2] === '-'
         const start = at + (isTabbed ? 3 : 2)
         const { word, end } = delimiterAt(command, start + (/^[ \t]*/.exec(command.slice(start))?.[0].length ?? 0))
 
-        pending.push({ word, isTabbed })
+        pending.push({ word, isTabbed, isShell })
         at = end - 1
       }
     } else if (char === ')' && isPattern) {
@@ -227,7 +293,15 @@ export const parse = (command: string): Command[] => {
       endCommand(char)
 
       if (char === '\n' && pending.length > 0) {
-        at = afterBodies(command, at + 1, pending) - 1
+        const { end, bodies } = afterBodies(command, at + 1, pending)
+
+        for (const [index, body] of bodies.entries()) {
+          if (pending[index]?.isShell === true) {
+            commands.push(...parse(body).map((one, position) => (position === 0 ? { ...one, before: '\n' } : one)), { words: [], before: '\n' })
+          }
+        }
+
+        at = end - 1
         pending = []
       }
     } else if (char === '|' || (char === '&' && !text.endsWith('>') && following !== '>')) {

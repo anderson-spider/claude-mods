@@ -119,3 +119,23 @@ test('classify sees through case arms and still reads subshells', () => {
   expect(classify('case $x in cd) ls ;; b) git commit -m x ;; esac')[0]).not.toHaveProperty('isAdrift')
   expect(kinds('(git commit -m x)')).toEqual(['commit'])
 })
+
+test('classify reads a heredoc or here-string body fed to a shell or ssh as commands', () => {
+  expect(kinds('bash <<EOF\ngit commit -m x\nEOF')).toEqual(['commit'])
+  expect(classify("sudo bash <<'EOF'\ngit push origin main\nEOF")).toMatchObject([{ kind: 'publish', refspecs: ['main'] }])
+  expect(kinds('env FOO=1 sh <<-EOF\n\tgit commit -m x\n\tEOF')).toEqual(['commit'])
+  expect(kinds('/bin/zsh <<EOF\ngit commit -m x\nEOF')).toEqual(['commit'])
+  expect(kinds('/usr/bin/env bash <<"EOF"\ngit commit -m x\nEOF')).toEqual(['commit'])
+  expect(kinds("ssh -p 22 host <<'EOF'\ngit push origin main\nEOF")).toEqual(['publish'])
+  expect(kinds("bash <<< 'git commit -m x'")).toEqual(['commit'])
+  expect(kinds('bash <<EOF && ls\ngit commit -m x\nEOF')).toEqual(['commit'])
+})
+
+test('classify keeps a heredoc body as data for other commands, and when the shell has its own script', () => {
+  expect(kinds('cat <<EOF\ngit commit -m x\nEOF')).toEqual([])
+  expect(kinds('python <<EOF\ngit commit\nEOF')).toEqual([])
+  expect(kinds("bash -c 'echo hi' <<EOF\ngit commit -m x\nEOF")).toEqual([])
+  expect(kinds('bash script.sh <<EOF\ngit commit -m x\nEOF')).toEqual([])
+  expect(kinds("ssh host 'ls' <<EOF\ngit commit -m x\nEOF")).toEqual([])
+  expect(kinds('echo $((1<<2)) && git status')).toEqual([])
+})
