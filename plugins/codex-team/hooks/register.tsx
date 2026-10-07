@@ -4,6 +4,7 @@ import type { Elements, EngineInterface, Register, RenderElement } from 'claude-
 import type { BandJob } from '../types'
 import { herdrAvailable, herdrOf } from './herdr'
 import { createBook } from './book'
+import { createPaneLayout } from './pane-layout'
 import { PROMPT } from './prompts'
 import { allJobs, bandRows, blockedText, finishedText, loopFinishedText, orphanText, snapshot } from './presentation'
 import { checkDoctor } from './doctor'
@@ -165,6 +166,7 @@ export const register: Register = on => {
       const tmpdir = await $.env.get('TMPDIR')
       const deps = {
         herdr: herdrOf((argv, init) => $.process.run(argv, init), { pane, cwd }),
+        layout: createPaneLayout(),
         files: { read: (path: string) => $.fs.read(path).catch(() => undefined), write: (path: string, text: string) => $.fs.write(path, text) },
         tmpdir,
         now: Date.now,

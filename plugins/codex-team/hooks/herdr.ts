@@ -52,14 +52,8 @@ export function herdrOf(run: Run, options: { pane: string; cwd: string }): Herdr
   }
 
   return {
-    async size() {
-      const area = (await json(['pane', 'layout', '--pane', options.pane])).result?.layout?.area
-      if (typeof area?.width !== 'number' || typeof area?.height !== 'number') throw new HerdrError('unknown', 'herdr did not report the pane size')
-      return { width: area.width, height: area.height }
-    },
-
-    async split(direction) {
-      const id = (await json(['pane', 'split', options.pane, '--direction', direction, '--cwd', options.cwd, '--no-focus'])).result?.pane?.pane_id
+    async split(direction, target) {
+      const id = (await json(['pane', 'split', target ?? options.pane, '--direction', direction, '--cwd', options.cwd, '--no-focus'])).result?.pane?.pane_id
       if (typeof id !== 'string') throw new HerdrError('unknown', 'herdr did not return the new pane')
       return id
     },
