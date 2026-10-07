@@ -189,3 +189,55 @@ test('reserveId shares the counter with start and skips live agent names', async
   expect([a.id, b.id]).toEqual([3, 4])
   await Promise.all([book.done(a.id), book.done(b.id)])
 })
+
+
+test('cancel leaves a mismatched pane alone and releases the stop gate', async () => {
+  let release = () => {}
+  const { book, calls, herdr } = bookWith({ gate: new Promise<void>(done => (release = done)) })
+  const a = await book.start(request())
+  await pause(5)
+  herdr.list = async () => [{ name: a.agent, pane: 'w9:p9' }, { name: 'ct-other', pane: a.pane! }]
+  expect(await book.cancel(a.id)).toContain(`no longer runs ${a.agent}`)
+  expect(calls.some(call => call.startsWith('keys') || call.startsWith('submit'))).toBe(false)
+  expect(a.status).toBe('cancelled')
+  release()
+  await book.ended(a.id)
+})
+
+test('cancel can retry after a failed identity check without sending Esc first', async () => {
+  let release = () => {}
+  const { book, calls, herdr } = bookWith({ gate: new Promise<void>(done => (release = done)) })
+  const a = await book.start(request())
+  await pause(5)
+  const list = herdr.list
+  herdr.list = async () => { throw new Error('list failed') }
+  expect(await book.cancel(a.id)).toContain('Could not send Esc')
+  expect(calls.some(call => call.startsWith('keys'))).toBe(false)
+  herdr.list = list
+  expect(await book.cancel(a.id)).toContain('Sent Esc')
+  release()
+  await book.ended(a.id)
+})
+
+test('/stop checks identity again after the wait and notes a mismatch or list failure', async () => {
+  for (const failed of [false, true]) {
+    let release = () => {}
+    const { book, calls, herdr } = bookWith({ gate: new Promise<void>(done => (release = done)) })
+    const a = await book.start(request())
+    await pause(5)
+    herdr.wait = async () => {
+      herdr.list = async () => {
+        if (failed) throw new Error('list failed')
+        return [{ name: a.agent, pane: 'w9:p9' }]
+      }
+      return 'idle'
+    }
+    await book.cancel(a.id)
+    release()
+    await book.ended(a.id)
+    expect(calls).toContain(`keys ${a.agent} esc`)
+    expect(calls.some(call => call.startsWith('submit'))).toBe(false)
+    expect(a.status).toBe('cancelled')
+    expect(a.error).toContain(failed ? 'list failed' : `no longer runs ${a.agent}`)
+  }
+})

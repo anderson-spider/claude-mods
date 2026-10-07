@@ -690,3 +690,19 @@ test('a cancelled loop keeps waiting through stop timeouts and permits Esc retri
     expect(state.calls.filter(call => call.startsWith('close'))).toEqual(['close w1:p2', 'close w1:p3'])
   } finally { releasePrompt(); releaseStop() }
 })
+
+
+test('a loop preserves its status and report when its panes no longer match', async () => {
+  for (const [verdict, status] of [['VERDICT: APPROVED', 'approved'], ['VERDICT: CHANGES', 'exhausted'], ['no verdict', 'failed']]) {
+    const state = loopWith(['dev', verdict])
+    state.deps.herdr.list = async () => [{ name: 'ct-other', pane: 'w1:p2' }, { name: 'ct-1-qa', pane: 'w9:p9' }]
+    const loop: Loop = { id: 1, ...loopRequest(1), status: 'developing', rounds: [], startedAt: 0 }
+    await runLoop(state.deps, loop, state.book)
+    expect(loop.status).toBe(status)
+    expect(state.files[loop.report!]).toContain(`Status: ${status}`)
+    expect(state.events).toEqual([`loop 1 ${status}`])
+    expect(state.calls.some(call => call.startsWith('close'))).toBe(false)
+    await state.deps.layout.open(state.deps.herdr)
+    expect(state.calls.filter(call => call.startsWith('split')).at(-1)).toBe('split down')
+  }
+})

@@ -14,6 +14,7 @@ export function fakeHerdr(script: Script) {
   const prompts = [...(script.prompt ?? [])]
   const waits = [...(script.wait ?? [])]
   const splits = [...(script.split ?? [])]
+  const agents = new Map<string, string>()
   let panes = 1
   const pop = <T>(queue: (T | Error)[], fallback: T): T => {
     const next = queue.length ? queue.shift()! : fallback
@@ -36,6 +37,7 @@ export function fakeHerdr(script: Script) {
     },
     start: async (name, pane, args) => {
       calls.push(`start ${name} ${pane} ${args.join(' ')}`)
+      agents.set(name, pane)
       if (script.start) throw script.start
     },
     prompt: async (name, text) => {
@@ -58,7 +60,7 @@ export function fakeHerdr(script: Script) {
     submit: async (name, text) => {
       calls.push(`submit ${name} ${text}`)
     },
-    list: async () => (script.live ?? []).map(name => ({ name, pane: 'w9:p9' })),
+    list: async () => [...(script.live ?? []).map(name => ({ name, pane: 'w9:p9' })), ...Array.from(agents, ([name, pane]) => ({ name, pane }))],
   }
   return { herdr, calls }
 }
@@ -173,6 +175,7 @@ export function loopHost(on: On, gate?: Promise<void>, script: Script = {}) {
   let version = 0
   let prompts = 0
   let panes = 1
+  const agents: { name: string; pane_id: string }[] = []
   on('tool.register', (_$, e) => { tools[e.name] = e.inputSchema; return { value: { tool: `mcp__codex-team__${e.name}` } } })
   on('command.register', (_$, e) => ({ value: { command: e.name } }))
   on('session.cwd', () => ({ value: '/proj' }))
@@ -189,7 +192,8 @@ export function loopHost(on: On, gate?: Promise<void>, script: Script = {}) {
     let stdout = '{}'
     if (argv[1] === '--version') stdout = 'installed'
     if (argv[1] === 'pane' && argv[2] === 'split') stdout = JSON.stringify({ result: { pane: { pane_id: `w1:p${++panes}` } } })
-    if (argv[1] === 'agent' && argv[2] === 'list') stdout = JSON.stringify({ result: { agents: [] } })
+    if (argv[1] === 'agent' && argv[2] === 'start') agents.push({ name: argv[3]!, pane_id: argv[7]! })
+    if (argv[1] === 'agent' && argv[2] === 'list') stdout = JSON.stringify({ result: { agents } })
     if (argv[1] === 'agent' && argv[2] === 'prompt' && argv[4] !== '/stop') {
       const index = prompts++
       files[argv[4]!.match(/write your final report as Markdown to (.+) and answer/)![1]!] = index === 0 ? 'dev report' : 'VERDICT: APPROVED'
