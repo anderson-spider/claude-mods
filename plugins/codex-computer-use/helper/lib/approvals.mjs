@@ -5,6 +5,8 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 
+import { isUnder } from './owners.mjs'
+
 /** Reads an elicitation's params: an app approval, or something this helper does not answer. */
 export const parseRequest = params => {
   const meta = params?._meta ?? {}
@@ -98,7 +100,7 @@ export class Approvals {
   /** Drops the session choices of every caller under `prefix` (a session id covers its subagents). */
   forget(prefix) {
     for (const caller of [...this.session.keys()]) {
-      if (caller === prefix || caller.startsWith(`${prefix}/`)) {
+      if (isUnder(prefix, caller)) {
         this.session.delete(caller)
       }
     }

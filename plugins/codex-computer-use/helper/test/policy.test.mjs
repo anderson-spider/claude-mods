@@ -7,7 +7,7 @@ import { Approvals, answerFor, parseRequest } from '../lib/approvals.mjs'
 import { removeCodexApproval } from '../lib/codex-approvals.mjs'
 import { namedApps, usedApp } from '../lib/apps.mjs'
 import { isEntryCall } from '../lib/hub.mjs'
-import { Owners } from '../lib/owners.mjs'
+import { Owners, isUnder } from '../lib/owners.mjs'
 import { temp } from './support.mjs'
 
 test('approval policy: deny beats everything, auto-approve starts off, callers are separate', () => {
@@ -70,3 +70,25 @@ test('removeCodexApproval takes out only that app, keeps the rest and the layout
   assert.equal(readFileSync(odd, 'utf8'), '{"apps":[]}')
 })
 
+
+test('isUnder matches a caller or its subagents, never another session sharing a prefix', () => {
+  assert.equal(isUnder('s1', 's1'), true)
+  assert.equal(isUnder('s1', 's1/agent'), true)
+  assert.equal(isUnder('abc', 'abcd/x'), false)
+  assert.equal(isUnder('s1/a', 's1'), false)
+})
+
+test('owners: releasePrefix frees a session and its subagents, drop frees one app, apps lists the rest', () => {
+  const owners = new Owners()
+
+  owners.claim('A', 's1/x')
+  owners.claim('B', 's2')
+  owners.claim('C', 's1abc')
+  owners.releasePrefix('s1')
+  assert.equal(owners.ownerOf('A'), undefined)
+  assert.equal(owners.ownerOf('B'), 's2')
+  assert.equal(owners.ownerOf('C'), 's1abc')
+  owners.drop('B')
+  assert.equal(owners.ownerOf('B'), undefined)
+  assert.deepEqual([...owners.apps()], ['C'])
+})
