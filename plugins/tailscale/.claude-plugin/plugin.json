@@ -4,6 +4,5 @@
   "description": "Lets Claude query and modify the tailnet through the Tailscale API, using TS_API_KEY.",
   "author": {
     "name": "anderson-spider"
-  },
-  "types": "./types/index.d.ts"
+  }
 }
