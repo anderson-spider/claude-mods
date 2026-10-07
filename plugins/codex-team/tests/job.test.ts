@@ -170,3 +170,35 @@ test('a rename failure never fails a standalone job', async () => {
   expect(calls).toContain('rename w1:p2 ct-1 execute')
   expect(j.status).toBe('done')
 })
+
+test('a report that opens with STATUS: WAITING blocks the job until the person answers, then the real report ends it', async () => {
+  const files = { '/tmp/codex-team/1.md': 'STATUS: WAITING\nWhich port?' }
+  const { deps, calls, events } = setup({ wait: ['working', 'idle'], onWait: () => { if (calls.at(-1) === 'wait ct-1 until working') files['/tmp/codex-team/1.md'] = '# Report\nport 8080 used' } }, files)
+  const j = job()
+  await runJob(deps, j, request())
+  expect(calls.slice(-3)).toEqual(['prompt ct-1', 'wait ct-1 until working', 'wait ct-1'])
+  expect(events).toEqual(['blocked blocked', 'finished done'])
+  expect(j.status).toBe('done')
+  expect(j.report).toBe('/tmp/codex-team/1.md')
+  expect(j.summary).toContain('port 8080 used')
+})
+
+test('a chunk timeout while waiting for the answer keeps waiting for working', async () => {
+  const files = { '/tmp/codex-team/1.md': 'STATUS: WAITING\nWhich port?' }
+  const { deps, calls, events } = setup({ wait: [new HerdrError('timeout', 'chunk'), 'working', 'idle'], onWait: () => { if (calls.at(-1) === 'wait ct-1 until working' && calls.filter(call => call === 'wait ct-1 until working').length === 2) files['/tmp/codex-team/1.md'] = '# Report\ndone' } }, files)
+  const j = job()
+  await runJob(deps, j, request())
+  expect(calls.slice(-4)).toEqual(['prompt ct-1', 'wait ct-1 until working', 'wait ct-1 until working', 'wait ct-1'])
+  expect(events).toEqual(['blocked blocked', 'finished done'])
+  expect(j.status).toBe('done')
+})
+
+test('a cancel while the job waits for the answer leaves it cancelled with no finished notice', async () => {
+  const files = { '/tmp/codex-team/1.md': 'STATUS: WAITING\nWhich port?' }
+  const j = job()
+  const { deps, events } = setup({ wait: ['working'], onWait: () => { j.status = 'cancelled' } }, files)
+  await runJob(deps, j, request())
+  expect(j.status).toBe('cancelled')
+  expect(events).toEqual(['blocked blocked'])
+  expect(events.some(event => event.startsWith('finished'))).toBe(false)
+})

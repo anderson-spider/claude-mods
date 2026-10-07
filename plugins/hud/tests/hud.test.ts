@@ -1212,6 +1212,34 @@ test("info: effort and speed come from the last request", async ($, on) => {
   expect(texts).toContain("72 tok/s");
 });
 
+test("info: running subagents show their models next to the main one, which stays the session's", async ($, on) => {
+  const clock = world(on);
+  withUsage(on, LIMITS);
+  hostInfo(on);
+  slowStep(on, clock, 5000, 360);
+  let list = [
+    { id: "a1", description: "Job", type: "general-purpose", status: "running" },
+    { id: "a2", description: "Loop", type: "general-purpose", status: "running" },
+    { id: "a3", description: "Plan", type: "Plan", status: "running" },
+  ];
+  on("agent.list", () => ({ value: list }));
+  on("turn.complete", () => ({ text: "" }));
+  await $.session.start({ source: "startup", cwd: "/work/spider-marketplace" } as any);
+  for (const [agentId, model] of [[undefined, "claude-opus-5-5"], ["a1", "claude-haiku-5-5"], ["a2", "claude-haiku-5-5"]]) {
+    for await (const _ of $.turn.step({ turnId: "t", index: 0, model, messageCount: 2, ...(agentId ? { agentId } : {}) } as any)) {
+    }
+  }
+  let { texts } = await band($, "terminal");
+  expect(texts).toContain("Opus 5.5");
+  expect(texts).toContain("2× Haiku 5.5 · agent");
+  expect(texts).not.toContain("Haiku 5.5");
+  list = list.map((a) => ({ ...a, status: "completed" }));
+  await ($ as any).turn.complete({ answer: "ok", agentId: "a1" } as any);
+  ({ texts } = await band($, "terminal"));
+  expect(texts).toContain("Opus 5.5");
+  expect(texts.some((t: string) => t.includes("Haiku"))).toBe(false);
+});
+
 test("info: a /model switch shows within the 10 s tick, and the old effort goes", async ($, on) => {
   const clock = world(on);
   withUsage(on, LIMITS);

@@ -62,7 +62,8 @@ export type PaneLayout = ReturnType<typeof createPaneLayout>
 export type Deps = { herdr: Herdr; layout: PaneLayout; files: Files; tmpdir: string | undefined; now: () => number; notify: Notify }
 
 export type Verdict = 'approved' | 'changes'
-export type Round = { dev: number; qa?: number; verdict?: Verdict }
+export type Checks = 'pass' | 'fail' | 'not run'
+export type Round = { dev: number; qa?: number; verdict?: Verdict; checks?: Checks }
 export type LoopStatus = 'developing' | 'reviewing' | 'approved' | 'exhausted' | 'failed' | 'cancelled'
 export type LoopRequest = { task: string; files: string[]; maxRounds: number }
 export type Loop = LoopRequest & {

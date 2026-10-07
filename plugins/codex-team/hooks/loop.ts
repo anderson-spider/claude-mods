@@ -1,14 +1,9 @@
 import { loopAgentName, phaseReportPath, reportPath } from './names'
 import { fixTask, qaFocus } from './prompts'
 import { loopReport } from './presentation'
+import { checksOf, verdictOf } from './report'
 import { waitForStop } from './stopping'
-import type { AgentSession, Book, Job, Loop, LoopDeps, LoopRequest, Round, Verdict } from './model'
-
-/** Only an exact verdict on the last non-empty line decides the QA result. */
-export function verdictOf(report?: string): Verdict | undefined {
-  const last = report?.split('\n').map(line => line.trim()).filter(Boolean).at(-1)
-  return last === 'VERDICT: APPROVED' ? 'approved' : last === 'VERDICT: CHANGES' ? 'changes' : undefined
-}
+import type { AgentSession, Book, Job, Loop, LoopDeps, LoopRequest, Round } from './model'
 
 const active = (loop: Loop) => loop.status === 'developing' || loop.status === 'reviewing'
 const note = (loop: Loop, text: string) => { loop.error = [loop.error, text].filter(Boolean).join('\n') }
@@ -20,7 +15,8 @@ export async function runLoop(deps: LoopDeps, loop: Loop, book: Pick<Book, 'excl
   const notify = (event: 'blocked' | 'finished', job: Job) => {
     if (event === 'blocked') deps.notify(event, loop, job)
   }
-  let lastQaReport = ''
+  // What the next dev round fixes: the last QA report, or the dev's own report whose checks failed.
+  let fix: { path: string; source: 'qa' | 'checks' } | undefined
   let findings: string | undefined
   const cancelled = () => loop.status === 'cancelled'
   const check = (job: Job, phase: string) => {
@@ -35,7 +31,7 @@ export async function runLoop(deps: LoopDeps, loop: Loop, book: Pick<Book, 'excl
       for (let index = 1; index <= loop.maxRounds; index++) {
         if (cancelled()) return
         loop.status = 'developing'
-        const dev = await book.start({ kind: 'execute', task: index === 1 ? loop.task : fixTask(loop.task, lastQaReport), files: loop.files }, {
+        const dev = await book.start({ kind: 'execute', task: index === 1 || !fix ? loop.task : fixTask(loop.task, fix.path, fix.source), files: loop.files }, {
           quiet: true, owned: true, session: devSession, paneName: `loop-${loop.id} dev`,
           reportPath: phaseReportPath(deps.tmpdir, loop.id, 'dev', index), notify,
         })
@@ -45,6 +41,19 @@ export async function runLoop(deps: LoopDeps, loop: Loop, book: Pick<Book, 'excl
         await book.ended(dev.id)
         if (!check(dev, `dev ${index}`) || cancelled()) return
         if (!dev.report) note(loop, `dev ${index}: ${dev.error ?? 'no report was written; QA will review the diff'}`)
+        else {
+          round.checks = checksOf(await deps.files.read(dev.report))
+          if (cancelled()) return
+          if (round.checks === 'fail') {
+            // The dev's own checks failed: skip QA and send the dev back with its report.
+            note(loop, `dev ${index}: CHECKS: FAIL, QA skipped — report: ${dev.report}`)
+            fix = { path: dev.report, source: 'checks' }
+            findings = undefined
+            continue
+          }
+          if (round.checks === 'not run') note(loop, `dev ${index}: CHECKS: NOT RUN`)
+          if (round.checks === undefined) note(loop, `dev ${index}: no CHECKS line`)
+        }
 
         loop.status = 'reviewing'
         const qa = await book.start({ kind: 'review', task: '', files: [], focus: qaFocus(loop.task) }, {
@@ -55,13 +64,14 @@ export async function runLoop(deps: LoopDeps, loop: Loop, book: Pick<Book, 'excl
         if (cancelled()) await book.cancel(qa.id)
         await book.ended(qa.id)
         if (!check(qa, `qa ${index}`) || cancelled()) return
-        lastQaReport = qa.report ?? phaseReportPath(deps.tmpdir, loop.id, 'qa', index)
-        findings = await deps.files.read(lastQaReport)
+        const qaReport = qa.report ?? phaseReportPath(deps.tmpdir, loop.id, 'qa', index)
+        fix = { path: qaReport, source: 'qa' }
+        findings = await deps.files.read(qaReport)
         if (cancelled()) return
         round.verdict = verdictOf(findings)
         if (!round.verdict) {
           loop.status = 'failed'
-          note(loop, `QA report has no VERDICT line: ${lastQaReport}`)
+          note(loop, `QA report has no VERDICT line: ${qaReport}`)
           return
         }
         if (round.verdict === 'approved') { loop.status = 'approved'; return }

@@ -1,6 +1,6 @@
 {
   "name": "hud",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "A usage line above the prompt (the context as a weather icon, share and tokens, your 5-hour and 7-day limits against the time elapsed, the prompt cache with its lifetime and time left, the subagents running) and suggested next prompts you can write directly to the prompt box as a draft. Built on Token Weather Usage, usage-meter, prompt-cache-control and next-steps; see NOTICE.",
   "author": {
     "name": "anderson-spider"

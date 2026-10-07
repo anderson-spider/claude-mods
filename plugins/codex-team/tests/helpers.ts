@@ -7,7 +7,7 @@ import { createBook } from '../hooks/book'
 import { herdrOf } from '../hooks/herdr'
 import type { BandJob } from '../types'
 
-export type Script = { prompt?: (Settled | Error)[]; wait?: (AgentState | Error)[]; start?: Error; rename?: Error; close?: Error; split?: (string | Error)[]; splitGate?: Promise<void>; read?: string; onPrompt?: () => void; live?: string[]; gate?: Promise<void> }
+export type Script = { prompt?: (Settled | Error)[]; wait?: (AgentState | Error)[]; start?: Error; rename?: Error; close?: Error; split?: (string | Error)[]; splitGate?: Promise<void>; read?: string; onPrompt?: () => void; onWait?: () => void; live?: string[]; gate?: Promise<void> }
 
 export function fakeHerdr(script: Script) {
   const calls: string[] = []
@@ -48,6 +48,7 @@ export function fakeHerdr(script: Script) {
     },
     wait: async (name, _timeoutMs, until) => {
       calls.push(`wait ${name}${until ? ` until ${until.join('|')}` : ''}`)
+      script.onWait?.()
       return pop<AgentState>(waits, 'idle')
     },
     read: async () => {
