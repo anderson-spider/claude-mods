@@ -110,9 +110,12 @@ export async function runJob(deps: JobDeps, job: Job, request: Request, options:
       try {
         await herdr.start(job.agent, job.pane, codexArgs(request.kind))
       } catch (error) {
+        // A startup error does not prove the role stopped.
+        if (session) session.active = true
         if (!(error instanceof HerdrError) || error.code !== 'agent_not_ready') throw error
         if (cancelled()) return
         await whileBlocked('blocked')
+        if (session) session.active = false
       }
       if (session) session.ready = true
     }

@@ -68,6 +68,14 @@ export function herdrOf(run: Run, options: { pane: string; cwd: string }): Herdr
       await exec(['pane', 'rename', pane, name])
     },
 
+    async close(pane) {
+      try {
+        await exec(['pane', 'close', pane])
+      } catch (error) {
+        if (!(error instanceof HerdrError) || error.code !== 'pane_not_found') throw error
+      }
+    },
+
     async start(name, pane, args) {
       await exec(['agent', 'start', name, '--kind', 'codex', '--pane', pane, '--', ...args])
     },

@@ -94,7 +94,7 @@ export function createBook(deps: Deps) {
         resolve.get(id)?.(job)
         resolve.delete(id)
       }
-      return `Sent ctrl+c to ${job.agent} (pane ${job.pane}) and marked it cancelled; the pane stays open.`
+      return `Sent ctrl+c to ${job.agent} (pane ${job.pane}) and marked it cancelled; ${job.agent === agentName(job.id) ? 'the pane stays open' : 'the loop closes its panes after the agents stop'}.`
     },
 
     jobs: (): readonly Job[] => jobs,

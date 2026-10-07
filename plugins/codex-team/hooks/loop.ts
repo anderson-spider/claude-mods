@@ -1,6 +1,7 @@
 import { loopAgentName, phaseReportPath, reportPath } from './names'
 import { fixTask, qaFocus } from './prompts'
 import { loopReport } from './presentation'
+import { waitForStop } from './stopping'
 import type { AgentSession, Book, Job, Loop, LoopDeps, LoopRequest, Round, Verdict } from './model'
 
 /** Only an exact verdict on the last non-empty line decides the QA result. */
@@ -85,6 +86,18 @@ export async function runLoop(deps: LoopDeps, loop: Loop, book: Pick<Book, 'excl
     deps.notify('finished', loop)
   } catch {
     // The completed loop stays readable through jobs if its notification fails.
+  }
+
+  const sessions = [devSession, qaSession]
+  // A failed phase may still be active; cancelled phases already waited in book.ended.
+  for (const session of sessions) await waitForStop(deps.herdr, session)
+  for (const session of sessions) {
+    if (!session.pane) continue
+    try {
+      await deps.herdr.close(session.pane)
+    } catch {
+      // Closing panes is best effort: the report, notification and status stand.
+    }
   }
 }
 
