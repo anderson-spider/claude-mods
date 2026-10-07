@@ -26,6 +26,7 @@ export type Herdr = {
   /** Opens a sibling pane without taking focus and returns its id. */
   split(direction: 'right' | 'down'): Promise<string>
   rename(pane: string, name: string): Promise<void>
+  close(pane: string): Promise<void>
   start(name: string, pane: string, args: string[]): Promise<void>
   /** Sends the prompt and waits for the agent to settle; `timeout` means this chunk ran out, not the job. */
   prompt(name: string, text: string, timeoutMs: number): Promise<Settled>
@@ -72,7 +73,7 @@ export type Loop = LoopRequest & {
 }
 
 export type Book = ReturnType<typeof createBook>
-export type LoopDeps = Pick<Deps, 'files' | 'tmpdir' | 'now'> & { notify: (event: 'blocked' | 'finished', loop: Loop, job?: Job) => void }
+export type LoopDeps = Pick<Deps, 'files' | 'tmpdir' | 'now'> & { herdr: Pick<Herdr, 'close' | 'wait'>; notify: (event: 'blocked' | 'finished', loop: Loop, job?: Job) => void }
 
 export type Check = { name: string; ok: boolean; detail: string }
 

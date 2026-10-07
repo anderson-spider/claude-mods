@@ -104,7 +104,7 @@ import { HerdrError } from '../hooks/model'
 import { runJob } from '../hooks/job'
 import type { AgentState, Deps, Herdr, Job, Request, Settled } from '../hooks/model'
 
-type Script = { prompt?: (Settled | Error)[]; wait?: (AgentState | Error)[]; start?: Error; rename?: Error; read?: string; onPrompt?: () => void; live?: string[]; gate?: Promise<void> }
+type Script = { prompt?: (Settled | Error)[]; wait?: (AgentState | Error)[]; start?: Error; rename?: Error; close?: Error; read?: string; onPrompt?: () => void; live?: string[]; gate?: Promise<void> }
 
 function fakeHerdr(script: Script) {
   const calls: string[] = []
@@ -127,6 +127,10 @@ function fakeHerdr(script: Script) {
     rename: async (pane, name) => {
       calls.push(`rename ${pane} ${name}`)
       if (script.rename) throw script.rename
+    },
+    close: async pane => {
+      calls.push(`close ${pane}`)
+      if (script.close) throw script.close
     },
     start: async (name, pane, args) => {
       calls.push(`start ${name} ${pane} ${args.join(' ')}`)
@@ -188,6 +192,7 @@ test('runJob starts a review job read-only', async () => {
   await runJob(deps, job('review'), request('review'))
   expect(calls[2]).toBe('rename w1:p2 ct-1 review')
   expect(calls[3]).toBe('start ct-1 w1:p2 -s read-only -a on-request')
+  expect(calls.some(call => call.startsWith('close'))).toBe(false)
 })
 
 test('runJob goes blocked and back to working when the person answers, notifying once', async () => {
@@ -444,6 +449,9 @@ import type { Loop } from '../hooks/model'
 
 function loopWith(reports: (string | undefined)[], script: Script = {}, gates: Record<number, Promise<void>> = {}) {
   const { herdr, calls } = fakeHerdr(script)
+  let panes = 1
+  const split = herdr.split
+  herdr.split = async direction => { await split(direction); return `w1:p${++panes}` }
   const files: Record<string, string> = {}
   const prompts: string[] = []
   const events: string[] = []
@@ -485,6 +493,145 @@ test('loop approves after one dev and QA and notifies only once', async () => {
   expect(loop.report).toBe('/tmp/codex-team/loop-1.md')
   expect(state.files[loop.report!]).toContain('ct-1-dev')
   expect(state.files[loop.report!]).toContain('/tmp/codex-team/1-qa1.md')
+})
+
+test('finished loops close both role panes after writing the report and notifying', async () => {
+  for (const [verdict, status] of [['VERDICT: APPROVED', 'approved'], ['VERDICT: CHANGES', 'exhausted'], ['no verdict', 'failed']]) {
+    const state = loopWith(['dev', verdict])
+    const close = state.deps.herdr.close
+    state.deps.herdr.close = async pane => {
+      expect(state.files['/tmp/codex-team/loop-1.md']).toContain(`Status: ${status}`)
+      expect(state.events).toEqual([`loop 1 ${status}`])
+      await close(pane)
+    }
+    const loop: Loop = { id: await state.book.reserveId(), ...loopRequest(1), status: 'developing', rounds: [], startedAt: 0 }
+    await runLoop(state.deps, loop, state.book)
+    expect(loop.status).toBe(status)
+    expect(state.calls.filter(call => call.startsWith('close'))).toEqual(['close w1:p2', 'close w1:p3'])
+  }
+})
+
+test('a failed dev closes only its pane and waits until its agent stops', async () => {
+  let release = () => {}
+  const gate = new Promise<void>(done => (release = done))
+  const state = loopWith(['dev'], { prompt: [new Error('prompt failed')] })
+  state.deps.herdr.wait = async (name, _timeout, until) => {
+    state.calls.push(`wait ${name} until ${until?.join('|')}`)
+    await gate
+    return 'idle'
+  }
+  const loop: Loop = { id: await state.book.reserveId(), ...loopRequest(), status: 'developing', rounds: [], startedAt: 0 }
+  const running = runLoop(state.deps, loop, state.book)
+  try {
+    await state.finished(loop)
+    await pause(5)
+    expect(loop.status).toBe('failed')
+    expect(state.calls).toContain('wait ct-1-dev until idle|done')
+    expect(state.calls.some(call => call.startsWith('close'))).toBe(false)
+  } finally { release() }
+  await running
+  expect(state.calls.filter(call => call.startsWith('close'))).toEqual(['close w1:p2'])
+  expect(state.prompts.length).toBe(1)
+})
+
+test('a startup timeout waits for the role to stop before closing its pane', async () => {
+  let release = () => {}
+  const gate = new Promise<void>(done => (release = done))
+  const state = loopWith([], { start: new HerdrError('agent_not_ready', 'startup is blocked') })
+  let now = 0
+  let stopping = false
+  state.deps.now = () => now
+  state.deps.herdr.wait = async (_name, _timeout, until) => {
+    if (until?.includes('working')) {
+      now = 30 * 60_000
+      throw new HerdrError('timeout', 'still starting')
+    }
+    stopping = true
+    await gate
+    return 'idle'
+  }
+  const loop: Loop = { id: await state.book.reserveId(), ...loopRequest(), status: 'developing', rounds: [], startedAt: 0 }
+  const book = createBook({ ...state.deps, notify: () => {} })
+  const running = runLoop(state.deps, loop, book)
+  try {
+    await state.finished(loop)
+    await pause(5)
+    expect(loop.status).toBe('failed')
+    expect(stopping).toBe(true)
+    expect(state.prompts).toEqual([])
+    expect(state.calls.some(call => call.startsWith('close'))).toBe(false)
+  } finally { release() }
+  await running
+  expect(state.calls.filter(call => call.startsWith('close'))).toEqual(['close w1:p2'])
+})
+
+test('a close failure preserves every loop outcome and its final notification', async () => {
+  for (const [verdict, status] of [['VERDICT: APPROVED', 'approved'], ['VERDICT: CHANGES', 'exhausted'], ['no verdict', 'failed']]) {
+    const state = loopWith(['dev', verdict], { close: new Error('cannot close') })
+    const loop: Loop = { id: await state.book.reserveId(), ...loopRequest(1), status: 'developing', rounds: [], startedAt: 0 }
+    await runLoop(state.deps, loop, state.book)
+    expect(loop.status).toBe(status)
+    expect(loop.error).not.toContain('cannot close')
+    expect(state.events).toEqual([`loop 1 ${status}`])
+    expect(state.calls.filter(call => call.startsWith('close'))).toEqual(['close w1:p2', 'close w1:p3'])
+  }
+})
+
+test('a cancelled loop still notifies and attempts both closes when closing fails', async () => {
+  let release = () => {}
+  const state = loopWith(['dev', 'VERDICT: APPROVED'], { close: new Error('cannot close') }, { 1: new Promise<void>(done => (release = done)) })
+  const close = state.deps.herdr.close
+  state.deps.herdr.close = async pane => {
+    expect(state.files['/tmp/codex-team/loop-1.md']).toContain('Status: cancelled')
+    expect(state.events).toEqual(['loop 1 cancelled'])
+    await close(pane)
+  }
+  const loop: Loop = { id: await state.book.reserveId(), ...loopRequest(), status: 'developing', rounds: [], startedAt: 0 }
+  const running = runLoop(state.deps, loop, state.book)
+  try {
+    for (let i = 0; i < 100 && state.prompts.length < 2; i++) await pause(1)
+    expect(state.prompts.length).toBe(2)
+    await cancelLoop(state.deps, state.book, loop)
+    expect(state.calls.some(call => call.startsWith('close'))).toBe(false)
+  } finally { release() }
+  await running
+  expect(loop.status).toBe('cancelled')
+  expect(loop.error).not.toContain('cannot close')
+  expect(state.events).toEqual(['loop 1 cancelled'])
+  expect(state.calls.filter(call => call.startsWith('close'))).toEqual(['close w1:p2', 'close w1:p3'])
+})
+
+test('loop cleanup also runs after a report read or final write exception', async () => {
+  for (const phase of ['read', 'write']) {
+    const state = loopWith(['dev', 'VERDICT: APPROVED'])
+    const read = state.deps.files.read
+    let reads = 0
+    state.deps.files.read = async path => {
+      if (++reads === 3 && phase === 'read') throw new Error('read failed')
+      return read(path)
+    }
+    const write = state.deps.files.write
+    state.deps.files.write = async (path, text) => {
+      if (path.endsWith('loop-1.md') && phase === 'write') throw new Error('write failed')
+      await write(path, text)
+    }
+    const loop: Loop = { id: await state.book.reserveId(), ...loopRequest(), status: 'developing', rounds: [], startedAt: 0 }
+    await runLoop(state.deps, loop, state.book)
+    expect(loop.status).toBe('failed')
+    expect(loop.error).toContain(`${phase} failed`)
+    expect(state.events).toEqual(['loop 1 failed'])
+    expect(state.calls.filter(call => call.startsWith('close'))).toEqual(['close w1:p2', 'close w1:p3'])
+  }
+})
+
+test('a notification failure still closes the loop panes', async () => {
+  const state = loopWith(['dev', 'VERDICT: APPROVED'])
+  state.deps.notify = () => { state.events.push('notification attempted'); throw new Error('notify failed') }
+  const loop: Loop = { id: await state.book.reserveId(), ...loopRequest(), status: 'developing', rounds: [], startedAt: 0 }
+  await runLoop(state.deps, loop, state.book)
+  expect(loop.status).toBe('approved')
+  expect(state.events).toEqual(['notification attempted'])
+  expect(state.calls.filter(call => call.startsWith('close'))).toEqual(['close w1:p2', 'close w1:p3'])
 })
 
 test('loop sends changes back to dev with the original task and the QA report path', async () => {
@@ -529,6 +676,7 @@ test('loop fails naming the dev or QA phase and round when a child fails', async
     expect(loop.error).toContain(failureAt === 0 ? 'dev 1' : 'qa 2')
     expect(loop.error).toContain('broken')
     expect(state.prompts.length).toBe(failureAt + 1)
+    expect(state.calls.filter(call => call.startsWith('close'))).toEqual(failureAt === 0 ? ['close w1:p2'] : ['close w1:p2', 'close w1:p3'])
   }
 })
 
@@ -557,12 +705,14 @@ test('cancelling a loop during dev or QA cancels the active child and starts not
     for (let i = 0; i < 100 && state.prompts.length <= phase; i++) await pause(1)
     expect(loop.status).toBe(phase === 0 ? 'developing' : 'reviewing')
     expect(await cancelLoop(state.deps, state.book, loop)).toContain('cancelled')
+    expect(state.calls.some(call => call.startsWith('close'))).toBe(false)
     release()
     await state.finished(loop)
     expect(loop.status).toBe('cancelled')
     expect(state.calls).toContain(`keys ct-1-${phase === 0 ? 'dev' : 'qa'} ctrl+c`)
     expect(state.prompts.length).toBe(phase + 1)
     expect(state.events).toEqual(['loop 1 cancelled'])
+    expect(state.calls.filter(call => call.startsWith('close'))).toEqual(phase === 0 ? ['close w1:p2'] : ['close w1:p2', 'close w1:p3'])
   }
 })
 
@@ -674,9 +824,14 @@ test('a loop cancelled while its child starts never sends that child a task afte
     for (const notReady of [false, true]) {
       for (const missing of [false, true]) {
         let release = () => {}
+        let releaseStop = () => {}
         let starting = false
+        let stopping = false
         const gate = new Promise<void>(done => (release = done))
+        const stopGate = new Promise<void>(done => (releaseStop = done))
         const state = loopWith(['dev', 'VERDICT: APPROVED'])
+        const wait = state.deps.herdr.wait
+        state.deps.herdr.wait = async (...args) => { stopping = true; await stopGate; return wait(...args) }
         const start = state.deps.herdr.start
         state.deps.herdr.start = async (...args) => {
           if (args[0] !== `ct-1-${phase === 0 ? 'dev' : 'qa'}`) return start(...args)
@@ -694,11 +849,18 @@ test('a loop cancelled while its child starts never sends that child a task afte
         const other = await state.book.start({ kind: 'execute', task: 'unrelated', files: [] })
         expect(other.status).toBe('queued')
         release()
+        if (notReady) {
+          for (let i = 0; i < 100 && !stopping; i++) await pause(1)
+          expect(stopping).toBe(true)
+          expect(other.status).toBe('queued')
+          expect(state.calls.some(call => call.startsWith('close'))).toBe(false)
+        }
+        releaseStop()
         await state.book.ended(child)
         await state.finished(loop)
         expect((await state.book.done(other.id)).status).toBe('done')
         expect(loop.status).toBe('cancelled')
-        expect(state.calls.some(call => call.startsWith(`wait ct-1-${phase === 0 ? 'dev' : 'qa'}`))).toBe(false)
+        expect(state.calls.filter(call => call.startsWith(`wait ct-1-${phase === 0 ? 'dev' : 'qa'}`))).toEqual(notReady ? [`wait ct-1-${phase === 0 ? 'dev' : 'qa'} until idle|done`] : [])
         expect(state.calls.some(call => call.startsWith(`prompt ct-1-${phase === 0 ? 'dev' : 'qa'}`))).toBe(false)
         expect(state.prompts.length).toBe(phase + 1)
         expect(state.prompts[phase]).toContain('unrelated')
@@ -733,6 +895,7 @@ test('loop fails before starting a child if its old report cannot be invalidated
   expect(loop.error).toContain('dev 1')
   expect(loop.error).toContain('cannot prepare report')
   expect(state.calls.some(call => call.startsWith('start '))).toBe(false)
+  expect(state.calls.some(call => call.startsWith('close'))).toBe(false)
 })
 
 // --- The Herdr adapter over the CLI ---
@@ -782,6 +945,24 @@ test('herdrOf splits the given pane without focus, in the given directory', asyn
   const { herdr, argvs } = adapter({ 'pane split': { stdout: JSON.stringify({ result: { pane: { pane_id: 'w1:p2' } } }) } })
   expect(await herdr.split('right')).toBe('w1:p2')
   expect(argvs[0]).toEqual(['herdr', 'pane', 'split', 'w1:p1', '--direction', 'right', '--cwd', '/proj', '--no-focus'])
+})
+
+test('herdrOf closes the given pane by id', async () => {
+  const { herdr, argvs } = adapter({})
+  await herdr.close('w1:p2')
+  expect(argvs[0]).toEqual(['herdr', 'pane', 'close', 'w1:p2'])
+})
+
+test('herdrOf ignores a pane that is already gone but propagates other close errors', async () => {
+  for (const code of ['pane_not_found', 'unknown']) {
+    const { herdr } = adapter({ 'pane close': { exitCode: 1, stderr: JSON.stringify({ error: { code, message: 'close failed' } }) } })
+    const error = await herdr.close('w1:p2').catch(e => e)
+    if (code === 'pane_not_found') expect(error).toBeUndefined()
+    else {
+      expect(error).toBeInstanceOf(HerdrError)
+      expect(error.code).toBe('unknown')
+    }
+  }
 })
 
 test('herdrOf reads the size of the pane from its layout', async () => {
@@ -1204,9 +1385,11 @@ test('a cancelled phase holds the execute slot after its deadline until the agen
     await pause(5)
     expect(other.status).toBe('queued')
     expect(waitingForStop).toBe(true)
+    expect(state.calls.some(call => call.startsWith('close'))).toBe(false)
     releaseStop()
     await state.finished(loop)
     expect((await book.done(other.id)).status).toBe('done')
+    expect(state.calls.filter(call => call.startsWith('close'))).toEqual(['close w1:p2'])
   } finally { releasePrompt(); releaseStop() }
 })
 
@@ -1251,8 +1434,10 @@ test('a cancelled loop keeps waiting through stop timeouts and permits ctrl+c re
     expect(waits).toBe(2)
     expect(other.status).toBe('queued')
     expect(await cancelLoop(state.deps, book, loop)).toContain('Sent ctrl+c')
+    expect(state.calls.some(call => call.startsWith('close'))).toBe(false)
     releaseStop()
     await state.finished(loop)
     await book.ended(other.id)
+    expect(state.calls.filter(call => call.startsWith('close'))).toEqual(['close w1:p2'])
   } finally { releasePrompt(); releaseStop() }
 })
