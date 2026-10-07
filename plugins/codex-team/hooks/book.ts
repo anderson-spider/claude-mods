@@ -72,6 +72,10 @@ export function createBook(deps: Deps) {
             if (cancelled() && options.session?.active) await waitForStop(deps.herdr, options.session)
           }
           await stops.get(id)
+          // A standalone job that wrote its report is over: its pane goes. A failure, a missing report or a cancel keeps it to look at.
+          if (!options.session && job.status === 'done' && job.report && job.pane) {
+            await deps.layout.close(deps.herdr, job.pane).catch(() => undefined)
+          }
         } finally {
           running.delete(id)
           resolve.get(id)?.(job)

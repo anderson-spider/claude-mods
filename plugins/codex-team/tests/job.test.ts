@@ -24,7 +24,7 @@ test('runJob starts a review job read-only', async () => {
   expect(calls.some(call => call.startsWith('close'))).toBe(false)
 })
 
-test('jobs share a row below the lead across execute and review', async () => {
+test('a standalone job closes its pane once its report is written, and open panes share a row below the lead', async () => {
   const { deps, calls } = setup({})
   const book = createBook(deps)
   for (const kind of ['execute', 'review', 'execute'] as const) {
@@ -32,7 +32,18 @@ test('jobs share a row below the lead across execute and review', async () => {
     await book.ended(j.id)
     expect(j.status).toBe('done')
   }
-  expect(calls.filter(call => call.startsWith('split'))).toEqual(['split down', 'split right w1:p2', 'split right w1:p3'])
+  // Only ct-1 wrote a report: its pane goes, so ct-2 opens below the lead again and ct-3 to its right.
+  expect(calls.filter(call => call.startsWith('split'))).toEqual(['split down', 'split down', 'split right w1:p3'])
+  expect(calls.filter(call => call.startsWith('close'))).toEqual(['close w1:p2'])
+})
+
+test('a failed standalone job keeps its pane open to look at', async () => {
+  const { deps, calls } = setup({ prompt: [new Error('broken')] })
+  const book = createBook(deps)
+  const j = await book.start(request('execute'))
+  await book.ended(j.id)
+  expect(j.status).toBe('failed')
+  expect(calls.some(call => call.startsWith('close'))).toBe(false)
 })
 
 test('a missing last pane retries once below the lead and records the replacement', async () => {
