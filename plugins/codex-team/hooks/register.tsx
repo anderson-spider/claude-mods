@@ -80,6 +80,9 @@ const draw = ({ Box, Text }: Kit, jobs: BandJob[], room: number): RenderElement 
 
 const refusal = (text: string) => ({ result: text, isError: true as const })
 
+// A tool handler never rejects: an error becomes a refusal the model can read.
+const failure = (error: unknown) => refusal(`codex-team failed: ${error instanceof Error ? error.message : String(error)}`)
+
 async function start($: EngineInterface, kind: Kind, e: Record<string, unknown>) {
   if (!book) return refusal(unavailable ?? NOT_READY)
   const request = requestOf(kind, e)
@@ -87,6 +90,21 @@ async function start($: EngineInterface, kind: Kind, e: Record<string, unknown>)
   const job = await book.start(request)
   await publish($)
   return { result: `Started job ${job.agent} (${kind}). A message arrives when it finishes; the jobs tool lists it meanwhile.` }
+}
+
+async function jobsTool($: EngineInterface, e: Record<string, unknown>) {
+  if (!book) return refusal(unavailable ?? NOT_READY)
+  if (e.action === 'cancel') {
+    if (typeof e.id !== 'number') return refusal('Give the id of the job to cancel.')
+    const answer = await book.cancel(e.id)
+    await publish($)
+    return { result: answer }
+  }
+  if (typeof e.id === 'number') {
+    const job = book.get(e.id)
+    return job ? { result: jobDetail(job) } : refusal(`No job ct-${e.id} in this session.`)
+  }
+  return { result: jobsReport(book.jobs(), Date.now()) }
 }
 
 async function doctor($: EngineInterface): Promise<string> {
@@ -180,24 +198,11 @@ export const register: Register = on => {
     return next(e)
   })
 
-  on('tool.call', { tool: 'mcp__codex-team__execute' }, ($, e) => start($, 'execute', e))
+  on('tool.call', { tool: 'mcp__codex-team__execute' }, ($, e) => start($, 'execute', e).catch(failure))
 
-  on('tool.call', { tool: 'mcp__codex-team__review' }, ($, e) => start($, 'review', e))
+  on('tool.call', { tool: 'mcp__codex-team__review' }, ($, e) => start($, 'review', e).catch(failure))
 
-  on('tool.call', { tool: 'mcp__codex-team__jobs' }, async ($, e) => {
-    if (!book) return refusal(unavailable ?? NOT_READY)
-    if (e.action === 'cancel') {
-      if (typeof e.id !== 'number') return refusal('Give the id of the job to cancel.')
-      const answer = await book.cancel(e.id)
-      await publish($)
-      return { result: answer }
-    }
-    if (typeof e.id === 'number') {
-      const job = book.get(e.id)
-      return job ? { result: jobDetail(job) } : refusal(`No job ct-${e.id} in this session.`)
-    }
-    return { result: jobsReport(book.jobs(), Date.now()) }
-  })
+  on('tool.call', { tool: 'mcp__codex-team__jobs' }, ($, e) => jobsTool($, e).catch(failure))
 
   on('command.run', { command: 'codex-team' }, async ($, e) => {
     if (!book) return { text: unavailable ?? NOT_READY }
