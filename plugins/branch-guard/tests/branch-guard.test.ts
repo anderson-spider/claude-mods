@@ -109,7 +109,7 @@ const BAND = {
   },
 } as const
 
-test('classify names commits and plain pushes, and leaves force pushes to blast-radius', () => {
+test('classify names commits and plain pushes, and leaves force pushes alone', () => {
   expect(kinds('ls -la && git status')).toEqual([])
   expect(kinds('git log --oneline')).toEqual([])
   expect(kinds('echo "git commit -m x"')).toEqual([])
