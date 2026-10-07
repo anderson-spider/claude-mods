@@ -175,3 +175,35 @@ export const limitMs = (raw: unknown, defaultMinutes: number): number => {
 
   return Math.round(Math.min(minutes, 24 * 60) * 60_000)
 }
+
+export type StatusReply = Reply & {
+  version?: string
+  callers?: { caller: string; apps: string[] }[]
+  settings?: { autoApprove: boolean; always: string[] }
+}
+
+/** What `/codex-cu status` tells the person. */
+export const statusReport = (enabled: boolean, reply: StatusReply): string => {
+  const lines = [`Route: ${enabled ? 'Codex computer use (on)' : "Claude's own computer use (off)"}`]
+
+  if (reply.status === 'unreachable' || reply.status === 'error') {
+    lines.push(`Helper: not reachable (${reply.message})`)
+  } else {
+    lines.push(`Helper: ${reply.version ?? '?'} running, ${reply.callers?.length ?? 0} Codex session(s)`)
+    lines.push(`Auto-approve: ${reply.settings?.autoApprove === true ? 'on (no questions)' : 'off (asks first)'}`)
+
+    for (const caller of reply.callers ?? []) {
+      lines.push(`  ${caller.caller}: ${caller.apps.length === 0 ? 'no apps' : caller.apps.join(', ')}`)
+    }
+  }
+
+  return lines.join('\n')
+}
+
+/** Use minutes to one decimal, or seconds to one decimal for waits under a minute. */
+export const approvalWaitText = (ms: number): string => {
+  const unit = ms < 60_000 ? 'second' : 'minute'
+  const amount = Number((ms / (unit === 'second' ? 1000 : 60_000)).toFixed(1))
+
+  return ` within ${amount} ${unit}${amount === 1 ? '' : 's'}`
+}

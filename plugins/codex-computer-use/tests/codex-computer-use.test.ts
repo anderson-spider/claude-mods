@@ -1,8 +1,11 @@
 import { expect, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
+import { MAX_APPROVALS, serve } from '../hooks/bridge'
+import type { BridgeDeps } from '../hooks/bridge'
 import { callerOf, post } from '../hooks/helper'
-import { isOwnDesktopTool, limitMs, parseCommand, toAnswer } from '../hooks/routing'
+import type { Reply } from '../hooks/helper'
+import { approvalWaitText, isOwnDesktopTool, limitMs, parseCommand, statusReport, toAnswer } from '../hooks/routing'
 
 declare const setTimeout: (fn: () => void, ms: number) => unknown
 const pause = (ms: number) => new Promise<void>(done => setTimeout(() => done(), ms))
@@ -235,4 +238,158 @@ test('limitMs reads minutes, falls back and caps', () => {
   expect(limitMs(0.5, 5)).toBe(30_000)
   expect(limitMs('12', 5)).toBe(720_000)
   expect(limitMs(1e9, 5)).toBe(86_400_000)
+})
+
+test('the bridge timeout describes the configured approval wait', { options: { approvalMinutes: 0.001 } }, async ($, on) => {
+  world(on)
+
+  const answer = await $.tool.call({ tool: TOOL, code: 'let app = await cua.getApp("TextEdit");' } as never)
+  expect(answer.isError).toBe(true)
+  expect(textOf(answer)).toBe('The person did not answer whether Codex may use TextEdit within 0.1 seconds; nothing was done with it.')
+})
+
+test('statusReport preserves unreachable and error reports', () => {
+  expect(statusReport(true, { status: 'unreachable', message: 'no socket' })).toBe(
+    'Route: Codex computer use (on)\nHelper: not reachable (no socket)',
+  )
+  expect(statusReport(false, { status: 'error', message: 'bad reply' })).toBe(
+    'Route: Claude\'s own computer use (off)\nHelper: not reachable (bad reply)',
+  )
+})
+
+test('statusReport preserves running helper, callers and auto-approve text', () => {
+  const reply = {
+    status: 'ok' as const, isError: false, content: [], version: '0.4.1',
+    callers: [{ caller: 'sess-1', apps: ['TextEdit', 'Calculator'] }, { caller: 'sess-2', apps: [] }],
+    settings: { autoApprove: true, always: [] },
+  }
+  expect(statusReport(true, reply)).toBe([
+    'Route: Codex computer use (on)',
+    'Helper: 0.4.1 running, 2 Codex session(s)',
+    'Auto-approve: on (no questions)',
+    '  sess-1: TextEdit, Calculator',
+    '  sess-2: no apps',
+  ].join('\n'))
+  expect(statusReport(false, { status: 'ok', isError: false, content: [] })).toBe([
+    'Route: Claude\'s own computer use (off)',
+    'Helper: ? running, 0 Codex session(s)',
+    'Auto-approve: off (asks first)',
+  ].join('\n'))
+})
+
+test('approval wait text uses the configured minutes, singular and fractional durations', () => {
+  expect(approvalWaitText(limitMs(5, 5))).toBe(' within 5 minutes')
+  expect(approvalWaitText(limitMs(1, 5))).toBe(' within 1 minute')
+  expect(approvalWaitText(limitMs(1.25, 5))).toBe(' within 1.3 minutes')
+  expect(approvalWaitText(limitMs(0.5, 5))).toBe(' within 30 seconds')
+  expect(approvalWaitText(1000)).toBe(' within 1 second')
+})
+
+const signal = { aborted: false } as AbortSignal
+const bridgeInput = { tool_use_id: 'tool-1', code: 'let app = await cua.getApp("TextEdit");', title: 'Open editor', timeout_ms: 1000 }
+const approval: Reply = { status: 'needs_approval', app: { bundleId: 'com.apple.TextEdit', displayName: 'TextEdit', canAlways: true } }
+const ok: Reply = { status: 'ok', isError: false, content: [{ type: 'text', text: 'done' }] }
+
+const bridgeDeps = (overrides: Partial<BridgeDeps>): BridgeDeps => ({
+  enabled: async () => true,
+  sessionId: async () => 'sess-1',
+  helper: async () => { throw new Error('unexpected helper call') },
+  ask: async () => { throw new Error('unexpected approval question') },
+  limitMs: limitMs(undefined, 5),
+  ...overrides,
+})
+
+test('serve refuses disabled calls before reading the session or reaching the helper', async () => {
+  const answer = await serve(bridgeDeps({
+    enabled: async () => false,
+    sessionId: async () => { throw new Error('unexpected session read') },
+  }), bridgeInput, signal)
+  expect(answer).toEqual({
+    result: 'codex-computer-use is off (/codex-cu off): use the default desktop route, or ask the person to type /codex-cu on.',
+    isError: true,
+  })
+})
+
+test('serve resets the caller and preserves the helper message and reset fallback', async () => {
+  const posted: { route: string; body: unknown }[] = []
+  const deps = bridgeDeps({ helper: async (route, body) => (posted.push({ route, body }), { ...ok, message: 'cleared' }) })
+  expect(await serve(deps, { ...bridgeInput, reset: true, agentId: 'agent a' }, signal)).toEqual({ result: 'cleared' })
+  expect(posted).toEqual([{ route: '/reset', body: { caller: 'sess-1/agent_a' } }])
+  expect(await serve(bridgeDeps({ helper: async () => ok }), { ...bridgeInput, reset: true }, signal)).toEqual({ result: 'reset' })
+})
+
+test('serve asks for approval, sends the choice and retries the same call', async () => {
+  for (const choice of ['session', 'always'] as const) {
+    const posted: { route: string; body: unknown }[] = []
+    let calls = 0
+    const deps = bridgeDeps({
+      helper: async (route, body) => {
+        posted.push({ route, body })
+        return route === '/call' && calls++ === 0 ? approval : ok
+      },
+      ask: async (question, receivedSignal) => {
+        expect(question).toEqual({ id: 'tool-1', bundleId: 'com.apple.TextEdit', displayName: 'TextEdit', canAlways: true, who: 'subagent agent-a' })
+        expect(receivedSignal).toBe(signal)
+        return choice
+      },
+    })
+    expect(await serve(deps, { ...bridgeInput, agentId: 'agent-a' }, signal)).toEqual({ result: 'done' })
+    const body = { caller: 'sess-1/agent-a', code: bridgeInput.code, title: bridgeInput.title, timeout_ms: bridgeInput.timeout_ms }
+    expect(posted).toEqual([
+      { route: '/call', body },
+      { route: '/approve', body: { caller: 'sess-1/agent-a', bundleId: 'com.apple.TextEdit', choice } },
+      { route: '/call', body },
+    ])
+  }
+})
+
+test('serve records denial without retrying the code', async () => {
+  const posted: { route: string; body: unknown }[] = []
+  const deps = bridgeDeps({
+    helper: async (route, body) => (posted.push({ route, body }), approval),
+    ask: async () => 'deny',
+  })
+  expect(await serve(deps, bridgeInput, signal)).toEqual({
+    result: 'The person did not allow Codex computer use to use TextEdit in this session. Do not use TextEdit through any other route; tell the person.',
+    isError: true,
+  })
+  expect(posted.map(item => item.route)).toEqual(['/call', '/approve'])
+  expect(posted[1]?.body).toEqual({ caller: 'sess-1', bundleId: 'com.apple.TextEdit', choice: 'deny' })
+})
+
+test('serve stops on an aborted question without approving or retrying', async () => {
+  const routes: string[] = []
+  const deps = bridgeDeps({ helper: async route => (routes.push(route), approval), ask: async () => 'aborted' })
+  expect(await serve(deps, bridgeInput, signal)).toEqual({
+    result: 'The person did not answer whether Codex may use TextEdit; nothing was done with it.', isError: true,
+  })
+  expect(routes).toEqual(['/call'])
+})
+
+test('serve timeout uses the configured limit and stops without approving or retrying', async () => {
+  const routes: string[] = []
+  const deps = bridgeDeps({
+    helper: async route => (routes.push(route), approval),
+    ask: async question => {
+      expect(question.who).toBe('main session')
+      return 'timeout'
+    },
+    limitMs: limitMs('2.5', 5),
+  })
+  expect(await serve(deps, bridgeInput, signal)).toEqual({
+    result: 'The person did not answer whether Codex may use TextEdit within 2.5 minutes; nothing was done with it.', isError: true,
+  })
+  expect(routes).toEqual(['/call'])
+})
+
+test('serve stops after the existing maximum approval rounds', async () => {
+  const routes: string[] = []
+  let questions = 0
+  const deps = bridgeDeps({
+    helper: async route => (routes.push(route), approval),
+    ask: async () => { questions++; return 'session' },
+  })
+  expect(await serve(deps, bridgeInput, signal)).toEqual({ result: 'codex-cu: too many approval rounds for one call.', isError: true })
+  expect(questions).toBe(MAX_APPROVALS + 1)
+  expect(routes).toEqual(Array.from({ length: MAX_APPROVALS + 1 }, () => ['/call', '/approve']).flat())
 })
