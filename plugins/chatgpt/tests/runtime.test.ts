@@ -1,10 +1,8 @@
 import { expect, test } from 'claude-code/testing'
-import { readAttachments } from '../hooks/attachments'
-import { performRequest, runNow } from '../hooks/execution'
-import { createJobs } from '../hooks/jobs'
+import { readAttachments } from '../hooks/input'
+import { performRequest, runNow, createJobs, taskQueue } from '../hooks/runner'
 import type { Outcome, OutputDeps, ProcessRunner, Request, RequestRunner } from '../hooks/model'
 import { saveAnswer, saveImages } from '../hooks/output'
-import { taskQueue } from '../hooks/queue'
 import { browserOf } from '../hooks/terminal-browser'
 
 function deferred<T>() {

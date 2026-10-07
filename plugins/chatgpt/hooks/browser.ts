@@ -1,6 +1,16 @@
 import type { Browser, PageState, TabHolder } from './model'
-import { CHATGPT_URL, LOAD_MS, ORIGIN } from './constants'
 import { COMPOSER, LANDED, LOGIN, leaveScript, stateScript } from './scripts'
+
+export const CHATGPT_URL = 'https://chatgpt.com/'
+export const ORIGIN = 'https://chatgpt.com'
+
+// How long a page may take to load and show the composer.
+export const LOAD_MS = 20_000
+
+export const TERMINAL_BROWSER = 'terminal-browser'
+
+// A tab new-tab just opened takes a moment to accept automation.
+export const STARTING = /no CDP target yet/
 
 // Every page script returns JSON.stringify(...): terminal-browser's eval
 // prints a string result as a JSON literal.

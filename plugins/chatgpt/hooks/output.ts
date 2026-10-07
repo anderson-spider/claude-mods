@@ -1,7 +1,9 @@
-import { PREVIEW_SIDE } from './constants'
-import { extensionOf, fileName, variantPath } from './files'
+import { extensionOf, fileName, variantPath } from './input'
 import type { AskResult, ImageResult, Outcome, OutputDeps, Preview, ProcessRunner, Request } from './model'
 import { askOutcome, imageFailure, imageSummary, jpegPreview } from './presentation'
+
+// The longest side of the preview the image tool hands back with the file.
+const PREVIEW_SIDE = 768
 
 async function outDir(tmpDir: OutputDeps['tmpDir']): Promise<string> {
   return `${((await tmpDir()) ?? '/tmp').replace(/\/$/, '')}/chatgpt`

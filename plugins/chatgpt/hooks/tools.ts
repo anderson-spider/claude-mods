@@ -1,6 +1,6 @@
 import type { Job, Outcome, Request } from './model'
 import { answerOf } from './presentation'
-import { requestOf } from './requests'
+import { requestOf } from './input'
 
 export async function serve(kind: 'ask' | 'image', e: Record<string, unknown>, handlers: { startJob: (request: Request) => Job; runNow: (request: Request) => Promise<Outcome> }) {
   const request = requestOf(kind, e)
