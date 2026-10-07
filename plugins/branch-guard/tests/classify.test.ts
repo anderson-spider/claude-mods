@@ -88,3 +88,28 @@ test('classify keeps push refspecs and tags as today', () => {
   expect(classify('git push -u origin feature')).toEqual([{ ...base, remote: 'origin', refspecs: ['feature'] }])
   expect(classify('git -C ../other push')).toEqual([{ ...base, dir: '../other', refspecs: [] }])
 })
+
+test('classify treats a heredoc body as data and the rest of the line and what follows it as commands', () => {
+  expect(kinds('cat <<EOF\ngit commit -m x\nEOF')).toEqual([])
+  expect(kinds('cat <<EOF > f\nhello\nEOF\ngit commit -m x')).toEqual(['commit'])
+  expect(kinds('cat <<-EOF\n\tgit commit -m x\n\tEOF')).toEqual([])
+  expect(kinds('cat <<-EOF\n\tgit commit -m x\n\tEOF\ngit push origin main')).toEqual(['publish'])
+  expect(kinds("cat <<'EOF'\ngit commit -m x\nEOF")).toEqual([])
+  expect(kinds('cat <<"EOF"\ngit push origin main\nEOF')).toEqual([])
+  expect(kinds('cat <<EOF\ngit commit -m x')).toEqual([])
+  expect(kinds('cat <<< "hi"; git commit -m x')).toEqual(['commit'])
+  expect(kinds('git commit -F - <<EOF\nmessage\nEOF')).toEqual(['commit'])
+  expect(kinds('echo "<<EOF"; git commit -m x')).toEqual(['commit'])
+})
+
+test('classify sees through case arms and still reads subshells', () => {
+  expect(kinds('case $x in a) git commit -m x ;; esac')).toEqual(['commit'])
+  expect(kinds('case $x in (a) git commit -m x ;; esac')).toEqual(['commit'])
+  expect(classify('case $x in a|b) git push origin main ;; esac')).toMatchObject([
+    { kind: 'publish', remote: 'origin', refspecs: ['main'] },
+  ])
+  expect(kinds('case $x in a) ls ;; b) git commit -m x ;& c) git push origin main ;;& esac')).toEqual(['commit', 'publish'])
+  expect(kinds('case $x in git) ls ;; esac')).toEqual([])
+  expect(classify('case $x in cd) ls ;; b) git commit -m x ;; esac')[0]).not.toHaveProperty('isAdrift')
+  expect(kinds('(git commit -m x)')).toEqual(['commit'])
+})

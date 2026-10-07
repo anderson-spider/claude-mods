@@ -24,6 +24,62 @@ const ASSIGNMENT = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/s
 
 export const IN_HOME = /^~(\/|$)/
 
+// The word that closes a heredoc, unquoted, and where it ends; the shell reads it up to the next blank or operator.
+const delimiterAt = (command: string, from: number) => {
+  let word = ''
+  let at = from
+  let quote: string | undefined
+
+  for (; at < command.length; at += 1) {
+    const char = command[at] ?? ''
+
+    if (quote !== undefined) {
+      if (char === quote) {
+        quote = undefined
+      } else {
+        word += char
+      }
+    } else if (char === "'" || char === '"') {
+      quote = char
+    } else if (char === '\\') {
+      word += command[at + 1] ?? ''
+      at += 1
+    } else if (/[\s;|&()<>]/.test(char)) {
+      break
+    } else {
+      word += char
+    }
+  }
+
+  return { word, end: at }
+}
+
+type Heredoc = { word: string; isTabbed: boolean }
+
+// Where the line after the bodies starts: each body runs to its closing delimiter, or to the end when it never comes.
+const afterBodies = (command: string, from: number, pending: readonly Heredoc[]) => {
+  let at = from
+
+  for (const { word, isTabbed } of pending) {
+    for (;;) {
+      if (at >= command.length) {
+        return command.length
+      }
+
+      const newline = command.indexOf('\n', at)
+      const line = command.slice(at, newline === -1 ? command.length : newline)
+
+      at = newline === -1 ? command.length : newline + 1
+
+      if ((isTabbed ? line.replace(/^\t+/, '') : line) === word) {
+        break
+      }
+    }
+  }
+
+  return at
+}
+
 type Command = { words: Word[]; /** The separator that came before: `;`, `&&`, `|`, `(`… */ before: string }
 
 // The simple commands on the line, empty ones included, each with the separator before it.
@@ -37,6 +93,28 @@ export const parse = (command: string): Command[] => {
   // A bare operator (`>`) is waiting for its target word.
   let isTargetNext = false
   let quote: string | undefined
+  // Heredocs opened on this line, whose bodies start after its newline.
+  let pending: Heredoc[] = []
+  // `case`: how many are open, whether its `in` is still to come, and the arm pattern being read (from `patternFrom` on).
+  let cases = 0
+  let isAwaitingIn = false
+  let isPattern = false
+  let patternFrom = 0
+
+  const endPattern = () => {
+    commands.length = patternFrom + 1
+    const first = commands[patternFrom]
+
+    if (first !== undefined) {
+      first.words = []
+    }
+
+    isPattern = false
+  }
+  const startPattern = () => {
+    isPattern = true
+    patternFrom = commands.length - 1
+  }
 
   const endWord = () => {
     const redirection = isOpen && !isQuoted ? REDIRECTION.exec(text) : null
@@ -46,7 +124,28 @@ export const parse = (command: string): Command[] => {
     } else if (redirection !== null) {
       isTargetNext = redirection[1] === ''
     } else if (isOpen) {
-      commands.at(-1)?.words.push({ text, isUnknown, isHome })
+      const words = commands.at(-1)?.words ?? []
+      const isFirst = words.every(word => OPENERS.has(word.text))
+
+      if (!isQuoted && isFirst && text === 'esac' && cases > 0) {
+        cases -= 1
+        isAwaitingIn = false
+
+        if (isPattern) {
+          endPattern()
+        }
+      } else {
+        words.push({ text, isUnknown, isHome })
+
+        if (!isQuoted && isFirst && text === 'case') {
+          cases += 1
+          isAwaitingIn = true
+        } else if (!isQuoted && isAwaitingIn && text === 'in' && words.length >= 3) {
+          isAwaitingIn = false
+          commands.push({ words: [], before: ';' })
+          startPattern()
+        }
+      }
     }
 
     text = ''
@@ -86,8 +185,39 @@ export const parse = (command: string): Command[] => {
       at += 1
     } else if (char === ' ' || char === '\t') {
       endWord()
+    } else if (char === '<' && following === '<') {
+      endWord()
+
+      if (command[at + 2] === '<') {
+        // A here-string: the next word is data.
+        isTargetNext = true
+        at += 2
+      } else {
+        const isTabbed = command[at + 2] === '-'
+        const start = at + (isTabbed ? 3 : 2)
+        const { word, end } = delimiterAt(command, start + (/^[ \t]*/.exec(command.slice(start))?.[0].length ?? 0))
+
+        pending.push({ word, isTabbed })
+        at = end - 1
+      }
+    } else if (char === ')' && isPattern) {
+      endWord()
+      isTargetNext = false
+      endPattern()
+    } else if (char === ';' && cases > 0 && !isPattern && (following === ';' || following === '&')) {
+      // `;;`, `;&` and `;;&` end an arm; the next pattern follows.
+      const length = following === ';' && command[at + 2] === '&' ? 2 : 1
+
+      endCommand(';')
+      startPattern()
+      at += length
     } else if (BREAKS.has(char)) {
       endCommand(char)
+
+      if (char === '\n' && pending.length > 0) {
+        at = afterBodies(command, at + 1, pending) - 1
+        pending = []
+      }
     } else if (char === '|' || (char === '&' && !text.endsWith('>') && following !== '>')) {
       const isDouble = following === '|' || following === '&'
       endCommand(isDouble ? `${char}${following}` : char)
