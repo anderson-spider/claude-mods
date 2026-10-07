@@ -87,14 +87,14 @@ export function createBook(deps: Deps) {
       job.status = 'cancelled'
       job.endedAt = deps.now()
       try {
-        await deps.herdr.sendKeys(job.agent, ['ctrl+c'])
+        await deps.herdr.sendKeys(job.agent, ['esc'])
       } catch (error) {
-        return `Could not send ctrl+c to ${job.agent} (pane ${job.pane}): ${error instanceof Error ? error.message : String(error)}`
+        return `Could not send Esc to ${job.agent} (pane ${job.pane}): ${error instanceof Error ? error.message : String(error)}`
       } finally {
         resolve.get(id)?.(job)
         resolve.delete(id)
       }
-      return `Sent ctrl+c to ${job.agent} (pane ${job.pane}) and marked it cancelled; ${job.agent === agentName(job.id) ? 'the pane stays open' : 'the loop closes its panes after the agents stop'}.`
+      return `Sent Esc to ${job.agent} (pane ${job.pane}) and marked it cancelled; ${job.agent === agentName(job.id) ? 'the pane stays open' : 'the loop closes its panes after the agents stop'}.`
     },
 
     jobs: (): readonly Job[] => jobs,

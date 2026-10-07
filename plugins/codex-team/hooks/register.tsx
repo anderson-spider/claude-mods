@@ -145,7 +145,7 @@ export const register: Register = on => {
       name: 'jobs',
       description:
         'Lists the Codex jobs and loops of this session (status, pane, report path), reads one by id, or cancels one with action: "cancel". ' +
-        'A cancel sends ctrl+c to its active Codex. Standalone panes stay open; a cancelled loop starts no further rounds and closes its panes once the agents stop.',
+        'A cancel sends Esc to its active Codex. Standalone panes stay open; a cancelled loop starts no further rounds and closes its panes once the agents stop.',
       inputSchema: {
         type: 'object',
         properties: {

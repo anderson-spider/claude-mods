@@ -10,7 +10,7 @@ export async function waitForStop(herdr: Pick<Herdr, 'wait'>, session: AgentSess
       if (state === 'idle' || state === 'done') session.active = false
     } catch (error) {
       if (error instanceof HerdrError && ['agent_not_found', 'pane_not_found'].includes(error.code)) session.active = false
-      // A timeout or transport failure proves nothing; another cancel can retry ctrl+c meanwhile.
+      // A timeout or transport failure proves nothing; another cancel can retry Esc meanwhile.
     }
   }
 }
