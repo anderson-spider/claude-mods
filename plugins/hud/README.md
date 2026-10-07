@@ -38,9 +38,9 @@ next:
   0: dismiss
 ```
 
-- Press `1`, `2` or `3` (from an empty prompt box, or click) to pick a suggestion. A picked one shows its place in the order, `[1]`, `[2]`; press it again to drop it. The `4` button (`write N to prompt`) appears once something is picked and writes the picks to the prompt box as a draft: one pick as it is, several as `Do these in order, one after the other:` followed by `1. …`, `2. …` in the order you picked them. Edit the draft and press Enter yourself; the mod never sends a prompt. `0` dismisses.
+- Press `1`, `2` or `3` (from an empty prompt box, or click) to write that suggestion directly to the prompt box as a draft and hide the offer. Edit the draft and press Enter yourself; the mod never sends a prompt. If the fill fails, the offer stays hidden and a toast reports the failure. `0` dismisses.
 - The first suggestion is also the prompt box's dim ghost text, so Tab takes it.
-- Inside a numbered draft a `/skill args` suggestion is plain text for the model; it runs as a command only when it is the single pick.
+- A `/skill args` suggestion is filled as it is, so it runs as a command when you send the draft.
 - The block goes away while Claude works, when a new turn starts and during a survey, and draws on the terminal only.
 - Layout, top to bottom: what other mods draw above the prompt (the order changed: they used to sit below the usage line), the suggestions, a blank line, the info line, the usage line, then the prompt. The usage line stays next to the prompt however the block comes and goes.
 - The info line (terminal only) reads `Sonnet 5.5 | high | 72 tok/s | folder | branch · 1 file +70 -4`: the model and effort of the last request, its output speed, the session's folder, its git branch (green when clean, red with a `*` when the tree has changes) and the files changed against `HEAD` with the lines added and removed (Unity YAML assets left out). On a narrow terminal the changes, speed, effort and folder go first, in that order. The git figures refresh every 10 seconds.
@@ -59,7 +59,7 @@ HUD is built on the work of others, adapted or used as the idea:
 
 - **Token Weather**, by Anthropic ([claude-code-playground](https://github.com/anthropics/claude-code-playground), Apache-2.0): the weather icons, the context tokens and the turns chart.
 - **Token Weather Usage** 3.10.7, by Eric Cologni ([augiefra/claude-mods](https://github.com/augiefra/claude-mods/tree/main/plugins/token-weather-usage), Apache-2.0): the base of this plugin, which was named `token-weather-usage` until 1.0.0. The changes from it are listed in the [NOTICE](NOTICE).
-- **next-steps** 1.0.0, by Thariq Shihipar (claude-community marketplace, MIT): the suggested next prompts (the fork, the text cleaning, the skill list and the buttons), changed here to pick several in an order.
+- **next-steps** 1.0.0, by Thariq Shihipar (claude-community marketplace, MIT): the suggested next prompts (the fork, the text cleaning, the skill list and the buttons), with each suggestion written directly to the prompt box as a draft.
 - **usage-meter**, by HolyGrail ([HolyGrail/claude-mods](https://github.com/HolyGrail/claude-mods/tree/main/plugins/usage-meter)): the idea of the limit gauges, written again without copying its code.
 - **prompt-cache-control**, by Daniel San ([davila7/claude-code-templates](https://github.com/davila7/claude-code-templates), MIT): the idea of the cache block, written again without copying its code.
 

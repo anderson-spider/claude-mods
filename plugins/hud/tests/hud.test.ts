@@ -1021,12 +1021,17 @@ test("suggestions: the desktop draws no block, only the line", async ($, on) => 
   expect(texts).toContain("107k");
 });
 
-// ---------- Next steps: picking several into one draft ----------
+// ---------- Next steps: filling a suggestion as a draft ----------
 
 // An offer with prompt.fill answering as told; the filled texts and the toasts are recorded.
-async function picking($: any, on: any, fill: "filled" | "refused" | "rejects" = "filled", items: unknown[] = ITEMS) {
+async function filling($: any, on: any, fill: "filled" | "refused" | "rejects" = "filled", items: unknown[] = ITEMS) {
   const filled: string[] = [];
   const toasts: string[] = [];
+  const submitted: string[] = [];
+  on("prompt.submit", (_$: any, e: any) => {
+    submitted.push(e.text);
+    return { turnId: "unexpected" };
+  });
   on("prompt.fill", (_$: any, e: any) => {
     if (fill === "rejects") throw new Error("boom");
     filled.push(e.text);
@@ -1041,7 +1046,7 @@ async function picking($: any, on: any, fill: "filled" | "refused" | "rejects" =
   suggesting(on, items);
   await $.session.start({ source: "startup", cwd: "/tmp" } as any);
   await turnDone($);
-  return { filled, toasts };
+  return { filled, toasts, submitted };
 }
 
 async function press($: any, ...keys: string[]) {
@@ -1049,62 +1054,66 @@ async function press($: any, ...keys: string[]) {
   return labels((await band($, "terminal")).ui);
 }
 
-test("picking: marks follow the order of choice, and write shows how many", async ($, on) => {
-  await picking($, on);
-  expect(await press($, "pick-1", "pick-3")).toEqual(["[1] Run the tests", "Commit", "[2] Open the PR", "write 2 to prompt", "dismiss"]);
-  expect(await press($, "pick-3")).toEqual(["[1] Run the tests", "Commit", "Open the PR", "write 1 to prompt", "dismiss"]);
-  expect(await press($, "pick-1")).toEqual(["Run the tests", "Commit", "Open the PR", "dismiss"]);
+for (const [key, prompt] of [
+  ["fill-1", "run the tests you just wrote"],
+  ["fill-2", "commit the change"],
+  ["fill-3", "open a pull request"],
+]) {
+  test(`filling: ${key} fills its prompt directly without submitting`, async ($, on) => {
+    const { filled, toasts, submitted } = await filling($, on);
+    await press($, key);
+    expect(filled).toEqual([prompt]);
+    expect(toasts).toEqual([]);
+    expect(submitted).toEqual([]);
+    expect((await band($, "terminal")).texts).not.toContain("next:");
+  });
+}
+
+test("filling: a new offer shows the same numbered labels", async ($, on) => {
+  await filling($, on);
+  await press($, "fill-1");
+  await turnDone($, { turnId: "t2" });
+  const { ui } = await band($, "terminal");
+  expect(await labels(ui)).toEqual(["Run the tests", "Commit", "Open the PR", "dismiss"]);
+  expect(((await ui.findAll({ type: "Button" })) as any[]).map((button) => button.props.hotkey)).toEqual(["1", "2", "3", "0"]);
 });
 
-test("picking: choosing 3 before 1 keeps that order in the draft", async ($, on) => {
-  const { filled } = await picking($, on);
-  expect(await press($, "pick-3", "pick-1")).toEqual(["[2] Run the tests", "Commit", "[1] Open the PR", "write 2 to prompt", "dismiss"]);
-  await press($, "write");
-  expect(filled).toEqual(["Do these in order, one after the other:\n1. open a pull request\n2. run the tests you just wrote"]);
-});
-
-test("picking: one pick fills the prompt as it is", async ($, on) => {
-  const { filled } = await picking($, on);
-  await press($, "pick-2", "write");
-  expect(filled).toEqual(["commit the change"]);
-});
-
-test("picking: writing hides the block", async ($, on) => {
-  await picking($, on);
-  await press($, "pick-1", "write");
+test("filling: a fill that is not accepted hides the block and shows a toast", async ($, on) => {
+  const { filled, toasts, submitted } = await filling($, on, "refused");
+  await press($, "fill-1");
+  expect(filled).toEqual(["run the tests you just wrote"]);
+  expect(toasts).toEqual(["could not fill the prompt box"]);
+  expect(submitted).toEqual([]);
   expect((await band($, "terminal")).texts).not.toContain("next:");
 });
 
-test("picking: a new offer starts with no picks", async ($, on) => {
-  await picking($, on);
-  await press($, "pick-1");
-  await turnDone($, { turnId: "t2" });
-  expect(await labels((await band($, "terminal")).ui)).toEqual(["Run the tests", "Commit", "Open the PR", "dismiss"]);
-});
-
-test("picking: a fill that is not accepted shows a toast", async ($, on) => {
-  const { toasts } = await picking($, on, "refused");
-  await press($, "pick-1", "write");
-  expect(toasts).toEqual(["could not fill the prompt box"]);
-});
-
-test("picking: a fill that rejects shows a toast", async ($, on) => {
-  const { toasts } = await picking($, on, "rejects");
-  await press($, "pick-1", "write");
+test("filling: a fill that rejects hides the block and shows a toast", async ($, on) => {
+  const { toasts, submitted } = await filling($, on, "rejects");
+  await press($, "fill-1");
   expect(toasts.length).toBe(1);
   expect(toasts[0]).toContain("could not fill:");
+  expect(submitted).toEqual([]);
+  expect((await band($, "terminal")).texts).not.toContain("next:");
 });
 
-test("picking: a slash suggestion alone is filled as it is, inside a combination it is plain text", async ($, on) => {
-  const { filled } = await picking($, on, "filled", [
+test("filling: a slash suggestion is filled as it is", async ($, on) => {
+  const { filled, submitted } = await filling($, on, "filled", [
     { label: "Review", prompt: "/review-pr 12" },
     { label: "Commit", prompt: "commit the change" },
   ]);
-  await press($, "pick-1", "write");
-  expect(filled[0]).toBe("/review-pr 12");
-  await turnDone($, { turnId: "t2" });
-  await press($, "pick-1", "pick-2", "write");
-  expect(filled[1]).toBe("Do these in order, one after the other:\n1. /review-pr 12\n2. commit the change");
+  await press($, "fill-1");
+  expect(filled).toEqual(["/review-pr 12"]);
+  expect(submitted).toEqual([]);
+});
+
+test("filling: model text is cleaned before it reaches the label or prompt", async ($, on) => {
+  const { filled, submitted } = await filling($, on, "filled", [
+    { label: "Run\u001b[31m\u200b tests", prompt: "run\u001b[31m\u200b  the\n tests" },
+  ]);
+  expect(await labels((await band($, "terminal")).ui)).toEqual(["Run tests", "dismiss"]);
+  await press($, "fill-1");
+  expect(filled).toEqual(["run the tests"]);
+  expect(submitted).toEqual([]);
 });
 
 // ---------- Next steps: the deferred review minors ----------
@@ -1131,7 +1140,7 @@ test("suggestions: a fork that is not answered offers nothing", async ($, on) =>
   expect((await band($, "terminal")).texts).not.toContain("next:");
 });
 
-test("picking: a press from an older, longer offer picks nothing", async ($, on) => {
+test("filling: a press from an older, longer offer fills nothing", async ($, on) => {
   const filled: string[] = [];
   on("prompt.fill", (_$: any, e: any) => {
     filled.push(e.text);
@@ -1146,7 +1155,7 @@ test("picking: a press from an older, longer offer picks nothing", async ($, on)
   await turnDone($);
   const old = (await band($, "terminal")).ui;
   await turnDone($, { turnId: "t2" });
-  await old.press({ key: "pick-3" } as any).catch(() => undefined);
+  await old.press({ key: "fill-3" } as any).catch(() => undefined);
   expect(await labels((await band($, "terminal")).ui)).toEqual(["Run the tests", "dismiss"]);
   expect(filled).toEqual([]);
 });
