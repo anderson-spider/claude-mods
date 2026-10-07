@@ -1,6 +1,5 @@
 import type { Browser, Check, TabHolder } from './model'
-import { CHATGPT_URL, ORIGIN } from './constants'
-import { chatUrlError, findTab, parseOutput } from './browser'
+import { CHATGPT_URL, ORIGIN, chatUrlError, findTab, parseOutput } from './browser'
 import { DOCTOR_SCRIPT } from './scripts'
 
 type Doctor = {

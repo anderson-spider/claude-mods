@@ -1,6 +1,5 @@
 import type { AskOptions, Browser, Image, ImageInput, ImageResult } from './model'
-import { LOAD_MS } from './constants'
-import { parseOutput, prepare } from './browser'
+import { LOAD_MS, parseOutput, prepare } from './browser'
 import { compose, readAnswer, stopped, unfinished, watch } from './conversation'
 import { GENERATED, imageScript, sendScript } from './scripts'
 

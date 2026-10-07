@@ -1,5 +1,4 @@
-import { listTabs, openedTab, splitTabId } from './browser'
-import { STARTING, TERMINAL_BROWSER } from './constants'
+import { listTabs, openedTab, splitTabId, STARTING, TERMINAL_BROWSER } from './browser'
 import type { Browser, ProcessRunner } from './model'
 
 async function terminalBrowser(run: ProcessRunner, args: string[], timeoutMs = 120_000): Promise<string> {
