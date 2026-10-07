@@ -1,28 +1,15 @@
 import { expect, test } from 'claude-code/testing'
 
-import {
-  ask,
-  extensionOf,
-  fileName,
-  generateImage,
-  isChatUrl,
-  parseOutput,
-  sendScript,
-  diagnose,
-  inputFor,
-  isHardBlocker,
-  jobsReport,
-  limitMs,
-  listTabs,
-  mimeOf,
-  openedTab,
-  report,
-  splitTabId,
-  summary,
-  taskQueue,
-  typeOf,
-} from '../hooks/chatgpt'
-import type { Browser } from '../hooks/chatgpt'
+import { ask } from '../hooks/ask'
+import { isChatUrl, listTabs, openedTab, parseOutput, splitTabId } from '../hooks/browser'
+import { isHardBlocker } from '../hooks/conversation'
+import { diagnose, report } from '../hooks/doctor'
+import { extensionOf, fileName, limitMs, mimeOf, typeOf } from '../hooks/files'
+import { generateImage } from '../hooks/image'
+import { jobsReport, summary } from '../hooks/presentation'
+import { taskQueue } from '../hooks/queue'
+import { inputFor, sendScript } from '../hooks/scripts'
+import type { Browser } from '../hooks/model'
 
 // terminal-browser's eval prints a string result as a JSON literal.
 const printed = (value: unknown) => `${JSON.stringify(JSON.stringify(value))}\n`
