@@ -17,7 +17,7 @@ claude plugin test plugins/branch-guard        # runs tests/branch-guard.test.ts
 claude plugin test plugins/chatgpt             # same, for chatgpt
 claude plugin test plugins/codex-computer-use  # same, for codex-computer-use (the plugin side)
 /Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node --test plugins/codex-computer-use/helper/test/helper.test.mjs   # its helper
-claude plugin test plugins/codex-team          # same, for codex-team
+claude plugin test plugins/codex-team          # runs tests/*.test.ts; tests/helpers.ts holds shared fakes
 claude plugin test plugins/tailscale           # same, for tailscale
 claude plugin test plugins/hud # same, for hud
 claude --plugin-dir plugins/branch-guard       # loads the plugin with automatic reload
@@ -97,6 +97,7 @@ Registers the `execute`, `review`, `loop` and `jobs` tools (`mcp__codex-team__<n
 - `hooks/model.ts`: shared job and loop types, the `Herdr`, `PaneLayout`, `Files`, `Deps`, `Run` and notification contracts, and `HerdrError`. `Book` derives its shape from `createBook`; consumers take only the methods they need.
 - `hooks/names.ts`: `agentName`, `loopAgentName`, `nextFreeId`, `reportPath` and `phaseReportPath` keep agent names, the shared id space and report paths together. A live `ct-<id>-dev` or `ct-<id>-qa` reserves that loop id after a reload.
 - `hooks/prompts.ts`: `buildPrompt`, `REPORT_RULE` and `PROMPT` hold the agent instructions; `codexArgs` picks the sandbox (`workspace-write` for execute, `read-only` for review, `-a on-request`). `qaFocus` adds the task as acceptance criteria and the verdict rule; `fixTask` carries the original task and previous QA report path.
+- `hooks/schemas.ts`: the execute, review, loop and jobs tool definitions, including their descriptions and input schemas. `register.tsx` registers these definitions with literal `$.tool.register(...)` calls.
 - `hooks/requests.ts`: `requestOf` validates and trims job inputs; `loopOf` reuses the execute rules and reads `maxRounds` (integer at least 1, default 3).
 - `hooks/job.ts`: `runJob` runs one phase against injected Herdr, file, clock and notification functions and never rejects (an error becomes `failed`). With an `AgentSession`, it opens and starts the role only once; later phases reuse its pane and prompt the same agent. A startup error marks the session active until a wait confirms it has stopped, including a cancel before its first prompt. Every new pane is renamed, best effort. The shared `PaneLayout` opens new panes; its helpers handle timeout chunks, blocked episodes, report summaries and error text; status updates preserve cancellation.
 - `hooks/pane-layout.ts`: `createPaneLayout` owns the last created pane and serializes pane openings and loop closes. The first pane opens `down` of the lead; later panes open `right` of the last created pane. A `pane_not_found` clears the target and retries once `down` of the lead. Closing the last pane clears it; closing an older pane preserves the target. The rest of each job runs outside this queue.
@@ -120,6 +121,8 @@ Details that only make sense when reading both sides:
 - `agent_prompt_stalled` fails the job and never sends the prompt again; a cancelled standalone job keeps its pane open.
 - `CHROME_ROWS` in `register.tsx` must follow the band's fixed rows (border, title and the `and N more` line).
 - The validator lists the existing execute, review and jobs hooks as `gating hook without .catch`; the loop handler ends in `.catch(failure)` and its registration also has `.catch`, so it is listed as `gating hook with .catch`.
+
+Tests live in `tests/*.test.ts`, grouped by the modules they exercise; `tests/helpers.ts` holds shared fakes and helpers.
 
 ## tailscale
 
