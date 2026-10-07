@@ -38,7 +38,7 @@ The suggested next prompts (the fork that guesses them after a turn, the text cl
 list given to the fork and the 1/2/3/0 buttons) are adapted from the next-steps plugin 1.0.0
 (claude-community marketplace) by Thariq Shihipar, licensed under the MIT License. Changes: plain
 JavaScript instead of TypeScript/JSX, drawn by the same hook as the usage line with the line last,
-picking several suggestions in an order and writing them as one numbered draft, and the two settings
+writing a suggestion directly to the prompt box as a draft, and the two settings
 (minAnswerChars, suggestSkills) moved into this plugin.
 
 MIT License

@@ -15,7 +15,7 @@
 // Pure code lives beside it: constants.mjs (labels, palette, icons), formatting.mjs (numbers and
 // time), context.mjs (readings and charts), limits.mjs (windows), cache.mjs (requests and TTL),
 // suggestions.mjs (prompts and their block), info.mjs (info state and line), drawing.mjs (usage line).
-// Injected flows: suggestion-flow.mjs (fork and picks), history.mjs (stored readings),
+// Injected flows: suggestion-flow.mjs (fork and draft actions), history.mjs (stored readings),
 // info-refresh.mjs (folder, git and model readings), render.mjs (AbovePrompt composition).
 // Shared mutable groups export stable state objects; resets reuse fresh...() factories.
 
@@ -25,7 +25,7 @@ import { limitData, freshLimits, paceStartOf } from "./limits.mjs";
 import { cacheData, freshCache, isOn, recordRequest, cacheState, cacheText } from "./cache.mjs";
 import { suggestionData, freshSuggestions } from "./suggestions.mjs";
 import { infoData, freshInfo, recordSpeed } from "./info.mjs";
-import { startSuggestions as startSuggestionFlow, togglePick as toggleSuggestionPick, writePicks as writeSuggestionPicks } from "./suggestion-flow.mjs";
+import { startSuggestions as startSuggestionFlow, fillSuggestion as fillSuggestionDraft } from "./suggestion-flow.mjs";
 import { TURNS_PREFIX, restoreTurns as restoreHistory, saveTurns as saveHistory, shareLimits as shareReading, adoptShared as adoptReading } from "./history.mjs";
 import { refreshInfo as refreshInfoReading } from "./info-refresh.mjs";
 import { renderHud } from "./render.mjs";
@@ -165,8 +165,7 @@ export function register(on, options) {
     if (props.hasSurvey) return below;
     const elements = $.ui.resolve(e);
     return renderHud(elements, e, props, below, {
-      pick: (index) => togglePick($, index),
-      write: () => writePicks($),
+      fill: (index) => fillSuggestion($, index),
       dismiss: () => showSuggestions($, freshSuggestions()),
       now: () => $.clock.now(),
       agents: () => hudData.agents,
@@ -192,16 +191,12 @@ function startSuggestions($, e) {
   }, e);
 }
 
-function togglePick($, index) {
-  toggleSuggestionPick((next) => showSuggestions($, next), index);
-}
-
-function writePicks($) {
-  writeSuggestionPicks({
+function fillSuggestion($, index) {
+  fillSuggestionDraft({
     show: (next) => showSuggestions($, next),
     fill: (request) => $.prompt.fill(request),
     toast: (text) => $.ui.toast(text),
-  });
+  }, index);
 }
 
 // ---------- Stored readings: host calls ----------

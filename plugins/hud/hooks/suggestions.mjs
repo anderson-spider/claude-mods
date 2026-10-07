@@ -13,8 +13,7 @@ const SKILLS_DESCRIBED_BUDGET = 6000;
 const SKILLS_NAMED_BUDGET = 3000;
 // Shortest answer that gets suggestions, and whether the fork is told the session's skills (settings).
 export const suggestionData = { minAnswerChars: 80, suggestSkills: true, current: freshSuggestions() };
-// What the block shows: nothing, a wait for the fork, or the offer with the indexes picked so far
-// in the order they were picked.
+// What the block shows: nothing, a wait for the fork, or the offer.
 export function freshSuggestions() {
   return { kind: "hidden" };
 }
@@ -119,33 +118,20 @@ export function parseSuggestions(reply, known) {
   return items;
 }
 
-// The draft for the picked suggestions: one pick as it is; several as a numbered list in the order
-// they were picked. Inside a list a slash prompt is plain text for the model, not a command.
-export function combine(items, picked) {
-  if (picked.length === 0) return "";
-  if (picked.length === 1) return items[picked[0]].prompt;
-  return ["Do these in order, one after the other:", ...picked.map((index, n) => `${n + 1}. ${items[index].prompt}`)].join("\n");
-}
-
 // The block above the usage line: nothing, the wait for the fork, or the offer. Terminal only.
-export function drawSuggestions(elements, { pick, write, dismiss }) {
+export function drawSuggestions(elements, { fill, dismiss }) {
   if (suggestionData.current.kind === "hidden") return null;
   const { Box, Text, Button } = elements;
   const gap = Box({ key: "gap", marginTop: 1, children: [] });
   if (suggestionData.current.kind === "loading") {
     return Box({ key: "next", flexDirection: "column", children: [gap, Text({ key: "wait", dimColor: true, children: "next steps…" })] });
   }
-  const { items, picked } = suggestionData.current;
+  const { items } = suggestionData.current;
   const row = (key, button) => Box({ key: "row-" + key, marginLeft: 2, children: [button] });
   const children = [gap, Text({ key: "title", dimColor: true, children: "next:" })];
   items.forEach((item, i) => {
-    const mark = picked.indexOf(i);
-    const label = mark === -1 ? item.label : `[${mark + 1}] ${item.label}`;
-    children.push(row(i, Button({ key: "pick-" + (i + 1), hotkey: String(i + 1), plain: true, label, onPress: () => pick(i) })));
+    children.push(row(i, Button({ key: "fill-" + (i + 1), hotkey: String(i + 1), plain: true, label: item.label, onPress: () => fill(i) })));
   });
-  if (picked.length > 0) {
-    children.push(row("write", Button({ key: "write", hotkey: "4", plain: true, label: `write ${picked.length} to prompt`, onPress: write })));
-  }
   children.push(row("dismiss", Button({ key: "dismiss", hotkey: "0", plain: true, label: "dismiss", onPress: dismiss })));
   return Box({ key: "next", flexDirection: "column", children });
 }

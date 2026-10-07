@@ -4,13 +4,13 @@ import { drawSuggestions } from "./suggestions.mjs";
 import { drawInfo } from "./info.mjs";
 import { drawLine, isBlank } from "./drawing.mjs";
 
-export async function renderHud(elements, e, props, below, { pick, write, dismiss, now, agents }) {
+export async function renderHud(elements, e, props, below, { fill, dismiss, now, agents }) {
   // Top to bottom: what mods placed after us draw, the suggestions, and the usage line last, so it
   // stays next to the prompt however the block above comes and goes. An empty drawing adds no blank line.
   const parts = [];
   if (!isBlank(below)) parts.push(below);
   const block = e.surface === "terminal" && !props.isWorking
-    ? drawSuggestions(elements, { pick, write, dismiss })
+    ? drawSuggestions(elements, { fill, dismiss })
     : null;
   if (block) parts.push(block);
   const infoLine = e.surface === "terminal" ? drawInfo(elements, props.bodyColumns ?? 80) : null;

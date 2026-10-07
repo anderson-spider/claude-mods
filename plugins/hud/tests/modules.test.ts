@@ -1,6 +1,6 @@
 import { test, expect } from "claude-code/testing";
 import { restoreTurns, saveTurns, shareLimits, adoptShared, TURNS_PREFIX } from "../hooks/history.mjs";
-import { startSuggestions, togglePick, writePicks } from "../hooks/suggestion-flow.mjs";
+import { startSuggestions, fillSuggestion } from "../hooks/suggestion-flow.mjs";
 import { refreshInfo } from "../hooks/info-refresh.mjs";
 import { renderHud } from "../hooks/render.mjs";
 import { contextData, freshContext, HISTORY } from "../hooks/context.mjs";
@@ -104,17 +104,46 @@ test("suggestions: command listing failure still offers slash prompts and sugges
   expect(suggestionData.current.kind).toBe("offer");
 });
 
-test("suggestions: picks keep their order, ignore stale indexes and hide before filling", async () => {
+for (const [index, prompt] of [[0, "Run the tests"], [1, "Review the diff"], [2, "Open the PR"]] as const) {
+  test(`suggestions: fills item ${index + 1} directly and hides before filling`, async () => {
+    reset();
+    show({ kind: "offer", items: [...ITEMS, { label: "PR", prompt: "Open the PR" }] });
+    const calls: any[] = [];
+    fillSuggestion({ show, fill: async (value: any) => { calls.push([suggestionData.current.kind, value]); return { isFilled: true }; }, toast: (text: string) => { calls.push(text); } }, index);
+    await Promise.resolve();
+    expect(calls).toEqual([["hidden", { text: prompt }]]);
+    expect(suggestionData.current).toEqual(freshSuggestions());
+  });
+}
+
+test("suggestions: a missing item or inactive offer does nothing", async () => {
   reset();
-  show({ kind: "offer", items: ITEMS, picked: [] });
-  togglePick(show, 1);
-  togglePick(show, 0);
-  togglePick(show, 2);
-  expect(suggestionData.current.picked).toEqual([1, 0]);
   const calls: any[] = [];
-  writePicks({ show, fill: async (value: any) => { calls.push([suggestionData.current.kind, value]); return { isFilled: false }; }, toast: (text: string) => { calls.push(text); } });
+  const deps = { show: (next: any) => { calls.push(next); show(next); }, fill: async (value: any) => { calls.push(value); return { isFilled: true }; }, toast: (text: string) => { calls.push(text); } };
+  for (const state of [freshSuggestions(), { kind: "loading", turnId: "turn" }, { kind: "offer", items: ITEMS }]) {
+    show(state);
+    for (const index of [-1, 2, 3]) fillSuggestion(deps, index);
+    expect(suggestionData.current).toBe(state);
+  }
+  expect(calls).toEqual([]);
+});
+
+test("suggestions: a refused fill hides the offer and reports the failure", async () => {
+  reset();
+  show({ kind: "offer", items: ITEMS });
+  const calls: any[] = [];
+  fillSuggestion({ show, fill: async (value: any) => { calls.push([suggestionData.current.kind, value]); return { isFilled: false }; }, toast: (text: string) => { calls.push(text); } }, 1);
   await Promise.resolve();
-  expect(calls).toEqual([["hidden", { text: "Do these in order, one after the other:\n1. Review the diff\n2. Run the tests" }], "could not fill the prompt box"]);
+  expect(calls).toEqual([["hidden", { text: "Review the diff" }], "could not fill the prompt box"]);
+});
+
+test("suggestions: a rejected fill hides the offer and reports the error", async () => {
+  reset();
+  show({ kind: "offer", items: ITEMS });
+  const calls: any[] = [];
+  fillSuggestion({ show, fill: async (value: any) => { calls.push([suggestionData.current.kind, value]); throw new Error("boom"); }, toast: (text: string) => { calls.push(text); } }, 0);
+  await Promise.resolve();
+  expect(calls).toEqual([["hidden", { text: "Run the tests" }], "could not fill: Error: boom"]);
 });
 
 test("info refresh: uses sequential git probes with the same exclusions and clears effort on a model switch", async () => {
@@ -148,7 +177,7 @@ test("info refresh: a probe exception preserves partial updates and skips model 
 test("render: reads the clock and live agents only for a usage line", async () => {
   reset();
   const reads: string[] = [];
-  const deps = { pick: () => {}, write: () => {}, dismiss: () => {}, now: async () => { reads.push("clock"); return NOW; }, agents: () => { reads.push("agents"); return [{ id: "a" }]; } };
+  const deps = { fill: () => {}, dismiss: () => {}, now: async () => { reads.push("clock"); return NOW; }, agents: () => { reads.push("agents"); return [{ id: "a" }]; } };
   const below = { type: "Text", children: "other mod" };
   expect(await renderHud(elements, { surface: "terminal" }, {}, below, deps)).toBe(below);
   expect(reads).toEqual([]);
