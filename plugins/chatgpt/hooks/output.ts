@@ -1,6 +1,6 @@
 import { extensionOf, fileName, variantPath } from './files'
 import type { AskResult, ImageResult, Outcome, OutputDeps, Preview, ProcessRunner, Request } from './model'
-import { askOutcome, imageFailure, imageSummary, jpegPreview } from './presentation'
+import { askOutcome, imageFailure, imageSummary } from './presentation'
 
 // The longest side of the preview the image tool hands back with the file.
 const PREVIEW_SIDE = 768
@@ -15,6 +15,10 @@ async function writeImage(run: ProcessRunner, path: string, base64: string): Pro
   await run(['mkdir', '-p', dir])
   const done = await run(['openssl', 'base64', '-d', '-A', '-out', path], { stdin: base64, timeoutMs: 60_000 })
   return done.exitCode === 0 ? undefined : `Could not write ${path}: ${done.stderr.trim()}`
+}
+
+function jpegPreview(base64: string): Preview {
+  return { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: base64 } }
 }
 
 // A small JPEG of the saved image (sips, on macOS), so the model sees it at once.

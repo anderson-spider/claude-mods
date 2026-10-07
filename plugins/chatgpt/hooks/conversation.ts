@@ -1,6 +1,6 @@
 import type { AskInput, Browser, PageState } from './model'
 import { blocked, isChatUrl } from './browser'
-import { chipScript, inputFor, modelScript, parseOutput, READ_SCRIPT, stateScript } from './scripts'
+import { chipScript, inputFor, modelScript, parseOutput, READ_SCRIPT, sendScript, stateScript } from './scripts'
 
 /** A blocker that ends a run at once (a limit, a verification), not just any dialog. */
 export function isHardBlocker(text: string): boolean {
@@ -24,6 +24,12 @@ export async function compose(browser: Pick<Browser, 'js' | 'upload'>, tabId: st
     if (!attached.attached) return `Could not attach ${file.name}: ${attached.reason}.`
   }
   return undefined
+}
+
+// Sends the prompt in the composer; the text to answer when the page would not take it.
+export async function send(browser: Pick<Browser, 'js'>, tabId: string, prompt: string): Promise<{ ok: true } | { ok: false; text: string }> {
+  const sent = parseOutput<{ sent: boolean; reason?: string }>(await browser.js(tabId, sendScript(prompt)))
+  return sent.sent ? { ok: true } : { ok: false, text: `Could not send the prompt: ${sent.reason}.` }
 }
 
 type Answer = { url: string; markdown: string }
