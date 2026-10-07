@@ -916,3 +916,160 @@ test("cache savings: kept in the store, back on a resumed session", SHOW_COST, a
   await $.session.start({ source: "resume", cwd: "/tmp" } as any);
   expect(String(await boltTip((await band($, "desktop")).ui))).toContain(`This thread: ≈ ${en$(2 * savedBy(287_000))} saved by the cache.`);
 });
+
+// ---------- Next steps: the suggestions after a turn ----------
+
+const COMMANDS = [
+  { name: "review-pr", description: "Review a pull request", source: "plugin" },
+  { name: "clear", description: "Clear the conversation", source: "builtin" },
+];
+const ITEMS = [
+  { label: "Run the tests", prompt: "run the tests you just wrote" },
+  { label: "Commit", prompt: "commit the change" },
+  { label: "Open the PR", prompt: "open a pull request" },
+];
+const ANSWER = "x".repeat(200);
+
+// The detached fork finishes some ticks after the turn does.
+async function settle() {
+  for (let i = 0; i < 10; i++) await new Promise((r) => setTimeout(r, 0));
+}
+
+// What the fork answers; fork prompts and ghost texts are recorded.
+function suggesting(on: any, reply: unknown, options: { commands?: unknown[]; fork?: () => Promise<unknown> } = {}) {
+  const seen = { forks: [] as string[], ghosts: [] as string[] };
+  on("command.list", () => ({ value: options.commands ?? COMMANDS }));
+  on("ui.log", () => ({ value: undefined }));
+  on("model.fork", async (_$: any, e: any) => {
+    seen.forks.push(e.prompt);
+    if (options.fork) return { value: await options.fork() };
+    return { value: { isAnswered: true, text: typeof reply === "string" ? reply : JSON.stringify(reply), usage: {} } };
+  });
+  on("prompt.suggest", (_$: any, e: any) => {
+    seen.ghosts.push(e.text);
+    return { isShown: true };
+  });
+  on("turn.complete", () => ({ text: "" }));
+  return seen;
+}
+
+async function turnDone($: any, extra: Record<string, unknown> = {}) {
+  await ($ as any).turn.complete({ reason: "answer", answer: ANSWER, turnId: "t1", durationMs: 1, isAborted: false, ...extra } as any);
+  await settle();
+}
+
+test("suggestions: a long answer forks and offers the first prompt as ghost text", async ($, on) => {
+  world(on);
+  withUsage(on, LIMITS);
+  const seen = suggesting(on, ITEMS);
+  await $.session.start({ source: "startup", cwd: "/tmp" } as any);
+  await turnDone($);
+  expect(seen.forks.length).toBe(1);
+  expect(seen.ghosts).toEqual(["run the tests you just wrote"]);
+});
+
+test("suggestions: an answer under minAnswerChars makes no fork", async ($, on) => {
+  world(on);
+  withUsage(on, LIMITS);
+  const seen = suggesting(on, ITEMS);
+  await $.session.start({ source: "startup", cwd: "/tmp" } as any);
+  await turnDone($, { answer: "x".repeat(20) });
+  expect(seen.forks.length).toBe(0);
+});
+
+test("suggestions: minAnswerChars is a setting", { options: { minAnswerChars: 10 } } as any, async ($, on) => {
+  world(on);
+  withUsage(on, LIMITS);
+  const seen = suggesting(on, ITEMS);
+  await $.session.start({ source: "startup", cwd: "/tmp" } as any);
+  await turnDone($, { answer: "x".repeat(20) });
+  expect(seen.forks.length).toBe(1);
+});
+
+test("suggestions: a subagent's turn makes no fork", async ($, on) => {
+  world(on);
+  withUsage(on, LIMITS);
+  const seen = suggesting(on, ITEMS);
+  await $.session.start({ source: "startup", cwd: "/tmp" } as any);
+  await turnDone($, { agentId: "a1" });
+  expect(seen.forks.length).toBe(0);
+});
+
+test("suggestions: the fork is told the session's skills", async ($, on) => {
+  world(on);
+  withUsage(on, LIMITS);
+  const seen = suggesting(on, ITEMS);
+  await $.session.start({ source: "startup", cwd: "/tmp" } as any);
+  await turnDone($);
+  expect(seen.forks[0]).toContain("/review-pr: Review a pull request");
+  expect(seen.forks[0]).not.toContain("/clear");
+});
+
+test("suggestions: without suggestSkills the fork gets no skill list", { options: { suggestSkills: false } } as any, async ($, on) => {
+  world(on);
+  withUsage(on, LIMITS);
+  const seen = suggesting(on, ITEMS);
+  await $.session.start({ source: "startup", cwd: "/tmp" } as any);
+  await turnDone($);
+  expect(seen.forks[0]).not.toContain("<available-skills>");
+});
+
+test("suggestions: a slash prompt naming an unknown command is dropped", async ($, on) => {
+  world(on);
+  withUsage(on, LIMITS);
+  const seen = suggesting(on, [
+    { label: "Made up", prompt: "/made-up now" },
+    { label: "Review", prompt: "/review-pr 12" },
+  ]);
+  await $.session.start({ source: "startup", cwd: "/tmp" } as any);
+  await turnDone($);
+  expect(seen.ghosts).toEqual(["/review-pr 12"]);
+});
+
+test("suggestions: unsafe text is cleaned, and a tag character drops the suggestion", async ($, on) => {
+  world(on);
+  withUsage(on, LIMITS);
+  const seen = suggesting(on, [
+    { label: "Hidden", prompt: `fix it\u{E0041}\u{E0042}` },
+    { label: "Clean\u001b[31m me", prompt: "run \u001b[31mthe\u0007 tests\n  now" },
+  ]);
+  await $.session.start({ source: "startup", cwd: "/tmp" } as any);
+  await turnDone($);
+  expect(seen.ghosts).toEqual(["run the tests now"]);
+});
+
+test("suggestions: prose, bad JSON, an unanswered or a failing fork offer nothing", async ($, on) => {
+  world(on);
+  withUsage(on, LIMITS);
+  const seen = suggesting(on, "I would suggest running the tests.");
+  await $.session.start({ source: "startup", cwd: "/tmp" } as any);
+  await turnDone($);
+  expect(seen.forks.length).toBe(1);
+  expect(seen.ghosts).toEqual([]);
+});
+
+test("suggestions: a fork that throws offers nothing and does not break the turn", async ($, on) => {
+  world(on);
+  withUsage(on, LIMITS);
+  const seen = suggesting(on, ITEMS, { fork: () => Promise.reject(new Error("boom")) });
+  await $.session.start({ source: "startup", cwd: "/tmp" } as any);
+  await turnDone($);
+  expect(seen.ghosts).toEqual([]);
+});
+
+test("suggestions: a result that arrives after a newer turn is dropped", async ($, on) => {
+  world(on);
+  withUsage(on, LIMITS);
+  let release: (v: unknown) => void = () => {};
+  const held = new Promise((r) => (release = r));
+  let call = 0;
+  const seen = suggesting(on, ITEMS, {
+    fork: () => (call++ === 0 ? held : Promise.resolve({ isAnswered: true, text: JSON.stringify([{ label: "Second", prompt: "second prompt" }]), usage: {} })),
+  });
+  await $.session.start({ source: "startup", cwd: "/tmp" } as any);
+  await turnDone($, { turnId: "t1" });
+  await turnDone($, { turnId: "t2" });
+  release({ isAnswered: true, text: JSON.stringify(ITEMS), usage: {} });
+  await settle();
+  expect(seen.ghosts).toEqual(["second prompt"]);
+});
