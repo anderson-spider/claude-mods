@@ -1,4 +1,4 @@
-# Token Weather Usage
+# HUD
 
 One band above the Claude Code prompt, with suggested next prompts above it: the context in tokens, your 5-hour and 7-day limits against the clock, whether the prompt cache is still warm, what the session and the last prompt cost, and which agents are running.
 
@@ -54,4 +54,12 @@ No personal data collected, sent or retained, no network requests of its own. Th
 
 ## Credits and license
 
-Weather, context and turns chart after Anthropic's **Token Weather** example ([claude-code-playground](https://github.com/anthropics/claude-code-playground), Apache-2.0). Limit gauges written after HolyGrail's **usage-meter** ([HolyGrail/claude-mods](https://github.com/HolyGrail/claude-mods/tree/main/plugins/usage-meter)), and the cache block after Daniel San's **prompt-cache-control** ([davila7/claude-code-templates](https://github.com/davila7/claude-code-templates), MIT), without copying their code. Apache-2.0 license: see [LICENSE](LICENSE) and [NOTICE](NOTICE). The suggested next prompts are adapted from the **next-steps** plugin by Thariq Shihipar (MIT). Adapted from [augiefra/claude-mods](https://github.com/augiefra/claude-mods/tree/main/plugins/token-weather-usage) 3.10.7; the changes are listed in the NOTICE.
+HUD is built on the work of others, adapted or used as the idea:
+
+- **Token Weather**, by Anthropic ([claude-code-playground](https://github.com/anthropics/claude-code-playground), Apache-2.0): the weather icons, the context tokens and the turns chart.
+- **Token Weather Usage** 3.10.7, by Eric Cologni ([augiefra/claude-mods](https://github.com/augiefra/claude-mods/tree/main/plugins/token-weather-usage), Apache-2.0): the base of this plugin, which was named `token-weather-usage` until 1.0.0. The changes from it are listed in the [NOTICE](NOTICE).
+- **next-steps** 1.0.0, by Thariq Shihipar (claude-community marketplace, MIT): the suggested next prompts (the fork, the text cleaning, the skill list and the buttons), changed here to pick several in an order.
+- **usage-meter**, by HolyGrail ([HolyGrail/claude-mods](https://github.com/HolyGrail/claude-mods/tree/main/plugins/usage-meter)): the idea of the limit gauges, written again without copying its code.
+- **prompt-cache-control**, by Daniel San ([davila7/claude-code-templates](https://github.com/davila7/claude-code-templates), MIT): the idea of the cache block, written again without copying its code.
+
+Apache-2.0 license: see [LICENSE](LICENSE) and [NOTICE](NOTICE), which also carries the MIT text of next-steps.

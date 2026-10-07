@@ -1,4 +1,4 @@
-// Token Weather Usage: one line above the prompt.
+// HUD: one line above the prompt, and suggested next prompts above it.
 //   Terminal, blocks split by a thin rule:
 //   ☁ 440k ▃▄▂▇▆ ▲ +8.4k │ 5h ██▒▒░░ 37% ▼ 3 · 2h22 │ 7d ███▓░░ 60% ▲ 2 · 2d23h │ cache 52 min │ 2 agents
 //   Desktop app: the same blocks as tinted, outlined pills.

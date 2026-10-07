@@ -10,7 +10,7 @@ Marketplace of [Claude Code](https://claude.com/claude-code) plugins made by and
 | [chatgpt](plugins/chatgpt) | Lets Claude ask your logged-in ChatGPT, or have it generate an image, in terminal-browser, and saves the result locally. |
 | [codex-computer-use](plugins/codex-computer-use) | Routes native Mac app control through Codex computer use from the ChatGPT app instead of Claude's own computer use, asking before each new app. |
 | [tailscale](plugins/tailscale) | Lets Claude query and modify your tailnet through the Tailscale API. |
-| [token-weather-usage](plugins/token-weather-usage) | One line above the prompt: context with a weather icon, 5-hour and 7-day limits against the clock, the prompt cache and the subagents running. |
+| [hud](plugins/hud) | One line above the prompt (context, 5-hour and 7-day limits against the clock, the prompt cache, the subagents running) and suggested next prompts you can pick, in order, into one draft. |
 
 ## Install
 
@@ -22,7 +22,7 @@ Inside Claude Code, add the marketplace and install the plugin:
 /plugin install chatgpt@spider-marketplace
 /plugin install codex-computer-use@spider-marketplace
 /plugin install tailscale@spider-marketplace
-/plugin install token-weather-usage@spider-marketplace
+/plugin install hud@spider-marketplace
 ```
 
 To use a local copy instead of GitHub, pass the folder path:
@@ -117,9 +117,9 @@ To update the ACL without overwriting someone else's edit: do a `GET /tailnet/-/
 
 `TS_API_KEY` must be a `tskey-api-...` key. An OAuth secret `tskey-client-...` is not valid as a Bearer without a token exchange, which the plugin does not do.
 
-## token-weather-usage
+## hud
 
-One line above the prompt, adapted from [token-weather-usage](https://github.com/augiefra/claude-mods/tree/main/plugins/token-weather-usage) (Apache-2.0): the context with a weather icon, one bar per recent prompt and the last prompt's change; the 5-hour and 7-day limits as block bars with a mark against the clock (`▲` ahead, `▼` behind, `▬` on pace) and the time left; the prompt cache with its time left, yellow near the end and red once expired; and the subagents running. Options (`/plugin`): **Pace start** (how many points ahead of the clock still count as on pace) and **Show cost** (dollar amounts, off by default). See [its README](plugins/token-weather-usage/README.md) and its [NOTICE](plugins/token-weather-usage/NOTICE).
+One line above the prompt, and suggested next prompts above it. The line: the context with a weather icon, one bar per recent prompt and the last prompt's change; the 5-hour and 7-day limits as block bars with a mark against the clock (`▲` ahead, `▼` behind, `▬` on pace) and the time left; the prompt cache with its time left, yellow near the end and red once expired; and the subagents running. After each answer, up to three likely next prompts: pick one or several (`1`, `2`, `3`), in the order you want, and `4` writes them to the prompt box as one draft; the plugin never sends it. Options (`/plugin`): **Pace start**, **Show cost**, **Shortest answer to suggest after** and **Suggest skills and slash commands**. It was `token-weather-usage` before 1.0.0 and is built on Token Weather Usage (Eric Cologni, Apache-2.0) and next-steps (Thariq Shihipar, MIT), among others. See [its README](plugins/hud/README.md) and its [NOTICE](plugins/hud/NOTICE).
 
 ## Development
 

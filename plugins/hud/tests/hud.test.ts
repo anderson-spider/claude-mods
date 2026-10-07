@@ -31,7 +31,7 @@ function withUsage(on: any, rateLimits: unknown[], context = { tokens: 107_000, 
 }
 
 async function band($: any, surface: "terminal" | "desktop", columns = 200) {
-  const ui = await $.ui.mount({ plugin: "token-weather-usage", surface, component: "AbovePrompt", props: { bodyColumns: columns } as any });
+  const ui = await $.ui.mount({ plugin: "hud", surface, component: "AbovePrompt", props: { bodyColumns: columns } as any });
   // The hover cards' lines are hidden until hovered: left out of the band's texts.
   const hidden = ((await ui.findAll({ type: "Box" })) as any[])
     .filter((b) => b.props?.position === "absolute")
@@ -1110,7 +1110,7 @@ test("suggestions: draw without any usage reading", async ($, on) => {
 
 test("suggestions: hidden while the model works, the line still draws", async ($, on) => {
   await offered($, on);
-  const ui: any = await $.ui.mount({ plugin: "token-weather-usage", surface: "terminal", component: "AbovePrompt", props: { bodyColumns: 200, isWorking: true } as any });
+  const ui: any = await $.ui.mount({ plugin: "hud", surface: "terminal", component: "AbovePrompt", props: { bodyColumns: 200, isWorking: true } as any });
   const texts = ((await ui.findAll({ type: "Text" })) as any[]).map((t) => t.text);
   expect(texts).not.toContain("next:");
   expect(texts).toContain("107k");
@@ -1118,7 +1118,7 @@ test("suggestions: hidden while the model works, the line still draws", async ($
 
 test("suggestions: nothing from this mod during a survey", async ($, on) => {
   await offered($, on);
-  const ui: any = await $.ui.mount({ plugin: "token-weather-usage", surface: "terminal", component: "AbovePrompt", props: { bodyColumns: 200, hasSurvey: true } as any });
+  const ui: any = await $.ui.mount({ plugin: "hud", surface: "terminal", component: "AbovePrompt", props: { bodyColumns: 200, hasSurvey: true } as any });
   const texts = ((await ui.findAll({ type: "Text" })) as any[]).map((t) => t.text);
   expect(texts).not.toContain("next:");
   expect(texts).not.toContain("107k");
