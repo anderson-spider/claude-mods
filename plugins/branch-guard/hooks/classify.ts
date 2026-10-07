@@ -102,6 +102,7 @@ const scan = (args: readonly Word[], shortValued: string, longValued: readonly s
   return { flags, positional }
 }
 
+// Only primitive fields: `walk` hands substitutions a shallow copy, which an object field would leak through.
 type State = {
   dir: string
   isAdrift: boolean

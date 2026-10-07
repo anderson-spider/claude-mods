@@ -1,6 +1,6 @@
 {
   "name": "branch-guard",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Holds a git commit or git push on the protected branch and shows what would go in, with Proceed and Cancel.",
   "author": { "name": "anderson-spider" },
   "types": "./types/index.d.ts"
