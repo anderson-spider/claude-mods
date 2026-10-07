@@ -621,6 +621,33 @@ function startSuggestions($, e) {
   })();
 }
 
+// The draft for the picked suggestions: one pick as it is; several as a numbered list in the order
+// they were picked. Inside a list a slash prompt is plain text for the model, not a command.
+function combine(items, picked) {
+  if (picked.length === 0) return "";
+  if (picked.length === 1) return items[picked[0]].prompt;
+  return ["Do these in order, one after the other:", ...picked.map((index, n) => `${n + 1}. ${items[index].prompt}`)].join("\n");
+}
+
+// Picks an item, or drops it from the picks when it is already there.
+function togglePick($, index) {
+  if (suggestions.kind !== "offer") return;
+  const { items, picked } = suggestions;
+  showSuggestions($, { kind: "offer", items, picked: picked.includes(index) ? picked.filter((i) => i !== index) : [...picked, index] });
+}
+
+// Writes the picks to the prompt box as a draft and hides the block; the person edits and sends it.
+function writePicks($) {
+  if (suggestions.kind !== "offer") return;
+  const text = combine(suggestions.items, suggestions.picked);
+  showSuggestions($, { kind: "hidden" });
+  if (text === "") return;
+  $.prompt.fill({ text }).then(
+    (r) => r.isFilled || $.ui.toast("could not fill the prompt box"),
+    (error) => $.ui.toast(`could not fill: ${String(error)}`),
+  );
+}
+
 // The block above the usage line: nothing, the wait for the fork, or the offer. Terminal only.
 function drawSuggestions($, elements) {
   if (suggestions.kind === "hidden") return null;
@@ -629,11 +656,18 @@ function drawSuggestions($, elements) {
   if (suggestions.kind === "loading") {
     return Box({ key: "next", flexDirection: "column", children: [gap, Text({ key: "wait", dimColor: true, children: "next steps…" })] });
   }
+  const { items, picked } = suggestions;
+  const row = (key, button) => Box({ key: "row-" + key, marginLeft: 2, children: [button] });
   const children = [gap, Text({ key: "title", dimColor: true, children: "next:" })];
-  suggestions.items.forEach((item, i) => {
-    children.push(Box({ key: "row" + i, marginLeft: 2, children: [Button({ key: "pick-" + (i + 1), hotkey: String(i + 1), plain: true, label: item.label, onPress: () => {} })] }));
+  items.forEach((item, i) => {
+    const mark = picked.indexOf(i);
+    const label = mark === -1 ? item.label : `[${mark + 1}] ${item.label}`;
+    children.push(row(i, Button({ key: "pick-" + (i + 1), hotkey: String(i + 1), plain: true, label, onPress: () => togglePick($, i) })));
   });
-  children.push(Box({ key: "rowx", marginLeft: 2, children: [Button({ key: "dismiss", hotkey: "0", plain: true, label: "dismiss", onPress: () => showSuggestions($, { kind: "hidden" }) })] }));
+  if (picked.length > 0) {
+    children.push(row("write", Button({ key: "write", hotkey: "4", plain: true, label: `write ${picked.length} to prompt`, onPress: () => writePicks($) })));
+  }
+  children.push(row("dismiss", Button({ key: "dismiss", hotkey: "0", plain: true, label: "dismiss", onPress: () => showSuggestions($, { kind: "hidden" }) })));
   return Box({ key: "next", flexDirection: "column", children });
 }
 
