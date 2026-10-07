@@ -394,13 +394,13 @@ test('cancel of a queued job never touches herdr for it and the queue skips it',
   expect(calls.some(call => call.includes('ct-2'))).toBe(false)
 })
 
-test('cancel of a working job sends ctrl+c, keeps the pane and stays cancelled without a finished message', async () => {
+test('cancel of a working job sends Esc, keeps the pane and stays cancelled without a finished message', async () => {
   let release = () => {}
   const { book, calls, events } = bookWith({ gate: new Promise<void>(done => (release = done)) })
   const a = await book.start({ kind: 'execute', task: 'long', files: [] })
   await pause(5)
-  expect(await book.cancel(a.id)).toContain('ctrl+c')
-  expect(calls).toContain('keys ct-1 ctrl+c')
+  expect(await book.cancel(a.id)).toContain('Esc')
+  expect(calls).toContain('keys ct-1 esc')
   expect(a.status).toBe('cancelled')
   release()
   await pause(10)
@@ -820,7 +820,7 @@ test('cancelling a loop during dev or QA cancels the active child and starts not
     release()
     await state.finished(loop)
     expect(loop.status).toBe('cancelled')
-    expect(state.calls).toContain(`keys ct-1-${phase === 0 ? 'dev' : 'qa'} ctrl+c`)
+    expect(state.calls).toContain(`keys ct-1-${phase === 0 ? 'dev' : 'qa'} esc`)
     expect(state.prompts.length).toBe(phase + 1)
     expect(state.events).toEqual(['loop 1 cancelled'])
     expect(state.calls.filter(call => call.startsWith('close'))).toEqual(phase === 0 ? ['close w1:p2'] : ['close w1:p2', 'close w1:p3'])
@@ -855,7 +855,7 @@ test('cancelling the dev keeps another execute queued until its pending prompt s
   }
 })
 
-test('a failed ctrl+c can be retried without releasing the dev slot before its prompt settles', async () => {
+test('a failed Esc can be retried without releasing the dev slot before its prompt settles', async () => {
   let release = () => {}
   const gate = new Promise<void>(done => (release = done))
   const state = loopWith(['dev', 'other'], {}, { 0: gate })
@@ -875,7 +875,7 @@ test('a failed ctrl+c can be retried without releasing the dev slot before its p
   try {
     expect(await state.book.cancel(dev)).toContain('transport failed')
     expect((await state.book.done(dev)).status).toBe('cancelled')
-    expect(await state.book.cancel(dev)).toContain('Sent ctrl+c')
+    expect(await state.book.cancel(dev)).toContain('Sent Esc')
     expect(attempts).toBe(2)
     expect((await state.book.done(dev)).status).toBe('cancelled')
     const other = await state.book.start({ kind: 'execute', task: 'unrelated', files: [] })
@@ -1088,8 +1088,8 @@ test('herdrOf waits until the given states and sends keys', async () => {
   const { herdr, argvs } = adapter({ 'agent wait': { stdout: agent('working') } })
   expect(await herdr.wait('ct-1', 5000, ['working', 'idle'])).toBe('working')
   expect(argvs[0]).toEqual(['herdr', 'agent', 'wait', 'ct-1', '--timeout', '5000', '--until', 'working', '--until', 'idle'])
-  await herdr.sendKeys('ct-1', ['ctrl+c'])
-  expect(argvs[1]).toEqual(['herdr', 'agent', 'send-keys', 'ct-1', 'ctrl+c'])
+  await herdr.sendKeys('ct-1', ['esc'])
+  expect(argvs[1]).toEqual(['herdr', 'agent', 'send-keys', 'ct-1', 'esc'])
 })
 
 test('herdrOf reads the pane text raw and lists only ct agents', async () => {
@@ -1287,7 +1287,7 @@ test('jobs cancels an active loop by its shared id and the band includes its rou
   expect(host.rows()).toContainEqual(expect.objectContaining({ id: 'loop-1', kind: 'loop', status: 'reviewing', round: 1, maxRounds: 2 }))
   const answer = await $.tool.call({ tool: 'mcp__codex-team__jobs', id: 1, action: 'cancel' })
   expect(answer.result).toContain('cancelled')
-  expect(host.argvs.some(argv => argv[2] === 'send-keys' && argv[3] === 'ct-1-qa' && argv[4] === 'ctrl+c')).toBe(true)
+  expect(host.argvs.some(argv => argv[2] === 'send-keys' && argv[3] === 'ct-1-qa' && argv[4] === 'esc')).toBe(true)
   release()
   for (let i = 0; i < 100 && !host.messages.length; i++) await pause(1)
   expect(host.messages.length).toBe(1)
@@ -1385,7 +1385,7 @@ test('loop agents are owned by the book and their id survives a reload', async (
   expect(await reloaded.reserveId()).toBe(2)
 })
 
-test('a cancelled loop retries failed ctrl+c while the reused phase still holds the slot', async () => {
+test('a cancelled loop retries failed Esc while the reused phase still holds the slot', async () => {
   let release = () => {}
   const state = loopWith(['dev', 'VERDICT: CHANGES', 'fixed'], {}, { 2: new Promise<void>(done => (release = done)) })
   const sendKeys = state.deps.herdr.sendKeys
@@ -1398,7 +1398,7 @@ test('a cancelled loop retries failed ctrl+c while the reused phase still holds 
   try {
     for (let i = 0; i < 100 && state.prompts.length < 3; i++) await pause(1)
     expect(await cancelLoop(state.deps, state.book, loop)).toContain('transport failed')
-    expect(await cancelLoop(state.deps, state.book, loop)).toContain('Sent ctrl+c to ct-1-dev')
+    expect(await cancelLoop(state.deps, state.book, loop)).toContain('Sent Esc to ct-1-dev')
     const other = await state.book.start(request())
     await pause(5)
     expect(other.status).toBe('queued')
@@ -1535,7 +1535,7 @@ test('a report clear failure in a later round never prompts or restarts its reus
   expect(state.calls.filter(call => call.startsWith('start')).length).toBe(2)
 })
 
-test('a cancelled loop keeps waiting through stop timeouts and permits ctrl+c retries', async () => {
+test('a cancelled loop keeps waiting through stop timeouts and permits Esc retries', async () => {
   let releasePrompt = () => {}
   let releaseStop = () => {}
   const state = loopWith(['dev', 'other'], { prompt: ['blocked'] }, { 0: new Promise<void>(done => (releasePrompt = done)) })
@@ -1559,7 +1559,7 @@ test('a cancelled loop keeps waiting through stop timeouts and permits ctrl+c re
     for (let i = 0; i < 100 && waits < 2; i++) await pause(1)
     expect(waits).toBe(2)
     expect(other.status).toBe('queued')
-    expect(await cancelLoop(state.deps, book, loop)).toContain('Sent ctrl+c')
+    expect(await cancelLoop(state.deps, book, loop)).toContain('Sent Esc')
     expect(state.calls.some(call => call.startsWith('close'))).toBe(false)
     releaseStop()
     await state.finished(loop)
