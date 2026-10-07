@@ -39,7 +39,7 @@ export function forbidden(method: string, path: string): string | undefined {
 }
 
 /** Secret fields that must not reach the model in read responses. */
-export const REDACTED_FIELDS = new Set([
+const REDACTED_FIELDS = new Set([
   'machineKey',
   'nodeKey',
   'tailnetLockKey',
@@ -87,11 +87,6 @@ function pick(value: unknown, fields: ReadonlySet<string>): unknown {
   return out
 }
 
-/** Removes the REDACTED_FIELDS at any level; text that is not JSON passes through intact. */
-export function redact(text: string): string {
-  return transform(text, { redact: true })
-}
-
 /** Applies `redact` and `fields` to the body; text that is not JSON passes through intact. */
 export function transform(text: string, opts: { redact?: boolean; fields?: readonly string[] }): string {
   if (!opts.redact && !opts.fields?.length) return text
@@ -105,19 +100,16 @@ export function transform(text: string, opts: { redact?: boolean; fields?: reado
   }
 }
 
-export async function call(
-  fetch: Fetch,
-  key: string | undefined,
-  req: Request,
-): Promise<{ text: string; isError: boolean }> {
-  if (!key) return { text: 'TS_API_KEY is not set in the Claude Code environment.', isError: true }
-  const url = buildUrl(req.path)
-  if (!url) {
-    return { text: `Invalid path: ${String(req.path)}. Use something like /tailnet/-/devices.`, isError: true }
-  }
-  const blocked = forbidden(req.method, req.path as string)
-  if (blocked) return { text: blocked, isError: true }
+/** Returns the path when `buildUrl` accepts it. */
+export function checkedPath(path: unknown): string | undefined {
+  return buildUrl(path) ? (path as string) : undefined
+}
 
+/** Method, headers (auth, If-Match, content type) and body of the request. */
+export function buildInit(
+  req: Request,
+  key: string,
+): { method: string; headers: Record<string, string>; body?: string } {
   const headers: Record<string, string> = { Authorization: `Bearer ${key}`, Accept: 'application/json' }
   if (req.ifMatch) headers['If-Match'] = req.ifMatch
   let payload: string | undefined
@@ -131,13 +123,35 @@ export async function call(
       headers['Content-Type'] = 'application/json'
     }
   }
+  return { method: req.method, headers, body: payload }
+}
+
+/** Turns the response into the tool answer: status, ETag, transformed and truncated body. */
+export function format(
+  res: { status: number; ok: boolean; text: string; headers?: Record<string, string> },
+  req: Request,
+): { text: string; isError: boolean } {
+  const raw = transform(res.text, req)
+  const text = raw.length > MAX_CHARS ? raw.slice(0, MAX_CHARS) + '\n…(truncated; use "fields" to request less)' : raw
+  const etag = res.headers?.etag
+  return { text: `HTTP ${res.status}\n${etag ? `ETag: ${etag}\n` : ''}${text}`, isError: !res.ok }
+}
+
+export async function call(
+  fetch: Fetch,
+  key: string | undefined,
+  req: Request,
+): Promise<{ text: string; isError: boolean }> {
+  if (!key) return { text: 'TS_API_KEY is not set in the Claude Code environment.', isError: true }
+  const path = checkedPath(req.path)
+  if (!path) {
+    return { text: `Invalid path: ${String(req.path)}. Use something like /tailnet/-/devices.`, isError: true }
+  }
+  const blocked = forbidden(req.method, path)
+  if (blocked) return { text: blocked, isError: true }
 
   try {
-    const res = await fetch(url, { method: req.method, headers, body: payload })
-    const raw = transform(res.text, req)
-    const text = raw.length > MAX_CHARS ? raw.slice(0, MAX_CHARS) + '\n…(truncated; use "fields" to request less)' : raw
-    const etag = res.headers?.etag
-    return { text: `HTTP ${res.status}\n${etag ? `ETag: ${etag}\n` : ''}${text}`, isError: !res.ok }
+    return format(await fetch(BASE + path, buildInit(req, key)), req)
   } catch (err) {
     return { text: `Call failed: ${err instanceof Error ? err.message : String(err)}`, isError: true }
   }

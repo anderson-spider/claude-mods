@@ -1,5 +1,5 @@
 import { test, expect } from 'claude-code/testing'
-import { buildUrl, call, forbidden, redact, transform } from '../hooks/api'
+import { buildInit, buildUrl, call, checkedPath, forbidden, format, transform } from '../hooks/api'
 
 type Seen = { url: string; init: { method: string; headers: Record<string, string>; body?: string } }
 
@@ -117,17 +117,17 @@ test('call returns an error on 412', async () => {
 })
 
 test('redact removes secret fields at any level', () => {
-  const out = JSON.parse(redact(devices))
+  const out = JSON.parse(transform(devices, { redact: true }))
   expect(out.devices[0]).toEqual({ id: '1', hostname: 'a', os: 'linux', addresses: ['100.1.1.1'], tags: ['tag:t'] })
 })
 
 test('redact removes secret, s3SecretAccessKey and token', () => {
-  const out = JSON.parse(redact('{"a":{"secret":"s","s3SecretAccessKey":"k","token":"t","ok":1}}'))
+  const out = JSON.parse(transform('{"a":{"secret":"s","s3SecretAccessKey":"k","token":"t","ok":1}}', { redact: true }))
   expect(out).toEqual({ a: { ok: 1 } })
 })
 
 test('redact leaves non-JSON text intact', () => {
-  expect(redact('not json')).toBe('not json')
+  expect(transform('not json', { redact: true })).toBe('not json')
 })
 
 test('call with redact:true filters the response', async () => {
@@ -168,4 +168,40 @@ test('call truncates a huge response and suggests fields', async () => {
   const r = await call(fetch, 'k', { method: 'GET', path: '/tailnet/-/devices' })
   expect(r.text).toContain('use "fields"')
   expect(r.text.length).toBeLessThan(61_000)
+})
+
+test('checkedPath returns the path only when buildUrl accepts it', () => {
+  expect(checkedPath('/tailnet/-/devices')).toBe('/tailnet/-/devices')
+  expect(checkedPath('//evil.com/x')).toBeUndefined()
+  expect(checkedPath(42)).toBeUndefined()
+})
+
+test('buildInit picks the content type from the body', () => {
+  const json = buildInit({ method: 'POST', path: '/x', body: '{"a":1}' }, 'k')
+  expect(json.headers['Content-Type']).toBe('application/json')
+  expect(json.body).toBe('{"a":1}')
+  const hujson = buildInit({ method: 'POST', path: '/x', body: '{"a":1,}' }, 'k')
+  expect(hujson.headers['Content-Type']).toBe('application/hujson')
+  const obj = buildInit({ method: 'POST', path: '/x', body: { a: 1 } }, 'k')
+  expect(obj.headers['Content-Type']).toBe('application/json')
+  expect(obj.body).toBe('{"a":1}')
+})
+
+test('buildInit sets auth, If-Match and no Content-Type without a body', () => {
+  const init = buildInit({ method: 'GET', path: '/x', ifMatch: 'x' }, 'k')
+  expect(init.method).toBe('GET')
+  expect(init.headers.Authorization).toBe('Bearer k')
+  expect(init.headers.Accept).toBe('application/json')
+  expect(init.headers['If-Match']).toBe('x')
+  expect(init.headers['Content-Type']).toBeUndefined()
+  expect(init.body).toBeUndefined()
+})
+
+test('format keeps the ETag line, the error flag and truncates long text', () => {
+  const ok = format({ status: 200, ok: true, text: 'hi', headers: { etag: '"e"' } }, { method: 'GET', path: '/x' })
+  expect(ok).toEqual({ text: 'HTTP 200\nETag: "e"\nhi', isError: false })
+  const bad = format({ status: 404, ok: false, text: 'no' }, { method: 'GET', path: '/x' })
+  expect(bad).toEqual({ text: 'HTTP 404\nno', isError: true })
+  const long = format({ status: 200, ok: true, text: 'a'.repeat(60_001) }, { method: 'GET', path: '/x' })
+  expect(long.text).toBe('HTTP 200\n' + 'a'.repeat(60_000) + '\n…(truncated; use "fields" to request less)')
 })

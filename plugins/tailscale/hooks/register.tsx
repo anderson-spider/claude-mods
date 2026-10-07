@@ -8,6 +8,11 @@ const AREAS =
   'devices, ACL (policy file), DNS, API and auth keys, users, invites, tailnet settings, ' +
   'webhooks, logs, device posture, services, OAuth apps and contacts'
 
+/** Shapes a call's output for the host: `isError` is set only when true (the host rejects `false`). */
+function reply(out: { text: string; isError: boolean }): { result: string } | { result: string; isError: true } {
+  return out.isError ? { result: out.text, isError: true as const } : { result: out.text }
+}
+
 export const register: Register = (on) => {
   on('session.start', async ($, e, next) => {
     await $.tool.register({
@@ -60,13 +65,14 @@ export const register: Register = (on) => {
   on('tool.call', { tool: 'mcp__tailscale__tailscale_get' }, async ($, e) => {
     const key = await $.env.get('TS_API_KEY')
     const fields = Array.isArray(e.fields) ? e.fields.filter((f): f is string => typeof f === 'string') : undefined
-    const { text, isError } = await call((url, init) => $.http.fetch(url, init), key, {
-      method: 'GET',
-      path: e.path,
-      redact: true,
-      fields,
-    })
-    return isError ? { result: text, isError: true as const } : { result: text }
+    return reply(
+      await call((url, init) => $.http.fetch(url, init), key, {
+        method: 'GET',
+        path: e.path,
+        redact: true,
+        fields,
+      }),
+    )
   })
 
   on('tool.call', { tool: 'mcp__tailscale__tailscale_write' }, async ($, e) => {
@@ -76,12 +82,13 @@ export const register: Register = (on) => {
     }
     const key = await $.env.get('TS_API_KEY')
     const ifMatch = typeof e.ifMatch === 'string' ? e.ifMatch : undefined
-    const { text, isError } = await call((url, init) => $.http.fetch(url, init), key, {
-      method,
-      path: e.path,
-      body: e.body,
-      ifMatch,
-    })
-    return isError ? { result: text, isError: true as const } : { result: text }
+    return reply(
+      await call((url, init) => $.http.fetch(url, init), key, {
+        method,
+        path: e.path,
+        body: e.body,
+        ifMatch,
+      }),
+    )
   })
 }
