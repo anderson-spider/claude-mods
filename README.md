@@ -106,7 +106,7 @@ Limitations: ownership is checked for apps named as string literals in `cua.getA
 
 ## codex-team
 
-Lets Claude lead Codex agents. Each job runs [Codex](https://github.com/openai/codex) in its own [Herdr](https://herdr.dev) pane, split beside Claude Code, so you can watch it and answer it when it asks; Claude gets a job id at once and a message when the job ends, with the path of its report. It needs Claude Code running in a Herdr pane (`HERDR_ENV=1`) and `herdr` and `codex` in `PATH`; `/codex-team-doctor` checks them. The plugin adds a section to Claude's system prompt so it delegates well-bounded work on its own.
+Lets Claude lead Codex agents. Each job runs [Codex](https://github.com/openai/codex) in its own [Herdr](https://herdr.dev) pane. The first pane opens below Claude Code; later panes open to the right of the last one created, forming a row beneath the lead. If that last pane has closed, the next starts below the lead again. You can watch each agent and answer it when it asks; Claude gets a job id at once and a message when the job ends, with the path of its report. It needs Claude Code running in a Herdr pane (`HERDR_ENV=1`) and `herdr` and `codex` in `PATH`; `/codex-team-doctor` checks them. The plugin adds a section to Claude's system prompt so it delegates well-bounded work on its own.
 
 | Entry | What it does |
 | --- | --- |

@@ -5,7 +5,6 @@ import type { On } from 'claude-code'
 import { agentName, nextFreeId, reportPath } from '../hooks/names'
 import { buildPrompt, codexArgs } from '../hooks/prompts'
 import { requestOf } from '../hooks/requests'
-import { splitDirection } from '../hooks/job'
 
 test('agentName prefixes the job id', () => {
   expect(agentName(3)).toBe('ct-3')
@@ -19,11 +18,6 @@ test('nextFreeId skips the names that are still live agents', () => {
 test('codexArgs sandboxes execute to the workspace and review to read-only', () => {
   expect(codexArgs('execute')).toEqual(['-s', 'workspace-write', '-a', 'on-request'])
   expect(codexArgs('review')).toEqual(['-s', 'read-only', '-a', 'on-request'])
-})
-
-test('splitDirection goes right on a wide pane and down otherwise', () => {
-  expect(splitDirection({ width: 286, height: 71 })).toBe('right')
-  expect(splitDirection({ width: 80, height: 60 })).toBe('down')
 })
 
 test('reportPath lives in a codex-team folder of TMPDIR, falling back to /tmp', () => {
@@ -102,27 +96,27 @@ test('loopOf rejects maxRounds unless it is an integer at least one', () => {
 
 import { HerdrError } from '../hooks/model'
 import { runJob } from '../hooks/job'
+import { createPaneLayout } from '../hooks/pane-layout'
 import type { AgentState, Deps, Herdr, Job, Request, Settled } from '../hooks/model'
 
-type Script = { prompt?: (Settled | Error)[]; wait?: (AgentState | Error)[]; start?: Error; rename?: Error; close?: Error; read?: string; onPrompt?: () => void; live?: string[]; gate?: Promise<void> }
+type Script = { prompt?: (Settled | Error)[]; wait?: (AgentState | Error)[]; start?: Error; rename?: Error; close?: Error; split?: (string | Error)[]; splitGate?: Promise<void>; read?: string; onPrompt?: () => void; live?: string[]; gate?: Promise<void> }
 
 function fakeHerdr(script: Script) {
   const calls: string[] = []
   const prompts = [...(script.prompt ?? [])]
   const waits = [...(script.wait ?? [])]
+  const splits = [...(script.split ?? [])]
+  let panes = 1
   const pop = <T>(queue: (T | Error)[], fallback: T): T => {
     const next = queue.length ? queue.shift()! : fallback
     if (next instanceof Error) throw next
     return next
   }
   const herdr: Herdr = {
-    size: async () => {
-      calls.push('size')
-      return { width: 286, height: 71 }
-    },
-    split: async direction => {
-      calls.push(`split ${direction}`)
-      return 'w1:p2'
+    split: async (direction, target) => {
+      calls.push(`split ${direction}${target ? ` ${target}` : ''}`)
+      await script.splitGate
+      return pop(splits, `w1:p${++panes}`)
     },
     rename: async (pane, name) => {
       calls.push(`rename ${pane} ${name}`)
@@ -167,6 +161,7 @@ function setup(script: Script, files: Record<string, string> = { '/tmp/codex-tea
   let clock = 0
   const deps: Deps = {
     herdr,
+    layout: createPaneLayout(),
     files: { read: async path => files[path], write: async () => {} },
     tmpdir: undefined,
     now: () => clock,
@@ -179,7 +174,7 @@ test('runJob runs an execute job to done with its report', async () => {
   const { deps, calls, events } = setup({})
   const j = job()
   await runJob(deps, j, request())
-  expect(calls).toEqual(['size', 'split right', 'rename w1:p2 ct-1 execute', 'start ct-1 w1:p2 -s workspace-write -a on-request', 'prompt ct-1'])
+  expect(calls).toEqual(['split down', 'rename w1:p2 ct-1 execute', 'start ct-1 w1:p2 -s workspace-write -a on-request', 'prompt ct-1'])
   expect(j.status).toBe('done')
   expect(j.pane).toBe('w1:p2')
   expect(j.report).toBe('/tmp/codex-team/1.md')
@@ -190,9 +185,67 @@ test('runJob runs an execute job to done with its report', async () => {
 test('runJob starts a review job read-only', async () => {
   const { deps, calls } = setup({}, { '/tmp/codex-team/1.md': 'findings' })
   await runJob(deps, job('review'), request('review'))
-  expect(calls[2]).toBe('rename w1:p2 ct-1 review')
-  expect(calls[3]).toBe('start ct-1 w1:p2 -s read-only -a on-request')
+  expect(calls[1]).toBe('rename w1:p2 ct-1 review')
+  expect(calls[2]).toBe('start ct-1 w1:p2 -s read-only -a on-request')
   expect(calls.some(call => call.startsWith('close'))).toBe(false)
+})
+
+test('jobs share a row below the lead across execute and review', async () => {
+  const { deps, calls } = setup({})
+  const book = createBook(deps)
+  for (const kind of ['execute', 'review', 'execute'] as const) {
+    const j = await book.start(request(kind))
+    await book.ended(j.id)
+    expect(j.status).toBe('done')
+  }
+  expect(calls.filter(call => call.startsWith('split'))).toEqual(['split down', 'split right w1:p2', 'split right w1:p3'])
+})
+
+test('a missing last pane retries once below the lead and records the replacement', async () => {
+  const { deps, calls } = setup({ split: ['w1:p2', new HerdrError('pane_not_found', 'pane gone'), 'w1:p3', 'w1:p4'] })
+  const jobs = [job(), job('review', 2), job('review', 3)]
+  for (const j of jobs) await runJob(deps, j, request(j.kind))
+  expect(calls.filter(call => call.startsWith('split'))).toEqual(['split down', 'split right w1:p2', 'split down', 'split right w1:p3'])
+  expect(jobs.map(j => j.pane)).toEqual(['w1:p2', 'w1:p3', 'w1:p4'])
+  expect(jobs.map(j => j.status)).toEqual(['done', 'done', 'done'])
+})
+
+test('split failures do not poison the opening queue or retry unrelated errors', async () => {
+  const { deps, calls } = setup({ split: ['w1:p2', new HerdrError('unknown', 'split failed'), 'w1:p3'] })
+  const jobs = [job(), job('review', 2), job('review', 3)]
+  for (const j of jobs) await runJob(deps, j, request(j.kind))
+  expect(calls.filter(call => call.startsWith('split'))).toEqual(['split down', 'split right w1:p2', 'split right w1:p2'])
+  expect(jobs.map(j => j.status)).toEqual(['done', 'failed', 'done'])
+})
+
+test('a missing lead after the fallback fails without another retry and leaves the tracker clear', async () => {
+  const missing = new HerdrError('pane_not_found', 'pane gone')
+  const { deps, calls } = setup({ split: ['w1:p2', missing, missing, 'w1:p3'] })
+  const jobs = [job(), job('review', 2), job('review', 3)]
+  for (const j of jobs) await runJob(deps, j, request(j.kind))
+  expect(calls.filter(call => call.startsWith('split'))).toEqual(['split down', 'split right w1:p2', 'split down', 'split down'])
+  expect(jobs.map(j => j.status)).toEqual(['done', 'failed', 'done'])
+})
+
+test('concurrent reviews serialize only their pane openings', async () => {
+  let open = () => {}
+  let finish = () => {}
+  const { deps, calls } = setup({ splitGate: new Promise<void>(done => (open = done)), gate: new Promise<void>(done => (finish = done)) })
+  const book = createBook(deps)
+  const jobs = await Promise.all([book.start(request('review')), book.start(request('review'))])
+  try {
+    await pause(5)
+    expect(calls.filter(call => call.startsWith('split'))).toEqual(['split down'])
+    open()
+    await pause(5)
+    expect(calls.filter(call => call.startsWith('split'))).toEqual(['split down', 'split right w1:p2'])
+    expect(jobs.map(j => j.status)).toEqual(['working', 'working'])
+  } finally {
+    open()
+    finish()
+    await Promise.all(jobs.map(j => book.ended(j.id)))
+  }
+  expect(jobs.map(j => j.pane)).toEqual(['w1:p2', 'w1:p3'])
 })
 
 test('runJob goes blocked and back to working when the person answers, notifying once', async () => {
@@ -282,6 +335,7 @@ function bookWith(script: Script) {
   const events: string[] = []
   const book = createBook({
     herdr,
+    layout: createPaneLayout(),
     files: { read: async () => 'report text', write: async () => {} },
     tmpdir: undefined,
     now: () => 0,
@@ -449,9 +503,6 @@ import type { Loop } from '../hooks/model'
 
 function loopWith(reports: (string | undefined)[], script: Script = {}, gates: Record<number, Promise<void>> = {}) {
   const { herdr, calls } = fakeHerdr(script)
-  let panes = 1
-  const split = herdr.split
-  herdr.split = async direction => { await split(direction); return `w1:p${++panes}` }
   const files: Record<string, string> = {}
   const prompts: string[] = []
   const events: string[] = []
@@ -466,6 +517,7 @@ function loopWith(reports: (string | undefined)[], script: Script = {}, gates: R
   }
   const deps = {
     herdr,
+    layout: createPaneLayout(),
     files: { read: async (path: string) => files[path], write: async (path: string, text: string) => { files[path] = text } },
     tmpdir: undefined,
     now: () => 0,
@@ -507,8 +559,67 @@ test('finished loops close both role panes after writing the report and notifyin
     const loop: Loop = { id: await state.book.reserveId(), ...loopRequest(1), status: 'developing', rounds: [], startedAt: 0 }
     await runLoop(state.deps, loop, state.book)
     expect(loop.status).toBe(status)
+    expect(state.calls.filter(call => call.startsWith('split'))).toEqual(['split down', 'split right w1:p2'])
     expect(state.calls.filter(call => call.startsWith('close'))).toEqual(['close w1:p2', 'close w1:p3'])
   }
+})
+
+test('a finished loop clears the last pane so the next job starts below the lead', async () => {
+  const state = loopWith(['dev', 'VERDICT: APPROVED', 'next job'])
+  const loop: Loop = { id: await state.book.reserveId(), ...loopRequest(1), status: 'developing', rounds: [], startedAt: 0 }
+  await runLoop(state.deps, loop, state.book)
+  const next = await state.book.start(request('review'))
+  await state.book.ended(next.id)
+  expect(next.status).toBe('done')
+  expect(state.calls.filter(call => call.startsWith('split'))).toEqual(['split down', 'split right w1:p2', 'split down'])
+})
+
+test('a review opening during the last loop pane close waits and then starts below the lead', async () => {
+  let closing = false
+  let release = () => {}
+  const gate = new Promise<void>(done => (release = done))
+  const state = loopWith(['dev', 'VERDICT: APPROVED', 'next review'])
+  const close = state.deps.herdr.close
+  state.deps.herdr.close = async pane => {
+    if (pane === 'w1:p3') { closing = true; await gate }
+    await close(pane)
+  }
+  const loop: Loop = { id: await state.book.reserveId(), ...loopRequest(1), status: 'developing', rounds: [], startedAt: 0 }
+  const running = runLoop(state.deps, loop, state.book)
+  let next: Job | undefined
+  try {
+    for (let i = 0; i < 100 && !closing; i++) await pause(1)
+    expect(closing).toBe(true)
+    next = await state.book.start(request('review'))
+    await pause(5)
+    expect(state.calls.filter(call => call.startsWith('split'))).toEqual(['split down', 'split right w1:p2'])
+  } finally {
+    release()
+    await running
+    if (next) await state.book.ended(next.id)
+  }
+  expect(next!.status).toBe('done')
+  expect(state.calls.filter(call => call.startsWith('split'))).toEqual(['split down', 'split right w1:p2', 'split down'])
+})
+
+test('closing older loop panes preserves a newer review as the row target', async () => {
+  let release = () => {}
+  const state = loopWith(['dev', 'VERDICT: APPROVED', 'other review', 'next review'], {}, { 1: new Promise<void>(done => (release = done)) })
+  const loop: Loop = { id: await state.book.reserveId(), ...loopRequest(1), status: 'developing', rounds: [], startedAt: 0 }
+  const running = runLoop(state.deps, loop, state.book)
+  try {
+    for (let i = 0; i < 100 && state.prompts.length < 2; i++) await pause(1)
+    expect(state.prompts.length).toBe(2)
+    const review = await state.book.start(request('review'))
+    await state.book.ended(review.id)
+  } finally {
+    release()
+    await running
+  }
+  const next = await state.book.start(request('review'))
+  await state.book.ended(next.id)
+  expect(state.calls.filter(call => call.startsWith('split'))).toEqual(['split down', 'split right w1:p2', 'split right w1:p3', 'split right w1:p4'])
+  expect(state.calls.filter(call => call.startsWith('close'))).toEqual(['close w1:p2', 'close w1:p3'])
 })
 
 test('a failed dev closes only its pane and waits until its agent stops', async () => {
@@ -905,7 +1016,7 @@ import type { Run } from '../hooks/model'
 
 type Answer = { exitCode?: number; stdout?: string; stderr?: string }
 
-// A fake `run` that records argv and answers by the herdr subcommand ("pane layout", "agent wait", …).
+// A fake `run` that records argv and answers by the herdr subcommand ("pane split", "agent wait", …).
 function fakeRun(answers: Record<string, Answer>) {
   const argvs: string[][] = []
   const timeouts: (number | undefined)[] = []
@@ -943,8 +1054,10 @@ test('herdrOf gives the process room beyond the herdr wait it asks for', async (
 
 test('herdrOf splits the given pane without focus, in the given directory', async () => {
   const { herdr, argvs } = adapter({ 'pane split': { stdout: JSON.stringify({ result: { pane: { pane_id: 'w1:p2' } } }) } })
-  expect(await herdr.split('right')).toBe('w1:p2')
-  expect(argvs[0]).toEqual(['herdr', 'pane', 'split', 'w1:p1', '--direction', 'right', '--cwd', '/proj', '--no-focus'])
+  expect(await herdr.split('down')).toBe('w1:p2')
+  expect(argvs[0]).toEqual(['herdr', 'pane', 'split', 'w1:p1', '--direction', 'down', '--cwd', '/proj', '--no-focus'])
+  expect(await herdr.split('right', 'w1:p3')).toBe('w1:p2')
+  expect(argvs[1]).toEqual(['herdr', 'pane', 'split', 'w1:p3', '--direction', 'right', '--cwd', '/proj', '--no-focus'])
 })
 
 test('herdrOf closes the given pane by id', async () => {
@@ -963,12 +1076,6 @@ test('herdrOf ignores a pane that is already gone but propagates other close err
       expect(error.code).toBe('unknown')
     }
   }
-})
-
-test('herdrOf reads the size of the pane from its layout', async () => {
-  const { herdr, argvs } = adapter({ 'pane layout': { stdout: JSON.stringify({ result: { layout: { area: { width: 286, height: 71 } } } }) } })
-  expect(await herdr.size()).toEqual({ width: 286, height: 71 })
-  expect(argvs[0]).toEqual(['herdr', 'pane', 'layout', '--pane', 'w1:p1'])
 })
 
 test('herdrOf starts Codex with its own arguments after --', async () => {
@@ -1088,6 +1195,7 @@ function loopHost(on: On, gate?: Promise<void>, script: Script = {}) {
   let rows: BandJob[] = []
   let version = 0
   let prompts = 0
+  let panes = 1
   on('tool.register', (_$, e) => { tools[e.name] = e.inputSchema; return { value: { tool: `mcp__codex-team__${e.name}` } } })
   on('command.register', (_$, e) => ({ value: { command: e.name } }))
   on('session.cwd', () => ({ value: '/proj' }))
@@ -1103,8 +1211,7 @@ function loopHost(on: On, gate?: Promise<void>, script: Script = {}) {
     const argv = e.argv
     let stdout = '{}'
     if (argv[1] === '--version') stdout = 'installed'
-    if (argv[1] === 'pane' && argv[2] === 'layout') stdout = JSON.stringify({ result: { layout: { area: { width: 286, height: 71 } } } })
-    if (argv[1] === 'pane' && argv[2] === 'split') stdout = JSON.stringify({ result: { pane: { pane_id: 'w1:p2' } } })
+    if (argv[1] === 'pane' && argv[2] === 'split') stdout = JSON.stringify({ result: { pane: { pane_id: `w1:p${++panes}` } } })
     if (argv[1] === 'agent' && argv[2] === 'list') stdout = JSON.stringify({ result: { agents: [] } })
     if (argv[1] === 'agent' && argv[2] === 'prompt') {
       const index = prompts++
@@ -1119,6 +1226,30 @@ function loopHost(on: On, gate?: Promise<void>, script: Script = {}) {
 }
 
 const startSession = ($: Engine) => $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
+
+test('the host shares the layout across execute, review and loop tools and resets it after loop closes', async ($, on) => {
+  const host = loopHost(on)
+  await startSession($)
+  for (const [index, kind] of ['execute', 'review', 'loop', 'review'].entries()) {
+    await $.tool.call({ tool: `mcp__codex-team__${kind}` as 'mcp__codex-team__execute', task: 'add X' })
+    for (let i = 0; i < 100 && host.messages.length < index + 1; i++) await pause(1)
+    expect(host.messages.length).toBe(index + 1)
+    if (kind === 'loop') {
+      for (let i = 0; i < 100 && host.argvs.filter(argv => argv[2] === 'close').length < 2; i++) await pause(1)
+      expect(host.argvs.filter(argv => argv[2] === 'close')).toEqual([
+        ['herdr', 'pane', 'close', 'w1:p4'],
+        ['herdr', 'pane', 'close', 'w1:p5'],
+      ])
+    }
+  }
+  expect(host.argvs.filter(argv => argv[2] === 'split')).toEqual([
+    ['herdr', 'pane', 'split', 'w1:p1', '--direction', 'down', '--cwd', '/proj', '--no-focus'],
+    ['herdr', 'pane', 'split', 'w1:p2', '--direction', 'right', '--cwd', '/proj', '--no-focus'],
+    ['herdr', 'pane', 'split', 'w1:p3', '--direction', 'right', '--cwd', '/proj', '--no-focus'],
+    ['herdr', 'pane', 'split', 'w1:p4', '--direction', 'right', '--cwd', '/proj', '--no-focus'],
+    ['herdr', 'pane', 'split', 'w1:p1', '--direction', 'down', '--cwd', '/proj', '--no-focus'],
+  ])
+})
 
 test('loop tool registers its schema, lists the parent and publishes one final report', async ($, on) => {
   const host = loopHost(on)
@@ -1196,15 +1327,10 @@ test('nextFreeId reserves a loop id while either role agent is live', () => {
 
 test('loop reuses exactly two named panes and agents and keeps all round reports', async () => {
   const state = loopWith(['dev one', 'first finding\nVERDICT: CHANGES', 'dev two', 'VERDICT: APPROVED'])
-  let panes = 0
-  state.deps.herdr.split = async direction => {
-    state.calls.push(`split ${direction}`)
-    return `w1:p${++panes + 1}`
-  }
   const loop = await loopStart(state.deps, state.book, loopRequest())
   await state.finished(loop)
   expect(loop.status).toBe('approved')
-  expect(state.calls.filter(call => call.startsWith('split'))).toEqual(['split right', 'split right'])
+  expect(state.calls.filter(call => call.startsWith('split'))).toEqual(['split down', 'split right w1:p2'])
   expect(state.calls.filter(call => call.startsWith('start'))).toEqual([
     'start ct-1-dev w1:p2 -s workspace-write -a on-request',
     'start ct-1-qa w1:p3 -s read-only -a on-request',
@@ -1297,7 +1423,7 @@ test('blocked standalone execute and review submit a message to the lead once pe
   expect(blocked.length).toBe(2)
   for (const [index, text] of blocked.entries()) {
     expect(text).toContain(`ct-${index + 1}`)
-    expect(text).toContain('pane w1:p2')
+    expect(text).toContain(`pane w1:p${index + 2}`)
     expect(text).toContain('The person must answer in the pane')
     expect(text).toContain('The lead must NOT answer for them')
   }
@@ -1312,9 +1438,9 @@ test('blocked loop phases tell the lead the parent and pane once per blocked epi
   expect(blocked.length).toBe(3)
   expect(blocked[0]).toContain('ct-1-dev')
   expect(blocked[2]).toContain('ct-1-qa')
-  for (const text of blocked) {
+  for (const [index, text] of blocked.entries()) {
     expect(text).toContain('loop-1')
-    expect(text).toContain('pane w1:p2')
+    expect(text).toContain(index === 2 ? 'pane w1:p3' : 'pane w1:p2')
     expect(text).toContain('The person must answer in the pane')
     expect(text).toContain('The lead must NOT answer for them')
   }

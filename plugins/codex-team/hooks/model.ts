@@ -1,4 +1,5 @@
 import type { createBook } from './book'
+import type { createPaneLayout } from './pane-layout'
 
 export type Kind = 'execute' | 'review'
 
@@ -22,9 +23,8 @@ export class HerdrError extends Error {
 
 /** What the plugin needs from Herdr; hooks/herdr.ts implements it over the CLI. */
 export type Herdr = {
-  size(): Promise<{ width: number; height: number }>
-  /** Opens a sibling pane without taking focus and returns its id. */
-  split(direction: 'right' | 'down'): Promise<string>
+  /** Splits the target (the lead when absent) without taking focus and returns the new pane's id. */
+  split(direction: 'right' | 'down', target?: string): Promise<string>
   rename(pane: string, name: string): Promise<void>
   close(pane: string): Promise<void>
   start(name: string, pane: string, args: string[]): Promise<void>
@@ -56,7 +56,8 @@ export type Job = {
 
 export type Files = { read(path: string): Promise<string | undefined>; write(path: string, text: string): Promise<void> }
 export type Notify = (event: 'blocked' | 'finished', job: Job) => void
-export type Deps = { herdr: Herdr; files: Files; tmpdir: string | undefined; now: () => number; notify: Notify }
+export type PaneLayout = ReturnType<typeof createPaneLayout>
+export type Deps = { herdr: Herdr; layout: PaneLayout; files: Files; tmpdir: string | undefined; now: () => number; notify: Notify }
 
 export type Verdict = 'approved' | 'changes'
 export type Round = { dev: number; qa?: number; verdict?: Verdict }
@@ -73,7 +74,7 @@ export type Loop = LoopRequest & {
 }
 
 export type Book = ReturnType<typeof createBook>
-export type LoopDeps = Pick<Deps, 'files' | 'tmpdir' | 'now'> & { herdr: Pick<Herdr, 'close' | 'wait'>; notify: (event: 'blocked' | 'finished', loop: Loop, job?: Job) => void }
+export type LoopDeps = Pick<Deps, 'layout' | 'files' | 'tmpdir' | 'now'> & { herdr: Pick<Herdr, 'close' | 'wait'>; notify: (event: 'blocked' | 'finished', loop: Loop, job?: Job) => void }
 
 export type Check = { name: string; ok: boolean; detail: string }
 
