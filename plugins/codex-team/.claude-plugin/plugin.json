@@ -1,0 +1,9 @@
+{
+  "name": "codex-team",
+  "version": "0.1.0",
+  "description": "Lets Claude lead Codex agents: execute and review run Codex in Herdr panes as background jobs.",
+  "author": {
+    "name": "anderson-spider"
+  },
+  "types": "./types/index.d.ts"
+}

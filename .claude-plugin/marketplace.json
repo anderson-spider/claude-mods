@@ -23,6 +23,11 @@
       "description": "Routes native Mac app control through Codex computer use from the ChatGPT app, with per-app approval, one Codex session per Claude session or subagent, and /codex-cu on|off."
     },
     {
+      "name": "codex-team",
+      "source": "./plugins/codex-team",
+      "description": "Lets Claude lead Codex agents: execute and review run Codex in Herdr panes as background jobs, with a band above the prompt and a report per job."
+    },
+    {
       "name": "tailscale",
       "source": "./plugins/tailscale",
       "description": "Lets Claude query and modify the tailnet through the Tailscale API, using TS_API_KEY."
