@@ -33,7 +33,7 @@ import { renderHud } from "./render.mjs";
 // Tickers and keys belong to the host integration, as do the subagents running now.
 // `agentModels` keeps each subagent's last request model, by agent id, while it runs.
 const freshAgents = () => ({ agents: [], agentsKey: "", agentModels: {} });
-const hudData ={ ticker: null, cacheTicker: null, turnsKey: null, ...freshAgents() };
+const hudData = { ticker: null, cacheTicker: null, turnsKey: null, ...freshAgents() };
 
 export function register(on, options) {
   limitData.paceStart = paceStartOf(options?.paceStart);
