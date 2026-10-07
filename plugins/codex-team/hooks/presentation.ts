@@ -1,4 +1,5 @@
 import type { BandJob } from '../types'
+import { isFinished } from './model'
 import type { Book, Check, Job, Loop } from './model'
 import { PREFIX, agentName } from './names'
 
@@ -50,13 +51,12 @@ export function doctorReport(checks: readonly Check[]): string {
   return [...lines, '', failed ? `${failed} check(s) failed.` : 'Everything codex-team relies on is in place.'].join('\n')
 }
 
-const FINISHED: Job['status'][] = ['done', 'failed', 'cancelled']
 export const snapshot = (loops: readonly Loop[], jobs: readonly Job[], now: () => number): BandJob[] =>
   [
     ...loops.filter(loop => loop.status === 'developing' || loop.status === 'reviewing')
       .map((loop): BandJob => ({ id: `loop-${loop.id}`, kind: 'loop', status: loop.status, round: loop.rounds.length, maxRounds: loop.maxRounds, pane: '…', elapsedSeconds: Math.floor((now() - loop.startedAt) / 1000) })),
     ...jobs
-      .filter(job => !FINISHED.includes(job.status))
+      .filter(job => !isFinished(job.status))
       .map(job => ({ id: job.agent, kind: job.kind, status: job.status, pane: job.pane ?? '…', elapsedSeconds: Math.floor((now() - job.startedAt) / 1000) })),
   ]
 

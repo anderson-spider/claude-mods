@@ -258,3 +258,30 @@ test('cancel sends neither Esc nor /stop when the pane now runs another terminal
   expect(calls.some(call => call.startsWith('submit'))).toBe(false)
   expect(a.status).toBe('cancelled')
 })
+
+// The exact answers of cancel for a job that has a pane: before and after it got its task, standalone and as a loop role.
+async function cancelAnswer(prompted: boolean, session?: { agent: string }): Promise<string> {
+  let release = () => {}
+  const gate = new Promise<void>(done => (release = done))
+  const { book, herdr } = bookWith(prompted ? { gate } : {})
+  if (!prompted) {
+    const start = herdr.start
+    herdr.start = async (name, pane, args) => { await start(name, pane, args); await gate }
+  }
+  const a = await book.start({ kind: 'execute', task: 'long', files: [] }, session ? { session } : {})
+  await pause(5)
+  const answer = await book.cancel(a.id)
+  release()
+  await book.ended(a.id)
+  return answer
+}
+
+test('cancel answers are exact for a standalone job before and after it got its task', async () => {
+  expect(await cancelAnswer(false)).toBe('Sent Esc to ct-1 (pane w1:p2) and marked it cancelled; the pane stays open.')
+  expect(await cancelAnswer(true)).toBe('Sent Esc to ct-1 (pane w1:p2) and marked it cancelled; /stop follows once it settles, to end its background commands; the pane stays open.')
+})
+
+test('cancel answers are exact for a loop role before and after it got its task', async () => {
+  expect(await cancelAnswer(false, { agent: 'ct-1-dev' })).toBe('Sent Esc to ct-1-dev (pane w1:p2) and marked it cancelled; the loop closes its panes after the agents stop.')
+  expect(await cancelAnswer(true, { agent: 'ct-1-dev' })).toBe('Sent Esc to ct-1-dev (pane w1:p2) and marked it cancelled; /stop follows once it settles, to end its background commands; the loop closes its panes after the agents stop.')
+})

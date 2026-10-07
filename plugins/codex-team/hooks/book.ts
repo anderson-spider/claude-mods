@@ -3,7 +3,8 @@ import { runJob, type JobOptions } from './job'
 import { waitForStop } from './stopping'
 import { owns } from './identity'
 import { messageOf, appendNote } from './text'
-import type { Deps, Job, Kind, Notify, Request, Status } from './model'
+import { isFinished } from './model'
+import type { Deps, Job, Kind, Notify, Request } from './model'
 
 /** Runs `task` after the ones queued before it: execute jobs share the working directory, so they take turns. */
 function taskQueue(): <T>(task: () => Promise<T>) => Promise<T> {
@@ -20,7 +21,6 @@ const kinds: Record<Kind, { title: (request: Request) => string; queued: boolean
   review: { title: request => `review of ${request.target ?? 'the current diff'}`, queued: false },
 }
 
-const FINISHED: Status[] = ['done', 'failed', 'cancelled']
 // Esc ends the Codex turn but keeps its background terminals (openai/codex#14602); /stop ends them once the turn has settled.
 const STOP_WAIT_MS = 15_000
 
@@ -102,7 +102,7 @@ export function createBook(deps: Deps) {
     async cancel(id: number): Promise<string> {
       const job = jobs.find(j => j.id === id)
       if (!job) return `No job ${agentName(id)} in this session.`
-      if (FINISHED.includes(job.status) && !(job.status === 'cancelled' && running.has(id))) return `${job.agent} is ${job.status}: nothing to cancel.`
+      if (isFinished(job.status) && !(job.status === 'cancelled' && running.has(id))) return `${job.agent} is ${job.status}: nothing to cancel.`
       if (job.status === 'queued' || !job.pane) {
         job.status = 'cancelled'
         job.endedAt = deps.now()
@@ -131,12 +131,10 @@ export function createBook(deps: Deps) {
         resolve.delete(id)
       }
       // The answer does not wait for /stop; the run does, before it frees the pane and the execute slot.
-      if (!prompted) {
-        release()
-        return `Sent Esc to ${job.agent} (pane ${job.pane}) and marked it cancelled; ${job.agent === agentName(job.id) ? 'the pane stays open' : 'the loop closes its panes after the agents stop'}.`
-      }
-      void stopBackground(job).finally(release)
-      return `Sent Esc to ${job.agent} (pane ${job.pane}) and marked it cancelled; /stop follows once it settles, to end its background commands; ${job.agent === agentName(job.id) ? 'the pane stays open' : 'the loop closes its panes after the agents stop'}.`
+      if (prompted) void stopBackground(job).finally(release)
+      else release()
+      const paneNote = job.agent === agentName(job.id) ? 'the pane stays open' : 'the loop closes its panes after the agents stop'
+      return `Sent Esc to ${job.agent} (pane ${job.pane}) and marked it cancelled; ${prompted ? '/stop follows once it settles, to end its background commands; ' : ''}${paneNote}.`
     },
 
     jobs: (): readonly Job[] => jobs,

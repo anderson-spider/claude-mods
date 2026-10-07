@@ -6,6 +6,9 @@ export type Kind = 'execute' | 'review'
 export type Request = { kind: Kind; task: string; files: string[]; target?: string; focus?: string }
 
 export type Status = 'queued' | 'starting' | 'working' | 'blocked' | 'done' | 'failed' | 'cancelled'
+
+/** Whether a job has ended, however it ended. */
+export const isFinished = (status: Status): boolean => status === 'done' || status === 'failed' || status === 'cancelled'
 /** What Herdr reports for an agent; `idle` and `done` both mean it is ready for input. */
 export type AgentState = 'idle' | 'working' | 'blocked' | 'done'
 /** The states a wait settles on by default. */
