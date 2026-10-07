@@ -18,7 +18,6 @@ export const JOB_LIMIT_MS = 30 * 60_000
 // `$.process.run` kills a child after 10 minutes at most: every wait runs in chunks below that.
 export const WAIT_CHUNK_MS = 540_000
 // Esc ends the Codex turn but keeps its background terminals (openai/codex#14602); /stop ends them once the turn has settled.
-// /stop ends only that Codex session's terminals, never the shared daemon's other sessions.
 export const STOP_WAIT_MS = 15_000
 
 const reportDir = (tmpdir: string | undefined) => `${(tmpdir || '/tmp').replace(/\/+$/, '')}/codex-team`

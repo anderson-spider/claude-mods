@@ -39,6 +39,7 @@ export function createBook(deps: Deps) {
       if (!job.pane || !await owns(deps.herdr, job.agent, job.pane, job.terminal)) {
         throw new Error(`Pane ${job.pane} no longer runs ${job.agent}; /stop was skipped and the pane was left alone.`)
       }
+      // /stop ends only this Codex session's background terminals, never the shared daemon's other sessions.
       await deps.herdr.submit(job.agent, '/stop')
     } catch (error) {
       appendNote(job, `Could not send /stop to end its background commands: ${messageOf(error)}`)
