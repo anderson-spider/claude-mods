@@ -72,3 +72,17 @@ test('the band holds a commit inside a brace group', async ($, on) => {
   expect(seen.ran).toEqual([])
   await ui.unmount()
 })
+
+test('the band holds a commit inside a case arm', async ($, on) => {
+  const seen = world(on)
+
+  const refused = $.tool.call({ tool: 'Bash', command: 'case $x in a) git commit -m x ;; esac' })
+  await pause(50)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: '⚠ Branch Guard · git commit' })).toBeDefined()
+  await ui.press({ key: 'cancel' })
+
+  expect((await refused).deny).toMatch(/pressed Cancel/)
+  expect(seen.ran).toEqual([])
+  await ui.unmount()
+})
