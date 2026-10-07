@@ -51,7 +51,7 @@ export async function saveImages(deps: OutputDeps, result: ImageResult, request:
     const base = request.out ?? `${await outDir(deps.tmpDir)}/${fileName(request.input.prompt, new Date(), ext)}`
     const path = variantPath(base, i, result.images.length)
     const failed = await writeImage(deps.run, path, image.base64)
-    if (failed) return { ok: false, text: failed, chatUrl: result.url, paths }
+    if (failed) return { ok: false, text: failed, error: failed, chatUrl: result.url, paths }
     paths.push(path)
     lines.push(`${path} (${image.width}x${image.height}, ${image.type})`)
     const preview = await previewOf(deps, path)

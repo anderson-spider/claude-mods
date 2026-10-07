@@ -3,6 +3,7 @@ import { readAttachments } from '../hooks/input'
 import { performRequest, runNow, createJobs, taskQueue } from '../hooks/runner'
 import type { Outcome, OutputDeps, ProcessRunner, Request, RequestRunner } from '../hooks/model'
 import { saveAnswer, saveImages } from '../hooks/output'
+import { NOTICE } from '../hooks/presentation'
 import { browserOf } from '../hooks/terminal-browser'
 
 function deferred<T>() {
@@ -80,6 +81,7 @@ test('answer persistence saves partial Markdown with its chat header and honors 
   expect(outcome).toEqual({
     ok: false,
     text: 'still going\nPartial answer saved to /out/answer.md.',
+    error: 'still going',
     timedOut: true,
     chatUrl: result.url,
     paths: ['/out/answer.md'],
@@ -109,7 +111,7 @@ test('image persistence keeps saved variants on a later write failure and cleans
   const outcome = await saveImages(deps, { ok: true, url: 'https://chatgpt.com/c/image', images: [image, image] }, {
     kind: 'image', input: { prompt: 'lamp' }, filePaths: [], out: '/out/lamp.png',
   })
-  expect(outcome).toEqual({ ok: false, text: 'Could not write /out/lamp-2.png: disk full', chatUrl: 'https://chatgpt.com/c/image', paths: ['/out/lamp-1.png'] })
+  expect(outcome).toEqual({ ok: false, text: 'Could not write /out/lamp-2.png: disk full', error: 'Could not write /out/lamp-2.png: disk full', chatUrl: 'https://chatgpt.com/c/image', paths: ['/out/lamp-1.png'] })
   expect(calls).toEqual([
     ['mkdir', '-p', '/out'],
     ['openssl', 'base64', '-d', '-A', '-out', '/out/lamp-1.png'],
@@ -135,7 +137,7 @@ test('background jobs remain queued until their turn and notify with the settled
       started.resolve()
       return await finish.promise
     }
-    return { ok: false, text: 'failed' }
+    return { ok: false, text: 'failed', error: 'failed' }
   })
   const deps = { perform, notifications: {
     toast: (text: string) => { toasts.push(text) },
@@ -155,8 +157,11 @@ test('background jobs remain queued until their turn and notify with the settled
   expect(first).toMatchObject({ status: 'done', chatUrl: 'https://chatgpt.com/c/a', paths: ['/out/a.md'] })
   expect(second.status).toBe('failed')
   expect(toasts).toEqual(['ChatGPT job #1 done', 'ChatGPT job #2 failed'])
-  expect(messages[0]).toContain('saved')
-  expect(messages[1]).toContain('failed')
+  expect(messages[0]?.split('\n')[0]).toBe(NOTICE)
+  expect(messages[0]).toContain('Saved to: /out/a.md')
+  expect(messages[0]).not.toContain('\nsaved')
+  expect(messages[1]?.split('\n')[0]).toBe(NOTICE)
+  expect(messages[1]).toContain('Note: failed')
   expect(jobs.report().split('\n')[0]).toContain('#2 ask failed')
 })
 
@@ -186,5 +191,5 @@ test('request dispatch reports an unavailable browser before touching attachment
     browser: async () => 'unavailable',
     attachments: { stat: unused },
     output: { run: unused, files: { write: unused, readBytes: unused }, tmpDir: unused },
-  }, { kind: 'ask', input: { prompt: 'question' }, filePaths: ['/ref.png'] }, {})).toEqual({ ok: false, text: 'unavailable' })
+  }, { kind: 'ask', input: { prompt: 'question' }, filePaths: ['/ref.png'] }, {})).toEqual({ ok: false, text: 'unavailable', error: 'unavailable' })
 })
