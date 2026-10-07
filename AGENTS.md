@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Claude Code plugin marketplace (`anderson-spider/spider-marketplace`). It currently has six plugins: `branch-guard` (holds commit and push on the protected branch), `chatgpt` (asks the user's ChatGPT, or has it generate an image, in terminal-browser), `codex-computer-use` (routes native Mac app control through Codex computer use, with a local helper), `codex-team` (lets Claude lead Codex agents in Herdr panes as background jobs), `tailscale` (tools to query and modify the tailnet) and `hud` (a usage line above the prompt, and suggested next prompts). The README and other documentation are in English; code comments and user-facing messages are in English too. Pull request titles and descriptions are in English.
+Claude Code plugin marketplace `spider-claude-mods` (`anderson-spider/claude-mods`). It currently has six plugins: `branch-guard` (holds commit and push on the protected branch), `chatgpt` (asks the user's ChatGPT, or has it generate an image, in terminal-browser), `codex-computer-use` (routes native Mac app control through Codex computer use, with a local helper), `codex-team` (lets Claude lead Codex agents in Herdr panes as background jobs), `tailscale` (tools to query and modify the tailnet) and `hud` (a usage line above the prompt, and suggested next prompts). The README and other documentation are in English; code comments and user-facing messages are in English too. Pull request titles and descriptions are in English.
 
 ## Structure
 
