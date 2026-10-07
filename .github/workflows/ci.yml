@@ -13,6 +13,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -20,5 +22,8 @@ jobs:
       # and its generated typings, so they stay a local check (see AGENTS.md).
       - name: Marketplace and plugin manifests agree
         run: node scripts/check-consistency.mjs
+      - name: Plugins with code changes bumped their version
+        if: github.event_name == 'pull_request'
+        run: node scripts/check-version-bump.mjs "origin/${{ github.base_ref }}"
       - name: codex-computer-use helper tests
         run: node --test plugins/codex-computer-use/helper/test/*.test.mjs
