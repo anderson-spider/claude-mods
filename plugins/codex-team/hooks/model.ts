@@ -36,11 +36,16 @@ export type Herdr = {
   sendKeys(name: string, keys: string[]): Promise<void>
   /** Types `text` and Enter into the agent without waiting for it to settle. */
   submit(name: string, text: string): Promise<void>
-  list(): Promise<{ name: string; pane: string }[]>
+  /** The `ct-*` agents with their pane and terminal: `terminal_id` changes when a pane id is reused after a restart. */
+  list(): Promise<{ name: string; pane: string; terminal?: string }[]>
+  /** A Herdr notification, seen outside Claude's window. */
+  notify(title: string, body: string): Promise<void>
+  /** Display-only metadata on one of the plugin's panes, under `--source codex-team`, gone after `ttlMs`. */
+  annotate(pane: string, meta: { title?: string; stateLabel?: string; ttlMs: number }): Promise<void>
 }
 
 /** One agent shared by the phase jobs of a loop role. */
-export type AgentSession = { agent: string; pane?: string; ready?: boolean; active?: boolean }
+export type AgentSession = { agent: string; pane?: string; terminal?: string; ready?: boolean; active?: boolean }
 
 export type Job = {
   id: number
@@ -49,6 +54,8 @@ export type Job = {
   status: Status
   agent: string
   pane?: string
+  /** The pane's `terminal_id` once the agent started; part of the identity checked before acting on the pane. */
+  terminal?: string
   startedAt: number
   endedAt?: number
   report?: string

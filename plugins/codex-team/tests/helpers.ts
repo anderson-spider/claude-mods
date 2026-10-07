@@ -7,7 +7,7 @@ import { createBook } from '../hooks/book'
 import { herdrOf } from '../hooks/herdr'
 import type { BandJob } from '../types'
 
-export type Script = { prompt?: (Settled | Error)[]; wait?: (AgentState | Error)[]; start?: Error; rename?: Error; close?: Error; split?: (string | Error)[]; splitGate?: Promise<void>; read?: string; onPrompt?: () => void; onWait?: () => void; live?: string[]; gate?: Promise<void> }
+export type Script = { prompt?: (Settled | Error)[]; wait?: (AgentState | Error)[]; start?: Error; rename?: Error; close?: Error; split?: (string | Error)[]; splitGate?: Promise<void>; read?: string; onPrompt?: () => void; onWait?: () => void; live?: string[]; gate?: Promise<void>; terminals?: Record<string, string>; list?: Error; notify?: Error; annotate?: Error }
 
 export function fakeHerdr(script: Script) {
   const calls: string[] = []
@@ -61,7 +61,19 @@ export function fakeHerdr(script: Script) {
     submit: async (name, text) => {
       calls.push(`submit ${name} ${text}`)
     },
-    list: async () => [...(script.live ?? []).map(name => ({ name, pane: 'w9:p9' })), ...Array.from(agents, ([name, pane]) => ({ name, pane }))],
+    // A started agent's terminal is `term-<name>` unless `terminals` says otherwise (a pane reused after a restart).
+    list: async () => {
+      if (script.list) throw script.list
+      return [...(script.live ?? []).map(name => ({ name, pane: 'w9:p9' })), ...Array.from(agents, ([name, pane]) => ({ name, pane, terminal: script.terminals?.[name] ?? `term-${name}` }))]
+    },
+    notify: async (title, body) => {
+      calls.push(`notify ${title} | ${body}`)
+      if (script.notify) throw script.notify
+    },
+    annotate: async (pane, meta) => {
+      calls.push(`annotate ${pane} ${meta.title ?? ''} ${meta.stateLabel ?? ''} ${meta.ttlMs}`)
+      if (script.annotate) throw script.annotate
+    },
   }
   return { herdr, calls }
 }

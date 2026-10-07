@@ -39,7 +39,7 @@ export function createBook(deps: Deps) {
   const stopBackground = async (job: Job): Promise<void> => {
     try {
       await deps.herdr.wait(job.agent, STOP_WAIT_MS, ['idle', 'done', 'blocked'])
-      if (!job.pane || !await owns(deps.herdr, job.agent, job.pane)) {
+      if (!job.pane || !await owns(deps.herdr, job.agent, job.pane, job.terminal)) {
         throw new Error(`Pane ${job.pane} no longer runs ${job.agent}; /stop was skipped and the pane was left alone.`)
       }
       await deps.herdr.submit(job.agent, '/stop')
@@ -78,7 +78,7 @@ export function createBook(deps: Deps) {
           await stops.get(id)
           // A standalone job that wrote its report is over: its pane goes. A failure, a missing report or a cancel keeps it to look at.
           if (!options.session && job.status === 'done' && job.report && job.pane) {
-            const closed = await deps.layout.close(deps.herdr, job.pane, job.agent).catch(() => undefined)
+            const closed = await deps.layout.close(deps.herdr, job.pane, job.agent, job.terminal).catch(() => undefined)
             if (closed === 'skipped') {
               const text = `Skipped closing pane ${job.pane}: could not confirm ${job.agent} in that pane.`
               job.error = job.error ? `${job.error}\n${text}` : text
@@ -119,7 +119,7 @@ export function createBook(deps: Deps) {
       let release = () => {}
       stops.set(id, new Promise<void>(done => (release = done)))
       try {
-        if (!await owns(deps.herdr, job.agent, job.pane)) {
+        if (!await owns(deps.herdr, job.agent, job.pane, job.terminal)) {
           release()
           return `Pane ${job.pane} no longer runs ${job.agent}; the job is cancelled, nothing was sent and the pane was left alone.`
         }

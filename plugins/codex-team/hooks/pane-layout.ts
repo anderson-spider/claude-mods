@@ -32,11 +32,11 @@ export function createPaneLayout() {
       })
     },
 
-    close(herdr: Pick<Herdr, 'close' | 'list'>, pane: string, agent: string): Promise<'closed' | 'skipped'> {
+    close(herdr: Pick<Herdr, 'close' | 'list'>, pane: string, agent: string, terminal?: string): Promise<'closed' | 'skipped'> {
       // Closing and opening share the queue so a split cannot target a pane being closed.
       return serial(async () => {
         try {
-          if (!await owns(herdr, agent, pane).catch(() => false)) return 'skipped'
+          if (!await owns(herdr, agent, pane, terminal).catch(() => false)) return 'skipped'
           await herdr.close(pane)
           return 'closed'
         } finally {

@@ -2,6 +2,7 @@ import { reportPath } from './names'
 import { buildPrompt, codexArgs } from './prompts'
 import { HerdrError } from './model'
 import { isWaiting } from './report'
+import { owns } from './identity'
 import type { AgentSession, AgentState, Deps, Herdr, Job, Request, Status } from './model'
 
 export const JOB_LIMIT_MS = 30 * 60_000
@@ -10,7 +11,7 @@ export const WAIT_CHUNK_MS = 540_000
 const SUMMARY_CHARS = 600
 const LEFT_BLOCKED: AgentState[] = ['working', 'idle', 'done']
 
-type JobDeps = Omit<Deps, 'herdr'> & { herdr: Pick<Herdr, 'split' | 'rename' | 'start' | 'prompt' | 'wait' | 'read'> }
+type JobDeps = Omit<Deps, 'herdr'> & { herdr: Pick<Herdr, 'split' | 'rename' | 'start' | 'prompt' | 'wait' | 'read' | 'list'> }
 
 // A cancel from outside wins: nothing the run learns afterwards changes a cancelled job.
 const setStatus = (job: Job, status: Status) => {
@@ -63,7 +64,9 @@ function recordReport(job: Job, path: string, report: string | undefined): boole
 }
 
 function errorText(code: string, message: string, pane: string): string {
-  return code === 'agent_prompt_stalled'
+  return code === 'pane_mismatch'
+    ? message
+    : code === 'agent_prompt_stalled'
     ? `Codex showed no activity after the prompt${pane}; it may still have arrived, so it was not sent again: inspect the pane.`
     : code === 'timeout'
       ? `timeout: ${message}${pane}; Codex was not stopped.`
@@ -87,6 +90,12 @@ export async function runJob(deps: JobDeps, job: Job, request: Request, options:
   const path = options.reportPath ?? reportPath(deps.tmpdir, job.id)
   const session = options.session
   const { settle, whileBlocked } = waits(deps, job, { deadline, limit, chunk })
+  // The agent's terminal is read once it runs in its pane; a failed list leaves it unknown and does not fail the job.
+  const recordTerminal = async () => {
+    const terminal = await herdr.list().then(agents => agents.find(agent => agent.name === job.agent && agent.pane === job.pane)?.terminal, () => undefined)
+    job.terminal = terminal
+    if (session) session.terminal = terminal
+  }
 
   try {
     // Loop children must not inherit a verdict from a report left by an earlier session.
@@ -116,9 +125,16 @@ export async function runJob(deps: JobDeps, job: Job, request: Request, options:
         if (session) session.active = false
       }
       if (session) session.ready = true
+      await recordTerminal()
+    } else {
+      job.terminal = session.terminal
     }
 
     if (cancelled()) return
+    // The prompt goes only to the agent that still runs in this pane: a reload or a Herdr restart can reuse the pane id.
+    if (!await owns(herdr, job.agent, job.pane ?? '', job.terminal).catch(() => false)) {
+      throw new HerdrError('pane_mismatch', `pane ${job.pane} no longer runs ${job.agent}; the prompt was not sent.`)
+    }
     set('working')
     if (session) session.active = true
     await whileBlocked(await settle(timeoutMs => herdr.prompt(job.agent, buildPrompt(request.kind, request, path), timeoutMs)))

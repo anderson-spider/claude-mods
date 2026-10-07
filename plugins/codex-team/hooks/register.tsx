@@ -3,11 +3,13 @@ import type { Elements, EngineInterface, Register, RenderElement } from 'claude-
 
 import type { BandJob } from '../types'
 import { herdrAvailable, herdrOf } from './herdr'
+import type { Herdr } from './model'
 import { createBook } from './book'
 import { createPaneLayout } from './pane-layout'
+import { JOB_LIMIT_MS } from './job'
 import { PROMPT } from './prompts'
 import { EXECUTE, REVIEW, LOOP, JOBS } from './schemas'
-import { allJobs, bandRows, blockedText, finishedText, loopFinishedText, orphanText, snapshot } from './presentation'
+import { allJobs, bandRows, blockedText, finishedText, herdrNoticeBody, herdrNoticeTitle, loopFinishedText, orphanText, snapshot } from './presentation'
 import { checkDoctor } from './doctor'
 import { NOT_READY, failure, jobsTool, refusal, startJob, startLoop } from './tools'
 import type { Job, Loop, LoopDeps } from './model'
@@ -40,22 +42,32 @@ async function publish($: EngineInterface) {
   }
 }
 
-const notifier = ($: EngineInterface) => (event: 'blocked' | 'finished', job: Job) => {
+// Best effort: a Herdr notification or pane label that fails never fails the job or the toast.
+function herdrNotice(herdr: Herdr, job: Job, loop?: Loop) {
+  void herdr.notify(herdrNoticeTitle(job, loop), herdrNoticeBody(job)).catch(() => undefined)
+  if (!job.pane) return
+  const title = loop ? `loop-${loop.id} ${job.kind === 'execute' ? 'dev' : 'qa'}` : `${job.agent} ${job.kind}`
+  void herdr.annotate(job.pane, { title, stateLabel: 'needs you', ttlMs: JOB_LIMIT_MS }).catch(() => undefined)
+}
+
+const notifier = ($: EngineInterface, herdr: Herdr) => (event: 'blocked' | 'finished', job: Job) => {
   void publish($)
   if (event === 'blocked') {
     $.ui.toast(`Codex Team: ${job.agent} needs you in pane ${job.pane}`)
     void $.prompt.submit({ text: blockedText(job) }).catch(() => undefined)
+    herdrNotice(herdr, job)
     return
   }
   $.ui.toast(`Codex Team: ${job.agent} ${job.status}`)
   void $.prompt.submit({ text: finishedText(job) }).catch(() => undefined)
 }
 
-const loopNotifier = ($: EngineInterface) => (event: 'blocked' | 'finished', loop: Loop, job?: Job) => {
+const loopNotifier = ($: EngineInterface, herdr: Herdr) => (event: 'blocked' | 'finished', loop: Loop, job?: Job) => {
   void publish($)
   if (event === 'blocked' && job) {
     $.ui.toast(`Codex Team: loop-${loop.id} ${job.agent} needs you in pane ${job.pane}`)
     void $.prompt.submit({ text: blockedText(job, loop) }).catch(() => undefined)
+    herdrNotice(herdr, job, loop)
     return
   }
   $.ui.toast(`Codex Team: loop-${loop.id} ${loop.status}`)
@@ -120,8 +132,8 @@ export const register: Register = on => {
         tmpdir,
         now: Date.now,
       }
-      book = createBook({ ...deps, notify: notifier($) })
-      loopDeps = { ...deps, notify: loopNotifier($) }
+      book = createBook({ ...deps, notify: notifier($, deps.herdr) })
+      loopDeps = { ...deps, notify: loopNotifier($, deps.herdr) }
     }
 
     return next(e)

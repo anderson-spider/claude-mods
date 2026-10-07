@@ -1,6 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import { HerdrError } from '../hooks/model'
 import { herdrAvailable } from '../hooks/herdr'
+import { owns } from '../hooks/identity'
 import { fakeRun, agent, adapter } from './helpers'
 
 test('herdrOf passes a prompt with quotes, newlines and $() as exactly one argv element', async () => {
@@ -71,6 +72,30 @@ test('herdrOf reads the pane text raw and lists only ct agents', async () => {
   expect(await herdr.read('ct-1', 50)).toBe('line 1\nline 2\n')
   expect(argvs[0]).toEqual(['herdr', 'agent', 'read', 'ct-1', '--source', 'recent-unwrapped', '--lines', '50'])
   expect(await herdr.list()).toEqual([{ name: 'ct-2', pane: 'w1:p3' }])
+})
+
+test('herdrOf lists the terminal of each ct agent', async () => {
+  const listed = JSON.stringify({ result: { agents: [{ agent: 'codex', name: 'ct-2', pane_id: 'w1:p3', terminal_id: 'term_a' }] } })
+  const { herdr } = adapter({ 'agent list': { stdout: listed } })
+  expect(await herdr.list()).toEqual([{ name: 'ct-2', pane: 'w1:p3', terminal: 'term_a' }])
+})
+
+test('owns needs the name and pane, and the terminal once known', async () => {
+  const herdr = { list: async () => [{ name: 'ct-2', pane: 'w1:p3', terminal: 'term_a' }] }
+  expect(await owns(herdr, 'ct-2', 'w1:p3')).toBe(true)
+  expect(await owns(herdr, 'ct-2', 'w1:p3', 'term_a')).toBe(true)
+  expect(await owns(herdr, 'ct-2', 'w1:p3', 'term_b')).toBe(false)
+  expect(await owns(herdr, 'ct-2', 'w1:p4', 'term_a')).toBe(false)
+})
+
+test('herdrOf notifies and annotates with one argv element per value and the codex-team source', async () => {
+  const { herdr, argvs } = adapter({ 'notification show': { stdout: '{}' }, 'pane report-metadata': { stdout: '{}' } })
+  await herdr.notify('codex-team: ct-1 needs you', 'pane w1:p2 "x" $(y)')
+  expect(argvs[0]).toEqual(['herdr', 'notification', 'show', 'codex-team: ct-1 needs you', '--body', 'pane w1:p2 "x" $(y)', '--sound', 'request'])
+  await herdr.annotate('w1:p2', { title: 'ct-1 execute', stateLabel: 'needs you', ttlMs: 1000 })
+  expect(argvs[1]).toEqual(['herdr', 'pane', 'report-metadata', 'w1:p2', '--source', 'codex-team', '--title', 'ct-1 execute', '--state-label', 'blocked=needs you', '--ttl-ms', '1000'])
+  await herdr.annotate('w1:p2', { ttlMs: 5 })
+  expect(argvs[2]).toEqual(['herdr', 'pane', 'report-metadata', 'w1:p2', '--source', 'codex-team', '--ttl-ms', '5'])
 })
 
 test('herdrOf turns a CLI error into a HerdrError with its code', async () => {

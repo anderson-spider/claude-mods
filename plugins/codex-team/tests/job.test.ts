@@ -3,6 +3,8 @@ import { HerdrError } from '../hooks/model'
 import { runJob } from '../hooks/job'
 import { createBook } from '../hooks/book'
 import { job, request, setup, pause } from './helpers'
+import type { Script } from './helpers'
+import type { AgentSession } from '../hooks/model'
 
 test('runJob runs an execute job to done with its report', async () => {
   const { deps, calls, events } = setup({})
@@ -201,4 +203,36 @@ test('a cancel while the job waits for the answer leaves it cancelled with no fi
   expect(j.status).toBe('cancelled')
   expect(events).toEqual(['blocked blocked'])
   expect(events.some(event => event.startsWith('finished'))).toBe(false)
+})
+
+test('a reused session whose pane now runs another terminal fails the phase without sending its prompt', async () => {
+  const script: Script = { terminals: {} }
+  const { deps, calls } = setup(script)
+  const session: AgentSession = { agent: 'ct-1' }
+  const first = job()
+  await runJob(deps, first, request(), { session })
+  expect(first.status).toBe('done')
+  expect(session.terminal).toBe('term-ct-1')
+  script.terminals = { 'ct-1': 'term-replaced' }
+  const second = job()
+  await runJob(deps, second, request(), { session })
+  expect(second.status).toBe('failed')
+  expect(second.error).toBe('pane w1:p2 no longer runs ct-1; the prompt was not sent.')
+  expect(second.terminal).toBe('term-ct-1')
+  expect(calls.filter(call => call.startsWith('prompt'))).toEqual(['prompt ct-1'])
+})
+
+test('a job whose list fails right after start still runs with its terminal unknown', async () => {
+  const { deps, calls } = setup({})
+  const { list } = deps.herdr
+  let failures = 1
+  deps.herdr.list = async () => {
+    if (failures-- > 0) throw new Error('list failed')
+    return list()
+  }
+  const j = job()
+  await runJob(deps, j, request())
+  expect(j.terminal).toBeUndefined()
+  expect(j.status).toBe('done')
+  expect(calls.at(-1)).toBe('prompt ct-1')
 })

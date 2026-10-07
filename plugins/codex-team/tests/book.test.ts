@@ -3,6 +3,7 @@ import { HerdrError } from '../hooks/model'
 import type { Job } from '../hooks/model'
 import { jobDetail, jobsReport } from '../hooks/presentation'
 import { request, pause, settled, bookWith } from './helpers'
+import type { Script } from './helpers'
 
 test('createBook queues execute jobs one at a time while a review starts at once', async () => {
   let release = () => {}
@@ -240,4 +241,20 @@ test('/stop checks identity again after the wait and notes a mismatch or list fa
     expect(a.status).toBe('cancelled')
     expect(a.error).toContain(failed ? 'list failed' : `no longer runs ${a.agent}`)
   }
+})
+
+test('cancel sends neither Esc nor /stop when the pane now runs another terminal', async () => {
+  let release = () => {}
+  const script: Script = { gate: new Promise<void>(done => (release = done)), terminals: {} }
+  const { book, calls } = bookWith(script)
+  const a = await book.start(request())
+  await pause(5)
+  expect(a.terminal).toBe('term-ct-1')
+  script.terminals = { 'ct-1': 'term-replaced' }
+  expect(await book.cancel(a.id)).toContain(`no longer runs ${a.agent}`)
+  expect(calls.some(call => call.startsWith('keys') || call.startsWith('submit'))).toBe(false)
+  release()
+  await book.ended(a.id)
+  expect(calls.some(call => call.startsWith('submit'))).toBe(false)
+  expect(a.status).toBe('cancelled')
 })

@@ -33,3 +33,15 @@ test('close closes when both agent and pane match', async () => {
   expect(await layout.close(herdr, pane, 'ct-1')).toBe('closed')
   expect(calls).toContain(`close ${pane}`)
 })
+
+test('close skips a pane whose terminal changed, and closes when the terminal matches', async () => {
+  const layout = createPaneLayout()
+  const { herdr, calls } = fakeHerdr({})
+  const pane = await layout.open(herdr)
+  herdr.list = async () => [{ name: 'ct-1', pane, terminal: 'term-new' }]
+  expect(await layout.close(herdr, pane, 'ct-1', 'term-old')).toBe('skipped')
+  expect(calls.some(call => call.startsWith('close'))).toBe(false)
+  herdr.list = async () => [{ name: 'ct-1', pane, terminal: 'term-old' }]
+  expect(await layout.close(herdr, pane, 'ct-1', 'term-old')).toBe('closed')
+  expect(calls).toContain(`close ${pane}`)
+})

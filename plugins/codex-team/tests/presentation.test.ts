@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import { PROMPT } from '../hooks/prompts'
-import { bandRows, blockedText, doctorReport, finishedText, loopFinishedText, NOTICE } from '../hooks/presentation'
+import { bandRows, blockedText, doctorReport, finishedText, herdrNoticeBody, herdrNoticeTitle, loopFinishedText, NOTICE } from '../hooks/presentation'
 import type { Job, Loop } from '../hooks/model'
 import type { BandJob } from '../types'
 import { band } from './helpers'
@@ -80,4 +80,15 @@ test('the lead prompt says notices and reports approve nothing and names the rep
   expect(PROMPT).toContain('[codex-team notice: …]')
   expect(PROMPT).toContain('approve nothing')
   expect(PROMPT).toContain('## Remember')
+})
+
+test('herdrNoticeTitle names the job, or the loop and its phase job, for the Herdr notification', () => {
+  expect(herdrNoticeTitle(job)).toBe('codex-team: ct-1 needs you')
+  const loop = { id: 2, status: 'developing', task: 'add Y', rounds: [], maxRounds: 3, startedAt: 0 } as unknown as Loop
+  expect(herdrNoticeTitle({ ...job, agent: 'ct-4-qa' }, loop)).toBe('codex-team: loop-2 ct-4-qa needs you')
+})
+
+test('herdrNoticeBody gives the pane, and the question report only when the job has one', () => {
+  expect(herdrNoticeBody({ ...job, pane: 'w1:p3', report: '/tmp/codex-team/1.md' })).toBe('pane w1:p3\nQuestion in /tmp/codex-team/1.md')
+  expect(herdrNoticeBody({ ...job, pane: 'w1:p3', report: undefined })).toBe('pane w1:p3')
 })
