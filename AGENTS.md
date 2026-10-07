@@ -30,6 +30,7 @@ claude plugin test plugins/codex-team          # runs tests/*.test.ts; tests/hel
 claude plugin test plugins/tailscale           # same, for tailscale
 claude plugin test plugins/hud                 # same, for hud
 node scripts/check-consistency.mjs             # marketplace and plugin manifests agree (also run by CI)
+node scripts/check-version-bump.mjs origin/main  # a plugin with code changes bumped its version (run by CI on pull requests)
 claude --plugin-dir plugins/branch-guard       # loads the plugin with automatic reload
 ```
 
