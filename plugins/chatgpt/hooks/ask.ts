@@ -1,7 +1,7 @@
 import type { AskInput, AskOptions, AskResult, Browser } from './model'
-import { parseOutput, prepare } from './browser'
+import { prepare } from './browser'
 import { compose, readAnswer, stopped, unfinished, watch } from './conversation'
-import { sendScript } from './scripts'
+import { parseOutput, sendScript } from './scripts'
 
 export async function ask(browser: Browser, input: AskInput, options: AskOptions = {}): Promise<AskResult> {
   const timeoutMs = options.timeoutMs ?? 6 * 60_000

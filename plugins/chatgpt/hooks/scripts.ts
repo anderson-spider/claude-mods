@@ -262,3 +262,13 @@ return JSON.stringify({ leaving: true });`
 }
 
 export const LANDED = `!window.__chatgptLeaving && document.readyState !== 'loading'`
+
+// Every page script returns JSON.stringify(...): terminal-browser's eval
+// prints a string result as a JSON literal.
+export function parseOutput<T>(text: string): T {
+  try {
+    return JSON.parse(JSON.parse(text.trim())) as T
+  } catch {
+    throw new Error(`unexpected browser output: ${text.slice(0, 200)}`)
+  }
+}

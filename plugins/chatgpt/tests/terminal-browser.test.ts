@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
-import { listTabs, openedTab, parseOutput, splitTabId } from '../hooks/browser'
 import type { ProcessRunner } from '../hooks/model'
-import { browserOf } from '../hooks/terminal-browser'
+import { parseOutput } from '../hooks/scripts'
+import { browserOf, listTabs, openedTab, splitTabId } from '../hooks/terminal-browser'
 import { printed } from './helpers'
 
 test('parseOutput reads the JSON a page script returns', () => {

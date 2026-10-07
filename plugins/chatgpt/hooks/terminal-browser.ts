@@ -1,5 +1,45 @@
-import { listTabs, openedTab, splitTabId, STARTING, TERMINAL_BROWSER } from './browser'
 import type { Browser, ProcessRunner } from './model'
+
+export const TERMINAL_BROWSER = 'terminal-browser'
+
+// A tab new-tab just opened takes a moment to accept automation.
+export const STARTING = /no CDP target yet/
+
+// terminal-browser names a tab by its browser's key and its own number; the
+// plugin carries both as one id, `<key>:<tab>`.
+
+// The JSON object a terminal-browser command prints, after any banner.
+export function jsonOf<T>(text: string): T | undefined {
+  try {
+    return JSON.parse(text.slice(text.indexOf('{'))) as T
+  } catch {
+    return undefined
+  }
+}
+
+/** The ids of every browser's tabs, from `terminal-browser ls --json`. */
+export function listTabs(text: string): string[] {
+  const parsed = jsonOf<{ browsers?: { key: string; tabs?: { id: number }[] }[] }>(text)
+  return (parsed?.browsers ?? []).flatMap(b => (b.tabs ?? []).map(t => `${b.key}:${t.id}`))
+}
+
+/** The `--browser` and `--tab` a `<key>:<tab>` id stands for. */
+export function splitTabId(tabId: string): { browser: string; tab: string } {
+  const at = tabId.lastIndexOf(':')
+  return { browser: tabId.slice(0, at), tab: tabId.slice(at + 1) }
+}
+
+/**
+ * The tab `terminal-browser new-tab <url>` opened, from its JSON output. When
+ * it had to start a browser, `openedTab` is null and the tab is the new
+ * browser's first.
+ */
+export function openedTab(text: string): string | undefined {
+  const parsed = jsonOf<{ key?: string; openedTab?: number | null; tabs?: { id: number; active?: boolean }[] }>(text)
+  if (!parsed?.key) return undefined
+  const tab = parsed.openedTab ?? parsed.tabs?.find(t => t.active)?.id ?? parsed.tabs?.[0]?.id ?? 1
+  return `${parsed.key}:${tab}`
+}
 
 async function terminalBrowser(run: ProcessRunner, args: string[], timeoutMs = 120_000): Promise<string> {
   for (let attempt = 0; ; attempt++) {
