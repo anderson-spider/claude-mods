@@ -3,11 +3,12 @@ import type { Elements, EngineInterface, Register, RenderElement } from 'claude-
 
 import type { CodexAsking } from '../types'
 import { serve } from './bridge'
-import type { BridgeInput, Choice } from './bridge'
+import type { BridgeInput } from './bridge'
 import { callerOf, kickstart, post, socketOf } from './helper'
-import type { Probe, Reply } from './helper'
+import type { Probe } from './helper'
+import { ROUTES } from './model'
+import type { Choice, Reply } from './model'
 import { BRIDGE, DESCRIPTION, HELP, INPUT_SCHEMA, PROMPT, denyOwn, forgetText, isOwnDesktopTool, limitMs, parseCommand, statusReport } from './routing'
-import type { StatusReply } from './routing'
 
 type Kit = Pick<Elements['terminal'], 'Box' | 'Text' | 'Button'>
 type Slot = { id: string; choice: Choice | null }
@@ -116,7 +117,7 @@ const draw = ({ Box, Text, Button }: Kit, now: CodexAsking): RenderElement => (
 
 const statusText = async ($: EngineInterface) => {
   const enabled = await isEnabled($)
-  const reply = (await helper($, '/status', {})) as StatusReply
+  const reply = await helper($, ROUTES.status, {})
 
   return statusReport(enabled, reply)
 }
@@ -136,7 +137,7 @@ export const register: Register = (on, options) => {
   })
 
   on('session.end', async ($, e, next) => {
-    await helper($, '/release', { caller: callerOf(e.sessionId) }).catch(() => undefined)
+    await helper($, ROUTES.release, { caller: callerOf(e.sessionId) }).catch(() => undefined)
 
     return next(e)
   })
@@ -157,7 +158,7 @@ export const register: Register = (on, options) => {
               : 'codex-cu off: Claude’s own desktop computer use is back; the Codex bridge refuses calls.',
         }
       case 'auto-approve': {
-        const reply = await helper($, '/settings', { autoApprove: command.isOn })
+        const reply = await helper($, ROUTES.settings, { autoApprove: command.isOn })
 
         return {
           text:
@@ -170,16 +171,12 @@ export const register: Register = (on, options) => {
       }
       case 'forget': {
         const caller = callerOf(await $.session.id())
-        const reply = await helper($, '/release', { caller })
+        const reply = await helper($, ROUTES.release, { caller })
 
         return { text: reply.status === 'ok' ? 'codex-cu: this session’s Codex sessions ended and its app answers were dropped.' : `codex-cu: ${JSON.stringify(reply)}` }
       }
       case 'forget-app': {
-        const reply = (await helper($, '/forget', { app: command.app })) as Reply & {
-          bundleId?: string
-          helper?: boolean
-          codex?: 'removed' | 'absent' | 'missing'
-        }
+        const reply = await helper($, ROUTES.forget, { app: command.app })
 
         return { text: forgetText(command.app, reply) }
       }

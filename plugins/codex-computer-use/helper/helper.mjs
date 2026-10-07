@@ -47,6 +47,8 @@ const readBody = request =>
     request.on('error', reject)
   })
 
+// The routes and replies of this file are declared in plugins/codex-computer-use/hooks/model.ts
+// (`ROUTES`, `Reply`); keep the two in step.
 const isCaller = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}(\/[A-Za-z0-9][A-Za-z0-9._:-]{0,127})?$/.test(value)
 
 export const handler = hub => async (request, response) => {

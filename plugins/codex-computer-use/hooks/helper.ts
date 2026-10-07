@@ -1,5 +1,7 @@
 import type { HttpInit, HttpResponse, ProcessRunInit, ProcessRunResult } from 'claude-code'
 
+import type { Reply } from './model'
+
 // The private link to the codex-cu helper: HTTP over its Unix socket through
 // `$.http.fetch({ socketPath })`. Pure apart from `probe`.
 
@@ -10,20 +12,6 @@ export type Probe = {
 }
 
 export const LABEL = 'com.anderson-spider.codex-cu'
-
-export type AppRef = { bundleId: string; displayName: string; canAlways?: boolean }
-
-export type ContentBlock = { type: string; text?: string; data?: string; mimeType?: string }
-
-/** What the helper answers to `/call`, plus `unreachable` when nothing listens. */
-export type Reply =
-  | { status: 'ok'; isError: boolean; content: ContentBlock[]; notes?: string[] }
-  | { status: 'needs_approval'; app: AppRef; text?: string }
-  | { status: 'denied'; app: AppRef; text?: string }
-  | { status: 'busy'; app: AppRef; owner: string; idleSeconds?: number; text?: string }
-  | { status: 'full'; message: string }
-  | { status: 'error'; message: string; notes?: string[] }
-  | { status: 'unreachable'; message: string }
 
 export const socketOf = (home: string) => `${home}/.claude/mcp/codex-cu/run/helper.sock`
 

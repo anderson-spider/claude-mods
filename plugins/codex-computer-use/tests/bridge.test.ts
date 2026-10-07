@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 
 import { MAX_APPROVALS, serve } from '../hooks/bridge'
 import type { BridgeDeps } from '../hooks/bridge'
-import type { Reply } from '../hooks/helper'
+import type { Reply } from '../hooks/model'
 import { limitMs } from '../hooks/routing'
 
 const signal = { aborted: false } as AbortSignal
