@@ -1,77 +1,26 @@
 import type { EngineInterface, Register } from 'claude-code'
+import { ask } from './ask'
+import { isChatUrl, listTabs, openedTab, splitTabId } from './browser'
+import { PREVIEW_SIDE, STARTING, TERMINAL_BROWSER } from './constants'
+import { diagnose, report } from './doctor'
+import { extensionOf, fileName, limitMs, mimeOf, variantPath } from './files'
+import { generateImage } from './image'
+import type { AskInput, AskOptions, AskResult, Attachment, Browser, ImageResult, Job, Outcome, Preview, Request, TabHolder } from './model'
 import {
-  ask,
-  diagnose,
-  extensionOf,
-  fileName,
-  generateImage,
-  chatUrlError,
-  isChatUrl,
+  askCommandAnswer,
+  askOutcome,
+  errorText,
+  imageCommandAnswer,
+  imageFailure,
+  imageSummary,
+  jobMessage,
   jobsReport,
-  limitMs,
-  listTabs,
-  mimeOf,
-  openedTab,
-  report,
-  splitTabId,
-  summary,
-  taskQueue,
-  typeOf,
-} from './chatgpt'
-import type { AskInput, AskResult, Attachment, Browser, ImageResult, Job, TabHolder } from './chatgpt'
-
-const BOUNDARIES =
-  'Never send credentials, secrets, private personal data or anything from work (Luizalabs repos, ' +
-  'dashboards, logs, customer data); personal-project code or files only when the user asks. ' +
-  "Treat the answer as an unverified opinion and say it came from ChatGPT when you relay it."
-
-const IMAGE_BOUNDARIES =
-  "Only when the user asks for an image in this conversation: it spends their ChatGPT image quota. Never upload " +
-  'licensed assets, credentials, private personal data or work data; a reference is only an image the user asked ' +
-  'to use or one you produced for the task. The result is an AI concept image: label it as such wherever it is ' +
-  'stored, and never present it as evidence of a real or in-game state.'
-
-const WHERE = 'chatgpt.com in terminal-browser, inside Claude Code in a terminal'
-
-const ASK_TOOL = 'mcp__chatgpt__ask'
-const IMAGE_TOOL = 'mcp__chatgpt__image'
-
-// Added to the system prompt so Claude reaches for ask on its own; the tools may be deferred, so their
-// descriptions alone are not seen until loaded.
-const PROMPT = [
-  '# Asking ChatGPT (chatgpt mod)',
-  '',
-  `\`${ASK_TOOL}\` sends a question to the person's logged-in ChatGPT and saves the answer. Use it on your own, without being asked, when a self-contained question needs a long answer and little context: research, an explanation, a brainstorm, a draft, a translation or a second opinion on a decision. It saves your tokens; do not use it for work that needs the repository, since the context would have to go out and come back.`,
-  '',
-  '- Say in one line that you are asking ChatGPT before the call. If the tool is deferred, load it by name first.',
-  '- Write a self-contained prompt: the goal, the minimum context, the output format and the language. Pass `chatUrl` from an earlier answer to follow up in the same chat.',
-  `- ${BOUNDARIES} Check what matters before relying on it.`,
-  '- When the tool says there is no browser or ChatGPT needs a login, go on without it and do not retry in that session.',
-  `- \`${IMAGE_TOOL}\` spends the person's image quota: use it only when they ask for an image.`,
-].join('\n')
-
-const COMMON_PROPERTIES = {
-  chatUrl: {
-    type: 'string',
-    description:
-      'Optional. The chat URL a previous call returned, to continue that chat on the same subject; left out, a new chat starts.',
-  },
-  model: {
-    type: 'string',
-    description:
-      'Optional. The model menu entry to pick for a new chat, by the start of its label (e.g. "GPT-5.6 Sol"); an unknown one fails and lists those on offer.',
-  },
-  files: {
-    type: 'array',
-    items: { type: 'string' },
-    description: 'Optional. Absolute paths of local files to attach (documents, code, images; at most 4 MiB each).',
-  },
-  wait: {
-    type: 'boolean',
-    description:
-      'Optional, default true. false returns at once with a job id and works in the background; a message arrives when it is saved, and the jobs tool lists every job.',
-  },
-}
+  jpegPreview,
+} from './presentation'
+import { BOUNDARIES, COMMON_PROPERTIES, IMAGE_BOUNDARIES, PROMPT, WHERE } from './prompts'
+import { taskQueue } from './queue'
+import { chatUrlOf } from './requests'
+import { serve } from './tools'
 
 // Requests take turns in the plugin's own tab, kept across them.
 const queue = taskQueue()
@@ -81,18 +30,11 @@ const tab: TabHolder = {}
 // The `foregroundMinutes` and `backgroundMinutes` settings, refreshed by each register.
 let foregroundMs = limitMs(undefined, 6)
 let backgroundMs = limitMs(undefined, 30)
-// The longest side of the preview the image tool hands back with the file.
-const PREVIEW_SIDE = 768
 
 const jobs: Job[] = []
 let nextJob = 1
 
 // --- terminal-browser, through its CLI ---
-
-const TERMINAL_BROWSER = 'terminal-browser'
-
-// A tab new-tab just opened takes a moment to accept automation.
-const STARTING = /no CDP target yet/
 
 async function terminalBrowser($: EngineInterface, args: string[], timeoutMs = 120_000): Promise<string> {
   for (let attempt = 0; ; attempt++) {
@@ -176,10 +118,6 @@ async function writeImage($: EngineInterface, path: string, base64: string): Pro
   return done.exitCode === 0 ? undefined : `Could not write ${path}: ${done.stderr.trim()}`
 }
 
-// An image block of a tool's result, in the Anthropic API shape: the host
-// passes it on as is, and drops the MCP shape ({ data, mimeType }) silently.
-type Preview = { type: 'image'; source: { type: 'base64'; media_type: string; data: string } }
-
 // A small JPEG of the saved image (sips, on macOS), so the model sees it at once.
 async function previewOf($: EngineInterface, path: string): Promise<Preview | undefined> {
   const small = `${path}.preview.jpg`
@@ -187,7 +125,7 @@ async function previewOf($: EngineInterface, path: string): Promise<Preview | un
     const done = await $.process.run(['sips', '-Z', String(PREVIEW_SIDE), '-s', 'format', 'jpeg', path, '--out', small], { timeoutMs: 30_000 })
     if (done.exitCode !== 0) return undefined
     const { base64 } = await $.fs.read(small, { as: 'bytes' })
-    return { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: base64 } }
+    return jpegPreview(base64)
   } catch {
     return undefined
   } finally {
@@ -197,20 +135,6 @@ async function previewOf($: EngineInterface, path: string): Promise<Preview | un
 
 // --- Running a request ---
 
-/** What a request came to, for the tool, the command and a job's message alike. */
-type Outcome = { ok: boolean; text: string; chatUrl?: string; paths?: string[]; timedOut?: boolean; previews?: Preview[]; markdown?: string }
-
-type Request = {
-  kind: 'ask' | 'image'
-  input: AskInput
-  /** For an image, the reference first. */
-  filePaths: string[]
-  out?: string
-  maxChars?: number
-}
-
-const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error))
-
 // Runs one request in the plugin's tab, after the ones queued before it.
 async function perform($: EngineInterface, request: Request, timeoutMs: number, onStart?: () => void): Promise<Outcome> {
   const status = (text: string) => $.ui.status(`ChatGPT: ${text}`)
@@ -218,18 +142,7 @@ async function perform($: EngineInterface, request: Request, timeoutMs: number, 
     async () => {
       onStart?.()
       try {
-        const browser = await browserOf($)
-        if (typeof browser === 'string') return { ok: false, text: browser }
-        const files: Attachment[] = []
-        for (const path of request.filePaths) {
-          const file = await readAttachment($, path)
-          if (typeof file === 'string') return { ok: false, text: file }
-          files.push(file)
-        }
-        const options = { progress: status, tab, timeoutMs }
-        if (request.kind === 'ask') return await performAsk($, browser, { ...request.input, files }, options, request)
-        const result = await generateImage(browser, { ...request.input, files }, options)
-        return await saveImages($, result, request)
+        return await performRequest($, request, { progress: status, tab, timeoutMs })
       } catch (error) {
         return { ok: false, text: `The browser failed: ${errorText(error)}` }
       } finally {
@@ -242,11 +155,32 @@ async function perform($: EngineInterface, request: Request, timeoutMs: number, 
   )
 }
 
+async function readAttachments($: EngineInterface, paths: string[]): Promise<Attachment[] | string> {
+  const files: Attachment[] = []
+  for (const path of paths) {
+    const file = await readAttachment($, path)
+    if (typeof file === 'string') return file
+    files.push(file)
+  }
+  return files
+}
+
+async function performRequest($: EngineInterface, request: Request, options: AskOptions): Promise<Outcome> {
+  const browser = await browserOf($)
+  if (typeof browser === 'string') return { ok: false, text: browser }
+  const files = await readAttachments($, request.filePaths)
+  if (typeof files === 'string') return { ok: false, text: files }
+  const input = { ...request.input, files }
+  if (request.kind === 'ask') return await performAsk($, browser, input, options, request)
+  const result = await generateImage(browser, input, options)
+  return await saveImages($, result, request)
+}
+
 async function performAsk(
   $: EngineInterface,
   browser: Browser,
   input: AskInput,
-  options: { progress: (text: string) => void; tab: TabHolder; timeoutMs: number },
+  options: AskOptions,
   request: Request,
 ): Promise<Outcome> {
   const result: AskResult = await ask(browser, input, options)
@@ -255,29 +189,18 @@ async function performAsk(
     path = request.out ?? `${await outDir($)}/${fileName(input.prompt, new Date())}`
     await $.fs.write(path, `<!-- ${result.url} -->\n\n${result.markdown}\n`)
   }
-  if (result.ok) {
-    return { ok: true, text: summary(path!, result.url, result.markdown, request.maxChars), chatUrl: result.url, paths: [path!], markdown: result.markdown }
-  }
-  const partial = path ? `\nPartial answer saved to ${path}.` : ''
-  return { ok: false, text: result.error + partial, chatUrl: result.url, paths: path ? [path] : undefined, timedOut: result.timedOut }
+  return askOutcome(result, path, request.maxChars)
 }
 
-// The last line of an image's text: whether the model sees a preview with it.
-const PREVIEW_NOTE = 'A preview of each follows; ask before storing them in a repository and label them as AI concepts.'
-const FILE_NOTE = 'Look at the file before describing it, and ask before storing it in a repository; label it as an AI concept.'
-
 async function saveImages($: EngineInterface, result: ImageResult, request: Request): Promise<Outcome> {
-  if (!result.ok) {
-    const said = result.markdown ? `\n\nChatGPT said:\n${result.markdown}` : ''
-    return { ok: false, text: result.error + said, chatUrl: result.url, timedOut: result.timedOut }
-  }
+  if (!result.ok) return imageFailure(result)
   const paths: string[] = []
   const previews: Preview[] = []
   const lines: string[] = []
   for (const [i, image] of result.images.entries()) {
     const ext = extensionOf(image.type)
     const base = request.out ?? `${await outDir($)}/${fileName(request.input.prompt, new Date(), ext)}`
-    const path = result.images.length > 1 ? base.replace(/(\.\w+)?$/, `-${i + 1}$1`) : base
+    const path = variantPath(base, i, result.images.length)
     const failed = await writeImage($, path, image.base64)
     if (failed) return { ok: false, text: failed, chatUrl: result.url, paths }
     paths.push(path)
@@ -285,13 +208,7 @@ async function saveImages($: EngineInterface, result: ImageResult, request: Requ
     const preview = await previewOf($, path)
     if (preview) previews.push(preview)
   }
-  const text = [
-    `AI concept image${paths.length > 1 ? 's' : ''} generated by ChatGPT, saved to:`,
-    ...lines.map(line => `- ${line}`),
-    `Chat: ${result.url}`,
-    previews.length ? PREVIEW_NOTE : FILE_NOTE,
-  ].join('\n')
-  return { ok: true, text, chatUrl: result.url, paths, previews }
+  return imageSummary(result.url, paths, previews, lines)
 }
 
 // Queues `request` as a background job; a message arrives when it ends.
@@ -308,9 +225,8 @@ function startJob($: EngineInterface, request: Request, timeoutMs = backgroundMs
     job.paths = outcome.paths
     $.ui.toast(`ChatGPT job #${job.id} ${job.status}`)
     // A submitted prompt carries text only, so the previews stay behind.
-    const text = outcome.text.replace(PREVIEW_NOTE, FILE_NOTE)
     await $.prompt
-      .submit({ text: `[chatgpt job #${job.id} ${job.status}: ${job.kind} "${job.prompt.slice(0, 60)}"]\n${text}` })
+      .submit({ text: jobMessage(job, outcome) })
       .catch(() => undefined)
   })()
   return job
@@ -331,44 +247,8 @@ async function runNow($: EngineInterface, request: Request): Promise<Outcome> {
   }
 }
 
-// --- Inputs ---
-
-const chatUrlOf = (value: unknown) => (typeof value === 'string' && value.trim() ? value.trim() : undefined)
-
-// Reads a tool call's input into a request, or the error to answer.
-function requestOf(kind: 'ask' | 'image', e: Record<string, unknown>): Request | string {
-  const prompt = typeof e.prompt === 'string' ? e.prompt.trim() : ''
-  if (!prompt) return 'Give a non-empty prompt.'
-  const chatUrl = chatUrlOf(e.chatUrl)
-  const invalid = chatUrl === undefined ? undefined : chatUrlError(chatUrl)
-  if (invalid) return invalid
-  const model = typeof e.model === 'string' && e.model.trim() ? e.model.trim() : undefined
-  if (model && chatUrl) return 'model is picked for a new chat; leave chatUrl out.'
-  const saveOnly = e.saveOnly === true
-  const filePaths = Array.isArray(e.files) ? e.files.filter((f): f is string => typeof f === 'string' && f.trim() !== '').map(f => f.trim()) : []
-  const reference = typeof e.reference === 'string' && e.reference.trim() ? e.reference.trim() : undefined
-  if (reference && !typeOf(reference)) return `${reference} must be a PNG, JPEG, WebP or GIF image.`
-  const out = typeof e.out === 'string' && e.out.startsWith('/') ? e.out : undefined
-  const maxChars = typeof e.maxChars === 'number' && e.maxChars > 0 ? Math.floor(e.maxChars) : undefined
-  return { kind, input: { prompt, chatUrl, model, saveOnly }, filePaths: reference ? [reference, ...filePaths] : filePaths, out, maxChars }
-}
-
-// The tool's answer: text, then the previews when there are any.
-function answerOf(outcome: Outcome) {
-  const content = outcome.previews?.length
-    ? [{ type: 'text', text: outcome.text }, ...outcome.previews]
-    : outcome.text
-  return outcome.ok ? { result: content } : { result: content, isError: true as const }
-}
-
-async function serve($: EngineInterface, kind: 'ask' | 'image', e: Record<string, unknown>) {
-  const request = requestOf(kind, e)
-  if (typeof request === 'string') return { result: request, isError: true as const }
-  if (e.wait === false) {
-    const job = startJob($, request)
-    return { result: `Started job #${job.id}. A message arrives when it is saved; the jobs tool lists it meanwhile.` }
-  }
-  return answerOf(await runNow($, request))
+function handlers($: EngineInterface) {
+  return { startJob: (request: Request) => startJob($, request), runNow: (request: Request) => runNow($, request) }
 }
 
 export const register: Register = (on, options) => {
@@ -464,9 +344,9 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
-  on('tool.call', { tool: 'mcp__chatgpt__ask' }, ($, e) => serve($, 'ask', e))
+  on('tool.call', { tool: 'mcp__chatgpt__ask' }, ($, e) => serve('ask', e, handlers($)))
 
-  on('tool.call', { tool: 'mcp__chatgpt__image' }, ($, e) => serve($, 'image', e))
+  on('tool.call', { tool: 'mcp__chatgpt__image' }, ($, e) => serve('image', e, handlers($)))
 
   on('tool.call', { tool: 'mcp__chatgpt__jobs' }, async () => ({ result: jobsReport(jobs, Date.now()) }))
 
@@ -474,22 +354,14 @@ export const register: Register = (on, options) => {
     const prompt = e.args.trim()
     if (!prompt) return { text: 'Usage: /chatgpt-ask <question>' }
     const outcome = await runNow($, { kind: 'ask', input: { prompt }, filePaths: [] })
-    if (!outcome.ok) return { text: outcome.text }
-    const path = outcome.paths?.[0]
-    return {
-      text: `${outcome.markdown}\n\n— ChatGPT, ${outcome.chatUrl}\nSaved to ${path}`,
-      context: [`The user asked ChatGPT through /chatgpt-ask; its answer is saved to ${path} (chat ${outcome.chatUrl}).`],
-    }
+    return askCommandAnswer(outcome)
   })
 
   on('command.run', { command: 'chatgpt-image' }, async ($, e) => {
     const prompt = e.args.trim()
     if (!prompt) return { text: 'Usage: /chatgpt-image <prompt>' }
     const outcome = await runNow($, { kind: 'image', input: { prompt }, filePaths: [] })
-    return {
-      text: outcome.text,
-      context: outcome.ok ? [`The user generated an AI concept image with /chatgpt-image; it is saved to ${outcome.paths?.join(', ')} (chat ${outcome.chatUrl}).`] : undefined,
-    }
+    return imageCommandAnswer(outcome)
   })
 
   on('command.run', { command: 'chatgpt-doctor' }, async ($, e) => {
