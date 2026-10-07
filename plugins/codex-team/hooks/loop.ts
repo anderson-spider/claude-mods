@@ -1,22 +1,7 @@
-import { reportPath, requestOf } from './team'
-import type { Deps, Job, createBook } from './team'
-
-export type Verdict = 'approved' | 'changes'
-export type Round = { dev: number; qa?: number; verdict?: Verdict }
-export type LoopStatus = 'developing' | 'reviewing' | 'approved' | 'exhausted' | 'failed' | 'cancelled'
-export type LoopRequest = { task: string; files: string[]; maxRounds: number }
-export type Loop = LoopRequest & {
-  id: number
-  status: LoopStatus
-  rounds: Round[]
-  error?: string
-  startedAt: number
-  endedAt?: number
-  report?: string
-}
-
-type Book = ReturnType<typeof createBook>
-export type LoopDeps = Omit<Deps, 'notify'> & { notify: (event: 'finished', loop: Loop) => void }
+import { reportPath } from './names'
+import { fixTask, qaFocus } from './prompts'
+import { loopReport } from './presentation'
+import type { Book, Job, Loop, LoopDeps, LoopRequest, Round, Verdict } from './model'
 
 /** Only an exact verdict on the last non-empty line decides the QA result. */
 export function verdictOf(report?: string): Verdict | undefined {
@@ -24,50 +9,11 @@ export function verdictOf(report?: string): Verdict | undefined {
   return last === 'VERDICT: APPROVED' ? 'approved' : last === 'VERDICT: CHANGES' ? 'changes' : undefined
 }
 
-export const qaFocus = (task: string) =>
-  [
-    `Acceptance criteria:\n${task}`,
-    'Report only actionable findings, each with the file, the line and why it matters. Do not edit any file.',
-    'End the report with exactly one last line: VERDICT: APPROVED or VERDICT: CHANGES.',
-  ].join('\n')
-
-export const fixTask = (task: string, qaReport: string) => `${task}\nRead the QA report at ${qaReport} and fix the findings.`
-
-/** Reads the loop input with the same task and file rules as execute. */
-export function loopOf(e: Record<string, unknown>): LoopRequest | string {
-  const request = requestOf('execute', e)
-  if (typeof request === 'string') return request
-  const maxRounds = e.maxRounds === undefined ? 3 : e.maxRounds
-  if (typeof maxRounds !== 'number' || !Number.isInteger(maxRounds) || maxRounds < 1) return 'Give maxRounds as an integer at least 1.'
-  return { task: request.task, files: request.files, maxRounds }
-}
-
 const active = (loop: Loop) => loop.status === 'developing' || loop.status === 'reviewing'
 const note = (loop: Loop, text: string) => { loop.error = [loop.error, text].filter(Boolean).join('\n') }
 
-/** The parent report keeps every child id and report path, even on a failure. */
-export function loopReport(loop: Loop, book: Book, findings?: string): string {
-  const child = (phase: string, id: number) => {
-    const job = book.get(id)
-    return `${phase}: ct-${id}${job?.report ? ` — report: ${job.report}` : ' — no report'}`
-  }
-  return [
-    `# Codex Team loop-${loop.id}`,
-    `Status: ${loop.status}`,
-    `Rounds: ${loop.rounds.length}/${loop.maxRounds}`,
-    `Task: ${loop.task}`,
-    ...loop.rounds.flatMap((round, index) => [
-      '', `## Round ${index + 1}`, child('Dev', round.dev),
-      ...(round.qa === undefined ? [] : [child('QA', round.qa)]),
-      `Verdict: ${round.verdict ?? 'none'}`,
-    ]),
-    ...(loop.error ? ['', `Note: ${loop.error}`] : []),
-    ...(loop.status === 'exhausted' && findings !== undefined ? ['', '## Last QA findings', findings] : []),
-  ].join('\n')
-}
-
 /** Runs every round in one execute slot. Never rejects: an error becomes `failed`. */
-export async function runLoop(deps: LoopDeps, loop: Loop, book: Book): Promise<void> {
+export async function runLoop(deps: LoopDeps, loop: Loop, book: Pick<Book, 'exclusive' | 'start' | 'ended' | 'get' | 'cancel'>): Promise<void> {
   let lastQaReport = ''
   let findings: string | undefined
   const cancelled = () => loop.status === 'cancelled'
@@ -132,13 +78,13 @@ export async function runLoop(deps: LoopDeps, loop: Loop, book: Book): Promise<v
 }
 
 /** Reserves an id in the job book and answers before the first round finishes. */
-export async function loopStart(deps: LoopDeps, book: Book, request: LoopRequest): Promise<Loop> {
+export async function loopStart(deps: LoopDeps, book: Pick<Book, 'reserveId' | 'exclusive' | 'start' | 'ended' | 'get' | 'cancel'>, request: LoopRequest): Promise<Loop> {
   const loop: Loop = { id: await book.reserveId(), ...request, status: 'developing', rounds: [], startedAt: deps.now() }
   void runLoop(deps, loop, book)
   return loop
 }
 
-export async function cancelLoop(deps: Pick<LoopDeps, 'now'>, book: Book, loop: Loop): Promise<string> {
+export async function cancelLoop(deps: Pick<LoopDeps, 'now'>, book: Pick<Book, 'cancel'>, loop: Loop): Promise<string> {
   if (!active(loop)) return `loop-${loop.id} is ${loop.status}: nothing to cancel.`
   loop.status = 'cancelled'
   loop.endedAt = deps.now()

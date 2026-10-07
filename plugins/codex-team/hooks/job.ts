@@ -1,0 +1,131 @@
+import { reportPath } from './names'
+import { buildPrompt, codexArgs } from './prompts'
+import { HerdrError } from './model'
+import type { AgentState, Deps, Herdr, Job, Request, Status } from './model'
+
+/** Terminal cells are about twice as tall as wide: split a wide pane to the right, a narrow or tall one down. */
+export const splitDirection = (size: { width: number; height: number }): 'right' | 'down' => (size.width >= size.height * 2 ? 'right' : 'down')
+
+export const JOB_LIMIT_MS = 30 * 60_000
+// `$.process.run` kills a child after 10 minutes at most: every wait runs in chunks below that.
+export const WAIT_CHUNK_MS = 540_000
+const SUMMARY_CHARS = 600
+const LEFT_BLOCKED: AgentState[] = ['working', 'idle', 'done']
+
+type JobDeps = Omit<Deps, 'herdr'> & { herdr: Pick<Herdr, 'size' | 'split' | 'start' | 'prompt' | 'wait' | 'read'> }
+
+// A cancel from outside wins: nothing the run learns afterwards changes a cancelled job.
+const setStatus = (job: Job, status: Status) => {
+  if (job.status !== 'cancelled') job.status = status
+}
+
+function waits(deps: Pick<Deps, 'now' | 'notify'> & { herdr: Pick<Herdr, 'wait'> }, job: Job, timing: { deadline: number; limit: number; chunk: number }) {
+  const { herdr } = deps
+  const { deadline, limit, chunk } = timing
+  const set = (status: Status) => setStatus(job, status)
+  const cancelled = () => job.status === 'cancelled'
+
+  // Runs `step` in chunks until it settles or the job limit passes; a chunk's own timeout carries on with `wait`.
+  const settle = async <T extends AgentState>(first: (timeoutMs: number) => Promise<T>): Promise<AgentState> => {
+    let step: (timeoutMs: number) => Promise<AgentState> = first
+    for (;;) {
+      const remaining = deadline - deps.now()
+      if (remaining <= 0) throw new HerdrError('timeout', `the job limit of ${Math.round(limit / 60_000)} minutes passed`)
+      try {
+        return await step(Math.min(chunk, remaining))
+      } catch (error) {
+        if (!(error instanceof HerdrError) || error.code !== 'timeout') throw error
+        step = timeoutMs => herdr.wait(job.agent, timeoutMs)
+      }
+    }
+  }
+
+  // A blocked agent waits for the person: say so once, then wait for it to leave that state, then for the next settle.
+  const whileBlocked = async (state: AgentState): Promise<AgentState> => {
+    while (state === 'blocked') {
+      set('blocked')
+      if (!cancelled()) deps.notify('blocked', job)
+      state = await settle(timeoutMs => herdr.wait(job.agent, timeoutMs, LEFT_BLOCKED))
+      if (state === 'working') {
+        set('working')
+        state = await settle(timeoutMs => herdr.wait(job.agent, timeoutMs))
+      }
+    }
+    return state
+  }
+
+  return { settle, whileBlocked }
+}
+
+function recordReport(job: Job, path: string, report: string | undefined): boolean {
+  if (report === undefined) return false
+  job.report = path
+  job.summary = report.slice(0, SUMMARY_CHARS)
+  return true
+}
+
+function errorText(code: string, message: string, pane: string): string {
+  return code === 'agent_prompt_stalled'
+    ? `Codex showed no activity after the prompt${pane}; it may still have arrived, so it was not sent again: inspect the pane.`
+    : code === 'timeout'
+      ? `timeout: ${message}${pane}; Codex was not stopped.`
+      : `${message}${pane}`
+}
+
+/**
+ * Runs one job in its own Herdr pane. Never rejects: an error becomes `failed`.
+ * Mutates `job`; `deps.notify` hears about each blocked episode and the end.
+ */
+export async function runJob(deps: JobDeps, job: Job, request: Request, options: { limitMs?: number; chunkMs?: number; freshReport?: boolean } = {}): Promise<void> {
+  const { herdr } = deps
+  const limit = options.limitMs ?? JOB_LIMIT_MS
+  const chunk = options.chunkMs ?? WAIT_CHUNK_MS
+  const deadline = deps.now() + limit
+  const where = () => (job.pane ? ` (pane ${job.pane})` : '')
+  const set = (status: Status) => setStatus(job, status)
+  const cancelled = () => job.status === 'cancelled'
+  const path = reportPath(deps.tmpdir, job.id)
+  const { settle, whileBlocked } = waits(deps, job, { deadline, limit, chunk })
+
+  try {
+    // Loop children must not inherit a verdict from a report left by an earlier session.
+    if (options.freshReport) {
+      await deps.files.write(path, '')
+      if (cancelled()) return
+    }
+    set('starting')
+    job.pane = await herdr.split(splitDirection(await herdr.size()))
+    // Cancelled while the pane was opening: the empty pane stays for the person to close.
+    if (cancelled()) return
+
+    try {
+      await herdr.start(job.agent, job.pane, codexArgs(request.kind))
+    } catch (error) {
+      if (!(error instanceof HerdrError) || error.code !== 'agent_not_ready') throw error
+      if (cancelled()) return
+      await whileBlocked('blocked')
+    }
+
+    if (cancelled()) return
+    set('working')
+    await whileBlocked(await settle(timeoutMs => herdr.prompt(job.agent, buildPrompt(request.kind, request, path), timeoutMs)))
+    if (cancelled()) return
+
+    const written = await deps.files.read(path)
+    const report = options.freshReport && written === '' ? undefined : written
+    if (!recordReport(job, path, report)) {
+      job.summary = await herdr.read(job.agent, 200)
+      job.error = `no report was written to ${path}; the summary is the text of the pane${where()}`
+    }
+    set('done')
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    const code = error instanceof HerdrError ? error.code : ''
+    set('failed')
+    job.error = errorText(code, message, where())
+  }
+
+  if (cancelled()) return
+  job.endedAt = deps.now()
+  deps.notify('finished', job)
+}

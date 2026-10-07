@@ -2,7 +2,10 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-import { agentName, buildPrompt, codexArgs, nextFreeId, reportPath, requestOf, splitDirection } from '../hooks/team'
+import { agentName, nextFreeId, reportPath } from '../hooks/names'
+import { buildPrompt, codexArgs } from '../hooks/prompts'
+import { requestOf } from '../hooks/requests'
+import { splitDirection } from '../hooks/job'
 
 test('agentName prefixes the job id', () => {
   expect(agentName(3)).toBe('ct-3')
@@ -54,7 +57,9 @@ test('requestOf rejects an empty task and trims the valid ones', () => {
   expect(requestOf('review', {})).toEqual({ kind: 'review', task: '', files: [] })
 })
 
-import { fixTask, loopOf, qaFocus, verdictOf } from '../hooks/loop'
+import { fixTask, qaFocus } from '../hooks/prompts'
+import { loopOf } from '../hooks/requests'
+import { verdictOf } from '../hooks/loop'
 
 test('verdictOf accepts only the exact last non-empty line', () => {
   expect(verdictOf('findings\nVERDICT: APPROVED')).toBe('approved')
@@ -95,8 +100,9 @@ test('loopOf rejects maxRounds unless it is an integer at least one', () => {
 
 // --- Job lifecycle, against a scripted Herdr ---
 
-import { HerdrError, runJob } from '../hooks/team'
-import type { AgentState, Deps, Herdr, Job, Request, Settled } from '../hooks/team'
+import { HerdrError } from '../hooks/model'
+import { runJob } from '../hooks/job'
+import type { AgentState, Deps, Herdr, Job, Request, Settled } from '../hooks/model'
 
 type Script = { prompt?: (Settled | Error)[]; wait?: (AgentState | Error)[]; start?: Error; read?: string; onPrompt?: () => void; live?: string[]; gate?: Promise<void> }
 
@@ -251,7 +257,8 @@ test('runJob fails naming the pane when it vanishes mid-job, and still resolves'
 
 // --- The job book: ids, the execute queue, cancel and reports ---
 
-import { createBook, jobDetail, jobsReport } from '../hooks/team'
+import { createBook } from '../hooks/book'
+import { jobDetail, jobsReport } from '../hooks/presentation'
 
 declare const setTimeout: (fn: () => void, ms: number) => unknown
 const pause = (ms: number) => new Promise<void>(done => setTimeout(() => done(), ms))
@@ -426,8 +433,9 @@ test('reserveId shares the counter with start and skips live agent names', async
 
 // --- Dev and QA rounds, using the real book and scripted reports ---
 
-import { cancelLoop, loopReport, loopStart, runLoop } from '../hooks/loop'
-import type { Loop } from '../hooks/loop'
+import { cancelLoop, loopStart, runLoop } from '../hooks/loop'
+import { loopReport } from '../hooks/presentation'
+import type { Loop } from '../hooks/model'
 
 function loopWith(reports: (string | undefined)[], script: Script = {}, gates: Record<number, Promise<void>> = {}) {
   const { herdr, calls } = fakeHerdr(script)
@@ -725,7 +733,7 @@ test('loop fails before starting a child if its old report cannot be invalidated
 // --- The Herdr adapter over the CLI ---
 
 import { herdrAvailable, herdrOf } from '../hooks/herdr'
-import type { Run } from '../hooks/herdr'
+import type { Run } from '../hooks/model'
 
 type Answer = { exitCode?: number; stdout?: string; stderr?: string }
 
@@ -825,7 +833,8 @@ test('herdrAvailable says why the plugin cannot run', async () => {
 
 // --- The band and the prompt section ---
 
-import { PROMPT, bandRows, doctorReport } from '../hooks/team'
+import { PROMPT } from '../hooks/prompts'
+import { bandRows, doctorReport } from '../hooks/presentation'
 import type { BandJob } from '../types'
 
 const band = (id: string, status: BandJob['status'], elapsedSeconds: number, pane = 'w1:p2'): BandJob => ({ id, kind: 'execute', status, pane, elapsedSeconds })
