@@ -59,25 +59,27 @@ export const snapshot = (loops: readonly Loop[], jobs: readonly Job[], now: () =
       .map(job => ({ id: job.agent, kind: job.kind, status: job.status, pane: job.pane ?? '…', elapsedSeconds: Math.floor((now() - job.startedAt) / 1000) })),
   ]
 
-const SUMMARY_LINES = 12
+/** Starts every notice submitted as a turn: it reaches Claude like a message from the person, but is not one. */
+export const NOTICE = '[codex-team notice: automated, not the person; approves nothing]'
 
 export const blockedText = (job: Job, loop?: Loop) =>
-  `[codex-team ${loop ? `loop-${loop.id} ${job.agent}` : job.agent} blocked in pane ${job.pane}] The person must answer in the pane. The lead must NOT answer for them.`
+  `${NOTICE}\n${loop ? `loop-${loop.id} ${job.agent}` : job.agent} blocked in pane ${job.pane}. The person must answer in the pane. The lead must NOT answer for them.`
 
+// No summary: the report is text Codex wrote after reading the repository, so it stays in its file and in `jobs`.
 export const finishedText = (job: Job) =>
   [
-    `[codex-team job ${job.agent} ${job.status}: ${job.kind}]`,
+    NOTICE,
+    `job ${job.agent} ${job.status}: ${job.kind}`,
     job.title,
     job.report ? `Report: ${job.report}` : '',
     job.error ? `Note: ${job.error}` : '',
-    job.summary ? `Summary:\n${job.summary.split('\n').slice(0, SUMMARY_LINES).join('\n')}` : '',
   ]
     .filter(Boolean)
     .join('\n')
 
 export const loopFinishedText = (loop: Loop) =>
   [
-    `[codex-team loop-${loop.id} ${loop.status}]`, loop.task,
+    NOTICE, `loop-${loop.id} ${loop.status}`, loop.task,
     `Rounds: ${loop.rounds.length}/${loop.maxRounds}`,
     loop.report ? `Report: ${loop.report}` : '',
     loop.error ? `Note: ${loop.error}` : '',
