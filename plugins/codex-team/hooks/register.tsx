@@ -3,17 +3,18 @@ import type { Elements, EngineInterface, Register, RenderElement } from 'claude-
 
 import type { BandJob } from '../types'
 import { herdrAvailable, herdrOf } from './herdr'
-import { PROMPT, bandRows, createBook, doctorReport, jobDetail, jobsReport, requestOf } from './team'
-import type { Check, Job, Kind } from './team'
-import { cancelLoop, loopOf, loopReport, loopStart } from './loop'
-import type { Loop, LoopDeps } from './loop'
+import { createBook } from './book'
+import { PROMPT } from './prompts'
+import { allJobs, bandRows, blockedText, finishedText, loopFinishedText, orphanText, snapshot } from './presentation'
+import { checkDoctor } from './doctor'
+import { NOT_READY, failure, jobsTool, refusal, startJob, startLoop } from './tools'
+import type { Job, Loop, LoopDeps } from './model'
 
 type Kit = Pick<Elements['terminal'], 'Box' | 'Text'>
 
 const TITLE = 'Codex Team'
 // Border (2), title (1) and the 'and N more' line (1).
 const CHROME_ROWS = 4
-const SUMMARY_LINES = 12
 
 const jobsAtom = atom({ plugin: 'codex-team', key: 'jobs' } as const, [] as BandJob[])
 
@@ -25,21 +26,9 @@ let loopDeps: LoopDeps | undefined
 let unavailable: string | undefined
 let ticker: { cancel: () => void } | undefined
 
-const FINISHED: Job['status'][] = ['done', 'failed', 'cancelled']
-const NOT_READY = 'codex-team is not ready: the session has not started it yet.'
-
-const snapshot = (): BandJob[] =>
-  [
-    ...loops.filter(loop => loop.status === 'developing' || loop.status === 'reviewing')
-      .map((loop): BandJob => ({ id: `loop-${loop.id}`, kind: 'loop', status: loop.status, round: loop.rounds.length, maxRounds: loop.maxRounds, pane: '…', elapsedSeconds: Math.floor((Date.now() - loop.startedAt) / 1000) })),
-    ...(book?.jobs() ?? [])
-    .filter(job => !FINISHED.includes(job.status))
-    .map(job => ({ id: job.agent, kind: job.kind, status: job.status, pane: job.pane ?? '…', elapsedSeconds: Math.floor((Date.now() - job.startedAt) / 1000) })),
-  ]
-
 // The band draws what `$.state` holds; a one-second tick keeps the elapsed time moving while a job is active.
 async function publish($: EngineInterface) {
-  const jobs = snapshot()
+  const jobs = snapshot(loops, book?.jobs() ?? [], Date.now)
   await update($, jobsAtom, () => jobs)
   if (jobs.length > 0 && !ticker) {
     ticker = $.clock.every(1000, () => void publish($))
@@ -49,36 +38,26 @@ async function publish($: EngineInterface) {
   }
 }
 
-const finishedText = (job: Job) =>
-  [
-    `[codex-team job ${job.agent} ${job.status}: ${job.kind}]`,
-    job.title,
-    job.report ? `Report: ${job.report}` : '',
-    job.error ? `Note: ${job.error}` : '',
-    job.summary ? `Summary:\n${job.summary.split('\n').slice(0, SUMMARY_LINES).join('\n')}` : '',
-  ]
-    .filter(Boolean)
-    .join('\n')
-
 const notifier = ($: EngineInterface) => (event: 'blocked' | 'finished', job: Job) => {
   void publish($)
   if (event === 'blocked') {
     $.ui.toast(`Codex Team: ${job.agent} needs you in pane ${job.pane}`)
+    void $.prompt.submit({ text: blockedText(job) }).catch(() => undefined)
     return
   }
   $.ui.toast(`Codex Team: ${job.agent} ${job.status}`)
   void $.prompt.submit({ text: finishedText(job) }).catch(() => undefined)
 }
 
-const loopNotifier = ($: EngineInterface) => (_event: 'finished', loop: Loop) => {
+const loopNotifier = ($: EngineInterface) => (event: 'blocked' | 'finished', loop: Loop, job?: Job) => {
   void publish($)
+  if (event === 'blocked' && job) {
+    $.ui.toast(`Codex Team: loop-${loop.id} ${job.agent} needs you in pane ${job.pane}`)
+    void $.prompt.submit({ text: blockedText(job, loop) }).catch(() => undefined)
+    return
+  }
   $.ui.toast(`Codex Team: loop-${loop.id} ${loop.status}`)
-  void $.prompt.submit({ text: [
-    `[codex-team loop-${loop.id} ${loop.status}]`, loop.task,
-    `Rounds: ${loop.rounds.length}/${loop.maxRounds}`,
-    loop.report ? `Report: ${loop.report}` : '',
-    loop.error ? `Note: ${loop.error}` : '',
-  ].filter(Boolean).join('\n') }).catch(() => undefined)
+  void $.prompt.submit({ text: loopFinishedText(loop) }).catch(() => undefined)
 }
 
 const draw = ({ Box, Text }: Kit, jobs: BandJob[], room: number): RenderElement => {
@@ -97,65 +76,10 @@ const draw = ({ Box, Text }: Kit, jobs: BandJob[], room: number): RenderElement 
   )
 }
 
-const refusal = (text: string) => ({ result: text, isError: true as const })
-
-// A tool handler never rejects: an error becomes a refusal the model can read.
-const failure = (error: unknown) => refusal(`codex-team failed: ${error instanceof Error ? error.message : String(error)}`)
-
-async function start($: EngineInterface, kind: Kind, e: Record<string, unknown>) {
-  if (!book) return refusal(unavailable ?? NOT_READY)
-  const request = requestOf(kind, e)
-  if (typeof request === 'string') return refusal(request)
-  const job = await book.start(request)
-  await publish($)
-  return { result: `Started job ${job.agent} (${kind}). A message arrives when it finishes; the jobs tool lists it meanwhile.` }
-}
-
-async function startLoop($: EngineInterface, e: Record<string, unknown>) {
-  if (!book || !loopDeps) return refusal(unavailable ?? NOT_READY)
-  const request = loopOf(e)
-  if (typeof request === 'string') return refusal(request)
-  const loop = await loopStart(loopDeps, book, request)
-  loops.push(loop)
-  await publish($)
-  return { result: `Started loop-${loop.id}. One message arrives at the end with the verdict and report path; the jobs tool lists it meanwhile.` }
-}
-
-const allJobs = () => [
-  ...[...loops].reverse().map(loop => `loop-${loop.id} ${loop.status} ${loop.rounds.length}/${loop.maxRounds}: ${loop.task.slice(0, 60)}${loop.report ? `\n  report ${loop.report}` : loop.error ? `\n  ${loop.error}` : ''}`),
-  !loops.length || book?.jobs().length ? jobsReport(book?.jobs() ?? [], Date.now()) : '',
-].filter(Boolean).join('\n')
-
-async function jobsTool($: EngineInterface, e: Record<string, unknown>) {
-  if (!book) return refusal(unavailable ?? NOT_READY)
-  const loop = typeof e.id === 'number' ? loops.find(loop => loop.id === e.id) : undefined
-  if (e.action === 'cancel') {
-    if (typeof e.id !== 'number') return refusal('Give the id of the job to cancel.')
-    const answer = loop ? await cancelLoop({ now: Date.now }, book, loop) : await book.cancel(e.id)
-    await publish($)
-    return { result: answer }
-  }
-  if (typeof e.id === 'number') {
-    if (loop) return { result: [loopReport(loop, book), loop.report ? `Report: ${loop.report}` : ''].filter(Boolean).join('\n') }
-    const job = book.get(e.id)
-    return job ? { result: jobDetail(job) } : refusal(`No job ct-${e.id} in this session.`)
-  }
-  return { result: allJobs() }
-}
-
 async function doctor($: EngineInterface): Promise<string> {
   const run = (argv: string[]) => $.process.run(argv, { timeoutMs: 15_000 }).catch(() => undefined)
   const inside = (await $.env.get('HERDR_ENV')) === '1'
-  const checks: Check[] = [
-    { name: 'inside Herdr', ok: inside, detail: inside ? 'HERDR_ENV=1' : 'HERDR_ENV is not 1: run Claude Code in a Herdr pane' },
-  ]
-  for (const tool of ['herdr', 'codex']) {
-    const found = await run([tool, '--version'])
-    checks.push({ name: tool, ok: found?.exitCode === 0, detail: found?.exitCode === 0 ? found.stdout.trim().split('\n')[0]! : 'not installed or not in PATH' })
-  }
-  const listed = await run(['herdr', 'agent', 'list'])
-  checks.push({ name: 'herdr agent list', ok: listed?.exitCode === 0, detail: listed?.exitCode === 0 ? 'answers' : (listed?.stderr || 'no answer').trim().slice(0, 200) })
-  return doctorReport(checks)
+  return checkDoctor(run, inside)
 }
 
 export const register: Register = on => {
@@ -252,20 +176,20 @@ export const register: Register = on => {
     return next(e)
   })
 
-  on('tool.call', { tool: 'mcp__codex-team__execute' }, ($, e) => start($, 'execute', e).catch(failure))
+  on('tool.call', { tool: 'mcp__codex-team__execute' }, ($, e) => startJob({ book, unavailable }, 'execute', e, () => publish($)).catch(failure))
 
-  on('tool.call', { tool: 'mcp__codex-team__review' }, ($, e) => start($, 'review', e).catch(failure))
+  on('tool.call', { tool: 'mcp__codex-team__review' }, ($, e) => startJob({ book, unavailable }, 'review', e, () => publish($)).catch(failure))
 
-  on('tool.call', { tool: 'mcp__codex-team__loop' }, ($, e) => startLoop($, e).catch(failure))
+  on('tool.call', { tool: 'mcp__codex-team__loop' }, ($, e) => startLoop({ book, loopDeps, unavailable }, e, loop => loops.push(loop), () => publish($)).catch(failure))
     .catch(() => refusal('codex-team loop failed before it could answer.'))
 
-  on('tool.call', { tool: 'mcp__codex-team__jobs' }, ($, e) => jobsTool($, e).catch(failure))
+  on('tool.call', { tool: 'mcp__codex-team__jobs' }, ($, e) => jobsTool({ book, loops, unavailable }, e, () => publish($), Date.now).catch(failure))
 
   on('command.run', { command: 'codex-team' }, async ($, e) => {
     if (!book) return { text: unavailable ?? NOT_READY }
     const orphans = await book.orphans()
-    const left = orphans.length ? `\n\nct-* agents left from before a reload (their panes are still open):\n${orphans.map(o => `  ${o.name} in ${o.pane}`).join('\n')}` : ''
-    return { text: allJobs() + left }
+    const left = orphanText(orphans)
+    return { text: allJobs(loops, book?.jobs(), Date.now) + left }
   })
 
   on('command.run', { command: 'codex-team-doctor' }, async ($, e) => ({ text: await doctor($) }))

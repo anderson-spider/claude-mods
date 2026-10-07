@@ -2,7 +2,10 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-import { agentName, buildPrompt, codexArgs, nextFreeId, reportPath, requestOf, splitDirection } from '../hooks/team'
+import { agentName, nextFreeId, reportPath } from '../hooks/names'
+import { buildPrompt, codexArgs } from '../hooks/prompts'
+import { requestOf } from '../hooks/requests'
+import { splitDirection } from '../hooks/job'
 
 test('agentName prefixes the job id', () => {
   expect(agentName(3)).toBe('ct-3')
@@ -54,7 +57,9 @@ test('requestOf rejects an empty task and trims the valid ones', () => {
   expect(requestOf('review', {})).toEqual({ kind: 'review', task: '', files: [] })
 })
 
-import { fixTask, loopOf, qaFocus, verdictOf } from '../hooks/loop'
+import { fixTask, qaFocus } from '../hooks/prompts'
+import { loopOf } from '../hooks/requests'
+import { verdictOf } from '../hooks/loop'
 
 test('verdictOf accepts only the exact last non-empty line', () => {
   expect(verdictOf('findings\nVERDICT: APPROVED')).toBe('approved')
@@ -95,10 +100,11 @@ test('loopOf rejects maxRounds unless it is an integer at least one', () => {
 
 // --- Job lifecycle, against a scripted Herdr ---
 
-import { HerdrError, runJob } from '../hooks/team'
-import type { AgentState, Deps, Herdr, Job, Request, Settled } from '../hooks/team'
+import { HerdrError } from '../hooks/model'
+import { runJob } from '../hooks/job'
+import type { AgentState, Deps, Herdr, Job, Request, Settled } from '../hooks/model'
 
-type Script = { prompt?: (Settled | Error)[]; wait?: (AgentState | Error)[]; start?: Error; read?: string; onPrompt?: () => void; live?: string[]; gate?: Promise<void> }
+type Script = { prompt?: (Settled | Error)[]; wait?: (AgentState | Error)[]; start?: Error; rename?: Error; read?: string; onPrompt?: () => void; live?: string[]; gate?: Promise<void> }
 
 function fakeHerdr(script: Script) {
   const calls: string[] = []
@@ -117,6 +123,10 @@ function fakeHerdr(script: Script) {
     split: async direction => {
       calls.push(`split ${direction}`)
       return 'w1:p2'
+    },
+    rename: async (pane, name) => {
+      calls.push(`rename ${pane} ${name}`)
+      if (script.rename) throw script.rename
     },
     start: async (name, pane, args) => {
       calls.push(`start ${name} ${pane} ${args.join(' ')}`)
@@ -165,7 +175,7 @@ test('runJob runs an execute job to done with its report', async () => {
   const { deps, calls, events } = setup({})
   const j = job()
   await runJob(deps, j, request())
-  expect(calls).toEqual(['size', 'split right', 'start ct-1 w1:p2 -s workspace-write -a on-request', 'prompt ct-1'])
+  expect(calls).toEqual(['size', 'split right', 'rename w1:p2 ct-1 execute', 'start ct-1 w1:p2 -s workspace-write -a on-request', 'prompt ct-1'])
   expect(j.status).toBe('done')
   expect(j.pane).toBe('w1:p2')
   expect(j.report).toBe('/tmp/codex-team/1.md')
@@ -176,7 +186,8 @@ test('runJob runs an execute job to done with its report', async () => {
 test('runJob starts a review job read-only', async () => {
   const { deps, calls } = setup({}, { '/tmp/codex-team/1.md': 'findings' })
   await runJob(deps, job('review'), request('review'))
-  expect(calls[2]).toBe('start ct-1 w1:p2 -s read-only -a on-request')
+  expect(calls[2]).toBe('rename w1:p2 ct-1 review')
+  expect(calls[3]).toBe('start ct-1 w1:p2 -s read-only -a on-request')
 })
 
 test('runJob goes blocked and back to working when the person answers, notifying once', async () => {
@@ -251,7 +262,8 @@ test('runJob fails naming the pane when it vanishes mid-job, and still resolves'
 
 // --- The job book: ids, the execute queue, cancel and reports ---
 
-import { createBook, jobDetail, jobsReport } from '../hooks/team'
+import { createBook } from '../hooks/book'
+import { jobDetail, jobsReport } from '../hooks/presentation'
 
 declare const setTimeout: (fn: () => void, ms: number) => unknown
 const pause = (ms: number) => new Promise<void>(done => setTimeout(() => done(), ms))
@@ -426,8 +438,9 @@ test('reserveId shares the counter with start and skips live agent names', async
 
 // --- Dev and QA rounds, using the real book and scripted reports ---
 
-import { cancelLoop, loopReport, loopStart, runLoop } from '../hooks/loop'
-import type { Loop } from '../hooks/loop'
+import { cancelLoop, loopStart, runLoop } from '../hooks/loop'
+import { loopReport } from '../hooks/presentation'
+import type { Loop } from '../hooks/model'
 
 function loopWith(reports: (string | undefined)[], script: Script = {}, gates: Record<number, Promise<void>> = {}) {
   const { herdr, calls } = fakeHerdr(script)
@@ -439,7 +452,7 @@ function loopWith(reports: (string | undefined)[], script: Script = {}, gates: R
     const index = prompts.length
     prompts.push(text)
     const report = reports[index]
-    if (report !== undefined) files[reportPath(undefined, Number(name.slice(3)))] = report
+    if (report !== undefined) files[text.match(/write your final report as Markdown to (.+) and answer/)![1]!] = report
     await gates[index]
     return prompt(name, text, timeout)
   }
@@ -448,7 +461,7 @@ function loopWith(reports: (string | undefined)[], script: Script = {}, gates: R
     files: { read: async (path: string) => files[path], write: async (path: string, text: string) => { files[path] = text } },
     tmpdir: undefined,
     now: () => 0,
-    notify: (_event: 'finished', loop: Loop) => { events.push(`loop ${loop.id} ${loop.status}`) },
+    notify: (event: 'blocked' | 'finished', loop: Loop, job?: Job) => { events.push(event === 'blocked' ? `blocked ${job!.agent}` : `loop ${loop.id} ${loop.status}`) },
   }
   const book = createBook({ ...deps, notify: (event, job) => { events.push(`${event} ${job.agent}`) } })
   const finished = async (loop: Loop) => {
@@ -470,8 +483,8 @@ test('loop approves after one dev and QA and notifies only once', async () => {
   expect(state.prompts[0]).toContain('a.ts')
   expect(state.prompts[1]).toContain(qaFocus('add X'))
   expect(loop.report).toBe('/tmp/codex-team/loop-1.md')
-  expect(state.files[loop.report!]).toContain('ct-2')
-  expect(state.files[loop.report!]).toContain('/tmp/codex-team/3.md')
+  expect(state.files[loop.report!]).toContain('ct-1-dev')
+  expect(state.files[loop.report!]).toContain('/tmp/codex-team/1-qa1.md')
 })
 
 test('loop sends changes back to dev with the original task and the QA report path', async () => {
@@ -480,7 +493,7 @@ test('loop sends changes back to dev with the original task and the QA report pa
   await state.finished(loop)
   expect(loop.status).toBe('approved')
   expect(loop.rounds).toEqual([{ dev: 2, qa: 3, verdict: 'changes' }, { dev: 4, qa: 5, verdict: 'approved' }])
-  expect(state.prompts[2]).toContain(fixTask('add X', '/tmp/codex-team/3.md'))
+  expect(state.prompts[2]).toContain(fixTask('add X', '/tmp/codex-team/1-qa1.md'))
   expect(state.events).toEqual(['loop 1 approved'])
 })
 
@@ -501,7 +514,7 @@ test('loop fails on a missing or invalid QA verdict and names its report path', 
     await state.finished(loop)
     expect(loop.status).toBe('failed')
     expect(loop.error).toContain('QA report has no VERDICT line')
-    expect(loop.error).toContain('/tmp/codex-team/3.md')
+    expect(loop.error).toContain('/tmp/codex-team/1-qa1.md')
     expect(state.prompts.length).toBe(2)
   }
 })
@@ -532,7 +545,7 @@ test('loop children still notify when blocked without finishing messages', async
   const state = loopWith(['dev', 'VERDICT: APPROVED'], { prompt: ['blocked', 'blocked'], wait: ['idle', 'idle'] })
   const loop = await loopStart(state.deps, state.book, loopRequest())
   await state.finished(loop)
-  expect(state.events).toEqual(['blocked ct-2', 'blocked ct-3', 'loop 1 approved'])
+  expect(state.events).toEqual(['blocked ct-1-dev', 'blocked ct-1-qa', 'loop 1 approved'])
 })
 
 test('cancelling a loop during dev or QA cancels the active child and starts nothing more', async () => {
@@ -547,7 +560,7 @@ test('cancelling a loop during dev or QA cancels the active child and starts not
     release()
     await state.finished(loop)
     expect(loop.status).toBe('cancelled')
-    expect(state.calls).toContain(`keys ct-${phase + 2} ctrl+c`)
+    expect(state.calls).toContain(`keys ct-1-${phase === 0 ? 'dev' : 'qa'} ctrl+c`)
     expect(state.prompts.length).toBe(phase + 1)
     expect(state.events).toEqual(['loop 1 cancelled'])
   }
@@ -666,7 +679,7 @@ test('a loop cancelled while its child starts never sends that child a task afte
         const state = loopWith(['dev', 'VERDICT: APPROVED'])
         const start = state.deps.herdr.start
         state.deps.herdr.start = async (...args) => {
-          if (args[0] !== `ct-${phase + 2}`) return start(...args)
+          if (args[0] !== `ct-1-${phase === 0 ? 'dev' : 'qa'}`) return start(...args)
           starting = true
           await gate
           if (notReady) throw new HerdrError('agent_not_ready', 'agent is still starting')
@@ -685,8 +698,8 @@ test('a loop cancelled while its child starts never sends that child a task afte
         await state.finished(loop)
         expect((await state.book.done(other.id)).status).toBe('done')
         expect(loop.status).toBe('cancelled')
-        expect(state.calls.some(call => call.startsWith(`wait ct-${child}`))).toBe(false)
-        expect(state.calls.some(call => call.startsWith(`prompt ct-${child}`))).toBe(false)
+        expect(state.calls.some(call => call.startsWith(`wait ct-1-${phase === 0 ? 'dev' : 'qa'}`))).toBe(false)
+        expect(state.calls.some(call => call.startsWith(`prompt ct-1-${phase === 0 ? 'dev' : 'qa'}`))).toBe(false)
         expect(state.prompts.length).toBe(phase + 1)
         expect(state.prompts[phase]).toContain('unrelated')
       }
@@ -696,14 +709,14 @@ test('a loop cancelled while its child starts never sends that child a task afte
 
 test('loop children cannot reuse a previous report when the new job writes none', async () => {
   const state = loopWith([undefined, undefined])
-  state.files['/tmp/codex-team/2.md'] = 'old dev report'
-  state.files['/tmp/codex-team/3.md'] = 'old QA report\nVERDICT: APPROVED'
+  state.files['/tmp/codex-team/1-dev1.md'] = 'old dev report'
+  state.files['/tmp/codex-team/1-qa1.md'] = 'old QA report\nVERDICT: APPROVED'
   const loop = await loopStart(state.deps, state.book, loopRequest())
   await state.finished(loop)
   expect(loop.status).toBe('failed')
   expect(loop.error).toContain('dev 1')
   expect(loop.error).toContain('no report')
-  expect(loop.error).toContain('QA report has no VERDICT line: /tmp/codex-team/3.md')
+  expect(loop.error).toContain('QA report has no VERDICT line: /tmp/codex-team/1-qa1.md')
   expect(state.book.get(3)?.report).toBe(undefined)
 })
 
@@ -711,7 +724,7 @@ test('loop fails before starting a child if its old report cannot be invalidated
   const state = loopWith(['dev', 'VERDICT: APPROVED'])
   const write = state.deps.files.write
   state.deps.files.write = async (path, text) => {
-    if (path === '/tmp/codex-team/2.md') throw new Error('cannot prepare report')
+    if (path === '/tmp/codex-team/1-dev1.md') throw new Error('cannot prepare report')
     await write(path, text)
   }
   const loop = await loopStart(state.deps, state.book, loopRequest())
@@ -725,7 +738,7 @@ test('loop fails before starting a child if its old report cannot be invalidated
 // --- The Herdr adapter over the CLI ---
 
 import { herdrAvailable, herdrOf } from '../hooks/herdr'
-import type { Run } from '../hooks/herdr'
+import type { Run } from '../hooks/model'
 
 type Answer = { exitCode?: number; stdout?: string; stderr?: string }
 
@@ -825,7 +838,8 @@ test('herdrAvailable says why the plugin cannot run', async () => {
 
 // --- The band and the prompt section ---
 
-import { PROMPT, bandRows, doctorReport } from '../hooks/team'
+import { PROMPT } from '../hooks/prompts'
+import { bandRows, doctorReport } from '../hooks/presentation'
 import type { BandJob } from '../types'
 
 const band = (id: string, status: BandJob['status'], elapsedSeconds: number, pane = 'w1:p2'): BandJob => ({ id, kind: 'execute', status, pane, elapsedSeconds })
@@ -881,7 +895,9 @@ test('doctorReport marks each check and counts the failures', () => {
 
 // --- Tool wiring against the engine, with no host processes or files ---
 
-function loopHost(on: On, gate?: Promise<void>) {
+function loopHost(on: On, gate?: Promise<void>, script: Script = {}) {
+  const promptStates = [...(script.prompt ?? [])]
+  const waitStates = [...(script.wait ?? [])]
   const clock = mock.clock(on)
   mock.env(on, { HERDR_ENV: '1', HERDR_PANE_ID: 'w1:p1', TMPDIR: '/tmp' })
   const tools: Record<string, unknown> = {}
@@ -911,10 +927,11 @@ function loopHost(on: On, gate?: Promise<void>) {
     if (argv[1] === 'agent' && argv[2] === 'list') stdout = JSON.stringify({ result: { agents: [] } })
     if (argv[1] === 'agent' && argv[2] === 'prompt') {
       const index = prompts++
-      files[`/tmp/codex-team/${argv[3]!.slice(3)}.md`] = index === 0 ? 'dev report' : 'VERDICT: APPROVED'
+      files[argv[4]!.match(/write your final report as Markdown to (.+) and answer/)![1]!] = index === 0 ? 'dev report' : 'VERDICT: APPROVED'
       if (index === 1) await gate
-      stdout = agent('done')
+      stdout = agent(String(promptStates.shift() ?? 'done'))
     }
+    if (argv[1] === 'agent' && argv[2] === 'wait') stdout = agent(String(waitStates.shift() ?? 'idle'))
     return { value: { exitCode: 0, stdout, stderr: '' } }
   })
   return { tools, files, messages, argvs, clock, rows: () => rows, prompts: () => prompts }
@@ -943,7 +960,7 @@ test('loop tool registers its schema, lists the parent and publishes one final r
   expect(host.messages[0]).toContain('/tmp/codex-team/loop-1.md')
   expect(host.files['/tmp/codex-team/loop-1.md']).toContain('Status: approved')
   expect((await $.tool.call({ tool: 'mcp__codex-team__jobs' })).result).toContain('loop-1 approved 1/3')
-  expect((await $.tool.call({ tool: 'mcp__codex-team__jobs', id: 1 })).result).toContain('QA: ct-3')
+  expect((await $.tool.call({ tool: 'mcp__codex-team__jobs', id: 1 })).result).toContain('QA: ct-1-qa')
   expect((await $.command.run({ command: 'codex-team', args: '' })).text).toContain('loop-1 approved 1/3')
   expect((await $.tool.call({ tool: 'mcp__codex-team__jobs', id: 1, action: 'cancel' })).result).toContain('nothing to cancel')
 })
@@ -958,7 +975,7 @@ test('jobs cancels an active loop by its shared id and the band includes its rou
   expect(host.rows()).toContainEqual(expect.objectContaining({ id: 'loop-1', kind: 'loop', status: 'reviewing', round: 1, maxRounds: 2 }))
   const answer = await $.tool.call({ tool: 'mcp__codex-team__jobs', id: 1, action: 'cancel' })
   expect(answer.result).toContain('cancelled')
-  expect(host.argvs.some(argv => argv[2] === 'send-keys' && argv[3] === 'ct-3' && argv[4] === 'ctrl+c')).toBe(true)
+  expect(host.argvs.some(argv => argv[2] === 'send-keys' && argv[3] === 'ct-1-qa' && argv[4] === 'ctrl+c')).toBe(true)
   release()
   for (let i = 0; i < 100 && !host.messages.length; i++) await pause(1)
   expect(host.messages.length).toBe(1)
@@ -973,4 +990,269 @@ test('loop tool rejects invalid inputs before starting a child', async ($, on) =
   expect(answer.isError).toBe(true)
   expect(answer.result).toContain('integer at least 1')
   expect(host.prompts()).toBe(0)
+})
+
+
+test('a rename failure never fails a standalone job', async () => {
+  const { deps, calls } = setup({ rename: new Error('rename failed') })
+  const j = job()
+  await runJob(deps, j, request())
+  expect(calls).toContain('rename w1:p2 ct-1 execute')
+  expect(j.status).toBe('done')
+})
+
+test('herdrOf passes the pane name as one argv element', async () => {
+  const { herdr, argvs } = adapter({})
+  await herdr.rename('w1:p2', 'loop-1 dev')
+  expect(argvs[0]).toEqual(['herdr', 'pane', 'rename', 'w1:p2', 'loop-1 dev'])
+})
+
+
+test('nextFreeId reserves a loop id while either role agent is live', () => {
+  expect(nextFreeId(1, ['ct-1-dev', 'ct-2-qa', 'ct-3', 'ct-40-dev'])).toBe(4)
+  expect(nextFreeId(1, ['ct-10-dev', 'ct-1-other'])).toBe(1)
+})
+
+test('loop reuses exactly two named panes and agents and keeps all round reports', async () => {
+  const state = loopWith(['dev one', 'first finding\nVERDICT: CHANGES', 'dev two', 'VERDICT: APPROVED'])
+  let panes = 0
+  state.deps.herdr.split = async direction => {
+    state.calls.push(`split ${direction}`)
+    return `w1:p${++panes + 1}`
+  }
+  const loop = await loopStart(state.deps, state.book, loopRequest())
+  await state.finished(loop)
+  expect(loop.status).toBe('approved')
+  expect(state.calls.filter(call => call.startsWith('split'))).toEqual(['split right', 'split right'])
+  expect(state.calls.filter(call => call.startsWith('start'))).toEqual([
+    'start ct-1-dev w1:p2 -s workspace-write -a on-request',
+    'start ct-1-qa w1:p3 -s read-only -a on-request',
+  ])
+  expect(state.calls.filter(call => call.startsWith('rename'))).toEqual(['rename w1:p2 loop-1 dev', 'rename w1:p3 loop-1 qa'])
+  expect(state.calls.filter(call => call.startsWith('prompt'))).toEqual(['prompt ct-1-dev', 'prompt ct-1-qa', 'prompt ct-1-dev', 'prompt ct-1-qa'])
+  expect(state.prompts[2]).toContain(fixTask('add X', '/tmp/codex-team/1-qa1.md'))
+  expect(state.prompts[3]).toContain(qaFocus('add X'))
+  for (const report of ['1-dev1', '1-qa1', '1-dev2', '1-qa2']) {
+    expect(state.files[loop.report!]).toContain(`/tmp/codex-team/${report}.md`)
+  }
+  expect(state.files['/tmp/codex-team/1-dev1.md']).toBe('dev one')
+  for (const id of [2, 3, 4, 5]) expect(state.files[loop.report!]).toContain(`job ct-${id}`)
+})
+
+test('loop creates QA only after dev finishes and ignores rename failures', async () => {
+  let release = () => {}
+  const state = loopWith(['dev', 'VERDICT: APPROVED'], { rename: new Error('cannot rename') }, { 0: new Promise<void>(done => (release = done)) })
+  const loop = await loopStart(state.deps, state.book, loopRequest())
+  try {
+    for (let i = 0; i < 100 && !state.prompts.length; i++) await pause(1)
+    expect(state.calls.filter(call => call.startsWith('start')).length).toBe(1)
+    expect(state.calls.some(call => call.includes('ct-1-qa'))).toBe(false)
+  } finally { release() }
+  await state.finished(loop)
+  expect(loop.status).toBe('approved')
+})
+
+test('every reused phase clears its own report before prompting and never accepts stale QA', async () => {
+  const state = loopWith(['dev', 'VERDICT: CHANGES', 'fixed', undefined])
+  for (const phase of ['dev', 'qa']) for (const round of [1, 2]) state.files[`/tmp/codex-team/1-${phase}${round}.md`] = 'stale\nVERDICT: APPROVED'
+  const prompt = state.deps.herdr.prompt
+  state.deps.herdr.prompt = async (...args) => {
+    const path = args[1].match(/write your final report as Markdown to (.+) and answer/)![1]!
+    expect(state.files[path]).toBe('')
+    return prompt(...args)
+  }
+  const loop = await loopStart(state.deps, state.book, loopRequest())
+  await state.finished(loop)
+  expect(loop.status).toBe('failed')
+  expect(loop.error).toContain('1-qa2.md')
+  expect(state.files['/tmp/codex-team/1-qa1.md']).toBe('VERDICT: CHANGES')
+})
+
+test('loop agents are owned by the book and their id survives a reload', async () => {
+  const state = loopWith(['dev', 'VERDICT: APPROVED'], { live: ['ct-7-dev', 'ct-7-qa'] })
+  const loop = await loopStart(state.deps, state.book, loopRequest())
+  await state.finished(loop)
+  state.deps.herdr.list = async () => state.book.jobs().map(j => ({ name: j.agent, pane: j.pane! }))
+  expect(await state.book.orphans()).toEqual([])
+  const reloaded = createBook({ ...state.deps, notify: () => {} })
+  expect(await reloaded.reserveId()).toBe(2)
+})
+
+test('a cancelled loop retries failed ctrl+c while the reused phase still holds the slot', async () => {
+  let release = () => {}
+  const state = loopWith(['dev', 'VERDICT: CHANGES', 'fixed'], {}, { 2: new Promise<void>(done => (release = done)) })
+  const sendKeys = state.deps.herdr.sendKeys
+  let attempts = 0
+  state.deps.herdr.sendKeys = async (...args) => {
+    if (++attempts === 1) throw new Error('transport failed')
+    await sendKeys(...args)
+  }
+  const loop = await loopStart(state.deps, state.book, loopRequest())
+  try {
+    for (let i = 0; i < 100 && state.prompts.length < 3; i++) await pause(1)
+    expect(await cancelLoop(state.deps, state.book, loop)).toContain('transport failed')
+    expect(await cancelLoop(state.deps, state.book, loop)).toContain('Sent ctrl+c to ct-1-dev')
+    const other = await state.book.start(request())
+    await pause(5)
+    expect(other.status).toBe('queued')
+    release()
+    await state.finished(loop)
+    await state.book.ended(other.id)
+    expect(state.calls.filter(call => call.startsWith('start ct-1-dev')).length).toBe(1)
+    expect(attempts).toBe(2)
+    expect(loop.status).toBe('cancelled')
+  } finally { release() }
+})
+
+
+test('blocked standalone execute and review submit a message to the lead once per episode', async ($, on) => {
+  const host = loopHost(on, undefined, { prompt: ['blocked', 'blocked'], wait: ['idle', 'idle'] })
+  await startSession($)
+  for (const kind of ['execute', 'review']) {
+    await $.tool.call({ tool: `mcp__codex-team__${kind}` as 'mcp__codex-team__execute', task: 'add X' })
+    for (let i = 0; i < 100 && host.messages.length < (kind === 'execute' ? 2 : 4); i++) await pause(1)
+  }
+  const blocked = host.messages.filter(message => message.includes('blocked'))
+  expect(blocked.length).toBe(2)
+  for (const [index, text] of blocked.entries()) {
+    expect(text).toContain(`ct-${index + 1}`)
+    expect(text).toContain('pane w1:p2')
+    expect(text).toContain('The person must answer in the pane')
+    expect(text).toContain('The lead must NOT answer for them')
+  }
+})
+
+test('blocked loop phases tell the lead the parent and pane once per blocked episode', async ($, on) => {
+  const host = loopHost(on, undefined, { prompt: ['blocked', 'blocked'], wait: ['working', 'blocked', 'idle', 'idle'] })
+  await startSession($)
+  await $.tool.call({ tool: 'mcp__codex-team__loop', task: 'add X' })
+  for (let i = 0; i < 100 && !host.messages.some(text => text.includes('loop-1 approved')); i++) await pause(1)
+  const blocked = host.messages.filter(message => message.includes('blocked'))
+  expect(blocked.length).toBe(3)
+  expect(blocked[0]).toContain('ct-1-dev')
+  expect(blocked[2]).toContain('ct-1-qa')
+  for (const text of blocked) {
+    expect(text).toContain('loop-1')
+    expect(text).toContain('pane w1:p2')
+    expect(text).toContain('The person must answer in the pane')
+    expect(text).toContain('The lead must NOT answer for them')
+  }
+  expect(host.messages.filter(message => !message.includes('blocked')).length).toBe(1)
+})
+
+test('cancelling while a reused phase clears its report sends no new prompt', async () => {
+  let release = () => {}
+  let clearing = false
+  const gate = new Promise<void>(done => (release = done))
+  const state = loopWith(['dev', 'VERDICT: CHANGES', 'fixed'])
+  const write = state.deps.files.write
+  state.deps.files.write = async (path, text) => {
+    if (path.endsWith('1-dev2.md')) { clearing = true; await gate }
+    await write(path, text)
+  }
+  const loop = await loopStart(state.deps, state.book, loopRequest())
+  try {
+    for (let i = 0; i < 100 && !clearing; i++) await pause(1)
+    expect(clearing).toBe(true)
+    await cancelLoop(state.deps, state.book, loop)
+  } finally { release() }
+  await state.finished(loop)
+  expect(loop.status).toBe('cancelled')
+  expect(state.prompts.length).toBe(2)
+  expect(state.calls.filter(call => call.startsWith('start')).length).toBe(2)
+})
+
+test('each reused phase gets a new 30 minute deadline with chunked waits', async () => {
+  const state = loopWith(['dev', 'VERDICT: CHANGES', 'fixed', 'VERDICT: APPROVED'], {
+    prompt: Array.from({ length: 4 }, () => new HerdrError('timeout', 'chunk')),
+    wait: ['idle', 'idle', 'idle', 'idle'],
+  })
+  let now = 0
+  state.deps.now = () => now
+  const prompt = state.deps.herdr.prompt
+  const limits: number[] = []
+  state.deps.herdr.prompt = async (...args) => {
+    limits.push(args[2])
+    now += 20 * 60_000
+    return prompt(...args)
+  }
+  const loop = await loopStart(state.deps, createBook({ ...state.deps, notify: () => {} }), loopRequest())
+  await state.finished(loop)
+  expect(loop.status).toBe('approved')
+  expect(limits).toEqual([540_000, 540_000, 540_000, 540_000])
+  expect(state.calls.filter(call => call.startsWith('wait')).length).toBe(4)
+})
+
+test('a cancelled phase holds the execute slot after its deadline until the agent settles', async () => {
+  let releasePrompt = () => {}
+  let releaseStop = () => {}
+  const promptGate = new Promise<void>(done => (releasePrompt = done))
+  const stopGate = new Promise<void>(done => (releaseStop = done))
+  const state = loopWith(['dev', 'other'], { prompt: ['blocked'] }, { 0: promptGate })
+  let now = 0
+  let waitingForStop = false
+  state.deps.now = () => now
+  state.deps.herdr.wait = async () => { waitingForStop = true; await stopGate; return 'idle' }
+  const book = createBook({ ...state.deps, notify: () => {} })
+  const loop = await loopStart(state.deps, book, loopRequest())
+  try {
+    for (let i = 0; i < 100 && !state.prompts.length; i++) await pause(1)
+    await cancelLoop(state.deps, book, loop)
+    now = 30 * 60_000
+    releasePrompt()
+    const other = await book.start(request())
+    await pause(5)
+    expect(other.status).toBe('queued')
+    expect(waitingForStop).toBe(true)
+    releaseStop()
+    await state.finished(loop)
+    expect((await book.done(other.id)).status).toBe('done')
+  } finally { releasePrompt(); releaseStop() }
+})
+
+
+test('a report clear failure in a later round never prompts or restarts its reused agent', async () => {
+  const state = loopWith(['dev', 'VERDICT: CHANGES', 'fixed'])
+  const write = state.deps.files.write
+  state.deps.files.write = async (path, text) => {
+    if (path.endsWith('1-dev2.md')) throw new Error('cannot clear round two')
+    await write(path, text)
+  }
+  const loop = await loopStart(state.deps, state.book, loopRequest())
+  await state.finished(loop)
+  expect(loop.status).toBe('failed')
+  expect(loop.error).toContain('dev 2')
+  expect(state.prompts.length).toBe(2)
+  expect(state.calls.filter(call => call.startsWith('start')).length).toBe(2)
+})
+
+test('a cancelled loop keeps waiting through stop timeouts and permits ctrl+c retries', async () => {
+  let releasePrompt = () => {}
+  let releaseStop = () => {}
+  const state = loopWith(['dev', 'other'], { prompt: ['blocked'] }, { 0: new Promise<void>(done => (releasePrompt = done)) })
+  const stopGate = new Promise<void>(done => (releaseStop = done))
+  let now = 0
+  let waits = 0
+  state.deps.now = () => now
+  state.deps.herdr.wait = async () => {
+    if (++waits === 1) throw new HerdrError('timeout', 'not stopped yet')
+    await stopGate
+    return 'done'
+  }
+  const book = createBook({ ...state.deps, notify: () => {} })
+  const loop = await loopStart(state.deps, book, loopRequest())
+  try {
+    for (let i = 0; i < 100 && !state.prompts.length; i++) await pause(1)
+    await cancelLoop(state.deps, book, loop)
+    now = 30 * 60_000
+    releasePrompt()
+    const other = await book.start(request())
+    for (let i = 0; i < 100 && waits < 2; i++) await pause(1)
+    expect(waits).toBe(2)
+    expect(other.status).toBe('queued')
+    expect(await cancelLoop(state.deps, book, loop)).toContain('Sent ctrl+c')
+    releaseStop()
+    await state.finished(loop)
+    await book.ended(other.id)
+  } finally { releasePrompt(); releaseStop() }
 })

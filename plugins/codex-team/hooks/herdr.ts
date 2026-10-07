@@ -1,11 +1,8 @@
-import { HerdrError } from './team'
-import type { AgentState, Herdr, Settled } from './team'
+import { HerdrError } from './model'
+import type { AgentState, Herdr, Run, Settled } from './model'
 
 // The Herdr interface over the `herdr` CLI. Every command prints JSON on success
 // and a JSON error on failure; `agent read` prints the pane text raw.
-
-/** What the adapter needs from the host: register.tsx hands `$.process.run` over this way. */
-export type Run = (argv: string[], init?: { timeoutMs?: number }) => Promise<{ exitCode: number; stdout: string; stderr: string }>
 
 const STATES: readonly string[] = ['idle', 'working', 'blocked', 'done']
 const SETTLED: readonly string[] = ['idle', 'blocked', 'done']
@@ -65,6 +62,10 @@ export function herdrOf(run: Run, options: { pane: string; cwd: string }): Herdr
       const id = (await json(['pane', 'split', options.pane, '--direction', direction, '--cwd', options.cwd, '--no-focus'])).result?.pane?.pane_id
       if (typeof id !== 'string') throw new HerdrError('unknown', 'herdr did not return the new pane')
       return id
+    },
+
+    async rename(pane, name) {
+      await exec(['pane', 'rename', pane, name])
     },
 
     async start(name, pane, args) {
