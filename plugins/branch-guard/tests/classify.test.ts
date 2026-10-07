@@ -46,3 +46,13 @@ test('classify follows cd, git -C and the branch a checkout leaves active', () =
   expect(classify('git checkout -- src/a.ts && git commit -m x')[0]).not.toHaveProperty('branchAfter')
   expect(classify('git checkout src/a.ts && git commit -m x')[0]).not.toHaveProperty('branchAfter')
 })
+
+test('classify keeps push refspecs and tags as today', () => {
+  const base = { dir: '.', isElsewhere: false, kind: 'publish', isAllRefs: false, hasUnknownRef: false }
+
+  expect(classify('git push origin HEAD:main')).toEqual([{ ...base, remote: 'origin', refspecs: ['HEAD:main'] }])
+  expect(classify('git push --tags')).toEqual([])
+  expect(classify('git push origin v1.2')).toEqual([{ ...base, remote: 'origin', refspecs: ['v1.2'] }])
+  expect(classify('git push -u origin feature')).toEqual([{ ...base, remote: 'origin', refspecs: ['feature'] }])
+  expect(classify('git -C ../other push')).toEqual([{ ...base, dir: '../other', refspecs: [] }])
+})
