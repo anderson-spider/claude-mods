@@ -149,7 +149,7 @@ Lifecycle per the spec: set `starting`; `size` then `split`; `start` with `codex
   - `wait`: `agent wait <name> --timeout <timeoutMs>`
   - `read`: `agent read <name> --source recent-unwrapped --lines <n>` → text
   - `sendKeys`: `agent send-keys <name> <keys…>`
-  - `list`: `agent list` → `.result.agents[]` filtered to names starting `ct-`, mapped to `{ name, pane: pane_id }`. The `agent list` entries carry no `name` field in the sample output; the implementer must run `herdr agent list --help`/`herdr agent get` once against a named agent started by hand (`herdr agent rename`) and use the real key before relying on this.
+  - `list`: `agent list` → `.result.agents[]` that have a `name` starting `ct-` (unnamed agents carry no `name` key), mapped to `{ name, pane: pane_id }`. Confirmed against the real CLI (herdr 0.9.3, a throwaway `ct-probe` agent): `agent start` and `agent get` answer `.result.agent` with `name`, `pane_id`, `agent_status`; `agent get <unknown>` fails with `{"error":{"code":"agent_not_found","message":"…"},"id":"…"}` and exit 1. The adapter reads that JSON from stderr and, when stderr is empty, from stdout.
 
 - [ ] **Step 1: Write the failing tests** with a fake `Run` that records argv and answers canned JSON:
   - **Review Focus 1:** `prompt('ct-1', 'a "b"\n`c` $(d)', 1000)` passes the text as exactly one argv element equal to the input.
@@ -157,7 +157,7 @@ Lifecycle per the spec: set `starting`; `size` then `split`; `start` with `codex
   - a failing command with stderr `{"error":{"code":"agent_not_ready"}}` throws `HerdrError` with that code; non-JSON stderr gives code `unknown`.
   - `herdrAvailable` returns a reason mentioning Herdr when `HERDR_ENV` is not `1`, and one naming `codex` when `codex --version` fails.
 - [ ] **Step 2: Run to verify failure.** Expected: FAIL, `../hooks/herdr` missing.
-- [ ] **Step 3: Implement** `herdr.ts`. Verify each JSON path against the real CLI by running the read-only commands (`pane layout`, `agent list`, `agent get`) and keep only paths seen in real output.
+- [ ] **Step 3: Implement** `herdr.ts`. Verify the paths not yet confirmed (`pane layout`, `pane split`, `agent prompt --wait`, `agent wait`, `agent read`) against the real CLI and keep only paths seen in real output.
 - [ ] **Step 4: Run tests.** Expected: PASS.
 - [ ] **Step 5: Commit** `feat(codex-team): drive Herdr through its CLI`
 
@@ -211,4 +211,4 @@ Lifecycle per the spec: set `starting`; `size` then `split`; `start` with `codex
 
 - **Spec coverage:** tools (Tasks 1, 3, 5); lifecycle steps 1-7 (Tasks 2, 3); state, band, commands, prompt section and toasts (Task 5); each error line of the spec (Task 2 tests, Task 4 `herdrAvailable`, Task 5 outside-Herdr answer); tests list (Tasks 1-5); housekeeping (Tasks 1 and 6).
 - **Decisions the spec left open:** `agent_not_ready` keeps the job `blocked` and then continues once the agent settles; waits run in chunks because `$.process.run` caps at 10 minutes; the counter skips live `ct-*` names after a reload; `TMPDIR` falls back to `/tmp`; the split target is explicit (`HERDR_PANE_ID`); `JOB_LIMIT_MS` is a constant, not a setting.
-- **Known unknown:** the real key for an agent's name in `herdr agent list` JSON is not in the sampled output; Task 4 Step 3 resolves it against the real CLI before relying on it.
+- **Confirmed against the real CLI:** the agent's name is the `name` key in `agent list`/`agent get`/`agent start` results, present only on named agents; error JSON is `{"error":{"code","message"},"id"}`.
