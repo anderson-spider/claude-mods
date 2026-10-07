@@ -1,4 +1,4 @@
-# codex-lead: Claude as lead of Codex agents in Herdr
+# codex-team: Claude as lead of Codex agents in Herdr
 
 Date: 2026-10-06
 Status: design, awaiting review
@@ -26,24 +26,24 @@ a socket helper, jobs surviving a reload.
 
 ## Shape
 
-New plugin `plugins/codex-lead/` (name provisional), following the `chatgpt`
+New plugin `plugins/codex-team/`, following the `chatgpt`
 plugin:
 
-- `hooks/lead.ts`: pure logic (prompt, agent name, Codex arguments, split
+- `hooks/team.ts`: pure logic (prompt, agent name, Codex arguments, split
   direction, report reading). Everything that touches the host goes through an
   injected `Herdr` (`split`, `start`, `prompt`, `wait`, `read`, `sendKeys`,
   `list`), so tests use a fake host.
 - `hooks/register.tsx`: host wiring (tools, jobs, toast, band, commands,
   prompt section).
 - `types/index.d.ts`: tool inputs and the plugin state (`PluginState`, key
-  `codex-lead`/`jobs`).
-- `tests/codex-lead.test.ts`, `.claude-plugin/plugin.json`, an entry in
+  `codex-team`/`jobs`).
+- `tests/codex-team.test.ts`, `.claude-plugin/plugin.json`, an entry in
   `.claude-plugin/marketplace.json`, a section in `AGENTS.md` and the README.
 
 ## Tools
 
 Registered with `$.tool.register` in `session.start`, listed as
-`mcp__codex-lead__<name>`:
+`mcp__codex-team__<name>`:
 
 - `execute { task, files? }`: Codex implements the task in the current
   directory, sandbox `workspace-write`. Queued: one at a time.
@@ -65,13 +65,13 @@ Each job is a detached `void (async () => …)()`, the same shape as the
 2. **Pane.** `herdr pane split --current --direction <right|down> --cwd "$PWD"
    --no-focus`; the direction follows `herdr pane layout` (wide pane: right,
    narrow or tall: down). The pane id is `.result.pane.pane_id`.
-3. **Agent.** `herdr agent start cl-<id> --kind codex --pane <pane> -- <args>`,
+3. **Agent.** `herdr agent start ct-<id> --kind codex --pane <pane> -- <args>`,
    where `<args>` set the sandbox (`-s workspace-write` or `-s read-only`) and
    `-a on-request` (flags checked against `codex --help`, codex-cli 0.160.1).
    The call returns once Codex is ready.
-4. **Prompt.** `herdr agent prompt cl-<id> "<prompt>" --wait`. The prompt holds
+4. **Prompt.** `herdr agent prompt ct-<id> "<prompt>" --wait`. The prompt holds
    the task, the rules (do not commit, stay inside the scope) and the order to
-   write the final report to `$TMPDIR/codex-lead/<id>.md` and answer only with
+   write the final report to `$TMPDIR/codex-team/<id>.md` and answer only with
    that path.
 5. **Wait.** `agent wait` in a loop: `working` keeps the job running;
    `blocked` sets the job to `blocked` and raises a toast ("Codex needs you");
@@ -84,7 +84,7 @@ Each job is a detached `void (async () => …)()`, the same shape as the
    sends `ctrl+c`, marks the job `cancelled` and leaves the pane.
 
 Jobs live in a module variable (lost on a reload). The panes survive, so
-`/codex-lead` also lists orphan `cl-*` agents from `herdr agent list`.
+`/codex-team` also lists orphan `ct-*` agents from `herdr agent list`.
 
 ## State and UI
 
@@ -95,19 +95,19 @@ Jobs live in a module variable (lost on a reload). The panes survive, so
   the pane):
 
   ```
-  Codex Lead
-    cl-3 execute  working   2m10s   w34:p2
-    cl-4 review   blocked   0m45s   w34:p3  ← answer in the pane
+  Codex Team
+    ct-3 execute  working   2m10s   w34:p2
+    ct-4 review   blocked   0m45s   w34:p3  ← answer in the pane
   ```
 
   `blocked` is highlighted; finished jobs leave the band after the toast; the
   rows are capped at `maxRows - CHROME_ROWS` with `… and N more`.
   `CHROME_ROWS` follows the band's fixed rows (border, title, footer). The band's
   strings are English and the tests assert on them.
-- Commands: `/codex-lead` (jobs and orphan panes) and `/codex-lead-doctor`
+- Commands: `/codex-team` (jobs and orphan panes) and `/codex-team-doctor`
   (`HERDR_ENV=1`, `herdr` and `codex` in PATH and their versions, whether
   `agent start --kind codex` works).
-- A `prompt.compose` section `codex-lead` teaches Claude to lead: delegate
+- A `prompt.compose` section `codex-team` teaches Claude to lead: delegate
   well-bounded work to `execute`, call `review` before integrating, read the
   job's report instead of the pane, and not start a second `execute` while one
   is queued in the same directory. The tools may be deferred, so their
@@ -123,7 +123,7 @@ becomes a result.
 - Outside Herdr (`HERDR_ENV` not 1): the tools answer `isError` with the
   reason and try nothing.
 - `herdr` or `codex` missing: the job is `failed` with the message;
-  `/codex-lead-doctor` names the missing one.
+  `/codex-team-doctor` names the missing one.
 - `agent_not_ready` at start: the job is `blocked`.
 - `agent_prompt_stalled` or `timeout`: the prompt may have arrived, so it is not
   resent; the job is `failed` and names the pane to inspect.
@@ -133,10 +133,10 @@ becomes a result.
 
 ## Tests
 
-`tests/codex-lead.test.ts`, run with `claude plugin test plugins/codex-lead`,
+`tests/codex-team.test.ts`, run with `claude plugin test plugins/codex-team`,
 using a fake `Herdr` that answers by subcommand:
 
-- `lead.ts`: prompt building, sandbox arguments per kind, `cl-<id>` name, split
+- `team.ts`: prompt building, sandbox arguments per kind, `ct-<id>` name, split
   direction, report reading.
 - Lifecycle: `queued → working → done`, `blocked` and back, `failed` for each
   error above, `cancelled`.
@@ -147,6 +147,6 @@ using a fake `Herdr` that answers by subcommand:
 
 ## Housekeeping
 
-Add `plugins/codex-lead` to `marketplace.json`, a `codex-lead` section to
+Add `plugins/codex-team` to `marketplace.json`, a `codex-team` section to
 `AGENTS.md` (and update its plugin count and list), a README entry, and
 `version` in `plugin.json`. Pull request title and description in English.
