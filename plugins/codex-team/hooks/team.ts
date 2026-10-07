@@ -111,7 +111,7 @@ export type Job = {
   error?: string
 }
 
-export type Files = { read(path: string): Promise<string | undefined> }
+export type Files = { read(path: string): Promise<string | undefined>; write(path: string, text: string): Promise<void> }
 export type Notify = (event: 'blocked' | 'finished', job: Job) => void
 export type Deps = { herdr: Herdr; files: Files; tmpdir: string | undefined; now: () => number; notify: Notify }
 
@@ -125,7 +125,7 @@ const LEFT_BLOCKED: AgentState[] = ['working', 'idle', 'done']
  * Runs one job in its own Herdr pane. Never rejects: an error becomes `failed`.
  * Mutates `job`; `deps.notify` hears about each blocked episode and the end.
  */
-export async function runJob(deps: Deps, job: Job, request: Request, options: { limitMs?: number; chunkMs?: number } = {}): Promise<void> {
+export async function runJob(deps: Deps, job: Job, request: Request, options: { limitMs?: number; chunkMs?: number; freshReport?: boolean } = {}): Promise<void> {
   const { herdr } = deps
   const limit = options.limitMs ?? JOB_LIMIT_MS
   const chunk = options.chunkMs ?? WAIT_CHUNK_MS
@@ -136,6 +136,7 @@ export async function runJob(deps: Deps, job: Job, request: Request, options: { 
     if (job.status !== 'cancelled') job.status = status
   }
   const cancelled = () => job.status === 'cancelled'
+  const path = reportPath(deps.tmpdir, job.id)
 
   // Runs `step` in chunks until it settles or the job limit passes; a chunk's own timeout carries on with `wait`.
   const settle = async <T extends AgentState>(first: (timeoutMs: number) => Promise<T>): Promise<AgentState> => {
@@ -167,6 +168,11 @@ export async function runJob(deps: Deps, job: Job, request: Request, options: { 
   }
 
   try {
+    // Loop children must not inherit a verdict from a report left by an earlier session.
+    if (options.freshReport) {
+      await deps.files.write(path, '')
+      if (cancelled()) return
+    }
     set('starting')
     job.pane = await herdr.split(splitDirection(await herdr.size()))
     // Cancelled while the pane was opening: the empty pane stays for the person to close.
@@ -176,15 +182,17 @@ export async function runJob(deps: Deps, job: Job, request: Request, options: { 
       await herdr.start(job.agent, job.pane, codexArgs(request.kind))
     } catch (error) {
       if (!(error instanceof HerdrError) || error.code !== 'agent_not_ready') throw error
+      if (cancelled()) return
       await whileBlocked('blocked')
     }
 
-    const path = reportPath(deps.tmpdir, job.id)
+    if (cancelled()) return
     set('working')
     await whileBlocked(await settle(timeoutMs => herdr.prompt(job.agent, buildPrompt(request.kind, request, path), timeoutMs)))
     if (cancelled()) return
 
-    const report = await deps.files.read(path)
+    const written = await deps.files.read(path)
+    const report = options.freshReport && written === '' ? undefined : written
     if (report !== undefined) {
       job.report = path
       job.summary = report.slice(0, SUMMARY_CHARS)
@@ -230,40 +238,74 @@ const FINISHED: Status[] = ['done', 'failed', 'cancelled']
 export function createBook(deps: Deps) {
   const jobs: Job[] = []
   const queue = taskQueue()
+  const completions = new Map<number, Promise<Job>>()
+  const resolve = new Map<number, (job: Job) => void>()
+  const runs = new Map<number, Promise<void>>()
+  const running = new Set<number>()
   let counter = 1
 
   const live = async () => (await deps.herdr.list().catch(() => [])).map(agent => agent.name)
+  const reserveId = async () => {
+    const names = await live()
+    const id = nextFreeId(counter, names)
+    counter = id + 1
+    return id
+  }
 
   return {
     /** Registers the job and starts it (an execute one after the others); answers at once. */
-    async start(request: Request): Promise<Job> {
-      const id = nextFreeId(counter, await live())
-      counter = id + 1
+    async start(request: Request, options: { quiet?: boolean; owned?: boolean } = {}): Promise<Job> {
+      const id = await reserveId()
       const job: Job = { id, kind: request.kind, title: titleOf(request), status: 'queued', agent: agentName(id), startedAt: deps.now() }
       jobs.push(job)
+      completions.set(id, new Promise<Job>(done => resolve.set(id, done)))
       const run = async () => {
-        if (job.status !== 'cancelled') await runJob(deps, job, request)
+        running.add(id)
+        try {
+          if (job.status !== 'cancelled') {
+            const notify: Notify = (event, job) => {
+              if (!options.quiet || event === 'blocked') deps.notify(event, job)
+            }
+            await runJob({ ...deps, notify }, job, request, { freshReport: options.quiet })
+          }
+        } finally {
+          running.delete(id)
+          resolve.get(id)?.(job)
+          resolve.delete(id)
+        }
       }
-      void (request.kind === 'execute' ? queue(run) : run())
+      runs.set(id, request.kind === 'execute' && !options.owned ? queue(run) : run())
       return job
     },
+
+    reserveId,
+    exclusive: queue,
+    done: (id: number): Promise<Job> => completions.get(id) ?? Promise.reject(new Error(`No job ${agentName(id)} in this session.`)),
+    /** Unlike done, waits for the run to return even when the job is cancelled. */
+    ended: (id: number): Promise<void> => runs.get(id) ?? Promise.reject(new Error(`No job ${agentName(id)} in this session.`)),
 
     async cancel(id: number): Promise<string> {
       const job = jobs.find(j => j.id === id)
       if (!job) return `No job ${agentName(id)} in this session.`
-      if (FINISHED.includes(job.status)) return `${job.agent} is ${job.status}: nothing to cancel.`
+      if (FINISHED.includes(job.status) && !(job.status === 'cancelled' && running.has(id))) return `${job.agent} is ${job.status}: nothing to cancel.`
       if (job.status === 'queued' || !job.pane) {
         job.status = 'cancelled'
         job.endedAt = deps.now()
+        resolve.get(id)?.(job)
+        resolve.delete(id)
         return `${job.agent} had not started and is now cancelled.`
       }
+      // Record the cancel before sending keys: the agent may still be registering.
+      job.status = 'cancelled'
+      job.endedAt = deps.now()
       try {
         await deps.herdr.sendKeys(job.agent, ['ctrl+c'])
       } catch (error) {
         return `Could not send ctrl+c to ${job.agent} (pane ${job.pane}): ${error instanceof Error ? error.message : String(error)}`
+      } finally {
+        resolve.get(id)?.(job)
+        resolve.delete(id)
       }
-      job.status = 'cancelled'
-      job.endedAt = deps.now()
       return `Sent ctrl+c to ${job.agent} (pane ${job.pane}) and marked it cancelled; the pane stays open.`
     },
 
@@ -314,13 +356,16 @@ const clock = (seconds: number) => `${Math.floor(seconds / 60)}m${String(seconds
 export function bandRows(jobs: readonly BandJob[], room: number): { rows: string[]; hidden: number } {
   const shown = jobs.slice(0, Math.max(0, room))
   const rows = shown.map(
-    job => `${job.id} ${job.kind}  ${job.status}  ${clock(job.elapsedSeconds)}  ${job.pane}${job.status === 'blocked' ? '  ← answer in the pane' : ''}`,
+    job => job.kind === 'loop'
+      ? `${job.id} ${job.status} ${job.round}/${job.maxRounds}  ${clock(job.elapsedSeconds)}`
+      : `${job.id} ${job.kind}  ${job.status}  ${clock(job.elapsedSeconds)}  ${job.pane}${job.status === 'blocked' ? '  ← answer in the pane' : ''}`,
   )
   return { rows, hidden: jobs.length - shown.length }
 }
 
 const EXECUTE_TOOL = 'mcp__codex-team__execute'
 const REVIEW_TOOL = 'mcp__codex-team__review'
+const LOOP_TOOL = 'mcp__codex-team__loop'
 const JOBS_TOOL = 'mcp__codex-team__jobs'
 
 // Added to the system prompt so Claude leads on its own; the tools may be deferred, so their descriptions
@@ -332,7 +377,8 @@ export const PROMPT = [
   '',
   `- \`${EXECUTE_TOOL}\` { task, files? }: Codex implements a well-bounded task in the current directory (sandbox workspace-write, it never commits). One execute runs at a time: a second waits in the queue, so do not start a second while one is running or queued in the same directory.`,
   `- \`${REVIEW_TOOL}\` { target?, focus? }: Codex reviews the current diff (or the target) read-only; reviews run in parallel.`,
-  `- \`${JOBS_TOOL}\` { id?, action? }: lists the jobs, reads one, or cancels it (\`action: "cancel"\`).`,
+  `- \`${LOOP_TOOL}\` { task, files?, maxRounds? }: use when work needs QA. Runs dev then read-only QA rounds (maxRounds defaults to 3), holding the execute queue throughout; answers an id at once and one message at the end with a verdict. Use execute and review for manual control.`,
+  `- \`${JOBS_TOOL}\` { id?, action? }: lists jobs and loops, reads one, or cancels it (\`action: "cancel"\`).`,
   '',
   '- Say in one line what you delegate before the call. If the tools are deferred, load them by name first.',
   '- Write a self-contained task: the goal, the files, the constraints and how to check it.',

@@ -1,11 +1,13 @@
 /** One job as the band above the prompt draws it. */
 export type BandJob = {
-  /** The Herdr agent name, `ct-<id>`. */
+  /** The Herdr agent name `ct-<id>`, or the parent `loop-<id>`. */
   id: string
-  kind: 'execute' | 'review'
-  status: 'queued' | 'starting' | 'working' | 'blocked' | 'done' | 'failed' | 'cancelled'
+  kind: 'execute' | 'review' | 'loop'
+  status: 'queued' | 'starting' | 'working' | 'blocked' | 'done' | 'failed' | 'cancelled' | 'developing' | 'reviewing' | 'approved' | 'exhausted'
   pane: string
   elapsedSeconds: number
+  round?: number
+  maxRounds?: number
 }
 
 declare module 'claude-code' {
@@ -25,6 +27,11 @@ declare module 'claude-code' {
     'mcp__codex-team__review': {
       target?: string
       focus?: string
+    }
+    'mcp__codex-team__loop': {
+      task: string
+      files?: string[]
+      maxRounds?: number
     }
     'mcp__codex-team__jobs': {
       id?: number

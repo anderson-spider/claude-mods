@@ -69,10 +69,11 @@ Holds nothing: it registers the `ask`, `image` and `jobs` tools (listed as `mcp_
 
 ## codex-team
 
-Registers the `execute`, `review` and `jobs` tools (`mcp__codex-team__<name>`; inputs declared in `types/index.d.ts` for the matchers, kept in step with the `inputSchema`) and the `/codex-team` and `/codex-team-doctor` commands in `session.start`. A `prompt.compose` hook adds the `codex-team:lead` section (`PROMPT` in `hooks/team.ts`). Three files:
+Registers the `execute`, `review`, `loop` and `jobs` tools (`mcp__codex-team__<name>`; inputs declared in `types/index.d.ts` for the matchers, kept in step with the `inputSchema`) and the `/codex-team` and `/codex-team-doctor` commands in `session.start`. A `prompt.compose` hook adds the `codex-team:lead` section (`PROMPT` in `hooks/team.ts`). Four files:
 
 - `hooks/team.ts`: pure. `requestOf` reads a tool input, `buildPrompt` writes the prompt (the rules, and the report path `$TMPDIR/codex-team/<id>.md`), `codexArgs` picks the sandbox (`workspace-write` for execute, `read-only` for review, `-a on-request`), `runJob` is the lifecycle against an injected `Herdr` and never rejects (an error becomes `failed`), `createBook` holds the session's jobs (ids, the execute queue, `cancel`), and `jobsReport`, `bandRows` and `doctorReport` draw text.
 - `hooks/herdr.ts`: the `Herdr` over the `herdr` CLI through `$.process.run` (`pane split`, `agent start`/`prompt`/`wait`/`read`/`send-keys`/`list`). A prompt goes as one argv element, never through a shell. `herdrAvailable` says why the plugin cannot run (`HERDR_ENV` is not 1, or no `herdr`).
+- `hooks/loop.ts`: pure. `loopOf` reads `task`, `files` and `maxRounds` (integer at least 1, default 3); `loopStart` reserves an id and starts `runLoop`, which never rejects. Each round runs an ordinary execute then a read-only review of the current diff. `qaFocus` adds the task as acceptance criteria and the verdict rule; `fixTask` sends the next dev the original task and the previous QA report path. `loopReport` writes the parent report through the injected `Files.write` (`$.fs.write` creates the folder).
 - `hooks/register.tsx`: wires the host. The tool handlers end in `.catch(failure)`, so a call never rejects; the job lives in the module's `book` (lost on a reload, `orphans` lists the `ct-*` agents it left), and `publish` copies it to `$.state` (`codex-team`/`jobs`) for the band in `AbovePrompt`, ticking once a second while a job is active. `notifier` toasts when a job blocks and, at the end, sends the report path as a new turn with `$.prompt.submit`.
 
 Details that only make sense when reading both sides:
@@ -80,9 +81,12 @@ Details that only make sense when reading both sides:
 - Jobs run long after the hook that started them returned, so `$` is only passed on, never stored; `start` answers a job id at once.
 - Every wait runs in chunks under 10 minutes (`WAIT_CHUNK_MS`), because `$.process.run` kills a child after that; a chunk's `timeout` carries on with `wait`, and the job limit is 30 minutes (`JOB_LIMIT_MS`). A timeout does not stop Codex.
 - `execute` jobs take turns in `taskQueue` (they share the working directory); `review` jobs start at once. A `blocked` agent waits for the person in its pane: `whileBlocked` notifies once per episode.
+- Jobs (`ct-<id>`) and loops (`loop-<id>`) share one id space through `book.reserveId`; reserving an id checks live agent names. `book.done(id)` resolves on done, failed or cancelled, including a cancel while queued. `book.exclusive(fn)` holds the execute slot across all rounds; a dev started inside it uses `{ quiet: true, owned: true }` to skip queueing behind itself, and QA uses `{ quiet: true }`. Quiet children drop only `finished` notifications; blocked notifications still reach the person. The loop sends one final notification with `$TMPDIR/codex-team/loop-<id>.md`.
+- Quiet children clear their report path before starting (`runJob`'s `freshReport` option) and treat it as absent if still empty afterwards, so an old verdict cannot approve a new task. A failed clear fails the child before Herdr starts; standalone execute and review keep their report behavior. A cancel during startup is checked again before any prompt is sent.
+- The verdict is the QA report's last non-empty line, trimmed, exactly `VERDICT: APPROVED` or `VERDICT: CHANGES`. A missing or invalid verdict fails the loop, never approves it; changes after the final round leave it exhausted with the last findings in the report. `jobs` lists jobs and loops, reads either by its shared id and cancels a loop's active child without starting another round. The band includes active parents as `loop-1 reviewing 2/3`; loops, like jobs, are forgotten on reload.
 - `agent_prompt_stalled` fails the job and never sends the prompt again; a cancelled job keeps its pane open.
 - `CHROME_ROWS` in `register.tsx` must follow the band's fixed rows (border, title and the `and N more` line).
-- The validator warns `gating hook without .catch` on every `tool.call` hook, here as in tailscale and chatgpt; it is informational.
+- The validator lists the existing execute, review and jobs hooks as `gating hook without .catch`; the loop handler ends in `.catch(failure)` and its registration also has `.catch`, so it is listed as `gating hook with .catch`.
 
 ## tailscale
 
