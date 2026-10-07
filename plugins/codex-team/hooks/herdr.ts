@@ -1,5 +1,7 @@
 import { HerdrError } from './model'
 import type { AgentState, Herdr, Run, Settled } from './model'
+import { isAgentName } from './names'
+import { messageOf } from './text'
 
 // The Herdr interface over the `herdr` CLI. Every command prints JSON on success
 // and a JSON error on failure; `agent read` prints the pane text raw.
@@ -8,7 +10,6 @@ const STATES: readonly string[] = ['idle', 'working', 'blocked', 'done']
 const SETTLED: readonly string[] = ['idle', 'blocked', 'done']
 // A herdr wait that gives up by itself answers `timeout`; the process gets a little longer than the wait it asked for.
 const GRACE_MS = 20_000
-const PREFIX = 'ct-'
 // Marks the pane metadata this plugin reports, so it never touches what others set.
 const SOURCE = 'codex-team'
 
@@ -29,12 +30,13 @@ function errorOf(stderr: string, stdout: string, exitCode: number): HerdrError {
 
 /** The Herdr interface over `run`, acting on `pane` (the calling pane) and `cwd` (the session's directory). */
 export function herdrOf(run: Run, options: { pane: string; cwd: string }): Herdr {
+  // Pane names and prompts each go as one argv element, never through a shell.
   const exec = async (argv: string[], timeoutMs?: number): Promise<string> => {
     let result: Awaited<ReturnType<Run>>
     try {
       result = await run(['herdr', ...argv], timeoutMs === undefined ? undefined : { timeoutMs })
     } catch (error) {
-      throw new HerdrError('unknown', error instanceof Error ? error.message : String(error))
+      throw new HerdrError('unknown', messageOf(error))
     }
     if (result.exitCode !== 0) throw errorOf(result.stderr, result.stdout, result.exitCode)
     return result.stdout
@@ -99,7 +101,7 @@ export function herdrOf(run: Run, options: { pane: string; cwd: string }): Herdr
 
     async list() {
       const agents: { name?: string; pane_id?: string; terminal_id?: string }[] = (await json(['agent', 'list'])).result?.agents ?? []
-      return agents.flatMap(agent => (agent.name?.startsWith(PREFIX) && agent.pane_id
+      return agents.flatMap(agent => (agent.name && isAgentName(agent.name) && agent.pane_id
         ? [{ name: agent.name, pane: agent.pane_id, ...(typeof agent.terminal_id === 'string' ? { terminal: agent.terminal_id } : {}) }]
         : []))
     },
@@ -123,8 +125,13 @@ export function herdrOf(run: Run, options: { pane: string; cwd: string }): Herdr
 export async function herdrAvailable(run: Run, env: { HERDR_ENV?: string }): Promise<string | undefined> {
   if (env.HERDR_ENV !== '1') return 'Not running inside Herdr (HERDR_ENV is not 1): codex-team needs Claude Code in a Herdr pane.'
   for (const tool of ['herdr', 'codex']) {
-    const found = await run([tool, '--version'], { timeoutMs: 15_000 }).catch(() => undefined)
-    if (found?.exitCode !== 0) return `${tool} is not installed or not in PATH.`
+    if (await versionOf(argv => run(argv, { timeoutMs: 15_000 }).catch(() => undefined), tool) === undefined) return `${tool} is not installed or not in PATH.`
   }
   return undefined
+}
+
+/** The first line of `<tool> --version`, or undefined when the tool did not answer or failed. */
+export async function versionOf(run: (argv: string[]) => Promise<{ exitCode: number; stdout: string } | undefined>, tool: string): Promise<string | undefined> {
+  const found = await run([tool, '--version'])
+  return found?.exitCode === 0 ? found.stdout.trim().split('\n')[0]! : undefined
 }

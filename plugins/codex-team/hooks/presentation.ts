@@ -1,5 +1,7 @@
 import type { BandJob } from '../types'
+import { isFinished } from './model'
 import type { Book, Check, Job, Loop } from './model'
+import { PREFIX, agentName } from './names'
 
 /** What `jobs` answers: one line per job, newest first. */
 export function jobsReport(jobs: readonly Job[], now: number): string {
@@ -49,13 +51,12 @@ export function doctorReport(checks: readonly Check[]): string {
   return [...lines, '', failed ? `${failed} check(s) failed.` : 'Everything codex-team relies on is in place.'].join('\n')
 }
 
-const FINISHED: Job['status'][] = ['done', 'failed', 'cancelled']
 export const snapshot = (loops: readonly Loop[], jobs: readonly Job[], now: () => number): BandJob[] =>
   [
     ...loops.filter(loop => loop.status === 'developing' || loop.status === 'reviewing')
       .map((loop): BandJob => ({ id: `loop-${loop.id}`, kind: 'loop', status: loop.status, round: loop.rounds.length, maxRounds: loop.maxRounds, pane: '…', elapsedSeconds: Math.floor((now() - loop.startedAt) / 1000) })),
     ...jobs
-      .filter(job => !FINISHED.includes(job.status))
+      .filter(job => !isFinished(job.status))
       .map(job => ({ id: job.agent, kind: job.kind, status: job.status, pane: job.pane ?? '…', elapsedSeconds: Math.floor((now() - job.startedAt) / 1000) })),
   ]
 
@@ -91,13 +92,13 @@ export const allJobs = (loops: readonly Loop[], jobs: readonly Job[] | undefined
 ].filter(Boolean).join('\n')
 
 export const orphanText = (orphans: readonly { name: string; pane: string }[]) =>
-  orphans.length ? `\n\nct-* agents left from before a reload (their panes are still open):\n${orphans.map(o => `  ${o.name} in ${o.pane}`).join('\n')}` : ''
+  orphans.length ? `\n\n${PREFIX}* agents left from before a reload (their panes are still open):\n${orphans.map(o => `  ${o.name} in ${o.pane}`).join('\n')}` : ''
 
 /** The parent report keeps every child id and report path, even on a failure. */
 export function loopReport(loop: Loop, book: Pick<Book, 'get'>, findings?: string): string {
   const child = (phase: string, id: number) => {
     const job = book.get(id)
-    return `${phase}: ${job?.agent ?? `ct-${id}`} (job ct-${id})${job?.report ? ` — report: ${job.report}` : ' — no report'}`
+    return `${phase}: ${job?.agent ?? agentName(id)} (job ${agentName(id)})${job?.report ? ` — report: ${job.report}` : ' — no report'}`
   }
   return [
     `# Codex Team loop-${loop.id}`,

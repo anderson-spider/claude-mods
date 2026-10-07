@@ -2,7 +2,8 @@ import { expect, test } from 'claude-code/testing'
 import { HerdrError } from '../hooks/model'
 import { runJob } from '../hooks/job'
 import { createBook } from '../hooks/book'
-import { job, request, setup, pause } from './helpers'
+import { cancelLoop, loopStart } from '../hooks/loop'
+import { job, request, setup, pause, loopWith, loopRequest } from './helpers'
 import type { Script } from './helpers'
 import type { AgentSession } from '../hooks/model'
 
@@ -121,6 +122,19 @@ test('runJob treats agent_not_ready at start as blocked and then prompts', async
   expect(j.status).toBe('done')
 })
 
+test('a cancel while the agent is blocked at startup never sends the prompt', async () => {
+  const j = job()
+  const { deps, calls, events } = setup({ start: new HerdrError('agent_not_ready', 'blocked at startup') })
+  deps.herdr.wait = async () => {
+    j.status = 'cancelled'
+    return 'idle'
+  }
+  await runJob(deps, j, request())
+  expect(j.status).toBe('cancelled')
+  expect(calls.some(call => call.startsWith('prompt'))).toBe(false)
+  expect(events).toEqual(['blocked blocked'])
+})
+
 test('runJob falls back to the pane text when Codex wrote no report', async () => {
   const { deps } = setup({ read: 'what the pane shows' }, {})
   const j = job()
@@ -235,4 +249,82 @@ test('a job whose list fails right after start still runs with its terminal unkn
   expect(j.terminal).toBeUndefined()
   expect(j.status).toBe('done')
   expect(calls.at(-1)).toBe('prompt ct-1')
+})
+
+test('each reused phase gets a new 30 minute deadline with chunked waits', async () => {
+  const state = loopWith(['dev', 'VERDICT: CHANGES', 'fixed', 'VERDICT: APPROVED'], {
+    prompt: Array.from({ length: 4 }, () => new HerdrError('timeout', 'chunk')),
+    wait: ['idle', 'idle', 'idle', 'idle'],
+  })
+  let now = 0
+  state.deps.now = () => now
+  const prompt = state.deps.herdr.prompt
+  const limits: number[] = []
+  state.deps.herdr.prompt = async (...args) => {
+    limits.push(args[2])
+    now += 20 * 60_000
+    return prompt(...args)
+  }
+  const loop = await loopStart(state.deps, createBook({ ...state.deps, notify: () => {} }), loopRequest())
+  await state.finished(loop)
+  expect(loop.status).toBe('approved')
+  expect(limits).toEqual([540_000, 540_000, 540_000, 540_000])
+  expect(state.calls.filter(call => call.startsWith('wait')).length).toBe(4)
+})
+
+test('a cancelled phase holds the execute slot after its deadline until the agent settles', async () => {
+  let releasePrompt = () => {}
+  let releaseStop = () => {}
+  const promptGate = new Promise<void>(done => (releasePrompt = done))
+  const stopGate = new Promise<void>(done => (releaseStop = done))
+  const state = loopWith(['dev', 'other'], { prompt: ['blocked'] }, { 0: promptGate })
+  let now = 0
+  let waitingForStop = false
+  state.deps.now = () => now
+  state.deps.herdr.wait = async () => { waitingForStop = true; await stopGate; return 'idle' }
+  const book = createBook({ ...state.deps, notify: () => {} })
+  const loop = await loopStart(state.deps, book, loopRequest())
+  try {
+    for (let i = 0; i < 100 && !state.prompts.length; i++) await pause(1)
+    await cancelLoop(state.deps, book, loop)
+    now = 30 * 60_000
+    releasePrompt()
+    const other = await book.start(request())
+    await pause(5)
+    expect(other.status).toBe('queued')
+    expect(waitingForStop).toBe(true)
+    expect(state.calls.some(call => call.startsWith('close'))).toBe(false)
+    releaseStop()
+    await state.finished(loop)
+    expect((await book.done(other.id)).status).toBe('done')
+    expect(state.calls.filter(call => call.startsWith('close'))).toEqual(['close w1:p2', 'close w1:p3'])
+  } finally { releasePrompt(); releaseStop() }
+})
+
+test('a cancel while the agent starts never sends the prompt', async () => {
+  const j = job()
+  const { deps, calls, events } = setup({})
+  const start = deps.herdr.start
+  deps.herdr.start = async (name, pane, args) => {
+    await start(name, pane, args)
+    await pause(1)
+    j.status = 'cancelled'
+  }
+  await runJob(deps, j, request())
+  expect(j.status).toBe('cancelled')
+  expect(calls.some(call => call.startsWith('prompt'))).toBe(false)
+  expect(events).toEqual([])
+})
+
+test('a cancel while the fresh report is cleared never opens a pane or sends the prompt', async () => {
+  const j = job()
+  const { deps, calls, events } = setup({})
+  deps.files.write = async () => {
+    await pause(1)
+    j.status = 'cancelled'
+  }
+  await runJob(deps, j, request(), { freshReport: true })
+  expect(j.status).toBe('cancelled')
+  expect(calls).toEqual([])
+  expect(events).toEqual([])
 })

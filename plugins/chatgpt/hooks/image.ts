@@ -1,9 +1,9 @@
-import type { AskOptions, Browser, Image, ImageInput, ImageResult } from './model'
-import { LOAD_MS, parseOutput, prepare } from './browser'
-import { compose, readAnswer, stopped, unfinished, watch } from './conversation'
-import { GENERATED, imageScript, sendScript } from './scripts'
+import type { AskInput, AskOptions, Browser, Image, ImageResult } from './model'
+import { LOAD_MS, prepare } from './browser'
+import { compose, readAnswer, send, stopped, unfinished, watch } from './conversation'
+import { GENERATED, imageScript, parseOutput } from './scripts'
 
-export async function generateImage(browser: Browser, input: ImageInput, options: AskOptions = {}): Promise<ImageResult> {
+export async function generateImage(browser: Browser, input: AskInput, options: AskOptions = {}): Promise<ImageResult> {
   const timeoutMs = options.timeoutMs ?? 6 * 60_000
   const pollMs = options.pollMs ?? 5000
   const progress = options.progress ?? (() => {})
@@ -33,8 +33,8 @@ export async function generateImage(browser: Browser, input: ImageInput, options
   const failed = await compose(browser, tabId, input, progress)
   if (failed) return { ok: false, url: start.href, error: failed }
 
-  const sent = parseOutput<{ sent: boolean; reason?: string }>(await browser.js(tabId, sendScript(input.prompt)))
-  if (!sent.sent) return { ok: false, url: start.href, error: `Could not send the prompt: ${sent.reason}.` }
+  const sent = await send(browser, tabId, input.prompt)
+  if (!sent.ok) return { ok: false, url: start.href, error: sent.text }
 
   progress('waiting for the image')
   const { end, page: state } = await watch(browser, tabId, start, {

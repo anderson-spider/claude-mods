@@ -32,7 +32,7 @@ export function createJobs() {
   const jobs: Job[] = []
   let nextJob = 1
 
-  // Queues `request` as a background job; a message arrives when it ends.
+  // Queues `request` as a background job (the list is lost on a reload); a message arrives when it ends.
   function start({ perform, notifications }: JobDeps, request: Request, timeoutMs: number): Job {
     const job: Job = { id: nextJob++, kind: request.kind, prompt: request.input.prompt, status: 'queued', startedAt: Date.now() }
     jobs.push(job)
@@ -45,7 +45,8 @@ export function createJobs() {
       job.chatUrl = outcome.chatUrl
       job.paths = outcome.paths
       notifications.toast(`ChatGPT job #${job.id} ${job.status}`)
-      // A submitted prompt is a new turn: send only the automated notice.
+      // A submitted prompt is a new turn that reaches the model like the person's words: send only the
+      // automated notice, with paths and the chat link, never the answer (unverified ChatGPT output).
       await notifications.submit(jobMessage(job, outcome)).catch(() => undefined)
     })()
     return job

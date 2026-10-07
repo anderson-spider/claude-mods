@@ -1,5 +1,7 @@
 // The page parts every script relies on, kept in one place so /chatgpt-doctor
-// checks the same selectors the scripts use.
+// checks the same selectors the scripts use. They follow chatgpt.com as of 2026-10: when the UI
+// changes, run /chatgpt-doctor, fix them here and check them in the browser (`terminal-browser
+// action -- eval`) before trusting the tests, which only cover the flow.
 export const COMPOSER = `document.querySelector('.ProseMirror[contenteditable=true], #prompt-textarea')`
 export const LOGIN = `(!!document.querySelector('[data-testid=login-button]') || /\\/auth\\/|\\/log-?in/.test(location.pathname))`
 const STOP = `(!!document.querySelector('[data-testid=stop-button]') || [...document.querySelectorAll('button')].some(b => /^(Parar|Stop)/i.test(b.getAttribute('aria-label') || '')))`
@@ -262,3 +264,13 @@ return JSON.stringify({ leaving: true });`
 }
 
 export const LANDED = `!window.__chatgptLeaving && document.readyState !== 'loading'`
+
+// Every page script returns JSON.stringify(...): terminal-browser's eval
+// prints a string result as a JSON literal.
+export function parseOutput<T>(text: string): T {
+  try {
+    return JSON.parse(JSON.parse(text.trim())) as T
+  } catch {
+    throw new Error(`unexpected browser output: ${text.slice(0, 200)}`)
+  }
+}

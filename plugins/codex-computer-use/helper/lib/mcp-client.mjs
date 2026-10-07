@@ -3,6 +3,8 @@
 // each such request to `onElicit`, whose answer goes back verbatim.
 import { spawn } from 'node:child_process'
 
+import { VERSION } from './version.mjs'
+
 const PROTOCOL = '2025-06-18'
 const STDERR_TAIL = 2000
 
@@ -37,8 +39,9 @@ export class McpStdioClient {
       'initialize',
       {
         protocolVersion: PROTOCOL,
+        // Without form elicitation node_repl refuses `getApp`.
         capabilities: { elicitation: { form: {} } },
-        clientInfo: { name: 'codex-cu-helper', version: '0.1.0' },
+        clientInfo: { name: 'codex-cu-helper', version: VERSION },
       },
       this.startupTimeoutMs,
     )

@@ -11,7 +11,8 @@
 //   (https://github.com/davila7/claude-code-templates, MIT), without copying its code.
 //
 // The engine reads on(...) and $.noun.method(...) from the source: they stay spelled out,
-// and the functions that take $ live at the top level in this file.
+// and the functions that take $ live at the top level in this file. It is also the only place that
+// reads the settings (paceStart, minAnswerChars, suggestSkills).
 // Pure code lives beside it: constants.mjs (labels, palette, icons), formatting.mjs (numbers and
 // time), context.mjs (readings and charts), limits.mjs (windows), cache.mjs (requests and TTL),
 // suggestions.mjs (prompts and their block), info.mjs (info state and line), drawing.mjs (usage line).
@@ -33,7 +34,7 @@ import { renderHud } from "./render.mjs";
 // Tickers and keys belong to the host integration, as do the subagents running now.
 // `agentModels` keeps each subagent's last request model, by agent id, while it runs.
 const freshAgents = () => ({ agents: [], agentsKey: "", agentModels: {} });
-const hudData ={ ticker: null, cacheTicker: null, turnsKey: null, ...freshAgents() };
+const hudData = { ticker: null, cacheTicker: null, turnsKey: null, ...freshAgents() };
 
 export function register(on, options) {
   limitData.paceStart = paceStartOf(options?.paceStart);

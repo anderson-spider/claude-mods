@@ -6,6 +6,9 @@ export type Kind = 'execute' | 'review'
 export type Request = { kind: Kind; task: string; files: string[]; target?: string; focus?: string }
 
 export type Status = 'queued' | 'starting' | 'working' | 'blocked' | 'done' | 'failed' | 'cancelled'
+
+/** Whether a job has ended, however it ended. */
+export const isFinished = (status: Status): boolean => status === 'done' || status === 'failed' || status === 'cancelled'
 /** What Herdr reports for an agent; `idle` and `done` both mean it is ready for input. */
 export type AgentState = 'idle' | 'working' | 'blocked' | 'done'
 /** The states a wait settles on by default. */
@@ -44,6 +47,9 @@ export type Herdr = {
   annotate(pane: string, meta: { title?: string; stateLabel?: string; ttlMs: number }): Promise<void>
 }
 
+/** The Herdr calls a job run makes. */
+export type JobHerdr = Pick<Herdr, 'split' | 'rename' | 'start' | 'prompt' | 'wait' | 'read' | 'list'>
+
 /** One agent shared by the phase jobs of a loop role. */
 export type AgentSession = { agent: string; pane?: string; terminal?: string; ready?: boolean; active?: boolean }
 
@@ -63,8 +69,9 @@ export type Job = {
   error?: string
 }
 
+export type NotifyEvent = 'blocked' | 'finished'
 export type Files = { read(path: string): Promise<string | undefined>; write(path: string, text: string): Promise<void> }
-export type Notify = (event: 'blocked' | 'finished', job: Job) => void
+export type Notify = (event: NotifyEvent, job: Job) => void
 export type PaneLayout = ReturnType<typeof createPaneLayout>
 export type Deps = { herdr: Herdr; layout: PaneLayout; files: Files; tmpdir: string | undefined; now: () => number; notify: Notify }
 
@@ -84,7 +91,9 @@ export type Loop = LoopRequest & {
 }
 
 export type Book = ReturnType<typeof createBook>
-export type LoopDeps = Pick<Deps, 'layout' | 'files' | 'tmpdir' | 'now'> & { herdr: Pick<Herdr, 'close' | 'wait' | 'list'>; notify: (event: 'blocked' | 'finished', loop: Loop, job?: Job) => void }
+/** The part of the job book a loop uses. */
+export type LoopBook = Pick<Book, 'exclusive' | 'start' | 'ended' | 'get' | 'cancel'>
+export type LoopDeps = Pick<Deps, 'layout' | 'files' | 'tmpdir' | 'now'> & { herdr: Pick<Herdr, 'close' | 'wait' | 'list'>; notify: (event: NotifyEvent, loop: Loop, job?: Job) => void }
 
 export type Check = { name: string; ok: boolean; detail: string }
 

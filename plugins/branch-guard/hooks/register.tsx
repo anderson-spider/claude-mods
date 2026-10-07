@@ -15,6 +15,8 @@ const TITLE = 'Branch Guard'
 // Waiting inside a `$` call does not use up the hook's time; `$.clock.sleep` would.
 const POLL = ['sleep', '0.25']
 // Border, title, Command, Would, the two blank lines, the footer, the 'and N more' and the buttons.
+// Keep it in step with the band's layout. The band's English strings (Command, Would, Proceed, Cancel,
+// '… and N more') are asserted by tests/register.test.ts: change both together.
 const CHROME_ROWS = 10
 const MAX_LINES = 8
 

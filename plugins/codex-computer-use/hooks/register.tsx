@@ -3,11 +3,14 @@ import type { Elements, EngineInterface, Register, RenderElement } from 'claude-
 
 import type { CodexAsking } from '../types'
 import { serve } from './bridge'
-import type { BridgeInput, Choice } from './bridge'
+import type { BridgeInput } from './bridge'
 import { callerOf, kickstart, post, socketOf } from './helper'
-import type { Probe, Reply } from './helper'
-import { BRIDGE, DESCRIPTION, HELP, INPUT_SCHEMA, PROMPT, denyOwn, forgetText, isOwnDesktopTool, limitMs, parseCommand, statusReport } from './routing'
-import type { StatusReply } from './routing'
+import type { Probe } from './helper'
+import { ROUTES } from './model'
+import type { Choice, Failure, Reply, StatusReply } from './model'
+import { forgetText, statusReport } from './presentation'
+import { DESCRIPTION, HELP, INPUT_SCHEMA, PROMPT, denyOwn } from './prompts'
+import { BRIDGE, isOwnDesktopTool, limitMs, parseCommand } from './routing'
 
 type Kit = Pick<Elements['terminal'], 'Box' | 'Text' | 'Button'>
 type Slot = { id: string; choice: Choice | null }
@@ -17,6 +20,8 @@ const TOOL = `mcp__${PLUGIN}__${BRIDGE}`
 const COMMAND = 'codex-cu'
 // Waiting inside a `$` call does not use up the hook's time; `$.clock.sleep` would.
 const POLL = ['sleep', '0.25']
+// How many polls `helper()` makes for the helper launchd was asked to start.
+const HELPER_RETRIES = 20
 // The `approvalMinutes` setting, refreshed by each register.
 let askLimitMs = limitMs(undefined, 5)
 
@@ -50,8 +55,8 @@ const helper = async ($: EngineInterface, route: string, body: unknown): Promise
     return first
   }
 
-  for (let i = 0; i < 20; i++) {
-    await $.process.run(['sleep', '0.25'])
+  for (let i = 0; i < HELPER_RETRIES; i++) {
+    await $.process.run(POLL)
     const again = await post(host, socket, route, body)
 
     if (again.status !== 'unreachable') {
@@ -114,7 +119,8 @@ const draw = ({ Box, Text, Button }: Kit, now: CodexAsking): RenderElement => (
 
 const statusText = async ($: EngineInterface) => {
   const enabled = await isEnabled($)
-  const reply = (await helper($, '/status', {})) as StatusReply
+  // `/status` answers the helper's own report, or a failure.
+  const reply = (await helper($, ROUTES.status, {})) as StatusReply | Failure
 
   return statusReport(enabled, reply)
 }
@@ -134,7 +140,7 @@ export const register: Register = (on, options) => {
   })
 
   on('session.end', async ($, e, next) => {
-    await helper($, '/release', { caller: callerOf(e.sessionId) }).catch(() => undefined)
+    await helper($, ROUTES.release, { caller: callerOf(e.sessionId) }).catch(() => undefined)
 
     return next(e)
   })
@@ -155,7 +161,7 @@ export const register: Register = (on, options) => {
               : 'codex-cu off: Claude’s own desktop computer use is back; the Codex bridge refuses calls.',
         }
       case 'auto-approve': {
-        const reply = await helper($, '/settings', { autoApprove: command.isOn })
+        const reply = await helper($, ROUTES.settings, { autoApprove: command.isOn })
 
         return {
           text:
@@ -168,16 +174,12 @@ export const register: Register = (on, options) => {
       }
       case 'forget': {
         const caller = callerOf(await $.session.id())
-        const reply = await helper($, '/release', { caller })
+        const reply = await helper($, ROUTES.release, { caller })
 
         return { text: reply.status === 'ok' ? 'codex-cu: this session’s Codex sessions ended and its app answers were dropped.' : `codex-cu: ${JSON.stringify(reply)}` }
       }
       case 'forget-app': {
-        const reply = (await helper($, '/forget', { app: command.app })) as Reply & {
-          bundleId?: string
-          helper?: boolean
-          codex?: 'removed' | 'absent' | 'missing'
-        }
+        const reply = await helper($, ROUTES.forget, { app: command.app })
 
         return { text: forgetText(command.app, reply) }
       }

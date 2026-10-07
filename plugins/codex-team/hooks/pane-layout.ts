@@ -2,7 +2,12 @@ import { HerdrError } from './model'
 import { owns } from './identity'
 import type { Herdr } from './model'
 
-/** One row of agent panes below the lead, shared by every job and loop of the session. */
+/**
+ * One row of agent panes below the lead, shared by every job and loop of the session. The first pane
+ * opens `down` of the lead, later ones `right` of the last created; a vanished target (`pane_not_found`)
+ * clears it and retries once `down` of the lead. Closing the last pane clears the target; closing an
+ * older one keeps it.
+ */
 export function createPaneLayout() {
   let last: string | undefined
   let tail: Promise<unknown> = Promise.resolve()

@@ -2,13 +2,15 @@ import type { Book, Kind, Loop, LoopDeps } from './model'
 import { loopOf, requestOf } from './requests'
 import { cancelLoop, loopStart } from './loop'
 import { allJobs, jobDetail, loopReport } from './presentation'
+import { agentName } from './names'
+import { messageOf } from './text'
 
 export const NOT_READY = 'codex-team is not ready: the session has not started it yet.'
 
 export const refusal = (text: string) => ({ result: text, isError: true as const })
 
 // A tool handler never rejects: an error becomes a refusal the model can read.
-export const failure = (error: unknown) => refusal(`codex-team failed: ${error instanceof Error ? error.message : String(error)}`)
+export const failure = (error: unknown) => refusal(`codex-team failed: ${messageOf(error)}`)
 
 export async function startJob({ book, unavailable }: { book?: Pick<Book, 'start'>; unavailable?: string }, kind: Kind, e: Record<string, unknown>, publish: () => Promise<void>) {
   if (!book) return refusal(unavailable ?? NOT_READY)
@@ -32,7 +34,7 @@ export async function startLoop({ book, loopDeps, unavailable }: { book?: Book; 
 function readJob(book: Pick<Book, 'get'>, loop: Loop | undefined, id: number) {
   if (loop) return { result: [loopReport(loop, book), loop.report ? `Report: ${loop.report}` : ''].filter(Boolean).join('\n') }
   const job = book.get(id)
-  return job ? { result: jobDetail(job) } : refusal(`No job ct-${id} in this session.`)
+  return job ? { result: jobDetail(job) } : refusal(`No job ${agentName(id)} in this session.`)
 }
 
 export async function jobsTool({ book, loops, unavailable }: { book?: Pick<Book, 'get' | 'jobs' | 'cancel'>; loops: readonly Loop[]; unavailable?: string }, e: Record<string, unknown>, publish: () => Promise<void>, now: () => number) {

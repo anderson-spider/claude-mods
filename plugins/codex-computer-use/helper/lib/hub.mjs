@@ -4,7 +4,7 @@
 import { answerFor, parseRequest } from './approvals.mjs'
 import { CODEX_APPROVALS, removeCodexApproval } from './codex-approvals.mjs'
 import { namedApps, resolveBundleId, usedApp } from './apps.mjs'
-import { Owners } from './owners.mjs'
+import { Owners, isUnder } from './owners.mjs'
 
 export const IDLE_MS = 15 * 60_000
 // An app stays with the caller that used it until this long after that caller's last call.
@@ -34,7 +34,7 @@ const textOf = result =>
 
 export class Hub {
   /**
-   * @param createClient (caller, onElicit) => an McpStdioClient-like object, not yet started
+   * @param createClient (onElicit) => an McpStdioClient-like object, not yet started
    * @param approvals an Approvals
    */
   constructor({
@@ -75,7 +75,7 @@ export class Hub {
     this.approvals.record(caller, bundleId, choice)
 
     if (choice === 'deny' && this.owners.ownerOf(bundleId) === caller) {
-      this.owners.byApp.delete(bundleId)
+      this.owners.drop(bundleId)
     }
   }
 
@@ -130,18 +130,14 @@ export class Hub {
     const ended = []
 
     for (const [caller, session] of [...this.sessions]) {
-      if (caller === prefix || caller.startsWith(`${prefix}/`)) {
+      if (isUnder(prefix, caller)) {
         session.client?.close()
         this.sessions.delete(caller)
         ended.push(caller)
       }
     }
 
-    for (const caller of new Set([...this.owners.byApp.values()])) {
-      if (caller === prefix || caller.startsWith(`${prefix}/`)) {
-        this.owners.release(caller)
-      }
-    }
+    this.owners.releasePrefix(prefix)
 
     this.approvals.forget(prefix)
 
@@ -171,7 +167,7 @@ export class Hub {
         isFresh: session.isFresh,
         idleSeconds: Math.round((now - session.lastUsed) / 1000),
       })),
-      owners: Object.fromEntries([...this.owners.byApp.keys()].flatMap(app => {
+      owners: Object.fromEntries(this.owners.apps().flatMap(app => {
         const held = this.#holder(app)
 
         return held === undefined ? [] : [[app, held]]
@@ -200,12 +196,17 @@ export class Hub {
     const idle = session === undefined ? Infinity : this.now() - session.lastUsed
 
     if (session === undefined || (session.running === 0 && idle > this.leaseMs)) {
-      this.owners.byApp.delete(app)
+      this.owners.drop(app)
 
       return undefined
     }
 
     return { owner, idleSeconds: session.running > 0 ? 0 : Math.round(idle / 1000) }
+  }
+
+  /** Frees `app` when its lease has lapsed; a live holder keeps it. */
+  #expire(app) {
+    this.#holder(app)
   }
 
   /** Frees a slot for `session` when `maxSessions` already run: the quietest idle one stops. */
@@ -250,7 +251,7 @@ export class Hub {
     }
 
     const restarted = session.client !== undefined
-    session.client = this.createClient(caller, params => this.#elicit(caller, session, params))
+    session.client = this.createClient(params => this.#elicit(caller, session, params))
     session.isFresh = true
     await session.client.start()
 
@@ -290,106 +291,133 @@ export class Hub {
     return answerFor(decision, request)
   }
 
+  /** Checks the code and the apps it names before anything runs: a finished reply, or the named apps. */
+  async #precheck(caller, code) {
+    if (typeof code !== 'string' || code.trim() === '') {
+      return { reply: { status: 'error', message: 'code must be a non-empty string.' } }
+    }
+
+    // Ownership and earlier denials are checked before anything runs.
+    const named = []
+
+    for (const name of namedApps(code)) {
+      const bundleId = await this.resolve(name, this.aliases)
+
+      if (bundleId !== undefined) {
+        named.push({ name, bundleId })
+      }
+    }
+
+    for (const { name, bundleId } of named) {
+      const held = this.#holder(bundleId)
+
+      if (held !== undefined && held.owner !== caller) {
+        return { reply: { status: 'busy', app: { bundleId, displayName: name }, ...held } }
+      }
+
+      if (this.approvals.decide(caller, bundleId) === 'deny') {
+        return { reply: { status: 'denied', app: { bundleId, displayName: name } } }
+      }
+    }
+
+    return { named }
+  }
+
+  /** Runs `code` in the caller's Codex session: a finished reply, or the tool result with what the server asked on the way. */
+  async #invoke(caller, session, named, { code, title, timeoutMs }) {
+    if (!this.#makeRoom(session)) {
+      return { reply: { status: 'full', message: `${this.maxSessions} Codex sessions are mid-call.` } }
+    }
+
+    const client = await this.#client(caller, session)
+    const notes = client === 'restarted' ? ['The Codex session had stopped and was started again; earlier variables are gone.'] : []
+
+    if (session.isFresh && !isEntryCall(code)) {
+      return {
+        reply: {
+          status: 'error',
+          message:
+            'This Codex session is new or was reset: the first call must be one documented entry call on its own, such as `await cua.getState();` or `let app = await cua.getApp("Calculator");`. Read the documentation it returns before calling anything else.',
+          notes,
+        },
+      }
+    }
+
+    for (const { bundleId } of named) {
+      if (this.approvals.decide(caller, bundleId) !== 'ask') {
+        this.owners.claim(bundleId, caller)
+      }
+    }
+
+    const timeout = Math.min(Math.max(Number(timeoutMs) || DEFAULT_TIMEOUT, 1000), MAX_TIMEOUT)
+    const ctx = {}
+    session.ctx = ctx
+    const args = { code, timeout_ms: timeout }
+
+    if (typeof title === 'string' && title !== '') {
+      args.title = title.slice(0, 80)
+    }
+
+    let result
+
+    try {
+      result = await session.client.callTool('js', args, timeout + 30_000)
+    } finally {
+      session.ctx = undefined
+    }
+
+    session.isFresh = false
+
+    return { result, ctx, notes }
+  }
+
+  /** The reply for a finished tool call: the app it used is claimed, then what the server asked decides the status. */
+  #outcome(caller, { result, ctx, notes }) {
+    const used = usedApp(result)
+
+    if (used !== undefined) {
+      this.#expire(used)
+      const claimed = this.owners.claim(used, caller)
+
+      if (!claimed.ok) {
+        notes.push(`Warning: ${used} is owned by another caller (${claimed.owner}).`)
+      }
+    }
+
+    if (ctx.busy !== undefined) {
+      return { status: 'busy', app: ctx.busy, owner: ctx.busy.owner, idleSeconds: ctx.busy.idleSeconds, text: textOf(result) }
+    }
+
+    if (ctx.denied !== undefined) {
+      return { status: 'denied', app: ctx.denied, text: textOf(result) }
+    }
+
+    if (ctx.needs !== undefined) {
+      // The call is run again only after the person allows, so the retried code runs from the start.
+      return { status: 'needs_approval', app: ctx.needs, text: textOf(result) }
+    }
+
+    if (ctx.unsupported !== undefined) {
+      notes.push(`The Codex server asked for an approval this helper does not answer ("${ctx.unsupported}"); it was declined.`)
+    }
+
+    return { status: 'ok', isError: result?.isError === true, content: result?.content ?? [], notes }
+  }
+
   async #run(caller, session, { code, title, timeout_ms: timeoutMs }) {
     session.running += 1
     session.lastUsed = this.now()
 
     try {
-      if (typeof code !== 'string' || code.trim() === '') {
-        return { status: 'error', message: 'code must be a non-empty string.' }
+      const checked = await this.#precheck(caller, code)
+
+      if (checked.reply !== undefined) {
+        return checked.reply
       }
 
-      // Ownership and earlier denials are checked before anything runs.
-      const named = []
+      const invoked = await this.#invoke(caller, session, checked.named, { code, title, timeoutMs })
 
-      for (const name of namedApps(code)) {
-        const bundleId = await this.resolve(name, this.aliases)
-
-        if (bundleId !== undefined) {
-          named.push({ name, bundleId })
-        }
-      }
-
-      for (const { name, bundleId } of named) {
-        const held = this.#holder(bundleId)
-
-        if (held !== undefined && held.owner !== caller) {
-          return { status: 'busy', app: { bundleId, displayName: name }, ...held }
-        }
-
-        if (this.approvals.decide(caller, bundleId) === 'deny') {
-          return { status: 'denied', app: { bundleId, displayName: name } }
-        }
-      }
-
-      if (!this.#makeRoom(session)) {
-        return { status: 'full', message: `${this.maxSessions} Codex sessions are mid-call.` }
-      }
-
-      const client = await this.#client(caller, session)
-      const notes = client === 'restarted' ? ['The Codex session had stopped and was started again; earlier variables are gone.'] : []
-
-      if (session.isFresh && !isEntryCall(code)) {
-        return {
-          status: 'error',
-          message:
-            'This Codex session is new or was reset: the first call must be one documented entry call on its own, such as `await cua.getState();` or `let app = await cua.getApp("Calculator");`. Read the documentation it returns before calling anything else.',
-          notes,
-        }
-      }
-
-      for (const { bundleId } of named) {
-        if (this.approvals.decide(caller, bundleId) !== 'ask') {
-          this.owners.claim(bundleId, caller)
-        }
-      }
-
-      const timeout = Math.min(Math.max(Number(timeoutMs) || DEFAULT_TIMEOUT, 1000), MAX_TIMEOUT)
-      const ctx = {}
-      session.ctx = ctx
-      const args = { code, timeout_ms: timeout }
-
-      if (typeof title === 'string' && title !== '') {
-        args.title = title.slice(0, 80)
-      }
-
-      let result
-
-      try {
-        result = await session.client.callTool('js', args, timeout + 30_000)
-      } finally {
-        session.ctx = undefined
-      }
-
-      session.isFresh = false
-      const used = usedApp(result)
-
-      if (used !== undefined) {
-        this.#holder(used)
-        const claimed = this.owners.claim(used, caller)
-
-        if (!claimed.ok) {
-          notes.push(`Warning: ${used} is owned by another caller (${claimed.owner}).`)
-        }
-      }
-
-      if (ctx.busy !== undefined) {
-        return { status: 'busy', app: ctx.busy, owner: ctx.busy.owner, idleSeconds: ctx.busy.idleSeconds, text: textOf(result) }
-      }
-
-      if (ctx.denied !== undefined) {
-        return { status: 'denied', app: ctx.denied, text: textOf(result) }
-      }
-
-      if (ctx.needs !== undefined) {
-        return { status: 'needs_approval', app: ctx.needs, text: textOf(result) }
-      }
-
-      if (ctx.unsupported !== undefined) {
-        notes.push(`The Codex server asked for an approval this helper does not answer ("${ctx.unsupported}"); it was declined.`)
-      }
-
-      return { status: 'ok', isError: result?.isError === true, content: result?.content ?? [], notes }
+      return invoked.reply ?? this.#outcome(caller, invoked)
     } catch (error) {
       return { status: 'error', message: error instanceof Error ? error.message : String(error) }
     } finally {

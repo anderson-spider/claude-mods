@@ -1,5 +1,5 @@
 import { bare, enter, IN_HOME, parse } from './shell'
-import type { Word } from './shell'
+import type { Command, Word } from './shell'
 
 export type Risk = {
   dir: string
@@ -28,12 +28,12 @@ export type Risk = {
     }
 )
 
-/** The branches where a direct commit or push deserves a question. */
+/** The branches where a direct commit or push deserves a question. Shared with measure.ts, which decides on the same pattern. */
 export const PROTECTED = /^(main|master|develop|release([/_-].*)?)$/
 
 const SEQUENCE = new Set(['', ';', '\n', '&&'])
 
-const KEYWORDS = new Set(['if', 'then', 'else', 'elif', 'fi', 'for', 'while', 'until', 'do', 'done', 'case', 'esac', 'function', '{', '}'])
+const KEYWORDS = new Set(['if', 'then', 'else', 'elif', 'fi', 'for', 'while', 'until', 'do', 'done', 'case', 'esac', 'function'])
 
 const GIT_VALUED = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--super-prefix'])
 
@@ -107,7 +107,6 @@ type State = {
   isAdrift: boolean
   branch: string | undefined
   isStaged: boolean
-  isStraight: boolean
 }
 
 // Where a `checkout`/`switch` leaves the person: the name when the text reveals it, `unknown` when not.
@@ -125,6 +124,67 @@ const move = (state: State, sub: string, args: readonly Word[], isSure: boolean)
   }
 
   state.branch = isSure && !target.isUnknown && target.text !== '-' ? target.text : 'unknown'
+}
+
+type Base = Pick<Risk, 'dir' | 'isElsewhere' | 'branchAfter'>
+
+const commitRisk = (base: Base, args: readonly Word[], state: State): Risk | undefined => {
+  const { flags, positional } = scan(args, COMMIT_SHORT, COMMIT_LONG)
+
+  return flags.has('--dry-run')
+    ? undefined
+    : {
+        ...base,
+        kind: 'commit',
+        isAll: flags.has('--all') || flags.has('-a'),
+        isAmend: flags.has('--amend'),
+        isAllowEmpty: flags.has('--allow-empty'),
+        hasPathspec: positional.length > 0,
+        stagesFirst: state.isStaged,
+      }
+}
+
+// The refs a push names after the remote, without the tags: `tag <name>` and `refs/tags/...` touch no branch.
+const branchRefs = (positional: readonly Word[]): Word[] => {
+  const named: Word[] = []
+
+  for (let index = 1; index < positional.length; index += 1) {
+    const word = positional[index]
+
+    if (word?.text === 'tag') {
+      index += 1
+    } else if (word !== undefined && !word.text.startsWith('refs/tags/')) {
+      named.push(word)
+    }
+  }
+
+  return named
+}
+
+const pushRisk = (base: Base, args: readonly Word[]): Risk | undefined => {
+  const { flags, positional } = scan(args, 'o', PUSH_LONG)
+  // Force push and dry run are not handled here: the first is left alone on purpose, the second sends nothing.
+  const isOther = [...FORCES, '-n', '--dry-run'].some(flag => flags.has(flag)) || positional.some(word => word.text.startsWith('+'))
+
+  if (isOther) {
+    return undefined
+  }
+
+  const named = branchRefs(positional)
+
+  // Only tags going out: touches no branch.
+  if ((flags.has('--tags') || positional.some(word => word.text === 'tag') || positional.slice(1).some(word => word.text.startsWith('refs/tags/'))) && named.length === 0) {
+    return undefined
+  }
+
+  return {
+    ...base,
+    kind: 'publish',
+    remote: positional[0]?.text,
+    refspecs: named.map(word => word.text),
+    isAllRefs: flags.has('--all') || flags.has('--mirror') || flags.has('--branches'),
+    hasUnknownRef: named.some(word => word.isUnknown),
+  }
 }
 
 const git = (state: State, words: readonly Word[], isSure: boolean): Risk | undefined => {
@@ -146,80 +206,35 @@ const git = (state: State, words: readonly Word[], isSure: boolean): Risk | unde
 
   if (STAGERS.has(sub)) {
     state.isStaged = true
-
-    return undefined
-  }
-
-  if (sub === 'checkout' || sub === 'switch') {
+  } else if (sub === 'checkout' || sub === 'switch') {
     move(state, sub, args, isSure)
-
-    return undefined
-  }
-
-  if (sub === 'commit') {
-    const { flags, positional } = scan(args, COMMIT_SHORT, COMMIT_LONG)
-
-    return flags.has('--dry-run')
-      ? undefined
-      : {
-          ...base,
-          kind: 'commit',
-          isAll: flags.has('--all') || flags.has('-a'),
-          isAmend: flags.has('--amend'),
-          isAllowEmpty: flags.has('--allow-empty'),
-          hasPathspec: positional.length > 0,
-          stagesFirst: state.isStaged,
-        }
-  }
-
-  if (sub === 'push') {
-    const { flags, positional } = scan(args, 'o', PUSH_LONG)
-    // Force push and dry run are not handled here: the first is left alone on purpose, the second sends nothing.
-    const isOther = [...FORCES, '-n', '--dry-run'].some(flag => flags.has(flag)) || positional.some(word => word.text.startsWith('+'))
-
-    if (isOther) {
-      return undefined
-    }
-
-    const named: Word[] = []
-
-    for (let index = 1; index < positional.length; index += 1) {
-      const word = positional[index]
-
-      if (word?.text === 'tag') {
-        index += 1
-      } else if (word !== undefined && !word.text.startsWith('refs/tags/')) {
-        named.push(word)
-      }
-    }
-
-    // Only tags going out: touches no branch.
-    if ((flags.has('--tags') || positional.some(word => word.text === 'tag') || positional.slice(1).some(word => word.text.startsWith('refs/tags/'))) && named.length === 0) {
-      return undefined
-    }
-
-    return {
-      ...base,
-      kind: 'publish',
-      remote: positional[0]?.text,
-      refspecs: named.map(word => word.text),
-      isAllRefs: flags.has('--all') || flags.has('--mirror') || flags.has('--branches'),
-      hasUnknownRef: named.some(word => word.isUnknown),
-    }
+  } else if (sub === 'commit') {
+    return commitRisk(base, args, state)
+  } else if (sub === 'push') {
+    return pushRisk(base, args)
   }
 
   return undefined
 }
 
-/** The commits and pushes the command line carries, in order; empty for everything else. */
-export const classify = (command: string): Risk[] => {
+/**
+ * The commits and pushes the command line carries, in order; empty for everything else.
+ * A safety net that reads text, not a permission system: aliases, scripts and variables that hold commands get through. The commands inside `$(…)`, backticks and `<(…)` are read as if run on their own.
+ */
+export const classify = (command: string): Risk[] => walk(parse(command), { dir: '.', isAdrift: false, branch: undefined, isStaged: false })
+
+// The commands of one list in order; the substitutions a command holds run first, on a copy of the state, so what they
+// do (`cd`, `checkout`) does not leak out and what came before reaches them.
+const walk = (parsed: readonly Command[], state: State): Risk[] => {
   const risks: Risk[] = []
-  const parsed = parse(command)
   // With `if`, `for` and the like, the text alone cannot tell which branch switches run.
   const isStraight = !parsed.some(one => KEYWORDS.has(one.words[0]?.text ?? ''))
-  const state: State = { dir: '.', isAdrift: false, branch: undefined, isStaged: false, isStraight }
 
   for (const [at, one] of parsed.entries()) {
+    if (one.sub !== undefined) {
+      risks.push(...walk(one.sub, { ...state }))
+    }
+
     const argv = bare(one.words)
     const name = (argv[0]?.text ?? '').split('/').at(-1)
     const args = argv.slice(1)
@@ -234,7 +249,7 @@ export const classify = (command: string): Risk[] => {
       state.isAdrift = isKnown ? state.isAdrift && !to.startsWith('/') && !isHomePath : true
       state.dir = isKnown ? enter(state.dir, to) : state.dir
     } else if (name === 'git') {
-      const isSure = state.isStraight && SEQUENCE.has(one.before) && SEQUENCE.has(parsed[at + 1]?.before ?? '')
+      const isSure = isStraight && SEQUENCE.has(one.before) && SEQUENCE.has(parsed[at + 1]?.before ?? '')
       const risk = git(state, args, isSure)
 
       if (risk !== undefined) {

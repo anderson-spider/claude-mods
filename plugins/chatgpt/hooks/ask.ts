@@ -1,7 +1,6 @@
 import type { AskInput, AskOptions, AskResult, Browser } from './model'
-import { parseOutput, prepare } from './browser'
-import { compose, readAnswer, stopped, unfinished, watch } from './conversation'
-import { sendScript } from './scripts'
+import { prepare } from './browser'
+import { compose, readAnswer, send, stopped, unfinished, watch } from './conversation'
 
 export async function ask(browser: Browser, input: AskInput, options: AskOptions = {}): Promise<AskResult> {
   const timeoutMs = options.timeoutMs ?? 6 * 60_000
@@ -19,8 +18,8 @@ export async function ask(browser: Browser, input: AskInput, options: AskOptions
   if (!input.saveOnly) {
     const failed = await compose(browser, tabId, input, progress)
     if (failed) return { ok: false, url: page.href, error: failed }
-    const sent = parseOutput<{ sent: boolean; reason?: string }>(await browser.js(tabId, sendScript(input.prompt)))
-    if (!sent.sent) return { ok: false, url: page.href, error: `Could not send the prompt: ${sent.reason}.` }
+    const sent = await send(browser, tabId, input.prompt)
+    if (!sent.ok) return { ok: false, url: page.href, error: sent.text }
   }
 
   progress('waiting for the answer')
