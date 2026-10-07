@@ -148,11 +148,11 @@ export const register: Register = on => {
 
   on('tool.call', { tool: 'mcp__codex-team__jobs' }, ($, e) => jobsTool({ book, loops, unavailable }, e, () => publish($), Date.now).catch(failure))
 
-  on('command.run', { command: 'codex-team' }, async ($, e) => {
+  on('command.run', { command: 'codex-team' }, async ($) => {
     if (!book) return { text: unavailable ?? NOT_READY }
     const orphans = await book.orphans()
     const left = orphanText(orphans)
-    return { text: allJobs(loops, book?.jobs(), Date.now) + left }
+    return { text: allJobs(loops, book.jobs(), Date.now) + left }
   })
 
   on('command.run', { command: 'codex-team-doctor' }, async ($, e) => ({ text: await doctor($) }))

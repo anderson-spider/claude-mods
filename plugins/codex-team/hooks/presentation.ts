@@ -1,5 +1,6 @@
 import type { BandJob } from '../types'
 import type { Book, Check, Job, Loop } from './model'
+import { PREFIX, agentName } from './names'
 
 /** What `jobs` answers: one line per job, newest first. */
 export function jobsReport(jobs: readonly Job[], now: number): string {
@@ -91,13 +92,13 @@ export const allJobs = (loops: readonly Loop[], jobs: readonly Job[] | undefined
 ].filter(Boolean).join('\n')
 
 export const orphanText = (orphans: readonly { name: string; pane: string }[]) =>
-  orphans.length ? `\n\nct-* agents left from before a reload (their panes are still open):\n${orphans.map(o => `  ${o.name} in ${o.pane}`).join('\n')}` : ''
+  orphans.length ? `\n\n${PREFIX}* agents left from before a reload (their panes are still open):\n${orphans.map(o => `  ${o.name} in ${o.pane}`).join('\n')}` : ''
 
 /** The parent report keeps every child id and report path, even on a failure. */
 export function loopReport(loop: Loop, book: Pick<Book, 'get'>, findings?: string): string {
   const child = (phase: string, id: number) => {
     const job = book.get(id)
-    return `${phase}: ${job?.agent ?? `ct-${id}`} (job ct-${id})${job?.report ? ` — report: ${job.report}` : ' — no report'}`
+    return `${phase}: ${job?.agent ?? agentName(id)} (job ${agentName(id)})${job?.report ? ` — report: ${job.report}` : ' — no report'}`
   }
   return [
     `# Codex Team loop-${loop.id}`,

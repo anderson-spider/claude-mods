@@ -1,7 +1,10 @@
-const PREFIX = 'ct-'
+export const PREFIX = 'ct-'
 
 /** The Herdr agent name of job `id`. */
 export const agentName = (id: number) => `${PREFIX}${id}`
+
+/** Whether a Herdr agent name belongs to a job or loop of this plugin. */
+export const isAgentName = (name: string): boolean => name.startsWith(PREFIX)
 
 /** The smallest id from `from` whose agent name is not among the live ones. */
 export function nextFreeId(from: number, live: readonly string[]): number {

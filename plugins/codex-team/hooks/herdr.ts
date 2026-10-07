@@ -1,5 +1,7 @@
 import { HerdrError } from './model'
 import type { AgentState, Herdr, Run, Settled } from './model'
+import { isAgentName } from './names'
+import { messageOf } from './text'
 
 // The Herdr interface over the `herdr` CLI. Every command prints JSON on success
 // and a JSON error on failure; `agent read` prints the pane text raw.
@@ -8,7 +10,6 @@ const STATES: readonly string[] = ['idle', 'working', 'blocked', 'done']
 const SETTLED: readonly string[] = ['idle', 'blocked', 'done']
 // A herdr wait that gives up by itself answers `timeout`; the process gets a little longer than the wait it asked for.
 const GRACE_MS = 20_000
-const PREFIX = 'ct-'
 // Marks the pane metadata this plugin reports, so it never touches what others set.
 const SOURCE = 'codex-team'
 
@@ -34,7 +35,7 @@ export function herdrOf(run: Run, options: { pane: string; cwd: string }): Herdr
     try {
       result = await run(['herdr', ...argv], timeoutMs === undefined ? undefined : { timeoutMs })
     } catch (error) {
-      throw new HerdrError('unknown', error instanceof Error ? error.message : String(error))
+      throw new HerdrError('unknown', messageOf(error))
     }
     if (result.exitCode !== 0) throw errorOf(result.stderr, result.stdout, result.exitCode)
     return result.stdout
@@ -99,7 +100,7 @@ export function herdrOf(run: Run, options: { pane: string; cwd: string }): Herdr
 
     async list() {
       const agents: { name?: string; pane_id?: string; terminal_id?: string }[] = (await json(['agent', 'list'])).result?.agents ?? []
-      return agents.flatMap(agent => (agent.name?.startsWith(PREFIX) && agent.pane_id
+      return agents.flatMap(agent => (agent.name && isAgentName(agent.name) && agent.pane_id
         ? [{ name: agent.name, pane: agent.pane_id, ...(typeof agent.terminal_id === 'string' ? { terminal: agent.terminal_id } : {}) }]
         : []))
     },

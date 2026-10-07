@@ -3,16 +3,16 @@ import { fixTask, qaFocus } from './prompts'
 import { loopReport } from './presentation'
 import { checksOf, verdictOf } from './report'
 import { waitForStop } from './stopping'
-import type { AgentSession, Book, Job, Loop, LoopDeps, LoopRequest, Round } from './model'
+import { appendNote, messageOf } from './text'
+import type { AgentSession, Book, Job, Loop, LoopBook, LoopDeps, LoopRequest, NotifyEvent, Round } from './model'
 
 const active = (loop: Loop) => loop.status === 'developing' || loop.status === 'reviewing'
-const note = (loop: Loop, text: string) => { loop.error = [loop.error, text].filter(Boolean).join('\n') }
 
 /** Runs every round in one execute slot. Never rejects: an error becomes `failed`. */
-export async function runLoop(deps: LoopDeps, loop: Loop, book: Pick<Book, 'exclusive' | 'start' | 'ended' | 'get' | 'cancel'>): Promise<void> {
+export async function runLoop(deps: LoopDeps, loop: Loop, book: LoopBook): Promise<void> {
   const devSession: AgentSession = { agent: loopAgentName(loop.id, 'dev') }
   const qaSession: AgentSession = { agent: loopAgentName(loop.id, 'qa') }
-  const notify = (event: 'blocked' | 'finished', job: Job) => {
+  const notify = (event: NotifyEvent, job: Job) => {
     if (event === 'blocked') deps.notify(event, loop, job)
   }
   // What the next dev round fixes: the last QA report, or the dev's own report whose checks failed.
@@ -22,7 +22,7 @@ export async function runLoop(deps: LoopDeps, loop: Loop, book: Pick<Book, 'excl
   const check = (job: Job, phase: string) => {
     if (job.status === 'done') return true
     if (!cancelled()) loop.status = job.status === 'cancelled' ? 'cancelled' : 'failed'
-    note(loop, `${phase}: ${job.agent} ${job.status}${job.error ? `: ${job.error}` : ''}`)
+    appendNote(loop, `${phase}: ${job.agent} ${job.status}${job.error ? `: ${job.error}` : ''}`)
     return false
   }
 
@@ -40,19 +40,19 @@ export async function runLoop(deps: LoopDeps, loop: Loop, book: Pick<Book, 'excl
         if (cancelled()) await book.cancel(dev.id)
         await book.ended(dev.id)
         if (!check(dev, `dev ${index}`) || cancelled()) return
-        if (!dev.report) note(loop, `dev ${index}: ${dev.error ?? 'no report was written; QA will review the diff'}`)
+        if (!dev.report) appendNote(loop, `dev ${index}: ${dev.error ?? 'no report was written; QA will review the diff'}`)
         else {
           round.checks = checksOf(await deps.files.read(dev.report))
           if (cancelled()) return
           if (round.checks === 'fail') {
             // The dev's own checks failed: skip QA and send the dev back with its report.
-            note(loop, `dev ${index}: CHECKS: FAIL, QA skipped — report: ${dev.report}`)
+            appendNote(loop, `dev ${index}: CHECKS: FAIL, QA skipped — report: ${dev.report}`)
             fix = { path: dev.report, source: 'checks' }
             findings = undefined
             continue
           }
-          if (round.checks === 'not run') note(loop, `dev ${index}: CHECKS: NOT RUN`)
-          if (round.checks === undefined) note(loop, `dev ${index}: no CHECKS line`)
+          if (round.checks === 'not run') appendNote(loop, `dev ${index}: CHECKS: NOT RUN`)
+          if (round.checks === undefined) appendNote(loop, `dev ${index}: no CHECKS line`)
         }
 
         loop.status = 'reviewing'
@@ -71,7 +71,7 @@ export async function runLoop(deps: LoopDeps, loop: Loop, book: Pick<Book, 'excl
         round.verdict = verdictOf(findings)
         if (!round.verdict) {
           loop.status = 'failed'
-          note(loop, `QA report has no VERDICT line: ${qaReport}`)
+          appendNote(loop, `QA report has no VERDICT line: ${qaReport}`)
           return
         }
         if (round.verdict === 'approved') { loop.status = 'approved'; return }
@@ -80,7 +80,7 @@ export async function runLoop(deps: LoopDeps, loop: Loop, book: Pick<Book, 'excl
     })
   } catch (error) {
     if (!cancelled()) loop.status = 'failed'
-    note(loop, error instanceof Error ? error.message : String(error))
+    appendNote(loop, messageOf(error))
   }
 
   loop.endedAt = deps.now()
@@ -90,7 +90,7 @@ export async function runLoop(deps: LoopDeps, loop: Loop, book: Pick<Book, 'excl
     loop.report = path
   } catch (error) {
     if (!cancelled()) loop.status = 'failed'
-    note(loop, error instanceof Error ? error.message : String(error))
+    appendNote(loop, messageOf(error))
   }
   try {
     deps.notify('finished', loop)
@@ -112,7 +112,7 @@ export async function runLoop(deps: LoopDeps, loop: Loop, book: Pick<Book, 'excl
 }
 
 /** Reserves an id in the job book and answers before the first round finishes. */
-export async function loopStart(deps: LoopDeps, book: Pick<Book, 'reserveId' | 'exclusive' | 'start' | 'ended' | 'get' | 'cancel'>, request: LoopRequest): Promise<Loop> {
+export async function loopStart(deps: LoopDeps, book: LoopBook & Pick<Book, 'reserveId'>, request: LoopRequest): Promise<Loop> {
   const loop: Loop = { id: await book.reserveId(), ...request, status: 'developing', rounds: [], startedAt: deps.now() }
   void runLoop(deps, loop, book)
   return loop

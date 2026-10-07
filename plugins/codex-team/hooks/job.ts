@@ -3,7 +3,8 @@ import { buildPrompt, codexArgs } from './prompts'
 import { HerdrError } from './model'
 import { isWaiting } from './report'
 import { owns } from './identity'
-import type { AgentSession, AgentState, Deps, Herdr, Job, Request, Status } from './model'
+import { messageOf } from './text'
+import type { AgentSession, AgentState, Deps, Herdr, JobHerdr, Job, Request, Status } from './model'
 
 export const JOB_LIMIT_MS = 30 * 60_000
 // `$.process.run` kills a child after 10 minutes at most: every wait runs in chunks below that.
@@ -11,7 +12,7 @@ export const WAIT_CHUNK_MS = 540_000
 const SUMMARY_CHARS = 600
 const LEFT_BLOCKED: AgentState[] = ['working', 'idle', 'done']
 
-type JobDeps = Omit<Deps, 'herdr'> & { herdr: Pick<Herdr, 'split' | 'rename' | 'start' | 'prompt' | 'wait' | 'read' | 'list'> }
+type JobDeps = Omit<Deps, 'herdr'> & { herdr: JobHerdr }
 
 // A cancel from outside wins: nothing the run learns afterwards changes a cancelled job.
 const setStatus = (job: Job, status: Status) => {
@@ -164,7 +165,7 @@ export async function runJob(deps: JobDeps, job: Job, request: Request, options:
     }
     set('done')
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
+    const message = messageOf(error)
     const code = error instanceof HerdrError ? error.code : ''
     set('failed')
     job.error = errorText(code, message, where())

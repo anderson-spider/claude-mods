@@ -2,6 +2,7 @@ import { agentName, nextFreeId } from './names'
 import { runJob, type JobOptions } from './job'
 import { waitForStop } from './stopping'
 import { owns } from './identity'
+import { messageOf, appendNote } from './text'
 import type { Deps, Job, Kind, Notify, Request, Status } from './model'
 
 /** Runs `task` after the ones queued before it: execute jobs share the working directory, so they take turns. */
@@ -44,8 +45,7 @@ export function createBook(deps: Deps) {
       }
       await deps.herdr.submit(job.agent, '/stop')
     } catch (error) {
-      const text = `Could not send /stop to end its background commands: ${error instanceof Error ? error.message : String(error)}`
-      job.error = job.error ? `${job.error}\n${text}` : text
+      appendNote(job, `Could not send /stop to end its background commands: ${messageOf(error)}`)
     }
   }
 
@@ -80,8 +80,7 @@ export function createBook(deps: Deps) {
           if (!options.session && job.status === 'done' && job.report && job.pane) {
             const closed = await deps.layout.close(deps.herdr, job.pane, job.agent, job.terminal).catch(() => undefined)
             if (closed === 'skipped') {
-              const text = `Skipped closing pane ${job.pane}: could not confirm ${job.agent} in that pane.`
-              job.error = job.error ? `${job.error}\n${text}` : text
+              appendNote(job, `Skipped closing pane ${job.pane}: could not confirm ${job.agent} in that pane.`)
             }
           }
         } finally {
@@ -126,7 +125,7 @@ export function createBook(deps: Deps) {
         await deps.herdr.sendKeys(job.agent, ['esc'])
       } catch (error) {
         release()
-        return `Could not send Esc to ${job.agent} (pane ${job.pane}): ${error instanceof Error ? error.message : String(error)}`
+        return `Could not send Esc to ${job.agent} (pane ${job.pane}): ${messageOf(error)}`
       } finally {
         resolve.get(id)?.(job)
         resolve.delete(id)
