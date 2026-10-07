@@ -25,7 +25,7 @@ It reads the text of the Bash command Claude is about to run, runs `git` command
 
 - **Read:** `TS_API_KEY`, on every call. It is never taken from tool input.
 - **Sent:** requests to the Tailscale API only.
-- **Filtered:** read responses drop `machineKey`, `nodeKey`, `tailnetLockKey`, `secret`, `s3SecretAccessKey` and `token`. Write responses are not filtered, because a new key's secret comes back once.
+- **Filtered:** read responses drop `machineKey`, `nodeKey`, `tailnetLockKey`, `secret`, `s3SecretAccessKey` and `token`, and any field whose name ends in `Key`, `Secret` or `Token`. Write responses are not filtered, because a new key's secret comes back once.
 
 ## hud
 

@@ -117,7 +117,8 @@ const dirs = (settings.env.CLAUDE_CODE_PLUGIN_DIRS ?? '').split(':').filter(Bool
 if (!dirs.includes(dir)) {
   dirs.push(dir)
   settings.env.CLAUDE_CODE_PLUGIN_DIRS = dirs.join(':')
-  if (fs.existsSync(file)) fs.copyFileSync(file, `${file}.bak-codex-cu`)
+  // Keep the first backup: a later run would otherwise overwrite it with an already edited file.
+  if (fs.existsSync(file) && !fs.existsSync(`${file}.bak-codex-cu`)) fs.copyFileSync(file, `${file}.bak-codex-cu`)
   fs.writeFileSync(file, `${JSON.stringify(settings, null, 2)}\n`)
   console.log(`plugin: added ${dir} to CLAUDE_CODE_PLUGIN_DIRS in ${file}`)
 } else {
