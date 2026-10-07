@@ -100,3 +100,38 @@ export type Request = {
   out?: string
   maxChars?: number
 }
+
+export type ProcessRunner = (
+  argv: string[],
+  init?: { stdin?: string; timeoutMs?: number },
+) => Promise<{ exitCode: number; stdout: string; stderr: string }>
+
+export type AttachmentFiles = { stat(path: string): Promise<{ size: number }> }
+
+export type OutputFiles = {
+  write(path: string, text: string): Promise<void>
+  readBytes(path: string): Promise<{ base64: string }>
+}
+
+export type OutputDeps = {
+  run: ProcessRunner
+  files: OutputFiles
+  tmpDir(): Promise<string | undefined>
+}
+
+export type RequestDeps = {
+  browser(): Promise<Browser | string>
+  attachments: AttachmentFiles
+  output: OutputDeps
+}
+
+export type RequestRunner = (request: Request, timeoutMs: number, onStart?: () => void) => Promise<Outcome>
+
+export type JobNotifications = {
+  toast(text: string): void
+  submit(text: string): Promise<unknown>
+}
+
+export type JobDeps = { perform: RequestRunner; notifications: JobNotifications }
+
+export type BackgroundStart = (request: Request) => Job
