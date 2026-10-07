@@ -40,7 +40,7 @@ export function gaugeOf(limit, now) {
   const tone = used >= USED_ALERT || pace > PACE_ALERT ? "alert" : pace > limitData.paceStart ? "fast" : "calm";
   // Without a window length there is no clock to compare with: no mark.
   const points = Math.max(1, Math.round(Math.abs(pace)));
-  const mark = elapsed === null ? "" : pace > limitData.paceStart ? `${PACE_MARKS.ahead} ${points}` : pace < 0 ? `${PACE_MARKS.behind} ${points}` : PACE_MARKS.even;
+  const mark = elapsed === null ? "" : pace > limitData.paceStart ? `${PACE_MARKS.ahead} ${points}` : pace < 0 ? `${PACE_MARKS.behind} ${points}` : "";
   // The time left; the 5-hour reset time goes to the clock's tooltip.
   const when = left !== null ? duration(left) : "";
   const resetAt = left !== null && limit.kind === "five_hour" ? clockTime(resetMs) : "";

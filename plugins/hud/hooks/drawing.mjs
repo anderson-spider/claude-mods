@@ -54,7 +54,7 @@ function gaugeBlock({ Box, Text, Svg }, mode, g) {
   if (mode === "nobar" || mode === "none") {
     parts.push(Text(g.tone === "alert" ? { key: "v", bold: true, color: ink("alert", mode), children: g.value } : { key: "v", bold: true, children: g.value }));
   }
-  // Against the clock: ▲ points ahead in amber or red, ▼ points behind and ▬ on pace in green.
+  // Against the clock: ▲ points ahead in amber or red, ▼ points behind in green; on pace, no mark.
   if (g.mark) parts.push(Text({ key: "u", bold: true, color: ink(g.tone, mode), children: g.mark }));
   // Terminal too narrow: the detail goes with the bar, leaving the label and the percentage.
   if (g.when && mode === "svg") {
