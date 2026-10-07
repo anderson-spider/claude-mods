@@ -27,7 +27,7 @@ It reads the text of the Bash command Claude is about to run, runs `git` command
 - **Sent:** requests to the Tailscale API only.
 - **Filtered:** read responses drop `machineKey`, `nodeKey`, `tailnetLockKey`, `secret`, `s3SecretAccessKey` and `token`. Write responses are not filtered, because a new key's secret comes back once.
 
-## token-weather-usage
+## hud
 
 - **Read:** the usage figures Claude Code provides (context, limits, session cost, each request's token counts), the session's subagents, and the prompt-cache environment switches (`DISABLE_PROMPT_CACHING`, `FORCE_PROMPT_CACHING_5M`, `CLAUDE_CODE_PROMPT_CACHE_TTL`, `ENABLE_PROMPT_CACHING_1H`).
 - **Saved:** in the plugin's local store, the latest limits reading and, per session, recent context readings, the last request's cache figures and the last prompt's cost; a session idle for 8 days is deleted.

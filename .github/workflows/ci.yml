@@ -1,0 +1,24 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # `claude plugin validate` and `claude plugin test` need the Claude Code CLI
+      # and its generated typings, so they stay a local check (see AGENTS.md).
+      - name: Marketplace and plugin manifests agree
+        run: node scripts/check-consistency.mjs
+      - name: codex-computer-use helper tests
+        run: node --test plugins/codex-computer-use/helper/test/*.test.mjs
