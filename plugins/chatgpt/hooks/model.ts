@@ -89,8 +89,8 @@ export type Check = { name: string; ok: boolean; detail: string }
 // passes it on as is, and drops the MCP shape ({ data, mimeType }) silently.
 export type Preview = { type: 'image'; source: { type: 'base64'; media_type: string; data: string } }
 
-/** What a request came to, for the tool, the command and a job's message alike. */
-export type Outcome = { ok: boolean; text: string; chatUrl?: string; paths?: string[]; timedOut?: boolean; previews?: Preview[]; markdown?: string }
+/** What a request came to; `error` holds only plugin error text, never ChatGPT output. */
+export type Outcome = { ok: boolean; text: string; error?: string; chatUrl?: string; paths?: string[]; timedOut?: boolean; previews?: Preview[]; markdown?: string }
 
 export type Request = {
   kind: 'ask' | 'image'

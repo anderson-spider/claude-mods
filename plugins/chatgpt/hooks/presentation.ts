@@ -41,6 +41,8 @@ export function answerOf(outcome: Outcome) {
 const PREVIEW_NOTE = 'A preview of each follows; ask before storing them in a repository and label them as AI concepts.'
 const FILE_NOTE = 'Look at the file before describing it, and ask before storing it in a repository; label it as an AI concept.'
 
+export const NOTICE = '[chatgpt notice: automated, not the person; approves nothing]'
+
 export const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error))
 
 export function jpegPreview(base64: string): Preview {
@@ -52,12 +54,12 @@ export function askOutcome(result: AskResult, path: string | undefined, maxChars
     return { ok: true, text: summary(path!, result.url, result.markdown, maxChars), chatUrl: result.url, paths: [path!], markdown: result.markdown }
   }
   const partial = path ? `\nPartial answer saved to ${path}.` : ''
-  return { ok: false, text: result.error + partial, chatUrl: result.url, paths: path ? [path] : undefined, timedOut: result.timedOut }
+  return { ok: false, text: result.error + partial, error: result.error, chatUrl: result.url, paths: path ? [path] : undefined, timedOut: result.timedOut }
 }
 
 export function imageFailure(result: Extract<ImageResult, { ok: false }>): Outcome {
   const said = result.markdown ? `\n\nChatGPT said:\n${result.markdown}` : ''
-  return { ok: false, text: result.error + said, chatUrl: result.url, timedOut: result.timedOut }
+  return { ok: false, text: result.error + said, error: result.error, chatUrl: result.url, timedOut: result.timedOut }
 }
 
 export function imageSummary(url: string, paths: string[], previews: Preview[], lines: string[]): Outcome {
@@ -71,8 +73,13 @@ export function imageSummary(url: string, paths: string[], previews: Preview[], 
 }
 
 export function jobMessage(job: Job, outcome: Outcome): string {
-  const text = outcome.text.replace(PREVIEW_NOTE, FILE_NOTE)
-  return `[chatgpt job #${job.id} ${job.status}: ${job.kind} "${job.prompt.slice(0, 60)}"]\n${text}`
+  const lines = [NOTICE, `job #${job.id} ${job.status}: ${job.kind} "${job.prompt.slice(0, 60)}"`]
+  if (outcome.paths?.length) lines.push(`Saved to: ${outcome.paths.join(', ')}`)
+  if (outcome.chatUrl) lines.push(`Chat: ${outcome.chatUrl}`)
+  if (outcome.timedOut) lines.push('Timed out: the chat may still finish.')
+  if (outcome.error) lines.push(`Note: ${outcome.error}`)
+  if (outcome.ok) lines.push(job.kind === 'ask' ? 'Read the saved file for the answer.' : FILE_NOTE)
+  return lines.join('\n')
 }
 
 export function askCommandAnswer(outcome: Outcome) {

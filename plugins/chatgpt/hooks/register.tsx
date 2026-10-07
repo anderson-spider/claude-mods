@@ -47,7 +47,8 @@ async function perform($: EngineInterface, request: Request, timeoutMs: number, 
       try {
         return await performRequest(requestDeps($), request, { progress: status, tab, timeoutMs })
       } catch (error) {
-        return { ok: false, text: `The browser failed: ${errorText(error)}` }
+        const text = `The browser failed: ${errorText(error)}`
+        return { ok: false, text, error: text }
       } finally {
         $.ui.status(undefined)
       }
