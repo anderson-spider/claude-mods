@@ -42,7 +42,8 @@ next:
 - The first suggestion is also the prompt box's dim ghost text, so Tab takes it.
 - Inside a numbered draft a `/skill args` suggestion is plain text for the model; it runs as a command only when it is the single pick.
 - The block goes away while Claude works, when a new turn starts and during a survey, and draws on the terminal only.
-- Layout, top to bottom: what other mods draw above the prompt (the order changed: they used to sit below the usage line), the suggestions, the usage line, then the prompt. The usage line stays next to the prompt however the block comes and goes.
+- Layout, top to bottom: what other mods draw above the prompt (the order changed: they used to sit below the usage line), the suggestions, a blank line, the info line, the usage line, then the prompt. The usage line stays next to the prompt however the block comes and goes.
+- The info line (terminal only) reads `Sonnet 5.5 | high | 72 tok/s | folder | branch · 1 file +70 -4`: the model and effort of the last request, its output speed, the session's folder, its git branch and the files changed against `HEAD` with the lines added and removed (Unity YAML assets left out). On a narrow terminal the changes, speed, effort and folder go first, in that order. The git figures refresh every 10 seconds.
 - **Shortest answer to suggest after** (`minAnswerChars`, 80): no suggestions after a shorter answer.
 - **Suggest skills and slash commands** (`suggestSkills`, on): tell the fork which skills and slash commands the session has, so a suggestion can be one of them.
 
