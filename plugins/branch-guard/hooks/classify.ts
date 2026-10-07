@@ -1,5 +1,5 @@
 import { bare, enter, IN_HOME, parse } from './shell'
-import type { Word } from './shell'
+import type { Command, Word } from './shell'
 
 export type Risk = {
   dir: string
@@ -221,14 +221,20 @@ const git = (state: State, words: readonly Word[], isSure: boolean): Risk | unde
  * The commits and pushes the command line carries, in order; empty for everything else.
  * A safety net that reads text, not a permission system: aliases, scripts and variables that hold commands get through. The commands inside `$(…)`, backticks and `<(…)` are read as if run on their own.
  */
-export const classify = (command: string): Risk[] => {
+export const classify = (command: string): Risk[] => walk(parse(command), { dir: '.', isAdrift: false, branch: undefined, isStaged: false })
+
+// The commands of one list in order; the substitutions a command holds run first, on a copy of the state, so what they
+// do (`cd`, `checkout`) does not leak out and what came before reaches them.
+const walk = (parsed: readonly Command[], state: State): Risk[] => {
   const risks: Risk[] = []
-  const parsed = parse(command)
   // With `if`, `for` and the like, the text alone cannot tell which branch switches run.
   const isStraight = !parsed.some(one => KEYWORDS.has(one.words[0]?.text ?? ''))
-  const state: State = { dir: '.', isAdrift: false, branch: undefined, isStaged: false }
 
   for (const [at, one] of parsed.entries()) {
+    if (one.sub !== undefined) {
+      risks.push(...walk(one.sub, { ...state }))
+    }
+
     const argv = bare(one.words)
     const name = (argv[0]?.text ?? '').split('/').at(-1)
     const args = argv.slice(1)

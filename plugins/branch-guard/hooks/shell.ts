@@ -196,11 +196,38 @@ const afterBodies = (command: string, from: number, pending: readonly Heredoc[])
 const closeParen = (command: string, from: number): number => {
   let depth = 1
   let pending: Heredoc[] = []
+  // Open `case`s, innermost last: reading its head, a pattern (whose `)` closes nothing) or an arm's commands.
+  const cases: ('head' | 'pattern' | 'body')[] = []
+  let word = ''
 
   for (let at = from; at < command.length; at += 1) {
     const char = command[at] ?? ''
 
-    if (char === '\\') {
+    if (/\w/.test(char)) {
+      word += char
+
+      continue
+    }
+
+    const top = cases.length - 1
+
+    if (word === 'case') {
+      cases.push('head')
+    } else if (word === 'in' && cases[top] === 'head') {
+      cases[top] = 'pattern'
+    } else if (word === 'esac' && top >= 0) {
+      cases.pop()
+    }
+
+    word = ''
+
+    if (cases.at(-1) === 'pattern' && (char === '(' || char === ')')) {
+      if (char === ')') {
+        cases[cases.length - 1] = 'body'
+      }
+    } else if (char === ';' && cases.at(-1) === 'body' && (command[at + 1] === ';' || command[at + 1] === '&')) {
+      cases[cases.length - 1] = 'pattern'
+    } else if (char === '\\') {
       at += 1
     } else if (char === "'") {
       at = command.indexOf("'", at + 1)
@@ -286,16 +313,20 @@ const bodySubstitutions = (body: string): Command[] => {
   return found
 }
 
-type Command = { words: Word[]; /** The separator that came before: `;`, `&&`, `|`, `(`… */ before: string }
+export type Command = {
+  words: Word[]
+  /** The separator that came before: `;`, `&&`, `|`, `(`… */
+  before: string
+  /** The commands inside the substitutions this command holds, which run first and in their own scope. */
+  sub?: Command[]
+}
 
 // The simple commands on the line, empty ones included, each with the separator before it.
 // The commands inside `$(…)`, backticks and `<(…)`/`>(…)` (also inside double quotes, and in the body of a heredoc
-// whose delimiter is unquoted) come after those of the line, as if run on their own; the word that holds
-// them stays unknown. Single-quoted text and `$((…))` are not substitutions. An unterminated one reads to the end.
+// whose delimiter is unquoted) hang from the command that holds them in `sub`, as if run on their own; the word
+// that holds them stays unknown. Single-quoted text and `$((…))` are not substitutions. An unterminated one reads to the end.
 export const parse = (command: string): Command[] => {
   const commands: Command[] = [{ words: [], before: '' }]
-  // The commands of the substitutions, appended after the line.
-  const nested: Command[] = []
   let text = ''
   let isOpen = false
   let isUnknown = false
@@ -316,6 +347,14 @@ export const parse = (command: string): Command[] => {
   // Parentheses still open in `$((…))` or `((…))`, where `<<` is a shift and not a heredoc.
   let arithmetic = 0
 
+  // The commands of a substitution belong to the command that holds it.
+  const attach = (index: number, found: Command[]) => {
+    const owner = commands[index]
+
+    if (owner !== undefined) {
+      owner.sub = [...(owner.sub ?? []), ...found]
+    }
+  }
   // The substitution that opens at `at` (`$(`, a backtick, `<(` or `>(`): its commands are kept, its text stays in the word.
   const substitute = (at: number) => {
     const isBacktick = command[at] === '`'
@@ -323,7 +362,7 @@ export const parse = (command: string): Command[] => {
     const close = isBacktick ? backtickEnd(command, start) : closeParen(command, start)
     const inner = command.slice(start, close)
 
-    nested.push(...inside(isBacktick ? inner.replace(/\\([`$\\])/g, '$1') : inner))
+    attach(commands.length - 1, inside(isBacktick ? inner.replace(/\\([`$\\])/g, '$1') : inner))
 
     return { raw: command.slice(at, close + 1), end: Math.min(close, command.length - 1) }
   }
@@ -488,8 +527,8 @@ export const parse = (command: string): Command[] => {
 
           if (heredoc?.isShell === true || isPiped) {
             commands.push(...parse(body).map((one, position) => (position === 0 ? { ...one, before: '\n' } : one)), { words: [], before: '\n' })
-          } else if (heredoc?.isLiteral === false) {
-            nested.push(...bodySubstitutions(body))
+          } else if (heredoc !== undefined && !heredoc.isLiteral) {
+            attach(heredoc.owner, bodySubstitutions(body))
           }
         }
 
@@ -510,7 +549,7 @@ export const parse = (command: string): Command[] => {
 
   endWord()
 
-  return [...commands, ...nested]
+  return commands
 }
 
 /** `path` from `base`, with no `.` or `..` in the middle. */

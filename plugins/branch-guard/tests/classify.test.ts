@@ -202,3 +202,13 @@ test('classify reads substitutions in heredoc bodies unless the delimiter is quo
   expect(kinds("cat <<'EOF'\n$(git commit -m x)\nEOF")).toEqual([])
   expect(kinds('bash <<EOF\ngit commit -m x\nEOF')).toEqual(['commit'])
 })
+
+test('classify closes a substitution after a case arm and keeps each one at its place', () => {
+  expect(kinds('echo $(case a in a) git commit -m x;; esac)')).toEqual(['commit'])
+  expect(kinds('x=$(case $y in (a|b) git push origin main ;; esac)')).toEqual(['publish'])
+  expect(kinds('echo $(case a in a) ls;; b) git commit -m x;; esac) && ls')).toEqual(['commit'])
+
+  expect(classify('echo $(git commit -m x); cd /tmp')).toMatchObject([{ kind: 'commit', dir: '.' }])
+  expect(classify('cd /a && echo $(git commit -m x)')).toMatchObject([{ kind: 'commit', dir: '/a' }])
+  expect(classify('echo $(cd /tmp); git commit -m x')).toMatchObject([{ kind: 'commit', dir: '.' }])
+})
