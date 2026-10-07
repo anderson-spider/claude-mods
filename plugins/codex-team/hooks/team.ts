@@ -129,6 +129,11 @@ export async function runJob(deps: Deps, job: Job, request: Request, options: { 
   const chunk = options.chunkMs ?? WAIT_CHUNK_MS
   const deadline = deps.now() + limit
   const where = () => (job.pane ? ` (pane ${job.pane})` : '')
+  // A cancel from outside wins: nothing the run learns afterwards changes a cancelled job.
+  const set = (status: Status) => {
+    if (job.status !== 'cancelled') job.status = status
+  }
+  const cancelled = () => job.status === 'cancelled'
 
   // Runs `step` in chunks until it settles or the job limit passes; a chunk's own timeout carries on with `wait`.
   const settle = async <T extends AgentState>(first: (timeoutMs: number) => Promise<T>): Promise<AgentState> => {
@@ -148,11 +153,11 @@ export async function runJob(deps: Deps, job: Job, request: Request, options: { 
   // A blocked agent waits for the person: say so once, then wait for it to leave that state, then for the next settle.
   const whileBlocked = async (state: AgentState): Promise<AgentState> => {
     while (state === 'blocked') {
-      job.status = 'blocked'
-      deps.notify('blocked', job)
+      set('blocked')
+      if (!cancelled()) deps.notify('blocked', job)
       state = await settle(timeoutMs => herdr.wait(job.agent, timeoutMs, LEFT_BLOCKED))
       if (state === 'working') {
-        job.status = 'working'
+        set('working')
         state = await settle(timeoutMs => herdr.wait(job.agent, timeoutMs))
       }
     }
@@ -160,8 +165,10 @@ export async function runJob(deps: Deps, job: Job, request: Request, options: { 
   }
 
   try {
-    job.status = 'starting'
+    set('starting')
     job.pane = await herdr.split(splitDirection(await herdr.size()))
+    // Cancelled while the pane was opening: the empty pane stays for the person to close.
+    if (cancelled()) return
 
     try {
       await herdr.start(job.agent, job.pane, codexArgs(request.kind))
@@ -171,8 +178,9 @@ export async function runJob(deps: Deps, job: Job, request: Request, options: { 
     }
 
     const path = reportPath(deps.tmpdir, job.id)
-    job.status = 'working'
+    set('working')
     await whileBlocked(await settle(timeoutMs => herdr.prompt(job.agent, buildPrompt(request.kind, request, path), timeoutMs)))
+    if (cancelled()) return
 
     const report = await deps.files.read(path)
     if (report !== undefined) {
@@ -182,11 +190,11 @@ export async function runJob(deps: Deps, job: Job, request: Request, options: { 
       job.summary = await herdr.read(job.agent, 200)
       job.error = `no report was written to ${path}; the summary is the text of the pane${where()}`
     }
-    job.status = 'done'
+    set('done')
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     const code = error instanceof HerdrError ? error.code : ''
-    job.status = 'failed'
+    set('failed')
     job.error =
       code === 'agent_prompt_stalled'
         ? `Codex showed no activity after the prompt${where()}; it may still have arrived, so it was not sent again: inspect the pane.`
@@ -195,6 +203,103 @@ export async function runJob(deps: Deps, job: Job, request: Request, options: { 
           : `${message}${where()}`
   }
 
+  if (cancelled()) return
   job.endedAt = deps.now()
   deps.notify('finished', job)
+}
+
+// --- The job book ---
+
+/** Runs `task` after the ones queued before it: execute jobs share the working directory, so they take turns. */
+function taskQueue(): <T>(task: () => Promise<T>) => Promise<T> {
+  let tail: Promise<unknown> = Promise.resolve()
+  return task => {
+    const run = tail.then(task, task)
+    tail = run.catch(() => undefined)
+    return run
+  }
+}
+
+const titleOf = (request: Request) => (request.kind === 'execute' ? request.task : `review of ${request.target ?? 'the current diff'}`)
+
+const FINISHED: Status[] = ['done', 'failed', 'cancelled']
+
+/** The jobs of this session: ids, the execute queue, cancel and the lists the person and Claude read. */
+export function createBook(deps: Deps) {
+  const jobs: Job[] = []
+  const queue = taskQueue()
+  let counter = 1
+
+  const live = async () => (await deps.herdr.list().catch(() => [])).map(agent => agent.name)
+
+  return {
+    /** Registers the job and starts it (an execute one after the others); answers at once. */
+    async start(request: Request): Promise<Job> {
+      const id = nextFreeId(counter, await live())
+      counter = id + 1
+      const job: Job = { id, kind: request.kind, title: titleOf(request), status: 'queued', agent: agentName(id), startedAt: deps.now() }
+      jobs.push(job)
+      const run = async () => {
+        if (job.status !== 'cancelled') await runJob(deps, job, request)
+      }
+      void (request.kind === 'execute' ? queue(run) : run())
+      return job
+    },
+
+    async cancel(id: number): Promise<string> {
+      const job = jobs.find(j => j.id === id)
+      if (!job) return `No job ${agentName(id)} in this session.`
+      if (FINISHED.includes(job.status)) return `${job.agent} is ${job.status}: nothing to cancel.`
+      if (job.status === 'queued' || !job.pane) {
+        job.status = 'cancelled'
+        job.endedAt = deps.now()
+        return `${job.agent} had not started and is now cancelled.`
+      }
+      try {
+        await deps.herdr.sendKeys(job.agent, ['ctrl+c'])
+      } catch (error) {
+        return `Could not send ctrl+c to ${job.agent} (pane ${job.pane}): ${error instanceof Error ? error.message : String(error)}`
+      }
+      job.status = 'cancelled'
+      job.endedAt = deps.now()
+      return `Sent ctrl+c to ${job.agent} (pane ${job.pane}) and marked it cancelled; the pane stays open.`
+    },
+
+    jobs: (): readonly Job[] => jobs,
+    get: (id: number) => jobs.find(j => j.id === id),
+
+    /** Live `ct-*` agents that no job of this session owns (left by a reload). */
+    async orphans() {
+      const owned = new Set(jobs.map(j => j.agent))
+      return (await deps.herdr.list().catch(() => [])).filter(agent => !owned.has(agent.name))
+    },
+  }
+}
+
+/** What `jobs` answers: one line per job, newest first. */
+export function jobsReport(jobs: readonly Job[], now: number): string {
+  if (!jobs.length) return 'No Codex Team jobs in this session.'
+  const minutes = (ms: number) => `${Math.max(0, Math.round(ms / 60_000))} min`
+  return [...jobs]
+    .reverse()
+    .map(job => {
+      const took = job.endedAt !== undefined ? `took ${minutes(job.endedAt - job.startedAt)}` : `for ${minutes(now - job.startedAt)}`
+      const head = `${job.agent} ${job.kind} ${job.status} (${took}): ${job.title.slice(0, 60)}${job.title.length > 60 ? '…' : ''}`
+      const detail = job.report ? `report ${job.report}` : job.error
+      return detail ? `${head}\n  ${detail}` : head
+    })
+    .join('\n')
+}
+
+/** What `jobs` answers for one id: where it runs, where the report is, what Codex said. */
+export function jobDetail(job: Job): string {
+  return [
+    `${job.agent} ${job.kind} ${job.status}: ${job.title}`,
+    job.pane ? `pane: ${job.pane}` : '',
+    job.report ? `report: ${job.report}` : '',
+    job.error ? `note: ${job.error}` : '',
+    job.summary ? `summary:\n${job.summary}` : '',
+  ]
+    .filter(Boolean)
+    .join('\n')
 }
