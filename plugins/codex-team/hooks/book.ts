@@ -19,6 +19,8 @@ const kinds: Record<Kind, { title: (request: Request) => string; queued: boolean
 }
 
 const FINISHED: Status[] = ['done', 'failed', 'cancelled']
+// Esc ends the Codex turn but keeps its background terminals (openai/codex#14602); /stop ends them once the turn has settled.
+const STOP_WAIT_MS = 15_000
 
 /** The jobs of this session: ids, the execute queue, cancel and the lists the person and Claude read. */
 export function createBook(deps: Deps) {
@@ -28,7 +30,20 @@ export function createBook(deps: Deps) {
   const resolve = new Map<number, (job: Job) => void>()
   const runs = new Map<number, Promise<void>>()
   const running = new Set<number>()
+  // A cancelled run waits for its /stop, so a loop closes the pane and frees the slot only after it.
+  const stops = new Map<number, Promise<void>>()
   let counter = 1
+
+  /** Ends the background commands of a cancelled agent once its turn settles; a failure is noted on the job, never thrown. */
+  const stopBackground = async (job: Job): Promise<void> => {
+    try {
+      await deps.herdr.wait(job.agent, STOP_WAIT_MS, ['idle', 'done', 'blocked'])
+      await deps.herdr.submit(job.agent, '/stop')
+    } catch (error) {
+      const text = `Could not send /stop to end its background commands: ${error instanceof Error ? error.message : String(error)}`
+      job.error = job.error ? `${job.error}\n${text}` : text
+    }
+  }
 
   const live = async () => (await deps.herdr.list().catch(() => [])).map(agent => agent.name)
   const reserveId = async () => {
@@ -56,6 +71,7 @@ export function createBook(deps: Deps) {
             await runJob({ ...deps, notify }, job, request, { ...options, freshReport: options.freshReport ?? options.quiet })
             if (cancelled() && options.session?.active) await waitForStop(deps.herdr, options.session)
           }
+          await stops.get(id)
         } finally {
           running.delete(id)
           resolve.get(id)?.(job)
@@ -83,18 +99,29 @@ export function createBook(deps: Deps) {
         resolve.delete(id)
         return `${job.agent} had not started and is now cancelled.`
       }
+      // Only an agent that got its task can have started background commands.
+      const prompted = job.status === 'working' || job.status === 'blocked' || job.status === 'cancelled'
       // Record the cancel before sending keys: the agent may still be registering.
       job.status = 'cancelled'
       job.endedAt = deps.now()
+      let release = () => {}
+      stops.set(id, new Promise<void>(done => (release = done)))
       try {
         await deps.herdr.sendKeys(job.agent, ['esc'])
       } catch (error) {
+        release()
         return `Could not send Esc to ${job.agent} (pane ${job.pane}): ${error instanceof Error ? error.message : String(error)}`
       } finally {
         resolve.get(id)?.(job)
         resolve.delete(id)
       }
-      return `Sent Esc to ${job.agent} (pane ${job.pane}) and marked it cancelled; ${job.agent === agentName(job.id) ? 'the pane stays open' : 'the loop closes its panes after the agents stop'}.`
+      // The answer does not wait for /stop; the run does, before it frees the pane and the execute slot.
+      if (!prompted) {
+        release()
+        return `Sent Esc to ${job.agent} (pane ${job.pane}) and marked it cancelled; ${job.agent === agentName(job.id) ? 'the pane stays open' : 'the loop closes its panes after the agents stop'}.`
+      }
+      void stopBackground(job).finally(release)
+      return `Sent Esc to ${job.agent} (pane ${job.pane}) and marked it cancelled; /stop follows once it settles, to end its background commands; ${job.agent === agentName(job.id) ? 'the pane stays open' : 'the loop closes its panes after the agents stop'}.`
     },
 
     jobs: (): readonly Job[] => jobs,

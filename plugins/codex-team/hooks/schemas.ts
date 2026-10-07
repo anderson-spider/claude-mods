@@ -48,7 +48,7 @@ export const JOBS = {
   name: 'jobs',
   description:
     'Lists the Codex jobs and loops of this session (status, pane, report path), reads one by id, or cancels one with action: "cancel". ' +
-    'A cancel sends Esc to its active Codex. Standalone panes stay open; a cancelled loop starts no further rounds and closes its panes once the agents stop.',
+    'A cancel sends Esc to its active Codex, then /stop once it settles, to end the background commands it started. Standalone panes stay open; a cancelled loop starts no further rounds and closes its panes once the agents stop.',
   inputSchema: {
     type: 'object',
     properties: {

@@ -59,6 +59,12 @@ test('herdrOf waits until the given states and sends keys', async () => {
   expect(argvs[1]).toEqual(['herdr', 'agent', 'send-keys', 'ct-1', 'esc'])
 })
 
+test('herdrOf submits text without waiting for the agent', async () => {
+  const { herdr, argvs } = adapter({})
+  await herdr.submit('ct-1', '/stop')
+  expect(argvs[0]).toEqual(['herdr', 'agent', 'prompt', 'ct-1', '/stop'])
+})
+
 test('herdrOf reads the pane text raw and lists only ct agents', async () => {
   const listed = JSON.stringify({ result: { agents: [{ agent: 'claude', pane_id: 'w1:p1' }, { agent: 'codex', name: 'ct-2', pane_id: 'w1:p3' }, { agent: 'codex', name: 'other', pane_id: 'w1:p4' }] } })
   const { herdr, argvs } = adapter({ 'agent read': { stdout: 'line 1\nline 2\n' }, 'agent list': { stdout: listed } })

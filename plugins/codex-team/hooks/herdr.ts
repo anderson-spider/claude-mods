@@ -91,6 +91,10 @@ export function herdrOf(run: Run, options: { pane: string; cwd: string }): Herdr
       await exec(['agent', 'send-keys', name, ...keys])
     },
 
+    async submit(name, text) {
+      await exec(['agent', 'prompt', name, text])
+    },
+
     async list() {
       const agents: { name?: string; pane_id?: string }[] = (await json(['agent', 'list'])).result?.agents ?? []
       return agents.flatMap(agent => (agent.name?.startsWith(PREFIX) && agent.pane_id ? [{ name: agent.name, pane: agent.pane_id }] : []))
