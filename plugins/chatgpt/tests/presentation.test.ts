@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import type { Job } from '../hooks/model'
 import { answerOf, askCommandAnswer, askOutcome, imageCommandAnswer, imageFailure, imageSummary, jobMessage, jobsReport, NOTICE, summary } from '../hooks/presentation'
-import { fileName } from '../hooks/input'
+import { fileName } from '../hooks/files'
 
 const notice = NOTICE
 const job: Job = { id: 7, kind: 'ask', prompt: 'Explain the tradeoffs', status: 'done', startedAt: 0 }

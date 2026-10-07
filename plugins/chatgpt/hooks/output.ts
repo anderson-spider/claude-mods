@@ -1,4 +1,4 @@
-import { extensionOf, fileName, variantPath } from './input'
+import { extensionOf, fileName, variantPath } from './files'
 import type { AskResult, ImageResult, Outcome, OutputDeps, Preview, ProcessRunner, Request } from './model'
 import { askOutcome, imageFailure, imageSummary, jpegPreview } from './presentation'
 
