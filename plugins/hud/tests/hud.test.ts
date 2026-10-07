@@ -184,7 +184,7 @@ test("pace mark: none for a window without a length", async ($, on) => {
   const { texts } = await band($, "terminal");
   expect(texts).toContain("$");
   expect(texts).toContain("█");
-  expect(texts.some((t) => /^[▲▼▬]/.test(t))).toBe(false);
+  expect(texts.some((t) => /^[▲▼]/.test(t))).toBe(false);
 });
 
 test("terminal: the line has no background panel", async ($, on) => {
@@ -203,8 +203,8 @@ test("pace start: a lead inside the start is not flagged", { options: { paceStar
   await $.session.start({ source: "startup", cwd: "/tmp" } as any);
   const { texts } = await band($, "terminal");
   expect(texts).toContain("7d");
-  // 2 points ahead, inside the start: on pace, green; still 8 behind on the other window.
-  expect(texts).toContain("▬");
+  // 2 points ahead, inside the start: on pace, no mark; still 8 behind on the other window.
+  expect(texts.some((t) => t.startsWith("▲"))).toBe(false);
   expect(texts.some((t) => t.startsWith("▲"))).toBe(false);
   expect(texts).toContain("▼ 8");
 });
@@ -215,7 +215,6 @@ test("pace start: a lead beyond the start is flagged", { options: { paceStart: 1
   await $.session.start({ source: "startup", cwd: "/tmp" } as any);
   const { texts } = await band($, "terminal");
   expect(texts).toContain("▲ 2");
-  expect(texts).not.toContain("▬");
 });
 
 test("narrow terminal: gives up the cache extras, then the bars, and the reset times last", async ($, on) => {

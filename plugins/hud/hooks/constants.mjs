@@ -88,9 +88,9 @@ const TONES = {
   alert: { svg: "#d64545", text: "red" },
 };
 // A mark and the gap in points beside the percentage of a window, so the state does not rest on
-// color alone: ▲ ahead of the clock (amber or red), ▼ behind it (green), ▬ on pace, inside the
-// pace start (green). The cache is signaled by color only.
-export const PACE_MARKS = { ahead: "▲", behind: "▼", even: "▬" };
+// color alone: ▲ ahead of the clock (amber or red), ▼ behind it (green); on pace, inside the
+// pace start, there is no mark. The cache is signaled by color only.
+export const PACE_MARKS = { ahead: "▲", behind: "▼" };
 // The terminal's own palette, brighter than the app's (made for tinted pills): the same three
 // tones in colors that stand out on a dark terminal, and a grey track and margin for the bar.
 export const TERM_TONES = { calm: "#6fcf97", fast: "#a8690a", alert: "#ff6b6b" };

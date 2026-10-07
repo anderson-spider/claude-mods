@@ -1,6 +1,6 @@
 {
   "name": "hud",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "A usage line above the prompt (the context as a weather icon, share and tokens, your 5-hour and 7-day limits against the time elapsed, the prompt cache with its lifetime and time left, the subagents running) and suggested next prompts you can pick, in order, into one draft. Built on Token Weather Usage, usage-meter, prompt-cache-control and next-steps; see NOTICE.",
   "author": {
     "name": "anderson-spider"
@@ -24,7 +24,7 @@
     "paceStart": {
       "type": "number",
       "title": "Pace start (points)",
-      "description": "How many points of the 5-hour and 7-day limits you may be ahead of the clock before the bar turns amber with a ▲ (up to it, the mark is a green ▬). 0 flags any lead; 5 ignores a lead of up to 5 points. Red still starts beyond 15 points ahead, or at 90% used.",
+      "description": "How many points of the 5-hour and 7-day limits you may be ahead of the clock before the bar turns amber with a ▲ (up to it, there is no mark). 0 flags any lead; 5 ignores a lead of up to 5 points. Red still starts beyond 15 points ahead, or at 90% used.",
       "default": 0,
       "min": 0,
       "max": 50
