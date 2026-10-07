@@ -1,8 +1,8 @@
-import { loopAgentName, phaseReportPath, reportPath } from './names'
+import { loopAgentName, loopReportPath, phaseReportPath } from './names'
+import { waitForStop } from './job'
 import { fixTask, qaFocus } from './prompts'
 import { loopReport } from './presentation'
 import { checksOf, verdictOf } from './report'
-import { waitForStop } from './stopping'
 import { appendNote, messageOf } from './text'
 import type { AgentSession, Book, Job, Loop, LoopBook, LoopDeps, LoopRequest, NotifyEvent, Round } from './model'
 
@@ -85,7 +85,7 @@ export async function runLoop(deps: LoopDeps, loop: Loop, book: LoopBook): Promi
 
   loop.endedAt = deps.now()
   try {
-    const path = reportPath(deps.tmpdir, loop.id).replace(/\/\d+\.md$/, `/loop-${loop.id}.md`)
+    const path = loopReportPath(deps.tmpdir, loop.id)
     await deps.files.write(path, loopReport(loop, book, findings))
     loop.report = path
   } catch (error) {

@@ -124,8 +124,13 @@ export function herdrOf(run: Run, options: { pane: string; cwd: string }): Herdr
 export async function herdrAvailable(run: Run, env: { HERDR_ENV?: string }): Promise<string | undefined> {
   if (env.HERDR_ENV !== '1') return 'Not running inside Herdr (HERDR_ENV is not 1): codex-team needs Claude Code in a Herdr pane.'
   for (const tool of ['herdr', 'codex']) {
-    const found = await run([tool, '--version'], { timeoutMs: 15_000 }).catch(() => undefined)
-    if (found?.exitCode !== 0) return `${tool} is not installed or not in PATH.`
+    if (await versionOf(argv => run(argv, { timeoutMs: 15_000 }).catch(() => undefined), tool) === undefined) return `${tool} is not installed or not in PATH.`
   }
   return undefined
+}
+
+/** The first line of `<tool> --version`, or undefined when the tool did not answer or failed. */
+export async function versionOf(run: (argv: string[]) => Promise<{ exitCode: number; stdout: string } | undefined>, tool: string): Promise<string | undefined> {
+  const found = await run([tool, '--version'])
+  return found?.exitCode === 0 ? found.stdout.trim().split('\n')[0]! : undefined
 }

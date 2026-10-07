@@ -1,6 +1,5 @@
-import { agentName, nextFreeId } from './names'
-import { runJob, type JobOptions } from './job'
-import { waitForStop } from './stopping'
+import { STOP_WAIT_MS, agentName, nextFreeId } from './names'
+import { runJob, waitForStop, type JobOptions } from './job'
 import { owns } from './identity'
 import { messageOf, appendNote } from './text'
 import { isFinished } from './model'
@@ -21,8 +20,6 @@ const kinds: Record<Kind, { title: (request: Request) => string; queued: boolean
   review: { title: request => `review of ${request.target ?? 'the current diff'}`, queued: false },
 }
 
-// Esc ends the Codex turn but keeps its background terminals (openai/codex#14602); /stop ends them once the turn has settled.
-const STOP_WAIT_MS = 15_000
 
 /** The jobs of this session: ids, the execute queue, cancel and the lists the person and Claude read. */
 export function createBook(deps: Deps) {

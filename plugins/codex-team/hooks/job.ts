@@ -1,4 +1,4 @@
-import { reportPath } from './names'
+import { JOB_LIMIT_MS, WAIT_CHUNK_MS, reportPath } from './names'
 import { buildPrompt, codexArgs } from './prompts'
 import { HerdrError } from './model'
 import { isWaiting } from './report'
@@ -6,9 +6,6 @@ import { owns } from './identity'
 import { messageOf } from './text'
 import type { AgentSession, AgentState, Deps, Herdr, JobHerdr, Job, Request, Status } from './model'
 
-export const JOB_LIMIT_MS = 30 * 60_000
-// `$.process.run` kills a child after 10 minutes at most: every wait runs in chunks below that.
-export const WAIT_CHUNK_MS = 540_000
 const SUMMARY_CHARS = 600
 const LEFT_BLOCKED: AgentState[] = ['working', 'idle', 'done']
 
@@ -197,4 +194,17 @@ export async function runJob(deps: JobDeps, job: Job, request: Request, options:
   if (cancelled()) return
   job.endedAt = deps.now()
   deps.notify('finished', job)
+}
+
+/** A cancelled loop keeps its execute slot until its active agent is known to have stopped. */
+export async function waitForStop(herdr: Pick<Herdr, 'wait'>, session: AgentSession): Promise<void> {
+  while (session.active) {
+    try {
+      const state = await herdr.wait(session.agent, WAIT_CHUNK_MS, ['idle', 'done'])
+      if (state === 'idle' || state === 'done') session.active = false
+    } catch (error) {
+      if (error instanceof HerdrError && ['agent_not_found', 'pane_not_found'].includes(error.code)) session.active = false
+      // A timeout or transport failure proves nothing; another cancel can retry Esc meanwhile.
+    }
+  }
 }

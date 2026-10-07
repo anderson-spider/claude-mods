@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import { HerdrError } from '../hooks/model'
-import { herdrAvailable } from '../hooks/herdr'
+import { herdrAvailable, versionOf } from '../hooks/herdr'
 import { owns } from '../hooks/identity'
 import { fakeRun, agent, adapter } from './helpers'
 
@@ -126,4 +126,10 @@ test('herdrOf passes the pane name as one argv element', async () => {
   const { herdr, argvs } = adapter({})
   await herdr.rename('w1:p2', 'loop-1 dev')
   expect(argvs[0]).toEqual(['herdr', 'pane', 'rename', 'w1:p2', 'loop-1 dev'])
+})
+
+test('versionOf answers the first stdout line of a successful version probe, else nothing', async () => {
+  expect(await versionOf(async () => ({ exitCode: 0, stdout: 'herdr 1.2\nmore' }), 'herdr')).toBe('herdr 1.2')
+  expect(await versionOf(async () => ({ exitCode: 1, stdout: '' }), 'herdr')).toBeUndefined()
+  expect(await versionOf(async () => undefined, 'herdr')).toBeUndefined()
 })
