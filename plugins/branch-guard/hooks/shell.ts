@@ -61,14 +61,20 @@ const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh'])
 // The ssh options that take a value as the next word (`-p 22`); attached values (`-p22`) are one word.
 const SSH_VALUED = new Set(['b', 'c', 'D', 'E', 'e', 'F', 'I', 'i', 'J', 'L', 'l', 'm', 'O', 'o', 'p', 'Q', 'R', 'S', 'W', 'w'])
 
-// The options of a wrapper that take the next word as their value.
-const VALUED: Record<string, string> = {
-  sudo: 'ugChprtUDRT,--user,--group,--close-from,--host,--prompt,--role,--type,--other-user,--chdir,--chroot,--command-timeout,',
-  env: 'uS,--unset,--split-string,',
+// The options of a wrapper that take the next word as their value, short ones by letter and long ones whole.
+const VALUED: Record<string, { short: Set<string>; long: Set<string> }> = {
+  sudo: {
+    short: new Set(['u', 'g', 'C', 'h', 'p', 'r', 't', 'U', 'D', 'R', 'T']),
+    long: new Set(['--user', '--group', '--close-from', '--host', '--prompt', '--role', '--type', '--other-user', '--chdir', '--chroot', '--command-timeout']),
+  },
+  env: { short: new Set(['u', 'S']), long: new Set(['--unset', '--split-string']) },
 }
 
 // The options of a wrapper that take no value; any other option is unknown.
-const FLAGS: Record<string, string> = { sudo: 'AbEHiKklnPSsVvB', env: 'i0vPC' }
+const FLAGS: Record<string, Set<string>> = { sudo: new Set('AbEHiKklnPSsVvB'), env: new Set('i0vPC') }
+
+// The options of a shell that take the next word as their value (`bash -o pipefail`).
+const SHELL_VALUED = new Set(['-o', '-O', '+o', '+O', '--rcfile', '--init-file'])
 
 const base = (text: string) => text.slice(text.lastIndexOf('/') + 1)
 
@@ -85,7 +91,7 @@ const readsCommands = (words: readonly Word[]) => {
     if (ASSIGNMENT.test(text) || OPENERS.has(text)) {
       start += 1
     } else if (WRAPPERS.has(name)) {
-      const [short = '', ...long] = (VALUED[name] ?? '').split(',')
+      const { short, long } = VALUED[name] ?? { short: new Set<string>(), long: new Set<string>() }
 
       start += 1
 
@@ -94,10 +100,10 @@ const readsCommands = (words: readonly Word[]) => {
         const option = words[start]?.text ?? ''
         const isLong = option.startsWith('--')
 
-        const known = `${short}${FLAGS[name] ?? ''}`
+        const flags = FLAGS[name] ?? new Set<string>()
 
-        isUnsure ||= !(isLong ? option.includes('=') || long.includes(option) : [...option.slice(1)].every(char => known.includes(char)))
-        start += 1 + ((isLong ? long.includes(option) : option.length === 2 && short.includes(option[1] ?? '-')) ? 1 : 0)
+        isUnsure ||= !(isLong ? option.includes('=') || long.has(option) : [...option.slice(1)].every(char => short.has(char) || flags.has(char)))
+        start += 1 + ((isLong ? long.has(option) : option.length === 2 && short.has(option[1] ?? '-')) ? 1 : 0)
       }
     } else {
       break
@@ -112,7 +118,17 @@ const readsCommands = (words: readonly Word[]) => {
   const rest = words.slice(start + 1).map(word => word.text)
 
   if (SHELLS.has(name)) {
-    return rest.every(text => text.startsWith('-') && !/^-[A-Za-z]*c/.test(text))
+    for (let at = 0; at < rest.length; at += 1) {
+      const text = rest[at] ?? ''
+
+      if (SHELL_VALUED.has(text)) {
+        at += 1
+      } else if (!(/^[-+]/.test(text)) || /^-[A-Za-z]*c/.test(text)) {
+        return false
+      }
+    }
+
+    return true
   }
 
   if (name === 'ssh') {

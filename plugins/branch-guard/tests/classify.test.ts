@@ -159,3 +159,13 @@ test('classify checks the whole pipeline and over-holds on an unknown wrapper op
   expect(kinds('sudo -X foo bash <<EOF\ngit commit -m x\nEOF')).toEqual(['commit'])
   expect(kinds('sudo -X foo cat <<EOF\ngit commit -m x\nEOF')).toEqual([])
 })
+
+test('classify reads a shell body when the shell has valued options but no script', () => {
+  for (const head of ['bash -o pipefail', 'bash -O extglob', 'bash +o history', 'bash --rcfile x', 'bash --init-file x', 'sh -o errexit']) {
+    expect(kinds(`${head} <<EOF\ngit commit -m x\nEOF`)).toEqual(['commit'])
+  }
+
+  expect(kinds('bash script.sh <<EOF\ngit commit -m x\nEOF')).toEqual([])
+  expect(kinds("bash -o pipefail -c 'echo hi' <<EOF\ngit commit -m x\nEOF")).toEqual([])
+  expect(kinds('bash -o pipefail script.sh <<EOF\ngit commit -m x\nEOF')).toEqual([])
+})
