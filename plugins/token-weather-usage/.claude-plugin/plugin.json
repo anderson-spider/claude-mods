@@ -1,7 +1,7 @@
 {
   "name": "token-weather-usage",
-  "version": "3.10.7-spider.1",
-  "description": "One line above the prompt: the context as a weather icon, share and tokens (☁ 36% · 361k/1M), your 5-hour and 7-day limits against the time elapsed, the prompt cache with its lifetime and time left, and the subagents running. After Token Weather (Anthropic, Apache-2.0) and the ideas of usage-meter (HolyGrail) and prompt-cache-control (Daniel San).",
+  "version": "3.10.7-spider.2",
+  "description": "One line above the prompt: the context as a weather icon, share and tokens (☁ 36% · 361k/1M), your 5-hour and 7-day limits against the time elapsed, the prompt cache with its lifetime and time left, the subagents running, and suggested next prompts you can pick, in order, into one draft. After Token Weather (Anthropic, Apache-2.0) and the ideas of usage-meter (HolyGrail) and prompt-cache-control (Daniel San).",
   "author": {
     "name": "Eric Cologni"
   },

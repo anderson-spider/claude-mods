@@ -1,6 +1,6 @@
 # Token Weather Usage
 
-One band above the Claude Code prompt: the context in tokens, your 5-hour and 7-day limits against the clock, whether the prompt cache is still warm, what the session and the last prompt cost, and which agents are running.
+One band above the Claude Code prompt, with suggested next prompts above it: the context in tokens, your 5-hour and 7-day limits against the clock, whether the prompt cache is still warm, what the session and the last prompt cost, and which agents are running.
 
 ![One session, step by step](https://raw.githubusercontent.com/augiefra/claude-mods/main/docs/band-story.gif)
 
@@ -26,10 +26,32 @@ In the terminal:
 
 Labels are in English (en-US).
 
+## Next steps
+
+After each answer, the mod asks the session's own model (a fork that shares the prompt cache, so it costs about one short reply) for up to three prompts you are likely to type next, and draws them above the usage line:
+
+```
+next:
+  1: Run the tests
+  2: Commit the change
+  3: Open the PR
+  0: dismiss
+```
+
+- Press `1`, `2` or `3` (from an empty prompt box, or click) to pick a suggestion. A picked one shows its place in the order, `[1]`, `[2]`; press it again to drop it. The `4` button (`write N to prompt`) appears once something is picked and writes the picks to the prompt box as a draft: one pick as it is, several as `Do these in order, one after the other:` followed by `1. …`, `2. …` in the order you picked them. Edit the draft and press Enter yourself; the mod never sends a prompt. `0` dismisses.
+- The first suggestion is also the prompt box's dim ghost text, so Tab takes it.
+- Inside a numbered draft a `/skill args` suggestion is plain text for the model; it runs as a command only when it is the single pick.
+- The block goes away while Claude works, when a new turn starts and during a survey, and draws on the terminal only.
+- Layout, top to bottom: what other mods draw above the prompt (the order changed: they used to sit below the usage line), the suggestions, the usage line, then the prompt. The usage line stays next to the prompt however the block comes and goes.
+- **Shortest answer to suggest after** (`minAnswerChars`, 80): no suggestions after a shorter answer.
+- **Suggest skills and slash commands** (`suggestSkills`, on): tell the fork which skills and slash commands the session has, so a suggestion can be one of them.
+
+This replaces the community `next-steps` plugin: turn that one off in `/plugin`, or you get two blocks.
+
 ## Privacy
 
-No personal data collected, sent or retained, no network requests. The mod reads the usage figures Claude Code provides (context, limits, session cost, each request's cache token counts), the list of the session's subagents, the locale variables and the prompt-cache switches, and keeps in the plugin's local storage the latest limits reading and, per session, recent context readings, the last request's cache figures, what the cache saved in the session and the last prompt's cost (deleted after 8 idle days).
+No personal data collected, sent or retained, no network requests of its own. The suggestions are one more request to the session's own model (the fork), carrying the conversation already in the session and the names and descriptions of its skills; nothing else leaves the machine. The mod reads the usage figures Claude Code provides (context, limits, session cost, each request's cache token counts), the list of the session's subagents, the locale variables and the prompt-cache switches, and keeps in the plugin's local storage the latest limits reading and, per session, recent context readings, the last request's cache figures, what the cache saved in the session and the last prompt's cost (deleted after 8 idle days).
 
 ## Credits and license
 
-Weather, context and turns chart after Anthropic's **Token Weather** example ([claude-code-playground](https://github.com/anthropics/claude-code-playground), Apache-2.0). Limit gauges written after HolyGrail's **usage-meter** ([HolyGrail/claude-mods](https://github.com/HolyGrail/claude-mods/tree/main/plugins/usage-meter)), and the cache block after Daniel San's **prompt-cache-control** ([davila7/claude-code-templates](https://github.com/davila7/claude-code-templates), MIT), without copying their code. Apache-2.0 license: see [LICENSE](LICENSE) and [NOTICE](NOTICE). Adapted from [augiefra/claude-mods](https://github.com/augiefra/claude-mods/tree/main/plugins/token-weather-usage) 3.10.7; the changes are listed in the NOTICE.
+Weather, context and turns chart after Anthropic's **Token Weather** example ([claude-code-playground](https://github.com/anthropics/claude-code-playground), Apache-2.0). Limit gauges written after HolyGrail's **usage-meter** ([HolyGrail/claude-mods](https://github.com/HolyGrail/claude-mods/tree/main/plugins/usage-meter)), and the cache block after Daniel San's **prompt-cache-control** ([davila7/claude-code-templates](https://github.com/davila7/claude-code-templates), MIT), without copying their code. Apache-2.0 license: see [LICENSE](LICENSE) and [NOTICE](NOTICE). The suggested next prompts are adapted from the **next-steps** plugin by Thariq Shihipar (MIT). Adapted from [augiefra/claude-mods](https://github.com/augiefra/claude-mods/tree/main/plugins/token-weather-usage) 3.10.7; the changes are listed in the NOTICE.
