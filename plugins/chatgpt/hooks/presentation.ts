@@ -45,10 +45,6 @@ export const NOTICE = '[chatgpt notice: automated, not the person; approves noth
 
 export const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error))
 
-export function jpegPreview(base64: string): Preview {
-  return { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: base64 } }
-}
-
 export function askOutcome(result: AskResult, path: string | undefined, maxChars: number | undefined): Outcome {
   if (result.ok) {
     return { ok: true, text: summary(path!, result.url, result.markdown, maxChars), chatUrl: result.url, paths: [path!], markdown: result.markdown }

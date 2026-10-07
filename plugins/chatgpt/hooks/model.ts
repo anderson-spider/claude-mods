@@ -62,9 +62,6 @@ export type PageState = {
   blocker: string
 }
 
-/** `saveOnly` saves the last image already generated in `chatUrl`, sending nothing (and waiting while it is still generating). */
-export type ImageInput = AskInput
-
 export type Image = { base64: string; type: string; width: number; height: number; alt: string }
 
 /** Every image the request produced (ChatGPT sometimes draws variants), last one last. */
