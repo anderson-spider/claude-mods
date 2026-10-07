@@ -100,3 +100,17 @@ test('the band holds a commit read from a heredoc fed to a shell', async ($, on)
   expect(seen.ran).toEqual([])
   await ui.unmount()
 })
+
+test('the band holds a commit hidden in a command substitution', async ($, on) => {
+  const seen = world(on)
+
+  const refused = $.tool.call({ tool: 'Bash', command: 'echo $(git commit -m x)' })
+  await pause(50)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: 'commit 2 files directly on main' })).toBeDefined()
+  await ui.press({ key: 'cancel' })
+
+  expect((await refused).deny).toMatch(/pressed Cancel/)
+  expect(seen.ran).toEqual([])
+  await ui.unmount()
+})

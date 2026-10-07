@@ -107,3 +107,13 @@ test('parse reads a heredoc body fed to a shell as commands and keeps one fed to
   expect(full('bash <<EOF\ngit commit -m x\nEOF')).toEqual([['bash'], ['git', 'commit', '-m', 'x']])
   expect(full('cat <<EOF\ngit commit -m x\nEOF')).toEqual([['cat']])
 })
+
+test('parse adds the commands inside substitutions after the line, and leaves the outer word unknown', () => {
+  expect(parse('echo $(git commit -m x)')[0]?.words).toMatchObject([{ text: 'echo' }, { isUnknown: true }])
+  expect(full('echo $(git commit -m x)')).toContainEqual(['git', 'commit', '-m', 'x'])
+  expect(full('echo `git push`')).toContainEqual(['git', 'push'])
+  expect(full('echo "$(git push)"')).toContainEqual(['git', 'push'])
+  expect(full("echo '$(git push)'")).toEqual([['echo', '$(git push)']])
+  // Arithmetic is not a substitution: it reads as before.
+  expect(full('echo $((1+2))')).toEqual([['echo', '$'], ['1+2']])
+})

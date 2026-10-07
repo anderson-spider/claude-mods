@@ -4,7 +4,7 @@
 /** A word of the command, already unquoted, and what the shell would still do with it. */
 export type Word = {
   text: string
-  /** Has `$`, a backtick or braces: only the shell knows what it becomes. */
+  /** Has `$`, a backtick or braces: only the shell knows what it becomes (the commands inside a substitution are parsed apart). */
   isUnknown: boolean
   /** Has `~` outside quotes. */
   isHome: boolean
@@ -54,7 +54,16 @@ const delimiterAt = (command: string, from: number) => {
   return { word, end: at }
 }
 
-type Heredoc = { word: string; /** Index of the command that opened it. */ owner: number; isTabbed: boolean; /** Fed to a shell or ssh: the body is commands. */ isShell: boolean }
+type Heredoc = {
+  word: string
+  /** Index of the command that opened it. */
+  owner: number
+  isTabbed: boolean
+  /** Fed to a shell or ssh: the body is commands. */
+  isShell: boolean
+  /** The delimiter is quoted: the shell expands nothing in the body. */
+  isLiteral: boolean
+}
 
 const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh'])
 
@@ -182,11 +191,111 @@ const afterBodies = (command: string, from: number, pending: readonly Heredoc[])
   return { end: at, bodies }
 }
 
+// Where the `(` opened before `from` closes (the index of its `)`), or the end of the text when it never does.
+// It follows quotes, escapes and heredoc bodies, so a `)` inside them does not close it.
+const closeParen = (command: string, from: number): number => {
+  let depth = 1
+  let pending: Heredoc[] = []
+
+  for (let at = from; at < command.length; at += 1) {
+    const char = command[at] ?? ''
+
+    if (char === '\\') {
+      at += 1
+    } else if (char === "'") {
+      at = command.indexOf("'", at + 1)
+
+      if (at === -1) {
+        return command.length
+      }
+    } else if (char === '"') {
+      for (at += 1; at < command.length && command[at] !== '"'; at += 1) {
+        if (command[at] === '\\') {
+          at += 1
+        } else if (command[at] === '$' && command[at + 1] === '(') {
+          at = closeParen(command, at + 2)
+        }
+      }
+    } else if (char === '$' && command[at + 1] === '(') {
+      at = closeParen(command, at + 2)
+    } else if (char === '`') {
+      at = backtickEnd(command, at + 1)
+    } else if (char === '<' && command[at + 1] === '<' && command[at + 2] !== '<' && command[at + 2] !== '(') {
+      const isTabbed = command[at + 2] === '-'
+      const start = at + (isTabbed ? 3 : 2)
+      const skip = /^[ \t]*/.exec(command.slice(start))?.[0].length ?? 0
+      const { word, end } = delimiterAt(command, start + skip)
+
+      pending.push({ word, isTabbed, isShell: false, isLiteral: false, owner: 0 })
+      at = end - 1
+    } else if (char === '\n' && pending.length > 0) {
+      at = afterBodies(command, at + 1, pending).end - 1
+      pending = []
+    } else if (char === '(') {
+      depth += 1
+    } else if (char === ')') {
+      depth -= 1
+
+      if (depth === 0) {
+        return at
+      }
+    }
+  }
+
+  return command.length
+}
+
+// Where the backtick opened before `from` closes, or the end of the text when it never does.
+const backtickEnd = (command: string, from: number): number => {
+  for (let at = from; at < command.length; at += 1) {
+    if (command[at] === '\\') {
+      at += 1
+    } else if (command[at] === '`') {
+      return at
+    }
+  }
+
+  return command.length
+}
+
+// The commands inside a substitution, as if run on their own: the shell runs them whenever it expands the word.
+const inside = (text: string): Command[] => parse(text).map((one, at) => (at === 0 ? { ...one, before: ';' } : one))
+
+// The substitutions of a heredoc body the shell expands (unquoted delimiter), whose commands run even when the body is data.
+const bodySubstitutions = (body: string): Command[] => {
+  const found: Command[] = []
+
+  for (let at = 0; at < body.length; at += 1) {
+    const char = body[at] ?? ''
+
+    if (char === '\\') {
+      at += 1
+    } else if (char === '$' && body[at + 1] === '(' && body[at + 2] !== '(') {
+      const close = closeParen(body, at + 2)
+
+      found.push(...inside(body.slice(at + 2, close)))
+      at = close
+    } else if (char === '`') {
+      const close = backtickEnd(body, at + 1)
+
+      found.push(...inside(body.slice(at + 1, close).replace(/\\([`$\\])/g, '$1')))
+      at = close
+    }
+  }
+
+  return found
+}
+
 type Command = { words: Word[]; /** The separator that came before: `;`, `&&`, `|`, `(`… */ before: string }
 
 // The simple commands on the line, empty ones included, each with the separator before it.
+// The commands inside `$(…)`, backticks and `<(…)`/`>(…)` (also inside double quotes, and in the body of a heredoc
+// whose delimiter is unquoted) come after those of the line, as if run on their own; the word that holds
+// them stays unknown. Single-quoted text and `$((…))` are not substitutions. An unterminated one reads to the end.
 export const parse = (command: string): Command[] => {
   const commands: Command[] = [{ words: [], before: '' }]
+  // The commands of the substitutions, appended after the line.
+  const nested: Command[] = []
   let text = ''
   let isOpen = false
   let isUnknown = false
@@ -207,6 +316,17 @@ export const parse = (command: string): Command[] => {
   // Parentheses still open in `$((…))` or `((…))`, where `<<` is a shift and not a heredoc.
   let arithmetic = 0
 
+  // The substitution that opens at `at` (`$(`, a backtick, `<(` or `>(`): its commands are kept, its text stays in the word.
+  const substitute = (at: number) => {
+    const isBacktick = command[at] === '`'
+    const start = at + (isBacktick ? 1 : 2)
+    const close = isBacktick ? backtickEnd(command, start) : closeParen(command, start)
+    const inner = command.slice(start, close)
+
+    nested.push(...inside(isBacktick ? inner.replace(/\\([`$\\])/g, '$1') : inner))
+
+    return { raw: command.slice(at, close + 1), end: Math.min(close, command.length - 1) }
+  }
   const endPattern = () => {
     commands.length = patternFrom + 1
     const first = commands[patternFrom]
@@ -289,6 +409,12 @@ export const parse = (command: string): Command[] => {
       } else if (char === '\\' && quote === '"') {
         text += following
         at += 1
+      } else if (quote === '"' && ((char === '$' && following === '(' && command[at + 2] !== '(') || char === '`')) {
+        const { raw, end } = substitute(at)
+
+        isUnknown = true
+        text += raw
+        at = end
       } else {
         isUnknown ||= quote === '"' && (char === '$' || char === '`')
         text += char
@@ -304,6 +430,13 @@ export const parse = (command: string): Command[] => {
       at += 1
     } else if (char === ' ' || char === '\t') {
       endWord()
+    } else if ((char === '$' && following === '(' && command[at + 2] !== '(') || char === '`' || ((char === '<' || char === '>') && following === '(' && arithmetic === 0)) {
+      const { raw, end } = substitute(at)
+
+      isUnknown = true
+      isOpen = true
+      text += raw
+      at = end
     } else if (char === '<' && following === '<' && arithmetic === 0) {
       // A heredoc body (or here-string) is data for `cat`, `tee`, `python`…, but commands for a shell
       // (`bash`, `sh`, `zsh`, `dash`, `ksh`, with no `-c` and no script) or `ssh host` with no remote command:
@@ -322,7 +455,9 @@ export const parse = (command: string): Command[] => {
         const start = at + (isTabbed ? 3 : 2)
         const { word, end } = delimiterAt(command, start + (/^[ \t]*/.exec(command.slice(start))?.[0].length ?? 0))
 
-        pending.push({ word, isTabbed, isShell, owner: commands.length - 1 })
+        const isLiteral = /['"\\]/.test(command.slice(start, end))
+
+        pending.push({ word, isTabbed, isShell, isLiteral, owner: commands.length - 1 })
         at = end - 1
       }
     } else if (char === ')' && isPattern) {
@@ -353,6 +488,8 @@ export const parse = (command: string): Command[] => {
 
           if (heredoc?.isShell === true || isPiped) {
             commands.push(...parse(body).map((one, position) => (position === 0 ? { ...one, before: '\n' } : one)), { words: [], before: '\n' })
+          } else if (heredoc?.isLiteral === false) {
+            nested.push(...bodySubstitutions(body))
           }
         }
 
@@ -373,7 +510,7 @@ export const parse = (command: string): Command[] => {
 
   endWord()
 
-  return commands
+  return [...commands, ...nested]
 }
 
 /** `path` from `base`, with no `.` or `..` in the middle. */

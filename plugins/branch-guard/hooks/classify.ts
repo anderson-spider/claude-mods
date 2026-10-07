@@ -219,7 +219,7 @@ const git = (state: State, words: readonly Word[], isSure: boolean): Risk | unde
 
 /**
  * The commits and pushes the command line carries, in order; empty for everything else.
- * A safety net that reads text, not a permission system: `$(…)`, aliases and scripts get through.
+ * A safety net that reads text, not a permission system: aliases, scripts and variables that hold commands get through. The commands inside `$(…)`, backticks and `<(…)` are read as if run on their own.
  */
 export const classify = (command: string): Risk[] => {
   const risks: Risk[] = []

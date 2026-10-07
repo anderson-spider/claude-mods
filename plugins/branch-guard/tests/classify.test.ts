@@ -121,6 +121,7 @@ test('classify sees through case arms and still reads subshells', () => {
 })
 
 test('classify reads a heredoc or here-string body fed to a shell or ssh as commands', () => {
+  expect(kinds("git commit -m \"$(cat <<'EOF'\ndon't\nEOF\n)\" && git push origin main")).toEqual(['commit', 'publish'])
   expect(kinds('bash <<EOF\ngit commit -m x\nEOF')).toEqual(['commit'])
   expect(classify("sudo bash <<'EOF'\ngit push origin main\nEOF")).toMatchObject([{ kind: 'publish', refspecs: ['main'] }])
   expect(kinds('env FOO=1 sh <<-EOF\n\tgit commit -m x\n\tEOF')).toEqual(['commit'])
@@ -176,4 +177,28 @@ test('classify reads a shell body when a combined option cluster ends in a value
   }
 
   expect(kinds('bash -eo pipefail script.sh <<EOF\ngit commit -m x\nEOF')).toEqual([])
+})
+
+test('classify sees git commands inside command substitutions', () => {
+  expect(kinds('echo $(git commit -m x)')).toEqual(['commit'])
+  expect(classify('echo `git push origin main`')).toMatchObject([{ kind: 'publish', refspecs: ['main'] }])
+  expect(kinds('x="$(git commit -m x)"')).toEqual(['commit'])
+  expect(kinds('x=$(git commit -m x)')).toEqual(['commit'])
+  expect(kinds('echo "a `git commit -m x` b"')).toEqual(['commit'])
+  expect(kinds('echo $(echo $(git commit -m x))')).toEqual(['commit'])
+  expect(classify('diff <(git push origin main) f')).toMatchObject([{ kind: 'publish', refspecs: ['main'] }])
+  expect(kinds('tee >(git commit -m x)')).toEqual(['commit'])
+  expect(kinds('echo $(git commit -m x')).toEqual(['commit'])
+  expect(kinds('echo `git commit -m x')).toEqual(['commit'])
+
+  expect(kinds("echo '$(git commit -m x)'")).toEqual([])
+  expect(kinds('echo $((1<<2))')).toEqual([])
+  expect(kinds('echo $(ls)')).toEqual([])
+})
+
+test('classify reads substitutions in heredoc bodies unless the delimiter is quoted', () => {
+  expect(kinds('cat <<EOF\n$(git commit -m x)\nEOF')).toEqual(['commit'])
+  expect(kinds('cat <<"EOF"\n$(git commit -m x)\nEOF')).toEqual([])
+  expect(kinds("cat <<'EOF'\n$(git commit -m x)\nEOF")).toEqual([])
+  expect(kinds('bash <<EOF\ngit commit -m x\nEOF')).toEqual(['commit'])
 })
