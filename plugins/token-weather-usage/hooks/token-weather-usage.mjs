@@ -629,10 +629,12 @@ function combine(items, picked) {
   return ["Do these in order, one after the other:", ...picked.map((index, n) => `${n + 1}. ${items[index].prompt}`)].join("\n");
 }
 
-// Picks an item, or drops it from the picks when it is already there.
+// Picks an item, or drops it from the picks when it is already there. A press from an older, longer
+// offer names an item the current one does not have: ignored.
 function togglePick($, index) {
   if (suggestions.kind !== "offer") return;
   const { items, picked } = suggestions;
+  if (!(index >= 0 && index < items.length)) return;
   showSuggestions($, { kind: "offer", items, picked: picked.includes(index) ? picked.filter((i) => i !== index) : [...picked, index] });
 }
 

@@ -1242,3 +1242,47 @@ test("picking: a slash suggestion alone is filled as it is, inside a combination
   await press($, "pick-1", "pick-2", "write");
   expect(filled[1]).toBe("Do these in order, one after the other:\n1. /review-pr 12\n2. commit the change");
 });
+
+// ---------- Next steps: the deferred review minors ----------
+
+test("suggestions: invalid JSON offers nothing", async ($, on) => {
+  world(on);
+  withUsage(on, LIMITS);
+  const seen = suggesting(on, '[{"label": "Run", "prompt": "run the tests"');
+  await $.session.start({ source: "startup", cwd: "/tmp" } as any);
+  await turnDone($);
+  expect(seen.forks.length).toBe(1);
+  expect(seen.ghosts).toEqual([]);
+  expect((await band($, "terminal")).texts).not.toContain("next:");
+});
+
+test("suggestions: a fork that is not answered offers nothing", async ($, on) => {
+  world(on);
+  withUsage(on, LIMITS);
+  const seen = suggesting(on, ITEMS, { fork: async () => ({ isAnswered: false, reason: "api-error" }) });
+  await $.session.start({ source: "startup", cwd: "/tmp" } as any);
+  await turnDone($);
+  expect(seen.forks.length).toBe(1);
+  expect(seen.ghosts).toEqual([]);
+  expect((await band($, "terminal")).texts).not.toContain("next:");
+});
+
+test("picking: a press from an older, longer offer picks nothing", async ($, on) => {
+  const filled: string[] = [];
+  on("prompt.fill", (_$: any, e: any) => {
+    filled.push(e.text);
+    return { isFilled: true };
+  });
+  world(on);
+  withUsage(on, LIMITS);
+  let call = 0;
+  // The first offer has three items, the second only one.
+  suggesting(on, null, { fork: async () => ({ isAnswered: true, text: JSON.stringify(call++ === 0 ? ITEMS : [ITEMS[0]]), usage: {} }) });
+  await $.session.start({ source: "startup", cwd: "/tmp" } as any);
+  await turnDone($);
+  const old = (await band($, "terminal")).ui;
+  await turnDone($, { turnId: "t2" });
+  await old.press({ key: "pick-3" } as any).catch(() => undefined);
+  expect(await labels((await band($, "terminal")).ui)).toEqual(["Run the tests", "dismiss"]);
+  expect(filled).toEqual([]);
+});
