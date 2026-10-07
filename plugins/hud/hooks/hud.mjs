@@ -1111,7 +1111,7 @@ function drawInfo(elements, columns) {
     { key: "effort", text: info.effort, drop: 1 },
     { key: "speed", text: info.speed === null ? "" : `${info.speed} tok/s`, drop: 0 },
     { key: "dir", text: info.dir, drop: 2 },
-    { key: "branch", text: info.branch },
+    { key: "branch", text: info.branch && info.files > 0 ? `${info.branch}*` : info.branch },
     // Hangs on the branch, with no divider.
     { key: "changes", text: info.branch ? changes : "", drop: -1, attached: true },
   ].filter((p) => p.text !== "");
@@ -1131,7 +1131,9 @@ function drawInfo(elements, columns) {
       return;
     }
     if (i > 0) children.push(Box({ key: "sep-" + i, paddingX: 1, children: [Text({ dimColor: true, children: "|" })] }));
-    children.push(Text({ key: p.key, bold: p.bold === true, dimColor: p.key === "dir" || p.key === "speed", children: p.text }));
+    // The branch is red with a * while the tree has changes, green when it is clean.
+    const color = p.key === "branch" ? (info.files > 0 ? TERM_TONES.alert : TERM_TONES.calm) : undefined;
+    children.push(Text({ key: p.key, bold: p.bold === true, color, dimColor: p.key === "dir" || p.key === "speed", children: p.text }));
   });
   return Box({ key: "info", flexDirection: "row", paddingX: 1, children });
 }

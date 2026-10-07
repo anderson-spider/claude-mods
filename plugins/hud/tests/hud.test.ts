@@ -1414,6 +1414,24 @@ test("info: the changed files and lines hang on the branch", async ($, on) => {
   expect(texts).toContain("-4");
 });
 
+test("info: a branch with changes is red with a star, a clean one green", async ($, on) => {
+  world(on);
+  withUsage(on, LIMITS);
+  hostInfo(on, { dirty: 1 });
+  await $.session.start({ source: "startup", cwd: "/work/spider-marketplace" } as any);
+  const dirty: any = await (await band($, "terminal")).ui.find({ type: "Text", text: "andersonsilva/feat*" });
+  expect(dirty.props?.color).toBe("#ff6b6b");
+});
+
+test("info: a clean branch is green and has no star", async ($, on) => {
+  world(on);
+  withUsage(on, LIMITS);
+  hostInfo(on);
+  await $.session.start({ source: "startup", cwd: "/work/spider-marketplace" } as any);
+  const clean: any = await (await band($, "terminal")).ui.find({ type: "Text", text: "andersonsilva/feat" });
+  expect(clean.props?.color).toBe("#6fcf97");
+});
+
 test("info: several changed files are counted in the plural", async ($, on) => {
   world(on);
   withUsage(on, LIMITS);
