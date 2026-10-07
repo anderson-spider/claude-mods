@@ -1,9 +1,9 @@
-import type { AskOptions, Browser, Image, ImageInput, ImageResult } from './model'
+import type { AskInput, AskOptions, Browser, Image, ImageResult } from './model'
 import { LOAD_MS, parseOutput, prepare } from './browser'
 import { compose, readAnswer, stopped, unfinished, watch } from './conversation'
 import { GENERATED, imageScript, sendScript } from './scripts'
 
-export async function generateImage(browser: Browser, input: ImageInput, options: AskOptions = {}): Promise<ImageResult> {
+export async function generateImage(browser: Browser, input: AskInput, options: AskOptions = {}): Promise<ImageResult> {
   const timeoutMs = options.timeoutMs ?? 6 * 60_000
   const pollMs = options.pollMs ?? 5000
   const progress = options.progress ?? (() => {})

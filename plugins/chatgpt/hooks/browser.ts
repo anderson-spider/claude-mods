@@ -32,11 +32,6 @@ export function chatUrlError(url: string): string | undefined {
   return isChatUrl(url) ? undefined : `chatUrl must be a chat link like https://chatgpt.com/c/<id>, not ${url}.`
 }
 
-/** Whether `url` starts a new chat: the home page. */
-export function isNewChatUrl(url: string): boolean {
-  return url === CHATGPT_URL
-}
-
 // Goes to `target` in the plugin's own tab, opening one when it is gone, and
 // waits for the composer (or a login page); never touches a tab it did not
 // open. The home page is a new chat, so going there is what the "New chat"
