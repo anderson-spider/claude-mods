@@ -8,6 +8,7 @@ claude plugin test plugins/branch-guard
 claude plugin test plugins/chatgpt
 claude plugin test plugins/codex-computer-use
 claude plugin test plugins/tailscale
+claude plugin test plugins/token-weather-usage
 /Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node --test plugins/codex-computer-use/helper/test/helper.test.mjs
 ```
 
@@ -20,6 +21,7 @@ claude plugin test plugins/tailscale
 | codex-computer-use (plugin) | Command parsing, routing, the approval band, `limitMs` | The `claude-code/testing` host |
 | codex-computer-use (helper) | Hub, MCP client, approvals, owners, `install.sh --check` | The real hub and client against a fake MCP server, with approvals pointed at a temp file |
 | tailscale | URL building, the forbidden call, redaction, `ETag`/`If-Match` | A fake `fetch`; no fake host |
+| token-weather-usage | The line on terminal and desktop, pace marks, cache states and prices, narrow-terminal steps, settings | The `claude-code/testing` host; no real session, so the paint is not checked |
 
 ## What they do not prove
 
