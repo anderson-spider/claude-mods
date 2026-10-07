@@ -107,7 +107,6 @@ type State = {
   isAdrift: boolean
   branch: string | undefined
   isStaged: boolean
-  isStraight: boolean
 }
 
 // Where a `checkout`/`switch` leaves the person: the name when the text reveals it, `unknown` when not.
@@ -127,7 +126,7 @@ const move = (state: State, sub: string, args: readonly Word[], isSure: boolean)
   state.branch = isSure && !target.isUnknown && target.text !== '-' ? target.text : 'unknown'
 }
 
-const git = (state: State, words: readonly Word[], isSure: boolean): Risk | undefined => {
+const git = (state: State, words: readonly Word[], isStraight: boolean, isSure: boolean): Risk | undefined => {
   let at = 0
   let where = state.dir
   let isElsewhere = false
@@ -217,7 +216,7 @@ export const classify = (command: string): Risk[] => {
   const parsed = parse(command)
   // With `if`, `for` and the like, the text alone cannot tell which branch switches run.
   const isStraight = !parsed.some(one => KEYWORDS.has(one.words[0]?.text ?? ''))
-  const state: State = { dir: '.', isAdrift: false, branch: undefined, isStaged: false, isStraight }
+  const state: State = { dir: '.', isAdrift: false, branch: undefined, isStaged: false }
 
   for (const [at, one] of parsed.entries()) {
     const argv = bare(one.words)
@@ -234,8 +233,8 @@ export const classify = (command: string): Risk[] => {
       state.isAdrift = isKnown ? state.isAdrift && !to.startsWith('/') && !isHomePath : true
       state.dir = isKnown ? enter(state.dir, to) : state.dir
     } else if (name === 'git') {
-      const isSure = state.isStraight && SEQUENCE.has(one.before) && SEQUENCE.has(parsed[at + 1]?.before ?? '')
-      const risk = git(state, args, isSure)
+      const isSure = isStraight && SEQUENCE.has(one.before) && SEQUENCE.has(parsed[at + 1]?.before ?? '')
+      const risk = git(state, args, isStraight, isSure)
 
       if (risk !== undefined) {
         risks.push(state.isAdrift ? { ...risk, isAdrift: true } : risk)
