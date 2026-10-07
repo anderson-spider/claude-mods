@@ -79,7 +79,8 @@ test('a review opening during the last loop pane close waits and then starts bel
 
 test('closing older loop panes preserves a newer review as the row target', async () => {
   let release = () => {}
-  const state = loopWith(['dev', 'VERDICT: APPROVED', 'other review', 'next review'], {}, { 1: new Promise<void>(done => (release = done)) })
+  // The newer review writes no report, so its pane stays open as the row target.
+  const state = loopWith(['dev', 'VERDICT: APPROVED', undefined, 'next review'], {}, { 1: new Promise<void>(done => (release = done)) })
   const loop: Loop = { id: await state.book.reserveId(), ...loopRequest(1), status: 'developing', rounds: [], startedAt: 0 }
   const running = runLoop(state.deps, loop, state.book)
   try {
@@ -94,7 +95,7 @@ test('closing older loop panes preserves a newer review as the row target', asyn
   const next = await state.book.start(request('review'))
   await state.book.ended(next.id)
   expect(state.calls.filter(call => call.startsWith('split'))).toEqual(['split down', 'split right w1:p2', 'split right w1:p3', 'split right w1:p4'])
-  expect(state.calls.filter(call => call.startsWith('close'))).toEqual(['close w1:p2', 'close w1:p3'])
+  expect(state.calls.filter(call => call.startsWith('close'))).toEqual(['close w1:p2', 'close w1:p3', 'close w1:p5'])
 })
 
 test('a failed dev closes only its pane and waits until its agent stops', async () => {
@@ -638,7 +639,7 @@ test('a cancelled phase holds the execute slot after its deadline until the agen
     releaseStop()
     await state.finished(loop)
     expect((await book.done(other.id)).status).toBe('done')
-    expect(state.calls.filter(call => call.startsWith('close'))).toEqual(['close w1:p2'])
+    expect(state.calls.filter(call => call.startsWith('close'))).toEqual(['close w1:p2', 'close w1:p3'])
   } finally { releasePrompt(); releaseStop() }
 })
 
@@ -686,6 +687,6 @@ test('a cancelled loop keeps waiting through stop timeouts and permits Esc retri
     releaseStop()
     await state.finished(loop)
     await book.ended(other.id)
-    expect(state.calls.filter(call => call.startsWith('close'))).toEqual(['close w1:p2'])
+    expect(state.calls.filter(call => call.startsWith('close'))).toEqual(['close w1:p2', 'close w1:p3'])
   } finally { releasePrompt(); releaseStop() }
 })

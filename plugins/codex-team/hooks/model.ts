@@ -34,6 +34,8 @@ export type Herdr = {
   wait(name: string, timeoutMs: number, until?: AgentState[]): Promise<AgentState>
   read(name: string, lines: number): Promise<string>
   sendKeys(name: string, keys: string[]): Promise<void>
+  /** Types `text` and Enter into the agent without waiting for it to settle. */
+  submit(name: string, text: string): Promise<void>
   list(): Promise<{ name: string; pane: string }[]>
 }
 

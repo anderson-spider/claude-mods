@@ -1,4 +1,5 @@
 import { expect, test } from 'claude-code/testing'
+import { HerdrError } from '../hooks/model'
 import type { Job } from '../hooks/model'
 import { jobDetail, jobsReport } from '../hooks/presentation'
 import { request, pause, settled, bookWith } from './helpers'
@@ -66,6 +67,41 @@ test('cancel of a working job sends Esc, keeps the pane and stays cancelled with
   expect(a.status).toBe('cancelled')
   expect(events).toEqual([])
   expect(calls.some(call => call.includes('close'))).toBe(false)
+})
+
+test('cancel sends /stop once the agent settles, and the run ends only after it', async () => {
+  let release = () => {}
+  let releaseStop = () => {}
+  const stopGate = new Promise<void>(done => (releaseStop = done))
+  const { book, calls, herdr } = bookWith({ gate: new Promise<void>(done => (release = done)) })
+  const submit = herdr.submit
+  herdr.submit = async (name, text) => { await stopGate; return submit(name, text) }
+  const a = await book.start({ kind: 'execute', task: 'long', files: [] })
+  await pause(5)
+  expect(await book.cancel(a.id)).toContain('/stop follows once it settles')
+  release()
+  let ended = false
+  void book.ended(a.id).then(() => { ended = true })
+  await pause(10)
+  expect(calls).toContain('wait ct-1 until idle|done|blocked')
+  expect(ended).toBe(false)
+  releaseStop()
+  await book.ended(a.id)
+  expect(calls.indexOf('keys ct-1 esc')).toBeLessThan(calls.indexOf('submit ct-1 /stop'))
+  expect(a.status).toBe('cancelled')
+})
+
+test('a failed /stop is noted on the cancelled job and never fails it', async () => {
+  let release = () => {}
+  const { book, herdr } = bookWith({ gate: new Promise<void>(done => (release = done)) })
+  herdr.submit = async () => { throw new HerdrError('agent_blocked', 'agent is blocked') }
+  const a = await book.start({ kind: 'execute', task: 'long', files: [] })
+  await pause(5)
+  await book.cancel(a.id)
+  release()
+  await book.ended(a.id)
+  expect(a.status).toBe('cancelled')
+  expect(a.error).toContain('Could not send /stop to end its background commands: agent is blocked')
 })
 
 test('cancel answers for a finished job and for an unknown id', async () => {

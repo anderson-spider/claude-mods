@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import { pause, loopHost, startSession } from './helpers'
 
-test('the host shares the layout across execute, review and loop tools and resets it after loop closes', async ($, on) => {
+test('the host shares the layout across execute, review and loop tools and resets it after each close', async ($, on) => {
   const host = loopHost(on)
   await startSession($)
   for (const [index, kind] of ['execute', 'review', 'loop', 'review'].entries()) {
@@ -9,17 +9,20 @@ test('the host shares the layout across execute, review and loop tools and reset
     for (let i = 0; i < 100 && host.messages.length < index + 1; i++) await pause(1)
     expect(host.messages.length).toBe(index + 1)
     if (kind === 'loop') {
-      for (let i = 0; i < 100 && host.argvs.filter(argv => argv[2] === 'close').length < 2; i++) await pause(1)
+      for (let i = 0; i < 100 && host.argvs.filter(argv => argv[2] === 'close').length < 4; i++) await pause(1)
       expect(host.argvs.filter(argv => argv[2] === 'close')).toEqual([
+        ['herdr', 'pane', 'close', 'w1:p2'],
+        ['herdr', 'pane', 'close', 'w1:p3'],
         ['herdr', 'pane', 'close', 'w1:p4'],
         ['herdr', 'pane', 'close', 'w1:p5'],
       ])
     }
   }
+  // Each finished standalone job closed its pane, so the next one opened below the lead again.
   expect(host.argvs.filter(argv => argv[2] === 'split')).toEqual([
     ['herdr', 'pane', 'split', 'w1:p1', '--direction', 'down', '--cwd', '/proj', '--no-focus'],
-    ['herdr', 'pane', 'split', 'w1:p2', '--direction', 'right', '--cwd', '/proj', '--no-focus'],
-    ['herdr', 'pane', 'split', 'w1:p3', '--direction', 'right', '--cwd', '/proj', '--no-focus'],
+    ['herdr', 'pane', 'split', 'w1:p1', '--direction', 'down', '--cwd', '/proj', '--no-focus'],
+    ['herdr', 'pane', 'split', 'w1:p1', '--direction', 'down', '--cwd', '/proj', '--no-focus'],
     ['herdr', 'pane', 'split', 'w1:p4', '--direction', 'right', '--cwd', '/proj', '--no-focus'],
     ['herdr', 'pane', 'split', 'w1:p1', '--direction', 'down', '--cwd', '/proj', '--no-focus'],
   ])

@@ -55,6 +55,9 @@ export function fakeHerdr(script: Script) {
     sendKeys: async (name, keys) => {
       calls.push(`keys ${name} ${keys.join(' ')}`)
     },
+    submit: async (name, text) => {
+      calls.push(`submit ${name} ${text}`)
+    },
     list: async () => (script.live ?? []).map(name => ({ name, pane: 'w9:p9' })),
   }
   return { herdr, calls }
@@ -96,7 +99,7 @@ export function bookWith(script: Script) {
     now: () => 0,
     notify: (event, j) => events.push(`${event} ${j.agent} ${j.status}`),
   })
-  return { book, calls, events }
+  return { book, calls, events, herdr }
 }
 
 export function loopWith(reports: (string | undefined)[], script: Script = {}, gates: Record<number, Promise<void>> = {}) {
@@ -187,7 +190,7 @@ export function loopHost(on: On, gate?: Promise<void>, script: Script = {}) {
     if (argv[1] === '--version') stdout = 'installed'
     if (argv[1] === 'pane' && argv[2] === 'split') stdout = JSON.stringify({ result: { pane: { pane_id: `w1:p${++panes}` } } })
     if (argv[1] === 'agent' && argv[2] === 'list') stdout = JSON.stringify({ result: { agents: [] } })
-    if (argv[1] === 'agent' && argv[2] === 'prompt') {
+    if (argv[1] === 'agent' && argv[2] === 'prompt' && argv[4] !== '/stop') {
       const index = prompts++
       files[argv[4]!.match(/write your final report as Markdown to (.+) and answer/)![1]!] = index === 0 ? 'dev report' : 'VERDICT: APPROVED'
       if (index === 1) await gate

@@ -44,7 +44,7 @@ export const PROMPT = [
   '',
   `- \`${EXECUTE_TOOL}\` { task, files? }: Codex implements a well-bounded task in the current directory (sandbox workspace-write, it never commits). One execute runs at a time: a second waits in the queue, so do not start a second while one is running or queued in the same directory.`,
   `- \`${REVIEW_TOOL}\` { target?, focus? }: Codex reviews the current diff (or the target) read-only; reviews run in parallel.`,
-  `- \`${LOOP_TOOL}\` { task, files?, maxRounds? }: use when work needs QA. Runs dev then read-only QA rounds (maxRounds defaults to 3), holding the execute queue throughout; answers an id at once and one message at the end with a verdict. After the report and final message, it closes its panes once the agents have stopped, whatever the outcome. Use execute and review for manual control; their panes stay open.`,
+  `- \`${LOOP_TOOL}\` { task, files?, maxRounds? }: use when work needs QA. Runs dev then read-only QA rounds (maxRounds defaults to 3), holding the execute queue throughout; answers an id at once and one message at the end with a verdict. After the report and final message, it closes its panes once the agents have stopped, whatever the outcome. Use execute and review for manual control; their panes close once the report is written and stay open after a failure, a missing report or a cancel.`,
   `- \`${JOBS_TOOL}\` { id?, action? }: lists jobs and loops, reads one, or cancels it (\`action: "cancel"\`).`,
   '',
   '- Say in one line what you delegate before the call. If the tools are deferred, load them by name first.',
