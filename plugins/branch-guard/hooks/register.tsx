@@ -2,8 +2,10 @@ import { atom, read } from 'claude-code'
 import type { Elements, EngineInterface, Register, RenderElement } from 'claude-code'
 
 import type { BranchGuardHeld } from '../types'
-import { classify, isProtectedTarget, measure } from './guard'
-import type { Probe, Risk } from './guard'
+import { classify } from './classify'
+import type { Risk } from './classify'
+import { isProtectedTarget, measure } from './measure'
+import type { Probe } from './measure'
 
 type Kit = Pick<Elements['terminal'], 'Box' | 'Text' | 'Button'>
 type Decision = 'proceed' | 'cancel'

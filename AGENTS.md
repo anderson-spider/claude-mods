@@ -27,9 +27,11 @@ Inside a session, `/reload-plugins` reloads the hooks.
 
 ## branch-guard
 
-`hooks/hooks.json` only points to `./register.tsx`. The flow crosses three files:
+`hooks/hooks.json` only points to `./register.tsx`. The flow crosses five files:
 
-- `hooks/guard.ts`: pure logic, no `$`. `classify(command)` reads the Bash text (`split`, `cd`, `git -C`, variables assigned on the line) and returns the `commit` and `publish` risks; `isProtectedTarget` decides, asynchronously, whether the target branch is protected; `measure` reports what would go in. Everything that touches the host goes through the injected `Probe`, which makes it testable without a real process. The parser (`parse`, `resolve`, `locate`, `isTempRepo`) came trimmed from the removed blast-radius plugin and now lives only here. Force push is left out on purpose.
+- `hooks/shell.ts`: the shell-text parser and path helpers (`parse`, `resolve`, `enter`, `locate`, `bare`), with no host access.
+- `hooks/classify.ts`: pure git classification, no `$`. `classify(command)` reads the Bash text (`split`, `cd`, `git -C`, variables assigned on the line) and returns the `commit` and `publish` risks. It owns the shared `PROTECTED` branch pattern, also used by `measure.ts`. Force push is left out on purpose.
+- `hooks/measure.ts`: `isProtectedTarget` decides, asynchronously, whether the target branch is protected; `measure` reports what would go in. Everything that touches the host goes through the injected `Probe`, which makes it testable without a real process. The parser and path helpers in `shell.ts` (`parse`, `resolve`, `locate`) and the temp repository check in `measure.ts` (`isTempRepo`) came trimmed from the removed blast-radius plugin and now live only here.
 - `hooks/register.tsx`: wires to the host. `tool.call` (Bash) classifies, measures and **holds** the call in `hold()` until the person decides (`proceed` releases it, otherwise it returns `deny` with the summary); `ui.render` in `AbovePrompt` draws the band; `session.start` clears state stuck from a reload.
 - `types/index.d.ts`: shape of the report and of the plugin state (`BranchGuardHeld`, key `branch-guard`/`held`), declared in `PluginState`.
 
