@@ -9,6 +9,7 @@ Marketplace of [Claude Code](https://claude.com/claude-code) plugins made by and
 | [branch-guard](plugins/branch-guard) | Holds a `git commit` or `git push` on the protected branch and shows what would go in. |
 | [chatgpt](plugins/chatgpt) | Lets Claude ask your logged-in ChatGPT, or have it generate an image, in terminal-browser, and saves the result locally. |
 | [codex-computer-use](plugins/codex-computer-use) | Routes native Mac app control through Codex computer use from the ChatGPT app instead of Claude's own computer use, asking before each new app. |
+| [codex-team](plugins/codex-team) | Lets Claude lead Codex agents: `execute` and `review` run Codex in Herdr panes as background jobs, with a band above the prompt and a report per job. |
 | [tailscale](plugins/tailscale) | Lets Claude query and modify your tailnet through the Tailscale API. |
 | [hud](plugins/hud) | One line above the prompt (context, 5-hour and 7-day limits against the clock, the prompt cache, the subagents running) and suggested next prompts you can pick, in order, into one draft. |
 
@@ -21,6 +22,7 @@ Inside Claude Code, add the marketplace and install the plugin:
 /plugin install branch-guard@spider-marketplace
 /plugin install chatgpt@spider-marketplace
 /plugin install codex-computer-use@spider-marketplace
+/plugin install codex-team@spider-marketplace
 /plugin install tailscale@spider-marketplace
 /plugin install hud@spider-marketplace
 ```
@@ -102,6 +104,20 @@ It copies the helper to `~/.claude/mcp/codex-cu` (keeping `state/`, where the ap
 
 Limitations: ownership is checked for apps named as string literals in `cua.getApp(...)` and for the app each result reports, so an app reached through a variable is owned only after its first call; Codex refuses an action when the app changed since it was last read ("The user changed …"), so read and act in the same call.
 
+## codex-team
+
+Lets Claude lead Codex agents. Each job runs [Codex](https://github.com/openai/codex) in its own [Herdr](https://herdr.dev) pane, split beside Claude Code, so you can watch it and answer it when it asks; Claude gets a job id at once and a message when the job ends, with the path of its report. It needs Claude Code running in a Herdr pane (`HERDR_ENV=1`) and `herdr` and `codex` in `PATH`; `/codex-team-doctor` checks them. The plugin adds a section to Claude's system prompt so it delegates well-bounded work on its own.
+
+| Entry | What it does |
+| --- | --- |
+| `mcp__codex-team__execute` | Tool for Claude: `task` (required, self-contained) and `files` (where Codex should start). Codex runs with `workspace-write` in the current directory and never commits. One `execute` runs at a time; the next ones wait in a queue. |
+| `mcp__codex-team__review` | Tool for Claude: `target` (a branch or commit; the uncommitted diff when empty) and `focus`. Codex reads and does not edit. Reviews run in parallel. |
+| `mcp__codex-team__jobs` | Tool for Claude: lists the jobs of the session, shows one with `id`, or cancels it with `action: "cancel"` (sends `ctrl+c`; the pane stays open). |
+| `/codex-team` | Lists the jobs and any `ct-*` agents left in panes by a reload. |
+| `/codex-team-doctor` | Checks that Herdr and Codex are in place. |
+
+The band above the prompt shows one row per active job (status, time elapsed and pane). A job that is `blocked` is waiting for you in its pane. A job has 30 minutes to finish. The reports are saved in a `codex-team` folder of `$TMPDIR`. Jobs live in the session: a reload forgets them and leaves their panes open.
+
 ## tailscale
 
 Registers two tools for Claude to talk to the Tailscale API (`https://api.tailscale.com/api/v2`), authenticated by the `TS_API_KEY` environment variable, which must be exported when Claude Code starts:
@@ -144,6 +160,8 @@ claude plugin test plugins/chatgpt
 claude plugin validate plugins/codex-computer-use
 claude plugin test plugins/codex-computer-use
 /Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node --test plugins/codex-computer-use/helper/test/helper.test.mjs
+claude plugin validate plugins/codex-team
+claude plugin test plugins/codex-team
 claude plugin validate plugins/tailscale
 claude plugin test plugins/tailscale
 ```

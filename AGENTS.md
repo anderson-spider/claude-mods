@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Claude Code plugin marketplace (`anderson-spider/spider-marketplace`). It currently has five plugins: `branch-guard` (holds commit and push on the protected branch), `chatgpt` (asks the user's ChatGPT, or has it generate an image, in terminal-browser), `codex-computer-use` (routes native Mac app control through Codex computer use, with a local helper), `tailscale` (tools to query and modify the tailnet) and `hud` (a usage line above the prompt, and suggested next prompts). The README and other documentation are in English; code comments and user-facing messages are in English too. Pull request titles and descriptions are in English.
+Claude Code plugin marketplace (`anderson-spider/spider-marketplace`). It currently has six plugins: `branch-guard` (holds commit and push on the protected branch), `chatgpt` (asks the user's ChatGPT, or has it generate an image, in terminal-browser), `codex-computer-use` (routes native Mac app control through Codex computer use, with a local helper), `codex-team` (lets Claude lead Codex agents in Herdr panes as background jobs), `tailscale` (tools to query and modify the tailnet) and `hud` (a usage line above the prompt, and suggested next prompts). The README and other documentation are in English; code comments and user-facing messages are in English too. Pull request titles and descriptions are in English.
 
 ## Structure
 
@@ -17,6 +17,7 @@ claude plugin test plugins/branch-guard        # runs tests/branch-guard.test.ts
 claude plugin test plugins/chatgpt             # same, for chatgpt
 claude plugin test plugins/codex-computer-use  # same, for codex-computer-use (the plugin side)
 /Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node --test plugins/codex-computer-use/helper/test/helper.test.mjs   # its helper
+claude plugin test plugins/codex-team          # same, for codex-team
 claude plugin test plugins/tailscale           # same, for tailscale
 claude plugin test plugins/hud # same, for hud
 claude --plugin-dir plugins/branch-guard       # loads the plugin with automatic reload
@@ -65,6 +66,23 @@ Holds nothing: it registers the `ask`, `image` and `jobs` tools (listed as `mcp_
 
 - The selectors follow chatgpt.com as of 2026-10: answers under `[data-markdown-text-style]`, the composer `.ProseMirror[contenteditable=true]`, the send button by `aria-label` (`Enviar`/`Send`), the stop button by `aria-label` (`Parar`/`Stop`), the model menu button by `aria-label` (`Selecionar modelo do ChatGPT`), the file inputs `input[type=file][accept="image/*"]` and the one with no `accept`, code blocks as `[data-markdown-copy=code-block]` (an editor with `data-language` and one div per line, or a `code` element with the language only in the header), inline code as `[data-markdown-copy=inline-code]`. When the UI changes, run `/chatgpt-doctor`, fix the scripts in `hooks/chatgpt.ts` and check them in the browser (`terminal-browser action -- eval`) before trusting the tests, which only cover the flow.
 - A generated image is told from an attached reference by its alt text (`gerad`/`generated`) and a width over 500; the reference's preview in the composer carries its file name.
+
+## codex-team
+
+Registers the `execute`, `review` and `jobs` tools (`mcp__codex-team__<name>`; inputs declared in `types/index.d.ts` for the matchers, kept in step with the `inputSchema`) and the `/codex-team` and `/codex-team-doctor` commands in `session.start`. A `prompt.compose` hook adds the `codex-team:lead` section (`PROMPT` in `hooks/team.ts`). Three files:
+
+- `hooks/team.ts`: pure. `requestOf` reads a tool input, `buildPrompt` writes the prompt (the rules, and the report path `$TMPDIR/codex-team/<id>.md`), `codexArgs` picks the sandbox (`workspace-write` for execute, `read-only` for review, `-a on-request`), `runJob` is the lifecycle against an injected `Herdr` and never rejects (an error becomes `failed`), `createBook` holds the session's jobs (ids, the execute queue, `cancel`), and `jobsReport`, `bandRows` and `doctorReport` draw text.
+- `hooks/herdr.ts`: the `Herdr` over the `herdr` CLI through `$.process.run` (`pane split`, `agent start`/`prompt`/`wait`/`read`/`send-keys`/`list`). A prompt goes as one argv element, never through a shell. `herdrAvailable` says why the plugin cannot run (`HERDR_ENV` is not 1, or no `herdr`).
+- `hooks/register.tsx`: wires the host. The tool handlers end in `.catch(failure)`, so a call never rejects; the job lives in the module's `book` (lost on a reload, `orphans` lists the `ct-*` agents it left), and `publish` copies it to `$.state` (`codex-team`/`jobs`) for the band in `AbovePrompt`, ticking once a second while a job is active. `notifier` toasts when a job blocks and, at the end, sends the report path as a new turn with `$.prompt.submit`.
+
+Details that only make sense when reading both sides:
+
+- Jobs run long after the hook that started them returned, so `$` is only passed on, never stored; `start` answers a job id at once.
+- Every wait runs in chunks under 10 minutes (`WAIT_CHUNK_MS`), because `$.process.run` kills a child after that; a chunk's `timeout` carries on with `wait`, and the job limit is 30 minutes (`JOB_LIMIT_MS`). A timeout does not stop Codex.
+- `execute` jobs take turns in `taskQueue` (they share the working directory); `review` jobs start at once. A `blocked` agent waits for the person in its pane: `whileBlocked` notifies once per episode.
+- `agent_prompt_stalled` fails the job and never sends the prompt again; a cancelled job keeps its pane open.
+- `CHROME_ROWS` in `register.tsx` must follow the band's fixed rows (border, title and the `and N more` line).
+- The validator warns `gating hook without .catch` on every `tool.call` hook, here as in tailscale and chatgpt; it is informational.
 
 ## tailscale
 
