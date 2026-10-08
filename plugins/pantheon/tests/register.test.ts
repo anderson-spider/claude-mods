@@ -21,11 +21,17 @@ const stepResult = {
   usage: { model: 'model-1', input_tokens: 10, cache_read_input_tokens: 2, cache_creation_input_tokens: 3, output_tokens: 4 },
 }
 const streamChunk = { kind: 'text' as const, index: 0, text: 'streaming' }
-function trackingWorld(on: On, slowNativeWrite = false, opts: { chunk?: boolean; slowMs?: number } = {}) {
+function trackingWorld(on: On, slowNativeWrite = false, opts: {
+  chunk?: boolean; slowMs?: number
+  /** While it returns a promise, every natives write waits for it. */
+  hold?: () => Promise<void> | undefined
+} = {}) {
   const fixture = world(on)
+  const forwarded: string[] = []
   on('agent.spawn', async () => ({ model: 'model-1', agentId: 'native-1' }))
   on('turn.start', async (_$, e) => ({ turnId: e.turnId }))
   on('turn.step', async function* (_$, e) {
+    forwarded.push(e.turnId)
     if (opts.chunk) {
       yield streamChunk
       // The response takes time to finish streaming.
@@ -43,6 +49,7 @@ function trackingWorld(on: On, slowNativeWrite = false, opts: { chunk?: boolean;
     const steps = e.key === 'natives' ? (e.value as Native[])[0]?.steps ?? 0 : undefined
     // Only the first write of one step is slow: the next steps' writes then wait behind it.
     if (slowNativeWrite && steps === 1 && !slowed) { slowed = true; await fixture.clock.sleep(10) }
+    if (steps !== undefined) await opts.hold?.()
     const result = await next(e)
     if (result.value.isSet) {
       stored[e.key] = e.value
@@ -53,7 +60,7 @@ function trackingWorld(on: On, slowNativeWrite = false, opts: { chunk?: boolean;
   on('command.run', { command: 'tracking-state' }, async (_$, e) => {
     return { text: JSON.stringify(stored[e.args] ?? null) }
   })
-  return { ...fixture, writes }
+  return { ...fixture, writes, forwarded }
 }
 async function nativesOf($: Engine): Promise<Native[]> {
   return JSON.parse((await $.command.run({ command: 'tracking-state', args: 'natives' })).text ?? 'null') ?? []
@@ -216,6 +223,37 @@ describe('register', () => {
     expect(after.rounds.length).toBe(2)
     expect(after.steps).toBe(2)
     expect(after.out).toBe(8)
+  })
+
+  test('a held natives write never holds the step: it is forwarded and streams before the write lands', async ($, on) => {
+    let gate: Promise<void> | undefined
+    let release!: () => void
+    const { forwarded } = trackingWorld(on, false, { chunk: true, hold: () => gate })
+    await start($)
+    await $.agent.spawn(spawnInput)
+    await step($)
+    await $.turn.complete({ ...completeInput, agentId: 'native-1' })
+    gate = new Promise<void>(resolve => { release = resolve })
+    const stream = $.turn.step({ ...stepInput(0), turnId: 'turn-2' })
+    let arrived = false
+    const first = stream.next().then(item => { arrived = true; return item })
+    // Let everything not waiting on the held write run.
+    for (let k = 0; k < 20; k++) await Promise.resolve()
+    await new Promise(resolve => setTimeout(resolve, 20))
+    expect(forwarded).toEqual(['turn-1', 'turn-2'])
+    expect(arrived).toBe(true)
+    expect((await first).value).toEqual(streamChunk)
+    // Nothing of turn-2 is persisted while the write is held.
+    expect((await nativesOf($))[0].rounds.map(round => round.status)).toEqual(['done'])
+    gate = undefined
+    release()
+    const end = await stream.next()
+    expect(end.done).toBe(true)
+    expect(end.value).toEqual({ ...stepResult, turnId: 'turn-2', index: 0 })
+    const [native] = await nativesOf($)
+    expect(native.rounds.map(round => round.status)).toEqual(['done', 'running'])
+    expect(native.rounds[1].turnId).toBe('turn-2')
+    expect(native.steps).toBe(2)
   })
 
   test('queued writes land in order for three concurrent steps', async ($, on) => {

@@ -378,13 +378,14 @@ export const register: Register = on => {
       now: () => $.clock.now(),
     }
     // A native's round opens before its response streams, so a continuation reads running while
-    // it works; the step and its usage are counted once the response is in.
+    // it works; the step and its usage are counted once the response is in. The snapshot is queued,
+    // never awaited: a slow write must not hold the step.
     if (e.agentId) {
       try {
         await ensureTracking(io)
-        natives = roundOpened(natives!, { id: e.agentId, turnId: e.turnId, now: await io.now() })
+        const now = await io.now()
+        natives = roundOpened(natives!, { id: e.agentId, turnId: e.turnId, now })
         nativesQueue.push(natives)
-        await nativesQueue.flushed()
       } catch { /* Tracking never changes the stream. */ }
     }
     const result = yield* next(e)
