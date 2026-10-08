@@ -144,7 +144,7 @@ const act = async (path, body, threads) => {
 }
 
 /** The request handler for the helper's socket server; `threads` is a Threads. */
-export const handler = ({ threads, log = () => {} }) => async (request, response) => {
+export const handler = ({ threads, log = () => {}, version = '' }) => async (request, response) => {
   const reply = (status, body) => {
     if (response.headersSent) {
       return
@@ -162,7 +162,7 @@ export const handler = ({ threads, log = () => {} }) => async (request, response
         return reply(405, { status: 'error', message: 'GET only' })
       }
 
-      return reply(200, { status: 'ok', pid: process.pid, threads: threads.list() })
+      return reply(200, { status: 'ok', pid: process.pid, version, threads: threads.list() })
     }
 
     if (!ACTIONS.has(pathname)) {

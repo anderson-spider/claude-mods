@@ -130,6 +130,8 @@ const SENT = { plugin: "threads", key: "sent" };
 const WAKES = { plugin: "threads", key: "wakes" };
 const LEAD = { plugin: "threads", key: "lead" };
 const WATCH_MS = 4000;
+// An idle thread with no transcript yet has not started its first turn; after this long it is taken as finished without one.
+const FIRST_TURN_MS = 60000;
 const AUTOWAKE_KEY = "autowake";
 
 const EMPTY_VIEW = { threads: [], plans: [], selfId: "", leadTitle: "", refreshedAt: 0, cap: DEFAULT_CAP };
@@ -877,7 +879,7 @@ async function registerTools($) {
       "which the user can watch (/threads) and you can steer and monitor. Use it when the user asks to spin up, start, or create " +
       "a thread, worker or session on a model (\"spin up a Haiku thread to triage the inbox\"). One call per thread. " +
       "By default the thread sends you a short report when it finishes or gets stuck; it reaches you as a cross-session message. " +
-      "Models: haiku, sonnet, opus, fable, or a full claude-* id. Session threads run with bypassed permissions by default (they never stop for approval); pass permission_mode to change one, or /threads mode for all.",
+      "Models: haiku, sonnet, opus, fable, or a full claude-* id. Session threads start in the chat's default permission mode (default, unless /threads mode or the defaultPermissionMode setting says otherwise); pass permission_mode to change one, or /threads mode for all.",
     inputSchema: {
       type: "object",
       properties: {
@@ -936,7 +938,8 @@ async function registerTools($) {
     name: T_WAIT,
     description:
       "Wait for threads and return what changed plus their latest output. until idle (default) waits until every named " +
-      "thread has finished its turn or needs the user; any_change returns at the first status or output change; needs_you " +
+      "thread has finished its turn or needs the user, so it also returns at once while a thread waits for an approval; to " +
+      "wait for that approval to be answered use any_change, which returns at the first status or output change; needs_you " +
       "returns when one needs the user. Polls every 3 seconds, at most timeout_s (default 300, max 600).",
     inputSchema: {
       type: "object",
@@ -1313,12 +1316,18 @@ async function probePanes($) {
   return { panes: new Map(), failed: !/no server running|error connecting to|no sessions/i.test(r.stderr) };
 }
 
-// A failed probe is believed on its second miss in a row (the ticker refreshes every couple of
-// seconds), so one aborted or timed-out call never marks a live thread exited.
+// A failed probe is believed only once it has kept failing for MISS_WINDOW_MS, so an aborted or
+// timed-out call (and the several refreshes that can land in the same moment) never marks a live
+// thread exited. probeMisses holds when the current run of failures began (0: none).
+const MISS_WINDOW_MS = 6000;
 const probeMisses = { panes: 0, codex: 0 };
-function trustMiss(kind, failed) {
-  probeMisses[kind] = failed ? probeMisses[kind] + 1 : 0;
-  return failed && probeMisses[kind] < 2;
+function trustMiss(kind, failed, now) {
+  if (!failed) {
+    probeMisses[kind] = 0;
+    return false;
+  }
+  if (probeMisses[kind] === 0) probeMisses[kind] = now;
+  return now - probeMisses[kind] < MISS_WINDOW_MS;
 }
 
 async function capture($, name, joined) {
@@ -1407,7 +1416,8 @@ async function doRefresh($) {
   const desk = await desktopUsers($, p);
   const probed = await probePanes($);
   const panes = probed.panes;
-  const keepPanes = trustMiss("panes", probed.failed);
+  const probeAt = await $.clock.now();
+  const keepPanes = trustMiss("panes", probed.failed, probeAt);
   const sessions = await scanSessions($, p);
   const lead = await leadInfo($, p, sessions);
   const ours = reg.threads.map((t) => sessions.get(t.sessionId)).filter(Boolean);
@@ -1434,7 +1444,7 @@ async function doRefresh($) {
   const liveLeads = new Set([...sessions.values()].filter((x) => !leadPids || leadPids.has(x.pid)).map((x) => x.sessionId));
   // Codex threads: one GET /status for all of them, and only when one is not closed
   const codexSnap = reg.threads.some((t) => t.backend === "codex" && t.status !== "closed") ? await codexSnapshot($, p) : { reachable: false, failed: false, byId: new Map() };
-  const keepCodex = trustMiss("codex", codexSnap.failed === true);
+  const keepCodex = trustMiss("codex", codexSnap.failed === true, probeAt);
   const reports = [];
   let inlineMapChanged = false;
   const nextMap = { ...inlineMap };
@@ -1678,9 +1688,33 @@ async function codexLive($, p) {
   return (await codexCall($, p, "/status")).ok;
 }
 
+// The version in this plugin's manifest; empty when it cannot be read.
+async function pluginVersion($) {
+  try {
+    return String(JSON.parse(await $.fs.read(`${$.plugin.root}/.claude-plugin/plugin.json`)).version ?? "");
+  } catch {
+    return "";
+  }
+}
+
+// A helper outlives plugin updates and reloads, so it can run older code than the plugin. It is
+// stopped (SIGTERM, which it handles) only when it tracks no thread, because a restart makes every
+// thread it tracks show exited. Returns true when it was stopped and a new one should start.
+async function replaceOutdatedHelper($, p) {
+  const want = await pluginVersion($);
+  if (!want) return false;
+  const r = await codexCall($, p, "/status");
+  if (!r.ok || r.body.version === want) return false;
+  if ((r.body.threads ?? []).length > 0 || !Number.isInteger(r.body.pid)) return false;
+  await run($, ["kill", String(r.body.pid)], 3000);
+  for (let i = 0; i < 10 && (await codexLive($, p)); i++) await run($, ["sleep", "0.3"], 3000);
+  await logEvent($, p, "helper-replaced", { from: r.body.version || "unknown", to: want });
+  return true;
+}
+
 // The helper starts on demand. Its socket shows it is up; a second start exits by itself, so a race is harmless.
 async function ensureHelper($, p) {
-  if (await codexLive($, p)) return { ok: true };
+  if ((await codexLive($, p)) && !(await replaceOutdatedHelper($, p))) return { ok: true };
   const node = (await $.fs.exists(CUA_NODE)) ? CUA_NODE : "node";
   // the plugin folder (where helper/ lives) is the host's $.plugin.root
   await run($, startHelperArgv($.plugin.root, node), 10000);
@@ -1699,7 +1733,7 @@ async function codexRead($, t) {
 
 async function codexLines($, t, n) {
   const r = await codexRead($, t);
-  if (!r) return ["(the Codex helper is not running)"];
+  if (!r) return [t.status === "exited" ? "(the Codex helper is not running)" : "(the Codex helper did not answer just now; this is the last known state)"];
   return codexActivity(r.activity).slice(-n).map(activityLine);
 }
 
@@ -2461,10 +2495,10 @@ async function closeThread($, t, opts = {}) {
       return `${shortTitle(t.title)} (${t.id}) is still running. ${ASK_IN_CHAT}`;
     }
   }
-  return closeNow($, t);
+  return closeNow($, t, from);
 }
 
-async function closeNow($, t) {
+async function closeNow($, t, by = "tool") {
   const p = await paths($);
   if (t.backend === "inline") {
     let note = "";
@@ -2475,7 +2509,7 @@ async function closeNow($, t) {
     }
     const now = await $.clock.now();
     await patchThread($, p, t.id, { status: "closed", closedAt: now });
-    await logEvent($, p, "closed", { id: t.id, backend: "inline", previous: t.status });
+    await logEvent($, p, "closed", { id: t.id, backend: "inline", previous: t.status, by });
     await releaseDesktop($, p, t);
     const tree = await finishWorktree($, p, t);
     await refresh($, { force: true });
@@ -2484,14 +2518,14 @@ async function closeNow($, t) {
   if (t.backend === "codex") {
     const note = await closeCodex($, p, t);
     await patchThread($, p, t.id, { status: "closed", closedAt: await $.clock.now() });
-    await logEvent($, p, "closed", { id: t.id, backend: "codex", previous: t.status });
+    await logEvent($, p, "closed", { id: t.id, backend: "codex", previous: t.status, by });
     await refresh($, { force: true });
     return `Closed ${shortTitle(t.title)} (${t.id}).${note} Continue it in Codex with: ${resumeCommand(t)}`;
   }
   await run($, tmuxArgv("kill-session", "-t", t.tmux), 5000);
   const now = await $.clock.now();
   await patchThread($, p, t.id, { status: "closed", closedAt: now });
-  await logEvent($, p, "closed", { id: t.id, previous: t.status });
+  await logEvent($, p, "closed", { id: t.id, previous: t.status, by });
   await releaseDesktop($, p, t);
   const tree = await finishWorktree($, p, t);
   await refresh($, { force: true });
@@ -2504,7 +2538,7 @@ async function armPaneClose($, t) {
   const { value: ui = EMPTY_UI } = await $.state.get(UI);
   if (ui.armedClose?.id === t.id && now - (ui.armedClose.at ?? 0) < 10000) {
     await patchUi($, (u) => ({ ...u, armedClose: null }));
-    return closeNow($, t);
+    return closeNow($, t, "pane");
   }
   await patchUi($, (u) => ({ ...u, armedClose: { id: t.id, at: now } }));
   return `Press Close again within 10 seconds to close ${shortTitle(t.title)}.`;
@@ -3227,6 +3261,19 @@ async function runSetup($, opts = {}) {
       ? `loaded from a hot-reload folder (${root}); edits apply on save`
       : `loaded from a folder (${root || "unknown"}), as with --plugin-dir`;
   checks.push({ name: "How the mod is loaded", ok: true, detail: how });
+  if (await codexLive($, p)) {
+    const want = await pluginVersion($);
+    const r = await codexCall($, p, "/status");
+    const running = r.ok ? r.body.version || "an older version" : "";
+    if (running && want && running !== want) {
+      const tracked = (r.body.threads ?? []).length;
+      checks.push({
+        name: "Codex helper version",
+        ok: true,
+        detail: `running ${running}, the plugin is ${want}. ${tracked ? `It tracks ${tracked} thread${tracked === 1 ? "" : "s"}, so it keeps running until they are closed; the next Codex thread then starts the new one.` : "The next Codex thread replaces it."}`,
+      });
+    }
+  }
 
   const filled = await backfillPlanHistory($);
   if (filled) checks.push({ name: "Plan history", ok: true, detail: `wrote records for ${filled} older plan${filled === 1 ? "" : "s"} (backfilled)` });
@@ -3706,6 +3753,7 @@ async function waitForThreads($, args, signal) {
       break;
     }
     const rows = pick(view);
+    const nowMs = await $.clock.now();
     for (const t of rows) idleSeen.set(t.id, t.status === "idle" ? (idleSeen.get(t.id) ?? 0) + 1 : 0);
     const changed = rows.filter((t) => {
       const b = base.get(t.id);
@@ -3715,7 +3763,7 @@ async function waitForThreads($, args, signal) {
     const isDone = (t) =>
       !LIVE.has(t.status) ||
       ATTENTION.has(t.status) ||
-      (t.status === "idle" && t.lastKind !== "" && t.lastKind !== "user" && t.lastKind !== "message" && (idleSeen.get(t.id) ?? 0) >= 1);
+      (t.status === "idle" && t.lastKind !== "user" && t.lastKind !== "message" && (idleSeen.get(t.id) ?? 0) >= 1 && (t.lastKind !== "" || nowMs - (t.createdAt ?? nowMs) > FIRST_TURN_MS));
     if (until === "any_change" && changed.length > 0) {
       reason = "Something changed.";
       break;
@@ -3853,7 +3901,7 @@ const HELP = [
   "/threads autowake on|off          start a turn here when a thread finishes (default off: the report waits for your next turn)",
   "",
   "Models: haiku, sonnet, opus, fable or a full claude-* id. Session threads need a trusted folder and the terminal login (claude auth status).",
-  "Session threads run with bypassed permissions by default (they never stop to ask); /threads mode changes that. Inline threads use this chat's own mode.",
+  "Session threads start in the default permission mode (they ask before risky actions) unless /threads mode or the defaultPermissionMode setting changes it. Inline threads use this chat's own mode.",
   "Or ask in plain English, e.g. spin up a Haiku thread to triage the inbox.",
 ].join("\n");
 

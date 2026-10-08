@@ -25,7 +25,12 @@ A thread can be a Codex session instead of a Claude one: `/threads new codex Sco
 - Approvals: Codex asks through the helper, and the request shows in the pane with Approve and Deny (or `/threads approve|deny <id>`). Each one asks you to confirm first; accepting or declining is the only answer the plugin gives. Requests the helper cannot answer (user input, MCP elicitation) are refused.
 - Not supported: fork, handoff, worktrees, plan phases, switching model or effort, a cost estimate, and a terminal pane (`/threads open` shows the resume command instead). `--inline` and `--session` cannot be combined with `--codex`, and `--worktree` is refused.
 - Closing stops tracking the thread and interrupts a running turn first. The Codex transcript stays: continue it with `codex resume <id>`.
+- Version: the helper reports the plugin version it was started from in `/status`. A helper that outlives a plugin update is replaced on the next Codex thread, but only when it tracks no thread (a restart makes every tracked thread show exited); `/threads setup` says when one is older and why it is still running.
 - Limits: the helper keeps the threads in memory. When it restarts, its Codex threads show as exited (with the reason); their transcripts remain in Codex.
+
+## Status checks
+
+A thread counts as exited only after tmux (or the Codex helper) has stayed silent for a few seconds; a single failed or aborted probe, such as an interrupted `threads_wait`, keeps the last known status. `threads_wait` with `until: idle` also returns while a thread waits for an approval (use `any_change` to wait for the answer), and stops waiting on a thread that is idle with no transcript a minute after it was created. The registry's `closed` events record who closed the thread (`by`: tool, command or pane).
 
 ## Permissions
 

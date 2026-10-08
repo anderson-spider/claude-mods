@@ -204,10 +204,11 @@ function sendKeys(w: World) {
 
 // The threads helper beneath the plugin: the same routes and replies as helper/lib/http.mjs, on a
 // state the test sets. A helper that is not running refuses the connection, as a missing socket does.
+const PLUGIN_VERSION = "9.9.9";
 const CODEX_SOCK = `${HOME}/.claude/threads-codex/run/helper.sock`;
 type CodexThread = { threadId: string; cwd: string; model: string | null; effort: string | null; status: string; lastAnswer: { text: string; at: number } | null; pendingApproval: { method: string; params: any; at: number } | null; error: string | null; queued: boolean; activity: Array<{ at: number; kind: string; text: string }> };
-type CodexFake = { running: boolean; starts: number; nextId: number; startError?: string; threads: Map<string, CodexThread>; calls: Array<{ route: string; body: any }>; decisions: string[] };
-const codexFake = (): CodexFake => ({ running: false, starts: 0, nextId: 0, threads: new Map(), calls: [], decisions: [] });
+type CodexFake = { version?: string; running: boolean; starts: number; nextId: number; startError?: string; threads: Map<string, CodexThread>; calls: Array<{ route: string; body: any }>; decisions: string[] };
+const codexFake = (): CodexFake => ({ version: PLUGIN_VERSION, running: false, starts: 0, nextId: 0, threads: new Map(), calls: [], decisions: [] });
 
 function codexFetch(w: World, e: any) {
   const c = w.codex!;
@@ -218,7 +219,7 @@ function codexFetch(w: World, e: any) {
   const reply = (status: number, json: object) => ({ value: { status, ok: status < 300, headers: {}, text: JSON.stringify(json) } });
   const fail = (status: number, code: string | undefined, message: string) => reply(status, { status: "error", ...(code ? { code } : {}), message });
   const seen = (t: CodexThread) => ({ threadId: t.threadId, cwd: t.cwd, model: t.model, effort: t.effort, status: t.status, lastAnswer: t.lastAnswer, pendingApproval: t.pendingApproval, error: t.error, queued: t.queued });
-  if (route === "/status") return reply(200, { status: "ok", pid: 1, threads: [...c.threads.values()].map(seen) });
+  if (route === "/status") return reply(200, { status: "ok", pid: 4242, ...(c.version === undefined ? {} : { version: c.version }), threads: [...c.threads.values()].map(seen) });
   if (route === "/start") {
     if (c.startError) return fail(502, undefined, c.startError);
     const threadId = `th-${++c.nextId}`;
@@ -308,6 +309,8 @@ function engine(on: any, w: World) {
     return { isDelivered: true };
   });
   on("fs.read", ($: any, e: any) => {
+    // the plugin's own manifest: the version the helper is compared with
+    if (!w.fs.has(e.path) && String(e.path).endsWith("/.claude-plugin/plugin.json")) return { value: JSON.stringify({ name: "threads", version: PLUGIN_VERSION }) };
     if (!w.fs.has(e.path)) throw new Error(`ENOENT ${e.path}`);
     return { value: w.fs.get(e.path) };
   });
@@ -407,6 +410,14 @@ function engine(on: any, w: World) {
     const ok = (stdout = "") => ({ value: { exitCode: 0, stdout, stderr: "", isStdoutTruncated: false, isStderrTruncated: false } });
     const fail = (stderr = "no", code = 1, stdout = "") => ({ value: { exitCode: code, stdout, stderr, isStdoutTruncated: false, isStderrTruncated: false } });
     const [cmd] = argv;
+    if (cmd === "kill" && w.codex) {
+      // the helper stops and takes its threads with it; the next one ships with the plugin's version
+      w.codex.running = false;
+      w.codex.threads.clear();
+      w.codex.version = PLUGIN_VERSION;
+      w.fs.delete(CODEX_SOCK);
+      return ok();
+    }
     if (cmd === "sh") {
       // the detached helper: it serves on its socket from now on
       if (w.codex && String(argv[2]).includes("helper/helper.mjs")) {
@@ -959,7 +970,7 @@ describe("threads: reports and monitoring", () => {
     expect(created(w, "Haiku scout").verifiedModel).toBe("claude-haiku-4-5-20251001");
   });
 
-  test("a tmux call that fails once does not mark session threads exited; two in a row do", async ($, on) => {
+  test("a tmux call that fails does not mark session threads exited until it has kept failing for a few seconds", async ($, on) => {
     const w = fresh();
     await boot($, on, w);
     await threads($, "new haiku Haiku scout -- list the files");
@@ -972,6 +983,8 @@ describe("threads: reports and monitoring", () => {
     expect(created(w, "Haiku scout").status).toBe(before);
     w.tmuxFailures = 99;
     await threads($, "refresh");
+    expect(created(w, "Haiku scout").status).toBe(before);
+    w.now += 7000;
     await threads($, "refresh");
     expect(created(w, "Haiku scout").status).toBe("exited");
   });
@@ -993,6 +1006,40 @@ describe("threads: reports and monitoring", () => {
     expect(r.result).toMatch(/^Every thread is done or needs you\./);
     expect(r.result).toMatch(/says  Found README\.md\./);
     expect(w.sleeps - sleepsBefore).toBe(3);
+  });
+
+  test("threads_wait rides out a probe that fails for a moment: no thread shows exited", async ($, on) => {
+    const w = fresh();
+    await boot($, on, w);
+    await threads($, "new haiku Haiku scout -- list the files");
+    const t = created(w, "Haiku scout");
+    const sleepsBefore = w.sleeps;
+    w.onSleep = (world, n) => {
+      world.now += 3000;
+      world.tmuxFailures = n === sleepsBefore + 1 ? 1 : 0;
+      if (n === sleepsBefore + 3) {
+        setSession(world, t.sessionId, { status: "idle" });
+        world.fs.set(transcriptPath(APP, t.sessionId), [userRow("list the files"), assistant("Found README.md.")].join("\n"));
+      }
+    };
+    const r: any = await $.tool.call({ tool: "mcp__threads__threads_wait", ids: [t.id], until: "idle", timeout_s: 60 } as any);
+    expect(r.result).toMatch(/^Every thread is done or needs you\./);
+    expect(r.result).not.toMatch(/\[exited\]/);
+    expect(events(w).filter((e: any) => e.type === "status" && e.to === "exited")).toEqual([]);
+  });
+
+  test("threads_wait stops waiting on a thread that is idle with no transcript after a minute", async ($, on) => {
+    const w = fresh();
+    await boot($, on, w);
+    await threads($, "new haiku Haiku scout -- list the files");
+    const t = created(w, "Haiku scout");
+    setSession(w, t.sessionId, { status: "idle" });
+    w.onSleep = (world) => {
+      world.now += 10000;
+    };
+    const r: any = await $.tool.call({ tool: "mcp__threads__threads_wait", ids: [t.id], until: "idle", timeout_s: 300 } as any);
+    expect(r.result).toMatch(/^Every thread is done or needs you\./);
+    expect(r.result).toMatch(/\[idle\]/);
   });
 
   test("threads_wait times out, and any_change returns at the first change", async ($, on) => {
@@ -2763,7 +2810,7 @@ describe("threads: Codex threads", () => {
     expect(await threads($, `send ${t.id} hello`)).toMatch(/is exited; nothing sent/);
   });
 
-  test("a helper that does not answer once keeps the thread's status; a second miss in a row marks it exited", async ($, on) => {
+  test("a helper that does not answer keeps the thread's status until it has stayed silent for a few seconds", async ($, on) => {
     const w = codexWorld();
     await boot($, on, w);
     await threads($, "new codex Blip --codex -- task");
@@ -2776,8 +2823,36 @@ describe("threads: Codex threads", () => {
     expect(created(w, "Blip").status).toBe(before);
     w.codex!.running = false;
     await threads($, "refresh");
+    expect(created(w, "Blip").status).toBe(before);
+    w.now += 7000;
     await threads($, "refresh");
     expect(created(w, "Blip")).toMatchObject({ status: "exited", codexError: "the Codex helper is not running, so this thread is no longer tracked" });
+  });
+
+  test("a helper older than the plugin is replaced when it tracks no thread, and kept while it does", async ($, on) => {
+    const w = codexWorld();
+    w.codex!.version = "0.0.1";
+    await boot($, on, w);
+    expect(await threads($, "new codex First --codex -- one")).toMatch(/^Created/);
+    expect(w.runs.filter((a) => a[0] === "kill")).toEqual([["kill", "4242"]]);
+    expect(w.runs.filter((a) => a[0] === "sh").length).toBe(1);
+    expect(events(w).map((e: any) => e.type)).toContain("helper-replaced");
+    // the new helper has the plugin's version and now tracks a thread: a second create leaves it alone
+    expect(await threads($, "new codex Second --codex -- two")).toMatch(/^Created/);
+    expect(w.runs.filter((a) => a[0] === "kill").length).toBe(1);
+    w.codex!.version = "0.0.1";
+    expect(await threads($, "new codex Third --codex -- three")).toMatch(/^Created/);
+    expect(w.runs.filter((a) => a[0] === "kill").length).toBe(1);
+    expect(await threads($, "setup")).toMatch(/Codex helper version: running 0\.0\.1, the plugin is 9\.9\.9\. It tracks \d+ threads?, so it keeps running/);
+  });
+
+  test("closing a thread records who closed it", async ($, on) => {
+    const w = codexWorld();
+    await boot($, on, w);
+    await threads($, "new codex Closer --codex -- task");
+    const t = created(w, "Closer");
+    await threads($, `close ${t.id}`);
+    expect(events(w).find((e: any) => e.type === "closed")).toMatchObject({ id: t.id, by: "command" });
   });
 
   test("a helper that restarted no longer tracks the thread: exited with that reason", async ($, on) => {
