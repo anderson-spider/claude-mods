@@ -1,5 +1,5 @@
 import type { Browser } from './model'
-import { type BrowserDeps, leadingJson, pageBrowser, scriptText } from './mcp-browser'
+import { type BrowserDeps, leadingJson, pageBrowser, scriptText, staysOnChatgpt } from './mcp-browser'
 
 export const CHROME = 'Claude in Chrome'
 export const CHROME_SERVER = 'claude-in-chrome'
@@ -14,6 +14,12 @@ const BLANK = /^(chrome:\/\/newtab\/?|about:blank)$/
 
 // What tabs_context_mcp prints: `tabGroupId` is absent (or null) when the MCP tab group does not exist yet.
 type Listing = { tabGroupId?: number | null; availableTabs?: { tabId: number; url?: string }[] }
+
+/** Whether the plugin's call to a Claude in Chrome tool stays on chatgpt.com; `tabId` is the plugin's tab, when it has one. */
+export function chromeStaysOnChatgpt(tool: string, input: unknown, tabId: string | undefined): boolean {
+  const own = tabId?.startsWith(PREFIX) ? tabId.slice(PREFIX.length) : undefined
+  return staysOnChatgpt(tool, input, ['tabs_context_mcp', 'tabs_create_mcp'], own)
+}
 
 /**
  * The Browser on Claude in Chrome's MCP tab group. It throws when Chrome cannot

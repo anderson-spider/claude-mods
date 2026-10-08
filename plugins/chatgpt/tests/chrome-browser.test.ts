@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { chromeBrowserOf } from '../hooks/chrome-browser'
+import { chromeBrowserOf, chromeStaysOnChatgpt } from '../hooks/chrome-browser'
 import { parseOutput } from '../hooks/scripts'
 import { fakeDeps, fakeMcp, withNote } from './mcp-helpers'
 
@@ -165,4 +165,12 @@ test('upload fails when no input matched the selector', async () => {
   const browser = await chromeBrowserOf(fakeDeps(call).deps)
   const error = await browser.upload('chrome:1', 'input[type=file]', [{ name: 'ref.png', type: 'image/png', path: '/x/ref.png' }]).catch(e => e)
   expect(String(error)).toContain('could not attach ref.png: no input matched input[type=file]')
+})
+
+test('chromeStaysOnChatgpt allows a script only in the plugin tab of this backend', () => {
+  const script = { action: 'javascript_exec', tabId: 7, text: '1' }
+  expect(chromeStaysOnChatgpt('tabs_context_mcp', {}, undefined)).toBe(true)
+  expect(chromeStaysOnChatgpt('javascript_tool', script, 'chrome:7')).toBe(true)
+  expect(chromeStaysOnChatgpt('javascript_tool', script, 'builtin:7')).toBe(false)
+  expect(chromeStaysOnChatgpt('javascript_tool', script, undefined)).toBe(false)
 })

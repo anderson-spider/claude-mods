@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { builtinBrowserOf } from '../hooks/builtin-browser'
+import { builtinBrowserOf, builtinStaysOnChatgpt } from '../hooks/builtin-browser'
 import { parseOutput } from '../hooks/scripts'
 import { fakeDeps, fakeMcp, withNote } from './mcp-helpers'
 
@@ -78,4 +78,12 @@ test('upload fails with the page reason when no input matched', async () => {
   expect(String(await browser.upload('builtin:seed', 'input[type=file]', [{ name: 'ref.png', type: 'image/png', path: '/x/ref.png' }]).catch(e => e))).toContain(
     'could not attach ref.png: no input matched input[type=file]',
   )
+})
+
+test('builtinStaysOnChatgpt allows a script only in the plugin tab of this backend', () => {
+  const script = { action: 'javascript_exec', tabId: 't1', text: '1' }
+  expect(builtinStaysOnChatgpt('tabs_context', {}, undefined)).toBe(true)
+  expect(builtinStaysOnChatgpt('javascript_tool', script, 'builtin:t1')).toBe(true)
+  expect(builtinStaysOnChatgpt('javascript_tool', script, 'chrome:1')).toBe(false)
+  expect(builtinStaysOnChatgpt('javascript_tool', script, undefined)).toBe(false)
 })
