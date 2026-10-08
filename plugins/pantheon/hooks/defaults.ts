@@ -7,11 +7,11 @@ export const DEFAULT_CONFIG: PantheonConfig = {
   foregroundMinutes: 5,
   disabledAgents: [],
   agents: {
-    explorer: { model: 'gpt-6-luna', sandbox: 'read-only' },
-    librarian: { model: 'gpt-6-luna', sandbox: 'read-only' },
-    fixer: { model: 'gpt-6-luna', sandbox: 'workspace-write' },
+    explorer: { model: 'gpt-6-luna', effort: 'high', sandbox: 'read-only' },
+    librarian: { model: 'gpt-6-luna', effort: 'high', sandbox: 'read-only' },
+    fixer: { model: 'gpt-6.1-sol', effort: 'high', sandbox: 'workspace-write' },
     oracle: { model: 'opus' },
-    designer: { model: 'inherit' },
+    designer: { model: 'sonnet' },
   },
   council: {
     seats: {

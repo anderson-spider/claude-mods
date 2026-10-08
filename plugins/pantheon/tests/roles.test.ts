@@ -139,7 +139,7 @@ describe('native agent specs', () => {
     expect(specs.find(spec => spec.name === 'oracle')).toEqual(expect.objectContaining({
       prompt: '<oracle>', model: 'opus', tools: ['Read', 'Grep', 'Glob'], description: expect.any(String),
     }))
-    expect(specs.find(spec => spec.name === 'designer')).toEqual(expect.objectContaining({ prompt: '<designer>', model: 'inherit' }))
+    expect(specs.find(spec => spec.name === 'designer')).toEqual(expect.objectContaining({ prompt: '<designer>', model: 'sonnet' }))
     expect(specs.find(spec => spec.name === 'designer')?.tools).toBeUndefined()
     expect(specs.find(spec => spec.name === 'councillor-beta')).toEqual(expect.objectContaining({
       prompt: '<councillor>', model: 'opus', tools: ['Read', 'Grep', 'Glob'],
