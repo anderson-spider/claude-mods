@@ -71,6 +71,7 @@ import {
   toolLine,
   DEFAULT_MODE,
   ANSWER_MAX,
+  clipAnswer,
   heldMatches,
   reportRow,
   shouldReport,
@@ -1628,7 +1629,7 @@ async function transcriptLines($, p, t, n) {
 
 // A thread's newest answer, whole (up to ANSWER_MAX), not a one-line snippet.
 async function latestAnswer($, p, t) {
-  if (t.backend === "codex") return clip((await codexRead($, t))?.lastAnswer?.text ?? t.lastReport?.text ?? "", ANSWER_MAX);
+  if (t.backend === "codex") return clipAnswer((await codexRead($, t))?.lastAnswer?.text ?? t.lastReport?.text ?? "");
   if (t.backend === "inline") {
     let rows = [];
     try {
@@ -1638,10 +1639,10 @@ async function latestAnswer($, p, t) {
     }
     const last = [...rows].reverse().find((m) => m.role === "assistant" && String(m.text ?? "").trim());
     const text = last ? String(last.text).trim() : t.lastReport?.text ?? "";
-    return clip(text, ANSWER_MAX);
+    return clipAnswer(text);
   }
   const parsed = parseTranscript(await transcriptTail($, p, t));
-  return clip(parsed.lastAnswer?.text ?? t.lastReport?.text ?? "", ANSWER_MAX);
+  return clipAnswer(parsed.lastAnswer?.text ?? t.lastReport?.text ?? "");
 }
 
 // The live activity feed of an inline thread (tool calls, model requests, answers), newest last.
@@ -2789,7 +2790,7 @@ async function deliverReport($, p, t, { answer, key, model, source, quiet = fals
     if (decision.reason === "the thread reported itself") await patchThread($, p, t.id, { appendedKey: key });
     return false;
   }
-  const text = clip(String(answer ?? "").trim(), ANSWER_MAX);
+  const text = clipAnswer(String(answer ?? "").trim());
   const patch = { lastReport: { at: now, text, source }, appendedKey: key };
   if (/^claude-/.test(model ?? "")) patch.verifiedModel = model;
   await patchThread($, p, t.id, patch);
@@ -3542,7 +3543,7 @@ async function runPlanActions($, p, plan, actions, opts) {
       await savePlan($, p, fresh);
       out.push(await sendToThread($, { ...t, isMine: true, handoffPath }, revisionPrompt(a.feedback, handoffPath, plan)));
     } else if (a.type === "ask-lead" && t) {
-      const report = clip(t.lastReport?.text ?? "", 1500);
+      const report = clipAnswer(t.lastReport?.text ?? "");
       const note = [
         `<plan gate: ${plan.title} (${plan.id}), phase ${phaseNumber(a.index)} ${ph.name} finished>`,
         `Thread: ${t.title} (${t.id}), model ${t.verifiedModel || t.requestedModel}`,
@@ -3727,7 +3728,7 @@ async function noteReport($, text) {
   }
   if (!t) return;
   const now = await $.clock.now();
-  const body = clip(stripTags(text), ANSWER_MAX);
+  const body = clipAnswer(stripTags(text));
   await patchThread($, p, t.id, { lastReport: { at: now, text: body, source: "peer" } });
   await logEvent($, p, "report-received", { id: t.id, text: clip(body, 500) });
   $.ui.toast(`${shortTitle(t.title)}: ${clip(body, 140)}`, { timeoutMs: 8000 });
@@ -3819,7 +3820,7 @@ export async function waitForThreads($, args, signal) {
     if (t.lastReport?.source === "peer" && t.lastReport.text && t.lastReport.text !== answer) out.push(`  message it sent the lead: ${t.lastReport.text}`);
     out.push(answer ? `  latest answer:\n${answer}` : "  latest answer: (none yet)");
   }
-  return clip(out.join("\n"), 16000);
+  return clip(out.join("\n"), ANSWER_MAX + 16000);
 }
 
 // ---- reading and listing --------------------------------------------------------------------------------------

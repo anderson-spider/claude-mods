@@ -627,6 +627,15 @@ export function clip(s, n) {
   return t.length <= n ? t : `${t.slice(0, Math.max(0, n - 1))}…`;
 }
 
+// An answer cut at ANSWER_MAX says how much was left out, so the lead knows it is not whole.
+// A stored report was already cut: its note is kept, not counted again.
+export function clipAnswer(s, n = ANSWER_MAX) {
+  const t = String(s ?? "");
+  const note = /\n\(\d+ more characters left out\)$/.exec(t);
+  if (t.length <= n || (note && note.index <= n)) return t;
+  return `${t.slice(0, n)}\n(${t.length - n} more characters left out)`;
+}
+
 export function shortPath(path, n) {
   let p = String(path ?? "").replace(/^\/Users\/[^/]+/, "~").replace(/^\/home\/[^/]+/, "~");
   if (p.length <= n) return p;
@@ -765,13 +774,13 @@ export function activityLine(it) {
 
 // ---- reports the lead model reads ------------------------------------------------------------
 
-export const ANSWER_MAX = 2000;
-export const REPORT_APPEND_MAX = 1500;
+// A thread's answer reaches the lead whole up to this many characters (about 15k tokens, under a tool result's budget).
+export const ANSWER_MAX = 60000;
 export const PEER_DEDUPE_MS = 60000;
 
-// The row appended for the lead's model when a thread finishes.
+// The row appended for the lead's model when a thread finishes; the caller has already cut the answer to ANSWER_MAX.
 export function reportRow({ title, id, model, answer }) {
-  const body = clip(String(answer ?? "").trim(), REPORT_APPEND_MAX);
+  const body = String(answer ?? "").trim();
   return {
     message: {
       type: "user",
