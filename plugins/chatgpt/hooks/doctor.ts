@@ -1,6 +1,9 @@
 import type { Browser, Check, TabHolder } from './model'
 import { CHATGPT_URL, ORIGIN, chatUrlError, findTab } from './browser'
-import { DOCTOR_SCRIPT, parseOutput } from './scripts'
+import { DOCTOR_SCRIPT, MODEL_READY, parseOutput } from './scripts'
+
+// How long the doctor gives the model menu to render after the composer; a page without it still gets its report.
+const MODEL_MS = 5_000
 
 type Doctor = {
   href: string
@@ -25,6 +28,7 @@ export async function diagnose(browser: Pick<Browser, 'tabs' | 'openTab' | 'js' 
   const invalid = chatUrl === undefined ? undefined : chatUrlError(chatUrl)
   if (invalid) return [{ name: 'chat link', ok: false, detail: invalid }]
   const tabId = await findTab(browser, chatUrl ?? CHATGPT_URL, tab)
+  await browser.waitFor(tabId, MODEL_READY, MODEL_MS)
   const page = parseOutput<Doctor>(await browser.js(tabId, DOCTOR_SCRIPT))
   const checks: Check[] = [
     { name: 'page', ok: page.href.startsWith(ORIGIN), detail: page.href },

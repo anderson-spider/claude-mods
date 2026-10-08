@@ -41,23 +41,32 @@ return JSON.stringify({
 })`
 }
 
-// Opens the model menu and clicks the entry whose label starts with `label`
-// (case and spacing ignored); answers the labels on offer when none does.
+// The model menu's button renders a moment after the composer, so whatever uses it waits for it first.
+export const MODEL_READY = `!!${MODEL_BUTTON}`
+
+// Opens the model menu and clicks the model whose name starts with `label`
+// (case and spacing ignored); answers the names on offer when none does. Only
+// the menu's model rows count (its effort controls are other items), and a
+// row's name is its first line of text, without the note under it.
 export function modelScript(label: string): string {
   return `
 const norm = t => (t || '').toLowerCase().replace(/\\s+/g, ' ').trim();
 const want = norm(${JSON.stringify(label)});
-const button = ${MODEL_BUTTON};
+let button = null;
+for (let i = 0; i < 20 && !button; i++) {
+  button = ${MODEL_BUTTON};
+  if (!button) await new Promise(r => setTimeout(r, 250));
+}
 if (!button) return JSON.stringify({ picked: false, reason: 'model menu not found', offered: [] }); else {
   button.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
   button.click();
   await new Promise(r => setTimeout(r, 800));
-  const items = [...document.querySelectorAll('[role=menuitem], [role=menuitemradio], [role=option]')].filter(i => norm(i.innerText));
-  const label = i => norm(i.innerText.split('\\n')[0]);
-  const item = items.find(i => label(i) === want) || items.find(i => label(i).startsWith(want));
+  const name = i => norm(i.querySelector('[data-menu-row-content] .truncate')?.textContent || (i.innerText || '').split('\\n')[0]);
+  const items = [...document.querySelectorAll('[role=menuitemradio], [role=option]')].filter(i => name(i));
+  const item = items.find(i => name(i) === want) || items.find(i => name(i).startsWith(want));
   if (item) item.click(); else document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
   await new Promise(r => setTimeout(r, 400));
-  return JSON.stringify(item ? { picked: true } : { picked: false, reason: 'no such entry', offered: items.map(label) });
+  return JSON.stringify(item ? { picked: true } : { picked: false, reason: 'no such entry', offered: items.map(name) });
 }`
 }
 
