@@ -92,17 +92,19 @@ function cacheBlock({ Text, Svg }, mode, state, compact = false) {
 
 // ---------- Limits: gauges ----------
 
-// Character bar of full blocks, the same in the terminal and the app: solid █ up to the share used; the gap with elapsed time shaded (▓ in the bar's color when ahead of time, ▒ grey as margin), ░ for the empty track.
+// Character bar of full blocks, the same in the terminal and the app: solid █ up to the share used; the gap with elapsed time shaded (▓ in the bar's color when ahead of time, ▒ grey as margin), ░ for the empty track. The pace cell, the last one the clock reaches, is underlined: it marks where the clock says you should be.
 function textGauge(Box, Text, g) {
   const used = Math.round((g.used / 100) * TEXT_CELLS);
   const time = g.elapsed === null ? used : Math.round((g.elapsed / 100) * TEXT_CELLS);
+  const pace = g.elapsed === null || time <= 0 ? -1 : Math.min(time, TEXT_CELLS) - 1;
   const color = TERM_TONES[g.tone];
   const cell = (i) => {
     const key = "c" + i;
-    if (i < Math.min(used, time)) return Text({ key, color, children: "█" });
-    if (i < used) return Text({ key, color, children: "▓" });
-    if (i < time) return Text({ key, color: TERM_MARGIN, children: "▒" });
-    return Text({ key, color: TERM_TRACK, children: "░" });
+    const mark = i === pace ? { underline: true } : {};
+    if (i < Math.min(used, time)) return Text({ key, color, children: "█", ...mark });
+    if (i < used) return Text({ key, color, children: "▓", ...mark });
+    if (i < time) return Text({ key, color: TERM_MARGIN, children: "▒", ...mark });
+    return Text({ key, color: TERM_TRACK, children: "░", ...mark });
   };
   // Cells side by side, without the block's spacing between them.
   return Box({ key: "bar", flexDirection: "row", children: Array.from({ length: TEXT_CELLS }, (_, i) => cell(i)) });
