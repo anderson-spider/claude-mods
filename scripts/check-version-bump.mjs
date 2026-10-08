@@ -28,7 +28,13 @@ for (const name of new Set(changed.filter(isCode).map(file => file.split('/')[1]
     continue // a new plugin has nothing to bump from
   }
 
-  const after = versionOf(git('show', `HEAD:${manifest}`))
+  let after
+
+  try {
+    after = versionOf(git('show', `HEAD:${manifest}`))
+  } catch {
+    continue // a removed plugin has nothing to bump to
+  }
 
   if (before === after) errors.push(`${name}: code changed but version is still ${after} (bump it in ${manifest})`)
 }
