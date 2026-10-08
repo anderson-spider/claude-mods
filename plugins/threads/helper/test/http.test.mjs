@@ -11,13 +11,13 @@ const CWD = '/tmp/project'
 const body = (task, extra = {}) => ({ cwd: CWD, task, sandbox: 'read-only', approval: 'on-request', ...extra })
 
 // A socket server over a Threads on the fake app-server, like the helper's.
-const serve = async () => {
+const serve = async (options = {}) => {
   const client = fakeClient()
   await client.start()
   const threads = new Threads({ client })
   threads.attach()
   const socket = join(temp(), 'helper.sock')
-  const server = createServer(handler({ threads }))
+  const server = createServer(handler({ threads, ...options }))
   await new Promise(resolve => server.listen(socket, resolve))
 
   const call = (method, path, payload) =>
@@ -133,5 +133,18 @@ test('unknown routes are 404, a wrong method is 405', async () => {
     assert.equal((await call('POST', '/status', {})).code, 405)
   } finally {
     close()
+  }
+})
+
+test('status carries the version the helper was started with, so the plugin can tell an outdated one', async () => {
+  const { call, close } = await serve({ version: '1.2.3' })
+
+  try {
+    const status = (await call('GET', '/status')).body
+
+    assert.equal(status.version, '1.2.3')
+    assert.equal(typeof status.pid, 'number')
+  } finally {
+    await close?.()
   }
 })

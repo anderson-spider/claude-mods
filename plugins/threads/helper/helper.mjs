@@ -2,11 +2,11 @@
 // The threads helper: one `codex app-server` child per user, served to the threads
 // plugin over a Unix socket in a directory only this user can enter. The helper
 // exits when the child does, so the next caller starts a fresh pair.
-import { appendFileSync, chmodSync, existsSync, mkdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { connect } from 'node:net'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { AppServerClient } from './lib/app-server-client.mjs'
@@ -19,6 +19,18 @@ const STATE = join(HOME, 'state')
 const SOCKET = join(RUN, 'helper.sock')
 const THREADS_FILE = join(STATE, 'threads.json')
 const LOG_FILE = join(STATE, 'helper.log')
+
+// The plugin version this helper ships with, so the plugin can tell an outdated helper that
+// survived an update. Empty when the manifest cannot be read.
+const versionOf = () => {
+  try {
+    const manifest = join(dirname(fileURLToPath(import.meta.url)), '..', '.claude-plugin', 'plugin.json')
+
+    return String(JSON.parse(readFileSync(manifest, 'utf8')).version ?? '')
+  } catch {
+    return ''
+  }
+}
 
 const log = message => {
   const line = `${new Date().toISOString()} ${message}\n`
@@ -87,7 +99,7 @@ const main = async () => {
     return
   }
 
-  server = createServer(handler({ threads, log }))
+  server = createServer(handler({ threads, log, version: versionOf() }))
   // A socket path over the Unix limit (about 104 bytes on macOS) fails here, not in the handler.
   server.on('error', error => {
     log(`could not listen on ${SOCKET}: ${error.message}`)
