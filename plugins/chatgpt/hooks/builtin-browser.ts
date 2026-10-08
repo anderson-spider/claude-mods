@@ -1,5 +1,5 @@
 import type { Browser } from './model'
-import { type BrowserDeps, leadingJson, pageBrowser, scriptText } from './mcp-browser'
+import { type BrowserDeps, leadingJson, pageBrowser, scriptText, staysOnChatgpt } from './mcp-browser'
 
 export const BUILTIN = "the Claude app's built-in browser"
 export const BUILTIN_SERVER = 'Claude_Browser'
@@ -8,6 +8,12 @@ export const BUILTIN_SERVER = 'Claude_Browser'
 const PREFIX = 'builtin:'
 
 const idOf = (id: string) => id.slice(PREFIX.length)
+
+/** Whether the plugin's call to a built-in browser tool stays on chatgpt.com; `tabId` is the plugin's tab, when it has one. */
+export function builtinStaysOnChatgpt(tool: string, input: unknown, tabId: string | undefined): boolean {
+  const own = tabId?.startsWith(PREFIX) ? tabId.slice(PREFIX.length) : undefined
+  return staysOnChatgpt(tool, input, ['tabs_context', 'tabs_create'], own)
+}
 
 /**
  * The Browser on the Claude desktop app's built-in browser pane. It keeps its own

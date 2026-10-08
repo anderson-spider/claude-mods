@@ -1,5 +1,5 @@
 import type { Attachment, Browser } from './model'
-import { ORIGIN } from './browser'
+import { CHATGPT_URL, ORIGIN, isChatUrl } from './browser'
 
 /** Calls one of a browser's MCP tools and returns its text; throws when the tool reports an error. */
 export type McpCall = (tool: string, args: Record<string, unknown>) => Promise<string>
@@ -28,6 +28,10 @@ export type McpHost = {
 // A rejection of `$.mcp.call` that says the server cannot be reached that way. A tool's own error is an `isError` result, never one of these.
 export const UNREACHABLE = /unknown server|no such server|not connected|not configured|not found/i
 
+// How the engine words a `$.mcp.call` it refused before the tool ran (`<plugin>: $.mcp.call(<server>, <tool>) refused: <reason>`),
+// as auto mode's classifier does with a call no prompt asked for.
+export const REFUSED = /\$\.mcp\.call\([^)]*\) refused\b/
+
 const textOf = (content: unknown) =>
   (Array.isArray(content) ? (content as { type?: string; text?: string }[]) : [])
     .filter(block => block.type === 'text')
@@ -36,8 +40,9 @@ const textOf = (content: unknown) =>
 
 /**
  * Calls a tool of an MCP server the way the host allows. The first call decides the route once: `$.mcp.call`
- * when it answers, or `$.tool.call` (a permission prompt may follow) when it rejects as unreachable. A tool
- * error (`isError`) is thrown to the caller at once and never retried, since the tool may already have acted.
+ * when it answers, or `$.tool.call` (a permission prompt may follow) when it rejects as unreachable. A refused
+ * `$.mcp.call` moves to `$.tool.call` from then on, at any call, since the tool never ran. A tool error
+ * (`isError`) is thrown to the caller at once and never retried, since the tool may already have acted.
  */
 export function mcpCallOf(host: McpHost, server: string): McpCall {
   let route: 'mcp' | 'tool' | undefined
@@ -54,7 +59,7 @@ export function mcpCallOf(host: McpHost, server: string): McpCall {
       result = await host.mcp(server, tool, args)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      if (route !== undefined || !UNREACHABLE.test(message)) throw error
+      if (!REFUSED.test(message) && (route !== undefined || !UNREACHABLE.test(message))) throw error
       route = 'tool'
       return viaTool(tool, args)
     }
@@ -63,6 +68,19 @@ export function mcpCallOf(host: McpHost, server: string): McpCall {
     if (result.isError) throw new Error(text || `${tool} failed`)
     return text
   }
+}
+
+/**
+ * Whether a backend's call stays on chatgpt.com, so the plugin's `tool.check` hook may allow it: auto mode's
+ * classifier gives no verdict on a call no prompt asked for. `listing` names the backend's tools that only list or
+ * open tabs; a script runs only in `ownTab`, the plugin's tab as the backend names it.
+ */
+export function staysOnChatgpt(tool: string, input: unknown, listing: readonly string[], ownTab: string | undefined): boolean {
+  const args = (input ?? {}) as Record<string, unknown>
+  if (listing.includes(tool)) return true
+  if (tool === 'navigate') return typeof args.url === 'string' && (args.url === CHATGPT_URL || isChatUrl(args.url))
+  if (tool === 'javascript_tool') return args.action === 'javascript_exec' && ownTab !== undefined && String(args.tabId) === ownTab
+  return false
 }
 
 /** The first JSON object in a tool's text: the tools print one, then a note about the tabs. */

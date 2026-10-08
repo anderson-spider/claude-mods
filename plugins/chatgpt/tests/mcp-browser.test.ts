@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { base64Of, bytesOf, leadingJson, mcpCallOf, pollUntil, scriptText, uploadBody, uploadFiles, type McpHost, type McpResult } from '../hooks/mcp-browser'
+import { base64Of, bytesOf, leadingJson, mcpCallOf, pollUntil, scriptText, staysOnChatgpt, uploadBody, uploadFiles, type McpHost, type McpResult } from '../hooks/mcp-browser'
 import type { Attachment } from '../hooks/model'
 
 test('leadingJson reads the first object, whatever braces and quotes it holds', () => {
@@ -172,6 +172,39 @@ test('once $.mcp.call answered, a later unreachable rejection is not turned into
   fail = true
   expect(String(await call('b', {}).catch(e => e))).toContain('no such server')
   expect(tool).toEqual([])
+})
+
+test('a refused $.mcp.call moves to $.tool.call, even after $.mcp.call answered, and stays there', async () => {
+  let refuse = false
+  const { host, mcp, tool } = fakeHost({
+    mcp: () => {
+      if (refuse) throw new Error('chatgpt: $.mcp.call(Claude_Browser, navigate) refused: the classifier gave no verdict')
+      return text('listed')
+    },
+    tool: input => ({ text: `ran ${String(input.tool)}` }),
+  })
+  const call = mcpCallOf(host, 'Claude_Browser')
+  expect(await call('tabs_context', {})).toBe('listed')
+  refuse = true
+  expect(await call('navigate', { url: 'https://chatgpt.com/' })).toBe('ran mcp__Claude_Browser__navigate')
+  expect(await call('javascript_tool', {})).toBe('ran mcp__Claude_Browser__javascript_tool')
+  expect(mcp).toEqual(['Claude_Browser/tabs_context', 'Claude_Browser/navigate'])
+  expect(tool).toEqual(['mcp__Claude_Browser__navigate', 'mcp__Claude_Browser__javascript_tool'])
+})
+
+test('staysOnChatgpt allows only listing, navigating to chatgpt.com and scripts in the plugin tab', () => {
+  const listing = ['tabs_context', 'tabs_create']
+  expect(staysOnChatgpt('tabs_context', {}, listing, undefined)).toBe(true)
+  expect(staysOnChatgpt('tabs_create', { foreground: false }, listing, undefined)).toBe(true)
+  expect(staysOnChatgpt('navigate', { url: 'https://chatgpt.com/' }, listing, undefined)).toBe(true)
+  expect(staysOnChatgpt('navigate', { tabId: 't1', url: 'https://chatgpt.com/c/abc-123' }, listing, undefined)).toBe(true)
+  expect(staysOnChatgpt('navigate', { url: 'https://example.com/' }, listing, undefined)).toBe(false)
+  expect(staysOnChatgpt('navigate', { url: 'https://chatgpt.com.evil.io/' }, listing, undefined)).toBe(false)
+  expect(staysOnChatgpt('javascript_tool', { action: 'javascript_exec', tabId: 't1', text: '1' }, listing, 't1')).toBe(true)
+  expect(staysOnChatgpt('javascript_tool', { action: 'javascript_exec', tabId: 7, text: '1' }, listing, '7')).toBe(true)
+  expect(staysOnChatgpt('javascript_tool', { action: 'javascript_exec', tabId: 'other', text: '1' }, listing, 't1')).toBe(false)
+  expect(staysOnChatgpt('javascript_tool', { action: 'javascript_exec', tabId: 't1', text: '1' }, listing, undefined)).toBe(false)
+  expect(staysOnChatgpt('computer', { action: 'left_click' }, listing, 't1')).toBe(false)
 })
 
 test('a $.tool.call denial or tool error is thrown to the caller', async () => {

@@ -7,11 +7,19 @@ import type { Browser, Outcome, ProcessRunner, Request, RequestDeps, TabHolder }
 import { askCommandAnswer, errorText, imageCommandAnswer } from './presentation'
 import { BOUNDARIES, COMMON_PROPERTIES, IMAGE_BOUNDARIES, PROMPT, WHERE } from './prompts'
 import { type Candidate, chooseBrowser } from './browsers'
-import { BUILTIN, BUILTIN_SERVER, builtinBrowserOf } from './builtin-browser'
-import { CHROME, CHROME_SERVER, chromeBrowserOf } from './chrome-browser'
+import { BUILTIN, BUILTIN_SERVER, builtinBrowserOf, builtinStaysOnChatgpt } from './builtin-browser'
+import { CHROME, CHROME_SERVER, chromeBrowserOf, chromeStaysOnChatgpt } from './chrome-browser'
 import { type McpCall, type McpHost, bytesOf, mcpCallOf } from './mcp-browser'
 import { TERMINAL_BROWSER, openTerminalBrowser } from './terminal-browser'
 import { serve } from './tools'
+
+const PLUGIN = 'chatgpt'
+
+// Which of the plugin's own calls to each browser server stay on chatgpt.com, by the tool's `mcp__` prefix.
+const OWN_CALLS = [
+  { prefix: `mcp__${BUILTIN_SERVER}__`, stays: builtinStaysOnChatgpt },
+  { prefix: `mcp__${CHROME_SERVER}__`, stays: chromeStaysOnChatgpt },
+]
 
 // Requests take turns in the plugin's own tab, kept across them.
 const queue = taskQueue()
@@ -226,6 +234,14 @@ export const register: Register = (on, options) => {
       description: 'Checks that ChatGPT works in the browser and which page parts moved: /chatgpt-doctor [chat URL]',
     })
     return next(e)
+  })
+
+  // Auto mode's classifier gives no verdict on a call no prompt asked for, so the plugin allows its own browser
+  // calls that stay on chatgpt.com; every other call goes on to the session's rules.
+  on('tool.check', async (_$, e, next) => {
+    const own = next.origin.plugin === PLUGIN ? OWN_CALLS.find(({ prefix }) => e.tool.startsWith(prefix)) : undefined
+    if (!own?.stays(e.tool.slice(own.prefix.length), e.input, tab.id)) return next(e)
+    return { decision: 'allow' as const, reason: 'chatgpt plugin driving chatgpt.com in its own browser tab' }
   })
 
   on('tool.call', { tool: 'mcp__chatgpt__ask' }, ($, e) => serve('ask', e, handlers($)))
