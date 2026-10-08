@@ -13,6 +13,16 @@ test('handshake: initialize answers, and initialized arrives before any other re
   assert.equal((await client.request('fake/probe')).initialized, true)
 })
 
+test('initialize opts out of the streamed deltas the helper ignores', async () => {
+  const client = fakeClient()
+  await client.start()
+  const { capabilities } = await client.request('fake/probe')
+
+  assert.equal(capabilities.experimentalApi, true)
+  assert.ok(capabilities.optOutNotificationMethods.includes('item/agentMessage/delta'))
+  assert.ok(capabilities.optOutNotificationMethods.includes('item/reasoning/textDelta'))
+})
+
 test('the spawn function is injected, so the command and args are the caller choice', async () => {
   const calls = []
   const client = new AppServerClient({
