@@ -1322,3 +1322,10 @@ export function forkPrompt(outline) {
     outline || "(no outline)",
   ].join("\n");
 }
+
+/** How the plugin at `root` is loaded, for /threads setup; an installed copy gets its update command. */
+export function loadedHow(root) {
+  if (/\/plugins\/(cache|marketplaces)\//.test(root)) return `installed (${root}); update with claude plugin update threads@spider-claude-mods`;
+  if (/\/dev-mods\//.test(root)) return `loaded from a hot-reload folder (${root}); edits apply on save`;
+  return `loaded from a folder (${root || "unknown"}), as with --plugin-dir`;
+}

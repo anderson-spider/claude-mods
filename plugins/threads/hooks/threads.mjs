@@ -99,6 +99,7 @@ import {
   worktreeOutcome,
   isUnread,
   CODEX_NO_WORKTREE,
+  loadedHow,
 } from "./core.mjs";
 import {
   CUA_NODE,
@@ -3278,13 +3279,7 @@ async function runSetup($, opts = {}) {
       : "Close a thread (ask me, or /threads close <id>) or raise the cap: /threads cap <n>.",
   });
   checks.push({ name: "Default permission mode", ok: true, detail: `${await defaultMode($)} (change with /threads mode <mode>; inline threads use this chat's mode)` });
-  const root = String($.plugin.root ?? "");
-  const how = /\/plugins\/(cache|marketplaces)\//.test(root)
-    ? `installed (${root}); update with claude plugin update threads@spider-claude-mods`
-    : /\/dev-mods\//.test(root)
-      ? `loaded from a hot-reload folder (${root}); edits apply on save`
-      : `loaded from a folder (${root || "unknown"}), as with --plugin-dir`;
-  checks.push({ name: "How the mod is loaded", ok: true, detail: how });
+  checks.push({ name: "How the mod is loaded", ok: true, detail: loadedHow(String($.plugin.root ?? "")) });
   if (await codexLive($, p)) {
     const want = await pluginVersion($);
     const r = await codexCall($, p, "/status");
