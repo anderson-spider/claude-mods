@@ -6,7 +6,7 @@ Adapted from [promptadvisers/claude-mods-computer-use-threads](https://github.co
 
 ## Requirements
 
-- `tmux`, a signed-in terminal Claude Code (`claude auth login`) and a trusted folder. Run `/threads setup` to check.
+- `tmux`, a signed-in terminal Claude Code (`claude auth login`). A session thread accepts Claude Code's folder trust prompt for itself, so it runs in any folder you point it at; one that cannot start reports `needs-trust`. Run `/threads setup` to check.
 - For the Codex link: the `codex-computer-use` plugin with its helper running.
 - For Codex threads: the `codex` CLI on your PATH, signed in (see [Codex threads](#codex-threads)).
 

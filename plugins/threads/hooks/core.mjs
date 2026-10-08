@@ -285,24 +285,6 @@ export function parsePanes(stdout) {
 
 export const PANE_FORMAT = "#{session_name}|#{pane_dead}|#{pane_pid}";
 
-// ---- trust -------------------------------------------------------------------------
-
-// Is the folder trusted in ~/.claude.json? Both /tmp and /private/tmp spellings. Exact folder only:
-// a live check showed Claude Code asking again in a git repo inside a trusted folder.
-export function isTrusted(claudeJson, path) {
-  let projects;
-  try {
-    projects = JSON.parse(claudeJson)?.projects ?? {};
-  } catch {
-    return false;
-  }
-  const p = String(path).replace(/\/+$/, "") || "/";
-  const spellings = new Set([p]);
-  if (p.startsWith("/private/")) spellings.add(p.slice("/private".length));
-  else if (/^\/(tmp|var|etc)(\/|$)/.test(p)) spellings.add(`/private${p}`);
-  return [...spellings].some((x) => projects[x]?.hasTrustDialogAccepted === true);
-}
-
 // ---- the screen ----------------------------------------------------------------------
 
 const LOGIN = /Login expired|Not logged in|Please run \/login|Invalid API key|OAuth token (has )?expired|run `?claude auth login/i;
