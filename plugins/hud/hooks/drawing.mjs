@@ -187,7 +187,12 @@ export function drawLine(elements, surface, columns, now, agents) {
         backgroundColor: b.tint[0],
       }),
     );
-    return Box({ flexDirection: "row", alignItems: "center", columnGap: 1, paddingX: 1, children: pills });
+    // Two rows: what the session is doing (context, cache, agents) above the limits.
+    const rowOf = (key, list) => (list.length ? Box({ key, flexDirection: "row", alignItems: "center", columnGap: 1, children: list }) : null);
+    const status = rowOf("row-status", pills.filter((_, i) => !blocks[i].key.startsWith("gauge-")));
+    const limits = rowOf("row-limits", pills.filter((_, i) => blocks[i].key.startsWith("gauge-")));
+    const rows = [status, limits].filter(Boolean);
+    return rows.length === 1 ? Box({ flexDirection: "row", paddingX: 1, children: rows }) : Box({ flexDirection: "column", rowGap: 1, paddingX: 1, children: rows });
   }
   const children = [];
   blocks.forEach((b, i) => {
