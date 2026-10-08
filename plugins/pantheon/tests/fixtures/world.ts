@@ -32,6 +32,9 @@ export function world(on: On, opts: World = {}) {
     toasts: [] as string[],
     statuses: [] as (string | undefined)[],
     submits: [] as string[],
+    opened: [] as { id: string; title?: string; columns?: number; rows?: number }[],
+    closed: [] as string[],
+    copied: [] as string[],
     gitRuns: 0,
   }
   const files = { ...(opts.files ?? {}) }
@@ -64,6 +67,9 @@ export function world(on: On, opts: World = {}) {
   on('ui.toast', async (_$, e) => { seen.toasts.push(e.text); return { value: undefined } })
   on('command.register', async (_$, e) => ({ value: { command: e.name } }))
   on('ui.status', async (_$, e) => { seen.statuses.push(e.text); return { value: undefined } })
+  on('ui.open', async (_$, e) => { seen.opened.push(e); return { value: undefined } })
+  on('ui.close', async (_$, e) => { seen.closed.push(e.id); return { value: undefined } })
+  on('ui.copy', async (_$, e) => { seen.copied.push(e.text); return { value: undefined } })
   on('process.spawn', async function* (_$, e) {
     seen.argv.push([...e.argv])
     seen.cwds.push(e.cwd ?? '')

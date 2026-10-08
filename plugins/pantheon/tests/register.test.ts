@@ -1,9 +1,206 @@
 import { describe, expect, test } from 'claude-code/testing'
+import type { Engine } from 'claude-code/testing'
+import type { AgentSpawnInput, On, TurnStepInput } from 'claude-code'
 
-import type { Job } from '../types'
+import type { Job, Native, SessionInfo } from '../types'
+import { createQueue } from '../hooks/register'
 import { DELEGATE, HOME, RESULT, ROOT, parse, start, world } from './fixtures/world'
 
+const spawnInput = {
+  tool_use_id: 'spawn-1', prompt: 'Review the change', description: 'Review',
+  subagentType: 'pantheon:oracle', provider: { plugin: 'pantheon', tier: 'user' },
+  parentModel: 'parent', permissionMode: 'default',
+} as AgentSpawnInput
+const stepInput = (index = 0, agentId: string | undefined = 'native-1'): TurnStepInput => ({
+  turnId: 'turn-1', index, agentId, model: 'model-1', effort: 'high', messageCount: 1,
+})
+const completeInput = { turnId: 'turn-1', reason: 'answer' as const, answer: 'Answer', durationMs: 42, isAborted: false }
+const measureInput = { context: { tokens: 100, window: 1000, percent: 10 }, rateLimits: [], changed: ['context'] as ['context'] }
+const stepResult = {
+  turnId: 'turn-1', index: 0, answer: 'Step answer', toolUses: [], stopReason: 'end_turn' as const,
+  usage: { model: 'model-1', input_tokens: 10, cache_read_input_tokens: 2, cache_creation_input_tokens: 3, output_tokens: 4 },
+}
+function trackingWorld(on: On, slowNativeWrite = false) {
+  const fixture = world(on)
+  on('agent.spawn', async () => ({ model: 'model-1', agentId: 'native-1' }))
+  on('turn.start', async (_$, e) => ({ turnId: e.turnId }))
+  on('turn.step', async function* (_$, e) { return { ...stepResult, turnId: e.turnId, index: e.index } })
+  on('turn.complete', async () => ({ text: 'Completed' }))
+  on('session.measure', async () => ({ changed: ['context'] }))
+  on('tool.call', async () => ({ result: 'Tool result' }))
+  const stored: Record<string, unknown> = {}
+  const writes: number[] = []
+  on('state.set', async (_$, e, next) => {
+    const steps = e.key === 'natives' ? (e.value as Native[])[0]?.steps ?? 0 : undefined
+    if (slowNativeWrite && steps === 1) await fixture.clock.sleep(10)
+    const result = await next(e)
+    if (result.value.isSet) {
+      stored[e.key] = e.value
+      if (steps !== undefined) writes.push(steps)
+    }
+    return result
+  })
+  on('command.run', { command: 'tracking-state' }, async (_$, e) => {
+    return { text: JSON.stringify(stored[e.args] ?? null) }
+  })
+  return { ...fixture, writes }
+}
+async function nativesOf($: Engine): Promise<Native[]> {
+  return JSON.parse((await $.command.run({ command: 'tracking-state', args: 'natives' })).text ?? 'null') ?? []
+}
+async function sessionOf($: Engine): Promise<SessionInfo | undefined> {
+  return JSON.parse((await $.command.run({ command: 'tracking-state', args: 'session' })).text ?? 'null')
+}
+async function step($: Engine, input = stepInput()) {
+  const stream = $.turn.step(input)
+  const chunks = []
+  let item = await stream.next()
+  while (!item.done) { chunks.push(item.value); item = await stream.next() }
+  return { chunks, result: item.value }
+}
+
 describe('register', () => {
+  test('snapshot queues recover after a failed write and retain only the latest pending snapshot', async () => {
+    const writes: number[] = []
+    const errors: unknown[] = []
+    let release!: () => void
+    const held = new Promise<void>(resolve => { release = resolve })
+    let began!: () => void
+    const started = new Promise<void>(resolve => { began = resolve })
+    const failure = new Error('write failed')
+    const queue = createQueue<number>(async value => {
+      writes.push(value)
+      if (value === 1) { began(); await held; throw failure }
+    }, error => { errors.push(error) })
+    queue.push(1)
+    await started
+    queue.push(2)
+    queue.push(3)
+    release()
+    await queue.flushed()
+    expect(writes).toEqual([1, 3])
+    expect(errors).toEqual([failure])
+    queue.push(4)
+    await queue.flushed()
+    expect(writes).toEqual([1, 3, 4])
+  })
+
+  test('tracking initializes lazily without session.start and ignores unknown native ids', async ($, on) => {
+    trackingWorld(on)
+    await step($)
+    await $.tool.call({ tool: 'Bash', command: 'pwd', agentId: 'native-1' })
+    await $.turn.complete({ ...completeInput, agentId: 'native-1' })
+    expect(await nativesOf($)).toEqual([])
+    await $.agent.spawn(spawnInput)
+    await step($)
+    expect((await nativesOf($))[0].steps).toBe(1)
+    expect((await nativesOf($))[0].rounds[0].status).toBe('running')
+  })
+
+  test('every tracking hook returns the event result unchanged', async ($, on) => {
+    world(on)
+    const started = { turnId: 'sentinel-turn' }
+    const spawned = { model: 'sentinel-model', agentId: 'native-1' }
+    const completed = { text: 'sentinel-completed' }
+    const measured = { changed: ['cost'] as ['cost'] }
+    const called = { ref: 7, result: 'sentinel-tool', text: 'Tool text', isReadOnly: true as const }
+    const chunk = { kind: 'text' as const, index: 0, text: 'stream sentinel' }
+    on('turn.start', async () => started)
+    on('agent.spawn', async () => spawned)
+    on('turn.complete', async () => completed)
+    on('session.measure', async () => measured)
+    on('tool.call', async () => called)
+    on('turn.step', async function* () { yield chunk; return stepResult })
+    await start($)
+    expect(await $.turn.start({ text: 'Go', turnId: 'turn-1' })).toEqual(started)
+    expect(await $.agent.spawn(spawnInput)).toEqual(spawned)
+    const { chunks, result } = await step($)
+    expect(chunks).toEqual([chunk])
+    expect(result).toEqual(stepResult)
+    expect(await $.turn.complete({ ...completeInput, agentId: 'native-1' })).toEqual(completed)
+    expect(await $.session.measure(measureInput)).toEqual(measured)
+    expect(await $.tool.call({ tool: 'Bash', command: 'pwd', agentId: 'native-1' })).toEqual(called)
+  })
+
+  test('agent.spawn of pantheon:oracle records a native through steps, tools and completion', async ($, on) => {
+    trackingWorld(on)
+    await start($)
+    await $.agent.spawn(spawnInput)
+    await step($)
+    await $.tool.call({ tool: 'Bash', command: 'pwd', agentId: 'native-1' })
+    await $.turn.complete({ ...completeInput, agentId: 'native-1' })
+    const [native] = await nativesOf($)
+    expect(native.role).toBe('oracle')
+    expect(native.rounds[0].status).toBe('done')
+    expect(native.rounds[0].turnId).toBe('turn-1')
+    expect(native.steps).toBe(1)
+    expect(native.ctx).toBe(15)
+    expect(native.out).toBe(4)
+    expect(native.lastTool).toBe('Bash pwd')
+    await step($, { ...stepInput(1), turnId: 'turn-2' })
+    expect((await nativesOf($))[0].rounds.map(round => round.status)).toEqual(['done', 'running'])
+  })
+
+  test('queued writes land in order for three concurrent steps', async ($, on) => {
+    const { clock, writes } = trackingWorld(on, true)
+    await start($)
+    await $.agent.spawn(spawnInput)
+    const first = step($)
+    await clock.settle()
+    const pending = Promise.all([first, ...[1, 2].map(index => step($, stepInput(index)))])
+    await clock.settle()
+    await clock.advance(10)
+    await pending
+    expect((await nativesOf($))[0].steps).toBe(3)
+    expect(writes[writes.length - 1]).toBe(3)
+    expect(writes).toContain(1)
+    expect(writes).toEqual([...writes].sort((a, b) => a - b))
+  })
+
+  test('reload marks running native rounds lost and resets the session', async ($, on) => {
+    trackingWorld(on)
+    const saved: Native[] = [{ id: 'old', role: 'oracle', type: 'pantheon:oracle', task: 'Old', model: 'm',
+      rounds: [{ startedAt: 1, status: 'done' }, { startedAt: 2, status: 'running' }], ctx: 0, out: 0, steps: 2 }]
+    const served = new Set<string>()
+    on('state.get', async (_$, e, next) => {
+      if (served.has(e.key) || !['natives', 'session'].includes(e.key)) return next(e)
+      served.add(e.key)
+      return { value: { value: e.key === 'natives' ? saved : { isRunning: true, model: 'saved-model' }, version: 1 } } as never
+    })
+    await start($)
+    expect((await nativesOf($))[0].rounds.map(round => round.status)).toEqual(['done', 'lost'])
+    expect(await sessionOf($)).toEqual({ isRunning: false, model: 'saved-model' })
+  })
+
+  test('main session tracks start, model, effort, measurement and completion independently', async ($, on) => {
+    trackingWorld(on)
+    await start($)
+    await $.turn.start({ text: 'Go', turnId: 'turn-1' })
+    expect((await sessionOf($))?.isRunning).toBe(true)
+    await step($, { ...stepInput(), agentId: undefined, effort: 3 })
+    await $.session.measure(measureInput)
+    await $.agent.spawn(spawnInput)
+    await $.turn.complete({ ...completeInput, agentId: 'native-1' })
+    expect((await sessionOf($))?.isRunning).toBe(true)
+    await $.turn.complete(completeInput)
+    const session = await sessionOf($)
+    expect(session?.model).toBe('model-1')
+    expect(session?.effort).toBe('3')
+    expect(session?.context).toEqual(measureInput.context)
+    expect(session?.isRunning).toBe(false)
+    expect(session?.lastTurnMs).toBe(42)
+  })
+
+  test('the panel opens on session.start and /pantheon close closes it', async ($, on) => {
+    const { seen } = world(on)
+    await start($)
+    expect(seen.opened).toEqual([{ id: 'pantheon', title: 'Pantheon', columns: 72, rows: 8 }])
+    expect(await $.command.run({ command: 'pantheon', args: 'close' })).toEqual({ text: 'Pantheon panel closed.' })
+    expect(seen.closed).toEqual(['pantheon'])
+    await $.command.run({ command: 'pantheon', args: '' })
+    expect(seen.opened.length).toBe(2)
+  })
+
   test('session.start registers tools and native agents', async ($, on) => {
     const { seen } = world(on)
     await start($)
