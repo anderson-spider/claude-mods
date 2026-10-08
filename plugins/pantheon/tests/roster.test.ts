@@ -131,6 +131,15 @@ test('active instances precede only the latest ended one', () => {
   expect(result.slots[1].instances[0].resumeId).toBeUndefined()
 })
 
+test('history keeps every line of a role, oldest first, for the timeline', () => {
+  const result = roster([
+    job({ id: 'late', status: 'done', startedAt: 300, endedAt: 400 }),
+    job({ id: 'early', status: 'done', startedAt: 100, endedAt: 200 }),
+  ])
+  expect(result.slots[1].instances.map(i => i.id)).toEqual(['late'])
+  expect(result.slots[1].history?.map(i => i.id)).toEqual(['early', 'late'])
+})
+
 test('jobs without session ids stay separate and missing tokens default to zero output', () => {
   const instances = roster([job({ id: 'one' }), job({ id: 'two' })]).slots[1].instances
   expect(instances).toHaveLength(2)

@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import {
-  MAX_NATIVES, DEFAULT_SESSION, DEFAULT_VIEW, roleOf, spawned, stepped, toolNoted,
+  MAX_NATIVES, DEFAULT_SESSION, DEFAULT_VIEW, roleOf, spawned, stepped, toolNoted, roundOpened, stepAccounted,
   completed, markNativesLost, normalizeNatives, normalizeSession, normalizeView,
   sessionStarted, sessionCompleted, sessionStepped, sessionMeasured, describeTool,
 } from '../hooks/tracking'
@@ -57,6 +57,16 @@ test('a step with a new turnId after the round ended opens round 2', () => {
     { turnId: 't2', startedAt: 130, status: 'running' },
   ])
   expect(done[0].rounds.length).toBe(1)
+})
+
+test('a continuation opens its round before the response and counts the step after it', () => {
+  const done = completed(stepped(spawned([], spawn()), { id: 'a', turnId: 't1', now: 110 }), { id: 'a', reason: 'answer', now: 120 })
+  const opened = roundOpened(done, { id: 'a', turnId: 't2', now: 130 })
+  expect(opened[0].rounds[1]).toEqual({ turnId: 't2', startedAt: 130, status: 'running' })
+  expect(opened[0].steps).toBe(1)
+  const counted = stepAccounted(opened, { id: 'a', usage: { input_tokens: 5, output_tokens: 2 } })
+  expect(counted[0].rounds).toEqual(opened[0].rounds)
+  expect(counted[0]).toEqual(expect.objectContaining({ steps: 2, ctx: 5, out: 2 }))
 })
 
 test('a step with the same turnId does not open a round', () => {

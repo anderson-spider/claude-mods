@@ -15,7 +15,7 @@ import { buildRoster } from './roster'
 import {
   DEFAULT_SESSION, DEFAULT_VIEW, completed, describeTool, markNativesLost,
   normalizeNatives, normalizeSession, normalizeView, sessionCompleted, sessionMeasured,
-  sessionStarted, sessionStepped, spawned, stepped, toolNoted,
+  roundOpened, sessionStarted, sessionStepped, spawned, stepAccounted, toolNoted,
 } from './tracking'
 import type { Clock, ConfigResult, DelegateArgs, PantheonConfig, Spawn } from './types'
 import { authorizedRoot, checkCwd } from './workspace'
@@ -153,6 +153,8 @@ export const register: Register = on => {
   }
   const nativesQueue = createQueue<Native[]>(list => trackingLive!.writeNatives(list), notifyTrackingWrite)
   const sessionQueue = createQueue<SessionInfo>(value => trackingLive!.writeSession(value), notifyTrackingWrite)
+  // Each view write carries the `$` of the hook that asked for it; only the latest pending one runs.
+  const viewQueue = createQueue<() => Promise<unknown>>(write => write(), notifyTrackingWrite)
 
   async function ensureTracking(io: TrackingIo): Promise<void> {
     trackingLive = io
@@ -338,10 +340,11 @@ export const register: Register = on => {
       }
       await ensureTracking(trackingIo)
       await Promise.all([nativesQueue.flushed(), sessionQueue.flushed()])
-      await update($, viewAtom, normalizeView).catch(notifyTrackingWrite)
+      viewQueue.push(() => update($, viewAtom, normalizeView))
+      await viewQueue.flushed()
     } catch { /* Tracking must not interrupt session setup. */ }
     try {
-      await $.ui.open({ id: PANE_ID, title: 'Pantheon', columns: 72, rows: 8 })
+      await $.ui.open({ id: PANE_ID, title: 'Pantheon', columns: 72, rows: 8, closeOnEscape: true })
     } catch { /* A surface without panes must still start the session. */ }
     return started
   })
@@ -366,24 +369,33 @@ export const register: Register = on => {
   })
 
   on('turn.step', async function* ($, e, next) {
+    const io: TrackingIo = {
+      readNatives: () => read($, nativesAtom),
+      writeNatives: list => update($, nativesAtom, () => list),
+      readSession: () => read($, sessionAtom),
+      writeSession: value => update($, sessionAtom, () => value),
+      toast: text => $.ui.toast(text),
+      now: () => $.clock.now(),
+    }
+    // A native's round opens before its response streams, so a continuation reads running while
+    // it works; the step and its usage are counted once the response is in.
+    if (e.agentId) {
+      try {
+        await ensureTracking(io)
+        natives = roundOpened(natives!, { id: e.agentId, turnId: e.turnId, now: await io.now() })
+        nativesQueue.push(natives)
+        await nativesQueue.flushed()
+      } catch { /* Tracking never changes the stream. */ }
+    }
     const result = yield* next(e)
     try {
-      const io: TrackingIo = {
-        readNatives: () => read($, nativesAtom),
-        writeNatives: list => update($, nativesAtom, () => list),
-        readSession: () => read($, sessionAtom),
-        writeSession: value => update($, sessionAtom, () => value),
-        toast: text => $.ui.toast(text),
-        now: () => $.clock.now(),
-      }
       await ensureTracking(io)
       if (!e.agentId) {
         session = sessionStepped(session!, e.model, String(e.effort ?? ''))
         sessionQueue.push(session)
         await sessionQueue.flushed()
       } else {
-        const now = await io.now()
-        natives = stepped(natives!, { id: e.agentId, turnId: e.turnId, now, usage: result.usage ?? undefined })
+        natives = stepAccounted(natives!, { id: e.agentId, usage: result.usage ?? undefined })
         nativesQueue.push(natives)
         await nativesQueue.flushed()
       }
@@ -541,7 +553,7 @@ export const register: Register = on => {
     }
     const [sub, ...rest] = e.args.trim().split(/\s+/).filter(Boolean)
     if (!sub) {
-      await $.ui.open({ id: PANE_ID, title: 'Pantheon' })
+      await $.ui.open({ id: PANE_ID, title: 'Pantheon', focus: true, closeOnEscape: true })
       return { text: 'Painel do Pantheon aberto.' }
     }
     if (sub === 'close') {
@@ -620,7 +632,7 @@ export const register: Register = on => {
       tab: normalizeView(view).tab,
       hasClient,
       clockLost: isClockLost,
-      onTab: tab => { update($, viewAtom, () => ({ tab })).catch(notifyTrackingWrite) },
+      onTab: tab => { viewQueue.push(() => update($, viewAtom, () => ({ tab }))) },
       onCancel: jobId => { jobs?.cancel(jobId) },
       onCopy: (text, surface) => { void $.ui.copy({ text, surface }) },
     }) as never

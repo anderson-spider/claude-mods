@@ -4,7 +4,9 @@ import type { Engine } from 'claude-code/testing'
 
 import { DELEGATE, HOME, RESULT, parse, start, world } from './fixtures/world'
 import { PANE_ID, statusText, timelineSource } from '../hooks/pane'
+import { buildRoster } from '../hooks/roster'
 import type { Slot } from '../hooks/roster'
+import { DEFAULT_CONFIG } from '../hooks/defaults'
 import type { Job, Native, SessionInfo } from '../hooks/types'
 
 const SURFACES = ['terminal', 'desktop'] as const
@@ -433,6 +435,72 @@ describe('pane', () => {
     expect(toasts[0]).toContain('view storage unavailable')
   })
 
+  t('fast tab switches persist in order even when the first write is slow', async ($, on) => {
+    const { clock } = world(on)
+    const stored: string[] = []
+    let slowed = false
+    on('state.set', async (_$, e, next) => {
+      if (e.key !== 'view') return next(e)
+      const tab = (e.value as { tab: string }).tab
+      if (tab === 'jobs' && !slowed) { slowed = true; await clock.sleep(10) }
+      const result = await next(e)
+      if (result.value.isSet) stored.push(tab)
+      return result
+    })
+    await start($)
+    const ui = await mountPane($, 'terminal')
+    const first = ui.press({ key: 'tab-jobs' })
+    await clock.settle()
+    const second = ui.press({ key: 'tab-agents' })
+    await clock.settle()
+    await clock.advance(10)
+    await Promise.all([first, second])
+    await clock.settle()
+    expect(stored[stored.length - 1]).toBe('agents')
+    expect(await ui.find({ key: 'tab-agents' })).toBeDefined()
+    const labels = (await ui.findAll({ type: 'Button' })).map(b => String((b as unknown as { props: { label?: string } }).props.label))
+    expect(labels).toContain('● Agents')
+  })
+
+  for (const surface of SURFACES) {
+    t(`an active council shows its disabled seat as off (${surface})`, async ($, on) => {
+      world(on, { files: { [`${HOME}/.claude/pantheon.json`]: JSON.stringify({ disabledAgents: ['councillor:alpha'] }) } })
+      seed(on, { natives: [native({ id: 'cb1', role: 'councillor-beta', type: 'pantheon:councillor-beta', task: 'weigh in' })] })
+      await start($)
+      await command($, 'config')
+      const all = await texts(await mountPane($, surface))
+      expect(all).toContain('cb1')
+      expect(all).toContain('alpha off')
+      await release()
+      const mini = await texts(await mountPane($, 'terminal', { placement: 'inline' }))
+      expect(mini).toContain('⊘ alpha off')
+    })
+  }
+
+  t('mini summarizes other agents and keeps active roles', async ($, on) => {
+    world(on)
+    seed(on, { natives: [native(), native({ id: 'x9', role: 'other', type: 'Explore', task: 'survey' })] })
+    await start($)
+    const ui = await mountPane($, 'terminal', { placement: 'inline', rows: 8 })
+    const root = (await ui.drawn()) as { children?: unknown[] }
+    expect((root.children ?? []).filter(Boolean).length <= 8).toBe(true)
+    const all = await texts(ui)
+    expect(all).toContain('● 1 other agent')
+    expect(all).toContain('n1') // the active oracle stays visible
+  })
+
+  t('a lost earlier round shows no invented duration', async ($, on) => {
+    world(on)
+    seed(on, { jobs: [
+      job({ id: 'pl1', agent: 'fixer', status: 'lost', sessionId: 's', startedAt: NOW - 600_000 }),
+      job({ id: 'pl2', agent: 'fixer', status: 'running', sessionId: 's', startedAt: NOW - 60_000 }),
+    ] })
+    await start($)
+    const all = await texts(await mountPane($, 'terminal'))
+    expect(all).toContain('■ ?')
+    expect(all).toContain('■ now')
+  })
+
   t('docked at 40 columns truncates', async ($, on) => {
     world(on)
     seed(on, {
@@ -529,6 +597,29 @@ describe('timelineSource', () => {
     expect(out).toContain('stroke-dasharray="1 4"')
     expect(out).toContain('>off</text>')
     expect(out).toContain('last run 33m ago')
+  })
+  test('two independent recent runs of one role draw two bars', () => {
+    const jobs: Job[] = [
+      { id: 'ja', agent: 'explorer', status: 'done', startedAt: NOW_T - 600_000, endedAt: NOW_T - 500_000, cwd: '/repo' },
+      { id: 'jb', agent: 'explorer', status: 'done', startedAt: NOW_T - 300_000, endedAt: NOW_T - 200_000, cwd: '/repo' },
+      { id: 'jold', agent: 'explorer', status: 'done', startedAt: NOW_T - 3_000_000, endedAt: NOW_T - 2_000_000, cwd: '/repo' },
+    ]
+    const roster = buildRoster({ jobs, natives: [], session: { isRunning: false }, config: DEFAULT_CONFIG })
+    // The card keeps only the latest; the timeline draws both runs inside the window, not the old one.
+    expect(roster.slots[1].instances.map(i => i.id)).toEqual(['jb'])
+    const svg = timelineSource(roster.slots, { isRunning: false }, NOW_T).source
+    expect(svg.split('fill="#c7d6ef" stroke="#1d4f9e"').length - 1).toBe(2)
+    expect(svg).toContain('>ja</text>')
+    expect(svg).toContain('>jb</text>')
+    expect(svg).not.toContain('>jold</text>')
+  })
+  test('a lost round with no end is a tick at its start, not a bar to now', () => {
+    const lost: Slot[] = [slot({ name: 'fixer', instances: [inst({ id: 'l', isActive: false, status: 'lost',
+      rounds: [{ startedAt: NOW_T - 600_000, status: 'lost' }] })] })]
+    const svg = timelineSource(lost, { isRunning: false }, NOW_T).source
+    expect(svg).toContain('width="3" height="12" fill="#7a4f00"/>')
+    expect(svg).not.toContain('stroke="#1d4f9e"/>')
+    expect(svg).not.toContain('fill="#1d4f9e"/>')
   })
   test('parallel instances label their ids and the now line closes the window', () => {
     expect(out).toContain('>a</text>')

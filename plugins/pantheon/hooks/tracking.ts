@@ -29,23 +29,32 @@ export const spawned = (list: Native[], s: {
 const updateNative = (list: Native[], id: string, fn: (n: Native) => Native): Native[] =>
   list.some(n => n.id === id) ? list.map(n => n.id === id ? fn(n) : n) : list
 
+/** Opens (or tags) the round a step belongs to, before its response streams. */
+export const roundOpened = (list: Native[], s: { id: string; turnId: string; now: number }): Native[] =>
+  updateNative(list, s.id, n => {
+    const last = n.rounds[n.rounds.length - 1]
+    if (!last || (last.status !== 'running' && last.turnId !== s.turnId)) {
+      // Native continuations have no turn.start; the first step opens their round.
+      return { ...n, rounds: [...n.rounds, { turnId: s.turnId, startedAt: s.now, status: 'running' }] }
+    }
+    if (last.status === 'running' && last.turnId === undefined) {
+      return { ...n, rounds: [...n.rounds.slice(0, -1), { ...last, turnId: s.turnId }] }
+    }
+    return n
+  })
+
+/** Counts a finished step and its usage. */
+export const stepAccounted = (list: Native[], s: { id: string; usage?: StepUsage }): Native[] =>
+  updateNative(list, s.id, n => {
+    const usage = s.usage
+    const ctx = (usage?.input_tokens ?? 0) + (usage?.cache_read_input_tokens ?? 0)
+      + (usage?.cache_creation_input_tokens ?? 0)
+    return { ...n, steps: n.steps + 1, ctx: ctx > 0 ? ctx : n.ctx, out: n.out + (usage?.output_tokens ?? 0) }
+  })
+
 export const stepped = (list: Native[], s: {
   id: string; turnId: string; now: number; usage?: StepUsage
-}): Native[] => updateNative(list, s.id, n => {
-  const last = n.rounds[n.rounds.length - 1]
-  let rounds = n.rounds
-  if (!last || (last.status !== 'running' && last.turnId !== s.turnId)) {
-    // Native continuations have no turn.start; the first step opens their round.
-    rounds = [...rounds, { turnId: s.turnId, startedAt: s.now, status: 'running' }]
-  } else if (last.status === 'running' && last.turnId === undefined) {
-    rounds = [...rounds.slice(0, -1), { ...last, turnId: s.turnId }]
-  }
-  const usage = s.usage
-  const ctx = (usage?.input_tokens ?? 0) + (usage?.cache_read_input_tokens ?? 0)
-    + (usage?.cache_creation_input_tokens ?? 0)
-  return { ...n, rounds, steps: n.steps + 1, ctx: ctx > 0 ? ctx : n.ctx,
-    out: n.out + (usage?.output_tokens ?? 0) }
-})
+}): Native[] => stepAccounted(roundOpened(list, s), s)
 
 export const toolNoted = (list: Native[], id: string, text: string): Native[] =>
   updateNative(list, id, n => ({ ...n, lastTool: text }))

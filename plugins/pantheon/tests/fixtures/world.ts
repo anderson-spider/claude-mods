@@ -34,7 +34,7 @@ export function world(on: On, opts: World = {}) {
     toasts: [] as string[],
     statuses: [] as (string | undefined)[],
     submits: [] as string[],
-    opened: [] as { id: string; title?: string; columns?: number; rows?: number }[],
+    opened: [] as { id: string; title?: string; columns?: number; rows?: number; focus?: true; closeOnEscape?: true }[],
     closed: [] as string[],
     copied: [] as string[],
     gitRuns: 0,

@@ -25,6 +25,8 @@ export type Slot = {
   model?: string; instances: Instance[]
   lastEndedAt?: number; offReason?: string
   seatsOff?: string[]
+  /** Every line of the role, all rounds, oldest first: the timeline's source (the cards use `instances`). */
+  history?: Instance[]
 }
 export type Roster = {
   slots: Slot[]; others: Instance[]; delegating: SlotName[]
@@ -141,6 +143,7 @@ export function buildRoster(input: {
       name, engine, state: off ? 'off' : active.length ? 'active' : 'idle',
       model: active.length ? active[0].model : configuredModel,
       instances: [...active, ...(ended ? [ended] : [])],
+      history: [...all].sort((a, b) => (a.rounds[0]?.startedAt ?? a.startedAt) - (b.rounds[0]?.startedAt ?? b.startedAt)),
       ...(ended?.endedAt !== undefined ? { lastEndedAt: ended.endedAt } : {}),
       ...(off ? { offReason: 'disabledAgents' } : {}),
       ...(name === 'council' && !off && seatsOff.length ? { seatsOff } : {}),

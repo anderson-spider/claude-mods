@@ -20,19 +20,29 @@ const stepResult = {
   turnId: 'turn-1', index: 0, answer: 'Step answer', toolUses: [], stopReason: 'end_turn' as const,
   usage: { model: 'model-1', input_tokens: 10, cache_read_input_tokens: 2, cache_creation_input_tokens: 3, output_tokens: 4 },
 }
-function trackingWorld(on: On, slowNativeWrite = false) {
+const streamChunk = { kind: 'text' as const, index: 0, text: 'streaming' }
+function trackingWorld(on: On, slowNativeWrite = false, opts: { chunk?: boolean; slowMs?: number } = {}) {
   const fixture = world(on)
   on('agent.spawn', async () => ({ model: 'model-1', agentId: 'native-1' }))
   on('turn.start', async (_$, e) => ({ turnId: e.turnId }))
-  on('turn.step', async function* (_$, e) { return { ...stepResult, turnId: e.turnId, index: e.index } })
+  on('turn.step', async function* (_$, e) {
+    if (opts.chunk) {
+      yield streamChunk
+      // The response takes time to finish streaming.
+      if (opts.slowMs) await fixture.clock.sleep(opts.slowMs)
+    }
+    return { ...stepResult, turnId: e.turnId, index: e.index }
+  })
   on('turn.complete', async () => ({ text: 'Completed' }))
   on('session.measure', async () => ({ changed: ['context'] }))
   on('tool.call', async () => ({ result: 'Tool result' }))
   const stored: Record<string, unknown> = {}
   const writes: number[] = []
+  let slowed = false
   on('state.set', async (_$, e, next) => {
     const steps = e.key === 'natives' ? (e.value as Native[])[0]?.steps ?? 0 : undefined
-    if (slowNativeWrite && steps === 1) await fixture.clock.sleep(10)
+    // Only the first write of one step is slow: the next steps' writes then wait behind it.
+    if (slowNativeWrite && steps === 1 && !slowed) { slowed = true; await fixture.clock.sleep(10) }
     const result = await next(e)
     if (result.value.isSet) {
       stored[e.key] = e.value
@@ -176,6 +186,38 @@ describe('register', () => {
     expect((await nativesOf($))[0].rounds.map(round => round.status)).toEqual(['done', 'running'])
   })
 
+  test('a native continuation reads running while its step streams, and its usage counts once', async ($, on) => {
+    const { clock } = trackingWorld(on, false, { chunk: true, slowMs: 500 })
+    await start($)
+    await $.agent.spawn(spawnInput)
+    const firstStep = step($)
+    await clock.settle()
+    await clock.advance(500)
+    await firstStep
+    await $.turn.complete({ ...completeInput, agentId: 'native-1' })
+    await clock.advance(1_000)
+    const stream = $.turn.step({ ...stepInput(0), turnId: 'turn-2' })
+    const first = await stream.next()
+    expect(first.value).toEqual(streamChunk)
+    const during = (await nativesOf($))[0]
+    expect(during.rounds.map(round => round.status)).toEqual(['done', 'running'])
+    expect(during.rounds[1].turnId).toBe('turn-2')
+    // The step is not counted until its response is in.
+    expect(during.steps).toBe(1)
+    const pending = stream.next()
+    await clock.settle()
+    await clock.advance(500)
+    const end = await pending
+    expect(end.done).toBe(true)
+    expect(end.value).toEqual({ ...stepResult, turnId: 'turn-2', index: 0 })
+    const after = (await nativesOf($))[0]
+    expect(after.rounds[1].startedAt).toBe(during.rounds[1].startedAt)
+    expect(after.rounds[1].startedAt).toBeLessThan(clock.now())
+    expect(after.rounds.length).toBe(2)
+    expect(after.steps).toBe(2)
+    expect(after.out).toBe(8)
+  })
+
   test('queued writes land in order for three concurrent steps', async ($, on) => {
     const { clock, writes } = trackingWorld(on, true)
     await start($)
@@ -229,11 +271,12 @@ describe('register', () => {
   test('the panel opens on session.start and /pantheon close closes it', async ($, on) => {
     const { seen } = world(on)
     await start($)
-    expect(seen.opened).toEqual([{ id: 'pantheon', title: 'Pantheon', columns: 72, rows: 8 }])
+    // The footer says "esc close": both opens close on Escape, and the manual one also focuses.
+    expect(seen.opened).toEqual([{ id: 'pantheon', title: 'Pantheon', columns: 72, rows: 8, closeOnEscape: true }])
     expect(await $.command.run({ command: 'pantheon', args: 'close' })).toEqual({ text: 'Pantheon panel closed.' })
     expect(seen.closed).toEqual(['pantheon'])
     await $.command.run({ command: 'pantheon', args: '' })
-    expect(seen.opened.length).toBe(2)
+    expect(seen.opened[1]).toEqual({ id: 'pantheon', title: 'Pantheon', focus: true, closeOnEscape: true })
   })
 
   test('session.start registers tools and native agents', async ($, on) => {

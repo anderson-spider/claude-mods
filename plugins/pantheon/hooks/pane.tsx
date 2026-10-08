@@ -2,12 +2,16 @@ import type { Elements, RenderSurface } from 'claude-code'
 
 import type { RailProps } from './rail'
 import { ago } from './roster'
-import type { Engine, Instance, Roster, Slot } from './roster'
+import type { Engine, Instance, Roster, RoundView, Slot } from './roster'
 import type { ConfigResult, Job, SessionInfo } from './types'
 
 export const PANE_ID = 'pantheon'
 
 const ACTIVE = new Set(['running', 'background'])
+
+// Where a round ends: its end, `now` while it truly runs, unknown for a lost round with no end.
+const endOf = (r: RoundView, now: number): number | undefined =>
+  r.endedAt ?? (ACTIVE.has(r.status) ? now : undefined)
 
 export function statusText(jobs: Job[]): string | undefined {
   const running = jobs.filter(job => job.status === 'running').length
@@ -175,7 +179,11 @@ function fit(segs: Seg[], width: number): Seg[] {
   return out
 }
 
-/** The "Last 15 minutes" card: one lane per slot, solid bars for running work, outlines for finished work. */
+/**
+ * The "Last 15 minutes" card: one lane per slot, solid bars for running work, outlines for finished
+ * work, and every run of the role that overlaps the window (its history, not just the cards' lines).
+ * A lost round with no known end is a tick at its start, never a bar.
+ */
 export function timelineSource(slots: Slot[], session: SessionInfo, now: number): { source: string; width: number; height: number } {
   const span = 900_000
   const t0 = now - span
@@ -185,20 +193,22 @@ export function timelineSource(slots: Slot[], session: SessionInfo, now: number)
   const xOf = (t: number) => x0 + ((Math.min(now, Math.max(t0, t)) - t0) / span) * (x1 - x0)
   const hex = (e: Engine | 'mixed') => HEX[e]
   const soft = (e: Engine) => (e === 'claude' ? HEX.claudeSoft : HEX.codexSoft)
-  const inWindow = (i: Instance) => i.rounds.some(r => (r.endedAt ?? now) >= t0)
+  const inRange = (r: RoundView) => (endOf(r, now) ?? r.startedAt) >= t0
+  const inWindow = (i: Instance) => i.rounds.some(inRange)
+  const runs = (slot: Slot) => (slot.history ?? slot.instances).filter(inWindow)
   const pitch = 28
   const sub = 18
   const lanes: { top: number; slot: Slot }[] = []
   let y = 34
   for (const slot of slots) {
     lanes.push({ top: y, slot })
-    y += pitch + sub * (Math.max(1, slot.instances.filter(inWindow).length) - 1)
+    y += pitch + sub * (Math.max(1, runs(slot).length) - 1)
   }
   const axisY = y + 8
   const height = axisY + 14
   let body = `<rect x="0.5" y="0.5" width="${SW - 1}" height="${height - 1}" rx="10" fill="${HEX.card}" stroke="${HEX.edge}"/>`
   body += `<text x="14" y="21" font-size="13" font-weight="600" fill="${HEX.ink}">Last 15 minutes</text>`
-  body += `<text x="${SW - 14}" y="21" font-size="11" text-anchor="end" fill="${HEX.muted}">solid = running · outline = finished</text>`
+  body += `<text x="${SW - 14}" y="21" font-size="11" text-anchor="end" fill="${HEX.muted}">solid = running · outline = finished · ? = lost</text>`
   for (const m of [0, 5, 10]) {
     const gx = x0 + (m / 15) * (x1 - x0)
     body += `<line x1="${gx}" y1="30" x2="${gx}" y2="${axisY - 14}" stroke="${HEX.grid}"/>`
@@ -224,21 +234,24 @@ export function timelineSource(slots: Slot[], session: SessionInfo, now: number)
       body += `<rect x="${x0 + 6}" y="${cy - 8}" width="28" height="15" rx="7" fill="${HEX.pill}"/><text x="${x0 + 20}" y="${cy + 3}" text-anchor="middle" font-size="10" font-weight="600" fill="${HEX.muted}">off</text>`
       continue
     }
-    const seen = slot.instances.filter(inWindow)
+    const seen = runs(slot)
     if (!seen.length) {
       body += `<text x="${x0 + 6}" y="${cy + 3}" font-size="10" fill="${HEX.muted}">${slot.lastEndedAt !== undefined ? `last run ${ago(now - slot.lastEndedAt)} ago` : 'idle'}</text>`
       continue
     }
     seen.forEach((i, k) => {
       const by = top + 2 + k * sub
-      const rounds = i.rounds.filter(r => (r.endedAt ?? now) >= t0)
+      const rounds = i.rounds.filter(inRange)
       rounds.forEach((r, m) => {
-        const ex = xOf(r.endedAt ?? now)
+        const end = endOf(r, now)
         const sx = xOf(r.startedAt)
-        const w = Math.max(3, ex - sx)
-        body += r.endedAt === undefined && i.isActive
-          ? `<rect x="${sx}" y="${by}" width="${w}" height="12" rx="3" fill="${hex(i.engine)}"/>`
-          : `<rect x="${sx}" y="${by}" width="${w}" height="12" rx="3" fill="${soft(i.engine)}" stroke="${hex(i.engine)}"/>`
+        const w = end === undefined ? 3 : Math.max(3, xOf(end) - sx)
+        const ex = sx + w
+        body += end === undefined
+          ? `<rect x="${sx}" y="${by}" width="3" height="12" fill="${HEX.amber}"/><text x="${sx + 6}" y="${by + 10}" font-size="10" font-weight="600" fill="${HEX.amber}">?</text>`
+          : r.endedAt === undefined
+            ? `<rect x="${sx}" y="${by}" width="${w}" height="12" rx="3" fill="${hex(i.engine)}"/>`
+            : `<rect x="${sx}" y="${by}" width="${w}" height="12" rx="3" fill="${soft(i.engine)}" stroke="${hex(i.engine)}"/>`
         if (i.rounds.length > 1) {
           body += `<text x="${sx + w / 2}" y="${by - 2}" text-anchor="middle" font-size="9" font-weight="600" fill="${HEX.amber}">r${i.rounds.indexOf(r) + 1}</text>`
         }
@@ -471,9 +484,11 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
       const shown = i.rounds.slice(-4)
       out.push(line(`${i.id}-d`, [
         { text: `${pad}  rounds`.trimEnd(), dim: true },
-        ...shown.map((r, k): Seg => (r.endedAt === undefined && i.isActive && k === shown.length - 1)
-          ? { text: '■ now', color: ROUND }
-          : { text: `■ ${fmtClock((r.endedAt ?? now) - r.startedAt)}`, dim: true }),
+        ...shown.map((r): Seg => {
+          const end = endOf(r, now)
+          if (end === undefined) return { text: '■ ?', color: ROUND, dim: true }
+          return r.endedAt === undefined ? { text: '■ now', color: ROUND } : { text: `■ ${fmtClock(end - r.startedAt)}`, dim: true }
+        }),
       ], undefined, IW))
     }
     return out
@@ -493,8 +508,14 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     return card(`role-${slot.name}`, [
       line(`${slot.name}-h`, left, [chip(`${live.length} running`, RUN)], IW, keepOf(left, live.length > 1 ? 3 : 2)),
       ...live.flatMap((i, k) => instanceRows(i, k, live.length)),
+      // A disabled council seat stays visible as off inside the slot while another seat works.
+      slot.seatsOff?.length
+        ? line(`${slot.name}-off`, [{ text: '⊘', dim: true }, { text: `${slot.seatsOff.join(', ')} off`, dim: true }], undefined, IW)
+        : null,
     ], { dim: true })
   }
+  const activeHeight = (slot: Slot) =>
+    3 + activeOf(slot).reduce((m, i) => m + instanceHeight(i), 0) + (slot.seatsOff?.length ? 1 : 0)
 
   const idleCard = (slot: Slot) => {
     const isOff = slot.state === 'off'
@@ -544,7 +565,7 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     const tail = roles.filter(s => s.state !== 'active')
     // Rows the always-shown part takes; idle and off cards (3 rows each) take what is left, in role order.
     const orchH = 4 + (data.session.context?.percent != null ? 1 : 0) + (roster.delegating.length ? 1 : 0)
-    const liveH = live.reduce((n, s) => n + 3 + activeOf(s).reduce((m, i) => m + instanceHeight(i), 0), 0)
+    const liveH = live.reduce((n, s) => n + activeHeight(s), 0)
     const used = 1 + (data.clockLost ? 1 : 0) + orchH + 1 + liveH + (roster.others.length ? 1 : 0) + 1 + 2
     let room = Math.floor((data.rows - used) / 3)
     let hidden = 0
@@ -727,14 +748,24 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
         if (i.status === 'background') segs.push({ text: 'bg', dim: true })
         segs.push(clockSeg(`clk-${i.id}`, i.startedAt, null, 'text', true))
       })
+      if (slot.seatsOff?.length) segs.push({ text: `⊘ ${slot.seatsOff.join(', ')} off`, dim: true })
       lines.push(line(`m-${slot.name}`, segs, undefined, W))
     }
 
     // With one or no spare line the last line goes first, and with a single line the orchestrator's alone.
     const more = live.length - shown.length
+    // Other subagents get one summary ahead of the quiet roles, so active work outside the roles shows.
+    const others = roster.others
+    const othersOn = others.filter(i => i.isActive).length
+    const othersSeg: Seg[] = others.length
+      ? [othersOn
+        ? { text: `● ${othersOn} other agent${othersOn > 1 ? 's' : ''}`, color: ENGINE_COLOR.claude }
+        : { text: `○ ${others.length} other agent${others.length > 1 ? 's' : ''}`, dim: true }]
+      : []
     if (avail >= 2) {
       lines.push(line('m-last', [
         ...(more > 0 ? [{ text: `+${more} active`, color: RUN }] : []),
+        ...othersSeg,
         ...quiet.map((r): Seg => r.state === 'off'
           ? { text: `⊘ ${r.name} off`, dim: true }
           : { text: `○ ${r.name}${r.lastEndedAt !== undefined ? ` ${ago(now - r.lastEndedAt)} ago` : ''}`, dim: true }),

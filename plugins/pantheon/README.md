@@ -45,7 +45,7 @@ The Jobs tab groups active and finished Codex jobs, with Cancel for active jobs 
 
 The terminal panel docks beside the transcript and uses a mini view when placed inline. Desktop adds a "Last 15 minutes" SVG timeline with a lane per role. The docked layout has rails, clocks and the pulse; mini (placed inline) has clocks and the pulse, no rails; desktop has rails and clocks, no pulse. Rails use each engine's color; inactive timers pause. The panel has no configuration. Rate limits, repository, branch and cache stay in hud.
 
-The tracking hooks only watch and pass events on unchanged. Native records and main-session readings use queues that keep only the latest pending snapshot in session state; the selected tab is saved there too. The panel shows one toast per session the first time saving the panel state (agents, session or selected tab) fails; jobs keep their own warning. See [Privacy and permissions](../../docs/PRIVACY.md#pantheon) for the stored fields and tool-input redaction.
+The tracking hooks only watch and pass events on unchanged. Native records, main-session readings and the selected tab are saved in session state through queues that keep only the latest pending snapshot. The panel shows one toast per session the first time saving the panel state (agents, session or selected tab) fails; jobs keep their own warning. See [Privacy and permissions](../../docs/PRIVACY.md#pantheon) for the stored fields and tool-input redaction.
 
 flightdeck users: `/plugin uninstall flightdeck`.
 
