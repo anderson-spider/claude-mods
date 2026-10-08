@@ -777,6 +777,27 @@ describe("threads: creating", () => {
     expect(sendKeys(w)).toEqual([["send-keys", "-t", `thread-${created(w, "Scout").id}`, "C-m"]]);
   });
 
+  test("a trust prompt that stays after the keys were sent is reported as stuck", async ($, on) => {
+    const w = fresh({ register: false, spawnScreen: "Do you trust the files in this folder?\n❯ 1. Yes, I trust this folder\n  2. No, exit" });
+    await boot($, on, w);
+    const out = await threads($, "new haiku Scout --cwd /work/untrusted -- list");
+    expect(out).toMatch(/keys to accept it were sent and the prompt did not accept/);
+    const types = events(w).map((e: any) => e.type);
+    expect(types.filter((t: string) => t === "trust-accepted")).toHaveLength(1);
+    expect(types.filter((t: string) => t === "trust-stuck")).toHaveLength(1);
+  });
+
+  test("a trust prompt with no recognizable options gets no key", async ($, on) => {
+    const w = fresh({ register: false, spawnScreen: "Do you trust the files in this folder?\n ❯ Continue\n   Quit" });
+    await boot($, on, w);
+    const out = await threads($, "new haiku Scout --cwd /work/untrusted -- list");
+    expect(out).toMatch(/did not recognize, so no key was sent/);
+    expect(sendKeys(w)).toEqual([]);
+    expect(created(w, "Scout").status).toBe("needs-trust");
+    const ev = events(w).find((e: any) => e.type === "trust-unrecognized");
+    expect(ev?.screen).toMatch(/Continue/);
+  });
+
   test("threads_create tool, plain English path", async ($, on) => {
     const w = fresh();
     await boot($, on, w);
