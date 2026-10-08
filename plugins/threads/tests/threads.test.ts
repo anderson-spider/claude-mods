@@ -997,6 +997,32 @@ describe("threads: reports and monitoring", () => {
     expect(created(w, "Haiku scout").status).toBe("exited");
   });
 
+  test("probeWindowSeconds sets how long a failed probe is ignored", { options: { probeWindowSeconds: 20 } } as any, async ($: any, on: any) => {
+    const w = fresh();
+    await boot($, on, w);
+    await threads($, "new haiku Haiku scout -- list the files");
+    const before = created(w, "Haiku scout").status;
+    w.tmuxFailures = 99;
+    await threads($, "refresh");
+    w.now += 19000;
+    await threads($, "refresh");
+    expect(created(w, "Haiku scout").status).toBe(before);
+    w.now += 2000;
+    await threads($, "refresh");
+    expect(created(w, "Haiku scout").status).toBe("exited");
+  });
+
+  test("an invalid probeWindowSeconds falls back to 6 seconds", { options: { probeWindowSeconds: -3 } } as any, async ($: any, on: any) => {
+    const w = fresh();
+    await boot($, on, w);
+    await threads($, "new haiku Haiku scout -- list the files");
+    w.tmuxFailures = 99;
+    await threads($, "refresh");
+    w.now += 7000;
+    await threads($, "refresh");
+    expect(created(w, "Haiku scout").status).toBe("exited");
+  });
+
   test("threads_wait does not treat a thread idle before its first turn as done", async ($, on) => {
     const w = fresh();
     await boot($, on, w);

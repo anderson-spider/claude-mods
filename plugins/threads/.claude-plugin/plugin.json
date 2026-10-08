@@ -1,6 +1,6 @@
 {
   "name": "threads",
-  "version": "0.2.8",
+  "version": "0.2.9",
   "description": "A lead chat creates real Claude Code sessions, or Codex sessions through a small helper, on chosen models, watches them live and steers them. Shows the apps each thread drives through codex-computer-use. Adapted from promptadvisers/claude-mods-computer-use-threads; see NOTICE.",
   "types": "./types/index.d.ts",
   "author": {
@@ -25,6 +25,12 @@
       "title": "Close idle threads after (minutes)",
       "description": "Finished session threads of this chat that stay idle this long are closed (transcript kept). Working, waiting and pinned threads are never closed. 0 turns it off.",
       "default": 120
+    },
+    "probeWindowSeconds": {
+      "type": "number",
+      "title": "Ignore failed probes for (seconds)",
+      "description": "A failed tmux or Codex helper probe is believed only after it has kept failing this long; until then a thread keeps its last known status. Invalid values use 6; 0 trusts the first failure.",
+      "default": 6
     }
   },
   "license": "MIT",

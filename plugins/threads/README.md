@@ -30,7 +30,7 @@ A thread can be a Codex session instead of a Claude one: `/threads new codex Sco
 
 ## Status checks
 
-A thread counts as exited only after tmux (or the Codex helper) has stayed silent for a few seconds; a single failed or aborted probe, such as an interrupted `threads_wait`, keeps the last known status. `threads_wait` with `until: idle` also returns while a thread waits for an approval (use `any_change` to wait for the answer), and stops waiting on a thread that is idle with no transcript a minute after it was created. The registry's `closed` events record who closed the thread (`by`: tool, command or pane).
+A thread counts as exited only after tmux (or the Codex helper) has stayed silent for a few seconds (6 by default; the `probeWindowSeconds` setting changes it); a single failed or aborted probe, such as an interrupted `threads_wait`, keeps the last known status. `threads_wait` with `until: idle` also returns while a thread waits for an approval (use `any_change` to wait for the answer), and stops waiting on a thread that is idle with no transcript a minute after it was created. The registry's `closed` events record who closed the thread (`by`: tool, command or pane).
 
 ## Permissions
 
