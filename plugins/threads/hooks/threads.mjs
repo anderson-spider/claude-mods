@@ -186,6 +186,8 @@ const callsInFlight = new Map();
 let configuredMode = DEFAULT_MODE;
 // idleCloseMinutes setting: finished session threads idle this long are closed (0: never)
 let idleCloseMinutes = 120;
+// probeWindowSeconds setting: how long a failed tmux or Codex helper probe is ignored
+let missWindowMs = 6000;
 let lastIdleCheck = 0;
 const MODE_KEY = "defaultMode";
 
@@ -193,6 +195,8 @@ export function register(on, options) {
   configuredMode = checkMode(options?.defaultPermissionMode).mode ?? DEFAULT_MODE;
   const idle = Number(options?.idleCloseMinutes);
   idleCloseMinutes = Number.isFinite(idle) && idle >= 0 ? idle : 120;
+  const win = Number(options?.probeWindowSeconds);
+  missWindowMs = Number.isFinite(win) && win >= 0 ? win * 1000 : 6000;
   on("session.start", async ($, e, next) => {
     desktopCache.at = 0;
     probeMisses.panes = 0;
@@ -1314,10 +1318,9 @@ async function probePanes($) {
   return { panes: new Map(), failed: !/no server running|error connecting to|no sessions/i.test(r.stderr) };
 }
 
-// A failed probe is believed only once it has kept failing for MISS_WINDOW_MS, so an aborted or
+// A failed probe is believed only once it has kept failing for missWindowMs, so an aborted or
 // timed-out call (and the several refreshes that can land in the same moment) never marks a live
 // thread exited. probeMisses holds when the current run of failures began (0: none).
-const MISS_WINDOW_MS = 6000;
 const probeMisses = { panes: 0, codex: 0 };
 function trustMiss(kind, failed, now) {
   if (!failed) {
@@ -1325,7 +1328,7 @@ function trustMiss(kind, failed, now) {
     return false;
   }
   if (probeMisses[kind] === 0) probeMisses[kind] = now;
-  return now - probeMisses[kind] < MISS_WINDOW_MS;
+  return now - probeMisses[kind] < missWindowMs;
 }
 
 async function capture($, name, joined) {
