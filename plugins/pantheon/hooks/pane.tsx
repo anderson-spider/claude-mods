@@ -263,9 +263,11 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
   const layout = layoutOf(data.surface, data.placement)
   const isDesk = layout === 'desktop'
   const isMini = layout === 'mini'
-  // The real width: a pane narrower than a comfortable minimum is clipped, never padded out.
-  const W = Math.max(12, data.columns)
-  const IW = Math.max(8, W - 4)
+  // The real width, with no floor: content degrades to fit it. Below 12 columns the cards give up
+  // their border and padding, the header its title and tabs, so nothing is wider than the body.
+  const W = Math.max(1, data.columns)
+  const isTiny = W < 12
+  const IW = isTiny ? W : W - 4
   const { now, roster } = data
   const canClient = data.hasClient && !data.clockLost
   const hasRail = canClient && !!el.rail
@@ -348,11 +350,11 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     <Box
       key={key}
       flexDirection="column"
-      borderStyle={style.border ?? (isDesk ? 'round' : 'single')}
+      borderStyle={isTiny ? undefined : style.border ?? (isDesk ? 'round' : 'single')}
       borderColor={isDesk ? style.color ?? '#e1ded6' : style.color}
       borderDimColor={isDesk ? undefined : style.dim}
       backgroundColor={isDesk ? '#ffffff' : undefined}
-      paddingX={1}
+      paddingX={isTiny ? 0 : 1}
       width={W}
     >
       {children}
@@ -373,25 +375,30 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     const right: Seg[] = data.tab === 'agents'
       ? W >= 58
         ? [{ text: `${c.active} active`, color: RUN }, { text: `· ${c.idle} idle · ${c.off} off`, dim: true }]
-        : [{ text: `${c.active} active`, color: RUN }]
+        : W >= 30 ? [{ text: `${c.active} active`, color: RUN }] : []
       : W >= 60 ? [{ text: 'codex jobs · this session', dim: true }] : []
+    // Too narrow for both tabs: one button switches to the other tab.
+    const other = data.tab === 'agents' ? 'jobs' : 'agents'
+    const tabs = W >= 30
+      ? [tabButton('agents', 'Agents'), tabButton('jobs', `Jobs ${data.jobs.length}`)]
+      : [<Button key={`tab-${other}`} label={other === 'jobs' ? 'J' : 'A'} hotkey={other === 'jobs' ? '2' : '1'} onPress={() => data.onTab(other)} />]
     return (
       <Box key="header" justifyContent="space-between" gap={1} width={W}>
         <Box gap={1} flexShrink={1}>
-          {text({ text: isDesk ? 'Pantheon' : 'PANTHEON', bold: true, color: ROUND })}
-          {tabButton('agents', 'Agents')}
-          {tabButton('jobs', `Jobs ${data.jobs.length}`)}
+          {W >= 14 ? text({ text: isDesk ? 'Pantheon' : 'PANTHEON', bold: true, color: ROUND }) : null}
+          {tabs}
         </Box>
         {right.length ? <Box gap={1} flexShrink={0}>{render(right)}</Box> : null}
       </Box>
     )
   }
+  // 7: the warning gets its own row under the header, ahead of everything optional.
+  const clockWarning = () => data.clockLost ? note('clock-lost', { text: 'clock unavailable', color: ROUND, bold: true }) : null
   const footer = () => note('footer', {
     dim: true,
     text: [
       data.tab === 'agents' ? '1 agents · 2 jobs · esc close' : '1 agents · 2 jobs · ↻ resumable · Copy = id + resume hint',
-      data.clockLost ? 'clock unavailable' : undefined,
-    ].filter(Boolean).join(' · '),
+    ].join(' · '),
   })
 
   // ------------------------------------------------------------ agents tab
@@ -424,7 +431,7 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     ]
     const ctx = s.context
     if (ctx && ctx.percent !== null) {
-      const [on, off] = bar(ctx.percent, Math.max(6, Math.min(20, IW - 24)))
+      const [on, off] = bar(ctx.percent, Math.max(1, Math.min(20, IW - 24)))
       rows.push(line('o3', [
         { text: 'ctx', dim: true }, on, off,
         { text: kilo(ctx.tokens), bold: true },
@@ -521,17 +528,13 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     ], undefined, W)
   }
 
-  // The orchestrator's connector to the first role: lit with packets while a turn runs.
+  // The orchestrator's connector to the first role: a solid lit mark for the whole turn (a
+  // one-cell line has no room for packets, which would leave it dim at some phases), dim otherwise.
   const orchestratorLink = () => {
     const running = data.session.isRunning
     return (
-      <Box key="orch-link" paddingLeft={1}>
-        {hasRail
-          ? el.rail!({
-            key: 'rail-orchestrator', width: 1,
-            props: { active: running, width: 1, color: paint(ENGINE_COLOR.claude)!, dim: paint('inactive')!, marks: [], isMerge: false, vertical: true },
-          })
-          : text({ text: '│', color: running ? ENGINE_COLOR.claude : undefined, dim: !running })}
+      <Box key="orch-link" paddingLeft={isTiny ? 0 : 1}>
+        {text({ text: running ? '┃' : '│', color: running ? paint(ENGINE_COLOR.claude) : undefined, bold: running, dim: !running })}
       </Box>
     )
   }
@@ -542,7 +545,7 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     // Rows the always-shown part takes; idle and off cards (3 rows each) take what is left, in role order.
     const orchH = 4 + (data.session.context?.percent != null ? 1 : 0) + (roster.delegating.length ? 1 : 0)
     const liveH = live.reduce((n, s) => n + 3 + activeOf(s).reduce((m, i) => m + instanceHeight(i), 0), 0)
-    const used = 1 + orchH + 1 + liveH + (roster.others.length ? 1 : 0) + 1 + 2
+    const used = 1 + (data.clockLost ? 1 : 0) + orchH + 1 + liveH + (roster.others.length ? 1 : 0) + 1 + 2
     let room = Math.floor((data.rows - used) / 3)
     let hidden = 0
     if (room < tail.length) {
@@ -553,6 +556,7 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     const chosen = new Set<string>([...live, ...tail.slice(0, room)].map(s => s.name))
     return [
       header(),
+      clockWarning(),
       isDesk && el.Svg ? timelineCard() : null,
       orchestratorCard(),
       orchestratorLink(),
@@ -591,8 +595,8 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
         <Box justifyContent="space-between" gap={1} width={IW}>
           <Box gap={1} flexShrink={1}>{render(fit(left, IW - 18))}</Box>
           <Box gap={1} flexShrink={0}>
-            {isLive && <Button key={`cancel-${job.id}`} label="Cancel" onPress={() => data.onCancel(job.id)} />}
-            <Button key={`copy-${job.id}`} label="Copy" onPress={press => data.onCopy(copyText(job), press.surface)} />
+            {isLive && <Button key={`cancel-${job.id}`} label={W < 24 ? 'x' : 'Cancel'} onPress={() => data.onCancel(job.id)} />}
+            <Button key={`copy-${job.id}`} label={W < 24 ? 'c' : 'Copy'} onPress={press => data.onCopy(copyText(job), press.surface)} />
           </Box>
         </Box>
         <Box gap={1} width={IW}>{render(fit(detail, IW))}</Box>
@@ -610,7 +614,7 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     const recent = [...data.jobs].sort((a, b) => b.startedAt - a.startedAt)
     const live = recent.filter(j => ACTIVE.has(j.status))
     const done = recent.filter(j => !ACTIVE.has(j.status))
-    let room = data.rows - 8 - live.reduce((n, j) => n + jobHeight(j), 0)
+    let room = data.rows - 8 - (data.clockLost ? 1 : 0) - live.reduce((n, j) => n + jobHeight(j), 0)
     const shownDone: Job[] = []
     for (const j of done) {
       if (room < jobHeight(j) && shownDone.length) break
@@ -625,6 +629,7 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     )
     return [
       header(),
+      clockWarning(),
       data.jobs.length === 0 ? note('empty', { dim: true, text: 'No Pantheon jobs in this session.' }) : null,
       live.length ? group('active', live, live.length) : null,
       shownDone.length ? group('finished', shownDone, done.length) : null,
@@ -650,6 +655,7 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
       ? [{ text: 'ctx', dim: true }, ...bar(ctx.percent, 6), { text: `${Math.round(ctx.percent)}%`, dim: true }] : []
 
     lines.push(line('m-o', [
+      ...(data.clockLost ? [{ text: 'clock unavailable', bold: true, color: ROUND }] : []),
       { text: 'pantheon', bold: true, color: ROUND },
       { text: s.isRunning ? '●' : '○', color: s.isRunning ? RUN : undefined, dim: !s.isRunning },
       { text: 'orchestrator' },

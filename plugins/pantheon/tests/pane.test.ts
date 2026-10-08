@@ -222,13 +222,16 @@ describe('pane', () => {
     seed(on, { natives: [native()], session: { isRunning: true, turnStartedAt: NOW - 5_000 } })
     await start($)
     await command($, 'config')
-    const rails = await railsOf(await mountPane($, 'terminal'))
+    const ui = await mountPane($, 'terminal')
+    const rails = await railsOf(ui)
     const glyphs = rails.filter(r => r.props?.glyph)
     expect(glyphs.length).toBe(5) // oracle lit; explorer, fixer, designer, council still; librarian off has none
     expect(glyphs.filter(r => r.props.active).length).toBe(1)
     expect(glyphs.every(r => r.props.isPulse !== false && r.props.isLine !== false)).toBe(true)
-    const link = rails.find(r => r.props?.vertical)
-    expect(link?.props.active).toBe(true)
+    // The orchestrator link is a solid lit mark, not a one-cell rail whose packets leave it dim at some phases.
+    expect(rails.some(r => r.props?.vertical)).toBe(false)
+    const mark = (await texts(ui)).filter(x => x === '┃')
+    expect(mark.length).toBe(1)
     // The region is the line plus the glyph cell, so it does not grow with what the rail draws.
     expect(glyphs.every(r => r.width === r.props.width + 1)).toBe(true)
   })
@@ -248,6 +251,59 @@ describe('pane', () => {
     expect(rails.length).toBeGreaterThan(0)
     expect(rails.every(r => r.props.isPulse === false)).toBe(true)
     expect((await clients(desk)).some(c => String(c.module).includes('elapsed'))).toBe(true)
+  })
+
+  t('the orchestrator link is lit for the whole turn on both surfaces and registers no extra timer', async ($, on) => {
+    world(on)
+    seed(on, { session: { isRunning: true, turnStartedAt: NOW - 5_000 } })
+    await start($)
+    for (const surface of SURFACES) {
+      const ui = await mountPane($, surface)
+      const link = (await ui.findAll({ type: 'Text' })).filter(n => String(n.text) === '┃')
+      expect(link.length).toBe(1)
+      expect((link[0] as unknown as { props: { bold?: boolean; color?: string } }).props.bold).toBe(true)
+      expect((await railsOf(ui)).some(r => r.props?.vertical)).toBe(false)
+      await release()
+    }
+  })
+
+  t('an 8-column body produces nothing wider than 8', async ($, on) => {
+    world(on)
+    seed(on, {
+      jobs: [job({ id: 'pj3a', description: 'map the pane render tree', lastActivity: 'rg something long' })],
+      natives: [native()],
+      session: { isRunning: true, turnStartedAt: NOW - 5_000, model: 'opus', context: { tokens: 100, window: 200, percent: 50 } },
+    })
+    await start($)
+    for (const surface of SURFACES) {
+      for (const tab of ['agents', 'jobs'] as const) {
+        const ui = await mountPane($, surface, { columns: 8 })
+        // The view persists between mounts: press only when the tab is not already showing.
+        if (await ui.find({ key: `tab-${tab}` })) await ui.press({ key: `tab-${tab}` })
+        expect((await texts(ui)).filter(x => x.length > 8)).toEqual([])
+        const labels = (await ui.findAll({ type: 'Button' })).map(b => String((b as unknown as { props: { label?: string } }).props.label))
+        expect(labels.filter(x => x.length + 4 > 8)).toEqual([])
+        await release()
+      }
+    }
+  })
+
+  t('the clock warning shows in docked at 40 columns and in mini', async ($, on) => {
+    let fail = false
+    world(on, { clockDown: () => fail })
+    seed(on, { jobs: [job({ id: 'pj3a', description: 'map' })], session: { isRunning: true, turnStartedAt: NOW - 5_000 } })
+    await start($)
+    fail = true
+    const docked = await mountPane($, 'terminal', { columns: 40 })
+    expect((await texts(docked)).includes('clock unavailable')).toBe(true)
+    await docked.press({ key: 'tab-jobs' })
+    expect((await texts(docked)).includes('clock unavailable')).toBe(true)
+    await release()
+    const mini = await mountPane($, 'terminal', { placement: 'inline', columns: 60 })
+    expect((await texts(mini)).includes('clock unavailable')).toBe(true)
+    await release()
+    const narrow = await mountPane($, 'terminal', { placement: 'inline', columns: 20 })
+    expect((await texts(narrow)).some(x => x.startsWith('clock'))).toBe(true)
   })
 
   t('desktop text and chips use the artboard hex values', async ($, on) => {
@@ -295,7 +351,7 @@ describe('pane', () => {
     fail = true
     const ui = await mountPane($, 'terminal')
     const all = await texts(ui)
-    expect(all.some(x => x.includes('clock unavailable'))).toBe(true)
+    expect(all.includes('clock unavailable')).toBe(true)
     expect(all).toContain('pj3a')
     expect(await clients(ui)).toEqual([])
   })
