@@ -60,6 +60,41 @@ async function step($: Engine, input = stepInput()) {
 }
 
 describe('register', () => {
+  for (const failedKeys of [['natives'], ['session'], ['view'], ['natives', 'session', 'view']]) {
+    test(`failed panel writes warn once and preserve hook results: ${failedKeys.join(', ')}`, async ($, on) => {
+      const { seen } = world(on)
+      const rejected: string[] = []
+      on('state.set', async (_$, e, next) => {
+        if (!failedKeys.includes(e.key)) return next(e)
+        rejected.push(e.key)
+        return { deny: 'panel storage unavailable' }
+      })
+      const spawned = { agentId: 'native-1', model: 'model-1' }
+      const completed = { text: 'unchanged completion' }
+      const called = { ref: 9, result: 'unchanged tool result', text: 'Tool text', isReadOnly: true as const }
+      on('agent.spawn', async () => spawned)
+      on('turn.start', async (_$, e) => ({ turnId: e.turnId }))
+      on('turn.complete', async () => completed)
+      on('tool.call', async () => called)
+      on('turn.step', async function* () { return stepResult })
+      on('session.measure', async () => ({ changed: ['context'] }))
+      expect(await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })).toEqual({ cwd: ROOT })
+      expect(await $.turn.start({ text: 'Go', turnId: 'turn-1' })).toEqual({ turnId: 'turn-1' })
+      expect(await $.agent.spawn(spawnInput)).toEqual(spawned)
+      expect((await step($)).result).toEqual(stepResult)
+      expect(await $.tool.call({ tool: 'Bash', command: 'pwd', agentId: 'native-1' })).toEqual(called)
+      expect(await $.turn.complete({ ...completeInput, agentId: 'native-1' })).toEqual(completed)
+      expect(await $.turn.complete(completeInput)).toEqual(completed)
+      expect(await $.session.measure(measureInput)).toEqual({ changed: ['context'] })
+      // Repeat view writes as well as the queue writes: the warning stays session-wide.
+      await start($)
+      for (const key of failedKeys) expect(rejected.filter(value => value === key).length).toBeGreaterThan(1)
+      expect(seen.toasts.length).toBe(1)
+      expect(seen.toasts[0]).toContain('pantheon: could not save the panel state (the panel may be stale):')
+      expect(seen.toasts[0]).toContain('panel storage unavailable')
+    })
+  }
+
   test('snapshot queues recover after a failed write and retain only the latest pending snapshot', async () => {
     const writes: number[] = []
     const errors: unknown[] = []

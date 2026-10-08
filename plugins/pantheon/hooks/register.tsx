@@ -41,6 +41,7 @@ type TrackingIo = {
   writeNatives: (list: Native[]) => Promise<unknown>
   readSession: () => Promise<unknown>
   writeSession: (value: SessionInfo) => Promise<unknown>
+  toast: (text: string) => void
   now: () => Promise<number>
 }
 
@@ -141,8 +142,16 @@ export const register: Register = on => {
   let natives: Native[] | undefined
   let session: SessionInfo | undefined
   let trackingLoad: Promise<void> | undefined
-  const nativesQueue = createQueue<Native[]>(list => trackingLive!.writeNatives(list), () => {})
-  const sessionQueue = createQueue<SessionInfo>(value => trackingLive!.writeSession(value), () => {})
+  let warnedTrackingWrite = false
+  function notifyTrackingWrite(error: unknown): void {
+    if (warnedTrackingWrite) return
+    warnedTrackingWrite = true
+    try {
+      trackingLive?.toast(`pantheon: could not save the panel state (the panel may be stale): ${error instanceof Error ? error.message : String(error)}`)
+    } catch { /* A failed warning must not affect the user's call. */ }
+  }
+  const nativesQueue = createQueue<Native[]>(list => trackingLive!.writeNatives(list), notifyTrackingWrite)
+  const sessionQueue = createQueue<SessionInfo>(value => trackingLive!.writeSession(value), notifyTrackingWrite)
 
   async function ensureTracking(io: TrackingIo): Promise<void> {
     trackingLive = io
@@ -323,11 +332,12 @@ export const register: Register = on => {
         writeNatives: list => update($, nativesAtom, () => list),
         readSession: () => read($, sessionAtom),
         writeSession: value => update($, sessionAtom, () => value),
+        toast: text => $.ui.toast(text),
         now: () => $.clock.now(),
       }
       await ensureTracking(trackingIo)
       await Promise.all([nativesQueue.flushed(), sessionQueue.flushed()])
-      await update($, viewAtom, normalizeView)
+      await update($, viewAtom, normalizeView).catch(notifyTrackingWrite)
     } catch { /* Tracking must not interrupt session setup. */ }
     try {
       await $.ui.open({ id: PANE_ID, title: 'Pantheon', columns: 72, rows: 8 })
@@ -342,6 +352,7 @@ export const register: Register = on => {
         writeNatives: list => update($, nativesAtom, () => list),
         readSession: () => read($, sessionAtom),
         writeSession: value => update($, sessionAtom, () => value),
+        toast: text => $.ui.toast(text),
         now: () => $.clock.now(),
       }
       await ensureTracking(io)
@@ -361,6 +372,7 @@ export const register: Register = on => {
         writeNatives: list => update($, nativesAtom, () => list),
         readSession: () => read($, sessionAtom),
         writeSession: value => update($, sessionAtom, () => value),
+        toast: text => $.ui.toast(text),
         now: () => $.clock.now(),
       }
       await ensureTracking(io)
@@ -386,6 +398,7 @@ export const register: Register = on => {
         writeNatives: list => update($, nativesAtom, () => list),
         readSession: () => read($, sessionAtom),
         writeSession: value => update($, sessionAtom, () => value),
+        toast: text => $.ui.toast(text),
         now: () => $.clock.now(),
       }
       await ensureTracking(io)
@@ -410,6 +423,7 @@ export const register: Register = on => {
         writeNatives: list => update($, nativesAtom, () => list),
         readSession: () => read($, sessionAtom),
         writeSession: value => update($, sessionAtom, () => value),
+        toast: text => $.ui.toast(text),
         now: () => $.clock.now(),
       }
       await ensureTracking(io)
@@ -429,6 +443,7 @@ export const register: Register = on => {
           writeNatives: list => update($, nativesAtom, () => list),
           readSession: () => read($, sessionAtom),
           writeSession: value => update($, sessionAtom, () => value),
+          toast: text => $.ui.toast(text),
           now: () => $.clock.now(),
         }
         await ensureTracking(io)
@@ -449,6 +464,7 @@ export const register: Register = on => {
           writeNatives: list => update($, nativesAtom, () => list),
           readSession: () => read($, sessionAtom),
           writeSession: value => update($, sessionAtom, () => value),
+          toast: text => $.ui.toast(text),
           now: () => $.clock.now(),
         }
         await ensureTracking(io)
