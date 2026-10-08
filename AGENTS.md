@@ -32,6 +32,7 @@ claude plugin test plugins/flightdeck          # same, for flightdeck
 node scripts/check-consistency.mjs             # marketplace and plugin manifests agree (also run by CI)
 node scripts/check-version-bump.mjs origin/main  # a plugin with code changes bumped its version (run by CI on pull requests)
 claude --plugin-dir plugins/branch-guard       # loads the plugin with automatic reload
+make update                                    # refreshes the marketplace and updates every installed plugin from it
 ```
 
 Inside a session, `/reload-plugins` reloads the hooks.
