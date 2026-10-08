@@ -119,6 +119,26 @@ function paceTick(g) {
   return g.elapsed === null ? -1 : Math.round((g.elapsed / 100) * TEXT_CELLS);
 }
 
+// A desktop pill: tinted, outlined, its parts side by side. The app rounds a Box only through its
+// border, and a border brings a padding that made the band taller than the prompt box: paddingY,
+// set after it, takes the vertical part back. A pill never shrinks: squeezed, the app broke "24 %"
+// over two lines. A keyed pill is a hover scope: its card shows while the pointer is over it.
+export function pill({ Box, Text }, b) {
+  return Box({
+    key: b.key,
+    flexDirection: "row",
+    columnGap: 1,
+    alignItems: "center",
+    children: b.tip ? [...b.parts, hoverCard(Box, Text, b.tip)] : b.parts,
+    flexShrink: 0,
+    paddingX: 1,
+    paddingY: 0,
+    borderStyle: "round",
+    borderColor: b.tint[1],
+    backgroundColor: b.tint[0],
+  });
+}
+
 // A rule between terminal blocks; the info line uses the same spacing.
 export function separator(Box, Text, key, glyph = SEP) {
   return Box({ key, paddingX: 1, children: [Text({ dimColor: true, children: glyph })] });
@@ -129,7 +149,7 @@ export function separator(Box, Text, key, glyph = SEP) {
 // The second and third rows of the band, in the same order on both surfaces:
 //   context | cache time | cache hit | agents
 //   5h bar 22% ▼65 · 40m | 7d bar 29% ▲4 · 5d 6h
-// In the terminal they are blocks split by a rule; in the app, tinted, outlined pills.
+// In the terminal they are blocks split by a rule; in the app, pills.
 export function drawLine(elements, surface, columns, now, agents) {
   const { Box, Text, Svg } = elements;
   const desktop = surface === "desktop" && !!Svg;
@@ -190,23 +210,8 @@ export function drawLine(elements, surface, columns, now, agents) {
   const row = (b) => ({ key: b.key, flexDirection: "row", columnGap: 1, alignItems: "center", children: b.parts });
   let draw;
   if (desktop) {
-    // Pills: tinted, outlined, side by side. The app rounds a Box only through its border, and
-    // a border brings a padding that made the band taller than the prompt box: paddingY, set
-    // after it, takes the vertical part back.
-    // A pill never shrinks: squeezed, the app broke "24 %" over two lines.
-    // A keyed pill is a hover scope: its card shows while the pointer is over it.
-    draw = (list) => list.map((b) =>
-      Box({
-        ...row(b),
-        children: b.tip ? [...b.parts, hoverCard(Box, Text, b.tip)] : b.parts,
-        flexShrink: 0,
-        paddingX: 1,
-        paddingY: 0,
-        borderStyle: "round",
-        borderColor: b.tint[1],
-        backgroundColor: b.tint[0],
-      }),
-    );
+    // Pills side by side.
+    draw = (list) => list.map((b) => pill(elements, b));
   } else {
     draw = (list) => list.flatMap((b, i) => (i > 0 ? [separator(Box, Text, "sep-" + i), Box(row(b))] : [Box(row(b))]));
   }

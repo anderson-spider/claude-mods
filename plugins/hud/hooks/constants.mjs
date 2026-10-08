@@ -115,6 +115,9 @@ export const TINTS = {
   fast: ["rgba(217,150,43,0.14)", "rgba(217,150,43,0.36)"],
   alert: ["rgba(214,69,69,0.12)", "rgba(214,69,69,0.36)"],
   agents: ["rgba(196,80,127,0.11)", "rgba(196,80,127,0.32)"],
+  model: ["rgba(204,120,92,0.12)", "rgba(204,120,92,0.34)"],
+  repo: ["rgba(128,128,128,0.10)", "rgba(128,128,128,0.30)"],
+  clean: ["rgba(63,166,107,0.11)", "rgba(63,166,107,0.30)"],
 };
 // Small outlined icons in the app, each in its pill's color (the alt text is required: a
 // drawing without one is dropped). The clock before a reset time takes the pill's color too.

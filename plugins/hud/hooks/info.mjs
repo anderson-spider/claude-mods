@@ -1,5 +1,5 @@
-import { T, SEP, TERM_TONES, RESERVED_COLUMNS } from "./constants.mjs";
-import { separator } from "./drawing.mjs";
+import { T, SEP, RESERVED_COLUMNS, TINTS, ink } from "./constants.mjs";
+import { separator, pill } from "./drawing.mjs";
 
 export const freshInfo = () => ({
   // What the info line shows: the last request's model and effort, the repository (or folder), and its git figures.
@@ -30,8 +30,8 @@ export function agentModels(agents) {
 
 // The first row of the band, on both surfaces. Drops the least useful parts until it fits: the
 // changes, the effort, the worktree mark, the repository. `gap` is the space before a part that
-// hangs on the one before it, with no divider.
-export function drawInfo(elements, columns) {
+// hangs on the one before it, with no divider; in the app such a part shares the pill before it.
+export function drawInfo(elements, columns, surface = "terminal") {
   const { Box, Text } = elements;
   const cur = infoData.current;
   const dirty = cur.files > 0;
@@ -52,19 +52,35 @@ export function drawInfo(elements, columns) {
     if (!victim) break;
     parts.splice(parts.indexOf(victim), 1);
   }
+  const desktop = surface === "desktop";
+  const mode = desktop ? "svg" : "text";
+  const nodes = parts.map((p) => {
+    if (p.key === "changes") {
+      const lines = counts ? [Text({ key: "added", color: ink("calm", mode), children: `+${cur.added}` }), Text({ key: "removed", color: ink("alert", mode), children: `-${cur.removed}` })] : [];
+      const label = p.text.replace(/ \+\d+ -\d+$/, "");
+      return Box({ key: "changes", flexDirection: "row", columnGap: 1, children: [Text({ key: "files", dimColor: true, children: label }), ...lines] });
+    }
+    // The branch is red with a * while the tree has changes, green when it is clean.
+    const color = p.key === "branch" ? ink(dirty ? "alert" : "calm", mode) : undefined;
+    return Text({ key: p.key, bold: p.bold === true, color, dimColor: p.key === "dir" || p.key === "effort" || p.key === "worktree", children: p.text });
+  });
+  if (desktop) {
+    // Pills: the model with its effort, the repository, the branch with its marks.
+    const pills = [];
+    parts.forEach((p, i) => {
+      if (p.gap === undefined || pills.length === 0) pills.push({ key: "info-" + p.key, tint: TINTS[{ model: "model", dir: "repo" }[p.key] ?? (dirty ? "alert" : "clean")], parts: [] });
+      // The effort hangs on the model with no space, as in the terminal.
+      const last = pills[pills.length - 1];
+      if (p.gap === 0) last.parts.push(Box({ key: "joined-" + p.key, flexDirection: "row", children: [last.parts.pop(), nodes[i]] }));
+      else last.parts.push(nodes[i]);
+    });
+    return Box({ key: "info", flexDirection: "row", alignItems: "center", columnGap: 1, paddingX: 1, children: pills.map((b) => pill(elements, b)) });
+  }
   const children = [];
   parts.forEach((p, i) => {
     if (i > 0 && p.gap === undefined) children.push(separator(Box, Text, "sep-" + i, SEP));
-    if (p.key === "changes") {
-      const lines = counts ? [Text({ key: "added", color: TERM_TONES.calm, children: `+${cur.added}` }), Text({ key: "removed", color: TERM_TONES.alert, children: `-${cur.removed}` })] : [];
-      const label = p.text.replace(/ \+\d+ -\d+$/, "");
-      children.push(Box({ key: "changes", flexDirection: "row", columnGap: 1, paddingLeft: 1, children: [Text({ key: "files", dimColor: true, children: label }), ...lines] }));
-      return;
-    }
-    // The branch is red with a * while the tree has changes, green when it is clean.
-    const color = p.key === "branch" ? (dirty ? TERM_TONES.alert : TERM_TONES.calm) : undefined;
-    const text = Text({ key: p.key, bold: p.bold === true, color, dimColor: p.key === "dir" || p.key === "effort" || p.key === "worktree", children: p.text });
-    children.push(p.gap ? Box({ key: "gap-" + p.key, paddingLeft: p.gap, children: [text] }) : text);
+    const node = p.key === "changes" ? Box({ key: "gap-changes", paddingLeft: 1, children: [nodes[i]] }) : nodes[i];
+    children.push(p.gap && p.key !== "changes" ? Box({ key: "gap-" + p.key, paddingLeft: p.gap, children: [node] }) : node);
   });
   return Box({ key: "info", flexDirection: "row", paddingX: 1, children });
 }

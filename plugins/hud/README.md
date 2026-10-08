@@ -14,7 +14,7 @@ next:
  5h ██▏······┊· 22% ▼65 · 40m | 7d ██┊▉······· 29% ▲4 · 5d 6h
 ```
 
-Three rows, in the same order in the terminal and in the app (where the second and third are tinted pills with hover cards): the session (model, repository, branch), what it is doing (context, cache, agents), and the 5-hour and 7-day limits next to the prompt.
+Three rows, in the same order in the terminal and in the app (where each part is a tinted pill, with hover cards on the second and third rows): the session (model, repository, branch), what it is doing (context, cache, agents), and the 5-hour and 7-day limits next to the prompt.
 
 - **Info**: the last request's model and effort (`Opus 5.5·medium`), the repository (its name even inside a worktree; the folder outside git), the git branch (green when clean, red with a `*` when the tree has changes), `⎇wt` in a linked worktree, and with changes the files changed against `HEAD` with the lines added and removed (`· 2 files +70 -4`, Unity YAML assets left out). On a narrow terminal the changes, effort, worktree mark and repository go first, in that order. The git figures refresh every 10 seconds.
 - **Context**: tokens in the context with a weather icon (hover the pill for the weather and the share of the window), one bar per recent prompt, the last prompt's change. The icon follows the share, as in Token Weather: ☀ clear (under 25%), ☁ cloudy (25%), ☂ showers (50%), ☇ storm (75%), ↯ compact soon (90%).
