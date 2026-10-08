@@ -58,10 +58,11 @@ export function createJobs() {
 // Request execution
 
 export async function performRequest(deps: RequestDeps, request: Request, options: AskOptions): Promise<Outcome> {
-  const browser = await deps.browser()
-  if (typeof browser === 'string') return { ok: false, text: browser, error: browser }
+  // Attachments are checked before a browser is opened, so an invalid path opens nothing.
   const files = await readAttachments(deps.attachments, request.filePaths)
   if (typeof files === 'string') return { ok: false, text: files, error: files }
+  const browser = await deps.browser()
+  if (typeof browser === 'string') return { ok: false, text: browser, error: browser }
   const input = { ...request.input, files }
   if (request.kind === 'ask') return await saveAnswer(deps.output, await ask(browser, input, options), request)
   const result = await generateImage(browser, input, options)

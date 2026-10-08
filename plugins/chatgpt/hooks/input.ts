@@ -4,7 +4,7 @@ import type { Attachment, AttachmentFiles, Request } from './model'
 
 // Attachment checks
 
-// Checks a local file to attach (at most 4 MiB); terminal-browser uploads it by path.
+// Checks a local file to attach (at most 4 MiB); the backend uploads it by its path.
 async function readAttachment(files: AttachmentFiles, path: string): Promise<Attachment | string> {
   if (!path.startsWith('/')) return `${path} must be an absolute path.`
   const type = mimeOf(path)

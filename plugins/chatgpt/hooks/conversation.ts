@@ -19,7 +19,7 @@ export async function compose(browser: Pick<Browser, 'js' | 'upload'>, tabId: st
   }
   for (const file of input.files ?? []) {
     progress(`attaching ${file.name}`)
-    await browser.upload(tabId, inputFor(file.type), [file.path])
+    await browser.upload(tabId, inputFor(file.type), [file])
     const attached = parseOutput<{ attached: boolean; reason?: string }>(await browser.js(tabId, chipScript(file.name)))
     if (!attached.attached) return `Could not attach ${file.name}: ${attached.reason}.`
   }

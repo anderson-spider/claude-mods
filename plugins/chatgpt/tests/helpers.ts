@@ -38,8 +38,8 @@ export function fakeBrowser(options: { tabs: string[]; pages: Partial<PageState>
       const page = options.pages[Math.min(poll++, options.pages.length - 1)]
       return printed({ ...base, ...page })
     },
-    upload: async (tabId, selector, paths) => {
-      calls.push(`upload ${tabId} ${selector} ${paths.join(' ')}`)
+    upload: async (tabId, selector, files) => {
+      calls.push(`upload ${tabId} ${selector} ${files.map(file => file.path).join(' ')}`)
     },
   }
   return { browser, calls }
@@ -75,8 +75,8 @@ export function fakeImageBrowser(options: { shots: Shot[]; base64: string; attac
       const shot = options.shots[Math.min(poll++, options.shots.length - 1)]!
       return printed({ href: 'https://chatgpt.com/c/img', composer: true, login: false, stop: false, images: 0, count: 0, length: 0, blocker: '', ...shot })
     },
-    upload: async (_tabId, selector, paths) => {
-      calls.push(`upload ${selector} ${paths.join(' ')}`)
+    upload: async (_tabId, selector, files) => {
+      calls.push(`upload ${selector} ${files.map(file => file.path).join(' ')}`)
     },
   }
   return { browser, calls }

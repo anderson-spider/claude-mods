@@ -59,7 +59,7 @@ export async function prepare(
       url: page.href,
       error:
         `ChatGPT is not ready in the browser (at ${page.href}).${blocked(page)} ` +
-        'Ask the user to log in to chatgpt.com in terminal-browser (or clear what the page shows) and try again; never type credentials.',
+        'Ask the user to log in to chatgpt.com in the browser the plugin uses (terminal-browser, Claude in Chrome or the Claude app\'s built-in browser), or to clear what the page shows, and try again; never type credentials.',
     }
   }
   if (page.stop && !options.busy) return { ok: false, url: page.href, error: 'ChatGPT is still answering in that chat; wait and try again.' }
