@@ -575,6 +575,22 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
   }
 
   // ------------------------------------------------------------ jobs tab
+  // One layout for drawing and for the row budget, so what is budgeted is what is drawn.
+  // Cancel and Copy sit beside the id line when both fit with it; otherwise they drop under it,
+  // and they stack in a column (no gap) when side by side would be wider than the body.
+  const jobLayout = (job: Job) => {
+    const isLive = ACTIVE.has(job.status)
+    const cancelLabel = W < 24 ? 'x' : 'Cancel'
+    const copyLabel = W < 24 ? 'c' : 'Copy'
+    const actionsW = (isLive ? cancelLabel.length + 4 + 1 : 0) + copyLabel.length + 4
+    const isStacked = actionsW > IW - 12
+    const isColumn = isStacked && actionsW > IW
+    const actionsH = !isStacked ? 0 : isColumn ? (isLive ? 2 : 1) : 1
+    const height = 1 + actionsH + 1 + (isLive ? (job.lastActivity ? 1 : 0) + (job.tokens ? 1 : 0) : 0)
+    return { cancelLabel, copyLabel, actionsW, isStacked, isColumn, height }
+  }
+  const jobHeight = (job: Job) => jobLayout(job).height
+
   const jobRows = (job: Job) => {
     const isLive = ACTIVE.has(job.status)
     const g = GLYPH[job.status] ?? GLYPH.lost
@@ -590,13 +606,9 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
       { text: clip(job.description ?? '(no description)', Math.max(8, IW - 26)), dim: true },
       ...(isLive ? [clockSeg(`jclk-${job.id}`, job.startedAt, null, 'text')] : after ? [{ text: `· ${after}`, dim: true }] : []),
     ]
-    // Cancel and Copy sit beside the id line when both fit with it; otherwise they stack under it.
-    const cancelLabel = W < 24 ? 'x' : 'Cancel'
-    const copyLabel = W < 24 ? 'c' : 'Copy'
-    const actionsW = (isLive ? cancelLabel.length + 4 + 1 : 0) + copyLabel.length + 4
-    const isStacked = actionsW > IW - 12
+    const { cancelLabel, copyLabel, actionsW, isStacked, isColumn } = jobLayout(job)
     const actions = (
-      <Box key="actions" gap={1} flexShrink={0} flexDirection={actionsW > IW ? 'column' : 'row'}>
+      <Box key="actions" gap={isColumn ? 0 : 1} flexShrink={0} flexDirection={isColumn ? 'column' : 'row'}>
         {isLive && <Button key={`cancel-${job.id}`} label={cancelLabel} onPress={() => data.onCancel(job.id)} />}
         <Button key={`copy-${job.id}`} label={copyLabel} onPress={press => data.onCopy(copyText(job), press.surface)} />
       </Box>
@@ -618,24 +630,43 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
         {isLive && job.lastActivity && note('act', { text: clip(`↳ ${job.lastActivity}`, IW), color: ACTIVITY })}
         {isLive && job.tokens && note('tok', {
           dim: true,
-          text: `in ${kilo(job.tokens.input)} · cached ${kilo(job.tokens.cached)} · out ${kilo(job.tokens.output)}`,
+          text: clip(`in ${kilo(job.tokens.input)} · cached ${kilo(job.tokens.cached)} · out ${kilo(job.tokens.output)}`, IW),
         })}
       </Box>
     )
   }
-  const jobHeight = (job: Job) => 2 + (ACTIVE.has(job.status) ? (job.lastActivity ? 1 : 0) + (job.tokens ? 1 : 0) : 0)
 
   const jobsTab = () => {
     const recent = [...data.jobs].sort((a, b) => b.startedAt - a.startedAt)
     const live = recent.filter(j => ACTIVE.has(j.status))
     const done = recent.filter(j => !ACTIVE.has(j.status))
-    let room = data.rows - 8 - (data.clockLost ? 1 : 0) - live.reduce((n, j) => n + jobHeight(j), 0)
+    // Rows outside the jobs: header, footer, the clock warning; each group adds its title and,
+    // when not tiny, the card's two border rows. Jobs are taken in order (active first) while they
+    // fit; when some do not, one row goes to the "+N hidden" note.
+    const groupH = 1 + (isTiny ? 0 : 2)
+    const fixed = 2 + (data.clockLost ? 1 : 0)
+    const sum = (list: Job[]) => list.reduce((n, j) => n + jobHeight(j), 0)
+    const need = fixed + (live.length ? groupH + sum(live) : 0) + (done.length ? groupH + sum(done) : 0)
+    const shownLive: Job[] = []
     const shownDone: Job[] = []
-    for (const j of done) {
-      if (room < jobHeight(j) && shownDone.length) break
-      shownDone.push(j)
-      room -= jobHeight(j)
+    if (need <= data.rows) {
+      shownLive.push(...live)
+      shownDone.push(...done)
+    } else {
+      let room = data.rows - fixed - 1
+      const take = (list: Job[], into: Job[]) => {
+        for (const j of list) {
+          const cost = jobHeight(j) + (into.length ? 0 : groupH)
+          if (cost > room) return false
+          into.push(j)
+          room -= cost
+        }
+        return true
+      }
+      if (take(live, shownLive)) take(done, shownDone)
     }
+    const hiddenLive = live.length - shownLive.length
+    const hiddenDone = done.length - shownDone.length
     const group = (key: string, list: Job[], total: number) => (
       <Box key={key} flexDirection="column">
         <Box gap={1} paddingX={1}>{render([{ text: key, bold: true }, { text: String(total), dim: true }])}</Box>
@@ -646,9 +677,12 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
       header(),
       clockWarning(),
       data.jobs.length === 0 ? note('empty', { dim: true, text: 'No Pantheon jobs in this session.' }) : null,
-      live.length ? group('active', live, live.length) : null,
+      shownLive.length ? group('active', shownLive, live.length) : null,
       shownDone.length ? group('finished', shownDone, done.length) : null,
-      shownDone.length < done.length ? note('more', { dim: true, text: `+${done.length - shownDone.length} older jobs hidden` }) : null,
+      hiddenLive + hiddenDone ? note('more', {
+        dim: true,
+        text: hiddenLive ? `+${hiddenLive + hiddenDone} jobs hidden` : `+${hiddenDone} older jobs hidden`,
+      }) : null,
       footer(),
     ]
   }

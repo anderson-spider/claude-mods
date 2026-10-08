@@ -312,6 +312,44 @@ describe('pane', () => {
     }
   })
 
+  t('the Jobs tab never draws taller than the body, at narrow and normal widths', async ($, on) => {
+    world(on)
+    const finished = Array.from({ length: 6 }, (_, k) => job({
+      id: `pd${k}`, status: 'done', description: `finished task ${k}`, startedAt: NOW - 600_000 + k * 1000, endedAt: NOW - 60_000,
+    }))
+    const running = [0, 1].map(k => job({
+      id: `pr${k}`, description: `running task ${k}`, lastActivity: 'rg x', tokens: { input: 1000, cached: 0, output: 10 }, startedAt: NOW - 5000 + k,
+    }))
+    seed(on, { jobs: [...running, ...finished] })
+    await start($)
+    // Rows a node takes: a Text or Button is one row, a column adds its children and gaps, a border adds two.
+    type Node = { type?: string; props?: { flexDirection?: string; gap?: number; borderStyle?: string }; children?: Node[] }
+    const tallest = (n: Node): number => {
+      if (n.type === 'Text' || n.type === 'Button' || n.type === 'Client') return 1
+      const sizes = (n.children ?? []).filter(Boolean).map(tallest)
+      const inner = n.props?.flexDirection === 'column'
+        ? sizes.reduce((a, b) => a + b, 0) + Math.max(0, sizes.length - 1) * (n.props?.gap ?? 0)
+        : Math.max(0, ...sizes)
+      return inner + (n.props?.borderStyle ? 2 : 0)
+    }
+    for (const surface of SURFACES) {
+      for (const [columns, rows] of [[20, 20], [8, 20], [11, 14], [40, 16], [120, 12], [20, 40]] as const) {
+        const ui = await mountPane($, surface, { columns, rows })
+        if (await ui.find({ key: 'tab-jobs' })) await ui.press({ key: 'tab-jobs' })
+        expect({ surface, columns, rows, height: tallest((await ui.drawn()) as Node) <= rows }).toEqual({ surface, columns, rows, height: true })
+        const ids = new Set(await texts(ui))
+        const drawn = [...running, ...finished].filter(j => ids.has(j.id)).length
+        if (rows === 20 && columns === 20) {
+          // Three rows per finished job at 20 columns: fewer than all six fit, and the rest are counted.
+          expect(drawn).toBeLessThan(8)
+          expect((await texts(ui)).some(x => /^\+\d+ (older )?jobs hidden$/.test(x))).toBe(true)
+        }
+        if (rows === 40) expect(drawn).toBe(8)
+        await release()
+      }
+    }
+  })
+
   t('the clock warning shows in docked at 40 columns and in mini', async ($, on) => {
     let fail = false
     world(on, { clockDown: () => fail })
