@@ -328,3 +328,38 @@ for (const surface of ["terminal", "desktop"] as const) {
     expect((await ui.findAll({ type: "Text", text: "█" })).length).toBeGreaterThan(0);
   });
 }
+
+for (const surface of ["terminal", "desktop"] as const) {
+  test(`pace cell underlined ${surface}`, async ($, on) => {
+    world(on);
+    withUsage(on, [
+      // 5 hours: 74% used, window 99% over: round(4.44) = 4 used cells, time round(5.94) = 6, so the pace cell is index 5 (a grey margin ▒).
+      { kind: "five_hour", percentUsed: 74, resetsAt: new Date(NOW + 3 * 60_000).toISOString() },
+      // 7 days: 80% used for 57% elapsed: round(4.8) = 5 used cells, time round(3.43) = 3, so the pace cell is index 2 (a red █).
+      { kind: "seven_day", percentUsed: 80, resetsAt: new Date(NOW + 3 * 86_400_000).toISOString() },
+    ]);
+    await $.session.start({ source: "startup", cwd: "/tmp" } as any);
+    const { ui } = await band($, surface);
+    const glyphs = "█▓▒░";
+    const colors = ["#6fcf97", "#a8690a", "#ff6b6b", "#4a525c"];
+    const cells = ((await ui.findAll({ type: "Text" })) as any[]).filter((d) => glyphs.includes(d.text) && colors.includes(d.props?.color));
+    const underlined = cells.filter((d) => d.props?.underline === true);
+    // One pace cell per bar, and nothing else is underlined.
+    expect(underlined.length).toBe(2);
+    expect(underlined.map((d) => d.text).sort()).toEqual(["█", "▒"]);
+    expect(underlined.find((d) => d.text === "▒")?.props?.color).toBe("#4a525c");
+    expect(underlined.find((d) => d.text === "█")?.props?.color).toBe("#ff6b6b");
+  });
+
+  test(`no pace cell without elapsed time ${surface}`, async ($, on) => {
+    world(on);
+    withUsage(on, [{ kind: "spend_limit", percentUsed: 40 }]);
+    await $.session.start({ source: "startup", cwd: "/tmp" } as any);
+    const { ui } = await band($, surface);
+    const glyphs = "█▓▒░";
+    const cells = ((await ui.findAll({ type: "Text" })) as any[]).filter((d) => glyphs.includes(d.text));
+    // The bar is drawn (so the check is not vacuous), but no cell is underlined.
+    expect(cells.length).toBeGreaterThan(0);
+    expect(cells.some((d) => d.props?.underline === true)).toBe(false);
+  });
+}
