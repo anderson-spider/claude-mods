@@ -32,3 +32,9 @@ It reads the text of the Bash command Claude is about to run, runs `git` command
 - **Read:** the usage figures Claude Code provides (context, limits, session cost, each request's token counts), the session's subagents, and the prompt-cache environment switches (`DISABLE_PROMPT_CACHING`, `FORCE_PROMPT_CACHING_5M`, `CLAUDE_CODE_PROMPT_CACHE_TTL`, `ENABLE_PROMPT_CACHING_1H`).
 - **Saved:** in the plugin's local store, the latest limits reading and, per session, recent context readings, the last request's cache figures and the last prompt's cost; a session idle for 8 days is deleted.
 - **Sent:** nothing. It makes no network requests.
+
+## flightdeck
+
+- **Read:** every tool call's name and input and whether it failed, every permission verdict, subagent spawns with their token usage and final answers, the first 70 characters of each prompt, the usage figures Claude Code provides, and advisor tool calls in the assistant's responses.
+- **Saved:** short summaries (a tool name plus a path or command, with credentials masked) in session state only; nothing survives the session.
+- **Sent:** nothing. It makes no network requests, runs no processes and reads or writes no files.

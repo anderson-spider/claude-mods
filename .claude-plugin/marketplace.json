@@ -31,6 +31,11 @@
       "name": "hud",
       "source": "./plugins/hud",
       "description": "A usage line above the prompt (context, 5-hour and 7-day limits against the clock, the prompt cache, the subagents running) and suggested next prompts you can pick, in order, into one draft."
+    },
+    {
+      "name": "flightdeck",
+      "source": "./plugins/flightdeck",
+      "description": "A live agent dashboard pane: context and cost, an advisor timeline, every permission check, and subagents as cards or swimlanes. Imported from claude-flightdeck by Stephen Casella."
     }
   ]
 }

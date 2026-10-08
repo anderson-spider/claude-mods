@@ -1,0 +1,11 @@
+flightdeck
+Copyright (c) 2026 Stephen Casella
+
+flightdeck is imported from https://github.com/scasella/claude-flightdeck
+(version 0.3.2, commit f31daca523d36c501cd0df23a737a44c7dc56ad6), licensed under
+the MIT License (see LICENSE).
+
+Changes: the plugin's code is unchanged. The manifest's homepage and repository
+point to this marketplace; the README installs from spider-claude-mods, loads
+its images from the upstream repository and drops the upstream-only files
+(CHANGELOG, CONTRIBUTING, SECURITY, docs/media).

@@ -11,6 +11,7 @@ Marketplace of [Claude Code](https://claude.com/claude-code) plugins made by and
 | [codex-computer-use](plugins/codex-computer-use) | Routes native Mac app control through Codex computer use from the ChatGPT app instead of Claude's own computer use, asking before each new app. |
 | [tailscale](plugins/tailscale) | Lets Claude query and modify your tailnet through the Tailscale API. |
 | [hud](plugins/hud) | One line above the prompt (context, 5-hour and 7-day limits against the clock, the prompt cache, the subagents running) and suggested next prompts you can write directly to the prompt box as a draft. |
+| [flightdeck](plugins/flightdeck) | A live agent dashboard pane (`/flightdeck`): context and cost, an advisor timeline, every permission check, and subagents as cards or swimlanes. |
 
 ## Install
 
@@ -23,6 +24,7 @@ Inside Claude Code, add the marketplace and install the plugin:
 /plugin install codex-computer-use@spider-claude-mods
 /plugin install tailscale@spider-claude-mods
 /plugin install hud@spider-claude-mods
+/plugin install flightdeck@spider-claude-mods
 ```
 
 To use a local copy instead of GitHub, pass the folder path:
@@ -120,6 +122,10 @@ To update the ACL without overwriting someone else's edit: do a `GET /tailnet/-/
 ## hud
 
 One line above the prompt, an info line above it (model, effort, speed, folder, branch and changed files) and suggested next prompts above that. The usage line: the context with a weather icon, one bar per recent prompt and the last prompt's change; the 5-hour and 7-day limits as block bars with a mark against the clock (`▲` ahead, `▼` behind, no mark on pace) and the time left; the prompt cache with its time left, yellow near the end and red once expired; and the subagents running. After each answer, up to three likely next prompts: press `1`, `2` or `3` to write that suggestion directly to the prompt box as a draft; the plugin never sends it. Options (`/plugin`): **Pace start**, **Shortest answer to suggest after** and **Suggest skills and slash commands**. It was `token-weather-usage` before 1.0.0 and is built on Token Weather Usage (Eric Cologni, Apache-2.0) and next-steps (Thariq Shihipar, MIT), among others. See [its README](plugins/hud/README.md) and its [NOTICE](plugins/hud/NOTICE).
+
+## flightdeck
+
+A pane with a live dashboard of the session, opened with `/flightdeck` (and offered at session start in terminals at least 144 columns wide): the main model's context gauge, cost and rate limits; an architect timeline for advisor or architect consults; one cell per permission check, with a drill-down that masks credentials; subagents as cards or swimlanes; the last turn's receipt; and a session log. Docked beside the transcript in fullscreen, an 8-row summary above the prompt otherwise. It only watches: no hook changes a tool call, prompt or subagent, and it makes no network requests and writes no files. Options are in `/config`. It is imported unchanged from [claude-flightdeck](https://github.com/scasella/claude-flightdeck) by Stephen Casella (MIT). See [its README](plugins/flightdeck/README.md) and its [NOTICE](plugins/flightdeck/NOTICE).
 
 ## Development
 
