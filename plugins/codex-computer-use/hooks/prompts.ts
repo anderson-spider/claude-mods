@@ -31,7 +31,6 @@ export const DESCRIPTION = [
   'Control native macOS apps through Codex computer use (background clicks and typing, no mouse takeover).',
   'Runs `code` (JavaScript with top-level await) in a persistent cua_repl session owned by this caller.',
   'First call of a new or reset session: one entry call only, `await cua.getState();` or `let app = await cua.getApp("<App name or bundle id>");`; read the documentation it returns before anything else.',
-  'Then e.g. `await app.typeText("25*4=")`, `await app.getAXState()`, `await app.click(<index>)`, as the documentation shows.',
   'An app used for the first time asks the person; a refusal or a busy app is final.',
 ].join(' ')
 
