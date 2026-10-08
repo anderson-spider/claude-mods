@@ -15,11 +15,11 @@ Needs the [Codex CLI](https://github.com/openai/codex) on `PATH` and logged in (
 
 | Role | Runs on | How the orchestrator calls it | Default |
 | --- | --- | --- | --- |
-| explorer | Codex | `delegate({ agent: "explorer" })` | `gpt-6-luna`, read-only |
-| librarian | Codex | `delegate({ agent: "librarian" })` | `gpt-6-luna`, read-only |
-| fixer | Codex | `delegate({ agent: "fixer" })` | `gpt-6-luna`, workspace-write |
+| explorer | Codex | `delegate({ agent: "explorer" })` | `gpt-6-luna` high, read-only |
+| librarian | Codex | `delegate({ agent: "librarian" })` | `gpt-6-luna` high, read-only |
+| fixer | Codex | `delegate({ agent: "fixer" })` | `gpt-6.1-sol` high, workspace-write |
 | oracle | Claude | Agent tool, `pantheon:oracle` | `opus`, Read/Grep/Glob |
-| designer | Claude | Agent tool, `pantheon:designer` | the session's model, every tool |
+| designer | Claude | Agent tool, `pantheon:designer` | `sonnet`, every tool |
 | council | both | one seat per engine | `alpha` on Codex, `beta` on Claude |
 
 The orchestrator gets a system prompt section, adapted from the slim `orchestrator.ts`, that says when to delegate, how to parallelize and how to call each role. A disabled role leaves that section and the Agent tool.
@@ -47,11 +47,11 @@ The orchestrator gets a system prompt section, adapted from the slim `orchestrat
   "foregroundMinutes": 5,
   "disabledAgents": [],
   "agents": {
-    "explorer":  { "model": "gpt-6-luna", "sandbox": "read-only" },
-    "librarian": { "model": "gpt-6-luna", "sandbox": "read-only" },
-    "fixer":     { "model": "gpt-6-luna", "sandbox": "workspace-write" },
+    "explorer":  { "model": "gpt-6-luna", "effort": "high", "sandbox": "read-only" },
+    "librarian": { "model": "gpt-6-luna", "effort": "high", "sandbox": "read-only" },
+    "fixer":     { "model": "gpt-6.1-sol", "effort": "high", "sandbox": "workspace-write" },
     "oracle":    { "model": "opus" },
-    "designer":  { "model": "inherit" }
+    "designer":  { "model": "sonnet" }
   },
   "council": {
     "seats": {

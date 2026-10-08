@@ -19,7 +19,7 @@ describe('loadConfig', () => {
     const result = valid(await loadConfig(async () => undefined, { user: 'u' }))
     expect(result.config).toEqual(DEFAULT_CONFIG)
     expect(result.config.sandboxCap).toBe('workspace-write')
-    expect(result.config.agents.fixer.model).toBe('gpt-6-luna')
+    expect(result.config.agents.fixer.model).toBe('gpt-6.1-sol')
   })
 
   test('reads only the injected paths, including an optional project file', async () => {
@@ -80,7 +80,7 @@ describe('loadConfig', () => {
     expect(result.config.agents.fixer).toEqual({
       model: 'project-model', sandbox: 'read-only', effort: 'high', prompt: 'user prompt',
     })
-    expect(result.config.agents.explorer).toEqual({ model: 'gpt-6-luna', sandbox: 'read-only' })
+    expect(result.config.agents.explorer).toEqual({ model: 'gpt-6-luna', effort: 'high', sandbox: 'read-only' })
     expect(result.config.council.seats).toEqual({
       alpha: { engine: 'claude', model: 'user-seat', effort: 'low', prompt: 'seat prompt' },
       beta: { engine: 'claude', model: 'opus' },
@@ -94,7 +94,7 @@ describe('loadConfig', () => {
       agents: { oracle: { model: 'sonnet', effort: 'high', prompt: '' }, designer: { prompt: 'custom' } },
     }))
     expect(result.config.agents.oracle).toEqual({ model: 'sonnet', effort: 'high', prompt: '' })
-    expect(result.config.agents.designer).toEqual({ model: 'inherit', prompt: 'custom' })
+    expect(result.config.agents.designer).toEqual({ model: 'sonnet', prompt: 'custom' })
     expect(result.config.disabledAgents).toContain('councillor:alpha')
   })
 
@@ -227,9 +227,9 @@ describe('loadConfig', () => {
     first.config.council.seats.alpha!.model = 'mutated'
     const second = valid(await loadConfig(async () => undefined, { user: 'u' }, first.config))
     expect(second.config.disabledAgents).toEqual([])
-    expect(second.config.agents.fixer).toEqual({ model: 'gpt-6-luna', sandbox: 'workspace-write' })
+    expect(second.config.agents.fixer).toEqual({ model: 'gpt-6.1-sol', effort: 'high', sandbox: 'workspace-write' })
     expect(second.config.council.seats.alpha?.model).toBe('gpt-6-astra')
-    expect(DEFAULT_CONFIG.agents.fixer.model).toBe('gpt-6-luna')
+    expect(DEFAULT_CONFIG.agents.fixer.model).toBe('gpt-6.1-sol')
     expect(DEFAULT_CONFIG.council.seats.alpha?.model).toBe('gpt-6-astra')
     expect(DEFAULT_CONFIG.disabledAgents).toEqual([])
   })
