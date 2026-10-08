@@ -55,6 +55,31 @@ export type AgentCard = {
   answer: string
 }
 
+/**
+ * A Codex job as the pantheon plugin keeps it in `$.state` (`pantheon.jobs`), read-only here.
+ * Pantheon is optional, so its contract is not a dependency: this is the part Flightdeck reads,
+ * and `jobsOf` checks each field before it is drawn.
+ */
+export type CodexJob = {
+  id: string
+  agent: string
+  description?: string
+  model?: string
+  status: 'running' | 'background' | 'done' | 'error' | 'cancelled' | 'lost'
+  startedAt: number
+  endedAt?: number
+  sessionId?: string
+  lastActivity?: string
+  tokens?: { input: number; cached: number; output: number }
+  result?: string
+  error?: string
+}
+
+/** A card drawn from a Codex job: never stored, built from `pantheon.jobs` at each draw. */
+export type CodexCard = AgentCard & {
+  codex: { mode: 'foreground' | 'background' | 'lost'; hasClock: boolean; activity: string }
+}
+
 /** A model loop whose id matches no card: a workflow agent, a compaction or a memory fork. */
 export type Loop = { id: string; steps: number; firstAt: number; lastAt: number; isDone: boolean }
 

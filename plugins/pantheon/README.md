@@ -32,7 +32,7 @@ The orchestrator gets a system prompt section, adapted from the slim `orchestrat
 
 ### Commands
 
-- `/pantheon` opens a pane with the Codex jobs (state, role, model, time, tokens, last activity, whether it can be resumed; Cancel and Copy buttons) and the native `pantheon:*` agents.
+- `/pantheon` opens a pane with the actions on the Codex jobs: one short line per job (id, state, role, description; `↻` when it can be resumed, which the orchestrator does with `delegate({ resume: jobId })`) with Cancel and Copy buttons. The details (model, time, tokens, last activity) and the native `pantheon:*` agents are in the [flightdeck](../flightdeck) pane.
 - `/pantheon cancel <jobId>`, `/pantheon config` (effective config, where each field came from, current error) and `/pantheon doctor`.
 - The status line shows `pantheon: N rodando · M em background` while jobs are active.
 

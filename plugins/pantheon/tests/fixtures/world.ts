@@ -19,8 +19,6 @@ export type World = {
   hang?: boolean
   /** O primeiro agent.register falha. */
   failFirstRegister?: boolean
-  /** Agentes que $.agent.list devolve. */
-  natives?: { id: string; type: string; status: 'running' | 'completed'; description: string }[]
   /** Respostas de process.run por comando (argv unido por espaço). */
   runs?: Record<string, { exitCode: number; stdout?: string; stderr?: string }>
 }
@@ -65,7 +63,6 @@ export function world(on: On, opts: World = {}) {
   on('tool.register', async (_$, e) => { seen.tools.push(e.name); return { value: { tool: `mcp__pantheon__${e.name}` } } })
   on('ui.toast', async (_$, e) => { seen.toasts.push(e.text); return { value: undefined } })
   on('command.register', async (_$, e) => ({ value: { command: e.name } }))
-  on('agent.list', async () => ({ value: (opts.natives ?? []) as never }))
   on('ui.status', async (_$, e) => { seen.statuses.push(e.text); return { value: undefined } })
   on('process.spawn', async function* (_$, e) {
     seen.argv.push([...e.argv])

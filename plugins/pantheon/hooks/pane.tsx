@@ -1,4 +1,4 @@
-import type { AgentInfo, Elements, RenderSurface } from 'claude-code'
+import type { Elements, RenderSurface } from 'claude-code'
 
 import type { ConfigResult, Job } from './types'
 
@@ -13,28 +13,14 @@ export function statusText(jobs: Job[]): string | undefined {
   return `pantheon: ${running} rodando · ${background} em background`
 }
 
-function seconds(ms: number): string {
-  const s = Math.max(0, Math.round(ms / 1000))
-  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m${String(s % 60).padStart(2, '0')}s`
-}
-
 export function isResumable(job: Job): boolean {
   return !!job.sessionId && !ACTIVE.has(job.status)
 }
 
-export function jobLine(job: Job, now: number): string {
-  const parts = [
-    job.status, job.agent, job.model ?? 'modelo padrão', seconds((job.endedAt ?? now) - job.startedAt),
-  ]
-  if (job.tokens) parts.push(`${job.tokens.input}→${job.tokens.output} tok`)
-  if (isResumable(job)) parts.push('retomável')
-  const head = `${job.id} · ${parts.join(' · ')}`
-  const detail = job.error ? `erro: ${job.error.split('\n')[0]}` : job.lastActivity
-  return [head, job.description, detail].filter(Boolean).join(' — ')
-}
-
-export function nativeLine(agent: AgentInfo): string {
-  return `${agent.type} · ${agent.status} — ${agent.description}`
+/** Uma linha curta por job: o detalhe (modelo, tempo, tokens, atividade) fica no Flightdeck. */
+export function jobLine(job: Job): string {
+  const head = `${job.id} · ${job.status} · ${job.agent}${isResumable(job) ? ' · ↻' : ''}`
+  return job.description ? `${head} — ${job.description}` : head
 }
 
 export function configReport(state: ConfigResult): string {
@@ -71,8 +57,6 @@ type PaneElements = Pick<Elements['terminal'], 'Box' | 'Text' | 'Button'>
 
 export type PaneData = {
   jobs: Job[]
-  natives: AgentInfo[]
-  now: number
   rows: number
   onCancel: (jobId: string) => void
   onCopy: (text: string, surface: RenderSurface) => void
@@ -83,13 +67,13 @@ export function drawPane(el: PaneElements, data: PaneData) {
   // Ativos primeiro (um job travado nunca some do painel), depois os mais recentes.
   const recent = [...data.jobs].reverse()
   const jobs = [...recent.filter(job => ACTIVE.has(job.status)), ...recent.filter(job => !ACTIVE.has(job.status))]
-    .slice(0, Math.max(1, data.rows - 4))
+    .slice(0, Math.max(1, data.rows - 5))
   return (
     <Box flexDirection="column">
-      {jobs.length === 0 && data.natives.length === 0 && <Text dimColor>Nenhum job do Pantheon nesta sessão.</Text>}
+      {jobs.length === 0 && <Text dimColor>Nenhum job do Pantheon nesta sessão.</Text>}
       {jobs.map(job => (
         <Box key={`job-${job.id}`} flexDirection="row" gap={1}>
-          <Text dimColor={!ACTIVE.has(job.status)}>{jobLine(job, data.now)}</Text>
+          <Text dimColor={!ACTIVE.has(job.status)}>{jobLine(job)}</Text>
           {ACTIVE.has(job.status) && (
             <Button key={`cancel-${job.id}`} label="Cancelar" onPress={() => data.onCancel(job.id)} />
           )}
@@ -102,9 +86,9 @@ export function drawPane(el: PaneElements, data: PaneData) {
           )}
         </Box>
       ))}
-      {data.natives.map(agent => (
-        <Text key={`agent-${agent.id}`} dimColor={agent.status !== 'running'}>{nativeLine(agent)}</Text>
-      ))}
+      {jobs.some(isResumable) && (
+        <Text dimColor>↻ retomável: o orchestrator retoma com delegate({'{'} resume: jobId {'}'}); o detalhe dos jobs fica no /flightdeck.</Text>
+      )}
     </Box>
   )
 }

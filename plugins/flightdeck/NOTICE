@@ -5,7 +5,12 @@ flightdeck is imported from https://github.com/scasella/claude-flightdeck
 (version 0.3.2, commit f31daca523d36c501cd0df23a737a44c7dc56ad6), licensed under
 the MIT License (see LICENSE).
 
-Changes: the plugin's code is unchanged. The manifest's homepage and repository
+Changes: the agents panel also draws the pantheon plugin's Codex jobs, read
+from its session state (`pantheon.jobs`) when that plugin is installed: as
+cards and swimlanes on the subagents' time axis, marked `codex`, `codex bg`
+(running in the background) or `codex lost` (its process gone), with a live
+clock while a job runs, and a `codex` legend entry. The hooks are unchanged and
+still pass every event on as it came. The manifest's homepage and repository
 point to this marketplace; the README installs from spider-claude-mods, loads
 its images from the upstream repository and drops the upstream-only files
 (CHANGELOG, CONTRIBUTING, SECURITY, docs/media).

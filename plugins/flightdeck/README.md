@@ -62,7 +62,7 @@ https://github.com/user-attachments/assets/9ad0fcc3-c81c-427a-a743-f7b6c49f5885
 | **main** | model, effort, permission mode, request count; a context gauge with compactions (⟲); cost and the first two rate-limit windows when your plan reports them | `turn.step`, `session.measure`, `session.compact`, `$.session.usage()` |
 | **architect** | consults on a timeline, whether one is running, how long the last took; optionally the moment of each consult; the first line of a subagent architect's advice | a spawn of a matching agent type, or a matching server tool in the assistant's rows |
 | **gate** | one cell per permission check: green allowed without asking, blue decided by the auto-mode classifier or you and then run, amber pending, red ✗ denied, dim if made inside a subagent. Totals, and a drill-down per tool family with credentials masked | `tool.check`, settled by the `tool.call` around it |
-| **agents** | cards side by side while they fit: the task, type, live context and output tokens, steps, a running clock, `max_tokens` in red. Beyond that, swimlanes on one time axis | `agent.spawn`, `turn.step`, `tool.call`, `turn.complete` |
+| **agents** | cards side by side while they fit: the task, type, live context and output tokens, steps, a running clock, `max_tokens` in red. Beyond that, swimlanes on one time axis. With the [pantheon](../pantheon) plugin, its Codex jobs join them, marked `codex`, `codex bg` (in the background) or `codex lost` (process gone), with a live clock while they run | `agent.spawn`, `turn.step`, `tool.call`, `turn.complete`; pantheon's `pantheon.jobs` state |
 | **loops** | model loops that match no card: workflow agents, compactions, memory forks | `turn.step` ids no card claims |
 | **receipt** | the running turn, or the last one: duration, agents, edits, errors, cost added | `turn.start`, `turn.complete` |
 | **log** | prompts, spawns, completions, consults, edits, errors and denials; filtered to one agent while you view its transcript | all of the above |
@@ -107,6 +107,7 @@ Flightdeck only watches. Every hook passes its event on unchanged: it never deni
 | your prompts' first 70 characters, for the log | `turn.start` |
 | context, cost and rate-limit readings | `session.measure`, `$.session.usage()` |
 | advisor tool calls in the assistant's responses (their content is encrypted) | `session.append` |
+| the pantheon plugin's Codex jobs (role, model, state, times, tokens, last activity), when it is installed | `$.state.get` of `pantheon.jobs`, read only |
 
 What it keeps: short summaries (a tool name plus a path or command, with credentials masked) in session state, which ends with the session. It makes **no** network requests, runs no processes, reads and writes no files, stores nothing across sessions, and calls no model. `claude plugin validate .` prints exactly what it hooks and calls.
 

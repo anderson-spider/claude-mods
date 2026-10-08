@@ -6,6 +6,8 @@ import type {
   Architect,
   Bucket,
   Check,
+  CodexCard,
+  CodexJob,
   Gate,
   Layout,
   LogLine,
@@ -180,7 +182,7 @@ export const PALETTES: Record<Palette, Colors> = {
 }
 
 /** SVG cannot name theme keys: mid-tone colours that read on light and dark backgrounds. */
-export const SVG_COLORS = { running: '#3b82f6', done: '#16a34a', failed: '#dc2626', other: '#8b5cf6', label: '#6b7280' }
+export const SVG_COLORS = { running: '#3b82f6', codex: '#0d9488', done: '#16a34a', failed: '#dc2626', other: '#8b5cf6', label: '#6b7280' }
 
 // ---------------------------------------------------------------- formatting
 
@@ -490,3 +492,73 @@ export const adviceLine = (report: string) => {
 }
 
 export const elapsedOf = (c: AgentCard, now: number) => (c.endedAt ?? now) - c.spawnedAt
+
+// ---------------------------------------------------------------- codex jobs (pantheon)
+
+const JOB_STATUSES: readonly CodexJob['status'][] = ['running', 'background', 'done', 'error', 'cancelled', 'lost']
+const text = (v: unknown) => (typeof v === 'string' ? v : undefined)
+const count = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
+
+/** `pantheon.jobs` as read from another plugin's state: anything that is not a job is left out. */
+export const jobsOf = (stored: unknown): CodexJob[] =>
+  listOf<unknown>(stored).flatMap(v => {
+    if (!isObject(v) || typeof v.id !== 'string' || typeof v.agent !== 'string') return []
+    const status = JOB_STATUSES.find(x => x === v.status)
+    if (!status || typeof v.startedAt !== 'number') return []
+    const tokens = isObject(v.tokens) ? { input: count(v.tokens.input), cached: count(v.tokens.cached), output: count(v.tokens.output) } : undefined
+    return [
+      {
+        id: v.id,
+        agent: v.agent,
+        status,
+        startedAt: v.startedAt,
+        description: text(v.description),
+        model: text(v.model),
+        endedAt: typeof v.endedAt === 'number' ? v.endedAt : undefined,
+        sessionId: text(v.sessionId),
+        lastActivity: text(v.lastActivity),
+        result: text(v.result),
+        error: text(v.error),
+        tokens,
+      },
+    ]
+  })
+
+/** Card ids of Codex jobs carry a prefix, so a job id never collides with a subagent's. */
+export const codexId = (jobId: string) => `codex-${jobId}`
+
+export const isCodex = (c: AgentCard): c is CodexCard => 'codex' in c
+
+/**
+ * A Codex job as a card on the agents' time axis. A job still running (in the foreground or the
+ * background) has no end: its clock runs from `startedAt`. A lost job (its process gone with a
+ * reload) has no known end either: its bar stops where it started and it shows no clock.
+ */
+export const codexCard = (j: CodexJob): CodexCard => {
+  const isActive = j.status === 'running' || j.status === 'background'
+  const status = isActive ? 'running' : j.status === 'error' ? 'failed' : j.status === 'cancelled' ? 'stopped' : j.status
+  const endedAt = isActive ? null : (j.endedAt ?? j.startedAt)
+  const first = (s: string | undefined) => s?.split('\n').find(l => l.trim())?.trim() ?? ''
+  return {
+    ...normalizeCard({}),
+    id: codexId(j.id),
+    type: `codex:${j.agent}`,
+    model: j.model ?? '',
+    description: j.description ?? '',
+    status,
+    spawnedAt: j.startedAt,
+    endedAt,
+    ctx: j.tokens?.input ?? 0,
+    out: j.tokens?.output ?? 0,
+    answer: shorten(j.result ?? '', 400),
+    codex: {
+      mode: j.status === 'background' ? 'background' : j.status === 'lost' ? 'lost' : 'foreground',
+      hasClock: isActive || j.endedAt !== undefined,
+      activity: shorten(j.error ? `error: ${first(j.error)}` : first(j.lastActivity), 160),
+    },
+  }
+}
+
+/** Subagent cards and Codex job cards on one axis, in the order they started. */
+export const withJobs = (cards: AgentCard[], jobs: CodexJob[]): AgentCard[] =>
+  jobs.length === 0 ? cards : [...cards, ...jobs.map(codexCard)].sort((a, b) => a.spawnedAt - b.spawnedAt)

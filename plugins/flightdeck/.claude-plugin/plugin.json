@@ -1,7 +1,7 @@
 {
   "name": "flightdeck",
-  "version": "0.3.2",
-  "description": "Flightdeck: a live agent dashboard for Claude Code. Main model vitals, an on-call architect, every permission check, subagent cards and swimlanes, a turn receipt and a session log, all from real session events. Imported from claude-flightdeck by Stephen Casella; see NOTICE.",
+  "version": "0.4.0",
+  "description": "Flightdeck: a live agent dashboard for Claude Code. Main model vitals, an on-call architect, every permission check, subagent cards and swimlanes (with the pantheon plugin's Codex jobs when it is installed), a turn receipt and a session log, all from real session events. Imported from claude-flightdeck by Stephen Casella; see NOTICE.",
   "author": {
     "name": "Stephen Casella",
     "url": "https://github.com/scasella"
