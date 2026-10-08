@@ -1,6 +1,6 @@
 {
   "name": "flightdeck",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Flightdeck: a live agent dashboard for Claude Code. Main model vitals, an on-call architect, every permission check, subagent cards and swimlanes (with the pantheon plugin's Codex jobs when it is installed), a turn receipt and a session log, all from real session events. Imported from claude-flightdeck by Stephen Casella; see NOTICE.",
   "author": {
     "name": "Stephen Casella",
@@ -25,7 +25,7 @@
       "title": "Architect pattern",
       "description": "Regular expression (case-insensitive) for the agent types and server tools that count as the on-call architect, e.g. advisor|architect|reviewer",
       "type": "string",
-      "default": "advisor|architect"
+      "default": "advisor|architect|oracle"
     },
     "architectLabel": {
       "title": "Architect label",

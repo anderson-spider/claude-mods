@@ -125,7 +125,7 @@ In `/config`, or under `pluginConfigs["flightdeck"].options` in `settings.json`:
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `architectPattern` | `advisor\|architect` | case-insensitive regex for agent types and server tools that count as the architect |
+| `architectPattern` | `advisor\|architect\|oracle` | case-insensitive regex for agent types and server tools that count as the architect |
 | `matchDescriptions` | `false` | also match agent descriptions, not just type names |
 | `architectLabel` | `ARCHITECT` | the architect's name in the pane |
 | `gateLabel` | `GATE` | the permission panel's name |
