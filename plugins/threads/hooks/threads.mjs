@@ -1500,7 +1500,9 @@ async function doRefresh($) {
       }
       if (state && state.codexError !== (t.codexError ?? "")) patch.codexError = state.codexError;
       if (Object.keys(patch).length && (isOwn || patch.status === "exited")) patches.set(t.id, { patch, from: t });
-      const row = { ...t, ...patch, isMine: isOwn, lastLine: state?.lastLine ?? "", lastKind: "", prompt: state?.prompt ?? "" };
+      const lastLine = state?.lastLine ?? "";
+      // a Codex thread has no transcript file: an answer line is what marks its turn as finished, so threads_wait need not give it the first-turn grace period
+      const row = { ...t, ...patch, isMine: isOwn, lastLine, lastKind: lastLine.startsWith("says") ? "assistant" : "", prompt: state?.prompt ?? "" };
       rows.push(row);
       // the newest answer of a turn goes to the lead that started the thread, unless it asked not to be reported to
       const answer = codexSnap.byId.get(t.codexThreadId)?.lastAnswer;
