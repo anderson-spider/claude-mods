@@ -1,7 +1,7 @@
 import type { AskInput, AskOptions, Browser, Image, ImageResult } from './model'
 import { LOAD_MS, prepare } from './browser'
 import { compose, readAnswer, send, stopped, unfinished, watch } from './conversation'
-import { GENERATED, imageScript, parseOutput } from './scripts'
+import { GENERATED, imageChunkScript, imageScript, parseOutput } from './scripts'
 
 export async function generateImage(browser: Browser, input: AskInput, options: AskOptions = {}): Promise<ImageResult> {
   const timeoutMs = options.timeoutMs ?? 6 * 60_000
@@ -59,6 +59,17 @@ export async function generateImage(browser: Browser, input: AskInput, options: 
   return readImages(browser, tabId, state.href, state.images - start.images, progress)
 }
 
+// The `length` characters of base64 imageScript held in the page, slice by slice; empty when they do not all arrive.
+async function readHeld(browser: Pick<Browser, 'js'>, tabId: string, length: number): Promise<string> {
+  let base64 = ''
+  while (base64.length < length) {
+    const { chunk } = parseOutput<{ chunk: string }>(await browser.js(tabId, imageChunkScript(base64.length)))
+    if (!chunk) return ''
+    base64 += chunk
+  }
+  return base64.length === length ? base64 : ''
+}
+
 // Reads the chat's last `count` generated images back, oldest first.
 async function readImages(
   browser: Pick<Browser, 'js'>,
@@ -71,13 +82,14 @@ async function readImages(
   let url = href
   for (let back = Math.max(1, count) - 1; back >= 0; back--) {
     progress('saving the image')
-    const found = parseOutput<{ found: boolean } & Image & { url: string }>(await browser.js(tabId, imageScript(back)))
-    if (!found.found || !found.base64) {
+    const found = parseOutput<{ found: boolean; length: number; url: string } & Omit<Image, 'base64'>>(await browser.js(tabId, imageScript(back)))
+    const base64 = found.found && found.length > 0 ? await readHeld(browser, tabId, found.length) : ''
+    if (!base64) {
       if (images.length) break
       return { ok: false, url: href, error: 'No generated image could be read from the page.' }
     }
     url = found.url
-    images.push({ base64: found.base64, type: found.type, width: found.width, height: found.height, alt: found.alt })
+    images.push({ base64, type: found.type, width: found.width, height: found.height, alt: found.alt })
   }
   return { ok: true, url, images }
 }

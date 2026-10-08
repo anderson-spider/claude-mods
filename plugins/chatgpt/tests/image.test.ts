@@ -1,12 +1,12 @@
 import { expect, test } from 'claude-code/testing'
 import { generateImage } from '../hooks/image'
-import { inputFor } from '../hooks/scripts'
+import { CHUNK_CHARS, inputFor } from '../hooks/scripts'
 import { fakeImageBrowser } from './helpers'
 
 test('generateImage uploads the reference by path, waits for a finished image and reads it back', async () => {
   const reference = { name: 'ref.png', type: 'image/png', path: '/x/ref.png' }
   const image = 'B'.repeat(5_000_005)
-  const { browser, calls } = fakeImageBrowser({
+  const { browser, calls, chunks } = fakeImageBrowser({
     shots: [{}, { stop: true }, { stop: true, images: 1 }, { images: 1 }],
     base64: image,
   })
@@ -15,6 +15,8 @@ test('generateImage uploads the reference by path, waits for a finished image an
   expect(calls).toEqual(['navigate https://chatgpt.com/', `upload ${inputFor('image/png')} /x/ref.png`, 'attach', 'send', 'image'])
   expect(result.ok && result.images.map(i => i.base64)).toEqual([image])
   expect(result.ok && [result.images[0]!.width, result.images[0]!.type]).toEqual([1024, 'image/png'])
+  // A browser tool's output is capped, so the bytes come back in slices.
+  expect(chunks()).toBe(Math.ceil(image.length / CHUNK_CHARS))
 })
 
 test('generateImage returns the text when ChatGPT answers without an image', async () => {
