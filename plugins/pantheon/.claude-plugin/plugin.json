@@ -1,0 +1,9 @@
+{
+  "name": "pantheon",
+  "version": "0.1.0",
+  "description": "Makes Claude an orchestrator that delegates to Codex specialists (explorer, librarian, fixer) and native Claude agents (oracle, designer, council), in the style of oh-my-opencode-slim.",
+  "author": {
+    "name": "anderson-spider"
+  },
+  "types": "./types/index.d.ts"
+}

@@ -12,6 +12,7 @@ Marketplace of [Claude Code](https://claude.com/claude-code) plugins made by and
 | [tailscale](plugins/tailscale) | Lets Claude query and modify your tailnet through the Tailscale API. |
 | [hud](plugins/hud) | One line above the prompt (context, 5-hour and 7-day limits against the clock, the prompt cache, the subagents running) and suggested next prompts you can write directly to the prompt box as a draft. |
 | [flightdeck](plugins/flightdeck) | A live agent dashboard pane (`/flightdeck`): context and cost, an advisor timeline, every permission check, and subagents as cards or swimlanes. |
+| [pantheon](plugins/pantheon) | Makes Claude an orchestrator that delegates to Codex roles (explorer, librarian, fixer) through `delegate` and to native Claude agents (oracle, designer, council), with a `/pantheon` pane of the jobs. |
 
 ## Install
 
@@ -25,6 +26,7 @@ Inside Claude Code, add the marketplace and install the plugin:
 /plugin install tailscale@spider-claude-mods
 /plugin install hud@spider-claude-mods
 /plugin install flightdeck@spider-claude-mods
+/plugin install pantheon@spider-claude-mods
 ```
 
 To use a local copy instead of GitHub, pass the folder path:

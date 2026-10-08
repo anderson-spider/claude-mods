@@ -1,0 +1,424 @@
+import { atom, read, update } from 'claude-code'
+import type { AgentSpec, ProcessRunInit, ProcessRunResult, Register } from 'claude-code'
+
+import type { Job } from '../types'
+import { buildArgv, createJsonlReader } from './codex'
+import { loadConfig } from './config'
+import { DEFAULT_CONFIG } from './defaults'
+import { createJobs, markLost } from './jobs'
+import { buildCouncilBlock, isCouncilOrigin, matchesCouncilTrigger } from './prompts/council'
+import { buildOrchestratorSection } from './prompts/orchestrator'
+import { rolePrompt } from './prompts/roles'
+import { PANE_ID, configReport, doctorReport, drawPane, statusText } from './pane'
+import { isOffered, nativeAgentSpecs, resolveCodexCall } from './roles'
+import type { Clock, ConfigResult, DelegateArgs, PantheonConfig, Spawn } from './types'
+import { authorizedRoot, checkCwd } from './workspace'
+
+/** O que os módulos precisam do engine, montado em cada hook (o `$` não pode ser guardado). */
+type Io = {
+  cwd: () => Promise<string>
+  run: (argv: string[], init?: ProcessRunInit) => Promise<ProcessRunResult>
+  home: () => Promise<string | undefined>
+  readText: (path: string) => Promise<string | undefined>
+  realPath: (path: string) => Promise<string | undefined>
+  toast: (text: string) => void
+  status: (text: string | undefined) => void
+  registerAgent: (spec: AgentSpec) => Promise<unknown>
+  readJobs: () => Promise<Job[]>
+  writeJobs: (list: Job[]) => Promise<unknown>
+  now: () => Promise<number>
+  after: Clock['after']
+  submit: (text: string) => Promise<unknown>
+}
+
+export const TOOLS = {
+  delegate: 'mcp__pantheon__delegate',
+  result: 'mcp__pantheon__delegate_result',
+  cancel: 'mcp__pantheon__delegate_cancel',
+} as const
+
+const jobsAtom = atom({ plugin: 'pantheon', key: 'jobs' } as const, [] as Job[])
+
+const DELEGATE_SCHEMA = {
+  type: 'object',
+  properties: {
+    agent: { type: 'string', description: 'explorer, librarian, fixer or councillor:<seat> of a Codex seat.' },
+    prompt: { type: 'string', description: 'The complete task for the role.' },
+    description: { type: 'string', description: 'A short label shown in /pantheon.' },
+    cwd: { type: 'string', description: 'Working directory inside the authorized root; defaults to the session directory.' },
+    model: { type: 'string', description: 'Overrides the role model for this call.' },
+    effort: { type: 'string', description: 'Overrides the role reasoning effort for this call.' },
+    background: { type: 'boolean', description: 'Return { jobId, status: "background" } immediately.' },
+    resume: { type: 'string', description: 'jobId of a finished, cancelled or lost job of this session to continue.' },
+  },
+  required: ['agent', 'prompt'],
+} as const
+
+const JOB_SCHEMA = {
+  type: 'object',
+  properties: { jobId: { type: 'string' } },
+  required: ['jobId'],
+} as const
+
+const PARTIAL_NOTE = 'Mudanças parciais do job continuam no disco; confira git status antes de seguir.'
+
+function reply(value: unknown): { result: string } {
+  return { result: JSON.stringify(value) }
+}
+
+function elapsed(job: Job): number | undefined {
+  return job.endedAt === undefined ? undefined : job.endedAt - job.startedAt
+}
+
+function summarize(job: Job) {
+  return {
+    jobId: job.id, agent: job.agent, status: job.status, model: job.model, cwd: job.cwd,
+    result: job.result, error: job.error, tokens: job.tokens, elapsedMs: elapsed(job),
+    lastActivity: job.lastActivity, isResumable: !!job.sessionId && !['running', 'background'].includes(job.status),
+  }
+}
+
+export const register: Register = on => {
+  let state: ConfigResult = { ok: true, config: DEFAULT_CONFIG, origins: {} }
+  let lastValid: PantheonConfig | undefined
+  let registeredKey: string | undefined
+  let toastedError: string | undefined
+  let idSeq = 0
+  // Último Io vivo: relógio, avisos e estado dos jobs que continuam depois do hook.
+  let live: Io | undefined
+  let jobs: ReturnType<typeof createJobs> | undefined
+
+  // Gravações do estado em fila, sempre com o snapshot mais recente: duas em voo
+  // poderiam chegar fora de ordem e deixar no painel um status antigo.
+  let pendingJobs: Job[] | undefined
+  let warnedWrite = false
+  let flushing: Promise<void> | undefined
+  function persist(list: Job[]) {
+    pendingJobs = list
+    flushing ??= (async () => {
+      try {
+        while (pendingJobs) {
+          const next = pendingJobs
+          pendingJobs = undefined
+          await live?.writeJobs(next).catch(error => {
+            if (warnedWrite) return
+            warnedWrite = true
+            live?.toast(`pantheon: não consegui gravar o estado dos jobs (o painel pode ficar desatualizado): ${error instanceof Error ? error.message : String(error)}`)
+          })
+        }
+      } finally {
+        flushing = undefined
+      }
+    })()
+  }
+  const persisted = () => flushing ?? Promise.resolve()
+
+  const clock: Clock = {
+    now: () => live!.now(),
+    after: (ms, fn) => live!.after(ms, fn),
+  }
+
+  // Na primeira chamada do módulo (início ou reload), os jobs ativos do estado viram lost.
+  async function ensureJobs(io: Io): Promise<ReturnType<typeof createJobs>> {
+    live = io
+    if (jobs) return jobs
+    const saved = markLost(await io.readJobs())
+    if (jobs) return jobs
+    jobs = createJobs({
+      spawn: () => { throw new Error('pantheon: spawn sem chamada ativa') },
+      clock,
+      codec: { buildArgv, createJsonlReader },
+      newId: () => `pj${(++idSeq).toString(36)}${Math.random().toString(36).slice(2, 6)}`,
+      onChange: list => {
+        live?.status(statusText(list))
+        persist(list)
+      },
+      notify: text => { void live?.submit(text).catch(() => {}) },
+      initial: saved,
+    })
+    persist(saved)
+    await persisted()
+    return jobs
+  }
+
+  async function workspace(io: Io): Promise<{ sessionCwd: string; root: string; isRepo: boolean }> {
+    const sessionCwd = await io.cwd()
+    const top = await io.run(['git', 'rev-parse', '--show-toplevel'], { cwd: sessionCwd }).catch(() => undefined)
+    const gitTop = top && top.exitCode === 0 ? top.stdout.trim() || undefined : undefined
+    return { sessionCwd, root: authorizedRoot(sessionCwd, gitTop), isRepo: gitTop !== undefined }
+  }
+
+  async function refreshConfig(io: Io, root: string): Promise<ConfigResult> {
+    const home = await io.home()
+    state = await loadConfig(io.readText, {
+      user: `${home ?? '~'}/.claude/pantheon.json`,
+      project: `${root}/.claude/pantheon.json`,
+    }, lastValid)
+    if (state.ok) {
+      lastValid = state.config
+      toastedError = undefined
+      await registerNatives(io, state.config)
+    } else {
+      // Sem nenhuma config válida até aqui, os nativos ficam com os padrões.
+      if (!lastValid) await registerNatives(io, state.config)
+      if (state.error !== toastedError) {
+        toastedError = state.error
+        io.toast(`pantheon: config inválida — ${state.error}`)
+      }
+    }
+    return state
+  }
+
+  async function registerNatives(io: Io, config: PantheonConfig) {
+    const key = JSON.stringify(config)
+    if (key === registeredKey) return
+    try {
+      for (const spec of nativeAgentSpecs(config, rolePrompt)) {
+        await io.registerAgent({
+          name: spec.name, description: spec.description, prompt: spec.prompt,
+          ...(spec.model ? { model: spec.model } : {}),
+          ...(spec.effort ? { effort: spec.effort } : {}),
+          ...(spec.tools ? { tools: spec.tools } : {}),
+        })
+      }
+      // Só marca como registrado depois de todos: uma falha é tentada de novo no próximo turno.
+      registeredKey = key
+    } catch (error) {
+      io.toast(`pantheon: falha ao registrar agentes nativos: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  async function delegate(io: Io, args: DelegateArgs, spawn: Spawn, signal: AbortSignal) {
+    const ws = await workspace(io)
+    const current = await refreshConfig(io, ws.root)
+    if (!current.ok) return reply({ error: `Config do Pantheon inválida: ${current.error}. Corrija o arquivo para delegar.` })
+
+    const all = await ensureJobs(io)
+    let cwd = args.cwd ?? ws.sessionCwd
+    let resumeSessionId: string | undefined
+    if (args.resume) {
+      const target = all.resumeTarget(args.resume)
+      if ('error' in target) return reply({ error: target.error })
+      if (args.cwd !== undefined && args.cwd !== target.cwd) {
+        return reply({ error: `resume reusa o cwd gravado (${target.cwd}); não aceita cwd novo.` })
+      }
+      if (args.agent !== target.agent) {
+        return reply({ error: `O job ${args.resume} é de ${target.agent}; use agent "${target.agent}" no resume.` })
+      }
+      cwd = target.cwd
+      resumeSessionId = target.sessionId
+    }
+
+    const checked = await checkCwd(io.realPath, ws.root, cwd)
+    if (typeof checked !== 'string') return reply({ error: checked.error })
+
+    const call = resolveCodexCall(current.config, args, {
+      cwd: checked, skipGitRepoCheck: !ws.isRepo, resumeSessionId,
+    }, rolePrompt)
+    if ('error' in call) return reply({ error: call.error })
+
+    const { job, outcome } = await all.run(call, {
+      foregroundMs: current.config.foregroundMinutes * 60_000,
+      background: args.background === true,
+      signal,
+      description: args.description,
+      spawn,
+    })
+    await persisted()
+    if (outcome === 'background') {
+      return reply({ jobId: job.id, status: 'background', note: 'Termina sozinho e avisa a sessão; leia com delegate_result.' })
+    }
+    return reply({ ...summarize(job), ...(outcome === 'cancelled' ? { note: PARTIAL_NOTE } : {}) })
+  }
+
+  on('session.start', async ($, e, next) => {
+    const io: Io = {
+      cwd: () => $.session.cwd(),
+      run: (argv, init) => $.process.run(argv, init),
+      home: () => $.env.get('HOME'),
+      readText: async path => (await $.fs.exists(path)) ? String(await $.fs.read(path)) : undefined,
+      realPath: async path => (await $.fs.stat(path, { resolve: true }).catch(() => undefined))?.realPath,
+      toast: text => $.ui.toast(text),
+      status: text => $.ui.status(text),
+      registerAgent: spec => $.agent.register(spec),
+      readJobs: () => read($, jobsAtom),
+      writeJobs: list => update($, jobsAtom, () => list),
+      now: () => $.clock.now(),
+      after: (ms, fn) => $.clock.after(ms, fn),
+      submit: text => $.prompt.submit({ text }),
+    }
+    const started = await next(e)
+    await ensureJobs(io)
+    await refreshConfig(io, (await workspace(io)).root)
+    await $.tool.register({
+      name: 'delegate',
+      description: 'Run a Pantheon Codex role (explorer, librarian, fixer, councillor:<seat>) on a task and return its final message, or a jobId when it goes to background.',
+      inputSchema: DELEGATE_SCHEMA,
+      isDeferred: false,
+    })
+    await $.tool.register({
+      name: 'delegate_result',
+      description: 'Read the status and, once finished, the result of a Pantheon Codex job.',
+      inputSchema: JOB_SCHEMA,
+      isDeferred: false,
+    })
+    await $.tool.register({
+      name: 'delegate_cancel',
+      description: 'Stop a running Pantheon Codex job and mark it cancelled; partial changes stay on disk.',
+      inputSchema: JOB_SCHEMA,
+      isDeferred: false,
+    })
+    await $.command.register({
+      name: 'pantheon',
+      description: 'Open the Pantheon pane; subcommands: cancel <jobId>, config, doctor',
+      argumentHint: '[cancel <jobId> | config | doctor]',
+    })
+    return started
+  })
+
+  on('tool.call', { tool: TOOLS.delegate }, async ($, e, next) => {
+    const io: Io = {
+      cwd: () => $.session.cwd(),
+      run: (argv, init) => $.process.run(argv, init),
+      home: () => $.env.get('HOME'),
+      readText: async path => (await $.fs.exists(path)) ? String(await $.fs.read(path)) : undefined,
+      realPath: async path => (await $.fs.stat(path, { resolve: true }).catch(() => undefined))?.realPath,
+      toast: text => $.ui.toast(text),
+      status: text => $.ui.status(text),
+      registerAgent: spec => $.agent.register(spec),
+      readJobs: () => read($, jobsAtom),
+      writeJobs: list => update($, jobsAtom, () => list),
+      now: () => $.clock.now(),
+      after: (ms, fn) => $.clock.after(ms, fn),
+      submit: text => $.prompt.submit({ text }),
+    }
+    // O processo do Codex fica preso a esta chamada (Esc no foreground o encerra).
+    const spawn: Spawn = req => {
+      const stream = $.process.spawn({ argv: req.argv, cwd: req.cwd, input: req.input })
+      return {
+        [Symbol.asyncIterator]: () => stream,
+        result: stream.result,
+        return: () => stream.return(undefined as never),
+      }
+    }
+    return delegate(io, e as unknown as DelegateArgs, spawn, next.signal)
+  })
+
+  on('tool.call', { tool: TOOLS.result }, async (_$, e) => {
+    const { jobId } = e as unknown as { jobId: string }
+    const job = jobs?.get(jobId)
+    if (!job) return reply({ error: `Job ${jobId} desconhecido nesta sessão.` })
+    return reply(summarize(job))
+  })
+
+  on('tool.call', { tool: TOOLS.cancel }, async (_$, e) => {
+    const { jobId } = e as unknown as { jobId: string }
+    if (!jobs) return reply({ error: `Job ${jobId} desconhecido nesta sessão.` })
+    const done = jobs.cancel(jobId)
+    if ('error' in done) return reply({ error: done.error })
+    await persisted()
+    return reply({ ...summarize(jobs.get(jobId) ?? done), note: PARTIAL_NOTE })
+  })
+
+  on('command.run', { command: 'pantheon' }, async ($, e) => {
+    const io: Io = {
+      cwd: () => $.session.cwd(),
+      run: (argv, init) => $.process.run(argv, init),
+      home: () => $.env.get('HOME'),
+      readText: async path => (await $.fs.exists(path)) ? String(await $.fs.read(path)) : undefined,
+      realPath: async path => (await $.fs.stat(path, { resolve: true }).catch(() => undefined))?.realPath,
+      toast: text => $.ui.toast(text),
+      status: text => $.ui.status(text),
+      registerAgent: spec => $.agent.register(spec),
+      readJobs: () => read($, jobsAtom),
+      writeJobs: list => update($, jobsAtom, () => list),
+      now: () => $.clock.now(),
+      after: (ms, fn) => $.clock.after(ms, fn),
+      submit: text => $.prompt.submit({ text }),
+    }
+    const [sub, ...rest] = e.args.trim().split(/\s+/).filter(Boolean)
+    if (!sub) {
+      await $.ui.open({ id: PANE_ID, title: 'Pantheon' })
+      return { text: 'Painel do Pantheon aberto.' }
+    }
+    if (sub === 'cancel') {
+      const jobId = rest[0]
+      if (!jobId) return { text: 'Uso: /pantheon cancel <jobId>' }
+      const done = jobs ? jobs.cancel(jobId) : { error: `Job ${jobId} desconhecido nesta sessão.` }
+      return { text: 'error' in done ? done.error : `Job ${jobId} cancelado. ${PARTIAL_NOTE}` }
+    }
+    const ws = await workspace(io)
+    const current = await refreshConfig(io, ws.root)
+    if (sub === 'config') return { text: configReport(current) }
+    if (sub === 'doctor') {
+      const version = await io.run(['codex', '--version']).catch(() => undefined)
+      const login = version?.exitCode === 0 ? await io.run(['codex', 'login', 'status']).catch(() => undefined) : undefined
+      return {
+        text: doctorReport({
+          codexVersion: version?.exitCode === 0 ? version.stdout.trim() : undefined,
+          loginStatus: login ? (login.stdout || login.stderr).trim().split('\n')[0] : undefined,
+          loginOk: login?.exitCode === 0,
+          config: current,
+          root: ws.root,
+          isRepo: ws.isRepo,
+        }),
+      }
+    }
+    return { text: `Subcomando desconhecido: ${sub}. Use /pantheon, /pantheon cancel <jobId>, /pantheon config ou /pantheon doctor.` }
+  })
+
+  on('ui.render', { component: 'Pane', requestId: PANE_ID }, async ($, e) => {
+    const { Box, Text, Button } = $.ui.resolve(e)
+    const list = await read($, jobsAtom)
+    const natives = (await $.agent.list()).filter(agent => agent.type.startsWith('pantheon:'))
+    return drawPane({ Box, Text, Button } as never, {
+      jobs: list,
+      natives,
+      now: await $.clock.now(),
+      rows: e.viewport?.rows ?? 24,
+      onCancel: jobId => { jobs?.cancel(jobId) },
+      onCopy: (text, surface) => { void $.ui.copy({ text, surface }) },
+    }) as never
+  })
+
+  on('prompt.compose', async ($, e, next) => {
+    const io: Io = {
+      cwd: () => $.session.cwd(),
+      run: (argv, init) => $.process.run(argv, init),
+      home: () => $.env.get('HOME'),
+      readText: async path => (await $.fs.exists(path)) ? String(await $.fs.read(path)) : undefined,
+      realPath: async path => (await $.fs.stat(path, { resolve: true }).catch(() => undefined))?.realPath,
+      toast: text => $.ui.toast(text),
+      status: text => $.ui.status(text),
+      registerAgent: spec => $.agent.register(spec),
+      readJobs: () => read($, jobsAtom),
+      writeJobs: list => update($, jobsAtom, () => list),
+      now: () => $.clock.now(),
+      after: (ms, fn) => $.clock.after(ms, fn),
+      submit: text => $.prompt.submit({ text }),
+    }
+    const composed = await next(e)
+    const current = await refreshConfig(io, (await workspace(io)).root)
+    return {
+      ...composed,
+      sections: [
+        ...composed.sections.filter(section => section.id !== 'pantheon:orchestrator'),
+        { id: 'pantheon:orchestrator', text: buildOrchestratorSection(current.config), scope: 'session' as const },
+      ],
+    }
+  })
+
+  on('prompt.submit', async (_$, e, next) => {
+    if (!isCouncilOrigin(e.origin?.kind) || !matchesCouncilTrigger(e.text)) return next(e)
+    const block = buildCouncilBlock(state.config)
+    if (!block) return next(e)
+    return next({ ...e, context: [...(e.context ?? []), block] })
+  })
+
+  // Guarda: decide antes do next e, se falhar, esconde o pantheon:* (a API deixa passar por padrão).
+  on('agent.offer', async (_$, e, next) => {
+    if (!e.agent.startsWith('pantheon:')) return next(e)
+    if (!isOffered(state.config, e.agent)) return { isOffered: false }
+    return next(e)
+  }).catch((_$, e, next) => e.agent.startsWith('pantheon:') ? { isOffered: false } : next(e))
+}

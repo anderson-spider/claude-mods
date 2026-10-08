@@ -1,0 +1,19 @@
+pantheon
+Copyright (c) 2026 anderson-spider
+
+The system prompt texts in hooks/prompts/ (orchestrator, role prompts, council
+mode and its synthesis format) are adapted from oh-my-opencode-slim,
+https://github.com/alvinunreal/oh-my-opencode-slim (src/agents/orchestrator.ts,
+role-routing.ts, role-prompts.ts, council.ts and src/hooks/council-inject),
+licensed under the MIT License (see LICENSE).
+
+Changes: rewritten for Claude Code's Agent tool and Pantheon's delegate,
+delegate_result and delegate_cancel tools; opencode-only parts (todo
+continuity, marketplace, wait_for_user, question, task_message) removed; the
+librarian points to web search and the available documentation MCPs; every
+role prompt ends with a line that lets a task's report format replace the
+role's own. The rest of the plugin is new code.
+
+The plugin was first developed in https://github.com/anderson-spider/claude-workflow-codex
+(PR #4), a fork of https://github.com/scasella/claude-dynamic-workflows-codex
+(MIT, Copyright (c) 2026 Stephen Casella); none of that project's code remains.
