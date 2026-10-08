@@ -35,7 +35,6 @@ import {
   colorOf,
   dotOf,
 
-  isTrusted,
   itemLine,
 
   modelChip,
@@ -361,7 +360,7 @@ export function register(on, options) {
   });
 
   on("tool.call", { tool: "mcp__threads__threads_setup" }, async ($, e) => {
-    const out = await runSetup($, { cwd: e.cwd, closeStale: e.close_stale === true, restartHelper: e.restart_helper === true });
+    const out = await runSetup($, { closeStale: e.close_stale === true, restartHelper: e.restart_helper === true });
     return { result: out.text };
   });
 
@@ -725,7 +724,7 @@ export function register(on, options) {
       }
       if (t.status === "needs-login") right.push(Text({ color: "red", wrap: "truncate", children: clip(LOGIN_HINT, rightW) }));
       if (t.status === "needs-trust") {
-        right.push(Text({ color: "red", wrap: "truncate", children: clip("Sits on the folder trust prompt. Trust the folder yourself, then close and recreate.", rightW) }));
+        right.push(Text({ color: "red", wrap: "truncate", children: clip("Sits on the folder trust prompt. Answer it in its pane, or close and recreate.", rightW) }));
       }
       const isLive = LIVE.has(t.status);
       // inline and Codex threads show an activity feed, not a terminal screen
@@ -886,7 +885,7 @@ async function registerTools($) {
         model: { type: "string", description: "haiku, sonnet, opus, fable, or a full model id. With backend codex: a Codex model name, or codex for the account default" },
         title: { type: "string", description: "Short title, e.g. \"Haiku scout\"; shown as \"Thread | <title>\"" },
         task: { type: "string", description: "The thread's task, written as a complete first prompt" },
-        cwd: { type: "string", description: "Folder to work in (default: this chat's folder). Must be a trusted folder." },
+        cwd: { type: "string", description: "Folder to work in (default: this chat's folder). Session threads accept its folder trust prompt." },
         permission_mode: { type: "string", enum: ["bypassPermissions", "default", "acceptEdits", "plan", "auto"], description: "Permission mode for a session thread (default is default, or what /threads mode set). Inline threads use this chat's mode." },
         report_back: { type: "boolean", description: "Ask the thread to message a short report back to this chat (default true)" },
         effort: { type: "string", enum: ["low", "medium", "high", "xhigh", "max"], description: "Reasoning effort (default: the model's)" },
@@ -962,7 +961,7 @@ async function registerTools($) {
       type: "object",
       properties: {
         title: { type: "string", description: "Short plan title" },
-        cwd: { type: "string", description: "Project folder (default: this chat's); must be trusted for session threads" },
+        cwd: { type: "string", description: "Project folder (default: this chat's); session threads accept its folder trust prompt" },
         gate: { type: "string", enum: ["auto", "lead", "user"] },
         handoff_dir: { type: "string", description: "Where handoff files go (default <cwd>/handoff)" },
         backend: { type: "string", enum: ["auto", "session", "inline"], description: "Default auto: session when the terminal CLI is logged in" },
@@ -1084,12 +1083,11 @@ async function registerTools($) {
   await $.tool.register({
     name: T_SETUP,
     description:
-      "Check what threads need and say exactly what to fix: the terminal CLI login (session threads), tmux, whether this folder is trusted, the live-thread cap and stale threads, the default permission mode and how the mod is loaded. " +
+      "Check what threads need and say exactly what to fix: the terminal CLI login (session threads), tmux, the live-thread cap and stale threads, the default permission mode and how the mod is loaded. " +
       "Use it when the user asks to set up or check threads, or when creating a thread failed. Set close_stale: true only when the user explicitly asked to close the stale threads it lists, and restart_helper: true only when they asked to restart the Codex helper (it closes the idle Codex threads it tracks, so their transcripts stay in Codex).",
     inputSchema: {
       type: "object",
       properties: {
-        cwd: { type: "string", description: "Folder to check for trust (default: this chat's)" },
         close_stale: { type: "boolean", description: "Close the stale threads found (only when the user asked)" },
         restart_helper: { type: "boolean", description: "Restart an outdated Codex helper, closing the idle Codex threads it tracks first (only when the user asked)" },
       },
@@ -1147,7 +1145,6 @@ async function paths($) {
     events: `${config}/threads/events.jsonl`,
     sessions: `${config}/sessions`,
     projects: `${config}/projects`,
-    claudeJson: configEnv ? `${configEnv}/.claude.json` : `${home}/.claude.json`,
   };
 }
 
@@ -1970,18 +1967,6 @@ async function createThreadChecked($, input, { m, title, task, mode, eff, extra,
   }
   if (backend === "inline") return createInline($, p, { model: m.model, title, task, cwd: real, here, reportBack: input.reportBack !== false, mode: mode.mode, authNote, effort: eff.effort, extra, context: input.context, repo, base: input.worktreeBase });
 
-  let claudeJson = "";
-  try {
-    claudeJson = await $.fs.read(p.claudeJson);
-  } catch {
-    claudeJson = "";
-  }
-  if (!isTrusted(claudeJson, real) && !isTrusted(claudeJson, cwd)) {
-    return {
-      error: `${real} is not a trusted folder. Open Claude Code there once (cd '${real}' && claude) and accept the trust prompt, then try again. Threads never accept trust for you.`,
-    };
-  }
-
   const reg = await loadRegistry($, p);
   const live = await liveCount($, reg);
   if (live.length >= reg.cap) {
@@ -2186,6 +2171,7 @@ async function createInline($, p, { model, title, task, cwd, here, reportBack, m
 
 // A few seconds after the spawn: did it register, or is it stuck on a login or trust screen?
 async function settle($, p, entry) {
+  let trustSent = false;
   for (let i = 0; i < 8; i++) {
     await run($, ["sleep", "1"], 5000);
     const panes = await livePanes($);
@@ -2197,6 +2183,13 @@ async function settle($, p, entry) {
       return { status: "exited", screen: last };
     }
     const screen = readScreen(await capture($, entry.tmux, false));
+    // the lead chose to run here, so the folder trust prompt is answered for it (option 1, "Yes, I trust")
+    if (screen.needsTrust && !screen.needsLogin && !trustSent) {
+      trustSent = true;
+      await run($, tmuxArgv("send-keys", "-t", entry.tmux, "C-m"), 5000);
+      await logEvent($, p, "trust-accepted", { id: entry.id });
+      continue;
+    }
     if (screen.needsLogin || screen.needsTrust) {
       const status = screen.needsLogin ? "needs-login" : "needs-trust";
       await patchThread($, p, entry.id, { status });
@@ -3236,27 +3229,6 @@ async function runSetup($, opts = {}) {
     fix: "Run in Terminal: brew install tmux",
     critical: true,
   });
-  const here = await $.session.cwd();
-  const want = String(opts.cwd ?? "").trim() || here;
-  let real = want;
-  try {
-    real = (await $.fs.stat(want, { resolve: true })).realPath || want;
-  } catch {
-    real = want;
-  }
-  let claudeJson = "";
-  try {
-    claudeJson = await $.fs.read(p.claudeJson);
-  } catch {
-    claudeJson = "";
-  }
-  const trusted = isTrusted(claudeJson, real) || isTrusted(claudeJson, want);
-  checks.push({
-    name: "Folder trust",
-    ok: trusted,
-    detail: `${real} is ${trusted ? "trusted" : "not trusted"} (trust is per folder, not inherited)`,
-    fix: `Run in Terminal: cd '${real}' && claude, accept the trust prompt once, then quit. Or pass a trusted folder as cwd.`,
-  });
   const reg = await loadRegistry($, p);
   const live = await liveCount($, reg);
   let stale = (await staleThreads($, p, reg)).filter((x) => !x.t.pinned);
@@ -3391,17 +3363,6 @@ async function createPlanChecked($, input, v) {
     const auth = await authStatus($);
     backend = auth.loggedIn ? "session" : requested === "session" ? "" : "inline";
     if (!backend) return { error: `${LOGIN_HINT} Or run the plan inline (backend inline).` };
-  }
-  if (backend === "session") {
-    let claudeJson = "";
-    try {
-      claudeJson = await $.fs.read(p.claudeJson);
-    } catch {
-      claudeJson = "";
-    }
-    if (!isTrusted(claudeJson, real) && !isTrusted(claudeJson, cwd)) {
-      return { error: `${real} is not a trusted folder. Open Claude Code there once and accept the trust prompt, then try again.` };
-    }
   }
   let handoffDir = String(input.handoff_dir ?? "").trim() || `${real}/handoff`;
   if (!handoffDir.startsWith("/")) handoffDir = `${real}/${handoffDir}`;
@@ -3929,7 +3890,7 @@ const HELP = [
   "/threads adopt <id>|all           lead threads whose chat is gone",
   "/threads pin|unpin|archive|unarchive <id>   pinned threads stay on top and are never cleaned up; archived ones are hidden",
   "/threads history [<planId>]       saved plan records",
-  "/threads setup [clean|restart]    check login, tmux, folder trust, the cap and stale threads; say exactly what to fix (clean closes the stale ones; restart replaces an outdated Codex helper after closing its idle threads)",
+  "/threads setup [clean|restart]    check login, tmux, the cap and stale threads; say exactly what to fix (clean closes the stale ones; restart replaces an outdated Codex helper after closing its idle threads)",
   "/threads mode [<mode>]            default permission mode for new session threads (default unless changed); --mode or permission_mode overrides per thread",
   "/threads clean                    drop closed or exited threads older than 7 days",
   "/threads effort <id> <level>      low, medium, high, xhigh or max (session threads: when idle; inline: from the next request)",
@@ -3937,7 +3898,7 @@ const HELP = [
   "/threads plan status | next | retry <n> | stop | close   (or ask in plain English; the model uses threads_plan and threads_plan_advance)",
   "/threads autowake on|off          start a turn here when a thread finishes (default off: the report waits for your next turn)",
   "",
-  "Models: haiku, sonnet, opus, fable or a full claude-* id. Session threads need a trusted folder and the terminal login (claude auth status).",
+  "Models: haiku, sonnet, opus, fable or a full claude-* id. Session threads need the terminal login (claude auth status).",
   "Session threads start in the default permission mode (they ask before risky actions) unless /threads mode or the defaultPermissionMode setting changes it. Inline threads use this chat's own mode.",
   "Or ask in plain English, e.g. spin up a Haiku thread to triage the inbox.",
 ].join("\n");
@@ -4004,7 +3965,7 @@ async function runCommand($, args) {
   if (verb === "markread" || verb === "mark-read") return markReadText($, { id: rest[0] && rest[0] !== "all" ? rest[0] : undefined, all: !rest[0] || rest[0] === "all" });
   if (verb === "setup" || verb === "doctor") {
     const flag = rest[0] === "clean" || rest[0] === "restart";
-    const out = await runSetup($, { cwd: flag ? undefined : rest[0], closeStale: rest[0] === "clean", restartHelper: rest[0] === "restart" });
+    const out = await runSetup($, { closeStale: rest[0] === "clean", restartHelper: rest[0] === "restart" });
     return out.text;
   }
   if (verb === "mode") {

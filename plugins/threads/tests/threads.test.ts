@@ -2,7 +2,6 @@ import { describe, expect, test } from "claude-code/testing";
 import {
   bandText,
   buildBrief,
-  isTrusted,
   messagesToItems,
   parseNew,
   parseRegistry,
@@ -543,16 +542,6 @@ describe("threads: pure helpers", () => {
     expect(threadTitle("Thread | Opus review")).toBe("Thread | Opus review");
   });
 
-  test("trust: exact folder only, /tmp vs /private/tmp spellings", () => {
-    const json = JSON.stringify({ projects: { "/tmp/practical-demo": { hasTrustDialogAccepted: true }, "/work/x": { hasTrustDialogAccepted: false } } });
-    expect(isTrusted(json, "/private/tmp/practical-demo")).toBe(true);
-    expect(isTrusted(json, "/private/tmp/practical-demo/task-alerts")).toBe(false); // Claude Code asks again there
-    expect(isTrusted(json, "/tmp/practical-demo/")).toBe(true);
-    expect(isTrusted(json, "/work/x")).toBe(false);
-    expect(isTrusted(json, "/work/x/y")).toBe(false);
-    expect(isTrusted("{broken", "/tmp/practical-demo")).toBe(false);
-  });
-
   test("status mapping from tmux, the sessions json and the screen", () => {
     const base = { previous: "working", tmux: { isLive: true, isDead: false }, session: { status: "busy" }, pidAlive: true, screen: readScreen(""), now: T0, createdAt: T0 - 600000 };
     expect(statusOf(base)).toBe("working");
@@ -693,10 +682,9 @@ describe("threads: creating", () => {
     expect(w.authCalls).toBe(2);
   });
 
-  test("refuses an untrusted folder, a missing folder, an unknown mode or model", async ($, on) => {
+  test("refuses a missing folder, an unknown mode or model", async ($, on) => {
     const w = fresh();
     await boot($, on, w);
-    expect(await threads($, "new haiku Scout --cwd /work/untrusted -- list")).toMatch(/\/work\/untrusted is not a trusted folder\..*never accept trust/);
     expect(await threads($, "new haiku Scout --cwd /nowhere -- list")).toMatch(/Folder not found: \/nowhere/);
     expect(await threads($, "new haiku Scout --mode yolo -- list")).toMatch(/Unknown permission mode "yolo"/);
     expect(await threads($, "new gpt-5 Scout -- list")).toMatch(/Unknown model "gpt-5"/);
@@ -724,6 +712,17 @@ describe("threads: creating", () => {
     const out = await threads($, "new haiku Scout -- list");
     expect(out).toMatch(/stuck on the login screen/);
     expect(created(w, "Scout").status).toBe("needs-login");
+  });
+
+  test("a thread on the folder trust prompt gets Enter once and goes on", async ($, on) => {
+    const w = fresh({ register: false, spawnScreen: "Do you trust the files in this folder?\n❯ 1. Yes, I trust this folder\n  2. No, exit" });
+    await boot($, on, w);
+    const out = await threads($, "new haiku Scout --cwd /work/untrusted -- list");
+    expect(out).toMatch(/Created .* in \/work\/untrusted/);
+    expect(sendKeys(w)).toEqual([["send-keys", "-t", `thread-${created(w, "Scout").id}`, "C-m"]]);
+    expect(events(w).map((e: any) => e.type)).toContain("trust-accepted");
+    // the fake screen never changes, so a second look still finds the prompt: Enter is not sent again
+    expect(created(w, "Scout").status).toBe("needs-trust");
   });
 
   test("threads_create tool, plain English path", async ($, on) => {
@@ -2052,7 +2051,6 @@ describe("threads: setup", () => {
     expect(out).toMatch(/^Threads setup\n✗ Terminal login: not logged in/);
     expect(out).toMatch(/Do: Run in Terminal: claude auth login\./);
     expect(out).toMatch(/✗ tmux: not found\n    Do: Run in Terminal: brew install tmux/);
-    expect(out).toMatch(/✓ Folder trust: \/work\/app is trusted/);
     expect(out).toMatch(/✓ Thread slots: 0 of 4 in use\. Stale: tgone1 \(Gone, its process has ended\)\./);
     expect(out).toMatch(/✓ Default permission mode: default/);
     expect(out).toMatch(/✓ How the mod is loaded: /);
@@ -2062,10 +2060,9 @@ describe("threads: setup", () => {
     expect(registry(w).threads[0]).toMatchObject({ status: "closed", closedBy: "setup" });
     w.loggedIn = true;
     w.tmuxVersion = "tmux 3.7b";
-    const ok: any = await $.tool.call({ tool: "mcp__threads__threads_setup", cwd: "/work/untrusted" } as any);
+    const ok: any = await $.tool.call({ tool: "mcp__threads__threads_setup" } as any);
     expect(ok.result).toMatch(/✓ Terminal login: logged in/);
     expect(ok.result).toMatch(/✓ tmux: tmux 3\.7b/);
-    expect(ok.result).toMatch(/✗ Folder trust: \/work\/untrusted is not trusted.*\n    Do: Run in Terminal: cd '\/work\/untrusted' && claude/);
     expect(ok.result).toMatch(/Session threads are ready\./);
     expect(w.store.setupPassedAt).toBe(T0);
   });
