@@ -749,6 +749,16 @@ describe("threads: creating", () => {
     expect(await threads($, "cap")).toBe("The cap is 1 live threads.");
   });
 
+  test("an archived thread does not take a slot under the cap", async ($, on) => {
+    const w = fresh();
+    await boot($, on, w);
+    await threads($, "cap 1");
+    await threads($, "new haiku One -- a");
+    expect(await threads($, "new haiku Two -- b")).toMatch(/cap is 1/);
+    await threads($, `archive ${created(w, "One").id}`);
+    expect(await threads($, "new haiku Two -- b")).toMatch(/^Created/);
+  });
+
   test("a thread stuck on the login screen is marked needs-login", async ($, on) => {
     const w = fresh({ register: false, spawnScreen: "Welcome\nLogin expired · Please run /login" });
     await boot($, on, w);
