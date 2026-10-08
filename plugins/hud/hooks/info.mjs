@@ -74,7 +74,8 @@ export function drawInfo(elements, columns, surface = "terminal") {
       if (p.gap === 0) last.parts.push(Box({ key: "joined-" + p.key, flexDirection: "row", children: [last.parts.pop(), nodes[i]] }));
       else last.parts.push(nodes[i]);
     });
-    return Box({ key: "info", flexDirection: "row", alignItems: "center", columnGap: 1, paddingX: 1, children: pills.map((b) => pill(elements, b)) });
+    // The same gap below as between the rows of pills under it.
+    return Box({ key: "info", flexDirection: "row", alignItems: "center", columnGap: 1, paddingX: 1, marginBottom: 1, children: pills.map((b) => pill(elements, b)) });
   }
   const children = [];
   parts.forEach((p, i) => {
