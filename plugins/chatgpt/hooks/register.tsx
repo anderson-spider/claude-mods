@@ -160,7 +160,7 @@ export const register: Register = (on, options) => {
         `Sends a self-contained question to the user's logged-in ChatGPT (${WHERE}), waits for the answer, saves ` +
         'it as Markdown and returns the file path, the chat URL and the start of the answer. Use when the user asks ' +
         'to ask ChatGPT, or for a self-contained question with a long answer (research, explanation, brainstorm, ' +
-        'draft text, translation, second opinion) after telling the user; not for work that needs the repository ' +
+        'draft text, translation, second opinion); not for work that needs the repository ' +
         '(the context would have to be sent and read back). Write the prompt with the goal, the minimum context, ' +
         'the output format and the language. Requests take turns; a slow one goes on in the background and a ' +
         'message arrives when it is saved. ' +
@@ -218,7 +218,9 @@ export const register: Register = (on, options) => {
       name: 'jobs',
       description:
         'Lists the ChatGPT requests of this session that ran or run in the background (ask or image with wait: ' +
-        'false, or a slow one that moved there): status, chat URL and saved files, newest first.',
+        'false, or a slow one that moved there): status, chat URL and saved files, newest first. Use it to find ' +
+        "a background request's file or chat URL, or to check whether it is still running. It sends nothing to " +
+        'ChatGPT, spends no quota and does not list requests from other sessions.',
       inputSchema: { type: 'object', properties: {} },
     })
     await $.command.register({
