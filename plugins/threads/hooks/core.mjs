@@ -345,7 +345,8 @@ export function readScreen(text) {
     return { needsLogin, needsTrust, needsYou: true, prompt: `Codex computer use wants to use ${cu[1]} (approve allows it for that thread's session)`, isCursorOnYes: false, heldMessage: false, heldPreview: "", bypassWarning: false, cuApproval: cu[1] };
   }
   const isCursorOnNo = needsTrust && /^\s*[❯>›]\s*(\d+\.\s*)?No, exit/m.test(tail);
-  return { needsLogin, needsTrust, isCursorOnNo, needsYou: needsYou && !heldMessage, prompt, isCursorOnYes, heldMessage, heldPreview, bypassWarning: false };
+  const hasTrustChoice = needsTrust && /Yes, I trust this folder|No, exit/.test(tail);
+  return { needsLogin, needsTrust, isCursorOnNo, hasTrustChoice, needsYou: needsYou && !heldMessage, prompt, isCursorOnYes, heldMessage, heldPreview, bypassWarning: false };
 }
 
 // Last N non-empty screen lines, trailing spaces trimmed.

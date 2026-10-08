@@ -2052,6 +2052,8 @@ async function createThreadChecked($, input, { m, title, task, mode, eff, extra,
   if (wt) lines.push(`It works in its own git worktree on branch ${wt.branch}, so it cannot clash with other threads. When it closes, an unchanged worktree is removed; one with work is kept for you to merge.`);
   if (authNote) lines.push(`Backend: ${authNote}.`);
   if (early.status === "needs-login") lines.push(`It is stuck on the login screen. ${LOGIN_HINT}`);
+  else if (early.isTrustUnrecognized) lines.push("It is stuck on the folder trust prompt, which this version did not recognize, so no key was sent. Answer it in its pane (/threads open), or close and recreate it.");
+  else if (early.isTrustStuck) lines.push("It is stuck on the folder trust prompt: the keys to accept it were sent and the prompt did not accept. Answer it in its pane (/threads open), or close and recreate it.");
   else if (early.status === "needs-trust") lines.push("It is stuck on the folder trust prompt.");
   else if (early.status === "exited") lines.push(`It exited right away: ${clip(early.screen, 300) || "no output"}`);
   else if (early.isRegistered) lines.push("It is running.");
@@ -2190,6 +2192,13 @@ async function settle($, p, entry) {
     const screen = readScreen(await capture($, entry.tmux, false));
     // the lead chose to run here, so the folder trust prompt is answered for it ("Yes, I trust this folder")
     if (screen.needsTrust && !screen.needsLogin && !trustSent) {
+      // an unknown layout never gets a key: Enter could pick "No, exit"
+      if (!screen.hasTrustChoice) {
+        await patchThread($, p, entry.id, { status: "needs-trust" });
+        await logEvent($, p, "trust-unrecognized", { id: entry.id, screen: clip(oneLine(screenLines(await capture($, entry.tmux, false), 8).join(" ")), 400) });
+        await logEvent($, p, "status", { id: entry.id, from: "starting", to: "needs-trust" });
+        return { status: "needs-trust", isTrustUnrecognized: true };
+      }
       trustSent = true;
       // the cursor starts on "No, exit" in current versions: move to "Yes" first, or Enter quits the thread
       if (screen.isCursorOnNo) await run($, tmuxArgv("send-keys", "-t", entry.tmux, "Down"), 5000);
@@ -2202,7 +2211,9 @@ async function settle($, p, entry) {
       await patchThread($, p, entry.id, { status });
       await logEvent($, p, "status", { id: entry.id, from: "starting", to: status });
       if (screen.needsLogin) await $.state.set(AUTH, { at: 0, loggedIn: false, detail: "" });
-      return { status };
+      const isTrustStuck = trustSent && !screen.needsLogin;
+      if (isTrustStuck) await logEvent($, p, "trust-stuck", { id: entry.id });
+      return { status, isTrustStuck };
     }
     const sessions = await scanSessions($, p);
     if (sessions.has(entry.sessionId)) return { status: "starting", isRegistered: true };
