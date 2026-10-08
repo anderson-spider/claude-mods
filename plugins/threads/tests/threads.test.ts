@@ -26,6 +26,8 @@ import {
   worktreeOutcome,
   isUnread,
   loadedHow,
+  ANSWER_MAX,
+  clipAnswer,
 } from "../hooks/core.mjs";
 import { waitForThreads } from "../hooks/threads.mjs";
 
@@ -1732,6 +1734,44 @@ describe("threads: whole answers in tool output", () => {
     await threads($, "refresh"); // the watcher records it as the report
     const list: any = await $.tool.call({ tool: "mcp__threads__threads_list" } as any);
     expect(list.result).toContain(LONG_ANSWER);
+  });
+
+  test("an answer of a few thousand characters reaches wait, read and the lead's report whole", async ($, on) => {
+    const w = fresh();
+    await boot($, on, w);
+    await threads($, "new haiku Haiku scout -- list the files");
+    const t = created(w, "Haiku scout");
+    await threads($, "refresh");
+    const files = Array.from({ length: 150 }, (_, i) => `plugins/some-plugin/hooks/module-${i}.mjs`).join("\n");
+    const answer = `The repository has 150 files:\n${files}\nEnd of list.`;
+    setSession(w, t.sessionId, { status: "idle" });
+    w.fs.set(transcriptPath(APP, t.sessionId), [userRow("list the files"), JSON.stringify({ type: "assistant", uuid: "a1", message: { model: "claude-haiku-4-5-20251001", content: [{ type: "text", text: answer }] } })].join("\n"));
+    await threads($, "refresh");
+    expect(created(w, "Haiku scout").lastReport.text).toBe(answer);
+    expect(w.appended.at(-1).content[0].text).toContain(`${answer}\n</thread report>`);
+    const wait: any = await $.tool.call({ tool: "mcp__threads__threads_wait", ids: [t.id], timeout_s: 30 } as any);
+    expect(wait.result).toContain(answer);
+    const read: any = await $.tool.call({ tool: "mcp__threads__threads_read", id: t.id } as any);
+    expect(read.result).toContain(`latest answer:\n${answer}`);
+  });
+
+  test("an answer past the limit is cut with a note of how much was left out", async ($, on) => {
+    const w = fresh();
+    await boot($, on, w);
+    await threads($, "new haiku Haiku scout -- dump it");
+    const t = created(w, "Haiku scout");
+    setSession(w, t.sessionId, { status: "idle" });
+    const answer = "x".repeat(ANSWER_MAX + 500);
+    w.fs.set(transcriptPath(APP, t.sessionId), [userRow("dump it"), JSON.stringify({ type: "assistant", uuid: "a1", message: { model: "claude-haiku-4-5-20251001", content: [{ type: "text", text: answer }] } })].join("\n"));
+    const read: any = await $.tool.call({ tool: "mcp__threads__threads_read", id: t.id } as any);
+    expect(read.result).toContain(`latest answer:\n${"x".repeat(ANSWER_MAX)}\n(500 more characters left out)`);
+  });
+
+  test("a report already cut keeps its note when it is read again", () => {
+    const cut = clipAnswer("y".repeat(ANSWER_MAX + 500));
+    expect(cut.endsWith("\n(500 more characters left out)")).toBe(true);
+    expect(clipAnswer(cut)).toBe(cut);
+    expect(clipAnswer("short")).toBe("short");
   });
 });
 
