@@ -11,15 +11,15 @@ for (const surface of ["terminal", "desktop"] as const) {
     expect(texts).toContain("107k");
     expect(texts).not.toContain("11% context");
     expect(texts).toContain("5h");
-    // The bar says how much is used: no percentage beside it.
+    // The bar and the percentage beside it.
     expect(texts).toContain("█");
-    expect(texts).not.toContain("32%");
+    expect(texts).toContain("32%");
     const dot = surface === "terminal" ? "· " : "";
     // The time left alone; the reset time is in the clock's tooltip.
-    expect(texts).toContain(`${dot}3h00`);
-    expect(texts).not.toContain(`${dot}3h00 → ${at(NOW + 3 * 3_600_000)}`);
-    expect(texts).not.toContain("59%");
-    expect(texts).toContain(`${dot}3d00h`);
+    expect(texts).toContain(`${dot}3h`);
+    expect(texts).not.toContain(`${dot}3h → ${at(NOW + 3 * 3_600_000)}`);
+    expect(texts).toContain("59%");
+    expect(texts).toContain(`${dot}3d`);
     // No request yet: the cache block waits, no cost without a ledger. In the app the bolt stands for the word.
     if (surface === "terminal") expect(texts).toContain("cache");
     expect(texts).toContain("—");
@@ -44,6 +44,8 @@ for (const surface of ["terminal", "desktop"] as const) {
       // Pills: tinted and rounded, without the border's vertical padding.
       const pills = ((await ui.findAll({ type: "Box" })) as any[]).filter((b) => b.props?.backgroundColor && b.props?.position !== "absolute");
       expect(pills.length).toBe(4);
+      // The same order as the terminal: context and cache, then the limits.
+      expect(texts.indexOf("—")).toBeLessThan(texts.indexOf("5h"));
       for (const p of pills) {
         expect(p.props?.borderStyle).toBe("round");
         expect(p.props?.paddingY).toBe(0);
@@ -66,16 +68,16 @@ for (const surface of ["terminal", "desktop"] as const) {
     await $.session.start({ source: "startup", cwd: "/tmp" } as any);
     const { ui, texts } = await band($, surface);
     // 7 days: 59% used against 57% of the time elapsed, 2 points ahead. 5 hours: 32% against 40%, 8 behind.
-    expect(texts).toContain("▲ 2");
-    expect(texts).toContain("▼ 8");
+    expect(texts).toContain("▲2");
+    expect(texts).toContain("▼8");
     // The 5-hour window comes first: its mark sits between "5h" and "7d", the 7-day mark after "7d".
-    expect(texts.indexOf("5h")).toBeLessThan(texts.indexOf("▼ 8"));
-    expect(texts.indexOf("▼ 8")).toBeLessThan(texts.indexOf("7d"));
-    expect(texts.indexOf("7d")).toBeLessThan(texts.indexOf("▲ 2"));
-    const ahead: any = await ui.find({ type: "Text", text: "▲ 2" });
+    expect(texts.indexOf("5h")).toBeLessThan(texts.indexOf("▼8"));
+    expect(texts.indexOf("▼8")).toBeLessThan(texts.indexOf("7d"));
+    expect(texts.indexOf("7d")).toBeLessThan(texts.indexOf("▲2"));
+    const ahead: any = await ui.find({ type: "Text", text: "▲2" });
     expect(ahead?.props?.bold).toBe(true);
     expect(ahead?.props?.color).toBe("#a8690a");
-    const behind: any = await ui.find({ type: "Text", text: "▼ 8" });
+    const behind: any = await ui.find({ type: "Text", text: "▼8" });
     expect(behind?.props?.bold).toBe(true);
     // The terminal's green is a hex; the app keeps the theme's "green".
     expect(behind?.props?.color).toBe(surface === "terminal" ? "#6fcf97" : "green");
@@ -92,11 +94,11 @@ test("pace mark: red past the pace alert, green when far behind", async ($, on) 
   ]);
   await $.session.start({ source: "startup", cwd: "/tmp" } as any);
   const { ui, texts } = await band($, "terminal");
-  expect(texts).toContain("▲ 33");
-  expect(texts).toContain("▼ 30");
-  const ahead: any = await ui.find({ type: "Text", text: "▲ 33" });
+  expect(texts).toContain("▲33");
+  expect(texts).toContain("▼30");
+  const ahead: any = await ui.find({ type: "Text", text: "▲33" });
   expect(ahead?.props?.color).toBe("#ff6b6b");
-  const behind: any = await ui.find({ type: "Text", text: "▼ 30" });
+  const behind: any = await ui.find({ type: "Text", text: "▼30" });
   expect(behind?.props?.color).toBe("#6fcf97");
 });
 
@@ -129,7 +131,7 @@ test("pace start: a lead inside the start is not flagged", { options: { paceStar
   // 2 points ahead, inside the start: on pace, no mark; still 8 behind on the other window.
   expect(texts.some((t) => t.startsWith("▲"))).toBe(false);
   expect(texts.some((t) => t.startsWith("▲"))).toBe(false);
-  expect(texts).toContain("▼ 8");
+  expect(texts).toContain("▼8");
 });
 
 test("pace start: a lead beyond the start is flagged", { options: { paceStart: 1 } } as any, async ($, on) => {
@@ -137,32 +139,35 @@ test("pace start: a lead beyond the start is flagged", { options: { paceStart: 1
   withUsage(on, LIMITS);
   await $.session.start({ source: "startup", cwd: "/tmp" } as any);
   const { texts } = await band($, "terminal");
-  expect(texts).toContain("▲ 2");
+  expect(texts).toContain("▲2");
 });
 
-test("narrow terminal: gives up the cache extras, then the bars, and the reset times last", async ($, on) => {
+test("narrow terminal: the cache gives up its extras, and the limits their bars, then the times left", async ($, on) => {
   // The 5-minute lifetime is the one with extras (its label) to give up.
   world(on, { CLAUDE_CODE_PROMPT_CACHE_TTL: "5m" });
   withUsage(on, LIMITS);
   engineStep(on, [HIT]);
   await $.session.start({ source: "startup", cwd: "/tmp" } as any);
   await step($, HIT);
-  const seen: string[] = [];
-  for (let columns = 40; columns <= 200; columns += 2) {
+  const limits: string[] = [];
+  const extras: boolean[] = [];
+  for (let columns = 20; columns <= 200; columns += 2) {
     const { texts } = await band($, "terminal", columns);
     const bar = texts.includes("█");
-    const reset = texts.includes("· 3h00") && texts.includes("· 3d00h");
-    const extras = texts.some((t) => t.includes("TTL"));
-    // Each piece of detail only ever appears when every more important one does.
-    if (extras) expect(bar && reset).toBe(true);
+    const reset = texts.includes("· 3h") && texts.includes("· 3d");
+    // On the limits row the bar only ever shows with the times left.
     if (bar) expect(reset).toBe(true);
-    seen.push(extras ? "full" : bar ? "compact" : reset ? "nobar" : "none");
+    limits.push(bar ? "full" : reset ? "nobar" : "none");
+    extras.push(texts.some((t) => t.includes("TTL")));
   }
-  // The four steps all happen, in this order, as the line narrows.
-  const order = ["none", "nobar", "compact", "full"];
-  expect(order.every((step) => seen.includes(step))).toBe(true);
-  const firsts = order.map((step) => seen.indexOf(step));
+  // Each row's steps all happen, in order, as the terminal widens.
+  const order = ["none", "nobar", "full"];
+  const firsts = order.map((step) => limits.indexOf(step));
+  expect(firsts.every((i) => i >= 0)).toBe(true);
   expect([...firsts].sort((x, y) => x - y)).toEqual(firsts);
+  expect(extras[0]).toBe(false);
+  expect(extras[extras.length - 1]).toBe(true);
+  expect(extras.slice(extras.indexOf(true)).every(Boolean)).toBe(true);
 });
 
 test("a window that already reset is hidden", async ($, on) => {
@@ -274,10 +279,11 @@ test("narrow terminal: no bar, no detail", async ($, on) => {
   world(on);
   withUsage(on, LIMITS);
   await $.session.start({ source: "startup", cwd: "/tmp" } as any);
-  const { texts } = await band($, "terminal", 60);
+  // The context has a row of its own: only the limits and the cache have to fit.
+  const { texts } = await band($, "terminal", 30);
   expect(texts).toContain("32%");
   expect(texts).not.toContain("█");
-  expect(texts).not.toContain("· 3h00");
+  expect(texts).not.toContain("· 3h");
 });
 
 test("after a restart, the turn bars come back", async ($, on) => {
@@ -306,60 +312,61 @@ test("after a restart, the turn bars come back", async ($, on) => {
   expect(store.has("turns:session-1")).toBe(true);
 });
 
-for (const surface of ["terminal", "desktop"] as const) {
-  test(`gap with elapsed time hatched ${surface}`, async ($, on) => {
-    world(on);
-    withUsage(on, [
-      // 5 hours: 74% used, window 99% over: margin left.
-      { kind: "five_hour", percentUsed: 74, resetsAt: new Date(NOW + 3 * 60_000).toISOString() },
-      // 7 days: 80% used for 57% elapsed: ahead of time (alert).
-      { kind: "seven_day", percentUsed: 80, resetsAt: new Date(NOW + 3 * 86_400_000).toISOString() },
-    ]);
-    await $.session.start({ source: "startup", cwd: "/tmp" } as any);
-    const { ui } = await band($, surface);
-    // The same block bar on both surfaces. 6 cells per bar: 2 grey margin cells (5 h), 2 red cells ahead (7 d).
-    const margin = (await ui.findAll({ type: "Text", text: "▒" })) as any[];
-    const ahead = (await ui.findAll({ type: "Text", text: "▓" })) as any[];
-    expect(margin.filter((d) => d.props?.color === "#4a525c").length).toBe(2);
-    expect(ahead.filter((d) => d.props?.color === "#ff6b6b").length).toBe(2);
-    // The empty track is a fixed grey, not the theme's dim.
-    expect(((await ui.findAll({ type: "Text", text: "░" })) as any[]).some((d) => d.props?.color === "#4a525c")).toBe(true);
-    // The solid part is full blocks.
-    expect((await ui.findAll({ type: "Text", text: "█" })).length).toBeGreaterThan(0);
-  });
+// The cells of the quota bars, in order, as one string per bar ("██▏······┊·").
+async function bars(ui: any): Promise<string[]> {
+  const boxes = ((await ui.findAll({ type: "Box" })) as any[]).filter((b) => b.props?.key === "bar");
+  return boxes.map((b) => ((b.children ?? []) as any[]).map((c) => String(c.children ?? c.props?.children ?? "")).join(""));
 }
 
 for (const surface of ["terminal", "desktop"] as const) {
-  test(`pace cell underlined ${surface}`, async ($, on) => {
+  test(`bar: ten cells in eighths, dots for the rest, ┊ where the clock stands ${surface}`, async ($, on) => {
     world(on);
     withUsage(on, [
-      // 5 hours: 74% used, window 99% over: round(4.44) = 4 used cells, time round(5.94) = 6, so the pace cell is index 5 (a grey margin ▒).
-      { kind: "five_hour", percentUsed: 74, resetsAt: new Date(NOW + 3 * 60_000).toISOString() },
-      // 7 days: 80% used for 57% elapsed: round(4.8) = 5 used cells, time round(3.43) = 3, so the pace cell is index 2 (a red █).
-      { kind: "seven_day", percentUsed: 80, resetsAt: new Date(NOW + 3 * 86_400_000).toISOString() },
+      // 5 hours: 22% used, 87% of the window over: 2.2 cells, the clock at boundary 9.
+      { kind: "five_hour", percentUsed: 22, resetsAt: new Date(NOW + 39 * 60_000).toISOString() },
+      // 7 days: 29% used, 24.6% of the window over: 2.9 cells, the clock at boundary 2.
+      { kind: "seven_day", percentUsed: 29, resetsAt: new Date(NOW + 5.278 * 86_400_000).toISOString() },
     ]);
     await $.session.start({ source: "startup", cwd: "/tmp" } as any);
-    const { ui } = await band($, surface);
-    const glyphs = "█▓▒░";
-    const colors = ["#6fcf97", "#a8690a", "#ff6b6b", "#4a525c"];
-    const cells = ((await ui.findAll({ type: "Text" })) as any[]).filter((d) => glyphs.includes(d.text) && colors.includes(d.props?.color));
-    const underlined = cells.filter((d) => d.props?.underline === true);
-    // One pace cell per bar, and nothing else is underlined.
-    expect(underlined.length).toBe(2);
-    expect(underlined.map((d) => d.text).sort()).toEqual(["█", "▒"]);
-    expect(underlined.find((d) => d.text === "▒")?.props?.color).toBe("#4a525c");
-    expect(underlined.find((d) => d.text === "█")?.props?.color).toBe("#ff6b6b");
+    const { ui, texts } = await band($, surface);
+    expect(await bars(ui)).toEqual(["██▏······┊·", "██┊▉·······"]);
+    expect(texts).toContain("22%");
+    expect(texts).toContain("▼65");
+    expect(texts).toContain("29%");
+    expect(texts).toContain("▲4");
+    // The filled cells in the tone's color, the track and the clock in fixed greys.
+    const tick: any = await ui.find({ type: "Text", text: "┊" });
+    expect(tick?.props?.color).toBe("#9aa3ad");
+    // 7 empty cells on each bar.
+    expect(((await ui.findAll({ type: "Text", text: "·" })) as any[]).filter((d) => d.props?.color === "#4a525c").length).toBe(14);
+    expect(((await ui.find({ type: "Text", text: "▏" })) as any)?.props?.color).toBe("#6fcf97");
   });
 
-  test(`no pace cell without elapsed time ${surface}`, async ($, on) => {
+  test(`bar: no clock without a window length ${surface}`, async ($, on) => {
     world(on);
     withUsage(on, [{ kind: "spend_limit", percentUsed: 40 }]);
     await $.session.start({ source: "startup", cwd: "/tmp" } as any);
     const { ui } = await band($, surface);
-    const glyphs = "█▓▒░";
-    const cells = ((await ui.findAll({ type: "Text" })) as any[]).filter((d) => glyphs.includes(d.text));
-    // The bar is drawn (so the check is not vacuous), but no cell is underlined.
-    expect(cells.length).toBeGreaterThan(0);
-    expect(cells.some((d) => d.props?.underline === true)).toBe(false);
+    expect(await bars(ui)).toEqual(["████······"]);
+  });
+}
+
+for (const surface of ["terminal", "desktop"] as const) {
+  test(`rows: context, cache and agents above, 5h and 7d below ${surface}`, async ($, on) => {
+    world(on);
+    withUsage(on, LIMITS);
+    on("agent.list", () => ({ value: [{ id: "a1", description: "Job", type: "Plan", status: "running" }] }));
+    await $.session.start({ source: "startup", cwd: "/tmp" } as any);
+    const { ui, texts } = await band($, surface);
+    const boxes = (await ui.findAll({ type: "Box" })) as any[];
+    const keys = boxes.map((b) => b.props?.key);
+    expect(keys.indexOf("row-status")).toBeGreaterThanOrEqual(0);
+    expect(keys.indexOf("row-status")).toBeLessThan(keys.indexOf("row-limits"));
+    const ctx = texts.indexOf("107k");
+    const agents = texts.findIndex((t: string) => t === "Plan" || t === "1 agent");
+    expect(texts.indexOf("—")).toBeGreaterThan(ctx);
+    expect(agents).toBeGreaterThan(texts.indexOf("—"));
+    expect(texts.indexOf("5h")).toBeGreaterThan(agents);
+    expect(texts.indexOf("7d")).toBeGreaterThan(texts.indexOf("5h"));
   });
 }

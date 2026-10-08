@@ -15,7 +15,8 @@ const TEXT = {
     compacted: "compacted",
     missed: "missed",
     causes: { model: "model changed", lapsed: "lapsed", prefix: "start changed" },
-    underMinute: "< 1 min",
+    underMinute: "< 1m",
+    hit: "hit",
     resetsAt: (time) => `Resets at ${time}`,
     toRewrite: (tokens) => `${tokens} to rewrite`,
     newThread: "new thread",
@@ -33,7 +34,9 @@ const TEXT = {
       compacted: "Compacted: the next message writes a new, smaller cache.",
     },
     agents: (n) => (n === 1 ? "1 agent" : `${n} agents`),
+    agentsLabel: "agents",
     icons: { five_hour: "5-hour limit", seven_day: "7-day limit", spend_limit: "Spend limit", reset: "Resets in", cache: "Prompt cache", agents: "Agents running" },
+    worktree: "⎇wt",
   },
 };
 export const T = TEXT.en;
@@ -79,8 +82,12 @@ export const weatherSvg = (band) => iconSvg(WEATHER_ICONS[band.id](band.app), WE
 
 // ---------- Layout ----------
 
-export const SEP = "│";
-export const TEXT_CELLS = 6;
+export const SEP = "|";
+// The quota bar: ten cells filled in eighths, and ┊ between the cells where the clock stands.
+export const TEXT_CELLS = 10;
+export const EIGHTHS = "▏▎▍▌▋▊▉";
+export const BAR_TRACK = "·";
+export const PACE_TICK = "┊";
 const TONES = {
   calm: { svg: "#3fa66b", text: "green" },
   // The theme's "yellow" is bright yellow in the app, unreadable on the yellow pill: a deep amber.
@@ -95,7 +102,7 @@ export const PACE_MARKS = { ahead: "▲", behind: "▼" };
 // tones in colors that stand out on a dark terminal, and a grey track and margin for the bar.
 export const TERM_TONES = { calm: "#6fcf97", fast: "#a8690a", alert: "#ff6b6b" };
 export const TERM_TRACK = "#4a525c";
-export const TERM_MARGIN = "#4a525c";
+export const TERM_PACE = "#9aa3ad";
 // The color of a tone's text: the app's on a drawn gauge ("svg"), the terminal's otherwise.
 export const ink = (tone, mode) => (mode === "svg" ? TONES[tone].text : TERM_TONES[tone]);
 // Desktop pills: a light tint and a slightly stronger outline per block.

@@ -208,11 +208,11 @@ test("suggestions: pressing dismiss hides the block", async ($, on) => {
   expect((await band($, "terminal")).texts).not.toContain("next:");
 });
 
-test("suggestions: the desktop draws no block, only the line", async ($, on) => {
+test("suggestions: the desktop draws the block above the line", async ($, on) => {
   await offered($, on);
   const { texts } = await band($, "desktop");
-  expect(texts).not.toContain("next:");
-  expect(texts).toContain("107k");
+  expect(texts).toContain("next:");
+  expect(texts.indexOf("next:")).toBeLessThan(texts.indexOf("107k"));
 });
 
 // ---------- Next steps: filling a suggestion as a draft ----------
