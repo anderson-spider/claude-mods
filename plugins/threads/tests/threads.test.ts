@@ -2796,6 +2796,22 @@ describe("threads: Codex threads", () => {
     expect(await threads($, `screen ${t.id}`)).toMatch(/live activity, working:\n.*task: read the docs/);
   });
 
+  test("threads_wait returns at once for a Codex thread that answered, not after the first-turn grace period", async ($, on) => {
+    const w = codexWorld();
+    await boot($, on, w);
+    const made: any = await $.tool.call({ tool: "mcp__threads__threads_create", backend: "codex", model: "codex", title: "Quick", task: "say hi", report_back: false } as any);
+    expect(made.result).toMatch(/Created Thread \| Quick/);
+    const t = created(w, "Quick");
+    const c = w.codex!.threads.get("th-1")!;
+    c.status = "idle";
+    c.lastAnswer = { text: "hi", at: w.now };
+    const start = w.now;
+    const r: any = await $.tool.call({ tool: "mcp__threads__threads_wait", ids: [t.id], until: "idle", timeout_s: 300 } as any);
+    expect(r.result).toMatch(/^Every thread is done or needs you\./);
+    expect(w.sleeps).toBe(0);
+    expect(w.now - start).toBeLessThan(10000);
+  });
+
   test("setup names a Codex thread the helper lost as stale; setup clean closes it through the helper", async ($, on) => {
     const w = codexWorld();
     await boot($, on, w);
