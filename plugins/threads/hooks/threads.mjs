@@ -361,7 +361,7 @@ export function register(on, options) {
   });
 
   on("tool.call", { tool: "mcp__threads__threads_setup" }, async ($, e) => {
-    const out = await runSetup($, { cwd: e.cwd, closeStale: e.close_stale === true });
+    const out = await runSetup($, { cwd: e.cwd, closeStale: e.close_stale === true, restartHelper: e.restart_helper === true });
     return { result: out.text };
   });
 
@@ -1085,12 +1085,13 @@ async function registerTools($) {
     name: T_SETUP,
     description:
       "Check what threads need and say exactly what to fix: the terminal CLI login (session threads), tmux, whether this folder is trusted, the live-thread cap and stale threads, the default permission mode and how the mod is loaded. " +
-      "Use it when the user asks to set up or check threads, or when creating a thread failed. Set close_stale: true only when the user explicitly asked to close the stale threads it lists.",
+      "Use it when the user asks to set up or check threads, or when creating a thread failed. Set close_stale: true only when the user explicitly asked to close the stale threads it lists, and restart_helper: true only when they asked to restart the Codex helper (it closes the idle Codex threads it tracks, so their transcripts stay in Codex).",
     inputSchema: {
       type: "object",
       properties: {
         cwd: { type: "string", description: "Folder to check for trust (default: this chat's)" },
         close_stale: { type: "boolean", description: "Close the stale threads found (only when the user asked)" },
+        restart_helper: { type: "boolean", description: "Restart an outdated Codex helper, closing the idle Codex threads it tracks first (only when the user asked)" },
       },
     },
   });
@@ -1710,6 +1711,36 @@ async function replaceOutdatedHelper($, p) {
   for (let i = 0; i < 10 && (await codexLive($, p)); i++) await run($, ["sleep", "0.3"], 3000);
   await logEvent($, p, "helper-replaced", { from: r.body.version || "unknown", to: want });
   return true;
+}
+
+// /threads setup restart: replaces an outdated helper by hand. Restarting makes every thread it tracks
+// show exited, so this chat's idle Codex threads are closed first (their transcripts stay in Codex),
+// and nothing happens while a thread is running, waiting for an approval, or belongs to another chat.
+async function restartHelper($, p) {
+  const want = await pluginVersion($);
+  if (!want) return { ok: false, detail: "could not read the plugin version, so the helper was left running." };
+  if (!(await codexLive($, p))) return { ok: true, detail: "no Codex helper is running; the next Codex thread starts one." };
+  const r = await codexCall($, p, "/status");
+  if (!r.ok) return { ok: false, detail: "the helper did not answer, so it was left running." };
+  if (r.body.version === want) return { ok: true, detail: `the helper already runs ${want}.` };
+  const reg = await loadRegistry($, p);
+  const selfId = await $.session.id();
+  const tracked = r.body.threads ?? [];
+  const nameOf = (h) => {
+    const t = reg.threads.find((x) => x.backend === "codex" && x.codexThreadId === h.threadId);
+    return t ? `${t.id} (${shortTitle(t.title)})` : String(h.threadId);
+  };
+  const busy = tracked.filter((h) => h.status === "starting" || h.status === "working" || h.status === "needs-you");
+  if (busy.length) return { ok: false, detail: `not restarted: ${busy.map(nameOf).join(", ")} ${busy.length === 1 ? "is" : "are"} still running or waiting for you. Let ${busy.length === 1 ? "it" : "them"} finish or close ${busy.length === 1 ? "it" : "them"}, then run /threads setup restart again.` };
+  const mine = reg.threads.filter((t) => t.backend === "codex" && t.status !== "closed" && tracked.some((h) => h.threadId === t.codexThreadId));
+  const others = tracked.filter((h) => !mine.some((t) => t.codexThreadId === h.threadId));
+  if (others.length) return { ok: false, detail: `not restarted: the helper also tracks ${others.map(nameOf).join(", ")}, which ${others.length === 1 ? "belongs" : "belong"} to another chat. Close ${others.length === 1 ? "it" : "them"} there first.` };
+  if (mine.some((t) => t.parent?.sessionId !== selfId)) return { ok: false, detail: "not restarted: some of the threads it tracks belong to another chat. Close them there first." };
+  for (const t of mine) await closeNow($, t, "setup");
+  const replaced = await replaceOutdatedHelper($, p);
+  await logEvent($, p, "helper-restarted", { ids: mine.map((t) => t.id), replaced });
+  const closed = mine.length ? ` Closed ${mine.map((t) => `${t.id} (${resumeCommand(t)})`).join("; ")}.` : "";
+  return { ok: replaced, detail: replaced ? `stopped the old helper.${closed} The next Codex thread starts ${want}.` : `could not stop the old helper.${closed}` };
 }
 
 // The helper starts on demand. Its socket shows it is up; a second start exits by itself, so a race is harmless.
@@ -3270,9 +3301,15 @@ async function runSetup($, opts = {}) {
       checks.push({
         name: "Codex helper version",
         ok: true,
-        detail: `running ${running}, the plugin is ${want}. ${tracked ? `It tracks ${tracked} thread${tracked === 1 ? "" : "s"}, so it keeps running until they are closed; the next Codex thread then starts the new one.` : "The next Codex thread replaces it."}`,
+        detail: `running ${running}, the plugin is ${want}. ${tracked ? `It tracks ${tracked} thread${tracked === 1 ? "" : "s"}, so it keeps running until they are closed. /threads setup restart closes the idle ones and replaces it; otherwise the next Codex thread replaces it once none is tracked.` : "The next Codex thread replaces it."}`,
       });
     }
+    if (opts.restartHelper) {
+      const done = await restartHelper($, p);
+      checks.push({ name: "Codex helper restart", ok: done.ok, detail: done.detail });
+    }
+  } else if (opts.restartHelper) {
+    checks.push({ name: "Codex helper restart", ok: true, detail: "no Codex helper is running; the next Codex thread starts one." });
   }
 
   const filled = await backfillPlanHistory($);
@@ -3892,7 +3929,7 @@ const HELP = [
   "/threads adopt <id>|all           lead threads whose chat is gone",
   "/threads pin|unpin|archive|unarchive <id>   pinned threads stay on top and are never cleaned up; archived ones are hidden",
   "/threads history [<planId>]       saved plan records",
-  "/threads setup [clean]            check login, tmux, folder trust, the cap and stale threads; say exactly what to fix (clean closes the stale ones)",
+  "/threads setup [clean|restart]    check login, tmux, folder trust, the cap and stale threads; say exactly what to fix (clean closes the stale ones; restart replaces an outdated Codex helper after closing its idle threads)",
   "/threads mode [<mode>]            default permission mode for new session threads (default unless changed); --mode or permission_mode overrides per thread",
   "/threads clean                    drop closed or exited threads older than 7 days",
   "/threads effort <id> <level>      low, medium, high, xhigh or max (session threads: when idle; inline: from the next request)",
@@ -3966,7 +4003,8 @@ async function runCommand($, args) {
   }
   if (verb === "markread" || verb === "mark-read") return markReadText($, { id: rest[0] && rest[0] !== "all" ? rest[0] : undefined, all: !rest[0] || rest[0] === "all" });
   if (verb === "setup" || verb === "doctor") {
-    const out = await runSetup($, { cwd: rest[0] === "clean" ? undefined : rest[0], closeStale: rest[0] === "clean" });
+    const flag = rest[0] === "clean" || rest[0] === "restart";
+    const out = await runSetup($, { cwd: flag ? undefined : rest[0], closeStale: rest[0] === "clean", restartHelper: rest[0] === "restart" });
     return out.text;
   }
   if (verb === "mode") {

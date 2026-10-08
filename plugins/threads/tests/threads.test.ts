@@ -2846,6 +2846,58 @@ describe("threads: Codex threads", () => {
     expect(await threads($, "setup")).toMatch(/Codex helper version: running 0\.0\.1, the plugin is 9\.9\.9\. It tracks \d+ threads?, so it keeps running/);
   });
 
+  test("setup restart closes the idle Codex threads and replaces an outdated helper; the next thread starts the new one", async ($, on) => {
+    const w = codexWorld();
+    await boot($, on, w);
+    await threads($, "new codex Idle one --codex -- task");
+    const t = created(w, "Idle one");
+    [...w.codex!.threads.values()].forEach((h) => (h.status = "idle"));
+    w.codex!.version = "0.0.1";
+    const hint = await threads($, "setup");
+    expect(hint).toMatch(/Codex helper version: running 0\.0\.1, the plugin is 9\.9\.9\. It tracks 1 thread, so it keeps running until they are closed\. \/threads setup restart/);
+    expect(w.runs.filter((a) => a[0] === "kill")).toEqual([]);
+
+    const out = await threads($, "setup restart");
+    expect(out).toMatch(new RegExp(`Codex helper restart: stopped the old helper\\. Closed ${t.id} \\(codex resume `));
+    expect(created(w, "Idle one").status).toBe("closed");
+    expect(w.runs.filter((a) => a[0] === "kill")).toEqual([["kill", "4242"]]);
+    expect(events(w).find((e: any) => e.type === "helper-restarted")).toMatchObject({ ids: [t.id], replaced: true });
+    expect(events(w).find((e: any) => e.type === "closed" && e.id === t.id)).toMatchObject({ by: "setup" });
+
+    expect(await threads($, "new codex Next --codex -- again")).toMatch(/^Created/);
+    expect(w.runs.filter((a) => a[0] === "kill").length).toBe(1);
+    expect(w.runs.filter((a) => a[0] === "sh").length).toBe(1);
+  });
+
+  test("setup restart leaves the helper alone while a thread is working, and says which", async ($, on) => {
+    const w = codexWorld();
+    await boot($, on, w);
+    await threads($, "new codex Busy --codex -- task");
+    const t = created(w, "Busy");
+    w.codex!.version = "0.0.1";
+    const out = await threads($, "setup restart");
+    expect(out).toMatch(new RegExp(`Codex helper restart: not restarted: ${t.id} \\(Busy\\) is still running or waiting for you`));
+    expect(created(w, "Busy").status).not.toBe("closed");
+    expect(w.runs.filter((a) => a[0] === "kill")).toEqual([]);
+  });
+
+  test("setup restart leaves the helper alone when it tracks a thread this chat does not own", async ($, on) => {
+    const w = codexWorld();
+    await boot($, on, w);
+    w.codex!.version = "0.0.1";
+    w.codex!.threads.set("th-other", { threadId: "th-other", cwd: "/x", model: null, effort: null, status: "idle", lastAnswer: null, pendingApproval: null, error: null, queued: false, activity: [] });
+    const out = await threads($, "setup restart");
+    expect(out).toMatch(/not restarted: the helper also tracks th-other, which belongs to another chat/);
+    expect(w.runs.filter((a) => a[0] === "kill")).toEqual([]);
+  });
+
+  test("setup restart does nothing when the helper already runs the plugin's version", async ($, on) => {
+    const w = codexWorld();
+    await boot($, on, w);
+    expect(await threads($, "setup restart")).toMatch(/Codex helper restart: the helper already runs 9\.9\.9\./);
+    expect(w.runs.filter((a) => a[0] === "kill")).toEqual([]);
+  });
+
   test("closing a thread records who closed it", async ($, on) => {
     const w = codexWorld();
     await boot($, on, w);
