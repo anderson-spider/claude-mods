@@ -151,12 +151,13 @@ test("info refresh: uses sequential git probes with the same exclusions and clea
   infoData.sessionModel = "old";
   infoData.current.effort = "high";
   const calls: any[] = [];
-  const outputs = [" topic \n", " M file\n?? other\n", "5\t2\tfile\n-\t-\timage\n"];
+  const outputs = [" topic \n", "/work/repo/.git/worktrees/project\n/work/repo/.git\n", " M file\n?? other\n", "5\t2\tfile\n-\t-\timage\n"];
   const changed = await refreshInfo({ cwd: async () => "/work/project/", run: async (argv: string[], options: any) => { calls.push([argv, options]); return { exitCode: 0, stdout: outputs.shift() }; }, model: async () => "new" });
   expect(changed).toBe(true);
-  expect(infoData.current).toEqual({ model: "new", effort: "", speed: null, dir: "project", branch: "topic", files: 2, added: 5, removed: 2 });
+  expect(infoData.current).toEqual({ model: "new", effort: "", dir: "repo", branch: "topic", worktree: true, files: 2, added: 5, removed: 2 });
   expect(calls).toEqual([
     [["git", "--no-optional-locks", "branch", "--show-current"], { cwd: "/work/project/", timeoutMs: 3000 }],
+    [["git", "--no-optional-locks", "rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir"], { cwd: "/work/project/", timeoutMs: 3000 }],
     [["git", "--no-optional-locks", "status", "--porcelain"], { cwd: "/work/project/", timeoutMs: 3000 }],
     [["git", "--no-optional-locks", "diff", "HEAD", "--numstat", "--", ".", ...["*.unity", "*.prefab", "*.asset", "*.meta", "*.mat", "*.anim", "*.controller", "*.physicMaterial", "*.lighting"].map((g) => `:(exclude)${g}`)], { cwd: "/work/project/", timeoutMs: 3000 }],
   ]);
@@ -185,6 +186,6 @@ test("render: reads the clock and live agents only for a usage line", async () =
   const result = await renderHud(elements, { surface: "terminal" }, {}, below, deps);
   expect(reads).toEqual(["clock", "agents"]);
   expect(result.children[0]).toBe(below);
-  // The terminal's info line lists the agents by model: no count on the usage line.
+  // The terminal lists the agents by model: no count on the usage line.
   expect(JSON.stringify(result)).not.toContain("1 agent");
 });

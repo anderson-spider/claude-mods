@@ -1,8 +1,9 @@
-// HUD: two rows above the prompt, and suggested next prompts above them.
-//   Terminal, blocks split by a thin rule:
-//   ☁ 440k ▃▄▂▇▆ ▲ +8.4k │ agents 2× Haiku 5.5
-//   5h ██▒▒░░ ▼ 3 · 2h22 │ 7d ███▓░░ ▲ 2 · 2d23h │ cache 52 min
-//   Desktop app: the same blocks and rows as tinted, outlined pills.
+// HUD: three rows above the prompt, in the same order in the terminal and the app, and suggested
+// next prompts above them.
+//   Opus 5.5·medium | claude-mods | untitled-session-dc89ef ⎇wt
+//   ☁ 440k ▃▄▂▇▆ ▲ +8.4k | cache 52m | hit 98% | agents 2× Haiku 5.5
+//   5h ██▏······┊· 22% ▼65 · 40m | 7d ██┊▉······· 29% ▲4 · 5d 6h
+//   Desktop app: the second and third rows as tinted, outlined pills.
 //
 // Context reading: adapted from the Token Weather example,
 //   Copyright 2026 Anthropic PBC, SPDX-License-Identifier: Apache-2.0 (claude-code-playground).
@@ -26,7 +27,7 @@ import { contextData, freshContext, pushReading } from "./context.mjs";
 import { limitData, freshLimits, paceStartOf } from "./limits.mjs";
 import { cacheData, freshCache, isOn, recordRequest, cacheState, cacheText } from "./cache.mjs";
 import { suggestionData, freshSuggestions } from "./suggestions.mjs";
-import { infoData, freshInfo, recordSpeed } from "./info.mjs";
+import { infoData, freshInfo } from "./info.mjs";
 import { startSuggestions as startSuggestionFlow, fillSuggestion as fillSuggestionDraft } from "./suggestion-flow.mjs";
 import { TURNS_PREFIX, restoreTurns as restoreHistory, saveTurns as saveHistory, shareLimits as shareReading, adoptShared as adoptReading } from "./history.mjs";
 import { refreshInfo as refreshInfoReading } from "./info-refresh.mjs";
@@ -109,7 +110,6 @@ export function register(on, options) {
     infoData.current.model = e.model || infoData.current.model;
     infoData.current.effort = e.effort === undefined ? "" : String(e.effort);
     if (result?.usage) {
-      recordSpeed(result.usage.output_tokens, (await $.clock.now()) - at);
       recordRequest(at, result.usage, e.model);
       // The request may have started an agent.
       await refreshAgents($);

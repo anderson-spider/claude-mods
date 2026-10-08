@@ -1,17 +1,21 @@
 import { test, expect } from "claude-code/testing";
 import { LIMITS, world, withUsage, band } from "./helpers";
 
-// ---------- Info line: model, effort, speed, folder, branch ----------
+// ---------- Info line: model·effort | repository | branch ⎇wt · changes ----------
 
 // A fake git by subcommand; `repo: false` answers every one as outside a repository, and `dirty`
 // puts that many changed files and a diff of 70 added and 4 removed lines in the working tree.
-function hostInfo(on: any, { branch = "andersonsilva/feat", model = "claude-sonnet-5-5" as string | (() => string), repo = true, dirty = 0 } = {}) {
+// `worktree` answers rev-parse as a linked worktree of /work/claude-mods.
+function hostInfo(on: any, { branch = "andersonsilva/feat", model = "claude-sonnet-5-5" as string | (() => string), repo = true, dirty = 0, worktree = false } = {}) {
   on("session.cwd", () => ({ value: "/work/spider-marketplace" }));
   on("session.model", () => ({ value: typeof model === "function" ? model() : model }));
   on("process.run", (_$: any, e: any) => {
     const out = (exitCode: number, stdout = "") => ({ value: { exitCode, stdout, stderr: "", isStdoutTruncated: false, isStderrTruncated: false } });
     if (!repo) return out(128);
     if (e.argv.includes("branch")) return out(0, branch + "\n");
+    if (e.argv.includes("rev-parse")) {
+      return out(0, worktree ? "/work/claude-mods/.git/worktrees/lucky-field\n/work/claude-mods/.git\n" : "/work/spider-marketplace/.git\n/work/spider-marketplace/.git\n");
+    }
     if (e.argv.includes("status")) return out(0, Array.from({ length: dirty }, (_, i) => ` M file${i}.ts\n`).join(""));
     if (e.argv.includes("diff")) return out(0, "60\t3\tplugins/hud/hooks/hud.mjs\n10\t1\tplugins/hud/tests/hud.test.ts\n-\t-\timage.png\n");
     return out(1);
@@ -38,7 +42,7 @@ test("info: the model, folder and branch show above the usage line before any re
   expect(texts.indexOf("spider-marketplace")).toBeLessThan(texts.indexOf("107k"));
 });
 
-test("info: effort and speed come from the last request", async ($, on) => {
+test("info: the effort comes from the last request, hung on the model; no speed", async ($, on) => {
   const clock = world(on);
   withUsage(on, LIMITS);
   hostInfo(on);
@@ -49,8 +53,9 @@ test("info: effort and speed come from the last request", async ($, on) => {
   }
   const { texts } = await band($, "terminal");
   expect(texts).toContain("Opus 5.5");
-  expect(texts).toContain("high");
-  expect(texts).toContain("72 tok/s");
+  expect(texts).toContain("·high");
+  expect(texts.indexOf("·high")).toBe(texts.indexOf("Opus 5.5") + 1);
+  expect(texts.some((t) => t.endsWith("tok/s"))).toBe(false);
 });
 
 test("agents: in the terminal, running subagents show their models on the usage line; the info line keeps the session's", async ($, on) => {
@@ -72,7 +77,7 @@ test("agents: in the terminal, running subagents show their models on the usage 
   }
   let { texts } = await band($, "terminal");
   expect(texts).toContain("Opus 5.5");
-  expect(texts).toContain("2× Haiku 5.5 · agent");
+  expect(texts).toContain("2× Haiku 5.5 · Plan");
   expect(texts).not.toContain("Haiku 5.5");
   list = list.map((a) => ({ ...a, status: "completed" }));
   await ($ as any).turn.complete({ answer: "ok", agentId: "a1" } as any);
@@ -91,29 +96,16 @@ test("info: a /model switch shows within the 10 s tick, and the old effort goes"
   const stream = $.turn.step({ turnId: "t", index: 0, model: "claude-sonnet-5-5", effort: "high", messageCount: 2 } as any);
   for await (const _ of stream) {
   }
-  expect((await band($, "terminal")).texts).toContain("high");
+  expect((await band($, "terminal")).texts).toContain("·high");
   // Same model: the request's own id and effort stay.
   await clock.advance(10_000);
-  expect((await band($, "terminal")).texts).toContain("high");
+  expect((await band($, "terminal")).texts).toContain("·high");
   model = "claude-opus-5-5";
   await clock.advance(10_000);
   const { texts } = await band($, "terminal");
   expect(texts).toContain("Opus 5.5");
   expect(texts).not.toContain("Sonnet 5.5");
-  expect(texts).not.toContain("high");
-});
-
-test("info: a request too short to measure leaves no speed", async ($, on) => {
-  const clock = world(on);
-  withUsage(on, LIMITS);
-  hostInfo(on);
-  slowStep(on, clock, 100, 360);
-  await $.session.start({ source: "startup", cwd: "/work/spider-marketplace" } as any);
-  const stream = $.turn.step({ turnId: "t", index: 0, model: "claude-sonnet-5-5", messageCount: 2 } as any);
-  for await (const _ of stream) {
-  }
-  const { texts } = await band($, "terminal");
-  expect(texts.some((t) => t.endsWith("tok/s"))).toBe(false);
+  expect(texts).not.toContain("·high");
 });
 
 test("info: outside a git repository the branch is left out", async ($, on) => {
@@ -126,7 +118,7 @@ test("info: outside a git repository the branch is left out", async ($, on) => {
   expect(texts).not.toContain("andersonsilva/feat");
 });
 
-test("info: on a narrow terminal the speed, effort and folder go first and the branch stays", async ($, on) => {
+test("info: on a narrow terminal the effort and folder go first and the branch stays", async ($, on) => {
   const clock = world(on);
   withUsage(on, LIMITS);
   hostInfo(on);
@@ -138,17 +130,38 @@ test("info: on a narrow terminal the speed, effort and folder go first and the b
   const { texts } = await band($, "terminal", 40);
   expect(texts).toContain("Sonnet 5.5");
   expect(texts).toContain("andersonsilva/feat");
-  expect(texts).not.toContain("72 tok/s");
+  expect(texts).not.toContain("·high");
   expect(texts).not.toContain("spider-marketplace");
 });
 
-test("info: the desktop draws no info line", async ($, on) => {
+test("info: the desktop draws the same info line, above the band", async ($, on) => {
   world(on);
   withUsage(on, LIMITS);
   hostInfo(on);
   await $.session.start({ source: "startup", cwd: "/work/spider-marketplace" } as any);
   const { texts } = await band($, "desktop");
-  expect(texts).not.toContain("andersonsilva/feat");
+  expect(texts).toContain("Sonnet 5.5");
+  expect(texts).toContain("andersonsilva/feat");
+  expect(texts.indexOf("andersonsilva/feat")).toBeLessThan(texts.indexOf("107k"));
+});
+
+test("info: in a worktree, the repository's name and ⎇wt after the branch", async ($, on) => {
+  world(on);
+  withUsage(on, LIMITS);
+  hostInfo(on, { worktree: true });
+  await $.session.start({ source: "startup", cwd: "/work/spider-marketplace" } as any);
+  const { texts } = await band($, "terminal");
+  expect(texts).toContain("claude-mods");
+  expect(texts).not.toContain("spider-marketplace");
+  expect(texts.indexOf("⎇wt")).toBe(texts.indexOf("andersonsilva/feat") + 1);
+});
+
+test("info: outside a worktree, no ⎇wt", async ($, on) => {
+  world(on);
+  withUsage(on, LIMITS);
+  hostInfo(on);
+  await $.session.start({ source: "startup", cwd: "/work/spider-marketplace" } as any);
+  expect((await band($, "terminal")).texts).not.toContain("⎇wt");
 });
 
 test("info: the changed files and lines hang on the branch", async ($, on) => {

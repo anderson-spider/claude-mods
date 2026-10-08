@@ -4,14 +4,14 @@ export const MINUTE = 60_000;
 export const HOUR = 60 * MINUTE;
 export const DAY = 24 * HOUR;
 
-// 3h02, 42 min, 2d23h.
+// 42m, 3h 2m, 3h, 5d 6h, 5d: the largest two units, a zero second unit left out.
 export function duration(ms) {
   const minutes = Math.round(ms / MINUTE);
-  if (minutes < 60) return `${minutes} min`;
+  if (minutes < 60) return `${minutes}m`;
   const days = Math.floor(minutes / 1440);
   const hours = Math.floor((minutes % 1440) / 60);
-  if (days > 0) return `${days}${T.day}${String(hours).padStart(2, "0")}h`;
-  return `${hours}h${String(minutes % 60).padStart(2, "0")}`;
+  if (days > 0) return hours > 0 ? `${days}${T.day} ${hours}h` : `${days}${T.day}`;
+  return minutes % 60 > 0 ? `${hours}h ${minutes % 60}m` : `${hours}h`;
 }
 
 // 24-hour time in the machine's time zone; UTC when the runtime has no time zone data.

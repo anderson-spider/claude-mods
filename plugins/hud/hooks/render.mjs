@@ -11,7 +11,7 @@ export async function renderHud(elements, e, props, below, { fill, dismiss, now,
   if (!isBlank(below)) parts.push(below);
   const block = props.isWorking ? null : drawSuggestions(elements, { fill, dismiss });
   if (block) parts.push(block);
-  const infoLine = e.surface === "terminal" ? drawInfo(elements, props.bodyColumns ?? 80) : null;
+  const infoLine = drawInfo(elements, props.bodyColumns ?? 80);
   const hasLine = contextData.readings.length > 0 || limitData.reading.list.length > 0;
   // A blank line keeps the suggestions apart from what follows them.
   if (block && (infoLine || hasLine)) parts.push(elements.Box({ key: "gap-usage", marginTop: 1, children: [] }));

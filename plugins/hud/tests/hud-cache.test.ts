@@ -18,12 +18,17 @@ test("cache: share read and time left on a subscription (1 hour)", async ($, on)
   await step($, HIT);
   const { ui, texts } = await band($, "terminal");
   expect(texts).toContain("cache");
-  // 98% served: the time left alone (1 hour, counted from the request's start).
-  expect(texts).not.toContain("98%");
-  expect(texts).toContain("1h00");
-  const time: any = await ui.find({ type: "Text", text: "1h00" });
+  // The time left (1 hour, counted from the request's start), then the share read in a block of its own.
+  expect(texts).toContain("1h");
+  expect(texts).toContain("hit");
+  expect(texts).toContain("98%");
+  expect(texts.indexOf("1h")).toBeLessThan(texts.indexOf("hit"));
+  const time: any = await ui.find({ type: "Text", text: "1h" });
   expect(time?.props?.bold).toBe(true);
   expect(time?.props?.color).toBeUndefined();
+  expect(((await ui.find({ type: "Text", text: "98%" })) as any)?.props?.color).toBeUndefined();
+  // In the app, the hit pill's hover card says how much was read.
+  expect(await cardOf((await band($, "desktop")).ui, "hit")).toBe("Last message: 98% read from the cache (98k).");
 });
 
 test("cache: yellow under 10 minutes, then expired with /compact", async ($, on) => {
@@ -40,8 +45,8 @@ test("cache: yellow under 10 minutes, then expired with /compact", async ($, on)
   await step($, HIT);
   await (clock as any).advance(55 * 60_000);
   let { ui, texts } = await band($, "terminal");
-  expect(texts).toContain("5 min");
-  const soon: any = await ui.find({ type: "Text", text: "5 min" });
+  expect(texts).toContain("5m");
+  const soon: any = await ui.find({ type: "Text", text: "5m" });
   expect(soon?.props?.color).toBe("#a8690a");
   // Under 10 minutes: signaled by color alone, no warning mark.
   expect(soon?.props?.bold).toBe(true);
@@ -51,7 +56,7 @@ test("cache: yellow under 10 minutes, then expired with /compact", async ($, on)
   expect(stake?.props?.dimColor).toBe(true);
   const desktop = await band($, "desktop");
   expect(desktop.texts).toContain("107k at stake");
-  const yellow: any = await desktop.ui.find({ type: "Text", text: "5 min" });
+  const yellow: any = await desktop.ui.find({ type: "Text", text: "5m" });
   expect(yellow?.props?.color).toBe("#a8690a");
   expect(await boltTip(desktop.ui)).toBe(
     `The cache expires at ${at(NOW + 3_600_000)}. Send your next message before then, or it writes 107k tokens again.`,
@@ -76,11 +81,14 @@ test("cache: a miss after a model change names the cause", async ($, on) => {
   await step($, HIT);
   await step($, MISS, "claude-sonnet-5-5");
   const { texts } = await band($, "terminal");
+  // The time stays; the hit block turns yellow with the cause.
+  expect(texts).toContain("1h");
   expect(texts).toContain("0%");
   expect(texts).toContain("· missed · model changed");
   const desktop = await band($, "desktop");
   expect(desktop.texts).toContain("missed · model changed");
-  expect(await boltTip(desktop.ui)).toBe("This message read only 0% from the cache (model changed): it wrote 99.7k tokens again.");
+  expect(((await desktop.ui.find({ type: "Text", text: "0%" })) as any)?.props?.color).toBe("#a8690a");
+  expect(await cardOf(desktop.ui, "hit")).toBe("This message read only 0% from the cache (model changed): it wrote 99.7k tokens again.");
 });
 
 test("cache: 5 minutes on an API key (no plan window)", async ($, on) => {
@@ -90,10 +98,10 @@ test("cache: 5 minutes on an API key (no plan window)", async ($, on) => {
   await $.session.start({ source: "startup", cwd: "/tmp" } as any);
   await step($, HIT);
   const { ui, texts } = await band($, "terminal");
-  expect(texts).toContain("5 min");
+  expect(texts).toContain("5m");
   // The lifetime is in sight, and a fresh 5-minute cache is not yellow (the threshold follows the lifetime).
-  expect(texts.join(" ")).toContain("5 min TTL · x1.25");
-  const time: any = await ui.find({ type: "Text", text: "5 min" });
+  expect(texts.join(" ")).toContain("5m TTL · x1.25");
+  const time: any = await ui.find({ type: "Text", text: "5m" });
   expect(time?.props?.color).toBeUndefined();
 });
 
@@ -107,7 +115,7 @@ test("cache: 5 minutes shows x1.25, and expired keeps the same format", async ($
   const { ui, texts } = await band($, "terminal");
   expect(texts).toContain("expired");
   // Expired: the lifetime and the write multiplier stay beside it, before the advice.
-  expect(texts).toContain("· 107k to rewrite · 5 min TTL · x1.25 · /compact");
+  expect(texts).toContain("· 107k to rewrite · 5m TTL · x1.25 · /compact");
   expect(((await ui.find({ type: "Text", text: "expired" })) as any)?.props?.color).toBe("#ff6b6b");
 });
 
@@ -119,13 +127,13 @@ test("cache: the yellow threshold is a sixth of the lifetime (50 s of 5 minutes)
   await step($, HIT);
   await clock.advance(4 * 60_000);
   let { ui, texts } = await band($, "terminal");
-  expect(texts).toContain("1 min");
-  expect(((await ui.find({ type: "Text", text: "1 min" })) as any)?.props?.color).toBeUndefined();
+  expect(texts).toContain("1m");
+  expect(((await ui.find({ type: "Text", text: "1m" })) as any)?.props?.color).toBeUndefined();
   await clock.advance(20_000);
   ({ ui, texts } = await band($, "terminal"));
   // 40 s left: under 50 s.
-  expect(texts).toContain("< 1 min");
-  expect(((await ui.find({ type: "Text", text: "< 1 min" })) as any)?.props?.color).toBe("#a8690a");
+  expect(texts).toContain("< 1m");
+  expect(((await ui.find({ type: "Text", text: "< 1m" })) as any)?.props?.color).toBe("#a8690a");
 });
 
 test("agents: a desktop pill while subagents run, gone once they finish", async ($, on) => {
@@ -191,19 +199,6 @@ test("cache expired from 300k: what gets written again, and a new thread", async
   expect(tip).not.toContain("/compact");
 });
 
-test("cache: below 90% served, the share before the time", async ($, on) => {
-  world(on);
-  withUsage(on, LIMITS);
-  const PART = { ...HIT, cache_read_input_tokens: 72_000, cache_creation_input_tokens: 0, input_tokens: 28_000 };
-  engineStep(on, [PART]);
-  await $.session.start({ source: "startup", cwd: "/tmp" } as any);
-  await step($, PART);
-  const { texts } = await band($, "terminal");
-  expect(texts).toContain("72%");
-  // After the time, dim.
-  expect(texts).toContain("· 1h00");
-});
-
 test("desktop: pills never shrink, and the 5-hour reset time sits in the pill's hover card", async ($, on) => {
   world(on);
   withUsage(on, LIMITS);
@@ -258,7 +253,7 @@ test("compaction: the context drops at once, no expired cache", async ($, on) =>
   const next = await band($, "terminal");
   expect(next.texts).not.toContain("compacted");
   expect(next.texts.join(" ")).not.toContain("missed");
-  expect(next.texts).toContain("1h00");
+  expect(next.texts).toContain("1h");
 });
 
 test("compaction: a skipped one changes nothing", async ($, on) => {
@@ -286,12 +281,11 @@ test("cache tooltip, warm, English: lifetime assumed", async ($, on) => {
   expect(await boltTip((await band($, "desktop")).ui)).toBe(
     [
       `Cache warm until ${at(NOW + 3_600_000)} (1-hour lifetime, assumed).`,
-      "Last message: 99% read from the cache (287k).",
     ].join("\n"),
   );
 });
 
-test("cache: under 10 minutes and under 90% served, the stake after the time", async ($, on) => {
+test("cache: under 10 minutes and under 90% served, the stake after the time, the share apart", async ($, on) => {
   const clock = world(on);
   withUsage(on, LIMITS);
   const PART = { ...HIT, cache_read_input_tokens: 72_000, cache_creation_input_tokens: 0, input_tokens: 28_000 };
@@ -300,15 +294,15 @@ test("cache: under 10 minutes and under 90% served, the stake after the time", a
   await step($, PART);
   await clock.advance(55 * 60_000);
   const { ui, texts } = await band($, "terminal");
-  expect(texts).toContain("72%");
-  const time: any = await ui.find({ type: "Text", text: "· 5 min" });
+  const time: any = await ui.find({ type: "Text", text: "5m" });
   expect(time?.props?.color).toBe("#a8690a");
-  // The share carries the same color, bold: the whole cache value signals by color.
-  const share: any = await ui.find({ type: "Text", text: "72%" });
-  expect(share?.props?.color).toBe("#a8690a");
-  expect(share?.props?.bold).toBe(true);
   expect(texts).toContain("· 107k at stake");
-  expect(texts.indexOf("· 5 min")).toBeLessThan(texts.indexOf("· 107k at stake"));
+  expect(texts.indexOf("5m")).toBeLessThan(texts.indexOf("· 107k at stake"));
+  // The share is no miss: its own block after the time, in the theme's color.
+  const share: any = await ui.find({ type: "Text", text: "72%" });
+  expect(share?.props?.color).toBeUndefined();
+  expect(share?.props?.bold).toBe(true);
+  expect(texts.indexOf("· 107k at stake")).toBeLessThan(texts.indexOf("72%"));
 });
 
 test("cache expired at 150k: the size in the pill, /compact in the tooltip", async ($, on) => {
