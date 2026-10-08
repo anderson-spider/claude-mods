@@ -9,8 +9,9 @@ import { createJobs, markLost } from './jobs'
 import { buildCouncilBlock, isCouncilOrigin, matchesCouncilTrigger } from './prompts/council'
 import { buildOrchestratorSection } from './prompts/orchestrator'
 import { rolePrompt } from './prompts/roles'
-import { PANE_ID, configReport, doctorReport, drawPane, statusText } from './pane'
+import { PANE_ID, configReport, doctorReport, drawPanel, statusText } from './pane'
 import { isOffered, nativeAgentSpecs, resolveCodexCall } from './roles'
+import { buildRoster } from './roster'
 import {
   DEFAULT_SESSION, DEFAULT_VIEW, completed, describeTool, markNativesLost,
   normalizeNatives, normalizeSession, normalizeView, sessionCompleted, sessionMeasured,
@@ -574,11 +575,35 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE_ID }, async ($, e) => {
-    const { Box, Text, Button } = $.ui.resolve(e)
-    const list = await read($, jobsAtom)
-    return drawPane({ Box, Text, Button } as never, {
-      jobs: list,
+    const els = $.ui.resolve(e)
+    const { Box, Text, Button } = els
+    const hasClient = 'Client' in els
+    const [list, natives, session, view, now] = await Promise.all([
+      read($, jobsAtom), read($, nativesAtom), read($, sessionAtom), read($, viewAtom),
+      // A redraw can outlive its session (a reload): fall back to the host clock rather than reject.
+      $.clock.now().catch(() => Date.now()),
+    ])
+    const info = normalizeSession(session)
+    return drawPanel({
+      Box, Text, Button,
+      ...('Svg' in els ? { Svg: els.Svg } : {}),
+      ...(hasClient ? {
+        // The module paths are literals here: the engine reads them off this entry module.
+        rail: ({ key, props }) => <els.Client key={key} module="./rail.tsx" height={1} props={props} />,
+        clock: ({ key, props }) => <els.Client key={key} module="./elapsed.tsx" props={props} />,
+      } : {}),
+    } as never, {
+      surface: e.surface,
+      placement: e.props.placement,
+      columns: e.props.bodyColumns,
       rows: e.viewport?.rows ?? 24,
+      now,
+      roster: buildRoster({ jobs: list, natives: normalizeNatives(natives), session: info, config: state.config }),
+      jobs: list,
+      session: info,
+      tab: normalizeView(view).tab,
+      hasClient,
+      onTab: tab => { void update($, viewAtom, () => ({ tab })) },
       onCancel: jobId => { jobs?.cancel(jobId) },
       onCopy: (text, surface) => { void $.ui.copy({ text, surface }) },
     }) as never
