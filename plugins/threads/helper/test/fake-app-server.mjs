@@ -8,6 +8,8 @@
 //   INPUT  the turn asks for user input (a server request that is not an approval)
 //   PERM   the turn asks for permissions (its reply is a permission grant)
 //   ASK    the turn asks for approval (a server request) and waits for the answer
+//   CANCEL like ASK, but the server then clears the request itself (serverRequest/resolved)
+//          and the turn goes on until turn/interrupt
 //   other  a full turn: a command, a commentary line, a final answer
 // Test-only methods: fake/probe (did `initialized` arrive?), fake/silent (never
 // answered), fake/exit (exits without answering). A reply to one of the fake's server
@@ -74,9 +76,16 @@ const runTurn = (threadId, turnId, text) => {
     })
   }
 
-  if (text.includes('ASK')) {
+  if (text.includes('ASK') || text.includes('CANCEL')) {
     const id = nextServerId++
     asking.set(id, { threadId, turnId, text })
+
+    if (text.includes('CANCEL')) {
+      setTimeout(() => {
+        asking.delete(id)
+        notify('serverRequest/resolved', { threadId, requestId: id })
+      }, 100)
+    }
 
     return write({
       id,
