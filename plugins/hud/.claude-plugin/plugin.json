@@ -1,6 +1,6 @@
 {
   "name": "hud",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "description": "Three rows above the prompt (the model, repository and branch; the context as a weather icon and tokens, the prompt cache with its time left and hit share, the subagents running; your 5-hour and 7-day limits against the time elapsed) and suggested next prompts you can write directly to the prompt box as a draft. Built on Token Weather Usage, usage-meter, prompt-cache-control and next-steps; see NOTICE.",
   "author": {
     "name": "anderson-spider"

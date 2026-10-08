@@ -11,8 +11,9 @@ for (const surface of ["terminal", "desktop"] as const) {
     expect(texts).toContain("107k");
     expect(texts).not.toContain("11% context");
     expect(texts).toContain("5h");
-    // The bar and the percentage beside it.
-    expect(texts).toContain("█");
+    // The bar (a drawn rail in the app) and the percentage beside it.
+    if (surface === "terminal") expect(texts).toContain("█");
+    else expect(((await ui.findAll({ type: "Svg" })) as any[]).some((s) => s.props?.alt === "32% used, 40% of the window gone")).toBe(true);
     expect(texts).toContain("32%");
     const dot = surface === "terminal" ? "· " : "";
     // The time left alone; the reset time is in the clock's tooltip.
@@ -312,42 +313,62 @@ test("after a restart, the turn bars come back", async ($, on) => {
   expect(store.has("turns:session-1")).toBe(true);
 });
 
-// The cells of the quota bars, in order, as one string per bar ("██▏······┊·").
+// The cells of the quota bars, in order, as one string per bar ("██░░░░░░░│·").
 async function bars(ui: any): Promise<string[]> {
   const boxes = ((await ui.findAll({ type: "Box" })) as any[]).filter((b) => b.props?.key === "bar");
   return boxes.map((b) => ((b.children ?? []) as any[]).map((c) => String(c.children ?? c.props?.children ?? "")).join(""));
 }
 
-for (const surface of ["terminal", "desktop"] as const) {
-  test(`bar: ten cells in eighths, dots for the rest, ┊ where the clock stands ${surface}`, async ($, on) => {
-    world(on);
-    withUsage(on, [
-      // 5 hours: 22% used, 87% of the window over: 2.2 cells, the clock at boundary 9.
-      { kind: "five_hour", percentUsed: 22, resetsAt: new Date(NOW + 39 * 60_000).toISOString() },
-      // 7 days: 29% used, 24.6% of the window over: 2.9 cells, the clock at boundary 2.
-      { kind: "seven_day", percentUsed: 29, resetsAt: new Date(NOW + 5.278 * 86_400_000).toISOString() },
-    ]);
-    await $.session.start({ source: "startup", cwd: "/tmp" } as any);
-    const { ui, texts } = await band($, surface);
-    expect(await bars(ui)).toEqual(["██▏······┊·", "██┊▉·······"]);
-    expect(texts).toContain("22%");
-    expect(texts).toContain("▼65");
-    expect(texts).toContain("29%");
-    expect(texts).toContain("▲4");
-    // The filled cells in the tone's color, the track and the clock in fixed greys.
-    const tick: any = await ui.find({ type: "Text", text: "┊" });
-    expect(tick?.props?.color).toBe("#9aa3ad");
-    // 7 empty cells on each bar.
-    expect(((await ui.findAll({ type: "Text", text: "·" })) as any[]).filter((d) => d.props?.color === "#4a525c").length).toBe(14);
-    expect(((await ui.find({ type: "Text", text: "▏" })) as any)?.props?.color).toBe("#6fcf97");
-  });
+// The SVG sources of the app's rails, in order.
+async function rails(ui: any): Promise<string[]> {
+  return ((await ui.findAll({ type: "Svg" })) as any[]).filter((s) => / used\b/.test(String(s.props?.alt))).map((s) => String(s.props.source));
+}
 
+const PACED = [
+  // 5 hours: 22% used, 87% of the window over: 2 cells used, 7 of slack, the clock at boundary 9.
+  { kind: "five_hour", percentUsed: 22, resetsAt: new Date(NOW + 39 * 60_000).toISOString() },
+  // 7 days: 29% used, 24.6% of the window over: 2 cells within, the clock at boundary 2, 1 cell ahead.
+  { kind: "seven_day", percentUsed: 29, resetsAt: new Date(NOW + 5.278 * 86_400_000).toISOString() },
+];
+
+test("bar: in the terminal, use within the pace, ahead of it, the slack and the clock", async ($, on) => {
+  world(on);
+  withUsage(on, PACED);
+  await $.session.start({ source: "startup", cwd: "/tmp" } as any);
+  const { ui, texts } = await band($, "terminal");
+  expect(await bars(ui)).toEqual(["██░░░░░░░│·", "██│▓·······"]);
+  expect(texts).toContain("▼65");
+  expect(texts).toContain("▲4");
+  // The use in the window's color, the lead in the tone's, the slack dimmed, the clock in grey.
+  expect(((await ui.find({ type: "Text", text: "▓" })) as any)?.props?.color).toBe("#d9962b");
+  expect(((await ui.find({ type: "Text", text: "░" })) as any)?.props?.dimColor).toBe(true);
+  expect(((await ui.find({ type: "Text", text: "│" })) as any)?.props?.color).toBe("#d6d9de");
+});
+
+test("bar: in the app, a drawn rail with the clock as a mark", async ($, on) => {
+  world(on);
+  withUsage(on, PACED);
+  await $.session.start({ source: "startup", cwd: "/tmp" } as any);
+  const { ui, texts } = await band($, "desktop");
+  expect(await bars(ui)).toEqual([]);
+  const [five, seven] = await rails(ui);
+  // Behind the clock: the slack in the window's color, faint, up to the clock.
+  expect(five).toContain('fill="#3a9a62" fill-opacity="0.3"');
+  expect(five).toContain('fill="#8a8f98"');
+  // Ahead of the clock: the lead in amber.
+  expect(seven).toContain('fill="#d9962b"');
+  expect(texts).toContain("29%");
+});
+
+for (const surface of ["terminal", "desktop"] as const) {
   test(`bar: no clock without a window length ${surface}`, async ($, on) => {
     world(on);
     withUsage(on, [{ kind: "spend_limit", percentUsed: 40 }]);
     await $.session.start({ source: "startup", cwd: "/tmp" } as any);
     const { ui } = await band($, surface);
-    expect(await bars(ui)).toEqual(["████······"]);
+    if (surface === "terminal") expect(await bars(ui)).toEqual(["████······"]);
+    else expect((await rails(ui))[0]).toContain('fill="#b8892a"');
+    if (surface === "desktop") expect((await rails(ui))[0]).not.toContain("#8a8f98");
   });
 }
 

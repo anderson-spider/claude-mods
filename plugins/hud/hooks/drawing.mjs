@@ -1,11 +1,11 @@
 import {
   T, ctxBand, WEATHER_ICON_SIZE, weatherSvg, SPARK, SPARK_COLORS,
-  SEP, TEXT_CELLS, EIGHTHS, BAR_TRACK, PACE_TICK, TERM_TONES, TERM_TRACK, TERM_PACE, ink, TINTS,
+  SEP, TEXT_CELLS, BAR_CELLS, PACE_TICK, RAIL, TERM_TRACK, TERM_PACE, ink, TINTS,
   ICON_SIZE, SMALL_ICON, ICONS, ICON_COLORS, LIMIT_ICONS, RESERVED_COLUMNS, iconSvg,
 } from "./constants.mjs";
 import { short } from "./formatting.mjs";
 import { contextData, turnDeltas, chartText, barsWidth, barsSvg, trendWord } from "./context.mjs";
-import { limitData, gaugeOf } from "./limits.mjs";
+import { limitData, gaugeOf, USED_ALERT } from "./limits.mjs";
 import { cacheState, cacheText, cacheDetails } from "./cache.mjs";
 import { agentModels } from "./info.mjs";
 
@@ -49,8 +49,9 @@ function gaugeBlock({ Box, Text, Svg }, mode, g) {
   const parts = [];
   if (mode === "svg") parts.push(icon(Svg, "k", LIMIT_ICONS[g.kind] ?? "coin", color, T.icons[g.kind] ?? g.label));
   parts.push(Text({ key: "l", children: g.label }));
-  // The same character bar in the terminal and the app; only a terminal too narrow drops it.
-  if (mode === "text" || mode === "svg") parts.push(textGauge(Box, Text, g));
+  // A drawn rail in the app, a character bar in the terminal; only a terminal too narrow drops it.
+  if (mode === "svg") parts.push(railGauge(Svg, g));
+  else if (mode === "text") parts.push(textGauge(Box, Text, g));
   parts.push(Text(g.tone === "alert" ? { key: "v", bold: true, color: ink("alert", mode), children: g.value } : { key: "v", bold: true, children: g.value }));
   // Against the clock: ▲ points ahead in amber or red, ▼ points behind in green; on pace, no mark.
   if (g.mark) parts.push(Text({ key: "u", bold: true, color: ink(g.tone, mode), children: g.mark }));
@@ -95,28 +96,80 @@ function cacheHitBlock({ Text }, mode, hit) {
 
 // ---------- Limits: gauges ----------
 
-// Character bar, the same in the terminal and the app: ten cells filled in eighths up to the share
-// used, dots for the rest, and ┊ between the cells where the clock says you should be.
+// The bar's segments in percent of the window: used within the pace, used ahead of the clock
+// (colored by the tone), and the slack between the share used and the clock. Without a clock,
+// all of the use counts as within. From USED_ALERT on, the use itself turns red.
+function segments(g) {
+  const used = Math.min(g.used, 100);
+  const clock = g.elapsed ?? used;
+  const base = g.used >= USED_ALERT ? ICON_COLORS.alert : ICON_COLORS[g.kind] ?? ICON_COLORS.spend_limit;
+  // A lead inside the pace start is not flagged: it keeps the base color.
+  const over = g.tone === "calm" ? base : ICON_COLORS[g.tone];
+  return { within: Math.min(used, clock), over: Math.max(0, used - clock), slack: Math.max(0, clock - used), base, overColor: over };
+}
+
+// The app's rail: a rounded track, the use drawn over the slack, and the clock as a thin mark.
+function railGauge(Svg, g) {
+  const { width: w, height: h } = RAIL;
+  const s = segments(g);
+  const x = (pct) => ((pct / 100) * w).toFixed(1);
+  const bar = (pct, fill, opacity = 1) => (pct > 0 ? `<rect x="0" y="3" width="${x(pct)}" height="6" rx="3" fill="${fill}" fill-opacity="${opacity}"/>` : "");
+  // Drawn back to front: the slack up to the clock, the overshoot up to the use, then the use within.
+  const body = [
+    `<rect x="0" y="3" width="${w}" height="6" rx="3" fill="${RAIL.track}"/>`,
+    bar(s.within + s.slack, s.base, RAIL.slack),
+    bar(s.within + s.over, s.overColor),
+    bar(s.within, s.base),
+    g.elapsed === null ? "" : `<rect x="${Math.min(w - 2, Math.max(0, x(g.elapsed) - 1)).toFixed(1)}" y="0" width="2" height="${h}" rx="1" fill="${RAIL.pace}"/>`,
+  ].join("");
+  const source = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">${body}</svg>`;
+  return Svg({ key: "bar", source, alt: T.railAlt(Math.round(g.used), g.elapsed === null ? null : Math.round(g.elapsed)), width: w, height: h });
+}
+
+// The terminal's bar: ten cells, each standing for a tenth of the window, and │ where the clock
+// stands, between the cells. Any use at all fills at least one cell.
 function textGauge(Box, Text, g) {
-  const color = TERM_TONES[g.tone];
-  const filled = (Math.min(g.used, 100) / 100) * TEXT_CELLS;
-  const full = Math.floor(filled);
-  const eighths = Math.floor((filled - full) * 8);
-  const cells = [];
+  const s = segments(g);
+  const cells = (pct) => Math.round((pct / 100) * TEXT_CELLS);
+  const used = g.used > 0 ? Math.max(1, cells(Math.min(g.used, 100))) : 0;
+  const clock = g.elapsed === null ? used : cells(g.elapsed);
+  const list = [];
   for (let i = 0; i < TEXT_CELLS; i++) {
-    if (i < full) cells.push(Text({ key: "c" + i, color, children: "█" }));
-    else if (i === full && eighths > 0) cells.push(Text({ key: "c" + i, color, children: EIGHTHS[eighths - 1] }));
-    else cells.push(Text({ key: "c" + i, color: TERM_TRACK, children: BAR_TRACK }));
+    let cell;
+    if (i < Math.min(used, clock)) cell = { color: s.base, children: BAR_CELLS.used };
+    else if (i < used) cell = { color: s.overColor, children: BAR_CELLS.over };
+    else if (i < clock) cell = { color: s.base, dimColor: true, children: BAR_CELLS.slack };
+    else cell = { color: TERM_TRACK, children: BAR_CELLS.rest };
+    list.push(Text({ key: "c" + i, ...cell }));
   }
-  const tick = paceTick(g);
-  if (tick >= 0) cells.splice(tick, 0, Text({ key: "pace", color: TERM_PACE, children: PACE_TICK }));
+  if (g.elapsed !== null) list.splice(clock, 0, Text({ key: "pace", color: TERM_PACE, children: PACE_TICK }));
   // Cells side by side, without the block's spacing between them.
-  return Box({ key: "bar", flexDirection: "row", children: cells });
+  return Box({ key: "bar", flexDirection: "row", children: list });
 }
 
 // The boundary between cells where the clock stands, -1 without a clock.
 function paceTick(g) {
   return g.elapsed === null ? -1 : Math.round((g.elapsed / 100) * TEXT_CELLS);
+}
+
+// A desktop pill: tinted, outlined, its parts side by side. The app rounds a Box only through its
+// border, and a border brings a padding that made the band taller than the prompt box: paddingY,
+// set after it, takes the vertical part back. A pill never shrinks: squeezed, the app broke "24 %"
+// over two lines. A keyed pill is a hover scope: its card shows while the pointer is over it.
+export function pill({ Box, Text }, b) {
+  return Box({
+    key: b.key,
+    flexDirection: "row",
+    columnGap: 1,
+    alignItems: "center",
+    children: b.tip ? [...b.parts, hoverCard(Box, Text, b.tip)] : b.parts,
+    flexShrink: 0,
+    paddingX: 1,
+    paddingY: 0,
+    borderStyle: "round",
+    borderColor: b.tint[1],
+    backgroundColor: b.tint[0],
+  });
 }
 
 // A rule between terminal blocks; the info line uses the same spacing.
@@ -129,7 +182,7 @@ export function separator(Box, Text, key, glyph = SEP) {
 // The second and third rows of the band, in the same order on both surfaces:
 //   context | cache time | cache hit | agents
 //   5h bar 22% ▼65 · 40m | 7d bar 29% ▲4 · 5d 6h
-// In the terminal they are blocks split by a rule; in the app, tinted, outlined pills.
+// In the terminal they are blocks split by a rule; in the app, pills.
 export function drawLine(elements, surface, columns, now, agents) {
   const { Box, Text, Svg } = elements;
   const desktop = surface === "desktop" && !!Svg;
@@ -190,23 +243,8 @@ export function drawLine(elements, surface, columns, now, agents) {
   const row = (b) => ({ key: b.key, flexDirection: "row", columnGap: 1, alignItems: "center", children: b.parts });
   let draw;
   if (desktop) {
-    // Pills: tinted, outlined, side by side. The app rounds a Box only through its border, and
-    // a border brings a padding that made the band taller than the prompt box: paddingY, set
-    // after it, takes the vertical part back.
-    // A pill never shrinks: squeezed, the app broke "24 %" over two lines.
-    // A keyed pill is a hover scope: its card shows while the pointer is over it.
-    draw = (list) => list.map((b) =>
-      Box({
-        ...row(b),
-        children: b.tip ? [...b.parts, hoverCard(Box, Text, b.tip)] : b.parts,
-        flexShrink: 0,
-        paddingX: 1,
-        paddingY: 0,
-        borderStyle: "round",
-        borderColor: b.tint[1],
-        backgroundColor: b.tint[0],
-      }),
-    );
+    // Pills side by side.
+    draw = (list) => list.map((b) => pill(elements, b));
   } else {
     draw = (list) => list.flatMap((b, i) => (i > 0 ? [separator(Box, Text, "sep-" + i), Box(row(b))] : [Box(row(b))]));
   }

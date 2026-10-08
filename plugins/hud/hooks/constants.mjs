@@ -8,6 +8,7 @@ const TEXT = {
     labels: { five_hour: "5h", seven_day: "7d", spend_limit: "$" },
     contextAlt: (word, percent, window) => `${word} · ${percent} of ${window}`,
     turnsAlt: (n) => `Tokens added by the last ${n} prompts`,
+    railAlt: (used, clock) => (clock === null ? `${used}% used` : `${used}% used, ${clock}% of the window gone`),
     day: "d",
     gaugeAlt: (label, value) => `${label}: ${value} used`,
     cache: "cache",
@@ -83,11 +84,13 @@ export const weatherSvg = (band) => iconSvg(WEATHER_ICONS[band.id](band.app), WE
 // ---------- Layout ----------
 
 export const SEP = "|";
-// The quota bar: ten cells filled in eighths, and ┊ between the cells where the clock stands.
+// The quota bar, ten cells: █ used within the pace, ▓ used ahead of it, ░ the slack left before
+// the clock, · the rest, and │ between the cells where the clock stands. In the app the same
+// segments are drawn as a rounded SVG rail.
 export const TEXT_CELLS = 10;
-export const EIGHTHS = "▏▎▍▌▋▊▉";
-export const BAR_TRACK = "·";
-export const PACE_TICK = "┊";
+export const BAR_CELLS = { used: "█", over: "▓", slack: "░", rest: "·" };
+export const PACE_TICK = "│";
+export const RAIL = { width: 64, height: 12, track: "rgba(127,127,127,0.22)", slack: 0.3, pace: "#8a8f98" };
 const TONES = {
   calm: { svg: "#3fa66b", text: "green" },
   // The theme's "yellow" is bright yellow in the app, unreadable on the yellow pill: a deep amber.
@@ -102,7 +105,7 @@ export const PACE_MARKS = { ahead: "▲", behind: "▼" };
 // tones in colors that stand out on a dark terminal, and a grey track and margin for the bar.
 export const TERM_TONES = { calm: "#6fcf97", fast: "#a8690a", alert: "#ff6b6b" };
 export const TERM_TRACK = "#4a525c";
-export const TERM_PACE = "#9aa3ad";
+export const TERM_PACE = "#d6d9de";
 // The color of a tone's text: the app's on a drawn gauge ("svg"), the terminal's otherwise.
 export const ink = (tone, mode) => (mode === "svg" ? TONES[tone].text : TERM_TONES[tone]);
 // Desktop pills: a light tint and a slightly stronger outline per block.
@@ -115,6 +118,9 @@ export const TINTS = {
   fast: ["rgba(217,150,43,0.14)", "rgba(217,150,43,0.36)"],
   alert: ["rgba(214,69,69,0.12)", "rgba(214,69,69,0.36)"],
   agents: ["rgba(196,80,127,0.11)", "rgba(196,80,127,0.32)"],
+  model: ["rgba(204,120,92,0.12)", "rgba(204,120,92,0.34)"],
+  repo: ["rgba(128,128,128,0.10)", "rgba(128,128,128,0.30)"],
+  clean: ["rgba(63,166,107,0.11)", "rgba(63,166,107,0.30)"],
 };
 // Small outlined icons in the app, each in its pill's color (the alt text is required: a
 // drawing without one is dropped). The clock before a reset time takes the pill's color too.

@@ -20,7 +20,7 @@ export function paceStartOf(raw) {
   const n = typeof raw === "string" && raw.trim() !== "" ? Number(raw) : raw;
   return typeof n === "number" && Number.isFinite(n) ? Math.min(Math.max(n, 0), PACE_START_MAX) : 0;
 }
-const USED_ALERT = 90;
+export const USED_ALERT = 90;
 
 export function sortLimits(list) {
   const rank = (kind) => (ORDER.includes(kind) ? ORDER.indexOf(kind) : ORDER.length);

@@ -2,8 +2,8 @@
 // next prompts above them.
 //   Opus 5.5·medium | claude-mods | untitled-session-dc89ef ⎇wt
 //   ☁ 440k ▃▄▂▇▆ ▲ +8.4k | cache 52m | hit 98% | agents 2× Haiku 5.5
-//   5h ██▏······┊· 22% ▼65 · 40m | 7d ██┊▉······· 29% ▲4 · 5d 6h
-//   Desktop app: the second and third rows as tinted, outlined pills.
+//   5h ██░░░░░░░│· 22% ▼65 · 40m | 7d ██│▓······· 29% ▲4 · 5d 6h
+//   Desktop app: every row as tinted, outlined pills.
 //
 // Context reading: adapted from the Token Weather example,
 //   Copyright 2026 Anthropic PBC, SPDX-License-Identifier: Apache-2.0 (claude-code-playground).

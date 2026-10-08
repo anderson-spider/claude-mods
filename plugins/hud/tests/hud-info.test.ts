@@ -145,6 +145,21 @@ test("info: the desktop draws the same info line, above the band", async ($, on)
   expect(texts.indexOf("andersonsilva/feat")).toBeLessThan(texts.indexOf("107k"));
 });
 
+test("info: in the desktop, the model, repository and branch are outlined pills", async ($, on) => {
+  world(on);
+  withUsage(on, LIMITS);
+  hostInfo(on, { worktree: true, dirty: 1 });
+  await $.session.start({ source: "startup", cwd: "/work/spider-marketplace" } as any);
+  const { ui, texts } = await band($, "desktop");
+  const pills = ((await ui.findAll({ type: "Box" })) as any[]).filter((b) => String(b.props?.key ?? "").startsWith("info-"));
+  expect(pills.map((b) => b.props.key)).toEqual(["info-model", "info-dir", "info-branch"]);
+  for (const b of pills) expect(b.props.borderStyle).toBe("round");
+  // The branch pill carries its marks: the worktree and the changes.
+  expect(texts.indexOf("⎇wt")).toBe(texts.indexOf("andersonsilva/feat*") + 1);
+  expect(texts).toContain("+70");
+  expect(texts.slice(0, texts.indexOf("107k"))).not.toContain("|");
+});
+
 test("info: in a worktree, the repository's name and ⎇wt after the branch", async ($, on) => {
   world(on);
   withUsage(on, LIMITS);
