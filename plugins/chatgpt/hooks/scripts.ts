@@ -167,7 +167,8 @@ function md(node) {
 function block(el) {
   if (el.nodeType !== 1) return md(el);
   const tag = el.tagName, copy = el.dataset?.markdownCopy;
-  if (copy || el.hidden || el.getAttribute('aria-hidden') === 'true') return md(el);
+  // Only the marks md handles itself: md sends any other element back here, so another value (\`contents\`) is a plain block.
+  if (/^(exclude|inline-code|code-block)$/.test(copy || '') || el.hidden || el.getAttribute('aria-hidden') === 'true') return md(el);
   if (/^H[1-6]$/.test(tag)) return '#'.repeat(Number(tag[1])) + ' ' + inline(el).trim() + '\\n\\n';
   if (tag === 'P') return inline(el).trim() + '\\n\\n';
   if (tag === 'UL' || tag === 'OL') return list(el, 0) + '\\n\\n';
