@@ -344,7 +344,8 @@ export function readScreen(text) {
   if (cu && !heldMessage) {
     return { needsLogin, needsTrust, needsYou: true, prompt: `Codex computer use wants to use ${cu[1]} (approve allows it for that thread's session)`, isCursorOnYes: false, heldMessage: false, heldPreview: "", bypassWarning: false, cuApproval: cu[1] };
   }
-  return { needsLogin, needsTrust, needsYou: needsYou && !heldMessage, prompt, isCursorOnYes, heldMessage, heldPreview, bypassWarning: false };
+  const isCursorOnNo = needsTrust && /^\s*[❯>›]\s*(\d+\.\s*)?No, exit/m.test(tail);
+  return { needsLogin, needsTrust, isCursorOnNo, needsYou: needsYou && !heldMessage, prompt, isCursorOnYes, heldMessage, heldPreview, bypassWarning: false };
 }
 
 // Last N non-empty screen lines, trailing spaces trimmed.
