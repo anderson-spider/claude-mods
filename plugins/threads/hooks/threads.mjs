@@ -627,7 +627,7 @@ export function register(on, options) {
       }
     }
     const totalCost = mine.reduce((a, t) => a + (t.costUsd ?? 0), 0);
-    tree.push(dim(`${view.threads.filter((t) => LIVE.has(t.status)).length} live · cap ${view.cap}${totalCost ? ` · ${money(totalCost)} est.` : ""}`, leftW));
+    tree.push(dim(`${view.threads.filter((t) => LIVE.has(t.status) && !t.archived).length} live · cap ${view.cap}${totalCost ? ` · ${money(totalCost)} est.` : ""}`, leftW));
     if (archivedCount) {
       tree.push(
         Button({
@@ -2065,7 +2065,7 @@ async function createThreadChecked($, input, { m, title, task, mode, eff, extra,
 }
 
 // Live threads of both kinds, for the cap.
-// Not counted: closed or exited threads, and threads of other chats whose lead process is gone.
+// Not counted: closed, exited or archived threads, and threads of other chats whose lead process is gone.
 async function liveCount($, reg) {
   const panes = await livePanes($);
   const { value: view = EMPTY_VIEW } = await $.state.get(VIEW);
@@ -2076,7 +2076,7 @@ async function liveCount($, reg) {
   const liveLeads = new Set([...sessions.values()].filter((x) => !alive || alive.has(x.pid)).map((x) => x.sessionId));
   const selfId = await $.session.id();
   return reg.threads.filter((t) => {
-    if (t.status === "closed" || t.status === "exited") return false;
+    if (t.status === "closed" || t.status === "exited" || t.archived) return false;
     if (t.parent?.sessionId !== selfId && !liveLeads.has(t.parent?.sessionId)) return false;
     if (t.backend === "inline" || t.backend === "codex") return LIVE.has(statusOf.get(t.id) ?? t.status);
     return panes.has(t.tmux) && !panes.get(t.tmux).isDead;
