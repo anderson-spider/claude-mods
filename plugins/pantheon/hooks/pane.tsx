@@ -590,15 +590,30 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
       { text: clip(job.description ?? '(no description)', Math.max(8, IW - 26)), dim: true },
       ...(isLive ? [clockSeg(`jclk-${job.id}`, job.startedAt, null, 'text')] : after ? [{ text: `· ${after}`, dim: true }] : []),
     ]
+    // Cancel and Copy sit beside the id line when both fit with it; otherwise they stack under it.
+    const cancelLabel = W < 24 ? 'x' : 'Cancel'
+    const copyLabel = W < 24 ? 'c' : 'Copy'
+    const actionsW = (isLive ? cancelLabel.length + 4 + 1 : 0) + copyLabel.length + 4
+    const isStacked = actionsW > IW - 12
+    const actions = (
+      <Box key="actions" gap={1} flexShrink={0} flexDirection={actionsW > IW ? 'column' : 'row'}>
+        {isLive && <Button key={`cancel-${job.id}`} label={cancelLabel} onPress={() => data.onCancel(job.id)} />}
+        <Button key={`copy-${job.id}`} label={copyLabel} onPress={press => data.onCopy(copyText(job), press.surface)} />
+      </Box>
+    )
     return (
       <Box key={job.id} flexDirection="column" width={IW}>
-        <Box justifyContent="space-between" gap={1} width={IW}>
-          <Box gap={1} flexShrink={1}>{render(fit(left, IW - 18))}</Box>
-          <Box gap={1} flexShrink={0}>
-            {isLive && <Button key={`cancel-${job.id}`} label={W < 24 ? 'x' : 'Cancel'} onPress={() => data.onCancel(job.id)} />}
-            <Button key={`copy-${job.id}`} label={W < 24 ? 'c' : 'Copy'} onPress={press => data.onCopy(copyText(job), press.surface)} />
+        {isStacked ? (
+          <Box flexDirection="column" width={IW}>
+            <Box gap={1}>{render(fit(left, IW))}</Box>
+            {actions}
           </Box>
-        </Box>
+        ) : (
+          <Box justifyContent="space-between" gap={1} width={IW}>
+            <Box gap={1} flexShrink={1}>{render(fit(left, IW - actionsW - 1))}</Box>
+            {actions}
+          </Box>
+        )}
         <Box gap={1} width={IW}>{render(fit(detail, IW))}</Box>
         {isLive && job.lastActivity && note('act', { text: clip(`↳ ${job.lastActivity}`, IW), color: ACTIVITY })}
         {isLive && job.tokens && note('tok', {

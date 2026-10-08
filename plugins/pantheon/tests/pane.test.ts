@@ -288,6 +288,30 @@ describe('pane', () => {
     }
   })
 
+  t('the job actions row stays within 8 columns on the Jobs tab', async ($, on) => {
+    world(on)
+    seed(on, { jobs: [job({ id: 'pj3a', description: 'map', result: 'an answer', sessionId: 's' })] })
+    await start($)
+    for (const surface of SURFACES) {
+      const ui = await mountPane($, surface, { columns: 8 })
+      if (await ui.find({ key: 'tab-jobs' })) await ui.press({ key: 'tab-jobs' })
+      expect(await ui.find({ key: 'cancel-pj3a' })).toBeDefined()
+      expect(await ui.find({ key: 'copy-pj3a' })).toBeDefined()
+      // Width a node takes if drawn on one line: Buttons are `[ label ]`, rows add their gaps.
+      type Node = { type?: string; props?: { label?: string; flexDirection?: string; gap?: number }; text?: string; children?: Node[] }
+      const widest = (n: Node): number => {
+        const kids = (n.children ?? []).filter(Boolean)
+        if (n.type === 'Button') return String(n.props?.label).length + 4
+        if (n.type === 'Text') return String(n.text ?? '').length
+        const sizes = kids.map(widest)
+        if (n.props?.flexDirection === 'column') return Math.max(0, ...sizes)
+        return sizes.reduce((a, b) => a + b, 0) + Math.max(0, sizes.length - 1) * (n.props?.gap ?? 0)
+      }
+      expect(widest((await ui.drawn()) as Node)).toBeLessThanOrEqual(8)
+      await release()
+    }
+  })
+
   t('the clock warning shows in docked at 40 columns and in mini', async ($, on) => {
     let fail = false
     world(on, { clockDown: () => fail })
