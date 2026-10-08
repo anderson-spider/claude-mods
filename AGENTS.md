@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Claude Code plugin marketplace `spider-claude-mods` (`anderson-spider/claude-mods`) with six plugins, all **function hooks mods** (an early-access Claude Code API that may change between versions). The `claude-code` module (`atom`, `read`, `Register`, `claude-code/testing`) is not on npm: Claude Code writes its typings to `plugins/*/.claude-plugin/types/` when it loads a plugin (git-ignored), and each plugin's `tsconfig.json` extends them. There is no `package.json`, build or lint. Load the `plugin-authoring` skill before writing or debugging a hooks module.
+Claude Code plugin marketplace `spider-claude-mods` (`anderson-spider/claude-mods`) with seven plugins, all **function hooks mods** (an early-access Claude Code API that may change between versions). The `claude-code` module (`atom`, `read`, `Register`, `claude-code/testing`) is not on npm: Claude Code writes its typings to `plugins/*/.claude-plugin/types/` when it loads a plugin (git-ignored), and each plugin's `tsconfig.json` extends them. There is no `package.json`, build or lint. Load the `plugin-authoring` skill before writing or debugging a hooks module.
 
 ## Layout
 
@@ -16,6 +16,7 @@ Claude Code plugin marketplace `spider-claude-mods` (`anderson-spider/claude-mod
 - **tailscale**: `tailscale_get` and `tailscale_write` tools over the Tailscale API. `api.ts` is pure (`call` takes an injected `fetch`); `tests/tailscale.test.ts` uses only it, with a fake `fetch`, and `tests/register.test.ts` runs the tools through the test host with a fake `http.fetch`.
 - **flightdeck**: a live agent dashboard pane (`/flightdeck`), imported unchanged from `scasella/claude-flightdeck` 0.3.2 (MIT): keep `LICENSE`, and list changes and credits in `NOTICE`. `core.ts` holds the pure reducers, formatters and layout rules; `register.tsx` the hooks, state and panels; `rail.tsx` and `elapsed.tsx` are surface modules (animated connectors, live clocks). It only watches: every hook passes its event on unchanged.
 - **hud**: three rows above the prompt, in the same order in the terminal and the app (model, repository and branch; context, cache, cache hit and agents; 5-hour and 7-day limits) plus suggested next prompts; plain ESM with no `types/`. Adapted from third-party work: keep `LICENSE`, and list changes and credits in `NOTICE`. `hud.mjs` also reads the settings. Pure modules sit beside it (labels and palette, context, limits, cache, suggestions, info, drawing, `render.mjs` composing `AbovePrompt`); the flows `suggestion-flow.mjs`, `history.mjs` and `info-refresh.mjs` take only the host callbacks they use. Labels are English only.
+- **pantheon**: makes the main session an orchestrator in the style of oh-my-opencode-slim. Codex roles (explorer, librarian, fixer, Codex council seats) run through the `delegate`, `delegate_result` and `delegate_cancel` tools on `codex exec --json`; native roles (`pantheon:oracle`, `pantheon:designer`, Claude council seats) are registered with `$.agent.register` and hidden by an `agent.offer` guard when disabled. `config.ts` loads and merges `~/.claude/pantheon.json` and `<repo>/.claude/pantheon.json` (`sandboxCap`/`noNetwork` merge to the most restrictive), `roles.ts` and `workspace.ts` resolve the role, sandbox and `cwd` (inside the repository root, by `realPath`), `codex.ts` builds the argv and parses the JSONL, `jobs.ts` runs jobs in the foreground, then the background (the session is prompted when one ends), `pane.tsx` draws `/pantheon` and the status line, `prompts/` holds the orchestrator section, role prompts, Council Mode and the superpowers mapping. `register.tsx` builds an `Io` of closures in each hook, since `$` cannot be stored, and writes the jobs to `$.state` through a queue that keeps only the latest snapshot. Prompts adapted from third-party work: keep `LICENSE` and `NOTICE`.
 
 ## Commands
 
@@ -29,6 +30,7 @@ claude plugin test plugins/codex-computer-use  # same, for codex-computer-use (t
 claude plugin test plugins/tailscale           # same, for tailscale
 claude plugin test plugins/hud                 # same, for hud
 claude plugin test plugins/flightdeck          # same, for flightdeck
+claude plugin test plugins/pantheon            # same, for pantheon
 node scripts/check-consistency.mjs             # marketplace and plugin manifests agree (also run by CI)
 node scripts/check-version-bump.mjs origin/main  # a plugin with code changes bumped its version (run by CI on pull requests)
 claude --plugin-dir plugins/branch-guard       # loads the plugin with automatic reload
