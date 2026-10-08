@@ -3280,7 +3280,7 @@ async function runSetup($, opts = {}) {
   checks.push({ name: "Default permission mode", ok: true, detail: `${await defaultMode($)} (change with /threads mode <mode>; inline threads use this chat's mode)` });
   const root = String($.plugin.root ?? "");
   const how = /\/plugins\/(cache|marketplaces)\//.test(root)
-    ? `installed (${root}); update with claude plugin update threads@two-mods`
+    ? `installed (${root}); update with claude plugin update threads@spider-claude-mods`
     : /\/dev-mods\//.test(root)
       ? `loaded from a hot-reload folder (${root}); edits apply on save`
       : `loaded from a folder (${root || "unknown"}), as with --plugin-dir`;
