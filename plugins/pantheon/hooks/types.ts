@@ -27,7 +27,7 @@ export interface CodexCall {
   prompt: string; cwd: string; skipGitRepoCheck: boolean; resumeSessionId?: string
 }
 import type { Tokens } from '../types'
-export type { Job, JobStatus, Tokens } from '../types'
+export type { Job, JobStatus, Tokens, Native, Round, RoundStatus, SessionInfo, PanelView } from '../types'
 export type CodexEvent =
   | { kind: 'session'; sessionId: string }
   | { kind: 'activity'; text: string }

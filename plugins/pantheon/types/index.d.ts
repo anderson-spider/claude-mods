@@ -8,9 +8,22 @@ export type Job = {
   lastActivity?: string; tokens?: Tokens; result?: string; error?: string
 }
 
+export type RoundStatus = 'running' | 'done' | 'failed' | 'stopped' | 'lost'
+export type Round = { turnId?: string; startedAt: number; endedAt?: number; status: RoundStatus }
+export type Native = {
+  id: string; role: string; type: string; task: string; model: string
+  rounds: Round[]; ctx: number; out: number; steps: number; lastTool?: string
+}
+export type SessionInfo = {
+  model?: string; effort?: string
+  context?: { tokens: number | null; window: number; percent: number | null }
+  isRunning: boolean; turnStartedAt?: number; lastTurnMs?: number
+}
+export type PanelView = { tab: 'agents' | 'jobs' }
+
 declare module 'claude-code' {
   interface PluginState {
-    pantheon: { jobs: Job[] }
+    pantheon: { jobs: Job[]; natives: Native[]; session: SessionInfo; view: PanelView }
   }
   // The inputs of the tools registered in session.start, in the shape the engine lays for
   // connected MCP tools; keep them in step with the inputSchema in hooks/register.tsx.
