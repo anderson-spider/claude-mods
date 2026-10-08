@@ -194,6 +194,8 @@ export function register(on, options) {
   idleCloseMinutes = Number.isFinite(idle) && idle >= 0 ? idle : 120;
   on("session.start", async ($, e, next) => {
     desktopCache.at = 0;
+    probeMisses.panes = 0;
+    probeMisses.codex = 0;
     const started = await next(e);
     try {
       await detectSurface($, e.surface);
@@ -1300,9 +1302,23 @@ async function pidsAlive($, pids) {
 }
 
 async function livePanes($) {
+  return (await probePanes($)).panes;
+}
+
+// A tmux that answers "no server" has no panes. Any other failure (a timeout, a killed process)
+// says nothing about the threads, so `failed` lets the caller keep what it knew.
+async function probePanes($) {
   const r = await run($, tmuxArgv("list-panes", "-a", "-F", PANE_FORMAT), 5000);
-  if (r.exitCode !== 0) return new Map();
-  return parsePanes(r.stdout);
+  if (r.exitCode === 0) return { panes: parsePanes(r.stdout), failed: false };
+  return { panes: new Map(), failed: !/no server running|error connecting to|no sessions/i.test(r.stderr) };
+}
+
+// A failed probe is believed on its second miss in a row (the ticker refreshes every couple of
+// seconds), so one aborted or timed-out call never marks a live thread exited.
+const probeMisses = { panes: 0, codex: 0 };
+function trustMiss(kind, failed) {
+  probeMisses[kind] = failed ? probeMisses[kind] + 1 : 0;
+  return failed && probeMisses[kind] < 2;
 }
 
 async function capture($, name, joined) {
@@ -1389,7 +1405,9 @@ async function doRefresh($) {
   const p = await paths($);
   const reg = await loadRegistry($, p);
   const desk = await desktopUsers($, p);
-  const panes = await livePanes($);
+  const probed = await probePanes($);
+  const panes = probed.panes;
+  const keepPanes = trustMiss("panes", probed.failed);
   const sessions = await scanSessions($, p);
   const lead = await leadInfo($, p, sessions);
   const ours = reg.threads.map((t) => sessions.get(t.sessionId)).filter(Boolean);
@@ -1415,7 +1433,8 @@ async function doRefresh($) {
   const leadPids = await pidsAlive($, [...sessions.values()].map((x) => x.pid));
   const liveLeads = new Set([...sessions.values()].filter((x) => !leadPids || leadPids.has(x.pid)).map((x) => x.sessionId));
   // Codex threads: one GET /status for all of them, and only when one is not closed
-  const codexSnap = reg.threads.some((t) => t.backend === "codex" && t.status !== "closed") ? await codexSnapshot($, p) : { reachable: false, byId: new Map() };
+  const codexSnap = reg.threads.some((t) => t.backend === "codex" && t.status !== "closed") ? await codexSnapshot($, p) : { reachable: false, failed: false, byId: new Map() };
+  const keepCodex = trustMiss("codex", codexSnap.failed === true);
   const reports = [];
   let inlineMapChanged = false;
   const nextMap = { ...inlineMap };
@@ -1460,7 +1479,9 @@ async function doRefresh($) {
     }
     if (t.backend === "codex") {
       const isOwn = t.parent?.sessionId === lead.selfId;
-      const state = t.status === "closed" ? null : codexStateOf(t, codexSnap);
+      let state = t.status === "closed" ? null : codexStateOf(t, codexSnap);
+      // the helper did not answer once: not proof that it is gone
+      if (keepCodex && state?.status === "exited" && t.status !== "exited") state = null;
       const patch = {};
       if (state && state.status !== t.status) {
         patch.status = state.status;
@@ -1493,6 +1514,8 @@ async function doRefresh($) {
         now,
         createdAt: t.createdAt,
       });
+      // tmux did not answer once: not proof that the pane is gone
+      if (keepPanes && status === "exited" && t.status !== "exited") status = t.status;
       if (pane || !verified) {
         const parsed = parseTranscript(await transcriptTail($, p, t, "131072"));
         if (parsed.model) verified = parsed.model;
@@ -1644,10 +1667,10 @@ const codexCall = ($, p, route, body) => callHelper(codexDeps($, p), route, body
 
 // The helper's view of every Codex thread; reachable is false when no helper answers.
 async function codexSnapshot($, p) {
-  if (!(await $.fs.exists(helperSocket(p.home)))) return { reachable: false, byId: new Map() };
+  if (!(await $.fs.exists(helperSocket(p.home)))) return { reachable: false, failed: false, byId: new Map() };
   const r = await codexCall($, p, "/status");
-  if (!r.ok) return { reachable: false, byId: new Map() };
-  return { reachable: true, byId: new Map((r.body.threads ?? []).map((h) => [h.threadId, h])) };
+  if (!r.ok) return { reachable: false, failed: true, byId: new Map() };
+  return { reachable: true, failed: false, byId: new Map((r.body.threads ?? []).map((h) => [h.threadId, h])) };
 }
 
 async function codexLive($, p) {
