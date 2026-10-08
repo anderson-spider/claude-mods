@@ -3,13 +3,14 @@ import { describe, expect, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
 import { DELEGATE, HOME, RESULT, parse, start, world } from './fixtures/world'
-import { PANE_ID, statusText } from '../hooks/pane'
+import { PANE_ID, statusText, timelineSource } from '../hooks/pane'
+import type { Slot } from '../hooks/roster'
 import type { Job, Native, SessionInfo } from '../hooks/types'
 
 const SURFACES = ['terminal', 'desktop'] as const
 const NOW = 1_000_000_000
 
-type Opts = { placement?: 'dock' | 'inline'; columns?: number; rows?: number }
+type Opts = { placement?: 'dock' | 'inline'; columns?: number; rows?: number; bodyRows?: number }
 
 const mounted: { unmount: () => Promise<unknown> }[] = []
 
@@ -20,6 +21,7 @@ async function mountPane($: Engine, surface: (typeof SURFACES)[number], opts: Op
     component: 'Pane',
     props: {
       title: 'Pantheon', isFocused: true, bodyColumns: opts.columns ?? 120, placement: opts.placement ?? 'dock',
+      scroll: { offset: 0, bodyRows: opts.bodyRows ?? opts.rows ?? 40 },
     } as never,
     requestId: PANE_ID,
     viewport: { columns: opts.columns ?? 120, rows: opts.rows ?? 40 } as never,
@@ -35,7 +37,7 @@ async function release() {
 
 type Mounted = Awaited<ReturnType<typeof mountPane>>
 async function texts(ui: Mounted): Promise<string[]> {
-  return (await ui.findAll({ type: 'Text' })).map(node => String(node.text))
+  return (await ui.findAll({ type: 'Text' })).map(node => String(node.text).trim())
 }
 
 function command($: Engine, args: string) {
@@ -162,24 +164,155 @@ describe('pane', () => {
     expect(await terminal.find({ type: 'Svg' })).toBeUndefined()
   })
 
-  t('mini stays within 8 lines and collapses to +N', async ($, on) => {
-    world(on)
-    const agents = ['explorer', 'librarian', 'fixer', 'councillor:alpha']
-    seed(on, {
-      jobs: agents.map((agent, k) => job({ id: `j${k}`, agent, lastActivity: 'read x' })),
+  const SIX = ['explorer', 'librarian', 'fixer', 'councillor:alpha']
+  const allActive = () => seed_all()
+  function seed_all() {
+    return {
+      jobs: SIX.map((agent, k) => job({ id: `j${k}`, agent, lastActivity: 'read x' })),
       natives: [native(), native({ id: 'n2', role: 'designer', type: 'pantheon:designer' })],
-      session: { isRunning: true, turnStartedAt: NOW - 5_000, model: 'opus' },
+      session: { isRunning: true, turnStartedAt: NOW - 5_000, model: 'opus' } as SessionInfo,
+    }
+  }
+
+  t('mini stays within 8 lines and collapses the sixth active line into +1', async ($, on) => {
+    world(on)
+    seed(on, allActive())
+    await start($)
+    for (const rows of [8, 40]) {
+      const ui = await mountPane($, 'terminal', { placement: 'inline', rows })
+      const root = (await ui.drawn()) as { children?: unknown[] }
+      expect((root.children ?? []).filter(Boolean).length <= 8).toBe(true)
+      const all = await texts(ui)
+      expect(all.includes('+1 active')).toBe(true)
+      expect(all.includes('/pantheon for details')).toBe(true)
+      expect(await ui.find({ key: 'tab-jobs' })).toBeUndefined()
+      await release()
+    }
+  })
+
+  t('mini degrades below three rows', async ($, on) => {
+    world(on)
+    seed(on, allActive())
+    await start($)
+    const two = await mountPane($, 'terminal', { placement: 'inline', rows: 2 })
+    expect(((await two.drawn()) as { children?: unknown[] }).children?.length).toBe(2)
+    expect((await texts(two)).includes('+6 active')).toBe(true)
+    await release()
+    const one = await mountPane($, 'terminal', { placement: 'inline', rows: 1 })
+    expect(((await one.drawn()) as { children?: unknown[] }).children?.length).toBe(1)
+  })
+
+  t('roles keep their fixed order when activity changes', async ($, on) => {
+    world(on)
+    seed(on, { natives: [native()] })
+    await start($)
+    const all = await texts(await mountPane($, 'terminal'))
+    const names = ['orchestrator', 'explorer', 'librarian', 'fixer', 'oracle', 'designer', 'council']
+    const at = names.map(name => all.lastIndexOf(name)) // the last one is the role line, not the delegating chip
+    expect(at.every(i => i >= 0)).toBe(true)
+    expect(at).toEqual([...at].sort((a, b) => a - b))
+  })
+
+  const clients = async (ui: Mounted) =>
+    (await ui.findAll({ type: 'Client' })).map(node => (node as unknown as { props: Record<string, any> }).props)
+  const railsOf = async (ui: Mounted) => (await clients(ui)).filter(c => String(c.module).includes('rail'))
+
+  t('docked: rails and pulse; idle roles have a still connector, off roles none, the orchestrator link is lit while a turn runs', async ($, on) => {
+    world(on, { files: { [`${HOME}/.claude/pantheon.json`]: JSON.stringify({ disabledAgents: ['librarian'] }) } })
+    seed(on, { natives: [native()], session: { isRunning: true, turnStartedAt: NOW - 5_000 } })
+    await start($)
+    await command($, 'config')
+    const rails = await railsOf(await mountPane($, 'terminal'))
+    const glyphs = rails.filter(r => r.props?.glyph)
+    expect(glyphs.length).toBe(5) // oracle lit; explorer, fixer, designer, council still; librarian off has none
+    expect(glyphs.filter(r => r.props.active).length).toBe(1)
+    expect(glyphs.every(r => r.props.isPulse !== false && r.props.isLine !== false)).toBe(true)
+    const link = rails.find(r => r.props?.vertical)
+    expect(link?.props.active).toBe(true)
+    // The region is the line plus the glyph cell, so it does not grow with what the rail draws.
+    expect(glyphs.every(r => r.width === r.props.width + 1)).toBe(true)
+  })
+
+  t('mini: clocks and pulse with no line; desktop: rails and no pulse', async ($, on) => {
+    world(on)
+    seed(on, { natives: [native()], session: { isRunning: true, turnStartedAt: NOW - 5_000 } })
+    await start($)
+    const mini = await mountPane($, 'terminal', { placement: 'inline' })
+    const stubs = await railsOf(mini)
+    expect(stubs.length).toBe(1)
+    expect(stubs[0].props.isLine).toBe(false)
+    expect((await clients(mini)).some(c => String(c.module).includes('elapsed'))).toBe(true)
+    await release()
+    const desk = await mountPane($, 'desktop')
+    const rails = (await railsOf(desk)).filter(r => r.props?.glyph)
+    expect(rails.length).toBeGreaterThan(0)
+    expect(rails.every(r => r.props.isPulse === false)).toBe(true)
+    expect((await clients(desk)).some(c => String(c.module).includes('elapsed'))).toBe(true)
+  })
+
+  t('desktop text and chips use the artboard hex values', async ($, on) => {
+    world(on)
+    seed(on, { natives: [native()] })
+    await start($)
+    const ui = await mountPane($, 'desktop')
+    const colors = (await ui.findAll({ type: 'Text' })).map(node => String((node as unknown as { props: { color?: string } }).props.color))
+    expect(colors.includes('#6b37b3')).toBe(true) // claude
+    expect(colors.includes('#176a30')).toBe(true) // running
+    expect(colors.some(c => !c.startsWith('#') && c !== 'undefined')).toBe(false)
+  })
+
+  t('an idle line keeps the role name at 40 columns', async ($, on) => {
+    world(on)
+    seed(on, {
+      jobs: [job({ id: 'pj1234567', agent: 'councillor:alpha', status: 'done', endedAt: NOW - 900_000, sessionId: 'sess' })],
+      natives: [native({ id: 'zz', role: 'councillor-beta', type: 'pantheon:councillor-beta', rounds: [{ startedAt: 1, endedAt: 2, status: 'done' }] })],
     })
     await start($)
-    const full = await mountPane($, 'terminal', { placement: 'inline', rows: 40 })
-    const root = (await full.drawn()) as { children?: unknown[] }
-    expect((root.children ?? []).filter(Boolean).length <= 8).toBe(true)
-    expect((await texts(full)).some(x => /^\+\d+ active$/.test(x))).toBe(false)
-    expect((await texts(full)).includes('/pantheon for details')).toBe(true)
+    const ui = await mountPane($, 'terminal', { columns: 40 })
+    const all = await texts(ui)
+    expect(all).toContain('council')
+    expect(all.filter(x => x.length > 40)).toEqual([])
+  })
+
+  t('a short body shows fewer idle cards than a tall viewport would', async ($, on) => {
+    world(on)
+    await start($)
+    const tall = await texts(await mountPane($, 'terminal', { rows: 40, bodyRows: 40 }))
+    expect(tall.some(x => x.startsWith('+') && x.includes('idle or off'))).toBe(false)
     await release()
-    const tight = await mountPane($, 'terminal', { placement: 'inline', rows: 7 })
-    expect((await texts(tight)).includes('+1 active')).toBe(true)
-    expect(await tight.find({ key: 'tab-jobs' })).toBeUndefined()
+    const short = await texts(await mountPane($, 'terminal', { rows: 40, bodyRows: 14 }))
+    expect(short.some(x => x.startsWith('+') && x.includes('idle or off'))).toBe(true)
+  })
+
+  t('a failing clock read draws without clocks and says so', async ($, on) => {
+    let fail = false
+    world(on, { clockDown: () => fail })
+    seed(on, { jobs: [job({ id: 'pj3a', description: 'map' })], session: { isRunning: true, turnStartedAt: NOW - 5_000 } })
+    await start($)
+    const ok = await mountPane($, 'terminal')
+    expect((await texts(ok)).some(x => x.includes('clock unavailable'))).toBe(false)
+    await release()
+    fail = true
+    const ui = await mountPane($, 'terminal')
+    const all = await texts(ui)
+    expect(all.some(x => x.includes('clock unavailable'))).toBe(true)
+    expect(all).toContain('pj3a')
+    expect(await clients(ui)).toEqual([])
+  })
+
+  t('a failed tab write shows one toast and does not throw', async ($, on) => {
+    const { seen } = world(on)
+    let deny = false
+    on('state.set', async (_$, e, next) => (deny && e.key === 'view' ? { deny: 'view storage unavailable' } : next(e)))
+    await start($)
+    deny = true
+    const ui = await mountPane($, 'terminal')
+    await ui.press({ key: 'tab-jobs' })
+    await ui.press({ key: 'tab-agents' })
+    await ui.press({ key: 'tab-jobs' })
+    const toasts = seen.toasts.filter(x => x.includes('could not save the panel state'))
+    expect(toasts.length).toBe(1)
+    expect(toasts[0]).toContain('view storage unavailable')
   })
 
   t('docked at 40 columns truncates', async ($, on) => {
@@ -240,5 +373,48 @@ describe('pane', () => {
     world(on)
     await start($)
     expect((await command($, 'cancel')).text).toContain('Uso')
+  })
+})
+
+describe('timelineSource', () => {
+  const NOW_T = 10_000_000
+  const slot = (over: Partial<Slot> & { name: Slot['name'] }): Slot => ({ engine: 'codex', state: 'idle', instances: [], ...over })
+  const inst = (over: object) => ({
+    id: 'i', engine: 'codex' as const, task: '', status: 'running', isActive: true, startedAt: NOW_T - 60_000,
+    rounds: [{ startedAt: NOW_T - 60_000, status: 'running' }], tokens: { out: 0 }, ...over,
+  })
+  const slots: Slot[] = [
+    slot({ name: 'orchestrator', engine: 'claude', state: 'active' }),
+    slot({ name: 'explorer', state: 'active', instances: [inst({ id: 'a' }), inst({ id: 'b', startedAt: NOW_T - 30_000, rounds: [{ startedAt: NOW_T - 30_000, status: 'running' }] })] }),
+    slot({ name: 'librarian' }),
+    slot({ name: 'fixer', state: 'active', instances: [inst({ id: 'f', rounds: [
+      { startedAt: NOW_T - 800_000, endedAt: NOW_T - 600_000, status: 'done' },
+      { startedAt: NOW_T - 60_000, status: 'running' },
+    ] })] }),
+    slot({ name: 'oracle', engine: 'claude', state: 'active', instances: [inst({ id: 'o', engine: 'claude' })] }),
+    slot({ name: 'designer', engine: 'claude', lastEndedAt: NOW_T - 2_000_000 }),
+    slot({ name: 'council', state: 'off', offReason: 'disabledAgents' }),
+  ]
+  const out = timelineSource(slots, { isRunning: true, turnStartedAt: NOW_T - 120_000 }, NOW_T).source
+
+  test('running bars are solid in the engine color, finished ones outlined', () => {
+    expect(out).toContain('fill="#1d4f9e"/>')
+    expect(out).toContain('fill="#6b37b3"/>')
+    expect(out).toContain('fill="#c7d6ef" stroke="#1d4f9e"')
+  })
+  test('rounds of one session are labelled and joined by a dashed line', () => {
+    expect(out).toContain('>r1</text>')
+    expect(out).toContain('>r2</text>')
+    expect(out).toContain('stroke-dasharray="2 3"')
+  })
+  test('off roles get a dotted lane with an off pill, idle roles their last run', () => {
+    expect(out).toContain('stroke-dasharray="1 4"')
+    expect(out).toContain('>off</text>')
+    expect(out).toContain('last run 33m ago')
+  })
+  test('parallel instances label their ids and the now line closes the window', () => {
+    expect(out).toContain('>a</text>')
+    expect(out).toContain('>b</text>')
+    expect(out).toContain('>now</text>')
   })
 })

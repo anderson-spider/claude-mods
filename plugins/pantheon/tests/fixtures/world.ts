@@ -21,6 +21,8 @@ export type World = {
   failFirstRegister?: boolean
   /** Respostas de process.run por comando (argv unido por espaço). */
   runs?: Record<string, { exitCode: number; stdout?: string; stderr?: string }>
+  /** While it returns true, clock.now rejects (this replaces the mock clock, so nothing can sleep). */
+  clockDown?: () => boolean
 }
 
 export function world(on: On, opts: World = {}) {
@@ -38,7 +40,13 @@ export function world(on: On, opts: World = {}) {
     gitRuns: 0,
   }
   const files = { ...(opts.files ?? {}) }
-  const clock = mock.clock(on)
+  const clock = opts.clockDown ? (undefined as never) : mock.clock(on)
+  if (opts.clockDown) {
+    on('clock.now', async () => {
+      if (opts.clockDown!()) throw new Error('clock gone')
+      return { value: 0 }
+    })
+  }
   mock.env(on, { HOME })
   on('session.start', async (_$, e) => ({ cwd: e.cwd }))
   on('session.cwd', async () => ({ value: ROOT }))

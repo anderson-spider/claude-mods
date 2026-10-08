@@ -81,6 +81,8 @@ export type PanelData = {
   session: SessionInfo
   tab: 'agents' | 'jobs'
   hasClient: boolean
+  /** The host clock failed: draw static durations from `now` and say so, with no Client. */
+  clockLost?: boolean
   onTab: (tab: 'agents' | 'jobs') => void
   onCancel: (jobId: string) => void
   onCopy: (text: string, surface: RenderSurface) => void
@@ -103,6 +105,16 @@ const HEX = {
   ink: '#1d1f23', muted: '#5b6270', grid: '#ece9e2', turn: '#dcd8cf', amber: '#7a4f00',
   card: '#ffffff', edge: '#e1ded6', dot: '#b9b4a8', pill: '#f0eee9',
 }
+
+// Desktop text and chips use the artboard's hex values instead of the theme names above.
+const DESK: Record<string, string> = {
+  suggestion: HEX.codex, merged: HEX.claude, success: '#176a30', warning: HEX.amber, error: '#b42318',
+  inactive: HEX.muted, text: HEX.ink, inverseText: '#ffffff', cyan: '#2d3138',
+}
+const DESK_SOFT: Record<string, string> = {
+  suggestion: '#e6eefb', merged: '#efe7fa', success: '#e3f4e7', warning: '#fbeccb', text: '#f0eee9',
+}
+const DESK_PANEL = '#f7f6f2'
 
 const GLYPH: Record<string, { text: string; color: string; label: string }> = {
   running: { text: '●', color: RUN, label: 'running' },
@@ -144,7 +156,7 @@ export function copyText(job: Job): string {
   return `${job.id}\nresume: delegate({ agent: "${job.agent}", resume: "${job.id}", prompt: … })`
 }
 
-type Seg = { text?: string; color?: string; bold?: boolean; dim?: boolean; bg?: string; node?: unknown; w?: number }
+type Seg = { text?: string; color?: string; bold?: boolean; dim?: boolean; bg?: string; chip?: boolean; node?: unknown; w?: number }
 const widthOf = (segs: Seg[]) =>
   segs.reduce((n, s, k) => n + (s.node ? s.w ?? 0 : (s.text ?? '').length) + (k ? 1 : 0), 0)
 
@@ -163,51 +175,173 @@ function fit(segs: Seg[], width: number): Seg[] {
   return out
 }
 
+/** The "Last 15 minutes" card: one lane per slot, solid bars for running work, outlines for finished work. */
+export function timelineSource(slots: Slot[], session: SessionInfo, now: number): { source: string; width: number; height: number } {
+  const span = 900_000
+  const t0 = now - span
+  const SW = 490
+  const x0 = 84
+  const x1 = 484
+  const xOf = (t: number) => x0 + ((Math.min(now, Math.max(t0, t)) - t0) / span) * (x1 - x0)
+  const hex = (e: Engine | 'mixed') => HEX[e]
+  const soft = (e: Engine) => (e === 'claude' ? HEX.claudeSoft : HEX.codexSoft)
+  const inWindow = (i: Instance) => i.rounds.some(r => (r.endedAt ?? now) >= t0)
+  const pitch = 28
+  const sub = 18
+  const lanes: { top: number; slot: Slot }[] = []
+  let y = 34
+  for (const slot of slots) {
+    lanes.push({ top: y, slot })
+    y += pitch + sub * (Math.max(1, slot.instances.filter(inWindow).length) - 1)
+  }
+  const axisY = y + 8
+  const height = axisY + 14
+  let body = `<rect x="0.5" y="0.5" width="${SW - 1}" height="${height - 1}" rx="10" fill="${HEX.card}" stroke="${HEX.edge}"/>`
+  body += `<text x="14" y="21" font-size="13" font-weight="600" fill="${HEX.ink}">Last 15 minutes</text>`
+  body += `<text x="${SW - 14}" y="21" font-size="11" text-anchor="end" fill="${HEX.muted}">solid = running · outline = finished</text>`
+  for (const m of [0, 5, 10]) {
+    const gx = x0 + (m / 15) * (x1 - x0)
+    body += `<line x1="${gx}" y1="30" x2="${gx}" y2="${axisY - 14}" stroke="${HEX.grid}"/>`
+  }
+  body += `<line x1="${x1}" y1="30" x2="${x1}" y2="${axisY - 14}" stroke="${HEX.ink}" stroke-dasharray="3 3"/>`
+  for (const { top, slot } of lanes) {
+    const cy = top + 8
+    const n = activeOf(slot).length
+    const labelFill = slot.name === 'orchestrator' ? HEX.ink : slot.state === 'active' ? hex(slot.engine) : HEX.muted
+    body += `<text x="14" y="${cy + 3}" font-size="11" font-weight="${slot.state === 'active' ? 600 : 400}" fill="${labelFill}">${esc(n > 1 ? `${slot.name} ×${n}` : slot.name)}</text>`
+    if (slot.name === 'orchestrator') {
+      const s = session
+      if (s.turnStartedAt) {
+        const end = s.isRunning ? now : s.turnStartedAt + (s.lastTurnMs ?? 0)
+        if (end >= t0) {
+          body += `<rect x="${xOf(s.turnStartedAt)}" y="${top + 2}" width="${Math.max(3, xOf(end) - xOf(s.turnStartedAt))}" height="12" rx="3" fill="${s.isRunning ? HEX.ink : HEX.turn}"/>`
+        }
+      }
+      continue
+    }
+    if (slot.state === 'off') {
+      body += `<line x1="${x0}" y1="${cy}" x2="${x1}" y2="${cy}" stroke="${HEX.dot}" stroke-dasharray="1 4"/>`
+      body += `<rect x="${x0 + 6}" y="${cy - 8}" width="28" height="15" rx="7" fill="${HEX.pill}"/><text x="${x0 + 20}" y="${cy + 3}" text-anchor="middle" font-size="10" font-weight="600" fill="${HEX.muted}">off</text>`
+      continue
+    }
+    const seen = slot.instances.filter(inWindow)
+    if (!seen.length) {
+      body += `<text x="${x0 + 6}" y="${cy + 3}" font-size="10" fill="${HEX.muted}">${slot.lastEndedAt !== undefined ? `last run ${ago(now - slot.lastEndedAt)} ago` : 'idle'}</text>`
+      continue
+    }
+    seen.forEach((i, k) => {
+      const by = top + 2 + k * sub
+      const rounds = i.rounds.filter(r => (r.endedAt ?? now) >= t0)
+      rounds.forEach((r, m) => {
+        const ex = xOf(r.endedAt ?? now)
+        const sx = xOf(r.startedAt)
+        const w = Math.max(3, ex - sx)
+        body += r.endedAt === undefined && i.isActive
+          ? `<rect x="${sx}" y="${by}" width="${w}" height="12" rx="3" fill="${hex(i.engine)}"/>`
+          : `<rect x="${sx}" y="${by}" width="${w}" height="12" rx="3" fill="${soft(i.engine)}" stroke="${hex(i.engine)}"/>`
+        if (i.rounds.length > 1) {
+          body += `<text x="${sx + w / 2}" y="${by - 2}" text-anchor="middle" font-size="9" font-weight="600" fill="${HEX.amber}">r${i.rounds.indexOf(r) + 1}</text>`
+        }
+        const next = rounds[m + 1]
+        if (next) body += `<line x1="${ex}" y1="${by + 6}" x2="${xOf(next.startedAt)}" y2="${by + 6}" stroke="${hex(i.engine)}" stroke-dasharray="2 3"/>`
+      })
+      if (seen.length > 1) {
+        body += `<text x="${xOf(rounds[0].startedAt) - 5}" y="${by + 10}" text-anchor="end" font-size="10" font-family="monospace" fill="${HEX.ink}">${esc(i.id)}</text>`
+      }
+    })
+  }
+  for (const [m, label] of [[0, '−15m'], [5, '−10m'], [10, '−5m']] as const) {
+    body += `<text x="${x0 + (m / 15) * (x1 - x0)}" y="${axisY}" text-anchor="middle" font-size="10" fill="${HEX.muted}">${label}</text>`
+  }
+  body += `<text x="${x1}" y="${axisY}" text-anchor="end" font-size="10" font-weight="600" fill="${HEX.ink}">now</text>`
+  const source = `<svg xmlns="http://www.w3.org/2000/svg" width="${SW}" height="${height}" viewBox="0 0 ${SW} ${height}" font-family="sans-serif">${body}</svg>`
+  return { source, width: SW, height }
+}
+
 export function drawPanel(el: PanelElements, data: PanelData): unknown {
-  const { Box, Text, Button } = el
+  const { Box, Button } = el
   const layout = layoutOf(data.surface, data.placement)
   const isDesk = layout === 'desktop'
-  const W = Math.max(30, data.columns)
-  const IW = W - 4
+  const isMini = layout === 'mini'
+  // The real width: a pane narrower than a comfortable minimum is clipped, never padded out.
+  const W = Math.max(12, data.columns)
+  const IW = Math.max(8, W - 4)
   const { now, roster } = data
-  const hasRail = data.hasClient && !!el.rail
-  const hasClock = data.hasClient && !!el.clock
+  const canClient = data.hasClient && !data.clockLost
+  const hasRail = canClient && !!el.rail
+  const hasClock = canClient && !!el.clock
   const [orch, ...roles] = roster.slots
 
-  const text = (s: Seg) => (
-    <Text color={s.color} bold={s.bold} dimColor={s.dim} backgroundColor={s.bg} wrap="truncate">{s.text}</Text>
-  )
+  // Desktop paints with the artboard's hex values; the dim mark becomes its muted gray.
+  const paint = (name: string | undefined) => (isDesk && name ? DESK[name] ?? name : name)
+  const text = (s: Seg) => {
+    const code = isDesk && s.color === 'cyan'
+    const color = code ? DESK.cyan : isDesk ? (s.dim && !s.color ? HEX.muted : paint(s.color) ?? HEX.ink) : s.color
+    const bg = s.bg ?? (code ? '#f4f2ed' : isDesk && s.chip && s.color ? DESK_SOFT[s.color] : undefined)
+    return (
+      <el.Text color={color} bold={s.bold} dimColor={isDesk ? undefined : s.dim} backgroundColor={bg} wrap="truncate">{s.text}</el.Text>
+    )
+  }
+  const chip = (t: string, color: string, bold = false): Seg =>
+    isDesk ? { text: ` ${t} `, color, chip: true, bold } : { text: t, color, bold }
   const render = (segs: Seg[]) => segs.map(s => (s.node ? s.node : text(s)))
   const note = (key: string, s: Seg) => <Box key={key}>{text({ ...s, text: clip(s.text ?? '', W) })}</Box>
 
-  // One line: the left segments are cut to what the right ones leave.
-  const line = (key: string, left: Seg[], right: Seg[] | undefined, width: number) => (
-    <Box key={key} justifyContent="space-between" gap={1} width={width}>
-      <Box gap={1} flexShrink={1}>{render(fit(left, right ? width - widthOf(right) - 1 : width))}</Box>
-      {right && <Box gap={1} flexShrink={0}>{render(right)}</Box>}
-    </Box>
-  )
+  // One line. `keep` cells of the left side (glyph and name) are never given to the right side,
+  // which is cut first; the left side is cut to what the right one leaves.
+  const keepOf = (left: Seg[], n: number) => widthOf(left.slice(0, n))
+  const line = (key: string, left: Seg[], right: Seg[] | undefined, width: number, keep = 0) => {
+    const rightFit = right ? fit(right, Math.max(0, width - keep - 1)) : undefined
+    const leftFit = fit(left, rightFit?.length ? width - widthOf(rightFit) - 1 : width)
+    return (
+      <Box key={key} justifyContent="space-between" gap={1} width={width}>
+        <Box gap={1} flexShrink={1}>{render(leftFit)}</Box>
+        {rightFit?.length ? <Box gap={1} flexShrink={0}>{render(rightFit)}</Box> : null}
+      </Box>
+    )
+  }
 
   const clockSeg = (key: string, since: number, endAt: number | null, color: string, bold = false): Seg => {
     if (since <= 0) return { text: '—', color }
-    if (hasClock) return { node: el.clock!({ key, width: 6, props: { since, now, endAt, color } }), w: 6 }
+    if (hasClock) return { node: el.clock!({ key, width: 6, props: { since, now, endAt, color: paint(color)! } }), w: 6 }
     return { text: fmtClock((endAt ?? now) - since), color, bold }
   }
 
-  // An active role gets the animated connector with the pulsing mark; the others a static mark.
-  const leadSeg = (key: string, slot: Slot, width: number): Seg => {
+  // The connector at the head of a role line, always LEAD cells wide: lit with packets while the
+  // role works, dim and still while idle, none when off. Pulse on the terminal only.
+  const LEAD = 4
+  const leadSeg = (key: string, slot: Slot): Seg => {
     const color = ENGINE_COLOR[slot.engine]
-    if (slot.state === 'active' && hasRail) {
+    if (slot.state === 'off') return { text: '⊘', dim: true }
+    const active = slot.state === 'active'
+    if (hasRail) {
       return {
         node: el.rail!({
-          key, width,
-          props: { active: true, width, color, dim: 'inactive', marks: [], isMerge: false, glyph: { on: '●', off: '○' } },
+          key, width: LEAD - 1,
+          props: {
+            active, width: LEAD - 1, color: paint(color)!, dim: paint('inactive')!, marks: [], isMerge: false,
+            glyph: { on: '●', off: '○' }, isPulse: !isDesk,
+          },
         }),
-        w: width + 1,
+        w: LEAD,
       }
     }
-    return slot.state === 'active' ? { text: '●', color: RUN }
-      : slot.state === 'off' ? { text: '⊘', dim: true } : { text: '○', dim: true }
+    return { text: `${active ? '●' : '○'}${'─'.repeat(LEAD - 1)}`, color: active ? color : undefined, dim: !active }
+  }
+
+  // One cell wide: just the pulsing mark, with no line and no 110 ms timer.
+  const pulseSeg = (key: string, slot: Slot): Seg => {
+    if (!hasRail) return { text: '●', color: RUN }
+    return {
+      node: el.rail!({
+        key, width: 1,
+        props: {
+          active: true, width: 1, color: ENGINE_COLOR[slot.engine], dim: 'inactive', marks: [], isMerge: false,
+          glyph: { on: '●', off: '○' }, isLine: false,
+        },
+      }),
+      w: 1,
+    }
   }
 
   const card = (key: string, children: unknown[], style: { border?: string; dim?: boolean; color?: string } = {}) => (
@@ -215,8 +349,9 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
       key={key}
       flexDirection="column"
       borderStyle={style.border ?? (isDesk ? 'round' : 'single')}
-      borderColor={style.color}
-      borderDimColor={style.dim}
+      borderColor={isDesk ? style.color ?? '#e1ded6' : style.color}
+      borderDimColor={isDesk ? undefined : style.dim}
+      backgroundColor={isDesk ? '#ffffff' : undefined}
       paddingX={1}
       width={W}
     >
@@ -235,27 +370,28 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
   )
   const header = () => {
     const c = roster.counts
+    const right: Seg[] = data.tab === 'agents'
+      ? W >= 58
+        ? [{ text: `${c.active} active`, color: RUN }, { text: `· ${c.idle} idle · ${c.off} off`, dim: true }]
+        : [{ text: `${c.active} active`, color: RUN }]
+      : W >= 60 ? [{ text: 'codex jobs · this session', dim: true }] : []
     return (
       <Box key="header" justifyContent="space-between" gap={1} width={W}>
         <Box gap={1} flexShrink={1}>
-          <Text bold color={ROUND}>{isDesk ? 'Pantheon' : 'PANTHEON'}</Text>
+          {text({ text: isDesk ? 'Pantheon' : 'PANTHEON', bold: true, color: ROUND })}
           {tabButton('agents', 'Agents')}
           {tabButton('jobs', `Jobs ${data.jobs.length}`)}
         </Box>
-        {data.tab === 'agents' ? (
-          <Box flexShrink={0}>
-            <Text color={RUN} wrap="truncate">{`${c.active} active`}</Text>
-            <Text dimColor wrap="truncate">{` · ${c.idle} idle · ${c.off} off`}</Text>
-          </Box>
-        ) : (
-          <Text dimColor wrap="truncate">codex jobs · this session</Text>
-        )}
+        {right.length ? <Box gap={1} flexShrink={0}>{render(right)}</Box> : null}
       </Box>
     )
   }
   const footer = () => note('footer', {
     dim: true,
-    text: data.tab === 'agents' ? '1 agents · 2 jobs · esc close' : '1 agents · 2 jobs · ↻ resumable · Copy = id + resume hint',
+    text: [
+      data.tab === 'agents' ? '1 agents · 2 jobs · esc close' : '1 agents · 2 jobs · ↻ resumable · Copy = id + resume hint',
+      data.clockLost ? 'clock unavailable' : undefined,
+    ].filter(Boolean).join(' · '),
   })
 
   // ------------------------------------------------------------ agents tab
@@ -298,7 +434,7 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     if (roster.delegating.length) {
       rows.push(line('o4', [{ text: 'delegating →', dim: true }, ...delegatingSegs()], undefined, IW))
     }
-    return card('orchestrator', rows, { color: 'inactive' })
+    return card('orchestrator', rows, { color: isDesk ? '#c9c4b8' : 'inactive' })
   }
 
   const instanceRows = (i: Instance, index: number, count: number): unknown[] => {
@@ -308,7 +444,7 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     const rounds = i.rounds.length
     const tags: Seg[] = [
       ...(i.status === 'background' ? [{ text: 'bg', dim: true }] : []),
-      ...(rounds > 1 ? [{ text: `↻ round ${rounds}`, color: ROUND, bold: true }] : []),
+      ...(rounds > 1 ? [chip(`↻ round ${rounds}`, ROUND, true)] : []),
     ]
     const pad = isDesk ? '' : `${stem}   `
     const out: unknown[] = [
@@ -341,13 +477,14 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     const live = activeOf(slot)
     const color = ENGINE_COLOR[slot.engine]
     const label = `${engineLabel(slot)}${slot.model ? ` · ${slot.model}` : ''}`
+    const left: Seg[] = [
+      leadSeg(`rail-${slot.name}`, slot),
+      { text: slot.name, bold: true, color },
+      ...(live.length > 1 ? [{ text: `×${live.length}`, bold: true }] : []),
+      isDesk ? chip(label, color) : { text: label, dim: true },
+    ]
     return card(`role-${slot.name}`, [
-      line(`${slot.name}-h`, [
-        leadSeg(`rail-${slot.name}`, slot, 3),
-        { text: slot.name, bold: true, color },
-        ...(live.length > 1 ? [{ text: `×${live.length}`, bold: true }] : []),
-        isDesk ? { text: ` ${label} `, color: 'inverseText', bg: color } : { text: label, dim: true },
-      ], [{ text: `${live.length} running`, color: RUN }], IW),
+      line(`${slot.name}-h`, left, [chip(`${live.length} running`, RUN)], IW, keepOf(left, live.length > 1 ? 3 : 2)),
       ...live.flatMap((i, k) => instanceRows(i, k, live.length)),
     ], { dim: true })
   }
@@ -366,13 +503,13 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
         ].filter(Boolean).join(' · '),
         dim: true,
       }]
-    return card(`role-${slot.name}`, [
-      line(`${slot.name}-h`, [
-        { text: isOff ? '⊘' : '○', dim: true },
-        { text: slot.name, color: isOff ? undefined : ENGINE_COLOR[slot.engine], dim: isOff },
-        ...(isOff ? [] : [{ text: engineLabel(slot), dim: true }]),
-      ], right, IW),
-    ], { dim: true, border: isOff ? 'dashed' : undefined })
+    const left: Seg[] = [
+      leadSeg(`rail-${slot.name}`, slot),
+      { text: slot.name, color: isOff ? undefined : ENGINE_COLOR[slot.engine], dim: isOff },
+      ...(isOff ? [] : [{ text: engineLabel(slot), dim: true }]),
+    ]
+    return card(`role-${slot.name}`, [line(`${slot.name}-h`, left, right, IW, keepOf(left, 2))],
+      { dim: true, border: isOff ? 'dashed' : undefined })
   }
 
   const othersLine = () => {
@@ -384,27 +521,42 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     ], undefined, W)
   }
 
+  // The orchestrator's connector to the first role: lit with packets while a turn runs.
+  const orchestratorLink = () => {
+    const running = data.session.isRunning
+    return (
+      <Box key="orch-link" paddingLeft={1}>
+        {hasRail
+          ? el.rail!({
+            key: 'rail-orchestrator', width: 1,
+            props: { active: running, width: 1, color: paint(ENGINE_COLOR.claude)!, dim: paint('inactive')!, marks: [], isMerge: false, vertical: true },
+          })
+          : text({ text: '│', color: running ? ENGINE_COLOR.claude : undefined, dim: !running })}
+      </Box>
+    )
+  }
+
   const agentsTab = () => {
     const live = roles.filter(s => s.state === 'active')
     const tail = roles.filter(s => s.state !== 'active')
-    // Rows the always-shown part takes; idle and off lines (3 rows each) fill what is left, from the top.
+    // Rows the always-shown part takes; idle and off cards (3 rows each) take what is left, in role order.
     const orchH = 4 + (data.session.context?.percent != null ? 1 : 0) + (roster.delegating.length ? 1 : 0)
     const liveH = live.reduce((n, s) => n + 3 + activeOf(s).reduce((m, i) => m + instanceHeight(i), 0), 0)
-    const used = 1 + orchH + liveH + (roster.others.length ? 1 : 0) + 1 + 2
+    const used = 1 + orchH + 1 + liveH + (roster.others.length ? 1 : 0) + 1 + 2
     let room = Math.floor((data.rows - used) / 3)
-    let shown = tail
     let hidden = 0
     if (room < tail.length) {
       room = Math.max(0, Math.floor((data.rows - used - 1) / 3))
-      shown = tail.slice(0, room)
       hidden = tail.length - room
     }
+    // Active roles always stay; the idle and off ones that fit are chosen from the top, and all are drawn in role order.
+    const chosen = new Set<string>([...live, ...tail.slice(0, room)].map(s => s.name))
     return [
       header(),
       isDesk && el.Svg ? timelineCard() : null,
       orchestratorCard(),
-      ...live.map(activeCard),
-      ...shown.map(idleCard),
+      orchestratorLink(),
+      ...roles.filter(s => chosen.has(s.name)).map(s => (s.state === 'active' ? activeCard(s) : idleCard(s))),
       hidden ? note('hidden', { dim: true, text: `+${hidden} idle or off · /pantheon to see all` }) : null,
       roster.others.length ? othersLine() : null,
       footer(),
@@ -414,85 +566,8 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
   // ------------------------------------------------------------ timeline (desktop)
   function timelineCard() {
     const Svg = el.Svg!
-    const span = 900_000
-    const t0 = now - span
-    const SW = 490
-    const x0 = 84
-    const x1 = 484
-    const xOf = (t: number) => x0 + ((Math.min(now, Math.max(t0, t)) - t0) / span) * (x1 - x0)
-    const hex = (e: Engine | 'mixed') => HEX[e]
-    const soft = (e: Engine) => (e === 'claude' ? HEX.claudeSoft : HEX.codexSoft)
-    const inWindow = (i: Instance) => i.rounds.some(r => (r.endedAt ?? now) >= t0)
-    const pitch = 28
-    const sub = 18
-    const lanes: { top: number; slot: Slot }[] = []
-    let y = 34
-    for (const slot of [orch, ...roles]) {
-      lanes.push({ top: y, slot })
-      y += pitch + sub * (Math.max(1, slot.instances.filter(inWindow).length) - 1)
-    }
-    const axisY = y + 8
-    const height = axisY + 14
-    let body = `<rect x="0.5" y="0.5" width="${SW - 1}" height="${height - 1}" rx="10" fill="${HEX.card}" stroke="${HEX.edge}"/>`
-    body += `<text x="14" y="21" font-size="13" font-weight="600" fill="${HEX.ink}">Last 15 minutes</text>`
-    body += `<text x="${SW - 14}" y="21" font-size="11" text-anchor="end" fill="${HEX.muted}">solid = running · outline = finished</text>`
-    for (const m of [0, 5, 10]) {
-      const gx = x0 + (m / 15) * (x1 - x0)
-      body += `<line x1="${gx}" y1="30" x2="${gx}" y2="${axisY - 14}" stroke="${HEX.grid}"/>`
-    }
-    body += `<line x1="${x1}" y1="30" x2="${x1}" y2="${axisY - 14}" stroke="${HEX.ink}" stroke-dasharray="3 3"/>`
-    for (const { top, slot } of lanes) {
-      const cy = top + 8
-      const n = activeOf(slot).length
-      const labelFill = slot.name === 'orchestrator' ? HEX.ink : slot.state === 'active' ? hex(slot.engine) : HEX.muted
-      body += `<text x="14" y="${cy + 3}" font-size="11" font-weight="${slot.state === 'active' ? 600 : 400}" fill="${labelFill}">${esc(n > 1 ? `${slot.name} ×${n}` : slot.name)}</text>`
-      if (slot.name === 'orchestrator') {
-        const s = data.session
-        if (s.turnStartedAt) {
-          const end = s.isRunning ? now : s.turnStartedAt + (s.lastTurnMs ?? 0)
-          if (end >= t0) {
-            body += `<rect x="${xOf(s.turnStartedAt)}" y="${top + 2}" width="${Math.max(3, xOf(end) - xOf(s.turnStartedAt))}" height="12" rx="3" fill="${s.isRunning ? HEX.ink : HEX.turn}"/>`
-          }
-        }
-        continue
-      }
-      if (slot.state === 'off') {
-        body += `<line x1="${x0}" y1="${cy}" x2="${x1}" y2="${cy}" stroke="${HEX.dot}" stroke-dasharray="1 4"/>`
-        body += `<rect x="${x0 + 6}" y="${cy - 8}" width="28" height="15" rx="7" fill="${HEX.pill}"/><text x="${x0 + 20}" y="${cy + 3}" text-anchor="middle" font-size="10" font-weight="600" fill="${HEX.muted}">off</text>`
-        continue
-      }
-      const seen = slot.instances.filter(inWindow)
-      if (!seen.length) {
-        body += `<text x="${x0 + 6}" y="${cy + 3}" font-size="10" fill="${HEX.muted}">${slot.lastEndedAt !== undefined ? `last run ${ago(now - slot.lastEndedAt)} ago` : 'idle'}</text>`
-        continue
-      }
-      seen.forEach((i, k) => {
-        const by = top + 2 + k * sub
-        const rounds = i.rounds.filter(r => (r.endedAt ?? now) >= t0)
-        rounds.forEach((r, m) => {
-          const ex = xOf(r.endedAt ?? now)
-          const sx = xOf(r.startedAt)
-          const w = Math.max(3, ex - sx)
-          body += r.endedAt === undefined && i.isActive
-            ? `<rect x="${sx}" y="${by}" width="${w}" height="12" rx="3" fill="${hex(i.engine)}"/>`
-            : `<rect x="${sx}" y="${by}" width="${w}" height="12" rx="3" fill="${soft(i.engine)}" stroke="${hex(i.engine)}"/>`
-          if (i.rounds.length > 1) {
-            body += `<text x="${sx + w / 2}" y="${by - 2}" text-anchor="middle" font-size="9" font-weight="600" fill="${HEX.amber}">r${i.rounds.indexOf(r) + 1}</text>`
-          }
-          const next = rounds[m + 1]
-          if (next) body += `<line x1="${ex}" y1="${by + 6}" x2="${xOf(next.startedAt)}" y2="${by + 6}" stroke="${hex(i.engine)}" stroke-dasharray="2 3"/>`
-        })
-        if (seen.length > 1) {
-          body += `<text x="${xOf(rounds[0].startedAt) - 5}" y="${by + 10}" text-anchor="end" font-size="10" font-family="monospace" fill="${HEX.ink}">${esc(i.id)}</text>`
-        }
-      })
-    }
-    for (const [m, label] of [[0, '−15m'], [5, '−10m'], [10, '−5m']] as const) {
-      body += `<text x="${x0 + (m / 15) * (x1 - x0)}" y="${axisY}" text-anchor="middle" font-size="10" fill="${HEX.muted}">${label}</text>`
-    }
-    body += `<text x="${x1}" y="${axisY}" text-anchor="end" font-size="10" font-weight="600" fill="${HEX.ink}">now</text>`
-    const source = `<svg xmlns="http://www.w3.org/2000/svg" width="${SW}" height="${height}" viewBox="0 0 ${SW} ${height}" font-family="sans-serif">${body}</svg>`
-    return <Svg key="timeline" source={source} alt="Last 15 minutes: one lane per role, a bar for each run" width={SW} height={height} />
+    const { source, width, height } = timelineSource(roster.slots, data.session, now)
+    return <Svg key="timeline" source={source} alt="Last 15 minutes: one lane per role, a bar for each run" width={width} height={height} />
   }
 
   // ------------------------------------------------------------ jobs tab
@@ -544,7 +619,7 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     }
     const group = (key: string, list: Job[], total: number) => (
       <Box key={key} flexDirection="column">
-        <Box gap={1} paddingX={1}><Text bold>{key}</Text><Text dimColor>{String(total)}</Text></Box>
+        <Box gap={1} paddingX={1}>{render([{ text: key, bold: true }, { text: String(total), dim: true }])}</Box>
         {card(`${key}-card`, list.map(jobRows), { dim: true })}
       </Box>
     )
@@ -563,7 +638,10 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     const s = data.session
     const live = roles.filter(r => r.state === 'active')
     const quiet = roles.filter(r => r.state !== 'active')
-    const capacity = Math.max(1, Math.min(8, data.rows) - 2)
+    // At most 8 lines: the orchestrator, the active roles and a last line. The orchestrator counts
+    // among the active, so six lines at most are active ones and the rest collapse into "+N".
+    const avail = Math.max(1, Math.min(8, data.rows))
+    const capacity = Math.max(0, Math.min(5, avail - 2))
     const shown = live.slice(0, capacity)
     const delegating = delegatingSegs()
     const lines: unknown[] = []
@@ -583,20 +661,8 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
 
     for (const slot of shown) {
       const act = activeOf(slot)
-      const color = ENGINE_COLOR[slot.engine]
       const per = Math.floor((W - 14) / act.length)
-      const segs: Seg[] = [
-        hasRail
-          ? {
-            node: el.rail!({
-              key: `mrail-${slot.name}`, width: 1,
-              props: { active: true, width: 1, color, dim: 'inactive', marks: [], isMerge: false, glyph: { on: '●', off: '○' } },
-            }),
-            w: 2,
-          }
-          : { text: '●', color: RUN },
-        { text: slot.name.padEnd(9), color },
-      ]
+      const segs: Seg[] = [pulseSeg(`mpulse-${slot.name}`, slot), { text: slot.name.padEnd(9), color: ENGINE_COLOR[slot.engine] }]
       act.forEach((i, k) => {
         if (k) segs.push({ text: '│', dim: true })
         const tags = (i.status === 'background' ? 3 : 0) + (i.rounds.length > 1 ? 6 : 0)
@@ -609,16 +675,19 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
       lines.push(line(`m-${slot.name}`, segs, undefined, W))
     }
 
+    // With one or no spare line the last line goes first, and with a single line the orchestrator's alone.
     const more = live.length - shown.length
-    lines.push(line('m-last', [
-      ...(more > 0 ? [{ text: `+${more} active`, color: RUN }] : []),
-      ...quiet.map((r): Seg => r.state === 'off'
-        ? { text: `⊘ ${r.name} off`, dim: true }
-        : { text: `○ ${r.name}${r.lastEndedAt !== undefined ? ` ${ago(now - r.lastEndedAt)} ago` : ''}`, dim: true }),
-    ], [{ text: '/pantheon for details', dim: true }], W))
+    if (avail >= 2) {
+      lines.push(line('m-last', [
+        ...(more > 0 ? [{ text: `+${more} active`, color: RUN }] : []),
+        ...quiet.map((r): Seg => r.state === 'off'
+          ? { text: `⊘ ${r.name} off`, dim: true }
+          : { text: `○ ${r.name}${r.lastEndedAt !== undefined ? ` ${ago(now - r.lastEndedAt)} ago` : ''}`, dim: true }),
+      ], [{ text: '/pantheon for details', dim: true }], W, 0))
+    }
     return lines
   }
 
   const children = layout === 'mini' ? mini() : data.tab === 'jobs' ? jobsTab() : agentsTab()
-  return <Box flexDirection="column" width={W}>{children}</Box>
+  return <Box flexDirection="column" width={W} backgroundColor={isDesk ? DESK_PANEL : undefined}>{children}</Box>
 }

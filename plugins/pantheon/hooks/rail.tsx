@@ -11,6 +11,10 @@ export type RailProps = {
   isMerge: boolean
   vertical?: boolean
   glyph?: { on: string; off: string }
+  // Both default to true. Without the line only the glyph is drawn, with no 110 ms timer;
+  // without the pulse the glyph stays steady, with no 600 ms timer.
+  isLine?: boolean
+  isPulse?: boolean
 }
 
 type Ref = { phase: number; tick: number; active: boolean }
@@ -40,22 +44,28 @@ const Rail: ClientModule<RailProps, State> = (props, surface) => {
   ref.active = props.active
   if (surface.state === undefined) {
     surface.setState({ ref })
-    surface.every(110, () => {
-      if (ref.active) {
-        ref.phase += 1
-        surface.setState({ ref })
-      }
-    })
-    surface.every(600, () => {
-      if (ref.active) {
-        ref.tick += 1
-        surface.setState({ ref })
-      }
-    })
+    if (props.isLine !== false) {
+      surface.every(110, () => {
+        if (ref.active) {
+          ref.phase += 1
+          surface.setState({ ref })
+        }
+      })
+    }
+    if (props.isPulse !== false) {
+      surface.every(600, () => {
+        if (ref.active) {
+          ref.tick += 1
+          surface.setState({ ref })
+        }
+      })
+    }
   }
 
-  const width = Math.max(1, props.vertical ? props.width : surface.columns || props.width)
-  const cells = railCells(width, props.active ? ref.phase : -1, props.marks, props.isMerge)
+  // The region's columns hold the glyph cell too: the line takes what is left, so a fixed region stays fixed.
+  const glyphCells = props.glyph && !props.vertical ? 1 : 0
+  const width = Math.max(1, props.vertical ? props.width : surface.columns ? surface.columns - glyphCells : props.width)
+  const cells = props.isLine === false ? [] : railCells(width, props.active ? ref.phase : -1, props.marks, props.isMerge)
   // Horizontal runs share a Text; vertical cells each take one row.
   const runs: { text: string; isLit: boolean }[] = []
   for (const cell of cells) {
@@ -67,7 +77,7 @@ const Rail: ClientModule<RailProps, State> = (props, surface) => {
   return (
     <Box flexDirection={props.vertical ? 'column' : 'row'}>
       {props.glyph && (
-        <Text color={props.color} bold={props.active && pulseOn(ref.tick)}>
+        <Text color={props.color} bold={props.active && props.isPulse !== false && pulseOn(ref.tick)}>
           {props.active ? props.glyph.on : props.glyph.off}
         </Text>
       )}

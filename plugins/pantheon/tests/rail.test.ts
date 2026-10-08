@@ -74,3 +74,30 @@ test('leading state glyph pulses in the caller color and settles when inactive',
   expect(stopped).toContain('■')
   expect(stopped).not.toContain('▶')
 })
+
+test('the line fills the region beside the glyph, so a fixed region stays fixed', () => {
+  const fake = fakeSurface()
+  fake.surface.columns = 12
+  const glyph = { on: '●', off: '○' }
+  for (let k = 0; k < 4; k++) {
+    const tree = Rail({ ...props, width: 11, glyph, active: false }, fake.surface as never) as { props: { children: unknown } }
+    const text = JSON.stringify(tree)
+    expect((text.match(/─/g) ?? []).length).toBe(11)
+    expect(text).toContain('○')
+    fake.timers.forEach(timer => timer.fn())
+  }
+})
+
+test('without the line only the pulse timer runs, without the pulse only the line timer', () => {
+  const pulseOnly = fakeSurface()
+  const glyph = { on: '●', off: '○' }
+  const tree = JSON.stringify(Rail({ ...props, width: 1, glyph, isLine: false }, pulseOnly.surface as never))
+  expect(pulseOnly.timers.map(timer => timer.ms)).toEqual([600])
+  expect(tree).toContain('●')
+  expect(tree).not.toContain('─')
+  const lineOnly = fakeSurface()
+  Rail({ ...props, glyph, isPulse: false }, lineOnly.surface as never)
+  expect(lineOnly.timers.map(timer => timer.ms)).toEqual([110])
+  const steady = JSON.stringify(Rail({ ...props, glyph, isPulse: false }, lineOnly.surface as never))
+  expect(steady).not.toContain('"bold":true,"children":"●"')
+})
