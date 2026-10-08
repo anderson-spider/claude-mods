@@ -1,5 +1,6 @@
 import type { On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
+import type { Engine } from 'claude-code/testing'
 
 import {
   DEFAULT_ARCHITECT,
@@ -7,6 +8,9 @@ import {
   DEFAULT_TURN,
   afterCall,
   applyStep,
+  codexCard,
+  jobsOf,
+  withJobs,
   consultTimeline,
   describeInput,
   endConsult,
@@ -184,11 +188,12 @@ test('layout math: lanes share one axis, the log gets 4-8 rows, the legend never
 
 // ---------------------------------------------------------------- drawing
 
-const engine = (on: On) => {
-  mock.clock(on)
+const engine = (on: On, now = 0) => {
+  const clock = mock.clock(on, { now })
   on('ui.status', () => ({ value: undefined }))
   on('turn.start', (_$, e) => ({ turnId: e.turnId }))
   on('turn.complete', () => ({ text: '' }))
+  return clock
 }
 
 const pane = (bodyColumns: number) => ({
@@ -417,5 +422,89 @@ test("a background architect's advice is read from its hand-back", async ($, on)
   })
   const ui = await $.ui.mount({ ...pane(64), surface: 'terminal' })
   expect(await ui.find({ text: /» Ship it after one more gate test\./ })).toBeDefined()
+  await ui.unmount()
+})
+
+// ---------------------------------------------------------------- codex jobs (pantheon)
+
+const job = (over: Record<string, unknown>) => ({ id: 'j1', agent: 'explorer', status: 'running', startedAt: 1000, cwd: '/repo', ...over })
+
+test('codex jobs are read leniently and become cards on the same axis', () => {
+  expect(jobsOf(undefined)).toEqual([])
+  expect(jobsOf([{ id: 'x' }, job({ status: 'weird' }), job({})]).map(j => j.id)).toEqual(['j1'])
+  const running = codexCard(jobsOf([job({ status: 'background', lastActivity: 'reading src\nmore' })])[0]!)
+  expect([running.id, running.type, running.status, running.endedAt]).toEqual(['codex-j1', 'codex:explorer', 'running', null])
+  expect(running.codex).toEqual({ mode: 'background', hasClock: true, activity: 'reading src' })
+  const lost = codexCard(jobsOf([job({ status: 'lost' })])[0]!)
+  expect([lost.status, lost.endedAt, lost.codex.mode, lost.codex.hasClock]).toEqual(['lost', 1000, 'lost', false])
+  const failed = codexCard(jobsOf([job({ status: 'error', endedAt: 1500, error: 'boom\ntrace' })])[0]!)
+  expect([failed.status, failed.endedAt, failed.codex.activity]).toEqual(['failed', 1500, 'error: boom'])
+  const sub = { ...normalizeCard({}), id: 'a', spawnedAt: 1200 }
+  expect(withJobs([sub], jobsOf([job({})])).map(c => c.id)).toEqual(['codex-j1', 'a'])
+  expect(withJobs([sub], [])).toEqual([sub])
+})
+
+// An inline pantheon plugin that owns `pantheon.jobs`. Its source is loaded on its own (it closes
+// over nothing), so the jobs reach it as the JSON text of a turn: `jobs:[...]`.
+const withPantheon = {
+  plugins: [
+    {
+      name: 'pantheon',
+      register: ((onP: On) => {
+        onP('turn.start', async ($p, e, next) => {
+          if (e.text?.startsWith('jobs:')) await $p.state.set({ plugin: 'pantheon', key: 'jobs' } as never, JSON.parse(e.text.slice(5)) as never)
+          return next(e)
+        })
+      }) as never,
+    },
+  ],
+}
+const seedJobs = ($: Engine, jobs: unknown[]) =>
+  $.turn.start({ text: `jobs:${JSON.stringify(jobs)}`, turnId: `J${jobs.length}` })
+
+const twoJobs = [
+  job({ id: 'j1', description: 'Map auth flow', status: 'background', model: 'gpt-6' }),
+  job({ id: 'j2', agent: 'fixer', description: 'Fix the parser', status: 'lost', startedAt: 1100 }),
+]
+
+test('codex jobs draw as cards with their marks, and expand on their hotkey', withPantheon, async ($, on) => {
+  engine(on)
+  await seedJobs($, twoJobs)
+  const ui = await $.ui.mount({ ...pane(64), surface: 'terminal' })
+  expect((await ui.find({ key: 'card-codex-j1' }))?.props.label).toContain('Map auth')
+  expect(await ui.find({ text: /codex bg/ })).toBeDefined()
+  expect(await ui.find({ text: /codex lost/ })).toBeDefined()
+  expect(await ui.find({ text: /codex:fixer/ })).toBeDefined()
+  expect(await ui.find({ text: /^ codex$/ })).toBeDefined() // legend
+  await ui.press({ key: 'card-codex-j1' })
+  expect(await ui.find({ text: /codex:explorer · gpt-6 · running · codex bg/ })).toBeDefined()
+  await ui.unmount()
+})
+
+const laneJobs = [job({ id: 'j1', description: 'Codex task', status: 'done', endedAt: 1500 }), job({ id: 'j2', status: 'running' })]
+
+test('codex jobs and subagents share the swimlanes past the card limit', withPantheon, async ($, on) => {
+  const clock = engine(on, 2000)
+  let n = 0
+  on('agent.spawn', () => ({ model: 'claude-sonnet-5-5', agentId: `s${++n}` }))
+  await seedJobs($, laneJobs)
+  await $.turn.start({ text: 'go', turnId: 'S1' })
+  await $.agent.spawn(spawn('general-purpose', 'Write the tests'))
+  await $.agent.spawn(spawn('Explore', 'Map the calls'))
+  await clock.advance(1000)
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ ...pane(64), surface })
+    expect(await ui.find({ text: /4 total/ })).toBeDefined()
+    expect(await ui.find({ text: /╍/ })).toBeDefined()
+    expect(await ui.find({ text: /━/ })).toBeDefined()
+    await ui.unmount()
+  }
+})
+
+test('without pantheon the pane draws as before', async ($, on) => {
+  engine(on)
+  const ui = await $.ui.mount({ ...pane(64), surface: 'terminal' })
+  expect(await ui.find({ text: /^ codex$/ })).toBeUndefined()
+  expect(await ui.find({ text: /agents ·/ })).toBeUndefined()
   await ui.unmount()
 })

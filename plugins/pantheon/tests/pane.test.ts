@@ -23,16 +23,14 @@ function command($: Engine, args: string) {
 
 describe('pane', () => {
   for (const surface of SURFACES) {
-    test(`pane lists codex jobs with status, model and resumable flag (${surface})`, async ($, on) => {
+    test(`pane lists codex jobs with status, role and resumable mark (${surface})`, async ($, on) => {
       world(on)
       await start($)
       const out = parse(await $.tool.call({ tool: DELEGATE, agent: 'explorer', prompt: 'x', description: 'map auth' } as never))
       const ui = await mountPane($, surface)
       const row = await ui.find({ type: 'Text', text: String(out.jobId) })
-      expect(row?.text).toContain('done')
-      expect(row?.text).toContain('gpt-6-luna')
-      expect(row?.text).toContain('retomável')
-      expect(row?.text).toContain('map auth')
+      expect(row?.text).toBe(`${out.jobId} · done · explorer · ↻ — map auth`)
+      expect(await ui.find({ type: 'Text', text: 'delegate({ resume: jobId })' })).toBeDefined()
       expect(await ui.find({ key: `copy-${out.jobId}` })).toBeDefined()
       expect(await ui.find({ key: `cancel-${out.jobId}` })).toBeUndefined()
     })
@@ -47,18 +45,12 @@ describe('pane', () => {
       expect(read.status).toBe('cancelled')
     })
 
-    test(`native pantheon agents appear without buttons (${surface})`, async ($, on) => {
-      world(on, {
-        natives: [
-          { id: 'n1', type: 'pantheon:oracle', status: 'running', description: 'review plan' },
-          { id: 'n2', type: 'Explore', status: 'running', description: 'other' },
-        ],
-      })
+    test(`the pane holds only codex jobs, not native agents (${surface})`, async ($, on) => {
+      world(on)
       await start($)
       const ui = await mountPane($, surface)
-      const row = await ui.find({ type: 'Text', text: 'pantheon:oracle' })
-      expect(row?.text).toContain('review plan')
-      expect(await ui.find({ type: 'Text', text: 'Explore' })).toBeUndefined()
+      expect((await ui.find({ type: 'Text', text: 'Nenhum job' }))).toBeDefined()
+      expect(await ui.find({ type: 'Text', text: 'retomável' })).toBeUndefined()
       expect(await ui.findAll({ type: 'Button' })).toEqual([])
     })
   }

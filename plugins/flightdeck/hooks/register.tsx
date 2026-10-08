@@ -16,6 +16,9 @@ import {
   applyStep,
   bucketOf,
   cardTitle,
+  isCodex,
+  jobsOf,
+  withJobs,
   titleLines,
   consultTimeline,
   describeInput,
@@ -76,6 +79,9 @@ const turn = atom({ plugin: 'flightdeck', key: 'turn' } as const, DEFAULT_TURN)
 const receipt = atom({ plugin: 'flightdeck', key: 'receipt' } as const, null)
 const view = atom({ plugin: 'flightdeck', key: 'view' } as const, DEFAULT_VIEW)
 const roster = atom({ plugin: 'flightdeck', key: 'roster' } as const, DEFAULT_ROSTER)
+// The pantheon plugin's Codex jobs, read only. Pantheon is optional (not a dependency), so its
+// contract is not laid in this plugin's types: the read is untyped and jobsOf checks the shape.
+const pantheonJobs = { plugin: 'pantheon', key: 'jobs' } as const
 
 type ServerBlock = { type: string; id?: string; name?: string; tool_use_id?: string }
 
@@ -521,12 +527,13 @@ export const register: Register = (on, options) => {
     const els = $.ui.resolve(e)
     const { Box, Text, Button } = els
     const hasClient = 'Client' in els
-    const [m, u, a, g, cards, lp, lines, t, r, v, now] = await Promise.all([
+    const [m, u, a, g, subagents, jobs, lp, lines, t, r, v, now] = await Promise.all([
       getMain($),
       getUsage($),
       getArchitect($),
       getGate($),
       getCards($),
+      $.state.get(pantheonJobs as never).then(x => jobsOf((x as { value?: unknown }).value)).catch(() => []),
       getLoops($),
       getLog($),
       getTurn($),
@@ -534,6 +541,9 @@ export const register: Register = (on, options) => {
       getView($),
       $.clock.now(),
     ])
+    // Codex jobs share the subagents' panel and time axis; they are drawn, never stored.
+    const cards = withJobs(subagents, jobs)
+    const hasCodex = jobs.length > 0
     const W = Math.max(40, e.props.bodyColumns)
     const layout = v.layout ?? cfg.layout
     const isWide = layout === 'wide' || (layout === 'auto' && W >= 110)
@@ -744,8 +754,15 @@ export const register: Register = (on, options) => {
     }
 
     // ---- agents: cards up to the limit, swimlanes beyond it
-    const statusColor = (c: AgentCard) => (c.status === 'failed' ? C.warn : c.status === 'done' ? C.gate : C.agent)
-    const glyph = (c: AgentCard) => (c.status === 'running' ? '◐' : c.status === 'done' ? '✓' : c.status === 'failed' ? '✗' : '■')
+    const statusColor = (c: AgentCard) =>
+      c.status === 'failed' || c.status === 'lost' ? C.warn : c.status === 'done' ? C.gate : isCodex(c) ? C.cleared : C.agent
+    const glyph = (c: AgentCard) =>
+      c.status === 'running' ? '◐' : c.status === 'done' ? '✓' : c.status === 'failed' ? '✗' : c.status === 'lost' ? '?' : '■'
+    // A Codex job's marks: always `codex`, then `bg` while it runs in the background, `lost` once its process is gone.
+    const codexMark = (c: AgentCard) =>
+      !isCodex(c) ? '' : c.codex.mode === 'background' ? 'codex bg' : c.codex.mode === 'lost' ? 'codex lost' : 'codex'
+    const cardClock = (key: string, c: AgentCard) =>
+      isCodex(c) && !c.codex.hasClock ? <Text color={C.dim}>—</Text> : clock(key, c.spawnedAt, c.endedAt, C.dim)
     const expandOnPress = (id: string) => () =>
       update($, view, x => ({ ...normalize(DEFAULT_VIEW, x), expanded: normalize(DEFAULT_VIEW, x).expanded === id ? null : id }))
 
@@ -769,7 +786,7 @@ export const register: Register = (on, options) => {
       }
       if (useLanes) {
         const shown = cards.slice(-6)
-        const barW = Math.max(8, w - 28)
+        const barW = Math.max(8, w - (shown.some(isCodex) ? 39 : 28))
         const geo = lanes(shown, now, barW)
         return (
           <Box flexDirection="column" width={w}>
@@ -785,9 +802,10 @@ export const register: Register = (on, options) => {
                     <Button key={`card-${c.id}`} plain hotkey={String(i + 1)} label={shorten(cardTitle(c), 14)} onPress={expandOnPress(c.id)} />
                   </Box>
                   <Text color={C.faint}>{' ' + '·'.repeat(gm?.before ?? 0)}</Text>
-                  <Text color={statusColor(c)}>{'━'.repeat(gm?.bar ?? 1)}</Text>
+                  <Text color={statusColor(c)}>{(isCodex(c) ? '╍' : '━').repeat(gm?.bar ?? 1)}</Text>
                   <Text color={C.faint}>{'·'.repeat(gm?.after ?? 0) + ' '}</Text>
-                  {clock(`lane-clock-${c.id}`, c.spawnedAt, c.endedAt, C.dim)}
+                  {cardClock(`lane-clock-${c.id}`, c)}
+                  {isCodex(c) ? <Text color={C.cleared}>{` ${codexMark(c)}`}</Text> : null}
                 </Box>
               )
             })}
@@ -809,7 +827,7 @@ export const register: Register = (on, options) => {
                 <Box
                   flexDirection="column"
                   borderStyle={isViewed ? 'double' : 'round'}
-                  borderColor={c.lastStop === 'max_tokens' ? C.warn : C.agent}
+                  borderColor={c.lastStop === 'max_tokens' ? C.warn : isCodex(c) ? C.cleared : C.agent}
                   borderDimColor={c.status !== 'running' && !isViewed}
                   width={cardW}
                   paddingX={1}
@@ -819,16 +837,23 @@ export const register: Register = (on, options) => {
                     {titleLines(cardTitle(c), cardW - 7, cardW - 4)[1]}
                   </Text>
                   <Text color={C.dim} wrap="truncate">
-                    {sameModel ? c.type : `${c.type} · ${prettyModel(c.model)}`}
+                    {sameModel || isCodex(c) ? c.type : `${c.type} · ${prettyModel(c.model)}`}
                   </Text>
                   <Text dimColor wrap="truncate">
-                    {c.steps > 0 ? `ctx ${kTokens(c.ctx)} · out ${kTokens(c.out)} · ${c.steps} st` : 'starting…'}
+                    {isCodex(c)
+                      ? c.out > 0 || c.ctx > 0
+                        ? `in ${kTokens(c.ctx)} · out ${kTokens(c.out)}${c.model ? ` · ${c.model}` : ''}`
+                        : c.codex.activity || c.model || (c.status === 'running' ? 'starting…' : '—')
+                      : c.steps > 0
+                        ? `ctx ${kTokens(c.ctx)} · out ${kTokens(c.out)} · ${c.steps} st`
+                        : 'starting…'}
                   </Text>
                   <Box>
                     <Text color={c.lastStop === 'max_tokens' ? C.warn : statusColor(c)}>
                       {cardW >= 26 ? `${glyph(c)} ${c.lastStop === 'max_tokens' ? 'max_tokens' : c.status} ` : `${glyph(c)} `}
                     </Text>
-                    <Box flexShrink={0}>{clock(`card-clock-${c.id}`, c.spawnedAt, c.endedAt, C.dim)}</Box>
+                    <Box flexShrink={0}>{cardClock(`card-clock-${c.id}`, c)}</Box>
+                    {isCodex(c) ? <Text color={C.cleared} wrap="truncate">{` ${codexMark(c)}`}</Text> : null}
                   </Box>
                 </Box>
               )
@@ -846,8 +871,15 @@ export const register: Register = (on, options) => {
           <Text bold wrap="wrap">
             {expandedCard.description || expandedCard.type}
           </Text>
-          <Text dimColor wrap="truncate">{`${expandedCard.type} · ${prettyModel(expandedCard.model)} · ${expandedCard.status} · ${expandedCard.steps} steps`}</Text>
-          {expandedCard.tools.length === 0 ? <Text color={C.faint}>no tool calls yet</Text> : null}
+          {isCodex(expandedCard) ? (
+            <Text dimColor wrap="truncate">{`${expandedCard.type} · ${expandedCard.model || 'default model'} · ${expandedCard.status} · ${codexMark(expandedCard)}`}</Text>
+          ) : (
+            <Text dimColor wrap="truncate">{`${expandedCard.type} · ${prettyModel(expandedCard.model)} · ${expandedCard.status} · ${expandedCard.steps} steps`}</Text>
+          )}
+          {isCodex(expandedCard) && expandedCard.codex.activity ? (
+            <Text color={expandedCard.status === 'failed' ? C.warn : C.text} wrap="truncate">{`· ${expandedCard.codex.activity}`}</Text>
+          ) : null}
+          {!isCodex(expandedCard) && expandedCard.tools.length === 0 ? <Text color={C.faint}>no tool calls yet</Text> : null}
           {expandedCard.tools.map(n => (
             <Text color={n.isError ? C.warn : C.text} wrap="truncate">
               {`${n.isError ? '✗' : '·'} ${n.text}`}
@@ -980,7 +1012,7 @@ export const register: Register = (on, options) => {
                 const gm = geo[i]
                 const x = 150 + ((gm?.before ?? 0) / 100) * (pxW - 160)
                 const wpx = Math.max(3, ((gm?.bar ?? 1) / 100) * (pxW - 160))
-                const fill = c.status === 'running' ? SVG_COLORS.running : c.status === 'done' ? SVG_COLORS.done : c.status === 'failed' ? SVG_COLORS.failed : SVG_COLORS.other
+                const fill = isCodex(c) && c.status === 'running' ? SVG_COLORS.codex : c.status === 'running' ? SVG_COLORS.running : c.status === 'done' ? SVG_COLORS.done : c.status === 'failed' ? SVG_COLORS.failed : SVG_COLORS.other
                 const label = shorten(cardTitle(c), 22).replace(/[<&>]/g, '')
                 return `<text x="4" y="${i * rowH + 13}" font-size="11" fill="${SVG_COLORS.label}">${label}</text><rect x="${x}" y="${i * rowH + 4}" width="${wpx}" height="10" rx="3" fill="${fill}"/>`
               })
@@ -1038,8 +1070,8 @@ export const register: Register = (on, options) => {
               <Box width={Math.max(10, W - 30)}>
                 <Text wrap="truncate">{cardTitle(c)}</Text>
               </Box>
-              <Text dimColor>{c.steps > 0 ? ` ctx ${kTokens(c.ctx)} ` : ' '}</Text>
-              {clock(`mini-clock-${c.id}`, c.spawnedAt, c.endedAt, C.dim)}
+              <Text dimColor>{isCodex(c) ? ` ${codexMark(c)} ` : c.steps > 0 ? ` ctx ${kTokens(c.ctx)} ` : ' '}</Text>
+              {cardClock(`mini-clock-${c.id}`, c)}
             </Box>
           ))}
           {cards.length > live.length ? (
@@ -1059,6 +1091,7 @@ export const register: Register = (on, options) => {
       [
         { label: 'main', color: C.main },
         { label: 'agents', color: C.agent },
+        ...(hasCodex ? [{ label: 'codex', color: C.cleared }] : []),
         { label: cfg.gateLabel.toLowerCase(), color: C.gate },
         ...(showArchitect ? [{ label: cfg.architectLabel.toLowerCase(), color: C.arch }] : []),
       ],

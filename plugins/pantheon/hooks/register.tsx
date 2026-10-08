@@ -370,11 +370,8 @@ export const register: Register = on => {
   on('ui.render', { component: 'Pane', requestId: PANE_ID }, async ($, e) => {
     const { Box, Text, Button } = $.ui.resolve(e)
     const list = await read($, jobsAtom)
-    const natives = (await $.agent.list()).filter(agent => agent.type.startsWith('pantheon:'))
     return drawPane({ Box, Text, Button } as never, {
       jobs: list,
-      natives,
-      now: await $.clock.now(),
       rows: e.viewport?.rows ?? 24,
       onCancel: jobId => { jobs?.cancel(jobId) },
       onCopy: (text, surface) => { void $.ui.copy({ text, surface }) },
