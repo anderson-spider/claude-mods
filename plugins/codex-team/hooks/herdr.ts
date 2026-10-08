@@ -1,5 +1,6 @@
 import { HerdrError } from './model'
-import type { AgentState, Herdr, Run, Settled } from './model'
+import type { AgentState, Engine, Herdr, Run, Settled } from './model'
+import { ENGINES, PROFILES } from './engines'
 import { isAgentName } from './names'
 import { messageOf } from './text'
 
@@ -74,8 +75,8 @@ export function herdrOf(run: Run, options: { pane: string; cwd: string }): Herdr
       }
     },
 
-    async start(name, pane, args) {
-      await exec(['agent', 'start', name, '--kind', 'codex', '--pane', pane, '--', ...args])
+    async start(name, pane, engine, args) {
+      await exec(['agent', 'start', name, '--kind', engine, '--pane', pane, '--', ...args])
     },
 
     async prompt(name, text, timeoutMs) {
@@ -124,10 +125,17 @@ export function herdrOf(run: Run, options: { pane: string; cwd: string }): Herdr
 /** Why the plugin cannot run here, or undefined when it can. */
 export async function herdrAvailable(run: Run, env: { HERDR_ENV?: string }): Promise<string | undefined> {
   if (env.HERDR_ENV !== '1') return 'Not running inside Herdr (HERDR_ENV is not 1): codex-team needs Claude Code in a Herdr pane.'
-  for (const tool of ['herdr', 'codex']) {
-    if (await versionOf(argv => run(argv, { timeoutMs: 15_000 }).catch(() => undefined), tool) === undefined) return `${tool} is not installed or not in PATH.`
-  }
+  if (await versionOf(argv => run(argv, { timeoutMs: 15_000 }).catch(() => undefined), 'herdr') === undefined) return 'herdr is not installed or not in PATH.'
   return undefined
+}
+
+/** The engines whose executable does not answer `--version`: a job asking for one is refused. */
+export async function missingEngines(run: Run): Promise<Engine[]> {
+  const missing: Engine[] = []
+  for (const engine of ENGINES) {
+    if (await versionOf(argv => run(argv, { timeoutMs: 15_000 }).catch(() => undefined), PROFILES[engine].binary) === undefined) missing.push(engine)
+  }
+  return missing
 }
 
 /** The first line of `<tool> --version`, or undefined when the tool did not answer or failed. */

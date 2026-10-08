@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import { HerdrError } from '../hooks/model'
-import { herdrAvailable, versionOf } from '../hooks/herdr'
+import { herdrAvailable, missingEngines, versionOf } from '../hooks/herdr'
 import { owns } from '../hooks/identity'
 import { fakeRun, agent, adapter } from './helpers'
 
@@ -48,7 +48,7 @@ test('herdrOf ignores a pane that is already gone but propagates other close err
 
 test('herdrOf starts Codex with its own arguments after --', async () => {
   const { herdr, argvs } = adapter({})
-  await herdr.start('ct-1', 'w1:p2', ['-s', 'read-only', '-a', 'on-request'])
+  await herdr.start('ct-1', 'w1:p2', 'codex', ['-s', 'read-only', '-a', 'on-request'])
   expect(argvs[0]).toEqual(['herdr', 'agent', 'start', 'ct-1', '--kind', 'codex', '--pane', 'w1:p2', '--', '-s', 'read-only', '-a', 'on-request'])
 })
 
@@ -100,7 +100,7 @@ test('herdrOf notifies and annotates with one argv element per value and the cod
 
 test('herdrOf turns a CLI error into a HerdrError with its code', async () => {
   const { herdr } = adapter({ 'agent start': { exitCode: 1, stderr: '{"error":{"code":"agent_not_ready","message":"blocked at startup"},"id":"x"}' }, 'agent wait': { exitCode: 1, stdout: 'not json at all' } })
-  const started = await herdr.start('ct-1', 'w1:p2', []).catch(e => e)
+  const started = await herdr.start('ct-1', 'w1:p2', 'codex', []).catch(e => e)
   expect(started).toBeInstanceOf(HerdrError)
   expect((started as HerdrError).code).toBe('agent_not_ready')
   expect((started as HerdrError).message).toContain('blocked at startup')
@@ -118,8 +118,21 @@ test('herdrOf refuses a prompt answer that is not a settled state', async () => 
 test('herdrAvailable says why the plugin cannot run', async () => {
   expect(await herdrAvailable(fakeRun({}).run, {})).toContain('Herdr')
   expect(await herdrAvailable(fakeRun({ herdr: { exitCode: 127 } }).run, { HERDR_ENV: '1' })).toContain('herdr')
-  expect(await herdrAvailable(fakeRun({ codex: { exitCode: 127 } }).run, { HERDR_ENV: '1' })).toContain('codex')
+  // An agent that is missing only refuses the jobs that ask for it.
+  expect(await herdrAvailable(fakeRun({ codex: { exitCode: 127 } }).run, { HERDR_ENV: '1' })).toBeUndefined()
   expect(await herdrAvailable(fakeRun({}).run, { HERDR_ENV: '1' })).toBeUndefined()
+})
+
+test('herdrOf starts Claude as its own kind, with its arguments after --', async () => {
+  const { herdr, argvs } = adapter({})
+  await herdr.start('ct-1', 'w1:p2', 'claude', ['--permission-mode', 'auto'])
+  expect(argvs[0]).toEqual(['herdr', 'agent', 'start', 'ct-1', '--kind', 'claude', '--pane', 'w1:p2', '--', '--permission-mode', 'auto'])
+})
+
+test('missingEngines lists the agents whose executable does not answer', async () => {
+  expect(await missingEngines(fakeRun({}).run)).toEqual([])
+  expect(await missingEngines(fakeRun({ codex: { exitCode: 127 } }).run)).toEqual(['codex'])
+  expect(await missingEngines(fakeRun({ codex: { exitCode: 127 }, claude: { exitCode: 127 } }).run)).toEqual(['codex', 'claude'])
 })
 
 test('herdrOf passes the pane name as one argv element', async () => {

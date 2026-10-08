@@ -3,7 +3,11 @@ import type { createPaneLayout } from './pane-layout'
 
 export type Kind = 'execute' | 'review'
 
-export type Request = { kind: Kind; task: string; files: string[]; target?: string; focus?: string }
+/** The agent a job runs: its name is also the `--kind` Herdr starts it with. */
+export type Engine = 'codex' | 'claude'
+
+/** `engine` is Codex when absent. */
+export type Request = { kind: Kind; task: string; files: string[]; target?: string; focus?: string; engine?: Engine }
 
 export type Status = 'queued' | 'starting' | 'working' | 'blocked' | 'done' | 'failed' | 'cancelled'
 
@@ -30,7 +34,8 @@ export type Herdr = {
   split(direction: 'right' | 'down', target?: string): Promise<string>
   rename(pane: string, name: string): Promise<void>
   close(pane: string): Promise<void>
-  start(name: string, pane: string, args: string[]): Promise<void>
+  /** Starts `engine` in the pane, with its own command-line `args`. */
+  start(name: string, pane: string, engine: Engine, args: string[]): Promise<void>
   /** Sends the prompt and waits for the agent to settle; `timeout` means this chunk ran out, not the job. */
   prompt(name: string, text: string, timeoutMs: number): Promise<Settled>
   /** Waits for a settled state, or for one of `until` when given. */
@@ -56,6 +61,7 @@ export type AgentSession = { agent: string; pane?: string; terminal?: string; re
 export type Job = {
   id: number
   kind: Kind
+  engine: Engine
   title: string
   status: Status
   agent: string
@@ -73,13 +79,15 @@ export type NotifyEvent = 'blocked' | 'finished'
 export type Files = { read(path: string): Promise<string | undefined>; write(path: string, text: string): Promise<void> }
 export type Notify = (event: NotifyEvent, job: Job) => void
 export type PaneLayout = ReturnType<typeof createPaneLayout>
-export type Deps = { herdr: Herdr; layout: PaneLayout; files: Files; tmpdir: string | undefined; now: () => number; notify: Notify }
+/** `claudeMode` is the `--permission-mode` of Claude jobs that run commands; see engines.ts. */
+export type Deps = { herdr: Herdr; layout: PaneLayout; files: Files; tmpdir: string | undefined; now: () => number; notify: Notify; claudeMode?: string }
 
 export type Verdict = 'approved' | 'changes'
 export type Checks = 'pass' | 'fail' | 'not run'
 export type Round = { dev: number; qa?: number; verdict?: Verdict; checks?: Checks }
 export type LoopStatus = 'developing' | 'reviewing' | 'approved' | 'exhausted' | 'failed' | 'cancelled'
-export type LoopRequest = { task: string; files: string[]; maxRounds: number }
+/** The engines are Codex when absent. */
+export type LoopRequest = { task: string; files: string[]; maxRounds: number; devEngine?: Engine; qaEngine?: Engine }
 export type Loop = LoopRequest & {
   id: number
   status: LoopStatus

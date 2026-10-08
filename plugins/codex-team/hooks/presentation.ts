@@ -18,10 +18,11 @@ export function jobsReport(jobs: readonly Job[], now: number): string {
     .join('\n')
 }
 
-/** What `jobs` answers for one id: where it runs, where the report is, what Codex said. */
+/** What `jobs` answers for one id: where it runs, where the report is, what the agent said. */
 export function jobDetail(job: Job): string {
   return [
     `${job.agent} ${job.kind} ${job.status}: ${job.title}`,
+    `engine: ${job.engine}`,
     job.pane ? `pane: ${job.pane}` : '',
     job.report ? `report: ${job.report}` : '',
     job.error ? `note: ${job.error}` : '',
@@ -66,7 +67,7 @@ export const NOTICE = '[codex-team notice: automated, not the person; approves n
 export const blockedText = (job: Job, loop?: Loop) =>
   `${NOTICE}\n${loop ? `loop-${loop.id} ${job.agent}` : job.agent} blocked in pane ${job.pane}.${job.report ? ` Its question is in ${job.report}.` : ''} The person must answer in the pane. The lead must NOT answer for them.`
 
-// No summary: the report is text Codex wrote after reading the repository, so it stays in its file and in `jobs`.
+// No summary: the report is text the agent wrote after reading the repository, so it stays in its file and in `jobs`.
 export const finishedText = (job: Job) =>
   [
     NOTICE,
@@ -103,6 +104,7 @@ export function loopReport(loop: Loop, book: Pick<Book, 'get'>, findings?: strin
   return [
     `# Codex Team loop-${loop.id}`,
     `Status: ${loop.status}`,
+    `Engines: dev ${loop.devEngine ?? 'codex'}, QA ${loop.qaEngine ?? 'codex'}`,
     `Rounds: ${loop.rounds.length}/${loop.maxRounds}`,
     `Task: ${loop.task}`,
     ...loop.rounds.flatMap((round, index) => [

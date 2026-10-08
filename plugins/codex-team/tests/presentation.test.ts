@@ -1,9 +1,9 @@
 import { expect, test } from 'claude-code/testing'
 import { PROMPT } from '../hooks/prompts'
-import { bandRows, blockedText, doctorReport, finishedText, herdrNoticeBody, herdrNoticeTitle, loopFinishedText, NOTICE } from '../hooks/presentation'
+import { bandRows, blockedText, doctorReport, jobDetail, finishedText, herdrNoticeBody, herdrNoticeTitle, loopFinishedText, NOTICE } from '../hooks/presentation'
 import type { Job, Loop } from '../hooks/model'
 import type { BandJob } from '../types'
-import { band } from './helpers'
+import { band, job as fakeJob } from './helpers'
 
 test('bandRows draws one row per job with its status, elapsed time and pane', () => {
   const { rows, hidden } = bandRows([band('ct-1', 'working', 130)], 5)
@@ -91,4 +91,8 @@ test('herdrNoticeTitle names the job, or the loop and its phase job, for the Her
 test('herdrNoticeBody gives the pane, and the question report only when the job has one', () => {
   expect(herdrNoticeBody({ ...job, pane: 'w1:p3', report: '/tmp/codex-team/1.md' })).toBe('pane w1:p3\nQuestion in /tmp/codex-team/1.md')
   expect(herdrNoticeBody({ ...job, pane: 'w1:p3', report: undefined })).toBe('pane w1:p3')
+})
+
+test('jobDetail names the engine of the job', () => {
+  expect(jobDetail({ ...fakeJob(), engine: 'claude' })).toContain('engine: claude')
 })

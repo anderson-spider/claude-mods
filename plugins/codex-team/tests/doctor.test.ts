@@ -20,6 +20,7 @@ test('doctor passes when inside Herdr and both tools and the agent list answer',
   const { run } = runOf({
     'herdr --version': { exitCode: 0, stdout: 'herdr 0.9.3\nextra' },
     'codex --version': { exitCode: 0, stdout: 'codex 1.2.0' },
+    'claude --version': { exitCode: 0, stdout: '2.1.293 (Claude Code)' },
     'herdr agent list': { exitCode: 0 },
   })
 
@@ -29,6 +30,7 @@ test('doctor passes when inside Herdr and both tools and the agent list answer',
   expect(text).toContain('✓ herdr: herdr 0.9.3')
   expect(text).not.toContain('extra')
   expect(text).toContain('✓ codex: codex 1.2.0')
+  expect(text).toContain('✓ claude: 2.1.293 (Claude Code)')
   expect(text).toContain('✓ herdr agent list: answers')
   expect(text).toContain('Everything codex-team relies on is in place.')
 })
@@ -43,10 +45,24 @@ test('doctor names each failure: outside Herdr, missing tools, an agent list tha
 
   expect(text).toContain('✗ inside Herdr: HERDR_ENV is not 1: run Claude Code in a Herdr pane')
   expect(text).toContain('✗ herdr: not installed or not in PATH')
-  expect(text).toContain('✗ codex: not installed or not in PATH')
+  expect(text).toContain('✗ codex: not installed or not in PATH: jobs with Codex will be refused')
+  expect(text).toContain('✗ claude: not installed or not in PATH: jobs with Claude will be refused')
   expect(text).toContain(`✗ herdr agent list: ${'x'.repeat(200)}`)
   expect(text).not.toContain('x'.repeat(201))
-  expect(text).toContain('4 check(s) failed.')
+  expect(text).toContain('5 check(s) failed.')
+})
+
+test('doctor accepts one missing agent while the other is in place', async () => {
+  const { run } = runOf({
+    'herdr --version': { exitCode: 0, stdout: 'herdr 0.9.3' },
+    'claude --version': { exitCode: 0, stdout: '2.1.293 (Claude Code)' },
+    'herdr agent list': { exitCode: 0 },
+  })
+
+  const text = await checkDoctor(run, true)
+
+  expect(text).toContain('✓ codex: not installed or not in PATH: jobs with Codex will be refused')
+  expect(text).toContain('Everything codex-team relies on is in place.')
 })
 
 test('doctor reports a command that did not answer at all', async () => {
@@ -55,5 +71,5 @@ test('doctor reports a command that did not answer at all', async () => {
   const text = await checkDoctor(run, true)
 
   expect(text).toContain('✗ herdr agent list: no answer')
-  expect(text).toContain('3 check(s) failed.')
+  expect(text).toContain('4 check(s) failed.')
 })

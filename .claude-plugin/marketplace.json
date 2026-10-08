@@ -25,7 +25,7 @@
     {
       "name": "codex-team",
       "source": "./plugins/codex-team",
-      "description": "Lets Claude lead Codex agents: execute and review run Codex in Herdr panes as background jobs, with a band above the prompt and a report per job."
+      "description": "Lets Claude lead Codex or Claude agents: execute, review and loop run them in Herdr panes as background jobs, with a band above the prompt and a report per job."
     },
     {
       "name": "tailscale",

@@ -1,4 +1,5 @@
-import type { Book, Kind, Loop, LoopDeps } from './model'
+import { PROFILES } from './engines'
+import type { Book, Engine, Kind, Loop, LoopDeps } from './model'
 import { loopOf, requestOf } from './requests'
 import { cancelLoop, loopStart } from './loop'
 import { allJobs, jobDetail, loopReport } from './presentation'
@@ -12,19 +13,29 @@ export const refusal = (text: string) => ({ result: text, isError: true as const
 // A tool handler never rejects: an error becomes a refusal the model can read.
 export const failure = (error: unknown) => refusal(`codex-team failed: ${messageOf(error)}`)
 
-export async function startJob({ book, unavailable }: { book?: Pick<Book, 'start'>; unavailable?: string }, kind: Kind, e: Record<string, unknown>, publish: () => Promise<void>) {
+/** Why an engine named in a request cannot run: its executable was not found when the session started. */
+const missingText = (engines: readonly (Engine | undefined)[], absent: readonly Engine[]): string | undefined => {
+  const engine = engines.map(named => named ?? 'codex').find(named => absent.includes(named))
+  return engine && `${PROFILES[engine].binary} is not installed or not in PATH: ${PROFILES[engine].label} cannot run here.`
+}
+
+export async function startJob({ book, unavailable, absent = [] }: { book?: Pick<Book, 'start'>; unavailable?: string; absent?: readonly Engine[] }, kind: Kind, e: Record<string, unknown>, publish: () => Promise<void>) {
   if (!book) return refusal(unavailable ?? NOT_READY)
   const request = requestOf(kind, e)
   if (typeof request === 'string') return refusal(request)
+  const missing = missingText([request.engine], absent)
+  if (missing) return refusal(missing)
   const job = await book.start(request)
   await publish()
   return { result: `Started job ${job.agent} (${kind}). A message arrives when it finishes; the jobs tool lists it meanwhile.` }
 }
 
-export async function startLoop({ book, loopDeps, unavailable }: { book?: Book; loopDeps?: LoopDeps; unavailable?: string }, e: Record<string, unknown>, addLoop: (loop: Loop) => void, publish: () => Promise<void>) {
+export async function startLoop({ book, loopDeps, unavailable, absent = [] }: { book?: Book; loopDeps?: LoopDeps; unavailable?: string; absent?: readonly Engine[] }, e: Record<string, unknown>, addLoop: (loop: Loop) => void, publish: () => Promise<void>) {
   if (!book || !loopDeps) return refusal(unavailable ?? NOT_READY)
   const request = loopOf(e)
   if (typeof request === 'string') return refusal(request)
+  const missing = missingText([request.devEngine, request.qaEngine], absent)
+  if (missing) return refusal(missing)
   const loop = await loopStart(loopDeps, book, request)
   addLoop(loop)
   await publish()

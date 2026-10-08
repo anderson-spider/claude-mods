@@ -11,7 +11,7 @@ test('runJob runs an execute job to done with its report', async () => {
   const { deps, calls, events } = setup({})
   const j = job()
   await runJob(deps, j, request())
-  expect(calls).toEqual(['split down', 'rename w1:p2 ct-1 execute', 'start ct-1 w1:p2 -s workspace-write -a on-request', 'prompt ct-1'])
+  expect(calls).toEqual(['split down', 'rename w1:p2 ct-1 execute', 'start ct-1 w1:p2 codex -s workspace-write -a on-request', 'prompt ct-1'])
   expect(j.status).toBe('done')
   expect(j.pane).toBe('w1:p2')
   expect(j.report).toBe('/tmp/codex-team/1.md')
@@ -23,7 +23,7 @@ test('runJob starts a review job read-only', async () => {
   const { deps, calls } = setup({}, { '/tmp/codex-team/1.md': 'findings' })
   await runJob(deps, job('review'), request('review'))
   expect(calls[1]).toBe('rename w1:p2 ct-1 review')
-  expect(calls[2]).toBe('start ct-1 w1:p2 -s read-only -a on-request')
+  expect(calls[2]).toBe('start ct-1 w1:p2 codex -s read-only -a on-request')
   expect(calls.some(call => call.startsWith('close'))).toBe(false)
 })
 
@@ -305,8 +305,8 @@ test('a cancel while the agent starts never sends the prompt', async () => {
   const j = job()
   const { deps, calls, events } = setup({})
   const start = deps.herdr.start
-  deps.herdr.start = async (name, pane, args) => {
-    await start(name, pane, args)
+  deps.herdr.start = async (name, pane, engine, args) => {
+    await start(name, pane, engine, args)
     await pause(1)
     j.status = 'cancelled'
   }
@@ -327,4 +327,86 @@ test('a cancel while the fresh report is cleared never opens a pane or sends the
   expect(j.status).toBe('cancelled')
   expect(calls).toEqual([])
   expect(events).toEqual([])
+})
+
+// --- Claude: the report, not the settled state, ends the job ---
+
+const claudeJob = () => ({ ...job(), engine: 'claude' as const })
+const claudeRequest = () => ({ ...request(), engine: 'claude' as const })
+const timeout = () => new HerdrError('timeout', 'still settled')
+const REPORT = '/tmp/codex-team/1.md'
+
+test('a Claude job starts with its own kind and arguments and ends at once when the report is there', async () => {
+  const { deps, calls } = setup({})
+  const j = claudeJob()
+  await runJob(deps, j, claudeRequest())
+  expect(calls[2]).toBe('start ct-1 w1:p2 claude --permission-mode auto --add-dir /tmp/codex-team --disallowedTools mcp__codex-team')
+  expect(calls.some(call => call.startsWith('wait'))).toBe(false)
+  expect(j.status).toBe('done')
+  expect(j.summary).toContain('all done')
+})
+
+test('a Claude job takes its permission mode from the deps and clears an old report before it starts', async () => {
+  const files: Record<string, string> = { [REPORT]: 'old report' }
+  const { deps, calls } = setup({ prompt: ['idle'], wait: [timeout(), timeout(), timeout()] }, files)
+  deps.claudeMode = 'acceptEdits'
+  deps.files = { read: async path => files[path], write: async (path, text) => { files[path] = text } }
+  const j = claudeJob()
+  await runJob(deps, j, claudeRequest())
+  expect(calls[2]).toContain('--permission-mode acceptEdits')
+  // The old report cannot end the job: with no new one, it waits for the quiet polls and falls back to the pane.
+  expect(j.report).toBeUndefined()
+  expect(j.error).toContain('no report was written')
+})
+
+test('a Claude job whose state settled early goes on waiting until the report is written', async () => {
+  const files: Record<string, string> = {}
+  let waits = 0
+  const { deps, calls } = setup({ wait: ['working', 'idle'], onWait: () => { if (++waits === 2) files[REPORT] = '# Report\nlate but whole' } }, files)
+  const j = claudeJob()
+  await runJob(deps, j, claudeRequest())
+  expect(calls.filter(call => call.startsWith('wait'))).toEqual(['wait ct-1 until working|blocked', 'wait ct-1'])
+  expect(j.status).toBe('done')
+  expect(j.summary).toContain('late but whole')
+  expect(j.error).toBeUndefined()
+})
+
+test('a Claude job that stays settled without a report ends after the quiet polls, with the pane as its summary', async () => {
+  const { deps, calls } = setup({ wait: [timeout(), timeout(), timeout()], read: 'pane says nothing' }, {})
+  const j = claudeJob()
+  await runJob(deps, j, claudeRequest())
+  expect(calls.filter(call => call.startsWith('wait'))).toHaveLength(3)
+  expect(j.status).toBe('done')
+  expect(j.report).toBeUndefined()
+  expect(j.summary).toBe('pane says nothing')
+  expect(j.error).toContain(`no report was written to ${REPORT}`)
+})
+
+test('a Claude job that asks for approval while the report is missing waits for the person, then for the report', async () => {
+  const files: Record<string, string> = {}
+  let waits = 0
+  const { deps, events } = setup({ wait: ['blocked', 'idle'], onWait: () => { if (++waits === 2) files[REPORT] = 'report after approval' } }, files)
+  const j = claudeJob()
+  await runJob(deps, j, claudeRequest())
+  expect(events).toEqual(['blocked blocked', 'finished done'])
+  expect(j.summary).toBe('report after approval')
+})
+
+test('a Claude question clears the old report so only the report written after the answer ends the job', async () => {
+  const files: Record<string, string> = {}
+  const writes: string[] = []
+  let waits = 0
+  const { deps, events } = setup({
+    wait: ['working', 'idle', 'idle'],
+    onPrompt: () => { files[REPORT] = 'STATUS: WAITING\nwhich file?' },
+    onWait: () => { if (++waits === 3) files[REPORT] = '# Report\nfinal' },
+  }, files)
+  deps.files = { read: async path => files[path], write: async (path, text) => { writes.push(text); files[path] = text } }
+  const j = claudeJob()
+  await runJob(deps, j, claudeRequest())
+  // Once before the task, once when the question was answered.
+  expect(writes).toEqual(['', ''])
+  expect(events).toEqual(['blocked blocked', 'finished done'])
+  expect(j.status).toBe('done')
+  expect(j.summary).toBe('# Report\nfinal')
 })
