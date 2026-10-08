@@ -11,11 +11,11 @@ export type Browser = {
    * string literal.
    */
   js(tabId: string, body: string): Promise<string>
-  /** Sets local files on the input `selector` names. */
-  upload(tabId: string, selector: string, paths: string[]): Promise<void>
+  /** Sets local files on the input `selector` names; each carries the name and MIME type the attachment check read. */
+  upload(tabId: string, selector: string, files: Attachment[]): Promise<void>
 }
 
-/** A local file to attach, uploaded by its path. */
+/** A local file to attach, uploaded by its path (`type` is its MIME type). */
 export type Attachment = { name: string; type: string; path: string }
 
 /**

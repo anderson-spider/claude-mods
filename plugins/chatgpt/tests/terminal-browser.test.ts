@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import type { ProcessRunner } from '../hooks/model'
 import { parseOutput } from '../hooks/scripts'
-import { browserOf, listTabs, openedTab, splitTabId } from '../hooks/terminal-browser'
+import { NO_PANE, listTabs, openTerminalBrowser, openedTab, splitTabId } from '../hooks/terminal-browser'
 import { printed } from './helpers'
 
 test('parseOutput reads the JSON a page script returns', () => {
@@ -36,7 +36,7 @@ test('the CLI adapter caches the first listing and retries a starting tab throug
     }
     return { exitCode: 0, stdout: '{"browsers":[{"key":"b","tabs":[{"id":1}]}]}', stderr: '' }
   }
-  const browser = await browserOf(run)
+  const browser = await openTerminalBrowser(run)
   if (typeof browser === 'string') throw new Error(browser)
   expect(await browser.tabs()).toEqual(['b:1'])
   expect(calls).toEqual([{ argv: ['terminal-browser', 'ls', '--json'], init: { timeoutMs: 15_000 } }])
@@ -51,15 +51,26 @@ test('the CLI adapter caches the first listing and retries a starting tab throug
   expect(calls.at(-1)?.argv).toEqual(['terminal-browser', 'ls', '--json'])
 })
 
-test('the CLI adapter preserves availability errors and turns wait failures into false', async () => {
-  expect(await browserOf(async () => { throw new Error('missing') })).toBe(
-    'No browser to drive ChatGPT with. terminal-browser said: terminal-browser is not installed (https://terminal-browser.sh). Run Claude Code directly in a Ghostty or kitty pane with terminal-browser installed.',
-  )
+test('outside a pane terminal-browser cannot drive, the adapter says so and the chooser moves on', async () => {
+  // The desktop app: ls exits 0 with no pane (self null) and no browser, so there is nothing to drive.
+  expect(await openTerminalBrowser(async () => ({ exitCode: 0, stdout: '{"self": null, "browsers": []}', stderr: '' }))).toBe(NO_PANE)
+  expect(await openTerminalBrowser(async () => ({ exitCode: 0, stdout: '{"self": null}', stderr: '' }))).toBe(NO_PANE)
+  // A null pane with a browser that is open still has tabs to drive.
+  const withBrowser = await openTerminalBrowser(async () => ({
+    exitCode: 0,
+    stdout: '{"self": null, "browsers": [{"key": "b", "tabs": [{"id": 1}]}]}',
+    stderr: '',
+  }))
+  expect(typeof withBrowser).toBe('object')
+})
+
+test('the CLI adapter reports why it is unavailable and turns wait failures into false', async () => {
+  expect(await openTerminalBrowser(async () => { throw new Error('missing') })).toBe('terminal-browser is not installed (https://terminal-browser.sh)')
   const calls: { argv: string[]; init?: Parameters<ProcessRunner>[1] }[] = []
-  const browser = await browserOf(async (argv, init) => {
+  const browser = await openTerminalBrowser(async (argv, init) => {
     calls.push({ argv, init })
     return argv.includes('ls')
-      ? { exitCode: 0, stdout: '{"browsers":[]}', stderr: '' }
+      ? { exitCode: 0, stdout: '{"self": {"tab": "t", "pane": "p"}, "browsers": []}', stderr: '' }
       : { exitCode: 1, stdout: '', stderr: 'timed out' }
   })
   if (typeof browser === 'string') throw new Error(browser)

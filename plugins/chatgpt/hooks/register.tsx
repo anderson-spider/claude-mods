@@ -3,16 +3,23 @@ import { diagnose, report } from './doctor'
 import { performRequest, runNow as runForeground, createJobs, taskQueue } from './runner'
 import { chatUrlOf } from './input'
 import { limitMs } from './settings'
-import type { Outcome, ProcessRunner, Request, RequestDeps, TabHolder } from './model'
+import type { Browser, Outcome, ProcessRunner, Request, RequestDeps, TabHolder } from './model'
 import { askCommandAnswer, errorText, imageCommandAnswer } from './presentation'
 import { BOUNDARIES, COMMON_PROPERTIES, IMAGE_BOUNDARIES, PROMPT, WHERE } from './prompts'
-import { browserOf } from './terminal-browser'
+import { type Candidate, chooseBrowser } from './browsers'
+import { BUILTIN, BUILTIN_SERVER, builtinBrowserOf } from './builtin-browser'
+import { CHROME, CHROME_SERVER, chromeBrowserOf } from './chrome-browser'
+import { type McpCall, type McpHost, bytesOf, mcpCallOf } from './mcp-browser'
+import { TERMINAL_BROWSER, openTerminalBrowser } from './terminal-browser'
 import { serve } from './tools'
 
 // Requests take turns in the plugin's own tab, kept across them.
 const queue = taskQueue()
 const tab: TabHolder = {}
 const jobs = createJobs()
+
+// The backend the plugin's tab belongs to: a tab id means nothing in another backend.
+let tabOwner: string | undefined
 
 // A foreground request waits this long; past it the work goes on in the background.
 // The `foregroundMinutes` and `backgroundMinutes` settings, refreshed by each register.
@@ -23,10 +30,62 @@ function processOf($: EngineInterface): ProcessRunner {
   return (argv, init) => $.process.run(argv, init)
 }
 
+// One caller per MCP server for the session, so the route it decided (see mcpCallOf) is remembered across requests.
+const mcpCalls = new Map<string, McpCall>()
+
+function mcpHostOf($: EngineInterface): McpHost {
+  return {
+    mcp: (server, tool, args) => $.mcp.call(server, tool, args),
+    tool: input => $.tool.call(input as never) as Promise<{ deny?: string; text?: string; isError?: boolean }>,
+  }
+}
+
+function callOf($: EngineInterface, server: string): McpCall {
+  let call = mcpCalls.get(server)
+  if (!call) {
+    call = mcpCallOf(mcpHostOf($), server)
+    mcpCalls.set(server, call)
+  }
+  return call
+}
+
+// The backends in the order the plugin tries them.
+function candidatesOf($: EngineInterface): Candidate[] {
+  const run = processOf($)
+  // Waits go through a host process, which does not use up the hook's clock budget as a timer would.
+  const deps = (server: string) => ({
+    call: callOf($, server),
+    readBytes: async (path: string) => bytesOf((await $.fs.read(path, { as: 'bytes' })).base64),
+    sleep: async (ms: number) => {
+      await $.process.run(['sleep', String(ms / 1000)])
+    },
+    now: () => Date.now(),
+  })
+  return [
+    { name: TERMINAL_BROWSER, open: () => openTerminalBrowser(run) },
+    { name: CHROME, open: () => chromeBrowserOf(deps(CHROME_SERVER)) },
+    { name: BUILTIN, open: () => builtinBrowserOf(deps(BUILTIN_SERVER)) },
+  ]
+}
+
+// Picks the backend, and starts the plugin's tab afresh when it differs from the one that opened that tab.
+async function pickBrowser($: EngineInterface): Promise<{ browser: Browser; name: string } | string> {
+  const chosen = await chooseBrowser(candidatesOf($))
+  if (typeof chosen === 'string') return chosen
+  if (tabOwner !== chosen.name) {
+    tab.id = undefined
+    tabOwner = chosen.name
+  }
+  return chosen
+}
+
 function requestDeps($: EngineInterface): RequestDeps {
   const run = processOf($)
   return {
-    browser: () => browserOf(run),
+    browser: async () => {
+      const picked = await pickBrowser($)
+      return typeof picked === 'string' ? picked : picked.browser
+    },
     attachments: { stat: path => $.fs.stat(path) },
     output: {
       run,
@@ -193,10 +252,11 @@ export const register: Register = (on, options) => {
     const chatUrl = chatUrlOf(e.args)
     return queue(async () => {
       try {
-        const browser = await browserOf(processOf($))
-        if (typeof browser === 'string') return { text: `✗ browser: ${browser}` }
+        const picked = await pickBrowser($)
+        if (typeof picked === 'string') return { text: `✗ browser: ${picked}` }
         $.ui.status('ChatGPT: checking the page')
-        return { text: report(await diagnose(browser, chatUrl, tab)) }
+        const checks = await diagnose(picked.browser, chatUrl, tab)
+        return { text: report([{ name: 'browser', ok: true, detail: picked.name }, ...checks]) }
       } catch (error) {
         return { text: `✗ browser: ${errorText(error)}` }
       } finally {

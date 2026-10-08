@@ -9,7 +9,8 @@ export const IMAGE_BOUNDARIES =
   'to use or one you produced for the task. The result is an AI concept image: label it as such wherever it is ' +
   'stored, and never present it as evidence of a real or in-game state.'
 
-export const WHERE = 'chatgpt.com in terminal-browser, inside Claude Code in a terminal'
+export const WHERE =
+  "chatgpt.com in the first browser that works: terminal-browser (Claude Code in a Ghostty or kitty pane), Claude in Chrome, or the Claude app's built-in browser"
 
 const ASK_TOOL = 'mcp__chatgpt__ask'
 const IMAGE_TOOL = 'mcp__chatgpt__image'

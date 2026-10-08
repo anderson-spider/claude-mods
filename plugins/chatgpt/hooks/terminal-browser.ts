@@ -79,17 +79,25 @@ function terminalBrowserOf(run: ProcessRunner, listed?: string): Browser {
       ),
     // Every page script is a function body; eval refuses a top-level `await` but waits for a returned promise, hence the async wrapper.
     js: (tabId, body) => terminalBrowser(run, [...select(tabId), 'eval', `(async () => {\n${body}\n})()`]),
-    upload: async (tabId, selector, paths) => {
-      await terminalBrowser(run, [...select(tabId), 'upload', selector, ...paths])
+    upload: async (tabId, selector, files) => {
+      await terminalBrowser(run, [...select(tabId), 'upload', selector, ...files.map(file => file.path)])
     },
   }
 }
 
+export const NO_PANE = 'not running inside a terminal pane terminal-browser can drive'
+
 // terminal-browser answers only where Claude Code runs in a terminal pane it
 // can find (Ghostty, kitty); not under tmux, Herdr or a background session.
-export async function browserOf(run: ProcessRunner): Promise<Browser | string> {
+// The string is why it cannot answer; the chooser in browsers.ts says so for it.
+export async function openTerminalBrowser(run: ProcessRunner): Promise<Browser | string> {
   const listed = await run([TERMINAL_BROWSER, 'ls', '--json'], { timeoutMs: 15_000 }).catch(() => undefined)
-  if (listed?.exitCode === 0) return terminalBrowserOf(run, listed.stdout)
-  const why = listed ? (listed.stderr || listed.stdout).trim().slice(0, 300) : 'terminal-browser is not installed (https://terminal-browser.sh)'
-  return `No browser to drive ChatGPT with. terminal-browser said: ${why}. Run Claude Code directly in a Ghostty or kitty pane with terminal-browser installed.`
+  if (listed?.exitCode === 0) {
+    // Outside a pane it can drive, terminal-browser exits 0 with no pane (`self` null) and no browser: nothing to drive.
+    const parsed = jsonOf<{ self?: unknown; browsers?: unknown[] }>(listed.stdout)
+    if (parsed?.self === null && (parsed.browsers ?? []).length === 0) return NO_PANE
+    return terminalBrowserOf(run, listed.stdout)
+  }
+  if (!listed) return 'terminal-browser is not installed (https://terminal-browser.sh)'
+  return (listed.stderr || listed.stdout).trim().slice(0, 300) || 'it exited with an error and no output'
 }

@@ -97,11 +97,25 @@ test('a foreground timeout continues only a valid chat with saveOnly and no atta
   expect(requests.length).toBe(1)
 })
 
-test('request dispatch reports an unavailable browser before touching attachments or output', async () => {
+test('request dispatch checks the attachments before it opens a browser', async () => {
+  const opened: string[] = []
   const unused = async () => { throw new Error('unused dependency') }
-  expect(await performRequest({
-    browser: async () => 'unavailable',
-    attachments: { stat: unused },
+  const deps = (browser: () => Promise<string>) => ({
+    browser,
+    attachments: { stat: async () => ({ size: 10 }) },
     output: { run: unused, files: { write: unused, readBytes: unused }, tmpDir: unused },
-  }, { kind: 'ask', input: { prompt: 'question' }, filePaths: ['/ref.png'] }, {})).toEqual({ ok: false, text: 'unavailable', error: 'unavailable' })
+  })
+  // An invalid path answers at once, and no browser is opened.
+  expect(await performRequest(deps(async () => { opened.push('browser'); return 'unavailable' }), { kind: 'ask', input: { prompt: 'question' }, filePaths: ['ref.png'] }, {})).toEqual({
+    ok: false,
+    text: 'ref.png must be an absolute path.',
+    error: 'ref.png must be an absolute path.',
+  })
+  expect(opened).toEqual([])
+  // A valid attachment, with no browser, still reports the browser.
+  expect(await performRequest(deps(async () => 'unavailable'), { kind: 'ask', input: { prompt: 'question' }, filePaths: ['/ref.png'] }, {})).toEqual({
+    ok: false,
+    text: 'unavailable',
+    error: 'unavailable',
+  })
 })

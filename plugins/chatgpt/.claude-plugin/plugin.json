@@ -1,7 +1,7 @@
 {
   "name": "chatgpt",
-  "version": "0.8.0",
-  "description": "Asks the user's logged-in ChatGPT, or has it generate an image, through terminal-browser, and saves the result locally.",
+  "version": "0.9.0",
+  "description": "Asks the user's logged-in ChatGPT, or has it generate an image, through terminal-browser, Claude in Chrome or the Claude app's built-in browser, and saves the result locally.",
   "author": {
     "name": "anderson-spider"
   },

@@ -62,7 +62,9 @@ if (!button) return JSON.stringify({ picked: false, reason: 'model menu not foun
 }
 
 export function sendScript(prompt: string): string {
+  // Every flow reaches chatgpt.com first (prepare checks it); this keeps the prompt off any other page.
   return `
+if (location.origin !== 'https://chatgpt.com') return JSON.stringify({ sent: false, reason: 'not on chatgpt.com' });
 const ed = ${COMPOSER};
 if (!ed) return JSON.stringify({ sent: false, reason: 'composer not found' }); else {
   const text = ${JSON.stringify(prompt)};
