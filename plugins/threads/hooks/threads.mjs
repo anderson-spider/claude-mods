@@ -2183,9 +2183,11 @@ async function settle($, p, entry) {
       return { status: "exited", screen: last };
     }
     const screen = readScreen(await capture($, entry.tmux, false));
-    // the lead chose to run here, so the folder trust prompt is answered for it (option 1, "Yes, I trust")
+    // the lead chose to run here, so the folder trust prompt is answered for it ("Yes, I trust this folder")
     if (screen.needsTrust && !screen.needsLogin && !trustSent) {
       trustSent = true;
+      // the cursor starts on "No, exit" in current versions: move to "Yes" first, or Enter quits the thread
+      if (screen.isCursorOnNo) await run($, tmuxArgv("send-keys", "-t", entry.tmux, "Down"), 5000);
       await run($, tmuxArgv("send-keys", "-t", entry.tmux, "C-m"), 5000);
       await logEvent($, p, "trust-accepted", { id: entry.id });
       continue;

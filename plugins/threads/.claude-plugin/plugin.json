@@ -1,6 +1,6 @@
 {
   "name": "threads",
-  "version": "0.2.7",
+  "version": "0.2.8",
   "description": "A lead chat creates real Claude Code sessions, or Codex sessions through a small helper, on chosen models, watches them live and steers them. Shows the apps each thread drives through codex-computer-use. Adapted from promptadvisers/claude-mods-computer-use-threads; see NOTICE.",
   "types": "./types/index.d.ts",
   "author": {

@@ -714,15 +714,24 @@ describe("threads: creating", () => {
     expect(created(w, "Scout").status).toBe("needs-login");
   });
 
-  test("a thread on the folder trust prompt gets Enter once and goes on", async ($, on) => {
-    const w = fresh({ register: false, spawnScreen: "Do you trust the files in this folder?\n❯ 1. Yes, I trust this folder\n  2. No, exit" });
+  test("a thread on the folder trust prompt picks Yes and goes on", async ($, on) => {
+    // current Claude Code starts the cursor on "No, exit": Down first, then Enter
+    const w = fresh({ register: false, spawnScreen: "Quick safety check: Is this a project you created or one you trust?\n ❯ No, exit\n   Yes, I trust this folder" });
     await boot($, on, w);
     const out = await threads($, "new haiku Scout --cwd /work/untrusted -- list");
     expect(out).toMatch(/Created .* in \/work\/untrusted/);
-    expect(sendKeys(w)).toEqual([["send-keys", "-t", `thread-${created(w, "Scout").id}`, "C-m"]]);
+    const id = created(w, "Scout").id;
+    expect(sendKeys(w)).toEqual([["send-keys", "-t", `thread-${id}`, "Down"], ["send-keys", "-t", `thread-${id}`, "C-m"]]);
     expect(events(w).map((e: any) => e.type)).toContain("trust-accepted");
-    // the fake screen never changes, so a second look still finds the prompt: Enter is not sent again
+    // the fake screen never changes, so a second look still finds the prompt: keys are not sent again
     expect(created(w, "Scout").status).toBe("needs-trust");
+  });
+
+  test("an older trust prompt with Yes already selected gets Enter only", async ($, on) => {
+    const w = fresh({ register: false, spawnScreen: "Do you trust the files in this folder?\n❯ 1. Yes, I trust this folder\n  2. No, exit" });
+    await boot($, on, w);
+    await threads($, "new haiku Scout --cwd /work/untrusted -- list");
+    expect(sendKeys(w)).toEqual([["send-keys", "-t", `thread-${created(w, "Scout").id}`, "C-m"]]);
   });
 
   test("threads_create tool, plain English path", async ($, on) => {
