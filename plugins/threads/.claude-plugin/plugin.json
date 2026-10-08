@@ -1,0 +1,34 @@
+{
+  "name": "threads",
+  "version": "0.2.0",
+  "description": "A lead chat creates real Claude Code sessions, or Codex sessions through a small helper, on chosen models, watches them live and steers them. Shows the apps each thread drives through codex-computer-use. Adapted from promptadvisers/claude-mods-computer-use-threads; see NOTICE.",
+  "types": "./types/index.d.ts",
+  "author": {
+    "name": "anderson-spider"
+  },
+  "userConfig": {
+    "defaultPermissionMode": {
+      "type": "string",
+      "title": "Default permission mode",
+      "description": "Permission mode for new session threads and plan phases unless one sets its own. /threads mode overrides this for the install.",
+      "default": "default",
+      "options": [
+        "default",
+        "acceptEdits",
+        "plan",
+        "auto",
+        "bypassPermissions"
+      ]
+    },
+    "idleCloseMinutes": {
+      "type": "number",
+      "title": "Close idle threads after (minutes)",
+      "description": "Finished session threads of this chat that stay idle this long are closed (transcript kept). Working, waiting and pinned threads are never closed. 0 turns it off.",
+      "default": 120
+    }
+  },
+  "license": "MIT",
+  "repository": "https://github.com/anderson-spider/claude-mods",
+  "homepage": "https://github.com/anderson-spider/claude-mods/tree/main/plugins/threads",
+  "displayName": "Threads"
+}
