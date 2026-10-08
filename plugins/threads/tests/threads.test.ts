@@ -95,6 +95,7 @@ type World = {
   duringSpawn?: () => Promise<void>;
   store: Record<string, unknown>;
   codex?: CodexFake; // the threads helper's socket, when a test wants Codex threads
+  tmuxFailures?: number; // the next list-panes calls fail the way a killed or timed-out process does
 };
 
 function fresh(over: Partial<World> = {}): World {
@@ -484,6 +485,10 @@ function engine(on: any, w: World) {
           return ok();
         }
         case "list-panes":
+          if (w.tmuxFailures) {
+            w.tmuxFailures--;
+            return fail("signal: killed");
+          }
           if (w.tmux.size === 0) return fail("no server running on /tmp/tmux-501/cc-threads");
           return ok([...w.tmux].map(([n, p]) => `${n}|${p.dead ? 1 : 0}|${p.pid}`).join("\n"));
         case "capture-pane":
@@ -952,6 +957,23 @@ describe("threads: reports and monitoring", () => {
     expect(r.result).toMatch(/says  Found README\.md and notes\.txt\./);
     expect(w.sleeps - sleepsBefore).toBe(2);
     expect(created(w, "Haiku scout").verifiedModel).toBe("claude-haiku-4-5-20251001");
+  });
+
+  test("a tmux call that fails once does not mark session threads exited; two in a row do", async ($, on) => {
+    const w = fresh();
+    await boot($, on, w);
+    await threads($, "new haiku Haiku scout -- list the files");
+    const before = created(w, "Haiku scout").status;
+    expect(before).not.toBe("exited");
+    w.tmuxFailures = 1;
+    await threads($, "refresh");
+    expect(created(w, "Haiku scout").status).toBe(before);
+    await threads($, "refresh");
+    expect(created(w, "Haiku scout").status).toBe(before);
+    w.tmuxFailures = 99;
+    await threads($, "refresh");
+    await threads($, "refresh");
+    expect(created(w, "Haiku scout").status).toBe("exited");
   });
 
   test("threads_wait does not treat a thread idle before its first turn as done", async ($, on) => {
@@ -2739,6 +2761,23 @@ describe("threads: Codex threads", () => {
     await threads($, "refresh");
     expect(created(w, "Lost")).toMatchObject({ status: "exited", codexError: "the Codex helper is not running, so this thread is no longer tracked" });
     expect(await threads($, `send ${t.id} hello`)).toMatch(/is exited; nothing sent/);
+  });
+
+  test("a helper that does not answer once keeps the thread's status; a second miss in a row marks it exited", async ($, on) => {
+    const w = codexWorld();
+    await boot($, on, w);
+    await threads($, "new codex Blip --codex -- task");
+    const before = created(w, "Blip").status;
+    w.codex!.running = false; // the socket file stays, but nobody answers
+    await threads($, "refresh");
+    expect(created(w, "Blip").status).toBe(before);
+    w.codex!.running = true;
+    await threads($, "refresh");
+    expect(created(w, "Blip").status).toBe(before);
+    w.codex!.running = false;
+    await threads($, "refresh");
+    await threads($, "refresh");
+    expect(created(w, "Blip")).toMatchObject({ status: "exited", codexError: "the Codex helper is not running, so this thread is no longer tracked" });
   });
 
   test("a helper that restarted no longer tracks the thread: exited with that reason", async ($, on) => {
