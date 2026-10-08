@@ -25,6 +25,7 @@ import {
   buildSpawnArgv,
   worktreeOutcome,
   isUnread,
+  loadedHow,
 } from "../hooks/core.mjs";
 import { waitForThreads } from "../hooks/threads.mjs";
 
@@ -2223,6 +2224,14 @@ describe("threads: pane buttons", () => {
 });
 
 describe("threads: setup", () => {
+  test("an installed copy is told to update from the spider-claude-mods marketplace", () => {
+    const cache = "/Users/u/.claude/plugins/cache/spider-claude-mods/threads/0.2.15";
+    expect(loadedHow(cache)).toBe(`installed (${cache}); update with claude plugin update threads@spider-claude-mods`);
+    expect(loadedHow("/Users/u/dev-mods/threads")).toMatch(/^loaded from a hot-reload folder/);
+    expect(loadedHow("/Users/u/src/threads")).toBe("loaded from a folder (/Users/u/src/threads), as with --plugin-dir");
+    expect(loadedHow("")).toBe("loaded from a folder (unknown), as with --plugin-dir");
+  });
+
   test("a checklist with exact fixes; clean closes stale threads; passing is remembered", async ($, on) => {
     const w = fresh({ loggedIn: false });
     w.fs.set(REG, JSON.stringify({ version: 1, cap: 4, threads: [
