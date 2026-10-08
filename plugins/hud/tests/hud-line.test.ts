@@ -274,7 +274,8 @@ test("narrow terminal: no bar, no detail", async ($, on) => {
   world(on);
   withUsage(on, LIMITS);
   await $.session.start({ source: "startup", cwd: "/tmp" } as any);
-  const { texts } = await band($, "terminal", 60);
+  // The context has a row of its own: only the limits and the cache have to fit.
+  const { texts } = await band($, "terminal", 45);
   expect(texts).toContain("32%");
   expect(texts).not.toContain("█");
   expect(texts).not.toContain("· 3h00");
@@ -361,5 +362,25 @@ for (const surface of ["terminal", "desktop"] as const) {
     // The bar is drawn (so the check is not vacuous), but no cell is underlined.
     expect(cells.length).toBeGreaterThan(0);
     expect(cells.some((d) => d.props?.underline === true)).toBe(false);
+  });
+}
+
+for (const surface of ["terminal", "desktop"] as const) {
+  test(`two rows: context and agents above, 5h, 7d and cache below ${surface}`, async ($, on) => {
+    world(on);
+    withUsage(on, LIMITS);
+    on("agent.list", () => ({ value: [{ id: "a1", description: "Job", type: "Plan", status: "running" }] }));
+    await $.session.start({ source: "startup", cwd: "/tmp" } as any);
+    const { ui, texts } = await band($, surface);
+    const boxes = (await ui.findAll({ type: "Box" })) as any[];
+    const keys = boxes.map((b) => b.props?.key);
+    expect(keys.indexOf("row-status")).toBeGreaterThanOrEqual(0);
+    expect(keys.indexOf("row-status")).toBeLessThan(keys.indexOf("row-limits"));
+    const ctx = texts.indexOf("107k");
+    const agents = texts.findIndex((t: string) => t === "agent" || t === "1 agent");
+    expect(agents).toBeGreaterThan(ctx);
+    expect(texts.indexOf("5h")).toBeGreaterThan(agents);
+    expect(texts.indexOf("7d")).toBeGreaterThan(texts.indexOf("5h"));
+    expect(texts.indexOf("—")).toBeGreaterThan(texts.indexOf("7d"));
   });
 }

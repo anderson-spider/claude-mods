@@ -53,7 +53,7 @@ test("info: effort and speed come from the last request", async ($, on) => {
   expect(texts).toContain("72 tok/s");
 });
 
-test("info: running subagents show their models next to the main one, which stays the session's", async ($, on) => {
+test("agents: in the terminal, running subagents show their models on the usage line; the info line keeps the session's", async ($, on) => {
   const clock = world(on);
   withUsage(on, LIMITS);
   hostInfo(on);

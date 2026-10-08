@@ -1,4 +1,4 @@
-import { TERM_TONES, RESERVED_COLUMNS, ICON_COLORS } from "./constants.mjs";
+import { TERM_TONES, RESERVED_COLUMNS } from "./constants.mjs";
 import { separator } from "./drawing.mjs";
 
 export const freshInfo = () => ({
@@ -24,7 +24,7 @@ export function recordSpeed(tokens, ms) {
 }
 
 // The subagents running now, by model: "2× Haiku 5.5 · Sonnet 5.5"; one with no request yet is "agent".
-function agentModels(agents) {
+export function agentModels(agents) {
   const counts = new Map();
   for (const a of agents) {
     const label = a.model ? modelLabel(a.model) : "agent";
@@ -34,8 +34,8 @@ function agentModels(agents) {
 }
 
 // One row above the usage line. Drops the least useful parts until it fits: the changes, speed,
-// subagents, effort, folder. `agents` is read only when the line has something of its own to show.
-export function drawInfo(elements, columns, agents = () => []) {
+// effort, folder. The subagents have their own block on the usage line.
+export function drawInfo(elements, columns) {
   const { Box, Text } = elements;
   const changes = infoData.current.files > 0 ? `· ${infoData.current.files} ${infoData.current.files === 1 ? "file" : "files"}${infoData.current.added || infoData.current.removed ? ` +${infoData.current.added} -${infoData.current.removed}` : ""}` : "";
   const parts = [
@@ -48,9 +48,6 @@ export function drawInfo(elements, columns, agents = () => []) {
     { key: "changes", text: infoData.current.branch ? changes : "", drop: -1, attached: true },
   ].filter((p) => p.text !== "");
   if (parts.length === 0) return null;
-  const subagents = agentModels(agents());
-  // Right after the main model, which stays the session's own.
-  if (subagents) parts.splice(1, 0, { key: "agents", text: subagents, drop: 1 });
   const width = () => 2 + parts.reduce((n, p, i) => n + p.text.length + (i === 0 ? 0 : p.attached ? 1 : 3), 0);
   while (width() > columns - RESERVED_COLUMNS) {
     const victim = parts.filter((p) => p.drop !== undefined).sort((a, b) => a.drop - b.drop)[0];
@@ -67,7 +64,7 @@ export function drawInfo(elements, columns, agents = () => []) {
     }
     if (i > 0) children.push(separator(Box, Text, "sep-" + i, "|"));
     // The branch is red with a * while the tree has changes, green when it is clean.
-    const color = p.key === "branch" ? (infoData.current.files > 0 ? TERM_TONES.alert : TERM_TONES.calm) : p.key === "agents" ? ICON_COLORS.agents : undefined;
+    const color = p.key === "branch" ? (infoData.current.files > 0 ? TERM_TONES.alert : TERM_TONES.calm) : undefined;
     children.push(Text({ key: p.key, bold: p.bold === true, color, dimColor: p.key === "dir" || p.key === "speed", children: p.text }));
   });
   return Box({ key: "info", flexDirection: "row", paddingX: 1, children });

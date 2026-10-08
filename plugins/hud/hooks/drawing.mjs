@@ -7,6 +7,7 @@ import { short } from "./formatting.mjs";
 import { contextData, turnDeltas, chartText, barsWidth, barsSvg, trendWord } from "./context.mjs";
 import { limitData, gaugeOf } from "./limits.mjs";
 import { cacheState, cacheText, cacheDetails } from "./cache.mjs";
+import { agentModels } from "./info.mjs";
 
 // Hover cards: the app shows no SVG <title> tooltip, so each pill carries a card of its own,
 // hidden until the pointer is over the pill, drawn above the band, in the app theme's own
@@ -123,7 +124,7 @@ export function drawLine(elements, surface, columns, now, agents) {
   // A window that already reset has no valid reading: hidden until the next one.
   const gauges = limitData.reading.list.filter((limit) => !(Date.parse(limit.resetsAt ?? "") <= now)).map((limit) => gaugeOf(limit, now));
   const cacheNow = cacheState(now);
-  // Block-character bars in the app. In the terminal the line gives up detail in steps until it fits:
+  // Block-character bars in the app. In the terminal the limits row gives up detail in steps until it fits:
   // the cache's lifetime (compact), then the bars (nobar: the reset times stay),
   // then the reset times too (none).
   let mode = "svg";
@@ -160,24 +161,27 @@ export function drawLine(elements, surface, columns, now, agents) {
   }
   for (const g of gauges) blocks.push(gaugeBlock(elements, mode, g));
   if (cacheNow) blocks.push(cacheBlock(elements, mode, cacheNow, compact));
-  // Agents last, shown only while some run: the blocks before them stay in place. The terminal's
-  // info line already lists them by model, so the pill is the desktop's alone.
-  if (desktop && agents.length > 0) {
-    const parts = [];
-    parts.push(icon(Svg, "i", "agents", ICON_COLORS.agents, T.icons.agents));
-    parts.push(Text({ key: "v", bold: true, children: T.agents(agents.length) }));
-    // The hover card lists what each one is doing.
+  // Agents beside the context, shown only while some run. The app shows a count with what each
+  // one is doing in the hover card; the terminal, without one, lists them by model.
+  if (agents.length > 0) {
+    const parts = desktop
+      ? [icon(Svg, "i", "agents", ICON_COLORS.agents, T.icons.agents), Text({ key: "v", bold: true, children: T.agents(agents.length) })]
+      : [Text({ key: "l", children: T.agentsLabel }), Text({ key: "v", bold: true, color: ICON_COLORS.agents, children: agentModels(agents) })];
     blocks.push({ key: "agents", tint: TINTS.agents, parts, tip: agents.map((a) => `${a.type} · ${a.description}`).join("\n") });
   }
 
+  // Two rows on both surfaces: what the session is doing (context, agents) above, the limits and
+  // the cache below, next to the prompt.
   const row = (b) => ({ key: b.key, flexDirection: "row", columnGap: 1, alignItems: "center", children: b.parts });
+  const isStatus = (b) => b.key === "context" || b.key === "agents";
+  let draw;
   if (desktop) {
     // Pills: tinted, outlined, side by side. The app rounds a Box only through its border, and
     // a border brings a padding that made the band taller than the prompt box: paddingY, set
     // after it, takes the vertical part back.
     // A pill never shrinks: squeezed, the app broke "24 %" over two lines.
     // A keyed pill is a hover scope: its card shows while the pointer is over it.
-    const pills = blocks.map((b) =>
+    draw = (list) => list.map((b) =>
       Box({
         ...row(b),
         children: b.tip ? [...b.parts, hoverCard(Box, Text, b.tip)] : b.parts,
@@ -189,32 +193,20 @@ export function drawLine(elements, surface, columns, now, agents) {
         backgroundColor: b.tint[0],
       }),
     );
-    // Two rows: what the session is doing (context, cache, agents) above the limits.
-    const rowOf = (key, list) => (list.length ? Box({ key, flexDirection: "row", alignItems: "center", columnGap: 1, children: list }) : null);
-    const status = rowOf("row-status", pills.filter((_, i) => !blocks[i].key.startsWith("gauge-")));
-    const limits = rowOf("row-limits", pills.filter((_, i) => blocks[i].key.startsWith("gauge-")));
-    const rows = [status, limits].filter(Boolean);
-    return rows.length === 1 ? Box({ flexDirection: "row", paddingX: 1, children: rows }) : Box({ flexDirection: "column", rowGap: 1, paddingX: 1, children: rows });
+  } else {
+    draw = (list) => list.flatMap((b, i) => (i > 0 ? [separator(Box, Text, "sep-" + i), Box(row(b))] : [Box(row(b))]));
   }
-  const children = [];
-  blocks.forEach((b, i) => {
-    if (i > 0) children.push(separator(Box, Text, "sep-" + i));
-    children.push(Box(row(b)));
-  });
-  return Box({ flexDirection: "row", alignItems: "center", paddingX: 1, children });
+  const rowOf = (key, list) => (list.length ? Box({ key, flexDirection: "row", alignItems: "center", ...(desktop ? { columnGap: 1 } : {}), children: draw(list) }) : null);
+  const rows = [rowOf("row-status", blocks.filter(isStatus)), rowOf("row-limits", blocks.filter((b) => !isStatus(b)))].filter(Boolean);
+  if (rows.length === 1) return Box({ flexDirection: "row", paddingX: 1, children: rows });
+  return Box({ flexDirection: "column", ...(desktop ? { rowGap: 1 } : {}), paddingX: 1, children: rows });
 }
 
-// Width of the terminal line in characters, with the bars and details. A new field on the line has to be counted here.
+// Width of the terminal's limits row in characters, with the bars and details. A new field on that row has to be counted here.
 // `level`: 0 everything, 1 a compact cache, 2 also no bars, (3: no reset times either, never measured).
 function textWidth(gauges, cacheNow, level = 0) {
   let width = 0;
   let blocks = 0;
-  if (contextData.readings.length > 0) {
-    const cur = contextData.readings[contextData.readings.length - 1];
-    width += 2 + short(cur.tokens).length;
-    if (contextData.readings.length >= 2) width += 1 + turnDeltas().length + 1 + trendWord().length;
-    blocks++;
-  }
   for (const g of gauges) width += g.label.length + 1 + (level < 2 ? TEXT_CELLS + 1 : g.value.length + 1) + (g.mark ? 1 + g.mark.length : 0) + (g.when ? 3 + g.when.length : 0);
   blocks += gauges.length;
   if (cacheNow) {

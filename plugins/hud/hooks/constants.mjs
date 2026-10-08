@@ -33,6 +33,7 @@ const TEXT = {
       compacted: "Compacted: the next message writes a new, smaller cache.",
     },
     agents: (n) => (n === 1 ? "1 agent" : `${n} agents`),
+    agentsLabel: "agents",
     icons: { five_hour: "5-hour limit", seven_day: "7-day limit", spend_limit: "Spend limit", reset: "Resets in", cache: "Prompt cache", agents: "Agents running" },
   },
 };

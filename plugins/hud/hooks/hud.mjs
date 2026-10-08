@@ -1,7 +1,8 @@
-// HUD: one line above the prompt, and suggested next prompts above it.
+// HUD: two rows above the prompt, and suggested next prompts above them.
 //   Terminal, blocks split by a thin rule:
-//   ☁ 440k ▃▄▂▇▆ ▲ +8.4k │ 5h ██▒▒░░ 37% ▼ 3 · 2h22 │ 7d ███▓░░ 60% ▲ 2 · 2d23h │ cache 52 min │ 2 agents
-//   Desktop app: the same blocks as tinted, outlined pills.
+//   ☁ 440k ▃▄▂▇▆ ▲ +8.4k │ agents 2× Haiku 5.5
+//   5h ██▒▒░░ ▼ 3 · 2h22 │ 7d ███▓░░ ▲ 2 · 2d23h │ cache 52 min
+//   Desktop app: the same blocks and rows as tinted, outlined pills.
 //
 // Context reading: adapted from the Token Weather example,
 //   Copyright 2026 Anthropic PBC, SPDX-License-Identifier: Apache-2.0 (claude-code-playground).

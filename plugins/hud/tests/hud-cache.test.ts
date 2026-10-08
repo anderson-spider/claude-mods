@@ -142,8 +142,11 @@ test("agents: a desktop pill while subagents run, gone once they finish", async 
   const desktop = await band($, "desktop");
   expect(desktop.texts).toContain("2 agents");
   expect(String(await cardOf(desktop.ui, "agents"))).toContain("Plan · Review the diff");
-  // The terminal shows them on the info line, by model, not as a count.
-  expect((await band($, "terminal")).texts.some((t: string) => t.includes("2 agents"))).toBe(false);
+  // The terminal shows them by model, not as a count, beside the context, above the limits.
+  const term = await band($, "terminal");
+  expect(term.texts.some((t: string) => t.includes("2 agents"))).toBe(false);
+  expect(term.texts).toContain("agents");
+  expect(term.texts.indexOf("agents")).toBeLessThan(term.texts.indexOf("5h"));
   list = list.map((a) => ({ ...a, status: "completed" }));
   await ($ as any).turn.complete({ answer: "ok", agentId: "a1" } as any);
   const after = await band($, "terminal");
