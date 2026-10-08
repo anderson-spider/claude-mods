@@ -31,6 +31,11 @@
       "name": "hud",
       "source": "./plugins/hud",
       "description": "A usage line above the prompt (context, 5-hour and 7-day limits against the clock, the prompt cache, the subagents running) and suggested next prompts you can pick, in order, into one draft."
+    },
+    {
+      "name": "threads",
+      "source": "./plugins/threads",
+      "description": "A lead chat starts real Claude sessions on chosen models (tmux), watches and steers them, and shows which apps each one drives through codex-computer-use."
     }
   ]
 }
