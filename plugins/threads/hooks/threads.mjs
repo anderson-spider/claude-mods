@@ -2179,6 +2179,7 @@ async function createInline($, p, { model, title, task, cwd, here, reportBack, m
 // A few seconds after the spawn: did it register, or is it stuck on a login or trust screen?
 async function settle($, p, entry) {
   let trustSent = false;
+  let trustWaits = 0;
   for (let i = 0; i < 8; i++) {
     await run($, ["sleep", "1"], 5000);
     const panes = await livePanes($);
@@ -2206,6 +2207,8 @@ async function settle($, p, entry) {
       await logEvent($, p, "trust-accepted", { id: entry.id });
       continue;
     }
+    // a slow terminal can take a few seconds to drop the prompt after the keys: look again before calling it stuck
+    if (trustSent && screen.needsTrust && !screen.needsLogin && ++trustWaits < 3) continue;
     if (screen.needsLogin || screen.needsTrust) {
       const status = screen.needsLogin ? "needs-login" : "needs-trust";
       await patchThread($, p, entry.id, { status });

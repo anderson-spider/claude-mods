@@ -288,7 +288,8 @@ export const PANE_FORMAT = "#{session_name}|#{pane_dead}|#{pane_pid}";
 // ---- the screen ----------------------------------------------------------------------
 
 const LOGIN = /Login expired|Not logged in|Please run \/login|Invalid API key|OAuth token (has )?expired|run `?claude auth login/i;
-const TRUST = /Do you trust the files in this folder|Yes, I trust this folder|Is this a project you created or one you trust/i;
+// The prompt's own lines start with these words (after a cursor or number): a thread that mentions them mid-sentence in its output, usually behind a ⏺ marker, is not on the prompt.
+const TRUST = /^\s*(?:[❯>›]\s*)?(?:\d+\.\s*)?(?:Quick safety check|Do you trust the files in this folder|Is this a project you created or one you trust|Yes, I trust this folder)/im;
 const YES_OPTION = /^\s*[❯>›]?\s*1\.\s+Yes\b/m;
 
 const HELD = /Held message from another session/;

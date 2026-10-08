@@ -797,6 +797,23 @@ describe("threads: creating", () => {
     expect(types.filter((t: string) => t === "trust-stuck")).toHaveLength(1);
   });
 
+  test("a slow terminal that drops the trust prompt after the keys is not reported as stuck", async ($, on) => {
+    const w = fresh({ register: false, spawnScreen: "Do you trust the files in this folder?\n❯ 1. Yes, I trust this folder\n  2. No, exit" });
+    w.onSleep = (world, n) => {
+      if (n === 3) for (const t of world.tmux.values()) t.screen = "╭─╮\n│ > │\n╰─╯";
+    };
+    await boot($, on, w);
+    const out = await threads($, "new haiku Scout --cwd /work/untrusted -- list");
+    expect(out).not.toMatch(/stuck on the folder trust prompt/);
+    expect(events(w).map((e: any) => e.type)).not.toContain("trust-stuck");
+    expect(created(w, "Scout").status).not.toBe("needs-trust");
+  });
+
+  test("a thread quoting the trust prompt in its output is not on the trust prompt", () => {
+    const quoted = "⏺ The prompt reads: Quick safety check: Is this a project you created or one you trust?\n  and option 1 is Yes, I trust this folder, so I pressed Enter.\n╭─╮\n│ > │\n╰─╯";
+    expect(readScreen(quoted).needsTrust).toBe(false);
+  });
+
   test("a trust prompt with no recognizable options gets no key", async ($, on) => {
     const w = fresh({ register: false, spawnScreen: "Do you trust the files in this folder?\n ❯ Continue\n   Quit" });
     await boot($, on, w);
