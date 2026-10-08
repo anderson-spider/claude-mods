@@ -17,6 +17,7 @@
 import { createInterface } from 'node:readline'
 
 let initialized = false
+let capabilities = null
 let threadCount = 0
 let turnCount = 0
 let nextServerId = 9000
@@ -139,6 +140,8 @@ const handle = message => {
       initialized = true
       return
     case 'initialize':
+      capabilities = params.capabilities ?? null
+
       return answer(id, { userAgent: 'fake-codex/0.0', codexHome: '/nowhere', platformFamily: 'unix', platformOs: 'macos' })
     case 'thread/start': {
       threadCount += 1
@@ -169,7 +172,7 @@ const handle = message => {
 
       return
     case 'fake/probe':
-      return answer(id, { initialized })
+      return answer(id, { initialized, capabilities })
     case 'fake/silent':
       return
     case 'fake/exit':

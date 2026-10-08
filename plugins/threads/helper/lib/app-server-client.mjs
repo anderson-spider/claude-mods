@@ -9,6 +9,13 @@ const CLIENT_INFO = { name: 'threads-helper', title: 'Threads helper', version: 
 const DEFAULT_TIMEOUT_MS = 60_000
 const STARTUP_TIMEOUT_MS = 30_000
 const STDERR_TAIL = 2000
+// Streamed pieces whose final item arrives in full anyway; the server need not send them.
+const OPT_OUT = [
+  'item/agentMessage/delta',
+  'item/reasoning/summaryTextDelta',
+  'item/reasoning/summaryPartAdded',
+  'item/reasoning/textDelta',
+]
 
 // The server answered one of our requests with an error.
 export class RpcError extends Error {
@@ -62,7 +69,7 @@ export class AppServerClient {
     try {
       const init = await this.request(
         'initialize',
-        { clientInfo: this.clientInfo, capabilities: { experimentalApi: true } },
+        { clientInfo: this.clientInfo, capabilities: { experimentalApi: true, optOutNotificationMethods: OPT_OUT } },
         this.startupTimeoutMs,
       )
       // The protocol expects this notification after initialize and before anything else.
