@@ -39,7 +39,7 @@ export const COMMON_PROPERTIES = {
   model: {
     type: 'string',
     description:
-      'Optional. The model menu entry to pick for a new chat, by the start of its label (e.g. "GPT-5.6 Sol"); an unknown one fails and lists those on offer.',
+      'Optional. The model menu entry to pick for a new chat, by the start of its label as the menu shows it; an unknown one fails and lists those on offer.',
   },
   files: {
     type: 'array',
