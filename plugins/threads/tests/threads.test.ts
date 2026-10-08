@@ -26,6 +26,7 @@ import {
   worktreeOutcome,
   isUnread,
 } from "../hooks/core.mjs";
+import { waitForThreads } from "../hooks/threads.mjs";
 
 const HOME = "/home/tester";
 const CFG = `${HOME}/.claude`;
@@ -266,7 +267,10 @@ function engine(on: any, w: World) {
   on("session.start", ($: any, e: any) => ({ cwd: e.cwd }));
   on("command.register", ($: any, e: any) => ({ value: { command: e.name } }));
   on("tool.register", ($: any, e: any) => ({ value: { tool: `mcp__threads__${e.name}` } }));
-  on("clock.now", () => ({ value: w.now }));
+  on("clock.now", ($: any) => {
+    (w as any).hook = $;
+    return { value: w.now };
+  });
   on("clock.every", () => ({ value: undefined }));
   on("http.fetch", ($: any, e: any) => {
     if (String(e.url).startsWith("http://codex-threads")) return codexFetch(w, e);
@@ -527,6 +531,45 @@ async function boot($: any, on: any, w: World) {
 }
 function created(w: World, title: string) {
   return registry(w).threads.find((t: any) => t.title === `Thread | ${title}`);
+}
+
+// A `$` for calling the module's functions directly (the test host cannot hand a hook an abort signal):
+// every `$.noun.method(arg)` goes to the same engine mock the host would use.
+function engineFacade(w: World): any {
+  const handlers = new Map<string, (...a: any[]) => any>();
+  engine((...args: any[]) => {
+    const [name, ...rest] = args;
+    if (typeof name === "string" && typeof rest.at(-1) === "function" && !(rest[0] && typeof rest[0] === "object")) handlers.set(name, rest.at(-1));
+  }, w);
+  const eventOf = (name: string, [a, b]: any[]) => {
+    if (name === "env.get") return { name: a };
+    if (name === "fs.write") return { path: a, text: b };
+    if (name.startsWith("fs.")) return { path: a };
+    if (name === "process.run") return { argv: a, ...(b ?? {}) };
+    if (name === "http.fetch") return { url: a, init: b };
+    return a ?? {};
+  };
+  const store = new Map<unknown, unknown>();
+  const state = { get: async (atom: unknown) => ({ value: store.get(atom) }), set: async (atom: unknown, value: unknown) => void store.set(atom, value) };
+  const facade: any = new Proxy(
+    {},
+    {
+      get: (_t, noun: string) =>
+        noun === "state" ? state : new Proxy(
+          {},
+          {
+            get: (_n, method: string) => async (...args: any[]) => {
+              const arg = eventOf(`${noun}.${method}`, args);
+              const handler = handlers.get(`${noun}.${method}`);
+              if (!handler) throw new Error(`no engine mock for ${noun}.${method}`);
+              const out = await handler(facade, arg);
+              return out && typeof out === "object" && "value" in out ? out.value : out;
+            },
+          },
+        ),
+    },
+  );
+  return facade;
 }
 
 const PANE_PROPS = { title: "Threads", isFocused: true, bodyColumns: 140, placement: "dock", scroll: {}, view: {} };
@@ -1074,6 +1117,62 @@ describe("threads: reports and monitoring", () => {
     const r: any = await $.tool.call({ tool: "mcp__threads__threads_wait", ids: [t.id], until: "idle", timeout_s: 300 } as any);
     expect(r.result).toMatch(/^Every thread is done or needs you\./);
     expect(r.result).toMatch(/\[idle\]/);
+  });
+
+  // The test host cannot hand a hook an abort signal, so these call waitForThreads with an engine facade.
+  test("threads_wait stops with 'interrupted' when the signal is already aborted: no sleep, threads still listed", async ($, on) => {
+    const w = fresh();
+    await boot($, on, w);
+    await threads($, "new haiku Haiku scout -- list the files");
+    const t = created(w, "Haiku scout");
+    const ctl = new AbortController();
+    ctl.abort();
+    const sleepsBefore = w.sleeps;
+    const r: string = await waitForThreads(engineFacade(w), { ids: [t.id], timeout_s: 60 }, ctl.signal);
+    expect(r).toMatch(/^Stopped waiting: interrupted\./);
+    expect(r).toContain("Changed: none");
+    expect(r).toContain(t.id);
+    expect(w.sleeps).toBe(sleepsBefore);
+  });
+
+  test("threads_wait stops with 'interrupted' when the signal fires during the sleep, and polls no more", async ($, on) => {
+    const w = fresh();
+    await boot($, on, w);
+    await threads($, "new haiku Haiku scout -- list the files");
+    const t = created(w, "Haiku scout");
+    const ctl = new AbortController();
+    const sleepsBefore = w.sleeps;
+    w.onSleep = (world) => {
+      world.now += 3000;
+      ctl.abort();
+    };
+    const r: string = await waitForThreads(engineFacade(w), { ids: [t.id], timeout_s: 300 }, ctl.signal);
+    expect(r).toMatch(/^Stopped waiting: interrupted\./);
+    expect(r).not.toMatch(/Timed out/);
+    expect(w.sleeps - sleepsBefore).toBe(1);
+  });
+
+  test("threads_wait with several threads reports each of them, and what changed before the interrupt", async ($, on) => {
+    const w = fresh();
+    await boot($, on, w);
+    await threads($, "new haiku Haiku scout -- list the files");
+    await threads($, "new haiku Haiku other -- read the docs");
+    const a = created(w, "Haiku scout");
+    const b = created(w, "Haiku other");
+    const ctl = new AbortController();
+    const sleepsBefore = w.sleeps;
+    w.onSleep = (world, n) => {
+      world.now += 3000;
+      if (n === sleepsBefore + 1) world.tmux.get(a.tmux)!.screen = PERMISSION_SCREEN;
+      if (n === sleepsBefore + 2) ctl.abort();
+    };
+    const r: string = await waitForThreads(engineFacade(w), { until: "idle", timeout_s: 300 }, ctl.signal);
+    // a needs you, which would end an "idle" wait on its own only if b were done too
+    expect(r).toMatch(/^Stopped waiting: interrupted\./);
+    expect(r).toContain(`Changed: ${a.id}`);
+    expect(r).toContain(a.id);
+    expect(r).toContain(b.id);
+    expect(w.sleeps - sleepsBefore).toBe(2);
   });
 
   test("threads_wait times out, and any_change returns at the first change", async ($, on) => {
