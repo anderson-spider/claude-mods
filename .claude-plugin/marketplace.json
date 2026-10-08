@@ -35,7 +35,7 @@
     {
       "name": "threads",
       "source": "./plugins/threads",
-      "description": "A lead chat starts real Claude sessions on chosen models (tmux), watches and steers them, and shows which apps each one drives through codex-computer-use."
+      "description": "A lead chat starts Claude sessions (tmux) or Codex sessions (app-server helper) on chosen models, watches and steers them, and shows which apps each one drives through codex-computer-use."
     }
   ]
 }

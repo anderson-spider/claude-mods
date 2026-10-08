@@ -99,7 +99,19 @@ import {
   worktreeFor,
   worktreeOutcome,
   isUnread,
+  CODEX_NO_WORKTREE,
 } from "./core.mjs";
+import {
+  CUA_NODE,
+  callHelper,
+  codexActivity,
+  codexModelOf,
+  codexModes,
+  codexStateOf,
+  codexTaskText,
+  helperSocket,
+  startHelperArgv,
+} from "./codex.mjs";
 
 const PANE = "threads";
 const PANE_TITLE = "Threads";
@@ -191,7 +203,7 @@ export function register(on, options) {
     await $.command.register({
       name: "threads",
       description: "Threads: create, watch and steer Claude Code worker sessions on other models",
-      argumentHint: "[new <model> <title> [--inline|--session] -- <task> | list | send <id> <msg> | type | interrupt | model | approve | deny | open | close <id> | cap <n> | clean | help]",
+      argumentHint: "[new <model> <title> [--inline|--session|--codex] -- <task> | list | send <id> <msg> | type | interrupt | model | approve | deny | open | close <id> | cap <n> | clean | help]",
       immediate: true,
     });
     await registerTools($);
@@ -569,7 +581,7 @@ export function register(on, options) {
         children: [
           Text({ children: `${indent}${isSel ? "›" : " "}` }),
           Text({ color: colorOf(t.status), children: dotOf(t.status) }),
-          Text({ color: "blue", children: modelChip(t.verifiedModel || t.requestedModel).padEnd(6) }),
+          Text({ color: "blue", children: modelChip(t.backend === "codex" ? "codex" : t.verifiedModel || t.requestedModel).padEnd(6) }),
           Button({
             key: `sel:${t.id}`,
             label: clip(`${t.pinned ? "⚑ " : ""}${t.forkedFrom ? "⑂ " : ""}${t.worktree && !t.worktree.removed ? "⎇ " : ""}${t.desktop?.length ? "▣ " : ""}${shortTitle(t.title)}${t.archived ? " (archived)" : ""}`, Math.max(8, leftW - 24 - indent.length - (isUnread(t) ? 4 : 0))),
@@ -685,8 +697,10 @@ export function register(on, options) {
           ],
         }),
       );
-      right.push(dim(`model  asked ${t.requestedModel} · running ${verified}${t.effort ? ` · effort ${t.effort}` : ""}`, rightW));
       const isInline = t.backend === "inline";
+      const isCodex = t.backend === "codex";
+      if (isCodex) right.push(dim(`model  Codex ${t.requestedModel === "codex" ? "account default" : t.requestedModel}${t.codexThreadId ? ` · thread ${t.codexThreadId}` : ""}`, rightW));
+      else right.push(dim(`model  asked ${t.requestedModel} · running ${verified}${t.effort ? ` · effort ${t.effort}` : ""}`, rightW));
       right.push(dim(`cwd    ${shortPath(t.cwd, isInline ? 40 : rightW - 7)}${isInline ? ` · inline agent ${t.agentId}` : ""}`, rightW));
       right.push(dim(`task   ${oneLine(t.task)}`, rightW));
       right.push(dim(`cost   ${t.costUsd ? money(t.costUsd) : "$0"} est. API-equivalent${t.pinned ? " · pinned" : ""}${t.archived ? " · archived" : ""}`, rightW));
@@ -710,17 +724,19 @@ export function register(on, options) {
         right.push(Text({ color: "red", wrap: "truncate", children: clip("Sits on the folder trust prompt. Trust the folder yourself, then close and recreate.", rightW) }));
       }
       const isLive = LIVE.has(t.status);
+      // inline and Codex threads show an activity feed, not a terminal screen
+      const feed = isInline || isCodex;
       const buttons = [
-        Button({ key: "view", label: `w ${ui.mode === "screen" ? "Transcript" : isInline ? "Activity" : "Screen"}`, hotkey: "w", onPress: () => toggleMode($) }),
+        Button({ key: "view", label: `w ${ui.mode === "screen" ? "Transcript" : feed ? "Activity" : "Screen"}`, hotkey: "w", onPress: () => toggleMode($) }),
       ];
       if (isLive) {
         buttons.push(
           Button({ key: "steer", label: "s Steer", hotkey: "s", variant: "primary", onPress: () => patchUi($, (u) => ({ ...u, steering: !u.steering })) }),
           Button({ key: "interrupt", label: isInline ? "i Stop" : "i Interrupt", hotkey: "i", onPress: () => noticeOf($, () => interruptThread($, t)) }),
         );
-        // model and effort open a row of choices right here (no dialog, so they work on every surface)
-        if (!isInline) buttons.push(Button({ key: "model", label: "m Model", hotkey: "m", onPress: () => patchUi($, (u) => ({ ...u, picker: u.picker === "model" ? "" : "model" })) }));
-        buttons.push(Button({ key: "effort", label: "e Effort", hotkey: "e", onPress: () => patchUi($, (u) => ({ ...u, picker: u.picker === "effort" ? "" : "effort" })) }));
+        // model and effort open a row of choices right here (no dialog, so they work on every surface); a Codex thread has neither
+        if (!isInline && !isCodex) buttons.push(Button({ key: "model", label: "m Model", hotkey: "m", onPress: () => patchUi($, (u) => ({ ...u, picker: u.picker === "model" ? "" : "model" })) }));
+        if (!isCodex) buttons.push(Button({ key: "effort", label: "e Effort", hotkey: "e", onPress: () => patchUi($, (u) => ({ ...u, picker: u.picker === "effort" ? "" : "effort" })) }));
       }
       if (t.status === "needs-you" && !isInline) {
         buttons.push(
@@ -805,11 +821,11 @@ export function register(on, options) {
         right.push(Text({ color: "green", wrap: "truncate", children: clip(line, rightW) }));
       }
       const isFresh = detail.id === t.id && detail.mode === ui.mode;
-      const heading = ui.mode === "screen" ? (isInline ? "Live activity (last 30)" : "Screen (last 30 lines)") : "Transcript (last 20)";
+      const heading = ui.mode === "screen" ? (feed ? "Live activity (last 30)" : "Screen (last 30 lines)") : "Transcript (last 20)";
       right.push(Text({ bold: true, children: heading }));
       if (!isFresh) right.push(dim("loading…", rightW));
       else if (detail.lines.length === 0) {
-        right.push(dim(ui.mode === "screen" ? (isInline ? "(no activity seen yet)" : "(screen is empty or the thread is gone)") : "(nothing in the transcript yet)", rightW));
+        right.push(dim(ui.mode === "screen" ? (feed ? "(no activity seen yet)" : "(screen is empty or the thread is gone)") : "(nothing in the transcript yet)", rightW));
       }
       else for (const l of detail.lines) right.push(Text({ wrap: "truncate", dimColor: ui.mode === "screen", children: clip(l, rightW) }));
     }
@@ -863,7 +879,7 @@ async function registerTools($) {
     inputSchema: {
       type: "object",
       properties: {
-        model: { type: "string", description: "haiku, sonnet, opus, fable, or a full model id" },
+        model: { type: "string", description: "haiku, sonnet, opus, fable, or a full model id. With backend codex: a Codex model name, or codex for the account default" },
         title: { type: "string", description: "Short title, e.g. \"Haiku scout\"; shown as \"Thread | <title>\"" },
         task: { type: "string", description: "The thread's task, written as a complete first prompt" },
         cwd: { type: "string", description: "Folder to work in (default: this chat's folder). Must be a trusted folder." },
@@ -873,9 +889,9 @@ async function registerTools($) {
         worktree: { type: "boolean", description: "Run it in its own git worktree and branch (the folder must be in a git repo), so parallel threads never edit the same files. Use when the user asks for isolation, a worktree or a separate branch, or when several threads will edit the same repo at once" },
         backend: {
           type: "string",
-          enum: ["auto", "session", "inline"],
+          enum: ["auto", "session", "inline", "codex"],
           description:
-            "session: its own Claude Code process (needs the terminal CLI login; shows in the sidebar via Remote Control). inline: a background agent of this chat on this chat's login. auto (default): session when the CLI is logged in, else inline.",
+            "session: its own Claude Code process (needs the terminal CLI login; shows in the sidebar via Remote Control). inline: a background agent of this chat on this chat's login. codex: a Codex session through the threads helper (model is a Codex model name, or omit it for the account default; no worktree, fork or model switch). auto (default): session when the CLI is logged in, else inline.",
         },
       },
       required: ["model", "title", "task"],
@@ -1327,13 +1343,13 @@ async function refresh($, opts = {}) {
 // Codex session per Claude session (and per subagent, "<session>/<agent>") and leases each app
 // to one of them. A caller untouched for BUSY_SECONDS no longer counts as busy.
 const BUSY_SECONDS = 15;
-const helperSocket = (p) => `${p.home}/.claude/mcp/codex-cu/run/helper.sock`;
+const cuSocket = (p) => `${p.home}/.claude/mcp/codex-cu/run/helper.sock`;
 // desktopUsers returns a Map of caller key -> { apps, busy }; empty when the helper is not running.
 let desktopCache = { at: 0, map: new Map() };
 async function desktopUsers($, p) {
   const now = Date.now();
   if (now - desktopCache.at < 3000) return desktopCache.map;
-  const socketPath = helperSocket(p);
+  const socketPath = cuSocket(p);
   let map = new Map();
   try {
     if (await $.fs.exists(socketPath)) {
@@ -1350,7 +1366,9 @@ async function desktopUsers($, p) {
 // A closed thread's process is killed before its own session.end hook can free its Codex
 // computer-use session, so tell the daemon directly (no-op when it is not running).
 async function releaseDesktop($, p, t) {
-  const socketPath = helperSocket(p);
+  // a Codex thread holds no computer-use lease of its own
+  if (t.backend === "codex") return;
+  const socketPath = cuSocket(p);
   const session = t.backend === "inline" ? `${t.parent?.sessionId ?? ""}/${t.agentId}` : t.sessionId;
   if (!session || !(await $.fs.exists(socketPath))) return;
   try {
@@ -1396,6 +1414,9 @@ async function doRefresh($) {
   const { value: inlineMap = {} } = await $.state.get(INLINE);
   const leadPids = await pidsAlive($, [...sessions.values()].map((x) => x.pid));
   const liveLeads = new Set([...sessions.values()].filter((x) => !leadPids || leadPids.has(x.pid)).map((x) => x.sessionId));
+  // Codex threads: one GET /status for all of them, and only when one is not closed
+  const codexSnap = reg.threads.some((t) => t.backend === "codex" && t.status !== "closed") ? await codexSnapshot($, p) : { reachable: false, byId: new Map() };
+  const reports = [];
   let inlineMapChanged = false;
   const nextMap = { ...inlineMap };
   for (const t of reg.threads) {
@@ -1435,6 +1456,23 @@ async function doRefresh($) {
         prompt: meta?.needsYou ? (last?.kind === "wait" ? last.text : "a permission prompt in this chat") : "",
         desktop: desktopOf(desk, t, lead.selfId),
       });
+      continue;
+    }
+    if (t.backend === "codex") {
+      const isOwn = t.parent?.sessionId === lead.selfId;
+      const state = t.status === "closed" ? null : codexStateOf(t, codexSnap);
+      const patch = {};
+      if (state && state.status !== t.status) {
+        patch.status = state.status;
+        if (state.status === "exited") patch.endedAt = now;
+      }
+      if (state && state.codexError !== (t.codexError ?? "")) patch.codexError = state.codexError;
+      if (Object.keys(patch).length && (isOwn || patch.status === "exited")) patches.set(t.id, { patch, from: t });
+      const row = { ...t, ...patch, isMine: isOwn, lastLine: state?.lastLine ?? "", lastKind: "", prompt: state?.prompt ?? "" };
+      rows.push(row);
+      // the newest answer of a turn goes to the lead that started the thread, unless it asked not to be reported to
+      const answer = codexSnap.byId.get(t.codexThreadId)?.lastAnswer;
+      if (isOwn && state && answer?.text && t.reportBack !== false) reports.push({ row, answer, key: `codex:${answer.at}` });
       continue;
     }
     const pane = panes.get(t.tmux);
@@ -1510,6 +1548,8 @@ async function doRefresh($) {
   rows.sort((a, b) => Number(b.isMine) - Number(a.isMine) || (a.isMine ? 0 : Number(LIVE.has(b.status)) - Number(LIVE.has(a.status))) || a.createdAt - b.createdAt);
   const plans = (reg.plans ?? []).filter((pl) => pl.lead?.sessionId === lead.selfId);
   await $.state.set(VIEW, { threads: rows, plans, selfId: lead.selfId, leadTitle: lead.title, refreshedAt: now, cap: reg.cap });
+  // deliverReport skips an answer already reported (appendedKey), so a refresh never repeats one
+  for (const r of reports) await deliverReport($, p, r.row, { answer: r.answer.text, key: r.key, model: r.row.requestedModel, source: "codex" });
 
   // the selected thread's live view, only while the pane is up
   const isOpen = (await $.ui.panes()).some((x) => x.id === PANE);
@@ -1518,7 +1558,7 @@ async function doRefresh($) {
     const sel = pool.find((r) => r.id === ui.selected) ?? pool[0];
     if (sel) {
       const lines =
-        sel.backend === "inline"
+        sel.backend === "inline" || sel.backend === "codex"
           ? ui.mode === "screen"
             ? await activityLines($, sel, 30)
             : await transcriptLines($, p, sel, 20)
@@ -1532,6 +1572,7 @@ async function doRefresh($) {
 }
 
 async function transcriptLines($, p, t, n) {
+  if (t.backend === "codex") return codexLines($, t, n);
   if (t.backend === "inline") {
     let rows = [];
     try {
@@ -1550,6 +1591,7 @@ async function transcriptLines($, p, t, n) {
 
 // A thread's newest answer, whole (up to ANSWER_MAX), not a one-line snippet.
 async function latestAnswer($, p, t) {
+  if (t.backend === "codex") return clip((await codexRead($, t))?.lastAnswer?.text ?? t.lastReport?.text ?? "", ANSWER_MAX);
   if (t.backend === "inline") {
     let rows = [];
     try {
@@ -1567,6 +1609,7 @@ async function latestAnswer($, p, t) {
 
 // The live activity feed of an inline thread (tool calls, model requests, answers), newest last.
 async function activityLines($, t, n) {
+  if (t.backend === "codex") return codexLines($, t, n);
   const { value: feed = {} } = await $.state.get(ACTIVITY);
   const { value: metaAll = {} } = await $.state.get(AGENTS);
   const lines = (feed[t.id] ?? []).slice(-n).map(activityLine);
@@ -1592,10 +1635,189 @@ async function findThread($, ref, opts = {}) {
   return hit;
 }
 
+// ---- Codex threads ----------------------------------------------------------------------------------------------
+// A Codex thread is a Codex session that the threads helper (helper/helper.mjs, one per user) keeps on
+// `codex app-server`. The helper's state is the source: no tmux pane, session file or transcript is read.
+
+const codexDeps = ($, p) => ({ fetch: (url, init) => $.http.fetch(url, init), socketPath: helperSocket(p.home) });
+const codexCall = ($, p, route, body) => callHelper(codexDeps($, p), route, body);
+
+// The helper's view of every Codex thread; reachable is false when no helper answers.
+async function codexSnapshot($, p) {
+  if (!(await $.fs.exists(helperSocket(p.home)))) return { reachable: false, byId: new Map() };
+  const r = await codexCall($, p, "/status");
+  if (!r.ok) return { reachable: false, byId: new Map() };
+  return { reachable: true, byId: new Map((r.body.threads ?? []).map((h) => [h.threadId, h])) };
+}
+
+async function codexLive($, p) {
+  if (!(await $.fs.exists(helperSocket(p.home)))) return false;
+  return (await codexCall($, p, "/status")).ok;
+}
+
+// The helper starts on demand. Its socket shows it is up; a second start exits by itself, so a race is harmless.
+async function ensureHelper($, p) {
+  if (await codexLive($, p)) return { ok: true };
+  const node = (await $.fs.exists(CUA_NODE)) ? CUA_NODE : "node";
+  // the plugin folder (where helper/ lives) is the host's $.plugin.root
+  await run($, startHelperArgv($.plugin.root, node), 10000);
+  for (let i = 0; i < 10; i++) {
+    await run($, ["sleep", "0.5"], 3000);
+    if (await codexLive($, p)) return { ok: true };
+  }
+  return { ok: false, message: `The Codex helper did not start. Its log is ${p.home}/.claude/threads-codex/state/helper.log; check that codex is installed and logged in.` };
+}
+
+// The helper's activity feed for a Codex thread (one POST /read); null when no helper answers.
+async function codexRead($, t) {
+  const r = await codexCall($, await paths($), "/read", { threadId: t.codexThreadId });
+  return r.ok ? r.body : null;
+}
+
+async function codexLines($, t, n) {
+  const r = await codexRead($, t);
+  if (!r) return ["(the Codex helper is not running)"];
+  return codexActivity(r.activity).slice(-n).map(activityLine);
+}
+
+// A Codex thread: a session on the helper, so no Claude login, folder trust or terminal is involved.
+async function createCodex($, p, { model, title, task, cwd, reportBack, permissionMode, effort, extra }) {
+  const modes = codexModes(permissionMode);
+  if (modes.error) return { error: modes.error };
+  const reg = await loadRegistry($, p);
+  const live = await liveCount($, reg);
+  if (live.length >= reg.cap) {
+    return { error: `${live.length} threads are already live and the cap is ${reg.cap}. Close one (/threads close <id>) or raise the cap (/threads cap <n>).` };
+  }
+  const lead = await leadInfo($, p, await scanSessions($, p));
+  const ready = await ensureHelper($, p);
+  if (!ready.ok) return { error: ready.message };
+  const started = await codexCall($, p, "/start", {
+    cwd,
+    task: codexTaskText({ title, leadTitle: lead.title, task }),
+    ...(model ? { model } : {}),
+    ...(effort ? { effort } : {}),
+    sandbox: modes.sandbox,
+    approval: modes.approval,
+  });
+  if (!started.ok) return { error: `Codex did not start the thread: ${oneLine(started.body.message ?? "no reply")}` };
+  const id = shortId(await newUuid($), new Set(reg.threads.map((t) => t.id)));
+  const now = await $.clock.now();
+  const entry = {
+    id,
+    backend: "codex",
+    agentId: "",
+    resolvedModel: "",
+    effort: effort ?? "",
+    title,
+    requestedModel: model ?? "codex",
+    verifiedModel: "",
+    sessionId: "",
+    tmux: "",
+    cwd,
+    permissionMode,
+    reportBack,
+    parent: { sessionId: lead.selfId, title: lead.title, socket: lead.socket },
+    task,
+    createdAt: now,
+    status: "starting",
+    lastReport: null,
+    bridgeSessionId: "",
+    closedAt: 0,
+    pid: 0,
+    socket: "",
+    codexThreadId: started.body.threadId,
+    codexError: "",
+    ...extra,
+  };
+  await mutateRegistry($, p, (fresh) => {
+    fresh.threads.push(entry);
+    return fresh;
+  });
+  await logEvent($, p, "created", {
+    id,
+    backend: "codex",
+    effort: effort ?? "",
+    title,
+    model: model ?? "",
+    codexThreadId: entry.codexThreadId,
+    cwd,
+    sandbox: modes.sandbox,
+    approval: modes.approval,
+    permissionMode,
+    reportBack,
+    lead: lead.selfId,
+  });
+  await refresh($, { force: true });
+  await patchUi($, (u) => (u.selected ? u : { ...u, selected: id }));
+  const lines = [
+    `Created ${title} (${id}) on ${model ?? "the Codex account default"}${effort ? ` (effort ${effort})` : ""} in ${cwd} as a Codex session: sandbox ${modes.sandbox}, approval ${modes.approval} (mode ${permissionMode}).`,
+    reportBack ? "It reports its answer here when each turn finishes." : "It does not report back; read it with /threads read.",
+    `Watch: /threads · Steer: /threads send ${id} <message> · Close: /threads close ${id}`,
+  ];
+  return { text: lines.join("\n"), id };
+}
+
+async function sendToCodex($, t, text) {
+  const p = await paths($);
+  const shown = shortTitle(t.title);
+  let r = await codexCall($, p, "/send", { threadId: t.codexThreadId, text });
+  let queued = false;
+  // a turn is running: the helper holds one message and sends it when that turn ends
+  if (r.status === 409 && r.body.code === "busy") {
+    r = await codexCall($, p, "/send", { threadId: t.codexThreadId, text, queue: true });
+    queued = r.ok && r.body.status === "queued";
+  }
+  await logEvent($, p, "message-sent", { id: t.id, backend: "codex", delivered: r.ok, reason: r.ok ? "" : clip(oneLine(r.body.message ?? ""), 200), text: clip(text, 500) });
+  if (!r.ok) return `Not delivered to ${shown} (${t.id}): ${oneLine(r.body.message ?? "no reply")}`;
+  await refresh($, { force: true });
+  if (queued) return `Queued for ${shown} (${t.id}): it is busy, so this message goes out when its current turn ends: ${clip(oneLine(text), 120)}`;
+  return `Sent to ${shown} (${t.id}): ${clip(oneLine(text), 120)}`;
+}
+
+async function interruptCodex($, p, t) {
+  const r = await codexCall($, p, "/interrupt", { threadId: t.codexThreadId });
+  await logEvent($, p, "interrupted", { id: t.id, backend: "codex", ok: r.ok });
+  if (!r.ok) return `Could not interrupt ${shortTitle(t.title)} (${t.id}): ${oneLine(r.body.message ?? "no reply")}`;
+  await refresh($, { force: true });
+  return `Interrupted ${shortTitle(t.title)} (${t.id}).`;
+}
+
+// Approve or deny the request the helper holds, after the person confirms it. Codex's own answers are accept or decline.
+async function answerCodex($, p, t, isApprove) {
+  if (t.status !== "needs-you") return `${shortTitle(t.title)} is not waiting on an approval.`;
+  const verb = isApprove ? "Approve" : "Deny";
+  let answer;
+  try {
+    answer = await $.ui.ask(`${shortTitle(t.title)} (${t.id}) is asking:\n\n${clip(t.prompt || "an approval request", 1200)}\n\n${verb} it?`, {
+      options: [verb, "Cancel"],
+      header: "Thread",
+    });
+  } catch {
+    answer = undefined;
+  }
+  if (answer !== verb) return `Left ${t.id}'s request as it was.`;
+  const r = await codexCall($, p, "/approve", { threadId: t.codexThreadId, decision: isApprove ? "accept" : "decline" });
+  await logEvent($, p, isApprove ? "approved" : "denied", { id: t.id, backend: "codex", ok: r.ok, prompt: clip(t.prompt, 400) });
+  await refresh($, { force: true });
+  return r.ok ? `${verb === "Approve" ? "Approved" : "Denied"} ${shortTitle(t.title)}'s request.` : `Could not answer ${t.id}: ${oneLine(r.body.message ?? "no reply")}`;
+}
+
+// Stops tracking the thread. A running turn is interrupted first, so it does not go on in Codex unseen.
+async function closeCodex($, p, t) {
+  if (t.status === "starting" || t.status === "working" || t.status === "needs-you") {
+    await codexCall($, p, "/interrupt", { threadId: t.codexThreadId });
+  }
+  const r = await codexCall($, p, "/close", { threadId: t.codexThreadId });
+  return r.status === 0 ? " The Codex helper is not running, so there was nothing else to stop." : "";
+}
+
 // ---- creating -----------------------------------------------------------------------------------------
 
 async function createThread($, input) {
-  const m = normalizeModel(input.model);
+  const isCodex = String(input.backend ?? "").toLowerCase() === "codex";
+  // a Codex model name is passed through unchecked; none means the account default
+  const m = isCodex ? { model: codexModelOf(input.model) } : normalizeModel(input.model);
   if (m.error) return { error: m.error };
   const title = threadTitle(input.title);
   if (!title) return { error: "A thread needs a title." };
@@ -1606,8 +1828,10 @@ async function createThread($, input) {
   const eff = checkEffort(input.effort);
   if (eff.error) return { error: eff.error };
   const extra = input.extra ?? {};
-  const permissionMode = mode.mode ?? (await defaultMode($));
-  const setupNote = input.extra?.planId ? "" : await setupOnFirstUse($);
+  // Codex never bypasses: a bypass default (the setting) falls back to default for a Codex thread that names no mode
+  const fallback = await defaultMode($);
+  const permissionMode = mode.mode ?? (isCodex && fallback === "bypassPermissions" ? "default" : fallback);
+  const setupNote = isCodex || input.extra?.planId ? "" : await setupOnFirstUse($);
   const made = await createThreadChecked($, input, { m, title, task, mode, eff, extra, permissionMode });
   if (!setupNote) return made;
   return made.error ? { error: `${made.error}\n${setupNote}` } : { ...made, text: `${made.text}\n${setupNote}` };
@@ -1615,7 +1839,7 @@ async function createThread($, input) {
 
 async function createThreadChecked($, input, { m, title, task, mode, eff, extra, permissionMode }) {
   const requested = String(input.backend ?? "auto").toLowerCase();
-  if (!["auto", "session", "inline"].includes(requested)) return { error: `Unknown backend "${input.backend}". Use auto, session or inline.` };
+  if (!["auto", "session", "inline", "codex"].includes(requested)) return { error: `Unknown backend "${input.backend}". Use auto, session, inline or codex.` };
 
   const p = await paths($);
   const here = await $.session.cwd();
@@ -1630,6 +1854,10 @@ async function createThreadChecked($, input, { m, title, task, mode, eff, extra,
   }
   if (!st || st.kind !== "dir") return { error: `Folder not found: ${cwd}` };
   const real = st.realPath || cwd;
+  if (requested === "codex") {
+    if (input.worktree) return { error: CODEX_NO_WORKTREE };
+    return createCodex($, p, { model: m.model, title, task, cwd: real, reportBack: input.reportBack !== false, permissionMode, effort: eff.effort, extra });
+  }
   let repo = "";
   if (input.worktree) {
     const top = await run($, ["git", "-C", real, "rev-parse", "--show-toplevel"], 5000);
@@ -1770,7 +1998,7 @@ async function liveCount($, reg) {
   return reg.threads.filter((t) => {
     if (t.status === "closed" || t.status === "exited") return false;
     if (t.parent?.sessionId !== selfId && !liveLeads.has(t.parent?.sessionId)) return false;
-    if (t.backend === "inline") return LIVE.has(statusOf.get(t.id) ?? t.status);
+    if (t.backend === "inline" || t.backend === "codex") return LIVE.has(statusOf.get(t.id) ?? t.status);
     return panes.has(t.tmux) && !panes.get(t.tmux).isDead;
   });
 }
@@ -1900,6 +2128,7 @@ async function sendToThread($, t, text) {
   const isInline = t.backend === "inline";
   // a finished inline agent is resumed by the message, so idle-and-done still counts
   if (!LIVE.has(t.status) && !(isInline && t.status === "exited" && t.isMine)) return `${t.id} is ${t.status}; nothing sent.`;
+  if (t.backend === "codex") return sendToCodex($, t, text);
   if (isInline && !t.isMine) return `${t.id} is an inline thread of another chat (${t.parent?.title ?? "?"}); only that chat can reach it.`;
   let result;
   try {
@@ -1963,9 +2192,9 @@ async function typeFallback($, p, t, text) {
 }
 
 async function typeIntoThread($, t, text) {
-  if (t.backend === "inline") {
+  if (t.backend === "inline" || t.backend === "codex") {
     const sent = await sendToThread($, t, text);
-    return `Inline threads have no prompt to type into, so it went as a message. ${sent}`;
+    return `${t.backend === "inline" ? "Inline" : "Codex"} threads have no prompt to type into, so it went as a message. ${sent}`;
   }
   if (!LIVE.has(t.status)) return `${t.id} is ${t.status}; nothing typed.`;
   const flat = oneLine(text);
@@ -1998,6 +2227,10 @@ async function stopInline($, t) {
 }
 
 async function interruptThread($, t) {
+  if (t.backend === "codex") {
+    if (!LIVE.has(t.status)) return `${shortTitle(t.title)} is ${t.status}; nothing to interrupt.`;
+    return interruptCodex($, await paths($), t);
+  }
   if (t.backend === "inline") {
     if (t.status !== "working" && t.status !== "needs-you") return `${shortTitle(t.title)} is ${t.status}; nothing to stop.`;
     const stopped = await stopInline($, t);
@@ -2016,6 +2249,7 @@ async function interruptThread($, t) {
 }
 
 async function setThreadModel($, t, rawModel) {
+  if (t.backend === "codex") return `${shortTitle(t.title)} is a Codex thread: its model is fixed when it starts, so switching is not supported for Codex threads. Start a new thread with --codex and the model you want.`;
   const m = normalizeModel(rawModel);
   if (m.error) return m.error;
   if (t.backend === "inline") return `${shortTitle(t.title)} is an inline thread; a subagent keeps the model it started on (${t.verifiedModel || t.resolvedModel || t.requestedModel}). Start a new thread on ${m.model} instead.`;
@@ -2036,6 +2270,7 @@ async function defaultMode($) {
 }
 
 async function setThreadEffort($, t, raw) {
+  if (t.backend === "codex") return `${shortTitle(t.title)} is a Codex thread: its effort is fixed when it starts, so changing it is not supported for Codex threads.`;
   const e = checkEffort(raw);
   if (e.error || !e.effort) return e.error ?? "Name an effort: low, medium, high, xhigh or max.";
   const p = await paths($);
@@ -2068,6 +2303,7 @@ async function askModel($, t) {
 
 // Approve or deny the permission prompt the thread is showing, after the person confirms it.
 async function answerPrompt($, t, isApprove) {
+  if (t.backend === "codex") return answerCodex($, await paths($), t, isApprove);
   if (t.backend === "inline") {
     return `${shortTitle(t.title)} is an inline thread: its permission prompts show in this chat, so answer them there.`;
   }
@@ -2093,6 +2329,9 @@ async function answerPrompt($, t, isApprove) {
 }
 
 async function openThread($, t, surface) {
+  if (t.backend === "codex") {
+    return `${shortTitle(t.title)} is a Codex thread: it runs in the threads helper, not in a terminal pane, so there is no live terminal to open. Continue it in Codex with: ${resumeCommand(t)}`;
+  }
   if (t.backend === "inline") {
     try {
       await $.ui.copy(surface ? { text: t.agentId, surface } : { text: t.agentId });
@@ -2191,7 +2430,7 @@ async function closeThread($, t, opts = {}) {
   if (t.status === "closed") return t.backend === "inline" ? `${t.id} is already closed.` : `${t.id} is already closed. Resume it with: ${resumeCommand(t)}`;
   const from = opts.from ?? "tool";
   if (!opts.confirmed && from !== "command") {
-    const what = t.backend === "inline" ? "Its agent in this chat is stopped." : "Its Claude Code process ends; the transcript is kept.";
+    const what = t.backend === "inline" ? "Its agent in this chat is stopped." : t.backend === "codex" ? "Codex stops tracking it; its transcript stays in Codex." : "Its Claude Code process ends; the transcript is kept.";
     const said = await confirmClose($, `Close ${shortTitle(t.title)} (${t.id}, ${t.status})? ${what}`);
     if (said === "no") return `${shortTitle(t.title)} (${t.id}) left running: you chose Cancel.`;
     if (said === "unavailable") {
@@ -2218,6 +2457,13 @@ async function closeNow($, t) {
     const tree = await finishWorktree($, p, t);
     await refresh($, { force: true });
     return `Closed ${shortTitle(t.title)} (${t.id}).${note}${tree}`;
+  }
+  if (t.backend === "codex") {
+    const note = await closeCodex($, p, t);
+    await patchThread($, p, t.id, { status: "closed", closedAt: await $.clock.now() });
+    await logEvent($, p, "closed", { id: t.id, backend: "codex", previous: t.status });
+    await refresh($, { force: true });
+    return `Closed ${shortTitle(t.title)} (${t.id}).${note} Continue it in Codex with: ${resumeCommand(t)}`;
   }
   await run($, tmuxArgv("kill-session", "-t", t.tmux), 5000);
   const now = await $.clock.now();
@@ -2354,7 +2600,7 @@ async function startWatcher($) {
   if (watcher) return;
   const { value: view = EMPTY_VIEW } = await $.state.get(VIEW);
   const hasPlan = (view.plans ?? []).some((pl) => pl.status === "running");
-  if (!hasPlan && !view.threads.some((t) => t.isMine && t.backend !== "inline" && LIVE.has(t.status))) return;
+  if (!hasPlan && !view.threads.some((t) => t.isMine && t.backend !== "inline" && t.backend !== "codex" && LIVE.has(t.status))) return;
   watcher = $.clock.every(WATCH_MS, () => {
     void watchTick($);
   });
@@ -2386,7 +2632,7 @@ async function watchOnce($, opts = {}) {
   const p = await paths($);
   const reg = await loadRegistry($, p);
   const selfId = await $.session.id();
-  const mine = reg.threads.filter((t) => t.parent?.sessionId === selfId && t.backend !== "inline" && LIVE.has(t.status));
+  const mine = reg.threads.filter((t) => t.parent?.sessionId === selfId && t.backend !== "inline" && t.backend !== "codex" && LIVE.has(t.status));
   const waiting = (reg.plans ?? []).filter((pl) => pl.lead?.sessionId === selfId && pl.status === "running" && pl.phases[pl.current ?? 0]?.status === "queued");
   await retireWaitingPredecessors($, p, { ...reg, plans: (reg.plans ?? []).filter((pl) => pl.lead?.sessionId === selfId) });
   for (const pl of waiting) await startPhase($, p, pl.id, pl.current ?? 0, opts);
@@ -2488,7 +2734,7 @@ async function deliverHeld($, p, t, screen) {
 
 // A session thread's est. API-equivalent cost from its whole transcript, re-read only when the file grew.
 async function sessionCost($, p, t) {
-  if (!t.sessionId || t.backend === "inline") return null;
+  if (!t.sessionId || t.backend === "inline" || t.backend === "codex") return null;
   const path = `${p.projects}/${slug(t.cwd)}/${t.sessionId}.jsonl`;
   let st;
   try {
@@ -2576,6 +2822,9 @@ async function detectSurface($, fromStart) {
 // ---- fork -----------------------------------------------------------------------------------------------------------
 
 async function forkThread($, input) {
+  if (String(input.backend ?? "").toLowerCase() === "codex") {
+    return { error: "A Codex thread cannot be a fork or a handoff: it starts from its task alone. Use /threads new <model> <title> --codex -- <task> instead." };
+  }
   const include = input.include === "full" ? "full" : "summary";
   const p = await paths($);
   const lead = await leadInfo($, p);
@@ -2653,7 +2902,7 @@ async function orphanThreads($, p, reg) {
   const liveLeads = new Set([...sessions.values()].filter((x) => !alive || alive.has(x.pid)).map((x) => x.sessionId));
   const panes = await livePanes($);
   return reg.threads.filter(
-    (t) => t.status !== "closed" && t.status !== "exited" && t.backend !== "inline" && !liveLeads.has(t.parent?.sessionId) && panes.has(t.tmux) && !panes.get(t.tmux).isDead,
+    (t) => t.status !== "closed" && t.status !== "exited" && t.backend !== "inline" && t.backend !== "codex" && !liveLeads.has(t.parent?.sessionId) && panes.has(t.tmux) && !panes.get(t.tmux).isDead,
   );
 }
 
@@ -2695,7 +2944,7 @@ async function closeIdleThreads($, p, reg, sessions, now) {
   lastIdleCheck = now;
   const selfId = await $.session.id();
   for (const t of reg.threads) {
-    if (t.parent?.sessionId !== selfId || t.backend === "inline" || t.status !== "idle" || t.pinned) continue;
+    if (t.parent?.sessionId !== selfId || t.backend === "inline" || t.backend === "codex" || t.status !== "idle" || t.pinned) continue;
     const sess = sessions.get(t.sessionId);
     const quietSince = sess?.statusUpdatedAt ?? sess?.updatedAt ?? 0;
     if (!quietSince || sess?.status !== "idle" || now - quietSince < idleCloseMinutes * 60000) continue;
@@ -2716,11 +2965,11 @@ async function renameThread($, t, raw) {
   await patchThread($, p, t.id, { title });
   await logEvent($, p, "renamed", { id: t.id, from: t.title, to: title });
   let note = "";
-  if (t.backend !== "inline" && t.status === "idle") {
+  if (t.backend !== "inline" && t.backend !== "codex" && t.status === "idle") {
     // the session's own name (sidebar, /resume picker) follows through Claude Code's /rename
     const typed = await typeIntoThread($, t, `/rename ${title}`);
     note = typed.startsWith("Typed") ? " Its session name changed too." : ` Its session kept its old name (${typed}).`;
-  } else if (t.backend !== "inline" && LIVE.has(t.status)) {
+  } else if (t.backend !== "inline" && t.backend !== "codex" && LIVE.has(t.status)) {
     note = ` Its session name in the sidebar changes once it is idle; ask again then, or run /threads rename ${t.id} ${shortTitle(title)}.`;
   }
   await refresh($, { force: true });
@@ -2864,6 +3113,12 @@ async function staleThreads($, p, reg) {
   for (const t of reg.threads) {
     if (t.status === "closed") continue;
     let why = "";
+    if (t.backend === "codex") {
+      if (t.status === "exited") why = "the Codex helper no longer tracks it";
+      else if (!liveLeads.has(t.parent?.sessionId)) why = "its lead chat is gone";
+      if (why) out.push({ t, why });
+      continue;
+    }
     if (t.backend !== "inline" && (!panes.has(t.tmux) || panes.get(t.tmux).isDead)) why = "its process has ended";
     else if (!liveLeads.has(t.parent?.sessionId)) why = "its lead chat is gone";
     else if (t.planId && finishedPlans.has(t.planId)) why = "its plan is finished";
@@ -2922,6 +3177,8 @@ async function runSetup($, opts = {}) {
     for (const { t } of stale) {
       if (t.backend === "inline") {
         if (t.parent?.sessionId === (await $.session.id())) await stopInline($, { ...t, isMine: true });
+      } else if (t.backend === "codex") {
+        await closeCodex($, await paths($), t);
       } else if (t.tmux) await run($, tmuxArgv("kill-session", "-t", t.tmux), 5000);
       await patchThread($, p, t.id, { status: "closed", closedAt: await $.clock.now(), closedBy: "setup" });
     }
@@ -3007,6 +3264,7 @@ async function createPlan($, input) {
 }
 
 async function createPlanChecked($, input, v) {
+  if (String(input.backend ?? "").toLowerCase() === "codex") return { error: "A plan runs Claude threads (session or inline); a Codex thread cannot be a plan phase." };
   const p = await paths($);
   const here = await $.session.cwd();
   let cwd = String(input.cwd ?? "").trim() || here;
@@ -3482,7 +3740,7 @@ async function waitForThreads($, args, signal) {
 
 async function readText($, t, mode, limit) {
   const p = await paths($);
-  if (mode === "screen" && t.backend === "inline") {
+  if (mode === "screen" && (t.backend === "inline" || t.backend === "codex")) {
     const n = Math.min(60, Math.max(1, Number(limit) || 30));
     return fitTail([`${t.title} (${t.id}) live activity, ${t.status}:`], (await activityLines($, t, n)).map((l) => clip(l, 400)), 9000);
   }
@@ -3506,10 +3764,11 @@ async function listText($, opts = {}) {
   const archived = view.threads.filter((t) => t.archived);
   const all = opts.includeArchived ? view.threads : view.threads.filter((t) => !t.archived);
   const fmt = (t) => {
-    const model = `${t.verifiedModel ? `${t.requestedModel} → ${t.verifiedModel}` : `${t.requestedModel} (unverified)`}${t.costUsd ? ` · ${money(t.costUsd)} est.` : ""}${t.pinned ? " · pinned" : ""}${t.forkedFrom ? (t.handedOff ? " · handoff" : " · fork") : ""}${t.archived ? " · archived" : ""}${isUnread(t) ? " · new" : ""}`;
+    const label = t.backend === "codex" ? `Codex ${t.requestedModel === "codex" ? "account default" : t.requestedModel}` : t.verifiedModel ? `${t.requestedModel} → ${t.verifiedModel}` : `${t.requestedModel} (unverified)`;
+    const model = `${label}${t.costUsd ? ` · ${money(t.costUsd)} est.` : ""}${t.pinned ? " · pinned" : ""}${t.forkedFrom ? (t.handedOff ? " · handoff" : " · fork") : ""}${t.archived ? " · archived" : ""}${isUnread(t) ? " · new" : ""}`;
     const tree = t.worktree ? `, worktree ${t.worktree.branch}${t.worktree.removed ? " (removed)" : t.worktree.kept ? " (kept)" : ""}` : "";
     const desk = t.desktop?.length ? `, desktop ${t.desktop.join("+")}` : "";
-    const kind = `${t.backend === "inline" ? "inline, chat's mode" : `session, ${t.permissionMode || "default"}`}${tree}${desk}`;
+    const kind = `${t.backend === "inline" ? "inline, chat's mode" : `${t.backend === "codex" ? "codex" : "session"}, ${t.permissionMode || "default"}`}${tree}${desk}`;
     const lines = [`${t.id}  ${dotOf(t.status)} ${t.status.padEnd(11)} ${shortTitle(t.title)}  ·  ${kind}  ·  ${model}  ·  ${shortPath(t.cwd, 50)}`];
     // full reports only for this chat's open threads; closed ones and other chats' get one line
     const full = opts.forModel && t.isMine && t.status !== "closed";
@@ -3541,7 +3800,8 @@ const HELP = [
   "Threads: real Claude Code sessions on other models that this chat creates, watches and steers.",
   "",
   "/threads                          toggle the Threads pane (1-9 select, w transcript/screen, s steer, i interrupt, m model, o open, x close, r refresh, c close pane)",
-  "/threads new <model> <title> -- <task>   create one; flags before -- : --inline or --session, --cwd <path>, --mode default|acceptEdits|plan|auto, --no-report",
+  "/threads new <model> <title> -- <task>   create one; flags before -- : --inline, --session or --codex, --cwd <path>, --mode default|acceptEdits|plan|auto, --no-report",
+  "                                  codex = a Codex session through the threads helper: the model is a Codex name (or codex for the account default); no worktree, fork, handoff or model switch",
   "                                  session = its own Claude Code process (needs claude auth login); inline = a background agent of this chat; default picks session when logged in",
   "/threads list                     every thread with status, model and last line",
   "/threads send <id> <message>      deliver a message (works mid-task)",

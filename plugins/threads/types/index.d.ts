@@ -1,8 +1,11 @@
-export type ThreadsReport = { at: number; text: string; source?: "peer" | "watcher" | "inline" };
+export type ThreadsReport = { at: number; text: string; source?: "peer" | "watcher" | "inline" | "codex" };
 export type ThreadsRow = {
   id: string;
-  backend?: "session" | "inline";
+  backend?: "session" | "inline" | "codex";
   agentId?: string;
+  // backend "codex": the Codex thread id the helper returns, and the error to show for it
+  codexThreadId?: string;
+  codexError?: string;
   resolvedModel?: string;
   title: string;
   requestedModel: string;

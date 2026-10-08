@@ -94,6 +94,7 @@ type World = {
   git?: (args: string[]) => { code?: number; stdout?: string; stderr?: string } | undefined;
   duringSpawn?: () => Promise<void>;
   store: Record<string, unknown>;
+  codex?: CodexFake; // the threads helper's socket, when a test wants Codex threads
 };
 
 function fresh(over: Partial<World> = {}): World {
@@ -200,6 +201,65 @@ function sendKeys(w: World) {
   return w.runs.filter((a) => a[0] === "tmux" && a.includes("send-keys")).map((a) => a.slice(5));
 }
 
+// The threads helper beneath the plugin: the same routes and replies as helper/lib/http.mjs, on a
+// state the test sets. A helper that is not running refuses the connection, as a missing socket does.
+const CODEX_SOCK = `${HOME}/.claude/threads-codex/run/helper.sock`;
+type CodexThread = { threadId: string; cwd: string; model: string | null; effort: string | null; status: string; lastAnswer: { text: string; at: number } | null; pendingApproval: { method: string; params: any; at: number } | null; error: string | null; queued: boolean; activity: Array<{ at: number; kind: string; text: string }> };
+type CodexFake = { running: boolean; starts: number; nextId: number; startError?: string; threads: Map<string, CodexThread>; calls: Array<{ route: string; body: any }>; decisions: string[] };
+const codexFake = (): CodexFake => ({ running: false, starts: 0, nextId: 0, threads: new Map(), calls: [], decisions: [] });
+
+function codexFetch(w: World, e: any) {
+  const c = w.codex!;
+  const route = String(e.url).slice("http://codex-threads".length);
+  const body = e.init?.body ? JSON.parse(e.init.body) : undefined;
+  c.calls.push({ route, body });
+  if (!c.running) throw new Error("connect ENOENT " + CODEX_SOCK);
+  const reply = (status: number, json: object) => ({ value: { status, ok: status < 300, headers: {}, text: JSON.stringify(json) } });
+  const fail = (status: number, code: string | undefined, message: string) => reply(status, { status: "error", ...(code ? { code } : {}), message });
+  const seen = (t: CodexThread) => ({ threadId: t.threadId, cwd: t.cwd, model: t.model, effort: t.effort, status: t.status, lastAnswer: t.lastAnswer, pendingApproval: t.pendingApproval, error: t.error, queued: t.queued });
+  if (route === "/status") return reply(200, { status: "ok", pid: 1, threads: [...c.threads.values()].map(seen) });
+  if (route === "/start") {
+    if (c.startError) return fail(502, undefined, c.startError);
+    const threadId = `th-${++c.nextId}`;
+    c.threads.set(threadId, { threadId, cwd: body.cwd, model: body.model ?? null, effort: body.effort ?? null, status: "working", lastAnswer: null, pendingApproval: null, error: null, queued: false, activity: [{ at: w.now, kind: "user", text: body.task }] });
+    c.starts++;
+    return reply(200, { status: "ok", threadId });
+  }
+  const t = c.threads.get(body?.threadId);
+  if (!t) return fail(404, "unknown", `no tracked thread ${body?.threadId}`);
+  if (route === "/read") return reply(200, { status: "ok", ...seen(t), activity: t.activity });
+  if (route === "/send") {
+    if (t.status === "exited") return fail(409, "exited", "the thread has exited");
+    if (t.status === "working" || t.status === "needs-you") {
+      if (!body.queue) return fail(409, "busy", "a turn is running; send with queue to hold one message");
+      if (t.queued) return fail(409, "busy", "a message is already queued");
+      t.queued = true;
+      return reply(200, { status: "queued" });
+    }
+    t.status = "working";
+    t.activity.push({ at: w.now, kind: "user", text: body.text });
+    return reply(200, { status: "sent", turnId: "turn-1" });
+  }
+  if (route === "/interrupt") {
+    if (t.status !== "working" && t.status !== "needs-you") return fail(409, "idle", "no turn is running");
+    t.status = "idle";
+    t.pendingApproval = null;
+    return reply(200, { status: "ok" });
+  }
+  if (route === "/approve") {
+    if (!t.pendingApproval) return fail(409, "no-approval", "no approval is waiting");
+    c.decisions.push(body.decision);
+    t.pendingApproval = null;
+    t.status = "working";
+    return reply(200, { status: "ok" });
+  }
+  if (route === "/close") {
+    c.threads.delete(t.threadId);
+    return reply(200, { status: "ok" });
+  }
+  return fail(404, undefined, `unknown route ${route}`);
+}
+
 // Claude Code beneath the mod: the host commands, files, tmux, sockets and dialogs.
 function engine(on: any, w: World) {
   on("session.start", ($: any, e: any) => ({ cwd: e.cwd }));
@@ -208,6 +268,7 @@ function engine(on: any, w: World) {
   on("clock.now", () => ({ value: w.now }));
   on("clock.every", () => ({ value: undefined }));
   on("http.fetch", ($: any, e: any) => {
+    if (String(e.url).startsWith("http://codex-threads")) return codexFetch(w, e);
     const h = (w as any).helper as { callers: any[]; calls: Array<{ url: string; body: any }> } | undefined;
     h?.calls.push({ url: e.url, body: e.init?.body ? JSON.parse(e.init.body) : undefined });
     const text = e.url.endsWith("/status") ? JSON.stringify({ callers: h?.callers ?? [], owners: {} }) : "{}";
@@ -345,6 +406,14 @@ function engine(on: any, w: World) {
     const ok = (stdout = "") => ({ value: { exitCode: 0, stdout, stderr: "", isStdoutTruncated: false, isStderrTruncated: false } });
     const fail = (stderr = "no", code = 1, stdout = "") => ({ value: { exitCode: code, stdout, stderr, isStdoutTruncated: false, isStderrTruncated: false } });
     const [cmd] = argv;
+    if (cmd === "sh") {
+      // the detached helper: it serves on its socket from now on
+      if (w.codex && String(argv[2]).includes("helper/helper.mjs")) {
+        w.codex.running = true;
+        w.fs.set(CODEX_SOCK, "");
+      }
+      return ok();
+    }
     if (cmd === "claude") {
       w.authCalls++;
       const out = JSON.stringify({ loggedIn: w.loggedIn, authMethod: w.loggedIn ? "claude.ai" : "none" });
@@ -2394,5 +2463,289 @@ describe("threads: Codex computer use", () => {
     await threads($, "close haiku");
     const release = (w as any).helper.calls.find((c: any) => c.url.endsWith("/release"));
     expect(release?.body).toEqual({ caller: scout.sessionId });
+  });
+});
+
+// ---- Codex threads ---------------------------------------------------------------------------------------------
+
+// A world whose helper is up, with no thread yet.
+function codexWorld(over: Partial<World> = {}): World {
+  const w = fresh(over);
+  w.codex = codexFake();
+  w.codex.running = true;
+  w.fs.set(CODEX_SOCK, "");
+  return w;
+}
+
+const codexStart = (w: World) => w.codex!.calls.filter((c) => c.route === "/start");
+
+describe("threads: Codex threads", () => {
+  test("/threads new --codex starts a Codex session with the sandbox its mode maps to, and no tmux pane", async ($, on) => {
+    const w = codexWorld();
+    await boot($, on, w);
+    const out = await threads($, "new codex Codex scout --codex -- list the files here");
+    expect(out).toMatch(/^Created Thread \| Codex scout \(t[0-9a-f]{5,}\) on the Codex account default in \/work\/app as a Codex session: sandbox read-only, approval on-request \(mode default\)\./);
+    expect(out).toMatch(/reports its answer here/);
+    const [start] = codexStart(w);
+    expect(start.body).toMatchObject({ cwd: APP, sandbox: "read-only", approval: "on-request" });
+    expect(start.body.model).toBeUndefined(); // "codex" names the account default: nothing is sent
+    expect(start.body.task).toContain('worker thread titled "Thread | Codex scout"');
+    expect(start.body.task).toContain("list the files here");
+    expect(spawns(w)).toEqual([]);
+    expect(w.runs.filter((a) => a[0] === "tmux" && (a.includes("send-keys") || a.includes("capture-pane") || a.includes("new-session")))).toEqual([]);
+    const t = created(w, "Codex scout");
+    expect(t).toMatchObject({ backend: "codex", codexThreadId: "th-1", requestedModel: "codex", permissionMode: "default", cwd: APP, reportBack: true, parent: { sessionId: LEAD }, status: "working", sessionId: "", tmux: "" });
+    expect(events(w).map((e: any) => e.type)).toContain("created");
+  });
+
+  test("a Codex model name is passed through unchecked; --effort goes as effort", async ($, on) => {
+    const w = codexWorld();
+    await boot($, on, w);
+    expect(await threads($, "new gpt-5.4-codex Codex model --codex --effort high -- a task")).toMatch(/^Created Thread \| Codex model/);
+    const [start] = codexStart(w);
+    expect(start.body).toMatchObject({ model: "gpt-5.4-codex", effort: "high" });
+    expect(created(w, "Codex model")).toMatchObject({ requestedModel: "gpt-5.4-codex", effort: "high" });
+  });
+
+  test("each permission mode maps to a sandbox and approval; bypassPermissions is refused before anything starts", async ($, on) => {
+    const w = codexWorld();
+    await boot($, on, w);
+    const cases: Array<[string, string, string, string]> = [
+      ["acceptEdits", "A", "workspace-write", "on-request"],
+      ["plan", "B", "read-only", "untrusted"],
+      ["auto", "C", "workspace-write", "on-request"],
+    ];
+    for (const [mode, name, sandbox, approval] of cases) {
+      await threads($, `new codex ${name} Mode ${name} --codex --mode ${mode} -- task`);
+      expect(codexStart(w).at(-1)!.body).toMatchObject({ sandbox, approval });
+    }
+    const starts = codexStart(w).length;
+    expect(await threads($, "new codex D Mode D --codex --mode bypassPermissions -- task")).toMatch(/Codex threads never bypass permissions/);
+    expect(codexStart(w).length).toBe(starts);
+    const denied: any = await $.tool.call({ tool: "mcp__threads__threads_create", model: "codex", title: "Tool D", task: "x", backend: "codex", permission_mode: "bypassPermissions" } as any);
+    expect(denied.deny).toMatch(/never bypass/);
+  });
+
+  test("a bypass default from the setting falls back to default for a Codex thread that names no mode", async ($, on) => {
+    const w = codexWorld({ store: { defaultMode: "bypassPermissions" } });
+    await boot($, on, w);
+    expect(await threads($, "new codex E Default E --codex -- task")).toMatch(/\(mode default\)/);
+    expect(codexStart(w).at(-1)!.body).toMatchObject({ sandbox: "read-only", approval: "on-request" });
+  });
+
+  test("the list shows a Codex thread as codex with its mode, and its status", async ($, on) => {
+    const w = codexWorld();
+    await boot($, on, w);
+    await threads($, "new codex Listed --codex -- task");
+    const list = await threads($, "list");
+    expect(list).toMatch(/codex, default/);
+    expect(list).toMatch(/working\s+Listed\n|working\s+Listed\s/);
+    expect(list).not.toMatch(/session, default/);
+  });
+
+  test("a finished answer is reported to the lead once, and not when the thread asked not to be reported to", async ($, on) => {
+    const w = codexWorld();
+    await boot($, on, w);
+    await threads($, "new codex Reporter --codex -- find things");
+    await threads($, "new codex Quiet --codex --no-report -- find things too");
+    const reporter = created(w, "Reporter");
+    w.codex!.threads.get(reporter.codexThreadId)!.status = "idle";
+    w.codex!.threads.get(reporter.codexThreadId)!.lastAnswer = { text: "Found 3 files: a, b, c.", at: w.now };
+    w.codex!.threads.get("th-2")!.status = "idle";
+    w.codex!.threads.get("th-2")!.lastAnswer = { text: "quiet answer", at: w.now };
+    await threads($, "refresh");
+    expect(appendedRows(w).join("\n")).toContain("Found 3 files: a, b, c.");
+    expect(appendedRows(w).join("\n")).not.toContain("quiet answer");
+    expect(events(w).find((e: any) => e.type === "finished" && e.id === reporter.id)).toMatchObject({ source: "codex" });
+    expect(created(w, "Reporter").lastReport.text).toBe("Found 3 files: a, b, c.");
+    await threads($, "refresh");
+    expect(appendedRows(w).length).toBe(1); // the same answer is not reported twice
+    // a new answer of the same thread is reported again
+    w.codex!.threads.get(reporter.codexThreadId)!.lastAnswer = { text: "Second answer.", at: w.now + 1000 };
+    await threads($, "refresh");
+    expect(appendedRows(w).at(-1)).toContain("Second answer.");
+  });
+
+  test("send goes to the helper; a busy turn gets one message held with queue, a second one is refused", async ($, on) => {
+    const w = codexWorld();
+    await boot($, on, w);
+    await threads($, "new codex Steered --codex -- start");
+    const t = created(w, "Steered");
+    const c = w.codex!.threads.get("th-1")!;
+    c.status = "idle";
+    expect(await threads($, `send ${t.id} next step please`)).toMatch(/^Sent to .* \(t[0-9a-f]+\): next step please/);
+    expect(w.codex!.calls.at(-2)).toMatchObject({ route: "/send", body: { threadId: "th-1", text: "next step please" } });
+    // the turn is running now: the send is busy, so it is retried with queue and held
+    const held = await threads($, `send ${t.id} and then this`);
+    expect(held).toMatch(/Queued for .* goes out when its current turn ends/);
+    const sends = w.codex!.calls.filter((c) => c.route === "/send");
+    expect(sends.at(-1)).toMatchObject({ body: { queue: true, text: "and then this" } });
+    expect(await threads($, `send ${t.id} a third one`)).toMatch(/Not delivered .*a message is already queued/);
+  });
+
+  test("interrupt calls the helper; with no running turn the helper's refusal is shown", async ($, on) => {
+    const w = codexWorld();
+    await boot($, on, w);
+    await threads($, "new codex Stoppable --codex -- long task");
+    const t = created(w, "Stoppable");
+    expect(await threads($, `interrupt ${t.id}`)).toMatch(/^Interrupted .* \(t/);
+    expect(w.codex!.calls.at(-2)).toMatchObject({ route: "/interrupt", body: { threadId: "th-1" } });
+    expect(await threads($, `interrupt ${t.id}`)).toMatch(/Could not interrupt .*no turn is running/);
+  });
+
+  test("approve and deny show the request and confirm first; accept or decline goes to the helper", async ($, on) => {
+    const w = codexWorld();
+    await boot($, on, w);
+    await threads($, "new codex Asker --codex -- clean up");
+    const t = created(w, "Asker");
+    const c = w.codex!.threads.get("th-1")!;
+    c.status = "needs-you";
+    c.pendingApproval = { method: "item/commandExecution/requestApproval", params: { command: "rm -rf build", cwd: APP, reason: "clean up the build" }, at: w.now };
+    await threads($, "refresh");
+    w.answers.push("Approve");
+    expect(await threads($, `approve ${t.id}`)).toMatch(/Approved .*'s request/);
+    expect(w.asked.at(-1)).toMatch(/Codex asks to run rm -rf build in \/work\/app\. Reason: clean up the build\.[\s\S]*Approve it\?/);
+    expect(w.codex!.decisions).toEqual(["accept"]);
+    expect(c.status).toBe("working");
+
+    c.status = "needs-you";
+    c.pendingApproval = { method: "item/fileChange/requestApproval", params: { changes: [{ path: "src/a.ts" }] }, at: w.now };
+    w.answers.push("Deny");
+    expect(await threads($, `deny ${t.id}`)).toMatch(/Denied .*'s request/);
+    expect(w.codex!.decisions).toEqual(["accept", "decline"]);
+
+    c.status = "needs-you";
+    c.pendingApproval = { method: "item/permissions/requestApproval", params: {}, at: w.now };
+    w.answers.push("Cancel");
+    expect(await threads($, `approve ${t.id}`)).toMatch(/Left .* request as it was/);
+    expect(w.codex!.decisions).toEqual(["accept", "decline"]);
+    w.answers.push(null); // dismissed: nothing is answered
+    await threads($, `approve ${t.id}`);
+    expect(w.codex!.decisions).toEqual(["accept", "decline"]);
+  });
+
+  test("close stops tracking the thread (interrupting a running turn first) and gives the codex resume command", async ($, on) => {
+    const w = codexWorld();
+    await boot($, on, w);
+    await threads($, "new codex Closer --codex -- task");
+    const t = created(w, "Closer");
+    const out = await threads($, `close ${t.id}`);
+    expect(out).toMatch(/^Closed .* \(t[0-9a-f]+\)\. Continue it in Codex with: codex resume th-1$/);
+    expect(w.codex!.calls.map((c) => c.route)).toEqual(expect.arrayContaining(["/close"]));
+    expect(created(w, "Closer").status).toBe("closed");
+    expect(w.runs.filter((a) => a[0] === "tmux" && a.includes("kill-session"))).toEqual([]);
+    // a running turn is interrupted before the thread is dropped
+    await threads($, "new codex Busy --codex -- task");
+    const busy = created(w, "Busy");
+    w.codex!.threads.get("th-2")!.status = "working";
+    w.codex!.calls.length = 0;
+    await threads($, `close ${busy.id}`);
+    // the refresh after the close asks no helper: no Codex thread is left open to read
+    expect(w.codex!.calls.map((c) => c.route)).toEqual(["/status", "/interrupt", "/close"]);
+  });
+
+  test("model and effort are not supported for a Codex thread", async ($, on) => {
+    const w = codexWorld();
+    await boot($, on, w);
+    await threads($, "new codex Fixed --codex -- task");
+    const t = created(w, "Fixed");
+    expect(await threads($, `model ${t.id} sonnet`)).toMatch(/not supported for Codex threads/);
+    expect(await threads($, `effort ${t.id} high`)).toMatch(/not supported for Codex threads/);
+    expect(w.codex!.calls.some((c) => c.route === "/send")).toBe(false);
+  });
+
+  test("open says a Codex thread has no terminal pane", async ($, on) => {
+    const w = codexWorld();
+    await boot($, on, w);
+    await threads($, "new codex Opened --codex -- task");
+    const t = created(w, "Opened");
+    expect(await threads($, `open ${t.id}`)).toMatch(/runs in the threads helper, not in a terminal pane.*codex resume th-1/);
+  });
+
+  test("read shows the helper's activity and the latest answer", async ($, on) => {
+    const w = codexWorld();
+    await boot($, on, w);
+    await threads($, "new codex Reader --codex -- read the docs");
+    const t = created(w, "Reader");
+    w.codex!.threads.get("th-1")!.lastAnswer = { text: "The docs say so.", at: w.now };
+    const text = await threads($, `read ${t.id}`);
+    expect(text).toMatch(/transcript, working/);
+    expect(text).toMatch(/you +task: read the docs/);
+    expect(text).toMatch(/latest answer:\nThe docs say so\./);
+    // the screen of a Codex thread is its activity feed
+    expect(await threads($, `screen ${t.id}`)).toMatch(/live activity, working:\n.*task: read the docs/);
+  });
+
+  test("setup names a Codex thread the helper lost as stale; setup clean closes it through the helper", async ($, on) => {
+    const w = codexWorld();
+    await boot($, on, w);
+    await threads($, "new codex Stale --codex -- task");
+    const t = created(w, "Stale");
+    w.codex!.threads.clear();
+    await threads($, "refresh");
+    expect(await threads($, "setup")).toMatch(/Stale: t[0-9a-f]+ \(Stale, the Codex helper no longer tracks it\)/);
+    expect(await threads($, "setup clean")).toMatch(/Closed 1 stale thread: /);
+    expect(created(w, "Stale")).toMatchObject({ status: "closed", closedBy: "setup" });
+    expect(w.codex!.calls.some((c) => c.route === "/close" && c.body.threadId === "th-1")).toBe(true);
+    expect(t.id).toBeTruthy();
+  });
+
+  test("the helper missing: started once, then the threads go to it", async ($, on) => {
+    const w = fresh();
+    w.codex = codexFake(); // not running, no socket yet
+    await boot($, on, w);
+    expect(await threads($, "new codex One --codex -- first")).toMatch(/^Created/);
+    expect(await threads($, "new codex Two --codex -- second")).toMatch(/^Created/);
+    const starts = w.runs.filter((a) => a[0] === "sh");
+    expect(starts.length).toBe(1);
+    expect(starts[0][2]).toMatch(/nohup 'node' '.*\/helper\/helper\.mjs' >\/dev\/null 2>&1 &$/);
+    expect(w.codex!.calls.filter((c) => c.route === "/start").length).toBe(2);
+  });
+
+  test("the helper's refusal to start a thread is shown and no row is kept", async ($, on) => {
+    const w = codexWorld();
+    w.codex!.startError = "codex app-server is not logged in";
+    await boot($, on, w);
+    expect(await threads($, "new codex Refused --codex -- task")).toMatch(/Not created\. Codex did not start the thread: codex app-server is not logged in/);
+    expect(registry(w).threads).toEqual([]);
+  });
+
+  test("the helper gone: its threads show exited with the reason, and a send is not delivered", async ($, on) => {
+    const w = codexWorld();
+    await boot($, on, w);
+    await threads($, "new codex Lost --codex -- task");
+    const t = created(w, "Lost");
+    w.codex!.running = false;
+    w.fs.delete(CODEX_SOCK);
+    await threads($, "refresh");
+    expect(created(w, "Lost")).toMatchObject({ status: "exited", codexError: "the Codex helper is not running, so this thread is no longer tracked" });
+    expect(await threads($, `send ${t.id} hello`)).toMatch(/is exited; nothing sent/);
+  });
+
+  test("a helper that restarted no longer tracks the thread: exited with that reason", async ($, on) => {
+    const w = codexWorld();
+    await boot($, on, w);
+    await threads($, "new codex Restarted --codex -- task");
+    w.codex!.threads.clear();
+    await threads($, "refresh");
+    expect(created(w, "Restarted")).toMatchObject({ status: "exited", codexError: "the Codex helper no longer tracks this thread (it restarted)" });
+  });
+
+  test("a Codex thread cannot take a worktree, be forked or be a plan phase", async ($, on) => {
+    const w = codexWorld();
+    await boot($, on, w);
+    expect(await threads($, "new codex Tree --codex --worktree -- task")).toMatch(/cannot take --worktree/);
+    expect(((await $.tool.call({ tool: "mcp__threads__threads_create", model: "codex", title: "Tree tool", task: "x", backend: "codex", worktree: true } as any)) as any).deny).toMatch(/cannot take --worktree/);
+    expect(((await $.tool.call({ tool: "mcp__threads__threads_fork", title: "Forked", model: "haiku", task: "x", backend: "codex" } as any)) as any).deny).toMatch(/cannot be a fork or a handoff/);
+    expect(((await $.tool.call({ tool: "mcp__threads__threads_plan", title: "Plan", gate: "auto", backend: "codex", phases: PHASES } as any)) as any).deny).toMatch(/cannot be a plan phase/);
+    expect(w.codex!.calls.filter((c) => c.route === "/start")).toEqual([]);
+  });
+
+  test("Codex threads count toward the cap", async ($, on) => {
+    const w = codexWorld();
+    await boot($, on, w);
+    await threads($, "cap 1");
+    await threads($, "new codex First --codex -- task");
+    expect(await threads($, "new codex Second --codex -- task")).toMatch(/1 threads are already live and the cap is 1/);
   });
 });

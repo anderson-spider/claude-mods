@@ -168,6 +168,7 @@ export function parseNew(args) {
   const [model = "", ...rest] = tokens;
   const words = [];
   const out = { model, title: "", task, cwd: undefined, permissionMode: undefined, reportBack: true, backend: "auto" };
+  let backendFlag = "";
   for (let i = 0; i < rest.length; i++) {
     const tok = rest[i];
     if (tok === "--cwd") {
@@ -183,19 +184,24 @@ export function parseNew(args) {
       out.reportBack = false;
     } else if (tok === "--worktree") {
       out.worktree = true;
-    } else if (tok === "--inline" || tok === "--session") {
-      out.backend = tok.slice(2);
+    } else if (tok === "--inline" || tok === "--session" || tok === "--codex") {
+      const want = tok.slice(2);
+      if (backendFlag && backendFlag !== want) return { error: "Pick one of --inline, --session or --codex." };
+      backendFlag = want;
+      out.backend = want;
     } else {
       words.push(tok);
     }
   }
   out.title = words.join(" ");
   if (!out.model || !out.title || !out.task) return { error: NEW_USAGE };
+  if (out.backend === "codex" && out.worktree) return { error: CODEX_NO_WORKTREE };
   return out;
 }
 
 export const NEW_USAGE =
-  "Usage is /threads new <model> <title> [--inline|--session] [--cwd <path>] [--mode bypassPermissions|default|acceptEdits|plan|auto] [--effort <level>] [--worktree] [--no-report] -- <task>";
+  "Usage is /threads new <model> <title> [--inline|--session|--codex] [--cwd <path>] [--mode bypassPermissions|default|acceptEdits|plan|auto] [--effort <level>] [--worktree] [--no-report] -- <task>";
+export const CODEX_NO_WORKTREE = "A Codex thread cannot take --worktree: it runs in the folder you give with --cwd, under Codex's sandbox.";
 
 export function checkMode(mode) {
   if (mode === undefined || mode === null || mode === "") return { mode: undefined };
@@ -657,6 +663,8 @@ export function shellQuote(s) {
 }
 
 export function resumeCommand(t) {
+  // a Codex thread is resumed by its id in the Codex CLI or app
+  if (t.backend === "codex") return `codex resume ${t.codexThreadId}`;
   return `cd ${shellQuote(t.cwd)} && claude --resume ${t.sessionId}`;
 }
 
