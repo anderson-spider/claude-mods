@@ -31,7 +31,7 @@ export async function runLoop(deps: LoopDeps, loop: Loop, book: LoopBook): Promi
       for (let index = 1; index <= loop.maxRounds; index++) {
         if (cancelled()) return
         loop.status = 'developing'
-        const dev = await book.start({ kind: 'execute', task: index === 1 || !fix ? loop.task : fixTask(loop.task, fix.path, fix.source), files: loop.files }, {
+        const dev = await book.start({ kind: 'execute', task: index === 1 || !fix ? loop.task : fixTask(loop.task, fix.path, fix.source), files: loop.files, engine: loop.devEngine }, {
           quiet: true, owned: true, session: devSession, paneName: `loop-${loop.id} dev`,
           reportPath: phaseReportPath(deps.tmpdir, loop.id, 'dev', index), notify,
         })
@@ -56,7 +56,7 @@ export async function runLoop(deps: LoopDeps, loop: Loop, book: LoopBook): Promi
         }
 
         loop.status = 'reviewing'
-        const qa = await book.start({ kind: 'review', task: '', files: [], focus: qaFocus(loop.task) }, {
+        const qa = await book.start({ kind: 'review', task: '', files: [], focus: qaFocus(loop.task), engine: loop.qaEngine }, {
           quiet: true, session: qaSession, paneName: `loop-${loop.id} qa`,
           reportPath: phaseReportPath(deps.tmpdir, loop.id, 'qa', index), notify,
         })

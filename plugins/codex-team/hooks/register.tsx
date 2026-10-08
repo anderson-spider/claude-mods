@@ -2,8 +2,9 @@ import { atom, read, update } from 'claude-code'
 import type { Elements, EngineInterface, Register, RenderElement } from 'claude-code'
 
 import type { BandJob } from '../types'
-import { herdrAvailable, herdrOf } from './herdr'
-import type { Herdr } from './model'
+import { herdrAvailable, herdrOf, missingEngines } from './herdr'
+import { claudeModeOf } from './engines'
+import type { Engine, Herdr } from './model'
 import { createBook } from './book'
 import { createPaneLayout } from './pane-layout'
 import { JOB_LIMIT_MS } from './names'
@@ -28,6 +29,8 @@ let book: ReturnType<typeof createBook> | undefined
 let loops: Loop[] = []
 let loopDeps: LoopDeps | undefined
 let unavailable: string | undefined
+// Engines whose executable was not found when the session started: a job asking for one is refused.
+let absent: Engine[] = []
 let ticker: { cancel: () => void } | undefined
 
 // The band draws what `$.state` holds; a one-second tick keeps the elapsed time moving while a job is active.
@@ -116,10 +119,11 @@ export const register: Register = on => {
     await $.tool.register(LOOP)
     await $.tool.register(JOBS)
     await $.command.register({ name: 'codex-team', description: 'Lists the Codex Team jobs and any ct-* panes left behind: /codex-team' })
-    await $.command.register({ name: 'codex-team-doctor', description: 'Checks that Herdr and Codex are in place: /codex-team-doctor' })
+    await $.command.register({ name: 'codex-team-doctor', description: 'Checks that Herdr and the Codex and Claude agents are in place: /codex-team-doctor' })
 
     const run = (argv: string[], init?: { timeoutMs?: number }) => $.process.run(argv, init)
     unavailable = await herdrAvailable(run, { HERDR_ENV: await $.env.get('HERDR_ENV') })
+    absent = unavailable === undefined ? await missingEngines(run) : []
     const pane = await $.env.get('HERDR_PANE_ID')
     if (unavailable === undefined && !pane) unavailable = 'HERDR_PANE_ID is not set: codex-team needs to know the pane it runs in.'
     if (unavailable === undefined && pane) {
@@ -131,6 +135,7 @@ export const register: Register = on => {
         files: { read: (path: string) => $.fs.read(path).catch(() => undefined), write: (path: string, text: string) => $.fs.write(path, text) },
         tmpdir,
         now: Date.now,
+        claudeMode: claudeModeOf(await $.env.get('CODEX_TEAM_CLAUDE_MODE')),
       }
       book = createBook({ ...deps, notify: notifier($, deps.herdr) })
       loopDeps = { ...deps, notify: loopNotifier($, deps.herdr) }
@@ -139,11 +144,11 @@ export const register: Register = on => {
     return next(e)
   })
 
-  on('tool.call', { tool: 'mcp__codex-team__execute' }, ($, e) => startJob({ book, unavailable }, 'execute', e, () => publish($)).catch(failure))
+  on('tool.call', { tool: 'mcp__codex-team__execute' }, ($, e) => startJob({ book, unavailable, absent }, 'execute', e, () => publish($)).catch(failure))
 
-  on('tool.call', { tool: 'mcp__codex-team__review' }, ($, e) => startJob({ book, unavailable }, 'review', e, () => publish($)).catch(failure))
+  on('tool.call', { tool: 'mcp__codex-team__review' }, ($, e) => startJob({ book, unavailable, absent }, 'review', e, () => publish($)).catch(failure))
 
-  on('tool.call', { tool: 'mcp__codex-team__loop' }, ($, e) => startLoop({ book, loopDeps, unavailable }, e, loop => loops.push(loop), () => publish($)).catch(failure))
+  on('tool.call', { tool: 'mcp__codex-team__loop' }, ($, e) => startLoop({ book, loopDeps, unavailable, absent }, e, loop => loops.push(loop), () => publish($)).catch(failure))
     .catch(() => refusal('codex-team loop failed before it could answer.'))
 
   on('tool.call', { tool: 'mcp__codex-team__jobs' }, ($, e) => jobsTool({ book, loops, unavailable }, e, () => publish($), Date.now).catch(failure))

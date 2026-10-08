@@ -1,10 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { buildPrompt, codexArgs, fixTask, qaFocus } from '../hooks/prompts'
-
-test('codexArgs sandboxes execute to the workspace and review to read-only', () => {
-  expect(codexArgs('execute')).toEqual(['-s', 'workspace-write', '-a', 'on-request'])
-  expect(codexArgs('review')).toEqual(['-s', 'read-only', '-a', 'on-request'])
-})
+import { buildPrompt, fixTask, qaFocus } from '../hooks/prompts'
 
 test('buildPrompt for execute carries the task, the files, the report path and the no-commit rule', () => {
   const prompt = buildPrompt('execute', { task: 'add X', files: ['a.ts'] }, '/tmp/codex-team/1.md')

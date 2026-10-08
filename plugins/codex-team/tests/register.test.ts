@@ -2,6 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import { agent, pause, loopHost, startSession } from './helpers'
 import type { BandJob } from '../types'
+import { LOOP } from '../hooks/schemas'
 
 test('the host shares the layout across execute, review and loop tools and resets it after each close', async ($, on) => {
   const host = loopHost(on)
@@ -33,15 +34,7 @@ test('the host shares the layout across execute, review and loop tools and reset
 test('loop tool registers its schema, lists the parent and publishes one final report', async ($, on) => {
   const host = loopHost(on)
   await startSession($)
-  expect(host.tools.loop).toEqual({
-    type: 'object',
-    properties: {
-      task: { type: 'string', description: 'The whole task, self-contained.' },
-      files: { type: 'array', items: { type: 'string' }, description: 'Optional files or folders Codex should start from.' },
-      maxRounds: { type: 'integer', minimum: 1, default: 3, description: 'Maximum dev and QA rounds.' },
-    },
-    required: ['task'],
-  })
+  expect(host.tools.loop).toEqual(LOOP.inputSchema)
   const answer = await $.tool.call({ tool: 'mcp__codex-team__loop', task: 'add X' })
   expect(answer.result).toContain('Started loop-1')
   for (let i = 0; i < 100 && !host.messages.length; i++) await pause(1)

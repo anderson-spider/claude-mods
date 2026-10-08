@@ -1,6 +1,7 @@
 import { STOP_WAIT_MS, agentName, nextFreeId } from './names'
 import { runJob, waitForStop, type JobOptions } from './job'
 import { owns } from './identity'
+import { PROFILES } from './engines'
 import { messageOf, appendNote } from './text'
 import { isFinished } from './model'
 import type { Deps, Job, Kind, Notify, Request } from './model'
@@ -40,7 +41,7 @@ export function createBook(deps: Deps) {
         throw new Error(`Pane ${job.pane} no longer runs ${job.agent}; /stop was skipped and the pane was left alone.`)
       }
       // /stop ends only this Codex session's background terminals, never the shared daemon's other sessions.
-      await deps.herdr.submit(job.agent, '/stop')
+      await deps.herdr.submit(job.agent, PROFILES[job.engine].cancel.stop!)
     } catch (error) {
       appendNote(job, `Could not send /stop to end its background commands: ${messageOf(error)}`)
     }
@@ -59,7 +60,7 @@ export function createBook(deps: Deps) {
     /** Registers the job and starts it (an execute one after the others); answers at once. */
     async start(request: Request, options: JobOptions & { quiet?: boolean; owned?: boolean; notify?: Notify } = {}): Promise<Job> {
       const id = await reserveId()
-      const job: Job = { id, kind: request.kind, title: kinds[request.kind].title(request), status: 'queued', agent: options.session?.agent ?? agentName(id), startedAt: deps.now() }
+      const job: Job = { id, kind: request.kind, engine: request.engine ?? 'codex', title: kinds[request.kind].title(request), status: 'queued', agent: options.session?.agent ?? agentName(id), startedAt: deps.now() }
       jobs.push(job)
       completions.set(id, new Promise<Job>(done => resolve.set(id, done)))
       const run = async () => {
@@ -110,8 +111,9 @@ export function createBook(deps: Deps) {
         resolve.delete(id)
         return `${job.agent} had not started and is now cancelled.`
       }
-      // Only an agent that got its task can have started background commands.
-      const prompted = job.status === 'working' || job.status === 'blocked' || job.status === 'cancelled'
+      const { keys, stop } = PROFILES[job.engine].cancel
+      // Only an agent that got its task can have started background commands, and only some have a command to end them.
+      const prompted = stop !== undefined && (job.status === 'working' || job.status === 'blocked' || job.status === 'cancelled')
       // Record the cancel before sending keys: the agent may still be registering.
       job.status = 'cancelled'
       job.endedAt = deps.now()
@@ -122,7 +124,7 @@ export function createBook(deps: Deps) {
           release()
           return `Pane ${job.pane} no longer runs ${job.agent}; the job is cancelled, nothing was sent and the pane was left alone.`
         }
-        await deps.herdr.sendKeys(job.agent, ['esc'])
+        await deps.herdr.sendKeys(job.agent, keys)
       } catch (error) {
         release()
         return `Could not send Esc to ${job.agent} (pane ${job.pane}): ${messageOf(error)}`

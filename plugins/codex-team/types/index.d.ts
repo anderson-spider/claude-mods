@@ -23,15 +23,19 @@ declare module 'claude-code' {
     'mcp__codex-team__execute': {
       task: string
       files?: string[]
+      engine?: 'codex' | 'claude'
     }
     'mcp__codex-team__review': {
       target?: string
       focus?: string
+      engine?: 'codex' | 'claude'
     }
     'mcp__codex-team__loop': {
       task: string
       files?: string[]
       maxRounds?: number
+      devEngine?: 'codex' | 'claude'
+      qaEngine?: 'codex' | 'claude'
     }
     'mcp__codex-team__jobs': {
       id?: number

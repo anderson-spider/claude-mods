@@ -1,5 +1,6 @@
-import { JOB_LIMIT_MS, WAIT_CHUNK_MS, reportPath } from './names'
-import { buildPrompt, codexArgs } from './prompts'
+import { JOB_LIMIT_MS, QUIET_MS, QUIET_POLLS, WAIT_CHUNK_MS, reportPath } from './names'
+import { PROFILES, argsFor } from './engines'
+import { buildPrompt } from './prompts'
 import { HerdrError } from './model'
 import { isWaiting } from './report'
 import { owns } from './identity'
@@ -61,13 +62,13 @@ function recordReport(job: Job, path: string, report: string | undefined): boole
   return true
 }
 
-function errorText(code: string, message: string, pane: string): string {
+function errorText(code: string, message: string, pane: string, label: string): string {
   return code === 'pane_mismatch'
     ? message
     : code === 'agent_prompt_stalled'
-    ? `Codex showed no activity after the prompt${pane}; it may still have arrived, so it was not sent again: inspect the pane.`
+    ? `${label} showed no activity after the prompt${pane}; it may still have arrived, so it was not sent again: inspect the pane.`
     : code === 'timeout'
-      ? `timeout: ${message}${pane}; Codex was not stopped.`
+      ? `timeout: ${message}${pane}; ${label} was not stopped.`
       : `${message}${pane}`
 }
 
@@ -108,7 +109,7 @@ async function startAgent({ deps, job, request, options, whileBlocked }: Phase):
 
   if (!session?.ready) {
     try {
-      await herdr.start(job.agent, job.pane, codexArgs(request.kind))
+      await herdr.start(job.agent, job.pane, job.engine, argsFor(job.engine, request.kind, deps.tmpdir, deps.claudeMode))
     } catch (error) {
       // A startup error does not prove the role stopped.
       if (session) session.active = true
@@ -143,10 +144,40 @@ async function sendTask({ deps, job, request, options, whileBlocked, settle, pat
   if (options.session) options.session.active = false
 }
 
+/**
+ * For an engine whose settled state is not proof of an end (Claude's is read from its screen): waits until the report
+ * is there, following the agent back to work or to a prompt for the person, and gives up once it stays settled
+ * without one. Answers false when cancelled meanwhile.
+ */
+async function confirmReport({ deps, job, whileBlocked, settle, readReport }: Run, deadline: number): Promise<boolean> {
+  const { herdr } = deps
+  let quiet = 0
+  while (quiet < QUIET_POLLS) {
+    if (job.status === 'cancelled') return false
+    if (await readReport() !== undefined) return true
+    const remaining = deadline - deps.now()
+    if (remaining <= 0) return true
+    let state: AgentState
+    try {
+      state = await herdr.wait(job.agent, Math.min(QUIET_MS, remaining), ['working', 'blocked'])
+    } catch (error) {
+      if (!(error instanceof HerdrError) || error.code !== 'timeout') throw error
+      state = 'idle'
+    }
+    if (state === 'blocked') await whileBlocked('blocked')
+    else if (state === 'working') await whileBlocked(await settle(timeoutMs => herdr.wait(job.agent, timeoutMs)))
+    quiet = state === 'blocked' || state === 'working' ? 0 : quiet + 1
+  }
+  return true
+}
+
 /** Reads the report, following any question the agent leaves for the person, and records it. Answers false when cancelled meanwhile. */
-async function collectReport({ deps, job, whileBlocked, settle, path, readReport }: Run): Promise<boolean> {
+async function collectReport(run: Run, deadline: number): Promise<boolean> {
+  const { deps, job, whileBlocked, settle, path, readReport } = run
   const { herdr } = deps
   const cancelled = () => job.status === 'cancelled'
+  const confirm = PROFILES[job.engine].confirmByReport
+  if (confirm && !await confirmReport(run, deadline)) return false
   let report = await readReport()
   // A report that opens with `STATUS: WAITING` holds a question: the agent waits for the person in its pane, then writes the real report.
   while (isWaiting(report)) {
@@ -158,8 +189,11 @@ async function collectReport({ deps, job, whileBlocked, settle, path, readReport
     setStatus(job, 'working')
     // Answered: a later blocked episode (an approval) has no question in the report.
     job.report = undefined
+    // The old question must not pass for the new report while the agent is still working.
+    if (confirm) await deps.files.write(path, '')
     await whileBlocked(await settle(timeoutMs => herdr.wait(job.agent, timeoutMs)))
     if (cancelled()) return false
+    if (confirm && !await confirmReport(run, deadline)) return false
     report = await readReport()
   }
   if (!recordReport(job, path, report)) {
@@ -181,16 +215,16 @@ export async function runJob(deps: JobDeps, job: Job, request: Request, options:
   const cancelled = () => job.status === 'cancelled'
   const path = options.reportPath ?? reportPath(deps.tmpdir, job.id)
   const { settle, whileBlocked } = waits(deps, job, { deadline, limit, chunk: options.chunkMs ?? WAIT_CHUNK_MS })
-  // Loop children read an empty file as no report, so an old verdict cannot approve a new task.
+  // Loop children read an empty file as no report, so an old verdict cannot approve a new task; so do agents whose report confirms their end.
   const readReport = async () => {
     const written = await deps.files.read(path)
-    return options.freshReport && written === '' ? undefined : written
+    return (options.freshReport || PROFILES[job.engine].confirmByReport) && written === '' ? undefined : written
   }
   const run: Run = { deps, job, request, options, whileBlocked, settle, path, readReport }
 
   try {
-    // Loop children must not inherit a verdict from a report left by an earlier session.
-    if (options.freshReport) {
+    // Loop children must not inherit a verdict from a report left by an earlier session; a report that confirms the end must be this job's own.
+    if (options.freshReport || PROFILES[job.engine].confirmByReport) {
       await deps.files.write(path, '')
       if (cancelled()) return
     }
@@ -200,11 +234,11 @@ export async function runJob(deps: JobDeps, job: Job, request: Request, options:
     await sendTask(run)
     if (cancelled()) return
 
-    if (!await collectReport(run)) return
+    if (!await collectReport(run, deadline)) return
   } catch (error) {
     const code = error instanceof HerdrError ? error.code : ''
     setStatus(job, 'failed')
-    job.error = errorText(code, messageOf(error), where())
+    job.error = errorText(code, messageOf(error), where(), PROFILES[job.engine].label)
   }
 
   if (cancelled()) return

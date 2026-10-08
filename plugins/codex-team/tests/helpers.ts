@@ -35,8 +35,8 @@ export function fakeHerdr(script: Script) {
       calls.push(`close ${pane}`)
       if (script.close) throw script.close
     },
-    start: async (name, pane, args) => {
-      calls.push(`start ${name} ${pane} ${args.join(' ')}`)
+    start: async (name, pane, engine, args) => {
+      calls.push(`start ${name} ${pane} ${engine} ${args.join(' ')}`)
       agents.set(name, pane)
       if (script.start) throw script.start
     },
@@ -78,7 +78,7 @@ export function fakeHerdr(script: Script) {
   return { herdr, calls }
 }
 
-export const job = (kind: 'execute' | 'review' = 'execute', id = 1): Job => ({ id, kind, title: 't', status: 'queued', agent: `ct-${id}`, startedAt: 0 })
+export const job = (kind: 'execute' | 'review' = 'execute', id = 1): Job => ({ id, kind, engine: 'codex', title: 't', status: 'queued', agent: `ct-${id}`, startedAt: 0 })
 export const request = (kind: 'execute' | 'review' = 'execute'): Request => ({ kind, task: 'do it', files: [] })
 
 export function setup(script: Script, files: Record<string, string> = { '/tmp/codex-team/1.md': '# Report\nall done' }) {

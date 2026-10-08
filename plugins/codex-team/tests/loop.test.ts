@@ -200,8 +200,8 @@ test('loop reuses exactly two named panes and agents and keeps all round reports
   expect(loop.status).toBe('approved')
   expect(state.calls.filter(call => call.startsWith('split'))).toEqual(['split down', 'split right w1:p2'])
   expect(state.calls.filter(call => call.startsWith('start'))).toEqual([
-    'start ct-1-dev w1:p2 -s workspace-write -a on-request',
-    'start ct-1-qa w1:p3 -s read-only -a on-request',
+    'start ct-1-dev w1:p2 codex -s workspace-write -a on-request',
+    'start ct-1-qa w1:p3 codex -s read-only -a on-request',
   ])
   expect(state.calls.filter(call => call.startsWith('rename'))).toEqual(['rename w1:p2 loop-1 dev', 'rename w1:p3 loop-1 qa'])
   expect(state.calls.filter(call => call.startsWith('prompt'))).toEqual(['prompt ct-1-dev', 'prompt ct-1-qa', 'prompt ct-1-dev', 'prompt ct-1-qa'])
@@ -282,4 +282,17 @@ test('a loop fails before the next dev round when its dev pane now runs another 
   expect(state.prompts).toHaveLength(2)
   expect(loop.error).toContain(`dev 2: ${loopAgentName(loop.id, 'dev')} failed: pane`)
   expect(loop.error).toContain('the prompt was not sent.')
+})
+
+test('a loop runs its dev and its QA with the engines asked for and says so in its report', async () => {
+  const state = loopWith(['dev one', 'VERDICT: APPROVED'])
+  const loop = await loopStart(state.deps, state.book, { ...loopRequest(), devEngine: 'codex', qaEngine: 'claude' })
+  await state.finished(loop)
+  expect(loop.status).toBe('approved')
+  expect(state.calls.filter(call => call.startsWith('start'))).toEqual([
+    'start ct-1-dev w1:p2 codex -s workspace-write -a on-request',
+    'start ct-1-qa w1:p3 claude --permission-mode manual --disallowedTools Edit NotebookEdit mcp__codex-team --allowedTools Write(//tmp/codex-team/**)',
+  ])
+  expect(state.book.get(3)?.engine).toBe('claude')
+  expect(state.files['/tmp/codex-team/loop-1.md']).toContain('Engines: dev codex, QA claude')
 })

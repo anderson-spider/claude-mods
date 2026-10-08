@@ -21,7 +21,7 @@ claude plugin test plugins/hud
 | chatgpt | Page scripts' flow, tab handling, queue, jobs, attachments | A fake `Browser`; no real page |
 | codex-computer-use (plugin) | Command parsing, routing, the approval band, `limitMs` | The `claude-code/testing` host |
 | codex-computer-use (helper) | Hub, MCP client, approvals, owners, `install.sh --check` | The real hub and client against a fake MCP server, with approvals pointed at a temp file |
-| codex-team | Jobs, the execute queue, the dev/QA loop, cancellation, pane placement and identity guards | Fakes for Herdr and the clock in `tests/helpers.ts`; no real Codex agent |
+| codex-team | Jobs, the execute queue, the dev/QA loop, cancellation, pane placement and identity guards | Fakes for Herdr and the clock in `tests/helpers.ts`; no real Codex or Claude agent run a task. `herdr agent start --kind claude` with the Claude profile's arguments was checked by hand against Herdr 0.9.3 (it starts and echoes the arguments); a whole job with a Claude agent was not run |
 | tailscale | URL building, the forbidden call, redaction, `ETag`/`If-Match` | A fake `fetch`; no fake host |
 | hud | The line on terminal and desktop, pace marks, cache states and prices, narrow-terminal steps, settings | The `claude-code/testing` host; no real session, so the paint is not checked |
 
