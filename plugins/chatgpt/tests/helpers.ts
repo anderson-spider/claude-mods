@@ -51,6 +51,7 @@ export type Shot = { stop?: boolean; images?: number; count?: number; length?: n
 export function fakeImageBrowser(options: { shots: Shot[]; base64: string; attached?: boolean; text?: string }) {
   const calls: string[] = []
   let poll = 0
+  let chunks = 0
   const browser: Browser = {
     tabs: async () => [],
     openTab: async url => {
@@ -69,7 +70,12 @@ export function fakeImageBrowser(options: { shots: Shot[]; base64: string; attac
       }
       if (code.includes('readAsDataURL')) {
         calls.push('image')
-        return printed({ found: true, url: 'https://chatgpt.com/c/img', type: 'image/png', base64: options.base64, width: 1024, height: 1024, alt: 'Imagem 1 gerada' })
+        return printed({ found: true, url: 'https://chatgpt.com/c/img', type: 'image/png', length: options.base64.length, width: 1024, height: 1024, alt: 'Imagem 1 gerada' })
+      }
+      const slice = /held\.slice\((\d+), (\d+)\)/.exec(code)
+      if (slice) {
+        chunks++
+        return printed({ chunk: options.base64.slice(Number(slice[1]), Number(slice[2])) })
       }
       if (code.includes('function convert')) return printed({ url: 'https://chatgpt.com/c/img', markdown: options.text ?? '', text: options.text ?? '' })
       const shot = options.shots[Math.min(poll++, options.shots.length - 1)]!
@@ -79,5 +85,5 @@ export function fakeImageBrowser(options: { shots: Shot[]; base64: string; attac
       calls.push(`upload ${selector} ${files.map(file => file.path).join(' ')}`)
     },
   }
-  return { browser, calls }
+  return { browser, calls, chunks: () => chunks }
 }

@@ -205,8 +205,13 @@ export function inputFor(type: string): string {
   return type.startsWith('image/') ? 'input[type=file][accept="image/*"]' : 'input[type=file]:not([accept]), input[type=file][accept=""]'
 }
 
+// Where imageScript leaves an image's base64 for imageChunkScript to hand back in slices: a browser tool's output is
+// capped, and an image is megabytes of base64.
+const HELD = 'window.__chatgptImage'
+export const CHUNK_CHARS = 40_000
+
 // Reads a generated image's bytes (`back` 0 is the last one), as the server
-// sent them when the page may fetch it, else redrawn as PNG.
+// sent them when the page may fetch it, else redrawn as PNG; prints their length, and keeps them for imageChunkScript.
 export function imageScript(back: number): string {
   return `
 const img = ${GENERATED}.at(${-1 - back});
@@ -234,8 +239,18 @@ if (!img) return JSON.stringify({ found: false }); else {
     type = 'image/png';
     b64 = canvas.toDataURL('image/png').split(',')[1] || '';
   }
-  return JSON.stringify({ found: true, url: location.href, type, base64: b64, width: img.naturalWidth, height: img.naturalHeight, alt: img.alt || '' });
+  ${HELD} = b64;
+  return JSON.stringify({ found: true, url: location.href, type, length: b64.length, width: img.naturalWidth, height: img.naturalHeight, alt: img.alt || '' });
 }`
+}
+
+// The slice of the held image's base64 from `start`; the last slice lets the page drop it.
+export function imageChunkScript(start: number): string {
+  return `
+const held = ${HELD} || '';
+const chunk = held.slice(${start}, ${start + CHUNK_CHARS});
+if (${start + CHUNK_CHARS} >= held.length) delete ${HELD};
+return JSON.stringify({ chunk });`
 }
 
 // What /chatgpt-doctor looks at in the page: every selector the plugin relies on.
