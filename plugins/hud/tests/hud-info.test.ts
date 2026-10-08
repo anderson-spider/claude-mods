@@ -154,6 +154,8 @@ test("info: in the desktop, the model, repository and branch are outlined pills"
   const pills = ((await ui.findAll({ type: "Box" })) as any[]).filter((b) => String(b.props?.key ?? "").startsWith("info-"));
   expect(pills.map((b) => b.props.key)).toEqual(["info-model", "info-dir", "info-branch"]);
   for (const b of pills) expect(b.props.borderStyle).toBe("round");
+  // Set apart from the rows of pills below it.
+  expect(((await ui.find({ type: "Box", key: "info" })) as any)?.props?.marginBottom).toBe(1);
   // The branch pill carries its marks: the worktree and the changes.
   expect(texts.indexOf("⎇wt")).toBe(texts.indexOf("andersonsilva/feat*") + 1);
   expect(texts).toContain("+70");

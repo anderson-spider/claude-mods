@@ -12,7 +12,7 @@ for (const surface of ["terminal", "desktop"] as const) {
     expect(texts).not.toContain("11% context");
     expect(texts).toContain("5h");
     // The bar (a drawn rail in the app) and the percentage beside it.
-    if (surface === "terminal") expect(texts).toContain("█");
+    if (surface === "terminal") expect(texts).toContain("━");
     else expect(((await ui.findAll({ type: "Svg" })) as any[]).some((s) => s.props?.alt === "32% used, 40% of the window gone")).toBe(true);
     expect(texts).toContain("32%");
     const dot = surface === "terminal" ? "· " : "";
@@ -109,7 +109,7 @@ test("pace mark: none for a window without a length", async ($, on) => {
   await $.session.start({ source: "startup", cwd: "/tmp" } as any);
   const { texts } = await band($, "terminal");
   expect(texts).toContain("$");
-  expect(texts).toContain("█");
+  expect(texts).toContain("━");
   expect(texts.some((t) => /^[▲▼]/.test(t))).toBe(false);
 });
 
@@ -154,7 +154,7 @@ test("narrow terminal: the cache gives up its extras, and the limits their bars,
   const extras: boolean[] = [];
   for (let columns = 20; columns <= 200; columns += 2) {
     const { texts } = await band($, "terminal", columns);
-    const bar = texts.includes("█");
+    const bar = texts.includes("━");
     const reset = texts.includes("· 3h") && texts.includes("· 3d");
     // On the limits row the bar only ever shows with the times left.
     if (bar) expect(reset).toBe(true);
@@ -283,7 +283,7 @@ test("narrow terminal: no bar, no detail", async ($, on) => {
   // The context has a row of its own: only the limits and the cache have to fit.
   const { texts } = await band($, "terminal", 30);
   expect(texts).toContain("32%");
-  expect(texts).not.toContain("█");
+  expect(texts).not.toContain("━");
   expect(texts).not.toContain("· 3h");
 });
 
@@ -313,7 +313,7 @@ test("after a restart, the turn bars come back", async ($, on) => {
   expect(store.has("turns:session-1")).toBe(true);
 });
 
-// The cells of the quota bars, in order, as one string per bar ("██░░░░░░░│·").
+// The cells of the quota bars, in order, as one string per bar ("━━╌╌╌╌╌╌╌│─").
 async function bars(ui: any): Promise<string[]> {
   const boxes = ((await ui.findAll({ type: "Box" })) as any[]).filter((b) => b.props?.key === "bar");
   return boxes.map((b) => ((b.children ?? []) as any[]).map((c) => String(c.children ?? c.props?.children ?? "")).join(""));
@@ -336,12 +336,13 @@ test("bar: in the terminal, use within the pace, ahead of it, the slack and the 
   withUsage(on, PACED);
   await $.session.start({ source: "startup", cwd: "/tmp" } as any);
   const { ui, texts } = await band($, "terminal");
-  expect(await bars(ui)).toEqual(["██░░░░░░░│·", "██│▓·······"]);
+  expect(await bars(ui)).toEqual(["━━╌╌╌╌╌╌╌│─", "━━│━───────"]);
   expect(texts).toContain("▼65");
   expect(texts).toContain("▲4");
   // The use in the window's color, the lead in the tone's, the slack dimmed, the clock in grey.
-  expect(((await ui.find({ type: "Text", text: "▓" })) as any)?.props?.color).toBe("#d9962b");
-  expect(((await ui.find({ type: "Text", text: "░" })) as any)?.props?.dimColor).toBe(true);
+  const lines = (await ui.findAll({ type: "Text", text: "━" })) as any[];
+  expect(lines.map((t) => t.props?.color)).toEqual(["#3a9a62", "#3a9a62", "#8a5fd0", "#8a5fd0", "#d9962b"]);
+  expect(((await ui.find({ type: "Text", text: "╌" })) as any)?.props?.dimColor).toBe(true);
   expect(((await ui.find({ type: "Text", text: "│" })) as any)?.props?.color).toBe("#d6d9de");
 });
 
@@ -366,7 +367,7 @@ for (const surface of ["terminal", "desktop"] as const) {
     withUsage(on, [{ kind: "spend_limit", percentUsed: 40 }]);
     await $.session.start({ source: "startup", cwd: "/tmp" } as any);
     const { ui } = await band($, surface);
-    if (surface === "terminal") expect(await bars(ui)).toEqual(["████······"]);
+    if (surface === "terminal") expect(await bars(ui)).toEqual(["━━━━──────"]);
     else expect((await rails(ui))[0]).toContain('fill="#b8892a"');
     if (surface === "desktop") expect((await rails(ui))[0]).not.toContain("#8a8f98");
   });
@@ -391,3 +392,29 @@ for (const surface of ["terminal", "desktop"] as const) {
     expect(texts.indexOf("7d")).toBeGreaterThan(texts.indexOf("5h"));
   });
 }
+
+// "Mon 14:00", the way the 7-day card writes a moment, in the machine's time zone.
+const day = (ms: number) => new Intl.DateTimeFormat("en-GB", { weekday: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(ms).replace(",", "");
+
+test("limits: the hover card adds when the window runs out at this pace, before the reset", async ($, on) => {
+  world(on);
+  withUsage(on, [
+    // 80% used in the first 2 of 5 hours: the last 20% go in 30 minutes, well before the reset.
+    { kind: "five_hour", percentUsed: 80, resetsAt: new Date(NOW + 3 * 3_600_000).toISOString() },
+    // 30% used in 4 of 7 days: behind the clock, it lasts to the reset.
+    { kind: "seven_day", percentUsed: 30, resetsAt: new Date(NOW + 3 * 86_400_000).toISOString() },
+  ]);
+  await $.session.start({ source: "startup", cwd: "/tmp" } as any);
+  const { ui } = await band($, "desktop");
+  expect(await cardOf(ui, "gauge-5h")).toBe(`Resets at ${at(NOW + 3 * 3_600_000)}\nAt this pace, runs out at ${at(NOW + 30 * 60_000)}`);
+  expect(await cardOf(ui, "gauge-7d")).toBe(`Resets ${day(NOW + 3 * 86_400_000)}`);
+});
+
+test("limits: a 7-day window ahead of the clock runs out on a given day", async ($, on) => {
+  world(on);
+  // 80% used in 4 of 7 days: the last 20% go in one day.
+  withUsage(on, [{ kind: "seven_day", percentUsed: 80, resetsAt: new Date(NOW + 3 * 86_400_000).toISOString() }]);
+  await $.session.start({ source: "startup", cwd: "/tmp" } as any);
+  const { ui } = await band($, "desktop");
+  expect(await cardOf(ui, "gauge-7d")).toBe(`Resets ${day(NOW + 3 * 86_400_000)}\nAt this pace, runs out ${day(NOW + 86_400_000)}`);
+});

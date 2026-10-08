@@ -19,6 +19,9 @@ const TEXT = {
     underMinute: "< 1m",
     hit: "hit",
     resetsAt: (time) => `Resets at ${time}`,
+    resetsOn: (time) => `Resets ${time}`,
+    runsOutAt: (time) => `At this pace, runs out at ${time}`,
+    runsOutOn: (time) => `At this pace, runs out ${time}`,
     toRewrite: (tokens) => `${tokens} to rewrite`,
     newThread: "new thread",
     times: (n) => `x${n}`,
@@ -84,11 +87,12 @@ export const weatherSvg = (band) => iconSvg(WEATHER_ICONS[band.id](band.app), WE
 // ---------- Layout ----------
 
 export const SEP = "|";
-// The quota bar, ten cells: █ used within the pace, ▓ used ahead of it, ░ the slack left before
-// the clock, · the rest, and │ between the cells where the clock stands. In the app the same
+// The quota bar, ten cells drawn as a line, so it sits mid-row and leaves the rows around it room:
+// ━ used (in the window's color within the pace, the tone's ahead of it), ╌ the slack left before
+// the clock, ─ the rest, and │ between the cells where the clock stands. In the app the same
 // segments are drawn as a rounded SVG rail.
 export const TEXT_CELLS = 10;
-export const BAR_CELLS = { used: "█", over: "▓", slack: "░", rest: "·" };
+export const BAR_CELLS = { used: "━", over: "━", slack: "╌", rest: "─" };
 export const PACE_TICK = "│";
 export const RAIL = { width: 64, height: 12, track: "rgba(127,127,127,0.22)", slack: 0.3, pace: "#8a8f98" };
 const TONES = {
