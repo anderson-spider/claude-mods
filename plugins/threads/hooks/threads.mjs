@@ -3730,7 +3730,7 @@ async function noteReport($, text) {
 
 // ---- waiting --------------------------------------------------------------------------------------------------
 
-async function waitForThreads($, args, signal) {
+export async function waitForThreads($, args, signal) {
   const until = ["idle", "any_change", "needs_you"].includes(args?.until) ? args.until : "idle";
   const timeoutS = Math.min(600, Math.max(3, Number(args?.timeout_s) || 300));
   await refresh($, { force: true });

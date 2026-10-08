@@ -141,6 +141,94 @@ test('a request the server clears itself leaves needs-you while the turn goes on
   await waitFor(() => threads.read(threadId).status === 'idle')
 })
 
+// A scripted client: the test pushes notifications and server requests itself, and sees every reply.
+const stubSetup = async () => {
+  const handlers = {}
+  const sent = []
+  const client = {
+    onNotification: fn => (handlers.notification = fn),
+    onServerRequest: fn => (handlers.serverRequest = fn),
+    onExit: fn => (handlers.exit = fn),
+    request: async method => (method === 'thread/start' ? { thread: { id: 'thr_s' } } : { turn: { id: 'turn_s' } }),
+    respond: (id, result) => sent.push({ id, result }),
+    respondError: (id, code, message) => sent.push({ id, error: { code, message } }),
+  }
+  const threads = new Threads({ client, persist: () => {} })
+  threads.attach()
+  const { threadId } = await threads.start(startInput('stub task'))
+  const ask = id =>
+    handlers.serverRequest({ id, method: 'item/commandExecution/requestApproval', params: { threadId, command: 'ls' } })
+  const resolved = (requestId, thread = threadId) => handlers.notification('serverRequest/resolved', { threadId: thread, requestId })
+
+  return { threads, threadId, sent, ask, resolved }
+}
+
+test('a resolved notice for another request id leaves the waiting approval alone', async () => {
+  const { threads, threadId, sent, ask, resolved } = await stubSetup()
+  ask(7)
+  resolved(8)
+  resolved(undefined)
+
+  const state = threads.read(threadId)
+  assert.equal(state.status, 'needs-you')
+  assert.equal(state.pendingApproval.method, 'item/commandExecution/requestApproval')
+  assert.ok(!state.activity.some(line => /resolved by the server/.test(line.text)))
+  await threads.approve({ threadId, decision: 'accept' })
+  assert.deepEqual(sent, [{ id: 7, result: { decision: 'accept' } }])
+})
+
+test('a resolved notice for an unknown or other thread changes nothing', async () => {
+  const { threads, threadId, ask, resolved } = await stubSetup()
+  ask(7)
+  resolved(7, 'thr_unknown')
+  resolved(7, null)
+
+  assert.equal(threads.read(threadId).status, 'needs-you')
+  assert.notEqual(threads.read(threadId).pendingApproval, null)
+})
+
+test('a resolved notice that arrives after the approval was answered is ignored', async () => {
+  const { threads, threadId, sent, ask, resolved } = await stubSetup()
+  ask(7)
+  await threads.approve({ threadId, decision: 'accept' })
+  const before = threads.read(threadId)
+  resolved(7)
+
+  const after = threads.read(threadId)
+  assert.equal(after.status, before.status)
+  assert.equal(after.pendingApproval, null)
+  assert.equal(after.activity.length, before.activity.length)
+  assert.equal(sent.length, 1)
+})
+
+test('a stale resolved notice does not clear the next approval', async () => {
+  const { threads, threadId, sent, ask, resolved } = await stubSetup()
+  ask(7)
+  await threads.approve({ threadId, decision: 'accept' })
+  ask(9)
+  resolved(7)
+
+  assert.equal(threads.read(threadId).status, 'needs-you')
+  await threads.approve({ threadId, decision: 'decline' })
+  assert.deepEqual(sent.at(-1), { id: 9, result: { decision: 'decline' } })
+})
+
+test('a resolved notice clears the approval without answering it, and ids match as text', async () => {
+  const { threads, threadId, sent, ask, resolved } = await stubSetup()
+  ask(7)
+  resolved('7')
+
+  const state = threads.read(threadId)
+  assert.equal(state.pendingApproval, null)
+  assert.equal(state.status, 'working')
+  assert.match(state.activity.at(-1).text, /resolved by the server/)
+  assert.deepEqual(sent, [])
+  await assert.rejects(threads.approve({ threadId, decision: 'accept' }), { status: 409, code: 'no-approval' })
+  // a second notice for the same id is a no-op
+  resolved(7)
+  assert.equal(threads.read(threadId).activity.filter(line => /resolved by the server/.test(line.text)).length, 1)
+})
+
 test('when the app-server exits, its threads are marked exited and refuse messages', async () => {
   const { threads, snapshots } = await setup()
 
