@@ -9,7 +9,6 @@ Marketplace of [Claude Code](https://claude.com/claude-code) plugins made by and
 | [branch-guard](plugins/branch-guard) | Holds a `git commit` or `git push` on the protected branch and shows what would go in. |
 | [chatgpt](plugins/chatgpt) | Lets Claude ask your logged-in ChatGPT, or have it generate an image, in terminal-browser, and saves the result locally. |
 | [codex-computer-use](plugins/codex-computer-use) | Routes native Mac app control through Codex computer use from the ChatGPT app instead of Claude's own computer use, asking before each new app. |
-| [codex-team](plugins/codex-team) | Lets Claude lead Codex or Claude agents: `execute`, `review` and dev/QA `loop` rounds run in Herdr panes as background jobs, with a band above the prompt and reports. |
 | [tailscale](plugins/tailscale) | Lets Claude query and modify your tailnet through the Tailscale API. |
 | [hud](plugins/hud) | One line above the prompt (context, 5-hour and 7-day limits against the clock, the prompt cache, the subagents running) and suggested next prompts you can write directly to the prompt box as a draft. |
 
@@ -22,7 +21,6 @@ Inside Claude Code, add the marketplace and install the plugin:
 /plugin install branch-guard@spider-claude-mods
 /plugin install chatgpt@spider-claude-mods
 /plugin install codex-computer-use@spider-claude-mods
-/plugin install codex-team@spider-claude-mods
 /plugin install tailscale@spider-claude-mods
 /plugin install hud@spider-claude-mods
 ```
@@ -104,33 +102,6 @@ It copies the helper to `~/.claude/mcp/codex-cu` (keeping `state/`, where the ap
 
 Limitations: ownership is checked for apps named as string literals in `cua.getApp(...)` and for the app each result reports, so an app reached through a variable is owned only after its first call; Codex refuses an action when the app changed since it was last read ("The user changed …"), so read and act in the same call.
 
-## codex-team
-
-Lets Claude lead Codex or Claude agents. Each job runs [Codex](https://github.com/openai/codex) (the default) or Claude Code in its own [Herdr](https://herdr.dev) pane. The first pane opens below Claude Code; later panes open to the right of the last one created, forming a row beneath the lead. If that last pane has closed, the next starts below the lead again. You can watch each agent and answer it when it asks; Claude gets a job id at once and a message when the job ends, with the path of its report. It needs Claude Code running in a Herdr pane (`HERDR_ENV=1`) and `herdr` in `PATH`, plus `codex` and `claude` for the agents you use (a job that asks for a missing one is refused); `/codex-team-doctor` checks them. The plugin adds a section to Claude's system prompt so it delegates well-bounded work on its own.
-
-| Entry | What it does |
-| --- | --- |
-| `mcp__codex-team__execute` | Tool for Claude: `task` (required, self-contained) and `files` (where the agent should start) and `engine` (`codex`, the default, or `claude`). Codex runs with `workspace-write`; Claude runs in `auto` permission mode (see below). Both work in the current directory and never commit. One `execute` runs at a time; the next ones wait in a queue. |
-| `mcp__codex-team__review` | Tool for Claude: `target` (a branch or commit; the uncommitted diff when empty) and `focus` and `engine`. The agent reads and does not edit. Reviews run in parallel. |
-| `mcp__codex-team__loop` | Tool for Claude: `task` (required, self-contained), optional `files`, `maxRounds` (integer at least 1, default 3), `devEngine` and `qaEngine` (each `codex` or `claude`, default `codex`; mixing them gives an independent review). Runs dev then read-only QA rounds, returning a loop id at once and one message at the end with the verdict and report path. `execute` and `review` remain available for manual control. |
-| `mcp__codex-team__jobs` | Tool for Claude: lists the jobs and loops of the session, shows one with `id`, or cancels it with `action: "cancel"` (sends `Esc` to the active child, then, for Codex only, `/stop` once it settles, since Codex keeps its background commands running after an interrupt; a cancelled standalone job keeps its pane open, while a cancelled loop starts no further rounds and closes its panes after the agents stop). Jobs and loops share one numeric id space. |
-| `/codex-team` | Lists the jobs, loops and any `ct-*` agents left in panes by a reload. |
-| `/codex-team-doctor` | Checks that Herdr, Codex and Claude are in place; one agent is enough. |
-
-The band above the prompt shows one row per active job (status, time elapsed and pane) and loop (phase and round, such as `loop-1 reviewing 2/3`). A job that is `blocked` is waiting for you in its pane. Each dev or QA phase has a fresh 30-minute limit; a loop is bounded by `maxRounds`. The reports are saved in a `codex-team` folder of `$TMPDIR`; each loop round writes `<loopId>-dev<round>.md` and `<loopId>-qa<round>.md`, freshly cleared before its prompt. The loop's final report is `loop-<id>.md`, with every phase job id, agent name and report path. Jobs and loops live in the session: a reload forgets them and leaves their panes open.
-
-**Claude agents.** Claude starts as its own Herdr kind (`herdr agent start --kind claude`) with a permission profile instead of Codex's sandbox:
-
-- `execute` runs with `--permission-mode auto`, so its classifier approves routine commands and the job only blocks when it needs you. Set `CODEX_TEAM_CLAUDE_MODE=acceptEdits` before starting Claude Code to have it ask for every command instead (any other value keeps `auto`).
-- `review` (and a loop's QA) runs with `--permission-mode manual`, `Edit` and `NotebookEdit` denied, and `Write` allowed only under the report folder. That is a permission policy, not a sandbox like Codex's `read-only`: a command that is not allowed asks you in the pane.
-- The agent has the `mcp__codex-team` tools denied, so it cannot lead agents of its own.
-- Herdr reads Claude's state from its screen, and an agent can look settled between two tool calls. So a Claude job ends only when its report is written: with none yet, the plugin follows the agent back to work or to an approval prompt, and gives up on the report only after the agent stays settled for 30 seconds (the pane text then becomes the summary). Its report file is cleared before the task and again once you answer a question, so an old file never ends the job.
-- A cancel sends `Esc`; Claude has no `/stop`.
-
-A loop holds the execute queue across all dev and QA rounds, so another `execute` waits until it ends. It opens one dev pane and agent (`ct-<id>-dev`, workspace-write), then one QA pane and agent (`ct-<id>-qa`, read-only) when QA first runs. Later rounds prompt those same agents, keeping their context so QA can check its earlier findings. The panes are named `loop-<id> dev` and `loop-<id> qa`; standalone panes are named `ct-<id> execute` or `ct-<id> review`. Renaming is best effort and never fails a job.
-
-QA reviews the current uncommitted diff against the original task and ends its report with exactly `VERDICT: APPROVED` or `VERDICT: CHANGES` as the last non-empty line. Approval ends the loop; changes send the original task and QA report path back to dev. Changes at `maxRounds` leave the loop `exhausted`, with the last findings in its report. A missing or invalid verdict ends it `failed`. Child finish messages are silent; the loop sends one final message to Claude. A blocked job or loop phase also sends a toast and a short message to Claude once per blocked episode, naming the pane and saying that you must answer there and the lead must not answer for you. Cancelling starts no more rounds, and a failed `Esc` can be retried while the active phase is still stopping. The execute queue stays held until the cancelled agent has stopped and its `/stop` has been sent. After attempting to write its final report and send its final message, a loop closes its dev and QA panes once the agents have stopped, whatever the outcome (approved, exhausted, failed or cancelled). Only panes that were created are closed. Closing is best effort and never changes the outcome or suppresses the final message. A standalone `execute` or `review` closes its pane once it ends `done` with its report written; after a failure, a missing report or a cancel the pane stays open so you can see what happened.
-
 ## tailscale
 
 Registers two tools for Claude to talk to the Tailscale API (`https://api.tailscale.com/api/v2`), authenticated by the `TS_API_KEY` environment variable, which must be exported when Claude Code starts:
@@ -173,8 +144,6 @@ claude plugin test plugins/chatgpt
 claude plugin validate plugins/codex-computer-use
 claude plugin test plugins/codex-computer-use
 /Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node --test plugins/codex-computer-use/helper/test/*.test.mjs
-claude plugin validate plugins/codex-team
-claude plugin test plugins/codex-team
 claude plugin validate plugins/tailscale
 claude plugin test plugins/tailscale
 ```
