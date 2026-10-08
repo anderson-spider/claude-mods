@@ -32,9 +32,22 @@ The orchestrator gets a system prompt section, adapted from the slim `orchestrat
 
 ### Commands
 
-- `/pantheon` opens a pane with the actions on the Codex jobs: one short line per job (id, state, role, description; `↻` when it can be resumed, which the orchestrator does with `delegate({ resume: jobId })`) with Cancel and Copy buttons. The details (model, time, tokens, last activity) and the native `pantheon:*` agents are in the [flightdeck](../flightdeck) pane.
+- `/pantheon` opens or focuses the panel, which also opens by itself at session start.
+- `/pantheon close` closes the panel.
 - `/pantheon cancel <jobId>`, `/pantheon config` (effective config, where each field came from, current error) and `/pantheon doctor`.
 - The status line shows `pantheon: N rodando · M em background` while jobs are active.
+
+## Panel
+
+The Agents tab keeps seven role slots in order: orchestrator, explorer, librarian, fixer, oracle, designer and council. Parallel instances stack inside their role; resumed work stays on the same line with its rounds. Other native subagents appear under "other agents" when present. Active instances show their model, elapsed time, tokens and last activity; idle roles show when they last ran and disabled roles stay visible as off. The orchestrator shows its model, effort, turn clock, context and the roles it is delegating to.
+
+The Jobs tab groups active and finished Codex jobs, with Cancel for active jobs and Copy for the job id and a resume hint. `↻` marks resumable jobs; the orchestrator resumes them with `delegate({ agent, resume: jobId, prompt })`.
+
+The terminal panel docks beside the transcript and uses a mini view when placed inline. Desktop adds a "Last 15 minutes" SVG timeline with a lane per role. Animated rails in each engine's color, a pulsing state glyph and live clocks show active work; inactive timers pause. The panel has no configuration. Rate limits, repository, branch and cache stay in hud.
+
+The tracking hooks only watch and pass events on unchanged. Native records and main-session readings use queues that keep only the latest pending snapshot in session state; the selected tab is saved there too. A failed panel-state write shows one toast. See [Privacy and permissions](../../docs/PRIVACY.md#pantheon) for the stored fields and tool-input redaction.
+
+flightdeck users: `/plugin uninstall flightdeck`.
 
 ## Configuration
 
@@ -100,8 +113,10 @@ claude plugin test plugins/pantheon
 claude --plugin-dir plugins/pantheon
 ```
 
-`hooks/register.tsx` holds every hook and every `$` call; the other modules are pure and take host access injected. `docs/design.md` and `docs/plan.md` are the design and implementation plan.
+`hooks/register.tsx` holds every hook and every `$` call. `tracking.ts` contains pure reducers for native subagents and the main session, plus tool-input redaction; `roster.ts` joins them with Codex jobs in the fixed role slots. `pane.tsx` draws the tabs and layouts, with `rail.tsx` and `elapsed.tsx` as surface modules for animation and clocks. Other host access is injected. The panel uses `pantheon.natives`, `pantheon.session` and `pantheon.view` alongside `pantheon.jobs` in `$.state`. `docs/design.md` and `docs/plan.md` preserve the original design and implementation history.
 
 ## Credits
 
 The orchestrator, role and council prompts are adapted from [oh-my-opencode-slim](https://github.com/alvinunreal/oh-my-opencode-slim) (MIT, see `LICENSE` and `NOTICE`).
+
+The panel's rail, clock, native tracking and tool description/redaction code is adapted from Stephen Casella's work under the MIT License; see `NOTICE` for its provenance, adaptations and full license text.

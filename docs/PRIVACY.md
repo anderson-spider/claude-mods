@@ -33,8 +33,9 @@ It reads the text of the Bash command Claude is about to run, runs `git` command
 - **Saved:** in the plugin's local store, the latest limits reading and, per session, recent context readings, the last request's cache figures and the last prompt's cost; a session idle for 8 days is deleted.
 - **Sent:** nothing. It makes no network requests.
 
-## flightdeck
+## pantheon
 
-- **Read:** every tool call's name and input and whether it failed, every permission verdict, subagent spawns with their token usage and final answers, the first 70 characters of each prompt, the usage figures Claude Code provides, and advisor tool calls in the assistant's responses.
-- **Saved:** short summaries (a tool name plus a path or command, with credentials masked) in session state only; nothing survives the session.
-- **Sent:** nothing. It makes no network requests, runs no processes and reads or writes no files.
+- **Read:** user and repository `pantheon.json` configuration, the session directory and repository root, and Codex job output. The panel watches native subagent spawns (type, description and model), step usage, completion status and tool inputs, plus the main session's model, effort, turn timing and context readings.
+- **Saved in `$.state`:** `pantheon.jobs` holds Codex job metadata, session ids for resume, activity, token usage, results and errors. `pantheon.natives` keeps at most 24 native records with spawn descriptions, model, rounds, token readings, step counts and the latest short tool description. `pantheon.session` holds main-session readings; `pantheon.view` holds the selected tab. Job, native and session snapshots use queues that keep only the latest pending snapshot. After reload, running native rounds and active Codex jobs are marked lost.
+- **Redacted:** native tool descriptions keep at most 64 characters and mask common credential patterns before shortening; file paths keep only their last two components. This is pattern-based masking, not a guarantee that all secrets are removed. Spawn descriptions and Codex job output are not covered by that masking.
+- **Sent and executed:** delegation sends the role and task prompt to the local `codex exec` process, which uses the configured Codex service and sandbox. Native agents use the session's tools and permissions. The panel's tracking itself only watches and passes events on unchanged; it adds no network requests or file writes. Job actions can cancel a process or copy its id and resume hint to the clipboard.

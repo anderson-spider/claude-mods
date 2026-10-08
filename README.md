@@ -11,8 +11,7 @@ Marketplace of [Claude Code](https://claude.com/claude-code) plugins made by and
 | [codex-computer-use](plugins/codex-computer-use) | Routes native Mac app control through Codex computer use from the ChatGPT app instead of Claude's own computer use, asking before each new app. |
 | [tailscale](plugins/tailscale) | Lets Claude query and modify your tailnet through the Tailscale API. |
 | [hud](plugins/hud) | One line above the prompt (context, 5-hour and 7-day limits against the clock, the prompt cache, the subagents running) and suggested next prompts you can write directly to the prompt box as a draft. |
-| [flightdeck](plugins/flightdeck) | A live agent dashboard pane (`/flightdeck`): context and cost, an advisor timeline, every permission check, and subagents as cards or swimlanes. |
-| [pantheon](plugins/pantheon) | Makes Claude an orchestrator that delegates to Codex roles (explorer, librarian, fixer) through `delegate` and to native Claude agents (oracle, designer, council), with a `/pantheon` pane of the jobs. |
+| [pantheon](plugins/pantheon) | Makes Claude an orchestrator that delegates to Codex roles (explorer, librarian, fixer) and native Claude agents (oracle, designer, council), with an auto-opening `/pantheon` panel for roles, activity and jobs. |
 
 ## Install
 
@@ -25,7 +24,6 @@ Inside Claude Code, add the marketplace and install the plugin:
 /plugin install codex-computer-use@spider-claude-mods
 /plugin install tailscale@spider-claude-mods
 /plugin install hud@spider-claude-mods
-/plugin install flightdeck@spider-claude-mods
 /plugin install pantheon@spider-claude-mods
 ```
 
@@ -125,9 +123,13 @@ To update the ACL without overwriting someone else's edit: do a `GET /tailnet/-/
 
 One line above the prompt, an info line above it (model, effort, speed, folder, branch and changed files) and suggested next prompts above that. The usage line: the context with a weather icon, one bar per recent prompt and the last prompt's change; the 5-hour and 7-day limits as block bars with a mark against the clock (`▲` ahead, `▼` behind, no mark on pace) and the time left; the prompt cache with its time left, yellow near the end and red once expired; and the subagents running. After each answer, up to three likely next prompts: press `1`, `2` or `3` to write that suggestion directly to the prompt box as a draft; the plugin never sends it. Options (`/plugin`): **Pace start**, **Shortest answer to suggest after** and **Suggest skills and slash commands**. It was `token-weather-usage` before 1.0.0 and is built on Token Weather Usage (Eric Cologni, Apache-2.0) and next-steps (Thariq Shihipar, MIT), among others. See [its README](plugins/hud/README.md) and its [NOTICE](plugins/hud/NOTICE).
 
-## flightdeck
+## pantheon
 
-A pane with a live dashboard of the session, opened with `/flightdeck` (and offered at session start in terminals at least 144 columns wide): the main model's context gauge, cost and rate limits; an architect timeline for advisor, architect or oracle consults; one cell per permission check, with a drill-down that masks credentials; subagents as cards or swimlanes; the last turn's receipt; and a session log. Docked beside the transcript in fullscreen, an 8-row summary above the prompt otherwise. It only watches: no hook changes a tool call, prompt or subagent, and it makes no network requests and writes no files. Options are in `/config`. It is imported unchanged from [claude-flightdeck](https://github.com/scasella/claude-flightdeck) by Stephen Casella (MIT). See [its README](plugins/flightdeck/README.md) and its [NOTICE](plugins/flightdeck/NOTICE).
+The main session delegates to Codex specialists through `delegate` and to native Claude agents through the Agent tool. The `/pantheon` panel opens by itself at session start; `/pantheon` opens or focuses it and `/pantheon close` closes it. The Agents tab keeps seven role slots in order: orchestrator, explorer, librarian, fixer, oracle, designer and council. Parallel instances stack in their role, resumed work shows its rounds, and other subagents appear under "other agents" when present. Each instance shows its model, elapsed time, tokens and last activity. The Jobs tab groups active and finished Codex jobs, with Cancel and Copy buttons and a resume hint.
+
+The panel docks beside the terminal transcript, uses a mini view when placed inline, and adds a "Last 15 minutes" SVG timeline on desktop. Animated rails, a pulsing state glyph and live clocks show active work. It has no panel configuration; rate limits, repository, branch and cache stay in hud. Its tracking hooks only watch and pass events on unchanged. `/pantheon cancel <jobId>`, `/pantheon config` and `/pantheon doctor` keep their existing behavior. See [its README](plugins/pantheon/README.md) and [NOTICE](plugins/pantheon/NOTICE).
+
+flightdeck users: `/plugin uninstall flightdeck`.
 
 ## Development
 

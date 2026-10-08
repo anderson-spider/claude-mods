@@ -33,14 +33,9 @@
       "description": "A usage line above the prompt (context, 5-hour and 7-day limits against the clock, the prompt cache, the subagents running) and suggested next prompts you can pick, in order, into one draft."
     },
     {
-      "name": "flightdeck",
-      "source": "./plugins/flightdeck",
-      "description": "A live agent dashboard pane: context and cost, an advisor timeline, every permission check, and subagents as cards or swimlanes. Imported from claude-flightdeck by Stephen Casella."
-    },
-    {
       "name": "pantheon",
       "source": "./plugins/pantheon",
-      "description": "Makes Claude an orchestrator that delegates to Codex specialists (explorer, librarian, fixer) and native Claude agents (oracle, designer, council), in the style of oh-my-opencode-slim."
+      "description": "Makes Claude an orchestrator that delegates to Codex specialists and native Claude agents, with an auto-opening /pantheon panel for roles, activity and jobs."
     }
   ]
 }

@@ -1,7 +1,7 @@
 {
   "name": "pantheon",
-  "version": "0.2.1",
-  "description": "Makes Claude an orchestrator that delegates to Codex specialists (explorer, librarian, fixer) and native Claude agents (oracle, designer, council), in the style of oh-my-opencode-slim.",
+  "version": "0.3.0",
+  "description": "Makes Claude an orchestrator that delegates to Codex specialists and native Claude agents, with an auto-opening /pantheon panel for roles, activity and jobs.",
   "author": {
     "name": "anderson-spider"
   },
