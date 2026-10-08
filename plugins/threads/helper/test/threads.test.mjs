@@ -125,6 +125,22 @@ test('a turn that ends with its approval unanswered gets a JSON-RPC error, never
   assert.equal(threads.read(threadId).pendingApproval, null)
 })
 
+test('a request the server clears itself leaves needs-you while the turn goes on', async () => {
+  const { threads, replies } = await setup()
+  const { threadId } = await threads.start(startInput('CANCEL this'))
+
+  await waitFor(() => threads.read(threadId).status === 'needs-you')
+  await waitFor(() => threads.read(threadId).status === 'working')
+
+  const state = threads.read(threadId)
+  assert.equal(state.pendingApproval, null)
+  assert.match(state.activity.at(-1).text, /resolved by the server/)
+  await assert.rejects(threads.approve({ threadId, decision: 'accept' }), { status: 409, code: 'no-approval' })
+  assert.deepEqual(replies, [])
+  await threads.interrupt({ threadId })
+  await waitFor(() => threads.read(threadId).status === 'idle')
+})
+
 test('when the app-server exits, its threads are marked exited and refuse messages', async () => {
   const { threads, snapshots } = await setup()
 

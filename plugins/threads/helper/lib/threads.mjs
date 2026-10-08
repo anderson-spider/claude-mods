@@ -302,6 +302,8 @@ export class Threads {
         return this.#statusChanged(record, params.status?.type)
       case 'item/completed':
         return this.#itemCompleted(record, params.item)
+      case 'serverRequest/resolved':
+        return this.#requestResolved(record, params.requestId)
       default:
         return
     }
@@ -451,6 +453,20 @@ export class Threads {
     record.pendingApproval = { id, method, params, at: this.#now() }
     record.status = 'needs-you'
     this.#line(record, 'approval', `asks: ${method}`)
+  }
+
+  // The server cleared a request without us (answered elsewhere, or cancelled while the turn
+  // goes on). One we answered is already gone from the record, so only the waiting one matches.
+  #requestResolved(record, requestId) {
+    const pending = record.pendingApproval
+
+    if (pending === null || String(pending.id) !== String(requestId)) {
+      return
+    }
+
+    record.pendingApproval = null
+    record.status = record.turnActive ? 'working' : 'idle'
+    this.#line(record, 'approval', `resolved by the server: ${pending.method}`)
   }
 
   #answerPending(record, message) {
