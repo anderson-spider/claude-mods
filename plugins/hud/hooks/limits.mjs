@@ -1,5 +1,5 @@
 import { T, PACE_MARKS } from "./constants.mjs";
-import { HOUR, DAY, duration, clockTime } from "./formatting.mjs";
+import { HOUR, DAY, duration, clockTime, dayTime } from "./formatting.mjs";
 
 // Length of each window; without one (spend cap), no elapsed-time marker.
 const SPANS = { five_hour: 5 * HOUR, seven_day: 7 * DAY };
@@ -41,10 +41,25 @@ export function gaugeOf(limit, now) {
   // Without a window length there is no clock to compare with: no mark.
   const points = Math.max(1, Math.round(Math.abs(pace)));
   const mark = elapsed === null ? "" : pace > limitData.paceStart ? `${PACE_MARKS.ahead}${points}` : pace < 0 ? `${PACE_MARKS.behind}${points}` : "";
-  // The time left; the 5-hour reset time goes to the clock's tooltip.
+  // The time left; the reset time and, when the use would reach 100% first, when it runs out
+  // go to the pill's hover card.
   const when = left !== null ? duration(left) : "";
-  const resetAt = left !== null && limit.kind === "five_hour" ? clockTime(resetMs) : "";
-  return { kind: limit.kind, label: T.labels[limit.kind] ?? limit.kind, used, elapsed, tone, mark, value: T.percent(Math.round(used)), when, resetAt };
+  return { kind: limit.kind, label: T.labels[limit.kind] ?? limit.kind, used, elapsed, tone, mark, value: T.percent(Math.round(used)), when, tip: tipOf(limit.kind, used, span, left, now) };
+}
+
+// "Resets at 18:00" (the 5-hour window) or "Resets Mon 14:00" (longer ones), and below it the
+// moment the window would run out if the use kept the pace it has had so far, when that comes
+// before the reset: a straight line through the share used over the time elapsed.
+function tipOf(kind, used, span, left, now) {
+  if (left === null) return "";
+  const short = kind === "five_hour";
+  const lines = [short ? T.resetsAt(clockTime(now + left)) : T.resetsOn(dayTime(now + left))];
+  const gone = span ? span - left : 0;
+  if (gone > 0 && used > 0 && used < 100) {
+    const toFull = ((100 - used) / used) * gone;
+    if (toFull < left) lines.push(short ? T.runsOutAt(clockTime(now + toFull)) : T.runsOutOn(dayTime(now + toFull)));
+  }
+  return lines.join("\n");
 }
 
 function bound(percent) {

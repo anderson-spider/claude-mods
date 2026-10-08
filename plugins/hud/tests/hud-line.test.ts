@@ -392,3 +392,29 @@ for (const surface of ["terminal", "desktop"] as const) {
     expect(texts.indexOf("7d")).toBeGreaterThan(texts.indexOf("5h"));
   });
 }
+
+// "Mon 14:00", the way the 7-day card writes a moment, in the machine's time zone.
+const day = (ms: number) => new Intl.DateTimeFormat("en-GB", { weekday: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(ms).replace(",", "");
+
+test("limits: the hover card adds when the window runs out at this pace, before the reset", async ($, on) => {
+  world(on);
+  withUsage(on, [
+    // 80% used in the first 2 of 5 hours: the last 20% go in 30 minutes, well before the reset.
+    { kind: "five_hour", percentUsed: 80, resetsAt: new Date(NOW + 3 * 3_600_000).toISOString() },
+    // 30% used in 4 of 7 days: behind the clock, it lasts to the reset.
+    { kind: "seven_day", percentUsed: 30, resetsAt: new Date(NOW + 3 * 86_400_000).toISOString() },
+  ]);
+  await $.session.start({ source: "startup", cwd: "/tmp" } as any);
+  const { ui } = await band($, "desktop");
+  expect(await cardOf(ui, "gauge-5h")).toBe(`Resets at ${at(NOW + 3 * 3_600_000)}\nAt this pace, runs out at ${at(NOW + 30 * 60_000)}`);
+  expect(await cardOf(ui, "gauge-7d")).toBe(`Resets ${day(NOW + 3 * 86_400_000)}`);
+});
+
+test("limits: a 7-day window ahead of the clock runs out on a given day", async ($, on) => {
+  world(on);
+  // 80% used in 4 of 7 days: the last 20% go in one day.
+  withUsage(on, [{ kind: "seven_day", percentUsed: 80, resetsAt: new Date(NOW + 3 * 86_400_000).toISOString() }]);
+  await $.session.start({ source: "startup", cwd: "/tmp" } as any);
+  const { ui } = await band($, "desktop");
+  expect(await cardOf(ui, "gauge-7d")).toBe(`Resets ${day(NOW + 3 * 86_400_000)}\nAt this pace, runs out ${day(NOW + 86_400_000)}`);
+});

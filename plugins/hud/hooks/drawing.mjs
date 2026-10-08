@@ -60,8 +60,8 @@ function gaugeBlock({ Box, Text, Svg }, mode, g) {
     parts.push(divider(Text, "s"), icon(Svg, "i", "clock", color, T.icons.reset, SMALL_ICON), Text({ key: "d", dimColor: true, children: g.when }));
   }
   else if (g.when && (mode === "text" || mode === "nobar")) parts.push(Text({ key: "d", dimColor: true, children: `· ${g.when}` }));
-  // The 5-hour reset time goes to the hover card.
-  return { key: "gauge-" + g.label, tint: TINTS[g.kind] ?? TINTS.spend_limit, parts, tip: g.resetAt ? T.resetsAt(g.resetAt) : "" };
+  // The reset time, and when the window would run out at this pace, go to the hover card.
+  return { key: "gauge-" + g.label, tint: TINTS[g.kind] ?? TINTS.spend_limit, parts, tip: g.tip };
 }
 
 // The time left before the cache lapses: "cache 52m" in the terminal, a bolt and "52m" in the app.

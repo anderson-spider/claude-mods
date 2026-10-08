@@ -24,6 +24,15 @@ export function clockTime(ms) {
   }
 }
 
+// "Mon 14:00": a moment within the week, in the machine's time zone.
+export function dayTime(ms) {
+  try {
+    return new Intl.DateTimeFormat("en-GB", { weekday: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(ms).replace(",", "");
+  } catch {
+    return clockTime(ms);
+  }
+}
+
 // 1M, 1.2M, 107k, 98.3k, 950: one decimal only when it matters.
 export function short(n) {
   if (n >= 1_000_000) return `${+(n / 1_000_000).toFixed(1)}M`;
