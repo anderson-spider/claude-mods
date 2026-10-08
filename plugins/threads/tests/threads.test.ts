@@ -954,6 +954,25 @@ describe("threads: reports and monitoring", () => {
     expect(created(w, "Haiku scout").verifiedModel).toBe("claude-haiku-4-5-20251001");
   });
 
+  test("threads_wait does not treat a thread idle before its first turn as done", async ($, on) => {
+    const w = fresh();
+    await boot($, on, w);
+    await threads($, "new haiku Haiku scout -- list the files");
+    const t = created(w, "Haiku scout");
+    const sleepsBefore = w.sleeps;
+    w.onSleep = (world, n) => {
+      world.now += 3000;
+      setSession(world, t.sessionId, { status: "idle" });
+      if (n === sleepsBefore + 3) {
+        world.fs.set(transcriptPath(APP, t.sessionId), [userRow("list the files"), assistant("Found README.md.")].join("\n"));
+      }
+    };
+    const r: any = await $.tool.call({ tool: "mcp__threads__threads_wait", until: "idle", timeout_s: 60 } as any);
+    expect(r.result).toMatch(/^Every thread is done or needs you\./);
+    expect(r.result).toMatch(/says  Found README\.md\./);
+    expect(w.sleeps - sleepsBefore).toBe(3);
+  });
+
   test("threads_wait times out, and any_change returns at the first change", async ($, on) => {
     const w = fresh();
     await boot($, on, w);

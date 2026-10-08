@@ -3688,10 +3688,11 @@ async function waitForThreads($, args, signal) {
       const b = base.get(t.id);
       return !b || b.status !== t.status || b.lastLine !== t.lastLine || b.report !== (t.lastReport?.at ?? 0);
     });
+    // an idle thread with an empty transcript has not started its first turn yet
     const isDone = (t) =>
       !LIVE.has(t.status) ||
       ATTENTION.has(t.status) ||
-      (t.status === "idle" && t.lastKind !== "user" && t.lastKind !== "message" && (idleSeen.get(t.id) ?? 0) >= 1);
+      (t.status === "idle" && t.lastKind !== "" && t.lastKind !== "user" && t.lastKind !== "message" && (idleSeen.get(t.id) ?? 0) >= 1);
     if (until === "any_change" && changed.length > 0) {
       reason = "Something changed.";
       break;
