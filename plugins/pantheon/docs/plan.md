@@ -557,6 +557,12 @@ test('skipGitRepoCheck is true only when git rev-parse fails', ...)
 **Files:** Create `hooks/pane.tsx`; Modify `hooks/register.tsx`; Test
 `hooks/pane.test.ts`. Spec: "Painel e comandos".
 
+> Nota (2026-10-08): o plano abaixo é histórico. Desde a 0.2.0 o painel `/pantheon` mostra
+> só as ações sobre os jobs Codex (uma linha curta por job, com Cancelar e Copiar
+> resposta) e não lista os agentes nativos `pantheon:*`; modelo, tempo, tokens e
+> atividade passaram para o flightdeck, que lê `pantheon.jobs` de `$.state`. A status
+> line segue igual.
+
 - [ ] **Step 1: Testes que falham** (loop em `['terminal', 'desktop'] as const`):
 
 ```ts

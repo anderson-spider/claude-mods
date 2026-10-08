@@ -19,7 +19,8 @@ Critérios de sucesso:
   system prompt adaptada do `orchestrator.ts` do slim.
 - Delegações Codex curtas voltam na própria chamada; longas (ou pedidas com
   `background: true`) viram job em background e acordam a sessão ao terminar.
-- `/pantheon` mostra o progresso dos jobs Codex e dos agentes nativos `pantheon:*`.
+- `/pantheon` mostra as ações sobre os jobs Codex (cancelar, copiar resposta); o detalhe
+  dos jobs fica no Flightdeck.
 - Uma mensagem do usuário com gatilho de council dispara a consulta em paralelo aos
   conselheiros e a síntese no formato do slim.
 - Teto de sandbox preservado e nunca afrouxado por configuração de projeto.
@@ -71,7 +72,7 @@ hooks/prompts/council.ts          gatilho + bloco Council Mode
 hooks/prompts/superpowers.ts      bloco de integração com superpowers
 hooks/codex.ts                    argv do codex exec; parser de JSONL → eventos de job
 hooks/jobs.ts                     estado dos jobs Codex, foreground→background, cancelamento
-hooks/pane.tsx                    painel /pantheon e linha de status
+hooks/pane.tsx                    painel /pantheon (só ações) e linha de status
 types/index.d.ts                  contrato do $.state (pantheon.jobs)
 hooks/fixtures/                   amostras JSONL do codex exec
 hooks/*.test.ts                   testes (claude plugin test)
@@ -328,13 +329,15 @@ Regras do bloco:
 
 - Status line (`$.ui.status`): `pantheon: N rodando · M em background`; some sem jobs
   ativos.
-- `/pantheon`: abre painel (`$.ui.open` + `ui.render` `Pane`). Uma linha por item:
-  - job Codex: estado (running, background, done, error, cancelled, lost), papel,
-    modelo, tempo, tokens, última atividade, se é retomável; botões Cancelar e Copiar
-    resposta
-    (`$.ui.copy`);
-  - agente nativo `pantheon:*` (de `$.agent.list`): tipo, status, descrição; sem
-    atividade nem botões.
+- `/pantheon`: abre painel (`$.ui.open` + `ui.render` `Pane`) só com as ações sobre os
+  jobs Codex. Uma linha curta por job: id, estado (running, background, done, error,
+  cancelled, lost), papel, descrição e `↻` se é retomável; botões Cancelar (job ativo) e
+  Copiar resposta (`$.ui.copy`, job com resposta). Ativos primeiro, depois os mais
+  recentes, limitado pela altura do viewport. Sem jobs: "Nenhum job do Pantheon nesta
+  sessão." O painel não lista os agentes nativos `pantheon:*`.
+- Detalhe dos jobs (modelo, tempo, tokens, última atividade): fica no plugin flightdeck,
+  que lê `pantheon.jobs` de `$.state` sem tipos e desenha cartões/raias marcados
+  codex / codex bg / codex lost. O pantheon não os desenha.
   Não abre sozinho.
 - `/pantheon cancel <jobId>`, `/pantheon config` (config efetiva, origem de cada campo e
   erro atual, se houver), `/pantheon doctor` (`codex` no PATH, versão,
@@ -376,7 +379,7 @@ rodando com `claude plugin test` (`claude-code/testing`):
   `prompt.submit` ao terminar; `background: true` volta na hora; `delegate_cancel` encerra
   o processo; `session.start` marca `running` e `background` como `lost`; `resume` de
   job sem `sessionId` (reload antes do `thread.started`) dá erro claro.
-- `pane.test.ts`: `mount` em `['terminal', 'desktop']`, estados e botão Cancelar.
+- `pane.test.ts`: `mount` em `['terminal', 'desktop']`, linha curta por job e botão Cancelar.
 - Validação manual em sessão real: explorer e fixer com Codex real; background forçado
   com `foregroundMinutes: 0.1`; council com um seat de cada engine; oracle nativo.
 

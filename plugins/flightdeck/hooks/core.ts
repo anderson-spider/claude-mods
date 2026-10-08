@@ -130,7 +130,7 @@ export const parseConfig = (o: Readonly<Record<string, unknown>>): Config => {
   const layout = str('layout', 'auto')
   const max = typeof o.maxCards === 'number' ? Math.round(o.maxCards) : 3
   return {
-    architect: safeRegExp(str('architectPattern', ''), 'advisor|architect'),
+    architect: safeRegExp(str('architectPattern', ''), 'advisor|architect|oracle'),
     architectLabel: str('architectLabel', 'ARCHITECT'),
     gateLabel: str('gateLabel', 'GATE'),
     panels: panels.length > 0 ? [...new Set(panels)] : [...PANELS],
