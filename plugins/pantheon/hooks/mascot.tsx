@@ -1,6 +1,6 @@
-// The terminal mascot: rows of half-block text, animated on the surface frame clock only while working.
+// The terminal mascot: rows of half-block runs, animated on the surface frame clock only while working.
 import type { ClientModule } from 'claude-code'
-import { clawdLines, FRAMES } from './clawd.ts'
+import { clawdRuns, FRAMES } from './clawd.ts'
 import type { Mood } from './clawd.ts'
 import type { SlotName } from './roster'
 
@@ -8,15 +8,10 @@ export type MascotProps = {
   role: SlotName
   mood: Mood
   size: 'small' | 'large'
-  color: string
-  propColor?: string
 }
 
 type Ref = { frame: number; mood: Mood }
 type State = { ref: Ref }
-
-// Body columns of the art; the prop zone follows.
-const BODY_COLS = 9
 
 export function frameAfter(frame: number, mood: Mood): number {
   return mood === 'work' ? (frame + 1) % FRAMES : frame
@@ -36,13 +31,14 @@ const Mascot: ClientModule<MascotProps, State> = (props, surface) => {
       }
     })
   }
-  const lines = clawdLines(props.role, props.mood, ref.frame, props.size)
+  const rows = clawdRuns(props.role, props.mood, ref.frame, props.size)
   return (
     <Box flexDirection="column">
-      {lines.map(line => (
+      {rows.map(row => (
         <Box flexDirection="row">
-          <Text color={props.color}>{line.slice(0, BODY_COLS)}</Text>
-          <Text color={props.propColor ?? props.color}>{line.slice(BODY_COLS)}</Text>
+          {row.map(run => (
+            <Text color={run.fg} backgroundColor={run.bg}>{run.text}</Text>
+          ))}
         </Box>
       ))}
     </Box>

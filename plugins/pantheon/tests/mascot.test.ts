@@ -10,13 +10,13 @@ function fakeSurface() {
     state: undefined as Parameters<typeof Clawd>[1]['state'],
     setState(next: NonNullable<Parameters<typeof Clawd>[1]['state']>) { surface.state = next; writes++ },
     every(ms: number, fn: () => void) { timers.push({ ms, fn }); return () => {} },
-    columns: 13,
-    rows: 4,
+    columns: 15,
+    rows: 6,
   }
   return { surface, timers, writes: () => writes }
 }
 
-const props = { role: 'fixer' as const, mood: 'work' as const, size: 'large' as const, color: 'orange' }
+const props = { role: 'fixer' as const, mood: 'work' as const, size: 'large' as const }
 
 test('frameAfter advances only when working and wraps at FRAMES', () => {
   expect(frameAfter(0, 'work')).toBe(1)
@@ -52,9 +52,17 @@ test('a mood change is picked up by the same timer', () => {
   expect(fake.surface.state?.ref.frame).toBe(1)
 })
 
-test('renders one Text row per line, the prop in propColor', () => {
+test('renders one row of Text runs per text row, with fg and bg colors', () => {
   const fake = fakeSurface()
-  const out = JSON.stringify(Clawd({ ...props, propColor: 'blue' }, fake.surface as never))
-  expect(out).toContain('orange')
-  expect(out).toContain('blue')
+  const tree = Clawd(props, fake.surface as never) as { props: { children: { props: { children: { props: Record<string, unknown> }[] } }[] } }
+  expect(tree.props.children.length).toBe(6)
+  const texts = tree.props.children.flatMap(r => r.props.children).map(t => t.props)
+  expect(texts.some(t => typeof t.color === 'string' && t.color.startsWith('#'))).toBe(true)
+  expect(texts.some(t => typeof t.backgroundColor === 'string' && t.backgroundColor.startsWith('#'))).toBe(true)
+})
+
+test('small renders three rows', () => {
+  const fake = fakeSurface()
+  const tree = Clawd({ ...props, size: 'small' }, fake.surface as never) as { props: { children: unknown[] } }
+  expect(tree.props.children.length).toBe(3)
 })
