@@ -1,15 +1,13 @@
-// Claude mascot, a side-on pixel sprite with one hat and one held prop per role. Pure module:
-// the terminal art (15 x 12 pixels, and a separate 8 x 6 one) as half-block runs, the desktop art
-// (30 x 26, shaded and outlined) as an SVG string.
+// Pure mascot art: a compact terminal Clawd with role hats and separate desktop SVGs with accessories.
 import type { SlotName } from './roster'
 
 export type Mood = 'work' | 'idle' | 'off'
 export type Cell = string | null
 export type Run = { text: string; fg?: string; bg?: string }
 
-export const FRAMES = 4
-export const COLS = 15
-export const ROWS = 12
+export const FRAMES = 2
+export const COLS = 9
+export const ROWS = 4
 
 const BODY = '#D0795A'
 const EYE = '#1C1B1A'
@@ -25,56 +23,7 @@ export const ROLE_COLOR: Record<SlotName, string> = {
   council: '#B8B3A6',
 }
 
-// ---- Terminal sprite (15 x 12) ----
-
-// Canvas rows 4-9: 9-column torso, left arm stub, right ear bump, two square eyes.
-const BODY_ROWS = [
-  '..OOOOOOOOOOO..',
-  '..OEOOOOOEOOO..',
-  'OOOOOOOOOOO....',
-  'OOOOOOOOOOO....',
-  '..OOOOOOOOO....',
-  '..OOOOOOOOO....',
-]
-// Canvas rows 10-11, two walk poses.
-const LEGS = [
-  ['..O.O...O.O....', '..O.O...O.O....'],
-  ['...O.O.O.O.....', '...O.O.O.O.....'],
-]
-
-// Hat per role (canvas rows 0-3); rows past 3 lie over the body, where '.' leaves it showing.
-const HATS: Record<SlotName, string[]> = {
-  orchestrator: ['......WW.......', '..WWWWWWWWW....', '..WWWgWWWWW....', '..RBBBBBBBBVVV.'],
-  explorer: ['...............', '....QQ..QQ.....', '...QqqqqqqQ....', '..QQQQQQQQQQQ..'],
-  librarian: ['......DD.......', '..DDDDDDDDDDD.Y', '....DDDDDDD...Y', '...............'],
-  // No hat: a mug of coffee, steaming, in the left hand.
-  fixer: ['...............', '...............', 'z..............', '.z.............', 'ww.............', 'ww.............'],
-  oracle: ['.......b.......', '......bbb......', '.....bbSbb.....', '..bbbbbbbbbbb..'],
-  designer: ['...............', '......MM.......', '....MMMMMM.....', '..MMMMMMMMMMM..'],
-  council: ['...............', '....LLLLLL.....', '..LLLLLLLLLLL..', '.lLLlLLLlLLLL..', 'Ll.............', 'lL.............'],
-}
-// Held prop per role: rows from `y` down, columns 11-14.
-const PROPS: Record<SlotName, { y: number; rows: string[] }> = {
-  // The clipboard's pen hangs on a string from the clip.
-  orchestrator: { y: 6, rows: ['....', '.nng', 'WWWg', 'WLWr', 'WLWr', 'WWWK'] },
-  explorer: { y: 6, rows: ['.AA.', 'AaaA', 'AaaA', '.AA.', '.n..', 'n...'] },
-  librarian: { y: 6, rows: ['....', 'rrrr', 'rwYr', 'rwwr', 'rrrr', '....'] },
-  fixer: { y: 6, rows: ['HHHH', 'HCKH', 'HKKH', 'HCCH', 'hhhh'] },
-  oracle: { y: 1, rows: ['..S.', '.SSS', '..S.', '..N.', '..N.', '.N..', 'N...'] },
-  designer: { y: 6, rows: ['...C', '..nC', '.n..', 'n...', '....', '....'] },
-  council: { y: 6, rows: ['.NNN', '.NNN', '..N.', '..N.', '..N.', '....'] },
-}
-
-const PALETTE: Record<string, string> = {
-  O: BODY, E: EYE, W: '#F5F4EF', g: '#CFCFC6', B: '#4A86D8', R: '#B0664D', V: '#4D4D4B',
-  Y: '#EEBB4D', K: '#2E2A28', Q: '#6E625A', q: '#9A8B7E', D: '#3B3B40', C: '#4FB6D8', N: '#6B4A2E',
-  M: '#D870A8', m: '#A8507F', L: '#D8D5CB', l: '#A7A397', A: '#E9C04F', a: '#CFD4D9', H: '#C4C9D6',
-  h: '#8C92A3', r: '#C4483D', w: '#F6EFDD', z: '#FFE9CF', n: '#7A5230', b: '#2D4A8C', S: '#FFF1A8',
-}
-
-function wrap(frame: number): number {
-  return ((frame % FRAMES) + FRAMES) % FRAMES
-}
+// ---- Terminal sprite: 18 x 8 pixels packed into 9 x 4 quadrant cells ----
 
 function dim(hex: string, keep: number, floor: number): string {
   const n = parseInt(hex.slice(1), 16)
@@ -82,68 +31,76 @@ function dim(hex: string, keep: number, floor: number): string {
   return '#' + [(n >> 16) & 255, (n >> 8) & 255, n & 255].map(mix).map(v => v.toString(16).padStart(2, '0')).join('')
 }
 
-// The small sprite (8 x 6), drawn on its own: body rows 2-4 with both eyes, legs on row 5.
-const SMALL_BODY = ['........', '........', '.OEOOEO.', 'OOOOOOO.', '.OOOOOO.']
-const SMALL_LEGS = ['.O.OO.O.', 'O.O..O.O']
-// Hat and prop per role over the small body; '.' leaves it showing.
-const SMALL: Record<SlotName, string[]> = {
-  orchestrator: ['..WWW...', '.BBBBBV.', '.......n', '.......W', '.......W'],
-  explorer: ['..QqqQ..', '.QQQQQQQ', '.......a', '.......n'],
-  librarian: ['.DDDDDD.', '..KKKK.Y', '.......Y', '.......r', '.......r'],
-  fixer: ['z.......', '.z......', 'w......H', 'w......C', '.......h'],
-  oracle: ['...bb..S', '.bbbbbbN', '.......N'],
-  designer: ['....M...', '.MMMMMmC', '.......N', '.......N'],
-  council: ['.LLLLLL.', 'lLLLLLLl', 'l......N', '.......n'],
-}
-
-// The terminal grid: a color string or null per pixel. Off closes the eyes and dims the colors.
-export function pixels(role: SlotName, mood: Mood, frame: number, size: 'small' | 'large' = 'large'): Cell[][] {
-  const body = mood === 'off' ? OFF_BODY : BODY
-  const pose = mood === 'work' ? wrap(frame) % 2 : 0
-  const small = size === 'small'
-  const rows = (small ? [...SMALL_BODY, SMALL_LEGS[pose]] : [...Array<string>(4).fill(''), ...BODY_ROWS, ...LEGS[pose]])
-    .map(r => [...r.padEnd(small ? 8 : COLS, '.')])
-  const over = (x: number, y: number, art: string[]) =>
-    art.forEach((r, j) => [...r].forEach((ch, i) => { if (ch !== '.') rows[y + j][x + i] = ch }))
-  if (small) over(0, 0, SMALL[role])
-  else {
-    over(0, 0, HATS[role])
-    over(11, PROPS[role].y, PROPS[role].rows)
+// Headwear occupies one text row; the original three-row body keeps its proportions.
+function hat(role: SlotName): Cell[][] {
+  const rows: Cell[][] = Array.from({ length: 2 }, () => Array<Cell>(COLS * 2).fill(null))
+  const band = (y: number, from: number, to: number, color: string) => {
+    for (let x = from; x <= to; x++) rows[y]![x] = color
   }
-  return rows.map(row =>
-    row.map(ch => {
-      if (ch === '.') return null
-      if (ch === 'O') return body
-      if (ch === 'E') return mood === 'off' ? body : EYE
-      const c = PALETTE[ch]
-      return mood === 'off' ? dim(c, 0.55, 28) : c
-    }),
-  )
-}
-
-function halfBlocks(g: Cell[][]): Run[][] {
-  const rows: Run[][] = []
-  for (let y = 0; y < g.length; y += 2) {
-    const runs: Run[] = []
-    for (let x = 0; x < g[y].length; x++) {
-      const top = g[y][x]
-      const bottom = g[y + 1]?.[x] ?? null
-      let run: Run
-      if (top && bottom) run = { text: '▀', fg: top, bg: bottom }
-      else if (bottom) run = { text: '▄', fg: bottom }
-      else if (top) run = { text: '▀', fg: top }
-      else run = { text: ' ' }
-      const last = runs[runs.length - 1]
-      if (last && last.fg === run.fg && last.bg === run.bg) last.text += run.text
-      else runs.push(run)
-    }
-    rows.push(runs)
+  switch (role) {
+    case 'orchestrator': // Captain's cap, white crown and blue band.
+      band(0, 6, 11, '#EEE5D0'); band(1, 3, 14, ROLE_COLOR.orchestrator)
+      break
+    case 'explorer': // Low field hat and wide brim.
+      band(0, 5, 12, '#B99B63'); band(1, 2, 15, '#B99B63')
+      break
+    case 'librarian': // Flat mortarboard and its tassel.
+      band(0, 2, 15, '#77758F'); band(1, 6, 11, '#77758F'); band(1, 16, 16, '#D9AE56')
+      break
+    case 'fixer': // Rounded hard hat.
+      band(0, 6, 11, '#E7B64B'); band(1, 3, 14, '#E7B64B')
+      break
+    case 'oracle': // Small pointed wizard hat.
+      band(0, 9, 9, ROLE_COLOR.oracle); band(1, 5, 12, ROLE_COLOR.oracle)
+      break
+    case 'designer': // Slanted beret.
+      band(0, 7, 12, ROLE_COLOR.designer); band(1, 4, 13, ROLE_COLOR.designer)
+      break
+    case 'council': // Flat judicial cap.
+      band(0, 4, 13, '#C4C1B6'); band(1, 6, 11, '#87877F')
+      break
   }
   return rows
 }
 
+// Geometry is shared by every role, independent of the headwear and terminal placement.
+export function pixels(role: SlotName, mood: Mood, frame: number, _size: 'small' | 'large' = 'large'): Cell[][] {
+  const body = mood === 'off' ? OFF_BODY : BODY
+  const eye = mood === 'off' ? dim(EYE, 0.55, 28) : EYE
+  const pose = mood === 'work' ? ((frame % FRAMES) + FRAMES) % FRAMES : 0
+  const headwear = hat(role).map(row => row.map(color => color && mood === 'off' ? dim(color, 0.45, 28) : color))
+  const top = headwear.length
+  const grid: Cell[][] = [...headwear, ...Array.from({ length: 6 }, () => Array<Cell>(COLS * 2).fill(null))]
+  for (let y = top; y < top + 4; y++) for (let x = 3; x < 15; x++) grid[y]![x] = body
+  for (const x of [1, 2, 15, 16]) grid[top + 2]![x] = body
+  // Only the feet alternate; headwear, face and torso retain the approved default pose.
+  const feet = pose === 0 ? [4, 6, 11, 13] : [5, 7, 10, 12]
+  for (const x of feet) grid[top + 4]![x] = body
+  grid[top + 1]![5] = eye
+  grid[top + 1]![12] = eye
+  return grid
+}
+
+// Bit order: upper left, upper right, lower left, lower right.
+const QUADRANTS = [' ', '▘', '▝', '▀', '▖', '▌', '▞', '▛', '▗', '▚', '▐', '▜', '▄', '▙', '▟', '█']
+
 export function clawdRuns(role: SlotName, mood: Mood, frame: number, size: 'small' | 'large'): Run[][] {
-  return halfBlocks(pixels(role, mood, frame, size))
+  const grid = pixels(role, mood, frame, size)
+  const body = mood === 'off' ? OFF_BODY : BODY
+  return Array.from({ length: ROWS }, (_, y) => {
+    const runs: Run[] = []
+    for (let x = 0; x < COLS; x++) {
+      const cells = [grid[y * 2]![x * 2], grid[y * 2]![x * 2 + 1], grid[y * 2 + 1]![x * 2], grid[y * 2 + 1]![x * 2 + 1]]
+      const fg = cells.includes(body) ? body : cells.find(color => color != null) ?? undefined
+      const bg = cells.find(color => color != null && color !== fg) ?? undefined
+      const mask = fg ? cells.reduce<number>((bits, color, index) => bits | (color === fg ? 1 << index : 0), 0) : 0
+      const run: Run = { text: QUADRANTS[mask]!, ...(fg ? { fg } : {}), ...(bg ? { bg } : {}) }
+      const last = runs[runs.length - 1]
+      if (last && last.fg === run.fg && last.bg === run.bg) last.text += run.text
+      else runs.push(run)
+    }
+    return runs
+  })
 }
 
 export function clawdLines(role: SlotName, mood: Mood, frame: number, size: 'small' | 'large'): string[] {

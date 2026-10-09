@@ -23,9 +23,9 @@ test('clawdSvg paints an optional frame background first and stays transparent b
 test('pixels: grid is ROWS x COLS with hex or null cells', () => {
   for (const role of ROLE_ORDER) for (const mood of MOODS) {
     const g = pixels(role, mood, 0)
-    expect(g.length).toBe(ROWS)
+    expect(g.length).toBe(ROWS * 2)
     for (const row of g) {
-      expect(row.length).toBe(COLS)
+      expect(row.length).toBe(COLS * 2)
       for (const c of row) expect(c === null || HEX.test(c)).toBe(true)
     }
   }
@@ -34,8 +34,8 @@ test('pixels: grid is ROWS x COLS with hex or null cells', () => {
 test('clawdRuns: equal display width on every text row, fixed rows per size', () => {
   for (const role of ROLE_ORDER) for (const mood of MOODS) for (const size of SIZES) for (let f = 0; f < FRAMES; f++) {
     const rows = clawdRuns(role, mood, f, size)
-    expect(rows.length).toBe(size === 'small' ? 3 : 6)
-    for (const r of rows) expect(width(r)).toBe(size === 'small' ? 8 : 15)
+    expect(rows.length).toBe(4)
+    for (const r of rows) expect(width(r)).toBe(9)
   }
 })
 
@@ -70,20 +70,23 @@ test('frames wrap, negative included', () => {
   expect(key('oracle', 'work', -1, 'small')).toBe(key('oracle', 'work', FRAMES - 1, 'small'))
 })
 
-test('all seven roles differ at both sizes and in each mood', () => {
-  for (const size of SIZES) for (const mood of MOODS)
-    expect(new Set(ROLE_ORDER.map(r => key(r, mood, 0, size))).size).toBe(ROLE_ORDER.length)
+test('roles have distinct hats over the same body in both terminal sizes', () => {
+  for (const size of SIZES) for (const mood of MOODS) for (let frame = 0; frame < FRAMES; frame++) {
+    const all = ROLE_ORDER.map(role => clawdRuns(role, mood, frame, size))
+    expect(new Set(all.map(rows => JSON.stringify(rows.slice(0, 1)))).size).toBe(ROLE_ORDER.length)
+    expect(new Set(all.map(rows => JSON.stringify(rows.slice(1)))).size).toBe(1)
+  }
 })
 
-test('off differs from idle (dimmed, eyes closed)', () => {
+test('off differs from idle only in colors', () => {
   expect(key('fixer', 'off', 0, 'large') === key('fixer', 'idle', 0, 'large')).toBe(false)
 })
 
 test('clawdLines: plain text of the runs', () => {
   const lines = clawdLines('council', 'idle', 0, 'large')
-  expect(lines.length).toBe(6)
-  for (const l of lines) expect([...l].length).toBe(15)
-  expect(clawdLines('council', 'idle', 0, 'small').map(l => [...l].length)).toEqual([8, 8, 8])
+  expect(lines.length).toBe(4)
+  for (const l of lines) expect([...l].length).toBe(9)
+  expect(clawdLines('council', 'idle', 0, 'small').map(l => [...l].length)).toEqual([9, 9, 9, 9])
 })
 
 test('ROLE_COLOR has the seven roles in hex', () => {
@@ -126,7 +129,7 @@ test('clawdSvg: roles differ', () => {
   expect(new Set(ROLE_ORDER.map(r => clawdSvg(r, 'idle'))).size).toBe(ROLE_ORDER.length)
 })
 
-// Each role's held prop and hat read the same at every size: these colors are the prop's own.
+// Desktop accessories keep their role colors.
 const SIGNATURE: Record<(typeof ROLE_ORDER)[number], string[]> = {
   orchestrator: ['#F5F4EF', '#4A86D8'],
   explorer: ['#6E625A', '#CFD4D9'],
@@ -138,22 +141,13 @@ const SIGNATURE: Record<(typeof ROLE_ORDER)[number], string[]> = {
 }
 const colorsOf = (g: (string | null)[][]) => new Set(g.flat().filter((c): c is string => !!c).map(c => c.toUpperCase()))
 
-test('terminal and desktop sprites carry the same hat and prop for each role', () => {
+test('desktop sprites retain their hat and prop for each role', () => {
   for (const role of ROLE_ORDER) {
     const svg = clawdSvg(role, 'idle').toUpperCase()
-    const term = colorsOf(pixels(role, 'idle', 0))
     for (const c of SIGNATURE[role]) {
       expect(svg.includes(`FILL="${c}"`)).toBe(true)
-      expect(term.has(c)).toBe(true)
     }
   }
-})
-
-test('the fixer wears no hat and holds a laptop and a mug; the oracle has no crystal ball', () => {
-  const fixer = pixels('fixer', 'idle', 0)
-  // Above the torso only the mug and its steam, at the far left.
-  for (let y = 0; y < 4; y++) fixer[y].forEach((c, x) => { if (c) expect(x < 2).toBe(true) })
-  expect(colorsOf(pixels('oracle', 'idle', 0)).has('#6F3FB0')).toBe(false)
 })
 
 const rects = (svg: string) =>
@@ -165,17 +159,14 @@ test('the council wig has curls hanging beside the face', () => {
   const curls = rects(clawdSvg('council', 'idle')).filter(r => WIG.includes(r.fill) && r.y >= 10)
   expect(curls.length >= 4).toBe(true)
   expect(curls.every(r => r.x < 8)).toBe(true)
-  // Terminal: wig pixels left of the torso, on its first rows.
-  const g = pixels('council', 'idle', 0)
-  expect([g[4][0], g[4][1], g[5][0], g[5][1]].every(c => c !== null && WIG.includes(c.toUpperCase()))).toBe(true)
+
 })
 
 test('a pen hangs from the orchestrator clipboard', () => {
   const PEN = '#C4483D'
   // Desktop: right of the clipboard (x 20-26 in the padded canvas).
   expect(rects(clawdSvg('orchestrator', 'idle')).filter(r => r.fill === PEN && r.x >= 27).length >= 3).toBe(true)
-  const g = pixels('orchestrator', 'idle', 0)
-  expect(g.slice(9, 11).every(row => row[14]?.toUpperCase() === PEN)).toBe(true)
+
 })
 
 const groups = (svg: string) => [...svg.matchAll(/<g class="([^"]+)">(.*?)<\/g>/g)].map(m => ({ cls: m[1], body: m[2] }))
@@ -207,13 +198,51 @@ test('clawdSvg: reduced motion stops the objects and shows their first frame', (
   expect(/\.fx\{animation:none;opacity:0\}\.f0\{opacity:1\}/.test(media)).toBe(true)
 })
 
-test('the small terminal sprite is drawn by hand at 8 x 6, with two eyes and the role signature', () => {
-  const EYE = '#1C1B1A'
-  for (const role of ROLE_ORDER) for (const mood of MOODS) for (let f = 0; f < 2; f++) {
-    const g = pixels(role, mood, f, 'small')
-    expect(g.length).toBe(6)
-    for (const row of g) expect(row.length).toBe(8)
-    expect(g.flat().filter(c => c === EYE).length).toBe(mood === 'off' ? 0 : 2)
-    if (mood === 'idle') expect(SIGNATURE[role].some(c => colorsOf(g).has(c))).toBe(true)
+test('only the feet move while working; the hat, eyes, arms and body stay fixed', () => {
+  const feet = ['  ▘▘ ▝▝  ', '  ▝▝ ▘▘  ']
+  for (const role of ROLE_ORDER) for (const size of SIZES) {
+    const idle = clawdRuns(role, 'idle', 0, size)
+    for (let frame = 0; frame < FRAMES; frame++) {
+      const work = clawdRuns(role, 'work', frame, size)
+      expect(work.slice(0, 3)).toEqual(idle.slice(0, 3))
+      expect(clawdLines(role, 'work', frame, size).slice(1))
+        .toEqual([' ▐▛███▜▌ ', '▝▜█████▛▘', feet[frame]])
+    }
+    expect(clawdLines(role, 'idle', 1, size)[3]).toBe(feet[0])
+    expect(clawdLines(role, 'off', 1, size)[3]).toBe(feet[0])
+  }
+})
+
+test('terminal sizes match and off preserves the default silhouette and eyes', () => {
+  for (const role of ROLE_ORDER) for (const mood of MOODS) for (let f = 0; f < FRAMES; f++) {
+    expect(clawdRuns(role, mood, f, 'small')).toEqual(clawdRuns(role, mood, f, 'large'))
+    expect(colorsOf(pixels(role, mood, f).slice(2)).size).toBe(2)
+  }
+  for (const role of ROLE_ORDER) {
+    const idle = clawdRuns(role, 'idle', 0, 'small')
+    const off = clawdRuns(role, 'off', 3, 'small')
+    expect(off.map(row => row.map(r => [r.text, !!r.fg, !!r.bg])))
+      .toEqual(idle.map(row => row.map(r => [r.text, !!r.fg, !!r.bg])))
+    expect(key(role, 'off', 0, 'small')).not.toBe(key(role, 'idle', 0, 'small'))
+  }
+})
+
+test('every colored quadrant round-trips without painting over transparent pixels', () => {
+  const glyphs = [' ', '▘', '▝', '▀', '▖', '▌', '▞', '▛', '▗', '▚', '▐', '▜', '▄', '▙', '▟', '█']
+  for (const role of ROLE_ORDER) for (const mood of MOODS) for (let frame = 0; frame < FRAMES; frame++) {
+    const source = pixels(role, mood, frame)
+    const rows = clawdRuns(role, mood, frame, 'small')
+    rows.forEach((row, y) => {
+      let x = 0
+      for (const run of row) for (const glyph of run.text) {
+        const mask = glyphs.indexOf(glyph)
+        expect(mask >= 0).toBe(true)
+        for (let bit = 0; bit < 4; bit++) {
+          const color = (mask & (1 << bit) ? run.fg : run.bg) ?? null
+          expect(color).toBe(source[y * 2 + Math.floor(bit / 2)]![x * 2 + bit % 2])
+        }
+        x++
+      }
+    })
   }
 })

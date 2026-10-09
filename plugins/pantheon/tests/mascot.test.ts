@@ -14,8 +14,8 @@ function fakeSurface() {
       timers.push(t)
       return () => { t.stopped = true }
     },
-    columns: 15,
-    rows: 6,
+    columns: 9,
+    rows: 4,
   }
   return { surface, timers, writes: () => writes }
 }
@@ -58,6 +58,7 @@ test('the timer starts when work begins and stops when it ends', () => {
   Clawd({ ...props, mood: 'idle' }, fake.surface as never)
   expect(fake.timers[0].stopped).toBe(true)
   Clawd(props, fake.surface as never)
+  expect(fake.surface.state?.ref.frame).toBe(0)
   expect(fake.timers.length).toBe(2)
   expect(fake.timers[1].stopped).toBe(false)
 })
@@ -65,16 +66,16 @@ test('the timer starts when work begins and stops when it ends', () => {
 test('renders one row of Text runs per text row, with fg and bg colors', () => {
   const fake = fakeSurface()
   const tree = Clawd(props, fake.surface as never) as { props: { children: { props: { children: { props: Record<string, unknown> }[] } }[] } }
-  expect(tree.props.children.length).toBe(6)
+  expect(tree.props.children.length).toBe(4)
   const texts = tree.props.children.flatMap(r => r.props.children).map(t => t.props)
   expect(texts.some(t => typeof t.color === 'string' && t.color.startsWith('#'))).toBe(true)
   expect(texts.some(t => typeof t.backgroundColor === 'string' && t.backgroundColor.startsWith('#'))).toBe(true)
 })
 
-test('small renders three rows', () => {
+test('small retains the same four-row frame', () => {
   const fake = fakeSurface()
   const tree = Clawd({ ...props, size: 'small' }, fake.surface as never) as { props: { children: unknown[] } }
-  expect(tree.props.children.length).toBe(3)
+  expect(tree.props.children.length).toBe(4)
 })
 
 test('rows and their runs retain positional keys on each work frame', () => {
@@ -90,4 +91,17 @@ test('rows and their runs retain positional keys on each work frame', () => {
     }
     fake.timers[0].fn()
   }
+})
+
+test('work to off stops the timer and resumes at the default pose', () => {
+  const fake = fakeSurface()
+  Clawd(props, fake.surface as never)
+  fake.timers[0]!.fn()
+  fake.timers[0]!.fn()
+  Clawd({ ...props, mood: 'off' }, fake.surface as never)
+  expect(fake.timers[0]!.stopped).toBe(true)
+  Clawd(props, fake.surface as never)
+  expect(fake.surface.state?.ref.frame).toBe(0)
+  fake.timers[1]!.fn()
+  expect(fake.surface.state?.ref.frame).toBe(1)
 })

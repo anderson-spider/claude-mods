@@ -1,4 +1,5 @@
 import { atom, read, update } from 'claude-code'
+import { COLS, ROWS } from './clawd'
 import type { AgentSpec, ProcessRunInit, ProcessRunResult, Register } from 'claude-code'
 
 import type { Job, Native, SessionInfo } from '../types'
@@ -662,9 +663,9 @@ export const register: Register = (on, options) => {
       ...(hasClient ? {
         // The module paths are literals here: the engine reads them off this entry module.
         clock: ({ key, props }) => <els.Client key={key} module="./elapsed.tsx" width={6} props={props} />,
-        // Large is 15 columns by 6 rows, small 8 by 3.
+        // Both terminal placements use the same compact mascot.
         ...(isClockLost ? {} : {
-          mascot: ({ key, props }) => <els.Client key={key} module="./mascot.tsx" width={props.size === 'large' ? 15 : 8} height={props.size === 'large' ? 6 : 3} props={props} />,
+          mascot: ({ key, props }) => <els.Client key={key} module="./mascot.tsx" width={COLS} height={ROWS} props={props} />,
         }),
       } : {}),
     } as never, {
