@@ -371,7 +371,7 @@ export function clawdSvg(role: SlotName, mood: Mood, height = 52): string {
   const b = grid(role, mood, true)
   const p = PROP[role]
   const fx = (p.frames ?? []).map((_, k) => grid(role, mood, false, k))
-  const layer: Record<string, string[]> = { base: [], la: [], lb: [], tw: [], tw2: [] }
+  const layer = { base: [] as string[], la: [] as string[], lb: [] as string[], tw: [] as string[], tw2: [] as string[] }
   const frames = fx.map((): string[] => [])
   for (let j = 0; j < H; j++) for (let i = 0; i < W; i++) {
     const ca = a[j][i]
