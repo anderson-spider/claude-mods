@@ -1,6 +1,6 @@
 {
   "name": "pantheon",
-  "version": "0.13.3",
+  "version": "0.13.4",
   "description": "Makes Claude an orchestrator that delegates to specialist roles on Codex or native Claude agents, chosen per profile, with an auto-opening /pantheon panel for roles, activity and a session log, and a strip above the prompt with model, context, cache, rate limits and running agents.",
   "author": {
     "name": "anderson-spider"
