@@ -3,13 +3,17 @@ import Clawd, { frameAfter } from '../hooks/mascot.tsx'
 import { FRAMES } from '../hooks/clawd.ts'
 
 function fakeSurface() {
-  const timers: { ms: number; fn: () => void }[] = []
+  const timers: { ms: number; fn: () => void; stopped: boolean }[] = []
   let writes = 0
   const surface = {
     elements: { Box: (props: unknown) => ({ type: 'Box', props }), Text: (props: unknown) => ({ type: 'Text', props }) },
     state: undefined as Parameters<typeof Clawd>[1]['state'],
     setState(next: NonNullable<Parameters<typeof Clawd>[1]['state']>) { surface.state = next; writes++ },
-    every(ms: number, fn: () => void) { timers.push({ ms, fn }); return () => {} },
+    every(ms: number, fn: () => void) {
+      const t = { ms, fn, stopped: false }
+      timers.push(t)
+      return () => { t.stopped = true }
+    },
     columns: 15,
     rows: 6,
   }
@@ -33,23 +37,29 @@ test('frame advances on the timer while working', () => {
   expect(fake.surface.state?.ref.frame).toBe(1)
 })
 
-test('idle never advances or redraws on the timer', () => {
-  const fake = fakeSurface()
-  Clawd({ ...props, mood: 'idle' }, fake.surface as never)
-  const writes = fake.writes()
-  for (const t of fake.timers) t.fn()
-  expect(fake.writes()).toBe(writes)
-  expect(fake.surface.state?.ref.frame).toBe(0)
+test('idle and off start no timer', () => {
+  for (const mood of ['idle', 'off'] as const) {
+    const fake = fakeSurface()
+    Clawd({ ...props, mood }, fake.surface as never)
+    Clawd({ ...props, mood }, fake.surface as never)
+    expect(fake.timers.length).toBe(0)
+    expect(fake.surface.state?.ref.frame).toBe(0)
+  }
 })
 
-test('a mood change is picked up by the same timer', () => {
+test('the timer starts when work begins and stops when it ends', () => {
   const fake = fakeSurface()
   Clawd({ ...props, mood: 'idle' }, fake.surface as never)
-  fake.timers[0].fn()
-  expect(fake.surface.state?.ref.frame).toBe(0)
   Clawd(props, fake.surface as never)
+  Clawd(props, fake.surface as never)
+  expect(fake.timers.length).toBe(1)
   fake.timers[0].fn()
   expect(fake.surface.state?.ref.frame).toBe(1)
+  Clawd({ ...props, mood: 'idle' }, fake.surface as never)
+  expect(fake.timers[0].stopped).toBe(true)
+  Clawd(props, fake.surface as never)
+  expect(fake.timers.length).toBe(2)
+  expect(fake.timers[1].stopped).toBe(false)
 })
 
 test('renders one row of Text runs per text row, with fg and bg colors', () => {
