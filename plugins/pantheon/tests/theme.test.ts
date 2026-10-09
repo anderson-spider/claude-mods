@@ -40,7 +40,7 @@ test('strip makes one block per job with state colors', () => {
     { state: 'planned', role: 'explorer' },
   ])
   expect(runs.length).toBe(4)
-  expect(runs.every(r => r.text === '▌')).toBe(true)
+  expect(runs.every(r => r.text === '▰')).toBe(true)
   expect(runs[0]!.color).toBe(ROLE_COLOR.fixer)
   expect(runs[1]!.color).toBe('#4CC2A0')
   expect(runs[2]!.color).toBe('#E5604D')

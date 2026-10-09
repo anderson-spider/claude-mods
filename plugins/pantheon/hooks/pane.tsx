@@ -627,8 +627,10 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     status === 'running' || status === 'background' ? 'running'
       : status === 'done' ? 'done'
         : status === 'failed' || status === 'error' ? 'failed' : 'planned'
-  // One thin bar per round; `extra` rounds beyond the shown ones read as +N.
+  // One ▰ per round, a space between them; `extra` rounds beyond the shown ones read as +N. A line with a
+  // single round has no strip at all: one lone mark says nothing and reads like a text cursor.
   const stripSegs = (key: string, items: StripItem[], extra = 0): Seg[] => {
+    if (items.length + extra < 2) return []
     const runs = strip(items)
     const more: Seg[] = extra > 0 ? [{ text: `+${extra}`, dim: true }] : []
     if (!runs.length) return more
@@ -638,7 +640,7 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
       const cellsW = Math.ceil(px / 8) + (extra > 0 ? 1 : 0)
       return [{ node: <Box key={`${key}-box`} width={cellsW} flexShrink={0}>{image(key, `<svg xmlns="http://www.w3.org/2000/svg" width="${px}" height="14">${rects}</svg>`, px, 14, 'jobs')}</Box>, w: cellsW }, ...more]
     }
-    return [...runs.map(r => ({ text: r.text, color: r.color, dim: r.dim })), ...(extra > 0 ? [{ text: ' ' }, ...more] : [])]
+    return [...runs.flatMap((r, k) => [...(k ? [{ text: ' ' }] : []), { text: r.text, color: r.color, dim: r.dim }]), ...(extra > 0 ? [{ text: ' ' }, ...more] : [])]
   }
 
   // What an instance read (Codex input, Claude context) and wrote.
@@ -694,7 +696,7 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
   const MODEL_W = 11
   const TIME_W = 6
   const CTX_W = 9
-  const STRIP_W = 8
+  const STRIP_W = 11
   const agentRowBlock = (r: AgentRow, compact: boolean, withCtxCol: boolean): RowBlock => {
     const { slot, inst: i } = r
     const role = slot.name

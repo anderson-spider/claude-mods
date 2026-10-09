@@ -317,7 +317,7 @@ describe('pane', () => {
         expect(strips.filter(p => p.source.split('<rect').length - 1 === 2)).toHaveLength(1)
       } else {
         // Two bars for the fixer; roles that never ran have none.
-        expect((await texts(ui)).filter(x => x === '▌')).toHaveLength(2)
+        expect((await texts(ui)).filter(x => x === '▰')).toHaveLength(2)
       }
       await $.tool.call({ tool: 'mcp__pantheon__delegate_cancel', jobId: second.jobId } as never)
     })
@@ -730,7 +730,7 @@ describe('pane', () => {
     const all = await texts(ui)
     expect(all.filter(x => x.startsWith('task '))).toEqual(['task 6']) // the latest run only
     expect(all).toContain('+2')
-    const bars = (await ui.findAll({ type: 'Text' })).filter(n => String(n.text) === '▌')
+    const bars = (await ui.findAll({ type: 'Text' })).filter(n => String(n.text) === '▰')
       .map(n => (n as unknown as { props: { color?: string } }).props.color)
     expect(bars).toEqual([BAD, OK, undefined, OK]) // failed, done, lost (dim), done
   })
@@ -817,12 +817,32 @@ describe('pane', () => {
     ] })
     await start($)
     const ui = await mountPane($, 'terminal', { rows: 70 })
-    const blocks = (await ui.findAll({ type: 'Text' })).filter(n => String(n.text) === '▌')
+    const blocks = (await ui.findAll({ type: 'Text' })).filter(n => String(n.text) === '▰')
       .map(n => (n as unknown as { props: { color?: string; dimColor?: boolean } }).props)
     const failed = blocks.findIndex(b => b.color === BAD)
     expect(failed).toBeGreaterThanOrEqual(0)
     expect(blocks[failed + 1].color).toBe(ROLE_COLOR.fixer) // the running second round follows the failed one
-    expect(blocks.some(b => b.color === OK)).toBe(true) // the finished explorer
+    expect(blocks.some(b => b.color === OK)).toBe(false) // the explorer ran once: no strip
+  })
+
+  t('a one-round row has no strip glyph; three rounds show three spaced marks of exact width', async ($, on) => {
+    world(on)
+    const round = (k: number, status: 'done' | 'failed') => ({ startedAt: NOW - 900_000 + k * 100_000, endedAt: NOW - 850_000 + k * 100_000, status })
+    seed(on, { natives: [
+      native({ id: 'one', role: 'explorer', type: 'pantheon:explorer', task: 'single', rounds: [round(1, 'done')] }),
+      native({ id: 'three', role: 'fixer', type: 'pantheon:fixer', task: 'triple', rounds: [round(1, 'done'), round(2, 'failed'), { startedAt: NOW - 30_000, status: 'running' }] }),
+    ] })
+    await start($)
+    const ui = await mountPane($, 'terminal', { rows: 70, columns: 100 })
+    const nodes = (await ui.findAll({ type: 'Text' })).map(n => n as unknown as { text: string; props: { color?: string } })
+    const marks = nodes.filter(n => String(n.text) === '▰')
+    // Only the fixer row: three marks (done, failed, running) with a single space between each; the lone round of the explorer has none.
+    expect(marks.map(n => n.props.color)).toEqual([OK, BAD, ROLE_COLOR.fixer])
+    const at = nodes.findIndex(n => n === marks[0])
+    expect(nodes.slice(at, at + 5).map(n => String(n.text))).toEqual(['▰', ' ', '▰', ' ', '▰'])
+    expect(nodes.slice(at, at + 5).reduce((n, x) => n + cellWidth(String(x.text)), 0)).toBe(5)
+    // The strip column keeps its width, so the row stays aligned: the task starts in the same cell as without one.
+    expect((await texts(ui))).toContain('single')
   })
 
   t('docked: the context gauge changes color past 70% and 85%', async ($, on) => {
@@ -1151,7 +1171,7 @@ describe('pane', () => {
     await start($)
     const ui = await mountPane($, 'terminal')
     // Two blocks: the lost round has no state color and no duration of its own; the running one is the role's.
-    const blocks = (await ui.findAll({ type: 'Text' })).filter(n => String(n.text) === '▌')
+    const blocks = (await ui.findAll({ type: 'Text' })).filter(n => String(n.text) === '▰')
       .map(n => (n as unknown as { props: { color?: string; dimColor?: boolean } }).props)
     const running = blocks.findIndex(b => b.color === ROLE_COLOR.fixer)
     expect(running).toBeGreaterThan(0)

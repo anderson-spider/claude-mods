@@ -80,8 +80,8 @@ export function gauge(pct: number, width: number): { on: string; off: string } {
   return { on: '▰'.repeat(full), off: '▱'.repeat(Math.max(0, width - full)) }
 }
 
-// A thin vertical bar, one cell wide: the heavy box-drawing stroke stays a line where ▮ turns into a fat block in many fonts.
-export const BLOCK = '▌'
+// One round, one cell wide: the gauge's own filled mark, so a lone bar never reads as a text cursor. Rows space them apart.
+export const BLOCK = '▰'
 
 export function strip(items: StripItem[]): Run[] {
   return items.map(it => {
