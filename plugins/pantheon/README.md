@@ -82,7 +82,7 @@ Layers apply in order: built-in defaults, `~/.claude/pantheon.json`, then `<repo
 
 ### Migrating from 0.3
 
-Version 0.4.0 changes the default to `claude`. Set `"profile": "mixed"` to keep the old engines. The old top-level `model` and engine/model/effort fields under top-level roles and seats are removed; move per-role and per-seat values into `profiles.<name>`. Invalid old fields produce a migration error naming the new path. Keep prompts and sandbox settings outside profiles.
+Version 0.4.0 changes the default to `claude`. Set `"profile": "mixed"` to keep the old engines. The old engine/model/effort fields under top-level roles and seats are removed; move per-role and per-seat values into `profiles.<name>`. Those fields produce a migration error naming the new path. A top-level `model` was already rejected in 0.3 and is still reported as an unknown field. Keep prompts and sandbox settings outside profiles.
 
 The equivalent of the old engine split with a customized fixer model is:
 
