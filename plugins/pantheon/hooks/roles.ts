@@ -135,7 +135,7 @@ export function nativeAgentSpecs(config: PantheonConfig, prompts: RolePrompts): 
     fixer: 'Pantheon bounded implementation from a complete specification.',
     oracle: 'Analyze architecture, debug difficult problems and review technical decisions.',
     designer: 'Design and implement interfaces and user experiences.',
-    git: 'Pantheon Git operations (pending role setup).',
+    git: 'Perform commit, squash, push and PR/MR after validation from the orchestrator brief.',
   }
   const specs: NativeSpec[] = ROLES
     .filter(role => isOffered(config, `pantheon:${role}`))
@@ -148,7 +148,7 @@ export function nativeAgentSpecs(config: PantheonConfig, prompts: RolePrompts): 
         model: override.model,
         effort: override.effort,
         ...(role === 'oracle' ? { disallowedTools: READ_ONLY_DENY }
-          : role === 'explorer' || role === 'librarian' ? { disallowedTools: RESEARCH_DENY } : {}),
+          : role === 'explorer' || role === 'librarian' || role === 'git' ? { disallowedTools: RESEARCH_DENY } : {}),
       }
     })
 

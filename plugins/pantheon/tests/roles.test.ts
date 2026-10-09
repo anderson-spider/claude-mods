@@ -215,6 +215,13 @@ describe('native agent prompts', () => {
 })
 
 describe('native agent specs', () => {
+  test('git inherits file editing tools but cannot delegate', () => {
+    const spec = nativeAgentSpecs(CLAUDE, prompts).find(spec => spec.name === 'git')
+    expect(spec?.disallowedTools).toEqual(['Agent', 'mcp__pantheon__delegate', 'mcp__pantheon__delegate_cancel'])
+    expect(spec?.tools).toBeUndefined()
+    expect(spec?.description).toContain('commit, squash, push and PR/MR after validation')
+    expect(spec?.prompt).toBe('<git>')
+  })
   test('native specs follow the engine', () => {
     const specs = nativeAgentSpecs(CLAUDE, prompts)
     expect(specs.map(spec => spec.name)).toEqual([...ROLES, 'councillor-alpha', 'councillor-beta'])
@@ -297,7 +304,7 @@ describe('role prompts by engine', () => {
 
   test('fixer commit instructions fit its engine', () => {
     expect(rolePrompt('fixer', 'codex')).toContain('.git is read-only')
-    expect(rolePrompt('fixer', 'claude')).toContain('Do not commit or push; the orchestrator commits.')
+    expect(rolePrompt('fixer', 'claude')).toContain('Do not commit or push; the git role handles your delivered changes.')
     expect(rolePrompt('fixer', 'claude')).not.toContain('.git is read-only')
   })
 

@@ -29,6 +29,10 @@ ${callLine('oracle', engine, 'Review', 'context')}
   designer: (engine: Engine) => `@designer
 ${callLine('designer', engine, 'Design UI', 'UI task')}
 - Delegate: user-facing polish, UX-critical flows, animation, landing pages, UI review; ask it to implement, not advise.`,
+  git: (engine: Engine) => `@git
+${callLine('git', engine, 'Git operations', 'git brief')}
+- Delegate: commit, squash, push and PR/MR after validation; brief: what to include, branch, base, squash yes/no, push yes/no, PR/MR yes/no.
+- The orchestrator decides and validates; @git performs the git work.`,
 }
 
 export function buildOrchestratorSection(config: PantheonConfig): string {
@@ -56,7 +60,7 @@ export function buildOrchestratorSection(config: PantheonConfig): string {
     'Delegate broad discovery, external research, multi-step implementation and complex debugging to suitable active roles. Do not delegate just because an agent exists.',
     ...(active('designer') ? ['Route UI/design work to @designer; do not implement its visual direction yourself.'] : []),
     'Reference paths instead of pasting files; give context, a complete task, allowed scope and a validation owner. Record job IDs, dependencies and write ownership.',
-    'Codex uses rg and shell for diagnostics and apply_patch for edits in its sandbox (read-only forbids writes). Native agents use Read/Grep/Glob/Edit within their offered tools. Preserve unrelated changes; only the orchestrator commits.',
+    'Codex uses rg and shell for diagnostics and apply_patch for edits in its sandbox (read-only forbids writes). Native agents use Read/Grep/Glob/Edit within their offered tools. Preserve unrelated changes.',
     '## 4. Plan and Parallelize',
     'Independent lanes now, dependent lanes later, disjoint write ownership for every writer; never edit locally inside a running write scope.',
     '### Background Task Discipline',
