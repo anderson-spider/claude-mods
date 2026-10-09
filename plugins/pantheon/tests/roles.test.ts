@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { MIXED } from './fixtures/profiles'
-import { CODEX_ROLES, NATIVE_ROLES, nativeAgentSpecs, resolveCodexCall } from '../hooks/roles'
+import { CLAUDE, CODEX, MIXED, resolved } from './fixtures/profiles'
+import { codexAgents, nativeAgentSpecs, resolveCodexCall, usesCodex } from '../hooks/roles'
+import { rolePrompt } from '../hooks/prompts/roles'
+import { ROLES } from '../hooks/defaults'
 import type { CodexCall, PantheonConfig, RolePrompts, Sandbox } from '../hooks/types'
 
 const ctx = { cwd: '/repo/sub', skipGitRepoCheck: false }
@@ -13,14 +15,56 @@ function call(config: PantheonConfig, agent = 'fixer'): CodexCall {
 }
 
 describe('Codex roles', () => {
-  test('fixed role groups resolve through their own engine', () => {
-    for (const agent of CODEX_ROLES) {
-      expect(call(MIXED, agent).agent).toBe(agent)
+  test('roles route by engine', async () => {
+    const codex = await resolved('codex')
+    expect(call(codex, 'oracle').sandbox).toBe('read-only')
+    expect(call(codex, 'designer').sandbox).toBe('workspace-write')
+    expect(call(codex, 'explorer').model).toBe('gpt-6-luna')
+    const claude = await resolved('claude')
+    expect(resolveCodexCall(claude, { agent: 'explorer', prompt: 't' }, ctx, prompts))
+      .toEqual({ error: 'Use pantheon:explorer through the Agent tool.' })
+  })
+
+  test('sandbox never widens', async () => {
+    expect(call(await resolved('codex', { agents: { oracle: { sandbox: 'workspace-write' } } }), 'oracle').sandbox)
+      .toBe('read-only')
+    expect(call(await resolved('mixed', { agents: { explorer: { sandbox: 'workspace-write' } } }), 'explorer').sandbox)
+      .toBe('read-only')
+    expect(call(await resolved('mixed', { agents: { fixer: { sandbox: 'read-only' } } })).sandbox).toBe('read-only')
+    expect(call(await resolved('mixed', { sandboxCap: 'read-only' })).sandbox).toBe('read-only')
+    for (const seat of ['alpha', 'beta']) expect(call(CODEX, `councillor:${seat}`).sandbox).toBe('read-only')
+  })
+
+  test('per-call and configured models must fit the Codex engine for roles and seats', () => {
+    for (const agent of ['fixer', 'councillor:alpha']) {
+      expect(resolveCodexCall(MIXED, { agent, prompt: 't', model: 'sonnet' }, ctx, prompts))
+        .toEqual({ error: expect.stringContaining('"sonnet" is a Claude model (engine codex)') })
     }
-    for (const agent of NATIVE_ROLES) {
-      expect(resolveCodexCall(MIXED, { agent, prompt: 'task' }, ctx, prompts))
-        .toEqual({ error: expect.stringContaining(`pantheon:${agent}`) })
+    const config: PantheonConfig = {
+      ...MIXED, agents: { ...MIXED.agents, fixer: { engine: 'codex', model: 'sonnet' } },
     }
+    expect(resolveCodexCall(config, { agent: 'fixer', prompt: 't' }, ctx, prompts))
+      .toEqual({ error: expect.stringContaining('"sonnet" is a Claude model (engine codex)') })
+    expect(resolveCodexCall(config, { agent: 'fixer', prompt: 't', model: 'gpt-6-luna' }, ctx, prompts))
+      .toEqual(expect.objectContaining({ model: 'gpt-6-luna' }))
+  })
+
+  test('unknown agent lists Codex agents', () => {
+    expect(resolveCodexCall(CLAUDE, { agent: 'nope', prompt: 't' }, ctx, prompts))
+      .toEqual({ error: 'Unknown or disabled agent: nope. Valid agents: none.' })
+    expect(resolveCodexCall(MIXED, { agent: 'nope', prompt: 't' }, ctx, prompts))
+      .toEqual({ error: 'Unknown or disabled agent: nope. Valid agents: explorer, librarian, fixer, councillor:alpha.' })
+  })
+
+  test('Codex availability follows active roles and seats', () => {
+    expect(codexAgents(CLAUDE)).toEqual([])
+    expect(usesCodex(CLAUDE)).toBe(false)
+    expect(codexAgents(MIXED)).toEqual(['explorer', 'librarian', 'fixer', 'councillor:alpha'])
+    expect(codexAgents(CODEX)).toEqual([...ROLES, 'councillor:alpha', 'councillor:beta'])
+    expect(usesCodex(CODEX)).toBe(true)
+    expect(usesCodex({ ...MIXED, disabledAgents: ['explorer', 'librarian', 'fixer', 'council'] })).toBe(false)
+    expect(codexAgents({ ...MIXED, disabledAgents: ['explorer', 'librarian', 'fixer'] })).toEqual(['councillor:alpha'])
+    expect(usesCodex({ ...MIXED, disabledAgents: ['explorer', 'librarian', 'fixer'] })).toBe(true)
   })
 
   const sandboxCases: Array<{ cap: Sandbox; role: Sandbox; expected: Sandbox }> = [
@@ -133,6 +177,31 @@ describe('Codex roles', () => {
 })
 
 describe('native agent specs', () => {
+  test('native specs follow the engine', () => {
+    const specs = nativeAgentSpecs(CLAUDE, prompts)
+    expect(specs.map(spec => spec.name)).toEqual([...ROLES, 'councillor-alpha', 'councillor-beta'])
+    expect(specs.find(spec => spec.name === 'explorer')).toEqual(expect.objectContaining({
+      tools: ['Read', 'Grep', 'Glob'], description: 'Pantheon codebase recon that returns compressed context.',
+    }))
+    expect(specs.find(spec => spec.name === 'librarian')).toEqual(expect.objectContaining({
+      tools: ['Read', 'Grep', 'Glob', 'WebSearch', 'WebFetch'], description: 'Pantheon research on external docs and APIs.',
+    }))
+    expect(specs.find(spec => spec.name === 'fixer')).toEqual(expect.objectContaining({
+      model: 'sonnet', description: 'Pantheon bounded implementation from a complete specification.',
+    }))
+    expect(specs.find(spec => spec.name === 'fixer')?.tools).toBeUndefined()
+    expect(nativeAgentSpecs(CODEX, prompts)).toEqual([])
+    expect(nativeAgentSpecs(MIXED, prompts).map(spec => spec.name)).toEqual(['oracle', 'designer', 'councillor-beta'])
+  })
+
+  test('prompts get the engine', () => {
+    const enginePrompts: RolePrompts = (key, engine) => `<${key}:${engine}>`
+    expect(nativeAgentSpecs(CLAUDE, enginePrompts).find(spec => spec.name === 'explorer')?.prompt)
+      .toBe('<explorer:claude>')
+    expect(resolveCodexCall(CODEX, { agent: 'oracle', prompt: 't' }, ctx, enginePrompts))
+      .toEqual(expect.objectContaining({ prompt: '<oracle:codex>\n\n---\n\nt' }))
+  })
+
   test('oracle and Claude seats are read tools only; designer inherits tools', () => {
     const specs = nativeAgentSpecs(MIXED, prompts)
     expect(specs.map(spec => spec.name)).toEqual(['oracle', 'designer', 'councillor-beta'])
@@ -167,5 +236,41 @@ describe('native agent specs', () => {
       .map(spec => spec.name)).toEqual(['designer'])
     expect(nativeAgentSpecs({ ...MIXED, disabledAgents: ['councillor:beta'] }, prompts)
       .map(spec => spec.name)).toEqual(['oracle', 'designer'])
+  })
+})
+
+describe('role prompts by engine', () => {
+  test('fixer commit instructions fit its engine', () => {
+    expect(rolePrompt('fixer', 'codex')).toContain('.git is read-only')
+    expect(rolePrompt('fixer', 'claude')).toContain('Do not commit or push; the orchestrator commits.')
+    expect(rolePrompt('fixer', 'claude')).not.toContain('.git is read-only')
+  })
+
+  test('read-only instructions fit the engine tools', () => {
+    for (const key of ['explorer', 'librarian', 'oracle', 'councillor'] as const) {
+      expect(rolePrompt(key, 'codex')).toContain('rg')
+      expect(rolePrompt(key, 'codex')).not.toContain('run Bash')
+      expect(rolePrompt(key, 'codex')).not.toContain('without Bash')
+      expect(rolePrompt(key, 'claude')).toContain('Read/Grep/Glob')
+    }
+    expect(rolePrompt('librarian', 'claude')).toContain('WebSearch')
+    expect(rolePrompt('librarian', 'claude')).toContain('WebFetch')
+    expect(rolePrompt('librarian', 'claude')).not.toContain('MCPs de documentação')
+  })
+
+  test('write roles describe file operations on both engines', () => {
+    for (const key of ['fixer', 'designer'] as const) {
+      for (const engine of ['claude', 'codex'] as const) expect(rolePrompt(key, engine)).toContain('**File operations**')
+      expect(rolePrompt(key, 'claude')).toContain('Read/Grep/Glob/Edit')
+      expect(rolePrompt(key, 'codex')).toContain('apply_patch')
+    }
+  })
+
+  test('all role and engine prompts end with the report override', () => {
+    for (const key of [...ROLES, 'councillor'] as const) {
+      for (const engine of ['claude', 'codex'] as const) {
+        expect(rolePrompt(key, engine).endsWith('Se a tarefa definir um formato de relatório, ele substitui o formato acima.')).toBe(true)
+      }
+    }
   })
 })

@@ -1,16 +1,19 @@
 import type {
   CodexCall, DelegateArgs, PantheonConfig, Role, RoleConfig, RolePrompts, Sandbox,
 } from './types'
+import { ROLES, ROLE_SANDBOX } from './defaults'
+import { modelMismatch } from './models'
 
-export const CODEX_ROLES: Role[] = ['explorer', 'librarian', 'fixer']
-export const NATIVE_ROLES: Role[] = ['oracle', 'designer']
-
-function isCodexRole(name: string): name is Role {
-  return CODEX_ROLES.includes(name as Role)
+function isRole(name: string): name is Role {
+  return ROLES.some(role => role === name)
 }
 
-function isNativeRole(name: string): boolean {
-  return NATIVE_ROLES.includes(name as Role)
+function isCodexRole(config: PantheonConfig, name: string): name is Role {
+  return isRole(name) && config.agents[name].engine === 'codex'
+}
+
+function isNativeRole(config: PantheonConfig, name: string): name is Role {
+  return isRole(name) && config.agents[name].engine === 'claude'
 }
 
 function seatDisabled(config: PantheonConfig, seat: string): boolean {
@@ -19,18 +22,22 @@ function seatDisabled(config: PantheonConfig, seat: string): boolean {
     config.disabledAgents.includes(`councillor-${seat}`)
 }
 
-/** Seats que o council usa: não desligados (nem o council inteiro), em ordem de nome. */
+/** Active council seats, including the council-wide switch, sorted by name. */
 export function activeSeats(config: PantheonConfig): string[] {
   return Object.keys(config.council.seats).filter(name => !seatDisabled(config, name)).sort()
 }
 
-function validCodexAgents(config: PantheonConfig): string[] {
+export function codexAgents(config: PantheonConfig): string[] {
   return [
-    ...CODEX_ROLES.filter(role => !config.disabledAgents.includes(role)),
+    ...ROLES.filter(role => isCodexRole(config, role) && !config.disabledAgents.includes(role)),
     ...Object.entries(config.council.seats)
       .filter(([name, seat]) => seat.engine === 'codex' && !seatDisabled(config, name))
       .map(([name]) => `councillor:${name}`),
   ]
+}
+
+export function usesCodex(config: PantheonConfig): boolean {
+  return codexAgents(config).length > 0
 }
 
 function appendPrompt(base: string, extra: string | undefined): string {
@@ -48,33 +55,34 @@ export function resolveCodexCall(
   prompts: RolePrompts,
 ): CodexCall | { error: string } {
   if (!validSandbox(config.sandboxCap)) {
-    return { error: `sandboxCap inválido: ${config.sandboxCap}` }
+    return { error: `Invalid sandboxCap: ${config.sandboxCap}` }
   }
 
   const unavailable = (): { error: string } => ({
-    error: `Agente desconhecido ou desativado: ${args.agent}. Agentes válidos: ${validCodexAgents(config).join(', ') || 'nenhum'}.`,
+    error: `Unknown or disabled agent: ${args.agent}. Valid agents: ${codexAgents(config).join(', ') || 'none'}.`,
   })
   let override: RoleConfig
   let key: Role | 'councillor'
   let sandbox: Sandbox
 
-  if (isNativeRole(args.agent)) {
+  if (isNativeRole(config, args.agent)) {
     if (config.disabledAgents.includes(args.agent)) return unavailable()
-    return { error: `Use pantheon:${args.agent} pela ferramenta Agent.` }
+    return { error: `Use pantheon:${args.agent} through the Agent tool.` }
   }
 
-  if (isCodexRole(args.agent)) {
+  if (isCodexRole(config, args.agent)) {
     if (config.disabledAgents.includes(args.agent)) return unavailable()
     override = config.agents[args.agent]
     key = args.agent
-    const requested = override.sandbox ?? (args.agent === 'fixer' ? 'workspace-write' : 'read-only')
-    if (!validSandbox(requested)) return { error: `Sandbox inválido para ${args.agent}: ${requested}` }
-    sandbox = requested === 'read-only' || config.sandboxCap === 'read-only' ? 'read-only' : 'workspace-write'
+    const requested = override.sandbox ?? ROLE_SANDBOX[args.agent]
+    if (!validSandbox(requested)) return { error: `Invalid sandbox for ${args.agent}: ${requested}` }
+    sandbox = [ROLE_SANDBOX[args.agent], requested, config.sandboxCap].includes('read-only')
+      ? 'read-only' : 'workspace-write'
   } else if (args.agent.startsWith('councillor:')) {
     const name = args.agent.slice('councillor:'.length)
     if (!Object.hasOwn(config.council.seats, name) || seatDisabled(config, name)) return unavailable()
     const seat = config.council.seats[name]!
-    if (seat.engine === 'claude') return { error: `Use pantheon:councillor-${name} pela ferramenta Agent.` }
+    if (seat.engine === 'claude') return { error: `Use pantheon:councillor-${name} through the Agent tool.` }
     override = seat
     key = 'councillor'
     sandbox = 'read-only'
@@ -82,9 +90,13 @@ export function resolveCodexCall(
     return unavailable()
   }
 
+  const model = args.model ?? override.model
+  const mismatch = modelMismatch('codex', model)
+  if (mismatch) return { error: mismatch }
+
   return {
     agent: args.agent,
-    model: args.model ?? override.model,
+    model,
     effort: args.effort ?? override.effort,
     sandbox,
     noNetwork: config.noNetwork,
@@ -100,21 +112,25 @@ type NativeSpec = {
 }
 
 export function nativeAgentSpecs(config: PantheonConfig, prompts: RolePrompts): NativeSpec[] {
-  const descriptions: Partial<Record<Role, string>> = {
+  const descriptions: Record<Role, string> = {
+    explorer: 'Pantheon codebase recon that returns compressed context.',
+    librarian: 'Pantheon research on external docs and APIs.',
+    fixer: 'Pantheon bounded implementation from a complete specification.',
     oracle: 'Analyze architecture, debug difficult problems and review technical decisions.',
     designer: 'Design and implement interfaces and user experiences.',
   }
-  const specs: NativeSpec[] = NATIVE_ROLES
+  const specs: NativeSpec[] = ROLES
     .filter(role => isOffered(config, `pantheon:${role}`))
     .map(role => {
       const override = config.agents[role]
       return {
         name: role,
-        description: descriptions[role]!,
+        description: descriptions[role],
         prompt: appendPrompt(prompts(role, 'claude'), override.prompt),
         model: override.model,
         effort: override.effort,
-        ...(role === 'oracle' ? { tools: ['Read', 'Grep', 'Glob'] } : {}),
+        ...(['explorer', 'librarian', 'oracle'].includes(role)
+          ? { tools: ['Read', 'Grep', 'Glob', ...(role === 'librarian' ? ['WebSearch', 'WebFetch'] : [])] } : {}),
       }
     })
 
@@ -136,7 +152,7 @@ export function isOffered(config: PantheonConfig, agentType: string): boolean {
   if (!agentType.startsWith('pantheon:')) return true
   const name = agentType.slice('pantheon:'.length)
   if (config.disabledAgents.includes(name)) return false
-  if (isNativeRole(name)) return true
+  if (isRole(name)) return isNativeRole(config, name)
   if (!name.startsWith('councillor-')) return false
   const seat = name.slice('councillor-'.length)
   return !seatDisabled(config, seat) && Object.hasOwn(config.council.seats, seat) &&

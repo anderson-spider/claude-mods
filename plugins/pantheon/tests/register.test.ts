@@ -334,6 +334,16 @@ describe('register', () => {
     expect(seen.cwds[0]).toBe(ROOT)
   })
 
+  test('absent user config registers default Claude roles and refuses Codex delegation', async ($, on) => {
+    const { seen, files } = world(on)
+    delete files[`${HOME}/.claude/pantheon.json`]
+    await start($)
+    expect(seen.agents).toEqual(['explorer', 'librarian', 'fixer', 'oracle', 'designer', 'councillor-alpha', 'councillor-beta'])
+    const out = parse(await $.tool.call({ tool: DELEGATE, agent: 'explorer', prompt: 'find x' } as never))
+    expect(out.error).toBe('Use pantheon:explorer through the Agent tool.')
+    expect(seen.argv).toEqual([])
+  })
+
   test('delegate refuses while config is invalid', async ($, on) => {
     const { seen } = world(on, { files: { [`${HOME}/.claude/pantheon.json`]: '{ nope' } })
     await start($)
@@ -502,7 +512,7 @@ describe('register', () => {
   test('invalid first config still registers the default native agents', async ($, on) => {
     const { seen } = world(on, { files: { [`${HOME}/.claude/pantheon.json`]: '{ nope' } })
     await start($)
-    expect(seen.agents).toEqual(['oracle', 'designer', 'councillor-alpha', 'councillor-beta'])
+    expect(seen.agents).toEqual(['explorer', 'librarian', 'fixer', 'oracle', 'designer', 'councillor-alpha', 'councillor-beta'])
   })
 
   test('a failed native registration is retried on the next turn', async ($, on) => {

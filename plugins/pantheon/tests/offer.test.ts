@@ -1,8 +1,16 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { MIXED } from './fixtures/profiles'
+import { CLAUDE, CODEX, MIXED } from './fixtures/profiles'
 import { isOffered } from '../hooks/roles'
 
 describe('agent offer', () => {
+  test('role offers follow their configured engines', () => {
+    for (const role of ['explorer', 'librarian', 'fixer']) expect(isOffered(CLAUDE, `pantheon:${role}`)).toBe(true)
+    for (const role of ['oracle', 'designer', 'councillor-beta']) expect(isOffered(CODEX, `pantheon:${role}`)).toBe(false)
+    expect(isOffered(MIXED, 'pantheon:fixer')).toBe(false)
+    expect(isOffered(MIXED, 'pantheon:oracle')).toBe(true)
+    expect(isOffered({ ...CLAUDE, disabledAgents: ['explorer'] }, 'pantheon:explorer')).toBe(false)
+  })
+
   test('active native roles and Claude seats are offered', () => {
     for (const agent of ['pantheon:oracle', 'pantheon:designer', 'pantheon:councillor-beta']) {
       expect(isOffered(MIXED, agent)).toBe(true)
