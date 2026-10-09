@@ -196,3 +196,14 @@ test('clawdSvg: reduced motion stops the objects and shows their first frame', (
   for (const cls of ['.fx', '.tw', '.tw2', '.la', '.lb']) expect(media.includes(cls)).toBe(true)
   expect(/\.fx\{animation:none;opacity:0\}\.f0\{opacity:1\}/.test(media)).toBe(true)
 })
+
+test('the small terminal sprite is drawn by hand at 8 x 6, with two eyes and the role signature', () => {
+  const EYE = '#1C1B1A'
+  for (const role of ROLE_ORDER) for (const mood of MOODS) for (let f = 0; f < 2; f++) {
+    const g = pixels(role, mood, f, 'small')
+    expect(g.length).toBe(6)
+    for (const row of g) expect(row.length).toBe(8)
+    expect(g.flat().filter(c => c === EYE).length).toBe(mood === 'off' ? 0 : 2)
+    if (mood === 'idle') expect(SIGNATURE[role].some(c => colorsOf(g).has(c))).toBe(true)
+  }
+})

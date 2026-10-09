@@ -1,6 +1,6 @@
 // Claude mascot, a side-on pixel sprite with one hat and one held prop per role. Pure module:
-// the terminal art (15 x 12 pixels) as half-block runs, the desktop art (30 x 26, shaded and
-// outlined) as an SVG string.
+// the terminal art (15 x 12 pixels, and a separate 8 x 6 one) as half-block runs, the desktop art
+// (30 x 26, shaded and outlined) as an SVG string.
 import type { SlotName } from './roster'
 
 export type Mood = 'work' | 'idle' | 'off'
@@ -68,7 +68,7 @@ const PROPS: Record<SlotName, { y: number; rows: string[] }> = {
 const PALETTE: Record<string, string> = {
   O: BODY, E: EYE, W: '#F5F4EF', g: '#CFCFC6', B: '#4A86D8', R: '#B0664D', V: '#4D4D4B',
   Y: '#EEBB4D', K: '#2E2A28', Q: '#6E625A', q: '#9A8B7E', D: '#3B3B40', C: '#4FB6D8', N: '#6B4A2E',
-  M: '#D870A8', L: '#D8D5CB', l: '#A7A397', A: '#E9C04F', a: '#CFD4D9', H: '#C4C9D6',
+  M: '#D870A8', m: '#A8507F', L: '#D8D5CB', l: '#A7A397', A: '#E9C04F', a: '#CFD4D9', H: '#C4C9D6',
   h: '#8C92A3', r: '#C4483D', w: '#F6EFDD', z: '#FFE9CF', n: '#7A5230', b: '#2D4A8C', S: '#FFF1A8',
 }
 
@@ -82,15 +82,34 @@ function dim(hex: string, keep: number, floor: number): string {
   return '#' + [(n >> 16) & 255, (n >> 8) & 255, n & 255].map(mix).map(v => v.toString(16).padStart(2, '0')).join('')
 }
 
+// The small sprite (8 x 6), drawn on its own: body rows 2-4 with both eyes, legs on row 5.
+const SMALL_BODY = ['........', '........', '.OEOOEO.', 'OOOOOOO.', '.OOOOOO.']
+const SMALL_LEGS = ['.O.OO.O.', 'O.O..O.O']
+// Hat and prop per role over the small body; '.' leaves it showing.
+const SMALL: Record<SlotName, string[]> = {
+  orchestrator: ['..WWW...', '.BBBBBV.', '.......n', '.......W', '.......W'],
+  explorer: ['..QqqQ..', '.QQQQQQQ', '.......a', '.......n'],
+  librarian: ['.DDDDDD.', '..KKKK.Y', '.......Y', '.......r', '.......r'],
+  fixer: ['z.......', '.z......', 'w......H', 'w......C', '.......h'],
+  oracle: ['...bb..S', '.bbbbbbN', '.......N'],
+  designer: ['....M...', '.MMMMMmC', '.......N', '.......N'],
+  council: ['.LLLLLL.', 'lLLLLLLl', 'l......N', '.......n'],
+}
+
 // The terminal grid: a color string or null per pixel. Off closes the eyes and dims the colors.
-export function pixels(role: SlotName, mood: Mood, frame: number): Cell[][] {
+export function pixels(role: SlotName, mood: Mood, frame: number, size: 'small' | 'large' = 'large'): Cell[][] {
   const body = mood === 'off' ? OFF_BODY : BODY
-  const legs = LEGS[mood === 'work' ? wrap(frame) % 2 : 0]
-  const rows = [...Array<string>(4).fill(''), ...BODY_ROWS, ...legs].map(r => [...r.padEnd(COLS, '.')])
+  const pose = mood === 'work' ? wrap(frame) % 2 : 0
+  const small = size === 'small'
+  const rows = (small ? [...SMALL_BODY, SMALL_LEGS[pose]] : [...Array<string>(4).fill(''), ...BODY_ROWS, ...LEGS[pose]])
+    .map(r => [...r.padEnd(small ? 8 : COLS, '.')])
   const over = (x: number, y: number, art: string[]) =>
     art.forEach((r, j) => [...r].forEach((ch, i) => { if (ch !== '.') rows[y + j][x + i] = ch }))
-  over(0, 0, HATS[role])
-  over(11, PROPS[role].y, PROPS[role].rows)
+  if (small) over(0, 0, SMALL[role])
+  else {
+    over(0, 0, HATS[role])
+    over(11, PROPS[role].y, PROPS[role].rows)
+  }
   return rows.map(row =>
     row.map(ch => {
       if (ch === '.') return null
@@ -100,28 +119,6 @@ export function pixels(role: SlotName, mood: Mood, frame: number): Cell[][] {
       return mood === 'off' ? dim(c, 0.55, 28) : c
     }),
   )
-}
-
-// 2x2 downscale to 8 columns x 6 pixel rows (the odd last column is padded empty).
-function downscale(g: Cell[][]): Cell[][] {
-  const out: Cell[][] = []
-  for (let by = 0; by < ROWS / 2; by++) {
-    const row: Cell[] = []
-    for (let bx = 0; bx < Math.ceil(COLS / 2); bx++) {
-      const cells: Cell[] = []
-      for (let dy = 0; dy < 2; dy++) for (let dx = 0; dx < 2; dx++) cells.push(g[by * 2 + dy][bx * 2 + dx] ?? null)
-      const inBody = by * 2 >= 4 && by * 2 + 1 <= 9
-      if (inBody && cells.includes(EYE)) { row.push(EYE); continue }
-      const counts = new Map<string, number>()
-      for (const c of cells) if (c) counts.set(c, (counts.get(c) ?? 0) + 1)
-      let best: Cell = null
-      let n = 0
-      for (const [c, k] of counts) if (k > n) { best = c; n = k }
-      row.push(best)
-    }
-    out.push(row)
-  }
-  return out
 }
 
 function halfBlocks(g: Cell[][]): Run[][] {
@@ -146,8 +143,7 @@ function halfBlocks(g: Cell[][]): Run[][] {
 }
 
 export function clawdRuns(role: SlotName, mood: Mood, frame: number, size: 'small' | 'large'): Run[][] {
-  const g = pixels(role, mood, frame)
-  return halfBlocks(size === 'large' ? g : downscale(g))
+  return halfBlocks(pixels(role, mood, frame, size))
 }
 
 export function clawdLines(role: SlotName, mood: Mood, frame: number, size: 'small' | 'large'): string[] {
