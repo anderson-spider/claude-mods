@@ -22,7 +22,7 @@ Turn a request into a plan the person has agreed to. No code, no spec file: one 
 
 ## 3. Write the plan
 
-- Path: `.pantheon/plans/YYYY-MM-DD-<topic>.md`. Add `.pantheon/` to `.git/info/exclude` (create the line once); never commit the plan or touch a tracked ignore file.
+- Path: `.pantheon/plans/YYYY-MM-DD-<topic>.md`. Add `.pantheon/` to the file printed by `git rev-parse --git-path info/exclude` (a worktree's `.git` is a file, so do not write to `.git/info/exclude` directly; create the line once); never commit the plan or touch a tracked ignore file.
 - Start with a short context and the decisions already made, then the tasks. Each task has:
   - **goal**: what changes and why, in a sentence or two;
   - **files**: the paths it may touch;

@@ -277,7 +277,7 @@ describe('role prompts by engine', () => {
   test('all role and engine prompts end with the report override', () => {
     for (const key of [...ROLES, 'councillor'] as const) {
       for (const engine of ['claude', 'codex'] as const) {
-        expect(rolePrompt(key, engine).endsWith('Se a tarefa definir um formato de relatório, ele substitui o formato acima.')).toBe(true)
+        expect(rolePrompt(key, engine).endsWith('If the task defines a report format, it replaces the format above.')).toBe(true)
       }
     }
   })
