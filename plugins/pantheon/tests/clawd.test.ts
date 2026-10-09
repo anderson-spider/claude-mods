@@ -145,3 +145,25 @@ test('the fixer wears no hat and holds a laptop and a mug; the oracle has no cry
   for (let y = 0; y < 4; y++) fixer[y].forEach((c, x) => { if (c) expect(x < 2).toBe(true) })
   expect(colorsOf(pixels('oracle', 'idle', 0)).has('#6F3FB0')).toBe(false)
 })
+
+const rects = (svg: string) =>
+  [...svg.matchAll(/<rect x="(\d+)" y="(\d+)"[^>]*fill="([^"]+)"/g)].map(m => ({ x: +m[1], y: +m[2], fill: m[3].toUpperCase() }))
+
+test('the council wig has curls hanging beside the face', () => {
+  const WIG = ['#D8D5CB', '#A7A397']
+  // Desktop: the torso's top row is y 10 in the padded canvas; curls hang below it, behind the eyes.
+  const curls = rects(clawdSvg('council', 'idle')).filter(r => WIG.includes(r.fill) && r.y >= 10)
+  expect(curls.length >= 4).toBe(true)
+  expect(curls.every(r => r.x < 8)).toBe(true)
+  // Terminal: wig pixels left of the torso, on its first rows.
+  const g = pixels('council', 'idle', 0)
+  expect([g[4][0], g[4][1], g[5][0], g[5][1]].every(c => c !== null && WIG.includes(c.toUpperCase()))).toBe(true)
+})
+
+test('a pen hangs from the orchestrator clipboard', () => {
+  const PEN = '#C4483D'
+  // Desktop: right of the clipboard (x 20-26 in the padded canvas).
+  expect(rects(clawdSvg('orchestrator', 'idle')).filter(r => r.fill === PEN && r.x >= 27).length >= 3).toBe(true)
+  const g = pixels('orchestrator', 'idle', 0)
+  expect(g.slice(9, 11).every(row => row[14]?.toUpperCase() === PEN)).toBe(true)
+})

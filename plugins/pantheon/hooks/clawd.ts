@@ -51,11 +51,12 @@ const HATS: Record<SlotName, string[]> = {
   fixer: ['...............', '...............', 'z..............', '.z.............', 'ww.............', 'ww.............'],
   oracle: ['.......b.......', '......bbb......', '.....bbSbb.....', '..bbbbbbbbbbb..'],
   designer: ['...............', '......MM.......', '....MMMMMM.....', '..MMMMMMMMMMM..'],
-  council: ['...............', '....LLLLLL.....', '..LLLLLLLLLLL..', '..LLlLLLlLLLL..'],
+  council: ['...............', '....LLLLLL.....', '..LLLLLLLLLLL..', '.lLLlLLLlLLLL..', 'Ll.............', 'lL.............'],
 }
 // Held prop per role: rows from `y` down, columns 11-14.
 const PROPS: Record<SlotName, { y: number; rows: string[] }> = {
-  orchestrator: { y: 6, rows: ['....', '.nn.', 'WWWW', 'WLLW', 'WLLW', 'WWWW'] },
+  // The clipboard's pen hangs on a string from the clip.
+  orchestrator: { y: 6, rows: ['....', '.nng', 'WWWg', 'WLWr', 'WLWr', 'WWWK'] },
   explorer: { y: 6, rows: ['.AA.', 'AaaA', 'AaaA', '.AA.', '.n..', 'n...'] },
   librarian: { y: 6, rows: ['....', 'rrrr', 'rwYr', 'rwwr', 'rrrr', '....'] },
   fixer: { y: 6, rows: ['HHHH', 'HCKH', 'HKKH', 'HCCH', 'hhhh'] },
@@ -271,12 +272,20 @@ const PROP: Record<SlotName, Prop> = {
     hand: [18, 14],
   },
   council: {
-    stamp: [[19, 8, ['NNNNNNN', 'NttttNN', 'NNNNNNN', 'NNNNNNt']], [18, 18, ['NNNNNNNNN', 'ttttttttt']], [21, 12, ['NN', 'NN', 'NN', 'NN', 'NN', 'NN']]],
+    stamp: [
+      [19, 8, ['NNNNNNN', 'NttttNN', 'NNNNNNN', 'NNNNNNt']], [18, 18, ['NNNNNNNNN', 'ttttttttt']], [21, 12, ['NN', 'NN', 'NN', 'NN', 'NN', 'NN']],
+      // The wig's side curls, hanging behind the face.
+      [2, 8, ['LLL', 'lll', 'LLL', 'lll']],
+    ],
     hand: [20, 14],
     arm: 5,
   },
   orchestrator: {
-    stamp: [[19, 10, ['..ttt..', 'WWWWWWW', 'WLLLLLW', 'WWWWWWW', 'WLLLLWW', 'WWWWWWW', 'WLLLWWW', 'WWWWWWW']]],
+    stamp: [
+      [19, 10, ['..ttt..', 'WWWWWWW', 'WLLLLLW', 'WWWWWWW', 'WLLLLWW', 'WWWWWWW', 'WLLLWWW', 'WWWWWWW']],
+      // A pen on a string, hanging off the clipboard's edge.
+      [26, 10, ['g', 'g', 'r', 'r', 'r', 'r', 'k']],
+    ],
     hand: [17, 14],
   },
 }
