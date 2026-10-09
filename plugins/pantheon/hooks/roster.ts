@@ -1,9 +1,9 @@
 import { isOffered } from './roles'
-import type { Job, Native, PantheonConfig, SessionInfo } from './types'
+import type { Engine, Job, Native, PantheonConfig, SessionInfo } from './types'
 
 export const ROLE_ORDER = ['orchestrator', 'explorer', 'librarian', 'fixer', 'oracle', 'designer', 'council'] as const
 export type SlotName = (typeof ROLE_ORDER)[number]
-export type Engine = 'claude' | 'codex'
+export type { Engine } from './types'
 export type RoundView = { startedAt: number; endedAt?: number; status: string }
 export type Instance = {
   id: string

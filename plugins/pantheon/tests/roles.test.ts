@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { DEFAULT_CONFIG } from '../hooks/defaults'
+import { MIXED } from './fixtures/profiles'
 import { CODEX_ROLES, NATIVE_ROLES, nativeAgentSpecs, resolveCodexCall } from '../hooks/roles'
 import type { CodexCall, PantheonConfig, RolePrompts, Sandbox } from '../hooks/types'
 
@@ -15,10 +15,10 @@ function call(config: PantheonConfig, agent = 'fixer'): CodexCall {
 describe('Codex roles', () => {
   test('fixed role groups resolve through their own engine', () => {
     for (const agent of CODEX_ROLES) {
-      expect(call(DEFAULT_CONFIG, agent).agent).toBe(agent)
+      expect(call(MIXED, agent).agent).toBe(agent)
     }
     for (const agent of NATIVE_ROLES) {
-      expect(resolveCodexCall(DEFAULT_CONFIG, { agent, prompt: 'task' }, ctx, prompts))
+      expect(resolveCodexCall(MIXED, { agent, prompt: 'task' }, ctx, prompts))
         .toEqual({ error: expect.stringContaining(`pantheon:${agent}`) })
     }
   })
@@ -32,8 +32,8 @@ describe('Codex roles', () => {
   for (const { cap, role, expected } of sandboxCases) {
     test(`role sandbox ${role} capped by ${cap}`, () => {
       const config: PantheonConfig = {
-        ...DEFAULT_CONFIG, sandboxCap: cap,
-        agents: { ...DEFAULT_CONFIG.agents, fixer: { sandbox: role } },
+        ...MIXED, sandboxCap: cap,
+        agents: { ...MIXED.agents, fixer: { engine: 'codex', sandbox: role } },
       }
       expect(call(config).sandbox).toBe(expected)
     })
@@ -41,8 +41,8 @@ describe('Codex roles', () => {
 
   test('missing role sandbox uses the safe role default', () => {
     const config: PantheonConfig = {
-      ...DEFAULT_CONFIG,
-      agents: { ...DEFAULT_CONFIG.agents, explorer: {}, librarian: {}, fixer: {} },
+      ...MIXED,
+      agents: { ...MIXED.agents, explorer: { engine: 'codex' }, librarian: { engine: 'codex' }, fixer: { engine: 'codex' } },
     }
     expect(call(config, 'explorer').sandbox).toBe('read-only')
     expect(call(config, 'librarian').sandbox).toBe('read-only')
@@ -53,8 +53,8 @@ describe('Codex roles', () => {
 
   test('call model and effort win over role while context and network are retained', () => {
     const config: PantheonConfig = {
-      ...DEFAULT_CONFIG, noNetwork: true,
-      agents: { ...DEFAULT_CONFIG.agents, fixer: { model: 'role-model', effort: 'low', sandbox: 'read-only' } },
+      ...MIXED, noNetwork: true,
+      agents: { ...MIXED.agents, fixer: { engine: 'codex', model: 'role-model', effort: 'low', sandbox: 'read-only' } },
     }
     expect(resolveCodexCall(config, { agent: 'fixer', prompt: 'task', model: 'call-model', effort: 'high', cwd: '/other', resume: 'job' },
       { cwd: '/saved', skipGitRepoCheck: true, resumeSessionId: 'session' }, prompts)).toEqual({
@@ -66,13 +66,13 @@ describe('Codex roles', () => {
   })
 
   test('native role is refused with an Agent tool instruction', () => {
-    const result = resolveCodexCall(DEFAULT_CONFIG, { agent: 'oracle', prompt: 'task' }, ctx, prompts)
+    const result = resolveCodexCall(MIXED, { agent: 'oracle', prompt: 'task' }, ctx, prompts)
     expect(result).toEqual({ error: expect.stringContaining('pantheon:oracle') })
     expect(result).toEqual({ error: expect.stringContaining('Agent') })
   })
 
   test('disabled and unknown agents list only available Codex agents', () => {
-    const config: PantheonConfig = { ...DEFAULT_CONFIG, disabledAgents: ['fixer', 'librarian'] }
+    const config: PantheonConfig = { ...MIXED, disabledAgents: ['fixer', 'librarian'] }
     for (const agent of ['fixer', 'unknown']) {
       const result = resolveCodexCall(config, { agent, prompt: 'task' }, ctx, prompts)
       expect(result).toEqual({ error: expect.stringContaining('explorer') })
@@ -82,38 +82,38 @@ describe('Codex roles', () => {
   })
 
   test('Codex seat uses seat model, effort and the councillor prompt', () => {
-    expect(call(DEFAULT_CONFIG, 'councillor:alpha')).toEqual({
+    expect(call(MIXED, 'councillor:alpha')).toEqual({
       agent: 'councillor:alpha', model: 'gpt-6-astra', effort: 'high', sandbox: 'read-only', noNetwork: false,
       prompt: '<councillor>\n\n---\n\ntask', ...ctx,
     })
-    expect(resolveCodexCall(DEFAULT_CONFIG,
+    expect(resolveCodexCall(MIXED,
       { agent: 'councillor:alpha', prompt: 'task', model: 'call-model', effort: 'low' }, ctx, prompts))
       .toEqual(expect.objectContaining({ model: 'call-model', effort: 'low', sandbox: 'read-only' }))
   })
 
   test('Claude seat is refused with its native Agent tool instruction', () => {
-    const result = resolveCodexCall(DEFAULT_CONFIG, { agent: 'councillor:beta', prompt: 'task' }, ctx, prompts)
+    const result = resolveCodexCall(MIXED, { agent: 'councillor:beta', prompt: 'task' }, ctx, prompts)
     expect(result).toEqual({ error: expect.stringContaining('pantheon:councillor-beta') })
     expect(result).toEqual({ error: expect.stringContaining('Agent') })
   })
 
   test('council disabled and missing seats cannot delegate', () => {
-    const config: PantheonConfig = { ...DEFAULT_CONFIG, disabledAgents: ['council'] }
+    const config: PantheonConfig = { ...MIXED, disabledAgents: ['council'] }
     expect(resolveCodexCall(config, { agent: 'councillor:alpha', prompt: 'task' }, ctx, prompts))
       .toEqual({ error: expect.stringContaining('explorer') })
-    expect(resolveCodexCall(DEFAULT_CONFIG, { agent: 'councillor:missing', prompt: 'task' }, ctx, prompts))
+    expect(resolveCodexCall(MIXED, { agent: 'councillor:missing', prompt: 'task' }, ctx, prompts))
       .toEqual({ error: expect.stringContaining('councillor:alpha') })
   })
 
   test('inherited object properties are not configured seats', () => {
-    expect(resolveCodexCall(DEFAULT_CONFIG, { agent: 'councillor:toString', prompt: 'task' }, ctx, prompts))
+    expect(resolveCodexCall(MIXED, { agent: 'councillor:toString', prompt: 'task' }, ctx, prompts))
       .toEqual({ error: expect.stringContaining('explorer') })
   })
 
   test('role and seat config prompts precede the task', () => {
     const config: PantheonConfig = {
-      ...DEFAULT_CONFIG,
-      agents: { ...DEFAULT_CONFIG.agents, fixer: { prompt: 'extra' } },
+      ...MIXED,
+      agents: { ...MIXED.agents, fixer: { engine: 'codex', prompt: 'extra' } },
       council: { seats: { alpha: { engine: 'codex', prompt: 'seat extra' } } },
     }
     expect(call(config).prompt).toBe('<fixer>\n\nextra\n\n---\n\ntask')
@@ -122,10 +122,10 @@ describe('Codex roles', () => {
 
   test('danger-full-access cannot be resolved as a cap or role sandbox', () => {
     const invalid = 'danger-full-access' as Sandbox
-    expect(resolveCodexCall({ ...DEFAULT_CONFIG, sandboxCap: invalid }, { agent: 'fixer', prompt: 'task' }, ctx, prompts))
+    expect(resolveCodexCall({ ...MIXED, sandboxCap: invalid }, { agent: 'fixer', prompt: 'task' }, ctx, prompts))
       .toEqual({ error: expect.stringContaining('danger-full-access') })
     const config: PantheonConfig = {
-      ...DEFAULT_CONFIG, agents: { ...DEFAULT_CONFIG.agents, fixer: { sandbox: invalid } },
+      ...MIXED, agents: { ...MIXED.agents, fixer: { engine: 'codex', sandbox: invalid } },
     }
     expect(resolveCodexCall(config, { agent: 'fixer', prompt: 'task' }, ctx, prompts))
       .toEqual({ error: expect.stringContaining('danger-full-access') })
@@ -134,7 +134,7 @@ describe('Codex roles', () => {
 
 describe('native agent specs', () => {
   test('oracle and Claude seats are read tools only; designer inherits tools', () => {
-    const specs = nativeAgentSpecs(DEFAULT_CONFIG, prompts)
+    const specs = nativeAgentSpecs(MIXED, prompts)
     expect(specs.map(spec => spec.name)).toEqual(['oracle', 'designer', 'councillor-beta'])
     expect(specs.find(spec => spec.name === 'oracle')).toEqual(expect.objectContaining({
       prompt: '<oracle>', model: 'opus', tools: ['Read', 'Grep', 'Glob'], description: expect.any(String),
@@ -148,8 +148,8 @@ describe('native agent specs', () => {
 
   test('native config model, effort and append prompts reach the registration specs', () => {
     const config: PantheonConfig = {
-      ...DEFAULT_CONFIG, sandboxCap: 'read-only', noNetwork: true,
-      agents: { ...DEFAULT_CONFIG.agents, oracle: { model: 'native-model', effort: 'high', prompt: 'extra' } },
+      ...MIXED, sandboxCap: 'read-only', noNetwork: true,
+      agents: { ...MIXED.agents, oracle: { engine: 'claude', model: 'native-model', effort: 'high', prompt: 'extra' } },
       council: { seats: { beta: { engine: 'claude', model: 'seat-model', effort: 'low', prompt: 'seat extra' } } },
     }
     const specs = nativeAgentSpecs(config, prompts)
@@ -163,9 +163,9 @@ describe('native agent specs', () => {
   })
 
   test('disabled natives and council do not produce registration specs', () => {
-    expect(nativeAgentSpecs({ ...DEFAULT_CONFIG, disabledAgents: ['oracle', 'council'] }, prompts)
+    expect(nativeAgentSpecs({ ...MIXED, disabledAgents: ['oracle', 'council'] }, prompts)
       .map(spec => spec.name)).toEqual(['designer'])
-    expect(nativeAgentSpecs({ ...DEFAULT_CONFIG, disabledAgents: ['councillor:beta'] }, prompts)
+    expect(nativeAgentSpecs({ ...MIXED, disabledAgents: ['councillor:beta'] }, prompts)
       .map(spec => spec.name)).toEqual(['oracle', 'designer'])
   })
 })

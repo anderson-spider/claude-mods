@@ -3,10 +3,11 @@ import { ago, buildRoster, ROLE_ORDER } from '../hooks/roster'
 import type { Job, Native, PantheonConfig, SessionInfo } from '../hooks/types'
 
 const config = (overrides: Partial<PantheonConfig> = {}): PantheonConfig => ({
+  profile: 'mixed',
   sandboxCap: 'workspace-write', noNetwork: false, foregroundMinutes: 5, disabledAgents: [],
   agents: {
-    explorer: { model: 'explorer-model' }, librarian: {}, fixer: { model: 'fixer-model' },
-    oracle: { model: 'oracle-model' }, designer: {},
+    explorer: { engine: 'codex', model: 'explorer-model' }, librarian: { engine: 'codex' }, fixer: { engine: 'codex', model: 'fixer-model' },
+    oracle: { engine: 'claude', model: 'oracle-model' }, designer: { engine: 'claude' },
   },
   council: { seats: {
     alpha: { engine: 'codex', model: 'alpha-model' },

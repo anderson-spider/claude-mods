@@ -1,16 +1,16 @@
 import type {
-  CodexCall, CodexRole, DelegateArgs, NativeRole, PantheonConfig, RoleOverride, RolePrompts, Sandbox,
+  CodexCall, DelegateArgs, PantheonConfig, Role, RoleConfig, RolePrompts, Sandbox,
 } from './types'
 
-export const CODEX_ROLES: CodexRole[] = ['explorer', 'librarian', 'fixer']
-export const NATIVE_ROLES: NativeRole[] = ['oracle', 'designer']
+export const CODEX_ROLES: Role[] = ['explorer', 'librarian', 'fixer']
+export const NATIVE_ROLES: Role[] = ['oracle', 'designer']
 
-function isCodexRole(name: string): name is CodexRole {
-  return CODEX_ROLES.includes(name as CodexRole)
+function isCodexRole(name: string): name is Role {
+  return CODEX_ROLES.includes(name as Role)
 }
 
-function isNativeRole(name: string): name is NativeRole {
-  return NATIVE_ROLES.includes(name as NativeRole)
+function isNativeRole(name: string): boolean {
+  return NATIVE_ROLES.includes(name as Role)
 }
 
 function seatDisabled(config: PantheonConfig, seat: string): boolean {
@@ -54,8 +54,8 @@ export function resolveCodexCall(
   const unavailable = (): { error: string } => ({
     error: `Agente desconhecido ou desativado: ${args.agent}. Agentes válidos: ${validCodexAgents(config).join(', ') || 'nenhum'}.`,
   })
-  let override: RoleOverride
-  let key: CodexRole | 'councillor'
+  let override: RoleConfig
+  let key: Role | 'councillor'
   let sandbox: Sandbox
 
   if (isNativeRole(args.agent)) {
@@ -88,7 +88,7 @@ export function resolveCodexCall(
     effort: args.effort ?? override.effort,
     sandbox,
     noNetwork: config.noNetwork,
-    prompt: `${appendPrompt(prompts(key), override.prompt)}\n\n---\n\n${args.prompt}`,
+    prompt: `${appendPrompt(prompts(key, 'codex'), override.prompt)}\n\n---\n\n${args.prompt}`,
     cwd: ctx.cwd,
     skipGitRepoCheck: ctx.skipGitRepoCheck,
     resumeSessionId: ctx.resumeSessionId,
@@ -100,7 +100,7 @@ type NativeSpec = {
 }
 
 export function nativeAgentSpecs(config: PantheonConfig, prompts: RolePrompts): NativeSpec[] {
-  const descriptions: Record<NativeRole, string> = {
+  const descriptions: Partial<Record<Role, string>> = {
     oracle: 'Analyze architecture, debug difficult problems and review technical decisions.',
     designer: 'Design and implement interfaces and user experiences.',
   }
@@ -110,8 +110,8 @@ export function nativeAgentSpecs(config: PantheonConfig, prompts: RolePrompts): 
       const override = config.agents[role]
       return {
         name: role,
-        description: descriptions[role],
-        prompt: appendPrompt(prompts(role), override.prompt),
+        description: descriptions[role]!,
+        prompt: appendPrompt(prompts(role, 'claude'), override.prompt),
         model: override.model,
         effort: override.effort,
         ...(role === 'oracle' ? { tools: ['Read', 'Grep', 'Glob'] } : {}),
@@ -123,7 +123,7 @@ export function nativeAgentSpecs(config: PantheonConfig, prompts: RolePrompts): 
     specs.push({
       name: `councillor-${name}`,
       description: `Give an independent read-only assessment as council seat ${name}.`,
-      prompt: appendPrompt(prompts('councillor'), seat.prompt),
+      prompt: appendPrompt(prompts('councillor', 'claude'), seat.prompt),
       model: seat.model,
       effort: seat.effort,
       tools: ['Read', 'Grep', 'Glob'],

@@ -1,17 +1,17 @@
-// Contrato compartilhado entre os módulos do Pantheon. Congelado depois da Task 1:
-// mudanças passam pelo orchestrator e são propagadas a todas as frentes.
+// Shared contract for Pantheon's modules.
 
 export type Sandbox = 'read-only' | 'workspace-write'
-export type CodexRole = 'explorer' | 'librarian' | 'fixer'
-export type NativeRole = 'oracle' | 'designer'
-export interface RoleOverride { model?: string; effort?: string; prompt?: string; sandbox?: Sandbox }
-export interface Seat { engine: 'codex' | 'claude'; model?: string; effort?: string; prompt?: string }
+export type Role = 'explorer' | 'librarian' | 'fixer' | 'oracle' | 'designer'
+export type Engine = 'codex' | 'claude'
+export interface RoleConfig { engine: Engine; model?: string; effort?: string; prompt?: string; sandbox?: Sandbox }
+export interface Seat { engine: Engine; model?: string; effort?: string; prompt?: string }
 export interface PantheonConfig {
+  profile: string
   sandboxCap: Sandbox
   noNetwork: boolean
   foregroundMinutes: number
   disabledAgents: string[]
-  agents: Record<CodexRole | NativeRole, RoleOverride>
+  agents: Record<Role, RoleConfig>
   council: { seats: Record<string, Seat> }
 }
 export type Origin = 'default' | 'user' | 'project'
@@ -49,5 +49,5 @@ export interface Codec {
   buildArgv: (call: CodexCall) => string[]
   createJsonlReader: () => { push(text: string): CodexEvent[]; end(): CodexEvent[] }
 }
-export type PromptKey = CodexRole | NativeRole | 'councillor'
-export type RolePrompts = (key: PromptKey) => string
+export type PromptKey = Role | 'councillor'
+export type RolePrompts = (key: PromptKey, engine: Engine) => string

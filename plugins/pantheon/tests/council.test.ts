@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { DEFAULT_CONFIG } from '../hooks/defaults'
+import { MIXED } from './fixtures/profiles'
 import { buildOrchestratorSection } from '../hooks/prompts/orchestrator'
 import { buildCouncilBlock, isCouncilOrigin, matchesCouncilTrigger } from '../hooks/prompts/council'
 
@@ -36,7 +36,7 @@ describe('council triggers', () => {
 
 describe('council block', () => {
   test('dispatches every seat by engine in background and preserves synthesis', () => {
-    const block = buildCouncilBlock(DEFAULT_CONFIG)
+    const block = buildCouncilBlock(MIXED)
     expect(block).toContain('delegate({ agent: "councillor:alpha", background: true')
     expect(block).toContain('Agent({ subagent_type: "pantheon:councillor-beta", run_in_background: true')
     for (const text of ['## Council Response', '## Per-Councillor Details', '## Council Summary', 'Consensus Level', 'unanimous', 'majority', 'split', 'Agreed Points', 'Disagreements', 'Remaining Uncertainty', 'Recommended Action']) {
@@ -44,7 +44,7 @@ describe('council block', () => {
     }
   })
   test('fetches context first, retries empty results once and keeps all failures visible', () => {
-    const block = buildCouncilBlock(DEFAULT_CONFIG)
+    const block = buildCouncilBlock(MIXED)
     for (const text of ['FIRST', 'read-only', 'same turn', 'delegate_result', 'retry an empty seat once', 'failed', 'delegate_cancel', 'no fixed deadline', 'seat name', 'synthesize yourself']) {
       expect(block).toContain(text)
     }
@@ -52,7 +52,7 @@ describe('council block', () => {
     expect(block).not.toContain('agent: "council"')
   })
   test('renders arbitrary seats deterministically without default-seat leftovers', () => {
-    const config = { ...DEFAULT_CONFIG, council: { seats: { zeta: { engine: 'claude' as const }, gamma: { engine: 'codex' as const } } } }
+    const config = { ...MIXED, council: { seats: { zeta: { engine: 'claude' as const }, gamma: { engine: 'codex' as const } } } }
     const block = buildCouncilBlock(config)
     expect(block).toContain('councillor:gamma')
     expect(block).toContain('pantheon:councillor-zeta')
@@ -61,17 +61,17 @@ describe('council block', () => {
     expect(block).toBe(buildCouncilBlock(config))
   })
   test('disabled council has no block or seat line', () => {
-    const config = { ...DEFAULT_CONFIG, disabledAgents: ['council'] }
+    const config = { ...MIXED, disabledAgents: ['council'] }
     expect(buildCouncilBlock(config)).toBe('')
     expect(buildOrchestratorSection(config)).not.toContain('councillor')
   })
   test('no seats means no procedure to dispatch', () => {
-    expect(buildCouncilBlock({ ...DEFAULT_CONFIG, council: { seats: {} } })).toBe('')
+    expect(buildCouncilBlock({ ...MIXED, council: { seats: {} } })).toBe('')
   })
 })
 
 test('disabled seat is left out of the dispatch and the orchestrator line', () => {
-  const config = { ...DEFAULT_CONFIG, disabledAgents: ['councillor:alpha'] }
+  const config = { ...MIXED, disabledAgents: ['councillor:alpha'] }
   const block = buildCouncilBlock(config)
   expect(block).not.toContain('councillor:alpha')
   expect(block).toContain('pantheon:councillor-beta')

@@ -6,7 +6,7 @@ import { DELEGATE, HOME, RESULT, parse, start, world } from './fixtures/world'
 import { PANE_ID, statusText, timelineSource } from '../hooks/pane'
 import { buildRoster } from '../hooks/roster'
 import type { Slot } from '../hooks/roster'
-import { DEFAULT_CONFIG } from '../hooks/defaults'
+import { MIXED } from './fixtures/profiles'
 import type { Job, Native, SessionInfo } from '../hooks/types'
 
 const SURFACES = ['terminal', 'desktop'] as const
@@ -604,7 +604,7 @@ describe('timelineSource', () => {
       { id: 'jb', agent: 'explorer', status: 'done', startedAt: NOW_T - 300_000, endedAt: NOW_T - 200_000, cwd: '/repo' },
       { id: 'jold', agent: 'explorer', status: 'done', startedAt: NOW_T - 3_000_000, endedAt: NOW_T - 2_000_000, cwd: '/repo' },
     ]
-    const roster = buildRoster({ jobs, natives: [], session: { isRunning: false }, config: DEFAULT_CONFIG })
+    const roster = buildRoster({ jobs, natives: [], session: { isRunning: false }, config: MIXED })
     // The card keeps only the latest; the timeline draws both runs inside the window, not the old one.
     expect(roster.slots[1].instances.map(i => i.id)).toEqual(['jb'])
     const svg = timelineSource(roster.slots, { isRunning: false }, NOW_T).source

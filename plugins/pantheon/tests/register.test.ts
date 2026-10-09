@@ -455,7 +455,7 @@ describe('register', () => {
     on('prompt.compose', async () => ({ sections: [] }))
     await start($)
     expect(seen.agents.length).toBe(3)
-    files[`${HOME}/.claude/pantheon.json`] = JSON.stringify({ agents: { oracle: { model: 'sonnet' } } })
+    files[`${HOME}/.claude/pantheon.json`] = JSON.stringify({ profile: 'mixed', profiles: { mixed: { agents: { oracle: { model: 'sonnet' } } } } })
     await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: [], tools: [], outputStyle: null, traits: [] } as never)
     expect(seen.agents.length).toBe(6)
     files[`${HOME}/.claude/pantheon.json`] = '{ broken'
@@ -502,7 +502,7 @@ describe('register', () => {
   test('invalid first config still registers the default native agents', async ($, on) => {
     const { seen } = world(on, { files: { [`${HOME}/.claude/pantheon.json`]: '{ nope' } })
     await start($)
-    expect(seen.agents).toEqual(['oracle', 'designer', 'councillor-beta'])
+    expect(seen.agents).toEqual(['oracle', 'designer', 'councillor-alpha', 'councillor-beta'])
   })
 
   test('a failed native registration is retried on the next turn', async ($, on) => {
