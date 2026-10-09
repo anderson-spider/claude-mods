@@ -16,7 +16,7 @@ Turn a request into a plan the person has agreed to. No code, no spec file: one 
 
 ## 2. Open the worktree
 
-- Call `EnterWorktree` with a `name` taken from the topic. It creates the worktree and its branch in one step; do not create a branch separately.
+- Call `EnterWorktree` with a `name` taken from the topic. It creates the worktree and its branch in one step; do not create a branch separately. If the project's rules name branches differently, rename the new branch with `git branch -m` before the first commit.
 - If the session already runs in a worktree, stay in it.
 - With the default `worktree.baseRef` (`fresh`) the worktree starts from `origin/<default branch>`. Say so when the work depends on commits that are not on the remote.
 

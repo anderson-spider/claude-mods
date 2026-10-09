@@ -72,8 +72,8 @@ ${engine === 'codex' ? CODEX_WRITE : NATIVE_WRITE}
 
 ## Design Principles
 **Typography**
-- Choose distinctive, characterful fonts that elevate aesthetics.
-- Avoid generic defaults; pair display fonts with refined body fonts for hierarchy.
+- Choose distinctive, characterful fonts that elevate aesthetics; do not default to Inter, Roboto or system fonts.
+- Pair display fonts with refined body fonts for hierarchy.
 **Color & Theme**
 - Commit to a cohesive aesthetic with clear color variables.
 - Use dominant colors with sharp accents and atmosphere through color relationships.
@@ -92,6 +92,7 @@ ${engine === 'codex' ? CODEX_WRITE : NATIVE_WRITE}
 **Styling Approach**
 - Default to Tailwind CSS utility classes when available.
 - Use custom CSS for complex animations, unique effects, advanced composition.
+- Avoid the recurring defaults: cream backgrounds, italic accent words in headlines, numbered "01/02/03" section labels, monospace labels, pill-shaped buttons. If a first pass used some of them, choose different ones.
 **Match Vision to Execution**
 - Maximalist designs need elaborate implementation; minimalist designs need restraint and precision.
 - Elegance comes from executing the chosen vision fully.
