@@ -26,7 +26,7 @@ export const DESCRIPTION = [
   'Control native macOS apps through Codex computer use (background clicks and typing, no mouse takeover).',
   'Runs `code` (JavaScript with top-level await) in a persistent cua_repl session owned by this caller.',
   'First call of a new or reset session: one entry call only, `await cua.getState();` or `let app = await cua.getApp("<App name or bundle id>");`; read the documentation it returns before anything else.',
-  'An app used for the first time asks the person; a refusal or a busy app is final.',
+  'An app used for the first time asks the person; a refusal is final; a busy app frees when its lease ends.',
 ].join(' ')
 
 export const INPUT_SCHEMA = {

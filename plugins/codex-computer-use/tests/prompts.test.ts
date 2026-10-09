@@ -11,4 +11,4 @@ test('prompt budget: the fixed text stays lean and the first-call rule lives in 
   expect(denyOwn('mcp__codex-computer-use__codex_cu')).toContain('mcp__codex-computer-use__codex_cu')
 })
 
-const DESCRIPTION_BUDGET = 486
+const DESCRIPTION_BUDGET = 520

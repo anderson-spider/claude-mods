@@ -45,6 +45,8 @@ describe('orchestrator section', () => {
     expect(section).toContain('Council seats: delegate councillor:alpha, delegate councillor:beta')
     expect(section).toContain('run_in_background: true')
     expect(section).toContain('delegate_result')
+    for (const text of ['delegate_cancel({ jobId })', 'resume: <jobId>', 'not the raw sessionId', 'only the orchestrator commits'])
+      expect(section).toContain(text)
   })
 
   test('discipline follows active engines including council-only Codex', async () => {
