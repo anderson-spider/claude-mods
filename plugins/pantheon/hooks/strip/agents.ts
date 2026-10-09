@@ -1,9 +1,11 @@
-import { ROLE_COLOR, OK, BAD, cellWidth, padCells, truncCells } from '../theme'
+import { ROLE_COLOR, OK, BAD, cellWidth, truncCells } from '../theme'
+import { DIM, TEXT, dot, run, width } from './runs'
+import type { Run } from './runs'
 import type { Job, Native } from '../../types'
 
-// The agents summary above the info row: up to three short flightdeck-style cards (round border,
-// pulse and role in the top edge, clock beside it) or, below CARD_MIN_COLUMNS, one row each.
-// Pure: colors come from theme.ts, the clock from the `now` the caller reads.
+// The running agents, folded into the box's last row: a pulse, the role in its color and a clock
+// for each of up to three, "+N" for the rest. Pure: colors come from theme.ts, the clock from the
+// `now` the caller reads.
 
 export type AgentView = {
   id: string
@@ -16,18 +18,13 @@ export type AgentView = {
   endedAt?: number
 }
 
-export const MAX_CARDS = 3
-/** Below this width the cards become one-line rows. */
-export const CARD_MIN_COLUMNS = 90
-const CARD_MAX_WIDTH = 44
 /** A failed agent stays in the summary this long, only while another is running. */
 export const FAIL_GRACE_MS = 20_000
 const NEUTRAL = '#8F96A6'
-const TEXT = '#d6d9de'
-const DIM = '#7B8190'
+export const MAX_SHOWN = 3
+/** Fewest cells of a task worth showing in the folded row. */
+export const MIN_TASK = 8
 export const PULSE = '●'
-
-type Run = { text: string; color?: string; dim?: boolean; bold?: boolean }
 
 const roleColor = (role: string): string => (ROLE_COLOR as Record<string, string>)[role] ?? NEUTRAL
 
@@ -90,73 +87,46 @@ export function agentsKey(agents: AgentView[]): string {
   return agents.map(a => `${a.id}:${a.status}`).join(',')
 }
 
-const pulseOf = (a: AgentView): Run => ({ text: PULSE, color: a.status === 'failed' ? BAD : OK })
+const pulseOf = (a: AgentView): Run => run(PULSE, a.status === 'failed' ? BAD : OK)
 const clockOf = (a: AgentView, now: number): string => fmtClock((a.endedAt ?? now) - a.startedAt)
 
-function cardRows(a: AgentView, width: number, now: number): Run[][] {
-  const color = roleColor(a.role)
-  const head: Run[] = [{ text: '╭─ ', color }, pulseOf(a), { text: ` ${truncCells(a.role, Math.max(1, width - 14))} `, color, bold: true }]
-  const tail: Run[] = [{ text: ` ${clockOf(a, now)} `, color: TEXT, bold: true }, { text: '─╮', color }]
-  const used = head.reduce((n, r) => n + cellWidth(r.text), 0) + tail.reduce((n, r) => n + cellWidth(r.text), 0)
-  const top = [...head, { text: '─'.repeat(Math.max(0, width - used)), color }, ...tail]
-  const body = width - 4
-  return [
-    top,
-    [{ text: '│ ', color }, { text: padCells(truncCells(a.task, body), body), color: TEXT }, { text: ' │', color }],
-    [{ text: `╰${'─'.repeat(width - 2)}╯`, color }],
-  ]
-}
-
-/** The summary as rows of runs: 3 rows of cards, or one row per agent plus "+N more". */
-export function agentLines(agents: AgentView[], columns: number, now: number): Run[][] {
+/** The folded agents row (without the box's padding), fitted to `room` cells; empty when nothing runs. */
+export function agentsRow(agents: AgentView[], room: number, now: number): Run[] {
   if (agents.length === 0) return []
-  const shown = agents.slice(0, MAX_CARDS)
+  const shown = agents.slice(0, MAX_SHOWN)
   const more = agents.length - shown.length
-  const room = columns - 2
-  if (columns >= CARD_MIN_COLUMNS) {
-    const gap = 1
-    const width = Math.min(CARD_MAX_WIDTH, Math.floor((room - gap * (shown.length - 1)) / shown.length))
-    const cards = shown.map(a => cardRows(a, width, now))
-    return [0, 1, 2].map(r => {
-      const row: Run[] = [{ text: ' ' }]
-      cards.forEach((c, i) => { if (i) row.push({ text: ' ' }); row.push(...c[r]) })
-      if (r === 1 && more > 0) row.push({ text: ` +${more} more`, dim: true })
-      return row
+  const lead = [run('agents ', DIM)]
+  const build = (budgets: number[]): Run[] => {
+    const body: Run[] = []
+    shown.forEach((a, i) => {
+      if (i) body.push(dot())
+      body.push(pulseOf(a), run(' '), run(a.role, roleColor(a.role), { bold: true }))
+      if (budgets[i] > 0) body.push(run(' ' + truncCells(a.task, budgets[i]), TEXT))
+      body.push(run(' ' + clockOf(a, now), TEXT, { bold: true }))
     })
+    if (more) body.push(run(` +${more}`, DIM))
+    return [...lead, ...body]
   }
-  const roleW = 9
-  const rows = shown.map((a): Run[] => {
-    const clock = clockOf(a, now)
-    const taskW = Math.max(1, room - 2 - roleW - 1 - cellWidth(clock) - 1)
-    return [
-      { text: ' ' }, pulseOf(a), { text: ' ' },
-      { text: padCells(truncCells(a.role, roleW - 1), roleW), color: roleColor(a.role), bold: true },
-      { text: padCells(truncCells(a.task, taskW), taskW), color: TEXT }, { text: ' ' },
-      { text: clock, color: TEXT, bold: true },
-    ]
-  })
-  if (more > 0) rows.push([{ text: `   +${more} more`, color: DIM }])
-  return rows
-}
-
-/** The summary as an element tree, or null when nothing runs. */
-export function drawAgents(elements: any, agents: AgentView[], columns: number, now: number): unknown {
-  const lines = agentLines(agents, columns, now)
-  if (lines.length === 0) return null
-  const { Box, Text } = elements
-  return Box({
-    key: 'agents',
-    flexDirection: 'column',
-    children: lines.map((row, r) => Box({
-      key: `agents-r${r}`,
-      flexDirection: 'row',
-      children: row.map((run, k) => Text({
-        key: `t${k}`,
-        ...(run.color ? { color: run.color } : {}),
-        ...(run.dim ? { dimColor: true } : {}),
-        ...(run.bold ? { bold: true } : {}),
-        children: run.text,
-      })),
-    })),
-  })
+  // The free width is shared between the tasks: a short task takes what it needs and leaves the
+  // rest to the longer ones. Below MIN_TASK cells each, a task is not worth showing.
+  const none = shown.map(() => 0)
+  const free = room - width(build(none)) - shown.length
+  if (free / shown.length >= MIN_TASK) {
+    const budgets = none.slice()
+    let left = free
+    let remaining = shown.length
+    for (const i of shown.map((_, k) => k).sort((x, y) => cellWidth(shown[x].task) - cellWidth(shown[y].task))) {
+      budgets[i] = Math.min(cellWidth(shown[i].task), Math.floor(left / remaining))
+      left -= budgets[i]
+      remaining--
+    }
+    const row = build(budgets)
+    if (width(row) <= room) return row
+  }
+  const bare = build(none)
+  if (width(bare) <= room) return bare
+  // The narrowest form: how many run and the oldest clock.
+  const oldest = fmtClock(Math.max(...agents.map(a => (a.endedAt ?? now) - a.startedAt)))
+  const count = agents.filter(a => a.status === 'running').length || agents.length
+  return [...lead, run(`${count} running`, OK, { bold: true }), dot(), run(`oldest ${oldest}`, TEXT)]
 }

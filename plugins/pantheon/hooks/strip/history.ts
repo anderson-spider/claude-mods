@@ -2,6 +2,8 @@
 import { HISTORY, contextData } from "./context";
 import { cacheData } from "./cache";
 import { limitData, sortLimits } from "./limits";
+import { PACE_POINTS } from "./pace";
+import type { PaceHistory } from "./pace";
 
 // Each session's readings are kept in the store, so the bars come back after a restart.
 export const TURNS_PREFIX = "turns:";
@@ -11,6 +13,20 @@ const TURNS_KEEP_MS = 8 * 24 * 3_600_000;
 const SHARED_KEY = "limits";
 
 // ---------- Turns: readings kept per session ----------
+
+// The stored burn-rate readings, kept only when well formed.
+function pacesOf(raw: any): PaceHistory {
+  const out: PaceHistory = {};
+  if (!raw || typeof raw !== "object") return out;
+  for (const [kind, entry] of Object.entries<any>(raw)) {
+    if (!entry || !Array.isArray(entry.points)) continue;
+    out[kind] = {
+      ...(typeof entry.resetsAt === "string" ? { resetsAt: entry.resetsAt } : {}),
+      points: entry.points.filter((p: any) => p && Number.isFinite(p.at) && Number.isFinite(p.used)).slice(-PACE_POINTS),
+    };
+  }
+  return out;
+}
 
 // Restores this session's readings and cache, and deletes sessions idle for more than 8 days.
 export async function restoreTurns({ now: clockNow, keys, get, remove }, turnsKey) {
@@ -23,6 +39,7 @@ export async function restoreTurns({ now: clockNow, keys, get, remove }, turnsKe
         contextData.readings = saved.readings.filter((r) => r && r.window > 0).slice(-HISTORY);
         if (saved.cache && Number.isFinite(saved.cache.at)) cacheData.request = saved.cache;
         cacheData.compacted = saved.compacted === true;
+        limitData.history = pacesOf(saved.paces);
         if (saved.seenTtl === "5m" || saved.seenTtl === "1h") cacheData.seenTtl = saved.seenTtl;
       } else if (!saved || !(now - saved.at < TURNS_KEEP_MS)) await remove(key);
     }
@@ -40,6 +57,8 @@ export async function saveTurns({ now, set }, turnsKey) {
       cache: cacheData.request,
       compacted: cacheData.compacted,
       seenTtl: cacheData.seenTtl,
+      // The recent {at, used} readings per window, for the burn rate (about 10 each).
+      paces: limitData.history,
     });
   } catch {
     // Not saved this turn: the bars come back on the next one.

@@ -5,6 +5,8 @@ import { cacheData, freshCache, isOn, recordRequest, cacheState, cacheText } fro
 import { infoData, freshInfo } from "./info";
 import { TURNS_PREFIX, restoreTurns, saveTurns, shareLimits, adoptShared } from "./history";
 import { refreshInfo } from "./info-refresh";
+import { recordPace } from "./pace";
+import { noteCost, noteSpawn, noteTool, noteTurnEnd, noteTurnStart, freshTurn, turnData } from "./receipt";
 
 // The updaters the entry module calls from its hooks, the way hud.mjs did. Host access is
 // injected through `StripHost`: closures built in each hook, because `$` cannot be stored.
@@ -17,7 +19,7 @@ export type StripHost = {
   cwd: () => Promise<string>;
   model: () => Promise<string>;
   run: (argv: string[], options: { cwd: string; timeoutMs: number }) => Promise<{ exitCode: number; stdout: string }>;
-  usage: () => Promise<{ context?: any; rateLimits: any[] }>;
+  usage: () => Promise<{ context?: any; rateLimits: any[]; cost?: { usd: number } }>;
   storeKeys: () => Promise<string[]>;
   storeGet: (key: string) => Promise<any>;
   storeSet: (key: string, value: unknown) => Promise<unknown>;
@@ -42,6 +44,8 @@ export function resetStrip() {
   limitData.reading = freshLimits();
   Object.assign(cacheData, freshCache());
   Object.assign(infoData, freshInfo());
+  limitData.history = {};
+  Object.assign(turnData, freshTurn());
   stripData.turnsKey = "";
 }
 
@@ -67,9 +71,20 @@ export async function startStrip(host: StripHost, env: CacheEnvValues) {
   await restoreTurns(storeOf(host), turnsKey);
   const usage = await host.usage();
   pushReading(usage.context);
+  noteCost(usage.cost?.usd);
   // The shared reading wins on start or reload; the local one is published only when none exists.
   await adoptShared(host.storeGet);
   if (limitData.reading.list.length === 0 && usage.rateLimits.length > 0) await shareLimits(storeOf(host), usage.rateLimits);
+  recordPaces();
+}
+
+/**
+ * Notes the current windows' use for the burn rate, at the time of the reading itself: a reading
+ * adopted from another session is as old as it is, never stamped with the moment it was taken up.
+ */
+function recordPaces() {
+  const at = limitData.reading.at;
+  for (const l of limitData.reading.list) if (Number.isFinite(l.percentUsed)) recordPace(limitData.history, l.kind, at, l.percentUsed, l.resetsAt);
 }
 
 /** The minute tick: another session may have measured something newer. */
@@ -105,10 +120,12 @@ export function noteStep(e: { model?: string; effort?: unknown }, result: { usag
 }
 
 /** turn.complete of the main conversation: one context reading, saved. */
-export async function noteTurnComplete(host: StripHost) {
+export async function noteTurnComplete(host: StripHost, e: { durationMs: number; reason?: string }) {
   if (!stripData.turnsKey) return;
   const usage = await host.usage();
   pushReading(usage.context);
+  noteCost(usage.cost?.usd);
+  noteTurnEnd(e);
   await saveTurns(storeOf(host), turnsKey);
 }
 
@@ -128,8 +145,27 @@ export async function noteCompact(host: StripHost, e: { agentId?: string; trigge
 }
 
 /** session.measure: publishes a new limits reading. */
-export async function noteMeasure(host: StripHost, e: { changed: string[]; rateLimits: any[] }) {
-  if (e.changed.includes("rateLimits") && e.rateLimits.length > 0) await shareLimits(storeOf(host), e.rateLimits);
+export async function noteMeasure(host: StripHost, e: { changed: string[]; rateLimits: any[]; cost?: { usd: number } }) {
+  if (e.cost) noteCost(e.cost.usd);
+  if (e.changed.includes("rateLimits") && e.rateLimits.length > 0) {
+    await shareLimits(storeOf(host), e.rateLimits);
+    recordPaces();
+  }
+}
+
+/** A main-loop turn starts: the receipt counters begin again. */
+export function noteStripTurnStart() {
+  noteTurnStart();
+}
+
+/** The main loop spawned a subagent. */
+export function noteStripSpawn() {
+  noteSpawn();
+}
+
+/** A main-loop tool call came back (`result` as `next(e)` resolved it). */
+export function noteStripTool(tool: string, result: { isError?: boolean; deny?: string } | undefined) {
+  noteTool(tool, { isError: result?.isError === true, isDenied: typeof result?.deny === "string" });
 }
 
 /** session.end (a real end): nothing to persist; kept so the entry has one place to call. */

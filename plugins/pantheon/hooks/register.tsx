@@ -18,7 +18,7 @@ import { agentsFromState, agentsKey } from './strip/agents'
 import { renderStrip } from './strip/render'
 import {
   adoptSharedLimits, cacheEnvFrom, configureStrip, endStrip, noteCompact, noteMeasure,
-  noteStep, noteTurnComplete, startStrip, tickStrip,
+  noteStep, noteStripSpawn, noteStripTool, noteStripTurnStart, noteTurnComplete, startStrip, tickStrip,
 } from './strip/state'
 import type { StripHost } from './strip/state'
 import {
@@ -162,7 +162,7 @@ const nativesAtom = atom({ plugin: 'pantheon', key: 'natives' } as const, [] as 
 const sessionAtom = atom({ plugin: 'pantheon', key: 'session' } as const, DEFAULT_SESSION)
 const viewAtom = atom({ plugin: 'pantheon', key: 'view' } as const, DEFAULT_VIEW)
 
-/** The agents the strip shows: every running job and native, one card each. */
+/** The agents the strip folds into its last row: every running job and native. */
 async function stripAgents($: Dollar, now: number) {
   const [list, tracked] = await Promise.all([read($, jobsAtom), read($, nativesAtom)])
   return agentsFromState(list, normalizeNatives(tracked), now)
@@ -539,6 +539,8 @@ export const register: Register = (on, options) => {
       sessionQueue.push(session)
       await sessionQueue.flushed()
     } catch { /* Tracking never changes the turn. */ }
+    // turn.start is the main loop's: the last-turn receipt's counters begin again.
+    if (aboveOn) { try { noteStripTurnStart() } catch { /* The strip never changes the turn. */ } }
     return next(e)
   })
 
@@ -608,7 +610,7 @@ export const register: Register = (on, options) => {
     } catch { /* Tracking never changes the completion result. */ }
     if (aboveOn && !e.agentId) {
       try {
-        await noteTurnComplete(stripHost($))
+        await noteTurnComplete(stripHost($), { durationMs: e.durationMs, reason: e.reason })
         $.ui.invalidate('ui.render')
       } catch { /* No reading this turn: the strip keeps the previous one. */ }
     }
@@ -660,6 +662,8 @@ export const register: Register = (on, options) => {
 
   on('agent.spawn', async ($, e, next) => {
     const started = await next(e)
+    // The receipt counts the subagents the main loop spawned.
+    if (aboveOn && !e.parentAgentId && started.agentId) { try { noteStripSpawn() } catch { /* The strip never changes the spawn. */ } }
     try {
       if (started.agentId) {
         const io: TrackingIo = {
@@ -699,7 +703,10 @@ export const register: Register = (on, options) => {
         }
       }
     } catch { /* Tracking must not prevent any tool, including delegate tools. */ }
-    return next(e)
+    const result = await next(e)
+    // The receipt counts the main loop's edits and failed tools; the result goes back as it came.
+    if (aboveOn && !e.agentId) { try { noteStripTool(String(e.tool), result) } catch { /* The strip never changes the call. */ } }
+    return result
   })
 
   on('tool.call', { tool: TOOLS.delegate }, async ($, e, next) => {
@@ -910,7 +917,7 @@ export const register: Register = (on, options) => {
     try {
       const now = await $.clock.now()
       return renderStrip({
-        surface: e.surface, columns: props?.bodyColumns ?? 80, now,
+        surface: e.surface, columns: props?.bodyColumns ?? 80, now, isWorking: props?.isWorking === true,
         agents: await stripAgents($, now), below,
       }, { elements: $.ui.resolve(e) }) as never
     } catch {

@@ -1,7 +1,6 @@
 import { test, expect } from "claude-code/testing";
 import { restoreTurns, saveTurns, shareLimits, adoptShared, TURNS_PREFIX } from "../hooks/strip/history";
 import { refreshInfo } from "../hooks/strip/info-refresh";
-import { renderStrip } from "../hooks/strip/render";
 import { contextData, freshContext, HISTORY } from "../hooks/strip/context";
 import { cacheData, freshCache } from "../hooks/strip/cache";
 import { limitData, freshLimits } from "../hooks/strip/limits";
@@ -9,12 +8,12 @@ import { infoData, freshInfo } from "../hooks/strip/info";
 
 const NOW = 1_800_000_000_000;
 const KEEP = 8 * 24 * 3_600_000;
-const elements = Object.fromEntries(["Box", "Text", "Button"].map((type) => [type, (props: any) => ({ type, props, children: props.children })]));
 
 function reset() {
   Object.assign(contextData, freshContext());
   Object.assign(cacheData, freshCache(), { env: {} });
   limitData.reading = freshLimits();
+  limitData.history = {};
   Object.assign(infoData, freshInfo());
 }
 
@@ -54,7 +53,7 @@ test("history: saves the existing shape and does not read the clock without a ke
   await saveTurns(deps, () => null);
   expect(clockReads).toBe(0);
   await saveTurns(deps, () => "turns:current");
-  expect(writes).toEqual([["turns:current", { at: NOW, readings: [], cache: null, compacted: false, seenTtl: null }]]);
+  expect(writes).toEqual([["turns:current", { at: NOW, readings: [], cache: null, compacted: false, seenTtl: null, paces: {} }]]);
 });
 
 test("history: publishing keeps newer shared limits and adoption only takes newer valid readings", async () => {
@@ -99,13 +98,27 @@ test("info refresh: a probe exception preserves partial updates and skips model 
   expect(modelReads).toBe(0);
 });
 
-test("render: reads nothing for an empty strip and keeps what mods below drew", () => {
+test("history: the burn-rate readings are saved with the session and come back, keeping only well-formed ones and about ten", async () => {
   reset();
-  const below = { type: "Text", children: "other mod" };
-  const input = { surface: "terminal", columns: 80, now: NOW, agents: [] as any[], below };
-  expect(renderStrip(input, { elements })).toBe(below);
-  contextData.readings = [{ tokens: 100, window: 1000, percent: 10 }];
-  const result = renderStrip(input, { elements });
-  expect(result.children[0]).toBe(below);
-  expect(result.children.length).toBe(2);
+  const key = TURNS_PREFIX + "current";
+  const paces = {
+    five_hour: { resetsAt: "2026-10-02T15:00:00.000Z", points: [{ at: 1, used: 10 }, null, { at: "x", used: 3 }, ...Array.from({ length: 14 }, (_, i) => ({ at: 10 + i, used: 20 + i }))] },
+    seven_day: "nope",
+    spend_limit: { resetsAt: 5, points: [{ at: 2, used: 2 }] },
+  };
+  const stored: any = { [key]: { at: NOW, readings: [{ tokens: 4, window: 100 }], paces } };
+  await restoreTurns({ now: async () => NOW, keys: async () => [key], get: async (k: string) => stored[k], remove: async () => {} }, () => key);
+  expect(limitData.history.five_hour.resetsAt).toBe("2026-10-02T15:00:00.000Z");
+  expect(limitData.history.five_hour.points.length).toBe(10);
+  expect(limitData.history.five_hour.points[9]).toEqual({ at: 23, used: 33 });
+  expect(limitData.history.seven_day).toBeUndefined();
+  // A malformed reset time is dropped, the points kept.
+  expect(limitData.history.spend_limit).toEqual({ points: [{ at: 2, used: 2 }] });
+  const writes: any[] = [];
+  await saveTurns({ now: async () => NOW, set: async (...args: any[]) => { writes.push(args); } }, () => key);
+  expect(writes[0][1].paces).toEqual(limitData.history);
+  // A record from before this field restores as empty history.
+  limitData.history = { five_hour: { points: [{ at: 1, used: 1 }] } };
+  await restoreTurns({ now: async () => NOW, keys: async () => [key], get: async () => ({ at: NOW, readings: [{ tokens: 4, window: 100 }] }), remove: async () => {} }, () => key);
+  expect(limitData.history).toEqual({});
 });

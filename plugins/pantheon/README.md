@@ -59,10 +59,11 @@ The tracking hooks only watch and pass events on unchanged. Native records, main
 
 Since 0.13.0 pantheon draws an always-on strip above the prompt, absorbed from the former hud plugin:
 
-- An info row: model, effort, speed, folder, git branch and changed files.
-- A usage row: the context with a weather icon and token counts, and the prompt cache with its time left and hit share.
-- The 5-hour and 7-day limits as bars with a mark against the clock and the time left.
-- Above them, up to three cards for running Pantheon jobs and native subagents. Below 90 columns they become one-line rows, with "+N more" for the rest.
+A rounded box in flightdeck's mini style, at most four rows, kept next to the prompt:
+
+- Session row: model and effort, working or idle, the context as a gauge with its percentage, the prompt cache with time left and hit share (red with what to rewrite when expired), the session cost, folder and branch, changed lines, and `⚡fast` while fast mode is on.
+- 5h and 7d rows, drawn as hud drew them and lined up column for column: a 10-cell bar with a `│` clock mark (`━` used, `╌` slack, `─` rest), the percentage, the `▲`/`▼` pace mark in points (amber `▲` ahead of the clock, red past 15 points or from 90% used, green `▼` behind) and the time left, then a projection: `at this pace: 100% in 1h40` when the window would run out before its reset, `at this pace: ~68% at reset` otherwise, and `↯at recent pace: 100% in 24m` when the last 30 minutes climb at more than 1.5 times the window's average rate (the projection then uses that recent rate). Narrow terminals give up the projection first, then the bars, then the time left.
+- Last row: the last turn's duration, agents spawned, edits, errors and its cost (`last turn 2m37s · 2 agents · 4 edits · 0 errors · +$0.18`). The `+$` is the change in the session cost during the turn, so it includes what background agents spent in that time, and the agents counted are those the main loop spawned, Workflow ones included; while Pantheon jobs or native subagents run it shows them instead, a pulse (green, red on failure), the role and a clock each, with "+N" for the rest.
 
 Options (`/plugin`): **Above-prompt strip** (`abovePrompt`, on by default; turn it off to hide the strip) and **Pace start** (`paceStart`, points of lead over the clock that still count as on pace, 0 by default). The suggested next prompts hud offered have no replacement. See [Privacy and permissions](../../docs/PRIVACY.md) for what the strip reads.
 
@@ -153,4 +154,4 @@ The orchestrator, role and council prompts are adapted from [oh-my-opencode-slim
 
 The panel's rail, clock, native tracking and tool description/redaction code is adapted from Stephen Casella's work under the MIT License; see `NOTICE` for its provenance, adaptations and full license text.
 
-The above-prompt strip (`hooks/strip/`, except `agents.ts`) is adapted from Apache-2.0 work (Token Weather by Anthropic PBC, token-weather-usage by Eric Cologni); those files stay under the Apache License 2.0 (see `LICENSE-APACHE` and `NOTICE`). The rest of pantheon is MIT.
+The above-prompt strip (`hooks/strip/`, except `agents.ts`, `box.ts`, `pace.ts`, `receipt.ts` and `runs.ts`) is adapted from Apache-2.0 work (Token Weather by Anthropic PBC, token-weather-usage by Eric Cologni); those files stay under the Apache License 2.0 (see `LICENSE-APACHE` and `NOTICE`). The rest of pantheon is MIT.

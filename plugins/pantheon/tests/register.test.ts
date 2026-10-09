@@ -1044,7 +1044,7 @@ describe('register', () => {
     })
     const texts = async (ui: Awaited<ReturnType<typeof mountStrip>>) =>
       (await ui.findAll({ type: 'Text' })).map(node => String(node.text)).join('|')
-    function stripWorld(on: On, opts: Parameters<typeof world>[1] = {}) {
+    function stripWorld(on: On, opts: Parameters<typeof world>[1] = {}, cost?: { usd: number }) {
       const fixture = world(on, opts)
       mock.store(on)
       on('ui.render', { component: 'AbovePrompt' }, async (_$, e) => _$.ui.resolve(e).Text({ children: 'below-marker' }) as never)
@@ -1054,6 +1054,7 @@ describe('register', () => {
         value: {
           startedAt: 0, context: { tokens: 120_000, window: 1_000_000, percent: 12 },
           rateLimits: [{ kind: 'five_hour', percentUsed: 32, resetsAt: new Date(3 * 3_600_000).toISOString() }],
+          ...(cost ? { cost: { usd: cost.usd } } : {}),
         },
       }))
       return fixture
@@ -1066,8 +1067,11 @@ describe('register', () => {
       try {
         const all = await texts(ui)
         expect(all).toContain('Opus 5')
-        expect(all).toContain('120')
+        expect(all).toContain('12%')
         expect(all).toContain('5h')
+        // The box: borders and the quota bar with its clock mark.
+        expect(all).toContain('╭')
+        expect(all).toMatch(/━|╌|─/)
       } finally { await ui.unmount() }
     })
 
@@ -1093,7 +1097,7 @@ describe('register', () => {
       } finally { await ui.unmount() }
     })
 
-    test('shows a card for a running background job and drops it when idle', async ($, on) => {
+    test('folds a running background job into the box and drops it when idle', async ($, on) => {
       const { clock } = stripWorld(on, { hang: true })
       await start($)
       const idle = await mountStrip($)
@@ -1104,12 +1108,15 @@ describe('register', () => {
       const ui = await mountStrip($)
       try {
         const all = await texts(ui)
+        expect(all).toContain('agents ')
         expect(all).toContain('fixer')
         expect(all).toContain('Wire the strip')
+        // One row of the box, never cards above it.
+        expect(all).not.toContain('╭─ ')
       } finally { await ui.unmount() }
     })
 
-    test('every running non-role native gets its own card labeled with its subagent type', async ($, on) => {
+    test('every running non-role native counts in the folded row, labeled with its subagent type', async ($, on) => {
       stripWorld(on)
       let n = 0
       on('agent.spawn', async () => ({ model: 'model-1', agentId: `native-${++n}` }))
@@ -1120,15 +1127,106 @@ describe('register', () => {
       await spawn('t2', 'Find the cache TTL', 'Explore')
       await spawn('t3', 'Review it', 'general-purpose')
       await spawn('t4', 'Fourth one', 'pantheon:fixer')
-      const ui = await mountStrip($)
+      const ui = await mountStrip($, 140)
       try {
         const all = await texts(ui)
         expect(all.match(/Explore/g)?.length).toBe(2)
         expect(all).toContain('general-purpose')
-        expect(all).toContain('+1 more')
-        expect(all).toContain('Map the auth code')
-        expect(all).toContain('Find the cache TTL')
+        expect(all).toContain('+1')
+        expect(all).toContain('Map the auth')
       } finally { await ui.unmount() }
+    })
+
+    describe('last-turn receipt', () => {
+      function receiptWorld(on: On, cost = { usd: 10 }, spawned: object = { model: 'model-1', agentId: 'native-1' }) {
+        const fixture = stripWorld(on, {}, cost)
+        on('turn.start', async (_$, e) => ({ turnId: e.turnId }))
+        on('turn.complete', async () => ({ text: 'Completed' }))
+        on('agent.spawn', async () => spawned as never)
+        on('tool.call', async (_$, e) => (e.tool === 'Bash' ? { result: 'boom', isError: true } : e.tool === 'Blocked' ? { deny: 'no' } : { result: `ran ${e.tool}` }) as never)
+        return fixture
+      }
+      const call = ($: Engine, tool: string, extra: object = {}) => $.tool.call({ tool, ...extra } as never) as Promise<Record<string, unknown>>
+
+      test('counts the main loop\'s edits, errors and spawned agents per turn, and shows the receipt with the cost of the turn', async ($, on) => {
+        const cost = { usd: 10 }
+        receiptWorld(on, cost)
+        await start($)
+        await $.turn.start({ turnId: 'turn-1', text: 'go' } as never)
+        await call($, 'Edit')
+        await call($, 'Write')
+        await call($, 'Read')
+        await call($, 'Bash')
+        await $.agent.spawn(spawnInput)
+        cost.usd = 10.5
+        // The spawned agent finishes (it would fold into the last row while it runs).
+        await $.turn.complete({ ...completeInput, agentId: 'native-1' } as never)
+        await $.turn.complete({ ...completeInput, durationMs: 157_000 } as never)
+        const ui = await mountStrip($)
+        try {
+          const all = (await ui.findAll({ type: 'Text' })).map(node => String(node.text)).join('')
+          expect(all).toContain('last turn 2m37s · 1 agent · 2 edits · 1 error · +$0.50')
+        } finally { await ui.unmount() }
+        // The next turn starts the counters over.
+        await $.turn.start({ turnId: 'turn-2', text: 'again' } as never)
+        await call($, 'Edit')
+        await $.turn.complete({ ...completeInput, turnId: 'turn-2', durationMs: 5000 } as never)
+        const again = await mountStrip($)
+        try {
+          const all = (await again.findAll({ type: 'Text' })).map(node => String(node.text)).join('')
+          expect(all).toContain('last turn 5s · 0 agents · 1 edit · 0 errors')
+        } finally { await again.unmount() }
+      })
+
+      test('a subagent\'s tool calls and spawns never count, and an error turn end adds one error', async ($, on) => {
+        receiptWorld(on)
+        await start($)
+        await $.turn.start({ turnId: 'turn-1', text: 'go' } as never)
+        await call($, 'Edit', { agentId: 'native-9' })
+        await call($, 'Bash', { agentId: 'native-9' })
+        await $.agent.spawn({ ...spawnInput, parentAgentId: 'native-9' })
+        await $.turn.complete({ ...completeInput, agentId: 'native-1' } as never)
+        await $.turn.complete({ ...completeInput, reason: 'error', durationMs: 1000 } as never)
+        const ui = await mountStrip($)
+        try {
+          const all = (await ui.findAll({ type: 'Text' })).map(node => String(node.text)).join('')
+          expect(all).toContain('last turn 1s · 0 agents · 0 edits · 1 error')
+        } finally { await ui.unmount() }
+      })
+
+      test('every handler answers as the engine did: results, denials and events pass through unchanged', async ($, on) => {
+        receiptWorld(on)
+        await start($)
+        expect(await $.turn.start({ turnId: 'turn-1', text: 'go' } as never)).toEqual({ turnId: 'turn-1' })
+        expect(await call($, 'Edit')).toMatchObject({ result: 'ran Edit' })
+        expect(await call($, 'Bash')).toMatchObject({ result: 'boom', isError: true })
+        expect(await call($, 'Blocked')).toMatchObject({ deny: 'no' })
+        expect(await $.agent.spawn(spawnInput)).toMatchObject({ model: 'model-1', agentId: 'native-1' })
+        expect(await $.turn.complete(completeInput as never)).toEqual({ text: 'Completed' })
+      })
+
+      test('a spawn the engine did not start (no agent id) is not counted', async ($, on) => {
+        receiptWorld(on, { usd: 10 }, { model: 'model-1' })
+        await start($)
+        await $.turn.start({ turnId: 'turn-1', text: 'go' } as never)
+        await $.agent.spawn(spawnInput)
+        await $.turn.complete({ ...completeInput, durationMs: 1000 } as never)
+        const ui = await mountStrip($)
+        try {
+          const all = (await ui.findAll({ type: 'Text' })).map(node => String(node.text)).join('')
+          expect(all).toContain('last turn 1s · 0 agents')
+        } finally { await ui.unmount() }
+      })
+
+      test('with abovePrompt off nothing is counted', { options: { abovePrompt: false } }, async ($, on) => {
+        receiptWorld(on)
+        await start($)
+        await $.turn.start({ turnId: 'turn-1', text: 'go' } as never)
+        await call($, 'Edit')
+        await $.turn.complete(completeInput as never)
+        const ui = await mountStrip($)
+        try { expect(await texts(ui)).toBe('below-marker') } finally { await ui.unmount() }
+      })
     })
 
     test('tracking hooks still pass events and results on unchanged', async ($, on) => {
