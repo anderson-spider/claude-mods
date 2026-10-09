@@ -38,6 +38,7 @@ function gateWorld(on: On, opts: { score?: number; key?: string; reject?: boolea
   const forwarded: unknown[] = []
   let probes = 0
   let uidReads = 0
+  let polls = 0
   const inspected: { path: string; resolve: boolean }[] = []
   if (opts.fault === 'workspace') on('session.cwd', () => { throw new Error('private workspace error') })
   else if (opts.cwd) on('session.cwd', () => ({ value: opts.cwd! }))
@@ -61,6 +62,7 @@ function gateWorld(on: On, opts: { score?: number; key?: string; reject?: boolea
       return { value: { exitCode: opts.uid === null ? 1 : 0, stdout: opts.uid ?? (opts.uid === null ? '' : '501\n'), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     }
     if (e.argv[0] === 'sleep') {
+      polls++
       if (opts.interrupt) throw new Error('interrupted host wait')
       await gatePause(5)
     } else probes++
@@ -73,10 +75,26 @@ function gateWorld(on: On, opts: { score?: number; key?: string; reject?: boolea
   })
   on('tool.call', (_$, e) => { forwarded.push(e); return { result: 'unchanged' } })
   on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'Text', children: ['idle'] }))
-  return { ...fixture, sent, forwarded, inspected, probes: () => probes, uidReads: () => uidReads }
+  return { ...fixture, sent, forwarded, inspected, probes: () => probes, uidReads: () => uidReads, polls: () => polls }
 }
 
 describe('edit gate', () => {
+  for (const session of [{ isInteractive: false, surface: null }, { isInteractive: true, surface: null }, { isInteractive: false, surface: 'terminal' as const }]) {
+    test(`ask denies without polling when no interactive surface can answer: ${JSON.stringify(session)}`, { options: { gate: true } }, async ($, on) => {
+      const opts = { interrupt: false }
+      const host = gateWorld(on, opts)
+      await $.session.start({ cwd: ROOT, ...session })
+      let settled = false
+      const pending = $.tool.call({ tool: 'Write', file_path: '/repo/new.ts', content: 'new file' } as never).then(result => { settled = true; return result })
+      try {
+        await gatePause(50)
+        expect(settled).toBe(true)
+        expect((await pending).deny).toBe('Pantheon edit gate requires an interactive session to confirm this edit. Edit denied.')
+        expect(host.polls()).toBe(0)
+        expect(host.forwarded).toEqual([])
+      } finally { opts.interrupt = true; await pending }
+    })
+  }
   const pathStat = (realPath: string): FsStat => ({ kind: 'dir', size: 0, mtimeMs: 0, isLink: false, realPath })
   const missingPath = () => Object.assign(new Error('ENOENT: missing path'), { code: 'ENOENT' })
   test('parent traversal after a missing component enters recovery instead of exempting an unseen symlink', async () => {
@@ -90,8 +108,8 @@ describe('edit gate', () => {
     const result = await withGateRecovery(async () => {
       const path = await resolveGatePath(stat, target, ROOT)
       const context = gateContext({ ...gateEdit, file_path: path }, { root: ROOT, home: HOME })
-      return { result: context.skip ? 'exempt' : 'evaluated' }
-    }, () => false, async () => ({ result: 'unexpected replay' }), async () => {
+      return context.skip ? undefined : { deny: 'evaluated' }
+    }, async () => ({ result: 'unexpected forwarding' }), async () => {
       held = true
       return { deny: 'held for the person' }
     })
@@ -152,6 +170,7 @@ describe('edit gate', () => {
         unresolvedLinks: link ? [target] : [],
       }
       const host = gateWorld(on, opts)
+      await start($)
       const ui = await $.ui.mount({ plugin: 'pantheon', component: 'AbovePrompt', surface: 'terminal', props: { hasSurvey: false, isWorking: true, maxRows: 12, bodyColumns: 120 } as never })
       const pending = $.tool.call({ ...gateEdit, file_path: target } as never)
       try {
@@ -226,6 +245,7 @@ describe('edit gate', () => {
     test(`${fault} failure asks instead of running the edit`, { options: { gate: true, jevApiKey: 'key', abovePrompt: false } }, async ($, on) => {
       const opts = { fault, interrupt: false }
       const host = gateWorld(on, opts)
+      await start($)
       const ui = await $.ui.mount({ plugin: 'pantheon', component: 'AbovePrompt', surface: 'terminal', props: { hasSurvey: false, isWorking: true, maxRows: 12, bodyColumns: 120 } as never })
       const pending = $.tool.call(gateEdit as never)
       try {
@@ -238,25 +258,40 @@ describe('edit gate', () => {
       } finally { opts.interrupt = true; await pending; await ui.unmount() }
     })
   }
-  test('a thrown decision asks, a failed recovery denies, and completed next is preserved', async () => {
+  test('a thrown decision asks and a failed recovery denies', async () => {
     const throwingDecision = async () => { throw new Error('private decision error') }
     let asks = 0
     const ask = async () => { asks++; return { deny: 'held and cancelled' } }
-    expect(await withGateRecovery(throwingDecision, () => false, async () => ({ result: 'unused' }), ask)).toEqual({ deny: 'held and cancelled' })
+    expect(await withGateRecovery(throwingDecision, async () => ({ result: 'unused' }), ask)).toEqual({ deny: 'held and cancelled' })
     expect(asks).toBe(1)
-    expect(await withGateRecovery(throwingDecision, () => false, async () => ({ result: 'unused' }), throwingDecision)).toEqual({ deny: 'Pantheon edit gate could not obtain a decision. Edit denied.' })
-    expect(await withGateRecovery(throwingDecision, () => true, async () => ({ result: 'original result' }), ask)).toEqual({ result: 'original result' })
+    expect(await withGateRecovery(throwingDecision, async () => ({ result: 'unused' }), throwingDecision)).toEqual({ deny: 'Pantheon edit gate could not obtain a decision. Edit denied.' })
     expect(asks).toBe(1)
   })
+  for (const gate of [false, true]) {
+    test(`forwarding rejection runs next once and never opens recovery (gate=${gate})`, async () => {
+      let calls = 0
+      let holds = 0
+      const next = async () => { calls++; throw new Error('downstream rejected') }
+      await expect(withGateRecovery(async () => { if (gate) holds++; return undefined }, next, async () => {
+        holds++
+        return undefined
+      })).rejects.toThrow('downstream rejected')
+      expect(calls).toBe(1)
+      expect(holds).toBe(gate ? 1 : 0)
+    })
+  }
   for (const reverse of [false, true]) {
     test(`parallel holds keep the second notice after delayed cleanup (${reverse})`, { options: { gate: true, jevApiKey: 'key', abovePrompt: false } }, async ($, on) => {
       const opts = { score: 0.5, interrupt: false }
       const host = gateWorld(on, opts)
       let delayed = false
+      let ready = false
       on('state.set', async (_$, e, next) => {
-        if (e.key === 'gateHeld' && e.value === null && !delayed) { delayed = true; await gatePause(80) }
+        if (ready && e.key === 'gateHeld' && e.value === null && !delayed) { delayed = true; await gatePause(80) }
         return next(e)
       })
+      await start($)
+      ready = true
       const ui = await $.ui.mount({ plugin: 'pantheon', component: 'AbovePrompt', surface: 'terminal', props: { hasSurvey: false, isWorking: true, maxRows: 12, bodyColumns: 120 } as never })
       const first = $.tool.call({ ...gateEdit, tool_use_id: reverse ? 'b' : 'a' } as never)
       await gatePause(30)
@@ -329,6 +364,7 @@ describe('edit gate', () => {
   for (const surface of ['terminal', 'desktop'] as const) {
     test(`grey zone waits for Proceed or Cancel on ${surface}`, { options: { gate: true, jevApiKey: 'key', abovePrompt: false } }, async ($, on) => {
       const host = gateWorld(on, { score: 0.5 })
+      await $.session.start({ cwd: ROOT, surface, isInteractive: true })
       const ui = await $.ui.mount({ plugin: 'pantheon', component: 'AbovePrompt', surface, props: { hasSurvey: false, isWorking: true, maxRows: 12, bodyColumns: 120, scroll: { offset: 0, bodyRows: 12 }, view: {} } })
       for (const decision of ['cancel', 'proceed']) {
         const pending = $.tool.call(gateEdit as never)
@@ -347,6 +383,7 @@ describe('edit gate', () => {
   }
   test('a failed hold denies instead of letting the edit through', { options: { gate: true, jevApiKey: 'key' } }, async ($, on) => {
     const host = gateWorld(on, { score: 0.5, interrupt: true })
+    await start($)
     expect((await $.tool.call(gateEdit as never)).deny).toContain('interrupted')
     expect(host.forwarded).toEqual([])
   })

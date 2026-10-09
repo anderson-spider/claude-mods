@@ -25,6 +25,7 @@ export const ALLOW_THRESHOLD = 0.85
 export const DENY_THRESHOLD = 0.30
 
 const EXTENSIONS = new Set(['md', 'mdx', 'txt', 'rst', 'ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs', 'json', 'yaml', 'yml', 'toml', 'css', 'scss', 'html', 'svelte', 'vue', 'py', 'go', 'rs', 'java', 'kt', 'swift', 'sh', 'sql', 'lock'])
+const MANIFESTS = new Set(['package.json', 'plugin.json', 'marketplace.json', 'Cargo.toml', 'go.mod', 'pyproject.toml'])
 type Kind = 'docs' | 'test' | 'source' | 'ui' | 'config' | 'workflow' | 'migration' | 'manifest' | 'lockfile' | 'other'
 
 /** Paths remain local; only closed classifications can cross the network boundary. */
@@ -37,7 +38,7 @@ function metadata(ctx: EditContext): { kind: Kind; ext: string } {
   if (/(^|\/)\.github\/workflows\//.test(path)) kind = 'workflow'
   else if (/(^|\/)(migrations|migrate)(\/|$)/.test(path)) kind = 'migration'
   else if (/^(package-lock\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb?)$/.test(name) || name.endsWith('.lock')) kind = 'lockfile'
-  else if (/^(package\.json|plugin\.json|marketplace\.json|Cargo\.toml|go\.mod|pyproject\.toml)$/.test(name)) kind = 'manifest'
+  else if (MANIFESTS.has(name)) kind = 'manifest'
   else if (/(^|\/)(__tests__|tests?|specs?)(\/|$)|\.(test|spec)\./.test(path)) kind = 'test'
   else if (['md', 'mdx', 'txt', 'rst'].includes(ext)) kind = 'docs'
   else if (['tsx', 'jsx', 'css', 'scss', 'html', 'svelte', 'vue'].includes(ext)) kind = 'ui'
@@ -52,7 +53,8 @@ export function rulesVerdict(ctx: EditContext): Verdict {
   const name = path.split('/').pop() ?? ''
   if (/(^|\/)\.github\/workflows\//.test(path)
     || /(^|\/)(migrations|migrate)(\/|$)/.test(path)
-    || /^(package\.json|plugin\.json|marketplace\.json|package-lock\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lock.*|Cargo\.lock)$/.test(name)
+    || MANIFESTS.has(name)
+    || /^(package-lock\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lock.*|Cargo\.lock)$/.test(name)
     || name.endsWith('.lock')) {
     return verdict('ask', 'Sensitive workflow, migration, manifest or lockfile; ask before applying.')
   }

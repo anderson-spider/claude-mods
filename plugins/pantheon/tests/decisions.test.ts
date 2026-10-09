@@ -9,6 +9,15 @@ const ctx: EditContext = { tool: 'Edit', path: 'src/user.ts', ext: '.ts', linesA
 const response = (text: string, status = 200): Fetch => async () => ({ status, ok: status === 200, text })
 const scored = (score: unknown) => response(JSON.stringify({ answers: { trivial: { noul: score } } }))
 
+for (const path of ['package.json', 'plugin.json', 'marketplace.json', 'Cargo.toml', 'go.mod', 'pyproject.toml', 'package-lock.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lock', 'bun.lockb', 'Cargo.lock']) {
+  test(`no key asks for a one-line manifest or lockfile edit: ${path}`, async () => {
+    let fetched = false
+    const verdict = await decide(async () => { fetched = true; throw new Error('unexpected fetch') }, undefined, { ...ctx, path, linesAdded: 1, linesRemoved: 0 })
+    expect(verdict).toMatchObject({ action: 'ask', source: 'rules' })
+    expect(fetched).toBe(false)
+  })
+}
+
 test('injected deadline fires and its cancellation runs', async () => {
   let fire: () => void = () => {}
   let cancelled = false

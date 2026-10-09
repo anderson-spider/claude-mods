@@ -33,13 +33,17 @@ import { authorizedRoot, checkCwd } from './workspace'
 
 const gateHeld = atom({ plugin: 'pantheon', key: 'gateHeld' }, null)
 
-export async function withGateRecovery(work: () => Promise<ToolCallResult>, called: () => boolean, replay: () => Promise<ToolCallResult>, ask: () => Promise<ToolCallResult>): Promise<ToolCallResult> {
-  try { return await work() } catch {
-    if (called()) return replay()
-    try { return await ask() } catch {
+type GateEvaluation = { deny: string } | undefined
+
+export async function withGateRecovery(work: () => Promise<GateEvaluation>, forward: () => Promise<ToolCallResult>, ask: () => Promise<GateEvaluation>): Promise<ToolCallResult> {
+  let evaluated: GateEvaluation
+  try { evaluated = await work() } catch {
+    try { evaluated = await ask() } catch {
       return { deny: 'Pantheon edit gate could not obtain a decision. Edit denied.' }
     }
   }
+  // Forwarding is outside recovery. Only the engine's .catch can safely replay next.
+  return evaluated ?? forward()
 }
 
 /** New files inherit their nearest existing ancestor's resolved location. */
@@ -279,6 +283,7 @@ export const register: Register = (on, options) => {
   let gateUid: Promise<string | undefined> | undefined
   type GateChoice = 'proceed' | 'cancel'
   let gateWaiting: { decision: GateChoice | null } | undefined
+  let gateInteractive = false
 
   // Like branch-guard, decisions travel in memory: state reads inside a dispatch are snapshots.
   async function holdGate(io: { poll: () => Promise<unknown>; show: (value: { message: string } | null) => Promise<unknown> }, message: string, signal: AbortSignal): Promise<GateChoice | 'aborted'> {
@@ -527,6 +532,7 @@ export const register: Register = (on, options) => {
   })
 
   on('session.start', async ($, e, next) => {
+    gateInteractive = e.isInteractive === true && e.surface != null
     gateWaiting = undefined
     if (options.gate === true) await update($, gateHeld, () => null)
     const io: Io = {
@@ -824,16 +830,17 @@ export const register: Register = (on, options) => {
   // Tracking is registered first and wraps this gate: it sees the settled result once,
   // so held calls are not counted early and denied calls never count as successful edits.
   on('tool.call', { tool: ['Edit', 'Write', 'NotebookEdit'] }, async ($, e, next) => {
-    const ask = async (message: string): Promise<ToolCallResult> => {
+    const ask = async (message: string): Promise<GateEvaluation> => {
+      if (!gateInteractive) return { deny: 'Pantheon edit gate requires an interactive session to confirm this edit. Edit denied.' }
       const outcome = await holdGate({
         poll: () => $.process.run(['sleep', '0.25']),
         show: value => update($, gateHeld, () => value),
       }, message, next.signal)
-      if (outcome === 'proceed') return next(e)
+      if (outcome === 'proceed') return undefined
       return { deny: `${message}\n${outcome === 'cancel' ? 'The person pressed Cancel.' : 'The wait was interrupted before a decision.'}` }
     }
     return withGateRecovery(async () => {
-      if (options.gate !== true || e.agentId) return next(e)
+      if (options.gate !== true || e.agentId) return undefined
       const cwd = await $.session.cwd()
       const workspaceRoot = gateRoot ?? (await workspace({ cwd: async () => cwd, run: (argv, init) => $.process.run(argv, init) })).root
       const stat = (path: string, resolve: boolean) => $.fs.stat(path, { resolve })
@@ -848,13 +855,13 @@ export const register: Register = (on, options) => {
         return result.exitCode === 0 && /^\d+$/.test(uid) ? uid : undefined
       }).catch(() => undefined)
       const context = gateContext({ ...e, [pathField]: path }, { root, home, uid: await gateUid })
-      if (context.skip) return next(e)
+      if (context.skip) return undefined
       const key = typeof options.jevApiKey === 'string' && options.jevApiKey.trim()
         ? options.jevApiKey : await $.env.get('OPENROUTER_API_KEY')
       const verdict = await decide((url, init) => $.http.fetch(url, init), key, context.ctx, {
         timer: (ms, fn) => { const timer = $.clock.after(ms, fn); return () => timer.cancel() },
       })
-      if (verdict.action === 'allow') return next(e)
+      if (verdict.action === 'allow') return undefined
       // Codex roles are offered by delegate, not agent.offer; both engines use disabledAgents.
       const message = gateMessage(verdict, context.ctx, {
         executor: !state.config.disabledAgents.includes('executor'),
@@ -862,7 +869,7 @@ export const register: Register = (on, options) => {
       })
       if (verdict.action === 'deny') return { deny: message }
       return ask(message)
-    }, () => next.called, () => next(e), () => ask(gateMessage(
+    }, () => next(e), () => ask(gateMessage(
       { action: 'ask', source: 'rules', reason: 'The edit gate could not evaluate this edit. Ask the person.' },
       { tool: String(e.tool), path: '', ext: '', files: 1 },
       { executor: false, designer: false },
