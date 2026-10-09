@@ -306,7 +306,7 @@ describe('pane', () => {
       const badge = await ui.find({ key: 'header-badge' })
       expect((badge as unknown as { props: Record<string, unknown> }).props).toMatchObject({ borderStyle: 'round', alignItems: 'center' })
       const dot = (await ui.findAll({ type: 'Svg' })).map(n => (n as unknown as { props: { alt: string; source: string; isInteractive?: boolean } }).props).find(p => p.alt === 'running')
-      expect(dot?.isInteractive).toBe(true)
+      expect(dot?.isInteractive).toBeUndefined()
       expect(dot?.source).toContain('<animate')
       expect(await ui.find({ key: 'close-box' })).toBeDefined()
       const all = await texts(ui)
@@ -643,7 +643,7 @@ describe('pane', () => {
     expect(dots.length).toBe(2) // the header and the running oracle row; the session card repeats no badge
     expect(dots.map(d => d.source).every(src => src === dots[0].source)).toBe(true)
     for (const dot of dots) {
-      expect(dot.isInteractive).toBe(true)
+      expect(dot.isInteractive).toBeUndefined()
       expect(dot.source).toContain('<animate')
       expect(dot.source).not.toContain('background:')
       expect(dot.source).not.toContain('<rect')

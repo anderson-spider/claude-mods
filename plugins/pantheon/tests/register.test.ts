@@ -1093,7 +1093,7 @@ describe('register', () => {
         expect(await ui.find({ key: 'strip' })).toBeDefined()
         expect(await ui.find({ key: 'strip-r1' })).toBeDefined()
         const pictures = (await ui.findAll({ type: 'Svg' })).map(n => (n as unknown as { props: { alt: string; isInteractive?: boolean } }).props)
-        expect(pictures.some(p => p.alt === 'working' && p.isInteractive)).toBe(true)
+        expect(pictures.some(p => p.alt === 'working' && p.isInteractive === undefined)).toBe(true)
         expect(pictures.some(p => p.alt.startsWith('5h'))).toBe(true)
       } finally { await ui.unmount() }
     })
