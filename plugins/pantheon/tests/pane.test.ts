@@ -438,20 +438,20 @@ describe('pane', () => {
     expect(all).toContain('3 running')
   })
 
-  t('docked: each agent row carries a mascot Client of its role and mood, the session a large one', async ($, on) => {
+  t('docked: each agent row carries a mascot Client of its role and mood, the session one at the same size', async ($, on) => {
     world(on)
     seed(on, busy())
     await start($)
     const ui = await mountPane($, 'terminal', { rows: 70 })
     const mascots = (await clients(ui)).filter(c => String(c.module).includes('mascot')).map(c => c.props)
     const of = (role: string) => mascots.filter(m => m.role === role)
-    expect(of('orchestrator')).toEqual([{ role: 'orchestrator', mood: 'work', size: 'large' }])
+    expect(of('orchestrator')).toEqual([{ role: 'orchestrator', mood: 'work', size: 'small' }])
     expect(of('explorer')).toEqual([{ role: 'explorer', mood: 'work', size: 'small' }])
     expect(of('oracle')).toEqual([{ role: 'oracle', mood: 'work', size: 'small' }])
     expect(of('fixer')).toEqual([{ role: 'fixer', mood: 'idle', size: 'small' }]) // finished
     expect(of('designer')).toEqual([{ role: 'designer', mood: 'off', size: 'small' }]) // planned
     const sizes = (await clients(ui)).filter(c => String(c.module).includes('mascot')).map(c => [c.width, c.height])
-    expect(sizes).toContainEqual([15, 6])
+    expect(sizes).not.toContainEqual([15, 6])
     expect(sizes).toContainEqual([8, 3])
   })
 
@@ -466,7 +466,7 @@ describe('pane', () => {
     const all = await texts(ui)
     const rows = clawdLines('explorer', 'work', 0, 'small').map(x => x.trim())
     for (const row of rows) expect(all).toContain(row)
-    expect(all).toContain(clawdLines('orchestrator', 'work', 0, 'large')[0].trim())
+    expect(all).toContain(clawdLines('orchestrator', 'work', 0, 'small')[0].trim())
     const colored = (await ui.findAll({ type: 'Text' })).filter(n => String(n.text).trim() === rows[0])
     expect(colored.every(n => (n as unknown as { props: { color?: string } }).props.color === undefined)).toBe(true)
   })
