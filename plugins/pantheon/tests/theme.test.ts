@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { ROLE_COLOR, SECTION_COLOR, boxLines, cellWidth, gauge, padCells, strip, truncCells } from '../hooks/theme'
+import { ROLE_COLOR, SECTION_COLOR, boxLines, cellWidth, gauge, modelName, padCells, strip, truncCells } from '../hooks/theme'
 
 test('cellWidth counts terminal cells per code point', () => {
   for (const g of ['▰', '▱', '▮', '●', 'α', 'β', '↑', '↓', '─', '│', '╭', '╮', '╰', '╯', '…', 'a']) expect(cellWidth(g)).toBe(1)
@@ -69,4 +69,17 @@ test('boxLines truncates a long title and handles tiny widths', () => {
   for (const w of [4, 8, 12]) {
     for (const l of boxLines('A very long title indeed', '#fff', ['x'], w)) expect(cellWidth(l.map(r => r.text).join(''))).toBe(w)
   }
+})
+
+test('modelName turns ids into friendly names', () => {
+  expect(modelName('claude-opus-5-5')).toBe('Opus 5.5')
+  expect(modelName('claude-sonnet-5-5[1m]')).toBe('Sonnet 5.5')
+  expect(modelName('claude-haiku-4-5-20251001')).toBe('Haiku 4.5')
+  expect(modelName('claude-3-5-sonnet-20241022')).toBe('Sonnet 3.5')
+  expect(modelName('opus')).toBe('Opus')
+  expect(modelName('fable')).toBe('Fable')
+  expect(modelName('gpt-5.5')).toBe('GPT-5.5')
+  expect(modelName('Opus 5.5')).toBe('Opus 5.5')
+  expect(modelName('codex')).toBe('codex')
+  expect(modelName(undefined)).toBe('')
 })

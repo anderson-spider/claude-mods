@@ -4,7 +4,7 @@ import type { RailProps } from './rail.tsx'
 import { ago } from './roster'
 import type { Engine, Instance, Roster, RoundView, Slot, SlotName } from './roster'
 import type { PingResult } from './ping'
-import { BAD, OK, ROLE_COLOR, SECTION_COLOR, cellWidth, gauge, strip, truncCells } from './theme'
+import { BAD, OK, ROLE_COLOR, SECTION_COLOR, cellWidth, gauge, modelName, strip, truncCells } from './theme'
 import type { StripItem } from './theme'
 import type { ConfigResult, Job, PanelGroup, SessionInfo } from './types'
 
@@ -245,7 +245,7 @@ export function timelineSource(slots: Slot[], session: SessionInfo, now: number,
   const span = 900_000
   const t0 = now - span
   const SW = Math.max(8, Math.round(columns * 8))
-  const x0 = Math.min(118, SW * 0.4)
+  const x0 = Math.min(136, SW * 0.4)
   const x1 = SW - 24
   const xOf = (t: number) => x0 + ((Math.min(now, Math.max(t0, t)) - t0) / span) * (x1 - x0)
   const hex = (e: Engine | 'mixed') => HEX[e]
@@ -687,7 +687,7 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
   const isWorking = data.session.isRunning || roles.some(r => activeOf(r).length > 0) || roster.others.some(i => i.isActive)
   const railBlock = (key: string, color: string): Block => {
     const width = W - 4
-    const dim = isWorking ? '#303747' : '#232835'
+    const dim = isWorking ? '#4b5468' : '#3b4354'
     const node = canClient && el.rail
       ? <Box key={key} width={W}>{text({ text: '  ' })}{el.rail({ key: `${key}-c`, width, props: { active: isWorking, width, color, dim, marks: [], isMerge: false } })}</Box>
       : <Box key={key} width={W}>{text({ text: `  ${'─'.repeat(width)}`, color: dim })}</Box>
@@ -747,7 +747,7 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     const isOff = slot.state === 'off'
     const running = r.group === 'running'
     const name = `${role}${i?.seat ? ` ${SEATS[i.seat] ?? i.seat}` : ''}`
-    const model = i?.model ?? slot.model ?? ''
+    const model = modelName(i?.model ?? slot.model)
     const task = isPlanned ? (isOff ? `Disabled · ${slot.offReason ?? 'disabledAgents'}` : 'Waiting for work') : squash(i!.task || '(no description)')
     let withModel = !compact
     let withStrip = !compact
@@ -761,8 +761,8 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     const time: Seg = i ? durationSeg(r.key, i, running) : { text: '—', dim: true }
     const list: Col[] = [
       { w: 2, segs: [dotOf(r)] },
-      { w: NAME_W, segs: [{ text: name, color: ROLE_COLOR[role], bold: true, dim: isPlanned }] },
-      ...(withModel ? [{ w: MODEL_W, segs: [{ text: model, dim: true }] }] : []),
+      { w: NAME_W, segs: [{ text: truncCells(name, NAME_W - 1), color: ROLE_COLOR[role], bold: true, dim: isPlanned }] },
+      ...(withModel ? [{ w: MODEL_W, segs: [{ text: truncCells(model, MODEL_W - 1), dim: true }] }] : []),
       ...(withStrip ? [{ w: STRIP_W, segs: stripSegs(`strip-${r.key}`, items) }] : []),
       { w: TIME_W, segs: [time] },
       { w: taskW, segs: [{ text: task, dim: !running }] },
@@ -839,7 +839,9 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     if (isDesk && el.Svg) {
       const on = Math.min(n, Math.max(0, Math.round((pct / 100) * n)))
       const rects = Array.from({ length: n }, (_, k) => `<rect x="${k * 11 + 1}" y="1" width="8" height="12" rx="2" fill="${k < on ? color : HEX.track}"/>`).join('')
-      return [{ node: image(key, `<svg xmlns="http://www.w3.org/2000/svg" width="${n * 11 + 1}" height="14">${rects}</svg>`, n * 11 + 1, 14, `context ${Math.round(pct)}%`), w: (n * 11 + 1) / 8 }]
+      // The Box is a whole number of cells wider than the image, so the percentage never touches the bar.
+      const cellsW = Math.ceil((n * 11 + 1) / 8) + 1
+      return [{ node: <Box key={`${key}-box`} width={cellsW} flexShrink={0}>{image(key, `<svg xmlns="http://www.w3.org/2000/svg" width="${n * 11 + 1}" height="14">${rects}</svg>`, n * 11 + 1, 14, `context ${Math.round(pct)}%`)}</Box>, w: cellsW }]
     }
     const g = gauge(pct, n)
     return [...(g.on ? [{ text: g.on, color }] : []), ...(g.off ? [{ text: g.off, dim: true }] : [])]
@@ -853,7 +855,7 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
       : s.lastTurnMs !== undefined ? { text: fmtClock(s.lastTurnMs), bold: true } : { text: '—', dim: true }
     const dot: Seg = running ? pulseSeg('s-dot') : idleSeg('s-idle')
     if (compact) {
-      const model = [s.model, s.effort].filter(Boolean).join(' · ')
+      const model = [modelName(s.model), s.effort].filter(Boolean).join(' · ')
       const left: Seg[] = [dot, { text: 'orchestrator', bold: true, color: ROLE_COLOR.orchestrator }, ...(model ? [{ text: clip(model, 20), dim: true }] : [])]
       return [{ node: line('o-c', left, running && s.turnStartedAt ? [timeSeg()] : undefined, W, keepOf(left, 2)), h: 1 }]
     }
@@ -864,7 +866,7 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
       ? [{ node: plate('s-pill', 11.5, 1.3, running ? [rgba(OK, 0.16), rgba(OK, 0.7)] : HUD.neutral, render(stateTexts), 1.25, 0.6), w: 11.5 }]
       : [dot, { text: ' ', dim: true }, stateTexts[1]]
     const identity: Seg[] = [
-      { text: s.model ?? 'orchestrator', bold: true, color: ROLE_COLOR.orchestrator },
+      { text: modelName(s.model) || 'orchestrator', bold: true, color: ROLE_COLOR.orchestrator },
       ...(s.effort ? [{ text: ` · ${s.effort} effort`, dim: true }] : []),
     ]
     const rows: RowBlock[] = []
@@ -874,11 +876,11 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     }
     const ctxLabel: Seg = { text: 'ctx ', dim: true }
     // 'ctx ' and ' 100%' take 9 cells; the gauge takes the rest up to 30 blocks, or none when under 3.
-    const gaugeN = Math.min(30, isDesk ? Math.floor(((IW - 9) * 8 - 1) / 11) : IW - 9)
+    const gaugeN = Math.min(30, isDesk ? Math.floor(((IW - 11) * 8 - 1) / 11) : IW - 9)
     rows.push({ node: space('s1', identity, state, isDesk ? 1.6 : undefined), h: isDesk ? 1.6 : 1 })
     rows.push({
       node: plain('s-ctx', ctx != null
-        ? [ctxLabel, ...(gaugeN >= 3 ? gaugeSegs('s-gauge', ctx, gaugeN) : []), { text: `${gaugeN >= 3 ? ' ' : ''}${Math.round(ctx)}%`, bold: true }]
+        ? [ctxLabel, ...(gaugeN >= 3 ? gaugeSegs('s-gauge', ctx, gaugeN) : []), { text: `${gaugeN >= 3 && !(isDesk && el.Svg) ? ' ' : ''}${Math.round(ctx)}%`, bold: true }]
         : [ctxLabel, { text: '—', dim: true }], IW, isDesk ? rowH : undefined),
       h: rowH,
     })
@@ -1037,7 +1039,7 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
       { text: i.id, bold: true },
       { text: `${g.text} ${g.label}`, color: g.color, dim: i.status === 'cancelled' || i.status === 'stopped' },
       { text: role, color: rc, bold: true },
-      ...(i.model ? [{ text: i.model, dim: true } as Seg] : []),
+      ...(i.model ? [{ text: modelName(i.model), dim: true } as Seg] : []),
     ]
     const chips: Seg[] = [{ text: 'rounds', dim: true }]
     i.rounds.slice(-4).forEach((r, k, shown) => {
@@ -1149,7 +1151,7 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
         { text: 'pantheon', bold: true, color: ROUND },
         { text: s.isRunning ? '●' : '○', color: s.isRunning ? RUN : undefined, dim: !s.isRunning },
         { text: 'orchestrator' },
-        ...(s.model ? [{ text: `${s.model}${s.effort ? ` ${s.effort}` : ''}`, dim: true }] : []),
+        ...(s.model ? [{ text: `${modelName(s.model)}${s.effort ? ` ${s.effort}` : ''}`, dim: true }] : []),
         ...(s.isRunning && s.turnStartedAt ? [clockSeg('clk-orchestrator', s.turnStartedAt, null, 'text', true)] : []),
         ...ctxSegs,
         ...(delegating.length ? [{ text: '→', dim: true }, ...delegating] : []),

@@ -101,3 +101,18 @@ export function boxLines(title: string, color: string, lines: string[], width: n
   out.push([{ text: '╰' + '─'.repeat(inner) + '╯', color }])
   return out
 }
+
+/** A friendly model name: 'claude-opus-5-5' -> 'Opus 5.5', 'haiku' -> 'Haiku', 'gpt-5.5' -> 'GPT-5.5'; anything else as given. */
+export function modelName(id: string | undefined): string {
+  if (!id) return ''
+  const bare = id.trim().replace(/\[[^\]]*\]$/, '').replace(/-\d{8}$/, '').replace(/^claude-/i, '')
+  const cap = (s: string) => s[0].toUpperCase() + s.slice(1).toLowerCase()
+  const ver = (a?: string, b?: string) => (a ? ` ${a}${b ? `.${b}` : ''}` : '')
+  const family = /^(opus|sonnet|haiku|fable)(?:-(\d+)(?:-(\d+))?)?$/i.exec(bare)
+  if (family) return cap(family[1]) + ver(family[2], family[3])
+  const legacy = /^(\d+)(?:-(\d+))?-(opus|sonnet|haiku)$/i.exec(bare)
+  if (legacy) return cap(legacy[3]) + ver(legacy[1], legacy[2])
+  const gpt = /^gpt-(.+)$/i.exec(bare)
+  if (gpt) return `GPT-${gpt[1]}`
+  return id.trim()
+}

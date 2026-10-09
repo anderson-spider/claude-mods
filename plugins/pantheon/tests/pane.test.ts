@@ -888,6 +888,42 @@ describe('pane', () => {
     }
   })
 
+  t('model names are friendly in the session title and agent rows, with a free cell around the bar and the strip', async ($, on) => {
+    world(on)
+    seed(on, {
+      natives: [native({ model: 'claude-haiku-4-5-20251001' })],
+      session: { isRunning: false, model: 'claude-opus-5-5', effort: 'high', context: { tokens: 7, window: 100, percent: 7 } },
+    })
+    await start($)
+    for (const surface of SURFACES) {
+      const ui = await mountPane($, surface, { rows: 80 })
+      const all = await texts(ui)
+      expect(all).toContain('Opus 5.5')
+      expect(all).toContain('Haiku 4.5')
+      expect(all.some(x => x.includes('claude-'))).toBe(false)
+      if (surface === 'desktop') {
+        // The gauge sits in a Box at least one cell wider than its image.
+        const box = (await ui.find({ key: 's-gauge-box' })) as unknown as { props: { width: number } }
+        const image = (await ui.findAll({ type: 'Svg' })).map(n => (n as unknown as { props: { alt: string; width: number } }).props).find(p => p.alt === 'context 7%')!
+        expect(box.props.width).toBeGreaterThanOrEqual(Math.ceil(image.width / 8) + 1)
+      }
+      await release()
+    }
+  })
+
+  t('rails keep a visible track at rest on both surfaces', async ($, on) => {
+    world(on)
+    seed(on, {})
+    await start($)
+    for (const surface of SURFACES) {
+      const ui = await mountPane($, surface, { rows: 70 })
+      const rails = await railsOf(ui)
+      expect(rails.length).toBeGreaterThan(0)
+      for (const rail of rails) expect(rail.props).toMatchObject({ active: false, dim: '#3b4354' })
+      await release()
+    }
+  })
+
   t('desktop tints each card by section', async ($, on) => {
     world(on)
     seed(on, busy())
@@ -1307,7 +1343,7 @@ describe('timelineSource', () => {
     const lane = [slot({ name: 'orchestrator', engine: 'claude' })]
     const svg = timelineSource(lane, session, NOW_T).source
     expect(svg.split('fill="#4a4945"/>').length - 1).toBe(3)
-    expect(svg).toContain('<rect x="118" y="48"')
+    expect(svg).toContain('<rect x="136" y="48"')
     expect(svg).toContain('height="12" rx="3" fill="#ebedf1"/>')
     const idle = timelineSource(lane, { ...session, isRunning: false }, NOW_T).source
     expect(idle.split('fill="#4a4945"/>').length - 1).toBe(3)
