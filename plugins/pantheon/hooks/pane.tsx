@@ -1,6 +1,7 @@
 import type { Elements, RenderSurface } from 'claude-code'
 
 import type { RailProps } from './rail'
+import type { MascotProps } from './mascot.tsx'
 import { ago } from './roster'
 import type { Engine, Instance, Roster, RoundView, Slot } from './roster'
 import type { ConfigResult, Job, SessionInfo } from './types'
@@ -65,6 +66,7 @@ export function doctorReport(facts: DoctorFacts): string {
 
 type Base = Pick<Elements['terminal'], 'Box' | 'Text' | 'Button'>
 type RailBuild = (p: { key: string; width: number; props: RailProps }) => unknown
+export type MascotBuild = (p: { key: string; props: MascotProps }) => unknown
 type ClockBuild = (p: {
   key: string
   width: number
@@ -79,6 +81,7 @@ export type PanelElements = Base & {
   Svg?: Elements['desktop']['Svg']
   rail?: RailBuild
   clock?: ClockBuild
+  mascot?: MascotBuild
 }
 
 export type PanelData = {

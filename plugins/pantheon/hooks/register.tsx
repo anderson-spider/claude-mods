@@ -621,6 +621,10 @@ export const register: Register = on => {
           ? <els.Client key={key} module="./rail.tsx" width={1} height={props.width + (props.glyph ? 1 : 0)} props={props} />
           : <els.Client key={key} module="./rail.tsx" width={props.isLine === false ? 1 : props.width + (props.glyph ? 1 : 0)} height={1} props={props} />,
         clock: ({ key, props }) => <els.Client key={key} module="./elapsed.tsx" width={6} props={props} />,
+        // 9 body columns plus the 4-column prop zone; large is 4 rows, small 2.
+        ...(isClockLost ? {} : {
+          mascot: ({ key, props }) => <els.Client key={key} module="./mascot.tsx" width={13} height={props.size === 'large' ? 4 : 2} props={props} />,
+        }),
       } : {}),
     } as never, {
       surface: e.surface,
