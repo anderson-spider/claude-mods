@@ -2,7 +2,7 @@ import type { Register } from 'claude-code'
 import { WRITE_METHODS, call } from './api'
 
 const PATH_HELP =
-  'Path relative to https://api.tailscale.com/api/v2, starting with "/". Use "-" for the default tailnet (e.g. /tailnet/-/devices).'
+  'API path under https://api.tailscale.com/api/v2, starting with "/". "-" is the default tailnet (/tailnet/-/devices).'
 
 const AREAS =
   'devices, ACL (policy file), DNS, API and auth keys, users, invites, tailnet settings, ' +
@@ -19,10 +19,9 @@ export const register: Register = (on) => {
       name: 'tailscale_get',
       description:
         `Queries the Tailscale API (GET, read-only): ${AREAS}. ` +
-        'Examples: /tailnet/-/devices, /tailnet/-/acl, /device/{id}, /tailnet/-/keys, /tailnet/-/settings. ' +
-        'The API does not paginate: the full list comes back. Use "fields" to return only the keys that matter. ' +
-        'Secret fields (machineKey, nodeKey, tailnetLockKey, secret, token, and any field named *Key, *Secret or *Token) are removed. ' +
-        'A GET on /tailnet/-/acl shows the ETag in the response: keep it for the POST ifMatch.',
+        'No pagination: use "fields" to keep only the keys you need. ' +
+        'Secret fields (*Key, *Secret, *Token) are removed. ' +
+        'GET /tailnet/-/acl returns the ETag for the write ifMatch.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -31,7 +30,7 @@ export const register: Register = (on) => {
             type: 'array',
             items: { type: 'string' },
             description:
-              'Optional. Keeps only these keys of the JSON response, at any level (e.g. ["hostname","addresses","os","lastSeen"]).',
+              'Optional. Keeps only these keys of the response, at any level.',
           },
         },
         required: ['path'],
@@ -40,20 +39,18 @@ export const register: Register = (on) => {
     await $.tool.register({
       name: 'tailscale_write',
       description:
-        'Modifies the tailnet through the Tailscale API (POST, PUT, PATCH or DELETE): authorize/delete devices, ' +
-        'set tags and routes, update ACL and DNS, create/revoke keys, webhooks and invites. ' +
-        'Changes real state: confirm with the user first. Deleting the entire tailnet is refused. ' +
-        'To update the ACL (POST /tailnet/-/acl), do a GET first and pass the ETag in ifMatch; ' +
-        'a string body that is not valid JSON is sent as HuJSON.',
+        'Modifies the tailnet through the Tailscale API (POST, PUT, PATCH or DELETE). ' +
+        'Changes real state: confirm with the user first. Deleting the whole tailnet is refused. ' +
+        'For POST /tailnet/-/acl, GET first and pass the ETag in ifMatch; a non-JSON string body is sent as HuJSON.',
       inputSchema: {
         type: 'object',
         properties: {
           method: { type: 'string', enum: [...WRITE_METHODS] },
-          path: { type: 'string', description: PATH_HELP },
-          body: { description: 'Request body, if any: JSON object or string (JSON/HuJSON).' },
+          path: { type: 'string', description: 'Same as tailscale_get.' },
+          body: { description: 'Request body: JSON object or string.' },
           ifMatch: {
             type: 'string',
-            description: 'Optional. ETag from GET /tailnet/-/acl, with the quotes, so a concurrent edit is not overwritten.',
+            description: 'Optional. ETag from GET /tailnet/-/acl, with quotes.',
           },
         },
         required: ['method', 'path'],
