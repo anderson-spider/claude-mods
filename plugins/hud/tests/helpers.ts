@@ -100,10 +100,15 @@ export async function settle() {
 }
 
 // What the fork answers; fork prompts and ghost texts are recorded.
-export function suggesting(on: any, reply: unknown, options: { commands?: unknown[]; fork?: () => Promise<unknown> } = {}) {
-  const seen = { forks: [] as string[], ghosts: [] as string[] };
+export function suggesting(on: any, reply: unknown, options: { commands?: unknown[]; fork?: () => Promise<unknown>; complete?: () => Promise<unknown> } = {}) {
+  const seen = { forks: [] as string[], completions: [] as any[], logs: [] as string[], ghosts: [] as string[] };
   on("command.list", () => ({ value: options.commands ?? COMMANDS }));
-  on("ui.log", () => ({ value: undefined }));
+  on("ui.log", (_$: any, e: any) => { seen.logs.push(e.text); return { value: undefined }; });
+  on("model.complete", async (_$: any, e: any) => {
+    seen.completions.push(e);
+    if (options.complete) return { value: await options.complete() };
+    return { value: { isAnswered: true, text: typeof reply === "string" ? reply : JSON.stringify(reply), usage: {} } };
+  });
   on("model.fork", async (_$: any, e: any) => {
     seen.forks.push(e.prompt);
     if (options.fork) return { value: await options.fork() };

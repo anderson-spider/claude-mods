@@ -20,7 +20,7 @@ function reset() {
   Object.assign(cacheData, freshCache(), { env: {} });
   limitData.reading = freshLimits();
   Object.assign(infoData, freshInfo());
-  Object.assign(suggestionData, { current: freshSuggestions(), minAnswerChars: 80, suggestSkills: true });
+  Object.assign(suggestionData, { current: freshSuggestions(), minAnswerChars: 80, suggestSkills: true, model: "haiku", lastRequest: "" });
 }
 
 test("history: restores valid readings and only expires other sessions at eight days", async () => {
@@ -77,6 +77,7 @@ test("history: publishing keeps newer shared limits and adoption only takes newe
 
 test("suggestions: a detached reply from an older turn is dropped", async () => {
   reset();
+  suggestionData.model = "fork";
   let finish: any;
   let forkStarted: any;
   const started = new Promise((resolve) => { forkStarted = resolve; });
@@ -97,6 +98,7 @@ test("suggestions: a detached reply from an older turn is dropped", async () => 
 
 test("suggestions: command listing failure still offers slash prompts and suggests the first", async () => {
   reset();
+  suggestionData.model = "fork";
   let suggested: any;
   const done = new Promise((resolve) => { suggested = resolve; });
   startSuggestions({ show, commands: async () => { throw new Error("unavailable"); }, fork: async () => ({ isAnswered: true, text: '[{"prompt":"/unknown next"}]' }), log: () => {}, suggest: async (value: any) => { suggested(value); } }, { reason: "answer", answer: "a".repeat(80), turnId: "turn" });

@@ -3,14 +3,73 @@ import { LIMITS, world, withUsage, band, ITEMS, suggesting, turnDone, settle } f
 
 // ---------- Next steps: the suggestions after a turn ----------
 
+test("suggestions: default completes with only the latest request and answer", async ($, on) => {
+  world(on);
+  withUsage(on, LIMITS);
+  const seen = suggesting(on, ITEMS);
+  const submitted: any[] = [];
+  on("prompt.submit", (_$: any, e: any) => { submitted.push(e); return { text: e.text }; });
+  await $.session.start({ source: "startup", cwd: "/tmp" } as any);
+  await $.prompt.submit({ text: "old request" } as any);
+  await turnDone($, { answer: "old answer ".repeat(20) });
+  const result = await $.prompt.submit({ text: "latest request" } as any);
+  expect(result).toEqual({ text: "latest request" });
+  expect(submitted.map((e) => e.text)).toEqual(["old request", "latest request"]);
+  await ($ as any).turn.start({ text: "agent request", turnId: "agent", agentId: "a1" });
+  await turnDone($, { answer: "latest answer ".repeat(20), turnId: "t2" });
+  expect(seen.forks).toEqual([]);
+  const call = seen.completions[1];
+  expect(call.model).toBe("haiku");
+  expect(call.effort).toBe("low");
+  expect(call.maxTokens).toBe(600);
+  expect(call.timeoutMs).toBe(20000);
+  expect(call.prompt).toContain("<request>\nlatest request\n</request>");
+  expect(call.prompt).toContain("latest answer");
+  expect(call.prompt).not.toContain("old request");
+  expect(call.prompt).not.toContain("old answer");
+  expect(call.prompt).not.toContain("agent request");
+  expect(call.prompt).not.toContain("Do not continue the task");
+  expect(call.prompt).toContain("/review-pr: Review a pull request");
+  await $.session.start({ source: "startup", cwd: "/tmp" } as any);
+  await turnDone($);
+  expect(seen.completions[2].prompt).toContain("<request>\n\n</request>");
+  expect(seen.completions[2].prompt).not.toContain("latest request");
+});
 
-test("suggestions: a long answer forks and offers the first prompt as ghost text", async ($, on) => {
+test("suggestions: Haiku omits skills when disabled and clips context", { options: { suggestSkills: false } } as any, async ($, on) => {
+  world(on);
+  withUsage(on, LIMITS);
+  const seen = suggesting(on, ITEMS);
+  on("prompt.submit", (_$: any, e: any) => ({ text: e.text }));
+  await $.session.start({ source: "startup", cwd: "/tmp" } as any);
+  await $.prompt.submit({ text: "r".repeat(3100) } as any);
+  await turnDone($, { answer: "a".repeat(6100) });
+  expect(seen.completions[0].prompt).toContain(`<request>\n${"r".repeat(2999)}…\n</request>`);
+  expect(seen.completions[0].prompt).toContain(`<answer>\n${"a".repeat(5999)}…\n</answer>`);
+  expect(seen.completions[0].prompt).not.toContain("<available-skills>");
+});
+
+test("suggestions: an unanswered Haiku call logs and offers nothing without fallback", async ($, on) => {
+  world(on);
+  withUsage(on, LIMITS);
+  const seen = suggesting(on, ITEMS, { complete: async () => ({ isAnswered: false, reason: "api-error" }) });
+  await $.session.start({ source: "startup", cwd: "/tmp" } as any);
+  await turnDone($);
+  expect(seen.completions.length).toBe(1);
+  expect(seen.forks).toEqual([]);
+  expect(seen.ghosts).toEqual([]);
+  expect(seen.logs.join(" ")).toContain("api-error");
+  expect((await band($, "terminal")).texts).not.toContain("next:");
+});
+
+test("suggestions: a long answer forks and offers the first prompt as ghost text", { options: { suggestionModel: "fork" } } as any, async ($, on) => {
   world(on);
   withUsage(on, LIMITS);
   const seen = suggesting(on, ITEMS);
   await $.session.start({ source: "startup", cwd: "/tmp" } as any);
   await turnDone($);
   expect(seen.forks.length).toBe(1);
+  expect(seen.completions).toEqual([]);
   expect(seen.ghosts).toEqual(["run the tests you just wrote"]);
 });
 
@@ -21,6 +80,7 @@ test("suggestions: an answer under minAnswerChars makes no fork", async ($, on) 
   await $.session.start({ source: "startup", cwd: "/tmp" } as any);
   await turnDone($, { answer: "x".repeat(20) });
   expect(seen.forks.length).toBe(0);
+  expect(seen.completions).toEqual([]);
 });
 
 test("suggestions: minAnswerChars is a setting", { options: { minAnswerChars: 10 } } as any, async ($, on) => {
@@ -29,7 +89,7 @@ test("suggestions: minAnswerChars is a setting", { options: { minAnswerChars: 10
   const seen = suggesting(on, ITEMS);
   await $.session.start({ source: "startup", cwd: "/tmp" } as any);
   await turnDone($, { answer: "x".repeat(20) });
-  expect(seen.forks.length).toBe(1);
+  expect(seen.completions.length).toBe(1);
 });
 
 test("suggestions: a subagent's turn makes no fork", async ($, on) => {
@@ -39,9 +99,10 @@ test("suggestions: a subagent's turn makes no fork", async ($, on) => {
   await $.session.start({ source: "startup", cwd: "/tmp" } as any);
   await turnDone($, { agentId: "a1" });
   expect(seen.forks.length).toBe(0);
+  expect(seen.completions).toEqual([]);
 });
 
-test("suggestions: the fork is told the session's skills", async ($, on) => {
+test("suggestions: the fork is told the session's skills", { options: { suggestionModel: "fork" } } as any, async ($, on) => {
   world(on);
   withUsage(on, LIMITS);
   const seen = suggesting(on, ITEMS);
@@ -51,7 +112,7 @@ test("suggestions: the fork is told the session's skills", async ($, on) => {
   expect(seen.forks[0]).not.toContain("/clear");
 });
 
-test("suggestions: without suggestSkills the fork gets no skill list", { options: { suggestSkills: false } } as any, async ($, on) => {
+test("suggestions: without suggestSkills the fork gets no skill list", { options: { suggestSkills: false, suggestionModel: "fork" } } as any, async ($, on) => {
   world(on);
   withUsage(on, LIMITS);
   const seen = suggesting(on, ITEMS);
@@ -84,7 +145,7 @@ test("suggestions: unsafe text is cleaned, and a tag character drops the suggest
   expect(seen.ghosts).toEqual(["run the tests now"]);
 });
 
-test("suggestions: prose, bad JSON, an unanswered or a failing fork offer nothing", async ($, on) => {
+test("suggestions: prose, bad JSON, an unanswered or a failing fork offer nothing", { options: { suggestionModel: "fork" } } as any, async ($, on) => {
   world(on);
   withUsage(on, LIMITS);
   const seen = suggesting(on, "I would suggest running the tests.");
@@ -94,7 +155,7 @@ test("suggestions: prose, bad JSON, an unanswered or a failing fork offer nothin
   expect(seen.ghosts).toEqual([]);
 });
 
-test("suggestions: a fork that throws offers nothing and does not break the turn", async ($, on) => {
+test("suggestions: a fork that throws offers nothing and does not break the turn", { options: { suggestionModel: "fork" } } as any, async ($, on) => {
   world(on);
   withUsage(on, LIMITS);
   const seen = suggesting(on, ITEMS, { fork: () => Promise.reject(new Error("boom")) });
@@ -103,7 +164,7 @@ test("suggestions: a fork that throws offers nothing and does not break the turn
   expect(seen.ghosts).toEqual([]);
 });
 
-test("suggestions: a result that arrives after a newer turn is dropped", async ($, on) => {
+test("suggestions: a result that arrives after a newer turn is dropped", { options: { suggestionModel: "fork" } } as any, async ($, on) => {
   world(on);
   withUsage(on, LIMITS);
   let release: (v: unknown) => void = () => {};
@@ -182,7 +243,7 @@ test("suggestions: nothing from this mod during a survey", async ($, on) => {
   expect(texts).not.toContain("107k");
 });
 
-test("suggestions: a wait line while the fork runs", async ($, on) => {
+test("suggestions: a wait line while the fork runs", { options: { suggestionModel: "fork" } } as any, async ($, on) => {
   world(on);
   withUsage(on, LIMITS);
   suggesting(on, ITEMS, { fork: () => new Promise(() => {}) });
@@ -312,7 +373,7 @@ test("filling: model text is cleaned before it reaches the label or prompt", asy
 
 // ---------- Next steps: the deferred review minors ----------
 
-test("suggestions: invalid JSON offers nothing", async ($, on) => {
+test("suggestions: invalid JSON offers nothing", { options: { suggestionModel: "fork" } } as any, async ($, on) => {
   world(on);
   withUsage(on, LIMITS);
   const seen = suggesting(on, '[{"label": "Run", "prompt": "run the tests"');
@@ -323,7 +384,7 @@ test("suggestions: invalid JSON offers nothing", async ($, on) => {
   expect((await band($, "terminal")).texts).not.toContain("next:");
 });
 
-test("suggestions: a fork that is not answered offers nothing", async ($, on) => {
+test("suggestions: a fork that is not answered offers nothing", { options: { suggestionModel: "fork" } } as any, async ($, on) => {
   world(on);
   withUsage(on, LIMITS);
   const seen = suggesting(on, ITEMS, { fork: async () => ({ isAnswered: false, reason: "api-error" }) });
@@ -334,7 +395,7 @@ test("suggestions: a fork that is not answered offers nothing", async ($, on) =>
   expect((await band($, "terminal")).texts).not.toContain("next:");
 });
 
-test("filling: a press from an older, longer offer fills nothing", async ($, on) => {
+test("filling: a press from an older, longer offer fills nothing", { options: { suggestionModel: "fork" } } as any, async ($, on) => {
   const filled: string[] = [];
   on("prompt.fill", (_$: any, e: any) => {
     filled.push(e.text);
