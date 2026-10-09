@@ -80,7 +80,7 @@ export function gauge(pct: number, width: number): { on: string; off: string } {
 }
 
 // A thin vertical bar, one cell wide: the heavy box-drawing stroke stays a line where ▮ turns into a fat block in many fonts.
-export const BLOCK = '┃'
+export const BLOCK = '▌'
 
 export function strip(items: StripItem[]): Run[] {
   return items.map(it => {

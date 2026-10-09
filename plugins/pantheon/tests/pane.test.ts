@@ -324,7 +324,7 @@ describe('pane', () => {
         expect(strips.filter(p => p.source.split('<rect').length - 1 === 2)).toHaveLength(1)
       } else {
         // Two bars for the fixer; roles that never ran have none.
-        expect((await texts(ui)).filter(x => x === '┃')).toHaveLength(2)
+        expect((await texts(ui)).filter(x => x === '▌')).toHaveLength(2)
       }
       await $.tool.call({ tool: 'mcp__pantheon__delegate_cancel', jobId: second.jobId } as never)
     })
@@ -803,7 +803,7 @@ describe('pane', () => {
     const all = await texts(ui)
     expect(all.filter(x => x.startsWith('task '))).toEqual(['task 6']) // the latest run only
     expect(all).toContain('+2')
-    const bars = (await ui.findAll({ type: 'Text' })).filter(n => String(n.text) === '┃')
+    const bars = (await ui.findAll({ type: 'Text' })).filter(n => String(n.text) === '▌')
       .map(n => (n as unknown as { props: { color?: string } }).props.color)
     expect(bars).toEqual([BAD, OK, undefined, OK]) // failed, done, lost (dim), done
   })
@@ -890,7 +890,7 @@ describe('pane', () => {
     ] })
     await start($)
     const ui = await mountPane($, 'terminal', { rows: 70 })
-    const blocks = (await ui.findAll({ type: 'Text' })).filter(n => String(n.text) === '┃')
+    const blocks = (await ui.findAll({ type: 'Text' })).filter(n => String(n.text) === '▌')
       .map(n => (n as unknown as { props: { color?: string; dimColor?: boolean } }).props)
     const failed = blocks.findIndex(b => b.color === BAD)
     expect(failed).toBeGreaterThanOrEqual(0)
@@ -1233,7 +1233,7 @@ describe('pane', () => {
     await start($)
     const ui = await mountPane($, 'terminal')
     // Two blocks: the lost round has no state color and no duration of its own; the running one is the role's.
-    const blocks = (await ui.findAll({ type: 'Text' })).filter(n => String(n.text) === '┃')
+    const blocks = (await ui.findAll({ type: 'Text' })).filter(n => String(n.text) === '▌')
       .map(n => (n as unknown as { props: { color?: string; dimColor?: boolean } }).props)
     const running = blocks.findIndex(b => b.color === ROLE_COLOR.fixer)
     expect(running).toBeGreaterThan(0)
