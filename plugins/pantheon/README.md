@@ -29,7 +29,7 @@ The orchestrator gets a system prompt section, adapted from the slim `orchestrat
 
 ### Tools
 
-- `delegate({ agent, prompt, description?, cwd?, model?, effort?, background?, resume? })` runs a role or council seat currently on Codex. It stays in the foreground up to `foregroundMinutes`; past that it returns `{ jobId, status: "background" }` and prompts the session when the job ends. `resume: <jobId>` continues the Codex session of a finished job, in the same `cwd`. A role moved to Claude cannot resume through `delegate`; the tool directs the orchestrator to its native Agent instead. A per-call `model` must be valid for Codex.
+- `delegate({ agent, prompt, description?, cwd?, model?, effort?, background?, resume? })` runs a role or council seat currently on Codex. It stays in the foreground up to `foregroundMinutes`; past that it returns `{ jobId, status: "background" }` and prompts the session when the job ends. `resume: <jobId>` continues the Codex session of a finished job, in the same `cwd`. A role moved to Claude cannot resume through `delegate`; the tool directs the orchestrator to its native Agent instead. A per-call `model` must be valid for Codex. The `delegate*` tools are deferred (behind ToolSearch, no fixed context) while no role or council seat is on Codex, and listed once one is; a profile change refreshes this on the next turn.
 - `delegate_result({ jobId })` gives a job's state and result.
 - `delegate_cancel({ jobId })` kills the process and marks the job `cancelled`; partial changes stay on disk.
 

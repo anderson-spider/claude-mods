@@ -175,6 +175,8 @@ function summarize(job: Job) {
   }
 }
 
+const DELEGATE_TOOLS = ['mcp__pantheon__delegate', 'mcp__pantheon__delegate_result', 'mcp__pantheon__delegate_cancel']
+
 export const register: Register = (on, options) => {
   // An empty field means /config never chose a profile, so the JSON layers decide.
   const selected = typeof options.profile === 'string' && options.profile.trim() ? options.profile : undefined
@@ -360,6 +362,13 @@ export const register: Register = (on, options) => {
     return reply({ ...summarize(job), ...(outcome === 'cancelled' ? { note: PARTIAL_NOTE } : {}) })
   }
 
+  // Whether the delegate tools were last described as Codex-backed; undefined until session.start.
+  let describedCodex: boolean | undefined
+  on('tool.describe', async (_$, e, next) => {
+    const result = await next(e)
+    return DELEGATE_TOOLS.includes(e.tool) ? { ...result, isDeferred: !usesCodex(state.config) } : result
+  })
+
   on('config.set', { key: 'pantheon.profile' }, async ($, e, next) => {
     const io: Pick<Io, 'cwd' | 'run' | 'home' | 'readText'> = {
       cwd: () => $.session.cwd(),
@@ -390,23 +399,26 @@ export const register: Register = (on, options) => {
     const started = await next(e)
     await ensureJobs(io)
     await refreshConfig(io, (await workspace(io)).root)
+    // Without a Codex role or seat the tools are deferred (no fixed context); tool.describe follows
+    // later profile switches.
+    describedCodex = usesCodex(state.config)
     await $.tool.register({
       name: 'delegate',
-      description: 'Run a Pantheon role or council seat currently on Codex on a task and return its final message, or a jobId when it goes to background.',
+      description: 'Run a Pantheon role or council seat on Codex on a task and return its final message, or a jobId when it goes to background.',
       inputSchema: DELEGATE_SCHEMA,
-      isDeferred: false,
+      isDeferred: !describedCodex,
     })
     await $.tool.register({
       name: 'delegate_result',
-      description: 'Read the status and, once finished, the result of a job for a Pantheon role or council seat currently on Codex.',
+      description: 'Read the status and, once finished, the result of a delegate job.',
       inputSchema: JOB_SCHEMA,
-      isDeferred: false,
+      isDeferred: !describedCodex,
     })
     await $.tool.register({
       name: 'delegate_cancel',
-      description: 'Stop a running job for a Pantheon role or council seat currently on Codex and mark it cancelled; partial changes stay on disk.',
+      description: 'Stop a running delegate job and mark it cancelled; partial changes stay on disk.',
       inputSchema: JOB_SCHEMA,
-      isDeferred: false,
+      isDeferred: !describedCodex,
     })
     await $.command.register({
       name: 'pantheon',
@@ -795,6 +807,11 @@ export const register: Register = (on, options) => {
     }
     const composed = await next(e)
     const current = await refreshConfig(io, (await workspace(io)).root)
+    const codex = usesCodex(current.config)
+    if (describedCodex !== undefined && codex !== describedCodex) {
+      describedCodex = codex
+      $.ui.invalidate('tool.describe')
+    }
     return {
       ...composed,
       sections: [
