@@ -106,7 +106,7 @@ const JOB_SCHEMA = {
   required: ['jobId'],
 } as const
 
-const PARTIAL_NOTE = 'Mudanças parciais do job continuam no disco; confira git status antes de seguir.'
+const PARTIAL_NOTE = 'Partial changes from the job stay on disk; check git status before continuing.'
 
 function reply(value: unknown): { result: string } {
   return { result: JSON.stringify(value) }
@@ -138,7 +138,7 @@ export const register: Register = on => {
   const jobsQueue = createQueue<Job[]>(list => live!.writeJobs(list), error => {
     if (warnedWrite) return
     warnedWrite = true
-    live?.toast(`pantheon: não consegui gravar o estado dos jobs (o painel pode ficar desatualizado): ${error instanceof Error ? error.message : String(error)}`)
+    live?.toast(`pantheon: could not save the job state (the panel may be stale): ${error instanceof Error ? error.message : String(error)}`)
   })
   const persisted = jobsQueue.flushed
 
@@ -184,7 +184,7 @@ export const register: Register = on => {
     const saved = markLost(await io.readJobs())
     if (jobs) return jobs
     jobs = createJobs({
-      spawn: () => { throw new Error('pantheon: spawn sem chamada ativa') },
+      spawn: () => { throw new Error('pantheon: spawn without an active call') },
       clock,
       codec: { buildArgv, createJsonlReader },
       newId: () => `pj${(++idSeq).toString(36)}${Math.random().toString(36).slice(2, 6)}`,
@@ -222,7 +222,7 @@ export const register: Register = on => {
       if (!lastValid) await registerNatives(io, state.config)
       if (state.error !== toastedError) {
         toastedError = state.error
-        io.toast(`pantheon: config inválida — ${state.error}`)
+        io.toast(`pantheon: invalid config — ${state.error}`)
       }
     }
     return state
@@ -243,14 +243,14 @@ export const register: Register = on => {
       // Só marca como registrado depois de todos: uma falha é tentada de novo no próximo turno.
       registeredKey = key
     } catch (error) {
-      io.toast(`pantheon: falha ao registrar agentes nativos: ${error instanceof Error ? error.message : String(error)}`)
+      io.toast(`pantheon: could not register the native agents: ${error instanceof Error ? error.message : String(error)}`)
     }
   }
 
   async function delegate(io: Io, args: DelegateArgs, spawn: Spawn, signal: AbortSignal) {
     const ws = await workspace(io)
     const current = await refreshConfig(io, ws.root)
-    if (!current.ok) return reply({ error: `Config do Pantheon inválida: ${current.error}. Corrija o arquivo para delegar.` })
+    if (!current.ok) return reply({ error: `Invalid Pantheon config: ${current.error}. Fix the file to delegate.` })
 
     const all = await ensureJobs(io)
     let cwd = args.cwd ?? ws.sessionCwd
@@ -259,10 +259,10 @@ export const register: Register = on => {
       const target = all.resumeTarget(args.resume)
       if ('error' in target) return reply({ error: target.error })
       if (args.cwd !== undefined && args.cwd !== target.cwd) {
-        return reply({ error: `resume reusa o cwd gravado (${target.cwd}); não aceita cwd novo.` })
+        return reply({ error: `resume reuses the recorded cwd (${target.cwd}); it does not take a new cwd.` })
       }
       if (args.agent !== target.agent) {
-        return reply({ error: `O job ${args.resume} é de ${target.agent}; use agent "${target.agent}" no resume.` })
+        return reply({ error: `Job ${args.resume} belongs to ${target.agent}; use agent "${target.agent}" to resume it.` })
       }
       cwd = target.cwd
       resumeSessionId = target.sessionId
@@ -285,7 +285,7 @@ export const register: Register = on => {
     })
     await persisted()
     if (outcome === 'background') {
-      return reply({ jobId: job.id, status: 'background', note: 'Termina sozinho e avisa a sessão; leia com delegate_result.' })
+      return reply({ jobId: job.id, status: 'background', note: 'Finishes on its own and notifies the session; read it with delegate_result.' })
     }
     return reply({ ...summarize(job), ...(outcome === 'cancelled' ? { note: PARTIAL_NOTE } : {}) })
   }
@@ -526,13 +526,13 @@ export const register: Register = on => {
   on('tool.call', { tool: TOOLS.result }, async (_$, e) => {
     const { jobId } = e as unknown as { jobId: string }
     const job = jobs?.get(jobId)
-    if (!job) return reply({ error: `Job ${jobId} desconhecido nesta sessão.` })
+    if (!job) return reply({ error: `Unknown job ${jobId} in this session.` })
     return reply(summarize(job))
   })
 
   on('tool.call', { tool: TOOLS.cancel }, async (_$, e) => {
     const { jobId } = e as unknown as { jobId: string }
-    if (!jobs) return reply({ error: `Job ${jobId} desconhecido nesta sessão.` })
+    if (!jobs) return reply({ error: `Unknown job ${jobId} in this session.` })
     const done = jobs.cancel(jobId)
     if ('error' in done) return reply({ error: done.error })
     await persisted()
@@ -558,7 +558,7 @@ export const register: Register = on => {
     const [sub, ...rest] = e.args.trim().split(/\s+/).filter(Boolean)
     if (!sub) {
       await $.ui.open({ id: PANE_ID, title: 'Pantheon', focus: true, closeOnEscape: true })
-      return { text: 'Painel do Pantheon aberto.' }
+      return { text: 'Pantheon panel opened.' }
     }
     if (sub === 'close') {
       await $.ui.close({ id: PANE_ID })
@@ -566,9 +566,9 @@ export const register: Register = on => {
     }
     if (sub === 'cancel') {
       const jobId = rest[0]
-      if (!jobId) return { text: 'Uso: /pantheon cancel <jobId>' }
-      const done = jobs ? jobs.cancel(jobId) : { error: `Job ${jobId} desconhecido nesta sessão.` }
-      return { text: 'error' in done ? done.error : `Job ${jobId} cancelado. ${PARTIAL_NOTE}` }
+      if (!jobId) return { text: 'Usage: /pantheon cancel <jobId>' }
+      const done = jobs ? jobs.cancel(jobId) : { error: `Unknown job ${jobId} in this session.` }
+      return { text: 'error' in done ? done.error : `Job ${jobId} cancelled. ${PARTIAL_NOTE}` }
     }
     const ws = await workspace(io)
     const current = await refreshConfig(io, ws.root)
@@ -589,7 +589,7 @@ export const register: Register = on => {
         }),
       }
     }
-    return { text: `Subcomando desconhecido: ${sub}. Use /pantheon, /pantheon close, /pantheon cancel <jobId>, /pantheon config ou /pantheon doctor.` }
+    return { text: `Unknown subcommand: ${sub}. Use /pantheon, /pantheon close, /pantheon cancel <jobId>, /pantheon config or /pantheon doctor.` }
   })
 
   // Last reading of the host clock, kept so a failed read can still draw static durations.

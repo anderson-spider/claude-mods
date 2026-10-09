@@ -17,7 +17,7 @@ describe('workspace', () => {
 
   test('symlink resolving outside root is refused', async () => {
     const stat: StatReal = async path => path === '/repo/link' ? '/etc' : path
-    expect(await checkCwd(stat, '/repo', '/repo/link')).toEqual({ error: expect.stringContaining('fora') })
+    expect(await checkCwd(stat, '/repo', '/repo/link')).toEqual({ error: expect.stringContaining('outside') })
   })
 
   test('a symlink inside root returns the resolved cwd', async () => {
@@ -31,12 +31,12 @@ describe('workspace', () => {
   })
 
   test('prefix trick /repo2 is not inside /repo', async () => {
-    expect(await checkCwd(identity, '/repo', '/repo2/sub')).toEqual({ error: expect.stringContaining('fora') })
+    expect(await checkCwd(identity, '/repo', '/repo2/sub')).toEqual({ error: expect.stringContaining('outside') })
   })
 
   test('resolved parent traversal outside root is refused', async () => {
     const stat: StatReal = async path => path === '/repo/../other' ? '/other' : path
-    expect(await checkCwd(stat, '/repo', '/repo/../other')).toEqual({ error: expect.stringContaining('fora') })
+    expect(await checkCwd(stat, '/repo', '/repo/../other')).toEqual({ error: expect.stringContaining('outside') })
   })
 
   test('trailing separators do not break segment comparison', async () => {

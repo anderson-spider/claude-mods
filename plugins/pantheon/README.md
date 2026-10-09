@@ -38,7 +38,7 @@ The orchestrator gets a system prompt section, adapted from the slim `orchestrat
 - `/pantheon` opens or focuses the panel, which also opens by itself at session start.
 - `/pantheon close` closes the panel.
 - `/pantheon cancel <jobId>`, `/pantheon config` (effective config, where each field came from, current error) and `/pantheon doctor`.
-- The status line shows `pantheon: N rodando · M em background` while jobs are active.
+- The status line shows `pantheon: N running · M in background` while jobs are active.
 
 ## Panel
 

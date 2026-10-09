@@ -440,14 +440,14 @@ describe('register', () => {
     await start($)
     const out = await $.command.run({ command: 'pantheon', args: 'doctor' })
     expect(out.text).toContain('not needed by profile claude')
-    expect(out.text).not.toContain('falha')
+    expect(out.text).not.toContain('fail')
   })
 
   test('delegate refuses while config is invalid', async ($, on) => {
     const { seen } = world(on, { files: { [`${HOME}/.claude/pantheon.json`]: '{ nope' } })
     await start($)
     const out = parse(await $.tool.call({ tool: DELEGATE, agent: 'explorer', prompt: 'x' } as never))
-    expect(String(out.error)).toContain('inválida')
+    expect(String(out.error)).toContain('Invalid Pantheon config')
     expect(seen.argv).toEqual([])
     expect(seen.toasts.length).toBe(1)
   })
@@ -470,7 +470,7 @@ describe('register', () => {
     const { seen } = world(on, { realPaths: { '/repo/link': '/etc' } })
     await start($)
     const out = parse(await $.tool.call({ tool: DELEGATE, agent: 'fixer', prompt: 'x', cwd: '/repo/link' } as never))
-    expect(String(out.error)).toContain('fora')
+    expect(String(out.error)).toContain('outside')
     expect(seen.argv).toEqual([])
   })
 
@@ -478,11 +478,11 @@ describe('register', () => {
     world(on, { stdout: '' , exitCode: 1 })
     await start($)
     const unknown = parse(await $.tool.call({ tool: DELEGATE, agent: 'fixer', prompt: 'x', resume: 'nope' } as never))
-    expect(String(unknown.error)).toContain('desconhecido')
+    expect(String(unknown.error)).toContain('Unknown job')
     const failed = parse(await $.tool.call({ tool: DELEGATE, agent: 'fixer', prompt: 'x' } as never))
     expect(failed.status).toBe('error')
     const again = parse(await $.tool.call({ tool: DELEGATE, agent: 'fixer', prompt: 'y', resume: failed.jobId } as never))
-    expect(String(again.error)).toContain('delegar de novo')
+    expect(String(again.error)).toContain('delegate it again')
   })
 
   test('resume ignores a new cwd and reuses the stored one', async ($, on) => {
@@ -490,7 +490,7 @@ describe('register', () => {
     await start($)
     const first = parse(await $.tool.call({ tool: DELEGATE, agent: 'fixer', prompt: 'x', cwd: '/repo/sub' } as never))
     const moved = parse(await $.tool.call({ tool: DELEGATE, agent: 'fixer', prompt: 'y', resume: first.jobId, cwd: '/repo/other' } as never))
-    expect(String(moved.error)).toContain('cwd gravado')
+    expect(String(moved.error)).toContain('recorded cwd')
     const ok = parse(await $.tool.call({ tool: DELEGATE, agent: 'fixer', prompt: 'y', resume: first.jobId } as never))
     expect(ok.status).toBe('done')
     expect(seen.cwds).toEqual(['/repo/sub', '/repo/sub'])
@@ -514,7 +514,7 @@ describe('register', () => {
     const first = parse(await $.tool.call({ tool: DELEGATE, agent: 'fixer', prompt: 'x', cwd: '/repo/sub' } as never))
     realPaths['/repo/sub'] = '/elsewhere'
     const out = parse(await $.tool.call({ tool: DELEGATE, agent: 'fixer', prompt: 'y', resume: first.jobId } as never))
-    expect(String(out.error)).toContain('fora')
+    expect(String(out.error)).toContain('outside')
     expect(seen.argv.length).toBe(1)
   })
 

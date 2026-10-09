@@ -64,7 +64,7 @@ export function parseEvent(obj: unknown): CodexEvent[] {
     const message = obj.type === 'turn.failed' && isRecord(obj.error)
       ? obj.error.message : obj.message
     return [{ kind: 'failed', error: typeof message === 'string' && message.trim()
-      ? message : `Codex reportou ${obj.type} sem mensagem` }]
+      ? message : `Codex reported ${obj.type} without a message` }]
   }
 
   return []
