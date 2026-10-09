@@ -374,13 +374,13 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     return { text: fmtClock((endAt ?? now) - since), color, bold }
   }
 
-  // The running dot: a solid circle with a ring that grows and fades (SMIL, so the Svg is interactive) on
-  // desktop, one text cell on the terminal. The footprint stays 10x10.
+  // The running dot uses SMIL, drawn as an image: the interactive frame's border clipped the 10px dot
+  // to a square. Desktop keeps a fixed 1.5-column slot like the strip's; terminal uses one text cell.
   const pulseSeg = (key: string): Seg => {
     if (isDesk && el.Svg) {
       const Svg = el.Svg
       const source = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10" width="10" height="10"><circle cx="5" cy="5" r="3" fill="${HEX.green}"/><circle cx="5" cy="5" r="3" fill="none" stroke="${HEX.green}" stroke-width="1"><animate attributeName="r" values="3;5" dur="1.4s" repeatCount="indefinite"/><animate attributeName="opacity" values="0.6;0" dur="1.4s" repeatCount="indefinite"/></circle></svg>`
-      return { node: <Svg key={key} source={source} alt="running" width={10} height={10} isInteractive />, w: 1 }
+      return { node: <Box key={key} width={1.5} flexShrink={0} alignItems="center"><Svg key={`${key}-i`} source={source} alt="running" width={10} height={10} /></Box>, w: 1.5 }
     }
     return { text: '●', color: RUN }
   }

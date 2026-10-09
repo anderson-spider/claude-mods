@@ -312,7 +312,7 @@ function drawDesktopBox(elements: any, input: BoxInput): unknown {
   const hasContent = Boolean(cur.model) || contextData.readings.length > 0 || gauges.length > 0 || turnData.last !== null || turnData.usd !== null || input.agents.length > 0
   if (!hasContent) return null
   const runsBox = (key: string, runs: Run[]) => Box({ key, flexShrink: 0, children: runs.map((part, j) => textOf(Text, part, j)) })
-  const image = (key: string, source: string, w: number, h: number, alt: string, isInteractive = false) => Svg({ key, source, width: w, height: h, alt, ...(isInteractive ? { isInteractive: true } : {}) })
+  const image = (key: string, source: string, w: number, h: number, alt: string) => Svg({ key, source, width: w, height: h, alt })
   // A fixed-width cell for an Svg: the picture is in CSS px, the Box in cells.
   const slot = (key: string, cells: number, child: unknown) => Box({ key, width: cells, flexShrink: 0, alignItems: 'center', children: [child] })
   const cellsOf = (px: number) => Math.ceil(px / COL_PX)
@@ -320,9 +320,9 @@ function drawDesktopBox(elements: any, input: BoxInput): unknown {
   // ---- row 1: the session
   const items: Item[] = []
   const status = input.isWorking
-    ? { cells: 11, node: Box({ key: 's-state', flexShrink: 0, alignItems: 'center', gap: 0.5, children: [Svg ? slot('s-dot', 1.5, image('s-dot-i', PULSE(DESK_TONE.calm), 10, 10, 'working', true)) : textOf(Text, run('●', DESK_TONE.calm), 0), textOf(Text, run('working', DESK_TONE.calm, { bold: true }), 1)] }) }
+    ? { cells: 11, node: Box({ key: 's-state', flexShrink: 0, alignItems: 'center', gap: 0.5, children: [Svg ? slot('s-dot', 1.5, image('s-dot-i', PULSE(DESK_TONE.calm), 10, 10, 'working')) : textOf(Text, run('●', DESK_TONE.calm), 0), textOf(Text, run('working', DESK_TONE.calm, { bold: true }), 1)] }) }
     : { cells: 7, node: Box({ key: 's-state', flexShrink: 0, alignItems: 'center', gap: 0.5, children: [Svg ? slot('s-dot', 1.5, image('s-dot-i', RING(DIM), 8, 8, 'idle')) : textOf(Text, run('○', DIM), 0), textOf(Text, run('idle', DIM), 1)] }) }
-  const dotOnly = Svg ? slot('s-dot', 1.5, image('s-dot-i', input.isWorking ? PULSE(DESK_TONE.calm) : RING(DIM), input.isWorking ? 10 : 8, input.isWorking ? 10 : 8, input.isWorking ? 'working' : 'idle', input.isWorking)) : textOf(Text, run(input.isWorking ? '●' : '○', input.isWorking ? DESK_TONE.calm : DIM), 0)
+  const dotOnly = Svg ? slot('s-dot', 1.5, image('s-dot-i', input.isWorking ? PULSE(DESK_TONE.calm) : RING(DIM), input.isWorking ? 10 : 8, input.isWorking ? 10 : 8, input.isWorking ? 'working' : 'idle')) : textOf(Text, run(input.isWorking ? '●' : '○', input.isWorking ? DESK_TONE.calm : DIM), 0)
   items.push({ ...status, drop: 5, alt: { cells: 2, node: dotOnly } })
   if (cur.model) {
     const label = run(modelLabel(cur.model), ACCENT, { bold: true })

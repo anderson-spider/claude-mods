@@ -351,7 +351,7 @@ test("desktop strip (HUD C): one native rounded Box with a session row, side-by-
   expect(bar5h.width % 1).toBe(0);
   expect(pictures.some(p => p.alt.startsWith("context"))).toBe(true);
   const dot = pictures.find(p => p.alt === "working");
-  expect(dot.isInteractive).toBe(true);
+  expect(dot.isInteractive).toBeUndefined();
   expect(dot.source).toContain("<animate");
 });
 
