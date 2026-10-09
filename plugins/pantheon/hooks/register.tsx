@@ -1,5 +1,4 @@
 import { atom, read, update } from 'claude-code'
-import { COLS, ROWS } from './clawd'
 import type { AgentSpec, ProcessRunInit, ProcessRunResult, Register } from 'claude-code'
 
 import type { Job, Native, SessionInfo } from '../types'
@@ -736,9 +735,9 @@ export const register: Register = (on, options) => {
       ...(hasClient ? {
         // The module paths are literals here: the engine reads them off this entry module.
         clock: ({ key, props }) => <els.Client key={key} module="./elapsed.tsx" width={6} props={props} />,
-        // Both terminal placements use the same compact mascot.
+        // The rail links the cards on both surfaces; it moves only while something works.
         ...(isClockLost ? {} : {
-          mascot: ({ key, props }) => <els.Client key={key} module="./mascot.tsx" width={COLS} height={ROWS} props={props} />,
+          rail: ({ key, width, props }) => <els.Client key={key} module="./rail.tsx" width={width} height={1} props={props} />,
         }),
       } : {}),
     } as never, {
