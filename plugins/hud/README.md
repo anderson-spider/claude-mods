@@ -27,7 +27,7 @@ Labels are in English (en-US).
 
 ## Next steps
 
-After each answer, the mod asks the session's own model (a fork that shares the prompt cache, so it costs about one short reply) for up to three prompts you are likely to type next, and draws them above the usage line:
+After each answer, the mod asks Haiku, given only your last prompt and Claude's last answer (so the cost does not grow with the session), for up to three prompts you are likely to type next, and draws them above the usage line. A setting switches back to a fork of the whole session in its own model:
 
 ```
 next:
@@ -43,13 +43,14 @@ next:
 - The block goes away while Claude works, when a new turn starts and during a survey. It draws in the terminal and in the app.
 - Layout, top to bottom: what other mods draw above the prompt (the order changed: they used to sit below the usage line), the suggestions, a blank line, the three rows of the band, then the prompt. The band stays next to the prompt however the block comes and goes.
 - **Shortest answer to suggest after** (`minAnswerChars`, 80): no suggestions after a shorter answer.
-- **Suggest skills and slash commands** (`suggestSkills`, on): tell the fork which skills and slash commands the session has, so a suggestion can be one of them.
+- **Model for suggestions** (`suggestionModel`, `haiku`): `haiku` asks Haiku with the last prompt, the last answer and the skill list; it is cheap whatever the session size but does not see earlier turns. `fork` asks a fork of the session in its own model: it sees the whole conversation and reuses the prompt cache, so it is cheap only while the cache is warm.
+- **Suggest skills and slash commands** (`suggestSkills`, on): tell the suggester which skills and slash commands the session has, so a suggestion can be one of them.
 
 This replaces the community `next-steps` plugin: turn that one off in `/plugin`, or you get two blocks.
 
 ## Privacy
 
-No personal data collected, sent or retained, no network requests of its own. The suggestions are one more request to the session's own model (the fork), carrying the conversation already in the session and the names and descriptions of its skills; nothing else leaves the machine. The mod reads the usage figures Claude Code provides (context, limits, session cost, each request's cache token counts), the list of the session's subagents, the locale variables and the prompt-cache switches, and keeps in the plugin's local storage the latest limits reading and, per session, recent context readings, the last request's cache figures, what the cache saved in the session and the last prompt's cost (deleted after 8 idle days).
+No personal data collected, sent or retained, no network requests of its own. The suggestions are one more model request made through Claude Code: to Haiku, carrying your last prompt (up to 3000 characters), Claude's last answer (up to 6000) and the names and descriptions of the session's skills; or, with `suggestionModel` set to `fork`, a fork of the session's own model, carrying the conversation already in the session and the same skill list. Nothing else leaves the machine. The mod reads the usage figures Claude Code provides (context, limits, session cost, each request's cache token counts), the list of the session's subagents, the locale variables and the prompt-cache switches, and keeps in the plugin's local storage the latest limits reading and, per session, recent context readings, the last request's cache figures, what the cache saved in the session and the last prompt's cost (deleted after 8 idle days).
 
 ## Credits and license
 
@@ -58,6 +59,7 @@ HUD is built on the work of others, adapted or used as the idea:
 - **Token Weather**, by Anthropic ([claude-code-playground](https://github.com/anthropics/claude-code-playground), Apache-2.0): the weather icons, the context tokens and the turns chart.
 - **Token Weather Usage** 3.10.7, by Eric Cologni ([augiefra/claude-mods](https://github.com/augiefra/claude-mods/tree/main/plugins/token-weather-usage), Apache-2.0): the base of this plugin, which was named `token-weather-usage` until 1.0.0. The changes from it are listed in the [NOTICE](NOTICE).
 - **next-steps** 1.0.0, by Thariq Shihipar (claude-community marketplace, MIT): the suggested next prompts (the fork, the text cleaning, the skill list and the buttons), with each suggestion written directly to the prompt box as a draft.
+- **next-steps** 1.3.1, by Pawandeep ([pawandeepdhall/claude-mods](https://github.com/pawandeepdhall/claude-mods/tree/main/plugins/next-steps), MIT): the idea of asking Haiku with only the last prompt and answer, written again without copying its code.
 - **usage-meter**, by HolyGrail ([HolyGrail/claude-mods](https://github.com/HolyGrail/claude-mods/tree/main/plugins/usage-meter)): the idea of the limit gauges, written again without copying its code.
 - **prompt-cache-control**, by Daniel San ([davila7/claude-code-templates](https://github.com/davila7/claude-code-templates), MIT): the idea of the cache block, written again without copying its code.
 

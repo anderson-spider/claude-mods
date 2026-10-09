@@ -42,6 +42,7 @@ export function register(on, options) {
   limitData.paceStart = paceStartOf(options?.paceStart);
   suggestionData.minAnswerChars = typeof options?.minAnswerChars === "number" ? options.minAnswerChars : 80;
   suggestionData.suggestSkills = options?.suggestSkills !== false && options?.suggestSkills !== "false";
+  suggestionData.model = options?.suggestionModel === "fork" ? "fork" : "haiku";
 
   on("session.start", async ($, e, next) => {
     hudData.ticker?.cancel();
@@ -50,6 +51,7 @@ export function register(on, options) {
     limitData.reading = freshLimits();
     Object.assign(cacheData, freshCache());
     suggestionData.current = freshSuggestions();
+    suggestionData.lastRequest = "";
     Object.assign(infoData, freshInfo());
     await refreshInfo($);
     cacheData.env = await cacheEnvOf($);
@@ -116,6 +118,11 @@ export function register(on, options) {
       $.ui.invalidate("ui.render");
     }
     return result;
+  });
+
+  on("prompt.submit", async ($, e, next) => {
+    suggestionData.lastRequest = e.text;
+    return next(e);
   });
 
   // A new turn of the conversation hides what was offered; a subagent's turn does not.
@@ -199,6 +206,7 @@ function startSuggestions($, e) {
     show: (next) => showSuggestions($, next),
     commands: () => $.command.list(),
     fork: (request) => $.model.fork(request),
+    complete: (request) => $.model.complete(request),
     log: (text) => $.ui.log(text),
     suggest: (request) => $.prompt.suggest(request),
   }, e);
