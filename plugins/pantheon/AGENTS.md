@@ -15,10 +15,10 @@ IMPORTANT: prompts and panel modules include third-party work. Keep `LICENSE` an
 ## Config and profiles
 
 - `config.ts` resolves built-in, `~/.claude/pantheon.json` and `<repo>/.claude/pantheon.json` layers. Top-level `profile` selects the profile, `profiles` holds engine/model/effort, and prompts and sandbox settings stay at the top level.
-- The project selection overrides the user selection. `sandboxCap` and `noNetwork` merge to the most restrictive, and Codex role sandboxes can only narrow from their defaults.
+- The project selection overrides the user selection, and the `/config` selection overrides both. `sandboxCap` and `noNetwork` merge to the most restrictive, and Codex role sandboxes can only narrow from their defaults.
 - Legacy engine/model/effort fields under top-level roles and seats are rejected with migration paths. A top-level `model` stays an unknown field.
 - `models.ts` validates engine/model pairs across every merged profile.
-- The active profile is also a `userConfig` field (`pantheon.profile`, shown in `/config`). `register` passes `options.profile` to `loadConfig` as the lowest explicit layer (origin `settings`). A `config.set` hook refuses names outside the profiles the JSON layers define, and any change while the JSON is invalid. The panel selector (`pane.tsx`, locked when a JSON layer sets `profile`) calls `$.config.set` on the same field.
+- The active profile is also a `userConfig` field (`pantheon.profile`, shown in `/config`). `register` passes a non-empty `options.profile` to `loadConfig`, applied after the JSON layers so it overrides their `profile` (origin `settings`); the field has no default, so unset means the JSON layers decide. A `config.set` hook refuses names outside the profiles the JSON layers define, and any change while the JSON is invalid. The panel selector (`pane.tsx`, locked only while a JSON layer sets `profile` and `/config` has none) calls `$.config.set` on the same field.
 
 ## Tracking and state
 
@@ -34,7 +34,7 @@ IMPORTANT: prompts and panel modules include third-party work. Keep `LICENSE` an
 
 ## Panel
 
-The panel opens at session start. `/pantheon close` closes it; `cancel <jobId>`, `config` and `doctor` keep their existing behavior. There is no panel configuration; rate limits, repository, branch and cache stay in hud.
+The panel opens at session start. `/pantheon close` closes it; `cancel <jobId>`, and `config` keep their existing behavior. `doctor` also pings every role and seat (`ping.ts` plans the targets and formats the section; `register.tsx` runs the Codex pings and queues the session prompt for the native ones with `io.after(0, …)`, because the host refuses `prompt.submit` while a `command.run` hook runs). There is no panel configuration; rate limits, repository, branch and cache stay in hud.
 
 - `pane.tsx` draws the Agents and Jobs tabs. Jobs keeps its read-only "Claude agent rounds" group.
 - Desktop: HUD-colored segments with static SVG backplates, native text and buttons, fixed numeric slots, identity-first agent rows with a mascot each, and a pane-width "Last 15 minutes" SVG timeline.

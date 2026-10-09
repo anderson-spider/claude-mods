@@ -29,14 +29,20 @@ describe('profiles', () => {
     expect(valid(await load({}, undefined, 'claude')).origins.profile).toBe('settings')
   })
 
-  test('user JSON overrides the settings profile', async () => {
+  test('the settings profile overrides the user JSON', async () => {
     const result = valid(await load({ profile: 'mixed' }, undefined, 'codex'))
-    expect(result.config.profile).toBe('mixed')
-    expect(result.origins.profile).toBe('user')
+    expect(result.config.profile).toBe('codex')
+    expect(result.origins.profile).toBe('settings')
   })
 
-  test('project JSON overrides the user and settings profiles', async () => {
+  test('the settings profile overrides the user and project JSON', async () => {
     const result = valid(await load({ profile: 'mixed' }, { profile: 'claude' }, 'codex'))
+    expect(result.config.profile).toBe('codex')
+    expect(result.origins.profile).toBe('settings')
+  })
+
+  test('without a settings profile the project JSON overrides the user JSON', async () => {
+    const result = valid(await load({ profile: 'mixed' }, { profile: 'claude' }))
     expect(result.config.profile).toBe('claude')
     expect(result.origins.profile).toBe('project')
   })
@@ -48,9 +54,8 @@ describe('profiles', () => {
     expect(result.config).toBe(DEFAULT_CONFIG)
   })
 
-  test('JSON may override an unknown settings profile', async () => {
-    expect(valid(await load({ profile: 'codex' }, undefined, 'nope')).config.profile).toBe('codex')
-    expect(valid(await load({}, { profile: 'mixed' }, 'nope')).config.profile).toBe('mixed')
+  test('an unknown settings profile is rejected even when JSON selects another', async () => {
+    expect(rejected(await load({ profile: 'codex' }, undefined, 'nope'))).toBe('profile: unknown profile "nope"; known: claude, codex, mixed')
   })
 
   test('profiles list built-in and merged custom names once', async () => {

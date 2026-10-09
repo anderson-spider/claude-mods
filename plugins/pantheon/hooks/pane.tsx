@@ -5,6 +5,7 @@ import type { Mood } from './clawd.ts'
 import type { MascotProps } from './mascot.tsx'
 import { ago } from './roster'
 import type { Engine, Instance, Roster, RoundView, Slot, SlotName } from './roster'
+import type { PingResult } from './ping'
 import type { ConfigResult, Job, PanelGroup, SessionInfo } from './types'
 
 export const PANE_ID = 'pantheon'
@@ -47,11 +48,12 @@ export type DoctorFacts = {
   config: ConfigResult
   root: string
   isRepo: boolean
+  pings?: PingResult[]
 }
 
 export function doctorReport(facts: DoctorFacts): string {
   const mark = (ok: boolean) => (ok ? 'ok  ' : 'fail')
-  return [
+  const lines = [
     !facts.usesCodex && !facts.codexVersion
       ? `info codex on PATH — not needed by profile ${facts.profile}`
       : `${mark(!!facts.codexVersion)} codex on PATH${facts.codexVersion ? `: ${facts.codexVersion}` : ' — install the Codex CLI'}`,
@@ -60,7 +62,20 @@ export function doctorReport(facts: DoctorFacts): string {
       : `${mark(facts.loginOk)} codex login status${facts.loginStatus ? `: ${facts.loginStatus}` : ''}`,
     `${mark(facts.config.ok)} config${facts.config.ok ? '' : `: ${facts.config.error}`}`,
     `${mark(true)} authorized root: ${facts.root}${facts.isRepo ? '' : ' (outside a git repository: --skip-git-repo-check)'}`,
-  ].join('\n')
+  ]
+  if (facts.pings) {
+    lines.push('', 'ping')
+    for (const p of facts.pings) {
+      const who = `${p.name} (${p.engine}${p.model ? ` ${p.model}` : ''})`
+      lines.push(
+        p.state === 'off' ? `info ${p.name} off`
+          : p.state === 'pending' ? `pending ${who} — the session confirms`
+          : p.state === 'ok' ? `${mark(true)} ${who}${p.ms === undefined ? '' : ` ${(p.ms / 1000).toFixed(1)}s`}`
+          : `${mark(false)} ${who}${p.detail ? `: ${p.detail}` : ''}`,
+      )
+    }
+  }
+  return lines.join('\n')
 }
 
 // ---------------------------------------------------------------- drawing

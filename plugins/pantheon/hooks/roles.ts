@@ -16,7 +16,7 @@ function isNativeRole(config: PantheonConfig, name: string): name is Role {
   return isRole(name) && config.agents[name].engine === 'claude'
 }
 
-function seatDisabled(config: PantheonConfig, seat: string): boolean {
+export function seatDisabled(config: PantheonConfig, seat: string): boolean {
   return config.disabledAgents.includes('council') ||
     config.disabledAgents.includes(`councillor:${seat}`) ||
     config.disabledAgents.includes(`councillor-${seat}`)

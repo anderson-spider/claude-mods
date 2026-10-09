@@ -30,6 +30,26 @@ test('doctor treats unavailable Codex as informational only when unused', async 
   expect(doctorReport({ ...facts, usesCodex: true })).toContain('fail')
 })
 
+test('doctor report adds a ping section only when pings are given', async () => {
+  const config = await loadConfig(async () => '{"profile":"mixed"}', { user: 'fixture' })
+  const facts = { usesCodex: true, profile: 'mixed', loginOk: true, config, root: '/repo', isRepo: true }
+  expect(doctorReport(facts)).not.toContain('ping')
+  const report = doctorReport({
+    ...facts,
+    pings: [
+      { name: 'explorer', engine: 'codex', model: 'gpt-6-luna', state: 'ok', ms: 1200 },
+      { name: 'oracle', engine: 'codex', model: 'gpt-6-luna', state: 'fail', detail: 'timeout' },
+      { name: 'fixer', engine: 'claude', model: 'sonnet', state: 'pending' },
+      { name: 'designer', engine: 'claude', state: 'off' },
+    ],
+  }).split('\n')
+  expect(report).toContain('ping')
+  expect(report).toContain('ok   explorer (codex gpt-6-luna) 1.2s')
+  expect(report).toContain('fail oracle (codex gpt-6-luna): timeout')
+  expect(report).toContain('pending fixer (claude sonnet) — the session confirms')
+  expect(report).toContain('info designer off')
+})
+
 type Opts = { placement?: 'dock' | 'inline'; columns?: number; rows?: number; bodyRows?: number; requestId?: string }
 
 const mounted: { unmount: () => Promise<unknown> }[] = []
@@ -1097,7 +1117,8 @@ describe('pane', () => {
     expect(out.text).toContain('codex-cli 9.9.9')
     expect(out.text).toContain('Logged in')
     expect(out.text).toContain('authorized root: /repo')
-    expect(out.text).not.toContain('fail')
+    // The ping section is covered in register.test.ts.
+    expect(out.text.split('\nping')[0]).not.toContain('fail')
   })
 
   t('/pantheon cancel without id shows usage', async ($, on) => {
