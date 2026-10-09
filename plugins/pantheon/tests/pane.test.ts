@@ -9,7 +9,7 @@ import { buildRoster } from '../hooks/roster'
 import { BAD, OK, ROLE_COLOR, SECTION_COLOR, cellWidth } from '../hooks/theme'
 import type { Slot } from '../hooks/roster'
 import { MIXED } from './fixtures/profiles'
-import type { Job, Native, SessionInfo } from '../hooks/types'
+import type { Job, Native, PanelView, SessionInfo } from '../hooks/types'
 
 const SURFACES = ['terminal', 'desktop'] as const
 const rgba = (hex: string, a: number) => `rgba(${[1, 3, 5].map(k => parseInt(hex.slice(k, k + 2), 16)).join(',')},${a})`
@@ -86,7 +86,7 @@ function command($: Engine, args: string) {
 }
 
 // Serves the draw-time state reads, standing for what tracking and the jobs would have written.
-function seed(on: On, data: { jobs?: Job[]; natives?: Native[]; session?: SessionInfo }) {
+function seed(on: On, data: { jobs?: Job[]; natives?: Native[]; session?: SessionInfo; view?: PanelView }) {
   on('state.get', async (_$, e, next) => {
     const value = data[e.key as keyof typeof data]
     return value === undefined ? next(e) : ({ value: { value, version: 1 } } as never)
@@ -476,7 +476,7 @@ describe('pane', () => {
     expect(String((await props('idle-rows')).borderColor)).toMatch(/^#/)
     const svgs = (await ui.findAll({ type: 'Svg' })).map(n => (n as unknown as { props: { alt: string; source: string; width: number; height: number; isInteractive?: boolean } }).props)
     expect(svgs.some(p => p.alt === 'card background')).toBe(false)
-    expect(await props('pill-toggle-idle')).toMatchObject({ width: 12.5, borderStyle: 'round', alignItems: 'center' })
+    expect(await ui.find({ key: 'toggle-idle' })).toBeUndefined()
     expect(await ui.find({ key: 'idle-explorer' })).toBeDefined()
     expect((await texts(ui)).filter(x => x === '—')).toHaveLength(4) // only the Session readings; a role that never ran leaves its time and task blank
     expect((await texts(ui)).some(t => t.includes('▎') || t.includes('━'))).toBe(false)
@@ -500,15 +500,18 @@ describe('pane', () => {
     }
   })
 
-  t('desktop: the Collapse button sits in the card title row, not on the border', async ($, on) => {
+  t('desktop: the header rows and the cards are spaced, and no group can be folded', async ($, on) => {
     world(on)
+    seed(on, { ...busy(), view: { collapsed: ['running', 'idle'] } })
     await start($)
-    const ui = await mountPane($, 'desktop', { columns: 86, rows: 70 })
-    const row = await ui.find({ key: 'idle-rows-title' }) as unknown as { props: Record<string, unknown> } | undefined
-    expect(row).toBeDefined()
-    expect(row!.props.position).toBeUndefined()
-    const toggle = await ui.find({ key: 'idle-rows-toggle' }) as unknown as { props: Record<string, unknown> }
-    expect(toggle.props.position).toBeUndefined()
+    const ui = await mountPane($, 'desktop', { columns: 86, rows: 80 })
+    const props = async (key: string) => (await ui.find({ key }) as unknown as { props: Record<string, unknown> }).props
+    expect(await props('header')).toMatchObject({ gap: 0.5, marginBottom: 1 })
+    for (const key of ['session', 'running-rows', 'idle-rows']) expect((await props(key)).marginBottom).toBe(1)
+    const labels = (await ui.findAll({ type: 'Button' })).map(b => String((b as unknown as { props: { label?: string } }).props.label))
+    expect(labels).not.toContain('Collapse')
+    expect(labels).not.toContain('Expand')
+    expect(await texts(ui)).toContain('map') // a fold stored from the terminal does not hide rows on desktop
   })
 
   t('desktop: idle role names stay readable and the Agents footer counts and pluralizes', async ($, on) => {
@@ -521,6 +524,13 @@ describe('pane', () => {
     const all = await texts(ui)
     expect(all).toContain('agents')
     expect(all).toContain('9') // the orchestrator plus the eight rows of the Agents card
+  })
+
+  t('desktop: a long model name is shown whole in the agent rows', async ($, on) => {
+    world(on)
+    seed(on, { jobs: [job({ id: 'f1', agent: 'fixer', status: 'done', model: 'gpt-6-astral-mini', endedAt: NOW - 1000 })] })
+    await start($)
+    expect(await texts(await mountPane($, 'desktop', { columns: 86, rows: 70 }))).toContain('GPT-6-astral-mini')
   })
 
   t('desktop session, groups and timeline share the pane inset and resize with columns', async ($, on) => {
@@ -736,7 +746,7 @@ describe('pane', () => {
       })
       inner = total + height
     }
-    return (n.props?.height ?? inner + (n.props?.borderStyle ? 0.1 : 0)) + (n.props?.marginTop ?? 0)
+    return (n.props?.height ?? inner + (n.props?.borderStyle ? 0.1 : 0)) + (n.props?.marginTop ?? 0) + (n.props?.marginBottom ?? 0)
   }
   const rowsOf = (n: Node): number => {
     if ((n.key ?? n.props?.key) === 'pantheon-desktop') return desktopRows(n)
@@ -765,7 +775,7 @@ describe('pane', () => {
     seed(on, busy())
     await start($)
     for (const surface of SURFACES) {
-      for (const [columns, rows] of [[70, 3], [70, 6], [70, 9], [70, 12], [70, 16], [70, 24], [70, 40], [70, 70], [40, 10], [40, 20], [20, 12], [8, 12], [120, 30]] as const) {
+      for (const [columns, rows] of [[70, 3], [70, 5], [70, 6], [70, 7], [70, 9], [70, 12], [70, 16], [70, 24], [70, 40], [70, 70], [40, 10], [40, 20], [20, 12], [8, 12], [120, 30]] as const) {
         const ui = await mountPane($, surface, { columns, rows })
         const height = rowsOf((await ui.drawn()) as Node)
         expect({ surface, columns, rows, fits: height <= rows, height }).toEqual({ surface, columns, rows, fits: true, height })
@@ -796,9 +806,11 @@ describe('pane', () => {
       const all = await texts(tall)
       expect(all.filter(x => x.startsWith('finished designer '))).toEqual(['finished designer 3'])
       expect(await tall.find({ key: 'idle-designer' })).toBeDefined()
-      await tall.press({ key: 'toggle-idle' })
-      expect((await texts(tall)).some(x => x.startsWith('finished designer '))).toBe(false)
-      await tall.press({ key: 'toggle-idle' })
+      if (surface === 'terminal') { // desktop has no fold button
+        await tall.press({ key: 'toggle-idle' })
+        expect((await texts(tall)).some(x => x.startsWith('finished designer '))).toBe(false)
+        await tall.press({ key: 'toggle-idle' })
+      }
       await release()
       const short = await mountPane($, surface, { rows: 12 })
       expect(await texts(short)).toContain('Agents · idle')
