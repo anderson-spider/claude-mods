@@ -9,10 +9,14 @@ update:
 	claude plugin marketplace update $(MARKETPLACE)
 	@claude plugin list --json | node -e ' \
 		const list = JSON.parse(require("fs").readFileSync(0, "utf8")); \
-		for (const p of list) if (p.id.endsWith("@$(MARKETPLACE)")) console.log(p.id, p.scope); \
+		const names = JSON.parse(require("fs").readFileSync(".claude-plugin/marketplace.json", "utf8")).plugins.map(p => p.name); \
+		for (const p of list) if (p.id.endsWith("@$(MARKETPLACE)")) { \
+			if (names.includes(p.id.split("@")[0])) console.log(p.id, p.scope); \
+			else console.error("skip: " + p.id + " is no longer in the marketplace; uninstall it"); \
+		} \
 	' | while read -r id scope; do \
 		echo "==> $$id ($$scope)"; \
-		claude plugin update "$$id" --scope "$$scope" </dev/null || echo "skip: $$id (not in the marketplace?)"; \
+		claude plugin update "$$id" --scope "$$scope" </dev/null || exit 1; \
 	done
 
 # Validates the marketplace, every plugin, and that the manifests agree.

@@ -14,7 +14,7 @@
     },
     "abovePrompt": {
       "type": "boolean",
-      "title": "Strip above the prompt",
+      "title": "Above-prompt strip",
       "description": "Shows the info, usage and limits rows above the prompt, plus a summary of the roles running now. Turn it off to hide the strip.",
       "default": true
     },

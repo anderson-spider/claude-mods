@@ -38,7 +38,7 @@ The panel opens at session start. `/pantheon close` closes it; `cancel <jobId>`,
 
 - `pane.tsx` draws the Agents view only (no tabs); a running Codex row carries Cancel, wired to the instance's `jobId`.
 - Desktop: segments in the former hud plugin's colors with static SVG backplates, native text and buttons, fixed numeric slots, identity-first agent rows, a card per section with a colored border, and a pane-width "Last 15 minutes" SVG timeline, then a "Session log" card built by `log.ts` from the roster (no hook or persisted state of its own).
-- Docked and inline mini: bordered cards per section (colored border), task-first rows and an animated rail.
+- Docked and inline mini: bordered cards per section (colored border) and task-first rows; docked adds the animated rail, mini has none.
 - `rail.tsx` and `elapsed.tsx` are surface modules for the animated rail (110 ms frames, only while there is active work) and live clocks. `theme.ts` holds the shared palette, section and role colors and cell helpers.
 
 ## Above-prompt strip
