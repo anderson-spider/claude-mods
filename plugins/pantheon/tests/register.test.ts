@@ -334,6 +334,98 @@ describe('register', () => {
     expect(seen.cwds[0]).toBe(ROOT)
   })
 
+  test('absent user config registers default Claude roles and refuses Codex delegation', async ($, on) => {
+    const { seen, files } = world(on)
+    on('agent.offer', async () => ({ isOffered: true }))
+    delete files[`${HOME}/.claude/pantheon.json`]
+    await start($)
+    expect(seen.agents).toEqual(['explorer', 'librarian', 'fixer', 'oracle', 'designer', 'councillor-alpha', 'councillor-beta'])
+    const out = parse(await $.tool.call({ tool: DELEGATE, agent: 'explorer', prompt: 'find x' } as never))
+    expect(out.error).toBe('Use pantheon:explorer through the Agent tool.')
+    expect(seen.argv).toEqual([])
+    expect((await $.agent.offer({ agent: 'pantheon:explorer', description: '', source: 'plugin', provider: { plugin: 'pantheon', tier: 'user' } } as never)).isOffered).toBe(true)
+  })
+
+  test('codex profile delegates oracle without registering it natively', async ($, on) => {
+    const { seen } = world(on, { files: { [`${HOME}/.claude/pantheon.json`]: '{"profile":"codex"}' } })
+    await start($)
+    const out = parse(await $.tool.call({ tool: DELEGATE, agent: 'oracle', prompt: 'review x' } as never))
+    expect(out.status).toBe('done')
+    expect(seen.argv.length).toBe(1)
+    expect(seen.argv[0].slice(0, 5)).toEqual(['codex', 'exec', '--json', '-s', 'read-only'])
+    expect(seen.agents).not.toContain('oracle')
+  })
+
+  test('profile switches hide native explorer, delegate it on Codex and re-register it on Claude', async ($, on) => {
+    const { seen, files } = world(on, { files: { [`${HOME}/.claude/pantheon.json`]: '{"profile":"claude"}' } })
+    on('agent.offer', async () => ({ isOffered: true }))
+    on('turn.start', async (_$, e) => ({ turnId: e.turnId }))
+    on('prompt.compose', async () => ({ sections: [] }))
+    const offer = () => $.agent.offer({ agent: 'pantheon:explorer', description: '', source: 'plugin', provider: { plugin: 'pantheon', tier: 'user' } } as never)
+    const turn = async (turnId: string) => {
+      await $.turn.start({ text: 'Go', turnId })
+      await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: [], tools: [], outputStyle: null, traits: [] } as never)
+    }
+    await start($)
+    expect((await offer()).isOffered).toBe(true)
+    expect(seen.agents.filter(agent => agent === 'explorer').length).toBe(1)
+    files[`${HOME}/.claude/pantheon.json`] = '{"profile":"codex"}'
+    await turn('codex-turn')
+    expect((await offer()).isOffered).toBe(false)
+    const out = parse(await $.tool.call({ tool: DELEGATE, agent: 'explorer', prompt: 'find x' } as never))
+    expect(out.status).toBe('done')
+    expect(seen.argv.length).toBe(1)
+    expect(seen.argv[0].slice(0, 5)).toEqual(['codex', 'exec', '--json', '-s', 'read-only'])
+    files[`${HOME}/.claude/pantheon.json`] = '{"profile":"claude"}'
+    await turn('claude-turn')
+    expect((await offer()).isOffered).toBe(true)
+    expect(seen.agents.filter(agent => agent === 'explorer').length).toBe(2)
+  })
+
+  test('resume refuses a finished fixer job after its engine changes to Claude', async ($, on) => {
+    const { seen, files } = world(on)
+    await start($)
+    const first = parse(await $.tool.call({ tool: DELEGATE, agent: 'fixer', prompt: 'x' } as never))
+    expect(first.status).toBe('done')
+    files[`${HOME}/.claude/pantheon.json`] = '{"profile":"claude"}'
+    const out = parse(await $.tool.call({ tool: DELEGATE, agent: 'fixer', resume: first.jobId, prompt: 'x' } as never))
+    expect(out.error).toBe('Use pantheon:fixer through the Agent tool.')
+    expect(seen.argv.length).toBe(1)
+  })
+
+  test('tool descriptions are generic across profiles', async ($, on) => {
+    // Replace the fixture's terminal tool.register handler so the registration payload is observable.
+    world(new Proxy(on, {
+      apply(target, thisArg, args) {
+        if (args[0] !== 'tool.register') return Reflect.apply(target, thisArg, args)
+      },
+    }))
+    const descriptions: Record<string, string> = {}
+    let agentDescription: unknown
+    on('tool.register', async (_$, e) => {
+      descriptions[e.name] = e.description
+      if (e.name === 'delegate') agentDescription = (e.inputSchema as { properties: { agent: { description: string } } }).properties.agent.description
+      return { value: { tool: `mcp__pantheon__${e.name}` } }
+    })
+    await start($)
+    expect(descriptions.delegate).not.toContain('explorer, librarian, fixer')
+    expect(descriptions.delegate).toContain('Run a Pantheon role or council seat currently on Codex on a task')
+    expect(descriptions.delegate_result).toContain('a Pantheon role or council seat currently on Codex')
+    expect(descriptions.delegate_cancel).toContain('a Pantheon role or council seat currently on Codex')
+    expect(agentDescription).toBe('A role or councillor:<seat> currently on Codex.')
+  })
+
+  test('doctor under Claude without Codex reports it is not needed', async ($, on) => {
+    world(on, {
+      files: { [`${HOME}/.claude/pantheon.json`]: '{"profile":"claude"}' },
+      runs: { 'codex --version': { exitCode: 127, stderr: 'codex: command not found' } },
+    })
+    await start($)
+    const out = await $.command.run({ command: 'pantheon', args: 'doctor' })
+    expect(out.text).toContain('not needed by profile claude')
+    expect(out.text).not.toContain('falha')
+  })
+
   test('delegate refuses while config is invalid', async ($, on) => {
     const { seen } = world(on, { files: { [`${HOME}/.claude/pantheon.json`]: '{ nope' } })
     await start($)
@@ -455,7 +547,7 @@ describe('register', () => {
     on('prompt.compose', async () => ({ sections: [] }))
     await start($)
     expect(seen.agents.length).toBe(3)
-    files[`${HOME}/.claude/pantheon.json`] = JSON.stringify({ agents: { oracle: { model: 'sonnet' } } })
+    files[`${HOME}/.claude/pantheon.json`] = JSON.stringify({ profile: 'mixed', profiles: { mixed: { agents: { oracle: { model: 'sonnet' } } } } })
     await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: [], tools: [], outputStyle: null, traits: [] } as never)
     expect(seen.agents.length).toBe(6)
     files[`${HOME}/.claude/pantheon.json`] = '{ broken'
@@ -502,7 +594,7 @@ describe('register', () => {
   test('invalid first config still registers the default native agents', async ($, on) => {
     const { seen } = world(on, { files: { [`${HOME}/.claude/pantheon.json`]: '{ nope' } })
     await start($)
-    expect(seen.agents).toEqual(['oracle', 'designer', 'councillor-beta'])
+    expect(seen.agents).toEqual(['explorer', 'librarian', 'fixer', 'oracle', 'designer', 'councillor-alpha', 'councillor-beta'])
   })
 
   test('a failed native registration is retried on the next turn', async ($, on) => {

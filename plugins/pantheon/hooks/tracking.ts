@@ -1,4 +1,5 @@
 import type { Native, Round, RoundStatus, SessionInfo, PanelView } from './types'
+import { ROLES } from './defaults'
 
 export const MAX_NATIVES = 24
 export const DEFAULT_SESSION: SessionInfo = { isRunning: false }
@@ -10,8 +11,8 @@ export type StepUsage = {
 }
 
 export const roleOf = (subagentType: string): string => {
-  if (subagentType === 'pantheon:oracle') return 'oracle'
-  if (subagentType === 'pantheon:designer') return 'designer'
+  const role = ROLES.find(role => subagentType === `pantheon:${role}`)
+  if (role) return role
   if (/^pantheon:councillor-.+$/.test(subagentType)) return subagentType.slice('pantheon:'.length)
   return 'other'
 }
@@ -96,7 +97,7 @@ export const normalizeNatives = (raw: unknown): Native[] => {
     }
     const type = stringOf(n.type)
     list.push({
-      id: n.id, role: typeof n.role === 'string' ? n.role : roleOf(type), type,
+      id: n.id, role: roleOf(type), type,
       task: stringOf(n.task), model: stringOf(n.model), rounds,
       ctx: numberOf(n.ctx), out: numberOf(n.out), steps: numberOf(n.steps),
       ...(typeof n.lastTool === 'string' ? { lastTool: n.lastTool } : {}),

@@ -1,9 +1,9 @@
-import { isOffered } from './roles'
-import type { Job, Native, PantheonConfig, SessionInfo } from './types'
+import { ROLES } from './defaults'
+import type { Engine, Job, Native, PantheonConfig, SessionInfo } from './types'
 
 export const ROLE_ORDER = ['orchestrator', 'explorer', 'librarian', 'fixer', 'oracle', 'designer', 'council'] as const
 export type SlotName = (typeof ROLE_ORDER)[number]
-export type Engine = 'claude' | 'codex'
+export type { Engine } from './types'
 export type RoundView = { startedAt: number; endedAt?: number; status: string }
 export type Instance = {
   id: string
@@ -65,13 +65,15 @@ function nativeInstance(native: Native): Instance | undefined {
 }
 
 function jobSlot(agent: string): SlotName | undefined {
-  if (agent === 'explorer' || agent === 'librarian' || agent === 'fixer') return agent
+  const role = ROLES.find(role => role === agent)
+  if (role) return role
   if (agent.startsWith('councillor:')) return 'council'
   return undefined
 }
 
 function nativeSlot(role: string): SlotName | undefined {
-  if (role === 'oracle' || role === 'designer') return role
+  const name = ROLES.find(name => name === role)
+  if (name) return name
   if (role.startsWith('councillor-')) return 'council'
   return undefined
 }
@@ -110,9 +112,6 @@ export function buildRoster(input: {
 
   const seats = Object.keys(config.council.seats).sort()
   const seatsOff = seats.filter(name => {
-    if (config.council.seats[name].engine === 'claude') {
-      return !isOffered(config, `pantheon:councillor-${name}`)
-    }
     return config.disabledAgents.includes('council') ||
       config.disabledAgents.includes(`councillor:${name}`) ||
       config.disabledAgents.includes(`councillor-${name}`)
@@ -130,19 +129,19 @@ export function buildRoster(input: {
     const ended = all.filter(instance => !instance.isActive).sort((a, b) => endedTime(b) - endedTime(a))[0]
     const off = name === 'council'
       ? config.disabledAgents.includes('council') || seatsOff.length === seats.length
-      : name === 'oracle' || name === 'designer'
-        ? !isOffered(config, `pantheon:${name}`)
-        : config.disabledAgents.includes(name)
-    const engine = name === 'council'
+      : config.disabledAgents.includes(name)
+    const configuredEngine = name === 'council'
       ? councilEngines.size === 1 ? [...councilEngines][0] : 'mixed'
-      : name === 'oracle' || name === 'designer' ? 'claude' : 'codex'
+      : config.agents[name].engine
+    const instances = [...active, ...(ended ? [ended] : [])]
+    const engine = instances.some(instance => instance.engine !== configuredEngine) ? 'mixed' : configuredEngine
     const configuredModel = name === 'council'
       ? councilModels.size === 1 ? [...councilModels][0] : undefined
       : config.agents[name].model
     return {
       name, engine, state: off ? 'off' : active.length ? 'active' : 'idle',
       model: active.length ? active[0].model : configuredModel,
-      instances: [...active, ...(ended ? [ended] : [])],
+      instances,
       history: [...all].sort((a, b) => (a.rounds[0]?.startedAt ?? a.startedAt) - (b.rounds[0]?.startedAt ?? b.startedAt)),
       ...(ended?.endedAt !== undefined ? { lastEndedAt: ended.endedAt } : {}),
       ...(off ? { offReason: 'disabledAgents' } : {}),

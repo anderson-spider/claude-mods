@@ -3,14 +3,31 @@ import { describe, expect, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
 import { DELEGATE, HOME, RESULT, parse, start, world } from './fixtures/world'
-import { PANE_ID, statusText, timelineSource } from '../hooks/pane'
+import { PANE_ID, configReport, doctorReport, statusText, timelineSource } from '../hooks/pane'
+import { loadConfig } from '../hooks/config'
 import { buildRoster } from '../hooks/roster'
 import type { Slot } from '../hooks/roster'
-import { DEFAULT_CONFIG } from '../hooks/defaults'
+import { MIXED } from './fixtures/profiles'
 import type { Job, Native, SessionInfo } from '../hooks/types'
 
 const SURFACES = ['terminal', 'desktop'] as const
 const NOW = 1_000_000_000
+
+test('config report identifies the active profile and origin before JSON', async () => {
+  const config = await loadConfig(async () => '{"profile":"codex"}', { user: 'fixture' })
+  const lines = configReport(config).split('\n')
+  expect(lines.slice(0, 3)).toContain('Perfil ativo: codex (user)')
+})
+
+test('doctor treats unavailable Codex as informational only when unused', async () => {
+  const config = await loadConfig(async () => '{"profile":"claude"}', { user: 'fixture' })
+  const facts = { usesCodex: false, profile: 'claude', loginOk: false, config, root: '/repo', isRepo: true }
+  const report = doctorReport(facts)
+  expect(report).not.toContain('falha')
+  expect(report).toContain('info')
+  expect(report).toContain('not needed by profile claude')
+  expect(doctorReport({ ...facts, usesCodex: true })).toContain('falha')
+})
 
 type Opts = { placement?: 'dock' | 'inline'; columns?: number; rows?: number; bodyRows?: number }
 
@@ -604,7 +621,7 @@ describe('timelineSource', () => {
       { id: 'jb', agent: 'explorer', status: 'done', startedAt: NOW_T - 300_000, endedAt: NOW_T - 200_000, cwd: '/repo' },
       { id: 'jold', agent: 'explorer', status: 'done', startedAt: NOW_T - 3_000_000, endedAt: NOW_T - 2_000_000, cwd: '/repo' },
     ]
-    const roster = buildRoster({ jobs, natives: [], session: { isRunning: false }, config: DEFAULT_CONFIG })
+    const roster = buildRoster({ jobs, natives: [], session: { isRunning: false }, config: MIXED })
     // The card keeps only the latest; the timeline draws both runs inside the window, not the old one.
     expect(roster.slots[1].instances.map(i => i.id)).toEqual(['jb'])
     const svg = timelineSource(roster.slots, { isRunning: false }, NOW_T).source

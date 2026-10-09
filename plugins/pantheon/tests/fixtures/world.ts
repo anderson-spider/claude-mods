@@ -39,7 +39,7 @@ export function world(on: On, opts: World = {}) {
     copied: [] as string[],
     gitRuns: 0,
   }
-  const files = { ...(opts.files ?? {}) }
+  const files = { [`${HOME}/.claude/pantheon.json`]: '{"profile":"mixed"}', ...(opts.files ?? {}) }
   const clock = opts.clockDown ? (undefined as never) : mock.clock(on)
   if (opts.clockDown) {
     on('clock.now', async () => {

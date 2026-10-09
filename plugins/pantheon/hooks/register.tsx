@@ -10,7 +10,7 @@ import { buildCouncilBlock, isCouncilOrigin, matchesCouncilTrigger } from './pro
 import { buildOrchestratorSection } from './prompts/orchestrator'
 import { rolePrompt } from './prompts/roles'
 import { PANE_ID, configReport, doctorReport, drawPanel, statusText } from './pane'
-import { isOffered, nativeAgentSpecs, resolveCodexCall } from './roles'
+import { isOffered, nativeAgentSpecs, resolveCodexCall, usesCodex } from './roles'
 import { buildRoster } from './roster'
 import {
   DEFAULT_SESSION, DEFAULT_VIEW, completed, describeTool, markNativesLost,
@@ -85,7 +85,7 @@ const viewAtom = atom({ plugin: 'pantheon', key: 'view' } as const, DEFAULT_VIEW
 const DELEGATE_SCHEMA = {
   type: 'object',
   properties: {
-    agent: { type: 'string', description: 'explorer, librarian, fixer or councillor:<seat> of a Codex seat.' },
+    agent: { type: 'string', description: 'A role or councillor:<seat> currently on Codex.' },
     prompt: { type: 'string', description: 'The complete task for the role.' },
     description: { type: 'string', description: 'A short label shown in /pantheon.' },
     cwd: { type: 'string', description: 'Working directory inside the authorized root; defaults to the session directory.' },
@@ -308,19 +308,19 @@ export const register: Register = on => {
     await refreshConfig(io, (await workspace(io)).root)
     await $.tool.register({
       name: 'delegate',
-      description: 'Run a Pantheon Codex role (explorer, librarian, fixer, councillor:<seat>) on a task and return its final message, or a jobId when it goes to background.',
+      description: 'Run a Pantheon role or council seat currently on Codex on a task and return its final message, or a jobId when it goes to background.',
       inputSchema: DELEGATE_SCHEMA,
       isDeferred: false,
     })
     await $.tool.register({
       name: 'delegate_result',
-      description: 'Read the status and, once finished, the result of a Pantheon Codex job.',
+      description: 'Read the status and, once finished, the result of a job for a Pantheon role or council seat currently on Codex.',
       inputSchema: JOB_SCHEMA,
       isDeferred: false,
     })
     await $.tool.register({
       name: 'delegate_cancel',
-      description: 'Stop a running Pantheon Codex job and mark it cancelled; partial changes stay on disk.',
+      description: 'Stop a running job for a Pantheon role or council seat currently on Codex and mark it cancelled; partial changes stay on disk.',
       inputSchema: JOB_SCHEMA,
       isDeferred: false,
     })
@@ -575,6 +575,8 @@ export const register: Register = on => {
       const login = version?.exitCode === 0 ? await io.run(['codex', 'login', 'status']).catch(() => undefined) : undefined
       return {
         text: doctorReport({
+          usesCodex: usesCodex(current.config),
+          profile: current.config.profile,
           codexVersion: version?.exitCode === 0 ? version.stdout.trim() : undefined,
           loginStatus: login ? (login.stdout || login.stderr).trim().split('\n')[0] : undefined,
           loginOk: login?.exitCode === 0,
