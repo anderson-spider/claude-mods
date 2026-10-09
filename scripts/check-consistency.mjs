@@ -1,5 +1,5 @@
 // Checks that the marketplace and the plugins agree. Run: node scripts/check-consistency.mjs
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 
 const read = path => JSON.parse(readFileSync(path, 'utf8'))
 const errors = []
@@ -20,6 +20,16 @@ for (const entry of marketplace.plugins) {
   if (!/^\d+\.\d+\.\d+$/.test(plugin.version ?? '')) errors.push(`${entry.name}: invalid version "${plugin.version}"`)
   if (!existsSync(`${dir}/hooks/hooks.json`)) errors.push(`${entry.name}: hooks/hooks.json is missing`)
   else read(`${dir}/hooks/hooks.json`)
+
+  // Each skill is skills/<name>/SKILL.md whose frontmatter names the directory and describes it.
+  const skills = `${dir}/skills`
+
+  for (const name of existsSync(skills) ? readdirSync(skills) : []) {
+    const file = `${skills}/${name}/SKILL.md`
+    const front = existsSync(file) ? /^---\nname: (.+)\ndescription: (.+)\n---\n/.exec(readFileSync(file, 'utf8')) : null
+
+    if (front?.[1] !== name) errors.push(`${entry.name}: ${file} is missing or its frontmatter does not name "${name}"`)
+  }
 }
 
 if (errors.length) {
