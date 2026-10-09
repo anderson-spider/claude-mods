@@ -21,8 +21,9 @@ const END_KINDS: Record<string, { kind: string; verb: string; word: 'in' | 'afte
 
 /**
  * Session-log events derived from the roster alone: one `started` per round, one end event per
- * ended round (kind from its status), an `activity` for a live instance's last tool and
- * `disabled` for a role that is off. Both of the latter carry `now`, since the roster has no stamp for them.
+ * ended round (kind from its status, with the task last so parallel instances of a role differ and
+ * cell truncation cuts the task first) and `disabled` for a role that is off, which carries `now`.
+ * No `activity` events: the roster has no stamp for them and the Running row shows the last one.
  * Ascending by time; only the last `limit` are kept.
  */
 export function logEvents(roster: Roster, now: number, limit: number): LogEvent[] {
@@ -37,10 +38,9 @@ export function logEvents(roster: Roster, now: number, limit: number): LogEvent[
         push(r.startedAt, 'started', `${n === 0 ? 'started' : 'resumed'}${task ? `: ${task}` : ''}`, i.seat)
         const end = END_KINDS[r.status]
         if (end && r.endedAt !== undefined) {
-          push(r.endedAt, end.kind, `${end.verb} ${end.word} ${duration(r.endedAt - r.startedAt)}`, i.seat)
+          push(r.endedAt, end.kind, `${end.verb} ${end.word} ${duration(r.endedAt - r.startedAt)}${task ? ` · ${task}` : ''}`, i.seat)
         }
       })
-      if (i.isActive && i.activity) push(now, 'activity', squash(i.activity), i.seat)
     }
     if (slot.state === 'off') push(now, 'disabled', 'disabled in config')
   }

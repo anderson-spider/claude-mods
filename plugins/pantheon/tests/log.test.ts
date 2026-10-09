@@ -32,9 +32,9 @@ test('done and failed carry the duration', () => {
   const out = logEvents(roster({ fixer: { instances: [b, a], history: [a, b] } }), 200_000, 50)
   expect(out.map(e => [e.at, e.kind, e.text])).toEqual([
     [1_000, 'started', 'started: Map the repo'],
-    [73_000, 'done', 'done in 1m 12s'],
+    [73_000, 'done', 'done in 1m 12s · Map the repo'],
     [100_000, 'started', 'started: Fix it'],
-    [140_000, 'failed', 'failed after 40s'],
+    [140_000, 'failed', 'failed after 40s · Fix it'],
   ])
 })
 
@@ -58,11 +58,11 @@ test('council events name the seat', () => {
   const out = logEvents(roster({ council: { instances: [i], history: [i], seats: ['alpha', 'beta'] } }), 40_000, 50)
   expect(out.map(e => [e.actor, e.text])).toEqual([
     ['council', 'alpha started: Weigh in'],
-    ['council', 'alpha done in 30s'],
+    ['council', 'alpha done in 30s · Weigh in'],
   ])
 })
 
-test('multiple rounds log each round once; lost and activity and disabled', () => {
+test('multiple rounds log each round once; lost and disabled, no activity', () => {
   const i = inst({ isActive: false, status: 'lost', endedAt: 9_000, rounds: [
     { startedAt: 1_000, endedAt: 3_000, status: 'done' },
     { startedAt: 4_000, endedAt: 9_000, status: 'lost' },
@@ -74,9 +74,20 @@ test('multiple rounds log each round once; lost and activity and disabled', () =
     oracle: { state: 'off', offReason: 'disabledAgents' },
   }), 12_000, 50)
   expect(out.filter(e => e.actor === 'designer').map(e => [e.kind, e.text])).toEqual([
-    ['started', 'started: Map the repo'], ['done', 'done in 2s'],
-    ['started', 'resumed: Map the repo'], ['lost', 'lost after 5s'],
+    ['started', 'started: Map the repo'], ['done', 'done in 2s · Map the repo'],
+    ['started', 'resumed: Map the repo'], ['lost', 'lost after 5s · Map the repo'],
   ])
-  expect(out.find(e => e.kind === 'activity')).toEqual({ at: 12_000, actor: 'librarian', kind: 'activity', text: 'Read' })
+  expect(out.some(e => e.kind === 'activity')).toBe(false)
   expect(out.find(e => e.kind === 'disabled')).toEqual({ at: 12_000, actor: 'oracle', kind: 'disabled', text: 'disabled in config' })
+})
+
+test('parallel instances of one role get distinct end lines', () => {
+  const mk = (n: number) => inst({ id: `p${n}`, task: `Fixer ${n}  sleep\n${n}`, isActive: false, status: 'done', startedAt: 1_000,
+    endedAt: 7_000, rounds: [{ startedAt: 1_000, endedAt: 7_000, status: 'done' }] })
+  const all = [1, 2, 3, 4].map(mk)
+  const out = logEvents(roster({ fixer: { instances: all, history: all } }), 9_000, 50)
+  const ends = out.filter(e => e.kind === 'done').map(e => e.text)
+  expect(ends).toEqual([1, 2, 3, 4].map(n => `done in 6s · Fixer ${n} sleep ${n}`))
+  expect(new Set(ends).size).toBe(4)
+  expect(out.some(e => e.kind === 'activity')).toBe(false)
 })
