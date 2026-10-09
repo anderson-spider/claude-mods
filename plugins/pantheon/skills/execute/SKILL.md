@@ -1,6 +1,6 @@
 ---
 name: execute
-description: Use to carry out a written plan (for example one from grill). Dispatches each task to the fixer or designer, runs the tests, commits, and sends only risky tasks to the oracle.
+description: Use to carry out a written plan (for example one from grill). Dispatches each task to the executor or designer, runs the tests, commits, and sends only risky tasks to the oracle.
 ---
 
 # Execute
@@ -10,7 +10,7 @@ Run `.pantheon/plans/<plan>.md` task by task.
 ## Per task
 
 1. **Brief.** Build it from the task section and the interfaces it names, nothing else: goal, files, interfaces, acceptance, and the rule below. Reference paths instead of pasting files.
-2. **Dispatch.** The fixer implements; the designer takes UI work. Use the call each role has in the Agents section: `delegate` for a role on Codex, the `pantheon:<role>` agent for one on Claude. Without a specialist, do the task yourself.
+2. **Dispatch.** The executor implements; the designer takes UI work. Use the call each role has in the Agents section: `delegate` for a role on Codex, the `pantheon:<role>` agent for one on Claude. Without a specialist, do the task yourself.
 3. **Test first.** Every brief tells the implementer to write a failing test for the acceptance criterion, then the code, then run the tests. It does not commit; absence of a commit is not a blocker.
 4. **Check.** Run the acceptance command yourself and read its output.
 5. **Commit.** Delegate to `git` (`delegate` on Codex, `pantheon:git` on Claude) with a brief: task files and what to include, branch, Conventional Commit intent, squash no, push no, PR/MR no. If `git` is disabled, commit the task's files yourself.
