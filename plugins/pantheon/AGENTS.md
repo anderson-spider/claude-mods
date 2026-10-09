@@ -37,15 +37,9 @@ IMPORTANT: prompts and panel modules include third-party work. Keep `LICENSE` an
 The panel opens at session start. `/pantheon close` closes it; `cancel <jobId>`, and `config` keep their existing behavior. `doctor` also pings every role and seat (`ping.ts` plans the targets and formats the section; `register.tsx` runs the Codex pings and queues the session prompt for the native ones with `io.after(0, …)`, because the host refuses `prompt.submit` while a `command.run` hook runs). There is no panel configuration; rate limits, repository, branch and cache stay in hud.
 
 - `pane.tsx` draws the Agents and Jobs tabs. Jobs keeps its read-only "Claude agent rounds" group.
-- Desktop: HUD-colored segments with static SVG backplates, native text and buttons, fixed numeric slots, identity-first agent rows with a mascot each, and a pane-width "Last 15 minutes" SVG timeline.
-- Docked and inline mini: they retain their original theme, bordered groups, task-first rows and compact quadrant sprites.
-- `rail.tsx`, `elapsed.tsx` and `mascot.tsx` are surface modules for packet rails with steady state glyphs, live clocks and the animated mascot. Rail timers run only on active lines.
-
-## Mascot
-
-`clawd.ts` is the pure mascot art: an independently drawn terminal Clawd with a shared 9 x 3 body and one row of role-specific headwear, packed into 9 x 4 quadrant runs in both terminal sizes, plus a separate shaded desktop sprite as an SVG string whose held objects animate while working.
-
-The mascot's 250 ms frame timer runs only while the agent works, restarting a two-position footstep sequence on each work period while the hat, eyes, arms and body stay fixed. Idle and the dimmed off state use the default pose, as does the colored no-Client fallback.
+- Desktop: HUD-colored segments with static SVG backplates, native text and buttons, fixed numeric slots, identity-first agent rows, a card per section with a colored border, and a pane-width "Last 15 minutes" SVG timeline.
+- Docked and inline mini: bordered cards per section (colored border), task-first rows and an animated rail.
+- `rail.tsx` and `elapsed.tsx` are surface modules for the animated rail (110 ms frames, only while there is active work) and live clocks. `theme.ts` holds the shared palette, section and role colors and cell helpers.
 
 ## Prompts and skills
 

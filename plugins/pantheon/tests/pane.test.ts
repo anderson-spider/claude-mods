@@ -804,7 +804,6 @@ describe('pane', () => {
       expect([rail.width, rail.height]).toEqual([76, 1])
       expect(rail.props).toMatchObject({ active: true, width: 76, marks: [], isMerge: false })
     }
-    expect((await clients(ui)).filter(c => String(c.module).includes('mascot'))).toEqual([])
     await release()
     // Nothing runs: the rails rest.
     data.jobs = []
@@ -815,7 +814,7 @@ describe('pane', () => {
     for (const rail of await railsOf(idle)) expect(rail.props.active).toBe(false)
   })
 
-  t('docked without a Client draws a static rail and no mascot', async ($, on) => {
+  t('docked without a Client draws a static rail', async ($, on) => {
     let fail = false
     world(on, { clockDown: () => fail })
     seed(on, busy())
@@ -889,20 +888,18 @@ describe('pane', () => {
     }
   })
 
-  t('desktop draws no mascot sprite and tints each card by section', async ($, on) => {
+  t('desktop tints each card by section', async ($, on) => {
     world(on)
     seed(on, busy())
     await start($)
     const ui = await mountPane($, 'desktop', { rows: 80 })
     const svgs = (await ui.findAll({ type: 'Svg' })).map(n => (n as unknown as { props: { source: string; alt: string } }).props)
-    expect(svgs.filter(s => s.alt.includes('mascot'))).toEqual([])
     const plates = svgs.filter(s => s.alt === 'card background').map(s => s.source)
     for (const color of [SECTION_COLOR.session, SECTION_COLOR.running, SECTION_COLOR.finished, SECTION_COLOR.planned]) {
       expect(plates.some(source => source.includes(`stroke="${rgba(color, 0.75)}"`))).toBe(true)
     }
     const timeline = svgs.find(s => s.alt.startsWith('Last 15 minutes'))!
     expect(timeline.source).toContain(`stroke="${rgba(SECTION_COLOR.timeline, 0.75)}"`)
-    expect((await clients(ui)).filter(c => String(c.module).includes('mascot'))).toEqual([])
     expect((await railsOf(ui)).map(c => c.props.color)).toEqual([SECTION_COLOR.running, SECTION_COLOR.finished, SECTION_COLOR.planned, SECTION_COLOR.timeline])
   })
 
@@ -1264,7 +1261,6 @@ describe('timelineSource', () => {
     for (const node of first) expect(node.key ?? node.props?.key).toBeDefined()
     const timeline = first.find(n => n.props?.alt?.startsWith('Last 15 minutes'))!
     expect(timeline.key ?? timeline.props?.key).toBe('timeline')
-    expect(first.filter(n => n.props?.alt?.includes('mascot'))).toEqual([])
     const plates = first.filter(n => n.props?.alt === 'card background')
     expect(plates.length > 0).toBe(true)
     for (const node of plates) expect(node.key ?? node.props?.key).toBeDefined()
