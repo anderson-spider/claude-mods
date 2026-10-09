@@ -1,9 +1,33 @@
 import { test, expect } from 'claude-code/testing'
-import { ALLOW_THRESHOLD, DENY_THRESHOLD, decide, rulesVerdict, type EditContext, type Fetch } from '../hooks/decisions'
+import { ALLOW_THRESHOLD, DENY_THRESHOLD, decide as decision, rulesVerdict, type EditContext, type Fetch, type Timer } from '../hooks/decisions'
+
+const testTimer: Timer = (ms, fn) => { const id = setTimeout(fn, ms); return () => clearTimeout(id) }
+const decide = (fetch: Fetch, key: string | undefined, ctx: EditContext, opts: { timer?: Timer; timeoutMs?: number } = {}) =>
+  decision(fetch, key, ctx, { timer: testTimer, ...opts })
 
 const ctx: EditContext = { tool: 'Edit', path: 'src/user.ts', ext: '.ts', linesAdded: 1, linesRemoved: 0, files: 1 }
 const response = (text: string, status = 200): Fetch => async () => ({ status, ok: status === 200, text })
 const scored = (score: unknown) => response(JSON.stringify({ answers: { trivial: { noul: score } } }))
+
+test('injected deadline fires and its cancellation runs', async () => {
+  let fire: () => void = () => {}
+  let cancelled = false
+  const pending = decide(() => new Promise(() => {}), 'key', ctx, { timer: (_ms: number, fn: () => void) => { fire = fn; return () => { cancelled = true } } } as never)
+  fire()
+  expect((await pending).reason).toContain('timed out')
+  expect(cancelled).toBe(true)
+})
+
+test('success cancels the injected deadline without global timers', async () => {
+  const saved = globalThis.setTimeout
+  let cancelled = false
+  try {
+    globalThis.setTimeout = undefined as never
+    const result = await decide(scored(0), 'key', ctx, { timer: () => () => { cancelled = true } } as never)
+    expect(result).toMatchObject({ action: 'deny', source: 'jev' })
+    expect(cancelled).toBe(true)
+  } finally { globalThis.setTimeout = saved }
+})
 
 test('exports the fixed score thresholds', () => {
   expect(ALLOW_THRESHOLD).toBe(0.85)
@@ -71,7 +95,7 @@ test('request explicitly selects metadata and sends the exact question', async (
   const body = JSON.parse(seen!.init.body!)
   expect(body).toEqual({
     model: 'typesafe/jev-1.13',
-    state: { ...ctx, caller: 'main orchestrator session' },
+    state: { tool: 'Edit', kind: 'source', ext: 'ts', linesAdded: 1, linesRemoved: 0, files: 1, caller: 'main orchestrator session' },
     questions: { trivial: {
       type: 'noul',
       instructions: 'Is this code edit small and trivial enough for the orchestrator to apply directly, without delegating to a specialist?',
@@ -83,6 +107,29 @@ test('request explicitly selects metadata and sends the exact question', async (
   })
   expect(seen!.init.body).not.toMatch(/content|old_string|new_string|private/)
 })
+
+test('hostile path and extension never appear anywhere in the request', async () => {
+  let body = ''
+  await decide(async (_url, init) => { body = init.body!; return { status: 200, ok: true, text: '{"answers":{"trivial":{"noul":0}}}' } }, 'key', {
+    ...ctx, path: '/repo/CONFIDENTIAL-PATH.note.SECRET-EXT', ext: '.SECRET-EXT',
+  })
+  expect(body).not.toContain('CONFIDENTIAL-PATH')
+  expect(body).not.toContain('SECRET-EXT')
+  expect(JSON.parse(body).state).toMatchObject({ kind: 'other', ext: 'other' })
+})
+
+for (const [path, ext, kind] of [
+  ['docs/readme.md', '.md', 'docs'], ['tests/a.test.ts', '.ts', 'test'], ['src/a.ts', '.ts', 'source'],
+  ['src/a.tsx', '.tsx', 'ui'], ['config/app.toml', '.toml', 'config'], ['.github/workflows/ci.yml', '.yml', 'workflow'],
+  ['db/migrations/001.sql', '.sql', 'migration'], ['package.json', '.json', 'manifest'], ['yarn.lock', '.lock', 'lockfile'], ['photo.png', '.png', 'other'],
+]) {
+  test(`request derives closed kind ${kind}`, async () => {
+    let body = ''
+    await decide(async (_url, init) => { body = init.body!; return { status: 200, ok: true, text: '{}' } }, 'key', { ...ctx, path, ext })
+    expect(JSON.parse(body).state.kind).toBe(kind)
+    expect(body).not.toContain(path)
+  })
+}
 
 const battery: [string, Partial<EditContext>, string][] = [
   ['README typo', { path: 'README.md', ext: '.md' }, 'allow'],

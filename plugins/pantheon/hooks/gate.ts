@@ -2,7 +2,7 @@ import type { EditContext, Verdict } from './decisions'
 
 // tool.call flattens the tool's input fields onto the event.
 export type GateEvent = { tool: string; agentId?: string; [field: string]: unknown }
-export type GateEnv = { root: string; home: string; scratchpad?: string }
+export type GateEnv = { root: string; home: string; uid?: string }
 
 // Lexical normalization only: the pure module cannot resolve filesystem links.
 const normalize = (path: string): string => {
@@ -40,9 +40,15 @@ export function gateContext(e: GateEvent, env: GateEnv):
   let path = ''
   if (typeof raw === 'string' && raw !== '') {
     const absolute = normalize(raw.startsWith('/') ? raw : root + '/' + raw)
-    const exemptions = [normalize(root + '/.pantheon'), normalize(env.home + '/.claude')]
-    if (env.scratchpad) exemptions.push(normalize(env.scratchpad))
-    if (exemptions.some(dir => within(absolute, dir))) return { skip: true, why: 'Exempt path.' }
+    const claude = env.home ? normalize(env.home + '/.claude') : undefined
+    const statePath = claude && within(absolute, claude) ? absolute.slice(claude.length + 1) : ''
+    const scratch = absolute.match(/^\/(?:private\/)?tmp\/claude-(\d+)\/[^/]+\/[^/]+\/scratchpad(?:\/|$)/)
+    if (within(absolute, normalize(root + '/.pantheon'))
+      || (claude && within(absolute, claude + '/plans'))
+      || /^projects\/[^/]+\/memory(?:\/|$)/.test(statePath)
+      || (env.uid !== undefined && /^\d+$/.test(env.uid) && scratch?.[1] === env.uid)) {
+      return { skip: true, why: 'Exempt path.' }
+    }
     path = within(absolute, root) ? absolute.slice(root === '/' ? 1 : root.length + 1) : absolute
   }
 

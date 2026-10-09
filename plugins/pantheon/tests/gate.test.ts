@@ -2,7 +2,7 @@ import { test, expect } from 'claude-code/testing'
 import { gateContext, gateMessage, type GateEvent } from '../hooks/gate'
 import type { EditContext, Verdict } from '../hooks/decisions'
 
-const env = { root: '/repo', home: '/home/person', scratchpad: '/tmp/session' }
+const env = { root: '/repo', home: '/home/person', uid: '501' }
 const edit: GateEvent = { tool: 'Edit', file_path: '/repo/src/main.ts', old_string: 'old', new_string: 'new' }
 const context = (e: GateEvent): EditContext => {
   const result = gateContext(e, env)
@@ -22,7 +22,7 @@ for (const tool of ['Read', 'Bash', 'Unknown']) {
   })
 }
 
-for (const file_path of ['/repo/.pantheon/plan.md', '/tmp/session/note.txt', '/home/person/.claude/state.json', '.pantheon/plan.md']) {
+for (const file_path of ['/repo/.pantheon/plan.md', '/home/person/.claude/plans/note.md', '/home/person/.claude/projects/repo/memory/note.md', '/tmp/claude-501/repo/session/scratchpad/note.md', '/private/tmp/claude-501/repo/session/scratchpad/note.md', '.pantheon/plan.md']) {
   test(`exempts ${file_path}`, () => {
     expect(gateContext({ ...edit, file_path }, env).skip).toBe(true)
   })
@@ -38,6 +38,24 @@ test('normalizes paths before checking exemptions and injected roots', () => {
   expect(gateContext({ ...edit, file_path: '/repo/src/../.pantheon/plan.md' }, env).skip).toBe(true)
   expect(gateContext({ ...edit, file_path: '/repo/.pantheon/plan.md' }, { ...env, root: '/repo/./' }).skip).toBe(true)
   expect(gateContext({ ...edit, file_path: '/tmp/session/note.txt' }, { root: env.root, home: env.home }).skip).toBe(false)
+})
+
+for (const file_path of [
+  '/home/person/.claude/settings.json', '/home/person/.claude/CLAUDE.md', '/home/person/.claude/hooks/a.ts',
+  '/home/person/.claude/mods/a.ts', '/home/person/.claude/skills/a.ts', '/home/person/.claude/plugins/a.ts',
+  '/home/person/.claude/projects/repo/settings.json', '/home/person/.claude/projects/repo/nested/memory/a.md',
+  '/home/person/.claude/plans-other/a.md', '/home/person/.claude/projects/repo/memory-other/a.md',
+  '/tmp/claude-502/repo/session/scratchpad/a.ts', '/private/tmp/claude-502/repo/session/scratchpad/a.ts',
+  '/tmp/claude-501/a.ts', '/tmp/claude-501/session/scratchpad/a.ts', '/tmp/claude-501/a/b/c/scratchpad/a.ts',
+  '/tmp/claude-501/repo/session/scratchpad/../a.ts',
+]) {
+  test(`does not exempt privileged state or a non-session scratchpad: ${file_path}`, () => {
+    expect(gateContext({ ...edit, file_path }, env).skip).toBe(false)
+  })
+}
+
+test('without a verified uid no scratchpad is exempt', () => {
+  expect(gateContext({ ...edit, file_path: '/tmp/claude-501/repo/session/scratchpad/a.ts' }, { root: env.root, home: env.home }).skip).toBe(false)
 })
 
 test('uses relative normalized paths inside the root and absolute paths outside', () => {

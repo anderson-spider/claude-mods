@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { AgentSpec, Hook, ProcessRunInit, ProcessRunResult, Register } from 'claude-code'
+import type { AgentSpec, Hook, ProcessRunInit, ProcessRunResult, Register, ToolCallResult } from 'claude-code'
 
 import type { Job, Native, SessionInfo } from '../types'
 import { buildArgv, createJsonlReader } from './codex'
@@ -32,6 +32,37 @@ import type { Clock, ConfigResult, DelegateArgs, PantheonConfig, Spawn } from '.
 import { authorizedRoot, checkCwd } from './workspace'
 
 const gateHeld = atom({ plugin: 'pantheon', key: 'gateHeld' }, null)
+
+export async function withGateRecovery(work: () => Promise<ToolCallResult>, called: () => boolean, replay: () => Promise<ToolCallResult>, ask: () => Promise<ToolCallResult>): Promise<ToolCallResult> {
+  try { return await work() } catch {
+    if (called()) return replay()
+    try { return await ask() } catch {
+      return { deny: 'Pantheon edit gate could not obtain a decision. Edit denied.' }
+    }
+  }
+}
+
+/** New files inherit their nearest existing ancestor's resolved location. */
+async function resolveGatePath(realPath: (path: string) => Promise<string | undefined>, raw: string, cwd: string): Promise<string> {
+  if (!raw) throw new Error('Missing edit path')
+  let candidate = raw.startsWith('/') ? raw : `${cwd}/${raw}`
+  const missing: string[] = []
+  while (true) {
+    const resolved = await realPath(candidate).catch(() => undefined)
+    if (resolved?.startsWith('/')) {
+      const parts: string[] = []
+      for (const part of `${resolved}/${missing.join('/')}`.split('/')) {
+        if (part === '..') parts.pop()
+        else if (part && part !== '.') parts.push(part)
+      }
+      return '/' + parts.join('/')
+    }
+    if (candidate === '/') throw new Error('Could not resolve edit path')
+    const slash = candidate.lastIndexOf('/')
+    missing.unshift(candidate.slice(slash + 1))
+    candidate = candidate.slice(0, slash) || '/'
+  }
+}
 
 /** O que os módulos precisam do engine, montado em cada hook (o `$` não pode ser guardado). */
 type Io = {
@@ -222,6 +253,7 @@ export const register: Register = (on, options) => {
   let lastValid: PantheonConfig | undefined
   let lastValidResult: Extract<ConfigResult, { ok: true }> | undefined
   let gateRoot: string | undefined
+  let gateUid: Promise<string | undefined> | undefined
   type GateChoice = 'proceed' | 'cancel'
   let gateWaiting: { decision: GateChoice | null } | undefined
 
@@ -243,8 +275,8 @@ export const register: Register = (on, options) => {
       return 'aborted'
     } finally {
       if (gateWaiting === slot) {
-        gateWaiting = undefined
-        await io.show(null).catch(() => undefined)
+        try { await io.show(null) } catch { /* Cleanup failure must not release the edit. */ }
+        finally { gateWaiting = undefined }
       }
     }
   }
@@ -769,32 +801,51 @@ export const register: Register = (on, options) => {
   // Tracking is registered first and wraps this gate: it sees the settled result once,
   // so held calls are not counted early and denied calls never count as successful edits.
   on('tool.call', { tool: ['Edit', 'Write', 'NotebookEdit'] }, async ($, e, next) => {
-    if (options.gate !== true || e.agentId) return next(e)
-    const root = gateRoot ?? (await workspace({ cwd: () => $.session.cwd(), run: (argv, init) => $.process.run(argv, init) })).root
-    const home = await $.env.get('HOME') ?? ''
-    // The hooks API has no scratchpad accessor. Exempt only Claude's temp parent,
-    // not the entire temp directory; gateContext still normalizes traversal segments.
-    const path = String(e.tool === 'NotebookEdit' ? e.notebook_path ?? '' : e.file_path ?? '')
-    const scratchpad = path.match(/^(\/(?:private\/)?tmp\/claude-\d+)(?:\/|$)/)?.[1]
-    const context = gateContext(e, { root, home, scratchpad })
-    if (context.skip) return next(e)
-    const key = typeof options.jevApiKey === 'string' && options.jevApiKey.trim()
-      ? options.jevApiKey : await $.env.get('OPENROUTER_API_KEY')
-    const verdict = await decide((url, init) => $.http.fetch(url, init), key, context.ctx)
-    if (verdict.action === 'allow') return next(e)
-    // Codex roles are offered by delegate, not agent.offer; both engines use disabledAgents.
-    const message = gateMessage(verdict, context.ctx, {
-      executor: !state.config.disabledAgents.includes('executor'),
-      designer: !state.config.disabledAgents.includes('designer'),
-    })
-    if (verdict.action === 'deny') return { deny: message }
-    const outcome = await holdGate({
-      poll: () => $.process.run(['sleep', '0.25']),
-      show: value => update($, gateHeld, () => value),
-    }, message, next.signal)
-    if (outcome === 'proceed') return next(e)
-    return { deny: `${message}\n${outcome === 'cancel' ? 'The person pressed Cancel.' : 'The wait was interrupted before a decision.'}` }
-  })
+    const ask = async (message: string): Promise<ToolCallResult> => {
+      const outcome = await holdGate({
+        poll: () => $.process.run(['sleep', '0.25']),
+        show: value => update($, gateHeld, () => value),
+      }, message, next.signal)
+      if (outcome === 'proceed') return next(e)
+      return { deny: `${message}\n${outcome === 'cancel' ? 'The person pressed Cancel.' : 'The wait was interrupted before a decision.'}` }
+    }
+    return withGateRecovery(async () => {
+      if (options.gate !== true || e.agentId) return next(e)
+      const cwd = await $.session.cwd()
+      const workspaceRoot = gateRoot ?? (await workspace({ cwd: async () => cwd, run: (argv, init) => $.process.run(argv, init) })).root
+      const realPath = async (path: string) => (await $.fs.stat(path, { resolve: true })).realPath
+      const root = await resolveGatePath(realPath, workspaceRoot, cwd)
+      const rawHome = await $.env.get('HOME')
+      const home = rawHome ? await resolveGatePath(realPath, rawHome, cwd) : ''
+      const pathField = e.tool === 'NotebookEdit' ? 'notebook_path' : 'file_path'
+      const path = await resolveGatePath(realPath, String(e[pathField] ?? ''), cwd)
+      // gateContext receives a resolved absolute target; the forwarded event stays untouched.
+      gateUid ??= $.process.run(['id', '-u']).then(result => {
+        const uid = result.stdout.trim()
+        return result.exitCode === 0 && /^\d+$/.test(uid) ? uid : undefined
+      }).catch(() => undefined)
+      const context = gateContext({ ...e, [pathField]: path }, { root, home, uid: await gateUid })
+      if (context.skip) return next(e)
+      const key = typeof options.jevApiKey === 'string' && options.jevApiKey.trim()
+        ? options.jevApiKey : await $.env.get('OPENROUTER_API_KEY')
+      const verdict = await decide((url, init) => $.http.fetch(url, init), key, context.ctx, {
+        timer: (ms, fn) => { const timer = $.clock.after(ms, fn); return () => timer.cancel() },
+      })
+      if (verdict.action === 'allow') return next(e)
+      // Codex roles are offered by delegate, not agent.offer; both engines use disabledAgents.
+      const message = gateMessage(verdict, context.ctx, {
+        executor: !state.config.disabledAgents.includes('executor'),
+        designer: !state.config.disabledAgents.includes('designer'),
+      })
+      if (verdict.action === 'deny') return { deny: message }
+      return ask(message)
+    }, () => next.called, () => next(e), () => ask(gateMessage(
+      { action: 'ask', source: 'rules', reason: 'The edit gate could not evaluate this edit. Ask the person.' },
+      { tool: String(e.tool), path: '', ext: '', files: 1 },
+      { executor: false, designer: false },
+    )))
+  }).catch((_$, e, next) => next.called || options.gate !== true || e.agentId
+    ? next(e) : { deny: 'Pantheon edit gate could not obtain a decision. Edit denied.' })
 
   on('tool.call', { tool: TOOLS.delegate }, async ($, e, next) => {
     const io: Io = {

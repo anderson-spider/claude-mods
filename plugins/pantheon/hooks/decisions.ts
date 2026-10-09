@@ -19,8 +19,32 @@ export type Fetch = (
   init: { method: string; headers: Record<string, string>; body?: string },
 ) => Promise<{ status: number; ok: boolean; text: string }>
 
+export type Timer = (ms: number, fn: () => void) => () => void
+
 export const ALLOW_THRESHOLD = 0.85
 export const DENY_THRESHOLD = 0.30
+
+const EXTENSIONS = new Set(['md', 'mdx', 'txt', 'rst', 'ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs', 'json', 'yaml', 'yml', 'toml', 'css', 'scss', 'html', 'svelte', 'vue', 'py', 'go', 'rs', 'java', 'kt', 'swift', 'sh', 'sql', 'lock'])
+type Kind = 'docs' | 'test' | 'source' | 'ui' | 'config' | 'workflow' | 'migration' | 'manifest' | 'lockfile' | 'other'
+
+/** Paths remain local; only closed classifications can cross the network boundary. */
+function metadata(ctx: EditContext): { kind: Kind; ext: string } {
+  const candidate = ctx.ext.replace(/^\./, '').toLowerCase()
+  const ext = EXTENSIONS.has(candidate) ? candidate : 'other'
+  const path = ctx.path.replace(/\\/g, '/')
+  const name = path.split('/').pop() ?? ''
+  let kind: Kind = 'other'
+  if (/(^|\/)\.github\/workflows\//.test(path)) kind = 'workflow'
+  else if (/(^|\/)(migrations|migrate)(\/|$)/.test(path)) kind = 'migration'
+  else if (/^(package-lock\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb?)$/.test(name) || name.endsWith('.lock')) kind = 'lockfile'
+  else if (/^(package\.json|plugin\.json|marketplace\.json|Cargo\.toml|go\.mod|pyproject\.toml)$/.test(name)) kind = 'manifest'
+  else if (/(^|\/)(__tests__|tests?|specs?)(\/|$)|\.(test|spec)\./.test(path)) kind = 'test'
+  else if (['md', 'mdx', 'txt', 'rst'].includes(ext)) kind = 'docs'
+  else if (['tsx', 'jsx', 'css', 'scss', 'html', 'svelte', 'vue'].includes(ext)) kind = 'ui'
+  else if (['json', 'yaml', 'yml', 'toml'].includes(ext)) kind = 'config'
+  else if (['ts', 'js', 'mjs', 'cjs', 'py', 'go', 'rs', 'java', 'kt', 'swift', 'sh', 'sql'].includes(ext)) kind = 'source'
+  return { kind, ext }
+}
 
 export function rulesVerdict(ctx: EditContext): Verdict {
   const verdict = (action: Verdict['action'], reason: string): Verdict => ({ action, source: 'rules', reason })
@@ -49,7 +73,7 @@ export async function decide(
   fetch: Fetch,
   key: string | undefined,
   ctx: EditContext,
-  opts?: { timeoutMs?: number },
+  opts: { timer: Timer; timeoutMs?: number },
 ): Promise<Verdict> {
   const fallback = (reason: string): Verdict => {
     const verdict = rulesVerdict(ctx)
@@ -57,11 +81,11 @@ export async function decide(
   }
   if (!key) return fallback('No API key configured.')
 
-  let timer: ReturnType<typeof setTimeout> | undefined
+  let cancel: (() => void) | undefined
   const timeout = Symbol('timeout')
   try {
     const deadline = new Promise<typeof timeout>(resolve => {
-      timer = setTimeout(() => resolve(timeout), opts?.timeoutMs ?? 3_000)
+      cancel = opts.timer(opts.timeoutMs ?? 3_000, () => resolve(timeout))
     })
     const response = await Promise.race([
       fetch('https://openrouter.ai/api/alpha/decisions', {
@@ -71,7 +95,7 @@ export async function decide(
           model: 'typesafe/jev-1.13',
           // Explicit selection keeps content-bearing extra properties out of the request.
           state: {
-            tool: ctx.tool, path: ctx.path, ext: ctx.ext,
+            tool: ctx.tool, ...metadata(ctx),
             linesAdded: ctx.linesAdded, linesRemoved: ctx.linesRemoved, files: ctx.files,
             caller: 'main orchestrator session',
           },
@@ -106,6 +130,6 @@ export async function decide(
   } catch {
     return fallback('Decision request failed.')
   } finally {
-    if (timer !== undefined) clearTimeout(timer)
+    cancel?.()
   }
 }
