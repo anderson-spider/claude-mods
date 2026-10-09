@@ -206,7 +206,7 @@ describe('jobs', () => {
     const reply = await pending
     expect(reply.outcome).toBe('error')
     expect(reply.job.status).toBe('error')
-    expect(reply.job.error).toContain('código 2')
+    expect(reply.job.error).toContain('code 2')
   })
 
   test('non-zero exit after a message -> error, message kept in result', async () => {
@@ -217,7 +217,7 @@ describe('jobs', () => {
     f.process.finish(3)
     const reply = await pending
     expect(reply.outcome).toBe('error')
-    expect(reply.job.error).toContain('código 3')
+    expect(reply.job.error).toContain('code 3')
     expect(reply.job.result).toBe('partial answer')
   })
 
@@ -262,7 +262,7 @@ describe('jobs', () => {
     f.process.finish(2)
     const reply = await pending
     expect(reply.job.error).toContain('last diagnostic')
-    expect(reply.job.error).toContain('código 2')
+    expect(reply.job.error).toContain('code 2')
   })
 
   test('signal exit -> error with signal', async () => {
@@ -310,7 +310,7 @@ describe('jobs', () => {
     expect(f.jobs.resumeTarget('background')).toHaveProperty('error')
     const target = f.jobs.resumeTarget('lost')
     expect(target).toHaveProperty('error')
-    if ('error' in target) expect(target.error).toContain('delegar de novo')
+    if ('error' in target) expect(target.error).toContain('delegate it again')
   })
 
   test('resumeTarget: done/cancelled/lost with sessionId -> sessionId, cwd, agent', () => {
@@ -324,7 +324,7 @@ describe('jobs', () => {
     const f = fixture([saved('done', 'thread-x')])
     void f.jobs.run({ ...call, resumeSessionId: 'thread-x' }, { ...foreground, background: true })
     await settle()
-    expect(f.jobs.resumeTarget('done')).toEqual({ error: expect.stringContaining('já está em uso') })
+    expect(f.jobs.resumeTarget('done')).toEqual({ error: expect.stringContaining('already in use') })
   })
 
   test('cancel kills process and marks cancelled', async () => {

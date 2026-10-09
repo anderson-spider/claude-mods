@@ -37,10 +37,10 @@ export function createJobs(deps: Deps) {
 
   function cancel(id: string): Job | { error: string } {
     const job = find(id)
-    if (!job) return { error: `Job ${id} desconhecido.` }
+    if (!job) return { error: `Unknown job ${id}.` }
     if (active(job)) {
       const runtime = live.get(id)
-      if (!runtime) return { error: `Job ${id} não tem processo ativo; recarregue seu estado como lost.` }
+      if (!runtime) return { error: `Job ${id} has no live process; reload its state as lost.` }
       runtime.cancel()
     }
     return copy(job)
@@ -80,7 +80,7 @@ export function createJobs(deps: Deps) {
       changed()
       resolveCompletion({ job: copy(job), outcome: status })
       if (wasBackground) {
-        deps.notify(`pantheon: job ${job.id} (${job.agent}) terminou com ${status}; use delegate_result({ jobId: '${job.id}' }).`)
+        deps.notify(`pantheon: job ${job.id} (${job.agent}) ended with ${status}; use delegate_result({ jobId: '${job.id}' }).`)
       }
     }
 
@@ -117,7 +117,7 @@ export function createJobs(deps: Deps) {
           case 'activity': job.lastActivity = event.text; break
           case 'message': job.result = event.text; break
           case 'usage': job.tokens = { ...event.tokens }; break
-          case 'failed': job.error = event.error || 'Codex informou falha.'; break
+          case 'failed': job.error = event.error || 'Codex reported a failure.'; break
         }
         changed()
       }
@@ -158,10 +158,10 @@ export function createJobs(deps: Deps) {
         if (!ended.ok) throw ended.error
         const errors = job.error ? [job.error] : []
         if (ended.value.code !== 0) {
-          errors.push(ended.value.code === null ? 'Codex encerrou sem código de saída.' : `codex saiu com código ${ended.value.code}`)
+          errors.push(ended.value.code === null ? 'Codex exited without an exit code.' : `codex exited with code ${ended.value.code}`)
         }
-        if (ended.value.signal) errors.push(`Codex encerrou com sinal ${ended.value.signal}.`)
-        if (!job.result?.trim()) errors.push('Codex encerrou sem mensagem final (agent_message).')
+        if (ended.value.signal) errors.push(`Codex exited on signal ${ended.value.signal}.`)
+        if (!job.result?.trim()) errors.push('Codex exited without a final message (agent_message).')
         if (errors.length) {
           if (diagnostics()) errors.push(diagnostics())
           await finish('error', errors.join('\n'))
@@ -183,13 +183,13 @@ export function createJobs(deps: Deps) {
     get(id: string): Job | undefined { const job = find(id); return job && copy(job) },
     resumeTarget(id: string): { sessionId: string; cwd: string; agent: string } | { error: string } {
       const job = find(id)
-      if (!job) return { error: `Job ${id} desconhecido.` }
-      if (active(job)) return { error: `Job ${id} ainda está ativo; aguarde ou cancele antes de retomar.` }
+      if (!job) return { error: `Unknown job ${id}.` }
+      if (active(job)) return { error: `Job ${id} is still active; wait for it or cancel it before resuming.` }
       if (!job.sessionId) {
-        return { error: `Job ${id} morreu antes de o Codex abrir a sessão; é preciso delegar de novo.` }
+        return { error: `Job ${id} died before Codex opened its session; delegate it again.` }
       }
       const busy = jobs.find(other => other.sessionId === job.sessionId && active(other))
-      if (busy) return { error: `A sessão Codex do job ${id} já está em uso pelo job ${busy.id}; aguarde ou cancele antes de retomar.` }
+      if (busy) return { error: `The Codex session of job ${id} is already in use by job ${busy.id}; wait for it or cancel it before resuming.` }
       return { sessionId: job.sessionId, cwd: job.cwd, agent: job.agent }
     },
   }

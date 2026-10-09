@@ -20,7 +20,7 @@ export function statusText(jobs: Job[]): string | undefined {
   const running = jobs.filter(job => job.status === 'running').length
   const background = jobs.filter(job => job.status === 'background').length
   if (!running && !background) return undefined
-  return `pantheon: ${running} rodando · ${background} em background`
+  return `pantheon: ${running} running · ${background} in background`
 }
 
 export function isResumable(job: Job): boolean {
@@ -28,13 +28,13 @@ export function isResumable(job: Job): boolean {
 }
 
 export function configReport(state: ConfigResult): string {
-  const lines = [state.ok ? 'Config válida.' : `Config inválida: ${state.error}`]
-  lines.push(`Perfil ativo: ${state.config.profile} (${state.ok ? state.origins.profile ?? 'default' : 'unknown origin'})`)
-  lines.push('', 'Config efetiva:', JSON.stringify(state.config, null, 2))
+  const lines = [state.ok ? 'Valid config.' : `Invalid config: ${state.error}`]
+  lines.push(`Active profile: ${state.config.profile} (${state.ok ? state.origins.profile ?? 'default' : 'unknown origin'})`)
+  lines.push('', 'Effective config:', JSON.stringify(state.config, null, 2))
   if (state.ok) {
     const origins = Object.entries(state.origins).filter(([, origin]) => origin !== 'default')
-    lines.push('', 'Origem (campos fora do padrão):')
-    lines.push(...(origins.length ? origins.map(([field, origin]) => `- ${field}: ${origin}`) : ['- todos os campos no padrão']))
+    lines.push('', 'Origin (fields not at their default):')
+    lines.push(...(origins.length ? origins.map(([field, origin]) => `- ${field}: ${origin}`) : ['- every field at its default']))
   }
   return lines.join('\n')
 }
@@ -51,16 +51,16 @@ export type DoctorFacts = {
 }
 
 export function doctorReport(facts: DoctorFacts): string {
-  const mark = (ok: boolean) => (ok ? 'ok ' : 'falha')
+  const mark = (ok: boolean) => (ok ? 'ok  ' : 'fail')
   return [
     !facts.usesCodex && !facts.codexVersion
-      ? `info codex no PATH — not needed by profile ${facts.profile}`
-      : `${mark(!!facts.codexVersion)} codex no PATH${facts.codexVersion ? `: ${facts.codexVersion}` : ' — instale o Codex CLI'}`,
+      ? `info codex on PATH — not needed by profile ${facts.profile}`
+      : `${mark(!!facts.codexVersion)} codex on PATH${facts.codexVersion ? `: ${facts.codexVersion}` : ' — install the Codex CLI'}`,
     !facts.usesCodex && !facts.loginOk
       ? `info codex login status — not needed by profile ${facts.profile}`
       : `${mark(facts.loginOk)} codex login status${facts.loginStatus ? `: ${facts.loginStatus}` : ''}`,
     `${mark(facts.config.ok)} config${facts.config.ok ? '' : `: ${facts.config.error}`}`,
-    `ok  raiz autorizada: ${facts.root}${facts.isRepo ? '' : ' (fora de repositório git: --skip-git-repo-check)'}`,
+    `${mark(true)} authorized root: ${facts.root}${facts.isRepo ? '' : ' (outside a git repository: --skip-git-repo-check)'}`,
   ].join('\n')
 }
 

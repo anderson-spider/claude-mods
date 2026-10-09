@@ -17,17 +17,17 @@ const NOW = 1_000_000_000
 test('config report identifies the active profile and origin before JSON', async () => {
   const config = await loadConfig(async () => '{"profile":"codex"}', { user: 'fixture' })
   const lines = configReport(config).split('\n')
-  expect(lines.slice(0, 3)).toContain('Perfil ativo: codex (user)')
+  expect(lines.slice(0, 3)).toContain('Active profile: codex (user)')
 })
 
 test('doctor treats unavailable Codex as informational only when unused', async () => {
   const config = await loadConfig(async () => '{"profile":"claude"}', { user: 'fixture' })
   const facts = { usesCodex: false, profile: 'claude', loginOk: false, config, root: '/repo', isRepo: true }
   const report = doctorReport(facts)
-  expect(report).not.toContain('falha')
+  expect(report).not.toContain('fail')
   expect(report).toContain('info')
   expect(report).toContain('not needed by profile claude')
-  expect(doctorReport({ ...facts, usesCodex: true })).toContain('falha')
+  expect(doctorReport({ ...facts, usesCodex: true })).toContain('fail')
 })
 
 type Opts = { placement?: 'dock' | 'inline'; columns?: number; rows?: number; bodyRows?: number }
@@ -722,7 +722,7 @@ describe('pane', () => {
     const { seen } = world(on, { hang: true })
     await start($)
     const out = parse(await $.tool.call({ tool: DELEGATE, agent: 'fixer', prompt: 'x', background: true } as never))
-    expect(seen.statuses).toContain('pantheon: 0 rodando · 1 em background')
+    expect(seen.statuses).toContain('pantheon: 0 running · 1 in background')
     await $.tool.call({ tool: 'mcp__pantheon__delegate_cancel', jobId: out.jobId } as never)
     expect(seen.statuses[seen.statuses.length - 1]).toBeUndefined()
     expect(statusText([])).toBeUndefined()
@@ -732,11 +732,11 @@ describe('pane', () => {
     const { files } = world(on, { files: { [`${HOME}/.claude/pantheon.json`]: JSON.stringify({ noNetwork: true }) } })
     await start($)
     const ok = await command($, 'config')
-    expect(ok.text).toContain('Config válida')
+    expect(ok.text).toContain('Valid config')
     expect(ok.text).toContain('noNetwork: user')
     files[`${HOME}/.claude/pantheon.json`] = '{ broken'
     const bad = await command($, 'config')
-    expect(bad.text).toContain('Config inválida')
+    expect(bad.text).toContain('Invalid config')
   })
 
   t('/pantheon doctor reports codex, login and config', async ($, on) => {
@@ -750,14 +750,14 @@ describe('pane', () => {
     const out = await command($, 'doctor')
     expect(out.text).toContain('codex-cli 9.9.9')
     expect(out.text).toContain('Logged in')
-    expect(out.text).toContain('raiz autorizada: /repo')
-    expect(out.text).not.toContain('falha')
+    expect(out.text).toContain('authorized root: /repo')
+    expect(out.text).not.toContain('fail')
   })
 
   t('/pantheon cancel without id shows usage', async ($, on) => {
     world(on)
     await start($)
-    expect((await command($, 'cancel')).text).toContain('Uso')
+    expect((await command($, 'cancel')).text).toContain('Usage')
   })
 })
 
