@@ -1,7 +1,7 @@
 {
   "name": "pantheon",
-  "version": "0.3.0",
-  "description": "Makes Claude an orchestrator that delegates to Codex specialists and native Claude agents, with an auto-opening /pantheon panel for roles, activity and jobs.",
+  "version": "0.4.0",
+  "description": "Makes Claude an orchestrator that delegates to specialist roles on Codex or native Claude agents, chosen per profile, with an auto-opening /pantheon panel for roles, activity and jobs.",
   "author": {
     "name": "anderson-spider"
   },
