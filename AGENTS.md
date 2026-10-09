@@ -43,7 +43,7 @@ Inside a session, `/reload-plugins` reloads the hooks.
 
 ## Conventions
 
-- README, docs, code comments and user-facing messages are in English.
+- README, docs, code comments and user-facing messages in the plugins (labels, toasts, errors) are in English.
 - When a plugin's behavior changes, bump `version` in its `plugin.json`.
 - Done for a plugin change means: `claude plugin validate plugins/<name>` and `claude plugin test plugins/<name>` pass, `node scripts/check-consistency.mjs` passes, `version` is bumped if behavior changed, and README/AGENTS.md match the new behavior.
 - PR titles follow Conventional Commits in English and descriptions are in English (`.github/pull_request_template.md`).
