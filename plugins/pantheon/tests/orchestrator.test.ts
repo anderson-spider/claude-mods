@@ -189,7 +189,7 @@ describe('role prompts', () => {
   const keys: PromptKey[] = ['explorer', 'librarian', 'fixer', 'oracle', 'designer', 'councillor']
   for (const key of keys) {
     test(`${key} ends with the task report-format override`, () => {
-      expect(rolePrompt(key, 'codex').endsWith('Se a tarefa definir um formato de relatório, ele substitui o formato acima.')).toBe(true)
+      expect(rolePrompt(key, 'codex').endsWith('If the task defines a report format, it replaces the format above.')).toBe(true)
     })
   }
 
@@ -201,14 +201,14 @@ describe('role prompts', () => {
     }
     expect(rolePrompt('explorer', 'codex')).toContain('<results>')
     expect(rolePrompt('explorer', 'codex')).not.toContain('ast_grep_search')
-    expect(rolePrompt('librarian', 'codex')).toContain('busca na web e MCPs de documentação disponíveis')
+    expect(rolePrompt('librarian', 'codex')).toContain('web search and the documentation MCPs available to you')
     expect(rolePrompt('librarian', 'codex')).not.toContain('context7')
     expect(rolePrompt('librarian', 'codex')).not.toContain('gh_grep')
   })
 
   test('fixer implements within scope, edits with apply_patch and does not commit', () => {
     const prompt = rolePrompt('fixer', 'codex')
-    for (const text of ['apply_patch', '<summary>', '<changes>', '<verification>', 'orchestrator', 'commit', 'NO spawning subagents', 'No design work']) {
+    for (const text of ['apply_patch', '<summary>', '<changes>', '<verification>', 'orchestrator', 'commit', 'Do not spawn subagents', 'No design work']) {
       expect(prompt).toContain(text)
     }
   })

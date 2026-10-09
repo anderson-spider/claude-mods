@@ -107,7 +107,7 @@ Four skills carry the workflow, and the orchestrator invokes them itself when th
 | `debug` | On a bug or failing test: reproduce, form hypotheses, confirm the cause, then fix. |
 | `finish` | Before claiming work is done: runs the real validation, one oracle review of the branch, then the PR. |
 
-- The plan lives in `.pantheon/plans/YYYY-MM-DD-<topic>.md`. `grill` adds `.pantheon/` to `.git/info/exclude`, so it is never committed and goes away with the worktree.
+- The plan lives in `.pantheon/plans/YYYY-MM-DD-<topic>.md`. `grill` adds `.pantheon/` to the repository's `info/exclude`, so it is never committed and goes away with the worktree.
 - Each task lists goal, files, interfaces, acceptance, `risk` and `parallel`. Tasks run in sequence unless marked `parallel: yes` with disjoint files; explorer and librarian lanes always run in parallel.
 - A failed task is retried once by the same implementer, then diagnosed by the oracle, then handed to you. An oracle gate is one review plus at most two re-reviews.
 - The worktree starts from `origin/<default branch>` unless `worktree.baseRef` is `head`.
