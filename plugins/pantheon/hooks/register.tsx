@@ -71,6 +71,8 @@ export async function resolveGatePath(stat: (path: string, resolve: boolean) => 
       if (!resolved?.startsWith('/') || (missing.length > 0 && own.kind !== 'dir')) {
         throw new Error('Could not resolve edit path')
       }
+      // Collapsing a missing component followed by .. can expose an uninspected symlink.
+      if (missing.includes('..')) throw new Error('Could not resolve parent traversal in missing path')
       const parts: string[] = []
       for (const part of `${resolved}/${missing.join('/')}`.split('/')) {
         if (part === '..') parts.pop()

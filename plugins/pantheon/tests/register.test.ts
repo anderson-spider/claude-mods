@@ -79,6 +79,42 @@ function gateWorld(on: On, opts: { score?: number; key?: string; reject?: boolea
 describe('edit gate', () => {
   const pathStat = (realPath: string): FsStat => ({ kind: 'dir', size: 0, mtimeMs: 0, isLink: false, realPath })
   const missingPath = () => Object.assign(new Error('ENOENT: missing path'), { code: 'ENOENT' })
+  test('parent traversal after a missing component enters recovery instead of exempting an unseen symlink', async () => {
+    const target = '/repo/.pantheon/missing/../escape/new.ts'
+    const stat = async (path: string): Promise<FsStat> => {
+      if (path === '/repo/.pantheon/missing' || path.startsWith('/repo/.pantheon/missing/')) throw missingPath()
+      if (path === '/repo/.pantheon/escape') return { ...pathStat('/repo/src'), isLink: true }
+      return pathStat(path)
+    }
+    let held = false
+    const result = await withGateRecovery(async () => {
+      const path = await resolveGatePath(stat, target, ROOT)
+      const context = gateContext({ ...gateEdit, file_path: path }, { root: ROOT, home: HOME })
+      return { result: context.skip ? 'exempt' : 'evaluated' }
+    }, () => false, async () => ({ result: 'unexpected replay' }), async () => {
+      held = true
+      return { deny: 'held for the person' }
+    })
+    expect(held).toBe(true)
+    expect(result).toEqual({ deny: 'held for the person' })
+  })
+  test('host-resolved parent traversal before the missing suffix still works', async () => {
+    const stat = async (path: string): Promise<FsStat> => {
+      if (path.endsWith('/new.ts')) throw missingPath()
+      if (path === '/repo/sub/../.pantheon/plans') return pathStat('/repo/.pantheon/plans')
+      throw new Error('Unexpected ancestor')
+    }
+    expect(await resolveGatePath(stat, '../.pantheon/plans/new.ts', '/repo/sub')).toBe('/repo/.pantheon/plans/new.ts')
+  })
+  test('a plain new subdirectory under .pantheon/plans remains exempt', async () => {
+    const stat = async (path: string): Promise<FsStat> => {
+      if (path === '/repo/.pantheon/plans/new' || path.endsWith('/new/note.md')) throw missingPath()
+      return pathStat(path)
+    }
+    const path = await resolveGatePath(stat, '/repo/.pantheon/plans/new/note.md', ROOT)
+    expect(path).toBe('/repo/.pantheon/plans/new/note.md')
+    expect(gateContext({ ...gateEdit, file_path: path }, { root: ROOT, home: HOME }).skip).toBe(true)
+  })
   // Hook refusals are not filesystem errors. Inject the filesystem boundary directly
   // to exercise actual ENOENT/code semantics; the UI tests below cover host refusals.
   for (const code of ['EACCES', 'EPERM', 'EIO', 'ELOOP', 'unknown']) {
