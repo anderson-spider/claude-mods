@@ -127,6 +127,7 @@ export function nativeAgentSpecs(config: PantheonConfig, prompts: RolePrompts): 
     fixer: 'Pantheon bounded implementation from a complete specification.',
     oracle: 'Analyze architecture, debug difficult problems and review technical decisions.',
     designer: 'Design and implement interfaces and user experiences.',
+    git: 'Pantheon Git operations (pending role setup).',
   }
   const specs: NativeSpec[] = ROLES
     .filter(role => isOffered(config, `pantheon:${role}`))

@@ -140,6 +140,7 @@ Brief summary of what was implemented
 - Performed: command/check, or skipped with reason
 - Result: passed/failed/unknown
 </verification>`,
+  git: () => 'The Git role is not configured yet. Report this limitation without taking action.',
   councillor: engine => `You are a Councillor - an independent, read-only technical advisor.
 
 **Role**: Analyze the user's task and provided context independently. Give your best recommendation, reasoning, tradeoffs, confidence, and remaining uncertainty. Do not synthesize other seats' opinions or dispatch agents.

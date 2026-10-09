@@ -106,7 +106,7 @@ describe('register', () => {
         expect(select?.props.value).toBe('claude')
         expect((select?.props.options as { value: string }[]).map(option => option.value)).toEqual(['claude', 'codex', 'mixed'])
       } finally { await third.unmount() }
-      expect(seen.agents.length).toBe(21)
+      expect(seen.agents.length).toBe(24)
     })
   }
 
@@ -579,7 +579,7 @@ describe('register', () => {
     on('agent.offer', async () => ({ isOffered: true }))
     delete files[`${HOME}/.claude/pantheon.json`]
     await start($)
-    expect(seen.agents).toEqual(['explorer', 'librarian', 'fixer', 'oracle', 'designer', 'councillor-alpha', 'councillor-beta'])
+    expect(seen.agents).toEqual(['explorer', 'librarian', 'fixer', 'oracle', 'designer', 'git', 'councillor-alpha', 'councillor-beta'])
     const out = parse(await $.tool.call({ tool: DELEGATE, agent: 'explorer', prompt: 'find x' } as never))
     expect(out.error).toBe('Use pantheon:explorer through the Agent tool.')
     expect(seen.argv).toEqual([])
@@ -718,7 +718,7 @@ describe('register', () => {
     expect(out.text).not.toContain('fail')
   })
 
-  const PING_ORDER = ['explorer', 'librarian', 'fixer', 'oracle', 'designer', 'councillor:alpha', 'councillor:beta']
+  const PING_ORDER = ['explorer', 'librarian', 'fixer', 'oracle', 'designer', 'git', 'councillor:alpha', 'councillor:beta']
   const agentMessage = (text: string) => `${JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text } })}\n`
 
   /** world() with its process.run replaced: Codex ping runs (`codex exec`) answer through `exec`; the rest is canned. */
@@ -1024,7 +1024,7 @@ describe('register', () => {
   test('invalid first config still registers the default native agents', async ($, on) => {
     const { seen } = world(on, { files: { [`${HOME}/.claude/pantheon.json`]: '{ nope' } })
     await start($)
-    expect(seen.agents).toEqual(['explorer', 'librarian', 'fixer', 'oracle', 'designer', 'councillor-alpha', 'councillor-beta'])
+    expect(seen.agents).toEqual(['explorer', 'librarian', 'fixer', 'oracle', 'designer', 'git', 'councillor-alpha', 'councillor-beta'])
   })
 
   test('a failed native registration is retried on the next turn', async ($, on) => {

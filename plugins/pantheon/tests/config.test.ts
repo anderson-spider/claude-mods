@@ -20,6 +20,15 @@ function rejected(result: ConfigResult) {
 }
 
 describe('profiles', () => {
+  for (const profile of ['claude', 'codex', 'mixed']) {
+    test(`${profile} resolves the git role defaults`, async () => {
+      const config = valid(await load({ profile })).config
+      expect(config.agents.git).toEqual(profile === 'claude'
+        ? { engine: 'claude', model: 'haiku', sandbox: 'workspace-write' }
+        : { engine: 'codex', model: 'gpt-6-luna', effort: 'low', sandbox: 'workspace-write' })
+    })
+  }
+
   test('settings alone select the profile and its origin', async () => {
     const result = valid(await loadConfig(async () => undefined, { user: 'u' }, undefined, 'codex'))
     expect(result.config.profile).toBe('codex')
@@ -257,6 +266,7 @@ describe('loadConfig', () => {
       fixer: { engine: 'claude', model: 'sonnet', sandbox: 'workspace-write' },
       oracle: { engine: 'claude', model: 'opus', sandbox: 'read-only' },
       designer: { engine: 'claude', model: 'sonnet', sandbox: 'workspace-write' },
+      git: { engine: 'claude', model: 'haiku', sandbox: 'workspace-write' },
     })
     expect(result.config.council.seats).toEqual({
       alpha: { engine: 'claude', model: 'opus' }, beta: { engine: 'claude', model: 'sonnet' },

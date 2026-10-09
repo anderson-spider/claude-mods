@@ -53,17 +53,17 @@ describe('Codex roles', () => {
     expect(resolveCodexCall(CLAUDE, { agent: 'nope', prompt: 't' }, ctx, prompts))
       .toEqual({ error: 'Unknown or disabled agent: nope. Valid agents: none.' })
     expect(resolveCodexCall(MIXED, { agent: 'nope', prompt: 't' }, ctx, prompts))
-      .toEqual({ error: 'Unknown or disabled agent: nope. Valid agents: explorer, librarian, fixer, councillor:alpha.' })
+      .toEqual({ error: 'Unknown or disabled agent: nope. Valid agents: explorer, librarian, fixer, git, councillor:alpha.' })
   })
 
   test('Codex availability follows active roles and seats', () => {
     expect(codexAgents(CLAUDE)).toEqual([])
     expect(usesCodex(CLAUDE)).toBe(false)
-    expect(codexAgents(MIXED)).toEqual(['explorer', 'librarian', 'fixer', 'councillor:alpha'])
+    expect(codexAgents(MIXED)).toEqual(['explorer', 'librarian', 'fixer', 'git', 'councillor:alpha'])
     expect(codexAgents(CODEX)).toEqual([...ROLES, 'councillor:alpha', 'councillor:beta'])
     expect(usesCodex(CODEX)).toBe(true)
-    expect(usesCodex({ ...MIXED, disabledAgents: ['explorer', 'librarian', 'fixer', 'council'] })).toBe(false)
-    expect(codexAgents({ ...MIXED, disabledAgents: ['explorer', 'librarian', 'fixer'] })).toEqual(['councillor:alpha'])
+    expect(usesCodex({ ...MIXED, disabledAgents: ['explorer', 'librarian', 'fixer', 'git', 'council'] })).toBe(false)
+    expect(codexAgents({ ...MIXED, disabledAgents: ['explorer', 'librarian', 'fixer', 'git'] })).toEqual(['councillor:alpha'])
     expect(usesCodex({ ...MIXED, disabledAgents: ['explorer', 'librarian', 'fixer'] })).toBe(true)
   })
 

@@ -58,7 +58,7 @@ describe('orchestrator section', () => {
       expect(buildOrchestratorSection({ ...config, disabledAgents })).not.toContain('delegate_result')
     }
     expect(buildOrchestratorSection({
-      ...MIXED, disabledAgents: ['explorer', 'librarian', 'fixer', 'council'],
+      ...MIXED, disabledAgents: ['explorer', 'librarian', 'fixer', 'git', 'council'],
     })).not.toContain('delegate_result')
   })
 
