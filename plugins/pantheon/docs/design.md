@@ -38,15 +38,14 @@ papel entre os grupos Codex e nativo.
   `src/hooks/council-inject/index.ts`, `docs/council.md`. Crédito no README.
 - API de mods: tipos do engine (`claude-code.d.ts`) e `reference.md` da skill
   plugin-authoring.
-- Amostra real de `codex exec --json` (codex-cli 0.161.0):
-  `docs/superpowers/fixtures/codex-exec-sample.jsonl`.
+- Amostra real de `codex exec --json` (codex-cli 0.161.0).
 - Skills do superpowers 6.4.2 (subagent-driven-development, requesting-code-review,
   dispatching-parallel-agents, executing-plans).
 
 ## O que sai do repositório
 
 `runner/`, `bin/`, `examples/`, `references/`, `SKILL.md`, `scripts/sync-skill.js`,
-`docs/` (screenshots dos viewers; fica só `docs/superpowers/`), `.claude/agents/`
+`docs/` (screenshots dos viewers), `.claude/agents/`
 (papéis migram para o mod), `package.json` atual (scripts do runner) e o conteúdo atual
 de `.claude-plugin/`. `README.md`, `CONTRIBUTING.md` e `.github/workflows/ci.yml` são
 reescritos.
