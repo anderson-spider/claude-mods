@@ -634,7 +634,9 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     const tokens: Seg = { text: kilo(sumTokens()), bold: true }
     const hasTiles = isDesk && W >= 36
     const showArt = canArt && IW >= 36
-    const TW = showArt ? IW - (LW + 2) : IW
+    // The terminal draws the session's mascot at the original Claude Code size; the app keeps the large one.
+    const sessionSize = isDesk ? 'large' : 'small'
+    const TW = showArt ? IW - ((isDesk ? LW : MW) + 2) : IW
     const lines: unknown[] = [
       line('o1', [{ text: 'Main session', bold: true }], undefined, TW),
       line('o2', [orchName, ...(model ? [{ text: clip(model, 28), dim: true } as Seg] : [])], undefined, TW, 1),
@@ -645,9 +647,9 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
       lines.push(line('o5', [{ text: 'Cost', dim: true }, cost, { text: 'Tokens', dim: true }, tokens, { text: 'Time', dim: true }, timeSeg()], undefined, TW))
     }
     if (roster.delegating.length) lines.push(line('o6', [{ text: 'delegating →', dim: true }, ...delegatingSegs()], undefined, TW))
-    const content = Math.max(showArt ? 6 : 0, lines.length)
+    const content = Math.max(showArt ? (isDesk ? 6 : 3) : 0, lines.length)
     const inner = showArt
-      ? <Box key="o-row" gap={2} width={IW}>{art('art-orchestrator', 'orchestrator', running ? 'work' : 'idle', 'large')}<Box flexDirection="column" width={TW}>{lines}</Box></Box>
+      ? <Box key="o-row" gap={2} width={IW}>{art('art-orchestrator', 'orchestrator', running ? 'work' : 'idle', sessionSize)}<Box flexDirection="column" width={TW}>{lines}</Box></Box>
       : <Box key="o-col" flexDirection="column" width={IW}>{lines}</Box>
     const blocks: Block[] = [{
       node: card('session', [inner], { dim: true, color: isDesk ? HEX.card : 'inactive' }),
