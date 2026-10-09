@@ -46,13 +46,16 @@ type TrackingIo = {
   now: () => Promise<number>
 }
 
-/** Serialize writes and replace any waiting snapshot with the latest one. */
-export function createQueue<T>(write: (v: T) => Promise<unknown>, onError: (e: unknown) => void) {
+/**
+ * Serialize writes and replace any waiting snapshot with the latest one; with `merge`, a waiting
+ * value is combined with the new one instead (for actions that must all happen, in order).
+ */
+export function createQueue<T>(write: (v: T) => Promise<unknown>, onError: (e: unknown) => void, merge?: (waiting: T, next: T) => T) {
   let pending: { value: T } | undefined
   let flushing: Promise<void> | undefined
   return {
     push(value: T): void {
-      pending = { value }
+      pending = { value: pending && merge ? merge(pending.value, value) : value }
       flushing ??= Promise.resolve().then(async () => {
         try {
           while (pending) {
@@ -154,7 +157,7 @@ export const register: Register = on => {
   const nativesQueue = createQueue<Native[]>(list => trackingLive!.writeNatives(list), notifyTrackingWrite)
   const sessionQueue = createQueue<SessionInfo>(value => trackingLive!.writeSession(value), notifyTrackingWrite)
   // Each view write carries the `$` of the hook that asked for it; only the latest pending one runs.
-  const viewQueue = createQueue<() => Promise<unknown>>(write => write(), notifyTrackingWrite)
+  const viewQueue = createQueue<() => Promise<unknown>>(write => write(), notifyTrackingWrite, (a, b) => async () => { await a(); await b() })
 
   async function ensureTracking(io: TrackingIo): Promise<void> {
     trackingLive = io
