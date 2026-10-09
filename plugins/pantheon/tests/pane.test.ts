@@ -548,7 +548,7 @@ describe('pane', () => {
     await start($)
     await command($, 'config')
     const ui = await mountPane($, 'terminal', { rows: 70 })
-    expect((await railsOf(ui)).map(c => c.props.color)).toEqual([SECTION_COLOR.running, SECTION_COLOR.idle, SECTION_COLOR.timeline])
+    expect((await railsOf(ui)).map(c => c.props.color)).toEqual([SECTION_COLOR.running, SECTION_COLOR.idle, SECTION_COLOR.timeline, SECTION_COLOR.log])
     const all = await texts(ui)
     expect(all.filter(text => text === '●')).toHaveLength(8) // header, orchestrator, oracle and the five idle rows
     expect(all).toContain('⊘') // the disabled librarian is planned and off
@@ -826,7 +826,7 @@ describe('pane', () => {
     await start($)
     const ui = await mountPane($, 'terminal', { rows: 70, columns: 80 })
     const rails = await railsOf(ui)
-    expect(rails.map(c => c.props.color)).toEqual([SECTION_COLOR.running, SECTION_COLOR.idle, SECTION_COLOR.timeline])
+    expect(rails.map(c => c.props.color)).toEqual([SECTION_COLOR.running, SECTION_COLOR.idle, SECTION_COLOR.timeline, SECTION_COLOR.log])
     for (const rail of rails) {
       expect([rail.width, rail.height]).toEqual([76, 1])
       expect(rail.props).toMatchObject({ active: true, width: 76, marks: [], isMerge: false })
@@ -1000,7 +1000,7 @@ describe('pane', () => {
     }
     const timeline = svgs.find(s => s.alt.startsWith('Last 15 minutes'))!
     expect(timeline.source).toContain(`stroke="${rgba(SECTION_COLOR.timeline, 0.75)}"`)
-    expect((await railsOf(ui)).map(c => c.props.color)).toEqual([SECTION_COLOR.running, SECTION_COLOR.idle, SECTION_COLOR.timeline])
+    expect((await railsOf(ui)).map(c => c.props.color)).toEqual([SECTION_COLOR.running, SECTION_COLOR.idle, SECTION_COLOR.timeline, SECTION_COLOR.log])
   })
 
   t('docked draws the Last 15 minutes timeline as lanes of minute cells while there is room', async ($, on) => {
@@ -1018,6 +1018,72 @@ describe('pane', () => {
     expect(tall.some(x => /^━+$/.test(x))).toBe(true)
     await release()
     expect(await texts(await mountPane($, 'terminal', { rows: 24, columns: 80 }))).not.toContain('Last 15 minutes')
+  })
+
+  const hhmmss = (at: number) => {
+    const d = new Date(at)
+    return [d.getHours(), d.getMinutes(), d.getSeconds()].map(n => String(n).padStart(2, '0')).join(':')
+  }
+  const logSetup = (): Native[] => [
+    native({ id: 'l1', role: 'oracle', type: 'pantheon:oracle', task: 'First', rounds: [{ startedAt: NOW - 300_000, endedAt: NOW - 240_000, status: 'done' }] }),
+    native({ id: 'l2', role: 'fixer', type: 'pantheon:fixer', task: 'Second 漢字漢字漢字漢字漢字漢字漢字漢字漢字漢字漢字漢字漢字漢字漢字漢字', rounds: [{ startedAt: NOW - 200_000, endedAt: NOW - 100_000, status: 'failed' }] }),
+  ]
+  const logRows = async (ui: Mounted) => (await ui.findAll({ type: 'Text' })).map(n => (n as unknown as { props: { children?: unknown; text?: string; color?: string } }).props)
+
+  for (const surface of SURFACES) t(`session log card sits last at level 0, oldest first, with colored actors (${surface})`, async ($, on) => {
+    world(on)
+    seed(on, { natives: logSetup() })
+    await start($)
+    const ui = await mountPane($, surface, { rows: 90, columns: 100 })
+    const all = await texts(ui)
+    expect(all).toContain('Session log')
+    expect(all.indexOf('Session log')).toBeGreaterThan(all.indexOf('Last 15 minutes'))
+    const stamps = all.filter(x => /^\d\d:\d\d:\d\d$/.test(x))
+    expect(stamps.length).toBeGreaterThan(0)
+    expect(stamps.length).toBeLessThanOrEqual(8)
+    expect(stamps).toContain(hhmmss(NOW - 240_000))
+    const times = stamps.map(x => x)
+    expect(times.indexOf(hhmmss(NOW - 300_000))).toBeLessThan(times.indexOf(hhmmss(NOW - 240_000)))
+    const nodes = await ui.findAll({ type: 'Text' })
+    const colorOf = (txt: string) => nodes.filter(n => String(n.text).trim() === txt).map(n => (n as unknown as { props: { color?: string } }).props.color)
+    const fixerColor = surface === 'desktop' ? ROLE_COLOR.fixer : ROLE_COLOR.fixer
+    expect(colorOf('fixer')).toContain(fixerColor)
+    expect(all.some(x => x.startsWith('failed after'))).toBe(true)
+  })
+
+  t('session log terminal lines are exactly the card width', async ($, on) => {
+    world(on)
+    seed(on, { natives: logSetup() })
+    await start($)
+    const ui = await mountPane($, 'terminal', { rows: 90, columns: 60 })
+    const nodes = (await ui.findAll({ type: 'Text' })).map(n => String(n.text))
+    expect(nodes[nodes.indexOf('Session log') - 1]).toBe('╭─ ')
+    const bottoms = nodes.filter(x => x.startsWith('╰'))
+    expect(bottoms.every(x => cellWidth(x) === 60)).toBe(true)
+    // Each log row is a Box of IW cells: its three columns plus the border cells add up to 60.
+    for (let k = 0; k < 8; k++) {
+      const row = await ui.find({ key: `log-${k}` }).catch(() => undefined)
+      if (row) expect((row as unknown as { props: { width: number } }).props.width).toBe(56)
+    }
+    expect(nodes.some(x => x.includes('…') && x.includes('漢'))).toBe(true)
+    expect(nodes.every(x => cellWidth(x) <= 60)).toBe(true)
+  })
+
+  for (const surface of SURFACES) t(`session log card is the first to go: gone at level 1 while the timeline stays (${surface})`, async ($, on) => {
+    world(on)
+    seed(on, { natives: logSetup() })
+    await start($)
+    let tall = 0
+    for (let rows = 90; rows >= 20; rows--) {
+      await release()
+      const ui = await mountPane($, surface, { rows, columns: 100 })
+      const all = await texts(ui)
+      const alts = (await ui.findAll({ type: 'Svg' })).map(n => (n as unknown as { props: { alt: string } }).props.alt)
+      const timeline = all.includes('Last 15 minutes') || alts.some(x => x.startsWith('Last 15 minutes'))
+      if (all.includes('Session log')) { tall = rows; continue }
+      if (timeline) { expect(tall).toBeGreaterThan(0); return }
+    }
+    throw new Error('no row count dropped the log card while keeping the timeline')
   })
 
   t('the session card shows cost, tokens and time on one line on both surfaces', async ($, on) => {

@@ -22,6 +22,7 @@ export const SECTION_COLOR = {
   // The amber of a warning (ctx past 70%, a lost run), not a panel section.
   planned: '#D9A441',
   timeline: '#A56BD8',
+  log: '#7B8190',
 }
 
 export const OK = '#4CC2A0'

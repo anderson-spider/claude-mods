@@ -1,6 +1,7 @@
 import type { Elements, RenderSurface } from 'claude-code'
 
 import type { RailProps } from './rail.tsx'
+import { logEvents } from './log'
 import { ago } from './roster'
 import type { Engine, Instance, Roster, RoundView, Slot, SlotName } from './roster'
 import type { PingResult } from './ping'
@@ -866,6 +867,32 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     return frame('timeline', SECTION_COLOR.timeline, { label: 'Last 15 minutes' }, rows)
   }
 
+  // ------- session log: the last 8 events derived from the roster, oldest first, newest last
+  const clockOf = (at: number): string => {
+    const d = new Date(at)
+    return [d.getHours(), d.getMinutes(), d.getSeconds()].map(n => String(n).padStart(2, '0')).join(':')
+  }
+  const logBlock = (): Block | undefined => {
+    const events = logEvents(roster, now, 8)
+    if (!events.length) return undefined
+    const ACTOR_W = 13
+    const textW = Math.max(0, IW - 9 - ACTOR_W)
+    const rows: RowBlock[] = events.map((ev, k) => {
+      const bad = ev.kind === 'failed' || ev.kind === 'lost'
+      const msg: Seg = {
+        text: truncCells(squash(ev.text), textW),
+        color: ev.kind === 'done' ? OK : bad ? BAD : undefined,
+        dim: ev.kind === 'activity' || ev.kind === 'disabled' || ev.kind === 'stopped',
+      }
+      return { node: cols(`log-${k}`, [
+        { w: 9, segs: [{ text: clockOf(ev.at), dim: true }] },
+        { w: ACTOR_W, segs: [{ text: truncCells(ev.actor, ACTOR_W - 1), color: ROLE_COLOR[ev.actor] }] },
+        { w: textW, segs: [msg] },
+      ], IW, isDesk ? rowH : undefined), h: rowH }
+    })
+    return frame('log', SECTION_COLOR.log, { label: 'Session log' }, rows)
+  }
+
   // ------- session
   // Entrance and exit over every run plus the session's own context as input; a side nobody reported is left out.
   const tokenText = (): string => {
@@ -953,38 +980,42 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
   }
 
   // The panel is built at the fullest level that fits `rows`; each step down drops something optional:
-  // 0 everything, 1 the timeline, 2 the Idle rows (the card keeps its heading), 3 the session card and the
-  // running rows to one line each, 4 the optional lines. Whatever still does not fit is cut from the bottom.
+  // 0 everything, 1 the session log, 2 the timeline, 3 the Idle rows (the card keeps its heading), 4 the
+  // session card and the running rows to one line each, 5 the optional lines. Whatever still does not fit is cut from the bottom.
   const buildAgents = (level: number): Block[] => {
     const rows = agentRows()
     const mode = (g: Group): 'full' | 'compact' | 'head' =>
-      g === 'idle' ? (level >= 2 ? 'head' : 'full') : level >= 3 ? 'compact' : 'full'
+      g === 'idle' ? (level >= 3 ? 'head' : 'full') : level >= 4 ? 'compact' : 'full'
     const blocks: Block[] = [{ node: header(), h: headerH }]
     if (data.clockLost) blocks.push({ node: clockWarning(), h: 1 })
-    blocks.push(...sessionBlocks(level >= 3))
+    blocks.push(...sessionBlocks(level >= 4))
     for (const g of ['running', 'idle'] as const) blocks.push(...groupBlock(g, rows[g], mode(g)))
-    if (level < 4 && roster.others.length) blocks.push({ node: othersLine(), h: 1 })
-    if (level === 0 && isDesk && el.Svg) {
+    if (level < 5 && roster.others.length) blocks.push({ node: othersLine(), h: 1 })
+    if (level <= 1 && isDesk && el.Svg) {
       const t = timelineSource(roster.slots, data.session, now, W)
       blocks.push({ node: timelineCard(t), h: t.height / 20, color: SECTION_COLOR.timeline })
-    } else if (level === 0 && !isDesk && !isTiny) {
+    } else if (level <= 1 && !isDesk && !isTiny) {
       const t = timelineBlock()
       if (t) blocks.push(t)
+    }
+    if (level === 0 && !isTiny) {
+      const l = logBlock()
+      if (l) blocks.push(l)
     }
     // Rails link neighbouring cards, in the next card's color; the tight levels have no room for them.
     const linked: Block[] = []
     blocks.forEach((b, k) => {
       linked.push(b)
       const next = blocks[k + 1]
-      if (level < 3 && !isTiny && b.color && next?.color) linked.push(railBlock(`rail-${k}`, next.color))
+      if (level < 4 && !isTiny && b.color && next?.color) linked.push(railBlock(`rail-${k}`, next.color))
     })
-    if (level < 4) linked.push({ node: footer(), h: isDesk ? (W >= 60 ? 2.05 : 3.05) : 1 })
+    if (level < 5) linked.push({ node: footer(), h: isDesk ? (W >= 60 ? 2.05 : 3.05) : 1 })
     return linked
   }
 
   const agentsTab = () => {
     let blocks: Block[] = []
-    for (let level = 0; level <= 4; level++) {
+    for (let level = 0; level <= 5; level++) {
       blocks = buildAgents(level)
       if (blocks.reduce((n, b) => n + b.h, 0) <= data.rows) break
     }
