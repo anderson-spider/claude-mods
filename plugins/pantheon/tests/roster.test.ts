@@ -76,6 +76,10 @@ test('jobs sharing a sessionId are one line with N rounds', () => {
   expect(JSON.stringify(jobs)).toBe(snapshot)
 })
 
+test('the council slot lists every configured seat', () => {
+  expect(roster([], [], config()).slots[6].seats).toEqual(['alpha', 'beta'])
+})
+
 test('council is one slot', () => {
   const jobs = [job({ agent: 'councillor:alpha' })]
   const natives = [native({ role: 'councillor-beta' })]

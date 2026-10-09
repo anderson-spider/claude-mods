@@ -30,7 +30,7 @@ IMPORTANT: prompts and panel modules include third-party work. Keep `LICENSE` an
 
 ## Roster
 
-`roster.ts` joins all five roles on either engine and council seats into seven fixed slots (orchestrator, explorer, librarian, fixer, oracle, designer, council), with "other agents" when present. Slot engines follow the effective config and show `mixed` when an active instance or the latest ended one used a different engine. Cards list every ended instance, newest first.
+`roster.ts` joins all five roles on either engine and council seats into seven fixed slots (orchestrator, explorer, librarian, fixer, oracle, designer, council), with "other agents" when present. Slot engines follow the effective config and show `mixed` when an active instance or the latest ended one used a different engine. The panel groups them as Running (one row per live instance; each council seat has its own) and Idle (exactly one row per role and per council seat with nothing live: the latest run's model, duration and task, a strip of the role's last four rounds with `+N` for older ones, `⇄` for a mixed engine, `⊘` for a disabled one). A lost run counts as Idle. The council slot carries every configured seat in `seats`.
 
 ## Panel
 

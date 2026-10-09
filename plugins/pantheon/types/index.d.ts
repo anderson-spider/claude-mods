@@ -22,7 +22,7 @@ export type SessionInfo = {
   /** US dollars the session has cost so far, as the host's ledger totals it. */
   costUsd?: number
 }
-export type PanelGroup = 'running' | 'finished' | 'planned'
+export type PanelGroup = 'running' | 'idle'
 export type PanelView = { tab: 'agents' | 'jobs'; collapsed?: PanelGroup[] }
 
 declare module 'claude-code' {

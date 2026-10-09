@@ -278,11 +278,11 @@ describe('pane', () => {
       await start($)
       const ui = await mountPane($, surface, { rows: 60 })
       const all = await texts(ui)
-      const at = ['Session', 'Agents · running', 'Agents · finished', 'Agents · planned'].map(x => all.indexOf(x))
+      const at = ['Session', 'Agents · running', 'Agents · idle'].map(x => all.indexOf(x))
       expect(at.every(i => i >= 0)).toBe(true)
       expect(at).toEqual([...at].sort((a, b) => a - b))
       // fixer and oracle run, explorer finished; librarian, designer and council have not run yet.
-      for (const name of ['explorer', 'librarian', 'fixer', 'oracle', 'designer', 'council']) expect(all).toContain(name)
+      for (const name of ['explorer', 'librarian', 'fixer', 'oracle', 'designer', 'council α', 'council β']) expect(all).toContain(name)
       expect(await ui.find({ key: 'tab-agents' })).toBeDefined()
       expect(await ui.find({ key: 'tab-jobs' })).toBeDefined()
       if (surface === 'desktop') {
@@ -323,8 +323,8 @@ describe('pane', () => {
         const strips = (await ui.findAll({ type: 'Svg' })).map(n => (n as unknown as { props: { alt: string; source: string } }).props).filter(p => p.alt === 'jobs')
         expect(strips.filter(p => p.source.split('<rect').length - 1 === 2)).toHaveLength(1)
       } else {
-        // Two blocks for the fixer, one for each of the five planned roles.
-        expect((await texts(ui)).filter(x => x === '▮')).toHaveLength(7)
+        // Two bars for the fixer; roles that never ran have none.
+        expect((await texts(ui)).filter(x => x === '┃')).toHaveLength(2)
       }
       await $.tool.call({ tool: 'mcp__pantheon__delegate_cancel', jobId: second.jobId } as never)
     })
@@ -397,19 +397,19 @@ describe('pane', () => {
     expect(await props('header-top')).toMatchObject({ height: 1.7, width: 80, alignItems: 'center' })
     expect(await props('profile-row')).toMatchObject({ width: 80 })
     expect(await props('session')).toMatchObject({ width: 80, paddingX: 2, position: 'relative', flexDirection: 'column' })
-    expect(await props('planned-rows')).toMatchObject({ width: 80, flexDirection: 'column', position: 'relative' })
-    expect((await props('planned-rows')).borderStyle).toBeUndefined()
+    expect(await props('idle-rows')).toMatchObject({ width: 80, flexDirection: 'column', position: 'relative' })
+    expect((await props('idle-rows')).borderStyle).toBeUndefined()
     expect(await props('jobs-count')).toMatchObject({ width: 3, flexShrink: 0, justifyContent: 'flex-end' })
     const svgs = (await ui.findAll({ type: 'Svg' })).map(n => (n as unknown as { props: { alt: string; source: string; width: number; height: number; isInteractive?: boolean } }).props)
     expect(svgs.some(p => p.source.includes('rx="6" fill="rgba(196,80,127,0.11)"'))).toBe(true) // the Agents tab pill
     expect(svgs.some(p => p.alt === 'card background' && p.source.includes(`stroke="${rgba(SECTION_COLOR.session, 0.75)}"`))).toBe(true)
-    expect(svgs.some(p => p.alt === 'card background' && p.source.includes(`stroke="${rgba(SECTION_COLOR.planned, 0.75)}"`))).toBe(true)
-    expect((await props('pill-toggle-planned')).width).toBe(10.5)
+    expect(svgs.some(p => p.alt === 'card background' && p.source.includes(`stroke="${rgba(SECTION_COLOR.idle, 0.75)}"`))).toBe(true)
+    expect((await props('pill-toggle-idle')).width).toBe(10.5)
     expect((await props('tab-agents')).hotkey).toBe('1')
     expect((await props('tab-jobs')).hotkey).toBe('2')
     expect((await props('key-agents')).hotkey).toBeUndefined()
-    expect(await ui.find({ key: 'plan-explorer' })).toBeDefined()
-    expect(await texts(ui)).toContain('Waiting for work')
+    expect(await ui.find({ key: 'idle-explorer' })).toBeDefined()
+    expect(await texts(ui)).toContain('—') // a role that never ran
     expect((await texts(ui)).some(t => t.includes('▎') || t.includes('━'))).toBe(false)
     const dividers = svgs.filter(p => p.alt === 'divider')
     expect(dividers.length).toBeGreaterThan(0)
@@ -429,7 +429,7 @@ describe('pane', () => {
       }
       const width = columns - 6
       expect(await props('pantheon-desktop')).toMatchObject({ width: columns, paddingX: 3 })
-      for (const key of ['header', 'session', 'planned-rows', 'footer']) expect((await props(key)).width).toBe(width)
+      for (const key of ['header', 'session', 'idle-rows', 'footer']) expect((await props(key)).width).toBe(width)
       const timeline = (await ui.findAll({ type: 'Svg' })).map(n => (n as unknown as { props: { alt: string; source: string; width: number; isInteractive?: boolean } }).props).find(p => p.alt.startsWith('Last 15 minutes'))
       expect(timeline).toBeDefined()
       expect(timeline!.width).toBe(width * 8)
@@ -548,9 +548,9 @@ describe('pane', () => {
     await start($)
     await command($, 'config')
     const ui = await mountPane($, 'terminal', { rows: 70 })
-    expect((await railsOf(ui)).map(c => c.props.color)).toEqual([SECTION_COLOR.running, SECTION_COLOR.planned, SECTION_COLOR.timeline])
+    expect((await railsOf(ui)).map(c => c.props.color)).toEqual([SECTION_COLOR.running, SECTION_COLOR.idle, SECTION_COLOR.timeline])
     const all = await texts(ui)
-    expect(all.filter(text => text === '●')).toHaveLength(7) // header, orchestrator, oracle and the four waiting roles
+    expect(all.filter(text => text === '●')).toHaveLength(8) // header, orchestrator, oracle and the five idle rows
     expect(all).toContain('⊘') // the disabled librarian is planned and off
   })
 
@@ -762,12 +762,12 @@ describe('pane', () => {
     await start($)
     const all = await texts(await mountPane($, 'terminal', { rows: 14 }))
     expect(all).toContain('map') // the running rows stay, one line each
-    expect(all).toContain('Agents · finished')
+    expect(all).toContain('Agents · idle')
     expect(all).not.toContain('tests')
     expect(all).toContain('3 running')
   })
 
-  t('all finished designer instances appear when space allows and fold within the row budget', async ($, on) => {
+  t('a role with several finished runs gets one Idle row for the latest, with its rounds in the strip', async ($, on) => {
     world(on)
     const done = [1, 3, 2].map(k => job({ id: `designer-${k}`, agent: 'designer', status: 'done',
       description: `finished designer ${k}`, startedAt: NOW - 10_000, endedAt: NOW - 4000 + k * 1000 }))
@@ -776,20 +776,47 @@ describe('pane', () => {
     for (const surface of SURFACES) {
       const tall = await mountPane($, surface, { rows: 80 })
       const all = await texts(tall)
-      expect(all.filter(x => x.startsWith('finished designer '))).toEqual([
-        'finished designer 3', 'finished designer 2', 'finished designer 1',
-      ])
-      expect(await tall.find({ key: 'plan-designer' })).toBeUndefined()
-      await tall.press({ key: 'toggle-finished' })
+      expect(all.filter(x => x.startsWith('finished designer '))).toEqual(['finished designer 3'])
+      expect(await tall.find({ key: 'idle-designer' })).toBeDefined()
+      await tall.press({ key: 'toggle-idle' })
       expect((await texts(tall)).some(x => x.startsWith('finished designer '))).toBe(false)
-      await tall.press({ key: 'toggle-finished' })
+      await tall.press({ key: 'toggle-idle' })
       await release()
       const short = await mountPane($, surface, { rows: 12 })
-      expect(await texts(short)).toContain('Agents · finished')
+      expect(await texts(short)).toContain('Agents · idle')
       expect((await texts(short)).some(x => x.startsWith('finished designer '))).toBe(false)
       expect(rowsOf((await short.drawn()) as Node) <= 12).toBe(true)
       await release()
     }
+  })
+
+  t('Idle sums a role up in one row: last four rounds green or red and +N for the rest, lost runs included', async ($, on) => {
+    world(on)
+    const run = (k: number, status: 'done' | 'failed' | 'lost') => native({
+      id: `f${k}`, role: 'fixer', type: 'pantheon:fixer', task: `task ${k}`,
+      rounds: [{ startedAt: NOW - 600_000 + k * 10_000, endedAt: status === 'lost' ? undefined : NOW - 590_000 + k * 10_000, status }],
+    })
+    seed(on, { natives: [run(1, 'done'), run(2, 'done'), run(3, 'failed'), run(4, 'done'), run(5, 'lost'), run(6, 'done')] })
+    await start($)
+    const ui = await mountPane($, 'terminal', { rows: 70 })
+    expect(await ui.find({ key: 'idle-fixer' })).toBeDefined()
+    const all = await texts(ui)
+    expect(all.filter(x => x.startsWith('task '))).toEqual(['task 6']) // the latest run only
+    expect(all).toContain('+2')
+    const bars = (await ui.findAll({ type: 'Text' })).filter(n => String(n.text) === '┃')
+      .map(n => (n as unknown as { props: { color?: string } }).props.color)
+    expect(bars).toEqual([BAD, OK, undefined, OK]) // failed, done, lost (dim), done
+  })
+
+  t('an engine-mixed role is marked on its row and not given a second one', async ($, on) => {
+    world(on, { files: { [`${HOME}/.claude/pantheon.json`]: JSON.stringify({ profile: 'codex' }) } })
+    seed(on, { natives: [native({ id: 'x1', role: 'oracle', type: 'pantheon:oracle', rounds: [{ startedAt: NOW - 90_000, endedAt: NOW - 30_000, status: 'done' }] })] })
+    await start($)
+    await command($, 'config')
+    const ui = await mountPane($, 'terminal', { rows: 70 })
+    const cards = (await texts(ui)).slice(0, (await texts(ui)).indexOf('Last 15 minutes'))
+    expect(cards.filter(x => x === 'oracle')).toHaveLength(1)
+    expect(cards.some(x => x.startsWith('⇄'))).toBe(true)
   })
 
   t('docked: rails join neighbouring cards in the next card color and move only with active work', async ($, on) => {
@@ -799,7 +826,7 @@ describe('pane', () => {
     await start($)
     const ui = await mountPane($, 'terminal', { rows: 70, columns: 80 })
     const rails = await railsOf(ui)
-    expect(rails.map(c => c.props.color)).toEqual([SECTION_COLOR.running, SECTION_COLOR.finished, SECTION_COLOR.planned, SECTION_COLOR.timeline])
+    expect(rails.map(c => c.props.color)).toEqual([SECTION_COLOR.running, SECTION_COLOR.idle, SECTION_COLOR.timeline])
     for (const rail of rails) {
       expect([rail.width, rail.height]).toEqual([76, 1])
       expect(rail.props).toMatchObject({ active: true, width: 76, marks: [], isMerge: false })
@@ -863,13 +890,12 @@ describe('pane', () => {
     ] })
     await start($)
     const ui = await mountPane($, 'terminal', { rows: 70 })
-    const blocks = (await ui.findAll({ type: 'Text' })).filter(n => String(n.text) === '▮')
+    const blocks = (await ui.findAll({ type: 'Text' })).filter(n => String(n.text) === '┃')
       .map(n => (n as unknown as { props: { color?: string; dimColor?: boolean } }).props)
     const failed = blocks.findIndex(b => b.color === BAD)
     expect(failed).toBeGreaterThanOrEqual(0)
     expect(blocks[failed + 1].color).toBe(ROLE_COLOR.fixer) // the running second round follows the failed one
     expect(blocks.some(b => b.color === OK)).toBe(true) // the finished explorer
-    expect(blocks.some(b => b.color === undefined && b.dimColor)).toBe(true) // a planned role
   })
 
   t('docked: the context gauge changes color past 70% and 85%', async ($, on) => {
@@ -969,12 +995,12 @@ describe('pane', () => {
     const ui = await mountPane($, 'desktop', { rows: 80 })
     const svgs = (await ui.findAll({ type: 'Svg' })).map(n => (n as unknown as { props: { source: string; alt: string } }).props)
     const plates = svgs.filter(s => s.alt === 'card background').map(s => s.source)
-    for (const color of [SECTION_COLOR.session, SECTION_COLOR.running, SECTION_COLOR.finished, SECTION_COLOR.planned]) {
+    for (const color of [SECTION_COLOR.session, SECTION_COLOR.running, SECTION_COLOR.idle]) {
       expect(plates.some(source => source.includes(`stroke="${rgba(color, 0.75)}"`))).toBe(true)
     }
     const timeline = svgs.find(s => s.alt.startsWith('Last 15 minutes'))!
     expect(timeline.source).toContain(`stroke="${rgba(SECTION_COLOR.timeline, 0.75)}"`)
-    expect((await railsOf(ui)).map(c => c.props.color)).toEqual([SECTION_COLOR.running, SECTION_COLOR.finished, SECTION_COLOR.planned, SECTION_COLOR.timeline])
+    expect((await railsOf(ui)).map(c => c.props.color)).toEqual([SECTION_COLOR.running, SECTION_COLOR.idle, SECTION_COLOR.timeline])
   })
 
   t('docked draws the Last 15 minutes timeline as lanes of minute cells while there is room', async ($, on) => {
@@ -1098,16 +1124,16 @@ describe('pane', () => {
     expect(all.filter(x => x.length > 40)).toEqual([])
   })
 
-  t('a short body degrades the planned and finished groups to their headings', async ($, on) => {
+  t('a short body degrades the Idle group to its heading', async ($, on) => {
     world(on)
     await start($)
     const tall = await texts(await mountPane($, 'terminal', { rows: 60, bodyRows: 60 }))
     expect(tall.filter(x => x === 'disabledAgents').length).toBe(0)
-    expect(tall).toContain('Waiting for work')
+    expect(tall).toContain('explorer')
     await release()
     const short = await texts(await mountPane($, 'terminal', { rows: 40, bodyRows: 14 }))
-    expect(short).toContain('Agents · planned')
-    expect(short).not.toContain('Waiting for work')
+    expect(short).toContain('Agents · idle')
+    expect(short).not.toContain('explorer')
   })
 
   t('a failing clock read draws without clocks and says so', async ($, on) => {
@@ -1177,7 +1203,9 @@ describe('pane', () => {
       const all = await texts(await mountPane($, surface))
       expect(all).toContain('council β')
       expect(all).toContain('weigh in')
-      expect(all).toContain('alpha off')
+      expect(all).toContain('council α') // the disabled seat is an Idle row of its own
+      expect(all).toContain('Disabled')
+      expect(all).toContain('⊘')
       await release()
       const mini = await texts(await mountPane($, 'terminal', { placement: 'inline' }))
       expect(mini).toContain('⊘ alpha off')
@@ -1205,7 +1233,7 @@ describe('pane', () => {
     await start($)
     const ui = await mountPane($, 'terminal')
     // Two blocks: the lost round has no state color and no duration of its own; the running one is the role's.
-    const blocks = (await ui.findAll({ type: 'Text' })).filter(n => String(n.text) === '▮')
+    const blocks = (await ui.findAll({ type: 'Text' })).filter(n => String(n.text) === '┃')
       .map(n => (n as unknown as { props: { color?: string; dimColor?: boolean } }).props)
     const running = blocks.findIndex(b => b.color === ROLE_COLOR.fixer)
     expect(running).toBeGreaterThan(0)

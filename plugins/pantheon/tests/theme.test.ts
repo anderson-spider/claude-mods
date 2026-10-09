@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 import { ROLE_COLOR, SECTION_COLOR, boxLines, cellWidth, gauge, modelName, padCells, strip, truncCells } from '../hooks/theme'
 
 test('cellWidth counts terminal cells per code point', () => {
-  for (const g of ['▰', '▱', '▮', '●', 'α', 'β', '↑', '↓', '─', '│', '╭', '╮', '╰', '╯', '…', 'a']) expect(cellWidth(g)).toBe(1)
+  for (const g of ['▰', '▱', '┃', '●', 'α', 'β', '↑', '↓', '─', '│', '╭', '╮', '╰', '╯', '…', 'a']) expect(cellWidth(g)).toBe(1)
   expect(cellWidth('')).toBe(0)
   expect(cellWidth('abc')).toBe(3)
   expect(cellWidth('漢字')).toBe(4)
@@ -40,7 +40,7 @@ test('strip makes one block per job with state colors', () => {
     { state: 'planned', role: 'explorer' },
   ])
   expect(runs.length).toBe(4)
-  expect(runs.every(r => r.text === '▮')).toBe(true)
+  expect(runs.every(r => r.text === '┃')).toBe(true)
   expect(runs[0]!.color).toBe(ROLE_COLOR.fixer)
   expect(runs[1]!.color).toBe('#4CC2A0')
   expect(runs[2]!.color).toBe('#E5604D')
@@ -49,12 +49,12 @@ test('strip makes one block per job with state colors', () => {
 })
 
 test('SECTION_COLOR has the mockup sections', () => {
-  expect(Object.keys(SECTION_COLOR).sort()).toEqual(['finished', 'planned', 'running', 'session', 'timeline'])
+  expect(Object.keys(SECTION_COLOR).sort()).toEqual(['idle', 'planned', 'running', 'session', 'timeline'])
 })
 
 test('boxLines gives every line exactly width cells', () => {
   const width = 30
-  const lines = boxLines('Jobs ▰▱', '#5B93E6', ['▰▰▰▱▱ α β ↑ ↓ ▮', 'a very long line that must be truncated for sure', '漢字漢字漢字', ''], width)
+  const lines = boxLines('Jobs ▰▱', '#5B93E6', ['▰▰▰▱▱ α β ↑ ↓ ┃', 'a very long line that must be truncated for sure', '漢字漢字漢字', ''], width)
   expect(lines.length).toBe(6)
   for (const l of lines) expect(cellWidth(l.map(r => r.text).join(''))).toBe(width)
   const flat = (i: number) => lines[i]!.map(r => r.text).join('')

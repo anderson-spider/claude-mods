@@ -4,7 +4,7 @@ import type { RailProps } from './rail.tsx'
 import { ago } from './roster'
 import type { Engine, Instance, Roster, RoundView, Slot, SlotName } from './roster'
 import type { PingResult } from './ping'
-import { BAD, OK, ROLE_COLOR, SECTION_COLOR, cellWidth, gauge, modelName, strip, truncCells } from './theme'
+import { BAD, BLOCK, OK, ROLE_COLOR, SECTION_COLOR, cellWidth, gauge, modelName, strip, truncCells } from './theme'
 import type { StripItem } from './theme'
 import type { ConfigResult, Job, PanelGroup, SessionInfo } from './types'
 
@@ -599,12 +599,14 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
   const plain = (key: string, segs: Seg[], width: number, height?: number) => cols(key, [{ w: width, segs }], width, height)
 
   type Group = PanelGroup
-  type AgentRow = { key: string; slot: Slot; inst?: Instance; group: Group }
+  // A Running row is one live instance. An Idle row is a whole role (or council seat): `inst` is its latest
+  // ended run and `rounds` every round the role ran, oldest first.
+  type AgentRow = { key: string; slot: Slot; inst?: Instance; group: Group; name: string; rounds?: RoundView[]; isOff?: boolean }
   type RowBlock = { node: unknown; h: number }
   type Block = RowBlock & { color?: string }
   type Title = { label: string; count?: number }
   type Toggle = { group: Group; label: string }
-  const LABEL: Record<Group, string> = { running: 'Agents · running', finished: 'Agents · finished', planned: 'Agents · planned' }
+  const LABEL: Record<Group, string> = { running: 'Agents · running', idle: 'Agents · idle' }
   const collapsedSet = new Set<string>(data.collapsed ?? [])
   const rowH = isDesk ? 1.4 : 1
 
@@ -699,13 +701,18 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     status === 'running' || status === 'background' ? 'running'
       : status === 'done' ? 'done'
         : status === 'failed' || status === 'error' ? 'failed' : 'planned'
-  const stripSegs = (key: string, items: StripItem[]): Seg[] => {
+  // One thin bar per round; `extra` rounds beyond the shown ones read as +N.
+  const stripSegs = (key: string, items: StripItem[], extra = 0): Seg[] => {
     const runs = strip(items)
+    const more: Seg[] = extra > 0 ? [{ text: `+${extra}`, dim: true }] : []
+    if (!runs.length) return more
     if (isDesk && el.Svg) {
-      const rects = runs.map((r, k) => `<rect x="${k * 14 + 1}" y="1" width="11" height="12" rx="2.5" ${r.color ? `fill="${r.color}"` : `fill="none" stroke="${HEX.dot}" stroke-width="1.4"`}/>`).join('')
-      return [{ node: image(key, `<svg xmlns="http://www.w3.org/2000/svg" width="${runs.length * 14 + 1}" height="14">${rects}</svg>`, runs.length * 14 + 1, 14, 'jobs'), w: (runs.length * 14 + 1) / 8 }]
+      const px = runs.length * 8 + 1
+      const rects = runs.map((r, k) => `<rect x="${k * 8 + 1}" y="1" width="4" height="12" rx="1.5" ${r.color ? `fill="${r.color}"` : `fill="none" stroke="${HEX.dot}" stroke-width="1.2"`}/>`).join('')
+      const cellsW = Math.ceil(px / 8) + (extra > 0 ? 1 : 0)
+      return [{ node: <Box key={`${key}-box`} width={cellsW} flexShrink={0}>{image(key, `<svg xmlns="http://www.w3.org/2000/svg" width="${px}" height="14">${rects}</svg>`, px, 14, 'jobs')}</Box>, w: cellsW }, ...more]
     }
-    return runs.map(r => ({ text: r.text, color: r.color, dim: r.dim }))
+    return [...runs.map(r => ({ text: r.text, color: r.color, dim: r.dim })), ...(extra > 0 ? [{ text: ' ' }, ...more] : [])]
   }
 
   // What an instance read (Codex input, Claude context) and wrote.
@@ -722,20 +729,34 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     const end = i.endedAt ?? endOf(i.rounds[i.rounds.length - 1] ?? { startedAt: i.startedAt, status: i.status }, now)
     return { text: end === undefined ? '—' : fmtClock(end - i.startedAt), dim: true }
   }
+  const nameOf = (slot: Slot, seat?: string) => `${slot.name}${seat ? ` ${SEATS[seat] ?? seat}` : ''}`
+  // Running: one row per live instance (parallel runs and council seats each get theirs). Idle: exactly one
+  // row per role and per council seat that has nothing live, summing up every run it ever had.
   const agentRows = (): Record<Group, AgentRow[]> => {
-    const out: Record<Group, AgentRow[]> = { running: [], finished: [], planned: [] }
+    const out: Record<Group, AgentRow[]> = { running: [], idle: [] }
     for (const slot of roles) {
-      for (const inst of slot.instances) {
-        const group: Group = inst.isActive ? 'running' : 'finished'
-        out[group].push({ key: inst.id, slot, inst, group })
+      for (const inst of slot.instances.filter(i => i.isActive)) {
+        out.running.push({ key: inst.id, slot, inst, group: 'running', name: nameOf(slot, inst.seat) })
       }
-      if (!slot.instances.length) out.planned.push({ key: `plan-${slot.name}`, slot, group: 'planned' })
+      const all = slot.history ?? slot.instances
+      const isCouncil = slot.name === 'council'
+      const seats = isCouncil && slot.state !== 'off'
+        ? [...new Set([...(slot.seats ?? []), ...all.map(i => i.seat).filter((x): x is string => !!x)])].sort() : []
+      for (const seat of seats.length ? seats : [undefined]) {
+        const mine = isCouncil && seats.length ? all.filter(i => i.seat === seat) : all
+        if (mine.some(i => i.isActive)) continue
+        const isOff = slot.state === 'off' || (seat !== undefined && !!slot.seatsOff?.includes(seat))
+        const last = slot.instances.filter(i => !i.isActive && mine.includes(i))[0]
+        const rounds = mine.flatMap(i => i.rounds).sort((a, b) => a.startedAt - b.startedAt)
+        out.idle.push({ key: `idle-${slot.name}${seat ? `-${seat}` : ''}`, slot, inst: last, group: 'idle', name: nameOf(slot, seat), rounds, isOff })
+      }
     }
     return out
   }
   const dotOf = (r: AgentRow): Seg => {
     const { slot, inst: i } = r
-    if (!i) return { text: slot.state === 'off' ? '⊘' : '●', dim: true }
+    if (r.isOff) return { text: '⊘', dim: true }
+    if (!i) return { text: '●', dim: true }
     if (i.isActive) return { text: '●', color: ROLE_COLOR[slot.name] }
     if (i.status === 'done') return { text: '●', color: OK }
     if (i.status === 'error' || i.status === 'failed') return { text: '●', color: BAD }
@@ -747,16 +768,17 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
   const MODEL_W = 11
   const TIME_W = 6
   const CTX_W = 9
-  const STRIP_W = isDesk ? 7.5 : 5
+  const STRIP_W = 8
   const agentRowBlock = (r: AgentRow, compact: boolean, withCtxCol: boolean): RowBlock => {
     const { slot, inst: i } = r
     const role = slot.name
-    const isPlanned = r.group === 'planned'
-    const isOff = slot.state === 'off'
-    const running = r.group === 'running'
-    const name = `${role}${i?.seat ? ` ${SEATS[i.seat] ?? i.seat}` : ''}`
+    const isIdle = r.group === 'idle'
+    const isOff = !!r.isOff
+    const running = !isIdle
+    const mixed = isIdle && slot.engine === 'mixed'
     const model = modelName(i?.model ?? slot.model)
-    const task = isPlanned ? (isOff ? `Disabled · ${slot.offReason ?? 'disabledAgents'}` : 'Waiting for work') : squash(i!.task || '(no description)')
+    const task = isOff ? (isIdle && slot.state !== 'off' ? 'Disabled' : `Disabled · ${slot.offReason ?? 'disabledAgents'}`)
+      : i ? squash(i.task || '(no description)') : '—'
     let withModel = !compact
     let withStrip = !compact
     let withCtx = !compact && withCtxCol
@@ -766,16 +788,18 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     if (IW - fixedW() < 12) withModel = false
     if (IW - fixedW() < 12) withStrip = false
     const taskW = Math.max(0, IW - fixedW())
-    const items: StripItem[] = i
-      ? i.rounds.slice(-4).map(rd => ({ state: stateOf(rd.status), role }))
-      : [{ state: 'planned', role }]
+    // Running: this instance's rounds in the role's color. Idle: the role's last four rounds, green or red.
+    const shown = isIdle ? (r.rounds ?? []).slice(-4) : (i?.rounds ?? []).slice(-4)
+    const items: StripItem[] = shown.map(rd => ({ state: stateOf(rd.status), role }))
+    const extra = isIdle ? Math.max(0, (r.rounds?.length ?? 0) - 4) : 0
     const pct = agentCtx(i)
     const time: Seg = i ? durationSeg(r.key, i, running) : { text: '—', dim: true }
+    const faded = isIdle && (!i || isOff)
     const list: Col[] = [
       { w: 2, segs: [dotOf(r)] },
-      { w: NAME_W, segs: [{ text: truncCells(name, NAME_W - 1), color: ROLE_COLOR[role], bold: true, dim: isPlanned }] },
-      ...(withModel ? [{ w: MODEL_W, segs: [{ text: truncCells(model, MODEL_W - 1), dim: true }] }] : []),
-      ...(withStrip ? [{ w: STRIP_W, segs: stripSegs(`strip-${r.key}`, items) }] : []),
+      { w: NAME_W, segs: [{ text: truncCells(r.name, NAME_W - 1), color: ROLE_COLOR[role], bold: true, dim: faded }] },
+      ...(withModel ? [{ w: MODEL_W, segs: [{ text: truncCells(`${mixed ? '⇄ ' : ''}${model}`, MODEL_W - 1), dim: true }] }] : []),
+      ...(withStrip ? [{ w: STRIP_W, segs: stripSegs(`strip-${r.key}`, items, extra) }] : []),
       { w: TIME_W, segs: [time] },
       ...(withCtx ? [{ w: CTX_W, segs: pct === undefined ? [] : [{ text: `ctx ${pct}%`, dim: true }] }] : []),
       { w: taskW, segs: [{ text: task, dim: !running }] },
@@ -858,8 +882,10 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
       const on = Math.min(n, Math.max(0, Math.round((pct / 100) * n)))
       const rects = Array.from({ length: n }, (_, k) => `<rect x="${k * 11 + 1}" y="1" width="8" height="12" rx="2" fill="${k < on ? color : HEX.track}"/>`).join('')
       // The Box is a whole number of cells wider than the image, so the percentage never touches the bar.
-      const cellsW = Math.ceil((n * 11 + 1) / 8) + 1
-      return [{ node: <Box key={`${key}-box`} width={cellsW} flexShrink={0}>{image(key, `<svg xmlns="http://www.w3.org/2000/svg" width="${n * 11 + 1}" height="14">${rects}</svg>`, n * 11 + 1, 14, `context ${Math.round(pct)}%`)}</Box>, w: cellsW }]
+      // The image carries 8 empty pixels on its right and the Box is another whole cell wider.
+      const px = n * 11 + 9
+      const cellsW = Math.ceil(px / 8) + 1
+      return [{ node: <Box key={`${key}-box`} width={cellsW} flexShrink={0}>{image(key, `<svg xmlns="http://www.w3.org/2000/svg" width="${px}" height="14">${rects}</svg>`, px, 14, `context ${Math.round(pct)}%`)}</Box>, w: cellsW }]
     }
     const g = gauge(pct, n)
     return [...(g.on ? [{ text: g.on, color }] : []), ...(g.off ? [{ text: g.off, dim: true }] : [])]
@@ -894,7 +920,7 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     }
     const ctxLabel: Seg = { text: 'ctx ', dim: true }
     // 'ctx ' and ' 100%' take 9 cells; the gauge takes the rest up to 30 blocks, or none when under 3.
-    const gaugeN = Math.min(30, isDesk ? Math.floor(((IW - 11) * 8 - 1) / 11) : IW - 9)
+    const gaugeN = Math.min(30, isDesk ? Math.floor(((IW - 13) * 8 - 9) / 11) : IW - 9)
     rows.push({ node: space('s1', identity, state, isDesk ? 1.6 : undefined), h: isDesk ? 1.6 : 1 })
     rows.push({
       node: plain('s-ctx', ctx != null
@@ -927,23 +953,17 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
   }
 
   // The panel is built at the fullest level that fits `rows`; each step down drops something optional:
-  // 0 everything, 1 the timeline, 2 the planned rows, 3 the finished rows, 4 the session card and the
-  // running rows to one line each, 5 the optional lines. Whatever still does not fit is cut from the bottom.
+  // 0 everything, 1 the timeline, 2 the Idle rows (the card keeps its heading), 3 the session card and the
+  // running rows to one line each, 4 the optional lines. Whatever still does not fit is cut from the bottom.
   const buildAgents = (level: number): Block[] => {
     const rows = agentRows()
     const mode = (g: Group): 'full' | 'compact' | 'head' =>
-      g === 'planned' ? (level >= 2 ? 'head' : 'full')
-        : g === 'finished' ? (level >= 3 ? 'head' : 'full')
-          : level >= 4 ? 'compact' : 'full'
+      g === 'idle' ? (level >= 2 ? 'head' : 'full') : level >= 3 ? 'compact' : 'full'
     const blocks: Block[] = [{ node: header(), h: headerH }]
     if (data.clockLost) blocks.push({ node: clockWarning(), h: 1 })
-    blocks.push(...sessionBlocks(level >= 4))
-    for (const g of ['running', 'finished', 'planned'] as const) blocks.push(...groupBlock(g, rows[g], mode(g)))
-    if (level < 5) {
-      const off = roles.filter(s => s.seatsOff?.length).flatMap(s => s.seatsOff!)
-      if (off.length) blocks.push({ node: line('seats-off', [{ text: '⊘', dim: true }, { text: `${off.join(', ')} off`, dim: true }], undefined, W), h: 1 })
-      if (roster.others.length) blocks.push({ node: othersLine(), h: 1 })
-    }
+    blocks.push(...sessionBlocks(level >= 3))
+    for (const g of ['running', 'idle'] as const) blocks.push(...groupBlock(g, rows[g], mode(g)))
+    if (level < 4 && roster.others.length) blocks.push({ node: othersLine(), h: 1 })
     if (level === 0 && isDesk && el.Svg) {
       const t = timelineSource(roster.slots, data.session, now, W)
       blocks.push({ node: timelineCard(t), h: t.height / 20, color: SECTION_COLOR.timeline })
@@ -956,15 +976,15 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     blocks.forEach((b, k) => {
       linked.push(b)
       const next = blocks[k + 1]
-      if (level < 4 && !isTiny && b.color && next?.color) linked.push(railBlock(`rail-${k}`, next.color))
+      if (level < 3 && !isTiny && b.color && next?.color) linked.push(railBlock(`rail-${k}`, next.color))
     })
-    if (level < 5) linked.push({ node: footer(), h: isDesk ? (W >= 60 ? 2.05 : 3.05) : 1 })
+    if (level < 4) linked.push({ node: footer(), h: isDesk ? (W >= 60 ? 2.05 : 3.05) : 1 })
     return linked
   }
 
   const agentsTab = () => {
     let blocks: Block[] = []
-    for (let level = 0; level <= 5; level++) {
+    for (let level = 0; level <= 4; level++) {
       blocks = buildAgents(level)
       if (blocks.reduce((n, b) => n + b.h, 0) <= data.rows) break
     }

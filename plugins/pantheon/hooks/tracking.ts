@@ -129,7 +129,7 @@ export const normalizeSession = (raw: unknown): SessionInfo => {
   }
 }
 
-const GROUPS: PanelGroup[] = ['running', 'finished', 'planned']
+const GROUPS: PanelGroup[] = ['running', 'idle']
 
 export const normalizeView = (raw: unknown): PanelView => {
   if (!isObject(raw) || (raw.tab !== 'agents' && raw.tab !== 'jobs')) return { ...DEFAULT_VIEW }

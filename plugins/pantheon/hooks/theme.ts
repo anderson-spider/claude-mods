@@ -18,7 +18,8 @@ export const ROLE_COLOR: Record<SlotName, string> = {
 export const SECTION_COLOR = {
   session: '#5B93E6',
   running: '#4CC2A0',
-  finished: '#8F96A6',
+  idle: '#8F96A6',
+  // The amber of a warning (ctx past 70%, a lost run), not a panel section.
   planned: '#D9A441',
   timeline: '#A56BD8',
 }
@@ -78,12 +79,15 @@ export function gauge(pct: number, width: number): { on: string; off: string } {
   return { on: '▰'.repeat(full), off: '▱'.repeat(Math.max(0, width - full)) }
 }
 
+// A thin vertical bar, one cell wide: the heavy box-drawing stroke stays a line where ▮ turns into a fat block in many fonts.
+export const BLOCK = '┃'
+
 export function strip(items: StripItem[]): Run[] {
   return items.map(it => {
-    if (it.state === 'running') return { text: '▮', color: ROLE_COLOR[it.role] }
-    if (it.state === 'done') return { text: '▮', color: OK }
-    if (it.state === 'failed') return { text: '▮', color: BAD }
-    return { text: '▮', dim: true }
+    if (it.state === 'running') return { text: BLOCK, color: ROLE_COLOR[it.role] }
+    if (it.state === 'done') return { text: BLOCK, color: OK }
+    if (it.state === 'failed') return { text: BLOCK, color: BAD }
+    return { text: BLOCK, dim: true }
   })
 }
 
