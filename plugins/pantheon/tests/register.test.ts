@@ -227,6 +227,17 @@ describe('register', () => {
     expect(received).toEqual([])
   })
 
+  for (const cleared of ['', '  ']) {
+    test(`config.set with ${JSON.stringify(cleared)} clears the selection and reaches next`, async ($, on) => {
+      world(on)
+      const received: ConfigSetInput[] = []
+      on('config.set', async (_$, e) => { received.push(e); return { value: e.value } })
+      const input = profileChange(cleared)
+      expect(await $.config.set(input)).toEqual({ value: cleared })
+      expect(received).toEqual([input])
+    })
+  }
+
   test('config.set denies malformed user JSON after a valid config without calling next', async ($, on) => {
     const { files } = world(on)
     const received: ConfigSetInput[] = []
@@ -651,9 +662,13 @@ describe('register', () => {
     expect(out.text).not.toContain('fail')
   })
 
+  const PING_ORDER = ['explorer', 'librarian', 'fixer', 'oracle', 'designer', 'councillor:alpha', 'councillor:beta']
+  const agentMessage = (text: string) => `${JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text } })}\n`
+
   /** world() with its process.run replaced: Codex ping runs (`codex exec`) answer through `exec`; the rest is canned. */
-  function pingWorld(on: On, opts: { profile: string; codex?: boolean; file?: string; exec?: (argv: string[]) => { exitCode: number; stdout?: string; stderr?: string } | Error }) {
+  function pingWorld(on: On, opts: { profile: string; codex?: boolean; file?: string; exec?: (argv: string[], asked: string) => { exitCode: number; stdout?: string; stderr?: string } | Error | 'hang' }) {
     const execs: string[][] = []
+    const inits: unknown[] = []
     const submits: string[] = []
     const fixture = world(new Proxy(on, {
       apply(target, thisArg, args) {
@@ -669,14 +684,18 @@ describe('register', () => {
       if (key === 'codex login status') return result({ exitCode: 0, stdout: 'Logged in\n' })
       if (e.argv[0] === 'codex' && e.argv[1] === 'exec') {
         execs.push(e.argv)
-        const out = opts.exec ? opts.exec(e.argv) : { exitCode: 0, stdout: 'pong' }
+        inits.push((e as { init?: unknown }).init)
+        // The mock sees no stdin, so a ping's target is told by call order, which follows pingTargets order.
+        const asked = PING_ORDER[execs.length - 1] ?? 'unknown'
+        const out = opts.exec ? opts.exec(e.argv, asked) : { exitCode: 0, stdout: agentMessage(PING_ORDER.map(n => `pong ${n}`).join(' ')) }
+        if (out === 'hang') return new Promise<never>(() => {})
         if (out instanceof Error) throw out
         return result(out)
       }
       return result({ exitCode: 0, stdout: `${ROOT}\n` })
     })
     on('prompt.submit', async (_$, e) => { submits.push(e.text); return { text: e.text } })
-    return { ...fixture, execs, submits }
+    return { ...fixture, execs, inits, submits }
   }
 
   test('doctor pings Codex targets, leaves native ones pending and submits one prompt', async ($, on) => {
@@ -711,6 +730,48 @@ describe('register', () => {
     expect(execs.length).toBeGreaterThan(0)
     expect(out.text).toMatch(/^fail explorer \(codex .*\): exit 3: bad auth$/m)
     expect(out.text).not.toContain('more')
+  })
+
+  test('a Codex ping sends its prompt on stdin and lets the host kill it at the timeout', async ($, on) => {
+    const { inits } = pingWorld(on, { profile: 'mixed' })
+    await start($)
+    await $.command.run({ command: 'pantheon', args: 'doctor' })
+    expect(inits.length).toBeGreaterThan(0)
+    for (const init of inits as { stdin?: string; timeoutMs?: number }[]) {
+      expect(init.stdin).toContain('pong ')
+      expect(init.timeoutMs).toBe(60_000)
+    }
+  })
+
+  test('every Codex ping runs read-only, even for roles that default to workspace-write', async ($, on) => {
+    const { execs } = pingWorld(on, { profile: 'codex' })
+    await start($)
+    await $.command.run({ command: 'pantheon', args: 'doctor' })
+    expect(execs.length).toBeGreaterThan(5)
+    for (const argv of execs) expect(argv.slice(argv.indexOf('-s'), argv.indexOf('-s') + 2)).toEqual(['-s', 'read-only'])
+  })
+
+  test('a Codex ping that never answers becomes fail timeout', async ($, on) => {
+    const { clock } = pingWorld(on, { profile: 'codex', exec: () => 'hang' })
+    await start($)
+    const run = $.command.run({ command: 'pantheon', args: 'doctor' })
+    await clock.settle()
+    await clock.advance(60_000)
+    const out = await run
+    expect(out.text).toMatch(/^fail explorer \(codex .*\): timeout$/m)
+  })
+
+  test('a ping needs exit 0 and the pong inside an agent message', async ($, on) => {
+    pingWorld(on, { profile: 'codex', exec: (_argv, asked) => {
+      if (asked === 'explorer') return { exitCode: 1, stdout: agentMessage('pong explorer') }
+      if (asked === 'librarian') return { exitCode: 0, stdout: `${JSON.stringify({ type: 'item.completed', item: { type: 'reasoning', text: `say pong ${asked}` } })}\n` }
+      return { exitCode: 0, stdout: agentMessage(`pong ${asked}`) }
+    } })
+    await start($)
+    const out = await $.command.run({ command: 'pantheon', args: 'doctor' })
+    expect(out.text).toMatch(/^fail explorer /m)
+    expect(out.text).toMatch(/^fail librarian /m)
+    expect(out.text).toMatch(/^ok {3}fixer /m)
   })
 
   test('a throwing Codex ping does not throw out of doctor', async ($, on) => {

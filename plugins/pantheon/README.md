@@ -86,7 +86,7 @@ Layers apply in order: built-in defaults, `~/.claude/pantheon.json`, then `<repo
 
 `/pantheon config` shows the active profile, effective configuration and field origins. Profile switches update the offered native agents and delegation routes.
 
-Pick the profile in `/config` (field `pantheon.profile`, free text) or with the selector in the panel header. Both write the same field, and the `/config` field accepts only names of built-in profiles or profiles defined in the JSON files; an unknown name, or any change while the JSON config is invalid, is refused with the reason. When a JSON file sets `profile` and `/config` has no choice, the panel selector is locked and names that file; once a profile is chosen in `/config` or the panel, it wins.
+Pick the profile in `/config` (field `pantheon.profile`, free text) or with the selector in the panel header. Both write the same field, and the `/config` field accepts only names of built-in profiles or profiles defined in the JSON files; an unknown name, or any change while the JSON config is invalid, is refused with the reason. When a JSON file sets `profile` and `/config` has no choice, the panel selector is locked and names that file; once a profile is chosen in `/config` or the panel, it wins. A profile saved in `/config` overrides the JSON `profile`, so if you chose one before this version, clear the field (an empty value is accepted) to let the JSON files decide again.
 
 ### Migrating from 0.3
 

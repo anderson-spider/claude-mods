@@ -51,6 +51,15 @@ type TrackingIo = {
 
 const PING_TIMEOUT_MS = 60_000
 
+/** True when an agent message in Codex's JSONL output contains `pong <name>`. */
+function saidPong(stdout: string, name: string): boolean {
+  const reader = createJsonlReader()
+  const want = `pong ${name}`.toLowerCase()
+  return [...reader.push(stdout), ...reader.end()].some(
+    ev => ev.kind === 'message' && ev.text.toLowerCase().includes(want),
+  )
+}
+
 /** One Codex ping through `io.run`, outside the Jobs list. Never throws: any error becomes a `fail`. */
 async function pingCodex(
   io: Pick<Io, 'run' | 'now' | 'after'>,
@@ -69,14 +78,18 @@ async function pingCodex(
       rolePrompt,
     )
     if ('error' in call) return fail(call.error)
+    // Fixer and designer default to workspace-write; a ping never needs to write.
+    call.sandbox = 'read-only'
     const start = await io.now()
     const timeout = new Promise<'timeout'>(resolve => { timer = io.after(PING_TIMEOUT_MS, () => resolve('timeout')) })
-    const run = io.run(buildArgv(call), { cwd: call.cwd, input: call.prompt })
+    const run = io.run(buildArgv(call), { cwd: call.cwd, stdin: call.prompt, timeoutMs: PING_TIMEOUT_MS })
+    // The host kills the child at timeoutMs and rejects; the race below reports it as a timeout first, so swallow the late rejection.
+    run.catch(() => {})
     const done = await Promise.race([run, timeout])
     timer?.cancel()
     const ms = (await io.now()) - start
     if (done === 'timeout') return fail('timeout', ms)
-    if (/pong/i.test(done.stdout)) return { ...base, state: 'ok', ms }
+    if (done.exitCode === 0 && saidPong(done.stdout, target.name)) return { ...base, state: 'ok', ms }
     const first = (done.stderr || done.stdout).trim().split('\n')[0]
     return fail(`exit ${done.exitCode}${first ? `: ${first.slice(0, 120)}` : ''}`, ms)
   } catch (error) {
@@ -250,6 +263,7 @@ export const register: Register = (on, options) => {
   }
 
   async function profileDenial(io: Pick<Io, 'cwd' | 'run' | 'home' | 'readText'>, value: unknown): Promise<string | undefined> {
+    if (value === undefined || value === null || (typeof value === 'string' && value.trim() === '')) return undefined
     const { root } = await workspace(io)
     const home = await io.home()
     const current = await loadConfig(io.readText, {
@@ -651,6 +665,7 @@ export const register: Register = (on, options) => {
         const results = await Promise.all(targets.map(async (target): Promise<PingResult> => {
           const base = { name: target.name, engine: target.engine, model: target.model }
           if (target.off) return { ...base, state: 'off' }
+          if (!target.valid) return { ...base, state: 'fail', detail: 'invalid seat name' }
           if (target.engine !== 'codex') return { ...base, state: 'pending' }
           if (!loginOk) return { ...base, state: 'fail', detail: 'codex unavailable' }
           return pingCodex(io, current.config, target, { cwd: ws.root, skipGitRepoCheck: !ws.isRepo })
@@ -658,7 +673,9 @@ export const register: Register = (on, options) => {
         pings = results
         const native = results.filter(p => p.state === 'pending').map(p => p.name)
         // The host refuses prompt.submit while this hook holds the turn, so the prompt goes out after it returns.
-        if (native.length > 0) io.after(0, () => { io.submit(pingPrompt(native)).catch(() => undefined) })
+        if (native.length > 0) io.after(0, () => {
+          try { io.submit(pingPrompt(native)).catch(() => undefined) } catch { /* A failed submit must not break the doctor. */ }
+        })
       }
       return {
         text: doctorReport({
