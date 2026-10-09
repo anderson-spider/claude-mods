@@ -426,7 +426,12 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
   }
   // The desktop header row is a pill row (1.7 rows tall at full width); the profile row sits under it.
   const headerTopH = isDesk && W >= 60 ? 1.7 : 1
-  const headerH = data.rows >= 2 ? headerTopH + 1 : 1
+  // Desktop: a gap between the title row and the Profile row, and a card gap under the Profile row,
+  // dropped when the body is too short to spare them.
+  const headerSpaced = isDesk && data.rows >= 6
+  const HEADER_ROW_GAP = headerSpaced ? 0.5 : 0
+  const HEADER_GAP = headerSpaced ? 1 : 0
+  const headerH = data.rows >= 2 ? headerTopH + 1 + HEADER_ROW_GAP + HEADER_GAP : 1
   const header = () => {
     const running = roles.reduce((n, r) => n + activeOf(r).length, 0) + roster.others.filter(i => i.isActive).length
     const right: Seg[] = W >= (isDesk ? 58 : 30)
@@ -450,7 +455,7 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
       </Box>
     )
     return (
-      <Box key="header" flexDirection="column" width={W}>
+      <Box key="header" flexDirection="column" width={W} gap={HEADER_ROW_GAP} marginBottom={HEADER_GAP}>
         {headerH > 1 ? (
           <Box key="header-top" justifyContent="space-between" alignItems="center" gap={1} width={W} height={W >= 60 ? 1.7 : 1}>
             <Box gap={isDesk ? 2 : 1} alignItems="center" flexShrink={1}>
@@ -544,17 +549,14 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
   const collapsedSet = new Set<string>(data.collapsed ?? [])
   const rowH = isDesk ? 1.4 : 1
   // Desktop cards are stacked with this gap between them, so a border never touches the next card.
-  const CARD_GAP = 0.6
+  const CARD_GAP = 1
 
   // A card. Terminal: round box lines with the title in the top border, every line exactly W cells.
   // Desktop: a native column over an SVG backplate; the title sits on its top edge.
   const frame = (key: string, color: string, title: Title, rows: RowBlock[], toggle?: Toggle): Block => {
-    const toggleBtn = toggle && data.onToggle ? (): unknown => {
-      const press = () => data.onToggle?.(toggle.group)
-      return isDesk && el.Svg
-        ? plate(`pill-toggle-${toggle.group}`, 10.5, pillTint(HUD.neutral[2]), [<Button key={`toggle-${toggle.group}`} plain label={toggle.label} onPress={press} />])
-        : <Button key={`toggle-${toggle.group}`} label={toggle.label} onPress={press} />
-    } : undefined
+    const toggleBtn = toggle && data.onToggle
+      ? (): unknown => <Button key={`toggle-${toggle.group}`} label={toggle.label} onPress={() => data.onToggle?.(toggle.group)} />
+      : undefined
     const sum = rows.reduce((n, r) => n + r.h, 0)
     if (isTiny) {
       return {
@@ -564,17 +566,16 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     }
     if (isDesk) {
       // A native rounded border sizes to its content, so the card never outgrows or underfills a
-      // backplate; the title is the first row, the fold button sits at its right.
+      // backplate; the title is the first row.
       const head = (
-        <Box key={`${key}-title`} width={W - 4} alignItems="center" justifyContent="space-between" gap={1} marginBottom={0.3}>
+        <Box key={`${key}-title`} width={W - 4} alignItems="center" gap={1} marginBottom={0.3}>
           <Box key={`${key}-label`}>
             {text({ text: title.label, bold: true, color })}
             {title.count === undefined ? null : text({ text: ` ${title.count}`, dim: true })}
           </Box>
-          {toggleBtn ? <Box key={`${key}-toggle`}>{toggleBtn()}</Box> : null}
         </Box>
       )
-      const total = rowH + 0.3 + (toggleBtn ? 1 : 0) + sum + 1
+      const total = rowH + 0.3 + sum + 1
       return {
         node: (
           <Box key={key} borderStyle="round" borderColor={mix(color, HEX.bg, 0.25)} backgroundColor={mix(color, HEX.bg, 0.94)} flexDirection="column" width={W} paddingX={1} marginBottom={CARD_GAP}>
@@ -704,6 +705,16 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
 
   const NAME_W = 10
   const MODEL_W = 11
+  const MODEL_MAX_W = 24
+  const modelLabel = (r: AgentRow) => `${r.group === 'idle' && r.slot.engine === 'mixed' ? '⇄ ' : ''}${modelName(r.inst?.model ?? r.slot.model)}`
+  // Desktop: the model column fits the longest model name of every agent row (one width for both cards,
+  // so they line up), from MODEL_W up to MODEL_MAX_W cells. Terminal keeps MODEL_W, so the task keeps its room.
+  let modelColW: number | undefined
+  const modelW = () => modelColW ??= !isDesk ? MODEL_W : (() => {
+    const all = agentRows()
+    const longest = [...all.running, ...all.idle].reduce((n, r) => Math.max(n, cellWidth(modelLabel(r))), 0)
+    return Math.min(MODEL_MAX_W, Math.max(MODEL_W, longest + 1))
+  })()
   const TIME_W = 6
   const CTX_W = 9
   const STRIP_W = 11
@@ -713,8 +724,6 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     const isIdle = r.group === 'idle'
     const isOff = !!r.isOff
     const running = !isIdle
-    const mixed = isIdle && slot.engine === 'mixed'
-    const model = modelName(i?.model ?? slot.model)
     const task = isOff ? (isIdle && slot.state !== 'off' ? 'Disabled' : `Disabled · ${slot.offReason ?? 'disabledAgents'}`)
       : i ? squash(i.task || '(no description)') : ''
     let withModel = !compact
@@ -726,7 +735,7 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     const cancelW = jobId && IW >= 30 ? cancelLabel.length + 4 : 0
     // The job id (Codex Running rows only) is the first thing to drop when the row is short.
     let jobW = jobId ? Math.min(cellWidth(jobId), 14) + 1 : 0
-    const fixedW = () => 2 + NAME_W + TIME_W + cancelW + jobW + (withCtx ? CTX_W : 0) + (withModel ? MODEL_W : 0) + (withStrip ? STRIP_W : 0)
+    const fixedW = () => 2 + NAME_W + TIME_W + cancelW + jobW + (withCtx ? CTX_W : 0) + (withModel ? modelW() : 0) + (withStrip ? STRIP_W : 0)
     if (IW - fixedW() < 12) jobW = 0
     // The ctx column goes next, then the model, then the strip.
     if (IW - fixedW() < 12) withCtx = false
@@ -744,7 +753,7 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     const list: Col[] = [
       { w: 2, segs: [dotOf(r)] },
       { w: NAME_W, segs: [{ text: truncCells(r.name, NAME_W - 1), color: ROLE_COLOR[role], bold: true, dim: faded }] },
-      ...(withModel ? [{ w: MODEL_W, segs: [{ text: truncCells(`${mixed ? '⇄ ' : ''}${model}`, MODEL_W - 1), dim: true }] }] : []),
+      ...(withModel ? [{ w: modelW(), segs: [{ text: truncCells(modelLabel(r), modelW() - 1), dim: true }] }] : []),
       ...(withStrip ? [{ w: STRIP_W, segs: stripSegs(`strip-${r.key}`, items, extra) }] : []),
       { w: TIME_W, segs: [time] },
       ...(withCtx ? [{ w: CTX_W, segs: pct === undefined ? [] : [{ text: `ctx ${pct}%`, dim: true }] }] : []),
@@ -768,11 +777,12 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
   }
 
   // A group card: its rows, or only the title and the fold button when folded or cut to a head.
+  // Desktop has no fold button, so a fold stored from the terminal is ignored there.
   const groupBlock = (g: Group, rows: AgentRow[], mode: 'full' | 'compact' | 'head'): Block[] => {
     if (!rows.length) return []
-    const isFolded = collapsedSet.has(g)
+    const isFolded = !isDesk && collapsedSet.has(g)
     const eff = isFolded ? 'head' : mode
-    const toggle: Toggle | undefined = W >= 30 && data.onToggle && (isFolded || mode !== 'head')
+    const toggle: Toggle | undefined = !isDesk && W >= 30 && data.onToggle && (isFolded || mode !== 'head')
       ? { group: g, label: isFolded ? 'Expand' : 'Collapse' } : undefined
     const withCtxCol = rows.some(r => agentCtx(r.inst) !== undefined)
     const built = eff === 'head' ? [] : rows.map(r => agentRowBlock(r, eff === 'compact', withCtxCol))
