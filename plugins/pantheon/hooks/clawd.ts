@@ -42,36 +42,34 @@ const LEGS = [
   ['...O.O.O.O.....', '...O.O.O.O.....'],
 ]
 
-// Hat per role (canvas rows 0-3).
+// Hat per role (canvas rows 0-3); rows past 3 lie over the body, where '.' leaves it showing.
 const HATS: Record<SlotName, string[]> = {
   orchestrator: ['......WW.......', '..WWWWWWWWW....', '..WWWgWWWWW....', '..RBBBBBBBBVVV.'],
-  explorer: ['...............', '....GGSGGG.....', '..GGGGSGGGG....', '..GGGGGGGGGGK..'],
+  explorer: ['...............', '....QQ..QQ.....', '...QqqqqqqQ....', '..QQQQQQQQQQQ..'],
   librarian: ['......DD.......', '..DDDDDDDDDDD.Y', '....DDDDDDD...Y', '...............'],
-  fixer: ['......YY.......', '....YYYYYY.....', '..YYYYYWYYYY...', '.YYYYYYYYYYYY..'],
-  oracle: ['.......Y.......', '......PPP......', '.....PPYPP.....', '..PPPPPPPPPPP..'],
+  // No hat: a mug of coffee, steaming, in the left hand.
+  fixer: ['...............', '...............', 'z..............', '.z.............', 'ww.............', 'ww.............'],
+  oracle: ['.......b.......', '......bbb......', '.....bbSbb.....', '..bbbbbbbbbbb..'],
   designer: ['...............', '......MM.......', '....MMMMMM.....', '..MMMMMMMMMMM..'],
   council: ['...............', '....LLLLLL.....', '..LLLLLLLLLLL..', '..LLlLLLlLLLL..'],
 }
-// Held prop per role (canvas rows 6-11, cols 11-14).
-const PROPS: Record<SlotName, string[]> = {
-  orchestrator: ['....', '.nn.', 'WWWW', 'WLLW', 'WLLW', 'WWWW'],
-  explorer: ['.AA.', 'AaaA', 'AaaA', '.AA.', '.n..', 'n...'],
-  librarian: ['....', 'rrrr', 'rwYr', 'rwwr', 'rrrr', '....'],
-  fixer: ['.H.H', '.HHH', '..H.', '.h..', 'h...', '....'],
-  oracle: ['.uu.', 'uUYu', 'uUUu', '.uu.', 'nnnn', '....'],
-  designer: ['...C', '..nC', '.n..', 'n...', '....', '....'],
-  council: ['.nnn', '.nnn', '..n.', '..n.', '..n.', '....'],
+// Held prop per role: rows from `y` down, columns 11-14.
+const PROPS: Record<SlotName, { y: number; rows: string[] }> = {
+  orchestrator: { y: 6, rows: ['....', '.nn.', 'WWWW', 'WLLW', 'WLLW', 'WWWW'] },
+  explorer: { y: 6, rows: ['.AA.', 'AaaA', 'AaaA', '.AA.', '.n..', 'n...'] },
+  librarian: { y: 6, rows: ['....', 'rrrr', 'rwYr', 'rwwr', 'rrrr', '....'] },
+  fixer: { y: 6, rows: ['HHHH', 'HCKH', 'HKKH', 'HCCH', 'hhhh'] },
+  oracle: { y: 1, rows: ['..S.', '.SSS', '..S.', '..N.', '..N.', '.N..', 'N...'] },
+  designer: { y: 6, rows: ['...C', '..nC', '.n..', 'n...', '....', '....'] },
+  council: { y: 6, rows: ['.NNN', '.NNN', '..N.', '..N.', '..N.', '....'] },
 }
 
 const PALETTE: Record<string, string> = {
   O: BODY, E: EYE, W: '#F5F4EF', g: '#CFCFC6', B: '#4A86D8', R: '#B0664D', V: '#4D4D4B',
-  Y: '#EEBB4D', G: '#4A9E7A', S: '#F5F4EF', P: '#8E8E8A', K: '#1C1B1A', D: '#3B3B40',
-  T: '#C9A24A', C: '#4FB6D8', N: '#8A6A4A', M: '#D870A8', L: '#CFCCC2', l: '#9C998F',
-  A: '#E9C04F', a: '#BFE3F2', H: '#C4C9D6', h: '#8C92A3', u: '#6F3FB0', U: '#D6B8F5',
-  r: '#C4483D', w: '#F2E8CC', n: '#7A5230',
+  Y: '#EEBB4D', K: '#2E2A28', Q: '#6E625A', q: '#9A8B7E', D: '#3B3B40', C: '#4FB6D8', N: '#6B4A2E',
+  M: '#D870A8', L: '#D8D5CB', l: '#A7A397', A: '#E9C04F', a: '#CFD4D9', H: '#C4C9D6',
+  h: '#8C92A3', r: '#C4483D', w: '#F6EFDD', z: '#FFE9CF', n: '#7A5230', b: '#2D4A8C', S: '#FFF1A8',
 }
-// The oracle's hat uses violet where the others use gray.
-const OVERRIDE: Partial<Record<SlotName, Record<string, string>>> = { oracle: { P: '#9A62D6' } }
 
 function wrap(frame: number): number {
   return ((frame % FRAMES) + FRAMES) % FRAMES
@@ -85,19 +83,19 @@ function dim(hex: string, keep: number, floor: number): string {
 
 // The terminal grid: a color string or null per pixel. Off closes the eyes and dims the colors.
 export function pixels(role: SlotName, mood: Mood, frame: number): Cell[][] {
-  const pal = { ...PALETTE, ...(OVERRIDE[role] ?? {}) }
   const body = mood === 'off' ? OFF_BODY : BODY
   const legs = LEGS[mood === 'work' ? wrap(frame) % 2 : 0]
-  const rows = [...HATS[role], ...BODY_ROWS, ...legs].map(r => r.padEnd(COLS, '.'))
-  PROPS[role].forEach((p, i) => {
-    rows[6 + i] = rows[6 + i].slice(0, 11) + p + rows[6 + i].slice(15)
-  })
+  const rows = [...Array<string>(4).fill(''), ...BODY_ROWS, ...legs].map(r => [...r.padEnd(COLS, '.')])
+  const over = (x: number, y: number, art: string[]) =>
+    art.forEach((r, j) => [...r].forEach((ch, i) => { if (ch !== '.') rows[y + j][x + i] = ch }))
+  over(0, 0, HATS[role])
+  over(11, PROPS[role].y, PROPS[role].rows)
   return rows.map(row =>
-    [...row].map(ch => {
+    row.map(ch => {
       if (ch === '.') return null
       if (ch === 'O') return body
       if (ch === 'E') return mood === 'off' ? body : EYE
-      const c = pal[ch]
+      const c = PALETTE[ch]
       return mood === 'off' ? dim(c, 0.55, 28) : c
     }),
   )

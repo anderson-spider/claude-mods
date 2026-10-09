@@ -115,3 +115,33 @@ test('clawdSvg: idle and off are the same shape, off is dimmed', () => {
 test('clawdSvg: roles differ', () => {
   expect(new Set(ROLE_ORDER.map(r => clawdSvg(r, 'idle'))).size).toBe(ROLE_ORDER.length)
 })
+
+// Each role's held prop and hat read the same at every size: these colors are the prop's own.
+const SIGNATURE: Record<(typeof ROLE_ORDER)[number], string[]> = {
+  orchestrator: ['#F5F4EF', '#4A86D8'],
+  explorer: ['#6E625A', '#CFD4D9'],
+  librarian: ['#3B3B40', '#C4483D'],
+  fixer: ['#C4C9D6', '#F6EFDD'],
+  oracle: ['#2D4A8C', '#FFF1A8'],
+  designer: ['#D870A8', '#4FB6D8'],
+  council: ['#D8D5CB', '#6B4A2E'],
+}
+const colorsOf = (g: (string | null)[][]) => new Set(g.flat().filter((c): c is string => !!c).map(c => c.toUpperCase()))
+
+test('terminal and desktop sprites carry the same hat and prop for each role', () => {
+  for (const role of ROLE_ORDER) {
+    const svg = clawdSvg(role, 'idle').toUpperCase()
+    const term = colorsOf(pixels(role, 'idle', 0))
+    for (const c of SIGNATURE[role]) {
+      expect(svg.includes(`FILL="${c}"`)).toBe(true)
+      expect(term.has(c)).toBe(true)
+    }
+  }
+})
+
+test('the fixer wears no hat and holds a laptop and a mug; the oracle has no crystal ball', () => {
+  const fixer = pixels('fixer', 'idle', 0)
+  // Above the torso only the mug and its steam, at the far left.
+  for (let y = 0; y < 4; y++) fixer[y].forEach((c, x) => { if (c) expect(x < 2).toBe(true) })
+  expect(colorsOf(pixels('oracle', 'idle', 0)).has('#6F3FB0')).toBe(false)
+})
