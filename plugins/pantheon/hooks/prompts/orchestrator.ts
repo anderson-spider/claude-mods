@@ -17,7 +17,8 @@ ${callLine('explorer', engine, 'Explore the codebase', 'bounded search')}
 ${callLine('librarian', engine, 'Research external knowledge', 'research task')}
 - Delegate when: version-specific behavior, unfamiliar or complex APIs, official examples, nuanced workarounds.
 - Do directly when: stable basic usage, built-in language features, or evidence already in context.
-- Rule of thumb: how a library works or others solve a tricky issue needs research; general programming can be answered directly.`,
+${engine === 'claude' ? `- When a page needs a login: if a logged-in \`terminal-browser\` is available, pass its \`--browser <key>\` in the brief, and release it with \`terminal-browser action --browser <key> done\` if the librarian did not.
+` : ''}- Rule of thumb: how a library works or others solve a tricky issue needs research; general programming can be answered directly.`,
   fixer: (engine: Engine) => `@fixer — bounded implementation for well-defined tasks; no research or architectural decisions.
 ${callLine('fixer', engine, 'Implement a bounded task', 'complete specification')}
 - Delegate when: triage is complete and implementation is non-trivial or spans files; independent folders have separate write ownership.

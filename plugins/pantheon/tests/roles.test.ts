@@ -198,12 +198,13 @@ describe('native agent specs', () => {
       description: 'Pantheon codebase recon that returns compressed context.',
     }))
     expect(specs.find(spec => spec.name === 'explorer')?.tools).toBeUndefined()
-    expect(specs.find(spec => spec.name === 'explorer')?.disallowedTools).toBeUndefined()
+    const NO_DELEGATE = ['Agent', 'mcp__pantheon__delegate', 'mcp__pantheon__delegate_cancel']
+    expect(specs.find(spec => spec.name === 'explorer')?.disallowedTools).toEqual(NO_DELEGATE)
     expect(specs.find(spec => spec.name === 'librarian')?.tools).toBeUndefined()
-    expect(specs.find(spec => spec.name === 'librarian')?.disallowedTools).toBeUndefined()
+    expect(specs.find(spec => spec.name === 'librarian')?.disallowedTools).toEqual(NO_DELEGATE)
     for (const name of ['oracle', 'councillor-alpha', 'councillor-beta']) {
       expect(specs.find(spec => spec.name === name)?.tools).toBeUndefined()
-      expect(specs.find(spec => spec.name === name)?.disallowedTools).toEqual(['Edit', 'Write', 'NotebookEdit'])
+      expect(specs.find(spec => spec.name === name)?.disallowedTools).toEqual(['Edit', 'Write', 'NotebookEdit', ...NO_DELEGATE])
     }
     expect(specs.find(spec => spec.name === 'librarian')).toEqual(expect.objectContaining({
       description: 'Pantheon research on external docs and APIs.',
@@ -228,12 +229,12 @@ describe('native agent specs', () => {
     const specs = nativeAgentSpecs(MIXED, prompts)
     expect(specs.map(spec => spec.name)).toEqual(['oracle', 'designer', 'councillor-beta'])
     expect(specs.find(spec => spec.name === 'oracle')).toEqual(expect.objectContaining({
-      prompt: '<oracle>', model: 'opus', disallowedTools: ['Edit', 'Write', 'NotebookEdit'], description: expect.any(String),
+      prompt: '<oracle>', model: 'opus', disallowedTools: ['Edit', 'Write', 'NotebookEdit', 'Agent', 'mcp__pantheon__delegate', 'mcp__pantheon__delegate_cancel'], description: expect.any(String),
     }))
     expect(specs.find(spec => spec.name === 'designer')).toEqual(expect.objectContaining({ prompt: '<designer>', model: 'sonnet' }))
     expect(specs.find(spec => spec.name === 'designer')?.tools).toBeUndefined()
     expect(specs.find(spec => spec.name === 'councillor-beta')).toEqual(expect.objectContaining({
-      prompt: '<councillor>', model: 'opus', disallowedTools: ['Edit', 'Write', 'NotebookEdit'],
+      prompt: '<councillor>', model: 'opus', disallowedTools: ['Edit', 'Write', 'NotebookEdit', 'Agent', 'mcp__pantheon__delegate', 'mcp__pantheon__delegate_cancel'],
     }))
   })
 
@@ -245,7 +246,7 @@ describe('native agent specs', () => {
     }
     const specs = nativeAgentSpecs(config, prompts)
     expect(specs.find(spec => spec.name === 'oracle')).toEqual(expect.objectContaining({
-      prompt: '<oracle>\n\nextra', model: 'native-model', effort: 'high', disallowedTools: ['Edit', 'Write', 'NotebookEdit'],
+      prompt: '<oracle>\n\nextra', model: 'native-model', effort: 'high', disallowedTools: ['Edit', 'Write', 'NotebookEdit', 'Agent', 'mcp__pantheon__delegate', 'mcp__pantheon__delegate_cancel'],
     }))
     expect(specs.find(spec => spec.name === 'councillor-beta')).toEqual(expect.objectContaining({
       prompt: '<councillor>\n\nseat extra', model: 'seat-model', effort: 'low',

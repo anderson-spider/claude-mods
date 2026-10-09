@@ -113,7 +113,12 @@ type NativeSpec = {
 }
 
 // Oracle and the councillors inherit the session's tools minus the ones that change files.
+// Explorer and librarian keep file tools (told by prompt not to use them).
 const NO_FILE_EDITS = ['Edit', 'Write', 'NotebookEdit'] as const
+// Read-only roles also cannot spawn agents or delegate to Codex.
+const NO_DELEGATION = ['Agent', 'mcp__pantheon__delegate', 'mcp__pantheon__delegate_cancel'] as const
+const READ_ONLY_DENY = [...NO_FILE_EDITS, ...NO_DELEGATION]
+const RESEARCH_DENY = [...NO_DELEGATION]
 
 export function nativeAgentSpecs(config: PantheonConfig, prompts: RolePrompts): NativeSpec[] {
   const descriptions: Record<Role, string> = {
@@ -133,7 +138,8 @@ export function nativeAgentSpecs(config: PantheonConfig, prompts: RolePrompts): 
         prompt: appendPrompt(prompts(role, 'claude'), override.prompt),
         model: override.model,
         effort: override.effort,
-        ...(role === 'oracle' ? { disallowedTools: NO_FILE_EDITS } : {}),
+        ...(role === 'oracle' ? { disallowedTools: READ_ONLY_DENY }
+          : role === 'explorer' || role === 'librarian' ? { disallowedTools: RESEARCH_DENY } : {}),
       }
     })
 
@@ -145,7 +151,7 @@ export function nativeAgentSpecs(config: PantheonConfig, prompts: RolePrompts): 
       prompt: appendPrompt(prompts('councillor', 'claude'), seat.prompt),
       model: seat.model,
       effort: seat.effort,
-      disallowedTools: NO_FILE_EDITS,
+      disallowedTools: READ_ONLY_DENY,
     })
   }
   return specs

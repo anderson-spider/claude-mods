@@ -560,7 +560,7 @@ describe('register', () => {
     expect(seen.agents).toEqual(['oracle', 'designer', 'councillor-beta'])
     const oracle = seen.registered.find(spec => spec.name === 'oracle')
     expect(oracle?.tools).toBeUndefined()
-    expect(oracle?.disallowedTools).toEqual(['Edit', 'Write', 'NotebookEdit'])
+    expect(oracle?.disallowedTools).toEqual(['Edit', 'Write', 'NotebookEdit', 'Agent', 'mcp__pantheon__delegate', 'mcp__pantheon__delegate_cancel'])
     expect(seen.registered.find(spec => spec.name === 'designer')?.disallowedTools).toBeUndefined()
   })
 
