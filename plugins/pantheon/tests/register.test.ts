@@ -22,6 +22,143 @@ const stepResult = {
   usage: { model: 'model-1', input_tokens: 10, cache_read_input_tokens: 2, cache_creation_input_tokens: 3, output_tokens: 4 },
 }
 const streamChunk = { kind: 'text' as const, index: 0, text: 'streaming' }
+
+const gateEdit = { tool: 'Edit', tool_use_id: 'gate-edit', file_path: '/repo/src/a.ts', old_string: 'private old text', new_string: 'private new text' }
+const gatePause = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
+function gateWorld(on: On, opts: { score?: number; key?: string; reject?: boolean; interrupt?: boolean; files?: Record<string, string> } = {}) {
+  const fixture = world(new Proxy(on, {
+    apply(target, self, args) {
+      if (args[0] !== 'env.get' && args[0] !== 'process.run') return Reflect.apply(target, self, args)
+    },
+  }), { files: opts.files })
+  const sent: { body?: string; headers?: Record<string, string> }[] = []
+  const forwarded: unknown[] = []
+  let probes = 0
+  on('env.get', (_$, e) => ({ value: e.name === 'HOME' ? HOME : e.name === 'OPENROUTER_API_KEY' ? opts.key : undefined }))
+  on('process.run', async (_$, e) => {
+    if (e.argv[0] === 'sleep') {
+      if (opts.interrupt) throw new Error('interrupted host wait')
+      await gatePause(5)
+    } else probes++
+    return { value: { exitCode: 0, stdout: ROOT, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('http.fetch', (_$, e) => {
+    sent.push({ body: e.init?.body, headers: e.init?.headers })
+    if (opts.reject) throw new Error('network unavailable')
+    return { value: { status: 200, ok: true, headers: {}, text: JSON.stringify({ answers: { trivial: { noul: opts.score ?? 0.95 } } }) } }
+  })
+  on('tool.call', (_$, e) => { forwarded.push(e); return { result: 'unchanged' } })
+  on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'Text', children: ['idle'] }))
+  return { ...fixture, sent, forwarded, probes: () => probes }
+}
+
+describe('edit gate', () => {
+  for (const options of [{}, { gate: false }]) {
+    test(`disabled gate passes untouched ${JSON.stringify(options)}`, { options }, async ($, on) => {
+      const host = gateWorld(on)
+      expect(await $.tool.call(gateEdit as never)).toEqual({ result: 'unchanged' })
+      expect(host.forwarded).toEqual([gateEdit])
+      expect(host.sent).toEqual([])
+      expect(host.probes()).toBe(0)
+    })
+  }
+  test('allows all edit tools, sends metadata only, prefers the option key and reuses the root', { options: { gate: true, jevApiKey: 'option-key' } }, async ($, on) => {
+    const host = gateWorld(on, { key: 'env-key' })
+    await start($)
+    const probes = host.probes()
+    for (const event of [gateEdit, { tool: 'Write', file_path: '/repo/a.ts', content: 'private content' }, { tool: 'NotebookEdit', notebook_path: '/repo/a.ipynb', new_source: 'private source' }]) {
+      expect(await $.tool.call(event as never)).toEqual({ result: 'unchanged' })
+    }
+    expect(host.forwarded).toHaveLength(3)
+    expect(host.probes()).toBe(probes)
+    expect(host.sent).toHaveLength(3)
+    for (const request of host.sent) {
+      expect(request.headers?.Authorization).toBe('Bearer option-key')
+      for (const secret of ['old_string', 'new_string', 'content', 'new_source', 'private']) expect(request.body).not.toContain(secret)
+    }
+    expect(JSON.parse(host.sent[0].body!).state).toEqual({ tool: 'Edit', path: 'src/a.ts', ext: '.ts', linesAdded: 1, linesRemoved: 1, files: 1, caller: 'main orchestrator session' })
+  })
+  test('denies a low score and uses the environment key when the option is blank', { options: { gate: true, jevApiKey: '  ' } }, async ($, on) => {
+    const host = gateWorld(on, { key: 'env-key', score: 0.1 })
+    expect((await $.tool.call(gateEdit as never)).deny).toContain('delegate to the executor')
+    expect(host.forwarded).toEqual([])
+    expect(host.sent[0].headers?.Authorization).toBe('Bearer env-key')
+  })
+  test('skips subagents and exempt directories without requests', { options: { gate: true, jevApiKey: 'key' } }, async ($, on) => {
+    const host = gateWorld(on)
+    for (const event of [{ ...gateEdit, agentId: 'native-1' }, ...['/repo/.pantheon/plan.md', `${HOME}/.claude/state.json`, '/private/tmp/claude-501/session/scratchpad/a.ts', '/tmp/claude-501/session/scratchpad/a.ts'].map(file_path => ({ ...gateEdit, file_path }))]) {
+      expect((await $.tool.call(event as never)).deny).toBeUndefined()
+    }
+    expect(host.sent).toEqual([])
+    expect(host.forwarded).toHaveLength(5)
+  })
+  for (const reject of [false, true]) {
+    test(`local rules survive ${reject ? 'a rejected fetch' : 'a missing key'}`, { options: { gate: true } }, async ($, on) => {
+      const host = gateWorld(on, { reject, key: reject ? 'key' : undefined })
+      expect((await $.tool.call(gateEdit as never)).deny).toBeUndefined()
+      expect((await $.tool.call({ ...gateEdit, new_string: 'line\n'.repeat(110) } as never)).deny).toContain('Denied by rules')
+      expect(host.sent).toHaveLength(reject ? 2 : 0)
+      expect(host.forwarded).toHaveLength(1)
+    })
+  }
+  for (const surface of ['terminal', 'desktop'] as const) {
+    test(`grey zone waits for Proceed or Cancel on ${surface}`, { options: { gate: true, jevApiKey: 'key', abovePrompt: false } }, async ($, on) => {
+      const host = gateWorld(on, { score: 0.5 })
+      const ui = await $.ui.mount({ plugin: 'pantheon', component: 'AbovePrompt', surface, props: { hasSurvey: false, isWorking: true, maxRows: 12, bodyColumns: 120, scroll: { offset: 0, bodyRows: 12 }, view: {} } })
+      for (const decision of ['cancel', 'proceed']) {
+        const pending = $.tool.call(gateEdit as never)
+        await gatePause(50)
+        expect(host.forwarded).toHaveLength(0)
+        expect(await ui.findAll({ type: 'Button' })).toHaveLength(2)
+        await ui.press({ key: decision })
+        const result = await pending
+        if (decision === 'cancel') expect(result.deny).toContain('pressed Cancel')
+        else expect(result).toEqual({ result: 'unchanged' })
+        expect(await ui.findAll({ type: 'Button' })).toHaveLength(0)
+      }
+      expect(host.forwarded).toHaveLength(1)
+      await ui.unmount()
+    })
+  }
+  test('a failed hold denies instead of letting the edit through', { options: { gate: true, jevApiKey: 'key' } }, async ($, on) => {
+    const host = gateWorld(on, { score: 0.5, interrupt: true })
+    expect((await $.tool.call(gateEdit as never)).deny).toContain('interrupted')
+    expect(host.forwarded).toEqual([])
+  })
+  test('disabled roles are not recommended', { options: { gate: true, jevApiKey: 'key' } }, async ($, on) => {
+    gateWorld(on, { score: 0.1, files: { [`${HOME}/.claude/pantheon.json`]: JSON.stringify({ disabledAgents: ['executor', 'designer'] }) } })
+    await start($)
+    const result = await $.tool.call({ ...gateEdit, file_path: '/repo/view.tsx' } as never)
+    expect(result.deny).toContain('ask the person to handle implementation')
+    expect(result.deny).toContain('ask the person to handle UI work')
+  })
+  test('rules hold unknown edits and receipt counts only the edit that proceeds', { options: { gate: true } }, async ($, on) => {
+    const host = gateWorld(on)
+    mock.store(on)
+    on('session.id', () => ({ value: 'gate-session' }))
+    on('session.model', () => ({ value: 'claude-opus-5' }))
+    on('session.usage', () => ({ value: { startedAt: 0, context: { tokens: 0, window: 1000, percent: 0 }, rateLimits: [] } }))
+    on('turn.start', (_$, e) => ({ turnId: e.turnId }))
+    on('turn.complete', () => ({ text: 'Completed' }))
+    await start($)
+    await $.turn.start({ turnId: 'gate-turn', prompt: 'Edit' } as never)
+    const ui = await $.ui.mount({ plugin: 'pantheon', component: 'AbovePrompt', surface: 'terminal', props: { hasSurvey: false, isWorking: false, maxRows: 12, bodyColumns: 120 } as never })
+    expect((await $.tool.call({ ...gateEdit, new_string: 'line\n'.repeat(110) } as never)).deny).toContain('Denied by rules')
+    for (const decision of ['cancel', 'proceed']) {
+      const pending = $.tool.call({ tool: 'Write', file_path: '/repo/new.ts', content: 'unknown old size' } as never)
+      await gatePause(50)
+      expect(host.forwarded).toHaveLength(0)
+      expect((await ui.findAll({ type: 'Text' })).map(n => n.text).join('|')).toContain('by rules')
+      await ui.press({ key: decision })
+      await pending
+    }
+    await $.turn.complete({ turnId: 'gate-turn', reason: 'answer', answer: 'Done', durationMs: 1000, isAborted: false })
+    expect((await ui.findAll({ type: 'Text' })).map(n => n.text).join('')).toContain('last turn 1s · 0 agents · 1 edit · 0 errors')
+    expect(host.sent).toEqual([])
+    await ui.unmount()
+  })
+})
+
 function trackingWorld(on: On, slowNativeWrite = false, opts: {
   chunk?: boolean; slowMs?: number
   /** While it returns a promise, every natives write waits for it. */

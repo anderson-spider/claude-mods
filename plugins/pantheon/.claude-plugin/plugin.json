@@ -7,6 +7,18 @@
   },
   "types": "./types/index.d.ts",
   "userConfig": {
+    "gate": {
+      "type": "boolean",
+      "title": "Main-session edit gate",
+      "description": "Asks a decision model, with metadata only, whether a main-session edit is small enough to apply directly.",
+      "default": false
+    },
+    "jevApiKey": {
+      "type": "string",
+      "title": "Jev API key",
+      "description": "OpenRouter API key for the edit gate. Falls back to OPENROUTER_API_KEY when unset.",
+      "sensitive": true
+    },
     "profile": {
       "type": "string",
       "title": "Active profile",
