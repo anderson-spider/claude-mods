@@ -76,3 +76,18 @@ test('small renders three rows', () => {
   const tree = Clawd({ ...props, size: 'small' }, fake.surface as never) as { props: { children: unknown[] } }
   expect(tree.props.children.length).toBe(3)
 })
+
+test('rows and their runs retain positional keys on each work frame', () => {
+  const fake = fakeSurface()
+  type Node = { key?: number; props: { key?: number; children: Node[] } }
+  for (let frame = 0; frame < FRAMES; frame++) {
+    const tree = Clawd(props, fake.surface as never) as Node
+    const rows = tree.props.children
+    expect(rows.map(row => row.key ?? row.props.key)).toEqual(rows.map((_, index) => index))
+    for (const row of rows) {
+      expect(row.props.children.map(run => run.key ?? run.props.key))
+        .toEqual(row.props.children.map((_, index) => index))
+    }
+    fake.timers[0].fn()
+  }
+})

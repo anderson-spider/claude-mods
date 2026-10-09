@@ -4,7 +4,7 @@ import {
   completed, markNativesLost, normalizeNatives, normalizeSession, normalizeView,
   sessionStarted, sessionCompleted, sessionStepped, sessionMeasured, describeTool, viewTab, viewToggled,
 } from '../hooks/tracking'
-import type { Native } from '../hooks/types'
+import type { Native, SessionInfo } from '../hooks/types'
 
 const spawn = (id = 'a', now = 100) => ({
   id, type: 'pantheon:oracle', task: 'Review the change', model: 'test-model', now,
@@ -179,6 +179,7 @@ test('session reducers', () => {
   const done = sessionCompleted(started, 50)
   expect(done.isRunning).toBe(false)
   expect(done.lastTurnMs).toBe(50)
+  expect(done.turns).toEqual([{ startedAt: 100, endedAt: 150 }])
   expect(DEFAULT_SESSION).toEqual({ isRunning: false })
   const modeled = sessionStepped(done, 'test-model', 'high')
   expect(modeled.model).toBe('test-model')
@@ -187,4 +188,35 @@ test('session reducers', () => {
   expect(sessionMeasured(modeled, { window: 100 }).context).toEqual({ tokens: null, window: 100, percent: null })
   expect(sessionMeasured(modeled, { tokens: 25, window: 100, percent: 25 }).context)
     .toEqual({ tokens: 25, window: 100, percent: 25 })
+})
+
+test('completed session turns retain the last 15 minutes and at most 50 entries', () => {
+  let session: SessionInfo = DEFAULT_SESSION
+  for (let k = 0; k < 55; k++) session = sessionCompleted(sessionStarted(session, k * 1000), 500)
+  expect(session.turns).toHaveLength(50)
+  expect(session.turns?.[0]).toEqual({ startedAt: 5000, endedAt: 5500 })
+  const before = JSON.stringify(session)
+  const done = sessionCompleted(sessionStarted(session, 955_000), 500)
+  expect(done.turns).toEqual([
+    { startedAt: 955_000, endedAt: 955_500 },
+  ])
+  expect(JSON.stringify(session)).toBe(before)
+  const boundary = sessionCompleted(sessionStarted({ isRunning: false, turns: [
+    { startedAt: 0, endedAt: 99 }, { startedAt: 0, endedAt: 100 },
+  ] }, 900_000), 100)
+  expect(boundary.turns).toEqual([{ startedAt: 0, endedAt: 100 }, { startedAt: 900_000, endedAt: 900_100 }])
+  expect(sessionCompleted(done, 500).turns).toEqual(done.turns)
+  expect(sessionCompleted(DEFAULT_SESSION, 500).turns).toBeUndefined()
+  expect(sessionCompleted(sessionStarted(DEFAULT_SESSION, 100), -1).turns).toBeUndefined()
+})
+
+test('normalizeSession validates turn intervals and bounds their history', () => {
+  const turns = [{ startedAt: 0, endedAt: 10 }, { startedAt: 20, endedAt: 20 }]
+  expect(normalizeSession({ isRunning: false, turns: [
+    ...turns, null, {}, { startedAt: '0', endedAt: 10 }, { startedAt: 0, endedAt: Infinity },
+    { startedAt: NaN, endedAt: 10 }, { startedAt: 10, endedAt: 5 }, { startedAt: -1, endedAt: 10 },
+  ] }).turns).toEqual(turns)
+  expect(normalizeSession({ turns: 'bad' }).turns).toBeUndefined()
+  const many = Array.from({ length: 55 }, (_, k) => ({ startedAt: k * 1000, endedAt: k * 1000 + 500 }))
+  expect(normalizeSession({ turns: [...many].reverse() }).turns).toEqual(many.slice(-50))
 })

@@ -11,13 +11,11 @@ export type RailProps = {
   isMerge: boolean
   vertical?: boolean
   glyph?: { on: string; off: string }
-  // Both default to true. Without the line only the glyph is drawn, with no 110 ms timer;
-  // without the pulse the glyph stays steady, with no 600 ms timer.
+  // Without the line only the steady glyph is drawn, with no timer.
   isLine?: boolean
-  isPulse?: boolean
 }
 
-type Ref = { phase: number; tick: number; active: boolean }
+type Ref = { phase: number; stop?: () => void }
 type State = { ref: Ref }
 
 // A negative phase is the resting line, with no packets.
@@ -34,32 +32,19 @@ export function railCells(width: number, phase: number, marks: number[], isMerge
   return cells
 }
 
-export function pulseOn(tick: number): boolean {
-  return tick % 2 === 0
-}
-
 const Rail: ClientModule<RailProps, State> = (props, surface) => {
   const { Box, Text } = surface.elements
-  const ref = surface.state?.ref ?? { phase: 0, tick: 0, active: props.active }
-  ref.active = props.active
-  if (surface.state === undefined) {
-    surface.setState({ ref })
-    if (props.isLine !== false) {
-      surface.every(110, () => {
-        if (ref.active) {
-          ref.phase += 1
-          surface.setState({ ref })
-        }
-      })
-    }
-    if (props.isPulse !== false) {
-      surface.every(600, () => {
-        if (ref.active) {
-          ref.tick += 1
-          surface.setState({ ref })
-        }
-      })
-    }
+  const ref = surface.state?.ref ?? { phase: 0 }
+  if (surface.state === undefined) surface.setState({ ref })
+  // Keep a single packet timer while the line is active; stop it on either prop change.
+  if (props.active && props.isLine !== false) {
+    if (!ref.stop) ref.stop = surface.every(110, () => {
+      ref.phase += 1
+      surface.setState({ ref })
+    })
+  } else if (ref.stop) {
+    ref.stop()
+    ref.stop = undefined
   }
 
   // The region's columns hold the glyph cell too: the line takes what is left, so a fixed region stays fixed.
@@ -77,12 +62,12 @@ const Rail: ClientModule<RailProps, State> = (props, surface) => {
   return (
     <Box flexDirection={props.vertical ? 'column' : 'row'}>
       {props.glyph && (
-        <Text color={props.color} bold={props.active && props.isPulse !== false && pulseOn(ref.tick)}>
+        <Text key="glyph" color={props.color}>
           {props.active ? props.glyph.on : props.glyph.off}
         </Text>
       )}
-      {runs.map(r => (
-        <Text color={r.isLit ? props.color : props.dim} bold={r.isLit}>
+      {runs.map((r, index) => (
+        <Text key={index} color={r.isLit ? props.color : props.dim} bold={r.isLit}>
           {r.text}
         </Text>
       ))}

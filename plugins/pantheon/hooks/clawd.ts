@@ -355,12 +355,12 @@ function grid(role: SlotName, mood: Mood, legB: boolean, fx = 0): string[][] {
 const rectAt = (x: number, y: number, fill: string) =>
   `<rect x="${x}" y="${y}" width="1.03" height="1.03" fill="${fill}"/>`
 
-export function clawdSvg(role: SlotName, mood: Mood, height = 52): string {
+export function clawdSvg(role: SlotName, mood: Mood, height = 52, background?: string): string {
   const color = (ch: string) => {
     const c = PAL[ch] ?? '#ff00ff'
     return mood === 'off' ? dim(c, 0.5, 27) : c
   }
-  const head = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${(height * W) / H}" height="${height}" shape-rendering="crispEdges">`
+  const head = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${(height * W) / H}" height="${height}" shape-rendering="crispEdges"${background ? ` style="background:${background}"` : ''}>${background ? `<rect width="100%" height="100%" fill="${background}"/>` : ''}`
   const a = grid(role, mood, false)
   if (mood !== 'work') {
     const still: string[] = []

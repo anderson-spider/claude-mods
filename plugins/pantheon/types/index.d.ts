@@ -18,6 +18,7 @@ export type SessionInfo = {
   model?: string; effort?: string
   context?: { tokens: number | null; window: number; percent: number | null }
   isRunning: boolean; turnStartedAt?: number; lastTurnMs?: number
+  turns?: { startedAt: number; endedAt: number }[]
   /** US dollars the session has cost so far, as the host's ledger totals it. */
   costUsd?: number
 }

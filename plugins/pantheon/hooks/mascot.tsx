@@ -35,10 +35,10 @@ const Mascot: ClientModule<MascotProps, State> = (props, surface) => {
   const rows = clawdRuns(props.role, props.mood, ref.frame, props.size)
   return (
     <Box flexDirection="column">
-      {rows.map(row => (
-        <Box flexDirection="row">
-          {row.map(run => (
-            <Text color={run.fg} backgroundColor={run.bg}>{run.text}</Text>
+      {rows.map((row, rowIndex) => (
+        <Box key={rowIndex} flexDirection="row">
+          {row.map((run, runIndex) => (
+            <Text key={runIndex} color={run.fg} backgroundColor={run.bg}>{run.text}</Text>
           ))}
         </Box>
       ))}

@@ -515,6 +515,7 @@ describe('register', () => {
     await start($)
     await $.turn.start({ text: 'Go', turnId: 'turn-1' })
     expect((await sessionOf($))?.isRunning).toBe(true)
+    const startedAt = (await sessionOf($))!.turnStartedAt!
     await step($, { ...stepInput(), agentId: undefined, effort: 3 })
     await $.session.measure(measureInput)
     await $.agent.spawn(spawnInput)
@@ -527,6 +528,7 @@ describe('register', () => {
     expect(session?.context).toEqual(measureInput.context)
     expect(session?.isRunning).toBe(false)
     expect(session?.lastTurnMs).toBe(42)
+    expect(session?.turns).toEqual([{ startedAt, endedAt: startedAt + 42 }])
   })
 
   test('the panel opens on session.start and /pantheon close closes it', async ($, on) => {

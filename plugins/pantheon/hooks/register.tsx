@@ -652,6 +652,7 @@ export const register: Register = (on, options) => {
       ...list.flatMap(j => [j.startedAt, j.endedAt ?? 0]),
       ...tracked.flatMap(n => n.rounds.flatMap(r => [r.startedAt, r.endedAt ?? 0])),
       info.turnStartedAt ?? 0,
+      ...(info.turns ?? []).flatMap(t => [t.startedAt, t.endedAt]),
     ]
     const now = read1 ?? lastNow ?? Math.max(...stamps)
     return drawPanel({
@@ -659,11 +660,7 @@ export const register: Register = (on, options) => {
       ...('Select' in els ? { Select: els.Select } : {}),
       ...('Svg' in els ? { Svg: els.Svg } : {}),
       ...(hasClient ? {
-        // The module paths are literals here: the engine reads them off this entry module. The
-        // region is as wide as the line plus the glyph cell, so it does not grow with what it draws.
-        rail: ({ key, props }) => props.vertical
-          ? <els.Client key={key} module="./rail.tsx" width={1} height={props.width + (props.glyph ? 1 : 0)} props={props} />
-          : <els.Client key={key} module="./rail.tsx" width={props.isLine === false ? 1 : props.width + (props.glyph ? 1 : 0)} height={1} props={props} />,
+        // The module paths are literals here: the engine reads them off this entry module.
         clock: ({ key, props }) => <els.Client key={key} module="./elapsed.tsx" width={6} props={props} />,
         // Large is 15 columns by 6 rows, small 8 by 3.
         ...(isClockLost ? {} : {

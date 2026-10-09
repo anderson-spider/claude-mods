@@ -120,14 +120,14 @@ test('other agents only when present', () => {
   expect(result.counts.active).toBe(0)
 })
 
-test('active instances precede only the latest ended one', () => {
+test('active instances precede every ended instance, newest end first', () => {
   const result = roster([
     job({ id: 'old', status: 'done', endedAt: 150 }),
     job({ id: 'latest', status: 'done', startedAt: 80, endedAt: 400 }),
     job({ id: 'active', status: 'background', startedAt: 300, sessionId: 'live', model: 'running-model' }),
     job({ id: 'middle', status: 'cancelled', startedAt: 200, endedAt: 250 }),
   ])
-  expect(result.slots[1].instances.map(i => i.id)).toEqual(['active', 'latest'])
+  expect(result.slots[1].instances.map(i => i.id)).toEqual(['active', 'latest', 'middle', 'old'])
   expect(result.slots[1].lastEndedAt).toBe(400)
   expect(result.slots[1].model).toBe('running-model')
   expect(result.slots[1].instances[0].resumeId).toBeUndefined()
@@ -138,7 +138,7 @@ test('history keeps every line of a role, oldest first, for the timeline', () =>
     job({ id: 'late', status: 'done', startedAt: 300, endedAt: 400 }),
     job({ id: 'early', status: 'done', startedAt: 100, endedAt: 200 }),
   ])
-  expect(result.slots[1].instances.map(i => i.id)).toEqual(['late'])
+  expect(result.slots[1].instances.map(i => i.id)).toEqual(['late', 'early'])
   expect(result.slots[1].history?.map(i => i.id)).toEqual(['early', 'late'])
 })
 
@@ -183,12 +183,14 @@ test('every role follows its configured engine and accepts either execution engi
   expect(roster([], [], { ...CODEX, disabledAgents: ['oracle'] }).slots[4].state).toBe('off')
 })
 
-test('displayed history from another engine makes the slot mixed', () => {
+test('only active instances and the latest ended one set the slot engine', () => {
   const ended = native({ role: 'explorer', type: 'pantheon:explorer',
     rounds: [{ startedAt: 100, endedAt: 200, status: 'done' }] })
   expect(roster([job()], [ended]).slots[1].engine).toBe('mixed')
   expect(roster([], [ended]).slots[1].engine).toBe('mixed')
-  expect(roster([job({ status: 'done', endedAt: 300 })], [ended]).slots[1].engine).toBe('codex')
+  const result = roster([job({ status: 'done', endedAt: 300 })], [ended])
+  expect(result.slots[1].engine).toBe('codex')
+  expect(result.slots[1].instances.map(i => i.engine)).toEqual(['codex', 'claude'])
 })
 
 test('council engines do not disable seats', () => {
