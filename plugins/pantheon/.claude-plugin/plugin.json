@@ -5,5 +5,13 @@
   "author": {
     "name": "anderson-spider"
   },
-  "types": "./types/index.d.ts"
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "profile": {
+      "type": "string",
+      "title": "Active profile",
+      "description": "Picks the active Pantheon profile. A profile set in ~/.claude/pantheon.json or <repo>/.claude/pantheon.json overrides this choice. Custom profiles defined in those files are accepted.",
+      "default": "claude"
+    }
+  }
 }

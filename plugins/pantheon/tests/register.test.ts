@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
-import type { AgentSpawnInput, On, TurnStepInput } from 'claude-code'
+import type { AgentSpawnInput, ConfigSetInput, On, TurnStepInput } from 'claude-code'
 
 import type { Job, Native, SessionInfo } from '../types'
 import { createQueue } from '../hooks/register'
@@ -77,6 +77,73 @@ async function step($: Engine, input = stepInput()) {
 }
 
 describe('register', () => {
+  const profileChange = (value: string): ConfigSetInput => ({
+    key: 'pantheon.profile', value, previous: 'claude',
+    provider: { plugin: 'pantheon', tier: 'user' }, origin: { kind: 'composer' },
+  })
+
+  test('config.set allows a built-in profile unchanged', async ($, on) => {
+    world(on)
+    const received: ConfigSetInput[] = []
+    on('config.set', async (_$, e) => { received.push(e); return { value: e.value } })
+    const input = profileChange('codex')
+    expect(await $.config.set(input)).toEqual({ value: 'codex' })
+    expect(received).toEqual([input])
+  })
+
+  for (const path of [`${HOME}/.claude/pantheon.json`, `${ROOT}/.claude/pantheon.json`]) {
+    test(`config.set allows a custom profile freshly defined in ${path}`, async ($, on) => {
+      const { files } = world(on)
+      on('config.set', async (_$, e) => ({ value: e.value }))
+      await start($)
+      files[path] = JSON.stringify({ profiles: { custom: {} } })
+      expect(await $.config.set(profileChange('custom'))).toEqual({ value: 'custom' })
+    })
+  }
+
+  test('config.set denies an unknown profile with the merged known names even when JSON selects a profile', async ($, on) => {
+    world(on, { files: {
+      [`${HOME}/.claude/pantheon.json`]: JSON.stringify({ profile: 'claude', profiles: { personal: {} } }),
+      [`${ROOT}/.claude/pantheon.json`]: JSON.stringify({ profiles: { project: {} } }),
+    } })
+    const received: ConfigSetInput[] = []
+    on('config.set', async (_$, e) => { received.push(e); return { value: e.value } })
+    expect(await $.config.set(profileChange('missing'))).toEqual({
+      deny: 'unknown profile "missing"; known: claude, codex, mixed, personal, project',
+    })
+    expect(received).toEqual([])
+  })
+
+  test('config.set passes another config row through unchanged', async ($, on) => {
+    world(on)
+    const received: ConfigSetInput[] = []
+    on('config.set', async (_$, e) => { received.push(e); return { value: e.value } })
+    const input: ConfigSetInput = {
+      key: 'theme', value: 'light', previous: 'dark',
+      provider: { plugin: 'engine', tier: 'core' }, origin: { kind: 'composer' },
+    }
+    expect(await $.config.set(input)).toEqual({ value: 'light' })
+    expect(received).toEqual([input])
+  })
+
+  for (const profile of ['codex', 'mixed']) {
+    test(`options.profile selects ${profile} on load when JSON has no selection`, { options: { profile } }, async ($, on) => {
+      world(on, { files: { [`${HOME}/.claude/pantheon.json`]: '{}' } })
+      await start($)
+      const report = await $.command.run({ command: 'pantheon', args: 'config' })
+      expect(report.text).toContain(`Active profile: ${profile} (settings)`)
+    })
+  }
+
+  for (const [path, origin] of [[`${HOME}/.claude/pantheon.json`, 'user'], [`${ROOT}/.claude/pantheon.json`, 'project']] as const) {
+    test(`JSON profile from ${origin} overrides options.profile`, { options: { profile: 'codex' } }, async ($, on) => {
+      world(on, { files: { [path]: JSON.stringify({ profile: 'claude' }) } })
+      await start($)
+      const report = await $.command.run({ command: 'pantheon', args: 'config' })
+      expect(report.text).toContain(`Active profile: claude (${origin})`)
+    })
+  }
+
   for (const failedKeys of [['natives'], ['session'], ['view'], ['natives', 'session', 'view']]) {
     test(`failed panel writes warn once and preserve hook results: ${failedKeys.join(', ')}`, async ($, on) => {
       const { seen } = world(on)

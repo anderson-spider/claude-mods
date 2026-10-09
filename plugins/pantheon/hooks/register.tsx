@@ -4,7 +4,7 @@ import type { AgentSpec, ProcessRunInit, ProcessRunResult, Register } from 'clau
 import type { Job, Native, SessionInfo } from '../types'
 import { buildArgv, createJsonlReader } from './codex'
 import { loadConfig } from './config'
-import { DEFAULT_CONFIG } from './defaults'
+import { BUILTIN_PROFILES, DEFAULT_CONFIG } from './defaults'
 import { createJobs, markLost } from './jobs'
 import { buildCouncilBlock, isCouncilOrigin, matchesCouncilTrigger } from './prompts/council'
 import { buildOrchestratorSection } from './prompts/orchestrator'
@@ -124,8 +124,9 @@ function summarize(job: Job) {
   }
 }
 
-export const register: Register = on => {
-  let state: ConfigResult = { ok: true, config: DEFAULT_CONFIG, origins: {} }
+export const register: Register = (on, options) => {
+  const selected = typeof options.profile === 'string' ? options.profile : undefined
+  let state: ConfigResult = { ok: true, config: DEFAULT_CONFIG, origins: {}, profiles: Object.keys(BUILTIN_PROFILES) }
   let lastValid: PantheonConfig | undefined
   let registeredKey: string | undefined
   let toastedError: string | undefined
@@ -200,7 +201,7 @@ export const register: Register = on => {
     return jobs
   }
 
-  async function workspace(io: Io): Promise<{ sessionCwd: string; root: string; isRepo: boolean }> {
+  async function workspace(io: Pick<Io, 'cwd' | 'run'>): Promise<{ sessionCwd: string; root: string; isRepo: boolean }> {
     const sessionCwd = await io.cwd()
     const top = await io.run(['git', 'rev-parse', '--show-toplevel'], { cwd: sessionCwd }).catch(() => undefined)
     const gitTop = top && top.exitCode === 0 ? top.stdout.trim() || undefined : undefined
@@ -212,7 +213,7 @@ export const register: Register = on => {
     state = await loadConfig(io.readText, {
       user: `${home ?? '~'}/.claude/pantheon.json`,
       project: `${root}/.claude/pantheon.json`,
-    }, lastValid)
+    }, lastValid, selected)
     if (state.ok) {
       lastValid = state.config
       toastedError = undefined
@@ -289,6 +290,25 @@ export const register: Register = on => {
     }
     return reply({ ...summarize(job), ...(outcome === 'cancelled' ? { note: PARTIAL_NOTE } : {}) })
   }
+
+  on('config.set', { key: 'pantheon.profile' }, async ($, e, next) => {
+    const io: Pick<Io, 'cwd' | 'run' | 'home' | 'readText'> = {
+      cwd: () => $.session.cwd(),
+      run: (argv, init) => $.process.run(argv, init),
+      home: () => $.env.get('HOME'),
+      readText: async path => (await $.fs.exists(path)) ? String(await $.fs.read(path)) : undefined,
+    }
+    const { root } = await workspace(io)
+    const home = await io.home()
+    const current = await loadConfig(io.readText, {
+      user: `${home ?? '~'}/.claude/pantheon.json`,
+      project: `${root}/.claude/pantheon.json`,
+    }, lastValid, typeof e.value === 'string' ? e.value : undefined)
+    if (typeof e.value !== 'string' || !current.profiles.includes(e.value)) {
+      return { deny: `unknown profile "${e.value}"; known: ${current.profiles.join(', ')}` }
+    }
+    return next(e)
+  })
 
   on('session.start', async ($, e, next) => {
     const io: Io = {
