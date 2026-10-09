@@ -1,4 +1,4 @@
-import type { Native, Round, RoundStatus, SessionInfo, PanelView } from './types'
+import type { Native, Round, RoundStatus, SessionInfo, PanelView, PanelGroup } from './types'
 import { ROLES } from './defaults'
 
 export const MAX_NATIVES = 24
@@ -120,11 +120,24 @@ export const normalizeSession = (raw: unknown): SessionInfo => {
     ...(context ? { context } : {}),
     ...(isNumber(raw.turnStartedAt) ? { turnStartedAt: raw.turnStartedAt } : {}),
     ...(isNumber(raw.lastTurnMs) ? { lastTurnMs: raw.lastTurnMs } : {}),
+    ...(isNumber(raw.costUsd) ? { costUsd: raw.costUsd } : {}),
   }
 }
 
-export const normalizeView = (raw: unknown): PanelView =>
-  isObject(raw) && (raw.tab === 'agents' || raw.tab === 'jobs') ? { tab: raw.tab } : { ...DEFAULT_VIEW }
+const GROUPS: PanelGroup[] = ['running', 'finished', 'planned']
+
+export const normalizeView = (raw: unknown): PanelView => {
+  if (!isObject(raw) || (raw.tab !== 'agents' && raw.tab !== 'jobs')) return { ...DEFAULT_VIEW }
+  const collapsed = Array.isArray(raw.collapsed) ? GROUPS.filter(g => (raw.collapsed as unknown[]).includes(g)) : []
+  return { tab: raw.tab, ...(collapsed.length ? { collapsed } : {}) }
+}
+export const viewTab = (v: PanelView, tab: PanelView['tab']): PanelView => ({ ...v, tab })
+export const viewToggled = (v: PanelView, group: PanelGroup): PanelView => {
+  const rest = (v.collapsed ?? []).filter(g => g !== group)
+  const collapsed = (v.collapsed ?? []).includes(group) ? rest : GROUPS.filter(g => g === group || rest.includes(g))
+  const { collapsed: _drop, ...base } = v
+  return { ...base, ...(collapsed.length ? { collapsed } : {}) }
+}
 
 export const sessionStarted = (s: SessionInfo, now: number): SessionInfo =>
   ({ ...s, isRunning: true, turnStartedAt: now })
@@ -134,9 +147,9 @@ export const sessionStepped = (s: SessionInfo, model: string, effort: string | u
   ({ ...s, model, effort })
 export const sessionMeasured = (s: SessionInfo, context: {
   tokens?: number | null; window: number; percent?: number | null
-}): SessionInfo => ({ ...s, context: {
+}, cost?: { usd: number }): SessionInfo => ({ ...s, context: {
   tokens: context.tokens ?? null, window: context.window, percent: context.percent ?? null,
-} })
+}, ...(cost && Number.isFinite(cost.usd) ? { costUsd: cost.usd } : {}) })
 
 const shorten = (s: string, n: number) => {
   const one = s.replace(/\s+/g, ' ').trim()

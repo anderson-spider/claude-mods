@@ -18,8 +18,11 @@ export type SessionInfo = {
   model?: string; effort?: string
   context?: { tokens: number | null; window: number; percent: number | null }
   isRunning: boolean; turnStartedAt?: number; lastTurnMs?: number
+  /** US dollars the session has cost so far, as the host's ledger totals it. */
+  costUsd?: number
 }
-export type PanelView = { tab: 'agents' | 'jobs' }
+export type PanelGroup = 'running' | 'finished' | 'planned'
+export type PanelView = { tab: 'agents' | 'jobs'; collapsed?: PanelGroup[] }
 
 declare module 'claude-code' {
   interface PluginState {

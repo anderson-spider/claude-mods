@@ -1,10 +1,12 @@
 import type { Elements, RenderSurface } from 'claude-code'
 
 import type { RailProps } from './rail'
+import { ROLE_COLOR, clawdLines, clawdSvg } from './clawd.ts'
+import type { Mood } from './clawd.ts'
 import type { MascotProps } from './mascot.tsx'
 import { ago } from './roster'
-import type { Engine, Instance, Roster, RoundView, Slot } from './roster'
-import type { ConfigResult, Job, SessionInfo } from './types'
+import type { Engine, Instance, Roster, RoundView, Slot, SlotName } from './roster'
+import type { ConfigResult, Job, PanelGroup, SessionInfo } from './types'
 
 export const PANE_ID = 'pantheon'
 
@@ -94,10 +96,14 @@ export type PanelData = {
   jobs: Job[]
   session: SessionInfo
   tab: 'agents' | 'jobs'
+  /** Agent groups the person folded; absent means none. */
+  collapsed?: PanelGroup[]
   hasClient: boolean
   /** The host clock failed: draw static durations from `now` and say so, with no Client. */
   clockLost?: boolean
   onTab: (tab: 'agents' | 'jobs') => void
+  onToggle?: (group: PanelGroup) => void
+  onClose?: () => void
   onCancel: (jobId: string) => void
   onCopy: (text: string, surface: RenderSurface) => void
 }
@@ -113,22 +119,32 @@ const RUN = 'success'
 const ROUND = 'warning'
 const ACTIVITY = 'cyan'
 const FAULT = 'error'
-// Hex values of the Desktop artboard, for the SVG timeline (which draws its own card).
+// The Desktop panel is dark: this is the one place its palette lives. Role colors come from clawd.ts.
 const HEX = {
-  codex: '#1d4f9e', claude: '#6b37b3', mixed: '#5b6270', codexSoft: '#c7d6ef', claudeSoft: '#e1d4f4',
-  ink: '#1d1f23', muted: '#5b6270', grid: '#ece9e2', turn: '#dcd8cf', amber: '#7a4f00',
-  card: '#ffffff', edge: '#e1ded6', dot: '#b9b4a8', pill: '#f0eee9',
+  codex: '#6aa3f0', claude: '#b58af0', mixed: '#9a9a94', codexSoft: '#1f3350', claudeSoft: '#35274f',
+  ink: '#f4f3ef', muted: '#8f8f8a', grid: '#333331', turn: '#4a4945', amber: '#e0a94a',
+  card: '#242423', edge: '#333331', dot: '#5a5955', pill: '#32322f',
+  bg: '#1b1b1a', tile: '#272726', green: '#4fb383', red: '#e5604f', track: '#35352f',
 }
+// The progress track is a hex on both surfaces.
+const TRACK = HEX.track
 
-// Desktop text and chips use the artboard's hex values instead of the theme names above.
+// Desktop text and chips use the panel's hex values instead of the theme names above.
 const DESK: Record<string, string> = {
-  suggestion: HEX.codex, merged: HEX.claude, success: '#176a30', warning: HEX.amber, error: '#b42318',
-  inactive: HEX.muted, text: HEX.ink, inverseText: '#ffffff', cyan: '#2d3138',
+  suggestion: HEX.codex, merged: HEX.claude, success: HEX.green, warning: HEX.amber, error: HEX.red,
+  inactive: HEX.muted, text: HEX.ink, inverseText: HEX.bg, cyan: '#8fb8d8',
 }
 const DESK_SOFT: Record<string, string> = {
-  suggestion: '#e6eefb', merged: '#efe7fa', success: '#e3f4e7', warning: '#fbeccb', text: '#f0eee9',
+  suggestion: HEX.codexSoft, merged: HEX.claudeSoft, success: '#1d3a2d', warning: '#3d3016', text: HEX.pill,
 }
-const DESK_PANEL = '#f7f6f2'
+const DESK_PANEL = HEX.bg
+
+// A hex color pulled toward `into`, for dimmed (planned) rows on a surface with no dim attribute.
+function mix(hex: string, into: string, t: number): string {
+  const n = (h: string, k: number) => parseInt(h.slice(1 + k * 2, 3 + k * 2), 16)
+  const c = [0, 1, 2].map(k => Math.round(n(hex, k) * (1 - t) + n(into, k) * t))
+  return `#${c.map(v => v.toString(16).padStart(2, '0')).join('')}`
+}
 
 const GLYPH: Record<string, { text: string; color: string; label: string }> = {
   running: { text: '●', color: RUN, label: 'running' },
@@ -136,6 +152,8 @@ const GLYPH: Record<string, { text: string; color: string; label: string }> = {
   done: { text: '✓', color: RUN, label: 'done' },
   error: { text: '✗', color: FAULT, label: 'error' },
   cancelled: { text: '⊘', color: 'inactive', label: 'cancelled' },
+  failed: { text: '✗', color: FAULT, label: 'failed' },
+  stopped: { text: '⊘', color: 'inactive', label: 'stopped' },
   lost: { text: '?', color: ROUND, label: 'lost' },
 }
 
@@ -156,15 +174,7 @@ const esc = (s: string) => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;
 // A Codex job reports usage only once it has some; until then the line would be all dashes.
 const hasTokens = (i: Instance) => i.engine !== 'codex' || i.tokens.input !== undefined || i.tokens.out > 0
 
-function tokensText(i: Instance): string {
-  return i.engine === 'codex'
-    ? `in ${kilo(i.tokens.input)} · cached ${kilo(i.tokens.cached)} · out ${kilo(i.tokens.out)}`
-    : `ctx ${kilo(i.tokens.ctx)} · out ${kilo(i.tokens.out)} · ${i.tokens.steps ?? 0} steps`
-}
-
-const engineLabel = (slot: Slot) => (slot.engine === 'mixed' ? 'codex + claude' : slot.engine)
 const activeOf = (slot: Slot) => slot.instances.filter(i => i.isActive)
-const resumeOf = (slot: Slot) => slot.instances.find(i => i.resumeId)?.resumeId
 
 export function copyText(job: Job): string {
   return `${job.id}\nresume: delegate({ agent: "${job.agent}", resume: "${job.id}", prompt: … })`
@@ -227,7 +237,7 @@ export function timelineSource(slots: Slot[], session: SessionInfo, now: number)
   for (const { top, slot } of lanes) {
     const cy = top + 8
     const n = activeOf(slot).length
-    const labelFill = slot.name === 'orchestrator' ? HEX.ink : slot.state === 'active' ? hex(slot.engine) : HEX.muted
+    const labelFill = slot.name === 'orchestrator' ? HEX.ink : slot.state === 'active' ? ROLE_COLOR[slot.name] : HEX.muted
     body += `<text x="14" y="${cy + 3}" font-size="11" font-weight="${slot.state === 'active' ? 600 : 400}" fill="${labelFill}">${esc(n > 1 ? `${slot.name} ×${n}` : slot.name)}</text>`
     if (slot.name === 'orchestrator') {
       const s = session
@@ -301,8 +311,10 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
   const paint = (name: string | undefined) => (isDesk && name ? DESK[name] ?? name : name)
   const text = (s: Seg) => {
     const code = isDesk && s.color === 'cyan'
-    const color = code ? DESK.cyan : isDesk ? (s.dim && !s.color ? HEX.muted : paint(s.color) ?? HEX.ink) : s.color
-    const bg = s.bg ?? (code ? '#f4f2ed' : isDesk && s.chip && s.color ? DESK_SOFT[s.color] : undefined)
+    let color = code ? DESK.cyan : isDesk ? (s.dim && !s.color ? HEX.muted : paint(s.color) ?? HEX.ink) : s.color
+    // No dim attribute on desktop: a dimmed hex is pulled toward the panel.
+    if (isDesk && s.dim && s.color && color?.startsWith('#')) color = mix(color, HEX.bg, 0.5)
+    const bg = s.bg ?? (code ? '#2b2f33' : isDesk && s.chip && s.color ? DESK_SOFT[s.color] : undefined)
     return (
       <el.Text color={color} bold={s.bold} dimColor={isDesk ? undefined : s.dim} backgroundColor={bg} wrap="truncate">{s.text}</el.Text>
     )
@@ -332,36 +344,20 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     return { text: fmtClock((endAt ?? now) - since), color, bold }
   }
 
-  // The connector at the head of a role line, always LEAD cells wide: lit with packets while the
-  // role works, dim and still while idle, none when off. Pulse on the terminal only.
-  const LEAD = 4
-  const leadSeg = (key: string, slot: Slot): Seg => {
-    const color = ENGINE_COLOR[slot.engine]
-    if (slot.state === 'off') return { text: '⊘', dim: true }
-    const active = slot.state === 'active'
-    if (hasRail) {
-      return {
-        node: el.rail!({
-          key, width: LEAD - 1,
-          props: {
-            active, width: LEAD - 1, color: paint(color)!, dim: paint('inactive')!, marks: [], isMerge: false,
-            glyph: { on: '●', off: '○' }, isPulse: !isDesk,
-          },
-        }),
-        w: LEAD,
-      }
+  // A pulsing state dot, one cell wide: an Svg with a SMIL pulse on desktop, a one-cell rail on the
+  // terminal (no line, no 110 ms timer), a plain dot where there is no Client.
+  const pulseSeg = (key: string): Seg => {
+    if (isDesk && el.Svg) {
+      const Svg = el.Svg
+      const source = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10" width="10" height="10"><circle cx="5" cy="5" r="4.5" fill="${HEX.green}"><animate attributeName="opacity" values="1;.35;1" dur="1.6s" repeatCount="indefinite"/></circle></svg>`
+      return { node: <Svg key={key} source={source} alt="running" width={10} height={10} isInteractive />, w: 1 }
     }
-    return { text: `${active ? '●' : '○'}${'─'.repeat(LEAD - 1)}`, color: active ? color : undefined, dim: !active }
-  }
-
-  // One cell wide: just the pulsing mark, with no line and no 110 ms timer.
-  const pulseSeg = (key: string, slot: Slot): Seg => {
-    if (!hasRail) return { text: '●', color: RUN }
+    if (isDesk || !hasRail) return { text: '●', color: RUN }
     return {
       node: el.rail!({
         key, width: 1,
         props: {
-          active: true, width: 1, color: ENGINE_COLOR[slot.engine], dim: 'inactive', marks: [], isMerge: false,
+          active: true, width: 1, color: RUN, dim: 'inactive', marks: [], isMerge: false,
           glyph: { on: '●', off: '○' }, isLine: false,
         },
       }),
@@ -374,9 +370,9 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
       key={key}
       flexDirection="column"
       borderStyle={isTiny ? undefined : style.border ?? (isDesk ? 'round' : 'single')}
-      borderColor={isDesk ? style.color ?? '#e1ded6' : style.color}
+      borderColor={isDesk ? paint(style.color) ?? HEX.edge : style.color}
       borderDimColor={isDesk ? undefined : style.dim}
-      backgroundColor={isDesk ? '#ffffff' : undefined}
+      backgroundColor={isDesk ? HEX.card : undefined}
       paddingX={isTiny ? 0 : 1}
       width={W}
     >
@@ -394,16 +390,17 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     />
   )
   const header = () => {
-    const c = roster.counts
+    const running = roles.reduce((n, r) => n + activeOf(r).length, 0) + roster.others.filter(i => i.isActive).length
     const right: Seg[] = data.tab === 'agents'
-      ? W >= 58
-        ? [{ text: `${c.active} active`, color: RUN }, { text: `· ${c.idle} idle · ${c.off} off`, dim: true }]
-        : W >= 30 ? [{ text: `${c.active} active`, color: RUN }] : []
-      : W >= 60 ? [{ text: 'codex jobs · this session', dim: true }] : []
+      ? W >= 30
+        ? running ? [pulseSeg('hdr-dot'), { text: `${running} running`, color: RUN, bold: true }] : [{ text: 'idle', dim: true }]
+        : []
+      : W >= 60 ? [{ text: 'Codex jobs · Claude rounds', dim: true }] : []
+    if (data.onClose && W >= 58) right.push({ node: <Button key="close" label="✕" onPress={() => data.onClose?.()} />, w: 5 })
     // Too narrow for both tabs: one button switches to the other tab.
     const other = data.tab === 'agents' ? 'jobs' : 'agents'
     const tabs = W >= 30
-      ? [tabButton('agents', 'Agents'), tabButton('jobs', `Jobs ${data.jobs.length}`)]
+      ? [tabButton('agents', 'Agents'), tabButton('jobs', `Jobs ${data.jobs.length + claudeRuns().length}`)]
       : [<Button key={`tab-${other}`} label={other === 'jobs' ? 'J' : 'A'} hotkey={other === 'jobs' ? '2' : '1'} onPress={() => data.onTab(other)} />]
     return (
       <Box key="header" justifyContent="space-between" gap={1} width={W}>
@@ -436,118 +433,240 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
       return { text: n > 1 ? `${name} ×${n}` : name, color: ENGINE_COLOR[slot.engine] }
     })
 
-  const orchestratorCard = () => {
-    const s = data.session
-    const running = s.isRunning
-    const model = [s.model, s.effort ? `effort ${s.effort}` : ''].filter(Boolean).join(' · ')
-    const rows: unknown[] = [
-      line('o1', [
-        { text: running ? '●' : '○', color: running ? RUN : undefined, dim: !running },
-        { text: 'orchestrator', bold: true },
-        { text: 'main session', dim: true },
-      ], model ? [{ text: clip(model, 28), dim: true }] : undefined, IW),
-      line('o2', [
-        { text: 'turn', dim: true },
-        { text: running ? 'running' : 'idle', color: running ? RUN : undefined, dim: !running },
-        ...(running && s.turnStartedAt ? [clockSeg('clk-orchestrator', s.turnStartedAt, null, 'text', true)] : []),
-      ], !running && s.lastTurnMs !== undefined ? [{ text: `last turn ${fmtClock(s.lastTurnMs)}`, dim: true }] : undefined, IW),
-    ]
-    const ctx = s.context
-    if (ctx && ctx.percent !== null) {
-      const [on, off] = bar(ctx.percent, Math.max(1, Math.min(20, IW - 24)))
-      rows.push(line('o3', [
-        { text: 'ctx', dim: true }, on, off,
-        { text: kilo(ctx.tokens), bold: true },
-        { text: `/${kilo(ctx.window)} ${Math.round(ctx.percent)}%`, dim: true },
-      ], undefined, IW))
+  // ------- art
+  const MW = 8
+  const LW = 15
+  const canArt = isDesk ? !!el.Svg : true
+  // A mascot: an Svg on desktop, the Client on the terminal, static colorless rows with no Client.
+  const art = (key: string, role: SlotName, mood: Mood, size: 'small' | 'large'): unknown => {
+    const w = size === 'large' ? LW : MW
+    if (isDesk) {
+      const Svg = el.Svg!
+      const px = size === 'large' ? 92 : 48
+      return (
+        <Box key={key} width={w} flexShrink={0}>
+          <Svg source={clawdSvg(role, mood, px)} alt={`${role} mascot, ${mood}`} width={Math.round((px * 30) / 26)} height={px} isInteractive={mood === 'work'} />
+        </Box>
+      )
     }
-    if (roster.delegating.length) {
-      rows.push(line('o4', [{ text: 'delegating →', dim: true }, ...delegatingSegs()], undefined, IW))
-    }
-    return card('orchestrator', rows, { color: isDesk ? '#c9c4b8' : 'inactive' })
+    if (canClient && el.mascot) return <Box key={key} width={w} flexShrink={0}>{el.mascot({ key: `${key}-c`, props: { role, mood, size } })}</Box>
+    return (
+      <Box key={key} width={w} flexShrink={0} flexDirection="column">
+        {clawdLines(role, mood, 0, size).map((row, k) => <Box key={k}>{text({ text: row })}</Box>)}
+      </Box>
+    )
   }
 
-  const instanceRows = (i: Instance, index: number, count: number): unknown[] => {
-    const isLast = index === count - 1
-    const stem = isDesk ? '' : count > 1 && !isLast ? '│' : ' '
-    const branch = isDesk ? '' : count > 1 && !isLast ? '├' : '└'
-    const rounds = i.rounds.length
-    const tags: Seg[] = [
-      ...(i.status === 'background' ? [{ text: 'bg', dim: true }] : []),
-      ...(rounds > 1 ? [chip(`↻ round ${rounds}`, ROUND, true)] : []),
-    ]
-    const pad = isDesk ? '' : `${stem}   `
-    const out: unknown[] = [
-      line(`${i.id}-a`, [
-        ...(branch ? [{ text: branch, dim: true }] : []),
-        { text: i.id, bold: true },
-        ...(i.seat ? [{ text: i.seat, color: ENGINE_COLOR[i.engine] }] : []),
-        { text: clip(i.task || '(no description)', Math.max(4, IW - 22)) },
-        ...tags,
-      ], [clockSeg(`clk-${i.id}`, i.startedAt, null, 'text', true)], IW),
-    ]
-    if (i.activity) {
-      out.push(line(`${i.id}-b`, [{ text: `${pad}↳`, dim: true }, { text: i.activity, color: ACTIVITY }], undefined, IW))
-    }
-    if (hasTokens(i)) out.push(line(`${i.id}-c`, [{ text: `${pad}  ${tokensText(i)}`.trimEnd(), dim: true }], undefined, IW))
-    if (rounds > 1) {
-      const shown = i.rounds.slice(-4)
-      out.push(line(`${i.id}-d`, [
-        { text: `${pad}  rounds`.trimEnd(), dim: true },
-        ...shown.map((r): Seg => {
-          const end = endOf(r, now)
-          if (end === undefined) return { text: '■ ?', color: ROUND, dim: true }
-          return r.endedAt === undefined ? { text: '■ now', color: ROUND } : { text: `■ ${fmtClock(end - r.startedAt)}`, dim: true }
-        }),
-      ], undefined, IW))
+  // ------- agent rows
+  type Group = PanelGroup
+  type AgentRow = { key: string; slot: Slot; inst?: Instance; group: Group }
+  type Block = { node: unknown; h: number }
+  const LABEL: Record<Group, string> = { running: 'Running', finished: 'Finished', planned: 'Planned' }
+  const collapsedSet = new Set<string>(data.collapsed ?? [])
+  const engineName = (e: Engine | 'mixed' | undefined) => (e && e !== 'mixed' ? ENGINE_COLOR[e] : 'inactive')
+
+  const agentRows = (): Record<Group, AgentRow[]> => {
+    const out: Record<Group, AgentRow[]> = { running: [], finished: [], planned: [] }
+    for (const slot of roles) {
+      for (const inst of slot.instances) {
+        const group: Group = inst.isActive ? 'running' : 'finished'
+        out[group].push({ key: inst.id, slot, inst, group })
+      }
+      if (!slot.instances.length) out.planned.push({ key: `plan-${slot.name}`, slot, group: 'planned' })
     }
     return out
   }
-  const instanceHeight = (i: Instance) => 1 + (hasTokens(i) ? 1 : 0) + (i.activity ? 1 : 0) + (i.rounds.length > 1 ? 1 : 0)
 
-  const activeCard = (slot: Slot) => {
-    const live = activeOf(slot)
-    const color = ENGINE_COLOR[slot.engine]
-    const label = `${engineLabel(slot)}${slot.model ? ` · ${slot.model}` : ''}`
-    const left: Seg[] = [
-      leadSeg(`rail-${slot.name}`, slot),
-      { text: slot.name, bold: true, color },
-      ...(live.length > 1 ? [{ text: `×${live.length}`, bold: true }] : []),
-      isDesk ? chip(label, color) : { text: label, dim: true },
-    ]
-    return card(`role-${slot.name}`, [
-      line(`${slot.name}-h`, left, [chip(`${live.length} running`, RUN)], IW, keepOf(left, live.length > 1 ? 3 : 2)),
-      ...live.flatMap((i, k) => instanceRows(i, k, live.length)),
-      // A disabled council seat stays visible as off inside the slot while another seat works.
-      slot.seatsOff?.length
-        ? line(`${slot.name}-off`, [{ text: '⊘', dim: true }, { text: `${slot.seatsOff.join(', ')} off`, dim: true }], undefined, IW)
-        : null,
-    ], { dim: true })
+  const tokenTotal = (i: Instance) => (i.engine === 'codex' ? (i.tokens.input ?? 0) : (i.tokens.ctx ?? 0)) + i.tokens.out
+  const ctxPercent = (i: Instance) => {
+    const window = data.session.context?.window
+    return i.engine === 'claude' && i.tokens.ctx != null && window ? Math.min(100, Math.round((i.tokens.ctx / window) * 100)) : undefined
   }
-  const activeHeight = (slot: Slot) =>
-    3 + activeOf(slot).reduce((m, i) => m + instanceHeight(i), 0) + (slot.seatsOff?.length ? 1 : 0)
+  const durationSeg = (key: string, i: Instance, running: boolean): Seg => {
+    if (running) return clockSeg(`clk-${i.id}`, i.startedAt, null, 'inactive')
+    const end = i.endedAt ?? endOf(i.rounds[i.rounds.length - 1] ?? { startedAt: i.startedAt, status: i.status }, now)
+    return { text: end === undefined ? '—' : fmtClock(end - i.startedAt), dim: true }
+  }
 
-  const idleCard = (slot: Slot) => {
+  // One agent: mascot, bold task, role and model, stats, a thin progress bar in the role color and the
+  // state mark. `compact` is the one-line form for short panes.
+  const rowBlock = (r: AgentRow, withSep: boolean, compact: boolean): Block => {
+    const { slot, inst: i } = r
+    const role = slot.name
+    const rc = ROLE_COLOR[role]
+    const isPlanned = r.group === 'planned'
     const isOff = slot.state === 'off'
-    const resume = resumeOf(slot)
-    const right: Seg[] = isOff
-      ? [{ text: 'off', dim: true }, { text: slot.offReason ?? 'disabledAgents', dim: true }]
-      : [{
-        text: [
-          'idle',
-          slot.lastEndedAt !== undefined ? `last ${ago(now - slot.lastEndedAt)} ago` : undefined,
-          slot.seatsOff?.length ? `${slot.seatsOff.join(', ')} off` : undefined,
-          resume ? `${resume} ↻` : undefined,
-        ].filter(Boolean).join(' · '),
-        dim: true,
-      }]
-    const left: Seg[] = [
-      leadSeg(`rail-${slot.name}`, slot),
-      { text: slot.name, color: isOff ? undefined : ENGINE_COLOR[slot.engine], dim: isOff },
-      ...(isOff ? [] : [{ text: engineLabel(slot), dim: true }]),
+    const running = r.group === 'running'
+    const mood: Mood = isPlanned ? 'off' : running ? 'work' : 'idle'
+    const engine = i?.engine ?? slot.engine
+    const model = i?.model ?? slot.model ?? ''
+    const g = i ? GLYPH[i.status] ?? GLYPH.done : undefined
+    const state: Seg = running ? pulseSeg(`dot-${i!.id}`)
+      : isPlanned ? { text: isOff ? '⊘' : '◷', dim: true }
+        : { text: g!.text, color: g!.color }
+    const task = isPlanned ? (isOff ? 'Disabled' : 'Waiting for work') : clip(i!.task || '(no description)', 200)
+    const tag = (i && i.status === 'background' ? [{ text: 'bg', dim: true } as Seg] : [])
+    if (compact) {
+      const left: Seg[] = [state, { text: role, color: rc, bold: true, dim: isPlanned }, { text: task, dim: isPlanned }, ...tag]
+      return { node: <Box key={r.key} width={IW}>{line(`${r.key}-l`, left, i ? [durationSeg(r.key, i, running)] : undefined, IW, keepOf(left, 2))}</Box>, h: 1 }
+    }
+    const showArt = canArt && IW >= 30
+    const CW = showArt ? IW - (MW + 3) : IW
+    const pct = i ? ctxPercent(i) : undefined
+    const stats: Seg[] = !i ? [] : [
+      ...(pct !== undefined || hasTokens(i) ? [{ text: [pct !== undefined ? `ctx ${pct}%` : '', hasTokens(i) ? kilo(tokenTotal(i)) : ''].filter(Boolean).join(' · '), dim: true } as Seg] : []),
+      durationSeg(r.key, i, running),
     ]
-    return card(`role-${slot.name}`, [line(`${slot.name}-h`, left, right, IW, keepOf(left, 2))],
-      { dim: true, border: isOff ? 'dashed' : undefined })
+    const rounds = i?.rounds.length ?? 0
+    const l2: Seg[] = [
+      { text: role, color: rc, bold: true, dim: isPlanned },
+      ...(i?.seat ? [{ text: i.seat, color: engineName(engine) }] : []),
+      ...(model ? [{ text: model, dim: true }] : []),
+      ...(isOff ? [{ text: slot.offReason ?? 'disabledAgents', dim: true }] : []),
+      ...(rounds > 1 ? [chip(`↻ round ${rounds}`, ROUND, true)] : []),
+      ...tag,
+      ...(i ? [{ text: i.id, dim: true }] : []),
+      ...(i?.resumeId ? [{ text: '↻', color: ROUND }] : []),
+    ]
+    const cells = Math.max(1, CW)
+    const ratio = running ? Math.max(0.06, pct !== undefined ? pct / 100 : 0.25) : 1
+    const filled = Math.max(1, Math.min(cells, Math.round(ratio * cells)))
+    const body: unknown[] = [
+      line(`${r.key}-a`, [{ text: task, bold: true, dim: isPlanned }], [state], CW, 1),
+      line(`${r.key}-b`, l2, stats, CW, keepOf(l2, 1)),
+      isPlanned
+        ? <Box key={`${r.key}-c`}>{text({ text: ' ' })}</Box>
+        : <Box key={`${r.key}-c`} width={CW}>{render([{ text: '━'.repeat(filled), color: rc }, ...(cells > filled ? [{ text: '─'.repeat(cells - filled), color: TRACK }] : [])]).map(n => n)}</Box>,
+    ]
+    if (i && running && i.activity) body.push(line(`${r.key}-d`, [{ text: '↳', dim: true }, { text: i.activity, color: ACTIVITY }], undefined, CW))
+    if (i && rounds > 1) {
+      body.push(line(`${r.key}-e`, [
+        { text: 'rounds', dim: true },
+        ...i.rounds.slice(-4).map((rd): Seg => {
+          const end = endOf(rd, now)
+          if (end === undefined) return { text: '■ ?', color: ROUND, dim: true }
+          return rd.endedAt === undefined ? { text: '■ now', color: ROUND } : { text: `■ ${fmtClock(end - rd.startedAt)}`, dim: true }
+        }),
+      ], undefined, CW))
+    }
+    const lines = body.length
+    const stripe = (
+      <Box key="stripe" flexDirection="column" flexShrink={0}>
+        {Array.from({ length: lines }, (_, k) => <Box key={k}>{text({ text: '▎', color: engineName(engine), dim: isPlanned })}</Box>)}
+      </Box>
+    )
+    const sep = isDesk ? text({ text: '─'.repeat(Math.max(1, IW)), color: HEX.grid }) : text({ text: ' ' })
+    return {
+      node: (
+        <Box key={r.key} flexDirection="column" width={IW}>
+          <Box gap={1} width={IW}>
+            {showArt ? stripe : null}
+            {showArt ? art(`art-${r.key}`, role, mood, 'small') : null}
+            <Box flexDirection="column" width={CW} flexShrink={1}>{body}</Box>
+          </Box>
+          {withSep ? <Box key="sep">{sep}</Box> : null}
+        </Box>
+      ),
+      h: lines + (withSep ? 1 : 0),
+    }
+  }
+
+  // A group: its heading (fold arrow, name, count, Collapse/Expand) and, unless folded, its rows.
+  const groupBlocks = (g: Group, rows: AgentRow[], mode: 'full' | 'compact' | 'head'): Block[] => {
+    if (!rows.length) return []
+    const isFolded = collapsedSet.has(g)
+    const eff = isFolded ? 'head' : mode
+    const hw = isTiny ? W : W - 2
+    const toggle = W >= 30 && data.onToggle && (isFolded || mode !== 'head')
+      ? [{
+        node: <Button key={`toggle-${g}`} label={isFolded ? 'Expand' : 'Collapse'} onPress={() => data.onToggle?.(g)} />,
+        w: (isFolded ? 'Expand' : 'Collapse').length + 4,
+      } as Seg]
+      : undefined
+    const head: Block = {
+      node: (
+        <Box key={`${g}-head`} paddingX={isTiny ? 0 : 1} width={W}>
+          {line(`${g}-hl`, [
+            { text: eff === 'head' ? '▸' : '▾', dim: true },
+            { text: LABEL[g], bold: true, dim: g === 'planned' },
+            { text: `· ${rows.length}`, dim: true },
+          ], toggle, hw)}
+        </Box>
+      ),
+      h: 1,
+    }
+    if (eff === 'head') return [head]
+    const compact = eff === 'compact'
+    const built = rows.map((r, k) => rowBlock(r, !compact && k < rows.length - 1, compact))
+    const inner = built.map(b => b.node)
+    const frame = isDesk
+      ? <Box key={`${g}-rows`} flexDirection="column" width={W} paddingX={isTiny ? 0 : 2}>{inner}</Box>
+      : card(`${g}-rows`, inner, { dim: true })
+    return [head, { node: frame, h: built.reduce((n, b) => n + b.h, 0) + (isDesk || isTiny ? 0 : 2) }]
+  }
+
+  // ------- session
+  const sumTokens = (): number => {
+    const all = [...roles.flatMap(s => s.history ?? s.instances), ...roster.others]
+    return all.reduce((n, i) => n + tokenTotal(i), 0) + (data.session.context?.tokens ?? 0)
+  }
+  const sessionBlocks = (compact: boolean): Block[] => {
+    const s = data.session
+    const running = s.isRunning
+    const model = [s.model, s.effort].filter(Boolean).join(' · ')
+    const ctx = s.context?.percent
+    const timeSeg = (): Seg => running && s.turnStartedAt
+      ? clockSeg('clk-orchestrator', s.turnStartedAt, null, 'text', true)
+      : s.lastTurnMs !== undefined ? { text: fmtClock(s.lastTurnMs), bold: true } : { text: '—', dim: true }
+    const dot: Seg = running ? pulseSeg('s-dot') : { text: '○', dim: true }
+    const orchName: Seg = { text: 'orchestrator', bold: true, color: ROLE_COLOR.orchestrator }
+    if (compact) {
+      const left: Seg[] = [dot, orchName, ...(model ? [{ text: clip(model, 20), dim: true }] : [])]
+      return [{ node: line('o-c', left, running && s.turnStartedAt ? [timeSeg()] : undefined, W, keepOf(left, 2)), h: 1 }]
+    }
+    const status: Seg[] = [
+      dot,
+      { text: running ? 'working' : 'idle', color: running ? RUN : undefined, dim: !running },
+      ...(ctx != null ? [{ text: `· ctx ${Math.round(ctx)}%`, dim: true } as Seg] : []),
+      ...(!running && s.lastTurnMs !== undefined ? [{ text: `· last turn ${fmtClock(s.lastTurnMs)}`, dim: true } as Seg] : []),
+    ]
+    const cost: Seg = s.costUsd !== undefined ? { text: `≈$${s.costUsd.toFixed(2)}`, bold: true } : { text: '—', dim: true }
+    const tokens: Seg = { text: kilo(sumTokens()), bold: true }
+    const hasTiles = isDesk && W >= 36
+    const showArt = canArt && IW >= 36
+    const TW = showArt ? IW - (LW + 2) : IW
+    const lines: unknown[] = [
+      line('o1', [{ text: 'Main session', bold: true }], undefined, TW),
+      line('o2', [orchName, ...(model ? [{ text: clip(model, 28), dim: true } as Seg] : [])], undefined, TW, 1),
+      line('o3', status, undefined, TW),
+    ]
+    if (!hasTiles) {
+      if (showArt) lines.push(<Box key="o4"><el.Text> </el.Text></Box>)
+      lines.push(line('o5', [{ text: 'Cost', dim: true }, cost, { text: 'Tokens', dim: true }, tokens, { text: 'Time', dim: true }, timeSeg()], undefined, TW))
+    }
+    if (roster.delegating.length) lines.push(line('o6', [{ text: 'delegating →', dim: true }, ...delegatingSegs()], undefined, TW))
+    const content = Math.max(showArt ? 6 : 0, lines.length)
+    const inner = showArt
+      ? <Box key="o-row" gap={2} width={IW}>{art('art-orchestrator', 'orchestrator', running ? 'work' : 'idle', 'large')}<Box flexDirection="column" width={TW}>{lines}</Box></Box>
+      : <Box key="o-col" flexDirection="column" width={IW}>{lines}</Box>
+    const blocks: Block[] = [{
+      node: card('session', [inner], { dim: true, color: isDesk ? HEX.card : 'inactive' }),
+      h: content + (isTiny ? 0 : 2),
+    }]
+    if (hasTiles) {
+      const tw = Math.floor((W - 2) / 3)
+      const tile = (k: string, label: string, value: Seg) => (
+        <Box key={k} flexDirection="column" borderStyle="round" borderColor={HEX.edge} backgroundColor={HEX.tile} paddingX={1} width={tw}>
+          {text({ text: label, dim: true })}
+          <Box>{render([value])}</Box>
+        </Box>
+      )
+      blocks.push({
+        node: <Box key="tiles" gap={1} width={W}>{tile('tile-cost', 'Cost', cost)}{tile('tile-tokens', 'Tokens', tokens)}{tile('tile-time', 'Time', timeSeg())}</Box>,
+        h: 4,
+      })
+    }
+    return blocks
   }
 
   const othersLine = () => {
@@ -559,43 +678,41 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     ], undefined, W)
   }
 
-  // The orchestrator's connector to the first role: a solid lit mark for the whole turn (a
-  // one-cell line has no room for packets, which would leave it dim at some phases), dim otherwise.
-  const orchestratorLink = () => {
-    const running = data.session.isRunning
-    return (
-      <Box key="orch-link" paddingLeft={isTiny ? 0 : 1}>
-        {text({ text: running ? '┃' : '│', color: running ? paint(ENGINE_COLOR.claude) : undefined, bold: running, dim: !running })}
-      </Box>
-    )
+  // The panel is built at the fullest level that fits `rows`; each step down drops something optional:
+  // 0 everything, 1 the timeline, 2 the planned rows, 3 the finished rows, 4 the session card and the
+  // running rows to one line each, 5 the optional lines. Whatever still does not fit is cut from the bottom.
+  const buildAgents = (level: number): Block[] => {
+    const rows = agentRows()
+    const mode = (g: Group): 'full' | 'compact' | 'head' =>
+      g === 'planned' ? (level >= 2 ? 'head' : 'full')
+        : g === 'finished' ? (level >= 3 ? 'head' : 'full')
+          : level >= 4 ? 'compact' : 'full'
+    const blocks: Block[] = [{ node: header(), h: 1 }]
+    if (data.clockLost) blocks.push({ node: clockWarning(), h: 1 })
+    blocks.push(...sessionBlocks(level >= 4))
+    for (const g of ['running', 'finished', 'planned'] as const) blocks.push(...groupBlocks(g, rows[g], mode(g)))
+    if (level < 5) {
+      const off = roles.filter(s => s.seatsOff?.length).flatMap(s => s.seatsOff!)
+      if (off.length) blocks.push({ node: line('seats-off', [{ text: '⊘', dim: true }, { text: `${off.join(', ')} off`, dim: true }], undefined, W), h: 1 })
+      if (roster.others.length) blocks.push({ node: othersLine(), h: 1 })
+    }
+    if (level === 0 && isDesk && el.Svg) {
+      const t = timelineSource(roster.slots, data.session, now)
+      blocks.push({ node: timelineCard(), h: Math.ceil(t.height / 20) })
+    }
+    if (level < 5) blocks.push({ node: footer(), h: 1 })
+    return blocks
   }
 
   const agentsTab = () => {
-    const live = roles.filter(s => s.state === 'active')
-    const tail = roles.filter(s => s.state !== 'active')
-    // Rows the always-shown part takes; idle and off cards (3 rows each) take what is left, in role order.
-    const orchH = 4 + (data.session.context?.percent != null ? 1 : 0) + (roster.delegating.length ? 1 : 0)
-    const liveH = live.reduce((n, s) => n + activeHeight(s), 0)
-    const used = 1 + (data.clockLost ? 1 : 0) + orchH + 1 + liveH + (roster.others.length ? 1 : 0) + 1 + 2
-    let room = Math.floor((data.rows - used) / 3)
-    let hidden = 0
-    if (room < tail.length) {
-      room = Math.max(0, Math.floor((data.rows - used - 1) / 3))
-      hidden = tail.length - room
+    let blocks: Block[] = []
+    for (let level = 0; level <= 5; level++) {
+      blocks = buildAgents(level)
+      if (blocks.reduce((n, b) => n + b.h, 0) <= data.rows) break
     }
-    // Active roles always stay; the idle and off ones that fit are chosen from the top, and all are drawn in role order.
-    const chosen = new Set<string>([...live, ...tail.slice(0, room)].map(s => s.name))
-    return [
-      header(),
-      clockWarning(),
-      isDesk && el.Svg ? timelineCard() : null,
-      orchestratorCard(),
-      orchestratorLink(),
-      ...roles.filter(s => chosen.has(s.name)).map(s => (s.state === 'active' ? activeCard(s) : idleCard(s))),
-      hidden ? note('hidden', { dim: true, text: `+${hidden} idle or off · /pantheon to see all` }) : null,
-      roster.others.length ? othersLine() : null,
-      footer(),
-    ]
+    let total = blocks.reduce((n, b) => n + b.h, 0)
+    while (total > data.rows && blocks.length > 1) total -= blocks.pop()!.h
+    return blocks.map(b => b.node)
   }
 
   // ------------------------------------------------------------ timeline (desktop)
@@ -667,52 +784,98 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     )
   }
 
+  // Claude's own agent rounds, read-only: the natives and their rounds, as the roster holds them.
+  type Run = { inst: Instance; role: string }
+  const claudeRuns = (): Run[] =>
+    [
+      ...roles.flatMap(s => (s.history ?? s.instances).filter(i => i.engine === 'claude').map(inst => ({ inst, role: s.name as string }))),
+      ...roster.others.filter(i => i.engine === 'claude').map(inst => ({ inst, role: 'other' })),
+    ].sort((a, b) => Number(b.inst.isActive) - Number(a.inst.isActive) || b.inst.startedAt - a.inst.startedAt)
+  const RUN_H = 3
+
+  const runRows = ({ inst: i, role }: Run) => {
+    const g = GLYPH[i.status] ?? GLYPH.lost
+    const rc = (ROLE_COLOR as Record<string, string>)[role]
+    const left: Seg[] = [
+      { text: i.id, bold: true },
+      { text: `${g.text} ${g.label}`, color: g.color, dim: i.status === 'cancelled' || i.status === 'stopped' },
+      { text: role, color: rc, bold: true },
+      ...(i.model ? [{ text: i.model, dim: true } as Seg] : []),
+    ]
+    const chips: Seg[] = [{ text: 'rounds', dim: true }]
+    i.rounds.slice(-4).forEach((r, k, shown) => {
+      const n = i.rounds.length - shown.length + k + 1
+      const rg = GLYPH[r.status] ?? GLYPH.lost
+      const end = endOf(r, now)
+      const live = r.endedAt === undefined && ACTIVE.has(r.status)
+      chips.push({ text: `${live ? '●' : rg.text} r${n}`, color: live ? RUN : rg.color })
+      chips.push(live ? clockSeg(`rclk-${i.id}-${n}`, r.startedAt, null, 'inactive') : { text: end === undefined ? '?' : fmtClock(end - r.startedAt), dim: true })
+    })
+    return (
+      <Box key={i.id} flexDirection="column" width={IW}>
+        {line(`${i.id}-a`, left, undefined, IW, keepOf(left, 1))}
+        {line(`${i.id}-b`, [{ text: i.task || '(no description)' }], undefined, IW)}
+        {line(`${i.id}-c`, chips, undefined, IW)}
+      </Box>
+    )
+  }
+
   const jobsTab = () => {
     const recent = [...data.jobs].sort((a, b) => b.startedAt - a.startedAt)
     const live = recent.filter(j => ACTIVE.has(j.status))
     const done = recent.filter(j => !ACTIVE.has(j.status))
+    const runs = claudeRuns()
     // Rows outside the jobs: header, footer, the clock warning; each group adds its title and,
-    // when not tiny, the card's two border rows. Jobs are taken in order (active first) while they
-    // fit; when some do not, one row goes to the "+N hidden" note.
+    // when not tiny, the card's two border rows. Items are taken in order (active jobs, finished
+    // jobs, Claude rounds) while they fit; when some do not, one row goes to the "+N hidden" note.
     const groupH = 1 + (isTiny ? 0 : 2)
     const fixed = 2 + (data.clockLost ? 1 : 0)
     const sum = (list: Job[]) => list.reduce((n, j) => n + jobHeight(j), 0)
-    const need = fixed + (live.length ? groupH + sum(live) : 0) + (done.length ? groupH + sum(done) : 0)
+    const need = fixed + (live.length ? groupH + sum(live) : 0) + (done.length ? groupH + sum(done) : 0) +
+      (runs.length ? groupH + runs.length * RUN_H : 0)
     const shownLive: Job[] = []
     const shownDone: Job[] = []
+    const shownRuns: Run[] = []
     if (need <= data.rows) {
       shownLive.push(...live)
       shownDone.push(...done)
+      shownRuns.push(...runs)
     } else {
       let room = data.rows - fixed - 1
-      const take = (list: Job[], into: Job[]) => {
-        for (const j of list) {
-          const cost = jobHeight(j) + (into.length ? 0 : groupH)
+      const take = <T,>(list: T[], into: T[], height: (item: T) => number) => {
+        for (const item of list) {
+          const cost = height(item) + (into.length ? 0 : groupH)
           if (cost > room) return false
-          into.push(j)
+          into.push(item)
           room -= cost
         }
         return true
       }
-      if (take(live, shownLive)) take(done, shownDone)
+      if (take(live, shownLive, jobHeight) && take(done, shownDone, jobHeight)) take(runs, shownRuns, () => RUN_H)
     }
     const hiddenLive = live.length - shownLive.length
     const hiddenDone = done.length - shownDone.length
-    const group = (key: string, list: Job[], total: number) => (
+    const hiddenRuns = runs.length - shownRuns.length
+    const group = (key: string, list: unknown[], total: number, extra: Seg[] = []) => (
       <Box key={key} flexDirection="column">
-        <Box gap={1} paddingX={1}>{render([{ text: key, bold: true }, { text: String(total), dim: true }])}</Box>
-        {card(`${key}-card`, list.map(jobRows), { dim: true })}
+        <Box paddingX={isTiny ? 0 : 1} width={W}>
+          {line(`${key}-h`, [{ text: key, bold: true }, { text: String(total), dim: true }, ...extra], undefined, isTiny ? W : W - 2)}
+        </Box>
+        {card(`${key}-card`, list, { dim: true })}
       </Box>
     )
+    const hiddenJobs = hiddenLive + hiddenDone
     return [
       header(),
       clockWarning(),
-      data.jobs.length === 0 ? note('empty', { dim: true, text: 'No Pantheon jobs in this session.' }) : null,
-      shownLive.length ? group('active', shownLive, live.length) : null,
-      shownDone.length ? group('finished', shownDone, done.length) : null,
-      hiddenLive + hiddenDone ? note('more', {
+      data.jobs.length === 0 && runs.length === 0 ? note('empty', { dim: true, text: 'No Pantheon jobs in this session.' }) : null,
+      shownLive.length ? group('active', shownLive.map(jobRows), live.length) : null,
+      shownDone.length ? group('finished', shownDone.map(jobRows), done.length) : null,
+      shownRuns.length ? group('Claude agent rounds', shownRuns.map(runRows), runs.length, [chip('read-only', 'inactive')]) : null,
+      hiddenJobs + hiddenRuns ? note('more', {
         dim: true,
-        text: hiddenLive ? `+${hiddenLive + hiddenDone} jobs hidden` : `+${hiddenDone} older jobs hidden`,
+        text: hiddenJobs === 0 ? `+${hiddenRuns} Claude rounds hidden`
+          : hiddenLive ? `+${hiddenJobs + hiddenRuns} jobs hidden` : `+${hiddenDone + hiddenRuns} older jobs hidden`,
       }) : null,
       footer(),
     ]
@@ -748,7 +911,7 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     for (const slot of shown) {
       const act = activeOf(slot)
       const per = Math.floor((W - 14) / act.length)
-      const segs: Seg[] = [pulseSeg(`mpulse-${slot.name}`, slot), { text: slot.name.padEnd(9), color: ENGINE_COLOR[slot.engine] }]
+      const segs: Seg[] = [pulseSeg(`mpulse-${slot.name}`), { text: slot.name.padEnd(9), color: ENGINE_COLOR[slot.engine] }]
       act.forEach((i, k) => {
         if (k) segs.push({ text: '│', dim: true })
         const tags = (i.status === 'background' ? 3 : 0) + (i.rounds.length > 1 ? 6 : 0)

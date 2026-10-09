@@ -14,7 +14,7 @@ import { isOffered, nativeAgentSpecs, resolveCodexCall, usesCodex } from './role
 import { buildRoster } from './roster'
 import {
   DEFAULT_SESSION, DEFAULT_VIEW, completed, describeTool, markNativesLost,
-  normalizeNatives, normalizeSession, normalizeView, sessionCompleted, sessionMeasured,
+  normalizeNatives, normalizeSession, normalizeView, sessionCompleted, sessionMeasured, viewTab, viewToggled,
   roundOpened, sessionStarted, sessionStepped, spawned, stepAccounted, toolNoted,
 } from './tracking'
 import type { Clock, ConfigResult, DelegateArgs, PantheonConfig, Spawn } from './types'
@@ -441,7 +441,7 @@ export const register: Register = on => {
         now: () => $.clock.now(),
       }
       await ensureTracking(io)
-      session = sessionMeasured(session!, e.context)
+      session = sessionMeasured(session!, e.context, e.cost)
       sessionQueue.push(session)
       await sessionQueue.flushed()
     } catch { /* Tracking never changes the measurement result. */ }
@@ -637,9 +637,12 @@ export const register: Register = on => {
       jobs: list,
       session: info,
       tab: normalizeView(view).tab,
+      collapsed: normalizeView(view).collapsed ?? [],
       hasClient,
       clockLost: isClockLost,
-      onTab: tab => { viewQueue.push(() => update($, viewAtom, () => ({ tab }))) },
+      onTab: tab => { viewQueue.push(() => update($, viewAtom, cur => viewTab(normalizeView(cur), tab))) },
+      onToggle: group => { viewQueue.push(() => update($, viewAtom, cur => viewToggled(normalizeView(cur), group))) },
+      onClose: () => { void $.ui.close({ id: PANE_ID }) },
       onCancel: jobId => { jobs?.cancel(jobId) },
       onCopy: (text, surface) => { void $.ui.copy({ text, surface }) },
     }) as never
