@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { AgentSpec, Hook, ProcessRunInit, ProcessRunResult, Register, ToolCallResult } from 'claude-code'
+import type { AgentSpec, FsStat, Hook, ProcessRunInit, ProcessRunResult, Register, ToolCallResult } from 'claude-code'
 
 import type { Job, Native, SessionInfo } from '../types'
 import { buildArgv, createJsonlReader } from './codex'
@@ -43,13 +43,34 @@ export async function withGateRecovery(work: () => Promise<ToolCallResult>, call
 }
 
 /** New files inherit their nearest existing ancestor's resolved location. */
-async function resolveGatePath(realPath: (path: string) => Promise<string | undefined>, raw: string, cwd: string): Promise<string> {
+export async function resolveGatePath(stat: (path: string, resolve: boolean) => Promise<FsStat>, raw: string, cwd: string): Promise<string> {
   if (!raw) throw new Error('Missing edit path')
+  const isMissing = (error: unknown): boolean => {
+    if (typeof error !== 'object' || error === null) return false
+    if ('code' in error) return error.code === 'ENOENT'
+    // Host errors may carry only their message. Never infer absence from arbitrary text.
+    return error instanceof Error && /^ENOENT(?=:|$)/.test(error.message)
+  }
   let candidate = raw.startsWith('/') ? raw : `${cwd}/${raw}`
   const missing: string[] = []
   while (true) {
-    const resolved = await realPath(candidate).catch(() => undefined)
-    if (resolved?.startsWith('/')) {
+    let own: FsStat | undefined
+    try { own = await stat(candidate, true) } catch (error) {
+      if (!isMissing(error)) throw error
+      // stat without resolution still identifies the entry itself through isLink,
+      // including dangling links. Only a second ENOENT confirms an absent entry.
+      let absent = false
+      try { await stat(candidate, false) } catch (inspectionError) {
+        if (!isMissing(inspectionError)) throw inspectionError
+        absent = true
+      }
+      if (!absent) throw new Error('Edit path exists but could not be resolved')
+    }
+    if (own) {
+      const resolved = own.realPath
+      if (!resolved?.startsWith('/') || (missing.length > 0 && own.kind !== 'dir')) {
+        throw new Error('Could not resolve edit path')
+      }
       const parts: string[] = []
       for (const part of `${resolved}/${missing.join('/')}`.split('/')) {
         if (part === '..') parts.pop()
@@ -813,12 +834,12 @@ export const register: Register = (on, options) => {
       if (options.gate !== true || e.agentId) return next(e)
       const cwd = await $.session.cwd()
       const workspaceRoot = gateRoot ?? (await workspace({ cwd: async () => cwd, run: (argv, init) => $.process.run(argv, init) })).root
-      const realPath = async (path: string) => (await $.fs.stat(path, { resolve: true })).realPath
-      const root = await resolveGatePath(realPath, workspaceRoot, cwd)
+      const stat = (path: string, resolve: boolean) => $.fs.stat(path, { resolve })
+      const root = await resolveGatePath(stat, workspaceRoot, cwd)
       const rawHome = await $.env.get('HOME')
-      const home = rawHome ? await resolveGatePath(realPath, rawHome, cwd) : ''
+      const home = rawHome ? await resolveGatePath(stat, rawHome, cwd) : ''
       const pathField = e.tool === 'NotebookEdit' ? 'notebook_path' : 'file_path'
-      const path = await resolveGatePath(realPath, String(e[pathField] ?? ''), cwd)
+      const path = await resolveGatePath(stat, String(e[pathField] ?? ''), cwd)
       // gateContext receives a resolved absolute target; the forwarded event stays untouched.
       gateUid ??= $.process.run(['id', '-u']).then(result => {
         const uid = result.stdout.trim()

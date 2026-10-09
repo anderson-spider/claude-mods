@@ -1,9 +1,10 @@
 import { describe, expect, test, mock } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
-import type { AgentSpawnInput, ConfigSetInput, On, TurnStepInput } from 'claude-code'
+import type { AgentSpawnInput, ConfigSetInput, FsStat, On, TurnStepInput } from 'claude-code'
 
 import type { Job, Native, SessionInfo } from '../types'
-import { createQueue, withGateRecovery } from '../hooks/register'
+import { createQueue, resolveGatePath, withGateRecovery } from '../hooks/register'
+import { gateContext } from '../hooks/gate'
 import { PANE_ID } from '../hooks/pane'
 import { DELEGATE, HOME, RESULT, ROOT, parse, start, world } from './fixtures/world'
 
@@ -25,11 +26,11 @@ const streamChunk = { kind: 'text' as const, index: 0, text: 'streaming' }
 
 const gateEdit = { tool: 'Edit', tool_use_id: 'gate-edit', file_path: '/repo/src/a.ts', old_string: 'private old text', new_string: 'private new text' }
 const gatePause = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
-function gateWorld(on: On, opts: { score?: number; key?: string; reject?: boolean; interrupt?: boolean; fault?: 'workspace' | 'env'; files?: Record<string, string>; cwd?: string; realPaths?: Record<string, string | undefined>; uid?: string | null } = {}) {
+function gateWorld(on: On, opts: { score?: number; key?: string; reject?: boolean; interrupt?: boolean; fault?: 'workspace' | 'env'; files?: Record<string, string>; cwd?: string; realPaths?: Record<string, string | undefined>; statErrors?: Record<string, string>; unresolvedLinks?: string[]; uid?: string | null } = {}) {
   const fixture = world(new Proxy(on, {
     apply(target, self, args) {
       if (args[0] === 'session.cwd' && (opts.fault === 'workspace' || opts.cwd)) return
-      if (args[0] === 'fs.stat' && opts.realPaths) return
+      if (args[0] === 'fs.stat' && (opts.realPaths || opts.statErrors || opts.unresolvedLinks)) return
       if (args[0] !== 'env.get' && args[0] !== 'process.run') return Reflect.apply(target, self, args)
     },
   }), { files: opts.files })
@@ -37,11 +38,17 @@ function gateWorld(on: On, opts: { score?: number; key?: string; reject?: boolea
   const forwarded: unknown[] = []
   let probes = 0
   let uidReads = 0
+  const inspected: { path: string; resolve: boolean }[] = []
   if (opts.fault === 'workspace') on('session.cwd', () => { throw new Error('private workspace error') })
   else if (opts.cwd) on('session.cwd', () => ({ value: opts.cwd! }))
-  if (opts.realPaths) on('fs.stat', (_$, e) => {
-    const realPath = Object.hasOwn(opts.realPaths!, e.path) ? opts.realPaths![e.path] : e.path
-    if (!realPath) throw new Error('missing path')
+  if (opts.realPaths || opts.statErrors || opts.unresolvedLinks) on('fs.stat', (_$, e) => {
+    inspected.push({ path: e.path, resolve: e.resolve === true })
+    if (opts.unresolvedLinks?.includes(e.path)) {
+      return { value: { kind: 'other', size: 0, mtimeMs: 0, isLink: true } }
+    }
+    if (opts.statErrors?.[e.path]) return { deny: opts.statErrors[e.path] }
+    const realPath = opts.realPaths && Object.hasOwn(opts.realPaths, e.path) ? opts.realPaths[e.path] : e.path
+    if (!realPath) return { deny: 'ENOENT: missing path' }
     return { value: { kind: 'dir', size: 0, mtimeMs: 0, isLink: realPath !== e.path, realPath } }
   })
   on('env.get', (_$, e) => {
@@ -66,10 +73,85 @@ function gateWorld(on: On, opts: { score?: number; key?: string; reject?: boolea
   })
   on('tool.call', (_$, e) => { forwarded.push(e); return { result: 'unchanged' } })
   on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'Text', children: ['idle'] }))
-  return { ...fixture, sent, forwarded, probes: () => probes, uidReads: () => uidReads }
+  return { ...fixture, sent, forwarded, inspected, probes: () => probes, uidReads: () => uidReads }
 }
 
 describe('edit gate', () => {
+  const pathStat = (realPath: string): FsStat => ({ kind: 'dir', size: 0, mtimeMs: 0, isLink: false, realPath })
+  const missingPath = () => Object.assign(new Error('ENOENT: missing path'), { code: 'ENOENT' })
+  // Hook refusals are not filesystem errors. Inject the filesystem boundary directly
+  // to exercise actual ENOENT/code semantics; the UI tests below cover host refusals.
+  for (const code of ['EACCES', 'EPERM', 'EIO', 'ELOOP', 'unknown']) {
+    test(`resolver never climbs past a middle component with ${code}`, async () => {
+      const visited: string[] = []
+      const stat = async (path: string): Promise<FsStat> => {
+        visited.push(path)
+        if (path === '/repo/.pantheon/middle/new.ts') throw missingPath()
+        if (path === '/repo/.pantheon/middle') throw Object.assign(new Error(`${code}: host failure`), { code })
+        return pathStat(path)
+      }
+      await expect(resolveGatePath(stat, '/repo/.pantheon/middle/new.ts', ROOT)).rejects.toThrow(code)
+      expect(visited.includes('/repo/.pantheon')).toBe(false)
+    })
+  }
+  for (const returnsLink of [false, true]) {
+    test(`resolver refuses an unresolved symlink (${returnsLink ? 'stat returns link' : 'resolution throws ENOENT'})`, async () => {
+      const visited: boolean[] = []
+      const stat = async (_path: string, resolve: boolean): Promise<FsStat> => {
+        visited.push(resolve)
+        if (resolve && !returnsLink) throw missingPath()
+        return { kind: 'other', size: 0, mtimeMs: 0, isLink: true }
+      }
+      await expect(resolveGatePath(stat, '/repo/.pantheon/new.ts', ROOT)).rejects.toThrow()
+      expect(visited).toEqual(returnsLink ? [true] : [true, false])
+    })
+  }
+  for (const failure of ['EACCES: permission denied', 'EPERM: operation denied', 'host unavailable', 'dangling link', 'ELOOP: symlink chain cycle']) {
+    test(`path resolution holds on ${failure}`, { options: { gate: true, jevApiKey: 'key', abovePrompt: false } }, async ($, on) => {
+      const link = failure === 'dangling link'
+      const target = link ? '/repo/.pantheon/new.ts' : '/repo/.pantheon/middle/new.ts'
+      const opts = {
+        interrupt: false,
+        statErrors: link ? {} : { [target]: failure },
+        unresolvedLinks: link ? [target] : [],
+      }
+      const host = gateWorld(on, opts)
+      const ui = await $.ui.mount({ plugin: 'pantheon', component: 'AbovePrompt', surface: 'terminal', props: { hasSurvey: false, isWorking: true, maxRows: 12, bodyColumns: 120 } as never })
+      const pending = $.tool.call({ ...gateEdit, file_path: target } as never)
+      try {
+        await gatePause(50)
+        expect(host.forwarded).toEqual([])
+        expect(host.sent).toEqual([])
+        expect(await ui.findAll({ type: 'Button' })).toHaveLength(2)
+        expect(host.inspected.some(call => call.path === '/repo/.pantheon')).toBe(false)
+        await ui.press({ key: 'cancel' })
+        expect((await pending).deny).toContain('Cancel')
+      } finally { opts.interrupt = true; await pending; await ui.unmount() }
+    })
+  }
+  test('deep missing paths inherit only a confirmed resolved directory and clean paths keep working', async () => {
+    const paths: Record<string, string | undefined> = {
+      '/repo/.pantheon/new/deep/a.ts': undefined, '/repo/.pantheon/new/deep': undefined, '/repo/.pantheon/new': undefined,
+      '/repo/link/new/deep/a.ts': undefined, '/repo/link/new/deep': undefined, '/repo/link/new': undefined,
+      '/repo/link': '/repo/src',
+      '/repo/sub/../src/a.ts': '/repo/src/a.ts',
+      // The host follows every hop; the gate receives the chain's final destination.
+      '/repo/.pantheon/chain.ts': '/repo/src/a.ts',
+    }
+    const inspected: { path: string; resolve: boolean }[] = []
+    const stat = async (path: string, resolve: boolean): Promise<FsStat> => {
+      inspected.push({ path, resolve })
+      const realPath = Object.hasOwn(paths, path) ? paths[path] : path
+      if (realPath === undefined) throw missingPath()
+      return { ...pathStat(realPath), isLink: path !== realPath }
+    }
+    const context = async (path: string) => gateContext({ ...gateEdit, file_path: await resolveGatePath(stat, path, '/repo/sub') }, { root: ROOT, home: HOME })
+    expect((await context('/repo/.pantheon/new/deep/a.ts')).skip).toBe(true)
+    for (const file_path of ['/repo/link/new/deep/a.ts', '../src/a.ts', '/repo/src/a.ts', '/repo/.pantheon/chain.ts']) {
+      expect((await context(file_path)).skip).toBe(false)
+    }
+    expect(inspected).toContainEqual({ path: '/repo/.pantheon/new/deep/a.ts', resolve: false })
+  })
   test('only exact state and scratchpad exemptions bypass the gate and uid is cached', { options: { gate: true, jevApiKey: 'key' } }, async ($, on) => {
     const host = gateWorld(on, { score: 0 })
     const exempt = ['/repo/.pantheon/a.md', `${HOME}/.claude/plans/a.md`, `${HOME}/.claude/projects/repo/memory/a.md`, '/tmp/claude-501/repo/session/scratchpad/a.ts', '/private/tmp/claude-501/repo/session/scratchpad/a.ts']
@@ -87,18 +169,15 @@ describe('edit gate', () => {
     expect(host.uidReads()).toBe(1)
     expect(host.sent).toHaveLength(2)
   })
-  test('resolved symlink targets and new files below symlink ancestors are gated', { options: { gate: true, jevApiKey: 'key' } }, async ($, on) => {
+  test('resolved symlink targets are gated', { options: { gate: true, jevApiKey: 'key' } }, async ($, on) => {
     const host = gateWorld(on, { score: 0, realPaths: {
       '/repo/.pantheon/source.ts': '/repo/src/source.ts',
-      '/repo/.pantheon/new/deep.ts': undefined,
-      '/repo/.pantheon/new': undefined,
-      '/repo/.pantheon': '/repo/src',
       [`${HOME}/.claude/plans/source.ts`]: '/repo/src/source.ts',
     } })
-    for (const file_path of ['/repo/.pantheon/source.ts', '/repo/.pantheon/new/deep.ts', `${HOME}/.claude/plans/source.ts`]) {
+    for (const file_path of ['/repo/.pantheon/source.ts', `${HOME}/.claude/plans/source.ts`]) {
       expect((await $.tool.call({ ...gateEdit, file_path } as never)).deny).toContain('Denied by jev')
     }
-    expect(host.sent).toHaveLength(3)
+    expect(host.sent).toHaveLength(2)
     expect(host.forwarded).toEqual([])
   })
   test('relative paths use session cwd rather than repository root', { options: { gate: true, jevApiKey: 'key' } }, async ($, on) => {
