@@ -13,7 +13,7 @@ Run `.pantheon/plans/<plan>.md` task by task.
 2. **Dispatch.** The fixer implements; the designer takes UI work. Use the call each role has in the Agents section: `delegate` for a role on Codex, the `pantheon:<role>` agent for one on Claude. Without a specialist, do the task yourself.
 3. **Test first.** Every brief tells the implementer to write a failing test for the acceptance criterion, then the code, then run the tests. It does not commit; absence of a commit is not a blocker.
 4. **Check.** Run the acceptance command yourself and read its output.
-5. **Commit.** You commit, only the files of the task, with a Conventional Commit message.
+5. **Commit.** Delegate to `git` (`delegate` on Codex, `pantheon:git` on Claude) with a brief: task files and what to include, branch, Conventional Commit intent, squash no, push no, PR/MR no. If `git` is disabled, commit the task's files yourself.
 
 ## Order
 
