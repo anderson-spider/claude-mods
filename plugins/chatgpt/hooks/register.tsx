@@ -5,7 +5,7 @@ import { chatUrlOf } from './input'
 import { limitMs } from './settings'
 import type { Browser, Outcome, ProcessRunner, Request, RequestDeps, TabHolder } from './model'
 import { askCommandAnswer, errorText, imageCommandAnswer } from './presentation'
-import { BOUNDARIES, COMMON_PROPERTIES, IMAGE_BOUNDARIES, PROMPT, WHERE } from './prompts'
+import { ASK_DESCRIPTION, COMMON_PROPERTIES, IMAGE_DESCRIPTION, PROMPT } from './prompts'
 import { type Candidate, chooseBrowser } from './browsers'
 import { BUILTIN, BUILTIN_SERVER, builtinBrowserOf, builtinStaysOnChatgpt } from './builtin-browser'
 import { CHROME, CHROME_SERVER, chromeBrowserOf, chromeStaysOnChatgpt } from './chrome-browser'
@@ -156,15 +156,7 @@ export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     await $.tool.register({
       name: 'ask',
-      description:
-        `Sends a self-contained question to the user's logged-in ChatGPT (${WHERE}), waits for the answer, saves ` +
-        'it as Markdown and returns the file path, the chat URL and the start of the answer. Use when the user asks ' +
-        'to ask ChatGPT, or for a self-contained question with a long answer (research, explanation, brainstorm, ' +
-        'draft text, translation, second opinion); not for work that needs the repository ' +
-        '(the context would have to be sent and read back). Write the prompt with the goal, the minimum context, ' +
-        'the output format and the language. Requests take turns; a slow one goes on in the background and a ' +
-        'message arrives when it is saved. ' +
-        BOUNDARIES,
+      description: ASK_DESCRIPTION,
       inputSchema: {
         type: 'object',
         properties: {
@@ -185,15 +177,7 @@ export const register: Register = (on, options) => {
     })
     await $.tool.register({
       name: 'image',
-      description:
-        `Generates or edits an image with the user's logged-in ChatGPT (${WHERE}), optionally from a local ` +
-        'reference image, waits for it and saves it locally (every variant ChatGPT draws); returns the paths, sizes, ' +
-        "the chat URL and a preview. Write the prompt in the user's language with what to keep from the reference " +
-        '(shape, proportions), the scene, lighting, materials, camera and exclusions (no people, no text, no copies ' +
-        'of existing games or brands). When ChatGPT answers with text instead (a refusal or a question), the tool ' +
-        'returns that text: relay it, do not rephrase around a refusal. Images can take minutes: wait: false keeps ' +
-        'working meanwhile. ' +
-        IMAGE_BOUNDARIES,
+      description: IMAGE_DESCRIPTION,
       inputSchema: {
         type: 'object',
         properties: {

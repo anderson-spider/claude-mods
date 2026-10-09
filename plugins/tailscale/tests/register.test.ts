@@ -118,3 +118,25 @@ test('write refuses to delete the whole tailnet', async ($, on) => {
   expect(text(result)).toMatch(/entire tailnet/)
   expect(sent).toEqual([])
 })
+
+/** Sums every description string (tool and schema properties) in a registered tool. */
+function descriptionChars(node: unknown): number {
+  if (Array.isArray(node)) return node.reduce((n: number, v) => n + descriptionChars(v), 0)
+  if (node === null || typeof node !== 'object') return 0
+  return Object.entries(node).reduce(
+    (n, [k, v]) => n + (k === 'description' && typeof v === 'string' ? v.length : descriptionChars(v)),
+    0,
+  )
+}
+
+test('tool descriptions and schema descriptions stay within the prompt budget', async ($, on) => {
+  const tools: unknown[] = []
+  on('env.get', () => ({ value: 'tskey-test' }))
+  on('tool.register', (_$, e) => (tools.push(e), { value: { tool: `mcp__tailscale__${e.name}` } }))
+  on('session.start', (_$, e) => ({ cwd: e.cwd }))
+
+  await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true } as never)
+
+  expect(tools.length).toBe(2)
+  expect(descriptionChars(tools)).toBeLessThanOrEqual(1300)
+})

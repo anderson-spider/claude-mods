@@ -1,6 +1,6 @@
 ---
 name: grill
-description: Use before creative or multi-step work (a feature, a refactor, a behavior change) to agree what to build, then write the plan. Interviews the person one question at a time, reads code and docs through the explorer and librarian, opens a worktree and writes a single plan.
+description: Use before creative or multi-step work (a feature, a refactor, a behavior change) to agree what to build, then write the plan. Interviews the person one question at a time, opens a worktree and writes a single plan.
 ---
 
 # Grill

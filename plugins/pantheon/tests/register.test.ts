@@ -649,10 +649,62 @@ describe('register', () => {
     })
     await start($)
     expect(descriptions.delegate).not.toContain('explorer, librarian, fixer')
-    expect(descriptions.delegate).toContain('Run a Pantheon role or council seat currently on Codex on a task')
-    expect(descriptions.delegate_result).toContain('a Pantheon role or council seat currently on Codex')
-    expect(descriptions.delegate_cancel).toContain('a Pantheon role or council seat currently on Codex')
+    expect(descriptions.delegate).toContain('Run a Pantheon role or council seat on Codex on a task')
+    for (const text of Object.values(descriptions)) expect(text).not.toContain('currently on Codex')
     expect(agentDescription).toBe('A role or councillor:<seat> currently on Codex.')
+  })
+
+  describe('delegate tools deferral', () => {
+    const NAMES = ['mcp__pantheon__delegate', 'mcp__pantheon__delegate_result', 'mcp__pantheon__delegate_cancel']
+    function observe(on: On, profile: string, files: Record<string, string> = {}) {
+      const w = world(new Proxy(on, {
+        apply(target, thisArg, args) {
+          if (args[0] !== 'tool.register') return Reflect.apply(target, thisArg, args)
+        },
+      }), { files: { [`${HOME}/.claude/pantheon.json`]: JSON.stringify({ profile }), ...files } })
+      const deferred: Record<string, boolean | undefined> = {}
+      on('tool.describe', async (_$, e) => ({ description: e.description }))
+      on('tool.register', async (_$, e) => {
+        deferred[e.name] = e.isDeferred
+        return { value: { tool: `mcp__pantheon__${e.name}` } }
+      })
+      return { ...w, deferred }
+    }
+    const describeAll = async ($: Engine) => Promise.all(NAMES.map(async tool => ($.tool.describe({ tool, description: 'd' } as never))))
+
+    test('claude profile defers the tools at registration and in tool.describe', async ($, on) => {
+      const { deferred } = observe(on, 'claude')
+      await start($)
+      expect(deferred).toEqual({ delegate: true, delegate_result: true, delegate_cancel: true })
+      for (const out of await describeAll($)) expect(out.isDeferred).toBe(true)
+    })
+
+    test('a profile with Codex roles lists the tools and delegate works', async ($, on) => {
+      const { deferred } = observe(on, 'codex')
+      await start($)
+      expect(deferred).toEqual({ delegate: false, delegate_result: false, delegate_cancel: false })
+      for (const out of await describeAll($)) expect(out.isDeferred).toBe(false)
+    })
+
+    test('switching profile mid-session flips the deferral and invalidates tool.describe', async ($, on) => {
+      const { files } = observe(on, 'claude')
+      on('turn.start', async (_$, e) => ({ turnId: e.turnId }))
+      on('prompt.compose', async () => ({ sections: [] }))
+      const invalidated: string[] = []
+      on('ui.invalidate', async (_$, e) => { invalidated.push(e.event); return { value: undefined } })
+      const compose = async (turnId: string) => {
+        await $.turn.start({ text: 'Go', turnId })
+        await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: [], tools: [], outputStyle: null, traits: [] } as never)
+      }
+      await start($)
+      files[`${HOME}/.claude/pantheon.json`] = '{"profile":"codex"}'
+      await compose('t1')
+      for (const out of await describeAll($)) expect(out.isDeferred).toBe(false)
+      files[`${HOME}/.claude/pantheon.json`] = '{"profile":"claude"}'
+      await compose('t2')
+      for (const out of await describeAll($)) expect(out.isDeferred).toBe(true)
+      expect(invalidated.filter(event => event === 'tool.describe').length).toBe(2)
+    })
   })
 
   test('doctor under Claude without Codex reports it is not needed', async ($, on) => {

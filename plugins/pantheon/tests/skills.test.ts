@@ -4,6 +4,6 @@ import { buildOrchestratorSection } from '../hooks/prompts/orchestrator'
 
 test('the orchestrator names the four skills and no longer mentions superpowers', () => {
   const section = buildOrchestratorSection(MIXED)
-  for (const name of ['grill', 'execute', 'debug', 'finish']) expect(section).toContain(`- ${name}:`)
+  expect(section).toContain('Invoke the Pantheon skills (grill, execute, debug, finish)')
   expect(section.toLowerCase()).not.toContain('superpowers')
 })

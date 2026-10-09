@@ -1,6 +1,6 @@
 ---
 name: execute
-description: Use to carry out a written plan (for example one from grill). Dispatches each task to the fixer or designer with a brief built from the plan, runs the tests, commits, and sends only the risky tasks to the oracle.
+description: Use to carry out a written plan (for example one from grill). Dispatches each task to the fixer or designer, runs the tests, commits, and sends only risky tasks to the oracle.
 ---
 
 # Execute
