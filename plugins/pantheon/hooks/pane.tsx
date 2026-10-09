@@ -893,12 +893,12 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
       return cols(key, [{ w: Math.max(0, IW - rw - 1), segs: left }, { w: IW - Math.max(0, IW - rw - 1), segs: right, end: true }], IW, h)
     }
     const ctxLabel: Seg = { text: 'ctx ', dim: true }
-    // 'ctx ' and ' 100%' take 9 cells; the gauge takes the rest up to 30 blocks, or none when under 3.
-    const gaugeN = Math.min(30, isDesk ? Math.floor(((IW - 13) * 8 - 9) / 11) : IW - 9)
+    // 'ctx ' and '  100%' take 10 cells; the gauge takes the rest up to 30 blocks, or none when under 3.
+    const gaugeN = Math.min(30, isDesk ? Math.floor(((IW - 13) * 8 - 9) / 11) : IW - 10)
     rows.push({ node: space('s1', identity, state, isDesk ? (headerBadge ? rowH : 1.6) : undefined), h: isDesk ? (headerBadge ? rowH : 1.6) : 1 })
     rows.push({
       node: plain('s-ctx', ctx != null
-        ? [ctxLabel, ...(gaugeN >= 3 ? gaugeSegs('s-gauge', ctx, gaugeN) : []), { text: `${gaugeN >= 3 && !(isDesk && el.Svg) ? ' ' : ''}${Math.round(ctx)}%`, bold: true }]
+        ? [ctxLabel, ...(gaugeN >= 3 ? gaugeSegs('s-gauge', ctx, gaugeN) : []), { text: `${gaugeN >= 3 && !(isDesk && el.Svg) ? '  ' : ''}${Math.round(ctx)}%`, bold: true }]
         : [ctxLabel, { text: '—', dim: true }], IW, isDesk ? rowH : undefined),
       h: rowH,
     })

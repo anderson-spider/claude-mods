@@ -63,7 +63,7 @@ function sessionRow(input: BoxInput, room: number): Run[] {
     const band = ctxBand(Math.round(last.percent))
     const on = Math.round(last.percent / 20)
     const label = run('ctx ', TEXT)
-    const pct = run(` ${Math.round(last.percent)}%`, band.term, { bold: true })
+    const pct = run(`  ${Math.round(last.percent)}%`, band.term, { bold: true })
     parts.push({ runs: [label, run('▰'.repeat(on), band.term), run('▱'.repeat(5 - on), TERM_TRACK), pct], drop: 40, keep: true, alt: [label, run(`${Math.round(last.percent)}%`, band.term, { bold: true })] })
   }
   const cache = cacheState(input.now)
@@ -122,7 +122,7 @@ function projectionRuns(g: Gauge): Run[] {
   if (p.kind === 'full') {
     const color = p.hot || g.tone === 'alert' ? ALERT : AMBER
     return p.hot
-      ? [run('↯', ALERT, { bold: true }), run('at recent pace: ', DIM), run(`100% in ${compactSpan(p.inMs)}`, color, { bold: true })]
+      ? [run('at recent pace: ', DIM), run(`100% in ${compactSpan(p.inMs)}`, color, { bold: true }), run(' ↯', ALERT, { bold: true })]
       : [run('at this pace: ', DIM), run(`100% in ${compactSpan(p.inMs)}`, color, { bold: true })]
   }
   return [run('at this pace: ', DIM), run(`~${p.pct}% at reset`, p.pct >= 85 ? AMBER : CALM)]

@@ -43,7 +43,7 @@ test("box: every line, borders included, has exactly the width of the terminal (
   expect(working).toContain("● working");
   expect(working).toContain("…");
   burning();
-  expect(plain(120).join("\n")).toContain("↯at recent pace");
+  expect(plain(120).join("\n")).toContain("at recent pace");
   // ⚡ takes two cells: the row holding it is as wide as the others only if it was counted so.
   expect(cellWidth("⚡")).toBe(2);
 });
@@ -176,7 +176,7 @@ test("box: projections: runs out in X (amber, red when burning or alert), ~N% at
   expect(rows.find(r => r.startsWith("│ 7d"))).toContain("at this pace: ~50% at reset");
   burning();
   const hot = plain(120).find(r => r.startsWith("│ 5h"))!;
-  expect(hot).toMatch(/↯at recent pace: 100% in \d+m/);
+  expect(hot).toMatch(/at recent pace: 100% in \d+m ↯/);
   // No projection at 0% used.
   seed({ limits: [windowOf("five_hour", 0, 0.5), windowOf("seven_day", 0, 0.5)] });
   expect(plain(120).join("\n")).not.toContain("at this pace");
@@ -236,7 +236,7 @@ test("box: the last-turn receipt: duration, agents, edits, errors and the cost; 
 test("box: the session row: session cost, model and effort, working or idle, context gauge, cache and the changed files", () => {
   seed();
   const row = plain(120)[1];
-  expect(row).toContain("Opus 5.5·medium · ○ idle · ctx ▰▰▰▱▱ 62% · cache 55m 98% · $12.40 · claude-mods flightdeck* · +182 -37 · ⚡fast");
+  expect(row).toContain("Opus 5.5·medium · ○ idle · ctx ▰▰▰▱▱  62% · cache 55m 98% · $12.40 · claude-mods flightdeck* · +182 -37 · ⚡fast");
   expect(plain(120, { isWorking: true })[1]).toContain("● working");
   // A clean tree: green branch with no star and no diff.
   infoData.current.files = 0;
