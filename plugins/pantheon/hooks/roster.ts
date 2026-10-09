@@ -22,10 +22,12 @@ export type Instance = {
 }
 export type Slot = {
   name: SlotName; engine: Engine | 'mixed'; state: 'active' | 'idle' | 'off'
-  model?: string; instances: Instance[]
+  model?: string
+  /** Cards: active instances first, then every ended instance, newest end first. */
+  instances: Instance[]
   lastEndedAt?: number; offReason?: string
   seatsOff?: string[]
-  /** Every line of the role, all rounds, oldest first: the timeline's source (the cards use `instances`). */
+  /** The same instances with all rounds, oldest start first: the timeline's source. */
   history?: Instance[]
 }
 export type Roster = {
@@ -126,15 +128,16 @@ export function buildRoster(input: {
     }
     const all = byRole.get(name)!
     const active = all.filter(instance => instance.isActive)
-    const ended = all.filter(instance => !instance.isActive).sort((a, b) => endedTime(b) - endedTime(a))[0]
+    const ended = all.filter(instance => !instance.isActive).sort((a, b) => endedTime(b) - endedTime(a))
     const off = name === 'council'
       ? config.disabledAgents.includes('council') || seatsOff.length === seats.length
       : config.disabledAgents.includes(name)
     const configuredEngine = name === 'council'
       ? councilEngines.size === 1 ? [...councilEngines][0] : 'mixed'
       : config.agents[name].engine
-    const instances = [...active, ...(ended ? [ended] : [])]
-    const engine = instances.some(instance => instance.engine !== configuredEngine) ? 'mixed' : configuredEngine
+    const instances = [...active, ...ended]
+    // The engine reads the active instances and the latest ended one: an older run on another engine never makes it mixed.
+    const engine = [...active, ...ended.slice(0, 1)].some(instance => instance.engine !== configuredEngine) ? 'mixed' : configuredEngine
     const configuredModel = name === 'council'
       ? councilModels.size === 1 ? [...councilModels][0] : undefined
       : config.agents[name].model
@@ -143,7 +146,7 @@ export function buildRoster(input: {
       model: active.length ? active[0].model : configuredModel,
       instances,
       history: [...all].sort((a, b) => (a.rounds[0]?.startedAt ?? a.startedAt) - (b.rounds[0]?.startedAt ?? b.startedAt)),
-      ...(ended?.endedAt !== undefined ? { lastEndedAt: ended.endedAt } : {}),
+      ...(ended[0]?.endedAt !== undefined ? { lastEndedAt: ended[0].endedAt } : {}),
       ...(off ? { offReason: 'disabledAgents' } : {}),
       ...(name === 'council' && !off && seatsOff.length ? { seatsOff } : {}),
     }

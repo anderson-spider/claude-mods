@@ -86,6 +86,42 @@ const t = (name: string, fn: (...args: Parameters<Parameters<typeof test>[1]>) =
   })
 
 describe('pane', () => {
+  for (const surface of SURFACES) t(`header shows working when only the main session runs (${surface})`, async ($, on) => {
+    world(on)
+    seed(on, { session: { isRunning: true, turnStartedAt: NOW - 5000 } })
+    await start($)
+    const ui = await mountPane($, surface, { rows: 70 })
+    const working = (await ui.findAll({ type: 'Text' })).filter(n => String(n.text).trim() === 'working')
+    expect(working).toHaveLength(2)
+    for (const node of working) expect((node as unknown as { props: { color: string } }).props.color)
+      .toBe(surface === 'desktop' ? '#4fb383' : 'success')
+    expect(await texts(ui)).not.toContain('idle')
+  })
+
+  for (const surface of SURFACES) t(`tabs separate counts and the footer identifies keys (${surface})`, async ($, on) => {
+    world(on)
+    seed(on, { jobs: [job()], natives: [native()] })
+    await start($)
+    const ui = await mountPane($, surface, { rows: 70 })
+    const tab = (await ui.find({ key: 'tab-jobs' })) as unknown as { props: { label: string; hotkey: string } }
+    if (surface === 'desktop') {
+      expect(tab.props.label).toBe('Jobs')
+      expect(tab.props.hotkey).toBe('2')
+      expect(await texts(ui)).toContain('2')
+      expect(await texts(ui)).toContain('keys:')
+      const shortcut = (await ui.find({ key: 'key-jobs' })) as unknown as { props: { hotkey: string } }
+      expect(shortcut.props.hotkey).toBeUndefined()
+      await ui.press({ key: 'tab-jobs' })
+      expect(await texts(ui)).toContain('↻ resumable · Copy = id + resume hint')
+      return
+    }
+    expect(tab.props.label).toBe('Jobs · 2')
+    expect(tab.props.hotkey).toBe('2')
+    expect(await texts(ui)).toContain('keys: 1 agents · 2 jobs · esc close')
+    await ui.press({ key: 'tab-jobs' })
+    expect(await texts(ui)).toContain('keys: 1 agents · 2 jobs · ↻ resumable · Copy = id + resume hint')
+  })
+
   for (const surface of SURFACES) {
     for (const placement of ['dock', 'inline'] as const) {
       for (const profile of ['claude', 'codex']) {
@@ -228,7 +264,10 @@ describe('pane', () => {
       for (const name of ['explorer', 'librarian', 'fixer', 'oracle', 'designer', 'council']) expect(all).toContain(name)
       expect(await ui.find({ key: 'tab-agents' })).toBeDefined()
       expect(await ui.find({ key: 'tab-jobs' })).toBeDefined()
-      expect(all).toContain('2 running')
+      if (surface === 'desktop') {
+        expect(all).toContain('2')
+        expect(all).toContain('running')
+      } else expect(all).toContain('2 running')
     })
 
     t(`an active explorer shows its instance, activity and clock (${surface})`, async ($, on) => {
@@ -244,7 +283,10 @@ describe('pane', () => {
       expect(all.some(x => x.includes('map pane render tree'))).toBe(true)
       expect(all.some(x => x.includes("rg 'x' plugins/"))).toBe(true)
       expect(all).toContain('43.5k') // input + output of the job, in the stats beside the clock
-      expect(all).toContain('1 running')
+      if (surface === 'desktop') {
+        expect(all).toContain('1')
+        expect(all).toContain('running')
+      } else expect(all).toContain('1 running')
       // The clock is a Client where the surface has one, else a Text.
       expect((await ui.find({ key: 'clk-pj3a' })) ?? all.find(x => /^\d+:\d\d$/.test(x))).toBeDefined()
     })
@@ -315,6 +357,115 @@ describe('pane', () => {
     expect(await terminal.find({ type: 'Svg' })).toBeUndefined()
   })
 
+  t('desktop uses HUD segments, fixed numeric slots and an unframed identity-first roster', async ($, on) => {
+    world(on)
+    await start($)
+    const ui = await mountPane($, 'desktop', { columns: 86, rows: 70 })
+    const props = async (key: string) => {
+      const node = await ui.find({ key })
+      if (!node) throw new Error(`Missing desktop node: ${key}`)
+      return (node as unknown as { props: Record<string, unknown> }).props
+    }
+    expect(await props('header')).toMatchObject({ flexDirection: 'column', width: 80 })
+    expect(await props('header-top')).toMatchObject({ height: 1.7, width: 80, alignItems: 'center' })
+    expect(await props('profile-row')).toMatchObject({ width: 80 })
+    expect(await props('session')).toMatchObject({ width: 80, paddingX: 2, height: 4.9 })
+    expect(await props('planned-rows')).toMatchObject({ width: 80, flexDirection: 'column' })
+    expect((await props('planned-rows')).borderStyle).toBeUndefined()
+    for (const [key, width] of [['metric-cost-value', 9], ['metric-tokens-value', 7], ['metric-time-value', 6], ['jobs-count', 3], ['planned-count', 3]] as const) {
+      expect(await props(key)).toMatchObject({ width, flexShrink: 0, justifyContent: 'flex-end' })
+    }
+    const svgs = (await ui.findAll({ type: 'Svg' })).map(n => (n as unknown as { props: { alt: string; source: string; width: number; height: number; isInteractive?: boolean } }).props)
+    expect(svgs.some(p => p.source.includes('rx="6" fill="rgba(196,80,127,0.11)"'))).toBe(true)
+    expect(svgs.some(p => p.source.includes('stroke="rgba(184,140,40,0.34)"'))).toBe(true)
+    expect((await props('pill-toggle-planned')).width).toBe(10.5)
+    expect((await props('tab-agents')).hotkey).toBe('1')
+    expect((await props('tab-jobs')).hotkey).toBe('2')
+    expect((await props('key-agents')).hotkey).toBeUndefined()
+    expect(await ui.find({ key: 'plan-explorer-identity' })).toBeDefined()
+    expect(await ui.find({ key: 'plan-explorer-task' })).toBeDefined()
+    expect(await texts(ui)).toContain('Waiting for work')
+    expect((await texts(ui)).some(t => t.includes('▎') || t.includes('━'))).toBe(false)
+    const dividers = svgs.filter(p => p.alt === 'divider')
+    expect(dividers.length).toBeGreaterThan(0)
+    for (const p of dividers) expect(p).toMatchObject({ width: 640, height: 1 })
+    expect(svgs.filter(p => p.alt === 'idle').every(p => !p.isInteractive)).toBe(true)
+  })
+
+  t('desktop session, groups and timeline share the pane inset and resize with columns', async ($, on) => {
+    world(on)
+    await start($)
+    for (const columns of [70, 86, 120]) {
+      const ui = await mountPane($, 'desktop', { columns, rows: 70 })
+      const props = async (key: string) => {
+        const node = await ui.find({ key })
+        if (!node) throw new Error(`Missing desktop node: ${key} at ${columns} columns`)
+        return (node as unknown as { props: Record<string, unknown> }).props
+      }
+      const width = columns - 6
+      expect(await props('pantheon-desktop')).toMatchObject({ width: columns, paddingX: 3 })
+      for (const key of ['header', 'session', 'metrics', 'planned-head', 'planned-rows', 'footer']) expect((await props(key)).width).toBe(width)
+      const timeline = (await ui.findAll({ type: 'Svg' })).map(n => (n as unknown as { props: { alt: string; source: string; width: number; isInteractive?: boolean } }).props).find(p => p.alt.startsWith('Last 15 minutes'))
+      expect(timeline).toBeDefined()
+      expect(timeline!.width).toBe(width * 8)
+      expect(timeline!.isInteractive).toBeUndefined()
+      expect(timeline!.source).toContain(`viewBox="0 0 ${width * 8} `)
+      await release()
+    }
+  })
+
+  for (const [columns, rows] of [[40, 70], [80, 3], [20, 100], [8, 100]] as const) {
+    t(`desktop keeps tab hotkeys and metrics within the pane at ${columns} columns / ${rows} rows`, async ($, on) => {
+      world(on)
+      seed(on, { session: { isRunning: true, turnStartedAt: NOW - 5000, costUsd: 1.25, context: { tokens: 1234, window: 200000, percent: 1 } } })
+      const switched: string[] = []
+      on('state.set', async (_$, event, next) => {
+        if (event.key === 'view') switched.push((event.value as { tab: string }).tab)
+        return next(event)
+      })
+      await start($)
+      const ui = await mountPane($, 'desktop', { columns, rows })
+      const tabProps = async (tab: string) => {
+        const node = await ui.find({ key: `tab-${tab}` })
+        expect(node).toBeDefined()
+        return (node as unknown as { props: { hotkey: string } }).props
+      }
+      expect((await tabProps('jobs')).hotkey).toBe('2')
+      if (columns >= 30) expect((await tabProps('agents')).hotkey).toBe('1')
+      if (rows === 3) expect(await ui.find({ key: 'footer' })).toBeUndefined()
+
+      type LayoutNode = { type?: string; key?: string; props?: { key?: string; width?: number }; children?: LayoutNode[] }
+      let metricNodes = 0
+      let metricImages = 0
+      const checkWidth = (node: LayoutNode, containerWidth: number, inMetrics = false) => {
+        const key = node.key ?? node.props?.key
+        const inside = inMetrics || key === 'metrics'
+        const width = typeof node.props?.width === 'number'
+          ? node.props.width / (node.type === 'Svg' ? 8 : 1) : containerWidth
+        if (inside) {
+          expect({ key, fits: width <= containerWidth }).toEqual({ key, fits: true })
+          if (key === 'metric-cost' || key === 'metric-tokens' || key === 'metric-time') metricNodes++
+          if (node.type === 'Svg') metricImages++
+        }
+        for (const child of node.children ?? []) if (child) checkWidth(child, width, inside)
+      }
+      checkWidth(await ui.drawn() as LayoutNode, columns)
+      expect(metricNodes).toBe(rows === 3 ? 0 : 3)
+      if (columns <= 20) {
+        expect(metricImages).toBe(0)
+        for (const label of ['Cost', 'Tokens', 'Time']) expect(await texts(ui)).toContain(label)
+      }
+
+      await ui.press({ key: 'tab-jobs' })
+      expect(switched[switched.length - 1]).toBe('jobs')
+      expect((await tabProps('agents')).hotkey).toBe('1')
+      if (columns >= 30) expect((await tabProps('jobs')).hotkey).toBe('2')
+      await ui.press({ key: 'tab-agents' })
+      expect(switched.slice(-2)).toEqual(['jobs', 'agents'])
+      expect((await tabProps('jobs')).hotkey).toBe('2')
+    })
+  }
+
   const SIX = ['explorer', 'librarian', 'fixer', 'councillor:alpha']
   const allActive = () => seed_all()
   function seed_all() {
@@ -368,34 +519,42 @@ describe('pane', () => {
     (await ui.findAll({ type: 'Client' })).map(node => (node as unknown as { props: Record<string, any> }).props)
   const railsOf = async (ui: Mounted) => (await clients(ui)).filter(c => String(c.module).includes('rail'))
 
-  t('docked: a pulsing dot per running agent and one in the header; planned and finished rows have none', async ($, on) => {
+  t('docked: steady text dots for running rows and header without rail Clients', async ($, on) => {
     world(on, { files: { [`${HOME}/.claude/pantheon.json`]: JSON.stringify({ disabledAgents: ['librarian'] }) } })
     seed(on, { natives: [native()], session: { isRunning: true, turnStartedAt: NOW - 5_000 } })
     await start($)
     await command($, 'config')
     const ui = await mountPane($, 'terminal')
-    const rails = await railsOf(ui)
-    expect(rails.length).toBe(3) // header, orchestrator, the running oracle
-    expect(rails.every(r => r.props.isLine === false && r.props.active && r.width === 1)).toBe(true)
+    expect(await railsOf(ui)).toEqual([])
     const all = await texts(ui)
+    expect(all.filter(text => text === '●')).toHaveLength(3) // header, orchestrator, oracle
     expect(all).toContain('⊘') // the disabled librarian is planned and off
     expect(all).toContain('◷') // the other roles are planned and waiting
   })
 
-  t('mini: clocks and a one-cell pulse; desktop: pulse dots are Svg, clocks stay Clients', async ($, on) => {
+  t('mini: steady text dots; desktop: steady image dots, clocks stay Clients', async ($, on) => {
     world(on)
     seed(on, { natives: [native()], session: { isRunning: true, turnStartedAt: NOW - 5_000 } })
     await start($)
     const mini = await mountPane($, 'terminal', { placement: 'inline' })
-    const stubs = await railsOf(mini)
-    expect(stubs.length).toBe(1)
-    expect(stubs[0].props.isLine).toBe(false)
+    expect(await railsOf(mini)).toEqual([])
+    expect((await texts(mini)).filter(text => text === '●')).toHaveLength(2) // header and oracle
     expect((await clients(mini)).some(c => String(c.module).includes('elapsed'))).toBe(true)
     await release()
     const desk = await mountPane($, 'desktop')
     expect(await railsOf(desk)).toEqual([])
-    const dots = (await desk.findAll({ type: 'Svg' })).filter(n => String((n as unknown as { props: { source: string } }).props.source).includes('<animate'))
+    const dots = (await desk.findAll({ type: 'Svg' })).map(n => (n as unknown as {
+      props: { source: string; alt: string; isInteractive?: boolean; width: number; height: number }
+    }).props).filter(s => s.alt === 'running')
     expect(dots.length).toBe(3)
+    for (const dot of dots) {
+      expect(dot.isInteractive).toBeUndefined()
+      expect(dot.source).not.toContain('<animate')
+      expect(dot.source).not.toContain('background:')
+      expect(dot.source).not.toContain('<rect')
+      expect(dot.source).toContain('fill="#4fb383"')
+      expect([dot.width, dot.height]).toEqual([10, 10])
+    }
     expect((await clients(desk)).some(c => String(c.module).includes('elapsed'))).toBe(true)
   })
 
@@ -508,7 +667,7 @@ describe('pane', () => {
     const colors = (await ui.findAll({ type: 'Text' })).map(node => String((node as unknown as { props: { color?: string } }).props.color))
     expect(colors.includes('#b58af0')).toBe(true) // claude
     expect(colors.includes('#4fb383')).toBe(true) // running
-    expect(colors.map(c => c.toLowerCase()).includes('#a56bd8')).toBe(true) // the oracle's role color
+    expect(colors.map(c => c.toLowerCase()).includes('#ab91df')).toBe(true) // the desktop oracle tint
     const borders = (await ui.findAll({ type: 'Box' })).map(node => (node as unknown as { props: { borderColor?: string; backgroundColor?: string } }).props)
     expect(borders.flatMap(p => [p.borderColor, p.backgroundColor]).filter(c => c && !c.startsWith('#'))).toEqual([])
     expect(colors.some(c => !c.startsWith('#') && c !== 'undefined')).toBe(false)
@@ -516,8 +675,32 @@ describe('pane', () => {
 
   // Rows a node takes: a Text or Button is one, a Client or Svg its declared height, a column adds its
   // children, a row takes the tallest, a border adds two.
-  type Node = { type?: string; props?: { flexDirection?: string; gap?: number; borderStyle?: string; height?: number }; children?: Node[] }
+  type Node = { type?: string; key?: string; props?: { key?: string; flexDirection?: string; gap?: number; rowGap?: number; borderStyle?: string; height?: number; width?: number; position?: string; marginTop?: number; flexWrap?: string }; children?: Node[] }
+  // Desktop uses pixel SVGs and absolute backplates, which do not consume terminal border rows.
+  const desktopRows = (n: Node): number => {
+    if (n.props?.position === 'absolute') return 0
+    if (n.type === 'Text' || n.type === 'Button' || n.type === 'Client') return n.props?.height ?? 1
+    if (n.type === 'Svg') return (n.props?.height ?? 20) / 20
+    const children = (n.children ?? []).filter(Boolean).filter(c => c.props?.position !== 'absolute')
+    const sizes = children.map(desktopRows)
+    let inner = n.props?.flexDirection === 'column'
+      ? sizes.reduce((a, b) => a + b, 0) + Math.max(0, sizes.length - 1) * (n.props?.rowGap ?? n.props?.gap ?? 0)
+      : Math.max(0, ...sizes)
+    if (n.props?.flexWrap === 'wrap' && n.props.width) {
+      let used = 0, height = 0, total = 0
+      children.forEach((child, k) => {
+        const width = child.props?.width ?? 0
+        const gap = used ? n.props?.gap ?? 0 : 0
+        if (used + gap + width > n.props!.width!) { total += height + (n.props?.rowGap ?? 0); used = 0; height = 0 }
+        used += (used ? n.props?.gap ?? 0 : 0) + width
+        height = Math.max(height, sizes[k])
+      })
+      inner = total + height
+    }
+    return (n.props?.height ?? inner + (n.props?.borderStyle ? 0.1 : 0)) + (n.props?.marginTop ?? 0)
+  }
   const rowsOf = (n: Node): number => {
+    if ((n.key ?? n.props?.key) === 'pantheon-desktop') return desktopRows(n)
     if (n.type === 'Text' || n.type === 'Button') return 1
     if (n.type === 'Client') return n.props?.height ?? 1
     if (n.type === 'Svg') return Math.ceil((n.props?.height ?? 20) / 20)
@@ -563,6 +746,31 @@ describe('pane', () => {
     expect(all).toContain('3 running')
   })
 
+  t('all finished designer instances appear when space allows and fold within the row budget', async ($, on) => {
+    world(on)
+    const done = [1, 3, 2].map(k => job({ id: `designer-${k}`, agent: 'designer', status: 'done',
+      description: `finished designer ${k}`, startedAt: NOW - 10_000, endedAt: NOW - 4000 + k * 1000 }))
+    seed(on, { jobs: done })
+    await start($)
+    for (const surface of SURFACES) {
+      const tall = await mountPane($, surface, { rows: 80 })
+      const all = await texts(tall)
+      expect(all.filter(x => x.startsWith('finished designer '))).toEqual([
+        'finished designer 3', 'finished designer 2', 'finished designer 1',
+      ])
+      expect(await tall.find({ key: 'plan-designer' })).toBeUndefined()
+      await tall.press({ key: 'toggle-finished' })
+      expect((await texts(tall)).some(x => x.startsWith('finished designer '))).toBe(false)
+      await tall.press({ key: 'toggle-finished' })
+      await release()
+      const short = await mountPane($, surface, { rows: 12 })
+      expect(await texts(short)).toContain('Finished')
+      expect((await texts(short)).some(x => x.startsWith('finished designer '))).toBe(false)
+      expect(rowsOf((await short.drawn()) as Node) <= 12).toBe(true)
+      await release()
+    }
+  })
+
   t('docked: each agent row carries a mascot Client of its role and mood, the session one at the same size', async ($, on) => {
     world(on)
     seed(on, busy())
@@ -604,22 +812,28 @@ describe('pane', () => {
     const svgs = (await ui.findAll({ type: 'Svg' })).map(n => (n as unknown as { props: { source: string; alt: string; isInteractive?: boolean; height: number } }).props)
     const mascot = (role: string, mood: string) => svgs.filter(s => s.alt === `${role} mascot, ${mood}`)
     expect(mascot('orchestrator', 'work').length).toBe(1)
-    expect(mascot('orchestrator', 'work')[0].source).toBe(clawdSvg('orchestrator', 'work', 92))
-    expect(mascot('explorer', 'work')[0].source).toBe(clawdSvg('explorer', 'work', 48))
+    expect(mascot('orchestrator', 'work')[0].source).toBe(clawdSvg('orchestrator', 'work', 64, '#302622'))
+    expect(mascot('explorer', 'work')[0].source).toBe(clawdSvg('explorer', 'work', 46, '#1b1b1a'))
     expect(mascot('explorer', 'work')[0].isInteractive).toBe(true)
     expect(mascot('fixer', 'idle')[0].isInteractive).toBeFalsy()
-    expect(mascot('designer', 'off')[0].source).toBe(clawdSvg('designer', 'off', 48))
+    expect(mascot('fixer', 'idle')[0].source).not.toContain('style="background:')
+    expect(mascot('designer', 'off')[0].source).toBe(clawdSvg('designer', 'off', 46))
+    for (const s of svgs.filter(s => s.isInteractive)) {
+      const bg = s.alt.startsWith('orchestrator mascot') ? '#302622' : '#1b1b1a'
+      expect(s.source).toContain(`style="background:${bg}"`)
+      expect(s.source).toContain(`<rect width="100%" height="100%" fill="${bg}"/>`)
+    }
     expect((await clients(ui)).filter(c => String(c.module).includes('mascot'))).toEqual([])
   })
 
-  t('the session shows cost, tokens and time as tiles on desktop and as one line docked', async ($, on) => {
+  t('the session shows cost, tokens and time as HUD segments on desktop and as one line docked', async ($, on) => {
     world(on)
     seed(on, busy())
     await start($)
     const desk = await mountPane($, 'desktop', { rows: 70 })
-    expect(await desk.find({ key: 'tile-cost' })).toBeDefined()
-    expect(await desk.find({ key: 'tile-tokens' })).toBeDefined()
-    expect(await desk.find({ key: 'tile-time' })).toBeDefined()
+    expect(await desk.find({ key: 'metric-cost' })).toBeDefined()
+    expect(await desk.find({ key: 'metric-tokens' })).toBeDefined()
+    expect(await desk.find({ key: 'metric-time' })).toBeDefined()
     expect(await texts(desk)).toContain('≈$0.50')
     await release()
     const term = await mountPane($, 'terminal', { rows: 70 })
@@ -689,10 +903,12 @@ describe('pane', () => {
     seed(on, busy())
     await start($)
     for (const surface of SURFACES) {
-      for (const rows of [6, 10, 14, 20, 40]) {
+      for (const rows of (surface === 'desktop' ? [3, 6, 10, 14, 20, 40] : [6, 10, 14, 20, 40])) {
         const ui = await mountPane($, surface, { rows })
         if (await ui.find({ key: 'tab-jobs' })) await ui.press({ key: 'tab-jobs' })
         expect({ surface, rows, fits: rowsOf((await ui.drawn()) as Node) <= rows }).toEqual({ surface, rows, fits: true })
+        expect(await ui.find({ key: 'profile-row' })).toBeDefined()
+        if (surface === 'desktop' && rows <= 6) expect(await ui.find({ key: 'footer' })).toBeUndefined()
         if (rows === 40) {
           expect(await ui.find({ key: 'cancel-pj1' })).toBeDefined()
           expect(await ui.find({ key: 'copy-pj3' })).toBeDefined()
@@ -907,11 +1123,59 @@ describe('timelineSource', () => {
   ]
   const out = timelineSource(slots, { isRunning: true, turnStartedAt: NOW_T - 120_000 }, NOW_T).source
 
+  test('timeline source and running bars stay identical within a 15-second bucket', () => {
+    const bucket = Math.floor(NOW_T / 15_000) * 15_000
+    const session = { isRunning: true, turnStartedAt: NOW_T - 120_000 }
+    const first = timelineSource(slots, session, bucket)
+    expect(timelineSource(slots, session, bucket + 14_999)).toEqual(first)
+    expect(timelineSource(slots, session, bucket + 15_000).source).not.toBe(first.source)
+  })
+
+  test('each desktop draw computes the timeline once and keeps timeline and mascot keys and sources stable', () => {
+    const session: SessionInfo = { isRunning: true, turnStartedAt: NOW_T - 120_000 }
+    const roster = buildRoster({ jobs: [job()], natives: [], session, config: MIXED })
+    let timelineReads = 0
+    // Only the timeline reads the retained turns; count evaluations without replacing its renderer.
+    Object.defineProperty(session, 'turns', { get() { timelineReads++; return [] } })
+    const element = (props: unknown) => ({ props })
+    const el = { Box: element, Text: element, Button: element, Svg: element }
+    type Node = { key?: string; props?: { key?: string; alt?: string; source?: string; children?: unknown } }
+    const images = (tree: unknown): Node[] => {
+      if (Array.isArray(tree)) return tree.flatMap(images)
+      if (!tree || typeof tree !== 'object') return []
+      const node = tree as Node
+      return [...(node.props?.source ? [node] : []), ...images(node.props?.children)]
+    }
+    const bucket = Math.floor(NOW_T / 15_000) * 15_000
+    const draw = (now: number) => images(drawPanel(el as never, {
+      surface: 'desktop', columns: 120, rows: 100, now, roster, jobs: [], session,
+      profiles: ['claude', 'codex', 'mixed'], activeProfile: 'mixed',
+      tab: 'agents', hasClient: false, onTab: () => {}, onCancel: () => {}, onCopy: () => {},
+    }))
+    const first = draw(bucket + 100)
+    expect(timelineReads).toBe(1)
+    const second = draw(bucket + 200)
+    expect(timelineReads).toBe(2)
+    const keyed = (nodes: Node[]) => nodes.map(n => ({ key: n.key ?? n.props?.key, source: n.props?.source }))
+    expect(keyed(second)).toEqual(keyed(first))
+    for (const node of first) expect(node.key ?? node.props?.key).toBeDefined()
+    const timeline = first.find(n => n.props?.alt?.startsWith('Last 15 minutes'))!
+    expect(timeline.key ?? timeline.props?.key).toBe('timeline')
+    const mascots = first.filter(n => n.props?.alt?.includes('mascot'))
+    expect(mascots.length > 0).toBe(true)
+    for (const node of mascots) expect(node.key ?? node.props?.key).toBeDefined()
+    session.isRunning = false
+    const idle = draw(bucket + 300).find(n => n.props?.alt === 'orchestrator mascot, idle')!
+    const working = mascots.find(n => n.props?.alt === 'orchestrator mascot, work')!
+    expect(idle.key ?? idle.props?.key).toBe(working.key ?? working.props?.key)
+    expect(idle.props?.source).not.toBe(working.props?.source)
+  })
+
   test('running bars are solid in the engine color, finished ones outlined', () => {
     expect(out).toContain('fill="#6aa3f0"/>')
     expect(out).toContain('fill="#b58af0"/>')
     expect(out).toContain('fill="#1f3350" stroke="#6aa3f0"')
-    expect(out).toContain('fill="#242423"') // the dark card
+    expect(out).toContain('rx="6" fill="rgba(128,128,128,0.10)"')
   })
   test('rounds of one session are labelled and joined by a dashed line', () => {
     expect(out).toContain('>r1</text>')
@@ -930,13 +1194,29 @@ describe('timelineSource', () => {
       { id: 'jold', agent: 'explorer', status: 'done', startedAt: NOW_T - 3_000_000, endedAt: NOW_T - 2_000_000, cwd: '/repo' },
     ]
     const roster = buildRoster({ jobs, natives: [], session: { isRunning: false }, config: MIXED })
-    // The card keeps only the latest; the timeline draws both runs inside the window, not the old one.
-    expect(roster.slots[1].instances.map(i => i.id)).toEqual(['jb'])
+    // Cards retain every run; the timeline draws only those overlapping the window.
+    expect(roster.slots[1].instances.map(i => i.id)).toEqual(['jb', 'ja', 'jold'])
     const svg = timelineSource(roster.slots, { isRunning: false }, NOW_T).source
     expect(svg.split('fill="#1f3350" stroke="#6aa3f0"').length - 1).toBe(2)
     expect(svg).toContain('>ja</text>')
     expect(svg).toContain('>jb</text>')
     expect(svg).not.toContain('>jold</text>')
+  })
+  test('orchestrator draws finished turns in the window and the running turn separately', () => {
+    const session: SessionInfo = { isRunning: true, turnStartedAt: NOW_T - 60_000, turns: [
+      { startedAt: NOW_T - 1_000_000, endedAt: NOW_T - 950_000 },
+      { startedAt: NOW_T - 1_000_000, endedAt: NOW_T - 800_000 },
+      { startedAt: NOW_T - 600_000, endedAt: NOW_T - 500_000 },
+      { startedAt: NOW_T - 300_000, endedAt: NOW_T - 200_000 },
+    ] }
+    const lane = [slot({ name: 'orchestrator', engine: 'claude' })]
+    const svg = timelineSource(lane, session, NOW_T).source
+    expect(svg.split('fill="#4a4945"/>').length - 1).toBe(3)
+    expect(svg).toContain('<rect x="118" y="48"')
+    expect(svg).toContain('height="12" rx="3" fill="#ebedf1"/>')
+    const idle = timelineSource(lane, { ...session, isRunning: false }, NOW_T).source
+    expect(idle.split('fill="#4a4945"/>').length - 1).toBe(3)
+    expect(idle).not.toContain('height="12" rx="3" fill="#ebedf1"/>')
   })
   test('a lost round with no end is a tick at its start, not a bar to now', () => {
     const lost: Slot[] = [slot({ name: 'fixer', instances: [inst({ id: 'l', isActive: false, status: 'lost',
@@ -944,7 +1224,7 @@ describe('timelineSource', () => {
     const svg = timelineSource(lost, { isRunning: false }, NOW_T).source
     expect(svg).toContain('width="3" height="12" fill="#e0a94a"/>')
     expect(svg).not.toContain('stroke="#6aa3f0"/>')
-    expect(svg).not.toContain('fill="#6aa3f0"/>')
+    expect(svg).not.toContain('height="12" rx="3" fill="#6aa3f0"/>')
   })
   test('parallel instances label their ids and the now line closes the window', () => {
     expect(out).toContain('>a</text>')

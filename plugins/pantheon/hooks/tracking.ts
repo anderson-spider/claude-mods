@@ -113,6 +113,10 @@ export const normalizeSession = (raw: unknown): SessionInfo => {
     window: raw.context.window,
     percent: isNumber(raw.context.percent) ? raw.context.percent : null,
   } : undefined
+  const turns = Array.isArray(raw.turns) ? raw.turns.flatMap(t =>
+    isObject(t) && isNumber(t.startedAt) && isNumber(t.endedAt) && t.startedAt >= 0 && t.endedAt >= t.startedAt
+      ? [{ startedAt: t.startedAt, endedAt: t.endedAt }] : [])
+    .sort((a, b) => a.endedAt - b.endedAt).slice(-50) : undefined
   return {
     isRunning: typeof raw.isRunning === 'boolean' ? raw.isRunning : false,
     ...(typeof raw.model === 'string' ? { model: raw.model } : {}),
@@ -120,6 +124,7 @@ export const normalizeSession = (raw: unknown): SessionInfo => {
     ...(context ? { context } : {}),
     ...(isNumber(raw.turnStartedAt) ? { turnStartedAt: raw.turnStartedAt } : {}),
     ...(isNumber(raw.lastTurnMs) ? { lastTurnMs: raw.lastTurnMs } : {}),
+    ...(turns ? { turns } : {}),
     ...(isNumber(raw.costUsd) ? { costUsd: raw.costUsd } : {}),
   }
 }
@@ -141,8 +146,14 @@ export const viewToggled = (v: PanelView, group: PanelGroup): PanelView => {
 
 export const sessionStarted = (s: SessionInfo, now: number): SessionInfo =>
   ({ ...s, isRunning: true, turnStartedAt: now })
-export const sessionCompleted = (s: SessionInfo, durationMs: number): SessionInfo =>
-  ({ ...s, isRunning: false, lastTurnMs: durationMs })
+export const sessionCompleted = (s: SessionInfo, durationMs: number): SessionInfo => {
+  const startedAt = s.turnStartedAt
+  const endedAt = startedAt === undefined ? undefined : startedAt + durationMs
+  const turns = s.isRunning && isNumber(startedAt) && isNumber(endedAt) && durationMs >= 0
+    ? [...(s.turns ?? []), { startedAt, endedAt }].filter(t => t.endedAt >= endedAt - 900_000).slice(-50)
+    : s.turns
+  return { ...s, isRunning: false, lastTurnMs: durationMs, ...(turns ? { turns } : {}) }
+}
 export const sessionStepped = (s: SessionInfo, model: string, effort: string | undefined): SessionInfo =>
   ({ ...s, model, effort })
 export const sessionMeasured = (s: SessionInfo, context: {

@@ -10,6 +10,16 @@ const width = (runs: { text: string }[]) => runs.reduce((n, r) => n + [...r.text
 const key = (role: (typeof ROLE_ORDER)[number], mood: Mood, f: number, size: 'small' | 'large') =>
   JSON.stringify(clawdRuns(role, mood, f, size))
 
+test('clawdSvg paints an optional frame background first and stays transparent by default', () => {
+  for (const mood of MOODS) {
+    const svg = clawdSvg('orchestrator', mood, 52, '#242423')
+    expect(svg).toContain('style="background:#242423"><rect width="100%" height="100%" fill="#242423"/>')
+    const transparent = clawdSvg('orchestrator', mood, 52)
+    expect(transparent).not.toContain('style="background:')
+    expect(transparent).not.toContain('width="100%" height="100%"')
+  }
+})
+
 test('pixels: grid is ROWS x COLS with hex or null cells', () => {
   for (const role of ROLE_ORDER) for (const mood of MOODS) {
     const g = pixels(role, mood, 0)
