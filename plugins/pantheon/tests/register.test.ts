@@ -1,9 +1,322 @@
 import { describe, expect, test } from 'claude-code/testing'
+import type { Engine } from 'claude-code/testing'
+import type { AgentSpawnInput, On, TurnStepInput } from 'claude-code'
 
-import type { Job } from '../types'
+import type { Job, Native, SessionInfo } from '../types'
+import { createQueue } from '../hooks/register'
 import { DELEGATE, HOME, RESULT, ROOT, parse, start, world } from './fixtures/world'
 
+const spawnInput = {
+  tool_use_id: 'spawn-1', prompt: 'Review the change', description: 'Review',
+  subagentType: 'pantheon:oracle', provider: { plugin: 'pantheon', tier: 'user' },
+  parentModel: 'parent', permissionMode: 'default',
+} as AgentSpawnInput
+const stepInput = (index = 0, agentId: string | undefined = 'native-1'): TurnStepInput => ({
+  turnId: 'turn-1', index, agentId, model: 'model-1', effort: 'high', messageCount: 1,
+})
+const completeInput = { turnId: 'turn-1', reason: 'answer' as const, answer: 'Answer', durationMs: 42, isAborted: false }
+const measureInput = { context: { tokens: 100, window: 1000, percent: 10 }, rateLimits: [], changed: ['context'] as ['context'] }
+const stepResult = {
+  turnId: 'turn-1', index: 0, answer: 'Step answer', toolUses: [], stopReason: 'end_turn' as const,
+  usage: { model: 'model-1', input_tokens: 10, cache_read_input_tokens: 2, cache_creation_input_tokens: 3, output_tokens: 4 },
+}
+const streamChunk = { kind: 'text' as const, index: 0, text: 'streaming' }
+function trackingWorld(on: On, slowNativeWrite = false, opts: {
+  chunk?: boolean; slowMs?: number
+  /** While it returns a promise, every natives write waits for it. */
+  hold?: () => Promise<void> | undefined
+} = {}) {
+  const fixture = world(on)
+  const forwarded: string[] = []
+  on('agent.spawn', async () => ({ model: 'model-1', agentId: 'native-1' }))
+  on('turn.start', async (_$, e) => ({ turnId: e.turnId }))
+  on('turn.step', async function* (_$, e) {
+    forwarded.push(e.turnId)
+    if (opts.chunk) {
+      yield streamChunk
+      // The response takes time to finish streaming.
+      if (opts.slowMs) await fixture.clock.sleep(opts.slowMs)
+    }
+    return { ...stepResult, turnId: e.turnId, index: e.index }
+  })
+  on('turn.complete', async () => ({ text: 'Completed' }))
+  on('session.measure', async () => ({ changed: ['context'] }))
+  on('tool.call', async () => ({ result: 'Tool result' }))
+  const stored: Record<string, unknown> = {}
+  const writes: number[] = []
+  let slowed = false
+  on('state.set', async (_$, e, next) => {
+    const steps = e.key === 'natives' ? (e.value as Native[])[0]?.steps ?? 0 : undefined
+    // Only the first write of one step is slow: the next steps' writes then wait behind it.
+    if (slowNativeWrite && steps === 1 && !slowed) { slowed = true; await fixture.clock.sleep(10) }
+    if (steps !== undefined) await opts.hold?.()
+    const result = await next(e)
+    if (result.value.isSet) {
+      stored[e.key] = e.value
+      if (steps !== undefined) writes.push(steps)
+    }
+    return result
+  })
+  on('command.run', { command: 'tracking-state' }, async (_$, e) => {
+    return { text: JSON.stringify(stored[e.args] ?? null) }
+  })
+  return { ...fixture, writes, forwarded }
+}
+async function nativesOf($: Engine): Promise<Native[]> {
+  return JSON.parse((await $.command.run({ command: 'tracking-state', args: 'natives' })).text ?? 'null') ?? []
+}
+async function sessionOf($: Engine): Promise<SessionInfo | undefined> {
+  return JSON.parse((await $.command.run({ command: 'tracking-state', args: 'session' })).text ?? 'null')
+}
+async function step($: Engine, input = stepInput()) {
+  const stream = $.turn.step(input)
+  const chunks = []
+  let item = await stream.next()
+  while (!item.done) { chunks.push(item.value); item = await stream.next() }
+  return { chunks, result: item.value }
+}
+
 describe('register', () => {
+  for (const failedKeys of [['natives'], ['session'], ['view'], ['natives', 'session', 'view']]) {
+    test(`failed panel writes warn once and preserve hook results: ${failedKeys.join(', ')}`, async ($, on) => {
+      const { seen } = world(on)
+      const rejected: string[] = []
+      on('state.set', async (_$, e, next) => {
+        if (!failedKeys.includes(e.key)) return next(e)
+        rejected.push(e.key)
+        return { deny: 'panel storage unavailable' }
+      })
+      const spawned = { agentId: 'native-1', model: 'model-1' }
+      const completed = { text: 'unchanged completion' }
+      const called = { ref: 9, result: 'unchanged tool result', text: 'Tool text', isReadOnly: true as const }
+      on('agent.spawn', async () => spawned)
+      on('turn.start', async (_$, e) => ({ turnId: e.turnId }))
+      on('turn.complete', async () => completed)
+      on('tool.call', async () => called)
+      on('turn.step', async function* () { return stepResult })
+      on('session.measure', async () => ({ changed: ['context'] }))
+      expect(await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })).toEqual({ cwd: ROOT })
+      expect(await $.turn.start({ text: 'Go', turnId: 'turn-1' })).toEqual({ turnId: 'turn-1' })
+      expect(await $.agent.spawn(spawnInput)).toEqual(spawned)
+      expect((await step($)).result).toEqual(stepResult)
+      expect(await $.tool.call({ tool: 'Bash', command: 'pwd', agentId: 'native-1' })).toEqual(called)
+      expect(await $.turn.complete({ ...completeInput, agentId: 'native-1' })).toEqual(completed)
+      expect(await $.turn.complete(completeInput)).toEqual(completed)
+      expect(await $.session.measure(measureInput)).toEqual({ changed: ['context'] })
+      // Repeat view writes as well as the queue writes: the warning stays session-wide.
+      await start($)
+      for (const key of failedKeys) expect(rejected.filter(value => value === key).length).toBeGreaterThan(1)
+      expect(seen.toasts.length).toBe(1)
+      expect(seen.toasts[0]).toContain('pantheon: could not save the panel state (the panel may be stale):')
+      expect(seen.toasts[0]).toContain('panel storage unavailable')
+    })
+  }
+
+  test('snapshot queues recover after a failed write and retain only the latest pending snapshot', async () => {
+    const writes: number[] = []
+    const errors: unknown[] = []
+    let release!: () => void
+    const held = new Promise<void>(resolve => { release = resolve })
+    let began!: () => void
+    const started = new Promise<void>(resolve => { began = resolve })
+    const failure = new Error('write failed')
+    const queue = createQueue<number>(async value => {
+      writes.push(value)
+      if (value === 1) { began(); await held; throw failure }
+    }, error => { errors.push(error) })
+    queue.push(1)
+    await started
+    queue.push(2)
+    queue.push(3)
+    release()
+    await queue.flushed()
+    expect(writes).toEqual([1, 3])
+    expect(errors).toEqual([failure])
+    queue.push(4)
+    await queue.flushed()
+    expect(writes).toEqual([1, 3, 4])
+  })
+
+  test('tracking initializes lazily without session.start and ignores unknown native ids', async ($, on) => {
+    trackingWorld(on)
+    await step($)
+    await $.tool.call({ tool: 'Bash', command: 'pwd', agentId: 'native-1' })
+    await $.turn.complete({ ...completeInput, agentId: 'native-1' })
+    expect(await nativesOf($)).toEqual([])
+    await $.agent.spawn(spawnInput)
+    await step($)
+    expect((await nativesOf($))[0].steps).toBe(1)
+    expect((await nativesOf($))[0].rounds[0].status).toBe('running')
+  })
+
+  test('every tracking hook returns the event result unchanged', async ($, on) => {
+    world(on)
+    const started = { turnId: 'sentinel-turn' }
+    const spawned = { model: 'sentinel-model', agentId: 'native-1' }
+    const completed = { text: 'sentinel-completed' }
+    const measured = { changed: ['cost'] as ['cost'] }
+    const called = { ref: 7, result: 'sentinel-tool', text: 'Tool text', isReadOnly: true as const }
+    const chunk = { kind: 'text' as const, index: 0, text: 'stream sentinel' }
+    on('turn.start', async () => started)
+    on('agent.spawn', async () => spawned)
+    on('turn.complete', async () => completed)
+    on('session.measure', async () => measured)
+    on('tool.call', async () => called)
+    on('turn.step', async function* () { yield chunk; return stepResult })
+    await start($)
+    expect(await $.turn.start({ text: 'Go', turnId: 'turn-1' })).toEqual(started)
+    expect(await $.agent.spawn(spawnInput)).toEqual(spawned)
+    const { chunks, result } = await step($)
+    expect(chunks).toEqual([chunk])
+    expect(result).toEqual(stepResult)
+    expect(await $.turn.complete({ ...completeInput, agentId: 'native-1' })).toEqual(completed)
+    expect(await $.session.measure(measureInput)).toEqual(measured)
+    expect(await $.tool.call({ tool: 'Bash', command: 'pwd', agentId: 'native-1' })).toEqual(called)
+  })
+
+  test('agent.spawn of pantheon:oracle records a native through steps, tools and completion', async ($, on) => {
+    trackingWorld(on)
+    await start($)
+    await $.agent.spawn(spawnInput)
+    await step($)
+    await $.tool.call({ tool: 'Bash', command: 'pwd', agentId: 'native-1' })
+    await $.turn.complete({ ...completeInput, agentId: 'native-1' })
+    const [native] = await nativesOf($)
+    expect(native.role).toBe('oracle')
+    expect(native.rounds[0].status).toBe('done')
+    expect(native.rounds[0].turnId).toBe('turn-1')
+    expect(native.steps).toBe(1)
+    expect(native.ctx).toBe(15)
+    expect(native.out).toBe(4)
+    expect(native.lastTool).toBe('Bash pwd')
+    await step($, { ...stepInput(1), turnId: 'turn-2' })
+    expect((await nativesOf($))[0].rounds.map(round => round.status)).toEqual(['done', 'running'])
+  })
+
+  test('a native continuation reads running while its step streams, and its usage counts once', async ($, on) => {
+    const { clock } = trackingWorld(on, false, { chunk: true, slowMs: 500 })
+    await start($)
+    await $.agent.spawn(spawnInput)
+    const firstStep = step($)
+    await clock.settle()
+    await clock.advance(500)
+    await firstStep
+    await $.turn.complete({ ...completeInput, agentId: 'native-1' })
+    await clock.advance(1_000)
+    const stream = $.turn.step({ ...stepInput(0), turnId: 'turn-2' })
+    const first = await stream.next()
+    expect(first.value).toEqual(streamChunk)
+    const during = (await nativesOf($))[0]
+    expect(during.rounds.map(round => round.status)).toEqual(['done', 'running'])
+    expect(during.rounds[1].turnId).toBe('turn-2')
+    // The step is not counted until its response is in.
+    expect(during.steps).toBe(1)
+    const pending = stream.next()
+    await clock.settle()
+    await clock.advance(500)
+    const end = await pending
+    expect(end.done).toBe(true)
+    expect(end.value).toEqual({ ...stepResult, turnId: 'turn-2', index: 0 })
+    const after = (await nativesOf($))[0]
+    expect(after.rounds[1].startedAt).toBe(during.rounds[1].startedAt)
+    expect(after.rounds[1].startedAt).toBeLessThan(clock.now())
+    expect(after.rounds.length).toBe(2)
+    expect(after.steps).toBe(2)
+    expect(after.out).toBe(8)
+  })
+
+  test('a held natives write never holds the step: it is forwarded and streams before the write lands', async ($, on) => {
+    let gate: Promise<void> | undefined
+    let release!: () => void
+    const { forwarded } = trackingWorld(on, false, { chunk: true, hold: () => gate })
+    await start($)
+    await $.agent.spawn(spawnInput)
+    await step($)
+    await $.turn.complete({ ...completeInput, agentId: 'native-1' })
+    gate = new Promise<void>(resolve => { release = resolve })
+    const stream = $.turn.step({ ...stepInput(0), turnId: 'turn-2' })
+    let arrived = false
+    const first = stream.next().then(item => { arrived = true; return item })
+    // Let everything not waiting on the held write run.
+    for (let k = 0; k < 20; k++) await Promise.resolve()
+    await new Promise(resolve => setTimeout(resolve, 20))
+    expect(forwarded).toEqual(['turn-1', 'turn-2'])
+    expect(arrived).toBe(true)
+    expect((await first).value).toEqual(streamChunk)
+    // Nothing of turn-2 is persisted while the write is held.
+    expect((await nativesOf($))[0].rounds.map(round => round.status)).toEqual(['done'])
+    gate = undefined
+    release()
+    const end = await stream.next()
+    expect(end.done).toBe(true)
+    expect(end.value).toEqual({ ...stepResult, turnId: 'turn-2', index: 0 })
+    const [native] = await nativesOf($)
+    expect(native.rounds.map(round => round.status)).toEqual(['done', 'running'])
+    expect(native.rounds[1].turnId).toBe('turn-2')
+    expect(native.steps).toBe(2)
+  })
+
+  test('queued writes land in order for three concurrent steps', async ($, on) => {
+    const { clock, writes } = trackingWorld(on, true)
+    await start($)
+    await $.agent.spawn(spawnInput)
+    const first = step($)
+    await clock.settle()
+    const pending = Promise.all([first, ...[1, 2].map(index => step($, stepInput(index)))])
+    await clock.settle()
+    await clock.advance(10)
+    await pending
+    expect((await nativesOf($))[0].steps).toBe(3)
+    expect(writes[writes.length - 1]).toBe(3)
+    expect(writes).toContain(1)
+    expect(writes).toEqual([...writes].sort((a, b) => a - b))
+  })
+
+  test('reload marks running native rounds lost and resets the session', async ($, on) => {
+    trackingWorld(on)
+    const saved: Native[] = [{ id: 'old', role: 'oracle', type: 'pantheon:oracle', task: 'Old', model: 'm',
+      rounds: [{ startedAt: 1, status: 'done' }, { startedAt: 2, status: 'running' }], ctx: 0, out: 0, steps: 2 }]
+    const served = new Set<string>()
+    on('state.get', async (_$, e, next) => {
+      if (served.has(e.key) || !['natives', 'session'].includes(e.key)) return next(e)
+      served.add(e.key)
+      return { value: { value: e.key === 'natives' ? saved : { isRunning: true, model: 'saved-model' }, version: 1 } } as never
+    })
+    await start($)
+    expect((await nativesOf($))[0].rounds.map(round => round.status)).toEqual(['done', 'lost'])
+    expect(await sessionOf($)).toEqual({ isRunning: false, model: 'saved-model' })
+  })
+
+  test('main session tracks start, model, effort, measurement and completion independently', async ($, on) => {
+    trackingWorld(on)
+    await start($)
+    await $.turn.start({ text: 'Go', turnId: 'turn-1' })
+    expect((await sessionOf($))?.isRunning).toBe(true)
+    await step($, { ...stepInput(), agentId: undefined, effort: 3 })
+    await $.session.measure(measureInput)
+    await $.agent.spawn(spawnInput)
+    await $.turn.complete({ ...completeInput, agentId: 'native-1' })
+    expect((await sessionOf($))?.isRunning).toBe(true)
+    await $.turn.complete(completeInput)
+    const session = await sessionOf($)
+    expect(session?.model).toBe('model-1')
+    expect(session?.effort).toBe('3')
+    expect(session?.context).toEqual(measureInput.context)
+    expect(session?.isRunning).toBe(false)
+    expect(session?.lastTurnMs).toBe(42)
+  })
+
+  test('the panel opens on session.start and /pantheon close closes it', async ($, on) => {
+    const { seen } = world(on)
+    await start($)
+    // The footer says "esc close": both opens close on Escape, and the manual one also focuses.
+    expect(seen.opened).toEqual([{ id: 'pantheon', title: 'Pantheon', columns: 72, rows: 8, closeOnEscape: true }])
+    expect(await $.command.run({ command: 'pantheon', args: 'close' })).toEqual({ text: 'Pantheon panel closed.' })
+    expect(seen.closed).toEqual(['pantheon'])
+    await $.command.run({ command: 'pantheon', args: '' })
+    expect(seen.opened[1]).toEqual({ id: 'pantheon', title: 'Pantheon', focus: true, closeOnEscape: true })
+  })
+
   test('session.start registers tools and native agents', async ($, on) => {
     const { seen } = world(on)
     await start($)

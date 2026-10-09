@@ -1,5 +1,7 @@
 # Pantheon Mod Implementation Plan
 
+> 2026-10-08: flightdeck was absorbed into the Pantheon panel and removed from the marketplace. `/pantheon` now opens automatically with Agents and Jobs tabs; `/pantheon close` closes it. The original plan below is preserved as history; see [the panel design](../../../docs/superpowers/specs/2026-10-08-pantheon-panel-design.md) for the replacement.
+
 > Design record from the original repository (`anderson-spider/claude-workflow-codex`, PR #4). Paths cited here moved: tests are in `tests/`, not `hooks/*.test.ts`, and the API types come from `.claude-plugin/types/` instead of `vendor/`.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.

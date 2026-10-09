@@ -21,6 +21,8 @@ export type World = {
   failFirstRegister?: boolean
   /** Respostas de process.run por comando (argv unido por espaço). */
   runs?: Record<string, { exitCode: number; stdout?: string; stderr?: string }>
+  /** While it returns true, clock.now rejects (this replaces the mock clock, so nothing can sleep). */
+  clockDown?: () => boolean
 }
 
 export function world(on: On, opts: World = {}) {
@@ -32,10 +34,19 @@ export function world(on: On, opts: World = {}) {
     toasts: [] as string[],
     statuses: [] as (string | undefined)[],
     submits: [] as string[],
+    opened: [] as { id: string; title?: string; columns?: number; rows?: number; focus?: true; closeOnEscape?: true }[],
+    closed: [] as string[],
+    copied: [] as string[],
     gitRuns: 0,
   }
   const files = { ...(opts.files ?? {}) }
-  const clock = mock.clock(on)
+  const clock = opts.clockDown ? (undefined as never) : mock.clock(on)
+  if (opts.clockDown) {
+    on('clock.now', async () => {
+      if (opts.clockDown!()) throw new Error('clock gone')
+      return { value: 0 }
+    })
+  }
   mock.env(on, { HOME })
   on('session.start', async (_$, e) => ({ cwd: e.cwd }))
   on('session.cwd', async () => ({ value: ROOT }))
@@ -64,6 +75,9 @@ export function world(on: On, opts: World = {}) {
   on('ui.toast', async (_$, e) => { seen.toasts.push(e.text); return { value: undefined } })
   on('command.register', async (_$, e) => ({ value: { command: e.name } }))
   on('ui.status', async (_$, e) => { seen.statuses.push(e.text); return { value: undefined } })
+  on('ui.open', async (_$, e) => { seen.opened.push(e); return { value: undefined } })
+  on('ui.close', async (_$, e) => { seen.closed.push(e.id); return { value: undefined } })
+  on('ui.copy', async (_$, e) => { seen.copied.push(e.text); return { value: undefined } })
   on('process.spawn', async function* (_$, e) {
     seen.argv.push([...e.argv])
     seen.cwds.push(e.cwd ?? '')

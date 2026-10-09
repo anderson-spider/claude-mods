@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { AgentSpec, ProcessRunInit, ProcessRunResult, Register } from 'claude-code'
 
-import type { Job } from '../types'
+import type { Job, Native, SessionInfo } from '../types'
 import { buildArgv, createJsonlReader } from './codex'
 import { loadConfig } from './config'
 import { DEFAULT_CONFIG } from './defaults'
@@ -9,8 +9,14 @@ import { createJobs, markLost } from './jobs'
 import { buildCouncilBlock, isCouncilOrigin, matchesCouncilTrigger } from './prompts/council'
 import { buildOrchestratorSection } from './prompts/orchestrator'
 import { rolePrompt } from './prompts/roles'
-import { PANE_ID, configReport, doctorReport, drawPane, statusText } from './pane'
+import { PANE_ID, configReport, doctorReport, drawPanel, statusText } from './pane'
 import { isOffered, nativeAgentSpecs, resolveCodexCall } from './roles'
+import { buildRoster } from './roster'
+import {
+  DEFAULT_SESSION, DEFAULT_VIEW, completed, describeTool, markNativesLost,
+  normalizeNatives, normalizeSession, normalizeView, sessionCompleted, sessionMeasured,
+  roundOpened, sessionStarted, sessionStepped, spawned, stepAccounted, toolNoted,
+} from './tracking'
 import type { Clock, ConfigResult, DelegateArgs, PantheonConfig, Spawn } from './types'
 import { authorizedRoot, checkCwd } from './workspace'
 
@@ -31,6 +37,40 @@ type Io = {
   submit: (text: string) => Promise<unknown>
 }
 
+type TrackingIo = {
+  readNatives: () => Promise<unknown>
+  writeNatives: (list: Native[]) => Promise<unknown>
+  readSession: () => Promise<unknown>
+  writeSession: (value: SessionInfo) => Promise<unknown>
+  toast: (text: string) => void
+  now: () => Promise<number>
+}
+
+/** Serialize writes and replace any waiting snapshot with the latest one. */
+export function createQueue<T>(write: (v: T) => Promise<unknown>, onError: (e: unknown) => void) {
+  let pending: { value: T } | undefined
+  let flushing: Promise<void> | undefined
+  return {
+    push(value: T): void {
+      pending = { value }
+      flushing ??= Promise.resolve().then(async () => {
+        try {
+          while (pending) {
+            const next = pending.value
+            pending = undefined
+            try { await write(next) } catch (error) {
+              try { onError(error) } catch { /* Reporting must not stop the queue. */ }
+            }
+          }
+        } finally {
+          flushing = undefined
+        }
+      })
+    },
+    flushed: (): Promise<void> => flushing ?? Promise.resolve(),
+  }
+}
+
 export const TOOLS = {
   delegate: 'mcp__pantheon__delegate',
   result: 'mcp__pantheon__delegate_result',
@@ -38,6 +78,9 @@ export const TOOLS = {
 } as const
 
 const jobsAtom = atom({ plugin: 'pantheon', key: 'jobs' } as const, [] as Job[])
+const nativesAtom = atom({ plugin: 'pantheon', key: 'natives' } as const, [] as Native[])
+const sessionAtom = atom({ plugin: 'pantheon', key: 'session' } as const, DEFAULT_SESSION)
+const viewAtom = atom({ plugin: 'pantheon', key: 'view' } as const, DEFAULT_VIEW)
 
 const DELEGATE_SCHEMA = {
   type: 'object',
@@ -88,30 +131,43 @@ export const register: Register = on => {
   let live: Io | undefined
   let jobs: ReturnType<typeof createJobs> | undefined
 
-  // Gravações do estado em fila, sempre com o snapshot mais recente: duas em voo
-  // poderiam chegar fora de ordem e deixar no painel um status antigo.
-  let pendingJobs: Job[] | undefined
   let warnedWrite = false
-  let flushing: Promise<void> | undefined
-  function persist(list: Job[]) {
-    pendingJobs = list
-    flushing ??= (async () => {
-      try {
-        while (pendingJobs) {
-          const next = pendingJobs
-          pendingJobs = undefined
-          await live?.writeJobs(next).catch(error => {
-            if (warnedWrite) return
-            warnedWrite = true
-            live?.toast(`pantheon: não consegui gravar o estado dos jobs (o painel pode ficar desatualizado): ${error instanceof Error ? error.message : String(error)}`)
-          })
-        }
-      } finally {
-        flushing = undefined
-      }
-    })()
+  const jobsQueue = createQueue<Job[]>(list => live!.writeJobs(list), error => {
+    if (warnedWrite) return
+    warnedWrite = true
+    live?.toast(`pantheon: não consegui gravar o estado dos jobs (o painel pode ficar desatualizado): ${error instanceof Error ? error.message : String(error)}`)
+  })
+  const persisted = jobsQueue.flushed
+
+  let trackingLive: TrackingIo | undefined
+  let natives: Native[] | undefined
+  let session: SessionInfo | undefined
+  let trackingLoad: Promise<void> | undefined
+  let warnedTrackingWrite = false
+  function notifyTrackingWrite(error: unknown): void {
+    if (warnedTrackingWrite) return
+    warnedTrackingWrite = true
+    try {
+      trackingLive?.toast(`pantheon: could not save the panel state (the panel may be stale): ${error instanceof Error ? error.message : String(error)}`)
+    } catch { /* A failed warning must not affect the user's call. */ }
   }
-  const persisted = () => flushing ?? Promise.resolve()
+  const nativesQueue = createQueue<Native[]>(list => trackingLive!.writeNatives(list), notifyTrackingWrite)
+  const sessionQueue = createQueue<SessionInfo>(value => trackingLive!.writeSession(value), notifyTrackingWrite)
+  // Each view write carries the `$` of the hook that asked for it; only the latest pending one runs.
+  const viewQueue = createQueue<() => Promise<unknown>>(write => write(), notifyTrackingWrite)
+
+  async function ensureTracking(io: TrackingIo): Promise<void> {
+    trackingLive = io
+    if (natives !== undefined && session !== undefined) return
+    trackingLoad ??= (async () => {
+      const [savedNatives, savedSession] = await Promise.all([io.readNatives(), io.readSession()])
+      natives = markNativesLost(normalizeNatives(savedNatives))
+      session = { ...normalizeSession(savedSession), isRunning: false }
+      nativesQueue.push(natives)
+      sessionQueue.push(session)
+    })().finally(() => { trackingLoad = undefined })
+    await trackingLoad
+  }
 
   const clock: Clock = {
     now: () => live!.now(),
@@ -131,12 +187,12 @@ export const register: Register = on => {
       newId: () => `pj${(++idSeq).toString(36)}${Math.random().toString(36).slice(2, 6)}`,
       onChange: list => {
         live?.status(statusText(list))
-        persist(list)
+        jobsQueue.push(list)
       },
       notify: text => { void live?.submit(text).catch(() => {}) },
       initial: saved,
     })
-    persist(saved)
+    jobsQueue.push(saved)
     await persisted()
     return jobs
   }
@@ -270,10 +326,170 @@ export const register: Register = on => {
     })
     await $.command.register({
       name: 'pantheon',
-      description: 'Open the Pantheon pane; subcommands: cancel <jobId>, config, doctor',
-      argumentHint: '[cancel <jobId> | config | doctor]',
+      description: 'Open the Pantheon pane; subcommands: close, cancel <jobId>, config, doctor',
+      argumentHint: '[close | cancel <jobId> | config | doctor]',
     })
+    try {
+      const trackingIo: TrackingIo = {
+        readNatives: () => read($, nativesAtom),
+        writeNatives: list => update($, nativesAtom, () => list),
+        readSession: () => read($, sessionAtom),
+        writeSession: value => update($, sessionAtom, () => value),
+        toast: text => $.ui.toast(text),
+        now: () => $.clock.now(),
+      }
+      await ensureTracking(trackingIo)
+      await Promise.all([nativesQueue.flushed(), sessionQueue.flushed()])
+      viewQueue.push(() => update($, viewAtom, normalizeView))
+      await viewQueue.flushed()
+    } catch { /* Tracking must not interrupt session setup. */ }
+    try {
+      await $.ui.open({ id: PANE_ID, title: 'Pantheon', columns: 72, rows: 8, closeOnEscape: true })
+    } catch { /* A surface without panes must still start the session. */ }
     return started
+  })
+
+  on('turn.start', async ($, e, next) => {
+    try {
+      const io: TrackingIo = {
+        readNatives: () => read($, nativesAtom),
+        writeNatives: list => update($, nativesAtom, () => list),
+        readSession: () => read($, sessionAtom),
+        writeSession: value => update($, sessionAtom, () => value),
+        toast: text => $.ui.toast(text),
+        now: () => $.clock.now(),
+      }
+      await ensureTracking(io)
+      const now = await io.now()
+      session = sessionStarted(session!, now)
+      sessionQueue.push(session)
+      await sessionQueue.flushed()
+    } catch { /* Tracking never changes the turn. */ }
+    return next(e)
+  })
+
+  on('turn.step', async function* ($, e, next) {
+    const io: TrackingIo = {
+      readNatives: () => read($, nativesAtom),
+      writeNatives: list => update($, nativesAtom, () => list),
+      readSession: () => read($, sessionAtom),
+      writeSession: value => update($, sessionAtom, () => value),
+      toast: text => $.ui.toast(text),
+      now: () => $.clock.now(),
+    }
+    // A native's round opens before its response streams, so a continuation reads running while
+    // it works; the step and its usage are counted once the response is in. The snapshot is queued,
+    // never awaited: a slow write must not hold the step.
+    if (e.agentId) {
+      try {
+        await ensureTracking(io)
+        const now = await io.now()
+        natives = roundOpened(natives!, { id: e.agentId, turnId: e.turnId, now })
+        nativesQueue.push(natives)
+      } catch { /* Tracking never changes the stream. */ }
+    }
+    const result = yield* next(e)
+    try {
+      await ensureTracking(io)
+      if (!e.agentId) {
+        session = sessionStepped(session!, e.model, String(e.effort ?? ''))
+        sessionQueue.push(session)
+        await sessionQueue.flushed()
+      } else {
+        natives = stepAccounted(natives!, { id: e.agentId, usage: result.usage ?? undefined })
+        nativesQueue.push(natives)
+        await nativesQueue.flushed()
+      }
+    } catch { /* Preserve both the stream and its result when tracking fails. */ }
+    return result
+  })
+
+  on('turn.complete', async ($, e, next) => {
+    const done = await next(e)
+    try {
+      const io: TrackingIo = {
+        readNatives: () => read($, nativesAtom),
+        writeNatives: list => update($, nativesAtom, () => list),
+        readSession: () => read($, sessionAtom),
+        writeSession: value => update($, sessionAtom, () => value),
+        toast: text => $.ui.toast(text),
+        now: () => $.clock.now(),
+      }
+      await ensureTracking(io)
+      if (!e.agentId) {
+        session = sessionCompleted(session!, e.durationMs)
+        sessionQueue.push(session)
+        await sessionQueue.flushed()
+      } else {
+        const now = await io.now()
+        natives = completed(natives!, { id: e.agentId, reason: e.reason, now })
+        nativesQueue.push(natives)
+        await nativesQueue.flushed()
+      }
+    } catch { /* Tracking never changes the completion result. */ }
+    return done
+  })
+
+  on('session.measure', async ($, e, next) => {
+    try {
+      const io: TrackingIo = {
+        readNatives: () => read($, nativesAtom),
+        writeNatives: list => update($, nativesAtom, () => list),
+        readSession: () => read($, sessionAtom),
+        writeSession: value => update($, sessionAtom, () => value),
+        toast: text => $.ui.toast(text),
+        now: () => $.clock.now(),
+      }
+      await ensureTracking(io)
+      session = sessionMeasured(session!, e.context)
+      sessionQueue.push(session)
+      await sessionQueue.flushed()
+    } catch { /* Tracking never changes the measurement result. */ }
+    return next(e)
+  })
+
+  on('agent.spawn', async ($, e, next) => {
+    const started = await next(e)
+    try {
+      if (started.agentId) {
+        const io: TrackingIo = {
+          readNatives: () => read($, nativesAtom),
+          writeNatives: list => update($, nativesAtom, () => list),
+          readSession: () => read($, sessionAtom),
+          writeSession: value => update($, sessionAtom, () => value),
+          toast: text => $.ui.toast(text),
+          now: () => $.clock.now(),
+        }
+        await ensureTracking(io)
+        const now = await io.now()
+        natives = spawned(natives!, { id: started.agentId, type: e.subagentType, task: e.description, model: started.model, now })
+        nativesQueue.push(natives)
+        await nativesQueue.flushed()
+      }
+    } catch { /* Tracking never changes the spawn result. */ }
+    return started
+  })
+
+  on('tool.call', async ($, e, next) => {
+    try {
+      if (e.agentId) {
+        const io: TrackingIo = {
+          readNatives: () => read($, nativesAtom),
+          writeNatives: list => update($, nativesAtom, () => list),
+          readSession: () => read($, sessionAtom),
+          writeSession: value => update($, sessionAtom, () => value),
+          toast: text => $.ui.toast(text),
+          now: () => $.clock.now(),
+        }
+        await ensureTracking(io)
+        if (natives!.some(native => native.id === e.agentId)) {
+          natives = toolNoted(natives!, e.agentId, describeTool(e.tool, e))
+          nativesQueue.push(natives)
+          await nativesQueue.flushed()
+        }
+      }
+    } catch { /* Tracking must not prevent any tool, including delegate tools. */ }
+    return next(e)
   })
 
   on('tool.call', { tool: TOOLS.delegate }, async ($, e, next) => {
@@ -338,8 +554,12 @@ export const register: Register = on => {
     }
     const [sub, ...rest] = e.args.trim().split(/\s+/).filter(Boolean)
     if (!sub) {
-      await $.ui.open({ id: PANE_ID, title: 'Pantheon' })
+      await $.ui.open({ id: PANE_ID, title: 'Pantheon', focus: true, closeOnEscape: true })
       return { text: 'Painel do Pantheon aberto.' }
+    }
+    if (sub === 'close') {
+      await $.ui.close({ id: PANE_ID })
+      return { text: 'Pantheon panel closed.' }
     }
     if (sub === 'cancel') {
       const jobId = rest[0]
@@ -364,15 +584,56 @@ export const register: Register = on => {
         }),
       }
     }
-    return { text: `Subcomando desconhecido: ${sub}. Use /pantheon, /pantheon cancel <jobId>, /pantheon config ou /pantheon doctor.` }
+    return { text: `Subcomando desconhecido: ${sub}. Use /pantheon, /pantheon close, /pantheon cancel <jobId>, /pantheon config ou /pantheon doctor.` }
   })
 
+  // Last reading of the host clock, kept so a failed read can still draw static durations.
+  let lastNow: number | undefined
   on('ui.render', { component: 'Pane', requestId: PANE_ID }, async ($, e) => {
-    const { Box, Text, Button } = $.ui.resolve(e)
-    const list = await read($, jobsAtom)
-    return drawPane({ Box, Text, Button } as never, {
+    const els = $.ui.resolve(e)
+    const { Box, Text, Button } = els
+    const hasClient = 'Client' in els
+    const [list, natives, session, view, read1] = await Promise.all([
+      read($, jobsAtom), read($, nativesAtom), read($, sessionAtom), read($, viewAtom),
+      $.clock.now().then(n => n as number | undefined, () => undefined),
+    ])
+    const info = normalizeSession(session)
+    const tracked = normalizeNatives(natives)
+    // A failed read is not hidden: the panel draws no live clocks and says so. Durations stay on one
+    // time base: the last reading, else the newest timestamp in the data.
+    const isClockLost = read1 === undefined
+    if (read1 !== undefined) lastNow = read1
+    const stamps = [
+      ...list.flatMap(j => [j.startedAt, j.endedAt ?? 0]),
+      ...tracked.flatMap(n => n.rounds.flatMap(r => [r.startedAt, r.endedAt ?? 0])),
+      info.turnStartedAt ?? 0,
+    ]
+    const now = read1 ?? lastNow ?? Math.max(...stamps)
+    return drawPanel({
+      Box, Text, Button,
+      ...('Svg' in els ? { Svg: els.Svg } : {}),
+      ...(hasClient ? {
+        // The module paths are literals here: the engine reads them off this entry module. The
+        // region is as wide as the line plus the glyph cell, so it does not grow with what it draws.
+        rail: ({ key, props }) => props.vertical
+          ? <els.Client key={key} module="./rail.tsx" width={1} height={props.width + (props.glyph ? 1 : 0)} props={props} />
+          : <els.Client key={key} module="./rail.tsx" width={props.isLine === false ? 1 : props.width + (props.glyph ? 1 : 0)} height={1} props={props} />,
+        clock: ({ key, props }) => <els.Client key={key} module="./elapsed.tsx" width={6} props={props} />,
+      } : {}),
+    } as never, {
+      surface: e.surface,
+      placement: e.props.placement,
+      columns: e.props.bodyColumns,
+      // The pane's usable height, not the terminal's.
+      rows: e.props.scroll?.bodyRows ?? e.viewport?.rows ?? 24,
+      now,
+      roster: buildRoster({ jobs: list, natives: tracked, session: info, config: state.config }),
       jobs: list,
-      rows: e.viewport?.rows ?? 24,
+      session: info,
+      tab: normalizeView(view).tab,
+      hasClient,
+      clockLost: isClockLost,
+      onTab: tab => { viewQueue.push(() => update($, viewAtom, () => ({ tab }))) },
       onCancel: jobId => { jobs?.cancel(jobId) },
       onCopy: (text, surface) => { void $.ui.copy({ text, surface }) },
     }) as never
