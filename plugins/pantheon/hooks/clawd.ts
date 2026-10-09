@@ -167,7 +167,7 @@ const PAL: Record<string, string> = {
   g: '#6E625A', k: '#2E2A28', a: '#CFD4D9', w: '#F6EFDD', T: '#D88A2E', t: '#9A5A1E',
   W: '#F5F4EF', G: '#CFCFC6', B: '#4A86D8', v: '#4D4D4B', r: '#C4483D', q: '#7E2A24', D: '#3B3B40',
   M: '#D870A8', m: '#A8507F', C: '#4FB6D8', N: '#6B4A2E', H: '#C4C9D6', h: '#8C92A3',
-  L: '#D8D5CB', l: '#A7A397', x: '#4A2E1E', z: '#FFE9CF', S: '#FFF1A8', P: '#9A62D6',
+  L: '#D8D5CB', l: '#A7A397', x: '#4A2E1E', z: '#FFE9CF', S: '#FFF1A8', Z: '#FFF1A8', P: '#9A62D6',
 }
 
 const BLANK = '........................'
@@ -236,10 +236,17 @@ const HAT: Record<SlotName, string[]> = {
 
 type Stamp = [number, number, string[]]
 type Line = [number, number, number, number, string]
-type Prop = { stamp?: Stamp[]; line?: Line[]; hand?: [number, number]; arm?: number }
+// `frames` are drawn over the prop, one per step of its loop while working; frame 0 is the still.
+type Prop = { stamp?: Stamp[]; line?: Line[]; hand?: [number, number]; arm?: number; frames?: Stamp[][]; step?: number }
+
+// The laptop's code lines, scrolling up one row per frame through its six-row screen.
+const CODE = ['nCCnCCCnn', 'nnnnnnnnn', 'nCCCCnnnn', 'nnnnnCCCn', 'nnnnnnnnn', 'nnCCCnCCn']
+// A glint sweeping across the lens now and then: frames 1-3 of six.
+const GLINT: [number, number][][] = [[], [[21, 11], [22, 10]], [[21, 13], [22, 12], [23, 11], [24, 10]], [[23, 13], [24, 12]], [], []]
 const PROP: Record<SlotName, Prop> = {
   oracle: {
-    stamp: [[23, 1, ['..S..', '.SSS.', 'SSSSS', '.SSS.', '..S..']], [20, 2, ['S']], [26, 8, ['S']]],
+    // S twinkles, Z (the small stars) half a beat later.
+    stamp: [[23, 1, ['..S..', '.SSS.', 'SSSSS', '.SSS.', '..S..']], [20, 2, ['Z']], [26, 8, ['Z']]],
     line: [[19, 14, 24, 6, 'N']],
     hand: [18, 13],
   },
@@ -247,6 +254,8 @@ const PROP: Record<SlotName, Prop> = {
     stamp: [[19, 8, ['..kkk..', '.kaaak.', 'kaaaaak', 'kwaaaak', 'kwaaaak', '.kaaak.', '..kkk..']]],
     line: [[19, 15, 17, 17, 'N']],
     hand: [17, 16],
+    frames: GLINT.map(f => f.map(([x, y]): Stamp => [x, y, ['W']])),
+    step: 0.35,
   },
   librarian: {
     stamp: [[19, 10, ['qqqqqqq', 'qrrrrrw', 'qrYYYrw', 'qrrrrrw', 'qrYYrrw', 'qrrrrrw', 'qqqqqqq']]],
@@ -265,6 +274,8 @@ const PROP: Record<SlotName, Prop> = {
       'HHHHHHHHHHHHH',
       'hhhhhhhhhhhhh',
     ]]],
+    frames: CODE.map((_, k) => [[17, 9, CODE.map((_, j) => CODE[(k + j) % CODE.length])]]),
+    step: 0.3,
   },
   designer: {
     stamp: [[24, 3, ['.CC.', 'CCCC', 'CCCC', '.HH.', '.HH.']]],
@@ -290,8 +301,8 @@ const PROP: Record<SlotName, Prop> = {
   },
 }
 
-// The 30 x 26 character grid; `legB` selects the second walking pose.
-function grid(role: SlotName, mood: Mood, legB: boolean): string[][] {
+// The 30 x 26 character grid; `legB` selects the second walking pose, `fx` the prop's frame.
+function grid(role: SlotName, mood: Mood, legB: boolean, fx = 0): string[][] {
   const g = Array.from({ length: IH }, () => Array<string>(IW).fill('.'))
   const px = (x: number, y: number, c: string) => { if (g[y]?.[x] !== undefined) g[y][x] = c }
   const rect = (x: number, y: number, w: number, h: number, c: string) => {
@@ -327,6 +338,7 @@ function grid(role: SlotName, mood: Mood, legB: boolean): string[][] {
   const eye = (x: number) => (mood === 'off' ? rect(x, 12, 3, 1, 'K') : rect(x, 11, 2, 3, 'K'))
   eye(7); eye(13)
   p.stamp?.forEach(([x, y, rows]) => stamp(x, y, rows))
+  p.frames?.[fx]?.forEach(([x, y, rows]) => stamp(x, y, rows))
   p.line?.forEach(([a, b, c, d, ch]) => line(a, b, c, d, ch))
   if (p.hand) {
     const [hx, hy] = p.hand
@@ -339,7 +351,7 @@ function grid(role: SlotName, mood: Mood, legB: boolean): string[][] {
   for (let j = 0; j < H; j++) for (let i = 0; i < W; i++) {
     if (out[j][i] !== '.') continue
     const n = [out[j - 1]?.[i], out[j + 1]?.[i], out[j]?.[i - 1], out[j]?.[i + 1]]
-    if (n.some(c => c && c !== '.' && c !== 'X' && c !== 'S' && c !== 'z')) out[j][i] = 'X'
+    if (n.some(c => c && c !== '.' && c !== 'X' && c !== 'S' && c !== 'Z' && c !== 'z')) out[j][i] = 'X'
   }
   return out
 }
@@ -348,35 +360,60 @@ const rectAt = (x: number, y: number, fill: string) =>
   `<rect x="${x}" y="${y}" width="1.03" height="1.03" fill="${fill}"/>`
 
 export function clawdSvg(role: SlotName, mood: Mood, height = 52): string {
-  const a = grid(role, mood, false)
-  const b = grid(role, mood, true)
   const color = (ch: string) => {
     const c = PAL[ch] ?? '#ff00ff'
     return mood === 'off' ? dim(c, 0.5, 27) : c
   }
-  const base: string[] = []
-  const poseA: string[] = []
-  const poseB: string[] = []
-  const isWork = mood === 'work'
+  const head = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${(height * W) / H}" height="${height}" shape-rendering="crispEdges">`
+  const a = grid(role, mood, false)
+  if (mood !== 'work') {
+    const still: string[] = []
+    for (let j = 0; j < H; j++) for (let i = 0; i < W; i++) if (a[j][i] !== '.') still.push(rectAt(i, j, color(a[j][i])))
+    return `${head}${still.join('')}</svg>`
+  }
+  // Working: the legs alternate (la, lb), the stars twinkle (tw, tw2) and the prop's frames loop (fx).
+  const b = grid(role, mood, true)
+  const p = PROP[role]
+  const fx = (p.frames ?? []).map((_, k) => grid(role, mood, false, k))
+  const layer: Record<string, string[]> = { base: [], la: [], lb: [], tw: [], tw2: [] }
+  const frames = fx.map((): string[] => [])
   for (let j = 0; j < H; j++) for (let i = 0; i < W; i++) {
     const ca = a[j][i]
     const cb = b[j][i]
-    if (!isWork || ca === cb) {
-      if (ca !== '.') base.push(rectAt(i, j, color(ca)))
-      continue
+    if (ca !== cb) {
+      if (ca !== '.') layer.la.push(rectAt(i, j, color(ca)))
+      if (cb !== '.') layer.lb.push(rectAt(i, j, color(cb)))
+    } else if (fx.some(g => g[j][i] !== ca)) {
+      // The still sits under the frames too, so seams between scaled cells never show the background.
+      if (ca !== '.') layer.base.push(rectAt(i, j, color(ca)))
+      fx.forEach((g, k) => { if (g[j][i] !== '.') frames[k].push(rectAt(i, j, color(g[j][i]))) })
+    } else if (ca !== '.') {
+      layer[ca === 'S' ? 'tw' : ca === 'Z' ? 'tw2' : 'base'].push(rectAt(i, j, color(ca)))
     }
-    if (ca !== '.') poseA.push(rectAt(i, j, color(ca)))
-    if (cb !== '.') poseB.push(rectAt(i, j, color(cb)))
   }
-  const head = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${(height * W) / H}" height="${height}" shape-rendering="crispEdges">`
-  if (!isWork) return `${head}${base.join('')}</svg>`
+  const n = frames.length
+  const step = p.step ?? 0.3
   const style =
     '<style>' +
     '@keyframes la{0%{opacity:1}50%{opacity:0}}' +
     '@keyframes lb{0%{opacity:0}50%{opacity:1}}' +
+    '@keyframes tw{0%{opacity:1}50%{opacity:.3}100%{opacity:1}}' +
     '.la{animation:la .5s steps(1,end) infinite}' +
     '.lb{animation:lb .5s steps(1,end) infinite}' +
-    '@media (prefers-reduced-motion: reduce){.la,.lb{animation: none}.lb{opacity:0}}' +
+    '.tw{animation:tw 1.2s steps(1,end) infinite}' +
+    '.tw2{animation:tw 1.2s steps(1,end) -.6s infinite}' +
+    (n
+      ? `@keyframes fx{0%{opacity:1}${+(100 / n).toFixed(3)}%,100%{opacity:0}}` +
+        `.fx{animation:fx ${+(n * step).toFixed(3)}s steps(1,end) infinite}` +
+        frames.map((_, k) => `.f${k}{animation-delay:${k ? -+((n - k) * step).toFixed(3) : 0}s}`).join('')
+      : '') +
+    '@media (prefers-reduced-motion: reduce){.la,.lb,.tw,.tw2{animation:none}.lb{opacity:0}.fx{animation:none;opacity:0}.f0{opacity:1}}' +
     '</style>'
-  return `${head}${style}${base.join('')}<g class="la">${poseA.join('')}</g><g class="lb">${poseB.join('')}</g></svg>`
+  const group = (cls: string, rects: string[]) => (rects.length ? `<g class="${cls}">${rects.join('')}</g>` : '')
+  return (
+    head + style + layer.base.join('') +
+    group('la', layer.la) + group('lb', layer.lb) + group('tw', layer.tw) + group('tw2', layer.tw2) +
+    frames.map((r, k) => group(`fx f${k}`, r)).join('') +
+    '</svg>'
+  )
 }

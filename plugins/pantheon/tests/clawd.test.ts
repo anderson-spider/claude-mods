@@ -167,3 +167,32 @@ test('a pen hangs from the orchestrator clipboard', () => {
   const g = pixels('orchestrator', 'idle', 0)
   expect(g.slice(9, 11).every(row => row[14]?.toUpperCase() === PEN)).toBe(true)
 })
+
+const groups = (svg: string) => [...svg.matchAll(/<g class="([^"]+)">(.*?)<\/g>/g)].map(m => ({ cls: m[1], body: m[2] }))
+
+test('clawdSvg: the held objects move only while working (stars, laptop screen, lens glint)', () => {
+  const oracle = groups(clawdSvg('oracle', 'work'))
+  for (const cls of ['tw', 'tw2']) {
+    const g = oracle.find(x => x.cls === cls)
+    expect(g !== undefined && g.body.toUpperCase().includes('#FFF1A8')).toBe(true)
+  }
+  for (const role of ['fixer', 'explorer'] as const) {
+    const frames = groups(clawdSvg(role, 'work')).filter(g => g.cls.split(' ').includes('fx'))
+    expect(frames.length >= 3).toBe(true)
+    expect(new Set(frames.map(f => f.body)).size >= 3).toBe(true)
+    expect(frames[0].cls.split(' ')).toContain('f0')
+  }
+  for (const role of ['orchestrator', 'librarian', 'designer', 'council'] as const) {
+    expect(groups(clawdSvg(role, 'work')).map(g => g.cls).sort()).toEqual(['la', 'lb'])
+  }
+  for (const role of ROLE_ORDER) for (const mood of ['idle', 'off'] as Mood[]) {
+    expect(clawdSvg(role, mood).includes('<g')).toBe(false)
+  }
+})
+
+test('clawdSvg: reduced motion stops the objects and shows their first frame', () => {
+  const svg = clawdSvg('fixer', 'work')
+  const media = svg.slice(svg.indexOf('prefers-reduced-motion'))
+  for (const cls of ['.fx', '.tw', '.tw2', '.la', '.lb']) expect(media.includes(cls)).toBe(true)
+  expect(/\.fx\{animation:none;opacity:0\}\.f0\{opacity:1\}/.test(media)).toBe(true)
+})
