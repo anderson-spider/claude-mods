@@ -1,8 +1,8 @@
 import type { Engine, PantheonConfig, Role, Sandbox } from './types'
 
-export const ROLES: readonly Role[] = ['explorer', 'librarian', 'fixer', 'oracle', 'designer', 'git']
+export const ROLES: readonly Role[] = ['explorer', 'librarian', 'executor', 'oracle', 'designer', 'git']
 export const ROLE_SANDBOX: Record<Role, Sandbox> = {
-  explorer: 'read-only', librarian: 'read-only', fixer: 'workspace-write',
+  explorer: 'read-only', librarian: 'read-only', executor: 'workspace-write',
   oracle: 'read-only', designer: 'workspace-write', git: 'workspace-write',
 }
 
@@ -24,7 +24,7 @@ export const BUILTIN_PROFILES: Record<'claude' | 'codex' | 'mixed', ProfileEntri
     agents: {
       explorer: { engine: 'claude', model: 'haiku' },
       librarian: { engine: 'claude', model: 'haiku' },
-      fixer: { engine: 'claude', model: 'sonnet' },
+      executor: { engine: 'claude', model: 'sonnet' },
       oracle: { engine: 'claude', model: 'opus' },
       designer: { engine: 'claude', model: 'sonnet' },
       git: { engine: 'claude', model: 'haiku' },
@@ -38,7 +38,7 @@ export const BUILTIN_PROFILES: Record<'claude' | 'codex' | 'mixed', ProfileEntri
     agents: {
       explorer: { engine: 'codex', model: 'gpt-6-luna', effort: 'high' },
       librarian: { engine: 'codex', model: 'gpt-6-luna', effort: 'high' },
-      fixer: { engine: 'codex', model: 'gpt-6.1-sol', effort: 'high' },
+      executor: { engine: 'codex', model: 'gpt-6.1-sol', effort: 'high' },
       oracle: { engine: 'codex', model: 'gpt-6-astra', effort: 'high' },
       designer: { engine: 'codex', model: 'gpt-6.1-sol', effort: 'high' },
       git: { engine: 'codex', model: 'gpt-6-luna', effort: 'low' },
@@ -52,7 +52,7 @@ export const BUILTIN_PROFILES: Record<'claude' | 'codex' | 'mixed', ProfileEntri
     agents: {
       explorer: { engine: 'codex', model: 'gpt-6-luna', effort: 'high' },
       librarian: { engine: 'codex', model: 'gpt-6-luna', effort: 'high' },
-      fixer: { engine: 'codex', model: 'gpt-6.1-sol', effort: 'high' },
+      executor: { engine: 'codex', model: 'gpt-6.1-sol', effort: 'high' },
       oracle: { engine: 'claude', model: 'opus' },
       designer: { engine: 'claude', model: 'sonnet' },
       git: { engine: 'codex', model: 'gpt-6-luna', effort: 'low' },

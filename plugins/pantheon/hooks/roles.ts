@@ -132,7 +132,7 @@ export function nativeAgentSpecs(config: PantheonConfig, prompts: RolePrompts): 
   const descriptions: Record<Role, string> = {
     explorer: 'Pantheon codebase recon that returns compressed context.',
     librarian: 'Pantheon research on external docs and APIs.',
-    fixer: 'Pantheon bounded implementation from a complete specification.',
+    executor: 'Pantheon bounded implementation from a complete specification.',
     oracle: 'Analyze architecture, debug difficult problems and review technical decisions.',
     designer: 'Design and implement interfaces and user experiences.',
     git: 'Perform commit, squash, push and PR/MR after validation from the orchestrator brief.',

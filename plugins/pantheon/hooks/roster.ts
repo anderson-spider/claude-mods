@@ -1,7 +1,7 @@
 import { ROLES } from './defaults'
 import type { Engine, Job, Native, PantheonConfig, SessionInfo } from './types'
 
-export const ROLE_ORDER = ['orchestrator', 'explorer', 'librarian', 'fixer', 'oracle', 'designer', 'git', 'council'] as const
+export const ROLE_ORDER = ['orchestrator', 'explorer', 'librarian', 'executor', 'oracle', 'designer', 'git', 'council'] as const
 export type SlotName = (typeof ROLE_ORDER)[number]
 export type { Engine } from './types'
 export type RoundView = { startedAt: number; endedAt?: number; status: string }
