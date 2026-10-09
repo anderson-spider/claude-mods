@@ -1,0 +1,53 @@
+# pantheon
+
+Makes the main session an orchestrator in the style of oh-my-opencode-slim. Profiles (`claude` by default, `codex`, `mixed`, or custom profiles) choose the engine, model and effort for each of the five roles and every council seat.
+
+IMPORTANT: prompts and panel modules include third-party work. Keep `LICENSE` and the credits and full license text in `NOTICE`.
+
+## Engines and roles
+
+- Roles and seats on Codex run through `delegate`, `delegate_result` and `delegate_cancel` on `codex exec --json`.
+- Roles and seats on Claude are registered as native `pantheon:<role>` or `pantheon:councillor-<seat>` agents with `$.agent.register`, and hidden by an `agent.offer` guard when disabled or moved to Codex.
+- `codex.ts` builds argv and parses JSONL.
+- `jobs.ts` runs foreground and background jobs and prompts the session when one ends.
+- `roles.ts` and `workspace.ts` resolve the role, sandbox and `cwd` inside the repository root by `realPath`.
+
+## Config and profiles
+
+- `config.ts` resolves built-in, `~/.claude/pantheon.json` and `<repo>/.claude/pantheon.json` layers. Top-level `profile` selects the profile, `profiles` holds engine/model/effort, and prompts and sandbox settings stay at the top level.
+- The project selection overrides the user selection. `sandboxCap` and `noNetwork` merge to the most restrictive, and Codex role sandboxes can only narrow from their defaults.
+- Legacy engine/model/effort fields under top-level roles and seats are rejected with migration paths. A top-level `model` stays an unknown field.
+- `models.ts` validates engine/model pairs across every merged profile.
+- The active profile is also a `userConfig` field (`pantheon.profile`, shown in `/config`). `register` passes `options.profile` to `loadConfig` as the lowest explicit layer (origin `settings`). A `config.set` hook refuses names outside the profiles the JSON layers define, and any change while the JSON is invalid. The panel selector (`pane.tsx`, locked when a JSON layer sets `profile`) calls `$.config.set` on the same field.
+
+## Tracking and state
+
+- `tracking.ts` holds pure reducers for native subagents and the main session, plus tool-input redaction.
+- The tracking hooks (`turn.start`, `turn.step`, `turn.complete`, `session.measure`, `agent.spawn`, `tool.call`) only watch and pass events on unchanged.
+- `pantheon.natives`, `pantheon.session` (with the ledger cost) and `pantheon.view` (the selected tab and folded groups) join `pantheon.jobs` in `$.state`, written through queues that keep only the latest pending snapshot.
+- The panel shows one toast per session the first time saving the panel state (agents, session or selected tab) fails. Jobs keep their own warning.
+- `register.tsx` builds host closures in each hook because `$` cannot be stored.
+
+## Roster
+
+`roster.ts` joins all five roles on either engine and council seats into seven fixed slots (orchestrator, explorer, librarian, fixer, oracle, designer, council), with "other agents" when present. Slot engines follow the effective config and show `mixed` when an active instance or the latest ended one used a different engine. Cards list every ended instance, newest first.
+
+## Panel
+
+The panel opens at session start. `/pantheon close` closes it; `cancel <jobId>`, `config` and `doctor` keep their existing behavior. There is no panel configuration; rate limits, repository, branch and cache stay in hud.
+
+- `pane.tsx` draws the Agents and Jobs tabs. Jobs keeps its read-only "Claude agent rounds" group.
+- Desktop: HUD-colored segments with static SVG backplates, native text and buttons, fixed numeric slots, identity-first agent rows with a mascot each, and a pane-width "Last 15 minutes" SVG timeline.
+- Docked and inline mini: they retain their original theme, bordered groups, task-first rows and compact quadrant sprites.
+- `rail.tsx`, `elapsed.tsx` and `mascot.tsx` are surface modules for packet rails with steady state glyphs, live clocks and the animated mascot. Rail timers run only on active lines.
+
+## Mascot
+
+`clawd.ts` is the pure mascot art: an independently drawn terminal Clawd with a shared 9 x 3 body and one row of role-specific headwear, packed into 9 x 4 quadrant runs in both terminal sizes, plus a separate shaded desktop sprite as an SVG string whose held objects animate while working.
+
+The mascot's 250 ms frame timer runs only while the agent works, restarting a two-position footstep sequence on each work period while the hat, eyes, arms and body stay fixed. Idle and the dimmed off state use the default pose, as does the colored no-Client fallback.
+
+## Prompts and skills
+
+- `prompts/` holds the orchestrator section, role prompts and Council Mode.
+- `skills/` holds `grill`, `execute`, `debug` and `finish` (`<name>/SKILL.md`). `scripts/check-consistency.mjs` checks their frontmatter.
