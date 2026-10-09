@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { AgentSpec, ProcessRunInit, ProcessRunResult, Register } from 'claude-code'
+import type { AgentSpec, Hook, ProcessRunInit, ProcessRunResult, Register } from 'claude-code'
 
 import type { Job, Native, SessionInfo } from '../types'
 import { buildArgv, createJsonlReader } from './codex'
@@ -14,6 +14,13 @@ import type { PingResult, PingTarget } from './ping'
 import { PANE_ID, configReport, doctorReport, drawPanel, statusText } from './pane'
 import { isOffered, nativeAgentSpecs, resolveCodexCall, usesCodex } from './roles'
 import { buildRoster } from './roster'
+import { agentsFromState, agentsKey } from './strip/agents'
+import { renderStrip } from './strip/render'
+import {
+  adoptSharedLimits, cacheEnvFrom, configureStrip, endStrip, noteCompact, noteMeasure,
+  noteStep, noteStripSpawn, noteStripTool, noteStripTurnStart, noteTurnComplete, startStrip, tickStrip,
+} from './strip/state'
+import type { StripHost } from './strip/state'
 import {
   DEFAULT_SESSION, DEFAULT_VIEW, completed, describeTool, markNativesLost,
   normalizeNatives, normalizeSession, normalizeView, sessionCompleted, sessionMeasured, viewToggled,
@@ -49,6 +56,25 @@ type TrackingIo = {
 }
 
 const PING_TIMEOUT_MS = 60_000
+
+/** The `$` a hook receives; it cannot be stored, so every hook builds what it needs from its own. */
+type Dollar = Parameters<Hook<'session.start'>>[0]
+
+/** Host access for the above-prompt strip modules, built from the hook's `$`. */
+function stripHost($: Dollar): StripHost {
+  return {
+    now: () => $.clock.now(),
+    sessionId: () => $.session.id(),
+    cwd: () => $.session.cwd(),
+    model: () => $.session.model(),
+    run: (argv, init) => $.process.run(argv, init),
+    usage: () => $.session.usage(),
+    storeKeys: () => $.store.keys(),
+    storeGet: key => $.store.get(key),
+    storeSet: (key, value) => $.store.set(key, value),
+    storeDelete: key => $.store.delete(key),
+  }
+}
 
 /** True when an agent message in Codex's JSONL output contains `pong <name>`. */
 function saidPong(stdout: string, name: string): boolean {
@@ -136,6 +162,12 @@ const nativesAtom = atom({ plugin: 'pantheon', key: 'natives' } as const, [] as 
 const sessionAtom = atom({ plugin: 'pantheon', key: 'session' } as const, DEFAULT_SESSION)
 const viewAtom = atom({ plugin: 'pantheon', key: 'view' } as const, DEFAULT_VIEW)
 
+/** The agents the strip folds into its last row: every running job and native. */
+async function stripAgents($: Dollar, now: number) {
+  const [list, tracked] = await Promise.all([read($, jobsAtom), read($, nativesAtom)])
+  return agentsFromState(list, normalizeNatives(tracked), now)
+}
+
 const DELEGATE_SCHEMA = {
   type: 'object',
   properties: {
@@ -188,6 +220,10 @@ export const register: Register = (on, options) => {
   let idSeq = 0
   // Último Io vivo: relógio, avisos e estado dos jobs que continuam depois do hook.
   let live: Io | undefined
+  const aboveOn = options.abovePrompt !== false && options.abovePrompt !== 'false'
+  configureStrip({ paceStart: options.paceStart })
+  let minuteTicker: { cancel: () => void } | undefined
+  let stripTicker: { cancel: () => void } | undefined
   let jobs: ReturnType<typeof createJobs> | undefined
 
   let warnedWrite = false
@@ -442,6 +478,48 @@ export const register: Register = (on, options) => {
     try {
       await $.ui.open({ id: PANE_ID, title: 'Pantheon', columns: 72, rows: 8, closeOnEscape: true })
     } catch { /* A surface without panes must still start the session. */ }
+    minuteTicker?.cancel()
+    stripTicker?.cancel()
+    if (aboveOn) {
+      try {
+        // Names stay literal: the engine lists the variables a module reads.
+        const readEnv = async (get: () => Promise<string | undefined>) => { try { return (await get()) || '' } catch { return '' } }
+        const env = {
+          off: await readEnv(() => $.env.get('DISABLE_PROMPT_CACHING')),
+          force5m: await readEnv(() => $.env.get('FORCE_PROMPT_CACHING_5M')),
+          ttl: await readEnv(() => $.env.get('CLAUDE_CODE_PROMPT_CACHE_TTL')),
+          enable1h: await readEnv(() => $.env.get('ENABLE_PROMPT_CACHING_1H')),
+        }
+        await startStrip(stripHost($), cacheEnvFrom(env))
+        // Every minute: elapsed time moves on, and another session may have measured something newer.
+        minuteTicker = $.clock.every(60_000, async () => {
+          try { await adoptSharedLimits(stripHost($)) } catch { /* The next tick tries again. */ }
+          $.ui.invalidate('ui.render')
+        })
+        // Every second the agents' clocks move while any runs; the cache countdown, git and model
+        // readings are checked every tenth tick, and a change in the agents redraws at once.
+        let ticks = 0
+        let lastKey = ''
+        // A slow tick (git readings) must not overlap with the next one.
+        let isTicking = false
+        stripTicker = $.clock.every(1000, async () => {
+          if (isTicking) return
+          isTicking = true
+          try {
+            ticks++
+            const now = await $.clock.now()
+            const agents = await stripAgents($, now)
+            const key = agentsKey(agents)
+            const agentsChanged = key !== lastKey
+            lastKey = key
+            const due = ticks % 10 === 0
+            const redraw = due ? await tickStrip(stripHost($), agentsChanged) : agentsChanged
+            if (redraw || agents.length > 0) $.ui.invalidate('ui.render')
+          } catch { /* A failed tick leaves the strip as it was. */ } finally { isTicking = false }
+        })
+        $.ui.invalidate('ui.render')
+      } catch { /* The strip must not interrupt session setup. */ }
+    }
     return started
   })
 
@@ -461,6 +539,8 @@ export const register: Register = (on, options) => {
       sessionQueue.push(session)
       await sessionQueue.flushed()
     } catch { /* Tracking never changes the turn. */ }
+    // turn.start is the main loop's: the last-turn receipt's counters begin again.
+    if (aboveOn) { try { noteStripTurnStart() } catch { /* The strip never changes the turn. */ } }
     return next(e)
   })
 
@@ -484,7 +564,12 @@ export const register: Register = (on, options) => {
         nativesQueue.push(natives)
       } catch { /* Tracking never changes the stream. */ }
     }
+    let at = 0
+    if (aboveOn && !e.agentId) { try { at = await $.clock.now() } catch { /* The strip falls back to 0. */ } }
     const result = yield* next(e)
+    if (aboveOn && !e.agentId) {
+      try { if (noteStep(e, result, at)) $.ui.invalidate('ui.render') } catch { /* The strip never changes the step. */ }
+    }
     try {
       await ensureTracking(io)
       if (!e.agentId) {
@@ -523,7 +608,32 @@ export const register: Register = (on, options) => {
         await nativesQueue.flushed()
       }
     } catch { /* Tracking never changes the completion result. */ }
+    if (aboveOn && !e.agentId) {
+      try {
+        await noteTurnComplete(stripHost($), { durationMs: e.durationMs, reason: e.reason })
+        $.ui.invalidate('ui.render')
+      } catch { /* No reading this turn: the strip keeps the previous one. */ }
+    }
     return done
+  })
+
+  // A compaction of the main conversation: the context drops now, not at the end of the next prompt.
+  on('session.compact', async ($, e, next) => {
+    const result = await next(e)
+    if (aboveOn) {
+      try { if (await noteCompact(stripHost($), e, result)) $.ui.invalidate('ui.render') } catch { /* The strip catches up at the next turn. */ }
+    }
+    return result
+  })
+
+  on('session.end', async (_$, e, next) => {
+    // A real end (exit, or process stopped); /clear, /resume and disconnect keep the tickers.
+    if (e.reason === 'prompt_input_exit' || e.reason === 'other') {
+      minuteTicker?.cancel()
+      stripTicker?.cancel()
+      endStrip()
+    }
+    return next(e)
   })
 
   on('session.measure', async ($, e, next) => {
@@ -541,11 +651,19 @@ export const register: Register = (on, options) => {
       sessionQueue.push(session)
       await sessionQueue.flushed()
     } catch { /* Tracking never changes the measurement result. */ }
+    if (aboveOn) {
+      try {
+        await noteMeasure(stripHost($), e)
+        $.ui.invalidate('ui.render')
+      } catch { /* The strip never changes the measurement. */ }
+    }
     return next(e)
   })
 
   on('agent.spawn', async ($, e, next) => {
     const started = await next(e)
+    // The receipt counts the subagents the main loop spawned.
+    if (aboveOn && !e.parentAgentId && started.agentId) { try { noteStripSpawn() } catch { /* The strip never changes the spawn. */ } }
     try {
       if (started.agentId) {
         const io: TrackingIo = {
@@ -585,7 +703,10 @@ export const register: Register = (on, options) => {
         }
       }
     } catch { /* Tracking must not prevent any tool, including delegate tools. */ }
-    return next(e)
+    const result = await next(e)
+    // The receipt counts the main loop's edits and failed tools; the result goes back as it came.
+    if (aboveOn && !e.agentId) { try { noteStripTool(String(e.tool), result) } catch { /* The strip never changes the call. */ } }
+    return result
   })
 
   on('tool.call', { tool: TOOLS.delegate }, async ($, e, next) => {
@@ -787,6 +908,22 @@ export const register: Register = (on, options) => {
         if ('error' in done) $.ui.toast(`pantheon: ${done.error}`)
       },
     }) as never
+  })
+
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    const below = await next(e)
+    const props = e.props ?? (e as never as typeof e.props)
+    if (!aboveOn || props?.hasSurvey) return below
+    try {
+      const now = await $.clock.now()
+      return renderStrip({
+        surface: e.surface, columns: props?.bodyColumns ?? 80, now, isWorking: props?.isWorking === true,
+        agents: await stripAgents($, now), below,
+      }, { elements: $.ui.resolve(e) }) as never
+    } catch {
+      // A failed read draws nothing of ours; what is below stays.
+      return below
+    }
   })
 
   on('prompt.compose', async ($, e, next) => {

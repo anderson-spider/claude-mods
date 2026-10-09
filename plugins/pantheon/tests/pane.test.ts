@@ -113,7 +113,7 @@ describe('pane', () => {
     await start($)
     const ui = await mountPane($, surface, { rows: 70 })
     const working = (await ui.findAll({ type: 'Text' })).filter(n => String(n.text).trim() === 'working')
-    expect(working).toHaveLength(2)
+    expect(working).toHaveLength(surface === 'desktop' ? 1 : 2) // desktop: the header's badge only
     for (const node of working) expect((node as unknown as { props: { color: string } }).props.color)
       .toBe(surface === 'desktop' ? '#4fb383' : 'success')
     expect(await texts(ui)).not.toContain('idle')
@@ -457,12 +457,48 @@ describe('pane', () => {
     expect(svgs.some(p => p.alt === 'card background' && p.source.includes(`stroke="${rgba(SECTION_COLOR.idle, 0.75)}"`))).toBe(true)
     expect((await props('pill-toggle-idle')).width).toBe(10.5)
     expect(await ui.find({ key: 'idle-explorer' })).toBeDefined()
-    expect(await texts(ui)).toContain('—') // a role that never ran
+    expect((await texts(ui)).filter(x => x === '—')).toHaveLength(4) // only the Session readings; a role that never ran leaves its time and task blank
     expect((await texts(ui)).some(t => t.includes('▎') || t.includes('━'))).toBe(false)
     const dividers = svgs.filter(p => p.alt === 'divider')
     expect(dividers.length).toBeGreaterThan(0)
     for (const p of dividers) expect(p).toMatchObject({ width: 640, height: 1 })
     expect(svgs.filter(p => p.alt === 'idle').every(p => !p.isInteractive)).toBe(true)
+  })
+
+  t('desktop: cards never overlap, they have an explicit height and a gap, and no rails', async ($, on) => {
+    world(on)
+    seed(on, busy())
+    await start($)
+    const ui = await mountPane($, 'desktop', { columns: 86, rows: 80 })
+    expect(await railsOf(ui)).toEqual([])
+    for (const key of ['session', 'running-rows', 'idle-rows']) {
+      const p = (await ui.find({ key }) as unknown as { props: { height?: number; marginBottom?: number } }).props
+      expect(typeof p.height).toBe('number')
+      expect(p.marginBottom).toBeGreaterThan(0)
+    }
+  })
+
+  t('desktop: the Collapse button sits in the card header row, not on the border', async ($, on) => {
+    world(on)
+    await start($)
+    const ui = await mountPane($, 'desktop', { columns: 86, rows: 70 })
+    const row = await ui.find({ key: 'idle-rows-head' }) as unknown as { props: Record<string, unknown>; children?: Node[] } | undefined
+    expect(row).toBeDefined()
+    expect(row!.props.position).toBeUndefined()
+    const toggle = await ui.find({ key: 'idle-rows-toggle' }) as unknown as { props: Record<string, unknown> }
+    expect(toggle.props.position).toBeUndefined()
+  })
+
+  t('desktop: idle role names stay readable and the Agents footer counts and pluralizes', async ($, on) => {
+    world(on)
+    await start($)
+    const ui = await mountPane($, 'desktop', { columns: 86, rows: 70 })
+    const names = (await ui.findAll({ type: 'Text' })).filter(n => String(n.text).trim() === 'explorer')
+      .map(n => (n as unknown as { props: { color: string } }).props.color)
+    expect(names).toContain(ROLE_COLOR.explorer) // full role color, not mixed toward the panel
+    const all = await texts(ui)
+    expect(all).toContain('agents')
+    expect(all).toContain('8') // the orchestrator plus the seven rows of the Agents card
   })
 
   t('desktop session, groups and timeline share the pane inset and resize with columns', async ($, on) => {
@@ -591,11 +627,11 @@ describe('pane', () => {
     expect((await clients(mini)).some(c => String(c.module).includes('elapsed'))).toBe(true)
     await release()
     const desk = await mountPane($, 'desktop')
-    expect((await railsOf(desk)).length).toBeGreaterThan(0)
+    expect(await railsOf(desk)).toEqual([]) // desktop's rail is the SVG timeline
     const dots = (await desk.findAll({ type: 'Svg' })).map(n => (n as unknown as {
       props: { source: string; alt: string; isInteractive?: boolean; width: number; height: number }
     }).props).filter(s => s.alt === 'running')
-    expect(dots.length).toBe(2) // header and session pill
+    expect(dots.length).toBe(1) // the header; the session card repeats no badge
     for (const dot of dots) {
       expect(dot.isInteractive).toBeUndefined()
       expect(dot.source).not.toContain('<animate')
@@ -961,6 +997,7 @@ describe('pane', () => {
     for (const surface of SURFACES) {
       const ui = await mountPane($, surface, { rows: 70 })
       const rails = await railsOf(ui)
+      if (surface === 'desktop') { expect(rails).toEqual([]); await release(); continue }
       expect(rails.length).toBeGreaterThan(0)
       for (const rail of rails) expect(rail.props).toMatchObject({ active: false, dim: '#3b4354' })
       await release()
@@ -979,7 +1016,7 @@ describe('pane', () => {
     }
     const timeline = svgs.find(s => s.alt.startsWith('Last 15 minutes'))!
     expect(timeline.source).toContain(`stroke="${rgba(SECTION_COLOR.timeline, 0.75)}"`)
-    expect((await railsOf(ui)).map(c => c.props.color)).toEqual([SECTION_COLOR.running, SECTION_COLOR.idle, SECTION_COLOR.timeline, SECTION_COLOR.log])
+    expect(await railsOf(ui)).toEqual([])
   })
 
   t('docked draws the Last 15 minutes timeline as lanes of minute cells while there is room', async ($, on) => {

@@ -36,6 +36,48 @@ tabs and docked, inline mini and desktop layouts. The permission gate, model
 loops, turn receipt, session log, architect timeline and configuration were
 not ported. Tracking hooks still pass every event on unchanged.
 
+Above-prompt strip
+
+The strip's modules (hooks/strip/) are adapted from hud, an earlier plugin of
+this marketplace that is now removed. hud was built on the projects below.
+
+The hooks/strip/ files that carry the "Adapted from hud" header are under the
+Apache License, Version 2.0.
+
+The notices of the projects hud was built on, as they came:
+
+claude-mods
+Copyright 2026 Eric Cologni
+
+hud includes code adapted from the Token Weather example mod
+(context weather, context tokens, recent turns chart) in
+https://github.com/anthropics/claude-code-playground
+Copyright 2026 Anthropic PBC, licensed under the Apache License, Version 2.0.
+
+It is adapted from plugins/token-weather-usage 3.10.7 of
+https://github.com/augiefra/claude-mods (Apache License, Version 2.0) by
+anderson-spider. The Apache License, Version 2.0 text is in LICENSE-APACHE.
+
+Changes: moved into pantheon as TypeScript; English only (the French labels and
+the language option are gone); the suggested next prompts are removed; an
+agents summary of running Pantheon jobs and native subagents replaces the
+subagents count; the limits' bars are block characters in the terminal and the
+app, with a mark and the gap in points against the clock beside each limit
+(ahead, behind, on pace) and the Pace start option; the cache shows its time
+left with the x1.25 write multiplier for the 5-minute lifetime; amber #e0a030
+in the terminal; a speed segment in the info row.
+
+The 5-hour and 7-day usage gauges were written for hud after usage-meter by
+HolyGrail (https://github.com/HolyGrail/claude-mods/tree/main/plugins/usage-meter):
+same idea (gauges with an elapsed-time marker, a reading shared across
+sessions), without copying its code.
+
+The prompt cache block (share of the prompt read from the cache, time left
+before it lapses, missed and expired states) was written for hud after
+prompt-cache-control by Daniel San (https://github.com/davila7/claude-code-templates):
+same idea (cache usage per request, an inferred lifetime and a countdown),
+without copying its code.
+
 MIT License
 
 Copyright (c) 2026 Stephen Casella

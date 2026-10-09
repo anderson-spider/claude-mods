@@ -28,14 +28,9 @@
       "description": "Lets Claude query and modify the tailnet through the Tailscale API, using TS_API_KEY."
     },
     {
-      "name": "hud",
-      "source": "./plugins/hud",
-      "description": "A usage line above the prompt (context, 5-hour and 7-day limits against the clock, the prompt cache, the subagents running) and suggested next prompts you can pick, in order, into one draft."
-    },
-    {
       "name": "pantheon",
       "source": "./plugins/pantheon",
-      "description": "Makes Claude an orchestrator that delegates to specialist roles on Codex or native Claude agents, chosen per profile, with an auto-opening /pantheon panel for roles, activity and a session log."
+      "description": "Makes Claude an orchestrator that delegates to specialist roles on Codex or native Claude agents, chosen per profile, with an auto-opening /pantheon panel for roles, activity and a session log, and a strip above the prompt with the model, context, prompt cache, usage limits and running agents."
     }
   ]
 }

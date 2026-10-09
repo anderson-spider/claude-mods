@@ -1,7 +1,8 @@
-import { T } from "./constants.mjs";
-import { MINUTE, HOUR, duration, clockTime, short } from "./formatting.mjs";
-import { contextData } from "./context.mjs";
-import { limitData } from "./limits.mjs";
+// Adapted from hud (Apache-2.0), built on Token Weather Usage; see NOTICE and LICENSE-APACHE.
+import { T } from "./constants";
+import { MINUTE, HOUR, duration, clockTime, short } from "./formatting";
+import { contextData } from "./context";
+import { limitData } from "./limits";
 
 // ---------- Prompt cache ----------
 
@@ -37,7 +38,7 @@ export const freshCache = () => ({
   key: "",
 });
 // Environment switches read at session start, after the request state is reset.
-export const cacheData = { ...freshCache(), env: {} };
+export const cacheData: any = { ...freshCache(), env: {} };
 
 export function isOn(value) {
   return /^(1|true|yes|on)$/i.test(String(value).trim());

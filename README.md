@@ -10,8 +10,7 @@ Marketplace of [Claude Code](https://claude.com/claude-code) plugins made by and
 | [chatgpt](plugins/chatgpt) | Lets Claude ask your logged-in ChatGPT, or have it generate an image, in terminal-browser, Claude in Chrome or the Claude desktop app's built-in browser, and saves the result locally. |
 | [codex-computer-use](plugins/codex-computer-use) | Routes native Mac app control through Codex computer use from the ChatGPT app instead of Claude's own computer use, asking before each new app. |
 | [tailscale](plugins/tailscale) | Lets Claude query and modify your tailnet through the Tailscale API. |
-| [hud](plugins/hud) | One line above the prompt (context, 5-hour and 7-day limits against the clock, the prompt cache, the subagents running) and suggested next prompts you can write directly to the prompt box as a draft. |
-| [pantheon](plugins/pantheon) | Makes Claude an orchestrator that delegates to Codex roles (explorer, librarian, fixer) and native Claude agents (oracle, designer, council), with an auto-opening `/pantheon` panel for roles, activity and a session log. |
+| [pantheon](plugins/pantheon) | Makes Claude an orchestrator that delegates to Codex roles (explorer, librarian, fixer) and native Claude agents (oracle, designer, council), with an auto-opening `/pantheon` panel for roles, activity and a session log, and a strip above the prompt with the model, context, prompt cache, usage limits and running agents. |
 
 ## Install
 
@@ -23,7 +22,6 @@ Inside Claude Code, add the marketplace and install the plugin:
 /plugin install chatgpt@spider-claude-mods
 /plugin install codex-computer-use@spider-claude-mods
 /plugin install tailscale@spider-claude-mods
-/plugin install hud@spider-claude-mods
 /plugin install pantheon@spider-claude-mods
 ```
 
@@ -119,17 +117,17 @@ To update the ACL without overwriting someone else's edit: do a `GET /tailnet/-/
 
 `TS_API_KEY` must be a `tskey-api-...` key. An OAuth secret `tskey-client-...` is not valid as a Bearer without a token exchange, which the plugin does not do.
 
-## hud
-
-One line above the prompt, an info line above it (model, effort, speed, folder, branch and changed files) and suggested next prompts above that. The usage line: the context with a weather icon, one bar per recent prompt and the last prompt's change; the 5-hour and 7-day limits as block bars with a mark against the clock (`▲` ahead, `▼` behind, no mark on pace) and the time left; the prompt cache with its time left, yellow near the end and red once expired; and the subagents running. After each answer, up to three likely next prompts: press `1`, `2` or `3` to write that suggestion directly to the prompt box as a draft; the plugin never sends it. Options (`/plugin`): **Pace start**, **Shortest answer to suggest after** and **Suggest skills and slash commands**. It was `token-weather-usage` before 1.0.0 and is built on Token Weather Usage (Eric Cologni, Apache-2.0) and next-steps (Thariq Shihipar, MIT), among others. See [its README](plugins/hud/README.md) and its [NOTICE](plugins/hud/NOTICE).
-
 ## pantheon
 
 The main session delegates to Codex specialists through `delegate` and to native Claude agents through the Agent tool. The `/pantheon` panel opens by itself at session start; `/pantheon` opens or focuses it and `/pantheon close` closes it. The panel keeps seven role slots in order: orchestrator, explorer, librarian, fixer, oracle, designer and council. Parallel instances stack in their role, resumed work shows its rounds, and other subagents appear under "other agents" when present. Each instance shows its model, elapsed time, context percentage and last activity; tokens are in the Session card. A running Codex row has a Cancel button.
 
-The panel docks beside the terminal transcript, uses a mini view when placed inline, and adds a "Last 15 minutes" SVG timeline on desktop. Each section is a card with its own colored border, and an animated rail (110 ms) runs only while there is active work. The docked layout has rails, clocks and the pulse; mini (placed inline) has clocks and the pulse, no rails; desktop has rails and clocks, no pulse. It has no panel configuration; rate limits, repository, branch and cache stay in hud. Its tracking hooks only watch and pass events on unchanged. `/pantheon cancel <jobId>`, `/pantheon config` and `/pantheon doctor` keep their existing behavior. See [its README](plugins/pantheon/README.md) and [NOTICE](plugins/pantheon/NOTICE).
+The panel docks beside the terminal transcript, uses a mini view when placed inline, and adds a "Last 15 minutes" SVG timeline on desktop. Each section is a card with its own colored border, and an animated rail (110 ms) runs only while there is active work. The docked layout has rails, clocks and the pulse; mini (placed inline) has clocks and the pulse, no rails; desktop has clocks and the SVG timeline, no rails and no pulse. The panel has no configuration. Its tracking hooks only watch and pass events on unchanged. `/pantheon cancel <jobId>`, `/pantheon config` and `/pantheon doctor` keep their existing behavior. See [its README](plugins/pantheon/README.md) and [NOTICE](plugins/pantheon/NOTICE).
+
+Since 0.13.0 pantheon also draws an always-on strip above the prompt: a rounded box with the session (model, effort, working or idle, context, prompt cache, session cost, folder, branch, changed files), the 5-hour and 7-day limits as aligned bars against the clock with a pace projection ("100% in 1h40", "~68% at reset"), and a last-turn receipt (duration, agents, edits, errors, cost) that gives way to the running Pantheon jobs and native subagents while they work. Options (`/plugin`): **Above-prompt strip** (`abovePrompt`, on by default; off hides it) and **Pace start** (`paceStart`). The suggested next prompts of the old hud plugin are gone.
 
 flightdeck users: `/plugin uninstall flightdeck`.
+
+hud was absorbed into pantheon in 0.13.0. If hud is still installed, both strips show above the prompt; remove it with `/plugin uninstall hud`.
 
 ## Development
 
