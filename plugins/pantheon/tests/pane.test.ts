@@ -4,6 +4,7 @@ import type { Engine } from 'claude-code/testing'
 
 import { DELEGATE, HOME, RESULT, parse, start, world } from './fixtures/world'
 import { PANE_ID, configReport, doctorReport, statusText, timelineSource } from '../hooks/pane'
+import { clawdLines, clawdSvg } from '../hooks/clawd'
 import { loadConfig } from '../hooks/config'
 import { buildRoster } from '../hooks/roster'
 import type { Slot } from '../hooks/roster'
@@ -86,17 +87,23 @@ const t = (name: string, fn: (...args: Parameters<Parameters<typeof test>[1]>) =
 
 describe('pane', () => {
   for (const surface of SURFACES) {
-    t(`agents tab shows seven slots in order (${surface})`, async ($, on) => {
+    t(`agents tab shows the session, the three groups and every role once (${surface})`, async ($, on) => {
       world(on)
+      seed(on, {
+        jobs: [job({ id: 'pjr', agent: 'fixer', description: 'wire tabs', status: 'running' }), job({ id: 'pjd', agent: 'explorer', status: 'done', description: 'map', endedAt: NOW - 30_000 })],
+        natives: [native()],
+      })
       await start($)
-      const ui = await mountPane($, surface)
-      const names = ['orchestrator', 'explorer', 'librarian', 'fixer', 'oracle', 'designer', 'council']
+      const ui = await mountPane($, surface, { rows: 60 })
       const all = await texts(ui)
-      const at = names.map(name => all.indexOf(name))
+      const at = ['orchestrator', 'Running', 'Finished', 'Planned'].map(x => all.indexOf(x))
       expect(at.every(i => i >= 0)).toBe(true)
       expect(at).toEqual([...at].sort((a, b) => a - b))
+      // fixer and oracle run, explorer finished; librarian, designer and council have not run yet.
+      for (const name of ['explorer', 'librarian', 'fixer', 'oracle', 'designer', 'council']) expect(all).toContain(name)
       expect(await ui.find({ key: 'tab-agents' })).toBeDefined()
       expect(await ui.find({ key: 'tab-jobs' })).toBeDefined()
+      expect(all).toContain('2 running')
     })
 
     t(`an active explorer shows its instance, activity and clock (${surface})`, async ($, on) => {
@@ -111,7 +118,7 @@ describe('pane', () => {
       expect(all).toContain('pj3a')
       expect(all.some(x => x.includes('map pane render tree'))).toBe(true)
       expect(all.some(x => x.includes("rg 'x' plugins/"))).toBe(true)
-      expect(all.some(x => x.includes('in 41.2k · cached 30.1k · out 2.3k'))).toBe(true)
+      expect(all).toContain('43.5k') // input + output of the job, in the stats beside the clock
       expect(all).toContain('1 running')
       // The clock is a Client where the surface has one, else a Text.
       expect((await ui.find({ key: 'clk-pj3a' })) ?? all.find(x => /^\d+:\d\d$/.test(x))).toBeDefined()
@@ -221,13 +228,13 @@ describe('pane', () => {
     expect(((await one.drawn()) as { children?: unknown[] }).children?.length).toBe(1)
   })
 
-  t('roles keep their fixed order when activity changes', async ($, on) => {
+  t('inside a group the roles keep their fixed order', async ($, on) => {
     world(on)
-    seed(on, { natives: [native()] })
+    seed(on, { natives: [native(), native({ id: 'n2', role: 'designer', type: 'pantheon:designer' })], jobs: [job({ id: 'pjf', agent: 'fixer', description: 'x' })] })
     await start($)
     const all = await texts(await mountPane($, 'terminal'))
-    const names = ['orchestrator', 'explorer', 'librarian', 'fixer', 'oracle', 'designer', 'council']
-    const at = names.map(name => all.lastIndexOf(name)) // the last one is the role line, not the delegating chip
+    const running = all.slice(all.indexOf('Running'), all.indexOf('Planned'))
+    const at = ['fixer', 'oracle', 'designer'].map(name => running.indexOf(name))
     expect(at.every(i => i >= 0)).toBe(true)
     expect(at).toEqual([...at].sort((a, b) => a - b))
   })
@@ -236,26 +243,21 @@ describe('pane', () => {
     (await ui.findAll({ type: 'Client' })).map(node => (node as unknown as { props: Record<string, any> }).props)
   const railsOf = async (ui: Mounted) => (await clients(ui)).filter(c => String(c.module).includes('rail'))
 
-  t('docked: rails and pulse; idle roles have a still connector, off roles none, the orchestrator link is lit while a turn runs', async ($, on) => {
+  t('docked: a pulsing dot per running agent and one in the header; planned and finished rows have none', async ($, on) => {
     world(on, { files: { [`${HOME}/.claude/pantheon.json`]: JSON.stringify({ disabledAgents: ['librarian'] }) } })
     seed(on, { natives: [native()], session: { isRunning: true, turnStartedAt: NOW - 5_000 } })
     await start($)
     await command($, 'config')
     const ui = await mountPane($, 'terminal')
     const rails = await railsOf(ui)
-    const glyphs = rails.filter(r => r.props?.glyph)
-    expect(glyphs.length).toBe(5) // oracle lit; explorer, fixer, designer, council still; librarian off has none
-    expect(glyphs.filter(r => r.props.active).length).toBe(1)
-    expect(glyphs.every(r => r.props.isPulse !== false && r.props.isLine !== false)).toBe(true)
-    // The orchestrator link is a solid lit mark, not a one-cell rail whose packets leave it dim at some phases.
-    expect(rails.some(r => r.props?.vertical)).toBe(false)
-    const mark = (await texts(ui)).filter(x => x === '┃')
-    expect(mark.length).toBe(1)
-    // The region is the line plus the glyph cell, so it does not grow with what the rail draws.
-    expect(glyphs.every(r => r.width === r.props.width + 1)).toBe(true)
+    expect(rails.length).toBe(3) // header, orchestrator, the running oracle
+    expect(rails.every(r => r.props.isLine === false && r.props.active && r.width === 1)).toBe(true)
+    const all = await texts(ui)
+    expect(all).toContain('⊘') // the disabled librarian is planned and off
+    expect(all).toContain('◷') // the other roles are planned and waiting
   })
 
-  t('mini: clocks and pulse with no line; desktop: rails and no pulse', async ($, on) => {
+  t('mini: clocks and a one-cell pulse; desktop: pulse dots are Svg, clocks stay Clients', async ($, on) => {
     world(on)
     seed(on, { natives: [native()], session: { isRunning: true, turnStartedAt: NOW - 5_000 } })
     await start($)
@@ -266,24 +268,10 @@ describe('pane', () => {
     expect((await clients(mini)).some(c => String(c.module).includes('elapsed'))).toBe(true)
     await release()
     const desk = await mountPane($, 'desktop')
-    const rails = (await railsOf(desk)).filter(r => r.props?.glyph)
-    expect(rails.length).toBeGreaterThan(0)
-    expect(rails.every(r => r.props.isPulse === false)).toBe(true)
+    expect(await railsOf(desk)).toEqual([])
+    const dots = (await desk.findAll({ type: 'Svg' })).filter(n => String((n as unknown as { props: { source: string } }).props.source).includes('<animate'))
+    expect(dots.length).toBe(3)
     expect((await clients(desk)).some(c => String(c.module).includes('elapsed'))).toBe(true)
-  })
-
-  t('the orchestrator link is lit for the whole turn on both surfaces and registers no extra timer', async ($, on) => {
-    world(on)
-    seed(on, { session: { isRunning: true, turnStartedAt: NOW - 5_000 } })
-    await start($)
-    for (const surface of SURFACES) {
-      const ui = await mountPane($, surface)
-      const link = (await ui.findAll({ type: 'Text' })).filter(n => String(n.text) === '┃')
-      expect(link.length).toBe(1)
-      expect((link[0] as unknown as { props: { bold?: boolean; color?: string } }).props.bold).toBe(true)
-      expect((await railsOf(ui)).some(r => r.props?.vertical)).toBe(false)
-      await release()
-    }
   })
 
   t('an 8-column body produces nothing wider than 8', async ($, on) => {
@@ -393,9 +381,201 @@ describe('pane', () => {
     await start($)
     const ui = await mountPane($, 'desktop')
     const colors = (await ui.findAll({ type: 'Text' })).map(node => String((node as unknown as { props: { color?: string } }).props.color))
-    expect(colors.includes('#6b37b3')).toBe(true) // claude
-    expect(colors.includes('#176a30')).toBe(true) // running
+    expect(colors.includes('#b58af0')).toBe(true) // claude
+    expect(colors.includes('#4fb383')).toBe(true) // running
+    expect(colors.map(c => c.toLowerCase()).includes('#a56bd8')).toBe(true) // the oracle's role color
+    const borders = (await ui.findAll({ type: 'Box' })).map(node => (node as unknown as { props: { borderColor?: string; backgroundColor?: string } }).props)
+    expect(borders.flatMap(p => [p.borderColor, p.backgroundColor]).filter(c => c && !c.startsWith('#'))).toEqual([])
     expect(colors.some(c => !c.startsWith('#') && c !== 'undefined')).toBe(false)
+  })
+
+  // Rows a node takes: a Text or Button is one, a Client or Svg its declared height, a column adds its
+  // children, a row takes the tallest, a border adds two.
+  type Node = { type?: string; props?: { flexDirection?: string; gap?: number; borderStyle?: string; height?: number }; children?: Node[] }
+  const rowsOf = (n: Node): number => {
+    if (n.type === 'Text' || n.type === 'Button') return 1
+    if (n.type === 'Client') return n.props?.height ?? 1
+    if (n.type === 'Svg') return Math.ceil((n.props?.height ?? 20) / 20)
+    const sizes = (n.children ?? []).filter(Boolean).map(rowsOf)
+    const inner = n.props?.flexDirection === 'column'
+      ? sizes.reduce((a, b) => a + b, 0) + Math.max(0, sizes.length - 1) * (n.props?.gap ?? 0)
+      : Math.max(0, ...sizes)
+    return inner + (n.props?.borderStyle ? 2 : 0)
+  }
+
+  const busy = () => ({
+    jobs: [
+      job({ id: 'pj1', agent: 'explorer', description: 'map', lastActivity: 'rg x', tokens: { input: 1000, cached: 0, output: 10 } }),
+      job({ id: 'pj2', agent: 'councillor:alpha', description: 'weigh' }),
+      job({ id: 'pj3', agent: 'fixer', status: 'done', description: 'tests', endedAt: NOW - 1000, sessionId: 's' }),
+    ],
+    natives: [native(), native({ id: 'n2', role: 'librarian', type: 'pantheon:librarian', rounds: [{ startedAt: 1, endedAt: 2, status: 'done' }] })],
+    session: { isRunning: true, turnStartedAt: NOW - 5_000, model: 'opus', costUsd: 0.5 } as SessionInfo,
+  })
+
+  t('the Agents tab never draws taller than the body, at small and normal heights', async ($, on) => {
+    world(on)
+    seed(on, busy())
+    await start($)
+    for (const surface of SURFACES) {
+      for (const [columns, rows] of [[70, 3], [70, 6], [70, 9], [70, 12], [70, 16], [70, 24], [70, 40], [70, 70], [40, 10], [40, 20], [20, 12], [8, 12], [120, 30]] as const) {
+        const ui = await mountPane($, surface, { columns, rows })
+        const height = rowsOf((await ui.drawn()) as Node)
+        expect({ surface, columns, rows, fits: height <= rows, height }).toEqual({ surface, columns, rows, fits: true, height })
+        await release()
+      }
+    }
+  })
+
+  t('a short body keeps the running agents and folds the rest into headings', async ($, on) => {
+    world(on)
+    seed(on, busy())
+    await start($)
+    const all = await texts(await mountPane($, 'terminal', { rows: 14 }))
+    expect(all).toContain('map') // the running rows stay, one line each
+    expect(all).toContain('Finished')
+    expect(all).not.toContain('tests')
+    expect(all).toContain('3 running')
+  })
+
+  t('docked: each agent row carries a mascot Client of its role and mood, the session a large one', async ($, on) => {
+    world(on)
+    seed(on, busy())
+    await start($)
+    const ui = await mountPane($, 'terminal', { rows: 70 })
+    const mascots = (await clients(ui)).filter(c => String(c.module).includes('mascot')).map(c => c.props)
+    const of = (role: string) => mascots.filter(m => m.role === role)
+    expect(of('orchestrator')).toEqual([{ role: 'orchestrator', mood: 'work', size: 'large' }])
+    expect(of('explorer')).toEqual([{ role: 'explorer', mood: 'work', size: 'small' }])
+    expect(of('oracle')).toEqual([{ role: 'oracle', mood: 'work', size: 'small' }])
+    expect(of('fixer')).toEqual([{ role: 'fixer', mood: 'idle', size: 'small' }]) // finished
+    expect(of('designer')).toEqual([{ role: 'designer', mood: 'off', size: 'small' }]) // planned
+    const sizes = (await clients(ui)).filter(c => String(c.module).includes('mascot')).map(c => [c.width, c.height])
+    expect(sizes).toContainEqual([15, 6])
+    expect(sizes).toContainEqual([8, 3])
+  })
+
+  t('docked without a Client draws static colorless mascot rows with the same layout', async ($, on) => {
+    let fail = false
+    world(on, { clockDown: () => fail })
+    seed(on, busy())
+    await start($)
+    fail = true
+    const ui = await mountPane($, 'terminal', { rows: 70 })
+    expect(await clients(ui)).toEqual([])
+    const all = await texts(ui)
+    const rows = clawdLines('explorer', 'work', 0, 'small').map(x => x.trim())
+    for (const row of rows) expect(all).toContain(row)
+    expect(all).toContain(clawdLines('orchestrator', 'work', 0, 'large')[0].trim())
+    const colored = (await ui.findAll({ type: 'Text' })).filter(n => String(n.text).trim() === rows[0])
+    expect(colored.every(n => (n as unknown as { props: { color?: string } }).props.color === undefined)).toBe(true)
+  })
+
+  t('desktop draws every mascot through Svg from clawdSvg, animated only while working', async ($, on) => {
+    world(on)
+    seed(on, busy())
+    await start($)
+    const ui = await mountPane($, 'desktop', { rows: 70 })
+    const svgs = (await ui.findAll({ type: 'Svg' })).map(n => (n as unknown as { props: { source: string; alt: string; isInteractive?: boolean; height: number } }).props)
+    const mascot = (role: string, mood: string) => svgs.filter(s => s.alt === `${role} mascot, ${mood}`)
+    expect(mascot('orchestrator', 'work').length).toBe(1)
+    expect(mascot('orchestrator', 'work')[0].source).toBe(clawdSvg('orchestrator', 'work', 92))
+    expect(mascot('explorer', 'work')[0].source).toBe(clawdSvg('explorer', 'work', 48))
+    expect(mascot('explorer', 'work')[0].isInteractive).toBe(true)
+    expect(mascot('fixer', 'idle')[0].isInteractive).toBeFalsy()
+    expect(mascot('designer', 'off')[0].source).toBe(clawdSvg('designer', 'off', 48))
+    expect((await clients(ui)).filter(c => String(c.module).includes('mascot'))).toEqual([])
+  })
+
+  t('the session shows cost, tokens and time as tiles on desktop and as one line docked', async ($, on) => {
+    world(on)
+    seed(on, busy())
+    await start($)
+    const desk = await mountPane($, 'desktop', { rows: 70 })
+    expect(await desk.find({ key: 'tile-cost' })).toBeDefined()
+    expect(await desk.find({ key: 'tile-tokens' })).toBeDefined()
+    expect(await desk.find({ key: 'tile-time' })).toBeDefined()
+    expect(await texts(desk)).toContain('≈$0.50')
+    await release()
+    const term = await mountPane($, 'terminal', { rows: 70 })
+    expect(await term.find({ key: 'tile-cost' })).toBeUndefined()
+    const all = await texts(term)
+    for (const label of ['Cost', 'Tokens', 'Time']) expect(all).toContain(label)
+    expect(all).toContain('≈$0.50')
+  })
+
+  t('a group folds and unfolds with its button and the choice persists', async ($, on) => {
+    world(on)
+    seed(on, busy())
+    await start($)
+    const ui = await mountPane($, 'terminal', { rows: 70 })
+    expect(await texts(ui)).toContain('pj1')
+    await ui.press({ key: 'toggle-running' })
+    const folded = await texts(ui)
+    expect(folded).toContain('Running')
+    expect(folded).not.toContain('pj1')
+    const labels = async (u: Mounted) => (await u.findAll({ type: 'Button' })).map(b => String((b as unknown as { props: { label?: string } }).props.label))
+    expect(await labels(ui)).toContain('Expand')
+    await release()
+    expect(await texts(await mountPane($, 'terminal', { rows: 70 }))).not.toContain('pj1')
+    await release()
+    const again = await mountPane($, 'terminal', { rows: 70 })
+    await again.press({ key: 'toggle-running' })
+    expect(await texts(again)).toContain('pj1')
+  })
+
+  t('the close button closes the pane', async ($, on) => {
+    const { seen } = world(on)
+    await start($)
+    const ui = await mountPane($, 'terminal', { columns: 70 })
+    await ui.press({ key: 'close' })
+    expect(seen.closed).toContain(PANE_ID)
+  })
+
+  t('the Jobs tab lists Claude agent rounds read-only, so it is not empty on the claude profile', async ($, on) => {
+    world(on, { files: { [`${HOME}/.claude/pantheon.json`]: JSON.stringify({ profile: 'claude' }) } })
+    seed(on, { natives: [native({ rounds: [
+      { startedAt: NOW - 200_000, endedAt: NOW - 152_000, status: 'done' },
+      { startedAt: NOW - 134_000, status: 'running' },
+    ] })] })
+    await start($)
+    await command($, 'config')
+    for (const surface of SURFACES) {
+      const ui = await mountPane($, surface, { rows: 40 })
+      if (await ui.find({ key: 'tab-jobs' })) await ui.press({ key: 'tab-jobs' })
+      const all = await texts(ui)
+      expect(all).not.toContain('No Pantheon jobs in this session.')
+      expect(all).toContain('Claude agent rounds')
+      expect(all).toContain('read-only')
+      expect(all).toContain('Review the lifecycle')
+      expect(all).toContain('oracle')
+      expect(all).toContain('✓ r1')
+      expect(all).toContain('0:48')
+      expect(all).toContain('● r2')
+      expect(await ui.find({ key: 'cancel-n1' })).toBeUndefined()
+      expect(await ui.find({ key: 'copy-n1' })).toBeUndefined()
+      expect((await ui.findAll({ type: 'Button' })).map(b => String((b as unknown as { props: { key?: string } }).props.key)).filter(k => k.startsWith('cancel-') || k.startsWith('copy-'))).toEqual([])
+      await release()
+    }
+  })
+
+  t('the Jobs tab keeps Codex jobs with their buttons beside the Claude rounds and stays within the body', async ($, on) => {
+    world(on)
+    seed(on, busy())
+    await start($)
+    for (const surface of SURFACES) {
+      for (const rows of [6, 10, 14, 20, 40]) {
+        const ui = await mountPane($, surface, { rows })
+        if (await ui.find({ key: 'tab-jobs' })) await ui.press({ key: 'tab-jobs' })
+        expect({ surface, rows, fits: rowsOf((await ui.drawn()) as Node) <= rows }).toEqual({ surface, rows, fits: true })
+        if (rows === 40) {
+          expect(await ui.find({ key: 'cancel-pj1' })).toBeDefined()
+          expect(await ui.find({ key: 'copy-pj3' })).toBeDefined()
+          expect(await texts(ui)).toContain('Claude agent rounds')
+        }
+        await release()
+      }
+    }
   })
 
   t('an idle line keeps the role name at 40 columns', async ($, on) => {
@@ -411,14 +591,16 @@ describe('pane', () => {
     expect(all.filter(x => x.length > 40)).toEqual([])
   })
 
-  t('a short body shows fewer idle cards than a tall viewport would', async ($, on) => {
+  t('a short body degrades the planned and finished groups to their headings', async ($, on) => {
     world(on)
     await start($)
-    const tall = await texts(await mountPane($, 'terminal', { rows: 40, bodyRows: 40 }))
-    expect(tall.some(x => x.startsWith('+') && x.includes('idle or off'))).toBe(false)
+    const tall = await texts(await mountPane($, 'terminal', { rows: 60, bodyRows: 60 }))
+    expect(tall.filter(x => x === 'disabledAgents').length).toBe(0)
+    expect(tall).toContain('Waiting for work')
     await release()
     const short = await texts(await mountPane($, 'terminal', { rows: 40, bodyRows: 14 }))
-    expect(short.some(x => x.startsWith('+') && x.includes('idle or off'))).toBe(true)
+    expect(short).toContain('Planned')
+    expect(short).not.toContain('Waiting for work')
   })
 
   t('a failing clock read draws without clocks and says so', async ($, on) => {
@@ -601,9 +783,10 @@ describe('timelineSource', () => {
   const out = timelineSource(slots, { isRunning: true, turnStartedAt: NOW_T - 120_000 }, NOW_T).source
 
   test('running bars are solid in the engine color, finished ones outlined', () => {
-    expect(out).toContain('fill="#1d4f9e"/>')
-    expect(out).toContain('fill="#6b37b3"/>')
-    expect(out).toContain('fill="#c7d6ef" stroke="#1d4f9e"')
+    expect(out).toContain('fill="#6aa3f0"/>')
+    expect(out).toContain('fill="#b58af0"/>')
+    expect(out).toContain('fill="#1f3350" stroke="#6aa3f0"')
+    expect(out).toContain('fill="#242423"') // the dark card
   })
   test('rounds of one session are labelled and joined by a dashed line', () => {
     expect(out).toContain('>r1</text>')
@@ -625,7 +808,7 @@ describe('timelineSource', () => {
     // The card keeps only the latest; the timeline draws both runs inside the window, not the old one.
     expect(roster.slots[1].instances.map(i => i.id)).toEqual(['jb'])
     const svg = timelineSource(roster.slots, { isRunning: false }, NOW_T).source
-    expect(svg.split('fill="#c7d6ef" stroke="#1d4f9e"').length - 1).toBe(2)
+    expect(svg.split('fill="#1f3350" stroke="#6aa3f0"').length - 1).toBe(2)
     expect(svg).toContain('>ja</text>')
     expect(svg).toContain('>jb</text>')
     expect(svg).not.toContain('>jold</text>')
@@ -634,9 +817,9 @@ describe('timelineSource', () => {
     const lost: Slot[] = [slot({ name: 'fixer', instances: [inst({ id: 'l', isActive: false, status: 'lost',
       rounds: [{ startedAt: NOW_T - 600_000, status: 'lost' }] })] })]
     const svg = timelineSource(lost, { isRunning: false }, NOW_T).source
-    expect(svg).toContain('width="3" height="12" fill="#7a4f00"/>')
-    expect(svg).not.toContain('stroke="#1d4f9e"/>')
-    expect(svg).not.toContain('fill="#1d4f9e"/>')
+    expect(svg).toContain('width="3" height="12" fill="#e0a94a"/>')
+    expect(svg).not.toContain('stroke="#6aa3f0"/>')
+    expect(svg).not.toContain('fill="#6aa3f0"/>')
   })
   test('parallel instances label their ids and the now line closes the window', () => {
     expect(out).toContain('>a</text>')

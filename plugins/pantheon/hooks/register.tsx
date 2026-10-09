@@ -14,7 +14,7 @@ import { isOffered, nativeAgentSpecs, resolveCodexCall, usesCodex } from './role
 import { buildRoster } from './roster'
 import {
   DEFAULT_SESSION, DEFAULT_VIEW, completed, describeTool, markNativesLost,
-  normalizeNatives, normalizeSession, normalizeView, sessionCompleted, sessionMeasured,
+  normalizeNatives, normalizeSession, normalizeView, sessionCompleted, sessionMeasured, viewTab, viewToggled,
   roundOpened, sessionStarted, sessionStepped, spawned, stepAccounted, toolNoted,
 } from './tracking'
 import type { Clock, ConfigResult, DelegateArgs, PantheonConfig, Spawn } from './types'
@@ -46,13 +46,16 @@ type TrackingIo = {
   now: () => Promise<number>
 }
 
-/** Serialize writes and replace any waiting snapshot with the latest one. */
-export function createQueue<T>(write: (v: T) => Promise<unknown>, onError: (e: unknown) => void) {
+/**
+ * Serialize writes and replace any waiting snapshot with the latest one; with `merge`, a waiting
+ * value is combined with the new one instead (for actions that must all happen, in order).
+ */
+export function createQueue<T>(write: (v: T) => Promise<unknown>, onError: (e: unknown) => void, merge?: (waiting: T, next: T) => T) {
   let pending: { value: T } | undefined
   let flushing: Promise<void> | undefined
   return {
     push(value: T): void {
-      pending = { value }
+      pending = { value: pending && merge ? merge(pending.value, value) : value }
       flushing ??= Promise.resolve().then(async () => {
         try {
           while (pending) {
@@ -154,7 +157,7 @@ export const register: Register = on => {
   const nativesQueue = createQueue<Native[]>(list => trackingLive!.writeNatives(list), notifyTrackingWrite)
   const sessionQueue = createQueue<SessionInfo>(value => trackingLive!.writeSession(value), notifyTrackingWrite)
   // Each view write carries the `$` of the hook that asked for it; only the latest pending one runs.
-  const viewQueue = createQueue<() => Promise<unknown>>(write => write(), notifyTrackingWrite)
+  const viewQueue = createQueue<() => Promise<unknown>>(write => write(), notifyTrackingWrite, (a, b) => async () => { await a(); await b() })
 
   async function ensureTracking(io: TrackingIo): Promise<void> {
     trackingLive = io
@@ -441,7 +444,7 @@ export const register: Register = on => {
         now: () => $.clock.now(),
       }
       await ensureTracking(io)
-      session = sessionMeasured(session!, e.context)
+      session = sessionMeasured(session!, e.context, e.cost)
       sessionQueue.push(session)
       await sessionQueue.flushed()
     } catch { /* Tracking never changes the measurement result. */ }
@@ -621,6 +624,10 @@ export const register: Register = on => {
           ? <els.Client key={key} module="./rail.tsx" width={1} height={props.width + (props.glyph ? 1 : 0)} props={props} />
           : <els.Client key={key} module="./rail.tsx" width={props.isLine === false ? 1 : props.width + (props.glyph ? 1 : 0)} height={1} props={props} />,
         clock: ({ key, props }) => <els.Client key={key} module="./elapsed.tsx" width={6} props={props} />,
+        // Large is 15 columns by 6 rows, small 8 by 3.
+        ...(isClockLost ? {} : {
+          mascot: ({ key, props }) => <els.Client key={key} module="./mascot.tsx" width={props.size === 'large' ? 15 : 8} height={props.size === 'large' ? 6 : 3} props={props} />,
+        }),
       } : {}),
     } as never, {
       surface: e.surface,
@@ -633,9 +640,12 @@ export const register: Register = on => {
       jobs: list,
       session: info,
       tab: normalizeView(view).tab,
+      collapsed: normalizeView(view).collapsed ?? [],
       hasClient,
       clockLost: isClockLost,
-      onTab: tab => { viewQueue.push(() => update($, viewAtom, () => ({ tab }))) },
+      onTab: tab => { viewQueue.push(() => update($, viewAtom, cur => viewTab(normalizeView(cur), tab))) },
+      onToggle: group => { viewQueue.push(() => update($, viewAtom, cur => viewToggled(normalizeView(cur), group))) },
+      onClose: () => { void $.ui.close({ id: PANE_ID }) },
       onCancel: jobId => { jobs?.cancel(jobId) },
       onCopy: (text, surface) => { void $.ui.copy({ text, surface }) },
     }) as never

@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 import {
   MAX_NATIVES, DEFAULT_SESSION, DEFAULT_VIEW, roleOf, spawned, stepped, toolNoted, roundOpened, stepAccounted,
   completed, markNativesLost, normalizeNatives, normalizeSession, normalizeView,
-  sessionStarted, sessionCompleted, sessionStepped, sessionMeasured, describeTool,
+  sessionStarted, sessionCompleted, sessionStepped, sessionMeasured, describeTool, viewTab, viewToggled,
 } from '../hooks/tracking'
 import type { Native } from '../hooks/types'
 
@@ -136,6 +136,14 @@ test('normalizers default invalid fields and preserve valid session and view sta
   expect(normalizeView('jobs')).toEqual(DEFAULT_VIEW)
   expect(normalizeView({ tab: 'bad' })).toEqual(DEFAULT_VIEW)
   expect(normalizeView({ tab: 'jobs' })).toEqual({ tab: 'jobs' })
+  expect(normalizeView({ tab: 'agents', collapsed: ['planned', 'bogus', 'running'] })).toEqual({ tab: 'agents', collapsed: ['running', 'planned'] })
+  expect(viewTab({ tab: 'agents', collapsed: ['running'] }, 'jobs')).toEqual({ tab: 'jobs', collapsed: ['running'] })
+  expect(viewToggled({ tab: 'agents' }, 'finished')).toEqual({ tab: 'agents', collapsed: ['finished'] })
+  expect(viewToggled({ tab: 'agents', collapsed: ['finished'] }, 'finished')).toEqual({ tab: 'agents' })
+  expect(normalizeSession({ isRunning: true, costUsd: 1.25 })).toEqual({ isRunning: true, costUsd: 1.25 })
+  expect(normalizeSession({ isRunning: true, costUsd: 'x' })).toEqual({ isRunning: true })
+  expect(sessionMeasured({ isRunning: false }, { window: 10 }, { usd: 0.4 }).costUsd).toBe(0.4)
+  expect(sessionMeasured({ isRunning: false, costUsd: 0.4 }, { window: 10 }).costUsd).toBe(0.4)
   const session = {
     model: 'test-model', effort: 'high', context: { tokens: 25, window: 100, percent: 25 },
     isRunning: true, turnStartedAt: 100, lastTurnMs: 20,

@@ -137,6 +137,23 @@ describe('register', () => {
     expect(writes).toEqual([1, 3, 4])
   })
 
+  test('a queue with a merge keeps every waiting action, in order', async () => {
+    const order: string[] = []
+    let release!: () => void
+    const held = new Promise<void>(resolve => { release = resolve })
+    let began!: () => void
+    const started = new Promise<void>(resolve => { began = resolve })
+    type Job = () => Promise<unknown>
+    const queue = createQueue<Job>(write => write(), () => {}, (a, b) => async () => { await a(); await b() })
+    queue.push(async () => { order.push('first'); began(); await held })
+    await started
+    queue.push(async () => { order.push('toggle') })
+    queue.push(async () => { order.push('tab') })
+    release()
+    await queue.flushed()
+    expect(order).toEqual(['first', 'toggle', 'tab'])
+  })
+
   test('tracking initializes lazily without session.start and ignores unknown native ids', async ($, on) => {
     trackingWorld(on)
     await step($)
