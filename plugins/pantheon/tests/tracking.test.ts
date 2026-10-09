@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 import {
   MAX_NATIVES, DEFAULT_SESSION, DEFAULT_VIEW, roleOf, spawned, stepped, toolNoted, roundOpened, stepAccounted,
   completed, markNativesLost, normalizeNatives, normalizeSession, normalizeView,
-  sessionStarted, sessionCompleted, sessionStepped, sessionMeasured, describeTool, viewTab, viewToggled,
+  sessionStarted, sessionCompleted, sessionStepped, sessionMeasured, describeTool, viewToggled,
 } from '../hooks/tracking'
 import type { Native, SessionInfo } from '../hooks/types'
 
@@ -134,12 +134,12 @@ test('normalizers default invalid fields and preserve valid session and view sta
   expect(normalizeSession(null)).toEqual(DEFAULT_SESSION)
   expect(normalizeSession({ isRunning: 'yes', lastTurnMs: 'bad' })).toEqual(DEFAULT_SESSION)
   expect(normalizeView('jobs')).toEqual(DEFAULT_VIEW)
-  expect(normalizeView({ tab: 'bad' })).toEqual(DEFAULT_VIEW)
-  expect(normalizeView({ tab: 'jobs' })).toEqual({ tab: 'jobs' })
-  expect(normalizeView({ tab: 'agents', collapsed: ['idle', 'bogus', 'finished', 'running'] })).toEqual({ tab: 'agents', collapsed: ['running', 'idle'] })
-  expect(viewTab({ tab: 'agents', collapsed: ['running'] }, 'jobs')).toEqual({ tab: 'jobs', collapsed: ['running'] })
-  expect(viewToggled({ tab: 'agents' }, 'idle')).toEqual({ tab: 'agents', collapsed: ['idle'] })
-  expect(viewToggled({ tab: 'agents', collapsed: ['idle'] }, 'idle')).toEqual({ tab: 'agents' })
+  expect(normalizeView({ tab: 'bad' })).toEqual({})
+  // An old saved view still carries the removed tab: it normalizes without it.
+  expect(normalizeView({ tab: 'jobs' })).toEqual({})
+  expect(normalizeView({ tab: 'agents', collapsed: ['idle', 'bogus', 'finished', 'running'] })).toEqual({ collapsed: ['running', 'idle'] })
+  expect(viewToggled({}, 'idle')).toEqual({ collapsed: ['idle'] })
+  expect(viewToggled({ collapsed: ['idle'] }, 'idle')).toEqual({})
   expect(normalizeSession({ isRunning: true, costUsd: 1.25 })).toEqual({ isRunning: true, costUsd: 1.25 })
   expect(normalizeSession({ isRunning: true, costUsd: 'x' })).toEqual({ isRunning: true })
   expect(sessionMeasured({ isRunning: false }, { window: 10 }, { usd: 0.4 }).costUsd).toBe(0.4)

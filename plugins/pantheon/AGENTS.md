@@ -24,8 +24,8 @@ IMPORTANT: prompts and panel modules include third-party work. Keep `LICENSE` an
 
 - `tracking.ts` holds pure reducers for native subagents and the main session, plus tool-input redaction.
 - The tracking hooks (`turn.start`, `turn.step`, `turn.complete`, `session.measure`, `agent.spawn`, `tool.call`) only watch and pass events on unchanged.
-- `pantheon.natives`, `pantheon.session` (with the ledger cost) and `pantheon.view` (the selected tab and folded groups) join `pantheon.jobs` in `$.state`, written through queues that keep only the latest pending snapshot.
-- The panel shows one toast per session the first time saving the panel state (agents, session or selected tab) fails. Jobs keep their own warning.
+- `pantheon.natives`, `pantheon.session` (with the ledger cost) and `pantheon.view` (the folded groups) join `pantheon.jobs` in `$.state`, written through queues that keep only the latest pending snapshot.
+- The panel shows one toast per session the first time saving the panel state (agents, session or folded groups) fails. Jobs keep their own warning.
 - `register.tsx` builds host closures in each hook because `$` cannot be stored.
 
 ## Roster
@@ -36,7 +36,7 @@ IMPORTANT: prompts and panel modules include third-party work. Keep `LICENSE` an
 
 The panel opens at session start. `/pantheon close` closes it; `cancel <jobId>`, and `config` keep their existing behavior. `doctor` also pings every role and seat (`ping.ts` plans the targets and formats the section; `register.tsx` runs the Codex pings and queues the session prompt for the native ones with `io.after(0, …)`, because the host refuses `prompt.submit` while a `command.run` hook runs). There is no panel configuration; rate limits, repository, branch and cache stay in hud.
 
-- `pane.tsx` draws the Agents and Jobs tabs. Jobs keeps its read-only "Claude agent rounds" group.
+- `pane.tsx` draws the Agents view only (no tabs); a running Codex row carries Cancel, wired to the instance's `jobId`.
 - Desktop: HUD-colored segments with static SVG backplates, native text and buttons, fixed numeric slots, identity-first agent rows, a card per section with a colored border, and a pane-width "Last 15 minutes" SVG timeline.
 - Docked and inline mini: bordered cards per section (colored border), task-first rows and an animated rail.
 - `rail.tsx` and `elapsed.tsx` are surface modules for the animated rail (110 ms frames, only while there is active work) and live clocks. `theme.ts` holds the shared palette, section and role colors and cell helpers.

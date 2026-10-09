@@ -24,10 +24,6 @@ export function statusText(jobs: Job[]): string | undefined {
   return `pantheon: ${running} running · ${background} in background`
 }
 
-export function isResumable(job: Job): boolean {
-  return !!job.sessionId && !ACTIVE.has(job.status)
-}
-
 export function configReport(state: ConfigResult): string {
   const lines = [state.ok ? 'Valid config.' : `Invalid config: ${state.error}`]
   lines.push(`Active profile: ${state.config.profile} (${state.ok ? state.origins.profile ?? 'default' : 'unknown origin'})`)
@@ -107,23 +103,19 @@ export type PanelData = {
   rows: number
   now: number
   roster: Roster
-  jobs: Job[]
   session: SessionInfo
   profiles: string[]
   activeProfile: string
   profileLockedBy?: 'user' | 'project'
   onProfile?: (name: string) => void
-  tab: 'agents' | 'jobs'
   /** Agent groups the person folded; absent means none. */
   collapsed?: PanelGroup[]
   hasClient: boolean
   /** The host clock failed: draw static durations from `now` and say so, with no Client. */
   clockLost?: boolean
-  onTab: (tab: 'agents' | 'jobs') => void
   onToggle?: (group: PanelGroup) => void
   onClose?: () => void
   onCancel: (jobId: string) => void
-  onCopy: (text: string, surface: RenderSurface) => void
 }
 
 export function layoutOf(surface: RenderSurface, placement?: string): 'docked' | 'mini' | 'desktop' {
@@ -136,7 +128,6 @@ const ENGINE_COLOR: Record<Engine | 'mixed', string> = { codex: 'suggestion', cl
 const RUN = 'success'
 const ROUND = 'warning'
 const ACTIVITY = 'cyan'
-const FAULT = 'error'
 // The Desktop panel is dark: this is the one place its palette lives. Role and section colors come from theme.ts.
 const HEX = {
   codex: '#6aa3f0', claude: '#b58af0', mixed: '#9a9a94', codexSoft: '#1f3350', claudeSoft: '#35274f',
@@ -164,14 +155,6 @@ const HUD = {
   calm: ['rgba(27,161,196,0.11)', 'rgba(27,161,196,0.30)', '#1b9cbe'],
   neutral: ['rgba(128,128,128,0.10)', 'rgba(128,128,128,0.30)', '#8a8f98'],
 } as const
-const ICON = {
-  agents: '<rect x="4" y="7.5" width="16" height="12.5" rx="3.5"/><path d="M12 7.5V4M2 12.5v3M22 12.5v3"/><circle cx="12" cy="3.2" r="1.3"/><circle cx="9" cy="13" r="1"/><circle cx="15" cy="13" r="1"/><path d="M9.5 16.8h5"/>',
-  jobs: '<rect x="4" y="6" width="16" height="14" rx="2"/><path d="M8 6V3h8v3M4 11h16M10 11v3h4v-3"/>',
-  cost: '<circle cx="12" cy="12" r="9"/><path d="M15 8.5c-4-3-9 2-3 3.5s1 6-3 3.5M12 5v2M12 17v2"/>',
-  tokens: '<path d="m12 3 9 5-9 5-9-5 9-5ZM3 12l9 5 9-5M3 16l9 5 9-5"/>',
-  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 6v6l4 2"/>',
-}
-
 // A hex color pulled toward `into`, for dimmed (planned) rows on a surface with no dim attribute.
 function mix(hex: string, into: string, t: number): string {
   const n = (h: string, k: number) => parseInt(h.slice(1 + k * 2, 3 + k * 2), 16)
@@ -182,16 +165,6 @@ function mix(hex: string, into: string, t: number): string {
 // '#rrggbb' as rgba(), for card backplates.
 const rgba = (hex: string, a: number) => `rgba(${[1, 3, 5].map(k => parseInt(hex.slice(k, k + 2), 16)).join(',')},${a})`
 
-const GLYPH: Record<string, { text: string; color: string; label: string }> = {
-  running: { text: '●', color: RUN, label: 'running' },
-  background: { text: '◐', color: ACTIVITY, label: 'background' },
-  done: { text: '✓', color: RUN, label: 'done' },
-  error: { text: '✗', color: FAULT, label: 'error' },
-  cancelled: { text: '⊘', color: 'inactive', label: 'cancelled' },
-  failed: { text: '✗', color: FAULT, label: 'failed' },
-  stopped: { text: '⊘', color: 'inactive', label: 'stopped' },
-  lost: { text: '?', color: ROUND, label: 'lost' },
-}
 
 function fmtClock(ms: number): string {
   const s = Math.max(0, Math.floor(ms / 1000))
@@ -210,10 +183,6 @@ const esc = (s: string) => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;
 // A Codex job reports usage only once it has some; until then the line would be all dashes.
 
 const activeOf = (slot: Slot) => slot.instances.filter(i => i.isActive)
-
-export function copyText(job: Job): string {
-  return `${job.id}\nresume: delegate({ agent: "${job.agent}", resume: "${job.id}", prompt: … })`
-}
 
 type Seg = { text?: string; color?: string; bold?: boolean; dim?: boolean; bg?: string; chip?: boolean; node?: unknown; w?: number }
 const widthOf = (segs: Seg[]) =>
@@ -334,7 +303,7 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
   const isDesk = layout === 'desktop'
   const isMini = layout === 'mini'
   // The real width, with no floor: content degrades to fit it. Below 12 columns the cards give up
-  // their border and padding, the header its title and tabs, so nothing is wider than the body.
+  // their border and padding, the header its title, so nothing is wider than the body.
   const outerW = Math.max(1, data.columns)
   const inset = isDesk && outerW >= 36 ? 3 : 0
   const W = Math.max(1, outerW - inset * 2)
@@ -349,8 +318,6 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     const Svg = el.Svg!
     return <Svg key={key} source={source} width={width} height={height} alt={alt} />
   }
-  const icon = (key: string, name: keyof typeof ICON, color: string, size = 16) => image(key,
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${ICON[name]}</svg>`, size, size, name)
   // The backplate supplies the exact 6px radius; native text and buttons remain selectable/actionable.
   const plate = (key: string, width: number, height: number, tint: readonly string[], children: unknown[], padding = 1.25, gap = 1) => (
     <Box key={key} width={width} height={height} position="relative" alignItems="center" paddingX={padding} gap={gap}>
@@ -379,8 +346,6 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
       <el.Text color={color} bold={s.bold} dimColor={isDesk ? undefined : s.dim} backgroundColor={bg} wrap="truncate">{s.text}</el.Text>
     )
   }
-  const chip = (t: string, color: string, bold = false): Seg =>
-    isDesk ? { text: ` ${t} `, color, chip: true, bold } : { text: t, color, bold }
   const render = (segs: Seg[]) => segs.map(s => (s.node ? s.node : text(s)))
   const note = (key: string, s: Seg) => <Box key={key}>{text({ ...s, text: clip(s.text ?? '', W) })}</Box>
 
@@ -416,21 +381,6 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
   const idleSeg = (key: string): Seg => isDesk && el.Svg ? {
     node: image(key, `<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><circle cx="4" cy="4" r="3" fill="none" stroke="${HEX.muted}" stroke-width="1.5"/></svg>`, 8, 8, 'idle'), w: 1,
   } : { text: '○', dim: true }
-
-  const card = (key: string, children: unknown[], style: { border?: string; dim?: boolean; color?: string } = {}) => (
-    <Box
-      key={key}
-      flexDirection="column"
-      borderStyle={isTiny ? undefined : style.border ?? (isDesk ? 'round' : 'single')}
-      borderColor={isDesk ? paint(style.color) ?? HEX.edge : style.color}
-      borderDimColor={isDesk ? undefined : style.dim}
-      backgroundColor={isDesk ? HEX.card : undefined}
-      paddingX={isTiny ? 0 : 1}
-      width={W}
-    >
-      {children}
-    </Box>
-  )
 
   // ------------------------------------------------------------ header and footer
   const profileRow = (width: number) => {
@@ -471,40 +421,21 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
   // The desktop header row is a pill row (1.7 rows tall at full width); the profile row sits under it.
   const headerTopH = isDesk && W >= 60 ? 1.7 : 1
   const headerH = data.rows >= 2 ? headerTopH + 1 : 1
-  const tabButton = (tab: 'agents' | 'jobs', label: string) => {
-    if (!isDesk) return <Button key={`tab-${tab}`} label={data.tab === tab ? `● ${label}` : label} hotkey={tab === 'agents' ? '1' : '2'} onPress={() => data.onTab(tab)} />
-    const active = data.tab === tab
-    const button = <Button key={`tab-${tab}`} plain label={W < 60 ? label : tab === 'agents' ? 'Agents' : 'Jobs'} hotkey={tab === 'agents' ? '1' : '2'} onPress={() => data.onTab(tab)} />
-    if (!isDesk || !el.Svg || W < 60) return button
-    const tint = active ? HUD.agents : HUD.neutral
-    return plate(`pill-${tab}`, tab === 'agents' ? 14.25 : 17.5, 1.7, tint, [
-      icon(`icon-${tab}`, tab, active ? HUD.agents[2] : HUD.neutral[2]), button,
-      ...(tab === 'jobs' ? [text({ text: '·', dim: true }), numeric('jobs-count', { text: String(data.jobs.length + claudeRuns().length), bold: true }, 3).node] : []),
-    ])
-  }
   const header = () => {
     const running = roles.reduce((n, r) => n + activeOf(r).length, 0) + roster.others.filter(i => i.isActive).length
-    const right: Seg[] = data.tab === 'agents'
-      ? W >= (isDesk ? 58 : 30)
+    const right: Seg[] = W >= (isDesk ? 58 : 30)
         ? running ? isDesk
           ? [pulseSeg('hdr-dot'), numeric('header-running-count', { text: String(running), color: RUN, bold: true }, 3), { text: 'running', color: RUN, bold: true }]
           : [pulseSeg('hdr-dot'), { text: `${running} running`, color: RUN, bold: true }]
           : data.session.isRunning ? [pulseSeg('hdr-dot'), { text: 'working', color: RUN, bold: true }] : [...(isDesk ? [idleSeg('hdr-idle')] : []), { text: 'idle', dim: true }]
         : []
-      : W >= 60 ? [{ text: 'Codex jobs · Claude rounds', dim: true }] : []
     if (data.onClose && W >= 58) right.push({ node: isDesk ? <Button key="close" plain label="✕" onPress={() => data.onClose?.()} /> : <Button key="close" label="✕" onPress={() => data.onClose?.()} />, w: isDesk ? 3 : 5 })
-    // Too narrow for both tabs: one button switches to the other tab.
-    const other = data.tab === 'agents' ? 'jobs' : 'agents'
-    const tabs = W >= 30
-      ? [tabButton('agents', 'Agents'), tabButton('jobs', `Jobs · ${data.jobs.length + claudeRuns().length}`)]
-      : [<Button key={`tab-${other}`} label={other === 'jobs' ? 'J' : 'A'} hotkey={other === 'jobs' ? '2' : '1'} onPress={() => data.onTab(other)} />]
     if (!isDesk) return (
       <Box key="header" flexDirection="column" width={W}>
         {headerH > 1 ? (
           <Box justifyContent="space-between" gap={1} width={W}>
             <Box gap={1} flexShrink={1}>
               {W >= 14 ? text({ text: 'PANTHEON', bold: true, color: ROUND }) : null}
-              {tabs}
             </Box>
             {right.length ? <Box gap={1} flexShrink={0}>{render(right)}</Box> : null}
           </Box>
@@ -518,7 +449,6 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
           <Box key="header-top" justifyContent="space-between" alignItems="center" gap={1} width={W} height={W >= 60 ? 1.7 : 1}>
             <Box gap={isDesk ? 2 : 1} alignItems="center" flexShrink={1}>
               {W >= 14 ? text({ text: isDesk ? 'Pantheon' : 'PANTHEON', bold: true, color: ROUND }) : null}
-              <Box key="tabs" gap={1} alignItems="center">{tabs}</Box>
             </Box>
             {right.length ? <Box key="header-state" width={isDesk ? 16 : undefined} alignItems="center" justifyContent="flex-end" gap={1} flexShrink={0}>{render(right)}</Box> : null}
           </Box>
@@ -531,28 +461,23 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
   const clockWarning = () => data.clockLost ? note('clock-lost', { text: 'clock unavailable', color: ROUND, bold: true }) : null
   const footer = () => !isDesk || !el.Svg || W < 60 ? note('footer', {
     dim: true,
-    text: [data.tab === 'agents' ? 'keys: 1 agents · 2 jobs · esc close' : 'keys: 1 agents · 2 jobs · ↻ resumable · Copy = id + resume hint'].join(' · '),
+    text: 'keys: esc close',
   }) : (
     <Box key="footer" flexDirection="column" width={W} gap={isDesk ? 0.5 : 0}>
       {rule('footer-rule')}
       <Box key="footer-row" width={W} alignItems="center" justifyContent="space-between" gap={1}>
         <Box key="totals" gap={1} alignItems="center">
-          {render([numeric('agents-total', { text: String(1 + roles.reduce((n, s) => n + s.instances.length, 0) + roster.others.length), dim: true }, 3), { text: 'agents', dim: true }, { text: '|', dim: true }, numeric('jobs-total', { text: String(data.jobs.length + claudeRuns().length), dim: true }, 3), { text: 'jobs', dim: true }])}
+          {render([numeric('agents-total', { text: String(1 + roles.reduce((n, s) => n + s.instances.length, 0) + roster.others.length), dim: true }, 3), { text: 'agents', dim: true }])}
         </Box>
-        <Box key="keys" alignItems="center" gap={1} flexShrink={0}>
+        {data.onClose ? <Box key="keys" alignItems="center" gap={1} flexShrink={0}>
           {text({ text: 'keys:', dim: true })}
-          {(['agents', 'jobs'] as const).map((tab, index) => <Box key={`key-${tab}`} alignItems="center" gap={0.6}>
-            {image(`hint-${tab}`, `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><rect x=".5" y=".5" width="15" height="15" rx="3" fill="none" stroke="#57585b"/><text x="8" y="11.5" text-anchor="middle" font-family="Avenir Next,Trebuchet MS,sans-serif" font-size="10" fill="#c9cbd0">${index + 1}</text></svg>`, 16, 16, `${tab} shortcut ${index + 1}`)}
-            {text({ text: tab, dim: true })}
-          </Box>)}
-          {data.onClose ? text({ text: 'esc close', dim: true }) : null}
-        </Box>
+          {text({ text: 'esc close', dim: true })}
+        </Box> : null}
       </Box>
-      {data.tab === 'jobs' ? text({ text: '↻ resumable · Copy = id + resume hint', dim: true }) : null}
     </Box>
   )
 
-  // ------------------------------------------------------------ agents tab
+  // ------------------------------------------------------------ agents
   const bar = (percent: number, cells: number): [Seg, Seg] => {
     const filled = Math.max(0, Math.min(cells, Math.round((percent / 100) * cells)))
     return [{ text: '█'.repeat(filled), color: percent >= 80 ? ROUND : ACTIVITY }, { text: '░'.repeat(cells - filled), dim: true }]
@@ -783,7 +708,11 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     let withModel = !compact
     let withStrip = !compact
     let withCtx = !compact && withCtxCol
-    const fixedW = () => 2 + NAME_W + TIME_W + (withCtx ? CTX_W : 0) + (withModel ? MODEL_W : 0) + (withStrip ? STRIP_W : 0)
+    // Cancel: only a Running row of a Codex agent has a job to stop; 'x' when the row is narrow.
+    const jobId = running && i?.engine === 'codex' && i.isActive ? i.jobId : undefined
+    const cancelLabel = IW >= 50 ? 'Cancel' : 'x'
+    const cancelW = jobId && IW >= 30 ? cancelLabel.length + 4 : 0
+    const fixedW = () => 2 + NAME_W + TIME_W + cancelW + (withCtx ? CTX_W : 0) + (withModel ? MODEL_W : 0) + (withStrip ? STRIP_W : 0)
     // The ctx column is the first to go, then the model, then the strip.
     if (IW - fixedW() < 12) withCtx = false
     if (IW - fixedW() < 12) withModel = false
@@ -804,6 +733,7 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
       { w: TIME_W, segs: [time] },
       ...(withCtx ? [{ w: CTX_W, segs: pct === undefined ? [] : [{ text: `ctx ${pct}%`, dim: true }] }] : []),
       { w: taskW, segs: [{ text: task, dim: !running }] },
+      ...(cancelW ? [{ w: cancelW, end: true, segs: [{ node: <Button key={`cancel-${jobId}`} label={cancelLabel} onPress={() => data.onCancel(jobId!)} />, w: cancelW }] }] : []),
     ]
     const main = cols(r.key, list, IW, isDesk ? rowH : undefined)
     if (i && running && i.activity && !compact) {
@@ -1013,7 +943,7 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     return linked
   }
 
-  const agentsTab = () => {
+  const agentsView = () => {
     let blocks: Block[] = []
     for (let level = 0; level <= 5; level++) {
       blocks = buildAgents(level)
@@ -1028,170 +958,6 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
   function timelineCard({ source, width, height }: ReturnType<typeof timelineSource>) {
     const Svg = el.Svg!
     return <Svg key="timeline" source={source} alt="Last 15 minutes: one lane per role, a bar for each run" width={width} height={height} />
-  }
-
-  // ------------------------------------------------------------ jobs tab
-  // One layout for drawing and for the row budget, so what is budgeted is what is drawn.
-  // Cancel and Copy sit beside the id line when both fit with it; otherwise they drop under it,
-  // and they stack in a column (no gap) when side by side would be wider than the body.
-  const jobLayout = (job: Job) => {
-    const isLive = ACTIVE.has(job.status)
-    const cancelLabel = W < 24 ? 'x' : 'Cancel'
-    const copyLabel = W < 24 ? 'c' : 'Copy'
-    const actionsW = (isLive ? cancelLabel.length + 4 + 1 : 0) + copyLabel.length + 4
-    const isStacked = actionsW > IW - 12
-    const isColumn = isStacked && actionsW > IW
-    const actionsH = !isStacked ? 0 : isColumn ? (isLive ? 2 : 1) : 1
-    const height = 1 + actionsH + 1 + (isLive ? (job.lastActivity ? 1 : 0) + (job.tokens ? 1 : 0) : 0)
-    return { cancelLabel, copyLabel, actionsW, isStacked, isColumn, height }
-  }
-  const jobHeight = (job: Job) => jobLayout(job).height
-
-  const jobRows = (job: Job) => {
-    const isLive = ACTIVE.has(job.status)
-    const g = GLYPH[job.status] ?? GLYPH.lost
-    const left: Seg[] = [
-      { text: job.id, bold: true },
-      { text: `${g.text} ${g.label}`, color: g.color, dim: job.status === 'cancelled' },
-      { text: job.agent, color: ENGINE_COLOR.codex },
-      ...(isResumable(job) ? [{ text: '↻', color: ROUND }] : []),
-    ]
-    const after = job.status === 'error' && job.error ? clip(job.error, 24)
-      : job.endedAt !== undefined ? `${ago(now - job.endedAt)} ago` : ''
-    const detail: Seg[] = [
-      { text: clip(job.description ?? '(no description)', Math.max(8, IW - 26)), dim: true },
-      ...(isLive ? [clockSeg(`jclk-${job.id}`, job.startedAt, null, 'text')] : after ? [{ text: `· ${after}`, dim: true }] : []),
-    ]
-    const { cancelLabel, copyLabel, actionsW, isStacked, isColumn } = jobLayout(job)
-    const actions = (
-      <Box key="actions" gap={isColumn ? 0 : 1} flexShrink={0} flexDirection={isColumn ? 'column' : 'row'}>
-        {isLive && <Button key={`cancel-${job.id}`} label={cancelLabel} onPress={() => data.onCancel(job.id)} />}
-        <Button key={`copy-${job.id}`} label={copyLabel} onPress={press => data.onCopy(copyText(job), press.surface)} />
-      </Box>
-    )
-    return (
-      <Box key={job.id} flexDirection="column" width={IW}>
-        {isStacked ? (
-          <Box flexDirection="column" width={IW}>
-            <Box gap={1}>{render(fit(left, IW))}</Box>
-            {actions}
-          </Box>
-        ) : (
-          <Box justifyContent="space-between" gap={1} width={IW}>
-            <Box gap={1} flexShrink={1}>{render(fit(left, IW - actionsW - 1))}</Box>
-            {actions}
-          </Box>
-        )}
-        <Box gap={1} width={IW}>{render(fit(detail, IW))}</Box>
-        {isLive && job.lastActivity && note('act', { text: clip(`↳ ${job.lastActivity}`, IW), color: ACTIVITY })}
-        {isLive && job.tokens && note('tok', {
-          dim: true,
-          text: clip(`in ${kilo(job.tokens.input)} · cached ${kilo(job.tokens.cached)} · out ${kilo(job.tokens.output)}`, IW),
-        })}
-      </Box>
-    )
-  }
-
-  // Claude's own agent rounds, read-only: the natives and their rounds, as the roster holds them.
-  type Run = { inst: Instance; role: string }
-  const claudeRuns = (): Run[] =>
-    [
-      ...roles.flatMap(s => (s.history ?? s.instances).filter(i => i.engine === 'claude').map(inst => ({ inst, role: s.name as string }))),
-      ...roster.others.filter(i => i.engine === 'claude').map(inst => ({ inst, role: 'other' })),
-    ].sort((a, b) => Number(b.inst.isActive) - Number(a.inst.isActive) || b.inst.startedAt - a.inst.startedAt)
-  const RUN_H = 3
-
-  const runRows = ({ inst: i, role }: Run) => {
-    const g = GLYPH[i.status] ?? GLYPH.lost
-    const rc = (ROLE_COLOR as Record<string, string>)[role]
-    const left: Seg[] = [
-      { text: i.id, bold: true },
-      { text: `${g.text} ${g.label}`, color: g.color, dim: i.status === 'cancelled' || i.status === 'stopped' },
-      { text: role, color: rc, bold: true },
-      ...(i.model ? [{ text: modelName(i.model), dim: true } as Seg] : []),
-    ]
-    const chips: Seg[] = [{ text: 'rounds', dim: true }]
-    i.rounds.slice(-4).forEach((r, k, shown) => {
-      const n = i.rounds.length - shown.length + k + 1
-      const rg = GLYPH[r.status] ?? GLYPH.lost
-      const end = endOf(r, now)
-      const live = r.endedAt === undefined && ACTIVE.has(r.status)
-      chips.push({ text: `${live ? '●' : rg.text} r${n}`, color: live ? RUN : rg.color })
-      chips.push(live ? clockSeg(`rclk-${i.id}-${n}`, r.startedAt, null, 'inactive') : { text: end === undefined ? '?' : fmtClock(end - r.startedAt), dim: true })
-    })
-    return (
-      <Box key={i.id} flexDirection="column" width={IW}>
-        {line(`${i.id}-a`, left, undefined, IW, keepOf(left, 1))}
-        {line(`${i.id}-b`, [{ text: i.task || '(no description)' }], undefined, IW)}
-        {line(`${i.id}-c`, chips, undefined, IW)}
-      </Box>
-    )
-  }
-
-  const jobsTab = () => {
-    const recent = [...data.jobs].sort((a, b) => b.startedAt - a.startedAt)
-    const live = recent.filter(j => ACTIVE.has(j.status))
-    const done = recent.filter(j => !ACTIVE.has(j.status))
-    const runs = claudeRuns()
-    // Rows outside the jobs: header, footer, the clock warning; each group adds its title and,
-    // when not tiny, the card's two border rows. Items are taken in order (active jobs, finished
-    // jobs, Claude rounds) while they fit; when some do not, one row goes to the "+N hidden" note.
-    const groupH = 1 + (isTiny ? 0 : 2)
-    // The header (with its profile row) plus the footer, which is taller on the full-width desktop.
-    const footerH = isDesk && el.Svg && W >= 60 ? 3.05 : 1
-    const warningH = data.clockLost ? 1 : 0
-    const showFooter = !isDesk || data.rows >= headerH + footerH + warningH + 1
-    const fixed = headerH + (showFooter ? footerH : 0) + warningH
-    const showSummary = !isDesk || data.rows >= fixed + 1
-    const sum = (list: Job[]) => list.reduce((n, j) => n + jobHeight(j), 0)
-    const need = fixed + (live.length ? groupH + sum(live) : 0) + (done.length ? groupH + sum(done) : 0) +
-      (runs.length ? groupH + runs.length * RUN_H : 0)
-    const shownLive: Job[] = []
-    const shownDone: Job[] = []
-    const shownRuns: Run[] = []
-    if (need <= data.rows) {
-      shownLive.push(...live)
-      shownDone.push(...done)
-      shownRuns.push(...runs)
-    } else {
-      let room = data.rows - fixed - 1
-      const take = <T,>(list: T[], into: T[], height: (item: T) => number) => {
-        for (const item of list) {
-          const cost = height(item) + (into.length ? 0 : groupH)
-          if (cost > room) return false
-          into.push(item)
-          room -= cost
-        }
-        return true
-      }
-      if (take(live, shownLive, jobHeight) && take(done, shownDone, jobHeight)) take(runs, shownRuns, () => RUN_H)
-    }
-    const hiddenLive = live.length - shownLive.length
-    const hiddenDone = done.length - shownDone.length
-    const hiddenRuns = runs.length - shownRuns.length
-    const group = (key: string, list: unknown[], total: number, extra: Seg[] = []) => (
-      <Box key={key} flexDirection="column">
-        <Box paddingX={isTiny ? 0 : 1} width={W}>
-          {line(`${key}-h`, [{ text: key, bold: true }, { text: String(total), dim: true }, ...extra], undefined, isTiny ? W : W - 2)}
-        </Box>
-        {card(`${key}-card`, list, { dim: true })}
-      </Box>
-    )
-    const hiddenJobs = hiddenLive + hiddenDone
-    return [
-      header(),
-      clockWarning(),
-      showSummary && data.jobs.length === 0 && runs.length === 0 ? note('empty', { dim: true, text: 'No Pantheon jobs in this session.' }) : null,
-      shownLive.length ? group('active', shownLive.map(jobRows), live.length) : null,
-      shownDone.length ? group('finished', shownDone.map(jobRows), done.length) : null,
-      shownRuns.length ? group('Claude agent rounds', shownRuns.map(runRows), runs.length, [chip('read-only', 'inactive')]) : null,
-      showSummary && hiddenJobs + hiddenRuns ? note('more', {
-        dim: true,
-        text: hiddenJobs === 0 ? `+${hiddenRuns} Claude rounds hidden`
-          : hiddenLive ? `+${hiddenJobs + hiddenRuns} jobs hidden` : `+${hiddenDone + hiddenRuns} older jobs hidden`,
-      }) : null,
-      showFooter ? footer() : null,
-    ]
   }
 
   // ------------------------------------------------------------ mini
@@ -1234,9 +1000,9 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
       act.forEach((i, k) => {
         if (k) segs.push({ text: '│', dim: true })
         const tags = (i.status === 'background' ? 3 : 0) + (i.rounds.length > 1 ? 6 : 0)
-        segs.push({ text: i.id, bold: true })
+        segs.push({ text: i.jobId ?? i.id, bold: true })
         if (i.rounds.length > 1) segs.push({ text: `↻ r${i.rounds.length}`, color: ROUND })
-        if (i.activity) segs.push({ text: clip(i.activity, Math.max(0, per - i.id.length - 8 - tags)), color: ACTIVITY })
+        if (i.activity) segs.push({ text: clip(i.activity, Math.max(0, per - (i.jobId ?? i.id).length - 8 - tags)), color: ACTIVITY })
         if (i.status === 'background') segs.push({ text: 'bg', dim: true })
         segs.push(clockSeg(`clk-${i.id}`, i.startedAt, null, 'text', true))
       })
@@ -1266,7 +1032,7 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     return lines
   }
 
-  const children = layout === 'mini' ? mini() : data.tab === 'jobs' ? jobsTab() : agentsTab()
+  const children = layout === 'mini' ? mini() : agentsView()
   return isDesk
     ? <Box key="pantheon-desktop" flexDirection="column" width={outerW} paddingX={inset} backgroundColor={DESK_PANEL}>{children}</Box>
     : <Box flexDirection="column" width={W} backgroundColor={undefined}>{children}</Box>

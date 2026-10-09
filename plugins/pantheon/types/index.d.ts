@@ -23,7 +23,7 @@ export type SessionInfo = {
   costUsd?: number
 }
 export type PanelGroup = 'running' | 'idle'
-export type PanelView = { tab: 'agents' | 'jobs'; collapsed?: PanelGroup[] }
+export type PanelView = { collapsed?: PanelGroup[] }
 
 declare module 'claude-code' {
   interface PluginState {

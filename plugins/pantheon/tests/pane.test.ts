@@ -119,28 +119,23 @@ describe('pane', () => {
     expect(await texts(ui)).not.toContain('idle')
   })
 
-  for (const surface of SURFACES) t(`tabs separate counts and the footer identifies keys (${surface})`, async ($, on) => {
+  for (const surface of SURFACES) t(`the pane is the agents view only: no tabs, no jobs text, footer keys left (${surface})`, async ($, on) => {
     world(on)
     seed(on, { jobs: [job()], natives: [native()] })
     await start($)
     const ui = await mountPane($, surface, { rows: 70 })
-    const tab = (await ui.find({ key: 'tab-jobs' })) as unknown as { props: { label: string; hotkey: string } }
+    for (const key of ['tab-agents', 'tab-jobs', 'pill-agents', 'pill-jobs', 'jobs-count', 'key-jobs']) expect(await ui.find({ key })).toBeUndefined()
+    const all = await texts(ui)
+    expect(all.filter(x => /jobs|resum|Copy/i.test(x) && x !== 'Read jobs.ts')).toEqual([])
+    expect(all.some(x => /^Jobs/.test(x))).toBe(false)
     if (surface === 'desktop') {
-      expect(tab.props.label).toBe('Jobs')
-      expect(tab.props.hotkey).toBe('2')
-      expect(await texts(ui)).toContain('2')
-      expect(await texts(ui)).toContain('keys:')
-      const shortcut = (await ui.find({ key: 'key-jobs' })) as unknown as { props: { hotkey: string } }
-      expect(shortcut.props.hotkey).toBeUndefined()
-      await ui.press({ key: 'tab-jobs' })
-      expect(await texts(ui)).toContain('↻ resumable · Copy = id + resume hint')
-      return
+      expect(all).toContain('keys:')
+      expect(all).toContain('esc close')
+    } else {
+      expect(all).toContain('keys: esc close')
     }
-    expect(tab.props.label).toBe('Jobs · 2')
-    expect(tab.props.hotkey).toBe('2')
-    expect(await texts(ui)).toContain('keys: 1 agents · 2 jobs · esc close')
-    await ui.press({ key: 'tab-jobs' })
-    expect(await texts(ui)).toContain('keys: 1 agents · 2 jobs · ↻ resumable · Copy = id + resume hint')
+    const buttons = (await ui.findAll({ type: 'Button' })).map(b => (b as unknown as { props: { hotkey?: string } }).props)
+    expect(buttons.some(b => b.hotkey === '1' || b.hotkey === '2')).toBe(false)
   })
 
   for (const surface of SURFACES) {
@@ -198,8 +193,8 @@ describe('pane', () => {
           return drawPanel({ Box, Text, Button }, {
             surface, placement, columns: 120, rows: 40, now: NOW,
             profiles: ['claude', 'codex', 'mixed'], activeProfile: 'mixed', onProfile: name => { choices.push(name) },
-            roster: buildRoster({ jobs: [], natives: [], session: { isRunning: false }, config: MIXED }), jobs: [], session: { isRunning: false },
-            tab: 'agents', hasClient: false, onTab: () => {}, onCancel: () => {}, onCopy: () => {},
+            roster: buildRoster({ jobs: [], natives: [], session: { isRunning: false }, config: MIXED }), session: { isRunning: false },
+            hasClient: false, onCancel: () => {},
           }) as never
         })
         const ui = await mountPane($, surface, { placement, requestId: 'profile-fixture' })
@@ -269,7 +264,7 @@ describe('pane', () => {
   })
 
   for (const surface of SURFACES) {
-    t(`agents tab shows the session, the three groups and every role once (${surface})`, async ($, on) => {
+    t(`agents view shows the session, the three groups and every role once (${surface})`, async ($, on) => {
       world(on)
       seed(on, {
         jobs: [job({ id: 'pjr', agent: 'fixer', description: 'wire tabs', status: 'running' }), job({ id: 'pjd', agent: 'explorer', status: 'done', description: 'map', endedAt: NOW - 30_000 })],
@@ -283,8 +278,6 @@ describe('pane', () => {
       expect(at).toEqual([...at].sort((a, b) => a - b))
       // fixer and oracle run, explorer finished; librarian, designer and council have not run yet.
       for (const name of ['explorer', 'librarian', 'fixer', 'oracle', 'designer', 'council α', 'council β']) expect(all).toContain(name)
-      expect(await ui.find({ key: 'tab-agents' })).toBeDefined()
-      expect(await ui.find({ key: 'tab-jobs' })).toBeDefined()
       if (surface === 'desktop') {
         expect(all).toContain('2')
         expect(all).toContain('running')
@@ -339,25 +332,53 @@ describe('pane', () => {
       expect(all).toContain('⊘')
     })
 
-    t(`tab button switches to jobs, which cancels and copies (${surface})`, async ($, on) => {
-      const { seen } = world(on, { hang: true })
+    t(`Cancel on a running Codex row stops that job (${surface})`, async ($, on) => {
+      world(on, { hang: true })
       await start($)
       const run = parse(await $.tool.call({ tool: DELEGATE, agent: 'fixer', prompt: 'x', description: 'wire tabs', background: true } as never))
-      const done = parse(await $.tool.call({ tool: DELEGATE, agent: 'explorer', prompt: 'y', description: 'map', background: true } as never))
-      await $.tool.call({ tool: 'mcp__pantheon__delegate_cancel', jobId: done.jobId } as never)
-      const ui = await mountPane($, surface)
-      await ui.press({ key: 'tab-jobs' })
-      const all = await texts(ui)
-      expect(all).toContain('active')
-      expect(all).toContain('finished')
-      await ui.press({ key: `copy-${done.jobId}` })
-      expect(seen.copied[0]).toContain(String(done.jobId))
-      expect(seen.copied[0]).toContain('resume: delegate({ agent: "explorer"')
-      expect(await ui.find({ key: `cancel-${done.jobId}` })).toBeUndefined()
+      const ui = await mountPane($, surface, { rows: 70 })
       await ui.press({ key: `cancel-${run.jobId}` })
       expect(parse(await $.tool.call({ tool: RESULT, jobId: run.jobId } as never)).status).toBe('cancelled')
-      await ui.press({ key: 'tab-agents' })
-      expect(await ui.find({ type: 'Text', text: 'orchestrator' })).toBeDefined()
+    })
+
+    t(`Cancel is absent on Claude rows and Idle rows (${surface})`, async ($, on) => {
+      world(on)
+      seed(on, {
+        jobs: [job({ id: 'pjr', agent: 'fixer', status: 'running' }), job({ id: 'pjd', agent: 'explorer', status: 'done', endedAt: NOW - 30_000 })],
+        natives: [native()],
+      })
+      await start($)
+      const ui = await mountPane($, surface, { rows: 70 })
+      expect(await ui.find({ key: 'cancel-pjr' })).toBeDefined()
+      expect(await ui.find({ key: 'cancel-pjd' })).toBeUndefined()
+      expect(await ui.find({ key: 'cancel-n1' })).toBeUndefined()
+      const labels = (await ui.findAll({ type: 'Button' })).map(b => (b as unknown as { props: { label: string } }).props.label)
+      expect(labels.filter(x => x === 'Cancel')).toHaveLength(1)
+    })
+
+    test(`Cancel on a resumed line carries the id of the running round (${surface})`, () => {
+      const jobs = [
+        job({ id: 'pj1', agent: 'fixer', status: 'done', sessionId: 's1', startedAt: NOW - 300_000, endedAt: NOW - 200_000 }),
+        job({ id: 'pj2', agent: 'fixer', status: 'running', sessionId: 's1', startedAt: NOW - 60_000 }),
+      ]
+      const cancelled: string[] = []
+      const element = (props: unknown) => ({ props })
+      const el = { Box: element, Text: element, Button: element, Svg: element }
+      type Node = { props?: { key?: string; label?: string; onPress?: () => void; children?: unknown } }
+      const buttons = (tree: unknown): Node[] => {
+        if (Array.isArray(tree)) return tree.flatMap(buttons)
+        if (!tree || typeof tree !== 'object') return []
+        const node = tree as Node
+        return [...(node.props?.onPress ? [node] : []), ...buttons(node.props?.children)]
+      }
+      const found = buttons(drawPanel(el as never, {
+        surface, columns: 120, rows: 40, now: NOW, profiles: ['claude'], activeProfile: 'claude',
+        roster: buildRoster({ jobs, natives: [], session: { isRunning: false }, config: MIXED }), session: { isRunning: false },
+        hasClient: false, onCancel: id => { cancelled.push(id) },
+      })).filter(b => b.props?.label === 'Cancel')
+      expect(found).toHaveLength(1)
+      found[0].props!.onPress!()
+      expect(cancelled).toEqual(['pj2'])
     })
 
     t(`other agents line only when present (${surface})`, async ($, on) => {
@@ -399,15 +420,10 @@ describe('pane', () => {
     expect(await props('session')).toMatchObject({ width: 80, paddingX: 2, position: 'relative', flexDirection: 'column' })
     expect(await props('idle-rows')).toMatchObject({ width: 80, flexDirection: 'column', position: 'relative' })
     expect((await props('idle-rows')).borderStyle).toBeUndefined()
-    expect(await props('jobs-count')).toMatchObject({ width: 3, flexShrink: 0, justifyContent: 'flex-end' })
     const svgs = (await ui.findAll({ type: 'Svg' })).map(n => (n as unknown as { props: { alt: string; source: string; width: number; height: number; isInteractive?: boolean } }).props)
-    expect(svgs.some(p => p.source.includes('rx="6" fill="rgba(196,80,127,0.11)"'))).toBe(true) // the Agents tab pill
     expect(svgs.some(p => p.alt === 'card background' && p.source.includes(`stroke="${rgba(SECTION_COLOR.session, 0.75)}"`))).toBe(true)
     expect(svgs.some(p => p.alt === 'card background' && p.source.includes(`stroke="${rgba(SECTION_COLOR.idle, 0.75)}"`))).toBe(true)
     expect((await props('pill-toggle-idle')).width).toBe(10.5)
-    expect((await props('tab-agents')).hotkey).toBe('1')
-    expect((await props('tab-jobs')).hotkey).toBe('2')
-    expect((await props('key-agents')).hotkey).toBeUndefined()
     expect(await ui.find({ key: 'idle-explorer' })).toBeDefined()
     expect(await texts(ui)).toContain('—') // a role that never ran
     expect((await texts(ui)).some(t => t.includes('▎') || t.includes('━'))).toBe(false)
@@ -440,23 +456,11 @@ describe('pane', () => {
   })
 
   for (const [columns, rows] of [[40, 70], [80, 3], [20, 100], [8, 100]] as const) {
-    t(`desktop keeps tab hotkeys and metrics within the pane at ${columns} columns / ${rows} rows`, async ($, on) => {
+    t(`desktop keeps metrics within the pane at ${columns} columns / ${rows} rows`, async ($, on) => {
       world(on)
       seed(on, { session: { isRunning: true, turnStartedAt: NOW - 5000, costUsd: 1.25, context: { tokens: 1234, window: 200000, percent: 1 } } })
-      const switched: string[] = []
-      on('state.set', async (_$, event, next) => {
-        if (event.key === 'view') switched.push((event.value as { tab: string }).tab)
-        return next(event)
-      })
       await start($)
       const ui = await mountPane($, 'desktop', { columns, rows })
-      const tabProps = async (tab: string) => {
-        const node = await ui.find({ key: `tab-${tab}` })
-        expect(node).toBeDefined()
-        return (node as unknown as { props: { hotkey: string } }).props
-      }
-      expect((await tabProps('jobs')).hotkey).toBe('2')
-      if (columns >= 30) expect((await tabProps('agents')).hotkey).toBe('1')
       if (rows === 3) expect(await ui.find({ key: 'footer' })).toBeUndefined()
 
       type LayoutNode = { type?: string; key?: string; props?: { key?: string; width?: number }; children?: LayoutNode[] }
@@ -478,14 +482,6 @@ describe('pane', () => {
       expect(metricNodes > 0).toBe(rows !== 3)
       if (rows !== 3) for (const label of ['cost', 'tokens', 'time']) expect(await texts(ui)).toContain(label)
       expect(metricImages >= 0).toBe(true)
-
-      await ui.press({ key: 'tab-jobs' })
-      expect(switched[switched.length - 1]).toBe('jobs')
-      expect((await tabProps('agents')).hotkey).toBe('1')
-      if (columns >= 30) expect((await tabProps('jobs')).hotkey).toBe('2')
-      await ui.press({ key: 'tab-agents' })
-      expect(switched.slice(-2)).toEqual(['jobs', 'agents'])
-      expect((await tabProps('jobs')).hotkey).toBe('2')
     })
   }
 
@@ -510,7 +506,6 @@ describe('pane', () => {
       const all = await texts(ui)
       expect(all.includes('+1 active')).toBe(true)
       expect(all.includes('/pantheon for details')).toBe(true)
-      expect(await ui.find({ key: 'tab-jobs' })).toBeUndefined()
       await release()
     }
   })
@@ -589,77 +584,11 @@ describe('pane', () => {
     })
     await start($)
     for (const surface of SURFACES) {
-      for (const tab of ['agents', 'jobs'] as const) {
-        const ui = await mountPane($, surface, { columns: 8 })
-        // The view persists between mounts: press only when the tab is not already showing.
-        if (await ui.find({ key: `tab-${tab}` })) await ui.press({ key: `tab-${tab}` })
-        expect((await texts(ui)).filter(x => x.length > 8)).toEqual([])
-        const labels = (await ui.findAll({ type: 'Button' })).map(b => String((b as unknown as { props: { label?: string } }).props.label))
-        expect(labels.filter(x => x.length + 4 > 8)).toEqual([])
-        await release()
-      }
-    }
-  })
-
-  t('the job actions row stays within 8 columns on the Jobs tab', async ($, on) => {
-    world(on)
-    seed(on, { jobs: [job({ id: 'pj3a', description: 'map', result: 'an answer', sessionId: 's' })] })
-    await start($)
-    for (const surface of SURFACES) {
       const ui = await mountPane($, surface, { columns: 8 })
-      if (await ui.find({ key: 'tab-jobs' })) await ui.press({ key: 'tab-jobs' })
-      expect(await ui.find({ key: 'cancel-pj3a' })).toBeDefined()
-      expect(await ui.find({ key: 'copy-pj3a' })).toBeDefined()
-      // Width a node takes if drawn on one line: Buttons are `[ label ]`, rows add their gaps.
-      type Node = { type?: string; props?: { label?: string; flexDirection?: string; gap?: number }; text?: string; children?: Node[] }
-      const widest = (n: Node): number => {
-        const kids = (n.children ?? []).filter(Boolean)
-        if (n.type === 'Button') return String(n.props?.label).length + 4
-        if (n.type === 'Text') return String(n.text ?? '').length
-        const sizes = kids.map(widest)
-        if (n.props?.flexDirection === 'column') return Math.max(0, ...sizes)
-        return sizes.reduce((a, b) => a + b, 0) + Math.max(0, sizes.length - 1) * (n.props?.gap ?? 0)
-      }
-      expect(widest((await ui.drawn()) as Node)).toBeLessThanOrEqual(8)
+      expect((await texts(ui)).filter(x => x.length > 8)).toEqual([])
+      const labels = (await ui.findAll({ type: 'Button' })).map(b => String((b as unknown as { props: { label?: string } }).props.label))
+      expect(labels.filter(x => x.length + 4 > 8)).toEqual([])
       await release()
-    }
-  })
-
-  t('the Jobs tab never draws taller than the body, at narrow and normal widths', async ($, on) => {
-    world(on)
-    const finished = Array.from({ length: 6 }, (_, k) => job({
-      id: `pd${k}`, status: 'done', description: `finished task ${k}`, startedAt: NOW - 600_000 + k * 1000, endedAt: NOW - 60_000,
-    }))
-    const running = [0, 1].map(k => job({
-      id: `pr${k}`, description: `running task ${k}`, lastActivity: 'rg x', tokens: { input: 1000, cached: 0, output: 10 }, startedAt: NOW - 5000 + k,
-    }))
-    seed(on, { jobs: [...running, ...finished] })
-    await start($)
-    // Rows a node takes: a Text or Button is one row, a column adds its children and gaps, a border adds two.
-    type Node = { type?: string; props?: { flexDirection?: string; gap?: number; borderStyle?: string }; children?: Node[] }
-    const tallest = (n: Node): number => {
-      if (n.type === 'Text' || n.type === 'Button' || n.type === 'Client') return 1
-      const sizes = (n.children ?? []).filter(Boolean).map(tallest)
-      const inner = n.props?.flexDirection === 'column'
-        ? sizes.reduce((a, b) => a + b, 0) + Math.max(0, sizes.length - 1) * (n.props?.gap ?? 0)
-        : Math.max(0, ...sizes)
-      return inner + (n.props?.borderStyle ? 2 : 0)
-    }
-    for (const surface of SURFACES) {
-      for (const [columns, rows] of [[20, 20], [8, 20], [11, 14], [40, 16], [120, 12], [20, 40]] as const) {
-        const ui = await mountPane($, surface, { columns, rows })
-        if (await ui.find({ key: 'tab-jobs' })) await ui.press({ key: 'tab-jobs' })
-        expect({ surface, columns, rows, height: tallest((await ui.drawn()) as Node) <= rows }).toEqual({ surface, columns, rows, height: true })
-        const ids = new Set(await texts(ui))
-        const drawn = [...running, ...finished].filter(j => ids.has(j.id)).length
-        if (rows === 20 && columns === 20) {
-          // Three rows per finished job at 20 columns: fewer than all six fit, and the rest are counted.
-          expect(drawn).toBeLessThan(8)
-          expect((await texts(ui)).some(x => /^\+\d+ (older )?jobs hidden$/.test(x))).toBe(true)
-        }
-        if (rows === 40) expect(drawn).toBe(8)
-        await release()
-      }
     }
   })
 
@@ -670,8 +599,6 @@ describe('pane', () => {
     await start($)
     fail = true
     const docked = await mountPane($, 'terminal', { columns: 40 })
-    expect((await texts(docked)).includes('clock unavailable')).toBe(true)
-    await docked.press({ key: 'tab-jobs' })
     expect((await texts(docked)).includes('clock unavailable')).toBe(true)
     await release()
     const mini = await mountPane($, 'terminal', { placement: 'inline', columns: 60 })
@@ -742,7 +669,7 @@ describe('pane', () => {
     session: { isRunning: true, turnStartedAt: NOW - 5_000, model: 'opus', costUsd: 0.5 } as SessionInfo,
   })
 
-  t('the Agents tab never draws taller than the body, at small and normal heights', async ($, on) => {
+  t('the Agents view never draws taller than the body, at small and normal heights', async ($, on) => {
     world(on)
     seed(on, busy())
     await start($)
@@ -1129,54 +1056,6 @@ describe('pane', () => {
     expect(seen.closed).toContain(PANE_ID)
   })
 
-  t('the Jobs tab lists Claude agent rounds read-only, so it is not empty on the claude profile', async ($, on) => {
-    world(on, { files: { [`${HOME}/.claude/pantheon.json`]: JSON.stringify({ profile: 'claude' }) } })
-    seed(on, { natives: [native({ rounds: [
-      { startedAt: NOW - 200_000, endedAt: NOW - 152_000, status: 'done' },
-      { startedAt: NOW - 134_000, status: 'running' },
-    ] })] })
-    await start($)
-    await command($, 'config')
-    for (const surface of SURFACES) {
-      const ui = await mountPane($, surface, { rows: 40 })
-      if (await ui.find({ key: 'tab-jobs' })) await ui.press({ key: 'tab-jobs' })
-      const all = await texts(ui)
-      expect(all).not.toContain('No Pantheon jobs in this session.')
-      expect(all).toContain('Claude agent rounds')
-      expect(all).toContain('read-only')
-      expect(all).toContain('Review the lifecycle')
-      expect(all).toContain('oracle')
-      expect(all).toContain('✓ r1')
-      expect(all).toContain('0:48')
-      expect(all).toContain('● r2')
-      expect(await ui.find({ key: 'cancel-n1' })).toBeUndefined()
-      expect(await ui.find({ key: 'copy-n1' })).toBeUndefined()
-      expect((await ui.findAll({ type: 'Button' })).map(b => String((b as unknown as { props: { key?: string } }).props.key)).filter(k => k.startsWith('cancel-') || k.startsWith('copy-'))).toEqual([])
-      await release()
-    }
-  })
-
-  t('the Jobs tab keeps Codex jobs with their buttons beside the Claude rounds and stays within the body', async ($, on) => {
-    world(on)
-    seed(on, busy())
-    await start($)
-    for (const surface of SURFACES) {
-      for (const rows of (surface === 'desktop' ? [3, 6, 10, 14, 20, 40] : [6, 10, 14, 20, 40])) {
-        const ui = await mountPane($, surface, { rows })
-        if (await ui.find({ key: 'tab-jobs' })) await ui.press({ key: 'tab-jobs' })
-        expect({ surface, rows, fits: rowsOf((await ui.drawn()) as Node) <= rows }).toEqual({ surface, rows, fits: true })
-        expect(await ui.find({ key: 'profile-row' })).toBeDefined()
-        if (surface === 'desktop' && rows <= 6) expect(await ui.find({ key: 'footer' })).toBeUndefined()
-        if (rows === 40) {
-          expect(await ui.find({ key: 'cancel-pj1' })).toBeDefined()
-          expect(await ui.find({ key: 'copy-pj3' })).toBeDefined()
-          expect(await texts(ui)).toContain('Claude agent rounds')
-        }
-        await release()
-      }
-    }
-  })
-
   t('an idle line keeps the role name at 40 columns', async ($, on) => {
     world(on)
     seed(on, {
@@ -1218,46 +1097,19 @@ describe('pane', () => {
     expect(await clients(ui)).toEqual([])
   })
 
-  t('a failed tab write shows one toast and does not throw', async ($, on) => {
+  t('a failed view write shows one toast and does not throw', async ($, on) => {
     const { seen } = world(on)
     let deny = false
     on('state.set', async (_$, e, next) => (deny && e.key === 'view' ? { deny: 'view storage unavailable' } : next(e)))
     await start($)
     deny = true
     const ui = await mountPane($, 'terminal')
-    await ui.press({ key: 'tab-jobs' })
-    await ui.press({ key: 'tab-agents' })
-    await ui.press({ key: 'tab-jobs' })
+    await ui.press({ key: 'toggle-idle' })
+    await ui.press({ key: 'toggle-idle' })
+    await ui.press({ key: 'toggle-idle' })
     const toasts = seen.toasts.filter(x => x.includes('could not save the panel state'))
     expect(toasts.length).toBe(1)
     expect(toasts[0]).toContain('view storage unavailable')
-  })
-
-  t('fast tab switches persist in order even when the first write is slow', async ($, on) => {
-    const { clock } = world(on)
-    const stored: string[] = []
-    let slowed = false
-    on('state.set', async (_$, e, next) => {
-      if (e.key !== 'view') return next(e)
-      const tab = (e.value as { tab: string }).tab
-      if (tab === 'jobs' && !slowed) { slowed = true; await clock.sleep(10) }
-      const result = await next(e)
-      if (result.value.isSet) stored.push(tab)
-      return result
-    })
-    await start($)
-    const ui = await mountPane($, 'terminal')
-    const first = ui.press({ key: 'tab-jobs' })
-    await clock.settle()
-    const second = ui.press({ key: 'tab-agents' })
-    await clock.settle()
-    await clock.advance(10)
-    await Promise.all([first, second])
-    await clock.settle()
-    expect(stored[stored.length - 1]).toBe('agents')
-    expect(await ui.find({ key: 'tab-agents' })).toBeDefined()
-    const labels = (await ui.findAll({ type: 'Button' })).map(b => String((b as unknown as { props: { label?: string } }).props.label))
-    expect(labels).toContain('● Agents')
   })
 
   for (const surface of SURFACES) {
@@ -1318,12 +1170,9 @@ describe('pane', () => {
       session: { isRunning: true, turnStartedAt: NOW - 5_000, model: 'claude-opus-5-5-with-a-long-name', effort: 'high' },
     })
     await start($)
-    for (const tab of ['agents', 'jobs'] as const) {
-      const ui = await mountPane($, 'terminal', { columns: 40 })
-      if (tab === 'jobs') await ui.press({ key: 'tab-jobs' })
-      expect((await texts(ui)).filter(x => x.length > 40)).toEqual([])
-      await release()
-    }
+    const ui = await mountPane($, 'terminal', { columns: 40 })
+    expect((await texts(ui)).filter(x => x.length > 40)).toEqual([])
+    await release()
   })
 
   t('status line counts running and background, clears when none', async ($, on) => {
@@ -1416,9 +1265,9 @@ describe('timelineSource', () => {
     }
     const bucket = Math.floor(NOW_T / 15_000) * 15_000
     const draw = (now: number) => images(drawPanel(el as never, {
-      surface: 'desktop', columns: 120, rows: 100, now, roster, jobs: [], session,
+      surface: 'desktop', columns: 120, rows: 100, now, roster, session,
       profiles: ['claude', 'codex', 'mixed'], activeProfile: 'mixed',
-      tab: 'agents', hasClient: false, onTab: () => {}, onCancel: () => {}, onCopy: () => {},
+      hasClient: false, onCancel: () => {},
     }))
     const first = draw(bucket + 100)
     expect(timelineReads).toBe(1)

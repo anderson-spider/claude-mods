@@ -16,7 +16,7 @@ import { isOffered, nativeAgentSpecs, resolveCodexCall, usesCodex } from './role
 import { buildRoster } from './roster'
 import {
   DEFAULT_SESSION, DEFAULT_VIEW, completed, describeTool, markNativesLost,
-  normalizeNatives, normalizeSession, normalizeView, sessionCompleted, sessionMeasured, viewTab, viewToggled,
+  normalizeNatives, normalizeSession, normalizeView, sessionCompleted, sessionMeasured, viewToggled,
   roundOpened, sessionStarted, sessionStepped, spawned, stepAccounted, toolNoted,
 } from './tracking'
 import type { Clock, ConfigResult, DelegateArgs, PantheonConfig, Spawn } from './types'
@@ -748,7 +748,6 @@ export const register: Register = (on, options) => {
       rows: e.props.scroll?.bodyRows ?? e.viewport?.rows ?? 24,
       now,
       roster: buildRoster({ jobs: list, natives: tracked, session: info, config: panelConfig.config }),
-      jobs: list,
       session: info,
       profiles: panelConfig.profiles,
       activeProfile: panelConfig.config.profile,
@@ -766,15 +765,15 @@ export const register: Register = (on, options) => {
           $.ui.toast(`pantheon: could not select profile: ${error instanceof Error ? error.message : String(error)}`)
         })
       },
-      tab: normalizeView(view).tab,
       collapsed: normalizeView(view).collapsed ?? [],
       hasClient,
       clockLost: isClockLost,
-      onTab: tab => { viewQueue.push(() => update($, viewAtom, cur => viewTab(normalizeView(cur), tab))) },
       onToggle: group => { viewQueue.push(() => update($, viewAtom, cur => viewToggled(normalizeView(cur), group))) },
       onClose: () => { void $.ui.close({ id: PANE_ID }) },
-      onCancel: jobId => { jobs?.cancel(jobId) },
-      onCopy: (text, surface) => { void $.ui.copy({ text, surface }) },
+      onCancel: jobId => {
+        const done = jobs ? jobs.cancel(jobId) : { error: `Unknown job ${jobId} in this session.` }
+        if ('error' in done) $.ui.toast(`pantheon: ${done.error}`)
+      },
     }) as never
   })
 

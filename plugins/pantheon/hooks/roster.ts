@@ -19,6 +19,8 @@ export type Instance = {
   activity?: string
   tokens: { input?: number; cached?: number; out: number; ctx?: number; steps?: number }
   resumeId?: string
+  /** Codex only: the id of the latest job of this line, the one `onCancel` stops. */
+  jobId?: string
 }
 export type Slot = {
   name: SlotName; engine: Engine | 'mixed'; state: 'active' | 'idle' | 'off'
@@ -52,6 +54,7 @@ function codexInstance(rounds: Job[]): Instance {
     tokens: latest.tokens
       ? { input: latest.tokens.input, cached: latest.tokens.cached, out: latest.tokens.output }
       : { out: 0 },
+    jobId: latest.id,
     ...(latest.sessionId && !isActive ? { resumeId: latest.id } : {}),
   }
 }
