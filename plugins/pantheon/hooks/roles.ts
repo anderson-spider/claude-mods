@@ -51,7 +51,7 @@ function validSandbox(value: string): value is Sandbox {
 export function resolveCodexCall(
   config: PantheonConfig,
   args: DelegateArgs,
-  ctx: { cwd: string; skipGitRepoCheck: boolean; resumeSessionId?: string },
+  ctx: { cwd: string; skipGitRepoCheck: boolean; resumeSessionId?: string; gitCommonDir?: string },
   prompts: RolePrompts,
 ): CodexCall | { error: string } {
   if (!validSandbox(config.sandboxCap)) {
@@ -90,6 +90,13 @@ export function resolveCodexCall(
     return unavailable()
   }
 
+  if (args.agent === 'git') {
+    const blocked = config.sandboxCap === 'read-only' ? 'sandboxCap'
+      : config.noNetwork ? 'noNetwork' : override.sandbox === 'read-only' ? 'sandbox' : undefined
+    if (blocked) return { error: `${blocked} blocks the git role: it needs write access to the git dir and network.` }
+    if (!ctx.gitCommonDir) return { error: "The git common dir could not be resolved or does not belong to the session's repository." }
+  }
+
   const model = args.model ?? override.model
   const mismatch = modelMismatch('codex', model)
   if (mismatch) return { error: mismatch }
@@ -100,6 +107,7 @@ export function resolveCodexCall(
     effort: args.effort ?? override.effort,
     sandbox,
     noNetwork: config.noNetwork,
+    ...(args.agent === 'git' ? { writableRoots: [ctx.gitCommonDir!], network: true } : {}),
     prompt: `${appendPrompt(prompts(key, 'codex'), override.prompt)}\n\n---\n\n${args.prompt}`,
     cwd: ctx.cwd,
     skipGitRepoCheck: ctx.skipGitRepoCheck,
@@ -127,6 +135,7 @@ export function nativeAgentSpecs(config: PantheonConfig, prompts: RolePrompts): 
     fixer: 'Pantheon bounded implementation from a complete specification.',
     oracle: 'Analyze architecture, debug difficult problems and review technical decisions.',
     designer: 'Design and implement interfaces and user experiences.',
+    git: 'Perform commit, squash, push and PR/MR after validation from the orchestrator brief.',
   }
   const specs: NativeSpec[] = ROLES
     .filter(role => isOffered(config, `pantheon:${role}`))
@@ -139,7 +148,7 @@ export function nativeAgentSpecs(config: PantheonConfig, prompts: RolePrompts): 
         model: override.model,
         effort: override.effort,
         ...(role === 'oracle' ? { disallowedTools: READ_ONLY_DENY }
-          : role === 'explorer' || role === 'librarian' ? { disallowedTools: RESEARCH_DENY } : {}),
+          : role === 'explorer' || role === 'librarian' || role === 'git' ? { disallowedTools: RESEARCH_DENY } : {}),
       }
     })
 

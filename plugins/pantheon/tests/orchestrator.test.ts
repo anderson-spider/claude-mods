@@ -5,8 +5,9 @@ import { buildOrchestratorSection } from '../hooks/prompts/orchestrator'
 import { rolePrompt } from '../hooks/prompts/roles'
 
 describe('orchestrator budget', () => {
-  test('claude prompt stays within 5000 chars', () => {
-    expect(buildOrchestratorSection(CLAUDE).length).toBeLessThanOrEqual(5000)
+  // The git route adds its required brief fields and keeps a small growth margin.
+  test('claude prompt stays within 5350 chars', () => {
+    expect(buildOrchestratorSection(CLAUDE).length).toBeLessThanOrEqual(5350)
   })
   // Measured after the cut (4946 and 5029 chars) plus 10%.
   test('codex stays within 5441 chars', () => {
@@ -24,7 +25,7 @@ describe('orchestrator section', () => {
   })
   test('claude routes every role and seat through Agent without Codex discipline', () => {
     const section = buildOrchestratorSection(CLAUDE)
-    for (const role of ['explorer', 'librarian', 'fixer', 'oracle', 'designer']) {
+    for (const role of ['explorer', 'librarian', 'fixer', 'oracle', 'designer', 'git']) {
       expect(section).toContain(`Agent({ subagent_type: "pantheon:${role}"`)
     }
     expect(section).toContain('Council seats: Agent pantheon:councillor-alpha, Agent pantheon:councillor-beta')
@@ -38,14 +39,14 @@ describe('orchestrator section', () => {
 
   test('codex routes every role and seat through delegate and preserves native discipline', () => {
     const section = buildOrchestratorSection(CODEX)
-    for (const role of ['explorer', 'librarian', 'fixer', 'oracle', 'designer']) {
+    for (const role of ['explorer', 'librarian', 'fixer', 'oracle', 'designer', 'git']) {
       expect(section).toContain(`delegate({ agent: "${role}"`)
       expect(section).not.toContain(`pantheon:${role}`)
     }
     expect(section).toContain('Council seats: delegate councillor:alpha, delegate councillor:beta')
     expect(section).toContain('run_in_background: true')
     expect(section).toContain('delegate_result')
-    for (const text of ['delegate_cancel({ jobId })', 'resume: <jobId>', 'not the raw sessionId', 'only the orchestrator commits'])
+    for (const text of ['delegate_cancel({ jobId })', 'resume: <jobId>', 'not the raw sessionId'])
       expect(section).toContain(text)
   })
 
@@ -58,13 +59,13 @@ describe('orchestrator section', () => {
       expect(buildOrchestratorSection({ ...config, disabledAgents })).not.toContain('delegate_result')
     }
     expect(buildOrchestratorSection({
-      ...MIXED, disabledAgents: ['explorer', 'librarian', 'fixer', 'council'],
+      ...MIXED, disabledAgents: ['explorer', 'librarian', 'fixer', 'git', 'council'],
     })).not.toContain('delegate_result')
   })
 
   test('lists active roles with the correct calling tools', () => {
     const section = buildOrchestratorSection(MIXED)
-    for (const role of ['explorer', 'librarian', 'fixer']) {
+    for (const role of ['explorer', 'librarian', 'fixer', 'git']) {
       expect(section).toContain(`@${role}`)
       expect(section).toContain(`delegate({ agent: "${role}"`)
     }
@@ -72,7 +73,7 @@ describe('orchestrator section', () => {
     expect(section).toContain('Agent({ subagent_type: "pantheon:designer"')
   })
 
-  for (const role of ['explorer', 'librarian', 'fixer', 'oracle', 'designer']) {
+  for (const role of ['explorer', 'librarian', 'fixer', 'oracle', 'designer', 'git']) {
     test(`disabled ${role} disappears from routing, examples and skill mappings`, () => {
       const section = buildOrchestratorSection({ ...MIXED, disabledAgents: [role] })
       expect(section).not.toContain(`@${role}`)
@@ -120,7 +121,51 @@ describe('orchestrator section', () => {
 })
 
 describe('role prompts', () => {
-  const keys: PromptKey[] = ['explorer', 'librarian', 'fixer', 'oracle', 'designer', 'councillor']
+  const keys: PromptKey[] = ['explorer', 'librarian', 'fixer', 'oracle', 'designer', 'git', 'councillor']
+  test('git routing keeps decisions and validation with the orchestrator', () => {
+    for (const config of [CLAUDE, CODEX, MIXED]) {
+      const section = buildOrchestratorSection(config)
+      expect(section).toContain('Delegate: commit, squash, push and PR/MR after validation')
+      expect(section).toContain('what to include, branch, base, squash yes/no, push yes/no, PR/MR yes/no')
+      expect(section).toContain('The orchestrator decides and validates; @git performs the git work')
+      expect(section).not.toContain('orchestrator commits')
+    }
+  })
+
+  for (const engine of ['codex', 'claude'] as const) {
+    test(`${engine} designer leaves commit and push to git`, () => {
+      expect(rolePrompt('designer', engine)).toContain('Do not commit or push; the git role handles your delivered changes.')
+    })
+
+    test(`${engine} fixer leaves commit and push to git`, () => {
+      const prompt = rolePrompt('fixer', engine)
+      expect(prompt).toContain('Do not commit or push')
+      expect(prompt).toContain('the git role')
+      expect(prompt).not.toContain('orchestrator commits')
+    })
+
+    test(`${engine} git enforces scope, refusals, conventions and reporting`, () => {
+      const prompt = rolePrompt('git', engine)
+      for (const text of [
+        "orchestrator's brief decides", 'what to include, branch, base, squash yes/no, push yes/no, PR/MR yes/no',
+        'git status', 'git diff', "Stage only the task's files", 'git log', 'Conventional Commits in English',
+        'PR/MR template', 'gh', 'glab', 'Preserve unrelated changes', 'Never add AI attribution',
+        'Refuse commit, push, rebase, reset or merge that modifies the default branch, main/master/develop or a protected branch',
+        "Discover the relevant remote's default branch", 'git symbolic-ref refs/remotes/<remote>/HEAD',
+        'gh repo view / glab repo view', 'confirm the branch you modify or push to is neither default nor protected',
+        'both the local branch and remote push destination', 'stop and report: unknown is not unprotected',
+        'Using main as a PR/MR base or rebasing the task branch onto main is allowed',
+        'the refusal concerns modifying those branches, not using them as a base',
+        'Refuse force push without --force-with-lease', 'Refuse merging a PR/MR',
+        'Refuse deleting remote branches', 'Rewrite history (squash, amend or rebase of the branch) only within',
+        "the range of the task's commits the orchestrator names in the brief, whoever created them",
+        'Refuse history outside that range', 'If the range is missing or ambiguous, stop and report',
+        'Refuse touching work outside the task', 'hook, conflict, auth', 'stop and report rather than improvise',
+        'Do not spawn subagents or delegate', 'sha + subject', 'branch and push result', 'PR/MR URL', 'refused or skipped',
+      ]) expect(prompt).toContain(text)
+      expect(prompt).not.toContain('Refuse rewriting history you did not create in this task')
+    })
+  }
   for (const key of keys) {
     test(`${key} ends with the task report-format override`, () => {
       expect(rolePrompt(key, 'codex').endsWith('If the task defines a report format, it replaces the format above.')).toBe(true)

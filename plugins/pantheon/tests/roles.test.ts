@@ -15,6 +15,30 @@ function call(config: PantheonConfig, agent = 'fixer'): CodexCall {
 }
 
 describe('Codex roles', () => {
+  test('git requires its resolved common dir and grants only that extra root', () => {
+    expect(resolveCodexCall(CODEX, { agent: 'git', prompt: 't' }, ctx, prompts))
+      .toEqual({ error: expect.stringContaining('git common dir could not be resolved') })
+    expect(resolveCodexCall(CODEX, { agent: 'git', prompt: 't' }, { ...ctx, gitCommonDir: '/main/.git' }, prompts))
+      .toEqual(expect.objectContaining({ sandbox: 'workspace-write', writableRoots: ['/main/.git'], network: true }))
+    for (const agent of ROLES.filter(role => role !== 'git')) {
+      const result = resolveCodexCall(CODEX, { agent, prompt: 't' }, { ...ctx, gitCommonDir: '/main/.git' }, prompts)
+      expect(result).not.toHaveProperty('writableRoots')
+      expect(result).not.toHaveProperty('network')
+    }
+  })
+
+  test('git refuses each setting that blocks writes or network', async () => {
+    for (const [setting, patch] of [
+      ['sandboxCap', { sandboxCap: 'read-only' }],
+      ['noNetwork', { noNetwork: true }],
+      ['sandbox', { agents: { git: { sandbox: 'read-only' } } }],
+    ] as const) {
+      const result = resolveCodexCall(await resolved('codex', patch), { agent: 'git', prompt: 't' }, ctx, prompts)
+      expect(result).toEqual({ error: expect.stringContaining(setting) })
+      expect(result).toEqual({ error: expect.stringContaining('needs write access to the git dir and network') })
+    }
+  })
+
   test('roles route by engine', async () => {
     const codex = await resolved('codex')
     expect(call(codex, 'oracle').sandbox).toBe('read-only')
@@ -53,17 +77,17 @@ describe('Codex roles', () => {
     expect(resolveCodexCall(CLAUDE, { agent: 'nope', prompt: 't' }, ctx, prompts))
       .toEqual({ error: 'Unknown or disabled agent: nope. Valid agents: none.' })
     expect(resolveCodexCall(MIXED, { agent: 'nope', prompt: 't' }, ctx, prompts))
-      .toEqual({ error: 'Unknown or disabled agent: nope. Valid agents: explorer, librarian, fixer, councillor:alpha.' })
+      .toEqual({ error: 'Unknown or disabled agent: nope. Valid agents: explorer, librarian, fixer, git, councillor:alpha.' })
   })
 
   test('Codex availability follows active roles and seats', () => {
     expect(codexAgents(CLAUDE)).toEqual([])
     expect(usesCodex(CLAUDE)).toBe(false)
-    expect(codexAgents(MIXED)).toEqual(['explorer', 'librarian', 'fixer', 'councillor:alpha'])
+    expect(codexAgents(MIXED)).toEqual(['explorer', 'librarian', 'fixer', 'git', 'councillor:alpha'])
     expect(codexAgents(CODEX)).toEqual([...ROLES, 'councillor:alpha', 'councillor:beta'])
     expect(usesCodex(CODEX)).toBe(true)
-    expect(usesCodex({ ...MIXED, disabledAgents: ['explorer', 'librarian', 'fixer', 'council'] })).toBe(false)
-    expect(codexAgents({ ...MIXED, disabledAgents: ['explorer', 'librarian', 'fixer'] })).toEqual(['councillor:alpha'])
+    expect(usesCodex({ ...MIXED, disabledAgents: ['explorer', 'librarian', 'fixer', 'git', 'council'] })).toBe(false)
+    expect(codexAgents({ ...MIXED, disabledAgents: ['explorer', 'librarian', 'fixer', 'git'] })).toEqual(['councillor:alpha'])
     expect(usesCodex({ ...MIXED, disabledAgents: ['explorer', 'librarian', 'fixer'] })).toBe(true)
   })
 
@@ -191,6 +215,13 @@ describe('native agent prompts', () => {
 })
 
 describe('native agent specs', () => {
+  test('git inherits file editing tools but cannot delegate', () => {
+    const spec = nativeAgentSpecs(CLAUDE, prompts).find(spec => spec.name === 'git')
+    expect(spec?.disallowedTools).toEqual(['Agent', 'mcp__pantheon__delegate', 'mcp__pantheon__delegate_cancel'])
+    expect(spec?.tools).toBeUndefined()
+    expect(spec?.description).toContain('commit, squash, push and PR/MR after validation')
+    expect(spec?.prompt).toBe('<git>')
+  })
   test('native specs follow the engine', () => {
     const specs = nativeAgentSpecs(CLAUDE, prompts)
     expect(specs.map(spec => spec.name)).toEqual([...ROLES, 'councillor-alpha', 'councillor-beta'])
@@ -273,7 +304,7 @@ describe('role prompts by engine', () => {
 
   test('fixer commit instructions fit its engine', () => {
     expect(rolePrompt('fixer', 'codex')).toContain('.git is read-only')
-    expect(rolePrompt('fixer', 'claude')).toContain('Do not commit or push; the orchestrator commits.')
+    expect(rolePrompt('fixer', 'claude')).toContain('Do not commit or push; the git role handles your delivered changes.')
     expect(rolePrompt('fixer', 'claude')).not.toContain('.git is read-only')
   })
 

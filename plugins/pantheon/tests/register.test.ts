@@ -78,6 +78,73 @@ async function step($: Engine, input = stepInput()) {
 }
 
 describe('register', () => {
+  const commonDirArgv = [
+    'env', '-u', 'GIT_DIR', '-u', 'GIT_COMMON_DIR', '-u', 'GIT_WORK_TREE',
+    '-u', 'GIT_INDEX_FILE', '-u', 'GIT_OBJECT_DIRECTORY', '-u', 'GIT_ALTERNATE_OBJECT_DIRECTORIES',
+    '-u', 'GIT_CEILING_DIRECTORIES', '-u', 'GIT_DISCOVERY_ACROSS_FILESYSTEM',
+    'git', 'rev-parse', '--path-format=absolute', '--git-common-dir',
+  ]
+  const commonDirCommand = commonDirArgv.join(' ')
+
+  for (const foreign of [false, true]) {
+    test(`git ${foreign ? 'refuses a foreign nested repository' : 'allows a linked worktree with the same canonical common dir'}`, async ($, on) => {
+      const { seen } = world(new Proxy(on, {
+        apply(target, thisArg, args) {
+          if (args[0] !== 'process.run') return Reflect.apply(target, thisArg, args)
+        },
+      }), {
+        realPaths: { '/repo/link': '/repo/sub', '/main/link.git': '/main/.git' },
+      })
+      const cwds: (string | undefined)[] = []
+      on('process.run', async (_$, e) => {
+        const common = e.argv.includes('--git-common-dir') && !e.argv.includes('--git-dir')
+        if (common) {
+          expect(e.argv).toEqual(commonDirArgv)
+          cwds.push(e.init?.cwd)
+        }
+        const dir = e.init?.cwd === ROOT ? '/main/.git' : foreign ? '/foreign/.git' : '/main/link.git'
+        return { value: {
+          exitCode: 0, stdout: common ? `${dir}\n` : `${ROOT}\n`, stderr: '',
+          isStdoutTruncated: false, isStderrTruncated: false,
+        } }
+      })
+      await start($)
+      const out = parse(await $.tool.call({ tool: DELEGATE, agent: 'git', prompt: 't', cwd: '/repo/link' } as never))
+      expect(cwds).toEqual([ROOT, '/repo/sub'])
+      if (foreign) {
+        expect(out.error).toContain("does not belong to the session's repository")
+        expect(seen.argv).toEqual([])
+        return
+      }
+      expect(out.error).toBeUndefined()
+      expect(seen.argv.length).toBe(1)
+      expect(seen.argv[0]).toContain('sandbox_workspace_write.writable_roots=["/main/.git"]')
+      expect(seen.argv[0]).toContain('sandbox_workspace_write.network_access=true')
+    })
+  }
+
+  for (const [setting, patch] of [
+    ['sandboxCap', { sandboxCap: 'read-only' }],
+    ['noNetwork', { noNetwork: true }],
+    ['sandbox', { agents: { git: { sandbox: 'read-only' } } }],
+  ] as const) {
+    test(`git refuses ${setting} without spawning`, async ($, on) => {
+      const { seen } = world(on, { files: { [`${HOME}/.claude/pantheon.json`]: JSON.stringify({ profile: 'codex', ...patch }) } })
+      await start($)
+      const out = parse(await $.tool.call({ tool: DELEGATE, agent: 'git', prompt: 't' } as never))
+      expect(out.error).toContain(setting)
+      expect(seen.argv).toEqual([])
+    })
+  }
+
+  test('git refuses a failed rev-parse without spawning', async ($, on) => {
+    const { seen } = world(on, { runs: { [commonDirCommand]: { exitCode: 128 } } })
+    await start($)
+    const out = parse(await $.tool.call({ tool: DELEGATE, agent: 'git', prompt: 't' } as never))
+    expect(out.error).toContain('git common dir could not be resolved')
+    expect(seen.argv).toEqual([])
+  })
+
   const mountPanel = ($: Engine) => $.ui.mount({
     plugin: 'pantheon', surface: 'terminal', component: 'Pane', requestId: PANE_ID,
     props: { title: 'Pantheon', isFocused: true, bodyColumns: 120, placement: 'dock', scroll: { offset: 0, bodyRows: 40 } },
@@ -106,7 +173,7 @@ describe('register', () => {
         expect(select?.props.value).toBe('claude')
         expect((select?.props.options as { value: string }[]).map(option => option.value)).toEqual(['claude', 'codex', 'mixed'])
       } finally { await third.unmount() }
-      expect(seen.agents.length).toBe(21)
+      expect(seen.agents.length).toBe(24)
     })
   }
 
@@ -579,7 +646,7 @@ describe('register', () => {
     on('agent.offer', async () => ({ isOffered: true }))
     delete files[`${HOME}/.claude/pantheon.json`]
     await start($)
-    expect(seen.agents).toEqual(['explorer', 'librarian', 'fixer', 'oracle', 'designer', 'councillor-alpha', 'councillor-beta'])
+    expect(seen.agents).toEqual(['explorer', 'librarian', 'fixer', 'oracle', 'designer', 'git', 'councillor-alpha', 'councillor-beta'])
     const out = parse(await $.tool.call({ tool: DELEGATE, agent: 'explorer', prompt: 'find x' } as never))
     expect(out.error).toBe('Use pantheon:explorer through the Agent tool.')
     expect(seen.argv).toEqual([])
@@ -718,7 +785,7 @@ describe('register', () => {
     expect(out.text).not.toContain('fail')
   })
 
-  const PING_ORDER = ['explorer', 'librarian', 'fixer', 'oracle', 'designer', 'councillor:alpha', 'councillor:beta']
+  const PING_ORDER = ['explorer', 'librarian', 'fixer', 'oracle', 'designer', 'git', 'councillor:alpha', 'councillor:beta']
   const agentMessage = (text: string) => `${JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text } })}\n`
 
   /** world() with its process.run replaced: Codex ping runs (`codex exec`) answer through `exec`; the rest is canned. */
@@ -806,6 +873,27 @@ describe('register', () => {
     expect(execs.length).toBeGreaterThan(5)
     for (const argv of execs) expect(argv.slice(argv.indexOf('-s'), argv.indexOf('-s') + 2)).toEqual(['-s', 'read-only'])
   })
+
+  test('git doctor ping has no writable roots or explicit network access', async ($, on) => {
+    const { execs } = pingWorld(on, { profile: 'codex' })
+    await start($)
+    const out = await $.command.run({ command: 'pantheon', args: 'doctor' })
+    expect(out.text).toMatch(/^ok {3}git \(codex/m)
+    expect(execs.length).toBe(PING_ORDER.length)
+    const argv = execs[PING_ORDER.indexOf('git')]!
+    expect(argv).toContain('sandbox_workspace_write.writable_roots=[]')
+    expect(argv).not.toContain('sandbox_workspace_write.network_access=true')
+    expect(argv.slice(argv.indexOf('-s'), argv.indexOf('-s') + 2)).toEqual(['-s', 'read-only'])
+  })
+
+  for (const [setting, value] of [['sandboxCap', 'read-only'], ['noNetwork', true]] as const) {
+    test(`git doctor ping reports ${setting} restrictions`, async ($, on) => {
+      pingWorld(on, { profile: 'codex', file: JSON.stringify({ profile: 'codex', [setting]: value }) })
+      await start($)
+      const out = await $.command.run({ command: 'pantheon', args: 'doctor' })
+      expect(out.text).toMatch(new RegExp(`^fail git \\(codex.*${setting}`, 'm'))
+    })
+  }
 
   test('a Codex ping that never answers becomes fail timeout', async ($, on) => {
     const { clock } = pingWorld(on, { profile: 'codex', exec: () => 'hang' })
@@ -1024,7 +1112,7 @@ describe('register', () => {
   test('invalid first config still registers the default native agents', async ($, on) => {
     const { seen } = world(on, { files: { [`${HOME}/.claude/pantheon.json`]: '{ nope' } })
     await start($)
-    expect(seen.agents).toEqual(['explorer', 'librarian', 'fixer', 'oracle', 'designer', 'councillor-alpha', 'councillor-beta'])
+    expect(seen.agents).toEqual(['explorer', 'librarian', 'fixer', 'oracle', 'designer', 'git', 'councillor-alpha', 'councillor-beta'])
   })
 
   test('a failed native registration is retried on the next turn', async ($, on) => {

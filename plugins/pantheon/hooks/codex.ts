@@ -8,8 +8,10 @@ export function buildArgv(call: CodexCall): string[] {
   const argv = ['codex', 'exec', '--json', '-s', call.sandbox]
   if (call.model !== undefined) argv.push('-m', call.model)
   if (call.effort !== undefined) argv.push('-c', `model_reasoning_effort=${call.effort}`)
-  argv.push('-c', 'sandbox_workspace_write.writable_roots=[]')
+  const roots = (call.writableRoots ?? []).map(path => JSON.stringify(path).replace(/\u007f/g, '\\u007f')).join(',')
+  argv.push('-c', `sandbox_workspace_write.writable_roots=[${roots}]`)
   if (call.noNetwork) argv.push('-c', 'sandbox_workspace_write.network_access=false')
+  else if (call.network === true) argv.push('-c', 'sandbox_workspace_write.network_access=true')
   argv.push('--ignore-rules')
   if (call.skipGitRepoCheck) argv.push('--skip-git-repo-check')
   if (call.resumeSessionId !== undefined) argv.push('resume', call.resumeSessionId)

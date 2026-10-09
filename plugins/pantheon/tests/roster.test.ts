@@ -8,7 +8,7 @@ const config = (overrides: Partial<PantheonConfig> = {}): PantheonConfig => ({
   sandboxCap: 'workspace-write', noNetwork: false, foregroundMinutes: 5, disabledAgents: [],
   agents: {
     explorer: { engine: 'codex', model: 'explorer-model' }, librarian: { engine: 'codex' }, fixer: { engine: 'codex', model: 'fixer-model' },
-    oracle: { engine: 'claude', model: 'oracle-model' }, designer: { engine: 'claude' },
+    oracle: { engine: 'claude', model: 'oracle-model' }, designer: { engine: 'claude' }, git: { engine: 'codex' },
   },
   council: { seats: {
     alpha: { engine: 'codex', model: 'alpha-model' },
@@ -26,12 +26,13 @@ const native = (overrides: Partial<Native> = {}): Native => ({
 const roster = (jobs: Job[] = [], natives: Native[] = [], c = config(), session: SessionInfo = { isRunning: false }) =>
   buildRoster({ jobs, natives, config: c, session })
 
-test('seven slots in fixed order with nothing running', () => {
+test('eight slots in fixed order with nothing running', () => {
   const result = roster()
+  expect(ROLE_ORDER).toEqual(['orchestrator', 'explorer', 'librarian', 'fixer', 'oracle', 'designer', 'git', 'council'])
   expect(result.slots.map(s => s.name)).toEqual(ROLE_ORDER)
-  expect(result.slots.map(s => s.state)).toEqual(['idle', 'idle', 'idle', 'idle', 'idle', 'idle', 'idle'])
+  expect(result.slots.map(s => s.state)).toEqual(Array(8).fill('idle'))
   expect(result.others).toEqual([])
-  expect(result.counts).toEqual({ active: 0, idle: 7, off: 0 })
+  expect(result.counts).toEqual({ active: 0, idle: 8, off: 0 })
 })
 
 test('active, idle with last ended, and off', () => {
@@ -40,7 +41,7 @@ test('active, idle with last ended, and off', () => {
   expect(result.slots[1].state).toBe('active')
   expect(result.slots[4]).toEqual(expect.objectContaining({ state: 'idle', lastEndedAt: 200 }))
   expect(result.slots[2]).toEqual(expect.objectContaining({ state: 'off', offReason: 'disabledAgents' }))
-  expect(result.counts).toEqual({ active: 1, idle: 5, off: 1 })
+  expect(result.counts).toEqual({ active: 1, idle: 6, off: 1 })
 })
 
 test('parallel instances stack', () => {
@@ -77,22 +78,22 @@ test('jobs sharing a sessionId are one line with N rounds', () => {
 })
 
 test('the council slot lists every configured seat', () => {
-  expect(roster([], [], config()).slots[6].seats).toEqual(['alpha', 'beta'])
+  expect(roster([], [], config()).slots[7].seats).toEqual(['alpha', 'beta'])
 })
 
 test('council is one slot', () => {
   const jobs = [job({ agent: 'councillor:alpha' })]
   const natives = [native({ role: 'councillor-beta' })]
-  const council = roster(jobs, natives, config({ disabledAgents: ['councillor:beta'] })).slots[6]
+  const council = roster(jobs, natives, config({ disabledAgents: ['councillor:beta'] })).slots[7]
   expect(council).toEqual(expect.objectContaining({ state: 'active', engine: 'mixed', seatsOff: ['beta'] }))
   expect(council.instances.map(i => [i.engine, i.seat])).toEqual([['codex', 'alpha'], ['claude', 'beta']])
-  expect(roster(jobs, natives, config({ disabledAgents: ['council'] })).slots[6])
+  expect(roster(jobs, natives, config({ disabledAgents: ['council'] })).slots[7])
     .toEqual(expect.objectContaining({ state: 'off', offReason: 'disabledAgents' }))
 })
 
 test('council is off when every seat is disabled with either spelling', () => {
-  expect(roster([], [], config({ disabledAgents: ['councillor:alpha', 'councillor-beta'] })).slots[6].state).toBe('off')
-  expect(roster([], [], config({ council: { seats: {} } })).slots[6].state).toBe('off')
+  expect(roster([], [], config({ disabledAgents: ['councillor:alpha', 'councillor-beta'] })).slots[7].state).toBe('off')
+  expect(roster([], [], config({ council: { seats: {} } })).slots[7].state).toBe('off')
 })
 
 test('delegating lists active roles in order', () => {
@@ -160,7 +161,7 @@ test('idle rows use configured models instead of the last instance model', () =>
   expect(result.slots[1].model).toBe('explorer-model')
   expect(result.slots[4].model).toBe('oracle-model')
   expect(result.slots[4].instances[0].isActive).toBe(false)
-  expect(result.slots[6]).toEqual(expect.objectContaining({ engine: 'codex', model: 'seat-model' }))
+  expect(result.slots[7]).toEqual(expect.objectContaining({ engine: 'codex', model: 'seat-model' }))
 })
 
 test('ago formats', () => {
@@ -174,7 +175,7 @@ test('ago formats', () => {
 })
 
 test('every role follows its configured engine and accepts either execution engine', () => {
-  for (const role of ['explorer', 'librarian', 'fixer', 'oracle', 'designer'] as const) {
+  for (const role of ['explorer', 'librarian', 'fixer', 'oracle', 'designer', 'git'] as const) {
     const idle = roster([], [], CODEX).slots.find(s => s.name === role)!
     expect(idle).toEqual(expect.objectContaining({ engine: 'codex', state: 'idle' }))
     expect(roster([job({ agent: role })], [], CODEX).slots.find(s => s.name === role))
@@ -199,9 +200,9 @@ test('only active instances and the latest ended one set the slot engine', () =>
 
 test('council engines do not disable seats', () => {
   for (const c of [CODEX, CLAUDE]) {
-    expect(roster([], [], c).slots[6]).toEqual(expect.objectContaining({ state: 'idle', engine: c.profile }))
-    expect(roster([], [], { ...c, disabledAgents: ['councillor:alpha'] }).slots[6].state).toBe('idle')
-    expect(roster([], [], { ...c, disabledAgents: ['council'] }).slots[6].state).toBe('off')
-    expect(roster([], [], { ...c, disabledAgents: Object.keys(c.council.seats).map(n => `councillor:${n}`) }).slots[6].state).toBe('off')
+    expect(roster([], [], c).slots[7]).toEqual(expect.objectContaining({ state: 'idle', engine: c.profile }))
+    expect(roster([], [], { ...c, disabledAgents: ['councillor:alpha'] }).slots[7].state).toBe('idle')
+    expect(roster([], [], { ...c, disabledAgents: ['council'] }).slots[7].state).toBe('off')
+    expect(roster([], [], { ...c, disabledAgents: Object.keys(c.council.seats).map(n => `councillor:${n}`) }).slots[7].state).toBe('off')
   }
 })

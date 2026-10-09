@@ -1,7 +1,7 @@
 // Shared contract for Pantheon's modules.
 
 export type Sandbox = 'read-only' | 'workspace-write'
-export type Role = 'explorer' | 'librarian' | 'fixer' | 'oracle' | 'designer'
+export type Role = 'explorer' | 'librarian' | 'fixer' | 'oracle' | 'designer' | 'git'
 export type Engine = 'codex' | 'claude'
 export interface RoleConfig { engine: Engine; model?: string; effort?: string; prompt?: string; sandbox?: Sandbox }
 export interface Seat { engine: Engine; model?: string; effort?: string; prompt?: string }
@@ -24,6 +24,7 @@ export interface DelegateArgs {
 }
 export interface CodexCall {
   agent: string; model?: string; effort?: string; sandbox: Sandbox; noNetwork: boolean
+  writableRoots?: string[]; network?: boolean
   prompt: string; cwd: string; skipGitRepoCheck: boolean; resumeSessionId?: string
 }
 import type { Tokens } from '../types'

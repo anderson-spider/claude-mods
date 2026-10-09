@@ -1,9 +1,9 @@
 import type { Engine, PantheonConfig, Role, Sandbox } from './types'
 
-export const ROLES: readonly Role[] = ['explorer', 'librarian', 'fixer', 'oracle', 'designer']
+export const ROLES: readonly Role[] = ['explorer', 'librarian', 'fixer', 'oracle', 'designer', 'git']
 export const ROLE_SANDBOX: Record<Role, Sandbox> = {
   explorer: 'read-only', librarian: 'read-only', fixer: 'workspace-write',
-  oracle: 'read-only', designer: 'workspace-write',
+  oracle: 'read-only', designer: 'workspace-write', git: 'workspace-write',
 }
 
 export type ProfileEntries = {
@@ -27,6 +27,7 @@ export const BUILTIN_PROFILES: Record<'claude' | 'codex' | 'mixed', ProfileEntri
       fixer: { engine: 'claude', model: 'sonnet' },
       oracle: { engine: 'claude', model: 'opus' },
       designer: { engine: 'claude', model: 'sonnet' },
+      git: { engine: 'claude', model: 'haiku' },
     },
     council: { seats: {
       alpha: { engine: 'claude', model: 'opus' },
@@ -40,6 +41,7 @@ export const BUILTIN_PROFILES: Record<'claude' | 'codex' | 'mixed', ProfileEntri
       fixer: { engine: 'codex', model: 'gpt-6.1-sol', effort: 'high' },
       oracle: { engine: 'codex', model: 'gpt-6-astra', effort: 'high' },
       designer: { engine: 'codex', model: 'gpt-6.1-sol', effort: 'high' },
+      git: { engine: 'codex', model: 'gpt-6-luna', effort: 'low' },
     },
     council: { seats: {
       alpha: { engine: 'codex', model: 'gpt-6-astra', effort: 'high' },
@@ -53,6 +55,7 @@ export const BUILTIN_PROFILES: Record<'claude' | 'codex' | 'mixed', ProfileEntri
       fixer: { engine: 'codex', model: 'gpt-6.1-sol', effort: 'high' },
       oracle: { engine: 'claude', model: 'opus' },
       designer: { engine: 'claude', model: 'sonnet' },
+      git: { engine: 'codex', model: 'gpt-6-luna', effort: 'low' },
     },
     council: { seats: {
       alpha: { engine: 'codex', model: 'gpt-6-astra', effort: 'high' },
