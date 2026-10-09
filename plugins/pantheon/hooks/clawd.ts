@@ -1,6 +1,6 @@
 // Claude mascot, a side-on pixel sprite with one hat and one held prop per role. Pure module:
-// the terminal art (15 x 12 pixels) as half-block runs, the desktop art (30 x 26, shaded and
-// outlined) as an SVG string.
+// the terminal art (15 x 12 pixels, and a separate 8 x 6 one) as half-block runs, the desktop art
+// (30 x 26, shaded and outlined) as an SVG string.
 import type { SlotName } from './roster'
 
 export type Mood = 'work' | 'idle' | 'off'
@@ -42,36 +42,35 @@ const LEGS = [
   ['...O.O.O.O.....', '...O.O.O.O.....'],
 ]
 
-// Hat per role (canvas rows 0-3).
+// Hat per role (canvas rows 0-3); rows past 3 lie over the body, where '.' leaves it showing.
 const HATS: Record<SlotName, string[]> = {
   orchestrator: ['......WW.......', '..WWWWWWWWW....', '..WWWgWWWWW....', '..RBBBBBBBBVVV.'],
-  explorer: ['...............', '....GGSGGG.....', '..GGGGSGGGG....', '..GGGGGGGGGGK..'],
+  explorer: ['...............', '....QQ..QQ.....', '...QqqqqqqQ....', '..QQQQQQQQQQQ..'],
   librarian: ['......DD.......', '..DDDDDDDDDDD.Y', '....DDDDDDD...Y', '...............'],
-  fixer: ['......YY.......', '....YYYYYY.....', '..YYYYYWYYYY...', '.YYYYYYYYYYYY..'],
-  oracle: ['.......Y.......', '......PPP......', '.....PPYPP.....', '..PPPPPPPPPPP..'],
+  // No hat: a mug of coffee, steaming, in the left hand.
+  fixer: ['...............', '...............', 'z..............', '.z.............', 'ww.............', 'ww.............'],
+  oracle: ['.......b.......', '......bbb......', '.....bbSbb.....', '..bbbbbbbbbbb..'],
   designer: ['...............', '......MM.......', '....MMMMMM.....', '..MMMMMMMMMMM..'],
-  council: ['...............', '....LLLLLL.....', '..LLLLLLLLLLL..', '..LLlLLLlLLLL..'],
+  council: ['...............', '....LLLLLL.....', '..LLLLLLLLLLL..', '.lLLlLLLlLLLL..', 'Ll.............', 'lL.............'],
 }
-// Held prop per role (canvas rows 6-11, cols 11-14).
-const PROPS: Record<SlotName, string[]> = {
-  orchestrator: ['....', '.nn.', 'WWWW', 'WLLW', 'WLLW', 'WWWW'],
-  explorer: ['.AA.', 'AaaA', 'AaaA', '.AA.', '.n..', 'n...'],
-  librarian: ['....', 'rrrr', 'rwYr', 'rwwr', 'rrrr', '....'],
-  fixer: ['.H.H', '.HHH', '..H.', '.h..', 'h...', '....'],
-  oracle: ['.uu.', 'uUYu', 'uUUu', '.uu.', 'nnnn', '....'],
-  designer: ['...C', '..nC', '.n..', 'n...', '....', '....'],
-  council: ['.nnn', '.nnn', '..n.', '..n.', '..n.', '....'],
+// Held prop per role: rows from `y` down, columns 11-14.
+const PROPS: Record<SlotName, { y: number; rows: string[] }> = {
+  // The clipboard's pen hangs on a string from the clip.
+  orchestrator: { y: 6, rows: ['....', '.nng', 'WWWg', 'WLWr', 'WLWr', 'WWWK'] },
+  explorer: { y: 6, rows: ['.AA.', 'AaaA', 'AaaA', '.AA.', '.n..', 'n...'] },
+  librarian: { y: 6, rows: ['....', 'rrrr', 'rwYr', 'rwwr', 'rrrr', '....'] },
+  fixer: { y: 6, rows: ['HHHH', 'HCKH', 'HKKH', 'HCCH', 'hhhh'] },
+  oracle: { y: 1, rows: ['..S.', '.SSS', '..S.', '..N.', '..N.', '.N..', 'N...'] },
+  designer: { y: 6, rows: ['...C', '..nC', '.n..', 'n...', '....', '....'] },
+  council: { y: 6, rows: ['.NNN', '.NNN', '..N.', '..N.', '..N.', '....'] },
 }
 
 const PALETTE: Record<string, string> = {
   O: BODY, E: EYE, W: '#F5F4EF', g: '#CFCFC6', B: '#4A86D8', R: '#B0664D', V: '#4D4D4B',
-  Y: '#EEBB4D', G: '#4A9E7A', S: '#F5F4EF', P: '#8E8E8A', K: '#1C1B1A', D: '#3B3B40',
-  T: '#C9A24A', C: '#4FB6D8', N: '#8A6A4A', M: '#D870A8', L: '#CFCCC2', l: '#9C998F',
-  A: '#E9C04F', a: '#BFE3F2', H: '#C4C9D6', h: '#8C92A3', u: '#6F3FB0', U: '#D6B8F5',
-  r: '#C4483D', w: '#F2E8CC', n: '#7A5230',
+  Y: '#EEBB4D', K: '#2E2A28', Q: '#6E625A', q: '#9A8B7E', D: '#3B3B40', C: '#4FB6D8', N: '#6B4A2E',
+  M: '#D870A8', m: '#A8507F', L: '#D8D5CB', l: '#A7A397', A: '#E9C04F', a: '#CFD4D9', H: '#C4C9D6',
+  h: '#8C92A3', r: '#C4483D', w: '#F6EFDD', z: '#FFE9CF', n: '#7A5230', b: '#2D4A8C', S: '#FFF1A8',
 }
-// The oracle's hat uses violet where the others use gray.
-const OVERRIDE: Partial<Record<SlotName, Record<string, string>>> = { oracle: { P: '#9A62D6' } }
 
 function wrap(frame: number): number {
   return ((frame % FRAMES) + FRAMES) % FRAMES
@@ -83,46 +82,43 @@ function dim(hex: string, keep: number, floor: number): string {
   return '#' + [(n >> 16) & 255, (n >> 8) & 255, n & 255].map(mix).map(v => v.toString(16).padStart(2, '0')).join('')
 }
 
+// The small sprite (8 x 6), drawn on its own: body rows 2-4 with both eyes, legs on row 5.
+const SMALL_BODY = ['........', '........', '.OEOOEO.', 'OOOOOOO.', '.OOOOOO.']
+const SMALL_LEGS = ['.O.OO.O.', 'O.O..O.O']
+// Hat and prop per role over the small body; '.' leaves it showing.
+const SMALL: Record<SlotName, string[]> = {
+  orchestrator: ['..WWW...', '.BBBBBV.', '.......n', '.......W', '.......W'],
+  explorer: ['..QqqQ..', '.QQQQQQQ', '.......a', '.......n'],
+  librarian: ['.DDDDDD.', '..KKKK.Y', '.......Y', '.......r', '.......r'],
+  fixer: ['z.......', '.z......', 'w......H', 'w......C', '.......h'],
+  oracle: ['...bb..S', '.bbbbbbN', '.......N'],
+  designer: ['....M...', '.MMMMMmC', '.......N', '.......N'],
+  council: ['.LLLLLL.', 'lLLLLLLl', 'l......N', '.......n'],
+}
+
 // The terminal grid: a color string or null per pixel. Off closes the eyes and dims the colors.
-export function pixels(role: SlotName, mood: Mood, frame: number): Cell[][] {
-  const pal = { ...PALETTE, ...(OVERRIDE[role] ?? {}) }
+export function pixels(role: SlotName, mood: Mood, frame: number, size: 'small' | 'large' = 'large'): Cell[][] {
   const body = mood === 'off' ? OFF_BODY : BODY
-  const legs = LEGS[mood === 'work' ? wrap(frame) % 2 : 0]
-  const rows = [...HATS[role], ...BODY_ROWS, ...legs].map(r => r.padEnd(COLS, '.'))
-  PROPS[role].forEach((p, i) => {
-    rows[6 + i] = rows[6 + i].slice(0, 11) + p + rows[6 + i].slice(15)
-  })
+  const pose = mood === 'work' ? wrap(frame) % 2 : 0
+  const small = size === 'small'
+  const rows = (small ? [...SMALL_BODY, SMALL_LEGS[pose]] : [...Array<string>(4).fill(''), ...BODY_ROWS, ...LEGS[pose]])
+    .map(r => [...r.padEnd(small ? 8 : COLS, '.')])
+  const over = (x: number, y: number, art: string[]) =>
+    art.forEach((r, j) => [...r].forEach((ch, i) => { if (ch !== '.') rows[y + j][x + i] = ch }))
+  if (small) over(0, 0, SMALL[role])
+  else {
+    over(0, 0, HATS[role])
+    over(11, PROPS[role].y, PROPS[role].rows)
+  }
   return rows.map(row =>
-    [...row].map(ch => {
+    row.map(ch => {
       if (ch === '.') return null
       if (ch === 'O') return body
       if (ch === 'E') return mood === 'off' ? body : EYE
-      const c = pal[ch]
+      const c = PALETTE[ch]
       return mood === 'off' ? dim(c, 0.55, 28) : c
     }),
   )
-}
-
-// 2x2 downscale to 8 columns x 6 pixel rows (the odd last column is padded empty).
-function downscale(g: Cell[][]): Cell[][] {
-  const out: Cell[][] = []
-  for (let by = 0; by < ROWS / 2; by++) {
-    const row: Cell[] = []
-    for (let bx = 0; bx < Math.ceil(COLS / 2); bx++) {
-      const cells: Cell[] = []
-      for (let dy = 0; dy < 2; dy++) for (let dx = 0; dx < 2; dx++) cells.push(g[by * 2 + dy][bx * 2 + dx] ?? null)
-      const inBody = by * 2 >= 4 && by * 2 + 1 <= 9
-      if (inBody && cells.includes(EYE)) { row.push(EYE); continue }
-      const counts = new Map<string, number>()
-      for (const c of cells) if (c) counts.set(c, (counts.get(c) ?? 0) + 1)
-      let best: Cell = null
-      let n = 0
-      for (const [c, k] of counts) if (k > n) { best = c; n = k }
-      row.push(best)
-    }
-    out.push(row)
-  }
-  return out
 }
 
 function halfBlocks(g: Cell[][]): Run[][] {
@@ -147,8 +143,7 @@ function halfBlocks(g: Cell[][]): Run[][] {
 }
 
 export function clawdRuns(role: SlotName, mood: Mood, frame: number, size: 'small' | 'large'): Run[][] {
-  const g = pixels(role, mood, frame)
-  return halfBlocks(size === 'large' ? g : downscale(g))
+  return halfBlocks(pixels(role, mood, frame, size))
 }
 
 export function clawdLines(role: SlotName, mood: Mood, frame: number, size: 'small' | 'large'): string[] {
@@ -168,7 +163,7 @@ const PAL: Record<string, string> = {
   g: '#6E625A', k: '#2E2A28', a: '#CFD4D9', w: '#F6EFDD', T: '#D88A2E', t: '#9A5A1E',
   W: '#F5F4EF', G: '#CFCFC6', B: '#4A86D8', v: '#4D4D4B', r: '#C4483D', q: '#7E2A24', D: '#3B3B40',
   M: '#D870A8', m: '#A8507F', C: '#4FB6D8', N: '#6B4A2E', H: '#C4C9D6', h: '#8C92A3',
-  L: '#D8D5CB', l: '#A7A397', x: '#4A2E1E', z: '#FFE9CF', S: '#FFF1A8', P: '#9A62D6',
+  L: '#D8D5CB', l: '#A7A397', x: '#4A2E1E', z: '#FFE9CF', S: '#FFF1A8', Z: '#FFF1A8', P: '#9A62D6',
 }
 
 const BLANK = '........................'
@@ -237,10 +232,17 @@ const HAT: Record<SlotName, string[]> = {
 
 type Stamp = [number, number, string[]]
 type Line = [number, number, number, number, string]
-type Prop = { stamp?: Stamp[]; line?: Line[]; hand?: [number, number]; arm?: number }
+// `frames` are drawn over the prop, one per step of its loop while working; frame 0 is the still.
+type Prop = { stamp?: Stamp[]; line?: Line[]; hand?: [number, number]; arm?: number; frames?: Stamp[][]; step?: number }
+
+// The laptop's code lines, scrolling up one row per frame through its six-row screen.
+const CODE = ['nCCnCCCnn', 'nnnnnnnnn', 'nCCCCnnnn', 'nnnnnCCCn', 'nnnnnnnnn', 'nnCCCnCCn']
+// A glint sweeping across the lens now and then: frames 1-3 of six.
+const GLINT: [number, number][][] = [[], [[21, 11], [22, 10]], [[21, 13], [22, 12], [23, 11], [24, 10]], [[23, 13], [24, 12]], [], []]
 const PROP: Record<SlotName, Prop> = {
   oracle: {
-    stamp: [[23, 1, ['..S..', '.SSS.', 'SSSSS', '.SSS.', '..S..']], [20, 2, ['S']], [26, 8, ['S']]],
+    // S twinkles, Z (the small stars) half a beat later.
+    stamp: [[23, 1, ['..S..', '.SSS.', 'SSSSS', '.SSS.', '..S..']], [20, 2, ['Z']], [26, 8, ['Z']]],
     line: [[19, 14, 24, 6, 'N']],
     hand: [18, 13],
   },
@@ -248,6 +250,8 @@ const PROP: Record<SlotName, Prop> = {
     stamp: [[19, 8, ['..kkk..', '.kaaak.', 'kaaaaak', 'kwaaaak', 'kwaaaak', '.kaaak.', '..kkk..']]],
     line: [[19, 15, 17, 17, 'N']],
     hand: [17, 16],
+    frames: GLINT.map(f => f.map(([x, y]): Stamp => [x, y, ['W']])),
+    step: 0.35,
   },
   librarian: {
     stamp: [[19, 10, ['qqqqqqq', 'qrrrrrw', 'qrYYYrw', 'qrrrrrw', 'qrYYrrw', 'qrrrrrw', 'qqqqqqq']]],
@@ -266,6 +270,8 @@ const PROP: Record<SlotName, Prop> = {
       'HHHHHHHHHHHHH',
       'hhhhhhhhhhhhh',
     ]]],
+    frames: CODE.map((_, k) => [[17, 9, CODE.map((_, j) => CODE[(k + j) % CODE.length])]]),
+    step: 0.3,
   },
   designer: {
     stamp: [[24, 3, ['.CC.', 'CCCC', 'CCCC', '.HH.', '.HH.']]],
@@ -273,18 +279,26 @@ const PROP: Record<SlotName, Prop> = {
     hand: [18, 14],
   },
   council: {
-    stamp: [[19, 8, ['NNNNNNN', 'NttttNN', 'NNNNNNN', 'NNNNNNt']], [18, 18, ['NNNNNNNNN', 'ttttttttt']], [21, 12, ['NN', 'NN', 'NN', 'NN', 'NN', 'NN']]],
+    stamp: [
+      [19, 8, ['NNNNNNN', 'NttttNN', 'NNNNNNN', 'NNNNNNt']], [18, 18, ['NNNNNNNNN', 'ttttttttt']], [21, 12, ['NN', 'NN', 'NN', 'NN', 'NN', 'NN']],
+      // The wig's side curls, hanging behind the face.
+      [2, 8, ['LLL', 'lll', 'LLL', 'lll']],
+    ],
     hand: [20, 14],
     arm: 5,
   },
   orchestrator: {
-    stamp: [[19, 10, ['..ttt..', 'WWWWWWW', 'WLLLLLW', 'WWWWWWW', 'WLLLLWW', 'WWWWWWW', 'WLLLWWW', 'WWWWWWW']]],
+    stamp: [
+      [19, 10, ['..ttt..', 'WWWWWWW', 'WLLLLLW', 'WWWWWWW', 'WLLLLWW', 'WWWWWWW', 'WLLLWWW', 'WWWWWWW']],
+      // A pen on a string, hanging off the clipboard's edge.
+      [26, 10, ['g', 'g', 'r', 'r', 'r', 'r', 'k']],
+    ],
     hand: [17, 14],
   },
 }
 
-// The 30 x 26 character grid; `legB` selects the second walking pose.
-function grid(role: SlotName, mood: Mood, legB: boolean): string[][] {
+// The 30 x 26 character grid; `legB` selects the second walking pose, `fx` the prop's frame.
+function grid(role: SlotName, mood: Mood, legB: boolean, fx = 0): string[][] {
   const g = Array.from({ length: IH }, () => Array<string>(IW).fill('.'))
   const px = (x: number, y: number, c: string) => { if (g[y]?.[x] !== undefined) g[y][x] = c }
   const rect = (x: number, y: number, w: number, h: number, c: string) => {
@@ -320,6 +334,7 @@ function grid(role: SlotName, mood: Mood, legB: boolean): string[][] {
   const eye = (x: number) => (mood === 'off' ? rect(x, 12, 3, 1, 'K') : rect(x, 11, 2, 3, 'K'))
   eye(7); eye(13)
   p.stamp?.forEach(([x, y, rows]) => stamp(x, y, rows))
+  p.frames?.[fx]?.forEach(([x, y, rows]) => stamp(x, y, rows))
   p.line?.forEach(([a, b, c, d, ch]) => line(a, b, c, d, ch))
   if (p.hand) {
     const [hx, hy] = p.hand
@@ -332,7 +347,7 @@ function grid(role: SlotName, mood: Mood, legB: boolean): string[][] {
   for (let j = 0; j < H; j++) for (let i = 0; i < W; i++) {
     if (out[j][i] !== '.') continue
     const n = [out[j - 1]?.[i], out[j + 1]?.[i], out[j]?.[i - 1], out[j]?.[i + 1]]
-    if (n.some(c => c && c !== '.' && c !== 'X' && c !== 'S' && c !== 'z')) out[j][i] = 'X'
+    if (n.some(c => c && c !== '.' && c !== 'X' && c !== 'S' && c !== 'Z' && c !== 'z')) out[j][i] = 'X'
   }
   return out
 }
@@ -341,35 +356,60 @@ const rectAt = (x: number, y: number, fill: string) =>
   `<rect x="${x}" y="${y}" width="1.03" height="1.03" fill="${fill}"/>`
 
 export function clawdSvg(role: SlotName, mood: Mood, height = 52): string {
-  const a = grid(role, mood, false)
-  const b = grid(role, mood, true)
   const color = (ch: string) => {
     const c = PAL[ch] ?? '#ff00ff'
     return mood === 'off' ? dim(c, 0.5, 27) : c
   }
-  const base: string[] = []
-  const poseA: string[] = []
-  const poseB: string[] = []
-  const isWork = mood === 'work'
+  const head = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${(height * W) / H}" height="${height}" shape-rendering="crispEdges">`
+  const a = grid(role, mood, false)
+  if (mood !== 'work') {
+    const still: string[] = []
+    for (let j = 0; j < H; j++) for (let i = 0; i < W; i++) if (a[j][i] !== '.') still.push(rectAt(i, j, color(a[j][i])))
+    return `${head}${still.join('')}</svg>`
+  }
+  // Working: the legs alternate (la, lb), the stars twinkle (tw, tw2) and the prop's frames loop (fx).
+  const b = grid(role, mood, true)
+  const p = PROP[role]
+  const fx = (p.frames ?? []).map((_, k) => grid(role, mood, false, k))
+  const layer = { base: [] as string[], la: [] as string[], lb: [] as string[], tw: [] as string[], tw2: [] as string[] }
+  const frames = fx.map((): string[] => [])
   for (let j = 0; j < H; j++) for (let i = 0; i < W; i++) {
     const ca = a[j][i]
     const cb = b[j][i]
-    if (!isWork || ca === cb) {
-      if (ca !== '.') base.push(rectAt(i, j, color(ca)))
-      continue
+    if (ca !== cb) {
+      if (ca !== '.') layer.la.push(rectAt(i, j, color(ca)))
+      if (cb !== '.') layer.lb.push(rectAt(i, j, color(cb)))
+    } else if (fx.some(g => g[j][i] !== ca)) {
+      // The still sits under the frames too, so seams between scaled cells never show the background.
+      if (ca !== '.') layer.base.push(rectAt(i, j, color(ca)))
+      fx.forEach((g, k) => { if (g[j][i] !== '.') frames[k].push(rectAt(i, j, color(g[j][i]))) })
+    } else if (ca !== '.') {
+      layer[ca === 'S' ? 'tw' : ca === 'Z' ? 'tw2' : 'base'].push(rectAt(i, j, color(ca)))
     }
-    if (ca !== '.') poseA.push(rectAt(i, j, color(ca)))
-    if (cb !== '.') poseB.push(rectAt(i, j, color(cb)))
   }
-  const head = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${(height * W) / H}" height="${height}" shape-rendering="crispEdges">`
-  if (!isWork) return `${head}${base.join('')}</svg>`
+  const n = frames.length
+  const step = p.step ?? 0.3
   const style =
     '<style>' +
     '@keyframes la{0%{opacity:1}50%{opacity:0}}' +
     '@keyframes lb{0%{opacity:0}50%{opacity:1}}' +
+    '@keyframes tw{0%{opacity:1}50%{opacity:.3}100%{opacity:1}}' +
     '.la{animation:la .5s steps(1,end) infinite}' +
     '.lb{animation:lb .5s steps(1,end) infinite}' +
-    '@media (prefers-reduced-motion: reduce){.la,.lb{animation: none}.lb{opacity:0}}' +
+    '.tw{animation:tw 1.2s steps(1,end) infinite}' +
+    '.tw2{animation:tw 1.2s steps(1,end) -.6s infinite}' +
+    (n
+      ? `@keyframes fx{0%{opacity:1}${+(100 / n).toFixed(3)}%,100%{opacity:0}}` +
+        `.fx{animation:fx ${+(n * step).toFixed(3)}s steps(1,end) infinite}` +
+        frames.map((_, k) => `.f${k}{animation-delay:${k ? -+((n - k) * step).toFixed(3) : 0}s}`).join('')
+      : '') +
+    '@media (prefers-reduced-motion: reduce){.la,.lb,.tw,.tw2{animation:none}.lb{opacity:0}.fx{animation:none;opacity:0}.f0{opacity:1}}' +
     '</style>'
-  return `${head}${style}${base.join('')}<g class="la">${poseA.join('')}</g><g class="lb">${poseB.join('')}</g></svg>`
+  const group = (cls: string, rects: string[]) => (rects.length ? `<g class="${cls}">${rects.join('')}</g>` : '')
+  return (
+    head + style + layer.base.join('') +
+    group('la', layer.la) + group('lb', layer.lb) + group('tw', layer.tw) + group('tw2', layer.tw2) +
+    frames.map((r, k) => group(`fx f${k}`, r)).join('') +
+    '</svg>'
+  )
 }

@@ -115,3 +115,95 @@ test('clawdSvg: idle and off are the same shape, off is dimmed', () => {
 test('clawdSvg: roles differ', () => {
   expect(new Set(ROLE_ORDER.map(r => clawdSvg(r, 'idle'))).size).toBe(ROLE_ORDER.length)
 })
+
+// Each role's held prop and hat read the same at every size: these colors are the prop's own.
+const SIGNATURE: Record<(typeof ROLE_ORDER)[number], string[]> = {
+  orchestrator: ['#F5F4EF', '#4A86D8'],
+  explorer: ['#6E625A', '#CFD4D9'],
+  librarian: ['#3B3B40', '#C4483D'],
+  fixer: ['#C4C9D6', '#F6EFDD'],
+  oracle: ['#2D4A8C', '#FFF1A8'],
+  designer: ['#D870A8', '#4FB6D8'],
+  council: ['#D8D5CB', '#6B4A2E'],
+}
+const colorsOf = (g: (string | null)[][]) => new Set(g.flat().filter((c): c is string => !!c).map(c => c.toUpperCase()))
+
+test('terminal and desktop sprites carry the same hat and prop for each role', () => {
+  for (const role of ROLE_ORDER) {
+    const svg = clawdSvg(role, 'idle').toUpperCase()
+    const term = colorsOf(pixels(role, 'idle', 0))
+    for (const c of SIGNATURE[role]) {
+      expect(svg.includes(`FILL="${c}"`)).toBe(true)
+      expect(term.has(c)).toBe(true)
+    }
+  }
+})
+
+test('the fixer wears no hat and holds a laptop and a mug; the oracle has no crystal ball', () => {
+  const fixer = pixels('fixer', 'idle', 0)
+  // Above the torso only the mug and its steam, at the far left.
+  for (let y = 0; y < 4; y++) fixer[y].forEach((c, x) => { if (c) expect(x < 2).toBe(true) })
+  expect(colorsOf(pixels('oracle', 'idle', 0)).has('#6F3FB0')).toBe(false)
+})
+
+const rects = (svg: string) =>
+  [...svg.matchAll(/<rect x="(\d+)" y="(\d+)"[^>]*fill="([^"]+)"/g)].map(m => ({ x: +m[1], y: +m[2], fill: m[3].toUpperCase() }))
+
+test('the council wig has curls hanging beside the face', () => {
+  const WIG = ['#D8D5CB', '#A7A397']
+  // Desktop: the torso's top row is y 10 in the padded canvas; curls hang below it, behind the eyes.
+  const curls = rects(clawdSvg('council', 'idle')).filter(r => WIG.includes(r.fill) && r.y >= 10)
+  expect(curls.length >= 4).toBe(true)
+  expect(curls.every(r => r.x < 8)).toBe(true)
+  // Terminal: wig pixels left of the torso, on its first rows.
+  const g = pixels('council', 'idle', 0)
+  expect([g[4][0], g[4][1], g[5][0], g[5][1]].every(c => c !== null && WIG.includes(c.toUpperCase()))).toBe(true)
+})
+
+test('a pen hangs from the orchestrator clipboard', () => {
+  const PEN = '#C4483D'
+  // Desktop: right of the clipboard (x 20-26 in the padded canvas).
+  expect(rects(clawdSvg('orchestrator', 'idle')).filter(r => r.fill === PEN && r.x >= 27).length >= 3).toBe(true)
+  const g = pixels('orchestrator', 'idle', 0)
+  expect(g.slice(9, 11).every(row => row[14]?.toUpperCase() === PEN)).toBe(true)
+})
+
+const groups = (svg: string) => [...svg.matchAll(/<g class="([^"]+)">(.*?)<\/g>/g)].map(m => ({ cls: m[1], body: m[2] }))
+
+test('clawdSvg: the held objects move only while working (stars, laptop screen, lens glint)', () => {
+  const oracle = groups(clawdSvg('oracle', 'work'))
+  for (const cls of ['tw', 'tw2']) {
+    const g = oracle.find(x => x.cls === cls)
+    expect(g !== undefined && g.body.toUpperCase().includes('#FFF1A8')).toBe(true)
+  }
+  for (const role of ['fixer', 'explorer'] as const) {
+    const frames = groups(clawdSvg(role, 'work')).filter(g => g.cls.split(' ').includes('fx'))
+    expect(frames.length >= 3).toBe(true)
+    expect(new Set(frames.map(f => f.body)).size >= 3).toBe(true)
+    expect(frames[0].cls.split(' ')).toContain('f0')
+  }
+  for (const role of ['orchestrator', 'librarian', 'designer', 'council'] as const) {
+    expect(groups(clawdSvg(role, 'work')).map(g => g.cls).sort()).toEqual(['la', 'lb'])
+  }
+  for (const role of ROLE_ORDER) for (const mood of ['idle', 'off'] as Mood[]) {
+    expect(clawdSvg(role, mood).includes('<g')).toBe(false)
+  }
+})
+
+test('clawdSvg: reduced motion stops the objects and shows their first frame', () => {
+  const svg = clawdSvg('fixer', 'work')
+  const media = svg.slice(svg.indexOf('prefers-reduced-motion'))
+  for (const cls of ['.fx', '.tw', '.tw2', '.la', '.lb']) expect(media.includes(cls)).toBe(true)
+  expect(/\.fx\{animation:none;opacity:0\}\.f0\{opacity:1\}/.test(media)).toBe(true)
+})
+
+test('the small terminal sprite is drawn by hand at 8 x 6, with two eyes and the role signature', () => {
+  const EYE = '#1C1B1A'
+  for (const role of ROLE_ORDER) for (const mood of MOODS) for (let f = 0; f < 2; f++) {
+    const g = pixels(role, mood, f, 'small')
+    expect(g.length).toBe(6)
+    for (const row of g) expect(row.length).toBe(8)
+    expect(g.flat().filter(c => c === EYE).length).toBe(mood === 'off' ? 0 : 2)
+    if (mood === 'idle') expect(SIGNATURE[role].some(c => colorsOf(g).has(c))).toBe(true)
+  }
+})
