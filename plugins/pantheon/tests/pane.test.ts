@@ -1117,7 +1117,8 @@ describe('pane', () => {
     expect(out.text).toContain('codex-cli 9.9.9')
     expect(out.text).toContain('Logged in')
     expect(out.text).toContain('authorized root: /repo')
-    expect(out.text).not.toContain('fail')
+    // The ping section is covered in register.test.ts.
+    expect(out.text.split('\nping')[0]).not.toContain('fail')
   })
 
   t('/pantheon cancel without id shows usage', async ($, on) => {

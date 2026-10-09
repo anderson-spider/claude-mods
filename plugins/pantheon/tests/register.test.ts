@@ -651,6 +651,94 @@ describe('register', () => {
     expect(out.text).not.toContain('fail')
   })
 
+  /** world() with its process.run replaced: Codex ping runs (`codex exec`) answer through `exec`; the rest is canned. */
+  function pingWorld(on: On, opts: { profile: string; codex?: boolean; file?: string; exec?: (argv: string[]) => { exitCode: number; stdout?: string; stderr?: string } | Error }) {
+    const execs: string[][] = []
+    const submits: string[] = []
+    const fixture = world(new Proxy(on, {
+      apply(target, thisArg, args) {
+        if (args[0] !== 'process.run') return Reflect.apply(target, thisArg, args)
+      },
+    }), { files: { [`${HOME}/.claude/pantheon.json`]: opts.file ?? `{"profile":"${opts.profile}"}` } })
+    const result = (r: { exitCode: number; stdout?: string; stderr?: string }) => ({
+      value: { exitCode: r.exitCode, stdout: r.stdout ?? '', stderr: r.stderr ?? '', isStdoutTruncated: false, isStderrTruncated: false },
+    })
+    on('process.run', async (_$, e) => {
+      const key = e.argv.join(' ')
+      if (key === 'codex --version') return result(opts.codex === false ? { exitCode: 127, stderr: 'not found' } : { exitCode: 0, stdout: 'codex-cli 1.0\n' })
+      if (key === 'codex login status') return result({ exitCode: 0, stdout: 'Logged in\n' })
+      if (e.argv[0] === 'codex' && e.argv[1] === 'exec') {
+        execs.push(e.argv)
+        const out = opts.exec ? opts.exec(e.argv) : { exitCode: 0, stdout: 'pong' }
+        if (out instanceof Error) throw out
+        return result(out)
+      }
+      return result({ exitCode: 0, stdout: `${ROOT}\n` })
+    })
+    on('prompt.submit', async (_$, e) => { submits.push(e.text); return { text: e.text } })
+    return { ...fixture, execs, submits }
+  }
+
+  test('doctor pings Codex targets, leaves native ones pending and submits one prompt', async ($, on) => {
+    const { execs, submits, clock } = pingWorld(on, { profile: 'mixed' })
+    await start($)
+    const out = await $.command.run({ command: 'pantheon', args: 'doctor' })
+    expect(execs.length).toBeGreaterThan(0)
+    expect(out.text).toContain('\nping\n')
+    expect(out.text).toMatch(/^ok {3}\S+ \(codex/m)
+    expect(out.text).toMatch(/^pending \S+ \(claude/m)
+    expect(out.text).not.toMatch(/^fail \S+ \(codex/m)
+    await clock.settle()
+    expect(submits.length).toBe(1)
+    expect(submits[0]).toContain('pantheon:')
+  })
+
+  test('doctor under Claude without Codex pings nothing and submits once', async ($, on) => {
+    const { execs, submits, clock } = pingWorld(on, { profile: 'claude', codex: false })
+    await start($)
+    const out = await $.command.run({ command: 'pantheon', args: 'doctor' })
+    expect(execs).toEqual([])
+    expect(out.text).toMatch(/^pending /m)
+    expect(out.text).not.toMatch(/^ok {3}\S+ \(/m)
+    await clock.settle()
+    expect(submits.length).toBe(1)
+  })
+
+  test('a failing Codex ping becomes a fail line with the first stderr line', async ($, on) => {
+    const { execs } = pingWorld(on, { profile: 'codex', exec: () => ({ exitCode: 3, stderr: 'bad auth\nmore' }) })
+    await start($)
+    const out = await $.command.run({ command: 'pantheon', args: 'doctor' })
+    expect(execs.length).toBeGreaterThan(0)
+    expect(out.text).toMatch(/^fail explorer \(codex .*\): exit 3: bad auth$/m)
+    expect(out.text).not.toContain('more')
+  })
+
+  test('a throwing Codex ping does not throw out of doctor', async ($, on) => {
+    pingWorld(on, { profile: 'codex', exec: () => new Error('boom') })
+    await start($)
+    const out = await $.command.run({ command: 'pantheon', args: 'doctor' })
+    expect(out.text).toMatch(/^fail explorer \(codex /m)
+  })
+
+  test('doctor skips the ping section and the submit when the config is invalid', async ($, on) => {
+    const { execs, submits, clock } = pingWorld(on, { profile: 'mixed', file: '{ nope' })
+    await start($)
+    const out = await $.command.run({ command: 'pantheon', args: 'doctor' })
+    expect(out.text).not.toContain('ping')
+    await clock.settle()
+    expect(execs).toEqual([])
+    expect(submits).toEqual([])
+  })
+
+  test('doctor does not submit when no target is native', async ($, on) => {
+    const { submits, clock } = pingWorld(on, { profile: 'codex' })
+    await start($)
+    const out = await $.command.run({ command: 'pantheon', args: 'doctor' })
+    await clock.settle()
+    expect(out.text).not.toMatch(/^pending /m)
+    expect(submits).toEqual([])
+  })
+
   test('delegate refuses while config is invalid', async ($, on) => {
     const { seen } = world(on, { files: { [`${HOME}/.claude/pantheon.json`]: '{ nope' } })
     await start($)

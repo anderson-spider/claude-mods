@@ -10,6 +10,8 @@ import { createJobs, markLost } from './jobs'
 import { buildCouncilBlock, isCouncilOrigin, matchesCouncilTrigger } from './prompts/council'
 import { buildOrchestratorSection } from './prompts/orchestrator'
 import { rolePrompt } from './prompts/roles'
+import { pingPrompt, pingTargets } from './ping'
+import type { PingResult, PingTarget } from './ping'
 import { PANE_ID, configReport, doctorReport, drawPanel, statusText } from './pane'
 import { isOffered, nativeAgentSpecs, resolveCodexCall, usesCodex } from './roles'
 import { buildRoster } from './roster'
@@ -45,6 +47,42 @@ type TrackingIo = {
   writeSession: (value: SessionInfo) => Promise<unknown>
   toast: (text: string) => void
   now: () => Promise<number>
+}
+
+const PING_TIMEOUT_MS = 60_000
+
+/** One Codex ping through `io.run`, outside the Jobs list. Never throws: any error becomes a `fail`. */
+async function pingCodex(
+  io: Pick<Io, 'run' | 'now' | 'after'>,
+  config: PantheonConfig,
+  target: PingTarget,
+  ctx: { cwd: string; skipGitRepoCheck: boolean },
+): Promise<PingResult> {
+  const base = { name: target.name, engine: target.engine, model: target.model }
+  const fail = (detail: string, ms?: number): PingResult => ({ ...base, state: 'fail', detail, ms })
+  let timer: { cancel: () => void } | undefined
+  try {
+    const call = resolveCodexCall(
+      config,
+      { agent: target.name, prompt: `Reply with exactly: pong ${target.name}. Do not use any tools.` },
+      ctx,
+      rolePrompt,
+    )
+    if ('error' in call) return fail(call.error)
+    const start = await io.now()
+    const timeout = new Promise<'timeout'>(resolve => { timer = io.after(PING_TIMEOUT_MS, () => resolve('timeout')) })
+    const run = io.run(buildArgv(call), { cwd: call.cwd, input: call.prompt })
+    const done = await Promise.race([run, timeout])
+    timer?.cancel()
+    const ms = (await io.now()) - start
+    if (done === 'timeout') return fail('timeout', ms)
+    if (/pong/i.test(done.stdout)) return { ...base, state: 'ok', ms }
+    const first = (done.stderr || done.stdout).trim().split('\n')[0]
+    return fail(`exit ${done.exitCode}${first ? `: ${first.slice(0, 120)}` : ''}`, ms)
+  } catch (error) {
+    timer?.cancel()
+    return fail(error instanceof Error ? error.message : String(error))
+  }
 }
 
 /**
@@ -606,16 +644,33 @@ export const register: Register = (on, options) => {
     if (sub === 'doctor') {
       const version = await io.run(['codex', '--version']).catch(() => undefined)
       const login = version?.exitCode === 0 ? await io.run(['codex', 'login', 'status']).catch(() => undefined) : undefined
+      const loginOk = login?.exitCode === 0
+      let pings: PingResult[] | undefined
+      if (current.ok) {
+        const targets = pingTargets(current.config)
+        const results = await Promise.all(targets.map(async (target): Promise<PingResult> => {
+          const base = { name: target.name, engine: target.engine, model: target.model }
+          if (target.off) return { ...base, state: 'off' }
+          if (target.engine !== 'codex') return { ...base, state: 'pending' }
+          if (!loginOk) return { ...base, state: 'fail', detail: 'codex unavailable' }
+          return pingCodex(io, current.config, target, { cwd: ws.root, skipGitRepoCheck: !ws.isRepo })
+        }))
+        pings = results
+        const native = results.filter(p => p.state === 'pending').map(p => p.name)
+        // The host refuses prompt.submit while this hook holds the turn, so the prompt goes out after it returns.
+        if (native.length > 0) io.after(0, () => { io.submit(pingPrompt(native)).catch(() => undefined) })
+      }
       return {
         text: doctorReport({
           usesCodex: usesCodex(current.config),
           profile: current.config.profile,
           codexVersion: version?.exitCode === 0 ? version.stdout.trim() : undefined,
           loginStatus: login ? (login.stdout || login.stderr).trim().split('\n')[0] : undefined,
-          loginOk: login?.exitCode === 0,
+          loginOk,
           config: current,
           root: ws.root,
           isRepo: ws.isRepo,
+          pings,
         }),
       }
     }
