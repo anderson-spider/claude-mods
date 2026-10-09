@@ -163,6 +163,9 @@ function mix(hex: string, into: string, t: number): string {
 }
 
 // '#rrggbb' as rgba(), for card backplates.
+// The desktop's measured cell size: a row is 19px tall (not 20) and a column 8px wide.
+const ROW_PX = 19
+const COL_PX = 8
 const rgba = (hex: string, a: number) => `rgba(${[1, 3, 5].map(k => parseInt(hex.slice(k, k + 2), 16)).join(',')},${a})`
 
 
@@ -213,7 +216,7 @@ export function timelineSource(slots: Slot[], session: SessionInfo, now: number,
   now = Math.floor(now / 15_000) * 15_000
   const span = 900_000
   const t0 = now - span
-  const SW = Math.max(8, Math.round(columns * 8))
+  const SW = Math.max(8, Math.round(columns * COL_PX))
   const x0 = Math.min(136, SW * 0.4)
   const x1 = SW - 24
   const xOf = (t: number) => x0 + ((Math.min(now, Math.max(t0, t)) - t0) / span) * (x1 - x0)
@@ -320,17 +323,17 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     const Svg = el.Svg!
     return <Svg key={key} source={source} width={width} height={height} alt={alt} />
   }
-  // The backplate supplies the exact 6px radius; native text and buttons remain selectable/actionable.
-  const plate = (key: string, width: number, height: number, tint: readonly string[], children: unknown[], padding = 1.25, gap = 1) => (
-    <Box key={key} width={width} height={height} position="relative" alignItems="center" paddingX={padding} gap={gap}>
-      <Box key={`${key}-back`} position="absolute" top={0} left={0}>
-        {image(`${key}-back-svg`, `<svg xmlns="http://www.w3.org/2000/svg" width="${width * 8}" height="${height * 20}"><rect x=".5" y=".5" width="${width * 8 - 1}" height="${height * 20 - 1}" rx="6" fill="${tint[0]}" stroke="${tint[1]}"/></svg>`, width * 8, height * 20, 'segment background')}
-      </Box>
+  // A pill is a native round-bordered Box (the border adds its own rows, so the pill centers in its row
+  // and never touches a neighbour); `width` is the content width, the border adds two cells.
+  const plate = (key: string, width: number, tint: readonly string[], children: unknown[], padding = 1, gap = 1) => (
+    <Box key={key} width={width + 2} flexShrink={0} borderStyle="round" borderColor={tint[1]} backgroundColor={tint[0]} alignItems="center" justifyContent="center" paddingX={padding} gap={gap}>
       {children}
     </Box>
   )
+  // A pill's [fill, border] as hex, pulled toward the panel background.
+  const pillTint = (hex: string): string[] => [mix(hex, HEX.bg, 0.88), mix(hex, HEX.bg, 0.55)]
   const rule = (key: string, width = W) => isDesk && el.Svg
-    ? image(key, `<svg xmlns="http://www.w3.org/2000/svg" width="${width * 8}" height="1"><path d="M0 .5H${width * 8}" stroke="${HEX.grid}"/></svg>`, width * 8, 1, 'divider')
+    ? image(key, `<svg xmlns="http://www.w3.org/2000/svg" width="${width * COL_PX}" height="1"><path d="M0 .5H${width * COL_PX}" stroke="${HEX.grid}"/></svg>`, width * COL_PX, 1, 'divider')
     : <Box key={key} width={width}><el.Text dimColor>{'─'.repeat(width)}</el.Text></Box>
   const numeric = (key: string, value: Seg, width: number): Seg => ({
     node: <Box key={key} width={width} flexShrink={0} justifyContent="flex-end">{value.node ?? text(value)}</Box>, w: width,
@@ -371,12 +374,13 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     return { text: fmtClock((endAt ?? now) - since), color, bold }
   }
 
-  // A steady state dot: an image on desktop, one text cell on the terminal.
+  // The running dot: a solid circle with a ring that grows and fades (SMIL, so the Svg is interactive) on
+  // desktop, one text cell on the terminal. The footprint stays 10x10.
   const pulseSeg = (key: string): Seg => {
     if (isDesk && el.Svg) {
       const Svg = el.Svg
-      const source = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10" width="10" height="10"><circle cx="5" cy="5" r="4.5" fill="${HEX.green}"/></svg>`
-      return { node: <Svg key={key} source={source} alt="running" width={10} height={10} />, w: 1 }
+      const source = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10" width="10" height="10"><circle cx="5" cy="5" r="3" fill="${HEX.green}"/><circle cx="5" cy="5" r="3" fill="none" stroke="${HEX.green}" stroke-width="1"><animate attributeName="r" values="3;5" dur="1.4s" repeatCount="indefinite"/><animate attributeName="opacity" values="0.6;0" dur="1.4s" repeatCount="indefinite"/></circle></svg>`
+      return { node: <Svg key={key} source={source} alt="running" width={10} height={10} isInteractive />, w: 1 }
     }
     return { text: '●', color: RUN }
   }
@@ -427,11 +431,11 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     const running = roles.reduce((n, r) => n + activeOf(r).length, 0) + roster.others.filter(i => i.isActive).length
     const right: Seg[] = W >= (isDesk ? 58 : 30)
         ? running ? isDesk
-          ? [pulseSeg('hdr-dot'), numeric('header-running-count', { text: String(running), color: RUN, bold: true }, 3), { text: 'running', color: RUN, bold: true }]
+          ? [{ node: plate('header-badge', 2.5 + 2 + `${running} running`.length, pillTint(HEX.green), [pulseSeg('hdr-dot').node, text({ text: `${running} running`, color: RUN, bold: true })]), w: 4.5 + `${running} running`.length }]
           : [pulseSeg('hdr-dot'), { text: `${running} running`, color: RUN, bold: true }]
           : data.session.isRunning ? [pulseSeg('hdr-dot'), { text: 'working', color: RUN, bold: true }] : [...(isDesk ? [idleSeg('hdr-idle')] : []), { text: 'idle', dim: true }]
         : []
-    if (data.onClose && W >= 58) right.push({ node: isDesk ? <Button key="close" plain label="✕" onPress={() => data.onClose?.()} /> : <Button key="close" label="✕" onPress={() => data.onClose?.()} />, w: isDesk ? 3 : 5 })
+    if (data.onClose && W >= 58) right.push({ node: isDesk ? <Box key="close-box" marginLeft={1}><Button key="close" plain label="✕" onPress={() => data.onClose?.()} /></Box> : <Button key="close" label="✕" onPress={() => data.onClose?.()} />, w: isDesk ? 4 : 5 })
     if (!isDesk) return (
       <Box key="header" flexDirection="column" width={W}>
         {headerH > 1 ? (
@@ -452,7 +456,7 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
             <Box gap={isDesk ? 2 : 1} alignItems="center" flexShrink={1}>
               {W >= 14 ? text({ text: isDesk ? 'Pantheon' : 'PANTHEON', bold: true, color: ROUND }) : null}
             </Box>
-            {right.length ? <Box key="header-state" width={isDesk ? 16 : undefined} alignItems="center" justifyContent="flex-end" gap={1} flexShrink={0}>{render(right)}</Box> : null}
+            {right.length ? <Box key="header-state" alignItems="center" justifyContent="flex-end" gap={1} flexShrink={0}>{render(right)}</Box> : null}
           </Box>
         ) : null}
         {profileRow(W)}
@@ -540,7 +544,7 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
   const collapsedSet = new Set<string>(data.collapsed ?? [])
   const rowH = isDesk ? 1.4 : 1
   // Desktop cards are stacked with this gap between them, so a border never touches the next card.
-  const CARD_GAP = 0.5
+  const CARD_GAP = 0.6
 
   // A card. Terminal: round box lines with the title in the top border, every line exactly W cells.
   // Desktop: a native column over an SVG backplate; the title sits on its top edge.
@@ -548,7 +552,7 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     const toggleBtn = toggle && data.onToggle ? (): unknown => {
       const press = () => data.onToggle?.(toggle.group)
       return isDesk && el.Svg
-        ? plate(`pill-toggle-${toggle.group}`, 10.5, 1.3, HUD.neutral, [<Button key={`toggle-${toggle.group}`} plain label={toggle.label} onPress={press} />])
+        ? plate(`pill-toggle-${toggle.group}`, 10.5, pillTint(HUD.neutral[2]), [<Button key={`toggle-${toggle.group}`} plain label={toggle.label} onPress={press} />])
         : <Button key={`toggle-${toggle.group}`} label={toggle.label} onPress={press} />
     } : undefined
     const sum = rows.reduce((n, r) => n + r.h, 0)
@@ -559,24 +563,22 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
       }
     }
     if (isDesk) {
-      // A fold button gets its own row inside the card, under the title that sits on the top edge.
-      const headH = toggleBtn ? 1.4 : 0
-      const total = 1.5 + headH + sum + 0.6
-      const px = Math.round(total * 20)
-      const back = el.Svg ? (
-        <Box key={`${key}-back`} position="absolute" top={0} left={0}>
-          {image(`${key}-back-svg`, `<svg xmlns="http://www.w3.org/2000/svg" width="${W * 8}" height="${px}"><rect x="1" y="10.5" width="${W * 8 - 2}" height="${px - 12}" rx="12" fill="${rgba(color, 0.06)}" stroke="${rgba(color, 0.75)}" stroke-width="1.4"/></svg>`, W * 8, px, 'card background')}
+      // A native rounded border sizes to its content, so the card never outgrows or underfills a
+      // backplate; the title is the first row, the fold button sits at its right.
+      const head = (
+        <Box key={`${key}-title`} width={W - 4} alignItems="center" justifyContent="space-between" gap={1} marginBottom={0.3}>
+          <Box key={`${key}-label`}>
+            {text({ text: title.label, bold: true, color })}
+            {title.count === undefined ? null : text({ text: ` ${title.count}`, dim: true })}
+          </Box>
+          {toggleBtn ? <Box key={`${key}-toggle`}>{toggleBtn()}</Box> : null}
         </Box>
-      ) : null
+      )
+      const total = rowH + 0.3 + (toggleBtn ? 1 : 0) + sum + 1
       return {
         node: (
-          <Box key={key} position="relative" flexDirection="column" width={W} height={total} marginBottom={CARD_GAP} paddingX={2} paddingTop={1.5} paddingBottom={0.6}>
-            {back}
-            <Box key={`${key}-title`} position="absolute" top={0} left={2} backgroundColor={HEX.bg} paddingX={0.5}>
-              {text({ text: title.label, bold: true, color })}
-              {title.count === undefined ? null : text({ text: ` ${title.count}`, dim: true })}
-            </Box>
-            {toggleBtn ? <Box key={`${key}-head`} width={W - 4} height={headH} alignItems="center" justifyContent="flex-end"><Box key={`${key}-toggle`}>{toggleBtn()}</Box></Box> : null}
+          <Box key={key} borderStyle="round" borderColor={mix(color, HEX.bg, 0.25)} backgroundColor={mix(color, HEX.bg, 0.94)} flexDirection="column" width={W} paddingX={1} marginBottom={CARD_GAP}>
+            {head}
             {rows.map(r => r.node)}
           </Box>
         ),
@@ -643,8 +645,8 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     const more: Seg[] = extra > 0 ? [{ text: `+${extra}`, dim: true }] : []
     if (!runs.length) return more
     if (isDesk && el.Svg) {
-      const px = runs.length * 8 + 1
-      const rects = runs.map((r, k) => `<rect x="${k * 8 + 1}" y="1" width="4" height="12" rx="1.5" ${r.color ? `fill="${r.color}"` : `fill="none" stroke="${HEX.dot}" stroke-width="1.2"`}/>`).join('')
+      const px = runs.length * COL_PX + 1
+      const rects = runs.map((r, k) => `<rect x="${k * COL_PX + 1}" y="1" width="4" height="12" rx="1.5" ${r.color ? `fill="${r.color}"` : `fill="none" stroke="${HEX.dot}" stroke-width="1.2"`}/>`).join('')
       const cellsW = Math.ceil(px / 8) + (extra > 0 ? 1 : 0)
       return [{ node: <Box key={`${key}-box`} width={cellsW} flexShrink={0}>{image(key, `<svg xmlns="http://www.w3.org/2000/svg" width="${px}" height="14">${rects}</svg>`, px, 14, 'jobs')}</Box>, w: cellsW }, ...more]
     }
@@ -693,7 +695,7 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     const { slot, inst: i } = r
     if (r.isOff) return { text: '⊘', dim: true }
     if (!i) return { text: '●', dim: true }
-    if (i.isActive) return { text: '●', color: ROLE_COLOR[slot.name] }
+    if (i.isActive) return isDesk && el.Svg ? pulseSeg(`dot-${r.key}`) : { text: '●', color: ROLE_COLOR[slot.name] }
     if (i.status === 'done') return { text: '●', color: OK }
     if (i.status === 'error' || i.status === 'failed') return { text: '●', color: BAD }
     if (i.status === 'lost') return { text: '●', color: SECTION_COLOR.planned }
@@ -881,7 +883,7 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     // Desktop's header already carries the working/idle badge (from 58 columns); the card repeats it only below that.
     const headerBadge = isDesk && W >= 58
     const state: Seg[] = headerBadge ? [] : isDesk && el.Svg && IW >= 30
-      ? [{ node: plate('s-pill', 11.5, 1.3, running ? [rgba(OK, 0.16), rgba(OK, 0.7)] : HUD.neutral, render(stateTexts), 1.25, 0.6), w: 11.5 }]
+      ? [{ node: plate('s-pill', 11.5, pillTint(running ? HEX.green : HUD.neutral[2]), render(stateTexts), 1, 0.6), w: 13.5 }]
       : [dot, { text: ' ', dim: true }, stateTexts[1]]
     const identity: Seg[] = [
       { text: modelName(s.model) || 'orchestrator', bold: true, color: ROLE_COLOR.orchestrator },
@@ -894,8 +896,8 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     }
     const ctxLabel: Seg = { text: 'ctx ', dim: true }
     // 'ctx ' and '  100%' take 10 cells; the gauge takes the rest up to 30 blocks, or none when under 3.
-    const gaugeN = Math.min(30, isDesk ? Math.floor(((IW - 13) * 8 - 9) / 11) : IW - 10)
-    rows.push({ node: space('s1', identity, state, isDesk ? (headerBadge ? rowH : 1.6) : undefined), h: isDesk ? (headerBadge ? rowH : 1.6) : 1 })
+    const gaugeN = Math.min(30, isDesk ? Math.floor(((IW - 13) * COL_PX - 9) / 11) : IW - 10)
+    rows.push({ node: space('s1', identity, state, isDesk ? (headerBadge ? rowH : 2) : undefined), h: isDesk ? (headerBadge ? rowH : 2) : 1 })
     rows.push({
       node: plain('s-ctx', ctx != null
         ? [ctxLabel, ...(gaugeN >= 3 ? gaugeSegs('s-gauge', ctx, gaugeN) : []), { text: `${gaugeN >= 3 && !(isDesk && el.Svg) ? '  ' : ''}${Math.round(ctx)}%`, bold: true }]
@@ -940,7 +942,7 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     if (level < 5 && roster.others.length) blocks.push({ node: othersLine(), h: 1 })
     if (level <= 1 && isDesk && el.Svg) {
       const t = timelineSource(roster.slots, data.session, now, W)
-      blocks.push({ node: <Box key="timeline-box" marginBottom={CARD_GAP}>{timelineCard(t)}</Box>, h: t.height / 20 + CARD_GAP, color: SECTION_COLOR.timeline })
+      blocks.push({ node: <Box key="timeline-box" marginBottom={CARD_GAP}>{timelineCard(t)}</Box>, h: t.height / ROW_PX + CARD_GAP, color: SECTION_COLOR.timeline })
     } else if (level <= 1 && !isDesk && !isTiny) {
       const t = timelineBlock()
       if (t) blocks.push(t)

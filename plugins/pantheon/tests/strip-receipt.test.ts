@@ -116,6 +116,17 @@ test("state: ⚡fast follows the last request's speed", () => {
   expect(noteStep({ model: "m" }, undefined, NOW)).toBe(false);
 });
 
+test("state: each main-loop request moves the context reading, so the strip does not wait for the turn to end", () => {
+  reset();
+  contextData.readings = [{ tokens: 0, window: 1_000_000, percent: 0 }];
+  noteStep({ model: "claude-opus-5-5" }, { usage: { input_tokens: 2_000, cache_read_input_tokens: 80_000, cache_creation_input_tokens: 8_000 } }, NOW);
+  expect(contextData.readings).toEqual([{ tokens: 90_000, window: 1_000_000, percent: 9 }]);
+  // No window known yet: nothing to measure against, no reading.
+  contextData.readings = [];
+  noteStep({ model: "claude-opus-5-5" }, { usage: { input_tokens: 5 } }, NOW);
+  expect(contextData.readings).toEqual([]);
+});
+
 test("state: a reading adopted from another session keeps its own age, so a later measurement is not mistaken for a burst", async () => {
   reset();
   const store = new Map<string, unknown>();

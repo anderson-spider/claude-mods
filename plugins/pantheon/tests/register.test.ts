@@ -1075,6 +1075,29 @@ describe('register', () => {
       } finally { await ui.unmount() }
     })
 
+    test('mounts on the desktop surface through the engine (a refused tree would draw the engine\'s own) with the three HUD C rows', async ($, on) => {
+      stripWorld(on, {}, { usd: 4.59 })
+      await start($)
+      const ui = await $.ui.mount({
+        plugin: 'pantheon', surface: 'desktop', component: 'AbovePrompt',
+        props: { hasSurvey: false, isWorking: true, maxRows: 12, bodyColumns: 100 } as never,
+        viewport: { columns: 100, rows: 40 } as never,
+      })
+      try {
+        const all = await texts(ui)
+        expect(all).toContain('Opus 5')
+        expect(all).toContain('5h')
+        expect(all).toContain('$4.59')
+        expect(all).toContain('below-marker')
+        expect(all).not.toMatch(/╭/)
+        expect(await ui.find({ key: 'strip' })).toBeDefined()
+        expect(await ui.find({ key: 'strip-r1' })).toBeDefined()
+        const pictures = (await ui.findAll({ type: 'Svg' })).map(n => (n as unknown as { props: { alt: string; isInteractive?: boolean } }).props)
+        expect(pictures.some(p => p.alt === 'working' && p.isInteractive)).toBe(true)
+        expect(pictures.some(p => p.alt.startsWith('5h'))).toBe(true)
+      } finally { await ui.unmount() }
+    })
+
     test('draws nothing of its own and returns what is below with abovePrompt off', { options: { abovePrompt: false } }, async ($, on) => {
       stripWorld(on)
       await start($)

@@ -278,10 +278,7 @@ describe('pane', () => {
       expect(at).toEqual([...at].sort((a, b) => a - b))
       // fixer and oracle run, explorer finished; librarian, designer and council have not run yet.
       for (const name of ['explorer', 'librarian', 'fixer', 'oracle', 'designer', 'council α', 'council β']) expect(all).toContain(name)
-      if (surface === 'desktop') {
-        expect(all).toContain('2')
-        expect(all).toContain('running')
-      } else expect(all).toContain('2 running')
+      expect(all).toContain('2 running')
     })
 
     t(`an active explorer shows its instance, activity and clock (${surface})`, async ($, on) => {
@@ -296,12 +293,24 @@ describe('pane', () => {
       expect(all.some(x => x.includes('map pane render tree'))).toBe(true)
       expect(all.some(x => x.includes("rg 'x' plugins/"))).toBe(true)
       expect(all).toContain('41.2k↑ 2.3k↓') // input and output of the job, in the session tokens
-      if (surface === 'desktop') {
-        expect(all).toContain('1')
-        expect(all).toContain('running')
-      } else expect(all).toContain('1 running')
+      expect(all).toContain('1 running')
       // The clock is a Client where the surface has one, else a Text.
       expect((await ui.find({ key: 'clk-pj3a' })) ?? all.find(x => /^\d+:\d\d$/.test(x))).toBeDefined()
+    })
+
+    if (surface === 'desktop') t('desktop: the running badge is a bordered pill with a pulsing dot, the close button has room, and the mount is accepted by the engine', async ($, on) => {
+      world(on)
+      seed(on, { jobs: [job({ id: 'pj3a', description: 'map pane render tree' })] })
+      await start($)
+      const ui = await mountPane($, 'desktop', { rows: 70 })
+      const badge = await ui.find({ key: 'header-badge' })
+      expect((badge as unknown as { props: Record<string, unknown> }).props).toMatchObject({ borderStyle: 'round', alignItems: 'center' })
+      const dot = (await ui.findAll({ type: 'Svg' })).map(n => (n as unknown as { props: { alt: string; source: string; isInteractive?: boolean } }).props).find(p => p.alt === 'running')
+      expect(dot?.isInteractive).toBe(true)
+      expect(dot?.source).toContain('<animate')
+      expect(await ui.find({ key: 'close-box' })).toBeDefined()
+      const all = await texts(ui)
+      for (const x of ['Pantheon', '1 running', 'Session', 'Agents · running', 'Agents · idle']) expect(all).toContain(x)
     })
 
     t(`a resumed job shows round 2 (${surface})`, async ($, on) => {
@@ -437,7 +446,7 @@ describe('pane', () => {
     expect(await terminal.find({ type: 'Svg' })).toBeUndefined()
   })
 
-  t('desktop draws section cards on SVG backplates with native rows and fixed numeric slots', async ($, on) => {
+  t('desktop draws section cards in native bordered boxes with native rows and fixed numeric slots', async ($, on) => {
     world(on)
     await start($)
     const ui = await mountPane($, 'desktop', { columns: 86, rows: 70 })
@@ -449,13 +458,12 @@ describe('pane', () => {
     expect(await props('header')).toMatchObject({ flexDirection: 'column', width: 80 })
     expect(await props('header-top')).toMatchObject({ height: 1.7, width: 80, alignItems: 'center' })
     expect(await props('profile-row')).toMatchObject({ width: 80 })
-    expect(await props('session')).toMatchObject({ width: 80, paddingX: 2, position: 'relative', flexDirection: 'column' })
-    expect(await props('idle-rows')).toMatchObject({ width: 80, flexDirection: 'column', position: 'relative' })
-    expect((await props('idle-rows')).borderStyle).toBeUndefined()
+    expect(await props('session')).toMatchObject({ width: 80, paddingX: 1, borderStyle: 'round', flexDirection: 'column' })
+    expect(await props('idle-rows')).toMatchObject({ width: 80, flexDirection: 'column', borderStyle: 'round' })
+    expect(String((await props('idle-rows')).borderColor)).toMatch(/^#/)
     const svgs = (await ui.findAll({ type: 'Svg' })).map(n => (n as unknown as { props: { alt: string; source: string; width: number; height: number; isInteractive?: boolean } }).props)
-    expect(svgs.some(p => p.alt === 'card background' && p.source.includes(`stroke="${rgba(SECTION_COLOR.session, 0.75)}"`))).toBe(true)
-    expect(svgs.some(p => p.alt === 'card background' && p.source.includes(`stroke="${rgba(SECTION_COLOR.idle, 0.75)}"`))).toBe(true)
-    expect((await props('pill-toggle-idle')).width).toBe(10.5)
+    expect(svgs.some(p => p.alt === 'card background')).toBe(false)
+    expect(await props('pill-toggle-idle')).toMatchObject({ width: 12.5, borderStyle: 'round', alignItems: 'center' })
     expect(await ui.find({ key: 'idle-explorer' })).toBeDefined()
     expect((await texts(ui)).filter(x => x === '—')).toHaveLength(4) // only the Session readings; a role that never ran leaves its time and task blank
     expect((await texts(ui)).some(t => t.includes('▎') || t.includes('━'))).toBe(false)
@@ -465,7 +473,7 @@ describe('pane', () => {
     expect(svgs.filter(p => p.alt === 'idle').every(p => !p.isInteractive)).toBe(true)
   })
 
-  t('desktop: cards never overlap, they have an explicit height and a gap, and no rails', async ($, on) => {
+  t('desktop: cards never overlap, they size to their content (a border, no fixed height) with a gap, and no rails', async ($, on) => {
     world(on)
     seed(on, busy())
     await start($)
@@ -473,16 +481,17 @@ describe('pane', () => {
     expect(await railsOf(ui)).toEqual([])
     for (const key of ['session', 'running-rows', 'idle-rows']) {
       const p = (await ui.find({ key }) as unknown as { props: { height?: number; marginBottom?: number } }).props
-      expect(typeof p.height).toBe('number')
+      expect(p.height).toBeUndefined()
+      expect((p as { borderStyle?: string }).borderStyle).toBe('round')
       expect(p.marginBottom).toBeGreaterThan(0)
     }
   })
 
-  t('desktop: the Collapse button sits in the card header row, not on the border', async ($, on) => {
+  t('desktop: the Collapse button sits in the card title row, not on the border', async ($, on) => {
     world(on)
     await start($)
     const ui = await mountPane($, 'desktop', { columns: 86, rows: 70 })
-    const row = await ui.find({ key: 'idle-rows-head' }) as unknown as { props: Record<string, unknown>; children?: Node[] } | undefined
+    const row = await ui.find({ key: 'idle-rows-title' }) as unknown as { props: Record<string, unknown> } | undefined
     expect(row).toBeDefined()
     expect(row!.props.position).toBeUndefined()
     const toggle = await ui.find({ key: 'idle-rows-toggle' }) as unknown as { props: Record<string, unknown> }
@@ -617,7 +626,7 @@ describe('pane', () => {
     expect(all).toContain('⊘') // the disabled librarian is planned and off
   })
 
-  t('mini: steady text dots; desktop: steady image dots, clocks stay Clients', async ($, on) => {
+  t('mini: steady text dots; desktop: pulsing image dots, clocks stay Clients', async ($, on) => {
     world(on)
     seed(on, { natives: [native()], session: { isRunning: true, turnStartedAt: NOW - 5_000 } })
     await start($)
@@ -631,10 +640,11 @@ describe('pane', () => {
     const dots = (await desk.findAll({ type: 'Svg' })).map(n => (n as unknown as {
       props: { source: string; alt: string; isInteractive?: boolean; width: number; height: number }
     }).props).filter(s => s.alt === 'running')
-    expect(dots.length).toBe(1) // the header; the session card repeats no badge
+    expect(dots.length).toBe(2) // the header and the running oracle row; the session card repeats no badge
+    expect(dots.map(d => d.source).every(src => src === dots[0].source)).toBe(true)
     for (const dot of dots) {
-      expect(dot.isInteractive).toBeUndefined()
-      expect(dot.source).not.toContain('<animate')
+      expect(dot.isInteractive).toBe(true)
+      expect(dot.source).toContain('<animate')
       expect(dot.source).not.toContain('background:')
       expect(dot.source).not.toContain('<rect')
       expect(dot.source).toContain('fill="#4fb383"')
@@ -1010,10 +1020,13 @@ describe('pane', () => {
     await start($)
     const ui = await mountPane($, 'desktop', { rows: 80 })
     const svgs = (await ui.findAll({ type: 'Svg' })).map(n => (n as unknown as { props: { source: string; alt: string } }).props)
-    const plates = svgs.filter(s => s.alt === 'card background').map(s => s.source)
-    for (const color of [SECTION_COLOR.session, SECTION_COLOR.running, SECTION_COLOR.idle]) {
-      expect(plates.some(source => source.includes(`stroke="${rgba(color, 0.75)}"`))).toBe(true)
+    const borders = new Map<string, string>()
+    for (const key of ['session', 'running-rows', 'idle-rows']) {
+      const p = (await ui.find({ key }) as unknown as { props: { borderColor?: string } }).props
+      expect(String(p.borderColor)).toMatch(/^#/)
+      borders.set(key, String(p.borderColor))
     }
+    expect(new Set(borders.values()).size).toBe(3)
     const timeline = svgs.find(s => s.alt.startsWith('Last 15 minutes'))!
     expect(timeline.source).toContain(`stroke="${rgba(SECTION_COLOR.timeline, 0.75)}"`)
     expect(await railsOf(ui)).toEqual([])
@@ -1380,9 +1393,6 @@ describe('timelineSource', () => {
     for (const node of first) expect(node.key ?? node.props?.key).toBeDefined()
     const timeline = first.find(n => n.props?.alt?.startsWith('Last 15 minutes'))!
     expect(timeline.key ?? timeline.props?.key).toBe('timeline')
-    const plates = first.filter(n => n.props?.alt === 'card background')
-    expect(plates.length > 0).toBe(true)
-    for (const node of plates) expect(node.key ?? node.props?.key).toBeDefined()
   })
 
   test('running bars are solid in the engine color, finished ones outlined', () => {
