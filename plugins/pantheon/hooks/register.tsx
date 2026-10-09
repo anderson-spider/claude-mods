@@ -307,7 +307,7 @@ export const register: Register = (on, options) => {
           name: spec.name, description: spec.description, prompt: spec.prompt,
           ...(spec.model ? { model: spec.model } : {}),
           ...(spec.effort ? { effort: spec.effort } : {}),
-          ...(spec.tools ? { tools: spec.tools } : {}),
+          ...(spec.disallowedTools ? { disallowedTools: spec.disallowedTools } : {}),
         })
       }
       // Só marca como registrado depois de todos: uma falha é tentada de novo no próximo turno.

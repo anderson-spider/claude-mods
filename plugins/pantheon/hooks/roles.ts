@@ -108,8 +108,12 @@ export function resolveCodexCall(
 }
 
 type NativeSpec = {
-  name: string; description: string; prompt: string; model?: string; effort?: string; tools?: string[]
+  name: string; description: string; prompt: string; model?: string; effort?: string
+  disallowedTools?: readonly string[]
 }
+
+// Oracle and the councillors inherit the session's tools minus the ones that change files.
+const NO_FILE_EDITS = ['Edit', 'Write', 'NotebookEdit'] as const
 
 export function nativeAgentSpecs(config: PantheonConfig, prompts: RolePrompts): NativeSpec[] {
   const descriptions: Record<Role, string> = {
@@ -129,8 +133,7 @@ export function nativeAgentSpecs(config: PantheonConfig, prompts: RolePrompts): 
         prompt: appendPrompt(prompts(role, 'claude'), override.prompt),
         model: override.model,
         effort: override.effort,
-        ...(['explorer', 'librarian', 'oracle'].includes(role)
-          ? { tools: ['Read', 'Grep', 'Glob', ...(role === 'librarian' ? ['WebSearch', 'WebFetch'] : [])] } : {}),
+        ...(role === 'oracle' ? { disallowedTools: NO_FILE_EDITS } : {}),
       }
     })
 
@@ -142,7 +145,7 @@ export function nativeAgentSpecs(config: PantheonConfig, prompts: RolePrompts): 
       prompt: appendPrompt(prompts('councillor', 'claude'), seat.prompt),
       model: seat.model,
       effort: seat.effort,
-      tools: ['Read', 'Grep', 'Glob'],
+      disallowedTools: NO_FILE_EDITS,
     })
   }
   return specs
