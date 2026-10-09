@@ -107,6 +107,19 @@ const t = (name: string, fn: (...args: Parameters<Parameters<typeof test>[1]>) =
   })
 
 describe('pane', () => {
+  for (const surface of SURFACES) t(`git has its own color and an Idle row (${surface})`, async ($, on) => {
+    world(on)
+    await start($)
+    const ui = await mountPane($, surface, { rows: 100 })
+    expect(await ui.find({ key: 'idle-git' })).toBeDefined()
+    expect(ROLE_COLOR.git).toBe('#E8873A')
+    expect(Object.entries(ROLE_COLOR).filter(([role]) => role !== 'git').map(([, color]) => color.toLowerCase()))
+      .not.toContain(ROLE_COLOR.git.toLowerCase())
+    const labels = (await ui.findAll({ type: 'Text' })).filter(n => String(n.text).trim() === 'git')
+    expect(labels.length).toBeGreaterThan(0)
+    expect(labels.some(n => (n as unknown as { props: { color: string } }).props.color === ROLE_COLOR.git)).toBe(true)
+  })
+
   for (const surface of SURFACES) t(`header shows working when only the main session runs (${surface})`, async ($, on) => {
     world(on)
     seed(on, { session: { isRunning: true, turnStartedAt: NOW - 5000 } })
@@ -507,7 +520,7 @@ describe('pane', () => {
     expect(names).toContain(ROLE_COLOR.explorer) // full role color, not mixed toward the panel
     const all = await texts(ui)
     expect(all).toContain('agents')
-    expect(all).toContain('8') // the orchestrator plus the seven rows of the Agents card
+    expect(all).toContain('9') // the orchestrator plus the eight rows of the Agents card
   })
 
   t('desktop session, groups and timeline share the pane inset and resize with columns', async ($, on) => {
@@ -622,7 +635,7 @@ describe('pane', () => {
     const ui = await mountPane($, 'terminal', { rows: 70 })
     expect((await railsOf(ui)).map(c => c.props.color)).toEqual([SECTION_COLOR.running, SECTION_COLOR.idle, SECTION_COLOR.timeline, SECTION_COLOR.log])
     const all = await texts(ui)
-    expect(all.filter(text => text === '●')).toHaveLength(8) // header, orchestrator, oracle and the five idle rows
+    expect(all.filter(text => text === '●')).toHaveLength(9) // header, orchestrator, oracle and the six idle rows
     expect(all).toContain('⊘') // the disabled librarian is planned and off
   })
 

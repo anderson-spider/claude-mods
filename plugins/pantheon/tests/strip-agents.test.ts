@@ -5,6 +5,18 @@ import { agent, NOW } from "./strip-fixtures";
 
 const plain = (runs: { text: string }[]) => runs.map((r) => r.text).join("");
 
+test("git jobs and native agents keep their role and orange color in the strip", () => {
+  const list = agentsFromState(
+    [{ id: "git-job", agent: "git", status: "running", startedAt: NOW - 2000, cwd: "/repo", description: "Commit changes" }],
+    [{ id: "git-native", role: "git", type: "pantheon:git", task: "Open PR", ctx: 0, out: 0, steps: 0,
+      rounds: [{ startedAt: NOW - 1000, status: "running" }] }], NOW);
+  expect(list.map(a => a.role)).toEqual(["git", "git"]);
+  const row = agentsRow(list, 116, NOW);
+  expect(row.filter(r => r.text === "git").map(r => r.color)).toEqual(["#E8873A", "#E8873A"]);
+  expect(plain(row)).toContain("Commit changes");
+  expect(plain(row)).toContain("Open PR");
+});
+
 test("agents row: nothing while idle", () => {
   expect(agentsRow([], 100, NOW)).toEqual([]);
 });

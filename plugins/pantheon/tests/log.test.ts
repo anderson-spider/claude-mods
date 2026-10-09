@@ -18,6 +18,16 @@ test('empty roster yields no events', () => {
   expect(logEvents(roster(), 10_000, 50)).toEqual([])
 })
 
+test('git logs start and completion under its own actor', () => {
+  const i = inst({ task: 'Commit changes', isActive: false, status: 'done', endedAt: 9_000,
+    rounds: [{ startedAt: 1_000, endedAt: 9_000, status: 'done' }] })
+  const out = logEvents(roster({ git: { instances: [i], history: [i] } }), 10_000, 50)
+  expect(out.map(e => [e.actor, e.kind, e.text])).toEqual([
+    ['git', 'started', 'started: Commit changes'],
+    ['git', 'done', 'done in 8s · Commit changes'],
+  ])
+})
+
 test('running instance has only a started event', () => {
   const i = inst()
   const out = logEvents(roster({ explorer: { state: 'active', instances: [i], history: [i] } }), 5_000, 50)

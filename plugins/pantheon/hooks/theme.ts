@@ -12,7 +12,7 @@ export const ROLE_COLOR: Record<SlotName, string> = {
   fixer: '#8F96A6',
   oracle: '#A56BD8',
   designer: '#D870A8',
-  git: '#8F96A6', // Placeholder until the git panel task assigns its color.
+  git: '#E8873A',
   council: '#B8B3A6',
 }
 
