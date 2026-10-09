@@ -1,9 +1,17 @@
 {
   "name": "pantheon",
-  "version": "0.7.2",
+  "version": "0.8.0",
   "description": "Makes Claude an orchestrator that delegates to specialist roles on Codex or native Claude agents, chosen per profile, with an auto-opening /pantheon panel for roles, activity and jobs.",
   "author": {
     "name": "anderson-spider"
   },
-  "types": "./types/index.d.ts"
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "profile": {
+      "type": "string",
+      "title": "Active profile",
+      "description": "Picks the active Pantheon profile. A profile set in ~/.claude/pantheon.json or <repo>/.claude/pantheon.json overrides this choice. Custom profiles defined in those files are accepted.",
+      "default": "claude"
+    }
+  }
 }

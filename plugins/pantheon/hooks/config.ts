@@ -192,9 +192,12 @@ export async function loadConfig(
   read: ReadFile,
   paths: { user: string; project?: string },
   lastValid?: PantheonConfig,
+  selected?: string,
 ): Promise<ConfigResult> {
+  const knownProfiles = new Set(Object.keys(BUILTIN_PROFILES))
   const rejected = (error: unknown): ConfigResult => ({
     ok: false, error: error instanceof Error ? error.message : String(error), config: lastValid ?? DEFAULT_CONFIG,
+    profiles: [...knownProfiles],
   })
   const layers: Layer[] = []
   const sources: [string, Origin][] = [[paths.user, 'user']]
@@ -205,7 +208,9 @@ export async function loadConfig(
       if (text === undefined) continue
       let parsed: unknown
       try { parsed = JSON.parse(text) } catch { throw new Error('Invalid JSON') }
-      layers.push({ config: validate(parsed), path, origin })
+      const config = validate(parsed)
+      for (const name of Object.keys(config.profiles ?? {})) knownProfiles.add(name)
+      layers.push({ config, path, origin })
     } catch (error) {
       return rejected(`${path}: ${error instanceof Error ? error.message : String(error)}`)
     }
@@ -218,6 +223,10 @@ export async function loadConfig(
     }
     const meta: Provenance = { origins: new Map(), paths: new Map() }
     for (const field of leaves(config)) mark(meta, field, 'default')
+    if (selected !== undefined) {
+      config.profile = selected
+      mark(meta, 'profile', 'settings')
+    }
     const profiles = new Map<string, ProfileEntries>(Object.entries(BUILTIN_PROFILES).map(([name, profile]) => [name, copyProfile(profile)]))
     for (const [name, profile] of profiles) for (const field of leaves(profile)) mark(meta, `${name}|${field}`, 'default')
     const custom = new Map<string, { patch: ProfileLayer; layer: Layer }[]>()
@@ -257,7 +266,7 @@ export async function loadConfig(
     const origins: Record<string, Origin> = Object.fromEntries(leaves(effective).map(field => [
       field, meta.origins.get(profileFields.has(field) ? `${config.profile}|${field}` : field) ?? 'default',
     ]))
-    return { ok: true, config: effective, origins }
+    return { ok: true, config: effective, origins, profiles: [...profiles.keys()] }
   } catch (error) {
     return rejected(error)
   }

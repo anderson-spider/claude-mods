@@ -4,7 +4,7 @@ import type { AgentSpec, ProcessRunInit, ProcessRunResult, Register } from 'clau
 import type { Job, Native, SessionInfo } from '../types'
 import { buildArgv, createJsonlReader } from './codex'
 import { loadConfig } from './config'
-import { DEFAULT_CONFIG } from './defaults'
+import { BUILTIN_PROFILES, DEFAULT_CONFIG } from './defaults'
 import { createJobs, markLost } from './jobs'
 import { buildCouncilBlock, isCouncilOrigin, matchesCouncilTrigger } from './prompts/council'
 import { buildOrchestratorSection } from './prompts/orchestrator'
@@ -124,9 +124,11 @@ function summarize(job: Job) {
   }
 }
 
-export const register: Register = on => {
-  let state: ConfigResult = { ok: true, config: DEFAULT_CONFIG, origins: {} }
+export const register: Register = (on, options) => {
+  const selected = typeof options.profile === 'string' ? options.profile : undefined
+  let state: ConfigResult = { ok: true, config: DEFAULT_CONFIG, origins: {}, profiles: Object.keys(BUILTIN_PROFILES) }
   let lastValid: PantheonConfig | undefined
+  let lastValidResult: Extract<ConfigResult, { ok: true }> | undefined
   let registeredKey: string | undefined
   let toastedError: string | undefined
   let idSeq = 0
@@ -200,21 +202,36 @@ export const register: Register = on => {
     return jobs
   }
 
-  async function workspace(io: Io): Promise<{ sessionCwd: string; root: string; isRepo: boolean }> {
+  async function workspace(io: Pick<Io, 'cwd' | 'run'>): Promise<{ sessionCwd: string; root: string; isRepo: boolean }> {
     const sessionCwd = await io.cwd()
     const top = await io.run(['git', 'rev-parse', '--show-toplevel'], { cwd: sessionCwd }).catch(() => undefined)
     const gitTop = top && top.exitCode === 0 ? top.stdout.trim() || undefined : undefined
     return { sessionCwd, root: authorizedRoot(sessionCwd, gitTop), isRepo: gitTop !== undefined }
   }
 
-  async function refreshConfig(io: Io, root: string): Promise<ConfigResult> {
+  async function profileDenial(io: Pick<Io, 'cwd' | 'run' | 'home' | 'readText'>, value: unknown): Promise<string | undefined> {
+    const { root } = await workspace(io)
+    const home = await io.home()
+    const current = await loadConfig(io.readText, {
+      user: `${home ?? '~'}/.claude/pantheon.json`,
+      project: `${root}/.claude/pantheon.json`,
+    }, lastValid, typeof value === 'string' ? value : undefined)
+    if (!current.ok) return current.error
+    if (typeof value !== 'string' || !current.profiles.includes(value)) {
+      return `unknown profile "${value}"; known: ${current.profiles.join(', ')}`
+    }
+    return undefined
+  }
+
+  async function refreshConfig(io: Pick<Io, 'home' | 'readText' | 'toast' | 'registerAgent'>, root: string): Promise<ConfigResult> {
     const home = await io.home()
     state = await loadConfig(io.readText, {
       user: `${home ?? '~'}/.claude/pantheon.json`,
       project: `${root}/.claude/pantheon.json`,
-    }, lastValid)
+    }, lastValid, selected)
     if (state.ok) {
       lastValid = state.config
+      lastValidResult = state
       toastedError = undefined
       await registerNatives(io, state.config)
     } else {
@@ -228,7 +245,7 @@ export const register: Register = on => {
     return state
   }
 
-  async function registerNatives(io: Io, config: PantheonConfig) {
+  async function registerNatives(io: Pick<Io, 'registerAgent' | 'toast'>, config: PantheonConfig) {
     const key = JSON.stringify(config)
     if (key === registeredKey) return
     try {
@@ -289,6 +306,17 @@ export const register: Register = on => {
     }
     return reply({ ...summarize(job), ...(outcome === 'cancelled' ? { note: PARTIAL_NOTE } : {}) })
   }
+
+  on('config.set', { key: 'pantheon.profile' }, async ($, e, next) => {
+    const io: Pick<Io, 'cwd' | 'run' | 'home' | 'readText'> = {
+      cwd: () => $.session.cwd(),
+      run: (argv, init) => $.process.run(argv, init),
+      home: () => $.env.get('HOME'),
+      readText: async path => (await $.fs.exists(path)) ? String(await $.fs.read(path)) : undefined,
+    }
+    const deny = await profileDenial(io, e.value)
+    return deny === undefined ? next(e) : { deny }
+  })
 
   on('session.start', async ($, e, next) => {
     const io: Io = {
@@ -595,6 +623,18 @@ export const register: Register = on => {
   // Last reading of the host clock, kept so a failed read can still draw static durations.
   let lastNow: number | undefined
   on('ui.render', { component: 'Pane', requestId: PANE_ID }, async ($, e) => {
+    const io: Pick<Io, 'cwd' | 'run' | 'home' | 'readText' | 'toast' | 'registerAgent'> = {
+      cwd: () => $.session.cwd(),
+      run: (argv, init) => $.process.run(argv, init),
+      home: () => $.env.get('HOME'),
+      readText: async path => (await $.fs.exists(path)) ? String(await $.fs.read(path)) : undefined,
+      toast: text => $.ui.toast(text),
+      registerAgent: spec => $.agent.register(spec),
+    }
+    const current = await refreshConfig(io, (await workspace(io)).root)
+    // Keep the last valid selector names and lock along with the effective config.
+    const panelConfig = current.ok ? current : lastValidResult ?? current
+    const profileOrigin = panelConfig.ok ? panelConfig.origins.profile : undefined
     const els = $.ui.resolve(e)
     const { Box, Text, Button } = els
     const hasClient = 'Client' in els
@@ -616,6 +656,7 @@ export const register: Register = on => {
     const now = read1 ?? lastNow ?? Math.max(...stamps)
     return drawPanel({
       Box, Text, Button,
+      ...('Select' in els ? { Select: els.Select } : {}),
       ...('Svg' in els ? { Svg: els.Svg } : {}),
       ...(hasClient ? {
         // The module paths are literals here: the engine reads them off this entry module. The
@@ -636,9 +677,25 @@ export const register: Register = on => {
       // The pane's usable height, not the terminal's.
       rows: e.props.scroll?.bodyRows ?? e.viewport?.rows ?? 24,
       now,
-      roster: buildRoster({ jobs: list, natives: tracked, session: info, config: state.config }),
+      roster: buildRoster({ jobs: list, natives: tracked, session: info, config: panelConfig.config }),
       jobs: list,
       session: info,
+      profiles: panelConfig.profiles,
+      activeProfile: panelConfig.config.profile,
+      profileLockedBy: profileOrigin === 'user' || profileOrigin === 'project' ? profileOrigin : undefined,
+      onProfile: name => {
+        void profileDenial(io, name).then(async deny => {
+          if (deny !== undefined) {
+            $.ui.toast(`pantheon: ${deny}`)
+            return
+          }
+          const result = await $.config.set({ key: 'pantheon.profile', value: name })
+          if (result.deny) $.ui.toast(`pantheon: ${result.deny}`)
+          else $.ui.invalidate('ui.render')
+        }).catch(error => {
+          $.ui.toast(`pantheon: could not select profile: ${error instanceof Error ? error.message : String(error)}`)
+        })
+      },
       tab: normalizeView(view).tab,
       collapsed: normalizeView(view).collapsed ?? [],
       hasClient,

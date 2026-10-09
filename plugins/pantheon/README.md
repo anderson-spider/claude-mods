@@ -56,7 +56,7 @@ flightdeck users: `/plugin uninstall flightdeck`.
 
 ## Configuration
 
-Layers apply in order: built-in defaults, `~/.claude/pantheon.json`, then `<repo>/.claude/pantheon.json`. Each file holds only what changes. Top-level `profile` selects the active profile (default `claude`); the project selection overrides the user selection. For example:
+Layers apply in order: built-in defaults, the `profile` field in `/config`, `~/.claude/pantheon.json`, then `<repo>/.claude/pantheon.json`. Each file holds only what changes. Top-level `profile` selects the active profile (default `claude`); the project selection overrides the user selection, and both override the `/config` choice. For example:
 
 ```json
 {
@@ -80,7 +80,9 @@ Layers apply in order: built-in defaults, `~/.claude/pantheon.json`, then `<repo
 - An invalid config shows a toast, `delegate` refuses every call until it is fixed, and the native agents stay as in the last valid config (or the defaults).
 - The config is read again on every `delegate` and every turn; no reload needed.
 
-`/pantheon config` shows the active profile, effective configuration and field origins. Profile switches update the offered native agents and delegation routes; there is no profile selection menu or slash command.
+`/pantheon config` shows the active profile, effective configuration and field origins. Profile switches update the offered native agents and delegation routes.
+
+Pick the profile in `/config` (field `pantheon.profile`, free text) or with the selector in the panel header. Both write the same field, and the `/config` field accepts only names of built-in profiles or profiles defined in the JSON files; an unknown name, or any change while the JSON config is invalid, is refused with the reason. When a JSON file sets `profile`, the panel selector is locked and names the file that wins.
 
 ### Migrating from 0.3
 

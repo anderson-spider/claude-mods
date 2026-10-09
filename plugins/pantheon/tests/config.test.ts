@@ -4,10 +4,10 @@ import { DEFAULT_CONFIG } from '../hooks/defaults'
 import type { ConfigResult, ReadFile } from '../hooks/types'
 
 const readFiles = (files: Record<string, string>): ReadFile => async path => files[path]
-const load = (user: unknown, project?: unknown) => loadConfig(readFiles({
+const load = (user: unknown, project?: unknown, selected?: string) => loadConfig(readFiles({
   u: JSON.stringify(user),
   ...(project === undefined ? {} : { p: JSON.stringify(project) }),
-}), { user: 'u', project: 'p' })
+}), { user: 'u', project: 'p' }, undefined, selected)
 
 function valid(result: ConfigResult) {
   if (!result.ok) throw new Error(result.error)
@@ -20,6 +20,65 @@ function rejected(result: ConfigResult) {
 }
 
 describe('profiles', () => {
+  test('settings alone select the profile and its origin', async () => {
+    const result = valid(await loadConfig(async () => undefined, { user: 'u' }, undefined, 'codex'))
+    expect(result.config.profile).toBe('codex')
+    expect(result.config.agents.fixer.engine).toBe('codex')
+    expect(result.origins.profile).toBe('settings')
+    expect(result.origins['agents.fixer.engine']).toBe('default')
+    expect(valid(await load({}, undefined, 'claude')).origins.profile).toBe('settings')
+  })
+
+  test('user JSON overrides the settings profile', async () => {
+    const result = valid(await load({ profile: 'mixed' }, undefined, 'codex'))
+    expect(result.config.profile).toBe('mixed')
+    expect(result.origins.profile).toBe('user')
+  })
+
+  test('project JSON overrides the user and settings profiles', async () => {
+    const result = valid(await load({ profile: 'mixed' }, { profile: 'claude' }, 'codex'))
+    expect(result.config.profile).toBe('claude')
+    expect(result.origins.profile).toBe('project')
+  })
+
+  test('unknown settings profile reports the known names without a file prefix', async () => {
+    const result = await load({}, { profiles: { mine: {} } }, 'nope')
+    expect(rejected(result)).toBe('profile: unknown profile "nope"; known: claude, codex, mixed, mine')
+    expect(result.profiles).toEqual(['claude', 'codex', 'mixed', 'mine'])
+    expect(result.config).toBe(DEFAULT_CONFIG)
+  })
+
+  test('JSON may override an unknown settings profile', async () => {
+    expect(valid(await load({ profile: 'codex' }, undefined, 'nope')).config.profile).toBe('codex')
+    expect(valid(await load({}, { profile: 'mixed' }, 'nope')).config.profile).toBe('mixed')
+  })
+
+  test('profiles list built-in and merged custom names once', async () => {
+    expect(valid(await load({})).profiles).toEqual(['claude', 'codex', 'mixed'])
+    const result = valid(await load({ profiles: { mine: {}, codex: {} } }, {
+      profiles: { mine: {}, team: {} },
+    }, 'team'))
+    expect(result.profiles).toEqual(['claude', 'codex', 'mixed', 'mine', 'team'])
+    expect(result.config.profile).toBe('team')
+    expect(result.origins.profile).toBe('settings')
+  })
+
+  test('errors expose the profile names known before failure', async () => {
+    const unreadable = await loadConfig(readFiles({ u: 'not json' }), { user: 'u' })
+    expect(unreadable.ok).toBe(false)
+    expect(unreadable.profiles).toEqual(['claude', 'codex', 'mixed'])
+    const projectError = await loadConfig(readFiles({ u: '{"profiles":{"mine":{}}}', p: 'not json' }), {
+      user: 'u', project: 'p',
+    })
+    expect(projectError.ok).toBe(false)
+    expect(projectError.profiles).toEqual(['claude', 'codex', 'mixed', 'mine'])
+    const mergedError = await load({ profiles: { mine: { agents: { fixer: { model: 'gpt-6-astra' } } } } }, {
+      profiles: { team: {} },
+    })
+    expect(mergedError.ok).toBe(false)
+    expect(mergedError.profiles).toEqual(['claude', 'codex', 'mixed', 'mine', 'team'])
+  })
+
   test('built-in codex and mixed', async () => {
     const codex = valid(await load({ profile: 'codex' })).config
     expect(codex.agents.oracle).toEqual({ engine: 'codex', model: 'gpt-6-astra', effort: 'high', sandbox: 'read-only' })

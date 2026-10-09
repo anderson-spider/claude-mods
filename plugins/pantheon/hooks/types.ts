@@ -14,10 +14,10 @@ export interface PantheonConfig {
   agents: Record<Role, RoleConfig>
   council: { seats: Record<string, Seat> }
 }
-export type Origin = 'default' | 'user' | 'project'
+export type Origin = 'default' | 'settings' | 'user' | 'project'
 export type ConfigResult =
-  | { ok: true; config: PantheonConfig; origins: Record<string, Origin> }
-  | { ok: false; error: string; config: PantheonConfig }
+  | { ok: true; config: PantheonConfig; origins: Record<string, Origin>; profiles: string[] }
+  | { ok: false; error: string; config: PantheonConfig; profiles: string[] }
 export interface DelegateArgs {
   agent: string; prompt: string; description?: string; cwd?: string
   model?: string; effort?: string; background?: boolean; resume?: string

@@ -76,10 +76,11 @@ type ClockBuild = (p: {
 }) => unknown
 
 /**
- * Box, Text and Button from `$.ui.resolve(e)`, `Svg` where the surface draws it. The Client
+ * Box, Text and Button from `$.ui.resolve(e)`, Select and Svg where the surface draws them. The Client
  * builders live in register.tsx: the engine reads a Client's module path off the entry source.
  */
 export type PanelElements = Base & {
+  Select?: Elements['terminal']['Select']
   Svg?: Elements['desktop']['Svg']
   rail?: RailBuild
   clock?: ClockBuild
@@ -95,6 +96,10 @@ export type PanelData = {
   roster: Roster
   jobs: Job[]
   session: SessionInfo
+  profiles: string[]
+  activeProfile: string
+  profileLockedBy?: 'user' | 'project'
+  onProfile?: (name: string) => void
   tab: 'agents' | 'jobs'
   /** Agent groups the person folded; absent means none. */
   collapsed?: PanelGroup[]
@@ -381,6 +386,42 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
   )
 
   // ------------------------------------------------------------ header and footer
+  const profileRow = (width: number) => {
+    const locked = data.profileLockedBy
+    const label = width >= 48 ? 'Profile' : undefined
+    const choose = (name: string) => {
+      if (!locked && data.profiles.includes(name)) data.onProfile?.(name)
+    }
+    const note = locked ? width >= 48 ? `set by ${locked} pantheon.json` : `${locked} JSON` : undefined
+    const prefixW = label ? label.length + 1 : 0
+    const noteW = note ? Math.min(note.length, Math.max(0, width - prefixW - (width >= 48 ? 12 : 4))) : 0
+    const namesW = Math.max(1, width - prefixW - (noteW ? noteW + 1 : 0))
+    const names = locked && namesW < 24 ? [data.activeProfile] : data.profiles
+    const nameW = Math.max(1, Math.floor((namesW - Math.max(0, names.length - 1)) / Math.max(1, names.length)))
+    return (
+      <Box key="profile-row" width={width} gap={1} overflow="hidden">
+        {!locked && el.Select && data.profiles.length ? (
+          <el.Select key="profile" label={label} value={data.activeProfile}
+            options={data.profiles.map(name => ({ value: name, label: clip(name, Math.max(1, width - prefixW - 4)) }))}
+            onSelect={choose} />
+        ) : (
+          <Box gap={1} width={namesW + prefixW} overflow="hidden">
+            {label ? text({ text: label, dim: true }) : null}
+            {names.map(name => {
+              const active = name === data.activeProfile
+              const shown = clip(`${active ? '● ' : ''}${name}`, nameW)
+              return locked
+                ? <el.Text key={`profile-${name}`} color={active ? paint(ENGINE_COLOR[orch.engine]) : undefined}
+                    bold={active} dimColor={!isDesk && !active ? true : undefined} wrap="truncate">{shown}</el.Text>
+                : <Button key={`profile-${name}`} plain label={shown} dimColor={!active} onPress={() => choose(name)} />
+            })}
+          </Box>
+        )}
+        {noteW ? text({ text: clip(note!, noteW), dim: true }) : null}
+      </Box>
+    )
+  }
+  const headerH = data.rows >= 2 ? 2 : 1
   const tabButton = (tab: 'agents' | 'jobs', label: string) => (
     <Button
       key={`tab-${tab}`}
@@ -403,12 +444,17 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
       ? [tabButton('agents', 'Agents'), tabButton('jobs', `Jobs ${data.jobs.length + claudeRuns().length}`)]
       : [<Button key={`tab-${other}`} label={other === 'jobs' ? 'J' : 'A'} hotkey={other === 'jobs' ? '2' : '1'} onPress={() => data.onTab(other)} />]
     return (
-      <Box key="header" justifyContent="space-between" gap={1} width={W}>
-        <Box gap={1} flexShrink={1}>
-          {W >= 14 ? text({ text: isDesk ? 'Pantheon' : 'PANTHEON', bold: true, color: ROUND }) : null}
-          {tabs}
-        </Box>
-        {right.length ? <Box gap={1} flexShrink={0}>{render(right)}</Box> : null}
+      <Box key="header" flexDirection="column" width={W}>
+        {headerH > 1 ? (
+          <Box justifyContent="space-between" gap={1} width={W}>
+            <Box gap={1} flexShrink={1}>
+              {W >= 14 ? text({ text: isDesk ? 'Pantheon' : 'PANTHEON', bold: true, color: ROUND }) : null}
+              {tabs}
+            </Box>
+            {right.length ? <Box gap={1} flexShrink={0}>{render(right)}</Box> : null}
+          </Box>
+        ) : null}
+        {profileRow(W)}
       </Box>
     )
   }
@@ -689,7 +735,7 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
       g === 'planned' ? (level >= 2 ? 'head' : 'full')
         : g === 'finished' ? (level >= 3 ? 'head' : 'full')
           : level >= 4 ? 'compact' : 'full'
-    const blocks: Block[] = [{ node: header(), h: 1 }]
+    const blocks: Block[] = [{ node: header(), h: headerH }]
     if (data.clockLost) blocks.push({ node: clockWarning(), h: 1 })
     blocks.push(...sessionBlocks(level >= 4))
     for (const g of ['running', 'finished', 'planned'] as const) blocks.push(...groupBlocks(g, rows[g], mode(g)))
@@ -831,7 +877,7 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     // when not tiny, the card's two border rows. Items are taken in order (active jobs, finished
     // jobs, Claude rounds) while they fit; when some do not, one row goes to the "+N hidden" note.
     const groupH = 1 + (isTiny ? 0 : 2)
-    const fixed = 2 + (data.clockLost ? 1 : 0)
+    const fixed = headerH + 1 + (data.clockLost ? 1 : 0)
     const sum = (list: Job[]) => list.reduce((n, j) => n + jobHeight(j), 0)
     const need = fixed + (live.length ? groupH + sum(live) : 0) + (done.length ? groupH + sum(done) : 0) +
       (runs.length ? groupH + runs.length * RUN_H : 0)
@@ -899,16 +945,22 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     const ctxSegs: Seg[] = ctx && ctx.percent !== null
       ? [{ text: 'ctx', dim: true }, ...bar(ctx.percent, 6), { text: `${Math.round(ctx.percent)}%`, dim: true }] : []
 
-    lines.push(line('m-o', [
-      ...(data.clockLost ? [{ text: 'clock unavailable', bold: true, color: ROUND }] : []),
-      { text: 'pantheon', bold: true, color: ROUND },
-      { text: s.isRunning ? '●' : '○', color: s.isRunning ? RUN : undefined, dim: !s.isRunning },
-      { text: 'orchestrator' },
-      ...(s.model ? [{ text: `${s.model}${s.effort ? ` ${s.effort}` : ''}`, dim: true }] : []),
-      ...(s.isRunning && s.turnStartedAt ? [clockSeg('clk-orchestrator', s.turnStartedAt, null, 'text', true)] : []),
-      ...ctxSegs,
-      ...(delegating.length ? [{ text: '→', dim: true }, ...delegating] : []),
-    ], undefined, W))
+    // Keep the clock failure visible before giving space to optional session details.
+    const profileW = data.clockLost ? Math.max(1, Math.min(W - 18, data.profileLockedBy ? 64 : 28))
+      : W < (data.profileLockedBy ? 48 : 24) ? W : Math.min(W - 16, data.profileLockedBy ? 64 : 28)
+    lines.push(<Box key="m-o" width={W} gap={profileW < W ? 1 : 0} overflow="hidden">
+      {profileRow(profileW)}
+      {profileW < W ? line('m-session', [
+        ...(data.clockLost ? [{ text: 'clock unavailable', bold: true, color: ROUND }] : []),
+        { text: 'pantheon', bold: true, color: ROUND },
+        { text: s.isRunning ? '●' : '○', color: s.isRunning ? RUN : undefined, dim: !s.isRunning },
+        { text: 'orchestrator' },
+        ...(s.model ? [{ text: `${s.model}${s.effort ? ` ${s.effort}` : ''}`, dim: true }] : []),
+        ...(s.isRunning && s.turnStartedAt ? [clockSeg('clk-orchestrator', s.turnStartedAt, null, 'text', true)] : []),
+        ...ctxSegs,
+        ...(delegating.length ? [{ text: '→', dim: true }, ...delegating] : []),
+      ], undefined, W - profileW - 1) : null}
+    </Box>)
 
     for (const slot of shown) {
       const act = activeOf(slot)
