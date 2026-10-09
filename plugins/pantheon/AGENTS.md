@@ -34,7 +34,7 @@ IMPORTANT: prompts and panel modules include third-party work. Keep `LICENSE` an
 
 ## Panel
 
-The panel opens at session start. `/pantheon close` closes it; `cancel <jobId>`, `config` and `doctor` keep their existing behavior. There is no panel configuration; rate limits, repository, branch and cache stay in hud.
+The panel opens at session start. `/pantheon close` closes it; `cancel <jobId>`, and `config` keep their existing behavior. `doctor` also pings every role and seat (`ping.ts` plans the targets and formats the section; `register.tsx` runs the Codex pings and queues the session prompt for the native ones with `io.after(0, …)`, because the host refuses `prompt.submit` while a `command.run` hook runs). There is no panel configuration; rate limits, repository, branch and cache stay in hud.
 
 - `pane.tsx` draws the Agents and Jobs tabs. Jobs keeps its read-only "Claude agent rounds" group.
 - Desktop: HUD-colored segments with static SVG backplates, native text and buttons, fixed numeric slots, identity-first agent rows with a mascot each, and a pane-width "Last 15 minutes" SVG timeline.

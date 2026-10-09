@@ -9,7 +9,7 @@ A Claude Code mod in the style of [oh-my-opencode-slim](https://github.com/alvin
 /plugin install pantheon@spider-claude-mods
 ```
 
-The [Codex CLI](https://github.com/openai/codex) must be on `PATH` and logged in (`codex login`) only for roles or seats on Codex. `/pantheon doctor` checks both; when the profile has no Codex roles or seats, missing CLI or login is informational.
+The [Codex CLI](https://github.com/openai/codex) must be on `PATH` and logged in (`codex login`) only for roles or seats on Codex. `/pantheon doctor` checks both; when the profile has no Codex roles or seats, missing CLI or login is informational. It also pings every role and council seat: Codex ones with a real `codex exec` (60 s limit, not listed as jobs), and Claude ones by asking the session, after the report, to call each `pantheon:*` agent, so they show as `pending` in the report. Disabled roles and seats show as `off`.
 
 ## Roles
 
