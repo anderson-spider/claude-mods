@@ -558,6 +558,10 @@ describe('register', () => {
     await start($)
     expect(seen.tools).toEqual(['delegate', 'delegate_result', 'delegate_cancel'])
     expect(seen.agents).toEqual(['oracle', 'designer', 'councillor-beta'])
+    const oracle = seen.registered.find(spec => spec.name === 'oracle')
+    expect(oracle?.tools).toBeUndefined()
+    expect(oracle?.disallowedTools).toEqual(['Edit', 'Write', 'NotebookEdit', 'Agent', 'mcp__pantheon__delegate', 'mcp__pantheon__delegate_cancel'])
+    expect(seen.registered.find(spec => spec.name === 'designer')?.disallowedTools).toBeUndefined()
   })
 
   test('delegate runs codex through process.spawn hook and returns final message', async ($, on) => {

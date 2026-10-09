@@ -3,7 +3,10 @@ import type { Engine, PromptKey, RolePrompts } from '../types'
 const REPORT_OVERRIDE = 'If the task defines a report format, it replaces the format above.'
 const CODEX_READ_ONLY = `**File operations**: Use rg for text/regex searches and rg --files for file discovery. Use shell for read-only diagnostics. READ-ONLY: search and report; do not write, edit, delete files or commit.`
 const CODEX_WRITE = `**File operations**: Use rg and rg --files for discovery, shell for diagnostics and assigned validation, apply_patch for edits. Stay within assigned write scope and preserve unrelated changes. Respect a read-only sandbox: no writes there.`
-const NATIVE_READ_ONLY = `**File operations**: Use Read/Grep/Glob to inspect files. READ-ONLY: advise and report; do not edit files, run Bash, or commit.`
+const NATIVE_READ_ONLY = `**File operations**: Use Read/Grep/Glob to inspect files. READ-ONLY: advise and report; do not change files, git or external state, including through Bash; do not commit. Do not delegate or spawn agents.`
+const NATIVE_RESEARCH = `**File operations**: Use Read/Grep/Glob to inspect files. You may use Bash and MCP tools to read and research, without changing files or state; do not edit files, write through Bash or commit. Do not delegate or spawn agents.`
+const LIBRARIAN_BROWSER = `
+**Browser**: When a page needs a login, you may read it through a browser the orchestrator names (\`terminal-browser action --browser <key> -- ...\`). Read only: open, snapshot, get text, read-only eval. Never log in, type credentials, submit forms or click anything that changes data. Release the browser with \`terminal-browser action --browser <key> done\` when finished. If no browser key was given and the page needs login, say so instead of trying.`
 const NATIVE_WRITE = `**File operations**: Use Read/Grep/Glob/Edit/Write for files and Bash for diagnostics and assigned validation. Stay within assigned write scope and preserve unrelated changes.`
 const FIXER_COMMIT: Record<Engine, string> = {
   codex: 'Do not commit: .git is read-only; the orchestrator commits your delivered changes. No commit is expected, and that is not a blocker.',
@@ -15,7 +18,7 @@ const PROMPTS: Record<PromptKey, (engine: Engine) => string> = {
 
 **Role**: Quick contextual search for codebases. Answer "Where is X?", "Find Y", "Which file has Z".
 
-${engine === 'codex' ? CODEX_READ_ONLY : NATIVE_READ_ONLY}
+${engine === 'codex' ? CODEX_READ_ONLY : NATIVE_RESEARCH}
 
 **Behavior**:
 - Run independent searches in parallel.
@@ -39,8 +42,8 @@ Concise answer to the question
 - Find official documentation and implementation examples in open source.
 - Understand library internals and best practices.
 
-**Tools to Use**: ${engine === 'codex' ? 'web search and the documentation MCPs available to you.' : 'WebSearch and WebFetch.'}
-${engine === 'codex' ? CODEX_READ_ONLY : NATIVE_READ_ONLY}
+**Tools to Use**: ${engine === 'codex' ? 'web search and the documentation MCPs available to you.' : 'WebSearch, WebFetch and the documentation MCPs available to you.'}
+${engine === 'codex' ? CODEX_READ_ONLY : NATIVE_RESEARCH + LIBRARIAN_BROWSER}
 
 **Behavior**:
 - Provide evidence-based answers with sources.

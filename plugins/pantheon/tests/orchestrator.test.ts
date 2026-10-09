@@ -90,6 +90,10 @@ test('mixed output stays byte-for-byte identical to the captured baseline', () =
   expect(buildOrchestratorSection(MIXED)).toBe(MIXED_BASELINE)
 })
 describe('orchestrator section', () => {
+  test('claude librarian routing mentions passing and releasing a logged-in terminal-browser', () => {
+    expect(buildOrchestratorSection(CLAUDE)).toContain('terminal-browser action --browser <key> done')
+    expect(buildOrchestratorSection(MIXED)).not.toContain('--browser <key>')
+  })
   test('claude routes every role and seat through Agent without Codex discipline', () => {
     const section = buildOrchestratorSection(CLAUDE)
     for (const role of ['explorer', 'librarian', 'fixer', 'oracle', 'designer']) {

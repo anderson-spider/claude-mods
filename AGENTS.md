@@ -17,7 +17,7 @@ Each plugin's details live in `plugins/<name>/AGENTS.md`, loaded when working un
 - **codex-computer-use**: routes native Mac app control through Codex computer use; has a `helper/` run by the ChatGPT app's `node`.
 - **tailscale**: `tailscale_get` and `tailscale_write` tools over the Tailscale API.
 - **hud**: rows above the prompt plus suggested next prompts; plain ESM, adapted from third-party work (keep `LICENSE` and `NOTICE`).
-- **pantheon**: orchestrator mode with profiles, Codex/Claude roles, council seats and the Agents/Jobs panel; includes third-party work (keep `LICENSE` and `NOTICE`).
+- **pantheon**: orchestrator mode with profiles, Codex/Claude roles, council seats and the agents panel; includes third-party work (keep `LICENSE` and `NOTICE`).
 
 ## Commands
 

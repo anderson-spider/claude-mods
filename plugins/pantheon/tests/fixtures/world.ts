@@ -30,6 +30,7 @@ export function world(on: On, opts: World = {}) {
     argv: [] as string[][],
     cwds: [] as string[],
     agents: [] as string[],
+    registered: [] as Array<{ name: string; tools?: readonly string[]; disallowedTools?: readonly string[] }>,
     tools: [] as string[],
     toasts: [] as string[],
     statuses: [] as (string | undefined)[],
@@ -69,6 +70,7 @@ export function world(on: On, opts: World = {}) {
   on('agent.register', async (_$, e) => {
     if (failRegister) { failRegister = false; throw new Error('transient') }
     seen.agents.push(e.name)
+    seen.registered.push(e)
     return { value: { agent: `pantheon:${e.name}` } }
   })
   on('tool.register', async (_$, e) => { seen.tools.push(e.name); return { value: { tool: `mcp__pantheon__${e.name}` } } })

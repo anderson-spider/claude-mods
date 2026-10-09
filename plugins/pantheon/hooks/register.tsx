@@ -1,5 +1,4 @@
 import { atom, read, update } from 'claude-code'
-import { COLS, ROWS } from './clawd'
 import type { AgentSpec, ProcessRunInit, ProcessRunResult, Register } from 'claude-code'
 
 import type { Job, Native, SessionInfo } from '../types'
@@ -17,7 +16,7 @@ import { isOffered, nativeAgentSpecs, resolveCodexCall, usesCodex } from './role
 import { buildRoster } from './roster'
 import {
   DEFAULT_SESSION, DEFAULT_VIEW, completed, describeTool, markNativesLost,
-  normalizeNatives, normalizeSession, normalizeView, sessionCompleted, sessionMeasured, viewTab, viewToggled,
+  normalizeNatives, normalizeSession, normalizeView, sessionCompleted, sessionMeasured, viewToggled,
   roundOpened, sessionStarted, sessionStepped, spawned, stepAccounted, toolNoted,
 } from './tracking'
 import type { Clock, ConfigResult, DelegateArgs, PantheonConfig, Spawn } from './types'
@@ -308,7 +307,7 @@ export const register: Register = (on, options) => {
           name: spec.name, description: spec.description, prompt: spec.prompt,
           ...(spec.model ? { model: spec.model } : {}),
           ...(spec.effort ? { effort: spec.effort } : {}),
-          ...(spec.tools ? { tools: spec.tools } : {}),
+          ...(spec.disallowedTools ? { disallowedTools: spec.disallowedTools } : {}),
         })
       }
       // Só marca como registrado depois de todos: uma falha é tentada de novo no próximo turno.
@@ -736,9 +735,9 @@ export const register: Register = (on, options) => {
       ...(hasClient ? {
         // The module paths are literals here: the engine reads them off this entry module.
         clock: ({ key, props }) => <els.Client key={key} module="./elapsed.tsx" width={6} props={props} />,
-        // Both terminal placements use the same compact mascot.
+        // The rail links the cards on both surfaces; it moves only while something works.
         ...(isClockLost ? {} : {
-          mascot: ({ key, props }) => <els.Client key={key} module="./mascot.tsx" width={COLS} height={ROWS} props={props} />,
+          rail: ({ key, width, props }) => <els.Client key={key} module="./rail.tsx" width={width} height={1} props={props} />,
         }),
       } : {}),
     } as never, {
@@ -749,7 +748,6 @@ export const register: Register = (on, options) => {
       rows: e.props.scroll?.bodyRows ?? e.viewport?.rows ?? 24,
       now,
       roster: buildRoster({ jobs: list, natives: tracked, session: info, config: panelConfig.config }),
-      jobs: list,
       session: info,
       profiles: panelConfig.profiles,
       activeProfile: panelConfig.config.profile,
@@ -767,15 +765,15 @@ export const register: Register = (on, options) => {
           $.ui.toast(`pantheon: could not select profile: ${error instanceof Error ? error.message : String(error)}`)
         })
       },
-      tab: normalizeView(view).tab,
       collapsed: normalizeView(view).collapsed ?? [],
       hasClient,
       clockLost: isClockLost,
-      onTab: tab => { viewQueue.push(() => update($, viewAtom, cur => viewTab(normalizeView(cur), tab))) },
       onToggle: group => { viewQueue.push(() => update($, viewAtom, cur => viewToggled(normalizeView(cur), group))) },
       onClose: () => { void $.ui.close({ id: PANE_ID }) },
-      onCancel: jobId => { jobs?.cancel(jobId) },
-      onCopy: (text, surface) => { void $.ui.copy({ text, surface }) },
+      onCancel: jobId => {
+        const done = jobs ? jobs.cancel(jobId) : { error: `Unknown job ${jobId} in this session.` }
+        if ('error' in done) $.ui.toast(`pantheon: ${done.error}`)
+      },
     }) as never
   })
 

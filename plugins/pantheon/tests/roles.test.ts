@@ -176,15 +176,38 @@ describe('Codex roles', () => {
   })
 })
 
+describe('native agent prompts', () => {
+  test('explorer and librarian may use Bash and MCP; oracle and councillor may not change state', () => {
+    expect(rolePrompt('explorer', 'claude')).toContain('Bash')
+    expect(rolePrompt('explorer', 'claude')).toContain('MCP')
+    const librarian = rolePrompt('librarian', 'claude')
+    expect(librarian).toContain('terminal-browser action --browser <key>')
+    expect(librarian).toContain('done')
+    for (const key of ['oracle', 'councillor'] as const) {
+      expect(rolePrompt(key, 'claude')).toContain('including through Bash')
+    }
+    expect(rolePrompt('explorer', 'codex')).not.toContain('MCP')
+  })
+})
+
 describe('native agent specs', () => {
   test('native specs follow the engine', () => {
     const specs = nativeAgentSpecs(CLAUDE, prompts)
     expect(specs.map(spec => spec.name)).toEqual([...ROLES, 'councillor-alpha', 'councillor-beta'])
     expect(specs.find(spec => spec.name === 'explorer')).toEqual(expect.objectContaining({
-      tools: ['Read', 'Grep', 'Glob'], description: 'Pantheon codebase recon that returns compressed context.',
+      description: 'Pantheon codebase recon that returns compressed context.',
     }))
+    expect(specs.find(spec => spec.name === 'explorer')?.tools).toBeUndefined()
+    const NO_DELEGATE = ['Agent', 'mcp__pantheon__delegate', 'mcp__pantheon__delegate_cancel']
+    expect(specs.find(spec => spec.name === 'explorer')?.disallowedTools).toEqual(NO_DELEGATE)
+    expect(specs.find(spec => spec.name === 'librarian')?.tools).toBeUndefined()
+    expect(specs.find(spec => spec.name === 'librarian')?.disallowedTools).toEqual(NO_DELEGATE)
+    for (const name of ['oracle', 'councillor-alpha', 'councillor-beta']) {
+      expect(specs.find(spec => spec.name === name)?.tools).toBeUndefined()
+      expect(specs.find(spec => spec.name === name)?.disallowedTools).toEqual(['Edit', 'Write', 'NotebookEdit', ...NO_DELEGATE])
+    }
     expect(specs.find(spec => spec.name === 'librarian')).toEqual(expect.objectContaining({
-      tools: ['Read', 'Grep', 'Glob', 'WebSearch', 'WebFetch'], description: 'Pantheon research on external docs and APIs.',
+      description: 'Pantheon research on external docs and APIs.',
     }))
     expect(specs.find(spec => spec.name === 'fixer')).toEqual(expect.objectContaining({
       model: 'sonnet', description: 'Pantheon bounded implementation from a complete specification.',
@@ -202,16 +225,16 @@ describe('native agent specs', () => {
       .toEqual(expect.objectContaining({ prompt: '<oracle:codex>\n\n---\n\nt' }))
   })
 
-  test('oracle and Claude seats are read tools only; designer inherits tools', () => {
+  test('oracle and Claude seats inherit tools minus file edits; designer inherits tools', () => {
     const specs = nativeAgentSpecs(MIXED, prompts)
     expect(specs.map(spec => spec.name)).toEqual(['oracle', 'designer', 'councillor-beta'])
     expect(specs.find(spec => spec.name === 'oracle')).toEqual(expect.objectContaining({
-      prompt: '<oracle>', model: 'opus', tools: ['Read', 'Grep', 'Glob'], description: expect.any(String),
+      prompt: '<oracle>', model: 'opus', disallowedTools: ['Edit', 'Write', 'NotebookEdit', 'Agent', 'mcp__pantheon__delegate', 'mcp__pantheon__delegate_cancel'], description: expect.any(String),
     }))
     expect(specs.find(spec => spec.name === 'designer')).toEqual(expect.objectContaining({ prompt: '<designer>', model: 'sonnet' }))
     expect(specs.find(spec => spec.name === 'designer')?.tools).toBeUndefined()
     expect(specs.find(spec => spec.name === 'councillor-beta')).toEqual(expect.objectContaining({
-      prompt: '<councillor>', model: 'opus', tools: ['Read', 'Grep', 'Glob'],
+      prompt: '<councillor>', model: 'opus', disallowedTools: ['Edit', 'Write', 'NotebookEdit', 'Agent', 'mcp__pantheon__delegate', 'mcp__pantheon__delegate_cancel'],
     }))
   })
 
@@ -223,7 +246,7 @@ describe('native agent specs', () => {
     }
     const specs = nativeAgentSpecs(config, prompts)
     expect(specs.find(spec => spec.name === 'oracle')).toEqual(expect.objectContaining({
-      prompt: '<oracle>\n\nextra', model: 'native-model', effort: 'high', tools: ['Read', 'Grep', 'Glob'],
+      prompt: '<oracle>\n\nextra', model: 'native-model', effort: 'high', disallowedTools: ['Edit', 'Write', 'NotebookEdit', 'Agent', 'mcp__pantheon__delegate', 'mcp__pantheon__delegate_cancel'],
     }))
     expect(specs.find(spec => spec.name === 'councillor-beta')).toEqual(expect.objectContaining({
       prompt: '<councillor>\n\nseat extra', model: 'seat-model', effort: 'low',

@@ -19,14 +19,18 @@ export type Instance = {
   activity?: string
   tokens: { input?: number; cached?: number; out: number; ctx?: number; steps?: number }
   resumeId?: string
+  /** Codex only: the id of the latest job of this line, the one `onCancel` stops. */
+  jobId?: string
 }
 export type Slot = {
   name: SlotName; engine: Engine | 'mixed'; state: 'active' | 'idle' | 'off'
   model?: string
-  /** Cards: active instances first, then every ended instance, newest end first. */
+  /** Active instances first, then the ended ones, newest end first. The panel lists the active ones under Running and one summary row per role or seat under Idle. */
   instances: Instance[]
   lastEndedAt?: number; offReason?: string
   seatsOff?: string[]
+  /** Council only: every configured seat name, sorted. */
+  seats?: string[]
   /** The same instances with all rounds, oldest start first: the timeline's source. */
   history?: Instance[]
 }
@@ -50,6 +54,7 @@ function codexInstance(rounds: Job[]): Instance {
     tokens: latest.tokens
       ? { input: latest.tokens.input, cached: latest.tokens.cached, out: latest.tokens.output }
       : { out: 0 },
+    jobId: latest.id,
     ...(latest.sessionId && !isActive ? { resumeId: latest.id } : {}),
   }
 }
@@ -149,6 +154,7 @@ export function buildRoster(input: {
       ...(ended[0]?.endedAt !== undefined ? { lastEndedAt: ended[0].endedAt } : {}),
       ...(off ? { offReason: 'disabledAgents' } : {}),
       ...(name === 'council' && !off && seatsOff.length ? { seatsOff } : {}),
+      ...(name === 'council' ? { seats } : {}),
     }
   })
   const counts = { active: 0, idle: 0, off: 0 }

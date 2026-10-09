@@ -3,7 +3,7 @@ import { ROLES } from './defaults'
 
 export const MAX_NATIVES = 24
 export const DEFAULT_SESSION: SessionInfo = { isRunning: false }
-export const DEFAULT_VIEW: PanelView = { tab: 'agents' }
+export const DEFAULT_VIEW: PanelView = {}
 
 export type StepUsage = {
   input_tokens?: number; cache_read_input_tokens?: number
@@ -129,14 +129,14 @@ export const normalizeSession = (raw: unknown): SessionInfo => {
   }
 }
 
-const GROUPS: PanelGroup[] = ['running', 'finished', 'planned']
+const GROUPS: PanelGroup[] = ['running', 'idle']
 
+// An old saved view may still carry `tab` (the Jobs tab is gone); only the fold choice is kept.
 export const normalizeView = (raw: unknown): PanelView => {
-  if (!isObject(raw) || (raw.tab !== 'agents' && raw.tab !== 'jobs')) return { ...DEFAULT_VIEW }
+  if (!isObject(raw)) return { ...DEFAULT_VIEW }
   const collapsed = Array.isArray(raw.collapsed) ? GROUPS.filter(g => (raw.collapsed as unknown[]).includes(g)) : []
-  return { tab: raw.tab, ...(collapsed.length ? { collapsed } : {}) }
+  return collapsed.length ? { collapsed } : {}
 }
-export const viewTab = (v: PanelView, tab: PanelView['tab']): PanelView => ({ ...v, tab })
 export const viewToggled = (v: PanelView, group: PanelGroup): PanelView => {
   const rest = (v.collapsed ?? []).filter(g => g !== group)
   const collapsed = (v.collapsed ?? []).includes(group) ? rest : GROUPS.filter(g => g === group || rest.includes(g))

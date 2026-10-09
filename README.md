@@ -11,7 +11,7 @@ Marketplace of [Claude Code](https://claude.com/claude-code) plugins made by and
 | [codex-computer-use](plugins/codex-computer-use) | Routes native Mac app control through Codex computer use from the ChatGPT app instead of Claude's own computer use, asking before each new app. |
 | [tailscale](plugins/tailscale) | Lets Claude query and modify your tailnet through the Tailscale API. |
 | [hud](plugins/hud) | One line above the prompt (context, 5-hour and 7-day limits against the clock, the prompt cache, the subagents running) and suggested next prompts you can write directly to the prompt box as a draft. |
-| [pantheon](plugins/pantheon) | Makes Claude an orchestrator that delegates to Codex roles (explorer, librarian, fixer) and native Claude agents (oracle, designer, council), with an auto-opening `/pantheon` panel for roles, activity and jobs. |
+| [pantheon](plugins/pantheon) | Makes Claude an orchestrator that delegates to Codex roles (explorer, librarian, fixer) and native Claude agents (oracle, designer, council), with an auto-opening `/pantheon` panel for roles, activity and a session log. |
 
 ## Install
 
@@ -125,9 +125,9 @@ One line above the prompt, an info line above it (model, effort, speed, folder, 
 
 ## pantheon
 
-The main session delegates to Codex specialists through `delegate` and to native Claude agents through the Agent tool. The `/pantheon` panel opens by itself at session start; `/pantheon` opens or focuses it and `/pantheon close` closes it. The Agents tab keeps seven role slots in order: orchestrator, explorer, librarian, fixer, oracle, designer and council. Parallel instances stack in their role, resumed work shows its rounds, and other subagents appear under "other agents" when present. Each instance shows its model, elapsed time, tokens and last activity. The Jobs tab groups active and finished Codex jobs, with Cancel and Copy buttons and a resume hint.
+The main session delegates to Codex specialists through `delegate` and to native Claude agents through the Agent tool. The `/pantheon` panel opens by itself at session start; `/pantheon` opens or focuses it and `/pantheon close` closes it. The panel keeps seven role slots in order: orchestrator, explorer, librarian, fixer, oracle, designer and council. Parallel instances stack in their role, resumed work shows its rounds, and other subagents appear under "other agents" when present. Each instance shows its model, elapsed time, context percentage and last activity; tokens are in the Session card. A running Codex row has a Cancel button.
 
-The panel docks beside the terminal transcript, uses a mini view when placed inline, and adds a "Last 15 minutes" SVG timeline on desktop. Both terminal layouts share the same 9 x 3 Clawd body with one row of role-specific hats, animated only while working; desktop keeps its role-specific SVG mascots. The docked layout has rails, clocks and the pulse; mini (placed inline) has clocks and the pulse, no rails; desktop has rails and clocks, no pulse. It has no panel configuration; rate limits, repository, branch and cache stay in hud. Its tracking hooks only watch and pass events on unchanged. `/pantheon cancel <jobId>`, `/pantheon config` and `/pantheon doctor` keep their existing behavior. See [its README](plugins/pantheon/README.md) and [NOTICE](plugins/pantheon/NOTICE).
+The panel docks beside the terminal transcript, uses a mini view when placed inline, and adds a "Last 15 minutes" SVG timeline on desktop. Each section is a card with its own colored border, and an animated rail (110 ms) runs only while there is active work. The docked layout has rails, clocks and the pulse; mini (placed inline) has clocks and the pulse, no rails; desktop has rails and clocks, no pulse. It has no panel configuration; rate limits, repository, branch and cache stay in hud. Its tracking hooks only watch and pass events on unchanged. `/pantheon cancel <jobId>`, `/pantheon config` and `/pantheon doctor` keep their existing behavior. See [its README](plugins/pantheon/README.md) and [NOTICE](plugins/pantheon/NOTICE).
 
 flightdeck users: `/plugin uninstall flightdeck`.
 
