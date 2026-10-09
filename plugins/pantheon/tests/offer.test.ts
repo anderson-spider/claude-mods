@@ -4,9 +4,9 @@ import { isOffered } from '../hooks/roles'
 
 describe('agent offer', () => {
   test('role offers follow their configured engines', () => {
-    for (const role of ['explorer', 'librarian', 'fixer']) expect(isOffered(CLAUDE, `pantheon:${role}`)).toBe(true)
+    for (const role of ['explorer', 'librarian', 'executor']) expect(isOffered(CLAUDE, `pantheon:${role}`)).toBe(true)
     for (const role of ['oracle', 'designer', 'councillor-beta']) expect(isOffered(CODEX, `pantheon:${role}`)).toBe(false)
-    expect(isOffered(MIXED, 'pantheon:fixer')).toBe(false)
+    expect(isOffered(MIXED, 'pantheon:executor')).toBe(false)
     expect(isOffered(MIXED, 'pantheon:oracle')).toBe(true)
     expect(isOffered({ ...CLAUDE, disabledAgents: ['explorer'] }, 'pantheon:explorer')).toBe(false)
   })
@@ -43,7 +43,7 @@ describe('agent offer', () => {
 
   test('unknown Pantheon types and Codex roles cannot be offered as native agents', () => {
     expect(isOffered(MIXED, 'pantheon:missing')).toBe(false)
-    expect(isOffered(MIXED, 'pantheon:fixer')).toBe(false)
+    expect(isOffered(MIXED, 'pantheon:executor')).toBe(false)
   })
 
   test('non-Pantheon agents are always offered', () => {

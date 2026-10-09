@@ -6,7 +6,7 @@ import { CLAUDE, CODEX, MIXED, resolved } from './fixtures/profiles'
 test('ping targets cover the six roles and the council seats per profile', () => {
   for (const config of [CLAUDE, CODEX, MIXED]) {
     const names = pingTargets(config).map(t => t.name)
-    expect(names).toEqual(['explorer', 'librarian', 'fixer', 'oracle', 'designer', 'git', 'councillor:alpha', 'councillor:beta'])
+    expect(names).toEqual(['explorer', 'librarian', 'executor', 'oracle', 'designer', 'git', 'councillor:alpha', 'councillor:beta'])
   }
   expect(pingTargets(CLAUDE).every(t => t.engine === 'claude' && !t.off)).toBe(true)
   expect(pingTargets(CODEX).every(t => t.engine === 'codex')).toBe(true)
@@ -25,10 +25,10 @@ test('ping targets mark disabled agents and seats as off', async () => {
 })
 
 test('ping prompt names each native agent and asks for pong replies', () => {
-  const prompt = pingPrompt(['fixer', 'councillor:beta'])
-  expect(prompt).toContain('pantheon:fixer')
+  const prompt = pingPrompt(['executor', 'councillor:beta'])
+  expect(prompt).toContain('pantheon:executor')
   expect(prompt).toContain('pantheon:councillor-beta')
-  expect(prompt).toContain('pong fixer')
+  expect(prompt).toContain('pong executor')
   expect(prompt).toContain('pong councillor:beta')
   expect(prompt).not.toContain('pantheon:councillor:beta')
 })

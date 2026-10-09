@@ -34,14 +34,14 @@ test('gauge clamps and rounds', () => {
 
 test('strip makes one block per job with state colors', () => {
   const runs = strip([
-    { state: 'running', role: 'fixer' },
+    { state: 'running', role: 'executor' },
     { state: 'done', role: 'oracle' },
     { state: 'failed', role: 'oracle' },
     { state: 'planned', role: 'explorer' },
   ])
   expect(runs.length).toBe(4)
   expect(runs.every(r => r.text === '▰')).toBe(true)
-  expect(runs[0]!.color).toBe(ROLE_COLOR.fixer)
+  expect(runs[0]!.color).toBe(ROLE_COLOR.executor)
   expect(runs[1]!.color).toBe('#4CC2A0')
   expect(runs[2]!.color).toBe('#E5604D')
   expect(runs[3]!.dim).toBe(true)

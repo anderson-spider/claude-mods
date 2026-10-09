@@ -4,7 +4,7 @@ import { CODEX_EXEC_SAMPLE } from './fixtures/codex-exec-sample'
 import type { CodexCall, CodexEvent } from '../hooks/types'
 
 const base: CodexCall = {
-  agent: 'fixer', sandbox: 'workspace-write', noNetwork: false,
+  agent: 'executor', sandbox: 'workspace-write', noNetwork: false,
   prompt: 'task', cwd: '/repo', skipGitRepoCheck: false,
 }
 
@@ -18,7 +18,7 @@ describe('codex argv', () => {
   })
 
   test('other roles retain their exact argv without the new fields', () => {
-    for (const agent of ['explorer', 'librarian', 'fixer', 'oracle', 'designer', 'councillor:alpha']) {
+    for (const agent of ['explorer', 'librarian', 'executor', 'oracle', 'designer', 'councillor:alpha']) {
       for (const sandbox of ['read-only', 'workspace-write'] as const) {
         for (const noNetwork of [false, true]) {
           expect(buildArgv({ ...base, agent, sandbox, noNetwork })).toEqual([

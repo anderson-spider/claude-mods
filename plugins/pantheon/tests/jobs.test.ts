@@ -115,7 +115,7 @@ const codec: Codec = {
 }
 
 const call: CodexCall = {
-  agent: 'fixer', model: 'test-model', sandbox: 'workspace-write', noNetwork: false,
+  agent: 'executor', model: 'test-model', sandbox: 'workspace-write', noNetwork: false,
   prompt: 'resolve the task', cwd: '/repo/task', skipGitRepoCheck: false,
 }
 const foreground = { foregroundMs: 100, background: false, description: 'task description' }
@@ -154,7 +154,7 @@ describe('jobs', () => {
     const reply = await pending
     expect(reply.outcome).toBe('done')
     expect(reply.job).toMatchObject({
-      id: 'job-1', agent: 'fixer', model: 'test-model', description: 'task description',
+      id: 'job-1', agent: 'executor', model: 'test-model', description: 'task description',
       status: 'done', sessionId: 'thread-1', result: 'final answer', cwd: '/repo/task',
       lastActivity: 'reading files', tokens: { input: 20, cached: 5, output: 10 },
       startedAt: 1000, endedAt: 1025,

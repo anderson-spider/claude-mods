@@ -32,9 +32,9 @@ describe('profiles', () => {
   test('settings alone select the profile and its origin', async () => {
     const result = valid(await loadConfig(async () => undefined, { user: 'u' }, undefined, 'codex'))
     expect(result.config.profile).toBe('codex')
-    expect(result.config.agents.fixer.engine).toBe('codex')
+    expect(result.config.agents.executor.engine).toBe('codex')
     expect(result.origins.profile).toBe('settings')
-    expect(result.origins['agents.fixer.engine']).toBe('default')
+    expect(result.origins['agents.executor.engine']).toBe('default')
     expect(valid(await load({}, undefined, 'claude')).origins.profile).toBe('settings')
   })
 
@@ -86,7 +86,7 @@ describe('profiles', () => {
     })
     expect(projectError.ok).toBe(false)
     expect(projectError.profiles).toEqual(['claude', 'codex', 'mixed', 'mine'])
-    const mergedError = await load({ profiles: { mine: { agents: { fixer: { model: 'gpt-6-astra' } } } } }, {
+    const mergedError = await load({ profiles: { mine: { agents: { executor: { model: 'gpt-6-astra' } } } } }, {
       profiles: { team: {} },
     })
     expect(mergedError.ok).toBe(false)
@@ -100,7 +100,7 @@ describe('profiles', () => {
     expect(codex.council.seats.beta).toEqual({ engine: 'codex', model: 'gpt-6.1-sol', effort: 'high' })
     const mixed = valid(await load({ profile: 'mixed' })).config
     expect(mixed.agents.explorer).toEqual({ engine: 'codex', model: 'gpt-6-luna', effort: 'high', sandbox: 'read-only' })
-    expect(mixed.agents.fixer.model).toBe('gpt-6.1-sol')
+    expect(mixed.agents.executor.model).toBe('gpt-6.1-sol')
     expect(mixed.agents.oracle).toEqual({ engine: 'claude', model: 'opus', sandbox: 'read-only' })
     expect(mixed.council.seats).toEqual({
       alpha: { engine: 'codex', model: 'gpt-6-astra', effort: 'high' }, beta: { engine: 'claude', model: 'opus' },
@@ -126,30 +126,30 @@ describe('profiles', () => {
   })
 
   test('profile edits merge over built-ins', async () => {
-    const result = valid(await load({ profile: 'mixed', profiles: { mixed: { agents: { fixer: { model: 'gpt-6-astra' } } } } }))
-    expect(result.config.agents.fixer).toEqual({ engine: 'codex', model: 'gpt-6-astra', effort: 'high', sandbox: 'workspace-write' })
+    const result = valid(await load({ profile: 'mixed', profiles: { mixed: { agents: { executor: { model: 'gpt-6-astra' } } } } }))
+    expect(result.config.agents.executor).toEqual({ engine: 'codex', model: 'gpt-6-astra', effort: 'high', sandbox: 'workspace-write' })
   })
 
   test('new profile inherits the merged claude and its origins', async () => {
     const result = valid(await load({ profiles: { claude: { agents: { explorer: { model: 'sonnet' } } }, mine: {} }, profile: 'mine' }))
     expect(result.config.agents.explorer.model).toBe('sonnet')
     expect(result.origins['agents.explorer.model']).toBe('user')
-    expect(result.origins['agents.fixer.model']).toBe('default')
+    expect(result.origins['agents.executor.model']).toBe('default')
   })
 
   test('custom inheritance uses the final claude and preserves layer engine switches', async () => {
     const result = valid(await load({ profile: 'mine', profiles: { mine: {
       agents: { explorer: { engine: 'codex', model: 'gpt-6-luna', effort: 'high' } },
     } } }, { profiles: {
-      claude: { agents: { fixer: { model: 'opus' } } },
+      claude: { agents: { executor: { model: 'opus' } } },
       mine: { agents: { explorer: { engine: 'claude' } } },
     } }))
     expect(result.config.agents.explorer).toEqual({ engine: 'claude', sandbox: 'read-only' })
-    expect(result.config.agents.fixer.model).toBe('opus')
+    expect(result.config.agents.executor.model).toBe('opus')
     expect(result.origins['agents.explorer.model']).toBeUndefined()
     expect(result.origins['agents.explorer.effort']).toBeUndefined()
     expect(result.origins['agents.explorer.engine']).toBe('project')
-    expect(result.origins['agents.fixer.model']).toBe('project')
+    expect(result.origins['agents.executor.model']).toBe('project')
   })
 
   test('engine switch drops inherited model and effort', async () => {
@@ -177,14 +177,14 @@ describe('profiles', () => {
     for (const field of ['model', 'effort', 'engine']) {
       for (const profile of [undefined, 'mixed']) {
         const target = profile ?? 'claude'
-        expect(rejected(await load({ profile, agents: { fixer: { [field]: 'x' } } })))
-          .toContain(`agents.fixer.${field}: moved to profiles.${target}.agents.fixer.${field}`)
+        expect(rejected(await load({ profile, agents: { executor: { [field]: 'x' } } })))
+          .toContain(`agents.executor.${field}: moved to profiles.${target}.agents.executor.${field}`)
         expect(rejected(await load({ profile, council: { seats: { beta: { [field]: 'x' } } } })))
           .toContain(`council.seats.beta.${field}: moved to profiles.${target}.council.seats.beta.${field}`)
       }
     }
-    expect(rejected(await load({ profile: 'mixed' }, { agents: { fixer: { model: 'x' } } })))
-      .toContain('moved to profiles.claude.agents.fixer.model')
+    expect(rejected(await load({ profile: 'mixed' }, { agents: { executor: { model: 'x' } } })))
+      .toContain('moved to profiles.claude.agents.executor.model')
   })
 
   test('top-level sandbox and prompt accepted for every role', async () => {
@@ -195,11 +195,11 @@ describe('profiles', () => {
   })
 
   test('engine/model pairs both ways and Claude suffixes', async () => {
-    expect(rejected(await load({ profiles: { claude: { agents: { fixer: { model: 'gpt-6-astra' } } } } })))
-      .toBe('u: profiles.claude.agents.fixer.model: "gpt-6-astra" is not a Claude model (engine claude)')
+    expect(rejected(await load({ profiles: { claude: { agents: { executor: { model: 'gpt-6-astra' } } } } })))
+      .toBe('u: profiles.claude.agents.executor.model: "gpt-6-astra" is not a Claude model (engine claude)')
     expect(rejected(await load({ profile: 'mixed', profiles: { mixed: { council: { seats: { alpha: { model: 'opus' } } } } } })))
       .toBe('u: profiles.mixed.council.seats.alpha.model: "opus" is a Claude model (engine codex)')
-    expect(valid(await load({ profiles: { claude: { agents: { fixer: { model: 'opus[1m]' } } } } })).config.agents.fixer.model).toBe('opus[1m]')
+    expect(valid(await load({ profiles: { claude: { agents: { executor: { model: 'opus[1m]' } } } } })).config.agents.executor.model).toBe('opus[1m]')
   })
 
   test('inactive profiles are validated after all layers', async () => {
@@ -209,8 +209,8 @@ describe('profiles', () => {
   })
 
   test('post-merge error prefix is the file that set the field', async () => {
-    expect(rejected(await load({}, { profiles: { claude: { agents: { fixer: { model: 'gpt-6-astra' } } } } })))
-      .toBe('p: profiles.claude.agents.fixer.model: "gpt-6-astra" is not a Claude model (engine claude)')
+    expect(rejected(await load({}, { profiles: { claude: { agents: { executor: { model: 'gpt-6-astra' } } } } })))
+      .toBe('p: profiles.claude.agents.executor.model: "gpt-6-astra" is not a Claude model (engine claude)')
     expect(rejected(await load({ profiles: { mine: { agents: { oracle: { model: 'gpt-6-astra' } } } } }, { profile: 'mine' })))
       .toBe('u: profiles.mine.agents.oracle.model: "gpt-6-astra" is not a Claude model (engine claude)')
   })
@@ -234,14 +234,14 @@ describe('profiles', () => {
   })
 
   test('origins project only the active profile', async () => {
-    const profiles = { mixed: { agents: { fixer: { model: 'gpt-6-astra' } } } }
+    const profiles = { mixed: { agents: { executor: { model: 'gpt-6-astra' } } } }
     const codex = valid(await load({ profiles }, { profile: 'codex' }))
-    expect(codex.origins['agents.fixer.model']).toBe('default')
+    expect(codex.origins['agents.executor.model']).toBe('default')
     expect(codex.origins.profile).toBe('project')
     expect(Object.keys(codex.origins).some(key => key.startsWith('profiles.'))).toBe(false)
     expect(Object.hasOwn(codex.config, 'profiles')).toBe(false)
     const mixed = valid(await load({ profile: 'mixed', profiles }))
-    expect(mixed.origins['agents.fixer.model']).toBe('user')
+    expect(mixed.origins['agents.executor.model']).toBe('user')
     expect(mixed.origins.profile).toBe('user')
   })
 
@@ -255,6 +255,28 @@ describe('profiles', () => {
 })
 
 describe('loadConfig', () => {
+  for (const [name, config, message] of [
+    ['top-level agents.fixer', { agents: { fixer: {} } }, 'agents.fixer: role `fixer` was renamed to `executor`; use `agents.executor`'],
+    ['profile agents.fixer', { profiles: { claude: { agents: { fixer: {} } } } }, 'profiles.claude.agents.fixer: role `fixer` was renamed to `executor`; use `profiles.claude.agents.executor`'],
+    ['disabled fixer', { disabledAgents: ['fixer'] }, 'disabledAgents: role `fixer` was renamed to `executor`; use `executor` in `disabledAgents`'],
+  ] as const) {
+    test(`rejects ${name} with executor migration guidance in either file`, async () => {
+      expect(rejected(await load(config))).toBe(`u: ${message}`)
+      expect(rejected(await load({}, config))).toBe(`p: ${message}`)
+    })
+  }
+
+  test('accepts agents.executor and disabledAgents executor', async () => {
+    const result = valid(await load({
+      agents: { executor: { prompt: 'Execute the assigned brief', sandbox: 'read-only' } },
+      disabledAgents: ['executor'],
+    }))
+    expect(result.config.agents.executor).toEqual({
+      engine: 'claude', model: 'sonnet', prompt: 'Execute the assigned brief', sandbox: 'read-only',
+    })
+    expect(result.config.disabledAgents).toEqual(['executor'])
+  })
+
   test('default profile is claude and equals DEFAULT_CONFIG', async () => {
     const result = valid(await loadConfig(async () => undefined, { user: 'u' }))
     expect(result.config).toEqual(DEFAULT_CONFIG)
@@ -263,7 +285,7 @@ describe('loadConfig', () => {
     expect(result.config.agents).toEqual({
       explorer: { engine: 'claude', model: 'haiku', sandbox: 'read-only' },
       librarian: { engine: 'claude', model: 'haiku', sandbox: 'read-only' },
-      fixer: { engine: 'claude', model: 'sonnet', sandbox: 'workspace-write' },
+      executor: { engine: 'claude', model: 'sonnet', sandbox: 'workspace-write' },
       oracle: { engine: 'claude', model: 'opus', sandbox: 'read-only' },
       designer: { engine: 'claude', model: 'sonnet', sandbox: 'workspace-write' },
       git: { engine: 'claude', model: 'haiku', sandbox: 'workspace-write' },
@@ -320,24 +342,24 @@ describe('loadConfig', () => {
       profile: 'mixed',
       foregroundMinutes: 2,
       disabledAgents: ['oracle', 'oracle'],
-      agents: { fixer: { prompt: 'user prompt' } },
+      agents: { executor: { prompt: 'user prompt' } },
       council: { seats: { alpha: { prompt: 'seat prompt' } } },
       profiles: { mixed: {
-        agents: { fixer: { model: 'user-model', effort: 'high' } },
+        agents: { executor: { model: 'user-model', effort: 'high' } },
         council: { seats: { alpha: { engine: 'codex', model: 'user-seat' } } },
       } },
     }, {
       foregroundMinutes: 3,
       disabledAgents: ['council', 'oracle'],
-      agents: { fixer: { sandbox: 'read-only' } },
+      agents: { executor: { sandbox: 'read-only' } },
       profiles: { mixed: {
-        agents: { fixer: { model: 'project-model' } },
+        agents: { executor: { model: 'project-model' } },
         council: { seats: { alpha: { engine: 'claude', effort: 'low' }, gamma: { engine: 'codex' } } },
       } },
     }))
     expect(result.config.foregroundMinutes).toBe(3)
     expect(result.config.disabledAgents).toEqual(['oracle', 'council'])
-    expect(result.config.agents.fixer).toEqual({
+    expect(result.config.agents.executor).toEqual({
       engine: 'codex', model: 'project-model', sandbox: 'read-only', effort: 'high', prompt: 'user prompt',
     })
     expect(result.config.agents.explorer).toEqual({ engine: 'codex', model: 'gpt-6-luna', effort: 'high', sandbox: 'read-only' })
@@ -350,7 +372,7 @@ describe('loadConfig', () => {
 
   test('accepts custom prompts for native roles and disabled councillors', async () => {
     const result = valid(await load({
-      disabledAgents: ['explorer', 'librarian', 'fixer', 'oracle', 'designer', 'council', 'councillor:alpha'],
+      disabledAgents: ['explorer', 'librarian', 'executor', 'oracle', 'designer', 'council', 'councillor:alpha'],
       agents: { oracle: { prompt: '' }, designer: { prompt: 'custom' } },
       profiles: { claude: { agents: { oracle: { model: 'sonnet', effort: 'high' } } } },
     }))
@@ -363,20 +385,20 @@ describe('loadConfig', () => {
     const result = valid(await load({
       profile: 'mixed',
       profiles: { mixed: {
-        agents: { fixer: { model: 'user-model', effort: 'high' } },
+        agents: { executor: { model: 'user-model', effort: 'high' } },
         council: { seats: { alpha: { engine: 'codex' } } },
       } },
       council: { seats: { alpha: { prompt: 'extra' } } },
     }, {
       foregroundMinutes: 8,
       disabledAgents: ['council'],
-      profiles: { mixed: { agents: { fixer: { model: 'project-model' } } } },
+      profiles: { mixed: { agents: { executor: { model: 'project-model' } } } },
     }))
     expect(result.origins.foregroundMinutes).toBe('project')
     expect(result.origins.disabledAgents).toBe('project')
-    expect(result.origins['agents.fixer.model']).toBe('project')
-    expect(result.origins['agents.fixer.effort']).toBe('user')
-    expect(result.origins['agents.fixer.sandbox']).toBe('default')
+    expect(result.origins['agents.executor.model']).toBe('project')
+    expect(result.origins['agents.executor.effort']).toBe('user')
+    expect(result.origins['agents.executor.sandbox']).toBe('default')
     expect(result.origins['agents.oracle.model']).toBe('default')
     expect(result.origins['council.seats.alpha.prompt']).toBe('user')
     expect(result.origins['council.seats.alpha.engine']).toBe('user')
@@ -391,7 +413,7 @@ describe('loadConfig', () => {
     ['top level string', '"config"', 'config'],
     ['unknown field', '{"unknown":true}', 'unknown'],
     ['unknown role', '{"agents":{"stranger":{}}}', 'agents.stranger'],
-    ['unknown nested field', '{"agents":{"fixer":{"modle":"x"}}}', 'agents.fixer.modle'],
+    ['unknown nested field', '{"agents":{"executor":{"modle":"x"}}}', 'agents.executor.modle'],
     ['top level prototype key', '{"__proto__":{}}', '__proto__'],
     ['unknown council field', '{"council":{"enabled":true}}', 'council.enabled'],
     ['unknown seat field', '{"council":{"seats":{"alpha":{"sandbox":"read-only"}}}}', 'council.seats.alpha.sandbox'],
@@ -407,10 +429,10 @@ describe('loadConfig', () => {
     ['empty councillor name', '{"disabledAgents":["councillor:"]}', 'disabledAgents'],
     ['non object agents', '{"agents":[]}', 'agents'],
     ['null role', '{"agents":{"oracle":null}}', 'agents.oracle'],
-    ['non string model', '{"profiles":{"claude":{"agents":{"fixer":{"model":2}}}}}', 'agents.fixer.model'],
+    ['non string model', '{"profiles":{"claude":{"agents":{"executor":{"model":2}}}}}', 'agents.executor.model'],
     ['non string effort', '{"profiles":{"claude":{"agents":{"oracle":{"effort":true}}}}}', 'agents.oracle.effort'],
     ['non string prompt', '{"agents":{"designer":{"prompt":[]}}}', 'agents.designer.prompt'],
-    ['invalid role sandbox', '{"agents":{"fixer":{"sandbox":"other"}}}', 'agents.fixer.sandbox'],
+    ['invalid role sandbox', '{"agents":{"executor":{"sandbox":"other"}}}', 'agents.executor.sandbox'],
     ['non object council', '{"council":false}', 'council'],
     ['non object seats', '{"council":{"seats":[]}}', 'council.seats'],
     ['null seat', '{"council":{"seats":{"gamma":null}}}', 'council.seats.gamma'],
@@ -442,7 +464,7 @@ describe('loadConfig', () => {
 
   for (const json of [
     '{"sandboxCap":"danger-full-access"}',
-    '{"agents":{"fixer":{"sandbox":"danger-full-access"}}}',
+    '{"agents":{"executor":{"sandbox":"danger-full-access"}}}',
     '{"agents":{"designer":{"sandbox":"danger-full-access"}}}',
   ]) {
     test(`danger-full-access is rejected: ${json}`, async () => {
@@ -495,15 +517,15 @@ describe('loadConfig', () => {
   })
 
   test('successful loads are independent of defaults, previous results and lastValid', async () => {
-    const first = valid(await load({ profiles: { claude: { agents: { fixer: { effort: 'high' } } } } }))
+    const first = valid(await load({ profiles: { claude: { agents: { executor: { effort: 'high' } } } } }))
     first.config.disabledAgents.push('oracle')
-    first.config.agents.fixer.model = 'mutated'
+    first.config.agents.executor.model = 'mutated'
     first.config.council.seats.alpha!.model = 'mutated'
     const second = valid(await loadConfig(async () => undefined, { user: 'u' }, first.config))
     expect(second.config.disabledAgents).toEqual([])
-    expect(second.config.agents.fixer).toEqual({ engine: 'claude', model: 'sonnet', sandbox: 'workspace-write' })
+    expect(second.config.agents.executor).toEqual({ engine: 'claude', model: 'sonnet', sandbox: 'workspace-write' })
     expect(second.config.council.seats.alpha?.model).toBe('opus')
-    expect(DEFAULT_CONFIG.agents.fixer.model).toBe('sonnet')
+    expect(DEFAULT_CONFIG.agents.executor.model).toBe('sonnet')
     expect(DEFAULT_CONFIG.council.seats.alpha?.model).toBe('opus')
     expect(DEFAULT_CONFIG.disabledAgents).toEqual([])
   })
