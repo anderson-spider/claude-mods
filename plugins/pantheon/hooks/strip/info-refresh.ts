@@ -1,3 +1,4 @@
+// Adapted from hud (Apache-2.0), built on Token Weather Usage; see NOTICE and LICENSE-APACHE.
 import { infoData } from "./info";
 
 // Unity's YAML assets swell the line counts and slow the diff: left out of them.

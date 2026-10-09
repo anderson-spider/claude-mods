@@ -1,3 +1,4 @@
+// Adapted from hud (Apache-2.0), built on Token Weather Usage; see NOTICE and LICENSE-APACHE.
 import { HISTORY, contextData } from "./context";
 import { cacheData } from "./cache";
 import { limitData, sortLimits } from "./limits";

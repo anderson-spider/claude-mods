@@ -1,3 +1,4 @@
+// Adapted from hud (Apache-2.0), built on Token Weather Usage; see NOTICE and LICENSE-APACHE.
 import { BARS, TURN_BARS, SPARK, PAST_BAR } from "./constants";
 import { short } from "./formatting";
 

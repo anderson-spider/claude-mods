@@ -1,3 +1,4 @@
+// Adapted from hud (Apache-2.0), built on Token Weather Usage; see NOTICE and LICENSE-APACHE.
 import {
   T, ctxBand, WEATHER_ICON_SIZE, weatherSvg, SPARK, SPARK_COLORS,
   SEP, TEXT_CELLS, BAR_CELLS, PACE_TICK, RAIL, TERM_TRACK, TERM_PACE, ink, TINTS,

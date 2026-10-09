@@ -1,3 +1,4 @@
+// Adapted from hud (Apache-2.0), built on Token Weather Usage; see NOTICE and LICENSE-APACHE.
 import { T, SEP, RESERVED_COLUMNS, TINTS, ink } from "./constants";
 import { separator, pill } from "./drawing";
 

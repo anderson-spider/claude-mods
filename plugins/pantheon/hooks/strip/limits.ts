@@ -1,3 +1,4 @@
+// Adapted from hud (Apache-2.0), built on Token Weather Usage; see NOTICE and LICENSE-APACHE.
 import { T, PACE_MARKS } from "./constants";
 import { HOUR, DAY, duration, clockTime, dayTime } from "./formatting";
 

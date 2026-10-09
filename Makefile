@@ -12,7 +12,7 @@ update:
 		for (const p of list) if (p.id.endsWith("@$(MARKETPLACE)")) console.log(p.id, p.scope); \
 	' | while read -r id scope; do \
 		echo "==> $$id ($$scope)"; \
-		claude plugin update "$$id" --scope "$$scope" </dev/null || exit 1; \
+		claude plugin update "$$id" --scope "$$scope" </dev/null || echo "skip: $$id (not in the marketplace?)"; \
 	done
 
 # Validates the marketplace, every plugin, and that the manifests agree.

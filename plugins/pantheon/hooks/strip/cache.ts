@@ -1,3 +1,4 @@
+// Adapted from hud (Apache-2.0), built on Token Weather Usage; see NOTICE and LICENSE-APACHE.
 import { T } from "./constants";
 import { MINUTE, HOUR, duration, clockTime, short } from "./formatting";
 import { contextData } from "./context";
