@@ -27,15 +27,11 @@ It reads the text of the Bash command Claude is about to run, runs `git` command
 - **Sent:** requests to the Tailscale API only.
 - **Filtered:** read responses drop `machineKey`, `nodeKey`, `tailnetLockKey`, `secret`, `s3SecretAccessKey` and `token`, and any field whose name ends in `Key`, `Secret` or `Token`. Write responses are not filtered, because a new key's secret comes back once.
 
-## hud
-
-- **Read:** the usage figures Claude Code provides (context, limits, session cost, each request's token counts), the session's subagents, and the prompt-cache environment switches (`DISABLE_PROMPT_CACHING`, `FORCE_PROMPT_CACHING_5M`, `CLAUDE_CODE_PROMPT_CACHE_TTL`, `ENABLE_PROMPT_CACHING_1H`).
-- **Saved:** in the plugin's local store, the latest limits reading and, per session, recent context readings, the last request's cache figures and the last prompt's cost; a session idle for 8 days is deleted.
-- **Sent:** nothing. It makes no network requests.
-
 ## pantheon
 
 - **Read:** user and repository `pantheon.json` configuration, the session directory and repository root, and Codex job output. The panel watches native subagent spawns (type, description and model), step usage, completion status and tool inputs, plus the main session's model, effort, turn timing and context readings.
+- **Read by the above-prompt strip:** the usage figures Claude Code provides (context, 5-hour and 7-day limits, each request's token counts and cache figures), the prompt-cache environment switches (`DISABLE_PROMPT_CACHING`, `FORCE_PROMPT_CACHING_5M`, `CLAUDE_CODE_PROMPT_CACHE_TTL`, `ENABLE_PROMPT_CACHING_1H`), and git facts (repository name, branch, changed files and line counts) from `git` processes run in the session's working directory.
+- **Saved by the strip:** in the plugin's local store, the latest limits reading (shared across sessions) and, per session, recent context readings and the last request's cache figures; a session idle for 8 days is deleted. The strip makes no network requests.
 - **Saved in `$.state`:** `pantheon.jobs` holds Codex job metadata, session ids for resume, activity, token usage, results and errors. `pantheon.natives` keeps at most 24 native records with spawn descriptions, model, rounds, token readings, step counts and the latest short tool description. `pantheon.session` holds main-session readings; `pantheon.view` holds the folded groups. Job, native, session and view snapshots use queues that keep only the latest pending snapshot. After reload, running native rounds and active Codex jobs are marked lost.
 - **Redacted:** native tool descriptions keep at most 64 characters and mask common credential patterns before shortening; only paths from `file_path` keep their last two components. Text from `command`, `pattern`, `url` and `description` is redacted and shortened without trimming path components, so full paths embedded in those fields can remain. This is pattern-based masking, not a guarantee that all secrets are removed. Spawn descriptions and Codex job output are not covered by that masking.
 - **Sent and executed:** delegation sends the role and task prompt to the local `codex exec` process, which uses the configured Codex service and sandbox. Native agents use the session's tools and permissions. The panel's tracking itself only watches and passes events on unchanged; it adds no network requests or file writes. The Cancel button on a running Codex row can cancel a process.

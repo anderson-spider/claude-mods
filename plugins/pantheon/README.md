@@ -44,18 +44,29 @@ The orchestrator gets a system prompt section, adapted from the slim `orchestrat
 
 The panel keeps seven role slots in order: orchestrator, explorer, librarian, fixer, oracle, designer and council. Running lists one row per live instance (parallel runs each get a row, and each council seat has its own); Idle lists exactly one row per role and council seat with nothing live, showing the latest run's model, duration and task plus a strip of `▰` marks for the role's last four rounds, shown only from two rounds on (green done, red failed, `+N` for older ones). Disabled roles and seats show as `⊘` rows, and a lost run counts as Idle. Groups fold to their headings when the pane is short. Other native subagents appear under "other agents" when present. Running rows show model, elapsed time, context use and last activity; roles that never ran read `—`; when a role last ran shows in the timeline and the mini view. A "Session log" card at the bottom lists the last eight events (round started, done, failed, lost or stopped, disabled roles) with the time and the role in its color; end lines name the task, so parallel runs of one role stay apart; it is the first card to drop when the pane is short. The orchestrator shows its model, effort, turn clock, context and the roles it is delegating to.
 
-The desktop panel follows HUD's dark palette, tinted segments and 6px corners. The header, session card, agent groups and timeline share a 24px inset; the timeline follows the available pane width. Cost, Tokens and Time are horizontal segments below the session card, with fixed numeric slots (9, 7 and 6 cells); they wrap on narrow panes and become plain label/value rows when an individual segment cannot fit, stacking the value below the label at the smallest widths. Cost comes from the host's ledger and reads `—` until a measurement arrives. Tokens adds each agent's context or input and output, so it is a rough size, not a bill. Collapsible Running and Idle groups use full-width hairline separators. Each desktop row leads with role and model, followed by the task and readings; its state marker has a fixed slot. Planned text uses the readable secondary color. Native text and buttons sit over static SVG backgrounds, so they remain selectable and actionable.
+The desktop panel follows the former hud plugin's dark palette, tinted segments and 6px corners. The header, session card, agent groups and timeline share a 24px inset; the timeline follows the available pane width. Cost, Tokens and Time are horizontal segments below the session card, with fixed numeric slots (9, 7 and 6 cells); they wrap on narrow panes and become plain label/value rows when an individual segment cannot fit, stacking the value below the label at the smallest widths. Cost comes from the host's ledger and reads `—` until a measurement arrives. Tokens adds each agent's context or input and output, so it is a rough size, not a bill. Collapsible Running and Idle groups use full-width hairline separators. Each desktop row leads with role and model, followed by the task and readings; its state marker has a fixed slot. Planned text uses the readable secondary color. Native text and buttons sit over static SVG backgrounds, so they remain selectable and actionable.
 
 The terminal panel draws one bordered card per section, each with its own border color, task-first rows, context progress bars and one-line Cost, Tokens and Time readings. Its close button appears from 58 columns. A rail animates at 110 ms only while an agent has active work, and clocks tick live.
 
 
 A running Codex row shows its job id (dim, the first thing to drop on narrow panes) and a Cancel button that stops its job; Claude agents and Idle rows have none, and `/pantheon cancel <jobId>` and the `delegate_cancel` tool stay available. The footer reads `keys: esc close`. The header shows `working` while only the main session runs, and the running-agent count when roles are active.
 
-The terminal panel docks beside the transcript and uses a mini view when placed inline. Desktop adds a "Last 15 minutes" SVG timeline with a lane per role. The orchestrator lane draws completed turns in gray and the current running turn in white; completed turns are retained for 15 minutes, up to 50 entries. The docked and mini layouts have clocks and steady text dots on running rows; desktop has clocks and steady SVG image dots. The timeline is computed once per draw and advances in 15-second steps. A run shorter than one step still draws one step wide. Engine color appears in terminal row stripes and desktop instance ids and timeline bars; inactive timers pause. The panel has no configuration. Rate limits, repository, branch and cache stay in hud.
+The terminal panel docks beside the transcript and uses a mini view when placed inline. Desktop adds a "Last 15 minutes" SVG timeline with a lane per role. The orchestrator lane draws completed turns in gray and the current running turn in white; completed turns are retained for 15 minutes, up to 50 entries. The docked and mini layouts have clocks and steady text dots on running rows; desktop has clocks and steady SVG image dots. The timeline is computed once per draw and advances in 15-second steps. A run shorter than one step still draws one step wide. Engine color appears in terminal row stripes and desktop instance ids and timeline bars; inactive timers pause. The panel has no configuration.
 
 The tracking hooks only watch and pass events on unchanged. Native records, main-session readings and the folded groups are saved in session state through queues that keep only the latest pending snapshot. The panel shows one toast per session the first time saving the panel state (agents, session or folded groups) fails; jobs keep their own warning. See [Privacy and permissions](../../docs/PRIVACY.md#pantheon) for the stored fields and tool-input redaction.
 
-flightdeck users: `/plugin uninstall flightdeck`.
+## Above-prompt strip
+
+Since 0.13.0 pantheon draws an always-on strip above the prompt, absorbed from the former hud plugin:
+
+- An info row: model, effort, speed, folder, git branch and changed files.
+- A usage row: the context with a weather icon and token counts, and the prompt cache with its time left and hit share.
+- The 5-hour and 7-day limits as bars with a mark against the clock and the time left.
+- Above them, up to three cards for running Pantheon jobs and native subagents. Below 90 columns they become one-line rows, with "+N more" for the rest.
+
+Options (`/plugin`): **Above-prompt strip** (`abovePrompt`, on by default; turn it off to hide the strip) and **Pace start** (`paceStart`, points of lead over the clock that still count as on pace, 0 by default). The suggested next prompts hud offered have no replacement. See [Privacy and permissions](../../docs/PRIVACY.md) for what the strip reads.
+
+flightdeck users: `/plugin uninstall flightdeck`. If hud is still installed, both strips show above the prompt; remove it with `/plugin uninstall hud`.
 
 ## Configuration
 
@@ -141,3 +152,5 @@ claude --plugin-dir plugins/pantheon
 The orchestrator, role and council prompts are adapted from [oh-my-opencode-slim](https://github.com/alvinunreal/oh-my-opencode-slim) (MIT, see `LICENSE` and `NOTICE`).
 
 The panel's rail, clock, native tracking and tool description/redaction code is adapted from Stephen Casella's work under the MIT License; see `NOTICE` for its provenance, adaptations and full license text.
+
+The above-prompt strip (`hooks/strip/`, except `agents.ts`) is adapted from Apache-2.0 work (Token Weather by Anthropic PBC, token-weather-usage by Eric Cologni); those files stay under the Apache License 2.0 (see `LICENSE-APACHE` and `NOTICE`). The rest of pantheon is MIT.

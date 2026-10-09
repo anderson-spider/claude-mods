@@ -34,12 +34,16 @@ IMPORTANT: prompts and panel modules include third-party work. Keep `LICENSE` an
 
 ## Panel
 
-The panel opens at session start. `/pantheon close` closes it; `cancel <jobId>`, and `config` keep their existing behavior. `doctor` also pings every role and seat (`ping.ts` plans the targets and formats the section; `register.tsx` runs the Codex pings and queues the session prompt for the native ones with `io.after(0, …)`, because the host refuses `prompt.submit` while a `command.run` hook runs). There is no panel configuration; rate limits, repository, branch and cache stay in hud.
+The panel opens at session start. `/pantheon close` closes it; `cancel <jobId>`, and `config` keep their existing behavior. `doctor` also pings every role and seat (`ping.ts` plans the targets and formats the section; `register.tsx` runs the Codex pings and queues the session prompt for the native ones with `io.after(0, …)`, because the host refuses `prompt.submit` while a `command.run` hook runs). There is no panel configuration.
 
 - `pane.tsx` draws the Agents view only (no tabs); a running Codex row carries Cancel, wired to the instance's `jobId`.
-- Desktop: HUD-colored segments with static SVG backplates, native text and buttons, fixed numeric slots, identity-first agent rows, a card per section with a colored border, and a pane-width "Last 15 minutes" SVG timeline, then a "Session log" card built by `log.ts` from the roster (no hook or persisted state of its own).
+- Desktop: segments in the former hud plugin's colors with static SVG backplates, native text and buttons, fixed numeric slots, identity-first agent rows, a card per section with a colored border, and a pane-width "Last 15 minutes" SVG timeline, then a "Session log" card built by `log.ts` from the roster (no hook or persisted state of its own).
 - Docked and inline mini: bordered cards per section (colored border), task-first rows and an animated rail.
 - `rail.tsx` and `elapsed.tsx` are surface modules for the animated rail (110 ms frames, only while there is active work) and live clocks. `theme.ts` holds the shared palette, section and role colors and cell helpers.
+
+## Above-prompt strip
+
+`hooks/strip/` holds the modules ported from the former hud plugin (Apache-2.0, built on Token Weather Usage; keep `NOTICE` and `LICENSE-APACHE`), drawn by the `AbovePrompt` entry in `register.tsx`: info row, usage row, 5h/7d limits against the clock, and up to three cards for running jobs and native subagents (one-line rows below 90 columns, "+N more"). Options `abovePrompt` (default true, off hides the strip) and `paceStart`. The next-step suggestions were dropped with hud; users migrating run `/plugin uninstall hud`. Pure modules take host access injected and never touch `$`.
 
 ## Prompts and skills
 

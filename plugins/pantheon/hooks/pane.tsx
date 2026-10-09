@@ -146,7 +146,7 @@ const DESK_SOFT: Record<string, string> = {
 }
 const DESK_PANEL = HEX.bg
 
-// Copied from hud's visual tokens; the plugins remain independently loadable.
+// Visual tokens taken from the former hud plugin.
 const HUD = {
   agents: ['rgba(196,80,127,0.11)', 'rgba(196,80,127,0.32)', '#c4507f'],
   model: ['rgba(204,120,92,0.12)', 'rgba(204,120,92,0.34)', '#cc785c'],
