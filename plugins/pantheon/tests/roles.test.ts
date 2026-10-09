@@ -240,6 +240,14 @@ describe('native agent specs', () => {
 })
 
 describe('role prompts by engine', () => {
+  for (const role of ['designer', 'fixer'] as const) {
+    for (const engine of ['codex', 'claude'] as const) {
+      test(`${role} on ${engine} returns coordination to the orchestrator`, () => {
+        expect(rolePrompt(role, engine)).toContain('Do not spawn subagents or delegate work; return coordination needs to the orchestrator.')
+      })
+    }
+  }
+
   test('fixer commit instructions fit its engine', () => {
     expect(rolePrompt('fixer', 'codex')).toContain('.git is read-only')
     expect(rolePrompt('fixer', 'claude')).toContain('Do not commit or push; the orchestrator commits.')

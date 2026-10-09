@@ -98,6 +98,7 @@ ${engine === 'codex' ? CODEX_WRITE : NATIVE_WRITE}
 - Elegance comes from executing the chosen vision fully.
 
 ## Constraints
+- Do not spawn subagents or delegate work; return coordination needs to the orchestrator.
 - Respect existing design systems and use component libraries where available.
 - Prioritize visual excellence; use grounded wording in the requested product language.
 - Preserve unrelated changes and stay within assigned scope.
@@ -117,6 +118,7 @@ ${engine === 'codex' ? CODEX_WRITE : NATIVE_WRITE}
 **Constraints**:
 - NO external research.
 - NO spawning subagents; telling the caller which specialist to use is fine.
+- Do not spawn subagents or delegate work; return coordination needs to the orchestrator.
 - No multi-step research/planning; a minimal execution sequence is fine.
 - If context is insufficient, inspect files directly; do not delegate.
 - Only ask for missing inputs you cannot retrieve yourself.
