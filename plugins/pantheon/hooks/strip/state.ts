@@ -116,6 +116,11 @@ export function noteStep(e: { model?: string; effort?: unknown }, result: { usag
   if (!result?.usage) return false;
   infoData.current.speed = result.usage.speed === "fast" ? "fast" : "";
   recordRequest(at, result.usage, e.model);
+  // The context moves with every request; turn.complete alone left the strip at 0% through a long first turn.
+  const window = contextData.readings[contextData.readings.length - 1]?.window;
+  const u = result.usage;
+  const tokens = (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
+  if (window && tokens > 0) pushReading({ tokens, window });
   return true;
 }
 

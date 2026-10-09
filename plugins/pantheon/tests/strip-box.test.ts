@@ -314,3 +314,19 @@ test("renderStrip: keeps what mods below drew above the box and returns it alone
   const bare = renderStrip({ surface: "terminal", columns: 120, now: NOW, agents: [] }, { elements });
   expect(bare.props.key).toBe("strip");
 });
+
+test("desktop strip: one native rounded Box, no glyph edges, quota columns as fixed-width Boxes; terminal keeps its glyph frame", () => {
+  seed();
+  const tree = drawBox(elements, input(100, { surface: "desktop" })) as any;
+  expect(tree.props).toMatchObject({ borderStyle: "round", paddingX: 1, flexDirection: "column" });
+  const all = texts(tree).map(t => t.text).join("");
+  expect(all).not.toMatch(/[╭╮╰╯]/);
+  const widths: number[] = [];
+  const walk = (n: any) => { if (!n || typeof n !== "object") return; if (Array.isArray(n)) return n.forEach(walk); if (n.type === "Box" && n.props.width) widths.push(n.props.width); walk(n.children); };
+  walk(tree.children);
+  expect(widths.filter(w => w === 11).length).toBe(2); // the two 11-cell bars
+  const terminal = drawBox(elements, input(100, { surface: "terminal" })) as any;
+  expect(terminal.props.borderStyle).toBeUndefined();
+  expect(texts(terminal).map(t => t.text).join("")).toContain("╭");
+  expect(renderStrip({ surface: "desktop", columns: 100, now: NOW, agents: [] }, { elements }).props.borderStyle).toBe("round");
+});

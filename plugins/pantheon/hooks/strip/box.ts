@@ -16,7 +16,13 @@ import type { AgentView } from './agents'
 import { DIM, TEXT, dot, fit, padRuns, run, width } from './runs'
 import type { Part, Run } from './runs'
 
-export type BoxInput = { columns: number; now: number; isWorking: boolean; agents: AgentView[] }
+export type BoxInput = { columns: number; now: number; isWorking: boolean; agents: AgentView[]; /** 'desktop' draws a native border and per-column boxes instead of glyph edges and space padding. */ surface?: string }
+
+/** One column of a quota row: `w` cells wide when set (padded on the terminal, a Box on desktop), else as is. */
+type Col = { runs: Run[]; w?: number }
+/** A body row: plain runs, or quota columns. */
+type Row = { runs: Run[] } | { cols: Col[] }
+const flat = (row: Row): Run[] => ('cols' in row ? row.cols.flatMap(c => (c.w ? padRuns(c.runs, c.w) : c.runs)) : row.runs)
 
 const BORDER = '#4b5468'
 const ACCENT = '#E08A5B'
@@ -143,26 +149,26 @@ function gaugesOf(now: number): Gauge[] {
  * pace mark and the time left (each padded to the widest of the rows), then the projection. A row
  * too wide gives up the projection first, then the bar, then the time left, for every row at once.
  */
-function quotaRows(gauges: Gauge[], room: number): Run[][] {
+function quotaRows(gauges: Gauge[], room: number): Row[] {
   if (gauges.length === 0) return []
   const pctW = Math.max(3, ...gauges.map(g => cellWidth(g.value)))
   const markW = Math.max(3, ...gauges.map(g => cellWidth(g.mark)))
   const leftW = Math.max(6, ...gauges.map(g => cellWidth(g.when)))
   const labelW = Math.max(...gauges.map(g => cellWidth(g.label)))
-  const build = (g: Gauge, { bar, left, proj }: { bar: boolean; left: boolean; proj: boolean }): Run[] => {
-    const out: Run[] = [...padRuns([run(g.label, DIM)], labelW), run(' ')]
-    if (bar) out.push(...quotaBar(g), run(' '))
-    out.push(...padRuns([run(g.value, g.tone === 'alert' ? ALERT : undefined, { bold: true })], pctW))
-    out.push(run(' '), ...padRuns(g.mark ? [run(g.mark, g.mark.startsWith('▼') ? CALM : TERM_TONES[g.tone], { bold: true })] : [], markW))
-    if (left && g.when) out.push(dot(), ...padRuns([run(g.when, DIM)], leftW))
+  const build = (g: Gauge, { bar, left, proj }: { bar: boolean; left: boolean; proj: boolean }): Row => {
+    const cols: Col[] = [{ runs: [run(g.label, DIM)], w: labelW }, { runs: [run(' ')] }]
+    if (bar) cols.push({ runs: quotaBar(g), w: BAR_WIDTH }, { runs: [run(' ')] })
+    cols.push({ runs: [run(g.value, g.tone === 'alert' ? ALERT : undefined, { bold: true })], w: pctW })
+    cols.push({ runs: [run(' ')] }, { runs: g.mark ? [run(g.mark, g.mark.startsWith('▼') ? CALM : TERM_TONES[g.tone], { bold: true })] : [], w: markW })
+    if (left && g.when) cols.push({ runs: [dot()] }, { runs: [run(g.when, DIM)], w: leftW })
     const extra = proj ? projectionRuns(g) : []
-    if (extra.length > 0) out.push(dot(), ...extra)
-    return out
+    if (extra.length > 0) cols.push({ runs: [dot()] }, { runs: extra })
+    return { cols }
   }
   const variants = [{ bar: true, left: true, proj: true }, { bar: true, left: true, proj: false }, { bar: false, left: true, proj: false }, { bar: false, left: false, proj: false }]
   for (const v of variants) {
     const rows = gauges.map(g => build(g, v))
-    if (rows.every(r => width(r) <= room)) return rows
+    if (rows.every(r => width(flat(r)) <= room)) return rows
   }
   return gauges.map(g => build(g, variants[variants.length - 1]))
 }
@@ -184,46 +190,76 @@ function receiptRow(room: number): Run[] {
 
 // ---------- the box ----------
 
-/** The box as rows of runs, every row exactly `columns` cells wide; empty when there is nothing to show. */
-export function boxLines(input: BoxInput): Run[][] {
-  const { columns, now } = input
-  const inner = columns - 4
+/** The body rows (session, quotas, last turn or agents) for `inner` cells; empty when there is nothing to show. */
+function bodyRows(input: BoxInput, inner: number): Row[] {
+  const { now } = input
   const gauges = gaugesOf(now)
   const cur = infoData.current
   const hasContent = Boolean(cur.model) || contextData.readings.length > 0 || gauges.length > 0 || turnData.last !== null || turnData.usd !== null || input.agents.length > 0
   if (!hasContent) return []
-  const body: Run[][] = []
+  const body: Row[] = []
   const session = sessionRow(input, inner)
-  if (session.length > 0) body.push(session)
+  if (session.length > 0) body.push({ runs: session })
   body.push(...quotaRows(gauges, inner))
   const last = input.agents.length > 0 ? agentsRow(input.agents, inner, now) : receiptRow(inner)
-  if (last.length > 0) body.push(last)
+  if (last.length > 0) body.push({ runs: last })
+  return body
+}
+
+/** The box as rows of runs, every row exactly `columns` cells wide; empty when there is nothing to show. */
+export function boxLines(input: BoxInput): Run[][] {
+  const { columns } = input
+  const inner = columns - 4
+  const body = bodyRows(input, inner)
+  if (body.length === 0) return []
   const edge = (text: string): Run => run(text, BORDER)
   return [
     [edge(`╭${'─'.repeat(columns - 2)}╮`)],
-    ...body.map(row => [edge('│'), run(' '), ...padRuns(row, inner), run(' '), edge('│')]),
+    ...body.map(row => [edge('│'), run(' '), ...padRuns(flat(row), inner), run(' '), edge('│')]),
     [edge(`╰${'─'.repeat(columns - 2)}╯`)],
   ]
 }
 
+const textOf = (Text: any, part: Run, k: number) => Text({
+  key: `t${k}`,
+  ...(part.color ? { color: part.color } : {}),
+  ...(part.dim ? { dimColor: true } : {}),
+  ...(part.bold ? { bold: true } : {}),
+  children: part.text,
+})
+
 /** The box as an element tree, or null when there is nothing to show. */
 export function drawBox(elements: any, input: BoxInput): unknown {
+  const { Box, Text } = elements
+  if (input.surface === 'desktop') {
+    // Desktop: one native rounded border; the proportional font cannot line up glyph edges or
+    // space padding, so each quota column is a Box of its cell width instead.
+    const body = bodyRows(input, input.columns - 4)
+    if (body.length === 0) return null
+    return Box({
+      key: 'strip',
+      flexDirection: 'column',
+      borderStyle: 'round',
+      borderColor: BORDER,
+      paddingX: 1,
+      children: body.map((row, r) => Box({
+        key: `strip-r${r}`,
+        flexDirection: 'row',
+        children: 'cols' in row
+          ? row.cols.map((c, k) => Box({ key: `c${k}`, ...(c.w ? { width: c.w } : {}), flexShrink: 0, children: c.runs.map((part, j) => textOf(Text, part, j)) }))
+          : row.runs.map((part, k) => textOf(Text, part, k)),
+      })),
+    })
+  }
   const lines = boxLines(input)
   if (lines.length === 0) return null
-  const { Box, Text } = elements
   return Box({
     key: 'strip',
     flexDirection: 'column',
     children: lines.map((row, r) => Box({
       key: `strip-r${r}`,
       flexDirection: 'row',
-      children: row.map((part, k) => Text({
-        key: `t${k}`,
-        ...(part.color ? { color: part.color } : {}),
-        ...(part.dim ? { dimColor: true } : {}),
-        ...(part.bold ? { bold: true } : {}),
-        children: part.text,
-      })),
+      children: row.map((part, k) => textOf(Text, part, k)),
     })),
   })
 }

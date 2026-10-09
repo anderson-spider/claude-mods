@@ -25,7 +25,7 @@ export function renderStrip(input: StripInput, deps: StripDeps): any {
   const { columns, now, agents, below } = input;
   const parts: any[] = [];
   if (!isBlank(below)) parts.push(below);
-  const box = drawBox(elements, { columns, now, isWorking: input.isWorking === true, agents });
+  const box = drawBox(elements, { columns, now, isWorking: input.isWorking === true, agents, surface: input.surface });
   if (box) parts.push(box);
   if (parts.length === 0) return below;
   return parts.length === 1 ? parts[0] : elements.Box({ flexDirection: "column", children: parts });
