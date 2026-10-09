@@ -315,18 +315,83 @@ test("renderStrip: keeps what mods below drew above the box and returns it alone
   expect(bare.props.key).toBe("strip");
 });
 
-test("desktop strip: one native rounded Box, no glyph edges, quota columns as fixed-width Boxes; terminal keeps its glyph frame", () => {
-  seed();
-  const tree = drawBox(elements, input(100, { surface: "desktop" })) as any;
+const deskElements = Object.fromEntries(["Box", "Text", "Svg"].map(type => [type, (props: any) => ({ type, key: props.key, props, children: props.children, ...(type === "Text" ? { text: String(props.children) } : {}) })]));
+
+const nodes = (n: any, out: any[] = []): any[] => {
+  if (!n || typeof n !== "object") return out;
+  if (Array.isArray(n)) { n.forEach(c => nodes(c, out)); return out; }
+  out.push(n);
+  nodes(n.children, out);
+  return out;
+};
+const byKey = (tree: any, key: string) => nodes(tree).find(n => n.key === key);
+const svgs = (tree: any) => nodes(tree).filter(n => n.type === "Svg").map(n => n.props);
+
+test("desktop strip (HUD C): one native rounded Box with a session row, side-by-side 5h/7d columns and a last-turn row; no glyph edges", () => {
+  seed({ limits: [windowOf("five_hour", 74, 0.61), windowOf("seven_day", 60, 0.5)] });
+  const tree = drawBox(deskElements, input(100, { surface: "desktop", isWorking: true })) as any;
   expect(tree.props).toMatchObject({ borderStyle: "round", paddingX: 1, flexDirection: "column" });
-  const all = texts(tree).map(t => t.text).join("");
-  expect(all).not.toMatch(/[╭╮╰╯]/);
-  const widths: number[] = [];
-  const walk = (n: any) => { if (!n || typeof n !== "object") return; if (Array.isArray(n)) return n.forEach(walk); if (n.type === "Box" && n.props.width) widths.push(n.props.width); walk(n.children); };
-  walk(tree.children);
-  expect(widths.filter(w => w === 11).length).toBe(2); // the two 11-cell bars
+  const all = texts(tree).map(t => t.text).join("|");
+  expect(all).not.toMatch(/[╭╮╰╯▰▱━█░]/);
+  for (const key of ["strip-r0", "strip-r1", "strip-r2"]) expect(byKey(tree, key)).toBeDefined();
+  expect(byKey(tree, "strip-r1").props.flexDirection).toBe("row");
+  expect(byKey(tree, "strip-g0")).toBeDefined();
+  expect(byKey(tree, "strip-g1")).toBeDefined();
+  // Time left and the projection sit under each bar, not on the bar's row.
+  const detail = texts(byKey(tree, "g0-detail")).map(t => t.text).join("");
+  expect(detail).toMatch(/left/);
+  expect(detail).toMatch(/%/);
+  expect(texts(byKey(tree, "g0-top")).map(t => t.text)).toContain("5h");
+  expect(all).toContain("Opus 5.5");
+  expect(all).toContain("last turn");
+  // Bars are exact-px Svgs: the quota bars carry the elapsed tick, the running dot pulses.
+  const pictures = svgs(tree);
+  const bar5h = pictures.find(p => p.alt.startsWith("5h"));
+  expect(bar5h.source).toContain('width="1.5"');
+  expect(bar5h.width % 1).toBe(0);
+  expect(pictures.some(p => p.alt.startsWith("context"))).toBe(true);
+  const dot = pictures.find(p => p.alt === "working");
+  expect(dot.isInteractive).toBe(true);
+  expect(dot.source).toContain("<animate");
+});
+
+test("desktop strip: every Text color is a hex, and only props the Box accepts are used", () => {
+  seed({ limits: [windowOf("five_hour", 90, 0.4), windowOf("seven_day", 60, 0.5)] });
+  for (const columns of [100, 60, 40]) {
+    const tree = drawBox(deskElements, input(columns, { surface: "desktop", isWorking: true })) as any;
+    for (const t of texts(tree)) if (t.color) expect(t.color).toMatch(/^#[0-9a-f]{6}$/i);
+    const allowed = new Set(["children", "key", "flexDirection", "flexGrow", "flexShrink", "alignItems", "justifyContent", "gap", "width", "marginLeft", "paddingX", "borderStyle", "borderColor"]);
+    for (const n of nodes(tree)) if (n.type === "Box") for (const k of Object.keys(n.props)) expect([columns, k, allowed.has(k)]).toEqual([columns, k, true]);
+  }
+});
+
+test("desktop strip: stacks 5h and 7d below ~70 columns and drops low-priority parts of the session row when narrow", () => {
+  seed();
+  const wide = drawBox(deskElements, input(100, { surface: "desktop" })) as any;
+  const stacked = drawBox(deskElements, input(60, { surface: "desktop" })) as any;
+  expect(byKey(wide, "strip-r1").props.flexDirection).toBe("row");
+  expect(byKey(stacked, "strip-r1").props.flexDirection).toBe("column");
+  const wideRow = texts(byKey(wide, "strip-r0")).map(t => t.text).join("|");
+  const narrowRow = texts(byKey(drawBox(deskElements, input(40, { surface: "desktop" })), "strip-r0")).map(t => t.text).join("|");
+  expect(wideRow).toContain("claude-mods");
+  expect(narrowRow).not.toContain("claude-mods");
+  expect(narrowRow).toContain("Opus 5.5");
+  expect(narrowRow).toContain("ctx");
+  // The columns never take more than the box has: the two share the inner width.
+  const [a, b] = [byKey(wide, "strip-g0"), byKey(wide, "strip-g1")];
+  expect(a.props.width + b.props.width + 3).toBeLessThanOrEqual(96);
+});
+
+test("desktop strip: without Svg it still draws (text dots, no bars) and the running agents replace the last-turn row", () => {
+  seed();
+  const tree = drawBox(elements, input(100, { surface: "desktop", isWorking: true, agents: AGENTS })) as any;
+  const all = texts(tree).map(t => t.text).join("|");
+  expect(all).toContain("●");
+  expect(all).toContain("agents ");
+  expect(all).not.toContain("last turn");
+  expect(svgs(tree)).toEqual([]);
+  expect(renderStrip({ surface: "desktop", columns: 100, now: NOW, agents: [] }, { elements: deskElements }).props.borderStyle).toBe("round");
   const terminal = drawBox(elements, input(100, { surface: "terminal" })) as any;
   expect(terminal.props.borderStyle).toBeUndefined();
   expect(texts(terminal).map(t => t.text).join("")).toContain("╭");
-  expect(renderStrip({ surface: "desktop", columns: 100, now: NOW, agents: [] }, { elements }).props.borderStyle).toBe("round");
 });

@@ -431,11 +431,11 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     const running = roles.reduce((n, r) => n + activeOf(r).length, 0) + roster.others.filter(i => i.isActive).length
     const right: Seg[] = W >= (isDesk ? 58 : 30)
         ? running ? isDesk
-          ? [pulseSeg('hdr-dot'), numeric('header-running-count', { text: String(running), color: RUN, bold: true }, 3), { text: 'running', color: RUN, bold: true }]
+          ? [{ node: plate('header-badge', 2.5 + 2 + `${running} running`.length, pillTint(HEX.green), [pulseSeg('hdr-dot').node, text({ text: `${running} running`, color: RUN, bold: true })]), w: 4.5 + `${running} running`.length }]
           : [pulseSeg('hdr-dot'), { text: `${running} running`, color: RUN, bold: true }]
           : data.session.isRunning ? [pulseSeg('hdr-dot'), { text: 'working', color: RUN, bold: true }] : [...(isDesk ? [idleSeg('hdr-idle')] : []), { text: 'idle', dim: true }]
         : []
-    if (data.onClose && W >= 58) right.push({ node: isDesk ? <Button key="close" plain label="✕" onPress={() => data.onClose?.()} /> : <Button key="close" label="✕" onPress={() => data.onClose?.()} />, w: isDesk ? 3 : 5 })
+    if (data.onClose && W >= 58) right.push({ node: isDesk ? <Box key="close-box" marginLeft={1}><Button key="close" plain label="✕" onPress={() => data.onClose?.()} /></Box> : <Button key="close" label="✕" onPress={() => data.onClose?.()} />, w: isDesk ? 4 : 5 })
     if (!isDesk) return (
       <Box key="header" flexDirection="column" width={W}>
         {headerH > 1 ? (
@@ -456,7 +456,7 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
             <Box gap={isDesk ? 2 : 1} alignItems="center" flexShrink={1}>
               {W >= 14 ? text({ text: isDesk ? 'Pantheon' : 'PANTHEON', bold: true, color: ROUND }) : null}
             </Box>
-            {right.length ? <Box key="header-state" width={isDesk ? 16 : undefined} alignItems="center" justifyContent="flex-end" gap={1} flexShrink={0}>{render(right)}</Box> : null}
+            {right.length ? <Box key="header-state" alignItems="center" justifyContent="flex-end" gap={1} flexShrink={0}>{render(right)}</Box> : null}
           </Box>
         ) : null}
         {profileRow(W)}
@@ -544,7 +544,7 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
   const collapsedSet = new Set<string>(data.collapsed ?? [])
   const rowH = isDesk ? 1.4 : 1
   // Desktop cards are stacked with this gap between them, so a border never touches the next card.
-  const CARD_GAP = 0.5
+  const CARD_GAP = 0.6
 
   // A card. Terminal: round box lines with the title in the top border, every line exactly W cells.
   // Desktop: a native column over an SVG backplate; the title sits on its top edge.
@@ -566,7 +566,7 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
       // A native rounded border sizes to its content, so the card never outgrows or underfills a
       // backplate; the title is the first row, the fold button sits at its right.
       const head = (
-        <Box key={`${key}-title`} width={W - 4} alignItems="center" justifyContent="space-between" gap={1}>
+        <Box key={`${key}-title`} width={W - 4} alignItems="center" justifyContent="space-between" gap={1} marginBottom={0.3}>
           <Box key={`${key}-label`}>
             {text({ text: title.label, bold: true, color })}
             {title.count === undefined ? null : text({ text: ` ${title.count}`, dim: true })}
@@ -574,7 +574,7 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
           {toggleBtn ? <Box key={`${key}-toggle`}>{toggleBtn()}</Box> : null}
         </Box>
       )
-      const total = rowH + (toggleBtn ? 1 : 0) + sum + 1
+      const total = rowH + 0.3 + (toggleBtn ? 1 : 0) + sum + 1
       return {
         node: (
           <Box key={key} borderStyle="round" borderColor={mix(color, HEX.bg, 0.25)} backgroundColor={mix(color, HEX.bg, 0.94)} flexDirection="column" width={W} paddingX={1} marginBottom={CARD_GAP}>

@@ -278,10 +278,7 @@ describe('pane', () => {
       expect(at).toEqual([...at].sort((a, b) => a - b))
       // fixer and oracle run, explorer finished; librarian, designer and council have not run yet.
       for (const name of ['explorer', 'librarian', 'fixer', 'oracle', 'designer', 'council α', 'council β']) expect(all).toContain(name)
-      if (surface === 'desktop') {
-        expect(all).toContain('2')
-        expect(all).toContain('running')
-      } else expect(all).toContain('2 running')
+      expect(all).toContain('2 running')
     })
 
     t(`an active explorer shows its instance, activity and clock (${surface})`, async ($, on) => {
@@ -296,12 +293,24 @@ describe('pane', () => {
       expect(all.some(x => x.includes('map pane render tree'))).toBe(true)
       expect(all.some(x => x.includes("rg 'x' plugins/"))).toBe(true)
       expect(all).toContain('41.2k↑ 2.3k↓') // input and output of the job, in the session tokens
-      if (surface === 'desktop') {
-        expect(all).toContain('1')
-        expect(all).toContain('running')
-      } else expect(all).toContain('1 running')
+      expect(all).toContain('1 running')
       // The clock is a Client where the surface has one, else a Text.
       expect((await ui.find({ key: 'clk-pj3a' })) ?? all.find(x => /^\d+:\d\d$/.test(x))).toBeDefined()
+    })
+
+    if (surface === 'desktop') t('desktop: the running badge is a bordered pill with a pulsing dot, the close button has room, and the mount is accepted by the engine', async ($, on) => {
+      world(on)
+      seed(on, { jobs: [job({ id: 'pj3a', description: 'map pane render tree' })] })
+      await start($)
+      const ui = await mountPane($, 'desktop', { rows: 70 })
+      const badge = await ui.find({ key: 'header-badge' })
+      expect((badge as unknown as { props: Record<string, unknown> }).props).toMatchObject({ borderStyle: 'round', alignItems: 'center' })
+      const dot = (await ui.findAll({ type: 'Svg' })).map(n => (n as unknown as { props: { alt: string; source: string; isInteractive?: boolean } }).props).find(p => p.alt === 'running')
+      expect(dot?.isInteractive).toBe(true)
+      expect(dot?.source).toContain('<animate')
+      expect(await ui.find({ key: 'close-box' })).toBeDefined()
+      const all = await texts(ui)
+      for (const x of ['Pantheon', '1 running', 'Session', 'Agents · running', 'Agents · idle']) expect(all).toContain(x)
     })
 
     t(`a resumed job shows round 2 (${surface})`, async ($, on) => {
