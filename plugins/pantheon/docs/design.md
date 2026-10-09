@@ -89,7 +89,7 @@ Dois grupos fixos. O grupo de um papel não muda por configuração.
 |---|---|---|
 | explorer | `gpt-6-luna` | `read-only` |
 | librarian | `gpt-6-luna` | `read-only` |
-| fixer | `gpt-6-luna` | `workspace-write` |
+| executor | `gpt-6-luna` | `workspace-write` |
 | councillor:\<seat\> (seats `engine: "codex"`) | do seat | `read-only` (fixo) |
 
 **Nativos Claude** (via Agent tool, registrados com `$.agent.register` no
@@ -128,7 +128,7 @@ Valores abaixo são os padrões; o arquivo só precisa do que muda.
   "agents": {
     "explorer":  { "model": "gpt-6-luna", "sandbox": "read-only" },
     "librarian": { "model": "gpt-6-luna", "sandbox": "read-only" },
-    "fixer":     { "model": "gpt-6-luna", "sandbox": "workspace-write" },
+    "executor":  { "model": "gpt-6-luna", "sandbox": "workspace-write" },
     "oracle":    { "model": "opus" },
     "designer":  { "model": "inherit" }
   },
@@ -170,7 +170,7 @@ mudanças valem sem reload).
 Registradas com `$.tool.register`, `isDeferred: false`. Atendem só papéis Codex.
 
 - `delegate({ agent, prompt, description?, cwd?, model?, effort?, background?, resume? })`
-  - `agent`: `explorer`, `librarian`, `fixer` ou `councillor:<seat>` de seat Codex.
+  - `agent`: `explorer`, `librarian`, `executor` ou `councillor:<seat>` de seat Codex.
     Nativo, desconhecido ou desligado → erro dizendo o que usar (o agente nativo pelo
     Agent tool, ou a lista válida).
   - `model` / `effort`: sobrescrevem os do papel nesta chamada (precedência: chamada >
@@ -231,7 +231,7 @@ Registradas com `$.tool.register`, `isDeferred: false`. Atendem só papéis Code
 5. Foreground: aguarda até `foregroundMinutes` (a espera em `$.process.spawn` não consome
    o orçamento de 10 s do hook). Terminou → retorna. Passou → retorna `background`; o
    loop continua desacoplado da chamada e, ao terminar, `$.prompt.submit` avisa a sessão
-   ("job X do fixer terminou; use delegate_result").
+   ("job X do executor terminou; use delegate_result").
 6. Esc no foreground: `next.signal` aborta, o loop sai e o processo morre.
 7. Reload do mod: o processo morre com o módulo; no `session.start` seguinte, jobs
    `running` **e** `background` viram `lost`. São retomáveis por `resume` só os que já
@@ -262,7 +262,7 @@ Tamanho alvo: ~100 linhas, incluindo o bloco de superpowers.
 ## Prompts dos papéis
 
 De `role-prompts.ts`, quase literais, com formatos de saída (`<results>` do explorer;
-`<summary>/<changes>/<verification>` do fixer). Regras de arquivo por grupo: Codex
+`<summary>/<changes>/<verification>` do executor). Regras de arquivo por grupo: Codex
 (`rg`, shell para diagnóstico, `apply_patch` para edição; read-only proíbe escrita);
 nativos (Read/Grep/Glob/Edit). Librarian: "busca na web e MCPs de documentação
 disponíveis" no lugar de `context7`/`gh_grep`. Todo prompt de papel termina com: "Se a
@@ -302,7 +302,7 @@ retorno).
 
 | Despacho da skill | Pantheon |
 |---|---|
-| implementer (subagent-driven-development) | `delegate` com `fixer`; Agent `pantheon:designer` se a tarefa for UI |
+| implementer (subagent-driven-development) | `delegate` com `executor`; Agent `pantheon:designer` se a tarefa for UI |
 | task reviewer e re-reviewer do subagent-driven-development (um despacho por gate, com o pacote de `scripts/review-package`) | Agent `pantheon:oracle` |
 | code reviewer final da branch (subagent-driven-development, requesting-code-review) | Agent `pantheon:oracle`, despacho separado |
 | agentes em paralelo (dispatching-parallel-agents) | vários `delegate`/Agent na mesma mensagem, papel conforme a tarefa |
@@ -319,10 +319,10 @@ Regras do bloco:
   diff e SHAs), porque o oracle não tem Bash.
 - O implementer Codex continua uma tarefa por `resume` (jobId); sem isso, segue o
   fallback da skill (novo implementer com brief, relatório e achados).
-- Commits: o sandbox do Codex não deixa o fixer commitar (`.git` é somente leitura).
-  O fixer implementa, testa e entrega o relatório sem commit; o orchestrator faz o
-  commit, registra o SHA e então gera o pacote de revisão (BASE gravado antes do
-  despacho, HEAD = esse commit). O prompt do fixer nesse despacho diz que a ausência de
+- Commits: o sandbox do Codex não deixa o executor commitar (`.git` é somente leitura).
+  O executor implementa, testa e entrega o relatório sem commit; o orchestrator delega o
+  commit ao papel git, registra o SHA e então gera o pacote de revisão (BASE gravado antes do
+  despacho, HEAD = esse commit). O prompt do executor nesse despacho diz que a ausência de
   commit é esperada e não é motivo para reportar BLOCKED.
 - Papel desligado sai da tabela; a skill usa o Agent tool padrão naquele caso.
 
@@ -381,7 +381,7 @@ rodando com `claude plugin test` (`claude-code/testing`):
   o processo; `session.start` marca `running` e `background` como `lost`; `resume` de
   job sem `sessionId` (reload antes do `thread.started`) dá erro claro.
 - `pane.test.ts`: `mount` em `['terminal', 'desktop']`, linha curta por job e botão Cancelar.
-- Validação manual em sessão real: explorer e fixer com Codex real; background forçado
+- Validação manual em sessão real: explorer e executor com Codex real; background forçado
   com `foregroundMinutes: 0.1`; council com um seat de cada engine; oracle nativo.
 
 CI: `tsc -p .` e `claude plugin validate .`; `claude plugin test .` se o `claude` rodar
@@ -397,3 +397,7 @@ confirmar na implementação).
 - Re-registro de agentes nativos durante a sessão vale a partir do turno seguinte.
 - O processamento de cada evento do Codex consome o orçamento do hook; o parser deve
   ser leve.
+
+## Executor scope (0.15)
+
+The executor implements code changes and runs scripts, test batteries and API calls within the orchestrator’s brief, returning short results (status, tables or errors). It does no external research or sub-delegation. Commits and history operations belong to git, whose protected-branch refusals still apply.
