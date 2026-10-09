@@ -198,19 +198,18 @@ test('clawdSvg: reduced motion stops the objects and shows their first frame', (
   expect(/\.fx\{animation:none;opacity:0\}\.f0\{opacity:1\}/.test(media)).toBe(true)
 })
 
-test('the original three-row body and poses remain below the hats', () => {
-  const feet = '  ▘▘ ▝▝  '
-  const lower = '▝▜█████▛▘'
-  const poses = [
-    [' ▐▛███▜▌ ', lower, feet],
-    [' ▐▙███▙▌ ', lower, feet],
-    ['▗▟▛███▜▙▖', ' ▜█████▛ ', feet],
-    [' ▐▟███▟▌ ', lower, feet],
-  ]
-  for (const role of ROLE_ORDER) for (let frame = 0; frame < FRAMES; frame++) {
-    const rows = clawdLines(role, 'work', frame, 'small')
-    expect(rows.slice(1)).toEqual(poses[frame])
-    expect(rows.slice(0, 1)).toEqual(clawdLines(role, 'idle', 0, 'small').slice(0, 1))
+test('only the feet move while working; the hat, eyes, arms and body stay fixed', () => {
+  const feet = ['  ▘▘ ▝▝  ', '  ▝▝ ▘▘  ']
+  for (const role of ROLE_ORDER) for (const size of SIZES) {
+    const idle = clawdRuns(role, 'idle', 0, size)
+    for (let frame = 0; frame < FRAMES; frame++) {
+      const work = clawdRuns(role, 'work', frame, size)
+      expect(work.slice(0, 3)).toEqual(idle.slice(0, 3))
+      expect(clawdLines(role, 'work', frame, size).slice(1))
+        .toEqual([' ▐▛███▜▌ ', '▝▜█████▛▘', feet[frame]])
+    }
+    expect(clawdLines(role, 'idle', 1, size)[3]).toBe(feet[0])
+    expect(clawdLines(role, 'off', 1, size)[3]).toBe(feet[0])
   }
 })
 

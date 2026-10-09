@@ -5,7 +5,7 @@ export type Mood = 'work' | 'idle' | 'off'
 export type Cell = string | null
 export type Run = { text: string; fg?: string; bg?: string }
 
-export const FRAMES = 4
+export const FRAMES = 2
 export const COLS = 9
 export const ROWS = 4
 
@@ -72,16 +72,12 @@ export function pixels(role: SlotName, mood: Mood, frame: number, _size: 'small'
   const top = headwear.length
   const grid: Cell[][] = [...headwear, ...Array.from({ length: 6 }, () => Array<Cell>(COLS * 2).fill(null))]
   for (let y = top; y < top + 4; y++) for (let x = 3; x < 15; x++) grid[y]![x] = body
-  const armY = top + (pose === 2 ? 1 : 2)
-  for (const x of [1, 2, 15, 16]) grid[armY]![x] = body
-  for (const x of [2, 15]) grid[top + 2]![x] = body
-  for (const x of [4, 6, 11, 13]) grid[top + 4]![x] = body
-  const looking = pose === 1 || pose === 3
-  const eyeY = top + (looking ? 0 : 1)
-  const left = looking ? (pose === 1 ? 5 : 4) : 5
-  const right = looking ? (pose === 1 ? 13 : 12) : 12
-  grid[eyeY]![left] = eye
-  grid[eyeY]![right] = eye
+  for (const x of [1, 2, 15, 16]) grid[top + 2]![x] = body
+  // Only the feet alternate; headwear, face and torso retain the approved default pose.
+  const feet = pose === 0 ? [4, 6, 11, 13] : [5, 7, 10, 12]
+  for (const x of feet) grid[top + 4]![x] = body
+  grid[top + 1]![5] = eye
+  grid[top + 1]![12] = eye
   return grid
 }
 
