@@ -4,7 +4,7 @@ import type { Engine } from 'claude-code/testing'
 
 import { DELEGATE, HOME, ROOT, RESULT, parse, start, world } from './fixtures/world'
 import { PANE_ID, configReport, doctorReport, drawPanel, statusText, timelineSource } from '../hooks/pane'
-import { clawdLines, clawdSvg } from '../hooks/clawd'
+import { clawdRuns, clawdSvg } from '../hooks/clawd'
 import { loadConfig } from '../hooks/config'
 import { buildRoster } from '../hooks/roster'
 import type { Slot } from '../hooks/roster'
@@ -306,7 +306,7 @@ describe('pane', () => {
       world(on, { files: { [`${HOME}/.claude/pantheon.json`]: JSON.stringify({ disabledAgents: ['librarian'] }) } })
       await start($)
       await command($, 'config')
-      const ui = await mountPane($, surface)
+      const ui = await mountPane($, surface, { rows: 70 })
       const all = await texts(ui)
       expect(all).toContain('disabledAgents')
       expect(all).toContain('⊘')
@@ -524,7 +524,7 @@ describe('pane', () => {
     seed(on, { natives: [native()], session: { isRunning: true, turnStartedAt: NOW - 5_000 } })
     await start($)
     await command($, 'config')
-    const ui = await mountPane($, 'terminal')
+    const ui = await mountPane($, 'terminal', { rows: 70 })
     expect(await railsOf(ui)).toEqual([])
     const all = await texts(ui)
     expect(all.filter(text => text === '●')).toHaveLength(3) // header, orchestrator, oracle
@@ -785,10 +785,11 @@ describe('pane', () => {
     expect(of('designer')).toEqual([{ role: 'designer', mood: 'off', size: 'small' }]) // planned
     const sizes = (await clients(ui)).filter(c => String(c.module).includes('mascot')).map(c => [c.width, c.height])
     expect(sizes).not.toContainEqual([15, 6])
-    expect(sizes).toContainEqual([8, 3])
+    expect(sizes.length > 0).toBe(true)
+    expect(sizes.every(([w, h]) => w === 9 && h === 4)).toBe(true)
   })
 
-  t('docked without a Client draws static colorless mascot rows with the same layout', async ($, on) => {
+  t('docked without a Client draws static colored default mascot rows with the same layout', async ($, on) => {
     let fail = false
     world(on, { clockDown: () => fail })
     seed(on, busy())
@@ -797,11 +798,15 @@ describe('pane', () => {
     const ui = await mountPane($, 'terminal', { rows: 70 })
     expect(await clients(ui)).toEqual([])
     const all = await texts(ui)
-    const rows = clawdLines('explorer', 'work', 0, 'small').map(x => x.trim())
-    for (const row of rows) expect(all).toContain(row)
-    expect(all).toContain(clawdLines('orchestrator', 'work', 0, 'small')[0].trim())
-    const colored = (await ui.findAll({ type: 'Text' })).filter(n => String(n.text).trim() === rows[0])
-    expect(colored.every(n => (n as unknown as { props: { color?: string } }).props.color === undefined)).toBe(true)
+    const runs = clawdRuns('explorer', 'idle', 0, 'small').flat()
+    const nodes = await ui.findAll({ type: 'Text' })
+    for (const run of runs.filter(r => r.text.trim())) {
+      expect(all).toContain(run.text.trim())
+      expect(nodes.some(n => {
+        const p = (n as unknown as { props: { color?: string; backgroundColor?: string } }).props
+        return String(n.text) === run.text && p.color === run.fg && p.backgroundColor === run.bg
+      })).toBe(true)
+    }
   })
 
   t('desktop draws every mascot through Svg from clawdSvg, animated only while working', async ($, on) => {

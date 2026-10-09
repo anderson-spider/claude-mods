@@ -1,6 +1,6 @@
 import type { Elements, RenderSurface } from 'claude-code'
 
-import { ROLE_COLOR, clawdLines, clawdSvg } from './clawd.ts'
+import { COLS, ROWS, ROLE_COLOR, clawdRuns, clawdSvg } from './clawd.ts'
 import type { Mood } from './clawd.ts'
 import type { MascotProps } from './mascot.tsx'
 import { ago } from './roster'
@@ -319,7 +319,7 @@ export function timelineSource(slots: Slot[], session: SessionInfo, now: number,
 }
 
 export function drawPanel(el: PanelElements, data: PanelData): unknown {
-  const { Box, Button } = el
+  const { Box, Button, Text } = el
   const layout = layoutOf(data.surface, data.placement)
   const isDesk = layout === 'desktop'
   const isMini = layout === 'mini'
@@ -555,12 +555,12 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     })
 
   // ------- art
-  const MW = 8
+  const MW = COLS
   const LW = 15
   const canArt = isDesk ? !!el.Svg : true
-  // A mascot: an Svg on desktop, the Client on the terminal, static colorless rows with no Client.
+  // A mascot: an Svg on desktop, the Client on the terminal, static colored rows with no Client.
   const art = (key: string, role: SlotName, mood: Mood, size: 'small' | 'large', background = DESK_PANEL): unknown => {
-    const w = isDesk ? (size === 'large' ? 9.75 : 7.25) : size === 'large' ? LW : MW
+    const w = isDesk ? (size === 'large' ? 9.75 : 7.25) : COLS
     if (isDesk) {
       const Svg = el.Svg!
       const px = size === 'large' ? 64 : 46
@@ -573,7 +573,11 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     if (canClient && el.mascot) return <Box key={key} width={w} flexShrink={0}>{el.mascot({ key: `${key}-c`, props: { role, mood, size } })}</Box>
     return (
       <Box key={key} width={w} flexShrink={0} flexDirection="column">
-        {clawdLines(role, mood, 0, size).map((row, k) => <Box key={k}>{text({ text: row })}</Box>)}
+        {clawdRuns(role, mood, 0, size).map((row, k) => (
+          <Box key={k} flexDirection="row">
+            {row.map((run, i) => <Text key={String(i)} color={run.fg} backgroundColor={run.bg}>{run.text}</Text>)}
+          </Box>
+        ))}
       </Box>
     )
   }
@@ -742,7 +746,7 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
         }),
       ], undefined, CW))
     }
-    const lines = body.length
+    const lines = Math.max(body.length, showArt ? ROWS : 0)
     const stripe = (
       <Box key="stripe" flexDirection="column" flexShrink={0}>
         {Array.from({ length: lines }, (_, k) => <Box key={k}>{text({ text: '▎', color: engineName(engine), dim: isPlanned })}</Box>)}
@@ -862,7 +866,7 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     }
     const hasTiles = isDesk && W >= 36
     const showArt = canArt && IW >= 36
-    // The terminal draws the session's mascot at the original Claude Code size; the app keeps the large one.
+    // Terminal agents and the session share the same frame; the app keeps its larger session SVG.
     const sessionSize = isDesk ? 'large' : 'small'
     const TW = showArt ? IW - ((isDesk ? LW : MW) + 2) : IW
     const lines: unknown[] = [
@@ -875,7 +879,7 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
       lines.push(line('o5', [{ text: 'Cost', dim: true }, cost, { text: 'Tokens', dim: true }, tokens, { text: 'Time', dim: true }, timeSeg()], undefined, TW))
     }
     if (roster.delegating.length) lines.push(line('o6', [{ text: 'delegating →', dim: true }, ...delegatingSegs()], undefined, TW))
-    const content = Math.max(showArt ? (isDesk ? 6 : 3) : 0, lines.length)
+    const content = Math.max(showArt ? (isDesk ? 6 : ROWS) : 0, lines.length)
     const inner = showArt
       ? <Box key="o-row" gap={2} width={IW}>{art('art-orchestrator', 'orchestrator', running ? 'work' : 'idle', sessionSize, HEX.card)}<Box flexDirection="column" width={TW}>{lines}</Box></Box>
       : <Box key="o-col" flexDirection="column" width={IW}>{lines}</Box>
