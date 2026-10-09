@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'claude-code/testing'
+import { describe, expect, test, mock } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 import type { AgentSpawnInput, ConfigSetInput, On, TurnStepInput } from 'claude-code'
 
@@ -1034,5 +1034,113 @@ describe('register', () => {
     expect(seen.tools).toEqual(['delegate', 'delegate_result', 'delegate_cancel'])
     await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: [], tools: [], outputStyle: null, traits: [] } as never)
     expect(seen.agents).toEqual(['oracle', 'designer', 'councillor-beta'])
+  })
+
+  describe('above-prompt strip', () => {
+    const mountStrip = ($: Engine, columns = 120) => $.ui.mount({
+      plugin: 'pantheon', surface: 'terminal', component: 'AbovePrompt',
+      props: { hasSurvey: false, isWorking: false, maxRows: 12, bodyColumns: columns } as never,
+      viewport: { columns, rows: 40 } as never,
+    })
+    const texts = async (ui: Awaited<ReturnType<typeof mountStrip>>) =>
+      (await ui.findAll({ type: 'Text' })).map(node => String(node.text)).join('|')
+    function stripWorld(on: On, opts: Parameters<typeof world>[1] = {}) {
+      const fixture = world(on, opts)
+      mock.store(on)
+      on('ui.render', { component: 'AbovePrompt' }, async (_$, e) => _$.ui.resolve(e).Text({ children: 'below-marker' }) as never)
+      on('session.id', async () => ({ value: 'session-1' }))
+      on('session.model', async () => ({ value: 'claude-opus-5' }))
+      on('session.usage', async () => ({
+        value: {
+          startedAt: 0, context: { tokens: 120_000, window: 1_000_000, percent: 12 },
+          rateLimits: [{ kind: 'five_hour', percentUsed: 32, resetsAt: new Date(3 * 3_600_000).toISOString() }],
+        },
+      }))
+      return fixture
+    }
+
+    test('renders the info, usage and limits rows with abovePrompt on', async ($, on) => {
+      stripWorld(on)
+      await start($)
+      const ui = await mountStrip($)
+      try {
+        const all = await texts(ui)
+        expect(all).toContain('Opus 5')
+        expect(all).toContain('120')
+        expect(all).toContain('5h')
+      } finally { await ui.unmount() }
+    })
+
+    test('draws nothing of its own and returns what is below with abovePrompt off', { options: { abovePrompt: false } }, async ($, on) => {
+      stripWorld(on)
+      await start($)
+      const ui = await mountStrip($)
+      try {
+        expect(await texts(ui)).toBe('below-marker')
+      } finally { await ui.unmount() }
+    })
+
+    test('yields to a survey', async ($, on) => {
+      stripWorld(on)
+      await start($)
+      const ui = await $.ui.mount({
+        plugin: 'pantheon', surface: 'terminal', component: 'AbovePrompt',
+        props: { hasSurvey: true, isWorking: false, maxRows: 12, bodyColumns: 120 } as never,
+        viewport: { columns: 120, rows: 40 } as never,
+      })
+      try {
+        expect(await texts(ui)).not.toContain('5h')
+      } finally { await ui.unmount() }
+    })
+
+    test('shows a card for a running background job and drops it when idle', async ($, on) => {
+      const { clock } = stripWorld(on, { hang: true })
+      await start($)
+      const idle = await mountStrip($)
+      try { expect(await texts(idle)).not.toContain('fixer') } finally { await idle.unmount() }
+      const out = parse(await $.tool.call({ tool: DELEGATE, agent: 'fixer', prompt: 'x', description: 'Wire the strip', background: true } as never))
+      expect(out.status).toBe('background')
+      await clock.settle()
+      const ui = await mountStrip($)
+      try {
+        const all = await texts(ui)
+        expect(all).toContain('fixer')
+        expect(all).toContain('Wire the strip')
+      } finally { await ui.unmount() }
+    })
+
+    test('every running non-role native gets its own card labeled with its subagent type', async ($, on) => {
+      stripWorld(on)
+      let n = 0
+      on('agent.spawn', async () => ({ model: 'model-1', agentId: `native-${++n}` }))
+      await start($)
+      const spawn = (tool_use_id: string, description: string, subagentType: string) =>
+        $.agent.spawn({ ...spawnInput, tool_use_id, description, subagentType } as never)
+      await spawn('t1', 'Map the auth code', 'Explore')
+      await spawn('t2', 'Find the cache TTL', 'Explore')
+      await spawn('t3', 'Review it', 'general-purpose')
+      await spawn('t4', 'Fourth one', 'pantheon:fixer')
+      const ui = await mountStrip($)
+      try {
+        const all = await texts(ui)
+        expect(all.match(/Explore/g)?.length).toBe(2)
+        expect(all).toContain('general-purpose')
+        expect(all).toContain('+1 more')
+        expect(all).toContain('Map the auth code')
+        expect(all).toContain('Find the cache TTL')
+      } finally { await ui.unmount() }
+    })
+
+    test('tracking hooks still pass events and results on unchanged', async ($, on) => {
+      const fixture = trackingWorld(on)
+      mock.store(on)
+      await start($)
+      const { chunks, result } = await step($, stepInput(0, undefined))
+      expect(chunks).toEqual([])
+      expect(result).toEqual({ ...stepResult, turnId: 'turn-1', index: 0 })
+      expect(await $.turn.complete(completeInput as never)).toEqual({ text: 'Completed' })
+      expect(await $.session.measure(measureInput as never)).toEqual({ changed: ['context'] })
+      expect(fixture.forwarded).toEqual(['turn-1'])
+    })
   })
 })

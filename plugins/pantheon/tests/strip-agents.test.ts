@@ -1,5 +1,5 @@
 import { test, expect } from "claude-code/testing";
-import { agentLines, agentsFromRoster, agentsKey, drawAgents, fmtClock, CARD_MIN_COLUMNS, FAIL_GRACE_MS, type AgentView } from "../hooks/strip/agents";
+import { agentLines, agentsFromState, agentsKey, drawAgents, fmtClock, CARD_MIN_COLUMNS, FAIL_GRACE_MS, type AgentView } from "../hooks/strip/agents";
 import { renderStrip } from "../hooks/strip/render";
 import { contextData, freshContext } from "../hooks/strip/context";
 import { infoData, freshInfo } from "../hooks/strip/info";
@@ -36,8 +36,8 @@ test("agents: nothing is drawn while idle", () => {
 });
 
 test("agents: a failed agent alone does not make a summary", () => {
-  const roster: any = { slots: [{ name: "fixer", instances: [{ id: "j1", task: "x", isActive: false, status: "error", startedAt: NOW - 5000, endedAt: NOW - 1000, rounds: [] }] }], others: [] };
-  expect(agentsFromRoster(roster, NOW)).toEqual([]);
+  const job: any = { id: "j1", agent: "fixer", description: "x", status: "error", startedAt: NOW - 5000, endedAt: NOW - 1000, cwd: "/" };
+  expect(agentsFromState([job], [], NOW)).toEqual([]);
 });
 
 test("agents: one running card with the role in the border, the task inside and the clock", () => {
@@ -102,25 +102,31 @@ test("agents: the clock reads m:ss, then HhMM", () => {
   expect(fmtClock(3_900_000)).toBe("1h05");
 });
 
-test("agents from the roster: running first by start, a recent failure only beside a running one", () => {
-  const inst = (id: string, extra: any = {}) => ({ id, task: id, isActive: true, status: "running", startedAt: NOW - 1000, rounds: [], ...extra });
-  const roster: any = {
-    slots: [
-      { name: "orchestrator", instances: [inst("main")] },
-      { name: "explorer", instances: [inst("late", { startedAt: NOW - 1000 }), inst("early", { startedAt: NOW - 9000 })] },
-      { name: "fixer", instances: [inst("bad", { isActive: false, status: "failed", endedAt: NOW - 2000 }), inst("old", { isActive: false, status: "error", endedAt: NOW - FAIL_GRACE_MS - 1 }), inst("done", { isActive: false, status: "done" })] },
-    ],
-    others: [inst("native", { startedAt: NOW - 500 })],
-  };
-  const list = agentsFromRoster(roster, NOW);
-  expect(list.map((a) => a.id)).toEqual(["early", "late", "native", "bad"]);
-  expect(list.map((a) => a.role)).toEqual(["explorer", "explorer", "agent", "fixer"]);
-  expect(list.map((a) => a.status)).toEqual(["running", "running", "running", "failed"]);
-  expect(agentsKey(list)).toBe("early:running,late:running,native:running,bad:failed");
-  // Idle: the orchestrator and finished work never make a summary.
-  roster.slots[1].instances = [];
-  roster.others = [];
-  expect(agentsFromRoster(roster, NOW)).toEqual([]);
+test("agents from state: running first by start, every native its own entry, a recent failure only beside a running one", () => {
+  const job = (id: string, agent: string, extra: any = {}): any => ({ id, agent, description: id, status: "running", startedAt: NOW - 1000, cwd: "/", ...extra });
+  const nat = (id: string, role: string, type: string, status: string, extra: any = {}): any => ({ id, role, type, task: id, model: "m", ctx: 0, out: 0, steps: 0, rounds: [{ startedAt: NOW - 1000, status, ...extra }] });
+  const jobs = [
+    job("early", "explorer", { startedAt: NOW - 9000 }),
+    job("bad", "fixer", { status: "error", endedAt: NOW - 2000 }),
+    job("old", "fixer", { status: "error", endedAt: NOW - FAIL_GRACE_MS - 1 }),
+    job("done", "fixer", { status: "done" }),
+    job("seat", "councillor:alpha", { description: undefined, status: "background", startedAt: NOW - 800 }),
+  ];
+  const natives = [
+    nat("n1", "other", "Explore", "running", { startedAt: NOW - 600 }),
+    nat("n2", "other", "Explore", "running", { startedAt: NOW - 500 }),
+    nat("n3", "other", "", "running", { startedAt: NOW - 400 }),
+    nat("n4", "oracle", "pantheon:oracle", "running", { startedAt: NOW - 300 }),
+    nat("n5", "councillor-beta", "pantheon:councillor-beta", "running", { startedAt: NOW - 200 }),
+  ];
+  const list = agentsFromState(jobs, natives, NOW);
+  expect(list.map((a) => a.id)).toEqual(["early", "seat", "n1", "n2", "n3", "n4", "n5", "bad"]);
+  expect(list.map((a) => a.role)).toEqual(["explorer", "council", "Explore", "Explore", "agent", "oracle", "council", "fixer"]);
+  expect(list.map((a) => a.status)).toEqual(Array(7).fill("running").concat("failed"));
+  expect(list[1].task).toBe("seat alpha");
+  expect(agentsKey(list.slice(0, 2))).toBe("early:running,seat:running");
+  // Idle: finished work never makes a summary.
+  expect(agentsFromState([job("done", "fixer", { status: "done" })], [nat("n", "other", "Explore", "done", { endedAt: NOW })], NOW)).toEqual([]);
 });
 
 test("strip: the summary sits above the info, usage and limits rows and below other mods", () => {

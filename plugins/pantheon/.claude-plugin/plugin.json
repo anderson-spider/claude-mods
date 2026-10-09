@@ -1,7 +1,7 @@
 {
   "name": "pantheon",
-  "version": "0.12.1",
-  "description": "Makes Claude an orchestrator that delegates to specialist roles on Codex or native Claude agents, chosen per profile, with an auto-opening /pantheon panel for roles, activity and a session log.",
+  "version": "0.13.0",
+  "description": "Makes Claude an orchestrator that delegates to specialist roles on Codex or native Claude agents, chosen per profile, with an auto-opening /pantheon panel for roles, activity and a session log, and a strip above the prompt with model, context, cache, rate limits and running agents.",
   "author": {
     "name": "anderson-spider"
   },
@@ -11,6 +11,20 @@
       "type": "string",
       "title": "Active profile",
       "description": "Picks the active Pantheon profile. Overrides the profile set in ~/.claude/pantheon.json or <repo>/.claude/pantheon.json; when unset, those files decide (default claude). Custom profiles defined in those files are accepted."
+    },
+    "abovePrompt": {
+      "type": "boolean",
+      "title": "Strip above the prompt",
+      "description": "Shows the info, usage and limits rows above the prompt, plus a summary of the roles running now. Turn it off to hide the strip.",
+      "default": true
+    },
+    "paceStart": {
+      "type": "number",
+      "title": "Pace start (points)",
+      "description": "How many points of the 5-hour and 7-day limits you may be ahead of the clock before the bar turns amber with a ▲ (up to it, there is no mark). 0 flags any lead; 5 ignores a lead of up to 5 points. Red still starts beyond 15 points ahead, or at 90% used.",
+      "default": 0,
+      "min": 0,
+      "max": 50
     }
   }
 }

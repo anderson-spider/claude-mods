@@ -1,5 +1,5 @@
 import { ROLE_COLOR, OK, BAD, cellWidth, padCells, truncCells } from '../theme'
-import type { Roster } from '../roster'
+import type { Job, Native } from '../../types'
 
 // The agents summary above the info row: up to three short flightdeck-style cards (round border,
 // pulse and role in the top edge, clock beside it) or, below CARD_MIN_COLUMNS, one row each.
@@ -7,7 +7,7 @@ import type { Roster } from '../roster'
 
 export type AgentView = {
   id: string
-  /** A pantheon role slot name ("explorer", "council", ...) or "agent" for anything else. */
+  /** A pantheon role ("explorer", "council", ...) or the subagent type of a native that is not one ("Explore"). */
   role: string
   task: string
   startedAt: number
@@ -38,21 +38,46 @@ export function fmtClock(ms: number): string {
   return m < 60 ? `${m}:${String(s % 60).padStart(2, '0')}` : `${Math.floor(m / 60)}h${String(m % 60).padStart(2, '0')}`
 }
 
+const isRole = (name: string): boolean => Object.hasOwn(ROLE_COLOR, name) && name !== 'orchestrator'
+
+/** The label of a native: its pantheon role (councillor seats read "council"), else its subagent type. */
+function nativeLabel(n: Native): string {
+  if (n.role.startsWith('councillor-')) return 'council'
+  if (isRole(n.role)) return n.role
+  return n.type || 'agent'
+}
+
 /**
- * The agents to show, from the roster: running ones by start, then ones that failed within the
- * grace window. Nothing at all unless something is running.
+ * The agents to show, straight from the jobs and natives (not the slot-based roster, which folds
+ * instances by role): every running one by start, then ones that failed within the grace window.
+ * Nothing at all unless something is running.
  */
-export function agentsFromRoster(roster: Roster, now: number): AgentView[] {
+export function agentsFromState(jobs: Job[], natives: Native[], now: number): AgentView[] {
   const running: AgentView[] = []
   const failed: AgentView[] = []
-  const slots = roster.slots.filter(s => s.name !== 'orchestrator').flatMap(s => s.instances.map(i => ({ role: s.name as string, i })))
-  const all = [...slots, ...roster.others.map(i => ({ role: 'agent', i }))]
-  for (const { role, i } of all) {
-    const task = i.task || (i.seat ? `seat ${i.seat}` : role)
-    if (i.isActive) running.push({ id: i.id, role, task, startedAt: i.startedAt, status: 'running' })
-    else if ((i.status === 'failed' || i.status === 'error') && now - (i.endedAt ?? i.startedAt) <= FAIL_GRACE_MS) {
-      failed.push({ id: i.id, role, task, startedAt: i.startedAt, status: 'failed', endedAt: i.endedAt })
-    }
+  const add = (v: AgentView, isRunning: boolean, isFailed: boolean) => {
+    if (isRunning) running.push(v)
+    else if (isFailed && now - (v.endedAt ?? v.startedAt) <= FAIL_GRACE_MS) failed.push({ ...v, status: 'failed' })
+  }
+  // A resumed Codex line shares a session id: only its latest job counts.
+  const lines = new Map<string, Job>()
+  for (const job of jobs) {
+    const key = job.sessionId ? `session:${job.sessionId}` : `job:${job.id}`
+    const seen = lines.get(key)
+    if (!seen || job.startedAt >= seen.startedAt) lines.set(key, job)
+  }
+  for (const job of lines.values()) {
+    const role = job.agent.startsWith('councillor:') ? 'council' : job.agent
+    const task = job.description || (job.agent.startsWith('councillor:') ? `seat ${job.agent.slice('councillor:'.length)}` : role)
+    add({ id: job.id, role, task, startedAt: job.startedAt, status: 'running', endedAt: job.endedAt },
+      job.status === 'running' || job.status === 'background', job.status === 'error')
+  }
+  for (const n of natives) {
+    const latest = n.rounds[n.rounds.length - 1]
+    if (!latest) continue
+    const label = nativeLabel(n)
+    add({ id: n.id, role: label, task: n.task || label, startedAt: latest.startedAt, status: 'running', endedAt: latest.endedAt },
+      latest.status === 'running', latest.status === 'failed')
   }
   if (running.length === 0) return []
   running.sort((a, b) => a.startedAt - b.startedAt)

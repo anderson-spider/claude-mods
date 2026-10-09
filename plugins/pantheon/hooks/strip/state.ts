@@ -1,3 +1,4 @@
+// Adapted from hud (Apache-2.0), built on Token Weather Usage; see NOTICE and LICENSE-APACHE.
 import { contextData, freshContext, pushReading } from "./context";
 import { limitData, freshLimits, paceStartOf } from "./limits";
 import { cacheData, freshCache, isOn, recordRequest, cacheState, cacheText } from "./cache";
@@ -105,6 +106,7 @@ export function noteStep(e: { model?: string; effort?: unknown }, result: { usag
 
 /** turn.complete of the main conversation: one context reading, saved. */
 export async function noteTurnComplete(host: StripHost) {
+  if (!stripData.turnsKey) return;
   const usage = await host.usage();
   pushReading(usage.context);
   await saveTurns(storeOf(host), turnsKey);
@@ -112,6 +114,7 @@ export async function noteTurnComplete(host: StripHost) {
 
 /** session.compact of the main conversation: the context drops now; the next request writes a new cache. */
 export async function noteCompact(host: StripHost, e: { agentId?: string; trigger?: string }, result: any) {
+  if (!stripData.turnsKey) return false;
   if (e.agentId || e.trigger === "precompute" || !result || typeof result.skip === "string") return false;
   const last = contextData.readings[contextData.readings.length - 1];
   if (Number.isFinite(result.tokensAfter) && result.tokensAfter > 0 && last?.window > 0) {
