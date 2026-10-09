@@ -13,7 +13,8 @@ function duration(ms: number): string {
 const squash = (s: string) => s.replace(/\s+/g, ' ').trim()
 const END_KINDS: Record<string, { kind: string; verb: string; word: 'in' | 'after' }> = {
   done: { kind: 'done', verb: 'done', word: 'in' },
-  completed: { kind: 'done', verb: 'done', word: 'in' },
+  error: { kind: 'failed', verb: 'failed', word: 'after' },
+  cancelled: { kind: 'stopped', verb: 'stopped', word: 'after' },
   failed: { kind: 'failed', verb: 'failed', word: 'after' },
   stopped: { kind: 'stopped', verb: 'stopped', word: 'after' },
   lost: { kind: 'lost', verb: 'lost', word: 'after' },

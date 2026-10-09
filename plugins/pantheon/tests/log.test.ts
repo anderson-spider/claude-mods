@@ -38,6 +38,18 @@ test('done and failed carry the duration', () => {
   ])
 })
 
+test('Codex error and cancelled job statuses log as failed and stopped', () => {
+  const a = inst({ id: 'a', task: 'Fix it', isActive: false, status: 'error' as never, startedAt: 1_000, endedAt: 41_000,
+    rounds: [{ startedAt: 1_000, endedAt: 41_000, status: 'error' as never }] })
+  const b = inst({ id: 'b', task: 'Stop it', isActive: false, status: 'cancelled' as never, startedAt: 50_000, endedAt: 55_000,
+    rounds: [{ startedAt: 50_000, endedAt: 55_000, status: 'cancelled' as never }] })
+  const out = logEvents(roster({ fixer: { instances: [b, a], history: [a, b] } }), 200_000, 50)
+  expect(out.filter(e => e.kind !== 'started').map(e => [e.kind, e.text])).toEqual([
+    ['failed', 'failed after 40s · Fix it'],
+    ['stopped', 'stopped after 5s · Stop it'],
+  ])
+})
+
 test('events are chronological across roles and limited to the most recent', () => {
   const a = inst({ id: 'a', isActive: false, status: 'done', endedAt: 9_000,
     rounds: [{ startedAt: 1_000, endedAt: 9_000, status: 'done' }] })

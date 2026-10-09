@@ -270,8 +270,9 @@ export function timelineSource(slots: Slot[], session: SessionInfo, now: number,
       const rounds = i.rounds.filter(inRange)
       rounds.forEach((r, m) => {
         const end = endOf(r, now)
-        const sx = xOf(r.startedAt)
-        const w = end === undefined ? 3 : Math.max(stepW, xOf(end) - sx)
+        const nextStart = rounds[m + 1] ? xOf(rounds[m + 1].startedAt) : x1
+        const sx = Math.min(xOf(r.startedAt), x1 - stepW)
+        const w = end === undefined ? 3 : Math.min(Math.max(stepW, xOf(end) - sx), Math.max(1, nextStart - sx))
         const ex = sx + w
         body += end === undefined
           ? `<rect x="${sx}" y="${by}" width="3" height="12" fill="${HEX.amber}"/><text x="${sx + 6}" y="${by + 10}" font-size="10" font-weight="600" fill="${HEX.amber}">?</text>`

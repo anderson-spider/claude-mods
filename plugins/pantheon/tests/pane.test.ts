@@ -1406,6 +1406,14 @@ describe('timelineSource', () => {
     const t0 = Math.floor(NOW_T / 15_000) * 15_000 - 900_000
     expect(Math.abs(Number(m![1]) - (136 + ((NOW_T - 300_000 - t0) / 900_000) * 528))).toBeLessThan(1e-6)
   })
+  test('a minimum-width bar never extends past now', () => {
+    const late: Slot[] = [slot({ name: 'fixer', instances: [inst({ id: 'n', isActive: false, status: 'done',
+      rounds: [{ startedAt: NOW_T - 3_000, endedAt: NOW_T - 1_000, status: 'done' }] })] })]
+    const svg = timelineSource(late, { isRunning: false }, NOW_T).source
+    const m = /<rect x="([\d.]+)" y="48" width="([\d.]+)" height="12" rx="3" fill="#[0-9a-f]+" stroke="#6aa3f0"\/>/.exec(svg)
+    expect(m).not.toBeNull()
+    expect(Number(m![1]) + Number(m![2])).toBeLessThanOrEqual(664 + 1e-6)
+  })
   test('a lost round with no end is a tick at its start, not a bar to now', () => {
     const lost: Slot[] = [slot({ name: 'fixer', instances: [inst({ id: 'l', isActive: false, status: 'lost',
       rounds: [{ startedAt: NOW_T - 600_000, status: 'lost' }] })] })]
