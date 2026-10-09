@@ -60,7 +60,7 @@ flightdeck users: `/plugin uninstall flightdeck`.
 
 ## Configuration
 
-Layers apply in order: built-in defaults, the `profile` field in `/config`, `~/.claude/pantheon.json`, then `<repo>/.claude/pantheon.json`. Each file holds only what changes. Top-level `profile` selects the active profile (default `claude`); the project selection overrides the user selection, and both override the `/config` choice. For example:
+Layers apply in order: built-in defaults, `~/.claude/pantheon.json`, then `<repo>/.claude/pantheon.json`; the `profile` field in `/config` is applied last for the profile choice only. Each file holds only what changes. Top-level `profile` selects the active profile (default `claude`); the project selection overrides the user selection, and the `/config` choice overrides both when set. For example:
 
 ```json
 {
@@ -86,7 +86,7 @@ Layers apply in order: built-in defaults, the `profile` field in `/config`, `~/.
 
 `/pantheon config` shows the active profile, effective configuration and field origins. Profile switches update the offered native agents and delegation routes.
 
-Pick the profile in `/config` (field `pantheon.profile`, free text) or with the selector in the panel header. Both write the same field, and the `/config` field accepts only names of built-in profiles or profiles defined in the JSON files; an unknown name, or any change while the JSON config is invalid, is refused with the reason. When a JSON file sets `profile`, the panel selector is locked and names the file that wins.
+Pick the profile in `/config` (field `pantheon.profile`, free text) or with the selector in the panel header. Both write the same field, and the `/config` field accepts only names of built-in profiles or profiles defined in the JSON files; an unknown name, or any change while the JSON config is invalid, is refused with the reason. When a JSON file sets `profile` and `/config` has no choice, the panel selector is locked and names that file; once a profile is chosen in `/config` or the panel, it wins.
 
 ### Migrating from 0.3
 

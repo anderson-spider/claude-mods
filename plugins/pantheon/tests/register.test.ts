@@ -186,7 +186,7 @@ describe('register', () => {
       await ui.select({ key: 'profile', value: 'personal' })
       expect(writes).toEqual([])
       expect(invalidations).toEqual([])
-      expect(seen.toasts).toEqual(['pantheon: profile: unknown profile "personal"; known: claude, codex, mixed'])
+      expect(seen.toasts).toEqual(['pantheon: unknown profile "personal"; known: claude, codex, mixed'])
     } finally { await ui.unmount() }
   })
 
@@ -275,11 +275,11 @@ describe('register', () => {
   }
 
   for (const [path, origin] of [[`${HOME}/.claude/pantheon.json`, 'user'], [`${ROOT}/.claude/pantheon.json`, 'project']] as const) {
-    test(`JSON profile from ${origin} overrides options.profile`, { options: { profile: 'codex' } }, async ($, on) => {
+    test(`options.profile overrides the ${origin} JSON profile`, { options: { profile: 'codex' } }, async ($, on) => {
       world(on, { files: { [path]: JSON.stringify({ profile: 'claude' }) } })
       await start($)
       const report = await $.command.run({ command: 'pantheon', args: 'config' })
-      expect(report.text).toContain(`Active profile: claude (${origin})`)
+      expect(report.text).toContain('Active profile: codex (settings)')
     })
   }
 

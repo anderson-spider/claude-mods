@@ -223,10 +223,6 @@ export async function loadConfig(
     }
     const meta: Provenance = { origins: new Map(), paths: new Map() }
     for (const field of leaves(config)) mark(meta, field, 'default')
-    if (selected !== undefined) {
-      config.profile = selected
-      mark(meta, 'profile', 'settings')
-    }
     const profiles = new Map<string, ProfileEntries>(Object.entries(BUILTIN_PROFILES).map(([name, profile]) => [name, copyProfile(profile)]))
     for (const [name, profile] of profiles) for (const field of leaves(profile)) mark(meta, `${name}|${field}`, 'default')
     const custom = new Map<string, { patch: ProfileLayer; layer: Layer }[]>()
@@ -237,6 +233,11 @@ export async function loadConfig(
         if (builtin) mergeProfile(builtin, name, patch, layer, meta)
         else custom.set(name, [...(custom.get(name) ?? []), { patch, layer }])
       }
+    }
+    // The /config selection wins over the files; it is applied after them so their `profile` is overridden.
+    if (selected !== undefined) {
+      config.profile = selected
+      mark(meta, 'profile', 'settings')
     }
     // Replay custom layers on the final Claude profile so switches and inherited origins survive.
     for (const [name, patches] of custom) {

@@ -126,7 +126,8 @@ function summarize(job: Job) {
 }
 
 export const register: Register = (on, options) => {
-  const selected = typeof options.profile === 'string' ? options.profile : undefined
+  // An empty field means /config never chose a profile, so the JSON layers decide.
+  const selected = typeof options.profile === 'string' && options.profile.trim() ? options.profile : undefined
   let state: ConfigResult = { ok: true, config: DEFAULT_CONFIG, origins: {}, profiles: Object.keys(BUILTIN_PROFILES) }
   let lastValid: PantheonConfig | undefined
   let lastValidResult: Extract<ConfigResult, { ok: true }> | undefined
@@ -217,7 +218,7 @@ export const register: Register = (on, options) => {
       user: `${home ?? '~'}/.claude/pantheon.json`,
       project: `${root}/.claude/pantheon.json`,
     }, lastValid, typeof value === 'string' ? value : undefined)
-    if (!current.ok) return current.error
+    if (!current.ok) return current.error.replace(/^profile: (unknown profile )/, '$1')
     if (typeof value !== 'string' || !current.profiles.includes(value)) {
       return `unknown profile "${value}"; known: ${current.profiles.join(', ')}`
     }
