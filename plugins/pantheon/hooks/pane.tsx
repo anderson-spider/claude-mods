@@ -461,6 +461,8 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
   }
   // 7: the warning gets its own row under the header, ahead of everything optional.
   const clockWarning = () => data.clockLost ? note('clock-lost', { text: 'clock unavailable', color: ROUND, bold: true }) : null
+  // The orchestrator plus every row the Agents cards list (running instances, idle roles and seats) and the other agents.
+  const agentTotalOf = () => { const r = agentRows(); return 1 + r.running.length + r.idle.length + roster.others.length }
   const footer = () => !isDesk || !el.Svg || W < 60 ? note('footer', {
     dim: true,
     text: 'keys: esc close',
@@ -469,7 +471,7 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
       {rule('footer-rule')}
       <Box key="footer-row" width={W} alignItems="center" justifyContent="space-between" gap={1}>
         <Box key="totals" gap={1} alignItems="center">
-          {render([numeric('agents-total', { text: String(1 + roles.reduce((n, s) => n + s.instances.length, 0) + roster.others.length), dim: true }, 3), { text: 'agents', dim: true }])}
+          {render([numeric('agents-total', { text: String(agentTotalOf()), dim: true }, 3), { text: agentTotalOf() === 1 ? 'agent' : 'agents', dim: true }])}
         </Box>
         {data.onClose ? <Box key="keys" alignItems="center" gap={1} flexShrink={0}>
           {text({ text: 'keys:', dim: true })}
@@ -537,6 +539,8 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
   const LABEL: Record<Group, string> = { running: 'Agents · running', idle: 'Agents · idle' }
   const collapsedSet = new Set<string>(data.collapsed ?? [])
   const rowH = isDesk ? 1.4 : 1
+  // Desktop cards are stacked with this gap between them, so a border never touches the next card.
+  const CARD_GAP = 0.5
 
   // A card. Terminal: round box lines with the title in the top border, every line exactly W cells.
   // Desktop: a native column over an SVG backplate; the title sits on its top edge.
@@ -555,7 +559,9 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
       }
     }
     if (isDesk) {
-      const total = 1.5 + sum + 0.6
+      // A fold button gets its own row inside the card, under the title that sits on the top edge.
+      const headH = toggleBtn ? 1.4 : 0
+      const total = 1.5 + headH + sum + 0.6
       const px = Math.round(total * 20)
       const back = el.Svg ? (
         <Box key={`${key}-back`} position="absolute" top={0} left={0}>
@@ -564,17 +570,17 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
       ) : null
       return {
         node: (
-          <Box key={key} position="relative" flexDirection="column" width={W} paddingX={2} paddingTop={1.5} paddingBottom={0.6}>
+          <Box key={key} position="relative" flexDirection="column" width={W} height={total} marginBottom={CARD_GAP} paddingX={2} paddingTop={1.5} paddingBottom={0.6}>
             {back}
             <Box key={`${key}-title`} position="absolute" top={0} left={2} backgroundColor={HEX.bg} paddingX={0.5}>
               {text({ text: title.label, bold: true, color })}
               {title.count === undefined ? null : text({ text: ` ${title.count}`, dim: true })}
             </Box>
-            {toggleBtn ? <Box key={`${key}-toggle`} position="absolute" top={0} right={2} backgroundColor={HEX.bg}>{toggleBtn()}</Box> : null}
+            {toggleBtn ? <Box key={`${key}-head`} width={W - 4} height={headH} alignItems="center" justifyContent="flex-end"><Box key={`${key}-toggle`}>{toggleBtn()}</Box></Box> : null}
             {rows.map(r => r.node)}
           </Box>
         ),
-        h: total, color,
+        h: total + CARD_GAP, color,
       }
     }
     const tag = title.count === undefined ? '' : ` ${title.count}`
@@ -708,7 +714,7 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     const mixed = isIdle && slot.engine === 'mixed'
     const model = modelName(i?.model ?? slot.model)
     const task = isOff ? (isIdle && slot.state !== 'off' ? 'Disabled' : `Disabled · ${slot.offReason ?? 'disabledAgents'}`)
-      : i ? squash(i.task || '(no description)') : '—'
+      : i ? squash(i.task || '(no description)') : ''
     let withModel = !compact
     let withStrip = !compact
     let withCtx = !compact && withCtxCol
@@ -730,8 +736,9 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     const items: StripItem[] = shown.map(rd => ({ state: stateOf(rd.status), role }))
     const extra = isIdle ? Math.max(0, (r.rounds?.length ?? 0) - 4) : 0
     const pct = agentCtx(i)
-    const time: Seg = i ? durationSeg(r.key, i, running) : { text: '—', dim: true }
-    const faded = isIdle && (!i || isOff)
+    // A role that never ran has no time and no task: those cells stay blank instead of two bare dashes.
+    const time: Seg = i ? durationSeg(r.key, i, running) : { text: '', dim: true }
+    const faded = isOff
     const list: Col[] = [
       { w: 2, segs: [dotOf(r)] },
       { w: NAME_W, segs: [{ text: truncCells(r.name, NAME_W - 1), color: ROLE_COLOR[role], bold: true, dim: faded }] },
@@ -871,7 +878,9 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     const cost: Seg = s.costUsd !== undefined ? { text: `≈$${s.costUsd.toFixed(2)}`, bold: true } : { text: '—', dim: true }
     const tokens: Seg = tokenText() === '—' ? { text: '—', dim: true } : { text: tokenText(), bold: true }
     const stateTexts: Seg[] = [dot, { text: running ? 'working' : 'idle', color: running ? RUN : undefined, dim: !running }]
-    const state: Seg[] = isDesk && el.Svg && IW >= 30
+    // Desktop's header already carries the working/idle badge (from 58 columns); the card repeats it only below that.
+    const headerBadge = isDesk && W >= 58
+    const state: Seg[] = headerBadge ? [] : isDesk && el.Svg && IW >= 30
       ? [{ node: plate('s-pill', 11.5, 1.3, running ? [rgba(OK, 0.16), rgba(OK, 0.7)] : HUD.neutral, render(stateTexts), 1.25, 0.6), w: 11.5 }]
       : [dot, { text: ' ', dim: true }, stateTexts[1]]
     const identity: Seg[] = [
@@ -886,7 +895,7 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     const ctxLabel: Seg = { text: 'ctx ', dim: true }
     // 'ctx ' and ' 100%' take 9 cells; the gauge takes the rest up to 30 blocks, or none when under 3.
     const gaugeN = Math.min(30, isDesk ? Math.floor(((IW - 13) * 8 - 9) / 11) : IW - 9)
-    rows.push({ node: space('s1', identity, state, isDesk ? 1.6 : undefined), h: isDesk ? 1.6 : 1 })
+    rows.push({ node: space('s1', identity, state, isDesk ? (headerBadge ? rowH : 1.6) : undefined), h: isDesk ? (headerBadge ? rowH : 1.6) : 1 })
     rows.push({
       node: plain('s-ctx', ctx != null
         ? [ctxLabel, ...(gaugeN >= 3 ? gaugeSegs('s-gauge', ctx, gaugeN) : []), { text: `${gaugeN >= 3 && !(isDesk && el.Svg) ? ' ' : ''}${Math.round(ctx)}%`, bold: true }]
@@ -931,7 +940,7 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     if (level < 5 && roster.others.length) blocks.push({ node: othersLine(), h: 1 })
     if (level <= 1 && isDesk && el.Svg) {
       const t = timelineSource(roster.slots, data.session, now, W)
-      blocks.push({ node: timelineCard(t), h: t.height / 20, color: SECTION_COLOR.timeline })
+      blocks.push({ node: <Box key="timeline-box" marginBottom={CARD_GAP}>{timelineCard(t)}</Box>, h: t.height / 20 + CARD_GAP, color: SECTION_COLOR.timeline })
     } else if (level <= 1 && !isDesk && !isTiny) {
       const t = timelineBlock()
       if (t) blocks.push(t)
@@ -945,7 +954,7 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     blocks.forEach((b, k) => {
       linked.push(b)
       const next = blocks[k + 1]
-      if (level < 4 && !isTiny && b.color && next?.color) linked.push(railBlock(`rail-${k}`, next.color))
+      if (level < 4 && !isTiny && !isDesk && b.color && next?.color) linked.push(railBlock(`rail-${k}`, next.color))
     })
     if (level < 5) linked.push({ node: footer(), h: isDesk ? (W >= 60 ? 2.05 : 3.05) : 1 })
     return linked
