@@ -2,8 +2,8 @@ import type { On } from 'claude-code'
 import { describe, expect, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
-import { DELEGATE, HOME, RESULT, parse, start, world } from './fixtures/world'
-import { PANE_ID, configReport, doctorReport, statusText, timelineSource } from '../hooks/pane'
+import { DELEGATE, HOME, ROOT, RESULT, parse, start, world } from './fixtures/world'
+import { PANE_ID, configReport, doctorReport, drawPanel, statusText, timelineSource } from '../hooks/pane'
 import { clawdLines, clawdSvg } from '../hooks/clawd'
 import { loadConfig } from '../hooks/config'
 import { buildRoster } from '../hooks/roster'
@@ -30,7 +30,7 @@ test('doctor treats unavailable Codex as informational only when unused', async 
   expect(doctorReport({ ...facts, usesCodex: true })).toContain('fail')
 })
 
-type Opts = { placement?: 'dock' | 'inline'; columns?: number; rows?: number; bodyRows?: number }
+type Opts = { placement?: 'dock' | 'inline'; columns?: number; rows?: number; bodyRows?: number; requestId?: string }
 
 const mounted: { unmount: () => Promise<unknown> }[] = []
 
@@ -43,7 +43,7 @@ async function mountPane($: Engine, surface: (typeof SURFACES)[number], opts: Op
       title: 'Pantheon', isFocused: true, bodyColumns: opts.columns ?? 120, placement: opts.placement ?? 'dock',
       scroll: { offset: 0, bodyRows: opts.bodyRows ?? opts.rows ?? 40 },
     } as never,
-    requestId: PANE_ID,
+    requestId: opts.requestId ?? PANE_ID,
     viewport: { columns: opts.columns ?? 120, rows: opts.rows ?? 40 } as never,
   })
   mounted.push(ui)
@@ -86,6 +86,131 @@ const t = (name: string, fn: (...args: Parameters<Parameters<typeof test>[1]>) =
   })
 
 describe('pane', () => {
+  for (const surface of SURFACES) {
+    for (const placement of ['dock', 'inline'] as const) {
+      for (const profile of ['claude', 'codex']) {
+        test(`profile selector lists custom profiles and writes the selected name (${surface}, ${placement}, ${profile})`,
+          { options: { profile } }, async ($, on) => {
+            try {
+              world(on, { files: { [`${HOME}/.claude/pantheon.json`]: '{"profiles":{"personal":{}}}' } })
+              const writes: unknown[] = []
+              on('config.set', async (_$, e) => { writes.push({ key: e.key, value: e.value }); return { value: e.value } })
+              await start($)
+              const ui = await mountPane($, surface, { placement })
+              const select = await ui.find({ key: 'profile' })
+              expect(select).toBeDefined()
+              const props = (select as unknown as { props: { value: string; options: { value: string }[] } }).props
+              expect(props.value).toBe(profile)
+              expect(props.options.map(o => o.value)).toEqual(['claude', 'codex', 'mixed', 'personal'])
+              await ui.select({ key: 'profile', value: 'personal' })
+              expect(writes).toEqual([{ key: 'pantheon.profile', value: 'personal' }])
+            } finally { await release() }
+          })
+      }
+
+      for (const layer of ['user', 'project'] as const) {
+        t(`profile selector is read-only and names the winning ${layer} layer (${surface}, ${placement})`, async ($, on) => {
+          world(on, { files: {
+            [`${HOME}/.claude/pantheon.json`]: JSON.stringify({ profile: layer === 'project' ? 'claude' : 'mixed' }),
+            ...(layer === 'project' ? { [`${ROOT}/.claude/pantheon.json`]: '{"profile":"mixed"}' } : {}),
+          } })
+          const writes: unknown[] = []
+          on('config.set', async (_$, e) => { writes.push(e); return { value: e.value } })
+          await start($)
+          const ui = await mountPane($, surface, { placement })
+          const all = await texts(ui)
+          expect(all).toContain(`set by ${layer} pantheon.json`)
+          expect(all).toContain('● mixed')
+          expect(all).toContain('claude')
+          expect(all).toContain('codex')
+          expect(await ui.find({ type: 'Select', key: 'profile' })).toBeUndefined()
+          expect(await ui.find({ type: 'Button', key: 'profile-mixed' })).toBeUndefined()
+          expect(writes).toEqual([])
+          await release()
+          const narrow = await mountPane($, surface, { placement, columns: 24 })
+          expect(await texts(narrow)).toContain(`${layer} JSON`)
+          expect(await narrow.find({ type: 'Select', key: 'profile' })).toBeUndefined()
+        })
+      }
+
+      t(`profile selector offers buttons when Select is absent (${surface}, ${placement})`, async ($, on) => {
+        world(on)
+        const choices: string[] = []
+        on('ui.render', { component: 'Pane', requestId: 'profile-fixture' }, ($, e) => {
+          const { Box, Text, Button } = $.ui.resolve(e)
+          return drawPanel({ Box, Text, Button }, {
+            surface, placement, columns: 120, rows: 40, now: NOW,
+            profiles: ['claude', 'codex', 'mixed'], activeProfile: 'mixed', onProfile: name => { choices.push(name) },
+            roster: buildRoster({ jobs: [], natives: [], session: { isRunning: false }, config: MIXED }), jobs: [], session: { isRunning: false },
+            tab: 'agents', hasClient: false, onTab: () => {}, onCancel: () => {}, onCopy: () => {},
+          }) as never
+        })
+        const ui = await mountPane($, surface, { placement, requestId: 'profile-fixture' })
+        const buttons = await ui.findAll({ type: 'Button' })
+        const labels = buttons.map(b => (b as unknown as { props: { label: string } }).props.label)
+        expect(labels).toContain('● mixed')
+        // The fixture, rather than Pantheon, owns the handlers in this drawing.
+        type Node = { props?: { key?: string }; press?: { plugin: string }; children?: Node[] }
+        const nodes = (n: Node): Node[] => [n, ...(n.children ?? []).flatMap(nodes)]
+        const drawn = nodes(await ui.drawn() as Node)
+        for (const name of ['claude', 'codex', 'mixed']) {
+          const key = `profile-${name}`
+          const plugin = drawn.find(n => n.props?.key === key)?.press?.plugin
+          expect(plugin).toBeDefined()
+          await ui.press({ key, plugin })
+        }
+        expect(choices).toEqual(['claude', 'codex', 'mixed'])
+      })
+    }
+  }
+
+  t('the default profile remains interactive without a JSON selection', async ($, on) => {
+    world(on, { files: { [`${HOME}/.claude/pantheon.json`]: '{}' } })
+    const writes: string[] = []
+    const viewWrites: unknown[] = []
+    on('config.set', async (_$, e) => { writes.push(String(e.value)); return { value: e.value } })
+    on('state.set', async (_$, e, next) => {
+      if (e.key === 'view') viewWrites.push(e.value)
+      return next(e)
+    })
+    await start($)
+    const ui = await mountPane($, 'terminal')
+    expect((await ui.find({ key: 'profile' }))?.props.value).toBe('claude')
+    const before = viewWrites.length
+    await ui.select({ key: 'profile', value: 'mixed' })
+    expect(writes).toEqual(['mixed'])
+    expect(viewWrites.length).toBe(before)
+  })
+
+  t('long profile names clip at narrow widths while selections carry the full name', async ($, on) => {
+    const name = 'a-personal-profile-with-a-long-name'
+    world(on, { files: { [`${HOME}/.claude/pantheon.json`]: JSON.stringify({ profiles: { [name]: {} } }) } })
+    const writes: string[] = []
+    on('config.set', async (_$, e) => { writes.push(String(e.value)); return { value: e.value } })
+    await start($)
+    for (const surface of SURFACES) {
+      for (const placement of ['dock', 'inline'] as const) {
+        const ui = await mountPane($, surface, { placement, columns: 8, rows: 8 })
+        const select = await ui.find({ key: 'profile' })
+        const options = select?.props.options as { value: string; label: string }[]
+        expect(options.map(o => o.value)).toContain(name)
+        expect(options.every(o => o.label.length <= 8)).toBe(true)
+        await ui.select({ key: 'profile', value: name })
+        await release()
+      }
+    }
+    expect(writes).toEqual([name, name, name, name])
+  })
+
+  t('profile selection denial shows the reason as a toast', async ($, on) => {
+    const { seen } = world(on, { files: { [`${HOME}/.claude/pantheon.json`]: '{}' } })
+    on('config.set', async () => ({ deny: 'profile settings are read-only' }))
+    await start($)
+    const ui = await mountPane($, 'terminal')
+    await ui.select({ key: 'profile', value: 'codex' })
+    expect(seen.toasts.some(text => text.includes('profile settings are read-only'))).toBe(true)
+  })
+
   for (const surface of SURFACES) {
     t(`agents tab shows the session, the three groups and every role once (${surface})`, async ($, on) => {
       world(on)

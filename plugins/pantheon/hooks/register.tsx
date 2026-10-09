@@ -636,6 +636,7 @@ export const register: Register = (on, options) => {
     const now = read1 ?? lastNow ?? Math.max(...stamps)
     return drawPanel({
       Box, Text, Button,
+      ...('Select' in els ? { Select: els.Select } : {}),
       ...('Svg' in els ? { Svg: els.Svg } : {}),
       ...(hasClient ? {
         // The module paths are literals here: the engine reads them off this entry module. The
@@ -659,6 +660,16 @@ export const register: Register = (on, options) => {
       roster: buildRoster({ jobs: list, natives: tracked, session: info, config: state.config }),
       jobs: list,
       session: info,
+      profiles: state.profiles,
+      activeProfile: state.config.profile,
+      profileLockedBy: state.origins.profile === 'user' || state.origins.profile === 'project' ? state.origins.profile : undefined,
+      onProfile: name => {
+        void $.config.set({ key: 'pantheon.profile', value: name }).then(result => {
+          if (result.deny) $.ui.toast(`pantheon: ${result.deny}`)
+        }).catch(error => {
+          $.ui.toast(`pantheon: could not select profile: ${error instanceof Error ? error.message : String(error)}`)
+        })
+      },
       tab: normalizeView(view).tab,
       collapsed: normalizeView(view).collapsed ?? [],
       hasClient,
