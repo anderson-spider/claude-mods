@@ -9,6 +9,29 @@ const base: CodexCall = {
 }
 
 describe('codex argv', () => {
+  test('git writes the common dir with TOML escaping and enables network', () => {
+    expect(buildArgv({ ...base, agent: 'git', writableRoots: ['/repo "quoted"/back\\slash/.git'], network: true })).toEqual([
+      'codex', 'exec', '--json', '-s', 'workspace-write',
+      '-c', 'sandbox_workspace_write.writable_roots=["/repo \\"quoted\\"/back\\\\slash/.git"]',
+      '-c', 'sandbox_workspace_write.network_access=true', '--ignore-rules', '-',
+    ])
+  })
+
+  test('other roles retain their exact argv without the new fields', () => {
+    for (const agent of ['explorer', 'librarian', 'fixer', 'oracle', 'designer', 'councillor:alpha']) {
+      for (const sandbox of ['read-only', 'workspace-write'] as const) {
+        for (const noNetwork of [false, true]) {
+          expect(buildArgv({ ...base, agent, sandbox, noNetwork })).toEqual([
+            'codex', 'exec', '--json', '-s', sandbox,
+            '-c', 'sandbox_workspace_write.writable_roots=[]',
+            ...(noNetwork ? ['-c', 'sandbox_workspace_write.network_access=false'] : []),
+            '--ignore-rules', '-',
+          ])
+        }
+      }
+    }
+  })
+
   test('new run argv', () => {
     expect(buildArgv({ ...base, model: 'm', effort: 'high', noNetwork: true })).toEqual([
       'codex', 'exec', '--json', '-s', 'workspace-write', '-m', 'm',

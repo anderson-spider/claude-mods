@@ -15,6 +15,30 @@ function call(config: PantheonConfig, agent = 'fixer'): CodexCall {
 }
 
 describe('Codex roles', () => {
+  test('git requires its resolved common dir and grants only that extra root', () => {
+    expect(resolveCodexCall(CODEX, { agent: 'git', prompt: 't' }, ctx, prompts))
+      .toEqual({ error: expect.stringContaining('git common dir could not be resolved') })
+    expect(resolveCodexCall(CODEX, { agent: 'git', prompt: 't' }, { ...ctx, gitCommonDir: '/main/.git' }, prompts))
+      .toEqual(expect.objectContaining({ sandbox: 'workspace-write', writableRoots: ['/main/.git'], network: true }))
+    for (const agent of ROLES.filter(role => role !== 'git')) {
+      const result = resolveCodexCall(CODEX, { agent, prompt: 't' }, { ...ctx, gitCommonDir: '/main/.git' }, prompts)
+      expect(result).not.toHaveProperty('writableRoots')
+      expect(result).not.toHaveProperty('network')
+    }
+  })
+
+  test('git refuses each setting that blocks writes or network', async () => {
+    for (const [setting, patch] of [
+      ['sandboxCap', { sandboxCap: 'read-only' }],
+      ['noNetwork', { noNetwork: true }],
+      ['sandbox', { agents: { git: { sandbox: 'read-only' } } }],
+    ] as const) {
+      const result = resolveCodexCall(await resolved('codex', patch), { agent: 'git', prompt: 't' }, ctx, prompts)
+      expect(result).toEqual({ error: expect.stringContaining(setting) })
+      expect(result).toEqual({ error: expect.stringContaining('needs write access to the git dir and network') })
+    }
+  })
+
   test('roles route by engine', async () => {
     const codex = await resolved('codex')
     expect(call(codex, 'oracle').sandbox).toBe('read-only')

@@ -99,12 +99,14 @@ async function pingCodex(
     const call = resolveCodexCall(
       config,
       { agent: target.name, prompt: `Reply with exactly: pong ${target.name}. Do not use any tools.` },
-      ctx,
+      target.name === 'git' ? { ...ctx, gitCommonDir: ctx.cwd } : ctx,
       rolePrompt,
     )
     if ('error' in call) return fail(call.error)
-    // Fixer and designer default to workspace-write; a ping never needs to write.
+    // A ping never needs writes or the git role's explicit network access.
     call.sandbox = 'read-only'
+    delete call.writableRoots
+    delete call.network
     const start = await io.now()
     const timeout = new Promise<'timeout'>(resolve => { timer = io.after(PING_TIMEOUT_MS, () => resolve('timeout')) })
     const run = io.run(buildArgv(call), { cwd: call.cwd, stdin: call.prompt, timeoutMs: PING_TIMEOUT_MS })
@@ -379,8 +381,28 @@ export const register: Register = (on, options) => {
     const checked = await checkCwd(io.realPath, ws.root, cwd)
     if (typeof checked !== 'string') return reply({ error: checked.error })
 
+    let gitCommonDir: string | undefined
+    if (args.agent === 'git') {
+      try {
+        const argv = [
+          'env', '-u', 'GIT_DIR', '-u', 'GIT_COMMON_DIR', '-u', 'GIT_WORK_TREE',
+          '-u', 'GIT_INDEX_FILE', '-u', 'GIT_OBJECT_DIRECTORY', '-u', 'GIT_ALTERNATE_OBJECT_DIRECTORIES',
+          '-u', 'GIT_CEILING_DIRECTORIES', '-u', 'GIT_DISCOVERY_ACROSS_FILESYSTEM',
+          'git', 'rev-parse', '--path-format=absolute', '--git-common-dir',
+        ]
+        const resolveCommonDir = async (cwd: string) => {
+          const common = await io.run(argv, { cwd })
+          return common.exitCode === 0 && common.stdout.trim()
+            ? io.realPath(common.stdout.trim()) : undefined
+        }
+        const rootCommonDir = await resolveCommonDir(ws.root)
+        const cwdCommonDir = await resolveCommonDir(checked)
+        if (rootCommonDir && rootCommonDir === cwdCommonDir) gitCommonDir = rootCommonDir
+      } catch { /* Resolution failures are reported by resolveCodexCall before spawning. */ }
+    }
+
     const call = resolveCodexCall(current.config, args, {
-      cwd: checked, skipGitRepoCheck: !ws.isRepo, resumeSessionId,
+      cwd: checked, skipGitRepoCheck: !ws.isRepo, resumeSessionId, gitCommonDir,
     }, rolePrompt)
     if ('error' in call) return reply({ error: call.error })
 

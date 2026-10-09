@@ -24,6 +24,7 @@ export interface DelegateArgs {
 }
 export interface CodexCall {
   agent: string; model?: string; effort?: string; sandbox: Sandbox; noNetwork: boolean
+  writableRoots?: string[]; network?: boolean
   prompt: string; cwd: string; skipGitRepoCheck: boolean; resumeSessionId?: string
 }
 import type { Tokens } from '../types'
