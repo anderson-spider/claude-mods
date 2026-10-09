@@ -217,6 +217,7 @@ export function timelineSource(slots: Slot[], session: SessionInfo, now: number,
   const x0 = Math.min(136, SW * 0.4)
   const x1 = SW - 24
   const xOf = (t: number) => x0 + ((Math.min(now, Math.max(t0, t)) - t0) / span) * (x1 - x0)
+  const stepW = (x1 - x0) / (span / 15_000)
   const hex = (e: Engine | 'mixed') => HEX[e]
   const soft = (e: Engine) => (e === 'claude' ? HEX.claudeSoft : HEX.codexSoft)
   const inRange = (r: RoundView) => (endOf(r, now) ?? r.startedAt) >= t0
@@ -270,7 +271,7 @@ export function timelineSource(slots: Slot[], session: SessionInfo, now: number,
       rounds.forEach((r, m) => {
         const end = endOf(r, now)
         const sx = xOf(r.startedAt)
-        const w = end === undefined ? 3 : Math.max(3, xOf(end) - sx)
+        const w = end === undefined ? 3 : Math.max(stepW, xOf(end) - sx)
         const ex = sx + w
         body += end === undefined
           ? `<rect x="${sx}" y="${by}" width="3" height="12" fill="${HEX.amber}"/><text x="${sx + 6}" y="${by + 10}" font-size="10" font-weight="600" fill="${HEX.amber}">?</text>`
@@ -714,8 +715,11 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     const jobId = running && i?.engine === 'codex' && i.isActive ? i.jobId : undefined
     const cancelLabel = IW >= 50 ? 'Cancel' : 'x'
     const cancelW = jobId && IW >= 30 ? cancelLabel.length + 4 : 0
-    const fixedW = () => 2 + NAME_W + TIME_W + cancelW + (withCtx ? CTX_W : 0) + (withModel ? MODEL_W : 0) + (withStrip ? STRIP_W : 0)
-    // The ctx column is the first to go, then the model, then the strip.
+    // The job id (Codex Running rows only) is the first thing to drop when the row is short.
+    let jobW = jobId ? Math.min(cellWidth(jobId), 14) + 1 : 0
+    const fixedW = () => 2 + NAME_W + TIME_W + cancelW + jobW + (withCtx ? CTX_W : 0) + (withModel ? MODEL_W : 0) + (withStrip ? STRIP_W : 0)
+    if (IW - fixedW() < 12) jobW = 0
+    // The ctx column goes next, then the model, then the strip.
     if (IW - fixedW() < 12) withCtx = false
     if (IW - fixedW() < 12) withModel = false
     if (IW - fixedW() < 12) withStrip = false
@@ -734,6 +738,7 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
       ...(withStrip ? [{ w: STRIP_W, segs: stripSegs(`strip-${r.key}`, items, extra) }] : []),
       { w: TIME_W, segs: [time] },
       ...(withCtx ? [{ w: CTX_W, segs: pct === undefined ? [] : [{ text: `ctx ${pct}%`, dim: true }] }] : []),
+      ...(jobW ? [{ w: jobW, segs: [{ text: truncCells(jobId!, jobW - 1), dim: true }] }] : []),
       { w: taskW, segs: [{ text: task, dim: !running }] },
       ...(cancelW ? [{ w: cancelW, end: true, segs: [{ node: <Button key={`cancel-${jobId}`} label={cancelLabel} onPress={() => data.onCancel(jobId!)} />, w: cancelW }] }] : []),
     ]

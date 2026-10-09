@@ -356,6 +356,38 @@ describe('pane', () => {
       expect(labels.filter(x => x === 'Cancel')).toHaveLength(1)
     })
 
+    t(`job id shows dim on a Running Codex row only, never Claude or Idle (${surface})`, async ($, on) => {
+      world(on)
+      seed(on, {
+        jobs: [job({ id: 'pjr', agent: 'fixer', status: 'running' }), job({ id: 'pjd', agent: 'explorer', status: 'done', endedAt: NOW - 30_000 })],
+        natives: [native({ id: 'n1x' })],
+      })
+      await start($)
+      const all = await texts(await mountPane($, surface, { rows: 70 }))
+      expect(all.filter(x => x.includes('pjr'))).toHaveLength(1)
+      expect(all.some(x => x.includes('pjd'))).toBe(false)
+      expect(all.some(x => x.includes('n1x'))).toBe(false)
+    })
+
+    t(`job id drops before the model, ctx and Cancel when the row is short (${surface})`, async ($, on) => {
+      world(on)
+      seed(on, { jobs: [job({ id: 'pjr-long-id', agent: 'fixer', status: 'running' })] })
+      await start($)
+      const wide = await texts(await mountPane($, surface, { rows: 70, columns: 120 }))
+      await release()
+      expect(wide.some(x => x.includes('pjr-long-id'))).toBe(true)
+      for (const columns of [60, 44]) {
+        await release()
+        const ui = await mountPane($, surface, { rows: 70, columns })
+        const narrow = await texts(ui)
+        if (!narrow.some(x => x.includes('pjr-long-id'))) {
+          expect(await ui.find({ key: 'cancel-pjr-long-id' })).toBeDefined()
+          return
+        }
+      }
+      throw new Error('job id never dropped while Cancel stayed')
+    })
+
     test(`Cancel on a resumed line carries the id of the running round (${surface})`, () => {
       const jobs = [
         job({ id: 'pj1', agent: 'fixer', status: 'done', sessionId: 's1', startedAt: NOW - 300_000, endedAt: NOW - 200_000 }),
@@ -967,6 +999,19 @@ describe('pane', () => {
     expect(await texts(await mountPane($, 'terminal', { rows: 24, columns: 80 }))).not.toContain('Last 15 minutes')
   })
 
+  t('docked timeline gives a 6-second run one cell in its lane', async ($, on) => {
+    const { clock } = world(on)
+    const data: { jobs?: Job[] } = {}
+    seed(on, data)
+    await start($)
+    const clockNow = clock.now()
+    data.jobs = [job({ id: 'pq1', agent: 'fixer', status: 'done', startedAt: clockNow - 300_000, endedAt: clockNow - 294_000 })]
+    const tall = await texts(await mountPane($, 'terminal', { rows: 80, columns: 80 }))
+    const from = tall.indexOf('Last 15 minutes')
+    expect(from).toBeGreaterThan(-1)
+    expect(tall.slice(from).some(x => /^━+$/.test(x))).toBe(true)
+  })
+
   const hhmmss = (at: number) => {
     const d = new Date(at)
     return [d.getHours(), d.getMinutes(), d.getSeconds()].map(n => String(n).padStart(2, '0')).join(':')
@@ -1349,6 +1394,17 @@ describe('timelineSource', () => {
     const idle = timelineSource(lane, { ...session, isRunning: false }, NOW_T).source
     expect(idle.split('fill="#4a4945"/>').length - 1).toBe(3)
     expect(idle).not.toContain('height="12" rx="3" fill="#ebedf1"/>')
+  })
+  test('a run shorter than one 15-second step still draws one step width in its lane', () => {
+    const quick: Slot[] = [slot({ name: 'fixer', instances: [inst({ id: 'q', isActive: false, status: 'done',
+      rounds: [{ startedAt: NOW_T - 300_000, endedAt: NOW_T - 294_000, status: 'done' }] })] })]
+    const svg = timelineSource(quick, { isRunning: false }, NOW_T).source
+    const step = (664 - 136) / 60
+    const m = /<rect x="([\d.]+)" y="48" width="([\d.]+)" height="12" rx="3" fill="#[0-9a-f]+" stroke="#6aa3f0"\/>/.exec(svg)
+    expect(m).not.toBeNull()
+    expect(Math.abs(Number(m![2]) - step)).toBeLessThan(1e-6)
+    const t0 = Math.floor(NOW_T / 15_000) * 15_000 - 900_000
+    expect(Math.abs(Number(m![1]) - (136 + ((NOW_T - 300_000 - t0) / 900_000) * 528))).toBeLessThan(1e-6)
   })
   test('a lost round with no end is a tick at its start, not a bar to now', () => {
     const lost: Slot[] = [slot({ name: 'fixer', instances: [inst({ id: 'l', isActive: false, status: 'lost',
