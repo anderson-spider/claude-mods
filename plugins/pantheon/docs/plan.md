@@ -1,6 +1,6 @@
 # Pantheon Mod Implementation Plan
 
-> 2026-10-08: flightdeck was absorbed into the Pantheon panel and removed from the marketplace. `/pantheon` now opens automatically with Agents and Jobs tabs; `/pantheon close` closes it. The original plan below is preserved as history; see [the panel design](../../../docs/superpowers/specs/2026-10-08-pantheon-panel-design.md) for the replacement.
+> 2026-10-08: flightdeck was absorbed into the Pantheon panel and removed from the marketplace. `/pantheon` now opens automatically with Agents and Jobs tabs; `/pantheon close` closes it. The original plan below is preserved as history.
 
 > Design record from the original repository (`anderson-spider/claude-workflow-codex`, PR #4). Paths cited here moved: tests are in `tests/`, not `hooks/*.test.ts`, and the API types come from `.claude-plugin/types/` instead of `vendor/`.
 
@@ -20,7 +20,6 @@ e testáveis (config, roles, workspace, codex, jobs, prompts); `register.tsx` e
 (`claude-code`, `claude-code/testing`), `codex-cli` ≥ 0.161, `claude plugin test`,
 `claude plugin validate`, `tsc` 5.9.
 
-**Spec:** `docs/superpowers/specs/2026-10-08-pantheon-mod-design.md` (revisão 4).
 Toda tarefa lê a seção do spec indicada nela.
 
 ## Global Constraints
@@ -142,10 +141,10 @@ Regras do runtime descobertas (valem para todas as tasks):
 
 **Files:**
 - Delete: `runner/`, `bin/`, `examples/`, `references/`, `SKILL.md`,
-  `scripts/sync-skill.js`, `docs/*.png` e demais arquivos de `docs/` fora de
-  `docs/superpowers/`, `.claude/agents/`, `package.json`, `package-lock.json` (se
+  `scripts/sync-skill.js`, `docs/*.png` e demais arquivos de `docs/`,
+  `.claude/agents/`, `package.json`, `package-lock.json` (se
   existir), conteúdo atual de `.claude-plugin/`
-- Move: `docs/superpowers/fixtures/codex-exec-sample.jsonl` →
+- Move: a amostra `codex-exec-sample.jsonl` →
   `hooks/fixtures/codex-exec-sample.ts` (`export const CODEX_EXEC_SAMPLE = \`...\``,
   conteúdo idêntico; importável pelos testes sem `$.fs`)
 - Create: `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`,

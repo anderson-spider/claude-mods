@@ -96,18 +96,21 @@ Replace `…` with your Codex model. The sandbox change also applies to `mixed`:
 
 Ask for a council ("run a council", "second opinion", "quero consenso", "segunda opinião", "conselho") and the orchestrator gets Council Mode: it dispatches every active seat in the background in the same turn, collects each answer as it arrives and synthesizes under `## Council Response`, `## Per-Councillor Details` and `## Council Summary`. Only prompts you type (terminal or Remote Control) trigger it, never quoted code, slash commands or SDK prompts.
 
-## Superpowers
+## Skills
 
-When a [superpowers](https://github.com/obra/superpowers) skill dispatches a subagent, the orchestrator uses the Pantheon role and keeps the skill's process:
+Four skills carry the workflow, and the orchestrator invokes them itself when their description applies. They replace the superpowers integration, so the superpowers plugin is not needed.
 
-| Skill dispatch | Pantheon |
+| Skill | Use |
 | --- | --- |
-| implementer (subagent-driven-development) | fixer through its configured engine; designer through its configured engine for UI |
-| task reviewer and re-reviewer | oracle through its configured engine, one dispatch per gate |
-| final branch code reviewer | oracle through its configured engine, a separate dispatch |
-| parallel agents | several `delegate`/Agent calls in one message |
+| `grill` | Before creative or multi-step work: interviews you one question at a time, reads code and docs through the explorer and librarian, opens a worktree with `EnterWorktree` and writes the plan. |
+| `execute` | Carries out the plan: briefs the fixer or designer from the task section, requires the test first, commits, and sends only `risk: yes` tasks to the oracle. |
+| `debug` | On a bug or failing test: reproduce, form hypotheses, confirm the cause, then fix. |
+| `finish` | Before claiming work is done: runs the real validation, one oracle review of the branch, then the PR. |
 
-Each mapping uses `delegate` for Codex or the `pantheon:<role>` Agent for Claude. `executing-plans` stays in the main agent. The implementer never commits; the orchestrator commits, records the SHA and builds the review package. Codex implementers reuse a session per task with `resume` and have read-only `.git`; native implementers are instructed not to commit or push. Native oracle reviewers have no Bash; Codex oracle reviewers can read the review package through their read-only shell.
+- The plan lives in `.pantheon/plans/YYYY-MM-DD-<topic>.md`. `grill` adds `.pantheon/` to `.git/info/exclude`, so it is never committed and goes away with the worktree.
+- Each task lists goal, files, interfaces, acceptance, `risk` and `parallel`. Tasks run in sequence unless marked `parallel: yes` with disjoint files; explorer and librarian lanes always run in parallel.
+- A failed task is retried once by the same implementer, then diagnosed by the oracle, then handed to you. An oracle gate is one review plus at most two re-reviews.
+- The worktree starts from `origin/<default branch>` unless `worktree.baseRef` is `head`.
 
 ## Security
 

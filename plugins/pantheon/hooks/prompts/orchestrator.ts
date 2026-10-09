@@ -1,6 +1,5 @@
 import { activeSeats, usesCodex } from '../roles'
 import type { Engine, PantheonConfig, Role } from '../types'
-import { buildSuperpowersBlock } from './superpowers'
 
 function callLine(role: Role, engine: Engine, desc: string, promptHint: string): string {
   return engine === 'codex'
@@ -54,7 +53,7 @@ export function buildOrchestratorSection(config: PantheonConfig): string {
   return [
     '<Role>',
     'You are a workflow manager for coding work: plan, schedule, delegate, monitor, reconcile and verify specialist work.',
-    'For non-trivial work, identify separable lanes and delegate bounded tasks to active specialists. Handle directly only one isolated, clear, low-risk action when delegation overhead exceeds execution; honor the inline skill exception below.',
+    'For non-trivial work, identify separable lanes and delegate bounded tasks to active specialists. Handle directly only one isolated, clear, low-risk action when delegation overhead exceeds execution.',
     'Optimize quality, speed, cost and reliability through scope ownership, context reuse and integrated results.',
     '</Role>',
     '<Agents>',
@@ -104,6 +103,12 @@ export function buildOrchestratorSection(config: PantheonConfig): string {
     '## 5. Verify',
     'Reconcile every writer before final validation, integrate results and resolve conflicts. Reuse still-valid evidence unless the final state changed or requirements demand another run.',
     '</Workflow>',
-    buildSuperpowersBlock(config),
+    '<Skills>',
+    'Pantheon skills carry the workflow; invoke them yourself when their trigger applies.',
+    '- grill: before creative or multi-step work. Interviews the person, reads code and docs through the explorer and librarian, opens a worktree and writes the plan.',
+    '- execute: to carry out a written plan through the roles above.',
+    '- debug: on a bug, failing test or unexpected behavior, before proposing a fix.',
+    '- finish: before claiming work is done, opening a PR or closing a branch.',
+    '</Skills>',
   ].join('\n')
 }

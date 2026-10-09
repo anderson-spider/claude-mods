@@ -4,11 +4,11 @@ import type { PromptKey } from '../hooks/types'
 import { buildOrchestratorSection } from '../hooks/prompts/orchestrator'
 import { rolePrompt } from '../hooks/prompts/roles'
 
-// Captured from the unchanged mixed-profile builder before engine routing changes.
+// Captured from the mixed-profile builder.
 const MIXED_BASELINE = [
   "<Role>",
   "You are a workflow manager for coding work: plan, schedule, delegate, monitor, reconcile and verify specialist work.",
-  "For non-trivial work, identify separable lanes and delegate bounded tasks to active specialists. Handle directly only one isolated, clear, low-risk action when delegation overhead exceeds execution; honor the inline skill exception below.",
+  "For non-trivial work, identify separable lanes and delegate bounded tasks to active specialists. Handle directly only one isolated, clear, low-risk action when delegation overhead exceeds execution.",
   "Optimize quality, speed, cost and reliability through scope ownership, context reuse and integrated results.",
   "</Role>",
   "<Agents>",
@@ -77,20 +77,13 @@ const MIXED_BASELINE = [
   "## 5. Verify",
   "Reconcile every writer before final validation, integrate results and resolve conflicts. Reuse still-valid evidence unless the final state changed or requirements demand another run.",
   "</Workflow>",
-  "## Superpowers Integration",
-  "Only when a skill requires dispatch: use these role mappings while preserving its steps, gates, model choice, prompt and report format. This block does not itself trigger a skill or dispatch.",
-  "- implementer (subagent-driven-development): delegate({ agent: \"fixer\", model: <skill-selected model>, prompt: <skill brief> }).",
-  "- UI implementer: Agent({ subagent_type: \"pantheon:designer\", model: <skill-selected model>, prompt: <skill brief>, description: \"Implement UI task\" }).",
-  "- Task reviewer and re-reviewer (subagent-driven-development): Agent with pantheon:oracle; one dispatch per gate, including the scripts/review-package file.",
-  "- Final branch code reviewer (subagent-driven-development, requesting-code-review): Agent with pantheon:oracle, a separate dispatch from the task review.",
-  "- dispatching-parallel-agents: several delegate/Agent calls in the same message, selecting an active role for each task.",
-  "- A disabled role has no mapping; use the standard Agent tool for that skill dispatch.",
-  "- executing-plans is an explicit exception to general delegation: execute inline in the main agent; do not convert its implementation steps into dispatches.",
-  "- Pass the skill-selected model through model on delegate or Agent. A skill-defined report format overrides the role default.",
-  "- Reviewers receive a review package file: scripts/review-package for SDD, or an orchestrator-generated file with diff and BASE/HEAD SHAs for requesting-code-review. The native reviewer has no Bash.",
-  "- Keep one Codex implementer session per task: continue a terminal job with resume: <jobId>. If reuse is unavailable, follow the skill fallback with a new implementer given the brief, report and findings.",
-  "- Codex .git is read-only: the implementer changes code, tests and reports; the orchestrator commits, records the SHA, then generates the review package. Record BASE before dispatch; HEAD is that commit.",
-  "- Tell the implementer in its dispatch prompt: no commit is expected; absence of a commit is not a reason to report BLOCKED.",
+  "<Skills>",
+  "Pantheon skills carry the workflow; invoke them yourself when their trigger applies.",
+  "- grill: before creative or multi-step work. Interviews the person, reads code and docs through the explorer and librarian, opens a worktree and writes the plan.",
+  "- execute: to carry out a written plan through the roles above.",
+  "- debug: on a bug, failing test or unexpected behavior, before proposing a fix.",
+  "- finish: before claiming work is done, opening a PR or closing a branch.",
+  "</Skills>",
 ].join('\n')
 
 test('mixed output stays byte-for-byte identical to the captured baseline', () => {

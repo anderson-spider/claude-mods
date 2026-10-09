@@ -4,3 +4,8 @@ plugins/*/.claude-plugin/types/
 # State and socket of the codex-computer-use helper, if it runs straight from the folder
 plugins/codex-computer-use/helper/state/
 plugins/codex-computer-use/helper/run/
+
+# superpowers output and Pantheon plans stay local
+docs/superpowers/
+.superpowers/
+.pantheon/

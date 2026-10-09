@@ -1,6 +1,6 @@
 # Pantheon: mod do Claude Code no estilo oh-my-opencode-slim
 
-> 2026-10-08: flightdeck was absorbed into the Pantheon panel and removed from the marketplace. `/pantheon` now opens automatically with Agents and Jobs tabs; `/pantheon close` closes it. The original design below is preserved as history; see [the panel design](../../../docs/superpowers/specs/2026-10-08-pantheon-panel-design.md) for the replacement.
+> 2026-10-08: flightdeck was absorbed into the Pantheon panel and removed from the marketplace. `/pantheon` now opens automatically with Agents and Jobs tabs; `/pantheon close` closes it. The original design below is preserved as history.
 
 > Design record from the original repository (`anderson-spider/claude-workflow-codex`, PR #4). Paths cited here moved: tests are in `tests/`, not `hooks/*.test.ts`, and the API types come from `.claude-plugin/types/` instead of `vendor/`.
 
@@ -38,15 +38,14 @@ papel entre os grupos Codex e nativo.
   `src/hooks/council-inject/index.ts`, `docs/council.md`. Crédito no README.
 - API de mods: tipos do engine (`claude-code.d.ts`) e `reference.md` da skill
   plugin-authoring.
-- Amostra real de `codex exec --json` (codex-cli 0.161.0):
-  `docs/superpowers/fixtures/codex-exec-sample.jsonl`.
+- Amostra real de `codex exec --json` (codex-cli 0.161.0).
 - Skills do superpowers 6.4.2 (subagent-driven-development, requesting-code-review,
   dispatching-parallel-agents, executing-plans).
 
 ## O que sai do repositório
 
 `runner/`, `bin/`, `examples/`, `references/`, `SKILL.md`, `scripts/sync-skill.js`,
-`docs/` (screenshots dos viewers; fica só `docs/superpowers/`), `.claude/agents/`
+`docs/` (screenshots dos viewers), `.claude/agents/`
 (papéis migram para o mod), `package.json` atual (scripts do runner) e o conteúdo atual
 de `.claude-plugin/`. `README.md`, `CONTRIBUTING.md` e `.github/workflows/ci.yml` são
 reescritos.
