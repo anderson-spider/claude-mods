@@ -7,7 +7,7 @@ IMPORTANT: prompts and panel modules include third-party work. Keep `LICENSE` an
 ## Engines and roles
 
 - Roles and seats on Codex run through `delegate`, `delegate_result` and `delegate_cancel` on `codex exec --json`.
-- Roles and seats on Claude are registered as native `pantheon:<role>` or `pantheon:councillor-<seat>` agents with `$.agent.register` (no tool list, so they inherit the session's tools; oracle and councillors get `disallowedTools` Edit, Write and NotebookEdit), and hidden by an `agent.offer` guard when disabled or moved to Codex.
+- Roles and seats on Claude are registered as native `pantheon:<role>` or `pantheon:councillor-<seat>` agents with `$.agent.register` (no tool list, so they inherit the session's tools; oracle and councillors get `disallowedTools` Edit, Write and NotebookEdit; explorer, librarian, oracle and councillors also get Agent, `mcp__pantheon__delegate` and `mcp__pantheon__delegate_cancel`; fixer and designer get none), and hidden by an `agent.offer` guard when disabled or moved to Codex.
 - `codex.ts` builds argv and parses JSONL.
 - `jobs.ts` runs foreground and background jobs and prompts the session when one ends.
 - `roles.ts` and `workspace.ts` resolve the role, sandbox and `cwd` inside the repository root by `realPath`.
