@@ -302,7 +302,7 @@ describe('pane', () => {
       const all = await texts(ui)
       expect(all.some(x => x.includes('map pane render tree'))).toBe(true)
       expect(all.some(x => x.includes("rg 'x' plugins/"))).toBe(true)
-      expect(all).toContain('43.5k') // input + output of the job, in the session tokens
+      expect(all).toContain('41.2k↑ 2.3k↓') // input and output of the job, in the session tokens
       if (surface === 'desktop') {
         expect(all).toContain('1')
         expect(all).toContain('running')
@@ -909,6 +909,44 @@ describe('pane', () => {
       }
       await release()
     }
+  })
+
+  t('session tokens split into input and output and show only the side that exists', async ($, on) => {
+    world(on)
+    const data: { jobs?: Job[]; session?: SessionInfo } = {
+      jobs: [job({ tokens: { input: 41200, cached: 0, output: 2300 } })],
+      session: { isRunning: false, context: { tokens: 10_000, window: 200_000, percent: 5 } },
+    }
+    seed(on, data)
+    await start($)
+    for (const surface of SURFACES) {
+      expect(await texts(await mountPane($, surface, { rows: 70 }))).toContain('51.2k↑ 2.3k↓')
+      await release()
+    }
+    data.jobs = [job({ tokens: { input: 0, cached: 0, output: 900 } })]
+    data.session = { isRunning: false }
+    expect(await texts(await mountPane($, 'terminal', { rows: 70 }))).toContain('900↓')
+    await release()
+    data.jobs = []
+    const none = await texts(await mountPane($, 'terminal', { rows: 70 }))
+    expect(none.some(x => x.includes('↑') || x.includes('↓'))).toBe(false)
+  })
+
+  t('a running Claude agent shows ctx N% only when the session reports the window', async ($, on) => {
+    world(on)
+    const data = { natives: [native({ ctx: 20_000 })], session: { isRunning: true, turnStartedAt: NOW - 5000, context: { tokens: 1, window: 200_000, percent: 1 } } as SessionInfo }
+    seed(on, data)
+    await start($)
+    for (const surface of SURFACES) {
+      expect(await texts(await mountPane($, surface, { rows: 70 }))).toContain('ctx 10%')
+      await release()
+    }
+    // Narrow rows give the column up first and keep the model.
+    const narrow = await texts(await mountPane($, 'terminal', { rows: 70, columns: 40 }))
+    expect(narrow).not.toContain('ctx 10%')
+    await release()
+    data.session = { isRunning: true, turnStartedAt: NOW - 5000 }
+    expect((await texts(await mountPane($, 'terminal', { rows: 70 }))).some(x => /^ctx \d+%$/.test(x))).toBe(false)
   })
 
   t('rails keep a visible track at rest on both surfaces', async ($, on) => {

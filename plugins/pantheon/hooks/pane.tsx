@@ -207,7 +207,6 @@ const kilo = (n: number | undefined | null) => (n == null ? '—' : n < 1000 ? S
 const esc = (s: string) => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!)
 
 // A Codex job reports usage only once it has some; until then the line would be all dashes.
-const hasTokens = (i: Instance) => i.engine !== 'codex' || i.tokens.input !== undefined || i.tokens.out > 0
 
 const activeOf = (slot: Slot) => slot.instances.filter(i => i.isActive)
 
@@ -709,7 +708,15 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     return runs.map(r => ({ text: r.text, color: r.color, dim: r.dim }))
   }
 
-  const tokenTotal = (i: Instance) => (i.engine === 'codex' ? (i.tokens.input ?? 0) : (i.tokens.ctx ?? 0)) + i.tokens.out
+  // What an instance read (Codex input, Claude context) and wrote.
+  const tokensIn = (i: Instance) => (i.engine === 'codex' ? i.tokens.input : i.tokens.ctx) ?? 0
+  // A running Claude agent's context use: its ctx over the window the session reports. Without the
+  // window nothing is guessed and the column stays out.
+  const agentCtx = (i: Instance | undefined): number | undefined => {
+    const window = data.session.context?.window
+    return i && i.isActive && i.engine === 'claude' && i.tokens.ctx != null && window
+      ? Math.min(100, Math.round((i.tokens.ctx / window) * 100)) : undefined
+  }
   const durationSeg = (key: string, i: Instance, running: boolean): Seg => {
     if (running) return clockSeg(`clk-${i.id}`, i.startedAt, null, 'inactive')
     const end = i.endedAt ?? endOf(i.rounds[i.rounds.length - 1] ?? { startedAt: i.startedAt, status: i.status }, now)
@@ -739,8 +746,9 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
   const NAME_W = 10
   const MODEL_W = 11
   const TIME_W = 6
+  const CTX_W = 9
   const STRIP_W = isDesk ? 7.5 : 5
-  const agentRowBlock = (r: AgentRow, compact: boolean): RowBlock => {
+  const agentRowBlock = (r: AgentRow, compact: boolean, withCtxCol: boolean): RowBlock => {
     const { slot, inst: i } = r
     const role = slot.name
     const isPlanned = r.group === 'planned'
@@ -751,13 +759,17 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     const task = isPlanned ? (isOff ? `Disabled · ${slot.offReason ?? 'disabledAgents'}` : 'Waiting for work') : squash(i!.task || '(no description)')
     let withModel = !compact
     let withStrip = !compact
-    const fixedW = () => 2 + NAME_W + TIME_W + (withModel ? MODEL_W : 0) + (withStrip ? STRIP_W : 0)
+    let withCtx = !compact && withCtxCol
+    const fixedW = () => 2 + NAME_W + TIME_W + (withCtx ? CTX_W : 0) + (withModel ? MODEL_W : 0) + (withStrip ? STRIP_W : 0)
+    // The ctx column is the first to go, then the model, then the strip.
+    if (IW - fixedW() < 12) withCtx = false
     if (IW - fixedW() < 12) withModel = false
     if (IW - fixedW() < 12) withStrip = false
     const taskW = Math.max(0, IW - fixedW())
     const items: StripItem[] = i
       ? i.rounds.slice(-4).map(rd => ({ state: stateOf(rd.status), role }))
       : [{ state: 'planned', role }]
+    const pct = agentCtx(i)
     const time: Seg = i ? durationSeg(r.key, i, running) : { text: '—', dim: true }
     const list: Col[] = [
       { w: 2, segs: [dotOf(r)] },
@@ -765,6 +777,7 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
       ...(withModel ? [{ w: MODEL_W, segs: [{ text: truncCells(model, MODEL_W - 1), dim: true }] }] : []),
       ...(withStrip ? [{ w: STRIP_W, segs: stripSegs(`strip-${r.key}`, items) }] : []),
       { w: TIME_W, segs: [time] },
+      ...(withCtx ? [{ w: CTX_W, segs: pct === undefined ? [] : [{ text: `ctx ${pct}%`, dim: true }] }] : []),
       { w: taskW, segs: [{ text: task, dim: !running }] },
     ]
     const main = cols(r.key, list, IW, isDesk ? rowH : undefined)
@@ -789,7 +802,8 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     const eff = isFolded ? 'head' : mode
     const toggle: Toggle | undefined = W >= 30 && data.onToggle && (isFolded || mode !== 'head')
       ? { group: g, label: isFolded ? 'Expand' : 'Collapse' } : undefined
-    const built = eff === 'head' ? [] : rows.map(r => agentRowBlock(r, eff === 'compact'))
+    const withCtxCol = rows.some(r => agentCtx(r.inst) !== undefined)
+    const built = eff === 'head' ? [] : rows.map(r => agentRowBlock(r, eff === 'compact', withCtxCol))
     return [frame(`${g}-rows`, SECTION_COLOR[g], { label: LABEL[g], count: rows.length }, built, toggle)]
   }
 
@@ -829,9 +843,13 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
   }
 
   // ------- session
-  const sumTokens = (): number => {
-    const all = [...roles.flatMap(s => s.history ?? s.instances), ...roster.others]
-    return all.reduce((n, i) => n + tokenTotal(i), 0) + (data.session.context?.tokens ?? 0)
+  // Entrance and exit over every run plus the session's own context as input; a side nobody reported is left out.
+  const tokenText = (): string => {
+    const all = [...roles.flatMap(r => r.history ?? r.instances), ...roster.others]
+    const input = all.reduce((n, i) => n + tokensIn(i), 0) + (data.session.context?.tokens ?? 0)
+    const output = all.reduce((n, i) => n + i.tokens.out, 0)
+    const sides = [...(input > 0 ? [`${kilo(input)}↑`] : []), ...(output > 0 ? [`${kilo(output)}↓`] : [])]
+    return sides.length ? sides.join(' ') : '—'
   }
   const ctxColor = (pct: number) => (pct > 85 ? BAD : pct > 70 ? SECTION_COLOR.planned : SECTION_COLOR.session)
   const gaugeSegs = (key: string, pct: number, n: number): Seg[] => {
@@ -860,7 +878,7 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
       return [{ node: line('o-c', left, running && s.turnStartedAt ? [timeSeg()] : undefined, W, keepOf(left, 2)), h: 1 }]
     }
     const cost: Seg = s.costUsd !== undefined ? { text: `≈$${s.costUsd.toFixed(2)}`, bold: true } : { text: '—', dim: true }
-    const tokens: Seg = { text: kilo(sumTokens()), bold: true }
+    const tokens: Seg = tokenText() === '—' ? { text: '—', dim: true } : { text: tokenText(), bold: true }
     const stateTexts: Seg[] = [dot, { text: running ? 'working' : 'idle', color: running ? RUN : undefined, dim: !running }]
     const state: Seg[] = isDesk && el.Svg && IW >= 30
       ? [{ node: plate('s-pill', 11.5, 1.3, running ? [rgba(OK, 0.16), rgba(OK, 0.7)] : HUD.neutral, render(stateTexts), 1.25, 0.6), w: 11.5 }]
