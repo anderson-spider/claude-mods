@@ -209,6 +209,20 @@ export const register: Register = (on, options) => {
     return { sessionCwd, root: authorizedRoot(sessionCwd, gitTop), isRepo: gitTop !== undefined }
   }
 
+  async function profileDenial(io: Pick<Io, 'cwd' | 'run' | 'home' | 'readText'>, value: unknown): Promise<string | undefined> {
+    const { root } = await workspace(io)
+    const home = await io.home()
+    const current = await loadConfig(io.readText, {
+      user: `${home ?? '~'}/.claude/pantheon.json`,
+      project: `${root}/.claude/pantheon.json`,
+    }, lastValid, typeof value === 'string' ? value : undefined)
+    if (!current.ok) return current.error
+    if (typeof value !== 'string' || !current.profiles.includes(value)) {
+      return `unknown profile "${value}"; known: ${current.profiles.join(', ')}`
+    }
+    return undefined
+  }
+
   async function refreshConfig(io: Pick<Io, 'home' | 'readText' | 'toast' | 'registerAgent'>, root: string): Promise<ConfigResult> {
     const home = await io.home()
     state = await loadConfig(io.readText, {
@@ -300,17 +314,8 @@ export const register: Register = (on, options) => {
       home: () => $.env.get('HOME'),
       readText: async path => (await $.fs.exists(path)) ? String(await $.fs.read(path)) : undefined,
     }
-    const { root } = await workspace(io)
-    const home = await io.home()
-    const current = await loadConfig(io.readText, {
-      user: `${home ?? '~'}/.claude/pantheon.json`,
-      project: `${root}/.claude/pantheon.json`,
-    }, lastValid, typeof e.value === 'string' ? e.value : undefined)
-    if (!current.ok) return { deny: current.error }
-    if (typeof e.value !== 'string' || !current.profiles.includes(e.value)) {
-      return { deny: `unknown profile "${e.value}"; known: ${current.profiles.join(', ')}` }
-    }
-    return next(e)
+    const deny = await profileDenial(io, e.value)
+    return deny === undefined ? next(e) : { deny }
   })
 
   on('session.start', async ($, e, next) => {
@@ -679,7 +684,12 @@ export const register: Register = (on, options) => {
       activeProfile: panelConfig.config.profile,
       profileLockedBy: profileOrigin === 'user' || profileOrigin === 'project' ? profileOrigin : undefined,
       onProfile: name => {
-        void $.config.set({ key: 'pantheon.profile', value: name }).then(result => {
+        void profileDenial(io, name).then(async deny => {
+          if (deny !== undefined) {
+            $.ui.toast(`pantheon: ${deny}`)
+            return
+          }
+          const result = await $.config.set({ key: 'pantheon.profile', value: name })
           if (result.deny) $.ui.toast(`pantheon: ${result.deny}`)
           else $.ui.invalidate('ui.render')
         }).catch(error => {

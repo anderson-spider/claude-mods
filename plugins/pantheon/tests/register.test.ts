@@ -143,13 +143,50 @@ describe('register', () => {
   test('panel selection requests a redraw after a successful config.set', async ($, on) => {
     world(on, { files: { [`${HOME}/.claude/pantheon.json`]: '{}' } })
     const invalidations: string[] = []
-    on('config.set', async (_$, e) => ({ value: e.value }))
+    const writes: { key: string; value: unknown }[] = []
+    on('config.set', async (_$, e) => { writes.push({ key: e.key, value: e.value }); return { value: e.value } })
     on('ui.invalidate', async (_$, e) => { invalidations.push(e.event); return { value: undefined } })
     await start($)
     const ui = await mountPanel($)
     try {
       await ui.select({ key: 'profile', value: 'codex' })
+      expect(writes).toEqual([{ key: 'pantheon.profile', value: 'codex' }])
       expect(invalidations).toEqual(['ui.render'])
+    } finally { await ui.unmount() }
+  })
+
+  test('panel selection denies user JSON that became invalid since the render without writing or invalidating', async ($, on) => {
+    const { files, seen } = world(on, { files: { [`${HOME}/.claude/pantheon.json`]: '{}' } })
+    const writes: ConfigSetInput[] = []
+    const invalidations: string[] = []
+    on('config.set', async (_$, e) => { writes.push(e); return { value: e.value } })
+    on('ui.invalidate', async (_$, e) => { invalidations.push(e.event); return { value: undefined } })
+    const ui = await mountPanel($)
+    try {
+      files[`${HOME}/.claude/pantheon.json`] = '{ broken'
+      await ui.select({ key: 'profile', value: 'mixed' })
+      expect(writes).toEqual([])
+      expect(invalidations).toEqual([])
+      expect(seen.toasts).toEqual([`pantheon: ${HOME}/.claude/pantheon.json: Invalid JSON`])
+    } finally { await ui.unmount() }
+  })
+
+  test('panel selection denies a custom profile removed from project JSON since the render without writing or invalidating', async ($, on) => {
+    const { files, seen } = world(on, { files: {
+      [`${HOME}/.claude/pantheon.json`]: '{}',
+      [`${ROOT}/.claude/pantheon.json`]: '{"profiles":{"personal":{}}}',
+    } })
+    const writes: ConfigSetInput[] = []
+    const invalidations: string[] = []
+    on('config.set', async (_$, e) => { writes.push(e); return { value: e.value } })
+    on('ui.invalidate', async (_$, e) => { invalidations.push(e.event); return { value: undefined } })
+    const ui = await mountPanel($)
+    try {
+      files[`${ROOT}/.claude/pantheon.json`] = '{}'
+      await ui.select({ key: 'profile', value: 'personal' })
+      expect(writes).toEqual([])
+      expect(invalidations).toEqual([])
+      expect(seen.toasts).toEqual(['pantheon: profile: unknown profile "personal"; known: claude, codex, mixed'])
     } finally { await ui.unmount() }
   })
 
