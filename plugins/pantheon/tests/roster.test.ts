@@ -1,5 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import { ago, buildRoster, ROLE_ORDER } from '../hooks/roster'
+import { CODEX, CLAUDE } from './fixtures/profiles'
 import type { Job, Native, PantheonConfig, SessionInfo } from '../hooks/types'
 
 const config = (overrides: Partial<PantheonConfig> = {}): PantheonConfig => ({
@@ -98,7 +99,7 @@ test('delegating lists active roles in order', () => {
   expect(result.slots[0]).toEqual(expect.objectContaining({ state: 'active', model: 'session-model', engine: 'claude' }))
 })
 
-test('orchestrator is never off and native disabling uses role offers', () => {
+test('orchestrator is never off and roles use disabledAgents', () => {
   const result = roster([], [], config({ disabledAgents: ['orchestrator', 'oracle', 'designer'] }),
     { isRunning: false, model: 'session-model' })
   expect(result.slots[0]).toEqual(expect.objectContaining({ state: 'idle', model: 'session-model' }))
@@ -166,4 +167,35 @@ test('ago formats', () => {
   expect(ago(60_000)).toBe('1m')
   expect(ago(3_600_000)).toBe('1h')
   expect(ago(0)).toBe('0s')
+})
+
+test('every role follows its configured engine and accepts either execution engine', () => {
+  for (const role of ['explorer', 'librarian', 'fixer', 'oracle', 'designer'] as const) {
+    const idle = roster([], [], CODEX).slots.find(s => s.name === role)!
+    expect(idle).toEqual(expect.objectContaining({ engine: 'codex', state: 'idle' }))
+    expect(roster([job({ agent: role })], [], CODEX).slots.find(s => s.name === role))
+      .toEqual(expect.objectContaining({ engine: 'codex', state: 'active' }))
+    const result = roster([], [native({ role, type: `pantheon:${role}` })], CLAUDE)
+    expect(result.slots.find(s => s.name === role))
+      .toEqual(expect.objectContaining({ engine: 'claude', state: 'active' }))
+    expect(result.others).toEqual([])
+  }
+  expect(roster([], [], { ...CODEX, disabledAgents: ['oracle'] }).slots[4].state).toBe('off')
+})
+
+test('displayed history from another engine makes the slot mixed', () => {
+  const ended = native({ role: 'explorer', type: 'pantheon:explorer',
+    rounds: [{ startedAt: 100, endedAt: 200, status: 'done' }] })
+  expect(roster([job()], [ended]).slots[1].engine).toBe('mixed')
+  expect(roster([], [ended]).slots[1].engine).toBe('mixed')
+  expect(roster([job({ status: 'done', endedAt: 300 })], [ended]).slots[1].engine).toBe('codex')
+})
+
+test('council engines do not disable seats', () => {
+  for (const c of [CODEX, CLAUDE]) {
+    expect(roster([], [], c).slots[6]).toEqual(expect.objectContaining({ state: 'idle', engine: c.profile }))
+    expect(roster([], [], { ...c, disabledAgents: ['councillor:alpha'] }).slots[6].state).toBe('idle')
+    expect(roster([], [], { ...c, disabledAgents: ['council'] }).slots[6].state).toBe('off')
+    expect(roster([], [], { ...c, disabledAgents: Object.keys(c.council.seats).map(n => `councillor:${n}`) }).slots[6].state).toBe('off')
+  }
 })

@@ -3,7 +3,8 @@ import { describe, expect, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
 import { DELEGATE, HOME, RESULT, parse, start, world } from './fixtures/world'
-import { PANE_ID, statusText, timelineSource } from '../hooks/pane'
+import { PANE_ID, configReport, doctorReport, statusText, timelineSource } from '../hooks/pane'
+import { loadConfig } from '../hooks/config'
 import { buildRoster } from '../hooks/roster'
 import type { Slot } from '../hooks/roster'
 import { MIXED } from './fixtures/profiles'
@@ -11,6 +12,22 @@ import type { Job, Native, SessionInfo } from '../hooks/types'
 
 const SURFACES = ['terminal', 'desktop'] as const
 const NOW = 1_000_000_000
+
+test('config report identifies the active profile and origin before JSON', async () => {
+  const config = await loadConfig(async () => '{"profile":"codex"}', { user: 'fixture' })
+  const lines = configReport(config).split('\n')
+  expect(lines.slice(0, 3)).toContain('Perfil ativo: codex (user)')
+})
+
+test('doctor treats unavailable Codex as informational only when unused', async () => {
+  const config = await loadConfig(async () => '{"profile":"claude"}', { user: 'fixture' })
+  const facts = { usesCodex: false, profile: 'claude', loginOk: false, config, root: '/repo', isRepo: true }
+  const report = doctorReport(facts)
+  expect(report).not.toContain('falha')
+  expect(report).toContain('info')
+  expect(report).toContain('not needed by profile claude')
+  expect(doctorReport({ ...facts, usesCodex: true })).toContain('falha')
+})
 
 type Opts = { placement?: 'dock' | 'inline'; columns?: number; rows?: number; bodyRows?: number }
 

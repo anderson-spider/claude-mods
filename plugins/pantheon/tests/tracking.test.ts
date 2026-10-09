@@ -11,6 +11,9 @@ const spawn = (id = 'a', now = 100) => ({
 })
 
 test('roleOf maps pantheon types and others', () => {
+  for (const role of ['explorer', 'librarian', 'fixer', 'oracle', 'designer']) {
+    expect(roleOf(`pantheon:${role}`)).toBe(role)
+  }
   expect(roleOf('pantheon:oracle')).toBe('oracle')
   expect(roleOf('pantheon:designer')).toBe('designer')
   expect(roleOf('pantheon:councillor-beta')).toBe('councillor-beta')
@@ -117,6 +120,7 @@ test('markNativesLost turns running rounds into lost', () => {
 })
 
 test('normalizeNatives drops broken records', () => {
+  expect(normalizeNatives([{ id: 'a', role: 'other', type: 'pantheon:fixer', rounds: [] }])[0].role).toBe('fixer')
   expect(normalizeNatives('x')).toEqual([])
   const list = normalizeNatives([{ id: 'a' }, { id: 'b', rounds: [] }, null])
   expect(list.length).toBe(1)

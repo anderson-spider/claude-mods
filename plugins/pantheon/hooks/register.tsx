@@ -10,7 +10,7 @@ import { buildCouncilBlock, isCouncilOrigin, matchesCouncilTrigger } from './pro
 import { buildOrchestratorSection } from './prompts/orchestrator'
 import { rolePrompt } from './prompts/roles'
 import { PANE_ID, configReport, doctorReport, drawPanel, statusText } from './pane'
-import { isOffered, nativeAgentSpecs, resolveCodexCall } from './roles'
+import { isOffered, nativeAgentSpecs, resolveCodexCall, usesCodex } from './roles'
 import { buildRoster } from './roster'
 import {
   DEFAULT_SESSION, DEFAULT_VIEW, completed, describeTool, markNativesLost,
@@ -575,6 +575,8 @@ export const register: Register = on => {
       const login = version?.exitCode === 0 ? await io.run(['codex', 'login', 'status']).catch(() => undefined) : undefined
       return {
         text: doctorReport({
+          usesCodex: usesCodex(current.config),
+          profile: current.config.profile,
           codexVersion: version?.exitCode === 0 ? version.stdout.trim() : undefined,
           loginStatus: login ? (login.stdout || login.stderr).trim().split('\n')[0] : undefined,
           loginOk: login?.exitCode === 0,

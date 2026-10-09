@@ -26,6 +26,7 @@ export function isResumable(job: Job): boolean {
 
 export function configReport(state: ConfigResult): string {
   const lines = [state.ok ? 'Config válida.' : `Config inválida: ${state.error}`]
+  lines.push(`Perfil ativo: ${state.config.profile} (${state.ok ? state.origins.profile ?? 'default' : 'unknown origin'})`)
   lines.push('', 'Config efetiva:', JSON.stringify(state.config, null, 2))
   if (state.ok) {
     const origins = Object.entries(state.origins).filter(([, origin]) => origin !== 'default')
@@ -36,6 +37,8 @@ export function configReport(state: ConfigResult): string {
 }
 
 export type DoctorFacts = {
+  usesCodex: boolean
+  profile: string
   codexVersion?: string
   loginStatus?: string
   loginOk: boolean
@@ -47,8 +50,12 @@ export type DoctorFacts = {
 export function doctorReport(facts: DoctorFacts): string {
   const mark = (ok: boolean) => (ok ? 'ok ' : 'falha')
   return [
-    `${mark(!!facts.codexVersion)} codex no PATH${facts.codexVersion ? `: ${facts.codexVersion}` : ' — instale o Codex CLI'}`,
-    `${mark(facts.loginOk)} codex login status${facts.loginStatus ? `: ${facts.loginStatus}` : ''}`,
+    !facts.usesCodex && !facts.codexVersion
+      ? `info codex no PATH — not needed by profile ${facts.profile}`
+      : `${mark(!!facts.codexVersion)} codex no PATH${facts.codexVersion ? `: ${facts.codexVersion}` : ' — instale o Codex CLI'}`,
+    !facts.usesCodex && !facts.loginOk
+      ? `info codex login status — not needed by profile ${facts.profile}`
+      : `${mark(facts.loginOk)} codex login status${facts.loginStatus ? `: ${facts.loginStatus}` : ''}`,
     `${mark(facts.config.ok)} config${facts.config.ok ? '' : `: ${facts.config.error}`}`,
     `ok  raiz autorizada: ${facts.root}${facts.isRepo ? '' : ' (fora de repositório git: --skip-git-repo-check)'}`,
   ].join('\n')
