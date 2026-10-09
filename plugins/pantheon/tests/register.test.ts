@@ -114,6 +114,32 @@ describe('register', () => {
     expect(received).toEqual([])
   })
 
+  test('config.set denies malformed user JSON after a valid config without calling next', async ($, on) => {
+    const { files } = world(on)
+    const received: ConfigSetInput[] = []
+    on('config.set', async (_$, e) => { received.push(e); return { value: e.value } })
+    await start($)
+    files[`${HOME}/.claude/pantheon.json`] = '{ broken'
+    expect(await $.config.set(profileChange('mixed'))).toEqual({
+      deny: `${HOME}/.claude/pantheon.json: Invalid JSON`,
+    })
+    expect(received).toEqual([])
+  })
+
+  test('config.set denies a custom profile with a mismatched model without calling next', async ($, on) => {
+    const { files } = world(on)
+    const received: ConfigSetInput[] = []
+    on('config.set', async (_$, e) => { received.push(e); return { value: e.value } })
+    await start($)
+    files[`${HOME}/.claude/pantheon.json`] = JSON.stringify({
+      profiles: { custom: { agents: { fixer: { engine: 'codex', model: 'sonnet' } } } },
+    })
+    expect(await $.config.set(profileChange('custom'))).toEqual({
+      deny: `${HOME}/.claude/pantheon.json: profiles.custom.agents.fixer.model: "sonnet" is a Claude model (engine codex)`,
+    })
+    expect(received).toEqual([])
+  })
+
   test('config.set passes another config row through unchanged', async ($, on) => {
     world(on)
     const received: ConfigSetInput[] = []

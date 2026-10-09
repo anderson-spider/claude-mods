@@ -304,6 +304,7 @@ export const register: Register = (on, options) => {
       user: `${home ?? '~'}/.claude/pantheon.json`,
       project: `${root}/.claude/pantheon.json`,
     }, lastValid, typeof e.value === 'string' ? e.value : undefined)
+    if (!current.ok) return { deny: current.error }
     if (typeof e.value !== 'string' || !current.profiles.includes(e.value)) {
       return { deny: `unknown profile "${e.value}"; known: ${current.profiles.join(', ')}` }
     }
