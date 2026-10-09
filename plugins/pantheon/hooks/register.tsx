@@ -128,6 +128,7 @@ export const register: Register = (on, options) => {
   const selected = typeof options.profile === 'string' ? options.profile : undefined
   let state: ConfigResult = { ok: true, config: DEFAULT_CONFIG, origins: {}, profiles: Object.keys(BUILTIN_PROFILES) }
   let lastValid: PantheonConfig | undefined
+  let lastValidResult: Extract<ConfigResult, { ok: true }> | undefined
   let registeredKey: string | undefined
   let toastedError: string | undefined
   let idSeq = 0
@@ -208,7 +209,7 @@ export const register: Register = (on, options) => {
     return { sessionCwd, root: authorizedRoot(sessionCwd, gitTop), isRepo: gitTop !== undefined }
   }
 
-  async function refreshConfig(io: Io, root: string): Promise<ConfigResult> {
+  async function refreshConfig(io: Pick<Io, 'home' | 'readText' | 'toast' | 'registerAgent'>, root: string): Promise<ConfigResult> {
     const home = await io.home()
     state = await loadConfig(io.readText, {
       user: `${home ?? '~'}/.claude/pantheon.json`,
@@ -216,6 +217,7 @@ export const register: Register = (on, options) => {
     }, lastValid, selected)
     if (state.ok) {
       lastValid = state.config
+      lastValidResult = state
       toastedError = undefined
       await registerNatives(io, state.config)
     } else {
@@ -229,7 +231,7 @@ export const register: Register = (on, options) => {
     return state
   }
 
-  async function registerNatives(io: Io, config: PantheonConfig) {
+  async function registerNatives(io: Pick<Io, 'registerAgent' | 'toast'>, config: PantheonConfig) {
     const key = JSON.stringify(config)
     if (key === registeredKey) return
     try {
@@ -616,6 +618,18 @@ export const register: Register = (on, options) => {
   // Last reading of the host clock, kept so a failed read can still draw static durations.
   let lastNow: number | undefined
   on('ui.render', { component: 'Pane', requestId: PANE_ID }, async ($, e) => {
+    const io: Pick<Io, 'cwd' | 'run' | 'home' | 'readText' | 'toast' | 'registerAgent'> = {
+      cwd: () => $.session.cwd(),
+      run: (argv, init) => $.process.run(argv, init),
+      home: () => $.env.get('HOME'),
+      readText: async path => (await $.fs.exists(path)) ? String(await $.fs.read(path)) : undefined,
+      toast: text => $.ui.toast(text),
+      registerAgent: spec => $.agent.register(spec),
+    }
+    const current = await refreshConfig(io, (await workspace(io)).root)
+    // Keep the last valid selector names and lock along with the effective config.
+    const panelConfig = current.ok ? current : lastValidResult ?? current
+    const profileOrigin = panelConfig.ok ? panelConfig.origins.profile : undefined
     const els = $.ui.resolve(e)
     const { Box, Text, Button } = els
     const hasClient = 'Client' in els
@@ -658,15 +672,16 @@ export const register: Register = (on, options) => {
       // The pane's usable height, not the terminal's.
       rows: e.props.scroll?.bodyRows ?? e.viewport?.rows ?? 24,
       now,
-      roster: buildRoster({ jobs: list, natives: tracked, session: info, config: state.config }),
+      roster: buildRoster({ jobs: list, natives: tracked, session: info, config: panelConfig.config }),
       jobs: list,
       session: info,
-      profiles: state.profiles,
-      activeProfile: state.config.profile,
-      profileLockedBy: state.origins.profile === 'user' || state.origins.profile === 'project' ? state.origins.profile : undefined,
+      profiles: panelConfig.profiles,
+      activeProfile: panelConfig.config.profile,
+      profileLockedBy: profileOrigin === 'user' || profileOrigin === 'project' ? profileOrigin : undefined,
       onProfile: name => {
         void $.config.set({ key: 'pantheon.profile', value: name }).then(result => {
           if (result.deny) $.ui.toast(`pantheon: ${result.deny}`)
+          else $.ui.invalidate('ui.render')
         }).catch(error => {
           $.ui.toast(`pantheon: could not select profile: ${error instanceof Error ? error.message : String(error)}`)
         })

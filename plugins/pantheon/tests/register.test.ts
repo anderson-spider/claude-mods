@@ -4,6 +4,7 @@ import type { AgentSpawnInput, ConfigSetInput, On, TurnStepInput } from 'claude-
 
 import type { Job, Native, SessionInfo } from '../types'
 import { createQueue } from '../hooks/register'
+import { PANE_ID } from '../hooks/pane'
 import { DELEGATE, HOME, RESULT, ROOT, parse, start, world } from './fixtures/world'
 
 const spawnInput = {
@@ -77,6 +78,81 @@ async function step($: Engine, input = stepInput()) {
 }
 
 describe('register', () => {
+  const mountPanel = ($: Engine) => $.ui.mount({
+    plugin: 'pantheon', surface: 'terminal', component: 'Pane', requestId: PANE_ID,
+    props: { title: 'Pantheon', isFocused: true, bodyColumns: 120, placement: 'dock', scroll: { offset: 0, bodyRows: 40 } },
+    viewport: { columns: 120, rows: 40 },
+  })
+
+  for (const layer of ['user', 'project'] as const) {
+    test(`panel reloads the ${layer} JSON profile, names and lock between renders without a prompt`, async ($, on) => {
+      const { files, seen } = world(on, { files: { [`${HOME}/.claude/pantheon.json`]: '{}' } })
+      const first = await mountPanel($)
+      try {
+        expect((await first.find({ key: 'profile' }))?.props.value).toBe('claude')
+      } finally { await first.unmount() }
+      const path = layer === 'user' ? `${HOME}/.claude/pantheon.json` : `${ROOT}/.claude/pantheon.json`
+      files[path] = JSON.stringify({ profile: 'personal', profiles: { personal: {} } })
+      const second = await mountPanel($)
+      try {
+        expect(await second.find({ type: 'Text', text: '● personal' })).toBeDefined()
+        expect(await second.find({ type: 'Text', text: `set by ${layer} pantheon.json` })).toBeDefined()
+        expect(await second.find({ type: 'Select', key: 'profile' })).toBeUndefined()
+      } finally { await second.unmount() }
+      delete files[path]
+      const third = await mountPanel($)
+      try {
+        const select = await third.find({ key: 'profile' })
+        expect(select?.props.value).toBe('claude')
+        expect((select?.props.options as { value: string }[]).map(option => option.value)).toEqual(['claude', 'codex', 'mixed'])
+      } finally { await third.unmount() }
+      expect(seen.agents.length).toBe(21)
+    })
+  }
+
+  test('panel reads options.profile on the first render without session.start or a prompt', { options: { profile: 'codex' } }, async ($, on) => {
+    world(on, { files: { [`${HOME}/.claude/pantheon.json`]: '{}' } })
+    const ui = await mountPanel($)
+    try {
+      expect((await ui.find({ key: 'profile' }))?.props.value).toBe('codex')
+      expect(await ui.find({ type: 'Text', text: /set by .* pantheon.json/ })).toBeUndefined()
+    } finally { await ui.unmount() }
+  })
+
+  test('panel keeps the last valid profile and warns once across invalid JSON renders without invalidating itself', async ($, on) => {
+    const { files, seen } = world(on, { files: { [`${HOME}/.claude/pantheon.json`]: '{"profile":"mixed"}' } })
+    const invalidations: string[] = []
+    on('ui.invalidate', async (_$, e) => { invalidations.push(e.event); return { value: undefined } })
+    const first = await mountPanel($)
+    try { expect(await first.find({ type: 'Text', text: '● mixed' })).toBeDefined() }
+    finally { await first.unmount() }
+    files[`${HOME}/.claude/pantheon.json`] = '{ broken'
+    for (let i = 0; i < 2; i++) {
+      const ui = await mountPanel($)
+      try {
+        const selected = await ui.find({ key: 'profile' })
+        const locked = await ui.find({ type: 'Text', text: '● mixed' })
+        expect(selected?.props.value === 'mixed' || locked !== undefined).toBe(true)
+      } finally { await ui.unmount() }
+    }
+    expect(seen.toasts).toEqual([`pantheon: invalid config — ${HOME}/.claude/pantheon.json: Invalid JSON`])
+    expect(seen.agents.length).toBe(3)
+    expect(invalidations).toEqual([])
+  })
+
+  test('panel selection requests a redraw after a successful config.set', async ($, on) => {
+    world(on, { files: { [`${HOME}/.claude/pantheon.json`]: '{}' } })
+    const invalidations: string[] = []
+    on('config.set', async (_$, e) => ({ value: e.value }))
+    on('ui.invalidate', async (_$, e) => { invalidations.push(e.event); return { value: undefined } })
+    await start($)
+    const ui = await mountPanel($)
+    try {
+      await ui.select({ key: 'profile', value: 'codex' })
+      expect(invalidations).toEqual(['ui.render'])
+    } finally { await ui.unmount() }
+  })
+
   const profileChange = (value: string): ConfigSetInput => ({
     key: 'pantheon.profile', value, previous: 'claude',
     provider: { plugin: 'pantheon', tier: 'user' }, origin: { kind: 'composer' },
