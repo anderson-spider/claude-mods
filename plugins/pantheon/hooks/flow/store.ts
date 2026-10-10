@@ -316,11 +316,20 @@ export async function saveApproved(fs: FlowFs, root: string, planId: string, fil
 // --- attestation ---
 //
 // Every file under `.pantheon/flow/` is writable by whoever edits the repository, so none of them can say what the person
-// approved. The host's own store (outside the repository, which no tool call of an agent writes) holds that: a record of
-// the approval, written only by `/pantheon flow approve` and by an adoption `amend` accepted. A snapshot is believed only
-// while it is exactly what the record names; the commands a plan runs come from nowhere else.
+// approved. The plugin's own store (`$.store`: a JSON file under the Claude Code configuration directory, by default
+// `~/.claude/plugins/store/pantheon_<source>-<hash>.json`) holds that: a record of the approval and the plan in force, written
+// only by `/pantheon flow approve` and by an adoption `amend` accepted. A snapshot is believed only while it is exactly what
+// the record names; the commands a plan runs come from nowhere else.
+//
+// What that does and does not protect: the store is outside the repository and the plugin API gives no other plugin or hook a
+// write to it, so an edit of the repository (the plan, the snapshot, the state, the pointer, the journal) cannot approve
+// anything. It is still a file the user's account can write: a Bash call or a Write tool call to that path reaches it unless
+// the person's own permission rules deny it (`Edit(~/.claude/plugins/store/**)` and a Bash rule on the same path), and the
+// edit gate is off by default and never sees Bash. The flow's ownership check refuses that path to the agents it links. The
+// file's name carries the plugin's install source: a plugin loaded inline (`--plugin-dir`) and the marketplace copy keep
+// separate stores, so changing how it is installed leaves every approval unattested until `/pantheon flow approve` again.
 
-/** What the host store holds for one plan of one repository. */
+/** What the plugin store holds for one plan of one repository. */
 export type AttestRecord = {
   /** The hash the person approved. */
   approvedHash: string
@@ -332,12 +341,28 @@ export type AttestRecord = {
   adopted?: string[]
 }
 
+/** The repository root as a key part: its real path (the caller resolves links), so two spellings of it are one repository. */
+const rootKey = (root: string): string => sha256(root.replace(/\/+$/, '') || '/').slice(0, 32)
+
 /** One key per repository root and plan: another checkout of the same plan has its own approval. */
 export function attestKey(root: string, planId: string): string {
-  return `flow.attest.${sha256(root.replace(/\/+$/, '') || '/').slice(0, 32)}.${checkPlanId(planId)}`
+  return `flow.attest.${rootKey(root)}.${checkPlanId(planId)}`
 }
 
-/** The record a host store handed back (it is JSON, never trusted to have a shape), or undefined. */
+/** The plan in force for a repository: the plan file and the id it was approved under, written by `/pantheon flow approve`. */
+export type ActiveRecord = { planId: string; plan: string }
+
+export function activeKey(root: string): string {
+  return `flow.active.${rootKey(root)}`
+}
+
+/** The record the store handed back (it is JSON, never trusted to have a shape), or undefined. */
+export function parseActive(raw: unknown): ActiveRecord | undefined {
+  if (!isObj(raw) || !isStr(raw.planId) || !isStr(raw.plan) || !PLAN_ID.test(raw.planId) || raw.plan.trim() === '') return undefined
+  return { planId: raw.planId, plan: raw.plan }
+}
+
+/** The record the plugin store handed back (it is JSON, never trusted to have a shape), or undefined. */
 export function parseAttest(raw: unknown): AttestRecord | undefined {
   if (!isObj(raw) || !isStr(raw.approvedHash) || !isStr(raw.snapshotHash)) return undefined
   if (!optional(raw.adoptedHash, isStr) || !optional(raw.adopted, isStrList)) return undefined

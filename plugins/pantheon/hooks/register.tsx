@@ -108,6 +108,8 @@ type Io = {
   run: (argv: string[], init?: ProcessRunInit) => Promise<ProcessRunResult>
   home: () => Promise<string | undefined>
   readText: (path: string) => Promise<string | undefined>
+  /** The path with its links followed; the path itself when the host cannot say. */
+  realPath: (path: string) => Promise<string>
   toast: (text: string) => void
   registerAgent: (spec: AgentSpec) => Promise<unknown>
   after: (ms: number, fn: () => void) => { cancel: () => void }
@@ -133,6 +135,9 @@ function hostIo($: Dollar): Io {
     run: (argv, init) => $.process.run(argv, init),
     home: () => $.env.get('HOME'),
     readText: async path => (await $.fs.exists(path)) ? String(await $.fs.read(path)) : undefined,
+    realPath: async path => {
+      try { return (await $.fs.stat(path, { resolve: true })).realPath ?? path } catch { return path }
+    },
     toast: text => $.ui.toast(text),
     registerAgent: spec => $.agent.register(spec),
     after: (ms, fn) => $.clock.after(ms, fn),
@@ -332,7 +337,17 @@ async function flowOwnership($: Dollar, rt: FlowRuntime, deps: FlowDeps, link: F
     const why = error instanceof Error ? error.message : String(error)
     return { owned: false as const, reason: `Task ${link.task}: ${raw} could not be resolved to a real path (${why}). Write it by a plain path inside the task's files.` }
   }
-  return ownershipVerdict(link.task, link.files ?? [], root, path, scratch)
+  // The plugin's own store holds what the flow trusts (the attestation, the plan in force): no task's agent writes it, wherever
+  // the repository's root is. The configuration directory is `CLAUDE_CONFIG_DIR` when set, else `~/.claude`.
+  const never: string[] = []
+  try {
+    const configured = await $.env.get('CLAUDE_CONFIG_DIR')
+    const home = await $.env.get('HOME')
+    for (const dir of [configured, home ? `${home}/.claude` : undefined]) {
+      if (dir) never.push(await resolveGatePath(stat, `${dir.replace(/\/+$/, '')}/plugins/store`, cwd))
+    }
+  } catch { /* A directory that cannot be resolved is guarded as spelled by the other entry, or by being outside the files. */ }
+  return ownershipVerdict(link.task, link.files ?? [], root, path, scratch, never)
 }
 
 /** The root and a path as the host resolves them (links followed), as the ownership gate reads them; a path it cannot resolve as written. */
@@ -424,10 +439,9 @@ function flowCtx($: Dollar, deps: FlowDeps): Ctx {
       architect: isOffered(deps.config, 'pantheon:architect'),
       qa: isOffered(deps.config, 'pantheon:qa'),
     },
-    list: async dir => (await $.fs.exists(dir)) ? (await $.fs.list(dir)).map(entry => ({ name: entry.name, kind: entry.kind, mtimeMs: entry.mtimeMs })) : [],
     serial: deps.serial,
     memo: deps.memo,
-    // The host's own store, outside the repository: what the controller trusts to say what the person approved.
+    // The plugin's own store, outside the repository: what the controller trusts to say what the person approved and which plan is in force.
     attest: { get: key => $.store.get(key), set: (key, value) => $.store.set(key, value) },
     warn: deps.warn,
   }
@@ -514,9 +528,13 @@ export const register: Register = (on, options) => {
   }
   // Hooks act only once session.start has found the repository root: the flow never runs a command to look for it.
   const flowOn = (): boolean => flowMode !== 'off' && gateRoot !== undefined
-  const flowDeps = async (io: Io): Promise<FlowDeps> => ({
-    root: gateRoot ?? (await workspace(io)).root, mode: flowMode, config: state.config, serial: flowSerial, memo: flowMemo, warn: flowWarning(io),
-  })
+  // The attestation is keyed by the real path of the root, not by how the session's cwd spells it.
+  let flowRealRoot: { spelled: string; real: string } | undefined
+  const flowDeps = async (io: Io): Promise<FlowDeps> => {
+    const spelled = gateRoot ?? (await workspace(io)).root
+    if (flowRealRoot?.spelled !== spelled) flowRealRoot = { spelled, real: await io.realPath(spelled) }
+    return { root: flowRealRoot.real, mode: flowMode, config: state.config, serial: flowSerial, memo: flowMemo, warn: flowWarning(io) }
+  }
   configureStrip({ paceStart: options.paceStart })
   let minuteTicker: { cancel: () => void } | undefined
   let stripTicker: { cancel: () => void } | undefined
@@ -972,19 +990,25 @@ export const register: Register = (on, options) => {
     const io = hostIo($)
     const agentId = e.agentId
     const raw = String((e.tool === 'NotebookEdit' ? e.notebook_path : e.file_path) ?? '')
+    // The verdict is settled first and the accounting of it is its own concern: a count or a journal line that fails must not
+    // let a write through that the verdict refused.
+    let refused: string | undefined
     try {
       const deps = await flowDeps(io)
       const link = raw ? await flowLinkFor($, flowRuntime, deps, agentId) : undefined
       if (link?.kind === 'work' && link.files) {
         const verdict = await flowOwnership($, flowRuntime, deps, link, raw)
         if (!verdict.owned) {
-          // A spawned agent's denials count for the work agent whose return the task end is.
-          await setFlowDenials($, flowRuntime, link.root ?? agentId, before => before + 1)
-          await noteOwnership(flowCtx($, deps), { planId: link.plan, taskId: link.task, path: raw, reason: verdict.reason })
-          if (flowMode === 'enforce') return { deny: `[Pantheon flow] ${verdict.reason}` }
+          refused = verdict.reason
+          try {
+            // A spawned agent's denials count for the work agent whose return the task end is.
+            await setFlowDenials($, flowRuntime, link.root ?? agentId, before => before + 1)
+            await noteOwnership(flowCtx($, deps), { planId: link.plan, taskId: link.task, path: raw, reason: verdict.reason })
+          } catch (error) { flowFailed(io, error) }
         }
       }
     } catch (error) { flowFailed(io, error) }
+    if (refused !== undefined && flowMode === 'enforce') return { deny: `[Pantheon flow] ${refused}` }
     return next(e)
   }).catch((_$, e, next) => {
     const deny = next.called ? undefined : flowWriteFallback(flowRuntime.links, flowMode, e.agentId)
@@ -1126,7 +1150,13 @@ export const register: Register = (on, options) => {
         return { text: flowLastProblem ? `${text}\nLast problem: ${flowLastProblem}` : text }
       }
       if (action !== 'approve' && action !== 'pause' && action !== 'resume' && action !== 'stop') {
-        return { text: 'Use /pantheon flow status, approve [plan path], pause, resume or stop.' }
+        return { text: 'Use /pantheon flow status, approve [plan path] [hash], pause, resume or stop.' }
+      }
+      // These change what the flow enforces: only the person's own run counts. A scheduled prompt, another session's message,
+      // a channel or a plugin is the model's word at one remove, and may not approve a block the model wrote.
+      const kind = e.origin?.kind
+      if (kind !== 'composer' && kind !== 'bridge' && kind !== 'sdk') {
+        return { text: `/pantheon flow ${action} changes what the flow enforces, so only the person can run it: this one came from ${kind ?? 'an origin the engine did not stamp'} (a scheduled prompt, another session, a channel, a plugin). Type it yourself.` }
       }
       if (flowMode === 'off') return { text: 'The flow is off. Set the plugin option flow to shadow or enforce first; while it is off nothing is written.' }
       if (action === 'approve') return { text: await approvePlan(ctx, e.args.replace(/^\s*flow\s+approve\s*/, '')) }

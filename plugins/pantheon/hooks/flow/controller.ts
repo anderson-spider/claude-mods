@@ -10,37 +10,38 @@
 //   and never widens it: the controller keeps running the snapshot, and whatever the allowlist does not let in waits for
 //   `/pantheon flow approve`. A plan file that does not parse changes nothing (fail open on the edit, not on enforcement).
 // - The repository's files are not the approval. `approved.json` and `state.json` are plain files that any edit can write, so
-//   a snapshot is believed only while the host's store (`Ctx.attest`, outside the repository) holds a record of exactly it,
-//   written by `approvePlan` and by an adoption. A snapshot that is missing, edited or unattested is never run and never
-//   forgotten: the flow stays approved in the state, says so (a Stop is held in enforce), and waits for the person's approve.
+//   a snapshot is believed only while the plugin's store (`Ctx.attest`, outside the repository) holds a record of exactly it,
+//   written by `approvePlan` and by an adoption, and the plan in force is the one that store names, not the pointer file. A
+//   snapshot that is missing, edited or unattested is never run and never forgotten: the flow stays approved in the state,
+//   says so (a Stop is held once per prompt in enforce), and waits for the person's approve, which lists what it would run.
 // - Every write to a plan's files (state, journal, ledger) is one job on that plan's serial queue. Long work (running
 //   checks, git) happens before the job, so a hook waiting for the queue never waits for a command.
 // - Shadow decides exactly as enforce and applies `applyMode`: it journals what enforce would have done and returns
 //   nothing for the host to act on. Off never reaches this module's work; every entry point returns at once.
 
-import { DEFAULT_LIMITS, amend, branchOnly, canonical, eligible, extractBlock, findTask, flowHash, ownsPath, parseFlow, sha256 } from './plan'
+import { amend, branchOnly, canonical, eligible, extractBlock, findTask, flowHash, ownsPath, parseFlow, sha256 } from './plan'
 import type { Amendment, Flow, FlowTask, ParseResult } from './plan'
 import { CheckUnrunnable, createCheckPass } from './checks'
 import type { CheckMemo, Runner } from './checks'
 import { parseArchitect, parseQa } from './verdicts'
-import { CONSECUTIVE_CAP, applyMode, decide, newState, rebase, withMode } from './policy'
+import { applyMode, decide, newState, rebase, withMode } from './policy'
 import type { ModeDecision } from './policy'
 import {
-  appendJournal, approve as setApproved, attestKey, attestOf, isApproved, loadApproved, loadState, matchesAttest, parseAttest,
-  readJournal, readSideEffects, recordSideEffect, restoreFromLedger, saveApproved, saveState, statePath, unapprove,
+  activeKey, appendJournal, approve as setApproved, attestKey, attestOf, isApproved, loadApproved, loadState, matchesAttest, parseActive,
+  parseAttest, readJournal, readSideEffects, recordSideEffect, restoreFromLedger, saveApproved, saveState, statePath, unapprove,
 } from './store'
 import type { ApprovedFile, AttestRecord, FlowFs, JournalInput, JournalKind } from './store'
 import { SEEN_EDITS_MAX, SEEN_IDS_MAX, remember } from './types'
 import type { CheckResult, DecideOptions, FlowEvent, FlowState, Mode, Reviewer } from './types'
 
 export type Serial = <T>(work: () => Promise<T>) => Promise<T>
-export type DirEntry = { name: string; kind: string; mtimeMs: number }
 /** Which roles the live configuration offers. */
 export type Available = { developer: boolean; ux: boolean; architect: boolean; qa: boolean }
 
 /**
- * The host's own key-value store (`$.store`): outside the repository, so no write of the plan, the state or the journal
- * reaches it. The controller keeps the record of an approval there; see `AttestRecord`.
+ * The plugin's own key-value store (`$.store`): outside the repository, so no write of the plan, the state or the journal
+ * reaches it (a Bash call or a Write to its file does: that boundary is the person's permission rules, see store.ts). The
+ * controller keeps the record of an approval there, and the plan in force; see `AttestRecord`.
  */
 export type Attest = {
   get: (key: string) => Promise<unknown>
@@ -51,11 +52,10 @@ export type Ctx = {
   fs: FlowFs
   run: Runner
   now: () => Promise<number>
-  /** The repository root; every path of a plan is relative to it. */
+  /** The repository root, as its real path (links resolved: two spellings of it are one repository); every path of a plan is relative to it. */
   root: string
   mode: Mode
   available: Available
-  list: (dir: string) => Promise<DirEntry[]>
   /** One queue per plan: `createSerial()` from the store, kept by the host across hooks. */
   serial: (planId: string) => Serial
   /** Check results by tree snapshot, kept by the host across hooks; without it every check runs every time. */
@@ -63,10 +63,10 @@ export type Ctx = {
   /** The time a Stop may spend running checks; STOP_DEADLINE_MS when absent. */
   stopDeadlineMs?: number
   /**
-   * Where the approval is attested. Absent (a host with no store), the files are all there is: a snapshot is believed when
-   * the state carries the same approval, which is what a forged file also satisfies. The host is expected to pass it.
+   * Where the approval and the plan in force are recorded: the plugin's store, outside the repository. Required: without it
+   * the files would be all there is, and a file anyone can write cannot say what the person approved.
    */
-  attest?: Attest
+  attest: Attest
   /** Called when the controller fails open or notices something the person should know; never throws into the controller. */
   warn: (text: string) => void
 }
@@ -193,9 +193,15 @@ function scratchpadOf(scratch: { uid?: string; sessionId?: string } | undefined)
  */
 export function ownershipVerdict(
   taskId: string, files: readonly string[], root: string, rawPath: string, scratch?: { uid?: string; sessionId?: string },
+  never: readonly string[] = [],
 ): { owned: true } | { owned: false; rel?: string; reason: string } {
   const base = norm(stripRoot(root))
   const abs = norm(rawPath.startsWith('/') ? rawPath : `${base}/${rawPath}`)
+  // Directories outside the repository that hold what the flow trusts (the plugin's store): not a task's, wherever the root is.
+  const forbidden = never.find(dir => within(abs.normalize('NFC').toLowerCase(), norm(dir).normalize('NFC').toLowerCase()))
+  if (forbidden !== undefined) {
+    return { owned: false, reason: `${abs} holds what the flow trusts (the plugin's store): it is not a task's to write. Do not write it; tell the lead what has to change there.` }
+  }
   if (scratchpadOf(scratch)?.test(abs)) return { owned: true }
   const rel = within(abs, base) && abs !== base ? abs.slice(base === '/' ? 1 : base.length + 1) : undefined
   // The flow's own files, the repository's git data and the agent configuration are written by the controller, git and the
@@ -305,7 +311,7 @@ type Located = {
   hash: string
   /** An approved, attested snapshot stands for the plan: `flow` is it and is enforced (while the state is not paused, stopped or done). */
   approved: boolean
-  /** What the host store attests, when `approved`. */
+  /** What the plugin store attests, when `approved`. */
   record?: AttestRecord
   edit: Edit
 }
@@ -331,7 +337,7 @@ type Prepared = {
   /** Journaled after: the plan edits this call saw. */
   edits: Note[]
   ledger: string[]
-  /** `approved.json` to write, and the record that attests it: the record goes to the host store first. */
+  /** `approved.json` to write, and the record that attests it: the record goes to the plugin store first. */
   snapshot?: ApprovedFile
   attest?: AttestRecord
   /** Why the plan file's edit waits for approval; set whenever one is waiting, journaled or not. */
@@ -348,6 +354,8 @@ type Prepared = {
 const enforcing = (p: Pick<Prepared, 'approved' | 'state' | 'hash'>): boolean => p.approved && isApproved(p.state, p.hash)
 
 const TAMPERED = `the approved snapshot changed outside ${APPROVE}`
+/** What `flowStatus` holds an adoptable edit for: it reads, it does not adopt. */
+const SOON = 'it is purely additive and the next event adopts it'
 
 async function readMeta(ctx: Pick<Ctx, 'fs' | 'root'>, rel: string): Promise<string | undefined> {
   const text = await ctx.fs.read(activeMetaPath(ctx.root))
@@ -360,14 +368,28 @@ async function readMeta(ctx: Pick<Ctx, 'fs' | 'root'>, rel: string): Promise<str
   } catch { return undefined }
 }
 
-/** The id of the plan in force: the one it was approved under, or the plan file's own. Undefined when there is none. */
-export async function activePlanId(ctx: Pick<Ctx, 'fs' | 'root'>): Promise<string | undefined> {
+/**
+ * The plan in force for this repository: the plan file and the id it was approved under. The plugin's store says it (written
+ * by `approvePlan`), so deleting or redirecting the pointer file changes nothing; a repository approved before the store held
+ * it falls back to the pointer file (and its id file, then the id in the plan file itself).
+ */
+async function planInForce(ctx: Pick<Ctx, 'fs' | 'root' | 'attest'>): Promise<{ rel: string; planId?: string; stored: boolean } | undefined> {
+  // A store that cannot be read names no plan: the pointer file is looked at, and the approval it leads to is held by `standing`.
+  let stored: ReturnType<typeof parseActive>
+  try { stored = parseActive(await ctx.attest.get(activeKey(ctx.root))) } catch { stored = undefined }
+  if (stored) return { rel: stored.plan, planId: stored.planId, stored: true }
   const pointer = await ctx.fs.read(activePath(ctx.root))
   const rel = pointer?.split('\n')[0]?.trim()
   if (!rel) return undefined
-  const hinted = await readMeta(ctx, rel)
-  if (hinted) return hinted
-  const text = await ctx.fs.read(planFile(ctx.root, rel))
+  return { rel, ...(await readMeta(ctx, rel).then(id => (id ? { planId: id } : {}))), stored: false }
+}
+
+/** The id of the plan in force: the one it was approved under, or the plan file's own. Undefined when there is none. */
+export async function activePlanId(ctx: Pick<Ctx, 'fs' | 'root' | 'attest'>): Promise<string | undefined> {
+  const found = await planInForce(ctx)
+  if (!found) return undefined
+  if (found.planId) return found.planId
+  const text = await ctx.fs.read(planFile(ctx.root, found.rel))
   const parsed = text === undefined ? undefined : parseFlow(text)
   return parsed?.ok ? parsed.flow.planId : undefined
 }
@@ -378,7 +400,7 @@ type Standing =
   | { status: 'tampered'; planId: string; why: string }
 
 /**
- * Whether a plan id stands approved: the host's record exists and the snapshot is exactly what it names. The state does not
+ * Whether a plan id stands approved: the store's record exists and the snapshot is exactly what it names. The state does not
  * decide it: it is progress, and a lost or forged one is brought back to the approval, never the other way round.
  */
 async function standing(ctx: Pick<Ctx, 'fs' | 'root' | 'attest'>, planId: string): Promise<Standing> {
@@ -387,19 +409,13 @@ async function standing(ctx: Pick<Ctx, 'fs' | 'root' | 'attest'>, planId: string
   let record: AttestRecord | undefined
   // A store that cannot be read says nothing: the approval is then unattested (held, never believed), not an error to fail open on.
   let unreadable: string | undefined
-  if (ctx.attest) {
-    try { record = parseAttest(await ctx.attest.get(attestKey(ctx.root, planId))) } catch (error) { unreadable = message(error) }
-  }
-  // No host store: the files are all there is, and the state's own approval is what the snapshot is held to.
-  else if (state?.approvedHash !== undefined && snapshot.kind === 'ok' && snapshot.approved.approvedHash === state.approvedHash) {
-    record = attestOf(snapshot.approved)
-  }
+  try { record = parseAttest(await ctx.attest.get(attestKey(ctx.root, planId))) } catch (error) { unreadable = message(error) }
   if (!record) {
     if (unreadable !== undefined && (state?.approvedHash !== undefined || snapshot.kind !== 'missing')) {
-      return { status: 'tampered', planId, why: `the host store that attests the approval could not be read (${clip(unreadable, 120)})` }
+      return { status: 'tampered', planId, why: `the plugin store that attests the approval could not be read (${clip(unreadable, 120)})` }
     }
     return state?.approvedHash !== undefined
-      ? { status: 'tampered', planId, why: 'nothing attests the approval this state records (it predates attestation, or the host store was cleared)' }
+      ? { status: 'tampered', planId, why: 'nothing attests the approval this state records (it predates attestation, or the plugin store was cleared)' }
       : { status: 'none', planId }
   }
   if (snapshot.kind === 'missing') return { status: 'tampered', planId, why: 'approved.json is missing' }
@@ -409,19 +425,19 @@ async function standing(ctx: Pick<Ctx, 'fs' | 'root' | 'attest'>, planId: string
 }
 
 async function locate(ctx: Ctx): Promise<Locate> {
-  const pointer = await ctx.fs.read(activePath(ctx.root))
-  const rel = pointer?.split('\n')[0]?.trim()
-  if (!rel) return { kind: 'none' }
+  const inForce = await planInForce(ctx)
+  if (!inForce) return { kind: 'none' }
+  const { rel } = inForce
   const path = planFile(ctx.root, rel)
   const text = await ctx.fs.read(path)
   const parsed: ParseResult = text === undefined ? { ok: false, errors: [`the plan file ${rel} does not exist`] } : parseFlow(text)
-  const hinted = await readMeta(ctx, rel)
   const fileId = parsed.ok ? parsed.flow.planId : undefined
 
   // The id the plan was approved under is the plan; the file's own id is only used when nothing was approved under the
-  // other, so editing the id in the file can neither hide an approval nor lose its snapshot.
-  let found = hinted ? await standing(ctx, hinted) : undefined
-  if ((!found || found.status === 'none') && fileId !== undefined && fileId !== found?.planId) found = await standing(ctx, fileId)
+  // other, so editing the id in the file can neither hide an approval nor lose its snapshot. When the store names the plan
+  // there is no other: what the file says about itself is an edit like any other.
+  let found = inForce.planId ? await standing(ctx, inForce.planId) : undefined
+  if (!inForce.stored && (!found || found.status === 'none') && fileId !== undefined && fileId !== found?.planId) found = await standing(ctx, fileId)
   if (!found) return { kind: 'invalid', path: rel, errors: parsed.ok ? [] : parsed.errors }
   if (found.status === 'tampered') return { kind: 'tampered', path: rel, planId: found.planId, why: found.why }
   let flow: Flow
@@ -513,9 +529,10 @@ function judge(flow: Flow, state: FlowState, edit: Extract<Edit, { kind: 'change
  * The state as the next decision sees it, read-only: the saved state (or a fresh one, with a note when the saved file
  * failed validation), the ledger applied, the flow in force and the plan file's edit settled against it, and the mode
  * recorded. An edit is adopted only when `amend` says it is purely additive; anything else is `pending` and changes nothing
- * here. Safe outside the queue; only `transact` writes it back.
+ * here. `hold` makes an adoptable edit wait for that reason (the job could not record it). Safe outside the queue; only
+ * `transact` writes it back.
  */
-async function prepare(ctx: Ctx, loc: Located): Promise<Prepared> {
+async function prepare(ctx: Ctx, loc: Located, hold?: string): Promise<Prepared> {
   const edits: Note[] = []
   let flow = loc.flow
   let hash = loc.hash
@@ -555,6 +572,7 @@ async function prepare(ctx: Ctx, loc: Located): Promise<Prepared> {
     const verdict = judge(flow, state, edit, seen)
     let reasons: string[]
     if ('pending' in verdict) reasons = verdict.pending
+    else if (hold !== undefined) reasons = [hold]
     else {
       // A role the new work needs, that the configuration disabled, is what approval refuses: it waits for approval too.
       const already = missingRoles(flow, ctx.available)
@@ -627,16 +645,23 @@ async function transact<T>(ctx: Ctx, loc: Located, trace: Trace, work: (state: F
       return fallback.value
     }
     const here = fresh.kind === 'ok' && fresh.planId === planId ? fresh : loc
-    const prepared = await prepare(ctx, here)
+    let prepared = await prepare(ctx, here)
+    // The record of an adoption goes to the store before anything is written for it. When the store does not take it, the
+    // adoption is dropped: the edit waits for approval with that reason and the flow in force goes on being enforced.
+    if (prepared.attest) {
+      try { await ctx.attest.set(attestKey(ctx.root, planId), prepared.attest) } catch (error) {
+        try { ctx.warn(`an adopted plan edit was held: the plugin store did not take its record (${message(error)})`) } catch { /* A failing warning changes nothing. */ }
+        prepared = await prepare(ctx, here, `the plugin store did not take the record of the adoption (${clip(message(error), 120)})`)
+      }
+    }
     const at = await ctx.now()
     // A rejected state file is journaled before the fresh one replaces it.
     for (const note of prepared.notes) await appendSafe(ctx, planId, { at, mode: ctx.mode, ...note })
     const out = work(prepared.state, prepared)
     const next = out.state ?? prepared.state
     for (const id of next.sideEffectsDone) if (!prepared.ledger.includes(id)) await recordSideEffect(ctx.fs, ctx.root, planId, id, at)
-    // The record goes first, then the snapshot, then the state: a crash in between leaves a snapshot that is not the
+    // The record went first, then the snapshot, then the state: a crash in between leaves a snapshot that is not the
     // attested one (held as tampered until the next approve), or a state older than its snapshot (brought up to it).
-    if (prepared.attest && ctx.attest) await ctx.attest.set(attestKey(ctx.root, planId), prepared.attest)
     if (prepared.snapshot) await saveApproved(ctx.fs, ctx.root, planId, prepared.snapshot)
     if (canonical(next) !== prepared.onDisk) await saveState(ctx.fs, ctx.root, next)
     for (const entry of prepared.edits) await appendSafe(ctx, planId, { at, mode: ctx.mode, ...entry })
@@ -659,7 +684,10 @@ async function transactAt<T>(ctx: Ctx, loc: Located, trace: Trace, hash: string,
 async function observe(ctx: Ctx, loc: Located, trace: Trace): Promise<Prepared> {
   trace.planId = loc.planId
   const prepared = await prepare(ctx, loc)
-  if (prepared.notes.length > 0 || prepared.edits.length > 0 || prepared.snapshot) await transact(ctx, loc, trace, () => ({ value: undefined }), { value: undefined })
+  // What was made durable is what the caller goes on with: an adoption the store did not take is not one.
+  if (prepared.notes.length > 0 || prepared.edits.length > 0 || prepared.snapshot) {
+    return transact<Prepared>(ctx, loc, trace, (_state, settled) => ({ value: settled }), { value: prepared })
+  }
   return prepared
 }
 
@@ -835,12 +863,15 @@ function emptyState(planId: string): FlowState {
   }
 }
 
-const tamperedReason = (why: string) => `${TAMPERED} (${why}); run ${APPROVE}. No check of the plan runs until then.`
+const tamperedReason = (why: string) => `${TAMPERED} (${why}). Ask the person to run ${APPROVE}, read the commands it lists, then confirm with the hash it prints. No check of the plan runs until then.`
+/** A held plan blocks the lead's Stop this many times between two prompts of the person: the lead cannot resolve it, the person can. */
+const TAMPERED_BLOCKS = 1
 
 /**
  * A plan whose approval cannot be believed: no check of it runs and the state keeps its approval (an approval lost by a
- * stray write would be a switch). Enforce holds the Stop with the reason, spending the same budget a failing check does, then
- * lets it through; shadow journals once. A pause, a stop or a finished flow is left alone, and so is a wait for background work.
+ * stray write would be a switch). Enforce holds the Stop once between two prompts of the person (the lead cannot resolve it,
+ * and a refill comes with every prompt, with the reason injected again), then lets it through; shadow journals once. A pause,
+ * a stop or a finished flow is left alone, and so is a wait for background work.
  */
 async function tamperedStop(ctx: Ctx, loc: Tampered, input: StopInput, trace: Trace): Promise<StopOutcome> {
   trace.planId = loc.planId
@@ -862,12 +893,12 @@ async function tamperedStop(ctx: Ctx, loc: Tampered, input: StopInput, trace: Tr
       await note({ kind: 'decision', action: 'allow', wouldBe: 'block' })
       return {}
     }
-    if (state.blocks >= DEFAULT_LIMITS.maxBlocks || (input.stopHookActive && saved.consecutiveBlocks >= CONSECUTIVE_CAP)) {
+    if (state.blocks >= TAMPERED_BLOCKS || (input.stopHookActive && saved.consecutiveBlocks >= TAMPERED_BLOCKS)) {
       state.consecutiveBlocks = 0
       state = { ...state, seenEdits: remember(state.seenEdits, [key], SEEN_EDITS_MAX) }
       await save()
       if (!told) await note({ kind: 'decision', action: 'allow', condition: 'snapshot_tampered_budget' })
-      return { notice: `${TAG}: ${reason} The stop was held ${state.blocks} times; it is let through now.` }
+      return { notice: `${TAG}: ${reason} The stop was held once and is let through now; the next prompt of the person brings this back.` }
     }
     state.blocks += 1
     state.consecutiveBlocks += 1
@@ -1207,24 +1238,72 @@ async function tamperedPrompt(ctx: Ctx, loc: Tampered, trace: Trace): Promise<{ 
 // --- commands ---
 
 const short = (hash: string) => hash.slice(0, 12)
+/** The digits of the plan's hash the person confirms an approval with. */
+const CONFIRM_DIGITS = 12
+export const confirmationOf = (flow: Flow): string => flowHash(flow).slice(0, CONFIRM_DIGITS)
 
-/** The newest plan that carries a flow block, or undefined. */
-async function newestPlan(ctx: Ctx): Promise<string | undefined> {
-  const dir = `${stripRoot(ctx.root)}/${PLANS_DIR}`
-  const entries = (await ctx.list(dir)).filter(entry => entry.kind === 'file' && entry.name.endsWith('.md'))
-    .sort((a, b) => b.mtimeMs - a.mtimeMs || (a.name < b.name ? 1 : -1))
-  for (const entry of entries) {
-    const text = await ctx.fs.read(`${dir}/${entry.name}`)
-    if (text !== undefined && /^```pantheon-flow/m.test(text)) return `${PLANS_DIR}/${entry.name}`
+/** `approve`'s argument: a plan path, the confirmation (12 hex digits), or both with the path first. */
+export function approveArgs(arg: string | undefined): { path?: string; confirm?: string } {
+  const text = (arg ?? '').trim()
+  const found = /^(?:(.*\S)\s+)?([0-9a-f]{12})$/i.exec(text)
+  if (found) return { ...(found[1] ? { path: found[1] } : {}), confirm: found[2]!.toLowerCase() }
+  return text ? { path: text } : {}
+}
+
+const LISTED_MAX = 100
+const commandKey = (check: { argv: readonly string[]; cwd?: string }) => `${check.cwd ?? ''}\0${check.argv.join('\0')}`
+
+/**
+ * What approving a plan would make runnable, for the person to read before confirming: every check (argv, directory,
+ * timeout) with what is new or changed against the approved plan (when one stands), the files each task may write, and the
+ * confirmation to type. It records nothing.
+ */
+function describePlan(rel: string, flow: Flow, previous: { flow?: Flow; why?: string }): string {
+  const known = new Map<string, number>()
+  for (const task of previous.flow?.tasks ?? []) for (const check of task.acceptance.checks) known.set(commandKey(check), check.timeoutSec)
+  const now = new Set<string>()
+  const commands: string[] = []
+  const unchanged: string[] = []
+  for (const task of flow.tasks) {
+    for (const check of task.acceptance.checks) {
+      now.add(commandKey(check))
+      const was = known.get(commandKey(check))
+      const line = `- [${task.id}] ${check.argv.join(' ')} (in ${check.cwd ?? 'the repository root'}, ${check.timeoutSec} s)`
+      if (previous.flow === undefined || was === undefined) commands.push(`${line} NEW`)
+      else if (was !== check.timeoutSec) commands.push(`${line} CHANGED (timeout was ${was} s)`)
+      else unchanged.push(line)
+    }
   }
-  return undefined
+  const dropped = [...known.keys()].filter(key => !now.has(key)).map(key => key.split('\0').slice(1).join(' '))
+  const cap = (lines: string[]) => (lines.length > LISTED_MAX ? [...lines.slice(0, LISTED_MAX), `- ... and ${lines.length - LISTED_MAX} more; read them in ${rel}`] : lines)
+  const files = flow.tasks.map(task => {
+    const flags = [task.risk ? 'risk' : '', task.sideEffect ? 'side effect' : ''].filter(Boolean)
+    return `- [${task.id}] ${task.role}${flags.length ? ` (${flags.join(', ')})` : ''}: ${task.files.join(', ') || 'no files'}`
+  })
+  const confirm = confirmationOf(flow)
+  return [
+    `Plan ${flow.planId} (${rel}): ${flow.tasks.length} tasks, hash ${confirm}. Nothing is approved yet and nothing was recorded.`,
+    previous.flow
+      ? 'Compared with the approved plan: NEW and CHANGED commands are the ones you have not approved before.'
+      : `There is no approved plan to compare with${previous.why ? ` (${previous.why})` : ''}: every command is new.`,
+    '',
+    `Commands that would run on this machine, when a task ends and when the session stops (argv, directory, timeout):`,
+    ...(commands.length + unchanged.length === 0 ? ['- none'] : cap([...commands, ...unchanged])),
+    ...(dropped.length > 0 ? ['', 'No longer run:', ...cap(dropped.map(command => `- ${command}`))] : []),
+    '',
+    'Files each task may write:',
+    ...cap(files),
+    '',
+    `To approve exactly this plan, run: ${APPROVE} ${rel} ${confirm}`,
+  ].join('\n')
 }
 
 export async function approvePlan(ctx: Ctx, arg?: string): Promise<string> {
   return guarded(ctx, 'approve', 'The flow could not approve the plan (an internal error; see the warning).', async trace => {
-    const given = arg?.trim()
-    const rel = given ? pointerValue(ctx.root, planFile(ctx.root, given)) : await newestPlan(ctx)
-    if (!rel) return `No plan with a \`\`\`pantheon-flow block under ${PLANS_DIR}/. Write one with the brainstorm skill, or pass the plan's path.`
+    const { path: given, confirm } = approveArgs(arg)
+    // The plan is the one named, or the one in force: never "the newest", which a file written meanwhile would change.
+    const rel = given ? pointerValue(ctx.root, planFile(ctx.root, given)) : (await planInForce(ctx))?.rel
+    if (!rel) return `No plan is in force yet, and approving never picks one by itself. Name it: ${APPROVE} <plan path> (plans live under ${PLANS_DIR}/).`
     const text = await ctx.fs.read(planFile(ctx.root, rel))
     if (text === undefined) return `Plan not found: ${rel}`
     if (!/^```pantheon-flow/m.test(text)) return `${rel} has no \`\`\`pantheon-flow block.`
@@ -1235,8 +1314,24 @@ export async function approvePlan(ctx: Ctx, arg?: string): Promise<string> {
     const { flow, hash } = parsed
     const planId = flow.planId
     trace.planId = planId
+    // Two steps: the plan is shown first, and only the confirmation of what was shown approves it. The block can change between
+    // the two (an edit, a file restored, a plan another session wrote), and then the confirmation is not the one printed.
+    if (!confirm) {
+      const now = await standing(ctx, planId)
+      return describePlan(rel, flow, now.status === 'approved' ? { flow: now.flow } : now.status === 'tampered' ? { why: now.why } : {})
+    }
+    if (confirm !== confirmationOf(flow)) {
+      return `Not approved: the block of ${rel} is hash ${confirmationOf(flow)} now, not ${confirm}. It changed after the commands were listed, or the hash is not the one printed. Run ${APPROVE} ${rel} again, read what it lists and confirm with the new hash.`
+    }
     // Approval replaces the snapshot with the block as it is now: adopted amendments and waiting edits are folded into it.
     const before = await ctx.serial(planId)(async () => {
+      const file: ApprovedFile = { approvedHash: hash, flow }
+      // The record of the approval and the plan in force go to the store before anything else is written for this approval
+      // (the state's own loss note, the ledger, the snapshot, the state, the pointer, the journal): a crash anywhere after
+      // leaves a snapshot that is not the attested one (held until the next approve) or a state behind its snapshot
+      // (brought up to it), and never a pointer at a plan that was not approved.
+      await ctx.attest.set(attestKey(ctx.root, planId), attestOf(file))
+      await ctx.attest.set(activeKey(ctx.root), { planId, plan: rel })
       const at = await ctx.now()
       const base = await baseState(ctx, planId, flow, hash)
       for (const note of base.notes) await appendSafe(ctx, planId, { at, mode: ctx.mode, ...note })
@@ -1245,11 +1340,6 @@ export async function approvePlan(ctx: Ctx, arg?: string): Promise<string> {
       const moved = setApproved(withMode(previous.hash === hash ? previous : rebase(flow, previous), ctx.mode), hash)
       const state: FlowState = { ...moved, seenIds: remember(moved.seenIds, flow.tasks.map(task => task.id), SEEN_IDS_MAX) }
       for (const id of state.sideEffectsDone) if (!base.ledger.includes(id)) await recordSideEffect(ctx.fs, ctx.root, planId, id, at)
-      // The host's record first, then the snapshot, the state, the id the pointer is for and the pointer: a crash anywhere in
-      // between leaves a snapshot that is not the attested one (held until the next approve) or a state behind its snapshot
-      // (brought up to it), and never a pointer at a plan that was not approved.
-      const file: ApprovedFile = { approvedHash: hash, flow }
-      if (ctx.attest) await ctx.attest.set(attestKey(ctx.root, planId), attestOf(file))
       await saveApproved(ctx.fs, ctx.root, planId, file)
       if (canonical(state) !== base.onDisk) await saveState(ctx.fs, ctx.root, state)
       await ctx.fs.write(activeMetaPath(ctx.root), `${JSON.stringify({ plan: rel, planId })}\n`)
@@ -1257,7 +1347,7 @@ export async function approvePlan(ctx: Ctx, arg?: string): Promise<string> {
       const replaced = previous.approvedHash !== undefined && previous.approvedHash !== hash
       await appendSafe(ctx, planId, {
         at, mode: ctx.mode, kind: 'approval', event: 'approve', condition: 'approved', approvedHash: hash,
-        detail: `approved ${hash} (${flow.tasks.length} tasks) from ${rel}${replaced ? `; replaces the approval ${previous.approvedHash}${previous.adoptedHash ? ` and its adopted amendments (${previous.adoptedHash})` : ''}` : ''}`,
+        detail: `approved ${hash} (${flow.tasks.length} tasks) from ${rel}, confirmed with ${confirm}${replaced ? `; replaces the approval ${previous.approvedHash}${previous.adoptedHash ? ` and its adopted amendments (${previous.adoptedHash})` : ''}` : ''}`,
       })
       return { amended: previous.adoptedHash !== undefined, waiting: (previous.seenEdits ?? []).length > 0 }
     })
@@ -1328,7 +1418,8 @@ export async function flowStatus(ctx: Ctx): Promise<string> {
         'Nothing of the plan is enforced or run until you do; the approval is still recorded in the state.',
       ].join('\n')
     }
-    const p = await prepare(ctx, loc)
+    // Read-only: an adoptable edit is shown as one the next event adopts (and records first), not as one already in force.
+    const p = await prepare(ctx, loc, SOON)
     const { flow, hash, state } = p
     const approved = enforcing(p)
     const approval = approved
@@ -1355,9 +1446,11 @@ export async function flowStatus(ctx: Ctx): Promise<string> {
       lines.push(`  ${task.id}: ${parts.join(', ')}`)
     }
     lines.push(`Budget: ${state.blocks}/${flow.limits.maxBlocks} blocks, ${state.consecutiveBlocks} in a row`)
-    if (approved && p.pending?.length) {
-      lines.push(`Edits: ${p.pending.length} waiting for ${APPROVE}; the approved flow keeps running without ${p.pending.length === 1 ? 'it' : 'them'}:`)
-      for (const reason of p.pending) lines.push(`  - ${reason}`)
+    const waiting = (p.pending ?? []).filter(reason => reason !== SOON)
+    if (approved && (p.pending ?? []).includes(SOON)) lines.push('Edits: the plan file holds an edit that is purely additive; the next event adopts it, recording it in the plugin store first.')
+    if (approved && waiting.length) {
+      lines.push(`Edits: ${waiting.length} waiting for ${APPROVE}; the approved flow keeps running without ${waiting.length === 1 ? 'it' : 'them'}:`)
+      for (const reason of waiting) lines.push(`  - ${reason}`)
     }
     if (approved && p.invalid) {
       lines.push(`Plan file: not valid, so the approved flow keeps running until it is fixed or approved again:`)

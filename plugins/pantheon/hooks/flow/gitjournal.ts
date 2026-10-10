@@ -2,7 +2,7 @@
 // Pure: file access, the clock and the per-plan queue are injected, and nothing here touches `$`. Nothing is written when no
 // plan is active: the gate protects without one, but a journal belongs to a plan and the gate creates none of its own.
 import { activePlanId } from './controller'
-import type { Serial } from './controller'
+import type { Attest, Serial } from './controller'
 import { redactSecrets } from './redact'
 import { appendJournal } from './store'
 import type { FlowFs, JournalInput } from './store'
@@ -11,6 +11,8 @@ import type { Mode } from './types'
 export type GitJournalCtx = {
   fs: FlowFs
   root: string
+  /** Where the plan in force is recorded (the plugin's store): the id it names is the plan's journal. */
+  attest: Attest
   mode: Mode
   now: () => Promise<number>
   serial: (planId: string) => Serial

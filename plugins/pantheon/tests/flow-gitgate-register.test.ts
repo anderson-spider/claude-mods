@@ -121,7 +121,12 @@ const bash = ($: Engine, command: string, agentId?: string) =>
 
 async function boot($: Engine, w: World) {
   await start($)
-  const out = await $.command.run({ command: 'pantheon', args: `flow approve ${PLAN}` } as never)
+  // The person's own run, in two steps: the plan is listed, and the hash the listing prints approves exactly that block.
+  const person = (args: string) => $.command.run({ command: 'pantheon', args, origin: { kind: 'composer' } } as never)
+  const listing = (await person(`flow approve ${PLAN}`)).text ?? ''
+  const hash = /, hash ([0-9a-f]{12})\./.exec(listing)?.[1]
+  expect(hash, listing).toBeDefined()
+  const out = await person(`flow approve ${PLAN} ${hash}`)
   expect(out.text).toContain('Approved demo')
   expect(w.files.get(`${ROOT}/.pantheon/flow/active`)).toBe(`${PLAN}\n`)
 }
