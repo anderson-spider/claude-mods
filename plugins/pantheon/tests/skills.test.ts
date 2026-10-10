@@ -6,7 +6,7 @@ import { planInstructions } from '../hooks/jevflow/texts'
 
 test('the lead names the three skills and no longer mentions superpowers', () => {
   const section = buildLeadSection(DEFAULTS)
-  expect(section).toContain('Invoke the Pantheon skills (flow, debug, finish)')
+  expect(section).toContain('Invoke the Pantheon skills (brainstorm, flow, debug, finish)')
   expect(section.toLowerCase()).not.toContain('superpowers')
 })
 

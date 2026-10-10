@@ -9,6 +9,7 @@ import { DEFAULT_CONFIG } from './defaults'
 import * as jevflow from './jevflow/controller'
 import { ROLES } from './jevflow/types'
 import { createBreaker, createJev } from './jevflow/jev'
+import { goalFromConversationPrompt, goalPrompt } from './jevflow/texts'
 import type { Breaker, JevIo } from './jevflow/jev'
 import { drawFlowTab } from './jevflow/view'
 import type { FlowView } from './jevflow/view'
@@ -282,8 +283,8 @@ async function stripAgents($: Dollar, now: number) {
 }
 
 const FLOW_TOOL_DESCRIPTION = 'The Pantheon flow (JevFlow): tracks a multi-step task against phases with checks, and holds a premature stop. '
-  + 'start lays out a new flow for a task that takes several steps and should be finished and verified (then write the phases to the '
-  + 'flow.json it names and call validate); join binds this session to a flow another session runs here; claim marks the phase you '
+  + 'start starts a flow when the person runs /pantheon goal or asks for one: it lays out a new flow for a task that takes several '
+  + 'steps and should be finished and verified (then write the phases to the flow.json it names and call validate); join binds this session to a flow another session runs here; claim marks the phase you '
   + 'take, as your Pantheon role (re-claim when you move); status shows the phases, claims and recent decisions.'
 
 export const register: Register = (on, options) => {
@@ -334,7 +335,7 @@ export const register: Register = (on, options) => {
   const jevKey = typeof options.judgeKey === 'string' ? options.judgeKey.trim() : ''
   const jev: JevAccess = { key: jevKey, breaker: jevBreaker }
   const flowRoot = async (io: Io): Promise<string> => gateRoot ?? (await workspace(io)).root
-  // Sessions that sent a prompt since this module loaded: the first prompt gets the lower nudge bar (auto.py).
+  // Sessions that sent a prompt since this module loaded: the first prompt gets the join hint (JevFlow's first prompt).
   const prompted = new Set<string>()
   // Sessions already told, once each, that Jev is off (no judgeKey) when a Stop needed it.
   const jevOffToasted = new Set<string>()
@@ -431,8 +432,8 @@ export const register: Register = (on, options) => {
     await refreshConfig(io, (await workspace(io)).root)
     await $.command.register({
       name: 'pantheon',
-      description: 'Open the Pantheon pane; subcommands: close, config, doctor, flow',
-      argumentHint: '[close | config | doctor | flow]',
+      description: 'Open the Pantheon pane; subcommands: close, config, doctor, flow, goal [text]',
+      argumentHint: '[close | config | doctor | flow | goal [text]]',
     })
     try {
       await $.tool.register({
@@ -757,9 +758,10 @@ export const register: Register = (on, options) => {
   }).catch((_$, e, next) => next.called || options.gate !== true || e.agentId
     ? next(e) : { deny: 'Pantheon edit gate could not obtain a decision. Edit denied.' })
 
-  // The flow (JevFlow hooks.py): SessionStart gives the lead the flow's context (or the start hint), a prompt refills the
-  // block budget or nudges a task toward a flow, the Stop runs the checks, Jev and the policy, and StopFailure keeps the
-  // API error. Each fails open: an error adds nothing and never holds the session.
+  // The flow (JevFlow hooks.py): SessionStart gives the lead the flow's context (or the join hint), a prompt refills the
+  // block budget, the Stop runs the checks, Jev and the policy, and StopFailure keeps the API error. A flow starts only
+  // with /pantheon goal or when the person asks for one, never from a prompt. Each fails open: an error adds nothing and
+  // never holds the session.
   on('classic.SessionStart', async ($, e, next) => {
     const below = await next(e)
     try {
@@ -788,6 +790,8 @@ export const register: Register = (on, options) => {
   on('classic.Stop', async ($, e, next) => {
     const below = await next(e)
     if (e.agent_id || below.block || below.preventContinuation) return below
+    // Background agents still work: the flow does not judge the phase until they finish (a shell or monitor is not waited for).
+    if (jevflow.pendingAgentTasks(e.background_tasks) > 0) return below
     try {
       const root = await flowRoot(hostIo($))
       // A check is a shell command the flow runs outside the permission system: it runs only when Claude Code's rules
@@ -892,6 +896,38 @@ export const register: Register = (on, options) => {
         return { text: `The flow status could not be read: ${error instanceof Error ? error.message : String(error)}` }
       }
     }
+    if (sub === 'goal') {
+      const text = e.args.trim().slice(sub.length).trim()
+      const host = hostIo($)
+      try {
+        const root = await flowRoot(host)
+        const sid = String(await $.session.id())
+        const io = flowHost($, jev)
+        // The bound check and the start run in one queue turn, so two goals cannot both start a flow for the session.
+        const outcome = await flowSerial(async () => {
+          const bound = await jevflow.boundFlow(io, root, sid)
+          if (bound && !bound.archived) return { kind: 'bound' as const, id: bound.id }
+          if (!text) return { kind: 'conversation' as const }
+          const instructions = await jevflow.startFlow(io, root, sid, text)
+          return { kind: 'started' as const, id: (await jevflow.boundFlow(io, root, sid))?.id ?? '?', instructions }
+        })
+        if (outcome.kind === 'bound') return { text: `pantheon: this session already follows flow ${outcome.id}. /pantheon flow shows it.` }
+        // The host refuses prompt.submit while this hook holds the turn, so the prompt goes out after it returns.
+        if (outcome.kind === 'conversation') {
+          host.after(0, () => {
+            try { host.submit(goalFromConversationPrompt()).catch(() => undefined) } catch { /* A failed submit must not break the goal. */ }
+          })
+          return { text: 'pantheon: Claude turns the idea defined in this conversation into a flow.' }
+        }
+        const prompt = goalPrompt(outcome.instructions)
+        host.after(0, () => {
+          try { host.submit(prompt).catch(() => undefined) } catch { /* A failed submit must not break the goal. */ }
+        })
+        return { text: `pantheon: flow ${outcome.id} started. Claude lays out its phases next.` }
+      } catch (error) {
+        return { text: `The flow could not start: ${error instanceof Error ? error.message : String(error)}` }
+      }
+    }
     if (sub === 'doctor') {
       const current = await refreshConfig(io, (await workspace(io)).root)
       let pings: PingResult[] | undefined
@@ -913,7 +949,7 @@ export const register: Register = (on, options) => {
         text: doctorReport({ config: current, pings }),
       }
     }
-    return { text: `Unknown subcommand: ${sub}. Use /pantheon, /pantheon close, /pantheon config, /pantheon doctor or /pantheon flow.` }
+    return { text: `Unknown subcommand: ${sub}. Use /pantheon, /pantheon close, /pantheon config, /pantheon doctor, /pantheon flow or /pantheon goal [text].` }
   })
 
   // Last reading of the host clock, kept so a failed read can still draw static durations.

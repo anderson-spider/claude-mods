@@ -1,5 +1,5 @@
 // Text the JevFlow port gives the lead and the user, with JevFlow's wording: the phase table and SessionStart context
-// and the transition line (hooks.py), the auto-planning instructions and nudges (auto.py), and the status render
+// and the transition line (hooks.py), the auto-planning instructions (auto.py), and the status render
 // (status.py). Only the names changed: the lead starts, joins and claims through the mcp__pantheon__flow tool instead of
 // the jevflow CLI, and the flows live under .pantheon/flow/. Pure: no file, clock or command here.
 
@@ -8,10 +8,6 @@ import type { Decision, Flow, PhaseStatus } from './types'
 import { branchOnly, FLOW_DIR_REL, isDict, pyStr, requiredPhases, utcStamp } from './project'
 import type { StateView } from './project'
 
-export const MIN_WORDS = 8
-export const FIRST_MIN_WORDS = 4
-export const SKIP_TAG = '#nojev'
-export const FORCE_TAG = '#jev'
 /** Characters of the last block reason that come back on resume or compact (hooks.py). */
 export const LAST_BLOCK_CONTEXT_CHARS = 1500
 /** Characters of NEEDS_HUMAN.md the status shows (status.py). */
@@ -109,26 +105,6 @@ export function transitionLine(flow: Flow, state: StateView, d: Pick<Decision, '
   return `[Pantheon flow]${title} ${head} (${done}/${req.length} done) · ${first}`
 }
 
-const QUESTION_START = new Set([
-  'what', 'why', 'how', 'when', 'where', 'who', 'which', 'is', 'are',
-  'does', 'do', 'did', 'can', 'could', 'should', 'would', 'explain',
-])
-
-/** A cheap, deterministic filter: long imperative requests become flows; questions, slash commands and short follow-ups do not. */
-export function looksLikeTask(prompt: string, minWords = MIN_WORDS): boolean {
-  const text = prompt.trim()
-  const lower = text.toLowerCase()
-  if (!text || lower.includes(SKIP_TAG)) return false
-  if (lower.split(/\s+/).includes(FORCE_TAG)) return true
-  if (text[0] === '/' || text[0] === '!') return false
-  const words = text.match(/\S+/g) ?? []
-  if (words.length < minWords) return false
-  const first = (words[0] ?? '').toLowerCase().replace(/^[,.:]+|[,.:]+$/g, '')
-  const questionStart = QUESTION_START.has(first)
-  if (text.trimEnd().endsWith('?') && (questionStart || words.length < 25)) return false
-  return !(questionStart && words.length < 25)
-}
-
 /** The instructions that make the lead lay the work out as phases in the flow's flow.json (`flowRel`) before it starts. */
 export function planInstructions(flowRel: string, flowId: string, goal: string): string {
   const goalExcerpt = cpSlice(goal, GOAL_EXCERPT_CHARS) + (cpLen(goal) > GOAL_EXCERPT_CHARS ? '...' : '')
@@ -170,27 +146,23 @@ export function planInstructions(flowRel: string, flowId: string, goal: string):
   )
 }
 
-/** The lead-facing nudge for a prompt that reads like a multi-step task. The lead still decides. */
-export function promptNudge(prompt: string, first = false): string | null {
-  if (!looksLikeTask(prompt, first ? FIRST_MIN_WORDS : MIN_WORDS)) return null
+/** The prompt Claude gets after `/pantheon goal <text>`: the planning instructions, and the brainstorm's decisions if any. */
+export function goalPrompt(instructions: string): string {
   return (
-    '[Pantheon flow] This request looks like a multi-step task with deliverables. Before '
-    + 'writing any code, start a tracked flow with the `mcp__pantheon__flow` tool (`action: "start"`, '
-    + '`name: "<short-kebab-name>"`, `goal: "<the user\'s request, verbatim>"`) from the project root (the name is '
-    + '2 to 5 words saying what the work delivers, for example `temp-converter-cli`), then lay out the '
-    + 'phases it asks for. The flow then verifies each phase with its check before you stop. Only skip this if the '
-    + 'task is really a single small edit or a question.'
+    '[Pantheon flow] The person started a flow with /pantheon goal.\n\n'
+    + `${instructions}\n\n`
+    + 'If a brainstorm defined the idea in this conversation, turn its decisions into the phases and their checks.'
   )
 }
 
-/** The one-time SessionStart note for a project with no flow yet. */
-export function startHint(): string {
+/** The prompt Claude gets after `/pantheon goal` with no text: the flow starts from the idea defined in this conversation. */
+export function goalFromConversationPrompt(): string {
   return (
-    'The Pantheon flow is on. For a task that will take several steps and should be finished and verified '
-    + '(not a question or a one-line change), you may start a tracked flow before working: call the '
-    + '`mcp__pantheon__flow` tool with `action: "start"`, `name: "<short-kebab-name>"` and `goal: "<the user\'s request>"` '
-    + 'from the project root, then follow what it returns. The flow then checks each phase before you stop. '
-    + 'Skip it for small or conversational requests.'
+    '[Pantheon flow] The person ran /pantheon goal without text: turn the idea defined in this conversation into a flow. '
+    + 'Call the `mcp__pantheon__flow` tool with `action: "start"`, `goal` set to the defined idea in one or two concrete '
+    + 'sentences (the person\'s words where possible) and `name` set to a short kebab-case name of 2 to 5 words. Then lay out '
+    + 'the phases with their checks as the tool asks, call validate, and start the first phase. If no idea has been defined '
+    + 'in this conversation yet, ask the person for the goal in one question and stop.'
   )
 }
 

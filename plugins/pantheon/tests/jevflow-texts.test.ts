@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import {
-  claimInstruction, idempotencyKey, looksLikeTask, phaseTable, planInstructions, promptNudge, render,
-  sessionContext, startHint, transitionLine,
+  claimInstruction, goalFromConversationPrompt, goalPrompt, idempotencyKey, phaseTable, planInstructions, render,
+  sessionContext, transitionLine,
 } from '../hooks/jevflow/texts'
 import type { StateView } from '../hooks/jevflow/project'
 import type { Flow, Limits, Phase } from '../hooks/jevflow/types'
@@ -118,41 +118,7 @@ test('the transition line adds the period when the reason has none and drops a r
     .toBe('[Pantheon flow] → a (0/2 done) · Phase a is ready.')
 })
 
-// --- task filter (auto.py looks_like_task) ---
-
-const TASK = 'Add a --verbose flag to the CLI, cover it with tests and document it in the README'
-
-test('long imperative requests read as tasks; questions, commands, short or opted-out prompts do not', () => {
-  for (const t of [TASK, 'refactor the storage layer so that writes are atomic and add a regression test', '#jev fix it']) {
-    expect(looksLikeTask(t)).toBe(true)
-  }
-  for (const t of [
-    '', 'fix the typo', '/jevflow:status', '!ls -la now please show me everything here',
-    'what does the supervisor do when claude exits early?', 'How does the stop hook decide whether to block the stop?',
-    `${TASK} #nojev`,
-  ]) {
-    expect(looksLikeTask(t)).toBe(false)
-  }
-})
-
-test('the minimum word count is a parameter', () => {
-  expect(looksLikeTask('add a dark mode toggle')).toBe(false)
-  expect(looksLikeTask('add a dark mode toggle', 4)).toBe(true)
-})
-
-// --- first-prompt nudge (auto.py prompt_nudge) ---
-
-test('the nudge uses the lower bar on the first prompt and names the start action', () => {
-  expect(promptNudge('add a dark mode toggle')).toBeNull()
-  const first = promptNudge('add a dark mode toggle', true)
-  expect(first).not.toBeNull()
-  expect(first).toContain('[Pantheon flow] This request looks like a multi-step task with deliverables.')
-  expect(first).toContain('`mcp__pantheon__flow` tool (`action: "start"`')
-  expect(first).not.toContain('jevflow start')
-  expect(promptNudge('what is this repo?', true)).toBeNull()
-})
-
-// --- planning instructions and start hint (auto.py) ---
+// --- planning instructions (auto.py) ---
 
 test('the planning instructions point at .pantheon/flow/flow.json and carry the example without a mode', () => {
   const text = planInstructions('.pantheon/flow/flows/x/flow.json', 'x', 'Add a dark mode toggle')
@@ -173,12 +139,20 @@ test('the example goal is cut to 200 characters with an ellipsis', () => {
   expect(planInstructions('f.json', 'x', 'g'.repeat(200))).toContain(`"goal": "${'g'.repeat(200)}",`)
 })
 
-test('the start hint offers the start action and no CLI', () => {
-  const hint = startHint()
-  expect(hint).toContain('`mcp__pantheon__flow` tool with `action: "start"`')
-  expect(hint).toContain('then follow what it returns.')
-  expect(hint).not.toContain('jevflow start')
-  expect(hint).not.toContain('.jevflow')
+test('the goal prompt carries the planning instructions and the brainstorm line', () => {
+  const text = goalPrompt('PLANNING')
+  expect(text).toContain('[Pantheon flow] The person started a flow with /pantheon goal.')
+  expect(text).toContain('PLANNING')
+  expect(text).toContain('If a brainstorm defined the idea in this conversation, turn its decisions into the phases and their checks.')
+})
+
+test('the conversation prompt asks for the start action with the defined idea, and a question when none is defined', () => {
+  const text = goalFromConversationPrompt()
+  expect(text).toContain('`mcp__pantheon__flow` tool with `action: "start"`')
+  expect(text).toContain('`goal` set to the defined idea')
+  expect(text).toContain('`name` set to a short kebab-case name')
+  expect(text).toContain('ask the person for the goal in one question and stop')
+  expect(text).not.toContain('jevflow')
 })
 
 test('the claim sentence names the claim action, the phase and the Pantheon roles', () => {
