@@ -101,11 +101,11 @@ test('missing or non-string Edit fields keep counts unknown', () => {
 
 for (const action of ['allow', 'ask', 'deny'] as const) {
   for (const source of ['jev', 'rules'] as const) {
-    for (const executor of [false, true]) {
-      for (const designer of [false, true]) {
-        test(`message: ${action}, ${source}, executor=${executor}, designer=${designer}`, () => {
+    for (const developer of [false, true]) {
+      for (const ux of [false, true]) {
+        test(`message: ${action}, ${source}, developer=${developer}, ux=${ux}`, () => {
           const verdict: Verdict = { action, source, score: source === 'jev' ? 0.42 : undefined, reason: 'Decision reason.' }
-          const message = gateMessage(verdict, { ...context(edit), path: 'src/view.tsx', ext: '.tsx' }, { executor, designer })
+          const message = gateMessage(verdict, { developer, ux })
           expect(message).toContain(source)
           if (source === 'jev') expect(message).toContain('0.42')
           if (action === 'allow') {
@@ -115,9 +115,10 @@ for (const action of ['allow', 'ask', 'deny'] as const) {
             expect(message.split('\n').length).toBeGreaterThanOrEqual(2)
             expect(message.split('\n').length).toBeLessThanOrEqual(3)
             expect(message).toContain('main session should not edit it itself')
-            expect(message.includes('executor')).toBe(executor)
-            expect(message.includes('designer')).toBe(designer)
-            if (!executor || !designer) expect(message).toContain('ask the person')
+            // Code goes to developer and visual work to ux; a disabled role is not recommended.
+            expect(message.includes('delegate to developer')).toBe(developer)
+            expect(message.includes('ux')).toBe(ux)
+            expect(message.includes('ask the person')).toBe(!developer)
           }
         })
       }
@@ -125,9 +126,9 @@ for (const action of ['allow', 'ask', 'deny'] as const) {
   }
 }
 
-for (const ext of ['.tsx', '.jsx', '.css', '.scss', '.svelte', '.vue', '.html', '.ts']) {
-  test(`designer routing for ${ext}`, () => {
-    const message = gateMessage({ action: 'deny', source: 'rules', reason: '' }, { ...context(edit), path: `src/file${ext}`, ext }, { executor: true, designer: true })
-    expect(message.includes('designer')).toBe(ext !== '.ts')
-  })
-}
+test('the message names developer for code and ux for visual work', () => {
+  const verdict: Verdict = { action: 'deny', source: 'rules', reason: '' }
+  expect(gateMessage(verdict, { developer: true, ux: true })).toContain('delegate to developer (code) or ux (visual work)')
+  expect(gateMessage(verdict, { developer: true, ux: false })).toContain('Please delegate to developer;')
+  expect(gateMessage(verdict, { developer: false, ux: true })).toContain('ask the person to handle implementation; delegate visual work to ux')
+})

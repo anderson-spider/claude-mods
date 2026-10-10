@@ -267,12 +267,12 @@ test('a passing stop clears the failure streak', () => {
   expect(passing.state.lastFailure).toBeUndefined()
 })
 
-test('a risky task awaiting review blocks the stop asking for the oracle', () => {
+test('a risky task awaiting review blocks the stop asking for the architect', () => {
   const { flow, hash } = chain()
   const state = approved(flow, hash, { status: { A: 'done', B: 'active', C: 'pending' }, awaitingReview: ['B'] })
   const decision = decide(flow, state, stopEvent({ A: [pass('A')], B: [pass('B')] }))
   expect(decision).toMatchObject({ action: 'block', condition: 'review_needed', task: 'B' })
-  expect(decision.reason).toContain('oracle')
+  expect(decision.reason).toContain('architect')
   expect(decision.state.blocks).toBe(1)
 })
 
@@ -365,7 +365,7 @@ test('ownership denials fail the task and count an attempt', () => {
   expect(decision.state.status.A).toBe('active')
 })
 
-test('failing checks retry, then ask the oracle, then ask the person', () => {
+test('failing checks retry, then ask the architect, then ask the person', () => {
   const { flow, hash } = chain()
   const one = decide(flow, approved(flow, hash), endEvent('A', [fail('A', 'first')]))
   expect(one).toMatchObject({ action: 'failTask', condition: 'retry', task: 'A' })
@@ -373,8 +373,8 @@ test('failing checks retry, then ask the oracle, then ask the person', () => {
   expect(one.reason).toContain('same implementer')
   expect(one.state.attempts.A).toBe(1)
   const two = decide(flow, one.state, endEvent('A', [fail('A', 'second')]))
-  expect(two).toMatchObject({ action: 'failTask', condition: 'oracle' })
-  expect(two.reason).toContain('oracle')
+  expect(two).toMatchObject({ action: 'failTask', condition: 'architect' })
+  expect(two.reason).toContain('architect')
   expect(two.state.attempts.A).toBe(2)
   const three = decide(flow, two.state, endEvent('A', [fail('A', 'third')]))
   expect(three).toMatchObject({ action: 'pause', condition: 'ask_person' })
@@ -394,7 +394,7 @@ test('a check that could not run, or no check result at all, fails the task end'
 
 test('maxAttempts from the flow moves the ladder', () => {
   const { flow, hash } = build([task('A')], { maxAttempts: 1 })
-  expect(decide(flow, approved(flow, hash), endEvent('A', [fail('A')])).condition).toBe('oracle')
+  expect(decide(flow, approved(flow, hash), endEvent('A', [fail('A')])).condition).toBe('architect')
   const wide = build([task('A')], { maxAttempts: 3 })
   const state = approved(wide.flow, wide.hash, { attempts: { A: 1 } })
   expect(decide(wide.flow, state, endEvent('A', [fail('A')])).condition).toBe('retry')
@@ -404,7 +404,7 @@ test('a loop task uses maxIterations instead of maxAttempts', () => {
   const { flow, hash } = build([task('A', { loop: { maxIterations: 4 } })])
   const state = approved(flow, hash, { attempts: { A: 2 } })
   expect(decide(flow, state, endEvent('A', [fail('A')])).condition).toBe('retry')
-  expect(decide(flow, { ...state, attempts: { A: 3 } }, endEvent('A', [fail('A')])).condition).toBe('oracle')
+  expect(decide(flow, { ...state, attempts: { A: 3 } }, endEvent('A', [fail('A')])).condition).toBe('architect')
   expect(decide(flow, { ...state, attempts: { A: 4 } }, endEvent('A', [fail('A')])).condition).toBe('ask_person')
 })
 
@@ -427,7 +427,7 @@ test('passing checks on a risky task park it in awaitingReview, not done', () =>
   const state = approved(flow, hash, { status: { A: 'done', B: 'active', C: 'pending' } })
   const decision = decide(flow, state, endEvent('B', [pass('B')]))
   expect(decision).toMatchObject({ action: 'allow', condition: 'review_needed', task: 'B' })
-  expect(decision.reason).toContain('oracle')
+  expect(decision.reason).toContain('architect')
   expect(decision.state.status.B).toBe('active')
   expect(decision.state.awaitingReview).toEqual(['B'])
   expect(decision.state.blocks).toBe(0)
@@ -466,9 +466,9 @@ test('a rejected review is a failed attempt with the note as its output, down th
   expect(one.state.reviewed).toEqual([])
   expect(one.state.attempts.B).toBe(1)
   expect(one.state.status.B).toBe('active')
-  // Back through task end and a second rejection: oracle, then the person.
+  // Back through task end and a second rejection: architect, then the person.
   const again = decide(flow, { ...one.state, awaitingReview: ['B'] }, { kind: 'review', taskId: 'B', verdict: 'rejected' })
-  expect(again.condition).toBe('oracle')
+  expect(again.condition).toBe('architect')
   const last = decide(flow, { ...again.state, awaitingReview: ['B'] }, { kind: 'review', taskId: 'B', verdict: 'rejected' })
   expect(last).toMatchObject({ action: 'pause', condition: 'ask_person' })
 })
@@ -607,7 +607,7 @@ const scenarios = (): { name: string; flow: Flow; state: FlowState; event: FlowE
     { name: 'regression', flow: c.flow, state: reviewed, event: stopEvent({ A: [fail('A')] }) },
     { name: 'complete', flow: c.flow, state: approved(c.flow, c.hash, { status: { A: 'done', B: 'done', C: 'done' } }), event: stopEvent({ A: [pass('A')], B: [pass('B')] }) },
     { name: 'retry', flow: c.flow, state: approved(c.flow, c.hash), event: endEvent('A', [fail('A')]) },
-    { name: 'oracle', flow: c.flow, state: approved(c.flow, c.hash, { attempts: { A: 1 } }), event: endEvent('A', [fail('A')]) },
+    { name: 'architect', flow: c.flow, state: approved(c.flow, c.hash, { attempts: { A: 1 } }), event: endEvent('A', [fail('A')]) },
     { name: 'ask_person', flow: c.flow, state: approved(c.flow, c.hash, { attempts: { A: 2 } }), event: endEvent('A', [fail('A')]) },
     { name: 'on_fail', flow: fan.flow, state: approved(fan.flow, fan.hash, { attempts: { A: 1 } }), event: endEvent('A', [fail('A')]) },
     { name: 'task_done', flow: c.flow, state: approved(c.flow, c.hash), event: endEvent('A', [pass('A')]) },

@@ -4,15 +4,21 @@ import { isOffered } from '../hooks/roles'
 
 describe('agent offer', () => {
   test('every role and default seat is offered', () => {
-    for (const role of ['explorer', 'librarian', 'executor', 'oracle', 'designer', 'git', 'councillor-alpha', 'councillor-beta']) {
+    for (const role of ['code-reader', 'docs-reader', 'developer', 'architect', 'ux', 'git', 'councillor-alpha', 'councillor-beta']) {
       expect(isOffered(DEFAULTS, `pantheon:${role}`)).toBe(true)
     }
   })
 
   test('disabled native roles are hidden', () => {
-    const config = { ...DEFAULTS, disabledAgents: ['oracle'] }
-    expect(isOffered(config, 'pantheon:oracle')).toBe(false)
-    expect(isOffered(config, 'pantheon:designer')).toBe(true)
+    const config = { ...DEFAULTS, disabledAgents: ['architect'] }
+    expect(isOffered(config, 'pantheon:architect')).toBe(false)
+    expect(isOffered(config, 'pantheon:ux')).toBe(true)
+  })
+
+  test('the former role names are not offered', () => {
+    for (const old of ['explorer', 'librarian', 'executor', 'designer', 'oracle', 'fixer']) {
+      expect(isOffered(DEFAULTS, `pantheon:${old}`)).toBe(false)
+    }
   })
 
   test('removed seat and unknown seats are hidden', () => {
@@ -25,7 +31,7 @@ describe('agent offer', () => {
     const config = { ...DEFAULTS, disabledAgents: ['council'] }
     expect(isOffered(config, 'pantheon:councillor-alpha')).toBe(false)
     expect(isOffered(config, 'pantheon:councillor-beta')).toBe(false)
-    expect(isOffered(config, 'pantheon:oracle')).toBe(true)
+    expect(isOffered(config, 'pantheon:architect')).toBe(true)
   })
 
   test('seat disable names work for the logical and native names', () => {
@@ -40,8 +46,8 @@ describe('agent offer', () => {
   })
 
   test('non-Pantheon agents are always offered', () => {
-    const config = { ...DEFAULTS, disabledAgents: ['oracle', 'council', 'Explore'] }
-    for (const agent of ['Explore', 'other:oracle', 'pantheonish:oracle', 'oracle']) {
+    const config = { ...DEFAULTS, disabledAgents: ['architect', 'council', 'Explore'] }
+    for (const agent of ['Explore', 'other:architect', 'pantheonish:architect', 'architect']) {
       expect(isOffered(config, agent)).toBe(true)
     }
   })

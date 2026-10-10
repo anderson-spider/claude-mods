@@ -6,8 +6,8 @@ import type { Native, PantheonConfig, SessionInfo } from '../hooks/types'
 const config = (overrides: Partial<PantheonConfig> = {}): PantheonConfig => ({
   disabledAgents: [],
   agents: {
-    explorer: { model: 'explorer-model' }, librarian: {}, executor: { model: 'executor-model' },
-    oracle: { model: 'oracle-model' }, designer: {}, git: {},
+    'code-reader': { model: 'code-reader-model' }, 'docs-reader': {}, developer: { model: 'developer-model' },
+    architect: { model: 'architect-model' }, ux: {}, git: {},
   },
   council: { seats: {
     alpha: { model: 'alpha-model' },
@@ -16,7 +16,7 @@ const config = (overrides: Partial<PantheonConfig> = {}): PantheonConfig => ({
   ...overrides,
 })
 const native = (overrides: Partial<Native> = {}): Native => ({
-  id: 'native', role: 'oracle', type: 'pantheon:oracle', task: 'Review', model: 'native-model',
+  id: 'native', role: 'architect', type: 'pantheon:architect', task: 'Review', model: 'native-model',
   rounds: [{ startedAt: 100, status: 'running' }], ctx: 40, out: 10, steps: 2, ...overrides,
 })
 const roster = (natives: Native[] = [], c = config(), session: SessionInfo = { isRunning: false }) =>
@@ -24,7 +24,7 @@ const roster = (natives: Native[] = [], c = config(), session: SessionInfo = { i
 
 test('eight slots in fixed order with nothing running', () => {
   const result = roster()
-  expect(ROLE_ORDER).toEqual(['orchestrator', 'explorer', 'librarian', 'executor', 'oracle', 'designer', 'git', 'council'])
+  expect(ROLE_ORDER).toEqual(['lead', 'code-reader', 'docs-reader', 'developer', 'architect', 'ux', 'git', 'council'])
   expect(result.slots.map(s => s.name)).toEqual(ROLE_ORDER)
   expect(result.slots.map(s => s.state)).toEqual(Array(8).fill('idle'))
   expect(result.others).toEqual([])
@@ -33,9 +33,9 @@ test('eight slots in fixed order with nothing running', () => {
 
 test('active, idle with last ended, and off', () => {
   const result = roster([
-    native({ id: 'run', role: 'explorer', type: 'pantheon:explorer' }),
+    native({ id: 'run', role: 'code-reader', type: 'pantheon:code-reader' }),
     native({ rounds: [{ startedAt: 100, endedAt: 200, status: 'done' }] }),
-  ], config({ disabledAgents: ['librarian'] }))
+  ], config({ disabledAgents: ['docs-reader'] }))
   expect(result.slots[1].state).toBe('active')
   expect(result.slots[4]).toEqual(expect.objectContaining({ state: 'idle', lastEndedAt: 200 }))
   expect(result.slots[2]).toEqual(expect.objectContaining({ state: 'off', offReason: 'disabledAgents' }))
@@ -44,8 +44,8 @@ test('active, idle with last ended, and off', () => {
 
 test('parallel instances stack', () => {
   const result = roster([
-    native({ id: 'one', role: 'executor', type: 'pantheon:executor' }),
-    native({ id: 'two', role: 'executor', type: 'pantheon:executor' }),
+    native({ id: 'one', role: 'developer', type: 'pantheon:developer' }),
+    native({ id: 'two', role: 'developer', type: 'pantheon:developer' }),
   ])
   expect(result.slots[3].instances.map(i => i.id)).toEqual(['one', 'two'])
   expect(result.slots[3].state).toBe('active')
@@ -54,7 +54,7 @@ test('parallel instances stack', () => {
 
 test('a native with several rounds is one line showing its latest round', () => {
   const natives = [native({
-    id: 'multi', role: 'explorer', type: 'pantheon:explorer', task: 'Latest task', model: 'latest-model',
+    id: 'multi', role: 'code-reader', type: 'pantheon:code-reader', task: 'Latest task', model: 'latest-model',
     lastTool: 'Read', rounds: [
       { startedAt: 100, endedAt: 150, status: 'done' },
       { startedAt: 200, endedAt: 250, status: 'done' },
@@ -96,15 +96,15 @@ test('council is off when every seat is disabled with either spelling', () => {
 
 test('delegating lists active roles in order', () => {
   const result = roster([
-    native({ id: 'e', role: 'executor' }), native({ id: 'x', role: 'explorer' }),
-    native({ id: 'seat', role: 'councillor-alpha' }), native({ id: 'd', role: 'designer' }),
+    native({ id: 'e', role: 'developer' }), native({ id: 'x', role: 'code-reader' }),
+    native({ id: 'seat', role: 'councillor-alpha' }), native({ id: 'd', role: 'ux' }),
   ], config(), { isRunning: true, model: 'session-model' })
-  expect(result.delegating).toEqual(['explorer', 'executor', 'designer', 'council'])
+  expect(result.delegating).toEqual(['code-reader', 'developer', 'ux', 'council'])
   expect(result.slots[0]).toEqual(expect.objectContaining({ state: 'active', model: 'session-model' }))
 })
 
-test('orchestrator is never off and roles use disabledAgents', () => {
-  const result = roster([], config({ disabledAgents: ['orchestrator', 'oracle', 'designer'] }),
+test('lead is never off and roles use disabledAgents', () => {
+  const result = roster([], config({ disabledAgents: ['lead', 'architect', 'ux'] }),
     { isRunning: false, model: 'session-model' })
   expect(result.slots[0]).toEqual(expect.objectContaining({ state: 'idle', model: 'session-model' }))
   expect(result.slots[4].state).toBe('off')
@@ -125,7 +125,7 @@ test('other agents only when present', () => {
 })
 
 test('active instances precede every ended instance, newest end first', () => {
-  const ex = (o: Partial<Native>) => native({ role: 'explorer', type: 'pantheon:explorer', ...o })
+  const ex = (o: Partial<Native>) => native({ role: 'code-reader', type: 'pantheon:code-reader', ...o })
   const result = roster([
     ex({ id: 'old', rounds: [{ startedAt: 50, endedAt: 150, status: 'done' }] }),
     ex({ id: 'latest', rounds: [{ startedAt: 80, endedAt: 400, status: 'done' }] }),
@@ -138,7 +138,7 @@ test('active instances precede every ended instance, newest end first', () => {
 })
 
 test('history keeps every line of a role, oldest first, for the timeline', () => {
-  const ex = (o: Partial<Native>) => native({ role: 'explorer', type: 'pantheon:explorer', ...o })
+  const ex = (o: Partial<Native>) => native({ role: 'code-reader', type: 'pantheon:code-reader', ...o })
   const result = roster([
     ex({ id: 'late', rounds: [{ startedAt: 300, endedAt: 400, status: 'done' }] }),
     ex({ id: 'early', rounds: [{ startedAt: 100, endedAt: 200, status: 'done' }] }),
@@ -157,8 +157,8 @@ test('idle rows use configured models instead of the last instance model', () =>
   const result = roster(
     [native({ rounds: [{ startedAt: 100, endedAt: 200, status: 'stopped' }] })],
     config({ council: { seats: { alpha: { model: 'seat-model' } } } }))
-  expect(result.slots[1].model).toBe('explorer-model')
-  expect(result.slots[4].model).toBe('oracle-model')
+  expect(result.slots[1].model).toBe('code-reader-model')
+  expect(result.slots[4].model).toBe('architect-model')
   expect(result.slots[4].instances[0].isActive).toBe(false)
   expect(result.slots[7].model).toBe('seat-model')
 })
@@ -180,14 +180,14 @@ test('ago formats', () => {
 })
 
 test('every role is a native slot with its default model', () => {
-  for (const role of ['explorer', 'librarian', 'executor', 'oracle', 'designer', 'git'] as const) {
+  for (const role of ['code-reader', 'docs-reader', 'developer', 'architect', 'ux', 'git'] as const) {
     const idle = roster([], DEFAULTS).slots.find(s => s.name === role)!
     expect(idle).toEqual(expect.objectContaining({ state: 'idle', model: DEFAULTS.agents[role].model }))
     const result = roster([native({ role, type: `pantheon:${role}` })], DEFAULTS)
     expect(result.slots.find(s => s.name === role)).toEqual(expect.objectContaining({ state: 'active' }))
     expect(result.others).toEqual([])
   }
-  expect(roster([], { ...DEFAULTS, disabledAgents: ['oracle'] }).slots[4].state).toBe('off')
+  expect(roster([], { ...DEFAULTS, disabledAgents: ['architect'] }).slots[4].state).toBe('off')
 })
 
 test('seats do not disable the council one by one', () => {

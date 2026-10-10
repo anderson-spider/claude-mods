@@ -1,6 +1,6 @@
 import type { Instance, Roster, SlotName } from './roster'
 
-export type LogEvent = { at: number; actor: SlotName | 'orchestrator'; kind: string; text: string }
+export type LogEvent = { at: number; actor: SlotName | 'lead'; kind: string; text: string }
 
 function duration(ms: number): string {
   const s = Math.max(0, Math.floor(ms / 1000))

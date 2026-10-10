@@ -67,13 +67,13 @@ export function gateContext(e: GateEvent, env: GateEnv):
   return { skip: false, ctx: { tool: e.tool, path, ext: extension(path), linesAdded, linesRemoved, files: 1 } }
 }
 
-export function gateMessage(v: Verdict, ctx: EditContext, roles: { executor: boolean; designer: boolean }): string {
+export function gateMessage(v: Verdict, roles: { developer: boolean; ux: boolean }): string {
   const source = v.source === 'jev' ? `jev (score ${v.score ?? 'unknown'})` : 'rules'
   if (v.action === 'allow') return `Allowed by ${source}.`
   const decision = v.action === 'deny' ? 'Denied' : 'Ask the person before proceeding'
-  const destinations = [roles.executor ? 'delegate to the executor' : 'ask the person to handle implementation']
-  if (['.tsx', '.jsx', '.css', '.scss', '.svelte', '.vue', '.html'].includes(extension(ctx.path).toLowerCase())) {
-    destinations.push(roles.designer ? 'delegate UI work to the designer' : 'ask the person to handle UI work')
-  }
+  // Code goes to developer and visual work to ux; a disabled role is replaced by a request for the person.
+  const destinations = roles.developer
+    ? [roles.ux ? 'delegate to developer (code) or ux (visual work)' : 'delegate to developer']
+    : ['ask the person to handle implementation', ...(roles.ux ? ['delegate visual work to ux'] : [])]
   return `${decision} by ${source}.\nPlease ${destinations.join('; ')}; the main session should not edit it itself.`
 }

@@ -23,9 +23,9 @@ export type FlowState = {
   status: Record<string, TaskStatus>
   /** Failed attempts per task since it last became active. */
   attempts: Record<string, number>
-  /** Tasks with an oracle review receipt. */
+  /** Tasks with an architect review receipt. */
   reviewed: string[]
-  /** Risk tasks whose checks passed and that wait for the oracle's verdict before they count as done. */
+  /** Risk tasks whose checks passed and that wait for the architect's verdict before they count as done. */
   awaitingReview: string[]
   /** Side-effect tasks recorded done in the ledger; never re-entered. */
   sideEffectsDone: string[]
@@ -51,7 +51,7 @@ export type FlowEvent =
   | { kind: 'stop'; stopHookActive: boolean; backgroundTasks: number; runningAgents: number; checks: Record<string, CheckResult[]> }
   /** The person wrote: the block budget refills. */
   | { kind: 'humanPrompt' }
-  /** The oracle reviewed a task that was awaiting review. */
+  /** The architect reviewed a task that was awaiting review. */
   | { kind: 'review'; taskId: string; verdict: 'approved' | 'rejected'; note?: string }
 
 export type Action = 'allow' | 'block' | 'advance' | 'wait' | 'pause' | 'complete' | 'failTask'
@@ -60,7 +60,7 @@ export type Decision = {
   action: Action
   /** A stable tag naming the rule that fired, for the journal and calibration. */
   condition: string
-  /** What the agent or the orchestrator reads: a concrete next step, with failing output when there is any. */
+  /** What the agent or the lead reads: a concrete next step, with failing output when there is any. */
   reason: string
   /** The state after this decision; the caller saves it. */
   state: FlowState

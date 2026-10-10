@@ -10,13 +10,13 @@ const NO_DELEGATION = ['Agent']
 const NO_EDITS = ['Edit', 'Write', 'NotebookEdit']
 
 describe('native agent prompts', () => {
-  test('explorer and librarian may use Bash and MCP; oracle and councillor may not change state', () => {
-    expect(rolePrompt('explorer')).toContain('Bash')
-    expect(rolePrompt('explorer')).toContain('MCP')
-    const librarian = rolePrompt('librarian')
-    expect(librarian).toContain('terminal-browser action --browser <key>')
-    expect(librarian).toContain('done')
-    for (const key of ['oracle', 'councillor'] as const) {
+  test('code-reader and docs-reader may use Bash and MCP; architect and councillor may not change state', () => {
+    expect(rolePrompt('code-reader')).toContain('Bash')
+    expect(rolePrompt('code-reader')).toContain('MCP')
+    const docsReader = rolePrompt('docs-reader')
+    expect(docsReader).toContain('terminal-browser action --browser <key>')
+    expect(docsReader).toContain('done')
+    for (const key of ['architect', 'councillor'] as const) {
       expect(rolePrompt(key)).toContain('including through Bash')
     }
   })
@@ -27,7 +27,7 @@ describe('native agent specs', () => {
     const spec = nativeAgentSpecs(DEFAULTS, prompts).find(spec => spec.name === 'git')
     expect(spec?.disallowedTools).toEqual(NO_DELEGATION)
     expect(spec).not.toHaveProperty('tools')
-    expect(spec?.description).toContain('commit, squash, push, PR/MR, checkout, worktree, stash')
+    expect(spec?.description).toContain('squash, PR/MR, checkout, switch, worktree, stash')
     expect(spec?.prompt).toBe('<git>')
     expect(spec?.model).toBe('haiku')
   })
@@ -35,39 +35,39 @@ describe('native agent specs', () => {
   test('every role and seat is a native spec', () => {
     const specs = nativeAgentSpecs(DEFAULTS, prompts)
     expect(specs.map(spec => spec.name)).toEqual([...ROLES, 'councillor-alpha', 'councillor-beta'])
-    expect(specs.find(spec => spec.name === 'explorer')).toEqual(expect.objectContaining({
+    expect(specs.find(spec => spec.name === 'code-reader')).toEqual(expect.objectContaining({
       description: 'Pantheon codebase recon that returns compressed context.', model: 'haiku',
     }))
-    expect(specs.find(spec => spec.name === 'explorer')?.disallowedTools).toEqual(NO_DELEGATION)
-    expect(specs.find(spec => spec.name === 'librarian')?.disallowedTools).toEqual(NO_DELEGATION)
-    for (const name of ['oracle', 'councillor-alpha', 'councillor-beta']) {
+    expect(specs.find(spec => spec.name === 'code-reader')?.disallowedTools).toEqual(NO_DELEGATION)
+    expect(specs.find(spec => spec.name === 'docs-reader')?.disallowedTools).toEqual(NO_DELEGATION)
+    for (const name of ['architect', 'councillor-alpha', 'councillor-beta']) {
       expect(specs.find(spec => spec.name === name)?.disallowedTools).toEqual([...NO_EDITS, ...NO_DELEGATION])
     }
-    expect(specs.find(spec => spec.name === 'librarian')).toEqual(expect.objectContaining({
+    expect(specs.find(spec => spec.name === 'docs-reader')).toEqual(expect.objectContaining({
       description: 'Pantheon research on external docs and APIs.',
     }))
-    expect(specs.find(spec => spec.name === 'executor')).toEqual(expect.objectContaining({
-      model: 'sonnet', description: 'Pantheon bounded implementation from a complete specification.',
+    expect(specs.find(spec => spec.name === 'developer')).toEqual(expect.objectContaining({
+      model: 'sonnet', description: 'Pantheon implementation of all code (backend, scripts, tests, hooks, CLI, UI logic) from a complete specification.',
     }))
-    expect(specs.find(spec => spec.name === 'executor')).not.toHaveProperty('disallowedTools')
+    expect(specs.find(spec => spec.name === 'developer')).not.toHaveProperty('disallowedTools')
     for (const spec of specs) expect(spec).not.toHaveProperty('tools')
   })
 
   test('default models reach the specs', () => {
     const models = Object.fromEntries(nativeAgentSpecs(DEFAULTS, prompts).map(spec => [spec.name, spec.model]))
     expect(models).toEqual({
-      explorer: 'haiku', librarian: 'haiku', executor: 'sonnet', oracle: 'opus', designer: 'sonnet', git: 'haiku',
+      'code-reader': 'haiku', 'docs-reader': 'haiku', developer: 'sonnet', architect: 'opus', ux: 'sonnet', git: 'haiku',
       'councillor-alpha': 'opus', 'councillor-beta': 'sonnet',
     })
   })
 
-  test('oracle and seats inherit tools minus file edits; designer inherits tools', () => {
+  test('architect and seats inherit tools minus file edits; ux inherits tools', () => {
     const specs = nativeAgentSpecs(DEFAULTS, prompts)
-    expect(specs.find(spec => spec.name === 'oracle')).toEqual(expect.objectContaining({
-      prompt: '<oracle>', model: 'opus', disallowedTools: [...NO_EDITS, ...NO_DELEGATION], description: expect.any(String),
+    expect(specs.find(spec => spec.name === 'architect')).toEqual(expect.objectContaining({
+      prompt: '<architect>', model: 'opus', disallowedTools: [...NO_EDITS, ...NO_DELEGATION], description: expect.any(String),
     }))
-    expect(specs.find(spec => spec.name === 'designer')).toEqual(expect.objectContaining({ prompt: '<designer>', model: 'sonnet' }))
-    expect(specs.find(spec => spec.name === 'designer')).not.toHaveProperty('disallowedTools')
+    expect(specs.find(spec => spec.name === 'ux')).toEqual(expect.objectContaining({ prompt: '<ux>', model: 'sonnet' }))
+    expect(specs.find(spec => spec.name === 'ux')).not.toHaveProperty('disallowedTools')
     expect(specs.find(spec => spec.name === 'councillor-beta')).toEqual(expect.objectContaining({
       prompt: '<councillor>', model: 'sonnet', disallowedTools: [...NO_EDITS, ...NO_DELEGATION],
     }))
@@ -75,12 +75,12 @@ describe('native agent specs', () => {
 
   test('config model, effort and append prompts reach the registration specs', async () => {
     const config = await resolved({
-      agents: { oracle: { model: 'claude-opus-4-1', effort: 'high', prompt: 'extra' } },
+      agents: { architect: { model: 'claude-opus-4-1', effort: 'high', prompt: 'extra' } },
       council: { seats: { beta: { model: 'haiku', effort: 'low', prompt: 'seat extra' }, gamma: { prompt: 'g' } } },
     })
     const specs = nativeAgentSpecs(config, prompts)
-    expect(specs.find(spec => spec.name === 'oracle')).toEqual(expect.objectContaining({
-      prompt: '<oracle>\n\nextra', model: 'claude-opus-4-1', effort: 'high', disallowedTools: [...NO_EDITS, ...NO_DELEGATION],
+    expect(specs.find(spec => spec.name === 'architect')).toEqual(expect.objectContaining({
+      prompt: '<architect>\n\nextra', model: 'claude-opus-4-1', effort: 'high', disallowedTools: [...NO_EDITS, ...NO_DELEGATION],
     }))
     expect(specs.find(spec => spec.name === 'councillor-beta')).toEqual(expect.objectContaining({
       prompt: '<councillor>\n\nseat extra', model: 'haiku', effort: 'low',
@@ -91,8 +91,8 @@ describe('native agent specs', () => {
   })
 
   test('disabled natives and council do not produce registration specs', () => {
-    expect(nativeAgentSpecs({ ...DEFAULTS, disabledAgents: ['oracle', 'council'] }, prompts)
-      .map(spec => spec.name)).toEqual(['explorer', 'librarian', 'executor', 'designer', 'git'])
+    expect(nativeAgentSpecs({ ...DEFAULTS, disabledAgents: ['architect', 'council'] }, prompts)
+      .map(spec => spec.name)).toEqual(['code-reader', 'docs-reader', 'developer', 'ux', 'git'])
     expect(nativeAgentSpecs({ ...DEFAULTS, disabledAgents: ['councillor:beta'] }, prompts)
       .map(spec => spec.name)).toEqual([...ROLES, 'councillor-alpha'])
     expect(nativeAgentSpecs({ ...DEFAULTS, disabledAgents: ['councillor-alpha'] }, prompts)
@@ -101,7 +101,7 @@ describe('native agent specs', () => {
 
   test('prompts come from the injected function', () => {
     const marked: RolePrompts = key => `[${key}]`
-    expect(nativeAgentSpecs(DEFAULTS, marked).find(spec => spec.name === 'explorer')?.prompt).toBe('[explorer]')
+    expect(nativeAgentSpecs(DEFAULTS, marked).find(spec => spec.name === 'code-reader')?.prompt).toBe('[code-reader]')
   })
 })
 
@@ -118,28 +118,49 @@ describe('council seats', () => {
 })
 
 describe('role prompts', () => {
-  test('executor executes the brief and reports results within its boundaries', () => {
-    const prompt = rolePrompt('executor')
+  test('developer executes the brief and reports results within its boundaries', () => {
+    const prompt = rolePrompt('developer')
     for (const text of [
       'run scripts, test batteries and API calls',
-      "within the orchestrator's complete brief and assigned scope",
+      "within the lead's complete brief and assigned scope",
       'short result: a table, status or errors, not raw logs',
       'State what you ran and what you did not run.',
       'Do not do external research.',
-      'Do not spawn subagents or delegate work; return coordination needs to the orchestrator.',
-      'Never modify protected branches or rewrite git history; git operations stay with the git role.',
+      'Do not spawn subagents or delegate work; return coordination needs to the lead.',
+      'Never modify protected branches or rewrite git history; other git operations stay with the git role.',
     ]) expect(prompt).toContain(text)
   })
 
-  test('designer, executor and git return coordination to the orchestrator', () => {
-    for (const role of ['designer', 'executor', 'git'] as const) {
-      expect(rolePrompt(role)).toContain('Do not spawn subagents or delegate work; return coordination needs to the orchestrator.')
+  test('ux, developer and git return coordination to the lead', () => {
+    for (const role of ['ux', 'developer', 'git'] as const) {
+      expect(rolePrompt(role)).toContain('Do not spawn subagents or delegate work; return coordination needs to the lead.')
     }
   })
 
-  test('executor does not commit and leaves that to the git role', () => {
-    expect(rolePrompt('executor')).toContain('Do not commit or push; the git role handles your delivered changes.')
-    expect(rolePrompt('executor')).not.toContain('.git is read-only')
+  test('developer writes all code, UI code included, and only guides look-and-feel work to ux', () => {
+    const prompt = rolePrompt('developer')
+    expect(prompt).toContain('Write all the code (backend, scripts, tests, hooks, CLI, UI code and logic included)')
+    expect(prompt).toContain('tell the lead it belongs to ux. This is guidance, not a refusal: still do the code your brief assigns.')
+    expect(prompt).not.toContain('No UI files')
+    expect(prompt).not.toContain('No design work')
+  })
+
+  test('ux owns look and feel, implements it and keeps the design criteria', () => {
+    const prompt = rolePrompt('ux')
+    for (const text of ['Own the look and feel: layout, hierarchy, color, spacing, motion, affordances and UI copy', 'Implement them (do not only advise)', 'whichever files your brief or task assigns', '## Design Principles', '## Review Responsibilities', 'Typography']) {
+      expect(prompt).toContain(text)
+    }
+  })
+
+  test('docs-reader reads and researches without writing docs', () => {
+    expect(rolePrompt('docs-reader')).toContain('you do not write documentation')
+  })
+
+  test('developer commits only its own paths and leaves push and other git work out', () => {
+    const prompt = rolePrompt('developer')
+    expect(prompt).toContain('git add -- <paths>')
+    expect(prompt).toContain('the lead pushes and the git role handles the rest')
+    expect(prompt).not.toContain('.git is read-only')
   })
 
   test('git covers checkout, switch, worktree and stash', () => {
@@ -148,17 +169,17 @@ describe('role prompts', () => {
   })
 
   test('read-only instructions use the native tools', () => {
-    for (const key of ['explorer', 'librarian', 'oracle', 'councillor'] as const) {
+    for (const key of ['code-reader', 'docs-reader', 'architect', 'councillor'] as const) {
       expect(rolePrompt(key)).toContain('Read/Grep/Glob')
       expect(rolePrompt(key)).not.toContain('apply_patch')
       expect(rolePrompt(key)).not.toContain('rg --files')
     }
-    expect(rolePrompt('librarian')).toContain('WebSearch')
-    expect(rolePrompt('librarian')).toContain('WebFetch')
+    expect(rolePrompt('docs-reader')).toContain('WebSearch')
+    expect(rolePrompt('docs-reader')).toContain('WebFetch')
   })
 
   test('write roles describe file operations', () => {
-    for (const key of ['executor', 'designer', 'git'] as const) {
+    for (const key of ['developer', 'ux', 'git'] as const) {
       expect(rolePrompt(key)).toContain('**File operations**')
       expect(rolePrompt(key)).toContain('Read/Grep/Glob/Edit')
       expect(rolePrompt(key)).not.toContain('apply_patch')

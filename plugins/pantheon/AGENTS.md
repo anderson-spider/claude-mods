@@ -1,20 +1,21 @@
 # pantheon
 
-Makes the main session an orchestrator in the style of oh-my-opencode-slim. The six roles and every council seat are native Claude subagents; the configuration chooses each one's model, effort and extra prompt.
+Makes the main session the lead in the style of oh-my-opencode-slim. The six roles and every council seat are native Claude subagents; the configuration chooses each one's model, effort and extra prompt.
 
 IMPORTANT: prompts and panel modules include third-party work. Keep `LICENSE` and the credits and full license text in `NOTICE`.
 
 ## Roles
 
-- Roles and seats are registered as native `pantheon:<role>` or `pantheon:councillor-<seat>` agents with `$.agent.register` (no tool list, so they inherit the session's tools; oracle and councillors get `disallowedTools` Edit, Write and NotebookEdit; explorer, librarian, oracle, git and councillors also get Agent; executor and designer get none), and hidden by an `agent.offer` guard when disabled.
-- Executor implements code changes and runs scripts, test batteries and API calls within the brief, returning short results; no external research or sub-delegation. Commits and history operations stay with git.
-- Executor, designer and git may write within their assigned scope. The git role executes commits, squash, push, PR/MR creation and repository state changes (checkout, switch, worktree, stash) from the orchestrator's brief; the orchestrator decides the included changes, branch, base, squash/push/PR choices and task commit range, and owns validation. Git follows repository conventions and templates, uses `gh` or `glab`, and reports SHAs, push results, PR/MR URLs and refusals.
+- Roles and seats are registered as native `pantheon:<role>` or `pantheon:councillor-<seat>` agents with `$.agent.register` (no tool list, so they inherit the session's tools; architect and councillors get `disallowedTools` Edit, Write and NotebookEdit; code-reader, docs-reader, architect, git and councillors also get Agent; developer and ux get none), and hidden by an `agent.offer` guard when disabled.
+- Developer writes all code (UI code and logic included) and runs scripts, test batteries and API calls within the brief, returning short results; no external research or sub-delegation. It tells the lead when a task is look and feel (guidance, not a refusal). Developer and ux commit their own task's files after the checks pass (`git add -- <paths>`, `git commit -m "<type>(<scope>): <summary> [<taskId>]" -- <paths>`; never `-A`, `.`, `--no-verify` or `--amend`, no AI attribution, retry once on `index.lock`) and never push, rebase, reset, merge, switch or stash; the lead pushes.
+- UX owns look and feel (layout, hierarchy, color, spacing, motion, UI copy), makes mockups and throwaway prototypes (scratchpad, never committed) when the direction is open, and implements the chosen one, keeping the design criteria of the former designer; the split with developer is by kind of work, not by file extension. Docs-reader reads external docs and research; it does not write docs. Architect covers architecture, debugging, review and simplification.
+- Developer, ux and git may write within their assigned scope. The git role executes squash, PR/MR creation and repository state changes (checkout, switch, worktree, stash) from the lead's brief; the lead decides the included changes, branch, base, squash/PR choices and task commit range, pushes, and owns validation. Git follows repository conventions and templates, uses `gh` or `glab`, and reports SHAs, PR/MR URLs and refusals; it does not push.
 - Git's fixed refusals cover modifying default or protected branches (including main/master/develop), unverified branch protection, force push without `--force-with-lease`, PR/MR merges, remote branch deletion, history rewrites outside an explicit task commit range, and work outside the task.
 
 ## Config
 
 - `config.ts` merges built-in defaults, `~/.claude/pantheon.json` and `<repo>/.claude/pantheon.json` field by field: `agents.<role>` and `council.seats.<seat>` take `model`, `effort` and `prompt`; `disabledAgents` is a union. Models must be Claude models (`models.ts`).
-- Fields of the Codex and profile era (`profile`, `profiles`, `sandboxCap`, `noNetwork`, `foregroundMinutes`, an entry's `engine` or `sandbox`) and the old `fixer` name fail to load with a message saying what to do.
+- Fields of the Codex and profile era (`profile`, `profiles`, `sandboxCap`, `noNetwork`, `foregroundMinutes`, an entry's `engine` or `sandbox`) and the old role names (`explorer`, `librarian`, `executor`, `designer`, `oracle`, `fixer`) fail to load with one message listing them saying what to do.
 
 ## Edit gate
 
@@ -33,7 +34,7 @@ IMPORTANT: prompts and panel modules include third-party work. Keep `LICENSE` an
 
 ## Roster
 
-`roster.ts` joins the native records of the six roles and council seats into eight fixed slots (orchestrator, explorer, librarian, executor, oracle, designer, git, council), with "other agents" when present. The panel groups them as Running (one row per live instance; each council seat has its own) and Idle (exactly one row per role and per council seat with nothing live: the latest run's model, duration and task, a strip of `▰` marks for the role's last four rounds (only with two or more rounds) with `+N` for older ones, `⊘` for a disabled one). A lost run counts as Idle. The council slot carries every configured seat in `seats`.
+`roster.ts` joins the native records of the six roles and council seats into eight fixed slots (lead, code-reader, docs-reader, developer, architect, ux, git, council), with "other agents" when present. The panel groups them as Running (one row per live instance; each council seat has its own) and Idle (exactly one row per role and per council seat with nothing live: the latest run's model, duration and task, a strip of `▰` marks for the role's last four rounds (only with two or more rounds) with `+N` for older ones, `⊘` for a disabled one). A lost run counts as Idle. The council slot carries every configured seat in `seats`.
 
 ## Panel
 
@@ -50,5 +51,5 @@ The panel opens at session start. `/pantheon close` closes it; `config` shows th
 
 ## Prompts and skills
 
-- `prompts/` holds the orchestrator section, role prompts and Council Mode.
-- `skills/` holds `grill`, `execute`, `debug` and `finish` (`<name>/SKILL.md`). `execute` and `finish` route commits, push and PR/MR creation to git from an orchestrator brief; validation and review remain with the orchestrator. `scripts/check-consistency.mjs` checks their frontmatter.
+- `prompts/` holds the lead section (`lead.ts`), role prompts and Council Mode.
+- `skills/` holds `grill`, `execute`, `debug` and `finish` (`<name>/SKILL.md`). `execute` has the developer or ux commit their own task, the lead pushes, and `finish` has git open the PR/MR from a lead brief; validation and review remain with the lead. `scripts/check-consistency.mjs` checks their frontmatter.

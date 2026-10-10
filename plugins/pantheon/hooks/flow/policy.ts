@@ -220,11 +220,11 @@ function onStop(flow: Flow, s: FlowState, event: Extract<FlowEvent, { kind: 'sto
   }
   s.lastFailure = undefined
 
-  // 6. a risky task whose checks passed waits for the oracle's verdict
+  // 6. a risky task whose checks passed waits for the architect's verdict
   const waiting = flow.tasks.find(task => s.awaitingReview.includes(task.id) && s.status[task.id] !== 'done')
   if (waiting) {
     charge(s)
-    return instruct(s, 'block', 'review_needed', `Task ${waiting.id} is risky and its checks pass, but it has no oracle review yet. Ask the oracle to review it before stopping.`, waiting.id)
+    return instruct(s, 'block', 'review_needed', `Task ${waiting.id} is risky and its checks pass, but it has no architect review yet. Ask the architect to review it before stopping.`, waiting.id)
   }
 
   // 7. everything required is done and every declared check of it passes
@@ -288,7 +288,7 @@ function onTaskEnd(flow: Flow, s: FlowState, event: Extract<FlowEvent, { kind: '
 
   if (task.risk && !s.reviewed.includes(task.id)) {
     if (!s.awaitingReview.includes(task.id)) s.awaitingReview.push(task.id)
-    return make(s, 'allow', 'review_needed', `Task ${task.id} passes its checks but is risky: ask the oracle to review it before it counts as done.`, task.id)
+    return make(s, 'allow', 'review_needed', `Task ${task.id} passes its checks but is risky: ask the architect to review it before it counts as done.`, task.id)
   }
   return finishTask(flow, s, task)
 }
@@ -314,10 +314,10 @@ function onReview(flow: Flow, s: FlowState, event: Extract<FlowEvent, { kind: 'r
     return finishTask(flow, s, task)
   }
   const note = event.note?.trim()
-  return failAttempt(flow, s, task, note ? tail(`The oracle rejected the review: ${note}`) : 'The oracle rejected the review.', 0)
+  return failAttempt(flow, s, task, note ? tail(`The architect rejected the review: ${note}`) : 'The architect rejected the review.', 0)
 }
 
-/** A failed attempt: retry the implementer, then the oracle (or the onFail task), then the person. */
+/** A failed attempt: retry the implementer, then the architect (or the onFail task), then the person. */
 function failAttempt(flow: Flow, s: FlowState, task: FlowTask, output: string, ownershipDenials: number): Decision {
   const max = task.loop?.maxIterations ?? flow.limits.maxAttempts
   const attempts = (s.attempts[task.id] ?? 0) + 1
@@ -344,7 +344,7 @@ function failAttempt(flow: Flow, s: FlowState, task: FlowTask, output: string, o
     s.status[branch.id] = 'active'
     return instruct(s, 'advance', 'on_fail', withOutput(`Task ${task.id} failed ${attempts} times. Move to ${branch.id} (${branch.goal}).`), branch.id)
   }
-  return instruct(s, 'failTask', 'oracle', withOutput(`Task ${task.id} (${task.goal}) failed ${attempts} times. Ask the oracle to diagnose it before another attempt.`), task.id)
+  return instruct(s, 'failTask', 'architect', withOutput(`Task ${task.id} (${task.goal}) failed ${attempts} times. Ask the architect to diagnose it before another attempt.`), task.id)
 }
 
 /**

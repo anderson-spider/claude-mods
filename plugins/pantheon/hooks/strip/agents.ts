@@ -9,7 +9,7 @@ import type { Native } from '../../types'
 
 export type AgentView = {
   id: string
-  /** A pantheon role ("explorer", "council", ...) or the subagent type of a native that is not one ("Explore"). */
+  /** A pantheon role ("code-reader", "council", ...) or the subagent type of a native that is not one ("Explore"). */
   role: string
   task: string
   startedAt: number
@@ -35,7 +35,7 @@ export function fmtClock(ms: number): string {
   return m < 60 ? `${m}:${String(s % 60).padStart(2, '0')}` : `${Math.floor(m / 60)}h${String(m % 60).padStart(2, '0')}`
 }
 
-const isRole = (name: string): boolean => Object.hasOwn(ROLE_COLOR, name) && name !== 'orchestrator'
+const isRole = (name: string): boolean => Object.hasOwn(ROLE_COLOR, name) && name !== 'lead'
 
 /** The label of a native: its pantheon role (councillor seats read "council"), else its subagent type. */
 function nativeLabel(n: Native): string {

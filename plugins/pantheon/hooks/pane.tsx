@@ -213,9 +213,9 @@ export function timelineSource(slots: Slot[], session: SessionInfo, now: number,
   for (const { top, slot } of lanes) {
     const cy = top + 8
     const n = activeOf(slot).length
-    const labelFill = slot.name === 'orchestrator' ? HEX.ink : slot.state === 'active' ? ROLE_COLOR[slot.name] : HEX.muted
+    const labelFill = slot.name === 'lead' ? HEX.ink : slot.state === 'active' ? ROLE_COLOR[slot.name] : HEX.muted
     body += `<text x="16" y="${cy + 3}" font-size="12" font-weight="${slot.state === 'active' ? 600 : 400}" fill="${labelFill}">${esc(n > 1 ? `${slot.name} ×${n}` : slot.name)}</text>`
-    if (slot.name === 'orchestrator') {
+    if (slot.name === 'lead') {
       const s = session
       const turns = s.turns ?? []
       for (const turn of turns) {
@@ -391,7 +391,7 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
   }
   // 7: the warning gets its own row under the header, ahead of everything optional.
   const clockWarning = () => data.clockLost ? note('clock-lost', { text: 'clock unavailable', color: ROUND, bold: true }) : null
-  // The orchestrator plus every row the Agents cards list (running instances, idle roles and seats) and the other agents.
+  // The lead plus every row the Agents cards list (running instances, idle roles and seats) and the other agents.
   const agentTotalOf = () => { const r = agentRows(); return 1 + r.running.length + r.idle.length + roster.others.length }
   const footer = () => !isDesk || !el.Svg || W < 60 ? note('footer', {
     dim: true,
@@ -624,7 +624,7 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     return { text: '●', dim: true }
   }
 
-  const NAME_W = 10
+  const NAME_W = 12
   const MODEL_W = 11
   const MODEL_MAX_W = 24
   const modelLabel = (r: AgentRow) => modelName(r.inst?.model ?? r.slot.model)
@@ -705,12 +705,12 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
   const timelineBlock = (): Block | undefined => {
     const span = 900_000
     const t0 = now - span
-    const labelW = 13
+    const labelW = 15
     const per = Math.floor((IW - labelW) / 15)
     if (per < 1) return undefined
     const hit = (s: number, e: number, b: number) => s < t0 + (b + 1) * 60_000 && e >= t0 + b * 60_000
     const busy = (slot: Slot, b: number): boolean => {
-      if (slot.name === 'orchestrator') {
+      if (slot.name === 'lead') {
         const ses = data.session
         return (ses.turns ?? []).some(t => hit(t.startedAt, t.endedAt, b)) ||
           (ses.isRunning && ses.turnStartedAt !== undefined && hit(ses.turnStartedAt, now, b))
@@ -791,12 +791,12 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     const running = s.isRunning
     const ctx = s.context?.percent
     const timeSeg = (): Seg => running && s.turnStartedAt
-      ? clockSeg('clk-orchestrator', s.turnStartedAt, null, 'text', true)
+      ? clockSeg('clk-lead', s.turnStartedAt, null, 'text', true)
       : s.lastTurnMs !== undefined ? { text: fmtClock(s.lastTurnMs), bold: true } : { text: '—', dim: true }
     const dot: Seg = running ? pulseSeg('s-dot') : idleSeg('s-idle')
     if (compact) {
       const model = [modelName(s.model), s.effort].filter(Boolean).join(' · ')
-      const left: Seg[] = [dot, { text: 'orchestrator', bold: true, color: ROLE_COLOR.orchestrator }, ...(model ? [{ text: clip(model, 20), dim: true }] : [])]
+      const left: Seg[] = [dot, { text: 'lead', bold: true, color: ROLE_COLOR.lead }, ...(model ? [{ text: clip(model, 20), dim: true }] : [])]
       return [{ node: line('o-c', left, running && s.turnStartedAt ? [timeSeg()] : undefined, W, keepOf(left, 2)), h: 1 }]
     }
     const cost: Seg = s.costUsd !== undefined ? { text: `≈$${s.costUsd.toFixed(2)}`, bold: true } : { text: '—', dim: true }
@@ -808,7 +808,7 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
       ? [{ node: plate('s-pill', 11.5, pillTint(running ? HEX.green : HUD.neutral[2]), render(stateTexts), 1, 0.6), w: 13.5 }]
       : [dot, { text: ' ', dim: true }, stateTexts[1]]
     const identity: Seg[] = [
-      { text: modelName(s.model) || 'orchestrator', bold: true, color: ROLE_COLOR.orchestrator },
+      { text: modelName(s.model) || 'lead', bold: true, color: ROLE_COLOR.lead },
       ...(s.effort ? [{ text: ` · ${s.effort} effort`, dim: true }] : []),
     ]
     const rows: RowBlock[] = []
@@ -906,7 +906,7 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     const s = data.session
     const live = roles.filter(r => r.state === 'active')
     const quiet = roles.filter(r => r.state !== 'active')
-    // At most 8 lines: the orchestrator, the active roles and a last line. The orchestrator counts
+    // At most 8 lines: the lead, the active roles and a last line. The lead counts
     // among the active, so six lines at most are active ones and the rest collapse into "+N".
     const avail = Math.max(1, Math.min(8, data.rows))
     const capacity = Math.max(0, Math.min(5, avail - 2))
@@ -922,17 +922,17 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
         ...(data.clockLost ? [{ text: 'clock unavailable', bold: true, color: ROUND }] : []),
         { text: 'pantheon', bold: true, color: ROUND },
         { text: s.isRunning ? '●' : '○', color: s.isRunning ? RUN : undefined, dim: !s.isRunning },
-        { text: 'orchestrator' },
+        { text: 'lead' },
         ...(s.model ? [{ text: `${modelName(s.model)}${s.effort ? ` ${s.effort}` : ''}`, dim: true }] : []),
-        ...(s.isRunning && s.turnStartedAt ? [clockSeg('clk-orchestrator', s.turnStartedAt, null, 'text', true)] : []),
+        ...(s.isRunning && s.turnStartedAt ? [clockSeg('clk-lead', s.turnStartedAt, null, 'text', true)] : []),
         ...ctxSegs,
         ...(delegating.length ? [{ text: '→', dim: true }, ...delegating] : []),
     ], undefined, W))
 
     for (const slot of shown) {
       const act = activeOf(slot)
-      const per = Math.floor((W - 14) / act.length)
-      const segs: Seg[] = [pulseSeg(`mpulse-${slot.name}`), { text: slot.name.padEnd(9), color: AGENT }]
+      const per = Math.floor((W - 16) / act.length)
+      const segs: Seg[] = [pulseSeg(`mpulse-${slot.name}`), { text: slot.name.padEnd(11), color: AGENT }]
       act.forEach((i, k) => {
         if (k) segs.push({ text: '│', dim: true })
         const tags = (i.status === 'background' ? 3 : 0) + (i.rounds.length > 1 ? 6 : 0)
@@ -946,7 +946,7 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
       lines.push(line(`m-${slot.name}`, segs, undefined, W))
     }
 
-    // With one or no spare line the last line goes first, and with a single line the orchestrator's alone.
+    // With one or no spare line the last line goes first, and with a single line the lead's alone.
     const more = live.length - shown.length
     // Other subagents get one summary ahead of the quiet roles, so active work outside the roles shows.
     const others = roster.others

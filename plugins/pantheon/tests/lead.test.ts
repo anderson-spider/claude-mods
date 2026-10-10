@@ -1,24 +1,24 @@
 import { describe, expect, test } from 'claude-code/testing'
 import { DEFAULTS } from './fixtures/config'
 import type { PromptKey } from '../hooks/types'
-import { buildOrchestratorSection } from '../hooks/prompts/orchestrator'
+import { buildLeadSection } from '../hooks/prompts/lead'
 import { rolePrompt } from '../hooks/prompts/roles'
 
-describe('orchestrator budget', () => {
+describe('lead budget', () => {
   // The git route adds its required brief fields; the limit keeps a small growth margin.
   test('the prompt stays within 5350 chars', () => {
-    expect(buildOrchestratorSection(DEFAULTS).length).toBeLessThanOrEqual(5350)
+    expect(buildLeadSection(DEFAULTS).length).toBeLessThanOrEqual(5350)
   })
 })
 
-describe('orchestrator section', () => {
-  test('librarian routing mentions passing and releasing a logged-in terminal-browser', () => {
-    expect(buildOrchestratorSection(DEFAULTS)).toContain('terminal-browser action --browser <key> done')
+describe('lead section', () => {
+  test('docs-reader routing mentions passing and releasing a logged-in terminal-browser', () => {
+    expect(buildLeadSection(DEFAULTS)).toContain('terminal-browser action --browser <key> done')
   })
 
   test('routes every role and seat through Agent', () => {
-    const section = buildOrchestratorSection(DEFAULTS)
-    for (const role of ['explorer', 'librarian', 'executor', 'oracle', 'designer', 'git']) {
+    const section = buildLeadSection(DEFAULTS)
+    for (const role of ['code-reader', 'docs-reader', 'developer', 'architect', 'ux', 'git']) {
       expect(section).toContain(`Agent({ subagent_type: "pantheon:${role}"`)
       expect(section).toContain(`@${role}`)
     }
@@ -31,9 +31,9 @@ describe('orchestrator section', () => {
     }
   })
 
-  for (const role of ['explorer', 'librarian', 'executor', 'oracle', 'designer', 'git']) {
+  for (const role of ['code-reader', 'docs-reader', 'developer', 'architect', 'ux', 'git']) {
     test(`disabled ${role} disappears from routing, examples and skill mappings`, () => {
-      const section = buildOrchestratorSection({ ...DEFAULTS, disabledAgents: [role] })
+      const section = buildLeadSection({ ...DEFAULTS, disabledAgents: [role] })
       expect(section).not.toContain(`@${role}`)
       expect(section).not.toContain(`pantheon:${role}`)
     })
@@ -41,19 +41,19 @@ describe('orchestrator section', () => {
 
   test('same config produces the same bytes without mutating it', () => {
     const before = JSON.stringify(DEFAULTS)
-    expect(buildOrchestratorSection(DEFAULTS)).toBe(buildOrchestratorSection(DEFAULTS))
+    expect(buildLeadSection(DEFAULTS)).toBe(buildLeadSection(DEFAULTS))
     expect(JSON.stringify(DEFAULTS)).toBe(before)
   })
 
   test('removes unsupported vocabulary and obsolete source sections', () => {
-    const section = buildOrchestratorSection(DEFAULTS)
+    const section = buildLeadSection(DEFAULTS)
     for (const text of ['task_revive', 'task_message', 'task_status', 'wait_for_user', '`question`', 'marketplace', 'Marketplace', 'Todo Continuity', '<Communication>', 'Permissions:', 'Stats:', '@observer']) {
       expect(section).not.toContain(text)
     }
   })
 
   test('keeps workflow, background discipline, amendments, handoff and reuse', () => {
-    const section = buildOrchestratorSection(DEFAULTS)
+    const section = buildLeadSection(DEFAULTS)
     for (const heading of ['## 1. Understand', '## 2. Path Selection', '## 3. Delegation Check', '## 4. Plan and Parallelize', '## 5. Verify', 'Background Task Discipline', 'Active Task Amendments', 'Design Handoff Discipline', 'Session Reuse']) {
       expect(section).toContain(heading)
     }
@@ -62,12 +62,22 @@ describe('orchestrator section', () => {
     }
   })
 
-  test('without the designer the handoff section is gone', () => {
-    expect(buildOrchestratorSection({ ...DEFAULTS, disabledAgents: ['designer'] })).not.toContain('Design Handoff Discipline')
+  test('code routes to developer and visual work to ux', () => {
+    const section = buildLeadSection(DEFAULTS)
+    const ux = section.slice(section.indexOf('@ux\n'), section.indexOf('@git\n'))
+    const developer = section.slice(section.indexOf('@developer\n'), section.indexOf('@architect\n'))
+    for (const text of ['layout, hierarchy, color, spacing, motion', 'UI copy', 'implement, not advise']) expect(ux).toContain(text)
+    for (const text of ['non-trivial or multi-file code', 'UI code and logic', 'commits its own task']) expect(developer).toContain(text)
+    expect(section).toContain('Route visual and UX work to @ux')
+    expect(section).toContain('@developer may do bounded mechanical follow-up that preserves the design exactly; visual judgment or changed feel returns to @ux')
+  })
+
+  test('without the ux the handoff section is gone', () => {
+    expect(buildLeadSection({ ...DEFAULTS, disabledAgents: ['ux'] })).not.toContain('Design Handoff Discipline')
   })
 
   test('ordinary section mentions seats in one line without injecting Council Mode', () => {
-    const section = buildOrchestratorSection(DEFAULTS)
+    const section = buildLeadSection(DEFAULTS)
     expect(section).toContain('pantheon:councillor-alpha')
     expect(section).toContain('pantheon:councillor-beta')
     expect(section.split('\n').filter(line => line.includes('councillor')).length).toBe(1)
@@ -76,37 +86,40 @@ describe('orchestrator section', () => {
   })
 
   test('empty seats do not fabricate a council member', () => {
-    expect(buildOrchestratorSection({ ...DEFAULTS, council: { seats: {} } })).not.toContain('councillor')
+    expect(buildLeadSection({ ...DEFAULTS, council: { seats: {} } })).not.toContain('councillor')
   })
 })
 
 describe('role prompts', () => {
-  const keys: PromptKey[] = ['explorer', 'librarian', 'executor', 'oracle', 'designer', 'git', 'councillor']
+  const keys: PromptKey[] = ['code-reader', 'docs-reader', 'developer', 'architect', 'ux', 'git', 'councillor']
 
-  test('git routing keeps decisions and validation with the orchestrator and covers repository state', () => {
-    const section = buildOrchestratorSection(DEFAULTS)
-    expect(section).toContain('Delegate: commit, squash, push and PR/MR after validation')
+  test('git routing keeps decisions and validation with the lead and covers repository state', () => {
+    const section = buildLeadSection(DEFAULTS)
+    expect(section).toContain('Delegate: squash and PR/MR after validation')
     for (const text of ['checkout', 'switch', 'worktree', 'stash']) expect(section).toContain(text)
-    expect(section).toContain('what to include, branch, base, squash yes/no, push yes/no, PR/MR yes/no')
-    expect(section).toContain('The orchestrator decides and validates; @git performs the git work')
-    expect(section).not.toContain('orchestrator commits')
+    expect(section).toContain('what to include, branch, base, squash yes/no, PR/MR yes/no')
+    expect(section).not.toContain('push yes/no')
+    expect(section).toContain('You run only read-only git and push; everything else that changes the repository')
+    expect(section).toContain('no force push without `--force-with-lease`, no remote branch deletion, no `--mirror`, never main/master/develop')
+    expect(section).not.toContain('lead commits')
   })
 
-  test('designer leaves commit and push to git', () => {
-    expect(rolePrompt('designer')).toContain('Do not commit or push; the git role handles your delivered changes.')
-  })
-
-  test('executor leaves commit and push to git', () => {
-    const prompt = rolePrompt('executor')
-    expect(prompt).toContain('Do not commit or push')
-    expect(prompt).toContain('the git role')
-    expect(prompt).not.toContain('orchestrator commits')
+  test('developer and ux commit their own task and never push', () => {
+    for (const key of ['developer', 'ux'] as const) {
+      const prompt = rolePrompt(key)
+      for (const text of [
+        'git add -- <paths>', 'git commit -m "<type>(<scope>): <summary> [<taskId>]" -- <paths>',
+        'Never `git add -A`, `git add .`, `--no-verify` or `--amend`', 'no globs in pathspecs', '`git mv` or `git rm`', '(no `-F`, no editor or `-e`)', 'No AI attribution', 'retry once',
+        'report it to the lead instead of bypassing it', 'Never push, rebase, reset, merge, switch branches or stash',
+      ]) expect(prompt).toContain(text)
+      expect(prompt).not.toContain('Do not commit or push')
+    }
   })
 
   test('git enforces scope, refusals, conventions and reporting', () => {
     const prompt = rolePrompt('git')
     for (const text of [
-      "orchestrator's brief decides", 'what to include, branch, base, squash yes/no, push yes/no, PR/MR yes/no',
+      "lead's brief decides", 'what to include, branch, base, squash yes/no, PR/MR yes/no', 'Developers commit their own tasks and the lead pushes',
       'checkout, switch, worktree and stash',
       'git status', 'git diff', "Stage only the task's files", 'git log', 'Conventional Commits in English',
       'PR/MR template', 'gh', 'glab', 'Preserve unrelated changes', 'Never add AI attribution',
@@ -118,10 +131,10 @@ describe('role prompts', () => {
       'the refusal concerns modifying those branches, not using them as a base',
       'Refuse force push without --force-with-lease', 'Refuse merging a PR/MR',
       'Refuse deleting remote branches', 'Rewrite history (squash, amend or rebase of the branch) only within',
-      "the range of the task's commits the orchestrator names in the brief, whoever created them",
+      "the range of the task's commits the lead names in the brief, whoever created them",
       'Refuse history outside that range', 'If the range is missing or ambiguous, stop and report',
       'Refuse touching work outside the task', 'hook, conflict, auth', 'stop and report rather than improvise',
-      'Do not spawn subagents or delegate', 'sha + subject', 'branch and push result', 'PR/MR URL', 'refused or skipped',
+      'Do not spawn subagents or delegate', 'sha + subject', 'whether it is on the remote', 'PR/MR URL', 'refused or skipped',
     ]) expect(prompt).toContain(text)
     expect(prompt).not.toContain('Refuse rewriting history you did not create in this task')
   })
@@ -132,30 +145,30 @@ describe('role prompts', () => {
     })
   }
 
-  test('executor implements within scope with Edit/Write and does not commit', () => {
-    const prompt = rolePrompt('executor')
-    for (const text of ['Read/Grep/Glob/Edit/Write', '<summary>', '<changes>', '<verification>', 'orchestrator', 'commit', 'Do not spawn subagents', 'No design work', 'run scripts, test batteries and API calls', 'short result: a table, status or errors, not raw logs']) {
+  test('developer implements within scope with Edit/Write and commits its own files', () => {
+    const prompt = rolePrompt('developer')
+    for (const text of ['Read/Grep/Glob/Edit/Write', '<summary>', '<changes>', '<verification>', 'lead', 'commit', 'Do not spawn subagents', 'tell the lead it belongs to ux', 'run scripts, test batteries and API calls', 'short result: a table, status or errors, not raw logs']) {
       expect(prompt).toContain(text)
     }
   })
 
-  test('explorer and librarian research read-only with the native tools', () => {
-    for (const key of ['explorer', 'librarian'] as const) {
+  test('code-reader and docs-reader research read-only with the native tools', () => {
+    for (const key of ['code-reader', 'docs-reader'] as const) {
       expect(rolePrompt(key)).toContain('Read/Grep/Glob')
       expect(rolePrompt(key)).toContain('without changing files or state')
     }
-    expect(rolePrompt('explorer')).toContain('<results>')
-    expect(rolePrompt('librarian')).toContain('WebSearch, WebFetch and the documentation MCPs available to you')
+    expect(rolePrompt('code-reader')).toContain('<results>')
+    expect(rolePrompt('docs-reader')).toContain('WebSearch, WebFetch and the documentation MCPs available to you')
   })
 
-  test('review and council use read-only tools while designer can edit', () => {
-    for (const key of ['oracle', 'councillor'] as const) {
+  test('review and council use read-only tools while ux can edit', () => {
+    for (const key of ['architect', 'councillor'] as const) {
       expect(rolePrompt(key)).toContain('Read/Grep/Glob')
       expect(rolePrompt(key)).toContain('READ-ONLY')
     }
-    expect(rolePrompt('designer')).toContain('Read/Grep/Glob/Edit')
-    expect(rolePrompt('designer')).toContain('Typography')
-    expect(rolePrompt('designer')).toContain('Motion & Interaction')
+    expect(rolePrompt('ux')).toContain('Read/Grep/Glob/Edit')
+    expect(rolePrompt('ux')).toContain('Typography')
+    expect(rolePrompt('ux')).toContain('Motion & Interaction')
     expect(rolePrompt('councillor')).toContain('independent')
   })
 })

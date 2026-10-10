@@ -6,12 +6,12 @@ export type Line = Run[]
 export type StripItem = { state: 'running' | 'done' | 'failed' | 'planned'; role: SlotName }
 
 export const ROLE_COLOR: Record<SlotName, string> = {
-  orchestrator: '#5B93E6',
-  explorer: '#3FA57D',
-  librarian: '#C9A24A',
-  executor: '#8F96A6',
-  oracle: '#A56BD8',
-  designer: '#D870A8',
+  lead: '#5B93E6',
+  'code-reader': '#3FA57D',
+  'docs-reader': '#C9A24A',
+  developer: '#8F96A6',
+  architect: '#A56BD8',
+  ux: '#D870A8',
   git: '#E8873A',
   council: '#B8B3A6',
 }

@@ -24,11 +24,11 @@ describe('defaults', () => {
     const result = valid(await loadConfig(async () => undefined, { user: 'u' }))
     expect(result.config).toEqual(DEFAULT_CONFIG)
     expect(result.config.agents).toEqual({
-      explorer: { model: 'haiku' },
-      librarian: { model: 'haiku' },
-      executor: { model: 'sonnet' },
-      oracle: { model: 'opus' },
-      designer: { model: 'sonnet' },
+      'code-reader': { model: 'haiku' },
+      'docs-reader': { model: 'haiku' },
+      developer: { model: 'sonnet' },
+      architect: { model: 'opus' },
+      ux: { model: 'sonnet' },
       git: { model: 'haiku' },
     })
     expect(result.config.council.seats).toEqual({ alpha: { model: 'opus' }, beta: { model: 'sonnet' } })
@@ -47,14 +47,14 @@ describe('defaults', () => {
 describe('loadConfig', () => {
   test('reads only the injected paths, including an optional project file', async () => {
     const read: ReadFile = async path => {
-      if (path === '/user/settings') return '{"agents":{"oracle":{"effort":"low"}}}'
-      if (path === '/repo/settings') return '{"agents":{"oracle":{"effort":"high"}}}'
+      if (path === '/user/settings') return '{"agents":{"architect":{"effort":"low"}}}'
+      if (path === '/repo/settings') return '{"agents":{"architect":{"effort":"high"}}}'
       throw new Error('unexpected path')
     }
-    expect(valid(await loadConfig(read, { user: '/user/settings' })).config.agents.oracle.effort).toBe('low')
+    expect(valid(await loadConfig(read, { user: '/user/settings' })).config.agents.architect.effort).toBe('low')
     expect(valid(await loadConfig(read, {
       user: '/user/settings', project: '/repo/settings',
-    })).config.agents.oracle.effort).toBe('high')
+    })).config.agents.architect.effort).toBe('high')
   })
 
   test('project config works without a user file', async () => {
@@ -66,14 +66,14 @@ describe('loadConfig', () => {
 
   test('user then project merge field by field', async () => {
     const result = valid(await load({
-      agents: { executor: { model: 'opus', effort: 'high', prompt: 'user prompt' } },
+      agents: { developer: { model: 'opus', effort: 'high', prompt: 'user prompt' } },
       council: { seats: { alpha: { prompt: 'seat prompt', effort: 'high' } } },
     }, {
-      agents: { executor: { model: 'claude-sonnet-4-5' } },
+      agents: { developer: { model: 'claude-sonnet-4-5' } },
       council: { seats: { alpha: { effort: 'low' } } },
     }))
-    expect(result.config.agents.executor).toEqual({ model: 'claude-sonnet-4-5', effort: 'high', prompt: 'user prompt' })
-    expect(result.config.agents.explorer).toEqual({ model: 'haiku' })
+    expect(result.config.agents.developer).toEqual({ model: 'claude-sonnet-4-5', effort: 'high', prompt: 'user prompt' })
+    expect(result.config.agents['code-reader']).toEqual({ model: 'haiku' })
     expect(result.config.council.seats).toEqual({
       alpha: { model: 'opus', effort: 'low', prompt: 'seat prompt' },
       beta: { model: 'sonnet' },
@@ -82,29 +82,29 @@ describe('loadConfig', () => {
 
   test('disabledAgents is a union without duplicates', async () => {
     const result = valid(await load(
-      { disabledAgents: ['oracle', 'oracle'] },
-      { disabledAgents: ['council', 'oracle', 'councillor:alpha'] },
+      { disabledAgents: ['architect', 'architect'] },
+      { disabledAgents: ['council', 'architect', 'councillor:alpha'] },
     ))
-    expect(result.config.disabledAgents).toEqual(['oracle', 'council', 'councillor:alpha'])
+    expect(result.config.disabledAgents).toEqual(['architect', 'council', 'councillor:alpha'])
   })
 
   test('accepts every role and councillor in disabledAgents with custom prompts', async () => {
     const result = valid(await load({
-      disabledAgents: ['explorer', 'librarian', 'executor', 'oracle', 'designer', 'git', 'council', 'councillor:alpha'],
-      agents: { oracle: { prompt: '' }, designer: { prompt: 'custom' } },
+      disabledAgents: ['code-reader', 'docs-reader', 'developer', 'architect', 'ux', 'git', 'council', 'councillor:alpha'],
+      agents: { architect: { prompt: '' }, ux: { prompt: 'custom' } },
     }))
-    expect(result.config.agents.oracle).toEqual({ model: 'opus', prompt: '' })
-    expect(result.config.agents.designer).toEqual({ model: 'sonnet', prompt: 'custom' })
+    expect(result.config.agents.architect).toEqual({ model: 'opus', prompt: '' })
+    expect(result.config.agents.ux).toEqual({ model: 'sonnet', prompt: 'custom' })
     expect(result.config.disabledAgents).toContain('councillor:alpha')
   })
 
-  test('accepts agents.executor and disabledAgents executor', async () => {
+  test('accepts agents.developer and disabledAgents developer', async () => {
     const result = valid(await load({
-      agents: { executor: { prompt: 'Execute the assigned brief' } },
-      disabledAgents: ['executor'],
+      agents: { developer: { prompt: 'Execute the assigned brief' } },
+      disabledAgents: ['developer'],
     }))
-    expect(result.config.agents.executor).toEqual({ model: 'sonnet', prompt: 'Execute the assigned brief' })
-    expect(result.config.disabledAgents).toEqual(['executor'])
+    expect(result.config.agents.developer).toEqual({ model: 'sonnet', prompt: 'Execute the assigned brief' })
+    expect(result.config.disabledAgents).toEqual(['developer'])
   })
 
   test('a new seat is accepted with or without a model', async () => {
@@ -132,26 +132,26 @@ describe('loadConfig', () => {
 
   test('Claude model ids and aliases with a context suffix are accepted', async () => {
     const result = valid(await load({
-      agents: { oracle: { model: 'opus[1m]' }, explorer: { model: 'claude-haiku-4-5' }, git: { model: 'inherit' } },
+      agents: { architect: { model: 'opus[1m]' }, 'code-reader': { model: 'claude-haiku-4-5' }, git: { model: 'inherit' } },
       council: { seats: { alpha: { model: 'claude-opus-4-1' } } },
     }))
-    expect(result.config.agents.oracle.model).toBe('opus[1m]')
+    expect(result.config.agents.architect.model).toBe('opus[1m]')
     expect(result.config.agents.git.model).toBe('inherit')
     expect(result.config.council.seats.alpha?.model).toBe('claude-opus-4-1')
   })
 
   test('origins report where each field came from', async () => {
     const result = valid(await load({
-      agents: { executor: { model: 'opus', effort: 'high' } },
+      agents: { developer: { model: 'opus', effort: 'high' } },
       council: { seats: { alpha: { prompt: 'extra' }, gamma: { model: 'haiku' } } },
     }, {
       disabledAgents: ['council'],
-      agents: { executor: { model: 'haiku' } },
+      agents: { developer: { model: 'haiku' } },
     }))
     expect(result.origins.disabledAgents).toBe('project')
-    expect(result.origins['agents.executor.model']).toBe('project')
-    expect(result.origins['agents.executor.effort']).toBe('user')
-    expect(result.origins['agents.oracle.model']).toBe('default')
+    expect(result.origins['agents.developer.model']).toBe('project')
+    expect(result.origins['agents.developer.effort']).toBe('user')
+    expect(result.origins['agents.architect.model']).toBe('default')
     expect(result.origins['council.seats.alpha.prompt']).toBe('user')
     expect(result.origins['council.seats.alpha.model']).toBe('default')
     expect(result.origins['council.seats.gamma']).toBe('user')
@@ -164,15 +164,39 @@ describe('loadConfig', () => {
     expect(valid(await load({ disabledAgents: ['git'] })).origins.disabledAgents).toBe('user')
   })
 
-  for (const [name, config, message] of [
-    ['agents.fixer', { agents: { fixer: {} } }, 'agents.fixer: role `fixer` was renamed to `executor`; use `agents.executor`'],
-    ['disabled fixer', { disabledAgents: ['fixer'] }, 'disabledAgents: role `fixer` was renamed to `executor`; use `executor` in `disabledAgents`'],
+  for (const [oldName, newName] of [
+    ['fixer', 'developer'],
+    ['explorer', 'code-reader'],
+    ['librarian', 'docs-reader'],
+    ['executor', 'developer'],
+    ['designer', 'ux'],
+    ['oracle', 'architect'],
   ] as const) {
-    test(`rejects ${name} with executor migration guidance in either file`, async () => {
-      expect(rejected(await load(config))).toBe(`u: ${message}`)
-      expect(rejected(await load({}, config))).toBe(`p: ${message}`)
-    })
+    for (const [name, config, message] of [
+      [`agents.${oldName}`, { agents: { [oldName]: {} } }, `agents.${oldName}: role \`${oldName}\` was renamed to \`${newName}\`; use \`agents.${newName}\``],
+      [`disabled ${oldName}`, { disabledAgents: [oldName] }, `disabledAgents: role \`${oldName}\` was renamed to \`${newName}\`; use \`${newName}\` in \`disabledAgents\``],
+    ] as const) {
+      test(`rejects ${name} with ${newName} migration guidance in either file`, async () => {
+        expect(rejected(await load(config))).toBe(`u: ${message}`)
+        expect(rejected(await load({}, config))).toBe(`p: ${message}`)
+      })
+    }
   }
+
+  test('lists every renamed role found in the file at once, agents first', async () => {
+    const config = { agents: { oracle: {}, developer: {}, designer: {} }, disabledAgents: ['explorer', 'git', 'fixer'] }
+    expect(rejected(await load(config))).toBe([
+      'u: agents.oracle: role `oracle` was renamed to `architect`; use `agents.architect`',
+      'agents.designer: role `designer` was renamed to `ux`; use `agents.ux`',
+      'disabledAgents: role `explorer` was renamed to `code-reader`; use `code-reader` in `disabledAgents`',
+      'disabledAgents: role `fixer` was renamed to `developer`; use `developer` in `disabledAgents`',
+    ].join('; '))
+  })
+
+  test('a repeated old name is listed once', async () => {
+    expect(rejected(await load({ disabledAgents: ['oracle', 'oracle'] })))
+      .toBe('u: disabledAgents: role `oracle` was renamed to `architect`; use `architect` in `disabledAgents`')
+  })
 
   for (const [field, json] of [
     ['profile', '{"profile":"claude"}'],
@@ -199,8 +223,8 @@ describe('loadConfig', () => {
   })
 
   for (const [field, json] of [
-    ['agents.executor.engine', '{"agents":{"executor":{"engine":"codex"}}}'],
-    ['agents.executor.sandbox', '{"agents":{"executor":{"sandbox":"read-only"}}}'],
+    ['agents.developer.engine', '{"agents":{"developer":{"engine":"codex"}}}'],
+    ['agents.developer.sandbox', '{"agents":{"developer":{"sandbox":"read-only"}}}'],
     ['council.seats.alpha.engine', '{"council":{"seats":{"alpha":{"engine":"claude"}}}}'],
     ['council.seats.alpha.sandbox', '{"council":{"seats":{"alpha":{"sandbox":"read-only"}}}}'],
   ] as const) {
@@ -212,7 +236,7 @@ describe('loadConfig', () => {
   }
 
   for (const [name, json, field] of [
-    ['an agent role', '{"agents":{"oracle":{"model":"gpt-6-astra"}}}', 'agents.oracle.model'],
+    ['an agent role', '{"agents":{"architect":{"model":"gpt-6-astra"}}}', 'agents.architect.model'],
     ['another agent role', '{"agents":{"git":{"model":"gemini-3"}}}', 'agents.git.model'],
     ['a seat', '{"council":{"seats":{"alpha":{"model":"gpt-6-luna"}}}}', 'council.seats.alpha.model'],
     ['a new seat', '{"council":{"seats":{"gamma":{"model":"o4"}}}}', 'council.seats.gamma.model'],
@@ -230,19 +254,19 @@ describe('loadConfig', () => {
     ['top level string', '"config"', 'config'],
     ['unknown field', '{"unknown":true}', 'unknown'],
     ['unknown role', '{"agents":{"stranger":{}}}', 'agents.stranger'],
-    ['unknown nested field', '{"agents":{"executor":{"modle":"x"}}}', 'agents.executor.modle'],
+    ['unknown nested field', '{"agents":{"developer":{"modle":"x"}}}', 'agents.developer.modle'],
     ['top level prototype key', '{"__proto__":{}}', '__proto__'],
     ['unknown council field', '{"council":{"enabled":true}}', 'council.enabled'],
     ['unknown seat field', '{"council":{"seats":{"alpha":{"color":"red"}}}}', 'council.seats.alpha.color'],
-    ['non array disabled agents', '{"disabledAgents":"oracle"}', 'disabledAgents'],
+    ['non array disabled agents', '{"disabledAgents":"architect"}', 'disabledAgents'],
     ['non string disabled agent', '{"disabledAgents":[1]}', 'disabledAgents'],
     ['unknown disabled agent', '{"disabledAgents":["stranger"]}', 'disabledAgents'],
     ['empty councillor name', '{"disabledAgents":["councillor:"]}', 'disabledAgents'],
     ['non object agents', '{"agents":[]}', 'agents'],
-    ['null role', '{"agents":{"oracle":null}}', 'agents.oracle'],
-    ['non string model', '{"agents":{"executor":{"model":2}}}', 'agents.executor.model'],
-    ['non string effort', '{"agents":{"oracle":{"effort":true}}}', 'agents.oracle.effort'],
-    ['non string prompt', '{"agents":{"designer":{"prompt":[]}}}', 'agents.designer.prompt'],
+    ['null role', '{"agents":{"architect":null}}', 'agents.architect'],
+    ['non string model', '{"agents":{"developer":{"model":2}}}', 'agents.developer.model'],
+    ['non string effort', '{"agents":{"architect":{"effort":true}}}', 'agents.architect.effort'],
+    ['non string prompt', '{"agents":{"ux":{"prompt":[]}}}', 'agents.ux.prompt'],
     ['non object council', '{"council":false}', 'council'],
     ['non object seats', '{"council":{"seats":[]}}', 'council.seats'],
     ['null seat', '{"council":{"seats":{"gamma":null}}}', 'council.seats.gamma'],
@@ -261,12 +285,12 @@ describe('loadConfig', () => {
   }
 
   test('non-string fields say "expected string"', async () => {
-    expect(rejected(await load({ agents: { executor: { model: 2 } } }))).toBe('u: agents.executor.model: expected string')
+    expect(rejected(await load({ agents: { developer: { model: 2 } } }))).toBe('u: agents.developer.model: expected string')
     expect(rejected(await load({ council: { seats: { alpha: { prompt: false } } } }))).toBe('u: council.seats.alpha.prompt: expected string')
   })
 
   test('invalid JSON keeps lastValid', async () => {
-    const lastValid = valid(await load({ agents: { oracle: { effort: 'low' } } })).config
+    const lastValid = valid(await load({ agents: { architect: { effort: 'low' } } })).config
     const result = await loadConfig(readFiles({ u: '{ broken' }), { user: 'u' }, lastValid)
     expect(result.ok).toBe(false)
     expect(result.config).toBe(lastValid)
@@ -282,7 +306,7 @@ describe('loadConfig', () => {
   })
 
   test('invalid project keeps lastValid rather than a partially merged config', async () => {
-    const lastValid = valid(await load({ agents: { oracle: { effort: 'low' } } })).config
+    const lastValid = valid(await load({ agents: { architect: { effort: 'low' } } })).config
     const result = await loadConfig(readFiles({ u: '{"agents":{"git":{"effort":"high"}}}', p: '{"unknown":true}' }), {
       user: 'u', project: 'p',
     }, lastValid)
@@ -293,7 +317,7 @@ describe('loadConfig', () => {
   })
 
   test('read errors keep lastValid and report the failing path', async () => {
-    const lastValid = valid(await load({ agents: { oracle: { effort: 'low' } } })).config
+    const lastValid = valid(await load({ agents: { architect: { effort: 'low' } } })).config
     const result = await loadConfig(async () => { throw new Error('unreadable') }, { user: 'u' }, lastValid)
     expect(result.ok).toBe(false)
     expect(result.config).toBe(lastValid)
@@ -307,21 +331,21 @@ describe('loadConfig', () => {
     const read: ReadFile = async () => text
     const first = await loadConfig(read, { user: 'u' })
     expect(first.ok).toBe(false)
-    text = '{"agents":{"oracle":{"effort":"low"}}}'
+    text = '{"agents":{"architect":{"effort":"low"}}}'
     const second = valid(await loadConfig(read, { user: 'u' }, first.config))
-    expect(second.config.agents.oracle.effort).toBe('low')
+    expect(second.config.agents.architect.effort).toBe('low')
   })
 
   test('successful loads are independent of defaults, previous results and lastValid', async () => {
-    const first = valid(await load({ agents: { executor: { effort: 'high' } } }))
-    first.config.disabledAgents.push('oracle')
-    first.config.agents.executor.model = 'mutated'
+    const first = valid(await load({ agents: { developer: { effort: 'high' } } }))
+    first.config.disabledAgents.push('architect')
+    first.config.agents.developer.model = 'mutated'
     first.config.council.seats.alpha!.model = 'mutated'
     const second = valid(await loadConfig(async () => undefined, { user: 'u' }, first.config))
     expect(second.config.disabledAgents).toEqual([])
-    expect(second.config.agents.executor).toEqual({ model: 'sonnet' })
+    expect(second.config.agents.developer).toEqual({ model: 'sonnet' })
     expect(second.config.council.seats.alpha?.model).toBe('opus')
-    expect(DEFAULT_CONFIG.agents.executor.model).toBe('sonnet')
+    expect(DEFAULT_CONFIG.agents.developer.model).toBe('sonnet')
     expect(DEFAULT_CONFIG.council.seats.alpha?.model).toBe('opus')
     expect(DEFAULT_CONFIG.disabledAgents).toEqual([])
   })

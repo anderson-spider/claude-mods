@@ -25,8 +25,8 @@ type NativeSpec = {
   disallowedTools?: readonly string[]
 }
 
-// Oracle and the councillors inherit the session's tools minus the ones that change files.
-// Explorer and librarian keep file tools (told by prompt not to use them).
+// Architect and the councillors inherit the session's tools minus the ones that change files.
+// Code-reader and docs-reader keep file tools (told by prompt not to use them).
 const NO_FILE_EDITS = ['Edit', 'Write', 'NotebookEdit'] as const
 // Read-only roles also cannot spawn agents.
 const NO_DELEGATION = ['Agent'] as const
@@ -35,12 +35,12 @@ const RESEARCH_DENY = [...NO_DELEGATION]
 
 export function nativeAgentSpecs(config: PantheonConfig, prompts: RolePrompts): NativeSpec[] {
   const descriptions: Record<Role, string> = {
-    explorer: 'Pantheon codebase recon that returns compressed context.',
-    librarian: 'Pantheon research on external docs and APIs.',
-    executor: 'Pantheon bounded implementation from a complete specification.',
-    oracle: 'Analyze architecture, debug difficult problems and review technical decisions.',
-    designer: 'Design and implement interfaces and user experiences.',
-    git: 'Perform git operations (commit, squash, push, PR/MR, checkout, worktree, stash) from the orchestrator brief.',
+    'code-reader': 'Pantheon codebase recon that returns compressed context.',
+    'docs-reader': 'Pantheon research on external docs and APIs.',
+    developer: 'Pantheon implementation of all code (backend, scripts, tests, hooks, CLI, UI logic) from a complete specification.',
+    architect: 'Analyze architecture, debug difficult problems and review technical decisions.',
+    ux: 'Owns look and feel (layout, hierarchy, color, spacing, motion, UI copy) and implements it.',
+    git: 'Perform git operations (squash, PR/MR, checkout, switch, worktree, stash) from the lead brief; does not push.',
   }
   const specs: NativeSpec[] = ROLES
     .filter(role => isOffered(config, `pantheon:${role}`))
@@ -52,8 +52,8 @@ export function nativeAgentSpecs(config: PantheonConfig, prompts: RolePrompts): 
         prompt: appendPrompt(prompts(role), override.prompt),
         model: override.model,
         effort: override.effort,
-        ...(role === 'oracle' ? { disallowedTools: READ_ONLY_DENY }
-          : role === 'explorer' || role === 'librarian' || role === 'git' ? { disallowedTools: RESEARCH_DENY } : {}),
+        ...(role === 'architect' ? { disallowedTools: READ_ONLY_DENY }
+          : role === 'code-reader' || role === 'docs-reader' || role === 'git' ? { disallowedTools: RESEARCH_DENY } : {}),
       }
     })
 

@@ -1,7 +1,7 @@
 import { ROLES } from './defaults'
 import type { Native, PantheonConfig, SessionInfo } from './types'
 
-export const ROLE_ORDER = ['orchestrator', 'explorer', 'librarian', 'executor', 'oracle', 'designer', 'git', 'council'] as const
+export const ROLE_ORDER = ['lead', 'code-reader', 'docs-reader', 'developer', 'architect', 'ux', 'git', 'council'] as const
 export type SlotName = (typeof ROLE_ORDER)[number]
 export type RoundView = { startedAt: number; endedAt?: number; status: string }
 export type Instance = {
@@ -83,7 +83,7 @@ export function buildRoster(input: {
   const councilModels = new Set(seats.filter(name => !seatsOff.includes(name))
     .map(name => config.council.seats[name].model))
   const slots = ROLE_ORDER.map((name): Slot => {
-    if (name === 'orchestrator') return {
+    if (name === 'lead') return {
       name, state: session.isRunning ? 'active' : 'idle',
       model: session.model, instances: [],
     }
@@ -112,7 +112,7 @@ export function buildRoster(input: {
   for (const slot of slots) counts[slot.state]++
   return {
     slots, others,
-    delegating: slots.filter(slot => slot.name !== 'orchestrator' && slot.state === 'active').map(slot => slot.name),
+    delegating: slots.filter(slot => slot.name !== 'lead' && slot.state === 'active').map(slot => slot.name),
     counts,
   }
 }

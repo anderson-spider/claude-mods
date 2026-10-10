@@ -104,13 +104,13 @@ test('request explicitly selects metadata and sends the exact question', async (
   const body = JSON.parse(seen!.init.body!)
   expect(body).toEqual({
     model: 'typesafe/jev-1.13',
-    state: { tool: 'Edit', kind: 'source', ext: 'ts', linesAdded: 1, linesRemoved: 0, files: 1, caller: 'main orchestrator session' },
+    state: { tool: 'Edit', kind: 'source', ext: 'ts', linesAdded: 1, linesRemoved: 0, files: 1, caller: 'main lead session' },
     questions: { trivial: {
       type: 'noul',
-      instructions: 'Is this code edit small and trivial enough for the orchestrator to apply directly, without delegating to a specialist?',
+      instructions: 'Is this code edit small and trivial enough for the lead to apply directly, without delegating to a specialist?',
       criteria: {
         true: 'Tiny, mechanical, single-file change such as a typo, a one-line fix or a doc tweak.',
-        false: 'Substantial, risky or multi-file change that should be delegated to an executor.',
+        false: 'Substantial, risky or multi-file change that should be delegated to developer (code) or ux (visual work).',
       },
     } },
   })
@@ -175,4 +175,11 @@ test('local rules count added and removed lines and preserve unknowns', () => {
     expect(rulesVerdict({ ...ctx, ext, linesAdded: 21 }).action).toBe('ask')
     expect(rulesVerdict({ ...ctx, ext, files: 4, linesAdded: 1 }).action).toBe('deny')
   }
+})
+
+test('deny reasons point to developer, and the question names ux for visual work', async () => {
+  expect(rulesVerdict({ ...ctx, linesAdded: 400, linesRemoved: 0 }).reason).toBe('Large or multi-file change; delegate to developer.')
+  expect(rulesVerdict({ ...ctx, files: 5 }).reason).toBe('Large or multi-file change; delegate to developer.')
+  const low = await decide(scored(0.1), 'k', { ...ctx, path: 'src/App.css', ext: '.css' })
+  expect(low.reason).toBe('Jev classified this edit as substantial; delegate to developer.')
 })

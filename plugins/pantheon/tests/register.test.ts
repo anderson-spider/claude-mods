@@ -10,7 +10,7 @@ import { HOME, ROOT, start, world } from './fixtures/world'
 
 const spawnInput = {
   tool_use_id: 'spawn-1', prompt: 'Review the change', description: 'Review',
-  subagentType: 'pantheon:oracle', provider: { plugin: 'pantheon', tier: 'user' },
+  subagentType: 'pantheon:architect', provider: { plugin: 'pantheon', tier: 'user' },
   parentModel: 'parent', permissionMode: 'default',
 } as AgentSpawnInput
 const stepInput = (index = 0, agentId: string | undefined = 'native-1'): TurnStepInput => ({
@@ -336,11 +336,11 @@ describe('edit gate', () => {
       expect(request.headers?.Authorization).toBe('Bearer option-key')
       for (const secret of ['old_string', 'new_string', 'content', 'new_source', 'private']) expect(request.body).not.toContain(secret)
     }
-    expect(JSON.parse(host.sent[0].body!).state).toEqual({ tool: 'Edit', kind: 'source', ext: 'ts', linesAdded: 1, linesRemoved: 1, files: 1, caller: 'main orchestrator session' })
+    expect(JSON.parse(host.sent[0].body!).state).toEqual({ tool: 'Edit', kind: 'source', ext: 'ts', linesAdded: 1, linesRemoved: 1, files: 1, caller: 'main lead session' })
   })
   test('denies a low score and uses the environment key when the option is blank', { options: { gate: true, jevApiKey: '  ' } }, async ($, on) => {
     const host = gateWorld(on, { key: 'env-key', score: 0.1 })
-    expect((await $.tool.call(gateEdit as never)).deny).toContain('delegate to the executor')
+    expect((await $.tool.call(gateEdit as never)).deny).toContain('delegate to developer')
     expect(host.forwarded).toEqual([])
     expect(host.sent[0].headers?.Authorization).toBe('Bearer env-key')
   })
@@ -388,11 +388,11 @@ describe('edit gate', () => {
     expect(host.forwarded).toEqual([])
   })
   test('disabled roles are not recommended', { options: { gate: true, jevApiKey: 'key' } }, async ($, on) => {
-    gateWorld(on, { score: 0.1, files: { [`${HOME}/.claude/pantheon.json`]: JSON.stringify({ disabledAgents: ['executor', 'designer'] }) } })
+    gateWorld(on, { score: 0.1, files: { [`${HOME}/.claude/pantheon.json`]: JSON.stringify({ disabledAgents: ['developer', 'ux'] }) } })
     await start($)
     const result = await $.tool.call({ ...gateEdit, file_path: '/repo/view.tsx' } as never)
     expect(result.deny).toContain('ask the person to handle implementation')
-    expect(result.deny).toContain('ask the person to handle UI work')
+    expect(result.deny).not.toContain('delegate')
   })
   test('rules hold unknown edits and receipt counts only the edit that proceeds', { options: { gate: true } }, async ($, on) => {
     const host = gateWorld(on)
@@ -488,7 +488,7 @@ describe('register', () => {
     const first = await mountPanel($)
     await first.unmount()
     expect(seen.agents.length).toBe(8)
-    files[`${ROOT}/.claude/pantheon.json`] = JSON.stringify({ disabledAgents: ['oracle'] })
+    files[`${ROOT}/.claude/pantheon.json`] = JSON.stringify({ disabledAgents: ['architect'] })
     const second = await mountPanel($)
     await second.unmount()
     // The new config registers its own agents once.
@@ -496,7 +496,7 @@ describe('register', () => {
   })
 
   test('panel keeps the last valid config and warns once across invalid JSON renders without invalidating itself', async ($, on) => {
-    const { files, seen } = world(on, { files: { [`${HOME}/.claude/pantheon.json`]: '{"agents":{"oracle":{"effort":"high"}}}' } })
+    const { files, seen } = world(on, { files: { [`${HOME}/.claude/pantheon.json`]: '{"agents":{"architect":{"effort":"high"}}}' } })
     const invalidations: string[] = []
     on('ui.invalidate', async (_$, e) => { invalidations.push(e.event); return { value: undefined } })
     const first = await mountPanel($)
@@ -626,7 +626,7 @@ describe('register', () => {
     expect(await $.tool.call({ tool: 'Bash', command: 'pwd', agentId: 'native-1' })).toEqual(called)
   })
 
-  test('agent.spawn of pantheon:oracle records a native through steps, tools and completion', async ($, on) => {
+  test('agent.spawn of pantheon:architect records a native through steps, tools and completion', async ($, on) => {
     trackingWorld(on)
     await start($)
     await $.agent.spawn(spawnInput)
@@ -634,7 +634,7 @@ describe('register', () => {
     await $.tool.call({ tool: 'Bash', command: 'pwd', agentId: 'native-1' })
     await $.turn.complete({ ...completeInput, agentId: 'native-1' })
     const [native] = await nativesOf($)
-    expect(native.role).toBe('oracle')
+    expect(native.role).toBe('architect')
     expect(native.rounds[0].status).toBe('done')
     expect(native.rounds[0].turnId).toBe('turn-1')
     expect(native.steps).toBe(1)
@@ -726,7 +726,7 @@ describe('register', () => {
 
   test('reload marks running native rounds lost and resets the session', async ($, on) => {
     trackingWorld(on)
-    const saved: Native[] = [{ id: 'old', role: 'oracle', type: 'pantheon:oracle', task: 'Old', model: 'm',
+    const saved: Native[] = [{ id: 'old', role: 'architect', type: 'pantheon:architect', task: 'Old', model: 'm',
       rounds: [{ startedAt: 1, status: 'done' }, { startedAt: 2, status: 'running' }], ctx: 0, out: 0, steps: 2 }]
     const served = new Set<string>()
     on('state.get', async (_$, e, next) => {
@@ -775,12 +775,12 @@ describe('register', () => {
     const { seen } = world(on)
     await start($)
     expect(seen.tools).toEqual([])
-    expect(seen.agents).toEqual(['explorer', 'librarian', 'executor', 'oracle', 'designer', 'git', 'councillor-alpha', 'councillor-beta'])
-    const oracle = seen.registered.find(spec => spec.name === 'oracle')
-    expect(oracle?.tools).toBeUndefined()
-    expect(oracle?.disallowedTools).toEqual(['Edit', 'Write', 'NotebookEdit', 'Agent'])
+    expect(seen.agents).toEqual(['code-reader', 'docs-reader', 'developer', 'architect', 'ux', 'git', 'councillor-alpha', 'councillor-beta'])
+    const architect = seen.registered.find(spec => spec.name === 'architect')
+    expect(architect?.tools).toBeUndefined()
+    expect(architect?.disallowedTools).toEqual(['Edit', 'Write', 'NotebookEdit', 'Agent'])
     expect(seen.registered.find(spec => spec.name === 'git')?.disallowedTools).toEqual(['Agent'])
-    expect(seen.registered.find(spec => spec.name === 'designer')?.disallowedTools).toBeUndefined()
+    expect(seen.registered.find(spec => spec.name === 'ux')?.disallowedTools).toBeUndefined()
   })
 
   test('absent user config registers the default roles and offers them', async ($, on) => {
@@ -788,32 +788,32 @@ describe('register', () => {
     on('agent.offer', async () => ({ isOffered: true }))
     delete files[`${HOME}/.claude/pantheon.json`]
     await start($)
-    expect(seen.agents).toEqual(['explorer', 'librarian', 'executor', 'oracle', 'designer', 'git', 'councillor-alpha', 'councillor-beta'])
-    expect((await $.agent.offer({ agent: 'pantheon:explorer', description: '', source: 'plugin', provider: { plugin: 'pantheon', tier: 'user' } } as never)).isOffered).toBe(true)
+    expect(seen.agents).toEqual(['code-reader', 'docs-reader', 'developer', 'architect', 'ux', 'git', 'councillor-alpha', 'councillor-beta'])
+    expect((await $.agent.offer({ agent: 'pantheon:code-reader', description: '', source: 'plugin', provider: { plugin: 'pantheon', tier: 'user' } } as never)).isOffered).toBe(true)
   })
 
   test('configured models and prompts reach the registered agents', async ($, on) => {
     const { seen } = world(on, { files: { [`${HOME}/.claude/pantheon.json`]: JSON.stringify({
-      agents: { oracle: { model: 'sonnet', effort: 'high', prompt: 'extra' } },
+      agents: { architect: { model: 'sonnet', effort: 'high', prompt: 'extra' } },
       council: { seats: { gamma: { model: 'haiku' } } },
     }) } })
     await start($)
-    const oracle = seen.registered.find(spec => spec.name === 'oracle') as { model?: string; effort?: string; prompt?: string }
-    expect(oracle.model).toBe('sonnet')
-    expect(oracle.effort).toBe('high')
-    expect(oracle.prompt).toContain('extra')
+    const architect = seen.registered.find(spec => spec.name === 'architect') as { model?: string; effort?: string; prompt?: string }
+    expect(architect.model).toBe('sonnet')
+    expect(architect.effort).toBe('high')
+    expect(architect.prompt).toContain('extra')
     expect(seen.agents).toContain('councillor-gamma')
   })
 
   test('/pantheon config reports the merged config and where it came from', async ($, on) => {
     world(on, { files: {
-      [`${HOME}/.claude/pantheon.json`]: JSON.stringify({ agents: { oracle: { effort: 'high' } } }),
+      [`${HOME}/.claude/pantheon.json`]: JSON.stringify({ agents: { architect: { effort: 'high' } } }),
       [`${ROOT}/.claude/pantheon.json`]: JSON.stringify({ disabledAgents: ['git'] }),
     } })
     await start($)
     const report = (await $.command.run({ command: 'pantheon', args: 'config' })).text ?? ''
     expect(report).not.toMatch(/profile|codex|sandbox/i)
-    expect(report).toContain('oracle')
+    expect(report).toContain('architect')
     expect(report).toContain('git')
   })
 
@@ -824,7 +824,7 @@ describe('register', () => {
     expect(out.text).toBe('Unknown subcommand: cancel. Use /pantheon, /pantheon close, /pantheon config or /pantheon doctor.')
   })
 
-  const PING_ORDER = ['explorer', 'librarian', 'executor', 'oracle', 'designer', 'git', 'councillor:alpha', 'councillor:beta']
+  const PING_ORDER = ['code-reader', 'docs-reader', 'developer', 'architect', 'ux', 'git', 'councillor:alpha', 'councillor:beta']
 
   function doctorWorld(on: On, file?: string) {
     const submits: string[] = []
@@ -842,21 +842,21 @@ describe('register', () => {
     expect(out.text).not.toMatch(/codex|fail/i)
     await clock.settle()
     expect(submits.length).toBe(1)
-    expect(submits[0]).toContain('pantheon:explorer')
+    expect(submits[0]).toContain('pantheon:code-reader')
     expect(submits[0]).toContain('pantheon:councillor-beta')
   })
 
   test('doctor marks disabled agents off and leaves them out of the ping prompt', async ($, on) => {
-    const { submits, clock } = doctorWorld(on, JSON.stringify({ disabledAgents: ['designer', 'councillor:beta'] }))
+    const { submits, clock } = doctorWorld(on, JSON.stringify({ disabledAgents: ['ux', 'councillor:beta'] }))
     await start($)
     const out = await $.command.run({ command: 'pantheon', args: 'doctor' })
-    expect(out.text).toMatch(/^info designer off$/m)
+    expect(out.text).toMatch(/^info ux off$/m)
     expect(out.text).toMatch(/^info councillor:beta off$/m)
     await clock.settle()
     expect(submits.length).toBe(1)
-    expect(submits[0]).not.toContain('pantheon:designer')
+    expect(submits[0]).not.toContain('pantheon:ux')
     expect(submits[0]).not.toContain('councillor-beta')
-    expect(submits[0]).toContain('pantheon:oracle')
+    expect(submits[0]).toContain('pantheon:architect')
   })
 
   test('doctor skips the ping section and the submit when the config is invalid', async ($, on) => {
@@ -869,7 +869,7 @@ describe('register', () => {
   })
 
   test('doctor does not submit when every target is disabled', async ($, on) => {
-    const { submits, clock } = doctorWorld(on, JSON.stringify({ disabledAgents: ['explorer', 'librarian', 'executor', 'oracle', 'designer', 'git', 'council'] }))
+    const { submits, clock } = doctorWorld(on, JSON.stringify({ disabledAgents: ['code-reader', 'docs-reader', 'developer', 'architect', 'ux', 'git', 'council'] }))
     await start($)
     const out = await $.command.run({ command: 'pantheon', args: 'doctor' })
     await clock.settle()
@@ -887,15 +887,15 @@ describe('register', () => {
   })
 
 
-  test('prompt.compose appends the orchestrator section last', async ($, on) => {
+  test('prompt.compose appends the lead section last', async ($, on) => {
     world(on)
     on('prompt.compose', async () => ({ sections: [{ id: 'intro', text: 'hi', scope: 'shared' as const }] }))
     await start($)
     const out = await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: [], tools: [], outputStyle: null, traits: [] } as never)
     const last = out.sections[out.sections.length - 1]
-    expect(last?.id).toBe('pantheon:orchestrator')
+    expect(last?.id).toBe('pantheon:lead')
     expect(last?.scope).toBe('session')
-    expect(last?.text).toContain('pantheon:oracle')
+    expect(last?.text).toContain('pantheon:architect')
   })
 
   test('valid config change re-registers native agents; invalid change does not', async ($, on) => {
@@ -903,10 +903,10 @@ describe('register', () => {
     on('prompt.compose', async () => ({ sections: [] }))
     await start($)
     expect(seen.agents.length).toBe(8)
-    files[`${HOME}/.claude/pantheon.json`] = JSON.stringify({ agents: { oracle: { model: 'sonnet' } } })
+    files[`${HOME}/.claude/pantheon.json`] = JSON.stringify({ agents: { architect: { model: 'sonnet' } } })
     await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: [], tools: [], outputStyle: null, traits: [] } as never)
     expect(seen.agents.length).toBe(16)
-    expect(seen.registered.filter(spec => spec.name === 'oracle').map(spec => (spec as { model?: string }).model)).toEqual(['opus', 'sonnet'])
+    expect(seen.registered.filter(spec => spec.name === 'architect').map(spec => (spec as { model?: string }).model)).toEqual(['opus', 'sonnet'])
     files[`${HOME}/.claude/pantheon.json`] = '{ broken'
     await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: [], tools: [], outputStyle: null, traits: [] } as never)
     expect(seen.agents.length).toBe(16)
@@ -927,19 +927,19 @@ describe('register', () => {
   })
 
   test('agent.offer hides disabled pantheon agents', async ($, on) => {
-    world(on, { files: { [`${HOME}/.claude/pantheon.json`]: JSON.stringify({ disabledAgents: ['oracle'] }) } })
+    world(on, { files: { [`${HOME}/.claude/pantheon.json`]: JSON.stringify({ disabledAgents: ['architect'] }) } })
     on('agent.offer', async () => ({ isOffered: true }))
     await start($)
     const offer = (agent: string) => $.agent.offer({ agent, description: '', source: 'plugin', provider: { plugin: 'pantheon', tier: 'user' } } as never)
-    expect((await offer('pantheon:oracle')).isOffered).toBe(false)
-    expect((await offer('pantheon:designer')).isOffered).toBe(true)
+    expect((await offer('pantheon:architect')).isOffered).toBe(false)
+    expect((await offer('pantheon:ux')).isOffered).toBe(true)
     expect((await offer('Explore')).isOffered).toBe(true)
   })
 
   test('invalid first config still registers the default native agents', async ($, on) => {
     const { seen } = world(on, { files: { [`${HOME}/.claude/pantheon.json`]: '{ nope' } })
     await start($)
-    expect(seen.agents).toEqual(['explorer', 'librarian', 'executor', 'oracle', 'designer', 'git', 'councillor-alpha', 'councillor-beta'])
+    expect(seen.agents).toEqual(['code-reader', 'docs-reader', 'developer', 'architect', 'ux', 'git', 'councillor-alpha', 'councillor-beta'])
   })
 
   test('a failed native registration is retried on the next turn', async ($, on) => {
@@ -948,7 +948,7 @@ describe('register', () => {
     await start($)
     expect(seen.agents).toEqual([])
     await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: [], tools: [], outputStyle: null, traits: [] } as never)
-    expect(seen.agents).toEqual(['explorer', 'librarian', 'executor', 'oracle', 'designer', 'git', 'councillor-alpha', 'councillor-beta'])
+    expect(seen.agents).toEqual(['code-reader', 'docs-reader', 'developer', 'architect', 'ux', 'git', 'councillor-alpha', 'councillor-beta'])
   })
 
   describe('above-prompt strip', () => {
@@ -1041,13 +1041,13 @@ describe('register', () => {
       on('turn.complete', async () => ({ text: 'Completed' }))
       await start($)
       const idle = await mountStrip($)
-      try { expect(await texts(idle)).not.toContain('executor') } finally { await idle.unmount() }
-      await $.agent.spawn({ ...spawnInput, description: 'Wire the strip', subagentType: 'pantheon:executor' } as never)
+      try { expect(await texts(idle)).not.toContain('developer') } finally { await idle.unmount() }
+      await $.agent.spawn({ ...spawnInput, description: 'Wire the strip', subagentType: 'pantheon:developer' } as never)
       const ui = await mountStrip($)
       try {
         const all = await texts(ui)
         expect(all).toContain('agents ')
-        expect(all).toContain('executor')
+        expect(all).toContain('developer')
         expect(all).toContain('Wire the strip')
         // One row of the box, never cards above it.
         expect(all).not.toContain('╭─ ')
@@ -1067,7 +1067,7 @@ describe('register', () => {
       await spawn('t1', 'Map the auth code', 'Explore')
       await spawn('t2', 'Find the cache TTL', 'Explore')
       await spawn('t3', 'Review it', 'general-purpose')
-      await spawn('t4', 'Fourth one', 'pantheon:executor')
+      await spawn('t4', 'Fourth one', 'pantheon:developer')
       const ui = await mountStrip($, 140)
       try {
         const all = await texts(ui)

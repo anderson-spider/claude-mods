@@ -7,7 +7,7 @@ import { decide } from './decisions'
 import { gateContext, gateMessage } from './gate'
 import { DEFAULT_CONFIG } from './defaults'
 import { buildCouncilBlock, isCouncilOrigin, matchesCouncilTrigger } from './prompts/council'
-import { buildOrchestratorSection } from './prompts/orchestrator'
+import { buildLeadSection } from './prompts/lead'
 import { rolePrompt } from './prompts/roles'
 import { pingPrompt, pingTargets } from './ping'
 import type { PingResult } from './ping'
@@ -593,16 +593,15 @@ export const register: Register = (on, options) => {
         timer: (ms, fn) => { const timer = $.clock.after(ms, fn); return () => timer.cancel() },
       })
       if (verdict.action === 'allow') return undefined
-      const message = gateMessage(verdict, context.ctx, {
-        executor: !state.config.disabledAgents.includes('executor'),
-        designer: !state.config.disabledAgents.includes('designer'),
+      const message = gateMessage(verdict, {
+        developer: !state.config.disabledAgents.includes('developer'),
+        ux: !state.config.disabledAgents.includes('ux'),
       })
       if (verdict.action === 'deny') return { deny: message }
       return ask(message)
     }, () => next(e), () => ask(gateMessage(
       { action: 'ask', source: 'rules', reason: 'The edit gate could not evaluate this edit. Ask the person.' },
-      { tool: String(e.tool), path: '', ext: '', files: 1 },
-      { executor: false, designer: false },
+      { developer: false, ux: false },
     )))
   }).catch((_$, e, next) => next.called || options.gate !== true || e.agentId
     ? next(e) : { deny: 'Pantheon edit gate could not obtain a decision. Edit denied.' })
@@ -737,8 +736,8 @@ export const register: Register = (on, options) => {
     return {
       ...composed,
       sections: [
-        ...composed.sections.filter(section => section.id !== 'pantheon:orchestrator'),
-        { id: 'pantheon:orchestrator', text: buildOrchestratorSection(current.config), scope: 'session' as const },
+        ...composed.sections.filter(section => section.id !== 'pantheon:lead'),
+        { id: 'pantheon:lead', text: buildLeadSection(current.config), scope: 'session' as const },
       ],
     }
   })

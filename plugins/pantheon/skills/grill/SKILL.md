@@ -10,7 +10,7 @@ Turn a request into a plan the person has agreed to. No code, no spec file: one 
 ## 1. Understand
 
 - If the request already states the acceptance criteria and the constraints, skip the interview and write the plan.
-- Read before asking. Dispatch the explorer for code and the librarian for external docs, in parallel when both apply. Do not ask what the repository or the docs already answer.
+- Read before asking. Dispatch the code-reader for code and the docs-reader for external docs, in parallel when both apply. Do not ask what the repository or the docs already answer.
 - Ask one question at a time, each with your recommendation and the reason. Prefer a choice over an open question. Stop asking when the purpose, the constraints and the success criteria are clear.
 - Write the understanding back in a few lines: what the person said, what you assumed. Wait for a correction or a yes.
 - If the request holds several independent pieces, split it and plan the first one.

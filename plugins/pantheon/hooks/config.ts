@@ -18,6 +18,15 @@ const REMOVED_TOP: Record<string, string> = {
   noNetwork: `removed with Codex (${NATIVE_ONLY}); delete it`,
   foregroundMinutes: `removed with Codex (${NATIVE_ONLY}); delete it`,
 }
+// Role names of earlier versions: each fails with the new name.
+const RENAMED_ROLES: Record<string, Role> = {
+  explorer: 'code-reader',
+  librarian: 'docs-reader',
+  executor: 'developer',
+  designer: 'ux',
+  oracle: 'architect',
+  fixer: 'developer',
+}
 const REMOVED_ENTRY: Record<string, string> = {
   engine: `removed (${NATIVE_ONLY}); delete it`,
   sandbox: `removed with Codex (${NATIVE_ONLY}); delete it`,
@@ -41,18 +50,32 @@ function entry(raw: unknown, field: string): AgentConfig {
   return value as AgentConfig
 }
 
+/** Fails with every former role name found in `agents` and `disabledAgents`, each with its new name. */
+function renamedRoles(config: Record<string, unknown>): void {
+  const found: string[] = []
+  const rename = (old: string, place: string) => found.push(place === 'agents'
+    ? `agents.${old}: role \`${old}\` was renamed to \`${RENAMED_ROLES[old]}\`; use \`agents.${RENAMED_ROLES[old]}\``
+    : `disabledAgents: role \`${old}\` was renamed to \`${RENAMED_ROLES[old]}\`; use \`${RENAMED_ROLES[old]}\` in \`disabledAgents\``)
+  const agents = config.agents
+  if (typeof agents === 'object' && agents !== null && !Array.isArray(agents)) {
+    for (const name of new Set(Object.keys(agents))) if (Object.hasOwn(RENAMED_ROLES, name)) rename(name, 'agents')
+  }
+  if (Array.isArray(config.disabledAgents)) {
+    for (const name of new Set(config.disabledAgents)) if (typeof name === 'string' && Object.hasOwn(RENAMED_ROLES, name)) rename(name, 'disabledAgents')
+  }
+  if (found.length) throw new Error(found.join('; '))
+}
+
 function validate(value: unknown): Layer {
   const config = object(value, 'config')
   for (const key of Object.keys(config)) {
     if (Object.hasOwn(REMOVED_TOP, key)) throw new Error(`${key}: ${REMOVED_TOP[key]}`)
     if (!['disabledAgents', 'agents', 'council'].includes(key)) throw new Error(`${key}: unknown field (${JSON.stringify(config[key])})`)
   }
+  renamedRoles(config)
   const layer: Layer = {}
   if (Object.hasOwn(config, 'disabledAgents')) {
     const disabled = config.disabledAgents
-    if (Array.isArray(disabled) && disabled.includes('fixer')) {
-      throw new Error('disabledAgents: role `fixer` was renamed to `executor`; use `executor` in `disabledAgents`')
-    }
     if (!Array.isArray(disabled) || disabled.some(name =>
       typeof name !== 'string' || !(
         (ROLES as readonly string[]).includes(name) || name === 'council' ||
@@ -63,7 +86,6 @@ function validate(value: unknown): Layer {
   }
   if (Object.hasOwn(config, 'agents')) {
     const agents = object(config.agents, 'agents')
-    if (Object.hasOwn(agents, 'fixer')) throw new Error('agents.fixer: role `fixer` was renamed to `executor`; use `agents.executor`')
     layer.agents = {}
     for (const [name, raw] of Object.entries(agents)) {
       if (!(ROLES as readonly string[]).includes(name)) throw new Error(`agents.${name}: unknown field (${JSON.stringify(raw)})`)

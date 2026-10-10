@@ -61,7 +61,7 @@ export function rulesVerdict(ctx: EditContext): Verdict {
   const known = (n: number | undefined): n is number => n !== undefined && Number.isFinite(n) && n >= 0
   const total = known(ctx.linesAdded) && known(ctx.linesRemoved) ? ctx.linesAdded + ctx.linesRemoved : undefined
   if (ctx.files > 3 || (total !== undefined && total > 100)) {
-    return verdict('deny', 'Large or multi-file change; delegate to the executor.')
+    return verdict('deny', 'Large or multi-file change; delegate to developer.')
   }
   if (total === undefined) return verdict('ask', 'Changed line counts are unknown; ask before applying.')
   if (ctx.files === 1 && total <= 5) return verdict('allow', 'Tiny single-file change.')
@@ -99,14 +99,14 @@ export async function decide(
           state: {
             tool: ctx.tool, ...metadata(ctx),
             linesAdded: ctx.linesAdded, linesRemoved: ctx.linesRemoved, files: ctx.files,
-            caller: 'main orchestrator session',
+            caller: 'main lead session',
           },
           questions: { trivial: {
             type: 'noul',
-            instructions: 'Is this code edit small and trivial enough for the orchestrator to apply directly, without delegating to a specialist?',
+            instructions: 'Is this code edit small and trivial enough for the lead to apply directly, without delegating to a specialist?',
             criteria: {
               true: 'Tiny, mechanical, single-file change such as a typo, a one-line fix or a doc tweak.',
-              false: 'Substantial, risky or multi-file change that should be delegated to an executor.',
+              false: 'Substantial, risky or multi-file change that should be delegated to developer (code) or ux (visual work).',
             },
           } },
         }),
@@ -126,7 +126,7 @@ export async function decide(
     }
     const action = score >= ALLOW_THRESHOLD ? 'allow' : score <= DENY_THRESHOLD ? 'deny' : 'ask'
     const reason = action === 'allow' ? 'Jev classified this edit as trivial.'
-      : action === 'deny' ? 'Jev classified this edit as substantial; delegate to the executor.'
+      : action === 'deny' ? 'Jev classified this edit as substantial; delegate to developer.'
       : 'Jev score is between the decision thresholds; ask before applying.'
     return { action, source: 'jev', score, reason }
   } catch {

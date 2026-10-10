@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 import { DEFAULTS } from './fixtures/config'
-import { buildOrchestratorSection } from '../hooks/prompts/orchestrator'
+import { buildLeadSection } from '../hooks/prompts/lead'
 import { buildCouncilBlock, isCouncilOrigin, matchesCouncilTrigger } from '../hooks/prompts/council'
 
 describe('council triggers', () => {
@@ -65,17 +65,17 @@ describe('council block', () => {
   test('disabled council has no block or seat line', () => {
     const config = { ...DEFAULTS, disabledAgents: ['council'] }
     expect(buildCouncilBlock(config)).toBe('')
-    expect(buildOrchestratorSection(config)).not.toContain('councillor')
+    expect(buildLeadSection(config)).not.toContain('councillor')
   })
   test('no seats means no procedure to dispatch', () => {
     expect(buildCouncilBlock({ ...DEFAULTS, council: { seats: {} } })).toBe('')
   })
 })
 
-test('disabled seat is left out of the dispatch and the orchestrator line', () => {
+test('disabled seat is left out of the dispatch and the lead line', () => {
   const config = { ...DEFAULTS, disabledAgents: ['councillor:alpha'] }
   const block = buildCouncilBlock(config)
   expect(block).not.toContain('councillor-alpha')
   expect(block).toContain('pantheon:councillor-beta')
-  expect(buildOrchestratorSection(config)).not.toContain('councillor-alpha')
+  expect(buildLeadSection(config)).not.toContain('councillor-alpha')
 })

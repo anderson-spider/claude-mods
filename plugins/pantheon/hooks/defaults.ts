@@ -1,6 +1,6 @@
 import type { PantheonConfig, Role } from './types'
 
-export const ROLES: readonly Role[] = ['explorer', 'librarian', 'executor', 'oracle', 'designer', 'git']
+export const ROLES: readonly Role[] = ['code-reader', 'docs-reader', 'developer', 'architect', 'ux', 'git']
 
 function freeze<T extends object>(value: T): T {
   for (const child of Object.values(value)) {
@@ -12,11 +12,11 @@ function freeze<T extends object>(value: T): T {
 export const DEFAULT_CONFIG: PantheonConfig = freeze({
   disabledAgents: [],
   agents: {
-    explorer: { model: 'haiku' },
-    librarian: { model: 'haiku' },
-    executor: { model: 'sonnet' },
-    oracle: { model: 'opus' },
-    designer: { model: 'sonnet' },
+    'code-reader': { model: 'haiku' },
+    'docs-reader': { model: 'haiku' },
+    developer: { model: 'sonnet' },
+    architect: { model: 'opus' },
+    ux: { model: 'sonnet' },
     git: { model: 'haiku' },
   },
   council: { seats: {
