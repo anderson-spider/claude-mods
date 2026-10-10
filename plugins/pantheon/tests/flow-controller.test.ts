@@ -2360,7 +2360,7 @@ test('noteDelivery appends a clipped, taskful note and does nothing without a pl
   await noteDelivery(w.ctx(), { agentId: 'a2', condition: 'delivery_unparsed', reason: 'short' })
   const notes = await deliveryNotes(w)
   expect(notes).toHaveLength(2)
-  expect(notes[0]).toMatchObject({ kind: 'note', event: 'delivery', condition: 'delivery_unlinked', task: 'T1', mode: 'shadow' })
+  expect(notes[0]).toMatchObject({ kind: 'note', event: 'delivery', condition: 'delivery_unlinked', task: 'T1', mode: 'enforce' })
   expect(notes[0].reason).toHaveLength(300)
   expect(notes[1]).toMatchObject({ condition: 'delivery_unparsed', reason: 'short' })
   expect(notes[1].task).toBeUndefined()
