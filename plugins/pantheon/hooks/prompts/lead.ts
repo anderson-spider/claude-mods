@@ -46,7 +46,7 @@ export function buildLeadSection(config: PantheonConfig): string {
     ...agents,
     ...councilLine,
     '### Git',
-    '- You commit your own work, push, squash and open PRs/MRs yourself; developer and ux commit their own task; only you push.',
+    '- You commit your own work, push, squash and open PRs/MRs yourself; developer and ux commit their own task; only you push; never merge a PR/MR unless the person asks.',
     '- Push refusals: no force push without `--force-with-lease`, no remote branch deletion, no `--mirror`, never main, master, develop, release or release/*.',
     '</Agents>',
     '<Workflow>',

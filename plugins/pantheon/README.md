@@ -131,7 +131,7 @@ Layers apply in order: built-in defaults, `~/.claude/pantheon.json`, then `<repo
 
 ### Migrating to 0.18
 
-`git` is no longer a role: the lead squashes, pushes and opens PRs/MRs itself, and `developer` and `ux` commit their own task. The hold on `git`, `gh` and `glab` shell commands is gone too. A config with `disabledAgents: ['git']` or an `agents.git` entry now fails validation as an unknown role; delete them.
+`git` is no longer a role: the lead squashes, pushes and opens PRs/MRs itself, and `developer` and `ux` commit their own task. The hold on `git`, `gh` and `glab` shell commands is gone too. A config with `disabledAgents: ['git']` or an `agents.git` entry now fails to load with a message that the role was removed in 0.18; delete them.
 
 ### Migrating to 0.17
 

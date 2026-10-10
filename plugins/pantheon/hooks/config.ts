@@ -27,6 +27,10 @@ const RENAMED_ROLES: Record<string, Role> = {
   oracle: 'architect',
   fixer: 'developer',
 }
+// Roles that no longer exist: each fails with what replaced it.
+const REMOVED_ROLES: Record<string, string> = {
+  git: 'removed in 0.18: the lead squashes, pushes and opens PRs/MRs itself; delete it',
+}
 const REMOVED_ENTRY: Record<string, string> = {
   engine: `removed (${NATIVE_ONLY}); delete it`,
   sandbox: `removed with Codex (${NATIVE_ONLY}); delete it`,
@@ -50,18 +54,25 @@ function entry(raw: unknown, field: string): AgentConfig {
   return value as AgentConfig
 }
 
-/** Fails with every former role name found in `agents` and `disabledAgents`, each with its new name. */
+/** Fails with every former or removed role name found in `agents` and `disabledAgents`, each with its new name or what to do. */
 function renamedRoles(config: Record<string, unknown>): void {
   const found: string[] = []
-  const rename = (old: string, place: string) => found.push(place === 'agents'
-    ? `agents.${old}: role \`${old}\` was renamed to \`${RENAMED_ROLES[old]}\`; use \`agents.${RENAMED_ROLES[old]}\``
-    : `disabledAgents: role \`${old}\` was renamed to \`${RENAMED_ROLES[old]}\`; use \`${RENAMED_ROLES[old]}\` in \`disabledAgents\``)
+  const rename = (old: string, place: string) => {
+    if (Object.hasOwn(REMOVED_ROLES, old)) {
+      found.push(`${place === 'agents' ? `agents.${old}` : 'disabledAgents'}: role \`${old}\` was ${REMOVED_ROLES[old]}`)
+    } else {
+      found.push(place === 'agents'
+        ? `agents.${old}: role \`${old}\` was renamed to \`${RENAMED_ROLES[old]}\`; use \`agents.${RENAMED_ROLES[old]}\``
+        : `disabledAgents: role \`${old}\` was renamed to \`${RENAMED_ROLES[old]}\`; use \`${RENAMED_ROLES[old]}\` in \`disabledAgents\``)
+    }
+  }
+  const former = (name: string) => Object.hasOwn(RENAMED_ROLES, name) || Object.hasOwn(REMOVED_ROLES, name)
   const agents = config.agents
   if (typeof agents === 'object' && agents !== null && !Array.isArray(agents)) {
-    for (const name of new Set(Object.keys(agents))) if (Object.hasOwn(RENAMED_ROLES, name)) rename(name, 'agents')
+    for (const name of new Set(Object.keys(agents))) if (former(name)) rename(name, 'agents')
   }
   if (Array.isArray(config.disabledAgents)) {
-    for (const name of new Set(config.disabledAgents)) if (typeof name === 'string' && Object.hasOwn(RENAMED_ROLES, name)) rename(name, 'disabledAgents')
+    for (const name of new Set(config.disabledAgents)) if (typeof name === 'string' && former(name)) rename(name, 'disabledAgents')
   }
   if (found.length) throw new Error(found.join('; '))
 }

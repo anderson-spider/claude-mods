@@ -108,6 +108,7 @@ describe('role prompts', () => {
     expect(section).not.toContain('pantheon:git')
     expect(section).toContain('You commit your own work, push, squash and open PRs/MRs yourself')
     expect(section).toContain('developer and ux commit their own task; only you push')
+    expect(section).toContain('never merge a PR/MR unless the person asks')
     expect(section).toContain('no force push without `--force-with-lease`, no remote branch deletion, no `--mirror`, never main, master, develop, release or release/*')
   })
 

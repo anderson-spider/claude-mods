@@ -193,6 +193,24 @@ describe('loadConfig', () => {
     ].join('; '))
   })
 
+  test('rejects the removed git role in agents and in disabledAgents, naming the key and the role', async () => {
+    const message = 'role `git` was removed in 0.18: the lead squashes, pushes and opens PRs/MRs itself; delete it'
+    expect(rejected(await load({ agents: { git: {} } }))).toBe(`u: agents.git: ${message}`)
+    expect(rejected(await load({}, { disabledAgents: ['git'] }))).toBe(`p: disabledAgents: ${message}`)
+  })
+
+  test('a valid entry next to the removed git role is not reported, and renamed roles are listed with it', async () => {
+    const message = 'role `git` was removed in 0.18: the lead squashes, pushes and opens PRs/MRs itself; delete it'
+    expect(rejected(await load({ agents: { developer: { model: 'sonnet' }, git: {} }, disabledAgents: ['qa'] })))
+      .toBe(`u: agents.git: ${message}`)
+    expect(rejected(await load({ agents: { oracle: {}, git: {} }, disabledAgents: ['git', 'qa'] })))
+      .toBe([
+        'u: agents.oracle: role `oracle` was renamed to `architect`; use `agents.architect`',
+        `agents.git: ${message}`,
+        `disabledAgents: ${message}`,
+      ].join('; '))
+  })
+
   test('a repeated old name is listed once', async () => {
     expect(rejected(await load({ disabledAgents: ['oracle', 'oracle'] })))
       .toBe('u: disabledAgents: role `oracle` was renamed to `architect`; use `architect` in `disabledAgents`')
