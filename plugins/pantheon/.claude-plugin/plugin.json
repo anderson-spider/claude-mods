@@ -1,6 +1,6 @@
 {
   "name": "pantheon",
-  "version": "0.19.0",
+  "version": "0.19.1",
   "description": "Makes Claude a lead that delegates to specialist roles as native Claude subagents, with an auto-opening /pantheon panel for roles, activity and a session log, and a strip above the prompt with model, context, cache, rate limits and running agents.",
   "author": {
     "name": "anderson-spider"

@@ -1498,7 +1498,7 @@ async function noteForeground(ctx: Ctx, planId: string, taskId: string): Promise
 
 /**
  * A `[T]` delegation the host still ran in the background (its agent definition sets it, its remote isolation forces it, or it
- * is a teammate): its end is not recorded. Journaled in both modes; in enforce the lead reads what to do in the result's context.
+ * is a teammate): its end is recorded only if the host delivers a task notification for it. Journaled in both modes; in enforce the lead reads what to do in the result's context.
  */
 export async function inspectForcedBackground(ctx: Ctx, input: { taskId: string }): Promise<{ context?: string }> {
   return guarded<{ context?: string }>(ctx, 'forced_background', {}, async trace => {
@@ -1510,12 +1510,16 @@ export async function inspectForcedBackground(ctx: Ctx, input: { taskId: string 
     if (!task) return {}
     const state = peek.state
     if (!(enforcing(peek) && !state.done && !state.paused && !state.stopped)) return {}
-    const reason = `Task ${task.id}'s agent ran in the background anyway (its agent definition, remote isolation or a teammate forces it): its end cannot be recorded, so the task does not advance from this run.`
+    // Shadow never rewrites the spawn, so only enforce names the cause it can see: the agent definition, remote isolation or a teammate.
+    const enforce = ctx.mode === 'enforce'
+    const reason = enforce
+      ? `Task ${task.id}'s agent ran in the background (its agent definition, remote isolation or a teammate forces it): its end is recorded only if the host delivers a task notification for it.`
+      : `Task ${task.id}'s agent ran in the background: its end is recorded only if the host delivers a task notification for it.`
     await noteQueued(ctx, loc.planId, {
       kind: 'decision', event: 'spawn', task: task.id, condition: 'spawn_background_forced', reason: clip(reason, 600), action: 'allow',
     })
-    if (ctx.mode !== 'enforce') return {}
-    return { context: `[${TAG}] ${reason} Re-run it in the foreground without the agent definition or isolation that forces background, or use /pantheon flow resume or /pantheon flow stop.` }
+    if (!enforce) return {}
+    return { context: `[${TAG}] ${reason} Wait for that notification; if none arrives, stop that agent before re-running the task in the foreground, or use /pantheon flow resume or /pantheon flow stop.` }
   })
 }
 

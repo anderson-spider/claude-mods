@@ -44,7 +44,7 @@ function flowWorld(on: On, opts: { files?: Record<string, string>; realPaths?: R
   const git = { head: 'aaaa1111', status: '', tracked: {} as Record<string, string> }
   // What the engine would answer: one bottom per event, steered by these fields.
   const engine = {
-    spawnId: 'agent-1', agentStatus: 'completed' as 'completed' | 'async_launched', agentOutput: 'Done.', editDeny: false,
+    spawnId: 'agent-1', agentStatus: 'completed' as 'completed' | 'async_launched' | 'teammate_spawned', agentOutput: 'Done.', editDeny: false,
     spawnBackground: [] as boolean[], // the `background` each spawn reached the engine with, after the flow's rewrite
     agentResult: undefined as unknown,
     stopBelow: {} as { block?: string }, prompts: [] as (readonly string[] | undefined)[],
@@ -170,6 +170,7 @@ function flowWorld(on: On, opts: { files?: Record<string, string>; realPaths?: R
   on('tool.call', async (_$, e) => {
     if (e.tool === 'Agent') {
       if (engine.agentResult !== undefined) return engine.agentResult as never
+      if (engine.agentStatus === 'teammate_spawned') return { result: { status: 'teammate_spawned', agentId: engine.spawnId }, text: 'teammate' } as never
       return (engine.agentStatus === 'completed'
         ? { result: { status: 'completed', agentId: engine.spawnId, content: [{ type: 'text', text: engine.agentOutput }], totalToolUseCount: 1, totalDurationMs: 1, totalTokens: 1, usage: {}, prompt: 'p' }, text: engine.agentOutput }
         : { result: { status: 'async_launched', agentId: engine.spawnId, description: 'd', prompt: 'p', outputFile: '/tmp/o' }, text: 'launched' }) as never
@@ -875,7 +876,7 @@ describe('ownership holes', () => {
     await $.agent.spawn({ ...spawnBase, description: '[T1] first', subagentType: 'pantheon:developer', background: true } as never)
     w.engine.agentStatus = 'async_launched'
     const out = await $.tool.call({ tool: 'Agent', description: '[T1] first', prompt: 'p' } as never)
-    expect(out.context?.[0]).toContain('its end cannot be recorded')
+    expect(out.context?.[0]).toContain('only if the host delivers')
     expect(out.context?.[0]).toContain('/pantheon flow resume')
     expect(w.journal().find(e => e.condition === 'spawn_background_forced')).toMatchObject({ event: 'spawn', task: 'T1', action: 'allow' })
   })
@@ -887,6 +888,20 @@ describe('ownership holes', () => {
     w.engine.agentStatus = 'async_launched'
     const out = await $.tool.call({ tool: 'Agent', description: '[T1] first', prompt: 'p' } as never)
     expect(out.context).toBeUndefined()
+    const forced = w.journal().find(e => e.condition === 'spawn_background_forced')
+    expect(forced).toMatchObject({ event: 'spawn', task: 'T1', action: 'allow' })
+    expect(forced?.reason).toContain('ran in the background')
+    expect(forced?.reason).not.toContain('forces it')
+  })
+
+  test('a [T] delegation a teammate spawns (teammate_spawned) is reported with spawn_background_forced and the lead is told in enforce', { options: { flow: 'enforce' } }, async ($, on) => {
+    const w = flowWorld(on)
+    await boot($, w)
+    await $.agent.spawn({ ...spawnBase, description: '[T1] first', subagentType: 'pantheon:developer', background: true } as never)
+    w.engine.agentStatus = 'teammate_spawned'
+    const out = await $.tool.call({ tool: 'Agent', description: '[T1] first', prompt: 'p' } as never)
+    expect(out.context?.[0]).toContain('a teammate forces it')
+    expect(out.context?.[0]).toContain('only if the host delivers')
     expect(w.journal().find(e => e.condition === 'spawn_background_forced')).toMatchObject({ event: 'spawn', task: 'T1', action: 'allow' })
   })
 
@@ -1426,7 +1441,7 @@ describe('prompts', () => {
     // and the lead is told so. A notification, if the host delivers one, still counts it below.
     w.engine.agentStatus = 'async_launched'
     const launched = await $.tool.call({ tool: 'Agent', description: '[T1] first', prompt: 'p', run_in_background: true } as never)
-    expect(launched.context?.[0]).toContain('cannot be recorded')
+    expect(launched.context?.[0]).toContain('only if the host delivers')
     expect(w.state()?.ends).toEqual({})
     const seen = w.engine.prompts
     await $.prompt.submit({
