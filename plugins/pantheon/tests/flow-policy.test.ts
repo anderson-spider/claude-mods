@@ -258,6 +258,31 @@ test('a delivered task whose check could not run ends the Stop as unverified: no
   expect(again.state.blocks).toBe(0)
 })
 
+test('a delivered task with its diagnosis open whose check could not run says so at Stop: the architect sentence is added', () => {
+  const { flow, hash } = chain()
+  const state = approved(flow, hash, { attempts: { A: 3 }, ends: { A: 1 } })
+  const decision = decide(flow, state, stopEvent({ A: [{ argv: ['run', 'A'], passed: null, output: 'working directory web does not exist', couldNotRun: true }] }), undefined, { diagnosis: ['A'], available: ALL })
+  expect(decision).toMatchObject({ action: 'allow', condition: 'unverified' })
+  expect(decision.reason).toContain('Create the directory the check needs')
+  expect(decision.reason).toContain('ask the architect to diagnose it (a delegation whose description starts with [A])')
+  expect(decision.reason).toContain('/pantheon flow resume')
+  expect(decision.reason).toContain('/pantheon flow stop')
+  expect(decision.reason).toContain('working directory web does not exist')
+  expect(decision.state.attempts).toEqual({ A: 3 })
+})
+
+test('a delivered task not in the diagnosis list keeps the unverified text byte for byte', () => {
+  const { flow, hash } = chain()
+  const state = approved(flow, hash, { ends: { A: 1 } })
+  const event = stopEvent({ A: [{ argv: ['run', 'A'], passed: null, output: 'working directory web does not exist', couldNotRun: true }] })
+  const plain = decide(flow, state, event)
+  const others = decide(flow, state, event, undefined, { diagnosis: ['B'], available: ALL })
+  const expected = 'Checks could not run, so their tasks are unverified and the flow is not marked complete. No attempt was spent. Create the directory the check needs, or ask the person to fix the plan and approve it.\n\n$ run A (could not run)\nworking directory web does not exist'
+  expect(plain.reason).toBe(expected)
+  expect(others.reason).toBe(expected)
+  expect(others.reason).not.toContain('architect')
+})
+
 test('an undelivered task whose check could not run is not unverified: the Stop continues the work and blocks', () => {
   const { flow, hash } = chain()
   const decision = decide(flow, approved(flow, hash), stopEvent({ A: [{ argv: ['run', 'A'], passed: null, output: 'working directory web does not exist', couldNotRun: true }] }))

@@ -310,7 +310,11 @@ function onStop(flow: Flow, s: FlowState, event: Extract<FlowEvent, { kind: 'sto
     const holdsOthers = flow.tasks.some(task => s.status[task.id] === 'active' && !couldNotRunIds.has(task.id))
       || eligible(flow, s.status).some(id => required.includes(id) && !couldNotRunIds.has(id))
     if (!holdsOthers) {
-      return allow('unverified', `Checks could not run, so their tasks are unverified and the flow is not marked complete. No attempt was spent. Create the directory the check needs, or ask the person to fix the plan and approve it.\n\n${tail(describe(unverifiedChecks))}`)
+      // A task whose architect diagnosis is open (its attempts are spent) is not released to "create the directory" alone: the
+      // same sentence check_failed gives for it, so the lead does not send the implementer again without the diagnosis.
+      const diagnosed = [...couldNotRunIds].filter(id => opts.diagnosis?.includes(id))
+      const diagnosis = diagnosed.map(id => ` Task ${id} (${findTask(flow, id)!.goal}) has its attempts spent: ask the architect to diagnose it (a delegation whose description starts with [${id}]), or run /pantheon flow resume or /pantheon flow stop.`).join('')
+      return allow('unverified', `Checks could not run, so their tasks are unverified and the flow is not marked complete. No attempt was spent. Create the directory the check needs, or ask the person to fix the plan and approve it.${diagnosis}\n\n${tail(describe(unverifiedChecks))}`)
     }
   }
 
