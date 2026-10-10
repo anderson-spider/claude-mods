@@ -45,6 +45,7 @@ function flowWorld(on: On, opts: { files?: Record<string, string>; realPaths?: R
   // What the engine would answer: one bottom per event, steered by these fields.
   const engine = {
     spawnId: 'agent-1', agentStatus: 'completed' as 'completed' | 'async_launched', agentOutput: 'Done.', editDeny: false,
+    spawnBackground: [] as boolean[], // the `background` each spawn reached the engine with, after the flow's rewrite
     agentResult: undefined as unknown,
     stopBelow: {} as { block?: string }, prompts: [] as (readonly string[] | undefined)[],
   }
@@ -162,6 +163,7 @@ function flowWorld(on: On, opts: { files?: Record<string, string>; realPaths?: R
   on('prompt.submit', async (_$, e) => { engine.prompts.push(e.context); return { text: e.text, ...(e.context ? { context: e.context } : {}) } })
   on('agent.spawn', async (_$, e) => {
     gate.prompts.push(e.prompt)
+    engine.spawnBackground.push(e.background)
     if (gate.hold) await gate.hold
     return { model: 'model-1', agentId: engine.spawnId }
   })
@@ -848,6 +850,31 @@ describe('ownership holes', () => {
     // Another description, or no isolation, is not the flow's business.
     expect((await $.tool.call({ tool: 'Agent', description: 'Explore', prompt: 'p', isolation: 'worktree' } as never)).deny).toBeUndefined()
     expect((await $.tool.call({ tool: 'Agent', description: '[T1] first', prompt: 'p' } as never)).deny).toBeUndefined()
+  })
+
+  test('a [T] delegation started in the background runs in the foreground in enforce', { options: { flow: 'enforce' } }, async ($, on) => {
+    const w = flowWorld(on)
+    await boot($, w)
+    const started = await $.agent.spawn({ ...spawnBase, description: '[T1] first', subagentType: 'pantheon:developer', background: true } as never)
+    expect('deny' in started && started.deny).toBeFalsy()
+    expect(w.engine.spawnBackground).toEqual([false])
+    expect(w.journal().find(e => e.condition === 'spawn_background')).toMatchObject({ event: 'spawn', task: 'T1', action: 'allow' })
+  })
+
+  test('in shadow a background [T] delegation is journaled as spawn_background and changes nothing', { options: { flow: 'shadow' } }, async ($, on) => {
+    const w = flowWorld(on)
+    await boot($, w)
+    await $.agent.spawn({ ...spawnBase, description: '[T1] first', subagentType: 'pantheon:developer', background: true } as never)
+    expect(w.engine.spawnBackground).toEqual([true])
+    expect(w.journal().find(e => e.condition === 'spawn_background')).toMatchObject({ event: 'spawn', task: 'T1', action: 'allow' })
+  })
+
+  test('a background delegation without [T] is untouched', { options: { flow: 'enforce' } }, async ($, on) => {
+    const w = flowWorld(on)
+    await boot($, w)
+    await $.agent.spawn({ ...spawnBase, description: 'Explore the repo', subagentType: 'Explore', background: true } as never)
+    expect(w.engine.spawnBackground).toEqual([true])
+    expect(w.journal().some(e => e.condition === 'spawn_background')).toBe(false)
   })
 
   test('in shadow the same delegation goes through and is only journaled', { options: { flow: 'shadow' } }, async ($, on) => {

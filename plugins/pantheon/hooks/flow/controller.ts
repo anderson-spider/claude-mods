@@ -1476,6 +1476,32 @@ export async function inspectIsolation(ctx: Ctx, input: { taskId: string; isolat
   })
 }
 
+/**
+ * A `[T]` delegation runs in the foreground: a background agent's end reaches the lead as a hand-back with no sender id a
+ * hook can trust, so the flow never records its end. In enforce the spawn is made foreground (`foreground: true`, the
+ * caller rewrites `background`); shadow only journals `spawn_background`. Nothing when no live plan holds the task.
+ */
+export async function inspectBackground(ctx: Ctx, input: { taskId: string }): Promise<{ foreground?: boolean }> {
+  return guarded<{ foreground?: boolean }>(ctx, 'background', {}, async trace => {
+    const loc = await locate(ctx)
+    if (loc.kind !== 'ok') return {}
+    trace.planId = loc.planId
+    const peek = await observe(ctx, loc, trace)
+    const task = findTask(peek.flow, input.taskId)
+    if (!task) return {}
+    const state = peek.state
+    if (!(enforcing(peek) && !state.done && !state.paused && !state.stopped)) return {}
+    const enforce = ctx.mode === 'enforce'
+    const reason = enforce
+      ? `Task ${task.id} runs in the foreground: its background agent's end cannot be attributed, so the flow would never record it. The spawn was made foreground.`
+      : `Task ${task.id} would run in the foreground: its background agent's end cannot be attributed, so the flow would never record it. Shadow changes nothing.`
+    await noteQueued(ctx, loc.planId, {
+      kind: 'decision', event: 'spawn', task: task.id, condition: 'spawn_background', reason: clip(reason, 600), action: 'allow',
+    })
+    return enforce ? { foreground: true } : {}
+  })
+}
+
 // --- main-session edits ---
 
 /**

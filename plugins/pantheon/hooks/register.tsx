@@ -7,7 +7,7 @@ import { rulesVerdict } from './decisions'
 import { gateContext, gateMessage } from './gate'
 import { DEFAULT_CONFIG } from './defaults'
 import {
-  approvePlan, controlFlow, flowStatus, flowTaskFiles, humanPrompt, inspectIsolation, inspectSpawn, mainEdit, noteDelivery, noteDeliveryDiagnostic, noteOwnership,
+  approvePlan, controlFlow, flowStatus, flowTaskFiles, humanPrompt, inspectBackground, inspectIsolation, inspectSpawn, mainEdit, noteDelivery, noteDeliveryDiagnostic, noteOwnership,
   ownershipVerdict, parseNotification, pendingAgentTasks, qaCriteriaBrief, reviewed, stopFlow, taskEnded, taskIdOf,
 } from './flow/controller'
 import type { Ctx, Serial } from './flow/controller'
@@ -960,10 +960,17 @@ export const register: Register = (on, options) => {
     let check: Awaited<ReturnType<typeof inspectSpawn>> | undefined
     try { check = await inspectSpawn(flowCtx($, await flowDeps(io)), { taskId, agentType: e.subagentType }) } catch (error) { flowFailed(io, error) }
     if (check?.deny) return { deny: check.deny }
+    // A [T] delegation runs in the foreground: its end is only attributable there (the Agent tool result). Enforce makes a
+    // background one foreground; shadow only journals it. Foreground is the only rewrite here, not a refusal.
+    let foreground = false
+    if (e.background) {
+      try { foreground = !!(await inspectBackground(flowCtx($, await flowDeps(io)), { taskId })).foreground } catch (error) { flowFailed(io, error) }
+    }
     // The lead writes the QA brief, so in enforce the approved criteria are appended to it: the lead cannot hand QA its own
     // answers. Shadow rewrites nothing.
     const brief = flowMode === 'enforce' && check?.kind === 'review' && check.by === 'qa' && check.criteria ? qaCriteriaBrief(taskId, check.criteria) : undefined
-    const forward = brief ? { ...e, prompt: `${e.prompt}\n\n${brief}` } : e
+    const base = brief ? { ...e, prompt: `${e.prompt}\n\n${brief}` } : e
+    const forward = foreground ? { ...base, background: false } : base
     // Nothing is linked unless a plan is in force for the task: nothing to wait for then either.
     if (!check?.kind || !check.planId) {
       // Nothing links this agent, so its delivery cannot be matched to the task. A refused role is already journaled by
