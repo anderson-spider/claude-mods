@@ -5,7 +5,8 @@ import { buildLeadSection } from '../hooks/prompts/lead'
 import { rolePrompt } from '../hooks/prompts/roles'
 
 describe('lead budget', () => {
-  // The ceiling is shared by the default config and every single disabled role or seat.
+  // Checked: the default config, and each role or configured seat disabled one at a time.
+  // Extra seats a user adds to council.seats are not bounded here; a third seat can exceed the ceiling.
   const LEAD_BUDGET = 4300
   test('the default prompt stays within 4300 chars', () => {
     expect(buildLeadSection(DEFAULTS).length).toBeLessThanOrEqual(LEAD_BUDGET)
@@ -29,6 +30,9 @@ describe('lead section', () => {
       expect(section).toContain(`@${role}`)
     }
     expect(section).toContain('Council seats: Agent pantheon:councillor-alpha, Agent pantheon:councillor-beta')
+    expect(section).toContain('never implement it yourself')
+    expect(section).toContain('low-risk')
+    expect(section).toContain('else pass its brief and result to a new Agent')
     for (const text of ['delegate(', 'delegate_result', 'delegate_cancel', 'resume: <jobId>', 'jobId', 'apply_patch', 'Codex', 'codex']) {
       expect(section).not.toContain(text)
     }

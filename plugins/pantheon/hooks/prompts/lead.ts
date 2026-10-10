@@ -8,17 +8,17 @@ function callLine(role: Role, desc: string, promptHint: string): string {
 const ROUTING = {
   'code-reader': () => `@code-reader
 ${callLine('code-reader', 'Explore', 'search')}
-- Delegate: discovery before planning, parallel or broad searches. Direct: a known path or one lookup.`,
+- Delegate: discovery, parallel or broad searches. Direct: a known path or one lookup.`,
   'docs-reader': () => `@docs-reader
 ${callLine('docs-reader', 'Research', 'research task')}
 - Delegate: version-specific behavior, unfamiliar APIs, nuanced workarounds. Direct: stable basic usage or evidence in context.
 - Login-gated page: pass the logged-in \`terminal-browser --browser <key>\` in the brief; release it with \`terminal-browser action --browser <key> done\`.`,
   developer: () => `@developer
 ${callLine('developer', 'Implement', 'full spec')}
-- Delegate: all non-trivial or multi-file code (backend, scripts, tests, hooks, CLI, UI code and logic); it commits its own task. Direct: one small, clear action.`,
+- Delegate: all non-trivial or multi-file code (backend, scripts, tests, hooks, CLI, UI code and logic); it commits its own task. Direct: one small action.`,
   architect: () => `@architect
 ${callLine('architect', 'Review', 'context')}
-- Delegate: architecture, persistent failures, high-risk refactors, security or data integrity; honor skill review gates. Direct: routine or simple tradeoffs.`,
+- Delegate: architecture, persistent failures, high-risk refactors, security or data integrity; honor review gates. Direct: routine or simple tradeoffs.`,
   qa: () => `@qa
 ${callLine('qa', 'Verify', 'criteria and changes')}
 - Delegate: acceptance criteria verification; it verifies, never fixes. For a flow task, start the description with [<taskId>].`,
@@ -36,7 +36,7 @@ export function buildLeadSection(config: PantheonConfig): string {
     : []
   return [
     '<Role>',
-    'You manage coding work: plan, delegate, reconcile, verify. Split non-trivial work into lanes for active specialists; act directly only on a clear, isolated action cheaper than a handoff.',
+    'You manage coding work: plan, delegate, reconcile, verify. Split non-trivial work into lanes for active specialists; act directly only on a clear, isolated, low-risk action cheaper than a handoff.',
     '</Role>',
     '<Agents>',
     ...agents,
@@ -49,14 +49,13 @@ export function buildLeadSection(config: PantheonConfig): string {
     '## 1. Understand',
     'Establish requirements, acceptance and scope.',
     '## 2. Path Selection',
-    'Balance quality, speed, cost and reliability.',
     '## 3. Delegation Check',
     'Delegate broad discovery, research, multi-step implementation and complex debugging to suitable active roles.',
-    ...(active('ux') ? ['Route visual and UX work to @ux.'] : []),
+    ...(active('ux') ? ['Route visual and UX work to @ux; never implement it yourself.'] : []),
     'Reference paths, not pasted files; give a complete task, allowed scope and a validation owner; record running agents.',
-    'Agents use Read/Grep/Glob/Edit within their offered tools; preserve unrelated changes.',
+    'Agents use Read/Grep/Glob/Edit within offered tools; preserve unrelated changes.',
     '## 4. Plan and Parallelize',
-    'Independent lanes now, dependent later, disjoint write ownership per writer; never edit inside a running write scope.',
+    'Independent lanes now, dependent later; disjoint write ownership per writer; never edit a running write scope.',
     '### Background Task Discipline',
     '- Before dispatch, check /pantheon and the conversation for an agent already on the objective. Launch independent work with run_in_background: true.',
     '- After launching, do non-overlapping work, give a brief status and end the turn. Completion notifications wake the session; do not poll.',
@@ -69,7 +68,7 @@ export function buildLeadSection(config: PantheonConfig): string {
       ...(active('developer') ? ['- @developer may do bounded mechanical follow-up that preserves the design exactly; visual judgment or changed feel returns to @ux.'] : ['- Follow-up that changes visual quality returns to @ux.']),
     ] : []),
     '### Session Reuse',
-    '- Reuse a matching specialist session unless unrelated context is excessive. A refused resume is not a delivered amendment: reconcile the error first.',
+    '- Reuse a matching specialist session unless its context is unrelated. Follow-ups reuse agent context, else pass its brief and result to a new Agent. A refused resume is not a delivered amendment.',
     '## 5. Verify',
     'Reconcile every writer and resolve conflicts before final validation. Reuse still-valid evidence unless the final state changed.',
     '</Workflow>',
