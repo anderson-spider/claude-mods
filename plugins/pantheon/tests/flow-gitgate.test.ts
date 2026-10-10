@@ -1029,3 +1029,425 @@ test('a shell that has no -c contract keeps a literal git read for what it is', 
   expect(reasonOf('lead', 'pwsh --ec ZwBpAHQA')).toMatch(/hidden/)
   expect(reasonOf('lead', 'pwsh -Command git push origin feature/x')).toMatch(/hidden/)
 })
+
+// What passes for git must not pass for the forge: gh, glab, hub and lab are named like git by every check that hides one.
+const FORGE_BEHIND_SOMETHING = [
+  'echo 1 | xargs gh pr merge',
+  'gh pr list --json number -q ".[0].number" | xargs gh pr merge',
+  'echo 1 | xargs glab mr merge',
+  'echo pr merge 1 | xargs gh',
+  'xargs -n1 gh api -X PUT < endpoints',
+  'find . -exec gh pr merge 1 \\;',
+  'printf "gh pr merge 1" | bash',
+  'echo "glab mr merge 1" | zsh',
+  'source <(echo gh pr merge 1)',
+  'bash < <(echo gh pr merge 1)',
+  'watch -n 999 gh pr merge 1',
+  'parallel gh pr merge ::: 1',
+  'script -q /dev/null gh pr merge 1',
+  'trap "gh pr merge 1" EXIT',
+  'coproc gh pr merge 1',
+  'nohup gh pr merge 1',
+  'timeout 5 gh pr merge 1',
+  'stdbuf -oL gh pr merge 1',
+  'ionice -c 2 gh pr merge 1',
+  'setsid gh pr merge 1',
+  'caffeinate gh pr merge 1',
+  'op run -- gh pr merge 1',
+  'echo "hub merge https://github.com/o/r/pull/1" | sh',
+  'echo "lab mr merge 1" | bash',
+  'xargs -n1 hub push origin main',
+  'GH pr merge 1',
+  // Unquoted, in another case, with a `.exe` or a path: the same text, whatever the tool is called.
+  'echo hub merge https://github.com/o/r/pull/1 | sh',
+  'echo hub api -X PUT repos/o/r/pulls/1/merge | sh',
+  'echo hub push origin main | sh',
+  'echo lab mr merge 1 | bash -s',
+  'echo lab mr merge 1 | source /dev/stdin',
+  'bash < <(echo lab mr merge 1)',
+  'bash < <(echo GH pr merge 1)',
+  '. <(echo Lab mr merge 1)',
+  'echo GH pr merge 1 | sh',
+  'echo gh.exe pr merge 1 | sh',
+  'echo GLAB mr merge 1 | sh',
+  'echo Git push origin main | sh',
+  'echo git.exe push origin main | sh',
+  'echo "HUB.EXE merge https://github.com/o/r/pull/1" | sh',
+  'echo /usr/local/bin/hub push origin main | sh',
+  'xargs GH pr merge',
+  'find . -exec Hub.exe push \\;',
+  'op run -- hub api -X PUT repos/o/r/pulls/1/merge',
+  'op run -- lab mr merge 1',
+  'mise exec -- hub merge https://github.com/o/r/pull/1',
+  'ssh host hub push origin main',
+  'docker exec c hub push origin main',
+  'nix-shell --run "hub push origin main"',
+  'fish hub push origin main',
+  // Behind another command, hub and lab are the tool before a verb of theirs, a group and its action, or an api call.
+  'op run -- hub push origin main',
+  'mise exec -- hub api -X DELETE repos/o/r',
+  'op run -- hub api repos/o/r/pulls/1/merge',
+  'op run -- hub pr checkout 5',
+  'op run -- hub release create v1',
+  'op run -- hub rebase origin/main',
+  'op run -- lab mr create',
+  'nix-shell --run "lab mr merge 1"',
+  // Fed to a shell, the text is the command: hub and lab count before an option or any verb.
+  'echo "lab -R x mr merge 1" | sh',
+  'echo hub -C . push origin main | sh',
+  'echo hub branch -D main | sh',
+  'bash < <(echo hub reset --hard)',
+  'source <(echo lab -R x mr merge 1)',
+]
+
+test('a forge merge behind xargs, find, a pipe into a shell, a feed or a runner is denied for every actor', () => {
+  const wrong: string[] = []
+
+  for (const command of FORGE_BEHIND_SOMETHING) {
+    for (const [actor, opts] of [['lead', {}], ['lead', { gitRole: false }], ['git', {}], ['developer', {}]] as const) {
+      if (gitAllowed(actor, command, all, opts).allow) wrong.push(`${actor}${opts.gitRole === false ? ' (no git role)' : ''}: ${command}`)
+    }
+  }
+
+  expect(wrong).toEqual([])
+})
+
+test('a reader that only names the forge, and the ordinary work around it, still pass', () => {
+  const ordinary: Array<[GitActor, string]> = [
+    ['lead', 'echo gh pr merge'], ['lead', 'echo "glab mr merge 1"'], ['lead', 'grep -rn gh .'], ['lead', 'man gh'], ['lead', 'cat .github/workflows/ci.yml'],
+    ['lead', 'ls hub'], ['lead', 'echo lab'], ['lead', 'cd ~/src/hub && make'], ['lead', 'gh pr view 1'], ['lead', 'gh pr checks'],
+    ['lead', 'gh issue list'], ['lead', 'glab mr list'], ['lead', 'git status'], ['lead', 'npm test'], ['lead', 'make'],
+    ['lead', 'git push -u origin andersonsilva/foo:andersonsilva/foo'], ['lead', 'gh pr list --json number | jq length'],
+    ['developer', 'git add -- a.ts && git commit -m "feat: x [T1]" -- a.ts'], ['git', 'gh pr create --fill'], ['git', 'gh pr view 1 --json title'],
+    ['qa', 'gh pr view 1'], ['qa', 'echo gh pr merge | cat'],
+  ]
+  const wrong: string[] = []
+
+  for (const [actor, command] of ordinary) {
+    const verdict = gitAllowed(actor, command, only('a.ts'))
+    if (!verdict.allow) wrong.push(`${actor}: ${command}: ${verdict.reason}`)
+  }
+
+  expect(wrong).toEqual([])
+})
+
+test('a word that is not literal in a forge call that changes state is not checked: the git role is refused it', () => {
+  const calls = [
+    `Q='mutation{mergePullRequest(input:{pullRequestId:"x"}){clientMutationId}}'; gh api graphql -f query="$Q"`,
+    'gh api graphql -f query="$(cat q.graphql)"',
+    'E=repos/o/r/pulls/1/merge; gh api -X PUT "$E"',
+    'gh api -X PUT repos/o/r/pulls/1/mer$X',
+    'gh pr $A 1',
+    'gh pr merge "$N"',
+    'glab mr "$ACTION" 1',
+    'gh repo edit "$R" --default-branch main',
+  ]
+  const wrong: string[] = []
+
+  for (const command of calls) {
+    for (const [actor, opts] of [['lead', {}], ['lead', { gitRole: false }], ['git', {}], ['developer', {}]] as const) {
+      if (gitAllowed(actor, command, all, opts).allow) wrong.push(`${actor}${opts.gitRole === false ? ' (no git role)' : ''}: ${command}`)
+    }
+  }
+
+  expect(wrong).toEqual([])
+  expect(reasonOf('git', 'gh api -X PUT "$E"')).toMatch(/not literal.*rewrite it as a literal command/)
+})
+
+test('a word that is not literal in a call that is a read whatever it holds is fine', () => {
+  for (const command of ['gh pr view "$N"', 'gh pr list --search "$Q"', 'gh pr checks "$N"', 'gh issue view "$N"', 'gh repo view "$R"', 'glab mr view "$N"', 'gh api "$E"', 'gh api -X GET "$E"', 'gh pr diff "$N" --name-only']) {
+    const verdict = gitAllowed('git', command, all)
+    if (!verdict.allow) throw new Error(`${command}: ${verdict.reason}`)
+  }
+
+  // The same word where a write is: refused.
+  for (const command of ['gh pr checkout "$N"', 'gh api "$E" -f x=y', 'gh api -X POST "$E"']) {
+    expect(gitAllowed('git', command, all).allow, command).toBe(false)
+  }
+})
+
+// `hub` and `lab` are also what a service, a package, a host and a Jupyter command are called: named behind another command, they
+// are the tool only before a verb or a group of theirs, never before an option or an everyday word.
+const NAMES_THAT_ARE_NOT_THE_TOOL = [
+  'jupyter lab --no-browser',
+  'uv run jupyter lab --ip 0.0.0.0',
+  'npm run lab -- --watch',
+  'kubectl logs -n hub -f mypod',
+  'docker compose logs hub -f',
+  'docker run --name hub -p 4444:4444 selenium/hub',
+  'docker run --rm lab --help',
+  './scripts/run.sh lab -v',
+  'pnpm --filter hub add lodash',
+  'yarn workspace hub add react',
+  'brew info hub --json',
+  'jupyter lab',
+  'jupyter lab extension list',
+  'jupyter lab build',
+  'jupyter lab clean',
+  'ls ~/src/hub',
+  'cd lab',
+  'pnpm --filter hub test',
+  'ssh server docker logs hub',
+  'ssh lab uptime',
+  'watch -n 5 kubectl get pods -n lab',
+  'docker compose up -d hub',
+  'kubectl exec -it hub -- sh',
+  'helm upgrade --install hub jupyterhub/jupyterhub',
+  'rsync -a src/ lab:/srv/data',
+  // A service or a script named like a verb or a group of theirs, right after the name.
+  'docker compose up hub api',
+  'docker compose restart hub api',
+  'docker compose logs hub api',
+  'docker compose up -d hub api worker',
+  'docker compose build lab api',
+  'docker compose exec hub api ls /app',
+  'kubectl rollout restart deployment/hub api',
+  'make lab release',
+  'yarn workspace hub create',
+  'nx run hub api',
+  'python manage.py lab sync',
+  'ssh lab repo sync',
+  'pnpm --filter hub project',
+  'pnpm --filter hub pull',
+  'pnpm --filter hub apply',
+  'echo hub | tee /tmp/x',
+  'echo "see the hub" | sh',
+  'make lab',
+]
+
+test('hub and lab named as a service, a package or a host are not the tool, for any actor', () => {
+  const wrong: string[] = []
+
+  for (const command of NAMES_THAT_ARE_NOT_THE_TOOL) {
+    for (const [actor, opts] of [['developer', {}], ['lead', {}], ['lead', { gitRole: false }], ['git', {}], ['qa', {}]] as const) {
+      const verdict = gitAllowed(actor, command, only('a.ts'), opts)
+      if (!verdict.allow) wrong.push(`${actor}${opts.gitRole === false ? ' (no git role)' : ''}: ${command}: ${verdict.reason}`)
+    }
+  }
+
+  expect(wrong).toEqual([])
+})
+
+test('a GraphQL query read from a file or stdin is refused for the git role however the field is spelled', () => {
+  const reads = [
+    'gh api graphql -F query=@q.graphql',
+    'gh api graphql -Fquery=@q.graphql',
+    'gh api graphql -Fquery=@-',
+    'gh api graphql -fquery=@q.graphql',
+    'gh api graphql -iFquery=@q',
+    'gh api graphql -XPOST -Fquery=@q.graphql',
+    'gh api graphql --field query=@q.graphql',
+    'gh api graphql --field=query=@q.graphql',
+    'gh api graphql --raw-field=query=@q.graphql',
+    'gh api graphql --fie query=@q.graphql',
+    'gh api graphql --input q.json',
+    'gh api graphql --inp q.json',
+    'hub api graphql -Fquery=@q.graphql',
+    'glab api graphql -Fquery=@q.graphql',
+  ]
+
+  for (const command of reads) {
+    expect(reasonOf('git', command), command).toMatch(/read from a file or stdin cannot be checked/)
+    expect(gitAllowed('lead', command, all, { gitRole: false }).allow, command).toBe(false)
+  }
+
+  // A query written on the command line is read as a query.
+  expect(gitAllowed('git', 'gh api graphql -f query="{ viewer { login } }" -X GET', all).allow).toBe(true)
+  expect(reasonOf('git', 'gh api graphql -f query="mutation { mergePullRequest(input: {}) { clientMutationId } }"')).toMatch(/Changing branches/)
+})
+
+test('the GraphQL endpoint is read as the API reads it: a slash, a host, a query string or another case do not hide it', () => {
+  const calls = [
+    `gh api /graphql -f query='mutation { mergePullRequest(input: {}) { clientMutationId } }'`,
+    `gh api https://api.github.com/graphql -f query='mutation { x }'`,
+    `gh api GraphQL -f query='mutation { x }'`,
+    `gh api graphql/ -f query='mutation { x }'`,
+    `gh api graphql?x=1 -f query='mutation { x }'`,
+    'gh api /graphql -F query=@m.graphql',
+    'gh api https://api.github.com/graphql -F query=@-',
+    'gh api https://ghe.example.com/api/graphql --input q.json',
+    `hub api /graphql -f query='mutation { x }'`,
+    'hub api https://api.github.com/graphql -Fquery=@m.graphql',
+    `glab api /graphql -f query='mutation { x }'`,
+    `glab api https://gitlab.com/api/graphql -f query='mutation { x }'`,
+    'glab api https://gitlab.com/api/graphql -F query=@m.graphql',
+  ]
+  const wrong: string[] = []
+
+  for (const command of calls) {
+    for (const [actor, opts] of [['git', {}], ['lead', { gitRole: false }]] as const) {
+      if (gitAllowed(actor, command, all, opts).allow) wrong.push(`${actor}${opts.gitRole === false ? ' (no git role)' : ''}: ${command}`)
+    }
+  }
+
+  expect(wrong).toEqual([])
+  // The refs, merges and branches endpoints are read the same way.
+  expect(reasonOf('git', 'gh api /repos/o/r/pulls/1/merge -X PUT')).toMatch(/Merging/)
+  expect(reasonOf('git', 'gh api https://api.github.com/repos/o/r/git/refs -X POST -f ref=refs/heads/main')).toMatch(/Changing branches/)
+  // A query written on the command line is a query.
+  expect(gitAllowed('git', `gh api /graphql -f query='{ viewer { login } }'`, all).allow).toBe(true)
+})
+
+test('hub pr list and hub pr show read; hub pr merge and hub merge <url> are a PR merge', () => {
+  for (const actor of ['lead', 'git', 'developer', 'qa'] as const) {
+    for (const command of ['hub pr list', 'hub pr list -s open', 'hub pr show 5']) {
+      const verdict = gitAllowed(actor, command, all)
+      if (!verdict.allow) throw new Error(`${actor}: ${command}: ${verdict.reason}`)
+    }
+  }
+
+  expect(reasonOf('git', 'hub pr merge 5')).toMatch(/Merging/)
+  expect(reasonOf('lead', 'hub pr merge 5')).toMatch(/PR\/MR work/)
+  expect(reasonOf('git', 'hub merge https://github.com/o/r/pull/1')).toMatch(/Merging/)
+  expect(reasonOf('lead', 'hub merge https://github.com/o/r/pull/1')).toMatch(/PR\/MR work/)
+
+  const forge = classifyGitCommand('hub pr list').forges[0]
+  expect([forge?.tool, forge?.group, forge?.action, forge?.changesState]).toEqual(['hub', 'pr', 'list', false])
+})
+
+// The git role's central job: a title, a body, notes or a label that a command builds is free text, and says nothing about what the call does.
+const FREE_TEXT_FROM_A_COMMAND = [
+  'gh pr create --title "feat: x" --body "$(cat <<\'EOF\'\n## Summary\n- one\n\nCloses #1\nEOF\n)"',
+  'gh pr create -t "$(git log -1 --format=%s)" -b "$(git log -1 --format=%b)"',
+  'gh pr create --base "$BASE" --title x --body y',
+  'glab mr create --title x --description "$(cat d.md)" --assignee @me --label feature',
+  'gh pr edit 12 --body "$(cat b.md)"',
+  'gh pr comment 12 --body "$(cat c.md)"',
+  'gh pr review 1 --approve --body "$MSG"',
+  'gh release create v1 --notes "$(cat n.md)"',
+  'gh pr create --title="$T" --body="$(cat b.md)"',
+  'gh pr create -t"$T" -b"$B"',
+  'gh pr create --fill --body-file "$F"',
+  'glab mr create --fill --title "$(git log -1 --format=%s)" --target-branch main',
+]
+
+test('a value that is not literal in a free-text option does not stop the git role from opening or editing a PR/MR', () => {
+  const wrong: string[] = []
+
+  for (const command of FREE_TEXT_FROM_A_COMMAND) {
+    for (const [actor, opts] of [['git', {}], ['lead', { gitRole: false }]] as const) {
+      const verdict = gitAllowed(actor, command, all, opts)
+      if (!verdict.allow) wrong.push(`${actor}${opts.gitRole === false ? ' (no git role)' : ''}: ${command}: ${verdict.reason}`)
+    }
+
+    // The lead with the git role routes it; the read-only roles and the developer never made PRs.
+    expect(gitAllowed('lead', command, all).allow, command).toBe(false)
+    expect(gitAllowed('developer', command, all).allow, command).toBe(false)
+  }
+
+  expect(wrong).toEqual([])
+})
+
+test('a word that is not literal anywhere else in a forge call that changes state is still refused to the git role', () => {
+  const calls = [
+    'gh pr checkout "$N"',
+    'gh pr merge "$N"',
+    'gh pr create -d "$N"',
+    'gh pr edit 12 --body "$(cat b.md)" "$N"',
+    'gh pr merge --body "$X" "$N"',
+    'gh pr create --title x --body y "$N"',
+    'gh pr create --title x -- "$N"',
+    'gh pr create --title x --repo "$R"',
+    'gh pr create -m "$X"',
+    'gh pr create --bod "$X" "$N"',
+    'gh pr edit "$N" --body x',
+    // An unquoted value is split by the shell: it is not one word, so it can carry an action or `--force`.
+    'gh repo sync -b {main,--force}',
+    'gh repo sync -b $B',
+    'gh pr --title $T',
+    'gh pr --subject {x,merge,1}',
+    'glab mr --message {x,merge,1}',
+    'gh pr create --body $(cat b.md)',
+    'gh pr create --body `cat b.md`',
+    'gh pr create --title=$T',
+    'gh pr create -t$T',
+    'gh pr create -b {main,--force}',
+    'gh pr create --title "x"$T',
+    // Inside double quotes `$@` and an array still become one word per element.
+    'set -- main --force; gh repo sync -b "$@"',
+    'A=(main --force); gh repo sync -b "${A[@]}"',
+    'gh repo sync -b "$*"',
+    'gh repo sync -b "${A[*]}"',
+    'gh pr create --title "$@"',
+    'gh pr $A 1',
+    'gh pr "$A" 1',
+    'gh api -X PUT "$E"',
+    'gh api graphql -f query="$Q"',
+    'gh api repos/o/r/issues -f title="$T"',
+  ]
+  const wrong: string[] = []
+
+  for (const command of calls) {
+    for (const [actor, opts] of [['git', {}], ['lead', { gitRole: false }]] as const) {
+      if (gitAllowed(actor, command, all, opts).allow) wrong.push(`${actor}${opts.gitRole === false ? ' (no git role)' : ''}: ${command}`)
+    }
+  }
+
+  expect(wrong).toEqual([])
+  expect(reasonOf('git', 'gh pr edit 12 --body "$(cat b.md)" "$N"')).toMatch(/not literal.*rewrite it as a literal command/)
+})
+
+test('an option before the action moves it: the CLI skips the option and its next word', () => {
+  const hidden = [
+    'gh pr -t x merge 1',
+    'gh pr --subject x merge 1',
+    'glab mr -t x merge 1',
+    'gh -t issue pr merge 1',
+    'gh -t api pr merge 1',
+    'gh pr -t view merge 1',
+    'gh repo -t x sync --force',
+  ]
+  const wrong: string[] = []
+
+  for (const command of hidden) {
+    for (const [actor, opts] of [['git', {}], ['lead', { gitRole: false }], ['lead', {}], ['developer', {}], ['qa', {}]] as const) {
+      if (gitAllowed(actor, command, all, opts).allow) wrong.push(`${actor}${opts.gitRole === false ? ' (no git role)' : ''}: ${command}`)
+    }
+  }
+
+  expect(wrong).toEqual([])
+  expect(reasonOf('git', 'gh pr -t x merge 1')).toMatch(/option before the action/)
+  // The merge written first, with the repository option the group has, is the merge.
+  expect(reasonOf('git', 'gh pr --repo o/r merge 1')).toMatch(/Merging/)
+  expect(reasonOf('lead', 'gh pr --repo o/r merge 1')).toMatch(/PR\/MR work/)
+
+  // Options after the action, and the group's own `-R`/`--repo` before it, are the ordinary call.
+  for (const command of ['gh pr create --title x --body y', 'gh pr view 12 --json title', 'gh pr -R o/r view 12', 'gh pr --repo o/r view 12', 'gh pr --repo=o/r view 12', 'gh -R o/r pr view 12', 'gh pr list --search "$Q"']) {
+    const verdict = gitAllowed('git', command, all)
+    if (!verdict.allow) throw new Error(`${command}: ${verdict.reason}`)
+  }
+
+  // With no word after the option there is no action to move: the version flags are read-only for everyone.
+  for (const command of ['gh pr view 12 --json title', 'gh pr -R o/r view 12', 'gh pr --repo o/r view 12', 'gh --version', 'glab --version', 'glab -v', 'gh version', 'gh --help', 'gh pr --help']) {
+    for (const [actor, opts] of [['lead', {}], ['lead', { gitRole: false }], ['git', {}], ['developer', {}], ['qa', {}]] as const) {
+      const verdict = gitAllowed(actor, command, all, opts)
+      if (!verdict.allow) throw new Error(`${actor}${opts.gitRole === false ? ' (no git role)' : ''}: ${command}: ${verdict.reason}`)
+    }
+  }
+})
+
+test('hub and lab are gh and glab: the same verdicts, and hub push is a push', () => {
+  expect(reasonOf('lead', 'hub push origin main')).toMatch(/protected branch `main`/)
+  expect(reasonOf('lead', 'hub push --force origin feature/x')).toMatch(/Forced/)
+  expect(verdictOf('lead', 'hub push origin feature/x:feature/x').allow).toBe(true)
+  expect(reasonOf('git', 'hub push origin feature/x:feature/x')).toMatch(/lead pushes/)
+  expect(reasonOf('developer', 'hub push origin feature/x')).toMatch(/`git` role/)
+  expect(reasonOf('git', 'hub merge https://github.com/o/r/pull/1')).toMatch(/Merging/)
+  expect(reasonOf('lead', 'hub merge https://github.com/o/r/pull/1')).toMatch(/PR\/MR work/)
+  expect(reasonOf('git', 'hub api -X PUT repos/o/r/pulls/1/merge')).toMatch(/Merging/)
+  expect(reasonOf('git', 'hub api -X POST repos/o/r/git/refs -f ref=refs/heads/main')).toMatch(/Changing branches/)
+  expect(reasonOf('lead', 'hub api -X PUT repos/o/r/pulls/1/merge')).toMatch(/changes state on the forge/)
+  expect(reasonOf('lead', 'hub pull-request -m x')).toMatch(/PR\/MR work/)
+  expect(reasonOf('git', 'lab mr merge 1')).toMatch(/Merging/)
+  expect(reasonOf('git', 'lab mr accept 1')).toMatch(/Merging/)
+  expect(reasonOf('lead', 'lab mr merge 1')).toMatch(/PR\/MR work/)
+  expect(reasonOf('git', 'lab project delete o/r')).toMatch(/Deleting a repository/)
+  for (const [actor, command] of [['lead', 'hub ci-status'], ['lead', 'hub api repos/o/r'], ['lead', 'lab mr list'], ['git', 'hub pull-request -m x'], ['lead', 'hub log -1']] as const) {
+    const verdict = gitAllowed(actor, command, all)
+    if (!verdict.allow) throw new Error(`${actor}: ${command}: ${verdict.reason}`)
+  }
+
+  const forge = classifyGitCommand('hub pull-request -m x').forges[0]
+  expect([forge?.tool, forge?.group, forge?.action]).toEqual(['hub', 'pr', 'create'])
+  expect(classifyGitCommand('hub push origin main').segments[0]?.verb).toBe('push')
+})

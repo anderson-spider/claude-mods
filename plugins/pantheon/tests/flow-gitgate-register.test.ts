@@ -525,6 +525,113 @@ describe('what the last review found', () => {
   })
 })
 
+describe('what the forge-gate review found', () => {
+  test('enforce: a forge merge behind xargs, a pipe or a runner is hidden, and hub and lab are gh and glab', { options: { flow: 'enforce' } }, async ($, on) => {
+    const w = gitWorld(on)
+    await boot($, w)
+    w.agents.push({ id: 'git-1', description: 'Git operations', type: 'pantheon:git', status: 'running' })
+    for (const id of [undefined, 'git-1']) {
+      for (const command of ['echo 1 | xargs gh pr merge', 'printf "gh pr merge 1" | bash', 'watch -n 999 gh pr merge 1', 'find . -exec gh pr merge 1 \\;']) {
+        expect((await bash($, command, id)).deny, `${id}: ${command}`).toContain('hidden')
+      }
+    }
+    expect((await bash($, 'hub push origin main')).deny).toContain('protected branch `main`')
+    expect((await bash($, 'lab mr merge 1', 'git-1')).deny).toContain('Merging')
+    expect((await bash($, 'hub api -X PUT repos/o/r/pulls/1/merge', 'git-1')).deny).toContain('Merging')
+    // The ordinary work around it is not held.
+    for (const command of ['gh pr view 1', 'gh issue list', 'echo gh pr merge', 'git status']) {
+      expect((await bash($, command)).deny, command).toBeUndefined()
+    }
+    expect(w.ran).toEqual(['gh pr view 1', 'gh issue list', 'echo gh pr merge', 'git status'])
+  })
+
+  test('enforce: hub and lab unquoted, and gh or git in another case or with a .exe, are hidden behind a pipe or a feed', { options: { flow: 'enforce' } }, async ($, on) => {
+    const w = gitWorld(on)
+    await boot($, w)
+    w.agents.push({ id: 'git-1', description: 'Git operations', type: 'pantheon:git', status: 'running' })
+    for (const id of [undefined, 'git-1']) {
+      for (const command of [
+        'echo hub merge https://github.com/o/r/pull/1 | sh',
+        'echo hub push origin main | sh',
+        'echo lab mr merge 1 | bash -s',
+        'bash < <(echo GH pr merge 1)',
+        'echo gh.exe pr merge 1 | sh',
+        'echo GLAB mr merge 1 | sh',
+        'echo hub -C . push origin main | sh',
+        'bash < <(echo hub reset --hard)',
+        'op run -- hub push origin main',
+        'mise exec -- hub api -X DELETE repos/o/r',
+      ]) {
+        expect((await bash($, command, id)).deny, `${id}: ${command}`).toContain('hidden')
+      }
+    }
+    expect(w.ran).toEqual([])
+  })
+
+  test('enforce: hub and lab named as a service, a package or a host are not held for any agent', { options: { flow: 'enforce' } }, async ($, on) => {
+    const w = gitWorld(on)
+    await boot($, w)
+    const id = await developer($, w)
+    w.agents.push({ id: 'git-1', description: 'Git operations', type: 'pantheon:git', status: 'running' })
+    const commands = [
+      'jupyter lab --no-browser', 'kubectl logs -n hub -f mypod', 'docker run --rm lab --help', 'pnpm --filter hub add lodash', 'yarn workspace hub add react',
+      'brew info hub --json', 'docker compose up -d hub api worker', 'make lab release', 'yarn workspace hub create', 'python manage.py lab sync',
+    ]
+
+    for (const agent of [undefined, id, 'git-1']) {
+      for (const command of commands) {
+        expect((await bash($, command, agent)).deny, `${agent}: ${command}`).toBeUndefined()
+      }
+    }
+
+    expect(w.ran).toHaveLength(commands.length * 3)
+  })
+
+  test('enforce: a GraphQL query read from a file, glued to its option, is refused to the git role', { options: { flow: 'enforce' } }, async ($, on) => {
+    const w = gitWorld(on)
+    await boot($, w)
+    w.agents.push({ id: 'git-1', description: 'Git operations', type: 'pantheon:git', status: 'running' })
+    expect((await bash($, 'gh api graphql -Fquery=@q.graphql', 'git-1')).deny).toContain('read from a file or stdin')
+    expect((await bash($, 'hub api graphql -Fquery=@-', 'git-1')).deny).toContain('read from a file or stdin')
+    expect((await bash($, 'gh api https://api.github.com/graphql -F query=@m.graphql', 'git-1')).deny).toContain('read from a file or stdin')
+    expect((await bash($, `gh api /graphql -f query='mutation { x }'`, 'git-1')).deny).toContain('Changing branches')
+  })
+
+  test('enforce: a word that is not literal in a forge call that changes state is refused to the git role', { options: { flow: 'enforce' } }, async ($, on) => {
+    const w = gitWorld(on)
+    await boot($, w)
+    w.agents.push({ id: 'git-1', description: 'Git operations', type: 'pantheon:git', status: 'running' })
+    for (const command of ['E=repos/o/r/pulls/1/merge; gh api -X PUT "$E"', 'gh api graphql -f query="$(cat q.graphql)"', 'gh pr $A 1']) {
+      expect((await bash($, command, 'git-1')).deny, command).toContain('not literal')
+    }
+    expect((await bash($, 'gh pr view "$N"', 'git-1')).deny).toBeUndefined()
+  })
+
+  test('enforce: the git role opens a PR with a title and a body a command builds; a loose non-literal word is still refused', { options: { flow: 'enforce' } }, async ($, on) => {
+    const w = gitWorld(on)
+    await boot($, w)
+    w.agents.push({ id: 'git-1', description: 'Git operations', type: 'pantheon:git', status: 'running' })
+    const opening = [
+      'gh pr create --title "feat: x" --body "$(cat body.md)"',
+      'gh pr create -t "$(git log -1 --format=%s)" -b "$(git log -1 --format=%b)"',
+      'glab mr create --title x --description "$(cat d.md)" --assignee @me --label feature',
+      'gh pr comment 12 --body "$MSG"',
+    ]
+
+    for (const command of opening) {
+      expect((await bash($, command, 'git-1')).deny, command).toBeUndefined()
+    }
+
+    expect((await bash($, 'gh pr checkout "$N"', 'git-1')).deny).toContain('not literal')
+    expect((await bash($, 'gh pr create --body $(cat b.md)', 'git-1')).deny).toContain('not literal')
+    expect((await bash($, 'gh repo sync -b {main,--force}', 'git-1')).deny).toContain('not literal')
+    expect((await bash($, 'gh pr -t x merge 1', 'git-1')).deny).toContain('option before the action')
+    expect((await bash($, 'gh pr edit 12 --body "$(cat b.md)" "$N"', 'git-1')).deny).toContain('not literal')
+    // The lead routes the PR to the git role, whatever the text.
+    expect((await bash($, 'gh pr create --title x --body "$(cat b.md)"')).deny).toContain('PR/MR work')
+  })
+})
+
 describe('a task\'s developer', () => {
   test('enforce: add and commit of its own files with the task id go through; unowned files, a missing id and a push do not', { options: { flow: 'enforce' } }, async ($, on) => {
     const w = gitWorld(on)
