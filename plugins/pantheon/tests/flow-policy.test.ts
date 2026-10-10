@@ -238,12 +238,53 @@ test('a failing active check blocks with the output tail, named by task', () => 
   expect(decision.state.lastInstruction).toBe(decision.reason)
 })
 
-test('a check that could not run counts as failing and says so', () => {
+test('a check that could not run for its directory or start is unverified at Stop: it holds nothing and spends no attempt', () => {
   const { flow, hash } = chain()
-  const decision = decide(flow, approved(flow, hash), stopEvent({ A: [{ argv: ['run', 'A'], passed: null, output: 'ENOENT' }] }))
-  expect(decision).toMatchObject({ action: 'block', condition: 'check_failed' })
+  const state = approved(flow, hash)
+  const decision = decide(flow, state, stopEvent({ A: [{ argv: ['run', 'A'], passed: null, output: 'working directory web does not exist', couldNotRun: true }] }))
+  expect(decision).toMatchObject({ action: 'allow', condition: 'unverified' })
+  expect(decision.reason).toContain('run A')
   expect(decision.reason).toContain('could not run')
-  expect(decision.reason).toContain('ENOENT')
+  expect(decision.reason).toContain('working directory web does not exist')
+  expect(decision.state.blocks).toBe(0)
+  expect(decision.state.attempts).toEqual({})
+  expect(decision.state.status).toEqual({ A: 'active', B: 'pending', C: 'pending' })
+  expect(decision.state.done).toBe(false)
+  expect(decision.state.lastFailure).toBeUndefined()
+  // Held the same way on a second Stop: still no attempt, still not a loop.
+  const again = decide(flow, decision.state, stopEvent({ A: [{ argv: ['run', 'A'], passed: null, output: 'x', couldNotRun: true }] }, { stopHookActive: true }))
+  expect(again).toMatchObject({ action: 'allow', condition: 'unverified' })
+  expect(again.state.blocks).toBe(0)
+})
+
+test('a check that timed out or whose runner exited counts as failing and says so', () => {
+  const { flow, hash } = chain()
+  for (const output of ['timed out after 120s: run A', 'exit code 127']) {
+    const decision = decide(flow, approved(flow, hash), stopEvent({ A: [{ argv: ['run', 'A'], passed: null, output }] }))
+    expect(decision).toMatchObject({ action: 'block', condition: 'check_failed' })
+    expect(decision.reason).toContain('could not run')
+    expect(decision.reason).toContain(output)
+    expect(decision.state.blocks).toBe(1)
+  }
+})
+
+test('at Stop a real failure still blocks when another check of the task could not run', () => {
+  const { flow, hash } = build([task('A', { acceptance: { checks: [check('a1'), check('a2')] } }), task('B', { dependsOn: ['A'] })])
+  const decision = decide(flow, approved(flow, hash), stopEvent({ A: [{ argv: ['run', 'a1'], passed: null, output: 'gone', couldNotRun: true }, fail('a2', 'FAILED')] }))
+  expect(decision).toMatchObject({ action: 'block', condition: 'check_failed', task: 'A' })
+  expect(decision.state.blocks).toBe(1)
+  expect(decision.state.attempts).toEqual({})
+  expect(decision.reason).toContain('FAILED')
+})
+
+test('at Stop a real failure of one task blocks even when another active task could not run', () => {
+  const { flow, hash } = build([task('A'), task('B')])
+  const state = approved(flow, hash, { status: { A: 'active', B: 'active' } })
+  const decision = decide(flow, state, stopEvent({
+    A: [{ argv: ['run', 'A'], passed: null, output: 'gone', couldNotRun: true }],
+    B: [fail('B', 'FAILED')],
+  }))
+  expect(decision).toMatchObject({ action: 'block', condition: 'check_failed', task: 'B' })
 })
 
 test('the third identical failure pauses and asks; a different output starts over', () => {
@@ -391,14 +432,59 @@ test('failing checks retry, then ask the architect, then ask the person', () => 
   expect(three.state.lastInstruction).toBe(three.reason)
 })
 
-test('a check that could not run, or no check result at all, fails the task end', () => {
+test('a check that timed out, or no check result at all, fails the task end', () => {
   const { flow, hash } = chain()
   const unable = decide(flow, approved(flow, hash), endEvent('A', [{ argv: ['run', 'A'], passed: null, output: 'timeout' }]))
   expect(unable).toMatchObject({ action: 'failTask', condition: 'retry' })
   expect(unable.reason).toContain('timeout')
+  expect(unable.state.attempts).toEqual({ A: 1 })
   const missing = decide(flow, approved(flow, hash), endEvent('A', []))
   expect(missing).toMatchObject({ action: 'failTask', condition: 'retry' })
   expect(missing.reason).toContain('no result reported')
+})
+
+test('a delivery whose checks could not run is unverified at the task end: no attempt, the task stays active', () => {
+  const { flow, hash } = chain()
+  const decision = decide(flow, approved(flow, hash), endEvent('A', [{ argv: ['run', 'A'], passed: null, output: 'working directory web does not exist, so run A could not run', couldNotRun: true }]))
+  expect(decision).toMatchObject({ action: 'allow', condition: 'unverified', task: 'A' })
+  expect(decision.reason).toContain('run A')
+  expect(decision.reason).toContain('could not run')
+  expect(decision.reason).toContain('working directory web does not exist')
+  expect(decision.state.attempts).toEqual({})
+  expect(decision.state.status).toEqual({ A: 'active', B: 'pending', C: 'pending' })
+  expect(decision.state.done).toBe(false)
+  // The delivery is still counted, so a later review of the older delivery is ignored.
+  expect(decision.state.ends).toEqual({ A: 1 })
+  // Nothing can be earned on that delivery: the receipts it had are cleared.
+  const earned = approved(flow, hash, { receipts: { A: { architect: true } } })
+  expect(decide(flow, earned, endEvent('A', [{ argv: ['run', 'A'], passed: null, output: 'x', couldNotRun: true }])).state.receipts).toEqual({})
+  // Repeated deliveries never spend the ladder.
+  let state = approved(flow, hash)
+  for (let i = 0; i < 5; i++) state = decide(flow, state, endEvent('A', [{ argv: ['run', 'A'], passed: null, output: 'x', couldNotRun: true }])).state
+  expect(state.attempts).toEqual({})
+  expect(state.paused).toBe(false)
+})
+
+test('a delivery with a real failure and a check that could not run still fails and spends an attempt', () => {
+  const { flow, hash } = build([task('A', { acceptance: { checks: [check('a1'), check('a2')] } })])
+  const decision = decide(flow, approved(flow, hash), endEvent('A', [{ argv: ['run', 'a1'], passed: null, output: 'gone', couldNotRun: true }, fail('a2', 'FAILED')]))
+  expect(decision).toMatchObject({ action: 'failTask', condition: 'retry', task: 'A' })
+  expect(decision.state.attempts).toEqual({ A: 1 })
+  expect(decision.reason).toContain('FAILED')
+})
+
+test('a delivery whose only non-passing check is a timeout still fails and spends an attempt', () => {
+  const { flow, hash } = build([task('A', { acceptance: { checks: [check('a1'), check('a2')] } })])
+  const decision = decide(flow, approved(flow, hash), endEvent('A', [{ argv: ['run', 'a1'], passed: null, output: 'timed out after 5s: run a1' }, pass('a2')]))
+  expect(decision).toMatchObject({ action: 'failTask', condition: 'retry' })
+  expect(decision.state.attempts).toEqual({ A: 1 })
+})
+
+test('an unverified delivery with an ownership denial still fails as before', () => {
+  const { flow, hash } = chain()
+  const decision = decide(flow, approved(flow, hash), endEvent('A', [{ argv: ['run', 'A'], passed: null, output: 'x', couldNotRun: true }], 1))
+  expect(decision).toMatchObject({ action: 'failTask', condition: 'ownership', task: 'A' })
+  expect(decision.state.attempts).toEqual({ A: 1 })
 })
 
 test('maxAttempts from the flow moves the ladder', () => {
@@ -1519,7 +1605,7 @@ function randomEvent(rand: () => number, flow: Flow, state: FlowState): FlowEven
   const resultsFor = (id: string): CheckResult[] => {
     const declared = flow.tasks.find(t => t.id === id)!.acceptance.checks.length
     const count = rand() < 0.1 ? Math.max(0, declared - 1) : declared
-    return Array.from({ length: count }, () => (rand() < 0.6 ? pass(id) : rand() < 0.8 ? fail(id, 'FAIL') : { argv: ['run', id], passed: null, output: 'timed out' }))
+    return Array.from({ length: count }, () => (rand() < 0.6 ? pass(id) : rand() < 0.7 ? fail(id, 'FAIL') : rand() < 0.5 ? { argv: ['run', id], passed: null, output: 'timed out' } : { argv: ['run', id], passed: null, output: 'working directory x does not exist', couldNotRun: true }))
   }
   const ids = flow.tasks.map(t => t.id)
   const kind = rand()
@@ -1633,6 +1719,8 @@ test('a held Stop whose task has its diagnosis open names the architect, the [id
   expect(decision.reason).toContain('/pantheon flow resume')
   expect(decision.reason).toContain('/pantheon flow stop')
   expect(decision.reason).toContain('boom')
+  // The attempts are spent, so "fix the failure, then try to stop again" would contradict the diagnosis: it is left out.
+  expect(decision.reason).not.toContain('Fix the failure, then try to stop again')
 })
 
 test('a held Stop for a task not in the diagnosis list keeps the plain check_failed text, byte for byte', () => {

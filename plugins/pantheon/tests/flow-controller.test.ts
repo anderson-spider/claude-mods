@@ -726,7 +726,7 @@ const CWD_FLOW = {
 }
 const WEB = `${ROOT}/packages/web`
 
-test('a check whose directory is not there yet holds the Stop with that reason and does not release the other tasks', async () => {
+test('a check whose directory is not there yet does not hold the Stop: it ends as unverified, and the other tasks still run', async () => {
   const w = world({ flow: CWD_FLOW })
   await approve(w)
   // B is finished; A is the task in progress, and packages/web has not been created.
@@ -736,18 +736,21 @@ test('a check whose directory is not there yet holds the Stop with that reason a
   w.memo.clear()
   for (let prompt = 0; prompt < 2; prompt++) {
     const out = await stopFlow(w.ctx(), stopInput)
-    expect(out.block).toContain('Task A (the web package) is not done')
-    expect(out.block).toContain('working directory packages/web does not exist, so npm test could not run')
-    expect(out.block).toContain('(could not run)')
+    expect(out.block).toBeUndefined()
     await humanPrompt(w.ctx())
   }
-  // Nothing was waved through: the host did not fail, so no warning and no fail-open note; B's check still ran.
+  // The Stop ends as unverified and names the check and why; no attempt is spent and nothing is blocked.
+  const journal = await w.journal()
+  const ended = journal.filter(e => e.event === 'stop' && e.condition === 'unverified')
+  expect(ended.length).toBeGreaterThan(0)
+  expect(JSON.stringify(ended.at(-1))).toContain('working directory packages/web does not exist, so npm test could not run')
+  expect((await w.state())?.attempts).toEqual({})
+  expect(journal.some(e => e.condition === 'check_failed')).toBe(false)
+  // Nothing was waved through by the host: no warning and no fail-open note; B's check still ran.
   expect(checkRuns(w).filter(argv => argv[0] === 'npm')).toEqual([])
   expect(checkRuns(w).some(argv => argv[0] === 'check' && argv[1] === 'B')).toBe(true)
   expect(w.warnings.filter(text => text.includes('failed open'))).toEqual([])
-  const journal = await w.journal()
   expect(journal.some(e => e.condition === 'check_unrunnable')).toBe(false)
-  expect(journal.some(e => e.condition === 'check_failed')).toBe(true)
   // The directory is made: the check runs from it and the task goes on.
   w.files.set(`${WEB}/package.json`, '{}')
   const after = await stopFlow(w.ctx(), stopInput)
@@ -757,7 +760,7 @@ test('a check whose directory is not there yet holds the Stop with that reason a
   expect((await w.state())?.status.A).toBe('done')
 })
 
-test('a directory moved away while the task is in progress holds the Stop; at a task end it counts an attempt', async () => {
+test('a directory moved away while the task is in progress is unverified at the Stop and at a task end: no attempt is spent', async () => {
   const w = world({ flow: CWD_FLOW })
   w.files.set(`${WEB}/package.json`, '{}')
   await approve(w)
@@ -768,20 +771,22 @@ test('a directory moved away while the task is in progress holds the Stop; at a 
   w.memo.clear()
   await humanPrompt(w.ctx())
   const out = await stopFlow(w.ctx(), stopInput)
-  expect(out.block).toContain('working directory packages/web does not exist')
-  expect(out.block).toContain('Task A')
+  expect(out.block).toBeUndefined()
   const ended = await taskEnded(w.ctx(), { taskId: 'A', ownershipDenials: 0 })
+  expect(ended.decision).toMatchObject({ action: 'allow', condition: 'unverified', task: 'A' })
   expect(JSON.stringify(ended)).toContain('working directory packages/web does not exist')
-  expect((await w.state())?.attempts.A).toBeGreaterThanOrEqual(1)
+  expect((await w.state())?.attempts).toEqual({})
+  expect((await w.state())?.status.A).toBe('active')
   expect((await w.journal()).some(e => e.condition === 'check_unrunnable')).toBe(false)
-  // A path that is a file is not a directory either.
+  // A path that is a file is not a directory either: still unverified, still no block.
   w.files.set(WEB, 'not a directory')
   w.memo.clear()
   await humanPrompt(w.ctx())
-  expect((await stopFlow(w.ctx(), stopInput)).block).toContain('working directory packages/web is not a directory')
+  expect((await stopFlow(w.ctx(), stopInput)).block).toBeUndefined()
+  expect((await w.journal()).some(e => e.condition === 'check_failed')).toBe(false)
 })
 
-test('the engine\'s "failed to start: ENOENT" is the plan\'s (the check could not run), with or without the directory probe', async () => {
+test('the engine\'s "failed to start: ENOENT" is unverified (the check could not run), with or without the directory probe', async () => {
   for (const probe of [true, false]) {
     const w = world({ flow: CWD_FLOW })
     w.files.set(`${WEB}/package.json`, '{}')
@@ -789,10 +794,13 @@ test('the engine\'s "failed to start: ENOENT" is the plan\'s (the check could no
     // The directory was there when asked and gone when spawned (or the host cannot be asked): the engine's own message.
     w.results.set('npm test', new Error("$.process.run(env) failed to start: ENOENT: no such file or directory, posix_spawn 'env'"))
     const out = await stopFlow(w.ctx('enforce', probe ? {} : { probeDir: undefined }), stopInput)
-    expect(out.block).toContain('Task A (the web package) is not done')
-    expect(out.block).toContain('could not start npm (ENOENT)')
+    expect(out.block).toBeUndefined()
+    const journal = await w.journal()
+    expect(JSON.stringify(journal.filter(e => e.event === 'stop' && e.condition === 'unverified'))).toContain('could not start npm (ENOENT)')
+    expect(journal.some(e => e.condition === 'check_failed')).toBe(false)
     expect(w.warnings.filter(text => text.includes('failed open'))).toEqual([])
-    expect((await w.journal()).some(e => e.condition === 'check_unrunnable')).toBe(false)
+    expect(journal.some(e => e.condition === 'check_unrunnable')).toBe(false)
+    expect((await w.state())?.attempts).toEqual({})
   }
   // Anything else the runner rejects with still says nothing about the plan, and releases the gate as before.
   const host = world({ flow: CWD_FLOW })

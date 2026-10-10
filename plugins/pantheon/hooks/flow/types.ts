@@ -18,8 +18,13 @@ export function remember(list: readonly string[] | undefined, items: readonly st
   return out.length > max ? out.slice(out.length - max) : out
 }
 
-/** One check of a task: `passed` is null when it could not run (missing binary, timeout), with why in `output`. */
-export type CheckResult = { argv: string[]; passed: boolean | null; output: string }
+/**
+ * One check of a task: `passed` is null when it could not run, with why in `output`. `couldNotRun` marks the ones that could
+ * not run because of the environment the task left behind (a missing or non-directory `cwd`, a process that failed to
+ * start): the policy treats those as unverified, not failed, so they cost no attempt and do not hold the Stop. A timeout or
+ * a runner exit is a real failure and never carries it.
+ */
+export type CheckResult = { argv: string[]; passed: boolean | null; output: string; couldNotRun?: true }
 
 /**
  * The first generation of the judge's seam, kept so `decide` keeps its signature: a judgment passed here is accepted and

@@ -59,6 +59,8 @@ test('a missing or non-executable binary could not run: passed is null with why'
     const result = await runCheck(run, ROOT, check(['nope', '--x']))
     expect(result?.passed).toBeNull()
     expect(result?.output).toContain('could not start nope')
+    // A runner exit (126/127) is a real failure of the plan's command: it is not flagged as a check that could not run.
+    expect(result?.couldNotRun).toBeUndefined()
   }
 })
 
@@ -70,6 +72,8 @@ test('a 127 from the check itself is a failure, not a missing binary', async () 
 test('a timeout is passed null with why; any other rejection is the host\'s fault and throws CheckUnrunnable', async () => {
   const timeout = scripted(() => { throw new Error('process timed out after 5000ms') })
   expect(await runCheck(timeout.run, ROOT, check(['slow'], { timeoutSec: 5 }))).toEqual({ argv: ['slow'], passed: null, output: 'timed out after 5s: slow' })
+  // A timeout is a real failure: it never carries the could-not-run flag.
+  expect(await runCheck(timeout.run, ROOT, check(['slow'], { timeoutSec: 5 }))).not.toHaveProperty('couldNotRun')
   const broken = scripted(() => { throw new Error('spawn denied') })
   await expect(runCheck(broken.run, ROOT, check(['x']))).rejects.toThrow(CheckUnrunnable)
   await expect(runCheck(broken.run, ROOT, check(['x']))).rejects.toThrow('x: spawn denied')
@@ -80,9 +84,9 @@ test('a working directory that is not there could not run: passed is null with w
   const seen: string[] = []
   const probe = (kind: 'directory' | 'missing' | 'other') => async (path: string) => { seen.push(path); return kind }
   const missing = await runCheck(run, ROOT, check(['npm', 'test'], { cwd: 'packages/web' }), { probe: probe('missing') })
-  expect(missing).toEqual({ argv: ['npm', 'test'], passed: null, output: 'working directory packages/web does not exist, so npm test could not run' })
+  expect(missing).toEqual({ argv: ['npm', 'test'], passed: null, output: 'working directory packages/web does not exist, so npm test could not run', couldNotRun: true })
   const file = await runCheck(run, ROOT, check(['npm', 'test'], { cwd: 'packages/web' }), { probe: probe('other') })
-  expect(file).toMatchObject({ passed: null, output: 'working directory packages/web is not a directory, so npm test could not run' })
+  expect(file).toMatchObject({ passed: null, output: 'working directory packages/web is not a directory, so npm test could not run', couldNotRun: true })
   expect(calls).toEqual([])
   expect(seen).toEqual(['/repo/packages/web', '/repo/packages/web'])
   // The directory is there: the check runs from it. A check with no cwd is not probed at all.
@@ -101,10 +105,11 @@ test('the engine\'s "failed to start" for a command or directory that is not the
   const result = await runCheck(lost.run, ROOT, check(['npm', 'test'], { cwd: 'packages/web' }))
   expect(result).toMatchObject({ argv: ['npm', 'test'], passed: null })
   expect(result?.output).toContain('could not start npm (ENOENT)')
+  expect(result?.couldNotRun).toBe(true)
   expect(result?.output).toContain('packages/web')
   for (const code of ['ENOTDIR', 'EACCES']) {
     const refused = scripted(() => { throw new Error(`$.process.run(env) failed to start: ${code}: posix_spawn 'env'`) })
-    expect(await runCheck(refused.run, ROOT, check(['x']))).toMatchObject({ passed: null })
+    expect(await runCheck(refused.run, ROOT, check(['x']))).toMatchObject({ passed: null, couldNotRun: true })
   }
   // What says nothing about the plan still releases the gate: a spawn limit, a denied process, an unknown failure.
   for (const text of ['$.process.run(env) failed to start: EMFILE: too many open files', 'spawn denied', 'process table full']) {
@@ -118,6 +123,7 @@ test('in a pass a check with a missing directory is null and the next checks sti
   const pass = await createCheckPass(run, ROOT, { probe: async path => (path.endsWith('/web') ? 'missing' : 'directory') })
   const results = await pass.runTask([check(['npm', 'test'], { cwd: 'web' }), check(['lint']), check(['build'], { cwd: 'api' })])
   expect(results.map(r => r.passed)).toEqual([null, true, true])
+  expect(results[0]).toMatchObject({ couldNotRun: true })
   expect(calls.map(c => c.argv.at(-1))).toEqual(['lint', 'build'])
   expect((await pass.finish()).unverified).toBe(0)
 })
@@ -183,6 +189,19 @@ test('only a pass is remembered: a fail or a result that could not run is run ag
     await p.finish()
   }
   expect(slow.calls).toHaveLength(2)
+  expect(memo.size).toBe(0)
+})
+
+test('a check that could not run for its directory is never remembered, even on an unchanged tree', async () => {
+  const memo: CheckMemo = new Map()
+  const { run, calls } = scripted(() => ok('never'))
+  const probe = async () => 'missing' as const
+  for (let i = 0; i < 2; i++) {
+    const p = await createCheckPass(run, ROOT, { memo, snapshot: async () => 't', probe })
+    expect((await p.runTask([check(['npm', 'test'], { cwd: 'web' })]))[0]).toMatchObject({ passed: null, couldNotRun: true })
+    await p.finish()
+  }
+  expect(calls).toEqual([])
   expect(memo.size).toBe(0)
 })
 
