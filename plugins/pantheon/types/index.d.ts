@@ -27,7 +27,7 @@ export type PanelView = { collapsed?: PanelGroup[] }
 
 declare module 'claude-code' {
   interface PluginState {
-    pantheon: { jobs: Job[]; natives: Native[]; session: SessionInfo; view: PanelView }
+    pantheon: { jobs: Job[]; natives: Native[]; session: SessionInfo; view: PanelView; gateHeld: { message: string } | null }
   }
   // The inputs of the tools registered in session.start, in the shape the engine lays for
   // connected MCP tools; keep them in step with the inputSchema in hooks/register.tsx.

@@ -1,9 +1,11 @@
 import { atom, read, update } from 'claude-code'
-import type { AgentSpec, Hook, ProcessRunInit, ProcessRunResult, Register } from 'claude-code'
+import type { AgentSpec, FsStat, Hook, ProcessRunInit, ProcessRunResult, Register, ToolCallResult } from 'claude-code'
 
 import type { Job, Native, SessionInfo } from '../types'
 import { buildArgv, createJsonlReader } from './codex'
 import { loadConfig } from './config'
+import { decide } from './decisions'
+import { gateContext, gateMessage } from './gate'
 import { BUILTIN_PROFILES, DEFAULT_CONFIG } from './defaults'
 import { createJobs, markLost } from './jobs'
 import { buildCouncilBlock, isCouncilOrigin, matchesCouncilTrigger } from './prompts/council'
@@ -28,6 +30,66 @@ import {
 } from './tracking'
 import type { Clock, ConfigResult, DelegateArgs, PantheonConfig, Spawn } from './types'
 import { authorizedRoot, checkCwd } from './workspace'
+
+const gateHeld = atom({ plugin: 'pantheon', key: 'gateHeld' }, null)
+
+type GateEvaluation = { deny: string } | undefined
+
+export async function withGateRecovery(work: () => Promise<GateEvaluation>, forward: () => Promise<ToolCallResult>, ask: () => Promise<GateEvaluation>): Promise<ToolCallResult> {
+  let evaluated: GateEvaluation
+  try { evaluated = await work() } catch {
+    try { evaluated = await ask() } catch {
+      return { deny: 'Pantheon edit gate could not obtain a decision. Edit denied.' }
+    }
+  }
+  // Forwarding is outside recovery. Only the engine's .catch can safely replay next.
+  return evaluated ?? forward()
+}
+
+/** New files inherit their nearest existing ancestor's resolved location. */
+export async function resolveGatePath(stat: (path: string, resolve: boolean) => Promise<FsStat>, raw: string, cwd: string): Promise<string> {
+  if (!raw) throw new Error('Missing edit path')
+  const isMissing = (error: unknown): boolean => {
+    if (typeof error !== 'object' || error === null) return false
+    if ('code' in error) return error.code === 'ENOENT'
+    // Host errors may carry only their message. Never infer absence from arbitrary text.
+    return error instanceof Error && /^ENOENT(?=:|$)/.test(error.message)
+  }
+  let candidate = raw.startsWith('/') ? raw : `${cwd}/${raw}`
+  const missing: string[] = []
+  while (true) {
+    let own: FsStat | undefined
+    try { own = await stat(candidate, true) } catch (error) {
+      if (!isMissing(error)) throw error
+      // stat without resolution still identifies the entry itself through isLink,
+      // including dangling links. Only a second ENOENT confirms an absent entry.
+      let absent = false
+      try { await stat(candidate, false) } catch (inspectionError) {
+        if (!isMissing(inspectionError)) throw inspectionError
+        absent = true
+      }
+      if (!absent) throw new Error('Edit path exists but could not be resolved')
+    }
+    if (own) {
+      const resolved = own.realPath
+      if (!resolved?.startsWith('/') || (missing.length > 0 && own.kind !== 'dir')) {
+        throw new Error('Could not resolve edit path')
+      }
+      // Collapsing a missing component followed by .. can expose an uninspected symlink.
+      if (missing.includes('..')) throw new Error('Could not resolve parent traversal in missing path')
+      const parts: string[] = []
+      for (const part of `${resolved}/${missing.join('/')}`.split('/')) {
+        if (part === '..') parts.pop()
+        else if (part && part !== '.') parts.push(part)
+      }
+      return '/' + parts.join('/')
+    }
+    if (candidate === '/') throw new Error('Could not resolve edit path')
+    const slash = candidate.lastIndexOf('/')
+    missing.unshift(candidate.slice(slash + 1))
+    candidate = candidate.slice(0, slash) || '/'
+  }
+}
 
 /** O que os módulos precisam do engine, montado em cada hook (o `$` não pode ser guardado). */
 type Io = {
@@ -217,6 +279,35 @@ export const register: Register = (on, options) => {
   let state: ConfigResult = { ok: true, config: DEFAULT_CONFIG, origins: {}, profiles: Object.keys(BUILTIN_PROFILES) }
   let lastValid: PantheonConfig | undefined
   let lastValidResult: Extract<ConfigResult, { ok: true }> | undefined
+  let gateRoot: string | undefined
+  let gateUid: Promise<string | undefined> | undefined
+  type GateChoice = 'proceed' | 'cancel'
+  let gateWaiting: { decision: GateChoice | null } | undefined
+  let gateInteractive = false
+
+  // Like branch-guard, decisions travel in memory: state reads inside a dispatch are snapshots.
+  async function holdGate(io: { poll: () => Promise<unknown>; show: (value: { message: string } | null) => Promise<unknown> }, message: string, signal: AbortSignal): Promise<GateChoice | 'aborted'> {
+    const slot = { decision: null as GateChoice | null }
+    try {
+      while (gateWaiting !== undefined) {
+        if (signal.aborted) return 'aborted'
+        // A host call does not consume the hook's time budget while the person decides.
+        await io.poll()
+      }
+      if (signal.aborted) return 'aborted'
+      gateWaiting = slot
+      await io.show({ message })
+      while (slot.decision === null && !signal.aborted) await io.poll()
+      return signal.aborted ? 'aborted' : slot.decision ?? 'aborted'
+    } catch {
+      return 'aborted'
+    } finally {
+      if (gateWaiting === slot) {
+        try { await io.show(null) } catch { /* Cleanup failure must not release the edit. */ }
+        finally { gateWaiting = undefined }
+      }
+    }
+  }
   let registeredKey: string | undefined
   let toastedError: string | undefined
   let idSeq = 0
@@ -298,7 +389,9 @@ export const register: Register = (on, options) => {
     const sessionCwd = await io.cwd()
     const top = await io.run(['git', 'rev-parse', '--show-toplevel'], { cwd: sessionCwd }).catch(() => undefined)
     const gitTop = top && top.exitCode === 0 ? top.stdout.trim() || undefined : undefined
-    return { sessionCwd, root: authorizedRoot(sessionCwd, gitTop), isRepo: gitTop !== undefined }
+    const root = authorizedRoot(sessionCwd, gitTop)
+    gateRoot = root
+    return { sessionCwd, root, isRepo: gitTop !== undefined }
   }
 
   async function profileDenial(io: Pick<Io, 'cwd' | 'run' | 'home' | 'readText'>, value: unknown): Promise<string | undefined> {
@@ -439,6 +532,9 @@ export const register: Register = (on, options) => {
   })
 
   on('session.start', async ($, e, next) => {
+    gateInteractive = e.isInteractive === true && e.surface != null
+    gateWaiting = undefined
+    if (options.gate === true) await update($, gateHeld, () => null)
     const io: Io = {
       cwd: () => $.session.cwd(),
       run: (argv, init) => $.process.run(argv, init),
@@ -731,6 +827,56 @@ export const register: Register = (on, options) => {
     return result
   })
 
+  // Tracking is registered first and wraps this gate: it sees the settled result once,
+  // so held calls are not counted early and denied calls never count as successful edits.
+  on('tool.call', { tool: ['Edit', 'Write', 'NotebookEdit'] }, async ($, e, next) => {
+    const ask = async (message: string): Promise<GateEvaluation> => {
+      if (!gateInteractive) return { deny: 'Pantheon edit gate requires an interactive session to confirm this edit. Edit denied.' }
+      const outcome = await holdGate({
+        poll: () => $.process.run(['sleep', '0.25']),
+        show: value => update($, gateHeld, () => value),
+      }, message, next.signal)
+      if (outcome === 'proceed') return undefined
+      return { deny: `${message}\n${outcome === 'cancel' ? 'The person pressed Cancel.' : 'The wait was interrupted before a decision.'}` }
+    }
+    return withGateRecovery(async () => {
+      if (options.gate !== true || e.agentId) return undefined
+      const cwd = await $.session.cwd()
+      const workspaceRoot = gateRoot ?? (await workspace({ cwd: async () => cwd, run: (argv, init) => $.process.run(argv, init) })).root
+      const stat = (path: string, resolve: boolean) => $.fs.stat(path, { resolve })
+      const root = await resolveGatePath(stat, workspaceRoot, cwd)
+      const rawHome = await $.env.get('HOME')
+      const home = rawHome ? await resolveGatePath(stat, rawHome, cwd) : ''
+      const pathField = e.tool === 'NotebookEdit' ? 'notebook_path' : 'file_path'
+      const path = await resolveGatePath(stat, String(e[pathField] ?? ''), cwd)
+      // gateContext receives a resolved absolute target; the forwarded event stays untouched.
+      gateUid ??= $.process.run(['id', '-u']).then(result => {
+        const uid = result.stdout.trim()
+        return result.exitCode === 0 && /^\d+$/.test(uid) ? uid : undefined
+      }).catch(() => undefined)
+      const context = gateContext({ ...e, [pathField]: path }, { root, home, uid: await gateUid })
+      if (context.skip) return undefined
+      const key = typeof options.jevApiKey === 'string' && options.jevApiKey.trim()
+        ? options.jevApiKey : await $.env.get('OPENROUTER_API_KEY')
+      const verdict = await decide((url, init) => $.http.fetch(url, init), key, context.ctx, {
+        timer: (ms, fn) => { const timer = $.clock.after(ms, fn); return () => timer.cancel() },
+      })
+      if (verdict.action === 'allow') return undefined
+      // Codex roles are offered by delegate, not agent.offer; both engines use disabledAgents.
+      const message = gateMessage(verdict, context.ctx, {
+        executor: !state.config.disabledAgents.includes('executor'),
+        designer: !state.config.disabledAgents.includes('designer'),
+      })
+      if (verdict.action === 'deny') return { deny: message }
+      return ask(message)
+    }, () => next(e), () => ask(gateMessage(
+      { action: 'ask', source: 'rules', reason: 'The edit gate could not evaluate this edit. Ask the person.' },
+      { tool: String(e.tool), path: '', ext: '', files: 1 },
+      { executor: false, designer: false },
+    )))
+  }).catch((_$, e, next) => next.called || options.gate !== true || e.agentId
+    ? next(e) : { deny: 'Pantheon edit gate could not obtain a decision. Edit denied.' })
+
   on('tool.call', { tool: TOOLS.delegate }, async ($, e, next) => {
     const io: Io = {
       cwd: () => $.session.cwd(),
@@ -933,6 +1079,24 @@ export const register: Register = (on, options) => {
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    const held = options.gate === true ? await read($, gateHeld) : null
+    if (held !== null && !e.props.hasSurvey) {
+      const { Box, Text, Button } = $.ui.resolve(e)
+      const choose = (decision: GateChoice) => {
+        if (gateWaiting?.decision === null) gateWaiting.decision = decision
+      }
+      return (
+        <Box flexDirection="column" borderStyle="round" borderColor="warning" paddingX={1}>
+          <Text bold color="warning">Pantheon edit gate</Text>
+          <Text>{held.message}</Text>
+          <Box marginTop={1} gap={2}>
+            <Button key="proceed" label="Proceed" hotkey="1" plain onPress={() => choose('proceed')} />
+            <Button key="cancel" label="Cancel" hotkey="2" plain autoFocus onPress={() => choose('cancel')} />
+            <Text dimColor>Claude is waiting for your answer</Text>
+          </Box>
+        </Box>
+      )
+    }
     const below = await next(e)
     const props = e.props ?? (e as never as typeof e.props)
     if (!aboveOn || props?.hasSurvey) return below

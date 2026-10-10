@@ -31,6 +31,13 @@ IMPORTANT: prompts and panel modules include third-party work. Keep `LICENSE` an
 - Only the Codex git role gets the repository's git common dir as an extra writable root and network explicitly on; other roles keep `writable_roots=[]`. `register.tsx` resolves `git rev-parse --path-format=absolute --git-common-dir` through `realPath` from both the session repository root and the checked `cwd`, removing Git location environment overrides for both probes and requiring the results to match. Resolution failure, `sandboxCap: read-only`, `noNetwork: true` or `agents.git.sandbox: read-only` refuses the call before spawning. The doctor ping remains read-only without the extra writable root or explicit network grant.
 - Write access to the whole git dir lets git change `.git/hooks` and Git config such as `core.hooksPath` and `core.sshCommand`, which can run code later in the user's own shell. If that trust is unacceptable, disable git with `disabledAgents`, or keep `noNetwork: true` or `sandboxCap: read-only` to block the Codex role.
 
+## Edit gate
+
+- `decisions.ts` is pure, with injected fetch and timer; it sends metadata only to the decision model through OpenRouter and falls back to local size and path rules. `gate.ts` is pure and builds edit context, exemptions and messages. Pure modules never touch `$`; `register.tsx` owns host access, path resolution, key lookup and the Proceed/Cancel hold.
+- The `tool.call` hook matches `Edit`, `Write` and `NotebookEdit`, main session only. It is registered after the tracking handler, which wraps it and observes the settled result once: held calls are not counted early and denials do not count as successful edits.
+- Plugin options: `gate` defaults to false; sensitive `jevApiKey` falls back to `OPENROUTER_API_KEY`. Score thresholds `0.85` (allow) and `0.30` (deny) are constants; the grey zone asks only when `session.start` reports `isInteractive: true` and a non-null `surface`, otherwise it denies without a hold. Recovery covers evaluation only; forwarding failures propagate to the engine without a second confirmation. No paths or contents cross the request boundary, only closed kind/extension classifications, tool, line counts, file count and the fixed caller label.
+- Exemptions are `<repo>/.pantheon/**`, `~/.claude/plans/**`, `~/.claude/projects/*/memory/**` and the current user's session scratchpad; the rest of `~/.claude` is gated. Decisions are per call, with no per-turn accumulator or Bash write detection.
+
 ## Tracking and state
 
 - `tracking.ts` holds pure reducers for native subagents and the main session, plus tool-input redaction.

@@ -76,6 +76,20 @@ Options (`/plugin`): **Above-prompt strip** (`abovePrompt`, on by default; turn 
 
 flightdeck users: `/plugin uninstall flightdeck`. If hud is still installed, both strips show above the prompt; remove it with `/plugin uninstall hud`.
 
+## Edit gate
+
+The plugin option `gate` is off by default. When enabled, it checks the main session's `Edit`, `Write` and `NotebookEdit` calls; subagents always pass through. Set the sensitive option `jevApiKey` to an OpenRouter API key, or leave it unset to use `OPENROUTER_API_KEY`.
+
+The decision model through OpenRouter scores whether the edit is trivial: a score at or above `0.85` passes, at or below `0.30` denies with a message pointing to the executor (and the designer for UI files), and the grey zone holds the call for **Proceed** or **Cancel** in interactive sessions with a surface. Without one, an ask verdict is denied immediately with “Pantheon edit gate requires an interactive session to confirm this edit. Edit denied.” Disabled roles are replaced with a request for the person to handle the work. The thresholds are constants, not options.
+
+Only edit metadata leaves the machine: the tool name; a closed `kind` (`docs`, `test`, `source`, `ui`, `config`, `workflow`, `migration`, `manifest`, `lockfile`, `other`); an extension from the closed set `md`, `mdx`, `txt`, `rst`, `ts`, `tsx`, `js`, `jsx`, `mjs`, `cjs`, `json`, `yaml`, `yml`, `toml`, `css`, `scss`, `html`, `svelte`, `vue`, `py`, `go`, `rs`, `java`, `kt`, `swift`, `sh`, `sql`, `lock` (anything else becomes `other`); lines added and removed when known; the file count; and the fixed caller label `main orchestrator session`. Paths, contents, `old_string`, `new_string` and notebook source are never sent. With the gate off, no decision request is made.
+
+A missing key, request error, 3 s timeout or malformed answer falls back to local size and path rules. Those rules allow tiny edits, ask when uncertain or on sensitive paths, and deny large changes; ask verdicts require an interactive surface and are denied without one. An unexpected exception during evaluation holds the edit in an interactive session with the fixed message “Ask the person before proceeding by rules. Please ask the person to handle implementation; the main session should not edit it itself.” Without an interactive surface, recovery denies immediately. If the hold itself fails or is interrupted, the edit is denied rather than run without a decision. Once the call is forwarded, a rejection propagates to the engine without opening another confirmation or executing the tool again.
+
+Exempt paths are `<repo>/.pantheon/**`, `~/.claude/plans/**`, `~/.claude/projects/*/memory/**` and the session scratchpad (`<tmp>/claude-<uid>/*/*/scratchpad/**`, for the current user). Paths are resolved through filesystem links before exemptions are checked. Everything else under `~/.claude` is gated.
+
+The gate judges one tool call at a time: a large refactor made of many small edits can pass call by call. A per-turn accumulator is deliberately out of scope for this version. Bash writes are not gated.
+
 ## Configuration
 
 Layers apply in order: built-in defaults, `~/.claude/pantheon.json`, then `<repo>/.claude/pantheon.json`; the `profile` field in `/config` is applied last for the profile choice only. Each file holds only what changes. Top-level `profile` selects the active profile (default `claude`); the project selection overrides the user selection, and the `/config` choice overrides both when set. For example:

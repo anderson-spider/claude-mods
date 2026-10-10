@@ -1,9 +1,10 @@
 import { describe, expect, test, mock } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
-import type { AgentSpawnInput, ConfigSetInput, On, TurnStepInput } from 'claude-code'
+import type { AgentSpawnInput, ConfigSetInput, FsStat, On, TurnStepInput } from 'claude-code'
 
 import type { Job, Native, SessionInfo } from '../types'
-import { createQueue } from '../hooks/register'
+import { createQueue, resolveGatePath, withGateRecovery } from '../hooks/register'
+import { gateContext } from '../hooks/gate'
 import { PANE_ID } from '../hooks/pane'
 import { DELEGATE, HOME, RESULT, ROOT, parse, start, world } from './fixtures/world'
 
@@ -22,6 +23,404 @@ const stepResult = {
   usage: { model: 'model-1', input_tokens: 10, cache_read_input_tokens: 2, cache_creation_input_tokens: 3, output_tokens: 4 },
 }
 const streamChunk = { kind: 'text' as const, index: 0, text: 'streaming' }
+
+const gateEdit = { tool: 'Edit', tool_use_id: 'gate-edit', file_path: '/repo/src/a.ts', old_string: 'private old text', new_string: 'private new text' }
+const gatePause = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
+function gateWorld(on: On, opts: { score?: number; key?: string; reject?: boolean; interrupt?: boolean; fault?: 'workspace' | 'env'; files?: Record<string, string>; cwd?: string; realPaths?: Record<string, string | undefined>; statErrors?: Record<string, string>; unresolvedLinks?: string[]; uid?: string | null } = {}) {
+  const fixture = world(new Proxy(on, {
+    apply(target, self, args) {
+      if (args[0] === 'session.cwd' && (opts.fault === 'workspace' || opts.cwd)) return
+      if (args[0] === 'fs.stat' && (opts.realPaths || opts.statErrors || opts.unresolvedLinks)) return
+      if (args[0] !== 'env.get' && args[0] !== 'process.run') return Reflect.apply(target, self, args)
+    },
+  }), { files: opts.files })
+  const sent: { body?: string; headers?: Record<string, string> }[] = []
+  const forwarded: unknown[] = []
+  let probes = 0
+  let uidReads = 0
+  let polls = 0
+  const inspected: { path: string; resolve: boolean }[] = []
+  if (opts.fault === 'workspace') on('session.cwd', () => { throw new Error('private workspace error') })
+  else if (opts.cwd) on('session.cwd', () => ({ value: opts.cwd! }))
+  if (opts.realPaths || opts.statErrors || opts.unresolvedLinks) on('fs.stat', (_$, e) => {
+    inspected.push({ path: e.path, resolve: e.resolve === true })
+    if (opts.unresolvedLinks?.includes(e.path)) {
+      return { value: { kind: 'other', size: 0, mtimeMs: 0, isLink: true } }
+    }
+    if (opts.statErrors?.[e.path]) return { deny: opts.statErrors[e.path] }
+    const realPath = opts.realPaths && Object.hasOwn(opts.realPaths, e.path) ? opts.realPaths[e.path] : e.path
+    if (!realPath) return { deny: 'ENOENT: missing path' }
+    return { value: { kind: 'dir', size: 0, mtimeMs: 0, isLink: realPath !== e.path, realPath } }
+  })
+  on('env.get', (_$, e) => {
+    if (opts.fault === 'env') throw new Error('private environment error')
+    return { value: e.name === 'HOME' ? HOME : e.name === 'OPENROUTER_API_KEY' ? opts.key : undefined }
+  })
+  on('process.run', async (_$, e) => {
+    if (e.argv.join(' ') === 'id -u') {
+      uidReads++
+      return { value: { exitCode: opts.uid === null ? 1 : 0, stdout: opts.uid ?? (opts.uid === null ? '' : '501\n'), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    }
+    if (e.argv[0] === 'sleep') {
+      polls++
+      if (opts.interrupt) throw new Error('interrupted host wait')
+      await gatePause(5)
+    } else probes++
+    return { value: { exitCode: 0, stdout: ROOT, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('http.fetch', (_$, e) => {
+    sent.push({ body: e.init?.body, headers: e.init?.headers })
+    if (opts.reject) throw new Error('network unavailable')
+    return { value: { status: 200, ok: true, headers: {}, text: JSON.stringify({ answers: { trivial: { noul: opts.score ?? 0.95 } } }) } }
+  })
+  on('tool.call', (_$, e) => { forwarded.push(e); return { result: 'unchanged' } })
+  on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'Text', children: ['idle'] }))
+  return { ...fixture, sent, forwarded, inspected, probes: () => probes, uidReads: () => uidReads, polls: () => polls }
+}
+
+describe('edit gate', () => {
+  for (const session of [{ isInteractive: false, surface: null }, { isInteractive: true, surface: null }, { isInteractive: false, surface: 'terminal' as const }]) {
+    test(`ask denies without polling when no interactive surface can answer: ${JSON.stringify(session)}`, { options: { gate: true } }, async ($, on) => {
+      const opts = { interrupt: false }
+      const host = gateWorld(on, opts)
+      await $.session.start({ cwd: ROOT, ...session })
+      let settled = false
+      const pending = $.tool.call({ tool: 'Write', file_path: '/repo/new.ts', content: 'new file' } as never).then(result => { settled = true; return result })
+      try {
+        await gatePause(50)
+        expect(settled).toBe(true)
+        expect((await pending).deny).toBe('Pantheon edit gate requires an interactive session to confirm this edit. Edit denied.')
+        expect(host.polls()).toBe(0)
+        expect(host.forwarded).toEqual([])
+      } finally { opts.interrupt = true; await pending }
+    })
+  }
+  const pathStat = (realPath: string): FsStat => ({ kind: 'dir', size: 0, mtimeMs: 0, isLink: false, realPath })
+  const missingPath = () => Object.assign(new Error('ENOENT: missing path'), { code: 'ENOENT' })
+  test('parent traversal after a missing component enters recovery instead of exempting an unseen symlink', async () => {
+    const target = '/repo/.pantheon/missing/../escape/new.ts'
+    const stat = async (path: string): Promise<FsStat> => {
+      if (path === '/repo/.pantheon/missing' || path.startsWith('/repo/.pantheon/missing/')) throw missingPath()
+      if (path === '/repo/.pantheon/escape') return { ...pathStat('/repo/src'), isLink: true }
+      return pathStat(path)
+    }
+    let held = false
+    const result = await withGateRecovery(async () => {
+      const path = await resolveGatePath(stat, target, ROOT)
+      const context = gateContext({ ...gateEdit, file_path: path }, { root: ROOT, home: HOME })
+      return context.skip ? undefined : { deny: 'evaluated' }
+    }, async () => ({ result: 'unexpected forwarding' }), async () => {
+      held = true
+      return { deny: 'held for the person' }
+    })
+    expect(held).toBe(true)
+    expect(result).toEqual({ deny: 'held for the person' })
+  })
+  test('host-resolved parent traversal before the missing suffix still works', async () => {
+    const stat = async (path: string): Promise<FsStat> => {
+      if (path.endsWith('/new.ts')) throw missingPath()
+      if (path === '/repo/sub/../.pantheon/plans') return pathStat('/repo/.pantheon/plans')
+      throw new Error('Unexpected ancestor')
+    }
+    expect(await resolveGatePath(stat, '../.pantheon/plans/new.ts', '/repo/sub')).toBe('/repo/.pantheon/plans/new.ts')
+  })
+  test('a plain new subdirectory under .pantheon/plans remains exempt', async () => {
+    const stat = async (path: string): Promise<FsStat> => {
+      if (path === '/repo/.pantheon/plans/new' || path.endsWith('/new/note.md')) throw missingPath()
+      return pathStat(path)
+    }
+    const path = await resolveGatePath(stat, '/repo/.pantheon/plans/new/note.md', ROOT)
+    expect(path).toBe('/repo/.pantheon/plans/new/note.md')
+    expect(gateContext({ ...gateEdit, file_path: path }, { root: ROOT, home: HOME }).skip).toBe(true)
+  })
+  // Hook refusals are not filesystem errors. Inject the filesystem boundary directly
+  // to exercise actual ENOENT/code semantics; the UI tests below cover host refusals.
+  for (const code of ['EACCES', 'EPERM', 'EIO', 'ELOOP', 'unknown']) {
+    test(`resolver never climbs past a middle component with ${code}`, async () => {
+      const visited: string[] = []
+      const stat = async (path: string): Promise<FsStat> => {
+        visited.push(path)
+        if (path === '/repo/.pantheon/middle/new.ts') throw missingPath()
+        if (path === '/repo/.pantheon/middle') throw Object.assign(new Error(`${code}: host failure`), { code })
+        return pathStat(path)
+      }
+      await expect(resolveGatePath(stat, '/repo/.pantheon/middle/new.ts', ROOT)).rejects.toThrow(code)
+      expect(visited.includes('/repo/.pantheon')).toBe(false)
+    })
+  }
+  for (const returnsLink of [false, true]) {
+    test(`resolver refuses an unresolved symlink (${returnsLink ? 'stat returns link' : 'resolution throws ENOENT'})`, async () => {
+      const visited: boolean[] = []
+      const stat = async (_path: string, resolve: boolean): Promise<FsStat> => {
+        visited.push(resolve)
+        if (resolve && !returnsLink) throw missingPath()
+        return { kind: 'other', size: 0, mtimeMs: 0, isLink: true }
+      }
+      await expect(resolveGatePath(stat, '/repo/.pantheon/new.ts', ROOT)).rejects.toThrow()
+      expect(visited).toEqual(returnsLink ? [true] : [true, false])
+    })
+  }
+  for (const failure of ['EACCES: permission denied', 'EPERM: operation denied', 'host unavailable', 'dangling link', 'ELOOP: symlink chain cycle']) {
+    test(`path resolution holds on ${failure}`, { options: { gate: true, jevApiKey: 'key', abovePrompt: false } }, async ($, on) => {
+      const link = failure === 'dangling link'
+      const target = link ? '/repo/.pantheon/new.ts' : '/repo/.pantheon/middle/new.ts'
+      const opts = {
+        interrupt: false,
+        statErrors: link ? {} : { [target]: failure },
+        unresolvedLinks: link ? [target] : [],
+      }
+      const host = gateWorld(on, opts)
+      await start($)
+      const ui = await $.ui.mount({ plugin: 'pantheon', component: 'AbovePrompt', surface: 'terminal', props: { hasSurvey: false, isWorking: true, maxRows: 12, bodyColumns: 120 } as never })
+      const pending = $.tool.call({ ...gateEdit, file_path: target } as never)
+      try {
+        await gatePause(50)
+        expect(host.forwarded).toEqual([])
+        expect(host.sent).toEqual([])
+        expect(await ui.findAll({ type: 'Button' })).toHaveLength(2)
+        expect(host.inspected.some(call => call.path === '/repo/.pantheon')).toBe(false)
+        await ui.press({ key: 'cancel' })
+        expect((await pending).deny).toContain('Cancel')
+      } finally { opts.interrupt = true; await pending; await ui.unmount() }
+    })
+  }
+  test('deep missing paths inherit only a confirmed resolved directory and clean paths keep working', async () => {
+    const paths: Record<string, string | undefined> = {
+      '/repo/.pantheon/new/deep/a.ts': undefined, '/repo/.pantheon/new/deep': undefined, '/repo/.pantheon/new': undefined,
+      '/repo/link/new/deep/a.ts': undefined, '/repo/link/new/deep': undefined, '/repo/link/new': undefined,
+      '/repo/link': '/repo/src',
+      '/repo/sub/../src/a.ts': '/repo/src/a.ts',
+      // The host follows every hop; the gate receives the chain's final destination.
+      '/repo/.pantheon/chain.ts': '/repo/src/a.ts',
+    }
+    const inspected: { path: string; resolve: boolean }[] = []
+    const stat = async (path: string, resolve: boolean): Promise<FsStat> => {
+      inspected.push({ path, resolve })
+      const realPath = Object.hasOwn(paths, path) ? paths[path] : path
+      if (realPath === undefined) throw missingPath()
+      return { ...pathStat(realPath), isLink: path !== realPath }
+    }
+    const context = async (path: string) => gateContext({ ...gateEdit, file_path: await resolveGatePath(stat, path, '/repo/sub') }, { root: ROOT, home: HOME })
+    expect((await context('/repo/.pantheon/new/deep/a.ts')).skip).toBe(true)
+    for (const file_path of ['/repo/link/new/deep/a.ts', '../src/a.ts', '/repo/src/a.ts', '/repo/.pantheon/chain.ts']) {
+      expect((await context(file_path)).skip).toBe(false)
+    }
+    expect(inspected).toContainEqual({ path: '/repo/.pantheon/new/deep/a.ts', resolve: false })
+  })
+  test('only exact state and scratchpad exemptions bypass the gate and uid is cached', { options: { gate: true, jevApiKey: 'key' } }, async ($, on) => {
+    const host = gateWorld(on, { score: 0 })
+    const exempt = ['/repo/.pantheon/a.md', `${HOME}/.claude/plans/a.md`, `${HOME}/.claude/projects/repo/memory/a.md`, '/tmp/claude-501/repo/session/scratchpad/a.ts', '/private/tmp/claude-501/repo/session/scratchpad/a.ts']
+    for (const file_path of exempt) expect((await $.tool.call({ ...gateEdit, file_path } as never)).deny).toBeUndefined()
+    expect(host.sent).toEqual([])
+    const gated = ['settings.json', 'CLAUDE.md', 'hooks/a.ts', 'mods/a.ts', 'skills/a.ts', 'plugins/a.ts'].map(p => `${HOME}/.claude/${p}`)
+    gated.push('/tmp/claude-502/repo/session/scratchpad/a.ts', '/tmp/claude-501/session/scratchpad/a.ts', '/tmp/claude-501/a.ts')
+    for (const file_path of gated) expect((await $.tool.call({ ...gateEdit, file_path } as never)).deny).toContain('Denied by jev')
+    expect(host.sent).toHaveLength(gated.length)
+    expect(host.uidReads()).toBe(1)
+  })
+  test('uid lookup failure is cached and grants no scratchpad exemption', { options: { gate: true, jevApiKey: 'key' } }, async ($, on) => {
+    const host = gateWorld(on, { score: 0, uid: null })
+    for (let i = 0; i < 2; i++) expect((await $.tool.call({ ...gateEdit, file_path: '/tmp/claude-501/repo/session/scratchpad/a.ts' } as never)).deny).toContain('Denied by jev')
+    expect(host.uidReads()).toBe(1)
+    expect(host.sent).toHaveLength(2)
+  })
+  test('resolved symlink targets are gated', { options: { gate: true, jevApiKey: 'key' } }, async ($, on) => {
+    const host = gateWorld(on, { score: 0, realPaths: {
+      '/repo/.pantheon/source.ts': '/repo/src/source.ts',
+      [`${HOME}/.claude/plans/source.ts`]: '/repo/src/source.ts',
+    } })
+    for (const file_path of ['/repo/.pantheon/source.ts', `${HOME}/.claude/plans/source.ts`]) {
+      expect((await $.tool.call({ ...gateEdit, file_path } as never)).deny).toContain('Denied by jev')
+    }
+    expect(host.sent).toHaveLength(2)
+    expect(host.forwarded).toEqual([])
+  })
+  test('relative paths use session cwd rather than repository root', { options: { gate: true, jevApiKey: 'key' } }, async ($, on) => {
+    const host = gateWorld(on, { score: 0, cwd: '/repo/sub', realPaths: { '/repo/sub/../.pantheon/note.md': '/repo/.pantheon/note.md' } })
+    expect((await $.tool.call({ ...gateEdit, file_path: '.pantheon/note.md' } as never)).deny).toContain('Denied by jev')
+    expect((await $.tool.call({ ...gateEdit, file_path: '../.pantheon/note.md' } as never)).deny).toBeUndefined()
+    expect(host.sent).toHaveLength(1)
+  })
+  for (const fault of ['workspace', 'env'] as const) {
+    test(`${fault} failure asks instead of running the edit`, { options: { gate: true, jevApiKey: 'key', abovePrompt: false } }, async ($, on) => {
+      const opts = { fault, interrupt: false }
+      const host = gateWorld(on, opts)
+      await start($)
+      const ui = await $.ui.mount({ plugin: 'pantheon', component: 'AbovePrompt', surface: 'terminal', props: { hasSurvey: false, isWorking: true, maxRows: 12, bodyColumns: 120 } as never })
+      const pending = $.tool.call(gateEdit as never)
+      try {
+        await gatePause(50)
+        expect(host.forwarded).toEqual([])
+        expect(await ui.findAll({ type: 'Button' })).toHaveLength(2)
+        expect((await ui.findAll({ type: 'Text' })).map(n => n.text).join('')).not.toContain('private')
+        await ui.press({ key: 'cancel' })
+        expect((await pending).deny).toContain('Cancel')
+      } finally { opts.interrupt = true; await pending; await ui.unmount() }
+    })
+  }
+  test('a thrown decision asks and a failed recovery denies', async () => {
+    const throwingDecision = async () => { throw new Error('private decision error') }
+    let asks = 0
+    const ask = async () => { asks++; return { deny: 'held and cancelled' } }
+    expect(await withGateRecovery(throwingDecision, async () => ({ result: 'unused' }), ask)).toEqual({ deny: 'held and cancelled' })
+    expect(asks).toBe(1)
+    expect(await withGateRecovery(throwingDecision, async () => ({ result: 'unused' }), throwingDecision)).toEqual({ deny: 'Pantheon edit gate could not obtain a decision. Edit denied.' })
+    expect(asks).toBe(1)
+  })
+  for (const gate of [false, true]) {
+    test(`forwarding rejection runs next once and never opens recovery (gate=${gate})`, async () => {
+      let calls = 0
+      let holds = 0
+      const next = async () => { calls++; throw new Error('downstream rejected') }
+      await expect(withGateRecovery(async () => { if (gate) holds++; return undefined }, next, async () => {
+        holds++
+        return undefined
+      })).rejects.toThrow('downstream rejected')
+      expect(calls).toBe(1)
+      expect(holds).toBe(gate ? 1 : 0)
+    })
+  }
+  for (const reverse of [false, true]) {
+    test(`parallel holds keep the second notice after delayed cleanup (${reverse})`, { options: { gate: true, jevApiKey: 'key', abovePrompt: false } }, async ($, on) => {
+      const opts = { score: 0.5, interrupt: false }
+      const host = gateWorld(on, opts)
+      let delayed = false
+      let ready = false
+      on('state.set', async (_$, e, next) => {
+        if (ready && e.key === 'gateHeld' && e.value === null && !delayed) { delayed = true; await gatePause(80) }
+        return next(e)
+      })
+      await start($)
+      ready = true
+      const ui = await $.ui.mount({ plugin: 'pantheon', component: 'AbovePrompt', surface: 'terminal', props: { hasSurvey: false, isWorking: true, maxRows: 12, bodyColumns: 120 } as never })
+      const first = $.tool.call({ ...gateEdit, tool_use_id: reverse ? 'b' : 'a' } as never)
+      await gatePause(30)
+      const second = $.tool.call({ ...gateEdit, tool_use_id: reverse ? 'a' : 'b' } as never)
+      try {
+        await gatePause(30)
+        await ui.press({ key: reverse ? 'proceed' : 'cancel' })
+        await first
+        await gatePause(30)
+        expect(await ui.findAll({ type: 'Button' })).toHaveLength(2)
+        await ui.press({ key: reverse ? 'cancel' : 'proceed' })
+        const result = await second
+        expect(Boolean(result.deny)).toBe(reverse)
+        expect(host.forwarded).toHaveLength(1)
+      } finally {
+        opts.interrupt = true
+        await Promise.all([first, second])
+        await ui.unmount()
+      }
+    })
+  }
+  for (const options of [{}, { gate: false }]) {
+    test(`disabled gate passes untouched ${JSON.stringify(options)}`, { options }, async ($, on) => {
+      const host = gateWorld(on)
+      expect(await $.tool.call(gateEdit as never)).toEqual({ result: 'unchanged' })
+      expect(host.forwarded).toEqual([gateEdit])
+      expect(host.sent).toEqual([])
+      expect(host.probes()).toBe(0)
+    })
+  }
+  test('allows all edit tools, sends metadata only, prefers the option key and reuses the root', { options: { gate: true, jevApiKey: 'option-key' } }, async ($, on) => {
+    const host = gateWorld(on, { key: 'env-key' })
+    await start($)
+    const probes = host.probes()
+    for (const event of [gateEdit, { tool: 'Write', file_path: '/repo/a.ts', content: 'private content' }, { tool: 'NotebookEdit', notebook_path: '/repo/a.ipynb', new_source: 'private source' }]) {
+      expect(await $.tool.call(event as never)).toEqual({ result: 'unchanged' })
+    }
+    expect(host.forwarded).toHaveLength(3)
+    expect(host.probes()).toBe(probes)
+    expect(host.sent).toHaveLength(3)
+    for (const request of host.sent) {
+      expect(request.headers?.Authorization).toBe('Bearer option-key')
+      for (const secret of ['old_string', 'new_string', 'content', 'new_source', 'private']) expect(request.body).not.toContain(secret)
+    }
+    expect(JSON.parse(host.sent[0].body!).state).toEqual({ tool: 'Edit', kind: 'source', ext: 'ts', linesAdded: 1, linesRemoved: 1, files: 1, caller: 'main orchestrator session' })
+  })
+  test('denies a low score and uses the environment key when the option is blank', { options: { gate: true, jevApiKey: '  ' } }, async ($, on) => {
+    const host = gateWorld(on, { key: 'env-key', score: 0.1 })
+    expect((await $.tool.call(gateEdit as never)).deny).toContain('delegate to the executor')
+    expect(host.forwarded).toEqual([])
+    expect(host.sent[0].headers?.Authorization).toBe('Bearer env-key')
+  })
+  test('skips subagents and exempt directories without requests', { options: { gate: true, jevApiKey: 'key' } }, async ($, on) => {
+    const host = gateWorld(on)
+    for (const event of [{ ...gateEdit, agentId: 'native-1' }, ...['/repo/.pantheon/plan.md', `${HOME}/.claude/plans/note.md`, '/private/tmp/claude-501/repo/session/scratchpad/a.ts', '/tmp/claude-501/repo/session/scratchpad/a.ts'].map(file_path => ({ ...gateEdit, file_path }))]) {
+      expect((await $.tool.call(event as never)).deny).toBeUndefined()
+    }
+    expect(host.sent).toEqual([])
+    expect(host.forwarded).toHaveLength(5)
+  })
+  for (const reject of [false, true]) {
+    test(`local rules survive ${reject ? 'a rejected fetch' : 'a missing key'}`, { options: { gate: true } }, async ($, on) => {
+      const host = gateWorld(on, { reject, key: reject ? 'key' : undefined })
+      expect((await $.tool.call(gateEdit as never)).deny).toBeUndefined()
+      expect((await $.tool.call({ ...gateEdit, new_string: 'line\n'.repeat(110) } as never)).deny).toContain('Denied by rules')
+      expect(host.sent).toHaveLength(reject ? 2 : 0)
+      expect(host.forwarded).toHaveLength(1)
+    })
+  }
+  for (const surface of ['terminal', 'desktop'] as const) {
+    test(`grey zone waits for Proceed or Cancel on ${surface}`, { options: { gate: true, jevApiKey: 'key', abovePrompt: false } }, async ($, on) => {
+      const host = gateWorld(on, { score: 0.5 })
+      await $.session.start({ cwd: ROOT, surface, isInteractive: true })
+      const ui = await $.ui.mount({ plugin: 'pantheon', component: 'AbovePrompt', surface, props: { hasSurvey: false, isWorking: true, maxRows: 12, bodyColumns: 120, scroll: { offset: 0, bodyRows: 12 }, view: {} } })
+      for (const decision of ['cancel', 'proceed']) {
+        const pending = $.tool.call(gateEdit as never)
+        await gatePause(50)
+        expect(host.forwarded).toHaveLength(0)
+        expect(await ui.findAll({ type: 'Button' })).toHaveLength(2)
+        await ui.press({ key: decision })
+        const result = await pending
+        if (decision === 'cancel') expect(result.deny).toContain('pressed Cancel')
+        else expect(result).toEqual({ result: 'unchanged' })
+        expect(await ui.findAll({ type: 'Button' })).toHaveLength(0)
+      }
+      expect(host.forwarded).toHaveLength(1)
+      await ui.unmount()
+    })
+  }
+  test('a failed hold denies instead of letting the edit through', { options: { gate: true, jevApiKey: 'key' } }, async ($, on) => {
+    const host = gateWorld(on, { score: 0.5, interrupt: true })
+    await start($)
+    expect((await $.tool.call(gateEdit as never)).deny).toContain('interrupted')
+    expect(host.forwarded).toEqual([])
+  })
+  test('disabled roles are not recommended', { options: { gate: true, jevApiKey: 'key' } }, async ($, on) => {
+    gateWorld(on, { score: 0.1, files: { [`${HOME}/.claude/pantheon.json`]: JSON.stringify({ disabledAgents: ['executor', 'designer'] }) } })
+    await start($)
+    const result = await $.tool.call({ ...gateEdit, file_path: '/repo/view.tsx' } as never)
+    expect(result.deny).toContain('ask the person to handle implementation')
+    expect(result.deny).toContain('ask the person to handle UI work')
+  })
+  test('rules hold unknown edits and receipt counts only the edit that proceeds', { options: { gate: true } }, async ($, on) => {
+    const host = gateWorld(on)
+    mock.store(on)
+    on('session.id', () => ({ value: 'gate-session' }))
+    on('session.model', () => ({ value: 'claude-opus-5' }))
+    on('session.usage', () => ({ value: { startedAt: 0, context: { tokens: 0, window: 1000, percent: 0 }, rateLimits: [] } }))
+    on('turn.start', (_$, e) => ({ turnId: e.turnId }))
+    on('turn.complete', () => ({ text: 'Completed' }))
+    await start($)
+    await $.turn.start({ turnId: 'gate-turn', prompt: 'Edit' } as never)
+    const ui = await $.ui.mount({ plugin: 'pantheon', component: 'AbovePrompt', surface: 'terminal', props: { hasSurvey: false, isWorking: false, maxRows: 12, bodyColumns: 120 } as never })
+    expect((await $.tool.call({ ...gateEdit, new_string: 'line\n'.repeat(110) } as never)).deny).toContain('Denied by rules')
+    for (const decision of ['cancel', 'proceed']) {
+      const pending = $.tool.call({ tool: 'Write', file_path: '/repo/new.ts', content: 'unknown old size' } as never)
+      await gatePause(50)
+      expect(host.forwarded).toHaveLength(0)
+      expect((await ui.findAll({ type: 'Text' })).map(n => n.text).join('|')).toContain('by rules')
+      await ui.press({ key: decision })
+      await pending
+    }
+    await $.turn.complete({ turnId: 'gate-turn', reason: 'answer', answer: 'Done', durationMs: 1000, isAborted: false })
+    expect((await ui.findAll({ type: 'Text' })).map(n => n.text).join('')).toContain('last turn 1s · 0 agents · 1 edit · 0 errors')
+    expect(host.sent).toEqual([])
+    await ui.unmount()
+  })
+})
+
 function trackingWorld(on: On, slowNativeWrite = false, opts: {
   chunk?: boolean; slowMs?: number
   /** While it returns a promise, every natives write waits for it. */

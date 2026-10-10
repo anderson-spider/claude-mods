@@ -1,12 +1,24 @@
 {
   "name": "pantheon",
-  "version": "0.15.0",
+  "version": "0.16.0",
   "description": "Makes Claude an orchestrator that delegates to specialist roles on Codex or native Claude agents, chosen per profile, with an auto-opening /pantheon panel for roles, activity and a session log, and a strip above the prompt with model, context, cache, rate limits and running agents.",
   "author": {
     "name": "anderson-spider"
   },
   "types": "./types/index.d.ts",
   "userConfig": {
+    "gate": {
+      "type": "boolean",
+      "title": "Main-session edit gate",
+      "description": "Asks a decision model, with metadata only, whether a main-session edit is small enough to apply directly.",
+      "default": false
+    },
+    "jevApiKey": {
+      "type": "string",
+      "title": "Jev API key",
+      "description": "OpenRouter API key for the edit gate. Falls back to OPENROUTER_API_KEY when unset.",
+      "sensitive": true
+    },
     "profile": {
       "type": "string",
       "title": "Active profile",
