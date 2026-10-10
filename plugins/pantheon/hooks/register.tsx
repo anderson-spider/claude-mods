@@ -3,7 +3,7 @@ import type { AgentSpec, FsStat, Hook, ProcessRunInit, ProcessRunResult, Registe
 
 import type { Native, SessionInfo } from '../types'
 import { loadConfig } from './config'
-import { decide } from './decisions'
+import { rulesVerdict } from './decisions'
 import { gateContext, gateMessage } from './gate'
 import { DEFAULT_CONFIG } from './defaults'
 import { buildCouncilBlock, isCouncilOrigin, matchesCouncilTrigger } from './prompts/council'
@@ -587,11 +587,7 @@ export const register: Register = (on, options) => {
       }).catch(() => undefined)
       const context = gateContext({ ...e, [pathField]: path }, { root, home, uid: await gateUid })
       if (context.skip) return undefined
-      const key = typeof options.jevApiKey === 'string' && options.jevApiKey.trim()
-        ? options.jevApiKey : await $.env.get('OPENROUTER_API_KEY')
-      const verdict = await decide((url, init) => $.http.fetch(url, init), key, context.ctx, {
-        timer: (ms, fn) => { const timer = $.clock.after(ms, fn); return () => timer.cancel() },
-      })
+      const verdict = rulesVerdict(context.ctx)
       if (verdict.action === 'allow') return undefined
       const message = gateMessage(verdict, {
         developer: !state.config.disabledAgents.includes('developer'),
@@ -600,7 +596,7 @@ export const register: Register = (on, options) => {
       if (verdict.action === 'deny') return { deny: message }
       return ask(message)
     }, () => next(e), () => ask(gateMessage(
-      { action: 'ask', source: 'rules', reason: 'The edit gate could not evaluate this edit. Ask the person.' },
+      { action: 'ask', reason: 'The edit gate could not evaluate this edit. Ask the person.' },
       { developer: false, ux: false },
     )))
   }).catch((_$, e, next) => next.called || options.gate !== true || e.agentId

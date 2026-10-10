@@ -68,12 +68,11 @@ export function gateContext(e: GateEvent, env: GateEnv):
 }
 
 export function gateMessage(v: Verdict, roles: { developer: boolean; ux: boolean }): string {
-  const source = v.source === 'jev' ? `jev (score ${v.score ?? 'unknown'})` : 'rules'
-  if (v.action === 'allow') return `Allowed by ${source}.`
+  if (v.action === 'allow') return 'Allowed by rules.'
   const decision = v.action === 'deny' ? 'Denied' : 'Ask the person before proceeding'
   // Code goes to developer and visual work to ux; a disabled role is replaced by a request for the person.
   const destinations = roles.developer
     ? [roles.ux ? 'delegate to developer (code) or ux (visual work)' : 'delegate to developer']
     : ['ask the person to handle implementation', ...(roles.ux ? ['delegate visual work to ux'] : [])]
-  return `${decision} by ${source}.\nPlease ${destinations.join('; ')}; the main session should not edit it itself.`
+  return `${decision} by rules.\nPlease ${destinations.join('; ')}; the main session should not edit it itself.`
 }

@@ -25,8 +25,11 @@ const stepResult = {
 const streamChunk = { kind: 'text' as const, index: 0, text: 'streaming' }
 
 const gateEdit = { tool: 'Edit', tool_use_id: 'gate-edit', file_path: '/repo/src/a.ts', old_string: 'private old text', new_string: 'private new text' }
+// Rules: gateEdit is tiny (allow), gateGrey is not trivial (ask) and gateBig is too large (deny).
+const gateGrey = { ...gateEdit, tool_use_id: 'gate-grey', new_string: 'private\n'.repeat(10) }
+const gateBig = { ...gateEdit, tool_use_id: 'gate-big', new_string: 'line\n'.repeat(110) }
 const gatePause = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
-function gateWorld(on: On, opts: { score?: number; key?: string; reject?: boolean; interrupt?: boolean; fault?: 'workspace' | 'env'; files?: Record<string, string>; cwd?: string; realPaths?: Record<string, string | undefined>; statErrors?: Record<string, string>; unresolvedLinks?: string[]; uid?: string | null } = {}) {
+function gateWorld(on: On, opts: { interrupt?: boolean; fault?: 'workspace' | 'env'; files?: Record<string, string>; cwd?: string; realPaths?: Record<string, string | undefined>; statErrors?: Record<string, string>; unresolvedLinks?: string[]; uid?: string | null } = {}) {
   const fixture = world(new Proxy(on, {
     apply(target, self, args) {
       if (args[0] === 'session.cwd' && (opts.fault === 'workspace' || opts.cwd)) return
@@ -54,7 +57,7 @@ function gateWorld(on: On, opts: { score?: number; key?: string; reject?: boolea
   })
   on('env.get', (_$, e) => {
     if (opts.fault === 'env') throw new Error('private environment error')
-    return { value: e.name === 'HOME' ? HOME : e.name === 'OPENROUTER_API_KEY' ? opts.key : undefined }
+    return { value: e.name === 'HOME' ? HOME : undefined }
   })
   on('process.run', async (_$, e) => {
     if (e.argv.join(' ') === 'id -u') {
@@ -70,8 +73,8 @@ function gateWorld(on: On, opts: { score?: number; key?: string; reject?: boolea
   })
   on('http.fetch', (_$, e) => {
     sent.push({ body: e.init?.body, headers: e.init?.headers })
-    if (opts.reject) throw new Error('network unavailable')
-    return { value: { status: 200, ok: true, headers: {}, text: JSON.stringify({ answers: { trivial: { noul: opts.score ?? 0.95 } } }) } }
+    // The gate decides by local rules and never fetches; every test asserts `sent` stays empty.
+    return { value: { status: 200, ok: true, headers: {}, text: '{}' } }
   })
   on('tool.call', (_$, e) => { forwarded.push(e); return { result: 'unchanged' } })
   on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'Text', children: ['idle'] }))
@@ -161,7 +164,7 @@ describe('edit gate', () => {
     })
   }
   for (const failure of ['EACCES: permission denied', 'EPERM: operation denied', 'host unavailable', 'dangling link', 'ELOOP: symlink chain cycle']) {
-    test(`path resolution holds on ${failure}`, { options: { gate: true, jevApiKey: 'key', abovePrompt: false } }, async ($, on) => {
+    test(`path resolution holds on ${failure}`, { options: { gate: true, abovePrompt: false } }, async ($, on) => {
       const link = failure === 'dangling link'
       const target = link ? '/repo/.pantheon/new.ts' : '/repo/.pantheon/middle/new.ts'
       const opts = {
@@ -207,42 +210,42 @@ describe('edit gate', () => {
     }
     expect(inspected).toContainEqual({ path: '/repo/.pantheon/new/deep/a.ts', resolve: false })
   })
-  test('only exact state and scratchpad exemptions bypass the gate and uid is cached', { options: { gate: true, jevApiKey: 'key' } }, async ($, on) => {
-    const host = gateWorld(on, { score: 0 })
+  test('only exact state and scratchpad exemptions bypass the gate and uid is cached', { options: { gate: true } }, async ($, on) => {
+    const host = gateWorld(on)
     const exempt = ['/repo/.pantheon/a.md', `${HOME}/.claude/plans/a.md`, `${HOME}/.claude/projects/repo/memory/a.md`, '/tmp/claude-501/repo/session/scratchpad/a.ts', '/private/tmp/claude-501/repo/session/scratchpad/a.ts']
     for (const file_path of exempt) expect((await $.tool.call({ ...gateEdit, file_path } as never)).deny).toBeUndefined()
     expect(host.sent).toEqual([])
     const gated = ['settings.json', 'CLAUDE.md', 'hooks/a.ts', 'mods/a.ts', 'skills/a.ts', 'plugins/a.ts'].map(p => `${HOME}/.claude/${p}`)
     gated.push('/tmp/claude-502/repo/session/scratchpad/a.ts', '/tmp/claude-501/session/scratchpad/a.ts', '/tmp/claude-501/a.ts')
-    for (const file_path of gated) expect((await $.tool.call({ ...gateEdit, file_path } as never)).deny).toContain('Denied by jev')
-    expect(host.sent).toHaveLength(gated.length)
+    for (const file_path of gated) expect((await $.tool.call({ ...gateBig, file_path } as never)).deny).toContain('Denied by rules')
+    expect(host.sent).toEqual([])
     expect(host.uidReads()).toBe(1)
   })
-  test('uid lookup failure is cached and grants no scratchpad exemption', { options: { gate: true, jevApiKey: 'key' } }, async ($, on) => {
-    const host = gateWorld(on, { score: 0, uid: null })
-    for (let i = 0; i < 2; i++) expect((await $.tool.call({ ...gateEdit, file_path: '/tmp/claude-501/repo/session/scratchpad/a.ts' } as never)).deny).toContain('Denied by jev')
+  test('uid lookup failure is cached and grants no scratchpad exemption', { options: { gate: true } }, async ($, on) => {
+    const host = gateWorld(on, { uid: null })
+    for (let i = 0; i < 2; i++) expect((await $.tool.call({ ...gateBig, file_path: '/tmp/claude-501/repo/session/scratchpad/a.ts' } as never)).deny).toContain('Denied by rules')
     expect(host.uidReads()).toBe(1)
-    expect(host.sent).toHaveLength(2)
+    expect(host.sent).toEqual([])
   })
-  test('resolved symlink targets are gated', { options: { gate: true, jevApiKey: 'key' } }, async ($, on) => {
-    const host = gateWorld(on, { score: 0, realPaths: {
+  test('resolved symlink targets are gated', { options: { gate: true } }, async ($, on) => {
+    const host = gateWorld(on, { realPaths: {
       '/repo/.pantheon/source.ts': '/repo/src/source.ts',
       [`${HOME}/.claude/plans/source.ts`]: '/repo/src/source.ts',
     } })
     for (const file_path of ['/repo/.pantheon/source.ts', `${HOME}/.claude/plans/source.ts`]) {
-      expect((await $.tool.call({ ...gateEdit, file_path } as never)).deny).toContain('Denied by jev')
+      expect((await $.tool.call({ ...gateBig, file_path } as never)).deny).toContain('Denied by rules')
     }
-    expect(host.sent).toHaveLength(2)
+    expect(host.sent).toEqual([])
     expect(host.forwarded).toEqual([])
   })
-  test('relative paths use session cwd rather than repository root', { options: { gate: true, jevApiKey: 'key' } }, async ($, on) => {
-    const host = gateWorld(on, { score: 0, cwd: '/repo/sub', realPaths: { '/repo/sub/../.pantheon/note.md': '/repo/.pantheon/note.md' } })
-    expect((await $.tool.call({ ...gateEdit, file_path: '.pantheon/note.md' } as never)).deny).toContain('Denied by jev')
-    expect((await $.tool.call({ ...gateEdit, file_path: '../.pantheon/note.md' } as never)).deny).toBeUndefined()
-    expect(host.sent).toHaveLength(1)
+  test('relative paths use session cwd rather than repository root', { options: { gate: true } }, async ($, on) => {
+    const host = gateWorld(on, { cwd: '/repo/sub', realPaths: { '/repo/sub/../.pantheon/note.md': '/repo/.pantheon/note.md' } })
+    expect((await $.tool.call({ ...gateBig, file_path: '.pantheon/note.md' } as never)).deny).toContain('Denied by rules')
+    expect((await $.tool.call({ ...gateBig, file_path: '../.pantheon/note.md' } as never)).deny).toBeUndefined()
+    expect(host.sent).toEqual([])
   })
   for (const fault of ['workspace', 'env'] as const) {
-    test(`${fault} failure asks instead of running the edit`, { options: { gate: true, jevApiKey: 'key', abovePrompt: false } }, async ($, on) => {
+    test(`${fault} failure asks instead of running the edit`, { options: { gate: true, abovePrompt: false } }, async ($, on) => {
       const opts = { fault, interrupt: false }
       const host = gateWorld(on, opts)
       await start($)
@@ -281,8 +284,8 @@ describe('edit gate', () => {
     })
   }
   for (const reverse of [false, true]) {
-    test(`parallel holds keep the second notice after delayed cleanup (${reverse})`, { options: { gate: true, jevApiKey: 'key', abovePrompt: false } }, async ($, on) => {
-      const opts = { score: 0.5, interrupt: false }
+    test(`parallel holds keep the second notice after delayed cleanup (${reverse})`, { options: { gate: true, abovePrompt: false } }, async ($, on) => {
+      const opts = { interrupt: false }
       const host = gateWorld(on, opts)
       let delayed = false
       let ready = false
@@ -293,9 +296,9 @@ describe('edit gate', () => {
       await start($)
       ready = true
       const ui = await $.ui.mount({ plugin: 'pantheon', component: 'AbovePrompt', surface: 'terminal', props: { hasSurvey: false, isWorking: true, maxRows: 12, bodyColumns: 120 } as never })
-      const first = $.tool.call({ ...gateEdit, tool_use_id: reverse ? 'b' : 'a' } as never)
+      const first = $.tool.call({ ...gateGrey, tool_use_id: reverse ? 'b' : 'a' } as never)
       await gatePause(30)
-      const second = $.tool.call({ ...gateEdit, tool_use_id: reverse ? 'a' : 'b' } as never)
+      const second = $.tool.call({ ...gateGrey, tool_use_id: reverse ? 'a' : 'b' } as never)
       try {
         await gatePause(30)
         await ui.press({ key: reverse ? 'proceed' : 'cancel' })
@@ -322,29 +325,22 @@ describe('edit gate', () => {
       expect(host.probes()).toBe(0)
     })
   }
-  test('allows all edit tools, sends metadata only, prefers the option key and reuses the root', { options: { gate: true, jevApiKey: 'option-key' } }, async ($, on) => {
-    const host = gateWorld(on, { key: 'env-key' })
+  test('allows a tiny edit by rules, reuses the root and never fetches', { options: { gate: true } }, async ($, on) => {
+    const host = gateWorld(on)
     await start($)
     const probes = host.probes()
-    for (const event of [gateEdit, { tool: 'Write', file_path: '/repo/a.ts', content: 'private content' }, { tool: 'NotebookEdit', notebook_path: '/repo/a.ipynb', new_source: 'private source' }]) {
-      expect(await $.tool.call(event as never)).toEqual({ result: 'unchanged' })
-    }
+    for (let i = 0; i < 3; i++) expect(await $.tool.call(gateEdit as never)).toEqual({ result: 'unchanged' })
     expect(host.forwarded).toHaveLength(3)
     expect(host.probes()).toBe(probes)
-    expect(host.sent).toHaveLength(3)
-    for (const request of host.sent) {
-      expect(request.headers?.Authorization).toBe('Bearer option-key')
-      for (const secret of ['old_string', 'new_string', 'content', 'new_source', 'private']) expect(request.body).not.toContain(secret)
-    }
-    expect(JSON.parse(host.sent[0].body!).state).toEqual({ tool: 'Edit', kind: 'source', ext: 'ts', linesAdded: 1, linesRemoved: 1, files: 1, caller: 'main lead session' })
+    expect(host.sent).toEqual([])
   })
-  test('denies a low score and uses the environment key when the option is blank', { options: { gate: true, jevApiKey: '  ' } }, async ($, on) => {
-    const host = gateWorld(on, { key: 'env-key', score: 0.1 })
-    expect((await $.tool.call(gateEdit as never)).deny).toContain('delegate to developer')
+  test('denies a large change by rules and points to developer', { options: { gate: true } }, async ($, on) => {
+    const host = gateWorld(on)
+    expect((await $.tool.call(gateBig as never)).deny).toContain('delegate to developer')
     expect(host.forwarded).toEqual([])
-    expect(host.sent[0].headers?.Authorization).toBe('Bearer env-key')
+    expect(host.sent).toEqual([])
   })
-  test('skips subagents and exempt directories without requests', { options: { gate: true, jevApiKey: 'key' } }, async ($, on) => {
+  test('skips subagents and exempt directories without requests', { options: { gate: true } }, async ($, on) => {
     const host = gateWorld(on)
     for (const event of [{ ...gateEdit, agentId: 'native-1' }, ...['/repo/.pantheon/plan.md', `${HOME}/.claude/plans/note.md`, '/private/tmp/claude-501/repo/session/scratchpad/a.ts', '/tmp/claude-501/repo/session/scratchpad/a.ts'].map(file_path => ({ ...gateEdit, file_path }))]) {
       expect((await $.tool.call(event as never)).deny).toBeUndefined()
@@ -352,22 +348,20 @@ describe('edit gate', () => {
     expect(host.sent).toEqual([])
     expect(host.forwarded).toHaveLength(5)
   })
-  for (const reject of [false, true]) {
-    test(`local rules survive ${reject ? 'a rejected fetch' : 'a missing key'}`, { options: { gate: true } }, async ($, on) => {
-      const host = gateWorld(on, { reject, key: reject ? 'key' : undefined })
-      expect((await $.tool.call(gateEdit as never)).deny).toBeUndefined()
-      expect((await $.tool.call({ ...gateEdit, new_string: 'line\n'.repeat(110) } as never)).deny).toContain('Denied by rules')
-      expect(host.sent).toHaveLength(reject ? 2 : 0)
-      expect(host.forwarded).toHaveLength(1)
-    })
-  }
+  test('local rules decide with no key, no option and no network', { options: { gate: true } }, async ($, on) => {
+    const host = gateWorld(on)
+    expect((await $.tool.call(gateEdit as never)).deny).toBeUndefined()
+    expect((await $.tool.call(gateBig as never)).deny).toContain('Denied by rules')
+    expect(host.sent).toEqual([])
+    expect(host.forwarded).toHaveLength(1)
+  })
   for (const surface of ['terminal', 'desktop'] as const) {
-    test(`grey zone waits for Proceed or Cancel on ${surface}`, { options: { gate: true, jevApiKey: 'key', abovePrompt: false } }, async ($, on) => {
-      const host = gateWorld(on, { score: 0.5 })
+    test(`grey zone waits for Proceed or Cancel on ${surface}`, { options: { gate: true, abovePrompt: false } }, async ($, on) => {
+      const host = gateWorld(on)
       await $.session.start({ cwd: ROOT, surface, isInteractive: true })
       const ui = await $.ui.mount({ plugin: 'pantheon', component: 'AbovePrompt', surface, props: { hasSurvey: false, isWorking: true, maxRows: 12, bodyColumns: 120, scroll: { offset: 0, bodyRows: 12 }, view: {} } })
       for (const decision of ['cancel', 'proceed']) {
-        const pending = $.tool.call(gateEdit as never)
+        const pending = $.tool.call(gateGrey as never)
         await gatePause(50)
         expect(host.forwarded).toHaveLength(0)
         expect(await ui.findAll({ type: 'Button' })).toHaveLength(2)
@@ -381,16 +375,16 @@ describe('edit gate', () => {
       await ui.unmount()
     })
   }
-  test('a failed hold denies instead of letting the edit through', { options: { gate: true, jevApiKey: 'key' } }, async ($, on) => {
-    const host = gateWorld(on, { score: 0.5, interrupt: true })
+  test('a failed hold denies instead of letting the edit through', { options: { gate: true } }, async ($, on) => {
+    const host = gateWorld(on, { interrupt: true })
     await start($)
-    expect((await $.tool.call(gateEdit as never)).deny).toContain('interrupted')
+    expect((await $.tool.call(gateGrey as never)).deny).toContain('interrupted')
     expect(host.forwarded).toEqual([])
   })
-  test('disabled roles are not recommended', { options: { gate: true, jevApiKey: 'key' } }, async ($, on) => {
-    gateWorld(on, { score: 0.1, files: { [`${HOME}/.claude/pantheon.json`]: JSON.stringify({ disabledAgents: ['developer', 'ux'] }) } })
+  test('disabled roles are not recommended', { options: { gate: true } }, async ($, on) => {
+    gateWorld(on, { files: { [`${HOME}/.claude/pantheon.json`]: JSON.stringify({ disabledAgents: ['developer', 'ux'] }) } })
     await start($)
-    const result = await $.tool.call({ ...gateEdit, file_path: '/repo/view.tsx' } as never)
+    const result = await $.tool.call({ ...gateBig, file_path: '/repo/view.tsx' } as never)
     expect(result.deny).toContain('ask the person to handle implementation')
     expect(result.deny).not.toContain('delegate')
   })
@@ -405,7 +399,7 @@ describe('edit gate', () => {
     await start($)
     await $.turn.start({ turnId: 'gate-turn', prompt: 'Edit' } as never)
     const ui = await $.ui.mount({ plugin: 'pantheon', component: 'AbovePrompt', surface: 'terminal', props: { hasSurvey: false, isWorking: false, maxRows: 12, bodyColumns: 120 } as never })
-    expect((await $.tool.call({ ...gateEdit, new_string: 'line\n'.repeat(110) } as never)).deny).toContain('Denied by rules')
+    expect((await $.tool.call(gateBig as never)).deny).toContain('Denied by rules')
     for (const decision of ['cancel', 'proceed']) {
       const pending = $.tool.call({ tool: 'Write', file_path: '/repo/new.ts', content: 'unknown old size' } as never)
       await gatePause(50)
@@ -487,12 +481,12 @@ describe('register', () => {
     const { files, seen } = world(on, { files: { [`${HOME}/.claude/pantheon.json`]: '{}' } })
     const first = await mountPanel($)
     await first.unmount()
-    expect(seen.agents.length).toBe(8)
+    expect(seen.agents.length).toBe(9)
     files[`${ROOT}/.claude/pantheon.json`] = JSON.stringify({ disabledAgents: ['architect'] })
     const second = await mountPanel($)
     await second.unmount()
     // The new config registers its own agents once.
-    expect(seen.agents.length).toBe(15)
+    expect(seen.agents.length).toBe(17)
   })
 
   test('panel keeps the last valid config and warns once across invalid JSON renders without invalidating itself', async ($, on) => {
@@ -507,7 +501,7 @@ describe('register', () => {
       await ui.unmount()
     }
     expect(seen.toasts).toEqual([`pantheon: invalid config — ${HOME}/.claude/pantheon.json: Invalid JSON`])
-    expect(seen.agents.length).toBe(8)
+    expect(seen.agents.length).toBe(9)
     expect(invalidations).toEqual([])
   })
 
@@ -775,7 +769,7 @@ describe('register', () => {
     const { seen } = world(on)
     await start($)
     expect(seen.tools).toEqual([])
-    expect(seen.agents).toEqual(['code-reader', 'docs-reader', 'developer', 'architect', 'ux', 'git', 'councillor-alpha', 'councillor-beta'])
+    expect(seen.agents).toEqual(['code-reader', 'docs-reader', 'developer', 'architect', 'qa', 'ux', 'git', 'councillor-alpha', 'councillor-beta'])
     const architect = seen.registered.find(spec => spec.name === 'architect')
     expect(architect?.tools).toBeUndefined()
     expect(architect?.disallowedTools).toEqual(['Edit', 'Write', 'NotebookEdit', 'Agent'])
@@ -788,7 +782,7 @@ describe('register', () => {
     on('agent.offer', async () => ({ isOffered: true }))
     delete files[`${HOME}/.claude/pantheon.json`]
     await start($)
-    expect(seen.agents).toEqual(['code-reader', 'docs-reader', 'developer', 'architect', 'ux', 'git', 'councillor-alpha', 'councillor-beta'])
+    expect(seen.agents).toEqual(['code-reader', 'docs-reader', 'developer', 'architect', 'qa', 'ux', 'git', 'councillor-alpha', 'councillor-beta'])
     expect((await $.agent.offer({ agent: 'pantheon:code-reader', description: '', source: 'plugin', provider: { plugin: 'pantheon', tier: 'user' } } as never)).isOffered).toBe(true)
   })
 
@@ -824,7 +818,7 @@ describe('register', () => {
     expect(out.text).toBe('Unknown subcommand: cancel. Use /pantheon, /pantheon close, /pantheon config or /pantheon doctor.')
   })
 
-  const PING_ORDER = ['code-reader', 'docs-reader', 'developer', 'architect', 'ux', 'git', 'councillor:alpha', 'councillor:beta']
+  const PING_ORDER = ['code-reader', 'docs-reader', 'developer', 'architect', 'qa', 'ux', 'git', 'councillor:alpha', 'councillor:beta']
 
   function doctorWorld(on: On, file?: string) {
     const submits: string[] = []
@@ -869,7 +863,7 @@ describe('register', () => {
   })
 
   test('doctor does not submit when every target is disabled', async ($, on) => {
-    const { submits, clock } = doctorWorld(on, JSON.stringify({ disabledAgents: ['code-reader', 'docs-reader', 'developer', 'architect', 'ux', 'git', 'council'] }))
+    const { submits, clock } = doctorWorld(on, JSON.stringify({ disabledAgents: ['code-reader', 'docs-reader', 'developer', 'architect', 'qa', 'ux', 'git', 'council'] }))
     await start($)
     const out = await $.command.run({ command: 'pantheon', args: 'doctor' })
     await clock.settle()
@@ -883,7 +877,7 @@ describe('register', () => {
     expect(seen.toasts.length).toBe(1)
     expect(seen.toasts[0]).toContain('pantheon: invalid config')
     expect(seen.toasts[0]).toContain('profiles were removed')
-    expect(seen.agents.length).toBe(8)
+    expect(seen.agents.length).toBe(9)
   })
 
 
@@ -902,14 +896,14 @@ describe('register', () => {
     const { seen, files } = world(on)
     on('prompt.compose', async () => ({ sections: [] }))
     await start($)
-    expect(seen.agents.length).toBe(8)
+    expect(seen.agents.length).toBe(9)
     files[`${HOME}/.claude/pantheon.json`] = JSON.stringify({ agents: { architect: { model: 'sonnet' } } })
     await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: [], tools: [], outputStyle: null, traits: [] } as never)
-    expect(seen.agents.length).toBe(16)
+    expect(seen.agents.length).toBe(18)
     expect(seen.registered.filter(spec => spec.name === 'architect').map(spec => (spec as { model?: string }).model)).toEqual(['opus', 'sonnet'])
     files[`${HOME}/.claude/pantheon.json`] = '{ broken'
     await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: [], tools: [], outputStyle: null, traits: [] } as never)
-    expect(seen.agents.length).toBe(16)
+    expect(seen.agents.length).toBe(18)
   })
 
 
@@ -939,7 +933,7 @@ describe('register', () => {
   test('invalid first config still registers the default native agents', async ($, on) => {
     const { seen } = world(on, { files: { [`${HOME}/.claude/pantheon.json`]: '{ nope' } })
     await start($)
-    expect(seen.agents).toEqual(['code-reader', 'docs-reader', 'developer', 'architect', 'ux', 'git', 'councillor-alpha', 'councillor-beta'])
+    expect(seen.agents).toEqual(['code-reader', 'docs-reader', 'developer', 'architect', 'qa', 'ux', 'git', 'councillor-alpha', 'councillor-beta'])
   })
 
   test('a failed native registration is retried on the next turn', async ($, on) => {
@@ -948,7 +942,7 @@ describe('register', () => {
     await start($)
     expect(seen.agents).toEqual([])
     await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: [], tools: [], outputStyle: null, traits: [] } as never)
-    expect(seen.agents).toEqual(['code-reader', 'docs-reader', 'developer', 'architect', 'ux', 'git', 'councillor-alpha', 'councillor-beta'])
+    expect(seen.agents).toEqual(['code-reader', 'docs-reader', 'developer', 'architect', 'qa', 'ux', 'git', 'councillor-alpha', 'councillor-beta'])
   })
 
   describe('above-prompt strip', () => {

@@ -10,13 +10,13 @@
     "gate": {
       "type": "boolean",
       "title": "Main-session edit gate",
-      "description": "Asks a decision model, with metadata only, whether a main-session edit is small enough to apply directly.",
+      "description": "Holds or denies main-session edits that local size and path rules do not consider trivial.",
       "default": false
     },
     "jevApiKey": {
       "type": "string",
       "title": "Jev API key",
-      "description": "OpenRouter API key for the edit gate. Falls back to OPENROUTER_API_KEY when unset.",
+      "description": "OpenRouter API key for the flow judge. Falls back to OPENROUTER_API_KEY when unset. The edit gate does not use it.",
       "sensitive": true
     },
     "abovePrompt": {
