@@ -1,353 +1,226 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { CLAUDE, CODEX, MIXED, resolved } from './fixtures/profiles'
-import { codexAgents, nativeAgentSpecs, resolveCodexCall, usesCodex } from '../hooks/roles'
+import { DEFAULTS, resolved } from './fixtures/config'
+import { activeSeats, nativeAgentSpecs, seatDisabled } from '../hooks/roles'
 import { rolePrompt } from '../hooks/prompts/roles'
 import { ROLES } from '../hooks/defaults'
-import type { CodexCall, PantheonConfig, RolePrompts, Sandbox } from '../hooks/types'
+import type { PantheonConfig, RolePrompts } from '../hooks/types'
 
-const ctx = { cwd: '/repo/sub', skipGitRepoCheck: false }
 const prompts: RolePrompts = key => `<${key}>`
-
-function call(config: PantheonConfig, agent = 'executor'): CodexCall {
-  const result = resolveCodexCall(config, { agent, prompt: 'task' }, ctx, prompts)
-  if ('error' in result) throw new Error(result.error)
-  return result
-}
-
-describe('Codex roles', () => {
-  test('git requires its resolved common dir and grants only that extra root', () => {
-    expect(resolveCodexCall(CODEX, { agent: 'git', prompt: 't' }, ctx, prompts))
-      .toEqual({ error: expect.stringContaining('git common dir could not be resolved') })
-    expect(resolveCodexCall(CODEX, { agent: 'git', prompt: 't' }, { ...ctx, gitCommonDir: '/main/.git' }, prompts))
-      .toEqual(expect.objectContaining({ sandbox: 'workspace-write', writableRoots: ['/main/.git'], network: true }))
-    for (const agent of ROLES.filter(role => role !== 'git')) {
-      const result = resolveCodexCall(CODEX, { agent, prompt: 't' }, { ...ctx, gitCommonDir: '/main/.git' }, prompts)
-      expect(result).not.toHaveProperty('writableRoots')
-      expect(result).not.toHaveProperty('network')
-    }
-  })
-
-  test('git refuses each setting that blocks writes or network', async () => {
-    for (const [setting, patch] of [
-      ['sandboxCap', { sandboxCap: 'read-only' }],
-      ['noNetwork', { noNetwork: true }],
-      ['sandbox', { agents: { git: { sandbox: 'read-only' } } }],
-    ] as const) {
-      const result = resolveCodexCall(await resolved('codex', patch), { agent: 'git', prompt: 't' }, ctx, prompts)
-      expect(result).toEqual({ error: expect.stringContaining(setting) })
-      expect(result).toEqual({ error: expect.stringContaining('needs write access to the git dir and network') })
-    }
-  })
-
-  test('roles route by engine', async () => {
-    const codex = await resolved('codex')
-    expect(call(codex, 'oracle').sandbox).toBe('read-only')
-    expect(call(codex, 'designer').sandbox).toBe('workspace-write')
-    expect(call(codex, 'explorer').model).toBe('gpt-6-luna')
-    const claude = await resolved('claude')
-    expect(resolveCodexCall(claude, { agent: 'explorer', prompt: 't' }, ctx, prompts))
-      .toEqual({ error: 'Use pantheon:explorer through the Agent tool.' })
-  })
-
-  test('sandbox never widens', async () => {
-    expect(call(await resolved('codex', { agents: { oracle: { sandbox: 'workspace-write' } } }), 'oracle').sandbox)
-      .toBe('read-only')
-    expect(call(await resolved('mixed', { agents: { explorer: { sandbox: 'workspace-write' } } }), 'explorer').sandbox)
-      .toBe('read-only')
-    expect(call(await resolved('mixed', { agents: { executor: { sandbox: 'read-only' } } })).sandbox).toBe('read-only')
-    expect(call(await resolved('mixed', { sandboxCap: 'read-only' })).sandbox).toBe('read-only')
-    for (const seat of ['alpha', 'beta']) expect(call(CODEX, `councillor:${seat}`).sandbox).toBe('read-only')
-  })
-
-  test('per-call and configured models must fit the Codex engine for roles and seats', () => {
-    for (const agent of ['executor', 'councillor:alpha']) {
-      expect(resolveCodexCall(MIXED, { agent, prompt: 't', model: 'sonnet' }, ctx, prompts))
-        .toEqual({ error: expect.stringContaining('"sonnet" is a Claude model (engine codex)') })
-    }
-    const config: PantheonConfig = {
-      ...MIXED, agents: { ...MIXED.agents, executor: { engine: 'codex', model: 'sonnet' } },
-    }
-    expect(resolveCodexCall(config, { agent: 'executor', prompt: 't' }, ctx, prompts))
-      .toEqual({ error: expect.stringContaining('"sonnet" is a Claude model (engine codex)') })
-    expect(resolveCodexCall(config, { agent: 'executor', prompt: 't', model: 'gpt-6-luna' }, ctx, prompts))
-      .toEqual(expect.objectContaining({ model: 'gpt-6-luna' }))
-  })
-
-  test('unknown agent lists Codex agents', () => {
-    expect(resolveCodexCall(CLAUDE, { agent: 'nope', prompt: 't' }, ctx, prompts))
-      .toEqual({ error: 'Unknown or disabled agent: nope. Valid agents: none.' })
-    expect(resolveCodexCall(MIXED, { agent: 'nope', prompt: 't' }, ctx, prompts))
-      .toEqual({ error: 'Unknown or disabled agent: nope. Valid agents: explorer, librarian, executor, git, councillor:alpha.' })
-  })
-
-  test('Codex availability follows active roles and seats', () => {
-    expect(codexAgents(CLAUDE)).toEqual([])
-    expect(usesCodex(CLAUDE)).toBe(false)
-    expect(codexAgents(MIXED)).toEqual(['explorer', 'librarian', 'executor', 'git', 'councillor:alpha'])
-    expect(codexAgents(CODEX)).toEqual([...ROLES, 'councillor:alpha', 'councillor:beta'])
-    expect(usesCodex(CODEX)).toBe(true)
-    expect(usesCodex({ ...MIXED, disabledAgents: ['explorer', 'librarian', 'executor', 'git', 'council'] })).toBe(false)
-    expect(codexAgents({ ...MIXED, disabledAgents: ['explorer', 'librarian', 'executor', 'git'] })).toEqual(['councillor:alpha'])
-    expect(usesCodex({ ...MIXED, disabledAgents: ['explorer', 'librarian', 'executor'] })).toBe(true)
-  })
-
-  const sandboxCases: Array<{ cap: Sandbox; role: Sandbox; expected: Sandbox }> = [
-    { cap: 'read-only', role: 'workspace-write', expected: 'read-only' },
-    { cap: 'workspace-write', role: 'read-only', expected: 'read-only' },
-    { cap: 'workspace-write', role: 'workspace-write', expected: 'workspace-write' },
-    { cap: 'read-only', role: 'read-only', expected: 'read-only' },
-  ]
-  for (const { cap, role, expected } of sandboxCases) {
-    test(`role sandbox ${role} capped by ${cap}`, () => {
-      const config: PantheonConfig = {
-        ...MIXED, sandboxCap: cap,
-        agents: { ...MIXED.agents, executor: { engine: 'codex', sandbox: role } },
-      }
-      expect(call(config).sandbox).toBe(expected)
-    })
-  }
-
-  test('missing role sandbox uses the safe role default', () => {
-    const config: PantheonConfig = {
-      ...MIXED,
-      agents: { ...MIXED.agents, explorer: { engine: 'codex' }, librarian: { engine: 'codex' }, executor: { engine: 'codex' } },
-    }
-    expect(call(config, 'explorer').sandbox).toBe('read-only')
-    expect(call(config, 'librarian').sandbox).toBe('read-only')
-    expect(call(config).sandbox).toBe('workspace-write')
-    expect(call(config).model).toBeUndefined()
-    expect(call(config).effort).toBeUndefined()
-  })
-
-  test('call model and effort win over role while context and network are retained', () => {
-    const config: PantheonConfig = {
-      ...MIXED, noNetwork: true,
-      agents: { ...MIXED.agents, executor: { engine: 'codex', model: 'role-model', effort: 'low', sandbox: 'read-only' } },
-    }
-    expect(resolveCodexCall(config, { agent: 'executor', prompt: 'task', model: 'call-model', effort: 'high', cwd: '/other', resume: 'job' },
-      { cwd: '/saved', skipGitRepoCheck: true, resumeSessionId: 'session' }, prompts)).toEqual({
-      agent: 'executor', model: 'call-model', effort: 'high', sandbox: 'read-only', noNetwork: true,
-      prompt: '<executor>\n\n---\n\ntask', cwd: '/saved', skipGitRepoCheck: true, resumeSessionId: 'session',
-    })
-    expect(call(config).model).toBe('role-model')
-    expect(call(config).effort).toBe('low')
-  })
-
-  test('native role is refused with an Agent tool instruction', () => {
-    const result = resolveCodexCall(MIXED, { agent: 'oracle', prompt: 'task' }, ctx, prompts)
-    expect(result).toEqual({ error: expect.stringContaining('pantheon:oracle') })
-    expect(result).toEqual({ error: expect.stringContaining('Agent') })
-  })
-
-  test('disabled and unknown agents list only available Codex agents', () => {
-    const config: PantheonConfig = { ...MIXED, disabledAgents: ['executor', 'librarian'] }
-    for (const agent of ['executor', 'unknown']) {
-      const result = resolveCodexCall(config, { agent, prompt: 'task' }, ctx, prompts)
-      expect(result).toEqual({ error: expect.stringContaining('explorer') })
-      expect(result).toEqual({ error: expect.stringContaining('councillor:alpha') })
-      expect(result).not.toEqual({ error: expect.stringContaining('librarian') })
-    }
-  })
-
-  test('Codex seat uses seat model, effort and the councillor prompt', () => {
-    expect(call(MIXED, 'councillor:alpha')).toEqual({
-      agent: 'councillor:alpha', model: 'gpt-6-astra', effort: 'high', sandbox: 'read-only', noNetwork: false,
-      prompt: '<councillor>\n\n---\n\ntask', ...ctx,
-    })
-    expect(resolveCodexCall(MIXED,
-      { agent: 'councillor:alpha', prompt: 'task', model: 'call-model', effort: 'low' }, ctx, prompts))
-      .toEqual(expect.objectContaining({ model: 'call-model', effort: 'low', sandbox: 'read-only' }))
-  })
-
-  test('Claude seat is refused with its native Agent tool instruction', () => {
-    const result = resolveCodexCall(MIXED, { agent: 'councillor:beta', prompt: 'task' }, ctx, prompts)
-    expect(result).toEqual({ error: expect.stringContaining('pantheon:councillor-beta') })
-    expect(result).toEqual({ error: expect.stringContaining('Agent') })
-  })
-
-  test('council disabled and missing seats cannot delegate', () => {
-    const config: PantheonConfig = { ...MIXED, disabledAgents: ['council'] }
-    expect(resolveCodexCall(config, { agent: 'councillor:alpha', prompt: 'task' }, ctx, prompts))
-      .toEqual({ error: expect.stringContaining('explorer') })
-    expect(resolveCodexCall(MIXED, { agent: 'councillor:missing', prompt: 'task' }, ctx, prompts))
-      .toEqual({ error: expect.stringContaining('councillor:alpha') })
-  })
-
-  test('inherited object properties are not configured seats', () => {
-    expect(resolveCodexCall(MIXED, { agent: 'councillor:toString', prompt: 'task' }, ctx, prompts))
-      .toEqual({ error: expect.stringContaining('explorer') })
-  })
-
-  test('role and seat config prompts precede the task', () => {
-    const config: PantheonConfig = {
-      ...MIXED,
-      agents: { ...MIXED.agents, executor: { engine: 'codex', prompt: 'extra' } },
-      council: { seats: { alpha: { engine: 'codex', prompt: 'seat extra' } } },
-    }
-    expect(call(config).prompt).toBe('<executor>\n\nextra\n\n---\n\ntask')
-    expect(call(config, 'councillor:alpha').prompt).toBe('<councillor>\n\nseat extra\n\n---\n\ntask')
-  })
-
-  test('danger-full-access cannot be resolved as a cap or role sandbox', () => {
-    const invalid = 'danger-full-access' as Sandbox
-    expect(resolveCodexCall({ ...MIXED, sandboxCap: invalid }, { agent: 'executor', prompt: 'task' }, ctx, prompts))
-      .toEqual({ error: expect.stringContaining('danger-full-access') })
-    const config: PantheonConfig = {
-      ...MIXED, agents: { ...MIXED.agents, executor: { engine: 'codex', sandbox: invalid } },
-    }
-    expect(resolveCodexCall(config, { agent: 'executor', prompt: 'task' }, ctx, prompts))
-      .toEqual({ error: expect.stringContaining('danger-full-access') })
-  })
-})
+const NO_DELEGATION = ['Agent']
+const NO_EDITS = ['Edit', 'Write', 'NotebookEdit']
 
 describe('native agent prompts', () => {
-  test('explorer and librarian may use Bash and MCP; oracle and councillor may not change state', () => {
-    expect(rolePrompt('explorer', 'claude')).toContain('Bash')
-    expect(rolePrompt('explorer', 'claude')).toContain('MCP')
-    const librarian = rolePrompt('librarian', 'claude')
-    expect(librarian).toContain('terminal-browser action --browser <key>')
-    expect(librarian).toContain('done')
-    for (const key of ['oracle', 'councillor'] as const) {
-      expect(rolePrompt(key, 'claude')).toContain('including through Bash')
+  test('code-reader and docs-reader may use Bash and MCP; architect and councillor may not change state', () => {
+    expect(rolePrompt('code-reader')).toContain('Bash')
+    expect(rolePrompt('code-reader')).toContain('MCP')
+    const docsReader = rolePrompt('docs-reader')
+    expect(docsReader).toContain('terminal-browser action --browser <key>')
+    expect(docsReader).toContain('done')
+    for (const key of ['architect', 'councillor'] as const) {
+      expect(rolePrompt(key)).toContain('including through Bash')
     }
-    expect(rolePrompt('explorer', 'codex')).not.toContain('MCP')
   })
 })
 
 describe('native agent specs', () => {
   test('git inherits file editing tools but cannot delegate', () => {
-    const spec = nativeAgentSpecs(CLAUDE, prompts).find(spec => spec.name === 'git')
-    expect(spec?.disallowedTools).toEqual(['Agent', 'mcp__pantheon__delegate', 'mcp__pantheon__delegate_cancel'])
-    expect(spec?.tools).toBeUndefined()
-    expect(spec?.description).toContain('commit, squash, push and PR/MR after validation')
+    const spec = nativeAgentSpecs(DEFAULTS, prompts).find(spec => spec.name === 'git')
+    expect(spec?.disallowedTools).toEqual(NO_DELEGATION)
+    expect(spec).not.toHaveProperty('tools')
+    expect(spec?.description).toContain('squash, PR/MR, checkout, switch, worktree, stash')
     expect(spec?.prompt).toBe('<git>')
+    expect(spec?.model).toBe('haiku')
   })
-  test('native specs follow the engine', () => {
-    const specs = nativeAgentSpecs(CLAUDE, prompts)
+
+  test('every role and seat is a native spec', () => {
+    const specs = nativeAgentSpecs(DEFAULTS, prompts)
     expect(specs.map(spec => spec.name)).toEqual([...ROLES, 'councillor-alpha', 'councillor-beta'])
-    expect(specs.find(spec => spec.name === 'explorer')).toEqual(expect.objectContaining({
-      description: 'Pantheon codebase recon that returns compressed context.',
+    expect(specs.find(spec => spec.name === 'code-reader')).toEqual(expect.objectContaining({
+      description: 'Pantheon codebase recon that returns compressed context.', model: 'haiku',
     }))
-    expect(specs.find(spec => spec.name === 'explorer')?.tools).toBeUndefined()
-    const NO_DELEGATE = ['Agent', 'mcp__pantheon__delegate', 'mcp__pantheon__delegate_cancel']
-    expect(specs.find(spec => spec.name === 'explorer')?.disallowedTools).toEqual(NO_DELEGATE)
-    expect(specs.find(spec => spec.name === 'librarian')?.tools).toBeUndefined()
-    expect(specs.find(spec => spec.name === 'librarian')?.disallowedTools).toEqual(NO_DELEGATE)
-    for (const name of ['oracle', 'councillor-alpha', 'councillor-beta']) {
-      expect(specs.find(spec => spec.name === name)?.tools).toBeUndefined()
-      expect(specs.find(spec => spec.name === name)?.disallowedTools).toEqual(['Edit', 'Write', 'NotebookEdit', ...NO_DELEGATE])
+    expect(specs.find(spec => spec.name === 'code-reader')?.disallowedTools).toEqual(NO_DELEGATION)
+    expect(specs.find(spec => spec.name === 'docs-reader')?.disallowedTools).toEqual(NO_DELEGATION)
+    for (const name of ['architect', 'qa', 'councillor-alpha', 'councillor-beta']) {
+      expect(specs.find(spec => spec.name === name)?.disallowedTools).toEqual([...NO_EDITS, ...NO_DELEGATION])
     }
-    expect(specs.find(spec => spec.name === 'librarian')).toEqual(expect.objectContaining({
+    expect(specs.find(spec => spec.name === 'docs-reader')).toEqual(expect.objectContaining({
       description: 'Pantheon research on external docs and APIs.',
     }))
-    expect(specs.find(spec => spec.name === 'executor')).toEqual(expect.objectContaining({
-      model: 'sonnet', description: 'Pantheon bounded implementation from a complete specification.',
+    expect(specs.find(spec => spec.name === 'developer')).toEqual(expect.objectContaining({
+      model: 'sonnet', description: 'Pantheon implementation of all code (backend, scripts, tests, hooks, CLI, UI logic) from a complete specification.',
     }))
-    expect(specs.find(spec => spec.name === 'executor')?.tools).toBeUndefined()
-    expect(nativeAgentSpecs(CODEX, prompts)).toEqual([])
-    expect(nativeAgentSpecs(MIXED, prompts).map(spec => spec.name)).toEqual(['oracle', 'designer', 'councillor-beta'])
+    expect(specs.find(spec => spec.name === 'developer')).not.toHaveProperty('disallowedTools')
+    for (const spec of specs) expect(spec).not.toHaveProperty('tools')
   })
 
-  test('prompts get the engine', () => {
-    const enginePrompts: RolePrompts = (key, engine) => `<${key}:${engine}>`
-    expect(nativeAgentSpecs(CLAUDE, enginePrompts).find(spec => spec.name === 'explorer')?.prompt)
-      .toBe('<explorer:claude>')
-    expect(resolveCodexCall(CODEX, { agent: 'oracle', prompt: 't' }, ctx, enginePrompts))
-      .toEqual(expect.objectContaining({ prompt: '<oracle:codex>\n\n---\n\nt' }))
+  test('default models reach the specs', () => {
+    const models = Object.fromEntries(nativeAgentSpecs(DEFAULTS, prompts).map(spec => [spec.name, spec.model]))
+    expect(models).toEqual({
+      'code-reader': 'haiku', 'docs-reader': 'haiku', developer: 'sonnet', architect: 'opus', qa: 'sonnet', ux: 'sonnet', git: 'haiku',
+      'councillor-alpha': 'opus', 'councillor-beta': 'sonnet',
+    })
   })
 
-  test('oracle and Claude seats inherit tools minus file edits; designer inherits tools', () => {
-    const specs = nativeAgentSpecs(MIXED, prompts)
-    expect(specs.map(spec => spec.name)).toEqual(['oracle', 'designer', 'councillor-beta'])
-    expect(specs.find(spec => spec.name === 'oracle')).toEqual(expect.objectContaining({
-      prompt: '<oracle>', model: 'opus', disallowedTools: ['Edit', 'Write', 'NotebookEdit', 'Agent', 'mcp__pantheon__delegate', 'mcp__pantheon__delegate_cancel'], description: expect.any(String),
+  test('qa has the read-only tool set, no delegation and its own description', () => {
+    const qa = nativeAgentSpecs(DEFAULTS, prompts).find(spec => spec.name === 'qa')
+    expect(qa).toEqual(expect.objectContaining({
+      prompt: '<qa>', model: 'sonnet', disallowedTools: [...NO_EDITS, ...NO_DELEGATION],
+      description: 'Runs what was built and returns a pass/fail verdict per acceptance criterion, with evidence.',
     }))
-    expect(specs.find(spec => spec.name === 'designer')).toEqual(expect.objectContaining({ prompt: '<designer>', model: 'sonnet' }))
-    expect(specs.find(spec => spec.name === 'designer')?.tools).toBeUndefined()
+    expect(qa).not.toHaveProperty('tools')
+  })
+
+  test('architect and seats inherit tools minus file edits; ux inherits tools', () => {
+    const specs = nativeAgentSpecs(DEFAULTS, prompts)
+    expect(specs.find(spec => spec.name === 'architect')).toEqual(expect.objectContaining({
+      prompt: '<architect>', model: 'opus', disallowedTools: [...NO_EDITS, ...NO_DELEGATION], description: expect.any(String),
+    }))
+    expect(specs.find(spec => spec.name === 'ux')).toEqual(expect.objectContaining({ prompt: '<ux>', model: 'sonnet' }))
+    expect(specs.find(spec => spec.name === 'ux')).not.toHaveProperty('disallowedTools')
     expect(specs.find(spec => spec.name === 'councillor-beta')).toEqual(expect.objectContaining({
-      prompt: '<councillor>', model: 'opus', disallowedTools: ['Edit', 'Write', 'NotebookEdit', 'Agent', 'mcp__pantheon__delegate', 'mcp__pantheon__delegate_cancel'],
+      prompt: '<councillor>', model: 'sonnet', disallowedTools: [...NO_EDITS, ...NO_DELEGATION],
     }))
   })
 
-  test('native config model, effort and append prompts reach the registration specs', () => {
-    const config: PantheonConfig = {
-      ...MIXED, sandboxCap: 'read-only', noNetwork: true,
-      agents: { ...MIXED.agents, oracle: { engine: 'claude', model: 'native-model', effort: 'high', prompt: 'extra' } },
-      council: { seats: { beta: { engine: 'claude', model: 'seat-model', effort: 'low', prompt: 'seat extra' } } },
-    }
+  test('config model, effort and append prompts reach the registration specs', async () => {
+    const config = await resolved({
+      agents: { architect: { model: 'claude-opus-4-1', effort: 'high', prompt: 'extra' } },
+      council: { seats: { beta: { model: 'haiku', effort: 'low', prompt: 'seat extra' }, gamma: { prompt: 'g' } } },
+    })
     const specs = nativeAgentSpecs(config, prompts)
-    expect(specs.find(spec => spec.name === 'oracle')).toEqual(expect.objectContaining({
-      prompt: '<oracle>\n\nextra', model: 'native-model', effort: 'high', disallowedTools: ['Edit', 'Write', 'NotebookEdit', 'Agent', 'mcp__pantheon__delegate', 'mcp__pantheon__delegate_cancel'],
+    expect(specs.find(spec => spec.name === 'architect')).toEqual(expect.objectContaining({
+      prompt: '<architect>\n\nextra', model: 'claude-opus-4-1', effort: 'high', disallowedTools: [...NO_EDITS, ...NO_DELEGATION],
     }))
     expect(specs.find(spec => spec.name === 'councillor-beta')).toEqual(expect.objectContaining({
-      prompt: '<councillor>\n\nseat extra', model: 'seat-model', effort: 'low',
+      prompt: '<councillor>\n\nseat extra', model: 'haiku', effort: 'low',
     }))
-    expect(specs.find(spec => spec.name === 'designer')?.tools).toBeUndefined()
+    const gamma = specs.find(spec => spec.name === 'councillor-gamma')
+    expect(gamma?.prompt).toBe('<councillor>\n\ng')
+    expect(gamma?.model).toBeUndefined()
   })
 
   test('disabled natives and council do not produce registration specs', () => {
-    expect(nativeAgentSpecs({ ...MIXED, disabledAgents: ['oracle', 'council'] }, prompts)
-      .map(spec => spec.name)).toEqual(['designer'])
-    expect(nativeAgentSpecs({ ...MIXED, disabledAgents: ['councillor:beta'] }, prompts)
-      .map(spec => spec.name)).toEqual(['oracle', 'designer'])
+    expect(nativeAgentSpecs({ ...DEFAULTS, disabledAgents: ['architect', 'council'] }, prompts)
+      .map(spec => spec.name)).toEqual(['code-reader', 'docs-reader', 'developer', 'qa', 'ux', 'git'])
+    expect(nativeAgentSpecs({ ...DEFAULTS, disabledAgents: ['councillor:beta'] }, prompts)
+      .map(spec => spec.name)).toEqual([...ROLES, 'councillor-alpha'])
+    expect(nativeAgentSpecs({ ...DEFAULTS, disabledAgents: ['councillor-alpha'] }, prompts)
+      .map(spec => spec.name)).toEqual([...ROLES, 'councillor-beta'])
+  })
+
+  test('prompts come from the injected function', () => {
+    const marked: RolePrompts = key => `[${key}]`
+    expect(nativeAgentSpecs(DEFAULTS, marked).find(spec => spec.name === 'code-reader')?.prompt).toBe('[code-reader]')
   })
 })
 
-describe('role prompts by engine', () => {
-  for (const engine of ['codex', 'claude'] as const) {
-    test(`executor on ${engine} executes the brief and reports results within its boundaries`, () => {
-      const prompt = rolePrompt('executor', engine)
-      for (const text of [
-        'run scripts, test batteries and API calls',
-        "within the orchestrator's complete brief and assigned scope",
-        'short result: a table, status or errors, not raw logs',
-        'State what you ran and what you did not run.',
-        'Do not do external research.',
-        'Do not spawn subagents or delegate work; return coordination needs to the orchestrator.',
-        'Never modify protected branches or rewrite git history; git operations stay with the git role.',
-      ]) expect(prompt).toContain(text)
-    })
-  }
+describe('council seats', () => {
+  test('seats are active unless the council or the seat is disabled, sorted by name', () => {
+    const config: PantheonConfig = { ...DEFAULTS, council: { seats: { zeta: {}, alpha: {}, mid: {} } } }
+    expect(activeSeats(config)).toEqual(['alpha', 'mid', 'zeta'])
+    expect(activeSeats({ ...config, disabledAgents: ['councillor:mid'] })).toEqual(['alpha', 'zeta'])
+    expect(activeSeats({ ...config, disabledAgents: ['councillor-alpha'] })).toEqual(['mid', 'zeta'])
+    expect(activeSeats({ ...config, disabledAgents: ['council'] })).toEqual([])
+    expect(seatDisabled({ ...config, disabledAgents: ['council'] }, 'alpha')).toBe(true)
+    expect(seatDisabled(config, 'alpha')).toBe(false)
+  })
+})
 
-  for (const role of ['designer', 'executor'] as const) {
-    for (const engine of ['codex', 'claude'] as const) {
-      test(`${role} on ${engine} returns coordination to the orchestrator`, () => {
-        expect(rolePrompt(role, engine)).toContain('Do not spawn subagents or delegate work; return coordination needs to the orchestrator.')
-      })
-    }
-  }
-
-  test('executor commit instructions fit its engine', () => {
-    expect(rolePrompt('executor', 'codex')).toContain('.git is read-only')
-    expect(rolePrompt('executor', 'claude')).toContain('Do not commit or push; the git role handles your delivered changes.')
-    expect(rolePrompt('executor', 'claude')).not.toContain('.git is read-only')
+describe('role prompts', () => {
+  test('developer executes the brief and reports results within its boundaries', () => {
+    const prompt = rolePrompt('developer')
+    for (const text of [
+      'run scripts, test batteries and API calls',
+      "within the lead's complete brief and assigned scope",
+      'short result: a table, status or errors, not raw logs',
+      'State what you ran and what you did not run.',
+      'Do not do external research.',
+      'Do not spawn subagents or delegate work; return coordination needs to the lead.',
+      'Never modify protected branches or rewrite git history; other git operations stay with the git role.',
+    ]) expect(prompt).toContain(text)
   })
 
-  test('read-only instructions fit the engine tools', () => {
-    for (const key of ['explorer', 'librarian', 'oracle', 'councillor'] as const) {
-      expect(rolePrompt(key, 'codex')).toContain('rg')
-      expect(rolePrompt(key, 'codex')).not.toContain('run Bash')
-      expect(rolePrompt(key, 'codex')).not.toContain('without Bash')
-      expect(rolePrompt(key, 'claude')).toContain('Read/Grep/Glob')
-    }
-    expect(rolePrompt('librarian', 'claude')).toContain('WebSearch')
-    expect(rolePrompt('librarian', 'claude')).toContain('WebFetch')
-    expect(rolePrompt('librarian', 'claude')).not.toContain('MCPs de documentação')
-  })
-
-  test('write roles describe file operations on both engines', () => {
-    for (const key of ['executor', 'designer'] as const) {
-      for (const engine of ['claude', 'codex'] as const) expect(rolePrompt(key, engine)).toContain('**File operations**')
-      expect(rolePrompt(key, 'claude')).toContain('Read/Grep/Glob/Edit')
-      expect(rolePrompt(key, 'codex')).toContain('apply_patch')
+  test('ux, developer and git return coordination to the lead', () => {
+    for (const role of ['ux', 'developer', 'git'] as const) {
+      expect(rolePrompt(role)).toContain('Do not spawn subagents or delegate work; return coordination needs to the lead.')
     }
   })
 
-  test('all role and engine prompts end with the report override', () => {
+  test('developer writes all code, UI code included, and only guides look-and-feel work to ux', () => {
+    const prompt = rolePrompt('developer')
+    expect(prompt).toContain('Write all the code (backend, scripts, tests, hooks, CLI, UI code and logic included)')
+    expect(prompt).toContain('tell the lead it belongs to ux. This is guidance, not a refusal: still do the code your brief assigns.')
+    expect(prompt).not.toContain('No UI files')
+    expect(prompt).not.toContain('No design work')
+  })
+
+  test('ux owns look and feel, implements it and keeps the design criteria', () => {
+    const prompt = rolePrompt('ux')
+    for (const text of ['Own the look and feel: layout, hierarchy, color, spacing, motion, affordances and UI copy', 'Implement them (do not only advise)', 'whichever files your brief or task assigns', '## Design Principles', '## Review Responsibilities', 'Typography']) {
+      expect(prompt).toContain(text)
+    }
+  })
+
+  test('qa can say blocked instead of fail when it cannot verify, and says why', () => {
+    const prompt = rolePrompt('qa')
+    for (const text of ['QA: blocked — <why', 'environment is unavailable', 'a criterion that needs a side effect', 'that is `blocked`, not `fail`', 'finish with `QA: blocked`']) {
+      expect(prompt).toContain(text)
+    }
+    expect(prompt).not.toContain('mark it `fail` and say why it could not be run')
+  })
+
+  test('architect ends a task review with one REVIEW: pass|fail line and gives a diagnosis without it', () => {
+    const prompt = rolePrompt('architect')
+    for (const text of ['End your answer with exactly one final line', '`REVIEW: pass` or `REVIEW: fail`', 'and nothing after it', 'diagnose a task that keeps failing', 'no `REVIEW:` line']) {
+      expect(prompt).toContain(text)
+    }
+    expect(rolePrompt('councillor')).not.toContain('REVIEW:')
+  })
+
+  test('docs-reader reads and researches without writing docs', () => {
+    expect(rolePrompt('docs-reader')).toContain('you do not write documentation')
+  })
+
+  test('developer commits only its own paths and leaves push and other git work out', () => {
+    const prompt = rolePrompt('developer')
+    expect(prompt).toContain('git add -- <paths>')
+    expect(prompt).toContain('the lead pushes and the git role handles the rest')
+    expect(prompt).not.toContain('.git is read-only')
+  })
+
+  test('git covers checkout, switch, worktree and stash', () => {
+    const prompt = rolePrompt('git')
+    for (const text of ['checkout', 'switch', 'worktree', 'stash']) expect(prompt).toContain(text)
+  })
+
+  test('read-only instructions use the native tools', () => {
+    for (const key of ['code-reader', 'docs-reader', 'architect', 'councillor'] as const) {
+      expect(rolePrompt(key)).toContain('Read/Grep/Glob')
+      expect(rolePrompt(key)).not.toContain('apply_patch')
+      expect(rolePrompt(key)).not.toContain('rg --files')
+    }
+    expect(rolePrompt('docs-reader')).toContain('WebSearch')
+    expect(rolePrompt('docs-reader')).toContain('WebFetch')
+  })
+
+  test('write roles describe file operations', () => {
+    for (const key of ['developer', 'ux', 'git'] as const) {
+      expect(rolePrompt(key)).toContain('**File operations**')
+      expect(rolePrompt(key)).toContain('Read/Grep/Glob/Edit')
+      expect(rolePrompt(key)).not.toContain('apply_patch')
+    }
+  })
+
+  test('no prompt mentions Codex, delegate tools or sandboxes', () => {
     for (const key of [...ROLES, 'councillor'] as const) {
-      for (const engine of ['claude', 'codex'] as const) {
-        expect(rolePrompt(key, engine).endsWith('If the task defines a report format, it replaces the format above.')).toBe(true)
-      }
+      const prompt = rolePrompt(key)
+      expect(prompt).not.toMatch(/codex|delegate_|sandbox/i)
+    }
+  })
+
+  test('all role prompts end with the report override', () => {
+    for (const key of [...ROLES, 'councillor'] as const) {
+      expect(rolePrompt(key).endsWith('If the task defines a report format, it replaces the format above.')).toBe(true)
     }
   })
 })

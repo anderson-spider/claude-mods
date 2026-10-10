@@ -1,6 +1,6 @@
 import type { Instance, Roster, SlotName } from './roster'
 
-export type LogEvent = { at: number; actor: SlotName | 'orchestrator'; kind: string; text: string }
+export type LogEvent = { at: number; actor: SlotName | 'lead'; kind: string; text: string }
 
 function duration(ms: number): string {
   const s = Math.max(0, Math.floor(ms / 1000))
@@ -13,8 +13,6 @@ function duration(ms: number): string {
 const squash = (s: string) => s.replace(/\s+/g, ' ').trim()
 const END_KINDS: Record<string, { kind: string; verb: string; word: 'in' | 'after' }> = {
   done: { kind: 'done', verb: 'done', word: 'in' },
-  error: { kind: 'failed', verb: 'failed', word: 'after' },
-  cancelled: { kind: 'stopped', verb: 'stopped', word: 'after' },
   failed: { kind: 'failed', verb: 'failed', word: 'after' },
   stopped: { kind: 'stopped', verb: 'stopped', word: 'after' },
   lost: { kind: 'lost', verb: 'lost', word: 'after' },

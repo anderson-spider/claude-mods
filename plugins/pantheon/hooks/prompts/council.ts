@@ -38,16 +38,15 @@ export function isCouncilOrigin(kind: string | undefined): boolean {
 export function buildCouncilBlock(config: PantheonConfig): string {
   const seats = activeSeats(config)
   if (seats.length === 0) return ''
-  const calls = seats.map(name => config.council.seats[name]?.engine === 'codex'
-    ? `   - ${name}: delegate({ agent: "councillor:${name}", background: true, prompt: <user task + fetched context> })`
-    : `   - ${name}: Agent({ subagent_type: "pantheon:councillor-${name}", run_in_background: true, description: "Councillor on the task", prompt: <user task + fetched context> })`)
+  const calls = seats.map(name =>
+    `   - ${name}: Agent({ subagent_type: "pantheon:councillor-${name}", run_in_background: true, description: "Councillor on the task", prompt: <user task + fetched context> })`)
   return [
     '## Council Mode',
     '1. Fetch external resources (PR/URL/docs) FIRST and embed a concise summary in every prompt: councillors are read-only.',
     `2. Dispatch all seats (${seats.join(', ')}) independently in parallel, in the same turn, with background enabled:`,
     ...calls,
     '   Give a brief status and end the turn; completion notifications wake the session. Do not poll.',
-    '3. Collect each response as it finishes (Codex: delegate_result({ jobId }); native: its completion result); retry an empty seat once. Wait until every seat has finished or failed, with no fixed deadline. Keep failed seats explicit, never omit them. A stuck seat is visible in /pantheon; cancel Codex with delegate_cancel({ jobId }) or stop the native agent, then count it as failed.',
+    '3. Collect each response as it finishes (its completion result); retry an empty seat once. Wait until every seat has finished or failed, with no fixed deadline. Keep failed seats explicit, never omit them. A stuck seat is visible in /pantheon; stop the agent, then count it as failed.',
     '4. Read the original user task and each response by exact seat name, identify agreements and contradictions, resolve disagreements with explicit reasoning, and synthesize yourself. Credit individual insights; choose and improve the best approach rather than averaging opinions.',
     'Required output (follow a host-requested checkpoint/compaction template instead when applicable):',
     '## Council Response',

@@ -38,12 +38,17 @@ export function gateContext(e: GateEvent, env: GateEnv):
   const raw = e.tool === 'NotebookEdit' ? e.notebook_path : e.file_path
   const root = normalize(env.root)
   let path = ''
+  // The flow's own files (state, snapshot, journal, ledger) are written by the controller, never by an edit: whatever the
+  // size of the change, it is not one the rules can call trivial.
+  let controllerFile = false
   if (typeof raw === 'string' && raw !== '') {
     const absolute = normalize(raw.startsWith('/') ? raw : root + '/' + raw)
     const claude = env.home ? normalize(env.home + '/.claude') : undefined
     const statePath = claude && within(absolute, claude) ? absolute.slice(claude.length + 1) : ''
     const scratch = absolute.match(/^\/(?:private\/)?tmp\/claude-(\d+)\/[^/]+\/[^/]+\/scratchpad(?:\/|$)/)
-    if (within(absolute, normalize(root + '/.pantheon'))
+    controllerFile = within(absolute.toLowerCase(), normalize(root + '/.pantheon/flow').toLowerCase())
+    // Only the plans are exempt from `.pantheon`: `.pantheon/flow/**` holds the approval and the state the flow trusts.
+    if (within(absolute, normalize(root + '/.pantheon/plans'))
       || (claude && within(absolute, claude + '/plans'))
       || /^projects\/[^/]+\/memory(?:\/|$)/.test(statePath)
       || (env.uid !== undefined && /^\d+$/.test(env.uid) && scratch?.[1] === env.uid)) {
@@ -54,7 +59,9 @@ export function gateContext(e: GateEvent, env: GateEnv):
 
   let linesAdded: number | undefined
   let linesRemoved: number | undefined
-  if (e.tool === 'Edit') {
+  if (controllerFile) {
+    // Unknown counts are what the rules answer with an ask (held for Proceed/Cancel, or denied without a surface).
+  } else if (e.tool === 'Edit') {
     // replace_all's occurrence count is unknown; neither count can be inferred.
     if (e.replace_all !== true) {
       linesAdded = lines(e.new_string)
@@ -67,13 +74,12 @@ export function gateContext(e: GateEvent, env: GateEnv):
   return { skip: false, ctx: { tool: e.tool, path, ext: extension(path), linesAdded, linesRemoved, files: 1 } }
 }
 
-export function gateMessage(v: Verdict, ctx: EditContext, roles: { executor: boolean; designer: boolean }): string {
-  const source = v.source === 'jev' ? `jev (score ${v.score ?? 'unknown'})` : 'rules'
-  if (v.action === 'allow') return `Allowed by ${source}.`
+export function gateMessage(v: Verdict, roles: { developer: boolean; ux: boolean }): string {
+  if (v.action === 'allow') return 'Allowed by rules.'
   const decision = v.action === 'deny' ? 'Denied' : 'Ask the person before proceeding'
-  const destinations = [roles.executor ? 'delegate to the executor' : 'ask the person to handle implementation']
-  if (['.tsx', '.jsx', '.css', '.scss', '.svelte', '.vue', '.html'].includes(extension(ctx.path).toLowerCase())) {
-    destinations.push(roles.designer ? 'delegate UI work to the designer' : 'ask the person to handle UI work')
-  }
-  return `${decision} by ${source}.\nPlease ${destinations.join('; ')}; the main session should not edit it itself.`
+  // Code goes to developer and visual work to ux; a disabled role is replaced by a request for the person.
+  const destinations = roles.developer
+    ? [roles.ux ? 'delegate to developer (code) or ux (visual work)' : 'delegate to developer']
+    : ['ask the person to handle implementation', ...(roles.ux ? ['delegate visual work to ux'] : [])]
+  return `${decision} by rules.\nPlease ${destinations.join('; ')}; the main session should not edit it itself.`
 }

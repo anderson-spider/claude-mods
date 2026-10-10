@@ -1,124 +1,123 @@
 import { expect, test } from 'claude-code/testing'
 import { ago, buildRoster, ROLE_ORDER } from '../hooks/roster'
-import { CODEX, CLAUDE } from './fixtures/profiles'
-import type { Job, Native, PantheonConfig, SessionInfo } from '../hooks/types'
+import { DEFAULTS } from './fixtures/config'
+import type { Native, PantheonConfig, SessionInfo } from '../hooks/types'
 
 const config = (overrides: Partial<PantheonConfig> = {}): PantheonConfig => ({
-  profile: 'mixed',
-  sandboxCap: 'workspace-write', noNetwork: false, foregroundMinutes: 5, disabledAgents: [],
+  disabledAgents: [],
   agents: {
-    explorer: { engine: 'codex', model: 'explorer-model' }, librarian: { engine: 'codex' }, executor: { engine: 'codex', model: 'executor-model' },
-    oracle: { engine: 'claude', model: 'oracle-model' }, designer: { engine: 'claude' }, git: { engine: 'codex' },
+    'code-reader': { model: 'code-reader-model' }, 'docs-reader': {}, developer: { model: 'developer-model' },
+    architect: { model: 'architect-model' }, qa: { model: 'qa-model' }, ux: {}, git: {},
   },
   council: { seats: {
-    alpha: { engine: 'codex', model: 'alpha-model' },
-    beta: { engine: 'claude', model: 'beta-model' },
+    alpha: { model: 'alpha-model' },
+    beta: { model: 'beta-model' },
   } },
   ...overrides,
 })
-const job = (overrides: Partial<Job> = {}): Job => ({
-  id: 'job', agent: 'explorer', status: 'running', startedAt: 100, cwd: '/repo', ...overrides,
-})
 const native = (overrides: Partial<Native> = {}): Native => ({
-  id: 'native', role: 'oracle', type: 'pantheon:oracle', task: 'Review', model: 'native-model',
+  id: 'native', role: 'architect', type: 'pantheon:architect', task: 'Review', model: 'native-model',
   rounds: [{ startedAt: 100, status: 'running' }], ctx: 40, out: 10, steps: 2, ...overrides,
 })
-const roster = (jobs: Job[] = [], natives: Native[] = [], c = config(), session: SessionInfo = { isRunning: false }) =>
-  buildRoster({ jobs, natives, config: c, session })
+const roster = (natives: Native[] = [], c = config(), session: SessionInfo = { isRunning: false }) =>
+  buildRoster({ natives, config: c, session })
 
-test('eight slots in fixed order with nothing running', () => {
+test('nine slots in fixed order with nothing running', () => {
   const result = roster()
-  expect(ROLE_ORDER).toEqual(['orchestrator', 'explorer', 'librarian', 'executor', 'oracle', 'designer', 'git', 'council'])
+  expect(ROLE_ORDER).toEqual(['lead', 'code-reader', 'docs-reader', 'developer', 'architect', 'qa', 'ux', 'git', 'council'])
   expect(result.slots.map(s => s.name)).toEqual(ROLE_ORDER)
-  expect(result.slots.map(s => s.state)).toEqual(Array(8).fill('idle'))
+  expect(result.slots.map(s => s.state)).toEqual(Array(9).fill('idle'))
   expect(result.others).toEqual([])
-  expect(result.counts).toEqual({ active: 0, idle: 8, off: 0 })
+  expect(result.counts).toEqual({ active: 0, idle: 9, off: 0 })
 })
 
 test('active, idle with last ended, and off', () => {
-  const result = roster([job()], [native({ rounds: [{ startedAt: 100, endedAt: 200, status: 'done' }] })],
-    config({ disabledAgents: ['librarian'] }))
+  const result = roster([
+    native({ id: 'run', role: 'code-reader', type: 'pantheon:code-reader' }),
+    native({ rounds: [{ startedAt: 100, endedAt: 200, status: 'done' }] }),
+  ], config({ disabledAgents: ['docs-reader'] }))
   expect(result.slots[1].state).toBe('active')
   expect(result.slots[4]).toEqual(expect.objectContaining({ state: 'idle', lastEndedAt: 200 }))
   expect(result.slots[2]).toEqual(expect.objectContaining({ state: 'off', offReason: 'disabledAgents' }))
-  expect(result.counts).toEqual({ active: 1, idle: 6, off: 1 })
+  expect(result.counts).toEqual({ active: 1, idle: 7, off: 1 })
 })
 
 test('parallel instances stack', () => {
   const result = roster([
-    job({ id: 'one', agent: 'executor', sessionId: 'first' }),
-    job({ id: 'two', agent: 'executor', sessionId: 'second' }),
+    native({ id: 'one', role: 'developer', type: 'pantheon:developer' }),
+    native({ id: 'two', role: 'developer', type: 'pantheon:developer' }),
   ])
   expect(result.slots[3].instances.map(i => i.id)).toEqual(['one', 'two'])
   expect(result.slots[3].state).toBe('active')
   expect(result.counts.active).toBe(1)
 })
 
-test('jobs sharing a sessionId are one line with N rounds', () => {
-  const jobs = [
-    job({ id: 'third', sessionId: 'shared', startedAt: 300, endedAt: 350, status: 'error',
-      description: 'Latest task', model: 'latest-model', lastActivity: 'Latest activity',
-      tokens: { input: 70, cached: 20, output: 15 } }),
-    job({ id: 'first', sessionId: 'shared', startedAt: 100, endedAt: 150, status: 'done' }),
-    job({ id: 'second', sessionId: 'shared', startedAt: 200, endedAt: 250, status: 'done' }),
-  ]
-  const snapshot = JSON.stringify(jobs)
-  const instance = roster(jobs).slots[1].instances[0]
-  expect(instance).toEqual(expect.objectContaining({
-    id: 'first', status: 'error', isActive: false, startedAt: 300, endedAt: 350,
-    task: 'Latest task', model: 'latest-model', activity: 'Latest activity', resumeId: 'third',
-    tokens: { input: 70, cached: 20, out: 15 },
+test('a native with several rounds is one line showing its latest round', () => {
+  const natives = [native({
+    id: 'multi', role: 'code-reader', type: 'pantheon:code-reader', task: 'Latest task', model: 'latest-model',
+    lastTool: 'Read', rounds: [
+      { startedAt: 100, endedAt: 150, status: 'done' },
+      { startedAt: 200, endedAt: 250, status: 'done' },
+      { startedAt: 300, endedAt: 350, status: 'failed' },
+    ],
+  })]
+  const snapshot = JSON.stringify(natives)
+  const instances = roster(natives).slots[1].instances
+  expect(instances).toHaveLength(1)
+  expect(instances[0]).toEqual(expect.objectContaining({
+    id: 'multi', status: 'failed', isActive: false, startedAt: 300, endedAt: 350,
+    task: 'Latest task', model: 'latest-model', activity: 'Read', tokens: { ctx: 40, out: 10, steps: 2 },
   }))
-  expect(instance.rounds).toEqual([
+  expect(instances[0].rounds).toEqual([
     { startedAt: 100, endedAt: 150, status: 'done' },
     { startedAt: 200, endedAt: 250, status: 'done' },
-    { startedAt: 300, endedAt: 350, status: 'error' },
+    { startedAt: 300, endedAt: 350, status: 'failed' },
   ])
-  expect(JSON.stringify(jobs)).toBe(snapshot)
+  expect(JSON.stringify(natives)).toBe(snapshot)
 })
 
 test('the council slot lists every configured seat', () => {
-  expect(roster([], [], config()).slots[7].seats).toEqual(['alpha', 'beta'])
+  expect(roster([], config()).slots[8].seats).toEqual(['alpha', 'beta'])
 })
 
 test('council is one slot', () => {
-  const jobs = [job({ agent: 'councillor:alpha' })]
-  const natives = [native({ role: 'councillor-beta' })]
-  const council = roster(jobs, natives, config({ disabledAgents: ['councillor:beta'] })).slots[7]
-  expect(council).toEqual(expect.objectContaining({ state: 'active', engine: 'mixed', seatsOff: ['beta'] }))
-  expect(council.instances.map(i => [i.engine, i.seat])).toEqual([['codex', 'alpha'], ['claude', 'beta']])
-  expect(roster(jobs, natives, config({ disabledAgents: ['council'] })).slots[7])
+  const natives = [native({ id: 'a', role: 'councillor-alpha', type: 'pantheon:councillor-alpha' }), native({ id: 'b', role: 'councillor-beta' })]
+  const council = roster(natives, config({ disabledAgents: ['councillor:beta'] })).slots[8]
+  expect(council).toEqual(expect.objectContaining({ state: 'active', seatsOff: ['beta'] }))
+  expect(council.instances.map(i => i.seat)).toEqual(['alpha', 'beta'])
+  expect(roster(natives, config({ disabledAgents: ['council'] })).slots[8])
     .toEqual(expect.objectContaining({ state: 'off', offReason: 'disabledAgents' }))
 })
 
 test('council is off when every seat is disabled with either spelling', () => {
-  expect(roster([], [], config({ disabledAgents: ['councillor:alpha', 'councillor-beta'] })).slots[7].state).toBe('off')
-  expect(roster([], [], config({ council: { seats: {} } })).slots[7].state).toBe('off')
+  expect(roster([], config({ disabledAgents: ['councillor:alpha', 'councillor-beta'] })).slots[8].state).toBe('off')
+  expect(roster([], config({ council: { seats: {} } })).slots[8].state).toBe('off')
 })
 
 test('delegating lists active roles in order', () => {
-  const result = roster([job({ agent: 'executor' }), job({ id: 'explorer', status: 'background' }),
-    job({ id: 'seat', agent: 'councillor:alpha' })], [native({ role: 'designer' })],
-    config(), { isRunning: true, model: 'session-model' })
-  expect(result.delegating).toEqual(['explorer', 'executor', 'designer', 'council'])
-  expect(result.slots[0]).toEqual(expect.objectContaining({ state: 'active', model: 'session-model', engine: 'claude' }))
+  const result = roster([
+    native({ id: 'e', role: 'developer' }), native({ id: 'x', role: 'code-reader' }),
+    native({ id: 'seat', role: 'councillor-alpha' }), native({ id: 'd', role: 'ux' }), native({ id: 'q', role: 'qa' }),
+  ], config(), { isRunning: true, model: 'session-model' })
+  expect(result.delegating).toEqual(['code-reader', 'developer', 'qa', 'ux', 'council'])
+  expect(result.slots[0]).toEqual(expect.objectContaining({ state: 'active', model: 'session-model' }))
 })
 
-test('orchestrator is never off and roles use disabledAgents', () => {
-  const result = roster([], [], config({ disabledAgents: ['orchestrator', 'oracle', 'designer'] }),
+test('lead is never off and roles use disabledAgents', () => {
+  const result = roster([], config({ disabledAgents: ['lead', 'architect', 'ux'] }),
     { isRunning: false, model: 'session-model' })
   expect(result.slots[0]).toEqual(expect.objectContaining({ state: 'idle', model: 'session-model' }))
   expect(result.slots[4].state).toBe('off')
-  expect(result.slots[5].state).toBe('off')
+  expect(result.slots[6].state).toBe('off')
 })
 
 test('other agents only when present', () => {
-  const result = roster([], [native({ role: 'other', lastTool: 'Read', rounds: [
+  const result = roster([native({ role: 'other', lastTool: 'Read', rounds: [
     { startedAt: 100, endedAt: 200, status: 'done' }, { startedAt: 300, status: 'running' },
   ] })])
   expect(result.others).toHaveLength(1)
   expect(result.others[0]).toEqual(expect.objectContaining({
-    engine: 'claude', isActive: true, startedAt: 300, activity: 'Read',
+    isActive: true, startedAt: 300, activity: 'Read',
     tokens: { ctx: 40, out: 10, steps: 2 },
   }))
   expect(result.others[0].rounds).toHaveLength(2)
@@ -126,42 +125,48 @@ test('other agents only when present', () => {
 })
 
 test('active instances precede every ended instance, newest end first', () => {
+  const ex = (o: Partial<Native>) => native({ role: 'code-reader', type: 'pantheon:code-reader', ...o })
   const result = roster([
-    job({ id: 'old', status: 'done', endedAt: 150 }),
-    job({ id: 'latest', status: 'done', startedAt: 80, endedAt: 400 }),
-    job({ id: 'active', status: 'background', startedAt: 300, sessionId: 'live', model: 'running-model' }),
-    job({ id: 'middle', status: 'cancelled', startedAt: 200, endedAt: 250 }),
+    ex({ id: 'old', rounds: [{ startedAt: 50, endedAt: 150, status: 'done' }] }),
+    ex({ id: 'latest', rounds: [{ startedAt: 80, endedAt: 400, status: 'done' }] }),
+    ex({ id: 'active', model: 'running-model', rounds: [{ startedAt: 300, status: 'running' }] }),
+    ex({ id: 'middle', rounds: [{ startedAt: 200, endedAt: 250, status: 'stopped' }] }),
   ])
   expect(result.slots[1].instances.map(i => i.id)).toEqual(['active', 'latest', 'middle', 'old'])
   expect(result.slots[1].lastEndedAt).toBe(400)
   expect(result.slots[1].model).toBe('running-model')
-  expect(result.slots[1].instances[0].resumeId).toBeUndefined()
 })
 
 test('history keeps every line of a role, oldest first, for the timeline', () => {
+  const ex = (o: Partial<Native>) => native({ role: 'code-reader', type: 'pantheon:code-reader', ...o })
   const result = roster([
-    job({ id: 'late', status: 'done', startedAt: 300, endedAt: 400 }),
-    job({ id: 'early', status: 'done', startedAt: 100, endedAt: 200 }),
+    ex({ id: 'late', rounds: [{ startedAt: 300, endedAt: 400, status: 'done' }] }),
+    ex({ id: 'early', rounds: [{ startedAt: 100, endedAt: 200, status: 'done' }] }),
   ])
   expect(result.slots[1].instances.map(i => i.id)).toEqual(['late', 'early'])
   expect(result.slots[1].history?.map(i => i.id)).toEqual(['early', 'late'])
 })
 
-test('jobs without session ids stay separate and missing tokens default to zero output', () => {
-  const instances = roster([job({ id: 'one' }), job({ id: 'two' })]).slots[1].instances
-  expect(instances).toHaveLength(2)
-  expect(instances[0].tokens).toEqual({ out: 0 })
-  expect(instances[0].resumeId).toBeUndefined()
+test('a native without rounds is skipped', () => {
+  const result = roster([native({ rounds: [] })])
+  expect(result.slots[4].instances).toEqual([])
+  expect(result.others).toEqual([])
 })
 
 test('idle rows use configured models instead of the last instance model', () => {
-  const result = roster([job({ status: 'done', endedAt: 200, model: 'old-model' })],
+  const result = roster(
     [native({ rounds: [{ startedAt: 100, endedAt: 200, status: 'stopped' }] })],
-    config({ council: { seats: { alpha: { engine: 'codex', model: 'seat-model' } } } }))
-  expect(result.slots[1].model).toBe('explorer-model')
-  expect(result.slots[4].model).toBe('oracle-model')
+    config({ council: { seats: { alpha: { model: 'seat-model' } } } }))
+  expect(result.slots[1].model).toBe('code-reader-model')
+  expect(result.slots[4].model).toBe('architect-model')
   expect(result.slots[4].instances[0].isActive).toBe(false)
-  expect(result.slots[7]).toEqual(expect.objectContaining({ engine: 'codex', model: 'seat-model' }))
+  expect(result.slots[8].model).toBe('seat-model')
+})
+
+test('council shows a model only when its active seats share one', () => {
+  expect(roster([], config()).slots[8].model).toBeUndefined()
+  expect(roster([], config({ disabledAgents: ['councillor:beta'] })).slots[8].model).toBe('alpha-model')
+  expect(roster([], DEFAULTS).slots[8].model).toBeUndefined()
 })
 
 test('ago formats', () => {
@@ -174,35 +179,20 @@ test('ago formats', () => {
   expect(ago(0)).toBe('0s')
 })
 
-test('every role follows its configured engine and accepts either execution engine', () => {
-  for (const role of ['explorer', 'librarian', 'executor', 'oracle', 'designer', 'git'] as const) {
-    const idle = roster([], [], CODEX).slots.find(s => s.name === role)!
-    expect(idle).toEqual(expect.objectContaining({ engine: 'codex', state: 'idle' }))
-    expect(roster([job({ agent: role })], [], CODEX).slots.find(s => s.name === role))
-      .toEqual(expect.objectContaining({ engine: 'codex', state: 'active' }))
-    const result = roster([], [native({ role, type: `pantheon:${role}` })], CLAUDE)
-    expect(result.slots.find(s => s.name === role))
-      .toEqual(expect.objectContaining({ engine: 'claude', state: 'active' }))
+test('every role is a native slot with its default model', () => {
+  for (const role of ['code-reader', 'docs-reader', 'developer', 'architect', 'qa', 'ux', 'git'] as const) {
+    const idle = roster([], DEFAULTS).slots.find(s => s.name === role)!
+    expect(idle).toEqual(expect.objectContaining({ state: 'idle', model: DEFAULTS.agents[role].model }))
+    const result = roster([native({ role, type: `pantheon:${role}` })], DEFAULTS)
+    expect(result.slots.find(s => s.name === role)).toEqual(expect.objectContaining({ state: 'active' }))
     expect(result.others).toEqual([])
   }
-  expect(roster([], [], { ...CODEX, disabledAgents: ['oracle'] }).slots[4].state).toBe('off')
+  expect(roster([], { ...DEFAULTS, disabledAgents: ['architect'] }).slots[4].state).toBe('off')
 })
 
-test('only active instances and the latest ended one set the slot engine', () => {
-  const ended = native({ role: 'explorer', type: 'pantheon:explorer',
-    rounds: [{ startedAt: 100, endedAt: 200, status: 'done' }] })
-  expect(roster([job()], [ended]).slots[1].engine).toBe('mixed')
-  expect(roster([], [ended]).slots[1].engine).toBe('mixed')
-  const result = roster([job({ status: 'done', endedAt: 300 })], [ended])
-  expect(result.slots[1].engine).toBe('codex')
-  expect(result.slots[1].instances.map(i => i.engine)).toEqual(['codex', 'claude'])
-})
-
-test('council engines do not disable seats', () => {
-  for (const c of [CODEX, CLAUDE]) {
-    expect(roster([], [], c).slots[7]).toEqual(expect.objectContaining({ state: 'idle', engine: c.profile }))
-    expect(roster([], [], { ...c, disabledAgents: ['councillor:alpha'] }).slots[7].state).toBe('idle')
-    expect(roster([], [], { ...c, disabledAgents: ['council'] }).slots[7].state).toBe('off')
-    expect(roster([], [], { ...c, disabledAgents: Object.keys(c.council.seats).map(n => `councillor:${n}`) }).slots[7].state).toBe('off')
-  }
+test('seats do not disable the council one by one', () => {
+  expect(roster([], DEFAULTS).slots[8].state).toBe('idle')
+  expect(roster([], { ...DEFAULTS, disabledAgents: ['councillor:alpha'] }).slots[8].state).toBe('idle')
+  expect(roster([], { ...DEFAULTS, disabledAgents: ['council'] }).slots[8].state).toBe('off')
+  expect(roster([], { ...DEFAULTS, disabledAgents: Object.keys(DEFAULTS.council.seats).map(n => `councillor:${n}`) }).slots[8].state).toBe('off')
 })

@@ -1,4 +1,4 @@
-// Pure visual vocabulary for the panel: role and section colors, terminal cell math, gauges, job strips and boxes.
+// Pure visual vocabulary for the panel: role and section colors, terminal cell math, gauges, round strips and boxes.
 import type { SlotName } from './roster'
 
 export type Run = { text: string; color?: string; dim?: boolean }
@@ -6,12 +6,13 @@ export type Line = Run[]
 export type StripItem = { state: 'running' | 'done' | 'failed' | 'planned'; role: SlotName }
 
 export const ROLE_COLOR: Record<SlotName, string> = {
-  orchestrator: '#5B93E6',
-  explorer: '#3FA57D',
-  librarian: '#C9A24A',
-  executor: '#8F96A6',
-  oracle: '#A56BD8',
-  designer: '#D870A8',
+  lead: '#5B93E6',
+  'code-reader': '#3FA57D',
+  'docs-reader': '#C9A24A',
+  developer: '#8F96A6',
+  architect: '#A56BD8',
+  qa: '#4FB3C9',
+  ux: '#D870A8',
   git: '#E8873A',
   council: '#B8B3A6',
 }

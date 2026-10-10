@@ -1,6 +1,6 @@
 import { test, expect } from 'claude-code/testing'
 import { gateContext, gateMessage, type GateEvent } from '../hooks/gate'
-import type { EditContext, Verdict } from '../hooks/decisions'
+import { rulesVerdict, type EditContext, type Verdict } from '../hooks/decisions'
 
 const env = { root: '/repo', home: '/home/person', uid: '501' }
 const edit: GateEvent = { tool: 'Edit', file_path: '/repo/src/main.ts', old_string: 'old', new_string: 'new' }
@@ -22,9 +22,37 @@ for (const tool of ['Read', 'Bash', 'Unknown']) {
   })
 }
 
-for (const file_path of ['/repo/.pantheon/plan.md', '/home/person/.claude/plans/note.md', '/home/person/.claude/projects/repo/memory/note.md', '/tmp/claude-501/repo/session/scratchpad/note.md', '/private/tmp/claude-501/repo/session/scratchpad/note.md', '.pantheon/plan.md']) {
+for (const file_path of ['/repo/.pantheon/plans/plan.md', '/home/person/.claude/plans/note.md', '/home/person/.claude/projects/repo/memory/note.md', '/tmp/claude-501/repo/session/scratchpad/note.md', '/private/tmp/claude-501/repo/session/scratchpad/note.md', '.pantheon/plans/plan.md']) {
   test(`exempts ${file_path}`, () => {
     expect(gateContext({ ...edit, file_path }, env).skip).toBe(true)
+  })
+}
+
+// `.pantheon/flow/**` holds the approval and the state the flow trusts: never exempt, and never a change the rules call
+// trivial, however small (an unknown size is an ask). Only the plans are exempt from `.pantheon`.
+for (const file_path of [
+  '/repo/.pantheon/flow/demo/approved.json', '/repo/.pantheon/flow/demo/state.json', '/repo/.pantheon/flow/active', '/repo/.pantheon/flow/active.json',
+  '.pantheon/flow/demo/journal.jsonl', '/repo/.PANTHEON/Flow/demo/approved.json', '/repo/.pantheon/plans/../flow/demo/approved.json', '/repo/.pantheon/flow',
+]) {
+  test(`does not exempt the flow's own file ${file_path} and asks even for a one-line change`, () => {
+    const result = gateContext({ ...edit, file_path }, env)
+    expect(result.skip).toBe(false)
+    if (!result.skip) {
+      expect(result.ctx.linesAdded).toBeUndefined()
+      expect(result.ctx.linesRemoved).toBeUndefined()
+      expect(rulesVerdict(result.ctx).action).toBe('ask')
+    }
+    const write = gateContext({ tool: 'Write', file_path, content: '{}' }, env)
+    expect(write.skip).toBe(false)
+    if (!write.skip) expect(rulesVerdict(write.ctx).action).toBe('ask')
+  })
+}
+
+for (const file_path of ['/repo/.pantheon/plan.md', '/repo/.pantheon/notes/a.md', '/repo/.pantheon/flows/a.json', '.pantheon/plan.md']) {
+  test(`only .pantheon/plans is exempt from .pantheon: ${file_path} is judged by the rules`, () => {
+    const result = gateContext({ ...edit, file_path }, env)
+    expect(result.skip).toBe(false)
+    if (!result.skip) expect(rulesVerdict(result.ctx).action).toBe('allow')
   })
 }
 
@@ -35,8 +63,8 @@ for (const file_path of ['/repo/.pantheon/../main.ts', '/tmp/session/../main.ts'
 }
 
 test('normalizes paths before checking exemptions and injected roots', () => {
-  expect(gateContext({ ...edit, file_path: '/repo/src/../.pantheon/plan.md' }, env).skip).toBe(true)
-  expect(gateContext({ ...edit, file_path: '/repo/.pantheon/plan.md' }, { ...env, root: '/repo/./' }).skip).toBe(true)
+  expect(gateContext({ ...edit, file_path: '/repo/src/../.pantheon/plans/plan.md' }, env).skip).toBe(true)
+  expect(gateContext({ ...edit, file_path: '/repo/.pantheon/plans/plan.md' }, { ...env, root: '/repo/./' }).skip).toBe(true)
   expect(gateContext({ ...edit, file_path: '/tmp/session/note.txt' }, { root: env.root, home: env.home }).skip).toBe(false)
 })
 
@@ -100,34 +128,39 @@ test('missing or non-string Edit fields keep counts unknown', () => {
 })
 
 for (const action of ['allow', 'ask', 'deny'] as const) {
-  for (const source of ['jev', 'rules'] as const) {
-    for (const executor of [false, true]) {
-      for (const designer of [false, true]) {
-        test(`message: ${action}, ${source}, executor=${executor}, designer=${designer}`, () => {
-          const verdict: Verdict = { action, source, score: source === 'jev' ? 0.42 : undefined, reason: 'Decision reason.' }
-          const message = gateMessage(verdict, { ...context(edit), path: 'src/view.tsx', ext: '.tsx' }, { executor, designer })
-          expect(message).toContain(source)
-          if (source === 'jev') expect(message).toContain('0.42')
-          if (action === 'allow') {
-            expect(message).toContain('Allowed')
-          } else {
-            expect(message).toContain(action === 'deny' ? 'Denied' : 'Ask')
-            expect(message.split('\n').length).toBeGreaterThanOrEqual(2)
-            expect(message.split('\n').length).toBeLessThanOrEqual(3)
-            expect(message).toContain('main session should not edit it itself')
-            expect(message.includes('executor')).toBe(executor)
-            expect(message.includes('designer')).toBe(designer)
-            if (!executor || !designer) expect(message).toContain('ask the person')
-          }
-        })
-      }
+  for (const developer of [false, true]) {
+    for (const ux of [false, true]) {
+      test(`message: ${action}, developer=${developer}, ux=${ux}`, () => {
+        const verdict: Verdict = { action, reason: 'Decision reason.' }
+        const message = gateMessage(verdict, { developer, ux })
+        expect(message).toContain('by rules')
+        if (action === 'allow') {
+          expect(message).toContain('Allowed')
+        } else {
+          expect(message).toContain(action === 'deny' ? 'Denied' : 'Ask')
+          expect(message.split('\n').length).toBeGreaterThanOrEqual(2)
+          expect(message.split('\n').length).toBeLessThanOrEqual(3)
+          expect(message).toContain('main session should not edit it itself')
+          // Code goes to developer and visual work to ux; a disabled role is not recommended.
+          expect(message.includes('delegate to developer')).toBe(developer)
+          expect(message.includes('ux')).toBe(ux)
+          expect(message.includes('ask the person')).toBe(!developer)
+        }
+      })
     }
   }
 }
 
-for (const ext of ['.tsx', '.jsx', '.css', '.scss', '.svelte', '.vue', '.html', '.ts']) {
-  test(`designer routing for ${ext}`, () => {
-    const message = gateMessage({ action: 'deny', source: 'rules', reason: '' }, { ...context(edit), path: `src/file${ext}`, ext }, { executor: true, designer: true })
-    expect(message.includes('designer')).toBe(ext !== '.ts')
-  })
-}
+test('the message names developer for code and ux for visual work', () => {
+  const verdict: Verdict = { action: 'deny', reason: '' }
+  expect(gateMessage(verdict, { developer: true, ux: true })).toContain('delegate to developer (code) or ux (visual work)')
+  expect(gateMessage(verdict, { developer: true, ux: false })).toContain('Please delegate to developer;')
+  expect(gateMessage(verdict, { developer: false, ux: true })).toContain('ask the person to handle implementation; delegate visual work to ux')
+})
+
+test('a 3000-line Write is denied by the size rule although removed lines are unknown', () => {
+  const ctx = context({ tool: 'Write', file_path: '/repo/src/big.ts', content: 'line\n'.repeat(3000) })
+  expect(ctx.linesAdded).toBe(3000)
+  expect(ctx.linesRemoved).toBeUndefined()
+  expect(rulesVerdict(ctx).action).toBe('deny')
+})

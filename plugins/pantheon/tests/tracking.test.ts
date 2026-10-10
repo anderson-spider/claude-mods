@@ -7,22 +7,25 @@ import {
 import type { Native, SessionInfo } from '../hooks/types'
 
 const spawn = (id = 'a', now = 100) => ({
-  id, type: 'pantheon:oracle', task: 'Review the change', model: 'test-model', now,
+  id, type: 'pantheon:architect', task: 'Review the change', model: 'test-model', now,
 })
 
 test('roleOf maps pantheon types and others', () => {
-  for (const role of ['explorer', 'librarian', 'executor', 'oracle', 'designer']) {
+  for (const role of ['code-reader', 'docs-reader', 'developer', 'architect', 'qa', 'ux']) {
     expect(roleOf(`pantheon:${role}`)).toBe(role)
   }
-  expect(roleOf('pantheon:oracle')).toBe('oracle')
-  expect(roleOf('pantheon:designer')).toBe('designer')
+  expect(roleOf('pantheon:architect')).toBe('architect')
+  expect(roleOf('pantheon:qa')).toBe('qa')
+  expect(roleOf('pantheon:ux')).toBe('ux')
   expect(roleOf('pantheon:councillor-beta')).toBe('councillor-beta')
   expect(roleOf('Explore')).toBe('other')
+  // Types of the former role names, left in a saved state, count as other agents.
+  for (const old of ['explorer', 'librarian', 'executor', 'designer', 'oracle']) expect(roleOf(`pantheon:${old}`)).toBe('other')
 })
 
 test('spawn creates a record with one running round', () => {
   expect(spawned([], spawn())).toEqual([{
-    id: 'a', role: 'oracle', type: 'pantheon:oracle', task: 'Review the change',
+    id: 'a', role: 'architect', type: 'pantheon:architect', task: 'Review the change',
     model: 'test-model', rounds: [{ startedAt: 100, status: 'running' }],
     ctx: 0, out: 0, steps: 0,
   }])
@@ -120,7 +123,7 @@ test('markNativesLost turns running rounds into lost', () => {
 })
 
 test('normalizeNatives drops broken records', () => {
-  expect(normalizeNatives([{ id: 'a', role: 'other', type: 'pantheon:executor', rounds: [] }])[0].role).toBe('executor')
+  expect(normalizeNatives([{ id: 'a', role: 'other', type: 'pantheon:developer', rounds: [] }])[0].role).toBe('developer')
   expect(normalizeNatives('x')).toEqual([])
   const list = normalizeNatives([{ id: 'a' }, { id: 'b', rounds: [] }, null])
   expect(list.length).toBe(1)

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { MIXED } from './fixtures/profiles'
-import { buildOrchestratorSection } from '../hooks/prompts/orchestrator'
+import { DEFAULTS } from './fixtures/config'
+import { buildLeadSection } from '../hooks/prompts/lead'
 import { buildCouncilBlock, isCouncilOrigin, matchesCouncilTrigger } from '../hooks/prompts/council'
 
 describe('council triggers', () => {
@@ -35,45 +35,47 @@ describe('council triggers', () => {
 })
 
 describe('council block', () => {
-  test('dispatches every seat by engine in background and preserves synthesis', () => {
-    const block = buildCouncilBlock(MIXED)
-    expect(block).toContain('delegate({ agent: "councillor:alpha", background: true')
+  test('dispatches every seat as a native background Agent call and preserves synthesis', () => {
+    const block = buildCouncilBlock(DEFAULTS)
+    expect(block).toContain('Agent({ subagent_type: "pantheon:councillor-alpha", run_in_background: true')
     expect(block).toContain('Agent({ subagent_type: "pantheon:councillor-beta", run_in_background: true')
+    expect(block).not.toContain('delegate')
     for (const text of ['## Council Response', '## Per-Councillor Details', '## Council Summary', 'Consensus Level', 'unanimous', 'majority', 'split', 'Agreed Points', 'Disagreements', 'Remaining Uncertainty', 'Recommended Action']) {
       expect(block).toContain(text)
     }
   })
   test('fetches context first, retries empty results once and keeps all failures visible', () => {
-    const block = buildCouncilBlock(MIXED)
-    for (const text of ['FIRST', 'read-only', 'same turn', 'delegate_result', 'retry an empty seat once', 'failed', 'delegate_cancel', 'no fixed deadline', 'seat name', 'synthesize yourself']) {
+    const block = buildCouncilBlock(DEFAULTS)
+    for (const text of ['FIRST', 'read-only', 'same turn', 'retry an empty seat once', 'failed', 'no fixed deadline', 'seat name', 'synthesize yourself']) {
       expect(block).toContain(text)
     }
     expect(block).not.toContain('3 minutes')
     expect(block).not.toContain('agent: "council"')
   })
   test('renders arbitrary seats deterministically without default-seat leftovers', () => {
-    const config = { ...MIXED, council: { seats: { zeta: { engine: 'claude' as const }, gamma: { engine: 'codex' as const } } } }
+    const config = { ...DEFAULTS, council: { seats: { zeta: {}, gamma: { model: 'haiku' } } } }
     const block = buildCouncilBlock(config)
-    expect(block).toContain('councillor:gamma')
+    expect(block).toContain('pantheon:councillor-gamma')
     expect(block).toContain('pantheon:councillor-zeta')
+    expect(block.indexOf('councillor-gamma')).toBeLessThan(block.indexOf('councillor-zeta'))
     expect(block).not.toContain('alpha')
     expect(block).not.toContain('beta')
     expect(block).toBe(buildCouncilBlock(config))
   })
   test('disabled council has no block or seat line', () => {
-    const config = { ...MIXED, disabledAgents: ['council'] }
+    const config = { ...DEFAULTS, disabledAgents: ['council'] }
     expect(buildCouncilBlock(config)).toBe('')
-    expect(buildOrchestratorSection(config)).not.toContain('councillor')
+    expect(buildLeadSection(config)).not.toContain('councillor')
   })
   test('no seats means no procedure to dispatch', () => {
-    expect(buildCouncilBlock({ ...MIXED, council: { seats: {} } })).toBe('')
+    expect(buildCouncilBlock({ ...DEFAULTS, council: { seats: {} } })).toBe('')
   })
 })
 
-test('disabled seat is left out of the dispatch and the orchestrator line', () => {
-  const config = { ...MIXED, disabledAgents: ['councillor:alpha'] }
+test('disabled seat is left out of the dispatch and the lead line', () => {
+  const config = { ...DEFAULTS, disabledAgents: ['councillor:alpha'] }
   const block = buildCouncilBlock(config)
-  expect(block).not.toContain('councillor:alpha')
+  expect(block).not.toContain('councillor-alpha')
   expect(block).toContain('pantheon:councillor-beta')
-  expect(buildOrchestratorSection(config)).not.toContain('councillor:alpha')
+  expect(buildLeadSection(config)).not.toContain('councillor-alpha')
 })

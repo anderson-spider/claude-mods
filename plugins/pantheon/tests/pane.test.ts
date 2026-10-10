@@ -2,53 +2,57 @@ import type { On } from 'claude-code'
 import { describe, expect, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
-import { DELEGATE, HOME, ROOT, RESULT, parse, start, world } from './fixtures/world'
-import { PANE_ID, configReport, doctorReport, drawPanel, statusText, timelineSource } from '../hooks/pane'
+import { HOME, start, world } from './fixtures/world'
+import { PANE_ID, configReport, doctorReport, drawPanel, timelineSource } from '../hooks/pane'
 import { loadConfig } from '../hooks/config'
 import { buildRoster } from '../hooks/roster'
 import { BAD, OK, ROLE_COLOR, SECTION_COLOR, cellWidth } from '../hooks/theme'
 import type { Slot } from '../hooks/roster'
-import { MIXED } from './fixtures/profiles'
-import type { Job, Native, PanelView, SessionInfo } from '../hooks/types'
+import { DEFAULTS } from './fixtures/config'
+import type { Native, PanelView, SessionInfo } from '../hooks/types'
 
 const SURFACES = ['terminal', 'desktop'] as const
 const rgba = (hex: string, a: number) => `rgba(${[1, 3, 5].map(k => parseInt(hex.slice(k, k + 2), 16)).join(',')},${a})`
 const NOW = 1_000_000_000
 
-test('config report identifies the active profile and origin before JSON', async () => {
-  const config = await loadConfig(async () => '{"profile":"codex"}', { user: 'fixture' })
-  const lines = configReport(config).split('\n')
-  expect(lines.slice(0, 3)).toContain('Active profile: codex (user)')
+test('config report lists the effective config and the origins of what was set', async () => {
+  const config = await loadConfig(async () => '{"disabledAgents":["git"],"agents":{"architect":{"effort":"high"}}}', { user: 'fixture' })
+  const report = configReport(config)
+  expect(report.split('\n')[0]).toBe('Valid config.')
+  expect(report).toContain('- disabledAgents: user')
+  expect(report).toContain('- agents.architect.effort: user')
+  expect(report).not.toMatch(/profile|codex|sandbox/i)
+  expect(configReport(await loadConfig(async () => undefined, { user: 'fixture' }))).toContain('- every field at its default')
 })
 
-test('doctor treats unavailable Codex as informational only when unused', async () => {
-  const config = await loadConfig(async () => '{"profile":"claude"}', { user: 'fixture' })
-  const facts = { usesCodex: false, profile: 'claude', loginOk: false, config, root: '/repo', isRepo: true }
-  const report = doctorReport(facts)
-  expect(report).not.toContain('fail')
-  expect(report).toContain('info')
-  expect(report).toContain('not needed by profile claude')
-  expect(doctorReport({ ...facts, usesCodex: true })).toContain('fail')
+test('config report names the error of an invalid config', async () => {
+  const config = await loadConfig(async () => '{"profile":"codex"}', { user: 'fixture' })
+  expect(configReport(config)).toContain('Invalid config: fixture: profile: profiles were removed')
 })
 
 test('doctor report adds a ping section only when pings are given', async () => {
-  const config = await loadConfig(async () => '{"profile":"mixed"}', { user: 'fixture' })
-  const facts = { usesCodex: true, profile: 'mixed', loginOk: true, config, root: '/repo', isRepo: true }
-  expect(doctorReport(facts)).not.toContain('ping')
+  const config = await loadConfig(async () => '{}', { user: 'fixture' })
+  const facts = { config }
+  expect(doctorReport(facts)).toBe('ok   config')
   const report = doctorReport({
     ...facts,
     pings: [
-      { name: 'explorer', engine: 'codex', model: 'gpt-6-luna', state: 'ok', ms: 1200 },
-      { name: 'oracle', engine: 'codex', model: 'gpt-6-luna', state: 'fail', detail: 'timeout' },
-      { name: 'executor', engine: 'claude', model: 'sonnet', state: 'pending' },
-      { name: 'designer', engine: 'claude', state: 'off' },
+      { name: 'code-reader', model: 'haiku', state: 'ok', ms: 1200 },
+      { name: 'architect', model: 'opus', state: 'fail', detail: 'timeout' },
+      { name: 'developer', model: 'sonnet', state: 'pending' },
+      { name: 'ux', state: 'off' },
     ],
   }).split('\n')
   expect(report).toContain('ping')
-  expect(report).toContain('ok   explorer (codex gpt-6-luna) 1.2s')
-  expect(report).toContain('fail oracle (codex gpt-6-luna): timeout')
-  expect(report).toContain('pending executor (claude sonnet) — the session confirms')
-  expect(report).toContain('info designer off')
+  expect(report).toContain('ok   code-reader (haiku) 1.2s')
+  expect(report).toContain('fail architect (opus): timeout')
+  expect(report).toContain('pending developer (sonnet) — the session confirms')
+  expect(report).toContain('info ux off')
+})
+
+test('doctor report marks an invalid config', async () => {
+  const config = await loadConfig(async () => '{ broken', { user: 'fixture' })
+  expect(doctorReport({ config })).toBe('fail config: fixture: Invalid JSON')
 })
 
 type Opts = { placement?: 'dock' | 'inline'; columns?: number; rows?: number; bodyRows?: number; requestId?: string }
@@ -85,19 +89,25 @@ function command($: Engine, args: string) {
   return $.command.run({ command: 'pantheon', args } as never)
 }
 
-// Serves the draw-time state reads, standing for what tracking and the jobs would have written.
-function seed(on: On, data: { jobs?: Job[]; natives?: Native[]; session?: SessionInfo; view?: PanelView }) {
+// Serves the draw-time state reads, standing for what tracking would have written.
+function seed(on: On, data: { natives?: Native[]; session?: SessionInfo; view?: PanelView }) {
   on('state.get', async (_$, e, next) => {
     const value = data[e.key as keyof typeof data]
     return value === undefined ? next(e) : ({ value: { value, version: 1 } } as never)
   })
 }
 
-const job = (over: Partial<Job> = {}): Job => ({
-  id: 'j1', agent: 'explorer', status: 'background', startedAt: NOW - 60_000, cwd: '/repo', ...over,
-})
+/** A native of `role` with a single round (override `rounds` for more); `status` and the times shape that round. */
+const run = (over: Partial<Native> & { status?: 'running' | 'done' | 'failed' | 'stopped' | 'lost'; startedAt?: number; endedAt?: number } = {}): Native => {
+  const { status = 'running', startedAt = NOW - 60_000, endedAt, ...rest } = over
+  const role = rest.role ?? 'code-reader'
+  return {
+    id: 'j1', role, type: `pantheon:${role}`, task: '', model: 'haiku', ctx: 0, out: 0, steps: 0,
+    rounds: [{ startedAt, status, ...(endedAt !== undefined ? { endedAt } : {}) }], ...rest,
+  }
+}
 const native = (over: Partial<Native> = {}): Native => ({
-  id: 'n1', role: 'oracle', type: 'pantheon:oracle', task: 'Review the lifecycle', model: 'opus',
+  id: 'n1', role: 'architect', type: 'pantheon:architect', task: 'Review the lifecycle', model: 'opus',
   rounds: [{ startedAt: NOW - 120_000, status: 'running' }], ctx: 5200, out: 310, steps: 4, lastTool: 'Read jobs.ts', ...over,
 })
 
@@ -134,7 +144,7 @@ describe('pane', () => {
 
   for (const surface of SURFACES) t(`the pane is the agents view only: no tabs, no jobs text, footer keys left (${surface})`, async ($, on) => {
     world(on)
-    seed(on, { jobs: [job()], natives: [native()] })
+    seed(on, { natives: [run(), native()] })
     await start($)
     const ui = await mountPane($, surface, { rows: 70 })
     for (const key of ['tab-agents', 'tab-jobs', 'pill-agents', 'pill-jobs', 'jobs-count', 'key-jobs']) expect(await ui.find({ key })).toBeUndefined()
@@ -152,136 +162,10 @@ describe('pane', () => {
   })
 
   for (const surface of SURFACES) {
-    for (const placement of ['dock', 'inline'] as const) {
-      for (const profile of ['claude', 'codex']) {
-        test(`profile selector lists custom profiles and writes the selected name (${surface}, ${placement}, ${profile})`,
-          { options: { profile } }, async ($, on) => {
-            try {
-              world(on, { files: { [`${HOME}/.claude/pantheon.json`]: '{"profiles":{"personal":{}}}' } })
-              const writes: unknown[] = []
-              on('config.set', async (_$, e) => { writes.push({ key: e.key, value: e.value }); return { value: e.value } })
-              await start($)
-              const ui = await mountPane($, surface, { placement })
-              const select = await ui.find({ key: 'profile' })
-              expect(select).toBeDefined()
-              const props = (select as unknown as { props: { value: string; options: { value: string }[] } }).props
-              expect(props.value).toBe(profile)
-              expect(props.options.map(o => o.value)).toEqual(['claude', 'codex', 'mixed', 'personal'])
-              await ui.select({ key: 'profile', value: 'personal' })
-              expect(writes).toEqual([{ key: 'pantheon.profile', value: 'personal' }])
-            } finally { await release() }
-          })
-      }
-
-      for (const layer of ['user', 'project'] as const) {
-        t(`profile selector is read-only and names the winning ${layer} layer (${surface}, ${placement})`, async ($, on) => {
-          world(on, { files: {
-            [`${HOME}/.claude/pantheon.json`]: JSON.stringify({ profile: layer === 'project' ? 'claude' : 'mixed' }),
-            ...(layer === 'project' ? { [`${ROOT}/.claude/pantheon.json`]: '{"profile":"mixed"}' } : {}),
-          } })
-          const writes: unknown[] = []
-          on('config.set', async (_$, e) => { writes.push(e); return { value: e.value } })
-          await start($)
-          const ui = await mountPane($, surface, { placement })
-          const all = await texts(ui)
-          expect(all).toContain(`set by ${layer} pantheon.json`)
-          expect(all).toContain('● mixed')
-          expect(all).toContain('claude')
-          expect(all).toContain('codex')
-          expect(await ui.find({ type: 'Select', key: 'profile' })).toBeUndefined()
-          expect(await ui.find({ type: 'Button', key: 'profile-mixed' })).toBeUndefined()
-          expect(writes).toEqual([])
-          await release()
-          const narrow = await mountPane($, surface, { placement, columns: 24 })
-          expect(await texts(narrow)).toContain(`${layer} JSON`)
-          expect(await narrow.find({ type: 'Select', key: 'profile' })).toBeUndefined()
-        })
-      }
-
-      t(`profile selector offers buttons when Select is absent (${surface}, ${placement})`, async ($, on) => {
-        world(on)
-        const choices: string[] = []
-        on('ui.render', { component: 'Pane', requestId: 'profile-fixture' }, ($, e) => {
-          const { Box, Text, Button } = $.ui.resolve(e)
-          return drawPanel({ Box, Text, Button }, {
-            surface, placement, columns: 120, rows: 40, now: NOW,
-            profiles: ['claude', 'codex', 'mixed'], activeProfile: 'mixed', onProfile: name => { choices.push(name) },
-            roster: buildRoster({ jobs: [], natives: [], session: { isRunning: false }, config: MIXED }), session: { isRunning: false },
-            hasClient: false, onCancel: () => {},
-          }) as never
-        })
-        const ui = await mountPane($, surface, { placement, requestId: 'profile-fixture' })
-        const buttons = await ui.findAll({ type: 'Button' })
-        const labels = buttons.map(b => (b as unknown as { props: { label: string } }).props.label)
-        expect(labels).toContain('● mixed')
-        // The fixture, rather than Pantheon, owns the handlers in this drawing.
-        type Node = { props?: { key?: string }; press?: { plugin: string }; children?: Node[] }
-        const nodes = (n: Node): Node[] => [n, ...(n.children ?? []).flatMap(nodes)]
-        const drawn = nodes(await ui.drawn() as Node)
-        for (const name of ['claude', 'codex', 'mixed']) {
-          const key = `profile-${name}`
-          const plugin = drawn.find(n => n.props?.key === key)?.press?.plugin
-          expect(plugin).toBeDefined()
-          await ui.press({ key, plugin })
-        }
-        expect(choices).toEqual(['claude', 'codex', 'mixed'])
-      })
-    }
-  }
-
-  t('the default profile remains interactive without a JSON selection', async ($, on) => {
-    world(on, { files: { [`${HOME}/.claude/pantheon.json`]: '{}' } })
-    const writes: string[] = []
-    const viewWrites: unknown[] = []
-    on('config.set', async (_$, e) => { writes.push(String(e.value)); return { value: e.value } })
-    on('state.set', async (_$, e, next) => {
-      if (e.key === 'view') viewWrites.push(e.value)
-      return next(e)
-    })
-    await start($)
-    const ui = await mountPane($, 'terminal')
-    expect((await ui.find({ key: 'profile' }))?.props.value).toBe('claude')
-    const before = viewWrites.length
-    await ui.select({ key: 'profile', value: 'mixed' })
-    expect(writes).toEqual(['mixed'])
-    expect(viewWrites.length).toBe(before)
-  })
-
-  t('long profile names clip at narrow widths while selections carry the full name', async ($, on) => {
-    const name = 'a-personal-profile-with-a-long-name'
-    world(on, { files: { [`${HOME}/.claude/pantheon.json`]: JSON.stringify({ profiles: { [name]: {} } }) } })
-    const writes: string[] = []
-    on('config.set', async (_$, e) => { writes.push(String(e.value)); return { value: e.value } })
-    await start($)
-    for (const surface of SURFACES) {
-      for (const placement of ['dock', 'inline'] as const) {
-        const ui = await mountPane($, surface, { placement, columns: 8, rows: 8 })
-        const select = await ui.find({ key: 'profile' })
-        const options = select?.props.options as { value: string; label: string }[]
-        expect(options.map(o => o.value)).toContain(name)
-        expect(options.every(o => o.label.length <= 8)).toBe(true)
-        await ui.select({ key: 'profile', value: name })
-        await release()
-      }
-    }
-    expect(writes).toEqual([name, name, name, name])
-  })
-
-  t('profile selection denial shows the reason as a toast', async ($, on) => {
-    const { seen } = world(on, { files: { [`${HOME}/.claude/pantheon.json`]: '{}' } })
-    on('config.set', async () => ({ deny: 'profile settings are read-only' }))
-    await start($)
-    const ui = await mountPane($, 'terminal')
-    await ui.select({ key: 'profile', value: 'codex' })
-    expect(seen.toasts.some(text => text.includes('profile settings are read-only'))).toBe(true)
-  })
-
-  for (const surface of SURFACES) {
     t(`agents view shows the session, the three groups and every role once (${surface})`, async ($, on) => {
       world(on)
       seed(on, {
-        jobs: [job({ id: 'pjr', agent: 'executor', description: 'wire tabs', status: 'running' }), job({ id: 'pjd', agent: 'explorer', status: 'done', description: 'map', endedAt: NOW - 30_000 })],
-        natives: [native()],
+        natives: [run({ id: 'pjr', role: 'developer', task: 'wire tabs', status: 'running' }), run({ id: 'pjd', role: 'code-reader', status: 'done', task: 'map', endedAt: NOW - 30_000 }), native()],
       })
       await start($)
       const ui = await mountPane($, surface, { rows: 60 })
@@ -289,23 +173,22 @@ describe('pane', () => {
       const at = ['Session', 'Agents · running', 'Agents · idle'].map(x => all.indexOf(x))
       expect(at.every(i => i >= 0)).toBe(true)
       expect(at).toEqual([...at].sort((a, b) => a - b))
-      // executor and oracle run, explorer finished; librarian, designer and council have not run yet.
-      for (const name of ['explorer', 'librarian', 'executor', 'oracle', 'designer', 'council α', 'council β']) expect(all).toContain(name)
+      // developer and architect run, code-reader finished; docs-reader, ux and council have not run yet.
+      for (const name of ['code-reader', 'docs-reader', 'developer', 'architect', 'qa', 'ux', 'council α', 'council β']) expect(all).toContain(name)
       expect(all).toContain('2 running')
     })
 
-    t(`an active explorer shows its instance, activity and clock (${surface})`, async ($, on) => {
+    t(`an active code-reader shows its instance, activity and clock (${surface})`, async ($, on) => {
       world(on)
-      seed(on, { jobs: [job({
-        id: 'pj3a', description: 'map pane render tree', lastActivity: "rg 'x' plugins/",
-        tokens: { input: 41200, cached: 30100, output: 2300 },
+      seed(on, { natives: [run({
+        id: 'pj3a', task: 'map pane render tree', lastTool: "rg 'x' plugins/", ctx: 41200, out: 2300,
       })] })
       await start($)
       const ui = await mountPane($, surface)
       const all = await texts(ui)
       expect(all.some(x => x.includes('map pane render tree'))).toBe(true)
       expect(all.some(x => x.includes("rg 'x' plugins/"))).toBe(true)
-      expect(all).toContain('41.2k↑ 2.3k↓') // input and output of the job, in the session tokens
+      expect(all).toContain('41.2k↑ 2.3k↓') // the native's context and output, in the session tokens
       expect(all).toContain('1 running')
       // The clock is a Client where the surface has one, else a Text.
       expect((await ui.find({ key: 'clk-pj3a' })) ?? all.find(x => /^\d+:\d\d$/.test(x))).toBeDefined()
@@ -313,7 +196,7 @@ describe('pane', () => {
 
     if (surface === 'desktop') t('desktop: the running badge is a bordered pill with a pulsing dot, the close button has room, and the mount is accepted by the engine', async ($, on) => {
       world(on)
-      seed(on, { jobs: [job({ id: 'pj3a', description: 'map pane render tree' })] })
+      seed(on, { natives: [run({ id: 'pj3a', task: 'map pane render tree' })] })
       await start($)
       const ui = await mountPane($, 'desktop', { rows: 70 })
       const badge = await ui.find({ key: 'header-badge' })
@@ -326,26 +209,27 @@ describe('pane', () => {
       for (const x of ['Pantheon', '1 running', 'Session', 'Agents · running', 'Agents · idle']) expect(all).toContain(x)
     })
 
-    t(`a resumed job shows round 2 (${surface})`, async ($, on) => {
-      world(on, { hang: true })
+    t(`a native with two rounds shows round 2 (${surface})`, async ($, on) => {
+      world(on)
+      seed(on, { natives: [run({ id: 'pjr', role: 'developer', task: 'wire tabs', rounds: [
+        { startedAt: NOW - 300_000, endedAt: NOW - 200_000, status: 'stopped' },
+        { startedAt: NOW - 60_000, status: 'running' },
+      ] })] })
       await start($)
-      const first = parse(await $.tool.call({ tool: DELEGATE, agent: 'executor', prompt: 'x', description: 'wire tabs', background: true } as never))
-      await $.tool.call({ tool: 'mcp__pantheon__delegate_cancel', jobId: first.jobId } as never)
-      const second = parse(await $.tool.call({ tool: DELEGATE, agent: 'executor', prompt: 'again', resume: first.jobId, background: true } as never))
       const ui = await mountPane($, surface)
-      // The strip holds one block per round: the cancelled first round and the running second one.
+      // The strip holds one block per round: the stopped first round and the running second one.
       if (surface === 'desktop') {
-        const strips = (await ui.findAll({ type: 'Svg' })).map(n => (n as unknown as { props: { alt: string; source: string } }).props).filter(p => p.alt === 'jobs')
+        const strips = (await ui.findAll({ type: 'Svg' })).map(n => (n as unknown as { props: { alt: string; source: string } }).props).filter(p => p.alt === 'rounds')
         expect(strips.filter(p => p.source.split('<rect').length - 1 === 2)).toHaveLength(1)
       } else {
-        // Two bars for the executor; roles that never ran have none.
+        // Two bars for the developer; roles that never ran have none.
         expect((await texts(ui)).filter(x => x === '▰')).toHaveLength(2)
       }
-      await $.tool.call({ tool: 'mcp__pantheon__delegate_cancel', jobId: second.jobId } as never)
     })
 
+
     t(`off role shows disabledAgents (${surface})`, async ($, on) => {
-      world(on, { files: { [`${HOME}/.claude/pantheon.json`]: JSON.stringify({ disabledAgents: ['librarian'] }) } })
+      world(on, { files: { [`${HOME}/.claude/pantheon.json`]: JSON.stringify({ disabledAgents: ['docs-reader'] }) } })
       await start($)
       await command($, 'config')
       const ui = await mountPane($, surface, { rows: 70 })
@@ -354,86 +238,20 @@ describe('pane', () => {
       expect(all).toContain('⊘')
     })
 
-    t(`Cancel on a running Codex row stops that job (${surface})`, async ($, on) => {
-      world(on, { hang: true })
-      await start($)
-      const run = parse(await $.tool.call({ tool: DELEGATE, agent: 'executor', prompt: 'x', description: 'wire tabs', background: true } as never))
-      const ui = await mountPane($, surface, { rows: 70 })
-      await ui.press({ key: `cancel-${run.jobId}` })
-      expect(parse(await $.tool.call({ tool: RESULT, jobId: run.jobId } as never)).status).toBe('cancelled')
-    })
-
-    t(`Cancel is absent on Claude rows and Idle rows (${surface})`, async ($, on) => {
+    t(`running rows have no Cancel button and no job id (${surface})`, async ($, on) => {
       world(on)
       seed(on, {
-        jobs: [job({ id: 'pjr', agent: 'executor', status: 'running' }), job({ id: 'pjd', agent: 'explorer', status: 'done', endedAt: NOW - 30_000 })],
-        natives: [native()],
+        natives: [run({ id: 'pjr', role: 'developer', status: 'running' }), run({ id: 'pjd', role: 'code-reader', status: 'done', endedAt: NOW - 30_000 }), native()],
       })
       await start($)
       const ui = await mountPane($, surface, { rows: 70 })
-      expect(await ui.find({ key: 'cancel-pjr' })).toBeDefined()
-      expect(await ui.find({ key: 'cancel-pjd' })).toBeUndefined()
-      expect(await ui.find({ key: 'cancel-n1' })).toBeUndefined()
       const labels = (await ui.findAll({ type: 'Button' })).map(b => (b as unknown as { props: { label: string } }).props.label)
-      expect(labels.filter(x => x === 'Cancel')).toHaveLength(1)
+      expect(labels.filter(x => x === 'Cancel' || x === 'x')).toEqual([])
+      expect(await ui.find({ key: 'cancel-pjr' })).toBeUndefined()
+      const all = await texts(ui)
+      expect(all.some(x => x.includes('pjr'))).toBe(false)
     })
 
-    t(`job id shows dim on a Running Codex row only, never Claude or Idle (${surface})`, async ($, on) => {
-      world(on)
-      seed(on, {
-        jobs: [job({ id: 'pjr', agent: 'executor', status: 'running' }), job({ id: 'pjd', agent: 'explorer', status: 'done', endedAt: NOW - 30_000 })],
-        natives: [native({ id: 'n1x' })],
-      })
-      await start($)
-      const all = await texts(await mountPane($, surface, { rows: 70 }))
-      expect(all.filter(x => x.includes('pjr'))).toHaveLength(1)
-      expect(all.some(x => x.includes('pjd'))).toBe(false)
-      expect(all.some(x => x.includes('n1x'))).toBe(false)
-    })
-
-    t(`job id drops before the model, ctx and Cancel when the row is short (${surface})`, async ($, on) => {
-      world(on)
-      seed(on, { jobs: [job({ id: 'pjr-long-id', agent: 'executor', status: 'running' })] })
-      await start($)
-      const wide = await texts(await mountPane($, surface, { rows: 70, columns: 120 }))
-      await release()
-      expect(wide.some(x => x.includes('pjr-long-id'))).toBe(true)
-      for (const columns of [60, 44]) {
-        await release()
-        const ui = await mountPane($, surface, { rows: 70, columns })
-        const narrow = await texts(ui)
-        if (!narrow.some(x => x.includes('pjr-long-id'))) {
-          expect(await ui.find({ key: 'cancel-pjr-long-id' })).toBeDefined()
-          return
-        }
-      }
-      throw new Error('job id never dropped while Cancel stayed')
-    })
-
-    test(`Cancel on a resumed line carries the id of the running round (${surface})`, () => {
-      const jobs = [
-        job({ id: 'pj1', agent: 'executor', status: 'done', sessionId: 's1', startedAt: NOW - 300_000, endedAt: NOW - 200_000 }),
-        job({ id: 'pj2', agent: 'executor', status: 'running', sessionId: 's1', startedAt: NOW - 60_000 }),
-      ]
-      const cancelled: string[] = []
-      const element = (props: unknown) => ({ props })
-      const el = { Box: element, Text: element, Button: element, Svg: element }
-      type Node = { props?: { key?: string; label?: string; onPress?: () => void; children?: unknown } }
-      const buttons = (tree: unknown): Node[] => {
-        if (Array.isArray(tree)) return tree.flatMap(buttons)
-        if (!tree || typeof tree !== 'object') return []
-        const node = tree as Node
-        return [...(node.props?.onPress ? [node] : []), ...buttons(node.props?.children)]
-      }
-      const found = buttons(drawPanel(el as never, {
-        surface, columns: 120, rows: 40, now: NOW, profiles: ['claude'], activeProfile: 'claude',
-        roster: buildRoster({ jobs, natives: [], session: { isRunning: false }, config: MIXED }), session: { isRunning: false },
-        hasClient: false, onCancel: id => { cancelled.push(id) },
-      })).filter(b => b.props?.label === 'Cancel')
-      expect(found).toHaveLength(1)
-      found[0].props!.onPress!()
-      expect(cancelled).toEqual(['pj2'])
-    })
 
     t(`other agents line only when present (${surface})`, async ($, on) => {
       world(on)
@@ -470,14 +288,13 @@ describe('pane', () => {
     }
     expect(await props('header')).toMatchObject({ flexDirection: 'column', width: 80 })
     expect(await props('header-top')).toMatchObject({ height: 1.7, width: 80, alignItems: 'center' })
-    expect(await props('profile-row')).toMatchObject({ width: 80 })
     expect(await props('session')).toMatchObject({ width: 80, paddingX: 1, borderStyle: 'round', flexDirection: 'column' })
     expect(await props('idle-rows')).toMatchObject({ width: 80, flexDirection: 'column', borderStyle: 'round' })
     expect(String((await props('idle-rows')).borderColor)).toMatch(/^#/)
     const svgs = (await ui.findAll({ type: 'Svg' })).map(n => (n as unknown as { props: { alt: string; source: string; width: number; height: number; isInteractive?: boolean } }).props)
     expect(svgs.some(p => p.alt === 'card background')).toBe(false)
     expect(await ui.find({ key: 'toggle-idle' })).toBeUndefined()
-    expect(await ui.find({ key: 'idle-explorer' })).toBeDefined()
+    expect(await ui.find({ key: 'idle-code-reader' })).toBeDefined()
     expect((await texts(ui)).filter(x => x === '—')).toHaveLength(4) // only the Session readings; a role that never ran leaves its time and task blank
     expect((await texts(ui)).some(t => t.includes('▎') || t.includes('━'))).toBe(false)
     const dividers = svgs.filter(p => p.alt === 'divider')
@@ -500,13 +317,13 @@ describe('pane', () => {
     }
   })
 
-  t('desktop: the header rows and the cards are spaced, and no group can be folded', async ($, on) => {
+  t('desktop: the header and the cards are spaced, and no group can be folded', async ($, on) => {
     world(on)
     seed(on, { ...busy(), view: { collapsed: ['running', 'idle'] } })
     await start($)
     const ui = await mountPane($, 'desktop', { columns: 86, rows: 80 })
     const props = async (key: string) => (await ui.find({ key }) as unknown as { props: Record<string, unknown> }).props
-    expect(await props('header')).toMatchObject({ gap: 0.5, marginBottom: 1 })
+    expect(await props('header')).toMatchObject({ marginBottom: 1 })
     for (const key of ['session', 'running-rows', 'idle-rows']) expect((await props(key)).marginBottom).toBe(1)
     const labels = (await ui.findAll({ type: 'Button' })).map(b => String((b as unknown as { props: { label?: string } }).props.label))
     expect(labels).not.toContain('Collapse')
@@ -518,19 +335,19 @@ describe('pane', () => {
     world(on)
     await start($)
     const ui = await mountPane($, 'desktop', { columns: 86, rows: 70 })
-    const names = (await ui.findAll({ type: 'Text' })).filter(n => String(n.text).trim() === 'explorer')
+    const names = (await ui.findAll({ type: 'Text' })).filter(n => String(n.text).trim() === 'code-reader')
       .map(n => (n as unknown as { props: { color: string } }).props.color)
-    expect(names).toContain(ROLE_COLOR.explorer) // full role color, not mixed toward the panel
+    expect(names).toContain(ROLE_COLOR['code-reader']) // full role color, not mixed toward the panel
     const all = await texts(ui)
     expect(all).toContain('agents')
-    expect(all).toContain('9') // the orchestrator plus the eight rows of the Agents card
+    expect(all).toContain('9') // the lead plus the eight rows of the Agents card
   })
 
   t('desktop: a long model name is shown whole in the agent rows', async ($, on) => {
     world(on)
-    seed(on, { jobs: [job({ id: 'f1', agent: 'executor', status: 'done', model: 'gpt-6-astral-mini', endedAt: NOW - 1000 })] })
+    seed(on, { natives: [run({ id: 'f1', role: 'developer', status: 'done', model: 'claude-sonnet-long-name', endedAt: NOW - 1000 })] })
     await start($)
-    expect(await texts(await mountPane($, 'desktop', { columns: 86, rows: 70 }))).toContain('GPT-6-astral-mini')
+    expect(await texts(await mountPane($, 'desktop', { columns: 86, rows: 70 }))).toContain('claude-sonnet-long-name')
   })
 
   t('desktop session, groups and timeline share the pane inset and resize with columns', async ($, on) => {
@@ -585,12 +402,14 @@ describe('pane', () => {
     })
   }
 
-  const SIX = ['explorer', 'librarian', 'executor', 'councillor:alpha']
+  const SIX = ['code-reader', 'docs-reader', 'developer', 'councillor-alpha']
   const allActive = () => seed_all()
   function seed_all() {
     return {
-      jobs: SIX.map((agent, k) => job({ id: `j${k}`, agent, lastActivity: 'read x' })),
-      natives: [native(), native({ id: 'n2', role: 'designer', type: 'pantheon:designer' })],
+      natives: [
+        ...SIX.map((role, k) => run({ id: `j${k}`, role, lastTool: 'read x' })),
+        native(), native({ id: 'n2', role: 'ux', type: 'pantheon:ux' }),
+      ],
       session: { isRunning: true, turnStartedAt: NOW - 5_000, model: 'opus' } as SessionInfo,
     }
   }
@@ -624,11 +443,11 @@ describe('pane', () => {
 
   t('inside a group the roles keep their fixed order', async ($, on) => {
     world(on)
-    seed(on, { natives: [native(), native({ id: 'n2', role: 'designer', type: 'pantheon:designer' })], jobs: [job({ id: 'pjf', agent: 'executor', description: 'x' })] })
+    seed(on, { natives: [native(), native({ id: 'n2', role: 'ux', type: 'pantheon:ux' }), run({ id: 'pjf', role: 'developer', task: 'x' })] })
     await start($)
     const all = await texts(await mountPane($, 'terminal'))
     const running = all.slice(all.indexOf('Agents · running'), all.indexOf('Agents · planned'))
-    const at = ['executor', 'oracle', 'designer'].map(name => running.indexOf(name))
+    const at = ['developer', 'architect', 'ux'].map(name => running.indexOf(name))
     expect(at.every(i => i >= 0)).toBe(true)
     expect(at).toEqual([...at].sort((a, b) => a - b))
   })
@@ -638,15 +457,15 @@ describe('pane', () => {
   const railsOf = async (ui: Mounted) => (await clients(ui)).filter(c => String(c.module).includes('rail'))
 
   t('docked: text dots for the rows and header, with the rails as the only animated Clients', async ($, on) => {
-    world(on, { files: { [`${HOME}/.claude/pantheon.json`]: JSON.stringify({ disabledAgents: ['librarian'] }) } })
+    world(on, { files: { [`${HOME}/.claude/pantheon.json`]: JSON.stringify({ disabledAgents: ['docs-reader'] }) } })
     seed(on, { natives: [native()], session: { isRunning: true, turnStartedAt: NOW - 5_000 } })
     await start($)
     await command($, 'config')
     const ui = await mountPane($, 'terminal', { rows: 70 })
     expect((await railsOf(ui)).map(c => c.props.color)).toEqual([SECTION_COLOR.running, SECTION_COLOR.idle, SECTION_COLOR.timeline, SECTION_COLOR.log])
     const all = await texts(ui)
-    expect(all.filter(text => text === '●')).toHaveLength(9) // header, orchestrator, oracle and the six idle rows
-    expect(all).toContain('⊘') // the disabled librarian is planned and off
+    expect(all.filter(text => text === '●')).toHaveLength(10) // header, lead, architect and the seven idle rows
+    expect(all).toContain('⊘') // the disabled docs-reader is planned and off
   })
 
   t('mini: steady text dots; desktop: pulsing image dots, clocks stay Clients', async ($, on) => {
@@ -655,7 +474,7 @@ describe('pane', () => {
     await start($)
     const mini = await mountPane($, 'terminal', { placement: 'inline' })
     expect(await railsOf(mini)).toEqual([])
-    expect((await texts(mini)).filter(text => text === '●')).toHaveLength(2) // header and oracle
+    expect((await texts(mini)).filter(text => text === '●')).toHaveLength(2) // header and architect
     expect((await clients(mini)).some(c => String(c.module).includes('elapsed'))).toBe(true)
     await release()
     const desk = await mountPane($, 'desktop')
@@ -663,7 +482,7 @@ describe('pane', () => {
     const dots = (await desk.findAll({ type: 'Svg' })).map(n => (n as unknown as {
       props: { source: string; alt: string; isInteractive?: boolean; width: number; height: number }
     }).props).filter(s => s.alt === 'running')
-    expect(dots.length).toBe(2) // the header and the running oracle row; the session card repeats no badge
+    expect(dots.length).toBe(2) // the header and the running architect row; the session card repeats no badge
     expect(dots.map(d => d.source).every(src => src === dots[0].source)).toBe(true)
     for (const dot of dots) {
       expect(dot.isInteractive).toBeUndefined()
@@ -679,7 +498,7 @@ describe('pane', () => {
   t('an 8-column body produces nothing wider than 8', async ($, on) => {
     world(on)
     seed(on, {
-      jobs: [job({ id: 'pj3a', description: 'map the pane render tree', lastActivity: 'rg something long' })],
+      natives: [run({ id: 'pj3a', task: 'map the pane render tree', lastTool: 'rg something long' })],
       natives: [native()],
       session: { isRunning: true, turnStartedAt: NOW - 5_000, model: 'opus', context: { tokens: 100, window: 200, percent: 50 } },
     })
@@ -696,7 +515,7 @@ describe('pane', () => {
   t('the clock warning shows in docked at 40 columns and in mini', async ($, on) => {
     let fail = false
     world(on, { clockDown: () => fail })
-    seed(on, { jobs: [job({ id: 'pj3a', description: 'map' })], session: { isRunning: true, turnStartedAt: NOW - 5_000 } })
+    seed(on, { natives: [run({ id: 'pj3a', task: 'map' })], session: { isRunning: true, turnStartedAt: NOW - 5_000 } })
     await start($)
     fail = true
     const docked = await mountPane($, 'terminal', { columns: 40 })
@@ -715,7 +534,7 @@ describe('pane', () => {
     await start($)
     const ui = await mountPane($, 'desktop')
     const colors = (await ui.findAll({ type: 'Text' })).map(node => String((node as unknown as { props: { color?: string } }).props.color))
-    expect(colors.includes(ROLE_COLOR.oracle)).toBe(true) // the running oracle
+    expect(colors.includes(ROLE_COLOR.architect)).toBe(true) // the running architect
     expect(colors.includes('#4fb383')).toBe(true) // running
     const borders = (await ui.findAll({ type: 'Box' })).map(node => (node as unknown as { props: { borderColor?: string; backgroundColor?: string } }).props)
     expect(borders.flatMap(p => [p.borderColor, p.backgroundColor]).filter(c => c && !c.startsWith('#'))).toEqual([])
@@ -761,12 +580,12 @@ describe('pane', () => {
   }
 
   const busy = () => ({
-    jobs: [
-      job({ id: 'pj1', agent: 'explorer', description: 'map', lastActivity: 'rg x', tokens: { input: 1000, cached: 0, output: 10 } }),
-      job({ id: 'pj2', agent: 'councillor:alpha', description: 'weigh' }),
-      job({ id: 'pj3', agent: 'executor', status: 'done', description: 'tests', endedAt: NOW - 1000, sessionId: 's' }),
+    natives: [
+      run({ id: 'pj1', role: 'code-reader', task: 'map', lastTool: 'rg x', ctx: 1000, out: 10 }),
+      run({ id: 'pj2', role: 'councillor-alpha', task: 'weigh' }),
+      run({ id: 'pj3', role: 'developer', status: 'done', task: 'tests', endedAt: NOW - 1000 }),
+      native(), native({ id: 'n2', role: 'docs-reader', type: 'pantheon:docs-reader', rounds: [{ startedAt: 1, endedAt: 2, status: 'done' }] }),
     ],
-    natives: [native(), native({ id: 'n2', role: 'librarian', type: 'pantheon:librarian', rounds: [{ startedAt: 1, endedAt: 2, status: 'done' }] })],
     session: { isRunning: true, turnStartedAt: NOW - 5_000, model: 'opus', costUsd: 0.5 } as SessionInfo,
   })
 
@@ -797,24 +616,24 @@ describe('pane', () => {
 
   t('a role with several finished runs gets one Idle row for the latest, with its rounds in the strip', async ($, on) => {
     world(on)
-    const done = [1, 3, 2].map(k => job({ id: `designer-${k}`, agent: 'designer', status: 'done',
-      description: `finished designer ${k}`, startedAt: NOW - 10_000, endedAt: NOW - 4000 + k * 1000 }))
-    seed(on, { jobs: done })
+    const done = [1, 3, 2].map(k => run({ id: `ux-${k}`, role: 'ux', status: 'done',
+      task: `finished ux ${k}`, startedAt: NOW - 10_000, endedAt: NOW - 4000 + k * 1000 }))
+    seed(on, { natives: done })
     await start($)
     for (const surface of SURFACES) {
       const tall = await mountPane($, surface, { rows: 80 })
       const all = await texts(tall)
-      expect(all.filter(x => x.startsWith('finished designer '))).toEqual(['finished designer 3'])
-      expect(await tall.find({ key: 'idle-designer' })).toBeDefined()
+      expect(all.filter(x => x.startsWith('finished ux '))).toEqual(['finished ux 3'])
+      expect(await tall.find({ key: 'idle-ux' })).toBeDefined()
       if (surface === 'terminal') { // desktop has no fold button
         await tall.press({ key: 'toggle-idle' })
-        expect((await texts(tall)).some(x => x.startsWith('finished designer '))).toBe(false)
+        expect((await texts(tall)).some(x => x.startsWith('finished ux '))).toBe(false)
         await tall.press({ key: 'toggle-idle' })
       }
       await release()
       const short = await mountPane($, surface, { rows: 12 })
       expect(await texts(short)).toContain('Agents · idle')
-      expect((await texts(short)).some(x => x.startsWith('finished designer '))).toBe(false)
+      expect((await texts(short)).some(x => x.startsWith('finished ux '))).toBe(false)
       expect(rowsOf((await short.drawn()) as Node) <= 12).toBe(true)
       await release()
     }
@@ -823,30 +642,19 @@ describe('pane', () => {
   t('Idle sums a role up in one row: last four rounds green or red and +N for the rest, lost runs included', async ($, on) => {
     world(on)
     const run = (k: number, status: 'done' | 'failed' | 'lost') => native({
-      id: `f${k}`, role: 'executor', type: 'pantheon:executor', task: `task ${k}`,
+      id: `f${k}`, role: 'developer', type: 'pantheon:developer', task: `task ${k}`,
       rounds: [{ startedAt: NOW - 600_000 + k * 10_000, endedAt: status === 'lost' ? undefined : NOW - 590_000 + k * 10_000, status }],
     })
     seed(on, { natives: [run(1, 'done'), run(2, 'done'), run(3, 'failed'), run(4, 'done'), run(5, 'lost'), run(6, 'done')] })
     await start($)
     const ui = await mountPane($, 'terminal', { rows: 70 })
-    expect(await ui.find({ key: 'idle-executor' })).toBeDefined()
+    expect(await ui.find({ key: 'idle-developer' })).toBeDefined()
     const all = await texts(ui)
     expect(all.filter(x => x.startsWith('task '))).toEqual(['task 6']) // the latest run only
     expect(all).toContain('+2')
     const bars = (await ui.findAll({ type: 'Text' })).filter(n => String(n.text) === '▰')
       .map(n => (n as unknown as { props: { color?: string } }).props.color)
     expect(bars).toEqual([BAD, OK, undefined, OK]) // failed, done, lost (dim), done
-  })
-
-  t('an engine-mixed role is marked on its row and not given a second one', async ($, on) => {
-    world(on, { files: { [`${HOME}/.claude/pantheon.json`]: JSON.stringify({ profile: 'codex' }) } })
-    seed(on, { natives: [native({ id: 'x1', role: 'oracle', type: 'pantheon:oracle', rounds: [{ startedAt: NOW - 90_000, endedAt: NOW - 30_000, status: 'done' }] })] })
-    await start($)
-    await command($, 'config')
-    const ui = await mountPane($, 'terminal', { rows: 70 })
-    const cards = (await texts(ui)).slice(0, (await texts(ui)).indexOf('Last 15 minutes'))
-    expect(cards.filter(x => x === 'oracle')).toHaveLength(1)
-    expect(cards.some(x => x.startsWith('⇄'))).toBe(true)
   })
 
   t('docked: rails join neighbouring cards in the next card color and move only with active work', async ($, on) => {
@@ -863,7 +671,6 @@ describe('pane', () => {
     }
     await release()
     // Nothing runs: the rails rest.
-    data.jobs = []
     data.natives = []
     data.session = { isRunning: false }
     const idle = await mountPane($, 'terminal', { rows: 70, columns: 80 })
@@ -913,10 +720,12 @@ describe('pane', () => {
 
   t('docked: the strip shows one block per round in the role, done, failed and planned colors', async ($, on) => {
     world(on)
-    seed(on, { jobs: [
-      job({ id: 'pf1', agent: 'executor', status: 'error', startedAt: NOW - 600_000, endedAt: NOW - 500_000, sessionId: 's' }),
-      job({ id: 'pf2', agent: 'executor', status: 'running', startedAt: NOW - 60_000, sessionId: 's' }),
-      job({ id: 'pe1', agent: 'explorer', status: 'done', startedAt: NOW - 300_000, endedAt: NOW - 200_000 }),
+    seed(on, { natives: [
+      run({ id: 'pf', role: 'developer', rounds: [
+        { startedAt: NOW - 600_000, endedAt: NOW - 500_000, status: 'failed' },
+        { startedAt: NOW - 60_000, status: 'running' },
+      ] }),
+      run({ id: 'pe1', role: 'code-reader', status: 'done', startedAt: NOW - 300_000, endedAt: NOW - 200_000 }),
     ] })
     await start($)
     const ui = await mountPane($, 'terminal', { rows: 70 })
@@ -924,23 +733,23 @@ describe('pane', () => {
       .map(n => (n as unknown as { props: { color?: string; dimColor?: boolean } }).props)
     const failed = blocks.findIndex(b => b.color === BAD)
     expect(failed).toBeGreaterThanOrEqual(0)
-    expect(blocks[failed + 1].color).toBe(ROLE_COLOR.executor) // the running second round follows the failed one
-    expect(blocks.some(b => b.color === OK)).toBe(false) // the explorer ran once: no strip
+    expect(blocks[failed + 1].color).toBe(ROLE_COLOR.developer) // the running second round follows the failed one
+    expect(blocks.some(b => b.color === OK)).toBe(false) // the code-reader ran once: no strip
   })
 
   t('a one-round row has no strip glyph; three rounds show three spaced marks of exact width', async ($, on) => {
     world(on)
     const round = (k: number, status: 'done' | 'failed') => ({ startedAt: NOW - 900_000 + k * 100_000, endedAt: NOW - 850_000 + k * 100_000, status })
     seed(on, { natives: [
-      native({ id: 'one', role: 'explorer', type: 'pantheon:explorer', task: 'single', rounds: [round(1, 'done')] }),
-      native({ id: 'three', role: 'executor', type: 'pantheon:executor', task: 'triple', rounds: [round(1, 'done'), round(2, 'failed'), { startedAt: NOW - 30_000, status: 'running' }] }),
+      native({ id: 'one', role: 'code-reader', type: 'pantheon:code-reader', task: 'single', rounds: [round(1, 'done')] }),
+      native({ id: 'three', role: 'developer', type: 'pantheon:developer', task: 'triple', rounds: [round(1, 'done'), round(2, 'failed'), { startedAt: NOW - 30_000, status: 'running' }] }),
     ] })
     await start($)
     const ui = await mountPane($, 'terminal', { rows: 70, columns: 100 })
     const nodes = (await ui.findAll({ type: 'Text' })).map(n => n as unknown as { text: string; props: { color?: string } })
     const marks = nodes.filter(n => String(n.text) === '▰')
-    // Only the executor row: three marks (done, failed, running) with a single space between each; the lone round of the explorer has none.
-    expect(marks.map(n => n.props.color)).toEqual([OK, BAD, ROLE_COLOR.executor])
+    // Only the developer row: three marks (done, failed, running) with a single space between each; the lone round of the code-reader has none.
+    expect(marks.map(n => n.props.color)).toEqual([OK, BAD, ROLE_COLOR.developer])
     const at = nodes.findIndex(n => n === marks[0])
     expect(nodes.slice(at, at + 5).map(n => String(n.text))).toEqual(['▰', ' ', '▰', ' ', '▰'])
     expect(nodes.slice(at, at + 5).reduce((n, x) => n + cellWidth(String(x.text)), 0)).toBe(5)
@@ -989,8 +798,8 @@ describe('pane', () => {
 
   t('session tokens split into input and output and show only the side that exists', async ($, on) => {
     world(on)
-    const data: { jobs?: Job[]; session?: SessionInfo } = {
-      jobs: [job({ tokens: { input: 41200, cached: 0, output: 2300 } })],
+    const data: { natives?: Native[]; session?: SessionInfo } = {
+      natives: [run({ ctx: 41200, out: 2300 })],
       session: { isRunning: false, context: { tokens: 10_000, window: 200_000, percent: 5 } },
     }
     seed(on, data)
@@ -999,11 +808,11 @@ describe('pane', () => {
       expect(await texts(await mountPane($, surface, { rows: 70 }))).toContain('51.2k↑ 2.3k↓')
       await release()
     }
-    data.jobs = [job({ tokens: { input: 0, cached: 0, output: 900 } })]
+    data.natives = [run({ ctx: 0, out: 900 })]
     data.session = { isRunning: false }
     expect(await texts(await mountPane($, 'terminal', { rows: 70 }))).toContain('900↓')
     await release()
-    data.jobs = []
+    data.natives = []
     const none = await texts(await mountPane($, 'terminal', { rows: 70 }))
     expect(none.some(x => x.includes('↑') || x.includes('↓'))).toBe(false)
   })
@@ -1059,12 +868,12 @@ describe('pane', () => {
 
   t('docked draws the Last 15 minutes timeline as lanes of minute cells while there is room', async ($, on) => {
     const { clock } = world(on)
-    const data: { jobs?: Job[] } = {}
+    const data: { natives?: Native[] } = {}
     seed(on, data)
     await start($)
     // The timeline reads the host clock, so the run starts relative to it.
     const clockNow = clock.now()
-    data.jobs = [job({ id: 'pt1', agent: 'explorer', status: 'running', startedAt: clockNow - 200_000 })]
+    data.natives = [run({ id: 'pt1', role: 'code-reader', status: 'running', startedAt: clockNow - 200_000 })]
     const tall = await texts(await mountPane($, 'terminal', { rows: 80, columns: 80 }))
     expect(tall).toContain('Last 15 minutes')
     expect(tall).toContain('-15m')
@@ -1076,11 +885,11 @@ describe('pane', () => {
 
   t('docked timeline gives a 6-second run one cell in its lane', async ($, on) => {
     const { clock } = world(on)
-    const data: { jobs?: Job[] } = {}
+    const data: { natives?: Native[] } = {}
     seed(on, data)
     await start($)
     const clockNow = clock.now()
-    data.jobs = [job({ id: 'pq1', agent: 'executor', status: 'done', startedAt: clockNow - 300_000, endedAt: clockNow - 294_000 })]
+    data.natives = [run({ id: 'pq1', role: 'developer', status: 'done', startedAt: clockNow - 300_000, endedAt: clockNow - 294_000 })]
     const tall = await texts(await mountPane($, 'terminal', { rows: 80, columns: 80 }))
     const from = tall.indexOf('Last 15 minutes')
     expect(from).toBeGreaterThan(-1)
@@ -1092,8 +901,8 @@ describe('pane', () => {
     return [d.getHours(), d.getMinutes(), d.getSeconds()].map(n => String(n).padStart(2, '0')).join(':')
   }
   const logSetup = (): Native[] => [
-    native({ id: 'l1', role: 'oracle', type: 'pantheon:oracle', task: 'First', rounds: [{ startedAt: NOW - 300_000, endedAt: NOW - 240_000, status: 'done' }] }),
-    native({ id: 'l2', role: 'executor', type: 'pantheon:executor', task: 'Second 漢字漢字漢字漢字漢字漢字漢字漢字漢字漢字漢字漢字漢字漢字漢字漢字', rounds: [{ startedAt: NOW - 200_000, endedAt: NOW - 100_000, status: 'failed' }] }),
+    native({ id: 'l1', role: 'architect', type: 'pantheon:architect', task: 'First', rounds: [{ startedAt: NOW - 300_000, endedAt: NOW - 240_000, status: 'done' }] }),
+    native({ id: 'l2', role: 'developer', type: 'pantheon:developer', task: 'Second 漢字漢字漢字漢字漢字漢字漢字漢字漢字漢字漢字漢字漢字漢字漢字漢字', rounds: [{ startedAt: NOW - 200_000, endedAt: NOW - 100_000, status: 'failed' }] }),
   ]
   const logRows = async (ui: Mounted) => (await ui.findAll({ type: 'Text' })).map(n => (n as unknown as { props: { children?: unknown; text?: string; color?: string } }).props)
 
@@ -1113,8 +922,8 @@ describe('pane', () => {
     expect(times.indexOf(hhmmss(NOW - 300_000))).toBeLessThan(times.indexOf(hhmmss(NOW - 240_000)))
     const nodes = await ui.findAll({ type: 'Text' })
     const colorOf = (txt: string) => nodes.filter(n => String(n.text).trim() === txt).map(n => (n as unknown as { props: { color?: string } }).props.color)
-    const executorColor = surface === 'desktop' ? ROLE_COLOR.executor : ROLE_COLOR.executor
-    expect(colorOf('executor')).toContain(executorColor)
+    const executorColor = surface === 'desktop' ? ROLE_COLOR.developer : ROLE_COLOR.developer
+    expect(colorOf('developer')).toContain(executorColor)
     expect(all.some(x => x.startsWith('failed after'))).toBe(true)
   })
 
@@ -1199,7 +1008,7 @@ describe('pane', () => {
   t('an idle line keeps the role name at 40 columns', async ($, on) => {
     world(on)
     seed(on, {
-      jobs: [job({ id: 'pj1234567', agent: 'councillor:alpha', status: 'done', endedAt: NOW - 900_000, sessionId: 'sess' })],
+      natives: [run({ id: 'pj1234567', role: 'councillor-alpha', status: 'done', endedAt: NOW - 900_000 })],
       natives: [native({ id: 'zz', role: 'councillor-beta', type: 'pantheon:councillor-beta', rounds: [{ startedAt: 1, endedAt: 2, status: 'done' }] })],
     })
     await start($)
@@ -1214,17 +1023,17 @@ describe('pane', () => {
     await start($)
     const tall = await texts(await mountPane($, 'terminal', { rows: 60, bodyRows: 60 }))
     expect(tall.filter(x => x === 'disabledAgents').length).toBe(0)
-    expect(tall).toContain('explorer')
+    expect(tall).toContain('code-reader')
     await release()
     const short = await texts(await mountPane($, 'terminal', { rows: 40, bodyRows: 14 }))
     expect(short).toContain('Agents · idle')
-    expect(short).not.toContain('explorer')
+    expect(short).not.toContain('code-reader')
   })
 
   t('a failing clock read draws without clocks and says so', async ($, on) => {
     let fail = false
     world(on, { clockDown: () => fail })
-    seed(on, { jobs: [job({ id: 'pj3a', description: 'map' })], session: { isRunning: true, turnStartedAt: NOW - 5_000 } })
+    seed(on, { natives: [run({ id: 'pj3a', task: 'map' })], session: { isRunning: true, turnStartedAt: NOW - 5_000 } })
     await start($)
     const ok = await mountPane($, 'terminal')
     expect((await texts(ok)).some(x => x.includes('clock unavailable'))).toBe(false)
@@ -1279,21 +1088,23 @@ describe('pane', () => {
     expect((root.children ?? []).filter(Boolean).length <= 8).toBe(true)
     const all = await texts(ui)
     expect(all).toContain('● 1 other agent')
-    expect(all).toContain('n1') // the active oracle stays visible
+    expect(all).toContain('n1') // the active architect stays visible
   })
 
   t('a lost earlier round shows no invented duration', async ($, on) => {
     world(on)
-    seed(on, { jobs: [
-      job({ id: 'pl1', agent: 'executor', status: 'lost', sessionId: 's', startedAt: NOW - 600_000 }),
-      job({ id: 'pl2', agent: 'executor', status: 'running', sessionId: 's', startedAt: NOW - 60_000 }),
+    seed(on, { natives: [
+      run({ id: 'pl', role: 'developer', rounds: [
+        { startedAt: NOW - 600_000, status: 'lost' },
+        { startedAt: NOW - 60_000, status: 'running' },
+      ] }),
     ] })
     await start($)
     const ui = await mountPane($, 'terminal')
     // Two blocks: the lost round has no state color and no duration of its own; the running one is the role's.
     const blocks = (await ui.findAll({ type: 'Text' })).filter(n => String(n.text) === '▰')
       .map(n => (n as unknown as { props: { color?: string; dimColor?: boolean } }).props)
-    const running = blocks.findIndex(b => b.color === ROLE_COLOR.executor)
+    const running = blocks.findIndex(b => b.color === ROLE_COLOR.developer)
     expect(running).toBeGreaterThan(0)
     expect(blocks[running - 1]).toMatchObject({ dimColor: true })
     expect(blocks[running - 1].color).toBeUndefined()
@@ -1303,9 +1114,9 @@ describe('pane', () => {
   t('docked at 40 columns truncates', async ($, on) => {
     world(on)
     seed(on, {
-      jobs: [job({
-        id: 'pj3a', description: 'a very long task description that cannot fit in forty columns',
-        lastActivity: 'apply_patch plugins/pantheon/hooks/pane.tsx and more',
+      natives: [run({
+        id: 'pj3a', task: 'a very long task description that cannot fit in forty columns',
+        lastTool: 'apply_patch plugins/pantheon/hooks/pane.tsx and more',
       })],
       session: { isRunning: true, turnStartedAt: NOW - 5_000, model: 'claude-opus-5-5-with-a-long-name', effort: 'high' },
     })
@@ -1315,67 +1126,51 @@ describe('pane', () => {
     await release()
   })
 
-  t('status line counts running and background, clears when none', async ($, on) => {
-    const { seen } = world(on, { hang: true })
-    await start($)
-    const out = parse(await $.tool.call({ tool: DELEGATE, agent: 'executor', prompt: 'x', background: true } as never))
-    expect(seen.statuses).toContain('pantheon: 0 running · 1 in background')
-    await $.tool.call({ tool: 'mcp__pantheon__delegate_cancel', jobId: out.jobId } as never)
-    expect(seen.statuses[seen.statuses.length - 1]).toBeUndefined()
-    expect(statusText([])).toBeUndefined()
-  })
-
   t('/pantheon config shows origins and current error', async ($, on) => {
-    const { files } = world(on, { files: { [`${HOME}/.claude/pantheon.json`]: JSON.stringify({ noNetwork: true }) } })
+    const { files } = world(on, { files: { [`${HOME}/.claude/pantheon.json`]: JSON.stringify({ disabledAgents: ['git'] }) } })
     await start($)
     const ok = await command($, 'config')
     expect(ok.text).toContain('Valid config')
-    expect(ok.text).toContain('noNetwork: user')
+    expect(ok.text).toContain('disabledAgents: user')
     files[`${HOME}/.claude/pantheon.json`] = '{ broken'
     const bad = await command($, 'config')
     expect(bad.text).toContain('Invalid config')
   })
 
-  t('/pantheon doctor reports codex, login and config', async ($, on) => {
-    world(on, {
-      runs: {
-        'codex --version': { exitCode: 0, stdout: 'codex-cli 9.9.9\n' },
-        'codex login status': { exitCode: 0, stdout: 'Logged in using ChatGPT\n' },
-      },
-    })
+  t('/pantheon doctor reports the config and the pending pings', async ($, on) => {
+    world(on)
     await start($)
     const out = await command($, 'doctor')
-    expect(out.text).toContain('codex-cli 9.9.9')
-    expect(out.text).toContain('Logged in')
-    expect(out.text).toContain('authorized root: /repo')
-    // The ping section is covered in register.test.ts.
+    expect(out.text).toContain('ok   config')
+    expect(out.text).not.toMatch(/codex|authorized root/i)
     expect(out.text.split('\nping')[0]).not.toContain('fail')
   })
 
-  t('/pantheon cancel without id shows usage', async ($, on) => {
+  t('/pantheon cancel is no longer a subcommand', async ($, on) => {
     world(on)
     await start($)
-    expect((await command($, 'cancel')).text).toContain('Usage')
+    expect((await command($, 'cancel')).text).toContain('Unknown subcommand: cancel')
   })
 })
 
+
 describe('timelineSource', () => {
   const NOW_T = 10_000_000
-  const slot = (over: Partial<Slot> & { name: Slot['name'] }): Slot => ({ engine: 'codex', state: 'idle', instances: [], ...over })
+  const slot = (over: Partial<Slot> & { name: Slot['name'] }): Slot => ({ state: 'idle', instances: [], ...over })
   const inst = (over: object) => ({
-    id: 'i', engine: 'codex' as const, task: '', status: 'running', isActive: true, startedAt: NOW_T - 60_000,
+    id: 'i', task: '', status: 'running', isActive: true, startedAt: NOW_T - 60_000,
     rounds: [{ startedAt: NOW_T - 60_000, status: 'running' }], tokens: { out: 0 }, ...over,
   })
   const slots: Slot[] = [
-    slot({ name: 'orchestrator', engine: 'claude', state: 'active' }),
-    slot({ name: 'explorer', state: 'active', instances: [inst({ id: 'a' }), inst({ id: 'b', startedAt: NOW_T - 30_000, rounds: [{ startedAt: NOW_T - 30_000, status: 'running' }] })] }),
-    slot({ name: 'librarian' }),
-    slot({ name: 'executor', state: 'active', instances: [inst({ id: 'f', rounds: [
+    slot({ name: 'lead', state: 'active' }),
+    slot({ name: 'code-reader', state: 'active', instances: [inst({ id: 'a' }), inst({ id: 'b', startedAt: NOW_T - 30_000, rounds: [{ startedAt: NOW_T - 30_000, status: 'running' }] })] }),
+    slot({ name: 'docs-reader' }),
+    slot({ name: 'developer', state: 'active', instances: [inst({ id: 'f', rounds: [
       { startedAt: NOW_T - 800_000, endedAt: NOW_T - 600_000, status: 'done' },
       { startedAt: NOW_T - 60_000, status: 'running' },
     ] })] }),
-    slot({ name: 'oracle', engine: 'claude', state: 'active', instances: [inst({ id: 'o', engine: 'claude' })] }),
-    slot({ name: 'designer', engine: 'claude', lastEndedAt: NOW_T - 2_000_000 }),
+    slot({ name: 'architect', state: 'active', instances: [inst({ id: 'o' })] }),
+    slot({ name: 'ux', lastEndedAt: NOW_T - 2_000_000 }),
     slot({ name: 'council', state: 'off', offReason: 'disabledAgents' }),
   ]
   const out = timelineSource(slots, { isRunning: true, turnStartedAt: NOW_T - 120_000 }, NOW_T).source
@@ -1390,7 +1185,7 @@ describe('timelineSource', () => {
 
   test('each desktop draw computes the timeline once and keeps timeline and card keys and sources stable', () => {
     const session: SessionInfo = { isRunning: true, turnStartedAt: NOW_T - 120_000 }
-    const roster = buildRoster({ jobs: [job()], natives: [], session, config: MIXED })
+    const roster = buildRoster({ natives: [run()], session, config: DEFAULTS })
     let timelineReads = 0
     // Only the timeline reads the retained turns; count evaluations without replacing its renderer.
     Object.defineProperty(session, 'turns', { get() { timelineReads++; return [] } })
@@ -1405,9 +1200,7 @@ describe('timelineSource', () => {
     }
     const bucket = Math.floor(NOW_T / 15_000) * 15_000
     const draw = (now: number) => images(drawPanel(el as never, {
-      surface: 'desktop', columns: 120, rows: 100, now, roster, session,
-      profiles: ['claude', 'codex', 'mixed'], activeProfile: 'mixed',
-      hasClient: false, onCancel: () => {},
+      surface: 'desktop', columns: 120, rows: 100, now, roster, session, hasClient: false,
     }))
     const first = draw(bucket + 100)
     expect(timelineReads).toBe(1)
@@ -1420,10 +1213,10 @@ describe('timelineSource', () => {
     expect(timeline.key ?? timeline.props?.key).toBe('timeline')
   })
 
-  test('running bars are solid in the engine color, finished ones outlined', () => {
-    expect(out).toContain('fill="#6aa3f0"/>')
+  test('running bars are solid, finished ones outlined, all in the one agent color', () => {
     expect(out).toContain('fill="#b58af0"/>')
-    expect(out).toContain('fill="#1f3350" stroke="#6aa3f0"')
+    expect(out).not.toContain('#6aa3f0')
+    expect(out).toContain('fill="#35274f" stroke="#b58af0"')
     expect(out).toContain('rx="12" fill="rgba(165,107,216,0.06)" stroke="rgba(165,107,216,0.75)"')
   })
   test('rounds of one session are labelled and joined by a dashed line', () => {
@@ -1437,28 +1230,28 @@ describe('timelineSource', () => {
     expect(out).toContain('last run 33m ago')
   })
   test('two independent recent runs of one role draw two bars', () => {
-    const jobs: Job[] = [
-      { id: 'ja', agent: 'explorer', status: 'done', startedAt: NOW_T - 600_000, endedAt: NOW_T - 500_000, cwd: '/repo' },
-      { id: 'jb', agent: 'explorer', status: 'done', startedAt: NOW_T - 300_000, endedAt: NOW_T - 200_000, cwd: '/repo' },
-      { id: 'jold', agent: 'explorer', status: 'done', startedAt: NOW_T - 3_000_000, endedAt: NOW_T - 2_000_000, cwd: '/repo' },
+    const natives = [
+      run({ id: 'ja', status: 'done', startedAt: NOW_T - 600_000, endedAt: NOW_T - 500_000 }),
+      run({ id: 'jb', status: 'done', startedAt: NOW_T - 300_000, endedAt: NOW_T - 200_000 }),
+      run({ id: 'jold', status: 'done', startedAt: NOW_T - 3_000_000, endedAt: NOW_T - 2_000_000 }),
     ]
-    const roster = buildRoster({ jobs, natives: [], session: { isRunning: false }, config: MIXED })
+    const roster = buildRoster({ natives, session: { isRunning: false }, config: DEFAULTS })
     // Cards retain every run; the timeline draws only those overlapping the window.
     expect(roster.slots[1].instances.map(i => i.id)).toEqual(['jb', 'ja', 'jold'])
     const svg = timelineSource(roster.slots, { isRunning: false }, NOW_T).source
-    expect(svg.split('fill="#1f3350" stroke="#6aa3f0"').length - 1).toBe(2)
+    expect(svg.split('fill="#35274f" stroke="#b58af0"').length - 1).toBe(2)
     expect(svg).toContain('>ja</text>')
     expect(svg).toContain('>jb</text>')
     expect(svg).not.toContain('>jold</text>')
   })
-  test('orchestrator draws finished turns in the window and the running turn separately', () => {
+  test('lead draws finished turns in the window and the running turn separately', () => {
     const session: SessionInfo = { isRunning: true, turnStartedAt: NOW_T - 60_000, turns: [
       { startedAt: NOW_T - 1_000_000, endedAt: NOW_T - 950_000 },
       { startedAt: NOW_T - 1_000_000, endedAt: NOW_T - 800_000 },
       { startedAt: NOW_T - 600_000, endedAt: NOW_T - 500_000 },
       { startedAt: NOW_T - 300_000, endedAt: NOW_T - 200_000 },
     ] }
-    const lane = [slot({ name: 'orchestrator', engine: 'claude' })]
+    const lane = [slot({ name: 'lead' })]
     const svg = timelineSource(lane, session, NOW_T).source
     expect(svg.split('fill="#4a4945"/>').length - 1).toBe(3)
     expect(svg).toContain('<rect x="136" y="48"')
@@ -1468,31 +1261,31 @@ describe('timelineSource', () => {
     expect(idle).not.toContain('height="12" rx="3" fill="#ebedf1"/>')
   })
   test('a run shorter than one 15-second step still draws one step width in its lane', () => {
-    const quick: Slot[] = [slot({ name: 'executor', instances: [inst({ id: 'q', isActive: false, status: 'done',
+    const quick: Slot[] = [slot({ name: 'developer', instances: [inst({ id: 'q', isActive: false, status: 'done',
       rounds: [{ startedAt: NOW_T - 300_000, endedAt: NOW_T - 294_000, status: 'done' }] })] })]
     const svg = timelineSource(quick, { isRunning: false }, NOW_T).source
     const step = (664 - 136) / 60
-    const m = /<rect x="([\d.]+)" y="48" width="([\d.]+)" height="12" rx="3" fill="#[0-9a-f]+" stroke="#6aa3f0"\/>/.exec(svg)
+    const m = /<rect x="([\d.]+)" y="48" width="([\d.]+)" height="12" rx="3" fill="#[0-9a-f]+" stroke="#b58af0"\/>/.exec(svg)
     expect(m).not.toBeNull()
     expect(Math.abs(Number(m![2]) - step)).toBeLessThan(1e-6)
     const t0 = Math.floor(NOW_T / 15_000) * 15_000 - 900_000
     expect(Math.abs(Number(m![1]) - (136 + ((NOW_T - 300_000 - t0) / 900_000) * 528))).toBeLessThan(1e-6)
   })
   test('a minimum-width bar never extends past now', () => {
-    const late: Slot[] = [slot({ name: 'executor', instances: [inst({ id: 'n', isActive: false, status: 'done',
+    const late: Slot[] = [slot({ name: 'developer', instances: [inst({ id: 'n', isActive: false, status: 'done',
       rounds: [{ startedAt: NOW_T - 3_000, endedAt: NOW_T - 1_000, status: 'done' }] })] })]
     const svg = timelineSource(late, { isRunning: false }, NOW_T).source
-    const m = /<rect x="([\d.]+)" y="48" width="([\d.]+)" height="12" rx="3" fill="#[0-9a-f]+" stroke="#6aa3f0"\/>/.exec(svg)
+    const m = /<rect x="([\d.]+)" y="48" width="([\d.]+)" height="12" rx="3" fill="#[0-9a-f]+" stroke="#b58af0"\/>/.exec(svg)
     expect(m).not.toBeNull()
     expect(Number(m![1]) + Number(m![2])).toBeLessThanOrEqual(664 + 1e-6)
   })
   test('a lost round with no end is a tick at its start, not a bar to now', () => {
-    const lost: Slot[] = [slot({ name: 'executor', instances: [inst({ id: 'l', isActive: false, status: 'lost',
+    const lost: Slot[] = [slot({ name: 'developer', instances: [inst({ id: 'l', isActive: false, status: 'lost',
       rounds: [{ startedAt: NOW_T - 600_000, status: 'lost' }] })] })]
     const svg = timelineSource(lost, { isRunning: false }, NOW_T).source
     expect(svg).toContain('width="3" height="12" fill="#e0a94a"/>')
-    expect(svg).not.toContain('stroke="#6aa3f0"/>')
-    expect(svg).not.toContain('height="12" rx="3" fill="#6aa3f0"/>')
+    expect(svg).not.toContain('stroke="#b58af0"/>')
+    expect(svg).not.toContain('height="12" rx="3" fill="#b58af0"/>')
   })
   test('parallel instances label their ids and the now line closes the window', () => {
     expect(out).toContain('>a</text>')

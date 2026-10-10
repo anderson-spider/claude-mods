@@ -2,33 +2,20 @@ import { mock } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-import { CODEX_EXEC_SAMPLE } from './codex-exec-sample'
-
-export const DELEGATE = 'mcp__pantheon__delegate'
-export const RESULT = 'mcp__pantheon__delegate_result'
 export const HOME = '/home/u'
 export const ROOT = '/repo'
 
 export type World = {
   files?: Record<string, string>
   realPaths?: Record<string, string>
-  isRepo?: boolean
-  stdout?: string
-  exitCode?: number
-  /** O processo do Codex não termina até ser encerrado. */
-  hang?: boolean
   /** O primeiro agent.register falha. */
   failFirstRegister?: boolean
-  /** Respostas de process.run por comando (argv unido por espaço). */
-  runs?: Record<string, { exitCode: number; stdout?: string; stderr?: string }>
   /** While it returns true, clock.now rejects (this replaces the mock clock, so nothing can sleep). */
   clockDown?: () => boolean
 }
 
 export function world(on: On, opts: World = {}) {
   const seen = {
-    argv: [] as string[][],
-    cwds: [] as string[],
     agents: [] as string[],
     registered: [] as Array<{ name: string; tools?: readonly string[]; disallowedTools?: readonly string[] }>,
     tools: [] as string[],
@@ -38,9 +25,8 @@ export function world(on: On, opts: World = {}) {
     opened: [] as { id: string; title?: string; columns?: number; rows?: number; focus?: true; closeOnEscape?: true }[],
     closed: [] as string[],
     copied: [] as string[],
-    gitRuns: 0,
   }
-  const files = { [`${HOME}/.claude/pantheon.json`]: '{"profile":"mixed"}', ...(opts.files ?? {}) }
+  const files = { [`${HOME}/.claude/pantheon.json`]: '{}', ...(opts.files ?? {}) }
   const clock = opts.clockDown ? (undefined as never) : mock.clock(on)
   if (opts.clockDown) {
     on('clock.now', async () => {
@@ -52,14 +38,7 @@ export function world(on: On, opts: World = {}) {
   on('session.start', async (_$, e) => ({ cwd: e.cwd }))
   on('session.cwd', async () => ({ value: ROOT }))
   on('process.run', async (_$, e) => {
-    const canned = opts.runs?.[e.argv.join(' ')]
-    if (canned) {
-      return { value: { exitCode: canned.exitCode, stdout: canned.stdout ?? '', stderr: canned.stderr ?? '', isStdoutTruncated: false, isStderrTruncated: false } }
-    }
-    seen.gitRuns++
-    return opts.isRepo === false
-      ? { value: { exitCode: 128, stdout: '', stderr: 'not a git repository', isStdoutTruncated: false, isStderrTruncated: false } }
-      : { value: { exitCode: 0, stdout: `${ROOT}\n`, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    return { value: { exitCode: 0, stdout: `${ROOT}\n`, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('fs.exists', async (_$, e) => ({ value: Object.hasOwn(files, e.path) }))
   on('fs.read', async (_$, e) => ({ value: files[e.path] ?? '' }))
@@ -80,17 +59,6 @@ export function world(on: On, opts: World = {}) {
   on('ui.open', async (_$, e) => { seen.opened.push(e); return { value: undefined } })
   on('ui.close', async (_$, e) => { seen.closed.push(e.id); return { value: undefined } })
   on('ui.copy', async (_$, e) => { seen.copied.push(e.text); return { value: undefined } })
-  on('process.spawn', async function* (_$, e) {
-    seen.argv.push([...e.argv])
-    seen.cwds.push(e.cwd ?? '')
-    const text = opts.stdout ?? CODEX_EXEC_SAMPLE
-    if (opts.hang) {
-      yield { stream: 'stdout' as const, text: '{"type":"thread.started","thread_id":"hang-1"}\n' }
-      await clock.sleep(1e12)
-    }
-    if (text) yield { stream: 'stdout' as const, text }
-    return { value: { code: opts.exitCode ?? 0, signal: null } }
-  })
   return { seen, files, clock }
 }
 

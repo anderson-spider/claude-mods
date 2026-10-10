@@ -10,7 +10,7 @@ import { cellWidth } from "../hooks/theme";
 import { D, H, NOW, agent, elements, input, plain, reset, seed, texts, windowOf } from "./strip-fixtures";
 
 const WIDTHS = [120, 80, 50];
-const AGENTS = [agent("explorer", "Map the auth middleware and its callers", 42), agent("executor", "Wire the new pace marks into limits", 188), agent("oracle", "Review the cache TTL inference for edge cases", 612)];
+const AGENTS = [agent("code-reader", "Map the auth middleware and its callers", 42), agent("developer", "Wire the new pace marks into limits", 188), agent("architect", "Review the cache TTL inference for edge cases", 612)];
 
 // The burning state: 71% used with the clock at 38%, climbing 12 points in the last ten minutes.
 function burning() {
@@ -21,9 +21,9 @@ function burning() {
 test("box: every line, borders included, has exactly the width of the terminal (⚡ ● ▰▱ ↯ and … counted in cells)", () => {
   const states: [string, () => void, any][] = [
     ["idle", () => seed(), {}],
-    ["working with agents", () => seed(), { isWorking: true, agents: [...AGENTS, agent("designer", "x", 9), agent("Explore", "y", 3)] }],
+    ["working with agents", () => seed(), { isWorking: true, agents: [...AGENTS, agent("ux", "x", 9), agent("Explore", "y", 3)] }],
     ["burning", burning, { isWorking: true }],
-    ["a failed agent", () => seed(), { isWorking: true, agents: [agent("executor", "Patch", 60, { status: "failed", endedAt: NOW - 5000 }), agent("explorer", "Look", 30)] }],
+    ["a failed agent", () => seed(), { isWorking: true, agents: [agent("developer", "Patch", 60, { status: "failed", endedAt: NOW - 5000 }), agent("code-reader", "Look", 30)] }],
   ];
   for (const columns of WIDTHS) {
     for (const [name, setup, extra] of states) {
@@ -106,15 +106,15 @@ test("box: with agents they replace the receipt in the last row, as a pulse, the
     expect(lines.join("\n")).not.toContain("╭─ ●");
   }
   const wide = plain(120, { isWorking: true, agents: AGENTS })[4];
-  expect(wide).toContain("● explorer Map the auth middl… 0:42");
-  expect(wide).toContain("● executor");
+  expect(wide).toContain("● code-reader Map the auth mi… 0:42");
+  expect(wide).toContain("● developer");
   expect(wide).toContain("3:08");
   expect(wide).toContain("10:12");
   const mid = plain(80, { isWorking: true, agents: AGENTS })[4];
-  expect(mid).toContain("● explorer 0:42 · ● executor 3:08 · ● oracle 10:12");
+  expect(mid).toContain("● code-reader 0:42 · ● developer 3:08 · ● architect 10:12");
   expect(plain(50, { isWorking: true, agents: AGENTS })[4]).toContain("3 running · oldest 10:12");
   // More than three: "+N" for the rest.
-  const five = plain(120, { isWorking: true, agents: [...AGENTS, agent("designer", "x", 9), agent("Explore", "y", 3)] })[4];
+  const five = plain(120, { isWorking: true, agents: [...AGENTS, agent("ux", "x", 9), agent("Explore", "y", 3)] })[4];
   expect(five).toContain("+2");
   // Idle again: the receipt is back.
   expect(plain(120)[4]).toContain("last turn 2m37s · 2 agents · 4 edits · 0 errors · +$0.18");
@@ -122,7 +122,7 @@ test("box: with agents they replace the receipt in the last row, as a pulse, the
 
 test("box: a failed agent's pulse is red and a running one's green", () => {
   seed();
-  const tree = drawBox(elements, input(120, { isWorking: true, agents: [agent("explorer", "Look", 30), agent("executor", "Patch", 60, { status: "failed", endedAt: NOW - 5000 })] }));
+  const tree = drawBox(elements, input(120, { isWorking: true, agents: [agent("code-reader", "Look", 30), agent("developer", "Patch", 60, { status: "failed", endedAt: NOW - 5000 })] }));
   const pulses = texts(tree).filter(t => t.text === "●" && t.color !== undefined);
   // The session row's ● working comes first.
   expect(pulses.map(t => t.color)).toEqual(["#4CC2A0", "#4CC2A0", "#E5604D"]);
