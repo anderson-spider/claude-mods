@@ -1,8 +1,11 @@
 import { expect, test } from 'claude-code/testing'
 import type { FlowState } from '../hooks/flow/types'
+import { flowHash, validateFlow } from '../hooks/flow/plan'
+import type { Flow } from '../hooks/flow/plan'
 import {
-  JOURNAL_CAP, JOURNAL_MAX_BYTES, REASON_MAX, createSerial, appendJournal, appendLabel, approve, flowDir, isApproved, journalPath, labelsPath, loadState,
-  ledgerPath, readJournal, readLabels, readSideEffects, recordSideEffect, restoreFromLedger, saveState, statePath,
+  JOURNAL_CAP, JOURNAL_MAX_BYTES, REASON_MAX, createSerial, appendJournal, appendLabel, approve, approvedPath, attestKey, attestOf, flowDir, isApproved,
+  journalPath, labelsPath, loadApproved, loadState, ledgerPath, matchesAttest, parseAttest, readJournal, readLabels, readSideEffects, recordSideEffect,
+  restoreFromLedger, saveApproved, saveState, statePath, unapprove,
   type FlowFs,
 } from '../hooks/flow/store'
 
@@ -29,6 +32,7 @@ test('paths live under .pantheon/flow/<planId>/', () => {
   expect(journalPath(ROOT, PLAN)).toBe('/repo/.pantheon/flow/decision-flow/journal.jsonl')
   expect(ledgerPath(ROOT, PLAN)).toBe('/repo/.pantheon/flow/decision-flow/side-effects.jsonl')
   expect(labelsPath(ROOT, PLAN)).toBe('/repo/.pantheon/flow/decision-flow/labels.jsonl')
+  expect(approvedPath(ROOT, PLAN)).toBe('/repo/.pantheon/flow/decision-flow/approved.json')
 })
 
 test('state survives a save and load round trip, including optional fields', async () => {
@@ -402,4 +406,162 @@ test('a state saved before qaRequired and ends existed loads with both empty', a
   const { qaRequired: _q, ends: _e, ...old } = state()
   const loaded = await loadState(memFs({ [statePath(ROOT, PLAN)]: JSON.stringify(old) }).fs, ROOT, PLAN)
   expect(loaded).toEqual(state({ qaRequired: [], ends: {} }))
+})
+
+// --- amendments: approved snapshot, adoption, new journal kinds ---
+
+const flowOf = (planId = PLAN): Flow => {
+  const result = validateFlow({
+    schemaVersion: 1, planId, goal: 'Ship it',
+    tasks: [
+      { id: 'T1', goal: 'first', files: ['src/a.ts'], acceptance: { checks: [{ argv: ['npm', 'test'] }] } },
+      { id: 'T2', goal: 'second', files: ['src/b.ts'], dependsOn: ['T1'], acceptance: { criteria: ['it works'] } },
+    ],
+  })
+  if (!result.ok) throw new Error(result.errors.join('; '))
+  return result.flow
+}
+
+test('a state keeps adoptedHash, seenEdits and seenIds through a save and load, and an older state has none', async () => {
+  const { fs } = memFs()
+  const saved = state({ approvedHash: 'h1', adoptedHash: 'h2', hash: 'h2', seenEdits: ['edit-1', 'edit-2'], seenIds: ['T1', 'T9', 'T10'] })
+  await saveState(fs, ROOT, saved)
+  expect(await loadState(fs, ROOT, PLAN)).toEqual(saved)
+  const plain = await loadState(memFs({ [statePath(ROOT, PLAN)]: JSON.stringify(state({ approvedHash: 'h1' })) }).fs, ROOT, PLAN)
+  expect(plain).toEqual(state({ approvedHash: 'h1' }))
+  for (const key of ['adoptedHash', 'seenEdits', 'seenIds']) expect(plain).not.toHaveProperty(key)
+})
+
+test('a state with a wrong adoptedHash, seenEdits or seenIds loads as undefined', async () => {
+  const path = statePath(ROOT, PLAN)
+  for (const bad of [{ adoptedHash: 4 }, { seenEdits: 'x' }, { seenEdits: [1] }, { seenIds: 'T1' }, { seenIds: [1] }]) {
+    expect(await loadState(memFs({ [path]: JSON.stringify({ ...state(), ...bad }) }).fs, ROOT, PLAN)).toBeUndefined()
+  }
+})
+
+test('an adopted flow is approved under its own hash; the approval alone no longer is once the state moved on', () => {
+  const approved = approve(state({ hash: 'h1' }), 'h1')
+  const adopted: FlowState = { ...approved, hash: 'h2', adoptedHash: 'h2' }
+  expect(isApproved(adopted, 'h2')).toBe(true)
+  // The person's hash is not the flow in force any more; a file that hashes to neither is not approved either.
+  expect(isApproved(adopted, 'h1')).toBe(false)
+  expect(isApproved(adopted, 'h3')).toBe(false)
+  // An adoption without the person's approval never counts.
+  expect(isApproved({ ...adopted, approvedHash: undefined }, 'h2')).toBe(false)
+  // A state whose progress is for another hash is not approved for the adopted one.
+  expect(isApproved({ ...adopted, hash: 'h1' }, 'h2')).toBe(false)
+})
+
+test('approve folds adoptions and a waiting edit into the new approval; unapprove drops every approval', () => {
+  const adopted = state({ hash: 'h2', approvedHash: 'h1', adoptedHash: 'h2', seenEdits: ['edit-1'], seenIds: ['T9'] })
+  const again = approve(adopted, 'h2')
+  expect(again).toMatchObject({ approvedHash: 'h2', hash: 'h2', seenIds: ['T9'] })
+  expect(again).not.toHaveProperty('adoptedHash')
+  expect(again).not.toHaveProperty('seenEdits')
+  expect(isApproved(again, 'h2')).toBe(true)
+  expect(adopted.adoptedHash).toBe('h2')
+  const none = unapprove(adopted)
+  expect(none).not.toHaveProperty('approvedHash')
+  expect(none).not.toHaveProperty('adoptedHash')
+  expect(none).toMatchObject({ hash: 'h2', seenEdits: ['edit-1'] })
+  expect(isApproved(none, 'h2')).toBe(false)
+})
+
+test('approved.json round trips as the approved flow, with or without an adoption', async () => {
+  const { fs, files } = memFs()
+  expect(await loadApproved(fs, ROOT, PLAN)).toEqual({ kind: 'missing' })
+  const flow = flowOf()
+  await saveApproved(fs, ROOT, PLAN, { approvedHash: flowHash(flow), flow })
+  expect(files.get(approvedPath(ROOT, PLAN))?.endsWith('\n')).toBe(true)
+  expect(await loadApproved(fs, ROOT, PLAN)).toEqual({ kind: 'ok', approved: { approvedHash: flowHash(flow), flow } })
+
+  const bigger = validateFlow({ ...flow, tasks: [...flow.tasks, { id: 'T3', goal: 'third', files: ['docs/'], dependsOn: ['T2'], acceptance: { criteria: ['reads well'] } }] })
+  if (!bigger.ok) throw new Error('fixture')
+  await saveApproved(fs, ROOT, PLAN, { approvedHash: flowHash(flow), adoptedHash: bigger.hash, flow: bigger.flow })
+  expect(await loadApproved(fs, ROOT, PLAN)).toEqual({ kind: 'ok', approved: { approvedHash: flowHash(flow), adoptedHash: bigger.hash, flow: bigger.flow } })
+})
+
+test('approved.json that is not trustworthy is invalid, never a flow', async () => {
+  const flow = flowOf()
+  const hash = flowHash(flow)
+  const other = flowOf('another-plan')
+  const cases: [string, unknown, string][] = [
+    ['not an object', [1], 'not a JSON object'],
+    ['no approvedHash', { flow }, 'no valid approvedHash'],
+    ['a flow that does not validate', { approvedHash: hash, flow: { ...flow, tasks: [] } }, 'invalid flow'],
+    ['another plan', { approvedHash: flowHash(other), flow: other }, 'another plan'],
+    ['a flow edited by hand', { approvedHash: hash, flow: { ...flow, goal: 'Something else' } }, 'does not match its recorded hash'],
+    ['an adoption equal to the approval', { approvedHash: hash, adoptedHash: hash, flow }, 'equal to the approval'],
+    ['an adoption the flow does not hash to', { approvedHash: hash, adoptedHash: 'f'.repeat(64), flow }, 'does not match its recorded hash'],
+  ]
+  for (const [label, content, why] of cases) {
+    const loaded = await loadApproved(memFs({ [approvedPath(ROOT, PLAN)]: JSON.stringify(content) }).fs, ROOT, PLAN)
+    expect(loaded.kind, label).toBe('invalid')
+    if (loaded.kind === 'invalid') expect(loaded.why, label).toContain(why)
+  }
+  const torn = await loadApproved(memFs({ [approvedPath(ROOT, PLAN)]: '{"approvedHash":' }).fs, ROOT, PLAN)
+  expect(torn.kind).toBe('invalid')
+  // A read that fails is a failure, not a missing snapshot.
+  const broken: FlowFs = { read: async () => { throw new Error('EIO') }, write: async () => undefined }
+  await expect(loadApproved(broken, ROOT, PLAN)).rejects.toThrow('EIO')
+})
+
+test('the journal keeps amendment and escalation entries and the hashes they carry', async () => {
+  const { fs } = memFs()
+  const adopted = await appendJournal(fs, ROOT, PLAN, {
+    at: 1, kind: 'amendment', condition: 'amendment_adopted', approvedHash: 'a'.repeat(64), adoptedHash: 'b'.repeat(80), detail: 'new task T3',
+  })
+  const pending = await appendJournal(fs, ROOT, PLAN, { at: 2, kind: 'amendment', condition: 'amendment_pending', detail: 'T1: goal changed' })
+  const escalation = await appendJournal(fs, ROOT, PLAN, { at: 3, kind: 'escalation', task: 'T1', condition: 'require_qa' })
+  expect(adopted).toMatchObject({ kind: 'amendment', approvedHash: 'a'.repeat(64) })
+  expect(adopted.adoptedHash?.length).toBe(64)
+  expect((await readJournal(fs, ROOT, PLAN)).map(e => e.kind)).toEqual(['amendment', 'amendment', 'escalation'])
+  expect(pending.approvedHash).toBeUndefined()
+  expect(escalation.kind).toBe('escalation')
+  // A hash that is not text is a malformed entry.
+  const { fs: raw, files } = memFs({ [journalPath(ROOT, PLAN)]: JSON.stringify({ id: 1, at: 1, kind: 'amendment', adoptedHash: 5 }) })
+  expect(await readJournal(raw, ROOT, PLAN)).toEqual([])
+  expect(files.size).toBe(1)
+})
+
+// --- attestation: the host's record of an approval ---
+
+test('the attestation key names the repository root and the plan, and is the same for the same pair', () => {
+  const key = attestKey('/repo', PLAN)
+  expect(key).toMatch(/^flow\.attest\.[0-9a-f]{32}\.decision-flow$/)
+  expect(attestKey('/repo/', PLAN)).toBe(key)
+  expect(attestKey('/other', PLAN)).not.toBe(key)
+  expect(attestKey('/repo', 'another-plan')).not.toBe(key)
+  expect(() => attestKey('/repo', '../escape')).toThrow()
+})
+
+test('an attestation is read back only with its shape, whatever the store hands over', () => {
+  expect(parseAttest({ approvedHash: 'a', snapshotHash: 'a' })).toEqual({ approvedHash: 'a', snapshotHash: 'a' })
+  expect(parseAttest({ approvedHash: 'a', adoptedHash: 'b', snapshotHash: 'b', adopted: ['T4'], extra: 1 })).toEqual({ approvedHash: 'a', adoptedHash: 'b', snapshotHash: 'b', adopted: ['T4'] })
+  for (const bad of [undefined, null, 'a', [], {}, { approvedHash: 'a' }, { snapshotHash: 'a' }, { approvedHash: 1, snapshotHash: 'a' },
+    { approvedHash: 'a', snapshotHash: 'a', adoptedHash: 2 }, { approvedHash: 'a', snapshotHash: 'a', adopted: 'T4' }, { approvedHash: 'a', snapshotHash: 'a', adopted: [4] }]) {
+    expect(parseAttest(bad)).toBeUndefined()
+  }
+})
+
+test('a snapshot matches its attestation only as a whole: both hashes and the flow itself', () => {
+  const flow = flowOf()
+  const hash = flowHash(flow)
+  const bigger = validateFlow({ ...flow, tasks: [...flow.tasks, { id: 'T3', goal: 'third', files: ['docs/'], dependsOn: ['T2'], acceptance: { criteria: ['reads well'] } }] })
+  if (!bigger.ok) throw new Error('fixture')
+  const approved = { approvedHash: hash, flow }
+  const record = attestOf(approved)
+  expect(record).toEqual({ approvedHash: hash, snapshotHash: hash })
+  expect(matchesAttest(approved, record)).toBe(true)
+  // A forged adoption: the approved hash is the real one, the flow is another, and its own hash is consistent.
+  expect(matchesAttest({ approvedHash: hash, adoptedHash: bigger.hash, flow: bigger.flow }, record)).toBe(false)
+  // A different flow under the recorded hashes.
+  expect(matchesAttest({ approvedHash: hash, flow: bigger.flow }, record)).toBe(false)
+  expect(matchesAttest({ approvedHash: bigger.hash, flow: bigger.flow }, record)).toBe(false)
+  // An adoption recorded by the host is matched, and so is only that one.
+  const adopted = { approvedHash: hash, adoptedHash: bigger.hash, flow: bigger.flow }
+  const adoptedRecord = attestOf(adopted, ['T3'])
+  expect(adoptedRecord).toEqual({ approvedHash: hash, adoptedHash: bigger.hash, snapshotHash: bigger.hash, adopted: ['T3'] })
+  expect(matchesAttest(adopted, adoptedRecord)).toBe(true)
+  expect(matchesAttest(approved, adoptedRecord)).toBe(false)
 })

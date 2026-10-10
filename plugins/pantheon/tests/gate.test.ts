@@ -22,9 +22,37 @@ for (const tool of ['Read', 'Bash', 'Unknown']) {
   })
 }
 
-for (const file_path of ['/repo/.pantheon/plan.md', '/home/person/.claude/plans/note.md', '/home/person/.claude/projects/repo/memory/note.md', '/tmp/claude-501/repo/session/scratchpad/note.md', '/private/tmp/claude-501/repo/session/scratchpad/note.md', '.pantheon/plan.md']) {
+for (const file_path of ['/repo/.pantheon/plans/plan.md', '/home/person/.claude/plans/note.md', '/home/person/.claude/projects/repo/memory/note.md', '/tmp/claude-501/repo/session/scratchpad/note.md', '/private/tmp/claude-501/repo/session/scratchpad/note.md', '.pantheon/plans/plan.md']) {
   test(`exempts ${file_path}`, () => {
     expect(gateContext({ ...edit, file_path }, env).skip).toBe(true)
+  })
+}
+
+// `.pantheon/flow/**` holds the approval and the state the flow trusts: never exempt, and never a change the rules call
+// trivial, however small (an unknown size is an ask). Only the plans are exempt from `.pantheon`.
+for (const file_path of [
+  '/repo/.pantheon/flow/demo/approved.json', '/repo/.pantheon/flow/demo/state.json', '/repo/.pantheon/flow/active', '/repo/.pantheon/flow/active.json',
+  '.pantheon/flow/demo/journal.jsonl', '/repo/.PANTHEON/Flow/demo/approved.json', '/repo/.pantheon/plans/../flow/demo/approved.json', '/repo/.pantheon/flow',
+]) {
+  test(`does not exempt the flow's own file ${file_path} and asks even for a one-line change`, () => {
+    const result = gateContext({ ...edit, file_path }, env)
+    expect(result.skip).toBe(false)
+    if (!result.skip) {
+      expect(result.ctx.linesAdded).toBeUndefined()
+      expect(result.ctx.linesRemoved).toBeUndefined()
+      expect(rulesVerdict(result.ctx).action).toBe('ask')
+    }
+    const write = gateContext({ tool: 'Write', file_path, content: '{}' }, env)
+    expect(write.skip).toBe(false)
+    if (!write.skip) expect(rulesVerdict(write.ctx).action).toBe('ask')
+  })
+}
+
+for (const file_path of ['/repo/.pantheon/plan.md', '/repo/.pantheon/notes/a.md', '/repo/.pantheon/flows/a.json', '.pantheon/plan.md']) {
+  test(`only .pantheon/plans is exempt from .pantheon: ${file_path} is judged by the rules`, () => {
+    const result = gateContext({ ...edit, file_path }, env)
+    expect(result.skip).toBe(false)
+    if (!result.skip) expect(rulesVerdict(result.ctx).action).toBe('allow')
   })
 }
 
@@ -35,8 +63,8 @@ for (const file_path of ['/repo/.pantheon/../main.ts', '/tmp/session/../main.ts'
 }
 
 test('normalizes paths before checking exemptions and injected roots', () => {
-  expect(gateContext({ ...edit, file_path: '/repo/src/../.pantheon/plan.md' }, env).skip).toBe(true)
-  expect(gateContext({ ...edit, file_path: '/repo/.pantheon/plan.md' }, { ...env, root: '/repo/./' }).skip).toBe(true)
+  expect(gateContext({ ...edit, file_path: '/repo/src/../.pantheon/plans/plan.md' }, env).skip).toBe(true)
+  expect(gateContext({ ...edit, file_path: '/repo/.pantheon/plans/plan.md' }, { ...env, root: '/repo/./' }).skip).toBe(true)
   expect(gateContext({ ...edit, file_path: '/tmp/session/note.txt' }, { root: env.root, home: env.home }).skip).toBe(false)
 })
 

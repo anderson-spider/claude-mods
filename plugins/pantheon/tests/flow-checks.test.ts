@@ -119,28 +119,49 @@ test('a pass reuses a result while the tree snapshot is the one it was produced 
   expect((await once()).summary.ran).toBe(2)
 })
 
-test('the memo keeps the snapshot as the checks left the tree, and never a result that could not run', async () => {
+test('only a pass is remembered: a fail or a result that could not run is run again', async () => {
   const memo: CheckMemo = new Map()
-  const snapshot = { now: 'before' as string | undefined }
-  // A build check writes an artifact: the tree after it is what the next stop will see.
-  const build = scripted(() => { snapshot.now = 'after'; return ok('built') })
-  const pass = await createCheckPass(build.run, ROOT, { memo, snapshot: tree(snapshot) })
-  await pass.runTask([check(['build'])])
-  await pass.finish()
-  const again = await createCheckPass(build.run, ROOT, { memo, snapshot: tree(snapshot) })
-  expect((await again.runTask([check(['build'])])).map(r => r.output)).toEqual(['built'])
-  expect((await again.finish()).reused).toBe(1)
-  expect(build.calls).toHaveLength(1)
-  // A timeout is not remembered.
-  const slow = scripted(() => { throw new Error('timed out') })
-  const memo2: CheckMemo = new Map()
+  const failing = scripted(() => ({ exitCode: 1, stdout: 'FAIL', stderr: '' }))
   for (let i = 0; i < 2; i++) {
-    const p = await createCheckPass(slow.run, ROOT, { memo: memo2, snapshot: async () => 't' })
+    const pass = await createCheckPass(failing.run, ROOT, { memo, snapshot: async () => 't' })
+    expect((await pass.runTask([check(['a'])]))[0]).toMatchObject({ passed: false })
+    await pass.finish()
+  }
+  expect(failing.calls).toHaveLength(2)
+  expect(memo.size).toBe(0)
+  const slow = scripted(() => { throw new Error('timed out') })
+  for (let i = 0; i < 2; i++) {
+    const p = await createCheckPass(slow.run, ROOT, { memo, snapshot: async () => 't' })
     expect((await p.runTask([check(['slow'])]))[0]).toMatchObject({ passed: null })
     await p.finish()
   }
   expect(slow.calls).toHaveLength(2)
-  expect(memo2.size).toBe(0)
+  expect(memo.size).toBe(0)
+})
+
+test('a pass is stored under the tree only when the checks left it as they found it', async () => {
+  const memo: CheckMemo = new Map()
+  const snapshot = { now: 'before' as string | undefined }
+  // A build check writes an artifact: the tree it passed on is not the one it leaves, so the pass is not remembered.
+  const build = scripted(() => { snapshot.now = 'after'; return ok('built') })
+  const pass = await createCheckPass(build.run, ROOT, { memo, snapshot: tree(snapshot) })
+  await pass.runTask([check(['build'])])
+  await pass.finish()
+  expect(memo.size).toBe(0)
+  const again = await createCheckPass(build.run, ROOT, { memo, snapshot: tree(snapshot) })
+  expect((await again.runTask([check(['build'])])).map(r => r.output)).toEqual(['built'])
+  expect((await again.finish()).reused).toBe(0)
+  expect(build.calls).toHaveLength(2)
+  // One that leaves the tree alone is.
+  const quiet = scripted(() => ok('fine'))
+  snapshot.now = 'steady'
+  const first = await createCheckPass(quiet.run, ROOT, { memo, snapshot: tree(snapshot) })
+  await first.runTask([check(['lint'])])
+  await first.finish()
+  const second = await createCheckPass(quiet.run, ROOT, { memo, snapshot: tree(snapshot) })
+  expect((await second.runTask([check(['lint'])])).map(r => r.output)).toEqual(['fine'])
+  expect((await second.finish()).reused).toBe(1)
+  expect(quiet.calls).toHaveLength(1)
 })
 
 test('the same command in two tasks runs once in a pass', async () => {

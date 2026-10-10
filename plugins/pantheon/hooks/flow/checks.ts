@@ -12,8 +12,8 @@
 // - unverified: the check never got to run because the pass ran out of time. No result is produced for it, so it is never a
 //   fail and never costs an attempt.
 //
-// A pass keeps a memo: a result is reused while the tree snapshot is the one it was produced on, so a Stop in a chat-only
-// turn re-runs nothing.
+// A pass keeps a memo of passes only: a pass is reused while the tree snapshot is the one it was produced on (and the tree
+// was not changed by the checks themselves), so a Stop in a chat-only turn re-runs nothing. A fail is always run again.
 
 import type { Check } from './plan'
 import { OUTPUT_TAIL } from './policy'
@@ -120,7 +120,7 @@ export type PassOptions = {
 export type CheckPass = {
   /** The task's checks in order. A check that did not get to run ends the list there: what comes back is a prefix. */
   runTask: (checks: readonly Check[]) => Promise<CheckResult[]>
-  /** Remembers what ran on the tree as the checks left it. */
+  /** Remembers the passes, when the tree is the one they ran on. */
   finish: () => Promise<{ ran: number; reused: number; unverified: number }>
 }
 
@@ -143,7 +143,8 @@ export async function createCheckPass(run: Runner, root: string, options: PassOp
     }
     const result = await runCheck(run, root, check, timeoutMs === undefined ? {} : { timeoutMs })
     if (!result) { exhausted = true; return undefined }
-    if (result.passed !== null) executed.push({ key, result })
+    // Only a pass is remembered: a failing or unrunnable check is run again, so a flaky or environmental failure is never stuck.
+    if (result.passed === true) executed.push({ key, result })
     return result
   }
 
@@ -164,9 +165,11 @@ export async function createCheckPass(run: Runner, root: string, options: PassOp
     },
     async finish() {
       const ran = executed.length
-      if (ran > 0 && options.memo && options.snapshot) {
+      if (ran > 0 && options.memo && options.snapshot && before !== undefined) {
+        // A pass is remembered under the tree it was produced on. A check that changed the tree (an artifact, a formatter)
+        // did not pass on the tree it leaves behind, so it is not remembered at all.
         const after = await options.snapshot()
-        if (after !== undefined) {
+        if (after !== undefined && after === before) {
           for (const { key, result } of executed) options.memo.set(key, { snapshot: after, result })
           while (options.memo.size > MEMO_MAX) options.memo.delete(options.memo.keys().next().value as string)
         }

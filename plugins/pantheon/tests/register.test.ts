@@ -189,7 +189,7 @@ describe('edit gate', () => {
   }
   test('deep missing paths inherit only a confirmed resolved directory and clean paths keep working', async () => {
     const paths: Record<string, string | undefined> = {
-      '/repo/.pantheon/new/deep/a.ts': undefined, '/repo/.pantheon/new/deep': undefined, '/repo/.pantheon/new': undefined,
+      '/repo/.pantheon/plans/new/deep/a.ts': undefined, '/repo/.pantheon/plans/new/deep': undefined, '/repo/.pantheon/plans/new': undefined,
       '/repo/link/new/deep/a.ts': undefined, '/repo/link/new/deep': undefined, '/repo/link/new': undefined,
       '/repo/link': '/repo/src',
       '/repo/sub/../src/a.ts': '/repo/src/a.ts',
@@ -204,11 +204,11 @@ describe('edit gate', () => {
       return { ...pathStat(realPath), isLink: path !== realPath }
     }
     const context = async (path: string) => gateContext({ ...gateEdit, file_path: await resolveGatePath(stat, path, '/repo/sub') }, { root: ROOT, home: HOME })
-    expect((await context('/repo/.pantheon/new/deep/a.ts')).skip).toBe(true)
+    expect((await context('/repo/.pantheon/plans/new/deep/a.ts')).skip).toBe(true)
     for (const file_path of ['/repo/link/new/deep/a.ts', '../src/a.ts', '/repo/src/a.ts', '/repo/.pantheon/chain.ts']) {
       expect((await context(file_path)).skip).toBe(false)
     }
-    expect(inspected).toContainEqual({ path: '/repo/.pantheon/new/deep/a.ts', resolve: false })
+    expect(inspected).toContainEqual({ path: '/repo/.pantheon/plans/new/deep/a.ts', resolve: false })
   })
   test('only exact state and scratchpad exemptions bypass the gate and uid is cached', { options: { gate: true } }, async ($, on) => {
     const host = gateWorld(on)
@@ -239,9 +239,9 @@ describe('edit gate', () => {
     expect(host.forwarded).toEqual([])
   })
   test('relative paths use session cwd rather than repository root', { options: { gate: true } }, async ($, on) => {
-    const host = gateWorld(on, { cwd: '/repo/sub', realPaths: { '/repo/sub/../.pantheon/note.md': '/repo/.pantheon/note.md' } })
-    expect((await $.tool.call({ ...gateBig, file_path: '.pantheon/note.md' } as never)).deny).toContain('Denied by rules')
-    expect((await $.tool.call({ ...gateBig, file_path: '../.pantheon/note.md' } as never)).deny).toBeUndefined()
+    const host = gateWorld(on, { cwd: '/repo/sub', realPaths: { '/repo/sub/../.pantheon/plans/note.md': '/repo/.pantheon/plans/note.md' } })
+    expect((await $.tool.call({ ...gateBig, file_path: '.pantheon/plans/note.md' } as never)).deny).toContain('Denied by rules')
+    expect((await $.tool.call({ ...gateBig, file_path: '../.pantheon/plans/note.md' } as never)).deny).toBeUndefined()
     expect(host.sent).toEqual([])
   })
   for (const fault of ['workspace', 'env'] as const) {

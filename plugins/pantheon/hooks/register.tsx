@@ -12,6 +12,11 @@ import {
 } from './flow/controller'
 import type { Ctx, Serial } from './flow/controller'
 import type { CheckMemo } from './flow/checks'
+import { classifyGitCommand } from './flow/gitgate'
+import type { GitActor } from './flow/gitgate'
+import { actorOfType, cwdOfAgent, gitGate, usesGit } from './flow/gitguard'
+import type { CwdBook } from './flow/gitguard'
+import { noteGit } from './flow/gitjournal'
 import { createSerial } from './flow/store'
 import type { Mode } from './flow/types'
 import { buildCouncilBlock, isCouncilOrigin, matchesCouncilTrigger } from './prompts/council'
@@ -241,6 +246,18 @@ async function setFlowDenials($: Dollar, rt: FlowRuntime, agentId: string, count
   await update($, flowAgentsAtom, links => links[agentId] ? { ...links, [agentId]: { ...links[agentId]!, denials: count(links[agentId]!.denials) } } : links)
 }
 
+/**
+ * What a write gets when the ownership hook did not finish (it outlasted its budget, or failed outside what it guards): in
+ * enforce, a write by an agent the flow linked to a task is not let through unchecked. Every other write is not the flow's to
+ * hold, and nothing is refused outside enforce.
+ */
+export function flowWriteFallback(links: ReadonlyMap<string, FlowAgent>, mode: Mode, agentId: string | undefined): string | undefined {
+  const link = mode === 'enforce' && agentId ? links.get(agentId) : undefined
+  return link?.kind === 'work' && link.files
+    ? `[Pantheon flow] The flow could not check this write against task ${link.task}'s files in time, so it was not made. Try it again.`
+    : undefined
+}
+
 /** Marks a delegation as starting until the returned function is called. */
 function holdPending(rt: FlowRuntime): () => void {
   let release!: () => void
@@ -263,7 +280,9 @@ async function flowLinkFor($: Dollar, rt: FlowRuntime, deps: FlowDeps, agentId: 
   const find = () => flowAgentOf($, rt, agentId)
   let link = await find()
   if (link || rt.strangers.has(agentId)) return link
-  if (rt.pending.size > 0) {
+  // Only the first level waits: the wait for what is starting is one wait of at most PENDING_WAIT_MS, whatever the depth of
+  // the parents asked after, not one per level.
+  if (depth === 0 && rt.pending.size > 0) {
     let timer: { cancel: () => void } | undefined
     await Promise.race([
       Promise.allSettled([...rt.pending]),
@@ -280,7 +299,7 @@ async function flowLinkFor($: Dollar, rt: FlowRuntime, deps: FlowDeps, agentId: 
     if (parent?.kind === 'work' && parent.files) adopted = inherited(parent, info.parentId)
   } else if (info) {
     const taskId = taskIdOf(info.description)
-    const check = taskId ? await inspectSpawn(flowCtx($, deps), { taskId, agentType: info.type }) : undefined
+    const check = taskId ? await inspectSpawn(flowCtx($, deps), { taskId, agentType: info.type, lookup: true }) : undefined
     if (taskId && check?.kind === 'work' && check.planId && check.files) {
       adopted = { task: taskId, plan: check.planId, kind: 'work', end: check.end, denials: 0, files: check.files }
     }
@@ -316,6 +335,75 @@ async function flowOwnership($: Dollar, rt: FlowRuntime, deps: FlowDeps, link: F
   return ownershipVerdict(link.task, link.files ?? [], root, path, scratch)
 }
 
+/** The root and a path as the host resolves them (links followed), as the ownership gate reads them; a path it cannot resolve as written. */
+async function flowResolved($: Dollar, root: string, raw: string): Promise<{ root: string; path: string }> {
+  const cwd = await $.session.cwd()
+  const stat = (path: string, resolve: boolean) => $.fs.stat(path, { resolve })
+  const resolvedRoot = await resolveGatePath(stat, root, cwd)
+  try { return { root: resolvedRoot, path: await resolveGatePath(stat, raw, cwd) } } catch { return { root: resolvedRoot, path: raw } }
+}
+
+/**
+ * The git gate (decision 12) for one shell command (Bash, or a Monitor's `command`). The main session is the lead; a task's
+ * work agent is a developer held to the task's files (resolved by the host as the ownership gate does); an agent that no
+ * task links is held by its type: a developer or ux commits under the same rules with every path its own, the git role is
+ * `git`, the read-only roles are read-only, and every other agent (general-purpose, Explore, one the engine does not list)
+ * gets the lead's rules. Returns the reason to refuse in enforce only: shadow journals what enforce would have denied and
+ * returns nothing. A command that runs no git is not looked at, so the agent lookup happens only for the ones that do.
+ */
+async function gitDenial($: Dollar, rt: FlowRuntime, deps: FlowDeps, book: CwdBook, command: string, agentId: string | undefined): Promise<string | undefined> {
+  const found = classifyGitCommand(command)
+  if (!usesGit(found)) return undefined
+  let actor: GitActor = 'lead'
+  let work: FlowAgent | undefined
+  // Where the agent's commands run. The Bash event does not say, so it is what the spawn said (a `cwd`, or none: the parent's);
+  // an agent in a worktree of its own, or one nothing accounts for, is not knowable and its lookups answer "unknown".
+  let cwd: string | null | undefined
+  if (agentId) {
+    const link = await flowLinkFor($, rt, deps, agentId)
+    const agents = await $.agent.list()
+    cwd = cwdOfAgent(agentId, agents, book)
+    if (link?.kind === 'work' && link.files) {
+      actor = 'developer'
+      work = link
+    } else {
+      actor = actorOfType(agents.find(agent => agent.id === agentId)?.type)
+    }
+  }
+  const where = cwd ? { cwd } : {}
+  const isFree = (actor === 'developer' || actor === 'ux') && !work
+  const outcome = await gitGate({ command, found, actor, ...(work ? { task: work.task } : {}), gitRole: isOffered(deps.config, 'pantheon:git') }, {
+    owned: async paths => {
+      // A developer no task links has no files to hold it to: its verbs and flags are checked, its paths are its own.
+      if (isFree) return paths
+      const owned: string[] = []
+      // An error here is not a refusal: it fails open with the rest of the gate. A path the host cannot resolve is "not owned".
+      for (const path of paths) if (work && (await flowOwnership($, rt, deps, work, path)).owned) owned.push(path)
+      return owned
+    },
+    // A bare `git push` goes to the checked-out branch. Not being able to read it is an answer ("unknown"), not an error.
+    branch: async dirArgs => {
+      if (cwd === null) return undefined
+      try {
+        const out = await $.process.run(['git', ...dirArgs, 'rev-parse', '--abbrev-ref', 'HEAD'], { ...where, timeoutMs: 5_000 })
+        return out.exitCode === 0 ? out.stdout.trim() || undefined : undefined
+      } catch { return undefined }
+    },
+    // The settings that send a bare push elsewhere (a push refspec, a mirror, `push.default`). Exit 1 is "none set".
+    config: async dirArgs => {
+      if (cwd === null) return undefined
+      try {
+        const out = await $.process.run(['git', ...dirArgs, 'config', '--get-regexp', '^(remote\\..*\\.(push|mirror)|push\\.default)$'], { ...where, timeoutMs: 5_000 })
+        if (out.exitCode === 0) return out.stdout.split('\n').filter(Boolean)
+        return out.exitCode === 1 ? [] : undefined
+      } catch { return undefined }
+    },
+  })
+  if (outcome.allow) return undefined
+  await noteGit(flowCtx($, deps), { actor, ...(work ? { task: work.task } : {}), reason: outcome.reason, summary: outcome.summary })
+  return deps.mode === 'enforce' ? outcome.reason : undefined
+}
+
 /** The controller's host access, built from the hook's `$` (it cannot be stored). */
 function flowCtx($: Dollar, deps: FlowDeps): Ctx {
   return {
@@ -339,6 +427,8 @@ function flowCtx($: Dollar, deps: FlowDeps): Ctx {
     list: async dir => (await $.fs.exists(dir)) ? (await $.fs.list(dir)).map(entry => ({ name: entry.name, kind: entry.kind, mtimeMs: entry.mtimeMs })) : [],
     serial: deps.serial,
     memo: deps.memo,
+    // The host's own store, outside the repository: what the controller trusts to say what the person approved.
+    attest: { get: key => $.store.get(key), set: (key, value) => $.store.set(key, value) },
     warn: deps.warn,
   }
 }
@@ -754,13 +844,17 @@ export const register: Register = (on, options) => {
     let check: Awaited<ReturnType<typeof inspectSpawn>> | undefined
     try { check = await inspectSpawn(flowCtx($, await flowDeps(io)), { taskId, agentType: e.subagentType }) } catch (error) { flowFailed(io, error) }
     if (check?.deny) return { deny: check.deny }
+    // The lead writes the QA brief, so in enforce the approved criteria are appended to it: the lead cannot hand QA its own
+    // answers. Shadow rewrites nothing.
+    const brief = flowMode === 'enforce' && check?.kind === 'review' && check.by === 'qa' && check.criteria ? qaCriteriaBrief(taskId, check.criteria) : undefined
+    const forward = brief ? { ...e, prompt: `${e.prompt}\n\n${brief}` } : e
+    // Nothing is linked unless a plan is in force for the task: nothing to wait for then either.
+    if (!check?.kind || !check.planId) return next(forward)
     // The link is written after the spawn resolves; an agent's first write waits for it (flowLinkFor).
     const release = holdPending(flowRuntime)
     try {
-      // The lead writes the QA brief, so the approved criteria are appended to it: the lead cannot hand QA its own answers.
-      const brief = check?.kind === 'review' && check.by === 'qa' && check.criteria ? qaCriteriaBrief(taskId, check.criteria) : undefined
-      const started = await next(brief ? { ...e, prompt: `${e.prompt}\n\n${brief}` } : e)
-      if (check?.kind && check.planId && started.agentId) {
+      const started = await next(forward)
+      if (started.agentId) {
         const link: FlowAgent = {
           task: taskId, plan: check.planId, kind: check.kind, end: check.end, denials: 0,
           ...(check.by ? { by: check.by } : {}), ...(check.files ? { files: check.files } : {}), ...(check.git ? { git: check.git } : {}),
@@ -818,7 +912,8 @@ export const register: Register = (on, options) => {
       const io = hostIo($)
       if (raw) {
         try {
-          const voided = await mainEdit(flowCtx($, await flowDeps(io)), { path: raw })
+          const deps = await flowDeps(io)
+          const voided = await mainEdit(flowCtx($, deps), { path: raw, resolve: () => flowResolved($, deps.root, raw) })
           if (voided.text) return { ...result, context: [...(result.context ?? []), voided.text] } as typeof result
         } catch (error) { flowFailed(io, error) }
       }
@@ -891,6 +986,50 @@ export const register: Register = (on, options) => {
       }
     } catch (error) { flowFailed(io, error) }
     return next(e)
+  }).catch((_$, e, next) => {
+    const deny = next.called ? undefined : flowWriteFallback(flowRuntime.links, flowMode, e.agentId)
+    return deny === undefined ? next(e) : { deny }
+  })
+
+  // Where a subagent works, for the git gate's branch and settings lookups: the Bash event does not say, so it is read at the
+  // spawn (the call's own `cwd`; none means the parent's). An Agent call with `isolation` runs in a worktree the engine
+  // makes, whose path no event carries: its agents are not knowable, and the gate's lookups answer "unknown" for them.
+  const gitIsolatedCalls = new Set<string>()
+  const gitCwds = new Map<string, string>()
+  const gitUnknownCwds = new Set<string>()
+  const remember = (set: Set<string>, id: string) => {
+    set.add(id)
+    if (set.size > 500) set.delete(set.values().next().value as string)
+  }
+  on('tool.call', { tool: 'Agent', isolation: /./ }, async (_$, e, next) => {
+    if (flowOn() && e.tool_use_id) remember(gitIsolatedCalls, e.tool_use_id)
+    return next(e)
+  })
+  on('agent.spawn', { tool_use_id: /./ }, async (_$, e, next) => {
+    const started = await next(e)
+    if (flowOn() && started.agentId) {
+      if (gitIsolatedCalls.has(e.tool_use_id)) remember(gitUnknownCwds, started.agentId)
+      else if (e.cwd) {
+        gitCwds.set(started.agentId, e.cwd)
+        if (gitCwds.size > 500) gitCwds.delete(gitCwds.keys().next().value as string)
+      }
+    }
+    return started
+  })
+
+  // The git gate (decision 12): shell git is held to who runs it. The lead pushes (never to a protected branch, bare pushes
+  // included) and routes the rest to the git role; a task's developer or ux commits its own files only; the git role keeps
+  // PR/MR, squash and repository state and never writes to a protected branch. It follows the flow mode and does not need a
+  // plan: the gate protects without one. `Monitor` runs a shell command too, so it is held the same way (one with no `command`
+  // is a WebSocket and has no git to read).
+  on('tool.call', { tool: ['Bash', 'Monitor'] }, async ($, e, next) => {
+    if (!flowOn() || typeof e.command !== 'string') return next(e)
+    const io = hostIo($)
+    let denial: string | undefined
+    try {
+      denial = await gitDenial($, flowRuntime, await flowDeps(io), { cwds: gitCwds, unknown: gitUnknownCwds }, e.command, e.agentId)
+    } catch (error) { flowFailed(io, error) }
+    return denial === undefined ? next(e) : { deny: `[Pantheon flow] ${denial}` }
   })
 
   // Task end for a foreground agent (decision 6): the Agent tool returned in the main loop; the controller's verdict is
@@ -933,7 +1072,9 @@ export const register: Register = (on, options) => {
         stopHookActive: e.stop_hook_active === true, backgroundTasks: pendingAgentTasks(e.background_tasks), runningAgents: running,
       })
       if (out.notice) io.toast(out.notice)
-      if (out.block) return { ...below, block: out.block }
+      const context = out.context ? { additionalContext: [...(below.additionalContext ?? []), out.context] } : {}
+      if (out.block) return { ...below, ...context, block: out.block }
+      if (out.context) return { ...below, ...context }
     } catch (error) { flowFailed(io, error) }
     return below
   })
@@ -1001,6 +1142,8 @@ export const register: Register = (on, options) => {
             }))
             for (const [id, link] of Object.entries(refresh(Object.fromEntries(flowRuntime.links)))) flowRuntime.links.set(id, link)
             await update($, flowAgentsAtom, refresh)
+            // An agent found to belong to no task may belong to one of the plan's now.
+            flowRuntime.strangers.clear()
           }
         } catch (error) { flowFailed(io, error) }
       }

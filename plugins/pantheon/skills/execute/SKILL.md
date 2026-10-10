@@ -9,7 +9,7 @@ Run `.pantheon/plans/<plan>.md` task by task. If the plan carries a `pantheon-fl
 
 ## With a flow
 
-The block is the contract: tasks, roles, files and acceptance come from it, and the controller checks them. You delegate and relay; the controller decides.
+The block is the contract: tasks, roles, files and acceptance come from it, and the controller checks them. You delegate and relay; the controller decides. The contract is the version the person approved: if you edit the block during the run, the controller adopts only purely additive edits (a new task at the end, an extra criterion, a raised `risk`; see brainstorm) and keeps running the approved version for everything else until the person runs `/pantheon flow approve`; `/pantheon flow status` lists what waits. Never rely on an edit that is waiting.
 
 1. **Pick.** The next task is one whose `dependsOn` are all done, in plan order. Run two together only when both are eligible and their `files` are disjoint; each implementer owns its files. Read-only lanes (code-reader, docs-reader) always run in parallel.
 2. **Brief.** Build it from the task's entry in the block and the plan's notes for that task id, nothing else: goal, files, interfaces, acceptance (the checks to make pass and the criteria), and the rules below. Reference paths instead of pasting files.

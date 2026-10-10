@@ -9,6 +9,7 @@
 
 import { branchOnly, eligible, findTask, flowHash, requiredTasks } from './plan'
 import type { Flow, FlowTask } from './plan'
+import { SEEN_IDS_MAX, remember } from './types'
 import type { Action, CheckResult, DecideOptions, Decision, FlowEvent, FlowState, Judgment, Mode, Receipts, Reviewer } from './types'
 
 /** Failing output quoted in a reason. */
@@ -28,21 +29,27 @@ export function newState(flow: Flow, hash: string): FlowState {
   if (first) status[first] = 'active'
   return {
     planId: flow.planId, hash, status, attempts: {}, awaiting: [], receipts: {}, qaRequired: [], ends: {}, sideEffectsDone: [],
-    blocks: 0, consecutiveBlocks: 0, paused: false, stopped: false, done: false,
+    blocks: 0, consecutiveBlocks: 0, paused: false, stopped: false, done: false, seenIds: flow.tasks.map(task => task.id),
   }
 }
 
 /**
- * The state for an edited plan: progress of the tasks still in the flow is kept, removed tasks are dropped,
- * new ones are pending, and the approval is cleared so the person approves the new hash again.
+ * The state for a changed effective flow: progress of the tasks still in the flow is kept, removed tasks are dropped (and
+ * retired, so no later amendment reuses their ids), new ones are pending. Enforcement is not dropped: `approvedHash` stays,
+ * and `adoptedHash` records the new flow's hash whenever it is not the one the person approved.
+ *
+ * This function never decides whether `flow` is authorized to be the effective one. The controller passes only the
+ * approved snapshot, an amendment `amend` allowed, or a plan the person just approved (which `approve` then records);
+ * for a plan nobody approved it clears the approval first (`unapprove`), so a rebase can never approve it.
  */
 export function rebase(flow: Flow, state: FlowState): FlowState {
   const ids = new Set(flow.tasks.map(task => task.id))
   const keep = <T>(record: Record<string, T>): Record<string, T> => Object.fromEntries(Object.entries(record).filter(([id]) => ids.has(id)))
+  const hash = flowHash(flow)
   const s: FlowState = {
     ...state,
     planId: flow.planId,
-    hash: flowHash(flow),
+    hash,
     status: keep(state.status),
     attempts: keep(state.attempts),
     awaiting: state.awaiting.filter(a => ids.has(a.task)).map(a => ({ ...a })),
@@ -52,7 +59,12 @@ export function rebase(flow: Flow, state: FlowState): FlowState {
     sideEffectsDone: [...state.sideEffectsDone],
     ...(state.lastFailure ? { lastFailure: { ...state.lastFailure } } : {}),
   }
-  delete s.approvedHash
+  // Every id the plan has had is remembered, so no later amendment reuses one the flow dropped.
+  s.seenIds = remember(state.seenIds, [...Object.keys(state.status), ...flow.tasks.map(task => task.id)], SEEN_IDS_MAX)
+  // The edits that waited were about the flow before this one.
+  delete s.seenEdits
+  if (state.approvedHash !== undefined && state.approvedHash !== hash) s.adoptedHash = hash
+  else delete s.adoptedHash
   s.done = false
   for (const task of flow.tasks) if (!(task.id in s.status)) s.status[task.id] = 'pending'
   // A receipt nobody requires any more (the task is no longer risky, say) is not waited for.
@@ -132,17 +144,17 @@ export function applyMode(decision: Decision, mode: Mode, previous: FlowState): 
   return { action: 'allow', condition: decision.condition, reason: '', state, wouldBe, ...(decision.task ? { task: decision.task } : {}) }
 }
 
-/** Whether the flow on disk is the one the person approved. */
+/** Whether `flow` is the one in force: the person's approval, or what was adopted over it, and the state's progress is for it. */
 function approvedFor(flow: Flow, state: FlowState): boolean {
   const hash = flowHash(flow)
-  return state.approvedHash === hash && state.hash === hash
+  return state.approvedHash !== undefined && (state.adoptedHash ?? state.approvedHash) === hash && state.hash === hash
 }
 
 // --- stop ---
 
 function onStop(flow: Flow, s: FlowState, event: Extract<FlowEvent, { kind: 'stop' }>, original: FlowState, opts: DecideOptions): Decision {
-  // 1. nothing to enforce; an unapproved or edited flow is left exactly as it is
-  if (!approvedFor(flow, original)) return make(copyState(original), 'allow', 'unapproved', 'The flow is not approved, or the plan changed since it was, so nothing is enforced.')
+  // 1. nothing to enforce; a flow nobody approved, or a state that is not for this flow, is left exactly as it is
+  if (!approvedFor(flow, original)) return make(copyState(original), 'allow', 'unapproved', 'The flow is not approved, or its approval does not match the plan in force, so nothing is enforced.')
   // A Stop that does not follow one of our blocks starts the consecutive run over.
   if (!event.stopHookActive) s.consecutiveBlocks = 0
   const allow = (condition: string, reason: string) => { s.consecutiveBlocks = 0; return make(s, 'allow', condition, reason) }
@@ -333,7 +345,7 @@ function onTaskEnd(flow: Flow, s: FlowState, event: Extract<FlowEvent, { kind: '
 
 /** Task ends and reviews do nothing on a flow that is unapproved, edited, done, paused or stopped. */
 function idleDecision(flow: Flow, original: FlowState): Decision | undefined {
-  if (!approvedFor(flow, original)) return make(copyState(original), 'allow', 'unapproved', 'The flow is not approved, or the plan changed since it was, so nothing is enforced.')
+  if (!approvedFor(flow, original)) return make(copyState(original), 'allow', 'unapproved', 'The flow is not approved, or its approval does not match the plan in force, so nothing is enforced.')
   if (original.done) return make(copyState(original), 'allow', 'already_done', 'The flow is already complete.')
   if (original.paused) return make(copyState(original), 'allow', 'paused', 'The flow is paused until the person resumes it.')
   if (original.stopped) return make(copyState(original), 'allow', 'stopped', 'The flow was stopped by the person.')

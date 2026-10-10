@@ -5,6 +5,16 @@ import type { TaskStatus } from './plan'
 
 export type Mode = 'off' | 'shadow' | 'enforce'
 
+/** The newest ids and edit keys a state remembers. */
+export const SEEN_IDS_MAX = 1000
+export const SEEN_EDITS_MAX = 64
+/** `list` with `items` added (each once), keeping the newest `max`. */
+export function remember(list: readonly string[] | undefined, items: readonly string[], max: number): string[] {
+  const out = [...(list ?? [])]
+  for (const item of items) if (!out.includes(item)) out.push(item)
+  return out.length > max ? out.slice(out.length - max) : out
+}
+
 /** One check of a task: `passed` is null when it could not run (missing binary, timeout), with why in `output`. */
 export type CheckResult = { argv: string[]; passed: boolean | null; output: string }
 
@@ -34,10 +44,26 @@ export type DecideOptions = {
 
 export type FlowState = {
   planId: string
-  /** The flow block's hash when this state was created; a different hash means the plan changed. */
+  /**
+   * The hash of the flow this state's progress is for: the effective flow, that is the approved snapshot plus the
+   * amendments adopted on top of it (`approved.json`). It is not the plan file's hash: the file may say more.
+   */
   hash: string
-  /** The hash the person approved with `/pantheon flow approve`; unset until then. */
+  /** The hash the person approved with `/pantheon flow approve`; unset until then. An adoption never moves it. */
   approvedHash?: string
+  /** The effective flow's hash once amendments were adopted over the approved snapshot; unset while they are one and the same. */
+  adoptedHash?: string
+  /**
+   * The plan-file edits already journaled as waiting for approval or as invalid (each its hash, or a key for a file that did
+   * not validate; the newest SEEN_EDITS_MAX), so that one edit is journaled once however many events see it or in what
+   * order two of them alternate. An approval or an adoption starts the set over.
+   */
+  seenEdits?: string[]
+  /**
+   * Every task id this plan has had (the newest SEEN_IDS_MAX): an adopted amendment never reuses one. Kept here, not read
+   * back from the journal, whose cap would forget them.
+   */
+  seenIds?: string[]
   status: Record<string, TaskStatus>
   /** Failed attempts per task since it last became active. */
   attempts: Record<string, number>

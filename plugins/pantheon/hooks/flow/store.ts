@@ -3,6 +3,7 @@
 //
 // Layout under `<root>/.pantheon/flow/<planId>/`:
 //   state.json         the FlowState, pretty JSON, written whole
+//   approved.json      the effective flow: the plan block as the person approved it, plus the amendments adopted since
 //   journal.jsonl      one JournalEntry per line, ids climbing, capped at JOURNAL_CAP entries and JOURNAL_MAX_BYTES
 //   side-effects.jsonl one { taskId, at } per line; the ledger outranks state.json
 //   labels.jsonl       one calibration label per line, referencing a journal id, capped like the journal
@@ -15,11 +16,14 @@
 // Reads never throw on content: torn, foreign or malformed lines are skipped. A failure of `fs` itself propagates and
 // the caller (which fails open) decides what to do.
 //
-// Approval: when the plan's flow hash differs from `state.hash`, the host calls the policy's `rebase(flow, state)` (new
-// hash, `approvedHash` cleared) and the person approves again with `approve`. `approve` only sets `approvedHash`.
+// Approval: `/pantheon flow approve` writes `approved.json` (the snapshot of the plan block) and sets `approvedHash`; an
+// edit of the plan file never changes either. The controller adopts an edit only when `amend` (plan.ts) finds it purely
+// additive: it then rewrites `approved.json` and records the effective flow's hash as `adoptedHash`, leaving the person's
+// `approvedHash` alone. A state that carries an `approvedHash` is enforced only while `approved.json` agrees with it.
 // The ledger is per planId, not per hash: a side effect recorded for an earlier version of the plan stays recorded.
 
-import type { TaskStatus } from './plan'
+import { flowHash, sha256, validateFlow } from './plan'
+import type { Flow, TaskStatus } from './plan'
 import type { Action, Awaiting, FlowState, Mode, Receipts, Reviewer } from './types'
 
 export type FlowFs = {
@@ -43,11 +47,13 @@ const TASK_MAX = 64
 const CONDITION_MAX = 64
 const CHECK_LABEL_MAX = 200
 const CHECKS_MAX = 20
+const HASH_MAX = 64
 
 // Same pattern plan.ts validates; checked again here because the id becomes a path segment.
 const PLAN_ID = /^[a-z0-9][a-z0-9-]{0,63}$/
 
-export type JournalKind = 'decision' | 'judgment' | 'approval' | 'note'
+/** `amendment`: a plan edit adopted, waiting for approval or invalid. `escalation`: a judge escalation (reserved for T9w). */
+export type JournalKind = 'decision' | 'judgment' | 'approval' | 'note' | 'amendment' | 'escalation'
 
 export type JournalEntry = {
   /** Assigned by appendJournal: the last id plus one, starting at 1. */
@@ -70,6 +76,10 @@ export type JournalEntry = {
   /** Pass/fail per check; never the output text. `passed` is null when the check could not run. */
   checks?: { label: string; passed: boolean | null }[]
   detail?: string
+  /** The hash the person approved, on an approval or an amendment entry. */
+  approvedHash?: string
+  /** The effective flow's hash after an adoption. */
+  adoptedHash?: string
 }
 
 /** What a caller passes: everything but the id. */
@@ -99,6 +109,7 @@ export const statePath = (root: string, planId: string) => `${flowDir(root, plan
 export const journalPath = (root: string, planId: string) => `${flowDir(root, planId)}/journal.jsonl`
 export const ledgerPath = (root: string, planId: string) => `${flowDir(root, planId)}/side-effects.jsonl`
 export const labelsPath = (root: string, planId: string) => `${flowDir(root, planId)}/labels.jsonl`
+export const approvedPath = (root: string, planId: string) => `${flowDir(root, planId)}/approved.json`
 
 // --- validation helpers ---
 
@@ -178,6 +189,8 @@ function parseState(raw: unknown, planId: string): FlowState | undefined {
   if (!isObj(raw)) return undefined
   if (raw.planId !== planId || !isStr(raw.hash)) return undefined
   if (!optional(raw.approvedHash, isStr) || !optional(raw.lastInstruction, isStr)) return undefined
+  // Added with plan amendments: an older state.json has none of them.
+  if (!optional(raw.adoptedHash, isStr) || !optional(raw.seenEdits, isStrList) || !optional(raw.seenIds, isStrList)) return undefined
   if (!optional(raw.mode, v => isStr(v) && MODES.includes(v))) return undefined
   if (!isObj(raw.status) || !Object.values(raw.status).every(v => isStr(v) && STATUSES.includes(v))) return undefined
   if (!isObj(raw.attempts) || !Object.values(raw.attempts).every(isCount)) return undefined
@@ -214,6 +227,9 @@ function parseState(raw: unknown, planId: string): FlowState | undefined {
   for (const id of (raw.awaitingReview as string[] | undefined) ?? []) addAwaiting(state, id, 'architect')
   for (const a of (raw.awaiting as Awaiting[] | undefined) ?? []) addAwaiting(state, a.task, a.by)
   if (raw.approvedHash !== undefined) state.approvedHash = raw.approvedHash as string
+  if (raw.adoptedHash !== undefined) state.adoptedHash = raw.adoptedHash as string
+  if (raw.seenEdits !== undefined) state.seenEdits = [...(raw.seenEdits as string[])]
+  if (raw.seenIds !== undefined) state.seenIds = [...(raw.seenIds as string[])]
   if (lf !== undefined) state.lastFailure = { key: (lf as Obj).key as string, count: (lf as Obj).count as number }
   if (raw.lastInstruction !== undefined) state.lastInstruction = raw.lastInstruction as string
   if (raw.mode !== undefined) state.mode = raw.mode as Mode
@@ -237,19 +253,118 @@ export async function saveState(fs: FlowFs, root: string, state: FlowState): Pro
 
 // --- approval ---
 
-/** Records the hash the person approved. Approving a hash the state does not carry is recorded but never counts. */
+/**
+ * Records the hash the person approved: what was adopted over an earlier approval and any edit that was waiting are
+ * folded into it. Approving a hash the state does not carry is recorded but never counts.
+ */
 export function approve(state: FlowState, hash: string): FlowState {
-  return { ...state, approvedHash: hash }
+  const next: FlowState = { ...state, approvedHash: hash }
+  delete next.adoptedHash
+  delete next.seenEdits
+  return next
 }
 
-/** True only when the approved hash, the plan's current hash and the state's hash are all the same. */
+/** The state of a plan nobody approved (or whose approval cannot be established): no approval, no adoption. */
+export function unapprove(state: FlowState): FlowState {
+  const next: FlowState = { ...state }
+  delete next.approvedHash
+  delete next.adoptedHash
+  return next
+}
+
+/**
+ * True only when `hash` is the flow the person approved or the one adopted over it, and the state's progress is for it.
+ * The plan file's own hash does not count: the file may say more than what was approved.
+ */
 export function isApproved(state: FlowState, hash: string): boolean {
-  return state.approvedHash !== undefined && state.approvedHash === hash && state.hash === hash
+  return state.approvedHash !== undefined && (state.adoptedHash ?? state.approvedHash) === hash && state.hash === hash
+}
+
+// --- approved snapshot ---
+
+/**
+ * What `approved.json` holds: the flow in force. `approvedHash` is the person's approval; `adoptedHash` is set when
+ * adopted amendments make the flow differ from it, and then `flow` hashes to `adoptedHash`, otherwise to `approvedHash`.
+ */
+export type ApprovedFile = { approvedHash: string; adoptedHash?: string; flow: Flow }
+export type ApprovedLoad =
+  | { kind: 'missing' }
+  | { kind: 'invalid'; why: string }
+  | { kind: 'ok'; approved: ApprovedFile }
+
+/** The snapshot, or why there is none. A file that does not validate, or whose flow does not hash to what it claims, is `invalid`. */
+export async function loadApproved(fs: FlowFs, root: string, planId: string): Promise<ApprovedLoad> {
+  const text = await fs.read(approvedPath(root, planId))
+  if (text === undefined) return { kind: 'missing' }
+  const raw = parseJson(text)
+  if (!isObj(raw)) return { kind: 'invalid', why: 'approved.json is not a JSON object' }
+  if (!isStr(raw.approvedHash) || !optional(raw.adoptedHash, isStr)) return { kind: 'invalid', why: 'approved.json has no valid approvedHash' }
+  const flow = validateFlow(raw.flow)
+  if (!flow.ok) return { kind: 'invalid', why: `approved.json holds an invalid flow: ${flow.errors[0] ?? 'unknown error'}` }
+  if (flow.flow.planId !== planId) return { kind: 'invalid', why: 'approved.json belongs to another plan' }
+  const adopted = raw.adoptedHash as string | undefined
+  if (adopted !== undefined && adopted === raw.approvedHash) return { kind: 'invalid', why: 'approved.json names an adoption equal to the approval' }
+  if (flowHash(flow.flow) !== (adopted ?? raw.approvedHash)) return { kind: 'invalid', why: 'the flow in approved.json does not match its recorded hash' }
+  return { kind: 'ok', approved: { approvedHash: raw.approvedHash, ...(adopted !== undefined ? { adoptedHash: adopted } : {}), flow: flow.flow } }
+}
+
+/** Writes the whole file. Callers write it BEFORE the state, so a crash in between leaves a state older than its snapshot. */
+export async function saveApproved(fs: FlowFs, root: string, planId: string, file: ApprovedFile): Promise<void> {
+  await fs.write(approvedPath(root, planId), `${JSON.stringify(file, null, 2)}\n`)
+}
+
+// --- attestation ---
+//
+// Every file under `.pantheon/flow/` is writable by whoever edits the repository, so none of them can say what the person
+// approved. The host's own store (outside the repository, which no tool call of an agent writes) holds that: a record of
+// the approval, written only by `/pantheon flow approve` and by an adoption `amend` accepted. A snapshot is believed only
+// while it is exactly what the record names; the commands a plan runs come from nowhere else.
+
+/** What the host store holds for one plan of one repository. */
+export type AttestRecord = {
+  /** The hash the person approved. */
+  approvedHash: string
+  /** The effective flow's hash once amendments were adopted over it. */
+  adoptedHash?: string
+  /** The hash of the flow in `approved.json`: `adoptedHash`, else `approvedHash`. */
+  snapshotHash: string
+  /** The tasks adopted over the approval: their text is the lead's, never the person's. */
+  adopted?: string[]
+}
+
+/** One key per repository root and plan: another checkout of the same plan has its own approval. */
+export function attestKey(root: string, planId: string): string {
+  return `flow.attest.${sha256(root.replace(/\/+$/, '') || '/').slice(0, 32)}.${checkPlanId(planId)}`
+}
+
+/** The record a host store handed back (it is JSON, never trusted to have a shape), or undefined. */
+export function parseAttest(raw: unknown): AttestRecord | undefined {
+  if (!isObj(raw) || !isStr(raw.approvedHash) || !isStr(raw.snapshotHash)) return undefined
+  if (!optional(raw.adoptedHash, isStr) || !optional(raw.adopted, isStrList)) return undefined
+  return {
+    approvedHash: raw.approvedHash, snapshotHash: raw.snapshotHash,
+    ...(raw.adoptedHash !== undefined ? { adoptedHash: raw.adoptedHash as string } : {}),
+    ...(raw.adopted !== undefined ? { adopted: [...(raw.adopted as string[])] } : {}),
+  }
+}
+
+/** The record that attests exactly `file`; `adopted` lists the tasks adopted over the approval. */
+export function attestOf(file: ApprovedFile, adopted: readonly string[] = []): AttestRecord {
+  return {
+    approvedHash: file.approvedHash, snapshotHash: flowHash(file.flow),
+    ...(file.adoptedHash !== undefined ? { adoptedHash: file.adoptedHash } : {}),
+    ...(adopted.length > 0 ? { adopted: [...adopted] } : {}),
+  }
+}
+
+/** Whether the snapshot is what the record names: both hashes and the flow itself. */
+export function matchesAttest(file: ApprovedFile, record: AttestRecord): boolean {
+  return file.approvedHash === record.approvedHash && file.adoptedHash === record.adoptedHash && flowHash(file.flow) === record.snapshotHash
 }
 
 // --- journal ---
 
-const KINDS: readonly string[] = ['decision', 'judgment', 'approval', 'note']
+const KINDS: readonly string[] = ['decision', 'judgment', 'approval', 'note', 'amendment', 'escalation']
 const ACTIONS: readonly string[] = ['allow', 'block', 'advance', 'wait', 'pause', 'complete', 'failTask']
 const MODES: readonly string[] = ['off', 'shadow', 'enforce']
 const SCORE_KEYS = ['claimsDone', 'complete', 'stuck'] as const
@@ -257,7 +372,7 @@ const SCORE_KEYS = ['claimsDone', 'complete', 'stuck'] as const
 function parseEntry(raw: unknown): JournalEntry | undefined {
   if (!isObj(raw)) return undefined
   if (!isCount(raw.id) || raw.id < 1 || !isNum(raw.at) || !isStr(raw.kind) || !KINDS.includes(raw.kind)) return undefined
-  for (const key of ['event', 'task', 'condition', 'reason', 'detail'] as const) if (!optional(raw[key], isStr)) return undefined
+  for (const key of ['event', 'task', 'condition', 'reason', 'detail', 'approvedHash', 'adoptedHash'] as const) if (!optional(raw[key], isStr)) return undefined
   for (const key of ['action', 'wouldBe'] as const) if (!optional(raw[key], v => isStr(v) && ACTIONS.includes(v))) return undefined
   if (!optional(raw.mode, v => isStr(v) && MODES.includes(v))) return undefined
   if (!optional(raw.scores, v => isObj(v) && Object.values(v).every(isNum))) return undefined
@@ -278,6 +393,8 @@ function parseEntry(raw: unknown): JournalEntry | undefined {
   }
   if (raw.checks !== undefined) entry.checks = (raw.checks as Obj[]).slice(0, CHECKS_MAX).map(c => ({ label: clip(c.label as string, CHECK_LABEL_MAX), passed: c.passed as boolean | null }))
   if (raw.detail !== undefined) entry.detail = clip(raw.detail as string, DETAIL_MAX)
+  if (raw.approvedHash !== undefined) entry.approvedHash = clip(raw.approvedHash as string, HASH_MAX)
+  if (raw.adoptedHash !== undefined) entry.adoptedHash = clip(raw.adoptedHash as string, HASH_MAX)
   return entry
 }
 

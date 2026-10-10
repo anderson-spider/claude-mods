@@ -38,6 +38,23 @@ export type FlowAgent = {
   git?: { head: string; dirty: string }
 }
 
+/**
+ * What the flow controller keeps in the host's own store (`$.store`, outside the repository), under the key
+ * `flow.attest.<first 32 hex digits of sha256(repository root)>.<planId>`: the record of what the person approved. Written
+ * only by `/pantheon flow approve` and by an adopted plan edit; a snapshot (`.pantheon/flow/<planId>/approved.json`) is believed
+ * only while it is exactly the flow this record names, so no edit of the repository can make the flow run another command.
+ */
+export type FlowAttest = {
+  /** The hash of the plan block the person approved. */
+  approvedHash: string
+  /** The hash of the flow in force once amendments were adopted over the approval. */
+  adoptedHash?: string
+  /** The hash of the flow in the snapshot: `adoptedHash` when there is one, else `approvedHash`. */
+  snapshotHash: string
+  /** The tasks adopted over the approval: their text is not the person's. */
+  adopted?: string[]
+}
+
 declare module 'claude-code' {
   interface PluginState {
     pantheon: { natives: Native[]; session: SessionInfo; view: PanelView; gateHeld: { message: string } | null; flowAgents: Record<string, FlowAgent> }

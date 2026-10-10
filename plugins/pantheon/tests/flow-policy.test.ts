@@ -82,15 +82,16 @@ test('stop with nothing to enforce allows and resets the consecutive run', () =>
   }
 })
 
-test('an unapproved or edited flow is allowed with the state exactly as it was', () => {
+test('an unapproved flow, or a state that is not for the flow in force, is allowed with the state exactly as it was', () => {
   const { flow, hash } = chain()
   const cases: FlowState[] = [
     { ...newState(flow, hash), blocks: 2, consecutiveBlocks: 3 },
     { ...newState(flow, hash), approvedHash: 'other', blocks: 2, consecutiveBlocks: 3 },
-    // Approved, but the plan was edited afterwards: the state still carries the old hash.
+    // Approved, but the state's progress is for another flow than the one in force.
     { ...newState(flow, 'old'), approvedHash: 'old', blocks: 2, consecutiveBlocks: 3 },
-    // The state was rebased to the new hash but not approved again.
-    { ...newState(flow, hash), approvedHash: 'old', blocks: 2, consecutiveBlocks: 3 },
+    { ...newState(flow, 'old'), approvedHash: hash, blocks: 2, consecutiveBlocks: 3 },
+    // An adoption that names another flow than the one in force (the approval alone does not stand for it).
+    { ...newState(flow, hash), approvedHash: hash, adoptedHash: 'elsewhere', blocks: 2, consecutiveBlocks: 3 },
   ]
   for (const state of cases) {
     for (const event of [stopEvent({ A: [fail('A')] }, { stopHookActive: true }), endEvent('A', [fail('A')])]) {
@@ -796,7 +797,7 @@ test('settling by checks skips a task missing a required receipt', () => {
   expect(reviewed.state.status.B).toBe('done')
 })
 
-test('rebase keeps progress for surviving tasks, drops removed ones, adds new ones and clears the approval', () => {
+test('rebase keeps progress for surviving tasks, drops and remembers removed ones, adds new ones and keeps the approval', () => {
   const old = build([task('A'), task('B'), task('C')])
   const state = approved(old.flow, old.hash, {
     status: { A: 'done', B: 'active', C: 'pending' }, attempts: { A: 1, B: 1, C: 2 },
@@ -806,7 +807,11 @@ test('rebase keeps progress for surviving tasks, drops removed ones, adds new on
   const rebased = rebase(next.flow, state)
   expect(rebased.hash).toBe(flowHash(next.flow))
   expect(rebased.hash).toBe(next.hash)
-  expect(rebased.approvedHash).toBeUndefined()
+  // Enforcement stays: the person's approval is untouched and the new flow is recorded as adopted over it.
+  expect(rebased.approvedHash).toBe(old.hash)
+  expect(rebased.adoptedHash).toBe(next.hash)
+  // Every id the plan has had is remembered, so a later amendment never reuses the one that was dropped.
+  expect(rebased.seenIds).toEqual(['A', 'B', 'C', 'N'])
   expect(rebased.status).toEqual({ A: 'done', B: 'active', N: 'pending' })
   expect(rebased.attempts).toEqual({ A: 1, B: 1 })
   expect(rebased.receipts).toEqual({ A: { architect: true } })
@@ -816,14 +821,47 @@ test('rebase keeps progress for surviving tasks, drops removed ones, adds new on
   expect(state.status).toEqual({ A: 'done', B: 'active', C: 'pending' })
 })
 
-test('rebase re-picks an active task when none is left, and stays unapproved until approved again', () => {
+test('rebase re-picks an active task when none is left and the flow is still enforced', () => {
   const old = build([task('A'), task('B')])
   const state = approved(old.flow, old.hash, { status: { A: 'done', B: 'active' } })
   const next = build([task('A'), task('N')])
   const rebased = rebase(next.flow, state)
   expect(rebased.status).toEqual({ A: 'done', N: 'active' })
-  expect(decide(next.flow, rebased, stopEvent()).condition).toBe('unapproved')
-  expect(decide(next.flow, { ...rebased, approvedHash: next.hash }, stopEvent()).condition).toBe('continue')
+  expect(decide(next.flow, rebased, stopEvent()).condition).toBe('continue')
+  // The old flow is no longer the one in force for this state.
+  expect(decide(old.flow, rebased, stopEvent()).condition).toBe('unapproved')
+})
+
+test('rebase onto the approved flow itself leaves no adoption, and never approves a state nobody approved', () => {
+  const { flow, hash } = chain()
+  const same = rebase(flow, approved(flow, hash, { adoptedHash: 'stale', seenEdits: ['an edit'] }))
+  expect(same.approvedHash).toBe(hash)
+  expect(same.adoptedHash).toBeUndefined()
+  expect(same.seenEdits).toBeUndefined()
+  const bigger = build([task('A'), task('B', { risk: true }), task('C', { acceptance: { criteria: ['reads well'] } }), task('D', { dependsOn: ['C'] })])
+  const none = rebase(bigger.flow, newState(flow, hash))
+  expect(none.approvedHash).toBeUndefined()
+  expect(none.adoptedHash).toBeUndefined()
+  expect(decide(bigger.flow, none, stopEvent()).condition).toBe('unapproved')
+  // The adoption chains: the second rebase keeps the person's approval, not the first adoption's hash.
+  const first = rebase(bigger.flow, approved(flow, hash))
+  const evenBigger = build([task('A'), task('B', { risk: true }), task('C', { acceptance: { criteria: ['reads well'] } }), task('D', { dependsOn: ['C'] }), task('E', { dependsOn: ['D'] })])
+  const second = rebase(evenBigger.flow, first)
+  expect(second).toMatchObject({ approvedHash: hash, adoptedHash: evenBigger.hash, hash: evenBigger.hash })
+})
+
+test('an adopted flow is enforced like an approved one, and a dropped task id is kept across rebases', () => {
+  const old = build([task('A'), task('B')])
+  const next = build([task('A'), task('B'), task('N', { dependsOn: ['B'] })])
+  const state = rebase(next.flow, approved(old.flow, old.hash, { status: { A: 'done', B: 'active' } }))
+  expect(state.adoptedHash).toBe(next.hash)
+  const blocked = decide(next.flow, state, stopEvent({ B: [fail('B', 'broke')] }))
+  expect(blocked).toMatchObject({ action: 'block', condition: 'check_failed', task: 'B' })
+  expect(blocked.state).toMatchObject({ approvedHash: old.hash, adoptedHash: next.hash })
+  // N is removed again by a later approval: its id stays on record.
+  const gone = rebase(old.flow, state)
+  expect(gone.seenIds).toEqual(['A', 'B', 'N'])
+  expect(rebase(next.flow, gone).seenIds).toEqual(['A', 'B', 'N'])
 })
 
 // --- mode, review guards, rebase details ---
@@ -843,12 +881,11 @@ test('withMode resets the budget once, on the switch into enforce', () => {
   expect(shadow.blocks).toBe(3)
 })
 
-test('a review on an unapproved, rebased, paused, stopped or done flow does not advance', () => {
+test('a review on an unapproved, paused, stopped or done flow does not advance', () => {
   const { flow, hash } = chain()
   const base = { status: { A: 'done', B: 'active', C: 'pending' } as FlowState['status'], awaiting: [{ task: 'B', by: 'architect' as const }] }
-  const rebased = rebase(flow, approved(flow, hash, base))
   const cases: [string, FlowState][] = [
-    ['unapproved', rebased],
+    ['unapproved', { ...newState(flow, hash), ...base }],
     ['paused', approved(flow, hash, { ...base, paused: true })],
     ['stopped', approved(flow, hash, { ...base, stopped: true })],
     ['already_done', approved(flow, hash, { ...base, done: true })],
