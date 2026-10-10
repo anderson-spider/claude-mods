@@ -40,11 +40,12 @@ function flowWorld(on: On, opts: { files?: Record<string, string>; realPaths?: R
   const files = new Map<string, string>([[`${HOME}/.claude/pantheon.json`, '{}'], [`${ROOT}/${PLAN}`, planMd(FLOW)], ...Object.entries(opts.files ?? {})])
   const runs: string[][] = []
   const results = new Map<string, { exitCode: number; stdout: string; stderr: string }>()
-  const faults = { write: false, run: false, store: false, denials: false }
+  const faults = { write: false, run: false, store: false, denials: false, unread: new Set<string>() }
   const git = { head: 'aaaa1111', status: '', tracked: {} as Record<string, string> }
   // What the engine would answer: one bottom per event, steered by these fields.
   const engine = {
     spawnId: 'agent-1', agentStatus: 'completed' as 'completed' | 'async_launched', agentOutput: 'Done.', editDeny: false,
+    spawnBackground: [] as boolean[], // the `background` each spawn reached the engine with, after the flow's rewrite
     agentResult: undefined as unknown,
     stopBelow: {} as { block?: string }, prompts: [] as (readonly string[] | undefined)[],
   }
@@ -144,8 +145,12 @@ function flowWorld(on: On, opts: { files?: Record<string, string>; realPaths?: R
   // The kit gives a plugin's state writes a bottom; record them to read the controller's link table back.
   const links: Record<string, FlowAgent> = {}
   const atom = { links: undefined as Record<string, FlowAgent> | undefined }
-  on('state.get', async (_$, e, next) => e.key === 'flowAgents' && atom.links
-    ? { value: { version: 1, value: atom.links } } as never : next(e))
+  // A state atom the host cannot read: a test names it in `faults.unread`. A hook that throws is skipped (the core answers
+  // instead), so the answer carries a value the atom can never hold (`null`), which the plugin cannot take apart.
+  on('state.get', async (_$, e, next) => {
+    if (faults.unread.has(e.key)) return { value: null, version: 1 } as never
+    return e.key === 'flowAgents' && atom.links ? { value: { version: 1, value: atom.links } } as never : next(e)
+  })
   on('state.set', async (_$, e, next) => {
     // The count of a denial is written to this value: a test can make that write fail.
     if (faults.denials && e.key === 'flowAgents') throw new Error('state is not writable')
@@ -158,6 +163,7 @@ function flowWorld(on: On, opts: { files?: Record<string, string>; realPaths?: R
   on('prompt.submit', async (_$, e) => { engine.prompts.push(e.context); return { text: e.text, ...(e.context ? { context: e.context } : {}) } })
   on('agent.spawn', async (_$, e) => {
     gate.prompts.push(e.prompt)
+    engine.spawnBackground.push(e.background)
     if (gate.hold) await gate.hold
     return { model: 'model-1', agentId: engine.spawnId }
   })
@@ -268,6 +274,46 @@ describe('stop', () => {
     }
     expect((await stop($)).block).toBeUndefined()
     expect(w.state()?.done).toBe(true)
+  })
+
+  test('Stop settles a runtime-linked task when the flowAgents atom cannot be read', { options: { flow: 'enforce' } }, async ($, on) => {
+    const w = flowWorld(on, { files: { [`${ROOT}/${PLAN}`]: planMd({ ...FLOW, tasks: [FLOW.tasks[0]] }) } })
+    await boot($, w)
+    await spawn($, w, { id: 'lost-1', description: '[T1] first', subagentType: 'pantheon:developer' })
+    await $.turn.complete({ turnId: 'turn-1', agentId: 'lost-1', reason: 'answer', answer: 'Done', durationMs: 1, isAborted: false })
+    w.faults.unread.add('flowAgents')
+    expect((await stop($)).block).toBeUndefined()
+    expect(w.state()).toMatchObject({ done: true, status: { T1: 'done' } })
+    const unread = w.journal().filter(e => e.condition === 'state_unread')
+    expect(unread).toHaveLength(1)
+    expect(unread[0]).toMatchObject({ event: 'delivery' })
+    expect(unread[0]!.reason).toMatch(/^flowAgents: \S/)
+  })
+
+  test('a state atom that stays unreadable journals one state_unread note across Stops', { options: { flow: 'enforce' } }, async ($, on) => {
+    const w = flowWorld(on)
+    await boot($, w)
+    w.faults.unread.add('flowAgents')
+    await stop($)
+    await stop($)
+    const unread = w.journal().filter(e => e.condition === 'state_unread')
+    expect(unread).toHaveLength(1)
+    expect(unread[0]!.reason).toMatch(/^flowAgents: \S/)
+  })
+
+  test('Stop still runs the checks and holds when the natives atom cannot be read', { options: { flow: 'enforce' } }, async ($, on) => {
+    const w = flowWorld(on)
+    await boot($, w)
+    w.fail('npm test', 'FAIL src/a.test.ts: expected 2 got 3')
+    w.faults.unread.add('natives')
+    const out = await stop($)
+    expect(out.block).toContain('Pantheon flow: Task T1 (first) is not done')
+    expect(out.block).toContain('expected 2 got 3')
+    expect(w.checkRuns()).toContainEqual(['npm', 'test'])
+    const unread = w.journal().filter(e => e.condition === 'state_unread')
+    expect(unread).toHaveLength(1)
+    expect(unread[0]!.reason).toMatch(/^natives: \S/)
+    expect(w.seen.toasts).toEqual([])
   })
 
   test('Stop prefers the runtime link when the atom has an older delivery cycle', { options: { flow: 'enforce' } }, async ($, on) => {
@@ -806,6 +852,52 @@ describe('ownership holes', () => {
     expect((await $.tool.call({ tool: 'Agent', description: '[T1] first', prompt: 'p' } as never)).deny).toBeUndefined()
   })
 
+  test('a [T] delegation started in the background runs in the foreground in enforce', { options: { flow: 'enforce' } }, async ($, on) => {
+    const w = flowWorld(on)
+    await boot($, w)
+    const started = await $.agent.spawn({ ...spawnBase, description: '[T1] first', subagentType: 'pantheon:developer', background: true } as never)
+    expect('deny' in started && started.deny).toBeFalsy()
+    expect(w.engine.spawnBackground).toEqual([false])
+    expect(w.journal().find(e => e.condition === 'spawn_background')).toMatchObject({ event: 'spawn', task: 'T1', action: 'allow' })
+  })
+
+  test('in shadow a background [T] delegation is journaled as spawn_background and changes nothing', { options: { flow: 'shadow' } }, async ($, on) => {
+    const w = flowWorld(on)
+    await boot($, w)
+    await $.agent.spawn({ ...spawnBase, description: '[T1] first', subagentType: 'pantheon:developer', background: true } as never)
+    expect(w.engine.spawnBackground).toEqual([true])
+    expect(w.journal().find(e => e.condition === 'spawn_background')).toMatchObject({ event: 'spawn', task: 'T1', action: 'allow' })
+  })
+
+  test('a [T] delegation the host still runs in the background is reported with spawn_background_forced and the lead is told in enforce', { options: { flow: 'enforce' } }, async ($, on) => {
+    const w = flowWorld(on)
+    await boot($, w)
+    await $.agent.spawn({ ...spawnBase, description: '[T1] first', subagentType: 'pantheon:developer', background: true } as never)
+    w.engine.agentStatus = 'async_launched'
+    const out = await $.tool.call({ tool: 'Agent', description: '[T1] first', prompt: 'p' } as never)
+    expect(out.context?.[0]).toContain('its end cannot be recorded')
+    expect(out.context?.[0]).toContain('/pantheon flow resume')
+    expect(w.journal().find(e => e.condition === 'spawn_background_forced')).toMatchObject({ event: 'spawn', task: 'T1', action: 'allow' })
+  })
+
+  test('in shadow a [T] delegation the host runs in the background is only journaled as spawn_background_forced', { options: { flow: 'shadow' } }, async ($, on) => {
+    const w = flowWorld(on)
+    await boot($, w)
+    await $.agent.spawn({ ...spawnBase, description: '[T1] first', subagentType: 'pantheon:developer', background: true } as never)
+    w.engine.agentStatus = 'async_launched'
+    const out = await $.tool.call({ tool: 'Agent', description: '[T1] first', prompt: 'p' } as never)
+    expect(out.context).toBeUndefined()
+    expect(w.journal().find(e => e.condition === 'spawn_background_forced')).toMatchObject({ event: 'spawn', task: 'T1', action: 'allow' })
+  })
+
+  test('a background delegation without [T] is untouched', { options: { flow: 'enforce' } }, async ($, on) => {
+    const w = flowWorld(on)
+    await boot($, w)
+    await $.agent.spawn({ ...spawnBase, description: 'Explore the repo', subagentType: 'Explore', background: true } as never)
+    expect(w.engine.spawnBackground).toEqual([true])
+    expect(w.journal().some(e => e.condition === 'spawn_background')).toBe(false)
+  })
+
   test('in shadow the same delegation goes through and is only journaled', { options: { flow: 'shadow' } }, async ($, on) => {
     const w = flowWorld(on)
     await boot($, w)
@@ -1330,10 +1422,11 @@ describe('prompts', () => {
     await boot($, w)
     w.engine.spawnId = 'bg-1'
     await $.agent.spawn({ ...spawnBase, description: '[T1] first', background: true } as never)
-    // The Agent tool returns at once for a background agent: nothing to decide yet.
+    // The Agent tool returns at once: the host ran this [T] agent in the background anyway, so its end is not recorded here
+    // and the lead is told so. A notification, if the host delivers one, still counts it below.
     w.engine.agentStatus = 'async_launched'
     const launched = await $.tool.call({ tool: 'Agent', description: '[T1] first', prompt: 'p', run_in_background: true } as never)
-    expect(launched.context).toBeUndefined()
+    expect(launched.context?.[0]).toContain('cannot be recorded')
     expect(w.state()?.ends).toEqual({})
     const seen = w.engine.prompts
     await $.prompt.submit({

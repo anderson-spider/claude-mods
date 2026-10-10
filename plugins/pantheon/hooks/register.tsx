@@ -7,7 +7,7 @@ import { rulesVerdict } from './decisions'
 import { gateContext, gateMessage } from './gate'
 import { DEFAULT_CONFIG } from './defaults'
 import {
-  approvePlan, controlFlow, flowStatus, flowTaskFiles, humanPrompt, inspectIsolation, inspectSpawn, mainEdit, noteDelivery, noteDeliveryDiagnostic, noteOwnership,
+  approvePlan, controlFlow, flowStatus, flowTaskFiles, humanPrompt, inspectForcedBackground, inspectIsolation, inspectSpawn, mainEdit, noteDelivery, noteDeliveryDiagnostic, noteOwnership,
   ownershipVerdict, parseNotification, pendingAgentTasks, qaCriteriaBrief, reviewed, stopFlow, taskEnded, taskIdOf,
 } from './flow/controller'
 import type { Ctx, Serial } from './flow/controller'
@@ -566,6 +566,8 @@ export const register: Register = (on, options) => {
   const deliveryCounts = { notifications: 0, agentResults: 0, parsed: 0, linked: 0 }
   const countsSignature = () => `notifications=${deliveryCounts.notifications} agentResults=${deliveryCounts.agentResults} parsed=${deliveryCounts.parsed} linked=${deliveryCounts.linked}`
   let lastDeliveryCounts = countsSignature()
+  // Each distinct state read failure (atom and message) is journaled once per runtime, not once per Stop.
+  const unreadSeen = new Set<string>()
   const noteShape = async (ctx: Ctx, signature: string) => {
     if (deliveryShapes.has(signature) || deliveryShapes.size >= 40) return
     // Reserve before the await so concurrent hooks cannot write the same signature twice.
@@ -956,12 +958,15 @@ export const register: Register = (on, options) => {
     if (!taskId) return next(e)
     const io = hostIo($)
     let check: Awaited<ReturnType<typeof inspectSpawn>> | undefined
-    try { check = await inspectSpawn(flowCtx($, await flowDeps(io)), { taskId, agentType: e.subagentType }) } catch (error) { flowFailed(io, error) }
+    try { check = await inspectSpawn(flowCtx($, await flowDeps(io)), { taskId, agentType: e.subagentType, background: e.background }) } catch (error) { flowFailed(io, error) }
     if (check?.deny) return { deny: check.deny }
+    // A [T] delegation runs in the foreground: inspectSpawn asks for it in enforce (and journals it); shadow rewrites nothing.
+    const foreground = check?.foreground === true
     // The lead writes the QA brief, so in enforce the approved criteria are appended to it: the lead cannot hand QA its own
     // answers. Shadow rewrites nothing.
     const brief = flowMode === 'enforce' && check?.kind === 'review' && check.by === 'qa' && check.criteria ? qaCriteriaBrief(taskId, check.criteria) : undefined
-    const forward = brief ? { ...e, prompt: `${e.prompt}\n\n${brief}` } : e
+    const base = brief ? { ...e, prompt: `${e.prompt}\n\n${brief}` } : e
+    const forward = foreground ? { ...base, background: false } : base
     // Nothing is linked unless a plan is in force for the task: nothing to wait for then either.
     if (!check?.kind || !check.planId) {
       // Nothing links this agent, so its delivery cannot be matched to the task. A refused role is already journaled by
@@ -1127,7 +1132,8 @@ export const register: Register = (on, options) => {
   })
 
   // Task end for a foreground agent (decision 6): the Agent tool returned in the main loop; the controller's verdict is
-  // appended for the lead to read. A background agent's end arrives as a task-notification prompt instead.
+  // appended for the lead to read. A [T] delegation is counted only here. On hosts that deliver a background end as a
+  // task-notification prompt, that prompt is the end of a non-[T] background agent (see the prompt.submit hook).
   on('tool.call', { tool: 'Agent' }, async ($, e, next) => {
     // A task's delegation in its own worktree would write outside the task's files: the setting is only visible here.
     if (flowOn() && !e.agentId && e.isolation) {
@@ -1159,6 +1165,15 @@ export const register: Register = (on, options) => {
         const text = await finishFlowAgent($, flowRuntime, deps, done.agentId, output, true)
         if (text) return { ...result, context: [...(result.context ?? []), text] }
       }
+      // A [T] delegation the host still ran in the background (its definition, remote isolation or a teammate forces it): its
+      // end is not recorded, so the lead is told in the result what to do.
+      if (!e.agentId && (payload?.status === 'async_launched' || payload?.status === 'remote_launched')) {
+        const taskId = taskIdOf(e.description)
+        if (taskId) {
+          const forced = await inspectForcedBackground(flowCtx($, deps), { taskId })
+          if (forced.context) return { ...result, context: [...(result.context ?? []), forced.context] } as typeof result
+        }
+      }
     } catch (error) { flowFailed(io, error) }
     return result
   })
@@ -1169,10 +1184,27 @@ export const register: Register = (on, options) => {
     if (!flowOn() || e.agent_id || below.block || below.preventContinuation) return below
     const io = hostIo($)
     try {
-      const running = normalizeNatives(await read($, nativesAtom)).filter(native => native.rounds[native.rounds.length - 1]?.status === 'running').length
-      const links = new Map(Object.entries(await read($, flowAgentsAtom)))
+      // Each atom read falls back on its own, so one unreadable atom never skips the evaluation: no running natives counted
+      // (the host's background_tasks still hold), and only this runtime's links. Each failure is journaled once per Stop.
+      const unread: { atom: 'natives' | 'flowAgents'; error: unknown }[] = []
+      let running = 0
+      try {
+        running = normalizeNatives(await read($, nativesAtom)).filter(native => native.rounds[native.rounds.length - 1]?.status === 'running').length
+      } catch (error) { unread.push({ atom: 'natives', error }) }
+      const links = new Map<string, FlowAgent>()
+      try {
+        for (const [id, link] of Object.entries(await read($, flowAgentsAtom))) links.set(id, link)
+      } catch (error) { unread.push({ atom: 'flowAgents', error }) }
       for (const [id, link] of flowRuntime.links) links.set(id, link)
       const ctx = flowCtx($, await flowDeps(io))
+      for (const { atom, error } of unread) {
+        const message = error instanceof Error ? error.message : String(error)
+        const reason = `${atom}: ${message.slice(0, 200)}`
+        if (unreadSeen.has(reason)) continue
+        // Reserved before awaiting; released when no plan is in force yet, so the failure is recorded once a flow exists.
+        unreadSeen.add(reason)
+        if (!await noteDeliveryDiagnostic(ctx, { condition: 'state_unread', reason })) unreadSeen.delete(reason)
+      }
       const counts = countsSignature()
       if (counts !== lastDeliveryCounts) {
         lastDeliveryCounts = counts
@@ -1191,7 +1223,8 @@ export const register: Register = (on, options) => {
     return below
   })
 
-  // Background agents end as a prompt of origin task-notification: the verdict rides as context. A person's prompt
+  // On hosts that deliver a background end as a prompt of origin task-notification, that prompt carries the verdict as context
+  // (a non-[T] agent: a [T] end is counted from the foreground Agent result). A person's prompt
   // refills the block budget and brings the goal, the current task and the last instruction back (never the system prompt).
   on('prompt.submit', { origin: { kind: 'task-notification' } }, async ($, e, next) => {
     if (!flowOn()) return next(e)
