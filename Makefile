@@ -1,23 +1,7 @@
-MARKETPLACE := spider-claude-mods
 PLUGINS := $(notdir $(wildcard plugins/*))
 CUA_NODE := /Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node
 
-.PHONY: update validate test
-
-# Refreshes the marketplace, then updates every plugin from it that is installed, in its own scope.
-update:
-	claude plugin marketplace update $(MARKETPLACE)
-	@claude plugin list --json | node -e ' \
-		const list = JSON.parse(require("fs").readFileSync(0, "utf8")); \
-		const names = JSON.parse(require("fs").readFileSync(".claude-plugin/marketplace.json", "utf8")).plugins.map(p => p.name); \
-		for (const p of list) if (p.id.endsWith("@$(MARKETPLACE)")) { \
-			if (names.includes(p.id.split("@")[0])) console.log(p.id, p.scope); \
-			else console.error("skip: " + p.id + " is no longer in the marketplace; uninstall it"); \
-		} \
-	' | while read -r id scope; do \
-		echo "==> $$id ($$scope)"; \
-		claude plugin update "$$id" --scope "$$scope" </dev/null || exit 1; \
-	done
+.PHONY: validate test
 
 # Validates the marketplace, every plugin, and that the manifests agree.
 validate:

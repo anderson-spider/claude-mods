@@ -5,6 +5,10 @@
 node = "24"
 "npm:typescript" = "7.0.2"
 
+[tasks.update]
+description = "Refresh the marketplace and update every installed plugin from it, in its own scope"
+run = "node scripts/update-plugins.mjs"
+
 # Claude Code writes plugins/*/.claude-plugin/types/ only when an interactive session loads a plugin from its folder,
 # so this opens one on a pseudo-terminal with every plugin and exits once all of them have their typings.
 [tasks.types]
