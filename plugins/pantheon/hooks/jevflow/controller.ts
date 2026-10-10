@@ -1,11 +1,11 @@
 // JevFlow's hook entry points (hooks.py `handle`, auto.py, the I/O of project.py) over injected host access. Every entry
 // point fails open: an error allows the stop and adds nothing, so the flow can never trap a session.
 
-import { applyDecision, capReached, decide } from './policy'
+import { applyDecision, capReached, decide, JEV_UNAVAILABLE } from './policy'
 import { PHASE_ID_RE, parseFlow } from './flow'
 import { claim as claimPhase, newState, record, touchAgent, validateState } from './state'
 import type { AgentInfo } from './state'
-import { judge, judgmentProbs, NO_JUDGE } from './questions'
+import { judge, judgmentProbs } from './questions'
 import type { AskFn } from './questions'
 import { checksToRun, slugify, summaryMarkdown } from './project'
 import { phaseTable, planInstructions, render, sessionContext, transitionLine } from './texts'
@@ -17,11 +17,12 @@ const FLOWS = 'flows'
 const DONE = 'done'
 const SESSIONS = 'sessions'
 const PREFIX = '[Pantheon flow]'
-/** Why Jev is off when the host gives no reason (io.ask undefined). */
+/** Why Jev has no key when the host gives no reason (io.ask undefined). */
 export const JEV_NO_KEY = 'neither the judgeKey option nor OPENROUTER_API_KEY is set'
-/** Shown while Jev has no key: the status line and the note at start. */
-const jevOffStatus = (io: Io) => `Jev: off (${io.jevOff ?? JEV_NO_KEY}); every Stop decides on the checks alone.`
-const jevOffNote = (io: Io) => `Note: Jev is off (${io.jevOff ?? JEV_NO_KEY}), so every Stop decides on the checks alone; tell the person.`
+/** Without a key the flow neither starts nor judges: the status line and the refused start. */
+const jevOffStatus = (io: Io) => `Jev: no key (${io.jevOff ?? JEV_NO_KEY}); the flow cannot start or judge.`
+const jevOffStart = (io: Io) =>
+  `Flow not started: the flow needs Jev, and ${io.jevOff ?? JEV_NO_KEY}. Tell the person to set a key or disable the pantheon plugin.`
 
 const REASON_JOURNAL_CHARS = 600
 const ERROR_DETAIL_CHARS = 300
@@ -54,7 +55,7 @@ export type Io = {
   move: (from: string, to: string) => Promise<void>
   run: Run
   now: () => Promise<number>
-  /** Jev, when a key is set (the judgeKey option or OPENROUTER_API_KEY); without it every Stop is checks-only (degraded). */
+  /** Jev, when a key is set (the judgeKey option or OPENROUTER_API_KEY); without it no flow starts and a Stop is held once. */
   ask?: AskFn
   /** Where Jev's key came from, for the status (never the key). */
   jevSource?: string
@@ -171,6 +172,7 @@ async function draftGoal(io: Io, p: Paths): Promise<string> {
 
 /** `jevflow start`: a draft under flows/<stamp>-<slug>/, bound to this session, and the planning instructions. */
 export async function startFlow(io: Io, root: string, sid: string | undefined, goal: string, name?: string): Promise<string> {
+  if (!io.ask) return jevOffStart(io)
   const now = await io.now()
   const ignore = `${root}/${BASE}/.gitignore`
   if (!(await io.exists(ignore))) await io.write(ignore, GITIGNORE)
@@ -184,7 +186,7 @@ export async function startFlow(io: Io, root: string, sid: string | undefined, g
   await io.write(p.draft, `${JSON.stringify({ goal: goal.trim(), created_at: now, session_id: sid ?? null, plan_blocks: 0 }, null, 1)}\n`)
   await bindSession(io, root, sid, id)
   const text = planInstructions(rel(p, p.flow), id, goal.trim())
-  return io.ask ? text : `${text}\n\n${jevOffNote(io)}`
+  return text
 }
 
 export async function validateFlow(io: Io, root: string, sid: string | undefined): Promise<string> {
@@ -448,8 +450,7 @@ export async function gitChanges(io: Io, cwd: string, sendDiff: boolean): Promis
 // ---------------------------------------------------------------- Stop
 
 export type StopPayload = { session_id?: string; stop_hook_active?: boolean; last_assistant_message?: string }
-/** `noJev`: this Stop needed a judgment and Jev was not asked because there is no key, so it decided on the checks alone. */
-export type StopOut = { block?: string; message?: string; noJev?: true }
+export type StopOut = { block?: string; message?: string }
 
 async function writeNeedsHuman(io: Io, p: Paths, flow: Flow, state: FlowState, question: string, now: number): Promise<void> {
   const ts = new Date(now * 1000).toISOString().replace(/\.\d+Z$/, 'Z')
@@ -467,11 +468,11 @@ async function onFlowStop(io: Io, p: Paths, payload: StopPayload): Promise<StopO
   const { checks, loopChecks, unanswered } = await runChecks(io, flow, state, p.root)
   // No one answered the check box: nothing is judged or recorded, and the next Stop asks again.
   if (unanswered) return { message: `${PREFIX} Check not run (${unanswered}); this Stop went through unjudged and the next one asks again.` }
-  // Deterministic first: budgets, caps, regression and loop phases never need Jev. Only a degraded_* result means the
-  // outcome depends on the judgment.
+  // Deterministic first: budgets, caps, regression and loop phases never need Jev. A jev_unavailable result without a
+  // judgment means the outcome depends on it.
   let d = decide(flow, state, null, checks, now, { stop_hook_active: active, loop_checks: loopChecks })
   let judged: Awaited<ReturnType<typeof judge>> | undefined
-  if (d.condition.startsWith('degraded_')) {
+  if (d.condition === JEV_UNAVAILABLE) {
     const remaining = flow.limits.max_jev_calls - state.jev_calls
     judged = remaining > 0
       ? await judge(io.ask, flow, state, {
@@ -498,11 +499,13 @@ async function onFlowStop(io: Io, p: Paths, payload: StopPayload): Promise<StopO
     checks: passed, probs: judged?.judgment ? judgmentProbs(judged.judgment) : null,
   }, now)
   await saveState(io, p, state)
-  const noJev: Pick<StopOut, 'noJev'> = judged?.error === NO_JUDGE ? { noJev: true } : {}
-  if (blocks) return { block: `${PREFIX} ${d.reason}`, ...(d.kind === ADVANCE ? { message: transitionLine(flow, state, d, prevPhase) } : {}), ...noJev }
-  if (d.condition === 'goal_complete') return { message: `${PREFIX} Goal complete.`, ...noJev }
-  if (d.kind === ALLOW_STOP && d.condition !== 'already_done') return { message: `${PREFIX} ${d.reason}`, ...noJev }
-  return noJev
+  if (blocks) {
+    const message = d.kind === ADVANCE ? transitionLine(flow, state, d, prevPhase) : d.condition === JEV_UNAVAILABLE ? `${PREFIX} ${d.reason}` : undefined
+    return { block: `${PREFIX} ${d.reason}`, ...(message ? { message } : {}) }
+  }
+  if (d.condition === 'goal_complete') return { message: `${PREFIX} Goal complete.` }
+  if (d.kind === ALLOW_STOP && d.condition !== 'already_done') return { message: `${PREFIX} ${d.reason}` }
+  return {}
 }
 
 /** Move a finished flow to done/<id>/ with a SUMMARY.md (project.py archive). */

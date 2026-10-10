@@ -217,7 +217,7 @@ export function render(flow: Flow, state: StateView, needsHuman: string | null =
   const err = state.last_error
   if (isDict(err)) out.push(`Last Claude API error: ${pyStr(err.error ?? '?')} at ${ts(err.ts)}`)
   const jerr = state.last_jev_error
-  if (isDict(jerr)) out.push(`Last Jev error (checks-only fallback): ${pyStr(jerr.error ?? '?')} at ${ts(jerr.ts)}`)
+  if (isDict(jerr)) out.push(`Last Jev error: ${pyStr(jerr.error ?? '?')} at ${ts(jerr.ts)}`)
   const decisions = (state.history ?? []).filter(h => isDict(h) && h.event === 'stop').slice(-recent)
   out.push('', 'Recent decisions:')
   if (!decisions.length) out.push('  (none yet)')

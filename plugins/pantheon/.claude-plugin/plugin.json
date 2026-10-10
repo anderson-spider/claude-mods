@@ -1,6 +1,6 @@
 {
   "name": "pantheon",
-  "version": "1.2.0",
+  "version": "2.0.0",
   "description": "Makes Claude a lead that delegates to specialist roles as native Claude subagents, tracks multi-step work against a JevFlow flow whose Stop checks each phase with Jev, and shows roles, activity and the flow in an auto-opening /pantheon panel, with a strip above the prompt for model, context, cache, rate limits and running agents.",
   "author": {
     "name": "anderson-spider"

@@ -193,7 +193,7 @@ type JevAccess = { key: string; breaker: Breaker; source?: 'option' | 'env' | 'r
 
 const JEV_REPO_ENV = "OPENROUTER_API_KEY comes from this repository's settings and is ignored; set the judgeKey option"
 /** JEV_REPO_ENV as the flow card's row, short enough not to be cut in a 68-cell card. */
-const JEV_REPO_ENV_ROW = "Jev off: repo's OPENROUTER_API_KEY ignored; set judgeKey."
+const JEV_REPO_ENV_ROW = "No Jev key: repo's OPENROUTER_API_KEY ignored; set judgeKey."
 
 /**
  * Falls back to OPENROUTER_API_KEY when the judgeKey option is not set. The process environment also carries the
@@ -370,8 +370,8 @@ export const register: Register = (on, options) => {
   const aboveOn = options.abovePrompt !== false && options.abovePrompt !== 'false'
 
   // The flow (JevFlow): every read-modify-write of its files goes through one queue, and Jev has one breaker while this
-  // module lives. Jev is called only with a key (the judgeKey option, else OPENROUTER_API_KEY); without one every Stop
-  // decides on the checks alone.
+  // module lives. Jev's key is the judgeKey option, else OPENROUTER_API_KEY; without one no flow starts and a Stop that
+  // needs a judgment is held once.
   let flowChain: Promise<unknown> = Promise.resolve()
   function flowSerial<T>(work: () => Promise<T>): Promise<T> {
     const run = flowChain.then(work, work)
@@ -384,8 +384,6 @@ export const register: Register = (on, options) => {
   const flowRoot = async (io: Io): Promise<string> => gateRoot ?? (await workspace(io)).root
   // Sessions that sent a prompt since this module loaded: the first prompt gets the join hint (JevFlow's first prompt).
   const prompted = new Set<string>()
-  // Sessions already told, once each, that Jev is off (no key) when a Stop needed it.
-  const jevOffToasted = new Set<string>()
   configureStrip({ paceStart: options.paceStart })
   let minuteTicker: { cancel: () => void } | undefined
   let stripTicker: { cancel: () => void } | undefined
@@ -879,10 +877,6 @@ export const register: Register = (on, options) => {
       const out = await flowSerial(() => jevflow.onStop(io, root, e))
       $.ui.invalidate('ui.render')
       if (out.message) $.ui.toast(out.message)
-      if (out.noJev && !jevOffToasted.has(e.session_id)) {
-        jevOffToasted.add(e.session_id)
-        $.ui.toast(`[Pantheon flow] Jev is off: ${jev.source === 'repo-env' ? JEV_REPO_ENV : 'set the judgeKey option or OPENROUTER_API_KEY'}. This Stop decided on the checks alone.`)
-      }
       if (out.block) return { ...below, block: out.block }
     } catch { /* Fail open: the stop is allowed. */ }
     return below

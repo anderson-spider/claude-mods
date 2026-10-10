@@ -2,13 +2,15 @@ import { expect, test } from 'claude-code/testing'
 import * as flow from '../hooks/jevflow/controller'
 import type { Io } from '../hooks/jevflow/controller'
 import type { Answers, AskFn } from '../hooks/jevflow/questions'
+import { faithfulAsk } from './fixtures/jev'
 
 // The hook entry points of the port (JevFlow hooks.py, auto.py) over an in-memory folder: shell checks pass or fail by
-// the table `exits`, git is absent, and the clock moves one second per read.
+// the table `exits`, git is absent, and the clock moves one second per read. Jev agrees with the checks unless a test
+// passes its own `ask`, or null for no key.
 
 const ROOT = '/repo'
 
-function folder(exits: Record<string, number> = {}, ask?: AskFn) {
+function folder(exits: Record<string, number> = {}, ask: AskFn | null = faithfulAsk) {
   const files = new Map<string, string>()
   let clock = 1_000_000
   const ran: string[] = []
@@ -90,7 +92,7 @@ test('start writes a draft bound to the session, and the Stop is held until the 
   expect(f.files.get(`${ROOT}/.pantheon/flow/done/${p.id}/SUMMARY.md`)).toContain('abandoned (no flow laid out)')
 })
 
-test('without Jev the checks decide: a failing check holds the stop, a passing one advances, and the last completes and archives', async () => {
+test('with a Jev that agrees with the checks, a failing check holds the stop, a passing one advances, and the last completes and archives', async () => {
   const f = folder({ 'test -f a.txt': 1, 'test -f b.txt': 1 })
   const p = await started(f)
   f.files.set(p.flow, JSON.stringify(FLOW))
@@ -108,7 +110,7 @@ test('without Jev the checks decide: a failing check holds the stop, a passing o
   const state = JSON.parse(f.files.get(p.state)!)
   expect(state.phase_status).toEqual({ a: 'done', b: 'active' })
   expect(state.history.at(-1)).toMatchObject({ event: 'stop', decision: 'ADVANCE', enforced: true, to_phase: 'b' })
-  expect(state.last_jev_error.error).toContain('judgeKey')
+  expect(state.jev_calls).toBeGreaterThan(0)
 
   f.exits['test -f b.txt'] = 0
   const done = await flow.onStop(f.io, ROOT, { session_id: 's1', stop_hook_active: true })
@@ -179,42 +181,49 @@ test('with Jev, a phase it calls done and verifies advances even without a check
   expect(state.history.at(-1).probs.verify).toEqual(['a', 0.95])
 })
 
-test('the status line and the start note say Jev is off without a judgeKey, and are absent with one', async () => {
-  const off = folder()
+test('without a key the flow does not start and writes nothing; the status of an existing flow says why', async () => {
+  const off = folder({}, null)
   expect(await flow.statusText(off.io, ROOT, 's1')).toBe('No flow in this folder. A multi-step task starts one with mcp__pantheon__flow start.')
-  const p = await started(off)
-  off.files.set(p.flow, JSON.stringify(FLOW))
-  const offStatus = await flow.statusText(off.io, ROOT, 's1')
-  expect(offStatus.split('\n').slice(0, 2)).toEqual([`Flow ${p.id}`, "Jev: off (neither the judgeKey option nor OPENROUTER_API_KEY is set); every Stop decides on the checks alone."])
-  const note = "Note: Jev is off (neither the judgeKey option nor OPENROUTER_API_KEY is set), so every Stop decides on the checks alone; tell the person."
-  expect((await flow.startFlow(off.io, ROOT, 's2', 'Another goal')).endsWith(`\n\n${note}`)).toBe(true)
+  const refused = await flow.startFlow(off.io, ROOT, 's1', 'Another goal')
+  expect(refused).toBe('Flow not started: the flow needs Jev, and neither the judgeKey option nor OPENROUTER_API_KEY is set. Tell the person to set a key or disable the pantheon plugin.')
+  expect([...off.files.keys()]).toEqual([])
 
-  const ask: AskFn = async () => { throw new Error('offline') }
-  const on = folder({}, ask)
-  const q = await started(on)
-  on.files.set(q.flow, JSON.stringify(FLOW))
-  const onStatus = await flow.statusText(on.io, ROOT, 's1')
-  expect(onStatus.startsWith(`Flow ${q.id}\n`)).toBe(true)
-  expect(onStatus).not.toContain('Jev: off')
-  expect(await flow.startFlow(on.io, ROOT, 's2', 'Another goal')).not.toContain('Jev is off')
+  // A flow started while a key was set, then read without one.
+  const on = folder()
+  const p = await started(on)
+  on.files.set(p.flow, JSON.stringify(FLOW))
+  const noKey: Io = { ...on.io }
+  delete noKey.ask
+  const status = await flow.statusText(noKey, ROOT, 's1')
+  expect(status.split('\n').slice(0, 2)).toEqual([`Flow ${p.id}`, 'Jev: no key (neither the judgeKey option nor OPENROUTER_API_KEY is set); the flow cannot start or judge.'])
+  expect(await flow.statusText({ ...on.io, jevSource: 'OPENROUTER_API_KEY' }, ROOT, 's1')).toContain('Jev: on (OPENROUTER_API_KEY).')
 })
 
-test('a Stop that needs Jev with no key is flagged noJev; a Jev call that fails is not', async () => {
-  const NO_CHECK = { ...FLOW, phases: FLOW.phases.map(({ check: _drop, ...rest }) => rest) }
-  const off = folder()
-  const p = await started(off)
-  off.files.set(p.flow, JSON.stringify(NO_CHECK))
-  const out = await flow.onStop(off.io, ROOT, { session_id: 's1', stop_hook_active: false })
-  expect(out.noJev).toBe(true)
-  expect(JSON.parse(off.files.get(p.state)!).history.at(-1)).toMatchObject({ event: 'stop', condition: 'degraded_no_check' })
-
+test('a Stop Jev does not judge is held once to tell the person, the next one goes through, and nothing advances', async () => {
   const ask: AskFn = async () => { throw new Error('offline') }
-  const keyed = folder({}, ask)
-  const q = await started(keyed)
-  keyed.files.set(q.flow, JSON.stringify(NO_CHECK))
-  const failed = await flow.onStop(keyed.io, ROOT, { session_id: 's1', stop_hook_active: false })
-  expect(failed.noJev).toBeUndefined()
-  expect(JSON.parse(keyed.files.get(q.state)!).last_jev_error.error).toContain('offline')
+  const f = folder({}, ask)
+  const p = await started(f)
+  f.files.set(p.flow, JSON.stringify(FLOW))
+  const held = await flow.onStop(f.io, ROOT, { session_id: 's1', stop_hook_active: false })
+  expect(held.block).toContain('Jev did not judge this Stop (Jev error: offline)')
+  expect(held.block).toContain('disable the pantheon plugin')
+  expect(held.message).toBe(held.block)
+  const relayed = await flow.onStop(f.io, ROOT, { session_id: 's1', stop_hook_active: true })
+  expect(relayed.block).toBeUndefined()
+  expect(relayed.message).toContain('Jev did not judge this Stop (Jev error: offline)')
+  const state = JSON.parse(f.files.get(p.state)!)
+  expect(state.current_phase).toBe('a')
+  expect(state.phase_status.a).toBe('active')
+  expect(state.blocks_this_session).toBe(1)
+  expect(state.history.filter((h: { event: string }) => h.event === 'stop').map((h: { decision: string; condition: string }) => `${h.decision}/${h.condition}`))
+    .toEqual(['BLOCK/jev_unavailable', 'ALLOW_STOP/jev_unavailable'])
+  expect(state.last_jev_error.error).toContain('offline')
+
+  // A flow left from a session that had a key: the Stop without one is held the same way.
+  const noKey: Io = { ...f.io }
+  delete noKey.ask
+  const again = await flow.onStop(noKey, ROOT, { session_id: 's1', stop_hook_active: false })
+  expect(again.block).toContain('Jev key missing')
 })
 
 test('a spawned Pantheon role claims the phase its description starts with, and nothing else does', () => {

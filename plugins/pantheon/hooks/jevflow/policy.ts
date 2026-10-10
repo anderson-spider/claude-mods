@@ -40,7 +40,7 @@ export type DecideOptions = {
   stop_hook_active?: boolean
   /** Phase id -> CheckResult of its `loop.until`. */
   loop_checks?: Readonly<Record<string, CheckResult>>
-  /** Why Jev is unavailable, quoted in the checks-only note. Used only when `judgment` is null. */
+  /** Why Jev is unavailable, quoted in the jev_unavailable reason. Used only when `judgment` is null. */
   degraded_reason?: string
 }
 export type CapKind = 'budget_blocks' | 'hook_cap' | 'budget_time' | 'budget_jev'
@@ -380,6 +380,21 @@ const routeOnFail = (
   )
 }
 
+/** The condition of a Stop with no Jev judgment: held once, then let through. */
+export const JEV_UNAVAILABLE = 'jev_unavailable'
+
+/** What the lead is told when Jev did not judge: stop and pass it on, the flow cannot go on without Jev. */
+export function jevUnavailableText(why: string): string {
+  return `Jev did not judge this Stop (${why}), and the flow cannot decide without it. Stop working and tell the person: ` +
+    "fix Jev (the judgeKey option or OPENROUTER_API_KEY, or the network) or disable the pantheon plugin."
+}
+
+/** The condition of the last recorded Stop decision. */
+function lastStopCondition(state: PolicyState): string | undefined {
+  for (let i = state.history.length - 1; i >= 0; i--) if (state.history[i]?.event === 'stop') return state.history[i]?.condition
+  return undefined
+}
+
 // --- the rules, in order: the first match wins ---
 
 const decideRule = (
@@ -483,19 +498,12 @@ const decideRule = (
     )
   }
 
-  // 5. degraded mode: checks only, never block without evidence
+  // 5. Jev is the flow's judge: without a judgment nothing advances (a divergence from JevFlow, which falls back to the
+  // checks). The Stop is held once so the lead tells the person; the stop that relays it goes through uncharged.
   if (judgment === null) {
-    const note = `Jev unavailable (${degradedReason}); checks-only mode.`
-    if (checkPass === true) return advanceOrComplete(flow, state, checks, cur, 'degraded_check_pass', [note])
-    if (checkFail) {
-      return block(
-        state,
-        'degraded_check_fail',
-        `Phase '${cur}' (${phase.name}) is not done: ${phase.done_when}.`,
-        { failure: checkFailText(cur, curCheck), notes: [note] },
-      )
-    }
-    return stop('degraded_no_check', `${note} Phase '${cur}' has no check, so there is no evidence to block on.`)
+    const reason = jevUnavailableText(degradedReason)
+    if (stopHookActive && lastStopCondition(state) === JEV_UNAVAILABLE) return stop(JEV_UNAVAILABLE, reason)
+    return block(state, JEV_UNAVAILABLE, reason, {})
   }
   const j = judgment
   const bands = bandsOf(flow)

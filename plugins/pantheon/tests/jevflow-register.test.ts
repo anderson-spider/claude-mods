@@ -1,6 +1,7 @@
 import { mock, expect, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
+import { faithfulBody } from './fixtures/jev'
 
 // The flow as the engine drives it: the mcp__pantheon__flow tool, the classic SessionStart and Stop hooks and the
 // /pantheon flow command, over an in-memory repository whose shell checks pass or fail by the table `exits`.
@@ -14,7 +15,8 @@ const FLOW = 'mcp__pantheon__flow'
 const timers = globalThis as unknown as { setTimeout: (run: () => void, ms: number) => unknown }
 const pause = (ms: number) => new Promise<void>(resolve => timers.setTimeout(resolve, ms))
 
-function flowWorld(on: On, store: Record<string, unknown> = {}, env: Record<string, string> = {}) {
+// Jev has a key and agrees with the checks unless a test passes `OPENROUTER_API_KEY: undefined` (no key) or sets `jevStatus`.
+function flowWorld(on: On, store: Record<string, unknown> = {}, env: Record<string, string | undefined> = {}) {
   const files = new Map<string, string>([[`${HOME}/.claude/pantheon.json`, '{}']])
   const exits: Record<string, number> = {}
   const toasts: string[] = []
@@ -23,15 +25,17 @@ function flowWorld(on: On, store: Record<string, unknown> = {}, env: Record<stri
   const rules: { decision: 'allow' | 'ask' | 'deny'; reason?: string } = { decision: 'allow' }
   const isDir = (path: string) => [...files.keys()].some(f => f.startsWith(`${path}/`))
   const clock = mock.clock(on)
-  mock.env(on, { HOME, ...env })
+  mock.env(on, Object.fromEntries(Object.entries({ HOME, OPENROUTER_API_KEY: 'test-key', ...env }).filter(([, v]) => v !== undefined)) as Record<string, string>)
   // Each settings source's contents (project and local are the repository's); `{}` for any other.
   const settings: Record<string, Record<string, unknown>> = {}
   on('settings.read', async (_$, e) => ({ value: (e.source ? settings[e.source] : undefined) ?? {} }))
-  // Jev's requests: their Authorization header, answered 401 at once (not retried, so the Stop goes on checks only).
+  // Jev's requests: their Authorization header; answered by a Jev that agrees with the checks, or with `jevStatus`.
   const jevAuth: string[] = []
+  const jev: { status?: number } = {}
   on('http.fetch', async (_$, e) => {
     jevAuth.push(String((e.init?.headers as Record<string, string> | undefined)?.Authorization))
-    return { value: { status: 401, ok: false, headers: {}, text: '{}' } }
+    if (jev.status !== undefined) return { value: { status: jev.status, ok: false, headers: {}, text: '{}' } }
+    return { value: { status: 200, ok: true, headers: {}, text: faithfulBody(String(e.init?.body)) } }
   })
   // The plugin's store, in memory and readable by the test (the test's own engine has no store handle).
   const kv = new Map<string, unknown>(Object.entries(store))
@@ -89,7 +93,7 @@ function flowWorld(on: On, store: Record<string, unknown> = {}, env: Record<stri
   on('classic.SessionStart', async () => ({}))
   on('classic.Stop', async () => ({}))
   on('classic.UserPromptSubmit', async () => ({}))
-  return { files, exits, toasts, ran, rules, store: kv, clock, settings, jevAuth }
+  return { files, exits, toasts, ran, rules, store: kv, clock, settings, jevAuth, jev }
 }
 
 const call = async ($: Engine, input: Record<string, unknown>) => String((await $.tool.call({ tool: FLOW, ...input } as never) as { result?: unknown }).result)
@@ -161,20 +165,26 @@ test('the Stop is not evaluated while a subagent runs in the background; a shell
   expect((await stopWith('shell')).block).toContain('test -f a.txt')
 })
 
-test('with no judgeKey, a Stop that needs Jev says so in one toast per session', async ($, on) => {
+test('without a key the flow tool refuses to start and writes nothing', async ($, on) => {
+  const w = flowWorld(on, {}, { OPENROUTER_API_KEY: undefined })
+  await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
+  const refused = await call($, { action: 'start', goal: 'Create a.txt then b.txt', name: 'two files' })
+  expect(refused).toContain('Flow not started: the flow needs Jev, and neither the judgeKey option nor OPENROUTER_API_KEY is set.')
+  expect([...w.files.keys()].some(path => path.includes('/.pantheon/'))).toBe(false)
+})
+
+test('when Jev fails, the Stop is held once with a toast telling the person, and the next stop goes through', async ($, on) => {
   const w = flowWorld(on)
   await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
-  const started = await call($, { action: 'start', goal: 'Create a.txt then b.txt', name: 'two files' })
-  const id = /tracked flow `([^`]+)`/.exec(started)?.[1]
-  expect(id).toBeDefined()
-  w.files.set(`${ROOT}/.pantheon/flow/flows/${id}/flow.json`, JSON.stringify({ ...PHASES, phases: PHASES.phases.map(({ check: _drop, ...rest }) => rest) }))
-  expect(await call($, { action: 'validate' })).toContain('is valid: 2 phases')
-
-  await stop($)
-  await stop($, true)
-  expect(w.toasts.filter(t => t.includes('Jev is off'))).toEqual([
-    "[Pantheon flow] Jev is off: set the judgeKey option or OPENROUTER_API_KEY. This Stop decided on the checks alone.",
-  ])
+  await layOut($, w)
+  w.exits['test -f a.txt'] = 0
+  w.jev.status = 401
+  const held = await stop($)
+  expect(held.block).toContain('Jev did not judge this Stop')
+  expect(held.block).toContain('disable the pantheon plugin')
+  expect(w.toasts.some(t => t.startsWith('[Pantheon flow] Jev did not judge this Stop'))).toBe(true)
+  const relayed = await stop($, true)
+  expect(relayed.block).toBeUndefined()
 })
 
 test('a spawned docs-reader whose Agent description starts with a phase id claims that phase; without the prefix it claims nothing', async ($, on) => {
@@ -355,16 +365,12 @@ test('the judgeKey option wins over OPENROUTER_API_KEY', { options: { judgeKey: 
 })
 
 for (const source of ['project', 'local'] as const) {
-  test(`OPENROUTER_API_KEY that the repository's ${source} settings declare is ignored, and the Stop says why`, async ($, on) => {
+  test(`OPENROUTER_API_KEY that the repository's ${source} settings declare is ignored, and no flow starts`, async ($, on) => {
     const w = flowWorld(on, {}, { OPENROUTER_API_KEY: 'repo-key' })
     w.settings[source] = { env: { OPENROUTER_API_KEY: 'repo-key' } }
     await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
-    const id = await layOutNoChecks($)
-    w.files.set(`${ROOT}/.pantheon/flow/flows/${id}/flow.json`, JSON.stringify({ ...PHASES, phases: PHASES.phases.map(({ check: _drop, ...rest }) => rest) }))
-    expect(await call($, { action: 'validate' })).toContain('is valid: 2 phases')
-    expect(await call($, { action: 'status' })).toContain("Jev: off (OPENROUTER_API_KEY comes from this repository's settings and is ignored; set the judgeKey option)")
-    await stop($)
+    const refused = await call($, { action: 'start', goal: 'Create a.txt then b.txt', name: 'two files' })
+    expect(refused).toContain("Flow not started: the flow needs Jev, and OPENROUTER_API_KEY comes from this repository's settings and is ignored; set the judgeKey option.")
     expect(w.jevAuth).toEqual([])
-    expect(w.toasts).toContain("[Pantheon flow] Jev is off: OPENROUTER_API_KEY comes from this repository's settings and is ignored; set the judgeKey option. This Stop decided on the checks alone.")
   })
 }

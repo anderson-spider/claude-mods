@@ -1,7 +1,7 @@
 // The judgment step of JevFlow (judge.py), ported: the curated state sent to Jev within a character budget, the
 // question set (every choice keeps `unclear`), the parsing of the answers, and compete-then-verify.
 // Pure: the Jev call is the injected `ask`, nothing here touches host access, and `judge` never throws. A failed first
-// call returns null so the caller degrades to checks-only. The sub-step questions (regions.py) are dropped with regions.
+// call returns null and the Stop is held once (jev_unavailable). The sub-step questions (regions.py) are dropped with regions.
 // Every string in the state goes through `redactSecrets` before it is trimmed: the state leaves the machine.
 
 import { redactSecrets } from './redact'

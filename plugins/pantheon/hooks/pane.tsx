@@ -86,7 +86,7 @@ export type PanelData = {
   collapsed?: PanelGroup[]
   /** This session's flow (draft, active or just archived); absent or `none` draws no flow card. */
   flow?: FlowView
-  /** Jev has a key; without it the flow card says the Stop decides on the checks alone. */
+  /** Jev has a key; without it the flow card says the flow cannot start or judge. */
   jevOn?: boolean
   /** The card's Jev-off row when the host knows better than "no key" (a repository's OPENROUTER_API_KEY is ignored). */
   jevOff?: string
@@ -277,8 +277,8 @@ export function timelineSource(slots: Slot[], session: SessionInfo, now: number,
   return { source, width: SW, height }
 }
 
-/** The flow card's Jev-off row with no key; short enough not to be cut in a 68-cell card. */
-export const JEV_OFF_ROW = 'Jev off (no judgeKey or OPENROUTER_API_KEY): checks only.'
+/** The flow card's row with no Jev key; short enough not to be cut in a 68-cell card. */
+export const JEV_OFF_ROW = 'No Jev key (judgeKey or OPENROUTER_API_KEY): flow is stopped.'
 
 export function drawPanel(el: PanelElements, data: PanelData): unknown {
   const { Box, Button } = el
@@ -889,7 +889,7 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
       const now1: Seg[] = state.done
         ? [{ text: `done ${done}/${total}`, color: OK }]
         : [{ text: state.current_phase, bold: true }, { text: `  ${done}/${total} done`, dim: true }]
-      return [frame('flow', color, title, [row('f-sum', [...now1, ...(jevOff ? [{ text: '  Jev off', color: SECTION_COLOR.planned }] : [])]), ...humanRow])]
+      return [frame('flow', color, title, [row('f-sum', [...now1, ...(jevOff ? [{ text: '  no Jev key', color: SECTION_COLOR.planned }] : [])]), ...humanRow])]
     }
     const depth = layers(flow)
     const who = claimsByPhase(state)

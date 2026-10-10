@@ -97,7 +97,7 @@ export type FlowState = {
   last_block_reason: string | null
   /** The last Claude API error (StopFailure). */
   last_error: ErrorNote | null
-  /** The last failed Jev call (the Stop fell back to checks only). */
+  /** The last failed Jev call (that Stop was held once and then let through). */
   last_jev_error?: ErrorNote
   started_at: number
   updated_at: number
