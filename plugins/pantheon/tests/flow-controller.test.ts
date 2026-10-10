@@ -4,7 +4,7 @@ import type { RunOutput, Runner } from '../hooks/flow/checks'
 import {
   activePlanId, approvePlan, controlFlow, diagnosisOpen, flowStatus, flowTaskFiles, humanPrompt, inspectIsolation, inspectSpawn, mainEdit, missingRoles,
   ownershipVerdict, parseNotification, pendingAgentTasks, qaCriteriaBrief, reviewed, stopFlow, taskEnded, taskIdOf, treeSnapshot, verdictCache,
-  approvalListings, confirmationVerdict, listingRefusal, unnamedHolds,
+  approvalListings, confirmationVerdict, listingRefusal, unnamedHolds, noteDelivery,
 } from '../hooks/flow/controller'
 import type { Attest, Available, Ctx } from '../hooks/flow/controller'
 import type { CheckMemo } from '../hooks/flow/checks'
@@ -2343,4 +2343,61 @@ test('the lead is told which task in progress had checks that did not run, in en
       expect(out.context).not.toContain('task C')
     } else expect(out.context).toBeUndefined()
   }
+})
+
+// --- discarded deliveries are journaled ---
+
+const deliveryNotes = async (w: World) => (await w.journal()).filter(e => e.event === 'delivery')
+
+test('noteDelivery appends a clipped, taskful note and does nothing without a plan in force', async () => {
+  const none = world()
+  await noteDelivery(none.ctx(), { agentId: 'a1', condition: 'delivery_unlinked', reason: 'nothing' })
+  expect(await deliveryNotes(none)).toEqual([])
+
+  const w = world()
+  await approve(w)
+  await noteDelivery(w.ctx(), { agentId: 'a1', taskId: 'T1', condition: 'delivery_unlinked', reason: 'x'.repeat(1000) })
+  await noteDelivery(w.ctx(), { agentId: 'a2', condition: 'delivery_unparsed', reason: 'short' })
+  const notes = await deliveryNotes(w)
+  expect(notes).toHaveLength(2)
+  expect(notes[0]).toMatchObject({ kind: 'note', event: 'delivery', condition: 'delivery_unlinked', task: 'T1', mode: 'shadow' })
+  expect(notes[0].reason).toHaveLength(300)
+  expect(notes[1]).toMatchObject({ condition: 'delivery_unparsed', reason: 'short' })
+  expect(notes[1].task).toBeUndefined()
+})
+
+test('a task end for a task that is not in the plan journals delivery_ignored and returns nothing', async () => {
+  const w = world()
+  await approve(w)
+  expect(await taskEnded(w.ctx(), { taskId: 'T9', ownershipDenials: 0 })).toEqual({})
+  expect(await deliveryNotes(w)).toMatchObject([{ condition: 'delivery_ignored', task: 'T9', reason: 'the task is not in the plan in force' }])
+})
+
+test('a task end for a plan that is not in force journals delivery_ignored', async () => {
+  const w = world()
+  w.files.set(`${ROOT}/.pantheon/flow/active`, `${PLAN}\n`)
+  expect(await taskEnded(w.ctx(), { taskId: 'T1', ownershipDenials: 0 })).toEqual({})
+  expect(await deliveryNotes(w)).toMatchObject([{ condition: 'delivery_ignored', task: 'T1', reason: 'the flow is not in force for this plan' }])
+})
+
+test('an idle flow journals nothing for a delivery it discards', async () => {
+  const paused = world()
+  await approve(paused)
+  await controlFlow(paused.ctx(), 'pause')
+  await taskEnded(paused.ctx(), { taskId: 'T9', ownershipDenials: 0 })
+  expect(await deliveryNotes(paused)).toEqual([])
+
+  const stopped = world()
+  await approve(stopped)
+  await controlFlow(stopped.ctx(), 'stop')
+  await taskEnded(stopped.ctx(), { taskId: 'T9', ownershipDenials: 0 })
+  expect(await deliveryNotes(stopped)).toEqual([])
+})
+
+test('the check_unrunnable entry of a task end carries the task', async () => {
+  const w = world()
+  await approve(w)
+  w.results.set('npm test', new Error('spawn EACCES'))
+  expect(await taskEnded(w.ctx(), { taskId: 'T1', ownershipDenials: 0 })).toEqual({})
+  expect((await w.journal()).filter(e => e.condition === 'check_unrunnable')).toMatchObject([{ task: 'T1' }])
 })
