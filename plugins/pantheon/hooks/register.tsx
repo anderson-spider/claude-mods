@@ -772,7 +772,7 @@ export const register: Register = (on, options) => {
 
   // The flow's tool, in place of JevFlow's CLI: start, validate, join, claim (as one of Pantheon's roles) and status.
   on('tool.call', { tool: 'mcp__pantheon__flow' }, async ($, e) => {
-    const input = (e.input ?? {}) as Record<string, unknown>
+    const input: Record<string, unknown> = { ...e }
     const str = (key: string) => typeof input[key] === 'string' ? (input[key] as string).trim() : ''
     const io = flowHost($, jev)
     const root = await flowRoot(hostIo($))

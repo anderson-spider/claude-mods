@@ -128,6 +128,21 @@ export async function tryActivate(io: Io, p: Paths): Promise<{ ok: boolean; erro
   return { ok: true, error: '' }
 }
 
+/**
+ * hooks.py `handle`: a draft whose flow.json became valid is promoted on any hook event, and tracking starts then (the
+ * state is created with a `flow_laid_out` entry), so the viewer and a claim see it at once. Returns why it is still a
+ * draft, or undefined once it is active.
+ */
+async function promote(io: Io, p: Paths): Promise<string | undefined> {
+  if (!(await isDraft(io, p))) return undefined
+  const { ok, error } = await tryActivate(io, p)
+  if (!ok) return error
+  const flow = await loadFlow(io, p)
+  const now = await io.now()
+  await saveState(io, p, record(await loadState(io, p, flow, now), 'flow_laid_out', { phases: flow.phases.length }, now))
+  return undefined
+}
+
 async function draftGoal(io: Io, p: Paths): Promise<string> {
   return String((await readJson(io, p.draft))?.goal ?? '')
 }
@@ -154,7 +169,8 @@ export async function validateFlow(io: Io, root: string, sid: string | undefined
   if (!p) return 'This session is not working on a flow. Start one with action start.'
   try {
     const flow = await loadFlow(io, p)
-    return `${rel(p, p.flow)} is valid: ${flow.phases.length} phases.\n${phaseTable(flow, newState(flow, await io.now()))}`
+    await promote(io, p)
+    return `${rel(p, p.flow)} is valid: ${flow.phases.length} phases.\n${phaseTable(flow, await loadState(io, p, flow, await io.now()))}`
   } catch (error) { return error instanceof Error ? error.message : String(error) }
 }
 
@@ -169,7 +185,7 @@ export async function joinFlow(io: Io, root: string, sid: string | undefined, id
 export async function claimFlow(io: Io, root: string, who: AgentInfo, phase: string, role: string): Promise<string> {
   const p = await boundFlow(io, root, who.sessionId)
   if (!p || p.archived) return 'This session is not working on an active flow. Start one with action start, or join one with action join.'
-  if (await isDraft(io, p)) return 'The flow is still a draft: lay out its phases first.'
+  if (await promote(io, p) !== undefined) return 'The flow is still a draft: lay out its phases first.'
   const flow = await loadFlow(io, p)
   const now = await io.now()
   const next = claimPhase(await loadState(io, p, flow, now), who, phase, role, now)
@@ -206,7 +222,7 @@ export async function listFlows(io: Io, root: string): Promise<{ p: Paths; mtime
 export async function statusText(io: Io, root: string, sid: string | undefined): Promise<string> {
   const p = await viewedFlow(io, root, sid)
   if (!p) return 'No flow in this folder. A multi-step task starts one with mcp__pantheon__flow start.'
-  if (await isDraft(io, p)) return `Flow ${p.id}: draft, phases not laid out yet.`
+  if (!p.archived && await promote(io, p) !== undefined) return `Flow ${p.id}: draft, phases not laid out yet.`
   const flow = await loadFlow(io, p)
   const state = await loadState(io, p, flow, await io.now())
   const human = await io.read(p.needsHuman).catch(() => undefined)
@@ -247,9 +263,7 @@ export async function onSessionStart(io: Io, root: string, payload: { session_id
   const now = await io.now()
   const p = await boundFlow(io, root, payload.session_id)
   if (!p || p.archived) return (await joinHint(io, root, payload.session_id, now)) ?? startHint()
-  if (await isDraft(io, p)) {
-    if (!(await tryActivate(io, p)).ok) return planInstructions(rel(p, p.flow), p.id, await draftGoal(io, p))
-  }
+  if (await promote(io, p) !== undefined) return planInstructions(rel(p, p.flow), p.id, await draftGoal(io, p))
   const flow = await loadFlow(io, p)
   let state = await loadState(io, p, flow, now)
   const source = payload.source ?? 'startup'
@@ -268,10 +282,9 @@ export async function onUserPrompt(io: Io, root: string, payload: { session_id?:
     const text = [join, promptNudge(String(payload.prompt ?? ''), first)].filter(Boolean).join('\n\n')
     return text || undefined
   }
-  if (await isDraft(io, p)) {
-    const { ok, error } = await tryActivate(io, p)
-    if (!ok) return `Reminder: flow \`${p.id}\` still needs its phases (${error}).\n\n${planInstructions(rel(p, p.flow), p.id, await draftGoal(io, p))}`
-    return undefined
+  const draftError = await promote(io, p)
+  if (draftError !== undefined) {
+    return `Reminder: flow \`${p.id}\` still needs its phases (${draftError}).\n\n${planInstructions(rel(p, p.flow), p.id, await draftGoal(io, p))}`
   }
   // A human reply is a fresh start: the block budget guards against looping unattended (hooks.py _refill_budget).
   try {
@@ -431,18 +444,16 @@ export async function onStop(io: Io, root: string, payload: StopPayload): Promis
   const p = await boundFlow(io, root, payload.session_id)
   if (!p || p.archived) return {}
   try {
-    if (await isDraft(io, p)) {
-      const { ok, error } = await tryActivate(io, p)
-      if (!ok) {
-        const draft = await readJson(io, p.draft) ?? {}
-        const n = Number(draft.plan_blocks ?? 0) + 1
-        if (n > PLAN_BLOCK_LIMIT) {
-          await archive(io, p, 'abandoned (no flow laid out)')
-          return { message: `${PREFIX} flow ${p.id} was never laid out; archived as abandoned. The flow is not tracking this task.` }
-        }
-        await io.write(p.draft, `${JSON.stringify({ ...draft, plan_blocks: n }, null, 1)}\n`)
-        return { block: `${PREFIX} Lay out the flow before stopping (${n}/${PLAN_BLOCK_LIMIT}): ${error}.\n\n${planInstructions(rel(p, p.flow), p.id, String(draft.goal ?? ''))}` }
+    const error = await promote(io, p)
+    if (error !== undefined) {
+      const draft = await readJson(io, p.draft) ?? {}
+      const n = Number(draft.plan_blocks ?? 0) + 1
+      if (n > PLAN_BLOCK_LIMIT) {
+        await archive(io, p, 'abandoned (no flow laid out)')
+        return { message: `${PREFIX} flow ${p.id} was never laid out; archived as abandoned. The flow is not tracking this task.` }
       }
+      await io.write(p.draft, `${JSON.stringify({ ...draft, plan_blocks: n }, null, 1)}\n`)
+      return { block: `${PREFIX} Lay out the flow before stopping (${n}/${PLAN_BLOCK_LIMIT}): ${error}.\n\n${planInstructions(rel(p, p.flow), p.id, String(draft.goal ?? ''))}` }
     }
     const out = await onFlowStop(io, p, payload)
     if (!out.block && (await readJson(io, p.state))?.done === true) {
