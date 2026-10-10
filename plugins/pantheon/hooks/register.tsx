@@ -66,8 +66,10 @@ export async function resolveGatePath(stat: (path: string, resolve: boolean) => 
   const isMissing = (error: unknown): boolean => {
     if (typeof error !== 'object' || error === null) return false
     if ('code' in error) return error.code === 'ENOENT'
-    // Host errors may carry only their message. Never infer absence from arbitrary text.
-    return error instanceof Error && /^ENOENT(?=:|$)/.test(error.message)
+    // Host errors may carry only their message. Never infer absence from arbitrary text: the two shapes seen are a bare
+    // `ENOENT: ...` and the engine's own `<plugin>: $.fs.stat(<path>) failed: ENOENT` (found by the end-to-end run, where
+    // a new file of a task could not be written because only the first shape was known).
+    return error instanceof Error && (/^ENOENT(?=:|$)/.test(error.message) || /^[\w@.-]+: \$\.fs\.stat\([\s\S]*\) failed: ENOENT(?=:|\s|$)/.test(error.message))
   }
   let candidate = raw.startsWith('/') ? raw : `${cwd}/${raw}`
   const missing: string[] = []

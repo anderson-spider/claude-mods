@@ -151,6 +151,19 @@ describe('edit gate', () => {
       expect(visited.includes('/repo/.pantheon')).toBe(false)
     })
   }
+  test('resolver treats the engine\'s own ENOENT message (no code) as a missing path, and only that shape', async () => {
+    const real = (path: string) => new Error(`pantheon: $.fs.stat(${path}) failed: ENOENT`)
+    const stat = async (path: string): Promise<FsStat> => {
+      if (path === '/repo/src/new.ts') throw real(path)
+      return pathStat(path)
+    }
+    expect(await resolveGatePath(stat, '/repo/src/new.ts', ROOT)).toBe('/repo/src/new.ts')
+    const other = async (path: string): Promise<FsStat> => {
+      if (path === '/repo/src/new.ts') throw new Error('pantheon: $.fs.stat(/repo/src/new.ts) failed: EACCES')
+      return pathStat(path)
+    }
+    await expect(resolveGatePath(other, '/repo/src/new.ts', ROOT)).rejects.toThrow('EACCES')
+  })
   for (const returnsLink of [false, true]) {
     test(`resolver refuses an unresolved symlink (${returnsLink ? 'stat returns link' : 'resolution throws ENOENT'})`, async () => {
       const visited: boolean[] = []
