@@ -570,7 +570,8 @@ export const register: Register = (on, options) => {
     if (deliveryShapes.has(signature) || deliveryShapes.size >= 40) return
     // Reserve before the await so concurrent hooks cannot write the same signature twice.
     deliveryShapes.add(signature)
-    await noteDeliveryDiagnostic(ctx, { condition: 'envelope_shape', reason: signature })
+    // Unwritten (no plan in force yet): release it, so the same shape arriving during a flow is still recorded.
+    if (!await noteDeliveryDiagnostic(ctx, { condition: 'envelope_shape', reason: signature })) deliveryShapes.delete(signature)
   }
   let flowLastProblem: string | undefined
   const flowToasted = new Set<string>()

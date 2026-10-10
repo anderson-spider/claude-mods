@@ -110,6 +110,22 @@ test('an attempted Stop asks for missing receipts immediately and preserves a pa
   expect(unavailable).toMatchObject({ action: 'pause', condition: 'role_unavailable' })
 })
 
+test('an attempted Stop voids receipts earned for older code, as a delivery does', () => {
+  const { flow, hash } = build([task('A', { risk: true, acceptance: { checks: [check('A')], criteria: ['works'] } })])
+  // A QA fail sent the task back with the architect's receipt still on record; the retry's end notification was lost.
+  const stale = approved(flow, hash, { ends: { A: 1 }, receipts: { A: { architect: true } }, awaiting: [] })
+  const settled = decide(flow, stale, stopEvent({ A: [pass('A')] }), undefined, { available: ALL, attempted: ['A'] })
+  expect(settled).toMatchObject({ action: 'block', condition: 'review_needed', state: { status: { A: 'active' }, ends: { A: 1 } } })
+  expect(settled.state.receipts.A).toBeUndefined()
+  expect(settled.state.awaiting).toEqual([{ task: 'A', by: 'architect' }, { task: 'A', by: 'qa' }])
+  // Once awaiting, later Stops leave the earned receipts alone and only ask for what is missing.
+  const partial: FlowState = { ...settled.state, receipts: { A: { architect: true } }, awaiting: [{ task: 'A', by: 'qa' }] }
+  for (let i = 0; i < 3; i++) {
+    const again = decide(flow, partial, stopEvent({ A: [pass('A')] }), undefined, { available: ALL, attempted: ['A'] })
+    expect(again).toMatchObject({ condition: 'qa_needed', state: { receipts: { A: { architect: true } }, awaiting: [{ task: 'A', by: 'qa' }] } })
+  }
+})
+
 test('attempted settling honors sticky and newly required QA', () => {
   const { flow, hash } = build([task('A')])
   for (const sticky of [false, true]) {

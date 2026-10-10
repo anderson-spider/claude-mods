@@ -1127,6 +1127,18 @@ describe('prompts', () => {
     expect(JSON.stringify(shapes)).not.toContain('unknown')
   })
 
+  test('a shape seen before any plan is in force is still recorded once a flow is approved', { options: { flow: 'shadow' } }, async ($, on) => {
+    const w = flowWorld(on)
+    await start($)
+    const arrive = () => $.prompt.submit({ text: envelope('bg-early', 'completed', 'PRIVATE'), origin: { kind: 'task-notification' } } as never)
+    await arrive()
+    expect(w.journal().filter(e => e.condition === 'envelope_shape')).toHaveLength(0)
+    expect((await approveFlow($)).text).toContain('Approved demo')
+    await arrive()
+    await arrive()
+    expect(w.journal().filter(e => e.condition === 'envelope_shape')).toHaveLength(1)
+  })
+
   test('shape notes cap at forty while event counters keep growing and flush only on changed Stops', { options: { flow: 'shadow' } }, async ($, on) => {
     const w = flowWorld(on)
     await boot($, w)

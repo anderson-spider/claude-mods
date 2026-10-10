@@ -294,6 +294,11 @@ function onStop(flow: Flow, s: FlowState, event: Extract<FlowEvent, { kind: 'sto
   for (const task of actives) {
     if (!ready.has(task.id) || !opts.attempted?.includes(task.id) || task.sideEffect
       || task.acceptance.checks.length === 0 || !checksPassed(task, event.checks[task.id])) continue
+    // A task already awaiting a receipt was settled before: step 6 asks for it, and settling again would void the receipts
+    // its reviewers keep earning.
+    if (s.awaiting.some(a => a.task === task.id)) continue
+    // As at a delivery: a receipt covers the code it saw, and this settlement may follow work that reviewer never saw.
+    clearReceipts(s, task.id)
     const settled = finishOrAwait(flow, s, task, opts)
     if (settled.action === 'pause') return settled
   }

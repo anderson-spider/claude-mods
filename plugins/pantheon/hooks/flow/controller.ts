@@ -1541,20 +1541,24 @@ function deliveryEntry(ctx: Ctx, input: DeliveryNote): Omit<JournalInput, 'at'> 
   }
 }
 
-/** Journals why a delivery (or a spawn link) was not acted on. No plan in force: nothing, and never a throw. */
-export async function noteDelivery(ctx: Ctx, input: DeliveryNote): Promise<void> {
-  await guarded<void>(ctx, 'delivery', undefined, async trace => {
+/**
+ * Journals why a delivery (or a spawn link) was not acted on. No plan in force: nothing, and never a throw.
+ * True only when the entry was handed to the plan's journal queue.
+ */
+export async function noteDelivery(ctx: Ctx, input: DeliveryNote): Promise<boolean> {
+  return guarded<boolean>(ctx, 'delivery', false, async trace => {
     const loc = await locate(ctx)
     const planId = 'planId' in loc ? loc.planId : undefined
-    if (!planId) return
+    if (!planId) return false
     trace.planId = planId
     await noteQueued(ctx, planId, deliveryEntry(ctx, input))
+    return true
   })
 }
 
 /** Bounded, content-free delivery diagnostics use the same guarded, per-plan journal queue. */
-export async function noteDeliveryDiagnostic(ctx: Ctx, input: { condition: 'envelope_shape' | 'delivery_counts'; reason: string }): Promise<void> {
-  await noteDelivery(ctx, { ...input, agentId: '' })
+export async function noteDeliveryDiagnostic(ctx: Ctx, input: { condition: 'envelope_shape' | 'delivery_counts'; reason: string }): Promise<boolean> {
+  return noteDelivery(ctx, { ...input, agentId: '' })
 }
 
 /** A developer or ux agent tried to write outside its task's files. */
