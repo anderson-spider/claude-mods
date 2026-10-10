@@ -90,12 +90,19 @@ describe('loadConfig', () => {
 
   test('accepts every role and councillor in disabledAgents with custom prompts', async () => {
     const result = valid(await load({
-      disabledAgents: ['code-reader', 'docs-reader', 'developer', 'architect', 'qa', 'ux', 'council', 'councillor:alpha'],
+      disabledAgents: ['code-reader', 'docs-reader', 'developer', 'architect', 'qa', 'ux', 'council', 'councillor:alpha', 'councillor:beta'],
       agents: { architect: { prompt: '' }, ux: { prompt: 'custom' } },
     }))
     expect(result.config.agents.architect).toEqual({ model: 'opus', prompt: '' })
     expect(result.config.agents.ux).toEqual({ model: 'sonnet', prompt: 'custom' })
     expect(result.config.disabledAgents).toContain('councillor:alpha')
+    expect(result.config.disabledAgents).toContain('councillor:beta')
+  })
+
+  test('disabledAgents rejects a councillor that is not one of the two seats', async () => {
+    const message = 'disabledAgents: councillor:gamma is not a seat; the council has two seats (alpha, beta)'
+    expect(rejected(await load({ disabledAgents: ['councillor:gamma'] }))).toBe(`u: ${message}`)
+    expect(rejected(await load({}, { disabledAgents: ['council', 'councillor:gamma'] }))).toBe(`p: ${message}`)
   })
 
   test('accepts agents.developer and disabledAgents developer', async () => {
@@ -107,22 +114,26 @@ describe('loadConfig', () => {
     expect(result.config.disabledAgents).toEqual(['developer'])
   })
 
-  test('a new seat is accepted with or without a model', async () => {
-    const withModel = valid(await load({ council: { seats: { gamma: { model: 'haiku' } } } }))
-    expect(withModel.config.council.seats.gamma).toEqual({ model: 'haiku' })
-    const without = valid(await load({ council: { seats: { gamma: { prompt: 'think' } } } }))
-    expect(without.config.council.seats.gamma).toEqual({ prompt: 'think' })
-    const empty = valid(await load({ council: { seats: { gamma: {} } } }))
-    expect(empty.config.council.seats.gamma).toEqual({})
-    expect(Object.keys(empty.config.council.seats)).toEqual(['alpha', 'beta', 'gamma'])
+  test('a third seat is rejected with the list of the two seats, in either file', async () => {
+    const message = 'council.seats.gamma: unknown seat; the council has two seats (alpha, beta)'
+    expect(rejected(await load({ council: { seats: { gamma: { model: 'haiku' } } } }))).toBe(`u: ${message}`)
+    expect(rejected(await load({ council: { seats: { gamma: {} } } }))).toBe(`u: ${message}`)
+    expect(rejected(await load({}, { council: { seats: { gamma: { prompt: 'think' } } } }))).toBe(`p: ${message}`)
   })
 
-  test('a seat declared by the user can be completed by the project', async () => {
+  test('alpha and beta overrides load and merge, and an empty seats object keeps both seats', async () => {
+    const result = valid(await load({ council: { seats: { alpha: { effort: 'low' }, beta: { prompt: 'b' } } } }))
+    expect(result.config.council.seats).toEqual({ alpha: { model: 'opus', effort: 'low' }, beta: { model: 'sonnet', prompt: 'b' } })
+    const empty = valid(await load({ council: { seats: {} } }))
+    expect(empty.config.council.seats).toEqual(DEFAULT_CONFIG.council.seats)
+  })
+
+  test('a seat set by the user is completed by the project', async () => {
     const result = valid(await load(
-      { council: { seats: { gamma: { prompt: 'think' } } } },
-      { council: { seats: { gamma: { model: 'opus' } } } },
+      { council: { seats: { beta: { prompt: 'think' } } } },
+      { council: { seats: { beta: { model: 'opus' } } } },
     ))
-    expect(result.config.council.seats.gamma).toEqual({ prompt: 'think', model: 'opus' })
+    expect(result.config.council.seats.beta).toEqual({ prompt: 'think', model: 'opus' })
   })
 
   test('partial override of an existing seat keeps its model', async () => {
@@ -143,7 +154,7 @@ describe('loadConfig', () => {
   test('origins report where each field came from', async () => {
     const result = valid(await load({
       agents: { developer: { model: 'opus', effort: 'high' } },
-      council: { seats: { alpha: { prompt: 'extra' }, gamma: { model: 'haiku' } } },
+      council: { seats: { alpha: { prompt: 'extra' }, beta: { model: 'haiku' } } },
     }, {
       disabledAgents: ['council'],
       agents: { developer: { model: 'haiku' } },
@@ -154,9 +165,8 @@ describe('loadConfig', () => {
     expect(result.origins['agents.architect.model']).toBe('default')
     expect(result.origins['council.seats.alpha.prompt']).toBe('user')
     expect(result.origins['council.seats.alpha.model']).toBe('default')
-    expect(result.origins['council.seats.gamma']).toBe('user')
-    expect(result.origins['council.seats.gamma.model']).toBe('user')
-    expect(result.origins['council.seats.beta.model']).toBe('default')
+    expect(result.origins['council.seats.beta']).toBe('user')
+    expect(result.origins['council.seats.beta.model']).toBe('user')
   })
 
   test('disabledAgents has no origin until a file sets it', async () => {
@@ -257,7 +267,7 @@ describe('loadConfig', () => {
     ['an agent role', '{"agents":{"architect":{"model":"gpt-6-astra"}}}', 'agents.architect.model'],
     ['another agent role', '{"agents":{"ux":{"model":"gemini-3"}}}', 'agents.ux.model'],
     ['a seat', '{"council":{"seats":{"alpha":{"model":"gpt-6-luna"}}}}', 'council.seats.alpha.model'],
-    ['a new seat', '{"council":{"seats":{"gamma":{"model":"o4"}}}}', 'council.seats.gamma.model'],
+    ['another seat', '{"council":{"seats":{"beta":{"model":"o4"}}}}', 'council.seats.beta.model'],
   ] as const) {
     test(`rejects a non-Claude model for ${name}`, async () => {
       const error = rejected(await loadConfig(readFiles({ u: json }), { user: 'u' }))
@@ -287,7 +297,8 @@ describe('loadConfig', () => {
     ['non string prompt', '{"agents":{"ux":{"prompt":[]}}}', 'agents.ux.prompt'],
     ['non object council', '{"council":false}', 'council'],
     ['non object seats', '{"council":{"seats":[]}}', 'council.seats'],
-    ['null seat', '{"council":{"seats":{"gamma":null}}}', 'council.seats.gamma'],
+    ['null seat', '{"council":{"seats":{"alpha":null}}}', 'council.seats.alpha'],
+    ['unknown seat', '{"council":{"seats":{"gamma":{"model":"haiku"}}}}', 'council.seats.gamma: unknown seat'],
     ['non string seat model', '{"council":{"seats":{"alpha":{"model":2}}}}', 'council.seats.alpha.model'],
     ['non string seat effort', '{"council":{"seats":{"alpha":{"effort":null}}}}', 'council.seats.alpha.effort'],
     ['non string seat prompt', '{"council":{"seats":{"alpha":{"prompt":false}}}}', 'council.seats.alpha.prompt'],

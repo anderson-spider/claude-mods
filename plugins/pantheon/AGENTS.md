@@ -13,7 +13,7 @@ IMPORTANT: prompts and panel modules include third-party work. Keep `LICENSE` an
 
 ## Config
 
-- `config.ts` merges built-in defaults, `~/.claude/pantheon.json` and `<repo>/.claude/pantheon.json` field by field: `agents.<role>` and `council.seats.<seat>` take `model`, `effort` and `prompt`; `disabledAgents` is a union. Models must be Claude models (`models.ts`).
+- `config.ts` merges built-in defaults, `~/.claude/pantheon.json` and `<repo>/.claude/pantheon.json` field by field: `agents.<role>` and `council.seats.<seat>` take `model`, `effort` and `prompt`; `disabledAgents` is a union. The council has exactly two seats, `alpha` and `beta` (the keys of `DEFAULT_CONFIG.council.seats`): a config naming any other seat under `council.seats`, or `councillor:<seat>` in `disabledAgents`, fails to load with the "unknown seat" or "is not a seat" message, so no third seat is ever registered. Models must be Claude models (`models.ts`).
 - Fields of the Codex and profile era (`profile`, `profiles`, `sandboxCap`, `noNetwork`, `foregroundMinutes`, an entry's `engine` or `sandbox`) the old role names (`explorer`, `librarian`, `executor`, `designer`, `oracle`, `fixer`) and the removed `git` role fail to load with one message listing them saying what to do.
 
 ## Edit gate

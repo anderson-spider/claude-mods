@@ -6,7 +6,7 @@ import { rolePrompt } from '../hooks/prompts/roles'
 
 describe('lead budget', () => {
   // Checked: the default config, and each role or configured seat disabled one at a time.
-  // The council has two seats (alpha, beta); config.ts does not reject a third, which would sit outside this ceiling.
+  // The council has two seats (alpha, beta); config.ts rejects any other seat name, so no seat can sit outside this ceiling.
   const LEAD_BUDGET = 4300
   test('the default prompt stays within 4300 chars', () => {
     expect(buildLeadSection(DEFAULTS).length).toBeLessThanOrEqual(LEAD_BUDGET)

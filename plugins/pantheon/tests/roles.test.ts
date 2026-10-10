@@ -80,7 +80,7 @@ describe('native agent specs', () => {
   test('config model, effort and append prompts reach the registration specs', async () => {
     const config = await resolved({
       agents: { architect: { model: 'claude-opus-4-1', effort: 'high', prompt: 'extra' } },
-      council: { seats: { beta: { model: 'haiku', effort: 'low', prompt: 'seat extra' }, gamma: { prompt: 'g' } } },
+      council: { seats: { alpha: { prompt: 'g' }, beta: { model: 'haiku', effort: 'low', prompt: 'seat extra' } } },
     })
     const specs = nativeAgentSpecs(config, prompts)
     expect(specs.find(spec => spec.name === 'architect')).toEqual(expect.objectContaining({
@@ -89,9 +89,9 @@ describe('native agent specs', () => {
     expect(specs.find(spec => spec.name === 'councillor-beta')).toEqual(expect.objectContaining({
       prompt: '<councillor>\n\nseat extra', model: 'haiku', effort: 'low',
     }))
-    const gamma = specs.find(spec => spec.name === 'councillor-gamma')
-    expect(gamma?.prompt).toBe('<councillor>\n\ng')
-    expect(gamma?.model).toBeUndefined()
+    const alpha = specs.find(spec => spec.name === 'councillor-alpha')
+    expect(alpha?.prompt).toBe('<councillor>\n\ng')
+    expect(alpha?.model).toBe('opus')
   })
 
   test('disabled natives and council do not produce registration specs', () => {

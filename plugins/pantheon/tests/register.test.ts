@@ -802,14 +802,15 @@ describe('register', () => {
   test('configured models and prompts reach the registered agents', async ($, on) => {
     const { seen } = world(on, { files: { [`${HOME}/.claude/pantheon.json`]: JSON.stringify({
       agents: { architect: { model: 'sonnet', effort: 'high', prompt: 'extra' } },
-      council: { seats: { gamma: { model: 'haiku' } } },
+      council: { seats: { beta: { model: 'haiku' } } },
     }) } })
     await start($)
     const architect = seen.registered.find(spec => spec.name === 'architect') as { model?: string; effort?: string; prompt?: string }
     expect(architect.model).toBe('sonnet')
     expect(architect.effort).toBe('high')
     expect(architect.prompt).toContain('extra')
-    expect(seen.agents).toContain('councillor-gamma')
+    const beta = seen.registered.find(spec => spec.name === 'councillor-beta') as { model?: string } | undefined
+    expect(beta?.model).toBe('haiku')
   })
 
   test('/pantheon config reports the merged config and where it came from', async ($, on) => {

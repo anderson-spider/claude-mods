@@ -8,6 +8,9 @@ type Layer = {
   council?: { seats?: Record<string, AgentConfig> }
 }
 
+// The council's seats are fixed by the defaults: a name outside them is rejected, not registered.
+const SEATS = Object.keys(DEFAULT_CONFIG.council.seats)
+const SEAT_LIST = `the council has two seats (${SEATS.join(', ')})`
 const ENTRY_KEYS = ['model', 'effort', 'prompt'] as const
 const NATIVE_ONLY = 'Pantheon runs only native Claude agents'
 // Fields of the Codex and profile era: each fails with what to do instead.
@@ -93,6 +96,11 @@ function validate(value: unknown): Layer {
         (name.startsWith('councillor:') && name.length > 'councillor:'.length)
       ),
     )) throw new Error('disabledAgents: expected list of roles, councillor:<seat> or council')
+    for (const name of disabled as string[]) {
+      if (name.startsWith('councillor:') && !SEATS.includes(name.slice('councillor:'.length))) {
+        throw new Error(`disabledAgents: ${name} is not a seat; ${SEAT_LIST}`)
+      }
+    }
     layer.disabledAgents = disabled as string[]
   }
   if (Object.hasOwn(config, 'agents')) {
@@ -108,7 +116,10 @@ function validate(value: unknown): Layer {
     for (const key of Object.keys(council)) if (key !== 'seats') throw new Error(`council.${key}: unknown field (${JSON.stringify(council[key])})`)
     if (Object.hasOwn(council, 'seats')) {
       const seats: Record<string, AgentConfig> = {}
-      for (const [name, raw] of Object.entries(object(council.seats, 'council.seats'))) seats[name] = entry(raw, `council.seats.${name}`)
+      for (const [name, raw] of Object.entries(object(council.seats, 'council.seats'))) {
+        if (!SEATS.includes(name)) throw new Error(`council.seats.${name}: unknown seat; ${SEAT_LIST}`)
+        seats[name] = entry(raw, `council.seats.${name}`)
+      }
       layer.council = { seats }
     }
   }
