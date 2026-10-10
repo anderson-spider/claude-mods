@@ -26,7 +26,7 @@ The flow tracks a session against `.pantheon/flow/flows/<id>/flow.json`: a goal 
 - Treat it as the next instruction. Do the concrete thing it names for the named phase.
 - If it quotes failing check output, fix the cause shown there. Run the check command yourself before claiming the phase is done.
 - "You said the work is done, but it is not" means a check still fails. Do not repeat the claim; make the check pass.
-- `not run:` in a check result means the check never ran: Claude Code's permission rules denied it, or the person cancelled it in the Pantheon flow check box. Do not rewrite the check to get around that; tell the person what it needs.
+- `not run:` in a check result means the check never ran: Claude Code's permission rules denied it, or the person cancelled it in the Pantheon flow check box. If no one answers the box within 2 minutes, the Stop goes through unjudged and the next Stop asks again. Do not rewrite the check to get around that; tell the person what it needs.
 - "You are looping" means your last approach is not working. Re-read the goal and change approach, not just parameters.
 - "Regression" means a phase that was done now fails its check. Fix that first.
 - Never edit `state.json` or `flow.json` under `.pantheon/flow/` to get past a block. Only the flow writes state. Changing the flow is the person's decision.

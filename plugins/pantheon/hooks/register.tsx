@@ -41,6 +41,8 @@ type GateHeld = { message: string; title?: string }
 /** The check commands the person approved, per repository root, in the plugin's store (newest last). */
 const CHECK_APPROVALS_KEY = 'flowCheckApprovals'
 const CHECK_APPROVALS_MAX = 200
+/** How long the flow check box waits for the person before the Stop goes through unjudged. */
+const CHECK_ANSWER_MINUTES = 2
 
 function approvalsIn(all: unknown, root: string): string[] {
   const list = all && typeof all === 'object' && !Array.isArray(all) ? (all as Record<string, unknown>)[root] : undefined
@@ -295,7 +297,13 @@ export const register: Register = (on, options) => {
   let gateInteractive = false
 
   // Like branch-guard, decisions travel in memory: state reads inside a dispatch are snapshots.
-  async function holdGate(io: { poll: () => Promise<unknown>; show: (value: GateHeld | null) => Promise<unknown> }, held: GateHeld, signal: AbortSignal): Promise<GateChoice | 'aborted'> {
+  // With `timeout`, the box gives up once it has been shown that long without an answer.
+  async function holdGate(
+    io: { poll: () => Promise<unknown>; show: (value: GateHeld | null) => Promise<unknown> },
+    held: GateHeld,
+    signal: AbortSignal,
+    timeout?: { ms: number; now: () => Promise<number> },
+  ): Promise<GateChoice | 'aborted' | 'timeout'> {
     const slot = { decision: null as GateChoice | null }
     try {
       while (gateWaiting !== undefined) {
@@ -306,7 +314,11 @@ export const register: Register = (on, options) => {
       if (signal.aborted) return 'aborted'
       gateWaiting = slot
       await io.show(held)
-      while (slot.decision === null && !signal.aborted) await io.poll()
+      const deadline = timeout ? (await timeout.now()) + timeout.ms : undefined
+      while (slot.decision === null && !signal.aborted) {
+        if (deadline !== undefined && (await timeout!.now()) >= deadline) return 'timeout'
+        await io.poll()
+      }
       return signal.aborted ? 'aborted' : slot.decision ?? 'aborted'
     } catch {
       return 'aborted'
@@ -810,12 +822,16 @@ export const register: Register = (on, options) => {
             const outcome = await holdGate({
               poll: () => $.process.run(['sleep', '0.25']),
               show: value => update($, gateHeld, () => value),
-            }, { message: `Run the check of phase \`${phase}\`?\n  ${cmd}`, title: 'Pantheon flow check' }, next.signal)
+            }, {
+              message: `Run the check of phase \`${phase}\`?\n  ${cmd}\nWithout an answer in ${CHECK_ANSWER_MINUTES} minutes, this Stop goes through unjudged.`,
+              title: 'Pantheon flow check',
+            }, next.signal, { ms: CHECK_ANSWER_MINUTES * 60_000, now: async () => Number(await $.clock.now()) })
             if (outcome === 'proceed') {
               // The run was approved either way; a store that cannot keep the approval only asks again next time.
               await rememberCheck($, root, cmd).catch(() => undefined)
               return { ok: true }
             }
+            if (outcome === 'timeout') return { ok: false, reason: `no answer within ${CHECK_ANSWER_MINUTES} minutes`, unanswered: true }
             return { ok: false, reason: outcome === 'cancel' ? 'the person cancelled it' : 'no answer from the person' }
           } catch (error) {
             return { ok: false, reason: error instanceof Error ? error.message : String(error) }

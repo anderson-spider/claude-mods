@@ -22,7 +22,7 @@ function flowWorld(on: On, store: Record<string, unknown> = {}) {
   // What Claude Code's permission rules answer for a check's Bash command (tool.check); allow unless a test says otherwise.
   const rules: { decision: 'allow' | 'ask' | 'deny'; reason?: string } = { decision: 'allow' }
   const isDir = (path: string) => [...files.keys()].some(f => f.startsWith(`${path}/`))
-  mock.clock(on)
+  const clock = mock.clock(on)
   mock.env(on, { HOME })
   // The plugin's store, in memory and readable by the test (the test's own engine has no store handle).
   const kv = new Map<string, unknown>(Object.entries(store))
@@ -80,7 +80,7 @@ function flowWorld(on: On, store: Record<string, unknown> = {}) {
   on('classic.SessionStart', async () => ({}))
   on('classic.Stop', async () => ({}))
   on('classic.UserPromptSubmit', async () => ({}))
-  return { files, exits, toasts, ran, rules, store: kv }
+  return { files, exits, toasts, ran, rules, store: kv, clock }
 }
 
 const call = async ($: Engine, input: Record<string, unknown>) => String((await $.tool.call({ tool: FLOW, ...input } as never) as { result?: unknown }).result)
@@ -270,3 +270,46 @@ for (const decision of ['proceed', 'cancel'] as const) {
     }
   })
 }
+
+test('a flow check box left unanswered gives up after 2 minutes: the Stop goes through unjudged and the next one asks again', async ($, on) => {
+  const w = flowWorld(on)
+  w.rules.decision = 'ask'
+  await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
+  await layOut($, w)
+  const ui = await $.ui.mount({ plugin: 'pantheon', component: 'AbovePrompt', surface: 'terminal', props: { hasSurvey: false, isWorking: false, maxRows: 12, bodyColumns: 120 } as never })
+  const boxShown = async () => {
+    let texts = ''
+    for (let i = 0; i < 100 && !texts.includes('Pantheon flow check'); i++) {
+      await pause(10)
+      texts = (await ui.findAll({ type: 'Text' })).map(node => String(node.text)).join('|')
+    }
+    return texts
+  }
+  let pending = stop($)
+  try {
+    const texts = await boxShown()
+    expect(texts).toContain('Without an answer in 2 minutes, this Stop goes through unjudged.')
+    await w.clock.advance(119_000)
+    await pause(20)
+    expect(await ui.findAll({ type: 'Text' }).then(n => n.some(t => String(t.text).includes('Pantheon flow check')))).toBe(true)
+    await w.clock.advance(1_000)
+    const out = await pending
+    expect(out.block).toBeUndefined()
+    expect(w.ran).toEqual([])
+    expect(w.toasts.some(t => t.includes('Check not run (no answer within 2 minutes)'))).toBe(true)
+    // Nothing was judged or recorded: the flow is where it was, and the next Stop asks again.
+    const state = JSON.parse([...w.files].find(([path]) => path.endsWith('/state.json'))![1])
+    expect(state.current_phase).toBe('a')
+    expect(state.blocks_this_session).toBe(0)
+    expect(state.history.some((h: { event: string }) => h.event === 'stop')).toBe(false)
+    expect(w.store.has('flowCheckApprovals')).toBe(false)
+    pending = stop($)
+    expect(await boxShown()).toContain('Run the check of phase `a`?')
+    await ui.press({ key: 'proceed' })
+    expect((await pending).block).toContain("Now work on phase 'b'")
+  } finally {
+    await ui.press({ key: 'cancel' }).catch(() => undefined)
+    await pending.catch(() => undefined)
+    await ui.unmount()
+  }
+})

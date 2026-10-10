@@ -279,3 +279,21 @@ test('an error from authorize refuses the command, and the check is not run', as
   expect(f.ran).toEqual([])
   expect(held.block).toContain('not run: gate broke')
 })
+
+test('a check the person left unanswered lets the Stop through unjudged, and the other checks are not asked', async () => {
+  const f = folder()
+  const p = await started(f)
+  f.files.set(p.flow, JSON.stringify(FLOW))
+  // Phase a is done first, so the next Stop has two commands to authorize: a's (regression) and b's.
+  await flow.onStop({ ...f.io, authorize: async () => ({ ok: true }) }, ROOT, { session_id: 's1', stop_hook_active: false })
+  const before = f.files.get(p.state)
+  const ranBefore = f.ran.length
+  const asked: string[] = []
+  const io: Io = { ...f.io, authorize: async cmd => { asked.push(cmd); return { ok: false, reason: 'no answer within 2 minutes', unanswered: true } } }
+  const out = await flow.onStop(io, ROOT, { session_id: 's1', stop_hook_active: true })
+  expect(asked).toHaveLength(1)
+  expect(f.ran).toHaveLength(ranBefore)
+  expect(out.block).toBeUndefined()
+  expect(out.message).toContain('Check not run (no answer within 2 minutes)')
+  expect(f.files.get(p.state)).toBe(before)
+})
