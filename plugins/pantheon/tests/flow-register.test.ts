@@ -1073,15 +1073,63 @@ describe('prompts', () => {
     expect(ended).toBeGreaterThan(adopted)
   })
 
-  test('a notification for an agent the host does not list is journaled as unlinked: no task end, no context, no output', { options: { flow: 'shadow' } }, async ($, on) => {
+  test('a listed agent whose description names no task is journaled unlinked with the reason: no task end, no context, no output', { options: { flow: 'shadow' } }, async ($, on) => {
     const w = flowWorld(on)
     await boot($, w)
+    w.agents.push({ id: 'bg-9', description: 'refactor the cache', type: 'general-purpose', status: 'running' })
     await $.prompt.submit({ text: envelope('bg-9', 'completed', 'SECRET-OUTPUT'), origin: { kind: 'task-notification' } } as never)
     expect(w.journal().at(-1)).toMatchObject({ kind: 'note', event: 'delivery', condition: 'delivery_unlinked', mode: 'shadow' })
+    expect(w.journal().at(-1)?.reason).toContain('names no [T<n>] task')
     expect(w.journal().some(e => e.event === 'taskEnd')).toBe(false)
     expect(w.engine.prompts.at(-1)).toBeUndefined()
     expect(JSON.stringify(w.journal())).not.toContain('SECRET-OUTPUT')
     expect(w.state()?.ends).toEqual({})
+  })
+
+  test('a notification for an id the host does not list writes nothing: it is not an agent of this session (a Bash or Monitor task)', { options: { flow: 'shadow' } }, async ($, on) => {
+    const w = flowWorld(on)
+    await boot($, w)
+    const before = w.journal().length
+    await $.prompt.submit({ text: envelope('bash-7', 'completed', 'exit 0'), origin: { kind: 'task-notification' } } as never)
+    expect(w.journal().length).toBe(before)
+    expect(w.journal().some(e => e.event === 'delivery')).toBe(false)
+    expect(w.engine.prompts.at(-1)).toBeUndefined()
+  })
+
+  test('a listed agent whose description names a task the plan does not have, or whose type is not the work role, says which', { options: { flow: 'shadow' } }, async ($, on) => {
+    const w = flowWorld(on)
+    await boot($, w)
+    w.agents.push({ id: 'bg-8', description: '[T9] ghost', type: 'pantheon:developer', status: 'running' })
+    w.agents.push({ id: 'bg-7', description: '[T1] first', type: 'pantheon:qa', status: 'running' })
+    await $.prompt.submit({ text: envelope('bg-8', 'completed'), origin: { kind: 'task-notification' } } as never)
+    expect(w.journal().at(-1)).toMatchObject({ condition: 'delivery_unlinked', mode: 'shadow' })
+    expect(w.journal().at(-1)?.reason).toContain('T9')
+    expect(w.journal().at(-1)?.reason).toContain('not in the plan')
+    await $.prompt.submit({ text: envelope('bg-7', 'completed'), origin: { kind: 'task-notification' } } as never)
+    expect(w.journal().at(-1)).toMatchObject({ condition: 'delivery_unlinked' })
+    expect(w.journal().at(-1)?.reason).toContain('not the work role')
+    expect(w.state()?.ends).toEqual({})
+  })
+
+  test('adoption refused because the flow is paused says the task is not live, and delivers nothing', { options: { flow: 'shadow' } }, async ($, on) => {
+    const w = flowWorld(on)
+    await boot($, w)
+    await command($, 'flow pause')
+    w.agents.push({ id: 'bg-1', description: '[T1] first', type: 'pantheon:developer', status: 'running' })
+    await $.prompt.submit({ text: envelope('bg-1', 'completed'), origin: { kind: 'task-notification' } } as never)
+    expect(w.journal().at(-1)).toMatchObject({ condition: 'delivery_unlinked', mode: 'shadow' })
+    expect(w.journal().at(-1)?.reason).toContain('not live')
+    expect(w.journal().some(e => e.event === 'taskEnd')).toBe(false)
+    expect(w.state()?.ends).toEqual({})
+  })
+
+  test('an adopted delivery whose status is not completed says so in its reason, and ends nothing', { options: { flow: 'shadow' } }, async ($, on) => {
+    const w = flowWorld(on)
+    await boot($, w)
+    w.agents.push({ id: 'bg-1', description: '[T1] first', type: 'pantheon:developer', status: 'running' })
+    await $.prompt.submit({ text: envelope('bg-1', 'failed'), origin: { kind: 'task-notification' } } as never)
+    expect(w.journal().find(e => e.condition === 'delivery_adopted')?.reason).toContain('status=failed')
+    expect(w.journal().some(e => e.event === 'taskEnd')).toBe(false)
   })
 
   test('an envelope without a task id or a status is journaled as unparsed, and says what is missing', { options: { flow: 'shadow' } }, async ($, on) => {
