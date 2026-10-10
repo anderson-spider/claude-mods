@@ -16,9 +16,30 @@ export type SessionInfo = {
 }
 export type PanelGroup = 'running' | 'idle'
 export type PanelView = { collapsed?: PanelGroup[] }
+/**
+ * A subagent the flow controller linked to a task: the `[<taskId>]` its description started with, read at spawn.
+ * `work` is the task's developer or ux, `review` a qa or architect spawned for a receipt the task awaited, `diagnosis`
+ * the architect asked to diagnose a task that ran out of attempts (its return is not a receipt).
+ */
+export type FlowAgent = {
+  task: string
+  plan: string
+  kind: 'work' | 'review' | 'diagnosis'
+  by?: 'qa' | 'architect'
+  /** The task's end count when the agent was spawned: a reviewer answers for that delivery. */
+  end: number
+  /** Writes the controller refused (enforce) or would have (shadow) outside the task's files since its last return. */
+  denials: number
+  /** The task's files, kept only when the flow was live at spawn: what the agent may write. */
+  files?: string[]
+  /** For a subagent spawned by a task's agent: the work agent whose task and files it inherited, whose return it never is. */
+  root?: string
+  /** The repository's HEAD and working-tree digest when a QA agent was spawned. */
+  git?: { head: string; dirty: string }
+}
 
 declare module 'claude-code' {
   interface PluginState {
-    pantheon: { natives: Native[]; session: SessionInfo; view: PanelView; gateHeld: { message: string } | null }
+    pantheon: { natives: Native[]; session: SessionInfo; view: PanelView; gateHeld: { message: string } | null; flowAgents: Record<string, FlowAgent> }
   }
 }

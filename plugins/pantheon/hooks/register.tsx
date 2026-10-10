@@ -1,11 +1,19 @@
 import { atom, read, update } from 'claude-code'
 import type { AgentSpec, FsStat, Hook, ProcessRunInit, ProcessRunResult, Register, ToolCallResult } from 'claude-code'
 
-import type { Native, SessionInfo } from '../types'
+import type { FlowAgent, Native, SessionInfo } from '../types'
 import { loadConfig } from './config'
 import { rulesVerdict } from './decisions'
 import { gateContext, gateMessage } from './gate'
 import { DEFAULT_CONFIG } from './defaults'
+import {
+  approvePlan, controlFlow, flowStatus, flowTaskFiles, humanPrompt, inspectIsolation, inspectSpawn, mainEdit, noteOwnership,
+  ownershipVerdict, parseNotification, pendingAgentTasks, qaCriteriaBrief, reviewed, stopFlow, taskEnded, taskIdOf,
+} from './flow/controller'
+import type { Ctx, Serial } from './flow/controller'
+import type { CheckMemo } from './flow/checks'
+import { createSerial } from './flow/store'
+import type { Mode } from './flow/types'
 import { buildCouncilBlock, isCouncilOrigin, matchesCouncilTrigger } from './prompts/council'
 import { buildLeadSection } from './prompts/lead'
 import { rolePrompt } from './prompts/roles'
@@ -174,6 +182,182 @@ export function createQueue<T>(write: (v: T) => Promise<unknown>, onError: (e: u
 const nativesAtom = atom({ plugin: 'pantheon', key: 'natives' } as const, [] as Native[])
 const sessionAtom = atom({ plugin: 'pantheon', key: 'session' } as const, DEFAULT_SESSION)
 const viewAtom = atom({ plugin: 'pantheon', key: 'view' } as const, DEFAULT_VIEW)
+const flowAgentsAtom = atom({ plugin: 'pantheon', key: 'flowAgents' } as const, {} as Record<string, FlowAgent>)
+
+/** Links the controller keeps: the newest, so the atom stays small. */
+export const FLOW_AGENTS_MAX = 48
+
+/** The `flow` option: off, shadow (the default, also for anything unrecognised) or enforce. */
+export function flowModeOf(value: unknown): Mode {
+  return value === 'off' || value === 'enforce' ? value : 'shadow'
+}
+
+/** The link for an agent, replacing an older one and dropping the oldest links past the cap. */
+export function withFlowAgent(links: Record<string, FlowAgent>, agentId: string, link: FlowAgent): Record<string, FlowAgent> {
+  const rest = Object.entries(links).filter(([id]) => id !== agentId)
+  return Object.fromEntries([...rest, [agentId, link]].slice(-FLOW_AGENTS_MAX))
+}
+
+/** What a flow call needs besides the hook's `$`; built by `register`, which owns the root, the config and the queues. */
+type FlowDeps = { root: string; mode: Mode; config: PantheonConfig; serial: (planId: string) => Serial; memo: CheckMemo; warn: (text: string) => void }
+
+/** What the flow hooks share while a module instance lives (a hot reload starts it again). */
+type FlowRuntime = {
+  /**
+   * The links as this module wrote them. `$.state` reads inside a dispatch are snapshots, so a write that raced a link's
+   * storage must see it here; the state value is what survives a reload.
+   */
+  links: Map<string, FlowAgent>
+  /** Delegations of a task's agents that are starting: the link of the agent they start is not written yet. */
+  pending: Set<Promise<void>>
+  /** Agents known not to belong to any task, so each write by one does not ask the engine again. */
+  strangers: Set<string>
+  uid: Promise<string | undefined> | undefined
+}
+
+const PENDING_WAIT_MS = 2000
+const STRANGERS_MAX = 500
+
+/** Keeps a link in memory (the newest FLOW_AGENTS_MAX) and in the state value. */
+async function storeFlowAgent($: Dollar, rt: FlowRuntime, agentId: string, link: FlowAgent): Promise<void> {
+  rt.links.delete(agentId)
+  rt.links.set(agentId, link)
+  while (rt.links.size > FLOW_AGENTS_MAX) rt.links.delete(rt.links.keys().next().value as string)
+  await update($, flowAgentsAtom, links => withFlowAgent(links, agentId, link))
+}
+
+/** The link of an agent as last written: memory first, then the state value. */
+async function flowAgentOf($: Dollar, rt: FlowRuntime, agentId: string): Promise<FlowAgent | undefined> {
+  return rt.links.get(agentId) ?? (await read($, flowAgentsAtom))[agentId]
+}
+
+/** Counts a refused write for a work agent, or clears the count when its delivery has been judged. */
+async function setFlowDenials($: Dollar, rt: FlowRuntime, agentId: string, count: (before: number) => number): Promise<void> {
+  const current = await flowAgentOf($, rt, agentId)
+  if (current) {
+    rt.links.delete(agentId)
+    rt.links.set(agentId, { ...current, denials: count(current.denials) })
+  }
+  await update($, flowAgentsAtom, links => links[agentId] ? { ...links, [agentId]: { ...links[agentId]!, denials: count(links[agentId]!.denials) } } : links)
+}
+
+/** Marks a delegation as starting until the returned function is called. */
+function holdPending(rt: FlowRuntime): () => void {
+  let release!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve })
+  rt.pending.add(gate)
+  return () => { release(); rt.pending.delete(gate) }
+}
+
+/** An agent spawned by a task's work agent writes under that task's files, and its denials count for the task's agent. */
+function inherited(parent: FlowAgent, parentId: string): FlowAgent {
+  return { task: parent.task, plan: parent.plan, kind: 'work', end: parent.end, denials: 0, ...(parent.files ? { files: parent.files } : {}), root: parent.root ?? parentId }
+}
+
+/**
+ * The link of an agent. A link is written only once its spawn has resolved, so an agent's first write can come first: it
+ * waits for the delegations in flight (at most PENDING_WAIT_MS), then asks the engine what the agent is (its `[T]`
+ * description, or the agent that spawned it) and adopts it. Agents that turn out to be no task's are remembered.
+ */
+async function flowLinkFor($: Dollar, rt: FlowRuntime, deps: FlowDeps, agentId: string, depth = 0): Promise<FlowAgent | undefined> {
+  const find = () => flowAgentOf($, rt, agentId)
+  let link = await find()
+  if (link || rt.strangers.has(agentId)) return link
+  if (rt.pending.size > 0) {
+    let timer: { cancel: () => void } | undefined
+    await Promise.race([
+      Promise.allSettled([...rt.pending]),
+      new Promise<void>(resolve => { timer = $.clock.after(PENDING_WAIT_MS, () => resolve()) }),
+    ])
+    timer?.cancel()
+    link = await find()
+    if (link) return link
+  }
+  const info = depth < 4 ? (await $.agent.list()).find(agent => agent.id === agentId) : undefined
+  let adopted: FlowAgent | undefined
+  if (info?.parentId) {
+    const parent = await flowLinkFor($, rt, deps, info.parentId, depth + 1)
+    if (parent?.kind === 'work' && parent.files) adopted = inherited(parent, info.parentId)
+  } else if (info) {
+    const taskId = taskIdOf(info.description)
+    const check = taskId ? await inspectSpawn(flowCtx($, deps), { taskId, agentType: info.type }) : undefined
+    if (taskId && check?.kind === 'work' && check.planId && check.files) {
+      adopted = { task: taskId, plan: check.planId, kind: 'work', end: check.end, denials: 0, files: check.files }
+    }
+  }
+  if (adopted) {
+    await storeFlowAgent($, rt, agentId, adopted)
+    return adopted
+  }
+  if (rt.strangers.size >= STRANGERS_MAX) rt.strangers.clear()
+  rt.strangers.add(agentId)
+  return undefined
+}
+
+/**
+ * Whether a write is inside the task's files, with the path and the root both resolved by the host (links followed), as
+ * the gate does, so `/var` against `/private/var` or a link out of an owned directory cannot change the answer. A path the
+ * host cannot resolve is refused. The scratchpad allowed is this session's, for this user.
+ */
+async function flowOwnership($: Dollar, rt: FlowRuntime, deps: FlowDeps, link: FlowAgent, raw: string) {
+  const cwd = await $.session.cwd()
+  const stat = (path: string, resolve: boolean) => $.fs.stat(path, { resolve })
+  const root = await resolveGatePath(stat, deps.root, cwd)
+  rt.uid ??= $.process.run(['id', '-u']).then(out => {
+    const uid = out.stdout.trim()
+    return out.exitCode === 0 && /^\d+$/.test(uid) ? uid : undefined
+  }).catch(() => undefined)
+  const scratch = { uid: await rt.uid, sessionId: String(await $.session.id()) }
+  let path: string
+  try { path = await resolveGatePath(stat, raw, cwd) } catch (error) {
+    const why = error instanceof Error ? error.message : String(error)
+    return { owned: false as const, reason: `Task ${link.task}: ${raw} could not be resolved to a real path (${why}). Write it by a plain path inside the task's files.` }
+  }
+  return ownershipVerdict(link.task, link.files ?? [], root, path, scratch)
+}
+
+/** The controller's host access, built from the hook's `$` (it cannot be stored). */
+function flowCtx($: Dollar, deps: FlowDeps): Ctx {
+  return {
+    fs: {
+      read: async path => (await $.fs.exists(path)) ? String(await $.fs.read(path)) : undefined,
+      write: (path, text) => $.fs.write(path, text),
+    },
+    run: async (argv, init) => {
+      const out = await $.process.run(argv, { cwd: init.cwd, timeoutMs: init.timeoutMs, ...(init.stdin === undefined ? {} : { stdin: init.stdin }) })
+      return { exitCode: out.exitCode, stdout: out.stdout, stderr: out.stderr }
+    },
+    now: async () => Number(await $.clock.now()),
+    root: deps.root,
+    mode: deps.mode,
+    available: {
+      developer: isOffered(deps.config, 'pantheon:developer'),
+      ux: isOffered(deps.config, 'pantheon:ux'),
+      architect: isOffered(deps.config, 'pantheon:architect'),
+      qa: isOffered(deps.config, 'pantheon:qa'),
+    },
+    list: async dir => (await $.fs.exists(dir)) ? (await $.fs.list(dir)).map(entry => ({ name: entry.name, kind: entry.kind, mtimeMs: entry.mtimeMs })) : [],
+    serial: deps.serial,
+    memo: deps.memo,
+    warn: deps.warn,
+  }
+}
+
+/**
+ * A subagent of a flow task returned (a foreground Agent result, or a background task's notification): the controller
+ * decides on that delivery. Returns the verdict text for the lead (enforce only).
+ */
+async function finishFlowAgent($: Dollar, rt: FlowRuntime, deps: FlowDeps, agentId: string, output: string, completed: boolean): Promise<string | undefined> {
+  const link = await flowAgentOf($, rt, agentId)
+  if (!link) return undefined
+  // Each return is one delivery (a resumed agent returns again); its denials were counted for this one alone.
+  if (link.denials > 0) await setFlowDenials($, rt, agentId, () => 0)
+  // A diagnosis is advice for the lead, and an agent that did not finish proved nothing either way.
+  if (link.kind === 'diagnosis' || !completed) return undefined
+  const ctx = flowCtx($, deps)
+  if (link.kind === 'work') return (await taskEnded(ctx, { taskId: link.task, ownershipDenials: link.denials })).text
+  return (await reviewed(ctx, { taskId: link.task, by: link.by ?? 'qa', end: link.end, output, ...(link.git ? { git: link.git } : {}) })).text
+}
 
 /** The agents the strip folds into its last row: every running native. */
 async function stripAgents($: Dollar, now: number) {
@@ -215,6 +399,34 @@ export const register: Register = (on, options) => {
   let registeredKey: string | undefined
   let toastedError: string | undefined
   const aboveOn = options.abovePrompt !== false && options.abovePrompt !== 'false'
+
+  // The decision flow: its mode, one queue per plan (every write to a plan's files goes through it), and the last problem.
+  const flowMode = flowModeOf(options.flow)
+  const flowSerials = new Map<string, Serial>()
+  const flowSerial = (planId: string): Serial => {
+    let serial = flowSerials.get(planId)
+    if (!serial) { serial = createSerial(); flowSerials.set(planId, serial) }
+    return serial
+  }
+  const flowMemo: CheckMemo = new Map()
+  const flowRuntime: FlowRuntime = { links: new Map(), pending: new Set(), strangers: new Set(), uid: undefined }
+  let flowLastProblem: string | undefined
+  const flowToasted = new Set<string>()
+  const flowWarning = (io: Pick<Io, 'toast'>) => (text: string): void => {
+    flowLastProblem = text
+    // Only enforce changes the session, so only enforce is worth a toast, once per distinct problem.
+    if (flowMode !== 'enforce' || flowToasted.has(text)) return
+    flowToasted.add(text)
+    try { io.toast(`pantheon: ${text}`) } catch { /* A failed toast changes nothing. */ }
+  }
+  const flowFailed = (io: Pick<Io, 'toast'>, error: unknown): void => {
+    flowWarning(io)(`the flow failed open — ${error instanceof Error ? error.message : String(error)}`)
+  }
+  // Hooks act only once session.start has found the repository root: the flow never runs a command to look for it.
+  const flowOn = (): boolean => flowMode !== 'off' && gateRoot !== undefined
+  const flowDeps = async (io: Io): Promise<FlowDeps> => ({
+    root: gateRoot ?? (await workspace(io)).root, mode: flowMode, config: state.config, serial: flowSerial, memo: flowMemo, warn: flowWarning(io),
+  })
   configureStrip({ paceStart: options.paceStart })
   let minuteTicker: { cancel: () => void } | undefined
   let stripTicker: { cancel: () => void } | undefined
@@ -307,8 +519,8 @@ export const register: Register = (on, options) => {
     await refreshConfig(io, (await workspace(io)).root)
     await $.command.register({
       name: 'pantheon',
-      description: 'Open the Pantheon pane; subcommands: close, config, doctor',
-      argumentHint: '[close | config | doctor]',
+      description: 'Open the Pantheon pane; subcommands: close, config, doctor, flow',
+      argumentHint: '[close | config | doctor | flow status|approve|pause|resume|stop]',
     })
     try {
       const trackingIo: TrackingIo = {
@@ -533,6 +745,51 @@ export const register: Register = (on, options) => {
     return started
   })
 
+  // The flow links a delegation to its task by the `[<taskId>]` that starts its description, and holds it to decisions 16 and 17:
+  // the task's own role, or qa/architect only for a receipt the task awaits. Registered after tracking, so it runs beneath it.
+  on('agent.spawn', { description: /^\s*\[[A-Za-z]/ }, async ($, e, next) => {
+    const taskId = !flowOn() || e.parentAgentId ? undefined : taskIdOf(e.description)
+    if (!taskId) return next(e)
+    const io = hostIo($)
+    let check: Awaited<ReturnType<typeof inspectSpawn>> | undefined
+    try { check = await inspectSpawn(flowCtx($, await flowDeps(io)), { taskId, agentType: e.subagentType }) } catch (error) { flowFailed(io, error) }
+    if (check?.deny) return { deny: check.deny }
+    // The link is written after the spawn resolves; an agent's first write waits for it (flowLinkFor).
+    const release = holdPending(flowRuntime)
+    try {
+      // The lead writes the QA brief, so the approved criteria are appended to it: the lead cannot hand QA its own answers.
+      const brief = check?.kind === 'review' && check.by === 'qa' && check.criteria ? qaCriteriaBrief(taskId, check.criteria) : undefined
+      const started = await next(brief ? { ...e, prompt: `${e.prompt}\n\n${brief}` } : e)
+      if (check?.kind && check.planId && started.agentId) {
+        const link: FlowAgent = {
+          task: taskId, plan: check.planId, kind: check.kind, end: check.end, denials: 0,
+          ...(check.by ? { by: check.by } : {}), ...(check.files ? { files: check.files } : {}), ...(check.git ? { git: check.git } : {}),
+        }
+        try { await storeFlowAgent($, flowRuntime, started.agentId, link) } catch (error) { flowFailed(io, error) }
+      }
+      return started
+    } finally { release() }
+  })
+
+  // A subagent spawned by a task's work agent writes under that task's files too: it inherits the task, whatever its description.
+  on('agent.spawn', { parentAgentId: /./ }, async ($, e, next) => {
+    if (!flowOn() || !e.parentAgentId) return next(e)
+    const io = hostIo($)
+    const parentId = e.parentAgentId
+    let parent: FlowAgent | undefined
+    try { parent = await flowLinkFor($, flowRuntime, await flowDeps(io), parentId) } catch (error) { flowFailed(io, error) }
+    if (parent?.kind !== 'work' || !parent.files) return next(e)
+    const release = holdPending(flowRuntime)
+    try {
+      const started = await next(e)
+      const child = inherited(parent, parentId)
+      if (started.agentId) {
+        try { await storeFlowAgent($, flowRuntime, started.agentId, child) } catch (error) { flowFailed(io, error) }
+      }
+      return started
+    } finally { release() }
+  })
+
   on('tool.call', async ($, e, next) => {
     try {
       if (e.agentId) {
@@ -555,6 +812,17 @@ export const register: Register = (on, options) => {
     const result = await next(e)
     // The receipt counts the main loop's edits and failed tools; the result goes back as it came.
     if (aboveOn && !e.agentId) { try { noteStripTool(String(e.tool), result) } catch { /* The strip never changes the call. */ } }
+    // A main-session edit that went through voids the receipts of a task awaiting them, if the file is one of its own.
+    if (flowOn() && !e.agentId && (e.tool === 'Edit' || e.tool === 'Write' || e.tool === 'NotebookEdit') && !result.deny && !result.isError) {
+      const raw = String((e.tool === 'NotebookEdit' ? e.notebook_path : e.file_path) ?? '')
+      const io = hostIo($)
+      if (raw) {
+        try {
+          const voided = await mainEdit(flowCtx($, await flowDeps(io)), { path: raw })
+          if (voided.text) return { ...result, context: [...(result.context ?? []), voided.text] } as typeof result
+        } catch (error) { flowFailed(io, error) }
+      }
+    }
     return result
   })
 
@@ -602,9 +870,103 @@ export const register: Register = (on, options) => {
   }).catch((_$, e, next) => next.called || options.gate !== true || e.agentId
     ? next(e) : { deny: 'Pantheon edit gate could not obtain a decision. Edit denied.' })
 
+  // Write ownership (decision 5): a developer or ux agent linked to a task writes only inside the task's files, and so does
+  // everything it spawns.
+  on('tool.call', { tool: ['Edit', 'Write', 'NotebookEdit'], agentId: /./ }, async ($, e, next) => {
+    if (!flowOn() || !e.agentId) return next(e)
+    const io = hostIo($)
+    const agentId = e.agentId
+    const raw = String((e.tool === 'NotebookEdit' ? e.notebook_path : e.file_path) ?? '')
+    try {
+      const deps = await flowDeps(io)
+      const link = raw ? await flowLinkFor($, flowRuntime, deps, agentId) : undefined
+      if (link?.kind === 'work' && link.files) {
+        const verdict = await flowOwnership($, flowRuntime, deps, link, raw)
+        if (!verdict.owned) {
+          // A spawned agent's denials count for the work agent whose return the task end is.
+          await setFlowDenials($, flowRuntime, link.root ?? agentId, before => before + 1)
+          await noteOwnership(flowCtx($, deps), { planId: link.plan, taskId: link.task, path: raw, reason: verdict.reason })
+          if (flowMode === 'enforce') return { deny: `[Pantheon flow] ${verdict.reason}` }
+        }
+      }
+    } catch (error) { flowFailed(io, error) }
+    return next(e)
+  })
+
+  // Task end for a foreground agent (decision 6): the Agent tool returned in the main loop; the controller's verdict is
+  // appended for the lead to read. A background agent's end arrives as a task-notification prompt instead.
+  on('tool.call', { tool: 'Agent' }, async ($, e, next) => {
+    // A task's delegation in its own worktree would write outside the task's files: the setting is only visible here.
+    if (flowOn() && !e.agentId && e.isolation) {
+      const taskId = taskIdOf(e.description)
+      const io = hostIo($)
+      if (taskId) {
+        try {
+          const refused = await inspectIsolation(flowCtx($, await flowDeps(io)), { taskId, isolation: String(e.isolation) })
+          if (refused.deny) return { deny: refused.deny }
+        } catch (error) { flowFailed(io, error) }
+      }
+    }
+    const result = await next(e)
+    if (!flowOn() || e.agentId || result.deny || result.isError) return result
+    const io = hostIo($)
+    try {
+      const done = result.result
+      if (done && typeof done === 'object' && 'status' in done && done.status === 'completed') {
+        const output = done.content.map(block => block.text).join('\n')
+        const text = await finishFlowAgent($, flowRuntime, await flowDeps(io), done.agentId, output, true)
+        if (text) return { ...result, context: [...(result.context ?? []), text] }
+      }
+    } catch (error) { flowFailed(io, error) }
+    return result
+  })
+
+  // The main session tries to stop (decisions 6 and 9). Shadow journals; enforce may hold the stop with a reason.
+  on('classic.Stop', async ($, e, next) => {
+    const below = await next(e)
+    if (!flowOn() || e.agent_id || below.block || below.preventContinuation) return below
+    const io = hostIo($)
+    try {
+      const running = normalizeNatives(await read($, nativesAtom)).filter(native => native.rounds[native.rounds.length - 1]?.status === 'running').length
+      const out = await stopFlow(flowCtx($, await flowDeps(io)), {
+        // A dev server or a monitor is not work the flow waits for; only agents and workflows are.
+        stopHookActive: e.stop_hook_active === true, backgroundTasks: pendingAgentTasks(e.background_tasks), runningAgents: running,
+      })
+      if (out.notice) io.toast(out.notice)
+      if (out.block) return { ...below, block: out.block }
+    } catch (error) { flowFailed(io, error) }
+    return below
+  })
+
+  // Background agents end as a prompt of origin task-notification: the verdict rides as context. A person's prompt
+  // refills the block budget and brings the goal, the current task and the last instruction back (never the system prompt).
+  on('prompt.submit', { origin: { kind: 'task-notification' } }, async ($, e, next) => {
+    if (!flowOn()) return next(e)
+    const io = hostIo($)
+    let text: string | undefined
+    try {
+      const note = parseNotification(e.text)
+      const known = note ? await flowAgentOf($, flowRuntime, note.agentId) : undefined
+      // Only a linked agent's own envelope counts, and only a completed status is a delivery.
+      if (note && known && !known.root) {
+        text = await finishFlowAgent($, flowRuntime, await flowDeps(io), note.agentId, note.result, note.status === 'completed')
+      }
+    } catch (error) { flowFailed(io, error) }
+    return text ? next({ ...e, context: [...(e.context ?? []), text] }) : next(e)
+  })
+
+  on('prompt.submit', { origin: { kind: /^(?:composer|bridge|sdk)$/ } }, async ($, e, next) => {
+    if (!flowOn()) return next(e)
+    const io = hostIo($)
+    let context: string | undefined
+    try { context = (await humanPrompt(flowCtx($, await flowDeps(io)))).context } catch (error) { flowFailed(io, error) }
+    return context ? next({ ...e, context: [...(e.context ?? []), context] }) : next(e)
+  })
+
   on('command.run', { command: 'pantheon' }, async ($, e) => {
     const io = hostIo($)
-    const [sub] = e.args.trim().split(/\s+/).filter(Boolean)
+    const parts = e.args.trim().split(/\s+/).filter(Boolean)
+    const [sub] = parts
     if (!sub) {
       await $.ui.open({ id: PANE_ID, title: 'Pantheon', focus: true, closeOnEscape: true })
       return { text: 'Pantheon panel opened.' }
@@ -615,6 +977,35 @@ export const register: Register = (on, options) => {
     }
     const current = await refreshConfig(io, (await workspace(io)).root)
     if (sub === 'config') return { text: configReport(current) }
+    if (sub === 'flow') {
+      const action = parts[1] ?? 'status'
+      const ctx = flowCtx($, await flowDeps(io))
+      if (action === 'status') {
+        const text = await flowStatus(ctx)
+        return { text: flowLastProblem ? `${text}\nLast problem: ${flowLastProblem}` : text }
+      }
+      if (action !== 'approve' && action !== 'pause' && action !== 'resume' && action !== 'stop') {
+        return { text: 'Use /pantheon flow status, approve [plan path], pause, resume or stop.' }
+      }
+      if (flowMode === 'off') return { text: 'The flow is off. Set the plugin option flow to shadow or enforce first; while it is off nothing is written.' }
+      if (action === 'approve') return { text: await approvePlan(ctx, e.args.replace(/^\s*flow\s+approve\s*/, '')) }
+      const done = await controlFlow(ctx, action)
+      if (action === 'resume') {
+        // Links made while the flow was paused, or before the plan's files changed, take the plan's files as they are now.
+        try {
+          const current = await flowTaskFiles(ctx)
+          if (current) {
+            const refresh = (links: Record<string, FlowAgent>) => Object.fromEntries(Object.entries(links).map(([id, link]) => {
+              const files = link.plan === current.planId && link.kind === 'work' ? current.files[link.task] : undefined
+              return [id, files ? { ...link, files } : link]
+            }))
+            for (const [id, link] of Object.entries(refresh(Object.fromEntries(flowRuntime.links)))) flowRuntime.links.set(id, link)
+            await update($, flowAgentsAtom, refresh)
+          }
+        } catch (error) { flowFailed(io, error) }
+      }
+      return { text: done }
+    }
     if (sub === 'doctor') {
       let pings: PingResult[] | undefined
       if (current.ok) {
@@ -635,7 +1026,7 @@ export const register: Register = (on, options) => {
         text: doctorReport({ config: current, pings }),
       }
     }
-    return { text: `Unknown subcommand: ${sub}. Use /pantheon, /pantheon close, /pantheon config or /pantheon doctor.` }
+    return { text: `Unknown subcommand: ${sub}. Use /pantheon, /pantheon close, /pantheon config, /pantheon doctor or /pantheon flow.` }
   })
 
   // Last reading of the host clock, kept so a failed read can still draw static durations.

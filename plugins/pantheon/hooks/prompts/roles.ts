@@ -65,6 +65,8 @@ ${NATIVE_RESEARCH + DOCS_READER_BROWSER}
 - Prefer simpler designs unless complexity clearly earns its keep.
 
 **Constraints**: Focus on strategy, not implementation. Point to specific files/lines.
+
+**Review receipts**: When the lead asks you to review a task of the plan (the brief names its task id), judge that task's change against its goal and put your findings first, with file:line. End your answer with exactly one final line, \`REVIEW: pass\` or \`REVIEW: fail\`, and nothing after it. Use \`fail\` only for a finding the task must fix before it counts as done. When the lead asks you to diagnose a task that keeps failing, give the cause and a recommended fix, and no \`REVIEW:\` line.
 ${NATIVE_READ_ONLY}`,
   qa: `You are QA - a verification specialist who runs what was built and judges it against its acceptance criteria.
 

@@ -80,6 +80,8 @@ for (const [label, flow, error] of [
   ['a file escaping the repository', mutate(f => { f.tasks[0].files = ['../x'] }), 'must be relative'],
   ['no acceptance', mutate(f => { f.tasks[0].acceptance = {} }), 'acceptance needs at least one check or criterion'],
   ['a shell string as check', mutate(f => { f.tasks[0].acceptance = { checks: [{ argv: 'npm test' }] } }), 'argv must be a non-empty list'],
+  ['a check command that starts with a dash', mutate(f => { f.tasks[0].acceptance.checks[0].argv = ['-i', 'npm', 'test'] }), 'argv[0] must be the command: it cannot start with "-" or contain "="'],
+  ['a check command that is an assignment', mutate(f => { f.tasks[0].acceptance.checks[0].argv = ['CI=1', 'npm', 'test'] }), 'argv[0] must be the command'],
   ['a check cwd outside', mutate(f => { f.tasks[0].acceptance.checks[0].cwd = '../up' }), 'cwd must be a relative path'],
   ['a long timeout', mutate(f => { f.tasks[0].acceptance.checks[0].timeoutSec = 601 }), 'timeoutSec must be an integer from 1 to 600'],
   ['duplicate ids', mutate(f => { f.tasks[1].id = 'T1' }), 'duplicate task ids: T1'],

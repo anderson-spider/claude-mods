@@ -169,6 +169,14 @@ describe('role prompts', () => {
     expect(prompt).not.toContain('mark it `fail` and say why it could not be run')
   })
 
+  test('architect ends a task review with one REVIEW: pass|fail line and gives a diagnosis without it', () => {
+    const prompt = rolePrompt('architect')
+    for (const text of ['End your answer with exactly one final line', '`REVIEW: pass` or `REVIEW: fail`', 'and nothing after it', 'diagnose a task that keeps failing', 'no `REVIEW:` line']) {
+      expect(prompt).toContain(text)
+    }
+    expect(rolePrompt('councillor')).not.toContain('REVIEW:')
+  })
+
   test('docs-reader reads and researches without writing docs', () => {
     expect(rolePrompt('docs-reader')).toContain('you do not write documentation')
   })

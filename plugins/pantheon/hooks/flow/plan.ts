@@ -191,6 +191,11 @@ function parseCheck(raw: unknown, where: string, errors: string[]): Check | unde
   for (const key of Object.keys(raw)) if (!['argv', 'cwd', 'timeoutSec'].includes(key)) errors.push(`${where}: unknown field ${key}`)
   // An argv array runs without a shell: no pipes, globbing or substitution to review.
   if (!Array.isArray(raw.argv) || raw.argv.length === 0 || !raw.argv.every(text)) { errors.push(`${where}.argv must be a non-empty list of strings`); return undefined }
+  // The runner starts the command through `env`, which would read an option or a NAME=value in first place as its own.
+  if ((raw.argv[0] as string).startsWith('-') || (raw.argv[0] as string).includes('=')) {
+    errors.push(`${where}.argv[0] must be the command: it cannot start with "-" or contain "="`)
+    return undefined
+  }
   let cwd: string | undefined
   if (raw.cwd !== undefined) {
     if (text(raw.cwd) && !raw.cwd.startsWith('/') && !raw.cwd.split('/').includes('..')) cwd = raw.cwd

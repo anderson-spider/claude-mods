@@ -7,6 +7,13 @@
   },
   "types": "./types/index.d.ts",
   "userConfig": {
+    "flow": {
+      "type": "string",
+      "title": "Decision flow",
+      "description": "The flow controller for a plan with a pantheon-flow block, after /pantheon flow approve. shadow (default) only journals what enforce would do; enforce blocks a premature stop, denies writes outside a task's files and a delegation to the wrong role, and attaches verdicts for the lead; off does nothing and writes no files.",
+      "default": "shadow",
+      "options": ["off", "shadow", "enforce"]
+    },
     "gate": {
       "type": "boolean",
       "title": "Main-session edit gate",

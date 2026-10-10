@@ -815,7 +815,7 @@ describe('register', () => {
     world(on)
     await start($)
     const out = await $.command.run({ command: 'pantheon', args: 'cancel' })
-    expect(out.text).toBe('Unknown subcommand: cancel. Use /pantheon, /pantheon close, /pantheon config or /pantheon doctor.')
+    expect(out.text).toBe('Unknown subcommand: cancel. Use /pantheon, /pantheon close, /pantheon config, /pantheon doctor or /pantheon flow.')
   })
 
   const PING_ORDER = ['code-reader', 'docs-reader', 'developer', 'architect', 'qa', 'ux', 'git', 'councillor:alpha', 'councillor:beta']
