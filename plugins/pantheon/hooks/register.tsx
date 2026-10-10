@@ -7,7 +7,7 @@ import { rulesVerdict } from './decisions'
 import { gateContext, gateMessage } from './gate'
 import { DEFAULT_CONFIG } from './defaults'
 import {
-  approvePlan, controlFlow, flowStatus, flowTaskFiles, humanPrompt, inspectIsolation, inspectSpawn, mainEdit, noteDelivery, noteOwnership,
+  approvePlan, controlFlow, flowStatus, flowTaskFiles, humanPrompt, inspectIsolation, inspectSpawn, mainEdit, noteDelivery, noteDeliveryDiagnostic, noteOwnership,
   ownershipVerdict, parseNotification, pendingAgentTasks, qaCriteriaBrief, reviewed, stopFlow, taskEnded, taskIdOf,
 } from './flow/controller'
 import type { Ctx, Serial } from './flow/controller'
@@ -483,6 +483,34 @@ function unparsedReason(text: string): string {
   return `the envelope has no non-empty ${missing.map(name => `<${name}>`).join(' or ')} before <result>`
 }
 
+const resultBucket = (length: number): string => length === 0 ? '0' : length <= 256 ? '1-256' : length <= 1024 ? '257-1024' : length <= 4096 ? '1025-4096' : '4097+'
+const shapeStatus = (value: unknown): string => typeof value === 'string' && value.trim()
+  ? value.trim().slice(0, 20).replace(/[^A-Za-z0-9_-]/g, '_') : 'missing'
+const envelopeObject = (value: unknown): Record<string, unknown> | undefined =>
+  value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined
+
+/** Only known envelope labels and lengths: arbitrary tag/field names and the result's words never enter a signature. */
+function notificationShape(text: string): string {
+  const start = text.indexOf('<result>')
+  const end = text.lastIndexOf('</result>')
+  const outside = start < 0 ? text : text.slice(0, start) + (end > start ? text.slice(end + 9) : '')
+  const tags = ['task-notification', 'task-id', 'tool-use-id', 'output-file', 'status', 'summary', 'event', 'note', 'usage']
+    .filter(tag => outside.includes(`<${tag}>`))
+  if (start >= 0) tags.push('result')
+  const length = start < 0 ? 0 : (end > start ? end : text.length) - start - 8
+  return `source=notification tags=${tags.join(',') || 'none'} status=${shapeStatus(envelopeTag(text, 'status'))} idLength=${envelopeTag(text, 'task-id')?.length ?? 0} result=${start >= 0} resultLength=${resultBucket(length)}`
+}
+
+function agentResultShape(value: unknown): string {
+  const payload = envelopeObject(value)
+  const fields = ['status', 'agentId', 'content', 'description', 'prompt', 'outputFile'].filter(key => payload && key in payload)
+  const length = Array.isArray(payload?.content) ? payload.content.reduce((total: number, block: unknown) => {
+    const text = envelopeObject(block)?.text
+    return total + (typeof text === 'string' ? text.length : 0)
+  }, 0) : typeof value === 'string' ? value.length : 0
+  return `source=Agent tags=${fields.join(',') || 'none'} status=${shapeStatus(payload?.status)} idLength=${typeof payload?.agentId === 'string' ? payload.agentId.length : 0} result=${value !== undefined} resultLength=${resultBucket(length)}`
+}
+
 /** The agents the strip folds into its last row: every running native. */
 async function stripAgents($: Dollar, now: number) {
   return agentsFromState(normalizeNatives(await read($, nativesAtom)), now)
@@ -534,6 +562,16 @@ export const register: Register = (on, options) => {
   }
   const flowMemo: CheckMemo = new Map()
   const flowRuntime: FlowRuntime = { links: new Map(), pending: new Set(), strangers: new Set(), uid: undefined }
+  const deliveryShapes = new Set<string>()
+  const deliveryCounts = { notifications: 0, agentResults: 0, parsed: 0, linked: 0 }
+  const countsSignature = () => `notifications=${deliveryCounts.notifications} agentResults=${deliveryCounts.agentResults} parsed=${deliveryCounts.parsed} linked=${deliveryCounts.linked}`
+  let lastDeliveryCounts = countsSignature()
+  const noteShape = async (ctx: Ctx, signature: string) => {
+    if (deliveryShapes.has(signature) || deliveryShapes.size >= 40) return
+    // Reserve before the await so concurrent hooks cannot write the same signature twice.
+    deliveryShapes.add(signature)
+    await noteDeliveryDiagnostic(ctx, { condition: 'envelope_shape', reason: signature })
+  }
   let flowLastProblem: string | undefined
   const flowToasted = new Set<string>()
   const flowWarning = (io: Pick<Io, 'toast'>) => (text: string): void => {
@@ -1102,13 +1140,22 @@ export const register: Register = (on, options) => {
       }
     }
     const result = await next(e)
-    if (!flowOn() || e.agentId || result.deny || result.isError) return result
+    if (!flowOn()) return result
     const io = hostIo($)
     try {
+      deliveryCounts.agentResults++
+      const deps = await flowDeps(io)
+      await noteShape(flowCtx($, deps), agentResultShape(result.result))
+      const payload = envelopeObject(result.result)
+      if (typeof payload?.agentId === 'string' && payload.agentId.trim() && typeof payload.status === 'string' && payload.status.trim()) {
+        deliveryCounts.parsed++
+        if (await flowAgentOf($, flowRuntime, payload.agentId)) deliveryCounts.linked++
+      }
+      if (e.agentId || result.deny || result.isError) return result
       const done = result.result
       if (done && typeof done === 'object' && 'status' in done && done.status === 'completed') {
         const output = done.content.map(block => block.text).join('\n')
-        const text = await finishFlowAgent($, flowRuntime, await flowDeps(io), done.agentId, output, true)
+        const text = await finishFlowAgent($, flowRuntime, deps, done.agentId, output, true)
         if (text) return { ...result, context: [...(result.context ?? []), text] }
       }
     } catch (error) { flowFailed(io, error) }
@@ -1122,9 +1169,18 @@ export const register: Register = (on, options) => {
     const io = hostIo($)
     try {
       const running = normalizeNatives(await read($, nativesAtom)).filter(native => native.rounds[native.rounds.length - 1]?.status === 'running').length
-      const out = await stopFlow(flowCtx($, await flowDeps(io)), {
+      const links = new Map(Object.entries(await read($, flowAgentsAtom)))
+      for (const [id, link] of flowRuntime.links) links.set(id, link)
+      const ctx = flowCtx($, await flowDeps(io))
+      const counts = countsSignature()
+      if (counts !== lastDeliveryCounts) {
+        lastDeliveryCounts = counts
+        await noteDeliveryDiagnostic(ctx, { condition: 'delivery_counts', reason: counts })
+      }
+      const out = await stopFlow(ctx, {
         // A dev server or a monitor is not work the flow waits for; only agents and workflows are.
         stopHookActive: e.stop_hook_active === true, backgroundTasks: pendingAgentTasks(e.background_tasks), runningAgents: running,
+        workLinks: [...links.values()].filter(link => link.kind === 'work').map(({ task, plan, end }) => ({ task, plan, end })),
       })
       if (out.notice) io.toast(out.notice)
       const context = out.context ? { additionalContext: [...(below.additionalContext ?? []), out.context] } : {}
@@ -1141,23 +1197,26 @@ export const register: Register = (on, options) => {
     const io = hostIo($)
     let text: string | undefined
     try {
+      deliveryCounts.notifications++
+      const deps = await flowDeps(io)
+      const ctx = flowCtx($, deps)
+      await noteShape(ctx, notificationShape(e.text))
       const note = parseNotification(e.text)
       if (!note) {
-        // Only an envelope for an agent this session knows (a stored link, or an id the engine lists) is journaled. A Monitor
-        // event carries no status and is no delivery: for any other id nothing is written.
+        // Beyond the shape, only an envelope for an agent this session knows gets a discard note.
         const id = envelopeTag(e.text, 'task-id')
         const stored = id ? await flowAgentOf($, flowRuntime, id) : undefined
         const listed = id && !stored ? (await $.agent.list()).some(agent => agent.id === id) : false
-        if (id && (stored || listed)) await noteDelivery(flowCtx($, await flowDeps(io)), { agentId: '', condition: 'delivery_unparsed', reason: unparsedReason(e.text) })
+        if (id && (stored || listed)) await noteDelivery(ctx, { agentId: '', condition: 'delivery_unparsed', reason: unparsedReason(e.text) })
       } else {
-        const deps = await flowDeps(io)
-        const ctx = flowCtx($, deps)
+        deliveryCounts.parsed++
         // A link stored at the spawn is the usual case. One lost (a reload drops the memory) or never written is adopted by lookup.
         const stored = await flowAgentOf($, flowRuntime, note.agentId)
         const adoption = stored ? undefined : await adoptFlowAgent($, flowRuntime, deps, note.agentId, 0)
         const link = stored ?? adoption?.link
+        if (link) deliveryCounts.linked++
         if (!link) {
-          // An id the engine does not list is no agent of this session (a Bash or Monitor task): nothing to journal.
+          // An id the engine does not list is no agent of this session: only its shape is journaled.
           if (adoption?.listed) await noteDelivery(ctx, { agentId: note.agentId, condition: 'delivery_unlinked', reason: `no link for agent ${note.agentId}: none was stored at its spawn, and ${adoption.refusal}` })
         } else if (link.root) {
           await noteDelivery(ctx, { agentId: note.agentId, taskId: link.task, condition: 'delivery_ignored', reason: `agent ${note.agentId} is a nested subagent of task agent ${link.root}: only a task's own agent delivers` })
