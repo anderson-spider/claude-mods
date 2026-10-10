@@ -259,30 +259,36 @@ test('task end state keeps the goal as the trusted part and the message under un
   expect(state).toEqual({ task: { goal: 'Add the flag' }, untrusted: { agent_message: 'Done, tests pass.' } })
 })
 
+// Words, as real output has: a cut drops the half word it leaves, so a run of one letter would lose all of it.
+const words = (w: string, n: number) => `START ${`${w} `.repeat(n)}END`
+
 test('retry state caps messages and check outputs at their tails', () => {
-  const long = (c: string, n: number) => `START${c.repeat(n)}END`
-  const state = retryState({ goal: 'g', agentMessage: long('a', 5_000), checkOutput: long('b', 5_000), previousCheckOutput: long('c', 5_000) }, ctx)
-  expect(state.untrusted.agent_message.length).toBe(CAPS.agentMessage + 1)
-  expect(state.untrusted.check_output.length).toBe(CAPS.checkOutput + 1)
-  expect(state.untrusted.previous_check_output!.length).toBe(CAPS.previousCheckOutput + 1)
-  for (const text of Object.values(state.untrusted)) {
+  const state = retryState({ goal: 'g', agentMessage: words('a', 5_000), checkOutput: words('b', 5_000), previousCheckOutput: words('c', 5_000) }, ctx)
+  const caps = [CAPS.agentMessage, CAPS.checkOutput, CAPS.previousCheckOutput]
+  Object.values(state.untrusted).forEach((text, i) => {
+    expect(text.length).toBeLessThanOrEqual(caps[i]! + 1)
+    expect(text.length).toBeGreaterThan(caps[i]! - 4)
     expect(text.startsWith('…')).toBe(true)
     expect(text.endsWith('END')).toBe(true)
-  }
+  })
 })
 
 test('done check state heads the prompt and tails the final message', () => {
-  const state = doneCheckState({ prompt: `START${'p'.repeat(5_000)}`, finalMessage: `${'m'.repeat(5_000)}END` }, ctx)
+  const state = doneCheckState({ prompt: words('p', 5_000), finalMessage: words('m', 5_000) }, ctx)
   expect(state.task.startsWith('START')).toBe(true)
-  expect(state.task.length).toBe(CAPS.prompt + 1)
+  expect(state.task.endsWith('…')).toBe(true)
+  expect(state.task.length).toBeLessThanOrEqual(CAPS.prompt + 1)
+  expect(state.task.length).toBeGreaterThan(CAPS.prompt - 4)
   expect(state.untrusted.final_message.endsWith('END')).toBe(true)
-  expect(state.untrusted.final_message.length).toBe(CAPS.finalMessage + 1)
+  expect(state.untrusted.final_message.length).toBeLessThanOrEqual(CAPS.finalMessage + 1)
+  expect(state.untrusted.final_message.length).toBeGreaterThan(CAPS.finalMessage - 4)
 })
 
 test('model fit state heads the brief and sends only role and brief', () => {
-  const state = modelFitState({ role: 'developer', brief: `START${'x'.repeat(9_000)}` }, ctx)
+  const state = modelFitState({ role: 'developer', brief: words('x', 9_000) }, ctx)
   expect(state.untrusted.brief.startsWith('START')).toBe(true)
-  expect(state.untrusted.brief.length).toBe(CAPS.brief + 1)
+  expect(state.untrusted.brief.length).toBeLessThanOrEqual(CAPS.brief + 1)
+  expect(state.untrusted.brief.length).toBeGreaterThan(CAPS.brief - 4)
   expect(Object.keys(state)).toEqual(['spawn', 'untrusted'])
   expect(state.spawn).toEqual({ role: 'developer' })
 })
@@ -317,18 +323,73 @@ test('hostile content never reaches the serialized state: paths, secrets, in tru
 })
 
 test('redaction runs before the cap, so a secret near the cut is never left half visible', () => {
-  const secret = 'sk-abcdEFGH1234567890abcdEFGH1234567890'
-  const state = taskEndState({ goal: 'g', agentMessage: `${'x'.repeat(CAPS.agentMessage - 10)} ${secret}` }, ctx)
+  const secret = join('s', 'k-abcdEFGH1234567890abcdEFGH1234567890')
+  const state = taskEndState({ goal: 'g', agentMessage: `${'x '.repeat(CAPS.agentMessage / 2 - 5)} ${secret}` }, ctx)
   expect(state.untrusted.agent_message).not.toContain('sk-')
   expect(state.untrusted.agent_message).not.toContain('1234567890')
 })
 
 test('clip bounds hostile input before redacting it', () => {
   const started = Date.now()
-  const out = clip('a.'.repeat(500_000), ctx, 100, 'tail')
-  expect(out.length).toBe(101)
+  const out = clip('a. '.repeat(250_000), ctx, 100, 'tail')
+  expect(out.length).toBeLessThanOrEqual(101)
+  expect(out.length).toBeGreaterThan(95)
   expect(Date.now() - started).toBeLessThan(1_500)
   expect(clip(undefined, ctx, 10, 'head')).toBe('')
+})
+
+const SECRET = 'Zq8SECRETVALUEzq8'
+const KEY_BLOCK = (n: number) => `${join('-----BEGIN ', 'PRIVATE KEY-----')}\n${'A'.repeat(n)}\n${join('-----END ', 'PRIVATE KEY-----')}`
+
+test('a secret whose name sits at the old 40k cut is redacted, not left loose beside a collapsed block', () => {
+  // `API_KEY=` + secret + a private key block of ~39.9k: the whole text is redacted before it is clipped
+  const text = `API_KEY=${SECRET} ${KEY_BLOCK(39_900)}`
+  expect(text.length).toBeGreaterThan(39_900)
+  for (const keep of ['tail', 'head'] as const) {
+    const out = clip(text, ctx, 2_000, keep)
+    expect(out).toBe('API_KEY=[redacted] [redacted]')
+  }
+  const state = taskEndState({ goal: 'g', agentMessage: text }, ctx)
+  expect(state.untrusted.agent_message).toBe('API_KEY=[redacted] [redacted]')
+  expect(JSON.stringify(state)).not.toContain('Zq8')
+})
+
+test('a secret inside the generous cap is redacted whole; one cut by the cap loses its half token', () => {
+  // ~150k characters still reach redaction whole
+  const inside = `${'word '.repeat(30_000)}API_KEY=${SECRET} tail words`
+  expect(inside.length).toBeLessThan(CAPS.rawInput)
+  expect(clip(inside, ctx, 400, 'tail').endsWith(' API_KEY=[redacted] tail words')).toBe(true)
+
+  // Past the cap the kept end is cut first, and the half token at the cut goes with it. Tail: the cut falls inside the value.
+  const afterCut = `API_KEY=${SECRET} ${'x '.repeat((CAPS.rawInput - 14) / 2)}`
+  expect(afterCut.length).toBe(CAPS.rawInput + 12)
+  const tailed = clip(afterCut, ctx, 100_000, 'tail')
+  expect(tailed).not.toContain('Zq8')
+  expect(tailed).not.toContain('SECRET')
+  expect(tailed.startsWith('…')).toBe(true)
+
+  // Head: the cut falls inside the value, after `API_KEY=`
+  const beforeCut = `${'x '.repeat((CAPS.rawInput - 14) / 2)} API_KEY=${SECRET}`
+  expect(beforeCut.indexOf('API_KEY=') + 8 + 5).toBe(CAPS.rawInput)
+  const headed = clip(beforeCut, ctx, 100_000, 'head')
+  expect(headed).not.toContain('Zq8')
+  expect(headed).not.toContain('API_KEY')
+  expect(headed.endsWith('…')).toBe(true)
+})
+
+test('after a cut the half token at the cut is dropped, from either end', () => {
+  const text = 'alpha beta gamma delta epsilon'
+  expect(clip(text, ctx, 14, 'tail')).toBe('… delta epsilon') // the cut is at a space
+  expect(clip(text, ctx, 13, 'tail')).toBe('…delta epsilon') // at the start of a word
+  expect(clip(text, ctx, 12, 'tail')).toBe('… epsilon') // inside `delta`: it goes
+  expect(clip(text, ctx, 10, 'head')).toBe('alpha beta…') // at a space
+  expect(clip(text, ctx, 12, 'head')).toBe('alpha beta…') // inside `gamma`: it goes
+  expect(clip(text, ctx, 14, 'head')).toBe('alpha beta…')
+  // one long token has no whole word to keep
+  expect(clip('x'.repeat(5_000), ctx, 100, 'tail')).toBe('…')
+  expect(clip('x'.repeat(5_000), ctx, 100, 'head')).toBe('…')
+  // short text is untouched
+  expect(clip('alpha beta', ctx, 100, 'tail')).toBe('alpha beta')
 })
 
 // --- checkpoint: the battery and the redacted state, made together ---

@@ -477,6 +477,33 @@ describe('what the second review found', () => {
   })
 })
 
+describe('what the final review found', () => {
+  test('enforce: a glab alias is the command it stands for, and gh codespace is not a way around the gate', { options: { flow: 'enforce' } }, async ($, on) => {
+    const w = gitWorld(on)
+    await boot($, w)
+    w.agents.push({ id: 'git-1', description: 'Git operations', type: 'pantheon:git', status: 'running' })
+    w.agents.push({ id: 'qa-1', description: 'Verify', type: 'pantheon:qa', status: 'running' })
+    expect((await bash($, 'glab mr accept 5', 'git-1')).deny).toContain('Merging')
+    expect((await bash($, 'glab project delete o/r --yes', 'git-1')).deny).toContain('Deleting a repository')
+    expect((await bash($, 'glab project delete o/r --yes')).deny).toContain('changes state on the forge')
+    expect((await bash($, 'glab project delete o/r --yes', 'qa-1')).deny).toContain('changes state on the forge')
+    expect((await bash($, 'gh codespace ssh -- git push origin main')).deny).toContain('changes state on the forge')
+    expect((await bash($, 'gh cs ssh -- git push origin main', 'git-1')).deny).toContain('another machine')
+    expect((await bash($, 'glab mr view 5', 'git-1')).deny).toBeUndefined()
+  })
+
+  test('enforce: a shell other than sh and bash, and a command line in a string, are read', { options: { flow: 'enforce' } }, async ($, on) => {
+    const w = gitWorld(on)
+    await boot($, w)
+    expect((await bash($, 'fish -c "git push origin main"')).deny).toContain('protected branch `main`')
+    expect((await bash($, 'pwsh -Command "git push origin main"')).deny).toContain('protected branch `main`')
+    expect((await bash($, 'nix-shell --run "git push origin main"')).deny).toContain('hidden')
+    expect((await bash($, 'docker exec c sh -c "git push origin main"')).deny).toContain('hidden')
+    expect((await bash($, 'echo "git push origin main" && grep "git push" README.md')).deny).toBeUndefined()
+    expect(w.ran).toEqual(['echo "git push origin main" && grep "git push" README.md'])
+  })
+})
+
 describe('a task\'s developer', () => {
   test('enforce: add and commit of its own files with the task id go through; unowned files, a missing id and a push do not', { options: { flow: 'enforce' } }, async ($, on) => {
     const w = gitWorld(on)

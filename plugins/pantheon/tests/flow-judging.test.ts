@@ -90,9 +90,11 @@ test('an option the repository sets is replaced by the person\'s own value, or u
   const all = resolveJudge({ judge: 'escalate', judgeKey: 'attacker-key', judgeBaseUrl: 'https://collector.example/v1', judgeRoute: 'typesafe' }, settings({ repo }))
   expect(all).toMatchObject({ mode: 'off' })
   expect(all.route).toBeUndefined()
-  expect(all.notes).toHaveLength(4)
+  // One note for the class, naming every option and no value.
+  expect(all.notes).toHaveLength(1)
   for (const note of all.notes) {
     expect(note).toContain('repository')
+    expect(note).toContain('judge, judgeKey, judgeRoute, judgeBaseUrl')
     expect(note).not.toContain('attacker-key')
     expect(note).not.toContain('collector.example')
   }
@@ -111,7 +113,8 @@ test('an option the repository sets is replaced by the person\'s own value, or u
     }),
   )
   expect(overridden).toMatchObject({ mode: 'shadow', route: { kind: 'openrouter', key: KEY, baseUrl: 'https://gateway.example/api' } })
-  expect(overridden.notes).toHaveLength(3)
+  expect(overridden.notes).toHaveLength(1)
+  expect(overridden.notes[0]).toContain('your own value is used where you set one')
   // A person's plain-text key overrides a repository's.
   const key = resolveJudge({ judge: 'shadow', judgeKey: 'attacker-key' }, settings({ trusted: [pluginConfigs({ judgeKey: KEY })], repo: [pluginConfigs({ judgeKey: 'attacker-key' })] }))
   expect(key.route).toEqual({ kind: 'openrouter', key: KEY })
@@ -266,4 +269,41 @@ test('a fetch that throws, with the key in its message, is a failure with the ke
   }
   expect(result).toMatchObject({ ok: false, reason: 'network', attempts: 2 })
   expect(JSON.stringify(result)).not.toContain(KEY)
+})
+
+test('L-d: a key the repository set and no key of the person\'s are one problem, said once', () => {
+  // The repository brings the only key there is: ignored, and then nothing to send with. One note, not "ignored" and "no key".
+  const out = resolveJudge({ judge: 'shadow', judgeKey: 'attacker-key' }, settings({ repo: [pluginConfigs({ judgeKey: 'attacker-key' })] }))
+  expect(out.mode).toBe('shadow')
+  expect(out.route).toBeUndefined()
+  expect(out.notes).toHaveLength(1)
+  expect(out.notes[0]).toContain('judgeKey')
+  expect(out.notes[0]).toContain('no request is made')
+  expect(out.notes[0]).not.toContain('attacker-key')
+  // Another option ignored and a base URL that cannot be used are two problems, one note each.
+  const two = resolveJudge(
+    { judge: 'shadow', judgeKey: KEY, judgeRoute: 'typesafe', judgeBaseUrl: 'http://gateway.example/api' },
+    settings({ repo: [pluginConfigs({ judgeRoute: 'typesafe' })] }),
+  )
+  expect(two.notes).toHaveLength(2)
+  // The judge the repository switched on over the person's off: one note.
+  const on = resolveJudge({ judge: 'escalate', judgeKey: KEY }, settings({ repo: [pluginConfigs({ judge: 'escalate' })] }))
+  expect(on).toMatchObject({ mode: 'off' })
+  expect(on.notes).toHaveLength(1)
+  // A base URL that cannot be used is its own class and does not repeat.
+  const url = resolveJudge({ judge: 'shadow', judgeKey: KEY, judgeBaseUrl: 'http://gateway.example/api' }, settings())
+  expect(url.notes).toHaveLength(1)
+})
+
+test('L-c: values are compared as the plugin reads them, so a normalized value cannot pass as the person\'s', () => {
+  // The plugin API hands over `shadow`; the repository wrote ` shadow ` (or a key with a trailing newline): same value.
+  const spaced = resolveJudge({ judge: 'shadow', judgeKey: KEY }, settings({ repo: [pluginConfigs({ judge: ' shadow ' })] }))
+  expect(spaced.mode).toBe('off')
+  expect(spaced.notes).toHaveLength(1)
+  const key = resolveJudge({ judge: 'shadow', judgeKey: 'attacker-key' }, settings({ repo: [pluginConfigs({ judgeKey: 'attacker-key\n' })] }))
+  expect(key.route).toBeUndefined()
+  expect(key.notes).toHaveLength(1)
+  // The person's own value with other spaces is still theirs, not the repository's.
+  const own = resolveJudge({ judge: 'shadow', judgeKey: KEY }, settings({ trusted: [pluginConfigs({ judge: 'shadow ' })], repo: [pluginConfigs({ judge: ' shadow' })] }))
+  expect(own).toMatchObject({ mode: 'shadow', notes: [] })
 })

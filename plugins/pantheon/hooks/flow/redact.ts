@@ -63,7 +63,7 @@ const YAML_BLOCK = new RegExp(`(^|[^\\w.-])(${NAME}[ \\t]*:[ \\t]*(?:[|>][-+0-9]
 const CONNECTION_AFTER = new RegExp(`(;[ \\t]*)(${NAME}[ \\t]*=[ \\t]*)[^;\\r\\n"']{1,2048}`, 'gi')
 const CONNECTION_FIRST = new RegExp(`(^|[\\r\\n])([ \\t]*${NAME}[ \\t]*=[ \\t]*)[^;\\r\\n"']{1,2048}(?=;)`, 'gi')
 const ASSIGNED = new RegExp(`(^|[^\\w.-])(${NAME}[ \\t]*(?::=|<-|=(?!>)|:)[ \\t]*)(?:${VALUE})`, 'gi')
-// Ruby's hash rocket and PHP's `=>`: only before a quoted value, so `key => key.id` stays code
+// `=>` only before a quoted value (Ruby, PHP): a bare `api_key => abc` stays on purpose, because `keys.map(key => key.id)` is code
 const ROCKET = new RegExp(`(^|[^\\w.-])(${NAME}[ \\t]*=>[ \\t]*)(?:"[^"\\n]{0,2048}"|'[^'\\n]{0,2048}')`, 'gi')
 
 /** Secrets and emails only (no paths): safe for text that has no home or root to translate, such as an error body. */
@@ -72,9 +72,11 @@ export function redactSecrets(text: string): string {
   out = out.replace(PRIVATE_KEY, REDACTED)
   out = redactOrphanKeyEnds(out)
   for (const shape of TOKEN_SHAPES) out = out.replace(shape, REDACTED)
-  // user:password@ and :password@ inside a URL; the password may hold a space (but `host:8080 text me@x.com` is no userinfo)
-  out = out.replace(/\b([a-z][a-z0-9+.-]{0,20}:\/\/)[^\s/@:]{0,200}:[^\s/@]{1,200}@/gi, `$1${REDACTED}@`)
-  out = out.replace(/\b([a-z][a-z0-9+.-]{0,20}:\/\/)[^\s/@:]{0,200}:(?!\d+(?!\w))[^/@\r\n]{1,200}@/gi, `$1${REDACTED}@`)
+  // user:password@ and :password@ inside a URL. The userinfo runs to the LAST `@` before the host (the first `/` or the
+  // end of the line), so a raw `@` or a space in the password leaks nothing. A port followed by prose is no userinfo:
+  // `host:8080 text me@x.com`. The spaced form goes first; a password of digits is left to the second pattern.
+  out = out.replace(/\b([a-z][a-z0-9+.-]{0,20}:\/\/)[^\s/@:]{0,200}:(?!\d+(?!\w))[^/\r\n]{1,400}@/gi, `$1${REDACTED}@`)
+  out = out.replace(/\b([a-z][a-z0-9+.-]{0,20}:\/\/)[^\s/@:]{0,200}:[^\s/]{1,400}@/gi, `$1${REDACTED}@`)
   // Headers: the value is the rest of the line (a cookie holds spaces and semicolons), or up to the closing quote
   out = out.replace(
     new RegExp(`(^|[^\\w-])((?:${HEADER_NAMES})[ \\t]*[:=][ \\t]*)[^\\r\\n"']{1,4096}`, 'gi'),

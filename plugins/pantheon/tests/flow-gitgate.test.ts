@@ -99,6 +99,24 @@ const allowed: Row[] = [
   ['git', 'gh issue comment 1 -b x'],
   ['git', 'git worktree add -b andersonsilva/x ../x'],
   ['lead', 'git push -o ci.skip origin feature/x'],
+  // Final review: glab's own names, what is read, and a git that is only mentioned
+  ['lead', 'glab mr ls'],
+  ['lead', 'glab mr show 5'],
+  ['lead', 'glab project view'],
+  ['lead', 'glab pipeline list'],
+  ['git', 'glab mr unapprove 5'],
+  ['git', 'glab mr new --fill'],
+  ['lead', 'gh discussion list'],
+  ['lead', 'gh codespace list'],
+  ['lead', 'gh cs view'],
+  ['git', 'gh codespace list'],
+  ['lead', 'echo "git push origin main"'],
+  ['lead', 'grep "git push" README.md'],
+  ['lead', 'man git'],
+  ['lead', 'cat .gitignore'],
+  ['qa', 'jest -t "does not run git"'],
+  ['qa', 'jira create --summary "Update git config docs"'],
+  ['qa', "sed 's/git push/git pull/' notes.txt"],
   // A comment ends the line's words.
   ['developer', 'git commit -m x -- a.ts # then push', only('a.ts')],
   ['developer', 'git add a.ts # not a path: b.ts', only('a.ts')],
@@ -402,6 +420,52 @@ const denied: Array<[...Row, reason: RegExp]> = [
   ['git', 'git config include.path ../x', all, /Do not write/],
   ['git', 'git config includeIf.gitdir:/x/.path ../y', all, /Do not write/],
   ['git', 'git config --add includeIf.onbranch:main.path ../y', all, /Do not write/],
+  // Final review: glab's aliases are the command they stand for
+  ['git', 'glab mr accept 5', all, /Merging/],
+  ['git', 'glab-work mr accept 5 --squash', all, /Merging/],
+  ['lead', 'glab mr accept 5', all, /PR\/MR work/],
+  ['lead', 'glab mr del 5', all, /PR\/MR work/],
+  ['lead', 'glab mr open 5', all, /PR\/MR work/],
+  ['lead', 'glab mr comment 5 -m x', all, /PR\/MR work/],
+  ['lead', 'gh co 5', all, /PR\/MR work/],
+  ['lead', 'glab project delete o/r --yes', all, /changes state on the forge/],
+  ['qa', 'glab project delete o/r --yes', all, /changes state on the forge/],
+  ['git', 'glab project delete o/r --yes', all, /Deleting a repository/],
+  ['git', 'glab repo delete o/r --yes', all, /Deleting a repository/],
+  ['git', 'glab repo transfer o/r --target-namespace x', all, /settings, name, owner/],
+  ['git', 'glab project update --default-branch x', all, /settings, name, owner/],
+  ['git', 'glab repo mirror o/r', all, /settings, name, owner/],
+  ['git', 'gh repo edit --default-branch x', all, /settings, name, owner/],
+  ['git', 'gh repo archive o/r --yes', all, /settings, name, owner/],
+  // Final review: shells beyond sh and bash, and strings that are command lines
+  ['lead', 'fish -c "git push origin main"', all, /protected branch `main`/],
+  ['lead', 'fish --command "git push origin main"', all, /protected branch `main`/],
+  ['lead', 'tcsh -c "git push origin main"', all, /protected branch `main`/],
+  ['lead', 'csh -c "git push origin main"', all, /protected branch `main`/],
+  ['lead', 'nu -c "git push origin main"', all, /protected branch `main`/],
+  ['lead', 'xonsh -c "git push origin main"', all, /protected branch `main`/],
+  ['lead', 'ash -c "git push origin main"', all, /protected branch `main`/],
+  ['lead', 'pwsh -Command "git push origin main"', all, /protected branch `main`/],
+  ['lead', 'pwsh -c "git push origin main"', all, /protected branch `main`/],
+  ['lead', 'powershell -command "git push origin main"', all, /protected branch `main`/],
+  ['lead', 'powershell -EncodedCommand ZwBpAHQAIABwAHUAcwBoAA==', all, /hidden/],
+  ['git', 'fish -c "git push origin x"', all, /lead pushes/],
+  ['lead', 'nix-shell --run "git push origin main"', all, /hidden/],
+  ['lead', 'nix-shell --run "cd x && git push origin main"', all, /hidden/],
+  ['lead', 'nix develop -c git push origin main', all, /hidden/],
+  ['lead', 'nix develop --command "git push origin main"', all, /hidden/],
+  ['lead', 'docker exec c sh -c "git push origin main"', all, /hidden/],
+  ['lead', 'docker run --rm alpine/git push origin main', all, /hidden/],
+  ['lead', 'kubectl exec pod -- git push origin main', all, /hidden/],
+  ['git', 'nix-shell --run "git commit -m x"', all, /hidden/],
+  ['qa', 'nix-shell --run "git log"', all, /hidden/],
+  // Final review: gh codespace runs commands on another machine
+  ['lead', 'gh codespace ssh -- git push origin main', all, /changes state on the forge/],
+  ['lead', 'gh cs ssh -c x -- git push origin main', all, /changes state on the forge/],
+  ['lead', 'gh codespace cp a remote:b', all, /changes state on the forge/],
+  ['git', 'gh codespace ssh -- git push origin main', all, /another machine/],
+  ['git', 'gh cs ssh -- git status', all, /another machine/],
+  ['git', 'gh codespace cp a remote:b', all, /another machine/],
   // Review: the forge API can move a branch or write a commit on one
   ['git', 'gh api -X POST repos/o/r/git/refs -f ref=refs/heads/main -f sha=x', all, /Changing branches/],
   ['git', 'gh api -X PATCH repos/o/r/git/refs/heads/main -f sha=x', all, /Changing branches/],
@@ -842,4 +906,17 @@ test('the push options of a push are its -o and --push-option values', () => {
   expect(options('git push --push-option=c -oD origin x')).toEqual(['c', 'D'])
   expect(options('git push origin x')).toEqual([])
   expect(options('git log -o x')).toEqual([])
+})
+
+test('glab\'s aliases are read as the command they stand for', () => {
+  const forge = (command: string) => classifyGitCommand(command).forges[0]
+  expect([forge('glab mr accept 5')?.group, forge('glab mr accept 5')?.action]).toEqual(['mr', 'merge'])
+  expect([forge('glab mr unapprove 5')?.group, forge('glab mr unapprove 5')?.action]).toEqual(['mr', 'revoke'])
+  expect([forge('glab project delete o/r')?.group, forge('glab project delete o/r')?.action]).toEqual(['repo', 'delete'])
+  expect([forge('glab-work pipe list')?.group]).toEqual(['ci'])
+  expect([forge('gh co 5')?.group, forge('gh co 5')?.action]).toEqual(['pr', 'checkout'])
+  expect(forge('gh cs ssh')?.group).toBe('codespace')
+  // gh's own `project` is Projects, not the repository.
+  expect(forge('gh project list')?.group).toBe('project')
+  expect(forge('gh project list')?.changesState).toBe(false)
 })

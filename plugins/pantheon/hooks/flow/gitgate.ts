@@ -68,7 +68,7 @@ type Heredoc = {
   isLiteral: boolean
 }
 
-const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh'])
+const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh', 'ash', 'fish', 'tcsh', 'csh', 'nu', 'pwsh', 'powershell', 'xonsh', 'elvish'])
 
 // The ssh options that take a value as the next word (`-p 22`); attached values (`-p22`) are one word.
 const SSH_VALUED = new Set(['b', 'c', 'D', 'E', 'e', 'F', 'I', 'i', 'J', 'L', 'l', 'm', 'O', 'o', 'p', 'Q', 'R', 'S', 'W', 'w'])
@@ -801,6 +801,52 @@ const wrapsGit = (rest: readonly Word[]): boolean =>
     return false
   })
 
+// Whether a string handed to a command is itself a command line that starts a git (`nix-shell --run "git push origin main"`,
+// `docker exec c sh -c "cd x && git push"`): after `&&`, `;`, `|` or a newline, past assignments, `git` (or `gh`, `glab`)
+// and a verb. A `git` in the middle of a sentence is prose.
+const textRunsGit = (text: string): boolean => {
+  if (!/\s/.test(text)) {
+    return false
+  }
+
+  for (const piece of text.split(/&&|\|\||[;|(\n]/)) {
+    const tokens = piece.trim().split(/\s+/)
+    let at = 0
+
+    while (/^[A-Za-z_]\w*=/.test(tokens[at] ?? '')) {
+      at += 1
+    }
+
+    const head = base(tokens[at] ?? '')
+
+    if (/^git-[a-z]/.test(head)) {
+      return true
+    }
+
+    if (head === 'git') {
+      let next = at + 1
+
+      while ((tokens[next] ?? '').startsWith('-')) {
+        next += GIT_VALUED.has(tokens[next] ?? '') ? 2 : 1
+      }
+
+      const verb = tokens[next]
+
+      if (verb !== undefined && BUILTIN_VERBS.has(verb)) {
+        return true
+      }
+    } else if (head === 'gh' || head === 'glab' || head.startsWith('glab-')) {
+      const group = tokens[at + 1] ?? ''
+
+      if (FORGE_ROUTED.has(group) || group === 'alias' || group === 'project' || group === 'codespace' || group === 'cs' || FORGE_EXTENSION.has(group)) {
+        return true
+      }
+    }
+  }
+
+  return false
+}
+
 // Whether the command an `xargs` or a `find -exec` stage runs is a git, a shell, a wrapper or not literal.
 const runsGit = (command: Word | undefined) => {
   const named = base(command?.text ?? '')
@@ -1111,22 +1157,46 @@ const FORGE_OTHER = new Set([
   '', 'issue', 'run', 'workflow', 'ci', 'cache', 'codespace', 'gist', 'label', 'org', 'project', 'secret', 'variable', 'ssh-key', 'gpg-key',
   'status', 'search', 'browse', 'auth', 'config', 'completion', 'help', 'version', 'attestation', 'copilot', 'agent-task', 'ruleset',
   'incident', 'snippet', 'user', 'schedule', 'deploy-key', 'milestone', 'iteration', 'job', 'runner', 'token', 'cluster', 'securefile',
-  'stack', 'check-update', 'duo', 'changelog',
+  'stack', 'check-update', 'duo', 'changelog', 'discussion', 'skill', 'licenses', 'preview', 'packages', 'container-registry',
+  'dependency-firewall', 'artifact-registry', 'mcp', 'orbit', 'security', 'skills', 'todo', 'whatsnew', 'work-items', 'opentofu',
+  'runner-controller',
 ])
 const FORGE_EXTENSION = new Set(['extension', 'extensions', 'ext'])
+// Groups that run a command they are given (on another machine, or an extension's): a git among their words is hidden.
+const FORGE_RUNS = new Set(['codespace', 'extension', 'extensions', 'ext', 'copilot'])
+// glab's own names for the same thing: `project` is `repo`, `pipe` and `pipeline` are `ci`, and a few subcommands have aliases
+// (`mr accept` is `mr merge`). Read from `glab <group> <alias> --help` on the installed glab.
+const GLAB_GROUPS: Record<string, string> = { project: 'repo', pipe: 'ci', pipeline: 'ci' }
+const GLAB_ACTIONS: Record<string, Record<string, string>> = {
+  mr: { accept: 'merge', unapprove: 'revoke', del: 'delete', open: 'reopen', comment: 'note', show: 'view', new: 'create', ls: 'list' },
+  repo: { ls: 'list' },
+  release: { ls: 'list' },
+}
 const FORGE_READ_ACTIONS = new Set(['', 'view', 'list', 'ls', 'status', 'diff', 'checks', 'show', 'get', 'watch', 'trace', 'clone'])
 const FORGE_FIELD_FLAGS = ['-f', '-F', '--field', '--raw-field', '--input']
 
 const forgeSegment = (tool: string, args: readonly Word[]): ForgeSegment => {
   const { flags, values, positional } = scan(args, 'RXfFH', ['--repo', '--hostname', '--method', '--field', '--raw-field', '--header', '--input', '--jq', '--template', '--preview'])
-  const group = positional[0]?.text ?? ''
-  const action = positional[1]?.text ?? ''
+  let group = positional[0]?.text ?? ''
+  let action = positional[1]?.text ?? ''
+
+  // The same command under another name is the same command.
+  if (tool.startsWith('glab')) {
+    group = GLAB_GROUPS[group] ?? group
+    action = GLAB_ACTIONS[group]?.[action] ?? action
+  } else if (group === 'co') {
+    group = 'pr'
+    action = 'checkout'
+  } else if (group === 'cs') {
+    group = 'codespace'
+  }
+
   // `--meth PUT` is `--method PUT`: git's tools read long options by unambiguous prefix.
   const method = values.find(([flag]) => flag === '-X' || (flag.startsWith('--') && flag.length >= 4 && '--method'.startsWith(flag)))?.[1]
   const hasFields = flags.some(flag => FORGE_FIELD_FLAGS.includes(flag))
   let changes: boolean
 
-  const known = FORGE_ROUTED.has(group) || FORGE_OTHER.has(group) || group === 'alias' || FORGE_EXTENSION.has(group)
+  const known = FORGE_ROUTED.has(group) || FORGE_OTHER.has(group) || group === 'alias' || group === 'codespace' || FORGE_EXTENSION.has(group)
 
   if (FORGE_ROUTED.has(group)) {
     if (flags.includes('--push')) {
@@ -1142,6 +1212,9 @@ const forgeSegment = (tool: string, args: readonly Word[]): ForgeSegment => {
     changes = action === 'set' || action === 'import'
   } else if (FORGE_EXTENSION.has(group)) {
     changes = action === 'install' || action === 'upgrade' || action === 'exec' || action === 'create'
+  } else if (group === 'codespace') {
+    // `gh codespace ssh -- git push origin main` runs a command on another machine, out of reach of this gate.
+    changes = action === 'ssh' || action === 'cp' || action === 'exec'
   } else {
     changes = !FORGE_OTHER.has(group)
   }
@@ -1227,9 +1300,20 @@ const classifyDepth = (command: string, depth: number, inherit: readonly string[
         found.opaque ||= segment.alias
       }
     } else if (name === 'gh' || name.startsWith('glab')) {
-      found.forges.push(forgeSegment(name, rest))
+      const forge = forgeSegment(name, rest)
+
+      found.forges.push(forge)
+      // `gh codespace ssh -- git push`, `gh extension exec x git push`: these groups run what they are given.
+      found.opaque ||= FORGE_RUNS.has(forge.group) && (wrapsGit(rest) || rest.some(word => textRunsGit(word.text)))
     } else if (SHELLS.has(name) || name === 'eval') {
-      const flagAt = rest.findIndex(word => /^-[A-Za-z]*c[A-Za-z]*$/.test(word.text))
+      // PowerShell's is `-Command` (any prefix, any case); fish and the others take `-c` or `--command`.
+      const isPowerShell = name === 'pwsh' || name === 'powershell'
+      const commandFlag = isPowerShell ? /^-c(?:o(?:m(?:m(?:a(?:n(?:d)?)?)?)?)?)?$/i : /^(?:-[A-Za-z]*c[A-Za-z]*|--command)$/
+
+      // A PowerShell command that is encoded cannot be read.
+      found.opaque ||= isPowerShell && rest.some(word => /^-e(?:nc\w*)?$/i.test(word.text))
+
+      const flagAt = rest.findIndex(word => commandFlag.test(word.text))
       const body = name === 'eval' ? rest : flagAt >= 0 ? rest.slice(flagAt + 1, flagAt + 2) : []
       const text = body.map(word => word.text).join(' ')
 
@@ -1250,8 +1334,9 @@ const classifyDepth = (command: string, depth: number, inherit: readonly string[
       found.opaque ||= rest.some((word, at) => FIND_EXEC.has(word.text) && runsGit(rest[at + 1]))
     } else if (RUNNERS.has(name) || (first.isUnknown && (GIT_WORD.test(` ${first.text} `) || (BARE_VARIABLE.test(first.text) && GIT_WORD.test(` ${command} `))))) {
       found.opaque ||= (first.isUnknown && (GIT_WORD.test(` ${first.text} `) || (BARE_VARIABLE.test(first.text) && GIT_WORD.test(` ${command} `)))) || rest.some(word => GIT_WORD.test(` ${word.text} `) || base(word.text) === 'git')
-    } else if (!READERS.has(name) && !ENV_SETTERS.has(name) && wrapsGit(rest)) {
-      // Any other command that runs what follows it (`caffeinate`, `op run --`, `flock f`, `xcrun`…) hides the git it runs.
+    } else if (!READERS.has(name) && !ENV_SETTERS.has(name) && (wrapsGit(rest) || rest.some(word => textRunsGit(word.text)))) {
+      // Any other command that runs what follows it (`caffeinate`, `op run --`, `flock f`, `xcrun`, `nix-shell --run "…"`)
+      // hides the git it runs, as a word or as a command line in a string.
       found.opaque = true
     }
   }
@@ -1604,11 +1689,24 @@ const forgeScopeVerdict = (forge: ForgeSegment): GitVerdict | undefined => {
     return deny('Aliases and extensions can hide a merge or run a program; use the documented commands.')
   }
 
+  if (forge.group === 'codespace' && forge.changesState) {
+    return deny('`gh codespace ssh|cp|exec` runs commands on another machine, out of the gate\'s reach; leave it to the person.')
+  }
+
   if (!forge.known) {
     return deny('That is not a `gh` or `glab` command Pantheon knows (it may be an alias for a merge); use the documented commands.')
   }
 
-  return forge.group === 'repo' && forge.action === 'delete' ? deny('Deleting a repository is denied.') : undefined
+  if (forge.group === 'repo' && forge.action === 'delete') {
+    return deny('Deleting a repository is denied.')
+  }
+
+  // The repository's own settings, owner and mirroring are not git work (`glab repo archive` only downloads an archive).
+  if (forge.group === 'repo' && (['transfer', 'mirror', 'update', 'edit', 'rename'].includes(forge.action) || (forge.action === 'archive' && forge.tool === 'gh'))) {
+    return deny('Changing a repository\'s settings, name, owner, mirroring or archive state is the person\'s call.')
+  }
+
+  return undefined
 }
 
 const OPAQUE_REASON = 'A `git` command is hidden in `eval`, `bash -c`, `xargs`, `ssh`, `… | sh`, an alias, brace expansion or a variable, where it cannot be checked; rewrite it as a literal command (`git push origin <branch>` written out, no variable for the verb, `eval` or pipe into a shell).'

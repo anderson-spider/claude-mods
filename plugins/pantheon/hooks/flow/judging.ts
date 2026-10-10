@@ -105,32 +105,49 @@ export function resolveJudge(options: Readonly<Record<string, unknown>>, setting
     return { mode: 'off', notes: ['the pantheon judge is off for this session: the settings that say who set its options could not all be read'] }
   }
 
+  // What the person is told is one note per class of problem, never one per option: the options a repository set (one note
+  // naming them all), a key that is missing (folded into the first when the repository's was the key that was ignored), a
+  // base URL that cannot be used.
   const notes: string[] = []
+  const ignored: { name: OptionName; own: boolean }[] = []
+  // A value as the person's settings, the repository's and the plugin API each carry it can differ in its spaces; they are
+  // compared as the plugin reads them, so a value the API normalized cannot pass as the person's.
+  const same = (a: unknown, b: unknown): boolean => String(a).trim() === String(b).trim()
   const attributed = (name: OptionName): unknown => {
     const merged = options[name]
     if (merged === undefined || merged === '') return undefined
     // The repository's word for this option; a value it does not carry came from somewhere else (the person's settings,
     // the secure store, the plugin's default), and a repository that carries another value did not win.
-    if (!settings.repo.some(source => valuesIn(source, name).includes(merged))) return merged
+    if (!settings.repo.some(source => valuesIn(source, name).some(value => same(value, merged)))) return merged
     // The person's own value, from the highest-precedence source of theirs that sets it.
     let own: unknown
     for (const source of settings.trusted) {
       const values = valuesIn(source, name)
       if (values.length > 0) own = values[values.length - 1]
     }
-    if (own === merged) return merged
-    notes.push(`the repository's settings set the pantheon option ${name}, which is ignored${own === undefined ? '' : ' in favour of your own value'}: set it in your own settings`)
+    if (own !== undefined && same(own, merged)) return merged
+    ignored.push({ name, own: own !== undefined })
     return own
   }
   const given = Object.fromEntries(OPTION_NAMES.map(name => [name, attributed(name)])) as Record<OptionName, unknown>
+  const keyIgnored = ignored.some(entry => entry.name === 'judgeKey')
+  const ignoredNote = (withNoKey: boolean): string[] => {
+    if (ignored.length === 0) return []
+    const names = ignored.map(entry => entry.name).join(', ')
+    const own = ignored.some(entry => entry.own)
+    const plural = ignored.length > 1
+    return [`the repository's settings set the pantheon option${plural ? 's' : ''} ${names}, which ${plural ? 'are' : 'is'} ignored${own ? ' (your own value is used where you set one)' : ''}: set ${plural ? 'them' : 'it'} in your own settings${withNoKey ? '; with no key of yours, no request is made' : ''}`]
+  }
 
   const mode = judgeModeOf(given.judge)
-  if (mode === 'off') return { mode, notes }
+  if (mode === 'off') return { mode, notes: ignoredNote(false) }
   const key = typeof given.judgeKey === 'string' ? given.judgeKey.trim() : ''
   if (!key) {
-    notes.push(`the pantheon option judge is ${mode} but judgeKey is not set: no request is made`)
-    return { mode, notes }
+    // The repository's key that was ignored and no key of the person's are one problem, said once.
+    if (keyIgnored) return { mode, notes: ignoredNote(true) }
+    return { mode, notes: [...ignoredNote(false), `the pantheon option judge is ${mode} but judgeKey is not set: no request is made`] }
   }
+  notes.push(...ignoredNote(false))
   const kind = judgeRouteOf(given.judgeRoute)
   let baseUrl: string | undefined
   if (typeof given.judgeBaseUrl === 'string' && given.judgeBaseUrl.trim() !== '') {

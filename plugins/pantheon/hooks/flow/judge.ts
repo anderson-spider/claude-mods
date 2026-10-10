@@ -107,10 +107,15 @@ export type JudgeResult = JudgeSuccess | JudgeFailure
 // --- Breaker ---
 
 export type Breaker = {
-  /** False while open. After the pause the next call is let through; a failure then reopens at once. */
+  /**
+   * False while open. When the pause is over exactly one call is let through as a probe and the rest stay refused
+   * until it reports: a failure reopens, a success closes.
+   */
   allow(): boolean
   success(): void
   failure(): void
+  /** An outcome that says nothing about the service (a rejected request): frees the probe without closing or reopening. */
+  release?(): void
   status(): { open: boolean; failures: number; until?: number }
 }
 
@@ -120,10 +125,10 @@ export const BREAKER_PAUSE_MS = 5 * 60_000
 export const BREAKER_MAX_REFUSALS = 50
 
 /**
- * Three consecutive failures open it for five minutes. `now` is the injected clock; share one breaker across callers.
- * Fail safe against a clock that stands still (stuck at 0, or not a clock at all): the pause would never end, so
- * every 50th refused call is let through as a probe. A failed probe reopens it and a success closes it. With a
- * working clock the effect is one extra probe per 50 calls refused inside a pause.
+ * Three consecutive failures open it for five minutes; then one probe goes through (half-open): a failure reopens it
+ * for another five minutes, a success closes it. `now` is the injected clock; share one breaker across callers.
+ * Fail safe against a clock that stands still (stuck at 0, or not a clock at all) and against a probe that never
+ * reports: every 50th refused call is let through anyway, so the breaker can never stay shut for good.
  */
 export function createBreaker(now: () => number, opts: { failures?: number; pauseMs?: number } = {}): Breaker {
   const clock = safeClock(now)
@@ -131,21 +136,32 @@ export function createBreaker(now: () => number, opts: { failures?: number; paus
   const pause = opts.pauseMs ?? BREAKER_PAUSE_MS
   let failures = 0
   let refused = 0
+  let probing = false
   let until: number | undefined
+  const refuse = () => {
+    refused += 1
+    if (refused < BREAKER_MAX_REFUSALS) return false
+    refused = 0
+    return true
+  }
   return {
     allow() {
-      if (until === undefined || clock() >= until) return true
-      refused += 1
-      if (refused < BREAKER_MAX_REFUSALS) return false
+      if (until === undefined) return true
+      if (clock() < until) return refuse()
+      // half-open: one probe at a time
+      if (probing) return refuse()
+      probing = true
       refused = 0
       return true
     },
-    success() { failures = 0; refused = 0; until = undefined },
+    success() { failures = 0; refused = 0; probing = false; until = undefined },
     failure() {
       failures += 1
       refused = 0
+      probing = false
       if (failures >= limit) until = clock() + pause
     },
+    release() { probing = false },
     status: () => ({ open: until !== undefined && clock() < until, failures, ...(until === undefined ? {} : { until }) }),
   }
 }
@@ -331,7 +347,7 @@ export async function judge(io: JudgeIo, route: Route, prepared: Prepared, opts:
   const fail = (reason: FailureReason, extra: Partial<JudgeFailure> = {}): JudgeFailure => ({
     ok: false, reason, ...(reason === 'off' ? { off: true as const } : {}), ...extra, kind, attempts, ms: Math.max(0, clock() - started),
   })
-  const report = (outcome: 'success' | 'failure') => { try { opts.breaker?.[outcome]() } catch { /* a broken breaker never breaks the judge */ } }
+  const report = (outcome: 'success' | 'failure' | 'release') => { try { opts.breaker?.[outcome]?.() } catch { /* a broken breaker never breaks the judge */ } }
   try {
     if (typeof route !== 'object' || route === null) return fail('config', { detail: 'no route' })
     const url = endpoint(route)
@@ -348,9 +364,10 @@ export async function judge(io: JudgeIo, route: Route, prepared: Prepared, opts:
       } catch { return 0 }
     }
     const result = await run({ io, route, url, prepared, timeoutMs, started, clock, random, count: () => { attempts += 1 }, fail })
-    // Every outcome feeds the breaker except a rejected request (the fault is the battery's) and a skipped call.
+    // Every outcome feeds the breaker except a rejected request (the fault is the battery's: it only frees a probe).
     if (result.ok) report('success')
-    else if (result.reason !== 'rejected') report('failure')
+    else if (result.reason === 'rejected') report('release')
+    else report('failure')
     return result
   } catch (error) {
     report('failure')

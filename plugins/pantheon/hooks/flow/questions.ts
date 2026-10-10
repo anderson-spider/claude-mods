@@ -50,8 +50,9 @@ export const CAPS = freeze({
   finalMessage: 2_000,
   prompt: 1_500,
   brief: 3_000,
-  // Redaction runs on at most this much raw text, so hostile output cannot make it slow.
-  rawInput: 40_000,
+  // Redaction runs on the whole text up to this many characters, so a secret near the cap's cut is still seen with its
+  // name; above it only the kept end of the cap is redacted, and the half token at the cut is dropped.
+  rawInput: 200_000,
 })
 
 // --- Thresholds (provisional until calibrated, decision 11) ---
@@ -283,12 +284,32 @@ export const QUESTION_SET_HASH: string = questionSetHash(BATTERIES)
 
 // --- State builders: trusted fields apart from `untrusted`, redacted and capped before anything leaves ---
 
-/** Redact, then cap: a secret cut in half by the cap could no longer be recognized, so the cap comes second. */
+/**
+ * `n` characters from the kept end of `text`, with an ellipsis where something was cut, and the half token at the cut
+ * dropped: its other half is gone, so a secret there would no longer be recognized as one.
+ */
+function cut(text: string, n: number, keep: 'head' | 'tail'): string {
+  if (text.length <= n) return text
+  if (keep === 'tail') {
+    const start = text.length - n
+    const kept = tail(text, n).slice(1) // the same slice without the marker (and without a split surrogate pair)
+    const midToken = /\S/.test(text[start - 1] ?? '') && /^\S/.test(kept)
+    return '…' + (midToken ? kept.replace(/^\S*/, '') : kept)
+  }
+  const kept = head(text, n).slice(0, -1)
+  const midToken = /\S/.test(text[kept.length] ?? '') && /\S$/.test(kept)
+  return (midToken ? kept.replace(/\S*$/, '').trimEnd() : kept) + '…'
+}
+
+/**
+ * Redact, then cap: a secret cut in half by the cap could no longer be recognized (`API_KEY=` may be the part that
+ * goes), so redaction sees the whole text first. Only text beyond `CAPS.rawInput` is cut before redaction, and then
+ * the half token at the cut is dropped.
+ */
 export function clip(text: string | undefined, ctx: RedactContext, cap: number, keep: 'head' | 'tail'): string {
   const raw = String(text ?? '')
-  const bounded = keep === 'tail' ? tail(raw, CAPS.rawInput) : head(raw, CAPS.rawInput)
-  const clean = redact(bounded, ctx)
-  return keep === 'tail' ? tail(clean, cap) : head(clean, cap)
+  const bounded = raw.length > CAPS.rawInput ? cut(raw, CAPS.rawInput, keep) : raw
+  return cut(redact(bounded, ctx), cap, keep)
 }
 
 export type TaskEndState = { task: { goal: string }; untrusted: { agent_message: string } }

@@ -266,9 +266,15 @@ test('model ids and bracket suffixes rank like their aliases, and the suggestion
   expect(tierOf('haiku')).toBe(1)
   expect(tierOf('sonnet[1m]')).toBe(2)
   expect(tierOf('claude-opus-4-7')).toBe(3)
-  expect(tierOf('claude-3-5-haiku-20241022')).toBe(1)
+  expect(tierOf('claude-haiku-4-5-20251001')).toBe(1)
   expect(tierOf('Sonnet')).toBe(2)
-  for (const model of ['opusplan', 'inherit', 'fable', 'claude-fable-1', 'sonnetx', 'xhaiku']) expect(tierOf(model)).toBeUndefined()
+  // the name has to start with the tier (or `claude-<tier>`): a name that merely contains it is another model
+  for (const model of [
+    'opusplan', 'inherit', 'fable', 'claude-fable-1', 'sonnetx', 'xhaiku', 'my-sonnet-fork', 'gpt-sonnet-9', 'x-opus-1',
+    'claude-3-5-haiku-20241022', 'anthropic.claude-sonnet-4-6', 'models/haiku', ' sonnet', '',
+  ]) expect(tierOf(model)).toBeUndefined()
+  expect(modelFit(fitAnswers(), fitInput({ floor: 'haiku', default: 'my-sonnet-fork', table: ['haiku'] })).suggest).toBeUndefined()
+  expect(modelFit(fitAnswers(), fitInput({ floor: 'my-haiku-fork', default: 'opus', table: ['haiku'] })).suggest).toBeUndefined()
   const result = modelFit(fitAnswers(), fitInput({ floor: 'claude-haiku-4-5', default: 'claude-sonnet-4-6', table: ['claude-haiku-4-5'] }))
   expect(result.suggest).toBe('claude-haiku-4-5')
 })

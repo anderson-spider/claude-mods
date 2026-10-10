@@ -48,6 +48,8 @@ function flowWorld(on: On, opts: { files?: Record<string, string>; realPaths?: R
     stopBelow: {} as { block?: string }, prompts: [] as (readonly string[] | undefined)[],
   }
   const mtimes = new Map<string, number>()
+  // Everything the plugin asked of the host about the repository, the processes and the settings, in order.
+  const asked: string[] = []
   const skip = new Set(['fs.exists', 'fs.read', 'fs.stat', 'process.run', 'env.get'])
   // The plugin's own store: the flow controller keeps the record of an approval there. A test can make it fail, and reads which
   // keys were written (which repository an approval was attested for).
@@ -88,10 +90,12 @@ function flowWorld(on: On, opts: { files?: Record<string, string>; realPaths?: R
     return real && (path === real || path.startsWith(`${real}/`)) ? `${ROOT}${path.slice(real.length)}` : path
   }
   on('fs.exists', async (_$, e) => {
+    asked.push(`fs.exists ${e.path}`)
     const path = spelled(e.path)
     return { value: files.has(path) || [...files.keys()].some(known => known.startsWith(`${path}/`)) }
   })
   on('fs.read', async (_$, e) => {
+    asked.push(`fs.read ${e.path}`)
     const text = files.get(spelled(e.path))
     if (text === undefined) throw new Error(`ENOENT: ${e.path}`)
     return { value: text }
@@ -109,6 +113,7 @@ function flowWorld(on: On, opts: { files?: Record<string, string>; realPaths?: R
     }
   })
   on('process.run', async (_$, e) => {
+    asked.push(`process.run ${e.argv.join(' ')}`)
     const argv = [...e.argv]
     const done = (stdout = '', exitCode = 0, stderr = '') => ({ value: { exitCode, stdout, stderr, isStdoutTruncated: false, isStderrTruncated: false } })
     if (argv[0] === 'git') {
@@ -182,6 +187,7 @@ function flowWorld(on: On, opts: { files?: Record<string, string>; realPaths?: R
   const settingsUnreadable = new Set<string>()
   on('settings.read', async (_$, e) => {
     settingsReads.push(e.source ?? 'merged')
+    asked.push(`settings.read ${e.source ?? 'merged'}`)
     if (settingsUnreadable.has(e.source ?? 'merged')) throw new Error('settings source unreadable')
     return { value: (settingsBy[e.source ?? 'merged'] ?? {}) as never }
   })
@@ -191,6 +197,7 @@ function flowWorld(on: On, opts: { files?: Record<string, string>; realPaths?: R
   const checkRuns = () => runs.filter(argv => argv[0] !== 'git')
   return {
     ...fixture, files, runs, results, faults, git, engine, gate, agents, listCalls: () => listCalls, mtimes, links, storeKeys, fail, state, journal, checkRuns,
+    lookups: () => asked,
     http, settingsBy, settingsReads, settingsUnreadable, envNames,
   }
 }
@@ -558,6 +565,33 @@ describe('write ownership', () => {
     expect(edited.context?.[0]).toContain('a new QA or review is needed')
     expect(edited.result).toBe('edited')
     expect(w.journal().at(-1)).toMatchObject({ condition: 'receipts_voided', task: 'T2' })
+  })
+
+  test('an edit by an agent no task links voids the receipts too; an agent a task links is held to its files instead', { options: { flow: 'enforce' } }, async ($, on) => {
+    const w = flowWorld(on)
+    await boot($, w)
+    await delegate($, w, { id: 'dev-1', description: '[T1] first', subagentType: 'pantheon:developer' })
+    await delegate($, w, { id: 'dev-2', description: '[T2] second', subagentType: 'pantheon:developer' })
+    expect(w.state()?.awaiting).toEqual([{ task: 'T2', by: 'architect' }])
+    const call = (path: string, agentId: string) =>
+      $.tool.call({ tool: 'Edit', file_path: path, old_string: 'a', new_string: 'b', agentId } as never)
+    // A general-purpose subagent (never given a [T]) edits a file of T2, which awaits the architect.
+    const stranger = await call('/repo/src/b/x.ts', 'stranger-1')
+    expect(stranger.deny).toBeUndefined()
+    expect(w.state()?.ends.T2).toBe(2)
+    expect(w.state()?.awaiting).toEqual([{ task: 'T2', by: 'architect' }])
+    expect(stranger.context?.[0]).toContain('a new QA or review is needed')
+    expect(w.journal().at(-1)).toMatchObject({ condition: 'receipts_voided', task: 'T2' })
+    // A file of no task awaiting a receipt voids nothing.
+    const elsewhere = await call('/repo/src/elsewhere.ts', 'stranger-1')
+    expect(elsewhere.context).toBeUndefined()
+    expect(w.state()?.ends.T2).toBe(2)
+    // A work agent of T1 writing T2's file is denied by ownership, and a denied write voids nothing.
+    w.engine.spawnId = 'dev-3'
+    await spawn($, w, { id: 'dev-3', description: '[T1] again', subagentType: 'pantheon:developer' })
+    const denied = await call('/repo/src/b/y.ts', 'dev-3')
+    expect(denied.deny).toContain('Task T1 owns only')
+    expect(w.state()?.ends.T2).toBe(2)
   })
 
   test('shadow journals the voided receipts and adds nothing to the edit', { options: { flow: 'shadow' } }, async ($, on) => {
@@ -1084,6 +1118,21 @@ describe('prompts', () => {
 })
 
 describe('/pantheon flow', () => {
+  test('with the flow off nothing is read: status answers off, and a refused or off run answers before any lookup', { options: { flow: 'off', judge: 'shadow', judgeKey: 'k' } }, async ($, on) => {
+    const w = flowWorld(on)
+    await start($)
+    const before = w.lookups().length
+    // `null` sends the command with no origin at all.
+    for (const origin of [{ kind: 'composer' }, { kind: 'scheduled-trigger' }, null]) {
+      expect((await command($, 'flow status', origin)).text, String(origin?.kind)).toContain('Pantheon flow: off')
+    }
+    expect((await command($, 'flow approve', { kind: 'composer' })).text).toContain('The flow is off')
+    expect((await command($, 'flow pause', { kind: 'scheduled-trigger' })).text).toContain('only the person can run it')
+    expect((await command($, 'flow nonsense')).text).toContain('Use /pantheon flow status')
+    // Not a git lookup, not a file read, not a settings read: nothing was asked of the host for any of them.
+    expect(w.lookups().slice(before)).toEqual([])
+  })
+
   test('approve, pause, resume and stop are the person\'s: any other origin is refused and changes nothing; status stays open', { options: { flow: 'enforce' } }, async ($, on) => {
     const w = flowWorld(on)
     await start($)
@@ -1153,8 +1202,10 @@ describe('/pantheon flow', () => {
     const state = w.state()!
     expect(state.approvedHash).toBe(state.hash)
     expect(w.journal()[0]).toMatchObject({ kind: 'approval', condition: 'approved' })
-    // A wrong confirmation approves nothing.
-    expect((await command($, `flow approve ${PLAN} 000000000000`)).text).toContain('Not approved: the block')
+    // A confirmation is spent with the approval, and a wrong one approves nothing.
+    expect((await command($, `flow approve ${PLAN} ${/, hash ([0-9a-f]{12})\./.exec(listing)?.[1]}`)).text).toContain('was not listed in this session yet')
+    await command($, `flow approve ${PLAN}`)
+    expect((await command($, `flow approve ${PLAN} 000000000000`)).text).toContain('is not the hash that was printed')
   })
 
   test('approve refuses an invalid plan with the reasons', { options: { flow: 'enforce' } }, async ($, on) => {
@@ -1415,9 +1466,26 @@ describe('the judge (T9w)', () => {
     await delegate($, w, { ...dev, output: 'Done.' })
     expect(w.http.requests).toEqual([])
     expect(w.settingsReads).toEqual(expect.arrayContaining(['user', 'project', 'local']))
+    // Both options are one class of problem: one toast, naming them.
     const told = w.seen.toasts.filter(text => text.includes('repository'))
-    expect(told).toHaveLength(2)
+    expect(told).toHaveLength(1)
+    expect(told[0]).toContain('judge, judgeKey')
     expect(w.seen.toasts.join('\n')).not.toContain(KEY)
+  })
+
+  test('a key only the repository set is one toast, not "ignored" and then "no key"', { options: { flow: 'enforce', judge: 'shadow', judgeKey: KEY } }, async ($, on) => {
+    const w = flowWorld(on)
+    w.settingsBy.user = { pluginConfigs: { 'pantheon@x': { options: { judge: 'shadow' } } } }
+    w.settingsBy.local = { pluginConfigs: { 'pantheon@x': { options: { judgeKey: KEY } } } }
+    await boot($, w)
+    await delegate($, w, { ...dev, output: 'Done.' })
+    await delegate($, w, { id: 'dev-2', description: '[T2] second', subagentType: 'pantheon:developer', output: 'Done.' })
+    expect(w.http.requests).toEqual([])
+    const told = w.seen.toasts.filter(text => text.includes('judgeKey'))
+    expect(told).toHaveLength(1)
+    expect(told[0]).toContain('no request is made')
+    expect(told[0]).not.toContain(KEY)
+    expect(w.seen.toasts.filter(text => text.includes('pantheon option'))).toHaveLength(1)
   })
 
   test('a settings source that cannot be read leaves the options unattributable: the judge is off for the session, with one toast', { options: { flow: 'enforce', judge: 'escalate', judgeKey: KEY, judgeBaseUrl: 'https://gateway.example/api' } }, async ($, on) => {
@@ -1447,7 +1515,7 @@ describe('the judge (T9w)', () => {
     expect(ended?.context?.join('\n')).toContain('Task T1 is done')
     expect(w.http.requests.map(request => request.url)).toEqual(['https://openrouter.ai/api/alpha/decisions'])
     expect(escalations(w)[0]).toMatchObject({ judge: { judgeMode: 'shadow', applied: false } })
-    expect(w.seen.toasts.filter(text => text.includes('repository'))).toHaveLength(2)
+    expect(w.seen.toasts.filter(text => text.includes('repository'))).toHaveLength(1)
   })
 
   test('the key comes from the plugin options only: a repository\'s pantheon.json and the environment are not consulted for it', { options: { flow: 'enforce', judge: 'shadow' } }, async ($, on) => {

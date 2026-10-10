@@ -1004,15 +1004,20 @@ export const register: Register = (on, options) => {
     const result = await next(e)
     // The receipt counts the main loop's edits and failed tools; the result goes back as it came.
     if (aboveOn && !e.agentId) { try { noteStripTool(String(e.tool), result) } catch { /* The strip never changes the call. */ } }
-    // A main-session edit that went through voids the receipts of a task awaiting them, if the file is one of its own.
-    if (flowOn() && !e.agentId && (e.tool === 'Edit' || e.tool === 'Write' || e.tool === 'NotebookEdit') && !result.deny && !result.isError) {
+    // An edit that went through voids the receipts of a task awaiting them, if the file is one of its own, when nobody that task
+    // owns made it: the main session, or an agent no task links (a general-purpose subagent, a developer with no [T]). A
+    // work agent of a task is held to the task's files by the ownership hook, and its delivery is a task end of its own.
+    if (flowOn() && (e.tool === 'Edit' || e.tool === 'Write' || e.tool === 'NotebookEdit') && !result.deny && !result.isError) {
       const raw = String((e.tool === 'NotebookEdit' ? e.notebook_path : e.file_path) ?? '')
       const io = hostIo($)
       if (raw) {
         try {
           const deps = await flowDeps(io)
-          const voided = await mainEdit(flowCtx($, deps), { path: raw, resolve: () => flowResolved($, deps.root, raw) })
-          if (voided.text) return { ...result, context: [...(result.context ?? []), voided.text] } as typeof result
+          const link = e.agentId ? await flowLinkFor($, flowRuntime, deps, e.agentId) : undefined
+          if (!e.agentId || link?.kind !== 'work') {
+            const voided = await mainEdit(flowCtx($, deps), { path: raw, resolve: () => flowResolved($, deps.root, raw) })
+            if (voided.text) return { ...result, context: [...(result.context ?? []), voided.text] } as typeof result
+          }
         } catch (error) { flowFailed(io, error) }
       }
     }
@@ -1220,25 +1225,31 @@ export const register: Register = (on, options) => {
       await $.ui.close({ id: PANE_ID })
       return { text: 'Pantheon panel closed.' }
     }
-    const current = await refreshConfig(io, (await workspace(io)).root)
-    if (sub === 'config') return { text: configReport(current) }
+    if (sub === 'config') return { text: configReport(await refreshConfig(io, (await workspace(io)).root)) }
     if (sub === 'flow') {
       const action = parts[1] ?? 'status'
+      if (action !== 'status' && action !== 'approve' && action !== 'pause' && action !== 'resume' && action !== 'stop') {
+        return { text: 'Use /pantheon flow status, approve [plan path] [hash], pause, resume or stop.' }
+      }
+      // What can be answered without reading anything is answered first: a flow that is off says so and touches nothing (no
+      // repository lookup, no settings), and a run that is not the person's is refused before any work.
+      if (action === 'status') {
+        if (flowMode === 'off') return { text: 'Pantheon flow: off. Set the plugin option flow to shadow or enforce to use it.' }
+      } else {
+        // These change what the flow enforces: only the person's own run counts. A scheduled prompt, another session's message,
+        // a channel or a plugin is the model's word at one remove, and may not approve a block the model wrote.
+        const kind = e.origin?.kind
+        if (kind !== 'composer' && kind !== 'bridge' && kind !== 'sdk') {
+          return { text: `/pantheon flow ${action} changes what the flow enforces, so only the person can run it: this one came from ${kind ?? 'an origin the engine did not stamp'} (a scheduled prompt, another session, a channel, a plugin). Type it yourself.` }
+        }
+        if (flowMode === 'off') return { text: 'The flow is off. Set the plugin option flow to shadow or enforce first; while it is off nothing is written.' }
+      }
+      await refreshConfig(io, (await workspace(io)).root)
       const ctx = flowCtx($, await flowDeps(io))
       if (action === 'status') {
         const text = await flowStatus(ctx)
         return { text: flowLastProblem ? `${text}\nLast problem: ${flowLastProblem}` : text }
       }
-      if (action !== 'approve' && action !== 'pause' && action !== 'resume' && action !== 'stop') {
-        return { text: 'Use /pantheon flow status, approve [plan path] [hash], pause, resume or stop.' }
-      }
-      // These change what the flow enforces: only the person's own run counts. A scheduled prompt, another session's message,
-      // a channel or a plugin is the model's word at one remove, and may not approve a block the model wrote.
-      const kind = e.origin?.kind
-      if (kind !== 'composer' && kind !== 'bridge' && kind !== 'sdk') {
-        return { text: `/pantheon flow ${action} changes what the flow enforces, so only the person can run it: this one came from ${kind ?? 'an origin the engine did not stamp'} (a scheduled prompt, another session, a channel, a plugin). Type it yourself.` }
-      }
-      if (flowMode === 'off') return { text: 'The flow is off. Set the plugin option flow to shadow or enforce first; while it is off nothing is written.' }
       if (action === 'approve') return { text: await approvePlan(ctx, e.args.replace(/^\s*flow\s+approve\s*/, '')) }
       const done = await controlFlow(ctx, action)
       if (action === 'resume') {
@@ -1260,6 +1271,7 @@ export const register: Register = (on, options) => {
       return { text: done }
     }
     if (sub === 'doctor') {
+      const current = await refreshConfig(io, (await workspace(io)).root)
       let pings: PingResult[] | undefined
       if (current.ok) {
         const results = pingTargets(current.config).map((target): PingResult => {

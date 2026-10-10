@@ -24,7 +24,7 @@ import type { Amendment, Flow, FlowTask, ParseResult } from './plan'
 import { CheckUnrunnable, createCheckPass } from './checks'
 import type { CheckMemo, Runner } from './checks'
 import { parseArchitect, parseQa } from './verdicts'
-import { applyMode, decide, newState, rebase, withMode } from './policy'
+import { CONSECUTIVE_CAP, applyMode, decide, newState, rebase, withMode } from './policy'
 import type { ModeDecision } from './policy'
 import { retryEscalation, taskEndEscalation } from './escalate'
 import type { JudgeResult } from './judge'
@@ -189,8 +189,12 @@ export function diagnosisOpen(flow: Flow, state: FlowState, task: FlowTask): boo
   return !(branch && state.status[branch.id] !== 'done')
 }
 
-/** Never a task's, whatever its `files` match (lower case: the usual file systems fold it). */
-const NEVER_OWNED = ['.pantheon/flow', '.git', '.claude']
+/**
+ * Never a task's, whatever its `files` match (lower case: the usual file systems fold it). All of `.pantheon` is in it, the
+ * plans included: a task whose pattern is `**\/*.md` would otherwise own the plan, edit it, and have the additive edit adopted
+ * without the lead (a plan is the lead's, from the main session, which is not held to ownership).
+ */
+const NEVER_OWNED = ['.pantheon', '.git', '.claude']
 
 /** The session scratchpad of this user and this session: `<tmp>/claude-<uid>/<project>/<session id>/scratchpad`. */
 function scratchpadOf(scratch: { uid?: string; sessionId?: string } | undefined): RegExp | undefined {
@@ -386,15 +390,17 @@ async function readMeta(ctx: Pick<Ctx, 'fs' | 'root'>, rel: string): Promise<str
  * by `approvePlan`), so deleting or redirecting the pointer file changes nothing; a repository approved before the store held
  * it falls back to the pointer file (and its id file, then the id in the plan file itself).
  */
-async function planInForce(ctx: Pick<Ctx, 'fs' | 'root' | 'attest'>): Promise<{ rel: string; planId?: string; stored: boolean } | undefined> {
-  // A store that cannot be read names no plan: the pointer file is looked at, and the approval it leads to is held by `standing`.
+async function planInForce(ctx: Pick<Ctx, 'fs' | 'root' | 'attest'>): Promise<{ rel: string; planId?: string; stored: boolean; unreadable?: string } | undefined> {
+  // A store that cannot be read names no plan, and the pointer file is not a substitute for it (it is what a redirect would
+  // write): the caller holds the plan, with no check run, the way it holds a snapshot that is not attested.
   let stored: ReturnType<typeof parseActive>
-  try { stored = parseActive(await ctx.attest.get(activeKey(ctx.root))) } catch { stored = undefined }
+  let unreadable: string | undefined
+  try { stored = parseActive(await ctx.attest.get(activeKey(ctx.root))) } catch (error) { stored = undefined; unreadable = message(error) }
   if (stored) return { rel: stored.plan, planId: stored.planId, stored: true }
   const pointer = await ctx.fs.read(activePath(ctx.root))
   const rel = pointer?.split('\n')[0]?.trim()
   if (!rel) return undefined
-  return { rel, ...(await readMeta(ctx, rel).then(id => (id ? { planId: id } : {}))), stored: false }
+  return { rel, ...(await readMeta(ctx, rel).then(id => (id ? { planId: id } : {}))), stored: false, ...(unreadable !== undefined ? { unreadable } : {}) }
 }
 
 /** The id of the plan in force: the one it was approved under, or the plan file's own. Undefined when there is none. */
@@ -445,6 +451,12 @@ async function locate(ctx: Ctx): Promise<Locate> {
   const text = await ctx.fs.read(path)
   const parsed: ParseResult = text === undefined ? { ok: false, errors: [`the plan file ${rel} does not exist`] } : parseFlow(text)
   const fileId = parsed.ok ? parsed.flow.planId : undefined
+  if (inForce.unreadable !== undefined) {
+    // The store that says which plan is in force cannot be read: nothing of the pointer file may stand in for it. The plan the
+    // pointer files point at is held (the id is the best there is), and nothing of it runs.
+    const planId = inForce.planId ?? fileId
+    if (planId) return { kind: 'tampered', path: rel, planId, why: `the plugin store that names the plan in force could not be read (${clip(inForce.unreadable, 120)})` }
+  }
 
   // The id the plan was approved under is the plan; the file's own id is only used when nothing was approved under the
   // other, so editing the id in the file can neither hide an approval nor lose its snapshot. When the store names the plan
@@ -1006,8 +1018,26 @@ export async function stopFlow(ctx: Ctx, input: StopInput): Promise<StopOutcome>
       const out = await evaluateStop(ctx, input, trace)
       if (out !== STALE) return out
     }
-    return ctx.mode === 'enforce' ? { block: `${TAG}: the flow in force changed while its checks ran, so none of their results was used. Stop again and they run against it.` } : {}
+    return staleStop(ctx, input, trace)
   })
+}
+
+/**
+ * The flow in force changed under its checks twice: nothing was decided, and in enforce the Stop is held once, saying so. It is
+ * a block like any other: it waits for background work, spends the budget, counts toward the engine's run of consecutive
+ * blocks, and is let through when either is used up, so a plan that is edited faster than its checks run cannot hold a turn.
+ */
+async function staleStop(ctx: Ctx, input: StopInput, trace: Trace): Promise<StopOutcome> {
+  if (ctx.mode !== 'enforce' || input.backgroundTasks > 0 || input.runningAgents > 0) return {}
+  const loc = await locate(ctx)
+  if (loc.kind !== 'ok' || !loc.approved) return {}
+  const held = { block: `${TAG}: the flow in force changed while its checks ran, so none of their results was used. Stop again and they run against it.` }
+  return transact<StopOutcome>(ctx, loc, trace, (state, p) => {
+    if (!enforcing(p) || state.done || state.paused || state.stopped) return { value: {} }
+    const run = input.stopHookActive ? state.consecutiveBlocks : 0
+    if (state.blocks >= p.flow.limits.maxBlocks || run >= CONSECUTIVE_CAP) return { value: {} }
+    return { state: { ...state, blocks: state.blocks + 1, consecutiveBlocks: run + 1 }, value: held }
+  }, { value: {} })
 }
 
 async function evaluateStop(ctx: Ctx, input: StopInput, trace: Trace): Promise<StopOutcome | typeof STALE> {
@@ -1471,9 +1501,28 @@ async function tamperedPrompt(ctx: Ctx, loc: Tampered, trace: Trace): Promise<{ 
 // --- commands ---
 
 const short = (hash: string) => hash.slice(0, 12)
-/** The digits of the plan's hash the person confirms an approval with. */
+/** The digits of the plan's hash the person types to confirm an approval. */
 const CONFIRM_DIGITS = 12
 export const confirmationOf = (flow: Flow): string => flowHash(flow).slice(0, CONFIRM_DIGITS)
+
+// What `approve` listed in this process, by repository, plan id and plan file: the FULL hash of the block it printed. Twelve
+// digits are what the person types, and they are too few to bind a block by themselves (a birthday collision between a benign
+// block and a malicious one is seconds of hashing): a confirmation approves only the block that was listed, whole. Memory
+// only, so a confirmation with no listing in this process (a restart, a reload) starts over.
+const LISTED = new Map<string, string>()
+const LISTED_BLOCKS_MAX = 32
+const listedKey = (ctx: Pick<Ctx, 'root'>, planId: string, rel: string): string => `${attestKey(ctx.root, planId)}\n${rel}`
+/**
+ * Whether a confirmation approves the block as it is now: a listing of this very block (its whole hash, not its first digits)
+ * was printed in this process, and what was typed is the start of that hash.
+ */
+export function confirmationVerdict(listed: string | undefined, current: string, typed: string): 'ok' | 'unlisted' | 'changed' | 'digits' {
+  if (listed === undefined) return 'unlisted'
+  if (listed !== current) return 'changed'
+  return typed.length >= CONFIRM_DIGITS && listed.startsWith(typed) ? 'ok' : 'digits'
+}
+/** For tests: how many listings the process remembers. */
+export const approvalListings = { get size() { return LISTED.size }, clear: () => LISTED.clear() }
 
 /** `approve`'s argument: a plan path, the confirmation (12 hex digits), or both with the path first. */
 export function approveArgs(arg: string | undefined): { path?: string; confirm?: string } {
@@ -1549,13 +1598,27 @@ export async function approvePlan(ctx: Ctx, arg?: string): Promise<string> {
     trace.planId = planId
     // Two steps: the plan is shown first, and only the confirmation of what was shown approves it. The block can change between
     // the two (an edit, a file restored, a plan another session wrote), and then the confirmation is not the one printed.
+    const key = listedKey(ctx, planId, rel)
     if (!confirm) {
       const now = await standing(ctx, planId)
+      // The listing is what the confirmation is held to: the whole hash of this block, not the digits it prints.
+      LISTED.delete(key)
+      LISTED.set(key, hash)
+      while (LISTED.size > LISTED_BLOCKS_MAX) LISTED.delete(LISTED.keys().next().value as string)
       return describePlan(rel, flow, now.status === 'approved' ? { flow: now.flow } : now.status === 'tampered' ? { why: now.why } : {})
     }
-    if (confirm !== confirmationOf(flow)) {
-      return `Not approved: the block of ${rel} is hash ${confirmationOf(flow)} now, not ${confirm}. It changed after the commands were listed, or the hash is not the one printed. Run ${APPROVE} ${rel} again, read what it lists and confirm with the new hash.`
+    const listed = LISTED.get(key)
+    const verdict = confirmationVerdict(listed, hash, confirm)
+    if (verdict === 'unlisted') {
+      return `Not approved: ${rel} was not listed in this session yet, and a confirmation approves only a plan that was listed first. Run ${APPROVE} ${rel} (it lists what would run), read it, then confirm with the hash it prints.`
     }
+    if (verdict === 'changed') {
+      return `Not approved: the block of ${rel} is hash ${confirmationOf(flow)} now, not the one that was listed (${listed!.slice(0, CONFIRM_DIGITS)}). It changed after the commands were listed. Run ${APPROVE} ${rel} again, read what it lists and confirm with the new hash.`
+    }
+    if (verdict === 'digits') {
+      return `Not approved: ${confirm} is not the hash that was printed for ${rel} (${listed!.slice(0, CONFIRM_DIGITS)}). Type the hash the listing printed, or list it again.`
+    }
+    LISTED.delete(key)
     // Approval replaces the snapshot with the block as it is now: adopted amendments and waiting edits are folded into it.
     const before = await ctx.serial(planId)(async () => {
       const file: ApprovedFile = { approvedHash: hash, flow }

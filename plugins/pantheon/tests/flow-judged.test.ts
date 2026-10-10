@@ -72,6 +72,8 @@ type World = ReturnType<typeof world>
 async function approve(w: World, mode: Mode = 'enforce', file = PLAN) {
   const parsed = parseFlow(w.files.get(`${ROOT}/${file}`) ?? '')
   if (!parsed.ok) throw new Error('fixture')
+  // The person's two steps: the listing, then the confirmation of what it printed.
+  await approvePlan(w.ctx(mode), file)
   await approvePlan(w.ctx(mode), `${file} ${flowHash(parsed.flow).slice(0, 12)}`)
 }
 

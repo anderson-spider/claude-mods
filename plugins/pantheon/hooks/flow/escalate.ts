@@ -103,9 +103,13 @@ export function doneCheckVerdict(answers: Answers, needsDoneCheck: boolean, thre
 
 // --- Model fit at spawn (decision 20) ---
 
-/** Higher is stronger. Aliases (`haiku`, `sonnet[1m]`) and ids (`claude-sonnet-4-6`); anything else, such as `opusplan`, `inherit` or a family not ranked here, has no tier and so never takes part. */
+/**
+ * Higher is stronger. The name must start with the tier: an alias (`haiku`, `sonnet[1m]`) or an id
+ * (`claude-sonnet-4-6`). Anything else, such as `opusplan`, `inherit`, `my-sonnet-fork` or a family not ranked here,
+ * has no tier and so never takes part.
+ */
 export function tierOf(model: string): number | undefined {
-  const family = /(?:^|-)(haiku|sonnet|opus)(?:-|\[|$)/.exec(String(model).toLowerCase())?.[1]
+  const family = /^(?:claude-)?(haiku|sonnet|opus)(?:-|\[|$)/.exec(String(model).toLowerCase())?.[1]
   return family === 'haiku' ? 1 : family === 'sonnet' ? 2 : family === 'opus' ? 3 : undefined
 }
 
