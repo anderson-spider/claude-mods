@@ -5,6 +5,31 @@
 node = "24"
 "npm:typescript" = "7.0.2"
 
+[tasks."plugins:validate"]
+description = "Validate the marketplace and every plugin, then check that the manifests agree"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+claude plugin validate .
+for p in plugins/*/; do echo "==> $(basename "$p")"; claude plugin validate "${p%/}"; done
+node scripts/check-consistency.mjs
+'''
+
+[tasks."plugins:test"]
+description = "Run every plugin's tests, and the codex-computer-use helper's when the ChatGPT app's node is present"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+for p in plugins/*/; do echo "==> $(basename "$p")"; claude plugin test "${p%/}"; done
+cua_node=/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node
+if [ -x "$cua_node" ]; then
+  echo "==> codex-computer-use helper"
+  "$cua_node" --test plugins/codex-computer-use/helper/test/*.test.mjs
+else
+  echo "==> codex-computer-use helper: skipped, $cua_node not found"
+fi
+'''
+
 [tasks."plugins:update"]
 description = "Refresh the marketplace and update every installed plugin from it, in its own scope"
 run = "node scripts/update-plugins.mjs"

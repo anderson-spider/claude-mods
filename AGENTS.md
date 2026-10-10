@@ -34,8 +34,8 @@ claude plugin test plugins/pantheon            # same, for pantheon
 node scripts/check-consistency.mjs             # marketplace and plugin manifests agree (also run by CI)
 node scripts/check-version-bump.mjs origin/main  # a plugin with code changes bumped its version (run by CI on pull requests)
 claude --plugin-dir plugins/branch-guard       # loads the plugin with automatic reload
-make validate                                  # validates the marketplace and every plugin, then runs check-consistency
-make test                                      # runs every plugin's tests and the codex-computer-use helper's
+mise run plugins:validate                      # validates the marketplace and every plugin, then runs check-consistency
+mise run plugins:test                          # runs every plugin's tests and the codex-computer-use helper's
 mise run plugins:update                        # refreshes the marketplace and updates every installed plugin from it
 ```
 
