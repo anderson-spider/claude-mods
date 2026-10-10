@@ -1,4 +1,4 @@
-// Pure visual vocabulary for the panel: role and section colors, terminal cell math, gauges, job strips and boxes.
+// Pure visual vocabulary for the panel: role and section colors, terminal cell math, gauges, round strips and boxes.
 import type { SlotName } from './roster'
 
 export type Run = { text: string; color?: string; dim?: boolean }

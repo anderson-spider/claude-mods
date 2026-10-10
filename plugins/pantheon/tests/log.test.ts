@@ -4,12 +4,12 @@ import { ROLE_ORDER } from '../hooks/roster'
 import type { Instance, Roster, Slot } from '../hooks/roster'
 
 const inst = (o: Partial<Instance> = {}): Instance => ({
-  id: 'i', engine: 'codex', task: 'Map the repo', status: 'running', isActive: true, startedAt: 1_000,
+  id: 'i', task: 'Map the repo', status: 'running', isActive: true, startedAt: 1_000,
   rounds: [{ startedAt: 1_000, status: 'running' }], tokens: { out: 0 }, ...o,
 })
 const roster = (by: Record<string, Partial<Slot>> = {}): Roster => ({
   slots: ROLE_ORDER.map((name): Slot => ({
-    name, engine: 'codex', state: 'idle', instances: [], ...by[name],
+    name, state: 'idle', instances: [], ...by[name],
   })),
   others: [], delegating: [], counts: { active: 0, idle: 0, off: 0 },
 })
@@ -48,11 +48,11 @@ test('done and failed carry the duration', () => {
   ])
 })
 
-test('Codex error and cancelled job statuses log as failed and stopped', () => {
-  const a = inst({ id: 'a', task: 'Fix it', isActive: false, status: 'error' as never, startedAt: 1_000, endedAt: 41_000,
-    rounds: [{ startedAt: 1_000, endedAt: 41_000, status: 'error' as never }] })
-  const b = inst({ id: 'b', task: 'Stop it', isActive: false, status: 'cancelled' as never, startedAt: 50_000, endedAt: 55_000,
-    rounds: [{ startedAt: 50_000, endedAt: 55_000, status: 'cancelled' as never }] })
+test('failed and stopped statuses log as failed and stopped', () => {
+  const a = inst({ id: 'a', task: 'Fix it', isActive: false, status: 'failed', startedAt: 1_000, endedAt: 41_000,
+    rounds: [{ startedAt: 1_000, endedAt: 41_000, status: 'failed' }] })
+  const b = inst({ id: 'b', task: 'Stop it', isActive: false, status: 'stopped', startedAt: 50_000, endedAt: 55_000,
+    rounds: [{ startedAt: 50_000, endedAt: 55_000, status: 'stopped' }] })
   const out = logEvents(roster({ executor: { instances: [b, a], history: [a, b] } }), 200_000, 50)
   expect(out.filter(e => e.kind !== 'started').map(e => [e.kind, e.text])).toEqual([
     ['failed', 'failed after 40s · Fix it'],

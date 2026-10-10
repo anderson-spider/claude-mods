@@ -1,7 +1,7 @@
 import { ROLE_COLOR, OK, BAD, cellWidth, truncCells } from '../theme'
 import { DIM, TEXT, dot, run, width } from './runs'
 import type { Run } from './runs'
-import type { Job, Native } from '../../types'
+import type { Native } from '../../types'
 
 // The running agents, folded into the box's last row: a pulse, the role in its color and a clock
 // for each of up to three, "+N" for the rest. Pure: colors come from theme.ts, the clock from the
@@ -45,29 +45,16 @@ function nativeLabel(n: Native): string {
 }
 
 /**
- * The agents to show, straight from the jobs and natives (not the slot-based roster, which folds
+ * The agents to show, straight from the natives (not the slot-based roster, which folds
  * instances by role): every running one by start, then ones that failed within the grace window.
  * Nothing at all unless something is running.
  */
-export function agentsFromState(jobs: Job[], natives: Native[], now: number): AgentView[] {
+export function agentsFromState(natives: Native[], now: number): AgentView[] {
   const running: AgentView[] = []
   const failed: AgentView[] = []
   const add = (v: AgentView, isRunning: boolean, isFailed: boolean) => {
     if (isRunning) running.push(v)
     else if (isFailed && now - (v.endedAt ?? v.startedAt) <= FAIL_GRACE_MS) failed.push({ ...v, status: 'failed' })
-  }
-  // A resumed Codex line shares a session id: only its latest job counts.
-  const lines = new Map<string, Job>()
-  for (const job of jobs) {
-    const key = job.sessionId ? `session:${job.sessionId}` : `job:${job.id}`
-    const seen = lines.get(key)
-    if (!seen || job.startedAt >= seen.startedAt) lines.set(key, job)
-  }
-  for (const job of lines.values()) {
-    const role = job.agent.startsWith('councillor:') ? 'council' : job.agent
-    const task = job.description || (job.agent.startsWith('councillor:') ? `seat ${job.agent.slice('councillor:'.length)}` : role)
-    add({ id: job.id, role, task, startedAt: job.startedAt, status: 'running', endedAt: job.endedAt },
-      job.status === 'running' || job.status === 'background', job.status === 'error')
   }
   for (const n of natives) {
     const latest = n.rounds[n.rounds.length - 1]

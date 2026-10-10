@@ -5,15 +5,13 @@ import { agent, NOW } from "./strip-fixtures";
 
 const plain = (runs: { text: string }[]) => runs.map((r) => r.text).join("");
 
-test("git jobs and native agents keep their role and orange color in the strip", () => {
+test("git natives keep their role and orange color in the strip", () => {
   const list = agentsFromState(
-    [{ id: "git-job", agent: "git", status: "running", startedAt: NOW - 2000, cwd: "/repo", description: "Commit changes" }],
     [{ id: "git-native", role: "git", type: "pantheon:git", task: "Open PR", ctx: 0, out: 0, steps: 0,
       rounds: [{ startedAt: NOW - 1000, status: "running" }] }], NOW);
-  expect(list.map(a => a.role)).toEqual(["git", "git"]);
+  expect(list.map(a => a.role)).toEqual(["git"]);
   const row = agentsRow(list, 116, NOW);
-  expect(row.filter(r => r.text === "git").map(r => r.color)).toEqual(["#E8873A", "#E8873A"]);
-  expect(plain(row)).toContain("Commit changes");
+  expect(row.filter(r => r.text === "git").map(r => r.color)).toEqual(["#E8873A"]);
   expect(plain(row)).toContain("Open PR");
 });
 
@@ -48,38 +46,33 @@ test("agents: the clock reads m:ss, then HhMM", () => {
 });
 
 test("agents from state: running first by start, every native its own entry, a recent failure only beside a running one", () => {
-  const job = (id: string, agent: string, extra: any = {}): any => ({ id, agent, description: id, status: "running", startedAt: NOW - 1000, cwd: "/", ...extra });
   const nat = (id: string, role: string, type: string, status: string, extra: any = {}): any => ({ id, role, type, task: id, model: "m", ctx: 0, out: 0, steps: 0, rounds: [{ startedAt: NOW - 1000, status, ...extra }] });
-  const jobs = [
-    job("early", "explorer", { startedAt: NOW - 9000 }),
-    job("bad", "executor", { status: "error", endedAt: NOW - 2000 }),
-    job("old", "executor", { status: "error", endedAt: NOW - FAIL_GRACE_MS - 1 }),
-    job("done", "executor", { status: "done" }),
-    job("seat", "councillor:alpha", { description: undefined, status: "background", startedAt: NOW - 800 }),
-  ];
   const natives = [
+    nat("early", "explorer", "pantheon:explorer", "running", { startedAt: NOW - 9000 }),
+    nat("bad", "executor", "pantheon:executor", "failed", { endedAt: NOW - 2000 }),
+    nat("old", "executor", "pantheon:executor", "failed", { endedAt: NOW - FAIL_GRACE_MS - 1 }),
+    nat("done", "executor", "pantheon:executor", "done", { endedAt: NOW - 500 }),
+    nat("seat", "councillor-alpha", "pantheon:councillor-alpha", "running", { startedAt: NOW - 800 }),
     nat("n1", "other", "Explore", "running", { startedAt: NOW - 600 }),
     nat("n2", "other", "Explore", "running", { startedAt: NOW - 500 }),
     nat("n3", "other", "", "running", { startedAt: NOW - 400 }),
     nat("n4", "oracle", "pantheon:oracle", "running", { startedAt: NOW - 300 }),
     nat("n5", "councillor-beta", "pantheon:councillor-beta", "running", { startedAt: NOW - 200 }),
   ];
-  const list = agentsFromState(jobs, natives, NOW);
+  const list = agentsFromState(natives, NOW);
   expect(list.map((a) => a.id)).toEqual(["early", "seat", "n1", "n2", "n3", "n4", "n5", "bad"]);
   expect(list.map((a) => a.role)).toEqual(["explorer", "council", "Explore", "Explore", "agent", "oracle", "council", "executor"]);
   expect(list.map((a) => a.status)).toEqual(Array(7).fill("running").concat("failed"));
-  expect(list[1].task).toBe("seat alpha");
   expect(agentsKey(list.slice(0, 2))).toBe("early:running,seat:running");
   // Idle: finished work never makes a summary.
-  expect(agentsFromState([job("done", "executor", { status: "done" })], [nat("n", "other", "Explore", "done", { endedAt: NOW })], NOW)).toEqual([]);
+  expect(agentsFromState([nat("n", "other", "Explore", "done", { endedAt: NOW })], NOW)).toEqual([]);
 });
-
 
 test("agents: a failed agent alone does not make a summary", () => {
-  const job: any = { id: "j1", agent: "executor", description: "x", status: "error", startedAt: NOW - 5000, endedAt: NOW - 1000, cwd: "/" };
-  expect(agentsFromState([job], [], NOW)).toEqual([]);
+  const failed: any = { id: "j1", role: "executor", type: "pantheon:executor", task: "x", ctx: 0, out: 0, steps: 0,
+    rounds: [{ startedAt: NOW - 5000, endedAt: NOW - 1000, status: "failed" }] };
+  expect(agentsFromState([failed], NOW)).toEqual([]);
 });
-
 
 test("agents row: the free width is shared between the tasks, so short ones are never cut at 160 and 120 columns", () => {
   const roomy = [agent("Explore", "Listar arquivos do repositório", 8), agent("Explore", "Listar arquivos de testes", 8), agent("executor", "Wire the pace marks", 70)];

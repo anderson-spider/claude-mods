@@ -1,12 +1,12 @@
 import { describe, expect, test, mock } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
-import type { AgentSpawnInput, ConfigSetInput, FsStat, On, TurnStepInput } from 'claude-code'
+import type { AgentSpawnInput, FsStat, On, TurnStepInput } from 'claude-code'
 
-import type { Job, Native, SessionInfo } from '../types'
+import type { Native, SessionInfo } from '../types'
 import { createQueue, resolveGatePath, withGateRecovery } from '../hooks/register'
 import { gateContext } from '../hooks/gate'
 import { PANE_ID } from '../hooks/pane'
-import { DELEGATE, HOME, RESULT, ROOT, parse, start, world } from './fixtures/world'
+import { HOME, ROOT, start, world } from './fixtures/world'
 
 const spawnInput = {
   tool_use_id: 'spawn-1', prompt: 'Review the change', description: 'Review',
@@ -477,288 +477,40 @@ async function step($: Engine, input = stepInput()) {
 }
 
 describe('register', () => {
-  const commonDirArgv = [
-    'env', '-u', 'GIT_DIR', '-u', 'GIT_COMMON_DIR', '-u', 'GIT_WORK_TREE',
-    '-u', 'GIT_INDEX_FILE', '-u', 'GIT_OBJECT_DIRECTORY', '-u', 'GIT_ALTERNATE_OBJECT_DIRECTORIES',
-    '-u', 'GIT_CEILING_DIRECTORIES', '-u', 'GIT_DISCOVERY_ACROSS_FILESYSTEM',
-    'git', 'rev-parse', '--path-format=absolute', '--git-common-dir',
-  ]
-  const commonDirCommand = commonDirArgv.join(' ')
-
-  for (const foreign of [false, true]) {
-    test(`git ${foreign ? 'refuses a foreign nested repository' : 'allows a linked worktree with the same canonical common dir'}`, async ($, on) => {
-      const { seen } = world(new Proxy(on, {
-        apply(target, thisArg, args) {
-          if (args[0] !== 'process.run') return Reflect.apply(target, thisArg, args)
-        },
-      }), {
-        realPaths: { '/repo/link': '/repo/sub', '/main/link.git': '/main/.git' },
-      })
-      const cwds: (string | undefined)[] = []
-      on('process.run', async (_$, e) => {
-        const common = e.argv.includes('--git-common-dir') && !e.argv.includes('--git-dir')
-        if (common) {
-          expect(e.argv).toEqual(commonDirArgv)
-          cwds.push(e.init?.cwd)
-        }
-        const dir = e.init?.cwd === ROOT ? '/main/.git' : foreign ? '/foreign/.git' : '/main/link.git'
-        return { value: {
-          exitCode: 0, stdout: common ? `${dir}\n` : `${ROOT}\n`, stderr: '',
-          isStdoutTruncated: false, isStderrTruncated: false,
-        } }
-      })
-      await start($)
-      const out = parse(await $.tool.call({ tool: DELEGATE, agent: 'git', prompt: 't', cwd: '/repo/link' } as never))
-      expect(cwds).toEqual([ROOT, '/repo/sub'])
-      if (foreign) {
-        expect(out.error).toContain("does not belong to the session's repository")
-        expect(seen.argv).toEqual([])
-        return
-      }
-      expect(out.error).toBeUndefined()
-      expect(seen.argv.length).toBe(1)
-      expect(seen.argv[0]).toContain('sandbox_workspace_write.writable_roots=["/main/.git"]')
-      expect(seen.argv[0]).toContain('sandbox_workspace_write.network_access=true')
-    })
-  }
-
-  for (const [setting, patch] of [
-    ['sandboxCap', { sandboxCap: 'read-only' }],
-    ['noNetwork', { noNetwork: true }],
-    ['sandbox', { agents: { git: { sandbox: 'read-only' } } }],
-  ] as const) {
-    test(`git refuses ${setting} without spawning`, async ($, on) => {
-      const { seen } = world(on, { files: { [`${HOME}/.claude/pantheon.json`]: JSON.stringify({ profile: 'codex', ...patch }) } })
-      await start($)
-      const out = parse(await $.tool.call({ tool: DELEGATE, agent: 'git', prompt: 't' } as never))
-      expect(out.error).toContain(setting)
-      expect(seen.argv).toEqual([])
-    })
-  }
-
-  test('git refuses a failed rev-parse without spawning', async ($, on) => {
-    const { seen } = world(on, { runs: { [commonDirCommand]: { exitCode: 128 } } })
-    await start($)
-    const out = parse(await $.tool.call({ tool: DELEGATE, agent: 'git', prompt: 't' } as never))
-    expect(out.error).toContain('git common dir could not be resolved')
-    expect(seen.argv).toEqual([])
-  })
-
   const mountPanel = ($: Engine) => $.ui.mount({
     plugin: 'pantheon', surface: 'terminal', component: 'Pane', requestId: PANE_ID,
     props: { title: 'Pantheon', isFocused: true, bodyColumns: 120, placement: 'dock', scroll: { offset: 0, bodyRows: 40 } },
     viewport: { columns: 120, rows: 40 },
   })
 
-  for (const layer of ['user', 'project'] as const) {
-    test(`panel reloads the ${layer} JSON profile, names and lock between renders without a prompt`, async ($, on) => {
-      const { files, seen } = world(on, { files: { [`${HOME}/.claude/pantheon.json`]: '{}' } })
-      const first = await mountPanel($)
-      try {
-        expect((await first.find({ key: 'profile' }))?.props.value).toBe('claude')
-      } finally { await first.unmount() }
-      const path = layer === 'user' ? `${HOME}/.claude/pantheon.json` : `${ROOT}/.claude/pantheon.json`
-      files[path] = JSON.stringify({ profile: 'personal', profiles: { personal: {} } })
-      const second = await mountPanel($)
-      try {
-        expect(await second.find({ type: 'Text', text: '● personal' })).toBeDefined()
-        expect(await second.find({ type: 'Text', text: `set by ${layer} pantheon.json` })).toBeDefined()
-        expect(await second.find({ type: 'Select', key: 'profile' })).toBeUndefined()
-      } finally { await second.unmount() }
-      delete files[path]
-      const third = await mountPanel($)
-      try {
-        const select = await third.find({ key: 'profile' })
-        expect(select?.props.value).toBe('claude')
-        expect((select?.props.options as { value: string }[]).map(option => option.value)).toEqual(['claude', 'codex', 'mixed'])
-      } finally { await third.unmount() }
-      expect(seen.agents.length).toBe(24)
-    })
-  }
-
-  test('panel reads options.profile on the first render without session.start or a prompt', { options: { profile: 'codex' } }, async ($, on) => {
-    world(on, { files: { [`${HOME}/.claude/pantheon.json`]: '{}' } })
-    const ui = await mountPanel($)
-    try {
-      expect((await ui.find({ key: 'profile' }))?.props.value).toBe('codex')
-      expect(await ui.find({ type: 'Text', text: /set by .* pantheon.json/ })).toBeUndefined()
-    } finally { await ui.unmount() }
+  test('panel reloads the config between renders without a prompt', async ($, on) => {
+    const { files, seen } = world(on, { files: { [`${HOME}/.claude/pantheon.json`]: '{}' } })
+    const first = await mountPanel($)
+    await first.unmount()
+    expect(seen.agents.length).toBe(8)
+    files[`${ROOT}/.claude/pantheon.json`] = JSON.stringify({ disabledAgents: ['oracle'] })
+    const second = await mountPanel($)
+    await second.unmount()
+    // The new config registers its own agents once.
+    expect(seen.agents.length).toBe(15)
   })
 
-  test('panel keeps the last valid profile and warns once across invalid JSON renders without invalidating itself', async ($, on) => {
-    const { files, seen } = world(on, { files: { [`${HOME}/.claude/pantheon.json`]: '{"profile":"mixed"}' } })
+  test('panel keeps the last valid config and warns once across invalid JSON renders without invalidating itself', async ($, on) => {
+    const { files, seen } = world(on, { files: { [`${HOME}/.claude/pantheon.json`]: '{"agents":{"oracle":{"effort":"high"}}}' } })
     const invalidations: string[] = []
     on('ui.invalidate', async (_$, e) => { invalidations.push(e.event); return { value: undefined } })
     const first = await mountPanel($)
-    try { expect(await first.find({ type: 'Text', text: '● mixed' })).toBeDefined() }
-    finally { await first.unmount() }
+    await first.unmount()
     files[`${HOME}/.claude/pantheon.json`] = '{ broken'
     for (let i = 0; i < 2; i++) {
       const ui = await mountPanel($)
-      try {
-        const selected = await ui.find({ key: 'profile' })
-        const locked = await ui.find({ type: 'Text', text: '● mixed' })
-        expect(selected?.props.value === 'mixed' || locked !== undefined).toBe(true)
-      } finally { await ui.unmount() }
+      await ui.unmount()
     }
     expect(seen.toasts).toEqual([`pantheon: invalid config — ${HOME}/.claude/pantheon.json: Invalid JSON`])
-    expect(seen.agents.length).toBe(3)
+    expect(seen.agents.length).toBe(8)
     expect(invalidations).toEqual([])
   })
 
-  test('panel selection requests a redraw after a successful config.set', async ($, on) => {
-    world(on, { files: { [`${HOME}/.claude/pantheon.json`]: '{}' } })
-    const invalidations: string[] = []
-    const writes: { key: string; value: unknown }[] = []
-    on('config.set', async (_$, e) => { writes.push({ key: e.key, value: e.value }); return { value: e.value } })
-    on('ui.invalidate', async (_$, e) => { invalidations.push(e.event); return { value: undefined } })
-    await start($)
-    const ui = await mountPanel($)
-    try {
-      await ui.select({ key: 'profile', value: 'codex' })
-      expect(writes).toEqual([{ key: 'pantheon.profile', value: 'codex' }])
-      expect(invalidations).toEqual(['ui.render'])
-    } finally { await ui.unmount() }
-  })
-
-  test('panel selection denies user JSON that became invalid since the render without writing or invalidating', async ($, on) => {
-    const { files, seen } = world(on, { files: { [`${HOME}/.claude/pantheon.json`]: '{}' } })
-    const writes: ConfigSetInput[] = []
-    const invalidations: string[] = []
-    on('config.set', async (_$, e) => { writes.push(e); return { value: e.value } })
-    on('ui.invalidate', async (_$, e) => { invalidations.push(e.event); return { value: undefined } })
-    const ui = await mountPanel($)
-    try {
-      files[`${HOME}/.claude/pantheon.json`] = '{ broken'
-      await ui.select({ key: 'profile', value: 'mixed' })
-      expect(writes).toEqual([])
-      expect(invalidations).toEqual([])
-      expect(seen.toasts).toEqual([`pantheon: ${HOME}/.claude/pantheon.json: Invalid JSON`])
-    } finally { await ui.unmount() }
-  })
-
-  test('panel selection denies a custom profile removed from project JSON since the render without writing or invalidating', async ($, on) => {
-    const { files, seen } = world(on, { files: {
-      [`${HOME}/.claude/pantheon.json`]: '{}',
-      [`${ROOT}/.claude/pantheon.json`]: '{"profiles":{"personal":{}}}',
-    } })
-    const writes: ConfigSetInput[] = []
-    const invalidations: string[] = []
-    on('config.set', async (_$, e) => { writes.push(e); return { value: e.value } })
-    on('ui.invalidate', async (_$, e) => { invalidations.push(e.event); return { value: undefined } })
-    const ui = await mountPanel($)
-    try {
-      files[`${ROOT}/.claude/pantheon.json`] = '{}'
-      await ui.select({ key: 'profile', value: 'personal' })
-      expect(writes).toEqual([])
-      expect(invalidations).toEqual([])
-      expect(seen.toasts).toEqual(['pantheon: unknown profile "personal"; known: claude, codex, mixed'])
-    } finally { await ui.unmount() }
-  })
-
-  const profileChange = (value: string): ConfigSetInput => ({
-    key: 'pantheon.profile', value, previous: 'claude',
-    provider: { plugin: 'pantheon', tier: 'user' }, origin: { kind: 'composer' },
-  })
-
-  test('config.set allows a built-in profile unchanged', async ($, on) => {
-    world(on)
-    const received: ConfigSetInput[] = []
-    on('config.set', async (_$, e) => { received.push(e); return { value: e.value } })
-    const input = profileChange('codex')
-    expect(await $.config.set(input)).toEqual({ value: 'codex' })
-    expect(received).toEqual([input])
-  })
-
-  for (const path of [`${HOME}/.claude/pantheon.json`, `${ROOT}/.claude/pantheon.json`]) {
-    test(`config.set allows a custom profile freshly defined in ${path}`, async ($, on) => {
-      const { files } = world(on)
-      on('config.set', async (_$, e) => ({ value: e.value }))
-      await start($)
-      files[path] = JSON.stringify({ profiles: { custom: {} } })
-      expect(await $.config.set(profileChange('custom'))).toEqual({ value: 'custom' })
-    })
-  }
-
-  test('config.set denies an unknown profile with the merged known names even when JSON selects a profile', async ($, on) => {
-    world(on, { files: {
-      [`${HOME}/.claude/pantheon.json`]: JSON.stringify({ profile: 'claude', profiles: { personal: {} } }),
-      [`${ROOT}/.claude/pantheon.json`]: JSON.stringify({ profiles: { project: {} } }),
-    } })
-    const received: ConfigSetInput[] = []
-    on('config.set', async (_$, e) => { received.push(e); return { value: e.value } })
-    expect(await $.config.set(profileChange('missing'))).toEqual({
-      deny: 'unknown profile "missing"; known: claude, codex, mixed, personal, project',
-    })
-    expect(received).toEqual([])
-  })
-
-  for (const cleared of ['', '  ']) {
-    test(`config.set with ${JSON.stringify(cleared)} clears the selection and reaches next`, async ($, on) => {
-      world(on)
-      const received: ConfigSetInput[] = []
-      on('config.set', async (_$, e) => { received.push(e); return { value: e.value } })
-      const input = profileChange(cleared)
-      expect(await $.config.set(input)).toEqual({ value: cleared })
-      expect(received).toEqual([input])
-    })
-  }
-
-  test('config.set denies malformed user JSON after a valid config without calling next', async ($, on) => {
-    const { files } = world(on)
-    const received: ConfigSetInput[] = []
-    on('config.set', async (_$, e) => { received.push(e); return { value: e.value } })
-    await start($)
-    files[`${HOME}/.claude/pantheon.json`] = '{ broken'
-    expect(await $.config.set(profileChange('mixed'))).toEqual({
-      deny: `${HOME}/.claude/pantheon.json: Invalid JSON`,
-    })
-    expect(received).toEqual([])
-  })
-
-  test('config.set denies a custom profile with a mismatched model without calling next', async ($, on) => {
-    const { files } = world(on)
-    const received: ConfigSetInput[] = []
-    on('config.set', async (_$, e) => { received.push(e); return { value: e.value } })
-    await start($)
-    files[`${HOME}/.claude/pantheon.json`] = JSON.stringify({
-      profiles: { custom: { agents: { executor: { engine: 'codex', model: 'sonnet' } } } },
-    })
-    expect(await $.config.set(profileChange('custom'))).toEqual({
-      deny: `${HOME}/.claude/pantheon.json: profiles.custom.agents.executor.model: "sonnet" is a Claude model (engine codex)`,
-    })
-    expect(received).toEqual([])
-  })
-
-  test('config.set passes another config row through unchanged', async ($, on) => {
-    world(on)
-    const received: ConfigSetInput[] = []
-    on('config.set', async (_$, e) => { received.push(e); return { value: e.value } })
-    const input: ConfigSetInput = {
-      key: 'theme', value: 'light', previous: 'dark',
-      provider: { plugin: 'engine', tier: 'core' }, origin: { kind: 'composer' },
-    }
-    expect(await $.config.set(input)).toEqual({ value: 'light' })
-    expect(received).toEqual([input])
-  })
-
-  for (const profile of ['codex', 'mixed']) {
-    test(`options.profile selects ${profile} on load when JSON has no selection`, { options: { profile } }, async ($, on) => {
-      world(on, { files: { [`${HOME}/.claude/pantheon.json`]: '{}' } })
-      await start($)
-      const report = await $.command.run({ command: 'pantheon', args: 'config' })
-      expect(report.text).toContain(`Active profile: ${profile} (settings)`)
-    })
-  }
-
-  for (const [path, origin] of [[`${HOME}/.claude/pantheon.json`, 'user'], [`${ROOT}/.claude/pantheon.json`, 'project']] as const) {
-    test(`options.profile overrides the ${origin} JSON profile`, { options: { profile: 'codex' } }, async ($, on) => {
-      world(on, { files: { [path]: JSON.stringify({ profile: 'claude' }) } })
-      await start($)
-      const report = await $.command.run({ command: 'pantheon', args: 'config' })
-      expect(report.text).toContain('Active profile: codex (settings)')
-    })
-  }
 
   for (const failedKeys of [['natives'], ['session'], ['view'], ['natives', 'session', 'view']]) {
     test(`failed panel writes warn once and preserve hook results: ${failedKeys.join(', ')}`, async ($, on) => {
@@ -1019,323 +771,105 @@ describe('register', () => {
     expect(seen.opened[1]).toEqual({ id: 'pantheon', title: 'Pantheon', focus: true, closeOnEscape: true })
   })
 
-  test('session.start registers tools and native agents', async ($, on) => {
+  test('session.start registers the native agents and no tools', async ($, on) => {
     const { seen } = world(on)
     await start($)
-    expect(seen.tools).toEqual(['delegate', 'delegate_result', 'delegate_cancel'])
-    expect(seen.agents).toEqual(['oracle', 'designer', 'councillor-beta'])
+    expect(seen.tools).toEqual([])
+    expect(seen.agents).toEqual(['explorer', 'librarian', 'executor', 'oracle', 'designer', 'git', 'councillor-alpha', 'councillor-beta'])
     const oracle = seen.registered.find(spec => spec.name === 'oracle')
     expect(oracle?.tools).toBeUndefined()
-    expect(oracle?.disallowedTools).toEqual(['Edit', 'Write', 'NotebookEdit', 'Agent', 'mcp__pantheon__delegate', 'mcp__pantheon__delegate_cancel'])
+    expect(oracle?.disallowedTools).toEqual(['Edit', 'Write', 'NotebookEdit', 'Agent'])
+    expect(seen.registered.find(spec => spec.name === 'git')?.disallowedTools).toEqual(['Agent'])
     expect(seen.registered.find(spec => spec.name === 'designer')?.disallowedTools).toBeUndefined()
   })
 
-  test('delegate runs codex through process.spawn hook and returns final message', async ($, on) => {
-    const { seen } = world(on)
-    await start($)
-    const out = parse(await $.tool.call({ tool: DELEGATE, agent: 'explorer', prompt: 'find x' } as never))
-    expect(out.status).toBe('done')
-    expect(typeof out.result).toBe('string')
-    expect(seen.argv[0]?.slice(0, 5)).toEqual(['codex', 'exec', '--json', '-s', 'read-only'])
-    expect(seen.cwds[0]).toBe(ROOT)
-  })
-
-  test('absent user config registers default Claude roles and refuses Codex delegation', async ($, on) => {
+  test('absent user config registers the default roles and offers them', async ($, on) => {
     const { seen, files } = world(on)
     on('agent.offer', async () => ({ isOffered: true }))
     delete files[`${HOME}/.claude/pantheon.json`]
     await start($)
     expect(seen.agents).toEqual(['explorer', 'librarian', 'executor', 'oracle', 'designer', 'git', 'councillor-alpha', 'councillor-beta'])
-    const out = parse(await $.tool.call({ tool: DELEGATE, agent: 'explorer', prompt: 'find x' } as never))
-    expect(out.error).toBe('Use pantheon:explorer through the Agent tool.')
-    expect(seen.argv).toEqual([])
     expect((await $.agent.offer({ agent: 'pantheon:explorer', description: '', source: 'plugin', provider: { plugin: 'pantheon', tier: 'user' } } as never)).isOffered).toBe(true)
   })
 
-  test('codex profile delegates oracle without registering it natively', async ($, on) => {
-    const { seen } = world(on, { files: { [`${HOME}/.claude/pantheon.json`]: '{"profile":"codex"}' } })
+  test('configured models and prompts reach the registered agents', async ($, on) => {
+    const { seen } = world(on, { files: { [`${HOME}/.claude/pantheon.json`]: JSON.stringify({
+      agents: { oracle: { model: 'sonnet', effort: 'high', prompt: 'extra' } },
+      council: { seats: { gamma: { model: 'haiku' } } },
+    }) } })
     await start($)
-    const out = parse(await $.tool.call({ tool: DELEGATE, agent: 'oracle', prompt: 'review x' } as never))
-    expect(out.status).toBe('done')
-    expect(seen.argv.length).toBe(1)
-    expect(seen.argv[0].slice(0, 5)).toEqual(['codex', 'exec', '--json', '-s', 'read-only'])
-    expect(seen.agents).not.toContain('oracle')
+    const oracle = seen.registered.find(spec => spec.name === 'oracle') as { model?: string; effort?: string; prompt?: string }
+    expect(oracle.model).toBe('sonnet')
+    expect(oracle.effort).toBe('high')
+    expect(oracle.prompt).toContain('extra')
+    expect(seen.agents).toContain('councillor-gamma')
   })
 
-  test('profile switches hide native explorer, delegate it on Codex and re-register it on Claude', async ($, on) => {
-    const { seen, files } = world(on, { files: { [`${HOME}/.claude/pantheon.json`]: '{"profile":"claude"}' } })
-    on('agent.offer', async () => ({ isOffered: true }))
-    on('turn.start', async (_$, e) => ({ turnId: e.turnId }))
-    on('prompt.compose', async () => ({ sections: [] }))
-    const offer = () => $.agent.offer({ agent: 'pantheon:explorer', description: '', source: 'plugin', provider: { plugin: 'pantheon', tier: 'user' } } as never)
-    const turn = async (turnId: string) => {
-      await $.turn.start({ text: 'Go', turnId })
-      await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: [], tools: [], outputStyle: null, traits: [] } as never)
-    }
+  test('/pantheon config reports the merged config and where it came from', async ($, on) => {
+    world(on, { files: {
+      [`${HOME}/.claude/pantheon.json`]: JSON.stringify({ agents: { oracle: { effort: 'high' } } }),
+      [`${ROOT}/.claude/pantheon.json`]: JSON.stringify({ disabledAgents: ['git'] }),
+    } })
     await start($)
-    expect((await offer()).isOffered).toBe(true)
-    expect(seen.agents.filter(agent => agent === 'explorer').length).toBe(1)
-    files[`${HOME}/.claude/pantheon.json`] = '{"profile":"codex"}'
-    await turn('codex-turn')
-    expect((await offer()).isOffered).toBe(false)
-    const out = parse(await $.tool.call({ tool: DELEGATE, agent: 'explorer', prompt: 'find x' } as never))
-    expect(out.status).toBe('done')
-    expect(seen.argv.length).toBe(1)
-    expect(seen.argv[0].slice(0, 5)).toEqual(['codex', 'exec', '--json', '-s', 'read-only'])
-    files[`${HOME}/.claude/pantheon.json`] = '{"profile":"claude"}'
-    await turn('claude-turn')
-    expect((await offer()).isOffered).toBe(true)
-    expect(seen.agents.filter(agent => agent === 'explorer').length).toBe(2)
+    const report = (await $.command.run({ command: 'pantheon', args: 'config' })).text ?? ''
+    expect(report).not.toMatch(/profile|codex|sandbox/i)
+    expect(report).toContain('oracle')
+    expect(report).toContain('git')
   })
 
-  test('resume refuses a finished executor job after its engine changes to Claude', async ($, on) => {
-    const { seen, files } = world(on)
+  test('an unknown /pantheon subcommand lists the available ones', async ($, on) => {
+    world(on)
     await start($)
-    const first = parse(await $.tool.call({ tool: DELEGATE, agent: 'executor', prompt: 'x' } as never))
-    expect(first.status).toBe('done')
-    files[`${HOME}/.claude/pantheon.json`] = '{"profile":"claude"}'
-    const out = parse(await $.tool.call({ tool: DELEGATE, agent: 'executor', resume: first.jobId, prompt: 'x' } as never))
-    expect(out.error).toBe('Use pantheon:executor through the Agent tool.')
-    expect(seen.argv.length).toBe(1)
-  })
-
-  test('tool descriptions are generic across profiles', async ($, on) => {
-    // Replace the fixture's terminal tool.register handler so the registration payload is observable.
-    world(new Proxy(on, {
-      apply(target, thisArg, args) {
-        if (args[0] !== 'tool.register') return Reflect.apply(target, thisArg, args)
-      },
-    }))
-    const descriptions: Record<string, string> = {}
-    let agentDescription: unknown
-    on('tool.register', async (_$, e) => {
-      descriptions[e.name] = e.description
-      if (e.name === 'delegate') agentDescription = (e.inputSchema as { properties: { agent: { description: string } } }).properties.agent.description
-      return { value: { tool: `mcp__pantheon__${e.name}` } }
-    })
-    await start($)
-    expect(descriptions.delegate).not.toContain('explorer, librarian, executor')
-    expect(descriptions.delegate).toContain('Run a Pantheon role or council seat on Codex on a task')
-    for (const text of Object.values(descriptions)) expect(text).not.toContain('currently on Codex')
-    expect(agentDescription).toBe('A role or councillor:<seat> currently on Codex.')
-  })
-
-  describe('delegate tools deferral', () => {
-    const NAMES = ['mcp__pantheon__delegate', 'mcp__pantheon__delegate_result', 'mcp__pantheon__delegate_cancel']
-    function observe(on: On, profile: string, files: Record<string, string> = {}) {
-      const w = world(new Proxy(on, {
-        apply(target, thisArg, args) {
-          if (args[0] !== 'tool.register') return Reflect.apply(target, thisArg, args)
-        },
-      }), { files: { [`${HOME}/.claude/pantheon.json`]: JSON.stringify({ profile }), ...files } })
-      const deferred: Record<string, boolean | undefined> = {}
-      on('tool.describe', async (_$, e) => ({ description: e.description }))
-      on('tool.register', async (_$, e) => {
-        deferred[e.name] = e.isDeferred
-        return { value: { tool: `mcp__pantheon__${e.name}` } }
-      })
-      return { ...w, deferred }
-    }
-    const describeAll = async ($: Engine) => Promise.all(NAMES.map(async tool => ($.tool.describe({ tool, description: 'd' } as never))))
-
-    test('claude profile defers the tools at registration and in tool.describe', async ($, on) => {
-      const { deferred } = observe(on, 'claude')
-      await start($)
-      expect(deferred).toEqual({ delegate: true, delegate_result: true, delegate_cancel: true })
-      for (const out of await describeAll($)) expect(out.isDeferred).toBe(true)
-    })
-
-    test('a profile with Codex roles lists the tools and delegate works', async ($, on) => {
-      const { deferred } = observe(on, 'codex')
-      await start($)
-      expect(deferred).toEqual({ delegate: false, delegate_result: false, delegate_cancel: false })
-      for (const out of await describeAll($)) expect(out.isDeferred).toBe(false)
-    })
-
-    test('switching profile mid-session flips the deferral and invalidates tool.describe', async ($, on) => {
-      const { files } = observe(on, 'claude')
-      on('turn.start', async (_$, e) => ({ turnId: e.turnId }))
-      on('prompt.compose', async () => ({ sections: [] }))
-      const invalidated: string[] = []
-      on('ui.invalidate', async (_$, e) => { invalidated.push(e.event); return { value: undefined } })
-      const compose = async (turnId: string) => {
-        await $.turn.start({ text: 'Go', turnId })
-        await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: [], tools: [], outputStyle: null, traits: [] } as never)
-      }
-      await start($)
-      files[`${HOME}/.claude/pantheon.json`] = '{"profile":"codex"}'
-      await compose('t1')
-      for (const out of await describeAll($)) expect(out.isDeferred).toBe(false)
-      files[`${HOME}/.claude/pantheon.json`] = '{"profile":"claude"}'
-      await compose('t2')
-      for (const out of await describeAll($)) expect(out.isDeferred).toBe(true)
-      expect(invalidated.filter(event => event === 'tool.describe').length).toBe(2)
-    })
-  })
-
-  test('doctor under Claude without Codex reports it is not needed', async ($, on) => {
-    world(on, {
-      files: { [`${HOME}/.claude/pantheon.json`]: '{"profile":"claude"}' },
-      runs: { 'codex --version': { exitCode: 127, stderr: 'codex: command not found' } },
-    })
-    await start($)
-    const out = await $.command.run({ command: 'pantheon', args: 'doctor' })
-    expect(out.text).toContain('not needed by profile claude')
-    expect(out.text).not.toContain('fail')
+    const out = await $.command.run({ command: 'pantheon', args: 'cancel' })
+    expect(out.text).toBe('Unknown subcommand: cancel. Use /pantheon, /pantheon close, /pantheon config or /pantheon doctor.')
   })
 
   const PING_ORDER = ['explorer', 'librarian', 'executor', 'oracle', 'designer', 'git', 'councillor:alpha', 'councillor:beta']
-  const agentMessage = (text: string) => `${JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text } })}\n`
 
-  /** world() with its process.run replaced: Codex ping runs (`codex exec`) answer through `exec`; the rest is canned. */
-  function pingWorld(on: On, opts: { profile: string; codex?: boolean; file?: string; exec?: (argv: string[], asked: string) => { exitCode: number; stdout?: string; stderr?: string } | Error | 'hang' }) {
-    const execs: string[][] = []
-    const inits: unknown[] = []
+  function doctorWorld(on: On, file?: string) {
     const submits: string[] = []
-    const fixture = world(new Proxy(on, {
-      apply(target, thisArg, args) {
-        if (args[0] !== 'process.run') return Reflect.apply(target, thisArg, args)
-      },
-    }), { files: { [`${HOME}/.claude/pantheon.json`]: opts.file ?? `{"profile":"${opts.profile}"}` } })
-    const result = (r: { exitCode: number; stdout?: string; stderr?: string }) => ({
-      value: { exitCode: r.exitCode, stdout: r.stdout ?? '', stderr: r.stderr ?? '', isStdoutTruncated: false, isStderrTruncated: false },
-    })
-    on('process.run', async (_$, e) => {
-      const key = e.argv.join(' ')
-      if (key === 'codex --version') return result(opts.codex === false ? { exitCode: 127, stderr: 'not found' } : { exitCode: 0, stdout: 'codex-cli 1.0\n' })
-      if (key === 'codex login status') return result({ exitCode: 0, stdout: 'Logged in\n' })
-      if (e.argv[0] === 'codex' && e.argv[1] === 'exec') {
-        execs.push(e.argv)
-        inits.push((e as { init?: unknown }).init)
-        // The mock sees no stdin, so a ping's target is told by call order, which follows pingTargets order.
-        const asked = PING_ORDER[execs.length - 1] ?? 'unknown'
-        const out = opts.exec ? opts.exec(e.argv, asked) : { exitCode: 0, stdout: agentMessage(PING_ORDER.map(n => `pong ${n}`).join(' ')) }
-        if (out === 'hang') return new Promise<never>(() => {})
-        if (out instanceof Error) throw out
-        return result(out)
-      }
-      return result({ exitCode: 0, stdout: `${ROOT}\n` })
-    })
+    const fixture = world(on, { files: { [`${HOME}/.claude/pantheon.json`]: file ?? '{}' } })
     on('prompt.submit', async (_$, e) => { submits.push(e.text); return { text: e.text } })
-    return { ...fixture, execs, inits, submits }
+    return { ...fixture, submits }
   }
 
-  test('doctor pings Codex targets, leaves native ones pending and submits one prompt', async ($, on) => {
-    const { execs, submits, clock } = pingWorld(on, { profile: 'mixed' })
+  test('doctor lists every target as pending and submits one ping prompt', async ($, on) => {
+    const { submits, clock } = doctorWorld(on)
     await start($)
     const out = await $.command.run({ command: 'pantheon', args: 'doctor' })
-    expect(execs.length).toBeGreaterThan(0)
     expect(out.text).toContain('\nping\n')
-    expect(out.text).toMatch(/^ok {3}\S+ \(codex/m)
-    expect(out.text).toMatch(/^pending \S+ \(claude/m)
-    expect(out.text).not.toMatch(/^fail \S+ \(codex/m)
+    for (const name of PING_ORDER) expect(out.text).toMatch(new RegExp(`^pending ${name} `, 'm'))
+    expect(out.text).not.toMatch(/codex|fail/i)
     await clock.settle()
     expect(submits.length).toBe(1)
-    expect(submits[0]).toContain('pantheon:')
+    expect(submits[0]).toContain('pantheon:explorer')
+    expect(submits[0]).toContain('pantheon:councillor-beta')
   })
 
-  test('doctor under Claude without Codex pings nothing and submits once', async ($, on) => {
-    const { execs, submits, clock } = pingWorld(on, { profile: 'claude', codex: false })
+  test('doctor marks disabled agents off and leaves them out of the ping prompt', async ($, on) => {
+    const { submits, clock } = doctorWorld(on, JSON.stringify({ disabledAgents: ['designer', 'councillor:beta'] }))
     await start($)
     const out = await $.command.run({ command: 'pantheon', args: 'doctor' })
-    expect(execs).toEqual([])
-    expect(out.text).toMatch(/^pending /m)
-    expect(out.text).not.toMatch(/^ok {3}\S+ \(/m)
+    expect(out.text).toMatch(/^info designer off$/m)
+    expect(out.text).toMatch(/^info councillor:beta off$/m)
     await clock.settle()
     expect(submits.length).toBe(1)
-  })
-
-  test('a failing Codex ping becomes a fail line with the first stderr line', async ($, on) => {
-    const { execs } = pingWorld(on, { profile: 'codex', exec: () => ({ exitCode: 3, stderr: 'bad auth\nmore' }) })
-    await start($)
-    const out = await $.command.run({ command: 'pantheon', args: 'doctor' })
-    expect(execs.length).toBeGreaterThan(0)
-    expect(out.text).toMatch(/^fail explorer \(codex .*\): exit 3: bad auth$/m)
-    expect(out.text).not.toContain('more')
-  })
-
-  test('a Codex ping sends its prompt on stdin and lets the host kill it at the timeout', async ($, on) => {
-    const { inits } = pingWorld(on, { profile: 'mixed' })
-    await start($)
-    await $.command.run({ command: 'pantheon', args: 'doctor' })
-    expect(inits.length).toBeGreaterThan(0)
-    for (const init of inits as { stdin?: string; timeoutMs?: number }[]) {
-      expect(init.stdin).toContain('pong ')
-      expect(init.timeoutMs).toBe(60_000)
-    }
-  })
-
-  test('every Codex ping runs read-only, even for roles that default to workspace-write', async ($, on) => {
-    const { execs } = pingWorld(on, { profile: 'codex' })
-    await start($)
-    await $.command.run({ command: 'pantheon', args: 'doctor' })
-    expect(execs.length).toBeGreaterThan(5)
-    for (const argv of execs) expect(argv.slice(argv.indexOf('-s'), argv.indexOf('-s') + 2)).toEqual(['-s', 'read-only'])
-  })
-
-  test('git doctor ping has no writable roots or explicit network access', async ($, on) => {
-    const { execs } = pingWorld(on, { profile: 'codex' })
-    await start($)
-    const out = await $.command.run({ command: 'pantheon', args: 'doctor' })
-    expect(out.text).toMatch(/^ok {3}git \(codex/m)
-    expect(execs.length).toBe(PING_ORDER.length)
-    const argv = execs[PING_ORDER.indexOf('git')]!
-    expect(argv).toContain('sandbox_workspace_write.writable_roots=[]')
-    expect(argv).not.toContain('sandbox_workspace_write.network_access=true')
-    expect(argv.slice(argv.indexOf('-s'), argv.indexOf('-s') + 2)).toEqual(['-s', 'read-only'])
-  })
-
-  for (const [setting, value] of [['sandboxCap', 'read-only'], ['noNetwork', true]] as const) {
-    test(`git doctor ping reports ${setting} restrictions`, async ($, on) => {
-      pingWorld(on, { profile: 'codex', file: JSON.stringify({ profile: 'codex', [setting]: value }) })
-      await start($)
-      const out = await $.command.run({ command: 'pantheon', args: 'doctor' })
-      expect(out.text).toMatch(new RegExp(`^fail git \\(codex.*${setting}`, 'm'))
-    })
-  }
-
-  test('a Codex ping that never answers becomes fail timeout', async ($, on) => {
-    const { clock } = pingWorld(on, { profile: 'codex', exec: () => 'hang' })
-    await start($)
-    const run = $.command.run({ command: 'pantheon', args: 'doctor' })
-    await clock.settle()
-    await clock.advance(60_000)
-    const out = await run
-    expect(out.text).toMatch(/^fail explorer \(codex .*\): timeout$/m)
-  })
-
-  test('a ping needs exit 0 and the pong inside an agent message', async ($, on) => {
-    pingWorld(on, { profile: 'codex', exec: (_argv, asked) => {
-      if (asked === 'explorer') return { exitCode: 1, stdout: agentMessage('pong explorer') }
-      if (asked === 'librarian') return { exitCode: 0, stdout: `${JSON.stringify({ type: 'item.completed', item: { type: 'reasoning', text: `say pong ${asked}` } })}\n` }
-      return { exitCode: 0, stdout: agentMessage(`pong ${asked}`) }
-    } })
-    await start($)
-    const out = await $.command.run({ command: 'pantheon', args: 'doctor' })
-    expect(out.text).toMatch(/^fail explorer /m)
-    expect(out.text).toMatch(/^fail librarian /m)
-    expect(out.text).toMatch(/^ok {3}executor /m)
-  })
-
-  test('a throwing Codex ping does not throw out of doctor', async ($, on) => {
-    pingWorld(on, { profile: 'codex', exec: () => new Error('boom') })
-    await start($)
-    const out = await $.command.run({ command: 'pantheon', args: 'doctor' })
-    expect(out.text).toMatch(/^fail explorer \(codex /m)
+    expect(submits[0]).not.toContain('pantheon:designer')
+    expect(submits[0]).not.toContain('councillor-beta')
+    expect(submits[0]).toContain('pantheon:oracle')
   })
 
   test('doctor skips the ping section and the submit when the config is invalid', async ($, on) => {
-    const { execs, submits, clock } = pingWorld(on, { profile: 'mixed', file: '{ nope' })
+    const { submits, clock } = doctorWorld(on, '{ nope')
     await start($)
     const out = await $.command.run({ command: 'pantheon', args: 'doctor' })
     expect(out.text).not.toContain('ping')
     await clock.settle()
-    expect(execs).toEqual([])
     expect(submits).toEqual([])
   })
 
-  test('doctor does not submit when no target is native', async ($, on) => {
-    const { submits, clock } = pingWorld(on, { profile: 'codex' })
+  test('doctor does not submit when every target is disabled', async ($, on) => {
+    const { submits, clock } = doctorWorld(on, JSON.stringify({ disabledAgents: ['explorer', 'librarian', 'executor', 'oracle', 'designer', 'git', 'council'] }))
     await start($)
     const out = await $.command.run({ command: 'pantheon', args: 'doctor' })
     await clock.settle()
@@ -1343,110 +877,15 @@ describe('register', () => {
     expect(submits).toEqual([])
   })
 
-  test('delegate refuses while config is invalid', async ($, on) => {
-    const { seen } = world(on, { files: { [`${HOME}/.claude/pantheon.json`]: '{ nope' } })
+  test('removed config fields make the config invalid with a migration message', async ($, on) => {
+    const { seen } = world(on, { files: { [`${HOME}/.claude/pantheon.json`]: '{"profile":"codex"}' } })
     await start($)
-    const out = parse(await $.tool.call({ tool: DELEGATE, agent: 'explorer', prompt: 'x' } as never))
-    expect(String(out.error)).toContain('Invalid Pantheon config')
-    expect(seen.argv).toEqual([])
     expect(seen.toasts.length).toBe(1)
+    expect(seen.toasts[0]).toContain('pantheon: invalid config')
+    expect(seen.toasts[0]).toContain('profiles were removed')
+    expect(seen.agents.length).toBe(8)
   })
 
-  test('skipGitRepoCheck is true only when git rev-parse fails', async ($, on) => {
-    const { seen } = world(on, { isRepo: false })
-    await start($)
-    await $.tool.call({ tool: DELEGATE, agent: 'explorer', prompt: 'x' } as never)
-    expect(seen.argv[0]).toContain('--skip-git-repo-check')
-  })
-
-  test('skipGitRepoCheck is absent inside a repository', async ($, on) => {
-    const { seen } = world(on)
-    await start($)
-    await $.tool.call({ tool: DELEGATE, agent: 'explorer', prompt: 'x' } as never)
-    expect(seen.argv[0]).not.toContain('--skip-git-repo-check')
-  })
-
-  test('cwd resolving outside the root is refused', async ($, on) => {
-    const { seen } = world(on, { realPaths: { '/repo/link': '/etc' } })
-    await start($)
-    const out = parse(await $.tool.call({ tool: DELEGATE, agent: 'executor', prompt: 'x', cwd: '/repo/link' } as never))
-    expect(String(out.error)).toContain('outside')
-    expect(seen.argv).toEqual([])
-  })
-
-  test('resume: unknown job and job without sessionId -> error', async ($, on) => {
-    world(on, { stdout: '' , exitCode: 1 })
-    await start($)
-    const unknown = parse(await $.tool.call({ tool: DELEGATE, agent: 'executor', prompt: 'x', resume: 'nope' } as never))
-    expect(String(unknown.error)).toContain('Unknown job')
-    const failed = parse(await $.tool.call({ tool: DELEGATE, agent: 'executor', prompt: 'x' } as never))
-    expect(failed.status).toBe('error')
-    const again = parse(await $.tool.call({ tool: DELEGATE, agent: 'executor', prompt: 'y', resume: failed.jobId } as never))
-    expect(String(again.error)).toContain('delegate it again')
-  })
-
-  test('resume ignores a new cwd and reuses the stored one', async ($, on) => {
-    const { seen } = world(on)
-    await start($)
-    const first = parse(await $.tool.call({ tool: DELEGATE, agent: 'executor', prompt: 'x', cwd: '/repo/sub' } as never))
-    const moved = parse(await $.tool.call({ tool: DELEGATE, agent: 'executor', prompt: 'y', resume: first.jobId, cwd: '/repo/other' } as never))
-    expect(String(moved.error)).toContain('recorded cwd')
-    const ok = parse(await $.tool.call({ tool: DELEGATE, agent: 'executor', prompt: 'y', resume: first.jobId } as never))
-    expect(ok.status).toBe('done')
-    expect(seen.cwds).toEqual(['/repo/sub', '/repo/sub'])
-    expect(seen.argv[1]).toContain('resume')
-  })
-
-  test('resume recomputes sandbox with a stricter current policy', async ($, on) => {
-    const { seen, files } = world(on)
-    await start($)
-    const first = parse(await $.tool.call({ tool: DELEGATE, agent: 'executor', prompt: 'x' } as never))
-    expect(seen.argv[0]).toContain('workspace-write')
-    files[`${ROOT}/.claude/pantheon.json`] = JSON.stringify({ sandboxCap: 'read-only' })
-    await $.tool.call({ tool: DELEGATE, agent: 'executor', prompt: 'y', resume: first.jobId } as never)
-    expect(seen.argv[1]?.[4]).toBe('read-only')
-  })
-
-  test('resume revalidates the stored cwd before spawning', async ($, on) => {
-    const realPaths: Record<string, string> = {}
-    const { seen } = world(on, { realPaths })
-    await start($)
-    const first = parse(await $.tool.call({ tool: DELEGATE, agent: 'executor', prompt: 'x', cwd: '/repo/sub' } as never))
-    realPaths['/repo/sub'] = '/elsewhere'
-    const out = parse(await $.tool.call({ tool: DELEGATE, agent: 'executor', prompt: 'y', resume: first.jobId } as never))
-    expect(String(out.error)).toContain('outside')
-    expect(seen.argv.length).toBe(1)
-  })
-
-  test('delegate_result reads a finished job', async ($, on) => {
-    world(on)
-    await start($)
-    const first = parse(await $.tool.call({ tool: DELEGATE, agent: 'explorer', prompt: 'x' } as never))
-    const read = parse(await $.tool.call({ tool: RESULT, jobId: first.jobId } as never))
-    expect(read.status).toBe('done')
-    expect(read.result).toBe(first.result)
-  })
-
-  test('session.start marks leftover running/background jobs as lost', async ($, on) => {
-    world(on)
-    const saved: Job[] = [
-      { id: 'a', agent: 'executor', status: 'running', startedAt: 0, cwd: ROOT, sessionId: 's1' },
-      { id: 'b', agent: 'explorer', status: 'background', startedAt: 0, cwd: ROOT },
-      { id: 'c', agent: 'explorer', status: 'done', startedAt: 0, cwd: ROOT },
-    ]
-    let served = false
-    on('state.get', async (_$, e, next) => {
-      if (served || e.key !== 'jobs') return next(e)
-      served = true
-      return { value: { value: saved, version: 1 } }
-    })
-    await start($)
-    const read = parse(await $.tool.call({ tool: RESULT, jobId: 'a' } as never))
-    expect(read.status).toBe('lost')
-    expect(read.isResumable).toBe(true)
-    expect(parse(await $.tool.call({ tool: RESULT, jobId: 'b' } as never)).status).toBe('lost')
-    expect(parse(await $.tool.call({ tool: RESULT, jobId: 'c' } as never)).status).toBe('done')
-  })
 
   test('prompt.compose appends the orchestrator section last', async ($, on) => {
     world(on)
@@ -1456,21 +895,23 @@ describe('register', () => {
     const last = out.sections[out.sections.length - 1]
     expect(last?.id).toBe('pantheon:orchestrator')
     expect(last?.scope).toBe('session')
-    expect(last?.text).toContain('delegate')
+    expect(last?.text).toContain('pantheon:oracle')
   })
 
   test('valid config change re-registers native agents; invalid change does not', async ($, on) => {
     const { seen, files } = world(on)
     on('prompt.compose', async () => ({ sections: [] }))
     await start($)
-    expect(seen.agents.length).toBe(3)
-    files[`${HOME}/.claude/pantheon.json`] = JSON.stringify({ profile: 'mixed', profiles: { mixed: { agents: { oracle: { model: 'sonnet' } } } } })
+    expect(seen.agents.length).toBe(8)
+    files[`${HOME}/.claude/pantheon.json`] = JSON.stringify({ agents: { oracle: { model: 'sonnet' } } })
     await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: [], tools: [], outputStyle: null, traits: [] } as never)
-    expect(seen.agents.length).toBe(6)
+    expect(seen.agents.length).toBe(16)
+    expect(seen.registered.filter(spec => spec.name === 'oracle').map(spec => (spec as { model?: string }).model)).toEqual(['opus', 'sonnet'])
     files[`${HOME}/.claude/pantheon.json`] = '{ broken'
     await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: [], tools: [], outputStyle: null, traits: [] } as never)
-    expect(seen.agents.length).toBe(6)
+    expect(seen.agents.length).toBe(16)
   })
+
 
   test('prompt.submit injects council block only for composer/bridge with trigger', async ($, on) => {
     world(on)
@@ -1495,19 +936,6 @@ describe('register', () => {
     expect((await offer('Explore')).isOffered).toBe(true)
   })
 
-  test('background delegate returns at once and wakes the session when done', async ($, on) => {
-    const { clock } = world(on)
-    const texts: string[] = []
-    on('prompt.submit', async (_$, e) => { texts.push(e.text); return { text: e.text } })
-    await start($)
-    const out = parse(await $.tool.call({ tool: DELEGATE, agent: 'explorer', prompt: 'x', background: true } as never))
-    expect(out.status).toBe('background')
-    await clock.settle()
-    const done = parse(await $.tool.call({ tool: RESULT, jobId: out.jobId } as never))
-    expect(done.status).toBe('done')
-    expect(texts.some(text => text.includes(String(out.jobId)) && text.includes('delegate_result'))).toBe(true)
-  })
-
   test('invalid first config still registers the default native agents', async ($, on) => {
     const { seen } = world(on, { files: { [`${HOME}/.claude/pantheon.json`]: '{ nope' } })
     await start($)
@@ -1518,9 +946,9 @@ describe('register', () => {
     const { seen } = world(on, { failFirstRegister: true })
     on('prompt.compose', async () => ({ sections: [] }))
     await start($)
-    expect(seen.tools).toEqual(['delegate', 'delegate_result', 'delegate_cancel'])
+    expect(seen.agents).toEqual([])
     await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: [], tools: [], outputStyle: null, traits: [] } as never)
-    expect(seen.agents).toEqual(['oracle', 'designer', 'councillor-beta'])
+    expect(seen.agents).toEqual(['explorer', 'librarian', 'executor', 'oracle', 'designer', 'git', 'councillor-alpha', 'councillor-beta'])
   })
 
   describe('above-prompt strip', () => {
@@ -1607,14 +1035,14 @@ describe('register', () => {
       } finally { await ui.unmount() }
     })
 
-    test('folds a running background job into the box and drops it when idle', async ($, on) => {
-      const { clock } = stripWorld(on, { hang: true })
+    test('folds a running native into the box and drops it when it ends', async ($, on) => {
+      stripWorld(on)
+      on('agent.spawn', async () => ({ model: 'model-1', agentId: 'native-1' }))
+      on('turn.complete', async () => ({ text: 'Completed' }))
       await start($)
       const idle = await mountStrip($)
       try { expect(await texts(idle)).not.toContain('executor') } finally { await idle.unmount() }
-      const out = parse(await $.tool.call({ tool: DELEGATE, agent: 'executor', prompt: 'x', description: 'Wire the strip', background: true } as never))
-      expect(out.status).toBe('background')
-      await clock.settle()
+      await $.agent.spawn({ ...spawnInput, description: 'Wire the strip', subagentType: 'pantheon:executor' } as never)
       const ui = await mountStrip($)
       try {
         const all = await texts(ui)
@@ -1624,6 +1052,9 @@ describe('register', () => {
         // One row of the box, never cards above it.
         expect(all).not.toContain('╭─ ')
       } finally { await ui.unmount() }
+      await $.turn.complete({ ...completeInput, agentId: 'native-1' } as never)
+      const done = await mountStrip($)
+      try { expect(await texts(done)).not.toContain('Wire the strip') } finally { await done.unmount() }
     })
 
     test('every running non-role native counts in the folded row, labeled with its subagent type', async ($, on) => {

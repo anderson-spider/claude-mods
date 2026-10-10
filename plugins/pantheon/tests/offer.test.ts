@@ -1,53 +1,46 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { CLAUDE, CODEX, MIXED } from './fixtures/profiles'
+import { DEFAULTS } from './fixtures/config'
 import { isOffered } from '../hooks/roles'
 
 describe('agent offer', () => {
-  test('role offers follow their configured engines', () => {
-    for (const role of ['explorer', 'librarian', 'executor']) expect(isOffered(CLAUDE, `pantheon:${role}`)).toBe(true)
-    for (const role of ['oracle', 'designer', 'councillor-beta']) expect(isOffered(CODEX, `pantheon:${role}`)).toBe(false)
-    expect(isOffered(MIXED, 'pantheon:executor')).toBe(false)
-    expect(isOffered(MIXED, 'pantheon:oracle')).toBe(true)
-    expect(isOffered({ ...CLAUDE, disabledAgents: ['explorer'] }, 'pantheon:explorer')).toBe(false)
-  })
-
-  test('active native roles and Claude seats are offered', () => {
-    for (const agent of ['pantheon:oracle', 'pantheon:designer', 'pantheon:councillor-beta']) {
-      expect(isOffered(MIXED, agent)).toBe(true)
+  test('every role and default seat is offered', () => {
+    for (const role of ['explorer', 'librarian', 'executor', 'oracle', 'designer', 'git', 'councillor-alpha', 'councillor-beta']) {
+      expect(isOffered(DEFAULTS, `pantheon:${role}`)).toBe(true)
     }
   })
 
   test('disabled native roles are hidden', () => {
-    const config = { ...MIXED, disabledAgents: ['oracle'] }
+    const config = { ...DEFAULTS, disabledAgents: ['oracle'] }
     expect(isOffered(config, 'pantheon:oracle')).toBe(false)
     expect(isOffered(config, 'pantheon:designer')).toBe(true)
   })
 
-  test('removed seat and seats switched to Codex are hidden', () => {
-    expect(isOffered({ ...MIXED, council: { seats: {} } }, 'pantheon:councillor-beta')).toBe(false)
-    expect(isOffered(MIXED, 'pantheon:councillor-alpha')).toBe(false)
-    expect(isOffered(MIXED, 'pantheon:councillor-toString')).toBe(false)
+  test('removed seat and unknown seats are hidden', () => {
+    expect(isOffered({ ...DEFAULTS, council: { seats: {} } }, 'pantheon:councillor-beta')).toBe(false)
+    expect(isOffered(DEFAULTS, 'pantheon:councillor-gamma')).toBe(false)
+    expect(isOffered(DEFAULTS, 'pantheon:councillor-toString')).toBe(false)
   })
 
-  test('disabled council hides all its native seats', () => {
-    const config = { ...MIXED, disabledAgents: ['council'] }
+  test('disabled council hides all its seats', () => {
+    const config = { ...DEFAULTS, disabledAgents: ['council'] }
+    expect(isOffered(config, 'pantheon:councillor-alpha')).toBe(false)
     expect(isOffered(config, 'pantheon:councillor-beta')).toBe(false)
     expect(isOffered(config, 'pantheon:oracle')).toBe(true)
   })
 
   test('seat disable names work for the logical and native names', () => {
     for (const name of ['councillor:beta', 'councillor-beta']) {
-      expect(isOffered({ ...MIXED, disabledAgents: [name] }, 'pantheon:councillor-beta')).toBe(false)
+      expect(isOffered({ ...DEFAULTS, disabledAgents: [name] }, 'pantheon:councillor-beta')).toBe(false)
     }
+    expect(isOffered({ ...DEFAULTS, disabledAgents: ['councillor:beta'] }, 'pantheon:councillor-alpha')).toBe(true)
   })
 
-  test('unknown Pantheon types and Codex roles cannot be offered as native agents', () => {
-    expect(isOffered(MIXED, 'pantheon:missing')).toBe(false)
-    expect(isOffered(MIXED, 'pantheon:executor')).toBe(false)
+  test('unknown Pantheon types are not offered', () => {
+    expect(isOffered(DEFAULTS, 'pantheon:missing')).toBe(false)
   })
 
   test('non-Pantheon agents are always offered', () => {
-    const config = { ...MIXED, disabledAgents: ['oracle', 'council', 'Explore'] }
+    const config = { ...DEFAULTS, disabledAgents: ['oracle', 'council', 'Explore'] }
     for (const agent of ['Explore', 'other:oracle', 'pantheonish:oracle', 'oracle']) {
       expect(isOffered(config, agent)).toBe(true)
     }
