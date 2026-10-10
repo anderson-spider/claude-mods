@@ -5,10 +5,12 @@
 // kept for the policy to quote.
 //
 // Three outcomes besides a pass or a fail:
-// - `passed: null`, "could not run": the command timed out or `env` could not exec it (exit 126/127). The policy treats
-//   it as not passed, with why.
-// - `CheckUnrunnable`: the runner itself rejected for any other reason. That is the host's fault, not the plan's, so it is
-//   thrown for the caller to fail open on instead of being counted against the task.
+// - `passed: null`, "could not run": the command timed out, `env` could not exec it (exit 126/127), or the check's working
+//   directory is not there (found out before the run when the host can say, or from the host's "failed to start: ENOENT").
+//   All of them are about the plan, so the policy treats it as not passed, with why: the Stop holds and a task end counts an
+//   attempt.
+// - `CheckUnrunnable`: the runner itself rejected for any other reason. That says nothing about the plan, so it is thrown for
+//   the caller to fail open on instead of being counted against the task.
 // - unverified: the check never got to run because the pass ran out of time. No result is produced for it, so it is never a
 //   fail and never costs an attempt.
 //
@@ -23,6 +25,11 @@ export type RunInit = { cwd: string; timeoutMs: number; stdin?: string }
 export type RunOutput = { exitCode: number; stdout: string; stderr: string }
 /** Runs a command by argv. Rejects when it cannot start or outlives `timeoutMs`. */
 export type Runner = (argv: string[], init: RunInit) => Promise<RunOutput>
+/**
+ * What a working directory is on disk: a directory, not there, or something else (a file). Rejects only when the host cannot
+ * say, and then the check just runs.
+ */
+export type DirProbe = (path: string) => Promise<'directory' | 'missing' | 'other'>
 
 /** Variables a check must not see: the judge's keys. */
 export const SCRUBBED_ENV: readonly string[] = ['OPENROUTER_API_KEY', 'TYPESAFE_API_KEY']
@@ -59,6 +66,12 @@ function tail(text: string): string {
 }
 
 const TIMEOUT = /time(?:d)?[ -]?out|timeout|still running|killed/i
+/**
+ * The engine's rejection when the process could not be spawned: `$.process.run(env) failed to start: ENOENT: ... posix_spawn
+ * 'env'`. `env` is always found, so it is the command's directory (or, through `env`, the command) that is not there, not the
+ * host: the plan's doing.
+ */
+const START_FAILED = /failed to start: (ENOENT|ENOTDIR|EACCES)\b/
 
 /** `env` could not exec the command: its own message names it, with the exit status 126 (not executable) or 127 (not found). */
 function envFailure(argv: readonly string[], out: RunOutput): string | undefined {
@@ -74,6 +87,8 @@ function envFailure(argv: readonly string[], out: RunOutput): string | undefined
 export type RunCheckOptions = {
   /** Replaces the check's own timeout when the pass has less time left. */
   timeoutMs?: number
+  /** Says what the check's `cwd` is before it runs; without it the runner's own failure is what says it is not there. */
+  probe?: DirProbe
 }
 
 /**
@@ -84,11 +99,23 @@ export async function runCheck(run: Runner, root: string, check: Check, options:
   const argv = [...check.argv]
   const limit = check.timeoutSec * 1000
   const timeoutMs = Math.max(1, Math.min(limit, options.timeoutMs ?? limit))
+  const cwd = checkCwd(root, check)
+  // A working directory that is not there (the task has not made it yet, or something moved it) is the plan's, not the host's:
+  // the check could not run, and it is charged like any check that could not.
+  if (check.cwd !== undefined && options.probe) {
+    const kind = await options.probe(cwd).catch(() => undefined)
+    if (kind === 'missing') return { argv, passed: null, output: `working directory ${check.cwd} does not exist, so ${checkLabel(check)} could not run` }
+    if (kind === 'other') return { argv, passed: null, output: `working directory ${check.cwd} is not a directory, so ${checkLabel(check)} could not run` }
+  }
   let out: RunOutput
   try {
-    out = await run(scrubbed(argv), { cwd: checkCwd(root, check), timeoutMs })
+    out = await run(scrubbed(argv), { cwd, timeoutMs })
   } catch (error) {
     const text = error instanceof Error ? error.message : String(error)
+    const spawn = START_FAILED.exec(text)
+    if (spawn) {
+      return { argv, passed: null, output: `could not start ${argv[0] ?? ''} (${spawn[1]}): the command or the working directory ${check.cwd ?? 'of the repository root'} was not found, or not allowed` }
+    }
     if (!TIMEOUT.test(text)) throw new CheckUnrunnable(argv, text.slice(0, 300))
     if (timeoutMs < limit) return undefined
     return { argv, passed: null, output: `timed out after ${check.timeoutSec}s: ${checkLabel(check)}` }
@@ -115,6 +142,8 @@ export type PassOptions = {
   snapshot?: () => Promise<string | undefined>
   /** The pass stops starting checks at `endsAt` (epoch ms by `now`); a running one is cut to the time left. */
   deadline?: { now: () => Promise<number>; endsAt: number }
+  /** Says what a check's `cwd` is before it runs (see `RunCheckOptions`). */
+  probe?: DirProbe
 }
 
 export type CheckPass = {
@@ -141,7 +170,7 @@ export async function createCheckPass(run: Runner, root: string, options: PassOp
       if (left <= 0) { exhausted = true; return undefined }
       timeoutMs = left
     }
-    const result = await runCheck(run, root, check, timeoutMs === undefined ? {} : { timeoutMs })
+    const result = await runCheck(run, root, check, { ...(timeoutMs === undefined ? {} : { timeoutMs }), ...(options.probe ? { probe: options.probe } : {}) })
     if (!result) { exhausted = true; return undefined }
     // Only a pass is remembered: a failing or unrunnable check is run again, so a flaky or environmental failure is never stuck.
     if (result.passed === true) executed.push({ key, result })

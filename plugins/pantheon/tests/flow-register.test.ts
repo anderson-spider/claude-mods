@@ -1191,13 +1191,13 @@ describe('/pantheon flow', () => {
     expect((await command($, 'flow approve')).text).toContain('Name it: /pantheon flow approve <plan path>')
     const listing = (await command($, `flow approve ${PLAN}`)).text ?? ''
     expect(listing).toContain('Nothing is approved yet and nothing was recorded.')
-    expect(listing).toContain('- [T1] npm test (in the repository root, 120 s) NEW')
+    expect(listing).toContain('- [T1] "npm" "test" (in the repository root, 120 s) NEW')
     expect(w.files.has(ACTIVE)).toBe(false)
     expect(w.state()).toBeUndefined()
     expect(w.journal()).toEqual([])
     const out = await approveFlow($)
     expect(out.text).toContain('Approved demo')
-    expect(out.text).toContain('- npm test')
+    expect(out.text).toContain('- "npm" "test"')
     expect(out.text).toContain('Mode: enforce')
     const state = w.state()!
     expect(state.approvedHash).toBe(state.hash)

@@ -467,6 +467,11 @@ function flowCtx($: Dollar, deps: FlowDeps): Ctx {
       const out = await $.process.run(argv, { cwd: init.cwd, timeoutMs: init.timeoutMs, ...(init.stdin === undefined ? {} : { stdin: init.stdin }) })
       return { exitCode: out.exitCode, stdout: out.stdout, stderr: out.stderr }
     },
+    // A check's working directory: not there, not a directory, or fine. A host that cannot say rejects, and the check just runs.
+    probeDir: async path => {
+      if (!(await $.fs.exists(path))) return 'missing'
+      return (await $.fs.stat(path)).kind === 'dir' ? 'directory' : 'other'
+    },
     now: async () => Number(await $.clock.now()),
     root: deps.root,
     mode: deps.mode,

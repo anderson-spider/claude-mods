@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { amend, branchOnly, canonical, eligible, filesOverlap, flowHash, globsOverlap, matchGlob, ownsPath, parseFlow, requiredTasks, sha256, validateFlow } from '../hooks/flow/plan'
+import { amend, branchOnly, canonical, eligible, escapeUnsafe, filesOverlap, flowHash, globsOverlap, hasUnsafe, matchGlob, ownsPath, parseFlow, quoted, requiredTasks, sha256, validateFlow } from '../hooks/flow/plan'
 import type { AmendState, Flow } from '../hooks/flow/plan'
 
 const base = () => ({
@@ -532,13 +532,77 @@ test('a plan at the limits is still a plan, and similar names are not the protec
     f.tasks = many(100, i => ({
       id: `T${i}`, goal: 'g', dependsOn: [],
       files: many(50, j => `src/t${i}/f${j}.ts`),
-      acceptance: { checks: many(20, j => ({ argv: many(64, k => `w${j}${k}`) })), criteria: many(20, j => `criterion ${j}`) },
+      acceptance: { checks: many(1, j => ({ argv: many(64, k => `w${j}${k}`) })), criteria: many(20, j => `criterion ${j}`) },
     }))
   })
   expect(errorsOf(edge)).toEqual([])
   for (const file of ['.pantheonx/a', 'docs/.pantheon/a.md', '.github/workflows/ci.yml', '.gitignore', '.gitattributes', '.claudex/a', '.pantheon-notes/a']) {
     expect(errorsOf(oneTask(t => { t.files = [file] })), file).toEqual([])
   }
+})
+
+test('a plan holds at most 100 checks in all, so that approval lists every command', () => {
+  const spread = (count: number) => mutate(f => {
+    f.tasks = many(Math.ceil(count / 20), i => ({
+      id: `T${i}`, goal: 'g', dependsOn: [], files: [`src/t${i}`],
+      acceptance: { checks: many(Math.min(20, count - i * 20), j => ({ argv: ['run', `${i}-${j}`] })) },
+    }))
+  })
+  expect(errorsOf(spread(100))).toEqual([])
+  expect(errorsOf(spread(101)).join('\n')).toContain('a flow has at most 100 checks in all, so that approval can list every command; this one has 101')
+  // 20 per task is still allowed on its own; the per-task limit is reported by itself.
+  expect(errorsOf(oneTask(t => { t.acceptance = { checks: many(21, i => ({ argv: ['run', String(i)] })) } })).join('\n')).toContain('at most 20 checks per task; this one lists 21')
+})
+
+// A command, a directory or a pattern is plain text: nothing that moves, hides or reorders what the person reads.
+const UNSAFE_CASES: [string, string][] = [
+  ['a newline', 'echo\nrm -rf /'],
+  ['a carriage return', 'ok\r- [T9] "safe" NEW'],
+  ['an escape sequence', 'ok\u001b[2K\u001b[1Aforged'],
+  ['a NUL', 'a\u0000b'],
+  ['a tab', 'a\tb'],
+  ['DEL', 'a\u007fb'],
+  ['a C1 control (CSI)', 'a\u009b2Jb'],
+  ['a right-to-left override', 'a\u202eb'],
+  ['a left-to-right embedding', 'a\u202ab'],
+  ['an isolate', 'a\u2066b'],
+  ['a pop isolate', 'a\u2069b'],
+  ['a left-to-right mark', 'a\u200eb'],
+  ['a right-to-left mark', 'a\u200fb'],
+  ['an Arabic letter mark', 'a\u061cb'],
+  ['a line separator', 'a\u2028b'],
+  ['a byte order mark', 'a\ufeffb'],
+]
+for (const [label, word] of UNSAFE_CASES) {
+  test(`rejects ${label} in an argv word, a cwd and a file pattern`, () => {
+    expect(hasUnsafe(word)).toBe(true)
+    expect(errorsOf(oneTask(t => { t.acceptance = { checks: [{ argv: ['run', word] }] } })).join('\n')).toContain('argv[1] holds a control or direction character')
+    expect(errorsOf(oneTask(t => { t.acceptance = { checks: [{ argv: ['run'], cwd: `sub/${word}` }] } })).join('\n')).toContain('cwd holds a control or direction character')
+    expect(errorsOf(oneTask(t => { t.files = [`src/${word}.ts`] })).join('\n')).toContain('holds a control or direction character; a pattern is plain text')
+  })
+}
+
+test('a pattern is refused for what was written, not for what the trim leaves; plain text with spaces, quotes and unicode is fine', () => {
+  expect(errorsOf(oneTask(t => { t.files = ['src/a.ts\n'] })).join('\n')).toContain('holds a control or direction character')
+  expect(errorsOf(oneTask(t => { t.files = ['\ufeffsrc/a.ts'] })).join('\n')).toContain('holds a control or direction character')
+  expect(errorsOf(oneTask(t => {
+    t.files = ['src/my dir/ação ✓.ts', 'it\'s "quoted"/x']
+    t.acceptance = { checks: [{ argv: ['node', '-e', 'console.log("ação ✓")', "it's"], cwd: 'my pkg' }] }
+  }))).toEqual([])
+  // The goal is prose and may span lines; the listing quotes it.
+  expect(errorsOf(mutate(f => { f.goal = 'one\ntwo' }))).toEqual([])
+  // What an error echoes of the plan is spelled out too.
+  const echoed = errorsOf(mutate(f => { f.tasks[1].dependsOn = ['T9\u202e'] })).join('\n')
+  expect(echoed).toContain('dependsOn unknown task T9\\u202e')
+  expect(echoed).not.toContain('\u202e')
+})
+
+test('quoted spells out everything JSON leaves raw, and escapeUnsafe leaves the rest alone', () => {
+  expect(quoted('a"b\\c\nd')).toBe('"a\\"b\\\\c\\nd"')
+  expect(quoted('x\u007fy\u009bz\u202e\u2066\ufeff\u200f\u2028')).toBe('"x\\u007fy\\u009bz\\u202e\\u2066\\ufeff\\u200f\\u2028"')
+  expect(quoted('ação ✓ 𝄞')).toBe('"ação ✓ 𝄞"')
+  expect(escapeUnsafe('plain "text"\\')).toBe('plain "text"\\')
+  expect(hasUnsafe('plain text, ação ✓')).toBe(false)
 })
 
 test('a block over 256 KB is refused before it is parsed', () => {

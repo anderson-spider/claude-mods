@@ -35,7 +35,21 @@ export const DEFAULT_LIMITS: Limits = { maxBlocks: 6, maxAttempts: 2 }
 const CHECK_TIMEOUT = { default: 120, max: 600 }
 // A plan is read on every event and compared pairwise on every edit: a hostile or runaway block must not cost the hook its
 // budget, so its size is bounded where it is read. Real plans are an order of magnitude under these.
-export const PLAN_LIMITS = { tasks: 100, files: 50, checks: 20, criteria: 20, argv: 64, pattern: 300, wildcards: 8, blockBytes: 256 * 1024 }
+// `totalChecks` is what the approval listing has to show whole: every command of the plan is on it, so a person who confirms the
+// hash has seen all of them (the listing never truncates, and approval refuses a plan it could not list in full).
+export const PLAN_LIMITS = { tasks: 100, files: 50, checks: 20, totalChecks: 100, criteria: 20, argv: 64, pattern: 300, wildcards: 8, blockBytes: 256 * 1024 }
+/**
+ * Characters that change what a terminal shows without being text: the C0 controls (newline, carriage return and escape
+ * included), DEL, the C1 controls, the line and paragraph separators, the direction marks and overrides, and the byte order mark.
+ * A command, a directory or a file pattern holding one could forge or hide a line of what approval lists.
+ */
+const UNSAFE = /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069\ufeff]/
+const UNSAFE_EACH = new RegExp(UNSAFE.source, 'g')
+export const hasUnsafe = (value: string): boolean => UNSAFE.test(value)
+/** The text with each of those characters spelled `\uXXXX`, so what is shown is what was written. */
+export const escapeUnsafe = (value: string): string => value.replace(UNSAFE_EACH, char => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`)
+/** A value as one JSON string, with the characters JSON leaves raw (DEL, C1, direction marks, separators) spelled out too. */
+export const quoted = (value: string): string => escapeUnsafe(JSON.stringify(value))
 /**
  * The first path segment of a task's `files` may not be one of these: the flow's own state, the repository's git data and the
  * agent configuration are never a task's to own, so an edit of the plan can never adopt them. Compared case-insensitively
@@ -84,7 +98,7 @@ export function parseFlow(markdown: string): ParseResult {
 export function validateFlow(raw: unknown): ParseResult {
   const errors: string[] = []
   if (!isObject(raw)) return { ok: false, errors: ['the flow must be a JSON object'] }
-  for (const key of Object.keys(raw)) if (!TOP_KEYS.includes(key)) errors.push(`unknown field ${key}`)
+  for (const key of Object.keys(raw)) if (!TOP_KEYS.includes(key)) errors.push(`unknown field ${escapeUnsafe(key)}`)
   if (raw.schemaVersion !== SCHEMA_VERSION) errors.push(`schemaVersion must be ${SCHEMA_VERSION}`)
   if (typeof raw.planId !== 'string' || !PLAN_ID.test(raw.planId)) errors.push(`planId must match ${PLAN_ID}`)
   if (!text(raw.goal)) errors.push('goal must be a non-empty string')
@@ -93,7 +107,7 @@ export function validateFlow(raw: unknown): ParseResult {
   if (raw.limits !== undefined) {
     if (!isObject(raw.limits)) errors.push('limits must be an object')
     else {
-      for (const key of Object.keys(raw.limits)) if (!(key in DEFAULT_LIMITS)) errors.push(`limits: unknown field ${key}`)
+      for (const key of Object.keys(raw.limits)) if (!(key in DEFAULT_LIMITS)) errors.push(`limits: unknown field ${escapeUnsafe(key)}`)
       // The engine honors 8 consecutive Stop blocks; the policy stops one short of it.
       if (raw.limits.maxBlocks !== undefined) {
         if (int(raw.limits.maxBlocks, 1, 7)) limits.maxBlocks = raw.limits.maxBlocks
@@ -120,6 +134,10 @@ export function validateFlow(raw: unknown): ParseResult {
         previous = task.id
       }
     })
+    const checks = tasks.reduce((sum, task) => sum + task.acceptance.checks.length, 0)
+    if (checks > PLAN_LIMITS.totalChecks) {
+      errors.push(`a flow has at most ${PLAN_LIMITS.totalChecks} checks in all, so that approval can list every command; this one has ${checks}`)
+    }
   }
 
   const ids = tasks.map(task => task.id)
@@ -128,11 +146,11 @@ export function validateFlow(raw: unknown): ParseResult {
   for (const task of tasks) {
     for (const dep of task.dependsOn) {
       if (dep === task.id) errors.push(`${task.id}: dependsOn itself`)
-      else if (!ids.includes(dep)) errors.push(`${task.id}: dependsOn unknown task ${dep}`)
+      else if (!ids.includes(dep)) errors.push(`${task.id}: dependsOn unknown task ${escapeUnsafe(dep)}`)
     }
     if (task.onFail !== undefined) {
       if (task.onFail === task.id) errors.push(`${task.id}: onFail cannot target itself`)
-      else if (!ids.includes(task.onFail)) errors.push(`${task.id}: onFail names unknown task ${task.onFail}`)
+      else if (!ids.includes(task.onFail)) errors.push(`${task.id}: onFail names unknown task ${escapeUnsafe(task.onFail)}`)
     }
   }
   if (errors.length === 0) {
@@ -150,13 +168,18 @@ function parseTask(raw: unknown, index: number, previous: string | undefined, er
   if (!isObject(raw)) { errors.push(`${where} must be an object`); return undefined }
   if (typeof raw.id !== 'string' || !TASK_ID.test(raw.id)) { errors.push(`${where}.id must match ${TASK_ID}`); return undefined }
   const at = raw.id
-  for (const key of Object.keys(raw)) if (!TASK_KEYS.includes(key)) errors.push(`${at}: unknown field ${key}`)
+  for (const key of Object.keys(raw)) if (!TASK_KEYS.includes(key)) errors.push(`${at}: unknown field ${escapeUnsafe(key)}`)
   if (!text(raw.goal)) errors.push(`${at}: goal must be a non-empty string`)
   const files = Array.isArray(raw.files) && raw.files.every(text) ? (raw.files as string[]).map(f => f.trim()) : undefined
   if (!files) errors.push(`${at}: files must be a list of non-empty paths or globs`)
   else if (files.length > PLAN_LIMITS.files) errors.push(`${at}: at most ${PLAN_LIMITS.files} files or globs per task; this one lists ${files.length}`)
   else {
+    // What was written, before the trim: a pattern with a newline or a direction override is refused, not tidied.
+    for (const written of raw.files as string[]) {
+      if (hasUnsafe(written)) errors.push(`${at}: file ${escapeUnsafe(written).slice(0, 120)} holds a control or direction character; a pattern is plain text`)
+    }
     for (const file of files) {
+      if (hasUnsafe(file)) continue
       if (file.startsWith('/') || file.split('/').includes('..')) errors.push(`${at}: file ${file} must be relative and stay inside the repository`)
       else if (file.length > PLAN_LIMITS.pattern) errors.push(`${at}: a file pattern is at most ${PLAN_LIMITS.pattern} characters`)
       else if ((file.match(/\*/g)?.length ?? 0) > PLAN_LIMITS.wildcards) errors.push(`${at}: file ${file} has more than ${PLAN_LIMITS.wildcards} wildcards`)
@@ -169,7 +192,7 @@ function parseTask(raw: unknown, index: number, previous: string | undefined, er
   let role: Role | undefined
   if (raw.role !== undefined) {
     if (typeof raw.role === 'string' && (TASK_ROLES as readonly string[]).includes(raw.role)) role = raw.role as Role
-    else if (typeof raw.role === 'string') errors.push(`${at}: role ${raw.role} is not a task role; task roles are developer or ux`)
+    else if (typeof raw.role === 'string') errors.push(`${at}: role ${escapeUnsafe(raw.role).slice(0, 60)} is not a task role; task roles are developer or ux`)
     else errors.push(`${at}: role must be developer or ux`)
   }
 
@@ -226,10 +249,16 @@ function parseTask(raw: unknown, index: number, previous: string | undefined, er
 
 function parseCheck(raw: unknown, where: string, errors: string[]): Check | undefined {
   if (!isObject(raw)) { errors.push(`${where} must be an object`); return undefined }
-  for (const key of Object.keys(raw)) if (!['argv', 'cwd', 'timeoutSec'].includes(key)) errors.push(`${where}: unknown field ${key}`)
+  for (const key of Object.keys(raw)) if (!['argv', 'cwd', 'timeoutSec'].includes(key)) errors.push(`${where}: unknown field ${escapeUnsafe(key)}`)
   // An argv array runs without a shell: no pipes, globbing or substitution to review.
   if (!Array.isArray(raw.argv) || raw.argv.length === 0 || !raw.argv.every(text)) { errors.push(`${where}.argv must be a non-empty list of strings`); return undefined }
   if (raw.argv.length > PLAN_LIMITS.argv) { errors.push(`${where}.argv has more than ${PLAN_LIMITS.argv} words`); return undefined }
+  // The listing the person confirms prints every word: a newline or a direction override could forge or hide a line of it.
+  const unsafe = (raw.argv as string[]).findIndex(word => hasUnsafe(word))
+  if (unsafe >= 0) {
+    errors.push(`${where}.argv[${unsafe}] holds a control or direction character (newline, escape, a bidi override and the like); a command is plain text`)
+    return undefined
+  }
   // The runner starts the command through `env`, which would read an option or a NAME=value in first place as its own.
   if ((raw.argv[0] as string).startsWith('-') || (raw.argv[0] as string).includes('=')) {
     errors.push(`${where}.argv[0] must be the command: it cannot start with "-" or contain "="`)
@@ -237,6 +266,7 @@ function parseCheck(raw: unknown, where: string, errors: string[]): Check | unde
   }
   let cwd: string | undefined
   if (raw.cwd !== undefined) {
+    if (typeof raw.cwd === 'string' && hasUnsafe(raw.cwd)) { errors.push(`${where}.cwd holds a control or direction character; a directory is plain text`); return undefined }
     if (text(raw.cwd) && !raw.cwd.startsWith('/') && !raw.cwd.split('/').includes('..')) cwd = raw.cwd
     else { errors.push(`${where}.cwd must be a relative path inside the repository`); return undefined }
   }

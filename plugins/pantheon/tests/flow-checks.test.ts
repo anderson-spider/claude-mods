@@ -75,6 +75,53 @@ test('a timeout is passed null with why; any other rejection is the host\'s faul
   await expect(runCheck(broken.run, ROOT, check(['x']))).rejects.toThrow('x: spawn denied')
 })
 
+test('a working directory that is not there could not run: passed is null with why, and the runner is never called', async () => {
+  const { run, calls } = scripted(() => ok('never'))
+  const seen: string[] = []
+  const probe = (kind: 'directory' | 'missing' | 'other') => async (path: string) => { seen.push(path); return kind }
+  const missing = await runCheck(run, ROOT, check(['npm', 'test'], { cwd: 'packages/web' }), { probe: probe('missing') })
+  expect(missing).toEqual({ argv: ['npm', 'test'], passed: null, output: 'working directory packages/web does not exist, so npm test could not run' })
+  const file = await runCheck(run, ROOT, check(['npm', 'test'], { cwd: 'packages/web' }), { probe: probe('other') })
+  expect(file).toMatchObject({ passed: null, output: 'working directory packages/web is not a directory, so npm test could not run' })
+  expect(calls).toEqual([])
+  expect(seen).toEqual(['/repo/packages/web', '/repo/packages/web'])
+  // The directory is there: the check runs from it. A check with no cwd is not probed at all.
+  expect(await runCheck(run, ROOT, check(['npm', 'test'], { cwd: 'packages/web' }), { probe: probe('directory') })).toMatchObject({ passed: true })
+  expect(calls[0]!.init.cwd).toBe('/repo/packages/web')
+  await runCheck(run, ROOT, check(['npm', 'test']), { probe: probe('missing') })
+  expect(seen).toHaveLength(3)
+  // A host that cannot say (the probe rejects) is not a reason to skip the check: it runs, and its own failure says what it is.
+  const unsure = await runCheck(run, ROOT, check(['npm', 'test'], { cwd: 'packages/web' }), { probe: async () => { throw new Error('stat failed') } })
+  expect(unsure).toMatchObject({ passed: true })
+})
+
+test('the engine\'s "failed to start" for a command or directory that is not there could not run; other rejections stay the host\'s', async () => {
+  const message = "$.process.run(env) failed to start: ENOENT: no such file or directory, posix_spawn 'env'"
+  const lost = scripted(() => { throw new Error(message) })
+  const result = await runCheck(lost.run, ROOT, check(['npm', 'test'], { cwd: 'packages/web' }))
+  expect(result).toMatchObject({ argv: ['npm', 'test'], passed: null })
+  expect(result?.output).toContain('could not start npm (ENOENT)')
+  expect(result?.output).toContain('packages/web')
+  for (const code of ['ENOTDIR', 'EACCES']) {
+    const refused = scripted(() => { throw new Error(`$.process.run(env) failed to start: ${code}: posix_spawn 'env'`) })
+    expect(await runCheck(refused.run, ROOT, check(['x']))).toMatchObject({ passed: null })
+  }
+  // What says nothing about the plan still releases the gate: a spawn limit, a denied process, an unknown failure.
+  for (const text of ['$.process.run(env) failed to start: EMFILE: too many open files', 'spawn denied', 'process table full']) {
+    const broken = scripted(() => { throw new Error(text) })
+    await expect(runCheck(broken.run, ROOT, check(['x']))).rejects.toThrow(CheckUnrunnable)
+  }
+})
+
+test('in a pass a check with a missing directory is null and the next checks still run', async () => {
+  const { run, calls } = scripted(argv => ok(argv.at(-1) ?? ''))
+  const pass = await createCheckPass(run, ROOT, { probe: async path => (path.endsWith('/web') ? 'missing' : 'directory') })
+  const results = await pass.runTask([check(['npm', 'test'], { cwd: 'web' }), check(['lint']), check(['build'], { cwd: 'api' })])
+  expect(results.map(r => r.passed)).toEqual([null, true, true])
+  expect(calls.map(c => c.argv.at(-1))).toEqual(['lint', 'build'])
+  expect((await pass.finish()).unverified).toBe(0)
+})
+
 test('a timeout the pass imposed (less than the check\'s own) leaves the check unverified, not null', async () => {
   const cut = scripted(() => { throw new Error('process timed out') })
   expect(await runCheck(cut.run, ROOT, check(['slow'], { timeoutSec: 60 }), { timeoutMs: 5_000 })).toBeUndefined()

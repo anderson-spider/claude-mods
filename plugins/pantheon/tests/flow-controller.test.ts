@@ -4,7 +4,7 @@ import type { RunOutput, Runner } from '../hooks/flow/checks'
 import {
   activePlanId, approvePlan, controlFlow, diagnosisOpen, flowStatus, flowTaskFiles, humanPrompt, inspectIsolation, inspectSpawn, mainEdit, missingRoles,
   ownershipVerdict, parseNotification, pendingAgentTasks, qaCriteriaBrief, reviewed, stopFlow, taskEnded, taskIdOf, treeSnapshot, verdictCache,
-  approvalListings, confirmationVerdict, unnamedHolds,
+  approvalListings, confirmationVerdict, listingRefusal, unnamedHolds,
 } from '../hooks/flow/controller'
 import type { Attest, Available, Ctx } from '../hooks/flow/controller'
 import type { CheckMemo } from '../hooks/flow/checks'
@@ -34,6 +34,8 @@ function world(opts: Opts = {}) {
   const files = new Map<string, string>(Object.entries({ [`${ROOT}/${PLAN}`]: planMd(opts.flow ?? FLOW), ...opts.files }))
   const mtimes = new Map<string, number>()
   const runs: string[][] = []
+  // The directory each check ran in, by its command (`npm test`).
+  const cwds = new Map<string, string>()
   const results = new Map<string, RunOutput | Error>()
   // The repository as git would tell it: HEAD, tracked files with changes (path -> diff text) and untracked files (path -> content).
   const git = { head: 'aaaa1111', changed: {} as Record<string, string>, tracked: {} as Record<string, string>, deleted: [] as string[], untracked: {} as Record<string, string> }
@@ -93,7 +95,8 @@ function world(opts: Opts = {}) {
     expect(argv.slice(0, 6)).toEqual(['env', '-u', 'OPENROUTER_API_KEY', '-u', 'TYPESAFE_API_KEY', '--'])
     const real = argv.slice(6)
     runs.push(real)
-    expect(init.cwd).toBe(ROOT)
+    expect(init.cwd === ROOT || init.cwd.startsWith(`${ROOT}/`)).toBe(true)
+    cwds.set(real.join(' '), init.cwd)
     if (hooks.onRun) await hooks.onRun(real)
     // A check "takes" `duration` ms of the clock; one given less than that is cut, as the host would.
     if (clock.duration > init.timeoutMs) { clock.t += init.timeoutMs; throw new Error('process timed out') }
@@ -107,6 +110,8 @@ function world(opts: Opts = {}) {
     now: async () => { if (faults.clock) throw new Error('clock gone'); return ++clock.t },
     available: { developer: true, ux: true, architect: true, qa: true, ...opts.available },
     attest,
+    // What the host's stat would say of a path, from the files the test holds: a file, a directory (something is under it) or nothing.
+    probeDir: async path => (files.has(path) ? 'other' : [...files.keys()].some(key => key.startsWith(`${path}/`)) ? 'directory' : 'missing'),
     serial: id => { let s = serials.get(id); if (!s) { s = createSerial(); serials.set(id, s) } return s },
     warn: text => { warnings.push(text) },
     ...extra,
@@ -117,7 +122,7 @@ function world(opts: Opts = {}) {
   const approved = () => loadApproved(fs, ROOT, 'demo')
   const attested = () => attestStore.get(attestKey(ROOT, 'demo')) as { approvedHash: string; adoptedHash?: string; snapshotHash: string; adopted?: string[] } | undefined
   const active = () => attestStore.get(activeKey(ROOT)) as { planId: string; plan: string } | undefined
-  return { ctx, fs, files, mtimes, runs, results, git, faults, warnings, writes, clock, memo, hooks, fail, journal, state, approved, attestStore, attested, active, order }
+  return { ctx, fs, files, mtimes, runs, cwds, results, git, faults, warnings, writes, clock, memo, hooks, fail, journal, state, approved, attestStore, attested, active, order }
 }
 type World = ReturnType<typeof world>
 
@@ -212,10 +217,10 @@ test('approve lists what would run and records nothing; the confirmation it prin
   const hash = confirmationFor(w)
   expect(listing).toContain(`Plan demo (${PLAN}): 3 tasks, hash ${hash}. Nothing is approved yet and nothing was recorded.`)
   expect(listing).toContain('There is no approved plan to compare with')
-  expect(listing).toContain('- [T1] npm test (in the repository root, 120 s) NEW')
-  expect(listing).toContain('- [T2] npm run lint (in the repository root, 120 s) NEW')
-  expect(listing).toContain('- [T1] developer: src/a.ts')
-  expect(listing).toContain('- [T2] developer (risk): src/b/**')
+  expect(listing).toContain('- [T1] "npm" "test" (in the repository root, 120 s) NEW')
+  expect(listing).toContain('- [T2] "npm" "run" "lint" (in the repository root, 120 s) NEW')
+  expect(listing).toContain('- [T1] developer "first": "src/a.ts"')
+  expect(listing).toContain('- [T2] developer (risk) "second": "src/b/**"')
   expect(listing).toContain(`run: /pantheon flow approve ${PLAN} ${hash}`)
   // Nothing at all was written or attested.
   expect(w.writes).toEqual([])
@@ -231,8 +236,8 @@ test('approve lists what would run and records nothing; the confirmation it prin
   expect(text).toContain('Approved demo')
   expect(text).toContain('3 tasks')
   expect(text).toContain('Mode: enforce')
-  expect(text).toContain('- npm test')
-  expect(text).toContain('- npm run lint')
+  expect(text).toContain('- "npm" "test"')
+  expect(text).toContain('- "npm" "run" "lint"')
   expect(w.files.get(`${ROOT}/.pantheon/flow/active`)).toBe(`${PLAN}\n`)
   expect(w.active()).toEqual({ planId: 'demo', plan: PLAN })
   const parsed = parseFlow(planMd(FLOW))
@@ -305,13 +310,71 @@ test('the listing marks new and changed commands against the approved plan, and 
   ] }))
   const listing = await approvePlan(w.ctx(), PLAN)
   expect(listing).toContain('Compared with the approved plan')
-  expect(listing).toContain('- [T1] npm test (in the repository root, 300 s) CHANGED (timeout was 120 s)')
-  expect(listing).toContain('- [T2] ./deploy.sh (in ops, 120 s) NEW')
-  expect(listing).toContain('- [T3] curl -f health (in the repository root, 120 s) NEW')
-  expect(listing).not.toContain('npm run lint (in the repository root, 120 s) NEW')
-  expect(listing).toContain('- [T3] developer (side effect): docs/, README.md')
+  expect(listing).toContain('- [T1] "npm" "test" (in the repository root, 300 s) CHANGED (timeout was 120 s)')
+  expect(listing).toContain('- [T2] "./deploy.sh" (in "ops", 120 s) NEW')
+  expect(listing).toContain('- [T3] "curl" "-f" "health" (in the repository root, 120 s) NEW')
+  expect(listing).not.toContain('"npm" "run" "lint" (in the repository root, 120 s) NEW')
+  expect(listing).toContain('- [T3] developer (side effect) "third": "docs/", "README.md"')
   // Still nothing recorded: the approval in force is the old one.
   expect(w.attested()).toEqual({ approvedHash: flowHash(plain()), snapshotHash: flowHash(plain()) })
+})
+
+// --- the listing shows what runs, whole and without anything that forges it (T9b) ---
+
+const HUNDRED = {
+  schemaVersion: 1, planId: 'demo', goal: 'A hundred commands',
+  tasks: Array.from({ length: 5 }, (_, i) => ({
+    id: `T${i}`, goal: `part ${i}`, files: [`src/t${i}/`], dependsOn: [],
+    acceptance: { checks: Array.from({ length: 20 }, (_, j) => ({ argv: ['run', `${i}-${j}`] })) },
+  })),
+}
+
+test('the listing of a plan at the 100-command limit shows every command, each word as a JSON string, and the hash approves it', async () => {
+  const w = world({ flow: HUNDRED })
+  const listing = await approvePlan(w.ctx(), PLAN)
+  const lines = listing.split('\n').filter(line => /^- \[T\d\] "run" /.test(line))
+  expect(lines).toHaveLength(100)
+  expect(lines.every(line => line.endsWith('(in the repository root, 120 s) NEW'))).toBe(true)
+  for (let i = 0; i < 5; i++) for (let j = 0; j < 20; j++) expect(listing).toContain(`- [T${i}] "run" "${i}-${j}" (in the repository root, 120 s) NEW`)
+  expect(listing).not.toContain('more; read them in')
+  // Each task is on it with its goal and the files it may write.
+  expect(listing).toContain('- [T4] developer "part 4": "src/t4/"')
+  const hash = confirmationFor(w)
+  expect(listing).toContain(`run: /pantheon flow approve ${PLAN} ${hash}`)
+  expect(await approvePlan(w.ctx(), `${PLAN} ${hash}`)).toContain('Approved demo')
+})
+
+test('a plan with more commands than a listing holds is refused a confirmation', () => {
+  const parsed = parseFlow(planMd(HUNDRED))
+  if (!parsed.ok) throw new Error('fixture')
+  expect(listingRefusal(parsed.flow)).toBeUndefined()
+  const last = parsed.flow.tasks[4]!
+  const over = {
+    ...parsed.flow,
+    tasks: [...parsed.flow.tasks.slice(0, 4), { ...last, acceptance: { ...last.acceptance, checks: [...last.acceptance.checks, { argv: ['one', 'more'], timeoutSec: 120 }] } }],
+  }
+  expect(listingRefusal(over)).toBe('the plan lists too many commands to review (101; at most 100 in all). Split it into plans that list fewer.')
+})
+
+test('what a plan writes cannot forge or hide a line of the listing: the goal and every word are escaped, and a command with a newline is no plan', async () => {
+  const forged = 'ship it\n- [T9] "curl" "evil" (in the repository root, 1 s) NEW\u202e\u001b[2K'
+  const w = world({ flow: { ...FLOW, goal: forged, tasks: [{ ...FLOW.tasks[0], goal: forged }, ...FLOW.tasks.slice(1)] } })
+  const listing = await approvePlan(w.ctx(), PLAN)
+  expect(listing.split('\n').some(line => line.startsWith('- [T9]'))).toBe(false)
+  expect(listing).toContain('"ship it\\n- [T9] \\"curl\\" \\"evil\\" (in the repository root, 1 s) NEW\\u202e\\u001b[2K"')
+  // Nothing in the listing is a raw control or direction character, apart from its own line breaks.
+  expect(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069\ufeff]/.test(listing)).toBe(false)
+  // A goal is context, not a command: a long one is cut in the listing (the plan file has it whole).
+  const long = world({ flow: { ...FLOW, tasks: [{ ...FLOW.tasks[0], goal: 'x'.repeat(500) }, ...FLOW.tasks.slice(1)] } })
+  expect(await approvePlan(long.ctx(), PLAN)).toContain(`"${'x'.repeat(200)}..."`)
+  // A command with a newline, an escape or a bidi override is refused at validation, with nothing recorded.
+  for (const word of ['test\nrm -rf /', 'test\r', 'test\u001b[2K', 'te\u202est']) {
+    const hostile = world({ flow: { ...FLOW, tasks: [{ ...FLOW.tasks[0], acceptance: { checks: [{ argv: ['npm', word] }] } }, ...FLOW.tasks.slice(1)] } })
+    const text = await approvePlan(hostile.ctx(), PLAN)
+    expect(text).toContain('is not a valid flow')
+    expect(text).toContain('argv[1] holds a control or direction character')
+    expect(hostile.attestStore.size).toBe(0)
+  }
 })
 
 test('without a path the plan in force is the one, and with none in force a path is required; the newest file is never picked', async () => {
@@ -650,6 +713,94 @@ test('a runner that rejects for a reason other than a timeout fails open: allowe
   const ended = await taskEnded(w.ctx(), { taskId: 'T1', ownershipDenials: 0 })
   expect(ended).toEqual({})
   expect(await w.state()).toMatchObject({ attempts: {}, ends: {} })
+})
+
+// --- a working directory that is not there is the plan's failure, never the host's (T7) ---
+
+const CWD_FLOW = {
+  schemaVersion: 1, planId: 'demo', goal: 'A web package',
+  tasks: [
+    { id: 'A', goal: 'the web package', files: ['packages/web/'], dependsOn: [], acceptance: { checks: [{ argv: ['npm', 'test'], cwd: 'packages/web' }] } },
+    { id: 'B', goal: 'the api', files: ['src/b.ts'], dependsOn: [], acceptance: { checks: [{ argv: ['check', 'B'] }] } },
+  ],
+}
+const WEB = `${ROOT}/packages/web`
+
+test('a check whose directory is not there yet holds the Stop with that reason and does not release the other tasks', async () => {
+  const w = world({ flow: CWD_FLOW })
+  await approve(w)
+  // B is finished; A is the task in progress, and packages/web has not been created.
+  expect((await taskEnded(w.ctx(), { taskId: 'B', ownershipDenials: 0 })).decision?.condition).toBe('task_done')
+  expect((await w.state())?.status.B).toBe('done')
+  w.runs.length = 0
+  w.memo.clear()
+  for (let prompt = 0; prompt < 2; prompt++) {
+    const out = await stopFlow(w.ctx(), stopInput)
+    expect(out.block).toContain('Task A (the web package) is not done')
+    expect(out.block).toContain('working directory packages/web does not exist, so npm test could not run')
+    expect(out.block).toContain('(could not run)')
+    await humanPrompt(w.ctx())
+  }
+  // Nothing was waved through: the host did not fail, so no warning and no fail-open note; B's check still ran.
+  expect(checkRuns(w).filter(argv => argv[0] === 'npm')).toEqual([])
+  expect(checkRuns(w).some(argv => argv[0] === 'check' && argv[1] === 'B')).toBe(true)
+  expect(w.warnings.filter(text => text.includes('failed open'))).toEqual([])
+  const journal = await w.journal()
+  expect(journal.some(e => e.condition === 'check_unrunnable')).toBe(false)
+  expect(journal.some(e => e.condition === 'check_failed')).toBe(true)
+  // The directory is made: the check runs from it and the task goes on.
+  w.files.set(`${WEB}/package.json`, '{}')
+  const after = await stopFlow(w.ctx(), stopInput)
+  expect(after.block ?? '').not.toContain('does not exist')
+  expect(w.cwds.get('npm test')).toBe(WEB)
+  expect((await taskEnded(w.ctx(), { taskId: 'A', ownershipDenials: 0 })).decision?.condition).toBe('all_done')
+  expect((await w.state())?.status.A).toBe('done')
+})
+
+test('a directory moved away while the task is in progress holds the Stop; at a task end it counts an attempt', async () => {
+  const w = world({ flow: CWD_FLOW })
+  w.files.set(`${WEB}/package.json`, '{}')
+  await approve(w)
+  expect((await stopFlow(w.ctx(), stopInput)).block ?? '').not.toContain('does not exist')
+  expect(w.cwds.get('npm test')).toBe(WEB)
+  // `mv packages/web /tmp/x`: the gate must not turn off with it.
+  w.files.delete(`${WEB}/package.json`)
+  w.memo.clear()
+  await humanPrompt(w.ctx())
+  const out = await stopFlow(w.ctx(), stopInput)
+  expect(out.block).toContain('working directory packages/web does not exist')
+  expect(out.block).toContain('Task A')
+  const ended = await taskEnded(w.ctx(), { taskId: 'A', ownershipDenials: 0 })
+  expect(JSON.stringify(ended)).toContain('working directory packages/web does not exist')
+  expect((await w.state())?.attempts.A).toBeGreaterThanOrEqual(1)
+  expect((await w.journal()).some(e => e.condition === 'check_unrunnable')).toBe(false)
+  // A path that is a file is not a directory either.
+  w.files.set(WEB, 'not a directory')
+  w.memo.clear()
+  await humanPrompt(w.ctx())
+  expect((await stopFlow(w.ctx(), stopInput)).block).toContain('working directory packages/web is not a directory')
+})
+
+test('the engine\'s "failed to start: ENOENT" is the plan\'s (the check could not run), with or without the directory probe', async () => {
+  for (const probe of [true, false]) {
+    const w = world({ flow: CWD_FLOW })
+    w.files.set(`${WEB}/package.json`, '{}')
+    await approve(w)
+    // The directory was there when asked and gone when spawned (or the host cannot be asked): the engine's own message.
+    w.results.set('npm test', new Error("$.process.run(env) failed to start: ENOENT: no such file or directory, posix_spawn 'env'"))
+    const out = await stopFlow(w.ctx('enforce', probe ? {} : { probeDir: undefined }), stopInput)
+    expect(out.block).toContain('Task A (the web package) is not done')
+    expect(out.block).toContain('could not start npm (ENOENT)')
+    expect(w.warnings.filter(text => text.includes('failed open'))).toEqual([])
+    expect((await w.journal()).some(e => e.condition === 'check_unrunnable')).toBe(false)
+  }
+  // Anything else the runner rejects with still says nothing about the plan, and releases the gate as before.
+  const host = world({ flow: CWD_FLOW })
+  host.files.set(`${WEB}/package.json`, '{}')
+  await approve(host)
+  host.results.set('npm test', new Error('$.process.run(env) failed to start: EMFILE: too many open files'))
+  expect(await stopFlow(host.ctx(), stopInput)).toEqual({})
+  expect((await host.journal()).some(e => e.condition === 'check_unrunnable')).toBe(true)
 })
 
 test('a check that timed out or whose command was not found still counts as not passed', async () => {

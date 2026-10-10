@@ -19,9 +19,10 @@
 // - Shadow decides exactly as enforce and applies `applyMode`: it journals what enforce would have done and returns
 //   nothing for the host to act on. Off never reaches this module's work; every entry point returns at once.
 
-import { amend, branchOnly, canonical, eligible, extractBlock, findTask, flowHash, ownsPath, parseFlow, sha256 } from './plan'
+import { amend, branchOnly, canonical, eligible, escapeUnsafe, extractBlock, findTask, flowHash, ownsPath, parseFlow, PLAN_LIMITS, quoted, sha256 } from './plan'
 import type { Amendment, Flow, FlowTask, ParseResult } from './plan'
 import { CheckUnrunnable, createCheckPass } from './checks'
+import type { DirProbe } from './checks'
 import type { CheckMemo, Runner } from './checks'
 import { parseArchitect, parseQa } from './verdicts'
 import { CONSECUTIVE_CAP, applyMode, decide, newState, rebase, withMode } from './policy'
@@ -67,6 +68,12 @@ export type Ctx = {
   serial: (planId: string) => Serial
   /** Check results by tree snapshot, kept by the host across hooks; without it every check runs every time. */
   memo?: CheckMemo
+  /**
+   * What a check's working directory is on disk, asked before the check runs so that a directory that is not there is the
+   * plan's failure (the check could not run: the Stop holds) and not the host's (which would release the gate). Absent, the
+   * runner's own "failed to start" is read the same way.
+   */
+  probeDir?: DirProbe
   /** The time a Stop may spend running checks; STOP_DEADLINE_MS when absent. */
   stopDeadlineMs?: number
   /**
@@ -1081,6 +1088,7 @@ async function evaluateStop(ctx: Ctx, input: StopInput, trace: Trace): Promise<S
     const pass = await createCheckPass(ctx.run, ctx.root, {
       scope: loc.planId, snapshot: () => snapshotKey(ctx, until), deadline: until,
       ...(ctx.memo ? { memo: ctx.memo } : {}),
+      ...(ctx.probeDir ? { probe: ctx.probeDir } : {}),
     })
     try {
       for (const task of stopTargets(peek.flow, state)) {
@@ -1228,7 +1236,11 @@ async function evaluateTaskEnd(ctx: Ctx, input: TaskEndInput, trace: Trace, memo
   const idle = peek.state.done || peek.state.paused || peek.state.stopped
   let checks: CheckResult[] = []
   if (!idle) {
-    const pass = await createCheckPass(ctx.run, ctx.root, { scope: loc.planId, snapshot: () => snapshotKey(ctx), ...(ctx.memo ? { memo: ctx.memo } : {}) })
+    const pass = await createCheckPass(ctx.run, ctx.root, {
+      scope: loc.planId, snapshot: () => snapshotKey(ctx),
+      ...(ctx.memo ? { memo: ctx.memo } : {}),
+      ...(ctx.probeDir ? { probe: ctx.probeDir } : {}),
+    })
     try { checks = await pass.runTask(task.acceptance.checks) } catch (error) {
       if (error instanceof CheckUnrunnable) return unrunnable(ctx, loc.planId, error)
       throw error
@@ -1574,8 +1586,24 @@ export function approveArgs(arg: string | undefined): { path?: string; confirm?:
   return text ? { path: text } : {}
 }
 
-const LISTED_MAX = 100
+/** The most commands a listing holds, all of them: a plan with more is refused (`validateFlow` already bounds it the same). */
+const LISTED_MAX = PLAN_LIMITS.totalChecks
+/** What is no longer run is not something to review, so only its list is kept short. */
+const DROPPED_MAX = 100
+/** A goal in the listing: context for the person, not a command, so a long one is cut (the plan file has it whole). */
+const GOAL_SHOWN = 200
 const commandKey = (check: { argv: readonly string[]; cwd?: string }) => `${check.cwd ?? ''}\0${check.argv.join('\0')}`
+/** A command as the listing shows it: every word a JSON string, so no newline, escape or direction override reaches the terminal raw. */
+const shownArgv = (argv: readonly string[]): string => argv.map(quoted).join(' ')
+
+/**
+ * Why the plan cannot be listed in full, or undefined. The listing never truncates a command (what the person confirms is the
+ * hash of everything that was shown), so a plan with more commands than it holds is not handed a confirmation at all.
+ */
+export function listingRefusal(flow: Flow): string | undefined {
+  const count = flow.tasks.reduce((sum, task) => sum + task.acceptance.checks.length, 0)
+  return count > LISTED_MAX ? `the plan lists too many commands to review (${count}; at most ${LISTED_MAX} in all). Split it into plans that list fewer.` : undefined
+}
 
 /**
  * What approving a plan would make runnable, for the person to read before confirming: every check (argv, directory,
@@ -1592,33 +1620,38 @@ function describePlan(rel: string, flow: Flow, previous: { flow?: Flow; why?: st
     for (const check of task.acceptance.checks) {
       now.add(commandKey(check))
       const was = known.get(commandKey(check))
-      const line = `- [${task.id}] ${check.argv.join(' ')} (in ${check.cwd ?? 'the repository root'}, ${check.timeoutSec} s)`
+      const line = `- [${task.id}] ${shownArgv(check.argv)} (in ${check.cwd === undefined ? 'the repository root' : quoted(check.cwd)}, ${check.timeoutSec} s)`
       if (previous.flow === undefined || was === undefined) commands.push(`${line} NEW`)
       else if (was !== check.timeoutSec) commands.push(`${line} CHANGED (timeout was ${was} s)`)
       else unchanged.push(line)
     }
   }
-  const dropped = [...known.keys()].filter(key => !now.has(key)).map(key => key.split('\0').slice(1).join(' '))
-  const cap = (lines: string[]) => (lines.length > LISTED_MAX ? [...lines.slice(0, LISTED_MAX), `- ... and ${lines.length - LISTED_MAX} more; read them in ${rel}`] : lines)
+  // The commands that stop running (the approved plan's): nothing to approve in them, so only this list is kept to a length.
+  const dropped = [...known.keys()].filter(key => !now.has(key)).map(key => key.split('\0').slice(1).map(quoted).join(' '))
+  const shortened = dropped.length > DROPPED_MAX
+    ? [...dropped.slice(0, DROPPED_MAX), `... and ${dropped.length - DROPPED_MAX} more that no longer run`]
+    : dropped
+  const goalOf = (goal: string) => quoted(goal.length > GOAL_SHOWN ? `${goal.slice(0, GOAL_SHOWN)}...` : goal)
   const files = flow.tasks.map(task => {
     const flags = [task.risk ? 'risk' : '', task.sideEffect ? 'side effect' : ''].filter(Boolean)
-    return `- [${task.id}] ${task.role}${flags.length ? ` (${flags.join(', ')})` : ''}: ${task.files.join(', ') || 'no files'}`
+    return `- [${task.id}] ${task.role}${flags.length ? ` (${flags.join(', ')})` : ''} ${goalOf(task.goal)}: ${task.files.map(quoted).join(', ') || 'no files'}`
   })
   const confirm = confirmationOf(flow)
+  const shownRel = escapeUnsafe(rel)
   return [
-    `Plan ${flow.planId} (${rel}): ${flow.tasks.length} tasks, hash ${confirm}. Nothing is approved yet and nothing was recorded.`,
+    `Plan ${flow.planId} (${shownRel}): ${flow.tasks.length} tasks, hash ${confirm}. Nothing is approved yet and nothing was recorded.`,
     previous.flow
       ? 'Compared with the approved plan: NEW and CHANGED commands are the ones you have not approved before.'
       : `There is no approved plan to compare with${previous.why ? ` (${previous.why})` : ''}: every command is new.`,
     '',
     `Commands that would run on this machine, when a task ends and when the session stops (argv, directory, timeout):`,
-    ...(commands.length + unchanged.length === 0 ? ['- none'] : cap([...commands, ...unchanged])),
-    ...(dropped.length > 0 ? ['', 'No longer run:', ...cap(dropped.map(command => `- ${command}`))] : []),
+    ...(commands.length + unchanged.length === 0 ? ['- none'] : [...commands, ...unchanged]),
+    ...(shortened.length > 0 ? ['', 'No longer run:', ...shortened.map(command => `- ${command}`)] : []),
     '',
-    'Files each task may write:',
-    ...cap(files),
+    'Each task: its goal, then the files it may write:',
+    ...files,
     '',
-    `To approve exactly this plan, run: ${APPROVE} ${rel} ${confirm}`,
+    `To approve exactly this plan, run: ${APPROVE} ${shownRel} ${confirm}`,
   ].join('\n')
 }
 
@@ -1636,6 +1669,8 @@ export async function approvePlan(ctx: Ctx, arg?: string): Promise<string> {
     const missing = missingRoles(parsed.flow, ctx.available)
     if (missing.length) return `Not approved: the plan needs ${missing.join(', ')}, which ${missing.length > 1 ? 'are' : 'is'} disabled in the pantheon configuration. Enable ${missing.length > 1 ? 'them' : 'it'} or change the plan.`
     const { flow, hash } = parsed
+    const refusal = listingRefusal(flow)
+    if (refusal) return `Not approved: ${refusal}`
     const planId = flow.planId
     trace.planId = planId
     // Two steps: the plan is shown first, and only the confirmation of what was shown approves it. The block can change between
@@ -1689,7 +1724,7 @@ export async function approvePlan(ctx: Ctx, arg?: string): Promise<string> {
       })
       return { amended: previous.adoptedHash !== undefined, waiting: (previous.seenEdits ?? []).length > 0 }
     })
-    const commands = [...new Set(parsed.flow.tasks.flatMap(task => task.acceptance.checks.map(check => check.argv.join(' '))))]
+    const commands = [...new Set(parsed.flow.tasks.flatMap(task => task.acceptance.checks.map(check => shownArgv(check.argv))))]
     return [
       `Approved ${parsed.flow.planId} (hash ${short(parsed.hash)}, ${parsed.flow.tasks.length} tasks) from ${rel}. Mode: ${ctx.mode}.`,
       commands.length ? `Approving the plan approves its checks; they run on this machine:\n${commands.slice(0, 12).map(command => `- ${command}`).join('\n')}${commands.length > 12 ? `\n- ... and ${commands.length - 12} more` : ''}` : 'The plan declares no check commands.',
