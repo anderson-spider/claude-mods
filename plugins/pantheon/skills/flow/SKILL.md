@@ -16,7 +16,7 @@ The flow tracks a session against `.pantheon/flow/flows/<id>/flow.json`: a goal 
 
 ## Claims: who works on which phase
 
-- You claim the phase you take yourself: `{ "action": "claim", "phase": "<phase id>", "as": "lead" }`. Agents claim with the same action, where `as` is one of code-reader, docs-reader, developer, ux, architect, qa. Claim before you start the phase; re-claim when you move to another, so the Flow tab of `/pantheon` stays accurate.
+- You claim the phase you take yourself: `{ "action": "claim", "phase": "<phase id>", "as": "lead" }`. Agents claim with the same action, where `as` is one of code-reader, docs-reader, developer, ux, architect, qa. Claim before you start the phase; re-claim when you move to another, so the Flow card of `/pantheon` stays accurate.
 - When you delegate a phase, start the Agent description with `[<phase id>]` (for example `[docs] Update the README`): the flow claims that phase for the agent as its role, and the agent still claims with the tool when it moves to another phase. Pick a phase nobody claimed whose dependencies are done; phases with no dependency between them can run in parallel.
 - Claims are advisory: the Stop policy never reads them.
 - If a `[Pantheon flow]` note says other sessions are running flows in this folder and the request belongs to one of them, join it with `{ "action": "join", "flow": "<flow id>" }` before you start, then claim. Start your own flow for unrelated work. Never edit another flow's files.
@@ -34,7 +34,7 @@ The flow tracks a session against `.pantheon/flow/flows/<id>/flow.json`: a goal 
 
 ## Checking
 
-- `{ "action": "status" }` or `/pantheon flow` shows the phase table, claims, recent decisions and any pending human question. The `/pantheon` panel's Flow tab shows the same live.
+- `{ "action": "status" }` or `/pantheon flow` shows the phase table, claims, recent decisions and any pending human question. The `/pantheon` panel's Flow card shows the same live.
 
 ## What Jev sees
 

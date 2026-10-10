@@ -197,7 +197,7 @@ export async function joinFlow(io: Io, root: string, sid: string | undefined, id
   return `Joined flow ${id}. Claim the phase you take with action claim.`
 }
 
-/** `jevflow claim <phase> --as <role>`: the agent's advisory claim, shown in the status and the Flow tab. */
+/** `jevflow claim <phase> --as <role>`: the agent's advisory claim, shown in the status and the Flow card. */
 export async function claimFlow(io: Io, root: string, who: AgentInfo, phase: string, role: string): Promise<string> {
   const p = await boundFlow(io, root, who.sessionId)
   if (!p || p.archived) return 'This session is not working on an active flow. Start one with action start, or join one with action join.'
@@ -293,7 +293,7 @@ export async function joinHint(io: Io, root: string, sid: string | undefined, no
     `- \`${p.id}\`: ${title || '(being planned)'}, at phase \`${phase ?? '?'}\`${agents.length ? `, worked on by ${agents.slice(0, 4).join(', ')}` : ''}`)
   return `${PREFIX} Other agents are running flows in this folder:\n${lines.join('\n')}\n`
     + 'If the request continues or helps with one of them, join it before working: mcp__pantheon__flow with action join and the flow id, '
-    + 'then action claim with the phase you take and your role, so the Flow tab shows you next to the other agents. Start a new flow only for unrelated work.'
+    + 'then action claim with the phase you take and your role, so the Flow card shows you next to the other agents. Start a new flow only for unrelated work.'
 }
 
 export async function onSessionStart(io: Io, root: string, payload: { session_id?: string; source?: string }): Promise<string | undefined> {
