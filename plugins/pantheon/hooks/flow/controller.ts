@@ -1392,6 +1392,8 @@ export type SpawnCheck = {
   files?: string[]
   /** Set only in enforce: the reason to refuse the spawn. */
   deny?: string
+  /** Set only in enforce for a `[T]` delegation asked to run in the background: the caller asks the host for the foreground. */
+  foreground?: true
   /** The task's files as they are now, for a QA spawn: its verdict is void if they change before it returns. */
   git?: Snapshot
   /** The approved plan's acceptance criteria of the task, for a QA spawn: the brief must carry them. */
@@ -1412,7 +1414,7 @@ export function qaCriteriaBrief(taskId: string, criteria: readonly string[]): st
  * architect's diagnosis). With `lookup` the agent already exists (the host is asking what it is): nothing is refused or
  * journaled, since its spawn was judged, and journaled, when it started.
  */
-export async function inspectSpawn(ctx: Ctx, input: { taskId: string; agentType: string; lookup?: boolean }): Promise<SpawnCheck> {
+export async function inspectSpawn(ctx: Ctx, input: { taskId: string; agentType: string; lookup?: boolean; background?: boolean }): Promise<SpawnCheck> {
   const unknown: SpawnCheck = { known: false, end: 0 }
   return guarded<SpawnCheck>(ctx, 'spawn', unknown, async trace => {
     const loc = await locate(ctx)
@@ -1445,11 +1447,13 @@ export async function inspectSpawn(ctx: Ctx, input: { taskId: string; agentType:
       })
       if (ctx.mode === 'enforce') return { ...base, deny: `[${TAG}] ${why.reason}` }
     }
-    if (!kind) return { ...base }
+    // A `[T]` delegation asked to run in the background: in enforce it is asked for the foreground, in shadow only journaled.
+    const foreground = input.background === true && live && !input.lookup ? await noteForeground(ctx, loc.planId, task.id) : undefined
+    if (!kind) return { ...base, ...foreground }
     const asQa = kind === 'review' && by === 'qa'
     const git = asQa ? await treeSnapshot(ctx, task.files) : undefined
     const criteria = asQa && approved && task.acceptance.criteria.length > 0 ? [...task.acceptance.criteria] : undefined
-    return { ...base, kind, ...(by ? { by } : {}), ...(git ? { git } : {}), ...(criteria ? { criteria } : {}) }
+    return { ...base, ...foreground, kind, ...(by ? { by } : {}), ...(git ? { git } : {}), ...(criteria ? { criteria } : {}) }
   })
 }
 
@@ -1477,12 +1481,27 @@ export async function inspectIsolation(ctx: Ctx, input: { taskId: string; isolat
 }
 
 /**
- * A `[T]` delegation runs in the foreground: a background agent's end reaches the lead as a hand-back with no sender id a
- * hook can trust, so the flow never records its end. In enforce the spawn is made foreground (`foreground: true`, the
- * caller rewrites `background`); shadow only journals `spawn_background`. Nothing when no live plan holds the task.
+ * A `[T]` delegation runs in the foreground, so its end is the foreground Agent result. In enforce the spawn asks the host
+ * for the foreground (the caller rewrites `background`); shadow only journals it. The host can still run the agent in the
+ * background (see inspectForcedBackground).
  */
-export async function inspectBackground(ctx: Ctx, input: { taskId: string }): Promise<{ foreground?: boolean }> {
-  return guarded<{ foreground?: boolean }>(ctx, 'background', {}, async trace => {
+async function noteForeground(ctx: Ctx, planId: string, taskId: string): Promise<{ foreground: true } | undefined> {
+  const enforce = ctx.mode === 'enforce'
+  const reason = enforce
+    ? `Task ${taskId} asked the host to run its agent in the foreground: a background end cannot be attributed, so the flow counts it from the foreground Agent result.`
+    : `Task ${taskId} would ask the host to run its agent in the foreground: a background end cannot be attributed. Shadow changes nothing.`
+  await noteQueued(ctx, planId, {
+    kind: 'decision', event: 'spawn', task: taskId, condition: 'spawn_background', reason: clip(reason, 600), action: 'allow',
+  })
+  return enforce ? { foreground: true } : undefined
+}
+
+/**
+ * A `[T]` delegation the host still ran in the background (its agent definition sets it, its remote isolation forces it, or it
+ * is a teammate): its end is not recorded. Journaled in both modes; in enforce the lead reads what to do in the result's context.
+ */
+export async function inspectForcedBackground(ctx: Ctx, input: { taskId: string }): Promise<{ context?: string }> {
+  return guarded<{ context?: string }>(ctx, 'forced_background', {}, async trace => {
     const loc = await locate(ctx)
     if (loc.kind !== 'ok') return {}
     trace.planId = loc.planId
@@ -1491,14 +1510,12 @@ export async function inspectBackground(ctx: Ctx, input: { taskId: string }): Pr
     if (!task) return {}
     const state = peek.state
     if (!(enforcing(peek) && !state.done && !state.paused && !state.stopped)) return {}
-    const enforce = ctx.mode === 'enforce'
-    const reason = enforce
-      ? `Task ${task.id} runs in the foreground: its background agent's end cannot be attributed, so the flow would never record it. The spawn was made foreground.`
-      : `Task ${task.id} would run in the foreground: its background agent's end cannot be attributed, so the flow would never record it. Shadow changes nothing.`
+    const reason = `Task ${task.id}'s agent ran in the background anyway (its agent definition, remote isolation or a teammate forces it): its end cannot be recorded, so the task does not advance from this run.`
     await noteQueued(ctx, loc.planId, {
-      kind: 'decision', event: 'spawn', task: task.id, condition: 'spawn_background', reason: clip(reason, 600), action: 'allow',
+      kind: 'decision', event: 'spawn', task: task.id, condition: 'spawn_background_forced', reason: clip(reason, 600), action: 'allow',
     })
-    return enforce ? { foreground: true } : {}
+    if (ctx.mode !== 'enforce') return {}
+    return { context: `[${TAG}] ${reason} Re-run it in the foreground without the agent definition or isolation that forces background, or use /pantheon flow resume or /pantheon flow stop.` }
   })
 }
 

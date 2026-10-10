@@ -869,6 +869,27 @@ describe('ownership holes', () => {
     expect(w.journal().find(e => e.condition === 'spawn_background')).toMatchObject({ event: 'spawn', task: 'T1', action: 'allow' })
   })
 
+  test('a [T] delegation the host still runs in the background is reported with spawn_background_forced and the lead is told in enforce', { options: { flow: 'enforce' } }, async ($, on) => {
+    const w = flowWorld(on)
+    await boot($, w)
+    await $.agent.spawn({ ...spawnBase, description: '[T1] first', subagentType: 'pantheon:developer', background: true } as never)
+    w.engine.agentStatus = 'async_launched'
+    const out = await $.tool.call({ tool: 'Agent', description: '[T1] first', prompt: 'p' } as never)
+    expect(out.context?.[0]).toContain('its end cannot be recorded')
+    expect(out.context?.[0]).toContain('/pantheon flow resume')
+    expect(w.journal().find(e => e.condition === 'spawn_background_forced')).toMatchObject({ event: 'spawn', task: 'T1', action: 'allow' })
+  })
+
+  test('in shadow a [T] delegation the host runs in the background is only journaled as spawn_background_forced', { options: { flow: 'shadow' } }, async ($, on) => {
+    const w = flowWorld(on)
+    await boot($, w)
+    await $.agent.spawn({ ...spawnBase, description: '[T1] first', subagentType: 'pantheon:developer', background: true } as never)
+    w.engine.agentStatus = 'async_launched'
+    const out = await $.tool.call({ tool: 'Agent', description: '[T1] first', prompt: 'p' } as never)
+    expect(out.context).toBeUndefined()
+    expect(w.journal().find(e => e.condition === 'spawn_background_forced')).toMatchObject({ event: 'spawn', task: 'T1', action: 'allow' })
+  })
+
   test('a background delegation without [T] is untouched', { options: { flow: 'enforce' } }, async ($, on) => {
     const w = flowWorld(on)
     await boot($, w)
@@ -1401,10 +1422,11 @@ describe('prompts', () => {
     await boot($, w)
     w.engine.spawnId = 'bg-1'
     await $.agent.spawn({ ...spawnBase, description: '[T1] first', background: true } as never)
-    // The Agent tool returns at once for a background agent: nothing to decide yet.
+    // The Agent tool returns at once: the host ran this [T] agent in the background anyway, so its end is not recorded here
+    // and the lead is told so. A notification, if the host delivers one, still counts it below.
     w.engine.agentStatus = 'async_launched'
     const launched = await $.tool.call({ tool: 'Agent', description: '[T1] first', prompt: 'p', run_in_background: true } as never)
-    expect(launched.context).toBeUndefined()
+    expect(launched.context?.[0]).toContain('cannot be recorded')
     expect(w.state()?.ends).toEqual({})
     const seen = w.engine.prompts
     await $.prompt.submit({
