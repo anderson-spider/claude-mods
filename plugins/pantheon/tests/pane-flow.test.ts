@@ -115,7 +115,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
       expect(texts).toContain('Flow')
       for (const phase of ['analyze', 'diagram', 'publish']) expect(texts.some(t => t.trim().endsWith(phase))).toBe(true)
       expect(texts.some(t => t.includes('ADVANCE/advance'))).toBe(true)
-      expect(texts.some(t => t.includes('Jev off'))).toBe(true)
+      expect(texts.some(t => t.includes('No Jev key'))).toBe(true)
       expect(texts).toContain('Session')
       expect(await ui.find({ key: 'tab-flow' })).toBeUndefined()
       expect(await ui.find({ key: 'tab-agents' })).toBeUndefined()
@@ -129,7 +129,7 @@ test('the panel has no flow card for a session without a flow', async ($, on) =>
   await withPane($, 'terminal', 60, texts => {
     expect(texts).toContain('Session')
     expect(texts).not.toContain('Flow')
-    expect(texts.join('|')).not.toContain('Jev off')
+    expect(texts.join('|')).not.toContain('No Jev key')
   })
 })
 
@@ -179,7 +179,7 @@ test('a render failure draws an error line instead of a blank pane', async ($, o
 })
 
 // The Jev-off row is drawn whole in a 72-column terminal pane (a 68-cell card), with no key and with a repository's key.
-for (const jevOff of [undefined, "Jev off: repo's OPENROUTER_API_KEY ignored; set judgeKey."]) {
+for (const jevOff of [undefined, "No Jev key: repo's OPENROUTER_API_KEY ignored; set judgeKey."]) {
   test(`the flow card's Jev-off row fits the card uncut (${jevOff ? 'repository key ignored' : 'no key'})`, () => {
     const element = (props: unknown) => ({ props })
     const el = { Box: element, Text: element, Button: element }

@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { applyDecision, decide, OUTPUT_CHARS } from '../hooks/jevflow/policy'
+import { applyDecision, decide, jevUnavailableText, OUTPUT_CHARS } from '../hooks/jevflow/policy'
 import type { DecideOptions } from '../hooks/jevflow/policy'
 import { ADVANCE, ALLOW_STOP, BLOCK, UNCLEAR } from '../hooks/jevflow/types'
 import type { CheckResult, Confidence, Decision, Flow, FlowState, Judgment, Limits, Phase, PhaseStatus } from '../hooks/jevflow/types'
@@ -152,6 +152,7 @@ type Row = {
   kind: string
   condition: string
   toPhase?: string
+  reason?: string
 }
 
 const CASES: Row[] = [
@@ -167,9 +168,17 @@ const CASES: Row[] = [
   { name: 'loop_pass', flow: LOOPED, cur: 'test', done: ['implement'], judgment: J('test'), checks: { test: PASS }, opts: { loop_checks: { test: PASS } }, kind: ALLOW_STOP, condition: 'goal_complete' },
   { name: 'loop_exhausted', flow: LOOPED, cur: 'test', done: ['implement'], patch: { loop_iterations: { test: 3 } }, judgment: J('test'), checks: { test: FAIL }, opts: { loop_checks: { test: FAIL } }, kind: ALLOW_STOP, condition: 'loop_exhausted' },
   { name: 'loop_exhausted_on_fail', flow: LOOP_BRANCH, cur: 'test', patch: { loop_iterations: { test: 2 } }, judgment: J('test'), checks: { test: FAIL }, opts: { loop_checks: { test: FAIL } }, kind: ADVANCE, condition: 'loop_exhausted_on_fail', toPhase: 'debug' },
-  { name: 'degraded_check_pass', flow: LINEAR, cur: 'scaffold', judgment: null, checks: { scaffold: PASS }, opts: { degraded_reason: 'JevHTTPError: 503' }, kind: ADVANCE, condition: 'degraded_check_pass', toPhase: 'implement' },
-  { name: 'degraded_check_fail', flow: LINEAR, cur: 'test', done: ['scaffold', 'implement'], judgment: null, checks: { scaffold: PASS, test: FAIL }, opts: { degraded_reason: 'timeout' }, kind: BLOCK, condition: 'degraded_check_fail' },
-  { name: 'degraded_no_check', flow: LINEAR, cur: 'implement', done: ['scaffold'], judgment: null, checks: { scaffold: PASS }, kind: ALLOW_STOP, condition: 'degraded_no_check' },
+  // Jev is all or nothing: a passing check does not advance without a judgment; the Stop is held once, then let through.
+  { name: 'jev_unavailable_check_pass', flow: LINEAR, cur: 'scaffold', judgment: null, checks: { scaffold: PASS }, opts: { degraded_reason: 'JevHTTPError: 503' }, kind: BLOCK, condition: 'jev_unavailable' },
+  { name: 'jev_unavailable_check_fail', flow: LINEAR, cur: 'test', done: ['scaffold', 'implement'], judgment: null, checks: { scaffold: PASS, test: FAIL }, opts: { degraded_reason: 'timeout' }, kind: BLOCK, condition: 'jev_unavailable' },
+  { name: 'jev_unavailable_no_check', flow: LINEAR, cur: 'implement', done: ['scaffold'], judgment: null, checks: { scaffold: PASS }, kind: BLOCK, condition: 'jev_unavailable' },
+  { name: 'jev_unavailable_relayed', flow: LINEAR, cur: 'implement', done: ['scaffold'], patch: { history: [{ ts: 1000, seq: 1, event: 'stop', decision: 'BLOCK', condition: 'jev_unavailable' }] }, judgment: null, checks: { scaffold: PASS }, opts: { stop_hook_active: true }, kind: ALLOW_STOP, condition: 'jev_unavailable' },
+  // The relay is per session: another session's Stop in between does not undo it, and another session's hold does not relay this one.
+  { name: 'jev_unavailable_relayed_past_other_session', flow: LINEAR, cur: 'implement', done: ['scaffold'], patch: { history: [{ ts: 1000, seq: 1, event: 'stop', decision: 'BLOCK', condition: 'jev_unavailable', reason: 'held for A', session_id: 'A' }, { ts: 1001, seq: 2, event: 'stop', decision: 'BLOCK', condition: 'continue', session_id: 'B' }] }, judgment: null, checks: { scaffold: PASS }, opts: { stop_hook_active: true, session_id: 'A' }, kind: ALLOW_STOP, condition: 'jev_unavailable', reason: 'held for A' },
+  { name: 'jev_unavailable_other_session_hold_not_relayed', flow: LINEAR, cur: 'implement', done: ['scaffold'], patch: { history: [{ ts: 1000, seq: 1, event: 'stop', decision: 'BLOCK', condition: 'continue', session_id: 'A' }, { ts: 1001, seq: 2, event: 'stop', decision: 'BLOCK', condition: 'jev_unavailable', session_id: 'B' }] }, judgment: null, checks: { scaffold: PASS }, opts: { stop_hook_active: true, session_id: 'A' }, kind: BLOCK, condition: 'jev_unavailable' },
+  // Loop phases decide on their checks alone, with or without Jev.
+  { name: 'loop_pass_without_jev', flow: LOOPED, cur: 'test', done: ['implement'], judgment: null, checks: { test: PASS }, opts: { loop_checks: { test: PASS } }, kind: ALLOW_STOP, condition: 'goal_complete' },
+  { name: 'jev_unavailable_new_turn_holds_again', flow: LINEAR, cur: 'implement', done: ['scaffold'], patch: { history: [{ ts: 1000, seq: 1, event: 'stop', decision: 'BLOCK', condition: 'jev_unavailable' }] }, judgment: null, checks: { scaffold: PASS }, opts: { stop_hook_active: false }, kind: BLOCK, condition: 'jev_unavailable' },
   { name: 'ask_human', flow: LINEAR, cur: 'implement', done: ['scaffold'], judgment: J('implement', { next_action: 'ask_human', next_action_conf: 0.85 }), checks: {}, kind: ALLOW_STOP, condition: 'ask_human' },
   { name: 'ask_human_low_conf_ignored', flow: LINEAR, cur: 'implement', done: ['scaffold'], judgment: J('implement', { next_action: 'ask_human', next_action_conf: 0.6 }), checks: {}, kind: BLOCK, condition: 'drop_band' },
   { name: 'stuck_once', flow: LINEAR, cur: 'test', done: ['scaffold', 'implement'], judgment: J('test', { stuck: 0.95 }), checks: { test: FAIL }, kind: BLOCK, condition: 'stuck' },
@@ -205,6 +214,7 @@ for (const row of CASES) {
     expect([d.kind, d.condition]).toEqual([row.kind, row.condition])
     expect(d.to_phase).toBe(row.toPhase)
     if (d.kind === BLOCK || d.kind === ADVANCE) expect(d.reason.trim()).not.toBe('')
+    if (row.reason !== undefined) expect(d.reason).toBe(row.reason)
   })
 }
 
@@ -564,4 +574,10 @@ test('the loop message reports the phase check output, not the passing until-che
   expect(d.reason).toContain('no extra test file')
   expect(d.reason).not.toContain('Ran 3 tests')
   expect(d.reason).toContain('phase check fails')
+})
+
+test('the jev_unavailable text keeps its instruction however long the Jev error is', () => {
+  const text = jevUnavailableText('x'.repeat(5000))
+  expect(text.length).toBeLessThan(600)
+  expect(text).toContain('disable the pantheon plugin')
 })

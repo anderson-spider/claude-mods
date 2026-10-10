@@ -181,7 +181,7 @@ test('status adds the last errors, the NEEDS_HUMAN text and flags unenforced sto
   }
   const out = render(twoPhase(), state, '# Jevflow needs a human\n\nPick one.\n')
   expect(out).toContain('Last Claude API error: overloaded at 1970-01-12 13:46:40Z')
-  expect(out).toContain('Last Jev error (checks-only fallback): timeout at 1970-01-12 13:46:40Z')
+  expect(out).toContain('Last Jev error: timeout at 1970-01-12 13:46:40Z')
   expect(out).toContain('BLOCK/degraded_check_fail (not enforced)  [a]')
   expect(out).toContain('ALLOW_STOP/ok  [a]')
   expect(out).not.toContain('ALLOW_STOP/ok (not enforced)')

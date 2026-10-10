@@ -15,6 +15,7 @@
 // dynamic phases and sub-steps (regions.py), gates, notify. Side-effect idempotency
 // keys are kept, because the side-effect conditions quote them.
 
+import { headText } from './questions'
 import { ADVANCE, ALLOW_STOP, BLOCK, UNCLEAR } from './types'
 import type { CheckResult, Decision, DecisionKind, Flow, FlowState, Judgment, Phase, PhaseStatus } from './types'
 
@@ -40,8 +41,10 @@ export type DecideOptions = {
   stop_hook_active?: boolean
   /** Phase id -> CheckResult of its `loop.until`. */
   loop_checks?: Readonly<Record<string, CheckResult>>
-  /** Why Jev is unavailable, quoted in the checks-only note. Used only when `judgment` is null. */
+  /** Why Jev is unavailable, quoted in the jev_unavailable reason. Used only when `judgment` is null. */
   degraded_reason?: string
+  /** The Stop's session: a jev_unavailable relay goes through only after that session's own hold. */
+  session_id?: string
 }
 export type CapKind = 'budget_blocks' | 'hook_cap' | 'budget_time' | 'budget_jev'
 
@@ -380,6 +383,25 @@ const routeOnFail = (
   )
 }
 
+/** The condition of a Stop with no Jev judgment: held once, then let through. */
+export const JEV_UNAVAILABLE = 'jev_unavailable'
+
+/** What the lead is told when Jev did not judge: stop and pass it on, the flow cannot go on without Jev. */
+export function jevUnavailableText(why: string): string {
+  // `why` is capped so the instruction at the end survives the journal's reason cut, which the relay repeats.
+  return `Jev did not judge this Stop (${headText(why, 300)}), and the flow cannot decide without it. Stop working and tell the person: ` +
+    "fix Jev (the judgeKey option or OPENROUTER_API_KEY, or the network) or disable the pantheon plugin."
+}
+
+/** The last recorded Stop decision of `sessionId` (of any session when it is unknown). */
+function lastStop(state: PolicyState, sessionId: string | undefined): PolicyState['history'][number] | undefined {
+  for (let i = state.history.length - 1; i >= 0; i--) {
+    const h = state.history[i]
+    if (h?.event === 'stop' && (sessionId === undefined || h.session_id === sessionId)) return h
+  }
+  return undefined
+}
+
 // --- the rules, in order: the first match wins ---
 
 const decideRule = (
@@ -391,6 +413,7 @@ const decideRule = (
   stopHookActive: boolean,
   loopChecks: Checks,
   degradedReason: string,
+  sessionId: string | undefined,
 ): PolicyDecision => {
   const cur = String(state.current_phase)
   const status = state.phase_status
@@ -483,19 +506,13 @@ const decideRule = (
     )
   }
 
-  // 5. degraded mode: checks only, never block without evidence
+  // 5. Jev is the flow's judge: without a judgment nothing advances (a divergence from JevFlow, which falls back to the
+  // checks). The Stop is held once so the lead tells the person; the same session's stop that relays it goes through
+  // uncharged, with the held reason, and the controller does not ask Jev for it.
   if (judgment === null) {
-    const note = `Jev unavailable (${degradedReason}); checks-only mode.`
-    if (checkPass === true) return advanceOrComplete(flow, state, checks, cur, 'degraded_check_pass', [note])
-    if (checkFail) {
-      return block(
-        state,
-        'degraded_check_fail',
-        `Phase '${cur}' (${phase.name}) is not done: ${phase.done_when}.`,
-        { failure: checkFailText(cur, curCheck), notes: [note] },
-      )
-    }
-    return stop('degraded_no_check', `${note} Phase '${cur}' has no check, so there is no evidence to block on.`)
+    const held = stopHookActive ? lastStop(state, sessionId) : undefined
+    if (held?.condition === JEV_UNAVAILABLE) return stop(JEV_UNAVAILABLE, held.reason || jevUnavailableText(degradedReason))
+    return block(state, JEV_UNAVAILABLE, jevUnavailableText(degradedReason), {})
   }
   const j = judgment
   const bands = bandsOf(flow)
@@ -681,6 +698,7 @@ export function decide(
     stopHookActive,
     opts.loop_checks ?? {},
     opts.degraded_reason ?? 'no judgment',
+    opts.session_id,
   )
   const run = stopHookActive ? state.consecutive_blocks : 0
   d.patch.consecutive_blocks = blocksOf(d) ? run + 1 : 0
