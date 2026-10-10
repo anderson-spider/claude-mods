@@ -15,6 +15,7 @@
 // dynamic phases and sub-steps (regions.py), gates, notify. Side-effect idempotency
 // keys are kept, because the side-effect conditions quote them.
 
+import { headText } from './questions'
 import { ADVANCE, ALLOW_STOP, BLOCK, UNCLEAR } from './types'
 import type { CheckResult, Decision, DecisionKind, Flow, FlowState, Judgment, Phase, PhaseStatus } from './types'
 
@@ -42,6 +43,8 @@ export type DecideOptions = {
   loop_checks?: Readonly<Record<string, CheckResult>>
   /** Why Jev is unavailable, quoted in the jev_unavailable reason. Used only when `judgment` is null. */
   degraded_reason?: string
+  /** The Stop's session: a jev_unavailable relay goes through only after that session's own hold. */
+  session_id?: string
 }
 export type CapKind = 'budget_blocks' | 'hook_cap' | 'budget_time' | 'budget_jev'
 
@@ -385,13 +388,17 @@ export const JEV_UNAVAILABLE = 'jev_unavailable'
 
 /** What the lead is told when Jev did not judge: stop and pass it on, the flow cannot go on without Jev. */
 export function jevUnavailableText(why: string): string {
-  return `Jev did not judge this Stop (${why}), and the flow cannot decide without it. Stop working and tell the person: ` +
+  // `why` is capped so the instruction at the end survives the journal's reason cut, which the relay repeats.
+  return `Jev did not judge this Stop (${headText(why, 300)}), and the flow cannot decide without it. Stop working and tell the person: ` +
     "fix Jev (the judgeKey option or OPENROUTER_API_KEY, or the network) or disable the pantheon plugin."
 }
 
-/** The condition of the last recorded Stop decision. */
-function lastStopCondition(state: PolicyState): string | undefined {
-  for (let i = state.history.length - 1; i >= 0; i--) if (state.history[i]?.event === 'stop') return state.history[i]?.condition
+/** The last recorded Stop decision of `sessionId` (of any session when it is unknown). */
+function lastStop(state: PolicyState, sessionId: string | undefined): PolicyState['history'][number] | undefined {
+  for (let i = state.history.length - 1; i >= 0; i--) {
+    const h = state.history[i]
+    if (h?.event === 'stop' && (sessionId === undefined || h.session_id === sessionId)) return h
+  }
   return undefined
 }
 
@@ -406,6 +413,7 @@ const decideRule = (
   stopHookActive: boolean,
   loopChecks: Checks,
   degradedReason: string,
+  sessionId: string | undefined,
 ): PolicyDecision => {
   const cur = String(state.current_phase)
   const status = state.phase_status
@@ -499,11 +507,12 @@ const decideRule = (
   }
 
   // 5. Jev is the flow's judge: without a judgment nothing advances (a divergence from JevFlow, which falls back to the
-  // checks). The Stop is held once so the lead tells the person; the stop that relays it goes through uncharged.
+  // checks). The Stop is held once so the lead tells the person; the same session's stop that relays it goes through
+  // uncharged, with the held reason, and the controller does not ask Jev for it.
   if (judgment === null) {
-    const reason = jevUnavailableText(degradedReason)
-    if (stopHookActive && lastStopCondition(state) === JEV_UNAVAILABLE) return stop(JEV_UNAVAILABLE, reason)
-    return block(state, JEV_UNAVAILABLE, reason, {})
+    const held = stopHookActive ? lastStop(state, sessionId) : undefined
+    if (held?.condition === JEV_UNAVAILABLE) return stop(JEV_UNAVAILABLE, held.reason || jevUnavailableText(degradedReason))
+    return block(state, JEV_UNAVAILABLE, jevUnavailableText(degradedReason), {})
   }
   const j = judgment
   const bands = bandsOf(flow)
@@ -689,6 +698,7 @@ export function decide(
     stopHookActive,
     opts.loop_checks ?? {},
     opts.degraded_reason ?? 'no judgment',
+    opts.session_id,
   )
   const run = stopHookActive ? state.consecutive_blocks : 0
   d.patch.consecutive_blocks = blocksOf(d) ? run + 1 : 0

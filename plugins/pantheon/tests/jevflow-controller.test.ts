@@ -200,7 +200,8 @@ test('without a key the flow does not start and writes nothing; the status of an
 })
 
 test('a Stop Jev does not judge is held once to tell the person, the next one goes through, and nothing advances', async () => {
-  const ask: AskFn = async () => { throw new Error('offline') }
+  let asked = 0
+  const ask: AskFn = async () => { asked++; throw new Error('offline') }
   const f = folder({}, ask)
   const p = await started(f)
   f.files.set(p.flow, JSON.stringify(FLOW))
@@ -208,15 +209,22 @@ test('a Stop Jev does not judge is held once to tell the person, the next one go
   expect(held.block).toContain('Jev did not judge this Stop (Jev error: offline)')
   expect(held.block).toContain('disable the pantheon plugin')
   expect(held.message).toBe(held.block)
+  const askedForHold = asked
+  expect(askedForHold).toBeGreaterThan(0)
+  // Another session's Stop in between does not undo s1's relay, and the relay never asks Jev.
+  expect(await flow.joinFlow(f.io, ROOT, 's2', p.id)).toContain(`Joined flow ${p.id}`)
+  await flow.onStop(f.io, ROOT, { session_id: 's2', stop_hook_active: false })
+  const askedForOther = asked
   const relayed = await flow.onStop(f.io, ROOT, { session_id: 's1', stop_hook_active: true })
+  expect(asked).toBe(askedForOther)
   expect(relayed.block).toBeUndefined()
   expect(relayed.message).toContain('Jev did not judge this Stop (Jev error: offline)')
   const state = JSON.parse(f.files.get(p.state)!)
   expect(state.current_phase).toBe('a')
   expect(state.phase_status.a).toBe('active')
-  expect(state.blocks_this_session).toBe(1)
-  expect(state.history.filter((h: { event: string }) => h.event === 'stop').map((h: { decision: string; condition: string }) => `${h.decision}/${h.condition}`))
-    .toEqual(['BLOCK/jev_unavailable', 'ALLOW_STOP/jev_unavailable'])
+  expect(state.blocks_this_session).toBe(2)
+  expect(state.history.filter((h: { event: string }) => h.event === 'stop').map((h: { decision: string; condition: string; session_id: string }) => `${h.session_id} ${h.decision}/${h.condition}`))
+    .toEqual(['s1 BLOCK/jev_unavailable', 's2 BLOCK/jev_unavailable', 's1 ALLOW_STOP/jev_unavailable'])
   expect(state.last_jev_error.error).toContain('offline')
 
   // A flow left from a session that had a key: the Stop without one is held the same way.

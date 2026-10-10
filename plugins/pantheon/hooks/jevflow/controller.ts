@@ -468,11 +468,12 @@ async function onFlowStop(io: Io, p: Paths, payload: StopPayload): Promise<StopO
   const { checks, loopChecks, unanswered } = await runChecks(io, flow, state, p.root)
   // No one answered the check box: nothing is judged or recorded, and the next Stop asks again.
   if (unanswered) return { message: `${PREFIX} Check not run (${unanswered}); this Stop went through unjudged and the next one asks again.` }
-  // Deterministic first: budgets, caps, regression and loop phases never need Jev. A jev_unavailable result without a
-  // judgment means the outcome depends on it.
-  let d = decide(flow, state, null, checks, now, { stop_hook_active: active, loop_checks: loopChecks })
+  // Deterministic first: budgets, caps, regression and loop phases never need Jev. A jev_unavailable hold without a
+  // judgment means the outcome depends on it; a jev_unavailable stop is the relay of an earlier hold and is not judged.
+  const session = payload.session_id ? { session_id: payload.session_id } : {}
+  let d = decide(flow, state, null, checks, now, { stop_hook_active: active, loop_checks: loopChecks, ...session })
   let judged: Awaited<ReturnType<typeof judge>> | undefined
-  if (d.condition === JEV_UNAVAILABLE) {
+  if (d.condition === JEV_UNAVAILABLE && d.kind === BLOCK) {
     const remaining = flow.limits.max_jev_calls - state.jev_calls
     judged = remaining > 0
       ? await judge(io.ask, flow, state, {
@@ -480,7 +481,7 @@ async function onFlowStop(io: Io, p: Paths, payload: StopPayload): Promise<StopO
       })
       : { judgment: null, calls: 0, error: 'max_jev_calls reached' }
     d = decide(flow, state, judged.judgment, checks, now, {
-      stop_hook_active: active, loop_checks: loopChecks, ...(judged.judgment ? {} : { degraded_reason: judged.error ?? 'no judgment' }),
+      stop_hook_active: active, loop_checks: loopChecks, ...session, ...(judged.judgment ? {} : { degraded_reason: judged.error ?? 'no judgment' }),
     })
   }
   // Always enforce (policy.py apply_mode): BLOCK and ADVANCE block; ask_human writes NEEDS_HUMAN.md.
@@ -496,7 +497,7 @@ async function onFlowStop(io: Io, p: Paths, payload: StopPayload): Promise<StopO
   const passed = Object.fromEntries(Object.entries(checks).filter(([, c]) => c.passed !== null).map(([k, c]) => [k, c.passed]))
   state = record(state, 'stop', {
     decision: d.kind, condition: d.condition, enforced: blocks, to_phase: d.to_phase ?? null, reason: d.reason.slice(0, REASON_JOURNAL_CHARS),
-    checks: passed, probs: judged?.judgment ? judgmentProbs(judged.judgment) : null,
+    checks: passed, probs: judged?.judgment ? judgmentProbs(judged.judgment) : null, ...session,
   }, now)
   await saveState(io, p, state)
   if (blocks) {
