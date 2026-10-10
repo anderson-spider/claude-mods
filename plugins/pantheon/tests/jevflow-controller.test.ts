@@ -72,6 +72,7 @@ test('start writes a draft bound to the session, and the Stop is held until the 
   expect(p.id).toMatch(/^\d{8}-\d{6}-two-files$/)
   expect(JSON.parse(f.files.get(p.draft)!)).toMatchObject({ goal: 'Create a.txt then b.txt', session_id: 's1', plan_blocks: 0 })
   expect(f.files.get(`${ROOT}/.pantheon/flow/sessions/s1`)).toBe(`${p.id}\n`)
+  expect(f.files.get(`${ROOT}/.pantheon/flow/.gitignore`)).toBe('sessions/\n*.tmp\n')
   for (const n of [1, 2, 3]) {
     const out = await flow.onStop(f.io, ROOT, { session_id: 's1', stop_hook_active: n > 1 })
     expect(out.block).toContain(`Lay out the flow before stopping (${n}/3)`)

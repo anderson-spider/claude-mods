@@ -30,6 +30,8 @@ const MAX_UNTRACKED = 200
 const JOIN_RECENT_S = 12 * 3600
 const JOIN_MAX = 3
 const ID_RE = /^[a-z0-9][a-z0-9._-]{0,80}$/
+/** auto.py GITIGNORE, for what Pantheon writes: a session's binding is local; the flows themselves can be committed. */
+const GITIGNORE = 'sessions/\n*.tmp\n'
 
 export type Run = (argv: string[], init: { cwd: string; timeoutMs: number }) => Promise<{ exitCode: number; stdout: string; stderr: string }>
 
@@ -152,6 +154,8 @@ async function draftGoal(io: Io, p: Paths): Promise<string> {
 /** `jevflow start`: a draft under flows/<stamp>-<slug>/, bound to this session, and the planning instructions. */
 export async function startFlow(io: Io, root: string, sid: string | undefined, goal: string, name?: string): Promise<string> {
   const now = await io.now()
+  const ignore = `${root}/${BASE}/.gitignore`
+  if (!(await io.exists(ignore))) await io.write(ignore, GITIGNORE)
   const stamp = new Date(now * 1000).toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15)
   const fromName = name ? slugify(name, 6) : 'flow'
   const slug = name && fromName !== 'flow' ? fromName : slugify(goal)
