@@ -131,7 +131,7 @@ describe('role prompts', () => {
       'State what you ran and what you did not run.',
       'Do not do external research.',
       'Do not spawn subagents or delegate work; return coordination needs to the lead.',
-      'Never modify protected branches.',
+      'Never modify protected branches.', 'do not plan or brainstorm',
     ]) expect(prompt).toContain(text)
   })
 
@@ -143,7 +143,7 @@ describe('role prompts', () => {
 
   test('developer writes all code, UI code included, and only guides look-and-feel work to ux', () => {
     const prompt = rolePrompt('developer')
-    expect(prompt).toContain('Write all the code (backend, scripts, tests, hooks, CLI, UI code and logic included)')
+    expect(prompt).toContain('Write all the code (UI logic included)')
     expect(prompt).toContain('tell the lead it belongs to ux. This is guidance, not a refusal: still do the code your brief assigns.')
     expect(prompt).not.toContain('No UI files')
     expect(prompt).not.toContain('No design work')
