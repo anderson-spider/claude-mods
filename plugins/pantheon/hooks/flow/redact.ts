@@ -77,6 +77,9 @@ export function redactSecrets(text: string): string {
   // `host:8080 text me@x.com`. The spaced form goes first; a password of digits is left to the second pattern.
   out = out.replace(/\b([a-z][a-z0-9+.-]{0,20}:\/\/)[^\s/@:]{0,200}:(?!\d+(?!\w))[^/\r\n]{1,400}@/gi, `$1${REDACTED}@`)
   out = out.replace(/\b([a-z][a-z0-9+.-]{0,20}:\/\/)[^\s/@:]{0,200}:[^\s/]{1,400}@/gi, `$1${REDACTED}@`)
+  // A token as the whole userinfo (`https://<token>@host/x.git`): eight characters or more, right after `scheme://`, so a
+  // short username (`ssh://git@host`), an `@` after a path, `mailto:` and scp-like `git@host:o/r` (no scheme) are untouched.
+  out = out.replace(/\b([a-z][a-z0-9+.-]{0,20}:\/\/)[^\s/@:]{8,200}@/gi, `$1${REDACTED}@`)
   // Headers: the value is the rest of the line (a cookie holds spaces and semicolons), or up to the closing quote
   out = out.replace(
     new RegExp(`(^|[^\\w-])((?:${HEADER_NAMES})[ \\t]*[:=][ \\t]*)[^\\r\\n"']{1,4096}`, 'gi'),

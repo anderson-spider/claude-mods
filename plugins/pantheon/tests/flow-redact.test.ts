@@ -180,6 +180,32 @@ test('redacts credentials inside URLs, including an empty user', () => {
   expect(r('connect redis://:s3cr3t@cache:6379/0 now')).toBe('connect redis://[redacted]@cache:6379/0 now')
 })
 
+test('redacts a token that is the whole userinfo, whatever the host looks like', () => {
+  const token = join('Zq9xW7', 'vB2kLmN4pR8tY')
+  expect(r(`https://${token}@10.0.0.5/x.git`)).toBe('https://[redacted]@10.0.0.5/x.git')
+  expect(r(`https://${token}@gitea:3000/x`)).toBe('https://[redacted]@gitea:3000/x')
+  expect(r(`git clone https://${token}@gitea.internal/org/repo.git`)).toBe('git clone https://[redacted]@gitea.internal/org/repo.git')
+  expect(r(`https://${token}@github.com/o/r`)).toBe('https://[redacted]@github.com/o/r')
+  expect(r(`git+ssh://${token}@host`)).toBe('git+ssh://[redacted]@host')
+  expect(r(`https://${token}@10.0.0.5/x.git`)).not.toContain(token)
+  // a short username is a name, not a secret
+  expect(r('ssh://git@host/x')).toBe('ssh://git@host/x')
+  // (with a real domain after it, `git@github.com` is an address to the email rule, as before)
+  expect(r('git+ssh://git@github.com/o/r.git')).toBe('git+ssh://<email>/o/r.git')
+  expect(r('ssh://deploy@10.0.0.5:2222/srv')).toBe('ssh://deploy@10.0.0.5:2222/srv')
+  // user:password keeps its behavior
+  expect(r('https://user:pw@host')).toBe('https://[redacted]@host')
+  expect(r('https://user:pw@10.0.0.5/x')).toBe('https://[redacted]@10.0.0.5/x')
+  // an @ after the path, prose around a URL, scp-like remotes and mailto are not userinfo
+  expect(r('https://example.com/a@b')).toBe('https://example.com/a@b')
+  expect(r(`https://example.com/${token}@host`)).toBe(`https://example.com/${token}@host`)
+  expect(r('see https://example.com/path and mail me@x.org')).toBe('see https://example.com/path and mail <email>')
+  expect(r(`see https://example.com and mail ${token}@x.org`)).toBe('see https://example.com and mail <email>')
+  expect(r(`git clone git@github.com:o/${token}.git`)).toBe(`git clone <email>:o/${token}.git`)
+  expect(r('mailto:someone.long@example.com')).toBe('mailto:<email>')
+  expect(r('https://example.com?next=https://other.test/a@b')).toBe('https://example.com?next=https://other.test/a@b')
+})
+
 test('redacts curl -u user:password but not git push -u', () => {
   expect(r('curl -u jane:s3cr3t https://x.test')).toBe('curl -u [redacted] https://x.test')
   expect(r('curl --user "jane:s3 cr3t" https://x.test')).toBe('curl --user [redacted] https://x.test')
@@ -336,7 +362,7 @@ test('the second-round redactions are idempotent', () => {
   const inputs = [
     '{\\"apiKey\\":\\"abc123secret\\"}', 'api_key => "abc123"', 'token := "abc123"', 'sig=abc&x-amz-signature=def', 'Basic dXNlcjpwYXNzd29yZA==',
     'mysql -phunter2', 'docker login -p hunter2 r', '-Users-jdoe-work jdoe@Mac', 'password: |\n  hunter2', 'token:\n  abc',
-    'Server=x;Password=P@ss word;', 'https://user:pa ss@host', join('ya', '29.a0AfH6SMBabcdefghijklmnop h', 'f_abcdefghijklmnopqrstuvwxyz1234'),
+    'Server=x;Password=P@ss word;', 'https://user:pa ss@host', `https://${join('Zq9xW7', 'vB2kLmN4pR8tY')}@gitea:3000/x`, join('ya', '29.a0AfH6SMBabcdefghijklmnop h', 'f_abcdefghijklmnopqrstuvwxyz1234'),
   ]
   for (const input of inputs) {
     const once = redact(input, { home: '/Users/jdoe', root: '/Users/jdoe/work/repo' })
@@ -419,6 +445,9 @@ test('adversarial long inputs finish quickly', () => {
     'a'.repeat(30) + '=> '.repeat(1_200),
     'sig='.repeat(8_000),
     '-Users-jane-'.repeat(3_000),
+    ('x://' + 'a'.repeat(199)).repeat(2_000),
+    'https://' + 'a'.repeat(39_000),
+    ('https://' + 'a'.repeat(9) + '@').repeat(4_000),
     'jane '.repeat(8_000),
   ]
   for (const input of inputs) {
