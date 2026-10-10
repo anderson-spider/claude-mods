@@ -566,6 +566,8 @@ export const register: Register = (on, options) => {
   const deliveryCounts = { notifications: 0, agentResults: 0, parsed: 0, linked: 0 }
   const countsSignature = () => `notifications=${deliveryCounts.notifications} agentResults=${deliveryCounts.agentResults} parsed=${deliveryCounts.parsed} linked=${deliveryCounts.linked}`
   let lastDeliveryCounts = countsSignature()
+  // Each distinct state read failure (atom and message) is journaled once per runtime, not once per Stop.
+  const unreadSeen = new Set<string>()
   const noteShape = async (ctx: Ctx, signature: string) => {
     if (deliveryShapes.has(signature) || deliveryShapes.size >= 40) return
     // Reserve before the await so concurrent hooks cannot write the same signature twice.
@@ -1184,7 +1186,11 @@ export const register: Register = (on, options) => {
       const ctx = flowCtx($, await flowDeps(io))
       for (const { atom, error } of unread) {
         const message = error instanceof Error ? error.message : String(error)
-        await noteDeliveryDiagnostic(ctx, { condition: 'state_unread', reason: `${atom}: ${message.slice(0, 200)}` })
+        const reason = `${atom}: ${message.slice(0, 200)}`
+        if (unreadSeen.has(reason)) continue
+        // Reserved before awaiting; released when no plan is in force yet, so the failure is recorded once a flow exists.
+        unreadSeen.add(reason)
+        if (!await noteDeliveryDiagnostic(ctx, { condition: 'state_unread', reason })) unreadSeen.delete(reason)
       }
       const counts = countsSignature()
       if (counts !== lastDeliveryCounts) {

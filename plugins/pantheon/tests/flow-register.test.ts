@@ -288,6 +288,17 @@ describe('stop', () => {
     expect(unread[0]!.reason).toMatch(/^flowAgents: \S/)
   })
 
+  test('a state atom that stays unreadable journals one state_unread note across Stops', { options: { flow: 'enforce' } }, async ($, on) => {
+    const w = flowWorld(on)
+    await boot($, w)
+    w.faults.unread.add('flowAgents')
+    await stop($)
+    await stop($)
+    const unread = w.journal().filter(e => e.condition === 'state_unread')
+    expect(unread).toHaveLength(1)
+    expect(unread[0]!.reason).toMatch(/^flowAgents: \S/)
+  })
+
   test('Stop still runs the checks and holds when the natives atom cannot be read', { options: { flow: 'enforce' } }, async ($, on) => {
     const w = flowWorld(on)
     await boot($, w)
@@ -303,7 +314,7 @@ describe('stop', () => {
     expect(w.seen.toasts).toEqual([])
   })
 
-  test('Stop prefers the runtime link when the atom has an older delivery cycle',{ options: { flow: 'enforce' } }, async ($, on) => {
+  test('Stop prefers the runtime link when the atom has an older delivery cycle', { options: { flow: 'enforce' } }, async ($, on) => {
     const w = flowWorld(on, { files: { [`${ROOT}/${PLAN}`]: planMd({ ...FLOW, tasks: [FLOW.tasks[0]] }) } })
     await boot($, w)
     await spawn($, w, { id: 'lost-1', description: '[T1] first', subagentType: 'pantheon:developer' })
