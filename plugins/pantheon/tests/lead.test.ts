@@ -5,9 +5,9 @@ import { buildLeadSection } from '../hooks/prompts/lead'
 import { rolePrompt } from '../hooks/prompts/roles'
 
 describe('lead budget', () => {
-  // The git route adds its required brief fields; the limit keeps a small growth margin.
-  test('the prompt stays within 5350 chars', () => {
-    expect(buildLeadSection(DEFAULTS).length).toBeLessThanOrEqual(5350)
+  // The git route adds its required brief fields and the qa route its flow-task prefix; the limit keeps a small growth margin.
+  test('the prompt stays within 5600 chars', () => {
+    expect(buildLeadSection(DEFAULTS).length).toBeLessThanOrEqual(5600)
   })
 })
 
@@ -18,7 +18,7 @@ describe('lead section', () => {
 
   test('routes every role and seat through Agent', () => {
     const section = buildLeadSection(DEFAULTS)
-    for (const role of ['code-reader', 'docs-reader', 'developer', 'architect', 'ux', 'git']) {
+    for (const role of ['code-reader', 'docs-reader', 'developer', 'architect', 'qa', 'ux', 'git']) {
       expect(section).toContain(`Agent({ subagent_type: "pantheon:${role}"`)
       expect(section).toContain(`@${role}`)
     }
@@ -31,7 +31,7 @@ describe('lead section', () => {
     }
   })
 
-  for (const role of ['code-reader', 'docs-reader', 'developer', 'architect', 'ux', 'git']) {
+  for (const role of ['code-reader', 'docs-reader', 'developer', 'architect', 'qa', 'ux', 'git']) {
     test(`disabled ${role} disappears from routing, examples and skill mappings`, () => {
       const section = buildLeadSection({ ...DEFAULTS, disabledAgents: [role] })
       expect(section).not.toContain(`@${role}`)
@@ -72,6 +72,15 @@ describe('lead section', () => {
     expect(section).toContain('@developer may do bounded mechanical follow-up that preserves the design exactly; visual judgment or changed feel returns to @ux')
   })
 
+  test('acceptance criteria verification routes to qa', () => {
+    const section = buildLeadSection(DEFAULTS)
+    const qa = section.slice(section.indexOf('@qa\n'), section.indexOf('@ux\n'))
+    expect(qa).toContain('acceptance criteria verification')
+    expect(qa).toContain('never fixes')
+    expect(qa).toContain('[<taskId>]')
+    expect(buildLeadSection({ ...DEFAULTS, disabledAgents: ['qa'] })).not.toContain('acceptance criteria verification')
+  })
+
   test('without the ux the handoff section is gone', () => {
     expect(buildLeadSection({ ...DEFAULTS, disabledAgents: ['ux'] })).not.toContain('Design Handoff Discipline')
   })
@@ -91,7 +100,7 @@ describe('lead section', () => {
 })
 
 describe('role prompts', () => {
-  const keys: PromptKey[] = ['code-reader', 'docs-reader', 'developer', 'architect', 'ux', 'git', 'councillor']
+  const keys: PromptKey[] = ['code-reader', 'docs-reader', 'developer', 'architect', 'qa', 'ux', 'git', 'councillor']
 
   test('git routing keeps decisions and validation with the lead and covers repository state', () => {
     const section = buildLeadSection(DEFAULTS)
@@ -100,7 +109,7 @@ describe('role prompts', () => {
     expect(section).toContain('what to include, branch, base, squash yes/no, PR/MR yes/no')
     expect(section).not.toContain('push yes/no')
     expect(section).toContain('You run only read-only git and push; everything else that changes the repository')
-    expect(section).toContain('no force push without `--force-with-lease`, no remote branch deletion, no `--mirror`, never main/master/develop')
+    expect(section).toContain('no force push without `--force-with-lease`, no remote branch deletion, no `--mirror`, never main, master, develop, release or release/*')
     expect(section).not.toContain('lead commits')
   })
 
@@ -116,6 +125,16 @@ describe('role prompts', () => {
     }
   })
 
+  test('qa runs what was built, never fixes, never runs side effects and returns a structured verdict', () => {
+    const prompt = rolePrompt('qa')
+    for (const text of [
+      'Verify, never fix', 'Never fix code', 'Never run side effects', 'deploy, publish, push', 'migration against shared data',
+      'Write only inside the session scratchpad', 'herdr pane', 'error paths', 'Partial coverage is a failure',
+      'C<n>: pass|fail — <evidence', 'QA: pass|fail', 'Do not spawn subagents',
+    ]) expect(prompt).toContain(text)
+    expect(prompt).not.toContain('Do not commit or push')
+  })
+
   test('git enforces scope, refusals, conventions and reporting', () => {
     const prompt = rolePrompt('git')
     for (const text of [
@@ -123,7 +142,7 @@ describe('role prompts', () => {
       'checkout, switch, worktree and stash',
       'git status', 'git diff', "Stage only the task's files", 'git log', 'Conventional Commits in English',
       'PR/MR template', 'gh', 'glab', 'Preserve unrelated changes', 'Never add AI attribution',
-      'Refuse commit, push, rebase, reset or merge that modifies the default branch, main/master/develop or a protected branch',
+      'Refuse commit, push, rebase, reset or merge that modifies the default branch, main, master, develop, release, release/* or a protected branch',
       "Discover the relevant remote's default branch", 'git symbolic-ref refs/remotes/<remote>/HEAD',
       'gh repo view / glab repo view', 'confirm the branch you modify or push to is neither default nor protected',
       'both the local branch and remote push destination', 'stop and report: unknown is not unprotected',

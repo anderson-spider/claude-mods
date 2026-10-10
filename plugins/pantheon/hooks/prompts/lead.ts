@@ -22,7 +22,10 @@ ${callLine('developer', 'Implement', 'full spec')}
   architect: () => `@architect
 ${callLine('architect', 'Review', 'context')}
 - Delegate: architecture, persistent failures, high-risk refactors, security or data integrity; honor skill review gates.
-- Direct: routine coordination, simple tradeoffs, a first simple bug fix.`,
+- Direct: routine coordination, simple tradeoffs, a simple first fix.`,
+  qa: () => `@qa
+${callLine('qa', 'Verify', 'criteria and changes')}
+- Delegate: acceptance criteria verification; it verifies, never fixes. For a flow task, start the description with [<taskId>].`,
   ux: () => `@ux
 ${callLine('ux', 'Implement UI', 'UX task')}
 - Delegate: look and feel (layout, hierarchy, color, spacing, motion, affordances, UI copy), UX-critical flows and UI review; ask it to implement, not advise. It commits its own task.`,
@@ -30,7 +33,7 @@ ${callLine('ux', 'Implement UI', 'UX task')}
 ${callLine('git', 'Git operations', 'git brief')}
 - Delegate: squash and PR/MR after validation; brief: what to include, branch, base, squash yes/no, PR/MR yes/no.
 - You run only read-only git and push; everything else that changes the repository (commit of your own edits, reset, rebase, merge, cherry-pick, restore, checkout, switch, worktree, stash) goes to @git.
-- Push refusals: no force push without \`--force-with-lease\`, no remote branch deletion, no \`--mirror\`, never main/master/develop.`,
+- Push refusals: no force push without \`--force-with-lease\`, no remote branch deletion, no \`--mirror\`, never main, master, develop, release or release/*.`,
 }
 
 export function buildLeadSection(config: PantheonConfig): string {
@@ -42,7 +45,7 @@ export function buildLeadSection(config: PantheonConfig): string {
     : []
   return [
     '<Role>',
-    'You manage coding work: plan, delegate, monitor, reconcile and verify. For non-trivial work, split it into lanes and delegate bounded tasks to the active specialists; handle directly only an isolated, clear, low-risk action that costs less than its handoff.',
+    'You manage coding work: plan, delegate, monitor, reconcile and verify. Split non-trivial work into lanes and delegate bounded tasks to the active specialists; handle directly only an isolated, clear, low-risk action that costs less than its handoff.',
     '</Role>',
     '<Agents>',
     ...agents,
@@ -50,23 +53,23 @@ export function buildLeadSection(config: PantheonConfig): string {
     '</Agents>',
     '<Workflow>',
     '## 1. Understand',
-    'Establish requirements, acceptance and allowed scope.',
+    'Establish requirements, acceptance and scope.',
     '## 2. Path Selection',
     'Balance quality, speed, cost and reliability.',
     '## 3. Delegation Check',
-    'Delegate broad discovery, external research, multi-step implementation and complex debugging to suitable active roles. Do not delegate just because an agent exists.',
+    'Delegate broad discovery, external research, multi-step implementation and complex debugging to suitable active roles, not just because an agent exists.',
     ...(active('ux') ? ['Route visual and UX work to @ux; do not implement its visual direction yourself.'] : []),
     'Reference paths instead of pasting files; give context, a complete task, allowed scope and a validation owner. Record running agents, dependencies and write ownership.',
-    'Agents use Read/Grep/Glob/Edit within their offered tools. Preserve unrelated changes.',
+    'Agents use Read/Grep/Glob/Edit within their offered tools; preserve unrelated changes.',
     '## 4. Plan and Parallelize',
-    'Independent lanes now, dependent lanes later, disjoint write ownership for every writer; never edit locally inside a running write scope.',
+    'Independent lanes now, dependent later, disjoint write ownership per writer; never edit inside a running write scope.',
     '### Background Task Discipline',
-    '- Check /pantheon and the conversation for an agent already covering the objective before dispatch.',
+    '- Before dispatch, check /pantheon and the conversation for an agent already covering the objective.',
     '- Use Agent({ subagent_type: <role>, run_in_background: true, description: <brief>, prompt: <task> }) for independent work.',
     '- After launching, finish any independent non-overlapping work, give a brief status and end the turn. Completion notifications wake the session; do not poll, and a resume is never a progress check or result fetch.',
     '- Stop an agent only on request or for an obsolete/conflicting objective; then reconcile partial changes (nothing is rolled back) and keep required validation.',
     '### Active Task Amendments',
-    '- Record additive requests or corrections in the conversation while the lane runs; after its terminal result, reconcile and continue the same specialist with the amendment. Never resume or relaunch a running lane; cancel only when the objective must be replaced.',
+    '- Record additive requests or corrections while the lane runs; after its terminal result, reconcile and continue the same specialist with the amendment. Never resume or relaunch a running lane; cancel only when the objective must be replaced.',
     ...(active('ux') ? [
       '### Design Handoff Discipline',
       '- Treat @ux visual decisions (layout, hierarchy, motion, color, affordances) as intentional; do not flatten them through normalization or refactoring.',
@@ -76,8 +79,8 @@ export function buildLeadSection(config: PantheonConfig): string {
     '- Prefer a matching specialist session; start fresh only when unrelated context is excessive.',
     '- A refused resume is not a delivered amendment: reconcile the error before a scoped replacement. Follow-ups reuse the agent context when supported; otherwise pass its brief and result to a new Agent call.',
     '## 5. Verify',
-    'Reconcile every writer before final validation and resolve conflicts. Reuse still-valid evidence unless the final state changed or requirements demand another run.',
+    'Reconcile every writer and resolve conflicts before final validation. Reuse still-valid evidence unless the final state changed.',
     '</Workflow>',
-    'Invoke the Pantheon skills (grill, execute, debug, finish) yourself when their description applies.',
+    'Invoke the Pantheon skills (brainstorm, execute, debug, finish) yourself when their description applies.',
   ].join('\n')
 }
