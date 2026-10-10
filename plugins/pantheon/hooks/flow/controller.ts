@@ -69,9 +69,9 @@ export type Ctx = {
   /** Check results by tree snapshot, kept by the host across hooks; without it every check runs every time. */
   memo?: CheckMemo
   /**
-   * What a check's working directory is on disk, asked before the check runs so that a directory that is not there is the
-   * plan's failure (the check could not run: the Stop holds) and not the host's (which would release the gate). Absent, the
-   * runner's own "failed to start" is read the same way.
+   * What a check's working directory is on disk, asked before the check runs so that a directory that is not there is a
+   * check that could not run (`couldNotRun`: it spends no attempt and, for a delivered task, ends the Stop as unverified)
+   * and not the host's failure (which would release the gate). Absent, the runner's own "failed to start" is read the same way.
    */
   probeDir?: DirProbe
   /** The time a Stop may spend running checks; STOP_DEADLINE_MS when absent. */
@@ -1014,9 +1014,12 @@ async function noteQueued(ctx: Ctx, planId: string, entry: Omit<JournalInput, 'a
 }
 
 /** The host, not the plan, failed to run a check: allow, say so, journal it and charge nothing. */
-async function unrunnable(ctx: Ctx, planId: string, error: CheckUnrunnable): Promise<Record<string, never>> {
+async function unrunnable(ctx: Ctx, planId: string, error: CheckUnrunnable, taskId?: string): Promise<Record<string, never>> {
   try { ctx.warn(`the flow failed open — a check could not be run: ${error.message}`) } catch { /* A failing warning changes nothing. */ }
-  await noteQueued(ctx, planId, { kind: 'note', event: 'check', condition: 'check_unrunnable', detail: clip(error.message, 600) })
+  await noteQueued(ctx, planId, {
+    kind: 'note', event: 'check', condition: 'check_unrunnable', detail: clip(error.message, 600),
+    ...(taskId ? { task: taskId } : {}),
+  })
   return {}
 }
 
@@ -1034,6 +1037,11 @@ function stopTargets(flow: Flow, state: FlowState): FlowTask[] {
     if (status !== 'done') return state.awaiting.some(a => a.task === task.id)
     return !branches.has(task.id)
   })
+}
+
+/** The active Stop targets whose architect diagnosis is open (their attempts are spent). */
+function diagnosisIds(flow: Flow, state: FlowState): string[] {
+  return stopTargets(flow, state).filter(task => state.status[task.id] === 'active' && diagnosisOpen(flow, state, task)).map(task => task.id)
 }
 
 export async function stopFlow(ctx: Ctx, input: StopInput): Promise<StopOutcome> {
@@ -1104,7 +1112,8 @@ async function evaluateStop(ctx: Ctx, input: StopInput, trace: Trace): Promise<S
   }
   const event: FlowEvent = { kind: 'stop', stopHookActive: input.stopHookActive, backgroundTasks: input.backgroundTasks, runningAgents: input.runningAgents, checks }
   const decision = await transactAt(ctx, loc, trace, peek.hash, (before, p) => {
-    const d = step(ctx, p.flow, before, event)
+    // Only a Stop names the architect's diagnosis: the active targets whose attempts are spent say what to do next.
+    const d = applyMode(decide(p.flow, before, event, undefined, { ...decideOpts(ctx), diagnosis: diagnosisIds(p.flow, before) }), ctx.mode, before)
     const all = Object.values(checks).flat()
     const entries: Omit<JournalInput, 'at'>[] = journalable(d, before) ? [entryFor(ctx, 'stop', d, all)] : []
     if (unverified > 0) {
@@ -1124,7 +1133,7 @@ async function evaluateStop(ctx: Ctx, input: StopInput, trace: Trace): Promise<S
   return {
     decision,
     ...(enforce && blocking && !waiting ? { block: `${TAG}: ${decision.reason}` } : {}),
-    ...(enforce && (decision.condition === 'budget' || decision.condition === 'complete') ? { notice: `${TAG}: ${decision.reason}` } : {}),
+    ...(enforce && (decision.condition === 'budget' || decision.condition === 'complete' || decision.condition === 'unverified') ? { notice: `${TAG}: ${decision.reason}` } : {}),
     // The checks of a task in progress that never ran are neither a pass nor a fail: the lead is told, to run them itself.
     ...(enforce && cut.length > 0 ? { context: `[${TAG}] The checks of ${cut.length === 1 ? 'task' : 'tasks'} ${cut.join(', ')} did not get to run within ${Math.round((ctx.stopDeadlineMs ?? STOP_DEADLINE_MS) / 1000)} s, so ${cut.length === 1 ? 'it is' : 'they are'} unverified (not failed). Run them yourself before calling ${cut.length === 1 ? 'it' : 'them'} done.` } : {}),
   }
@@ -1231,9 +1240,17 @@ async function evaluateTaskEnd(ctx: Ctx, input: TaskEndInput, trace: Trace, memo
   trace.planId = loc.planId
   const peek = await observe(ctx, loc, trace)
   const task = findTask(peek.flow, input.taskId)
-  if (!task) return {}
-  if (!enforcing(peek)) return {}
   const idle = peek.state.done || peek.state.paused || peek.state.stopped
+  if (!task || !enforcing(peek)) {
+    // A delivery the flow discards leaves a trace; an idle flow stays silent as it always did.
+    if (!idle) {
+      await noteQueued(ctx, loc.planId, deliveryEntry(ctx, {
+        agentId: '', taskId: input.taskId, condition: 'delivery_ignored',
+        reason: task ? 'the flow is not in force for this plan' : 'the task is not in the plan in force',
+      }))
+    }
+    return {}
+  }
   let checks: CheckResult[] = []
   if (!idle) {
     const pass = await createCheckPass(ctx.run, ctx.root, {
@@ -1242,7 +1259,7 @@ async function evaluateTaskEnd(ctx: Ctx, input: TaskEndInput, trace: Trace, memo
       ...(ctx.probeDir ? { probe: ctx.probeDir } : {}),
     })
     try { checks = await pass.runTask(task.acceptance.checks) } catch (error) {
-      if (error instanceof CheckUnrunnable) return unrunnable(ctx, loc.planId, error)
+      if (error instanceof CheckUnrunnable) return unrunnable(ctx, loc.planId, error, task.id)
       throw error
     }
     await pass.finish()
@@ -1474,6 +1491,33 @@ export async function mainEdit(ctx: Ctx, input: { path: string; resolve?: () => 
       const text = `[${TAG}] Your edit to ${rel} changed code that ${tasks.length > 1 ? 'tasks' : 'task'} ${tasks.join(', ')} had delivered for review. ${tasks.map(id => `${id}: receipts invalidated (${earned(id).join(', ') || 'none earned yet'}), still waiting for ${waiting(id)}`).join('; ')}. A review already running answers for the older code and will be ignored: a new QA or review is needed once the code is settled.`
       return { state: next, entries, value: { text } }
     })
+  })
+}
+
+export type DeliveryNote = {
+  agentId: string
+  taskId?: string
+  condition: 'delivery_unparsed' | 'delivery_unlinked' | 'delivery_adopted' | 'delivery_ignored' | 'spawn_unlinked'
+  reason: string
+}
+
+/** The journal entry for a delivery the flow did not act on. It never holds the agent's output. */
+function deliveryEntry(ctx: Ctx, input: DeliveryNote): Omit<JournalInput, 'at'> {
+  return {
+    kind: 'note', event: 'delivery', condition: input.condition, reason: clip(input.reason, 300),
+    ...(input.taskId ? { task: input.taskId } : {}),
+    mode: ctx.mode,
+  }
+}
+
+/** Journals why a delivery (or a spawn link) was not acted on. No plan in force: nothing, and never a throw. */
+export async function noteDelivery(ctx: Ctx, input: DeliveryNote): Promise<void> {
+  await guarded<void>(ctx, 'delivery', undefined, async trace => {
+    const loc = await locate(ctx)
+    const planId = 'planId' in loc ? loc.planId : undefined
+    if (!planId) return
+    trace.planId = planId
+    await noteQueued(ctx, planId, deliveryEntry(ctx, input))
   })
 }
 

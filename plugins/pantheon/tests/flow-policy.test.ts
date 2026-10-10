@@ -2,11 +2,12 @@ import { expect, test } from 'claude-code/testing'
 import { flowHash, validateFlow } from '../hooks/flow/plan'
 import type { Flow } from '../hooks/flow/plan'
 import { applyMode, decide as decideWith, enterEnforce, newState, OUTPUT_TAIL, rebase, requiredReceipts, withMode } from '../hooks/flow/policy'
+import type { StopOptions } from '../hooks/flow/policy'
 import type { CheckResult, DecideOptions, FlowEvent, FlowState, Judgment } from '../hooks/flow/types'
 
 // `decide` makes the caller say which roles are enabled; the tests say "all of them" unless a test cares.
 const ALL = { qa: true, architect: true }
-const decide = (flow: Flow, state: FlowState, event: FlowEvent, judgment?: Judgment, opts: DecideOptions = { available: ALL }) =>
+const decide = (flow: Flow, state: FlowState, event: FlowEvent, judgment?: Judgment, opts: StopOptions = { available: ALL }) =>
   decideWith(flow, state, event, judgment, opts)
 
 type Raw = Record<string, unknown>
@@ -237,12 +238,132 @@ test('a failing active check blocks with the output tail, named by task', () => 
   expect(decision.state.lastInstruction).toBe(decision.reason)
 })
 
-test('a check that could not run counts as failing and says so', () => {
+test('a delivered task whose check could not run ends the Stop as unverified: no attempt is spent, nothing is blocked', () => {
   const { flow, hash } = chain()
-  const decision = decide(flow, approved(flow, hash), stopEvent({ A: [{ argv: ['run', 'A'], passed: null, output: 'ENOENT' }] }))
-  expect(decision).toMatchObject({ action: 'block', condition: 'check_failed' })
+  const state = approved(flow, hash, { ends: { A: 1 } })
+  const decision = decide(flow, state, stopEvent({ A: [{ argv: ['run', 'A'], passed: null, output: 'working directory web does not exist', couldNotRun: true }] }))
+  expect(decision).toMatchObject({ action: 'allow', condition: 'unverified' })
+  expect(decision.reason).toContain('run A')
   expect(decision.reason).toContain('could not run')
-  expect(decision.reason).toContain('ENOENT')
+  expect(decision.reason).toContain('working directory web does not exist')
+  expect(decision.reason).toContain('Create the directory the check needs')
+  expect(decision.state.blocks).toBe(0)
+  expect(decision.state.attempts).toEqual({})
+  expect(decision.state.status).toEqual({ A: 'active', B: 'pending', C: 'pending' })
+  expect(decision.state.done).toBe(false)
+  expect(decision.state.lastFailure).toBeUndefined()
+  // Held the same way on a second Stop: still no attempt, still not a loop.
+  const again = decide(flow, decision.state, stopEvent({ A: [{ argv: ['run', 'A'], passed: null, output: 'x', couldNotRun: true }] }, { stopHookActive: true }))
+  expect(again).toMatchObject({ action: 'allow', condition: 'unverified' })
+  expect(again.state.blocks).toBe(0)
+})
+
+test('a delivered task with its diagnosis open whose check could not run says so at Stop: the architect sentence is added', () => {
+  const { flow, hash } = chain()
+  const state = approved(flow, hash, { attempts: { A: 3 }, ends: { A: 1 } })
+  const decision = decide(flow, state, stopEvent({ A: [{ argv: ['run', 'A'], passed: null, output: 'working directory web does not exist', couldNotRun: true }] }), undefined, { diagnosis: ['A'], available: ALL })
+  expect(decision).toMatchObject({ action: 'allow', condition: 'unverified' })
+  expect(decision.reason).toContain('Create the directory the check needs')
+  expect(decision.reason).toContain('ask the architect to diagnose it (a delegation whose description starts with [A])')
+  expect(decision.reason).toContain('/pantheon flow resume')
+  expect(decision.reason).toContain('/pantheon flow stop')
+  expect(decision.reason).toContain('working directory web does not exist')
+  expect(decision.state.attempts).toEqual({ A: 3 })
+})
+
+test('a delivered task not in the diagnosis list keeps the unverified text byte for byte', () => {
+  const { flow, hash } = chain()
+  const state = approved(flow, hash, { ends: { A: 1 } })
+  const event = stopEvent({ A: [{ argv: ['run', 'A'], passed: null, output: 'working directory web does not exist', couldNotRun: true }] })
+  const plain = decide(flow, state, event)
+  const others = decide(flow, state, event, undefined, { diagnosis: ['B'], available: ALL })
+  const expected = 'Checks could not run, so their tasks are unverified and the flow is not marked complete. No attempt was spent. Create the directory the check needs, or ask the person to fix the plan and approve it.\n\n$ run A (could not run)\nworking directory web does not exist'
+  expect(plain.reason).toBe(expected)
+  expect(others.reason).toBe(expected)
+  expect(others.reason).not.toContain('architect')
+})
+
+test('an undelivered task whose check could not run is not unverified: the Stop continues the work and blocks', () => {
+  const { flow, hash } = chain()
+  const decision = decide(flow, approved(flow, hash), stopEvent({ A: [{ argv: ['run', 'A'], passed: null, output: 'working directory web does not exist', couldNotRun: true }] }))
+  expect(decision).toMatchObject({ action: 'block', condition: 'continue' })
+  expect(decision.reason).toContain('Task A is not finished')
+  expect(decision.state.blocks).toBe(1)
+  expect(decision.state.attempts).toEqual({})
+})
+
+test('a delivered task whose check could not run does not end the Stop while a receipt is awaited: the architect block remains', () => {
+  const { flow, hash } = build([task('A'), task('B', { risk: true })])
+  const state = approved(flow, hash, {
+    status: { A: 'active', B: 'active' }, ends: { A: 1, B: 1 }, awaiting: [{ task: 'B', by: 'architect' }],
+  })
+  const decision = decide(flow, state, stopEvent({
+    A: [{ argv: ['run', 'A'], passed: null, output: 'gone', couldNotRun: true }],
+    B: [pass('B')],
+  }))
+  expect(decision).toMatchObject({ action: 'block', condition: 'review_needed', task: 'B' })
+  expect(decision.reason).toContain('architect')
+  expect(decision.reason).toContain('B')
+})
+
+test('a delivered task whose check could not run does not end the Stop while a required task is pending and eligible: the block remains', () => {
+  const { flow, hash } = build([task('A', { dependsOn: [] }), task('B', { dependsOn: [] })])
+  const state = approved(flow, hash, { ends: { A: 1 } })
+  const decision = decide(flow, state, stopEvent({ A: [{ argv: ['run', 'A'], passed: null, output: 'gone', couldNotRun: true }] }))
+  expect(decision).toMatchObject({ action: 'block', condition: 'continue' })
+  expect(decision.state.blocks).toBe(1)
+  expect(decision.state.attempts).toEqual({})
+})
+
+test('a required task waiting on the unverified one is not eligible, so the Stop ends as unverified', () => {
+  const { flow, hash } = build([task('A', { dependsOn: [] }), task('B', { dependsOn: ['A'] })])
+  const decision = decide(flow, approved(flow, hash, { ends: { A: 1 } }), stopEvent({ A: [{ argv: ['run', 'A'], passed: null, output: 'gone', couldNotRun: true }] }))
+  expect(decision).toMatchObject({ action: 'allow', condition: 'unverified' })
+  expect(decision.state.attempts).toEqual({})
+})
+
+test('a side effect whose only check could not run pauses for the person at the task end, never delegated again', () => {
+  const { flow, hash } = build([task('A', { sideEffect: true })])
+  const decision = decide(flow, approved(flow, hash), endEvent('A', [{ argv: ['run', 'A'], passed: null, output: 'working directory x does not exist', couldNotRun: true }]))
+  expect(decision).toMatchObject({ action: 'pause', condition: 'ask_person', task: 'A' })
+  expect(decision.state.paused).toBe(true)
+  expect(decision.state.sideEffectsDone).toEqual(['A'])
+  expect(decision.state.attempts).toEqual({})
+  expect(decision.reason).toContain('by hand')
+  // Resume marks the task done, so the text must say what that means before the person resumes or stops.
+  expect(decision.reason).toContain('/pantheon flow resume treats the task as done and starts what depends on it')
+  expect(decision.reason).toContain('/pantheon flow stop')
+  expect(decision.reason).not.toContain('delegate')
+})
+
+test('a check that timed out or whose runner exited counts as failing and says so', () => {
+  const { flow, hash } = chain()
+  for (const output of ['timed out after 120s: run A', 'exit code 127']) {
+    const decision = decide(flow, approved(flow, hash), stopEvent({ A: [{ argv: ['run', 'A'], passed: null, output }] }))
+    expect(decision).toMatchObject({ action: 'block', condition: 'check_failed' })
+    expect(decision.reason).toContain('could not run')
+    expect(decision.reason).toContain(output)
+    expect(decision.state.blocks).toBe(1)
+  }
+})
+
+test('at Stop a real failure still blocks when another check of the task could not run', () => {
+  const { flow, hash } = build([task('A', { acceptance: { checks: [check('a1'), check('a2')] } }), task('B', { dependsOn: ['A'] })])
+  const decision = decide(flow, approved(flow, hash), stopEvent({ A: [{ argv: ['run', 'a1'], passed: null, output: 'gone', couldNotRun: true }, fail('a2', 'FAILED')] }))
+  expect(decision).toMatchObject({ action: 'block', condition: 'check_failed', task: 'A' })
+  expect(decision.state.blocks).toBe(1)
+  expect(decision.state.attempts).toEqual({})
+  expect(decision.reason).toContain('FAILED')
+})
+
+test('at Stop a real failure of one task blocks even when another active task could not run', () => {
+  const { flow, hash } = build([task('A'), task('B')])
+  const state = approved(flow, hash, { status: { A: 'active', B: 'active' } })
+  const decision = decide(flow, state, stopEvent({
+    A: [{ argv: ['run', 'A'], passed: null, output: 'gone', couldNotRun: true }],
+    B: [fail('B', 'FAILED')],
+  }))
+  expect(decision).toMatchObject({ action: 'block', condition: 'check_failed', task: 'B' })
 })
 
 test('the third identical failure pauses and asks; a different output starts over', () => {
@@ -390,14 +511,59 @@ test('failing checks retry, then ask the architect, then ask the person', () => 
   expect(three.state.lastInstruction).toBe(three.reason)
 })
 
-test('a check that could not run, or no check result at all, fails the task end', () => {
+test('a check that timed out, or no check result at all, fails the task end', () => {
   const { flow, hash } = chain()
   const unable = decide(flow, approved(flow, hash), endEvent('A', [{ argv: ['run', 'A'], passed: null, output: 'timeout' }]))
   expect(unable).toMatchObject({ action: 'failTask', condition: 'retry' })
   expect(unable.reason).toContain('timeout')
+  expect(unable.state.attempts).toEqual({ A: 1 })
   const missing = decide(flow, approved(flow, hash), endEvent('A', []))
   expect(missing).toMatchObject({ action: 'failTask', condition: 'retry' })
   expect(missing.reason).toContain('no result reported')
+})
+
+test('a delivery whose checks could not run is unverified at the task end: no attempt, the task stays active', () => {
+  const { flow, hash } = chain()
+  const decision = decide(flow, approved(flow, hash), endEvent('A', [{ argv: ['run', 'A'], passed: null, output: 'working directory web does not exist, so run A could not run', couldNotRun: true }]))
+  expect(decision).toMatchObject({ action: 'allow', condition: 'unverified', task: 'A' })
+  expect(decision.reason).toContain('run A')
+  expect(decision.reason).toContain('could not run')
+  expect(decision.reason).toContain('working directory web does not exist')
+  expect(decision.state.attempts).toEqual({})
+  expect(decision.state.status).toEqual({ A: 'active', B: 'pending', C: 'pending' })
+  expect(decision.state.done).toBe(false)
+  // The delivery is still counted, so a later review of the older delivery is ignored.
+  expect(decision.state.ends).toEqual({ A: 1 })
+  // Nothing can be earned on that delivery: the receipts it had are cleared.
+  const earned = approved(flow, hash, { receipts: { A: { architect: true } } })
+  expect(decide(flow, earned, endEvent('A', [{ argv: ['run', 'A'], passed: null, output: 'x', couldNotRun: true }])).state.receipts).toEqual({})
+  // Repeated deliveries never spend the ladder.
+  let state = approved(flow, hash)
+  for (let i = 0; i < 5; i++) state = decide(flow, state, endEvent('A', [{ argv: ['run', 'A'], passed: null, output: 'x', couldNotRun: true }])).state
+  expect(state.attempts).toEqual({})
+  expect(state.paused).toBe(false)
+})
+
+test('a delivery with a real failure and a check that could not run still fails and spends an attempt', () => {
+  const { flow, hash } = build([task('A', { acceptance: { checks: [check('a1'), check('a2')] } })])
+  const decision = decide(flow, approved(flow, hash), endEvent('A', [{ argv: ['run', 'a1'], passed: null, output: 'gone', couldNotRun: true }, fail('a2', 'FAILED')]))
+  expect(decision).toMatchObject({ action: 'failTask', condition: 'retry', task: 'A' })
+  expect(decision.state.attempts).toEqual({ A: 1 })
+  expect(decision.reason).toContain('FAILED')
+})
+
+test('a delivery whose only non-passing check is a timeout still fails and spends an attempt', () => {
+  const { flow, hash } = build([task('A', { acceptance: { checks: [check('a1'), check('a2')] } })])
+  const decision = decide(flow, approved(flow, hash), endEvent('A', [{ argv: ['run', 'a1'], passed: null, output: 'timed out after 5s: run a1' }, pass('a2')]))
+  expect(decision).toMatchObject({ action: 'failTask', condition: 'retry' })
+  expect(decision.state.attempts).toEqual({ A: 1 })
+})
+
+test('an unverified delivery with an ownership denial still fails as before', () => {
+  const { flow, hash } = chain()
+  const decision = decide(flow, approved(flow, hash), endEvent('A', [{ argv: ['run', 'A'], passed: null, output: 'x', couldNotRun: true }], 1))
+  expect(decision).toMatchObject({ action: 'failTask', condition: 'ownership', task: 'A' })
+  expect(decision.state.attempts).toEqual({ A: 1 })
 })
 
 test('maxAttempts from the flow moves the ladder', () => {
@@ -1518,7 +1684,7 @@ function randomEvent(rand: () => number, flow: Flow, state: FlowState): FlowEven
   const resultsFor = (id: string): CheckResult[] => {
     const declared = flow.tasks.find(t => t.id === id)!.acceptance.checks.length
     const count = rand() < 0.1 ? Math.max(0, declared - 1) : declared
-    return Array.from({ length: count }, () => (rand() < 0.6 ? pass(id) : rand() < 0.8 ? fail(id, 'FAIL') : { argv: ['run', id], passed: null, output: 'timed out' }))
+    return Array.from({ length: count }, () => (rand() < 0.6 ? pass(id) : rand() < 0.7 ? fail(id, 'FAIL') : rand() < 0.5 ? { argv: ['run', id], passed: null, output: 'timed out' } : { argv: ['run', id], passed: null, output: 'working directory x does not exist', couldNotRun: true }))
   }
   const ids = flow.tasks.map(t => t.id)
   const kind = rand()
@@ -1619,4 +1785,38 @@ test('property: an escalation that fires in a second pass is the first pass plus
     if (JSON.stringify(second) !== JSON.stringify(first)) escalated++
   }
   expect(escalated).toBeGreaterThan(100)
+})
+
+// --- a Stop whose failing task has its architect diagnosis open ---
+
+test('a held Stop whose task has its diagnosis open names the architect, the [id] description, resume and stop', () => {
+  const { flow, hash } = chain()
+  const decision = decide(flow, approved(flow, hash, { attempts: { A: 3 } }), stopEvent({ A: [fail('A', 'boom')] }), undefined, { diagnosis: ['A'], available: ALL })
+  expect(decision).toMatchObject({ action: 'block', condition: 'check_failed', task: 'A' })
+  expect(decision.reason).toContain('ask the architect to diagnose it')
+  expect(decision.reason).toContain('[A]')
+  expect(decision.reason).toContain('/pantheon flow resume')
+  expect(decision.reason).toContain('/pantheon flow stop')
+  expect(decision.reason).toContain('boom')
+  // The attempts are spent, so "fix the failure, then try to stop again" would contradict the diagnosis: it is left out.
+  expect(decision.reason).not.toContain('Fix the failure, then try to stop again')
+})
+
+test('a held Stop for a task not in the diagnosis list keeps the plain check_failed text, byte for byte', () => {
+  const { flow, hash } = chain()
+  const plain = decide(flow, approved(flow, hash), stopEvent({ A: [fail('A', 'boom')] }))
+  const others = decide(flow, approved(flow, hash), stopEvent({ A: [fail('A', 'boom')] }), undefined, { diagnosis: ['B'], available: ALL })
+  expect(plain.reason).toBe('Task A (goal A) is not done: its checks fail. Fix the failure, then try to stop again.\n\n$ run A\nboom')
+  expect(others.reason).toBe(plain.reason)
+  expect(others.reason).not.toContain('architect')
+  expect(others.reason).not.toContain('/pantheon flow')
+})
+
+test('with the architect disabled, a held Stop whose diagnosis is open gives the role_unavailable text', () => {
+  const { flow, hash } = chain()
+  const gone = decide(flow, approved(flow, hash, { attempts: { A: 3 } }), stopEvent({ A: [fail('A', 'boom')] }), undefined, { diagnosis: ['A'], available: { qa: true, architect: false } })
+  expect(gone).toMatchObject({ action: 'pause', condition: 'role_unavailable', task: 'A' })
+  expect(gone.reason).toContain("the architect is disabled; enable it in pantheon.json and /pantheon flow resume, or /pantheon flow stop.")
+  expect(gone.reason).not.toContain('ask the architect')
+  expect(gone.state.paused).toBe(true)
 })

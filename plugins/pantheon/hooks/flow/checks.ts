@@ -5,10 +5,12 @@
 // kept for the policy to quote.
 //
 // Three outcomes besides a pass or a fail:
-// - `passed: null`, "could not run": the command timed out, `env` could not exec it (exit 126/127), or the check's working
-//   directory is not there (found out before the run when the host can say, or from the host's "failed to start: ENOENT").
-//   All of them are about the plan, so the policy treats it as not passed, with why: the Stop holds and a task end counts an
-//   attempt.
+// - `passed: null` with `couldNotRun: true`: a check that could not run because the task did not make its environment. That
+//   is a missing or non-directory working directory (found before the run when the host can say) or a start failure ("failed
+//   to start: ENOENT"). For a delivered task the policy spends no attempt and the Stop ends as `unverified`; a task never
+//   delivered is simply not finished.
+// - `passed: null` without the flag: a real failure. A timeout, a signal and a runner exit (126/127) count as not passed: the
+//   Stop holds and a task end counts an attempt.
 // - `CheckUnrunnable`: the runner itself rejected for any other reason. That says nothing about the plan, so it is thrown for
 //   the caller to fail open on instead of being counted against the task.
 // - unverified: the check never got to run because the pass ran out of time. No result is produced for it, so it is never a
@@ -104,8 +106,8 @@ export async function runCheck(run: Runner, root: string, check: Check, options:
   // the check could not run, and it is charged like any check that could not.
   if (check.cwd !== undefined && options.probe) {
     const kind = await options.probe(cwd).catch(() => undefined)
-    if (kind === 'missing') return { argv, passed: null, output: `working directory ${check.cwd} does not exist, so ${checkLabel(check)} could not run` }
-    if (kind === 'other') return { argv, passed: null, output: `working directory ${check.cwd} is not a directory, so ${checkLabel(check)} could not run` }
+    if (kind === 'missing') return { argv, passed: null, output: `working directory ${check.cwd} does not exist, so ${checkLabel(check)} could not run`, couldNotRun: true }
+    if (kind === 'other') return { argv, passed: null, output: `working directory ${check.cwd} is not a directory, so ${checkLabel(check)} could not run`, couldNotRun: true }
   }
   let out: RunOutput
   try {
@@ -114,7 +116,7 @@ export async function runCheck(run: Runner, root: string, check: Check, options:
     const text = error instanceof Error ? error.message : String(error)
     const spawn = START_FAILED.exec(text)
     if (spawn) {
-      return { argv, passed: null, output: `could not start ${argv[0] ?? ''} (${spawn[1]}): the command or the working directory ${check.cwd ?? 'of the repository root'} was not found, or not allowed` }
+      return { argv, passed: null, output: `could not start ${argv[0] ?? ''} (${spawn[1]}): the command or the working directory ${check.cwd ?? 'of the repository root'} was not found, or not allowed`, couldNotRun: true }
     }
     if (!TIMEOUT.test(text)) throw new CheckUnrunnable(argv, text.slice(0, 300))
     if (timeoutMs < limit) return undefined

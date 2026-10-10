@@ -109,7 +109,7 @@ export function enterEnforce(state: FlowState): FlowState {
  * never lowers an attempt count, never turns a block or a pause into an allow or an advance, and never starts a task the
  * first pass did not (it is an input to a second decision, never a patch on the first).
  */
-export function decide(flow: Flow, state: FlowState, event: FlowEvent, _judgment: Judgment | undefined, opts: DecideOptions): Decision {
+export function decide(flow: Flow, state: FlowState, event: FlowEvent, _judgment: Judgment | undefined, opts: StopOptions): Decision {
   switch (event.kind) {
     case 'stop': return onStop(flow, begin(flow, state), event, state, opts)
     case 'taskEnd': return onTaskEnd(flow, begin(flow, state), event, state, opts)
@@ -162,7 +162,13 @@ function approvedFor(flow: Flow, state: FlowState): boolean {
 
 // --- stop ---
 
-function onStop(flow: Flow, s: FlowState, event: Extract<FlowEvent, { kind: 'stop' }>, original: FlowState, opts: DecideOptions): Decision {
+/**
+ * What a Stop may be told beyond `DecideOptions`: the ids of active tasks whose architect diagnosis is open (the controller's
+ * `diagnosisOpen`, computed for the Stop only). A held Stop for such a task says what to do next; nothing else changes.
+ */
+export type StopOptions = DecideOptions & { diagnosis?: readonly string[] }
+
+function onStop(flow: Flow, s: FlowState, event: Extract<FlowEvent, { kind: 'stop' }>, original: FlowState, opts: StopOptions): Decision {
   // 1. nothing to enforce; a flow nobody approved, or a state that is not for this flow, is left exactly as it is
   if (!approvedFor(flow, original)) return make(copyState(original), 'allow', 'unapproved', 'The flow is not approved, or its approval does not match the plan in force, so nothing is enforced.')
   // A Stop that does not follow one of our blocks starts the consecutive run over.
@@ -241,9 +247,18 @@ function onStop(flow: Flow, s: FlowState, event: Extract<FlowEvent, { kind: 'sto
 
   // 5. an active task, or one waiting for a receipt, has a failing check
   const checked = flow.tasks.filter(task => s.status[task.id] === 'active' || (s.status[task.id] !== 'done' && s.awaiting.some(a => a.task === task.id)))
+  const unverifiedChecks: CheckResult[] = []
+  const couldNotRunIds = new Set<string>()
   for (const active of checked) {
     const failed = (event.checks[active.id] ?? []).filter(check => check.passed !== true)
     if (failed.length === 0) continue
+    // Checks that could not run for the environment are unverified, not failed: they spend nothing and never block on their own.
+    // Only a delivered task counts as unverified; one never delivered is simply not finished (step 8 holds the Stop for it). A
+    // real failure of any task still blocks below.
+    if (failed.every(check => check.couldNotRun)) {
+      if ((s.ends[active.id] ?? 0) > 0) { unverifiedChecks.push(...failed); couldNotRunIds.add(active.id) }
+      continue
+    }
     const output = tail(describe(failed))
     const key = `${active.id}\n${output}`
     const count = s.lastFailure?.key === key ? s.lastFailure.count + 1 : 1
@@ -255,6 +270,18 @@ function onStop(flow: Flow, s: FlowState, event: Extract<FlowEvent, { kind: 'sto
       s.consecutiveBlocks = 0
       return instruct(s, 'pause', 'looping',
         `Task ${active.id} (${active.goal}) failed ${count} times in a row with the same output. Stop retrying: ask the person how to proceed.\n\n${output}`, active.id)
+    }
+    // The architect's diagnosis is open (the attempts are spent): with the architect disabled the pause says so, as a failed attempt does.
+    if (opts.diagnosis?.includes(active.id)) {
+      if (!opts.available.architect) {
+        s.paused = true
+        s.consecutiveBlocks = 0
+        return instruct(s, 'pause', 'role_unavailable',
+          `Task ${active.id} (${active.goal}) failed ${s.attempts[active.id] ?? 0} times and needs the architect's diagnosis, but the architect is disabled; enable it in pantheon.json and /pantheon flow resume, or /pantheon flow stop.\n\n${output}`, active.id)
+      }
+      charge(s)
+      return instruct(s, 'block', 'check_failed',
+        `Task ${active.id} (${active.goal}) is not done: its checks fail. Its attempts are spent: ask the architect to diagnose it (a delegation whose description starts with [${active.id}]), or run /pantheon flow resume or /pantheon flow stop.\n\n${output}`, active.id)
     }
     charge(s)
     return instruct(s, 'block', 'check_failed',
@@ -275,6 +302,20 @@ function onStop(flow: Flow, s: FlowState, event: Extract<FlowEvent, { kind: 'sto
     }
     charge(s)
     return instruct(s, 'block', conditionFor(by[0]!), stopReason(waiting, by), waiting.id)
+  }
+
+  // Checks that could not run on delivered tasks end the Stop as unverified, but only when nothing else holds it: no other
+  // active task and no eligible required task still to start. Otherwise the block below (continue) stays.
+  if (unverifiedChecks.length) {
+    const holdsOthers = flow.tasks.some(task => s.status[task.id] === 'active' && !couldNotRunIds.has(task.id))
+      || eligible(flow, s.status).some(id => required.includes(id) && !couldNotRunIds.has(id))
+    if (!holdsOthers) {
+      // A task whose architect diagnosis is open (its attempts are spent) is not released to "create the directory" alone: the
+      // same sentence check_failed gives for it, so the lead does not send the implementer again without the diagnosis.
+      const diagnosed = [...couldNotRunIds].filter(id => opts.diagnosis?.includes(id))
+      const diagnosis = diagnosed.map(id => ` Task ${id} (${findTask(flow, id)!.goal}) has its attempts spent: ask the architect to diagnose it (a delegation whose description starts with [${id}]), or run /pantheon flow resume or /pantheon flow stop.`).join('')
+      return allow('unverified', `Checks could not run, so their tasks are unverified and the flow is not marked complete. No attempt was spent. Create the directory the check needs, or ask the person to fix the plan and approve it.${diagnosis}\n\n${tail(describe(unverifiedChecks))}`)
+    }
   }
 
   // 7. everything required is done and every declared check of it passes
@@ -346,6 +387,19 @@ function onTaskEnd(flow: Flow, s: FlowState, event: Extract<FlowEvent, { kind: '
   }
   s.ends[task.id] = (s.ends[task.id] ?? 0) + 1
   const failures = failingChecks(task, event.checks)
+  // A check that could not run for the environment the task left (its directory is not there, its command did not start) says
+  // nothing about the work: the delivery is unverified, the task stays where it is and no attempt is spent.
+  if (event.ownershipDenials === 0 && failures.length > 0 && failures.every(check => check.couldNotRun)) {
+    clearReceipts(s, task.id)
+    // A side effect may already have run before its check could not: the person must look, it is never delegated again.
+    if (task.sideEffect) {
+      if (!s.sideEffectsDone.includes(task.id)) s.sideEffectsDone.push(task.id)
+      s.paused = true
+      s.consecutiveBlocks = 0
+      return instruct(s, 'pause', 'ask_person', `Task ${task.id} (${task.goal}) is a side effect and its checks could not run, so it may already have run. The flow will not re-run it. Ask the person to check it by hand first: /pantheon flow resume treats the task as done and starts what depends on it, so if the effect did not run, the person should do it by hand before resuming, or run /pantheon flow stop.\n\n${tail(describe(failures))}`, task.id)
+    }
+    return make(s, 'allow', 'unverified', `Task ${task.id} (${task.goal}) was delivered, but its checks could not run, so it is unverified and no attempt was spent. Create the directory the check needs, or ask the person to fix the plan and approve it.\n\n${tail(describe(failures))}`, task.id)
+  }
   if (event.ownershipDenials > 0 || failures.length) return failAttempt(flow, s, task, tail(describe(failures)), event.ownershipDenials, opts)
 
   // A receipt covers the code it saw: a new delivery starts over, so none earned for older code counts.

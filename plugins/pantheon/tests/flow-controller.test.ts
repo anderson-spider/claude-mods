@@ -4,7 +4,7 @@ import type { RunOutput, Runner } from '../hooks/flow/checks'
 import {
   activePlanId, approvePlan, controlFlow, diagnosisOpen, flowStatus, flowTaskFiles, humanPrompt, inspectIsolation, inspectSpawn, mainEdit, missingRoles,
   ownershipVerdict, parseNotification, pendingAgentTasks, qaCriteriaBrief, reviewed, stopFlow, taskEnded, taskIdOf, treeSnapshot, verdictCache,
-  approvalListings, confirmationVerdict, listingRefusal, unnamedHolds,
+  approvalListings, confirmationVerdict, listingRefusal, unnamedHolds, noteDelivery,
 } from '../hooks/flow/controller'
 import type { Attest, Available, Ctx } from '../hooks/flow/controller'
 import type { CheckMemo } from '../hooks/flow/checks'
@@ -726,7 +726,7 @@ const CWD_FLOW = {
 }
 const WEB = `${ROOT}/packages/web`
 
-test('a check whose directory is not there yet holds the Stop with that reason and does not release the other tasks', async () => {
+test('a check whose directory is not there yet does not hold the Stop: it ends as unverified, and the other tasks still run', async () => {
   const w = world({ flow: CWD_FLOW })
   await approve(w)
   // B is finished; A is the task in progress, and packages/web has not been created.
@@ -734,20 +734,33 @@ test('a check whose directory is not there yet holds the Stop with that reason a
   expect((await w.state())?.status.B).toBe('done')
   w.runs.length = 0
   w.memo.clear()
+  // Before A is delivered, the Stop holds it: it was never started, so its missing directory is not an unverified delivery.
+  expect((await stopFlow(w.ctx(), stopInput)).block).toContain('Task A')
+  await humanPrompt(w.ctx())
+  // A is delivered with its directory still missing: the check could not run, so the delivery is unverified and spends nothing.
+  expect((await taskEnded(w.ctx(), { taskId: 'A', ownershipDenials: 0 })).decision).toMatchObject({ action: 'allow', condition: 'unverified', task: 'A' })
+  expect((await w.state())?.attempts).toEqual({})
+  w.memo.clear()
   for (let prompt = 0; prompt < 2; prompt++) {
     const out = await stopFlow(w.ctx(), stopInput)
-    expect(out.block).toContain('Task A (the web package) is not done')
-    expect(out.block).toContain('working directory packages/web does not exist, so npm test could not run')
-    expect(out.block).toContain('(could not run)')
+    expect(out.block).toBeUndefined()
+    // The lead is told in enforce, as for a budget stop: the notice names the check and says what to do.
+    expect(out.notice ?? '').toContain('could not run')
+    expect(out.notice ?? '').toContain('Create the directory the check needs')
     await humanPrompt(w.ctx())
   }
-  // Nothing was waved through: the host did not fail, so no warning and no fail-open note; B's check still ran.
+  // The Stop ends as unverified and names the check and why; no attempt is spent and nothing is blocked.
+  const journal = await w.journal()
+  const ended = journal.filter(e => e.event === 'stop' && e.condition === 'unverified')
+  expect(ended.length).toBeGreaterThan(0)
+  expect(JSON.stringify(ended.at(-1))).toContain('working directory packages/web does not exist, so npm test could not run')
+  expect((await w.state())?.attempts).toEqual({})
+  expect(journal.some(e => e.condition === 'check_failed')).toBe(false)
+  // Nothing was waved through by the host: no warning and no fail-open note; B's check still ran.
   expect(checkRuns(w).filter(argv => argv[0] === 'npm')).toEqual([])
   expect(checkRuns(w).some(argv => argv[0] === 'check' && argv[1] === 'B')).toBe(true)
   expect(w.warnings.filter(text => text.includes('failed open'))).toEqual([])
-  const journal = await w.journal()
   expect(journal.some(e => e.condition === 'check_unrunnable')).toBe(false)
-  expect(journal.some(e => e.condition === 'check_failed')).toBe(true)
   // The directory is made: the check runs from it and the task goes on.
   w.files.set(`${WEB}/package.json`, '{}')
   const after = await stopFlow(w.ctx(), stopInput)
@@ -757,7 +770,7 @@ test('a check whose directory is not there yet holds the Stop with that reason a
   expect((await w.state())?.status.A).toBe('done')
 })
 
-test('a directory moved away while the task is in progress holds the Stop; at a task end it counts an attempt', async () => {
+test('a directory moved away while the task is in progress is unverified at the Stop and at a task end: no attempt is spent', async () => {
   const w = world({ flow: CWD_FLOW })
   w.files.set(`${WEB}/package.json`, '{}')
   await approve(w)
@@ -767,32 +780,44 @@ test('a directory moved away while the task is in progress holds the Stop; at a 
   w.files.delete(`${WEB}/package.json`)
   w.memo.clear()
   await humanPrompt(w.ctx())
-  const out = await stopFlow(w.ctx(), stopInput)
-  expect(out.block).toContain('working directory packages/web does not exist')
-  expect(out.block).toContain('Task A')
+  // B is finished first: a required task still to start would hold the Stop by itself.
+  expect((await taskEnded(w.ctx(), { taskId: 'B', ownershipDenials: 0 })).decision?.condition).toBe('task_done')
   const ended = await taskEnded(w.ctx(), { taskId: 'A', ownershipDenials: 0 })
+  expect(ended.decision).toMatchObject({ action: 'allow', condition: 'unverified', task: 'A' })
   expect(JSON.stringify(ended)).toContain('working directory packages/web does not exist')
-  expect((await w.state())?.attempts.A).toBeGreaterThanOrEqual(1)
+  expect((await w.state())?.attempts).toEqual({})
+  expect((await w.state())?.status.A).toBe('active')
+  w.memo.clear()
+  const out = await stopFlow(w.ctx(), stopInput)
+  expect(out.block).toBeUndefined()
   expect((await w.journal()).some(e => e.condition === 'check_unrunnable')).toBe(false)
-  // A path that is a file is not a directory either.
+  // A path that is a file is not a directory either: still unverified, still no block.
   w.files.set(WEB, 'not a directory')
   w.memo.clear()
   await humanPrompt(w.ctx())
-  expect((await stopFlow(w.ctx(), stopInput)).block).toContain('working directory packages/web is not a directory')
+  expect((await stopFlow(w.ctx(), stopInput)).block).toBeUndefined()
+  expect((await w.journal()).some(e => e.condition === 'check_failed')).toBe(false)
 })
 
-test('the engine\'s "failed to start: ENOENT" is the plan\'s (the check could not run), with or without the directory probe', async () => {
+test('the engine\'s "failed to start: ENOENT" is unverified (the check could not run), with or without the directory probe', async () => {
   for (const probe of [true, false]) {
     const w = world({ flow: CWD_FLOW })
     w.files.set(`${WEB}/package.json`, '{}')
     await approve(w)
     // The directory was there when asked and gone when spawned (or the host cannot be asked): the engine's own message.
     w.results.set('npm test', new Error("$.process.run(env) failed to start: ENOENT: no such file or directory, posix_spawn 'env'"))
+    // B is finished first (a required task still to start would hold the Stop by itself); A is delivered, its command did not
+    // start: unverified at the task end, and at the Stop too.
+    expect((await taskEnded(w.ctx(), { taskId: 'B', ownershipDenials: 0 })).decision?.condition).toBe('task_done')
+    expect((await taskEnded(w.ctx('enforce', probe ? {} : { probeDir: undefined }), { taskId: 'A', ownershipDenials: 0 })).decision).toMatchObject({ action: 'allow', condition: 'unverified' })
     const out = await stopFlow(w.ctx('enforce', probe ? {} : { probeDir: undefined }), stopInput)
-    expect(out.block).toContain('Task A (the web package) is not done')
-    expect(out.block).toContain('could not start npm (ENOENT)')
+    expect(out.block).toBeUndefined()
+    const journal = await w.journal()
+    expect(JSON.stringify(journal.filter(e => e.event === 'stop' && e.condition === 'unverified'))).toContain('could not start npm (ENOENT)')
+    expect(journal.some(e => e.condition === 'check_failed')).toBe(false)
     expect(w.warnings.filter(text => text.includes('failed open'))).toEqual([])
-    expect((await w.journal()).some(e => e.condition === 'check_unrunnable')).toBe(false)
+    expect(journal.some(e => e.condition === 'check_unrunnable')).toBe(false)
+    expect((await w.state())?.attempts).toEqual({})
   }
   // Anything else the runner rejects with still says nothing about the plan, and releases the gate as before.
   const host = world({ flow: CWD_FLOW })
@@ -2343,4 +2368,81 @@ test('the lead is told which task in progress had checks that did not run, in en
       expect(out.context).not.toContain('task C')
     } else expect(out.context).toBeUndefined()
   }
+})
+
+// --- discarded deliveries are journaled ---
+
+const deliveryNotes = async (w: World) => (await w.journal()).filter(e => e.event === 'delivery')
+
+test('noteDelivery appends a clipped, taskful note and does nothing without a plan in force', async () => {
+  const none = world()
+  await noteDelivery(none.ctx(), { agentId: 'a1', condition: 'delivery_unlinked', reason: 'nothing' })
+  expect(await deliveryNotes(none)).toEqual([])
+
+  const w = world()
+  await approve(w)
+  await noteDelivery(w.ctx(), { agentId: 'a1', taskId: 'T1', condition: 'delivery_unlinked', reason: 'x'.repeat(1000) })
+  await noteDelivery(w.ctx(), { agentId: 'a2', condition: 'delivery_unparsed', reason: 'short' })
+  const notes = await deliveryNotes(w)
+  expect(notes).toHaveLength(2)
+  expect(notes[0]).toMatchObject({ kind: 'note', event: 'delivery', condition: 'delivery_unlinked', task: 'T1', mode: 'enforce' })
+  expect(notes[0].reason).toHaveLength(300)
+  expect(notes[1]).toMatchObject({ condition: 'delivery_unparsed', reason: 'short' })
+  expect(notes[1].task).toBeUndefined()
+})
+
+test('a task end for a task that is not in the plan journals delivery_ignored and returns nothing', async () => {
+  const w = world()
+  await approve(w)
+  expect(await taskEnded(w.ctx(), { taskId: 'T9', ownershipDenials: 0 })).toEqual({})
+  expect(await deliveryNotes(w)).toMatchObject([{ condition: 'delivery_ignored', task: 'T9', reason: 'the task is not in the plan in force' }])
+})
+
+test('a task end for a plan that is not in force journals delivery_ignored', async () => {
+  const w = world()
+  w.files.set(`${ROOT}/.pantheon/flow/active`, `${PLAN}\n`)
+  expect(await taskEnded(w.ctx(), { taskId: 'T1', ownershipDenials: 0 })).toEqual({})
+  expect(await deliveryNotes(w)).toMatchObject([{ condition: 'delivery_ignored', task: 'T1', reason: 'the flow is not in force for this plan' }])
+})
+
+test('an idle flow journals nothing for a delivery it discards', async () => {
+  const paused = world()
+  await approve(paused)
+  await controlFlow(paused.ctx(), 'pause')
+  await taskEnded(paused.ctx(), { taskId: 'T9', ownershipDenials: 0 })
+  expect(await deliveryNotes(paused)).toEqual([])
+
+  const stopped = world()
+  await approve(stopped)
+  await controlFlow(stopped.ctx(), 'stop')
+  await taskEnded(stopped.ctx(), { taskId: 'T9', ownershipDenials: 0 })
+  expect(await deliveryNotes(stopped)).toEqual([])
+})
+
+test('the check_unrunnable entry of a task end carries the task', async () => {
+  const w = world()
+  await approve(w)
+  w.results.set('npm test', new Error('spawn EACCES'))
+  expect(await taskEnded(w.ctx(), { taskId: 'T1', ownershipDenials: 0 })).toEqual({})
+  expect((await w.journal()).filter(e => e.condition === 'check_unrunnable')).toMatchObject([{ task: 'T1' }])
+})
+
+test('a held Stop for a task that spent its attempts names the architect, the [T1] description, resume and stop; one with attempts left does not', async () => {
+  const spent = world({ flow: { ...FLOW, limits: { maxAttempts: 1 } } })
+  await approve(spent)
+  spent.fail('npm test', 'FAIL once')
+  await taskEnded(spent.ctx(), { taskId: 'T1', ownershipDenials: 0 })
+  const held = await stopFlow(spent.ctx(), stopInput)
+  expect(held.block).toContain('ask the architect to diagnose it')
+  expect(held.block).toContain('[T1]')
+  expect(held.block).toContain('/pantheon flow resume')
+  expect(held.block).toContain('/pantheon flow stop')
+
+  const fresh = world()
+  await approve(fresh)
+  fresh.fail('npm test', 'FAIL once')
+  const retry = await stopFlow(fresh.ctx(), stopInput)
+  expect(retry.block).toContain('Fix the failure')
+  expect(retry.block).not.toContain('architect')
+  expect(retry.block).not.toContain('/pantheon flow')
 })
