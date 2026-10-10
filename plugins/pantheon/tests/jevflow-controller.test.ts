@@ -185,8 +185,8 @@ test('the status line and the start note say Jev is off without a judgeKey, and 
   const p = await started(off)
   off.files.set(p.flow, JSON.stringify(FLOW))
   const offStatus = await flow.statusText(off.io, ROOT, 's1')
-  expect(offStatus.split('\n').slice(0, 2)).toEqual([`Flow ${p.id}`, "Jev: off (the plugin's judgeKey option is not set); every Stop decides on the checks alone."])
-  const note = "Note: Jev is off (the plugin's judgeKey option is not set), so every Stop decides on the checks alone; tell the person."
+  expect(offStatus.split('\n').slice(0, 2)).toEqual([`Flow ${p.id}`, "Jev: off (neither the judgeKey option nor OPENROUTER_API_KEY is set); every Stop decides on the checks alone."])
+  const note = "Note: Jev is off (neither the judgeKey option nor OPENROUTER_API_KEY is set), so every Stop decides on the checks alone; tell the person."
   expect((await flow.startFlow(off.io, ROOT, 's2', 'Another goal')).endsWith(`\n\n${note}`)).toBe(true)
 
   const ask: AskFn = async () => { throw new Error('offline') }

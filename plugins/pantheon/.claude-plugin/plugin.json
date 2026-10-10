@@ -1,6 +1,6 @@
 {
   "name": "pantheon",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "description": "Makes Claude a lead that delegates to specialist roles as native Claude subagents, tracks multi-step work against a JevFlow flow whose Stop checks each phase with Jev, and shows roles, activity and the flow in an auto-opening /pantheon panel, with a strip above the prompt for model, context, cache, rate limits and running agents.",
   "author": {
     "name": "anderson-spider"
@@ -16,7 +16,7 @@
     "judgeKey": {
       "type": "string",
       "title": "Jev API key (OpenRouter)",
-      "description": "The OpenRouter key for Jev (typesafe/jev-1.13), which judges at a Stop where the work is when the checks alone do not decide. Without it every Stop decides on the phase checks alone. When set, the flow's goal and phases, the check results with a tail of failing output, the tail of the lead's last message, the uncommitted file names with line counts (diffs only with the flow's privacy.send_diff) and the last decisions are sent to openrouter.ai, with secrets in common shapes removed first. The key is sent only in the Authorization header and is never logged or stored.",
+      "description": "The OpenRouter key for Jev (typesafe/jev-1.13); when empty, the OPENROUTER_API_KEY environment variable is used, unless the repository's own settings declare it. Jev judges at a Stop where the work is when the checks alone do not decide. Without it every Stop decides on the phase checks alone. When set, the flow's goal and phases, the check results with a tail of failing output, the tail of the lead's last message, the uncommitted file names with line counts (diffs only with the flow's privacy.send_diff) and the last decisions are sent to openrouter.ai, with secrets in common shapes removed first. The key is sent only in the Authorization header and is never logged or stored.",
       "sensitive": true
     },
     "abovePrompt": {

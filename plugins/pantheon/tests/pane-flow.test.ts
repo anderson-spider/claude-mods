@@ -1,3 +1,7 @@
+import { drawPanel, JEV_OFF_ROW } from '../hooks/pane'
+import { buildRoster } from '../hooks/roster'
+import { parseFlow } from '../hooks/jevflow/flow'
+import { DEFAULTS } from './fixtures/config'
 import { mock, expect, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
@@ -173,3 +177,19 @@ test('a render failure draws an error line instead of a blank pane', async ($, o
     expect(texts).toContain('Session')
   })
 })
+
+// The Jev-off row is drawn whole in a 72-column terminal pane (a 68-cell card), with no key and with a repository's key.
+for (const jevOff of [undefined, "Jev off: repo's OPENROUTER_API_KEY ignored; set judgeKey."]) {
+  test(`the flow card's Jev-off row fits the card uncut (${jevOff ? 'repository key ignored' : 'no key'})`, () => {
+    const element = (props: unknown) => ({ props })
+    const el = { Box: element, Text: element, Button: element }
+    const flow = { kind: 'flow', id: ID, archived: false, flow: (parseFlow(JSON.parse(FLOW_JSON)) as { flow: unknown }).flow, state: JSON.parse(STATE_JSON) }
+    const roster = buildRoster({ natives: [], session: {}, config: DEFAULTS })
+    const tree = JSON.stringify(drawPanel(el as never, {
+      surface: 'terminal', columns: 72, rows: 60, now: 1_000_000_000, roster, session: {}, hasClient: false,
+      flow: flow as never, jevOn: false, ...(jevOff ? { jevOff } : {}),
+    }))
+    expect(tree).not.toContain('failed to draw')
+    expect(tree).toContain(JSON.stringify(jevOff ?? JEV_OFF_ROW).slice(1, -1))
+  })
+}
