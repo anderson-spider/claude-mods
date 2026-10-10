@@ -164,9 +164,9 @@ function approvedFor(flow: Flow, state: FlowState): boolean {
 
 /**
  * What a Stop may be told beyond `DecideOptions`: the ids of active tasks whose architect diagnosis is open (the controller's
- * `diagnosisOpen`, computed for the Stop only). A held Stop for such a task says what to do next; nothing else changes.
+ * `diagnosisOpen`, computed for the Stop only), and tasks with a work link for the current delivery cycle.
  */
-export type StopOptions = DecideOptions & { diagnosis?: readonly string[] }
+export type StopOptions = DecideOptions & { diagnosis?: readonly string[]; attempted?: readonly string[] }
 
 function onStop(flow: Flow, s: FlowState, event: Extract<FlowEvent, { kind: 'stop' }>, original: FlowState, opts: StopOptions): Decision {
   // 1. nothing to enforce; a flow nobody approved, or a state that is not for this flow, is left exactly as it is
@@ -288,6 +288,15 @@ function onStop(flow: Flow, s: FlowState, event: Extract<FlowEvent, { kind: 'sto
       `Task ${active.id} (${active.goal}) is not done: its checks fail. Fix the failure, then try to stop again.\n\n${output}`, active.id)
   }
   s.lastFailure = undefined
+
+  // Only tasks active on entry may settle here; finishing one can activate work this Stop did not observe.
+  const ready = new Set(eligible(flow, s.status))
+  for (const task of actives) {
+    if (!ready.has(task.id) || !opts.attempted?.includes(task.id) || task.sideEffect
+      || task.acceptance.checks.length === 0 || !checksPassed(task, event.checks[task.id])) continue
+    const settled = finishOrAwait(flow, s, task, opts)
+    if (settled.action === 'pause') return settled
+  }
 
   // 6. a task whose checks passed waits for its receipts (the architect's review, QA's verdict, or both in any order)
   for (const waiting of flow.tasks) {
