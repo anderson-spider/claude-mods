@@ -7,7 +7,7 @@ import { rulesVerdict } from './decisions'
 import { gateContext, gateMessage } from './gate'
 import { DEFAULT_CONFIG } from './defaults'
 import {
-  approvePlan, controlFlow, flowStatus, flowTaskFiles, humanPrompt, inspectIsolation, inspectSpawn, mainEdit, noteOwnership,
+  approvePlan, controlFlow, flowStatus, flowTaskFiles, humanPrompt, inspectIsolation, inspectSpawn, mainEdit, noteDelivery, noteOwnership,
   ownershipVerdict, parseNotification, pendingAgentTasks, qaCriteriaBrief, reviewed, stopFlow, taskEnded, taskIdOf,
 } from './flow/controller'
 import type { Ctx, Serial } from './flow/controller'
@@ -329,6 +329,20 @@ async function flowLinkFor($: Dollar, rt: FlowRuntime, deps: FlowDeps, agentId: 
     link = await find()
     if (link) return link
   }
+  const adopted = await adoptFlowAgent($, rt, deps, agentId, depth)
+  if (adopted) return adopted
+  if (rt.strangers.size >= STRANGERS_MAX) rt.strangers.clear()
+  rt.strangers.add(agentId)
+  return undefined
+}
+
+/**
+ * Adopts an agent that has no stored link, by asking the engine what it is: a subagent inherits the task of its parent when
+ * that parent is a work agent, and a `[T]` description the plan has makes a work agent of that task. The link is stored. An
+ * agent the engine does not list, or one that names no task, adopts nothing. Shared by a writer (flowLinkFor) and a
+ * notification (prompt.submit), so there is one adoption path.
+ */
+async function adoptFlowAgent($: Dollar, rt: FlowRuntime, deps: FlowDeps, agentId: string, depth: number): Promise<FlowAgent | undefined> {
   const info = depth < 4 ? (await $.agent.list()).find(agent => agent.id === agentId) : undefined
   let adopted: FlowAgent | undefined
   if (info?.parentId) {
@@ -341,13 +355,8 @@ async function flowLinkFor($: Dollar, rt: FlowRuntime, deps: FlowDeps, agentId: 
       adopted = { task: taskId, plan: check.planId, kind: 'work', end: check.end, denials: 0, files: check.files }
     }
   }
-  if (adopted) {
-    await storeFlowAgent($, rt, agentId, adopted)
-    return adopted
-  }
-  if (rt.strangers.size >= STRANGERS_MAX) rt.strangers.clear()
-  rt.strangers.add(agentId)
-  return undefined
+  if (adopted) await storeFlowAgent($, rt, agentId, adopted)
+  return adopted
 }
 
 /**
@@ -443,6 +452,14 @@ async function finishFlowAgent($: Dollar, rt: FlowRuntime, deps: FlowDeps, agent
   const ctx = flowCtx($, deps)
   if (link.kind === 'work') return (await taskEnded(ctx, { taskId: link.task, ownershipDenials: link.denials, output })).text
   return (await reviewed(ctx, { taskId: link.task, by: link.by ?? 'qa', end: link.end, output, ...(link.git ? { git: link.git } : {}) })).text
+}
+
+/** What a notification envelope lacks before its `<result>` for parseNotification to read it: a non-empty `<task-id>` or `<status>`. */
+function unparsedReason(text: string): string {
+  const at = text.indexOf('<result>')
+  const head = at === -1 ? text : text.slice(0, at)
+  const missing = ['task-id', 'status'].filter(name => !new RegExp(`<${name}>([^<]*)</${name}>`).exec(head)?.[1]?.trim())
+  return `the envelope has no non-empty ${missing.map(name => `<${name}>`).join(' or ')} before <result>`
 }
 
 /** The agents the strip folds into its last row: every running native. */
@@ -886,7 +903,17 @@ export const register: Register = (on, options) => {
     const brief = flowMode === 'enforce' && check?.kind === 'review' && check.by === 'qa' && check.criteria ? qaCriteriaBrief(taskId, check.criteria) : undefined
     const forward = brief ? { ...e, prompt: `${e.prompt}\n\n${brief}` } : e
     // Nothing is linked unless a plan is in force for the task: nothing to wait for then either.
-    if (!check?.kind || !check.planId) return next(forward)
+    if (!check?.kind || !check.planId) {
+      // Nothing links this agent, so its delivery cannot be matched to the task. A refused role is already journaled by
+      // inspectSpawn while the flow is live (its files are set then), so only what nothing judged is noted here. Forwarding is unchanged.
+      if (!check || check.known === false || !check.files) {
+        const reason = !check ? 'the flow could not check this spawn (see the warning)'
+          : check.known === false ? `task ${taskId} is unknown to the plan in force, or no plan is in force`
+          : `task ${taskId} is in the plan in force but not live (not approved, paused, stopped or done), so this spawn was not judged`
+        try { await noteDelivery(flowCtx($, await flowDeps(io)), { agentId: '', taskId, condition: 'spawn_unlinked', reason }) } catch (error) { flowFailed(io, error) }
+      }
+      return next(forward)
+    }
     // The link is written after the spawn resolves; an agent's first write waits for it (flowLinkFor).
     const release = holdPending(flowRuntime)
     try {
@@ -1094,10 +1121,23 @@ export const register: Register = (on, options) => {
     let text: string | undefined
     try {
       const note = parseNotification(e.text)
-      const known = note ? await flowAgentOf($, flowRuntime, note.agentId) : undefined
-      // Only a linked agent's own envelope counts, and only a completed status is a delivery.
-      if (note && known && !known.root) {
-        text = await finishFlowAgent($, flowRuntime, await flowDeps(io), note.agentId, note.result, note.status === 'completed')
+      if (!note) {
+        await noteDelivery(flowCtx($, await flowDeps(io)), { agentId: '', condition: 'delivery_unparsed', reason: unparsedReason(e.text) })
+      } else {
+        const deps = await flowDeps(io)
+        const ctx = flowCtx($, deps)
+        // A link stored at the spawn is the usual case. One lost (a reload drops the memory) or never written is adopted by lookup.
+        const stored = await flowAgentOf($, flowRuntime, note.agentId)
+        const link = stored ?? await adoptFlowAgent($, flowRuntime, deps, note.agentId, 0)
+        if (!link) {
+          await noteDelivery(ctx, { agentId: note.agentId, condition: 'delivery_unlinked', reason: `no link for agent ${note.agentId}: none was stored at its spawn, and $.agent.list() gives it no [T<n>] description of a task in the plan in force` })
+        } else if (link.root) {
+          await noteDelivery(ctx, { agentId: note.agentId, taskId: link.task, condition: 'delivery_ignored', reason: `agent ${note.agentId} is a nested subagent of task agent ${link.root}: only a task's own agent delivers` })
+        } else {
+          if (!stored) await noteDelivery(ctx, { agentId: note.agentId, taskId: link.task, condition: 'delivery_adopted', reason: `linked by lookup: $.agent.list() gives agent ${note.agentId} the [${link.task}] description` })
+          // Only a linked agent's own envelope counts, and only a completed status is a delivery.
+          text = await finishFlowAgent($, flowRuntime, deps, note.agentId, note.result, note.status === 'completed')
+        }
       }
     } catch (error) { flowFailed(io, error) }
     return text ? next({ ...e, context: [...(e.context ?? []), text] }) : next(e)
