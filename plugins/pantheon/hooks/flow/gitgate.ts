@@ -12,6 +12,8 @@ type Word = {
   isUnknown: boolean
   /** Has `~` outside quotes. */
   isHome: boolean
+  /** Has a `$`, a backtick, a substitution or a brace outside quotes: the shell can split it into several words. */
+  canSplit?: boolean
 }
 
 const BREAKS = new Set([';', '\n', '(', ')'])
@@ -349,6 +351,24 @@ type Command = {
   sub?: Command[]
 }
 
+// Whether the `$` at `at`, inside double quotes, expands to one word per element: `$@`, `$*`, `${@}`, `${A[@]}`, `${A[*]}`, `${!p@}`.
+const splitsInQuotes = (command: string, at: number): boolean => {
+  const next = command[at + 1] ?? ''
+
+  if (next === '@' || next === '*') {
+    return true
+  }
+
+  if (next !== '{') {
+    return false
+  }
+
+  const close = command.indexOf('}', at)
+  const body = command.slice(at + 2, close === -1 ? command.length : close)
+
+  return /\[[@*]\]/.test(body) || /^[@*]/.test(body) || /^![\w]+[@*]$/.test(body)
+}
+
 // The simple commands on the line, empty ones included, each with the separator before it.
 // The commands inside `$(…)`, backticks and `<(…)`/`>(…)` (also inside double quotes, and in the body of a heredoc
 // whose delimiter is unquoted) hang from the command that holds them in `sub`, as if run on their own; the word
@@ -358,6 +378,7 @@ const parse = (command: string): Command[] => {
   let text = ''
   let isOpen = false
   let isUnknown = false
+  let canSplit = false
   let isHome = false
   let isQuoted = false
   // A bare operator (`>`) is waiting for its target word.
@@ -439,7 +460,7 @@ const parse = (command: string): Command[] => {
           endPattern()
         }
       } else {
-        words.push({ text, isUnknown, isHome })
+        words.push({ text, isUnknown, isHome, canSplit })
 
         if (!isQuoted && isFirst && text === 'case') {
           cases += 1
@@ -456,6 +477,7 @@ const parse = (command: string): Command[] => {
     isQuoted = false
     isOpen = false
     isUnknown = false
+    canSplit = false
     isHome = false
   }
   const endCommand = (before: string) => {
@@ -490,6 +512,8 @@ const parse = (command: string): Command[] => {
         at = end
       } else {
         isUnknown ||= quote === '"' && (char === '$' || char === '`')
+        // `"$@"`, `"$*"`, `"${A[@]}"` and `"${A[*]}"` still become one word per element.
+        canSplit ||= quote === '"' && char === '$' && splitsInQuotes(command, at)
         text += char
       }
     } else if (char === "'" || char === '"') {
@@ -512,6 +536,7 @@ const parse = (command: string): Command[] => {
       const { raw, end } = substitute(at)
 
       isUnknown = true
+      canSplit = true
       isOpen = true
       text += raw
       at = end
@@ -581,6 +606,7 @@ const parse = (command: string): Command[] => {
     } else {
       isHome ||= char === '~' && !isOpen
       isUnknown ||= char === '$' || char === '`' || char === '{'
+      canSplit ||= char === '$' || char === '`' || char === '{'
       text += char
       isOpen = true
     }
@@ -641,8 +667,14 @@ export type ForgeSegment = {
   args: string[]
   /** The flags as written (`--force`, `--input`…). */
   flags: string[]
+  /** The options that took a value, with it (`-F query=@q.graphql`, `-fquery=@-`, `--field=a=b`). */
+  values: Array<[flag: string, value: string]>
   /** The group is one gh and glab are known to have; an unknown one can be an alias for anything, a merge included. */
   known: boolean
+  /** Some word of the call is not literal (a variable or a substitution) and is not the value of a free-text option: the group, the action, an endpoint, a query, a field, a loose argument. */
+  hasUnknown: boolean
+  /** An option stands before the action (`gh pr -t x merge 1`): the CLI skips it and its next word, so the action is not the one read. */
+  hidesAction: boolean
   /** The first and second loose words (`pr merge`, `repo delete`, `api`). */
   group: string
   action: string
@@ -663,7 +695,39 @@ const READERS = new Set([
   'false', 'export', 'unset', 'alias', 'unalias', 'read', 'hash',
 ])
 const FIND_EXEC = new Set(['-exec', '-execdir', '-ok', '-okdir'])
-const GIT_WORD = /(^|[\s/;&|()`'"={,}])git($|[\s;&|()`'"{,}])/
+// `hub` and `lab` are also what a service, a package, a host or a Jupyter command is called, and they sit before options and everyday
+// words all the time (`jupyter lab --no-browser`, `docker compose up hub api`, `make lab release`, `pnpm --filter hub add x`). Named
+// behind another command (`op run -- hub push`, `echo "lab mr merge 1" | sh`) they are the tool only before what no other tool says:
+// a git verb of theirs, a group and the action that changes it, or an `api` call with a method or an endpoint. At the start of a
+// command they are always read.
+const HUB_LAB_VERBS = ['push', 'merge', 'rebase', 'cherry-pick', 'am', 'pull-request']
+const HUB_LAB_ACTIONS = new Map<string, readonly string[]>([
+  ['pr', ['merge', 'create', 'close', 'reopen', 'edit', 'ready', 'review', 'comment', 'checkout', 'lock', 'unlock', 'update-branch']],
+  ['mr', ['merge', 'accept', 'create', 'new', 'close', 'reopen', 'update', 'rebase', 'approve', 'unapprove', 'revoke', 'note', 'comment', 'delete', 'del', 'checkout']],
+  ['release', ['create', 'delete', 'upload', 'edit']],
+  ['repo', ['create', 'delete', 'edit', 'rename', 'archive', 'transfer', 'update', 'mirror']],
+  ['project', ['create', 'delete', 'fork', 'transfer', 'update', 'archive', 'mirror']],
+])
+// What follows `hub` or `lab` in a text for the tool to be named there: the verbs, a group and its action, `api` and a method or an
+// endpoint (a word with a `/`, or `graphql`).
+const HUB_LAB_CALL = [
+  ...HUB_LAB_VERBS.map(verb => `${verb}(?![\\w-])`),
+  ...[...HUB_LAB_ACTIONS].map(([group, actions]) => `${group}\\s+(?:${actions.join('|')})(?![\\w-])`),
+  'api\\s+(?:-X|--meth|graphql(?![\\w-])|[^\\s\'"]*/)',
+].join('|')
+// A word that names git or a forge tool, as a text mentions it: `git`, `git-…`, `gh`, `glab`, `glab-…`, each in any case and with a
+// `.exe`, and `hub` and `lab` when what follows them is a call of theirs (`~/src/hub` and `ls lab` are names). Everything that treats
+// a hidden `git` as hidden treats these the same way. `after` says what `hub` and `lab` need after them: a `call` of theirs
+// (`FORGE_OR_GIT_WORD`), any `word` (`FORGE_OR_GIT_FED`: a text a shell is about to run is the command, so `echo hub -C . push | sh`
+// is one), or `none` (`FORGE_OR_GIT_NAME`: a word that is not literal, `$(which hub) push`, where the command is what it names).
+const toolWord = (after: 'call' | 'word' | 'none') =>
+  new RegExp(
+    `(^|[\\s/;&|()\`'"={,}])(?:git(?:-[\\w.-]+)?|gh|glab(?:-[\\w.-]+)?|(?:hub|lab)${after === 'none' ? '' : `(?=(?:\\.exe)?\\s+${after === 'word' ? '\\S' : `(?:${HUB_LAB_CALL})`})`})(?:\\.exe)?($|[\\s;&|()\`'"{,}])`,
+    'i',
+  )
+const FORGE_OR_GIT_WORD = toolWord('call')
+const FORGE_OR_GIT_FED = toolWord('word')
+const FORGE_OR_GIT_NAME = toolWord('none')
 const GIT_VALUED = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--super-prefix', '--exec-path', '--config-env'])
 // Names that skip hooks, point git elsewhere or make it run a program (a pager, an editor, an ssh or askpass command, a
 // config file). `GIT_TRACE`, `LC_ALL`, `TZ`… are not among them.
@@ -784,31 +848,83 @@ const xargsCommand = (rest: readonly Word[]): Word | undefined => {
   return undefined
 }
 
-// The name a word runs under: a flake reference (`nixpkgs#git`, `github:o/r#git`) is named by what follows its last `#`.
-const commandName = (text: string) => base(text.slice(text.lastIndexOf('#') + 1))
+// The name a word runs under: a flake reference (`nixpkgs#git`, `github:o/r#git`) is named by what follows its last `#`, a path
+// by its last part, and the case and a `.exe` do not matter (macOS and Windows find `Git.exe` for `git`).
+const commandName = (text: string) => base(text.slice(text.lastIndexOf('#') + 1)).toLowerCase().replace(/\.exe$/, '')
+
+// The forge tools: gh and its `hub` ancestor, glab and `lab`.
+const isForgeTool = (name: string) => name === 'gh' || name === 'hub' || name === 'lab' || name.startsWith('glab')
+// A name that is git or a forge tool whatever follows it. `hub` and `lab` are left out: they are also names of other things.
+const isGitName = (name: string) => name === 'git' || /^git-[a-z]/.test(name) || name === 'gh' || name.startsWith('glab')
+// The words that follow `hub` to ask the forge for something; any other is a git verb (`hub push` is `git push`).
+const HUB_FORGE = new Set(['api', 'pr', 'pull-request', 'ci-status', 'release', 'issue', 'browse', 'compare', 'fork', 'create', 'delete', 'sync', 'alias', 'gist'])
+
+// Whether the words after a `hub` or `lab` named behind another command are a call of the tool's (see `HUB_LAB_VERBS`): a verb of
+// theirs, a group and its action, or `api` with a method (`-X`, `--method`) or an endpoint (a word with a `/`, or `graphql`).
+const isHubOrLabCall = (following: readonly Word[]): boolean => {
+  const verb = following[0]?.text ?? ''
+
+  if (HUB_LAB_VERBS.includes(verb) || HUB_LAB_ACTIONS.get(verb)?.includes(following[1]?.text ?? '') === true) {
+    return true
+  }
+
+  if (verb !== 'api') {
+    return false
+  }
+
+  const calls = following.slice(1)
+  const endpoint = calls.find(word => !word.text.startsWith('-'))?.text ?? ''
+
+  return calls.some(word => word.text === '-X' || /^-X./.test(word.text) || /^--meth/.test(word.text)) || /\/|^graphql$/i.test(endpoint)
+}
+
+// Whether `named` followed by `following` is a git or a forge command: `git-<verb>` alone, `git` before a verb, an option or a word
+// that is not literal, `gh` and `glab` before a group, an option or a word that is not literal, and `hub` and `lab` (which are also
+// names of other things) only before a call of theirs.
+const runsAs = (named: string, following: readonly Word[]): boolean => {
+  if (/^git-[a-z]/.test(named)) {
+    return true
+  }
+
+  const next = following[0]
+
+  if (next === undefined) {
+    return false
+  }
+
+  const isOptionOrUnknown = next.isUnknown || next.text.startsWith('-')
+
+  if (named === 'git') {
+    return isOptionOrUnknown || BUILTIN_VERBS.has(next.text)
+  }
+
+  if (named === 'hub' || named === 'lab') {
+    return isHubOrLabCall(following)
+  }
+
+  if (isForgeTool(named)) {
+    return isOptionOrUnknown || FORGE_ROUTED.has(next.text) || next.text === 'alias' || next.text === 'project' || next.text === 'codespace' || next.text === 'cs' || FORGE_EXTENSION.has(next.text)
+  }
+
+  return false
+}
 
 // Whether a word of a command that is none of the above, followed by what a git command takes (a verb, an option, something not
 // literal), runs git: `caffeinate git push`, `op run -- git push`, `mise exec -- gh pr merge`. A `git` that stands alone, or is
 // followed by a word that is no verb (`pytest -k git tests/`, `brew install git curl`), is a name, not a command.
-const wrapsGit = (rest: readonly Word[]): boolean =>
-  rest.some((word, at) => {
+const wrapsGit = (rest: readonly Word[]): boolean => rest.some((word, at) => runsAs(commandName(word.text), rest.slice(at + 1)))
+
+// Whether words a shell is about to run as a command line (a pipe or a feed into it) name git or a forge tool: a word that is one
+// (`git`, `Git.exe`, `GLAB`, `/usr/bin/gh`), `hub` or `lab` before any word, or a flake reference to one (`nixpkgs#git push`).
+const feedsGit = (words: readonly Word[]): boolean =>
+  words.some((word, at) => {
     const named = commandName(word.text)
-    const next = rest[at + 1]
 
-    if (/^git-[a-z]/.test(named)) {
-      return true
-    }
-
-    if (named === 'git') {
-      return next !== undefined && (next.isUnknown || next.text.startsWith('-') || BUILTIN_VERBS.has(next.text))
-    }
-
-    if (named === 'gh' || named === 'glab' || named.startsWith('glab-')) {
-      return next !== undefined && (next.isUnknown || next.text.startsWith('-') || FORGE_ROUTED.has(next.text) || next.text === 'alias' || FORGE_EXTENSION.has(next.text))
-    }
-
-    return false
+    return FORGE_OR_GIT_FED.test(` ${word.text} `) || ((named === 'hub' || named === 'lab') && words[at + 1] !== undefined) || runsAs(named, words.slice(at + 1))
   })
+
+// What `RUNNERS` do with the words they are given: a word that is one of the tools, or a tool and the call it runs.
+const runsGitIn = (rest: readonly Word[]): boolean => wrapsGit(rest) || rest.some(word => FORGE_OR_GIT_WORD.test(` ${word.text} `) || isGitName(commandName(word.text)))
 
 // Whether a string handed to a command is itself a command line that starts a git (`nix-shell --run "git push origin main"`,
 // `docker exec c sh -c "cd x && git push"`): after `&&`, `;`, `|` or a newline, past assignments, `git` (or `gh`, `glab`)
@@ -829,43 +945,36 @@ const textRunsGit = (text: string): boolean => {
     const head = commandName(tokens[at] ?? '')
 
     // `nix run nixpkgs#git -- push`, as a string.
+    const wordsFrom = (index: number): Word[] => tokens.slice(index).map(text => ({ text, isUnknown: false, isHome: false }))
+
     if (head === 'nix') {
-      return wrapsGit(tokens.slice(at + 1).map(text => ({ text, isUnknown: false, isHome: false })))
+      return wrapsGit(wordsFrom(at + 1))
     }
 
-    if (/^git-[a-z]/.test(head)) {
-      return true
-    }
-
-    if (head === 'git') {
+    if (head === 'git' || head === 'hub') {
+      // Past git's own options (and the value of those that take one), the verb.
       let next = at + 1
 
       while ((tokens[next] ?? '').startsWith('-')) {
         next += GIT_VALUED.has(tokens[next] ?? '') ? 2 : 1
       }
 
-      const verb = tokens[next]
-
-      if (verb !== undefined && BUILTIN_VERBS.has(verb)) {
+      if (runsAs(head, wordsFrom(next))) {
         return true
       }
-    } else if (head === 'gh' || head === 'glab' || head.startsWith('glab-')) {
-      const group = tokens[at + 1] ?? ''
-
-      if (FORGE_ROUTED.has(group) || group === 'alias' || group === 'project' || group === 'codespace' || group === 'cs' || FORGE_EXTENSION.has(group)) {
-        return true
-      }
+    } else if (runsAs(head, wordsFrom(at + 1))) {
+      return true
     }
   }
 
   return false
 }
 
-// Whether the command an `xargs` or a `find -exec` stage runs is a git, a shell, a wrapper or not literal.
+// Whether the command an `xargs` or a `find -exec` stage runs is a git or a forge tool, a shell, a wrapper or not literal.
 const runsGit = (command: Word | undefined) => {
   const named = commandName(command?.text ?? '')
 
-  return command !== undefined && (command.isUnknown || named === 'git' || /^git-[a-z]/.test(named) || SHELLS.has(shellName(named)) || XARGS_WRAPPERS.has(named))
+  return command !== undefined && (command.isUnknown || named === 'git' || /^git-[a-z]/.test(named) || isForgeTool(named) || SHELLS.has(shellName(named)) || XARGS_WRAPPERS.has(named))
 }
 
 // Whether a command runs text it is fed or gets from a variable: a first word that is not literal, a shell or `eval` with a
@@ -919,7 +1028,7 @@ const pipesIntoShell = (commands: readonly Command[]): boolean => {
     }
 
     isFound ||= isLoop && runsUnread(argv)
-    isGitSeen ||= one.words.some(word => GIT_WORD.test(` ${word.text} `))
+    isGitSeen ||= feedsGit(one.words)
     isFound ||= one.sub !== undefined && pipesIntoShell(one.sub)
   }
 
@@ -1186,8 +1295,106 @@ const GLAB_ACTIONS: Record<string, Record<string, string>> = {
   repo: { ls: 'list' },
   release: { ls: 'list' },
 }
+// `hub`'s own commands, as the gh command they are: `hub pull-request` is `gh pr create`.
+const HUB_GROUPS: Record<string, [group: string, action: string]> = {
+  'pull-request': ['pr', 'create'], fork: ['repo', 'fork'], create: ['repo', 'create'], delete: ['repo', 'delete'], sync: ['repo', 'sync'],
+  'ci-status': ['ci', ''], browse: ['browse', ''], compare: ['browse', ''],
+}
 const FORGE_READ_ACTIONS = new Set(['', 'view', 'list', 'ls', 'status', 'diff', 'checks', 'show', 'get', 'watch', 'trace', 'clone'])
-const FORGE_FIELD_FLAGS = ['-f', '-F', '--field', '--raw-field', '--input']
+// What a call with a word that is not literal may still be: a read nobody can turn into a write by what the word holds.
+const OBVIOUS_READS: Record<string, readonly string[]> = {
+  pr: ['view', 'list', 'checks', 'diff', 'status'], mr: ['view', 'list', 'diff'], issue: ['view', 'list'], repo: ['view'],
+}
+// Whether an option is `name`: as written, or a long option as an unambiguous prefix of it (`--fie` is `--field`).
+const isOption = (flag: string, name: string) => flag === name || (name.startsWith('--') && flag.startsWith('--') && flag.length >= 4 && name.startsWith(flag))
+// The options of `api` that send fields (`-f`, `-F`, `--field`, `--raw-field`) and the one that sends a body (`--input`).
+const isFieldOption = (flag: string) => ['-f', '-F', '--field', '--raw-field'].some(name => isOption(flag, name))
+const isFieldFlag = (flag: string) => isFieldOption(flag) || isOption(flag, '--input')
+
+// Options whose value is free text a call carries and does not act on: a title, a body, a description, notes, a message, a subject, a
+// label, an assignee, a branch. A value that is not literal there (`--body "$(cat b.md)"`) changes no group, action or endpoint, so
+// the call can still be read. `-t` and `-b` are the same option in gh, glab and hub for what the git role runs (a title; a body, or
+// glab's target branch); `-d`, `-m` and `-n` are not (`gh pr create -d` is a draft, `gh pr merge -d` and `-m` are not text).
+const FREE_TEXT_OPTIONS = new Set(['--title', '--body', '--body-file', '--description', '--notes', '--message', '--assignee', '--label', '--base', '--subject'])
+const FREE_TEXT_SHORT = new Set(['-t', '-b'])
+
+// Whether a word of the call is not literal and is something other than the value of a free-text option: the group, the action, an
+// endpoint, a query, a field, a loose argument (`gh pr merge "$N"`, which can expand to `-b main --force`). The value is exempt
+// only as one word: an unquoted `$X`, `$(…)` or `{a,b}` is split by the shell (`-b {main,--force}` is `-b main --force`).
+const hasUnreadWord = (args: readonly Word[]): boolean => {
+  for (let at = 0; at < args.length; at += 1) {
+    const word = args[at]
+    const text = word?.text ?? ''
+
+    if (word === undefined) {
+      continue
+    }
+
+    if (text === '--') {
+      return args.slice(at + 1).some(rest => rest.isUnknown)
+    }
+
+    const eq = text.indexOf('=')
+    const isLong = text.startsWith('--') && FREE_TEXT_OPTIONS.has(eq === -1 ? text : text.slice(0, eq))
+    const isShort = !text.startsWith('--') && FREE_TEXT_SHORT.has(text.slice(0, 2))
+
+    if (isLong || isShort) {
+      // The value is glued (`--body=…`, `-t…`) or the next word.
+      const isGlued = isLong ? eq !== -1 : text.length > 2
+      const value = isGlued ? word : args[at + 1]
+
+      at += isGlued ? 0 : 1
+
+      if (value?.isUnknown === true && value.canSplit === true) {
+        return true
+      }
+
+      continue
+    }
+
+    if (word.isUnknown) {
+      return true
+    }
+  }
+
+  return false
+}
+
+// Whether an option comes before the action of a gh, glab or lab call. cobra, looking for the subcommand, reads any flag it does not
+// know as taking the next word as its value, so `gh pr -t x merge 1` runs `pr merge 1` while the words read as `pr x`. Only `-R`
+// and `--repo` (the group's own), the help and version flags may stand there, and so may an option with `=` or glued to its value
+// (it takes none) or one with no word after it (`gh --version`).
+const hidesAction = (tool: string, args: readonly Word[]): boolean => {
+  if (tool !== 'gh' && tool !== 'lab' && !tool.startsWith('glab')) {
+    return false
+  }
+
+  let seen = 0
+
+  for (let at = 0; at < args.length && seen < 2; at += 1) {
+    const text = args[at]?.text ?? ''
+
+    if (text === '--') {
+      return false
+    }
+
+    if (text === 'api' && seen === 0) {
+      // `api` is a command of its own: its options are read after it.
+      return false
+    }
+
+    if (text === '-R' || text === '--repo') {
+      at += 1
+    } else if (/^-[^-]$/.test(text) ? text !== '-h' && text !== '-v' : text.startsWith('--') && !text.includes('=') && text !== '--help' && text !== '--version') {
+      // It hides something only when a word that is no option comes after it (`gh --version` has no action to move).
+      return args.slice(at + 1).some(word => !word.text.startsWith('-'))
+    } else if (!text.startsWith('-')) {
+      seen += 1
+    }
+  }
+
+  return false
+}
 
 const forgeSegment = (tool: string, args: readonly Word[]): ForgeSegment => {
   const { flags, values, positional } = scan(args, 'RXfFH', ['--repo', '--hostname', '--method', '--field', '--raw-field', '--header', '--input', '--jq', '--template', '--preview'])
@@ -1195,7 +1402,9 @@ const forgeSegment = (tool: string, args: readonly Word[]): ForgeSegment => {
   let action = positional[1]?.text ?? ''
 
   // The same command under another name is the same command.
-  if (tool.startsWith('glab')) {
+  if (tool === 'hub' && HUB_GROUPS[group] !== undefined) {
+    ;[group, action] = HUB_GROUPS[group] as [string, string]
+  } else if (tool.startsWith('glab') || tool === 'lab') {
     group = GLAB_GROUPS[group] ?? group
     action = GLAB_ACTIONS[group]?.[action] ?? action
   } else if (group === 'co') {
@@ -1207,7 +1416,7 @@ const forgeSegment = (tool: string, args: readonly Word[]): ForgeSegment => {
 
   // `--meth PUT` is `--method PUT`: git's tools read long options by unambiguous prefix.
   const method = values.find(([flag]) => flag === '-X' || (flag.startsWith('--') && flag.length >= 4 && '--method'.startsWith(flag)))?.[1]
-  const hasFields = flags.some(flag => FORGE_FIELD_FLAGS.includes(flag))
+  const hasFields = flags.some(isFieldFlag)
   let changes: boolean
 
   const known = FORGE_ROUTED.has(group) || FORGE_OTHER.has(group) || group === 'alias' || group === 'codespace' || FORGE_EXTENSION.has(group)
@@ -1233,7 +1442,10 @@ const forgeSegment = (tool: string, args: readonly Word[]): ForgeSegment => {
     changes = !FORGE_OTHER.has(group)
   }
 
-  return { tool, args: args.map(arg => arg.text), flags, known, group, action, positional: positional.map(word => word.text), changesState: changes }
+  // What an option before the action hides is unknown: it is state-changing until shown otherwise.
+  const hidesIt = hidesAction(tool, args)
+
+  return { tool, args: args.map(arg => arg.text), flags, values, known, hasUnknown: group === 'api' ? args.some(arg => arg.isUnknown) : hasUnreadWord(args), hidesAction: hidesIt, group, action, positional: positional.map(word => word.text), changesState: changes || hidesIt }
 }
 
 export type Classified = { segments: GitSegment[]; forges: ForgeSegment[]; opaque: boolean; envSets: string[] }
@@ -1272,7 +1484,7 @@ const classifyDepth = (command: string, depth: number, inherit: readonly string[
   let isAdrift = false
 
   if (depth > 4) {
-    found.opaque = GIT_WORD.test(command)
+    found.opaque = FORGE_OR_GIT_WORD.test(command)
 
     return found
   }
@@ -1291,13 +1503,13 @@ const classifyDepth = (command: string, depth: number, inherit: readonly string[
     const eff = effective(one.words)
     const assigns = [...inherit, ...eff.assigns]
     const first = eff.argv[0]
-    const name = base(first?.text ?? '')
+    const name = commandName(first?.text ?? '')
     const rest = eff.argv.slice(1)
 
     isAdrift ||= eff.moved
 
     // `bash < <(echo git push)`: the substitution feeds a shell.
-    if (one.sub !== undefined && (readsCommands(one.words) || name === 'source' || name === '.') && flatten(one.sub).some(inner => inner.words.some(word => GIT_WORD.test(` ${word.text} `)))) {
+    if (one.sub !== undefined && (readsCommands(one.words) || name === 'source' || name === '.') && flatten(one.sub).some(inner => feedsGit(inner.words))) {
       found.opaque = true
     }
 
@@ -1305,7 +1517,7 @@ const classifyDepth = (command: string, depth: number, inherit: readonly string[
       const text = eff.split.map(word => word.text).join(' ')
 
       merge(classifyDepth(text, depth + 1, assigns))
-      found.opaque ||= eff.split.some(word => word.isUnknown) && GIT_WORD.test(` ${text} `)
+      found.opaque ||= eff.split.some(word => word.isUnknown) && FORGE_OR_GIT_WORD.test(` ${text} `)
 
       continue
     }
@@ -1342,7 +1554,23 @@ const classifyDepth = (command: string, depth: number, inherit: readonly string[
         found.segments.push(segment)
         found.opaque ||= segment.alias
       }
-    } else if (name === 'gh' || name.startsWith('glab')) {
+    } else if (name === 'hub' && rest[0]?.text === 'merge' && rest.some(word => /^https?:\/\//.test(word.text))) {
+      // `hub merge <pull request URL>` is hub's own command: it fetches that pull request's head and runs `git merge --no-ff`
+      // locally, a call to no forge API. It is still the merge of that pull request, so it is read as `pr merge` and refused as that is.
+      const forge = forgeSegment(name, [{ text: 'pr', isUnknown: false, isHome: false }, ...rest])
+
+      found.forges.push(forge)
+    } else if (name === 'hub' && !HUB_FORGE.has(rest[0]?.text ?? '')) {
+      // `hub` forwards what it does not know to git: `hub push origin main` is `git push origin main`.
+      const segment = gitSegment(rest, isAdrift, assigns, one.before)
+
+      if (segment === undefined) {
+        found.opaque = true
+      } else {
+        found.segments.push(segment)
+        found.opaque ||= segment.alias
+      }
+    } else if (isForgeTool(name)) {
       const forge = forgeSegment(name, rest)
 
       found.forges.push(forge)
@@ -1398,19 +1626,19 @@ const classifyDepth = (command: string, depth: number, inherit: readonly string[
         ? rest.some(word => word.isUnknown)
         : rest.some((word, at) => word.isUnknown && (shellCommandOption(shell, rest[at - 1]?.text ?? '') || /^(?:--|-|\/)[A-Za-z][\w-]*[=:]/.test(word.text)))
 
-      found.opaque ||= unknownBody && (GIT_WORD.test(` ${command} `) || rest.some(word => word.isUnknown && GIT_WORD.test(` ${word.text} `)))
+      found.opaque ||= unknownBody && (FORGE_OR_GIT_WORD.test(` ${command} `) || rest.some(word => word.isUnknown && FORGE_OR_GIT_NAME.test(` ${word.text} `)))
 
       if (shell !== 'eval' && bodies.length === 0 && isPosix) {
         // `bash "$(echo git push)"`: a script argument that holds git.
-        found.opaque ||= rest.some(word => word.isUnknown && GIT_WORD.test(` ${word.text} `))
+        found.opaque ||= rest.some(word => word.isUnknown && FORGE_OR_GIT_NAME.test(` ${word.text} `))
       }
     } else if (name === 'xargs') {
       // Only what `xargs` runs matters: `xargs grep -l git` runs no git.
       found.opaque ||= runsGit(xargsCommand(rest))
     } else if (name === 'find') {
       found.opaque ||= rest.some((word, at) => FIND_EXEC.has(word.text) && runsGit(rest[at + 1]))
-    } else if (RUNNERS.has(name) || (first.isUnknown && (GIT_WORD.test(` ${first.text} `) || (BARE_VARIABLE.test(first.text) && GIT_WORD.test(` ${command} `))))) {
-      found.opaque ||= (first.isUnknown && (GIT_WORD.test(` ${first.text} `) || (BARE_VARIABLE.test(first.text) && GIT_WORD.test(` ${command} `)))) || rest.some(word => GIT_WORD.test(` ${word.text} `) || base(word.text) === 'git')
+    } else if (RUNNERS.has(name) || (first.isUnknown && (FORGE_OR_GIT_NAME.test(` ${first.text} `) || (BARE_VARIABLE.test(first.text) && FORGE_OR_GIT_WORD.test(` ${command} `))))) {
+      found.opaque ||= (first.isUnknown && (FORGE_OR_GIT_NAME.test(` ${first.text} `) || (BARE_VARIABLE.test(first.text) && FORGE_OR_GIT_WORD.test(` ${command} `)))) || runsGitIn(rest)
     } else if (!READERS.has(name) && !ENV_SETTERS.has(name) && (wrapsGit(rest) || rest.some(word => textRunsGit(word.text)))) {
       // Any other command that runs what follows it (`caffeinate`, `op run --`, `flock f`, `xcrun`, `nix-shell --run "…"`)
       // hides the git it runs, as a word or as a command line in a string.
@@ -1741,20 +1969,28 @@ const gitScopeVerdict = (segment: GitSegment, protectedNames: readonly string[])
 // Endpoints that move a branch or write a commit on one: refs, branches (and their protection), merges, contents and files.
 const FORGE_BRANCH_ENDPOINT = /\/(git\/refs|branches|protected_branches|rulesets|contents|repository\/(branches|files|commits))\b/
 
+// The endpoint of an `api` call as the API reads it: no scheme or host, no query string, no leading or trailing `/`, in lower case
+// (`/graphql`, `GraphQL`, `https://api.github.com/graphql?x=1` and `graphql` are one endpoint).
+const endpointOf = (text: string) => text.replace(/^[a-z][a-z0-9+.-]*:\/\/[^/]*/i, '').replace(/[?#].*$/s, '').replace(/^\/+|\/+$/g, '').toLowerCase()
+const isGraphql = (endpoint: string) => endpoint === 'graphql' || endpoint.endsWith('/graphql')
+
 const forgeScopeVerdict = (forge: ForgeSegment): GitVerdict | undefined => {
-  const endpoint = forge.group === 'api' && forge.changesState ? forge.positional[1] ?? '' : ''
-  const isApiMerge = /\/merges?\b/.test(endpoint)
+  const endpoint = forge.group === 'api' && forge.changesState ? endpointOf(forge.positional[1] ?? '') : ''
+  const isApiMerge = /\/merges?\b/.test(`/${endpoint}`)
 
   if (((forge.group === 'pr' || forge.group === 'mr') && forge.action === 'merge') || isApiMerge) {
     return deny('Merging a PR/MR is the person\'s call; open it and leave the merge.')
   }
 
-  if (FORGE_BRANCH_ENDPOINT.test(endpoint) || (endpoint === 'graphql' && /\bmutation\b/i.test(forge.args.join(' ')))) {
+  if (FORGE_BRANCH_ENDPOINT.test(`/${endpoint}`) || (isGraphql(endpoint) && /\bmutation\b/i.test(forge.args.join(' ')))) {
     return deny('Changing branches, refs or files through the forge API is the person\'s call; use `git` and the PR/MR commands instead.')
   }
 
-  // A query read from a file or from stdin cannot be read here: it may be a mutation.
-  if (forge.group === 'api' && forge.positional[1] === 'graphql' && forge.changesState && (forge.flags.includes('--input') || /\bquery=@/.test(forge.args.join(' ')))) {
+  // A query read from a file or from stdin (`--input`, or a field whose value is `query=@file` or `query=@-`, glued to its option or
+  // not) cannot be read here: it may be a mutation.
+  const readsQuery = forge.flags.some(flag => isOption(flag, '--input')) || forge.values.some(([flag, value]) => isFieldOption(flag) && value.startsWith('query=@'))
+
+  if (isGraphql(endpoint) && readsQuery) {
     return deny('A GraphQL query read from a file or stdin cannot be checked for a mutation; write the query on the command line, or leave it to the person.')
   }
 
@@ -1764,6 +2000,20 @@ const forgeScopeVerdict = (forge: ForgeSegment): GitVerdict | undefined => {
 
   if (forge.changesState && (forge.group === 'alias' || FORGE_EXTENSION.has(forge.group))) {
     return deny('Aliases and extensions can hide a merge or run a program; use the documented commands.')
+  }
+
+  if (forge.hidesAction) {
+    return deny('An option before the action of this call (`gh pr -t x merge 1`) makes the CLI skip the next word as its value and run another action; write the action first and the options after it (only `-R` may come before).')
+  }
+
+  // What a word that is not literal holds decides what the call changes (an endpoint, a query, a field, the action): unless the call
+  // is a read whatever the word is, it cannot be checked.
+  const isObviousRead = forge.group === 'api'
+    ? !forge.changesState && !forge.flags.some(isFieldFlag)
+    : (OBVIOUS_READS[forge.group] ?? []).includes(forge.action)
+
+  if (forge.hasUnknown && !isObviousRead) {
+    return deny(`A word of this \`${forge.tool}\` call is not literal (a variable or a substitution), so what it changes cannot be checked; rewrite it as a literal command.`)
   }
 
   if (forge.group === 'codespace' && forge.changesState) {
