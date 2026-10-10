@@ -40,7 +40,7 @@ function flowWorld(on: On, opts: { files?: Record<string, string>; realPaths?: R
   const files = new Map<string, string>([[`${HOME}/.claude/pantheon.json`, '{}'], [`${ROOT}/${PLAN}`, planMd(FLOW)], ...Object.entries(opts.files ?? {})])
   const runs: string[][] = []
   const results = new Map<string, { exitCode: number; stdout: string; stderr: string }>()
-  const faults = { write: false, run: false, store: false, denials: false }
+  const faults = { write: false, run: false, store: false, denials: false, unread: new Set<string>() }
   const git = { head: 'aaaa1111', status: '', tracked: {} as Record<string, string> }
   // What the engine would answer: one bottom per event, steered by these fields.
   const engine = {
@@ -144,8 +144,12 @@ function flowWorld(on: On, opts: { files?: Record<string, string>; realPaths?: R
   // The kit gives a plugin's state writes a bottom; record them to read the controller's link table back.
   const links: Record<string, FlowAgent> = {}
   const atom = { links: undefined as Record<string, FlowAgent> | undefined }
-  on('state.get', async (_$, e, next) => e.key === 'flowAgents' && atom.links
-    ? { value: { version: 1, value: atom.links } } as never : next(e))
+  // A state atom the host cannot read: a test names it in `faults.unread`. A hook that throws is skipped (the core answers
+  // instead), so the answer carries a value the atom can never hold (`null`), which the plugin cannot take apart.
+  on('state.get', async (_$, e, next) => {
+    if (faults.unread.has(e.key)) return { value: null, version: 1 } as never
+    return e.key === 'flowAgents' && atom.links ? { value: { version: 1, value: atom.links } } as never : next(e)
+  })
   on('state.set', async (_$, e, next) => {
     // The count of a denial is written to this value: a test can make that write fail.
     if (faults.denials && e.key === 'flowAgents') throw new Error('state is not writable')
@@ -270,7 +274,36 @@ describe('stop', () => {
     expect(w.state()?.done).toBe(true)
   })
 
-  test('Stop prefers the runtime link when the atom has an older delivery cycle', { options: { flow: 'enforce' } }, async ($, on) => {
+  test('Stop settles a runtime-linked task when the flowAgents atom cannot be read', { options: { flow: 'enforce' } }, async ($, on) => {
+    const w = flowWorld(on, { files: { [`${ROOT}/${PLAN}`]: planMd({ ...FLOW, tasks: [FLOW.tasks[0]] }) } })
+    await boot($, w)
+    await spawn($, w, { id: 'lost-1', description: '[T1] first', subagentType: 'pantheon:developer' })
+    await $.turn.complete({ turnId: 'turn-1', agentId: 'lost-1', reason: 'answer', answer: 'Done', durationMs: 1, isAborted: false })
+    w.faults.unread.add('flowAgents')
+    expect((await stop($)).block).toBeUndefined()
+    expect(w.state()).toMatchObject({ done: true, status: { T1: 'done' } })
+    const unread = w.journal().filter(e => e.condition === 'state_unread')
+    expect(unread).toHaveLength(1)
+    expect(unread[0]).toMatchObject({ event: 'delivery' })
+    expect(unread[0]!.reason).toMatch(/^flowAgents: \S/)
+  })
+
+  test('Stop still runs the checks and holds when the natives atom cannot be read', { options: { flow: 'enforce' } }, async ($, on) => {
+    const w = flowWorld(on)
+    await boot($, w)
+    w.fail('npm test', 'FAIL src/a.test.ts: expected 2 got 3')
+    w.faults.unread.add('natives')
+    const out = await stop($)
+    expect(out.block).toContain('Pantheon flow: Task T1 (first) is not done')
+    expect(out.block).toContain('expected 2 got 3')
+    expect(w.checkRuns()).toContainEqual(['npm', 'test'])
+    const unread = w.journal().filter(e => e.condition === 'state_unread')
+    expect(unread).toHaveLength(1)
+    expect(unread[0]!.reason).toMatch(/^natives: \S/)
+    expect(w.seen.toasts).toEqual([])
+  })
+
+  test('Stop prefers the runtime link when the atom has an older delivery cycle',{ options: { flow: 'enforce' } }, async ($, on) => {
     const w = flowWorld(on, { files: { [`${ROOT}/${PLAN}`]: planMd({ ...FLOW, tasks: [FLOW.tasks[0]] }) } })
     await boot($, w)
     await spawn($, w, { id: 'lost-1', description: '[T1] first', subagentType: 'pantheon:developer' })

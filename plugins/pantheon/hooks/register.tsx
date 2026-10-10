@@ -1169,10 +1169,23 @@ export const register: Register = (on, options) => {
     if (!flowOn() || e.agent_id || below.block || below.preventContinuation) return below
     const io = hostIo($)
     try {
-      const running = normalizeNatives(await read($, nativesAtom)).filter(native => native.rounds[native.rounds.length - 1]?.status === 'running').length
-      const links = new Map(Object.entries(await read($, flowAgentsAtom)))
+      // Each atom read falls back on its own, so one unreadable atom never skips the evaluation: no running natives counted
+      // (the host's background_tasks still hold), and only this runtime's links. Each failure is journaled once per Stop.
+      const unread: { atom: 'natives' | 'flowAgents'; error: unknown }[] = []
+      let running = 0
+      try {
+        running = normalizeNatives(await read($, nativesAtom)).filter(native => native.rounds[native.rounds.length - 1]?.status === 'running').length
+      } catch (error) { unread.push({ atom: 'natives', error }) }
+      const links = new Map<string, FlowAgent>()
+      try {
+        for (const [id, link] of Object.entries(await read($, flowAgentsAtom))) links.set(id, link)
+      } catch (error) { unread.push({ atom: 'flowAgents', error }) }
       for (const [id, link] of flowRuntime.links) links.set(id, link)
       const ctx = flowCtx($, await flowDeps(io))
+      for (const { atom, error } of unread) {
+        const message = error instanceof Error ? error.message : String(error)
+        await noteDeliveryDiagnostic(ctx, { condition: 'state_unread', reason: `${atom}: ${message.slice(0, 200)}` })
+      }
       const counts = countsSignature()
       if (counts !== lastDeliveryCounts) {
         lastDeliveryCounts = counts

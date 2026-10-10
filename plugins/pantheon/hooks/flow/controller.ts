@@ -1528,7 +1528,7 @@ export async function mainEdit(ctx: Ctx, input: { path: string; resolve?: () => 
 export type DeliveryNote = {
   agentId: string
   taskId?: string
-  condition: 'delivery_unparsed' | 'delivery_unlinked' | 'delivery_adopted' | 'delivery_ignored' | 'spawn_unlinked' | 'envelope_shape' | 'delivery_counts'
+  condition: 'delivery_unparsed' | 'delivery_unlinked' | 'delivery_adopted' | 'delivery_ignored' | 'spawn_unlinked' | 'envelope_shape' | 'delivery_counts' | 'state_unread'
   reason: string
 }
 
@@ -1557,7 +1557,7 @@ export async function noteDelivery(ctx: Ctx, input: DeliveryNote): Promise<boole
 }
 
 /** Bounded, content-free delivery diagnostics use the same guarded, per-plan journal queue. */
-export async function noteDeliveryDiagnostic(ctx: Ctx, input: { condition: 'envelope_shape' | 'delivery_counts'; reason: string }): Promise<boolean> {
+export async function noteDeliveryDiagnostic(ctx: Ctx, input: { condition: 'envelope_shape' | 'delivery_counts' | 'state_unread'; reason: string }): Promise<boolean> {
   return noteDelivery(ctx, { ...input, agentId: '' })
 }
 
