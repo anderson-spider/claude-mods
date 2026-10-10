@@ -59,6 +59,11 @@ export function rebase(flow: Flow, state: FlowState): FlowState {
     sideEffectsDone: [...state.sideEffectsDone],
     ...(state.lastFailure ? { lastFailure: { ...state.lastFailure } } : {}),
   }
+  if (state.lastOutput) {
+    const kept = keep(state.lastOutput)
+    if (Object.keys(kept).length > 0) s.lastOutput = kept
+    else delete s.lastOutput
+  }
   // Every id the plan has had is remembered, so no later amendment reuses one the flow dropped.
   s.seenIds = remember(state.seenIds, [...Object.keys(state.status), ...flow.tasks.map(task => task.id)], SEEN_IDS_MAX)
   // The edits that waited were about the flow before this one.
@@ -89,6 +94,8 @@ export function withMode(state: FlowState, mode: Mode): FlowState {
 export function enterEnforce(state: FlowState): FlowState {
   const s: FlowState = { ...state, attempts: {}, blocks: 0, consecutiveBlocks: 0 }
   delete s.lastFailure
+  // The attempts start over, and so does what the retry battery compares them with.
+  delete s.lastOutput
   // What shadow let wait for a receipt, or earn one, no agent was ever held to: unfinished tasks start enforcement clean.
   s.awaiting = state.awaiting.filter(a => state.status[a.task] === 'done').map(a => ({ ...a }))
   s.receipts = copyReceipts(Object.fromEntries(Object.entries(state.receipts).filter(([id]) => state.status[id] === 'done')))
@@ -96,8 +103,11 @@ export function enterEnforce(state: FlowState): FlowState {
 }
 
 /**
- * The judgment is accepted and ignored: it is journaled by the caller, never acted on. `opts` can only make the next
- * decision stricter (`requireQa`) or ask the person (`available`); it is the second input of the two-pass escalation.
+ * The judgment is accepted and ignored: it is journaled by the caller, never acted on. `opts` is how the judge speaks: the
+ * caller runs `decide` once without escalations, asks the judge only where the result depends on it, and runs `decide` again
+ * with `requireQa` or `retryToArchitect`. An escalation can only make the decision stricter: it never marks more tasks done,
+ * never lowers an attempt count, never turns a block or a pause into an allow or an advance, and never starts a task the
+ * first pass did not (it is an input to a second decision, never a patch on the first).
  */
 export function decide(flow: Flow, state: FlowState, event: FlowEvent, _judgment: Judgment | undefined, opts: DecideOptions): Decision {
   switch (event.kind) {
@@ -383,10 +393,18 @@ function onReview(flow: Flow, s: FlowState, event: Extract<FlowEvent, { kind: 'r
  * asked at once so they can come in any order, and a missing receipt from a disabled role pauses and asks the person.
  */
 function finishOrAwait(flow: Flow, s: FlowState, task: FlowTask, opts: DecideOptions): Decision {
+  if (opts.requireQa !== true) return decideReceipts(flow, s, task, opts)
+  // QA never runs a side effect twice, and nobody can be escalated to when the role is disabled: the judge cannot pause a flow.
+  if (task.sideEffect || !opts.available.qa) return { ...decideReceipts(flow, s, task, { ...opts, requireQa: false }), note: 'require_qa_ignored' }
+  // Criteria (or an earlier escalation) already require QA: there is nothing to add.
+  if (task.acceptance.criteria.length > 0 || s.qaRequired.includes(task.id)) return decideReceipts(flow, s, task, opts)
+  // The escalation only tightens: where the judge-less outcome is already a pause (no eligible task left, a disabled architect)
+  // it stays one, and asks the person, instead of becoming a wait for QA.
+  const base = decideReceipts(flow, copyState(s), task, { ...opts, requireQa: false })
+  if (base.action === 'pause' || base.action === 'block') return decideReceipts(flow, s, task, { ...opts, requireQa: false })
   // An escalation sticks to the task until it is done, so settle-by-checks, rebase and later task ends still honor it.
-  if (opts.requireQa === true && !task.sideEffect && task.acceptance.criteria.length === 0 && !s.qaRequired.includes(task.id)) s.qaRequired.push(task.id)
-  const decision = decideReceipts(flow, s, task, opts)
-  return opts.requireQa === true && task.sideEffect ? { ...decision, note: 'require_qa_ignored' } : decision
+  s.qaRequired.push(task.id)
+  return decideReceipts(flow, s, task, opts)
 }
 
 function decideReceipts(flow: Flow, s: FlowState, task: FlowTask, opts: DecideOptions): Decision {
@@ -419,7 +437,16 @@ function failAttempt(flow: Flow, s: FlowState, task: FlowTask, output: string, o
       `Task ${task.id} tried to write ${ownershipDenials} file(s) outside its files. Retry the same implementer and keep to: ${task.files.join(', ')}.`, task.id)
   }
   if (attempts < max) {
-    return instruct(s, 'failTask', 'retry', withOutput(`Task ${task.id} (${task.goal}) failed attempt ${attempts} of ${max}. Retry the same implementer with this output.`), task.id)
+    const retry = (): Decision => instruct(s, 'failTask', 'retry', withOutput(`Task ${task.id} (${task.goal}) failed attempt ${attempts} of ${max}. Retry the same implementer with this output.`), task.id)
+    if (opts.retryToArchitect !== true) return retry()
+    // The escalation never advances (an `onFail` branch still to run is its own rung) and never pauses (a disabled architect
+    // would): in both the ladder goes on as it would have, and the decision says the escalation was set aside.
+    const branch = task.onFail ? findTask(flow, task.onFail) : undefined
+    if ((branch && s.status[branch.id] !== 'done') || !opts.available.architect) return { ...retry(), note: 'retry_to_architect_ignored' }
+    // The same state the last attempt leaves: one try after the diagnosis, then the person. Never lower than it was.
+    s.attempts[task.id] = Math.max(attempts, max)
+    return instruct(s, 'failTask', 'architect',
+      withOutput(`Task ${task.id} (${task.goal}) failed attempt ${attempts} of ${max}, and what it returned suggests another retry of the same implementer will not fix it. Ask the architect to diagnose it before another attempt.`), task.id)
   }
   const branch = task.onFail ? findTask(flow, task.onFail) : undefined
   if (branch && s.status[branch.id] !== 'done') {

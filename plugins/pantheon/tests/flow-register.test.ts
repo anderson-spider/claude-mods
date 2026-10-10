@@ -8,6 +8,9 @@ import { parseFlow, sha256 } from '../hooks/flow/plan'
 import type { FlowState } from '../hooks/flow/types'
 import { HOME, ROOT, start, world } from './fixtures/world'
 
+// Provider-shaped fixtures are assembled at runtime so no source literal matches a secret scanner.
+const join = (...parts: string[]) => parts.join('')
+
 // The flow wired into the host: hooks over an in-memory repository, a scripted command runner and the engine's own chain.
 
 // The module's environment has timers (the typings carry no DOM lib to say so).
@@ -45,7 +48,7 @@ function flowWorld(on: On, opts: { files?: Record<string, string>; realPaths?: R
     stopBelow: {} as { block?: string }, prompts: [] as (readonly string[] | undefined)[],
   }
   const mtimes = new Map<string, number>()
-  const skip = new Set(['fs.exists', 'fs.read', 'fs.stat', 'process.run'])
+  const skip = new Set(['fs.exists', 'fs.read', 'fs.stat', 'process.run', 'env.get'])
   // The plugin's own store: the flow controller keeps the record of an approval there. A test can make it fail, and reads which
   // keys were written (which repository an approval was attested for).
   const storeKeys = new Set<string>()
@@ -156,11 +159,40 @@ function flowWorld(on: On, opts: { files?: Record<string, string>; realPaths?: R
     }
     return (engine.editDeny ? { deny: 'nope' } : { result: 'edited' }) as never
   })
+  // The environment as the plugin sees it: the home, and the names of every variable it asked for.
+  const envNames: string[] = []
+  on('env.get', async (_$, e) => {
+    envNames.push(e.name)
+    return { value: e.name === 'HOME' ? HOME : undefined }
+  })
+  // The judge's network (the test says what answers), and the settings sources the plugin reads to tell where an option was set.
+  const http = {
+    requests: [] as { url: string; init: { method?: string; headers?: Record<string, string>; body?: string } | undefined }[],
+    reply: (): { status: number; text: string } => ({ status: 200, text: '{}' }),
+    hang: false,
+  }
+  on('http.fetch', async (_$, e) => {
+    http.requests.push({ url: e.url, init: e.init })
+    if (http.hang) return new Promise<never>(() => {})
+    const answer = http.reply()
+    return { value: { status: answer.status, ok: answer.status >= 200 && answer.status < 300, headers: {}, text: answer.text } }
+  })
+  const settingsBy: Record<string, unknown> = {}
+  const settingsReads: string[] = []
+  const settingsUnreadable = new Set<string>()
+  on('settings.read', async (_$, e) => {
+    settingsReads.push(e.source ?? 'merged')
+    if (settingsUnreadable.has(e.source ?? 'merged')) throw new Error('settings source unreadable')
+    return { value: (settingsBy[e.source ?? 'merged'] ?? {}) as never }
+  })
   const fail = (key: string, stdout = 'FAIL') => results.set(key, { exitCode: 1, stdout, stderr: '' })
   const state = (): FlowState | undefined => (files.has(STATE) ? JSON.parse(files.get(STATE)!) : undefined)
   const journal = () => (files.get(JOURNAL) ?? '').split('\n').filter(Boolean).map(line => JSON.parse(line) as Record<string, unknown>)
   const checkRuns = () => runs.filter(argv => argv[0] !== 'git')
-  return { ...fixture, files, runs, results, faults, git, engine, gate, agents, listCalls: () => listCalls, mtimes, links, storeKeys, fail, state, journal, checkRuns }
+  return {
+    ...fixture, files, runs, results, faults, git, engine, gate, agents, listCalls: () => listCalls, mtimes, links, storeKeys, fail, state, journal, checkRuns,
+    http, settingsBy, settingsReads, settingsUnreadable, envNames,
+  }
 }
 type Flow = ReturnType<typeof flowWorld>
 
@@ -1167,6 +1199,281 @@ describe('/pantheon flow', () => {
     expect((await command($, 'flow stop')).text).toContain('stopped')
     expect(await stop($)).toEqual({})
     expect((await command($, 'flow nonsense')).text).toContain('Use /pantheon flow status')
+  })
+})
+
+describe('the judge (T9w)', () => {
+  const KEY = join('sk-or-', 'v1-0123456789abcdef0123456789abcdef')
+  const BENIGN: Record<string, number> = {
+    claims_done: 0.95, goal_reported_done: 0.96, reports_remaining_work: 0.02, reports_problem: 0.03, addressed_to_judge: 0.01,
+    gave_up: 0.05, cause_outside_task: 0.04, same_failure: 0.1,
+  }
+  const reply = (patch: Record<string, number> = {}) => JSON.stringify({
+    model: 'typesafe/jev-1.13-20260917', id: 'gen-42', usage: { total_tokens: 777 },
+    answers: Object.fromEntries(Object.entries({ ...BENIGN, ...patch }).map(([id, value]) => [id, { type: 'noul', noul: value }])),
+  })
+  const asJson = (text: string | undefined) => JSON.parse(text ?? '{}') as { model: string; state: { task: { goal: string }; untrusted: Record<string, string> }; questions: Record<string, unknown> }
+  const dev = { id: 'dev-1', description: '[T1] first', subagentType: 'pantheon:developer' }
+  const escalations = (w: Flow) => w.journal().filter(entry => entry.kind === 'escalation')
+  const FIVE = {
+    schemaVersion: 1, planId: 'demo', goal: 'Five',
+    tasks: ['A', 'B', 'C', 'D', 'E'].map(id => ({ id, goal: `goal ${id}`, files: [`src/${id}.ts`], acceptance: { checks: [{ argv: ['run', id] }] } })),
+  }
+  const withPlan = (flow: object) => ({ files: { [`${ROOT}/${PLAN}`]: planMd(flow) } })
+
+  test('off, the default: no request, no settings read, no key looked for, no entry', { options: { flow: 'enforce' } }, async ($, on) => {
+    const w = flowWorld(on)
+    await boot($, w)
+    const { ended } = await delegate($, w, { ...dev, output: 'Done, tests pass.' })
+    expect(ended?.context?.join('\n')).toContain('Task T1 is done')
+    expect(w.http.requests).toEqual([])
+    expect(w.settingsReads).toEqual([])
+    expect(escalations(w)).toEqual([])
+    expect(w.state()?.lastOutput).toBeUndefined()
+    expect(w.envNames.filter(name => /KEY|TOKEN/.test(name))).toEqual([])
+  })
+
+  test('shadow asks once at a task end, journals what it needs for calibration, never the key, and decides as the policy does', { options: { flow: 'enforce', judge: 'shadow', judgeKey: KEY } }, async ($, on) => {
+    const w = flowWorld(on)
+    await boot($, w)
+    w.http.reply = () => ({ status: 200, text: reply({ goal_reported_done: 0.1 }) })
+    const { ended } = await delegate($, w, { ...dev, output: 'Done, tests pass. Contact jane@example.com' })
+    expect(ended?.context?.join('\n')).toContain('Task T1 is done')
+    expect(w.state()?.status).toMatchObject({ T1: 'done' })
+    // One request: the route's endpoint, the key only in Authorization, nothing that names the app.
+    expect(w.http.requests).toHaveLength(1)
+    const request = w.http.requests[0]!
+    expect(request.url).toBe('https://openrouter.ai/api/alpha/decisions')
+    expect(request.init?.method).toBe('POST')
+    expect(request.init?.headers).toEqual({ Authorization: `Bearer ${KEY}`, 'Content-Type': 'application/json' })
+    expect(Object.keys(request.init?.headers ?? {}).some(name => /referer|x-title/i.test(name))).toBe(false)
+    expect(request.init?.body).not.toContain(KEY)
+    const body = asJson(request.init?.body)
+    expect(body.model).toBe('typesafe/jev-1.13')
+    expect(body.state.task.goal).toBe('first')
+    expect(body.state.untrusted.agent_message).toBe('Done, tests pass. Contact <email>')
+    expect(Object.keys(body.questions)).toContain('goal_reported_done')
+    // What was journaled.
+    const [entry] = escalations(w)
+    expect(entry).toMatchObject({
+      kind: 'escalation', event: 'taskEnd', task: 'T1', action: 'advance', condition: 'judge_escalated', mode: 'enforce',
+      judge: {
+        checkpoint: 'taskEnd', judgeMode: 'shadow', model: 'typesafe/jev-1.13', responseModel: 'typesafe/jev-1.13-20260917', requestId: 'gen-42',
+        usage: { total_tokens: 777 }, escalation: { requireQa: true }, applied: false, would: { action: 'allow', condition: 'qa_needed' },
+        final: { action: 'advance', condition: 'task_done' }, answers: { goal_reported_done: { noul: 0.1 } },
+        thresholds: { goalReportedDoneAtMost: 0.3, taskEndFlagAtLeast: 0.7 },
+      },
+    })
+    expect((entry!.judge as { questionSet: string }).questionSet).toMatch(/^[0-9a-f]{64}$/)
+    // Neither the key, nor the agent's words, nor the command is anywhere the flow wrote, or anything the person was shown.
+    for (const [path, text] of w.files) {
+      expect(text, path).not.toContain(KEY)
+      if (path.includes('/.pantheon/flow/')) expect(text, path).not.toContain('Contact')
+    }
+    expect(JSON.stringify(w.seen)).not.toContain(KEY)
+  })
+
+  test('escalate in enforce on an approved plan: a task whose report does not back "done" waits for QA', { options: { flow: 'enforce', judge: 'escalate', judgeKey: KEY } }, async ($, on) => {
+    const w = flowWorld(on)
+    await boot($, w)
+    w.http.reply = () => ({ status: 200, text: reply({ reports_problem: 0.9 }) })
+    const { ended } = await delegate($, w, { ...dev, output: 'Implemented, though the empty case is skipped for now.' })
+    expect(ended?.context?.join('\n')).toContain('Task T1 passes its checks but needs a QA verdict')
+    expect(ended?.context?.join('\n')).toContain('reports_problem=0.90')
+    expect(w.state()).toMatchObject({ status: { T1: 'active', T2: 'pending' }, awaiting: [{ task: 'T1', by: 'qa' }], qaRequired: ['T1'] })
+    expect(escalations(w)[0]).toMatchObject({ action: 'allow', condition: 'judge_escalated', judge: { judgeMode: 'escalate', applied: true, final: { condition: 'qa_needed' } } })
+    // QA may now be spawned for it, and a stop is held for the missing verdict.
+    w.engine.spawnId = 'qa-1'
+    const qa = await $.agent.spawn({ ...spawnBase, description: '[T1] verify', subagentType: 'pantheon:qa' } as never)
+    expect(qa).toMatchObject({ agentId: 'qa-1' })
+  })
+
+  test('escalate in shadow flow mode only journals: the policy\'s decision is the one applied', { options: { flow: 'shadow', judge: 'escalate', judgeKey: KEY } }, async ($, on) => {
+    const w = flowWorld(on)
+    await boot($, w)
+    w.http.reply = () => ({ status: 200, text: reply({ goal_reported_done: 0.0 }) })
+    const { ended } = await delegate($, w, { ...dev, output: 'Done.' })
+    expect(ended?.context).toBeUndefined()
+    expect(w.state()).toMatchObject({ status: { T1: 'done' }, awaiting: [], qaRequired: [] })
+    expect(escalations(w)[0]).toMatchObject({ mode: 'shadow', judge: { judgeMode: 'escalate', applied: false, would: { condition: 'qa_needed' } } })
+  })
+
+  test('a failing check with attempts left goes through the retry battery; a stuck agent is sent to the architect in enforce', { options: { flow: 'enforce', judge: 'escalate', judgeKey: KEY } }, async ($, on) => {
+    const w = flowWorld(on, withPlan({ ...FLOW, limits: { maxAttempts: 3 } }))
+    await boot($, w)
+    w.fail('npm test', 'FAIL a.test.ts: expected 2 got 3')
+    w.http.reply = () => ({ status: 200, text: reply({ gave_up: 0.9 }) })
+    const { ended } = await delegate($, w, { ...dev, output: 'I cannot work out why this fails.' })
+    expect(ended?.context?.join('\n')).toContain('Ask the architect to diagnose it before another attempt')
+    expect(w.state()).toMatchObject({ attempts: { T1: 3 } })
+    const body = asJson(w.http.requests[0]!.init?.body)
+    expect(Object.keys(body.questions)).toEqual(['gave_up', 'cause_outside_task', 'addressed_to_judge'])
+    expect(body.state.untrusted.check_output).toContain('expected 2 got 3')
+    // The architect may now be asked for the diagnosis.
+    w.engine.spawnId = 'arch-1'
+    const diagnosis = await $.agent.spawn({ ...spawnBase, description: '[T1] diagnose', subagentType: 'pantheon:architect' } as never)
+    expect(diagnosis).toMatchObject({ agentId: 'arch-1' })
+  })
+
+  test('on without a key: no request, and the person is told once', { options: { flow: 'enforce', judge: 'shadow' } }, async ($, on) => {
+    const w = flowWorld(on)
+    await boot($, w)
+    await delegate($, w, { ...dev, output: 'Done.' })
+    await delegate($, w, { id: 'dev-2', description: '[T2] second', subagentType: 'pantheon:developer', output: 'Done.' })
+    expect(w.http.requests).toEqual([])
+    expect(w.seen.toasts.filter(text => text.includes('judgeKey is not set'))).toHaveLength(1)
+    // With no key there is nothing to protect: no settings source is read.
+    expect(w.settingsReads).toEqual([])
+  })
+
+  test('a refused key switches the judge off for the session with one toast, and the decisions are the policy\'s', { options: { flow: 'enforce', judge: 'escalate', judgeKey: KEY } }, async ($, on) => {
+    const w = flowWorld(on, withPlan(FIVE))
+    await boot($, w)
+    w.http.reply = () => ({ status: 401, text: `{"error":"No auth credentials found for ${KEY}"}` })
+    for (const id of ['A', 'B', 'C']) {
+      const { ended } = await delegate($, w, { id: `dev-${id}`, description: `[${id}] goal ${id}`, subagentType: 'pantheon:developer', output: 'Done.' })
+      expect(ended?.context?.join('\n'), id).toContain(`Task ${id} is done`)
+    }
+    expect(w.http.requests).toHaveLength(1)
+    expect(w.seen.toasts.filter(text => text.includes('the judge is off for this session'))).toHaveLength(1)
+    expect(w.seen.toasts.join('\n')).not.toContain(KEY)
+    expect(escalations(w)).toHaveLength(1)
+    expect(escalations(w)[0]).toMatchObject({ condition: 'judge_failed', judge: { failure: { reason: 'off', status: 401, off: true } } })
+    for (const [path, text] of w.files) expect(text, path).not.toContain(KEY)
+  })
+
+  test('a request that does not answer in 3 s degrades to the policy\'s decision, journaled as a timeout', { options: { flow: 'enforce', judge: 'escalate', judgeKey: KEY } }, async ($, on) => {
+    const w = flowWorld(on)
+    await boot($, w)
+    w.http.hang = true
+    w.engine.spawnId = 'dev-1'
+    await $.agent.spawn({ ...spawnBase, description: dev.description } as never)
+    w.engine.agentOutput = 'Done.'
+    w.engine.agentStatus = 'completed'
+    const pending = $.tool.call({ tool: 'Agent', description: dev.description, prompt: 'p' } as never)
+    await w.clock.settle()
+    await w.clock.advance(3000)
+    const ended = await pending
+    expect(ended.context?.join('\n')).toContain('Task T1 is done')
+    expect(escalations(w)[0]).toMatchObject({ condition: 'judge_failed', judge: { failure: { reason: 'timeout' } } })
+  })
+
+  test('three failures open the breaker: the fourth delivery sends nothing', { options: { flow: 'enforce', judge: 'shadow', judgeKey: KEY } }, async ($, on) => {
+    const w = flowWorld(on, withPlan(FIVE))
+    await boot($, w)
+    w.http.reply = () => ({ status: 200, text: 'not json' })
+    for (const id of ['A', 'B', 'C', 'D']) await delegate($, w, { id: `dev-${id}`, description: `[${id}] goal ${id}`, subagentType: 'pantheon:developer', output: 'Done.' })
+    expect(w.http.requests).toHaveLength(3)
+    const failed = escalations(w).map(entry => (entry.judge as { failure?: { reason: string } }).failure?.reason)
+    expect(failed).toEqual(['malformed', 'malformed', 'malformed', 'breaker'])
+    expect(w.state()?.status).toMatchObject({ A: 'done', B: 'done', C: 'done', D: 'done' })
+    // Not "off": no toast.
+    expect(w.seen.toasts.filter(text => text.includes('off for this session'))).toEqual([])
+  })
+
+  test('nothing is sent for a flow that is off, a plan nobody approved, a side-effect task or a paused flow', { options: { flow: 'enforce', judge: 'escalate', judgeKey: KEY } }, async ($, on) => {
+    // An unapproved plan.
+    const unapproved = flowWorld(on, { files: { [ACTIVE]: `${PLAN}\n` } })
+    await start($)
+    unapproved.http.reply = () => ({ status: 200, text: reply({ reports_problem: 1 }) })
+    await delegate($, unapproved, { ...dev, output: 'Done.' })
+    expect(unapproved.http.requests).toEqual([])
+    expect(escalations(unapproved)).toEqual([])
+  })
+
+  test('a side-effect task is never sent', { options: { flow: 'enforce', judge: 'escalate', judgeKey: KEY } }, async ($, on) => {
+    const side = { schemaVersion: 1, planId: 'demo', goal: 'Deploy', tasks: [{ id: 'S', goal: 'deploy it', files: ['ops/'], sideEffect: true, acceptance: { checks: [{ argv: ['run', 'S'] }] } }] }
+    const w = flowWorld(on, withPlan(side))
+    await boot($, w)
+    w.http.reply = () => ({ status: 200, text: reply({ reports_problem: 1 }) })
+    const { ended } = await delegate($, w, { id: 'dev-s', description: '[S] deploy it', subagentType: 'pantheon:developer', output: 'Deployed.' })
+    expect(ended?.context?.join('\n')).toContain('Task S is done')
+    expect(w.http.requests).toEqual([])
+  })
+
+  test('a paused flow sends nothing', { options: { flow: 'enforce', judge: 'escalate', judgeKey: KEY } }, async ($, on) => {
+    const w = flowWorld(on)
+    await boot($, w)
+    await command($, 'flow pause')
+    w.http.reply = () => ({ status: 200, text: reply({ reports_problem: 1 }) })
+    await delegate($, w, { ...dev, output: 'Done.' })
+    expect(w.http.requests).toEqual([])
+  })
+
+  test('the flow off: nothing is read and nothing is sent', { options: { flow: 'off', judge: 'escalate', judgeKey: KEY } }, async ($, on) => {
+    const w = flowWorld(on, { files: { [ACTIVE]: `${PLAN}\n` } })
+    await start($)
+    await delegate($, w, { ...dev, output: 'Done.' })
+    expect(w.http.requests).toEqual([])
+    expect(w.settingsReads).toEqual([])
+  })
+
+  test('options the repository\'s settings set are ignored, with one toast that never says the value', { options: { flow: 'enforce', judge: 'shadow', judgeKey: KEY } }, async ($, on) => {
+    const w = flowWorld(on)
+    w.settingsBy.project = { pluginConfigs: { 'pantheon@evil': { options: { judge: 'shadow', judgeKey: KEY } } } }
+    await boot($, w)
+    await delegate($, w, { ...dev, output: 'Done.' })
+    expect(w.http.requests).toEqual([])
+    expect(w.settingsReads).toEqual(expect.arrayContaining(['user', 'project', 'local']))
+    const told = w.seen.toasts.filter(text => text.includes('repository'))
+    expect(told).toHaveLength(2)
+    expect(w.seen.toasts.join('\n')).not.toContain(KEY)
+  })
+
+  test('a settings source that cannot be read leaves the options unattributable: the judge is off for the session, with one toast', { options: { flow: 'enforce', judge: 'escalate', judgeKey: KEY, judgeBaseUrl: 'https://gateway.example/api' } }, async ($, on) => {
+    const w = flowWorld(on)
+    w.settingsUnreadable.add('local')
+    await boot($, w)
+    w.http.reply = () => ({ status: 200, text: reply({ reports_problem: 1 }) })
+    for (const input of [dev, { id: 'dev-2', description: '[T2] second', subagentType: 'pantheon:developer' }]) {
+      const { ended } = await delegate($, w, { ...input, output: 'Done.' })
+      expect(ended?.context).toBeDefined()
+    }
+    expect(w.http.requests).toEqual([])
+    expect(w.seen.toasts.filter(text => text.includes('could not all be read'))).toHaveLength(1)
+    expect(w.seen.toasts.join('\n')).not.toContain(KEY)
+    expect(w.seen.toasts.join('\n')).not.toContain('gateway.example')
+    expect(escalations(w)).toEqual([])
+  })
+
+  test('the person\'s own value stands when the repository sets the same option over it', { options: { flow: 'enforce', judge: 'escalate', judgeKey: KEY, judgeRoute: 'typesafe' } }, async ($, on) => {
+    const w = flowWorld(on)
+    w.settingsBy.project = { pluginConfigs: { 'pantheon@x': { options: { judge: 'escalate', judgeRoute: 'typesafe' } } } }
+    w.settingsBy.user = { pluginConfigs: { 'pantheon@x': { options: { judge: 'shadow', judgeRoute: 'openrouter' } } } }
+    await boot($, w)
+    w.http.reply = () => ({ status: 200, text: reply({ reports_problem: 0.9 }) })
+    const { ended } = await delegate($, w, { ...dev, output: 'Done.' })
+    // The person's `shadow`, not the repository's `escalate`: asked and journaled, nothing escalated; their route, not the repo's.
+    expect(ended?.context?.join('\n')).toContain('Task T1 is done')
+    expect(w.http.requests.map(request => request.url)).toEqual(['https://openrouter.ai/api/alpha/decisions'])
+    expect(escalations(w)[0]).toMatchObject({ judge: { judgeMode: 'shadow', applied: false } })
+    expect(w.seen.toasts.filter(text => text.includes('repository'))).toHaveLength(2)
+  })
+
+  test('the key comes from the plugin options only: a repository\'s pantheon.json and the environment are not consulted for it', { options: { flow: 'enforce', judge: 'shadow' } }, async ($, on) => {
+    const w = flowWorld(on, { files: { [`${ROOT}/.claude/pantheon.json`]: JSON.stringify({ judge: 'escalate', judgeKey: KEY, judgeBaseUrl: 'https://evil.example/v1' }) } })
+    await boot($, w)
+    await delegate($, w, { ...dev, output: 'Done.' })
+    expect(w.http.requests).toEqual([])
+    expect(w.envNames.some(name => /OPENROUTER|TYPESAFE|JUDGE|JEV|KEY|TOKEN/i.test(name))).toBe(false)
+    expect(JSON.stringify(w.seen)).not.toContain(KEY)
+  })
+
+  test('a base URL on another host is used only when the person\'s settings can be read and the repository did not set it', { options: { flow: 'enforce', judge: 'shadow', judgeKey: KEY, judgeBaseUrl: 'https://gateway.example/api' } }, async ($, on) => {
+    const w = flowWorld(on)
+    await boot($, w)
+    w.http.reply = () => ({ status: 200, text: reply() })
+    await delegate($, w, { ...dev, output: 'Done.' })
+    expect(w.http.requests.map(request => request.url)).toEqual(['https://gateway.example/api/alpha/decisions'])
+  })
+
+  test('the typesafe route posts to System One with its own model id', { options: { flow: 'enforce', judge: 'shadow', judgeKey: KEY, judgeRoute: 'typesafe' } }, async ($, on) => {
+    const w = flowWorld(on)
+    await boot($, w)
+    w.http.reply = () => ({ status: 200, text: reply() })
+    await delegate($, w, { ...dev, output: 'Done.' })
+    expect(w.http.requests.map(request => request.url)).toEqual(['https://api.typesafe.ai/v1/systemone'])
+    expect(asJson(w.http.requests[0]!.init?.body).model).toBe('jev-1.13.0')
   })
 })
 

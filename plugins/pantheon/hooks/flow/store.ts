@@ -24,6 +24,7 @@
 
 import { flowHash, sha256, validateFlow } from './plan'
 import type { Flow, TaskStatus } from './plan'
+import { LAST_OUTPUT_MAX, LAST_OUTPUT_TASKS_MAX } from './types'
 import type { Action, Awaiting, FlowState, Mode, Receipts, Reviewer } from './types'
 
 export type FlowFs = {
@@ -52,8 +53,51 @@ const HASH_MAX = 64
 // Same pattern plan.ts validates; checked again here because the id becomes a path segment.
 const PLAN_ID = /^[a-z0-9][a-z0-9-]{0,63}$/
 
-/** `amendment`: a plan edit adopted, waiting for approval or invalid. `escalation`: a judge escalation (reserved for T9w). */
+/**
+ * `amendment`: a plan edit adopted, waiting for approval or invalid. `escalation`: one judged checkpoint (the answers, what
+ * they escalated to and what happened) or the judge's failure to answer one, with the details in `judge`.
+ */
 export type JournalKind = 'decision' | 'judgment' | 'approval' | 'note' | 'amendment' | 'escalation'
+
+/** One question's answer as the judge returned it (probabilities untouched). */
+export type JudgeAnswer = { noul?: number; choice?: string; score?: number; confidence?: number; probabilities?: Record<string, number> }
+
+/**
+ * What the journal keeps of one judged checkpoint (decisions 10, 11 and 18): everything calibration needs and nothing that
+ * left the machine as text. Never the key, the state (the goal, the agent's message, a check's output) or a command.
+ */
+export type JudgeRecord = {
+  /** The battery asked: a task end with its checks passing, or the retry of a failing check. */
+  checkpoint: 'taskEnd' | 'retry'
+  /** The `judge` option the call ran under. */
+  judgeMode: 'shadow' | 'escalate'
+  /** The model asked for, and the one the response says answered (they can differ: a dated snapshot). */
+  model?: string
+  responseModel?: string
+  /** The response's request id. */
+  requestId?: string
+  /** The numeric fields of the response's `usage`, as returned. */
+  usage?: Record<string, number>
+  /** Hash of every question the judge can ask, so the wording that judged is on record. */
+  questionSet: string
+  /** True when the answering model is not one the thresholds were calibrated on. */
+  uncalibrated?: boolean
+  /** Requests made (a retry counts) and the time the call took. */
+  attempts?: number
+  ms?: number
+  answers?: Record<string, JudgeAnswer>
+  /** The thresholds the answers were measured against. */
+  thresholds?: Record<string, number>
+  /** What the answers escalated to (absent: nothing). */
+  escalation?: { requireQa?: boolean; retryToArchitect?: boolean }
+  /** What the second decision said, whether or not it was acted on. */
+  would?: { action: Action; condition: string; task?: string }
+  /** The second decision was the one returned (judge `escalate`, flow `enforce`, plan approved) and it changed something. */
+  applied?: boolean
+  /** The decision the host got, after the mode: the final action. */
+  final?: { action: Action; condition: string; task?: string }
+  failure?: { reason: string; status?: number; off?: boolean | 'battery'; detail?: string; retryAfterMs?: number }
+}
 
 export type JournalEntry = {
   /** Assigned by appendJournal: the last id plus one, starting at 1. */
@@ -80,6 +124,8 @@ export type JournalEntry = {
   approvedHash?: string
   /** The effective flow's hash after an adoption. */
   adoptedHash?: string
+  /** The judged checkpoint, on an `escalation` entry. */
+  judge?: JudgeRecord
 }
 
 /** What a caller passes: everything but the id. */
@@ -206,6 +252,8 @@ function parseState(raw: unknown, planId: string): FlowState | undefined {
   if (typeof raw.paused !== 'boolean' || typeof raw.stopped !== 'boolean' || typeof raw.done !== 'boolean') return undefined
   const lf = raw.lastFailure
   if (lf !== undefined && !(isObj(lf) && isStr(lf.key) && isCount(lf.count))) return undefined
+  // Added with the judge: the failing output of a task's last delivery. An older state.json has none.
+  if (!optional(raw.lastOutput, v => isObj(v) && Object.values(v).every(isStr))) return undefined
   // Rebuilt field by field so unknown keys never leak into the state.
   const state: FlowState = {
     planId, hash: raw.hash,
@@ -231,6 +279,10 @@ function parseState(raw: unknown, planId: string): FlowState | undefined {
   if (raw.seenEdits !== undefined) state.seenEdits = [...(raw.seenEdits as string[])]
   if (raw.seenIds !== undefined) state.seenIds = [...(raw.seenIds as string[])]
   if (lf !== undefined) state.lastFailure = { key: (lf as Obj).key as string, count: (lf as Obj).count as number }
+  if (raw.lastOutput !== undefined) {
+    const entries = Object.entries(raw.lastOutput as Record<string, string>).slice(-LAST_OUTPUT_TASKS_MAX).map(([id, text]) => [id, clip(text, LAST_OUTPUT_MAX)] as const)
+    if (entries.length > 0) state.lastOutput = Object.fromEntries(entries)
+  }
   if (raw.lastInstruction !== undefined) state.lastInstruction = raw.lastInstruction as string
   if (raw.mode !== undefined) state.mode = raw.mode as Mode
   return state
@@ -394,6 +446,83 @@ const ACTIONS: readonly string[] = ['allow', 'block', 'advance', 'wait', 'pause'
 const MODES: readonly string[] = ['off', 'shadow', 'enforce']
 const SCORE_KEYS = ['claimsDone', 'complete', 'stuck'] as const
 
+const JUDGE_ID = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/
+const JUDGE_ANSWERS_MAX = 12
+const JUDGE_KEYS_MAX = 16
+
+/** The numbers of a record, by name: finite only, at most JUDGE_KEYS_MAX, names as identifiers. */
+function parseNumbers(raw: unknown): Record<string, number> | undefined {
+  if (!isObj(raw)) return undefined
+  const out: Record<string, number> = {}
+  for (const [key, value] of Object.entries(raw)) {
+    if (Object.keys(out).length >= JUDGE_KEYS_MAX) break
+    if (JUDGE_ID.test(key) && isNum(value)) out[key] = value
+  }
+  return Object.keys(out).length > 0 ? out : undefined
+}
+
+function parseJudgeAnswer(raw: unknown): JudgeAnswer | undefined {
+  if (!isObj(raw)) return undefined
+  const out: JudgeAnswer = {}
+  if (isNum(raw.noul)) out.noul = raw.noul
+  if (isStr(raw.choice)) out.choice = clip(raw.choice, 64)
+  if (isNum(raw.score)) out.score = raw.score
+  if (isNum(raw.confidence)) out.confidence = raw.confidence
+  const probabilities = parseNumbers(raw.probabilities)
+  if (probabilities) out.probabilities = probabilities
+  return out
+}
+
+/** Rebuilt field by field, like the rest of the journal: a malformed `judge` is dropped, never the entry. */
+function parseJudge(raw: unknown): JudgeRecord | undefined {
+  if (!isObj(raw)) return undefined
+  if (raw.checkpoint !== 'taskEnd' && raw.checkpoint !== 'retry') return undefined
+  if (raw.judgeMode !== 'shadow' && raw.judgeMode !== 'escalate') return undefined
+  if (!isStr(raw.questionSet)) return undefined
+  const out: JudgeRecord = { checkpoint: raw.checkpoint, judgeMode: raw.judgeMode, questionSet: clip(raw.questionSet, HASH_MAX) }
+  for (const key of ['model', 'responseModel', 'requestId'] as const) if (isStr(raw[key])) out[key] = clip(raw[key] as string, 128)
+  const usage = parseNumbers(raw.usage)
+  if (usage) out.usage = usage
+  if (typeof raw.uncalibrated === 'boolean') out.uncalibrated = raw.uncalibrated
+  if (isCount(raw.attempts)) out.attempts = raw.attempts
+  if (isNum(raw.ms)) out.ms = raw.ms
+  if (isObj(raw.answers)) {
+    const answers: Record<string, JudgeAnswer> = {}
+    for (const [id, value] of Object.entries(raw.answers)) {
+      if (Object.keys(answers).length >= JUDGE_ANSWERS_MAX) break
+      const answer = JUDGE_ID.test(id) ? parseJudgeAnswer(value) : undefined
+      if (answer) answers[id] = answer
+    }
+    out.answers = answers
+  }
+  const thresholds = parseNumbers(raw.thresholds)
+  if (thresholds) out.thresholds = thresholds
+  if (isObj(raw.escalation)) {
+    const escalation: NonNullable<JudgeRecord['escalation']> = {}
+    if (typeof raw.escalation.requireQa === 'boolean') escalation.requireQa = raw.escalation.requireQa
+    if (typeof raw.escalation.retryToArchitect === 'boolean') escalation.retryToArchitect = raw.escalation.retryToArchitect
+    out.escalation = escalation
+  }
+  if (isObj(raw.would) && isStr(raw.would.action) && ACTIONS.includes(raw.would.action) && isStr(raw.would.condition)) {
+    out.would = { action: raw.would.action as Action, condition: clip(raw.would.condition, CONDITION_MAX), ...(isStr(raw.would.task) ? { task: clip(raw.would.task, TASK_MAX) } : {}) }
+  }
+  if (typeof raw.applied === 'boolean') out.applied = raw.applied
+  if (isObj(raw.final) && isStr(raw.final.action) && ACTIONS.includes(raw.final.action) && isStr(raw.final.condition)) {
+    out.final = { action: raw.final.action as Action, condition: clip(raw.final.condition, CONDITION_MAX), ...(isStr(raw.final.task) ? { task: clip(raw.final.task, TASK_MAX) } : {}) }
+  }
+  if (isObj(raw.failure) && isStr(raw.failure.reason)) {
+    const f = raw.failure
+    out.failure = {
+      reason: clip(f.reason as string, 32),
+      ...(isNum(f.status) ? { status: f.status } : {}),
+      ...(f.off === true || f.off === 'battery' ? { off: f.off } : {}),
+      ...(isStr(f.detail) ? { detail: clip(f.detail, 200) } : {}),
+      ...(isNum(f.retryAfterMs) ? { retryAfterMs: f.retryAfterMs } : {}),
+    }
+  }
+  return out
+}
+
 function parseEntry(raw: unknown): JournalEntry | undefined {
   if (!isObj(raw)) return undefined
   if (!isCount(raw.id) || raw.id < 1 || !isNum(raw.at) || !isStr(raw.kind) || !KINDS.includes(raw.kind)) return undefined
@@ -418,6 +547,8 @@ function parseEntry(raw: unknown): JournalEntry | undefined {
   }
   if (raw.checks !== undefined) entry.checks = (raw.checks as Obj[]).slice(0, CHECKS_MAX).map(c => ({ label: clip(c.label as string, CHECK_LABEL_MAX), passed: c.passed as boolean | null }))
   if (raw.detail !== undefined) entry.detail = clip(raw.detail as string, DETAIL_MAX)
+  const judge = raw.judge === undefined ? undefined : parseJudge(raw.judge)
+  if (judge) entry.judge = judge
   if (raw.approvedHash !== undefined) entry.approvedHash = clip(raw.approvedHash as string, HASH_MAX)
   if (raw.adoptedHash !== undefined) entry.adoptedHash = clip(raw.adoptedHash as string, HASH_MAX)
   return entry

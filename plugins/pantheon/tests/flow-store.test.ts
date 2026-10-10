@@ -524,6 +524,50 @@ test('the journal keeps amendment and escalation entries and the hashes they car
   expect(files.size).toBe(1)
 })
 
+test('a judged checkpoint round-trips in the journal, rebuilt field by field, and a malformed one is dropped, never the entry', async () => {
+  const { fs } = memFs()
+  const judge = {
+    checkpoint: 'retry' as const, judgeMode: 'escalate' as const, model: 'typesafe/jev-1.13', responseModel: 'typesafe/jev-1.13-20260917', requestId: 'gen-1',
+    usage: { total_tokens: 12, prompt_tokens: 10 }, questionSet: 'f'.repeat(64), uncalibrated: false, attempts: 1, ms: 40,
+    answers: { gave_up: { noul: 0.9 }, outcome: { choice: 'blocked', confidence: 0.5, probabilities: { blocked: 0.5, other: 0.5 } } },
+    thresholds: { retryFlagAtLeast: 0.7 }, escalation: { retryToArchitect: true },
+    would: { action: 'failTask' as const, condition: 'architect', task: 'T1' }, applied: true, final: { action: 'failTask' as const, condition: 'architect', task: 'T1' },
+  }
+  const stored = await appendJournal(fs, ROOT, PLAN, { at: 1, kind: 'escalation', event: 'taskEnd', task: 'T1', action: 'failTask', condition: 'judge_escalated', judge })
+  expect(stored.judge).toEqual(judge)
+  expect((await readJournal(fs, ROOT, PLAN))[0]!.judge).toEqual(judge)
+  // A failure keeps its reason and the truncated body.
+  const failed = await appendJournal(fs, ROOT, PLAN, {
+    at: 2, kind: 'escalation', condition: 'judge_failed',
+    judge: { checkpoint: 'taskEnd', judgeMode: 'shadow', questionSet: 'a'.repeat(64), failure: { reason: 'rejected', status: 422, off: 'battery', detail: 'x'.repeat(500) } },
+  })
+  expect(failed.judge?.failure).toEqual({ reason: 'rejected', status: 422, off: 'battery', detail: 'x'.repeat(200) })
+  // Unknown fields do not leak in, and a record that is not one is dropped with the entry kept.
+  const odd = await appendJournal(fs, ROOT, PLAN, {
+    at: 3, kind: 'escalation', condition: 'judge_clear',
+    judge: { ...judge, key: 'sk-secret', answers: { ok: { noul: 0.1, extra: 'x' }, 'bad id!': { noul: 1 }, text: 'no' } } as never,
+  })
+  expect(JSON.stringify(odd)).not.toContain('sk-secret')
+  expect(odd.judge?.answers).toEqual({ ok: { noul: 0.1 } })
+  const dropped = await appendJournal(fs, ROOT, PLAN, { at: 4, kind: 'escalation', condition: 'judge_clear', judge: { checkpoint: 'doneCheck' } as never })
+  expect(dropped.judge).toBeUndefined()
+  expect(dropped.condition).toBe('judge_clear')
+})
+
+test('the failing output the retry battery compares survives a round trip, capped, and an old state has none', async () => {
+  const { fs, files } = memFs()
+  await saveState(fs, ROOT, state({ lastOutput: { T2: 'FAIL: expected 2', gone: 'x'.repeat(5000) } }))
+  const loaded = await loadState(fs, ROOT, PLAN)
+  expect(loaded?.lastOutput?.T2).toBe('FAIL: expected 2')
+  expect(loaded?.lastOutput?.gone).toHaveLength(1500)
+  const old = JSON.parse(files.get(statePath(ROOT, PLAN))!) as Record<string, unknown>
+  delete old.lastOutput
+  files.set(statePath(ROOT, PLAN), JSON.stringify(old))
+  expect((await loadState(fs, ROOT, PLAN))?.lastOutput).toBeUndefined()
+  files.set(statePath(ROOT, PLAN), JSON.stringify({ ...old, lastOutput: { T2: 5 } }))
+  expect(await loadState(fs, ROOT, PLAN)).toBeUndefined()
+})
+
 // --- attestation: the host's record of an approval ---
 
 test('the attestation key names the repository root and the plan, and is the same for the same pair', () => {

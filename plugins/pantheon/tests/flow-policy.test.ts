@@ -1362,3 +1362,261 @@ test('a delivery during a pause or a stop still counts and clears the older rece
   expect(decide(flow, done, endEvent('R', [pass('R')])).state).toEqual(done)
   expect(decide(flow, done, endEvent('ghost', [pass('R')])).state).toEqual(done)
 })
+
+// --- escalations: the judge's second decision (decision 18) ---
+
+test('retryToArchitect sends a failing retry to the architect now and sets the attempts to the limit', () => {
+  const { flow, hash } = build([task('A')], { maxAttempts: 3 })
+  const state = approved(flow, hash)
+  const plain = decide(flow, state, endEvent('A', [fail('A', 'expected 2 got 3')]))
+  expect(plain).toMatchObject({ action: 'failTask', condition: 'retry', task: 'A' })
+  expect(plain.state.attempts.A).toBe(1)
+  const escalated = decide(flow, state, endEvent('A', [fail('A', 'expected 2 got 3')]), undefined, { retryToArchitect: true, available: ALL })
+  expect(escalated).toMatchObject({ action: 'failTask', condition: 'architect', task: 'A' })
+  expect(escalated.reason).toContain('expected 2 got 3')
+  expect(escalated.reason).toContain('architect')
+  expect(escalated.state.attempts.A).toBe(3)
+  expect(escalated.state.status.A).toBe('active')
+  expect(escalated.state.lastInstruction).toBe(escalated.reason)
+  // The ladder continues as after the last attempt: one more try after the diagnosis, then the person.
+  const again = decide(flow, escalated.state, endEvent('A', [fail('A', 'again')]))
+  expect(again).toMatchObject({ action: 'pause', condition: 'ask_person' })
+})
+
+test('retryToArchitect never advances, pauses or overrides: an onFail branch, a disabled architect and ownership keep the ladder', () => {
+  const branch = build([task('A', { onFail: 'F' }), task('F', { dependsOn: [] })], { maxAttempts: 3 })
+  const onFail = decide(branch.flow, approved(branch.flow, branch.hash), endEvent('A', [fail('A')]), undefined, { retryToArchitect: true, available: ALL })
+  expect(onFail).toMatchObject({ action: 'failTask', condition: 'retry', note: 'retry_to_architect_ignored' })
+  expect(onFail.state.attempts.A).toBe(1)
+  expect(onFail.state.status.F).toBe('pending')
+
+  const { flow, hash } = build([task('A')], { maxAttempts: 3 })
+  const gone = decide(flow, approved(flow, hash), endEvent('A', [fail('A')]), undefined, { retryToArchitect: true, available: { qa: true, architect: false } })
+  expect(gone).toMatchObject({ action: 'failTask', condition: 'retry', note: 'retry_to_architect_ignored' })
+  expect(gone.state.paused).toBe(false)
+  expect(gone.state.attempts.A).toBe(1)
+
+  // A delivery that wrote outside its files is the ownership rung, whatever the judge thinks.
+  const owned = decide(flow, approved(flow, hash), endEvent('A', [pass('A')], 2), undefined, { retryToArchitect: true, available: ALL })
+  expect(owned).toMatchObject({ action: 'failTask', condition: 'ownership' })
+  expect(owned.note).toBeUndefined()
+  expect(owned.state.attempts.A).toBe(1)
+
+  // Past the limit, or at it, the policy already did what the escalation asks.
+  const last = decide(flow, approved(flow, hash, { attempts: { A: 2 } }), endEvent('A', [fail('A')]), undefined, { retryToArchitect: true, available: ALL })
+  const lastPlain = decide(flow, approved(flow, hash, { attempts: { A: 2 } }), endEvent('A', [fail('A')]))
+  expect(last).toEqual(lastPlain)
+  const over = decide(flow, approved(flow, hash, { attempts: { A: 3 } }), endEvent('A', [fail('A')]), undefined, { retryToArchitect: true, available: ALL })
+  expect(over).toMatchObject({ action: 'pause', condition: 'ask_person' })
+
+  // It means nothing for a passing delivery, a stop or a human prompt.
+  const passing = decide(flow, approved(flow, hash), endEvent('A', [pass('A')]), undefined, { retryToArchitect: true, available: ALL })
+  expect(passing).toEqual(decide(flow, approved(flow, hash), endEvent('A', [pass('A')])))
+  const stopped = decide(flow, approved(flow, hash), stopEvent({ A: [fail('A')] }), undefined, { retryToArchitect: true, available: ALL })
+  expect(stopped).toEqual(decide(flow, approved(flow, hash), stopEvent({ A: [fail('A')] })))
+})
+
+test('retryToArchitect also escalates a QA failure, which goes through the same ladder', () => {
+  const { flow, hash } = build([task('Q', { acceptance: { checks: [check('Q')], criteria: ['works'] } })], { maxAttempts: 3 })
+  const waiting = approved(flow, hash, { awaiting: [{ task: 'Q', by: 'qa' }] })
+  const plain = decide(flow, waiting, review('Q', 'qa', 'fail', 'C1 fails'))
+  const escalated = decide(flow, waiting, review('Q', 'qa', 'fail', 'C1 fails'), undefined, { retryToArchitect: true, available: ALL })
+  expect(plain).toMatchObject({ action: 'failTask', condition: 'retry' })
+  expect(escalated).toMatchObject({ action: 'failTask', condition: 'architect' })
+  expect(escalated.state.attempts.Q).toBe(3)
+  expect(escalated.state.receipts.Q).toBeUndefined()
+})
+
+test('requireQa never turns a pause into a wait, and with QA disabled there is nobody to escalate to', () => {
+  // A risky task whose architect is disabled pauses; the escalation leaves that pause exactly as it was (no QA requirement is
+  // recorded, nothing else is asked for), instead of making it a wait.
+  const risky = build([task('R', { risk: true })])
+  const gone = { qa: true, architect: false }
+  const plain = decide(risky.flow, approved(risky.flow, risky.hash), endEvent('R', [pass('R')]), undefined, { available: gone })
+  const strict = decide(risky.flow, approved(risky.flow, risky.hash), endEvent('R', [pass('R')]), undefined, { requireQa: true, available: gone })
+  expect(plain).toMatchObject({ action: 'pause', condition: 'role_unavailable' })
+  expect(strict).toEqual(plain)
+  expect(strict.state.qaRequired).toEqual([])
+
+  // QA disabled: nobody to escalate to; the flow is not paused for it.
+  const { flow, hash } = build([task('A'), task('B')])
+  const offline = decide(flow, approved(flow, hash), endEvent('A', [pass('A')]), undefined, { requireQa: true, available: { qa: false, architect: true } })
+  expect(offline).toMatchObject({ action: 'advance', condition: 'task_done', note: 'require_qa_ignored' })
+  expect(offline.state.qaRequired).toEqual([])
+  expect(offline.state.awaiting).toEqual([])
+})
+
+test('requireQa on a risk task adds QA to the architect\'s review, and where QA is already required it changes nothing', () => {
+  const risky = build([task('R', { risk: true })])
+  const both = decide(risky.flow, approved(risky.flow, risky.hash), endEvent('R', [pass('R')]), undefined, { requireQa: true, available: ALL })
+  expect(both).toMatchObject({ action: 'allow', condition: 'review_needed' })
+  expect(both.state.awaiting).toEqual([{ task: 'R', by: 'architect' }, { task: 'R', by: 'qa' }])
+  const criteria = build([task('Q', { acceptance: { checks: [check('Q')], criteria: ['x'] } })])
+  const already = decide(criteria.flow, approved(criteria.flow, criteria.hash), endEvent('Q', [pass('Q')]), undefined, { requireQa: true, available: ALL })
+  expect(already).toEqual(decide(criteria.flow, approved(criteria.flow, criteria.hash), endEvent('Q', [pass('Q')])))
+})
+
+test('rebase and entering enforce keep the failing output only for tasks still there, and the attempts starting over drop it', () => {
+  const { flow, hash } = build([task('A'), task('B')])
+  const state = approved(flow, hash, { lastOutput: { A: 'x', B: 'y', gone: 'z' } })
+  const smaller = build([task('A')])
+  expect(rebase(smaller.flow, state).lastOutput).toEqual({ A: 'x' })
+  expect(rebase(build([task('Z')]).flow, state).lastOutput).toBeUndefined()
+  expect(enterEnforce(state).lastOutput).toBeUndefined()
+  expect(state.lastOutput).toEqual({ A: 'x', B: 'y', gone: 'z' })
+})
+
+// Two-pass property tests (decision 18): the escalated decision is a second `decide` over the same inputs, and whatever the
+// judge says it can only be stricter.
+
+function prng(seed: number): () => number {
+  let a = seed >>> 0
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0
+    let t = a
+    t = Math.imul(t ^ (t >>> 15), t | 1)
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+}
+const choose = <T>(rand: () => number, items: readonly T[]): T => items[Math.floor(rand() * items.length)]!
+
+function randomFlow(rand: () => number): { flow: Flow; hash: string } | undefined {
+  const count = 1 + Math.floor(rand() * 4)
+  const ids = ['A', 'B', 'C', 'D'].slice(0, count)
+  const tasks = ids.map((id, index) => {
+    const hasChecks = rand() < 0.85
+    const criteria = !hasChecks || rand() < 0.3 ? { criteria: ['it works'] } : {}
+    const others = ids.filter(other => other !== id)
+    return task(id, {
+      ...(rand() < 0.3 ? { risk: true } : {}),
+      ...(rand() < 0.2 ? { sideEffect: true } : {}),
+      ...(index > 0 && rand() < 0.3 ? { dependsOn: [] } : {}),
+      ...(others.length > 0 && rand() < 0.15 ? { onFail: choose(rand, others) } : {}),
+      acceptance: { checks: hasChecks ? [check(id)] : [], ...criteria },
+    })
+  })
+  try { return build(tasks, { maxAttempts: 1 + Math.floor(rand() * 4), maxBlocks: 1 + Math.floor(rand() * 7) }) } catch { return undefined }
+}
+
+function randomState(rand: () => number, flow: Flow, hash: string): FlowState {
+  const ids = flow.tasks.map(t => t.id)
+  const status = Object.fromEntries(ids.map(id => [id, choose(rand, ['pending', 'active', 'active', 'done', 'failed'] as const)]))
+  const awaiting = ids.flatMap(id => (rand() < 0.25 ? [{ task: id, by: choose(rand, ['qa', 'architect'] as const) }] : []))
+  const receipts = Object.fromEntries(ids.flatMap(id => (rand() < 0.2 ? [[id, rand() < 0.5 ? { qa: true as const } : { architect: true as const }]] : [])))
+  return {
+    ...newState(flow, hash), approvedHash: hash, status, awaiting, receipts,
+    attempts: Object.fromEntries(ids.flatMap(id => (rand() < 0.5 ? [[id, Math.floor(rand() * 4)]] : []))),
+    qaRequired: ids.filter(() => rand() < 0.15),
+    ends: Object.fromEntries(ids.map(id => [id, Math.floor(rand() * 3)])),
+    blocks: Math.floor(rand() * 7), consecutiveBlocks: Math.floor(rand() * 8),
+    paused: rand() < 0.1, stopped: rand() < 0.05, done: rand() < 0.05,
+  }
+}
+
+function randomEvent(rand: () => number, flow: Flow, state: FlowState): FlowEvent {
+  const resultsFor = (id: string): CheckResult[] => {
+    const declared = flow.tasks.find(t => t.id === id)!.acceptance.checks.length
+    const count = rand() < 0.1 ? Math.max(0, declared - 1) : declared
+    return Array.from({ length: count }, () => (rand() < 0.6 ? pass(id) : rand() < 0.8 ? fail(id, 'FAIL') : { argv: ['run', id], passed: null, output: 'timed out' }))
+  }
+  const ids = flow.tasks.map(t => t.id)
+  const kind = rand()
+  if (kind < 0.55) {
+    const id = choose(rand, ids)
+    return endEvent(id, resultsFor(id), rand() < 0.1 ? 1 : 0)
+  }
+  if (kind < 0.8) {
+    return stopEvent(Object.fromEntries(ids.filter(() => rand() < 0.8).map(id => [id, resultsFor(id)])), {
+      stopHookActive: rand() < 0.5, backgroundTasks: rand() < 0.1 ? 1 : 0, runningAgents: rand() < 0.1 ? 1 : 0,
+    })
+  }
+  if (kind < 0.95) {
+    const id = choose(rand, ids)
+    const by = choose(rand, ['qa', 'architect'] as const)
+    const verdict = by === 'qa' ? choose(rand, ['pass', 'fail', 'blocked'] as const) : choose(rand, ['pass', 'fail'] as const)
+    return { kind: 'review', taskId: id, end: rand() < 0.8 ? (state.ends[id] ?? 0) : 9, by, verdict, ...(rand() < 0.5 ? { note: 'a note' } : {}) } as FlowEvent
+  }
+  return { kind: 'humanPrompt' }
+}
+
+test('property: with an escalation the second decision is never less strict than the first', () => {
+  const rand = prng(18)
+  const doneIds = (s: FlowState) => Object.keys(s.status).filter(id => s.status[id] === 'done')
+  const activeIds = (s: FlowState) => Object.keys(s.status).filter(id => s.status[id] === 'active')
+  let cases = 0
+  let changed = 0
+  let retried = 0
+  let tightened = 0
+  for (let round = 0; round < 6000; round++) {
+    const built = randomFlow(rand)
+    if (!built) continue
+    const { flow, hash } = built
+    const state = randomState(rand, flow, hash)
+    const event = randomEvent(rand, flow, state)
+    const available = { qa: rand() < 0.8, architect: rand() < 0.8 }
+    const base: DecideOptions = { available }
+    const first = decide(deepFreeze(clone(flow)), deepFreeze(clone(state)), deepFreeze(clone(event)), undefined, deepFreeze(clone(base)))
+    for (const escalation of [{ requireQa: true }, { retryToArchitect: true }, { requireQa: true, retryToArchitect: true }] as const) {
+      cases++
+      const second = decide(deepFreeze(clone(flow)), deepFreeze(clone(state)), deepFreeze(clone(event)), undefined, deepFreeze({ ...base, ...escalation }))
+      // Never more tasks done.
+      for (const id of doneIds(second.state)) {
+        // A task the ledger already holds done is done in both passes.
+        expect(doneIds(first.state), `${id} done only after the escalation`).toContain(id)
+      }
+      // Never fewer attempts.
+      for (const id of Object.keys(first.state.attempts)) {
+        expect(second.state.attempts[id] ?? 0, `attempts of ${id}`).toBeGreaterThanOrEqual(first.state.attempts[id] ?? 0)
+      }
+      // Never a block or a pause turned into an allow or an advance.
+      if (first.action === 'block' || first.action === 'pause') {
+        expect(['block', 'pause'], `${first.condition} became ${second.action}/${second.condition}`).toContain(second.action)
+      }
+      // Never an advance the first pass did not make, and never a decision that completes the flow.
+      if (second.action === 'advance') expect(first.action).toBe('advance')
+      if (second.action === 'complete') expect(first.action).toBe('complete')
+      // The same task: the event's own, or the one the first pass named.
+      if (event.kind === 'taskEnd' || event.kind === 'review') {
+        if (second.task !== undefined) expect([first.task, event.taskId], 'target task').toContain(second.task)
+        // It starts no task the first pass did not (the event's own task may stay active instead of moving on).
+        for (const id of activeIds(second.state)) {
+          if (!activeIds(first.state).includes(id)) expect(id).toBe(event.taskId)
+        }
+      }
+      // Nothing is paused, stopped or finished by the judge.
+      if (!first.state.paused) expect(second.state.paused).toBe(false)
+      if (!first.state.done) expect(second.state.done).toBe(false)
+      expect(second.state.stopped).toBe(first.state.stopped)
+      // Escalations are cumulative only in what they require: an escalation that changes nothing changes nothing at all.
+      const identical = JSON.stringify(second) === JSON.stringify(first)
+      if (!identical) changed++
+      if (second.condition === 'architect' && first.condition === 'retry') retried++
+      if (second.state.qaRequired.length > first.state.qaRequired.length) tightened++
+    }
+  }
+  // The generator reaches every kind of escalation, so the properties above were exercised and not vacuous.
+  expect(cases).toBeGreaterThan(9000)
+  expect(changed).toBeGreaterThan(300)
+  expect(retried).toBeGreaterThan(50)
+  expect(tightened).toBeGreaterThan(50)
+})
+
+test('property: an escalation that fires in a second pass is the first pass plus a requirement, never a patch on its output', () => {
+  const rand = prng(1810)
+  let escalated = 0
+  for (let round = 0; round < 3000; round++) {
+    const built = randomFlow(rand)
+    if (!built) continue
+    const { flow, hash } = built
+    const state = randomState(rand, flow, hash)
+    const event = randomEvent(rand, flow, state)
+    const available = { qa: true, architect: true }
+    const first = decide(flow, state, event, undefined, { available })
+    // Passing the same options again, with the escalation off, is the first pass exactly: the pass is a function of its inputs.
+    expect(decide(flow, state, event, undefined, { available, requireQa: false, retryToArchitect: false })).toEqual(first)
+    const second = decide(flow, state, event, undefined, { available, requireQa: true, retryToArchitect: true })
+    if (JSON.stringify(second) !== JSON.stringify(first)) escalated++
+  }
+  expect(escalated).toBeGreaterThan(100)
+})

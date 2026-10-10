@@ -20,11 +20,30 @@
       "description": "Holds or denies main-session edits that local size and path rules do not consider trivial.",
       "default": false
     },
-    "jevApiKey": {
+    "judge": {
       "type": "string",
-      "title": "Jev API key",
-      "description": "OpenRouter API key for the flow judge. Falls back to OPENROUTER_API_KEY when unset. The edit gate does not use it.",
+      "title": "Flow judge (Jev)",
+      "description": "An outside check of the agent's own report at the end of a flow task, in the decision flow. off (default) sends nothing and reads none of the settings sources below. shadow asks and journals what it would have done and changes nothing. escalate also acts, only in flow enforce mode on an approved plan, and only to make the flow stricter: it can ask for a QA verdict, or send a failing task to the architect's diagnosis; it never marks work done. Needs judgeKey. Privacy: while this is shadow or escalate and a key is set, three texts leave this machine at a task end or a retry of an approved plan: the task's goal as the approved plan states it (for a task adopted from a plan edit, as the lead wrote it), the last 2000 characters of the agent's final message, and, on a retry, the last 1500 characters of the first failing check's output and of the previous failing output. Before sending, only secrets in common shapes, email addresses and file paths (your home, the repository root) are removed: code, diffs, commands and file excerpts that the message or the output quotes are sent as written. They go to openrouter.ai (api.typesafe.ai with judgeRoute typesafe, or your judgeBaseUrl). The failing output is also kept, redacted the same way, in .pantheon/flow/<plan>/state.json while this is on. When a key is set, to tell your options from a repository's the plugin reads your settings sources (user, project, local, flag and policy settings, each whole, env included) and looks only at this plugin's options.",
+      "default": "off",
+      "options": ["off", "shadow", "escalate"]
+    },
+    "judgeKey": {
+      "type": "string",
+      "title": "Judge API key",
+      "description": "The API key of the judge's route (an OpenRouter key by default). Read only from here: never from a file of the repository or from the environment. It is sent only in the Authorization header of the judge's request, to the route's host (or your judgeBaseUrl), and is never logged, journaled, stored or shown.",
       "sensitive": true
+    },
+    "judgeRoute": {
+      "type": "string",
+      "title": "Judge route",
+      "description": "openrouter (default): OpenRouter's decisions endpoint (openrouter.ai) with the model typesafe/jev-1.13. typesafe: TypeSafe's own System One endpoint (api.typesafe.ai) with the model jev-1.13.0. The key must be for the route chosen.",
+      "default": "openrouter",
+      "options": ["openrouter", "typesafe"]
+    },
+    "judgeBaseUrl": {
+      "type": "string",
+      "title": "Judge base URL (optional)",
+      "description": "Replaces the route's own address, for a gateway of yours. https only (or a loopback address). The key is sent to it, so set it only in your own settings: a value that the repository's settings also carry is ignored. Leave empty for the route's own address."
     },
     "abovePrompt": {
       "type": "boolean",

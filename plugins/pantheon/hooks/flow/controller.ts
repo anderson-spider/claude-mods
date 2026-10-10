@@ -26,13 +26,20 @@ import type { CheckMemo, Runner } from './checks'
 import { parseArchitect, parseQa } from './verdicts'
 import { applyMode, decide, newState, rebase, withMode } from './policy'
 import type { ModeDecision } from './policy'
+import { retryEscalation, taskEndEscalation } from './escalate'
+import type { JudgeResult } from './judge'
+import type { JudgeAccess } from './judging'
+import { QUESTION_SET_HASH, THRESHOLDS, checkpoint } from './questions'
+import type { Thresholds } from './questions'
+import { redact, tail } from './redact'
+import type { RedactContext } from './redact'
 import {
   activeKey, appendJournal, approve as setApproved, attestKey, attestOf, isApproved, loadApproved, loadState, matchesAttest, parseActive,
   parseAttest, readJournal, readSideEffects, recordSideEffect, restoreFromLedger, saveApproved, saveState, statePath, unapprove,
 } from './store'
-import type { ApprovedFile, AttestRecord, FlowFs, JournalInput, JournalKind } from './store'
-import { SEEN_EDITS_MAX, SEEN_IDS_MAX, remember } from './types'
-import type { CheckResult, DecideOptions, FlowEvent, FlowState, Mode, Reviewer } from './types'
+import type { ApprovedFile, AttestRecord, FlowFs, JournalInput, JournalKind, JudgeRecord } from './store'
+import { LAST_OUTPUT_MAX, LAST_OUTPUT_TASKS_MAX, SEEN_EDITS_MAX, SEEN_IDS_MAX, remember } from './types'
+import type { CheckResult, DecideOptions, Decision, FlowEvent, FlowState, Mode, Reviewer } from './types'
 
 export type Serial = <T>(work: () => Promise<T>) => Promise<T>
 /** Which roles the live configuration offers. */
@@ -67,6 +74,12 @@ export type Ctx = {
    * the files would be all there is, and a file anyone can write cannot say what the person approved.
    */
   attest: Attest
+  /**
+   * The judge (decisions 10 and 18); absent while the plugin option `judge` is off or no key is set, and then nothing leaves
+   * the machine and every decision is the policy's alone. It is asked at most once per event, outside the plan's queue (a
+   * request is long work), and only where the first decision depends on its answer.
+   */
+  judge?: JudgeAccess
   /** Called when the controller fails open or notices something the person should know; never throws into the controller. */
   warn: (text: string) => void
 }
@@ -658,7 +671,12 @@ async function transact<T>(ctx: Ctx, loc: Located, trace: Trace, work: (state: F
     // A rejected state file is journaled before the fresh one replaces it.
     for (const note of prepared.notes) await appendSafe(ctx, planId, { at, mode: ctx.mode, ...note })
     const out = work(prepared.state, prepared)
-    const next = out.state ?? prepared.state
+    let next = out.state ?? prepared.state
+    // The failing output kept for the judge goes away with the judge: turning it off (or no key, or a refused one) leaves no text.
+    if (next.lastOutput !== undefined && !judgeLive(ctx)) {
+      next = { ...next }
+      delete next.lastOutput
+    }
     for (const id of next.sideEffectsDone) if (!prepared.ledger.includes(id)) await recordSideEffect(ctx.fs, ctx.root, planId, id, at)
     // The record went first, then the snapshot, then the state: a crash in between leaves a snapshot that is not the
     // attested one (held as tampered until the next approve), or a state older than its snapshot (brought up to it).
@@ -715,14 +733,214 @@ function decideOpts(ctx: Ctx): DecideOptions {
   return { available: { qa: ctx.available.qa, architect: ctx.available.architect } }
 }
 
-/**
- * One decision. The judge's seam (T9): ask it here, between the first `decide` and `applyMode`, only when the result finishes a
- * task or retries, and feed an escalation into a second `decide` through `DecideOptions` (`requireQa`, `retryToArchitect`).
- * Until then no judgment exists and the decision is the policy's alone.
- */
+/** One decision on a state, without the judge: events other than a task end are never asked about. */
 function step(ctx: Ctx, flow: Flow, state: FlowState, event: FlowEvent): ModeDecision {
   const first = decide(flow, state, event, undefined, decideOpts(ctx))
   return applyMode(first, ctx.mode, state)
+}
+
+// --- the judge: two passes (decision 18) ---
+//
+// The judge informs and code decides. A task end is decided once without it (pass 1). Only where an escalation would change
+// that decision (a task that would be done and has no QA receipt required yet; a retry that has attempts left) is the judge
+// asked, with the one battery of that branch. Its answers become `requireQa` or `retryToArchitect`, the second input of a
+// second `decide`, never a patch on the first, and that second decision is made before `applyMode`. Anything that goes wrong
+// (no key, a breaker, a timeout, an answer that does not parse, a state that moved meanwhile) leaves pass 1 as the decision.
+
+type Branch = 'taskEnd' | 'retry'
+type TaskEndEvent = Extract<FlowEvent, { kind: 'taskEnd' }>
+type Escalation = { requireQa?: true; retryToArchitect?: true; why: string[] }
+/** What the judge answered for one event: asked once, before the job, and used inside it. */
+type Asked = {
+  branch: Branch
+  mode: 'shadow' | 'escalate'
+  result: JudgeResult
+  /** From the answers, computed before any decision uses them. Absent when the call failed. */
+  escalation?: Escalation
+  /** The thresholds the answers were measured against, for the journal. */
+  thresholds: Record<string, number>
+}
+/** One per call of `taskEnded`: its second attempt (a flow that moved while checks ran) reuses the answer, never asks again. */
+type JudgeMemo = { asked?: Asked | null }
+
+const sameDecision = (a: Decision, b: Decision): boolean =>
+  a.action === b.action && a.condition === b.condition && a.task === b.task && canonical(a.state) === canonical(b.state)
+
+/**
+ * Whether pass 1 of a task end depends on the judge: the decision with each escalation in turn, compared with the decision
+ * without. A side-effect task and a delivery with ownership denials are never judged (nothing to escalate to, or an answer the
+ * ladder already gave); a paused, stopped or unapproved flow answers the same whatever is asked.
+ */
+function probe(ctx: Ctx, flow: Flow, state: FlowState, event: TaskEndEvent): { branch: Branch; first: Decision; second: Decision } | undefined {
+  const task = findTask(flow, event.taskId)
+  if (!task || task.sideEffect || event.ownershipDenials > 0) return undefined
+  const opts = decideOpts(ctx)
+  const first = decide(flow, state, event, undefined, opts)
+  const tries: [Branch, DecideOptions][] = [['retry', { ...opts, retryToArchitect: true }], ['taskEnd', { ...opts, requireQa: true }]]
+  for (const [branch, escalated] of tries) {
+    const second = decide(flow, state, event, undefined, escalated)
+    if (!sameDecision(first, second)) return { branch, first, second }
+  }
+  return undefined
+}
+
+/** The judge's answer for a task end, or undefined when it was not asked (no judge, nothing to escalate, nothing to judge). */
+async function askJudge(ctx: Ctx, p: Pick<Prepared, 'flow' | 'state'>, task: FlowTask, event: TaskEndEvent, output: string | undefined, memo: JudgeMemo): Promise<Asked | undefined> {
+  const access = ctx.judge
+  if (!access) return undefined
+  if (memo.asked !== undefined) return memo.asked ?? undefined
+  memo.asked = null
+  try {
+    // Without the agent's own report there is nothing to judge, and a guess would only escalate.
+    const message = (output ?? '').trim()
+    if (!message) return undefined
+    const found = probe(ctx, p.flow, p.state, event)
+    if (!found) return undefined
+    const previous = p.state.lastOutput?.[task.id]
+    const failing = event.checks.find(check => check.passed !== true)
+    const request = found.branch === 'retry'
+      ? checkpoint('retry', { goal: task.goal, agentMessage: message, checkOutput: failing?.output ?? '', ...(previous === undefined ? {} : { previousCheckOutput: previous }) }, access.redact)
+      : checkpoint('taskEnd', { goal: task.goal, agentMessage: message }, access.redact)
+    const result = await access.ask(request)
+    if (!result) return undefined
+    const thresholds: Thresholds = access.thresholds ?? THRESHOLDS
+    const asked: Asked = {
+      branch: found.branch, mode: access.mode, result,
+      thresholds: found.branch === 'retry'
+        ? { retryFlagAtLeast: thresholds.retryFlagAtLeast }
+        : { goalReportedDoneAtMost: thresholds.goalReportedDoneAtMost, taskEndFlagAtLeast: thresholds.taskEndFlagAtLeast },
+    }
+    if (result.ok) {
+      if (found.branch === 'retry') {
+        const out = retryEscalation(result.answers, thresholds)
+        asked.escalation = { ...(out.retryToArchitect ? { retryToArchitect: true as const } : {}), why: out.why }
+      } else {
+        const out = taskEndEscalation(result.answers, task, thresholds)
+        asked.escalation = { ...(out.requireQa ? { requireQa: true as const } : {}), why: out.why }
+      }
+    }
+    memo.asked = asked
+    return asked
+  } catch {
+    // A judge that fails in any way is no judge: the decision is the policy's.
+    return undefined
+  }
+}
+
+/** The journal's account of one judged checkpoint: the answers as returned, the thresholds, what they escalated to and what happened. */
+function judgeEntry(
+  ctx: Ctx, event: TaskEndEvent, asked: Asked,
+  outcome: { would?: Decision; applied: boolean; final: ModeDecision; stale: boolean },
+): Omit<JournalInput, 'at'> {
+  const { result } = asked
+  const kind = asked.branch
+  const final = { action: outcome.final.action, condition: outcome.final.condition, ...(outcome.final.task ? { task: outcome.final.task } : {}) }
+  const base: JudgeRecord = { checkpoint: kind, judgeMode: asked.mode, questionSet: QUESTION_SET_HASH, final }
+  let record: JudgeRecord
+  let condition: string
+  let reason: string
+  if (!result.ok) {
+    record = {
+      ...base, attempts: result.attempts, ms: result.ms,
+      failure: {
+        reason: result.reason,
+        ...(result.status === undefined ? {} : { status: result.status }),
+        ...(result.off === undefined ? {} : { off: result.off }),
+        ...(result.detail === undefined ? {} : { detail: result.detail }),
+        ...(result.retryAfterMs === undefined ? {} : { retryAfterMs: result.retryAfterMs }),
+      },
+    }
+    condition = 'judge_failed'
+    reason = `the judge gave no answer (${result.reason}${result.status === undefined ? '' : ` ${result.status}`}): the decision is the policy's`
+  } else {
+    const escalation = asked.escalation ?? { why: [] }
+    const escalated = escalation.requireQa === true || escalation.retryToArchitect === true
+    record = {
+      ...base,
+      model: result.requestModel,
+      ...(result.model === undefined ? {} : { responseModel: result.model }),
+      ...(result.id === undefined ? {} : { requestId: result.id }),
+      ...(result.usage === undefined ? {} : { usage: result.usage }),
+      uncalibrated: result.uncalibrated,
+      attempts: result.attempts, ms: result.ms,
+      answers: result.answers,
+      thresholds: asked.thresholds,
+      escalation: { ...(escalation.requireQa ? { requireQa: true } : {}), ...(escalation.retryToArchitect ? { retryToArchitect: true } : {}) },
+      ...(outcome.would ? { would: { action: outcome.would.action, condition: outcome.would.condition, ...(outcome.would.task ? { task: outcome.would.task } : {}) } } : {}),
+      applied: outcome.applied,
+    }
+    condition = outcome.stale ? 'judge_stale' : escalated ? 'judge_escalated' : 'judge_clear'
+    reason = outcome.stale
+      ? 'the state moved while the judge was asked: its answer was not used'
+      : escalated ? [...escalation.why, ...(outcome.would?.note ? [`set aside: ${outcome.would.note}`] : [])].join('; ') : 'no escalation'
+  }
+  const would = outcome.final.wouldBe
+  return {
+    kind: 'escalation', event: 'taskEnd', task: event.taskId,
+    action: outcome.final.action, condition, reason: clip(reason, 600), mode: ctx.mode,
+    ...(would && would.action !== outcome.final.action ? { wouldBe: would.action } : {}),
+    judge: record,
+  }
+}
+
+/**
+ * A task end decided with the judge's answer (if any). Pass 1 is the decision; when the judge answered for this branch and
+ * its answers escalate, pass 2 is `decide` with the escalation in `DecideOptions`. Pass 2 replaces pass 1 only when the judge
+ * mode is `escalate`, the flow mode is `enforce` and the plan is approved (`live`); otherwise it is journaled as what would
+ * have happened. `applyMode` comes last, so shadow journals the escalated action as `wouldBe` like any other.
+ */
+function stepJudged(ctx: Ctx, flow: Flow, state: FlowState, event: TaskEndEvent, asked: Asked | undefined, live: boolean): { decision: ModeDecision; entries: Omit<JournalInput, 'at'>[] } {
+  const opts = decideOpts(ctx)
+  if (!asked) return { decision: applyMode(decide(flow, state, event, undefined, opts), ctx.mode, state), entries: [] }
+  const found = probe(ctx, flow, state, event)
+  const first = found?.first ?? decide(flow, state, event, undefined, opts)
+  // The branch it answered is still the decision's, and the answers escalate: the second input of the second decision.
+  const current = found !== undefined && found.branch === asked.branch
+  const escalation = asked.result.ok && current ? asked.escalation : undefined
+  let would: Decision | undefined
+  let final: Decision = first
+  let applied = false
+  if (escalation && (escalation.requireQa || escalation.retryToArchitect)) {
+    would = decide(flow, state, event, undefined, { ...opts, ...(escalation.requireQa ? { requireQa: true } : {}), ...(escalation.retryToArchitect ? { retryToArchitect: true } : {}) })
+    if (asked.mode === 'escalate' && ctx.mode === 'enforce' && live && !sameDecision(first, would)) {
+      final = would
+      applied = true
+    }
+  }
+  const decision = applyMode(final, ctx.mode, state)
+  const stale = asked.result.ok && !current
+  const entry = judgeEntry(ctx, event, asked, { ...(would ? { would } : {}), applied, final: decision, stale })
+  // The lead is told why QA is asked for a task that has no criteria: the doubt was about the agent's own report.
+  if (applied && escalation?.requireQa && ctx.mode === 'enforce') {
+    return { decision: { ...decision, reason: `${decision.reason} (The agent's own report did not back "done": ${escalation.why.join('; ')}.)` }, entries: [entry] }
+  }
+  return { decision, entries: [entry] }
+}
+
+/** Whether the judge is on for this call: configured, and not switched off for the session by a refused key. */
+function judgeLive(ctx: Ctx): boolean {
+  if (!ctx.judge) return false
+  try { return !ctx.judge.status().off } catch { return true }
+}
+
+/**
+ * The failing output the retry battery compares the next failure with; only while the judge is on, and never for a done task.
+ * It is redacted as what is sent is (secrets, emails, and the home and the root as paths): the state file is the repository's.
+ */
+function withLastOutput(state: FlowState, taskId: string, checks: readonly CheckResult[], where: RedactContext): FlowState {
+  const failing = checks.find(check => check.passed !== true)
+  const current = state.lastOutput ?? {}
+  const settled = state.status[taskId] === 'done' || failing === undefined
+  if (settled) {
+    if (!(taskId in current)) return state
+    const rest = Object.fromEntries(Object.entries(current).filter(([id]) => id !== taskId))
+    const { lastOutput: _dropped, ...kept } = state
+    return Object.keys(rest).length > 0 ? { ...kept, lastOutput: rest } : kept
+  }
+  const text = tail(redact(failing.output, where), LAST_OUTPUT_MAX)
+  const rest = Object.entries(current).filter(([id]) => id !== taskId)
+  const next = Object.fromEntries([...rest, [taskId, text]].slice(-LAST_OUTPUT_TASKS_MAX))
+  return { ...state, lastOutput: next }
 }
 
 function entryFor(ctx: Ctx, event: string, decision: ModeDecision, checks?: readonly CheckResult[], task?: string): Omit<JournalInput, 'at'> {
@@ -911,11 +1129,19 @@ async function tamperedStop(ctx: Ctx, loc: Tampered, input: StopInput, trace: Tr
 
 // --- task end and reviews ---
 
-/** A work agent (developer or ux) returned for a task: its own checks decide. */
-export async function taskEnded(ctx: Ctx, input: { taskId: string; ownershipDenials: number }): Promise<Outcome> {
+/** What a delivery carries: the task, the writes refused during it, and the agent's final message (what the judge reads). */
+export type TaskEndInput = { taskId: string; ownershipDenials: number; output?: string }
+
+/**
+ * A work agent (developer or ux) returned for a task: its own checks decide. With a judge on `ctx` and the agent's message,
+ * the judge is asked once, where the decision depends on it, and its answer is journaled whatever it does to the decision.
+ */
+export async function taskEnded(ctx: Ctx, input: TaskEndInput): Promise<Outcome> {
   return guarded<Outcome>(ctx, 'task end', {}, async trace => {
+    // One request per delivery: the second attempt (the flow moved while checks ran) reuses the answer.
+    const memo: JudgeMemo = {}
     for (let attempt = 0; attempt < 2; attempt++) {
-      const out = await evaluateTaskEnd(ctx, input, trace)
+      const out = await evaluateTaskEnd(ctx, input, trace, memo)
       if (out !== STALE) return out
     }
     return ctx.mode === 'enforce'
@@ -924,7 +1150,7 @@ export async function taskEnded(ctx: Ctx, input: { taskId: string; ownershipDeni
   })
 }
 
-async function evaluateTaskEnd(ctx: Ctx, input: { taskId: string; ownershipDenials: number }, trace: Trace): Promise<Outcome | typeof STALE> {
+async function evaluateTaskEnd(ctx: Ctx, input: TaskEndInput, trace: Trace, memo: JudgeMemo): Promise<Outcome | typeof STALE> {
   const loc = await locate(ctx)
   if (loc.kind !== 'ok') return {}
   trace.planId = loc.planId
@@ -942,10 +1168,17 @@ async function evaluateTaskEnd(ctx: Ctx, input: { taskId: string; ownershipDenia
     }
     await pass.finish()
   }
-  const event: FlowEvent = { kind: 'taskEnd', taskId: task.id, checks, ownershipDenials: input.ownershipDenials }
+  const event: TaskEndEvent = { kind: 'taskEnd', taskId: task.id, checks, ownershipDenials: input.ownershipDenials }
+  // The judge is long work: it is asked here, before the plan's queue, from the state as `observe` saw it. The decision inside
+  // the job starts over from the state as it is then, and uses the answer only for the branch it was asked about.
+  const asked = idle ? undefined : await askJudge(ctx, peek, task, event, input.output, memo)
   const decision = await transactAt(ctx, loc, trace, peek.hash, (before, p) => {
-    const d = step(ctx, p.flow, before, event)
-    return { state: d.state, entries: journalable(d, before) ? [entryFor(ctx, 'taskEnd', d, checks, task.id)] : [], value: d }
+    const judged = stepJudged(ctx, p.flow, before, event, asked, enforcing(p))
+    const d = judged.decision
+    // The failing output is kept (only while the judge is on) for the retry battery to compare the next failure with.
+    const state = ctx.judge && judgeLive(ctx) && !idle ? withLastOutput(d.state, task.id, checks, ctx.judge.redact) : d.state
+    const entries = [...(journalable(d, before) ? [entryFor(ctx, 'taskEnd', d, checks, task.id)] : []), ...judged.entries]
+    return { state, entries, value: d }
   })
   if (decision === STALE) return STALE
   const text = leadText(ctx, decision)
@@ -1374,6 +1607,7 @@ export async function controlFlow(ctx: Ctx, action: 'pause' | 'resume' | 'stop')
       const attempts = Object.fromEntries(Object.entries(state.attempts).filter(([id]) => state.status[id] === 'done'))
       const next: FlowState = { ...state, paused: false, stopped: false, attempts, consecutiveBlocks: 0 }
       delete next.lastFailure
+      delete next.lastOutput
       return { state: next, entries: [{ kind: 'note', event: 'command', condition: 'command_resume', detail: 'resumed by the person' }] }
     }
     if (loc.kind === 'tampered') {
@@ -1446,6 +1680,11 @@ export async function flowStatus(ctx: Ctx): Promise<string> {
       lines.push(`  ${task.id}: ${parts.join(', ')}`)
     }
     lines.push(`Budget: ${state.blocks}/${flow.limits.maxBlocks} blocks, ${state.consecutiveBlocks} in a row`)
+    if (ctx.judge) {
+      const judge = ctx.judge.status()
+      const notes = [judge.off ? 'off for this session (the key or the endpoint was refused)' : '', judge.breakerOpen ? 'paused by its breaker' : '', judge.stoppedBatteries > 0 ? `${judge.stoppedBatteries} question set(s) stopped after a rejection` : ''].filter(Boolean)
+      lines.push(`Judge: ${ctx.judge.mode}${notes.length > 0 ? `, ${notes.join('; ')}` : ''}`)
+    } else lines.push('Judge: off (nothing is sent)')
     const waiting = (p.pending ?? []).filter(reason => reason !== SOON)
     if (approved && (p.pending ?? []).includes(SOON)) lines.push('Edits: the plan file holds an edit that is purely additive; the next event adopts it, recording it in the plugin store first.')
     if (approved && waiting.length) {

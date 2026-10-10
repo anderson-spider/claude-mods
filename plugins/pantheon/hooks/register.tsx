@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { AgentSpec, FsStat, Hook, ProcessRunInit, ProcessRunResult, Register, ToolCallResult } from 'claude-code'
+import type { AgentSpec, FsStat, Hook, ProcessRunInit, ProcessRunResult, Register, SettingsSource, ToolCallResult } from 'claude-code'
 
 import type { FlowAgent, Native, SessionInfo } from '../types'
 import { loadConfig } from './config'
@@ -17,6 +17,9 @@ import type { GitActor } from './flow/gitgate'
 import { actorOfType, cwdOfAgent, gitGate, usesGit } from './flow/gitguard'
 import type { CwdBook } from './flow/gitguard'
 import { noteGit } from './flow/gitjournal'
+import type { JudgeIo, Route } from './flow/judge'
+import { createJudgeAccess, createJudgeSession, judgeModeOf, resolveJudge } from './flow/judging'
+import type { JudgeSession, JudgeSetup, SettingsView } from './flow/judging'
 import { createSerial } from './flow/store'
 import type { Mode } from './flow/types'
 import { buildCouncilBlock, isCouncilOrigin, matchesCouncilTrigger } from './prompts/council'
@@ -114,6 +117,8 @@ type Io = {
   registerAgent: (spec: AgentSpec) => Promise<unknown>
   after: (ms: number, fn: () => void) => { cancel: () => void }
   submit: (text: string) => Promise<unknown>
+  /** One source of the engine's settings, as loaded (the judge options are checked against where they were set). */
+  settings: (source: SettingsSource) => Promise<unknown>
 }
 
 type TrackingIo = {
@@ -142,6 +147,27 @@ function hostIo($: Dollar): Io {
     registerAgent: spec => $.agent.register(spec),
     after: (ms, fn) => $.clock.after(ms, fn),
     submit: text => $.prompt.submit({ text }),
+    settings: source => $.settings.read({ source }),
+  }
+}
+
+/**
+ * The judge's host access from the hook's `$`: the request goes through the host's network (`$.http.fetch`, whose answer
+ * carries the headers the retry reads), the timer is the host's clock, and the epoch clock and the jitter are plain
+ * synchronous calls. Nothing else is sent than what `judge` builds: an Authorization and a Content-Type, no Referer, no X-Title.
+ */
+function judgeIo($: Dollar): JudgeIo {
+  return {
+    fetch: async (url, init) => {
+      const response = await $.http.fetch(url, init)
+      return { status: response.status, ok: response.ok, text: response.text, headers: response.headers }
+    },
+    timer: (ms, fn) => {
+      const handle = $.clock.after(ms, fn)
+      return () => handle.cancel()
+    },
+    now: () => Date.now(),
+    random: () => Math.random(),
   }
 }
 
@@ -209,7 +235,16 @@ export function withFlowAgent(links: Record<string, FlowAgent>, agentId: string,
 }
 
 /** What a flow call needs besides the hook's `$`; built by `register`, which owns the root, the config and the queues. */
-type FlowDeps = { root: string; mode: Mode; config: PantheonConfig; serial: (planId: string) => Serial; memo: CheckMemo; warn: (text: string) => void }
+type FlowDeps = {
+  root: string
+  mode: Mode
+  config: PantheonConfig
+  serial: (planId: string) => Serial
+  memo: CheckMemo
+  warn: (text: string) => void
+  /** Present only while the judge is on and a key is set: what `flowCtx` builds the controller's `judge` from. */
+  judge?: { mode: 'shadow' | 'escalate'; route: Route; home: string; session: JudgeSession; toast: (text: string) => void }
+}
 
 /** What the flow hooks share while a module instance lives (a hot reload starts it again). */
 type FlowRuntime = {
@@ -444,6 +479,12 @@ function flowCtx($: Dollar, deps: FlowDeps): Ctx {
     // The plugin's own store, outside the repository: what the controller trusts to say what the person approved and which plan is in force.
     attest: { get: key => $.store.get(key), set: (key, value) => $.store.set(key, value) },
     warn: deps.warn,
+    ...(deps.judge ? {
+      judge: createJudgeAccess({
+        mode: deps.judge.mode, route: deps.judge.route, io: judgeIo($), session: deps.judge.session,
+        redact: { home: deps.judge.home, root: deps.root }, toast: deps.judge.toast,
+      }),
+    } : {}),
   }
 }
 
@@ -459,7 +500,7 @@ async function finishFlowAgent($: Dollar, rt: FlowRuntime, deps: FlowDeps, agent
   // A diagnosis is advice for the lead, and an agent that did not finish proved nothing either way.
   if (link.kind === 'diagnosis' || !completed) return undefined
   const ctx = flowCtx($, deps)
-  if (link.kind === 'work') return (await taskEnded(ctx, { taskId: link.task, ownershipDenials: link.denials })).text
+  if (link.kind === 'work') return (await taskEnded(ctx, { taskId: link.task, ownershipDenials: link.denials, output })).text
   return (await reviewed(ctx, { taskId: link.task, by: link.by ?? 'qa', end: link.end, output, ...(link.git ? { git: link.git } : {}) })).text
 }
 
@@ -530,10 +571,47 @@ export const register: Register = (on, options) => {
   const flowOn = (): boolean => flowMode !== 'off' && gateRoot !== undefined
   // The attestation is keyed by the real path of the root, not by how the session's cwd spells it.
   let flowRealRoot: { spelled: string; real: string } | undefined
+  // The judge (decisions 10 and 18): `judge` is off by default, and then nothing is read or sent. The key, the route and a base URL
+  // come from the plugin's options only (never a file of the repository, never the environment). One session, so one breaker
+  // and one "off for the session" for every caller; it lives as long as this module instance does.
+  const judgeSession = createJudgeSession(() => Date.now())
+  let judgeSetup: Promise<JudgeSetup> | undefined
+  const judgeDeps = async (io: Io): Promise<FlowDeps['judge']> => {
+    if (judgeModeOf(options.judge) === 'off') return undefined
+    judgeSetup ??= (async (): Promise<JudgeSetup> => {
+      // Where the options were set matters only when there is a key to protect: with none, no request can be made and the
+      // settings are not read. Every source is read (the engine gives each whole, its `env` included; only
+      // `pluginConfigs` is looked at), and one that cannot be read leaves the options unattributable.
+      let view: SettingsView | undefined
+      if (typeof options.judgeKey === 'string' && options.judgeKey.trim() !== '') {
+        const sources = async (names: readonly SettingsSource[]) => {
+          const out: unknown[] = []
+          let readable = true
+          for (const name of names) {
+            try { out.push(await io.settings(name)) } catch { readable = false }
+          }
+          return { out, readable }
+        }
+        const trusted = await sources(['user', 'flag', 'policy'])
+        const repo = await sources(['project', 'local'])
+        view = { trusted: trusted.out, repo: repo.out, readable: trusted.readable && repo.readable }
+      }
+      const setup = resolveJudge(options, view)
+      for (const note of setup.notes) { try { io.toast(`pantheon: ${note}`) } catch { /* A failed toast changes nothing. */ } }
+      return setup
+    })()
+    const setup = await judgeSetup
+    if (setup.mode === 'off' || !setup.route) return undefined
+    return { mode: setup.mode, route: setup.route, home: (await io.home()) ?? '', session: judgeSession, toast: text => io.toast(text) }
+  }
   const flowDeps = async (io: Io): Promise<FlowDeps> => {
     const spelled = gateRoot ?? (await workspace(io)).root
     if (flowRealRoot?.spelled !== spelled) flowRealRoot = { spelled, real: await io.realPath(spelled) }
-    return { root: flowRealRoot.real, mode: flowMode, config: state.config, serial: flowSerial, memo: flowMemo, warn: flowWarning(io) }
+    const judge = await judgeDeps(io)
+    return {
+      root: flowRealRoot.real, mode: flowMode, config: state.config, serial: flowSerial, memo: flowMemo, warn: flowWarning(io),
+      ...(judge ? { judge } : {}),
+    }
   }
   configureStrip({ paceStart: options.paceStart })
   let minuteTicker: { cancel: () => void } | undefined

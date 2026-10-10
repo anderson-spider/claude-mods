@@ -8,6 +8,9 @@ export type Mode = 'off' | 'shadow' | 'enforce'
 /** The newest ids and edit keys a state remembers. */
 export const SEEN_IDS_MAX = 1000
 export const SEEN_EDITS_MAX = 64
+/** The failing output kept per task for the retry battery, and how many tasks keep one. */
+export const LAST_OUTPUT_MAX = 1500
+export const LAST_OUTPUT_TASKS_MAX = 100
 /** `list` with `items` added (each once), keeping the newest `max`. */
 export function remember(list: readonly string[] | undefined, items: readonly string[], max: number): string[] {
   const out = [...(list ?? [])]
@@ -18,7 +21,10 @@ export function remember(list: readonly string[] | undefined, items: readonly st
 /** One check of a task: `passed` is null when it could not run (missing binary, timeout), with why in `output`. */
 export type CheckResult = { argv: string[]; passed: boolean | null; output: string }
 
-/** What a judge said about a checkpoint. Recorded for calibration only: the policy never acts on it. */
+/**
+ * The first generation of the judge's seam, kept so `decide` keeps its signature: a judgment passed here is accepted and
+ * ignored. The judge reaches the policy only as `DecideOptions` (a second `decide` that can only be stricter).
+ */
 export type Judgment = {
   source: 'jev'
   scores: Partial<Record<'claimsDone' | 'complete' | 'stuck', number>>
@@ -38,6 +44,14 @@ export type DecideOptions = {
    * nothing and the decision carries `note: 'require_qa_ignored'`.
    */
   requireQa?: boolean
+  /**
+   * A failing check whose retry the judge doubts (decision 18): the task goes to the architect's diagnosis now instead of
+   * burning another attempt. `attempts` is set to the limit (never lowered), so the ladder continues as it would after the
+   * last attempt: one more try after the diagnosis, then the person. It never advances, never marks a task done, never
+   * overrides ownership, the limit or a pause, and is ignored (`note: 'retry_to_architect_ignored'`) when the architect is
+   * disabled or the task has an `onFail` branch still to run: the judge cannot pause a flow or move it to another task.
+   */
+  retryToArchitect?: boolean
   /** Whether each role is enabled. A role that is disabled while a task needs its receipt (or the architect's diagnosis) pauses the flow and asks the person. */
   available: { qa: boolean; architect: boolean }
 }
@@ -93,6 +107,12 @@ export type FlowState = {
   consecutiveBlocks: number
   /** The last failing output, and how many times in a row it repeated. */
   lastFailure?: { key: string; count: number }
+  /**
+   * The output of the failing check of a task's last failed delivery (redacted of secrets, at most `LAST_OUTPUT_MAX`
+   * characters), kept only while the judge is on: it is the "previous output" the retry battery compares with. Dropped when
+   * the task is done, delivers a pass, or the attempts start over.
+   */
+  lastOutput?: Record<string, string>
   paused: boolean
   stopped: boolean
   done: boolean

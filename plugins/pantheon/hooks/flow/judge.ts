@@ -73,7 +73,7 @@ export type JudgeSuccess = {
 
 export type FailureReason =
   | 'off' // 401/402/403/404: the key or the endpoint is unusable; the caller switches the judge off for the session
-  | 'rejected' // 400/422: this battery's request is wrong, and it will be wrong again; `detail` holds the truncated body
+  | 'rejected' // 400/422: this battery's request is wrong, and it will be wrong again; `detail` holds the provider's error code, never its message
   | 'http' // any other status, including a retryable one that failed twice or could not be retried in time
   | 'timeout'
   | 'network' // fetch itself failed
@@ -91,7 +91,10 @@ export type JudgeFailure = {
    */
   off?: true | 'battery'
   status?: number
-  /** `rejected`: the body truncated to 300 characters with the key stripped. `malformed` and `network`: what was wrong. */
+  /**
+   * `rejected`: only the error code the provider named (a short identifier), never its message: an error message can echo the
+   * request, which is the goal and the agent's words. `malformed` and `network`: what was wrong, in our words or the host's.
+   */
   detail?: string
   /** A retryable status's `retry-after` in ms, no higher than the call's deadline. */
   retryAfterMs?: number
@@ -167,7 +170,8 @@ const MIN_ATTEMPT_MS = 100
 const RETRY_JITTER_MS = { min: 200, span: 300 }
 export const MIN_TIMEOUT_MS = 500
 export const MAX_TIMEOUT_MS = 5_000
-const DETAIL_CAP = 300
+/** A provider error code is a short identifier; anything else is free text that may quote the request. */
+const ERROR_CODE = /^[A-Za-z0-9_.:-]{1,40}$/
 // Loose enough for the tolerances of rounding to two decimals.
 const EPSILON = 1e-6
 
@@ -187,6 +191,18 @@ function stripKey(text: string, key: string): string {
 
 function clean(text: string, key: string, cap: number): string {
   return head(redactSecrets(stripKey(text, key)), cap)
+}
+
+/** The code of an error body (`{ error: { code } }`, `{ code }`, `{ error: { type } }`, `{ type }`), or undefined: never its message. */
+function errorCode(text: string): string | undefined {
+  let body: unknown
+  try { body = JSON.parse(text) } catch { return undefined }
+  const inner = isObject(body) && isObject(body.error) ? body.error : undefined
+  for (const candidate of [inner?.code, isObject(body) ? body.code : undefined, inner?.type, isObject(body) ? body.type : undefined]) {
+    const code = typeof candidate === 'number' ? String(candidate) : candidate
+    if (typeof code === 'string' && ERROR_CODE.test(code)) return code
+  }
+  return undefined
 }
 
 function headerValue(headers: Record<string, string> | undefined, name: string): string | undefined {
@@ -398,7 +414,10 @@ async function run(r: Run): Promise<JudgeResult> {
       } else if (OFF_STATUSES.has(attempt.status)) {
         return fail('off', { status: attempt.status })
       } else if (REJECTED_STATUSES.has(attempt.status)) {
-        return fail('rejected', { off: 'battery', status: attempt.status, detail: clean(attempt.text, route.key, DETAIL_CAP) })
+        {
+          const code = errorCode(attempt.text)
+          return fail('rejected', { off: 'battery', status: attempt.status, ...(code === undefined ? {} : { detail: stripKey(code, route.key) }) })
+        }
       } else if (RETRYABLE(attempt.status)) {
         wait = retryAfterMs(attempt.headers, clock())
         // Reported no higher than the deadline: a longer ask cannot be waited out, and a bad clock must not invent days.
