@@ -470,11 +470,16 @@ async function finishFlowAgent($: Dollar, rt: FlowRuntime, deps: FlowDeps, agent
   return (await reviewed(ctx, { taskId: link.task, by: link.by ?? 'qa', end: link.end, output, ...(link.git ? { git: link.git } : {}) })).text
 }
 
-/** What a notification envelope lacks before its `<result>` for parseNotification to read it: a non-empty `<task-id>` or `<status>`. */
-function unparsedReason(text: string): string {
+/** A tag of a notification envelope, read as parseNotification reads it: before `<result>`, trimmed, empty is none. */
+function envelopeTag(text: string, name: string): string | undefined {
   const at = text.indexOf('<result>')
   const head = at === -1 ? text : text.slice(0, at)
-  const missing = ['task-id', 'status'].filter(name => !new RegExp(`<${name}>([^<]*)</${name}>`).exec(head)?.[1]?.trim())
+  return new RegExp(`<${name}>([^<]*)</${name}>`).exec(head)?.[1]?.trim() || undefined
+}
+
+/** What a notification envelope lacks before its `<result>` for parseNotification to read it: a non-empty `<task-id>` or `<status>`. */
+function unparsedReason(text: string): string {
+  const missing = ['task-id', 'status'].filter(name => !envelopeTag(text, name))
   return `the envelope has no non-empty ${missing.map(name => `<${name}>`).join(' or ')} before <result>`
 }
 
@@ -1138,7 +1143,12 @@ export const register: Register = (on, options) => {
     try {
       const note = parseNotification(e.text)
       if (!note) {
-        await noteDelivery(flowCtx($, await flowDeps(io)), { agentId: '', condition: 'delivery_unparsed', reason: unparsedReason(e.text) })
+        // Only an envelope for an agent this session knows (a stored link, or an id the engine lists) is journaled. A Monitor
+        // event carries no status and is no delivery: for any other id nothing is written.
+        const id = envelopeTag(e.text, 'task-id')
+        const stored = id ? await flowAgentOf($, flowRuntime, id) : undefined
+        const listed = id && !stored ? (await $.agent.list()).some(agent => agent.id === id) : false
+        if (id && (stored || listed)) await noteDelivery(flowCtx($, await flowDeps(io)), { agentId: '', condition: 'delivery_unparsed', reason: unparsedReason(e.text) })
       } else {
         const deps = await flowDeps(io)
         const ctx = flowCtx($, deps)
@@ -1153,6 +1163,8 @@ export const register: Register = (on, options) => {
           await noteDelivery(ctx, { agentId: note.agentId, taskId: link.task, condition: 'delivery_ignored', reason: `agent ${note.agentId} is a nested subagent of task agent ${link.root}: only a task's own agent delivers` })
         } else {
           if (!stored) await noteDelivery(ctx, { agentId: note.agentId, taskId: link.task, condition: 'delivery_adopted', reason: `linked by lookup: $.agent.list() gives agent ${note.agentId} the [${link.task}] description${note.status === 'completed' ? '' : `; status=${note.status}`}` })
+          // A task's agent that ended failed or killed proved nothing: the journal says so, and reads no delivery. A diagnosis is advice and is not journaled.
+          if (note.status !== 'completed' && link.kind !== 'diagnosis') await noteDelivery(ctx, { agentId: note.agentId, taskId: link.task, condition: 'delivery_ignored', reason: `agent ${note.agentId} ended with status=${note.status}: it proved nothing, so its output was not judged` })
           // Only a linked agent's own envelope counts, and only a completed status is a delivery.
           text = await finishFlowAgent($, flowRuntime, deps, note.agentId, note.result, note.status === 'completed')
         }

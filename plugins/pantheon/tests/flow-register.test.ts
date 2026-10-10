@@ -1132,15 +1132,42 @@ describe('prompts', () => {
     expect(w.journal().some(e => e.event === 'taskEnd')).toBe(false)
   })
 
-  test('an envelope without a task id or a status is journaled as unparsed, and says what is missing', { options: { flow: 'shadow' } }, async ($, on) => {
+  test('an envelope without a task id writes nothing, and a listed agent whose envelope lacks a status is journaled as unparsed', { options: { flow: 'shadow' } }, async ($, on) => {
     const w = flowWorld(on)
     await boot($, w)
+    const before = w.journal().length
     await $.prompt.submit({ text: '<task-notification>\n<status>completed</status>\n<result>Done.</result>\n</task-notification>', origin: { kind: 'task-notification' } } as never)
-    expect(w.journal().at(-1)).toMatchObject({ kind: 'note', event: 'delivery', condition: 'delivery_unparsed', mode: 'shadow' })
-    expect(w.journal().at(-1)?.reason).toContain('<task-id>')
+    expect(w.journal().length).toBe(before)
+    w.agents.push({ id: 'bg-1', description: 'refactor the cache', type: 'general-purpose', status: 'running' })
     await $.prompt.submit({ text: '<task-notification><task-id>bg-1</task-id><result>Done</result></task-notification>', origin: { kind: 'task-notification' } } as never)
-    expect(w.journal().at(-1)).toMatchObject({ condition: 'delivery_unparsed' })
+    expect(w.journal().at(-1)).toMatchObject({ kind: 'note', event: 'delivery', condition: 'delivery_unparsed', mode: 'shadow' })
     expect(w.journal().at(-1)?.reason).toContain('<status>')
+    expect(w.engine.prompts.at(-1)).toBeUndefined()
+    expect(w.state()?.ends).toEqual({})
+  })
+
+  test('a Monitor event (a task-notification with no status) for a task the host does not list changes nothing and adds no context', { options: { flow: 'shadow' } }, async ($, on) => {
+    const w = flowWorld(on)
+    await boot($, w)
+    const before = w.journal().length
+    const monitor = '<task-notification>\n<task-id>bgiietmhj</task-id>\n<summary>Monitor event: "build finished"</summary>\n<event>build ok</event>\n</task-notification>'
+    await $.prompt.submit({ text: monitor, origin: { kind: 'task-notification' } } as never)
+    await $.prompt.submit({ text: monitor, origin: { kind: 'task-notification' } } as never)
+    expect(w.journal().length).toBe(before)
+    expect(w.engine.prompts.at(-1)).toBeUndefined()
+    expect(w.state()?.ends).toEqual({})
+  })
+
+  test('a stored task link whose envelope ends failed or killed is journaled as ignored with its status, and ends nothing', { options: { flow: 'shadow' } }, async ($, on) => {
+    const w = flowWorld(on)
+    await boot($, w)
+    await spawn($, w, { id: 'bg-1', description: '[T1] first', subagentType: 'pantheon:developer' })
+    await $.prompt.submit({ text: envelope('bg-1', 'failed'), origin: { kind: 'task-notification' } } as never)
+    expect(w.journal().at(-1)).toMatchObject({ kind: 'note', event: 'delivery', condition: 'delivery_ignored', task: 'T1', mode: 'shadow' })
+    expect(w.journal().at(-1)?.reason).toContain('status=failed')
+    await $.prompt.submit({ text: envelope('bg-1', 'killed'), origin: { kind: 'task-notification' } } as never)
+    expect(w.journal().at(-1)?.reason).toContain('status=killed')
+    expect(w.journal().some(e => e.event === 'taskEnd')).toBe(false)
     expect(w.state()?.ends).toEqual({})
   })
 
