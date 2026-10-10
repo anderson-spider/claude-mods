@@ -22,7 +22,7 @@ Each plugin's details live in `plugins/<name>/AGENTS.md`, loaded when working un
 
 ```
 mise install                                   # node and TypeScript 7 from mise.toml (scripts, `tsc --lsp`, `tsc -p plugins/<name>/tsconfig.json`)
-mise run types                                 # writes every plugin's .claude-plugin/types/ (a short interactive session loads each plugin from its folder)
+mise run plugins:types                         # writes every plugin's .claude-plugin/types/ (a short interactive session loads each plugin from its folder)
 claude plugin validate .                       # validates the marketplace
 claude plugin validate plugins/branch-guard    # validates the plugin
 claude plugin test plugins/branch-guard        # runs tests/*.test.ts
@@ -36,7 +36,7 @@ node scripts/check-version-bump.mjs origin/main  # a plugin with code changes bu
 claude --plugin-dir plugins/branch-guard       # loads the plugin with automatic reload
 make validate                                  # validates the marketplace and every plugin, then runs check-consistency
 make test                                      # runs every plugin's tests and the codex-computer-use helper's
-mise run update                                # refreshes the marketplace and updates every installed plugin from it
+mise run plugins:update                        # refreshes the marketplace and updates every installed plugin from it
 ```
 
 Inside a session, `/reload-plugins` reloads the hooks.
