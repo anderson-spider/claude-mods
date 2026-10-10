@@ -5,10 +5,17 @@ import { buildLeadSection } from '../hooks/prompts/lead'
 import { rolePrompt } from '../hooks/prompts/roles'
 
 describe('lead budget', () => {
-  // The git rule and the qa route's flow-task prefix add text; the limit keeps a small growth margin.
-  test('the prompt stays within 5600 chars', () => {
-    expect(buildLeadSection(DEFAULTS).length).toBeLessThanOrEqual(5600)
+  // Checked: the default config, and each role or configured seat disabled one at a time.
+  // The council has two seats (alpha, beta); config.ts rejects any other seat name, so no seat can sit outside this ceiling.
+  const LEAD_BUDGET = 4300
+  test('the default prompt stays within 4300 chars', () => {
+    expect(buildLeadSection(DEFAULTS).length).toBeLessThanOrEqual(LEAD_BUDGET)
   })
+  for (const role of ['code-reader', 'docs-reader', 'developer', 'architect', 'qa', 'ux', 'council']) {
+    test(`the prompt with ${role} disabled stays within 4300 chars`, () => {
+      expect(buildLeadSection({ ...DEFAULTS, disabledAgents: [role] }).length).toBeLessThanOrEqual(LEAD_BUDGET)
+    })
+  }
 })
 
 describe('lead section', () => {
@@ -23,6 +30,9 @@ describe('lead section', () => {
       expect(section).toContain(`@${role}`)
     }
     expect(section).toContain('Council seats: Agent pantheon:councillor-alpha, Agent pantheon:councillor-beta')
+    expect(section).toContain('never implement it yourself')
+    expect(section).toContain('low-risk')
+    expect(section).toContain('else pass its brief and result to a new Agent')
     for (const text of ['delegate(', 'delegate_result', 'delegate_cancel', 'resume: <jobId>', 'jobId', 'apply_patch', 'Codex', 'codex']) {
       expect(section).not.toContain(text)
     }
@@ -129,7 +139,7 @@ describe('role prompts', () => {
     for (const text of [
       'Verify, never fix', 'Never fix code', 'Never run side effects', 'deploy, publish, push', 'migration against shared data',
       'Write only inside the session scratchpad', 'herdr pane', 'error paths', 'Partial coverage is a failure',
-      'C<n>: pass|fail — <evidence', 'QA: pass|fail', 'Do not spawn subagents',
+      'C<n>: pass|fail — <evidence', 'QA: pass|fail',
     ]) expect(prompt).toContain(text)
     expect(prompt).not.toContain('Do not commit or push')
   })

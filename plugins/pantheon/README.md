@@ -118,14 +118,14 @@ Layers apply in order: built-in defaults, `~/.claude/pantheon.json`, then `<repo
     "developer": { "model": "opus", "effort": "high", "prompt": "..." },
     "code-reader": { "model": "sonnet" }
   },
-  "council": { "seats": { "gamma": { "model": "fable" } } },
+  "council": { "seats": { "beta": { "model": "fable" } } },
   "disabledAgents": ["ux"]
 }
 ```
 
-- `agents.<role>` and `council.seats.<seat>` accept `model`, `effort` and `prompt` (appended to the role's prompt). A new seat may leave out `model` to inherit the session's.
+- `agents.<role>` and `council.seats.<seat>` accept `model`, `effort` and `prompt` (appended to the role's prompt). The council has two seats, `alpha` and `beta`; a config cannot add a third. Any other seat name under `council.seats` fails with `council.seats.<name>: unknown seat; the council has two seats (alpha, beta)`.
 - Models must be Claude models: the aliases `opus`, `sonnet`, `haiku`, `fable`, `opusplan`, `default` and `inherit` (optionally with a bracket suffix such as `[1m]`), or an ID containing `claude`. Effort is not validated.
-- `disabledAgents` takes role names, `councillor:<seat>` and `"council"`, combined as a union across layers.
+- `disabledAgents` takes role names, `councillor:alpha`, `councillor:beta` and `"council"`, combined as a union across layers. A `councillor:<seat>` naming any other seat fails with `disabledAgents: councillor:<seat> is not a seat; the council has two seats (alpha, beta)`.
 - An invalid config shows a toast and the native agents stay as in the last valid config (or the defaults). The config is read again on every turn; no reload needed.
 
 `/pantheon config` shows the effective configuration and field origins.

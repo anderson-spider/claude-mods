@@ -3,7 +3,7 @@ import { DEFAULTS, resolved } from './fixtures/config'
 import { activeSeats, nativeAgentSpecs, seatDisabled } from '../hooks/roles'
 import { rolePrompt } from '../hooks/prompts/roles'
 import { ROLES } from '../hooks/defaults'
-import type { PantheonConfig, RolePrompts } from '../hooks/types'
+import type { PantheonConfig, PromptKey, RolePrompts } from '../hooks/types'
 
 const prompts: RolePrompts = key => `<${key}>`
 const NO_DELEGATION = ['Agent']
@@ -80,7 +80,7 @@ describe('native agent specs', () => {
   test('config model, effort and append prompts reach the registration specs', async () => {
     const config = await resolved({
       agents: { architect: { model: 'claude-opus-4-1', effort: 'high', prompt: 'extra' } },
-      council: { seats: { beta: { model: 'haiku', effort: 'low', prompt: 'seat extra' }, gamma: { prompt: 'g' } } },
+      council: { seats: { alpha: { prompt: 'g' }, beta: { model: 'haiku', effort: 'low', prompt: 'seat extra' } } },
     })
     const specs = nativeAgentSpecs(config, prompts)
     expect(specs.find(spec => spec.name === 'architect')).toEqual(expect.objectContaining({
@@ -89,9 +89,9 @@ describe('native agent specs', () => {
     expect(specs.find(spec => spec.name === 'councillor-beta')).toEqual(expect.objectContaining({
       prompt: '<councillor>\n\nseat extra', model: 'haiku', effort: 'low',
     }))
-    const gamma = specs.find(spec => spec.name === 'councillor-gamma')
-    expect(gamma?.prompt).toBe('<councillor>\n\ng')
-    expect(gamma?.model).toBeUndefined()
+    const alpha = specs.find(spec => spec.name === 'councillor-alpha')
+    expect(alpha?.prompt).toBe('<councillor>\n\ng')
+    expect(alpha?.model).toBe('opus')
   })
 
   test('disabled natives and council do not produce registration specs', () => {
@@ -131,7 +131,7 @@ describe('role prompts', () => {
       'State what you ran and what you did not run.',
       'Do not do external research.',
       'Do not spawn subagents or delegate work; return coordination needs to the lead.',
-      'Never modify protected branches or rewrite git history; the lead pushes and runs the other git operations.',
+      'Never modify protected branches.', 'do not plan or brainstorm',
     ]) expect(prompt).toContain(text)
   })
 
@@ -143,7 +143,7 @@ describe('role prompts', () => {
 
   test('developer writes all code, UI code included, and only guides look-and-feel work to ux', () => {
     const prompt = rolePrompt('developer')
-    expect(prompt).toContain('Write all the code (backend, scripts, tests, hooks, CLI, UI code and logic included)')
+    expect(prompt).toContain('Write all the code (UI logic included)')
     expect(prompt).toContain('tell the lead it belongs to ux. This is guidance, not a refusal: still do the code your brief assigns.')
     expect(prompt).not.toContain('No UI files')
     expect(prompt).not.toContain('No design work')
@@ -214,4 +214,17 @@ describe('role prompts', () => {
       expect(rolePrompt(key).endsWith('If the task defines a report format, it replaces the format above.')).toBe(true)
     }
   })
+})
+
+// Rendered size of each role prompt, in characters. The ceilings are the sizes the slimming reached (code-reader
+// and councillor keep their earlier size), so a new rule has to replace text rather than add to it.
+describe('role prompt budget', () => {
+  const ceilings: Record<PromptKey, number> = {
+    developer: 2100, ux: 3300, qa: 1900, 'docs-reader': 1300, architect: 1450, 'code-reader': 807, councillor: 1071,
+  }
+  for (const [key, max] of Object.entries(ceilings) as [PromptKey, number][]) {
+    test(`${key} stays within ${max} characters`, () => {
+      expect(rolePrompt(key).length).toBeLessThanOrEqual(max)
+    })
+  }
 })
