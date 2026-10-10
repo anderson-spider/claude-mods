@@ -392,7 +392,7 @@ function onTaskEnd(flow: Flow, s: FlowState, event: Extract<FlowEvent, { kind: '
       if (!s.sideEffectsDone.includes(task.id)) s.sideEffectsDone.push(task.id)
       s.paused = true
       s.consecutiveBlocks = 0
-      return instruct(s, 'pause', 'ask_person', `Task ${task.id} (${task.goal}) is a side effect and its checks could not run, so it may already have run. The flow will not re-run it: ask the person to check it by hand, then /pantheon flow resume.\n\n${tail(describe(failures))}`, task.id)
+      return instruct(s, 'pause', 'ask_person', `Task ${task.id} (${task.goal}) is a side effect and its checks could not run, so it may already have run. The flow will not re-run it. Ask the person to check it by hand first: /pantheon flow resume treats the task as done and starts what depends on it, so if the effect did not run, the person should do it by hand before resuming, or run /pantheon flow stop.\n\n${tail(describe(failures))}`, task.id)
     }
     return make(s, 'allow', 'unverified', `Task ${task.id} (${task.goal}) was delivered, but its checks could not run, so it is unverified and no attempt was spent. Create the directory the check needs, or ask the person to fix the plan and approve it.\n\n${tail(describe(failures))}`, task.id)
   }

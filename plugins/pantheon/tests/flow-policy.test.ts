@@ -305,6 +305,9 @@ test('a side effect whose only check could not run pauses for the person at the 
   expect(decision.state.sideEffectsDone).toEqual(['A'])
   expect(decision.state.attempts).toEqual({})
   expect(decision.reason).toContain('by hand')
+  // Resume marks the task done, so the text must say what that means before the person resumes or stops.
+  expect(decision.reason).toContain('/pantheon flow resume treats the task as done and starts what depends on it')
+  expect(decision.reason).toContain('/pantheon flow stop')
   expect(decision.reason).not.toContain('delegate')
 })
 
