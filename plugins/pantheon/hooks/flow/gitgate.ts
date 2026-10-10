@@ -69,6 +69,12 @@ type Heredoc = {
 }
 
 const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh', 'ash', 'fish', 'tcsh', 'csh', 'nu', 'pwsh', 'powershell', 'xonsh', 'elvish'])
+// The shells whose `-c` is a contract: the word after it is the command line. The others (PowerShell's `-Command`, `-File`,
+// `-EncodedCommand`, nu's `-e`…) spell it every way, so for them a command line is read wherever it stands.
+const POSIX_SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh', 'ash'])
+
+// What a program is called as a shell: its basename, lowercased, without `.exe` (`/usr/bin/PWSH.exe` is `pwsh`).
+const shellName = (text: string) => text.slice(text.lastIndexOf('/') + 1).toLowerCase().replace(/\.exe$/, '')
 
 // The ssh options that take a value as the next word (`-p 22`); attached values (`-p22`) are one word.
 const SSH_VALUED = new Set(['b', 'c', 'D', 'E', 'e', 'F', 'I', 'i', 'J', 'L', 'l', 'm', 'O', 'o', 'p', 'Q', 'R', 'S', 'W', 'w'])
@@ -136,13 +142,13 @@ const readsCommands = (words: readonly Word[]) => {
   }
 
   if (isUnsure) {
-    return words.slice(start).some(word => SHELLS.has(base(word.text)) || base(word.text) === 'ssh')
+    return words.slice(start).some(word => SHELLS.has(shellName(word.text)) || base(word.text) === 'ssh')
   }
 
   const name = base(words[start]?.text ?? '')
   const rest = words.slice(start + 1).map(word => word.text)
 
-  if (SHELLS.has(name)) {
+  if (SHELLS.has(shellName(name))) {
     for (let at = 0; at < rest.length; at += 1) {
       const text = rest[at] ?? ''
 
@@ -859,7 +865,7 @@ const textRunsGit = (text: string): boolean => {
 const runsGit = (command: Word | undefined) => {
   const named = commandName(command?.text ?? '')
 
-  return command !== undefined && (command.isUnknown || named === 'git' || /^git-[a-z]/.test(named) || SHELLS.has(named) || XARGS_WRAPPERS.has(named))
+  return command !== undefined && (command.isUnknown || named === 'git' || /^git-[a-z]/.test(named) || SHELLS.has(shellName(named)) || XARGS_WRAPPERS.has(named))
 }
 
 // Whether a command runs text it is fed or gets from a variable: a first word that is not literal, a shell or `eval` with a
@@ -877,7 +883,7 @@ const runsUnread = (argv: readonly Word[]) => {
     return true
   }
 
-  if (SHELLS.has(name) || name === 'eval') {
+  if (SHELLS.has(shellName(name)) || name === 'eval') {
     return rest.some(word => word.isUnknown)
   }
 
@@ -885,7 +891,7 @@ const runsUnread = (argv: readonly Word[]) => {
     const command = xargsCommand(rest)
     const named = base(command?.text ?? '')
 
-    return command !== undefined && (command.isUnknown || SHELLS.has(named) || XARGS_WRAPPERS.has(named))
+    return command !== undefined && (command.isUnknown || SHELLS.has(shellName(named)) || XARGS_WRAPPERS.has(named))
   }
 
   return false
@@ -1232,23 +1238,34 @@ const forgeSegment = (tool: string, args: readonly Word[]): ForgeSegment => {
 
 export type Classified = { segments: GitSegment[]; forges: ForgeSegment[]; opaque: boolean; envSets: string[] }
 
-// Whether `text` is an option that hands the shell a command line to run: `-c` (also in a cluster, `-lc`), `--command` and
-// nu's `--commands`; fish also runs `-C` and `--init-command`; PowerShell takes any prefix of `-Command` and
-// `-CommandWithArgs`, in any case, and `-cwa`.
-const shellCommandOption = (shell: string, text: string): boolean => {
-  if (shell === 'pwsh' || shell === 'powershell') {
-    const lower = text.toLowerCase()
-    const abbreviates = (full: string, least: number) => lower.length >= least && full.startsWith(lower)
+// An option word as the shells that spell options loosely read it: PowerShell takes `-`, `--` or `/` for the first dash, in any
+// case, and `-Name:value` or `--name=value` attaches a value. Returns the lowercased name, or undefined for a word that is no option.
+const optionName = (text: string): string | undefined => /^(?:--|-|\/)([A-Za-z][\w-]*)(?:[=:].*)?$/s.exec(text)?.[1]?.toLowerCase()
 
-    return abbreviates('-command', 2) || abbreviates('-commandwithargs', 9) || lower === '-cwa'
+// Whether `text` hands the shell a command line to run: `-c` (also in a cluster, `-lc`), `--command`, nu's `--commands` and
+// `-e`/`--execute`, fish's `-C` and `--init-command`; PowerShell takes any prefix of `-Command` and `-CommandWithArgs`
+// (`-c`, `--c`, `/Command`, `-cwa`…).
+const shellCommandOption = (shell: string, text: string): boolean => {
+  const name = optionName(text)
+
+  if (name === undefined) {
+    return false
   }
 
-  if (/^(?:-[A-Za-z]*c[A-Za-z]*|--commands?)$/.test(text)) {
+  if (shell === 'pwsh' || shell === 'powershell') {
+    return 'command'.startsWith(name) || (name.length >= 8 && 'commandwithargs'.startsWith(name)) || name === 'cwa'
+  }
+
+  if (/^-[A-Za-z]*c[A-Za-z]*$/.test(text) || ['command', 'commands'].includes(name)) {
     return true
   }
 
-  return shell === 'fish' && /^(?:-[A-Za-z]*C[A-Za-z]*|--init-command)$/.test(text)
+  return (shell === 'nu' && (name === 'e' || name === 'execute')) || (shell === 'fish' && (name === 'c' || name === 'init-command'))
 }
+
+// PowerShell's encoded command (`-EncodedCommand`, `-ec`, `-e`, any prefix of the name, with `-`, `--`, `/` or none): base64 that
+// cannot be read.
+const isEncodedCommand = (text: string) => /^(?:--|-|\/)?e(?:c|n[a-z]*)?(?:[=:].*)?$/is.test(text)
 
 const classifyDepth = (command: string, depth: number, inherit: readonly string[]): Classified => {
   const found: Classified = { segments: [], forges: [], opaque: false, envSets: [] }
@@ -1331,39 +1348,59 @@ const classifyDepth = (command: string, depth: number, inherit: readonly string[
       found.forges.push(forge)
       // `gh codespace ssh -- git push`, `gh extension exec x git push`: these groups run what they are given.
       found.opaque ||= FORGE_RUNS.has(forge.group) && (wrapsGit(rest) || rest.some(word => textRunsGit(word.text)))
-    } else if (SHELLS.has(name) || name === 'eval') {
-      // A PowerShell command that is encoded cannot be read (`-EncodedCommand`, `-ec`, `-e`).
-      found.opaque ||= (name === 'pwsh' || name === 'powershell') && rest.some(word => /^-e(?:c|n[a-z]*)?$/i.test(word.text))
+    } else if (SHELLS.has(shellName(first.text)) || name === 'eval') {
+      const shell = name === 'eval' ? 'eval' : shellName(first.text)
+      const isPosix = shell === 'eval' || POSIX_SHELLS.has(shell)
+      const isPowerShell = shell === 'pwsh' || shell === 'powershell'
 
-      // Each command line the shell is handed: the word after a command option, or what follows its `=`. `eval` runs its words.
-      const bodies: Word[][] = name === 'eval' ? (rest.length > 0 ? [[...rest]] : []) : []
+      // A PowerShell command that is encoded cannot be read.
+      found.opaque ||= isPowerShell && rest.some(word => isEncodedCommand(word.text))
 
-      if (name !== 'eval') {
+      // The text of a word as a command line: what follows the `=` of `--command=…`.
+      const lineOf = (word: Word) => (/^(?:--|-|\/)[A-Za-z][\w-]*[=:]/.test(word.text) ? word.text.slice(word.text.search(/[=:]/) + 1) : word.text)
+      // Words that are handed to the shell as a command line, whatever the option before them is called.
+      const bodies: Word[] = []
+
+      if (shell === 'eval') {
+        if (rest.length > 0) {
+          merge(classifyDepth(rest.map(word => word.text).join(' '), depth + 1, assigns))
+        }
+      } else if (isPosix) {
+        // `-c` is a contract: the word after it is the command line.
         rest.forEach((word, at) => {
-          const isLong = word.text.startsWith('--')
-          const attached = isLong ? word.text.indexOf('=') : -1
-
-          if (!shellCommandOption(name, attached === -1 ? word.text : word.text.slice(0, attached))) {
-            return
-          }
+          const attached = /^--commands?=/.test(word.text) ? word.text.indexOf('=') : -1
 
           if (attached !== -1) {
-            bodies.push([{ text: word.text.slice(attached + 1), isUnknown: word.isUnknown, isHome: false }])
-          } else if (rest[at + 1] !== undefined) {
-            bodies.push([rest[at + 1] as Word])
+            bodies.push({ text: word.text.slice(attached + 1), isUnknown: word.isUnknown, isHome: false })
+          } else if (shellCommandOption(shell, word.text) && rest[at + 1] !== undefined) {
+            bodies.push(rest[at + 1] as Word)
           }
         })
+      } else {
+        // No such contract: every word that holds a command line is read as `bash -c` reads one, and an unquoted `git push`
+        // among the words is a git.
+        for (const word of rest) {
+          if (/\s/.test(lineOf(word))) {
+            bodies.push({ text: lineOf(word), isUnknown: word.isUnknown, isHome: false })
+          }
+        }
+
+        found.opaque ||= wrapsGit(rest)
       }
 
       for (const body of bodies) {
-        const text = body.map(word => word.text).join(' ')
-
-        merge(classifyDepth(text, depth + 1, assigns))
-        // A body that is not literal (`eval "$X"`) runs whatever the variable holds: it is hidden git when the line mentions git at all.
-        found.opaque ||= body.some(word => word.isUnknown) && (GIT_WORD.test(` ${text} `) || GIT_WORD.test(` ${command} `))
+        merge(classifyDepth(body.text, depth + 1, assigns))
       }
 
-      if (bodies.length === 0) {
+      // A command line that is not literal (`eval "$X"`, `fish -c "$X"`) runs whatever the variable holds: it is hidden git when
+      // the line mentions git at all.
+      const unknownBody = shell === 'eval'
+        ? rest.some(word => word.isUnknown)
+        : rest.some((word, at) => word.isUnknown && (shellCommandOption(shell, rest[at - 1]?.text ?? '') || /^(?:--|-|\/)[A-Za-z][\w-]*[=:]/.test(word.text)))
+
+      found.opaque ||= unknownBody && (GIT_WORD.test(` ${command} `) || rest.some(word => word.isUnknown && GIT_WORD.test(` ${word.text} `)))
+
+      if (shell !== 'eval' && bodies.length === 0 && isPosix) {
         // `bash "$(echo git push)"`: a script argument that holds git.
         found.opaque ||= rest.some(word => word.isUnknown && GIT_WORD.test(` ${word.text} `))
       }

@@ -511,14 +511,17 @@ describe('what the last review found', () => {
     for (const command of ['fish -C "git push origin main"', 'nu --commands "git push origin main"', 'pwsh -cwa "git push origin main"']) {
       expect((await bash($, command)).deny, command).toContain('protected branch `main`')
     }
-    for (const command of ['pwsh -ec ZwBpAHQA', 'nix run nixpkgs#git -- push origin main']) {
+    for (const command of ['pwsh -ec ZwBpAHQA', 'pwsh --ec ZwBpAHQA', 'pwsh -Command git push origin main', 'nix run nixpkgs#git -- push origin main']) {
       expect((await bash($, command)).deny, command).toContain('hidden')
     }
+    for (const command of ['pwsh --c "git push origin main"', 'pwsh /Command "git push origin main"', 'nu -e "git push origin main"', 'nu --execute "git push origin main"']) {
+      expect((await bash($, command)).deny, command).toContain('protected branch `main`')
+    }
     // Names that only look like git, and git that is only mentioned, still run.
-    for (const command of ['echo "nixpkgs#git"', 'grep -rn "#git" .', 'git log --oneline', 'fish -c "echo hi"']) {
+    for (const command of ['echo "nixpkgs#git"', 'grep -rn "#git" .', 'git log --oneline', 'fish -c "echo hi"', 'pwsh -Command "Get-ChildItem"', 'nu -c "ls"']) {
       expect((await bash($, command)).deny, command).toBeUndefined()
     }
-    expect(w.ran).toHaveLength(4)
+    expect(w.ran).toHaveLength(6)
   })
 })
 

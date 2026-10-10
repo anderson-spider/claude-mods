@@ -129,6 +129,20 @@ const allowed: Row[] = [
   ['lead', 'fish -c "echo hi"'],
   ['lead', 'pwsh -Command "Get-ChildItem"'],
   ['lead', 'pwsh -ExecutionPolicy Bypass -File build.ps1'],
+  // The shell family, closed structurally: what is not a command line passes
+  ['lead', 'pwsh -Command "Get-ChildItem"'],
+  ['lead', 'fish -c "echo hi"'],
+  ['lead', 'bash -c "echo git"'],
+  ['lead', 'echo git push'],
+  ['lead', 'nu -c "ls"'],
+  ['lead', 'nu -e "ls | length"'],
+  ['lead', 'zsh -c "make test"'],
+  ['lead', 'bash push.sh'],
+  ['lead', 'claude plugin test plugins/pantheon'],
+  ['lead', 'npm run build'],
+  ['lead', 'pwsh -NoProfile -ExecutionPolicy Bypass -Command "Get-Content ~/.gitconfig"'],
+  ['lead', 'pwsh -Command "git status"'],
+  ['developer', 'pwsh -File build.ps1'],
   // A comment ends the line's words.
   ['developer', 'git commit -m x -- a.ts # then push', only('a.ts')],
   ['developer', 'git add a.ts # not a path: b.ts', only('a.ts')],
@@ -956,4 +970,62 @@ test('glab\'s aliases are read as the command they stand for', () => {
   // gh's own `project` is Projects, not the repository.
   expect(forge('gh project list')?.group).toBe('project')
   expect(forge('gh project list')?.changesState).toBe(false)
+})
+
+test('a shell that has no -c contract is read wherever its command line stands, for every actor', () => {
+  const spellings = [
+    'pwsh -Command git push origin main',
+    'pwsh -c git push origin main',
+    'pwsh --command "git push origin main"',
+    'pwsh --c "git push origin main"',
+    'pwsh --cwa "git push origin main"',
+    'pwsh -cwa "git push origin main"',
+    'pwsh /Command "git push origin main"',
+    'pwsh /c "git push origin main"',
+    'pwsh -CommandWithArgs "git push origin main"',
+    'pwsh -NoProfile -Command:"git push origin main"',
+    'pwsh -File build.ps1 "git push origin main"',
+    'pwsh --ec ZwBpAHQA',
+    'pwsh /ec ZwBpAHQA',
+    'pwsh -EncodedCommand ZwBpAHQA',
+    'pwsh -encodedcommand=ZwBpAHQA',
+    'pwsh -e ZwBpAHQA',
+    'powershell /Command git push origin main',
+    'PWSH.EXE -Command git push origin main',
+    'env pwsh -c git push origin main',
+    '/usr/local/microsoft/powershell/7/pwsh -Command "git push origin main"',
+    'nu -e "git push origin main"',
+    'nu --execute "git push origin main"',
+    'nu -c "git push origin main"',
+    'nu --commands "git push origin main"',
+    'nu --execute="git push origin main"',
+    'fish -c "git push origin main"',
+    'fish -C "git push origin main"',
+    'fish --init-command "git push origin main"',
+    'fish -c "cd x && git push origin main"',
+    'xonsh -c "git push origin main"',
+    'elvish -c "git push origin main"',
+    'tcsh -c "git push origin main"',
+    'csh -c "git push origin main"',
+    'fish -c unknownflag git push origin main',
+  ]
+  const wrong: string[] = []
+
+  for (const command of spellings) {
+    for (const actor of ['lead', 'git', 'developer'] as const) {
+      if (verdictOf(actor, command).allow) wrong.push(`${actor}: ${command}`)
+    }
+  }
+
+  expect(wrong).toEqual([])
+})
+
+test('a shell that has no -c contract keeps a literal git read for what it is', () => {
+  // The string is read like `bash -c` reads one: the push is judged as any other, so feature is fine and main is not.
+  expect(verdictOf('lead', 'pwsh --c "git push origin feature/x:feature/x"').allow).toBe(true)
+  expect(reasonOf('lead', 'pwsh --c "git push origin main"')).toMatch(/protected branch `main`/)
+  expect(reasonOf('lead', 'nu -e "git commit -m x"')).toMatch(/`git` role/)
+  // An encoded command and an unquoted git cannot be read.
+  expect(reasonOf('lead', 'pwsh --ec ZwBpAHQA')).toMatch(/hidden/)
+  expect(reasonOf('lead', 'pwsh -Command git push origin feature/x')).toMatch(/hidden/)
 })
