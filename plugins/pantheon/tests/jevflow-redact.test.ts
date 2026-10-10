@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { head, redact, redactSecrets, tail } from '../hooks/flow/redact'
+import { head, redact, redactSecrets, tail } from '../hooks/jevflow/redact'
 
 // Fixtures that look like provider tokens are assembled at runtime so no source literal matches a secret scanner.
 const join = (...parts: string[]) => parts.join('')

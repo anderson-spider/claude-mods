@@ -138,12 +138,13 @@ describe('pane', () => {
     expect(await texts(ui)).not.toContain('idle')
   })
 
-  for (const surface of SURFACES) t(`the pane is the agents view only: no tabs, no jobs text, footer keys left (${surface})`, async ($, on) => {
+  for (const surface of SURFACES) t(`the pane has the Agents and Flow tabs, no jobs text, footer keys left (${surface})`, async ($, on) => {
     world(on)
     seed(on, { natives: [run(), native()] })
     await start($)
     const ui = await mountPane($, surface, { rows: 70 })
-    for (const key of ['tab-agents', 'tab-jobs', 'pill-agents', 'pill-jobs', 'jobs-count', 'key-jobs']) expect(await ui.find({ key })).toBeUndefined()
+    for (const key of ['tab-agents', 'tab-flow']) expect(await ui.find({ key })).toBeDefined()
+    for (const key of ['tab-jobs', 'pill-agents', 'pill-jobs', 'jobs-count', 'key-jobs']) expect(await ui.find({ key })).toBeUndefined()
     const all = await texts(ui)
     expect(all.filter(x => /jobs|resum|Copy/i.test(x) && x !== 'Read jobs.ts')).toEqual([])
     expect(all.some(x => /^Jobs/.test(x))).toBe(false)

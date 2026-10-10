@@ -1,4 +1,4 @@
-import type { Native, Round, RoundStatus, SessionInfo, PanelView, PanelGroup } from './types'
+import type { Native, Round, RoundStatus, SessionInfo, PanelView, PanelGroup, PanelTab } from './types'
 import { ROLES } from './defaults'
 
 export const MAX_NATIVES = 24
@@ -135,7 +135,11 @@ const GROUPS: PanelGroup[] = ['running', 'idle']
 export const normalizeView = (raw: unknown): PanelView => {
   if (!isObject(raw)) return { ...DEFAULT_VIEW }
   const collapsed = Array.isArray(raw.collapsed) ? GROUPS.filter(g => (raw.collapsed as unknown[]).includes(g)) : []
-  return collapsed.length ? { collapsed } : {}
+  return { ...(collapsed.length ? { collapsed } : {}), ...(raw.tab === 'flow' ? { tab: 'flow' as const } : {}) }
+}
+export const viewTabbed = (v: PanelView, tab: PanelTab): PanelView => {
+  const { tab: _drop, ...base } = v
+  return tab === 'flow' ? { ...base, tab } : base
 }
 export const viewToggled = (v: PanelView, group: PanelGroup): PanelView => {
   const rest = (v.collapsed ?? []).filter(g => g !== group)

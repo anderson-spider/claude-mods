@@ -19,9 +19,9 @@ const fileOperations = (access: 'read-only' | 'research' | 'write'): string => {
 
 const DOCS_READER_BROWSER = `
 **Browser**: For a page behind a login, read it through the browser the lead names (\`terminal-browser action --browser <key> -- ...\`): open, snapshot, get text or read-only eval. Never log in, type credentials, submit forms or click anything that changes data. Release it with \`terminal-browser action --browser <key> done\`. With no browser key, say the page needs a login instead of trying.`
-const COMMIT_RULE = `**Committing**: After the task's checks (or your own validation, outside a flow) pass, stage and commit only your task's files:
-- \`git add -- <paths>\`, then \`git commit -m "<type>(<scope>): <summary> [<taskId>]" -- <paths>\`. Name every path, with no globs in pathspecs; for renames and deletes use \`git mv\` or \`git rm\` on your task's paths. Never \`git add -A\`, \`git add .\`, \`--no-verify\` or \`--amend\`; give the message with \`-m\` (no \`-F\`, no editor or \`-e\`).
-- Write the message by the repository's convention in English; leave out the \`[<taskId>]\` when there is no flow task. No AI attribution in the message.
+const COMMIT_RULE = `**Committing**: After the phase's check (or your own validation, outside a flow) passes, stage and commit only your task's files:
+- \`git add -- <paths>\`, then \`git commit -m "<type>(<scope>): <summary> [<phase>]" -- <paths>\`. Name every path, with no globs in pathspecs; for renames and deletes use \`git mv\` or \`git rm\` on your task's paths. Never \`git add -A\`, \`git add .\`, \`--no-verify\` or \`--amend\`; give the message with \`-m\` (no \`-F\`, no editor or \`-e\`).
+- Write the message by the repository's convention in English; leave out the \`[<phase>]\` when there is no flow phase. No AI attribution in the message.
 - If \`.git/index.lock\` is held, retry once. If a pre-commit hook fails on files outside your task, report it to the lead instead of bypassing it.
 - Never push, rebase, reset, merge, switch branches, stash or rewrite history: the lead pushes.`
 

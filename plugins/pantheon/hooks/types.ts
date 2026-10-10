@@ -12,7 +12,7 @@ export type Origin = 'default' | 'user' | 'project'
 export type ConfigResult =
   | { ok: true; config: PantheonConfig; origins: Record<string, Origin> }
   | { ok: false; error: string; config: PantheonConfig }
-export type { Native, Round, RoundStatus, SessionInfo, PanelView, PanelGroup } from '../types'
+export type { Native, Round, RoundStatus, SessionInfo, PanelView, PanelGroup, PanelTab } from '../types'
 export type ReadFile = (path: string) => Promise<string | undefined>
 export type PromptKey = Role | 'councillor'
 export type RolePrompts = (key: PromptKey) => string
