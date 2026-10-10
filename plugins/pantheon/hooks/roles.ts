@@ -41,7 +41,6 @@ export function nativeAgentSpecs(config: PantheonConfig, prompts: RolePrompts): 
     architect: 'Analyze architecture, debug difficult problems and review technical decisions.',
     qa: 'Runs what was built and returns a pass/fail verdict per acceptance criterion, with evidence.',
     ux: 'Owns look and feel (layout, hierarchy, color, spacing, motion, UI copy) and implements it.',
-    git: 'Perform git operations (squash, PR/MR, checkout, switch, worktree, stash) from the lead brief; does not push.',
   }
   const specs: NativeSpec[] = ROLES
     .filter(role => isOffered(config, `pantheon:${role}`))
@@ -54,7 +53,7 @@ export function nativeAgentSpecs(config: PantheonConfig, prompts: RolePrompts): 
         model: override.model,
         effort: override.effort,
         ...(role === 'architect' || role === 'qa' ? { disallowedTools: READ_ONLY_DENY }
-          : role === 'code-reader' || role === 'docs-reader' || role === 'git' ? { disallowedTools: RESEARCH_DENY } : {}),
+          : role === 'code-reader' || role === 'docs-reader' ? { disallowedTools: RESEARCH_DENY } : {}),
       }
     })
 

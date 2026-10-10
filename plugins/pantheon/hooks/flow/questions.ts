@@ -106,7 +106,7 @@ export const FIT_TABLE: readonly string[] = freeze(['haiku', 'haiku', 'sonnet', 
  * tiered down (decision 20). Provisional, like the thresholds.
  */
 export const FIT_FLOORS: Readonly<Record<string, string>> = freeze({
-  'code-reader': 'haiku', 'docs-reader': 'haiku', developer: 'haiku', ux: 'sonnet', git: 'haiku',
+  'code-reader': 'haiku', 'docs-reader': 'haiku', developer: 'haiku', ux: 'sonnet',
 })
 
 // --- Questions ---

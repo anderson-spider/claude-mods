@@ -5,7 +5,7 @@ import { buildLeadSection } from '../hooks/prompts/lead'
 import { rolePrompt } from '../hooks/prompts/roles'
 
 describe('lead budget', () => {
-  // The git route adds its required brief fields and the qa route its flow-task prefix; the limit keeps a small growth margin.
+  // The git rule and the qa route's flow-task prefix add text; the limit keeps a small growth margin.
   test('the prompt stays within 5600 chars', () => {
     expect(buildLeadSection(DEFAULTS).length).toBeLessThanOrEqual(5600)
   })
@@ -18,7 +18,7 @@ describe('lead section', () => {
 
   test('routes every role and seat through Agent', () => {
     const section = buildLeadSection(DEFAULTS)
-    for (const role of ['code-reader', 'docs-reader', 'developer', 'architect', 'qa', 'ux', 'git']) {
+    for (const role of ['code-reader', 'docs-reader', 'developer', 'architect', 'qa', 'ux']) {
       expect(section).toContain(`Agent({ subagent_type: "pantheon:${role}"`)
       expect(section).toContain(`@${role}`)
     }
@@ -31,7 +31,7 @@ describe('lead section', () => {
     }
   })
 
-  for (const role of ['code-reader', 'docs-reader', 'developer', 'architect', 'qa', 'ux', 'git']) {
+  for (const role of ['code-reader', 'docs-reader', 'developer', 'architect', 'qa', 'ux']) {
     test(`disabled ${role} disappears from routing, examples and skill mappings`, () => {
       const section = buildLeadSection({ ...DEFAULTS, disabledAgents: [role] })
       expect(section).not.toContain(`@${role}`)
@@ -64,7 +64,7 @@ describe('lead section', () => {
 
   test('code routes to developer and visual work to ux', () => {
     const section = buildLeadSection(DEFAULTS)
-    const ux = section.slice(section.indexOf('@ux\n'), section.indexOf('@git\n'))
+    const ux = section.slice(section.indexOf('@ux\n'), section.length)
     const developer = section.slice(section.indexOf('@developer\n'), section.indexOf('@architect\n'))
     for (const text of ['layout, hierarchy, color, spacing, motion', 'UI copy', 'implement, not advise']) expect(ux).toContain(text)
     for (const text of ['non-trivial or multi-file code', 'UI code and logic', 'commits its own task']) expect(developer).toContain(text)
@@ -100,17 +100,16 @@ describe('lead section', () => {
 })
 
 describe('role prompts', () => {
-  const keys: PromptKey[] = ['code-reader', 'docs-reader', 'developer', 'architect', 'qa', 'ux', 'git', 'councillor']
+  const keys: PromptKey[] = ['code-reader', 'docs-reader', 'developer', 'architect', 'qa', 'ux', 'councillor']
 
-  test('git routing keeps decisions and validation with the lead and covers repository state', () => {
+  test('git rule: the lead commits, pushes and opens PRs itself, with push refusals and no git agent', () => {
     const section = buildLeadSection(DEFAULTS)
-    expect(section).toContain('Delegate: squash and PR/MR after validation')
-    for (const text of ['checkout', 'switch', 'worktree', 'stash']) expect(section).toContain(text)
-    expect(section).toContain('what to include, branch, base, squash yes/no, PR/MR yes/no')
-    expect(section).not.toContain('push yes/no')
-    expect(section).toContain('You run only read-only git and push; everything else that changes the repository')
+    expect(section).not.toContain('@git')
+    expect(section).not.toContain('pantheon:git')
+    expect(section).toContain('You commit your own work, push, squash and open PRs/MRs yourself')
+    expect(section).toContain('developer and ux commit their own task; only you push')
+    expect(section).toContain('never merge a PR/MR unless the person asks')
     expect(section).toContain('no force push without `--force-with-lease`, no remote branch deletion, no `--mirror`, never main, master, develop, release or release/*')
-    expect(section).not.toContain('lead commits')
   })
 
   test('developer and ux commit their own task and never push', () => {
@@ -119,7 +118,7 @@ describe('role prompts', () => {
       for (const text of [
         'git add -- <paths>', 'git commit -m "<type>(<scope>): <summary> [<taskId>]" -- <paths>',
         'Never `git add -A`, `git add .`, `--no-verify` or `--amend`', 'no globs in pathspecs', '`git mv` or `git rm`', '(no `-F`, no editor or `-e`)', 'No AI attribution', 'retry once',
-        'report it to the lead instead of bypassing it', 'Never push, rebase, reset, merge, switch branches or stash',
+        'report it to the lead instead of bypassing it', 'Never push, rebase, reset, merge, switch branches, stash or rewrite history: the lead pushes',
       ]) expect(prompt).toContain(text)
       expect(prompt).not.toContain('Do not commit or push')
     }
@@ -134,35 +133,6 @@ describe('role prompts', () => {
     ]) expect(prompt).toContain(text)
     expect(prompt).not.toContain('Do not commit or push')
   })
-
-  test('git enforces scope, refusals, conventions and reporting', () => {
-    const prompt = rolePrompt('git')
-    for (const text of [
-      "lead's brief decides", 'what to include, branch, base, squash yes/no, PR/MR yes/no', 'Developers commit their own tasks and the lead pushes',
-      'checkout, switch, worktree and stash',
-      'git status', 'git diff', "Stage only the task's files", 'git log', 'Conventional Commits in English',
-      'PR/MR template', 'gh', 'glab', 'Preserve unrelated changes', 'Never add AI attribution',
-      'Refuse commit, push, rebase, reset or merge that modifies the default branch, main, master, develop, release, release/* or a protected branch',
-      "Discover the relevant remote's default branch", 'git symbolic-ref refs/remotes/<remote>/HEAD',
-      'gh repo view / glab repo view', 'confirm the branch you modify or push to is neither default nor protected',
-      'both the local branch and remote push destination', 'stop and report: unknown is not unprotected',
-      'Using main as a PR/MR base or rebasing the task branch onto main is allowed',
-      'the refusal concerns modifying those branches, not using them as a base',
-      'Refuse force push without --force-with-lease', 'Refuse merging a PR/MR',
-      'Refuse deleting remote branches', 'Rewrite history (squash, amend or rebase of the branch) only within',
-      "the range of the task's commits the lead names in the brief, whoever created them",
-      'Refuse history outside that range', 'If the range is missing or ambiguous, stop and report',
-      'Refuse touching work outside the task', 'hook, conflict, auth', 'stop and report rather than improvise',
-      'Do not spawn subagents or delegate', 'sha + subject', 'whether it is on the remote', 'PR/MR URL', 'refused or skipped',
-    ]) expect(prompt).toContain(text)
-    expect(prompt).not.toContain('Refuse rewriting history you did not create in this task')
-  })
-
-  for (const key of keys) {
-    test(`${key} ends with the task report-format override`, () => {
-      expect(rolePrompt(key).endsWith('If the task defines a report format, it replaces the format above.')).toBe(true)
-    })
-  }
 
   test('developer implements within scope with Edit/Write and commits its own files', () => {
     const prompt = rolePrompt('developer')

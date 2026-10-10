@@ -3,9 +3,9 @@ import { expect, test } from 'claude-code/testing'
 import { pingPrompt, pingTargets } from '../hooks/ping'
 import { DEFAULTS, resolved } from './fixtures/config'
 
-test('ping targets cover the seven roles and the council seats', () => {
+test('ping targets cover the six roles and the council seats', () => {
   const targets = pingTargets(DEFAULTS)
-  expect(targets.map(t => t.name)).toEqual(['code-reader', 'docs-reader', 'developer', 'architect', 'qa', 'ux', 'git', 'councillor:alpha', 'councillor:beta'])
+  expect(targets.map(t => t.name)).toEqual(['code-reader', 'docs-reader', 'developer', 'architect', 'qa', 'ux', 'councillor:alpha', 'councillor:beta'])
   expect(targets.every(t => !t.off && t.valid)).toBe(true)
   expect(targets.find(t => t.name === 'code-reader')).toEqual({ name: 'code-reader', model: 'haiku', off: false, valid: true })
   expect(targets.find(t => t.name === 'architect')?.model).toBe('opus')

@@ -29,11 +29,6 @@ ${callLine('qa', 'Verify', 'criteria and changes')}
   ux: () => `@ux
 ${callLine('ux', 'Implement UI', 'UX task')}
 - Delegate: look and feel (layout, hierarchy, color, spacing, motion, affordances, UI copy), UX-critical flows and UI review; ask it to implement, not advise. It commits its own task.`,
-  git: () => `@git
-${callLine('git', 'Git operations', 'git brief')}
-- Delegate: squash and PR/MR after validation; brief: what to include, branch, base, squash yes/no, PR/MR yes/no.
-- You run only read-only git and push; everything else that changes the repository (commit of your own edits, reset, rebase, merge, cherry-pick, restore, checkout, switch, worktree, stash) goes to @git.
-- Push refusals: no force push without \`--force-with-lease\`, no remote branch deletion, no \`--mirror\`, never main, master, develop, release or release/*.`,
 }
 
 export function buildLeadSection(config: PantheonConfig): string {
@@ -50,6 +45,9 @@ export function buildLeadSection(config: PantheonConfig): string {
     '<Agents>',
     ...agents,
     ...councilLine,
+    '### Git',
+    '- You commit your own work, push, squash and open PRs/MRs yourself; developer and ux commit their own task; only you push; never merge a PR/MR unless the person asks.',
+    '- Push refusals: no force push without `--force-with-lease`, no remote branch deletion, no `--mirror`, never main, master, develop, release or release/*.',
     '</Agents>',
     '<Workflow>',
     '## 1. Understand',

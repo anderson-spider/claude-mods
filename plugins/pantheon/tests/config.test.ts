@@ -30,7 +30,6 @@ describe('defaults', () => {
       architect: { model: 'opus' },
       qa: { model: 'sonnet' },
       ux: { model: 'sonnet' },
-      git: { model: 'haiku' },
     })
     expect(result.config.council.seats).toEqual({ alpha: { model: 'opus' }, beta: { model: 'sonnet' } })
     expect(result.config.disabledAgents).toEqual([])
@@ -59,10 +58,10 @@ describe('loadConfig', () => {
   })
 
   test('project config works without a user file', async () => {
-    const result = valid(await loadConfig(readFiles({ p: '{"agents":{"git":{"effort":"low"}}}' }), {
+    const result = valid(await loadConfig(readFiles({ p: '{"agents":{"ux":{"effort":"low"}}}' }), {
       user: 'u', project: 'p',
     }))
-    expect(result.config.agents.git).toEqual({ model: 'haiku', effort: 'low' })
+    expect(result.config.agents.ux).toEqual({ model: 'sonnet', effort: 'low' })
   })
 
   test('user then project merge field by field', async () => {
@@ -91,7 +90,7 @@ describe('loadConfig', () => {
 
   test('accepts every role and councillor in disabledAgents with custom prompts', async () => {
     const result = valid(await load({
-      disabledAgents: ['code-reader', 'docs-reader', 'developer', 'architect', 'qa', 'ux', 'git', 'council', 'councillor:alpha'],
+      disabledAgents: ['code-reader', 'docs-reader', 'developer', 'architect', 'qa', 'ux', 'council', 'councillor:alpha'],
       agents: { architect: { prompt: '' }, ux: { prompt: 'custom' } },
     }))
     expect(result.config.agents.architect).toEqual({ model: 'opus', prompt: '' })
@@ -133,11 +132,11 @@ describe('loadConfig', () => {
 
   test('Claude model ids and aliases with a context suffix are accepted', async () => {
     const result = valid(await load({
-      agents: { architect: { model: 'opus[1m]' }, 'code-reader': { model: 'claude-haiku-4-5' }, git: { model: 'inherit' } },
+      agents: { architect: { model: 'opus[1m]' }, 'code-reader': { model: 'claude-haiku-4-5' }, ux: { model: 'inherit' } },
       council: { seats: { alpha: { model: 'claude-opus-4-1' } } },
     }))
     expect(result.config.agents.architect.model).toBe('opus[1m]')
-    expect(result.config.agents.git.model).toBe('inherit')
+    expect(result.config.agents.ux.model).toBe('inherit')
     expect(result.config.council.seats.alpha?.model).toBe('claude-opus-4-1')
   })
 
@@ -162,7 +161,7 @@ describe('loadConfig', () => {
 
   test('disabledAgents has no origin until a file sets it', async () => {
     expect(valid(await load({})).origins.disabledAgents).toBeUndefined()
-    expect(valid(await load({ disabledAgents: ['git'] })).origins.disabledAgents).toBe('user')
+    expect(valid(await load({ disabledAgents: ['qa'] })).origins.disabledAgents).toBe('user')
   })
 
   for (const [oldName, newName] of [
@@ -185,13 +184,31 @@ describe('loadConfig', () => {
   }
 
   test('lists every renamed role found in the file at once, agents first', async () => {
-    const config = { agents: { oracle: {}, developer: {}, designer: {} }, disabledAgents: ['explorer', 'git', 'fixer'] }
+    const config = { agents: { oracle: {}, developer: {}, designer: {} }, disabledAgents: ['explorer', 'fixer'] }
     expect(rejected(await load(config))).toBe([
       'u: agents.oracle: role `oracle` was renamed to `architect`; use `agents.architect`',
       'agents.designer: role `designer` was renamed to `ux`; use `agents.ux`',
       'disabledAgents: role `explorer` was renamed to `code-reader`; use `code-reader` in `disabledAgents`',
       'disabledAgents: role `fixer` was renamed to `developer`; use `developer` in `disabledAgents`',
     ].join('; '))
+  })
+
+  test('rejects the removed git role in agents and in disabledAgents, naming the key and the role', async () => {
+    const message = 'role `git` was removed in 0.18: the lead squashes, pushes and opens PRs/MRs itself; delete it'
+    expect(rejected(await load({ agents: { git: {} } }))).toBe(`u: agents.git: ${message}`)
+    expect(rejected(await load({}, { disabledAgents: ['git'] }))).toBe(`p: disabledAgents: ${message}`)
+  })
+
+  test('a valid entry next to the removed git role is not reported, and renamed roles are listed with it', async () => {
+    const message = 'role `git` was removed in 0.18: the lead squashes, pushes and opens PRs/MRs itself; delete it'
+    expect(rejected(await load({ agents: { developer: { model: 'sonnet' }, git: {} }, disabledAgents: ['qa'] })))
+      .toBe(`u: agents.git: ${message}`)
+    expect(rejected(await load({ agents: { oracle: {}, git: {} }, disabledAgents: ['git', 'qa'] })))
+      .toBe([
+        'u: agents.oracle: role `oracle` was renamed to `architect`; use `agents.architect`',
+        `agents.git: ${message}`,
+        `disabledAgents: ${message}`,
+      ].join('; '))
   })
 
   test('a repeated old name is listed once', async () => {
@@ -238,7 +255,7 @@ describe('loadConfig', () => {
 
   for (const [name, json, field] of [
     ['an agent role', '{"agents":{"architect":{"model":"gpt-6-astra"}}}', 'agents.architect.model'],
-    ['another agent role', '{"agents":{"git":{"model":"gemini-3"}}}', 'agents.git.model'],
+    ['another agent role', '{"agents":{"ux":{"model":"gemini-3"}}}', 'agents.ux.model'],
     ['a seat', '{"council":{"seats":{"alpha":{"model":"gpt-6-luna"}}}}', 'council.seats.alpha.model'],
     ['a new seat', '{"council":{"seats":{"gamma":{"model":"o4"}}}}', 'council.seats.gamma.model'],
   ] as const) {
@@ -308,7 +325,7 @@ describe('loadConfig', () => {
 
   test('invalid project keeps lastValid rather than a partially merged config', async () => {
     const lastValid = valid(await load({ agents: { architect: { effort: 'low' } } })).config
-    const result = await loadConfig(readFiles({ u: '{"agents":{"git":{"effort":"high"}}}', p: '{"unknown":true}' }), {
+    const result = await loadConfig(readFiles({ u: '{"agents":{"ux":{"effort":"high"}}}', p: '{"unknown":true}' }), {
       user: 'u', project: 'p',
     }, lastValid)
     expect(result.ok).toBe(false)

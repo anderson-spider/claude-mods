@@ -2,16 +2,17 @@ import { test, expect } from "claude-code/testing";
 import { agentsFromState, agentsKey, agentsRow, fmtClock, FAIL_GRACE_MS } from "../hooks/strip/agents";
 import { width } from "../hooks/strip/runs";
 import { agent, NOW } from "./strip-fixtures";
+import { ROLE_COLOR } from "../hooks/theme";
 
 const plain = (runs: { text: string }[]) => runs.map((r) => r.text).join("");
 
-test("git natives keep their role and orange color in the strip", () => {
+test("a developer native keeps its role and color in the strip", () => {
   const list = agentsFromState(
-    [{ id: "git-native", role: "git", type: "pantheon:git", task: "Open PR", ctx: 0, out: 0, steps: 0,
+    [{ id: "dev-native", role: "developer", type: "pantheon:developer", task: "Open PR", ctx: 0, out: 0, steps: 0,
       rounds: [{ startedAt: NOW - 1000, status: "running" }] }], NOW);
-  expect(list.map(a => a.role)).toEqual(["git"]);
+  expect(list.map(a => a.role)).toEqual(["developer"]);
   const row = agentsRow(list, 116, NOW);
-  expect(row.filter(r => r.text === "git").map(r => r.color)).toEqual(["#E8873A"]);
+  expect(row.filter(r => r.text === "developer").map(r => r.color)).toEqual([ROLE_COLOR.developer]);
   expect(plain(row)).toContain("Open PR");
 });
 

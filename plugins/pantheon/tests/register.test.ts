@@ -494,12 +494,12 @@ describe('register', () => {
     const { files, seen } = world(on, { files: { [`${HOME}/.claude/pantheon.json`]: '{}' } })
     const first = await mountPanel($)
     await first.unmount()
-    expect(seen.agents.length).toBe(9)
+    expect(seen.agents.length).toBe(8)
     files[`${ROOT}/.claude/pantheon.json`] = JSON.stringify({ disabledAgents: ['architect'] })
     const second = await mountPanel($)
     await second.unmount()
     // The new config registers its own agents once.
-    expect(seen.agents.length).toBe(17)
+    expect(seen.agents.length).toBe(15)
   })
 
   test('panel keeps the last valid config and warns once across invalid JSON renders without invalidating itself', async ($, on) => {
@@ -514,7 +514,7 @@ describe('register', () => {
       await ui.unmount()
     }
     expect(seen.toasts).toEqual([`pantheon: invalid config — ${HOME}/.claude/pantheon.json: Invalid JSON`])
-    expect(seen.agents.length).toBe(9)
+    expect(seen.agents.length).toBe(8)
     expect(invalidations).toEqual([])
   })
 
@@ -782,11 +782,11 @@ describe('register', () => {
     const { seen } = world(on)
     await start($)
     expect(seen.tools).toEqual([])
-    expect(seen.agents).toEqual(['code-reader', 'docs-reader', 'developer', 'architect', 'qa', 'ux', 'git', 'councillor-alpha', 'councillor-beta'])
+    expect(seen.agents).toEqual(['code-reader', 'docs-reader', 'developer', 'architect', 'qa', 'ux', 'councillor-alpha', 'councillor-beta'])
     const architect = seen.registered.find(spec => spec.name === 'architect')
     expect(architect?.tools).toBeUndefined()
     expect(architect?.disallowedTools).toEqual(['Edit', 'Write', 'NotebookEdit', 'Agent'])
-    expect(seen.registered.find(spec => spec.name === 'git')?.disallowedTools).toEqual(['Agent'])
+    expect(seen.registered.find(spec => spec.name === 'git')).toBeUndefined()
     expect(seen.registered.find(spec => spec.name === 'ux')?.disallowedTools).toBeUndefined()
   })
 
@@ -795,7 +795,7 @@ describe('register', () => {
     on('agent.offer', async () => ({ isOffered: true }))
     delete files[`${HOME}/.claude/pantheon.json`]
     await start($)
-    expect(seen.agents).toEqual(['code-reader', 'docs-reader', 'developer', 'architect', 'qa', 'ux', 'git', 'councillor-alpha', 'councillor-beta'])
+    expect(seen.agents).toEqual(['code-reader', 'docs-reader', 'developer', 'architect', 'qa', 'ux', 'councillor-alpha', 'councillor-beta'])
     expect((await $.agent.offer({ agent: 'pantheon:code-reader', description: '', source: 'plugin', provider: { plugin: 'pantheon', tier: 'user' } } as never)).isOffered).toBe(true)
   })
 
@@ -815,13 +815,13 @@ describe('register', () => {
   test('/pantheon config reports the merged config and where it came from', async ($, on) => {
     world(on, { files: {
       [`${HOME}/.claude/pantheon.json`]: JSON.stringify({ agents: { architect: { effort: 'high' } } }),
-      [`${ROOT}/.claude/pantheon.json`]: JSON.stringify({ disabledAgents: ['git'] }),
+      [`${ROOT}/.claude/pantheon.json`]: JSON.stringify({ disabledAgents: ['qa'] }),
     } })
     await start($)
     const report = (await $.command.run({ command: 'pantheon', args: 'config' })).text ?? ''
     expect(report).not.toMatch(/profile|codex|sandbox/i)
     expect(report).toContain('architect')
-    expect(report).toContain('git')
+    expect(report).toContain('disabledAgents')
   })
 
   test('an unknown /pantheon subcommand lists the available ones', async ($, on) => {
@@ -831,7 +831,7 @@ describe('register', () => {
     expect(out.text).toBe('Unknown subcommand: cancel. Use /pantheon, /pantheon close, /pantheon config, /pantheon doctor or /pantheon flow.')
   })
 
-  const PING_ORDER = ['code-reader', 'docs-reader', 'developer', 'architect', 'qa', 'ux', 'git', 'councillor:alpha', 'councillor:beta']
+  const PING_ORDER = ['code-reader', 'docs-reader', 'developer', 'architect', 'qa', 'ux', 'councillor:alpha', 'councillor:beta']
 
   function doctorWorld(on: On, file?: string) {
     const submits: string[] = []
@@ -876,7 +876,7 @@ describe('register', () => {
   })
 
   test('doctor does not submit when every target is disabled', async ($, on) => {
-    const { submits, clock } = doctorWorld(on, JSON.stringify({ disabledAgents: ['code-reader', 'docs-reader', 'developer', 'architect', 'qa', 'ux', 'git', 'council'] }))
+    const { submits, clock } = doctorWorld(on, JSON.stringify({ disabledAgents: ['code-reader', 'docs-reader', 'developer', 'architect', 'qa', 'ux', 'council'] }))
     await start($)
     const out = await $.command.run({ command: 'pantheon', args: 'doctor' })
     await clock.settle()
@@ -890,7 +890,7 @@ describe('register', () => {
     expect(seen.toasts.length).toBe(1)
     expect(seen.toasts[0]).toContain('pantheon: invalid config')
     expect(seen.toasts[0]).toContain('profiles were removed')
-    expect(seen.agents.length).toBe(9)
+    expect(seen.agents.length).toBe(8)
   })
 
 
@@ -909,14 +909,14 @@ describe('register', () => {
     const { seen, files } = world(on)
     on('prompt.compose', async () => ({ sections: [] }))
     await start($)
-    expect(seen.agents.length).toBe(9)
+    expect(seen.agents.length).toBe(8)
     files[`${HOME}/.claude/pantheon.json`] = JSON.stringify({ agents: { architect: { model: 'sonnet' } } })
     await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: [], tools: [], outputStyle: null, traits: [] } as never)
-    expect(seen.agents.length).toBe(18)
+    expect(seen.agents.length).toBe(16)
     expect(seen.registered.filter(spec => spec.name === 'architect').map(spec => (spec as { model?: string }).model)).toEqual(['opus', 'sonnet'])
     files[`${HOME}/.claude/pantheon.json`] = '{ broken'
     await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: [], tools: [], outputStyle: null, traits: [] } as never)
-    expect(seen.agents.length).toBe(18)
+    expect(seen.agents.length).toBe(16)
   })
 
 
@@ -946,7 +946,7 @@ describe('register', () => {
   test('invalid first config still registers the default native agents', async ($, on) => {
     const { seen } = world(on, { files: { [`${HOME}/.claude/pantheon.json`]: '{ nope' } })
     await start($)
-    expect(seen.agents).toEqual(['code-reader', 'docs-reader', 'developer', 'architect', 'qa', 'ux', 'git', 'councillor-alpha', 'councillor-beta'])
+    expect(seen.agents).toEqual(['code-reader', 'docs-reader', 'developer', 'architect', 'qa', 'ux', 'councillor-alpha', 'councillor-beta'])
   })
 
   test('a failed native registration is retried on the next turn', async ($, on) => {
@@ -955,7 +955,7 @@ describe('register', () => {
     await start($)
     expect(seen.agents).toEqual([])
     await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: [], tools: [], outputStyle: null, traits: [] } as never)
-    expect(seen.agents).toEqual(['code-reader', 'docs-reader', 'developer', 'architect', 'qa', 'ux', 'git', 'councillor-alpha', 'councillor-beta'])
+    expect(seen.agents).toEqual(['code-reader', 'docs-reader', 'developer', 'architect', 'qa', 'ux', 'councillor-alpha', 'councillor-beta'])
   })
 
   describe('above-prompt strip', () => {

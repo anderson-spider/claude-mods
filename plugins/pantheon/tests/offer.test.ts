@@ -4,7 +4,7 @@ import { isOffered } from '../hooks/roles'
 
 describe('agent offer', () => {
   test('every role and default seat is offered', () => {
-    for (const role of ['code-reader', 'docs-reader', 'developer', 'architect', 'qa', 'ux', 'git', 'councillor-alpha', 'councillor-beta']) {
+    for (const role of ['code-reader', 'docs-reader', 'developer', 'architect', 'qa', 'ux', 'councillor-alpha', 'councillor-beta']) {
       expect(isOffered(DEFAULTS, `pantheon:${role}`)).toBe(true)
     }
   })
