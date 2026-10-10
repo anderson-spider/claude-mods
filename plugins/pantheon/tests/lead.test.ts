@@ -5,10 +5,16 @@ import { buildLeadSection } from '../hooks/prompts/lead'
 import { rolePrompt } from '../hooks/prompts/roles'
 
 describe('lead budget', () => {
-  // The git rule and the qa route's flow-task prefix add text; the limit keeps a small growth margin.
-  test('the prompt stays within 5600 chars', () => {
-    expect(buildLeadSection(DEFAULTS).length).toBeLessThanOrEqual(5600)
+  // The ceiling is shared by the default config and every single disabled role or seat.
+  const LEAD_BUDGET = 4300
+  test('the default prompt stays within 4300 chars', () => {
+    expect(buildLeadSection(DEFAULTS).length).toBeLessThanOrEqual(LEAD_BUDGET)
   })
+  for (const role of ['code-reader', 'docs-reader', 'developer', 'architect', 'qa', 'ux', 'council']) {
+    test(`the prompt with ${role} disabled stays within 4300 chars`, () => {
+      expect(buildLeadSection({ ...DEFAULTS, disabledAgents: [role] }).length).toBeLessThanOrEqual(LEAD_BUDGET)
+    })
+  }
 })
 
 describe('lead section', () => {
