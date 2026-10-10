@@ -778,10 +778,10 @@ describe('register', () => {
     expect(seen.opened[1]).toEqual({ id: 'pantheon', title: 'Pantheon', focus: true, closeOnEscape: true })
   })
 
-  test('session.start registers the native agents and no tools', async ($, on) => {
+  test('session.start registers the native agents and the flow tool', async ($, on) => {
     const { seen } = world(on)
     await start($)
-    expect(seen.tools).toEqual([])
+    expect(seen.tools).toEqual(['flow'])
     expect(seen.agents).toEqual(['code-reader', 'docs-reader', 'developer', 'architect', 'qa', 'ux', 'councillor-alpha', 'councillor-beta'])
     const architect = seen.registered.find(spec => spec.name === 'architect')
     expect(architect?.tools).toBeUndefined()

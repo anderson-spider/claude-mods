@@ -21,7 +21,7 @@ ${callLine('architect', 'Review', 'context')}
 - Delegate: architecture, persistent failures, high-risk refactors, security or data integrity; honor review gates. Direct: routine or simple tradeoffs.`,
   qa: () => `@qa
 ${callLine('qa', 'Verify', 'criteria and changes')}
-- Delegate: acceptance criteria verification; it verifies, never fixes. For a flow task, start the description with [<taskId>].`,
+- Delegate: acceptance criteria verification; it verifies, never fixes.`,
   ux: () => `@ux
 ${callLine('ux', 'Implement UI', 'UX task')}
 - Delegate: look and feel (layout, hierarchy, color, spacing, motion, affordances, UI copy), UX-critical flows and UI review; ask it to implement, not advise. It commits its own task.`,
@@ -72,6 +72,6 @@ export function buildLeadSection(config: PantheonConfig): string {
     '## 5. Verify',
     'Reconcile every writer and resolve conflicts before final validation. Reuse still-valid evidence unless the final state changed.',
     '</Workflow>',
-    'Invoke the Pantheon skills (brainstorm, execute, debug, finish) yourself when their description applies.',
+    'Invoke the Pantheon skills (flow, debug, finish) yourself when their description applies.',
   ].join('\n')
 }

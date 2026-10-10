@@ -87,7 +87,6 @@ describe('lead section', () => {
     const qa = section.slice(section.indexOf('@qa\n'), section.indexOf('@ux\n'))
     expect(qa).toContain('acceptance criteria verification')
     expect(qa).toContain('never fixes')
-    expect(qa).toContain('[<taskId>]')
     expect(buildLeadSection({ ...DEFAULTS, disabledAgents: ['qa'] })).not.toContain('acceptance criteria verification')
   })
 
@@ -126,7 +125,7 @@ describe('role prompts', () => {
     for (const key of ['developer', 'ux'] as const) {
       const prompt = rolePrompt(key)
       for (const text of [
-        'git add -- <paths>', 'git commit -m "<type>(<scope>): <summary> [<taskId>]" -- <paths>',
+        'git add -- <paths>', 'git commit -m "<type>(<scope>): <summary> [<phase>]" -- <paths>',
         'Never `git add -A`, `git add .`, `--no-verify` or `--amend`', 'no globs in pathspecs', '`git mv` or `git rm`', '(no `-F`, no editor or `-e`)', 'No AI attribution', 'retry once',
         'report it to the lead instead of bypassing it', 'Never push, rebase, reset, merge, switch branches, stash or rewrite history: the lead pushes',
       ]) expect(prompt).toContain(text)

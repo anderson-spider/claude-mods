@@ -1,22 +1,17 @@
 import { atom, read, update } from 'claude-code'
-import type { AgentSpec, FsStat, Hook, ProcessRunInit, ProcessRunResult, Register, SettingsSource, ToolCallResult } from 'claude-code'
+import type { AgentSpec, FsStat, Hook, ProcessRunInit, ProcessRunResult, Register, ToolCallResult } from 'claude-code'
 
-import type { FlowAgent, Native, SessionInfo } from '../types'
+import type { Native, SessionInfo } from '../types'
 import { loadConfig } from './config'
 import { rulesVerdict } from './decisions'
 import { gateContext, gateMessage } from './gate'
 import { DEFAULT_CONFIG } from './defaults'
-import {
-  approvePlan, controlFlow, flowStatus, flowTaskFiles, humanPrompt, inspectForcedBackground, inspectIsolation, inspectSpawn, mainEdit, noteDelivery, noteDeliveryDiagnostic, noteOwnership,
-  ownershipVerdict, parseNotification, pendingAgentTasks, qaCriteriaBrief, reviewed, stopFlow, taskEnded, taskIdOf,
-} from './flow/controller'
-import type { Ctx, Serial } from './flow/controller'
-import type { CheckMemo } from './flow/checks'
-import type { JudgeIo, Route } from './flow/judge'
-import { createJudgeAccess, createJudgeSession, judgeModeOf, resolveJudge } from './flow/judging'
-import type { JudgeSession, JudgeSetup, SettingsView } from './flow/judging'
-import { createSerial } from './flow/store'
-import type { Mode } from './flow/types'
+import * as jevflow from './jevflow/controller'
+import { ROLES } from './jevflow/types'
+import { createBreaker, createJev } from './jevflow/jev'
+import type { Breaker, JevIo } from './jevflow/jev'
+import { drawFlowTab } from './jevflow/view'
+import type { FlowView } from './jevflow/view'
 import { buildCouncilBlock, isCouncilOrigin, matchesCouncilTrigger } from './prompts/council'
 import { buildLeadSection } from './prompts/lead'
 import { rolePrompt } from './prompts/roles'
@@ -34,13 +29,24 @@ import {
 import type { StripHost } from './strip/state'
 import {
   DEFAULT_SESSION, DEFAULT_VIEW, completed, describeTool, markNativesLost,
-  normalizeNatives, normalizeSession, normalizeView, sessionCompleted, sessionMeasured, viewToggled,
+  normalizeNatives, normalizeSession, normalizeView, sessionCompleted, sessionMeasured, viewTabbed, viewToggled,
   roundOpened, sessionStarted, sessionStepped, spawned, stepAccounted, toolNoted,
 } from './tracking'
 import type { ConfigResult, PantheonConfig } from './types'
 import { authorizedRoot } from './workspace'
 
 const gateHeld = atom({ plugin: 'pantheon', key: 'gateHeld' }, null)
+/** The Proceed/Cancel box: what it asks and its title (the edit gate's when none is given). */
+type GateHeld = { message: string; title?: string }
+
+/** The check commands the person approved, per repository root, in the plugin's store (newest last). */
+const CHECK_APPROVALS_KEY = 'flowCheckApprovals'
+const CHECK_APPROVALS_MAX = 200
+
+function approvalsIn(all: unknown, root: string): string[] {
+  const list = all && typeof all === 'object' && !Array.isArray(all) ? (all as Record<string, unknown>)[root] : undefined
+  return Array.isArray(list) ? list.filter((cmd): cmd is string => typeof cmd === 'string') : []
+}
 
 type GateEvaluation = { deny: string } | undefined
 
@@ -108,14 +114,10 @@ type Io = {
   run: (argv: string[], init?: ProcessRunInit) => Promise<ProcessRunResult>
   home: () => Promise<string | undefined>
   readText: (path: string) => Promise<string | undefined>
-  /** The path with its links followed; the path itself when the host cannot say. */
-  realPath: (path: string) => Promise<string>
   toast: (text: string) => void
   registerAgent: (spec: AgentSpec) => Promise<unknown>
   after: (ms: number, fn: () => void) => { cancel: () => void }
   submit: (text: string) => Promise<unknown>
-  /** One source of the engine's settings, as loaded (the judge options are checked against where they were set). */
-  settings: (source: SettingsSource) => Promise<unknown>
 }
 
 type TrackingIo = {
@@ -137,35 +139,94 @@ function hostIo($: Dollar): Io {
     run: (argv, init) => $.process.run(argv, init),
     home: () => $.env.get('HOME'),
     readText: async path => (await $.fs.exists(path)) ? String(await $.fs.read(path)) : undefined,
-    realPath: async path => {
-      try { return (await $.fs.stat(path, { resolve: true })).realPath ?? path } catch { return path }
-    },
     toast: text => $.ui.toast(text),
     registerAgent: spec => $.agent.register(spec),
     after: (ms, fn) => $.clock.after(ms, fn),
     submit: text => $.prompt.submit({ text }),
-    settings: source => $.settings.read({ source }),
   }
 }
 
-/**
- * The judge's host access from the hook's `$`: the request goes through the host's network (`$.http.fetch`, whose answer
- * carries the headers the retry reads), the timer is the host's clock, and the epoch clock and the jitter are plain
- * synchronous calls. Nothing else is sent than what `judge` builds: an Authorization and a Content-Type, no Referer, no X-Title.
- */
-function judgeIo($: Dollar): JudgeIo {
+/** Jev's host access from the hook's `$`: the request goes through the host's network and the timer is the host's clock. */
+function jevIo($: Dollar): JevIo {
   return {
     fetch: async (url, init) => {
       const response = await $.http.fetch(url, init)
-      return { status: response.status, ok: response.ok, text: response.text, headers: response.headers }
+      return { status: response.status, text: response.text, headers: response.headers }
     },
     timer: (ms, fn) => {
       const handle = $.clock.after(ms, fn)
       return () => handle.cancel()
     },
-    now: () => Date.now(),
-    random: () => Math.random(),
   }
+}
+
+/**
+ * The flow controller's host access (times in seconds, as JevFlow's). There is no delete or move on `$.fs`, so a draft
+ * is removed and a finished flow archived through `rm` and `mv`.
+ */
+function flowIo($: Dollar, ask?: jevflow.Io['ask']): jevflow.Io {
+  return {
+    read: async path => (await $.fs.exists(path)) ? String(await $.fs.read(path)) : undefined,
+    write: (path, text) => $.fs.write(path, text),
+    exists: path => $.fs.exists(path),
+    list: async dir => (await $.fs.list(dir)).map(entry => ({ name: entry.name, kind: entry.kind, mtimeMs: entry.mtimeMs })),
+    remove: async path => { await $.process.run(['rm', '-f', '--', path]) },
+    move: async (from, to) => {
+      const out = await $.process.run(['mv', '--', from, to])
+      if (out.exitCode !== 0) throw new Error(`mv failed: ${out.stderr.trim()}`)
+    },
+    run: async (argv, init) => {
+      const out = await $.process.run(argv, { cwd: init.cwd, timeoutMs: init.timeoutMs })
+      return { exitCode: out.exitCode, stdout: out.stdout, stderr: out.stderr }
+    },
+    now: async () => Number(await $.clock.now()) / 1000,
+    ...(ask ? { ask } : {}),
+  }
+}
+
+/** Jev's key (the judgeKey option; empty means checks only) and the breaker shared while the module lives. */
+type JevAccess = { key: string; breaker: Breaker }
+
+/** The flow controller's host access, with Jev when a key is set. */
+function flowHost($: Dollar, jev: JevAccess): jevflow.Io {
+  return flowIo($, jev.key ? createJev(jevIo($), jev.key, { breaker: jev.breaker }) : undefined)
+}
+
+/** What the Flow tab draws: this session's flow, else the newest in this folder (project.py default_flow). */
+async function flowViewOf($: Dollar, jev: JevAccess, root: string): Promise<FlowView> {
+  try {
+    const io = flowHost($, jev)
+    const p = await jevflow.viewedFlow(io, root, String(await $.session.id()))
+    if (!p) return { kind: 'none' }
+    if (await jevflow.isDraft(io, p)) {
+      const draft = await io.read(p.draft).catch(() => undefined)
+      let goal = ''
+      try { goal = String((JSON.parse(draft ?? '{}') as { goal?: unknown }).goal ?? '') } catch { /* An unreadable draft shows no goal. */ }
+      return { kind: 'draft', id: p.id, goal }
+    }
+    try {
+      const loaded = await jevflow.loadFlowAndState(io, p)
+      const needsHuman = await io.read(p.needsHuman).catch(() => undefined)
+      return { kind: 'flow', id: p.id, archived: p.archived, ...loaded, ...(needsHuman ? { needsHuman: needsHuman.slice(0, 2000) } : {}) }
+    } catch (error) {
+      return { kind: 'error', id: p.id, error: error instanceof Error ? error.message : String(error) }
+    }
+  } catch (error) {
+    return { kind: 'error', id: '?', error: error instanceof Error ? error.message : String(error) }
+  }
+}
+
+/** Whether the person approved this exact check command in this repository before. */
+async function isApprovedCheck($: Dollar, root: string, cmd: string): Promise<boolean> {
+  return approvalsIn(await $.store.get(CHECK_APPROVALS_KEY), root).includes(cmd)
+}
+
+/** Remembers an approved check command for this repository, keeping the newest CHECK_APPROVALS_MAX. */
+async function rememberCheck($: Dollar, root: string, cmd: string): Promise<void> {
+  const all = await $.store.get(CHECK_APPROVALS_KEY)
+  const kept: Record<string, unknown> = all && typeof all === 'object' && !Array.isArray(all) ? { ...(all as Record<string, unknown>) } : {}
+  kept[root] = [...approvalsIn(all, root).filter(c => c !== cmd), cmd].slice(-CHECK_APPROVALS_MAX)
+  await $.store.set(CHECK_APPROVALS_KEY, kept)
 }
 
 /** Host access for the above-prompt strip modules, built from the hook's `$`. */
@@ -215,306 +276,15 @@ export function createQueue<T>(write: (v: T) => Promise<unknown>, onError: (e: u
 const nativesAtom = atom({ plugin: 'pantheon', key: 'natives' } as const, [] as Native[])
 const sessionAtom = atom({ plugin: 'pantheon', key: 'session' } as const, DEFAULT_SESSION)
 const viewAtom = atom({ plugin: 'pantheon', key: 'view' } as const, DEFAULT_VIEW)
-const flowAgentsAtom = atom({ plugin: 'pantheon', key: 'flowAgents' } as const, {} as Record<string, FlowAgent>)
-
-/** Links the controller keeps: the newest, so the atom stays small. */
-export const FLOW_AGENTS_MAX = 48
-
-/** The `flow` option: off, shadow (the default, also for anything unrecognised) or enforce. */
-export function flowModeOf(value: unknown): Mode {
-  return value === 'off' || value === 'enforce' ? value : 'shadow'
-}
-
-/** The link for an agent, replacing an older one and dropping the oldest links past the cap. */
-export function withFlowAgent(links: Record<string, FlowAgent>, agentId: string, link: FlowAgent): Record<string, FlowAgent> {
-  const rest = Object.entries(links).filter(([id]) => id !== agentId)
-  return Object.fromEntries([...rest, [agentId, link]].slice(-FLOW_AGENTS_MAX))
-}
-
-/** What a flow call needs besides the hook's `$`; built by `register`, which owns the root, the config and the queues. */
-type FlowDeps = {
-  root: string
-  mode: Mode
-  config: PantheonConfig
-  serial: (planId: string) => Serial
-  memo: CheckMemo
-  warn: (text: string) => void
-  /** Present only while the judge is on and a key is set: what `flowCtx` builds the controller's `judge` from. */
-  judge?: { mode: 'shadow' | 'escalate'; route: Route; home: string; session: JudgeSession; toast: (text: string) => void }
-}
-
-/** What the flow hooks share while a module instance lives (a hot reload starts it again). */
-type FlowRuntime = {
-  /**
-   * The links as this module wrote them. `$.state` reads inside a dispatch are snapshots, so a write that raced a link's
-   * storage must see it here; the state value is what survives a reload.
-   */
-  links: Map<string, FlowAgent>
-  /** Delegations of a task's agents that are starting: the link of the agent they start is not written yet. */
-  pending: Set<Promise<void>>
-  /** Agents known not to belong to any task, so each write by one does not ask the engine again. */
-  strangers: Set<string>
-  uid: Promise<string | undefined> | undefined
-}
-
-const PENDING_WAIT_MS = 2000
-const STRANGERS_MAX = 500
-
-/** Keeps a link in memory (the newest FLOW_AGENTS_MAX) and in the state value. */
-async function storeFlowAgent($: Dollar, rt: FlowRuntime, agentId: string, link: FlowAgent): Promise<void> {
-  rt.links.delete(agentId)
-  rt.links.set(agentId, link)
-  while (rt.links.size > FLOW_AGENTS_MAX) rt.links.delete(rt.links.keys().next().value as string)
-  await update($, flowAgentsAtom, links => withFlowAgent(links, agentId, link))
-}
-
-/** The link of an agent as last written: memory first, then the state value. */
-async function flowAgentOf($: Dollar, rt: FlowRuntime, agentId: string): Promise<FlowAgent | undefined> {
-  return rt.links.get(agentId) ?? (await read($, flowAgentsAtom))[agentId]
-}
-
-/** Counts a refused write for a work agent, or clears the count when its delivery has been judged. */
-async function setFlowDenials($: Dollar, rt: FlowRuntime, agentId: string, count: (before: number) => number): Promise<void> {
-  const current = await flowAgentOf($, rt, agentId)
-  if (current) {
-    rt.links.delete(agentId)
-    rt.links.set(agentId, { ...current, denials: count(current.denials) })
-  }
-  await update($, flowAgentsAtom, links => links[agentId] ? { ...links, [agentId]: { ...links[agentId]!, denials: count(links[agentId]!.denials) } } : links)
-}
-
-/**
- * What a write gets when the ownership hook did not finish (it outlasted its budget, or failed outside what it guards): in
- * enforce, a write by an agent the flow linked to a task is not let through unchecked. Every other write is not the flow's to
- * hold, and nothing is refused outside enforce.
- */
-export function flowWriteFallback(links: ReadonlyMap<string, FlowAgent>, mode: Mode, agentId: string | undefined): string | undefined {
-  const link = mode === 'enforce' && agentId ? links.get(agentId) : undefined
-  return link?.kind === 'work' && link.files
-    ? `[Pantheon flow] The flow could not check this write against task ${link.task}'s files in time, so it was not made. Try it again.`
-    : undefined
-}
-
-/** Marks a delegation as starting until the returned function is called. */
-function holdPending(rt: FlowRuntime): () => void {
-  let release!: () => void
-  const gate = new Promise<void>(resolve => { release = resolve })
-  rt.pending.add(gate)
-  return () => { release(); rt.pending.delete(gate) }
-}
-
-/** An agent spawned by a task's work agent writes under that task's files, and its denials count for the task's agent. */
-function inherited(parent: FlowAgent, parentId: string): FlowAgent {
-  return { task: parent.task, plan: parent.plan, kind: 'work', end: parent.end, denials: 0, ...(parent.files ? { files: parent.files } : {}), root: parent.root ?? parentId }
-}
-
-/**
- * The link of an agent. A link is written only once its spawn has resolved, so an agent's first write can come first: it
- * waits for the delegations in flight (at most PENDING_WAIT_MS), then asks the engine what the agent is (its `[T]`
- * description, or the agent that spawned it) and adopts it. Agents that turn out to be no task's are remembered.
- */
-async function flowLinkFor($: Dollar, rt: FlowRuntime, deps: FlowDeps, agentId: string, depth = 0): Promise<FlowAgent | undefined> {
-  const find = () => flowAgentOf($, rt, agentId)
-  let link = await find()
-  if (link || rt.strangers.has(agentId)) return link
-  // Only the first level waits: the wait for what is starting is one wait of at most PENDING_WAIT_MS, whatever the depth of
-  // the parents asked after, not one per level.
-  if (depth === 0 && rt.pending.size > 0) {
-    let timer: { cancel: () => void } | undefined
-    await Promise.race([
-      Promise.allSettled([...rt.pending]),
-      new Promise<void>(resolve => { timer = $.clock.after(PENDING_WAIT_MS, () => resolve()) }),
-    ])
-    timer?.cancel()
-    link = await find()
-    if (link) return link
-  }
-  const adopted = (await adoptFlowAgent($, rt, deps, agentId, depth)).link
-  if (adopted) return adopted
-  if (rt.strangers.size >= STRANGERS_MAX) rt.strangers.clear()
-  rt.strangers.add(agentId)
-  return undefined
-}
-
-/**
- * What a lookup answered: the link when the agent was adopted (stored), else why not. `listed` is false when the engine does
- * not list the id at all, which is how a Bash or Monitor task looks: it is not an agent of this session.
- */
-type Adoption = { link?: FlowAgent; listed: boolean; refusal: string }
-
-/**
- * Adopts an agent that has no stored link, by asking the engine what it is: a subagent inherits the task of its parent when
- * that parent is a work agent, and a `[T]` description the plan has makes a work agent of that task (with the task's files,
- * so only a live flow adopts). The link is stored. Shared by a writer (flowLinkFor) and a notification (prompt.submit), so
- * there is one adoption path.
- *
- * Premise: `$.agent.list()` gives a nested agent its `parentId`. A nested agent is never adopted by its own `[T]`
- * description: the spawn hook links a `[T]` delegation only when it has no parentAgentId, so for a nested one the lookup is
- * the only route, and it must not let the agent claim the task by its own description (only its parent's task is inherited).
- */
-async function adoptFlowAgent($: Dollar, rt: FlowRuntime, deps: FlowDeps, agentId: string, depth: number): Promise<Adoption> {
-  const info = depth < 4 ? (await $.agent.list()).find(agent => agent.id === agentId) : undefined
-  if (!info) return { listed: false, refusal: `$.agent.list() does not list agent ${agentId}` }
-  if (info.parentId) {
-    const parent = await flowLinkFor($, rt, deps, info.parentId, depth + 1)
-    if (parent?.kind === 'work' && parent.files) {
-      const link = inherited(parent, info.parentId)
-      await storeFlowAgent($, rt, agentId, link)
-      return { link, listed: true, refusal: '' }
-    }
-    return { listed: true, refusal: `$.agent.list() gives it the parent ${info.parentId}, which is not a live task's work agent` }
-  }
-  const taskId = taskIdOf(info.description)
-  if (!taskId) return { listed: true, refusal: 'its description names no [T<n>] task' }
-  const check = await inspectSpawn(flowCtx($, deps), { taskId, agentType: info.type, lookup: true })
-  if (check.known === false) return { listed: true, refusal: `task ${taskId} is not in the plan in force` }
-  if (check.kind !== 'work') return { listed: true, refusal: `agent type ${info.type} is not the work role of task ${taskId}` }
-  if (!check.planId || !check.files) return { listed: true, refusal: `task ${taskId} is not live (not approved, paused, stopped or done)` }
-  const link: FlowAgent = { task: taskId, plan: check.planId, kind: 'work', end: check.end, denials: 0, files: check.files }
-  await storeFlowAgent($, rt, agentId, link)
-  return { link, listed: true, refusal: '' }
-}
-
-/**
- * Whether a write is inside the task's files, with the path and the root both resolved by the host (links followed), as
- * the gate does, so `/var` against `/private/var` or a link out of an owned directory cannot change the answer. A path the
- * host cannot resolve is refused. The scratchpad allowed is this session's, for this user.
- */
-async function flowOwnership($: Dollar, rt: FlowRuntime, deps: FlowDeps, link: FlowAgent, raw: string) {
-  const cwd = await $.session.cwd()
-  const stat = (path: string, resolve: boolean) => $.fs.stat(path, { resolve })
-  const root = await resolveGatePath(stat, deps.root, cwd)
-  rt.uid ??= $.process.run(['id', '-u']).then(out => {
-    const uid = out.stdout.trim()
-    return out.exitCode === 0 && /^\d+$/.test(uid) ? uid : undefined
-  }).catch(() => undefined)
-  const scratch = { uid: await rt.uid, sessionId: String(await $.session.id()) }
-  let path: string
-  try { path = await resolveGatePath(stat, raw, cwd) } catch (error) {
-    const why = error instanceof Error ? error.message : String(error)
-    return { owned: false as const, reason: `Task ${link.task}: ${raw} could not be resolved to a real path (${why}). Write it by a plain path inside the task's files.` }
-  }
-  // The plugin's own store holds what the flow trusts (the attestation, the plan in force): no task's agent writes it, wherever
-  // the repository's root is. The configuration directory is `CLAUDE_CONFIG_DIR` when set, else `~/.claude`.
-  const never: string[] = []
-  try {
-    const configured = await $.env.get('CLAUDE_CONFIG_DIR')
-    const home = await $.env.get('HOME')
-    for (const dir of [configured, home ? `${home}/.claude` : undefined]) {
-      if (dir) never.push(await resolveGatePath(stat, `${dir.replace(/\/+$/, '')}/plugins/store`, cwd))
-    }
-  } catch { /* A directory that cannot be resolved is guarded as spelled by the other entry, or by being outside the files. */ }
-  return ownershipVerdict(link.task, link.files ?? [], root, path, scratch, never)
-}
-
-/** The root and a path as the host resolves them (links followed), as the ownership gate reads them; a path it cannot resolve as written. */
-async function flowResolved($: Dollar, root: string, raw: string): Promise<{ root: string; path: string }> {
-  const cwd = await $.session.cwd()
-  const stat = (path: string, resolve: boolean) => $.fs.stat(path, { resolve })
-  const resolvedRoot = await resolveGatePath(stat, root, cwd)
-  try { return { root: resolvedRoot, path: await resolveGatePath(stat, raw, cwd) } } catch { return { root: resolvedRoot, path: raw } }
-}
-
-/** The controller's host access, built from the hook's `$` (it cannot be stored). */
-function flowCtx($: Dollar, deps: FlowDeps): Ctx {
-  return {
-    fs: {
-      read: async path => (await $.fs.exists(path)) ? String(await $.fs.read(path)) : undefined,
-      write: (path, text) => $.fs.write(path, text),
-    },
-    run: async (argv, init) => {
-      const out = await $.process.run(argv, { cwd: init.cwd, timeoutMs: init.timeoutMs, ...(init.stdin === undefined ? {} : { stdin: init.stdin }) })
-      return { exitCode: out.exitCode, stdout: out.stdout, stderr: out.stderr }
-    },
-    // A check's working directory: not there, not a directory, or fine. A host that cannot say rejects, and the check just runs.
-    probeDir: async path => {
-      if (!(await $.fs.exists(path))) return 'missing'
-      return (await $.fs.stat(path)).kind === 'dir' ? 'directory' : 'other'
-    },
-    now: async () => Number(await $.clock.now()),
-    root: deps.root,
-    mode: deps.mode,
-    available: {
-      developer: isOffered(deps.config, 'pantheon:developer'),
-      ux: isOffered(deps.config, 'pantheon:ux'),
-      architect: isOffered(deps.config, 'pantheon:architect'),
-      qa: isOffered(deps.config, 'pantheon:qa'),
-    },
-    serial: deps.serial,
-    memo: deps.memo,
-    // The plugin's own store, outside the repository: what the controller trusts to say what the person approved and which plan is in force.
-    attest: { get: key => $.store.get(key), set: (key, value) => $.store.set(key, value) },
-    warn: deps.warn,
-    ...(deps.judge ? {
-      judge: createJudgeAccess({
-        mode: deps.judge.mode, route: deps.judge.route, io: judgeIo($), session: deps.judge.session,
-        redact: { home: deps.judge.home, root: deps.root }, toast: deps.judge.toast,
-      }),
-    } : {}),
-  }
-}
-
-/**
- * A subagent of a flow task returned (a foreground Agent result, or a background task's notification): the controller
- * decides on that delivery. Returns the verdict text for the lead (enforce only).
- */
-async function finishFlowAgent($: Dollar, rt: FlowRuntime, deps: FlowDeps, agentId: string, output: string, completed: boolean): Promise<string | undefined> {
-  const link = await flowAgentOf($, rt, agentId)
-  if (!link) return undefined
-  // Each return is one delivery (a resumed agent returns again); its denials were counted for this one alone.
-  if (link.denials > 0) await setFlowDenials($, rt, agentId, () => 0)
-  // A diagnosis is advice for the lead, and an agent that did not finish proved nothing either way.
-  if (link.kind === 'diagnosis' || !completed) return undefined
-  const ctx = flowCtx($, deps)
-  if (link.kind === 'work') return (await taskEnded(ctx, { taskId: link.task, ownershipDenials: link.denials, output })).text
-  return (await reviewed(ctx, { taskId: link.task, by: link.by ?? 'qa', end: link.end, output, ...(link.git ? { git: link.git } : {}) })).text
-}
-
-/** A tag of a notification envelope, read as parseNotification reads it: before `<result>`, trimmed, empty is none. */
-function envelopeTag(text: string, name: string): string | undefined {
-  const at = text.indexOf('<result>')
-  const head = at === -1 ? text : text.slice(0, at)
-  return new RegExp(`<${name}>([^<]*)</${name}>`).exec(head)?.[1]?.trim() || undefined
-}
-
-/** What a notification envelope lacks before its `<result>` for parseNotification to read it: a non-empty `<task-id>` or `<status>`. */
-function unparsedReason(text: string): string {
-  const missing = ['task-id', 'status'].filter(name => !envelopeTag(text, name))
-  return `the envelope has no non-empty ${missing.map(name => `<${name}>`).join(' or ')} before <result>`
-}
-
-const resultBucket = (length: number): string => length === 0 ? '0' : length <= 256 ? '1-256' : length <= 1024 ? '257-1024' : length <= 4096 ? '1025-4096' : '4097+'
-const shapeStatus = (value: unknown): string => typeof value === 'string' && value.trim()
-  ? value.trim().slice(0, 20).replace(/[^A-Za-z0-9_-]/g, '_') : 'missing'
-const envelopeObject = (value: unknown): Record<string, unknown> | undefined =>
-  value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined
-
-/** Only known envelope labels and lengths: arbitrary tag/field names and the result's words never enter a signature. */
-function notificationShape(text: string): string {
-  const start = text.indexOf('<result>')
-  const end = text.lastIndexOf('</result>')
-  const outside = start < 0 ? text : text.slice(0, start) + (end > start ? text.slice(end + 9) : '')
-  const tags = ['task-notification', 'task-id', 'tool-use-id', 'output-file', 'status', 'summary', 'event', 'note', 'usage']
-    .filter(tag => outside.includes(`<${tag}>`))
-  if (start >= 0) tags.push('result')
-  const length = start < 0 ? 0 : (end > start ? end : text.length) - start - 8
-  return `source=notification tags=${tags.join(',') || 'none'} status=${shapeStatus(envelopeTag(text, 'status'))} idLength=${envelopeTag(text, 'task-id')?.length ?? 0} result=${start >= 0} resultLength=${resultBucket(length)}`
-}
-
-function agentResultShape(value: unknown): string {
-  const payload = envelopeObject(value)
-  const fields = ['status', 'agentId', 'content', 'description', 'prompt', 'outputFile'].filter(key => payload && key in payload)
-  const length = Array.isArray(payload?.content) ? payload.content.reduce((total: number, block: unknown) => {
-    const text = envelopeObject(block)?.text
-    return total + (typeof text === 'string' ? text.length : 0)
-  }, 0) : typeof value === 'string' ? value.length : 0
-  return `source=Agent tags=${fields.join(',') || 'none'} status=${shapeStatus(payload?.status)} idLength=${typeof payload?.agentId === 'string' ? payload.agentId.length : 0} result=${value !== undefined} resultLength=${resultBucket(length)}`
-}
-
 /** The agents the strip folds into its last row: every running native. */
 async function stripAgents($: Dollar, now: number) {
   return agentsFromState(normalizeNatives(await read($, nativesAtom)), now)
 }
+
+const FLOW_TOOL_DESCRIPTION = 'The Pantheon flow (JevFlow): tracks a multi-step task against phases with checks, and holds a premature stop. '
+  + 'start lays out a new flow for a task that takes several steps and should be finished and verified (then write the phases to the '
+  + 'flow.json it names and call validate); join binds this session to a flow another session runs here; claim marks the phase you '
+  + 'take, as your Pantheon role (re-claim when you move); status shows the phases, claims and recent decisions.'
 
 export const register: Register = (on, options) => {
   let state: ConfigResult = { ok: true, config: DEFAULT_CONFIG, origins: {} }
@@ -526,7 +296,7 @@ export const register: Register = (on, options) => {
   let gateInteractive = false
 
   // Like branch-guard, decisions travel in memory: state reads inside a dispatch are snapshots.
-  async function holdGate(io: { poll: () => Promise<unknown>; show: (value: { message: string } | null) => Promise<unknown> }, message: string, signal: AbortSignal): Promise<GateChoice | 'aborted'> {
+  async function holdGate(io: { poll: () => Promise<unknown>; show: (value: GateHeld | null) => Promise<unknown> }, held: GateHeld, signal: AbortSignal): Promise<GateChoice | 'aborted'> {
     const slot = { decision: null as GateChoice | null }
     try {
       while (gateWaiting !== undefined) {
@@ -536,7 +306,7 @@ export const register: Register = (on, options) => {
       }
       if (signal.aborted) return 'aborted'
       gateWaiting = slot
-      await io.show({ message })
+      await io.show(held)
       while (slot.decision === null && !signal.aborted) await io.poll()
       return signal.aborted ? 'aborted' : slot.decision ?? 'aborted'
     } catch {
@@ -552,87 +322,22 @@ export const register: Register = (on, options) => {
   let toastedError: string | undefined
   const aboveOn = options.abovePrompt !== false && options.abovePrompt !== 'false'
 
-  // The decision flow: its mode, one queue per plan (every write to a plan's files goes through it), and the last problem.
-  const flowMode = flowModeOf(options.flow)
-  const flowSerials = new Map<string, Serial>()
-  const flowSerial = (planId: string): Serial => {
-    let serial = flowSerials.get(planId)
-    if (!serial) { serial = createSerial(); flowSerials.set(planId, serial) }
-    return serial
+  // The flow (JevFlow): every read-modify-write of its files goes through one queue, and Jev has one breaker while this
+  // module lives. Jev is called only when the judgeKey option is set; without it every Stop decides on the checks alone.
+  let flowChain: Promise<unknown> = Promise.resolve()
+  function flowSerial<T>(work: () => Promise<T>): Promise<T> {
+    const run = flowChain.then(work, work)
+    flowChain = run.catch(() => undefined)
+    return run
   }
-  const flowMemo: CheckMemo = new Map()
-  const flowRuntime: FlowRuntime = { links: new Map(), pending: new Set(), strangers: new Set(), uid: undefined }
-  const deliveryShapes = new Set<string>()
-  const deliveryCounts = { notifications: 0, agentResults: 0, parsed: 0, linked: 0 }
-  const countsSignature = () => `notifications=${deliveryCounts.notifications} agentResults=${deliveryCounts.agentResults} parsed=${deliveryCounts.parsed} linked=${deliveryCounts.linked}`
-  let lastDeliveryCounts = countsSignature()
-  // Each distinct state read failure (atom and message) is journaled once per runtime, not once per Stop.
-  const unreadSeen = new Set<string>()
-  const noteShape = async (ctx: Ctx, signature: string) => {
-    if (deliveryShapes.has(signature) || deliveryShapes.size >= 40) return
-    // Reserve before the await so concurrent hooks cannot write the same signature twice.
-    deliveryShapes.add(signature)
-    // Unwritten (no plan in force yet): release it, so the same shape arriving during a flow is still recorded.
-    if (!await noteDeliveryDiagnostic(ctx, { condition: 'envelope_shape', reason: signature })) deliveryShapes.delete(signature)
-  }
-  let flowLastProblem: string | undefined
-  const flowToasted = new Set<string>()
-  const flowWarning = (io: Pick<Io, 'toast'>) => (text: string): void => {
-    flowLastProblem = text
-    // Only enforce changes the session, so only enforce is worth a toast, once per distinct problem.
-    if (flowMode !== 'enforce' || flowToasted.has(text)) return
-    flowToasted.add(text)
-    try { io.toast(`pantheon: ${text}`) } catch { /* A failed toast changes nothing. */ }
-  }
-  const flowFailed = (io: Pick<Io, 'toast'>, error: unknown): void => {
-    flowWarning(io)(`the flow failed open — ${error instanceof Error ? error.message : String(error)}`)
-  }
-  // Hooks act only once session.start has found the repository root: the flow never runs a command to look for it.
-  const flowOn = (): boolean => flowMode !== 'off' && gateRoot !== undefined
-  // The attestation is keyed by the real path of the root, not by how the session's cwd spells it.
-  let flowRealRoot: { spelled: string; real: string } | undefined
-  // The judge (decisions 10 and 18): `judge` is off by default, and then nothing is read or sent. The key, the route and a base URL
-  // come from the plugin's options only (never a file of the repository, never the environment). One session, so one breaker
-  // and one "off for the session" for every caller; it lives as long as this module instance does.
-  const judgeSession = createJudgeSession(() => Date.now())
-  let judgeSetup: Promise<JudgeSetup> | undefined
-  const judgeDeps = async (io: Io): Promise<FlowDeps['judge']> => {
-    if (judgeModeOf(options.judge) === 'off') return undefined
-    judgeSetup ??= (async (): Promise<JudgeSetup> => {
-      // Where the options were set matters only when there is a key to protect: with none, no request can be made and the
-      // settings are not read. Every source is read (the engine gives each whole, its `env` included; only
-      // `pluginConfigs` is looked at), and one that cannot be read leaves the options unattributable.
-      let view: SettingsView | undefined
-      if (typeof options.judgeKey === 'string' && options.judgeKey.trim() !== '') {
-        const sources = async (names: readonly SettingsSource[]) => {
-          const out: unknown[] = []
-          let readable = true
-          for (const name of names) {
-            try { out.push(await io.settings(name)) } catch { readable = false }
-          }
-          return { out, readable }
-        }
-        const trusted = await sources(['user', 'flag', 'policy'])
-        const repo = await sources(['project', 'local'])
-        view = { trusted: trusted.out, repo: repo.out, readable: trusted.readable && repo.readable }
-      }
-      const setup = resolveJudge(options, view)
-      for (const note of setup.notes) { try { io.toast(`pantheon: ${note}`) } catch { /* A failed toast changes nothing. */ } }
-      return setup
-    })()
-    const setup = await judgeSetup
-    if (setup.mode === 'off' || !setup.route) return undefined
-    return { mode: setup.mode, route: setup.route, home: (await io.home()) ?? '', session: judgeSession, toast: text => io.toast(text) }
-  }
-  const flowDeps = async (io: Io): Promise<FlowDeps> => {
-    const spelled = gateRoot ?? (await workspace(io)).root
-    if (flowRealRoot?.spelled !== spelled) flowRealRoot = { spelled, real: await io.realPath(spelled) }
-    const judge = await judgeDeps(io)
-    return {
-      root: flowRealRoot.real, mode: flowMode, config: state.config, serial: flowSerial, memo: flowMemo, warn: flowWarning(io),
-      ...(judge ? { judge } : {}),
-    }
-  }
+  const jevBreaker = createBreaker(() => Date.now())
+  const jevKey = typeof options.judgeKey === 'string' ? options.judgeKey.trim() : ''
+  const jev: JevAccess = { key: jevKey, breaker: jevBreaker }
+  const flowRoot = async (io: Io): Promise<string> => gateRoot ?? (await workspace(io)).root
+  // Sessions that sent a prompt since this module loaded: the first prompt gets the lower nudge bar (auto.py).
+  const prompted = new Set<string>()
+  // Sessions already told, once each, that Jev is off (no judgeKey) when a Stop needed it.
+  const jevOffToasted = new Set<string>()
   configureStrip({ paceStart: options.paceStart })
   let minuteTicker: { cancel: () => void } | undefined
   let stripTicker: { cancel: () => void } | undefined
@@ -719,15 +424,35 @@ export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     gateInteractive = e.isInteractive === true && e.surface != null
     gateWaiting = undefined
-    if (options.gate === true) await update($, gateHeld, () => null)
+    // A box left by an earlier session is cleared whether or not the edit gate is on; a failed write must not stop the start.
+    try { await update($, gateHeld, () => null) } catch { /* The box is only a prompt; the session starts without the clear. */ }
     const io = hostIo($)
     const started = await next(e)
     await refreshConfig(io, (await workspace(io)).root)
     await $.command.register({
       name: 'pantheon',
       description: 'Open the Pantheon pane; subcommands: close, config, doctor, flow',
-      argumentHint: '[close | config | doctor | flow status|approve|pause|resume|stop]',
+      argumentHint: '[close | config | doctor | flow]',
     })
+    try {
+      await $.tool.register({
+        name: 'flow',
+        description: FLOW_TOOL_DESCRIPTION,
+        isDeferred: false,
+        inputSchema: {
+          type: 'object',
+          properties: {
+            action: { type: 'string', enum: ['start', 'validate', 'join', 'claim', 'status'], description: 'What to do.' },
+            goal: { type: 'string', description: "start: the person's request, verbatim." },
+            name: { type: 'string', description: 'start: a short kebab-case name of 2 to 5 words saying what the work delivers.' },
+            flow: { type: 'string', description: 'join: the id of a flow another session runs in this folder.' },
+            phase: { type: 'string', description: 'claim: the id of the phase you take.' },
+            as: { type: 'string', enum: [...ROLES], description: 'claim: your Pantheon role.' },
+          },
+          required: ['action'],
+        },
+      })
+    } catch { /* A host without plugin tools still starts the session. */ }
     try {
       const trackingIo: TrackingIo = {
         readNatives: () => read($, nativesAtom),
@@ -948,69 +673,19 @@ export const register: Register = (on, options) => {
         await nativesQueue.flushed()
       }
     } catch { /* Tracking never changes the spawn result. */ }
-    return started
-  })
-
-  // The flow links a delegation to its task by the `[<taskId>]` that starts its description, and holds it to decisions 16 and 17:
-  // the task's own role, or qa/architect only for a receipt the task awaits. Registered after tracking, so it runs beneath it.
-  on('agent.spawn', { description: /^\s*\[[A-Za-z]/ }, async ($, e, next) => {
-    const taskId = !flowOn() || e.parentAgentId ? undefined : taskIdOf(e.description)
-    if (!taskId) return next(e)
-    const io = hostIo($)
-    let check: Awaited<ReturnType<typeof inspectSpawn>> | undefined
-    try { check = await inspectSpawn(flowCtx($, await flowDeps(io)), { taskId, agentType: e.subagentType, background: e.background }) } catch (error) { flowFailed(io, error) }
-    if (check?.deny) return { deny: check.deny }
-    // A [T] delegation runs in the foreground: inspectSpawn asks for it in enforce (and journals it); shadow rewrites nothing.
-    const foreground = check?.foreground === true
-    // The lead writes the QA brief, so in enforce the approved criteria are appended to it: the lead cannot hand QA its own
-    // answers. Shadow rewrites nothing.
-    const brief = flowMode === 'enforce' && check?.kind === 'review' && check.by === 'qa' && check.criteria ? qaCriteriaBrief(taskId, check.criteria) : undefined
-    const base = brief ? { ...e, prompt: `${e.prompt}\n\n${brief}` } : e
-    const forward = foreground ? { ...base, background: false } : base
-    // Nothing is linked unless a plan is in force for the task: nothing to wait for then either.
-    if (!check?.kind || !check.planId) {
-      // Nothing links this agent, so its delivery cannot be matched to the task. A refused role is already journaled by
-      // inspectSpawn while the flow is live (its files are set then), so only what nothing judged is noted here. Forwarding is unchanged.
-      if (!check || check.known === false || !check.files) {
-        const reason = !check ? 'the flow could not check this spawn (see the warning)'
-          : check.known === false ? `task ${taskId} is unknown to the plan in force, or no plan is in force`
-          : `task ${taskId} is in the plan in force but not live (not approved, paused, stopped or done), so this spawn was not judged`
-        try { await noteDelivery(flowCtx($, await flowDeps(io)), { agentId: '', taskId, condition: 'spawn_unlinked', reason }) } catch (error) { flowFailed(io, error) }
-      }
-      return next(forward)
+    // A delegated phase: the lead's Agent description starts with `[<phase id>]` and the type is a Pantheon role. The
+    // claim is the one the agent's own flow tool call would make; a failure never changes the spawn.
+    const agentId = started.agentId
+    const claim = agentId ? jevflow.spawnClaim(e.subagentType, e.description) : undefined
+    if (agentId && claim) {
+      try {
+        const root = await flowRoot(hostIo($))
+        const sessionId = String(await $.session.id())
+        await flowSerial(() => jevflow.claimFlow(flowHost($, jev), root, { sessionId, agentId, agentType: e.subagentType }, claim.phase, claim.role))
+        $.ui.invalidate('ui.render')
+      } catch { /* The claim is advisory and fails open. */ }
     }
-    // The link is written after the spawn resolves; an agent's first write waits for it (flowLinkFor).
-    const release = holdPending(flowRuntime)
-    try {
-      const started = await next(forward)
-      if (started.agentId) {
-        const link: FlowAgent = {
-          task: taskId, plan: check.planId, kind: check.kind, end: check.end, denials: 0,
-          ...(check.by ? { by: check.by } : {}), ...(check.files ? { files: check.files } : {}), ...(check.git ? { git: check.git } : {}),
-        }
-        try { await storeFlowAgent($, flowRuntime, started.agentId, link) } catch (error) { flowFailed(io, error) }
-      }
-      return started
-    } finally { release() }
-  })
-
-  // A subagent spawned by a task's work agent writes under that task's files too: it inherits the task, whatever its description.
-  on('agent.spawn', { parentAgentId: /./ }, async ($, e, next) => {
-    if (!flowOn() || !e.parentAgentId) return next(e)
-    const io = hostIo($)
-    const parentId = e.parentAgentId
-    let parent: FlowAgent | undefined
-    try { parent = await flowLinkFor($, flowRuntime, await flowDeps(io), parentId) } catch (error) { flowFailed(io, error) }
-    if (parent?.kind !== 'work' || !parent.files) return next(e)
-    const release = holdPending(flowRuntime)
-    try {
-      const started = await next(e)
-      const child = inherited(parent, parentId)
-      if (started.agentId) {
-        try { await storeFlowAgent($, flowRuntime, started.agentId, child) } catch (error) { flowFailed(io, error) }
-      }
-      return started
-    } finally { release() }
+    return started
   })
 
   on('tool.call', async ($, e, next) => {
@@ -1035,23 +710,6 @@ export const register: Register = (on, options) => {
     const result = await next(e)
     // The receipt counts the main loop's edits and failed tools; the result goes back as it came.
     if (aboveOn && !e.agentId) { try { noteStripTool(String(e.tool), result) } catch { /* The strip never changes the call. */ } }
-    // An edit that went through voids the receipts of a task awaiting them, if the file is one of its own, when nobody that task
-    // owns made it: the main session, or an agent no task links (a general-purpose subagent, a developer with no [T]). A
-    // work agent of a task is held to the task's files by the ownership hook, and its delivery is a task end of its own.
-    if (flowOn() && (e.tool === 'Edit' || e.tool === 'Write' || e.tool === 'NotebookEdit') && !result.deny && !result.isError) {
-      const raw = String((e.tool === 'NotebookEdit' ? e.notebook_path : e.file_path) ?? '')
-      const io = hostIo($)
-      if (raw) {
-        try {
-          const deps = await flowDeps(io)
-          const link = e.agentId ? await flowLinkFor($, flowRuntime, deps, e.agentId) : undefined
-          if (!e.agentId || link?.kind !== 'work') {
-            const voided = await mainEdit(flowCtx($, deps), { path: raw, resolve: () => flowResolved($, deps.root, raw) })
-            if (voided.text) return { ...result, context: [...(result.context ?? []), voided.text] } as typeof result
-          }
-        } catch (error) { flowFailed(io, error) }
-      }
-    }
     return result
   })
 
@@ -1063,7 +721,7 @@ export const register: Register = (on, options) => {
       const outcome = await holdGate({
         poll: () => $.process.run(['sleep', '0.25']),
         show: value => update($, gateHeld, () => value),
-      }, message, next.signal)
+      }, { message }, next.signal)
       if (outcome === 'proceed') return undefined
       return { deny: `${message}\n${outcome === 'cancel' ? 'The person pressed Cancel.' : 'The wait was interrupted before a decision.'}` }
     }
@@ -1099,179 +757,119 @@ export const register: Register = (on, options) => {
   }).catch((_$, e, next) => next.called || options.gate !== true || e.agentId
     ? next(e) : { deny: 'Pantheon edit gate could not obtain a decision. Edit denied.' })
 
-  // Write ownership (decision 5): a developer or ux agent linked to a task writes only inside the task's files, and so does
-  // everything it spawns.
-  on('tool.call', { tool: ['Edit', 'Write', 'NotebookEdit'], agentId: /./ }, async ($, e, next) => {
-    if (!flowOn() || !e.agentId) return next(e)
-    const io = hostIo($)
-    const agentId = e.agentId
-    const raw = String((e.tool === 'NotebookEdit' ? e.notebook_path : e.file_path) ?? '')
-    // The verdict is settled first and the accounting of it is its own concern: a count or a journal line that fails must not
-    // let a write through that the verdict refused.
-    let refused: string | undefined
-    try {
-      const deps = await flowDeps(io)
-      const link = raw ? await flowLinkFor($, flowRuntime, deps, agentId) : undefined
-      if (link?.kind === 'work' && link.files) {
-        const verdict = await flowOwnership($, flowRuntime, deps, link, raw)
-        if (!verdict.owned) {
-          refused = verdict.reason
-          try {
-            // A spawned agent's denials count for the work agent whose return the task end is.
-            await setFlowDenials($, flowRuntime, link.root ?? agentId, before => before + 1)
-            await noteOwnership(flowCtx($, deps), { planId: link.plan, taskId: link.task, path: raw, reason: verdict.reason })
-          } catch (error) { flowFailed(io, error) }
-        }
-      }
-    } catch (error) { flowFailed(io, error) }
-    if (refused !== undefined && flowMode === 'enforce') return { deny: `[Pantheon flow] ${refused}` }
-    return next(e)
-  }).catch((_$, e, next) => {
-    const deny = next.called ? undefined : flowWriteFallback(flowRuntime.links, flowMode, e.agentId)
-    return deny === undefined ? next(e) : { deny }
-  })
-
-  // Task end for a foreground agent (decision 6): the Agent tool returned in the main loop; the controller's verdict is
-  // appended for the lead to read. A [T] end is counted from this foreground result, and from a task-notification too when
-  // the host delivers one (see the prompt.submit hook); a non-[T] background agent's end comes only as that notification.
-  on('tool.call', { tool: 'Agent' }, async ($, e, next) => {
-    // A task's delegation in its own worktree would write outside the task's files: the setting is only visible here.
-    if (flowOn() && !e.agentId && e.isolation) {
-      const taskId = taskIdOf(e.description)
-      const io = hostIo($)
-      if (taskId) {
-        try {
-          const refused = await inspectIsolation(flowCtx($, await flowDeps(io)), { taskId, isolation: String(e.isolation) })
-          if (refused.deny) return { deny: refused.deny }
-        } catch (error) { flowFailed(io, error) }
-      }
-    }
-    const result = await next(e)
-    if (!flowOn()) return result
-    const io = hostIo($)
-    try {
-      deliveryCounts.agentResults++
-      const deps = await flowDeps(io)
-      await noteShape(flowCtx($, deps), agentResultShape(result.result))
-      const payload = envelopeObject(result.result)
-      if (typeof payload?.agentId === 'string' && payload.agentId.trim() && typeof payload.status === 'string' && payload.status.trim()) {
-        deliveryCounts.parsed++
-        if (await flowAgentOf($, flowRuntime, payload.agentId)) deliveryCounts.linked++
-      }
-      if (e.agentId || result.deny || result.isError) return result
-      const done = result.result
-      if (done && typeof done === 'object' && 'status' in done && done.status === 'completed') {
-        const output = done.content.map(block => block.text).join('\n')
-        const text = await finishFlowAgent($, flowRuntime, deps, done.agentId, output, true)
-        if (text) return { ...result, context: [...(result.context ?? []), text] }
-      }
-      // A [T] delegation the host still ran in the background (its definition, remote isolation or a teammate forces it): its
-      // end is recorded only if the host delivers a task-notification for it, so the lead is told in the result what to do.
-      if (!e.agentId && result.result !== undefined && (payload?.status === 'async_launched' || payload?.status === 'remote_launched' || payload?.status === 'teammate_spawned')) {
-        const taskId = taskIdOf(e.description)
-        if (taskId) {
-          const forced = await inspectForcedBackground(flowCtx($, deps), { taskId })
-          if (forced.context) return { ...result, context: [...(result.context ?? []), forced.context] }
-        }
-      }
-    } catch (error) { flowFailed(io, error) }
-    return result
-  })
-
-  // The main session tries to stop (decisions 6 and 9). Shadow journals; enforce may hold the stop with a reason.
-  on('classic.Stop', async ($, e, next) => {
+  // The flow (JevFlow hooks.py): SessionStart gives the lead the flow's context (or the start hint), a prompt refills the
+  // block budget or nudges a task toward a flow, the Stop runs the checks, Jev and the policy, and StopFailure keeps the
+  // API error. Each fails open: an error adds nothing and never holds the session.
+  on('classic.SessionStart', async ($, e, next) => {
     const below = await next(e)
-    if (!flowOn() || e.agent_id || below.block || below.preventContinuation) return below
-    const io = hostIo($)
     try {
-      // Each atom read falls back on its own, so one unreadable atom never skips the evaluation: no running natives counted
-      // (the host's background_tasks still hold), and only this runtime's links. Each failure is journaled once per Stop.
-      const unread: { atom: 'natives' | 'flowAgents'; error: unknown }[] = []
-      let running = 0
-      try {
-        running = normalizeNatives(await read($, nativesAtom)).filter(native => native.rounds[native.rounds.length - 1]?.status === 'running').length
-      } catch (error) { unread.push({ atom: 'natives', error }) }
-      const links = new Map<string, FlowAgent>()
-      try {
-        for (const [id, link] of Object.entries(await read($, flowAgentsAtom))) links.set(id, link)
-      } catch (error) { unread.push({ atom: 'flowAgents', error }) }
-      for (const [id, link] of flowRuntime.links) links.set(id, link)
-      const ctx = flowCtx($, await flowDeps(io))
-      for (const { atom, error } of unread) {
-        const message = error instanceof Error ? error.message : String(error)
-        const reason = `${atom}: ${message.slice(0, 200)}`
-        if (unreadSeen.has(reason)) continue
-        // Reserved before awaiting; released when no plan is in force yet, so the failure is recorded once a flow exists.
-        unreadSeen.add(reason)
-        if (!await noteDeliveryDiagnostic(ctx, { condition: 'state_unread', reason })) unreadSeen.delete(reason)
-      }
-      const counts = countsSignature()
-      if (counts !== lastDeliveryCounts) {
-        lastDeliveryCounts = counts
-        await noteDeliveryDiagnostic(ctx, { condition: 'delivery_counts', reason: counts })
-      }
-      const out = await stopFlow(ctx, {
-        // A dev server or a monitor is not work the flow waits for; only agents and workflows are.
-        stopHookActive: e.stop_hook_active === true, backgroundTasks: pendingAgentTasks(e.background_tasks), runningAgents: running,
-        workLinks: [...links.values()].filter(link => link.kind === 'work').map(({ task, plan, end }) => ({ task, plan, end })),
-      })
-      if (out.notice) io.toast(out.notice)
-      const context = out.context ? { additionalContext: [...(below.additionalContext ?? []), out.context] } : {}
-      if (out.block) return { ...below, ...context, block: out.block }
-      if (out.context) return { ...below, ...context }
-    } catch (error) { flowFailed(io, error) }
+      const io = flowHost($, jev)
+      const root = await flowRoot(hostIo($))
+      const context = await flowSerial(() => jevflow.onSessionStart(io, root, { session_id: e.session_id, source: e.source }))
+      $.ui.invalidate('ui.render')
+      if (context) return { ...below, additionalContext: [...(below.additionalContext ?? []), context] }
+    } catch { /* Fail open. */ }
     return below
   })
 
-  // On hosts that deliver a background end as a prompt of origin task-notification, that prompt carries the verdict as context
-  // (a [T] end counts from the foreground Agent result, and from this notification too when the host delivers one). A person's prompt
-  // refills the block budget and brings the goal, the current task and the last instruction back (never the system prompt).
-  on('prompt.submit', { origin: { kind: 'task-notification' } }, async ($, e, next) => {
-    if (!flowOn()) return next(e)
-    const io = hostIo($)
-    let text: string | undefined
+  on('classic.UserPromptSubmit', async ($, e, next) => {
+    const below = await next(e)
     try {
-      deliveryCounts.notifications++
-      const deps = await flowDeps(io)
-      const ctx = flowCtx($, deps)
-      await noteShape(ctx, notificationShape(e.text))
-      const note = parseNotification(e.text)
-      if (!note) {
-        // Beyond the shape, only an envelope for an agent this session knows gets a discard note.
-        const id = envelopeTag(e.text, 'task-id')
-        const stored = id ? await flowAgentOf($, flowRuntime, id) : undefined
-        const listed = id && !stored ? (await $.agent.list()).some(agent => agent.id === id) : false
-        if (id && (stored || listed)) await noteDelivery(ctx, { agentId: '', condition: 'delivery_unparsed', reason: unparsedReason(e.text) })
-      } else {
-        deliveryCounts.parsed++
-        // A link stored at the spawn is the usual case. One lost (a reload drops the memory) or never written is adopted by lookup.
-        const stored = await flowAgentOf($, flowRuntime, note.agentId)
-        const adoption = stored ? undefined : await adoptFlowAgent($, flowRuntime, deps, note.agentId, 0)
-        const link = stored ?? adoption?.link
-        if (link) deliveryCounts.linked++
-        if (!link) {
-          // An id the engine does not list is no agent of this session: only its shape is journaled.
-          if (adoption?.listed) await noteDelivery(ctx, { agentId: note.agentId, condition: 'delivery_unlinked', reason: `no link for agent ${note.agentId}: none was stored at its spawn, and ${adoption.refusal}` })
-        } else if (link.root) {
-          await noteDelivery(ctx, { agentId: note.agentId, taskId: link.task, condition: 'delivery_ignored', reason: `agent ${note.agentId} is a nested subagent of task agent ${link.root}: only a task's own agent delivers` })
-        } else {
-          if (!stored) await noteDelivery(ctx, { agentId: note.agentId, taskId: link.task, condition: 'delivery_adopted', reason: `linked by lookup: $.agent.list() gives agent ${note.agentId} the [${link.task}] description${note.status === 'completed' ? '' : `; status=${note.status}`}` })
-          // A task's agent that ended failed or killed proved nothing: the journal says so, and reads no delivery. A diagnosis is advice and is not journaled.
-          if (note.status !== 'completed' && link.kind !== 'diagnosis') await noteDelivery(ctx, { agentId: note.agentId, taskId: link.task, condition: 'delivery_ignored', reason: `agent ${note.agentId} ended with status=${note.status}: it proved nothing, so its output was not judged` })
-          // Only a linked agent's own envelope counts, and only a completed status is a delivery.
-          text = await finishFlowAgent($, flowRuntime, deps, note.agentId, note.result, note.status === 'completed')
-        }
-      }
-    } catch (error) { flowFailed(io, error) }
-    return text ? next({ ...e, context: [...(e.context ?? []), text] }) : next(e)
+      const first = !prompted.has(e.session_id)
+      prompted.add(e.session_id)
+      const io = flowHost($, jev)
+      const root = await flowRoot(hostIo($))
+      const context = await flowSerial(() => jevflow.onUserPrompt(io, root, { session_id: e.session_id, prompt: e.prompt }, first))
+      if (context) return { ...below, additionalContext: [...(below.additionalContext ?? []), context] }
+    } catch { /* Fail open. */ }
+    return below
   })
 
-  on('prompt.submit', { origin: { kind: /^(?:composer|bridge|sdk)$/ } }, async ($, e, next) => {
-    if (!flowOn()) return next(e)
-    const io = hostIo($)
-    let context: string | undefined
-    try { context = (await humanPrompt(flowCtx($, await flowDeps(io)))).context } catch (error) { flowFailed(io, error) }
-    return context ? next({ ...e, context: [...(e.context ?? []), context] }) : next(e)
+  on('classic.Stop', async ($, e, next) => {
+    const below = await next(e)
+    if (e.agent_id || below.block || below.preventContinuation) return below
+    try {
+      const root = await flowRoot(hostIo($))
+      // A check is a shell command the flow runs outside the permission system: it runs only when Claude Code's rules
+      // allow it, or the person approves that exact command here (an approval is kept for this repository).
+      const io: jevflow.Io = {
+        ...flowHost($, jev),
+        authorize: async (cmd, phase): Promise<jevflow.CheckAuthorization> => {
+          try {
+            const verdict = await $.tool.check({ tool: 'Bash', input: { command: cmd } })
+            if (verdict.decision === 'allow') return { ok: true }
+            if (verdict.decision === 'deny') {
+              return { ok: false, reason: `Claude Code's permission rules deny it${verdict.reason ? `: ${verdict.reason}` : ''}` }
+            }
+            if (await isApprovedCheck($, root, cmd)) return { ok: true }
+            if (!gateInteractive) {
+              return { ok: false, reason: "it needs permission and there is no one to ask; add an allow rule for it in Claude Code's settings" }
+            }
+            const outcome = await holdGate({
+              poll: () => $.process.run(['sleep', '0.25']),
+              show: value => update($, gateHeld, () => value),
+            }, { message: `Run the check of phase \`${phase}\`?\n  ${cmd}`, title: 'Pantheon flow check' }, next.signal)
+            if (outcome === 'proceed') {
+              // The run was approved either way; a store that cannot keep the approval only asks again next time.
+              await rememberCheck($, root, cmd).catch(() => undefined)
+              return { ok: true }
+            }
+            return { ok: false, reason: outcome === 'cancel' ? 'the person cancelled it' : 'no answer from the person' }
+          } catch (error) {
+            return { ok: false, reason: error instanceof Error ? error.message : String(error) }
+          }
+        },
+      }
+      const out = await flowSerial(() => jevflow.onStop(io, root, e))
+      $.ui.invalidate('ui.render')
+      if (out.message) $.ui.toast(out.message)
+      if (out.noJev && !jevOffToasted.has(e.session_id)) {
+        jevOffToasted.add(e.session_id)
+        $.ui.toast("[Pantheon flow] Jev is off: set the plugin's judgeKey option. This Stop decided on the checks alone.")
+      }
+      if (out.block) return { ...below, block: out.block }
+    } catch { /* Fail open: the stop is allowed. */ }
+    return below
+  })
+
+  on('classic.StopFailure', async ($, e, next) => {
+    const below = await next(e)
+    try {
+      const io = flowHost($, jev)
+      const root = await flowRoot(hostIo($))
+      await flowSerial(() => jevflow.onStopFailure(io, root, { session_id: e.session_id, error: String(e.error), error_details: e.error_details }))
+    } catch { /* Fail open. */ }
+    return below
+  })
+
+  // The flow's tool, in place of JevFlow's CLI: start, validate, join, claim (as one of Pantheon's roles) and status.
+  on('tool.call', { tool: 'mcp__pantheon__flow' }, async ($, e) => {
+    const input: Record<string, unknown> = { ...e }
+    const str = (key: string) => typeof input[key] === 'string' ? (input[key] as string).trim() : ''
+    const io = flowHost($, jev)
+    const root = await flowRoot(hostIo($))
+    const sessionId = String(await $.session.id())
+    let text: string
+    try {
+      text = await flowSerial(async () => {
+        switch (str('action')) {
+          case 'start':
+            if (!str('goal')) return 'start needs goal: the person\'s request, verbatim.'
+            return jevflow.startFlow(io, root, sessionId, str('goal'), str('name') || undefined)
+          case 'validate': return jevflow.validateFlow(io, root, sessionId)
+          case 'join': return str('flow') ? jevflow.joinFlow(io, root, sessionId, str('flow')) : 'join needs flow: the flow id.'
+          case 'claim':
+            if (!str('phase') || !str('as')) return 'claim needs phase (a phase id) and as (one of the Pantheon roles).'
+            return jevflow.claimFlow(io, root, { sessionId, ...(e.agentId ? { agentId: e.agentId } : {}) }, str('phase'), str('as'))
+          case 'status': return jevflow.statusText(io, root, sessionId)
+          default: return 'Unknown action: use start, validate, join, claim or status.'
+        }
+      })
+    } catch (error) {
+      text = `The flow could not do that: ${error instanceof Error ? error.message : String(error)}`
+    }
+    $.ui.invalidate('ui.render')
+    return { result: text }
   })
 
   on('command.run', { command: 'pantheon' }, async ($, e) => {
@@ -1288,48 +886,11 @@ export const register: Register = (on, options) => {
     }
     if (sub === 'config') return { text: configReport(await refreshConfig(io, (await workspace(io)).root)) }
     if (sub === 'flow') {
-      const action = parts[1] ?? 'status'
-      if (action !== 'status' && action !== 'approve' && action !== 'pause' && action !== 'resume' && action !== 'stop') {
-        return { text: 'Use /pantheon flow status, approve [plan path] [hash], pause, resume or stop.' }
+      try {
+        return { text: await jevflow.statusText(flowHost($, jev), await flowRoot(hostIo($)), String(await $.session.id())) }
+      } catch (error) {
+        return { text: `The flow status could not be read: ${error instanceof Error ? error.message : String(error)}` }
       }
-      // What can be answered without reading anything is answered first: a flow that is off says so and touches nothing (no
-      // repository lookup, no settings), and a run that is not the person's is refused before any work.
-      if (action === 'status') {
-        if (flowMode === 'off') return { text: 'Pantheon flow: off. Set the plugin option flow to shadow or enforce to use it.' }
-      } else {
-        // These change what the flow enforces: only the person's own run counts. A scheduled prompt, another session's message,
-        // a channel or a plugin is the model's word at one remove, and may not approve a block the model wrote.
-        const kind = e.origin?.kind
-        if (kind !== 'composer' && kind !== 'bridge' && kind !== 'sdk') {
-          return { text: `/pantheon flow ${action} changes what the flow enforces, so only the person can run it: this one came from ${kind ?? 'an origin the engine did not stamp'} (a scheduled prompt, another session, a channel, a plugin). Type it yourself.` }
-        }
-        if (flowMode === 'off') return { text: 'The flow is off. Set the plugin option flow to shadow or enforce first; while it is off nothing is written.' }
-      }
-      await refreshConfig(io, (await workspace(io)).root)
-      const ctx = flowCtx($, await flowDeps(io))
-      if (action === 'status') {
-        const text = await flowStatus(ctx)
-        return { text: flowLastProblem ? `${text}\nLast problem: ${flowLastProblem}` : text }
-      }
-      if (action === 'approve') return { text: await approvePlan(ctx, e.args.replace(/^\s*flow\s+approve\s*/, '')) }
-      const done = await controlFlow(ctx, action)
-      if (action === 'resume') {
-        // Links made while the flow was paused, or before the plan's files changed, take the plan's files as they are now.
-        try {
-          const current = await flowTaskFiles(ctx)
-          if (current) {
-            const refresh = (links: Record<string, FlowAgent>) => Object.fromEntries(Object.entries(links).map(([id, link]) => {
-              const files = link.plan === current.planId && link.kind === 'work' ? current.files[link.task] : undefined
-              return [id, files ? { ...link, files } : link]
-            }))
-            for (const [id, link] of Object.entries(refresh(Object.fromEntries(flowRuntime.links)))) flowRuntime.links.set(id, link)
-            await update($, flowAgentsAtom, refresh)
-            // An agent found to belong to no task may belong to one of the plan's now.
-            flowRuntime.strangers.clear()
-          }
-        } catch (error) { flowFailed(io, error) }
-      }
-      return { text: done }
     }
     if (sub === 'doctor') {
       const current = await refreshConfig(io, (await workspace(io)).root)
@@ -1379,7 +940,23 @@ export const register: Register = (on, options) => {
       ...(info.turns ?? []).flatMap(t => [t.startedAt, t.endedAt]),
     ]
     const now = read1 ?? lastNow ?? Math.max(...stamps)
-    return drawPanel({
+    const columns = e.props.bodyColumns
+    const bodyRows = e.props.scroll?.bodyRows ?? e.viewport?.rows ?? 24
+    // The tab row needs a docked pane with room for it; the inline mini view and a tiny body draw the agents alone.
+    const tabbed = e.props.placement !== 'inline' && columns >= 20 && bodyRows >= 4
+    const tab = tabbed ? normalizeView(view).tab ?? 'agents' : 'agents'
+    const choose = (next: 'agents' | 'flow') => { viewQueue.push(() => update($, viewAtom, cur => viewTabbed(normalizeView(cur), next))) }
+    // The tabs: the agents view, and the Flow tab with JevFlow's status of this session's flow.
+    const tabs = (
+      <Box key="tabs" gap={1}>
+        <Button key="tab-agents" plain label={tab === 'agents' ? '[Agents]' : 'Agents'} onPress={() => choose('agents')} />
+        <Button key="tab-flow" plain label={tab === 'flow' ? '[Flow]' : 'Flow'} onPress={() => choose('flow')} />
+      </Box>
+    )
+    if (tab === 'flow') {
+      return <Box key="pane" flexDirection="column" width={columns}>{tabs}{drawFlowTab({ Box, Text }, await flowViewOf($, jev, await flowRoot(hostIo($))), columns, Boolean(jev.key)) as never}</Box> as never
+    }
+    const agents = drawPanel({
       Box, Text, Button,
       ...('Select' in els ? { Select: els.Select } : {}),
       ...('Svg' in els ? { Svg: els.Svg } : {}),
@@ -1396,7 +973,7 @@ export const register: Register = (on, options) => {
       placement: e.props.placement,
       columns: e.props.bodyColumns,
       // The pane's usable height, not the terminal's.
-      rows: e.props.scroll?.bodyRows ?? e.viewport?.rows ?? 24,
+      rows: tabbed ? bodyRows - 1 : bodyRows,
       now,
       roster: buildRoster({ natives: tracked, session: info, config: current.config }),
       session: info,
@@ -1405,11 +982,12 @@ export const register: Register = (on, options) => {
       clockLost: isClockLost,
       onToggle: group => { viewQueue.push(() => update($, viewAtom, cur => viewToggled(normalizeView(cur), group))) },
       onClose: () => { void $.ui.close({ id: PANE_ID }) },
-    }) as never
+    })
+    return tabbed ? <Box key="pane" flexDirection="column" width={columns}>{tabs}{agents as never}</Box> as never : agents as never
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    const held = options.gate === true ? await read($, gateHeld) : null
+    const held = await read($, gateHeld)
     if (held !== null && !e.props.hasSurvey) {
       const { Box, Text, Button } = $.ui.resolve(e)
       const choose = (decision: GateChoice) => {
@@ -1417,7 +995,7 @@ export const register: Register = (on, options) => {
       }
       return (
         <Box flexDirection="column" borderStyle="round" borderColor="warning" paddingX={1}>
-          <Text bold color="warning">Pantheon edit gate</Text>
+          <Text bold color="warning">{held.title ?? 'Pantheon edit gate'}</Text>
           <Text>{held.message}</Text>
           <Box marginTop={1} gap={2}>
             <Button key="proceed" label="Proceed" hotkey="1" plain onPress={() => choose('proceed')} />

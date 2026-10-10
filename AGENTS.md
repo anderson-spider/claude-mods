@@ -16,7 +16,7 @@ Each plugin's details live in `plugins/<name>/AGENTS.md`, loaded when working un
 - **chatgpt**: `ask` and `image` tools driving chatgpt.com in the first browser that works.
 - **codex-computer-use**: routes native Mac app control through Codex computer use; has a `helper/` run by the ChatGPT app's `node`.
 - **tailscale**: `tailscale_get` and `tailscale_write` tools over the Tailscale API.
-- **pantheon**: lead mode with native Claude roles, council seats, the agents panel and the above-prompt strip (absorbed from the former hud plugin); includes third-party work (keep `LICENSE`, `LICENSE-APACHE` and `NOTICE`).
+- **pantheon**: lead mode with native Claude roles, council seats, the JevFlow flow (claims by role), the agents and flow panel and the above-prompt strip (absorbed from the former hud plugin); includes third-party work (keep `LICENSE`, `LICENSE-APACHE` and `NOTICE`).
 
 ## Commands
 

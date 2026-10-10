@@ -38,8 +38,8 @@ export function gateContext(e: GateEvent, env: GateEnv):
   const raw = e.tool === 'NotebookEdit' ? e.notebook_path : e.file_path
   const root = normalize(env.root)
   let path = ''
-  // The flow's own files (state, snapshot, journal, ledger) are written by the controller, never by an edit: whatever the
-  // size of the change, it is not one the rules can call trivial.
+  // The flow's files (flow.json, state.json, drafts, session bindings): an edit there changes what the Stop enforces, so
+  // whatever its size it is not one the rules can call trivial.
   let controllerFile = false
   if (typeof raw === 'string' && raw !== '') {
     const absolute = normalize(raw.startsWith('/') ? raw : root + '/' + raw)
@@ -47,7 +47,7 @@ export function gateContext(e: GateEvent, env: GateEnv):
     const statePath = claude && within(absolute, claude) ? absolute.slice(claude.length + 1) : ''
     const scratch = absolute.match(/^\/(?:private\/)?tmp\/claude-(\d+)\/[^/]+\/[^/]+\/scratchpad(?:\/|$)/)
     controllerFile = within(absolute.toLowerCase(), normalize(root + '/.pantheon/flow').toLowerCase())
-    // Only the plans are exempt from `.pantheon`: `.pantheon/flow/**` holds the approval and the state the flow trusts.
+    // Only the plans are exempt from `.pantheon`: `.pantheon/flow/**` holds the flows and the state the Stop trusts.
     if (within(absolute, normalize(root + '/.pantheon/plans'))
       || (claude && within(absolute, claude + '/plans'))
       || /^projects\/[^/]+\/memory(?:\/|$)/.test(statePath)

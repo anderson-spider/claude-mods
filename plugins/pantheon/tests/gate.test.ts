@@ -28,7 +28,7 @@ for (const file_path of ['/repo/.pantheon/plans/plan.md', '/home/person/.claude/
   })
 }
 
-// `.pantheon/flow/**` holds the approval and the state the flow trusts: never exempt, and never a change the rules call
+// `.pantheon/flow/**` holds the flows and the state the Stop trusts: never exempt, and never a change the rules call
 // trivial, however small (an unknown size is an ask). Only the plans are exempt from `.pantheon`.
 for (const file_path of [
   '/repo/.pantheon/flow/demo/approved.json', '/repo/.pantheon/flow/demo/state.json', '/repo/.pantheon/flow/active', '/repo/.pantheon/flow/active.json',

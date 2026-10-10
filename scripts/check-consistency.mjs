@@ -23,7 +23,7 @@ for (const entry of marketplace.plugins) {
 
   // Each skill is skills/<name>/SKILL.md whose frontmatter names the directory and describes it.
   // Size ceilings in bytes; skills not listed here are not measured.
-  const ceilings = { pantheon: { execute: 8000, brainstorm: 8500 } }
+  const ceilings = {}
   const skills = `${dir}/skills`
 
   for (const name of existsSync(skills) ? readdirSync(skills) : []) {
