@@ -39,7 +39,8 @@ const GITIGNORE = 'sessions/\n*.tmp\n'
 export type Run = (argv: string[], init: { cwd: string; timeoutMs: number }) => Promise<{ exitCode: number; stdout: string; stderr: string }>
 
 /** Whether a check command may run; a refusal says why, and the check then counts as failed. */
-export type CheckAuthorization = { ok: true } | { ok: false; reason: string }
+/** `unanswered`: the person was asked and did not answer in time; the Stop then goes through unjudged. */
+export type CheckAuthorization = { ok: true } | { ok: false; reason: string; unanswered?: boolean }
 
 /** What the controller needs from the host, built from the hook's `$` by register.tsx. Times are seconds, as JevFlow's. */
 export type Io = {
@@ -346,16 +347,23 @@ export async function runCheck(io: Io, cmd: string, cwd: string, timeoutS: numbe
   return { passed: out.exitCode === 0, output: text }
 }
 
-/** One decision per distinct command, asked in order; an error from the host refuses the command. */
+/**
+ * One decision per distinct command, asked in order; an error from the host refuses the command. Once the person leaves
+ * one unanswered, the rest are not asked: they get the same answer.
+ */
 async function authorizeChecks(
   authorize: NonNullable<Io['authorize']>,
   commands: { cmd: string; phase: string }[],
 ): Promise<Map<string, CheckAuthorization>> {
   const decisions = new Map<string, CheckAuthorization>()
+  let unanswered: CheckAuthorization | undefined
   for (const { cmd, phase } of commands) {
     if (decisions.has(cmd)) continue
+    if (unanswered) { decisions.set(cmd, unanswered); continue }
     try {
-      decisions.set(cmd, await authorize(cmd, phase))
+      const decision = await authorize(cmd, phase)
+      decisions.set(cmd, decision)
+      if (!decision.ok && decision.unanswered) unanswered = decision
     } catch (error) {
       decisions.set(cmd, { ok: false, reason: error instanceof Error ? error.message : String(error) })
     }
@@ -363,7 +371,7 @@ async function authorizeChecks(
   return decisions
 }
 
-export async function runChecks(io: Io, flow: Flow, state: FlowState, cwd: string): Promise<{ checks: Record<string, CheckResult>; loopChecks: Record<string, CheckResult> }> {
+export async function runChecks(io: Io, flow: Flow, state: FlowState, cwd: string): Promise<{ checks: Record<string, CheckResult>; loopChecks: Record<string, CheckResult>; unanswered?: string }> {
   const per = flow.limits.check_timeout_s
   let start = await io.now()
   const settling = capReached(flow, state, start) !== null
@@ -377,6 +385,8 @@ export async function runChecks(io: Io, flow: Flow, state: FlowState, cwd: strin
   if (cur?.loop) commands.push({ cmd: cur.loop.until, phase: cur.id })
   // A person deciding on a command does not eat the budget: the clock starts once every decision is in.
   const decisions = io.authorize ? await authorizeChecks(io.authorize, commands) : undefined
+  const unanswered = [...decisions?.values() ?? []].find(d => !d.ok && d.unanswered)
+  if (unanswered && !unanswered.ok) return { checks: {}, loopChecks: {}, unanswered: unanswered.reason }
   if (decisions) start = await io.now()
   const left = async () => Math.min(per, start + CHECKS_TOTAL_S - (await io.now()))
   const run = async (cmd: string): Promise<CheckResult> => {
@@ -448,7 +458,9 @@ async function onFlowStop(io: Io, p: Paths, payload: StopPayload): Promise<StopO
   if (state.done) return {}
   const active = payload.stop_hook_active === true
   const prevPhase = state.current_phase
-  const { checks, loopChecks } = await runChecks(io, flow, state, p.root)
+  const { checks, loopChecks, unanswered } = await runChecks(io, flow, state, p.root)
+  // No one answered the check box: nothing is judged or recorded, and the next Stop asks again.
+  if (unanswered) return { message: `${PREFIX} Check not run (${unanswered}); this Stop went through unjudged and the next one asks again.` }
   // Deterministic first: budgets, caps, regression and loop phases never need Jev. Only a degraded_* result means the
   // outcome depends on the judgment.
   let d = decide(flow, state, null, checks, now, { stop_hook_active: active, loop_checks: loopChecks })
