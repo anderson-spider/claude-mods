@@ -1132,8 +1132,8 @@ export const register: Register = (on, options) => {
   })
 
   // Task end for a foreground agent (decision 6): the Agent tool returned in the main loop; the controller's verdict is
-  // appended for the lead to read. A [T] delegation is counted only here. On hosts that deliver a background end as a
-  // task-notification prompt, that prompt is the end of a non-[T] background agent (see the prompt.submit hook).
+  // appended for the lead to read. A [T] end is counted from this foreground result, and from a task-notification too when
+  // the host delivers one (see the prompt.submit hook); a non-[T] background agent's end comes only as that notification.
   on('tool.call', { tool: 'Agent' }, async ($, e, next) => {
     // A task's delegation in its own worktree would write outside the task's files: the setting is only visible here.
     if (flowOn() && !e.agentId && e.isolation) {
@@ -1166,12 +1166,12 @@ export const register: Register = (on, options) => {
         if (text) return { ...result, context: [...(result.context ?? []), text] }
       }
       // A [T] delegation the host still ran in the background (its definition, remote isolation or a teammate forces it): its
-      // end is not recorded, so the lead is told in the result what to do.
-      if (!e.agentId && (payload?.status === 'async_launched' || payload?.status === 'remote_launched')) {
+      // end is recorded only if the host delivers a task-notification for it, so the lead is told in the result what to do.
+      if (!e.agentId && result.result !== undefined && (payload?.status === 'async_launched' || payload?.status === 'remote_launched' || payload?.status === 'teammate_spawned')) {
         const taskId = taskIdOf(e.description)
         if (taskId) {
           const forced = await inspectForcedBackground(flowCtx($, deps), { taskId })
-          if (forced.context) return { ...result, context: [...(result.context ?? []), forced.context] } as typeof result
+          if (forced.context) return { ...result, context: [...(result.context ?? []), forced.context] }
         }
       }
     } catch (error) { flowFailed(io, error) }
@@ -1224,7 +1224,7 @@ export const register: Register = (on, options) => {
   })
 
   // On hosts that deliver a background end as a prompt of origin task-notification, that prompt carries the verdict as context
-  // (a non-[T] agent: a [T] end is counted from the foreground Agent result). A person's prompt
+  // (a [T] end counts from the foreground Agent result, and from this notification too when the host delivers one). A person's prompt
   // refills the block budget and brings the goal, the current task and the last instruction back (never the system prompt).
   on('prompt.submit', { origin: { kind: 'task-notification' } }, async ($, e, next) => {
     if (!flowOn()) return next(e)
