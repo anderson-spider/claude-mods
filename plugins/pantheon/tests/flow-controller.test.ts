@@ -2401,3 +2401,23 @@ test('the check_unrunnable entry of a task end carries the task', async () => {
   expect(await taskEnded(w.ctx(), { taskId: 'T1', ownershipDenials: 0 })).toEqual({})
   expect((await w.journal()).filter(e => e.condition === 'check_unrunnable')).toMatchObject([{ task: 'T1' }])
 })
+
+test('a held Stop for a task that spent its attempts names the architect, the [T1] description, resume and stop; one with attempts left does not', async () => {
+  const spent = world({ flow: { ...FLOW, limits: { maxAttempts: 1 } } })
+  await approve(spent)
+  spent.fail('npm test', 'FAIL once')
+  await taskEnded(spent.ctx(), { taskId: 'T1', ownershipDenials: 0 })
+  const held = await stopFlow(spent.ctx(), stopInput)
+  expect(held.block).toContain('ask the architect to diagnose it')
+  expect(held.block).toContain('[T1]')
+  expect(held.block).toContain('/pantheon flow resume')
+  expect(held.block).toContain('/pantheon flow stop')
+
+  const fresh = world()
+  await approve(fresh)
+  fresh.fail('npm test', 'FAIL once')
+  const retry = await stopFlow(fresh.ctx(), stopInput)
+  expect(retry.block).toContain('Fix the failure')
+  expect(retry.block).not.toContain('architect')
+  expect(retry.block).not.toContain('/pantheon flow')
+})

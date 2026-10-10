@@ -2,11 +2,12 @@ import { expect, test } from 'claude-code/testing'
 import { flowHash, validateFlow } from '../hooks/flow/plan'
 import type { Flow } from '../hooks/flow/plan'
 import { applyMode, decide as decideWith, enterEnforce, newState, OUTPUT_TAIL, rebase, requiredReceipts, withMode } from '../hooks/flow/policy'
+import type { StopOptions } from '../hooks/flow/policy'
 import type { CheckResult, DecideOptions, FlowEvent, FlowState, Judgment } from '../hooks/flow/types'
 
 // `decide` makes the caller say which roles are enabled; the tests say "all of them" unless a test cares.
 const ALL = { qa: true, architect: true }
-const decide = (flow: Flow, state: FlowState, event: FlowEvent, judgment?: Judgment, opts: DecideOptions = { available: ALL }) =>
+const decide = (flow: Flow, state: FlowState, event: FlowEvent, judgment?: Judgment, opts: StopOptions = { available: ALL }) =>
   decideWith(flow, state, event, judgment, opts)
 
 type Raw = Record<string, unknown>
@@ -1619,4 +1620,36 @@ test('property: an escalation that fires in a second pass is the first pass plus
     if (JSON.stringify(second) !== JSON.stringify(first)) escalated++
   }
   expect(escalated).toBeGreaterThan(100)
+})
+
+// --- a Stop whose failing task has its architect diagnosis open ---
+
+test('a held Stop whose task has its diagnosis open names the architect, the [id] description, resume and stop', () => {
+  const { flow, hash } = chain()
+  const decision = decide(flow, approved(flow, hash, { attempts: { A: 3 } }), stopEvent({ A: [fail('A', 'boom')] }), undefined, { diagnosis: ['A'], available: ALL })
+  expect(decision).toMatchObject({ action: 'block', condition: 'check_failed', task: 'A' })
+  expect(decision.reason).toContain('ask the architect to diagnose it')
+  expect(decision.reason).toContain('[A]')
+  expect(decision.reason).toContain('/pantheon flow resume')
+  expect(decision.reason).toContain('/pantheon flow stop')
+  expect(decision.reason).toContain('boom')
+})
+
+test('a held Stop for a task not in the diagnosis list keeps the plain check_failed text, byte for byte', () => {
+  const { flow, hash } = chain()
+  const plain = decide(flow, approved(flow, hash), stopEvent({ A: [fail('A', 'boom')] }))
+  const others = decide(flow, approved(flow, hash), stopEvent({ A: [fail('A', 'boom')] }), undefined, { diagnosis: ['B'], available: ALL })
+  expect(plain.reason).toBe('Task A (goal A) is not done: its checks fail. Fix the failure, then try to stop again.\n\n$ run A\nboom')
+  expect(others.reason).toBe(plain.reason)
+  expect(others.reason).not.toContain('architect')
+  expect(others.reason).not.toContain('/pantheon flow')
+})
+
+test('with the architect disabled, a held Stop whose diagnosis is open gives the role_unavailable text', () => {
+  const { flow, hash } = chain()
+  const gone = decide(flow, approved(flow, hash, { attempts: { A: 3 } }), stopEvent({ A: [fail('A', 'boom')] }), undefined, { diagnosis: ['A'], available: { qa: true, architect: false } })
+  expect(gone).toMatchObject({ action: 'pause', condition: 'role_unavailable', task: 'A' })
+  expect(gone.reason).toContain("the architect is disabled; enable it in pantheon.json and /pantheon flow resume, or /pantheon flow stop.")
+  expect(gone.reason).not.toContain('ask the architect')
+  expect(gone.state.paused).toBe(true)
 })

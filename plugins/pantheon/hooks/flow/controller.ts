@@ -1039,6 +1039,11 @@ function stopTargets(flow: Flow, state: FlowState): FlowTask[] {
   })
 }
 
+/** The active Stop targets whose architect diagnosis is open (their attempts are spent). */
+function diagnosisIds(flow: Flow, state: FlowState): string[] {
+  return stopTargets(flow, state).filter(task => state.status[task.id] === 'active' && diagnosisOpen(flow, state, task)).map(task => task.id)
+}
+
 export async function stopFlow(ctx: Ctx, input: StopInput): Promise<StopOutcome> {
   return guarded<StopOutcome>(ctx, 'stop', {}, async trace => {
     // The flow in force may move while its checks run (an approval, an adoption): what ran says nothing about the new one, so
@@ -1107,7 +1112,8 @@ async function evaluateStop(ctx: Ctx, input: StopInput, trace: Trace): Promise<S
   }
   const event: FlowEvent = { kind: 'stop', stopHookActive: input.stopHookActive, backgroundTasks: input.backgroundTasks, runningAgents: input.runningAgents, checks }
   const decision = await transactAt(ctx, loc, trace, peek.hash, (before, p) => {
-    const d = step(ctx, p.flow, before, event)
+    // Only a Stop names the architect's diagnosis: the active targets whose attempts are spent say what to do next.
+    const d = applyMode(decide(p.flow, before, event, undefined, { ...decideOpts(ctx), diagnosis: diagnosisIds(p.flow, before) }), ctx.mode, before)
     const all = Object.values(checks).flat()
     const entries: Omit<JournalInput, 'at'>[] = journalable(d, before) ? [entryFor(ctx, 'stop', d, all)] : []
     if (unverified > 0) {

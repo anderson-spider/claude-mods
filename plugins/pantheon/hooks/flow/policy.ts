@@ -109,7 +109,7 @@ export function enterEnforce(state: FlowState): FlowState {
  * never lowers an attempt count, never turns a block or a pause into an allow or an advance, and never starts a task the
  * first pass did not (it is an input to a second decision, never a patch on the first).
  */
-export function decide(flow: Flow, state: FlowState, event: FlowEvent, _judgment: Judgment | undefined, opts: DecideOptions): Decision {
+export function decide(flow: Flow, state: FlowState, event: FlowEvent, _judgment: Judgment | undefined, opts: StopOptions): Decision {
   switch (event.kind) {
     case 'stop': return onStop(flow, begin(flow, state), event, state, opts)
     case 'taskEnd': return onTaskEnd(flow, begin(flow, state), event, state, opts)
@@ -162,7 +162,13 @@ function approvedFor(flow: Flow, state: FlowState): boolean {
 
 // --- stop ---
 
-function onStop(flow: Flow, s: FlowState, event: Extract<FlowEvent, { kind: 'stop' }>, original: FlowState, opts: DecideOptions): Decision {
+/**
+ * What a Stop may be told beyond `DecideOptions`: the ids of active tasks whose architect diagnosis is open (the controller's
+ * `diagnosisOpen`, computed for the Stop only). A held Stop for such a task says what to do next; nothing else changes.
+ */
+export type StopOptions = DecideOptions & { diagnosis?: readonly string[] }
+
+function onStop(flow: Flow, s: FlowState, event: Extract<FlowEvent, { kind: 'stop' }>, original: FlowState, opts: StopOptions): Decision {
   // 1. nothing to enforce; a flow nobody approved, or a state that is not for this flow, is left exactly as it is
   if (!approvedFor(flow, original)) return make(copyState(original), 'allow', 'unapproved', 'The flow is not approved, or its approval does not match the plan in force, so nothing is enforced.')
   // A Stop that does not follow one of our blocks starts the consecutive run over.
@@ -255,6 +261,18 @@ function onStop(flow: Flow, s: FlowState, event: Extract<FlowEvent, { kind: 'sto
       s.consecutiveBlocks = 0
       return instruct(s, 'pause', 'looping',
         `Task ${active.id} (${active.goal}) failed ${count} times in a row with the same output. Stop retrying: ask the person how to proceed.\n\n${output}`, active.id)
+    }
+    // The architect's diagnosis is open (the attempts are spent): with the architect disabled the pause says so, as a failed attempt does.
+    if (opts.diagnosis?.includes(active.id)) {
+      if (!opts.available.architect) {
+        s.paused = true
+        s.consecutiveBlocks = 0
+        return instruct(s, 'pause', 'role_unavailable',
+          `Task ${active.id} (${active.goal}) failed ${s.attempts[active.id] ?? 0} times and needs the architect's diagnosis, but the architect is disabled; enable it in pantheon.json and /pantheon flow resume, or /pantheon flow stop.\n\n${output}`, active.id)
+      }
+      charge(s)
+      return instruct(s, 'block', 'check_failed',
+        `Task ${active.id} (${active.goal}) is not done: its checks fail. Fix the failure, then try to stop again. Its attempts are spent: ask the architect to diagnose it (a delegation whose description starts with [${active.id}]), or run /pantheon flow resume or /pantheon flow stop.\n\n${output}`, active.id)
     }
     charge(s)
     return instruct(s, 'block', 'check_failed',
