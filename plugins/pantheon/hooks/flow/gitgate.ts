@@ -1,6 +1,7 @@
 // The git gate: which git a given actor may run through Bash. Pure: no `$`, no host calls; the caller decides what a denial does.
 // A safety net that reads text, not a permission system: aliases, scripts and variables that hold commands get through,
-// except that anything that hides a `git` from the parser (eval, `bash -c "$x"`, xargs…) counts as opaque and fails closed.
+// except that anything that hides a `git` from the parser (eval, `bash -c "$x"`, xargs…) counts as opaque and fails closed
+// for every actor, the git role included. An unquoted `#` that starts a word is a comment, as in the shell.
 // The shell parser below (down to "Classification") is adapted from branch-guard's shell.ts, trimmed of its path helpers.
 import type { Role } from '../types'
 
@@ -15,7 +16,7 @@ type Word = {
 
 const BREAKS = new Set([';', '\n', '(', ')'])
 
-const WRAPPERS = new Set(['sudo', 'command', 'exec', 'time', 'nohup', 'env'])
+const WRAPPERS = new Set(['sudo', 'command', 'exec', 'time', 'nohup', 'env', 'timeout', 'gtimeout', 'nice', 'ionice', 'stdbuf', 'setsid', 'caffeinate', 'arch'])
 
 // Words that open a command without being part of it: `{ git commit; }`, `if …; then git commit; fi`.
 const OPENERS = new Set(['{', '!', 'if', 'then', 'else', 'elif', 'while', 'until', 'do'])
@@ -80,10 +81,17 @@ const VALUED: Record<string, { short: Set<string>; long: Set<string> }> = {
   },
   env: { short: new Set(['u', 'S', 'C']), long: new Set(['--unset', '--split-string', '--chdir']) },
   exec: { short: new Set(['a']), long: new Set() },
+  timeout: { short: new Set(['k', 's']), long: new Set(['--kill-after', '--signal']) },
+  gtimeout: { short: new Set(['k', 's']), long: new Set(['--kill-after', '--signal']) },
+  caffeinate: { short: new Set(['t', 'w']), long: new Set() },
+  arch: { short: new Set(['d', 'e']), long: new Set() },
+  nice: { short: new Set(['n']), long: new Set(['--adjustment']) },
+  ionice: { short: new Set(['c', 'n', 'p', 'P', 'u']), long: new Set(['--class', '--classdata', '--pid', '--pgid', '--uid']) },
+  stdbuf: { short: new Set(['i', 'o', 'e']), long: new Set(['--input', '--output', '--error']) },
 }
 
 // The options of a wrapper that take no value; any other option is unknown.
-const FLAGS: Record<string, Set<string>> = { sudo: new Set('AbEHiKklnPSsVvB'), env: new Set('i0v'), exec: new Set('cl') }
+const FLAGS: Record<string, Set<string>> = { sudo: new Set('AbEHiKklnPSsVvB'), env: new Set('i0v'), exec: new Set('cl'), timeout: new Set('fpv'), gtimeout: new Set('fpv'), ionice: new Set('t'), setsid: new Set('cfw'), caffeinate: new Set('dimsu') }
 
 // The options of a shell that take the next word as their value (`bash -o pipefail`).
 const SHELL_VALUED = new Set(['-o', '-O', '+o', '+O', '--rcfile', '--init-file'])
@@ -116,6 +124,11 @@ const readsCommands = (words: readonly Word[]) => {
 
         isUnsure ||= !(isLong ? option.includes('=') || long.has(option) : [...option.slice(1)].every(char => short.has(char) || flags.has(char)))
         start += 1 + ((isLong ? long.has(option) : option.length === 2 && short.has(option[1] ?? '-')) ? 1 : 0)
+      }
+
+      // `timeout 10 bash`: the duration is not the command.
+      if ((name === 'timeout' || name === 'gtimeout') && start < words.length) {
+        start += 1
       }
     } else {
       break
@@ -251,6 +264,11 @@ const closeParen = (command: string, from: number): number => {
       at = closeParen(command, at + 2)
     } else if (char === '`') {
       at = backtickEnd(command, at + 1)
+    } else if (char === '#' && (at === from || /[\s;|&()]/.test(command[at - 1] ?? ' '))) {
+      // A comment: a `)` in it closes nothing.
+      const newline = command.indexOf('\n', at)
+
+      at = newline === -1 ? command.length : newline - 1
     } else if (char === '<' && command[at + 1] === '<' && command[at + 2] !== '<' && command[at + 2] !== '(') {
       const isTabbed = command[at + 2] === '-'
       const start = at + (isTabbed ? 3 : 2)
@@ -477,6 +495,11 @@ const parse = (command: string): Command[] => {
       isOpen ||= following !== '\n'
       isQuoted ||= following !== '\n'
       at += 1
+    } else if (char === '#' && !isOpen && arithmetic === 0) {
+      // A `#` that starts a word comments out the rest of the line (the newline itself still ends the command).
+      const newline = command.indexOf('\n', at)
+
+      at = newline === -1 ? command.length : newline - 1
     } else if (char === ' ' || char === '\t') {
       endWord()
     } else if ((char === '$' && following === '(' && command[at + 2] !== '(') || char === '`' || ((char === '<' || char === '>') && following === '(' && arithmetic === 0)) {
@@ -566,7 +589,7 @@ const parse = (command: string): Command[] => {
 
 // ---- Classification ----
 
-export type GitActor = 'lead' | Role
+export type GitActor = 'lead' | Role | 'councillor'
 export type GitVerdict = { allow: true } | { allow: false; reason: string }
 
 export type GitSegment = {
@@ -580,6 +603,8 @@ export type GitSegment = {
   paths: string[]
   /** The values of `-m`, `--message`, `--trailer` and `--author` of a commit. */
   message?: string[]
+  /** The values of `-m` and `--message` only: the commit's own text, which is where a task id belongs. */
+  text?: string[]
   /** False only for the read-only verbs and forms. Unknown verbs count as changing state. */
   changesState: boolean
   /** The flags after the verb as written (`-m`, `--amend`…); a cluster like `-am` is listed by letter. */
@@ -592,6 +617,12 @@ export type GitSegment = {
   alias: boolean
   /** `-c` or `--config-env` sets an alias, a push setting, `core.hooksPath`, `core.sshCommand` or a remote's receivepack/uploadpack. */
   unsafeConfig: boolean
+  /** The separator that came before the command on its line (`&&`, `;`, `||`, `|`, a newline…); empty for the first. */
+  before: string
+  /** The values of `-o` and `--push-option` of a push. */
+  pushOptions: string[]
+  /** The keys `-c` and `--config-env` set, lowercased; `?` for one that is not literal. */
+  configKeys: string[]
   /** Some word after the verb is not literal. */
   hasUnknown: boolean
   /** The paths cannot be trusted: one is not literal, `-C` is not, or a `cd` came earlier on the line. */
@@ -602,6 +633,10 @@ export type ForgeSegment = {
   /** `gh`, `glab`, `glab-work`… */
   tool: string
   args: string[]
+  /** The flags as written (`--force`, `--input`…). */
+  flags: string[]
+  /** The group is one gh and glab are known to have; an unknown one can be an alias for anything, a merge included. */
+  known: boolean
   /** The first and second loose words (`pr merge`, `repo delete`, `api`). */
   group: string
   action: string
@@ -611,16 +646,34 @@ export type ForgeSegment = {
 }
 
 // Commands that run what they are given: a `git` among their words cannot be read.
-const RUNNERS = new Set(['xargs', 'find', 'parallel', 'ssh', 'watch', 'source', '.', 'script', 'setsid', 'timeout', 'nice', 'ionice', 'stdbuf', 'chroot', 'su', 'doas', 'osascript', 'busybox', 'coproc', 'trap'])
+// `xargs` and `find` run a git only through their command (`xargs git …`, `find -exec git …`), so they are read apart.
+const RUNNERS = new Set(['parallel', 'ssh', 'watch', 'source', '.', 'script', 'chroot', 'su', 'doas', 'osascript', 'busybox', 'coproc', 'trap'])
+const BARE_VARIABLE = /^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?$/
+// Commands that take names and text as data and never run an argument: a `git push` among their words is not a git command.
+const READERS = new Set([
+  'echo', 'printf', 'cat', 'head', 'tail', 'less', 'more', 'bat', 'grep', 'egrep', 'fgrep', 'rg', 'ag', 'ack', 'ls', 'tree', 'stat',
+  'file', 'wc', 'sort', 'uniq', 'cut', 'tr', 'diff', 'cmp', 'comm', 'man', 'info', 'which', 'whereis', 'type', 'test', '[', '[[',
+  'touch', 'mkdir', 'rmdir', 'rm', 'mv', 'cp', 'ln', 'cd', 'pushd', 'popd', 'basename', 'dirname', 'realpath', 'readlink', 'true',
+  'false', 'export', 'unset', 'alias', 'unalias', 'read', 'hash',
+])
+const FIND_EXEC = new Set(['-exec', '-execdir', '-ok', '-okdir'])
 const GIT_WORD = /(^|[\s/;&|()`'"={,}])git($|[\s;&|()`'"{,}])/
 const GIT_VALUED = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--super-prefix', '--exec-path', '--config-env'])
-// Names that skip hooks or point git elsewhere. `GIT_PAGER`, `GIT_SSH_COMMAND`, `GIT_TRACE`… are not among them.
-const HOOK_ENV = /^(GIT_DIR$|GIT_WORK_TREE$|GIT_INDEX_FILE$|GIT_CONFIG|GIT_EXEC_PATH$|HUSKY|SKIP$|LEFTHOOK|PRE_COMMIT)/
+// Names that skip hooks, point git elsewhere or make it run a program (a pager, an editor, an ssh or askpass command, a
+// config file). `GIT_TRACE`, `LC_ALL`, `TZ`… are not among them.
+const HOOK_ENV = /^(GIT_DIR$|GIT_WORK_TREE$|GIT_INDEX_FILE$|GIT_CONFIG|GIT_EXEC_PATH$|GIT_SSH|GIT_EXTERNAL_DIFF$|GIT_ASKPASS$|SSH_ASKPASS$|GIT_PROXY_COMMAND$|GIT_EDITOR$|GIT_SEQUENCE_EDITOR$|GIT_PAGER$|PAGER$|EDITOR$|VISUAL$|HOME$|XDG_CONFIG_HOME$|GIT_TEMPLATE_DIR$|HUSKY|SKIP$|LEFTHOOK|PRE_COMMIT)/
 // What `export $(cat .env)` leaves in `envSets`: variables set from text the parser cannot read.
 const UNKNOWN_ENV = '?'
 const ENV_SETTERS = new Set(['export', 'declare', 'typeset', 'readonly', 'local'])
-// Config keys that change how git pushes, runs commands or finds hooks.
-const UNSAFE_KEY = /^(alias\.|push\.|core\.(hookspath|sshcommand)$|remote\..+\.(push|receivepack|uploadpack)$)/i
+// Config keys that change how git pushes, where it pushes, or run a program (a pager, an editor, a helper, a filter driver).
+const UNSAFE_KEY = /^(alias\.|push\.|url\.|credential\.|filter\.|include\.path$|includeif\..+\.path$|core\.(hookspath|sshcommand|pager|editor|fsmonitor|askpass|gitproxy)$|diff\.external$|diff\..+\.(command|textconv)$|merge\..+\.driver$|(difftool|mergetool)\..+\.cmd$|sequence\.editor$|gpg\.|remote\..+\.(push|pushurl|receivepack|uploadpack|mirror)$|branch\..+\.(remote|merge|pushremote)$)/i
+// What `-c` and `--config-env` may set: display and identity. Any other key can run a program or move a push.
+const SAFE_CONFIG = /^(color\.[\w.-]+|core\.quotepath|advice\.[\w.-]+|i18n\.[\w.-]+|user\.(name|email))$/i
+// The transports that run a command (`ext::sh -c …`, `fd::`).
+const COMMAND_URL = /^(ext|fd)::/i
+// Verbs that can hand a program to the remote side: `--upload-pack`, `--receive-pack` and `--exec` (a rebase's `--exec` is read apart).
+const PACK_VERBS = new Set(['push', 'fetch', 'pull', 'clone', 'ls-remote', 'archive'])
+const PACK_OPTIONS = ['--upload-pack', '--receive-pack', '--exec']
 const EMPTY_OPTIONS = { short: new Set<string>(), long: new Set<string>() }
 const CHDIR_SHORT: Record<string, string> = { env: 'C', sudo: 'DR' }
 
@@ -685,6 +738,11 @@ const effective = (words: readonly Word[]): Effective => {
       if (words[at]?.text === '--') {
         at += 1
       }
+
+      // `timeout 10 git push`: the duration is not the command.
+      if ((name === 'timeout' || name === 'gtimeout') && at < words.length) {
+        at += 1
+      }
     } else {
       break
     }
@@ -697,7 +755,7 @@ const effective = (words: readonly Word[]): Effective => {
 const flatten = (commands: readonly Command[]): Command[] => commands.flatMap(one => [...flatten(one.sub ?? []), one])
 
 const XARGS_VALUED = 'ILnPsdEa'
-const XARGS_WRAPPERS = new Set(['eval', 'env', 'sudo', 'command', 'exec', 'nohup', 'time'])
+const XARGS_WRAPPERS = new Set(['eval', 'env', 'sudo', 'command', 'exec', 'nohup', 'time', 'timeout', 'gtimeout', 'nice', 'ionice', 'stdbuf', 'setsid', 'caffeinate', 'arch'])
 
 // The command an `xargs` stage runs, past its options; undefined when it names none (it then runs `echo`).
 const xargsCommand = (rest: readonly Word[]): Word | undefined => {
@@ -718,6 +776,36 @@ const xargsCommand = (rest: readonly Word[]): Word | undefined => {
   }
 
   return undefined
+}
+
+// Whether a word of a command that is none of the above, followed by what a git command takes (a verb, an option, something not
+// literal), runs git: `caffeinate git push`, `op run -- git push`, `mise exec -- gh pr merge`. A `git` that stands alone, or is
+// followed by a word that is no verb (`pytest -k git tests/`, `brew install git curl`), is a name, not a command.
+const wrapsGit = (rest: readonly Word[]): boolean =>
+  rest.some((word, at) => {
+    const named = base(word.text)
+    const next = rest[at + 1]
+
+    if (/^git-[a-z]/.test(named)) {
+      return true
+    }
+
+    if (named === 'git') {
+      return next !== undefined && (next.isUnknown || next.text.startsWith('-') || BUILTIN_VERBS.has(next.text))
+    }
+
+    if (named === 'gh' || named === 'glab' || named.startsWith('glab-')) {
+      return next !== undefined && (next.isUnknown || next.text.startsWith('-') || FORGE_ROUTED.has(next.text) || next.text === 'alias' || FORGE_EXTENSION.has(next.text))
+    }
+
+    return false
+  })
+
+// Whether the command an `xargs` or a `find -exec` stage runs is a git, a shell, a wrapper or not literal.
+const runsGit = (command: Word | undefined) => {
+  const named = base(command?.text ?? '')
+
+  return command !== undefined && (command.isUnknown || named === 'git' || /^git-[a-z]/.test(named) || SHELLS.has(named) || XARGS_WRAPPERS.has(named))
 }
 
 // Whether a command runs text it is fed or gets from a variable: a first word that is not literal, a shell or `eval` with a
@@ -802,7 +890,8 @@ const scan = (args: readonly Word[], shortValued: string, longValued: readonly s
       const flag = eq === -1 ? text : text.slice(0, eq)
       let value = eq === -1 ? undefined : text.slice(eq + 1)
 
-      if (value === undefined && longValued.includes(flag)) {
+      // git takes unambiguous prefixes of long options (`--rep origin` is `--repo origin`).
+      if (value === undefined && longValued.some(name => flag === name || (flag.length >= 4 && name.startsWith(flag)))) {
         at += 1
         value = args[at]?.text
       }
@@ -939,8 +1028,9 @@ const PATHSPEC_VERBS: Record<string, { short: string; long: string[] }> = {
 }
 
 // One `git …` command (the words after `git`), or undefined (opaque) when the verb is not literal.
-const gitSegment = (words: readonly Word[], isAdrift: boolean, assigns: readonly string[]): GitSegment | undefined => {
+const gitSegment = (words: readonly Word[], isAdrift: boolean, assigns: readonly string[], before = ''): GitSegment | undefined => {
   const global: string[] = []
+  const configKeys: string[] = []
   let alias = false
   let unsafeConfig = false
   let dir = ''
@@ -964,6 +1054,12 @@ const gitSegment = (words: readonly Word[], isAdrift: boolean, assigns: readonly
       dir = fold(dir, value?.text ?? '.')
     }
 
+    if (flag === '-c' || flag === '--config-env' || flag.startsWith('--config-env=')) {
+      const isLiteral = config !== undefined && value?.isUnknown !== true && words[at]?.isUnknown !== true
+
+      configKeys.push(isLiteral ? config.split('=')[0]?.toLowerCase() ?? '?' : '?')
+    }
+
     alias ||= /^alias\./i.test(config ?? '')
     unsafeConfig ||= UNSAFE_KEY.test((config ?? '').split('=')[0] ?? '')
     at += isValued ? 2 : 1
@@ -980,7 +1076,10 @@ const gitSegment = (words: readonly Word[], isAdrift: boolean, assigns: readonly
   const args = words.slice(at + 1)
   const spec = PATHSPEC_VERBS[verb]
   const { flags, values, positional } = spec === undefined ? scan(args, verb === 'push' ? 'o' : '', verb === 'push' ? PUSH_LONG_VALUED : []) : scan(args, spec.short, spec.long)
-  const base = { verb, args: args.map(arg => arg.text), positional: positional.map(word => word.text), changesState: changesState(verb, args), flags, global, assigns: [...assigns], alias, unsafeConfig, hasUnknown: args.some(arg => arg.isUnknown) }
+  const pushOptions = verb === 'push'
+    ? values.filter(([flag]) => flag === '-o' || (flag.startsWith('--') && flag.length >= 4 && '--push-option'.startsWith(flag))).map(([, value]) => value)
+    : []
+  const base = { verb, args: args.map(arg => arg.text), positional: positional.map(word => word.text), changesState: changesState(verb, args), flags, global, assigns: [...assigns], alias, unsafeConfig, configKeys, before, pushOptions, hasUnknown: args.some(arg => arg.isUnknown) }
 
   if (spec === undefined) {
     return { ...base, paths: [], uncertain }
@@ -990,9 +1089,12 @@ const gitSegment = (words: readonly Word[], isAdrift: boolean, assigns: readonly
   const isUnsure = uncertain || positional.some(word => word.isUnknown)
 
   if (verb === 'commit') {
-    const message = values.filter(([flag]) => ['-m', '--message', '--trailer', '--author'].includes(flag)).map(([, value]) => value)
+    // Long options are read as git reads them, by unambiguous prefix (`--mess=x` is `--message=x`).
+    const named = (flag: string, long: string) => flag === long || (flag.length >= 4 && long.startsWith(flag))
+    const message = values.filter(([flag]) => flag === '-m' || ['--message', '--trailer', '--author'].some(long => named(flag, long))).map(([, value]) => value)
+    const text = values.filter(([flag]) => flag === '-m' || named(flag, '--message')).map(([, value]) => value)
 
-    return { ...base, paths, message, uncertain: isUnsure }
+    return { ...base, paths, message, text, uncertain: isUnsure }
   }
 
   return { ...base, paths, uncertain: isUnsure }
@@ -1000,31 +1102,54 @@ const gitSegment = (words: readonly Word[], isAdrift: boolean, assigns: readonly
 
 // ---- gh and glab ----
 
-const FORGE_READ_GROUPS = new Set(['', 'status', 'search', 'version', 'help', 'browse', 'completion'])
-const FORGE_READ_ACTIONS = new Set(['', 'view', 'list', 'ls', 'status', 'diff', 'checks', 'show', 'get', 'watch', 'trace'])
+// The command groups that change the repository's side of the forge (pull and merge requests, the repository itself, its
+// releases, a raw API call). Anything else (`issue`, `run`, `workflow`, `ci`…) is not git work and is not routed to the git role.
+const FORGE_ROUTED = new Set(['pr', 'mr', 'repo', 'api', 'release'])
+// Groups gh and glab have that are not git work: they pass for every actor. `alias` and `extension` are read apart, and a
+// group in none of these lists is unknown (an alias such as `gh mm` can be `pr merge --admin`): it is held as state-changing.
+const FORGE_OTHER = new Set([
+  '', 'issue', 'run', 'workflow', 'ci', 'cache', 'codespace', 'gist', 'label', 'org', 'project', 'secret', 'variable', 'ssh-key', 'gpg-key',
+  'status', 'search', 'browse', 'auth', 'config', 'completion', 'help', 'version', 'attestation', 'copilot', 'agent-task', 'ruleset',
+  'incident', 'snippet', 'user', 'schedule', 'deploy-key', 'milestone', 'iteration', 'job', 'runner', 'token', 'cluster', 'securefile',
+  'stack', 'check-update', 'duo', 'changelog',
+])
+const FORGE_EXTENSION = new Set(['extension', 'extensions', 'ext'])
+const FORGE_READ_ACTIONS = new Set(['', 'view', 'list', 'ls', 'status', 'diff', 'checks', 'show', 'get', 'watch', 'trace', 'clone'])
 const FORGE_FIELD_FLAGS = ['-f', '-F', '--field', '--raw-field', '--input']
 
 const forgeSegment = (tool: string, args: readonly Word[]): ForgeSegment => {
   const { flags, values, positional } = scan(args, 'RXfFH', ['--repo', '--hostname', '--method', '--field', '--raw-field', '--header', '--input', '--jq', '--template', '--preview'])
   const group = positional[0]?.text ?? ''
   const action = positional[1]?.text ?? ''
-  const method = values.find(([flag]) => flag === '-X' || flag === '--method')?.[1]
+  // `--meth PUT` is `--method PUT`: git's tools read long options by unambiguous prefix.
+  const method = values.find(([flag]) => flag === '-X' || (flag.startsWith('--') && flag.length >= 4 && '--method'.startsWith(flag)))?.[1]
+  const hasFields = flags.some(flag => FORGE_FIELD_FLAGS.includes(flag))
   let changes: boolean
 
-  if (flags.includes('--push')) {
-    changes = true
-  } else if (group === 'api') {
-    changes = (method !== undefined && method.toUpperCase() !== 'GET') || flags.some(flag => FORGE_FIELD_FLAGS.includes(flag))
-  } else if (FORGE_READ_GROUPS.has(group)) {
-    changes = false
+  const known = FORGE_ROUTED.has(group) || FORGE_OTHER.has(group) || group === 'alias' || FORGE_EXTENSION.has(group)
+
+  if (FORGE_ROUTED.has(group)) {
+    if (flags.includes('--push')) {
+      changes = true
+    } else if (group === 'api') {
+      // With a method, that method says; without one, fields make it a POST.
+      changes = method === undefined ? hasFields : method.toUpperCase() !== 'GET'
+    } else {
+      changes = !FORGE_READ_ACTIONS.has(action)
+    }
+  } else if (group === 'alias') {
+    // `gh alias set mm 'pr merge --admin'` hides a merge behind a word nobody reads.
+    changes = action === 'set' || action === 'import'
+  } else if (FORGE_EXTENSION.has(group)) {
+    changes = action === 'install' || action === 'upgrade' || action === 'exec' || action === 'create'
   } else {
-    changes = !FORGE_READ_ACTIONS.has(action)
+    changes = !FORGE_OTHER.has(group)
   }
 
-  return { tool, args: args.map(arg => arg.text), group, action, positional: positional.map(word => word.text), changesState: changes }
+  return { tool, args: args.map(arg => arg.text), flags, known, group, action, positional: positional.map(word => word.text), changesState: changes }
 }
 
-type Classified = { segments: GitSegment[]; forges: ForgeSegment[]; opaque: boolean; envSets: string[] }
+export type Classified = { segments: GitSegment[]; forges: ForgeSegment[]; opaque: boolean; envSets: string[] }
 
 const classifyDepth = (command: string, depth: number, inherit: readonly string[]): Classified => {
   const found: Classified = { segments: [], forges: [], opaque: false, envSets: [] }
@@ -1093,7 +1218,7 @@ const classifyDepth = (command: string, depth: number, inherit: readonly string[
     } else if (name === 'git' || /^git-[a-z][a-z-]*$/.test(name)) {
       // `git-push` is the verb `push`.
       const words = name === 'git' ? rest : [{ text: name.slice(4), isUnknown: false, isHome: false }, ...rest]
-      const segment = gitSegment(words, isAdrift, assigns)
+      const segment = gitSegment(words, isAdrift, assigns, one.before)
 
       if (segment === undefined) {
         found.opaque = true
@@ -1112,13 +1237,22 @@ const classifyDepth = (command: string, depth: number, inherit: readonly string[
         const inner = classifyDepth(text, depth + 1, assigns)
 
         merge(inner)
-        found.opaque ||= body.some(word => word.isUnknown) && GIT_WORD.test(` ${text} `)
+        // A body that is not literal (`eval "$X"`) runs whatever the variable holds: it is hidden git when the line mentions git at all.
+        found.opaque ||= body.some(word => word.isUnknown) && (GIT_WORD.test(` ${text} `) || GIT_WORD.test(` ${command} `))
       } else {
         // `bash "$(echo git push)"`: a script argument that holds git.
         found.opaque ||= rest.some(word => word.isUnknown && GIT_WORD.test(` ${word.text} `))
       }
-    } else if (RUNNERS.has(name) || (first.isUnknown && GIT_WORD.test(` ${first.text} `))) {
-      found.opaque ||= (first.isUnknown && GIT_WORD.test(` ${first.text} `)) || rest.some(word => GIT_WORD.test(` ${word.text} `) || base(word.text) === 'git')
+    } else if (name === 'xargs') {
+      // Only what `xargs` runs matters: `xargs grep -l git` runs no git.
+      found.opaque ||= runsGit(xargsCommand(rest))
+    } else if (name === 'find') {
+      found.opaque ||= rest.some((word, at) => FIND_EXEC.has(word.text) && runsGit(rest[at + 1]))
+    } else if (RUNNERS.has(name) || (first.isUnknown && (GIT_WORD.test(` ${first.text} `) || (BARE_VARIABLE.test(first.text) && GIT_WORD.test(` ${command} `))))) {
+      found.opaque ||= (first.isUnknown && (GIT_WORD.test(` ${first.text} `) || (BARE_VARIABLE.test(first.text) && GIT_WORD.test(` ${command} `)))) || rest.some(word => GIT_WORD.test(` ${word.text} `) || base(word.text) === 'git')
+    } else if (!READERS.has(name) && !ENV_SETTERS.has(name) && wrapsGit(rest)) {
+      // Any other command that runs what follows it (`caffeinate`, `op run --`, `flock f`, `xcrun`…) hides the git it runs.
+      found.opaque = true
     }
   }
 
@@ -1202,7 +1336,7 @@ const badGlobal = (global: readonly string[]) => {
 }
 
 const devVerdict = (segment: GitSegment, owns: (path: string) => boolean): GitVerdict | undefined => {
-  // Read-only git may carry harmless variables (`GIT_PAGER=cat git log`, `LC_ALL=C git status`); anything that changes state or skips hooks may not.
+  // Read-only git may carry harmless variables (`LC_ALL=C git status`, `TZ=UTC git log`); anything that changes state, skips hooks or runs a program may not.
   if (segment.assigns.some(name => HOOK_ENV.test(name)) || (segment.changesState && segment.assigns.length > 0)) {
     return deny('Do not set environment around git (`VAR=… git`, `env`): hooks and the repository must stay as configured.')
   }
@@ -1255,10 +1389,10 @@ const devVerdict = (segment: GitSegment, owns: (path: string) => boolean): GitVe
   return deny(`Dev agents only run \`git add\`, \`mv\`, \`rm\`, \`restore\` and \`commit\` on their own files; report back so the lead can route \`${label(segment)}\` to the \`git\` role.`)
 }
 
-const PROTECTED_DEFAULT = ['main', 'master', 'develop', 'release', 'release/*']
+export const PROTECTED_DEFAULT = ['main', 'master', 'develop', 'release', 'release/*']
 
 // Whether `name` is one of the protected names: exact, or under a `prefix/*` pattern.
-const isProtected = (name: string, patterns: readonly string[]) =>
+export const isProtected = (name: string, patterns: readonly string[]) =>
   patterns.some(pattern => (pattern.endsWith('/*') ? name.startsWith(pattern.slice(0, -1)) : name === pattern))
 
 // The lead's push: no forced, deleting, mirroring or hook-skipping push, nothing to a protected branch by name, no config overrides.
@@ -1266,7 +1400,7 @@ const pushVerdict = (segment: GitSegment, envSets: readonly string[], protectedN
   const longs = segment.flags.filter(flag => flag.startsWith('--'))
   // git takes unambiguous prefixes of long options.
   const hasLong = (name: string) => longs.some(flag => flag === name || (flag.length >= 4 && name.startsWith(flag)))
-  const hasRepo = longs.some(flag => flag === '--repo')
+  const hasRepo = hasLong('--repo')
   const refspecs = hasRepo ? segment.positional : segment.positional.slice(1)
 
   if (segment.global.some(option => option === '-c' || option.startsWith('--config-env'))) {
@@ -1295,6 +1429,15 @@ const pushVerdict = (segment: GitSegment, envSets: readonly string[], protectedN
 
   if (hasLong('--no-verify')) {
     return deny('`git push --no-verify` skips the hooks; fix the failure instead.')
+  }
+
+  if (hasLong('--receive-pack') || hasLong('--exec')) {
+    return deny('`--receive-pack` and `--exec` run another program on the receiving side in place of git; do not use them.')
+  }
+
+  // GitLab push options open, retarget and merge a merge request from the push itself.
+  if (segment.pushOptions.some(option => /^merge_request\./i.test(option.trim()))) {
+    return deny('A `merge_request.*` push option opens or merges a merge request from the push; open the MR through the git role.')
   }
 
   for (const refspec of refspecs) {
@@ -1327,24 +1470,86 @@ const SCRIPT_COMMAND = /^\s*(\.{0,2}\/|\S+\.(sh|bash|zsh)\b|(ba|z|da|k)?sh\b|sou
 const execValues = (args: readonly string[]) =>
   args.flatMap((arg, at) => (arg === '-x' || (arg.startsWith('--e') && '--exec'.startsWith(arg)) ? [args[at + 1] ?? ''] : arg.startsWith('--exec=') ? [arg.slice(7)] : []))
 
-// What the git role (or a lead acting as it) may not do beyond the push.
-const gitScopeVerdict = (segment: GitSegment): GitVerdict | undefined => {
+// The branch a ref text names: `refs/heads/x`, `heads/x`, `refs/remotes/<remote>/x` and `refs/tags/x` all read as `x`.
+const refName = (text: string) => text.replace(/^refs\/(heads|tags)\//, '').replace(/^heads\//, '').replace(/^refs\/remotes\/[^/]+\//, '')
+
+// Whether the segment has one of these options, long ones by unambiguous prefix as git reads them.
+const hasOption = (segment: GitSegment, ...names: string[]) =>
+  segment.flags.some(flag => names.some(name => flag === name || (name.startsWith('--') && flag.startsWith('--') && flag.length >= 4 && name.startsWith(flag))))
+
+// The word after the first of `names` in the arguments (`checkout -b NAME`).
+const wordAfter = (segment: GitSegment, ...names: string[]) => {
+  const at = segment.args.findIndex(arg => names.includes(arg))
+
+  return at === -1 ? undefined : segment.args[at + 1]
+}
+
+// What the git role (or a lead acting as it) may not do beyond the push: change a protected branch by name, rewrite the
+// configuration that decides where a push goes, or hand git another program.
+const gitScopeVerdict = (segment: GitSegment, protectedNames: readonly string[]): GitVerdict | undefined => {
   const text = segment.args.join(' ')
+  const isProtectedRef = (name: string) => isProtected(refName(name), protectedNames)
+  const protectedReason = (name: string) => `\`${refName(name)}\` is a protected branch (${protectedNames.join(', ')}); the person changes those, not an agent.`
 
   if (segment.alias) {
     return deny('Defining aliases with `-c alias.*` is not allowed: they hide the verb.')
   }
 
   if (segment.unsafeConfig) {
-    return deny('Do not override push settings, `core.hooksPath`, `core.sshCommand` or a remote\'s upload/receive pack with `-c` or `--config-env`.')
+    const key = segment.configKeys.find(name => UNSAFE_KEY.test(name)) ?? 'a push setting'
+
+    return deny(`Do not override \`${key}\` with \`-c\` or \`--config-env\`: push settings, remotes, \`core.hooksPath\`, \`core.sshCommand\`, helpers and pack programs stay as configured.`)
   }
 
   if (segment.flags.some(flag => flag.length >= 4 && ['--upload-pack', '--receive-pack'].some(name => name.startsWith(flag)))) {
     return deny('`--upload-pack` and `--receive-pack` run another program in place of git; do not use them.')
   }
 
-  if (segment.verb === 'config' && segment.changesState && UNSAFE_KEY.test(segment.positional[0] ?? '')) {
-    return deny(`Do not write \`${segment.positional[0]}\`: aliases, push settings, \`core.hooksPath\`, \`core.sshCommand\` and remote pack programs stay as configured.`)
+  // Any loose word may be the key: `git config set k v`, `--file x k v` and `--blob b k` put other words first.
+  const unsafeKey = segment.verb === 'config' && segment.changesState ? segment.positional.find(word => UNSAFE_KEY.test(word)) : undefined
+
+  if (unsafeKey !== undefined) {
+    return deny(`Do not write \`${unsafeKey}\`: aliases, push settings, remotes, \`url.*\`, \`core.hooksPath\`, \`core.sshCommand\`, helpers and remote pack programs stay as configured.`)
+  }
+
+  if (segment.verb === 'branch' && segment.changesState) {
+    const targets = hasOption(segment, '-d', '-D', '--delete', '-m', '-M', '--move', '-c', '-C', '--copy')
+      ? segment.positional
+      : hasOption(segment, '-f', '--force') ? segment.positional.slice(0, 1) : []
+    const hit = targets.find(isProtectedRef)
+
+    if (hit !== undefined) {
+      return deny(`\`git branch\` on ${protectedReason(hit)}`)
+    }
+  }
+
+  if (segment.verb === 'update-ref' && hasOption(segment, '--stdin')) {
+    return deny('`git update-ref --stdin` updates refs the command line does not show; name the ref.')
+  }
+
+  if (segment.verb === 'update-ref') {
+    const hit = segment.positional.find(isProtectedRef)
+
+    if (hit !== undefined) {
+      return deny(`\`git update-ref\` on ${protectedReason(hit)}`)
+    }
+  }
+
+  if (segment.verb === 'tag' && segment.changesState && hasOption(segment, '-d', '--delete', '-f', '--force')) {
+    const names = hasOption(segment, '-d', '--delete') ? segment.positional : segment.positional.slice(0, 1)
+    const hit = names.find(isProtectedRef)
+
+    if (hit !== undefined) {
+      return deny(`\`git tag\` of a name that reads as ${protectedReason(hit)}`)
+    }
+  }
+
+  if (segment.verb === 'checkout' || segment.verb === 'switch' || segment.verb === 'worktree') {
+    const made = wordAfter(segment, '-b', '-B', '-c', '-C', '--create', '--force-create', '--orphan')
+
+    if (made !== undefined && isProtectedRef(made)) {
+      return deny(`\`git ${segment.verb}\` creating or resetting ${protectedReason(made)}`)
+    }
   }
 
   if (!BUILTIN_VERBS.has(segment.verb)) {
@@ -1371,30 +1576,83 @@ const gitScopeVerdict = (segment: GitSegment): GitVerdict | undefined => {
 }
 
 // What the git role may not do on the forge: merge, or delete a repository.
+// Endpoints that move a branch or write a commit on one: refs, branches (and their protection), merges, contents and files.
+const FORGE_BRANCH_ENDPOINT = /\/(git\/refs|branches|protected_branches|rulesets|contents|repository\/(branches|files|commits))\b/
+
 const forgeScopeVerdict = (forge: ForgeSegment): GitVerdict | undefined => {
-  const isApiMerge = forge.group === 'api' && forge.changesState && /\/merge\b/.test(forge.positional[1] ?? '')
+  const endpoint = forge.group === 'api' && forge.changesState ? forge.positional[1] ?? '' : ''
+  const isApiMerge = /\/merges?\b/.test(endpoint)
 
   if (((forge.group === 'pr' || forge.group === 'mr') && forge.action === 'merge') || isApiMerge) {
     return deny('Merging a PR/MR is the person\'s call; open it and leave the merge.')
   }
 
+  if (FORGE_BRANCH_ENDPOINT.test(endpoint) || (endpoint === 'graphql' && /\bmutation\b/i.test(forge.args.join(' ')))) {
+    return deny('Changing branches, refs or files through the forge API is the person\'s call; use `git` and the PR/MR commands instead.')
+  }
+
+  // A query read from a file or from stdin cannot be read here: it may be a mutation.
+  if (forge.group === 'api' && forge.positional[1] === 'graphql' && forge.changesState && (forge.flags.includes('--input') || /\bquery=@/.test(forge.args.join(' ')))) {
+    return deny('A GraphQL query read from a file or stdin cannot be checked for a mutation; write the query on the command line, or leave it to the person.')
+  }
+
+  if (forge.group === 'repo' && forge.action === 'sync' && forge.flags.some(flag => flag.startsWith('--') && flag.length >= 4 && '--force'.startsWith(flag))) {
+    return deny('`repo sync --force` overwrites the branch it syncs; leave it to the person.')
+  }
+
+  if (forge.changesState && (forge.group === 'alias' || FORGE_EXTENSION.has(forge.group))) {
+    return deny('Aliases and extensions can hide a merge or run a program; use the documented commands.')
+  }
+
+  if (!forge.known) {
+    return deny('That is not a `gh` or `glab` command Pantheon knows (it may be an alias for a merge); use the documented commands.')
+  }
+
   return forge.group === 'repo' && forge.action === 'delete' ? deny('Deleting a repository is denied.') : undefined
 }
 
-const OPAQUE_REASON = 'A `git` command is hidden in `eval`, `bash -c`, `xargs`, `ssh`, `… | sh`, an alias, brace expansion or a variable, where it cannot be checked; run the git command directly.'
+const OPAQUE_REASON = 'A `git` command is hidden in `eval`, `bash -c`, `xargs`, `ssh`, `… | sh`, an alias, brace expansion or a variable, where it cannot be checked; rewrite it as a literal command (`git push origin <branch>` written out, no variable for the verb, `eval` or pipe into a shell).'
+
+// What no actor may do, whatever the verb: hand git a program through `-c`, the environment, a command URL or a pack option.
+const commonVerdict = (segment: GitSegment, envSets: readonly string[]): GitVerdict | undefined => {
+  const key = segment.configKeys.find(name => !SAFE_CONFIG.test(name))
+
+  if (key !== undefined) {
+    return deny(`\`-c ${key === '?' ? '<not literal>' : key}\` (or \`--config-env\`) can make git run a program or move a push; only color.*, core.quotepath, advice.*, i18n.*, user.name and user.email may be set that way.`)
+  }
+
+  if (segment.assigns.some(name => HOOK_ENV.test(name)) || envSets.length > 0) {
+    return deny('Do not set environment around git (hook-skip variables, `GIT_DIR`, `GIT_CONFIG*`, `GIT_SSH*`, `GIT_PAGER`, `PAGER`, `EDITOR`, `HOME`, or exports it cannot read): hooks, programs and the repository must stay as configured.')
+  }
+
+  if (segment.args.some(arg => COMMAND_URL.test(arg))) {
+    return deny('`ext::` and `fd::` remotes run a command; use a normal remote URL.')
+  }
+
+  if (PACK_VERBS.has(segment.verb) && hasOption(segment, ...PACK_OPTIONS)) {
+    return deny('`--upload-pack`, `--receive-pack` and `--exec` run another program in place of git; do not use them.')
+  }
+
+  return undefined
+}
+
+// The tool, the group and the action, never the arguments: they can carry a token, a URL with a password or a message.
+const forgeName = (forge: ForgeSegment) => (forge.group === 'api' ? `${forge.tool} api` : `${forge.tool} ${forge.group} ${forge.action}`.trim())
 
 const forgeReason = (forge: ForgeSegment) =>
   forge.group === 'pr' || forge.group === 'mr'
-    ? `PR/MR work goes to the git role: \`${forge.tool} ${forge.args.join(' ')}\`.`
-    : `\`${forge.tool} ${forge.args.join(' ')}\` changes state on the forge; route it to the git role.`
+    ? `PR/MR work goes to the git role: \`${forgeName(forge)}\`.`
+    : `\`${forgeName(forge)}\` changes state on the forge; route it to the git role.`
 
 /**
- * Whether `actor` may run `command`. The strictest segment decides; a hidden `git` is denied for every actor except `git`.
- * With `gitRole: false` (the git role is disabled) the lead may do what `git` does, under the git role's own limits,
+ * Whether `actor` may run `command`. The strictest segment decides; a hidden `git` is denied for every actor, the git role
+ * included. With `gitRole: false` (the git role is disabled) the lead may do what `git` does, under the git role's own limits,
  * except push unsafely and run a hidden `git`. `protected` lists the branches a push may not name: exact names or `prefix/*`.
+ * `found` is the caller's own `classifyGitCommand(command)`, to read the line once. The text cannot say which branch is
+ * checked out, so a push that names none is decided by the caller (`gitguard.ts`).
  */
-export function gitAllowed(actor: GitActor, command: string, owns: (path: string) => boolean, opts: { gitRole?: boolean; protected?: string[] } = {}): GitVerdict {
-  const { segments, forges, opaque, envSets } = classifyGitCommand(command)
+export function gitAllowed(actor: GitActor, command: string, owns: (path: string) => boolean, opts: { gitRole?: boolean; protected?: string[]; found?: Classified } = {}): GitVerdict {
+  const { segments, forges, opaque, envSets } = opts.found ?? classifyGitCommand(command)
   const isGitScope = actor === 'git' || (actor === 'lead' && opts.gitRole === false)
   const isDev = actor === 'developer' || actor === 'ux'
   const protectedNames = opts.protected ?? PROTECTED_DEFAULT
@@ -1420,12 +1678,12 @@ export function gitAllowed(actor: GitActor, command: string, owns: (path: string
     }
 
     if (actor === 'git') {
-      verdict = segment.verb === 'push' ? deny('The lead pushes; report back and let the lead run `git push`.') : gitScopeVerdict(segment)
+      verdict = segment.verb === 'push' ? deny('The lead pushes; report back and let the lead run `git push`.') : gitScopeVerdict(segment, protectedNames)
     } else if (actor === 'lead') {
       if (segment.verb === 'push') {
-        verdict = pushVerdict(segment, envSets, protectedNames) ?? (isGitScope ? gitScopeVerdict(segment) : undefined)
+        verdict = pushVerdict(segment, envSets, protectedNames) ?? (isGitScope ? gitScopeVerdict(segment, protectedNames) : undefined)
       } else if (isGitScope) {
-        verdict = gitScopeVerdict(segment)
+        verdict = gitScopeVerdict(segment, protectedNames)
       } else if (segment.changesState) {
         verdict = deny(`Delegate \`${label(segment)}\` to the \`git\` role; the lead only pushes.`)
       }
@@ -1435,10 +1693,13 @@ export function gitAllowed(actor: GitActor, command: string, owns: (path: string
       verdict = segment.changesState ? deny(`${actor} is read-only; ask the lead to route \`${label(segment)}\` to the \`git\` role.`) : undefined
     }
 
+    // What no actor may do goes last, so each actor's own reason comes first.
+    verdict ??= commonVerdict(segment, envSets)
+
     if (verdict !== undefined) {
       return verdict
     }
   }
 
-  return opaque && actor !== 'git' ? deny(OPAQUE_REASON) : { allow: true }
+  return opaque ? deny(OPAQUE_REASON) : { allow: true }
 }

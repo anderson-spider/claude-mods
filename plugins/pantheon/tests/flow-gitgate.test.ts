@@ -13,14 +13,13 @@ const reasonOf = (actor: GitActor, command: string, owns: (path: string) => bool
 type Row = [actor: GitActor, command: string, owns?: (path: string) => boolean]
 
 const allowed: Row[] = [
-  ['developer', 'GIT_PAGER=cat git log'],
   ['developer', 'LC_ALL=C git status'],
   ['developer', 'TZ=UTC git log -1'],
   ['developer', 'export CI=1; npm test && git add a.ts && git commit -m x -- a.ts', only('a.ts')],
   ['developer', 'export CI=1 FOO=bar && git status'],
   ['developer', 'readonly X=1; git status'],
-  ['lead', 'GIT_SSH_COMMAND=x git push'],
   ['lead', 'GIT_TRACE=1 git push origin feature/x'],
+  ['lead', 'LC_ALL=C git log'],
   ['lead', 'git ls-files | xargs rm'],
   ['lead', 'git ls-files | xargs -n1 wc -l'],
   ['lead', 'git diff | while read l; do echo $l; done'],
@@ -59,6 +58,53 @@ const allowed: Row[] = [
   ['lead', 'glab mr view 4'],
   ['lead', 'glab-work ci status'],
   ['lead', 'gh status'],
+  // What is not git work is not routed to the git role: issues, runs, workflows, CI.
+  ['lead', 'gh run cancel 1'],
+  ['lead', 'gh run rerun 1'],
+  ['lead', 'gh workflow run x'],
+  ['lead', 'gh issue comment 1 -b x'],
+  ['lead', 'gh issue create --title x'],
+  ['lead', 'glab issue note 3 -m x'],
+  ['lead', 'gh repo clone o/r'],
+  ['lead', 'gh api -X GET repos/x -f per_page=5'],
+  // Wrappers that run a command: it is read as if typed on the line.
+  ['lead', 'timeout 5 git push origin feature/x'],
+  ['lead', 'timeout -k 5 30 git status'],
+  ['lead', 'nice -n 10 git log'],
+  ['lead', 'ionice -c 2 git status'],
+  ['lead', 'stdbuf -oL git log'],
+  ['lead', 'setsid git status'],
+  // Only what xargs and find run counts, not a word that says git.
+  ['lead', 'find . -name "*.ts" | xargs grep -l git'],
+  ['lead', 'find ~/src/git -type f'],
+  ['lead', 'find . -name "*.sh" -exec wc -l {} +'],
+  // A `git` that is a name, not a command: a reader's text, a package, a path, a word with no verb after it.
+  ['lead', 'echo git push origin main'],
+  ['lead', 'grep -r git push.txt'],
+  ['lead', 'ls ~/src/git'],
+  ['lead', 'brew install git curl'],
+  ['qa', 'pytest -k git tests/'],
+  ['qa', 'npm test -- git'],
+  ['developer', 'cd git && ls'],
+  // The wrappers that run the command after them are read through.
+  ['lead', 'caffeinate git push origin feature/x'],
+  ['lead', 'caffeinate -t 60 git push origin feature/x'],
+  ['lead', 'gtimeout 10 git push origin feature/x'],
+  ['lead', 'arch -arm64 git status'],
+  // What the review of the git role asked to keep out is only the writes; reading and the documented commands pass.
+  ['lead', 'gh alias list'],
+  ['git', 'gh alias list'],
+  ['git', 'gh extension list'],
+  ['git', 'gh api graphql -f query="query { viewer { login } }"'],
+  ['git', 'gh issue comment 1 -b x'],
+  ['git', 'git worktree add -b andersonsilva/x ../x'],
+  ['lead', 'git push -o ci.skip origin feature/x'],
+  // A comment ends the line's words.
+  ['developer', 'git commit -m x -- a.ts # then push', only('a.ts')],
+  ['developer', 'git add a.ts # not a path: b.ts', only('a.ts')],
+  ['lead', 'git status # git push origin main'],
+  ['lead', 'echo done #; git commit -m x'],
+  ['lead', 'git -c color.ui=never -c core.quotepath=false -c advice.detachedHead=false status'],
   ['developer', 'gh pr diff 1'],
   ['architect', 'gh pr view 2'],
   ['git', 'gh pr create --fill'],
@@ -124,7 +170,13 @@ const allowed: Row[] = [
   ['git', 'git stash push -u -m tag'],
   ['git', 'git worktree add ../x'],
   ['git', 'git status'],
-  ['git', 'eval "$X git push"'],
+  ['git', 'git -c user.name=x -c user.email=y@z.io commit -m w'],
+  ['git', 'git branch -f feature main'],
+  ['git', 'git tag -f v1 main'],
+  ['git', 'gh api repos/o/r/branches'],
+  ['git', 'gh api -X GET repos/o/r/git/refs -f per_page=5'],
+  ['git', 'git rebase --exec="make test" main'],
+  ['git', 'git switch -c andersonsilva/x && git commit -m y'],
   ['architect', 'git status'],
   ['architect', 'git diff main...HEAD && git log -5'],
   ['code-reader', 'git grep foo'],
@@ -133,11 +185,12 @@ const allowed: Row[] = [
 ]
 
 test('allows what each actor may run', () => {
+  const wrong: string[] = []
   for (const [actor, command, owns] of allowed) {
     const verdict = verdictOf(actor, command, owns)
-    expect(verdict.allow).toBe(true)
-    if (!verdict.allow) throw new Error(`${actor}: ${command}: ${verdict.reason}`)
+    if (!verdict.allow) wrong.push(`${actor}: ${JSON.stringify(command)} was denied: ${verdict.reason}`)
   }
+  expect(wrong).toEqual([])
 })
 
 const denied: Array<[...Row, reason: RegExp]> = [
@@ -200,8 +253,6 @@ const denied: Array<[...Row, reason: RegExp]> = [
   ['lead', 'bash < <(echo git push)', all, /hidden/],
   ['lead', 'sh < <(echo "git push")', all, /hidden/],
   ['lead', 'source /dev/stdin < <(echo git push)', all, /hidden/],
-  ['lead', 'gh run cancel 1', all, /changes state on the forge/],
-  ['lead', 'gh workflow run x', all, /changes state on the forge/],
   // H1: hooks skipped or the repository swapped through the environment or -c
   ['developer', 'FOO=1 git add a.ts', only('a.ts'), /environment/],
   ['developer', 'env FOO=1 git add a.ts', only('a.ts'), /environment/],
@@ -288,6 +339,130 @@ const denied: Array<[...Row, reason: RegExp]> = [
   ['ux', 'glab mr merge 1', all, /PR\/MR work/],
   ['architect', 'gh pr create', all, /PR\/MR work/],
   ['code-reader', 'gh pr comment 1 -b x', all, /PR\/MR work/],
+  // Review: the shell's own syntax, option prefixes and hidden git
+  ['lead', 'git push --rep=origin main', all, /protected branch `main`/],
+  ['lead', 'git push --rep origin main', all, /protected branch `main`/],
+  ['lead', 'git push --repo origin release/1.2', all, /protected branch `release\/1.2`/],
+  ['lead', 'git push\ngit push origin main # deploy', all, /protected branch `main`/],
+  ['lead', 'git status # note\ngit push origin main', all, /protected branch `main`/],
+  ['lead', 'git push --receive-pack=x origin feature', all, /receiving side/],
+  ['lead', 'git push --exec=x origin feature', all, /receiving side/],
+  ['lead', 'git push --rec=x origin feature', all, /receiving side/],
+  ['lead', 'git push --ex=x origin feature', all, /receiving side/],
+  ['git', 'eval "$X git push"', all, /hidden/],
+  ['git', 'P=push; git $P origin main', all, /hidden/],
+  ['lead', 'P=push; git $P origin main', all, /hidden/],
+  ['git', 'X="git push origin main"; eval "$X"', all, /hidden/],
+  ['lead', 'X="git push origin main"; eval "$X"', all, /hidden/],
+  ['developer', 'X="git push origin main"; bash -c "$X"', all, /hidden/],
+  ['git', 'CMD="git push origin main"; $CMD', all, /hidden/],
+  ['git', 'echo "git push origin main" | sh', all, /hidden/],
+  ['git', 'echo git push | xargs sh -c', all, /hidden/],
+  ['git', 'xargs git push < refs', all, /hidden/],
+  ['lead', 'echo a | xargs -n1 timeout 5 git push', all, /hidden/],
+  ['lead', 'find . -execdir sh -c "git push" \\;', all, /hidden/],
+  ['git', 'ssh host git push', all, /hidden/],
+  // Second review: a command that runs another command hides the git it runs
+  ['lead', 'op run -- git push origin main', all, /hidden/],
+  ['lead', 'mise exec -- git push origin main', all, /hidden/],
+  ['lead', 'xcrun git push origin main', all, /hidden/],
+  ['lead', 'flock /tmp/l git push origin main', all, /hidden/],
+  ['lead', 'unbuffer git push origin main', all, /hidden/],
+  ['git', 'op run -- git commit -m x', all, /hidden/],
+  ['developer', 'op run -- gh pr merge 1', all, /hidden/],
+  ['qa', 'op run -- git log', all, /hidden/],
+  ['lead', 'caffeinate git push origin main', all, /protected branch `main`/],
+  ['lead', 'gtimeout 10 git push origin main', all, /protected branch `main`/],
+  ['lead', 'arch -arm64 git push origin main', all, /protected branch `main`/],
+  ['lead', 'caffeinate gh pr merge 1', all, /PR\/MR work/],
+  // Second review: aliases and extensions, push options, and what the git role may still do through the forge
+  ['lead', 'gh alias set mm "pr merge --admin"', all, /changes state on the forge/],
+  ['git', 'gh alias set mm "pr merge --admin"', all, /Aliases and extensions/],
+  ['git', 'gh alias import aliases.yml', all, /Aliases and extensions/],
+  ['git', 'glab alias set mm "mr merge"', all, /Aliases and extensions/],
+  ['git', 'gh extension install o/x', all, /Aliases and extensions/],
+  ['git', 'gh mm 1', all, /not a `gh` or `glab` command/],
+  ['git', 'glab-work frobnicate', all, /not a `gh` or `glab` command/],
+  ['lead', 'gh mm 1', all, /changes state on the forge/],
+  ['lead', 'git push -o merge_request.create -o merge_request.merge_when_pipeline_succeeds origin feat', all, /merge_request/],
+  ['lead', 'git push --push-option=merge_request.target=main origin feat', all, /merge_request/],
+  ['lead', 'git push --push-opt merge_request.merge origin feat', all, /merge_request/],
+  ['lead', 'git push -omerge_request.merge_when_pipeline_succeeds origin feat', all, /merge_request/],
+  ['developer', 'git push -o merge_request.merge origin feat', all, /`git` role/],
+  ['git', 'git update-ref --stdin', all, /update-ref --stdin/],
+  ['git', 'git worktree add -B main ../x', all, /protected branch/],
+  ['git', 'git worktree add -b release/1.2 ../x', all, /protected branch/],
+  ['git', 'gh api graphql -F query=@q.graphql', all, /cannot be checked/],
+  ['git', 'gh api graphql -f query=@q.graphql', all, /cannot be checked/],
+  ['git', 'gh api graphql --input q.json', all, /cannot be checked/],
+  ['git', 'gh repo sync --force', all, /repo sync --force/],
+  ['git', 'gh repo sync o/r --forc', all, /repo sync --force/],
+  ['git', 'gh api -X PUT repos/o/r/rulesets/1 -f enforcement=disabled', all, /Changing branches/],
+  ['git', 'gh api -X PUT repos/o/r/branches/main/protection -f x=y', all, /Changing branches/],
+  ['git', 'git config include.path ../x', all, /Do not write/],
+  ['git', 'git config includeIf.gitdir:/x/.path ../y', all, /Do not write/],
+  ['git', 'git config --add includeIf.onbranch:main.path ../y', all, /Do not write/],
+  // Review: the forge API can move a branch or write a commit on one
+  ['git', 'gh api -X POST repos/o/r/git/refs -f ref=refs/heads/main -f sha=x', all, /Changing branches/],
+  ['git', 'gh api -X PATCH repos/o/r/git/refs/heads/main -f sha=x', all, /Changing branches/],
+  ['git', 'gh api --method PUT repos/o/r/contents/a.txt -f branch=main', all, /Changing branches/],
+  ['git', 'gh api -X POST repos/o/r/branches/main/rename -f new_name=x', all, /Changing branches/],
+  ['git', 'glab api -X POST projects/1/repository/branches -f branch=x', all, /Changing branches/],
+  ['git', 'glab api --method POST projects/1/repository/commits -f branch=main', all, /Changing branches/],
+  ['git', 'gh api -X POST repos/o/r/merges -f base=main -f head=x', all, /Merging/],
+  ['git', 'gh api --meth PUT repos/o/r/pulls/3/merge', all, /Merging/],
+  ['git', 'gh api graphql -f query="mutation { createRef(input: {}) { clientMutationId } }"', all, /Changing branches/],
+  ['lead', 'gh api -X POST repos/o/r/git/refs -f ref=refs/heads/main', all, /changes state on the forge/],
+  // Review: -c, the environment, command URLs and pack options hand git a program
+  ['lead', 'git -c core.pager="sh -c x" log', all, /-c core\.pager/],
+  ['lead', 'git -c core.editor=x status', all, /-c core\.editor/],
+  ['lead', 'git -c credential.helper="!x" fetch', all, /-c credential\.helper/],
+  ['lead', 'git --config-env=core.pager=P log', all, /-c core\.pager/],
+  ['lead', 'git -c "$X" log', all, /-c <not literal>/],
+  ['lead', 'git -c color.ui=never -c core.pager=x log', all, /-c core\.pager/],
+  ['git', 'git -c core.editor=vim commit -m x', all, /override `core\.editor`/],
+  ['git', 'git -c user.name=a -c core.pager=x log', all, /override `core\.pager`/],
+  ['developer', 'git -c core.pager=x log', all, /only `-C`/],
+  ['lead', 'GIT_PAGER=x git log', all, /Do not set environment/],
+  ['lead', 'PAGER="sh -c x" git log', all, /Do not set environment/],
+  ['lead', 'EDITOR=x git log', all, /Do not set environment/],
+  ['lead', 'HOME=/tmp/h git status', all, /Do not set environment/],
+  ['lead', 'XDG_CONFIG_HOME=/x git status', all, /Do not set environment/],
+  ['lead', 'GIT_ASKPASS=x git fetch', all, /Do not set environment/],
+  ['lead', 'GIT_EXTERNAL_DIFF=x git diff', all, /Do not set environment/],
+  ['lead', 'export GIT_SSH_COMMAND=x; git fetch', all, /Do not set environment/],
+  ['lead', 'export $(cat .env); git status', all, /Do not set environment/],
+  ['git', 'GIT_SSH_COMMAND=x git fetch', all, /Do not set environment/],
+  ['lead', 'GIT_SSH_COMMAND=x git push', all, /GIT_/],
+  ['developer', 'GIT_PAGER=cat git log', all, /environment/],
+  ['lead', 'git fetch "ext::sh -c id"', all, /ext::/],
+  ['git', 'git clone fd::17 x', all, /ext::/],
+  ['git', 'git remote add x "ext::sh -c id"', all, /ext::/],
+  ['lead', 'git fetch --upload-pack="sh -c x" origin', all, /another program/],
+  ['lead', 'git ls-remote --upload-pack=x .', all, /another program/],
+  ['developer', 'git fetch --exec=x', all, /another program/],
+  // Review: configuration writes with another word first, and branches or refs by protected name
+  ['git', 'git config set alias.p push', all, /Do not write `alias.p`/],
+  ['git', 'git config --file /x/cfg remote.origin.push y', all, /Do not write `remote.origin.push`/],
+  ['git', 'git config --blob HEAD:x url.x.insteadOf y', all, /Do not write `url.x.insteadOf`/],
+  ['git', 'git config url.git@x:.insteadOf y', all, /Do not write/],
+  ['git', 'git config branch.main.merge refs/heads/x', all, /Do not write/],
+  ['git', 'git config core.pager "sh -c x"', all, /Do not write/],
+  ['git', 'git config credential.helper "!x"', all, /Do not write/],
+  ['git', 'git config remote.origin.mirror true', all, /Do not write/],
+  ['git', 'git branch -D main', all, /protected branch/],
+  ['git', 'git branch -d release/1.2', all, /protected branch/],
+  ['git', 'git branch -m main old', all, /protected branch/],
+  ['git', 'git branch -m old develop', all, /protected branch/],
+  ['git', 'git branch -f main HEAD~1', all, /protected branch/],
+  ['git', 'git branch --delete master', all, /protected branch/],
+  ['git', 'git update-ref refs/heads/main abc123', all, /protected branch/],
+  ['git', 'git update-ref -d refs/heads/release/1', all, /protected branch/],
+  ['git', 'git tag -d main', all, /protected branch/],
+  ['git', 'git tag -f release HEAD', all, /protected branch/],
+  ['git', 'git checkout -B main origin/x', all, /protected branch/],
+  ['git', 'git switch -C release/1.2', all, /protected branch/],
+  ['git', 'git checkout -b develop', all, /protected branch/],
   // M4: globs in a dev pathspec
   ['developer', 'git add src/*.ts', all, /explicitly/],
   ['developer', 'git add "a?.ts"', all, /explicitly/],
@@ -455,11 +630,13 @@ const denied: Array<[...Row, reason: RegExp]> = [
 ]
 
 test('denies with a reason that names where to go', () => {
+  const wrong: string[] = []
   for (const [actor, command, owns, reason] of denied) {
     const verdict = verdictOf(actor, command, owns)
-    if (verdict.allow) throw new Error(`${actor}: ${JSON.stringify(command)} was allowed`)
-    expect(verdict.reason).toMatch(reason)
+    if (verdict.allow) wrong.push(`${actor}: ${JSON.stringify(command)} was allowed`)
+    else if (!reason.test(verdict.reason)) wrong.push(`${actor}: ${JSON.stringify(command)} was denied with ${JSON.stringify(verdict.reason)}, not ${reason}`)
   }
+  expect(wrong).toEqual([])
 })
 
 test('the strictest segment of a compound command decides', () => {
@@ -521,10 +698,12 @@ test('a hidden git is opaque, a visible one inside bash -c or eval is read', () 
   expect(classifyGitCommand('eval "git push"').segments[0].verb).toBe('push')
   expect(classifyGitCommand('bash -lc "git status && git commit -m x"').segments.map(segment => segment.verb)).toEqual(['status', 'commit'])
   expect(classifyGitCommand('bash -c "$X"').opaque).toBe(false)
-  for (const command of ['eval "$X git push"', 'echo a | xargs git add', 'find . -exec git rm {} +', 'ssh host "git push"', "su -c 'git reset --hard'", '$(which git) push', 'git -c alias.x=push x', 'timeout 5 git push']) {
-    expect(classifyGitCommand(command).opaque).toBe(true)
+  for (const command of ['eval "$X git push"', 'echo a | xargs git add', 'find . -exec git rm {} +', 'ssh host "git push"', "su -c 'git reset --hard'", '$(which git) push', 'git -c alias.x=push x', 'X="git push"; eval "$X"', 'CMD="git push"; $CMD origin x']) {
+    expect(classifyGitCommand(command).opaque, command).toBe(true)
   }
-  expect(classifyGitCommand('find . -name "*.git"').opaque).toBe(false)
+  for (const command of ['find . -name "*.git"', 'find ~/src/git', 'find . | xargs grep -l git', 'eval "$(ssh-agent -s)"', 'timeout 5 git push', '$HOME/bin/tool && echo git']) {
+    expect(classifyGitCommand(command).opaque, command).toBe(false)
+  }
 })
 
 test('a cd earlier on the line makes a dev path unverifiable but not the lead push', () => {
@@ -593,4 +772,74 @@ test('the protected branches are a parameter: exact names and prefix patterns', 
   expect(push('git push origin feature/release/1', ['release/*']).allow).toBe(true)
   expect(push('git push origin release', ['release']).allow).toBe(false)
   expect(push('git push origin main', ['release/*']).allow).toBe(true)
+})
+
+test('an unquoted # that starts a word comments out the rest of the line', () => {
+  const words = (command: string) => classifyGitCommand(command).segments.map(segment => segment.positional)
+  expect(words('git push origin # deploy')).toEqual([['origin']])
+  expect(words('git commit -m x -- a.ts # c')).toEqual([['a.ts']])
+  expect(classifyGitCommand('git commit -m x -- a.ts # c').segments[0]?.paths).toEqual(['a.ts'])
+  // Not a comment: inside a word, a quote or an expansion.
+  expect(words('git push origin feature#1')).toEqual([['origin', 'feature#1']])
+  expect(words('git push origin "# x"')).toEqual([['origin', '# x']])
+  expect(words('git push origin \\#x')).toEqual([['origin', '#x']])
+  expect(words('git log -n ${#X}')).toEqual([['${#X}']])
+  // The newline ends the comment, so what follows is a command again.
+  expect(words('git status # a\ngit push origin main')).toEqual([[], ['origin', 'main']])
+  expect(words('git status # git push origin main')).toEqual([[]])
+  // A `)` in a comment closes no substitution.
+  expect(classifyGitCommand('echo $(git status # )\n)').segments.map(segment => segment.verb)).toEqual(['status'])
+})
+
+test('timeout, nice, ionice, stdbuf and setsid run the command after them', () => {
+  for (const command of ['timeout 5 git commit -m x', 'timeout -k 5 30 git commit -m x', 'nice git commit -m x', 'nice -n 10 git commit -m x', 'ionice -c 2 -n 7 git commit -m x', 'stdbuf -oL git commit -m x', 'setsid git commit -m x', 'nohup timeout 5 git commit -m x']) {
+    expect(reasonOf('lead', command), command).toMatch(/commit/)
+  }
+  expect(classifyGitCommand('timeout 10 bash <<EOF\ngit push origin main\nEOF').segments.map(segment => segment.verb)).toEqual(['push'])
+})
+
+test('the reason names the forge command, never its arguments', () => {
+  const reason = reasonOf('lead', 'gh pr create --title "SECRET-TITLE" --body "tok_abc123" --repo https://u:pw@h/x')
+  expect(reason).toContain('gh pr create')
+  for (const leak of ['SECRET-TITLE', 'tok_abc123', 'u:pw']) expect(reason).not.toContain(leak)
+  expect(reasonOf('lead', 'gh api -X POST repos/x/issues -f token=abc')).not.toContain('abc')
+})
+
+test('a commit\'s text is -m and --message only', () => {
+  const found = classifyGitCommand('git commit --author "A [T1]" --trailer "Refs: [T1]" -m "one" --mess=two -- a.ts')
+  expect(found.segments[0]?.text).toEqual(['one', 'two'])
+  expect(found.segments[0]?.message).toEqual(['A [T1]', 'Refs: [T1]', 'one', 'two'])
+})
+
+test('git takes option prefixes, so the scan reads a prefixed option\'s value as a value', () => {
+  const push = classifyGitCommand('git push --rep origin main').segments[0]
+  expect(push?.positional).toEqual(['main'])
+  expect(classifyGitCommand('git push --repo origin main').segments[0]?.positional).toEqual(['main'])
+})
+
+test('without a git role the lead is held to the protected branches by name too', () => {
+  const lead = (command: string) => gitAllowed('lead', command, all, { gitRole: false })
+  for (const command of ['git branch -D main', 'git update-ref refs/heads/release/1 abc', 'git tag -d release', 'git checkout -B develop x', 'git config set alias.p push']) {
+    expect(lead(command).allow, command).toBe(false)
+  }
+  for (const command of ['git branch -D feature', 'git branch -f feature main', 'git tag -d v1', 'git checkout -b feature/x']) {
+    expect(lead(command).allow, command).toBe(true)
+  }
+})
+
+test('the separator before each git command is reported', () => {
+  const befores = (command: string) => classifyGitCommand(command).segments.map(segment => segment.before)
+  expect(befores('git switch x && git push')).toEqual(['', '&&'])
+  expect(befores('git switch x || git push')).toEqual(['', '||'])
+  expect(befores('git switch x; git push')).toEqual(['', ';'])
+  expect(befores('git switch x\ngit push')).toEqual(['', '\n'])
+  expect(befores('git log | head -1 && git push')).toEqual(['', '&&'])
+})
+
+test('the push options of a push are its -o and --push-option values', () => {
+  const options = (command: string) => classifyGitCommand(command).segments[0]?.pushOptions
+  expect(options('git push -o a -o b origin x')).toEqual(['a', 'b'])
+  expect(options('git push --push-option=c -oD origin x')).toEqual(['c', 'D'])
+  expect(options('git push origin x')).toEqual([])
+  expect(options('git log -o x')).toEqual([])
 })
