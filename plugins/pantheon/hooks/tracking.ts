@@ -1,4 +1,4 @@
-import type { Native, Round, RoundStatus, SessionInfo, PanelView, PanelGroup, PanelTab } from './types'
+import type { Native, Round, RoundStatus, SessionInfo, PanelView, PanelGroup } from './types'
 import { ROLES } from './defaults'
 
 export const MAX_NATIVES = 24
@@ -131,15 +131,11 @@ export const normalizeSession = (raw: unknown): SessionInfo => {
 
 const GROUPS: PanelGroup[] = ['running', 'idle']
 
-// An old saved view may still carry `tab` (the Jobs tab is gone); only the fold choice is kept.
+// An old saved view may still carry `tab` (the tab row is gone); only the fold choice is kept.
 export const normalizeView = (raw: unknown): PanelView => {
   if (!isObject(raw)) return { ...DEFAULT_VIEW }
   const collapsed = Array.isArray(raw.collapsed) ? GROUPS.filter(g => (raw.collapsed as unknown[]).includes(g)) : []
-  return { ...(collapsed.length ? { collapsed } : {}), ...(raw.tab === 'flow' ? { tab: 'flow' as const } : {}) }
-}
-export const viewTabbed = (v: PanelView, tab: PanelTab): PanelView => {
-  const { tab: _drop, ...base } = v
-  return tab === 'flow' ? { ...base, tab } : base
+  return { ...(collapsed.length ? { collapsed } : {}) }
 }
 export const viewToggled = (v: PanelView, group: PanelGroup): PanelView => {
   const rest = (v.collapsed ?? []).filter(g => g !== group)

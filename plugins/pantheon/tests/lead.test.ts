@@ -72,6 +72,11 @@ describe('lead section', () => {
     }
   })
 
+  test('names the brainstorm and goal skills in the skills line', () => {
+    const section = buildLeadSection(DEFAULTS)
+    expect(section).toContain('Invoke the Pantheon skills (flow, brainstorm, goal, debug, finish)')
+  })
+
   test('code routes to developer and visual work to ux', () => {
     const section = buildLeadSection(DEFAULTS)
     const ux = section.slice(section.indexOf('@ux\n'), section.length)

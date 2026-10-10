@@ -140,6 +140,7 @@ test('normalizers default invalid fields and preserve valid session and view sta
   expect(normalizeView({ tab: 'bad' })).toEqual({})
   // An old saved view still carries the removed tab: it normalizes without it.
   expect(normalizeView({ tab: 'jobs' })).toEqual({})
+  expect(normalizeView({ tab: 'flow' })).toEqual({})
   expect(normalizeView({ tab: 'agents', collapsed: ['idle', 'bogus', 'finished', 'running'] })).toEqual({ collapsed: ['running', 'idle'] })
   expect(viewToggled({}, 'idle')).toEqual({ collapsed: ['idle'] })
   expect(viewToggled({ collapsed: ['idle'] }, 'idle')).toEqual({})

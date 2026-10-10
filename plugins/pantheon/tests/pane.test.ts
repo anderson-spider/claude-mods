@@ -138,13 +138,12 @@ describe('pane', () => {
     expect(await texts(ui)).not.toContain('idle')
   })
 
-  for (const surface of SURFACES) t(`the pane has the Agents and Flow tabs, no jobs text, footer keys left (${surface})`, async ($, on) => {
+  for (const surface of SURFACES) t(`the pane has no tab row, no jobs text, footer keys left (${surface})`, async ($, on) => {
     world(on)
     seed(on, { natives: [run(), native()] })
     await start($)
     const ui = await mountPane($, surface, { rows: 70 })
-    for (const key of ['tab-agents', 'tab-flow']) expect(await ui.find({ key })).toBeDefined()
-    for (const key of ['tab-jobs', 'pill-agents', 'pill-jobs', 'jobs-count', 'key-jobs']) expect(await ui.find({ key })).toBeUndefined()
+    for (const key of ['tab-agents', 'tab-flow', 'tab-jobs', 'pill-agents', 'pill-jobs', 'jobs-count', 'key-jobs']) expect(await ui.find({ key })).toBeUndefined()
     const all = await texts(ui)
     expect(all.filter(x => /jobs|resum|Copy/i.test(x) && x !== 'Read jobs.ts')).toEqual([])
     expect(all.some(x => /^Jobs/.test(x))).toBe(false)
@@ -1289,4 +1288,14 @@ describe('timelineSource', () => {
     expect(out).toContain('>b</text>')
     expect(out).toContain('>now</text>')
   })
+})
+
+test('a flow card that throws while drawing leaves one error line and the rest of the panel', () => {
+  const element = (props: unknown) => ({ props })
+  const el = { Box: element, Text: element, Button: element }
+  const broken = { kind: 'flow', id: 'f', archived: false, flow: { goal: 'g', phases: [{ id: 'a', depends_on: [] }], limits: {} }, state: null }
+  const roster = buildRoster({ natives: [], session: {}, config: DEFAULTS })
+  const tree = JSON.stringify(drawPanel(el as never, { surface: 'terminal', columns: 60, rows: 40, now: NOW, roster, session: {}, hasClient: false, flow: broken as never }))
+  expect(tree).toContain('pantheon: flow card failed to draw: ')
+  expect(tree).toContain('Session')
 })

@@ -59,11 +59,18 @@ async function started(f: ReturnType<typeof folder>, sid = 's1') {
   return flow.pathsOf(ROOT, id)
 }
 
-test('a session with no flow gets the start hint; a task-like first prompt gets the nudge', async () => {
+test('a session with no flow is never nudged toward one: no start hint, and a task-like first prompt gets no note', async () => {
   const f = folder()
-  expect(await flow.onSessionStart(f.io, ROOT, { session_id: 's1', source: 'startup' })).toContain('`action: "start"`')
-  expect(await flow.onUserPrompt(f.io, ROOT, { session_id: 's1', prompt: 'add a dark mode toggle' }, true)).toContain('[Pantheon flow] This request looks like a multi-step task')
+  expect(await flow.onSessionStart(f.io, ROOT, { session_id: 's1', source: 'startup' })).toBeUndefined()
+  expect(await flow.onUserPrompt(f.io, ROOT, { session_id: 's1', prompt: 'add a dark mode toggle, cover it with tests and document it in the README' }, true)).toBeUndefined()
   expect(await flow.onUserPrompt(f.io, ROOT, { session_id: 's1', prompt: 'what is this?' }, false)).toBeUndefined()
+})
+
+test('pendingAgentTasks counts only subagent and workflow tasks', () => {
+  expect(flow.pendingAgentTasks(undefined)).toBe(0)
+  expect(flow.pendingAgentTasks([])).toBe(0)
+  expect(flow.pendingAgentTasks([{ type: 'shell' }, { type: 'monitor' }])).toBe(0)
+  expect(flow.pendingAgentTasks([{ type: 'subagent' }, { type: 'shell' }, { type: 'workflow' }])).toBe(2)
 })
 
 test('start writes a draft bound to the session, and the Stop is held until the flow is laid out, then archived as abandoned', async () => {

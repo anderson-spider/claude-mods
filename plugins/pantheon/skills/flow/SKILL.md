@@ -9,13 +9,14 @@ The flow tracks a session against `.pantheon/flow/flows/<id>/flow.json`: a goal 
 
 ## Starting a flow
 
-- For a task that will take several steps and should be finished and verified (not a question or a one-line change), call `mcp__pantheon__flow` with `{ "action": "start", "name": "<short-kebab-name>", "goal": "<the person's request, verbatim>" }` before writing any code, then follow what it returns: write the phases to the flow.json it names and check them with `{ "action": "validate" }`.
+- Flows start when the person runs the `/pantheon:goal` skill or asks for one. Do not start a flow on your own unless the person asks.
+- The `goal` skill calls `mcp__pantheon__flow` with `{ "action": "start", "name": "<short-kebab-name>", "goal": "<the goal>" }` before any code is written. Then write the phases to the flow.json the instructions name, check them with `{ "action": "validate" }`, and claim and start the first phase.
 - The Stop is held until the flow is laid out (at most 3 times; then the draft is archived as abandoned).
 - A finished flow moves to `.pantheon/flow/done/<id>/` with a SUMMARY.md, and the next task starts a new one.
 
 ## Claims: who works on which phase
 
-- You claim the phase you take yourself: `{ "action": "claim", "phase": "<phase id>", "as": "lead" }`. Agents claim with the same action, where `as` is one of code-reader, docs-reader, developer, ux, architect, qa. Claim before you start the phase; re-claim when you move to another, so the Flow tab of `/pantheon` stays accurate.
+- You claim the phase you take yourself: `{ "action": "claim", "phase": "<phase id>", "as": "lead" }`. Agents claim with the same action, where `as` is one of code-reader, docs-reader, developer, ux, architect, qa. Claim before you start the phase; re-claim when you move to another, so the Flow card of `/pantheon` stays accurate.
 - When you delegate a phase, start the Agent description with `[<phase id>]` (for example `[docs] Update the README`): the flow claims that phase for the agent as its role, and the agent still claims with the tool when it moves to another phase. Pick a phase nobody claimed whose dependencies are done; phases with no dependency between them can run in parallel.
 - Claims are advisory: the Stop policy never reads them.
 - If a `[Pantheon flow]` note says other sessions are running flows in this folder and the request belongs to one of them, join it with `{ "action": "join", "flow": "<flow id>" }` before you start, then claim. Start your own flow for unrelated work. Never edit another flow's files.
@@ -33,7 +34,7 @@ The flow tracks a session against `.pantheon/flow/flows/<id>/flow.json`: a goal 
 
 ## Checking
 
-- `{ "action": "status" }` or `/pantheon flow` shows the phase table, claims, recent decisions and any pending human question. The `/pantheon` panel's Flow tab shows the same live.
+- `{ "action": "status" }` or `/pantheon flow` shows the phase table, claims, recent decisions and any pending human question. The `/pantheon` panel's Flow card shows the same live.
 
 ## What Jev sees
 

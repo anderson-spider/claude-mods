@@ -8,7 +8,7 @@ import type { AgentInfo } from './state'
 import { judge, judgmentProbs, NO_JUDGE } from './questions'
 import type { AskFn } from './questions'
 import { checksToRun, slugify, summaryMarkdown } from './project'
-import { phaseTable, planInstructions, promptNudge, render, sessionContext, startHint, transitionLine } from './texts'
+import { phaseTable, planInstructions, render, sessionContext, transitionLine } from './texts'
 import { ADVANCE, ALLOW_STOP, BLOCK, ROLES } from './types'
 import type { CheckResult, Flow, FlowState } from './types'
 
@@ -197,7 +197,7 @@ export async function joinFlow(io: Io, root: string, sid: string | undefined, id
   return `Joined flow ${id}. Claim the phase you take with action claim.`
 }
 
-/** `jevflow claim <phase> --as <role>`: the agent's advisory claim, shown in the status and the Flow tab. */
+/** `jevflow claim <phase> --as <role>`: the agent's advisory claim, shown in the status and the Flow card. */
 export async function claimFlow(io: Io, root: string, who: AgentInfo, phase: string, role: string): Promise<string> {
   const p = await boundFlow(io, root, who.sessionId)
   if (!p || p.archived) return 'This session is not working on an active flow. Start one with action start, or join one with action join.'
@@ -223,6 +223,11 @@ export function spawnClaim(subagentType: string | undefined, description: string
   const phase = /^\s*\[([^\]]*)\]/.exec(description ?? '')?.[1]
   if (phase === undefined || !PHASE_ID_RE.test(phase)) return undefined
   return { phase, role }
+}
+
+/** How many of the Stop's background tasks are agents: a dev server or a monitor is not work the flow waits for. */
+export function pendingAgentTasks(tasks: readonly { type?: string }[] | undefined): number {
+  return (tasks ?? []).filter(task => task.type === 'subagent' || task.type === 'workflow').length
 }
 
 /** The flow a viewer shows: the session's, else the newest active, else the newest archived (project.py default_flow). */
@@ -288,13 +293,13 @@ export async function joinHint(io: Io, root: string, sid: string | undefined, no
     `- \`${p.id}\`: ${title || '(being planned)'}, at phase \`${phase ?? '?'}\`${agents.length ? `, worked on by ${agents.slice(0, 4).join(', ')}` : ''}`)
   return `${PREFIX} Other agents are running flows in this folder:\n${lines.join('\n')}\n`
     + 'If the request continues or helps with one of them, join it before working: mcp__pantheon__flow with action join and the flow id, '
-    + 'then action claim with the phase you take and your role, so the Flow tab shows you next to the other agents. Start a new flow only for unrelated work.'
+    + 'then action claim with the phase you take and your role, so the Flow card shows you next to the other agents. Start a new flow only for unrelated work.'
 }
 
 export async function onSessionStart(io: Io, root: string, payload: { session_id?: string; source?: string }): Promise<string | undefined> {
   const now = await io.now()
   const p = await boundFlow(io, root, payload.session_id)
-  if (!p || p.archived) return (await joinHint(io, root, payload.session_id, now)) ?? startHint()
+  if (!p || p.archived) return joinHint(io, root, payload.session_id, now)
   if (await promote(io, p) !== undefined) return planInstructions(rel(p, p.flow), p.id, await draftGoal(io, p))
   const flow = await loadFlow(io, p)
   let state = await loadState(io, p, flow, now)
@@ -305,14 +310,12 @@ export async function onSessionStart(io: Io, root: string, payload: { session_id
   return sessionContext(flow, state, source, rel(p, p.needsHuman))
 }
 
-/** UserPromptSubmit: the nudge for a session with no flow, the refill of the block budget and the draft reminder for one with a flow. */
+/** UserPromptSubmit: the join hint on the first prompt of a session with no flow, the refill of the block budget and the draft reminder for one with a flow. */
 export async function onUserPrompt(io: Io, root: string, payload: { session_id?: string; prompt?: string }, first: boolean): Promise<string | undefined> {
   const now = await io.now()
   const p = await boundFlow(io, root, payload.session_id)
   if (!p || p.archived) {
-    const join = first ? await joinHint(io, root, payload.session_id, now) : undefined
-    const text = [join, promptNudge(String(payload.prompt ?? ''), first)].filter(Boolean).join('\n\n')
-    return text || undefined
+    return first ? joinHint(io, root, payload.session_id, now) : undefined
   }
   const draftError = await promote(io, p)
   if (draftError !== undefined) {

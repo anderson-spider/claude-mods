@@ -10,7 +10,6 @@ import * as jevflow from './jevflow/controller'
 import { ROLES } from './jevflow/types'
 import { createBreaker, createJev } from './jevflow/jev'
 import type { Breaker, JevIo } from './jevflow/jev'
-import { drawFlowTab } from './jevflow/view'
 import type { FlowView } from './jevflow/view'
 import { buildCouncilBlock, isCouncilOrigin, matchesCouncilTrigger } from './prompts/council'
 import { buildLeadSection } from './prompts/lead'
@@ -29,7 +28,7 @@ import {
 import type { StripHost } from './strip/state'
 import {
   DEFAULT_SESSION, DEFAULT_VIEW, completed, describeTool, markNativesLost,
-  normalizeNatives, normalizeSession, normalizeView, sessionCompleted, sessionMeasured, viewTabbed, viewToggled,
+  normalizeNatives, normalizeSession, normalizeView, sessionCompleted, sessionMeasured, viewToggled,
   roundOpened, sessionStarted, sessionStepped, spawned, stepAccounted, toolNoted,
 } from './tracking'
 import type { ConfigResult, PantheonConfig } from './types'
@@ -192,11 +191,11 @@ function flowHost($: Dollar, jev: JevAccess): jevflow.Io {
   return flowIo($, jev.key ? createJev(jevIo($), jev.key, { breaker: jev.breaker }) : undefined)
 }
 
-/** What the Flow tab draws: this session's flow, else the newest in this folder (project.py default_flow). */
+/** What the panel's flow card draws: the flow this session is bound to, none otherwise. */
 async function flowViewOf($: Dollar, jev: JevAccess, root: string): Promise<FlowView> {
   try {
     const io = flowHost($, jev)
-    const p = await jevflow.viewedFlow(io, root, String(await $.session.id()))
+    const p = await jevflow.boundFlow(io, root, await $.session.id().then(id => String(id), () => undefined))
     if (!p) return { kind: 'none' }
     if (await jevflow.isDraft(io, p)) {
       const draft = await io.read(p.draft).catch(() => undefined)
@@ -282,8 +281,8 @@ async function stripAgents($: Dollar, now: number) {
 }
 
 const FLOW_TOOL_DESCRIPTION = 'The Pantheon flow (JevFlow): tracks a multi-step task against phases with checks, and holds a premature stop. '
-  + 'start lays out a new flow for a task that takes several steps and should be finished and verified (then write the phases to the '
-  + 'flow.json it names and call validate); join binds this session to a flow another session runs here; claim marks the phase you '
+  + 'start starts a flow when the person runs /pantheon:goal or asks for one: it lays out a new flow for a task that takes several '
+  + 'steps and should be finished and verified (then write the phases to the flow.json it names and call validate); join binds this session to a flow another session runs here; claim marks the phase you '
   + 'take, as your Pantheon role (re-claim when you move); status shows the phases, claims and recent decisions.'
 
 export const register: Register = (on, options) => {
@@ -334,7 +333,7 @@ export const register: Register = (on, options) => {
   const jevKey = typeof options.judgeKey === 'string' ? options.judgeKey.trim() : ''
   const jev: JevAccess = { key: jevKey, breaker: jevBreaker }
   const flowRoot = async (io: Io): Promise<string> => gateRoot ?? (await workspace(io)).root
-  // Sessions that sent a prompt since this module loaded: the first prompt gets the lower nudge bar (auto.py).
+  // Sessions that sent a prompt since this module loaded: the first prompt gets the join hint (JevFlow's first prompt).
   const prompted = new Set<string>()
   // Sessions already told, once each, that Jev is off (no judgeKey) when a Stop needed it.
   const jevOffToasted = new Set<string>()
@@ -757,9 +756,10 @@ export const register: Register = (on, options) => {
   }).catch((_$, e, next) => next.called || options.gate !== true || e.agentId
     ? next(e) : { deny: 'Pantheon edit gate could not obtain a decision. Edit denied.' })
 
-  // The flow (JevFlow hooks.py): SessionStart gives the lead the flow's context (or the start hint), a prompt refills the
-  // block budget or nudges a task toward a flow, the Stop runs the checks, Jev and the policy, and StopFailure keeps the
-  // API error. Each fails open: an error adds nothing and never holds the session.
+  // The flow (JevFlow hooks.py): SessionStart gives the lead the flow's context (or the join hint), a prompt refills the
+  // block budget, the Stop runs the checks, Jev and the policy, and StopFailure keeps the API error. A flow starts only
+  // with the /pantheon:goal skill or when the person asks for one, never from a prompt. Each fails open: an error adds
+  // nothing and never holds the session.
   on('classic.SessionStart', async ($, e, next) => {
     const below = await next(e)
     try {
@@ -788,6 +788,8 @@ export const register: Register = (on, options) => {
   on('classic.Stop', async ($, e, next) => {
     const below = await next(e)
     if (e.agent_id || below.block || below.preventContinuation) return below
+    // Background agents still work: the flow does not judge the phase until they finish (a shell or monitor is not waited for).
+    if (jevflow.pendingAgentTasks(e.background_tasks) > 0) return below
     try {
       const root = await flowRoot(hostIo($))
       // A check is a shell command the flow runs outside the permission system: it runs only when Claude Code's rules
@@ -919,6 +921,19 @@ export const register: Register = (on, options) => {
   // Last reading of the host clock, kept so a failed read can still draw static durations.
   let lastNow: number | undefined
   on('ui.render', { component: 'Pane', requestId: PANE_ID }, async ($, e) => {
+    // A draw failure never blanks the pane: it draws one error line instead.
+    try {
+      return (await draw()) as never
+    } catch (error) {
+      const message = `pantheon: panel failed to draw: ${error instanceof Error ? error.message : String(error)}`
+      try {
+        const { Text } = $.ui.resolve(e)
+        return <Text key="pane-error" color="error" wrap="wrap">{message}</Text> as never
+      } catch {
+        return { type: 'Text', props: { color: 'error' }, children: [message] } as never
+      }
+    }
+    async function draw() {
     const io = hostIo($)
     const current = await refreshConfig(io, (await workspace(io)).root)
     const els = $.ui.resolve(e)
@@ -942,21 +957,9 @@ export const register: Register = (on, options) => {
     const now = read1 ?? lastNow ?? Math.max(...stamps)
     const columns = e.props.bodyColumns
     const bodyRows = e.props.scroll?.bodyRows ?? e.viewport?.rows ?? 24
-    // The tab row needs a docked pane with room for it; the inline mini view and a tiny body draw the agents alone.
-    const tabbed = e.props.placement !== 'inline' && columns >= 20 && bodyRows >= 4
-    const tab = tabbed ? normalizeView(view).tab ?? 'agents' : 'agents'
-    const choose = (next: 'agents' | 'flow') => { viewQueue.push(() => update($, viewAtom, cur => viewTabbed(normalizeView(cur), next))) }
-    // The tabs: the agents view, and the Flow tab with JevFlow's status of this session's flow.
-    const tabs = (
-      <Box key="tabs" gap={1}>
-        <Button key="tab-agents" plain label={tab === 'agents' ? '[Agents]' : 'Agents'} onPress={() => choose('agents')} />
-        <Button key="tab-flow" plain label={tab === 'flow' ? '[Flow]' : 'Flow'} onPress={() => choose('flow')} />
-      </Box>
-    )
-    if (tab === 'flow') {
-      return <Box key="pane" flexDirection="column" width={columns}>{tabs}{drawFlowTab({ Box, Text }, await flowViewOf($, jev, await flowRoot(hostIo($))), columns, Boolean(jev.key)) as never}</Box> as never
-    }
-    const agents = drawPanel({
+    // This session's own flow only (draft, active or just archived); the panel draws nothing for none.
+    const flow = await flowViewOf($, jev, await flowRoot(io))
+    return drawPanel({
       Box, Text, Button,
       ...('Select' in els ? { Select: els.Select } : {}),
       ...('Svg' in els ? { Svg: els.Svg } : {}),
@@ -973,8 +976,10 @@ export const register: Register = (on, options) => {
       placement: e.props.placement,
       columns: e.props.bodyColumns,
       // The pane's usable height, not the terminal's.
-      rows: tabbed ? bodyRows - 1 : bodyRows,
+      rows: bodyRows,
       now,
+      flow,
+      jevOn: Boolean(jev.key),
       roster: buildRoster({ natives: tracked, session: info, config: current.config }),
       session: info,
       collapsed: normalizeView(view).collapsed ?? [],
@@ -983,7 +988,7 @@ export const register: Register = (on, options) => {
       onToggle: group => { viewQueue.push(() => update($, viewAtom, cur => viewToggled(normalizeView(cur), group))) },
       onClose: () => { void $.ui.close({ id: PANE_ID }) },
     })
-    return tabbed ? <Box key="pane" flexDirection="column" width={columns}>{tabs}{agents as never}</Box> as never : agents as never
+    }
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {

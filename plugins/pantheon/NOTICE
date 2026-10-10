@@ -39,7 +39,7 @@ not ported. Tracking hooks still pass every event on unchanged.
 Flow
 
 The flow (hooks/jevflow/: flow.ts, state.ts, policy.ts, questions.ts, texts.ts,
-project.ts, controller.ts, and the Flow tab in view.tsx) and skills/flow/SKILL.md
+project.ts, controller.ts, and the Flow card in pane.tsx) and skills/flow/SKILL.md
 are ported from JevFlow 0.2.0, https://github.com/Parth1811/JevFlow
 (commit dab6872, jevflow/flow.py, state.py, agents.py, policy.py, judge.py,
 hooks.py, auto.py, project.py and status.py), by Parth Patil, licensed under the
@@ -49,7 +49,7 @@ Changes: rewritten in TypeScript as Claude Code function hooks. The jevflow CLI
 is the mcp__pantheon__flow tool, and a claim's --as is one of Pantheon's roles.
 The mode is always enforce. Not ported: gates, notify, dynamic phases and
 sub-steps, the supervisor, auto mode, the side-effect ledger, the statusline
-and the web viewer, whose place the panel's Flow tab takes.
+and the web viewer, whose place the panel's Flow card takes.
 
 MIT License
 

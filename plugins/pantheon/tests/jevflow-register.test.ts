@@ -79,6 +79,7 @@ function flowWorld(on: On, store: Record<string, unknown> = {}) {
   on('ui.invalidate', async () => ({ value: undefined }))
   on('classic.SessionStart', async () => ({}))
   on('classic.Stop', async () => ({}))
+  on('classic.UserPromptSubmit', async () => ({}))
   return { files, exits, toasts, ran, rules, store: kv }
 }
 
@@ -127,11 +128,28 @@ test('the flow tool starts, validates and claims, the Stop holds and advances on
   expect(w.files.has(`${ROOT}/.pantheon/flow/done/${id}/SUMMARY.md`)).toBe(true)
 })
 
-test('a session with no flow is told it may start one', async ($, on) => {
+test('a session with no flow is never told to start one', async ($, on) => {
   flowWorld(on)
   await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
   const out = await $.classic.SessionStart({ session_id: SID, source: 'startup' } as never) as { additionalContext?: string[] }
-  expect(out.additionalContext?.join('\n')).toContain('`mcp__pantheon__flow` tool with `action: "start"`')
+  expect(out.additionalContext).toBeUndefined()
+  const prompt = await $.classic.UserPromptSubmit({ session_id: SID, prompt: 'Add a dark mode toggle, cover it with tests and document it in the README' } as never) as { additionalContext?: string[] }
+  expect(prompt.additionalContext).toBeUndefined()
+})
+
+test('the Stop is not evaluated while a subagent runs in the background; a shell task does not hold it back', async ($, on) => {
+  const w = flowWorld(on)
+  w.exits['test -f a.txt'] = 1
+  await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
+  await layOut($, w)
+  const stopWith = (type: string) => $.classic.Stop({
+    session_id: SID, stop_hook_active: false, last_assistant_message: 'Done.',
+    background_tasks: [{ id: 't1', type, status: 'running', description: 'x', command: 'x' }], session_crons: [],
+  } as never) as Promise<{ block?: string }>
+  const ranBefore = w.ran.length
+  expect((await stopWith('subagent')).block).toBeUndefined()
+  expect(w.ran.length).toBe(ranBefore)
+  expect((await stopWith('shell')).block).toContain('test -f a.txt')
 })
 
 test('with no judgeKey, a Stop that needs Jev says so in one toast per session', async ($, on) => {

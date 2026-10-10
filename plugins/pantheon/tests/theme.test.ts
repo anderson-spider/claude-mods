@@ -49,7 +49,7 @@ test('strip makes one block per job with state colors', () => {
 })
 
 test('SECTION_COLOR has the mockup sections', () => {
-  expect(Object.keys(SECTION_COLOR).sort()).toEqual(['idle', 'log', 'planned', 'running', 'session', 'timeline'])
+  expect(Object.keys(SECTION_COLOR).sort()).toEqual(['flow', 'idle', 'log', 'planned', 'running', 'session', 'timeline'])
 })
 
 test('boxLines gives every line exactly width cells', () => {

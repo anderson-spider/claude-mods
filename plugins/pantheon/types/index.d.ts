@@ -15,8 +15,7 @@ export type SessionInfo = {
   costUsd?: number
 }
 export type PanelGroup = 'running' | 'idle'
-export type PanelTab = 'agents' | 'flow'
-export type PanelView = { collapsed?: PanelGroup[]; tab?: PanelTab }
+export type PanelView = { collapsed?: PanelGroup[] }
 declare module 'claude-code' {
   /**
    * The input of the flow tool registered in session.start, in the shape the engine lays for connected MCP tools, so the

@@ -24,6 +24,7 @@ export const SECTION_COLOR = {
   planned: '#D9A441',
   timeline: '#A56BD8',
   log: '#7B8190',
+  flow: '#E08A5B',
 }
 
 export const OK = '#4CC2A0'

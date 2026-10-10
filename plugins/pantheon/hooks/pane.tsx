@@ -7,6 +7,8 @@ import type { Instance, Roster, RoundView, Slot, SlotName } from './roster'
 import type { PingResult } from './ping'
 import { BAD, BLOCK, OK, ROLE_COLOR, SECTION_COLOR, cellWidth, gauge, modelName, strip, truncCells } from './theme'
 import type { StripItem } from './theme'
+import { claimsByPhase, layers } from './jevflow/view'
+import type { FlowView } from './jevflow/view'
 import type { ConfigResult, PanelGroup, SessionInfo } from './types'
 
 export const PANE_ID = 'pantheon'
@@ -82,6 +84,10 @@ export type PanelData = {
   session: SessionInfo
   /** Agent groups the person folded; absent means none. */
   collapsed?: PanelGroup[]
+  /** This session's flow (draft, active or just archived); absent or `none` draws no flow card. */
+  flow?: FlowView
+  /** The judgeKey option is set; without it the flow card says the Stop decides on the checks alone. */
+  jevOn?: boolean
   hasClient: boolean
   /** The host clock failed: draw static durations from `now` and say so, with no Client. */
   clockLost?: boolean
@@ -850,9 +856,73 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     ], undefined, W)
   }
 
+  // ------- flow: JevFlow's status of this session's flow as one card, between the session and the agents
+  const flowBlocks = (level: number): Block[] => {
+    const view = data.flow
+    if (!view || view.kind === 'none') return []
+    const color = SECTION_COLOR.flow
+    const row = (key: string, segs: Seg[]): RowBlock => ({ node: plain(key, segs, IW, isDesk ? rowH : undefined), h: rowH })
+    const jevOff = data.jevOn === false
+    const jevRow = row('f-jev', [{ text: 'Jev off: set the judgeKey option. The Stop decides on the checks alone.', color: SECTION_COLOR.planned }])
+    if (view.kind === 'draft') {
+      return [frame('flow', color, { label: 'Flow' }, [
+        row('f-draft', [{ text: 'Draft: phases not laid out yet', color: SECTION_COLOR.planned }]),
+        ...(level < 4 ? [row('f-goal', [{ text: squash(view.goal), dim: true }])] : []),
+        ...(jevOff && level < 2 ? [jevRow] : []),
+      ])]
+    }
+    if (view.kind === 'error') {
+      return [frame('flow', color, { label: 'Flow' }, [row('f-err', [{ text: squash(view.error), color: BAD }])])]
+    }
+    const { flow, state } = view
+    const total = flow.phases.length
+    const done = flow.phases.filter(p => state.phase_status[p.id] === 'done').length
+    const human = view.needsHuman ?? state.needs_human
+    const humanRow = human ? [row('f-human', [{ text: `NEEDS_HUMAN: ${squash(String(human))}`, color: BAD }])] : []
+    const title: Title = { label: view.archived ? 'Flow · archived' : 'Flow', count: total }
+    if (level >= 4) {
+      const now1: Seg[] = state.done
+        ? [{ text: `done ${done}/${total}`, color: OK }]
+        : [{ text: state.current_phase, bold: true }, { text: `  ${done}/${total} done`, dim: true }]
+      return [frame('flow', color, title, [row('f-sum', [...now1, ...(jevOff ? [{ text: '  Jev off', color: SECTION_COLOR.planned }] : [])]), ...humanRow])]
+    }
+    const depth = layers(flow)
+    const who = claimsByPhase(state)
+    // Tight levels show a window of the phases around the current one.
+    const cap = level >= 2 ? 5 : total
+    const at = Math.max(0, flow.phases.findIndex(p => p.id === state.current_phase))
+    const from = Math.min(Math.max(0, at - 1), Math.max(0, total - cap))
+    const shown = flow.phases.slice(from, from + cap)
+    const idW = Math.min(18, Math.max(5, ...shown.map(p => p.id.length + 2 * (depth[p.id] ?? 0))))
+    const STATUS_W = 8
+    const rows: RowBlock[] = []
+    if (level < 2) rows.push(row('f-goal', [{ text: squash(flow.goal), dim: true }]))
+    if (jevOff && level < 2) rows.push(jevRow)
+    for (const p of shown) {
+      const status = state.phase_status[p.id] ?? 'pending'
+      const isNow = p.id === state.current_phase && !state.done
+      const claims = (who[p.id] ?? []).join(', ')
+      rows.push({ node: cols(`f-${p.id}`, [
+        { w: 2, segs: [{ text: isNow ? '▸' : ' ', color: SECTION_COLOR.planned }] },
+        { w: idW + 1, segs: [{ text: `${'  '.repeat(depth[p.id] ?? 0)}${p.id}`, bold: isNow, dim: status === 'pending' }] },
+        { w: STATUS_W, segs: [{ text: status, color: status === 'done' ? OK : status === 'active' ? SECTION_COLOR.planned : undefined, dim: status === 'pending' }] },
+        { w: Math.max(0, IW - 2 - idW - 1 - STATUS_W), segs: [{ text: claims, dim: true }] },
+      ], IW, isDesk ? rowH : undefined), h: rowH })
+    }
+    if (shown.length < total) rows.push(row('f-more', [{ text: `${total - shown.length} more phases`, dim: true }]))
+    const lim = flow.limits
+    rows.push(row('f-budget', [{ text: `blocks ${state.blocks_this_session}/${lim.max_blocks_per_session} · restarts ${state.restarts}/${lim.max_restarts} · jev ${state.jev_calls}/${lim.max_jev_calls}`, dim: true }]))
+    const decisions = state.history.filter(x => x.event === 'stop').slice(-(level === 0 ? 3 : level === 1 ? 1 : 0))
+    for (const [k, d] of decisions.entries()) {
+      rows.push(row(`f-d${k}`, [{ text: squash(`${d.decision}/${d.condition} [${d.phase ?? '?'}] ${d.reason ?? ''}`), dim: true }]))
+    }
+    return [frame('flow', color, title, [...rows, ...humanRow])]
+  }
+
   // The panel is built at the fullest level that fits `rows`; each step down drops something optional:
-  // 0 everything, 1 the session log, 2 the timeline, 3 the Idle rows (the card keeps its heading), 4 the
-  // session card and the running rows to one line each, 5 the optional lines. Whatever still does not fit is cut from the bottom.
+  // 0 everything, 1 the session log (the flow card keeps one decision), 2 the timeline (the flow card a window of five
+  // phases, no goal or decisions), 3 the Idle rows (the card keeps its heading), 4 the session card, the flow card and
+  // the running rows to one line each, 5 the optional lines. Whatever still does not fit is cut from the bottom.
   const buildAgents = (level: number): Block[] => {
     const rows = agentRows()
     const mode = (g: Group): 'full' | 'compact' | 'head' =>
@@ -860,6 +930,10 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     const blocks: Block[] = [{ node: header(), h: headerH }]
     if (data.clockLost) blocks.push({ node: clockWarning(), h: 1 })
     blocks.push(...sessionBlocks(level >= 4))
+    // A flow card that cannot draw leaves one error line; the rest of the panel still draws.
+    try { blocks.push(...flowBlocks(level)) } catch (error) {
+      blocks.push({ node: line('flow-err', [{ text: `pantheon: flow card failed to draw: ${error instanceof Error ? error.message : String(error)}`, color: BAD }], undefined, W), h: 1 })
+    }
     for (const g of ['running', 'idle'] as const) blocks.push(...groupBlock(g, rows[g], mode(g)))
     if (level < 5 && roster.others.length) blocks.push({ node: othersLine(), h: 1 })
     if (level <= 1 && isDesk && el.Svg) {
