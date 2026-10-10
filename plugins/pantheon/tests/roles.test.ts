@@ -23,13 +23,8 @@ describe('native agent prompts', () => {
 })
 
 describe('native agent specs', () => {
-  test('git inherits file editing tools but cannot delegate', () => {
-    const spec = nativeAgentSpecs(DEFAULTS, prompts).find(spec => spec.name === 'git')
-    expect(spec?.disallowedTools).toEqual(NO_DELEGATION)
-    expect(spec).not.toHaveProperty('tools')
-    expect(spec?.description).toContain('squash, PR/MR, checkout, switch, worktree, stash')
-    expect(spec?.prompt).toBe('<git>')
-    expect(spec?.model).toBe('haiku')
+  test('there is no git spec', () => {
+    expect(nativeAgentSpecs(DEFAULTS, prompts).find(spec => spec.name === 'git')).toBeUndefined()
   })
 
   test('every role and seat is a native spec', () => {
@@ -56,7 +51,7 @@ describe('native agent specs', () => {
   test('default models reach the specs', () => {
     const models = Object.fromEntries(nativeAgentSpecs(DEFAULTS, prompts).map(spec => [spec.name, spec.model]))
     expect(models).toEqual({
-      'code-reader': 'haiku', 'docs-reader': 'haiku', developer: 'sonnet', architect: 'opus', qa: 'sonnet', ux: 'sonnet', git: 'haiku',
+      'code-reader': 'haiku', 'docs-reader': 'haiku', developer: 'sonnet', architect: 'opus', qa: 'sonnet', ux: 'sonnet',
       'councillor-alpha': 'opus', 'councillor-beta': 'sonnet',
     })
   })
@@ -101,7 +96,7 @@ describe('native agent specs', () => {
 
   test('disabled natives and council do not produce registration specs', () => {
     expect(nativeAgentSpecs({ ...DEFAULTS, disabledAgents: ['architect', 'council'] }, prompts)
-      .map(spec => spec.name)).toEqual(['code-reader', 'docs-reader', 'developer', 'qa', 'ux', 'git'])
+      .map(spec => spec.name)).toEqual(['code-reader', 'docs-reader', 'developer', 'qa', 'ux'])
     expect(nativeAgentSpecs({ ...DEFAULTS, disabledAgents: ['councillor:beta'] }, prompts)
       .map(spec => spec.name)).toEqual([...ROLES, 'councillor-alpha'])
     expect(nativeAgentSpecs({ ...DEFAULTS, disabledAgents: ['councillor-alpha'] }, prompts)
@@ -136,12 +131,12 @@ describe('role prompts', () => {
       'State what you ran and what you did not run.',
       'Do not do external research.',
       'Do not spawn subagents or delegate work; return coordination needs to the lead.',
-      'Never modify protected branches or rewrite git history; other git operations stay with the git role.',
+      'Never modify protected branches or rewrite git history; the lead pushes and runs the other git operations.',
     ]) expect(prompt).toContain(text)
   })
 
-  test('ux, developer and git return coordination to the lead', () => {
-    for (const role of ['ux', 'developer', 'git'] as const) {
+  test('ux and developer return coordination to the lead', () => {
+    for (const role of ['ux', 'developer'] as const) {
       expect(rolePrompt(role)).toContain('Do not spawn subagents or delegate work; return coordination needs to the lead.')
     }
   })
@@ -184,13 +179,9 @@ describe('role prompts', () => {
   test('developer commits only its own paths and leaves push and other git work out', () => {
     const prompt = rolePrompt('developer')
     expect(prompt).toContain('git add -- <paths>')
-    expect(prompt).toContain('the lead pushes and the git role handles the rest')
+    expect(prompt).toContain('Never push, rebase, reset, merge, switch branches, stash or rewrite history: the lead pushes.')
+    expect(prompt).not.toMatch(/git role/i)
     expect(prompt).not.toContain('.git is read-only')
-  })
-
-  test('git covers checkout, switch, worktree and stash', () => {
-    const prompt = rolePrompt('git')
-    for (const text of ['checkout', 'switch', 'worktree', 'stash']) expect(prompt).toContain(text)
   })
 
   test('read-only instructions use the native tools', () => {
@@ -204,7 +195,7 @@ describe('role prompts', () => {
   })
 
   test('write roles describe file operations', () => {
-    for (const key of ['developer', 'ux', 'git'] as const) {
+    for (const key of ['developer', 'ux'] as const) {
       expect(rolePrompt(key)).toContain('**File operations**')
       expect(rolePrompt(key)).toContain('Read/Grep/Glob/Edit')
       expect(rolePrompt(key)).not.toContain('apply_patch')
