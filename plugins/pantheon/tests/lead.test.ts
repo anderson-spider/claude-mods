@@ -129,7 +129,7 @@ describe('role prompts', () => {
     for (const text of [
       'Verify, never fix', 'Never fix code', 'Never run side effects', 'deploy, publish, push', 'migration against shared data',
       'Write only inside the session scratchpad', 'herdr pane', 'error paths', 'Partial coverage is a failure',
-      'C<n>: pass|fail — <evidence', 'QA: pass|fail', 'Do not spawn subagents',
+      'C<n>: pass|fail — <evidence', 'QA: pass|fail',
     ]) expect(prompt).toContain(text)
     expect(prompt).not.toContain('Do not commit or push')
   })

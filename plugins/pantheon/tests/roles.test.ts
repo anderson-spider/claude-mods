@@ -3,7 +3,7 @@ import { DEFAULTS, resolved } from './fixtures/config'
 import { activeSeats, nativeAgentSpecs, seatDisabled } from '../hooks/roles'
 import { rolePrompt } from '../hooks/prompts/roles'
 import { ROLES } from '../hooks/defaults'
-import type { PantheonConfig, RolePrompts } from '../hooks/types'
+import type { PantheonConfig, PromptKey, RolePrompts } from '../hooks/types'
 
 const prompts: RolePrompts = key => `<${key}>`
 const NO_DELEGATION = ['Agent']
@@ -131,7 +131,7 @@ describe('role prompts', () => {
       'State what you ran and what you did not run.',
       'Do not do external research.',
       'Do not spawn subagents or delegate work; return coordination needs to the lead.',
-      'Never modify protected branches or rewrite git history; the lead pushes and runs the other git operations.',
+      'Never modify protected branches.',
     ]) expect(prompt).toContain(text)
   })
 
@@ -214,4 +214,17 @@ describe('role prompts', () => {
       expect(rolePrompt(key).endsWith('If the task defines a report format, it replaces the format above.')).toBe(true)
     }
   })
+})
+
+// Rendered size of each role prompt, in characters. The ceilings are the sizes the slimming reached (code-reader
+// and councillor keep their earlier size), so a new rule has to replace text rather than add to it.
+describe('role prompt budget', () => {
+  const ceilings: Record<PromptKey, number> = {
+    developer: 2100, ux: 3300, qa: 1900, 'docs-reader': 1300, architect: 1450, 'code-reader': 807, councillor: 1071,
+  }
+  for (const [key, max] of Object.entries(ceilings) as [PromptKey, number][]) {
+    test(`${key} stays within ${max} characters`, () => {
+      expect(rolePrompt(key).length).toBeLessThanOrEqual(max)
+    })
+  }
 })
