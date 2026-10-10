@@ -17,9 +17,11 @@ const FLOWS = 'flows'
 const DONE = 'done'
 const SESSIONS = 'sessions'
 const PREFIX = '[Pantheon flow]'
-/** Shown while Jev has no key (io.ask undefined): the status line and the note at start. */
-const JEV_OFF_STATUS = "Jev: off (the plugin's judgeKey option is not set); every Stop decides on the checks alone."
-const JEV_OFF_NOTE = "Note: Jev is off (the plugin's judgeKey option is not set), so every Stop decides on the checks alone; tell the person."
+/** Why Jev is off when the host gives no reason (io.ask undefined). */
+export const JEV_NO_KEY = 'neither the judgeKey option nor OPENROUTER_API_KEY is set'
+/** Shown while Jev has no key: the status line and the note at start. */
+const jevOffStatus = (io: Io) => `Jev: off (${io.jevOff ?? JEV_NO_KEY}); every Stop decides on the checks alone.`
+const jevOffNote = (io: Io) => `Note: Jev is off (${io.jevOff ?? JEV_NO_KEY}), so every Stop decides on the checks alone; tell the person.`
 
 const REASON_JOURNAL_CHARS = 600
 const ERROR_DETAIL_CHARS = 300
@@ -52,8 +54,12 @@ export type Io = {
   move: (from: string, to: string) => Promise<void>
   run: Run
   now: () => Promise<number>
-  /** Jev, when the judgeKey option is set; without it every Stop is checks-only (degraded). */
+  /** Jev, when a key is set (the judgeKey option or OPENROUTER_API_KEY); without it every Stop is checks-only (degraded). */
   ask?: AskFn
+  /** Where Jev's key came from, for the status (never the key). */
+  jevSource?: string
+  /** Why Jev is off, for the status and the note at start; JEV_NO_KEY when absent. */
+  jevOff?: string
   /**
    * Decides whether a check command may run, asked once per distinct command before the check time budget starts.
    * Without it every check runs.
@@ -178,7 +184,7 @@ export async function startFlow(io: Io, root: string, sid: string | undefined, g
   await io.write(p.draft, `${JSON.stringify({ goal: goal.trim(), created_at: now, session_id: sid ?? null, plan_blocks: 0 }, null, 1)}\n`)
   await bindSession(io, root, sid, id)
   const text = planInstructions(rel(p, p.flow), id, goal.trim())
-  return io.ask ? text : `${text}\n\n${JEV_OFF_NOTE}`
+  return io.ask ? text : `${text}\n\n${jevOffNote(io)}`
 }
 
 export async function validateFlow(io: Io, root: string, sid: string | undefined): Promise<string> {
@@ -259,7 +265,7 @@ export async function listFlows(io: Io, root: string): Promise<{ p: Paths; mtime
 export async function statusText(io: Io, root: string, sid: string | undefined): Promise<string> {
   const p = await viewedFlow(io, root, sid)
   if (!p) return 'No flow in this folder. A multi-step task starts one with mcp__pantheon__flow start.'
-  const off = io.ask ? [] : [JEV_OFF_STATUS]
+  const off = io.ask ? (io.jevSource ? [`Jev: on (${io.jevSource}).`] : []) : [jevOffStatus(io)]
   if (!p.archived && await promote(io, p) !== undefined) return [`Flow ${p.id}: draft, phases not laid out yet.`, ...off].join('\n')
   const flow = await loadFlow(io, p)
   const state = await loadState(io, p, flow, await io.now())

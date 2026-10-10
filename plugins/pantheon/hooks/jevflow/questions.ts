@@ -347,7 +347,7 @@ const reasonOf = (error: unknown): string => {
 /** What `judge` resolves to: the judgment, or null when Jev gave none (the Stop degrades to checks only, quoting `error`). */
 export type JudgeResult = { judgment: JevJudgment | null; calls: number; error: string | null }
 
-export const NO_JUDGE = "no judge: Jev key missing (set the plugin's judgeKey option)"
+export const NO_JUDGE = 'no judge: Jev key missing (set the judgeKey option or OPENROUTER_API_KEY)'
 
 /**
  * The judgment (judge.py `judge`): the main call, then, when a phase won, the verify call on that phase

@@ -86,8 +86,10 @@ export type PanelData = {
   collapsed?: PanelGroup[]
   /** This session's flow (draft, active or just archived); absent or `none` draws no flow card. */
   flow?: FlowView
-  /** The judgeKey option is set; without it the flow card says the Stop decides on the checks alone. */
+  /** Jev has a key; without it the flow card says the Stop decides on the checks alone. */
   jevOn?: boolean
+  /** The card's Jev-off row when the host knows better than "no key" (a repository's OPENROUTER_API_KEY is ignored). */
+  jevOff?: string
   hasClient: boolean
   /** The host clock failed: draw static durations from `now` and say so, with no Client. */
   clockLost?: boolean
@@ -274,6 +276,9 @@ export function timelineSource(slots: Slot[], session: SessionInfo, now: number,
   const source = `<svg xmlns="http://www.w3.org/2000/svg" width="${SW}" height="${height}" viewBox="0 0 ${SW} ${height}" font-family="Avenir Next,Trebuchet MS,sans-serif">${body}</svg>`
   return { source, width: SW, height }
 }
+
+/** The flow card's Jev-off row with no key; short enough not to be cut in a 68-cell card. */
+export const JEV_OFF_ROW = 'Jev off (no judgeKey or OPENROUTER_API_KEY): checks only.'
 
 export function drawPanel(el: PanelElements, data: PanelData): unknown {
   const { Box, Button } = el
@@ -863,7 +868,7 @@ export function drawPanel(el: PanelElements, data: PanelData): unknown {
     const color = SECTION_COLOR.flow
     const row = (key: string, segs: Seg[]): RowBlock => ({ node: plain(key, segs, IW, isDesk ? rowH : undefined), h: rowH })
     const jevOff = data.jevOn === false
-    const jevRow = row('f-jev', [{ text: 'Jev off: set the judgeKey option. The Stop decides on the checks alone.', color: SECTION_COLOR.planned }])
+    const jevRow = row('f-jev', [{ text: data.jevOff ?? JEV_OFF_ROW, color: SECTION_COLOR.planned }])
     if (view.kind === 'draft') {
       return [frame('flow', color, { label: 'Flow' }, [
         row('f-draft', [{ text: 'Draft: phases not laid out yet', color: SECTION_COLOR.planned }]),

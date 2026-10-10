@@ -185,12 +185,48 @@ function flowIo($: Dollar, ask?: jevflow.Io['ask']): jevflow.Io {
   }
 }
 
-/** Jev's key (the judgeKey option; empty means checks only) and the breaker shared while the module lives. */
-type JevAccess = { key: string; breaker: Breaker }
+/**
+ * Jev's key (empty means checks only), where it came from, and the breaker shared while the module lives. The judgeKey
+ * option wins; without it `resolveJevKey` falls back to OPENROUTER_API_KEY once.
+ */
+type JevAccess = { key: string; breaker: Breaker; source?: 'option' | 'env' | 'repo-env'; resolving?: Promise<void> }
+
+const JEV_REPO_ENV = "OPENROUTER_API_KEY comes from this repository's settings and is ignored; set the judgeKey option"
+/** JEV_REPO_ENV as the flow card's row, short enough not to be cut in a 68-cell card. */
+const JEV_REPO_ENV_ROW = "Jev off: repo's OPENROUTER_API_KEY ignored; set judgeKey."
+
+/**
+ * Falls back to OPENROUTER_API_KEY when the judgeKey option is not set. The process environment also carries the
+ * settings' `env` blocks, so a key a repository's project or local settings declare is dropped: the flow's data would
+ * go out under that repository's account. A settings read that fails drops it too. Concurrent callers share one read.
+ */
+function resolveJevKey($: Dollar, jev: JevAccess): Promise<void> {
+  jev.resolving ??= readJevEnvKey($, jev)
+  return jev.resolving
+}
+
+async function readJevEnvKey($: Dollar, jev: JevAccess): Promise<void> {
+  if (jev.key) return
+  const key = (await $.env.get('OPENROUTER_API_KEY').catch(() => undefined))?.trim()
+  if (!key) return
+  try {
+    for (const source of ['project', 'local'] as const) {
+      const env = (await $.settings.read({ source }))?.env as Record<string, unknown> | undefined
+      if (env && typeof env === 'object' && Object.hasOwn(env, 'OPENROUTER_API_KEY')) { jev.source = 'repo-env'; return }
+    }
+  } catch { jev.source = 'repo-env'; return }
+  jev.key = key
+  jev.source = 'env'
+}
 
 /** The flow controller's host access, with Jev when a key is set. */
 function flowHost($: Dollar, jev: JevAccess): jevflow.Io {
-  return flowIo($, jev.key ? createJev(jevIo($), jev.key, { breaker: jev.breaker }) : undefined)
+  const ask = jev.key ? createJev(jevIo($), jev.key, { breaker: jev.breaker }) : undefined
+  return {
+    ...flowIo($, ask),
+    ...(ask ? { jevSource: jev.source === 'env' ? 'OPENROUTER_API_KEY' : 'judgeKey option' } : {}),
+    ...(jev.source === 'repo-env' ? { jevOff: JEV_REPO_ENV } : {}),
+  }
 }
 
 /** What the panel's flow card draws: the flow this session is bound to, none otherwise. */
@@ -334,7 +370,8 @@ export const register: Register = (on, options) => {
   const aboveOn = options.abovePrompt !== false && options.abovePrompt !== 'false'
 
   // The flow (JevFlow): every read-modify-write of its files goes through one queue, and Jev has one breaker while this
-  // module lives. Jev is called only when the judgeKey option is set; without it every Stop decides on the checks alone.
+  // module lives. Jev is called only with a key (the judgeKey option, else OPENROUTER_API_KEY); without one every Stop
+  // decides on the checks alone.
   let flowChain: Promise<unknown> = Promise.resolve()
   function flowSerial<T>(work: () => Promise<T>): Promise<T> {
     const run = flowChain.then(work, work)
@@ -343,11 +380,11 @@ export const register: Register = (on, options) => {
   }
   const jevBreaker = createBreaker(() => Date.now())
   const jevKey = typeof options.judgeKey === 'string' ? options.judgeKey.trim() : ''
-  const jev: JevAccess = { key: jevKey, breaker: jevBreaker }
+  const jev: JevAccess = { key: jevKey, breaker: jevBreaker, ...(jevKey ? { source: 'option' as const } : {}) }
   const flowRoot = async (io: Io): Promise<string> => gateRoot ?? (await workspace(io)).root
   // Sessions that sent a prompt since this module loaded: the first prompt gets the join hint (JevFlow's first prompt).
   const prompted = new Set<string>()
-  // Sessions already told, once each, that Jev is off (no judgeKey) when a Stop needed it.
+  // Sessions already told, once each, that Jev is off (no key) when a Stop needed it.
   const jevOffToasted = new Set<string>()
   configureStrip({ paceStart: options.paceStart })
   let minuteTicker: { cancel: () => void } | undefined
@@ -803,6 +840,7 @@ export const register: Register = (on, options) => {
     // Background agents still work: the flow does not judge the phase until they finish (a shell or monitor is not waited for).
     if (jevflow.pendingAgentTasks(e.background_tasks) > 0) return below
     try {
+      await resolveJevKey($, jev)
       const root = await flowRoot(hostIo($))
       // A check is a shell command the flow runs outside the permission system: it runs only when Claude Code's rules
       // allow it, or the person approves that exact command here (an approval is kept for this repository).
@@ -843,7 +881,7 @@ export const register: Register = (on, options) => {
       if (out.message) $.ui.toast(out.message)
       if (out.noJev && !jevOffToasted.has(e.session_id)) {
         jevOffToasted.add(e.session_id)
-        $.ui.toast("[Pantheon flow] Jev is off: set the plugin's judgeKey option. This Stop decided on the checks alone.")
+        $.ui.toast(`[Pantheon flow] Jev is off: ${jev.source === 'repo-env' ? JEV_REPO_ENV : 'set the judgeKey option or OPENROUTER_API_KEY'}. This Stop decided on the checks alone.`)
       }
       if (out.block) return { ...below, block: out.block }
     } catch { /* Fail open: the stop is allowed. */ }
@@ -864,6 +902,7 @@ export const register: Register = (on, options) => {
   on('tool.call', { tool: 'mcp__pantheon__flow' }, async ($, e) => {
     const input: Record<string, unknown> = { ...e }
     const str = (key: string) => typeof input[key] === 'string' ? (input[key] as string).trim() : ''
+    await resolveJevKey($, jev).catch(() => undefined)
     const io = flowHost($, jev)
     const root = await flowRoot(hostIo($))
     const sessionId = String(await $.session.id())
@@ -905,6 +944,7 @@ export const register: Register = (on, options) => {
     if (sub === 'config') return { text: configReport(await refreshConfig(io, (await workspace(io)).root)) }
     if (sub === 'flow') {
       try {
+        await resolveJevKey($, jev)
         return { text: await jevflow.statusText(flowHost($, jev), await flowRoot(hostIo($)), String(await $.session.id())) }
       } catch (error) {
         return { text: `The flow status could not be read: ${error instanceof Error ? error.message : String(error)}` }
@@ -974,6 +1014,7 @@ export const register: Register = (on, options) => {
     const columns = e.props.bodyColumns
     const bodyRows = e.props.scroll?.bodyRows ?? e.viewport?.rows ?? 24
     // This session's own flow only (draft, active or just archived); the panel draws nothing for none.
+    await resolveJevKey($, jev).catch(() => undefined)
     const flow = await flowViewOf($, jev, await flowRoot(io))
     return drawPanel({
       Box, Text, Button,
@@ -996,6 +1037,7 @@ export const register: Register = (on, options) => {
       now,
       flow,
       jevOn: Boolean(jev.key),
+      ...(jev.source === 'repo-env' ? { jevOff: JEV_REPO_ENV_ROW } : {}),
       roster: buildRoster({ natives: tracked, session: info, config: current.config }),
       session: info,
       collapsed: normalizeView(view).collapsed ?? [],
