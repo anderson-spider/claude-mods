@@ -252,6 +252,98 @@ test('a check the person approved in this repository before runs without asking 
   expect(advanced.block).toContain("Now work on phase 'b'")
 })
 
+test('with autoChecks, an ask runs the check with no box and remembers nothing, even with no one to ask', { options: { autoChecks: true } }, async ($, on) => {
+  const w = flowWorld(on)
+  w.rules.decision = 'ask'
+  await $.session.start({ cwd: ROOT, surface: null, isInteractive: false })
+  await layOut($, w)
+  const advanced = await stop($)
+  expect(w.ran).toEqual(['test -f a.txt'])
+  expect(advanced.block).toContain("Now work on phase 'b'")
+  expect(w.store.has('flowCheckApprovals')).toBe(false)
+})
+
+test('with autoChecks, a deny still blocks the check and no box is shown', { options: { autoChecks: true } }, async ($, on) => {
+  const w = flowWorld(on)
+  w.rules.decision = 'deny'
+  w.rules.reason = 'Bash(test:*) is denied'
+  await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
+  await layOut($, w)
+  const held = await stop($)
+  expect(w.ran).toEqual([])
+  expect(held.block).toContain("not run: Claude Code's permission rules deny it: Bash(test:*) is denied")
+  expect(w.store.has('flowCheckApprovals')).toBe(false)
+})
+
+test('with autoChecks off, an ask in an interactive session still shows the box', { options: { autoChecks: false } }, async ($, on) => {
+  const w = flowWorld(on)
+  w.rules.decision = 'ask'
+  await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
+  await layOut($, w)
+  const ui = await $.ui.mount({ plugin: 'pantheon', component: 'AbovePrompt', surface: 'terminal', props: { hasSurvey: false, isWorking: false, maxRows: 12, bodyColumns: 120 } as never })
+  const pending = stop($)
+  try {
+    let texts = ''
+    for (let i = 0; i < 100 && !texts.includes('Pantheon flow check'); i++) {
+      await pause(10)
+      texts = (await ui.findAll({ type: 'Text' })).map(node => String(node.text)).join('|')
+    }
+    expect(texts).toContain('Run the check of phase `a`?')
+    expect(w.ran).toEqual([])
+    await ui.press({ key: 'cancel' })
+    expect((await pending).block).toContain('the person cancelled it')
+  } finally {
+    await ui.press({ key: 'cancel' }).catch(() => undefined)
+    await pending.catch(() => undefined)
+    await ui.unmount()
+  }
+})
+
+test('with autoChecks in an interactive session, an ask runs the check with no box, advances the phase and remembers nothing', { options: { autoChecks: true } }, async ($, on) => {
+  const w = flowWorld(on)
+  w.rules.decision = 'ask'
+  await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
+  await layOut($, w)
+  const ui = await $.ui.mount({ plugin: 'pantheon', component: 'AbovePrompt', surface: 'terminal', props: { hasSurvey: false, isWorking: false, maxRows: 12, bodyColumns: 120 } as never })
+  try {
+    const advanced = await stop($)
+    expect(w.ran).toEqual(['test -f a.txt'])
+    expect(advanced.block).toContain("Now work on phase 'b'")
+    const texts = (await ui.findAll({ type: 'Text' })).map(node => String(node.text)).join('|')
+    expect(texts).not.toContain('Pantheon flow check')
+    expect(w.store.has('flowCheckApprovals')).toBe(false)
+  } finally {
+    await ui.unmount()
+  }
+})
+
+for (const source of ['project', 'local'] as const) {
+  test(`with autoChecks, the ${source} settings declaring it are ignored: the box is shown and the check waits`, { options: { autoChecks: true } }, async ($, on) => {
+    const w = flowWorld(on)
+    w.rules.decision = 'ask'
+    w.settings[source] = { pluginConfigs: { 'pantheon@spider-claude-mods': { options: { autoChecks: true } } } }
+    await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
+    await layOut($, w)
+    const ui = await $.ui.mount({ plugin: 'pantheon', component: 'AbovePrompt', surface: 'terminal', props: { hasSurvey: false, isWorking: false, maxRows: 12, bodyColumns: 120 } as never })
+    const pending = stop($)
+    try {
+      let texts = ''
+      for (let i = 0; i < 100 && !texts.includes('Pantheon flow check'); i++) {
+        await pause(10)
+        texts = (await ui.findAll({ type: 'Text' })).map(node => String(node.text)).join('|')
+      }
+      expect(texts).toContain('Run the check of phase `a`?')
+      expect(w.ran).toEqual([])
+      await ui.press({ key: 'cancel' })
+      expect((await pending).block).toContain('the person cancelled it')
+    } finally {
+      await ui.press({ key: 'cancel' }).catch(() => undefined)
+      await pending.catch(() => undefined)
+      await ui.unmount()
+    }
+  })
+}
+
 for (const decision of ['proceed', 'cancel'] as const) {
   test(`an ask in an interactive session holds the flow check box; ${decision} decides it (${decision === 'proceed' ? 'and is remembered' : 'and nothing is remembered'})`, async ($, on) => {
     const w = flowWorld(on)
