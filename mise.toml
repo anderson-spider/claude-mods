@@ -1,0 +1,51 @@
+# Development tools for this repository: `mise install` once, then the tools follow the directory.
+# Node runs scripts/*.mjs and the TypeScript language server; TypeScript 7 serves `tsc --lsp` and type-checks with
+# `tsc -p plugins/<name>/tsconfig.json` (the typings it extends are written by Claude Code when it loads the plugin).
+[tools]
+node = "24"
+"npm:typescript" = "7.0.2"
+
+[tasks."plugins:validate"]
+description = "Validate the marketplace and every plugin, then check that the manifests agree"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+claude plugin validate .
+for p in plugins/*/; do echo "==> $(basename "$p")"; claude plugin validate "${p%/}"; done
+node scripts/check-consistency.mjs
+'''
+
+[tasks."plugins:test"]
+description = "Run every plugin's tests, and the codex-computer-use helper's when the ChatGPT app's node is present"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+for p in plugins/*/; do echo "==> $(basename "$p")"; claude plugin test "${p%/}"; done
+cua_node=/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node
+if [ -x "$cua_node" ]; then
+  echo "==> codex-computer-use helper"
+  "$cua_node" --test plugins/codex-computer-use/helper/test/*.test.mjs
+else
+  echo "==> codex-computer-use helper: skipped, $cua_node not found"
+fi
+'''
+
+[tasks."plugins:update"]
+description = "Refresh the marketplace and update every installed plugin from it, in its own scope"
+run = "node scripts/update-plugins.mjs"
+
+# Claude Code writes plugins/*/.claude-plugin/types/ only when an interactive session loads a plugin from its folder,
+# so this opens one on a pseudo-terminal with every plugin and exits once all of them have their typings.
+[tasks."plugins:types"]
+description = "Generate the claude-code typings every plugin's tsconfig.json extends"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+dirs=(plugins/*/)
+args=()
+for d in "${dirs[@]}"; do args+=(--plugin-dir "${d%/}"); done
+ready() { for d in "${dirs[@]}"; do [ -f "${d}.claude-plugin/types/tsconfig.json" ] || return 1; done; }
+{ for _ in $(seq 120); do ready && break; sleep 1; done; sleep 2; printf '/exit\r'; } | script -q /dev/null claude "${args[@]}" >/dev/null 2>&1 || true
+ready || { echo "typings were not written for every plugin" >&2; exit 1; }
+echo "typings written for every plugin"
+'''
