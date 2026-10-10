@@ -74,7 +74,7 @@ export type Ctx = {
    * and not the host's failure (which would release the gate). Absent, the runner's own "failed to start" is read the same way.
    */
   probeDir?: DirProbe
-  /** The time a Stop may spend running checks; STOP_DEADLINE_MS when absent. */
+  /** Overrides the Stop deadline derived from its targets' check timeouts. */
   stopDeadlineMs?: number
   /**
    * Where the approval and the plan in force are recorded: the plugin's store, outside the repository. Required: without it
@@ -96,8 +96,10 @@ export type Outcome = { text?: string; decision?: ModeDecision }
 export type StopOutcome = { block?: string; notice?: string; /** Text for the lead that is not a block: what the Stop could not verify. */ context?: string; decision?: ModeDecision }
 export type Snapshot = { head: string; dirty: string }
 
-/** A Stop evaluation that runs checks gives up starting new ones after this long; those are unverified, never failed. */
+/** The minimum Stop deadline; a longer check raises it, with snapshot time, up to ten minutes. */
 export const STOP_DEADLINE_MS = 120_000
+const STOP_SNAPSHOT_MARGIN_MS = 30_000
+const STOP_DEADLINE_CAP_MS = 600_000
 /** More untracked files than this are listed in a snapshot but their content is not read. */
 const UNTRACKED_HASH_CAP = 300
 
@@ -1025,7 +1027,10 @@ async function unrunnable(ctx: Ctx, planId: string, error: CheckUnrunnable, task
 
 // --- Stop ---
 
-export type StopInput = { stopHookActive: boolean; backgroundTasks: number; runningAgents: number }
+export type StopInput = {
+  stopHookActive: boolean; backgroundTasks: number; runningAgents: number
+  workLinks?: readonly { task: string; plan: string; end: number }[]
+}
 
 /** The tasks whose checks a Stop needs: active ones, ones awaiting a receipt, and done ones (a regression or an unverified check). */
 function stopTargets(flow: Flow, state: FlowState): FlowTask[] {
@@ -1083,23 +1088,33 @@ async function evaluateStop(ctx: Ctx, input: StopInput, trace: Trace): Promise<S
   // A plan nobody approved is never enforced and none of its commands run; an approved one is, whatever its file now says.
   if (!enforcing(peek)) return {}
   const state = peek.state
+  const started = await ctx.now()
+  const targets = stopTargets(peek.flow, state)
+  const longest = Math.max(0, ...targets.flatMap(task => task.acceptance.checks.map(check => check.timeoutSec * 1000)))
+  const limit = ctx.stopDeadlineMs ?? Math.min(STOP_DEADLINE_CAP_MS, Math.max(STOP_DEADLINE_MS, longest + STOP_SNAPSHOT_MARGIN_MS))
   const idle = state.done || state.paused || state.stopped || input.backgroundTasks > 0 || input.runningAgents > 0
   const checks: Record<string, CheckResult[]> = {}
   let unverified = 0
+  let currentSnapshot = false
   // Tasks being worked on (or waiting for a receipt) whose checks did not all get to run.
   const cut: string[] = []
   if (!idle) {
     // The whole evaluation has a deadline: a check that does not get to run in time is unverified, never a fail.
     // The snapshots the pass takes (its git calls) are inside the deadline too.
-    const limit = ctx.stopDeadlineMs ?? STOP_DEADLINE_MS
-    const until: Until = { now: ctx.now, endsAt: (await ctx.now()) + limit }
+    const until: Until = { now: ctx.now, endsAt: started + limit }
+    const snapshots: (string | undefined)[] = []
+    const snapshot = async () => {
+      const key = await snapshotKey(ctx, until)
+      snapshots.push(key)
+      return key
+    }
     const pass = await createCheckPass(ctx.run, ctx.root, {
-      scope: loc.planId, snapshot: () => snapshotKey(ctx, until), deadline: until,
+      scope: loc.planId, snapshot, deadline: until,
       ...(ctx.memo ? { memo: ctx.memo } : {}),
       ...(ctx.probeDir ? { probe: ctx.probeDir } : {}),
     })
     try {
-      for (const task of stopTargets(peek.flow, state)) {
+      for (const task of targets) {
         const ran = await pass.runTask(task.acceptance.checks)
         checks[task.id] = ran
         if (ran.length < task.acceptance.checks.length && (state.status[task.id] === 'active' || state.awaiting.some(a => a.task === task.id))) cut.push(task.id)
@@ -1109,17 +1124,33 @@ async function evaluateStop(ctx: Ctx, input: StopInput, trace: Trace): Promise<S
       throw error
     }
     unverified = (await pass.finish()).unverified
+    // finish only snapshots when it has passes to memoize; cache hits and callers without a memo still need verification.
+    if (snapshots.length < 2) await snapshot()
+    currentSnapshot = snapshots[0] !== undefined && snapshots[0] === snapshots.at(-1)
   }
+  const elapsedMs = Math.max(0, (await ctx.now()) - started)
   const event: FlowEvent = { kind: 'stop', stopHookActive: input.stopHookActive, backgroundTasks: input.backgroundTasks, runningAgents: input.runningAgents, checks }
   const decision = await transactAt(ctx, loc, trace, peek.hash, (before, p) => {
     // Only a Stop names the architect's diagnosis: the active targets whose attempts are spent say what to do next.
-    const d = applyMode(decide(p.flow, before, event, undefined, { ...decideOpts(ctx), diagnosis: diagnosisIds(p.flow, before) }), ctx.mode, before)
+    const attempted = currentSnapshot ? (input.workLinks ?? [])
+      .filter(link => link.plan === p.flow.planId && link.end === (before.ends[link.task] ?? 0)).map(link => link.task) : []
+    const d = applyMode(decide(p.flow, before, event, undefined, { ...decideOpts(ctx), diagnosis: diagnosisIds(p.flow, before), attempted }), ctx.mode, before)
+    if (ctx.judge && judgeLive(ctx)) {
+      for (const id of attempted) {
+        const task = findTask(p.flow, id)
+        const ran = checks[id] ?? []
+        if (!task || ran.length < task.acceptance.checks.length || !ran.every(check => check.passed === true)) continue
+        if (before.status[id] === 'active' && (d.state.status[id] === 'done' || d.state.awaiting.some(a => a.task === id))) {
+          d.state = withLastOutput(d.state, id, ran, ctx.judge.redact)
+        }
+      }
+    }
     const all = Object.values(checks).flat()
-    const entries: Omit<JournalInput, 'at'>[] = journalable(d, before) ? [entryFor(ctx, 'stop', d, all)] : []
+    const entries: Omit<JournalInput, 'at'>[] = journalable(d, before) ? [{ ...entryFor(ctx, 'stop', d, all), detail: `elapsedMs=${elapsedMs}` }] : []
     if (unverified > 0) {
       entries.push({
         kind: 'note', event: 'stop', condition: 'checks_unverified',
-        detail: `${unverified} check(s) did not get to run within ${Math.round((ctx.stopDeadlineMs ?? STOP_DEADLINE_MS) / 1000)} s: unverified, not failed.`,
+        detail: `${unverified} check(s) did not get to run within ${Math.round(limit / 1000)} s: unverified, not failed.`,
       })
     }
     return { state: d.state, entries, value: d }
@@ -1135,7 +1166,7 @@ async function evaluateStop(ctx: Ctx, input: StopInput, trace: Trace): Promise<S
     ...(enforce && blocking && !waiting ? { block: `${TAG}: ${decision.reason}` } : {}),
     ...(enforce && (decision.condition === 'budget' || decision.condition === 'complete' || decision.condition === 'unverified') ? { notice: `${TAG}: ${decision.reason}` } : {}),
     // The checks of a task in progress that never ran are neither a pass nor a fail: the lead is told, to run them itself.
-    ...(enforce && cut.length > 0 ? { context: `[${TAG}] The checks of ${cut.length === 1 ? 'task' : 'tasks'} ${cut.join(', ')} did not get to run within ${Math.round((ctx.stopDeadlineMs ?? STOP_DEADLINE_MS) / 1000)} s, so ${cut.length === 1 ? 'it is' : 'they are'} unverified (not failed). Run them yourself before calling ${cut.length === 1 ? 'it' : 'them'} done.` } : {}),
+    ...(enforce && cut.length > 0 ? { context: `[${TAG}] The checks of ${cut.length === 1 ? 'task' : 'tasks'} ${cut.join(', ')} did not get to run within ${Math.round(limit / 1000)} s, so ${cut.length === 1 ? 'it is' : 'they are'} unverified (not failed). Run them yourself before calling ${cut.length === 1 ? 'it' : 'them'} done.` } : {}),
   }
 }
 
@@ -1497,7 +1528,7 @@ export async function mainEdit(ctx: Ctx, input: { path: string; resolve?: () => 
 export type DeliveryNote = {
   agentId: string
   taskId?: string
-  condition: 'delivery_unparsed' | 'delivery_unlinked' | 'delivery_adopted' | 'delivery_ignored' | 'spawn_unlinked'
+  condition: 'delivery_unparsed' | 'delivery_unlinked' | 'delivery_adopted' | 'delivery_ignored' | 'spawn_unlinked' | 'envelope_shape' | 'delivery_counts'
   reason: string
 }
 
@@ -1510,15 +1541,24 @@ function deliveryEntry(ctx: Ctx, input: DeliveryNote): Omit<JournalInput, 'at'> 
   }
 }
 
-/** Journals why a delivery (or a spawn link) was not acted on. No plan in force: nothing, and never a throw. */
-export async function noteDelivery(ctx: Ctx, input: DeliveryNote): Promise<void> {
-  await guarded<void>(ctx, 'delivery', undefined, async trace => {
+/**
+ * Journals why a delivery (or a spawn link) was not acted on. No plan in force: nothing, and never a throw.
+ * True only when the entry was handed to the plan's journal queue.
+ */
+export async function noteDelivery(ctx: Ctx, input: DeliveryNote): Promise<boolean> {
+  return guarded<boolean>(ctx, 'delivery', false, async trace => {
     const loc = await locate(ctx)
     const planId = 'planId' in loc ? loc.planId : undefined
-    if (!planId) return
+    if (!planId) return false
     trace.planId = planId
     await noteQueued(ctx, planId, deliveryEntry(ctx, input))
+    return true
   })
+}
+
+/** Bounded, content-free delivery diagnostics use the same guarded, per-plan journal queue. */
+export async function noteDeliveryDiagnostic(ctx: Ctx, input: { condition: 'envelope_shape' | 'delivery_counts'; reason: string }): Promise<boolean> {
+  return noteDelivery(ctx, { ...input, agentId: '' })
 }
 
 /** A developer or ux agent tried to write outside its task's files. */

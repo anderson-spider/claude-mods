@@ -45,6 +45,7 @@ function flowWorld(on: On, opts: { files?: Record<string, string>; realPaths?: R
   // What the engine would answer: one bottom per event, steered by these fields.
   const engine = {
     spawnId: 'agent-1', agentStatus: 'completed' as 'completed' | 'async_launched', agentOutput: 'Done.', editDeny: false,
+    agentResult: undefined as unknown,
     stopBelow: {} as { block?: string }, prompts: [] as (readonly string[] | undefined)[],
   }
   const mtimes = new Map<string, number>()
@@ -142,6 +143,9 @@ function flowWorld(on: On, opts: { files?: Record<string, string>; realPaths?: R
   })
   // The kit gives a plugin's state writes a bottom; record them to read the controller's link table back.
   const links: Record<string, FlowAgent> = {}
+  const atom = { links: undefined as Record<string, FlowAgent> | undefined }
+  on('state.get', async (_$, e, next) => e.key === 'flowAgents' && atom.links
+    ? { value: { version: 1, value: atom.links } } as never : next(e))
   on('state.set', async (_$, e, next) => {
     // The count of a denial is written to this value: a test can make that write fail.
     if (faults.denials && e.key === 'flowAgents') throw new Error('state is not writable')
@@ -150,6 +154,7 @@ function flowWorld(on: On, opts: { files?: Record<string, string>; realPaths?: R
     return result
   })
   on('classic.Stop', async () => engine.stopBelow)
+  on('turn.complete', async () => ({ text: '' }))
   on('prompt.submit', async (_$, e) => { engine.prompts.push(e.context); return { text: e.text, ...(e.context ? { context: e.context } : {}) } })
   on('agent.spawn', async (_$, e) => {
     gate.prompts.push(e.prompt)
@@ -158,6 +163,7 @@ function flowWorld(on: On, opts: { files?: Record<string, string>; realPaths?: R
   })
   on('tool.call', async (_$, e) => {
     if (e.tool === 'Agent') {
+      if (engine.agentResult !== undefined) return engine.agentResult as never
       return (engine.agentStatus === 'completed'
         ? { result: { status: 'completed', agentId: engine.spawnId, content: [{ type: 'text', text: engine.agentOutput }], totalToolUseCount: 1, totalDurationMs: 1, totalTokens: 1, usage: {}, prompt: 'p' }, text: engine.agentOutput }
         : { result: { status: 'async_launched', agentId: engine.spawnId, description: 'd', prompt: 'p', outputFile: '/tmp/o' }, text: 'launched' }) as never
@@ -198,7 +204,7 @@ function flowWorld(on: On, opts: { files?: Record<string, string>; realPaths?: R
   return {
     ...fixture, files, runs, results, faults, git, engine, gate, agents, listCalls: () => listCalls, mtimes, links, storeKeys, fail, state, journal, checkRuns,
     lookups: () => asked,
-    http, settingsBy, settingsReads, settingsUnreadable, envNames,
+    http, settingsBy, settingsReads, settingsUnreadable, envNames, atom,
   }
 }
 type Flow = ReturnType<typeof flowWorld>
@@ -242,6 +248,48 @@ async function delegate($: Engine, w: Flow, input: { id: string; description: st
 }
 
 describe('stop', () => {
+  test('Stop completes spawned work whose delivery never arrived', { options: { flow: 'enforce' } }, async ($, on) => {
+    const w = flowWorld(on, { files: { [`${ROOT}/${PLAN}`]: planMd({ ...FLOW, tasks: [FLOW.tasks[0]] }) } })
+    await boot($, w)
+    await spawn($, w, { id: 'lost-1', description: '[T1] first', subagentType: 'pantheon:developer' })
+    // Only tracking sees the end; neither the Agent result nor a delivery notification arrives.
+    await $.turn.complete({ turnId: 'turn-1', agentId: 'lost-1', reason: 'answer', answer: 'Done', durationMs: 1, isAborted: false })
+    expect((await stop($)).block).toBeUndefined()
+    expect(w.state()).toMatchObject({ done: true, status: { T1: 'done' }, ends: {} })
+    expect(w.journal().some(e => e.event === 'taskEnd')).toBe(false)
+    expect(w.journal().at(-1)).toMatchObject({ event: 'stop', condition: 'complete' })
+  })
+
+  test('Stop uses atom work links after reload', { options: { flow: 'enforce' } }, async ($, on) => {
+    const w = flowWorld(on, { files: { [`${ROOT}/${PLAN}`]: planMd({ ...FLOW, tasks: [FLOW.tasks[0]] }) } })
+    await boot($, w)
+    w.atom.links = {
+      restored: { task: 'T1', plan: 'demo', kind: 'work', end: 0, denials: 0, files: ['src/a.ts'] },
+    }
+    expect((await stop($)).block).toBeUndefined()
+    expect(w.state()?.done).toBe(true)
+  })
+
+  test('Stop prefers the runtime link when the atom has an older delivery cycle', { options: { flow: 'enforce' } }, async ($, on) => {
+    const w = flowWorld(on, { files: { [`${ROOT}/${PLAN}`]: planMd({ ...FLOW, tasks: [FLOW.tasks[0]] }) } })
+    await boot($, w)
+    await spawn($, w, { id: 'lost-1', description: '[T1] first', subagentType: 'pantheon:developer' })
+    await $.turn.complete({ turnId: 'turn-1', agentId: 'lost-1', reason: 'answer', answer: 'Done', durationMs: 1, isAborted: false })
+    w.atom.links = { 'lost-1': { ...w.links['lost-1']!, end: 9 } }
+    await stop($)
+    expect(w.state()?.done).toBe(true)
+  })
+
+  test('Stop ignores stored review and diagnosis links as work attempts', { options: { flow: 'enforce' } }, async ($, on) => {
+    const w = flowWorld(on)
+    await boot($, w)
+    w.atom.links = {
+      review: { task: 'T1', plan: 'demo', kind: 'review', end: 0, denials: 0, files: [] },
+      diagnosis: { task: 'T1', plan: 'demo', kind: 'diagnosis', end: 0, denials: 0, files: [] },
+    }
+    expect((await stop($)).block).toContain('Task T1 is not finished')
+  })
+
   test('enforce holds a premature stop with the failing check output', { options: { flow: 'enforce' } }, async ($, on) => {
     const w = flowWorld(on)
     await boot($, w)
@@ -763,7 +811,7 @@ describe('ownership holes', () => {
     await boot($, w)
     const out = await $.tool.call({ tool: 'Agent', description: '[T1] first', prompt: 'p', isolation: 'worktree' } as never)
     expect(out.deny).toBeUndefined()
-    expect(w.journal().at(-1)).toMatchObject({ condition: 'spawn_isolation', action: 'allow', wouldBe: 'block' })
+    expect(w.journal().find(e => e.condition === 'spawn_isolation')).toMatchObject({ action: 'allow', wouldBe: 'block' })
   })
 })
 
@@ -1060,6 +1108,82 @@ const envelope = (id: string, status: string, result = 'Done.') => [
 ].join('\n')
 
 describe('prompts', () => {
+  test('shape diagnostics deduplicate metadata and never record notification or Agent content', { options: { flow: 'shadow' } }, async ($, on) => {
+    const w = flowWorld(on)
+    await boot($, w)
+    for (const result of ['PRIVATE-RESULT-A', 'PRIVATE-RESULT-B']) {
+      await $.prompt.submit({ text: envelope('unknown', 'completed', result + '<private-secret-tag>x</private-secret-tag>'), origin: { kind: 'task-notification' } } as never)
+    }
+    w.engine.agentOutput = 'PRIVATE-AGENT-RESULT'
+    for (let i = 0; i < 2; i++) await $.tool.call({ tool: 'Agent', description: 'unlinked', prompt: 'p' } as never)
+    const shapes = w.journal().filter(e => e.condition === 'envelope_shape')
+    expect(shapes).toHaveLength(2)
+    expect(shapes[0]!.reason).toContain('source=notification')
+    expect(shapes[0]!.reason).toContain('idLength=7')
+    expect(shapes[0]!.reason).toContain('status=completed')
+    expect(shapes[1]!.reason).toContain('source=Agent')
+    expect(JSON.stringify(shapes)).not.toContain('PRIVATE')
+    expect(JSON.stringify(shapes)).not.toContain('private-secret-tag')
+    expect(JSON.stringify(shapes)).not.toContain('unknown')
+  })
+
+  test('a shape seen before any plan is in force is still recorded once a flow is approved', { options: { flow: 'shadow' } }, async ($, on) => {
+    const w = flowWorld(on)
+    await start($)
+    const arrive = () => $.prompt.submit({ text: envelope('bg-early', 'completed', 'PRIVATE'), origin: { kind: 'task-notification' } } as never)
+    await arrive()
+    expect(w.journal().filter(e => e.condition === 'envelope_shape')).toHaveLength(0)
+    expect((await approveFlow($)).text).toContain('Approved demo')
+    await arrive()
+    await arrive()
+    expect(w.journal().filter(e => e.condition === 'envelope_shape')).toHaveLength(1)
+  })
+
+  test('shape notes cap at forty while event counters keep growing and flush only on changed Stops', { options: { flow: 'shadow' } }, async ($, on) => {
+    const w = flowWorld(on)
+    await boot($, w)
+    for (let n = 1; n <= 45; n++) await $.prompt.submit({ text: envelope('x'.repeat(n), 'completed', 'PRIVATE'), origin: { kind: 'task-notification' } } as never)
+    expect(w.journal().filter(e => e.condition === 'envelope_shape')).toHaveLength(40)
+    await stop($)
+    const counts = () => w.journal().filter(e => e.condition === 'delivery_counts')
+    expect(counts()).toHaveLength(1)
+    expect(counts()[0]!.reason).toBe('notifications=45 agentResults=0 parsed=45 linked=0')
+    await stop($)
+    expect(counts()).toHaveLength(1)
+    await $.prompt.submit({ text: '<task-notification><summary>PRIVATE-MONITOR</summary></task-notification>', origin: { kind: 'task-notification' } } as never)
+    await stop($)
+    expect(counts()).toHaveLength(2)
+    expect(counts()[1]!.reason).toBe('notifications=46 agentResults=0 parsed=45 linked=0')
+    expect(w.journal().at(-1)?.event).toBe('stop')
+  })
+
+  test('Agent error envelopes are diagnosed without changing their result and status is bounded', { options: { flow: 'shadow' } }, async ($, on) => {
+    const w = flowWorld(on)
+    const returned = { isError: true, text: 'PRIVATE-ERROR', result: {
+      status: 'a'.repeat(50), agentId: 'PRIVATE-ID', content: [{ type: 'text', text: 'PRIVATE-CONTENT' }],
+      'PRIVATE-FIELD': 'PRIVATE-VALUE',
+    } }
+    w.engine.agentResult = returned
+    await boot($, w)
+    expect(await $.tool.call({ tool: 'Agent', description: 'unlinked', prompt: 'p' } as never)).toEqual(returned)
+    const shapes = w.journal().filter(e => e.condition === 'envelope_shape')
+    expect(shapes).toHaveLength(1)
+    expect(shapes[0]!.reason).toContain(`status=${'a'.repeat(20)} `)
+    expect(JSON.stringify(shapes)).not.toContain('PRIVATE')
+  })
+
+  test('delivery counts include parsed and linked Agent results and notifications', { options: { flow: 'shadow' } }, async ($, on) => {
+    const w = flowWorld(on)
+    await boot($, w)
+    await spawn($, w, { id: 'bg-1', description: '[T1] first', subagentType: 'pantheon:developer' })
+    w.engine.agentStatus = 'async_launched'
+    const result = await $.tool.call({ tool: 'Agent', description: '[T1] first', prompt: 'p' } as never)
+    expect(result.result).toMatchObject({ status: 'async_launched', agentId: 'bg-1' })
+    await $.prompt.submit({ text: envelope('bg-1', 'completed'), origin: { kind: 'task-notification' } } as never)
+    await stop($)
+    expect(w.journal().find(e => e.condition === 'delivery_counts')?.reason).toBe('notifications=1 agentResults=1 parsed=2 linked=2')
+  })
+
   test('a background agent never linked at spawn is adopted by lookup: the delivery is journaled as adopted, then the task ends', { options: { flow: 'shadow' } }, async ($, on) => {
     const w = flowWorld(on)
     await boot($, w)
@@ -1086,13 +1210,12 @@ describe('prompts', () => {
     expect(w.state()?.ends).toEqual({})
   })
 
-  test('a notification for an id the host does not list writes nothing: it is not an agent of this session (a Bash or Monitor task)', { options: { flow: 'shadow' } }, async ($, on) => {
+  test('a notification for an id the host does not list writes only its shape', { options: { flow: 'shadow' } }, async ($, on) => {
     const w = flowWorld(on)
     await boot($, w)
     const before = w.journal().length
     await $.prompt.submit({ text: envelope('bash-7', 'completed', 'exit 0'), origin: { kind: 'task-notification' } } as never)
-    expect(w.journal().length).toBe(before)
-    expect(w.journal().some(e => e.event === 'delivery')).toBe(false)
+    expect(w.journal().slice(before)).toMatchObject([{ condition: 'envelope_shape' }])
     expect(w.engine.prompts.at(-1)).toBeUndefined()
   })
 
@@ -1132,12 +1255,12 @@ describe('prompts', () => {
     expect(w.journal().some(e => e.event === 'taskEnd')).toBe(false)
   })
 
-  test('an envelope without a task id writes nothing, and a listed agent whose envelope lacks a status is journaled as unparsed', { options: { flow: 'shadow' } }, async ($, on) => {
+  test('an envelope without a task id writes its shape, and a listed agent whose envelope lacks a status is journaled as unparsed', { options: { flow: 'shadow' } }, async ($, on) => {
     const w = flowWorld(on)
     await boot($, w)
     const before = w.journal().length
     await $.prompt.submit({ text: '<task-notification>\n<status>completed</status>\n<result>Done.</result>\n</task-notification>', origin: { kind: 'task-notification' } } as never)
-    expect(w.journal().length).toBe(before)
+    expect(w.journal().slice(before)).toMatchObject([{ condition: 'envelope_shape' }])
     w.agents.push({ id: 'bg-1', description: 'refactor the cache', type: 'general-purpose', status: 'running' })
     await $.prompt.submit({ text: '<task-notification><task-id>bg-1</task-id><result>Done</result></task-notification>', origin: { kind: 'task-notification' } } as never)
     expect(w.journal().at(-1)).toMatchObject({ kind: 'note', event: 'delivery', condition: 'delivery_unparsed', mode: 'shadow' })
@@ -1153,7 +1276,8 @@ describe('prompts', () => {
     const monitor = '<task-notification>\n<task-id>bgiietmhj</task-id>\n<summary>Monitor event: "build finished"</summary>\n<event>build ok</event>\n</task-notification>'
     await $.prompt.submit({ text: monitor, origin: { kind: 'task-notification' } } as never)
     await $.prompt.submit({ text: monitor, origin: { kind: 'task-notification' } } as never)
-    expect(w.journal().length).toBe(before)
+    expect(w.journal().slice(before)).toMatchObject([{ condition: 'envelope_shape' }])
+    expect(w.journal().at(-1)?.reason).toContain('status=missing')
     expect(w.engine.prompts.at(-1)).toBeUndefined()
     expect(w.state()?.ends).toEqual({})
   })

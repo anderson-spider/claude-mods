@@ -8,6 +8,7 @@ import {
 } from '../hooks/flow/controller'
 import type { Attest, Available, Ctx } from '../hooks/flow/controller'
 import type { CheckMemo } from '../hooks/flow/checks'
+import * as flowController from '../hooks/flow/controller'
 import { flowHash, ownsPath, parseFlow, sha256 } from '../hooks/flow/plan'
 import { activeKey, approvedPath, attestKey, createSerial, loadApproved, loadState, readJournal, readSideEffects, statePath } from '../hooks/flow/store'
 import type { FlowFs } from '../hooks/flow/store'
@@ -594,6 +595,109 @@ test('a done task whose check now fails is a regression the stop blocks on', asy
 
 // --- check reuse, deadline, unrunnable ---
 
+test('Stop derives attempts only from work links for this plan and current end', async () => {
+  for (const links of [undefined, [], [{ task: 'T1', plan: 'other', end: 0 }], [{ task: 'T1', plan: 'demo', end: 1 }], [{ task: 'T1', plan: 'demo', end: 0 }]]) {
+    const w = world({ flow: { ...FLOW, tasks: [FLOW.tasks[0]] } })
+    await approve(w)
+    const result = await stopFlow(w.ctx(), { ...stopInput, workLinks: links })
+    const matches = links?.some(link => link.plan === 'demo' && link.end === 0) ?? false
+    expect(result.decision?.condition).toBe(matches ? 'complete' : 'continue')
+    expect((await w.state())!.ends).toEqual({})
+  }
+})
+
+test('Stop compares work links to the state read after checks', async () => {
+  const w = world({ flow: { ...FLOW, tasks: [FLOW.tasks[0]] } })
+  await approve(w)
+  w.hooks.onRun = async () => {
+    const state = (await w.state())!
+    w.files.set(statePath(ROOT, 'demo'), JSON.stringify({ ...state, ends: { T1: 1 } }))
+  }
+  const result = await stopFlow(w.ctx(), { ...stopInput, workLinks: [{ task: 'T1', plan: 'demo', end: 0 }] })
+  expect(result.decision?.condition).toBe('continue')
+})
+
+test('Stop drops the previous failing output of evidence-settled work while the judge is on', async () => {
+  const w = world({ flow: { ...FLOW, tasks: [FLOW.tasks[0]] } })
+  await approve(w)
+  w.files.set(statePath(ROOT, 'demo'), JSON.stringify({ ...(await w.state())!, lastOutput: { T1: 'previous failure' } }))
+  const ctx = w.ctx('enforce', { judge: {
+    mode: 'shadow', redact: { root: ROOT, home: '/home/test' }, ask: async () => undefined,
+    status: () => ({ off: false, breakerOpen: false, stoppedBatteries: 0 }),
+  } })
+  await stopFlow(ctx, { ...stopInput, workLinks: [{ task: 'T1', plan: 'demo', end: 0 }] })
+  expect((await w.state())!.lastOutput).toBeUndefined()
+})
+
+test('Stop preserves the retry output when a check of work already awaiting review cannot run', async () => {
+  const w = world({ flow: { ...FLOW, tasks: [{ ...FLOW.tasks[0], risk: true }] } })
+  await approve(w)
+  w.files.set(statePath(ROOT, 'demo'), JSON.stringify({ ...(await w.state())!, ends: { T1: 1 }, awaiting: [{ task: 'T1', by: 'architect' }], lastOutput: { T1: 'previous failure' } }))
+  w.results.set('npm test', new Error('failed to start: ENOENT'))
+  await stopFlow(w.ctx('enforce', { judge: {
+    mode: 'shadow', redact: { root: ROOT, home: '/home/test' }, ask: async () => undefined,
+    status: () => ({ off: false, breakerOpen: false, stoppedBatteries: 0 }),
+  } }), { ...stopInput, workLinks: [{ task: 'T1', plan: 'demo', end: 1 }] })
+  expect((await w.state())!.lastOutput).toEqual({ T1: 'previous failure' })
+})
+
+test('Stop settles attempted work only on a known unchanged snapshot, even without a memo or with only cache hits', async () => {
+  for (const mode of ['changed', 'no-git', 'no-memo', 'cache-hit'] as const) {
+    const w = world({ flow: { ...FLOW, tasks: [FLOW.tasks[0]] } })
+    await approve(w)
+    if (mode === 'cache-hit') await stopFlow(w.ctx(), stopInput)
+    if (mode === 'changed' || mode === 'no-memo') w.hooks.onRun = async () => { w.git.changed['src/a.ts'] = 'changed during check' }
+    let heads = 0
+    const ctx = w.ctx('enforce', {
+      ...(mode === 'no-memo' ? { memo: undefined } : {}),
+      run: async (argv, opts) => {
+        if (argv[0] === 'git' && mode === 'no-git') return { exitCode: 128, stdout: '', stderr: '' }
+        if (argv[0] === 'git' && argv[1] === 'rev-parse' && mode === 'cache-hit' && ++heads > 1) w.git.changed['src/a.ts'] = 'changed after cache lookup'
+        return w.ctx().run(argv, opts)
+      },
+    })
+    const result = await stopFlow(ctx, { ...stopInput, workLinks: [{ task: 'T1', plan: 'demo', end: 0 }] })
+    expect(result.decision?.condition).toBe('continue')
+    expect((await w.state())!.status.T1).toBe('active')
+  }
+})
+
+test('Stop gives a long check its own timeout plus snapshot margin and journals elapsed milliseconds', async () => {
+  const w = world({ flow: { ...FLOW, tasks: [{ ...FLOW.tasks[0], acceptance: { checks: [{ argv: ['slow'], timeoutSec: 300 }] } }] } })
+  await approve(w)
+  w.clock.duration = 250_000
+  const result = await stopFlow(w.ctx(), { ...stopInput, workLinks: [{ task: 'T1', plan: 'demo', end: 0 }] })
+  expect(result.decision?.condition).toBe('complete')
+  const entry = (await w.journal()).findLast(e => e.event === 'stop' && e.kind === 'decision')!
+  expect(Number(/elapsedMs=(\d+)/.exec(entry.detail ?? '')?.[1])).toBeGreaterThanOrEqual(250_000)
+})
+
+test('a cut attempted check stays unverified and the derived deadline is capped', async () => {
+  for (const override of [undefined, 10_000]) {
+    const w = world({ flow: { ...FLOW, tasks: [{ ...FLOW.tasks[0], acceptance: { checks: [{ argv: ['slow'], timeoutSec: 600 }] } }] } })
+    await approve(w)
+    w.clock.duration = 600_000
+    const start = w.clock.t
+    const result = await stopFlow(w.ctx('enforce', { stopDeadlineMs: override }), { ...stopInput, workLinks: [{ task: 'T1', plan: 'demo', end: 0 }] })
+    expect(result.decision?.condition).toBe('continue')
+    expect(result.context).toContain('unverified (not failed)')
+    expect((await w.state())!.attempts).toEqual({})
+    expect(w.clock.t - start).toBeLessThan((override ?? 600_000) + 1000)
+  }
+})
+
+test('delivery diagnostics use the guarded journal path and clip reasons', async () => {
+  const w = world()
+  await approve(w)
+  for (const condition of ['envelope_shape', 'delivery_counts'] as const) {
+    await flowController.noteDeliveryDiagnostic(w.ctx(), { condition, reason: 'x'.repeat(500) })
+    expect((await w.journal()).at(-1)).toMatchObject({ kind: 'note', event: 'delivery', condition })
+    expect((await w.journal()).at(-1)!.reason!.length).toBe(300)
+  }
+  w.faults.write = true
+  await flowController.noteDeliveryDiagnostic(w.ctx(), { condition: 'envelope_shape', reason: 'shape' })
+})
+
 test('a pass is reused while the tree is the one it ran on; a fail is run again every time', async () => {
   const w = world({ flow: { ...FLOW, limits: { maxBlocks: 7 } } })
   await approve(w)
@@ -675,7 +779,7 @@ test('past the deadline the checks left are unverified: never a fail, never an a
   // Each check takes 50 s of a 120 s budget: A and B run, C is cut to the 20 s left, D never starts.
   w.clock.duration = 50_000
   w.git.changed['src/A.ts'] = 'edited so that nothing is reused'
-  const out = await stopFlow(w.ctx(), stopInput)
+  const out = await stopFlow(w.ctx('enforce', { stopDeadlineMs: 120_000 }), stopInput)
   expect(checkRuns(w).map(argv => argv[1])).toEqual(['A', 'B', 'C'])
   expect(out.block ?? '').not.toContain('could not run')
   expect(out.block ?? '').not.toContain('checks fail')
@@ -2362,7 +2466,7 @@ test('the lead is told which task in progress had checks that did not run, in en
     w.git.changed['src/A.ts'] = 'edited so that nothing is reused'
     const out = await stopFlow(w.ctx(), stopInput)
     if (mode === 'enforce') {
-      expect(out.context).toContain('The checks of task D did not get to run within 120 s')
+      expect(out.context).toContain('The checks of task D did not get to run within 150 s')
       expect(out.context).toContain('unverified (not failed)')
       // A done task whose regression check was cut is not a task in progress.
       expect(out.context).not.toContain('task C')

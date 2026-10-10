@@ -68,6 +68,107 @@ test('fan-out roots: the first listed eligible task starts and the join waits fo
 
 // --- stop: precedence and conditions ---
 
+test('Stop settles an attempted active task without inventing a delivery', () => {
+  const { flow, hash } = build([task('A')])
+  const state = deepFreeze(approved(flow, hash, { attempts: { A: 1 }, ends: { A: 2 }, lastFailure: { key: 'old', count: 1 } }))
+  const decision = decide(flow, state, stopEvent({ A: [pass('A')] }), undefined, { available: ALL, attempted: ['A'] })
+  expect(decision).toMatchObject({ action: 'complete', condition: 'complete', state: { done: true, status: { A: 'done' }, ends: { A: 2 }, attempts: {}, awaiting: [], qaRequired: [] } })
+  expect(decision.state.lastFailure).toBeUndefined()
+  expect(state.status.A).toBe('active')
+  expect(decide(flow, decision.state, endEvent('A', [pass('A')])).condition).toBe('already_done')
+})
+
+test('Stop requires an attempt and never settles newly activated or ineligible tasks', () => {
+  const { flow, hash } = build([task('A'), task('B')])
+  const state = approved(flow, hash)
+  const event = stopEvent({ A: [pass('A')], B: [pass('B')] })
+  for (const attempted of [undefined, [], ['B']]) {
+    expect(decide(flow, state, event, undefined, { available: ALL, attempted }).state.status).toEqual(state.status)
+  }
+  const settled = decide(flow, state, event, undefined, { available: ALL, attempted: ['A', 'B'] })
+  expect(settled).toMatchObject({ condition: 'continue', task: 'B', state: { status: { A: 'done', B: 'active' } } })
+  expect(decide(flow, settled.state, endEvent('A', [pass('A')]))).toMatchObject({ condition: 'not_active', state: { ends: {} } })
+  const ineligible = approved(flow, hash, { status: { A: 'pending', B: 'active' } })
+  expect(decide(flow, ineligible, event, undefined, { available: ALL, attempted: ['B'] }).state.status.B).toBe('active')
+})
+
+test('an attempted Stop asks for missing receipts immediately and preserves a partial review', () => {
+  const { flow, hash } = build([task('A', { risk: true, acceptance: { checks: [check('A')], criteria: ['works'] } })])
+  const opts = { available: ALL, attempted: ['A'] }
+  const first = decide(flow, approved(flow, hash), stopEvent({ A: [pass('A')] }), undefined, opts)
+  expect(first.action).toBe('block')
+  expect(first.condition).toBe('review_needed')
+  expect(first.reason).toContain('architect')
+  expect(first.reason).toContain('QA')
+  expect(first.state.awaiting).toEqual([{ task: 'A', by: 'architect' }, { task: 'A', by: 'qa' }])
+  expect(first.state.ends).toEqual({})
+  const partial: FlowState = { ...first.state, receipts: { A: { architect: true } }, awaiting: [{ task: 'A', by: 'qa' }] }
+  const second = decide(flow, partial, stopEvent({ A: [pass('A')] }), undefined, opts)
+  expect(second.condition).toBe('qa_needed')
+  expect(second).toMatchObject({ action: 'block', state: { status: { A: 'active' }, receipts: { A: { architect: true } }, awaiting: [{ task: 'A', by: 'qa' }] } })
+  const unavailable = decide(flow, approved(flow, hash), stopEvent({ A: [pass('A')] }), undefined, { ...opts, available: { qa: true, architect: false } })
+  expect(unavailable).toMatchObject({ action: 'pause', condition: 'role_unavailable' })
+})
+
+test('an attempted Stop voids receipts earned for older code, as a delivery does', () => {
+  const { flow, hash } = build([task('A', { risk: true, acceptance: { checks: [check('A')], criteria: ['works'] } })])
+  // A QA fail sent the task back with the architect's receipt still on record; the retry's end notification was lost.
+  const stale = approved(flow, hash, { ends: { A: 1 }, receipts: { A: { architect: true } }, awaiting: [] })
+  const settled = decide(flow, stale, stopEvent({ A: [pass('A')] }), undefined, { available: ALL, attempted: ['A'] })
+  expect(settled).toMatchObject({ action: 'block', condition: 'review_needed', state: { status: { A: 'active' }, ends: { A: 1 } } })
+  expect(settled.state.receipts.A).toBeUndefined()
+  expect(settled.state.awaiting).toEqual([{ task: 'A', by: 'architect' }, { task: 'A', by: 'qa' }])
+  // Once awaiting, later Stops leave the earned receipts alone and only ask for what is missing.
+  const partial: FlowState = { ...settled.state, receipts: { A: { architect: true } }, awaiting: [{ task: 'A', by: 'qa' }] }
+  for (let i = 0; i < 3; i++) {
+    const again = decide(flow, partial, stopEvent({ A: [pass('A')] }), undefined, { available: ALL, attempted: ['A'] })
+    expect(again).toMatchObject({ condition: 'qa_needed', state: { receipts: { A: { architect: true } }, awaiting: [{ task: 'A', by: 'qa' }] } })
+  }
+})
+
+test('attempted settling honors sticky and newly required QA', () => {
+  const { flow, hash } = build([task('A')])
+  for (const sticky of [false, true]) {
+    const result = decide(flow, approved(flow, hash, { qaRequired: sticky ? ['A'] : [] }), stopEvent({ A: [pass('A')] }), undefined,
+      { available: ALL, attempted: ['A'], requireQa: !sticky })
+    expect(result).toMatchObject({ action: 'block', condition: 'qa_needed', state: { qaRequired: ['A'], awaiting: [{ task: 'A', by: 'qa' }] } })
+  }
+})
+
+test('attempted settling preserves the check, side-effect and receipt invariants', () => {
+  for (const sideEffect of [false, true]) for (const risk of [false, true]) for (const length of [0, 1, 2]) {
+    if (sideEffect && (risk || length === 0)) continue
+    const checks = [check('A'), check('B')].slice(0, length)
+    const { flow, hash } = build([task('A', { sideEffect, risk, acceptance: { checks, criteria: length ? [] : ['manual'] } })])
+    for (const results of [[], [pass('A')], [pass('A'), pass('B')], [fail('A'), pass('B')]]) {
+      const decision = decide(flow, approved(flow, hash), stopEvent({ A: results }), undefined, { available: ALL, attempted: ['A'] })
+      if (sideEffect || risk || length === 0 || results.length < length || results.some(c => !c.passed)) expect(decision.state.status.A).not.toBe('done')
+      if (decision.state.status.A === 'done') {
+        expect(sideEffect).toBe(false)
+        expect(risk).toBe(false)
+        expect(length > 0).toBe(true)
+        expect(results.length >= length && results.slice(0, length).every(c => c.passed)).toBe(true)
+      }
+      if (results.some(c => !c.passed)) expect(decision.condition).toBe('check_failed')
+      if (!sideEffect && risk && length > 0 && results.length >= length && results.every(c => c.passed)) {
+        expect(decision.action).toBe('block')
+        expect(decision.state.awaiting).toContainEqual({ task: 'A', by: 'architect' })
+      }
+    }
+  }
+})
+
+test('a regression still blocks before attempted settling and recovers only on passing checks', () => {
+  const { flow, hash } = build([task('A'), task('B')])
+  const opts = { available: ALL, attempted: ['A', 'B'] }
+  const first = decide(flow, approved(flow, hash), stopEvent({ A: [pass('A')], B: [pass('B')] }), undefined, opts)
+  const broken = decide(flow, first.state, stopEvent({ A: [fail('A')], B: [pass('B')] }), undefined, opts)
+  expect(broken).toMatchObject({ condition: 'regression', state: { status: { A: 'active', B: 'pending' } } })
+  const recovered = decide(flow, broken.state, stopEvent({ A: [pass('A')], B: [pass('B')] }), undefined, opts)
+  expect(recovered.state.status).toEqual({ A: 'done', B: 'active' })
+  expect(recovered.state.ends).toEqual({})
+})
+
 test('stop with nothing to enforce allows and resets the consecutive run', () => {
   const { flow, hash } = chain()
   const cases: [string, FlowState][] = [
