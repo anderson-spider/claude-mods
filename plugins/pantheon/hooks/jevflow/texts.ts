@@ -146,26 +146,6 @@ export function planInstructions(flowRel: string, flowId: string, goal: string):
   )
 }
 
-/** The prompt Claude gets after `/pantheon goal <text>`: the planning instructions, and the brainstorm's decisions if any. */
-export function goalPrompt(instructions: string): string {
-  return (
-    '[Pantheon flow] The person started a flow with /pantheon goal.\n\n'
-    + `${instructions}\n\n`
-    + 'If a brainstorm defined the idea in this conversation, turn its decisions into the phases and their checks.'
-  )
-}
-
-/** The prompt Claude gets after `/pantheon goal` with no text: the flow starts from the idea defined in this conversation. */
-export function goalFromConversationPrompt(): string {
-  return (
-    '[Pantheon flow] The person ran /pantheon goal without text: turn the idea defined in this conversation into a flow. '
-    + 'Call the `mcp__pantheon__flow` tool with `action: "start"`, `goal` set to the defined idea in one or two concrete '
-    + 'sentences (the person\'s words where possible) and `name` set to a short kebab-case name of 2 to 5 words. Then lay out '
-    + 'the phases with their checks as the tool asks, call validate, and start the first phase. If no idea has been defined '
-    + 'in this conversation yet, ask the person for the goal in one question and stop.'
-  )
-}
-
 /**
  * The claim sentence of JevFlow's join hint, for the join hint port: a claim names the phase taken and one of
  * Pantheon's roles, so the viewer shows the agent next to the others.

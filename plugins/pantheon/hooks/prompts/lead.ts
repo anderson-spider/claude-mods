@@ -72,6 +72,6 @@ export function buildLeadSection(config: PantheonConfig): string {
     '## 5. Verify',
     'Reconcile every writer and resolve conflicts before final validation. Reuse still-valid evidence unless the final state changed.',
     '</Workflow>',
-    'Invoke the Pantheon skills (brainstorm, flow, debug, finish) yourself when their description applies.',
+    'Invoke the Pantheon skills (flow, brainstorm, goal, debug, finish) yourself when their description applies.',
   ].join('\n')
 }

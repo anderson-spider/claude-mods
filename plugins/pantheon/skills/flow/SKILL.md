@@ -9,9 +9,8 @@ The flow tracks a session against `.pantheon/flow/flows/<id>/flow.json`: a goal 
 
 ## Starting a flow
 
-- Flows start when the person runs `/pantheon goal` or asks for one. Do not start a flow on your own unless the person asks.
-- With `/pantheon goal <text>` the draft already exists: write the phases to the flow.json the instructions name, then check them with `{ "action": "validate" }`.
-- With `/pantheon goal` and no text, call `mcp__pantheon__flow` with `{ "action": "start", "name": "<short-kebab-name>", "goal": "<the idea defined in this conversation>" }` before writing any code, then write the phases and validate. If no idea is defined yet, ask the person for the goal in one question.
+- Flows start when the person runs the `/pantheon:goal` skill or asks for one. Do not start a flow on your own unless the person asks.
+- The `goal` skill calls `mcp__pantheon__flow` with `{ "action": "start", "name": "<short-kebab-name>", "goal": "<the goal>" }` before any code is written. Then write the phases to the flow.json the instructions name, check them with `{ "action": "validate" }`, and claim and start the first phase.
 - The Stop is held until the flow is laid out (at most 3 times; then the draft is archived as abandoned).
 - A finished flow moves to `.pantheon/flow/done/<id>/` with a SUMMARY.md, and the next task starts a new one.
 

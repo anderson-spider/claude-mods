@@ -1,7 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import {
-  claimInstruction, goalFromConversationPrompt, goalPrompt, idempotencyKey, phaseTable, planInstructions, render,
-  sessionContext, transitionLine,
+  claimInstruction, idempotencyKey, phaseTable, planInstructions, render, sessionContext, transitionLine,
 } from '../hooks/jevflow/texts'
 import type { StateView } from '../hooks/jevflow/project'
 import type { Flow, Limits, Phase } from '../hooks/jevflow/types'
@@ -137,22 +136,6 @@ test('the planning instructions point at .pantheon/flow/flow.json and carry the 
 test('the example goal is cut to 200 characters with an ellipsis', () => {
   expect(planInstructions('f.json', 'x', 'g'.repeat(250))).toContain(`"goal": "${'g'.repeat(200)}..."`)
   expect(planInstructions('f.json', 'x', 'g'.repeat(200))).toContain(`"goal": "${'g'.repeat(200)}",`)
-})
-
-test('the goal prompt carries the planning instructions and the brainstorm line', () => {
-  const text = goalPrompt('PLANNING')
-  expect(text).toContain('[Pantheon flow] The person started a flow with /pantheon goal.')
-  expect(text).toContain('PLANNING')
-  expect(text).toContain('If a brainstorm defined the idea in this conversation, turn its decisions into the phases and their checks.')
-})
-
-test('the conversation prompt asks for the start action with the defined idea, and a question when none is defined', () => {
-  const text = goalFromConversationPrompt()
-  expect(text).toContain('`mcp__pantheon__flow` tool with `action: "start"`')
-  expect(text).toContain('`goal` set to the defined idea')
-  expect(text).toContain('`name` set to a short kebab-case name')
-  expect(text).toContain('ask the person for the goal in one question and stop')
-  expect(text).not.toContain('jevflow')
 })
 
 test('the claim sentence names the claim action, the phase and the Pantheon roles', () => {

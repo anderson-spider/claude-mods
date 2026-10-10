@@ -24,4 +24,4 @@ Turn an idea into a defined one the person has agreed to. This skill writes no c
 
 ## 4. Stop
 
-- Do not start the work. Tell the person the idea is defined, and that `/pantheon goal` starts the flow from this conversation, or `/pantheon goal <text>` starts it from a sentence they write.
+- Do not start the work. Tell the person the idea is defined, and that `/pantheon:goal` starts the flow from this conversation, or `/pantheon:goal <goal text>` starts it from a sentence they write.

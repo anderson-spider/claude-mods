@@ -22,7 +22,7 @@ function flowWorld(on: On, store: Record<string, unknown> = {}) {
   // What Claude Code's permission rules answer for a check's Bash command (tool.check); allow unless a test says otherwise.
   const rules: { decision: 'allow' | 'ask' | 'deny'; reason?: string } = { decision: 'allow' }
   const isDir = (path: string) => [...files.keys()].some(f => f.startsWith(`${path}/`))
-  const clock = mock.clock(on)
+  mock.clock(on)
   mock.env(on, { HOME })
   // The plugin's store, in memory and readable by the test (the test's own engine has no store handle).
   const kv = new Map<string, unknown>(Object.entries(store))
@@ -80,7 +80,7 @@ function flowWorld(on: On, store: Record<string, unknown> = {}) {
   on('classic.SessionStart', async () => ({}))
   on('classic.Stop', async () => ({}))
   on('classic.UserPromptSubmit', async () => ({}))
-  return { files, exits, toasts, ran, rules, store: kv, clock }
+  return { files, exits, toasts, ran, rules, store: kv }
 }
 
 const call = async ($: Engine, input: Record<string, unknown>) => String((await $.tool.call({ tool: FLOW, ...input } as never) as { result?: unknown }).result)
@@ -135,50 +135,6 @@ test('a session with no flow is never told to start one', async ($, on) => {
   expect(out.additionalContext).toBeUndefined()
   const prompt = await $.classic.UserPromptSubmit({ session_id: SID, prompt: 'Add a dark mode toggle, cover it with tests and document it in the README' } as never) as { additionalContext?: string[] }
   expect(prompt.additionalContext).toBeUndefined()
-})
-
-test('/pantheon goal <text> starts a draft bound to the session, returns the started text and submits the planning prompt', async ($, on) => {
-  const w = flowWorld(on)
-  const submits: string[] = []
-  on('prompt.submit', async (_$, e) => { submits.push(e.text); return { text: e.text } })
-  await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
-  const out = await $.command.run({ command: 'pantheon', args: 'goal Create a.txt, then b.txt!' } as never) as { text?: string }
-  const id = /pantheon: flow (\S+) started/.exec(out.text ?? '')?.[1]
-  expect(id).toBeDefined()
-  expect(out.text).toBe(`pantheon: flow ${id} started. Claude lays out its phases next.`)
-  expect(JSON.parse(w.files.get(`${ROOT}/.pantheon/flow/flows/${id}/draft.json`)!).goal).toBe('Create a.txt, then b.txt!')
-  expect(w.files.get(`${ROOT}/.pantheon/flow/sessions/${SID}`)).toBe(`${id}\n`)
-  await w.clock.settle()
-  expect(submits.length).toBe(1)
-  expect(submits[0]).toContain('[Pantheon flow] The person started a flow with /pantheon goal.')
-  expect(submits[0]).toContain(`lay it out as phases by writing \`.pantheon/flow/flows/${id}/flow.json\``)
-})
-
-test('/pantheon goal with no text creates no draft and submits the conversation prompt', async ($, on) => {
-  const w = flowWorld(on)
-  const submits: string[] = []
-  on('prompt.submit', async (_$, e) => { submits.push(e.text); return { text: e.text } })
-  await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
-  const before = [...w.files.keys()].sort()
-  const out = await $.command.run({ command: 'pantheon', args: 'goal' } as never) as { text?: string }
-  expect(out.text).toBe('pantheon: Claude turns the idea defined in this conversation into a flow.')
-  expect([...w.files.keys()].sort()).toEqual(before)
-  await w.clock.settle()
-  expect(submits.length).toBe(1)
-  expect(submits[0]).toContain('`action: "start"`')
-  expect(submits[0]).toContain('ask the person for the goal in one question and stop')
-})
-
-test('/pantheon goal with text while the session follows an active flow says so and creates nothing', async ($, on) => {
-  const w = flowWorld(on)
-  await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
-  const started = await call($, { action: 'start', goal: 'Create a.txt then b.txt', name: 'two files' })
-  const id = /tracked flow `([^`]+)`/.exec(started)?.[1]
-  expect(id).toBeDefined()
-  const before = [...w.files.keys()].sort()
-  const out = await $.command.run({ command: 'pantheon', args: 'goal x' } as never) as { text?: string }
-  expect(out.text).toBe(`pantheon: this session already follows flow ${id}. /pantheon flow shows it.`)
-  expect([...w.files.keys()].sort()).toEqual(before)
 })
 
 test('the Stop is not evaluated while a subagent runs in the background; a shell task does not hold it back', async ($, on) => {

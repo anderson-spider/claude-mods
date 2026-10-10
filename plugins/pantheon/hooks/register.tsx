@@ -9,7 +9,6 @@ import { DEFAULT_CONFIG } from './defaults'
 import * as jevflow from './jevflow/controller'
 import { ROLES } from './jevflow/types'
 import { createBreaker, createJev } from './jevflow/jev'
-import { goalFromConversationPrompt, goalPrompt } from './jevflow/texts'
 import type { Breaker, JevIo } from './jevflow/jev'
 import { drawFlowTab } from './jevflow/view'
 import type { FlowView } from './jevflow/view'
@@ -283,7 +282,7 @@ async function stripAgents($: Dollar, now: number) {
 }
 
 const FLOW_TOOL_DESCRIPTION = 'The Pantheon flow (JevFlow): tracks a multi-step task against phases with checks, and holds a premature stop. '
-  + 'start starts a flow when the person runs /pantheon goal or asks for one: it lays out a new flow for a task that takes several '
+  + 'start starts a flow when the person runs /pantheon:goal or asks for one: it lays out a new flow for a task that takes several '
   + 'steps and should be finished and verified (then write the phases to the flow.json it names and call validate); join binds this session to a flow another session runs here; claim marks the phase you '
   + 'take, as your Pantheon role (re-claim when you move); status shows the phases, claims and recent decisions.'
 
@@ -432,8 +431,8 @@ export const register: Register = (on, options) => {
     await refreshConfig(io, (await workspace(io)).root)
     await $.command.register({
       name: 'pantheon',
-      description: 'Open the Pantheon pane; subcommands: close, config, doctor, flow, goal [text]',
-      argumentHint: '[close | config | doctor | flow | goal [text]]',
+      description: 'Open the Pantheon pane; subcommands: close, config, doctor, flow',
+      argumentHint: '[close | config | doctor | flow]',
     })
     try {
       await $.tool.register({
@@ -760,8 +759,8 @@ export const register: Register = (on, options) => {
 
   // The flow (JevFlow hooks.py): SessionStart gives the lead the flow's context (or the join hint), a prompt refills the
   // block budget, the Stop runs the checks, Jev and the policy, and StopFailure keeps the API error. A flow starts only
-  // with /pantheon goal or when the person asks for one, never from a prompt. Each fails open: an error adds nothing and
-  // never holds the session.
+  // with the /pantheon:goal skill or when the person asks for one, never from a prompt. Each fails open: an error adds
+  // nothing and never holds the session.
   on('classic.SessionStart', async ($, e, next) => {
     const below = await next(e)
     try {
@@ -896,38 +895,6 @@ export const register: Register = (on, options) => {
         return { text: `The flow status could not be read: ${error instanceof Error ? error.message : String(error)}` }
       }
     }
-    if (sub === 'goal') {
-      const text = e.args.trim().slice(sub.length).trim()
-      const host = hostIo($)
-      try {
-        const root = await flowRoot(host)
-        const sid = String(await $.session.id())
-        const io = flowHost($, jev)
-        // The bound check and the start run in one queue turn, so two goals cannot both start a flow for the session.
-        const outcome = await flowSerial(async () => {
-          const bound = await jevflow.boundFlow(io, root, sid)
-          if (bound && !bound.archived) return { kind: 'bound' as const, id: bound.id }
-          if (!text) return { kind: 'conversation' as const }
-          const instructions = await jevflow.startFlow(io, root, sid, text)
-          return { kind: 'started' as const, id: (await jevflow.boundFlow(io, root, sid))?.id ?? '?', instructions }
-        })
-        if (outcome.kind === 'bound') return { text: `pantheon: this session already follows flow ${outcome.id}. /pantheon flow shows it.` }
-        // The host refuses prompt.submit while this hook holds the turn, so the prompt goes out after it returns.
-        if (outcome.kind === 'conversation') {
-          host.after(0, () => {
-            try { host.submit(goalFromConversationPrompt()).catch(() => undefined) } catch { /* A failed submit must not break the goal. */ }
-          })
-          return { text: 'pantheon: Claude turns the idea defined in this conversation into a flow.' }
-        }
-        const prompt = goalPrompt(outcome.instructions)
-        host.after(0, () => {
-          try { host.submit(prompt).catch(() => undefined) } catch { /* A failed submit must not break the goal. */ }
-        })
-        return { text: `pantheon: flow ${outcome.id} started. Claude lays out its phases next.` }
-      } catch (error) {
-        return { text: `The flow could not start: ${error instanceof Error ? error.message : String(error)}` }
-      }
-    }
     if (sub === 'doctor') {
       const current = await refreshConfig(io, (await workspace(io)).root)
       let pings: PingResult[] | undefined
@@ -949,7 +916,7 @@ export const register: Register = (on, options) => {
         text: doctorReport({ config: current, pings }),
       }
     }
-    return { text: `Unknown subcommand: ${sub}. Use /pantheon, /pantheon close, /pantheon config, /pantheon doctor, /pantheon flow or /pantheon goal [text].` }
+    return { text: `Unknown subcommand: ${sub}. Use /pantheon, /pantheon close, /pantheon config, /pantheon doctor or /pantheon flow.` }
   })
 
   // Last reading of the host clock, kept so a failed read can still draw static durations.
