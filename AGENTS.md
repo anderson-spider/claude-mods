@@ -22,6 +22,7 @@ Each plugin's details live in `plugins/<name>/AGENTS.md`, loaded when working un
 
 ```
 mise install                                   # node and TypeScript 7 from mise.toml (scripts, `tsc --lsp`, `tsc -p plugins/<name>/tsconfig.json`)
+mise run types                                 # writes every plugin's .claude-plugin/types/ (a short interactive session loads each plugin from its folder)
 claude plugin validate .                       # validates the marketplace
 claude plugin validate plugins/branch-guard    # validates the plugin
 claude plugin test plugins/branch-guard        # runs tests/*.test.ts

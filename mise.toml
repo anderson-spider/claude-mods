@@ -4,3 +4,19 @@
 [tools]
 node = "24"
 "npm:typescript" = "7.0.2"
+
+# Claude Code writes plugins/*/.claude-plugin/types/ only when an interactive session loads a plugin from its folder,
+# so this opens one on a pseudo-terminal with every plugin and exits once all of them have their typings.
+[tasks.types]
+description = "Generate the claude-code typings every plugin's tsconfig.json extends"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+dirs=(plugins/*/)
+args=()
+for d in "${dirs[@]}"; do args+=(--plugin-dir "${d%/}"); done
+ready() { for d in "${dirs[@]}"; do [ -f "${d}.claude-plugin/types/tsconfig.json" ] || return 1; done; }
+{ for _ in $(seq 120); do ready && break; sleep 1; done; sleep 2; printf '/exit\r'; } | script -q /dev/null claude "${args[@]}" >/dev/null 2>&1 || true
+ready || { echo "typings were not written for every plugin" >&2; exit 1; }
+echo "typings written for every plugin"
+'''
