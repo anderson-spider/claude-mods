@@ -14,7 +14,7 @@ IMPORTANT: prompts and panel modules include third-party work. Keep `LICENSE` an
 ## Config
 
 - `config.ts` merges built-in defaults, `~/.claude/pantheon.json` and `<repo>/.claude/pantheon.json` field by field: `agents.<role>` and `council.seats.<seat>` take `model`, `effort` and `prompt`; `disabledAgents` is a union. Models must be Claude models (`models.ts`).
-- Fields of the Codex and profile era (`profile`, `profiles`, `sandboxCap`, `noNetwork`, `foregroundMinutes`, an entry's `engine` or `sandbox`) and the old role names (`explorer`, `librarian`, `executor`, `designer`, `oracle`, `fixer`) fail to load with one message listing them saying what to do.
+- Fields of the Codex and profile era (`profile`, `profiles`, `sandboxCap`, `noNetwork`, `foregroundMinutes`, an entry's `engine` or `sandbox`) the old role names (`explorer`, `librarian`, `executor`, `designer`, `oracle`, `fixer`) and the removed `git` role fail to load with one message listing them saying what to do.
 
 ## Edit gate
 
