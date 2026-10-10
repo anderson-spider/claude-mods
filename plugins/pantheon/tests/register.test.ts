@@ -323,10 +323,10 @@ describe('register', () => {
     on('config.set', async (_$, e) => { received.push(e); return { value: e.value } })
     await start($)
     files[`${HOME}/.claude/pantheon.json`] = JSON.stringify({
-      profiles: { custom: { agents: { fixer: { engine: 'codex', model: 'sonnet' } } } },
+      profiles: { custom: { agents: { executor: { engine: 'codex', model: 'sonnet' } } } },
     })
     expect(await $.config.set(profileChange('custom'))).toEqual({
-      deny: `${HOME}/.claude/pantheon.json: profiles.custom.agents.fixer.model: "sonnet" is a Claude model (engine codex)`,
+      deny: `${HOME}/.claude/pantheon.json: profiles.custom.agents.executor.model: "sonnet" is a Claude model (engine codex)`,
     })
     expect(received).toEqual([])
   })
@@ -646,7 +646,7 @@ describe('register', () => {
     on('agent.offer', async () => ({ isOffered: true }))
     delete files[`${HOME}/.claude/pantheon.json`]
     await start($)
-    expect(seen.agents).toEqual(['explorer', 'librarian', 'fixer', 'oracle', 'designer', 'git', 'councillor-alpha', 'councillor-beta'])
+    expect(seen.agents).toEqual(['explorer', 'librarian', 'executor', 'oracle', 'designer', 'git', 'councillor-alpha', 'councillor-beta'])
     const out = parse(await $.tool.call({ tool: DELEGATE, agent: 'explorer', prompt: 'find x' } as never))
     expect(out.error).toBe('Use pantheon:explorer through the Agent tool.')
     expect(seen.argv).toEqual([])
@@ -689,14 +689,14 @@ describe('register', () => {
     expect(seen.agents.filter(agent => agent === 'explorer').length).toBe(2)
   })
 
-  test('resume refuses a finished fixer job after its engine changes to Claude', async ($, on) => {
+  test('resume refuses a finished executor job after its engine changes to Claude', async ($, on) => {
     const { seen, files } = world(on)
     await start($)
-    const first = parse(await $.tool.call({ tool: DELEGATE, agent: 'fixer', prompt: 'x' } as never))
+    const first = parse(await $.tool.call({ tool: DELEGATE, agent: 'executor', prompt: 'x' } as never))
     expect(first.status).toBe('done')
     files[`${HOME}/.claude/pantheon.json`] = '{"profile":"claude"}'
-    const out = parse(await $.tool.call({ tool: DELEGATE, agent: 'fixer', resume: first.jobId, prompt: 'x' } as never))
-    expect(out.error).toBe('Use pantheon:fixer through the Agent tool.')
+    const out = parse(await $.tool.call({ tool: DELEGATE, agent: 'executor', resume: first.jobId, prompt: 'x' } as never))
+    expect(out.error).toBe('Use pantheon:executor through the Agent tool.')
     expect(seen.argv.length).toBe(1)
   })
 
@@ -715,7 +715,7 @@ describe('register', () => {
       return { value: { tool: `mcp__pantheon__${e.name}` } }
     })
     await start($)
-    expect(descriptions.delegate).not.toContain('explorer, librarian, fixer')
+    expect(descriptions.delegate).not.toContain('explorer, librarian, executor')
     expect(descriptions.delegate).toContain('Run a Pantheon role or council seat on Codex on a task')
     for (const text of Object.values(descriptions)) expect(text).not.toContain('currently on Codex')
     expect(agentDescription).toBe('A role or councillor:<seat> currently on Codex.')
@@ -785,7 +785,7 @@ describe('register', () => {
     expect(out.text).not.toContain('fail')
   })
 
-  const PING_ORDER = ['explorer', 'librarian', 'fixer', 'oracle', 'designer', 'git', 'councillor:alpha', 'councillor:beta']
+  const PING_ORDER = ['explorer', 'librarian', 'executor', 'oracle', 'designer', 'git', 'councillor:alpha', 'councillor:beta']
   const agentMessage = (text: string) => `${JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text } })}\n`
 
   /** world() with its process.run replaced: Codex ping runs (`codex exec`) answer through `exec`; the rest is canned. */
@@ -915,7 +915,7 @@ describe('register', () => {
     const out = await $.command.run({ command: 'pantheon', args: 'doctor' })
     expect(out.text).toMatch(/^fail explorer /m)
     expect(out.text).toMatch(/^fail librarian /m)
-    expect(out.text).toMatch(/^ok {3}fixer /m)
+    expect(out.text).toMatch(/^ok {3}executor /m)
   })
 
   test('a throwing Codex ping does not throw out of doctor', async ($, on) => {
@@ -970,7 +970,7 @@ describe('register', () => {
   test('cwd resolving outside the root is refused', async ($, on) => {
     const { seen } = world(on, { realPaths: { '/repo/link': '/etc' } })
     await start($)
-    const out = parse(await $.tool.call({ tool: DELEGATE, agent: 'fixer', prompt: 'x', cwd: '/repo/link' } as never))
+    const out = parse(await $.tool.call({ tool: DELEGATE, agent: 'executor', prompt: 'x', cwd: '/repo/link' } as never))
     expect(String(out.error)).toContain('outside')
     expect(seen.argv).toEqual([])
   })
@@ -978,21 +978,21 @@ describe('register', () => {
   test('resume: unknown job and job without sessionId -> error', async ($, on) => {
     world(on, { stdout: '' , exitCode: 1 })
     await start($)
-    const unknown = parse(await $.tool.call({ tool: DELEGATE, agent: 'fixer', prompt: 'x', resume: 'nope' } as never))
+    const unknown = parse(await $.tool.call({ tool: DELEGATE, agent: 'executor', prompt: 'x', resume: 'nope' } as never))
     expect(String(unknown.error)).toContain('Unknown job')
-    const failed = parse(await $.tool.call({ tool: DELEGATE, agent: 'fixer', prompt: 'x' } as never))
+    const failed = parse(await $.tool.call({ tool: DELEGATE, agent: 'executor', prompt: 'x' } as never))
     expect(failed.status).toBe('error')
-    const again = parse(await $.tool.call({ tool: DELEGATE, agent: 'fixer', prompt: 'y', resume: failed.jobId } as never))
+    const again = parse(await $.tool.call({ tool: DELEGATE, agent: 'executor', prompt: 'y', resume: failed.jobId } as never))
     expect(String(again.error)).toContain('delegate it again')
   })
 
   test('resume ignores a new cwd and reuses the stored one', async ($, on) => {
     const { seen } = world(on)
     await start($)
-    const first = parse(await $.tool.call({ tool: DELEGATE, agent: 'fixer', prompt: 'x', cwd: '/repo/sub' } as never))
-    const moved = parse(await $.tool.call({ tool: DELEGATE, agent: 'fixer', prompt: 'y', resume: first.jobId, cwd: '/repo/other' } as never))
+    const first = parse(await $.tool.call({ tool: DELEGATE, agent: 'executor', prompt: 'x', cwd: '/repo/sub' } as never))
+    const moved = parse(await $.tool.call({ tool: DELEGATE, agent: 'executor', prompt: 'y', resume: first.jobId, cwd: '/repo/other' } as never))
     expect(String(moved.error)).toContain('recorded cwd')
-    const ok = parse(await $.tool.call({ tool: DELEGATE, agent: 'fixer', prompt: 'y', resume: first.jobId } as never))
+    const ok = parse(await $.tool.call({ tool: DELEGATE, agent: 'executor', prompt: 'y', resume: first.jobId } as never))
     expect(ok.status).toBe('done')
     expect(seen.cwds).toEqual(['/repo/sub', '/repo/sub'])
     expect(seen.argv[1]).toContain('resume')
@@ -1001,10 +1001,10 @@ describe('register', () => {
   test('resume recomputes sandbox with a stricter current policy', async ($, on) => {
     const { seen, files } = world(on)
     await start($)
-    const first = parse(await $.tool.call({ tool: DELEGATE, agent: 'fixer', prompt: 'x' } as never))
+    const first = parse(await $.tool.call({ tool: DELEGATE, agent: 'executor', prompt: 'x' } as never))
     expect(seen.argv[0]).toContain('workspace-write')
     files[`${ROOT}/.claude/pantheon.json`] = JSON.stringify({ sandboxCap: 'read-only' })
-    await $.tool.call({ tool: DELEGATE, agent: 'fixer', prompt: 'y', resume: first.jobId } as never)
+    await $.tool.call({ tool: DELEGATE, agent: 'executor', prompt: 'y', resume: first.jobId } as never)
     expect(seen.argv[1]?.[4]).toBe('read-only')
   })
 
@@ -1012,9 +1012,9 @@ describe('register', () => {
     const realPaths: Record<string, string> = {}
     const { seen } = world(on, { realPaths })
     await start($)
-    const first = parse(await $.tool.call({ tool: DELEGATE, agent: 'fixer', prompt: 'x', cwd: '/repo/sub' } as never))
+    const first = parse(await $.tool.call({ tool: DELEGATE, agent: 'executor', prompt: 'x', cwd: '/repo/sub' } as never))
     realPaths['/repo/sub'] = '/elsewhere'
-    const out = parse(await $.tool.call({ tool: DELEGATE, agent: 'fixer', prompt: 'y', resume: first.jobId } as never))
+    const out = parse(await $.tool.call({ tool: DELEGATE, agent: 'executor', prompt: 'y', resume: first.jobId } as never))
     expect(String(out.error)).toContain('outside')
     expect(seen.argv.length).toBe(1)
   })
@@ -1031,7 +1031,7 @@ describe('register', () => {
   test('session.start marks leftover running/background jobs as lost', async ($, on) => {
     world(on)
     const saved: Job[] = [
-      { id: 'a', agent: 'fixer', status: 'running', startedAt: 0, cwd: ROOT, sessionId: 's1' },
+      { id: 'a', agent: 'executor', status: 'running', startedAt: 0, cwd: ROOT, sessionId: 's1' },
       { id: 'b', agent: 'explorer', status: 'background', startedAt: 0, cwd: ROOT },
       { id: 'c', agent: 'explorer', status: 'done', startedAt: 0, cwd: ROOT },
     ]
@@ -1112,7 +1112,7 @@ describe('register', () => {
   test('invalid first config still registers the default native agents', async ($, on) => {
     const { seen } = world(on, { files: { [`${HOME}/.claude/pantheon.json`]: '{ nope' } })
     await start($)
-    expect(seen.agents).toEqual(['explorer', 'librarian', 'fixer', 'oracle', 'designer', 'git', 'councillor-alpha', 'councillor-beta'])
+    expect(seen.agents).toEqual(['explorer', 'librarian', 'executor', 'oracle', 'designer', 'git', 'councillor-alpha', 'councillor-beta'])
   })
 
   test('a failed native registration is retried on the next turn', async ($, on) => {
@@ -1212,15 +1212,15 @@ describe('register', () => {
       const { clock } = stripWorld(on, { hang: true })
       await start($)
       const idle = await mountStrip($)
-      try { expect(await texts(idle)).not.toContain('fixer') } finally { await idle.unmount() }
-      const out = parse(await $.tool.call({ tool: DELEGATE, agent: 'fixer', prompt: 'x', description: 'Wire the strip', background: true } as never))
+      try { expect(await texts(idle)).not.toContain('executor') } finally { await idle.unmount() }
+      const out = parse(await $.tool.call({ tool: DELEGATE, agent: 'executor', prompt: 'x', description: 'Wire the strip', background: true } as never))
       expect(out.status).toBe('background')
       await clock.settle()
       const ui = await mountStrip($)
       try {
         const all = await texts(ui)
         expect(all).toContain('agents ')
-        expect(all).toContain('fixer')
+        expect(all).toContain('executor')
         expect(all).toContain('Wire the strip')
         // One row of the box, never cards above it.
         expect(all).not.toContain('╭─ ')
@@ -1237,7 +1237,7 @@ describe('register', () => {
       await spawn('t1', 'Map the auth code', 'Explore')
       await spawn('t2', 'Find the cache TTL', 'Explore')
       await spawn('t3', 'Review it', 'general-purpose')
-      await spawn('t4', 'Fourth one', 'pantheon:fixer')
+      await spawn('t4', 'Fourth one', 'pantheon:executor')
       const ui = await mountStrip($, 140)
       try {
         const all = await texts(ui)

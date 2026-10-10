@@ -17,7 +17,7 @@ The [Codex CLI](https://github.com/openai/codex) must be on `PATH` and logged in
 | --- | --- | --- | --- |
 | explorer | claude `haiku` | codex `gpt-6-luna`, high | codex `gpt-6-luna`, high |
 | librarian | claude `haiku` | codex `gpt-6-luna`, high | codex `gpt-6-luna`, high |
-| fixer | claude `sonnet` | codex `gpt-6.1-sol`, high | codex `gpt-6.1-sol`, high |
+| executor | claude `sonnet` | codex `gpt-6.1-sol`, high | codex `gpt-6.1-sol`, high |
 | oracle | claude `opus` | codex `gpt-6-astra`, high | claude `opus` |
 | designer | claude `sonnet` | codex `gpt-6.1-sol`, high | claude `sonnet` |
 | git | claude `haiku` | codex `gpt-6-luna`, low | codex `gpt-6-luna`, low |
@@ -27,6 +27,8 @@ The [Codex CLI](https://github.com/openai/codex) must be on `PATH` and logged in
 All six roles and every seat can use either engine. The orchestrator calls a Codex role with `delegate({ agent: "<role>", prompt })` and a Claude role with `Agent({ subagent_type: "pantheon:<role>", prompt })`. Seats use `councillor:<seat>` on Codex or `pantheon:councillor-<seat>` on Claude.
 
 The orchestrator gets a system prompt section, adapted from the slim `orchestrator.ts`, that says when to delegate, how to parallelize and how to call each role. A disabled role leaves that section and the Agent tool.
+
+The `executor` role implements code changes and runs scripts, test batteries and API calls within the orchestrator’s brief, returning short results (status, tables or errors). It does no external research or sub-delegation and leaves commits and history operations to `git`.
 
 The `git` role handles commits, squash, push and PR/MR creation after validation. The orchestrator decides and validates; its brief specifies the included changes, branch, base, squash, push and PR/MR choices, and the task's commit range for history rewrites. Git reads status and diffs, preserves unrelated changes, follows commit conventions and PR/MR templates, uses `gh` or `glab` for the remote, and reports commit SHAs, push results, the PR/MR URL and refusals.
 
@@ -47,7 +49,7 @@ Its fixed refusals cover modifying default or protected branches (including main
 
 ## Panel
 
-The panel keeps eight role slots in order: orchestrator, explorer, librarian, fixer, oracle, designer, git and council. Running lists one row per live instance (parallel runs each get a row, and each council seat has its own); Idle lists exactly one row per role and council seat with nothing live, showing the latest run's model, duration and task plus a strip of `▰` marks for the role's last four rounds, shown only from two rounds on (green done, red failed, `+N` for older ones). Disabled roles and seats show as `⊘` rows, and a lost run counts as Idle. Groups fold to their headings when the pane is short. Other native subagents appear under "other agents" when present. Running rows show model, elapsed time, context use and last activity; roles that never ran leave the time and task blank and keep their role color; when a role last ran shows in the timeline and the mini view. A "Session log" card at the bottom lists the last eight events (round started, done, failed, lost or stopped, disabled roles) with the time and the role in its color; end lines name the task, so parallel runs of one role stay apart; it is the first card to drop when the pane is short. The orchestrator shows its model, effort, turn clock, context and the roles it is delegating to.
+The panel keeps eight role slots in order: orchestrator, explorer, librarian, executor, oracle, designer, git and council. Running lists one row per live instance (parallel runs each get a row, and each council seat has its own); Idle lists exactly one row per role and council seat with nothing live, showing the latest run's model, duration and task plus a strip of `▰` marks for the role's last four rounds, shown only from two rounds on (green done, red failed, `+N` for older ones). Disabled roles and seats show as `⊘` rows, and a lost run counts as Idle. Groups fold to their headings when the pane is short. Other native subagents appear under "other agents" when present. Running rows show model, elapsed time, context use and last activity; roles that never ran leave the time and task blank and keep their role color; when a role last ran shows in the timeline and the mini view. A "Session log" card at the bottom lists the last eight events (round started, done, failed, lost or stopped, disabled roles) with the time and the role in its color; end lines name the task, so parallel runs of one role stay apart; it is the first card to drop when the pane is short. The orchestrator shows its model, effort, turn clock, context and the roles it is delegating to.
 
 The desktop panel follows the former hud plugin's dark palette, tinted segments and 6px corners. The header, session card, agent groups and timeline share a 24px inset; the timeline follows the available pane width. Cost, Tokens and Time are horizontal segments below the session card, with fixed numeric slots (9, 7 and 6 cells); they wrap on narrow panes and become plain label/value rows when an individual segment cannot fit, stacking the value below the label at the smallest widths. Cost comes from the host's ledger and reads `—` until a measurement arrives. Tokens adds each agent's context or input and output, so it is a rough size, not a bill. Collapsible Running and Idle groups use full-width hairline separators. Each desktop row leads with role and model, followed by the task and readings; its state marker has a fixed slot. Planned text uses the readable secondary color. Native text and buttons sit over static SVG backgrounds, so they remain selectable and actionable.
 
@@ -82,20 +84,20 @@ Layers apply in order: built-in defaults, `~/.claude/pantheon.json`, then `<repo
 {
   "profile": "mixed",
   "profiles": {
-    "mixed": { "agents": { "fixer": { "model": "gpt-6-astra" } } },
+    "mixed": { "agents": { "executor": { "model": "gpt-6-astra" } } },
     "mine": {
       "agents": { "oracle": { "engine": "codex", "model": "gpt-6-astra" } },
       "council": { "seats": { "beta": { "engine": "codex" } } }
     }
   },
-  "agents": { "fixer": { "prompt": "...", "sandbox": "read-only" } }
+  "agents": { "executor": { "prompt": "...", "sandbox": "read-only" } }
 }
 ```
 
 - `profiles.<name>.agents.<role>` and `profiles.<name>.council.seats.<seat>` accept only `engine`, `model` and `effort`, merged field by field. A custom profile inherits the fully merged `claude` profile. Changing an entry's engine drops its inherited model and effort unless that same layer supplies them.
 - Top-level `agents.<role>` accepts only `prompt` (appended to the role's prompt) and `sandbox`; top-level `council.seats.<seat>` accepts only `prompt`. These settings apply to every profile. Every seat needs an engine in its profile; a prompt-only seat missing from the active profile is rejected.
 - `sandboxCap` defaults to `workspace-write`, `noNetwork` to `false`, `foregroundMinutes` to `5` and `disabledAgents` to `[]`. `disabledAgents` takes role names, `councillor:<seat>` and `"council"`, combined as a union across layers.
-- `sandboxCap` and `noNetwork` merge to the most restrictive of default, user and project: a project never loosens the user's config. Codex sandboxes can only narrow from the role default: explorer, librarian, oracle and council seats are read-only; fixer, designer and git default to workspace-write. `danger-full-access` is refused.
+- `sandboxCap` and `noNetwork` merge to the most restrictive of default, user and project: a project never loosens the user's config. Codex sandboxes can only narrow from the role default: explorer, librarian, oracle and council seats are read-only; executor, designer and git default to workspace-write. `danger-full-access` is refused.
 - Validation runs after merging, over every profile, including inactive profiles. An unknown active profile, missing seat engine or incompatible engine/model pair rejects the config. Claude accepts aliases `opus`, `sonnet`, `haiku`, `fable`, `opusplan`, `default` and `inherit` (optionally with a bracket suffix such as `[1m]`), or an ID containing `claude`. Codex accepts other model strings and rejects those Claude names. Omitting `model` is valid for either engine. Effort is not validated; supported values differ by engine.
 - An invalid config shows a toast, `delegate` refuses every call until it is fixed, and the native agents stay as in the last valid config (or the defaults).
 - The config is read again on every `delegate` and every turn; no reload needed.
@@ -104,14 +106,18 @@ Layers apply in order: built-in defaults, `~/.claude/pantheon.json`, then `<repo
 
 Pick the profile in `/config` (field `pantheon.profile`, free text) or with the selector in the panel header. Both write the same field, and the `/config` field accepts only names of built-in profiles or profiles defined in the JSON files; an unknown name, or any change while the JSON config is invalid, is refused with the reason. When a JSON file sets `profile` and `/config` has no choice, the panel selector is locked and names that file; once a profile is chosen in `/config` or the panel, it wins. A profile saved in `/config` overrides the JSON `profile`, so if you chose one before this version, clear the field (an empty value is accepted) to let the JSON files decide again.
 
+### Migrating to 0.15
+
+The role is now `executor`, including the native agent `pantheon:executor`. Rename `agents.fixer` to `agents.executor` at the top level and under every `profiles.<name>`, and replace `fixer` with `executor` in `disabledAgents`. Configs that still use `fixer` in those fields fail to load with a message naming `executor`; there is no alias.
+
 ### Migrating from 0.3
 
 Version 0.4.0 changes the default to `claude`. Set `"profile": "mixed"` to keep the old engines. The old engine/model/effort fields under top-level roles and seats are removed; move per-role and per-seat values into `profiles.<name>`. Those fields produce a migration error naming the new path. A top-level `model` was already rejected in 0.3 and is still reported as an unknown field. Keep prompts and sandbox settings outside profiles.
 
-The equivalent of the old engine split with a customized fixer model is:
+The equivalent of the old engine split with a customized executor model is:
 
 ```json
-{"profile":"mixed","profiles":{"mixed":{"agents":{"fixer":{"model":"…"}}}}}
+{"profile":"mixed","profiles":{"mixed":{"agents":{"executor":{"model":"…"}}}}}
 ```
 
 Replace `…` with your Codex model. The sandbox change also applies to `mixed`: setting explorer or librarian to `workspace-write` no longer widens their read-only default.
@@ -127,7 +133,7 @@ Four skills carry the workflow, and the orchestrator invokes them itself when th
 | Skill | Use |
 | --- | --- |
 | `grill` | Before creative or multi-step work: interviews you one question at a time, reads code and docs through the explorer and librarian, opens a worktree with `EnterWorktree` and writes the plan. |
-| `execute` | Carries out the plan: briefs the fixer or designer from the task section, requires the test first, delegates commits to git, and sends only `risk: yes` tasks to the oracle. |
+| `execute` | Carries out the plan: briefs the executor or designer from the task section, requires the test first, delegates commits to git, and sends only `risk: yes` tasks to the oracle. |
 | `debug` | On a bug or failing test: reproduce, form hypotheses, confirm the cause, then fix. |
 | `finish` | Before claiming work is done: runs the real validation, one oracle review of the branch, then delegates push and PR/MR creation to git. |
 
@@ -139,11 +145,11 @@ Four skills carry the workflow, and the orchestrator invokes them itself when th
 ## Security
 
 - **Workspace**: a `delegate` `cwd` must resolve, symlinks followed, inside the session's repository root (or the session directory outside a repository). `resume` always reuses the job's stored `cwd` and checks it again.
-- **Sandbox**: for Codex, the effective sandbox is the most restrictive of the role default, `agents.<role>.sandbox` and `sandboxCap`; council seats are always read-only. Explorer, librarian and oracle default to read-only; fixer, designer and git default to workspace-write. Runs other than git pass `-c sandbox_workspace_write.writable_roots=[]`, so extra writable roots in your `config.toml` do not widen writes. `/tmp` and `$TMPDIR` stay writable.
+- **Sandbox**: for Codex, the effective sandbox is the most restrictive of the role default, `agents.<role>.sandbox` and `sandboxCap`; council seats are always read-only. Explorer, librarian and oracle default to read-only; executor, designer and git default to workspace-write. Runs other than git pass `-c sandbox_workspace_write.writable_roots=[]`, so extra writable roots in your `config.toml` do not widen writes. `/tmp` and `$TMPDIR` stay writable.
 - **Git sandbox exception**: only the Codex git role gets workspace-write with the repository's git common dir as an extra writable root and network explicitly on. The common dir is resolved with `git rev-parse --path-format=absolute --git-common-dir` and `realPath` from both the session repository root and the requested `cwd`, with Git location environment overrides removed for both probes; the resolved directories must match. It refuses before spawning if resolution fails, `sandboxCap` is `read-only`, `noNetwork` is `true`, or `agents.git.sandbox` is `read-only`. The doctor ping stays read-only, without the extra writable root or explicit network grant.
 - **Git trust**: write access to the whole git dir lets the role change `.git/hooks` and Git config such as `core.hooksPath` and `core.sshCommand`, which can run code later in your own shell. If that trust is not acceptable, disable `git` through `disabledAgents`, or keep `noNetwork: true` or `sandboxCap: "read-only"` to block the Codex git role.
 - **`--ignore-rules`**: every run ignores Codex `.rules` files, because an `allow` rule would run commands outside the sandbox. The cost: your `forbidden` rules do not apply inside Pantheon either; the sandbox still does.
-- **Native agents** follow the session's permission mode; `sandbox`, `sandboxCap` and `noNetwork` do not apply to them. Every native role inherits the session's tools, MCP servers included. That includes MCP tools that write. Oracle and council seats have Edit, Write and NotebookEdit withheld. The read-only roles (explorer, librarian, oracle and council seats) also have Agent and the delegate tools withheld. Explorer and librarian keep Edit and Write, and their prompts tell them not to change files, git or external state through Bash. The librarian may read a logged-in page through a `terminal-browser` the orchestrator names, read only: no login, credentials, form submissions or clicks that change data, and it releases the browser when done. Fixer, designer and git may write within their assigned scope. Native git has `disallowedTools` Agent, `mcp__pantheon__delegate` and `mcp__pantheon__delegate_cancel`. Fixer and designer keep the delegation tools; their prompts forbid sub-delegation, without separate enforcement.
+- **Native agents** follow the session's permission mode; `sandbox`, `sandboxCap` and `noNetwork` do not apply to them. Every native role inherits the session's tools, MCP servers included. That includes MCP tools that write. Oracle and council seats have Edit, Write and NotebookEdit withheld. The read-only roles (explorer, librarian, oracle and council seats) also have Agent and the delegate tools withheld. Explorer and librarian keep Edit and Write, and their prompts tell them not to change files, git or external state through Bash. The librarian may read a logged-in page through a `terminal-browser` the orchestrator names, read only: no login, credentials, form submissions or clicks that change data, and it releases the browser when done. Executor, designer and git may write within their assigned scope. Native git has `disallowedTools` Agent, `mcp__pantheon__delegate` and `mcp__pantheon__delegate_cancel`. Executor and designer keep the delegation tools; their prompts forbid sub-delegation, without separate enforcement.
 
 ## Develop
 

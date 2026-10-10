@@ -25,7 +25,7 @@ describe('orchestrator section', () => {
   })
   test('claude routes every role and seat through Agent without Codex discipline', () => {
     const section = buildOrchestratorSection(CLAUDE)
-    for (const role of ['explorer', 'librarian', 'fixer', 'oracle', 'designer', 'git']) {
+    for (const role of ['explorer', 'librarian', 'executor', 'oracle', 'designer', 'git']) {
       expect(section).toContain(`Agent({ subagent_type: "pantheon:${role}"`)
     }
     expect(section).toContain('Council seats: Agent pantheon:councillor-alpha, Agent pantheon:councillor-beta')
@@ -39,7 +39,7 @@ describe('orchestrator section', () => {
 
   test('codex routes every role and seat through delegate and preserves native discipline', () => {
     const section = buildOrchestratorSection(CODEX)
-    for (const role of ['explorer', 'librarian', 'fixer', 'oracle', 'designer', 'git']) {
+    for (const role of ['explorer', 'librarian', 'executor', 'oracle', 'designer', 'git']) {
       expect(section).toContain(`delegate({ agent: "${role}"`)
       expect(section).not.toContain(`pantheon:${role}`)
     }
@@ -59,13 +59,13 @@ describe('orchestrator section', () => {
       expect(buildOrchestratorSection({ ...config, disabledAgents })).not.toContain('delegate_result')
     }
     expect(buildOrchestratorSection({
-      ...MIXED, disabledAgents: ['explorer', 'librarian', 'fixer', 'git', 'council'],
+      ...MIXED, disabledAgents: ['explorer', 'librarian', 'executor', 'git', 'council'],
     })).not.toContain('delegate_result')
   })
 
   test('lists active roles with the correct calling tools', () => {
     const section = buildOrchestratorSection(MIXED)
-    for (const role of ['explorer', 'librarian', 'fixer', 'git']) {
+    for (const role of ['explorer', 'librarian', 'executor', 'git']) {
       expect(section).toContain(`@${role}`)
       expect(section).toContain(`delegate({ agent: "${role}"`)
     }
@@ -73,7 +73,7 @@ describe('orchestrator section', () => {
     expect(section).toContain('Agent({ subagent_type: "pantheon:designer"')
   })
 
-  for (const role of ['explorer', 'librarian', 'fixer', 'oracle', 'designer', 'git']) {
+  for (const role of ['explorer', 'librarian', 'executor', 'oracle', 'designer', 'git']) {
     test(`disabled ${role} disappears from routing, examples and skill mappings`, () => {
       const section = buildOrchestratorSection({ ...MIXED, disabledAgents: [role] })
       expect(section).not.toContain(`@${role}`)
@@ -121,7 +121,7 @@ describe('orchestrator section', () => {
 })
 
 describe('role prompts', () => {
-  const keys: PromptKey[] = ['explorer', 'librarian', 'fixer', 'oracle', 'designer', 'git', 'councillor']
+  const keys: PromptKey[] = ['explorer', 'librarian', 'executor', 'oracle', 'designer', 'git', 'councillor']
   test('git routing keeps decisions and validation with the orchestrator', () => {
     for (const config of [CLAUDE, CODEX, MIXED]) {
       const section = buildOrchestratorSection(config)
@@ -137,8 +137,8 @@ describe('role prompts', () => {
       expect(rolePrompt('designer', engine)).toContain('Do not commit or push; the git role handles your delivered changes.')
     })
 
-    test(`${engine} fixer leaves commit and push to git`, () => {
-      const prompt = rolePrompt('fixer', engine)
+    test(`${engine} executor leaves commit and push to git`, () => {
+      const prompt = rolePrompt('executor', engine)
       expect(prompt).toContain('Do not commit or push')
       expect(prompt).toContain('the git role')
       expect(prompt).not.toContain('orchestrator commits')
@@ -185,9 +185,9 @@ describe('role prompts', () => {
     expect(rolePrompt('librarian', 'codex')).not.toContain('gh_grep')
   })
 
-  test('fixer implements within scope, edits with apply_patch and does not commit', () => {
-    const prompt = rolePrompt('fixer', 'codex')
-    for (const text of ['apply_patch', '<summary>', '<changes>', '<verification>', 'orchestrator', 'commit', 'Do not spawn subagents', 'No design work']) {
+  test('executor implements within scope, edits with apply_patch and does not commit', () => {
+    const prompt = rolePrompt('executor', 'codex')
+    for (const text of ['apply_patch', '<summary>', '<changes>', '<verification>', 'orchestrator', 'commit', 'Do not spawn subagents', 'No design work', 'run scripts, test batteries and API calls', 'short result: a table, status or errors, not raw logs']) {
       expect(prompt).toContain(text)
     }
   })

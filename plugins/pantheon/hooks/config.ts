@@ -57,6 +57,9 @@ function entries(value: Record<string, unknown>, prefix: string, profile?: strin
   }
   if (Object.hasOwn(value, 'agents')) {
     const agents = object(value.agents, `${prefix}agents`)
+    if (Object.hasOwn(agents, 'fixer')) {
+      throw new Error(`${prefix}agents.fixer: role \`fixer\` was renamed to \`executor\`; use \`${prefix}agents.executor\``)
+    }
     knownKeys(agents, ROLES, `${prefix}agents.`)
     for (const [name, raw] of Object.entries(agents)) check(raw, `${prefix}agents.${name}`, true)
   }
@@ -86,6 +89,9 @@ function validate(value: unknown): ConfigLayer {
   }
   if (Object.hasOwn(config, 'disabledAgents')) {
     const disabled = config.disabledAgents
+    if (Array.isArray(disabled) && disabled.includes('fixer')) {
+      throw new Error('disabledAgents: role `fixer` was renamed to `executor`; use `executor` in `disabledAgents`')
+    }
     if (!Array.isArray(disabled) || disabled.some(name =>
       typeof name !== 'string' || !(
         (ROLES as readonly string[]).includes(name) || name === 'council' ||

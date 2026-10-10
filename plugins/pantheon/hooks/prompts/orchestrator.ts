@@ -18,9 +18,9 @@ ${callLine('librarian', engine, 'Research', 'research task')}
 - Direct: stable basic usage or evidence already in context.
 ${engine === 'claude' ? `- For a login-gated page, pass a logged-in \`terminal-browser\`'s \`--browser <key>\` in the brief and release it with \`terminal-browser action --browser <key> done\` if the librarian did not.
 ` : ''}`.trimEnd(),
-  fixer: (engine: Engine) => `@fixer
-${callLine('fixer', engine, 'Implement', 'full spec')}
-- Delegate: triage done and work non-trivial or multi-file; separate folders mean separate write ownership.
+  executor: (engine: Engine) => `@executor
+${callLine('executor', engine, 'Execute', 'full spec')}
+- Delegate: triage done and work non-trivial or multi-file, including scripts, test batteries and API calls within the brief's scope; separate folders mean separate write ownership.
 - Direct: one small clear action costs less than its handoff. Design taste, layout and UI copy stay with the design lane.`,
   oracle: (engine: Engine) => `@oracle
 ${callLine('oracle', engine, 'Review', 'context')}
@@ -80,7 +80,7 @@ export function buildOrchestratorSection(config: PantheonConfig): string {
     ...(active('designer') ? [
       '### Design Handoff Discipline',
       '- Treat @designer layout, spacing, hierarchy, motion, color, affordances and component feel as intentional; do not flatten them through normalization or refactoring. Improve copy while preserving visual structure and interaction intent.',
-      ...(active('fixer') ? ['- @fixer may do bounded mechanical follow-up that preserves the design exactly; visual judgment or changed feel returns to @designer.'] : ['- Follow-up that changes visual quality returns to @designer.']),
+      ...(active('executor') ? ['- @executor may do bounded mechanical follow-up that preserves the design exactly; visual judgment or changed feel returns to @designer.'] : ['- Follow-up that changes visual quality returns to @designer.']),
     ] : []),
     '### Session Reuse',
     '- Prefer a matching specialist session; start fresh only when unrelated context is excessive.',

@@ -7,8 +7,9 @@ IMPORTANT: prompts and panel modules include third-party work. Keep `LICENSE` an
 ## Engines and roles
 
 - Roles and seats on Codex run through `delegate`, `delegate_result` and `delegate_cancel` on `codex exec --json`.
-- Roles and seats on Claude are registered as native `pantheon:<role>` or `pantheon:councillor-<seat>` agents with `$.agent.register` (no tool list, so they inherit the session's tools; oracle and councillors get `disallowedTools` Edit, Write and NotebookEdit; explorer, librarian, oracle, git and councillors also get Agent, `mcp__pantheon__delegate` and `mcp__pantheon__delegate_cancel`; fixer and designer get none), and hidden by an `agent.offer` guard when disabled or moved to Codex.
-- Fixer, designer and git may write within their assigned scope. The git role executes commits, squash, push and PR/MR creation from the orchestrator's brief; the orchestrator decides the included changes, branch, base, squash/push/PR choices and task commit range, and owns validation. Git follows repository conventions and templates, uses `gh` or `glab`, and reports SHAs, push results, PR/MR URLs and refusals.
+- Roles and seats on Claude are registered as native `pantheon:<role>` or `pantheon:councillor-<seat>` agents with `$.agent.register` (no tool list, so they inherit the session's tools; oracle and councillors get `disallowedTools` Edit, Write and NotebookEdit; explorer, librarian, oracle, git and councillors also get Agent, `mcp__pantheon__delegate` and `mcp__pantheon__delegate_cancel`; executor and designer get none), and hidden by an `agent.offer` guard when disabled or moved to Codex.
+- Executor implements code changes and runs scripts, test batteries and API calls within the brief, returning short results; no external research or sub-delegation. Commits and history operations stay with git.
+- Executor, designer and git may write within their assigned scope. The git role executes commits, squash, push and PR/MR creation from the orchestrator's brief; the orchestrator decides the included changes, branch, base, squash/push/PR choices and task commit range, and owns validation. Git follows repository conventions and templates, uses `gh` or `glab`, and reports SHAs, push results, PR/MR URLs and refusals.
 - Git's fixed refusals cover modifying default or protected branches (including main/master/develop), unverified branch protection, force push without `--force-with-lease`, PR/MR merges, remote branch deletion, history rewrites outside an explicit task commit range, and work outside the task.
 - `codex.ts` builds argv and parses JSONL.
 - `jobs.ts` runs foreground and background jobs and prompts the session when one ends.
@@ -18,6 +19,7 @@ IMPORTANT: prompts and panel modules include third-party work. Keep `LICENSE` an
 
 - `config.ts` resolves built-in, `~/.claude/pantheon.json` and `<repo>/.claude/pantheon.json` layers. Top-level `profile` selects the profile, `profiles` holds engine/model/effort, and prompts and sandbox settings stay at the top level.
 - The project selection overrides the user selection, and the `/config` selection overrides both. `sandboxCap` and `noNetwork` merge to the most restrictive, and Codex role sandboxes can only narrow from their defaults.
+- `fixer` in top-level or profile `agents`, or in `disabledAgents`, is rejected with a migration message naming `executor`; no alias.
 - Legacy engine/model/effort fields under top-level roles and seats are rejected with migration paths. A top-level `model` stays an unknown field.
 - Built-in git profiles: `claude` uses Claude `haiku`; `codex` and `mixed` use Codex `gpt-6-luna` with effort `low`.
 - `models.ts` validates engine/model pairs across every merged profile.
@@ -25,7 +27,7 @@ IMPORTANT: prompts and panel modules include third-party work. Keep `LICENSE` an
 
 ## Sandbox and trust
 
-- Codex explorer, librarian, oracle and council seats are read-only; fixer, designer and git default to workspace-write. Native agents follow session permissions; Codex sandbox and network settings do not apply to them.
+- Codex explorer, librarian, oracle and council seats are read-only; executor, designer and git default to workspace-write. Native agents follow session permissions; Codex sandbox and network settings do not apply to them.
 - Only the Codex git role gets the repository's git common dir as an extra writable root and network explicitly on; other roles keep `writable_roots=[]`. `register.tsx` resolves `git rev-parse --path-format=absolute --git-common-dir` through `realPath` from both the session repository root and the checked `cwd`, removing Git location environment overrides for both probes and requiring the results to match. Resolution failure, `sandboxCap: read-only`, `noNetwork: true` or `agents.git.sandbox: read-only` refuses the call before spawning. The doctor ping remains read-only without the extra writable root or explicit network grant.
 - Write access to the whole git dir lets git change `.git/hooks` and Git config such as `core.hooksPath` and `core.sshCommand`, which can run code later in the user's own shell. If that trust is unacceptable, disable git with `disabledAgents`, or keep `noNetwork: true` or `sandboxCap: read-only` to block the Codex role.
 
@@ -39,7 +41,7 @@ IMPORTANT: prompts and panel modules include third-party work. Keep `LICENSE` an
 
 ## Roster
 
-`roster.ts` joins all six roles on either engine and council seats into eight fixed slots (orchestrator, explorer, librarian, fixer, oracle, designer, git, council), with "other agents" when present. Slot engines follow the effective config and show `mixed` when an active instance or the latest ended one used a different engine. The panel groups them as Running (one row per live instance; each council seat has its own) and Idle (exactly one row per role and per council seat with nothing live: the latest run's model, duration and task, a strip of `▰` marks for the role's last four rounds (only with two or more rounds) with `+N` for older ones, `⇄` for a mixed engine, `⊘` for a disabled one). A lost run counts as Idle. The council slot carries every configured seat in `seats`.
+`roster.ts` joins all six roles on either engine and council seats into eight fixed slots (orchestrator, explorer, librarian, executor, oracle, designer, git, council), with "other agents" when present. Slot engines follow the effective config and show `mixed` when an active instance or the latest ended one used a different engine. The panel groups them as Running (one row per live instance; each council seat has its own) and Idle (exactly one row per role and per council seat with nothing live: the latest run's model, duration and task, a strip of `▰` marks for the role's last four rounds (only with two or more rounds) with `+N` for older ones, `⇄` for a mixed engine, `⊘` for a disabled one). A lost run counts as Idle. The council slot carries every configured seat in `seats`.
 
 ## Panel
 

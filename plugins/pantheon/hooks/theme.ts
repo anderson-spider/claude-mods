@@ -9,7 +9,7 @@ export const ROLE_COLOR: Record<SlotName, string> = {
   orchestrator: '#5B93E6',
   explorer: '#3FA57D',
   librarian: '#C9A24A',
-  fixer: '#8F96A6',
+  executor: '#8F96A6',
   oracle: '#A56BD8',
   designer: '#D870A8',
   git: '#E8873A',

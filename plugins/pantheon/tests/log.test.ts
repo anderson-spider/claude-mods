@@ -39,7 +39,7 @@ test('done and failed carry the duration', () => {
     rounds: [{ startedAt: 1_000, endedAt: 73_000, status: 'done' }] })
   const b = inst({ id: 'b', task: 'Fix it', isActive: false, status: 'failed', startedAt: 100_000, endedAt: 140_000,
     rounds: [{ startedAt: 100_000, endedAt: 140_000, status: 'failed' }] })
-  const out = logEvents(roster({ fixer: { instances: [b, a], history: [a, b] } }), 200_000, 50)
+  const out = logEvents(roster({ executor: { instances: [b, a], history: [a, b] } }), 200_000, 50)
   expect(out.map(e => [e.at, e.kind, e.text])).toEqual([
     [1_000, 'started', 'started: Map the repo'],
     [73_000, 'done', 'done in 1m 12s · Map the repo'],
@@ -53,7 +53,7 @@ test('Codex error and cancelled job statuses log as failed and stopped', () => {
     rounds: [{ startedAt: 1_000, endedAt: 41_000, status: 'error' as never }] })
   const b = inst({ id: 'b', task: 'Stop it', isActive: false, status: 'cancelled' as never, startedAt: 50_000, endedAt: 55_000,
     rounds: [{ startedAt: 50_000, endedAt: 55_000, status: 'cancelled' as never }] })
-  const out = logEvents(roster({ fixer: { instances: [b, a], history: [a, b] } }), 200_000, 50)
+  const out = logEvents(roster({ executor: { instances: [b, a], history: [a, b] } }), 200_000, 50)
   expect(out.filter(e => e.kind !== 'started').map(e => [e.kind, e.text])).toEqual([
     ['failed', 'failed after 40s · Fix it'],
     ['stopped', 'stopped after 5s · Stop it'],
@@ -104,12 +104,12 @@ test('multiple rounds log each round once; lost and disabled, no activity', () =
 })
 
 test('parallel instances of one role get distinct end lines', () => {
-  const mk = (n: number) => inst({ id: `p${n}`, task: `Fixer ${n}  sleep\n${n}`, isActive: false, status: 'done', startedAt: 1_000,
+  const mk = (n: number) => inst({ id: `p${n}`, task: `Executor ${n}  sleep\n${n}`, isActive: false, status: 'done', startedAt: 1_000,
     endedAt: 7_000, rounds: [{ startedAt: 1_000, endedAt: 7_000, status: 'done' }] })
   const all = [1, 2, 3, 4].map(mk)
-  const out = logEvents(roster({ fixer: { instances: all, history: all } }), 9_000, 50)
+  const out = logEvents(roster({ executor: { instances: all, history: all } }), 9_000, 50)
   const ends = out.filter(e => e.kind === 'done').map(e => e.text)
-  expect(ends).toEqual([1, 2, 3, 4].map(n => `done in 6s · Fixer ${n} sleep ${n}`))
+  expect(ends).toEqual([1, 2, 3, 4].map(n => `done in 6s · Executor ${n} sleep ${n}`))
   expect(new Set(ends).size).toBe(4)
   expect(out.some(e => e.kind === 'activity')).toBe(false)
 })
