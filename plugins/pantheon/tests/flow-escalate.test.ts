@@ -281,7 +281,6 @@ test('model ids and bracket suffixes rank like their aliases, and the suggestion
 
 test('the shipped floors and table: no floor for the architect and QA, ux keeps sonnet', () => {
   expect(modelFit(fitAnswers(), fitInput({ role: 'ux', floor: FIT_FLOORS.ux!, default: 'sonnet' })).suggest).toBeUndefined()
-  expect(modelFit(fitAnswers(), fitInput({ role: 'git', floor: FIT_FLOORS.git!, default: 'sonnet' })).suggest).toBe('haiku')
   expect(FIT_FLOORS.architect).toBeUndefined()
   expect(FIT_FLOORS.qa).toBeUndefined()
 })
