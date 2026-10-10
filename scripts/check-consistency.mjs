@@ -22,13 +22,21 @@ for (const entry of marketplace.plugins) {
   else read(`${dir}/hooks/hooks.json`)
 
   // Each skill is skills/<name>/SKILL.md whose frontmatter names the directory and describes it.
+  // Size ceilings in bytes; skills not listed here are not measured.
+  const ceilings = { pantheon: { execute: 8000, brainstorm: 8500 } }
   const skills = `${dir}/skills`
 
   for (const name of existsSync(skills) ? readdirSync(skills) : []) {
     const file = `${skills}/${name}/SKILL.md`
-    const front = existsSync(file) ? /^---\nname: (.+)\ndescription: (.+)\n---\n/.exec(readFileSync(file, 'utf8')) : null
+    const text = existsSync(file) ? readFileSync(file, 'utf8') : ''
+    const front = /^---\nname: (.+)\ndescription: (.+)\n---\n/.exec(text)
 
     if (front?.[1] !== name) errors.push(`${entry.name}: ${file} is missing or its frontmatter does not name "${name}"`)
+
+    const max = ceilings[entry.name]?.[name]
+    const n = Buffer.byteLength(text)
+
+    if (max !== undefined && n > max) errors.push(`${entry.name}: ${file} is ${n} bytes; the ceiling is ${max}`)
   }
 }
 

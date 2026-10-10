@@ -5,8 +5,8 @@ import { extractBlock, parseFlow } from '../hooks/flow/plan'
 
 // `claude plugin test` has no file system and cannot import Markdown, so skills/brainstorm/SKILL.md is out of reach:
 // this is the example block copied from it verbatim. Change one, change the other.
-// The skills' size ceilings (execute 8000 bytes, brainstorm 8500) cannot be read here either: the T3 acceptance check
-// in the plan (a node one-liner over the four SKILL.md files) enforces them.
+// The skills' size ceilings (execute 8000 bytes, brainstorm 8500) cannot be read here either: scripts/check-consistency.mjs
+// enforces them.
 const BRAINSTORM_EXAMPLE = `{
   "schemaVersion": 1,
   "planId": "csv-export",
