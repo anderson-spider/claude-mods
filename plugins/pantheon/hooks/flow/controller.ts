@@ -69,9 +69,9 @@ export type Ctx = {
   /** Check results by tree snapshot, kept by the host across hooks; without it every check runs every time. */
   memo?: CheckMemo
   /**
-   * What a check's working directory is on disk, asked before the check runs so that a directory that is not there is the
-   * plan's failure (the check could not run: the Stop holds) and not the host's (which would release the gate). Absent, the
-   * runner's own "failed to start" is read the same way.
+   * What a check's working directory is on disk, asked before the check runs so that a directory that is not there is a
+   * check that could not run (`couldNotRun`: it spends no attempt and, for a delivered task, ends the Stop as unverified)
+   * and not the host's failure (which would release the gate). Absent, the runner's own "failed to start" is read the same way.
    */
   probeDir?: DirProbe
   /** The time a Stop may spend running checks; STOP_DEADLINE_MS when absent. */
@@ -1133,7 +1133,7 @@ async function evaluateStop(ctx: Ctx, input: StopInput, trace: Trace): Promise<S
   return {
     decision,
     ...(enforce && blocking && !waiting ? { block: `${TAG}: ${decision.reason}` } : {}),
-    ...(enforce && (decision.condition === 'budget' || decision.condition === 'complete') ? { notice: `${TAG}: ${decision.reason}` } : {}),
+    ...(enforce && (decision.condition === 'budget' || decision.condition === 'complete' || decision.condition === 'unverified') ? { notice: `${TAG}: ${decision.reason}` } : {}),
     // The checks of a task in progress that never ran are neither a pass nor a fail: the lead is told, to run them itself.
     ...(enforce && cut.length > 0 ? { context: `[${TAG}] The checks of ${cut.length === 1 ? 'task' : 'tasks'} ${cut.join(', ')} did not get to run within ${Math.round((ctx.stopDeadlineMs ?? STOP_DEADLINE_MS) / 1000)} s, so ${cut.length === 1 ? 'it is' : 'they are'} unverified (not failed). Run them yourself before calling ${cut.length === 1 ? 'it' : 'them'} done.` } : {}),
   }

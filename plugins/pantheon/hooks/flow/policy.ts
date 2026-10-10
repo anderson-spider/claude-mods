@@ -248,12 +248,17 @@ function onStop(flow: Flow, s: FlowState, event: Extract<FlowEvent, { kind: 'sto
   // 5. an active task, or one waiting for a receipt, has a failing check
   const checked = flow.tasks.filter(task => s.status[task.id] === 'active' || (s.status[task.id] !== 'done' && s.awaiting.some(a => a.task === task.id)))
   const unverifiedChecks: CheckResult[] = []
+  const couldNotRunIds = new Set<string>()
   for (const active of checked) {
     const failed = (event.checks[active.id] ?? []).filter(check => check.passed !== true)
     if (failed.length === 0) continue
-    // Checks that could not run for the environment are unverified, not failed: they hold nothing and spend nothing. A real
-    // failure of another task still blocks below.
-    if (failed.every(check => check.couldNotRun)) { unverifiedChecks.push(...failed); continue }
+    // Checks that could not run for the environment are unverified, not failed: they spend nothing and never block on their own.
+    // Only a delivered task counts as unverified; one never delivered is simply not finished (step 8 holds the Stop for it). A
+    // real failure of any task still blocks below.
+    if (failed.every(check => check.couldNotRun)) {
+      if ((s.ends[active.id] ?? 0) > 0) { unverifiedChecks.push(...failed); couldNotRunIds.add(active.id) }
+      continue
+    }
     const output = tail(describe(failed))
     const key = `${active.id}\n${output}`
     const count = s.lastFailure?.key === key ? s.lastFailure.count + 1 : 1
@@ -283,9 +288,6 @@ function onStop(flow: Flow, s: FlowState, event: Extract<FlowEvent, { kind: 'sto
       `Task ${active.id} (${active.goal}) is not done: its checks fail. Fix the failure, then try to stop again.\n\n${output}`, active.id)
   }
   s.lastFailure = undefined
-  if (unverifiedChecks.length) {
-    return allow('unverified', `Checks could not run, so their tasks are unverified and the flow is not marked complete. No attempt was spent. Fix the working directory or the command the check names.\n\n${tail(describe(unverifiedChecks))}`)
-  }
 
   // 6. a task whose checks passed waits for its receipts (the architect's review, QA's verdict, or both in any order)
   for (const waiting of flow.tasks) {
@@ -300,6 +302,16 @@ function onStop(flow: Flow, s: FlowState, event: Extract<FlowEvent, { kind: 'sto
     }
     charge(s)
     return instruct(s, 'block', conditionFor(by[0]!), stopReason(waiting, by), waiting.id)
+  }
+
+  // Checks that could not run on delivered tasks end the Stop as unverified, but only when nothing else holds it: no other
+  // active task and no eligible required task still to start. Otherwise the block below (continue) stays.
+  if (unverifiedChecks.length) {
+    const holdsOthers = flow.tasks.some(task => s.status[task.id] === 'active' && !couldNotRunIds.has(task.id))
+      || eligible(flow, s.status).some(id => required.includes(id) && !couldNotRunIds.has(id))
+    if (!holdsOthers) {
+      return allow('unverified', `Checks could not run, so their tasks are unverified and the flow is not marked complete. No attempt was spent. Create the directory the check needs, or ask the person to fix the plan and approve it.\n\n${tail(describe(unverifiedChecks))}`)
+    }
   }
 
   // 7. everything required is done and every declared check of it passes
@@ -375,7 +387,14 @@ function onTaskEnd(flow: Flow, s: FlowState, event: Extract<FlowEvent, { kind: '
   // nothing about the work: the delivery is unverified, the task stays where it is and no attempt is spent.
   if (event.ownershipDenials === 0 && failures.length > 0 && failures.every(check => check.couldNotRun)) {
     clearReceipts(s, task.id)
-    return make(s, 'allow', 'unverified', `Task ${task.id} (${task.goal}) was delivered, but its checks could not run, so it is unverified and no attempt was spent. Fix the check's working directory or command, then stop again.\n\n${tail(describe(failures))}`, task.id)
+    // A side effect may already have run before its check could not: the person must look, it is never delegated again.
+    if (task.sideEffect) {
+      if (!s.sideEffectsDone.includes(task.id)) s.sideEffectsDone.push(task.id)
+      s.paused = true
+      s.consecutiveBlocks = 0
+      return instruct(s, 'pause', 'ask_person', `Task ${task.id} (${task.goal}) is a side effect and its checks could not run, so it may already have run. The flow will not re-run it: ask the person to check it by hand, then /pantheon flow resume.\n\n${tail(describe(failures))}`, task.id)
+    }
+    return make(s, 'allow', 'unverified', `Task ${task.id} (${task.goal}) was delivered, but its checks could not run, so it is unverified and no attempt was spent. Create the directory the check needs, or ask the person to fix the plan and approve it.\n\n${tail(describe(failures))}`, task.id)
   }
   if (event.ownershipDenials > 0 || failures.length) return failAttempt(flow, s, task, tail(describe(failures)), event.ownershipDenials, opts)
 

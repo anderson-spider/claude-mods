@@ -5,12 +5,12 @@
 // kept for the policy to quote.
 //
 // Three outcomes besides a pass or a fail:
-// - `passed: null`, "could not run": the command timed out, `env` could not exec it (exit 126/127), or the check's working
-//   directory is not there (found out before the run when the host can say, or from the host's "failed to start: ENOENT").
-//   All of them are about the plan, so the policy treats it as not passed, with why: the Stop holds and a task end counts an
-//   attempt. A missing or non-directory working directory and a start failure also carry `couldNotRun: true`: the task did not
-//   make the environment the check needs, so the policy reads them as unverified (no attempt spent, the Stop ends as
-//   `unverified`). A timeout, a signal and a runner exit (126/127) are real failures and never carry the flag.
+// - `passed: null` with `couldNotRun: true`: a check that could not run because the task did not make its environment. That
+//   is a missing or non-directory working directory (found before the run when the host can say) or a start failure ("failed
+//   to start: ENOENT"). For a delivered task the policy spends no attempt and the Stop ends as `unverified`; a task never
+//   delivered is simply not finished.
+// - `passed: null` without the flag: a real failure. A timeout, a signal and a runner exit (126/127) count as not passed: the
+//   Stop holds and a task end counts an attempt.
 // - `CheckUnrunnable`: the runner itself rejected for any other reason. That says nothing about the plan, so it is thrown for
 //   the caller to fail open on instead of being counted against the task.
 // - unverified: the check never got to run because the pass ran out of time. No result is produced for it, so it is never a

@@ -734,9 +734,19 @@ test('a check whose directory is not there yet does not hold the Stop: it ends a
   expect((await w.state())?.status.B).toBe('done')
   w.runs.length = 0
   w.memo.clear()
+  // Before A is delivered, the Stop holds it: it was never started, so its missing directory is not an unverified delivery.
+  expect((await stopFlow(w.ctx(), stopInput)).block).toContain('Task A')
+  await humanPrompt(w.ctx())
+  // A is delivered with its directory still missing: the check could not run, so the delivery is unverified and spends nothing.
+  expect((await taskEnded(w.ctx(), { taskId: 'A', ownershipDenials: 0 })).decision).toMatchObject({ action: 'allow', condition: 'unverified', task: 'A' })
+  expect((await w.state())?.attempts).toEqual({})
+  w.memo.clear()
   for (let prompt = 0; prompt < 2; prompt++) {
     const out = await stopFlow(w.ctx(), stopInput)
     expect(out.block).toBeUndefined()
+    // The lead is told in enforce, as for a budget stop: the notice names the check and says what to do.
+    expect(out.notice ?? '').toContain('could not run')
+    expect(out.notice ?? '').toContain('Create the directory the check needs')
     await humanPrompt(w.ctx())
   }
   // The Stop ends as unverified and names the check and why; no attempt is spent and nothing is blocked.
@@ -770,13 +780,16 @@ test('a directory moved away while the task is in progress is unverified at the 
   w.files.delete(`${WEB}/package.json`)
   w.memo.clear()
   await humanPrompt(w.ctx())
-  const out = await stopFlow(w.ctx(), stopInput)
-  expect(out.block).toBeUndefined()
+  // B is finished first: a required task still to start would hold the Stop by itself.
+  expect((await taskEnded(w.ctx(), { taskId: 'B', ownershipDenials: 0 })).decision?.condition).toBe('task_done')
   const ended = await taskEnded(w.ctx(), { taskId: 'A', ownershipDenials: 0 })
   expect(ended.decision).toMatchObject({ action: 'allow', condition: 'unverified', task: 'A' })
   expect(JSON.stringify(ended)).toContain('working directory packages/web does not exist')
   expect((await w.state())?.attempts).toEqual({})
   expect((await w.state())?.status.A).toBe('active')
+  w.memo.clear()
+  const out = await stopFlow(w.ctx(), stopInput)
+  expect(out.block).toBeUndefined()
   expect((await w.journal()).some(e => e.condition === 'check_unrunnable')).toBe(false)
   // A path that is a file is not a directory either: still unverified, still no block.
   w.files.set(WEB, 'not a directory')
@@ -793,6 +806,10 @@ test('the engine\'s "failed to start: ENOENT" is unverified (the check could not
     await approve(w)
     // The directory was there when asked and gone when spawned (or the host cannot be asked): the engine's own message.
     w.results.set('npm test', new Error("$.process.run(env) failed to start: ENOENT: no such file or directory, posix_spawn 'env'"))
+    // B is finished first (a required task still to start would hold the Stop by itself); A is delivered, its command did not
+    // start: unverified at the task end, and at the Stop too.
+    expect((await taskEnded(w.ctx(), { taskId: 'B', ownershipDenials: 0 })).decision?.condition).toBe('task_done')
+    expect((await taskEnded(w.ctx('enforce', probe ? {} : { probeDir: undefined }), { taskId: 'A', ownershipDenials: 0 })).decision).toMatchObject({ action: 'allow', condition: 'unverified' })
     const out = await stopFlow(w.ctx('enforce', probe ? {} : { probeDir: undefined }), stopInput)
     expect(out.block).toBeUndefined()
     const journal = await w.journal()
