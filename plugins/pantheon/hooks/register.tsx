@@ -12,11 +12,6 @@ import {
 } from './flow/controller'
 import type { Ctx, Serial } from './flow/controller'
 import type { CheckMemo } from './flow/checks'
-import { classifyGitCommand } from './flow/gitgate'
-import type { GitActor } from './flow/gitgate'
-import { actorOfType, cwdOfAgent, gitGate, usesGit } from './flow/gitguard'
-import type { CwdBook } from './flow/gitguard'
-import { noteGit } from './flow/gitjournal'
 import type { JudgeIo, Route } from './flow/judge'
 import { createJudgeAccess, createJudgeSession, judgeModeOf, resolveJudge } from './flow/judging'
 import type { JudgeSession, JudgeSetup, SettingsView } from './flow/judging'
@@ -393,67 +388,6 @@ async function flowResolved($: Dollar, root: string, raw: string): Promise<{ roo
   const stat = (path: string, resolve: boolean) => $.fs.stat(path, { resolve })
   const resolvedRoot = await resolveGatePath(stat, root, cwd)
   try { return { root: resolvedRoot, path: await resolveGatePath(stat, raw, cwd) } } catch { return { root: resolvedRoot, path: raw } }
-}
-
-/**
- * The git gate (decision 12) for one shell command (Bash, or a Monitor's `command`). The main session is the lead; a task's
- * work agent is a developer held to the task's files (resolved by the host as the ownership gate does); an agent that no
- * task links is held by its type: a developer or ux commits under the same rules with every path its own, the git role is
- * `git`, the read-only roles are read-only, and every other agent (general-purpose, Explore, one the engine does not list)
- * gets the lead's rules. Returns the reason to refuse in enforce only: shadow journals what enforce would have denied and
- * returns nothing. A command that runs no git is not looked at, so the agent lookup happens only for the ones that do.
- */
-async function gitDenial($: Dollar, rt: FlowRuntime, deps: FlowDeps, book: CwdBook, command: string, agentId: string | undefined): Promise<string | undefined> {
-  const found = classifyGitCommand(command)
-  if (!usesGit(found)) return undefined
-  let actor: GitActor = 'lead'
-  let work: FlowAgent | undefined
-  // Where the agent's commands run. The Bash event does not say, so it is what the spawn said (a `cwd`, or none: the parent's);
-  // an agent in a worktree of its own, or one nothing accounts for, is not knowable and its lookups answer "unknown".
-  let cwd: string | null | undefined
-  if (agentId) {
-    const link = await flowLinkFor($, rt, deps, agentId)
-    const agents = await $.agent.list()
-    cwd = cwdOfAgent(agentId, agents, book)
-    if (link?.kind === 'work' && link.files) {
-      actor = 'developer'
-      work = link
-    } else {
-      actor = actorOfType(agents.find(agent => agent.id === agentId)?.type)
-    }
-  }
-  const where = cwd ? { cwd } : {}
-  const isFree = (actor === 'developer' || actor === 'ux') && !work
-  const outcome = await gitGate({ command, found, actor, ...(work ? { task: work.task } : {}), gitRole: isOffered(deps.config, 'pantheon:git') }, {
-    owned: async paths => {
-      // A developer no task links has no files to hold it to: its verbs and flags are checked, its paths are its own.
-      if (isFree) return paths
-      const owned: string[] = []
-      // An error here is not a refusal: it fails open with the rest of the gate. A path the host cannot resolve is "not owned".
-      for (const path of paths) if (work && (await flowOwnership($, rt, deps, work, path)).owned) owned.push(path)
-      return owned
-    },
-    // A bare `git push` goes to the checked-out branch. Not being able to read it is an answer ("unknown"), not an error.
-    branch: async dirArgs => {
-      if (cwd === null) return undefined
-      try {
-        const out = await $.process.run(['git', ...dirArgs, 'rev-parse', '--abbrev-ref', 'HEAD'], { ...where, timeoutMs: 5_000 })
-        return out.exitCode === 0 ? out.stdout.trim() || undefined : undefined
-      } catch { return undefined }
-    },
-    // The settings that send a bare push elsewhere (a push refspec, a mirror, `push.default`). Exit 1 is "none set".
-    config: async dirArgs => {
-      if (cwd === null) return undefined
-      try {
-        const out = await $.process.run(['git', ...dirArgs, 'config', '--get-regexp', '^(remote\\..*\\.(push|mirror)|push\\.default)$'], { ...where, timeoutMs: 5_000 })
-        if (out.exitCode === 0) return out.stdout.split('\n').filter(Boolean)
-        return out.exitCode === 1 ? [] : undefined
-      } catch { return undefined }
-    },
-  })
-  if (outcome.allow) return undefined
-  await noteGit(flowCtx($, deps), { actor, ...(work ? { task: work.task } : {}), reason: outcome.reason, summary: outcome.summary })
-  return deps.mode === 'enforce' ? outcome.reason : undefined
 }
 
 /** The controller's host access, built from the hook's `$` (it cannot be stored). */
@@ -1103,47 +1037,6 @@ export const register: Register = (on, options) => {
   }).catch((_$, e, next) => {
     const deny = next.called ? undefined : flowWriteFallback(flowRuntime.links, flowMode, e.agentId)
     return deny === undefined ? next(e) : { deny }
-  })
-
-  // Where a subagent works, for the git gate's branch and settings lookups: the Bash event does not say, so it is read at the
-  // spawn (the call's own `cwd`; none means the parent's). An Agent call with `isolation` runs in a worktree the engine
-  // makes, whose path no event carries: its agents are not knowable, and the gate's lookups answer "unknown" for them.
-  const gitIsolatedCalls = new Set<string>()
-  const gitCwds = new Map<string, string>()
-  const gitUnknownCwds = new Set<string>()
-  const remember = (set: Set<string>, id: string) => {
-    set.add(id)
-    if (set.size > 500) set.delete(set.values().next().value as string)
-  }
-  on('tool.call', { tool: 'Agent', isolation: /./ }, async (_$, e, next) => {
-    if (flowOn() && e.tool_use_id) remember(gitIsolatedCalls, e.tool_use_id)
-    return next(e)
-  })
-  on('agent.spawn', { tool_use_id: /./ }, async (_$, e, next) => {
-    const started = await next(e)
-    if (flowOn() && started.agentId) {
-      if (gitIsolatedCalls.has(e.tool_use_id)) remember(gitUnknownCwds, started.agentId)
-      else if (e.cwd) {
-        gitCwds.set(started.agentId, e.cwd)
-        if (gitCwds.size > 500) gitCwds.delete(gitCwds.keys().next().value as string)
-      }
-    }
-    return started
-  })
-
-  // The git gate (decision 12): shell git is held to who runs it. The lead pushes (never to a protected branch, bare pushes
-  // included) and routes the rest to the git role; a task's developer or ux commits its own files only; the git role keeps
-  // PR/MR, squash and repository state and never writes to a protected branch. It follows the flow mode and does not need a
-  // plan: the gate protects without one. `Monitor` runs a shell command too, so it is held the same way (one with no `command`
-  // is a WebSocket and has no git to read).
-  on('tool.call', { tool: ['Bash', 'Monitor'] }, async ($, e, next) => {
-    if (!flowOn() || typeof e.command !== 'string') return next(e)
-    const io = hostIo($)
-    let denial: string | undefined
-    try {
-      denial = await gitDenial($, flowRuntime, await flowDeps(io), { cwds: gitCwds, unknown: gitUnknownCwds }, e.command, e.agentId)
-    } catch (error) { flowFailed(io, error) }
-    return denial === undefined ? next(e) : { deny: `[Pantheon flow] ${denial}` }
   })
 
   // Task end for a foreground agent (decision 6): the Agent tool returned in the main loop; the controller's verdict is
