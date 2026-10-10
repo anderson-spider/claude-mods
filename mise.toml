@@ -1,0 +1,6 @@
+# Development tools for this repository: `mise install` once, then the tools follow the directory.
+# Node runs scripts/*.mjs and the TypeScript language server; TypeScript 7 serves `tsc --lsp` and type-checks with
+# `tsc -p plugins/<name>/tsconfig.json` (the typings it extends are written by Claude Code when it loads the plugin).
+[tools]
+node = "24"
+"npm:typescript" = "7.0.2"
