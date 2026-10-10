@@ -15,8 +15,8 @@ The flow tracks a session against `.pantheon/flow/flows/<id>/flow.json`: a goal 
 
 ## Claims: who works on which phase
 
-- Each agent claims the phase it takes: `{ "action": "claim", "phase": "<phase id>", "as": "<role>" }`, where `role` is one of lead, code-reader, docs-reader, developer, ux, architect, qa. Claim before you start the phase; re-claim when you move to another, so the Flow tab of `/pantheon` stays accurate.
-- When you delegate a phase to a role, tell the agent to claim it with its own role first. Pick a phase nobody claimed whose dependencies are done; phases with no dependency between them can run in parallel.
+- You claim the phase you take yourself: `{ "action": "claim", "phase": "<phase id>", "as": "lead" }`. Agents claim with the same action, where `as` is one of code-reader, docs-reader, developer, ux, architect, qa. Claim before you start the phase; re-claim when you move to another, so the Flow tab of `/pantheon` stays accurate.
+- When you delegate a phase, start the Agent description with `[<phase id>]` (for example `[docs] Update the README`): the flow claims that phase for the agent as its role, and the agent still claims with the tool when it moves to another phase. Pick a phase nobody claimed whose dependencies are done; phases with no dependency between them can run in parallel.
 - Claims are advisory: the Stop policy never reads them.
 - If a `[Pantheon flow]` note says other sessions are running flows in this folder and the request belongs to one of them, join it with `{ "action": "join", "flow": "<flow id>" }` before you start, then claim. Start your own flow for unrelated work. Never edit another flow's files.
 
@@ -25,6 +25,7 @@ The flow tracks a session against `.pantheon/flow/flows/<id>/flow.json`: a goal 
 - Treat it as the next instruction. Do the concrete thing it names for the named phase.
 - If it quotes failing check output, fix the cause shown there. Run the check command yourself before claiming the phase is done.
 - "You said the work is done, but it is not" means a check still fails. Do not repeat the claim; make the check pass.
+- `not run:` in a check result means the check never ran: Claude Code's permission rules denied it, or the person cancelled it in the Pantheon flow check box. Do not rewrite the check to get around that; tell the person what it needs.
 - "You are looping" means your last approach is not working. Re-read the goal and change approach, not just parameters.
 - "Regression" means a phase that was done now fails its check. Fix that first.
 - Never edit `state.json` or `flow.json` under `.pantheon/flow/` to get past a block. Only the flow writes state. Changing the flow is the person's decision.

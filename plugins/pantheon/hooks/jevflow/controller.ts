@@ -2,14 +2,14 @@
 // point fails open: an error allows the stop and adds nothing, so the flow can never trap a session.
 
 import { applyDecision, capReached, decide } from './policy'
-import { parseFlow } from './flow'
+import { PHASE_ID_RE, parseFlow } from './flow'
 import { claim as claimPhase, newState, record, touchAgent, validateState } from './state'
 import type { AgentInfo } from './state'
-import { judge, judgmentProbs } from './questions'
+import { judge, judgmentProbs, NO_JUDGE } from './questions'
 import type { AskFn } from './questions'
 import { checksToRun, slugify, summaryMarkdown } from './project'
 import { phaseTable, planInstructions, promptNudge, render, sessionContext, startHint, transitionLine } from './texts'
-import { ADVANCE, ALLOW_STOP, BLOCK } from './types'
+import { ADVANCE, ALLOW_STOP, BLOCK, ROLES } from './types'
 import type { CheckResult, Flow, FlowState } from './types'
 
 export const BASE = '.pantheon/flow'
@@ -17,6 +17,9 @@ const FLOWS = 'flows'
 const DONE = 'done'
 const SESSIONS = 'sessions'
 const PREFIX = '[Pantheon flow]'
+/** Shown while Jev has no key (io.ask undefined): the status line and the note at start. */
+const JEV_OFF_STATUS = "Jev: off (the plugin's judgeKey option is not set); every Stop decides on the checks alone."
+const JEV_OFF_NOTE = "Note: Jev is off (the plugin's judgeKey option is not set), so every Stop decides on the checks alone; tell the person."
 
 const REASON_JOURNAL_CHARS = 600
 const ERROR_DETAIL_CHARS = 300
@@ -35,6 +38,9 @@ const GITIGNORE = 'sessions/\n*.tmp\n'
 
 export type Run = (argv: string[], init: { cwd: string; timeoutMs: number }) => Promise<{ exitCode: number; stdout: string; stderr: string }>
 
+/** Whether a check command may run; a refusal says why, and the check then counts as failed. */
+export type CheckAuthorization = { ok: true } | { ok: false; reason: string }
+
 /** What the controller needs from the host, built from the hook's `$` by register.tsx. Times are seconds, as JevFlow's. */
 export type Io = {
   read: (path: string) => Promise<string | undefined>
@@ -47,6 +53,11 @@ export type Io = {
   now: () => Promise<number>
   /** Jev, when the judgeKey option is set; without it every Stop is checks-only (degraded). */
   ask?: AskFn
+  /**
+   * Decides whether a check command may run, asked once per distinct command before the check time budget starts.
+   * Without it every check runs.
+   */
+  authorize?: (cmd: string, phase: string) => Promise<CheckAuthorization>
 }
 
 export type Paths = { root: string; id: string; archived: boolean; dir: string; flow: string; state: string; needsHuman: string; draft: string }
@@ -165,7 +176,8 @@ export async function startFlow(io: Io, root: string, sid: string | undefined, g
   const p = pathsOf(root, id)
   await io.write(p.draft, `${JSON.stringify({ goal: goal.trim(), created_at: now, session_id: sid ?? null, plan_blocks: 0 }, null, 1)}\n`)
   await bindSession(io, root, sid, id)
-  return planInstructions(rel(p, p.flow), id, goal.trim())
+  const text = planInstructions(rel(p, p.flow), id, goal.trim())
+  return io.ask ? text : `${text}\n\n${JEV_OFF_NOTE}`
 }
 
 export async function validateFlow(io: Io, root: string, sid: string | undefined): Promise<string> {
@@ -198,6 +210,21 @@ export async function claimFlow(io: Io, root: string, who: AgentInfo, phase: str
   return `Claimed ${phase} as ${role}.`
 }
 
+/** The roles a spawned agent can claim as: the lead is the main session, never a subagent. */
+const SPAWN_ROLES: readonly string[] = ROLES.filter(role => role !== 'lead')
+
+/**
+ * The claim a delegated agent gets when it spawns: its type is `pantheon:<role>` and its description starts with
+ * `[<phase id>]` (optional leading spaces). Anything else is not a delegation and claims nothing.
+ */
+export function spawnClaim(subagentType: string | undefined, description: string | undefined): { phase: string; role: string } | undefined {
+  const role = subagentType?.startsWith('pantheon:') ? subagentType.slice('pantheon:'.length) : undefined
+  if (role === undefined || !SPAWN_ROLES.includes(role)) return undefined
+  const phase = /^\s*\[([^\]]*)\]/.exec(description ?? '')?.[1]
+  if (phase === undefined || !PHASE_ID_RE.test(phase)) return undefined
+  return { phase, role }
+}
+
 /** The flow a viewer shows: the session's, else the newest active, else the newest archived (project.py default_flow). */
 export async function viewedFlow(io: Io, root: string, sid: string | undefined): Promise<Paths | undefined> {
   const bound = await boundFlow(io, root, sid)
@@ -226,11 +253,12 @@ export async function listFlows(io: Io, root: string): Promise<{ p: Paths; mtime
 export async function statusText(io: Io, root: string, sid: string | undefined): Promise<string> {
   const p = await viewedFlow(io, root, sid)
   if (!p) return 'No flow in this folder. A multi-step task starts one with mcp__pantheon__flow start.'
-  if (!p.archived && await promote(io, p) !== undefined) return `Flow ${p.id}: draft, phases not laid out yet.`
+  const off = io.ask ? [] : [JEV_OFF_STATUS]
+  if (!p.archived && await promote(io, p) !== undefined) return [`Flow ${p.id}: draft, phases not laid out yet.`, ...off].join('\n')
   const flow = await loadFlow(io, p)
   const state = await loadState(io, p, flow, await io.now())
   const human = await io.read(p.needsHuman).catch(() => undefined)
-  return `Flow ${p.id}${p.archived ? ' (archived)' : ''}\n${render(flow, state, human)}`
+  return [`Flow ${p.id}${p.archived ? ' (archived)' : ''}`, ...off, render(flow, state, human)].join('\n')
 }
 
 // ---------------------------------------------------------------- session start, prompt
@@ -315,20 +343,49 @@ export async function runCheck(io: Io, cmd: string, cwd: string, timeoutS: numbe
   return { passed: out.exitCode === 0, output: text }
 }
 
+/** One decision per distinct command, asked in order; an error from the host refuses the command. */
+async function authorizeChecks(
+  authorize: NonNullable<Io['authorize']>,
+  commands: { cmd: string; phase: string }[],
+): Promise<Map<string, CheckAuthorization>> {
+  const decisions = new Map<string, CheckAuthorization>()
+  for (const { cmd, phase } of commands) {
+    if (decisions.has(cmd)) continue
+    try {
+      decisions.set(cmd, await authorize(cmd, phase))
+    } catch (error) {
+      decisions.set(cmd, { ok: false, reason: error instanceof Error ? error.message : String(error) })
+    }
+  }
+  return decisions
+}
+
 export async function runChecks(io: Io, flow: Flow, state: FlowState, cwd: string): Promise<{ checks: Record<string, CheckResult>; loopChecks: Record<string, CheckResult> }> {
   const per = flow.limits.check_timeout_s
-  const start = await io.now()
-  const left = async () => Math.min(per, start + CHECKS_TOTAL_S - (await io.now()))
-  const checks: Record<string, CheckResult> = {}
+  let start = await io.now()
   const settling = capReached(flow, state, start) !== null
+  const planned: { id: string; cmd: string }[] = []
   for (const id of checksToRun(flow, state, settling)) {
-    const phase = flow.phases.find(p => p.id === id)
-    if (phase?.check) checks[id] = await runCheck(io, phase.check, cwd, await left())
+    const check = flow.phases.find(p => p.id === id)?.check
+    if (check) planned.push({ id, cmd: check })
   }
+  const cur = flow.phases.find(p => p.id === state.current_phase)
+  const commands = planned.map(({ id, cmd }) => ({ cmd, phase: id }))
+  if (cur?.loop) commands.push({ cmd: cur.loop.until, phase: cur.id })
+  // A person deciding on a command does not eat the budget: the clock starts once every decision is in.
+  const decisions = io.authorize ? await authorizeChecks(io.authorize, commands) : undefined
+  if (decisions) start = await io.now()
+  const left = async () => Math.min(per, start + CHECKS_TOTAL_S - (await io.now()))
+  const run = async (cmd: string): Promise<CheckResult> => {
+    const decision = decisions?.get(cmd)
+    if (decision && !decision.ok) return { passed: false, output: `not run: ${decision.reason}` }
+    return runCheck(io, cmd, cwd, await left())
+  }
+  const checks: Record<string, CheckResult> = {}
+  for (const { id, cmd } of planned) checks[id] = await run(cmd)
   for (const p of flow.phases) if (!p.check && !(p.id in checks)) checks[p.id] = { passed: null, output: '' }
   const loopChecks: Record<string, CheckResult> = {}
-  const cur = flow.phases.find(p => p.id === state.current_phase)
-  if (cur?.loop) loopChecks[cur.id] = await runCheck(io, cur.loop.until, cwd, await left())
+  if (cur?.loop) loopChecks[cur.id] = await run(cur.loop.until)
   return { checks, loopChecks }
 }
 
@@ -372,7 +429,8 @@ export async function gitChanges(io: Io, cwd: string, sendDiff: boolean): Promis
 // ---------------------------------------------------------------- Stop
 
 export type StopPayload = { session_id?: string; stop_hook_active?: boolean; last_assistant_message?: string }
-export type StopOut = { block?: string; message?: string }
+/** `noJev`: this Stop needed a judgment and Jev was not asked because there is no key, so it decided on the checks alone. */
+export type StopOut = { block?: string; message?: string; noJev?: true }
 
 async function writeNeedsHuman(io: Io, p: Paths, flow: Flow, state: FlowState, question: string, now: number): Promise<void> {
   const ts = new Date(now * 1000).toISOString().replace(/\.\d+Z$/, 'Z')
@@ -419,10 +477,11 @@ async function onFlowStop(io: Io, p: Paths, payload: StopPayload): Promise<StopO
     checks: passed, probs: judged?.judgment ? judgmentProbs(judged.judgment) : null,
   }, now)
   await saveState(io, p, state)
-  if (blocks) return { block: `${PREFIX} ${d.reason}`, ...(d.kind === ADVANCE ? { message: transitionLine(flow, state, d, prevPhase) } : {}) }
-  if (d.condition === 'goal_complete') return { message: `${PREFIX} Goal complete.` }
-  if (d.kind === ALLOW_STOP && d.condition !== 'already_done') return { message: `${PREFIX} ${d.reason}` }
-  return {}
+  const noJev: Pick<StopOut, 'noJev'> = judged?.error === NO_JUDGE ? { noJev: true } : {}
+  if (blocks) return { block: `${PREFIX} ${d.reason}`, ...(d.kind === ADVANCE ? { message: transitionLine(flow, state, d, prevPhase) } : {}), ...noJev }
+  if (d.condition === 'goal_complete') return { message: `${PREFIX} Goal complete.`, ...noJev }
+  if (d.kind === ALLOW_STOP && d.condition !== 'already_done') return { message: `${PREFIX} ${d.reason}`, ...noJev }
+  return noJev
 }
 
 /** Move a finished flow to done/<id>/ with a SUMMARY.md (project.py archive). */
@@ -462,7 +521,7 @@ export async function onStop(io: Io, root: string, payload: StopPayload): Promis
     const out = await onFlowStop(io, p, payload)
     if (!out.block && (await readJson(io, p.state))?.done === true) {
       const done = await archive(io, p)
-      if (done) return { message: `${PREFIX} Goal complete. Flow archived to ${rel(done, done.dir)}/ (SUMMARY.md inside).` }
+      if (done) return { ...out, message: `${PREFIX} Goal complete. Flow archived to ${rel(done, done.dir)}/ (SUMMARY.md inside).` }
     }
     return out
   } catch (error) {

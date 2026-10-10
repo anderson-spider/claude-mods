@@ -33,6 +33,6 @@ declare module 'claude-code' {
     }
   }
   interface PluginState {
-    pantheon: { natives: Native[]; session: SessionInfo; view: PanelView; gateHeld: { message: string } | null }
+    pantheon: { natives: Native[]; session: SessionInfo; view: PanelView; gateHeld: { message: string; title?: string } | null }
   }
 }

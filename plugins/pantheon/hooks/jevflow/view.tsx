@@ -44,7 +44,21 @@ export function claimsByPhase(state: FlowState): Record<string, string[]> {
   return out
 }
 
-export function drawFlowTab(el: Base, view: FlowView, columns: number): unknown {
+/** The Flow tab. With Jev off (no judgeKey option) its first row says so: every Stop then decides on the checks alone. */
+export function drawFlowTab(el: Base, view: FlowView, columns: number, jevOn = true): unknown {
+  const body = drawFlowBody(el, view, columns)
+  if (jevOn) return body
+  const { Box, Text } = el
+  const W = Math.max(20, columns)
+  return (
+    <Box key="flow" flexDirection="column" width={W}>
+      <Text key="jev" color="warning" wrap="wrap">Jev off: set the judgeKey option. The Stop decides on the checks alone.</Text>
+      {body as never}
+    </Box>
+  )
+}
+
+function drawFlowBody(el: Base, view: FlowView, columns: number): unknown {
   const { Box, Text } = el
   const W = Math.max(20, columns)
   if (view.kind === 'none') {

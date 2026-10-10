@@ -41,7 +41,7 @@ function folder(exits: Record<string, number> = {}, ask?: AskFn) {
     now: async () => ++clock,
     ...(ask ? { ask } : {}),
   }
-  return { io, files, exits, ran }
+  return { io, files, exits, ran, advance: (seconds: number) => { clock += seconds } }
 }
 
 const FLOW = {
@@ -170,4 +170,105 @@ test('with Jev, a phase it calls done and verifies advances even without a check
   const state = JSON.parse(f.files.get(p.state)!)
   expect(state.jev_calls).toBe(2)
   expect(state.history.at(-1).probs.verify).toEqual(['a', 0.95])
+})
+
+test('the status line and the start note say Jev is off without a judgeKey, and are absent with one', async () => {
+  const off = folder()
+  expect(await flow.statusText(off.io, ROOT, 's1')).toBe('No flow in this folder. A multi-step task starts one with mcp__pantheon__flow start.')
+  const p = await started(off)
+  off.files.set(p.flow, JSON.stringify(FLOW))
+  const offStatus = await flow.statusText(off.io, ROOT, 's1')
+  expect(offStatus.split('\n').slice(0, 2)).toEqual([`Flow ${p.id}`, "Jev: off (the plugin's judgeKey option is not set); every Stop decides on the checks alone."])
+  const note = "Note: Jev is off (the plugin's judgeKey option is not set), so every Stop decides on the checks alone; tell the person."
+  expect((await flow.startFlow(off.io, ROOT, 's2', 'Another goal')).endsWith(`\n\n${note}`)).toBe(true)
+
+  const ask: AskFn = async () => { throw new Error('offline') }
+  const on = folder({}, ask)
+  const q = await started(on)
+  on.files.set(q.flow, JSON.stringify(FLOW))
+  const onStatus = await flow.statusText(on.io, ROOT, 's1')
+  expect(onStatus.startsWith(`Flow ${q.id}\n`)).toBe(true)
+  expect(onStatus).not.toContain('Jev: off')
+  expect(await flow.startFlow(on.io, ROOT, 's2', 'Another goal')).not.toContain('Jev is off')
+})
+
+test('a Stop that needs Jev with no key is flagged noJev; a Jev call that fails is not', async () => {
+  const NO_CHECK = { ...FLOW, phases: FLOW.phases.map(({ check: _drop, ...rest }) => rest) }
+  const off = folder()
+  const p = await started(off)
+  off.files.set(p.flow, JSON.stringify(NO_CHECK))
+  const out = await flow.onStop(off.io, ROOT, { session_id: 's1', stop_hook_active: false })
+  expect(out.noJev).toBe(true)
+  expect(JSON.parse(off.files.get(p.state)!).history.at(-1)).toMatchObject({ event: 'stop', condition: 'degraded_no_check' })
+
+  const ask: AskFn = async () => { throw new Error('offline') }
+  const keyed = folder({}, ask)
+  const q = await started(keyed)
+  keyed.files.set(q.flow, JSON.stringify(NO_CHECK))
+  const failed = await flow.onStop(keyed.io, ROOT, { session_id: 's1', stop_hook_active: false })
+  expect(failed.noJev).toBeUndefined()
+  expect(JSON.parse(keyed.files.get(q.state)!).last_jev_error.error).toContain('offline')
+})
+
+test('a spawned Pantheon role claims the phase its description starts with, and nothing else does', () => {
+  expect(flow.spawnClaim('pantheon:docs-reader', '[docs] Update the README')).toEqual({ phase: 'docs', role: 'docs-reader' })
+  expect(flow.spawnClaim('pantheon:developer', '   [implement]Write the parser')).toEqual({ phase: 'implement', role: 'developer' })
+  expect(flow.spawnClaim('pantheon:architect', 'Review [docs] first')).toBeUndefined()
+  expect(flow.spawnClaim('pantheon:developer', 'Write the parser')).toBeUndefined()
+  expect(flow.spawnClaim('pantheon:developer', '[Docs] Capital phase id')).toBeUndefined()
+  expect(flow.spawnClaim('pantheon:developer', '[] empty phase id')).toBeUndefined()
+  expect(flow.spawnClaim('pantheon:developer', undefined)).toBeUndefined()
+  expect(flow.spawnClaim('pantheon:lead', '[a] The lead is never a subagent')).toBeUndefined()
+  expect(flow.spawnClaim('pantheon:councillor-alpha', '[a] A council seat is not a role')).toBeUndefined()
+  expect(flow.spawnClaim('general-purpose', '[a] Not a Pantheon agent')).toBeUndefined()
+  expect(flow.spawnClaim(undefined, '[a] No type')).toBeUndefined()
+})
+
+test('a check the host refuses is not run, and the Stop holds with the reason', async () => {
+  const f = folder({ 'test -f a.txt': 1 })
+  const p = await started(f)
+  f.files.set(p.flow, JSON.stringify(FLOW))
+  const io: Io = { ...f.io, authorize: async cmd => cmd === 'test -f a.txt' ? { ok: false, reason: 'the person cancelled it' } : { ok: true } }
+  const held = await flow.onStop(io, ROOT, { session_id: 's1', stop_hook_active: false })
+  expect(f.ran).toEqual([])
+  expect(held.block).toContain('not run: the person cancelled it')
+  expect(JSON.parse(f.files.get(p.state)!).current_phase).toBe('a')
+})
+
+test('a check the host allows runs as before, and the time the decision takes is not charged to the check budget', async () => {
+  const f = folder()
+  const p = await started(f)
+  f.files.set(p.flow, JSON.stringify(FLOW))
+  const asked: string[] = []
+  const io: Io = { ...f.io, authorize: async (cmd, phase) => { asked.push(`${phase}:${cmd}`); f.advance(1000); return { ok: true } } }
+  const advanced = await flow.onStop(io, ROOT, { session_id: 's1', stop_hook_active: false })
+  expect(asked).toEqual(['a:test -f a.txt'])
+  expect(f.ran).toEqual(['test -f a.txt'])
+  expect(advanced.block).toContain("Now work on phase 'b'")
+})
+
+test('the same command is authorized once per Stop, however many checks run it', async () => {
+  const SHARED = { ...FLOW, phases: FLOW.phases.map(phase => ({ ...phase, check: 'test -f shared' })) }
+  const f = folder()
+  const p = await started(f)
+  f.files.set(p.flow, JSON.stringify(SHARED))
+  const asked: string[] = []
+  const io: Io = { ...f.io, authorize: async cmd => { asked.push(cmd); return { ok: true } } }
+  await flow.onStop(io, ROOT, { session_id: 's1', stop_hook_active: false })
+  expect(asked).toEqual(['test -f shared'])
+  // Phase a is done and phase b is current, so one Stop runs the same command twice.
+  const before = asked.length
+  await flow.onStop(io, ROOT, { session_id: 's1', stop_hook_active: true })
+  expect(asked.length - before).toBe(1)
+  expect(f.ran.filter(cmd => cmd === 'test -f shared')).toHaveLength(3)
+})
+
+test('an error from authorize refuses the command, and the check is not run', async () => {
+  const f = folder()
+  const p = await started(f)
+  f.files.set(p.flow, JSON.stringify(FLOW))
+  const io: Io = { ...f.io, authorize: async () => { throw new Error('gate broke') } }
+  const held = await flow.onStop(io, ROOT, { session_id: 's1', stop_hook_active: false })
+  expect(f.ran).toEqual([])
+  expect(held.block).toContain('not run: gate broke')
 })

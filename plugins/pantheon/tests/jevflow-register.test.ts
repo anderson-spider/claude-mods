@@ -10,13 +10,28 @@ const HOME = '/home/u'
 const SID = 'sess-1'
 const FLOW = 'mcp__pantheon__flow'
 
-function flowWorld(on: On) {
+// The test runtime has timers, but the typings this plugin checks against do not declare them.
+const timers = globalThis as unknown as { setTimeout: (run: () => void, ms: number) => unknown }
+const pause = (ms: number) => new Promise<void>(resolve => timers.setTimeout(resolve, ms))
+
+function flowWorld(on: On, store: Record<string, unknown> = {}) {
   const files = new Map<string, string>([[`${HOME}/.claude/pantheon.json`, '{}']])
   const exits: Record<string, number> = {}
   const toasts: string[] = []
+  const ran: string[] = []
+  // What Claude Code's permission rules answer for a check's Bash command (tool.check); allow unless a test says otherwise.
+  const rules: { decision: 'allow' | 'ask' | 'deny'; reason?: string } = { decision: 'allow' }
   const isDir = (path: string) => [...files.keys()].some(f => f.startsWith(`${path}/`))
   mock.clock(on)
   mock.env(on, { HOME })
+  // The plugin's store, in memory and readable by the test (the test's own engine has no store handle).
+  const kv = new Map<string, unknown>(Object.entries(store))
+  on('store.get', async (_$, e) => ({ value: kv.get(e.key) }))
+  on('store.set', async (_$, e) => { kv.set(e.key, e.value); return { value: undefined } })
+  on('store.delete', async (_$, e) => { kv.delete(e.key); return { value: undefined } })
+  on('store.keys', async () => ({ value: [...kv.keys()] }))
+  on('tool.check', async () => rules)
+  on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'Text', children: ['idle'] }))
   on('session.start', async (_$, e) => ({ cwd: e.cwd }))
   on('session.cwd', async () => ({ value: ROOT }))
   on('session.id', async () => ({ value: SID }))
@@ -47,7 +62,10 @@ function flowWorld(on: On) {
       for (const [f, text] of [...files]) if (f.startsWith(`${from}/`)) { files.delete(f); files.set(to + f.slice(from.length), text) }
       return done()
     }
+    // A real wait: the held box polls, and a microtask-only loop would starve the timers the tests use.
+    if (argv[0] === 'sleep') { await pause(5); return done() }
     if (argv[0] === '/bin/sh') {
+      ran.push(argv[2]!)
       const code = exits[argv[2]!] ?? 0
       return done(code ? `${argv[2]}: failed\n` : '', code)
     }
@@ -61,7 +79,7 @@ function flowWorld(on: On) {
   on('ui.invalidate', async () => ({ value: undefined }))
   on('classic.SessionStart', async () => ({}))
   on('classic.Stop', async () => ({}))
-  return { files, exits, toasts }
+  return { files, exits, toasts, ran, rules, store: kv }
 }
 
 const call = async ($: Engine, input: Record<string, unknown>) => String((await $.tool.call({ tool: FLOW, ...input } as never) as { result?: unknown }).result)
@@ -115,3 +133,122 @@ test('a session with no flow is told it may start one', async ($, on) => {
   const out = await $.classic.SessionStart({ session_id: SID, source: 'startup' } as never) as { additionalContext?: string[] }
   expect(out.additionalContext?.join('\n')).toContain('`mcp__pantheon__flow` tool with `action: "start"`')
 })
+
+test('with no judgeKey, a Stop that needs Jev says so in one toast per session', async ($, on) => {
+  const w = flowWorld(on)
+  await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
+  const started = await call($, { action: 'start', goal: 'Create a.txt then b.txt', name: 'two files' })
+  const id = /tracked flow `([^`]+)`/.exec(started)?.[1]
+  expect(id).toBeDefined()
+  w.files.set(`${ROOT}/.pantheon/flow/flows/${id}/flow.json`, JSON.stringify({ ...PHASES, phases: PHASES.phases.map(({ check: _drop, ...rest }) => rest) }))
+  expect(await call($, { action: 'validate' })).toContain('is valid: 2 phases')
+
+  await stop($)
+  await stop($, true)
+  expect(w.toasts.filter(t => t.includes('Jev is off'))).toEqual([
+    "[Pantheon flow] Jev is off: set the plugin's judgeKey option. This Stop decided on the checks alone.",
+  ])
+})
+
+test('a spawned docs-reader whose Agent description starts with a phase id claims that phase; without the prefix it claims nothing', async ($, on) => {
+  const w = flowWorld(on)
+  let agentId = 'native-1'
+  on('agent.spawn', async () => ({ model: 'model-1', agentId }))
+  await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
+  const started = await call($, { action: 'start', goal: 'Create a.txt then b.txt', name: 'two files' })
+  const id = /tracked flow `([^`]+)`/.exec(started)?.[1]
+  expect(id).toBeDefined()
+  w.files.set(`${ROOT}/.pantheon/flow/flows/${id}/flow.json`, JSON.stringify(PHASES))
+  expect(await call($, { action: 'validate' })).toContain('is valid: 2 phases')
+
+  const spawn = (description: string) => $.agent.spawn({
+    tool_use_id: `spawn-${agentId}`, prompt: 'Read the docs', description, subagentType: 'pantheon:docs-reader',
+    provider: { plugin: 'pantheon', tier: 'user' }, parentModel: 'parent', permissionMode: 'default',
+  } as never)
+  const agents = () => JSON.parse(w.files.get(`${ROOT}/.pantheon/flow/flows/${id}/state.json`)!).agents
+
+  await spawn('[a] Read the docs')
+  expect(agents()['agent:native-1']).toMatchObject({ phase: 'a', role: 'docs-reader', claimed: true })
+
+  agentId = 'native-2'
+  await spawn('Read the docs')
+  expect(agents()['agent:native-2']).toBeUndefined()
+})
+
+/** Starts a flow through the tool and lays its phases out, as the model does; the flow's phases are PHASES. */
+async function layOut($: Engine, w: { files: Map<string, string> }) {
+  const started = await call($, { action: 'start', goal: 'Create a.txt then b.txt', name: 'two files' })
+  const id = /tracked flow `([^`]+)`/.exec(started)?.[1]
+  expect(id).toBeDefined()
+  w.files.set(`${ROOT}/.pantheon/flow/flows/${id}/flow.json`, JSON.stringify(PHASES))
+  expect(await call($, { action: 'validate' })).toContain('is valid: 2 phases')
+}
+
+test('a check the permission rules deny is not run, and the Stop holds with the reason', async ($, on) => {
+  const w = flowWorld(on)
+  w.rules.decision = 'deny'
+  w.rules.reason = 'Bash(test:*) is denied'
+  await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
+  await layOut($, w)
+  const held = await stop($)
+  expect(w.ran).toEqual([])
+  expect(held.block).toContain("not run: Claude Code's permission rules deny it: Bash(test:*) is denied")
+})
+
+test('a check the rules ask about is not run when no one can answer, and the Stop says so', async ($, on) => {
+  const w = flowWorld(on)
+  w.rules.decision = 'ask'
+  await $.session.start({ cwd: ROOT, surface: null, isInteractive: false })
+  await layOut($, w)
+  const held = await stop($)
+  expect(w.ran).toEqual([])
+  expect(held.block).toContain('it needs permission and there is no one to ask')
+})
+
+test('a check the person approved in this repository before runs without asking again', async ($, on) => {
+  const w = flowWorld(on, { flowCheckApprovals: { [ROOT]: ['test -f a.txt'] } })
+  w.rules.decision = 'ask'
+  await $.session.start({ cwd: ROOT, surface: null, isInteractive: false })
+  await layOut($, w)
+  const advanced = await stop($)
+  expect(w.ran).toEqual(['test -f a.txt'])
+  expect(advanced.block).toContain("Now work on phase 'b'")
+})
+
+for (const decision of ['proceed', 'cancel'] as const) {
+  test(`an ask in an interactive session holds the flow check box; ${decision} decides it (${decision === 'proceed' ? 'and is remembered' : 'and nothing is remembered'})`, async ($, on) => {
+    const w = flowWorld(on)
+    w.rules.decision = 'ask'
+    await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
+    await layOut($, w)
+    const ui = await $.ui.mount({ plugin: 'pantheon', component: 'AbovePrompt', surface: 'terminal', props: { hasSurvey: false, isWorking: false, maxRows: 12, bodyColumns: 120 } as never })
+    const pending = stop($)
+    try {
+      // Wait for the Stop to reach the hold and draw the box (bounded, so a missing box fails rather than hangs).
+      let texts = ''
+      for (let i = 0; i < 100 && !texts.includes('Pantheon flow check'); i++) {
+        await pause(10)
+        texts = (await ui.findAll({ type: 'Text' })).map(node => String(node.text)).join('|')
+      }
+      expect(texts).toContain('Pantheon flow check')
+      expect(texts).toContain('Run the check of phase `a`?')
+      expect(w.ran).toEqual([])
+      await ui.press({ key: decision })
+      const out = await pending
+      if (decision === 'proceed') {
+        expect(w.ran).toEqual(['test -f a.txt'])
+        expect(out.block).toContain("Now work on phase 'b'")
+        expect(w.store.get('flowCheckApprovals')).toEqual({ [ROOT]: ['test -f a.txt'] })
+      } else {
+        expect(w.ran).toEqual([])
+        expect(out.block).toContain('the person cancelled it')
+        expect(w.store.has('flowCheckApprovals')).toBe(false)
+      }
+    } finally {
+      // A pending hold that never got a press must not keep polling after the test.
+      await ui.press({ key: 'cancel' }).catch(() => undefined)
+      await pending.catch(() => undefined)
+      await ui.unmount()
+    }
+  })
+}

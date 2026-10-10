@@ -164,7 +164,9 @@ export function planInstructions(flowRel: string, flowId: string, goal: string):
     + `Shape (example values, replace them):\n\`\`\`json\n${JSON.stringify(example, null, 1)}\n\`\`\`\n`
     + 'Check it by calling the `mcp__pantheon__flow` tool with `action: "validate"`, then start on the first phase. '
     + 'The flow will not let you stop until it is laid out, then it tracks each phase. When you delegate a phase, '
-    + `tell the agent to claim it first with its role. Do not edit other files under \`${FLOW_DIR_REL}/\`.`
+    + 'start the Agent description with `[<phase id>]` (for example `[docs] Update the README`), and the flow claims '
+    + 'that phase for the agent as its role. Agents still claim with the tool when they move to another phase, and '
+    + `you claim your own phase with the tool. Do not edit other files under \`${FLOW_DIR_REL}/\`.`
   )
 }
 

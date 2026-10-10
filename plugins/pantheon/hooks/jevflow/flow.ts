@@ -29,7 +29,7 @@ export const DEFAULT_LIMITS: Limits = Object.freeze({
 export const DEFAULT_PRIVACY: { send_diff: boolean } = Object.freeze({ send_diff: false })
 
 const SCHEMA_VERSION = 1
-const PHASE_ID_RE = /^[a-z][a-z0-9_-]{0,39}$/
+export const PHASE_ID_RE = /^[a-z][a-z0-9_-]{0,39}$/
 const RESERVED_PHASE_IDS: ReadonlySet<string> = new Set(['unclear'])
 const TOP_LEVEL_KEYS: ReadonlySet<string> = new Set(['schema_version', 'flow_version', 'goal', 'title', 'phases', 'limits', 'privacy'])
 const PHASE_KEYS: ReadonlySet<string> = new Set(['id', 'name', 'done_when', 'check', 'depends_on', 'loop', 'on_fail', 'side_effect'])

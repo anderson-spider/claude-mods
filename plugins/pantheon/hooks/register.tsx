@@ -36,6 +36,17 @@ import type { ConfigResult, PantheonConfig } from './types'
 import { authorizedRoot } from './workspace'
 
 const gateHeld = atom({ plugin: 'pantheon', key: 'gateHeld' }, null)
+/** The Proceed/Cancel box: what it asks and its title (the edit gate's when none is given). */
+type GateHeld = { message: string; title?: string }
+
+/** The check commands the person approved, per repository root, in the plugin's store (newest last). */
+const CHECK_APPROVALS_KEY = 'flowCheckApprovals'
+const CHECK_APPROVALS_MAX = 200
+
+function approvalsIn(all: unknown, root: string): string[] {
+  const list = all && typeof all === 'object' && !Array.isArray(all) ? (all as Record<string, unknown>)[root] : undefined
+  return Array.isArray(list) ? list.filter((cmd): cmd is string => typeof cmd === 'string') : []
+}
 
 type GateEvaluation = { deny: string } | undefined
 
@@ -205,6 +216,19 @@ async function flowViewOf($: Dollar, jev: JevAccess, root: string): Promise<Flow
   }
 }
 
+/** Whether the person approved this exact check command in this repository before. */
+async function isApprovedCheck($: Dollar, root: string, cmd: string): Promise<boolean> {
+  return approvalsIn(await $.store.get(CHECK_APPROVALS_KEY), root).includes(cmd)
+}
+
+/** Remembers an approved check command for this repository, keeping the newest CHECK_APPROVALS_MAX. */
+async function rememberCheck($: Dollar, root: string, cmd: string): Promise<void> {
+  const all = await $.store.get(CHECK_APPROVALS_KEY)
+  const kept: Record<string, unknown> = all && typeof all === 'object' && !Array.isArray(all) ? { ...(all as Record<string, unknown>) } : {}
+  kept[root] = [...approvalsIn(all, root).filter(c => c !== cmd), cmd].slice(-CHECK_APPROVALS_MAX)
+  await $.store.set(CHECK_APPROVALS_KEY, kept)
+}
+
 /** Host access for the above-prompt strip modules, built from the hook's `$`. */
 function stripHost($: Dollar): StripHost {
   return {
@@ -272,7 +296,7 @@ export const register: Register = (on, options) => {
   let gateInteractive = false
 
   // Like branch-guard, decisions travel in memory: state reads inside a dispatch are snapshots.
-  async function holdGate(io: { poll: () => Promise<unknown>; show: (value: { message: string } | null) => Promise<unknown> }, message: string, signal: AbortSignal): Promise<GateChoice | 'aborted'> {
+  async function holdGate(io: { poll: () => Promise<unknown>; show: (value: GateHeld | null) => Promise<unknown> }, held: GateHeld, signal: AbortSignal): Promise<GateChoice | 'aborted'> {
     const slot = { decision: null as GateChoice | null }
     try {
       while (gateWaiting !== undefined) {
@@ -282,7 +306,7 @@ export const register: Register = (on, options) => {
       }
       if (signal.aborted) return 'aborted'
       gateWaiting = slot
-      await io.show({ message })
+      await io.show(held)
       while (slot.decision === null && !signal.aborted) await io.poll()
       return signal.aborted ? 'aborted' : slot.decision ?? 'aborted'
     } catch {
@@ -312,6 +336,8 @@ export const register: Register = (on, options) => {
   const flowRoot = async (io: Io): Promise<string> => gateRoot ?? (await workspace(io)).root
   // Sessions that sent a prompt since this module loaded: the first prompt gets the lower nudge bar (auto.py).
   const prompted = new Set<string>()
+  // Sessions already told, once each, that Jev is off (no judgeKey) when a Stop needed it.
+  const jevOffToasted = new Set<string>()
   configureStrip({ paceStart: options.paceStart })
   let minuteTicker: { cancel: () => void } | undefined
   let stripTicker: { cancel: () => void } | undefined
@@ -398,7 +424,8 @@ export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     gateInteractive = e.isInteractive === true && e.surface != null
     gateWaiting = undefined
-    if (options.gate === true) await update($, gateHeld, () => null)
+    // A box left by an earlier session is cleared whether or not the edit gate is on; a failed write must not stop the start.
+    try { await update($, gateHeld, () => null) } catch { /* The box is only a prompt; the session starts without the clear. */ }
     const io = hostIo($)
     const started = await next(e)
     await refreshConfig(io, (await workspace(io)).root)
@@ -646,6 +673,18 @@ export const register: Register = (on, options) => {
         await nativesQueue.flushed()
       }
     } catch { /* Tracking never changes the spawn result. */ }
+    // A delegated phase: the lead's Agent description starts with `[<phase id>]` and the type is a Pantheon role. The
+    // claim is the one the agent's own flow tool call would make; a failure never changes the spawn.
+    const agentId = started.agentId
+    const claim = agentId ? jevflow.spawnClaim(e.subagentType, e.description) : undefined
+    if (agentId && claim) {
+      try {
+        const root = await flowRoot(hostIo($))
+        const sessionId = String(await $.session.id())
+        await flowSerial(() => jevflow.claimFlow(flowHost($, jev), root, { sessionId, agentId, agentType: e.subagentType }, claim.phase, claim.role))
+        $.ui.invalidate('ui.render')
+      } catch { /* The claim is advisory and fails open. */ }
+    }
     return started
   })
 
@@ -682,7 +721,7 @@ export const register: Register = (on, options) => {
       const outcome = await holdGate({
         poll: () => $.process.run(['sleep', '0.25']),
         show: value => update($, gateHeld, () => value),
-      }, message, next.signal)
+      }, { message }, next.signal)
       if (outcome === 'proceed') return undefined
       return { deny: `${message}\n${outcome === 'cancel' ? 'The person pressed Cancel.' : 'The wait was interrupted before a decision.'}` }
     }
@@ -750,11 +789,44 @@ export const register: Register = (on, options) => {
     const below = await next(e)
     if (e.agent_id || below.block || below.preventContinuation) return below
     try {
-      const io = flowHost($, jev)
       const root = await flowRoot(hostIo($))
+      // A check is a shell command the flow runs outside the permission system: it runs only when Claude Code's rules
+      // allow it, or the person approves that exact command here (an approval is kept for this repository).
+      const io: jevflow.Io = {
+        ...flowHost($, jev),
+        authorize: async (cmd, phase): Promise<jevflow.CheckAuthorization> => {
+          try {
+            const verdict = await $.tool.check({ tool: 'Bash', input: { command: cmd } })
+            if (verdict.decision === 'allow') return { ok: true }
+            if (verdict.decision === 'deny') {
+              return { ok: false, reason: `Claude Code's permission rules deny it${verdict.reason ? `: ${verdict.reason}` : ''}` }
+            }
+            if (await isApprovedCheck($, root, cmd)) return { ok: true }
+            if (!gateInteractive) {
+              return { ok: false, reason: "it needs permission and there is no one to ask; add an allow rule for it in Claude Code's settings" }
+            }
+            const outcome = await holdGate({
+              poll: () => $.process.run(['sleep', '0.25']),
+              show: value => update($, gateHeld, () => value),
+            }, { message: `Run the check of phase \`${phase}\`?\n  ${cmd}`, title: 'Pantheon flow check' }, next.signal)
+            if (outcome === 'proceed') {
+              // The run was approved either way; a store that cannot keep the approval only asks again next time.
+              await rememberCheck($, root, cmd).catch(() => undefined)
+              return { ok: true }
+            }
+            return { ok: false, reason: outcome === 'cancel' ? 'the person cancelled it' : 'no answer from the person' }
+          } catch (error) {
+            return { ok: false, reason: error instanceof Error ? error.message : String(error) }
+          }
+        },
+      }
       const out = await flowSerial(() => jevflow.onStop(io, root, e))
       $.ui.invalidate('ui.render')
       if (out.message) $.ui.toast(out.message)
+      if (out.noJev && !jevOffToasted.has(e.session_id)) {
+        jevOffToasted.add(e.session_id)
+        $.ui.toast("[Pantheon flow] Jev is off: set the plugin's judgeKey option. This Stop decided on the checks alone.")
+      }
       if (out.block) return { ...below, block: out.block }
     } catch { /* Fail open: the stop is allowed. */ }
     return below
@@ -882,7 +954,7 @@ export const register: Register = (on, options) => {
       </Box>
     )
     if (tab === 'flow') {
-      return <Box key="pane" flexDirection="column" width={columns}>{tabs}{drawFlowTab({ Box, Text }, await flowViewOf($, jev, await flowRoot(hostIo($))), columns) as never}</Box> as never
+      return <Box key="pane" flexDirection="column" width={columns}>{tabs}{drawFlowTab({ Box, Text }, await flowViewOf($, jev, await flowRoot(hostIo($))), columns, Boolean(jev.key)) as never}</Box> as never
     }
     const agents = drawPanel({
       Box, Text, Button,
@@ -915,7 +987,7 @@ export const register: Register = (on, options) => {
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    const held = options.gate === true ? await read($, gateHeld) : null
+    const held = await read($, gateHeld)
     if (held !== null && !e.props.hasSurvey) {
       const { Box, Text, Button } = $.ui.resolve(e)
       const choose = (decision: GateChoice) => {
@@ -923,7 +995,7 @@ export const register: Register = (on, options) => {
       }
       return (
         <Box flexDirection="column" borderStyle="round" borderColor="warning" paddingX={1}>
-          <Text bold color="warning">Pantheon edit gate</Text>
+          <Text bold color="warning">{held.title ?? 'Pantheon edit gate'}</Text>
           <Text>{held.message}</Text>
           <Box marginTop={1} gap={2}>
             <Button key="proceed" label="Proceed" hotkey="1" plain onPress={() => choose('proceed')} />

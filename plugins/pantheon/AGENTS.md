@@ -35,11 +35,13 @@ IMPORTANT: prompts and panel modules include third-party work. Keep `LICENSE` an
 
 `hooks/jevflow/` is a port of JevFlow 0.2.0 (see `NOTICE`): pure `flow.ts`, `state.ts`, `policy.ts`, `questions.ts`, `texts.ts`, `project.ts`, the Jev client `jev.ts`, the I/O in `controller.ts` (host access injected), and the Flow tab in `view.tsx`. Keep it faithful to JevFlow: same rules, thresholds, condition tags and wording; `flow.json` and `state.json` keep JevFlow's snake_case shape.
 
-- Always on and always enforce: there is no mode or on/off option. Jev is used when the `judgeKey` option is set; without it every Stop decides on the checks.
+- Always on and always enforce: there is no mode or on/off option. Jev is used when the `judgeKey` option is set; without it every Stop decides on the checks. With no key, the status, the Flow tab's first row and a once-per-session toast say that Jev is off.
 - Layout under `.pantheon/flow/`: `flows/<id>/` (draft.json, flow.json, state.json, NEEDS_HUMAN.md), `done/<id>/` with SUMMARY.md, `sessions/<session id>` (the flow a session works on).
 - JevFlow's CLI is the `mcp__pantheon__flow` tool (start, validate, join, claim, status); a claim's `as` must be one of `ROLES` in `types.ts`. Claims are advisory: the policy never reads them.
-- Every entry point fails open, and every read-modify-write of the flow's files goes through one queue (`flowSerial`). Checks are shell strings run as `/bin/sh -c` from the repository root.
-- `$` may only be passed to functions declared at the top of `register.tsx` (the engine rejects the module otherwise): `flowHost`, `flowViewOf`.
+- A spawned `pantheon:<role>` agent (not lead) whose description starts with `[<phase id>]` claims that phase as its role: `spawnClaim` in `controller.ts`, run by `agent.spawn` after tracking through the same `claimFlow` as the tool.
+- Every entry point fails open, and every read-modify-write of the flow's files goes through one queue (`flowSerial`). A check is a shell string run as `/bin/sh -c` from the repository root only when Claude Code's permission rules allow it (`$.tool.check` on a `Bash` command, so an allow rule such as `Bash(npm test:*)` lets it run) or the person approved that exact command in this repository through the Pantheon box. Approvals are kept in `$.store` under `flowCheckApprovals` (per root, at most 200, newest last). Otherwise the check does not run and counts as failed with `not run: <reason>`.
+- The controller asks `io.authorize` once per distinct command, before its check time budget starts (the budget is not charged for the person's decision); without `io.authorize` every check runs. Only the `classic.Stop` hook in `register.tsx` builds it. The box is the edit gate's Proceed/Cancel hold (`gateHeld`, with a `title`), shown whether or not the `gate` option is on.
+- `$` may only be passed to functions declared at the top of `register.tsx` (the engine rejects the module otherwise): `flowHost`, `flowViewOf`, `isApprovedCheck`, `rememberCheck`.
 
 ## Roster
 
