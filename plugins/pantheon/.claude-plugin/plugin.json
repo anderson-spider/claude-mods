@@ -1,6 +1,6 @@
 {
   "name": "pantheon",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Makes Claude a lead that delegates to specialist roles as native Claude subagents, tracks multi-step work against a JevFlow flow whose Stop checks each phase with Jev, and shows roles, activity and the flow in an auto-opening /pantheon panel, with a strip above the prompt for model, context, cache, rate limits and running agents.",
   "author": {
     "name": "anderson-spider"
@@ -24,6 +24,12 @@
       "title": "Above-prompt strip",
       "description": "Shows the info, usage and limits rows above the prompt, plus a summary of the roles running now. Turn it off to hide the strip.",
       "default": true
+    },
+    "autoChecks": {
+      "type": "boolean",
+      "title": "Run flow checks without asking",
+      "description": "Runs a flow check that Claude Code's permission rules would ask about without the Pantheon approval box, and remembers nothing. Checks the rules deny still do not run. Off by default: each new check command then asks once in this repository.",
+      "default": false
     },
     "paceStart": {
       "type": "number",

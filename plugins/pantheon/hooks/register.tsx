@@ -219,6 +219,26 @@ async function readJevEnvKey($: Dollar, jev: JevAccess): Promise<void> {
   jev.source = 'env'
 }
 
+/**
+ * Whether the repository's own settings (project or local) declare the autoChecks option for this plugin. Like its
+ * OPENROUTER_API_KEY, a repository's settings never turn autoChecks on: a declaration there is ignored. A settings read
+ * that fails counts as a declaration (fail closed).
+ */
+async function repoSetsAutoChecks($: Dollar): Promise<boolean> {
+  try {
+    for (const source of ['project', 'local'] as const) {
+      const configs = (await $.settings.read({ source }))?.pluginConfigs as Record<string, unknown> | undefined
+      if (!configs || typeof configs !== 'object') continue
+      for (const [key, value] of Object.entries(configs)) {
+        if (key !== 'pantheon' && !key.startsWith('pantheon@')) continue
+        const declared = (value as { options?: unknown } | null | undefined)?.options
+        if (declared && typeof declared === 'object' && Object.hasOwn(declared, 'autoChecks')) return true
+      }
+    }
+    return false
+  } catch { return true }
+}
+
 /** The flow controller's host access, with Jev when a key is set. */
 function flowHost($: Dollar, jev: JevAccess): jevflow.Io {
   const ask = jev.key ? createJev(jevIo($), jev.key, { breaker: jev.breaker }) : undefined
@@ -851,6 +871,9 @@ export const register: Register = (on, options) => {
             if (verdict.decision === 'deny') {
               return { ok: false, reason: `Claude Code's permission rules deny it${verdict.reason ? `: ${verdict.reason}` : ''}` }
             }
+            // autoChecks: an ask runs the check with no box and nothing is remembered (deny and allow were decided above),
+            // unless the repository's own settings declare the option.
+            if (options.autoChecks === true && !(await repoSetsAutoChecks($))) return { ok: true }
             if (await isApprovedCheck($, root, cmd)) return { ok: true }
             if (!gateInteractive) {
               return { ok: false, reason: "it needs permission and there is no one to ask; add an allow rule for it in Claude Code's settings" }
