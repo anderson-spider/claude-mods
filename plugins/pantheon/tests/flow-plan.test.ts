@@ -90,6 +90,11 @@ for (const [label, flow, error] of [
   ['onFail on itself', mutate(f => { f.tasks[0].onFail = 'T1' }), 'onFail cannot target itself'],
   ['a bad loop', mutate(f => { f.tasks[0].loop = { maxIterations: 0 } }), 'loop must be { maxIterations }'],
   ['a side effect without a check', mutate(f => { f.tasks[1].sideEffect = true }), 'a sideEffect task needs a check'],
+  ['an unknown role', mutate(f => { f.tasks[0].role = 'wizard' }), 'T1: role wizard is not a task role; task roles are developer or ux'],
+  ['a non-string role', mutate(f => { f.tasks[0].role = 3 }), 'T1: role must be developer or ux'],
+  ['a read-only role', mutate(f => { f.tasks[0].role = 'architect' }), 'T1: role architect is not a task role; task roles are developer or ux'],
+  ['a reader role', mutate(f => { f.tasks[0].role = 'code-reader' }), 'T1: role code-reader is not a task role; task roles are developer or ux'],
+  ['the git role', mutate(f => { f.tasks[0].role = 'git' }), 'T1: role git is not a task role; task roles are developer or ux'],
   ['a non-boolean risk', mutate(f => { f.tasks[0].risk = 'yes' }), 'risk must be a boolean'],
 ] as const) {
   test(`rejects ${label}`, () => {
@@ -149,4 +154,33 @@ test('ownership accepts ./ prefixes on either side', () => {
   expect(ownsPath({ files: ['./src/'] }, 'src/a.ts')).toBe(true)
   expect(ownsPath({ files: ['src/a.ts'] }, './src/a.ts')).toBe(true)
   expect(ownsPath({ files: ['src/a.ts'] }, 'src/b.ts')).toBe(false)
+})
+
+const roleOf = (patch: (flow: any) => void) => {
+  const result = validateFlow(mutate(patch))
+  if (!result.ok) throw new Error(result.errors.join('\n'))
+  return result
+}
+
+test('an explicit role is kept', () => {
+  const result = roleOf(f => { f.tasks[0].role = 'developer'; f.tasks[1].role = 'ux' })
+  expect(result.flow.tasks.map(task => task.role)).toEqual(['developer', 'ux'])
+})
+
+test('the default role is developer whatever the files, UI files included', () => {
+  expect(roleOf(f => { f.tasks[0].files = ['src/ui/App.tsx', 'src/ui/app.css'] }).flow.tasks[0].role).toBe('developer')
+  expect(roleOf(f => { f.tasks[0].files = ['src/ui/App.TSX', 'src/api.ts'] }).flow.tasks[0].role).toBe('developer')
+  expect(roleOf(f => {}).flow.tasks.map(task => task.role)).toEqual(['developer', 'developer'])
+  expect(roleOf(f => { f.tasks[0].files = ['a.tsx']; f.tasks[0].role = 'ux' }).flow.tasks[0].role).toBe('ux')
+})
+
+test('the hash changes with the role, explicit or defaulted', () => {
+  const hashOf = (patch: (flow: any) => void) => roleOf(patch).hash
+  const plain = hashOf(f => {})
+  expect(hashOf(f => { f.tasks[0].role = 'ux' })).not.toBe(plain)
+  expect(hashOf(f => { f.tasks[0].role = 'developer' })).toBe(plain)
+  // The default does not depend on the files, so naming developer explicitly changes nothing.
+  const ui = hashOf(f => { f.tasks[0].files = ['a.tsx'] })
+  expect(hashOf(f => { f.tasks[0].files = ['a.tsx']; f.tasks[0].role = 'developer' })).toBe(ui)
+  expect(hashOf(f => { f.tasks[0].files = ['a.tsx']; f.tasks[0].role = 'ux' })).not.toBe(ui)
 })

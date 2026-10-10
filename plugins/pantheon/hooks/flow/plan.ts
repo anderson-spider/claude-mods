@@ -1,6 +1,8 @@
 // The flow contract: the fenced `pantheon-flow` JSON block a plan carries, validated strictly so a
 // typo fails at approval instead of silently changing what the controller enforces.
 
+import type { Role } from '../types'
+
 export const FLOW_FENCE = 'pantheon-flow'
 export const SCHEMA_VERSION = 1
 
@@ -10,6 +12,7 @@ export type FlowTask = {
   id: string
   goal: string
   files: string[]
+  role: Role
   dependsOn: string[]
   acceptance: Acceptance
   risk: boolean
@@ -28,7 +31,9 @@ const CHECK_TIMEOUT = { default: 120, max: 600 }
 const PLAN_ID = /^[a-z0-9][a-z0-9-]{0,63}$/
 const TASK_ID = /^[A-Za-z][A-Za-z0-9_-]{0,31}$/
 const TOP_KEYS = ['schemaVersion', 'planId', 'goal', 'limits', 'tasks']
-const TASK_KEYS = ['id', 'goal', 'files', 'dependsOn', 'acceptance', 'risk', 'loop', 'onFail', 'sideEffect']
+// The architect reviews through `risk` and the readers are delegated by the lead outside the flow, so a task is implemented by one of these two.
+const TASK_ROLES: readonly Role[] = ['developer', 'ux']
+const TASK_KEYS = ['id', 'goal', 'files', 'role', 'dependsOn', 'acceptance', 'risk', 'loop', 'onFail', 'sideEffect']
 
 type Raw = Record<string, unknown>
 const isObject = (v: unknown): v is Raw => typeof v === 'object' && v !== null && !Array.isArray(v)
@@ -126,6 +131,13 @@ function parseTask(raw: unknown, index: number, previous: string | undefined, er
   if (!files) errors.push(`${at}: files must be a list of non-empty paths or globs`)
   else for (const file of files) if (file.startsWith('/') || file.split('/').includes('..')) errors.push(`${at}: file ${file} must be relative and stay inside the repository`)
 
+  let role: Role | undefined
+  if (raw.role !== undefined) {
+    if (typeof raw.role === 'string' && (TASK_ROLES as readonly string[]).includes(raw.role)) role = raw.role as Role
+    else if (typeof raw.role === 'string') errors.push(`${at}: role ${raw.role} is not a task role; task roles are developer or ux`)
+    else errors.push(`${at}: role must be developer or ux`)
+  }
+
   // Omitted means after the task listed before it; [] makes a root.
   let dependsOn: string[] = previous ? [previous] : []
   if (raw.dependsOn !== undefined) {
@@ -168,7 +180,7 @@ function parseTask(raw: unknown, index: number, previous: string | undefined, er
   // A side effect is recorded once and never re-entered, so its done must rest on a check.
   if (sideEffect && acceptance.checks.length === 0) errors.push(`${at}: a sideEffect task needs a check`)
   if (!files || !text(raw.goal)) return undefined
-  return { id: at, goal: (raw.goal as string).trim(), files, dependsOn, acceptance, risk: raw.risk === true, ...(loop ? { loop } : {}), ...(onFail ? { onFail } : {}), sideEffect }
+  return { id: at, goal: (raw.goal as string).trim(), files, role: role ?? 'developer', dependsOn, acceptance, risk: raw.risk === true, ...(loop ? { loop } : {}), ...(onFail ? { onFail } : {}), sideEffect }
 }
 
 function parseCheck(raw: unknown, where: string, errors: string[]): Check | undefined {
