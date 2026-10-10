@@ -504,6 +504,24 @@ describe('what the final review found', () => {
   })
 })
 
+describe('what the last review found', () => {
+  test('enforce: every spelling of a shell\'s command option, and a flake reference that is git, are read', { options: { flow: 'enforce' } }, async ($, on) => {
+    const w = gitWorld(on)
+    await boot($, w)
+    for (const command of ['fish -C "git push origin main"', 'nu --commands "git push origin main"', 'pwsh -cwa "git push origin main"']) {
+      expect((await bash($, command)).deny, command).toContain('protected branch `main`')
+    }
+    for (const command of ['pwsh -ec ZwBpAHQA', 'nix run nixpkgs#git -- push origin main']) {
+      expect((await bash($, command)).deny, command).toContain('hidden')
+    }
+    // Names that only look like git, and git that is only mentioned, still run.
+    for (const command of ['echo "nixpkgs#git"', 'grep -rn "#git" .', 'git log --oneline', 'fish -c "echo hi"']) {
+      expect((await bash($, command)).deny, command).toBeUndefined()
+    }
+    expect(w.ran).toHaveLength(4)
+  })
+})
+
 describe('a task\'s developer', () => {
   test('enforce: add and commit of its own files with the task id go through; unowned files, a missing id and a push do not', { options: { flow: 'enforce' } }, async ($, on) => {
     const w = gitWorld(on)

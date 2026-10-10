@@ -4,7 +4,7 @@ import type { RunOutput, Runner } from '../hooks/flow/checks'
 import {
   activePlanId, approvePlan, controlFlow, diagnosisOpen, flowStatus, flowTaskFiles, humanPrompt, inspectIsolation, inspectSpawn, mainEdit, missingRoles,
   ownershipVerdict, parseNotification, pendingAgentTasks, qaCriteriaBrief, reviewed, stopFlow, taskEnded, taskIdOf, treeSnapshot, verdictCache,
-  approvalListings, confirmationVerdict,
+  approvalListings, confirmationVerdict, unnamedHolds,
 } from '../hooks/flow/controller'
 import type { Attest, Available, Ctx } from '../hooks/flow/controller'
 import type { CheckMemo } from '../hooks/flow/checks'
@@ -30,6 +30,7 @@ type Opts = { mode?: Mode; available?: Partial<Available>; flow?: object; files?
 function world(opts: Opts = {}) {
   // What a process remembers of the listings it printed is the process's: each test is a session of its own.
   approvalListings.clear()
+  unnamedHolds.clear()
   const files = new Map<string, string>(Object.entries({ [`${ROOT}/${PLAN}`]: planMd(opts.flow ?? FLOW), ...opts.files }))
   const mtimes = new Map<string, number>()
   const runs: string[][] = []
@@ -61,7 +62,12 @@ function world(opts: Opts = {}) {
     },
   }
   const fs: FlowFs = {
-    read: async path => { if (faults.read) throw new Error('disk gone'); return files.get(path) },
+    read: async path => {
+      if (faults.read) throw new Error('disk gone')
+      // As the host answers: a file's text, undefined for what is not there, and a rejection for a directory (it is not a file).
+      if (!files.has(path) && [...files.keys()].some(key => key.startsWith(`${path}/`))) throw new Error(`EISDIR: illegal operation on a directory, read '${path}'`)
+      return files.get(path)
+    },
     write: async (path, text) => { if (faults.write) throw new Error('read-only file system'); writes.push(path); order.push(path); files.set(path, text) },
   }
   const run: Runner = async (argv, init) => {
@@ -1001,6 +1007,91 @@ test('a store that cannot name the plan in force holds it: the pointer files are
   w.faults.storeActive = false
   await humanPrompt(w.ctx())
   expect((await stopFlow(w.ctx(), stopInput)).block).toContain('Task T1 (first) is not done')
+})
+
+test('a store that cannot be read and a pointer file that is gone is a plan nobody can name: held, never "none"', async () => {
+  const w = world()
+  await approve(w)
+  w.fail('npm test', 'FAIL a')
+  expect((await stopFlow(w.ctx(), stopInput)).block).toContain('Task T1 (first) is not done')
+  expect(checkRuns(w)).toHaveLength(1)
+  // The store cannot say which plan is in force, and the pointer files are deleted (what a deletion leaves).
+  w.faults.storeActive = true
+  w.files.delete(`${ROOT}/.pantheon/flow/active`)
+  w.files.delete(`${ROOT}/.pantheon/flow/active.json`)
+  const prompt = await humanPrompt(w.ctx())
+  expect(prompt.context).toContain(HELD)
+  expect(prompt.context).toContain('read the commands it lists')
+  const out = await stopFlow(w.ctx(), stopInput)
+  expect(out.block).toContain(HELD)
+  expect(out.block).toContain('could not be read')
+  expect(out.block).toContain('no pointer file names a plan')
+  // No check ran, and once per prompt: the next stop goes through, the next prompt brings it back.
+  expect(checkRuns(w)).toHaveLength(1)
+  const through = await stopFlow(w.ctx(), { ...stopInput, stopHookActive: true })
+  expect(through.block).toBeUndefined()
+  expect(through.notice).toContain('held once and is let through now')
+  expect((await humanPrompt(w.ctx())).context).toContain(HELD)
+  expect((await stopFlow(w.ctx(), stopInput)).block).toContain(HELD)
+  expect(checkRuns(w)).toHaveLength(1)
+  // Nothing else of the plan runs either, and the status and the controls say what it is.
+  expect(await taskEnded(w.ctx(), { taskId: 'T1', ownershipDenials: 0 })).toEqual({})
+  expect(checkRuns(w)).toHaveLength(1)
+  const status = await flowStatus(w.ctx())
+  expect(status).toContain('Plan: none can be named')
+  expect(status).toContain('Approval: NOT trusted')
+  expect(await controlFlow(w.ctx(), 'stop')).toContain('No plan can be named')
+  // A wait for background work is not held.
+  await humanPrompt(w.ctx())
+  expect(await stopFlow(w.ctx(), { ...stopInput, backgroundTasks: 1 })).toEqual({})
+  // The store back: the plan it names is enforced again, pointer files or not.
+  w.faults.storeActive = false
+  await humanPrompt(w.ctx())
+  expect((await stopFlow(w.ctx(), stopInput)).block).toContain('Task T1 (first) is not done')
+})
+
+test('with the store unreadable and nothing under .pantheon/flow, there is no flow to hold: nothing is held, warned or written', async () => {
+  for (const mode of ['enforce', 'shadow'] as const) {
+    const w = world({ mode })
+    w.faults.store = true
+    expect([...w.files.keys()].some(path => path.startsWith(`${ROOT}/.pantheon/flow`))).toBe(false)
+    await humanPrompt(w.ctx())
+    expect(await stopFlow(w.ctx(), stopInput)).toEqual({})
+    expect(await stopFlow(w.ctx(), stopInput)).toEqual({})
+    expect((await humanPrompt(w.ctx())).context).toBeUndefined()
+    expect(await taskEnded(w.ctx(), { taskId: 'T1', ownershipDenials: 0 })).toEqual({})
+    expect(await activePlanId(w.ctx())).toBeUndefined()
+    expect(await flowStatus(w.ctx())).not.toContain('NOT trusted')
+    expect(checkRuns(w)).toEqual([])
+    expect(w.warnings).toEqual([])
+    expect(w.writes).toEqual([])
+  }
+})
+
+test('with the store unreadable and no pointer file, any trace under .pantheon/flow holds: shadow only warns and writes nothing, enforce holds once, in memory', async () => {
+  // A journal, a state or an approved.json of a plan, with the pointer files gone: the directory is what says a flow was kept.
+  const trace = { [`${ROOT}/.pantheon/flow/demo/journal.jsonl`]: '{"kind":"note"}\n' }
+  const shadow = world({ mode: 'shadow', files: trace })
+  shadow.faults.storeActive = true
+  expect(await stopFlow(shadow.ctx(), stopInput)).toEqual({})
+  expect(shadow.warnings.some(text => text.includes('the flow would hold the stop') && text.includes('could not be read'))).toBe(true)
+  expect((await humanPrompt(shadow.ctx())).context).toBeUndefined()
+  expect(shadow.writes).toEqual([])
+  // Enforce: a plan nobody can name has no state file, so the hold is counted in memory and nothing is written.
+  const enforce = world({ files: trace })
+  enforce.faults.storeActive = true
+  expect((await stopFlow(enforce.ctx(), stopInput)).block).toContain(HELD)
+  expect((await stopFlow(enforce.ctx(), stopInput)).block).toBeUndefined()
+  expect(enforce.writes).toEqual([])
+  // Readable again: nothing was approved, so there is no plan to hold.
+  enforce.faults.storeActive = false
+  await humanPrompt(enforce.ctx())
+  expect(await stopFlow(enforce.ctx(), stopInput)).toEqual({})
+  // A directory that cannot be told from a missing one (the read of it fails for another reason) is a flow kept, never "none".
+  const refused = world()
+  refused.faults.storeActive = true
+  const refusing = { ...refused.ctx(), fs: { ...refused.fs, read: async (path: string) => { if (path.endsWith('/.pantheon/flow')) throw new Error('EACCES'); return refused.fs.read(path) } } }
+  expect((await stopFlow(refusing, stopInput)).block).toContain(HELD)
 })
 
 test('deleting or redirecting the pointer files changes nothing: the store names the plan in force', async () => {
@@ -2058,14 +2149,14 @@ test('shadow journals the held approval once when the store cannot be read', asy
 
 test('a store that cannot be written approves nothing: no snapshot, no pointer', async () => {
   const w = world()
-  w.faults.store = true
+  w.faults.storeSet = true
   await approvePlan(w.ctx(), PLAN)
   const text = await approvePlan(w.ctx(), `${PLAN} ${confirmationFor(w)}`)
   expect(text).toContain('could not approve')
   expect(w.files.has(`${ROOT}/.pantheon/flow/active`)).toBe(false)
   expect((await w.approved()).kind).toBe('missing')
   expect(await stopFlow(w.ctx(), stopInput)).toEqual({})
-  w.faults.store = false
+  w.faults.storeSet = false
   expect(await approveText(w)).toContain('Approved demo')
   expect((await stopFlow(w.ctx(), stopInput)).block).toContain('Task T1')
 })

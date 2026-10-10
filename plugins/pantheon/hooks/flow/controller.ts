@@ -337,7 +337,7 @@ type Located = {
  * unreadable or not the one the host attested, or the state records an approval that was never attested). None of its
  * commands run and nothing is forgotten: the person approves again.
  */
-type Tampered = { kind: 'tampered'; path: string; planId: string; why: string }
+type Tampered = { kind: 'tampered'; path: string; /** Undefined when nothing names the plan (the store is unreadable and no pointer file exists). */ planId?: string; why: string }
 type Locate = { kind: 'none' } | { kind: 'invalid'; path: string; errors: string[] } | Tampered | ({ kind: 'ok' } & Located)
 type Trace = { planId?: string }
 type Note = { kind: JournalKind; condition: string; detail: string; approvedHash?: string; adoptedHash?: string }
@@ -386,11 +386,21 @@ async function readMeta(ctx: Pick<Ctx, 'fs' | 'root'>, rel: string): Promise<str
 }
 
 /**
+ * Whether anything of a flow was ever kept in this repository: `.pantheon/flow/` is there (a plan's directory, a journal, a
+ * state, an approved.json or the pointer). `FlowFs.read` answers undefined only for a path that does not exist, and a directory
+ * is not a file it can read, so anything but undefined (the text of a file by that name, a rejection) is the path being there:
+ * a read that fails for any reason counts as present, the safe way round.
+ */
+async function flowKept(ctx: Pick<Ctx, 'fs' | 'root'>): Promise<boolean> {
+  try { return (await ctx.fs.read(`${stripRoot(ctx.root)}/.pantheon/flow`)) !== undefined } catch { return true }
+}
+
+/**
  * The plan in force for this repository: the plan file and the id it was approved under. The plugin's store says it (written
  * by `approvePlan`), so deleting or redirecting the pointer file changes nothing; a repository approved before the store held
  * it falls back to the pointer file (and its id file, then the id in the plan file itself).
  */
-async function planInForce(ctx: Pick<Ctx, 'fs' | 'root' | 'attest'>): Promise<{ rel: string; planId?: string; stored: boolean; unreadable?: string } | undefined> {
+async function planInForce(ctx: Pick<Ctx, 'fs' | 'root' | 'attest'>): Promise<{ rel?: string; planId?: string; stored: boolean; unreadable?: string } | undefined> {
   // A store that cannot be read names no plan, and the pointer file is not a substitute for it (it is what a redirect would
   // write): the caller holds the plan, with no check run, the way it holds a snapshot that is not attested.
   let stored: ReturnType<typeof parseActive>
@@ -399,7 +409,10 @@ async function planInForce(ctx: Pick<Ctx, 'fs' | 'root' | 'attest'>): Promise<{ 
   if (stored) return { rel: stored.plan, planId: stored.planId, stored: true }
   const pointer = await ctx.fs.read(activePath(ctx.root))
   const rel = pointer?.split('\n')[0]?.trim()
-  if (!rel) return undefined
+  // No pointer file either: with the store readable that is no plan. With it unreadable it is a plan nobody can name when a
+  // flow was kept here (a missing pointer is what a deletion leaves, so it is not "none": the caller holds it), and no plan
+  // at all in a repository that never had one.
+  if (!rel) return unreadable !== undefined && await flowKept(ctx) ? { stored: false, unreadable } : undefined
   return { rel, ...(await readMeta(ctx, rel).then(id => (id ? { planId: id } : {}))), stored: false, ...(unreadable !== undefined ? { unreadable } : {}) }
 }
 
@@ -408,6 +421,7 @@ export async function activePlanId(ctx: Pick<Ctx, 'fs' | 'root' | 'attest'>): Pr
   const found = await planInForce(ctx)
   if (!found) return undefined
   if (found.planId) return found.planId
+  if (found.rel === undefined) return undefined
   const text = await ctx.fs.read(planFile(ctx.root, found.rel))
   const parsed = text === undefined ? undefined : parseFlow(text)
   return parsed?.ok ? parsed.flow.planId : undefined
@@ -446,6 +460,11 @@ async function standing(ctx: Pick<Ctx, 'fs' | 'root' | 'attest'>, planId: string
 async function locate(ctx: Ctx): Promise<Locate> {
   const inForce = await planInForce(ctx)
   if (!inForce) return { kind: 'none' }
+  if (inForce.rel === undefined) {
+    // The store that says which plan is in force cannot be read and no pointer file names one: nothing can be said of a plan,
+    // and nothing may be taken for "no plan". It is held the way an unattested snapshot is, with no check run.
+    return { kind: 'tampered', path: '', why: `the plugin store that names the plan in force could not be read (${clip(inForce.unreadable ?? 'no reason given', 120)}) and no pointer file names a plan` }
+  }
   const { rel } = inForce
   const path = planFile(ctx.root, rel)
   const text = await ctx.fs.read(path)
@@ -1111,6 +1130,11 @@ function emptyState(planId: string): FlowState {
   }
 }
 
+// A plan nobody can name has no state file to count its holds in: they are counted here, per repository root.
+const UNNAMED_HELD = new Map<string, number>()
+/** For tests: forget the holds of plans nobody could name. */
+export const unnamedHolds = { clear: () => UNNAMED_HELD.clear() }
+
 const tamperedReason = (why: string) => `${TAMPERED} (${why}). Ask the person to run ${APPROVE}, read the commands it lists, then confirm with the hash it prints. No check of the plan runs until then.`
 /** A held plan blocks the lead's Stop this many times between two prompts of the person: the lead cannot resolve it, the person can. */
 const TAMPERED_BLOCKS = 1
@@ -1122,18 +1146,31 @@ const TAMPERED_BLOCKS = 1
  * a stop or a finished flow is left alone, and so is a wait for background work.
  */
 async function tamperedStop(ctx: Ctx, loc: Tampered, input: StopInput, trace: Trace): Promise<StopOutcome> {
-  trace.planId = loc.planId
   const reason = tamperedReason(loc.why)
-  return ctx.serial(loc.planId)(async () => {
+  const planId = loc.planId
+  if (planId === undefined) {
+    // No plan can be named, so there is no state or journal to write: the hold is counted in memory, once between two prompts.
+    if (input.backgroundTasks > 0 || input.runningAgents > 0) return {}
+    if (ctx.mode !== 'enforce') {
+      try { ctx.warn(`the flow would hold the stop: ${loc.why}`) } catch { /* A failing warning changes nothing. */ }
+      return {}
+    }
+    const held = UNNAMED_HELD.get(ctx.root) ?? 0
+    if (held >= TAMPERED_BLOCKS) return { notice: `${TAG}: ${reason} The stop was held once and is let through now; the next prompt of the person brings this back.` }
+    UNNAMED_HELD.set(ctx.root, held + 1)
+    return { block: `${TAG}: ${reason}` }
+  }
+  trace.planId = planId
+  return ctx.serial(planId)(async () => {
     const at = await ctx.now()
-    const saved = (await loadState(ctx.fs, ctx.root, loc.planId)) ?? emptyState(loc.planId)
+    const saved = (await loadState(ctx.fs, ctx.root, planId)) ?? emptyState(planId)
     if (input.backgroundTasks > 0 || input.runningAgents > 0 || saved.done || saved.paused || saved.stopped) return {}
     const key = `tampered:${loc.why}`
     const told = (saved.seenEdits ?? []).includes(key)
     let state: FlowState = { ...saved }
     if (!input.stopHookActive) state.consecutiveBlocks = 0
     const save = async () => { if (canonical(state) !== canonical(saved)) await saveState(ctx.fs, ctx.root, state) }
-    const note = (entry: Omit<JournalInput, 'at'>) => appendSafe(ctx, loc.planId, { at, mode: ctx.mode, event: 'stop', condition: 'snapshot_tampered', reason: clip(reason, 600), ...entry })
+    const note = (entry: Omit<JournalInput, 'at'>) => appendSafe(ctx, planId, { at, mode: ctx.mode, event: 'stop', condition: 'snapshot_tampered', reason: clip(reason, 600), ...entry })
     if (ctx.mode !== 'enforce') {
       if (told) return {}
       state = { ...state, seenEdits: remember(state.seenEdits, [key], SEEN_EDITS_MAX) }
@@ -1489,9 +1526,14 @@ export async function humanPrompt(ctx: Ctx): Promise<{ context?: string }> {
 
 /** The person wrote and the plan's approval cannot be believed: the budget refills, and in enforce the lead is told what to ask. */
 async function tamperedPrompt(ctx: Ctx, loc: Tampered, trace: Trace): Promise<{ context?: string }> {
-  trace.planId = loc.planId
-  return ctx.serial(loc.planId)(async () => {
-    const saved = await loadState(ctx.fs, ctx.root, loc.planId)
+  const planId = loc.planId
+  if (planId === undefined) {
+    UNNAMED_HELD.delete(ctx.root)
+    return ctx.mode === 'enforce' ? { context: `[${TAG}] ${tamperedReason(loc.why)} Tell the person; do not rely on the plan's checks.` } : {}
+  }
+  trace.planId = planId
+  return ctx.serial(planId)(async () => {
+    const saved = await loadState(ctx.fs, ctx.root, planId)
     if (saved && (saved.blocks > 0 || saved.consecutiveBlocks > 0)) await saveState(ctx.fs, ctx.root, { ...saved, blocks: 0, consecutiveBlocks: 0 })
     if (ctx.mode !== 'enforce' || saved?.stopped || saved?.done) return {}
     return { context: `[${TAG}] ${tamperedReason(loc.why)} Tell the person; do not rely on the plan's checks.` }
@@ -1675,14 +1717,16 @@ export async function controlFlow(ctx: Ctx, action: 'pause' | 'resume' | 'stop')
     }
     if (loc.kind === 'tampered') {
       // The person may still pause or end a flow whose approval cannot be believed; approving it again is what restores it.
-      trace.planId = loc.planId
-      await ctx.serial(loc.planId)(async () => {
+      const planId = loc.planId
+      if (planId === undefined) return `No plan can be named, so there is nothing to ${action} (${loc.why}). Once the plugin store can be read, ${APPROVE} <plan path> brings the flow back.`
+      trace.planId = planId
+      await ctx.serial(planId)(async () => {
         const at = await ctx.now()
-        const done = change((await loadState(ctx.fs, ctx.root, loc.planId)) ?? emptyState(loc.planId))
+        const done = change((await loadState(ctx.fs, ctx.root, planId)) ?? emptyState(planId))
         await saveState(ctx.fs, ctx.root, done.state)
-        for (const entry of done.entries) await appendSafe(ctx, loc.planId, { at, mode: ctx.mode, ...entry })
+        for (const entry of done.entries) await appendSafe(ctx, planId, { at, mode: ctx.mode, ...entry })
       })
-      return `Flow ${loc.planId} ${label}. Its approval cannot be believed (${loc.why}): nothing of the plan runs until you ${APPROVE}.`
+      return `Flow ${planId} ${label}. Its approval cannot be believed (${loc.why}): nothing of the plan runs until you ${APPROVE}.`
     }
     const result = await transact(ctx, loc, trace, state => ({ ...change(state), value: true }))
     return result ? `Flow ${loc.planId} ${label}.` : 'Nothing changed.'
@@ -1710,7 +1754,7 @@ export async function flowStatus(ctx: Ctx): Promise<string> {
     if (loc.kind === 'tampered') {
       return [
         head,
-        `Plan: ${loc.path} (${loc.planId})`,
+        loc.planId === undefined ? 'Plan: none can be named' : `Plan: ${loc.path} (${loc.planId})`,
         `Approval: NOT trusted: ${TAMPERED} (${loc.why}); run ${APPROVE}`,
         'Nothing of the plan is enforced or run until you do; the approval is still recorded in the state.',
       ].join('\n')

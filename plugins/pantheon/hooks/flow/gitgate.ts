@@ -778,12 +778,15 @@ const xargsCommand = (rest: readonly Word[]): Word | undefined => {
   return undefined
 }
 
+// The name a word runs under: a flake reference (`nixpkgs#git`, `github:o/r#git`) is named by what follows its last `#`.
+const commandName = (text: string) => base(text.slice(text.lastIndexOf('#') + 1))
+
 // Whether a word of a command that is none of the above, followed by what a git command takes (a verb, an option, something not
 // literal), runs git: `caffeinate git push`, `op run -- git push`, `mise exec -- gh pr merge`. A `git` that stands alone, or is
 // followed by a word that is no verb (`pytest -k git tests/`, `brew install git curl`), is a name, not a command.
 const wrapsGit = (rest: readonly Word[]): boolean =>
   rest.some((word, at) => {
-    const named = base(word.text)
+    const named = commandName(word.text)
     const next = rest[at + 1]
 
     if (/^git-[a-z]/.test(named)) {
@@ -817,7 +820,12 @@ const textRunsGit = (text: string): boolean => {
       at += 1
     }
 
-    const head = base(tokens[at] ?? '')
+    const head = commandName(tokens[at] ?? '')
+
+    // `nix run nixpkgs#git -- push`, as a string.
+    if (head === 'nix') {
+      return wrapsGit(tokens.slice(at + 1).map(text => ({ text, isUnknown: false, isHome: false })))
+    }
 
     if (/^git-[a-z]/.test(head)) {
       return true
@@ -849,7 +857,7 @@ const textRunsGit = (text: string): boolean => {
 
 // Whether the command an `xargs` or a `find -exec` stage runs is a git, a shell, a wrapper or not literal.
 const runsGit = (command: Word | undefined) => {
-  const named = base(command?.text ?? '')
+  const named = commandName(command?.text ?? '')
 
   return command !== undefined && (command.isUnknown || named === 'git' || /^git-[a-z]/.test(named) || SHELLS.has(named) || XARGS_WRAPPERS.has(named))
 }
@@ -1224,6 +1232,24 @@ const forgeSegment = (tool: string, args: readonly Word[]): ForgeSegment => {
 
 export type Classified = { segments: GitSegment[]; forges: ForgeSegment[]; opaque: boolean; envSets: string[] }
 
+// Whether `text` is an option that hands the shell a command line to run: `-c` (also in a cluster, `-lc`), `--command` and
+// nu's `--commands`; fish also runs `-C` and `--init-command`; PowerShell takes any prefix of `-Command` and
+// `-CommandWithArgs`, in any case, and `-cwa`.
+const shellCommandOption = (shell: string, text: string): boolean => {
+  if (shell === 'pwsh' || shell === 'powershell') {
+    const lower = text.toLowerCase()
+    const abbreviates = (full: string, least: number) => lower.length >= least && full.startsWith(lower)
+
+    return abbreviates('-command', 2) || abbreviates('-commandwithargs', 9) || lower === '-cwa'
+  }
+
+  if (/^(?:-[A-Za-z]*c[A-Za-z]*|--commands?)$/.test(text)) {
+    return true
+  }
+
+  return shell === 'fish' && /^(?:-[A-Za-z]*C[A-Za-z]*|--init-command)$/.test(text)
+}
+
 const classifyDepth = (command: string, depth: number, inherit: readonly string[]): Classified => {
   const found: Classified = { segments: [], forges: [], opaque: false, envSets: [] }
   let isAdrift = false
@@ -1306,24 +1332,38 @@ const classifyDepth = (command: string, depth: number, inherit: readonly string[
       // `gh codespace ssh -- git push`, `gh extension exec x git push`: these groups run what they are given.
       found.opaque ||= FORGE_RUNS.has(forge.group) && (wrapsGit(rest) || rest.some(word => textRunsGit(word.text)))
     } else if (SHELLS.has(name) || name === 'eval') {
-      // PowerShell's is `-Command` (any prefix, any case); fish and the others take `-c` or `--command`.
-      const isPowerShell = name === 'pwsh' || name === 'powershell'
-      const commandFlag = isPowerShell ? /^-c(?:o(?:m(?:m(?:a(?:n(?:d)?)?)?)?)?)?$/i : /^(?:-[A-Za-z]*c[A-Za-z]*|--command)$/
+      // A PowerShell command that is encoded cannot be read (`-EncodedCommand`, `-ec`, `-e`).
+      found.opaque ||= (name === 'pwsh' || name === 'powershell') && rest.some(word => /^-e(?:c|n[a-z]*)?$/i.test(word.text))
 
-      // A PowerShell command that is encoded cannot be read.
-      found.opaque ||= isPowerShell && rest.some(word => /^-e(?:nc\w*)?$/i.test(word.text))
+      // Each command line the shell is handed: the word after a command option, or what follows its `=`. `eval` runs its words.
+      const bodies: Word[][] = name === 'eval' ? (rest.length > 0 ? [[...rest]] : []) : []
 
-      const flagAt = rest.findIndex(word => commandFlag.test(word.text))
-      const body = name === 'eval' ? rest : flagAt >= 0 ? rest.slice(flagAt + 1, flagAt + 2) : []
-      const text = body.map(word => word.text).join(' ')
+      if (name !== 'eval') {
+        rest.forEach((word, at) => {
+          const isLong = word.text.startsWith('--')
+          const attached = isLong ? word.text.indexOf('=') : -1
 
-      if (body.length > 0) {
-        const inner = classifyDepth(text, depth + 1, assigns)
+          if (!shellCommandOption(name, attached === -1 ? word.text : word.text.slice(0, attached))) {
+            return
+          }
 
-        merge(inner)
+          if (attached !== -1) {
+            bodies.push([{ text: word.text.slice(attached + 1), isUnknown: word.isUnknown, isHome: false }])
+          } else if (rest[at + 1] !== undefined) {
+            bodies.push([rest[at + 1] as Word])
+          }
+        })
+      }
+
+      for (const body of bodies) {
+        const text = body.map(word => word.text).join(' ')
+
+        merge(classifyDepth(text, depth + 1, assigns))
         // A body that is not literal (`eval "$X"`) runs whatever the variable holds: it is hidden git when the line mentions git at all.
         found.opaque ||= body.some(word => word.isUnknown) && (GIT_WORD.test(` ${text} `) || GIT_WORD.test(` ${command} `))
-      } else {
+      }
+
+      if (bodies.length === 0) {
         // `bash "$(echo git push)"`: a script argument that holds git.
         found.opaque ||= rest.some(word => word.isUnknown && GIT_WORD.test(` ${word.text} `))
       }
