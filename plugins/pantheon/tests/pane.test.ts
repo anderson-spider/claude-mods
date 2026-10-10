@@ -174,7 +174,7 @@ describe('pane', () => {
       expect(at.every(i => i >= 0)).toBe(true)
       expect(at).toEqual([...at].sort((a, b) => a - b))
       // developer and architect run, code-reader finished; docs-reader, ux and council have not run yet.
-      for (const name of ['code-reader', 'docs-reader', 'developer', 'architect', 'ux', 'council α', 'council β']) expect(all).toContain(name)
+      for (const name of ['code-reader', 'docs-reader', 'developer', 'architect', 'qa', 'ux', 'council α', 'council β']) expect(all).toContain(name)
       expect(all).toContain('2 running')
     })
 
@@ -464,7 +464,7 @@ describe('pane', () => {
     const ui = await mountPane($, 'terminal', { rows: 70 })
     expect((await railsOf(ui)).map(c => c.props.color)).toEqual([SECTION_COLOR.running, SECTION_COLOR.idle, SECTION_COLOR.timeline, SECTION_COLOR.log])
     const all = await texts(ui)
-    expect(all.filter(text => text === '●')).toHaveLength(9) // header, lead, architect and the six idle rows
+    expect(all.filter(text => text === '●')).toHaveLength(10) // header, lead, architect and the seven idle rows
     expect(all).toContain('⊘') // the disabled docs-reader is planned and off
   })
 

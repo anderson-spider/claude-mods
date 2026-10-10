@@ -11,6 +11,7 @@ export const ROLE_COLOR: Record<SlotName, string> = {
   'docs-reader': '#C9A24A',
   developer: '#8F96A6',
   architect: '#A56BD8',
+  qa: '#4FB3C9',
   ux: '#D870A8',
   git: '#E8873A',
   council: '#B8B3A6',

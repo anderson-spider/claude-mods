@@ -14,6 +14,24 @@ export type Judgment = {
   scores: Partial<Record<'claimsDone' | 'complete' | 'stuck', number>>
 } | { source: 'none'; reason: string }
 
+/** Who gives a receipt: the architect reviews risky work, QA verifies acceptance criteria. */
+export type Reviewer = 'architect' | 'qa'
+/** A task waiting for one receipt. */
+export type Awaiting = { task: string; by: Reviewer }
+export type Receipts = { architect?: true; qa?: true }
+
+/** What `decide` may be told about the world; both are optional and only ever make the flow stricter or ask the person. */
+export type DecideOptions = {
+  /**
+   * Every task that is not a side effect needs a QA receipt (decision 18: the judge doubts a "complete" claim). The task
+   * is then recorded in `FlowState.qaRequired`, so the requirement outlives this call. On a side-effect task it does
+   * nothing and the decision carries `note: 'require_qa_ignored'`.
+   */
+  requireQa?: boolean
+  /** Whether each role is enabled. A role that is disabled while a task needs its receipt (or the architect's diagnosis) pauses the flow and asks the person. */
+  available: { qa: boolean; architect: boolean }
+}
+
 export type FlowState = {
   planId: string
   /** The flow block's hash when this state was created; a different hash means the plan changed. */
@@ -23,10 +41,24 @@ export type FlowState = {
   status: Record<string, TaskStatus>
   /** Failed attempts per task since it last became active. */
   attempts: Record<string, number>
-  /** Tasks with an architect review receipt. */
-  reviewed: string[]
-  /** Risk tasks whose checks passed and that wait for the architect's verdict before they count as done. */
-  awaitingReview: string[]
+  /**
+   * Receipts still to come: a task whose checks passed (or whose attempt was otherwise accepted) that waits for the
+   * architect's review or for QA's verdict before it counts as done. A task may wait for both, in any order.
+   */
+  awaiting: Awaiting[]
+  /**
+   * Receipts earned per task: `architect` is an approved review, `qa` a passing verdict. A task is done only when its
+   * checks pass AND every receipt it requires exists (see `requiredReceipts` in policy.ts). A failed attempt, a
+   * regression and a failing check clear the task's receipts.
+   */
+  receipts: Record<string, Receipts>
+  /** Tasks that a `requireQa` escalation made wait for QA; the requirement stays until the task is done. */
+  qaRequired: string[]
+  /**
+   * Task ends seen per task (every acted-on `taskEnd` counts, passing or not). A reviewer is spawned for one end and
+   * its `review` event carries that count: a verdict about older code is ignored.
+   */
+  ends: Record<string, number>
   /** Side-effect tasks recorded done in the ledger; never re-entered. */
   sideEffectsDone: string[]
   /** Blocks spent since the person last wrote; refilled on every human prompt. */
@@ -47,12 +79,20 @@ export type FlowState = {
 export type FlowEvent =
   /** A delegated task's agent returned. `ownershipDenials` counts writes the controller refused. */
   | { kind: 'taskEnd'; taskId: string; checks: CheckResult[]; ownershipDenials: number }
-  /** The main session tries to stop. `checks` holds the active task's and every done task's results (regression). */
+  /** The main session tries to stop. `checks` holds the results of every active task, every task awaiting a receipt (a failing check there drops its wait) and every done task (regression). */
   | { kind: 'stop'; stopHookActive: boolean; backgroundTasks: number; runningAgents: number; checks: Record<string, CheckResult[]> }
   /** The person wrote: the block budget refills. */
   | { kind: 'humanPrompt' }
-  /** The architect reviewed a task that was awaiting review. */
-  | { kind: 'review'; taskId: string; verdict: 'approved' | 'rejected'; note?: string }
+  /**
+   * The architect or QA returned for a task that was awaiting them: `pass` earns the receipt, `fail` is a failed
+   * attempt. QA may also say `blocked` (it could not run the task's environment): that pauses and asks the person
+   * without spending an attempt. `end` is the task's end count when the reviewer was spawned (`FlowState.ends`); a
+   * review for a task not awaiting that `by`, or carrying another `end`, is ignored.
+   */
+  | { kind: 'review'; taskId: string; end: number; note?: string } & (
+    | { by: 'architect'; verdict: 'pass' | 'fail' }
+    | { by: 'qa'; verdict: 'pass' | 'fail' | 'blocked' }
+  )
 
 export type Action = 'allow' | 'block' | 'advance' | 'wait' | 'pause' | 'complete' | 'failTask'
 
@@ -66,4 +106,6 @@ export type Decision = {
   state: FlowState
   /** The task the decision moves to, when it moves. */
   task?: string
+  /** A tag for something the policy ignored on purpose, so the caller can journal it (`require_qa_ignored`). */
+  note?: string
 }

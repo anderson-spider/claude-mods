@@ -20,7 +20,7 @@
 // The ledger is per planId, not per hash: a side effect recorded for an earlier version of the plan stays recorded.
 
 import type { TaskStatus } from './plan'
-import type { Action, FlowState, Mode } from './types'
+import type { Action, Awaiting, FlowState, Mode, Receipts, Reviewer } from './types'
 
 export type FlowFs = {
   /**
@@ -166,6 +166,14 @@ export function createSerial(): <T>(work: () => Promise<T>) => Promise<T> {
 
 // --- state ---
 
+const REVIEWERS: readonly string[] = ['architect', 'qa']
+const isAwaitingList = (v: unknown): boolean => Array.isArray(v) && v.every(a => isObj(a) && isStr(a.task) && isStr(a.by) && REVIEWERS.includes(a.by))
+const isReceiptsMap = (v: unknown): boolean => isObj(v) && Object.values(v).every(r => isObj(r) && optional(r.architect, x => x === true) && optional(r.qa, x => x === true))
+
+function addAwaiting(state: FlowState, task: string, by: Reviewer): void {
+  if (!state.awaiting.some(a => a.task === task && a.by === by)) state.awaiting.push({ task, by })
+}
+
 function parseState(raw: unknown, planId: string): FlowState | undefined {
   if (!isObj(raw)) return undefined
   if (raw.planId !== planId || !isStr(raw.hash)) return undefined
@@ -173,9 +181,14 @@ function parseState(raw: unknown, planId: string): FlowState | undefined {
   if (!optional(raw.mode, v => isStr(v) && MODES.includes(v))) return undefined
   if (!isObj(raw.status) || !Object.values(raw.status).every(v => isStr(v) && STATUSES.includes(v))) return undefined
   if (!isObj(raw.attempts) || !Object.values(raw.attempts).every(isCount)) return undefined
-  if (!isStrList(raw.reviewed) || !isStrList(raw.sideEffectsDone)) return undefined
-  // Added after the first release: an older state.json has no list and loads as empty.
-  if (!optional(raw.awaitingReview, isStrList)) return undefined
+  if (!isStrList(raw.sideEffectsDone)) return undefined
+  // Receipts replaced `reviewed` and `awaitingReview`; a state saved before that still loads: its reviews become architect
+  // receipts and its pending reviews wait for the architect. A state needs one of the two receipt forms.
+  if (!optional(raw.reviewed, isStrList) || !optional(raw.awaitingReview, isStrList)) return undefined
+  if (!optional(raw.awaiting, isAwaitingList) || !optional(raw.receipts, isReceiptsMap)) return undefined
+  if (raw.reviewed === undefined && raw.receipts === undefined) return undefined
+  // Added with the QA escalation and the delivery count: an older state.json has neither and loads with them empty.
+  if (!optional(raw.qaRequired, isStrList) || !optional(raw.ends, v => isObj(v) && Object.values(v).every(isCount))) return undefined
   if (!isCount(raw.blocks) || !isCount(raw.consecutiveBlocks)) return undefined
   if (typeof raw.paused !== 'boolean' || typeof raw.stopped !== 'boolean' || typeof raw.done !== 'boolean') return undefined
   const lf = raw.lastFailure
@@ -185,10 +198,21 @@ function parseState(raw: unknown, planId: string): FlowState | undefined {
     planId, hash: raw.hash,
     status: { ...raw.status } as Record<string, TaskStatus>,
     attempts: { ...raw.attempts } as Record<string, number>,
-    reviewed: [...raw.reviewed], awaitingReview: raw.awaitingReview === undefined ? [] : [...(raw.awaitingReview as string[])], sideEffectsDone: [...raw.sideEffectsDone],
+    awaiting: [], receipts: {}, qaRequired: raw.qaRequired === undefined ? [] : [...(raw.qaRequired as string[])],
+    ends: raw.ends === undefined ? {} : { ...(raw.ends as Record<string, number>) },
+    sideEffectsDone: [...raw.sideEffectsDone],
     blocks: raw.blocks, consecutiveBlocks: raw.consecutiveBlocks,
     paused: raw.paused, stopped: raw.stopped, done: raw.done,
   }
+  for (const id of (raw.reviewed as string[] | undefined) ?? []) state.receipts[id] = { ...state.receipts[id], architect: true }
+  for (const [id, r] of Object.entries((raw.receipts as Record<string, Obj> | undefined) ?? {})) {
+    const receipts: Receipts = { ...state.receipts[id] }
+    if (r.architect === true) receipts.architect = true
+    if (r.qa === true) receipts.qa = true
+    state.receipts[id] = receipts
+  }
+  for (const id of (raw.awaitingReview as string[] | undefined) ?? []) addAwaiting(state, id, 'architect')
+  for (const a of (raw.awaiting as Awaiting[] | undefined) ?? []) addAwaiting(state, a.task, a.by)
   if (raw.approvedHash !== undefined) state.approvedHash = raw.approvedHash as string
   if (lf !== undefined) state.lastFailure = { key: (lf as Obj).key as string, count: (lf as Obj).count as number }
   if (raw.lastInstruction !== undefined) state.lastInstruction = raw.lastInstruction as string

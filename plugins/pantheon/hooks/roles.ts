@@ -25,7 +25,7 @@ type NativeSpec = {
   disallowedTools?: readonly string[]
 }
 
-// Architect and the councillors inherit the session's tools minus the ones that change files.
+// Architect, qa and the councillors inherit the session's tools minus the ones that change files (qa writes only in the scratchpad, through Bash).
 // Code-reader and docs-reader keep file tools (told by prompt not to use them).
 const NO_FILE_EDITS = ['Edit', 'Write', 'NotebookEdit'] as const
 // Read-only roles also cannot spawn agents.
@@ -39,6 +39,7 @@ export function nativeAgentSpecs(config: PantheonConfig, prompts: RolePrompts): 
     'docs-reader': 'Pantheon research on external docs and APIs.',
     developer: 'Pantheon implementation of all code (backend, scripts, tests, hooks, CLI, UI logic) from a complete specification.',
     architect: 'Analyze architecture, debug difficult problems and review technical decisions.',
+    qa: 'Runs what was built and returns a pass/fail verdict per acceptance criterion, with evidence.',
     ux: 'Owns look and feel (layout, hierarchy, color, spacing, motion, UI copy) and implements it.',
     git: 'Perform git operations (squash, PR/MR, checkout, switch, worktree, stash) from the lead brief; does not push.',
   }
@@ -52,7 +53,7 @@ export function nativeAgentSpecs(config: PantheonConfig, prompts: RolePrompts): 
         prompt: appendPrompt(prompts(role), override.prompt),
         model: override.model,
         effort: override.effort,
-        ...(role === 'architect' ? { disallowedTools: READ_ONLY_DENY }
+        ...(role === 'architect' || role === 'qa' ? { disallowedTools: READ_ONLY_DENY }
           : role === 'code-reader' || role === 'docs-reader' || role === 'git' ? { disallowedTools: RESEARCH_DENY } : {}),
       }
     })

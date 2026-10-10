@@ -90,6 +90,8 @@ for (const [label, flow, error] of [
   ['onFail on itself', mutate(f => { f.tasks[0].onFail = 'T1' }), 'onFail cannot target itself'],
   ['a bad loop', mutate(f => { f.tasks[0].loop = { maxIterations: 0 } }), 'loop must be { maxIterations }'],
   ['a side effect without a check', mutate(f => { f.tasks[1].sideEffect = true }), 'a sideEffect task needs a check'],
+  ['criteria on a side effect', mutate(f => { f.tasks[0].sideEffect = true; f.tasks[0].acceptance.criteria = ['looks right'] }), 'T1: a sideEffect task cannot have criteria; move criteria to a preceding task'],
+  ['risk on a side effect', mutate(f => { f.tasks[0].sideEffect = true; f.tasks[0].risk = true }), 'T1: a sideEffect task cannot be risk; review in a preceding task'],
   ['an unknown role', mutate(f => { f.tasks[0].role = 'wizard' }), 'T1: role wizard is not a task role; task roles are developer or ux'],
   ['a non-string role', mutate(f => { f.tasks[0].role = 3 }), 'T1: role must be developer or ux'],
   ['a read-only role', mutate(f => { f.tasks[0].role = 'architect' }), 'T1: role architect is not a task role; task roles are developer or ux'],

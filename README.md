@@ -10,7 +10,7 @@ Marketplace of [Claude Code](https://claude.com/claude-code) plugins made by and
 | [chatgpt](plugins/chatgpt) | Lets Claude ask your logged-in ChatGPT, or have it generate an image, in terminal-browser, Claude in Chrome or the Claude desktop app's built-in browser, and saves the result locally. |
 | [codex-computer-use](plugins/codex-computer-use) | Routes native Mac app control through Codex computer use from the ChatGPT app instead of Claude's own computer use, asking before each new app. |
 | [tailscale](plugins/tailscale) | Lets Claude query and modify your tailnet through the Tailscale API. |
-| [pantheon](plugins/pantheon) | Makes Claude a lead that delegates to specialist roles (code-reader, docs-reader, developer, architect, ux, git) and council seats as native Claude subagents, with an auto-opening `/pantheon` panel for roles, activity and a session log, and a strip above the prompt with the model, context, prompt cache, usage limits and running agents. |
+| [pantheon](plugins/pantheon) | Makes Claude a lead that delegates to specialist roles (code-reader, docs-reader, developer, architect, qa, ux, git) and council seats as native Claude subagents, with an auto-opening `/pantheon` panel for roles, activity and a session log, and a strip above the prompt with the model, context, prompt cache, usage limits and running agents. |
 
 ## Install
 
@@ -119,7 +119,7 @@ To update the ACL without overwriting someone else's edit: do a `GET /tailnet/-/
 
 ## pantheon
 
-The main session delegates to native Claude subagents through the Agent tool. The `/pantheon` panel opens by itself at session start; `/pantheon` opens or focuses it and `/pantheon close` closes it. The panel keeps eight role slots in order: lead, code-reader, docs-reader, developer, architect, ux, git and council. Parallel instances stack in their role, resumed work shows its rounds, and other subagents appear under "other agents" when present. Each instance shows its model, elapsed time, context percentage and last activity; tokens are in the Session card.
+The main session delegates to native Claude subagents through the Agent tool. The `/pantheon` panel opens by itself at session start; `/pantheon` opens or focuses it and `/pantheon close` closes it. The panel keeps nine role slots in order: lead, code-reader, docs-reader, developer, architect, qa, ux, git and council. Parallel instances stack in their role, resumed work shows its rounds, and other subagents appear under "other agents" when present. Each instance shows its model, elapsed time, context percentage and last activity; tokens are in the Session card.
 
 The panel docks beside the terminal transcript, uses a mini view when placed inline, and adds a "Last 15 minutes" SVG timeline on desktop. Each section is a card with its own colored border, and an animated rail (110 ms) runs only while there is active work. The docked layout has rails, clocks and the pulse; mini (placed inline) has clocks and the pulse, no rails; desktop has clocks and the SVG timeline, no rails and no pulse. The panel has no configuration. Its tracking hooks only watch and pass events on unchanged. `/pantheon config` and `/pantheon doctor` report the effective configuration and ping every role. See [its README](plugins/pantheon/README.md) and [NOTICE](plugins/pantheon/NOTICE).
 

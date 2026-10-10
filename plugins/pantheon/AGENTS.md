@@ -1,16 +1,16 @@
 # pantheon
 
-Makes the main session the lead in the style of oh-my-opencode-slim. The six roles and every council seat are native Claude subagents; the configuration chooses each one's model, effort and extra prompt.
+Makes the main session the lead in the style of oh-my-opencode-slim. The seven roles and every council seat are native Claude subagents; the configuration chooses each one's model, effort and extra prompt.
 
 IMPORTANT: prompts and panel modules include third-party work. Keep `LICENSE` and the credits and full license text in `NOTICE`.
 
 ## Roles
 
-- Roles and seats are registered as native `pantheon:<role>` or `pantheon:councillor-<seat>` agents with `$.agent.register` (no tool list, so they inherit the session's tools; architect and councillors get `disallowedTools` Edit, Write and NotebookEdit; code-reader, docs-reader, architect, git and councillors also get Agent; developer and ux get none), and hidden by an `agent.offer` guard when disabled.
+- Roles and seats are registered as native `pantheon:<role>` or `pantheon:councillor-<seat>` agents with `$.agent.register` (no tool list, so they inherit the session's tools; architect, qa and councillors get `disallowedTools` Edit, Write and NotebookEdit; code-reader, docs-reader, architect, qa, git and councillors also get Agent; developer and ux get none), and hidden by an `agent.offer` guard when disabled.
 - Developer writes all code (UI code and logic included) and runs scripts, test batteries and API calls within the brief, returning short results; no external research or sub-delegation. It tells the lead when a task is look and feel (guidance, not a refusal). Developer and ux commit their own task's files after the checks pass (`git add -- <paths>`, `git commit -m "<type>(<scope>): <summary> [<taskId>]" -- <paths>`; never `-A`, `.`, `--no-verify` or `--amend`, no AI attribution, retry once on `index.lock`) and never push, rebase, reset, merge, switch or stash; the lead pushes.
-- UX owns look and feel (layout, hierarchy, color, spacing, motion, UI copy), makes mockups and throwaway prototypes (scratchpad, never committed) when the direction is open, and implements the chosen one, keeping the design criteria of the former designer; the split with developer is by kind of work, not by file extension. Docs-reader reads external docs and research; it does not write docs. Architect covers architecture, debugging, review and simplification.
+- UX owns look and feel (layout, hierarchy, color, spacing, motion, UI copy), makes mockups and throwaway prototypes (scratchpad, never committed) when the direction is open, and implements the chosen one, keeping the design criteria of the former designer; the split with developer is by kind of work, not by file extension. Docs-reader reads external docs and research; it does not write docs. Architect covers architecture, debugging, review and simplification. QA runs what was built and returns `C<n>: pass|fail — <evidence>` per acceptance criterion plus a final `QA: pass|fail` (partial coverage is a fail); it never fixes code or runs side effects and writes only in the session scratchpad through Bash.
 - Developer, ux and git may write within their assigned scope. The git role executes squash, PR/MR creation and repository state changes (checkout, switch, worktree, stash) from the lead's brief; the lead decides the included changes, branch, base, squash/PR choices and task commit range, pushes, and owns validation. Git follows repository conventions and templates, uses `gh` or `glab`, and reports SHAs, PR/MR URLs and refusals; it does not push.
-- Git's fixed refusals cover modifying default or protected branches (including main/master/develop), unverified branch protection, force push without `--force-with-lease`, PR/MR merges, remote branch deletion, history rewrites outside an explicit task commit range, and work outside the task.
+- Git's fixed refusals cover modifying default or protected branches (including main, master, develop, release and release/*), unverified branch protection, force push without `--force-with-lease`, PR/MR merges, remote branch deletion, history rewrites outside an explicit task commit range, and work outside the task.
 
 ## Config
 
@@ -19,9 +19,9 @@ IMPORTANT: prompts and panel modules include third-party work. Keep `LICENSE` an
 
 ## Edit gate
 
-- `decisions.ts` is pure, with injected fetch and timer; it sends metadata only to the decision model through OpenRouter and falls back to local size and path rules. `gate.ts` is pure and builds edit context, exemptions and messages. Pure modules never touch `$`; `register.tsx` owns host access, path resolution, key lookup and the Proceed/Cancel hold.
+- `decisions.ts` is pure and holds the local size and path rules (`rulesVerdict`); `gate.ts` is pure and builds edit context, exemptions and messages. Pure modules never touch `$`; `register.tsx` owns host access, path resolution and the Proceed/Cancel hold. The gate makes no network request and reads no API key: with metadata only, "is this edit trivial?" is a code decision.
 - The `tool.call` hook matches `Edit`, `Write` and `NotebookEdit`, main session only. It is registered after the tracking handler, which wraps it and observes the settled result once: held calls are not counted early and denials do not count as successful edits.
-- Plugin options: `gate` defaults to false; sensitive `jevApiKey` falls back to `OPENROUTER_API_KEY`. Score thresholds `0.85` (allow) and `0.30` (deny) are constants; the grey zone asks only when `session.start` reports `isInteractive: true` and a non-null `surface`, otherwise it denies without a hold. Recovery covers evaluation only; forwarding failures propagate to the engine without a second confirmation. No paths or contents cross the request boundary, only closed kind/extension classifications, tool, line counts, file count and the fixed caller label.
+- Plugin option: `gate` defaults to false. Rules: a sensitive path (workflow, migration, manifest, lockfile) always asks; more than 3 files, or more than 100 lines (the known added plus removed lines, a lower bound when a Write leaves the removed count unknown), denies; a single-file change of at most 5 lines, or a doc change of at most 20, allows; unknown counts and everything else ask. An ask holds the call for Proceed/Cancel only when `session.start` reports `isInteractive: true` and a non-null `surface`, otherwise it denies without a hold. Recovery covers evaluation only; forwarding failures propagate to the engine without a second confirmation.
 - Exemptions are `<repo>/.pantheon/**`, `~/.claude/plans/**`, `~/.claude/projects/*/memory/**` and the current user's session scratchpad; the rest of `~/.claude` is gated. Decisions are per call, with no per-turn accumulator or Bash write detection.
 
 ## Tracking and state
@@ -34,7 +34,7 @@ IMPORTANT: prompts and panel modules include third-party work. Keep `LICENSE` an
 
 ## Roster
 
-`roster.ts` joins the native records of the six roles and council seats into eight fixed slots (lead, code-reader, docs-reader, developer, architect, ux, git, council), with "other agents" when present. The panel groups them as Running (one row per live instance; each council seat has its own) and Idle (exactly one row per role and per council seat with nothing live: the latest run's model, duration and task, a strip of `▰` marks for the role's last four rounds (only with two or more rounds) with `+N` for older ones, `⊘` for a disabled one). A lost run counts as Idle. The council slot carries every configured seat in `seats`.
+`roster.ts` joins the native records of the seven roles and council seats into nine fixed slots (lead, code-reader, docs-reader, developer, architect, qa, ux, git, council), with "other agents" when present. The panel groups them as Running (one row per live instance; each council seat has its own) and Idle (exactly one row per role and per council seat with nothing live: the latest run's model, duration and task, a strip of `▰` marks for the role's last four rounds (only with two or more rounds) with `+N` for older ones, `⊘` for a disabled one). A lost run counts as Idle. The council slot carries every configured seat in `seats`.
 
 ## Panel
 

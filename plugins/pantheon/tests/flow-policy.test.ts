@@ -1,8 +1,13 @@
 import { expect, test } from 'claude-code/testing'
 import { flowHash, validateFlow } from '../hooks/flow/plan'
 import type { Flow } from '../hooks/flow/plan'
-import { applyMode, decide, enterEnforce, newState, OUTPUT_TAIL, rebase, withMode } from '../hooks/flow/policy'
-import type { CheckResult, FlowEvent, FlowState, Judgment } from '../hooks/flow/types'
+import { applyMode, decide as decideWith, enterEnforce, newState, OUTPUT_TAIL, rebase, requiredReceipts, withMode } from '../hooks/flow/policy'
+import type { CheckResult, DecideOptions, FlowEvent, FlowState, Judgment } from '../hooks/flow/types'
+
+// `decide` makes the caller say which roles are enabled; the tests say "all of them" unless a test cares.
+const ALL = { qa: true, architect: true }
+const decide = (flow: Flow, state: FlowState, event: FlowEvent, judgment?: Judgment, opts: DecideOptions = { available: ALL }) =>
+  decideWith(flow, state, event, judgment, opts)
 
 type Raw = Record<string, unknown>
 const check = (name = 't') => ({ argv: ['run', name] })
@@ -38,7 +43,7 @@ test('newState activates the first eligible task and leaves the rest pending', (
   const { flow, hash } = chain()
   const state = newState(flow, hash)
   expect(state.status).toEqual({ A: 'active', B: 'pending', C: 'pending' })
-  expect(state).toMatchObject({ planId: 'p', hash, blocks: 0, consecutiveBlocks: 0, paused: false, stopped: false, done: false, reviewed: [], sideEffectsDone: [] })
+  expect(state).toMatchObject({ planId: 'p', hash, blocks: 0, consecutiveBlocks: 0, paused: false, stopped: false, done: false, awaiting: [], receipts: {}, sideEffectsDone: [] })
   expect(state.approvedHash).toBeUndefined()
 })
 
@@ -103,7 +108,8 @@ test('a task end on a done, paused or stopped flow is allowed untouched', () => 
     const state = approved(flow, hash, { ...patch, blocks: 1 })
     const decision = decide(flow, state, endEvent('A', [fail('A')]))
     expect(decision).toMatchObject({ action: 'allow', condition })
-    expect(decision.state).toEqual(state)
+    // A paused or stopped flow still counts the delivery; a finished one is untouched.
+    expect(decision.state).toEqual(condition === 'already_done' ? state : { ...state, ends: { A: 1 } })
   }
 })
 
@@ -176,15 +182,15 @@ test('settling never marks a side-effect or a check-less task done', () => {
 
 test('regression blocks back to the done task and re-opens its review', () => {
   const { flow, hash } = chain()
-  const state = approved(flow, hash, { status: { A: 'done', B: 'active', C: 'pending' }, reviewed: ['A'], awaitingReview: ['B'], attempts: { A: 2 } })
+  const state = approved(flow, hash, { status: { A: 'done', B: 'active', C: 'pending' }, receipts: { A: { architect: true } }, awaiting: [{ task: 'B', by: 'architect' }], attempts: { A: 2 } })
   const decision = decide(flow, state, stopEvent({ A: [fail('A', 'A broke')], B: [pass('B')] }))
   expect(decision).toMatchObject({ action: 'block', condition: 'regression', task: 'A' })
   expect(decision.reason).toContain('A broke')
   expect(decision.reason).toContain('[A]')
   expect(decision.state.status).toEqual({ A: 'active', B: 'pending', C: 'pending' })
   expect(decision.state.attempts.A).toBeUndefined()
-  expect(decision.state.reviewed).toEqual([])
-  expect(decision.state.awaitingReview).toEqual([])
+  expect(decision.state.receipts).toEqual({})
+  expect(decision.state.awaiting).toEqual([])
   expect(decision.state.blocks).toBe(1)
   expect(decision.state.consecutiveBlocks).toBe(1)
   expect(decision.state.lastInstruction).toBe(decision.reason)
@@ -269,7 +275,7 @@ test('a passing stop clears the failure streak', () => {
 
 test('a risky task awaiting review blocks the stop asking for the architect', () => {
   const { flow, hash } = chain()
-  const state = approved(flow, hash, { status: { A: 'done', B: 'active', C: 'pending' }, awaitingReview: ['B'] })
+  const state = approved(flow, hash, { status: { A: 'done', B: 'active', C: 'pending' }, awaiting: [{ task: 'B', by: 'architect' }] })
   const decision = decide(flow, state, stopEvent({ A: [pass('A')], B: [pass('B')] }))
   expect(decision).toMatchObject({ action: 'block', condition: 'review_needed', task: 'B' })
   expect(decision.reason).toContain('architect')
@@ -283,12 +289,13 @@ test('an active risky task that has not passed its checks yet just continues', (
   expect(decide(flow, state, stopEvent({ A: [pass('A')], B: [pass('B')] })).condition).toBe('continue')
 })
 
-test('checks that fail while a review is pending drop the task from awaitingReview', () => {
+test('checks that fail while a receipt is pending or earned drop the task from awaiting and receipts', () => {
   const { flow, hash } = chain()
-  const state = approved(flow, hash, { status: { A: 'done', B: 'active', C: 'pending' }, awaitingReview: ['B'] })
+  const state = approved(flow, hash, { status: { A: 'done', B: 'active', C: 'pending' }, awaiting: [{ task: 'B', by: 'architect' }], receipts: { A: { architect: true }, B: { qa: true } } })
   const decision = decide(flow, state, stopEvent({ A: [pass('A')], B: [fail('B')] }))
   expect(decision.condition).toBe('check_failed')
-  expect(decision.state.awaitingReview).toEqual([])
+  expect(decision.state.awaiting).toEqual([])
+  expect(decision.state.receipts).toEqual({ A: { architect: true } })
 })
 
 test('completion needs a passing result for every declared check of every required task', () => {
@@ -422,35 +429,34 @@ test('exhausted attempts move to the onFail task', () => {
   expect(decide(flow, back.state, endEvent('A', [fail('A')])).condition).toBe('ask_person')
 })
 
-test('passing checks on a risky task park it in awaitingReview, not done', () => {
+test('passing checks on a risky task park it in awaiting, not done', () => {
   const { flow, hash } = chain()
   const state = approved(flow, hash, { status: { A: 'done', B: 'active', C: 'pending' } })
   const decision = decide(flow, state, endEvent('B', [pass('B')]))
   expect(decision).toMatchObject({ action: 'allow', condition: 'review_needed', task: 'B' })
   expect(decision.reason).toContain('architect')
   expect(decision.state.status.B).toBe('active')
-  expect(decision.state.awaitingReview).toEqual(['B'])
+  expect(decision.state.awaiting).toEqual([{ task: 'B', by: 'architect' }])
   expect(decision.state.blocks).toBe(0)
   // A second pass does not duplicate the entry.
-  expect(decide(flow, decision.state, endEvent('B', [pass('B')])).state.awaitingReview).toEqual(['B'])
+  expect(decide(flow, decision.state, endEvent('B', [pass('B')])).state.awaiting).toEqual([{ task: 'B', by: 'architect' }])
 })
 
 test('an approved review finishes the task like any passing task end', () => {
   const { flow, hash } = chain()
-  const awaiting = approved(flow, hash, { status: { A: 'done', B: 'active', C: 'pending' }, awaitingReview: ['B'], attempts: { B: 1 } })
-  const done = decide(flow, awaiting, { kind: 'review', taskId: 'B', verdict: 'approved' })
+  const awaiting = approved(flow, hash, { status: { A: 'done', B: 'active', C: 'pending' }, awaiting: [{ task: 'B', by: 'architect' }], attempts: { B: 1 } })
+  const done = decide(flow, awaiting, { kind: 'review', end: 0, taskId: 'B', by: 'architect', verdict: 'pass' })
   expect(done).toMatchObject({ action: 'advance', condition: 'task_done', task: 'C' })
   expect(done.state.status).toEqual({ A: 'done', B: 'done', C: 'active' })
-  expect(done.state.awaitingReview).toEqual([])
-  expect(done.state.reviewed).toEqual(['B'])
+  expect(done.state.awaiting).toEqual([])
+  expect(done.state.receipts.B).toEqual({ architect: true })
   expect(done.state.attempts.B).toBeUndefined()
   expect(done.state.lastInstruction).toBe(done.reason)
 })
 
-test('an approved review of the last required task says all_done and records the side effect', () => {
-  const { flow, hash } = build([task('A', { risk: true, sideEffect: true })])
-  const awaiting = approved(flow, hash, { awaitingReview: ['A'] })
-  const done = decide(flow, awaiting, { kind: 'review', taskId: 'A', verdict: 'approved' })
+test('finishing the last required task, a side effect is recorded and says all_done', () => {
+  const { flow, hash } = build([task('A', { sideEffect: true })])
+  const done = decide(flow, approved(flow, hash), endEvent('A', [pass('A')]))
   expect(done).toMatchObject({ action: 'advance', condition: 'all_done' })
   expect(done.state.sideEffectsDone).toEqual(['A'])
   expect(done.state.done).toBe(false)
@@ -458,45 +464,48 @@ test('an approved review of the last required task says all_done and records the
 
 test('a rejected review is a failed attempt with the note as its output, down the same ladder', () => {
   const { flow, hash } = chain()
-  const awaiting = approved(flow, hash, { status: { A: 'done', B: 'active', C: 'pending' }, awaitingReview: ['B'], reviewed: ['B'] })
-  const one = decide(flow, awaiting, { kind: 'review', taskId: 'B', verdict: 'rejected', note: 'misses the null case' })
+  const awaiting = approved(flow, hash, { status: { A: 'done', B: 'active', C: 'pending' }, awaiting: [{ task: 'B', by: 'architect' }], receipts: { B: { qa: true } } })
+  const one = decide(flow, awaiting, { kind: 'review', end: 0, taskId: 'B', by: 'architect', verdict: 'fail', note: 'misses the null case' })
   expect(one).toMatchObject({ action: 'failTask', condition: 'retry', task: 'B' })
   expect(one.reason).toContain('misses the null case')
-  expect(one.state.awaitingReview).toEqual([])
-  expect(one.state.reviewed).toEqual([])
+  expect(one.state.awaiting).toEqual([])
+  expect(one.state.receipts.B).toBeUndefined()
   expect(one.state.attempts.B).toBe(1)
   expect(one.state.status.B).toBe('active')
   // Back through task end and a second rejection: architect, then the person.
-  const again = decide(flow, { ...one.state, awaitingReview: ['B'] }, { kind: 'review', taskId: 'B', verdict: 'rejected' })
+  const waiting = [{ task: 'B', by: 'architect' as const }]
+  const again = decide(flow, { ...one.state, awaiting: waiting }, { kind: 'review', end: 0, taskId: 'B', by: 'architect', verdict: 'fail' })
   expect(again.condition).toBe('architect')
-  const last = decide(flow, { ...again.state, awaitingReview: ['B'] }, { kind: 'review', taskId: 'B', verdict: 'rejected' })
+  const last = decide(flow, { ...again.state, awaiting: waiting }, { kind: 'review', end: 0, taskId: 'B', by: 'architect', verdict: 'fail' })
   expect(last).toMatchObject({ action: 'pause', condition: 'ask_person' })
 })
 
 test('a rejected review on a task with onFail moves to the branch', () => {
   const { flow, hash } = build([task('A', { risk: true, onFail: 'D' }), task('D', { dependsOn: [] })])
-  const awaiting = approved(flow, hash, { awaitingReview: ['A'], attempts: { A: 1 } })
-  const decision = decide(flow, awaiting, { kind: 'review', taskId: 'A', verdict: 'rejected' })
+  const awaiting = approved(flow, hash, { awaiting: [{ task: 'A', by: 'architect' }], attempts: { A: 1 } })
+  const decision = decide(flow, awaiting, { kind: 'review', end: 0, taskId: 'A', by: 'architect', verdict: 'fail' })
   expect(decision).toMatchObject({ action: 'advance', condition: 'on_fail', task: 'D' })
 })
 
-test('a failed task end takes the task out of reviewed and awaitingReview', () => {
+test('a failed task end takes the task out of awaiting and receipts', () => {
   const { flow, hash } = chain()
-  const state = approved(flow, hash, { status: { A: 'done', B: 'active', C: 'pending' }, awaitingReview: ['B'], reviewed: ['B'] })
+  const state = approved(flow, hash, { status: { A: 'done', B: 'active', C: 'pending' }, awaiting: [{ task: 'B', by: 'architect' }], receipts: { A: { architect: true }, B: { architect: true } } })
   const decision = decide(flow, state, endEvent('B', [fail('B')]))
   expect(decision.condition).toBe('retry')
-  expect(decision.state.awaitingReview).toEqual([])
-  expect(decision.state.reviewed).toEqual([])
+  expect(decision.state.awaiting).toEqual([])
+  expect(decision.state.receipts).toEqual({ A: { architect: true } })
 })
 
-test('a review for a task not awaiting review is ignored', () => {
+test('a review for a task not awaiting that reviewer is ignored', () => {
   const { flow, hash } = chain()
   const state = approved(flow, hash)
   for (const taskId of ['B', 'ghost']) {
-    for (const verdict of ['approved', 'rejected'] as const) {
-      const decision = decide(flow, state, { kind: 'review', taskId, verdict })
-      expect(decision).toMatchObject({ action: 'allow', condition: 'review_ignored' })
-      expect(decision.state).toEqual(state)
+    for (const by of ['architect', 'qa'] as const) {
+      for (const verdict of ['pass', 'fail'] as const) {
+        const decision = decide(flow, state, { kind: 'review', taskId, by, verdict })
+        expect(decision).toMatchObject({ action: 'allow', condition: 'review_ignored' })
+        expect(decision.state).toEqual(state)
+      }
     }
   }
 })
@@ -515,13 +524,17 @@ test('passing checks mark the task done, reset its bookkeeping and activate the 
   expect(decision.state.lastInstruction).toBe(decision.reason)
 })
 
-test('a criteria-only task counts as passing', () => {
+test('a criteria-only task has no check to fail but waits for QA before it counts as done', () => {
   const { flow, hash } = chain()
   const state = approved(flow, hash, { status: { A: 'done', B: 'done', C: 'active' } })
   const decision = decide(flow, state, endEvent('C', []))
-  expect(decision).toMatchObject({ action: 'advance', condition: 'all_done' })
-  expect(decision.state.status.C).toBe('done')
-  expect(decision.state.done).toBe(false)
+  expect(decision).toMatchObject({ action: 'allow', condition: 'qa_needed', task: 'C' })
+  expect(decision.state.status.C).toBe('active')
+  expect(decision.state.awaiting).toEqual([{ task: 'C', by: 'qa' }])
+  const passed = decide(flow, decision.state, review('C', 'qa', 'pass', undefined, 1))
+  expect(passed).toMatchObject({ action: 'advance', condition: 'all_done' })
+  expect(passed.state.status.C).toBe('done')
+  expect(passed.state.done).toBe(false)
 })
 
 test('finishing the last required task says all_done even when a branch-only task is pending', () => {
@@ -596,7 +609,8 @@ test('a human prompt refills the budget', () => {
 
 const scenarios = (): { name: string; flow: Flow; state: FlowState; event: FlowEvent }[] => {
   const c = chain()
-  const reviewed = approved(c.flow, c.hash, { status: { A: 'done', B: 'active', C: 'pending' }, awaitingReview: ['B'] })
+  const reviewed = approved(c.flow, c.hash, { status: { A: 'done', B: 'active', C: 'pending' }, awaiting: [{ task: 'B', by: 'architect' }] })
+  const qaWait = approved(c.flow, c.hash, { status: { A: 'done', B: 'done', C: 'active' }, awaiting: [{ task: 'C', by: 'qa' }], receipts: { B: { architect: true } } })
   const fan = build([task('A', { onFail: 'D' }), task('D', { dependsOn: [] })])
   return [
     { name: 'check_failed', flow: c.flow, state: approved(c.flow, c.hash), event: stopEvent({ A: [fail('A')] }) },
@@ -612,10 +626,14 @@ const scenarios = (): { name: string; flow: Flow; state: FlowState; event: FlowE
     { name: 'on_fail', flow: fan.flow, state: approved(fan.flow, fan.hash, { attempts: { A: 1 } }), event: endEvent('A', [fail('A')]) },
     { name: 'task_done', flow: c.flow, state: approved(c.flow, c.hash), event: endEvent('A', [pass('A')]) },
     { name: 'ownership', flow: c.flow, state: approved(c.flow, c.hash), event: endEvent('A', [pass('A')], 1) },
-    { name: 'review_approved', flow: c.flow, state: reviewed, event: { kind: 'review', taskId: 'B', verdict: 'approved' } },
-    { name: 'review_rejected', flow: c.flow, state: reviewed, event: { kind: 'review', taskId: 'B', verdict: 'rejected', note: 'no' } },
+    { name: 'review_approved', flow: c.flow, state: reviewed, event: { kind: 'review', end: 0, taskId: 'B', by: 'architect', verdict: 'pass' } },
+    { name: 'review_rejected', flow: c.flow, state: reviewed, event: { kind: 'review', end: 0, taskId: 'B', by: 'architect', verdict: 'fail', note: 'no' } },
+    { name: 'qa_passed', flow: c.flow, state: qaWait, event: { kind: 'review', end: 0, taskId: 'C', by: 'qa', verdict: 'pass' } },
+    { name: 'qa_failed', flow: c.flow, state: qaWait, event: { kind: 'review', end: 0, taskId: 'C', by: 'qa', verdict: 'fail', note: 'no' } },
+    { name: 'qa_pending', flow: c.flow, state: approved(c.flow, c.hash, { status: { A: 'done', B: 'done', C: 'active' } }), event: endEvent('C', []) },
+    { name: 'qa_stop', flow: c.flow, state: qaWait, event: stopEvent({ A: [pass('A')], B: [pass('B')] }) },
     { name: 'review_pending', flow: c.flow, state: reviewed, event: endEvent('B', [pass('B')]) },
-    { name: 'all_done', flow: c.flow, state: approved(c.flow, c.hash, { status: { A: 'done', B: 'done', C: 'active' } }), event: endEvent('C', []) },
+    { name: 'all_done', flow: c.flow, state: qaWait, event: { kind: 'review', end: 0, taskId: 'C', by: 'qa', verdict: 'pass' } },
     { name: 'unverified', flow: c.flow, state: approved(c.flow, c.hash, { status: { A: 'done', B: 'done', C: 'done' } }), event: stopEvent() },
     { name: 'unapproved', flow: c.flow, state: newState(c.flow, c.hash), event: stopEvent() },
     { name: 'refill', flow: c.flow, state: approved(c.flow, c.hash, { blocks: 4 }), event: { kind: 'humanPrompt' } },
@@ -696,8 +714,8 @@ test('shadow keeps real progress but not the transitions that only send work bac
     if (['block', 'advance', 'failTask', 'pause'].includes(decision.action)) {
       const kept = progress ? decision.state : state
       expect({ name, status: shadowed.state.status }).toEqual({ name, status: kept.status })
-      expect({ name, reviewed: shadowed.state.reviewed }).toEqual({ name, reviewed: kept.reviewed })
-      expect({ name, awaiting: shadowed.state.awaitingReview }).toEqual({ name, awaiting: kept.awaitingReview })
+      expect({ name, receipts: shadowed.state.receipts }).toEqual({ name, receipts: kept.receipts })
+      expect({ name, awaiting: shadowed.state.awaiting }).toEqual({ name, awaiting: kept.awaiting })
     }
   }
   const { flow, hash } = chain()
@@ -714,9 +732,9 @@ test('shadow keeps real progress but not the transitions that only send work bac
 
 test('enterEnforce clears attempts, the failure streak and the budget only', () => {
   const { flow, hash } = chain()
-  const state = approved(flow, hash, { status: { A: 'done', B: 'active', C: 'pending' }, attempts: { B: 2 }, lastFailure: { key: 'k', count: 2 }, blocks: 3, consecutiveBlocks: 2, reviewed: ['A'], lastInstruction: 'x' })
+  const state = approved(flow, hash, { status: { A: 'done', B: 'active', C: 'pending' }, attempts: { B: 2 }, lastFailure: { key: 'k', count: 2 }, blocks: 3, consecutiveBlocks: 2, receipts: { A: { architect: true } }, lastInstruction: 'x' })
   const clean = enterEnforce(state)
-  expect(clean).toMatchObject({ attempts: {}, blocks: 0, consecutiveBlocks: 0, status: state.status, reviewed: ['A'], lastInstruction: 'x', approvedHash: hash })
+  expect(clean).toMatchObject({ attempts: {}, blocks: 0, consecutiveBlocks: 0, status: state.status, receipts: { A: { architect: true } }, lastInstruction: 'x', approvedHash: hash })
   expect(clean.lastFailure).toBeUndefined()
   expect(state.attempts).toEqual({ B: 2 })
 })
@@ -767,21 +785,22 @@ test('the budget path completes only when nothing is open, regressed or unverifi
   expect(decide(flow, state, stopEvent({ B: [pass('B')] })).condition).toBe('budget')
 })
 
-test('settling by checks skips a risk task without a review receipt', () => {
+test('settling by checks skips a task missing a required receipt', () => {
   const { flow, hash } = chain()
   const state = approved(flow, hash, { status: { A: 'done', B: 'active', C: 'pending' }, blocks: 6 })
   const unreviewed = decide(flow, state, stopEvent({ A: [pass('A')], B: [pass('B')] }))
   expect(unreviewed.condition).toBe('budget')
   expect(unreviewed.state.status.B).toBe('active')
   expect(unreviewed.state.status.C).toBe('pending')
-  const reviewed = decide(flow, { ...state, reviewed: ['B'] }, stopEvent({ A: [pass('A')], B: [pass('B')] }))
+  const reviewed = decide(flow, { ...state, receipts: { B: { architect: true } } }, stopEvent({ A: [pass('A')], B: [pass('B')] }))
   expect(reviewed.state.status.B).toBe('done')
 })
 
 test('rebase keeps progress for surviving tasks, drops removed ones, adds new ones and clears the approval', () => {
   const old = build([task('A'), task('B'), task('C')])
   const state = approved(old.flow, old.hash, {
-    status: { A: 'done', B: 'active', C: 'pending' }, attempts: { A: 1, B: 1, C: 2 }, reviewed: ['A', 'C'], awaitingReview: ['B', 'C'], sideEffectsDone: ['C'], blocks: 2,
+    status: { A: 'done', B: 'active', C: 'pending' }, attempts: { A: 1, B: 1, C: 2 },
+    receipts: { A: { architect: true }, C: { architect: true } }, awaiting: [{ task: 'B', by: 'architect' }, { task: 'C', by: 'qa' }], sideEffectsDone: ['C'], blocks: 2,
   })
   const next = build([task('A'), task('B'), task('N', { dependsOn: [] })])
   const rebased = rebase(next.flow, state)
@@ -790,8 +809,8 @@ test('rebase keeps progress for surviving tasks, drops removed ones, adds new on
   expect(rebased.approvedHash).toBeUndefined()
   expect(rebased.status).toEqual({ A: 'done', B: 'active', N: 'pending' })
   expect(rebased.attempts).toEqual({ A: 1, B: 1 })
-  expect(rebased.reviewed).toEqual(['A'])
-  expect(rebased.awaitingReview).toEqual(['B'])
+  expect(rebased.receipts).toEqual({ A: { architect: true } })
+  expect(rebased.awaiting).toEqual([])
   expect(rebased.sideEffectsDone).toEqual(['C'])
   expect(rebased.blocks).toBe(2)
   expect(state.status).toEqual({ A: 'done', B: 'active', C: 'pending' })
@@ -826,7 +845,7 @@ test('withMode resets the budget once, on the switch into enforce', () => {
 
 test('a review on an unapproved, rebased, paused, stopped or done flow does not advance', () => {
   const { flow, hash } = chain()
-  const base = { status: { A: 'done', B: 'active', C: 'pending' } as FlowState['status'], awaitingReview: ['B'] }
+  const base = { status: { A: 'done', B: 'active', C: 'pending' } as FlowState['status'], awaiting: [{ task: 'B', by: 'architect' as const }] }
   const rebased = rebase(flow, approved(flow, hash, base))
   const cases: [string, FlowState][] = [
     ['unapproved', rebased],
@@ -835,8 +854,8 @@ test('a review on an unapproved, rebased, paused, stopped or done flow does not 
     ['already_done', approved(flow, hash, { ...base, done: true })],
   ]
   for (const [condition, state] of cases) {
-    for (const verdict of ['approved', 'rejected'] as const) {
-      const decision = decide(flow, state, { kind: 'review', taskId: 'B', verdict })
+    for (const verdict of ['pass', 'fail'] as const) {
+      const decision = decide(flow, state, { kind: 'review', end: 0, taskId: 'B', by: 'architect', verdict })
       expect(decision).toMatchObject({ action: 'allow', condition })
       expect(decision.state).toEqual(state)
     }
@@ -857,9 +876,452 @@ test('rebase reopens a completed flow, so a new task activates and the flow is n
 
 test('rebase sends back a done task that is now risky and has no receipt, unless its side effect ran', () => {
   const old = build([task('A'), task('B'), task('S', { dependsOn: [] })])
-  const state = approved(old.flow, old.hash, { status: { A: 'done', B: 'done', S: 'done' }, reviewed: ['B'], sideEffectsDone: ['S'], done: true })
+  const state = approved(old.flow, old.hash, { status: { A: 'done', B: 'done', S: 'done' }, receipts: { B: { architect: true } }, sideEffectsDone: ['S'], done: true })
   const next = build([task('A', { risk: true }), task('B', { risk: true }), task('S', { risk: true, dependsOn: [] })])
   const rebased = rebase(next.flow, state)
   expect(rebased.status).toEqual({ A: 'active', B: 'done', S: 'done' })
-  expect(rebased.reviewed).toEqual(['B'])
+  expect(rebased.receipts).toEqual({ B: { architect: true } })
+})
+
+// --- receipts: architect and QA ---
+
+const QA_TASK = { acceptance: { checks: [check('Q')], criteria: ['shows the empty state', 'rejects a bad id'] } }
+const qaFlow = () => build([task('Q', QA_TASK), task('N')])
+const bothFlow = () => build([task('R', { risk: true, acceptance: { checks: [check('R')], criteria: ['works end to end'] } }), task('N')])
+// `end` is the task's end count when the reviewer was spawned: 0 on a hand-built state, 1 after one passing task end.
+const review = (taskId: string, by: 'architect' | 'qa', verdict: 'pass' | 'fail' | 'blocked', note?: string, end = 0): FlowEvent =>
+  ({ kind: 'review', end, taskId, by, verdict, ...(note ? { note } : {}) }) as FlowEvent
+
+test('requiredReceipts: architect for risk, qa for criteria or requireQa, never qa for a side effect', () => {
+  const { flow } = build([
+    task('A'), task('B', { risk: true }), task('C', { acceptance: { criteria: ['x'] } }),
+    task('D', { risk: true, acceptance: { checks: [check('D')], criteria: ['x'] } }), task('E', { sideEffect: true }),
+  ])
+  // The plan refuses criteria and risk on a side effect; the policy still never asks QA to run one.
+  const E = { ...flow.tasks[4]!, risk: true, acceptance: { checks: [check('E')], criteria: ['x'] } }
+  const [A, B, C, D] = flow.tasks
+  expect([A, B, C, D, E].map(t => requiredReceipts(t!))).toEqual([[], ['architect'], ['qa'], ['architect', 'qa'], ['architect']])
+  expect(requiredReceipts(A!, {}, ['A'])).toEqual(['qa'])
+  expect(requiredReceipts(E, {}, ['E'])).toEqual(['architect'])
+  expect([A, B, E].map(t => requiredReceipts(t!, { requireQa: true }))).toEqual([['qa'], ['architect', 'qa'], ['architect']])
+})
+
+test('a task with criteria waits for QA at task end, then at the stop, and QA passing finishes it', () => {
+  const { flow, hash } = qaFlow()
+  const end = decide(flow, approved(flow, hash), endEvent('Q', [pass('Q')]))
+  expect(end).toMatchObject({ action: 'allow', condition: 'qa_needed', task: 'Q' })
+  expect(end.reason).toContain('qa')
+  expect(end.state.status.Q).toBe('active')
+  expect(end.state.awaiting).toEqual([{ task: 'Q', by: 'qa' }])
+  expect(end.state.blocks).toBe(0)
+  const stop = decide(flow, end.state, stopEvent({ Q: [pass('Q')] }))
+  expect(stop).toMatchObject({ action: 'block', condition: 'qa_needed', task: 'Q' })
+  expect(stop.reason).toContain('QA verdict')
+  expect(stop.state.blocks).toBe(1)
+  expect(stop.state.consecutiveBlocks).toBe(1)
+  const done = decide(flow, end.state, review('Q', 'qa', 'pass', undefined, 1))
+  expect(done).toMatchObject({ action: 'advance', condition: 'task_done', task: 'N' })
+  expect(done.state.status).toEqual({ Q: 'done', N: 'active' })
+  expect(done.state.receipts.Q).toEqual({ qa: true })
+  expect(done.state.awaiting).toEqual([])
+})
+
+test('a task with criteria and no check at all still needs QA', () => {
+  const { flow, hash } = build([task('A', { acceptance: { criteria: ['reads well'] } })])
+  const end = decide(flow, approved(flow, hash), endEvent('A', []))
+  expect(end).toMatchObject({ action: 'allow', condition: 'qa_needed' })
+  expect(decide(flow, end.state, review('A', 'qa', 'pass', undefined, 1)).condition).toBe('all_done')
+})
+
+test('risk plus criteria needs both receipts, in either order', () => {
+  const { flow, hash } = bothFlow()
+  const end = decide(flow, approved(flow, hash), endEvent('R', [pass('R')]))
+  expect(end).toMatchObject({ action: 'allow', condition: 'review_needed', task: 'R' })
+  expect(end.reason).toContain('architect')
+  expect(end.reason).toContain('qa')
+  expect(end.state.awaiting).toEqual([{ task: 'R', by: 'architect' }, { task: 'R', by: 'qa' }])
+  const stop = decide(flow, end.state, stopEvent({ R: [pass('R')] }))
+  expect(stop).toMatchObject({ action: 'block', condition: 'review_needed' })
+  expect(stop.reason).toContain('no architect review and no QA verdict')
+
+  const final = (first: 'architect' | 'qa', second: 'architect' | 'qa') => {
+    const one = decide(flow, end.state, review('R', first, 'pass', undefined, 1))
+    expect(one).toMatchObject({ action: 'allow', condition: second === 'qa' ? 'qa_needed' : 'review_needed', task: 'R' })
+    expect(one.state.status.R).toBe('active')
+    expect(one.state.awaiting).toEqual([{ task: 'R', by: second }])
+    expect(one.state.receipts.R).toEqual({ [first]: true })
+    return decide(flow, one.state, review('R', second, 'pass', undefined, 1))
+  }
+  const ab = final('architect', 'qa')
+  const ba = final('qa', 'architect')
+  for (const result of [ab, ba]) {
+    expect(result).toMatchObject({ action: 'advance', condition: 'task_done', task: 'N' })
+    expect(result.state.status).toEqual({ R: 'done', N: 'active' })
+    expect(result.state.receipts).toEqual({ R: { architect: true, qa: true } })
+    expect(result.state.awaiting).toEqual([])
+  }
+  expect(ab.state.status).toEqual(ba.state.status)
+  expect(ab.state.receipts).toEqual(ba.state.receipts)
+})
+
+test('an architect approval of a task that also needs QA adds the QA wait when it was not already waiting', () => {
+  const { flow, hash } = bothFlow()
+  const legacy = approved(flow, hash, { awaiting: [{ task: 'R', by: 'architect' }] })
+  const one = decide(flow, legacy, review('R', 'architect', 'pass'))
+  expect(one).toMatchObject({ action: 'allow', condition: 'qa_needed' })
+  expect(one.state.awaiting).toEqual([{ task: 'R', by: 'qa' }])
+})
+
+test('settling by checks never finishes a task that is missing a receipt', () => {
+  const both = bothFlow()
+  const qa = qaFlow()
+  const cases: [string, { flow: Flow; hash: string }, Record<string, CheckResult[]>, Partial<FlowState>, 'active' | 'done'][] = [
+    ['no receipt', qa, { Q: [pass('Q')] }, {}, 'active'],
+    ['qa receipt', qa, { Q: [pass('Q')] }, { receipts: { Q: { qa: true } } }, 'done'],
+    ['only the architect receipt', both, { R: [pass('R')] }, { receipts: { R: { architect: true } } }, 'active'],
+    ['only the qa receipt', both, { R: [pass('R')] }, { receipts: { R: { qa: true } } }, 'active'],
+    ['both receipts', both, { R: [pass('R')] }, { receipts: { R: { architect: true, qa: true } } }, 'done'],
+  ]
+  for (const [name, { flow, hash }, checks, patch, expected] of cases) {
+    const id = flow.tasks[0]!.id
+    const decision = decide(flow, approved(flow, hash, { blocks: 6, ...patch }), stopEvent(checks))
+    expect({ name, status: decision.state.status[id] }).toEqual({ name, status: expected })
+    if (expected === 'active') expect({ name, condition: decision.condition }).toEqual({ name, condition: 'budget' })
+  }
+  // The consecutive-cap budget path settles the same way.
+  const capped = decide(qa.flow, approved(qa.flow, qa.hash, { blocks: 2, consecutiveBlocks: 7 }), stopEvent({ Q: [pass('Q')] }, { stopHookActive: true }))
+  expect(capped.condition).toBe('budget')
+  expect(capped.state.status.Q).toBe('active')
+})
+
+test('requireQa makes a checks-only task wait for QA, and only then', () => {
+  const { flow, hash } = build([task('A'), task('S', { sideEffect: true, dependsOn: [] })])
+  const plain = decide(flow, approved(flow, hash), endEvent('A', [pass('A')]))
+  expect(plain).toMatchObject({ action: 'advance', condition: 'task_done' })
+  const strict = decide(flow, approved(flow, hash), endEvent('A', [pass('A')]), undefined, { requireQa: true, available: ALL })
+  expect(strict).toMatchObject({ action: 'allow', condition: 'qa_needed', task: 'A' })
+  expect(strict.state.status.A).toBe('active')
+  expect(strict.state.awaiting).toEqual([{ task: 'A', by: 'qa' }])
+  // Never on a side-effect task.
+  const side = decide(flow, approved(flow, hash, { status: { A: 'done', S: 'active' } }), endEvent('S', [pass('S')]), undefined, { requireQa: true, available: ALL })
+  expect(side.condition).not.toBe('qa_needed')
+  expect(side.state.status.S).toBe('done')
+  // Settling by checks honors it too.
+  const settled = decide(flow, approved(flow, hash, { blocks: 6 }), stopEvent({ A: [pass('A')] }), undefined, { requireQa: true, available: ALL })
+  expect(settled.state.status.A).toBe('active')
+  expect(decide(flow, approved(flow, hash, { blocks: 6 }), stopEvent({ A: [pass('A')] })).state.status.A).toBe('done')
+  // The stricter second pass is a pure function of the state: the first decision is unchanged.
+  expect(plain.state.status.A).toBe('done')
+})
+
+test('a QA fail is a failed attempt that clears the receipts and walks the retry ladder', () => {
+  const { flow, hash } = bothFlow()
+  const waiting = approved(flow, hash, { awaiting: [{ task: 'R', by: 'qa' }], receipts: { R: { architect: true } } })
+  const one = decide(flow, waiting, review('R', 'qa', 'fail', 'the empty state is blank'))
+  expect(one).toMatchObject({ action: 'failTask', condition: 'retry', task: 'R' })
+  expect(one.reason).toContain('the empty state is blank')
+  expect(one.reason).toContain('QA failed')
+  expect(one.state.attempts.R).toBe(1)
+  expect(one.state.awaiting).toEqual([])
+  expect(one.state.receipts.R).toBeUndefined()
+  expect(one.state.status.R).toBe('active')
+  // Bounded: the next fails go to the architect, then to the person.
+  const again = decide(flow, { ...one.state, awaiting: [{ task: 'R', by: 'qa' }] }, review('R', 'qa', 'fail'))
+  expect(again).toMatchObject({ action: 'failTask', condition: 'architect' })
+  const last = decide(flow, { ...again.state, awaiting: [{ task: 'R', by: 'qa' }] }, review('R', 'qa', 'fail'))
+  expect(last).toMatchObject({ action: 'pause', condition: 'ask_person' })
+  // After a fail the task needs both receipts again.
+  const back = decide(flow, one.state, endEvent('R', [pass('R')]))
+  expect(back.state.awaiting).toEqual([{ task: 'R', by: 'architect' }, { task: 'R', by: 'qa' }])
+})
+
+test('a QA fail on a task with onFail moves to the branch', () => {
+  const { flow, hash } = build([task('A', { onFail: 'D', acceptance: { checks: [check('A')], criteria: ['x'] } }), task('D', { dependsOn: [] })])
+  const waiting = approved(flow, hash, { awaiting: [{ task: 'A', by: 'qa' }], attempts: { A: 1 } })
+  expect(decide(flow, waiting, review('A', 'qa', 'fail'))).toMatchObject({ action: 'advance', condition: 'on_fail', task: 'D' })
+})
+
+test('a review for the wrong reviewer is ignored and leaves the state as it was', () => {
+  const { flow, hash } = bothFlow()
+  const onlyQa = approved(flow, hash, { awaiting: [{ task: 'R', by: 'qa' }], receipts: { R: { architect: true } } })
+  for (const verdict of ['pass', 'fail'] as const) {
+    const decision = decide(flow, onlyQa, review('R', 'architect', verdict))
+    expect(decision).toMatchObject({ action: 'allow', condition: 'review_ignored' })
+    expect(decision.state).toEqual(onlyQa)
+  }
+  // A receipt already given cannot be given again.
+  const again = decide(flow, decide(flow, onlyQa, review('R', 'qa', 'pass')).state, review('R', 'qa', 'pass'))
+  expect(again.condition).toBe('review_ignored')
+})
+
+test('a disabled role that is needed pauses and asks the person, it never blocks', () => {
+  const { flow, hash } = bothFlow()
+  const qaGone = { available: { qa: false, architect: true } }
+  const end = decide(flow, approved(flow, hash), endEvent('R', [pass('R')]), undefined, qaGone)
+  expect(end).toMatchObject({ action: 'pause', condition: 'role_unavailable', task: 'R' })
+  expect(end.reason).toContain('qa is disabled')
+  expect(end.reason).toContain('enable it in pantheon.json and /pantheon flow resume, or /pantheon flow stop')
+  expect(end.state.paused).toBe(true)
+  expect(end.state.status.R).toBe('active')
+  expect(end.state.awaiting).toEqual([{ task: 'R', by: 'architect' }, { task: 'R', by: 'qa' }])
+  expect(end.state.lastInstruction).toBe(end.reason)
+
+  const waiting = approved(flow, hash, { awaiting: [{ task: 'R', by: 'architect' }] })
+  const stop = decide(flow, waiting, stopEvent({ R: [pass('R')] }), undefined, { available: { qa: true, architect: false } })
+  expect(stop).toMatchObject({ action: 'pause', condition: 'role_unavailable', task: 'R' })
+  expect(stop.reason).toContain('the architect is disabled')
+  expect(stop.state.blocks).toBe(0)
+  expect(stop.state.paused).toBe(true)
+  // A paused flow lets the session stop.
+  expect(decide(flow, stop.state, stopEvent({ R: [pass('R')] }), undefined, { available: { qa: true, architect: false } }).condition).toBe('paused')
+
+  // Available roles, or nothing said about availability, change nothing.
+  const open = decide(flow, approved(flow, hash), endEvent('R', [pass('R')]), undefined, { available: { qa: true, architect: true } })
+  expect(open.condition).toBe('review_needed')
+  expect(decide(flow, approved(flow, hash), endEvent('R', [pass('R')])).condition).toBe('review_needed')
+  // A disabled role nobody needs is fine.
+  const plain = build([task('A')])
+  expect(decide(plain.flow, approved(plain.flow, plain.hash), endEvent('A', [pass('A')]), undefined, { available: { qa: false, architect: false } }).condition).toBe('all_done')
+})
+
+test('a disabled architect cannot diagnose: the exhausted ladder pauses with role_unavailable', () => {
+  const { flow, hash } = chain()
+  const gone = { available: { qa: true, architect: false } }
+  const decision = decide(flow, approved(flow, hash, { attempts: { A: 1 } }), endEvent('A', [fail('A', 'nope')]), undefined, gone)
+  expect(decision).toMatchObject({ action: 'pause', condition: 'role_unavailable' })
+  expect(decision.reason).toContain('nope')
+  expect(decision.state.paused).toBe(true)
+  expect(decide(flow, approved(flow, hash), endEvent('A', [fail('A')]), undefined, gone).condition).toBe('retry')
+})
+
+test('a regression of a done task clears its receipts, so it needs them again', () => {
+  const { flow, hash } = bothFlow()
+  const done = approved(flow, hash, {
+    status: { R: 'done', N: 'active' }, receipts: { R: { architect: true, qa: true } }, attempts: { R: 1 },
+  })
+  const back = decide(flow, done, stopEvent({ R: [fail('R', 'R broke')] }))
+  expect(back).toMatchObject({ action: 'block', condition: 'regression', task: 'R' })
+  expect(back.state.status).toEqual({ R: 'active', N: 'pending' })
+  expect(back.state.receipts).toEqual({})
+  expect(back.state.awaiting).toEqual([])
+  const again = decide(flow, back.state, endEvent('R', [pass('R')]))
+  expect(again).toMatchObject({ action: 'allow', condition: 'review_needed' })
+  expect(again.state.status.R).toBe('active')
+  expect(again.state.awaiting).toEqual([{ task: 'R', by: 'architect' }, { task: 'R', by: 'qa' }])
+})
+
+test('a regression also drops the receipts of work started on top of the broken task', () => {
+  const { flow, hash } = build([task('A'), task('B', { acceptance: { checks: [check('B')], criteria: ['x'] } })])
+  const state = approved(flow, hash, { status: { A: 'done', B: 'active' }, receipts: { B: { qa: true } }, awaiting: [{ task: 'B', by: 'qa' }] })
+  const back = decide(flow, state, stopEvent({ A: [fail('A')] }))
+  expect(back.state.status).toEqual({ A: 'active', B: 'pending' })
+  expect(back.state.receipts).toEqual({})
+  expect(back.state.awaiting).toEqual([])
+})
+
+test('rebase keeps receipts only for surviving tasks and sends back a done task that now needs one', () => {
+  const old = build([task('A'), task('B'), task('S', { dependsOn: [] })])
+  const state = approved(old.flow, old.hash, {
+    status: { A: 'done', B: 'done', S: 'done' }, receipts: { A: { architect: true }, B: { qa: true } }, sideEffectsDone: ['S'], done: true,
+  })
+  // A gains criteria and has no qa receipt; B gains criteria and has one; S gains criteria but its side effect already ran.
+  const next = build([
+    task('A', { acceptance: { checks: [check('A')], criteria: ['x'] } }), task('B', { acceptance: { checks: [check('B')], criteria: ['x'] } }),
+    task('S', { dependsOn: [], acceptance: { checks: [check('S')], criteria: ['x'] } }),
+  ])
+  const rebased = rebase(next.flow, state)
+  expect(rebased.status).toEqual({ A: 'active', B: 'done', S: 'done' })
+  expect(rebased.receipts).toEqual({ A: { architect: true }, B: { qa: true } })
+  // Removed tasks lose their receipts and waits; a wait nobody requires any more is dropped.
+  const gone = approved(old.flow, old.hash, {
+    status: { A: 'active', B: 'active', S: 'pending' }, receipts: { S: { architect: true } },
+    awaiting: [{ task: 'A', by: 'architect' }, { task: 'B', by: 'qa' }, { task: 'S', by: 'qa' }],
+  })
+  const shrunk = rebase(build([task('A', { risk: true }), task('B')]).flow, gone)
+  expect(shrunk.awaiting).toEqual([{ task: 'A', by: 'architect' }])
+  expect(shrunk.receipts).toEqual({})
+  expect(gone.awaiting).toHaveLength(3)
+})
+
+test('shadow restores the receipts and waits of work it would have sent back, but keeps the attempt', () => {
+  const { flow, hash } = bothFlow()
+  const previous = approved(flow, hash, { awaiting: [{ task: 'R', by: 'qa' }], receipts: { R: { architect: true } } })
+  const failed = applyMode(decide(flow, previous, review('R', 'qa', 'fail')), 'shadow', previous)
+  expect(failed.wouldBe).toMatchObject({ action: 'failTask', condition: 'retry' })
+  expect(failed.state.awaiting).toEqual(previous.awaiting)
+  expect(failed.state.receipts).toEqual(previous.receipts)
+  expect(failed.state.attempts.R).toBe(1)
+  // Real progress (a task finishing) keeps the new receipts.
+  const passed = applyMode(decide(flow, previous, review('R', 'qa', 'pass')), 'shadow', previous)
+  expect(passed.wouldBe?.condition).toBe('task_done')
+  expect(passed.state.status.R).toBe('done')
+  expect(passed.state.receipts.R).toEqual({ architect: true, qa: true })
+  // A pause (a disabled role) is not applied in shadow either.
+  const paused = applyMode(decide(flow, approved(flow, hash), endEvent('R', [pass('R')]), undefined, { available: { qa: false, architect: true } }), 'shadow', approved(flow, hash))
+  expect(paused.wouldBe?.condition).toBe('role_unavailable')
+  expect(paused.state.paused).toBe(false)
+  expect(paused.state.awaiting).toEqual([])
+})
+
+test('opts never change what a judgment cannot: a judgment still has no effect with opts', () => {
+  const { flow, hash } = qaFlow()
+  const opts = { requireQa: true, available: { qa: true, architect: true } }
+  const base = decide(flow, approved(flow, hash), endEvent('Q', [pass('Q')]), undefined, opts)
+  const judged = decide(flow, approved(flow, hash), endEvent('Q', [pass('Q')]), { source: 'jev', scores: { complete: 0.99, claimsDone: 0.99, stuck: 0 } }, opts)
+  expect(judged).toEqual(base)
+})
+
+test('decide with qa receipts never mutates its input', () => {
+  const { flow, hash } = bothFlow()
+  const state = approved(flow, hash, { awaiting: [{ task: 'R', by: 'qa' }], receipts: { R: { architect: true } } })
+  for (const event of [review('R', 'qa', 'pass'), review('R', 'qa', 'fail'), endEvent('R', [pass('R')]), stopEvent({ R: [pass('R')] })]) {
+    const before = clone({ flow, state, event })
+    decide(deepFreeze(clone(flow)), deepFreeze(clone(state)), deepFreeze(clone(event)), undefined, deepFreeze({ requireQa: true, available: { qa: false, architect: false } }))
+    expect(clone({ flow, state, event })).toEqual(before)
+  }
+})
+
+// --- receipts: escalation, deliveries, blocked, enforcement edges ---
+
+test('a requireQa escalation sticks: settle-by-checks, a later task end and rebase all still wait for QA', () => {
+  const { flow, hash } = build([task('A'), task('B')])
+  const strict = decide(flow, approved(flow, hash), endEvent('A', [pass('A')]), undefined, { requireQa: true, available: ALL })
+  expect(strict.state.qaRequired).toEqual(['A'])
+  // The budget runs out and the next call knows nothing of the escalation: the task is still not settled.
+  const settled = decide(flow, { ...strict.state, blocks: 6 }, stopEvent({ A: [pass('A')] }))
+  expect(settled).toMatchObject({ condition: 'budget' })
+  expect(settled.state.status.A).toBe('active')
+  expect(settled.reason).toContain('Awaiting receipts: A (qa)')
+  // The agent delivers again without the escalation in the options: QA is still required.
+  const again = decide(flow, strict.state, endEvent('A', [pass('A')]))
+  expect(again).toMatchObject({ action: 'allow', condition: 'qa_needed' })
+  // A plan edit keeps the requirement; a task that is removed loses it.
+  expect(rebase(flow, strict.state).qaRequired).toEqual(['A'])
+  expect(rebase(build([task('B')]).flow, strict.state).qaRequired).toEqual([])
+  // A done task with the escalation but no receipt goes back.
+  const rebased = rebase(flow, { ...strict.state, status: { A: 'done', B: 'active' }, receipts: {}, awaiting: [] })
+  expect(rebased.status.A).not.toBe('done')
+  // QA passing finishes it and drops the escalation.
+  const done = decide(flow, strict.state, review('A', 'qa', 'pass', undefined, 1))
+  expect(done.state.status.A).toBe('done')
+  expect(done.state.qaRequired).toEqual([])
+})
+
+test('requireQa on a side-effect task changes nothing and says so', () => {
+  const { flow, hash } = build([task('S', { sideEffect: true })])
+  const decision = decide(flow, approved(flow, hash), endEvent('S', [pass('S')]), undefined, { requireQa: true, available: ALL })
+  expect(decision).toMatchObject({ condition: 'all_done', note: 'require_qa_ignored' })
+  expect(decision.state.qaRequired).toEqual([])
+  expect(decision.state.status.S).toBe('done')
+  expect(decide(flow, approved(flow, hash), endEvent('S', [pass('S')])).note).toBeUndefined()
+})
+
+test('a new delivery drops the receipts earned for older code', () => {
+  const { flow, hash } = bothFlow()
+  const first = decide(flow, approved(flow, hash), endEvent('R', [pass('R')]))
+  expect(first.state.ends.R).toBe(1)
+  const approvedByArchitect = decide(flow, first.state, review('R', 'architect', 'pass', undefined, 1))
+  expect(approvedByArchitect.state.receipts.R).toEqual({ architect: true })
+  // The developer re-delivers: the architect's receipt covered the old code.
+  const second = decide(flow, approvedByArchitect.state, endEvent('R', [pass('R')]))
+  expect(second.state.ends.R).toBe(2)
+  expect(second.state.receipts.R).toBeUndefined()
+  expect(second.state.awaiting).toEqual([{ task: 'R', by: 'architect' }, { task: 'R', by: 'qa' }])
+  // QA verifies the new code, but the architect has not seen it.
+  const qa = decide(flow, second.state, review('R', 'qa', 'pass', undefined, 2))
+  expect(qa).toMatchObject({ action: 'allow', condition: 'review_needed' })
+  expect(qa.state.status.R).toBe('active')
+  expect(qa.state.awaiting).toEqual([{ task: 'R', by: 'architect' }])
+  // A verdict about the old delivery is ignored, whichever reviewer gives it.
+  for (const by of ['architect', 'qa'] as const) {
+    const stale = decide(flow, second.state, review('R', by, 'pass', undefined, 1))
+    expect(stale).toMatchObject({ action: 'allow', condition: 'review_ignored' })
+    expect(stale.state).toEqual(second.state)
+  }
+  expect(decide(flow, second.state, review('R', 'qa', 'fail', undefined, 1)).condition).toBe('review_ignored')
+  // A failing delivery counts too.
+  const failing = decide(flow, second.state, endEvent('R', [fail('R')]))
+  expect(failing.state.ends.R).toBe(3)
+})
+
+test('a QA verdict of blocked pauses and asks the person without spending an attempt', () => {
+  const { flow, hash } = qaFlow()
+  const waiting = approved(flow, hash, { awaiting: [{ task: 'Q', by: 'qa' }], attempts: { Q: 1 } })
+  const blocked = decide(flow, waiting, review('Q', 'qa', 'blocked', 'no database to run against'))
+  expect(blocked).toMatchObject({ action: 'pause', condition: 'qa_blocked', task: 'Q' })
+  expect(blocked.reason).toContain('no database to run against')
+  expect(blocked.reason).toContain('no attempt was spent')
+  expect(blocked.state.paused).toBe(true)
+  expect(blocked.state.attempts.Q).toBe(1)
+  expect(blocked.state.awaiting).toEqual([{ task: 'Q', by: 'qa' }])
+  expect(blocked.state.status.Q).toBe('active')
+  // A stale or unexpected blocked verdict is ignored like any other.
+  expect(decide(flow, waiting, review('Q', 'qa', 'blocked', undefined, 5)).condition).toBe('review_ignored')
+  expect(decide(flow, approved(flow, hash), review('Q', 'qa', 'blocked')).condition).toBe('review_ignored')
+})
+
+test('a task awaiting a receipt while agents still run waits without spending budget', () => {
+  const { flow, hash } = qaFlow()
+  const waiting = approved(flow, hash, { awaiting: [{ task: 'Q', by: 'qa' }], blocks: 2, consecutiveBlocks: 2 })
+  const decision = decide(flow, waiting, stopEvent({ Q: [pass('Q')] }, { runningAgents: 1, stopHookActive: true }))
+  expect(decision).toMatchObject({ action: 'wait', condition: 'waiting' })
+  expect(decision.state.blocks).toBe(2)
+  expect(decision.state.consecutiveBlocks).toBe(0)
+  expect(decision.state.awaiting).toEqual(waiting.awaiting)
+})
+
+test('a failing check on a task that is only awaiting a receipt still blocks and clears it', () => {
+  const { flow, hash } = build([task('cli', { dependsOn: [] }), task('docs', { dependsOn: [], acceptance: { checks: [check('docs')], criteria: ['x'] } })])
+  const state = approved(flow, hash, { status: { cli: 'active', docs: 'pending' }, awaiting: [{ task: 'docs', by: 'qa' }] })
+  const decision = decide(flow, state, stopEvent({ cli: [pass('cli')], docs: [fail('docs', 'docs broke')] }))
+  expect(decision).toMatchObject({ action: 'block', condition: 'check_failed', task: 'docs' })
+  expect(decision.state.awaiting).toEqual([])
+})
+
+test('entering enforce clears the waits and receipts of tasks that are not done', () => {
+  const { flow, hash } = bothFlow()
+  const state = approved(flow, hash, {
+    status: { R: 'active', N: 'done' }, awaiting: [{ task: 'R', by: 'qa' }, { task: 'N', by: 'qa' }],
+    receipts: { R: { architect: true }, N: { qa: true } }, mode: 'shadow',
+  })
+  for (const clean of [enterEnforce(state), withMode(state, 'enforce')]) {
+    expect(clean.awaiting).toEqual([{ task: 'N', by: 'qa' }])
+    expect(clean.receipts).toEqual({ N: { qa: true } })
+  }
+  expect(state.awaiting).toHaveLength(2)
+  expect(withMode(state, 'shadow').awaiting).toHaveLength(2)
+})
+
+test('a delivery during a pause or a stop still counts and clears the older receipts', () => {
+  const { flow, hash } = bothFlow()
+  const delivered = decide(flow, approved(flow, hash), endEvent('R', [pass('R')]))
+  const architect = decide(flow, delivered.state, review('R', 'architect', 'pass', undefined, 1))
+  const blocked = decide(flow, architect.state, review('R', 'qa', 'blocked', 'no database', 1))
+  expect(blocked).toMatchObject({ action: 'pause', condition: 'qa_blocked' })
+  expect(blocked.state.receipts.R).toEqual({ architect: true })
+  // The developer re-delivers while the flow is paused: nothing advances, but the old receipts are gone.
+  const during = decide(flow, blocked.state, endEvent('R', [pass('R')]))
+  expect(during).toMatchObject({ action: 'allow', condition: 'paused' })
+  expect(during.state.paused).toBe(true)
+  expect(during.state.ends.R).toBe(2)
+  expect(during.state.receipts).toEqual({})
+  expect(during.state.awaiting).toEqual([])
+  expect(during.state.status.R).toBe('active')
+  expect(blocked.state.ends.R).toBe(1)
+  // The person resumes. QA's verdict is about the old delivery and is ignored.
+  const resumed = { ...during.state, paused: false }
+  const stale = decide(flow, resumed, review('R', 'qa', 'pass', undefined, 1))
+  expect(stale.condition).toBe('review_ignored')
+  expect(stale.state).toEqual(resumed)
+  // The next delivery asks for both receipts again.
+  const again = decide(flow, resumed, endEvent('R', [pass('R')]))
+  expect(again.state.awaiting).toEqual([{ task: 'R', by: 'architect' }, { task: 'R', by: 'qa' }])
+  expect(again.state.receipts).toEqual({})
+  // The same for a stop, and a done task or an unknown one is left alone.
+  const stopped = decide(flow, { ...architect.state, stopped: true }, endEvent('R', [pass('R')]))
+  expect(stopped).toMatchObject({ condition: 'stopped' })
+  expect(stopped.state.receipts).toEqual({})
+  const done = approved(flow, hash, { paused: true, status: { R: 'done', N: 'active' }, receipts: { R: { architect: true, qa: true } } })
+  expect(decide(flow, done, endEvent('R', [pass('R')])).state).toEqual(done)
+  expect(decide(flow, done, endEvent('ghost', [pass('R')])).state).toEqual(done)
 })

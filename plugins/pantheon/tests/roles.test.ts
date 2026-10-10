@@ -40,7 +40,7 @@ describe('native agent specs', () => {
     }))
     expect(specs.find(spec => spec.name === 'code-reader')?.disallowedTools).toEqual(NO_DELEGATION)
     expect(specs.find(spec => spec.name === 'docs-reader')?.disallowedTools).toEqual(NO_DELEGATION)
-    for (const name of ['architect', 'councillor-alpha', 'councillor-beta']) {
+    for (const name of ['architect', 'qa', 'councillor-alpha', 'councillor-beta']) {
       expect(specs.find(spec => spec.name === name)?.disallowedTools).toEqual([...NO_EDITS, ...NO_DELEGATION])
     }
     expect(specs.find(spec => spec.name === 'docs-reader')).toEqual(expect.objectContaining({
@@ -56,9 +56,18 @@ describe('native agent specs', () => {
   test('default models reach the specs', () => {
     const models = Object.fromEntries(nativeAgentSpecs(DEFAULTS, prompts).map(spec => [spec.name, spec.model]))
     expect(models).toEqual({
-      'code-reader': 'haiku', 'docs-reader': 'haiku', developer: 'sonnet', architect: 'opus', ux: 'sonnet', git: 'haiku',
+      'code-reader': 'haiku', 'docs-reader': 'haiku', developer: 'sonnet', architect: 'opus', qa: 'sonnet', ux: 'sonnet', git: 'haiku',
       'councillor-alpha': 'opus', 'councillor-beta': 'sonnet',
     })
+  })
+
+  test('qa has the read-only tool set, no delegation and its own description', () => {
+    const qa = nativeAgentSpecs(DEFAULTS, prompts).find(spec => spec.name === 'qa')
+    expect(qa).toEqual(expect.objectContaining({
+      prompt: '<qa>', model: 'sonnet', disallowedTools: [...NO_EDITS, ...NO_DELEGATION],
+      description: 'Runs what was built and returns a pass/fail verdict per acceptance criterion, with evidence.',
+    }))
+    expect(qa).not.toHaveProperty('tools')
   })
 
   test('architect and seats inherit tools minus file edits; ux inherits tools', () => {
@@ -92,7 +101,7 @@ describe('native agent specs', () => {
 
   test('disabled natives and council do not produce registration specs', () => {
     expect(nativeAgentSpecs({ ...DEFAULTS, disabledAgents: ['architect', 'council'] }, prompts)
-      .map(spec => spec.name)).toEqual(['code-reader', 'docs-reader', 'developer', 'ux', 'git'])
+      .map(spec => spec.name)).toEqual(['code-reader', 'docs-reader', 'developer', 'qa', 'ux', 'git'])
     expect(nativeAgentSpecs({ ...DEFAULTS, disabledAgents: ['councillor:beta'] }, prompts)
       .map(spec => spec.name)).toEqual([...ROLES, 'councillor-alpha'])
     expect(nativeAgentSpecs({ ...DEFAULTS, disabledAgents: ['councillor-alpha'] }, prompts)
@@ -150,6 +159,14 @@ describe('role prompts', () => {
     for (const text of ['Own the look and feel: layout, hierarchy, color, spacing, motion, affordances and UI copy', 'Implement them (do not only advise)', 'whichever files your brief or task assigns', '## Design Principles', '## Review Responsibilities', 'Typography']) {
       expect(prompt).toContain(text)
     }
+  })
+
+  test('qa can say blocked instead of fail when it cannot verify, and says why', () => {
+    const prompt = rolePrompt('qa')
+    for (const text of ['QA: blocked — <why', 'environment is unavailable', 'a criterion that needs a side effect', 'that is `blocked`, not `fail`', 'finish with `QA: blocked`']) {
+      expect(prompt).toContain(text)
+    }
+    expect(prompt).not.toContain('mark it `fail` and say why it could not be run')
   })
 
   test('docs-reader reads and researches without writing docs', () => {

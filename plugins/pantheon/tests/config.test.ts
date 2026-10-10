@@ -28,6 +28,7 @@ describe('defaults', () => {
       'docs-reader': { model: 'haiku' },
       developer: { model: 'sonnet' },
       architect: { model: 'opus' },
+      qa: { model: 'sonnet' },
       ux: { model: 'sonnet' },
       git: { model: 'haiku' },
     })
@@ -90,7 +91,7 @@ describe('loadConfig', () => {
 
   test('accepts every role and councillor in disabledAgents with custom prompts', async () => {
     const result = valid(await load({
-      disabledAgents: ['code-reader', 'docs-reader', 'developer', 'architect', 'ux', 'git', 'council', 'councillor:alpha'],
+      disabledAgents: ['code-reader', 'docs-reader', 'developer', 'architect', 'qa', 'ux', 'git', 'council', 'councillor:alpha'],
       agents: { architect: { prompt: '' }, ux: { prompt: 'custom' } },
     }))
     expect(result.config.agents.architect).toEqual({ model: 'opus', prompt: '' })

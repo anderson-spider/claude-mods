@@ -1,6 +1,6 @@
 // Shared contract for Pantheon's modules.
 
-export type Role = 'code-reader' | 'docs-reader' | 'developer' | 'architect' | 'ux' | 'git'
+export type Role = 'code-reader' | 'docs-reader' | 'developer' | 'architect' | 'qa' | 'ux' | 'git'
 /** One native agent's settings: the model, the reasoning effort and text appended to its prompt. */
 export interface AgentConfig { model?: string; effort?: string; prompt?: string }
 export interface PantheonConfig {

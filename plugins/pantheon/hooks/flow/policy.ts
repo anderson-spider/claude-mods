@@ -1,10 +1,15 @@
 // The flow policy: one pure reducer from an event to a decision. No host access, no I/O, no clock.
 // Deterministic checks decide; a judgment is accepted only so the caller can record it and never
 // changes the action. The input state is never mutated: the next state comes back in `decision.state`.
+//
+// Receipts: a task is done only when its checks pass AND every receipt it requires exists (`requiredReceipts`: the
+// architect's review for a `risk` task, QA's verdict for a task with acceptance criteria, and QA for any non-side-effect
+// task when the caller passes `requireQa`). Every path that finishes a task goes through `missingReceipts`, so no path
+// can settle a task that is missing one.
 
 import { branchOnly, eligible, findTask, flowHash, requiredTasks } from './plan'
 import type { Flow, FlowTask } from './plan'
-import type { Action, CheckResult, Decision, FlowEvent, FlowState, Judgment, Mode } from './types'
+import type { Action, CheckResult, DecideOptions, Decision, FlowEvent, FlowState, Judgment, Mode, Receipts, Reviewer } from './types'
 
 /** Failing output quoted in a reason. */
 export const OUTPUT_TAIL = 1200
@@ -22,7 +27,7 @@ export function newState(flow: Flow, hash: string): FlowState {
   const first = eligible(flow, status)[0]
   if (first) status[first] = 'active'
   return {
-    planId: flow.planId, hash, status, attempts: {}, reviewed: [], awaitingReview: [], sideEffectsDone: [],
+    planId: flow.planId, hash, status, attempts: {}, awaiting: [], receipts: {}, qaRequired: [], ends: {}, sideEffectsDone: [],
     blocks: 0, consecutiveBlocks: 0, paused: false, stopped: false, done: false,
   }
 }
@@ -40,17 +45,22 @@ export function rebase(flow: Flow, state: FlowState): FlowState {
     hash: flowHash(flow),
     status: keep(state.status),
     attempts: keep(state.attempts),
-    reviewed: state.reviewed.filter(id => ids.has(id)),
-    awaitingReview: (state.awaitingReview ?? []).filter(id => ids.has(id)),
+    awaiting: state.awaiting.filter(a => ids.has(a.task)).map(a => ({ ...a })),
+    receipts: copyReceipts(keep(state.receipts)),
+    qaRequired: state.qaRequired.filter(id => ids.has(id)),
+    ends: keep(state.ends),
     sideEffectsDone: [...state.sideEffectsDone],
     ...(state.lastFailure ? { lastFailure: { ...state.lastFailure } } : {}),
   }
   delete s.approvedHash
   s.done = false
   for (const task of flow.tasks) if (!(task.id in s.status)) s.status[task.id] = 'pending'
-  // A task that became risky after it was done has no review receipt: it goes back, unless its side effect already ran.
+  // A receipt nobody requires any more (the task is no longer risky, say) is not waited for.
+  s.awaiting = s.awaiting.filter(a => requiredReceipts(findTask(flow, a.task)!, {}, s.qaRequired).includes(a.by))
+  // A task that now requires a receipt it never earned (it became risky, or got criteria, after it was done) goes back,
+  // unless its side effect already ran.
   for (const task of flow.tasks) {
-    if (s.status[task.id] === 'done' && task.risk && !s.reviewed.includes(task.id) && !s.sideEffectsDone.includes(task.id)) s.status[task.id] = 'pending'
+    if (s.status[task.id] === 'done' && missingReceipts(task, s).length > 0 && !s.sideEffectsDone.includes(task.id)) s.status[task.id] = 'pending'
   }
   for (const id of s.sideEffectsDone) if (ids.has(id)) s.status[id] = 'done'
   keepOrActivate(flow, s)
@@ -63,25 +73,31 @@ export function withMode(state: FlowState, mode: Mode): FlowState {
   return { ...state, mode }
 }
 
-/** The budget and failure bookkeeping starts clean when the flow goes from shadow into enforce. */
+/** The budget, failure bookkeeping and unfinished tasks' receipts start clean when the flow goes from shadow into enforce. */
 export function enterEnforce(state: FlowState): FlowState {
   const s: FlowState = { ...state, attempts: {}, blocks: 0, consecutiveBlocks: 0 }
   delete s.lastFailure
+  // What shadow let wait for a receipt, or earn one, no agent was ever held to: unfinished tasks start enforcement clean.
+  s.awaiting = state.awaiting.filter(a => state.status[a.task] === 'done').map(a => ({ ...a }))
+  s.receipts = copyReceipts(Object.fromEntries(Object.entries(state.receipts).filter(([id]) => state.status[id] === 'done')))
   return s
 }
 
-/** The judgment is accepted and ignored: it is journaled by the caller, never acted on. */
-export function decide(flow: Flow, state: FlowState, event: FlowEvent, _judgment?: Judgment): Decision {
+/**
+ * The judgment is accepted and ignored: it is journaled by the caller, never acted on. `opts` can only make the next
+ * decision stricter (`requireQa`) or ask the person (`available`); it is the second input of the two-pass escalation.
+ */
+export function decide(flow: Flow, state: FlowState, event: FlowEvent, _judgment: Judgment | undefined, opts: DecideOptions): Decision {
   switch (event.kind) {
-    case 'stop': return onStop(flow, begin(flow, state), event, state)
-    case 'taskEnd': return onTaskEnd(flow, begin(flow, state), event, state)
+    case 'stop': return onStop(flow, begin(flow, state), event, state, opts)
+    case 'taskEnd': return onTaskEnd(flow, begin(flow, state), event, state, opts)
     case 'humanPrompt': {
       const s = begin(flow, state)
       s.blocks = 0
       s.consecutiveBlocks = 0
       return make(s, 'allow', 'refill', 'The person wrote: the block budget is refilled.')
     }
-    case 'review': return onReview(flow, begin(flow, state), event, state)
+    case 'review': return onReview(flow, begin(flow, state), event, state, opts)
   }
 }
 
@@ -90,7 +106,7 @@ export function decide(flow: Flow, state: FlowState, event: FlowEvent, _judgment
  * become `allow` with an empty reason and the original in `wouldBe`; no budget is charged and nothing is
  * paused. Progress that reflects real work (task_done, all_done) stays in `state`; a decision that would
  * only have sent work back (regression, on_fail, looping, any block, failTask or pause) keeps `attempts`
- * and `lastFailure` but restores status, awaitingReview and reviewed. off: `allow` with `previous` untouched.
+ * and `lastFailure` but restores status, awaiting and receipts. off: `allow` with `previous` untouched.
  */
 export function applyMode(decision: Decision, mode: Mode, previous: FlowState): ModeDecision {
   if (mode === 'enforce') return decision
@@ -107,8 +123,9 @@ export function applyMode(decision: Decision, mode: Mode, previous: FlowState): 
     lastInstruction: previous.lastInstruction,
     ...(progress ? {} : {
       status: { ...previous.status },
-      reviewed: [...previous.reviewed],
-      awaitingReview: [...(previous.awaitingReview ?? [])],
+      awaiting: previous.awaiting.map(a => ({ ...a })),
+      receipts: copyReceipts(previous.receipts),
+      qaRequired: [...previous.qaRequired],
     }),
   }
   if (state.lastInstruction === undefined) delete state.lastInstruction
@@ -123,7 +140,7 @@ function approvedFor(flow: Flow, state: FlowState): boolean {
 
 // --- stop ---
 
-function onStop(flow: Flow, s: FlowState, event: Extract<FlowEvent, { kind: 'stop' }>, original: FlowState): Decision {
+function onStop(flow: Flow, s: FlowState, event: Extract<FlowEvent, { kind: 'stop' }>, original: FlowState, opts: DecideOptions): Decision {
   // 1. nothing to enforce; an unapproved or edited flow is left exactly as it is
   if (!approvedFor(flow, original)) return make(copyState(original), 'allow', 'unapproved', 'The flow is not approved, or the plan changed since it was, so nothing is enforced.')
   // A Stop that does not follow one of our blocks starts the consecutive run over.
@@ -149,7 +166,7 @@ function onStop(flow: Flow, s: FlowState, event: Extract<FlowEvent, { kind: 'sto
   const overBlocks = s.blocks >= flow.limits.maxBlocks
   const overRun = event.stopHookActive && original.consecutiveBlocks >= CONSECUTIVE_CAP
   if (overBlocks || overRun) {
-    const settled = settleByChecks(flow, s, event.checks)
+    const settled = settleByChecks(flow, s, event.checks, opts)
     const open = required.filter(id => s.status[id] !== 'done')
     const regressed = regressedIds()
     const unverified = unverifiedIds()
@@ -165,6 +182,8 @@ function onStop(flow: Flow, s: FlowState, event: Extract<FlowEvent, { kind: 'sto
     const parts = [head]
     if (settled.length) parts.push(`Checks pass for ${settled.join(', ')}: marked done.`)
     if (open.length) parts.push(`Still open: ${open.join(', ')}.`)
+    const waitingOn = s.awaiting.filter(a => s.status[a.task] !== 'done')
+    if (waitingOn.length) parts.push(`Awaiting receipts: ${waitingOn.map(a => `${a.task} (${a.by})`).join(', ')}.`)
     if (regressed.length) parts.push(`Regressed (done, but their checks now fail): ${regressed.join(', ')}.`)
     if (unverified.length) parts.push(`Not verified (a check has no passing result): ${unverified.join(', ')}.`)
     parts.push('Send any message to resume with a fresh budget.')
@@ -184,12 +203,12 @@ function onStop(flow: Flow, s: FlowState, event: Extract<FlowEvent, { kind: 'sto
     // What was started on top of the broken task waits until it is fixed.
     for (const id of downstream(flow, task.id)) {
       if (s.status[id] === 'active') s.status[id] = 'pending'
-      s.awaitingReview = s.awaitingReview.filter(other => other !== id)
+      if (s.status[id] !== 'done') clearReceipts(s, id)
     }
     s.status[task.id] = 'active'
     delete s.attempts[task.id]
-    s.reviewed = s.reviewed.filter(id => id !== task.id)
-    s.awaitingReview = s.awaitingReview.filter(id => id !== task.id)
+    // The receipts covered the work as it was: the task needs them again.
+    clearReceipts(s, task.id)
     s.lastFailure = undefined
     charge(s)
     return instruct(s, 'block', 'regression',
@@ -198,16 +217,17 @@ function onStop(flow: Flow, s: FlowState, event: Extract<FlowEvent, { kind: 'sto
 
   const actives = flow.tasks.filter(task => s.status[task.id] === 'active')
 
-  // 5. an active task has a failing check
-  for (const active of actives) {
+  // 5. an active task, or one waiting for a receipt, has a failing check
+  const checked = flow.tasks.filter(task => s.status[task.id] === 'active' || (s.status[task.id] !== 'done' && s.awaiting.some(a => a.task === task.id)))
+  for (const active of checked) {
     const failed = (event.checks[active.id] ?? []).filter(check => check.passed !== true)
     if (failed.length === 0) continue
     const output = tail(describe(failed))
     const key = `${active.id}\n${output}`
     const count = s.lastFailure?.key === key ? s.lastFailure.count + 1 : 1
     s.lastFailure = { key, count }
-    // Its checks no longer back a pending review: it needs a fresh task end.
-    s.awaitingReview = s.awaitingReview.filter(id => id !== active.id)
+    // Its checks no longer back a pending or earned receipt: it needs a fresh task end.
+    clearReceipts(s, active.id)
     if (count >= LOOP_LIMIT) {
       s.paused = true
       s.consecutiveBlocks = 0
@@ -220,11 +240,19 @@ function onStop(flow: Flow, s: FlowState, event: Extract<FlowEvent, { kind: 'sto
   }
   s.lastFailure = undefined
 
-  // 6. a risky task whose checks passed waits for the architect's verdict
-  const waiting = flow.tasks.find(task => s.awaitingReview.includes(task.id) && s.status[task.id] !== 'done')
-  if (waiting) {
+  // 6. a task whose checks passed waits for its receipts (the architect's review, QA's verdict, or both in any order)
+  for (const waiting of flow.tasks) {
+    if (s.status[waiting.id] === 'done') continue
+    const by = REVIEWERS.filter(who => s.awaiting.some(a => a.task === waiting.id && a.by === who))
+    if (by.length === 0) continue
+    const gone = unavailable(by, opts)
+    if (gone.length) {
+      s.paused = true
+      s.consecutiveBlocks = 0
+      return instruct(s, 'pause', 'role_unavailable', unavailableReason(waiting, by, gone), waiting.id)
+    }
     charge(s)
-    return instruct(s, 'block', 'review_needed', `Task ${waiting.id} is risky and its checks pass, but it has no architect review yet. Ask the architect to review it before stopping.`, waiting.id)
+    return instruct(s, 'block', conditionFor(by[0]!), stopReason(waiting, by), waiting.id)
   }
 
   // 7. everything required is done and every declared check of it passes
@@ -258,16 +286,16 @@ function continueReason(flow: Flow, s: FlowState, actives: FlowTask[]): string {
   return lines.join('\n')
 }
 
-/** Marks done, in dependency order, every eligible task with checks that all passed; side effects and unreviewed risk tasks are never settled. */
-function settleByChecks(flow: Flow, s: FlowState, checks: Record<string, CheckResult[]>): string[] {
+/** Marks done, in dependency order, every eligible task with checks that all passed; side effects and tasks missing a required receipt are never settled. */
+function settleByChecks(flow: Flow, s: FlowState, checks: Record<string, CheckResult[]>, opts: DecideOptions): string[] {
   const settled: string[] = []
   for (;;) {
     const next = eligible(flow, s.status)
       .map(id => findTask(flow, id)!)
-      .find(task => !task.sideEffect && (!task.risk || s.reviewed.includes(task.id)) && task.acceptance.checks.length > 0 && checksPassed(task, checks[task.id]))
+      .find(task => !task.sideEffect && missingReceipts(task, s, opts).length === 0 && task.acceptance.checks.length > 0 && checksPassed(task, checks[task.id]))
     if (!next) return settled
     s.status[next.id] = 'done'
-    s.awaitingReview = s.awaitingReview.filter(id => id !== next.id)
+    s.awaiting = s.awaiting.filter(a => a.task !== next.id)
     delete s.attempts[next.id]
     settled.push(next.id)
   }
@@ -275,22 +303,32 @@ function settleByChecks(flow: Flow, s: FlowState, checks: Record<string, CheckRe
 
 // --- task end and review ---
 
-function onTaskEnd(flow: Flow, s: FlowState, event: Extract<FlowEvent, { kind: 'taskEnd' }>, original: FlowState): Decision {
+function onTaskEnd(flow: Flow, s: FlowState, event: Extract<FlowEvent, { kind: 'taskEnd' }>, original: FlowState, opts: DecideOptions): Decision {
   const idle = idleDecision(flow, original)
-  if (idle) return idle
+  if (idle) {
+    // A paused or stopped flow does not act on the delivery, but it happened: receipts and waits for the older code
+    // must not survive it, or a reviewer spawned before would count after the resume.
+    const delivered = findTask(flow, event.taskId)
+    if (approvedFor(flow, original) && !original.done && (original.paused || original.stopped) && delivered && original.status[delivered.id] !== 'done') {
+      const state = copyState(original)
+      state.ends[delivered.id] = (state.ends[delivered.id] ?? 0) + 1
+      clearReceipts(state, delivered.id)
+      return make(state, idle.action, idle.condition, idle.reason)
+    }
+    return idle
+  }
   const task = findTask(flow, event.taskId)
   // Parallel tasks: the ones being worked on, and any eligible one that finishes ahead of its turn.
   if (!task || s.status[task.id] === 'done' || !(s.status[task.id] === 'active' || eligible(flow, s.status).includes(task.id))) {
     return make(s, 'allow', 'not_active', `Task ${event.taskId} is not an active or eligible task, so its result is not acted on.`)
   }
+  s.ends[task.id] = (s.ends[task.id] ?? 0) + 1
   const failures = failingChecks(task, event.checks)
-  if (event.ownershipDenials > 0 || failures.length) return failAttempt(flow, s, task, tail(describe(failures)), event.ownershipDenials)
+  if (event.ownershipDenials > 0 || failures.length) return failAttempt(flow, s, task, tail(describe(failures)), event.ownershipDenials, opts)
 
-  if (task.risk && !s.reviewed.includes(task.id)) {
-    if (!s.awaitingReview.includes(task.id)) s.awaitingReview.push(task.id)
-    return make(s, 'allow', 'review_needed', `Task ${task.id} passes its checks but is risky: ask the architect to review it before it counts as done.`, task.id)
-  }
-  return finishTask(flow, s, task)
+  // A receipt covers the code it saw: a new delivery starts over, so none earned for older code counts.
+  clearReceipts(s, task.id)
+  return finishOrAwait(flow, s, task, opts)
 }
 
 /** Task ends and reviews do nothing on a flow that is unapproved, edited, done, paused or stopped. */
@@ -302,29 +340,62 @@ function idleDecision(flow: Flow, original: FlowState): Decision | undefined {
   return undefined
 }
 
-function onReview(flow: Flow, s: FlowState, event: Extract<FlowEvent, { kind: 'review' }>, original: FlowState): Decision {
+function onReview(flow: Flow, s: FlowState, event: Extract<FlowEvent, { kind: 'review' }>, original: FlowState, opts: DecideOptions): Decision {
   const idle = idleDecision(flow, original)
   if (idle) return idle
   const task = findTask(flow, event.taskId)
-  if (!task || !s.awaitingReview.includes(task.id)) {
-    return make(s, 'allow', 'review_ignored', `Review for ${event.taskId} ignored: the task is not awaiting review.`)
+  if (!task || !s.awaiting.some(a => a.task === task.id && a.by === event.by)) {
+    return make(s, 'allow', 'review_ignored', `Review by ${event.by} for ${event.taskId} ignored: the task is not awaiting it.`)
   }
-  if (event.verdict === 'approved') {
-    if (!s.reviewed.includes(task.id)) s.reviewed.push(task.id)
-    return finishTask(flow, s, task)
+  if (event.end !== (s.ends[task.id] ?? 0)) {
+    return make(s, 'allow', 'review_ignored', `Review by ${event.by} for ${event.taskId} ignored: it saw delivery ${event.end} and the task was delivered ${s.ends[task.id] ?? 0} time(s).`)
+  }
+  if (event.verdict === 'blocked') {
+    const why = event.note?.trim()
+    s.paused = true
+    return instruct(s, 'pause', 'qa_blocked',
+      `QA could not verify task ${task.id} (${task.goal})${why ? `: ${tail(why)}` : '.'} It is neither a pass nor a fail, so no attempt was spent. Ask the person what QA needs, then /pantheon flow resume.`, task.id)
+  }
+  if (event.verdict === 'pass') {
+    s.awaiting = s.awaiting.filter(a => !(a.task === task.id && a.by === event.by))
+    s.receipts[task.id] = { ...s.receipts[task.id], [event.by]: true }
+    return finishOrAwait(flow, s, task, opts)
   }
   const note = event.note?.trim()
-  return failAttempt(flow, s, task, note ? tail(`The architect rejected the review: ${note}`) : 'The architect rejected the review.', 0)
+  const what = event.by === 'architect' ? 'The architect rejected the review' : 'QA failed the task'
+  return failAttempt(flow, s, task, note ? tail(`${what}: ${note}`) : `${what}.`, 0, opts)
+}
+
+/**
+ * The task's checks pass. It is done when every required receipt exists; otherwise it waits for the missing ones, all
+ * asked at once so they can come in any order, and a missing receipt from a disabled role pauses and asks the person.
+ */
+function finishOrAwait(flow: Flow, s: FlowState, task: FlowTask, opts: DecideOptions): Decision {
+  // An escalation sticks to the task until it is done, so settle-by-checks, rebase and later task ends still honor it.
+  if (opts.requireQa === true && !task.sideEffect && task.acceptance.criteria.length === 0 && !s.qaRequired.includes(task.id)) s.qaRequired.push(task.id)
+  const decision = decideReceipts(flow, s, task, opts)
+  return opts.requireQa === true && task.sideEffect ? { ...decision, note: 'require_qa_ignored' } : decision
+}
+
+function decideReceipts(flow: Flow, s: FlowState, task: FlowTask, opts: DecideOptions): Decision {
+  const missing = missingReceipts(task, s, opts)
+  if (missing.length === 0) return finishTask(flow, s, task)
+  for (const by of missing) if (!s.awaiting.some(a => a.task === task.id && a.by === by)) s.awaiting.push({ task: task.id, by })
+  const gone = unavailable(missing, opts)
+  if (gone.length) {
+    s.paused = true
+    return instruct(s, 'pause', 'role_unavailable', unavailableReason(task, missing, gone), task.id)
+  }
+  return make(s, 'allow', conditionFor(missing[0]!), taskEndReason(task, missing), task.id)
 }
 
 /** A failed attempt: retry the implementer, then the architect (or the onFail task), then the person. */
-function failAttempt(flow: Flow, s: FlowState, task: FlowTask, output: string, ownershipDenials: number): Decision {
+function failAttempt(flow: Flow, s: FlowState, task: FlowTask, output: string, ownershipDenials: number, opts: DecideOptions): Decision {
   const max = task.loop?.maxIterations ?? flow.limits.maxAttempts
   const attempts = (s.attempts[task.id] ?? 0) + 1
   s.attempts[task.id] = attempts
   // Whatever receipt it had no longer covers the work.
-  s.reviewed = s.reviewed.filter(id => id !== task.id)
-  s.awaitingReview = s.awaitingReview.filter(id => id !== task.id)
+  clearReceipts(s, task.id)
   const withOutput = (text: string) => (output ? `${text}\n\n${output}` : text)
   if (attempts > max) {
     s.paused = true
@@ -344,6 +415,11 @@ function failAttempt(flow: Flow, s: FlowState, task: FlowTask, output: string, o
     s.status[branch.id] = 'active'
     return instruct(s, 'advance', 'on_fail', withOutput(`Task ${task.id} failed ${attempts} times. Move to ${branch.id} (${branch.goal}).`), branch.id)
   }
+  if (!opts.available.architect) {
+    s.paused = true
+    return instruct(s, 'pause', 'role_unavailable',
+      withOutput(`Task ${task.id} (${task.goal}) failed ${attempts} times and needs the architect's diagnosis, but the architect is disabled; enable it in pantheon.json and /pantheon flow resume, or /pantheon flow stop.`), task.id)
+  }
   return instruct(s, 'failTask', 'architect', withOutput(`Task ${task.id} (${task.goal}) failed ${attempts} times. Ask the architect to diagnose it before another attempt.`), task.id)
 }
 
@@ -354,7 +430,8 @@ function failAttempt(flow: Flow, s: FlowState, task: FlowTask, output: string, o
 function finishTask(flow: Flow, s: FlowState, task: FlowTask): Decision {
   const wasActive = s.status[task.id] === 'active'
   s.status[task.id] = 'done'
-  s.awaitingReview = s.awaitingReview.filter(id => id !== task.id)
+  s.awaiting = s.awaiting.filter(a => a.task !== task.id)
+  s.qaRequired = s.qaRequired.filter(id => id !== task.id)
   if (task.sideEffect && !s.sideEffectsDone.includes(task.id)) s.sideEffectsDone.push(task.id)
   delete s.attempts[task.id]
   s.lastFailure = undefined
@@ -385,8 +462,10 @@ function begin(flow: Flow, state: FlowState): FlowState {
     ...state,
     status: { ...state.status },
     attempts: { ...state.attempts },
-    reviewed: [...state.reviewed],
-    awaitingReview: [...(state.awaitingReview ?? [])],
+    awaiting: state.awaiting.map(a => ({ ...a })),
+    receipts: copyReceipts(state.receipts),
+    qaRequired: [...state.qaRequired],
+    ends: { ...state.ends },
     sideEffectsDone: [...state.sideEffectsDone],
     ...(state.lastFailure ? { lastFailure: { ...state.lastFailure } } : {}),
   }
@@ -415,11 +494,66 @@ function copyState(state: FlowState): FlowState {
     ...state,
     status: { ...state.status },
     attempts: { ...state.attempts },
-    reviewed: [...state.reviewed],
-    awaitingReview: [...(state.awaitingReview ?? [])],
+    awaiting: state.awaiting.map(a => ({ ...a })),
+    receipts: copyReceipts(state.receipts),
+    qaRequired: [...state.qaRequired],
+    ends: { ...state.ends },
     sideEffectsDone: [...state.sideEffectsDone],
     ...(state.lastFailure ? { lastFailure: { ...state.lastFailure } } : {}),
   }
+}
+
+// --- receipts ---
+
+const REVIEWERS: readonly Reviewer[] = ['architect', 'qa']
+
+/**
+ * The receipts a task needs before it is done: the architect's review when it is `risk`; QA's verdict when it has
+ * acceptance criteria or the caller passes `requireQa` or an earlier call did (`qaRequired`). A side-effect task never goes to QA (it must not run twice),
+ * so it never requires one.
+ */
+export function requiredReceipts(task: FlowTask, opts: Partial<DecideOptions> = {}, qaRequired: readonly string[] = []): Reviewer[] {
+  const out: Reviewer[] = []
+  if (task.risk) out.push('architect')
+  if (!task.sideEffect && (task.acceptance.criteria.length > 0 || opts.requireQa === true || qaRequired.includes(task.id))) out.push('qa')
+  return out
+}
+
+function missingReceipts(task: FlowTask, s: FlowState, opts: Partial<DecideOptions> = {}): Reviewer[] {
+  return requiredReceipts(task, opts, s.qaRequired).filter(by => !s.receipts[task.id]?.[by])
+}
+
+/** A task's receipts and everything it was waiting for go away. */
+function clearReceipts(s: FlowState, id: string): void {
+  s.awaiting = s.awaiting.filter(a => a.task !== id)
+  delete s.receipts[id]
+}
+
+function copyReceipts(receipts: Record<string, Receipts>): Record<string, Receipts> {
+  return Object.fromEntries(Object.entries(receipts).map(([id, r]) => [id, { ...r }]))
+}
+
+const conditionFor = (by: Reviewer): string => (by === 'architect' ? 'review_needed' : 'qa_needed')
+const unavailable = (by: Reviewer[], opts: DecideOptions): Reviewer[] => by.filter(who => opts.available[who] === false)
+const WHO: Record<Reviewer, string> = { architect: 'the architect', qa: 'qa' }
+const names = (by: Reviewer[]): string => by.map(who => WHO[who]).join(' and ')
+
+function taskEndReason(task: FlowTask, missing: Reviewer[]): string {
+  if (missing.length === 2) return `Task ${task.id} passes its checks but needs two receipts before it counts as done: an architect review (it is risky) and a QA verdict. Ask the architect to review it and qa to verify it, in any order.`
+  return missing[0] === 'architect'
+    ? `Task ${task.id} passes its checks but is risky: ask the architect to review it before it counts as done.`
+    : `Task ${task.id} passes its checks but needs a QA verdict: ask qa to verify it before it counts as done.`
+}
+
+function stopReason(task: FlowTask, by: Reviewer[]): string {
+  if (by.length === 2) return `Task ${task.id} passes its checks but has no architect review and no QA verdict yet. Ask the architect to review it and qa to verify it before stopping.`
+  return by[0] === 'architect'
+    ? `Task ${task.id} is risky and its checks pass, but it has no architect review yet. Ask the architect to review it before stopping.`
+    : `Task ${task.id} passes its checks but has no QA verdict yet. Ask qa to verify it before stopping.`
+}
+
+function unavailableReason(task: FlowTask, needed: Reviewer[], gone: Reviewer[]): string {
+  return `Task ${task.id} (${task.goal}) needs ${names(needed)} before it counts as done, but ${names(gone)} ${gone.length > 1 ? 'are' : 'is'} disabled; enable ${gone.length > 1 ? 'them' : 'it'} in pantheon.json and /pantheon flow resume, or /pantheon flow stop.`
 }
 
 /** Every task that depends on `id`, directly or through others. */

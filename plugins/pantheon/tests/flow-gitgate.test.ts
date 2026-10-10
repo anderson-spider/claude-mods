@@ -580,7 +580,9 @@ test('assignments and exports are reported per segment and for the line', () => 
 
 test('the protected branches are a parameter: exact names and prefix patterns', () => {
   const push = (command: string, names?: string[]) => gitAllowed('lead', command, all, names === undefined ? {} : { protected: names })
-  expect(push('git push origin release/1.2').allow).toBe(true)
+  expect(push('git push origin release/1.2').allow).toBe(false)
+  expect(push('git push origin HEAD:release').allow).toBe(false)
+  expect(push('git push origin feature/release-notes').allow).toBe(true)
   expect(push('git push origin develop', ['main']).allow).toBe(true)
   for (const command of ['git push origin release/1.2', 'git push origin HEAD:refs/heads/release/2', 'git push origin HEAD:heads/release/x']) {
     const verdict = push(command, ['main', 'release/*'])

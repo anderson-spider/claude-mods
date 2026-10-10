@@ -1255,7 +1255,7 @@ const devVerdict = (segment: GitSegment, owns: (path: string) => boolean): GitVe
   return deny(`Dev agents only run \`git add\`, \`mv\`, \`rm\`, \`restore\` and \`commit\` on their own files; report back so the lead can route \`${label(segment)}\` to the \`git\` role.`)
 }
 
-const PROTECTED_DEFAULT = ['main', 'master', 'develop']
+const PROTECTED_DEFAULT = ['main', 'master', 'develop', 'release', 'release/*']
 
 // Whether `name` is one of the protected names: exact, or under a `prefix/*` pattern.
 const isProtected = (name: string, patterns: readonly string[]) =>

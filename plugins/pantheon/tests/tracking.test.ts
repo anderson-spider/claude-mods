@@ -11,10 +11,11 @@ const spawn = (id = 'a', now = 100) => ({
 })
 
 test('roleOf maps pantheon types and others', () => {
-  for (const role of ['code-reader', 'docs-reader', 'developer', 'architect', 'ux']) {
+  for (const role of ['code-reader', 'docs-reader', 'developer', 'architect', 'qa', 'ux']) {
     expect(roleOf(`pantheon:${role}`)).toBe(role)
   }
   expect(roleOf('pantheon:architect')).toBe('architect')
+  expect(roleOf('pantheon:qa')).toBe('qa')
   expect(roleOf('pantheon:ux')).toBe('ux')
   expect(roleOf('pantheon:councillor-beta')).toBe('councillor-beta')
   expect(roleOf('Explore')).toBe('other')

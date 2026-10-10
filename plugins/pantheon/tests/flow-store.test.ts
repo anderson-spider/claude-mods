@@ -19,7 +19,7 @@ const memFs = (seed: Record<string, string> = {}) => {
 }
 
 const state = (patch: Partial<FlowState> = {}): FlowState => ({
-  planId: PLAN, hash: 'h1', status: { T1: 'done', T2: 'active', T3: 'pending' }, attempts: { T2: 1 }, reviewed: ['T1'], awaitingReview: ['T2'],
+  planId: PLAN, hash: 'h1', status: { T1: 'done', T2: 'active', T3: 'pending' }, attempts: { T2: 1 }, awaiting: [{ task: 'T2', by: 'architect' }], receipts: { T1: { architect: true } }, qaRequired: [], ends: {},
   sideEffectsDone: [], blocks: 3, consecutiveBlocks: 1, paused: false, stopped: false, done: false, ...patch,
 })
 
@@ -60,6 +60,18 @@ test('a state with the wrong shape loads as undefined', async () => {
     { ...state(), attempts: { T1: -1 } },
     { ...state(), attempts: { T1: 1.5 } },
     { ...state(), reviewed: 'T1' },
+    { ...state(), awaiting: 'T2' },
+    { ...state(), awaiting: ['T2'] },
+    { ...state(), awaiting: [{ task: 'T2', by: 'human' }] },
+    { ...state(), awaiting: [{ task: 2, by: 'qa' }] },
+    { ...state(), receipts: ['T1'] },
+    { ...state(), qaRequired: 'T1' },
+    { ...state(), qaRequired: [1] },
+    { ...state(), ends: { T1: -1 } },
+    { ...state(), ends: [1] },
+    { ...state(), receipts: { T1: { architect: false } } },
+    { ...state(), receipts: { T1: { qa: 'yes' } } },
+    { ...state(), receipts: { T1: 'done' } },
     { ...state(), mode: 'loud' },
     { ...state(), mode: 1 },
     { ...state(), awaitingReview: 'T2' },
@@ -182,7 +194,7 @@ test('the ledger restores done side-effect tasks after state loss', async () => 
   // State lost: the file is gone, the ledger survives.
   files.delete(statePath(ROOT, PLAN))
   expect(await loadState(fs, ROOT, PLAN)).toBeUndefined()
-  const fresh = state({ status: { T1: 'pending', T5: 'pending', T6: 'pending' }, attempts: {}, reviewed: [], blocks: 6, consecutiveBlocks: 0 })
+  const fresh = state({ status: { T1: 'pending', T5: 'pending', T6: 'pending' }, attempts: {}, receipts: {}, blocks: 6, consecutiveBlocks: 0 })
   const restored = restoreFromLedger(fresh, await readSideEffects(fs, ROOT, PLAN))
   expect(restored.status).toEqual({ T1: 'pending', T5: 'done', T6: 'pending' })
   expect(restored.sideEffectsDone).toEqual(['T5'])
@@ -222,10 +234,37 @@ test('labels append and read back, skipping torn lines', async () => {
   expect(labels[1]?.note).toBeUndefined()
 })
 
-test('a state saved before awaitingReview existed loads with an empty list', async () => {
-  const { awaitingReview: _gone, ...old } = state()
+test('a state saved with reviewed and awaitingReview loads as architect receipts and architect waits', async () => {
+  const { awaiting: _a, receipts: _r, ...rest } = state()
+  const old = { ...rest, reviewed: ['T1'], awaitingReview: ['T2'] }
   const loaded = await loadState(memFs({ [statePath(ROOT, PLAN)]: JSON.stringify(old) }).fs, ROOT, PLAN)
-  expect(loaded).toEqual(state({ awaitingReview: [] }))
+  expect(loaded).toEqual(state({ awaiting: [{ task: 'T2', by: 'architect' }], receipts: { T1: { architect: true } } }))
+  expect(loaded).not.toHaveProperty('reviewed')
+  expect(loaded).not.toHaveProperty('awaitingReview')
+})
+
+test('a state from before awaitingReview existed still loads, with nothing waiting', async () => {
+  const { awaiting: _a, receipts: _r, ...rest } = state()
+  const old = { ...rest, reviewed: ['T1'] }
+  const loaded = await loadState(memFs({ [statePath(ROOT, PLAN)]: JSON.stringify(old) }).fs, ROOT, PLAN)
+  expect(loaded).toEqual(state({ awaiting: [], receipts: { T1: { architect: true } } }))
+})
+
+test('old and new receipt fields merge, without duplicates, and a state with neither receipt form is refused', async () => {
+  const path = statePath(ROOT, PLAN)
+  const { awaiting: _a, receipts: _r, ...rest } = state()
+  const both = { ...rest, reviewed: ['T1'], awaitingReview: ['T2'], awaiting: [{ task: 'T2', by: 'architect' }, { task: 'T2', by: 'qa' }], receipts: { T1: { qa: true }, T3: { architect: true } } }
+  const loaded = await loadState(memFs({ [path]: JSON.stringify(both) }).fs, ROOT, PLAN)
+  expect(loaded?.awaiting).toEqual([{ task: 'T2', by: 'architect' }, { task: 'T2', by: 'qa' }])
+  expect(loaded?.receipts).toEqual({ T1: { architect: true, qa: true }, T3: { architect: true } })
+  expect(await loadState(memFs({ [path]: JSON.stringify(rest) }).fs, ROOT, PLAN)).toBeUndefined()
+})
+
+test('qa receipts, waits, escalations and delivery counts survive a save and load round trip', async () => {
+  const { fs } = memFs()
+  const saved = state({ awaiting: [{ task: 'T2', by: 'qa' }, { task: 'T2', by: 'architect' }], receipts: { T1: { architect: true, qa: true } }, qaRequired: ['T2'], ends: { T1: 2, T2: 1 } })
+  await saveState(fs, ROOT, saved)
+  expect(await loadState(fs, ROOT, PLAN)).toEqual(saved)
 })
 
 test('createSerial runs interleaved read-modify-write appends one at a time so both land with distinct ids', async () => {
@@ -357,4 +396,10 @@ test('a label and a journal append run concurrently through one queue keep the j
   ])
   expect(entry.id).toBeGreaterThan(7)
   expect((await readLabels(fs, ROOT, PLAN)).map(l => l.journalId)).toEqual([7])
+})
+
+test('a state saved before qaRequired and ends existed loads with both empty', async () => {
+  const { qaRequired: _q, ends: _e, ...old } = state()
+  const loaded = await loadState(memFs({ [statePath(ROOT, PLAN)]: JSON.stringify(old) }).fs, ROOT, PLAN)
+  expect(loaded).toEqual(state({ qaRequired: [], ends: {} }))
 })

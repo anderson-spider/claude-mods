@@ -179,6 +179,9 @@ function parseTask(raw: unknown, index: number, previous: string | undefined, er
   const sideEffect = raw.sideEffect === true
   // A side effect is recorded once and never re-entered, so its done must rest on a check.
   if (sideEffect && acceptance.checks.length === 0) errors.push(`${at}: a sideEffect task needs a check`)
+  // QA and the architect would have to run or review it, and a side effect must not run twice: verify it in another task.
+  if (sideEffect && acceptance.criteria.length > 0) errors.push(`${at}: a sideEffect task cannot have criteria; move criteria to a preceding task`)
+  if (sideEffect && raw.risk === true) errors.push(`${at}: a sideEffect task cannot be risk; review in a preceding task`)
   if (!files || !text(raw.goal)) return undefined
   return { id: at, goal: (raw.goal as string).trim(), files, role: role ?? 'developer', dependsOn, acceptance, risk: raw.risk === true, ...(loop ? { loop } : {}), ...(onFail ? { onFail } : {}), sideEffect }
 }
