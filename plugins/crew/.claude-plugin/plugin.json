@@ -1,8 +1,22 @@
 {
   "name": "crew",
-  "version": "0.1.0",
-  "description": "Registers six specialist subagents: code-reader and research on Haiku; designer, developer and tester on Sonnet; architect on Opus.",
+  "version": "0.3.0",
+  "description": "Registers six specialist subagents: code-reader and research on Haiku; designer, developer and tester on Sonnet; architect on Opus. Optionally lets Jev (TypeSafe) move each call's model and effort one step from those defaults; that sends a redacted, truncated prompt to api.typesafe.ai.",
   "author": {
     "name": "anderson-spider"
+  },
+  "userConfig": {
+    "jevRouting": {
+      "type": "boolean",
+      "title": "Jev routing of model and effort",
+      "description": "Lets Jev (TypeSafe) choose the model and effort of each crew:* Agent call, one step from the agent's default and never below the architect's Sonnet floor. Off by default: with it on, the call's description and its prompt (secrets and paths removed, cut to 4000 characters) are sent to api.typesafe.ai. The agent type is never changed, and a call that names a model keeps it. A repository's own settings cannot turn it on.",
+      "default": false
+    },
+    "jevKey": {
+      "type": "string",
+      "title": "Jev API key (TypeSafe)",
+      "description": "Last fallback for the TypeSafe key, used only when jevRouting is on: TYPESAFE_API_KEY, JEV_API_KEY and ~/.jev-router.env are read first. The key is sent only in the Authorization header to api.typesafe.ai and is never logged or stored by the plugin.",
+      "sensitive": true
+    }
   }
 }

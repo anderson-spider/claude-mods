@@ -37,6 +37,8 @@ Skip it for a one-line change, a rename, a typo or a question with a known answe
 | Reproduce, cover with tests, run the suite | `crew:tester` |
 | Audit the diff against the plan (writes the review to `.crew/reviews/<name>.md`) | `crew:architect` |
 
+Each agent runs on its default model and effort; when the user has turned on Jev routing, the model and effort of a call may move one step, so do not pass a `model` unless a specific one is needed (a call that names a model is not routed).
+
 ## Rules
 
 - No edits during brainstorming; the plan is the deliverable.

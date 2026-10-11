@@ -15,7 +15,7 @@ Each plugin's details live in `plugins/<name>/AGENTS.md`, loaded when working un
 - **branch-guard**: holds a commit or push on a protected branch until the person proceeds or cancels.
 - **chatgpt**: `ask` and `image` tools driving chatgpt.com in the first browser that works.
 - **codex-computer-use**: routes native Mac app control through Codex computer use; has a `helper/` run by the ChatGPT app's `node`.
-- **crew**: registers the `code-reader`, `research`, `designer`, `developer`, `tester` and `architect` subagent types with fixed models.
+- **crew**: registers the `code-reader`, `research`, `designer`, `developer`, `tester` and `architect` subagent types with default models; optional Jev routing moves a call's model and effort one step.
 - **tailscale**: `tailscale_get` and `tailscale_write` tools over the Tailscale API.
 
 ## Commands
