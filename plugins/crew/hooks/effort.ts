@@ -3,8 +3,9 @@
 // type and description and is matched by `$.agent.list()` when an unknown id steps. Pure: the list is injected.
 //
 // An agent's effort never changes once a step has gone out (bar the exception below): the first step of an id
-// decides it. An id that stepped before its effort was known (not listed yet, or two calls alike with different efforts) runs on its default. Whether
-// a mid-run change would cost a cache rewrite is not known; this keeps the question from arising.
+// decides it. An id that stepped before its effort was known (not listed yet, or two calls alike with different efforts) runs on its default. A
+// mid-run top-level effort change invalidates the cached message blocks; this rule avoids it except in the cases
+// AGENTS.md lists.
 //
 // One exception, by design: a step with nothing pending is not recorded (a workflow's agent steps on every request).
 // So an already-running agent of the same type and description with no entry of its own (spawned with an explicit

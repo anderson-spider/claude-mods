@@ -1,4 +1,4 @@
-// The decision log: one small JSON file per routed decision, so the thresholds can be tuned from data. Pure: the write
+// The decision log: one small JSON file per routed decision, so the thresholds can be revisited from data. Pure: the write
 // and the log line are injected. A record holds numbers and short names only; never the prompt, the description, the
 // key or a path.
 

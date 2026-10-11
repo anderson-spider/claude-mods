@@ -6,7 +6,7 @@
 import { EFFORTS, EFFORT_FLOOR, MODELS, MODEL_FLOORS, SPECIALISTS } from './agents'
 import type { Effort, Model, Specialist } from './agents'
 import type { AskFn } from './jev'
-import { DEPTH_BOUNDS, DEPTH_TIE, DESCRIPTION_CHARS, PROMPT_CHARS, QUESTIONS, TIER_MIN_CONFIDENCE } from './questions'
+import { DEPTH_HIGH, DEPTH_TIE, DESCRIPTION_CHARS, PROMPT_CHARS, QUESTIONS, TIER_MIN_CONFIDENCE } from './questions'
 import { head, redact } from './redact'
 import type { RedactContext } from './redact'
 
@@ -56,8 +56,8 @@ export function decide(spec: Specialist, answers: Record<string, Record<string, 
   const effortAt = EFFORTS.indexOf(spec.effort)
   const depth = answers.reasoning_depth?.score
   let effort = spec.effort
-  if (isNumber(depth) && !DEPTH_BOUNDS.some(bound => Math.abs(depth - bound) < DEPTH_TIE)) {
-    const wanted = depth < DEPTH_BOUNDS[0] ? 0 : depth < DEPTH_BOUNDS[1] ? 1 : 2
+  if (isNumber(depth) && Math.abs(depth - DEPTH_HIGH) >= DEPTH_TIE) {
+    const wanted = depth < DEPTH_HIGH ? EFFORTS.indexOf('medium') : EFFORTS.indexOf('high')
     effort = EFFORTS[clamp(wanted, Math.max(effortAt - 1, EFFORTS.indexOf(EFFORT_FLOOR)), Math.min(effortAt + 1, EFFORTS.length - 1))] ?? spec.effort
   }
 
