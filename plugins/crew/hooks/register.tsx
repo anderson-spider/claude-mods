@@ -1,6 +1,8 @@
 import type { Hook, Register } from 'claude-code'
 import { SPECIALISTS } from './agents'
 import type { Effort } from './agents'
+import { decisionRecord, saveDecision } from './decisions'
+import type { DecisionIo } from './decisions'
 import { createEffortBook } from './effort'
 import type { BindOutcome, Listed } from './effort'
 import { deniedWrite } from './guard'
@@ -29,6 +31,28 @@ function jevIo($: Dollar): JevIo {
     },
     now: () => Date.now(),
   }
+}
+
+/** The decision log's host access: one file write and the debug log. */
+function decisionIo($: Dollar): DecisionIo {
+  return {
+    write: (path, text) => $.fs.write(path, text),
+    log: text => $.ui.log(text, { to: 'debug' }),
+  }
+}
+
+/** How long a spawn's result waits for the decision write; the write itself is not aborted. */
+const DECISION_WAIT_MS = 1_000
+
+/** Waits for the decision write, but no longer than DECISION_WAIT_MS: a hung `$.fs.write` must not hold the spawn. */
+async function settleDecision($: Dollar, saved: Promise<void>): Promise<void> {
+  let cancel: () => void = () => {}
+  const slow = new Promise<true>(resolve => {
+    cancel = jevIo($).timer(DECISION_WAIT_MS, () => resolve(true))
+  })
+  const timedOut = await Promise.race([saved.then(() => false as const), slow])
+  cancel()
+  if (timedOut) $.ui.log('crew jev: decision write slow', { to: 'debug' })
 }
 
 /** Where the key may come from; the names are literal so the engine sees which variables are read. */
@@ -160,6 +184,25 @@ export const register: Register = (on, options) => {
 
     // What was applied, not what was asked: an effort that lost the race to the first step runs on the default.
     const took = outcome === 'applied' || outcome === 'matched'
+
+    // The decision log: started before the notice so the write overlaps it, awaited for about a second before
+    // returning (it never rejects), so a failing write cannot change the result and a hung one cannot hold it.
+    const saved = saveDecision(decisionIo($), access.home, result.agentId, decisionRecord({
+      ts: new Date().toISOString(),
+      agent: spec.name,
+      tier: routed.decision.tier,
+      confidence: routed.decision.tierConfidence,
+      depth: routed.decision.depth,
+      defaultModel: spec.model,
+      model: model ?? spec.model,
+      defaultEffort: spec.effort,
+      effortPlanned: routed.decision.effort,
+      effortApplied: took ? routed.decision.effort : spec.effort,
+      bind: outcome,
+      jevModel: routed.jevModel,
+      durationMs: routed.ms,
+      description: e.description,
+    }))
     $.ui.log(`crew jev: ${describe(spec, routed, { model, effort: effort !== undefined && took ? effort : undefined })}`, { to: 'debug' })
     if (effort !== undefined && !took) {
       $.ui.log(`crew jev: crew:${spec.name} effort ${effort} not applied (${outcome ?? 'no agent id'}); it runs on ${spec.effort}`, { to: 'debug' })
@@ -167,6 +210,7 @@ export const register: Register = (on, options) => {
     } else {
       $.ui.notice(e.tool_use_id, `crew:${spec.name} -> ${routed.decision.model} · ${routed.decision.effort} (jev)`)
     }
+    await settleDecision($, saved)
     return result
   }).catch(($, e, next) => next(e))
 

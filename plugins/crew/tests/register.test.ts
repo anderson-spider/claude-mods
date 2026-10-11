@@ -70,6 +70,7 @@ type Seen = {
   steps: (string | number | undefined)[]
   notices: string[]
   logs: string[]
+  writes: { path: string; text: string }[]
 }
 
 /** The host beneath the plugin: env, settings and files, Jev's endpoint, the spawn and the step the plugin routes. */
@@ -87,9 +88,13 @@ function jevWorld(
     reply?: () => Promise<Reply>
     spawn?: (e: Record<string, unknown>) => Promise<{ model: string; agentId: string }>
     agents?: { id: string; type: string; description: string }[]
+    /** The decision log's write rejects. */
+    writeFail?: boolean
+    /** The decision log's write never settles. */
+    writeHang?: boolean
   } = {},
 ) {
-  const seen: Seen = { fetches: [], spawned: [], steps: [], notices: [], logs: [] }
+  const seen: Seen = { fetches: [], spawned: [], steps: [], notices: [], logs: [], writes: [] }
   const flags = { settingsFail: opts.settingsFail === true }
   const clock = mock.clock(on)
   mock.env(on, { HOME, TYPESAFE_API_KEY: KEY, ...opts.env })
@@ -104,6 +109,12 @@ function jevWorld(
     const text = opts.files?.[e.path]
     if (text === undefined) throw new Error(`ENOENT: ${e.path}`)
     return { value: text }
+  })
+  on('fs.write', async (_$, e) => {
+    if (opts.writeFail) throw new Error('EACCES')
+    if (opts.writeHang) return new Promise<never>(() => {})
+    seen.writes.push({ path: e.path, text: e.text })
+    return { value: undefined }
   })
   on('http.fetch', async (_$, e) => {
     seen.fetches.push({
@@ -530,4 +541,112 @@ test('the main loop and an agent that was not routed step untouched, and routing
   await step($, undefined, 'high')
 
   expect(seen.steps).toEqual(['medium', 'high'])
+})
+
+// --- Decision log ---
+
+const DIR = `${HOME}/.claude/crew/decisions`
+const record = (seen: Seen, i = 0) => JSON.parse(seen.writes[i]?.text ?? '{}') as Record<string, unknown>
+
+test('an applied decision is logged once, in a file named by time and agent id', ON, async ($, on) => {
+  const { seen } = jevWorld(on, { reply: async () => ok(answer('opus', 0.9, 3.9)) })
+  await $.agent.spawn(spawnInput())
+
+  expect(seen.writes).toHaveLength(1)
+  const path = seen.writes[0]?.path ?? ''
+  expect(path.startsWith(`${DIR}/`)).toBe(true)
+  expect(path).toMatch(/\/\d{4}-\d\d-\d\dT\d\d-\d\d-\d\d\.\d{3}Z-a1\.json$/)
+  expect(record(seen)).toMatchObject({
+    v: 1, agent: 'developer', tier: 'opus', confidence: 0.9, depth: 3.9,
+    defaultModel: 'sonnet', model: 'opus', defaultEffort: 'medium', effortPlanned: 'high', effortApplied: 'high',
+    jevModel: 'jev-1.13.0', applied: { model: true, effort: true }, outcome: null,
+  })
+  expect(record(seen).descriptionHash).toMatch(/^[0-9a-f]{8}$/)
+  expect(typeof record(seen).durationMs).toBe('number')
+})
+
+test('a kept decision is logged too, with nothing applied', ON, async ($, on) => {
+  const { seen } = jevWorld(on, { reply: async () => ok(answer('sonnet', 0.95, 1.4)) })
+  await $.agent.spawn(spawnInput())
+
+  expect(record(seen)).toMatchObject({
+    tier: 'sonnet', model: 'sonnet', effortPlanned: 'medium', effortApplied: 'medium', applied: { model: false, effort: false },
+  })
+})
+
+test('an effort that lost the race to the first step is logged as not applied', ON, async ($, on) => {
+  const { seen } = jevWorld(on, {
+    reply: async () => ok(answer('sonnet', 0.95, 3.9)),
+    spawn: async e => {
+      // The subagent steps before the spawn resolves, so the planned effort cannot take.
+      await step($, 'a1', 'medium')
+      return { model: String(e.model ?? 'default'), agentId: 'a1' }
+    },
+  })
+  await $.agent.spawn(spawnInput())
+
+  expect(record(seen)).toMatchObject({ effortPlanned: 'high', effortApplied: 'medium', applied: { effort: false } })
+})
+
+test('the record holds no prompt, description, key or path', ON, async ($, on) => {
+  const secret = `Use ${TOKEN} and ${KEY} on ${HOME}/.ssh/id_rsa and ${ROOT}/src/secret.ts, mail jane@example.com`
+  const { seen } = jevWorld(on)
+  await $.agent.spawn(spawnInput({ prompt: secret, description: `fix ${ROOT}/src/hidden.ts` }))
+
+  const text = seen.writes[0]?.text ?? ''
+  for (const leaked of [TOKEN, KEY, '.ssh', 'id_rsa', 'secret.ts', 'hidden.ts', 'jane@example.com', 'fix ', 'Use ', ROOT]) {
+    expect(text).not.toContain(leaked)
+  }
+  expect(Object.keys(record(seen)).sort()).toEqual([
+    'agent', 'applied', 'bind', 'confidence', 'defaultEffort', 'defaultModel', 'depth', 'descriptionHash', 'durationMs',
+    'effortApplied', 'effortPlanned', 'jevModel', 'model', 'outcome', 'tier', 'ts', 'v',
+  ])
+})
+
+test('nothing is written without a trusted home', ON, async ($, on) => {
+  const { seen } = jevWorld(on, { env: { HOME: 'relative/home' } })
+  await $.agent.spawn(spawnInput())
+
+  expect(seen.spawned[0]?.model).toBe('opus')
+  expect(seen.writes).toEqual([])
+  expect(seen.logs.some(line => line.includes('decision not logged (no trusted home)'))).toBe(true)
+})
+
+test('a write error is logged and does not change the spawn', ON, async ($, on) => {
+  const { seen } = jevWorld(on, { writeFail: true })
+  const result = await $.agent.spawn(spawnInput())
+
+  expect(result).toMatchObject({ model: 'opus', agentId: 'a1' })
+  expect(seen.notices).toEqual(['crew:developer -> opus · high (jev)'])
+  expect(seen.logs.some(line => line.includes('decision not logged (write failed)'))).toBe(true)
+})
+
+test('calls that are not routed write nothing', ON, async ($, on) => {
+  const { seen } = jevWorld(on, { reply: async () => ok(answer('sonnet', 0.95, 0.4)) })
+  await $.agent.spawn(spawnInput({ model: 'haiku' }))
+  await $.agent.spawn(spawnInput({ subagentType: 'Explore' }))
+
+  expect(seen.writes).toEqual([])
+})
+
+test('a write that never settles does not hold the spawn: the result returns after the wait, with one debug line', ON, async ($, on) => {
+  const { seen, clock } = jevWorld(on, { writeHang: true })
+  const spawned = $.agent.spawn(spawnInput())
+  await clock.settle()
+  await pause()
+  await clock.advance(1_000)
+  const result = await spawned
+
+  expect(result).toMatchObject({ model: 'opus', agentId: 'a1' })
+  expect(seen.notices).toEqual(['crew:developer -> opus · high (jev)'])
+  expect(seen.logs.filter(line => line.includes('decision write slow'))).toHaveLength(1)
+})
+
+test('a write that settles first leaves no slow line and no timer behind', ON, async ($, on) => {
+  const { seen, clock } = jevWorld(on)
+  await $.agent.spawn(spawnInput())
+  await clock.advance(5_000)
+
+  expect(seen.writes).toHaveLength(1)
+  expect(seen.logs.some(line => line.includes('decision write slow'))).toBe(false)
 })

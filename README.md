@@ -132,7 +132,8 @@ Off by default. With the `jevRouting` option on and a TypeSafe key, Jev decides 
 - **Key**, in order: `TYPESAFE_API_KEY` or `JEV_API_KEY` in the environment, `~/.jev-router.env` (`JEV_API_KEY=...`), then the `jevKey` option. A key, a `HOME` or a `jevKey` that the repository's own project or local settings declare is ignored, and a repository cannot turn `jevRouting` on: set `jevRouting` in user settings (local settings count as the repository, so routing stays off there). Routing is also off when those settings cannot be read, and a debug log line gives the reason. A new key or file needs `/reload-plugins`.
 - **Sent** to `api.typesafe.ai`: the agent name, the call description and the prompt with secrets, emails and paths removed and cut to 4000 characters. See [docs/PRIVACY.md](docs/PRIVACY.md).
 - **Fail open**: without a key, or on an error, a timeout (3 s) or more than four calls at once, the call runs as Claude made it.
-- The thresholds are untuned defaults; the debug log is where to tune them.
+- The thresholds are untuned defaults; the debug log and the decision log are where to tune them.
+- **Decision log**: with routing on, each decision is also saved as a small JSON file in `~/.claude/crew/decisions/` (tier, confidence, depth, models, efforts, duration, a hash of the description, and an empty `outcome` for you to fill in; no prompt, description, key or path). It stays on your machine and is never pruned: delete the folder to clear it. For example: `duckdb -c "select tier, effortApplied, count(*) from read_json_auto('~/.claude/crew/decisions/*.json') group by all"`.
 
 The plugin also ships a `brainstorm` skill that says how to plan with these agents: gather context with `code-reader` and `research` in parallel, let `architect` challenge the leading option, then write one plan before `developer` implements it. Once you approve the plan, it recommends `/goal`, `/loop` or direct execution, without starting any of them.
 
