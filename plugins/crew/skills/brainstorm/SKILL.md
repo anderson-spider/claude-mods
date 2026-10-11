@@ -37,7 +37,7 @@ Skip it for a one-line change, a rename, a typo or a question with a known answe
 | Reproduce, cover with tests, run the suite | `crew:tester` |
 | Audit the diff against the plan (writes the review to `.crew/reviews/<name>.md`) | `crew:architect` |
 
-Each agent runs on its default model and effort; with Jev routing (on by default with a TypeSafe key), the model and effort of a call may move one step, so do not pass a `model` unless a specific one is needed (a call that names a model is not routed).
+Each agent runs on its default model and effort; with Jev routing (on when the `jevKey` option is set), the model and effort of a call may move one step, so do not pass a `model` unless a specific one is needed (a call that names a model is not routed).
 
 ## Rules
 

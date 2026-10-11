@@ -9,7 +9,7 @@ Marketplace of [Claude Code](https://claude.com/claude-code) plugins made by and
 | [branch-guard](plugins/branch-guard) | Holds a `git commit` or `git push` on the protected branch and shows what would go in. |
 | [chatgpt](plugins/chatgpt) | Lets Claude ask your logged-in ChatGPT, or have it generate an image, in terminal-browser, Claude in Chrome or the Claude desktop app's built-in browser, and saves the result locally. |
 | [codex-computer-use](plugins/codex-computer-use) | Routes native Mac app control through Codex computer use from the ChatGPT app instead of Claude's own computer use, asking before each new app. |
-| [crew](plugins/crew) | Registers six specialist subagents: `code-reader` and `research` on Haiku; `designer`, `developer` and `tester` on Sonnet; `architect` on Opus. Optional Jev routing of each call's model and effort. |
+| [crew](plugins/crew) | Registers six specialist subagents: `code-reader` and `research` on Haiku; `designer`, `developer` and `tester` on Sonnet; `architect` on Opus. Optional Jev routing of each call's model and effort, on when the `jevKey` option is set. |
 | [tailscale](plugins/tailscale) | Lets Claude query and modify your tailnet through the Tailscale API. |
 
 ## Install
@@ -127,17 +127,39 @@ The architect can only write Markdown under `.crew/` and the tester only test fi
 
 ### The lead
 
-In a request that offers the Agent tool (the main session; the crew agents do not have it), a system prompt section makes Claude the lead: it talks with you, breaks the work down and hands every task that reads, searches, edits or runs anything in the project to the crew agent for that kind of work, in parallel when the tasks are independent. It does not judge a task's size: with a key, Jev sizes each call; without one, each agent runs on the model sized for its role. A teammate's prompt does not get the section. Git and pull requests stay with the lead.
+In a request that offers the Agent tool (the main session; the crew agents do not have it), a system prompt section makes Claude the lead: it talks with you, breaks the work down and hands every task that reads, searches, edits or runs anything in the project to the crew agent for that kind of work, in parallel when the tasks are independent. It does not judge a task's size: with a `jevKey`, Jev sizes each call; without one, each agent runs on the model sized for its role. A teammate's prompt does not get the section. Git and pull requests stay with the lead.
 
 ### Jev routing of model and effort
 
-On by default, but it sends nothing without a TypeSafe key: upgrading with a key already in the environment or in `~/.jev-router.env` starts sending, so set `jevRouting: false` in user settings to opt out. With a key, Jev decides per Agent call which model and effort a `crew:*` agent runs on, one step from its default at most (the architect never below Opus, and no agent's effort below medium). The agent type stays the one Claude chose, so the tools and the write rules do not change; a call that names a model, a fork, a workflow script's agent and any other agent type are left alone. The task's description ends with the choice (`audit auth · opus/high`); on the subagent's first step a transcript line confirms what ran or says what ran instead (`crew: jev: audit auth: confirmed claude-opus-5-5 · high`), a notice shows each decision once the subagent has started (and says when an effort could not be applied), and a debug log line records the tier, confidence, depth and Jev model id.
+Off until you fill in the `jevKey` option: with a TypeSafe key there, Jev routes; with it empty, nothing is sent and nothing is read. Save the key in the plugin's config, which keeps it in secure storage and not in a settings file:
 
-- **Key**, in order: `TYPESAFE_API_KEY` or `JEV_API_KEY` in the environment, `~/.jev-router.env` (`JEV_API_KEY=...`), then the `jevKey` option. A key, a `HOME` or a `jevKey` that the repository's own project or local settings declare is ignored, and a repository cannot decide routing: a `jevRouting` that its project or local settings declare, either way, turns routing off (set it in user settings only). Routing is also off when those settings cannot be read, and a debug log line gives the reason. A new key or file needs `/reload-plugins`.
+```sh
+read -rs k && printf '%s' "$k" | jq -Rs '{jevKey:.}' | claude plugin configure crew@spider-claude-mods --values-stdin; unset k
+```
+
+(Paste the key at the silent prompt; it is not echoed or kept in shell history. `claude plugin configure crew@spider-claude-mods` without `--values-stdin` only lists the options and which are unset, so use it to check that the key is set; inside Claude Code, `/plugin configure crew@spider-claude-mods` also sets it, which is where the CLI points.) With a key, Jev decides per Agent call which model and effort a `crew:*` agent runs on, one step from its default at most (the architect never below Opus, and no agent's effort below medium). The agent type stays the one Claude chose, so the tools and the write rules do not change; a call that names a model, a fork, a workflow script's agent and any other agent type are left alone. The task's description ends with the choice (`audit auth · opus/high`); on the subagent's first step a transcript line confirms what ran or says what ran instead (`crew: jev: audit auth: confirmed claude-opus-5-5 · high`), a notice shows each decision once the subagent has started (and says when an effort could not be applied), and a debug log line records the tier, confidence, depth and Jev model id.
+
+- **Key**: the `jevKey` option is the only source and the only switch. It must be printable ASCII of 512 characters or fewer with no spaces; an empty value turns routing off silently, and a malformed one turns it off with a debug log line (never showing the value). A `jevKey` that the repository's own project or local settings declare turns routing off entirely; a `HOME` they declare is ignored. Routing is also off when those settings cannot be read; a debug log line gives the reason. Changing the option reloads the plugin. Environment variables (`TYPESAFE_API_KEY`, `JEV_API_KEY`) and `~/.jev-router.env` are no longer read. With `--plugin-dir` the plugin is `crew@inline`, which `configure` refuses because it is not installed; the key is read from `pluginConfigs["crew@inline"].options.jevKey` in `~/.claude/settings.json` (plain text there), so prefer testing with the installed plugin.
 - **Sent** to `api.typesafe.ai`: the agent name, the call description and the prompt with secrets, emails and paths removed and cut to 4000 characters. See [docs/PRIVACY.md](docs/PRIVACY.md).
-- **Fail open**: without a key, or on an error, a timeout (3 s) or more than four calls at once, the call runs as Claude made it.
+- **Fail open**: on an error, a timeout (3 s) or more than four calls at once, the call runs as Claude made it.
 - The thresholds are untuned defaults; the debug log and the decision log are where to tune them.
-- **Decision log**: with routing on, each decision is also saved as a small JSON file in `~/.claude/crew/decisions/` (tier, confidence, depth, models, efforts, duration, a hash of the description, and an empty `outcome` for you to fill in; no prompt, description, key or path). It stays on your machine and is never pruned: delete the folder to clear it. For example: `duckdb -c "select tier, effortApplied, count(*) from read_json_auto('~/.claude/crew/decisions/*.json') group by all"`.
+- **Decision log**: with a key set, each decision is also saved as a small JSON file in `~/.claude/crew/decisions/` (tier, confidence, depth, models, efforts, duration, a hash of the description, and an empty `outcome` for you to fill in; no prompt, description, key or path). It stays on your machine and is never pruned: delete the folder to clear it. For example: `duckdb -c "select tier, effortApplied, count(*) from read_json_auto('~/.claude/crew/decisions/*.json') group by all"`.
+
+#### Upgrading to 0.5.0
+
+The `jevRouting` option is gone and the environment variables and `~/.jev-router.env` are no longer read: Jev routes whenever `jevKey` is filled in. A stale `jevRouting` left in your settings is ignored. If you had turned routing off with `jevRouting: false` and still have a `jevKey` saved, clear it to stay off:
+
+```sh
+printf '{"jevKey":""}' | claude plugin configure crew@spider-claude-mods --values-stdin
+```
+
+If your key lives in `JEV_API_KEY`, move it into the option without printing it or leaving it in shell history:
+
+```sh
+printf '%s' "$JEV_API_KEY" | jq -Rs '{jevKey:.}' | claude plugin configure crew@spider-claude-mods --values-stdin
+```
+
+A `jevKey` that is not a string makes Claude Code refuse to load the whole plugin (all six agents), not only the routing.
 
 The plugin also ships a `brainstorm` skill that says how to plan with these agents: gather context with `code-reader` and `research` in parallel, let `architect` challenge the leading option, then write one plan before `developer` implements it. Once you approve the plan, it recommends `/goal`, `/loop` or direct execution, without starting any of them.
 
