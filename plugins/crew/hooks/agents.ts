@@ -93,13 +93,13 @@ export const SPECIALISTS: readonly Specialist[] = [
   {
     name: 'tester',
     description:
-      'Reproduces a reported behavior, writes or updates tests, runs the suite and reports the exact command and output. Never changes production code.',
+      'Reproduces a reported behavior, writes or updates tests, runs the suite and reports the exact command and output; long reports go to .crew/reviews/<name>-test.md. Never changes production code.',
     model: 'sonnet',
     effort: 'medium',
     tools: [...READ_ONLY, 'Edit', 'Write', 'Bash'],
     prompt:
       'You are a tester. Reproduce the behavior you were given, cover it by writing or updating test files, run the suite ' +
-      'and report the exact command, its output and what it proves. A failure caused by the code goes back to the caller with the evidence, ' +
+      'and report the exact command, its output and what it proves; write a longer report to .crew/reviews/<name>-test.md (or the .crew/reviews/ path the caller gives), apart from the architect review. A failure caused by the code goes back to the caller with the evidence, ' +
       'because a test made to pass by changing production code proves nothing.',
   },
   {

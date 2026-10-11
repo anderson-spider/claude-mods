@@ -111,7 +111,7 @@ Registers six subagent types when a session starts, each with a default model an
 | `crew:research` | Haiku | Read, Grep, Glob, Edit, Write, WebSearch, WebFetch, Context7 and browser tools (terminal-browser, Claude in Chrome) | Researches docs and the web, browsing pages when needed, and writes findings or documentation. Never edits source code. |
 | `crew:designer` | Sonnet | Read, Grep, Glob, Edit, Write, WebSearch, WebFetch, Context7 and browser tools | Specifies the UI and experience (layout, states, accessibility, copy) and edits styles and layout. Leaves logic and tests to the developer. |
 | `crew:developer` | Sonnet | Read, Grep, Glob, Edit, Write, Bash | Implements a spec, adds tests and runs them. |
-| `crew:tester` | Sonnet | Read, Grep, Glob, Edit, Write, Bash | Reproduces a behavior, writes the tests, runs the suite and reports the output. Never changes production code. |
+| `crew:tester` | Sonnet | Read, Grep, Glob, Edit, Write, Bash | Reproduces a behavior, writes the tests, runs the suite and reports the output (longer reports under `.crew/reviews/`). Never changes production code. |
 | `crew:architect` | Opus | Read, Grep, Glob, Write, Bash | The architect: plans and reviews a design or diff for bugs, regressions and missing tests. Writes plan and review documents under `.crew/` only, never code. |
 
 Layout in the project where the agents run (unversioned, added to `.gitignore` by the skill):
@@ -119,11 +119,11 @@ Layout in the project where the agents run (unversioned, added to `.gitignore` b
 ```
 .crew/
   plans/<name>.md       the plan you approve
-  reviews/<name>.md     the architect's reviews
+  reviews/<name>.md     the architect's reviews (the tester's reports: <name>-test.md)
   research/<name>.md    the research agent's findings
 ```
 
-The architect can only write Markdown under `.crew/` and the tester only test files: a hook denies any other `Write` or `Edit` by those agents. Plans and reviews live in `.crew/`, which the `brainstorm` skill adds to the repository's `.gitignore` when it is not ignored yet.
+The architect can only write Markdown under `.crew/` and the tester only test files and Markdown under `.crew/reviews/`: a hook denies any other `Write` or `Edit` by those agents. Plans and reviews live in `.crew/`, which the `brainstorm` skill adds to the repository's `.gitignore` when it is not ignored yet.
 
 ### The lead
 
