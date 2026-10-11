@@ -38,23 +38,56 @@ test('a tier answer below 0.5 confidence keeps the default model', () => {
   expect(decide(spec('code-reader'), answers(['sonnet', 0.2], 0.2)).model).toBe('haiku')
 })
 
-test('depth maps to effort by the 1.0 and 2.5 bounds, never below the medium floor', () => {
+test('depth 3.0 is the bound to high; below it is medium, never below the medium floor', () => {
   expect(EFFORT_FLOOR).toBe('medium')
-  // Every agent defaults to medium: a depth under 2.5 keeps it, a high depth raises it to high.
+  // Every agent defaults to medium: a depth under 3.0 keeps it, a depth from 3.0 up raises it to high.
   for (const s of SPECIALISTS) {
     expect(decide(s, answers(undefined, 0.1)).effort).toBe('medium')
     expect(decide(s, answers(undefined, 0.74)).effort).toBe('medium')
     expect(decide(s, answers(undefined, 1.43)).effort).toBe('medium')
+    expect(decide(s, answers(undefined, 2.5)).effort).toBe('medium')
+    expect(decide(s, answers(undefined, 2.9)).effort).toBe('medium')
+    expect(decide(s, answers(undefined, 3.02)).effort).toBe('high')
     expect(decide(s, answers(undefined, 3.96)).effort).toBe('high')
   }
 })
 
-test('a depth on a bound (within 0.01) or no depth keeps the default effort', () => {
-  expect(decide(spec('developer'), answers(undefined, 1.0)).effort).toBe('medium')
-  expect(decide(spec('developer'), answers(undefined, 1.005)).effort).toBe('medium')
-  expect(decide(spec('code-reader'), answers(undefined, 2.5)).effort).toBe('medium')
+test('a depth within 0.01 of the bound or no depth keeps the default effort', () => {
+  const high = { ...spec('developer'), effort: 'high' as const }
+  expect(decide(high, answers(undefined, 3.0)).effort).toBe('high')
+  expect(decide(high, answers(undefined, 2.995)).effort).toBe('high')
+  expect(decide(high, answers(undefined, 3.005)).effort).toBe('high')
+  expect(decide(high, answers(undefined, 2.98)).effort).toBe('medium')
+  expect(decide(spec('developer'), answers(undefined, 3.0)).effort).toBe('medium')
+  expect(decide(spec('developer'), answers(undefined, 2.995)).effort).toBe('medium')
   expect(decide(spec('developer'), answers(undefined, undefined)).effort).toBe('medium')
   expect(decide(spec('developer'), { reasoning_depth: { score: 'high' } }).effort).toBe('medium')
+})
+
+test('the architect (opus, floor) keeps opus at any depth and moves effort only from the bound', () => {
+  expect(decide(spec('architect'), answers(['haiku', 0.99], 3.5))).toMatchObject({ model: 'opus', effort: 'high' })
+  expect(decide(spec('architect'), answers(['haiku', 0.99], 0.2))).toMatchObject({ model: 'opus', effort: 'medium' })
+})
+
+test('a high-default agent drops one step below the bound, never below the medium floor', () => {
+  const high = { ...spec('developer'), effort: 'high' as const }
+  expect(decide(high, answers(undefined, 3.02)).effort).toBe('high')
+  expect(decide(high, answers(undefined, 2.98)).effort).toBe('medium')
+  expect(decide(high, answers(undefined, 0.2)).effort).toBe('medium')
+})
+
+test('the tier applies at confidence 0.5 and not at 0.49, whatever the depth', () => {
+  expect(decide(spec('developer'), answers(['opus', 0.49], 3.5))).toMatchObject({ model: 'sonnet', effort: 'high' })
+  expect(decide(spec('developer'), answers(['opus', 0.5], 3.5))).toMatchObject({ model: 'opus', effort: 'high' })
+})
+
+test('3.01 and 2.99 are ties in floating point (|d - 3.0| is 0.00999..., under 0.01): they keep the default', () => {
+  // Documented as "within 0.01": both edges count as within, so the default stays; 3.011 and 2.989 are outside.
+  const high = { ...spec('developer'), effort: 'high' as const }
+  expect(decide(spec('developer'), answers(undefined, 3.01)).effort).toBe('medium')
+  expect(decide(high, answers(undefined, 2.99)).effort).toBe('high')
+  expect(decide(spec('developer'), answers(undefined, 3.011)).effort).toBe('high')
+  expect(decide(high, answers(undefined, 2.989)).effort).toBe('medium')
 })
 
 test('unusable answers change nothing', () => {

@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import { MODELS } from '../hooks/agents'
-import { DEPTH_BOUNDS, DESCRIPTION_CHARS, JEV_MODEL, PROMPT_CHARS, QUESTIONS, TIER_MIN_CONFIDENCE } from '../hooks/questions'
+import { DEPTH_HIGH, DEPTH_TIE, DESCRIPTION_CHARS, JEV_MODEL, PROMPT_CHARS, QUESTIONS, TIER_MIN_CONFIDENCE } from '../hooks/questions'
 
 test('the tier question offers exactly the model tiers the routing may choose', () => {
   expect(Object.keys(QUESTIONS.tier.criteria)).toEqual([...MODELS])
@@ -8,8 +8,10 @@ test('the tier question offers exactly the model tiers the routing may choose', 
   expect(QUESTIONS.reasoning_depth.type).toBe('score')
 })
 
-test('the thresholds are ordered and the pinned model is an id the log accepts', () => {
-  expect(DEPTH_BOUNDS[0]).toBeLessThan(DEPTH_BOUNDS[1])
+test('the thresholds are in range and the pinned model is an id the log accepts', () => {
+  expect(DEPTH_HIGH).toBeGreaterThan(0)
+  expect(DEPTH_HIGH).toBeLessThanOrEqual(4)
+  expect(DEPTH_TIE).toBeLessThan(1)
   expect(TIER_MIN_CONFIDENCE).toBeGreaterThan(0)
   expect(TIER_MIN_CONFIDENCE).toBeLessThanOrEqual(1)
   expect(DESCRIPTION_CHARS).toBeLessThan(PROMPT_CHARS)

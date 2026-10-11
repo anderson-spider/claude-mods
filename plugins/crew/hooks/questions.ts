@@ -46,10 +46,14 @@ export const QUESTIONS = {
 /** The tier answer applies from this confidence; below it the agent keeps its default model. */
 export const TIER_MIN_CONFIDENCE = 0.5
 
-/** `reasoning_depth` below the first bound is `low`, below the second `medium`, else `high`. Untuned defaults. */
-export const DEPTH_BOUNDS = [1.0, 2.5] as const
+/**
+ * `reasoning_depth` (Jev's 0-4 scale) from this value is `high`, below it `medium`: a declared policy, not a fit. Every
+ * agent's effort floor is `medium`, so there is no `low` bound. 3.0 keeps `high` for the top band: about 30% of the 126
+ * decisions logged when it was set, against about half at 2.5 (a snapshot, not a live figure).
+ */
+export const DEPTH_HIGH = 3.0
 
-/** A depth within this distance of a bound is a tie: the agent keeps its default effort. */
+/** A depth within this distance of the bound is a tie: the agent keeps its default effort. */
 export const DEPTH_TIE = 0.01
 
 /** The prompt is cut to this many characters after redaction; the description to the second. */
