@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import type { Job } from '../hooks/codex/jobs'
 import {
-  JOB_ID, codexRolePrompt, exitEnd, isCodexProcess, isInside, jobOfRecord, jobPaths, lostEnd, newJobId, noticeText, parseExit,
+  JOB_ID, cardJob, codexRolePrompt, exitEnd, isCodexProcess, isInside, jobOfRecord, jobPaths, lostEnd, newJobId, noticeText, parseExit,
   parsePid, parsePoll, parseRecord, pollArgv, recordOf, resultOf, takeLines, utf8Length, waitArgv, workerArgv,
 } from '../hooks/codex/worker'
 
@@ -179,4 +179,26 @@ test('architect and research are told their final message is the -o file, and no
   expect(research).toContain('the whole findings')
   expect(research).toContain('there is no browser')
   expect(codexRolePrompt('developer', 'ROLE', undefined)).toBe('ROLE')
+})
+
+test('effort round-trips through recordOf, parseRecord and jobOfRecord; a bad value or none is dropped', () => {
+  const job: Job = { id: 'cx-1-aaaaa', agent: 'developer', status: 'done', startedAt: 1, cwd: '/r', effort: 'high' }
+  const record = recordOf(job, { description: 'd', activity: [] })
+  expect(record.effort).toBe('high')
+  const back = parseRecord(JSON.stringify(record))!
+  expect(back.effort).toBe('high')
+  expect(jobOfRecord(back).effort).toBe('high')
+  expect(parseRecord(JSON.stringify({ ...record, effort: 'ultra' }))).not.toHaveProperty('effort')
+  const bare = recordOf({ ...job, effort: undefined }, { description: 'd', activity: [] })
+  expect(bare).not.toHaveProperty('effort')
+  expect(jobOfRecord(parseRecord(JSON.stringify(bare))!)).not.toHaveProperty('effort')
+})
+
+test('cardJob and resultOf carry the effort', () => {
+  const job: Job = { id: 'cx-1-aaaaa', agent: 'developer', status: 'done', startedAt: 1, cwd: '/r', effort: 'medium' }
+  expect(cardJob(job, { description: 'd', activity: [] }).effort).toBe('medium')
+  expect(resultOf(job, { description: 'd', activity: [] }).effort).toBe('medium')
+  const none = { ...job, effort: undefined }
+  expect(cardJob(none, { description: 'd', activity: [] })).not.toHaveProperty('effort')
+  expect(resultOf(none, undefined)).not.toHaveProperty('effort')
 })

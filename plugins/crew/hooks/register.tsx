@@ -1,6 +1,6 @@
 import { atom, update } from 'claude-code'
 import type { Hook, Register } from 'claude-code'
-import { SPECIALISTS, codexSection, leadSection, offersCodex } from './agents'
+import { CODEX_BASE_EFFORT, SPECIALISTS, codexSection, leadSection, offersCodex } from './agents'
 import type { Effort, Specialist } from './agents'
 import { createConfirmations, confirmText } from './confirm'
 import type { Confirmations } from './confirm'
@@ -9,7 +9,7 @@ import type { DecisionIo } from './decisions'
 import { createEffortBook } from './effort'
 import type { BindOutcome, EffortBook, Listed } from './effort'
 import { createCodexEngine } from './codex/engine'
-import type { Answer, CodexEngine, CodexHost, CodexInput } from './codex/engine'
+import type { Answer, CodexEngine, CodexHost, CodexInput, SizeEffort } from './codex/engine'
 import { parseCodexModels } from './codex/models'
 import { CODEX_LANES } from './codex/roles'
 import type { JobSummary } from './codex/worker'
@@ -20,8 +20,8 @@ import type { Breaker, Gate, JevIo } from './jev'
 import { checkKey, resolveAccess } from './key'
 import type { KeyIo, Off } from './key'
 import { JEV_MODEL } from './questions'
-import { describe, moved, noticeText, route, routable, taggedDescription, untagged } from './routing'
-import type { Moved, Routed } from './routing'
+import { describe, moved, noticeText, route, routable, sizeCodexJob, taggedDescription, untagged } from './routing'
+import type { CodexSizing, Moved, Routed } from './routing'
 
 /**
  * The `$` a hook receives. Every hook builds what it needs from its own, and nothing here keeps one past its hook, with
@@ -208,6 +208,7 @@ async function registerCodexTools($: Dollar) {
       "Approvals are on-request and Codex's own auto-review decides any request to leave the sandbox, so the sandbox is not a hard limit; " +
       "the person's ~/.codex config applies too (model, MCP servers), with the write lanes' writable roots and network pinned off. " +
       'architect and research run read-only and their final message is saved under .crew/. ' +
+      'Each job runs on medium reasoning effort; when Jev routing is on (a jevKey), Jev may raise it to high, and then the redacted prompt is sent to Jev (api.typesafe.ai) too, adding about 3 s before the job starts. ' +
       'Waits up to 20 s and returns as soon as the job ends; past that the job goes on in the background and you get a message when it ends: ' +
       'collect it with codex_result, stop it with codex_cancel.',
     inputSchema: {
@@ -261,11 +262,23 @@ async function startCrew(engine: CodexEngine | undefined, modelErrors: readonly 
 
 type CodexCall = CodexInput & { agentId?: string; jobId?: unknown }
 
-async function codexStart(engine: CodexEngine, $: Dollar, e: CodexCall, signal: AbortSignal) {
+/** A Codex job's effort. Never rejects: no routing, no valid key or any failure of Jev gives the base. */
+function sizeCodexEffort($: Dollar, routing: Routing): SizeEffort {
+  const deps: CodexSizing = {
+    enabled: routing.enabled,
+    key: () => keyOf($, routing.access, routing.jevKey),
+    context: () => redactContext($, routing.access),
+    ask: key => createJev(jevIo($), key, { model: JEV_MODEL, breaker: routing.breaker, gate: routing.gate }),
+    log: line => $.ui.log(line, { to: 'debug' }),
+  }
+  return (role, description, prompt, signal, jobId) => sizeCodexJob(deps, role, description, prompt, signal, jobId)
+}
+
+async function codexStart(engine: CodexEngine, $: Dollar, routing: Routing, e: CodexCall, signal: AbortSignal) {
   if (e.agentId) return codexReply({ text: LEAD_ONLY, isError: true })
   const host = codexHost($)
   engine.useHost(host)
-  return codexReply(await engine.start(e, host, signal))
+  return codexReply(await engine.start(e, host, signal, sizeCodexEffort($, routing)))
 }
 
 async function codexResult(engine: CodexEngine, $: Dollar, e: CodexCall) {
@@ -428,7 +441,7 @@ export const register: Register = (on, options) => {
     if (!e.tools.includes('Agent') || e.traits.includes('teammate') || e.traits.includes('bare')) return composed
     const jev = routing.enabled && (await keyOf($, routing.access, routing.jevKey)) !== undefined
     // The Codex sentence follows the tools offered, so the text is the same on every request of a session.
-    const text = codex && offersCodex(e.tools) ? `${leadSection(jev)} ${codexSection()}` : leadSection(jev)
+    const text = codex && offersCodex(e.tools) ? `${leadSection(jev)} ${codexSection(jev)}` : leadSection(jev)
     return { sections: [...composed.sections, { id: 'crew:lead', text, scope: 'session' as const }] }
   }).catch((_, e, next) => next(e))
   on('agent.spawn', {}, ($, e, next) => routeSpawn(routing, $, e, next)).catch((_, e, next) => next(e))
@@ -466,7 +479,7 @@ export const register: Register = (on, options) => {
   if (codex) {
     const failed = (error: { message?: string; kind: string }) =>
       codexReply({ text: `crew codex failed: ${error.message ?? error.kind}`, isError: true })
-    on('tool.call', { tool: 'mcp__crew__codex' }, ($, e, next) => codexStart(codex, $, e, next.signal)).catch((_$, _e, next) => failed(next.error))
+    on('tool.call', { tool: 'mcp__crew__codex' }, ($, e, next) => codexStart(codex, $, routing, e, next.signal)).catch((_$, _e, next) => failed(next.error))
     on('tool.call', { tool: 'mcp__crew__codex_result' }, ($, e) => codexResult(codex, $, e)).catch((_$, _e, next) => failed(next.error))
     on('tool.call', { tool: 'mcp__crew__codex_cancel' }, ($, e) => codexCancel(codex, $, e)).catch((_$, _e, next) => failed(next.error))
   }

@@ -1,7 +1,7 @@
 {
   "name": "crew",
-  "version": "0.9.0",
-  "description": "Makes the main session a lead that delegates to six specialist subagents: code-reader and research on Haiku; designer, developer and tester on Sonnet; architect on Opus. It also shows a live dashboard of the session (Flightdeck, vendored). With the jevKey option set (a TypeSafe key), Jev may move each call's model one step (the architect stays on Opus) and raise its effort to high; that sends a redacted, truncated prompt to api.typesafe.ai. With the codex option on, the lead can run a role on OpenAI Codex through the local Codex CLI, which sends the prompt and the repository content the job reads to OpenAI.",
+  "version": "0.10.0",
+  "description": "Makes the main session a lead that delegates to six specialist subagents: code-reader and research on Haiku; designer, developer and tester on Sonnet; architect on Opus. It also shows a live dashboard of the session (Flightdeck, vendored). With the jevKey option set (a TypeSafe key), Jev may move each call's model one step (the architect stays on Opus) and raise its effort to high, and it sizes the effort of each Codex job; that sends a redacted, truncated prompt to api.typesafe.ai. With the codex option on, the lead can run a role on OpenAI Codex through the local Codex CLI, which sends the prompt and the repository content the job reads to OpenAI.",
   "author": {
     "name": "anderson-spider"
   },
@@ -10,13 +10,13 @@
     "jevKey": {
       "type": "string",
       "title": "Jev API key (TypeSafe)",
-      "description": "Setting this key turns Jev routing on; leaving it empty turns it off. With a key, Jev (TypeSafe) chooses the model and effort of each crew:* Agent call, one step from the agent's default and never below the architect's Opus floor or medium effort, and the choice shows in the task's description. The call's description and its prompt (secrets and paths removed, cut to 4000 characters) are sent to api.typesafe.ai. The agent type is never changed, and a call that names a model keeps it. The key is sent only in the Authorization header and is never logged or stored by the plugin. A repository's own settings cannot supply it.",
+      "description": "Setting this key turns Jev routing on; leaving it empty turns it off. With a key, Jev (TypeSafe) chooses the model and effort of each crew:* Agent call, one step from the agent's default and never below the architect's Opus floor or medium effort, and the choice shows in the task's description. The call's description and its prompt (secrets and paths removed, cut to 4000 characters) are sent to api.typesafe.ai. When the Codex engine is on, Jev also sets each Codex job's effort (medium or high, never the model) and the job's description and redacted prompt are sent there too. The agent type is never changed, and a call that names a model keeps it. The key is sent only in the Authorization header and is never logged or stored by the plugin. A repository's own settings cannot supply it.",
       "sensitive": true
     },
     "codex": {
       "type": "boolean",
       "title": "Codex engine",
-      "description": "Lets the lead run a crew role on OpenAI Codex through the local Codex CLI instead of a Claude subagent. When on, the prompts the lead writes and the repository content the job reads are sent to OpenAI by that CLI, under your Codex login and plan. The crew's Write and Edit guard does not apply to Codex jobs. Off by default; when off, nothing is registered or run.",
+      "description": "Lets the lead run a crew role on OpenAI Codex through the local Codex CLI instead of a Claude subagent. When on, the prompts the lead writes and the repository content the job reads are sent to OpenAI by that CLI, under your Codex login and plan. The crew's Write and Edit guard does not apply to Codex jobs. Jobs run on medium effort unless Jev raises them to high, so the model_reasoning_effort in your Codex config.toml no longer applies to them. Off by default; when off, nothing is registered or run.",
       "default": false
     },
     "codexModels": {

@@ -40,7 +40,7 @@ export function fakeProcesses(opts: {
   runs: Run[]
   alive: Set<number>
   /** The repository `git rev-parse --show-toplevel` names; null: not in a git repository. */
-  gitTop: () => string | null
+  gitTop: (cwd: string) => string | null
   scenario: () => Scenario
   /** The foreground wait reaches its limit at once (the job is still running then). */
   foregroundElapses?: boolean
@@ -64,8 +64,8 @@ export function fakeProcesses(opts: {
     switch (argv[0]) {
       case 'git': {
         if (argv[1] === 'check-ignore') return opts.crewIgnored?.() ? out() : out('', 1)
-        const top = opts.gitTop()
         const cwd = init?.cwd ?? '/repo'
+        const top = opts.gitTop(cwd)
         return top !== null && (cwd === top || cwd.startsWith(`${top}/`)) ? out(`${top}\n`) : out('', 128, 'fatal: not a git repository')
       }
       case 'mkdir':

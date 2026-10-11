@@ -10,6 +10,21 @@ import type { AgentCard, ToolNote } from '../../types'
 import { normalizeCard, shorten } from '../flightdeck/core'
 import type { CodexJob, CodexStatus } from './types'
 
+const CARD_TAG = /(?: · |^)[\w.:-]{1,64}\/(?:low|medium|high)$/
+
+/**
+ * The description without any trailing card tags (` · <model|codex>/<effort>`, or a title that is only the tag), so a
+ * copied title is not tagged twice. Strip before cutting the description: a cut tag is no longer recognized.
+ */
+export function untaggedDescription(description: string): string {
+  let text = description.trim()
+  for (let previous = ''; previous !== text;) {
+    previous = text
+    text = text.replace(CARD_TAG, '').trimEnd()
+  }
+  return text
+}
+
 /** The dashboard's own cap on cards (`slice(-24)` in its `agent.spawn` hook). */
 export const MAX_CARDS = 24
 
@@ -39,7 +54,7 @@ export const codexCard = (job: CodexJob, now: number): AgentCard => {
     id: job.id,
     type: `codex:${job.agent}`,
     model: job.model ?? '',
-    description: job.description,
+    description: job.effort ? [job.description, `${job.model ?? 'codex'}/${job.effort}`].filter(Boolean).join(' · ') : job.description,
     status,
     spawnedAt: job.startedAt,
     endedAt: status === 'running' ? null : (job.endedAt ?? now),

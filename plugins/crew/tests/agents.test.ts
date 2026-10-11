@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { CODEX_TOOL, EFFORTS, EFFORT_FLOOR, MODELS, MODEL_FLOORS, SPECIALISTS, codexSection, leadSection, offersCodex } from '../hooks/agents'
+import { CODEX_BASE_EFFORT, CODEX_TOOL, EFFORTS, EFFORT_FLOOR, MODELS, MODEL_FLOORS, SPECIALISTS, codexSection, leadSection, offersCodex } from '../hooks/agents'
 
 const by = (name: string) => SPECIALISTS.find(s => s.name === name)
 
@@ -53,11 +53,25 @@ test('every default sits on the model and effort scales routing moves along', ()
 })
 
 test('codexSection names the three Codex tools', () => {
-  const text = codexSection()
+  const text = codexSection(false)
   expect(text.length).toBeGreaterThan(0)
   for (const name of ['mcp__crew__codex', 'mcp__crew__codex_result', 'mcp__crew__codex_cancel']) {
     expect(text).toContain(name)
   }
+})
+
+test('CODEX_BASE_EFFORT is medium, apart from the agents\' own defaults', () => {
+  expect(CODEX_BASE_EFFORT).toBe('medium')
+  expect(EFFORTS).toContain(CODEX_BASE_EFFORT)
+})
+
+test('codexSection says whether Jev sizes the job, and is stable for each flag', () => {
+  expect(codexSection(true)).toContain('Jev sizes each Codex job')
+  expect(codexSection(true)).not.toContain('does not size')
+  expect(codexSection(false)).not.toContain('Jev')
+  expect(codexSection(false)).toContain('medium effort')
+  expect(codexSection(true)).toBe(codexSection(true))
+  expect(codexSection(true)).not.toBe(codexSection(false))
 })
 
 test('offersCodex is true only when the Codex tool is listed', () => {

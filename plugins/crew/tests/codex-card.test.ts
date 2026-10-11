@@ -1,6 +1,6 @@
 import type { On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
-import { MAX_CARDS, codexCard, createThrottle, isTerminal, upsertCard } from '../hooks/codex/card'
+import { MAX_CARDS, codexCard, createThrottle, isTerminal, untaggedDescription, upsertCard } from '../hooks/codex/card'
 import type { CodexJob } from '../hooks/codex/types'
 import { cardTitle, elapsedOf, lanes, normalizeCard, titleLines } from '../hooks/flightdeck/core'
 import type { AgentCard } from '../types'
@@ -366,4 +366,24 @@ test('a card list from a past session in the wrong shape is still drawn after th
   const ui = await $.ui.mount(pane(120))
   expect(await ui.find({ text: /after junk/ })).toBeDefined()
   await ui.unmount()
+})
+
+test('an empty description gives the tag alone, with no leading separator', () => {
+  expect(codexCard(job({ description: '', effort: 'medium' }), 2_000).description).toBe('codex/medium')
+})
+
+test('an effort tags the card description with the model, or codex when there is none; the job description is unchanged', () => {
+  const j = job({ effort: 'high' })
+  expect(codexCard(j, 2_000).description).toBe('fix the parser · codex/high')
+  expect(j.description).toBe('fix the parser')
+  expect(codexCard(job({ effort: 'medium', model: 'gpt-5.3-codex-max' }), 2_000).description).toBe('fix the parser · gpt-5.3-codex-max/medium')
+  expect(codexCard(job(), 2_000).description).toBe('fix the parser')
+})
+
+test('untaggedDescription strips every trailing card tag, and a title that is only the tag', () => {
+  expect(untaggedDescription('audit auth · codex/medium')).toBe('audit auth')
+  expect(untaggedDescription('audit auth · codex/m · codex/medium')).toBe('audit auth · codex/m')
+  expect(untaggedDescription('audit auth · codex/medium · gpt-5.3-codex-max/high')).toBe('audit auth')
+  expect(untaggedDescription('codex/medium')).toBe('')
+  expect(untaggedDescription('review codex/high flags')).toBe('review codex/high flags')
 })

@@ -479,3 +479,29 @@ describe('verify C6: parseCodexModels never throws and never pollutes', () => {
     expect(r.errors).toHaveLength(1)
   })
 })
+
+describe('codex argv effort', () => {
+  test('-c model_reasoning_effort follows the approval flags and comes before -m, -o and resume', () => {
+    expect(buildArgv({ ...base, role: 'architect', approvals: true, effort: 'high', model: 'gpt-x', output: 'o.md', resume: SESS })).toEqual([
+      'codex', 'exec', '--json', '-s', 'read-only', '-c', DEV, ...APPROVALS, '-c', 'model_reasoning_effort="high"',
+      '-m', 'gpt-x', '-o', 'o.md', 'resume', SESS, '-',
+    ])
+  })
+
+  test('a write role takes it before the lane pins', () => {
+    expect(buildArgv({ ...base, role: 'developer', effort: 'medium' })).toEqual([
+      'codex', 'exec', '--json', '-s', 'workspace-write', '-c', DEV, '-c', 'model_reasoning_effort="medium"', ...PINS, '-',
+    ])
+  })
+
+  test('absent: no flag', () => {
+    for (const role of ROLES) expect(buildArgv({ ...base, role }).join(' ')).not.toContain('model_reasoning_effort')
+  })
+
+  test('only low, medium and high pass', () => {
+    for (const effort of ['low', 'medium', 'high'] as const) expect(buildArgv({ ...base, role: 'developer', effort })).toContain(`model_reasoning_effort="${effort}"`)
+    for (const effort of ['xhigh', 'High', '', 'high"\nx'] as const) {
+      expect(() => buildArgv({ ...base, role: 'developer', effort: effort as never })).toThrow('Unknown effort')
+    }
+  })
+})

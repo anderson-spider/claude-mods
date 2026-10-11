@@ -1,6 +1,6 @@
 // The Codex engine through the test host: the option, the tools, the detached worker's files and the cards. Every
 // process and file is faked; nothing runs Codex.
-import { expect, test } from 'claude-code/testing'
+import { expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import { CODEX_TOOL, SPECIALISTS, leadSection } from '../hooks/agents'
@@ -8,6 +8,7 @@ import { tomlString } from '../hooks/codex/argv'
 import { CODEX_EXEC_0_162_FAILURE, CODEX_EXEC_0_162_INTERRUPTED, CODEX_EXEC_0_162_SUCCESS } from './fixtures/codex-exec-0.162'
 import { PID, fakeProcesses, pause } from './codex-fake'
 import type { Run, Scenario } from './codex-fake'
+import { SLOT_HOLD_MS } from '../hooks/jev'
 
 const ROOT = '/repo'
 const DIR = `${ROOT}/.crew/codex`
@@ -46,6 +47,8 @@ function codexWorld(
     recordFails?: boolean
     /** The project's git ignores `.crew`. */
     crewIgnored?: boolean
+    /** Jev's endpoint, the settings it reads and the mock clock, for the effort tests. */
+    jev?: { reply: () => Promise<{ status: number; ok: boolean; headers: Record<string, string>; text: string }> }
   } = {},
 ) {
   const submittedTexts: string[] = []
@@ -118,8 +121,19 @@ function codexWorld(
   })
   on('process.run', async (_$, e) => ({ value: { ...(await run([...e.argv], e.init)), isStdoutTruncated: false, isStderrTruncated: false } }))
 
+  const jevSeen = { fetches: [] as { body: string; headers: Record<string, string> }[], settingsReads: 0 }
+  let clock: ReturnType<typeof mock.clock> | undefined
+  if (opts.jev) {
+    const reply = opts.jev.reply
+    clock = mock.clock(on)
+    mock.env(on, { HOME: '/home/u' })
+    on('settings.read', () => { jevSeen.settingsReads++; return { value: {} } as never })
+    on('http.fetch', async (_$, e) => { jevSeen.fetches.push({ body: String(e.init?.body ?? ''), headers: { ...((e.init?.headers ?? {}) as Record<string, string>) } }); return { value: await reply() } })
+  }
+
   lastWorld = { logs, runs }
   return {
+    jevSeen, clock,
     files, runs, registered, logs, transcript, cards, alive, fsCalls,
     get submitted() { return submittedTexts.length },
     submittedTexts,
@@ -877,4 +891,196 @@ test('H: background true returns only once the job record is on disk', { ...ON }
   world.alive.clear()
   world.files.set(`${DIR}/${jobId}.exit`, '0\n')
   await until($, jobId, ['done', 'error'])
+})
+
+// --- Jev sizes the effort of a Codex job ---
+
+const JEV_KEY = ['key-', 'jev-0123456789abcdef'].join('')
+const JEV_ON = { options: { codex: true, jevKey: JEV_KEY } }
+const depthReply = (depth: number) => async () => ({
+  status: 200, ok: true, headers: {},
+  text: JSON.stringify({ model: 'jev-1.13.0', answers: { tier: { choice: 'opus', confidence: 0.9 }, reasoning_depth: { score: depth, confidence: 0.5 } } }),
+})
+const hung = () => new Promise<never>(() => {})
+const effortOf = (world: { worker: () => Run[] }, nth = -1) => codexArgv(world.worker().at(nth)!).find(a => a.startsWith('model_reasoning_effort='))
+const realPause = () => new Promise<void>(resolve => (globalThis as unknown as { setTimeout: (f: () => void, ms: number) => unknown }).setTimeout(resolve, 0))
+
+test('J: a deep prompt (3.5) runs high, a shallow one (2.0) medium, and the debug logs carry neither description nor prompt', { ...JEV_ON }, async ($, on) => {
+  let depth = 3.5
+  const world = codexWorld(on, { jev: { reply: () => depthReply(depth)() } })
+  await $.session.start(START)
+
+  const high = parsed(await call($, { agent: 'developer', prompt: 'hard task', description: 'secret-description-1', background: true }))
+  expect(effortOf(world)).toBe('model_reasoning_effort="high"')
+  expect(high.effort).toBe('high')
+  expect(JSON.parse(String(world.files.get(`${DIR}/${String(high.jobId)}.json`))).effort).toBe('high')
+  depth = 2.0
+  await call($, { agent: 'developer', prompt: 'easy task', description: 'd2', background: true })
+  expect(effortOf(world)).toBe('model_reasoning_effort="medium"')
+  expect(world.jevSeen.fetches.length).toBe(2)
+  expect(world.logs.filter(l => l.startsWith('crew jev: codex:developer'))[0]).toMatch(/codex:developer cx-[a-z0-9-]+ depth=3\.50 effort=high jev=jev-1\.13\.0 \d+ms/)
+  // The line names the job it sized, so two jobs of one role are told apart.
+  expect(world.logs.some(l => l.startsWith(`crew jev: codex:developer ${String(high.jobId)} depth=3.50 `))).toBe(true)
+  expect(world.logs.join('\n')).not.toContain('secret-description-1')
+  expect(world.logs.join('\n')).not.toContain('hard task')
+})
+
+test('J: a Jev error runs medium', { ...JEV_ON }, async ($, on) => {
+  const world = codexWorld(on, { jev: { reply: async () => ({ status: 400, ok: false, headers: {}, text: 'no' }) } })
+  await $.session.start(START)
+  await call($, { agent: 'developer', prompt: 'p', description: 'd', background: true })
+  expect(effortOf(world)).toBe('model_reasoning_effort="medium"')
+  expect(world.jevSeen.fetches.length).toBe(1)
+})
+
+test('J: no key runs medium with no fetch and no settings read', { ...ON }, async ($, on) => {
+  const world = codexWorld(on, { jev: { reply: depthReply(3.9) } })
+  await $.session.start(START)
+  await call($, { agent: 'developer', prompt: 'p', description: 'd', background: true })
+  expect(effortOf(world)).toBe('model_reasoning_effort="medium"')
+  expect(world.jevSeen.fetches).toEqual([])
+  expect(world.jevSeen.settingsReads).toBe(0)
+})
+
+test('J: a refused call and a resume send nothing to Jev', { ...JEV_ON }, async ($, on) => {
+  const world = codexWorld(on, { jev: { reply: depthReply(3.9) } })
+  await $.session.start(START)
+  await call($, { agent: 'planner', prompt: 'p', description: 'd' })
+  await call($, { agent: 'developer', prompt: '  ', description: 'd' })
+  await call($, { agent: 'developer', prompt: 'p', description: 'd', cwd: '/missing' })
+  await call($, { agent: 'developer', prompt: 'p', description: 'd', cwd: '/elsewhere' })
+  await call($, { agent: 'developer', prompt: 'p', description: 'd', resume: 'cx-nope-00000' })
+  expect(world.jevSeen.fetches).toEqual([])
+  expect(world.worker()).toEqual([])
+
+  const first = parsed(await call($, { agent: 'code-reader', prompt: 'p', description: 'd' }))
+  expect(world.jevSeen.fetches.length).toBe(1)
+  await call($, { agent: 'code-reader', prompt: 'more', description: 'd', resume: first.jobId, background: true })
+  expect(world.jevSeen.fetches.length).toBe(1)
+  expect(effortOf(world)).toBe('model_reasoning_effort="high"')
+})
+
+test('J: a Jev that never answers fails open to medium at the deadline', { ...JEV_ON }, async ($, on) => {
+  const world = codexWorld(on, { jev: { reply: hung } })
+  await $.session.start(START)
+  const pending = call($, { agent: 'developer', prompt: 'p', description: 'd', background: true })
+  for (let i = 0; i < 50 && world.jevSeen.fetches.length === 0; i++) await realPause()
+  expect(world.worker()).toEqual([])
+  await world.clock!.advance(3_000)
+  await pending
+  expect(effortOf(world)).toBe('model_reasoning_effort="medium"')
+})
+
+test('J: the fifth call with four in flight fails open to medium', { ...JEV_ON }, async ($, on) => {
+  const world = codexWorld(on, { jev: { reply: hung } })
+  await $.session.start(START)
+  const four = Array.from({ length: 4 }, (_, i) => call($, { agent: 'code-reader', prompt: 'p', description: `d${i}`, background: true }))
+  for (let i = 0; i < 100 && world.jevSeen.fetches.length < 4; i++) await realPause()
+  expect(world.jevSeen.fetches.length).toBe(4)
+
+  await call($, { agent: 'code-reader', prompt: 'p', description: 'fifth', background: true })
+  expect(world.jevSeen.fetches.length).toBe(4)
+  expect(effortOf(world)).toBe('model_reasoning_effort="medium"')
+  expect(world.logs.some(l => /codex:code-reader cx-\S+ not sized \(busy\)/.test(l))).toBe(true)
+
+  await world.clock!.advance(3_000)
+  await Promise.all(four)
+})
+
+// --- K: the shared gate, slots after a fail-open, redaction of the Codex prompt ---
+
+test('K: four Codex calls that failed open at the deadline keep their slots until their fetches settle, then free them', { ...JEV_ON }, async ($, on) => {
+  const waiting: (() => void)[] = []
+  let hang = true
+  const world = codexWorld(on, {
+    jev: {
+      reply: () => hang
+        ? new Promise(resolve => { waiting.push(() => resolve({ status: 200, ok: true, headers: {}, text: '{"model":"jev-1.13.0","answers":{}}' })) })
+        : depthReply(3.5)(),
+    },
+  })
+  await $.session.start(START)
+  const four = Array.from({ length: 4 }, (_, i) => call($, { agent: 'code-reader', prompt: 'p', description: `d${i}`, background: true }))
+  for (let i = 0; i < 100 && world.jevSeen.fetches.length < 4; i++) await realPause()
+  expect(world.jevSeen.fetches.length).toBe(4)
+  await world.clock!.advance(3_000)
+  await Promise.all(four)
+  expect(world.worker().map(run => effortOf({ worker: () => [run] }))).toEqual(Array(4).fill('model_reasoning_effort="medium"'))
+
+  // The four requests still run on the account: the next job is refused a slot and sends nothing.
+  await call($, { agent: 'code-reader', prompt: 'p', description: 'while held', background: true })
+  expect(world.jevSeen.fetches.length).toBe(4)
+  expect(effortOf(world)).toBe('model_reasoning_effort="medium"')
+
+  hang = false
+  for (const go of waiting) go()
+  for (let i = 0; i < 20; i++) await realPause()
+  // The slots are free: the next job passes the gate and is stopped by the breaker the four timeouts opened (the
+  // gate refuses as busy before the breaker is asked, so 'breaker' proves the slot was released). The breaker runs on
+  // the wall clock (wallNow), which the mock clock does not move, so its pause is not stepped over here.
+  await call($, { agent: 'code-reader', prompt: 'p', description: 'after settle', background: true })
+  expect(world.jevSeen.fetches.length).toBe(4)
+  expect(world.logs.filter(l => l.startsWith('crew jev: codex:')).at(-1)).toMatch(/^crew jev: codex:code-reader cx-\S+ not sized \(breaker\)$/)
+  expect(effortOf(world)).toBe('model_reasoning_effort="medium"')
+})
+
+test('K: a Codex fetch that never settles frees its slot after the 60 s hold', { ...JEV_ON }, async ($, on) => {
+  let hang = true
+  const world = codexWorld(on, { jev: { reply: () => (hang ? hung() : depthReply(3.5)()) } })
+  await $.session.start(START)
+  const four = Array.from({ length: 4 }, (_, i) => call($, { agent: 'code-reader', prompt: 'p', description: `d${i}`, background: true }))
+  for (let i = 0; i < 100 && world.jevSeen.fetches.length < 4; i++) await realPause()
+  await world.clock!.advance(3_000)
+  await Promise.all(four)
+  await call($, { agent: 'code-reader', prompt: 'p', description: 'held', background: true })
+  expect(world.logs.filter(l => l.startsWith('crew jev: codex:')).at(-1)).toMatch(/^crew jev: codex:code-reader cx-\S+ not sized \(busy\)$/)
+  hang = false
+  await world.clock!.advance(SLOT_HOLD_MS)
+  for (let i = 0; i < 20; i++) await realPause()
+  // Past the hold the gate lets the next job through to the breaker the four timeouts opened.
+  await call($, { agent: 'code-reader', prompt: 'p', description: 'after hold', background: true })
+  expect(world.logs.filter(l => l.startsWith('crew jev: codex:')).at(-1)).toMatch(/^crew jev: codex:code-reader cx-\S+ not sized \(breaker\)$/)
+  expect(world.jevSeen.fetches.length).toBe(4)
+  expect(effortOf(world)).toBe('model_reasoning_effort="medium"')
+})
+
+test('K: Codex calls and Agent spawns share the cap of 4: with three jobs and one spawn in flight, a fourth job fails open', { ...JEV_ON }, async ($, on) => {
+  const world = codexWorld(on, { jev: { reply: hung } })
+  const spawned: unknown[] = []
+  on('agent.list', async () => ({ value: [] }) as never)
+  on('agent.spawn', async (_$, e) => { spawned.push({ ...e }); return { model: String(e.model ?? 'default'), agentId: 'a1' } })
+  on('ui.notice', async () => ({ value: undefined }))
+  await $.session.start(START)
+  const three = Array.from({ length: 3 }, (_, i) => call($, { agent: 'code-reader', prompt: 'p', description: `d${i}`, background: true }))
+  const spawn = $.agent.spawn({
+    tool_use_id: 'tu1', prompt: 'Audit it.', description: 'audit', subagentType: 'crew:developer',
+    provider: { plugin: 'crew', tier: 'user' }, parentModel: 'opus', background: false, fork: false,
+  } as never)
+  for (let i = 0; i < 100 && world.jevSeen.fetches.length < 4; i++) await realPause()
+  expect(world.jevSeen.fetches.length).toBe(4)
+
+  await call($, { agent: 'code-reader', prompt: 'p', description: 'fourth job', background: true })
+  expect(world.jevSeen.fetches.length).toBe(4)
+  expect(effortOf(world)).toBe('model_reasoning_effort="medium"')
+  expect(world.logs.some(l => /codex:code-reader cx-\S+ not sized \(busy\)/.test(l))).toBe(true)
+
+  await world.clock!.advance(3_000)
+  await Promise.all([...three, spawn])
+  expect(spawned.length).toBe(1)
+})
+
+test('K: the Codex prompt sent to Jev is redacted and capped, and the key goes only in the header', { ...JEV_ON }, async ($, on) => {
+  const world = codexWorld(on, { jev: { reply: depthReply(2.0) } })
+  await $.session.start(START)
+  const secret = ['sk-', 'abcdefghijklmnopqrstuvwxyz012345'].join('')
+  const prompt = `Read /Users/bob/private/notes.txt and mail bob@example.com with token ${secret}. ${'x'.repeat(9000)}`
+  await call($, { agent: 'developer', prompt, description: 'ask bob@example.com', background: true })
+  expect(world.jevSeen.fetches.length).toBe(1)
+  const sent = world.jevSeen.fetches[0]!.body
+  const state = JSON.parse(sent).state as { agent: { type: string; description: string }; task: { prompt: string } }
+  expect(state.agent.type).toBe('developer')
+  for (const leak of ['/Users/bob', 'bob@example.com', secret, JEV_KEY]) expect(sent).not.toContain(leak)
+  // 4000 characters and the ellipsis, as for the Agent calls.
+  expect(state.task.prompt.length).toBeLessThanOrEqual(4001)
+  expect(world.jevSeen.fetches[0]!.headers.Authorization).toBe(`Bearer ${JEV_KEY}`)
 })
