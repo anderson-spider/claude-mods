@@ -1,7 +1,8 @@
 import { expect, test } from 'claude-code/testing'
 import { MODEL_FLOORS, SPECIALISTS } from '../hooks/agents'
 import type { Specialist } from '../hooks/agents'
-import { decide, describe, route, routable, stateOf } from '../hooks/routing'
+import { decide, describe, moved, noticeText, route, routable, stateOf } from '../hooks/routing'
+import type { Routed } from '../hooks/routing'
 import { PROMPT_CHARS } from '../hooks/questions'
 
 const spec = (name: string) => SPECIALISTS.find(s => s.name === name) as Specialist
@@ -99,4 +100,24 @@ test('route asks once and decides; its log line holds no prompt', async () => {
   expect(line).toContain('model=opus')
   expect(line).toContain('jev=jev-1.13.0')
   expect(line).not.toContain('auth migration')
+})
+
+const routedAs = (model: 'haiku' | 'sonnet' | 'opus', effort: 'low' | 'medium' | 'high'): Routed => ({
+  decision: { model, effort },
+  ms: 5,
+})
+
+test('moved names only what differs from the agent defaults, and nothing without an answer', () => {
+  // developer defaults to sonnet and medium.
+  expect(moved(spec('developer'), routedAs('opus', 'high'))).toEqual({ model: 'opus', effort: 'high' })
+  expect(moved(spec('developer'), routedAs('sonnet', 'high'))).toEqual({ model: undefined, effort: 'high' })
+  expect(moved(spec('developer'), routedAs('haiku', 'medium'))).toEqual({ model: 'haiku', effort: undefined })
+  expect(moved(spec('developer'), routedAs('sonnet', 'medium'))).toEqual({ model: undefined, effort: undefined })
+  expect(moved(spec('developer'), undefined)).toEqual({ model: undefined, effort: undefined })
+})
+
+test('the notice shows the answered effort, or the default with the moved effort named as not applied', () => {
+  const routed = routedAs('opus', 'high')
+  expect(noticeText(spec('developer'), routed, undefined)).toBe('crew:developer -> opus · high (jev)')
+  expect(noticeText(spec('developer'), routed, 'high')).toBe('crew:developer -> opus · medium (jev; effort high not applied)')
 })

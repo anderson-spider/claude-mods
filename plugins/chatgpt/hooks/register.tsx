@@ -5,21 +5,45 @@ import { chatUrlOf } from './input'
 import { limitMs } from './settings'
 import type { Browser, Outcome, ProcessRunner, Request, RequestDeps, TabHolder } from './model'
 import { askCommandAnswer, errorText, imageCommandAnswer } from './presentation'
-import { ASK_DESCRIPTION, COMMON_PROPERTIES, IMAGE_DESCRIPTION, PROMPT } from './prompts'
+import { ASK_DESCRIPTION, IMAGE_DESCRIPTION, PROMPT } from './prompts'
+import {
+  ASK_COMMAND_DESCRIPTION,
+  ASK_INPUT_SCHEMA,
+  DOCTOR_COMMAND_DESCRIPTION,
+  IMAGE_COMMAND_DESCRIPTION,
+  IMAGE_INPUT_SCHEMA,
+  JOBS_DESCRIPTION,
+  JOBS_INPUT_SCHEMA,
+} from './tool-schemas'
 import { type Candidate, chooseBrowser } from './browsers'
 import { BUILTIN, BUILTIN_SERVER, builtinBrowserOf, builtinStaysOnChatgpt } from './builtin-browser'
 import { CHROME, CHROME_SERVER, chromeBrowserOf, chromeStaysOnChatgpt } from './chrome-browser'
-import { type McpCall, type McpHost, bytesOf, mcpCallOf } from './mcp-browser'
+import { type BrowserDeps, type McpCall, type McpHost, bytesOf, mcpCallOf } from './mcp-browser'
 import { TERMINAL_BROWSER, openTerminalBrowser } from './terminal-browser'
 import { serve } from './tools'
 
 const PLUGIN = 'chatgpt'
 
-// Which of the plugin's own calls to each browser server stay on chatgpt.com, by the tool's `mcp__` prefix.
-const OWN_CALLS = [
-  { prefix: `mcp__${BUILTIN_SERVER}__`, stays: builtinStaysOnChatgpt },
-  { prefix: `mcp__${CHROME_SERVER}__`, stays: chromeStaysOnChatgpt },
+// A backend: terminal-browser runs as a host process; the others are MCP servers, whose `stays` says which of the
+// plugin's own calls to them stay on chatgpt.com.
+type Backend =
+  | { name: string; open(run: ProcessRunner): Promise<Browser | string> }
+  | {
+      name: string
+      server: string
+      open(deps: BrowserDeps): Promise<Browser>
+      stays(tool: string, input: unknown, tabId: string | undefined): boolean
+    }
+
+// The backends in the order the plugin tries them.
+const BACKENDS: Backend[] = [
+  { name: TERMINAL_BROWSER, open: openTerminalBrowser },
+  { name: CHROME, server: CHROME_SERVER, open: chromeBrowserOf, stays: chromeStaysOnChatgpt },
+  { name: BUILTIN, server: BUILTIN_SERVER, open: builtinBrowserOf, stays: builtinStaysOnChatgpt },
 ]
+
+// Which of the plugin's own calls to each browser server stay on chatgpt.com, by the tool's `mcp__` prefix.
+const OWN_CALLS = BACKENDS.flatMap(backend => ('server' in backend ? [{ prefix: `mcp__${backend.server}__`, stays: backend.stays }] : []))
 
 // Requests take turns in the plugin's own tab, kept across them.
 const queue = taskQueue()
@@ -29,13 +53,21 @@ const jobs = createJobs()
 // The backend the plugin's tab belongs to: a tab id means nothing in another backend.
 let tabOwner: string | undefined
 
+// The defaults of the `foregroundMinutes` and `backgroundMinutes` settings, as plugin.json declares them.
+const FOREGROUND_MINUTES = 6
+const BACKGROUND_MINUTES = 30
+
 // A foreground request waits this long; past it the work goes on in the background.
 // The `foregroundMinutes` and `backgroundMinutes` settings, refreshed by each register.
-let foregroundMs = limitMs(undefined, 6)
-let backgroundMs = limitMs(undefined, 30)
+let foregroundMs = limitMs(undefined, FOREGROUND_MINUTES)
+let backgroundMs = limitMs(undefined, BACKGROUND_MINUTES)
 
 function processOf($: EngineInterface): ProcessRunner {
   return (argv, init) => $.process.run(argv, init)
+}
+
+function readBytes($: EngineInterface, path: string) {
+  return $.fs.read(path, { as: 'bytes' })
 }
 
 // One caller per MCP server for the session, so the route it decided (see mcpCallOf) is remembered across requests.
@@ -44,7 +76,7 @@ const mcpCalls = new Map<string, McpCall>()
 function mcpHostOf($: EngineInterface): McpHost {
   return {
     mcp: (server, tool, args) => $.mcp.call(server, tool, args),
-    tool: input => $.tool.call(input as never) as Promise<{ deny?: string; text?: string; isError?: boolean }>,
+    tool: input => $.tool.call(input as never),
   }
 }
 
@@ -57,23 +89,21 @@ function callOf($: EngineInterface, server: string): McpCall {
   return call
 }
 
-// The backends in the order the plugin tries them.
+// BACKENDS, each opened only when the chooser gets to it.
 function candidatesOf($: EngineInterface): Candidate[] {
   const run = processOf($)
   // Waits go through a host process, which does not use up the hook's clock budget as a timer would.
-  const deps = (server: string) => ({
+  const deps = (server: string): BrowserDeps => ({
     call: callOf($, server),
-    readBytes: async (path: string) => bytesOf((await $.fs.read(path, { as: 'bytes' })).base64),
+    readBytes: async (path: string) => bytesOf((await readBytes($, path)).base64),
     sleep: async (ms: number) => {
       await $.process.run(['sleep', String(ms / 1000)])
     },
     now: () => Date.now(),
   })
-  return [
-    { name: TERMINAL_BROWSER, open: () => openTerminalBrowser(run) },
-    { name: CHROME, open: () => chromeBrowserOf(deps(CHROME_SERVER)) },
-    { name: BUILTIN, open: () => builtinBrowserOf(deps(BUILTIN_SERVER)) },
-  ]
+  return BACKENDS.map(backend =>
+    'server' in backend ? { name: backend.name, open: () => backend.open(deps(backend.server)) } : { name: backend.name, open: () => backend.open(run) },
+  )
 }
 
 // Picks the backend, and starts the plugin's tab afresh when it differs from the one that opened that tab.
@@ -99,7 +129,7 @@ function requestDeps($: EngineInterface): RequestDeps {
       run,
       files: {
         write: (path, text) => $.fs.write(path, text),
-        readBytes: path => $.fs.read(path, { as: 'bytes' }),
+        readBytes: path => readBytes($, path),
       },
       tmpDir: () => $.env.get('TMPDIR'),
     },
@@ -144,8 +174,8 @@ function handlers($: EngineInterface) {
 }
 
 export const register: Register = (on, options) => {
-  foregroundMs = limitMs(options?.foregroundMinutes, 6)
-  backgroundMs = limitMs(options?.backgroundMinutes, 30)
+  foregroundMs = limitMs(options?.foregroundMinutes, FOREGROUND_MINUTES)
+  backgroundMs = limitMs(options?.backgroundMinutes, BACKGROUND_MINUTES)
 
   on('prompt.compose', async ($, e, next) => {
     const composed = await next(e)
@@ -154,71 +184,12 @@ export const register: Register = (on, options) => {
   })
 
   on('session.start', async ($, e, next) => {
-    await $.tool.register({
-      name: 'ask',
-      description: ASK_DESCRIPTION,
-      inputSchema: {
-        type: 'object',
-        properties: {
-          prompt: { type: 'string', description: 'The whole question, self-contained.' },
-          ...COMMON_PROPERTIES,
-          saveOnly: {
-            type: 'boolean',
-            description: 'Optional. Only save the last answer already in chatUrl, sending nothing (waits while it is still streaming).',
-          },
-          out: { type: 'string', description: 'Optional absolute path for the Markdown file.' },
-          maxChars: {
-            type: 'number',
-            description: 'How much of the answer to return inline (default 3000); the file has all of it.',
-          },
-        },
-        required: ['prompt'],
-      },
-    })
-    await $.tool.register({
-      name: 'image',
-      description: IMAGE_DESCRIPTION,
-      inputSchema: {
-        type: 'object',
-        properties: {
-          prompt: { type: 'string', description: 'What to generate or change, self-contained.' },
-          reference: {
-            type: 'string',
-            description: 'Optional absolute path of a PNG, JPEG, WebP or GIF image (at most 4 MiB) to attach.',
-          },
-          ...COMMON_PROPERTIES,
-          saveOnly: {
-            type: 'boolean',
-            description:
-              'Optional. Only save the last image already in chatUrl, sending nothing and spending no quota (waits ' +
-              'while it is still generating); prompt only names the file.',
-          },
-          out: { type: 'string', description: 'Optional absolute path for the image file (variants get -1, -2).' },
-        },
-        required: ['prompt'],
-      },
-    })
-    await $.tool.register({
-      name: 'jobs',
-      description:
-        'Lists the ChatGPT requests of this session that ran or run in the background (ask or image with wait: ' +
-        'false, or a slow one that moved there): status, chat URL and saved files, newest first. Use it to find ' +
-        "a background request's file or chat URL, or to check whether it is still running. It sends nothing to " +
-        'ChatGPT, spends no quota and does not list requests from other sessions.',
-      inputSchema: { type: 'object', properties: {} },
-    })
-    await $.command.register({
-      name: 'chatgpt-ask',
-      description: 'Asks ChatGPT in the browser and shows the answer: /chatgpt-ask <question>',
-    })
-    await $.command.register({
-      name: 'chatgpt-image',
-      description: 'Generates an image with ChatGPT in the browser and saves it: /chatgpt-image <prompt>',
-    })
-    await $.command.register({
-      name: 'chatgpt-doctor',
-      description: 'Checks that ChatGPT works in the browser and which page parts moved: /chatgpt-doctor [chat URL]',
-    })
+    await $.tool.register({ name: 'ask', description: ASK_DESCRIPTION, inputSchema: ASK_INPUT_SCHEMA })
+    await $.tool.register({ name: 'image', description: IMAGE_DESCRIPTION, inputSchema: IMAGE_INPUT_SCHEMA })
+    await $.tool.register({ name: 'jobs', description: JOBS_DESCRIPTION, inputSchema: JOBS_INPUT_SCHEMA })
+    await $.command.register({ name: 'chatgpt-ask', description: ASK_COMMAND_DESCRIPTION })
+    await $.command.register({ name: 'chatgpt-image', description: IMAGE_COMMAND_DESCRIPTION })
+    await $.command.register({ name: 'chatgpt-doctor', description: DOCTOR_COMMAND_DESCRIPTION })
     return next(e)
   })
 

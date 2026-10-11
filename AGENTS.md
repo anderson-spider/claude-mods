@@ -11,7 +11,7 @@ Claude Code plugin marketplace `spider-claude-mods` (`anderson-spider/claude-mod
 
 ## Plugins
 
-Each plugin's details live in `plugins/<name>/AGENTS.md`, loaded when working under that directory (its `CLAUDE.md` imports it).
+Each plugin's details live in `plugins/<name>/AGENTS.md`, loaded when Claude reads or edits a file under that directory (`.claude/rules/<name>.md` imports it; a `CLAUDE.md` at a plugin root draws a `claude plugin validate` warning).
 
 - **branch-guard**: holds a commit or push on a protected branch until the person proceeds or cancels.
 - **chatgpt**: `ask` and `image` tools driving chatgpt.com in the first browser that works.

@@ -14,15 +14,18 @@ const sleep = (waitMs: number) => `await new Promise(r => setTimeout(r, ${Math.m
 const SEND_SELECTOR =
   '[data-testid=send-button], #composer-submit-button, button[aria-label=Enviar], button[aria-label=Send], button[aria-label="Send prompt"], button[aria-label="Enviar prompt"]'
 
+// How much of a blocker's text the page hands back.
+const BLOCKER_MAX = 300
+
 // What stands in the way, in the page's words: a human verification, an open
 // dialog or alert, or an error line in the conversation (a usage limit).
 const BLOCKER = `(() => {
   if (document.querySelector('iframe[src*="challenges.cloudflare.com"], #challenge-form, #cf-challenge-running')) return 'a human verification (captcha)';
   const shown = el => el.offsetParent !== null && (el.innerText || '').trim();
   const box = [...document.querySelectorAll('[role=dialog], [role=alertdialog], [role=alert]')].find(shown);
-  if (box) return box.innerText.trim().replace(/\\s+/g, ' ').slice(0, 300);
+  if (box) return box.innerText.trim().replace(/\\s+/g, ' ').slice(0, ${BLOCKER_MAX});
   const error = [...document.querySelectorAll('main .text-token-text-error, main [class*="text-red"]')].find(shown);
-  return error ? error.innerText.trim().replace(/\\s+/g, ' ').slice(0, 300) : '';
+  return error ? error.innerText.trim().replace(/\\s+/g, ' ').slice(0, ${BLOCKER_MAX}) : '';
 })()`
 
 export function stateScript(waitMs: number): string {

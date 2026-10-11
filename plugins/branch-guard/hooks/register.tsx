@@ -1,7 +1,7 @@
 import { atom, read } from 'claude-code'
 import type { Elements, EngineInterface, Register, RenderElement } from 'claude-code'
 
-import type { BranchGuardHeld } from '../types'
+import type { BranchGuardHeld, BranchGuardReport } from '../types'
 import { classify } from './classify'
 import type { Risk } from './classify'
 import { isProtectedTarget, measure } from './measure'
@@ -9,7 +9,10 @@ import type { Probe } from './measure'
 
 type Kit = Pick<Elements['terminal'], 'Box' | 'Text' | 'Button'>
 type Decision = 'proceed' | 'cancel'
+type Outcome = Decision | 'aborted'
 type Slot = { id: string; decision: Decision | null }
+/** The call being held, if any; the others wait for it to be decided. */
+type Queue = { current: Slot | undefined }
 
 const TITLE = 'Branch Guard'
 // Waiting inside a `$` call does not use up the hook's time; `$.clock.sleep` would.
@@ -25,7 +28,7 @@ const held = atom(ref, null)
 
 // Reads of `$.state` in a dispatch see a single moment: the decision the hook
 // is waiting for would not arrive that way, so it travels here and the state holds only the drawing.
-let waiting: Slot | undefined
+const queue: Queue = { current: undefined }
 
 const probe = ($: EngineInterface): Probe => ({
   run: (argv, init) => $.process.run(argv, init),
@@ -37,23 +40,24 @@ const probe = ($: EngineInterface): Probe => ({
     ),
 })
 
-const decide = (decision: Decision) => {
-  if (waiting?.decision === null) {
-    waiting.decision = decision
+const decide = (line: Queue, decision: Decision) => {
+  if (line.current?.decision === null) {
+    line.current.decision = decision
   }
 }
 
 /** Holds the call until the person decides; never rejects, so the command cannot slip through on an error. */
 const hold = async (
   $: EngineInterface,
+  line: Queue,
   mine: BranchGuardHeld,
   signal: AbortSignal,
-): Promise<Decision | 'aborted'> => {
+): Promise<Outcome> => {
   const slot: Slot = { id: mine.id, decision: null }
 
   try {
     // One held call at a time: the second waits for the first to be decided.
-    while (waiting !== undefined) {
+    while (line.current !== undefined) {
       if (signal.aborted) {
         return 'aborted'
       }
@@ -61,7 +65,7 @@ const hold = async (
       await $.process.run(POLL)
     }
 
-    waiting = slot
+    line.current = slot
     await $.state.set(ref, mine)
 
     while (slot.decision === null && !signal.aborted) {
@@ -72,8 +76,8 @@ const hold = async (
   } catch {
     return 'aborted'
   } finally {
-    if (waiting === slot) {
-      waiting = undefined
+    if (line.current === slot) {
+      line.current = undefined
       await $.state.set(ref, null).catch(() => undefined)
     }
   }
@@ -85,7 +89,26 @@ const REVIEW = 'Pushing to the protected branch from another branch is a PR case
 const advise = (risks: readonly Risk[]) =>
   risks.some(risk => risk.kind === 'publish' && risk.refspecs.some(spec => spec.includes(':'))) ? REVIEW : BRANCH
 
-const draw = ({ Box, Text, Button }: Kit, now: BranchGuardHeld, room: number): RenderElement => {
+// Only the protected branch asks; everything else, and any repository in a temp directory, passes. One at a time, in order.
+const screen = async (host: Probe, found: readonly Risk[], cwd: string) => {
+  const risks: Risk[] = []
+
+  for (const risk of found) {
+    if (await isProtectedTarget(host, risk, cwd)) {
+      risks.push(risk)
+    }
+  }
+
+  return risks
+}
+
+// What Claude is told when the call is not let through.
+const denyFor = (outcome: Exclude<Outcome, 'proceed'>, report: BranchGuardReport, risks: readonly Risk[]) =>
+  outcome === 'cancel'
+    ? `Branch Guard held this command: the person pressed Cancel. It would ${report.summary}. ${advise(risks)}`
+    : `Branch Guard held this command and the wait was interrupted before a decision. It would ${report.summary}.`
+
+const draw = ({ Box, Text, Button }: Kit, now: BranchGuardHeld, room: number, line: Queue): RenderElement => {
   const { report } = now
   const shown = report.lines.slice(0, Math.max(0, room))
   const hidden = report.total - shown.length
@@ -119,8 +142,8 @@ const draw = ({ Box, Text, Button }: Kit, now: BranchGuardHeld, room: number): R
         </Text>
       ))}
       <Box marginTop={1} gap={2}>
-        <Button key="proceed" label="Proceed" hotkey="1" plain onPress={() => decide('proceed')} />
-        <Button key="cancel" label="Cancel" hotkey="2" plain autoFocus onPress={() => decide('cancel')} />
+        <Button key="proceed" label="Proceed" hotkey="1" plain onPress={() => decide(line, 'proceed')} />
+        <Button key="cancel" label="Cancel" hotkey="2" plain autoFocus onPress={() => decide(line, 'cancel')} />
         <Text dimColor>Claude is waiting for your answer</Text>
       </Box>
     </Box>
@@ -130,7 +153,7 @@ const draw = ({ Box, Text, Button }: Kit, now: BranchGuardHeld, room: number): R
 export const register: Register = on => {
   // A reload in the middle of a wait would leave the value stuck and hold everything after it.
   on('session.start', async ($, e, next) => {
-    waiting = undefined
+    queue.current = undefined
     await $.state.set(ref, null)
 
     return next(e)
@@ -145,14 +168,7 @@ export const register: Register = on => {
 
     const host = probe($)
     const cwd = await $.session.cwd()
-    const risks: Risk[] = []
-
-    // Only the protected branch asks; everything else, and any repository in a temp directory, passes.
-    for (const risk of found) {
-      if (await isProtectedTarget(host, risk, cwd)) {
-        risks.push(risk)
-      }
-    }
+    const risks = await screen(host, found, cwd)
 
     if (risks.length === 0) {
       return next(e)
@@ -161,6 +177,7 @@ export const register: Register = on => {
     const report = await measure(host, risks, cwd)
     const outcome = await hold(
       $,
+      queue,
       { id: e.tool_use_id, command: e.command, report },
       next.signal,
     )
@@ -169,12 +186,7 @@ export const register: Register = on => {
       return next(e)
     }
 
-    return {
-      deny:
-        outcome === 'cancel'
-          ? `Branch Guard held this command: the person pressed Cancel. It would ${report.summary}. ${advise(risks)}`
-          : `Branch Guard held this command and the wait was interrupted before a decision. It would ${report.summary}.`,
-    }
+    return { deny: denyFor(outcome, report, risks) }
   })
 
   // The report goes in the band above the prompt, at any width.
@@ -185,6 +197,6 @@ export const register: Register = on => {
       return next(e)
     }
 
-    return draw($.ui.resolve(e), now, Math.min(MAX_LINES, e.props.maxRows - CHROME_ROWS))
+    return draw($.ui.resolve(e), now, Math.min(MAX_LINES, e.props.maxRows - CHROME_ROWS), queue)
   })
 }

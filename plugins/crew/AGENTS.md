@@ -22,7 +22,7 @@ plugins/crew/
   hooks/guard.ts              deniedWrite(type, path): the lane of each agent
   hooks/jev.ts                Jev client: one 3 s deadline, one retry, breaker, cap of 4 calls in flight
   hooks/questions.ts          the two questions (tier, reasoning_depth), the pinned Jev model and the thresholds
-  hooks/routing.ts            which calls are routable, state for Jev, answers to model and effort
+  hooks/routing.ts            which calls are routable, state for Jev, answers to model and effort, what moved and the notice text
   hooks/effort.ts             pending and bound effort per subagent id; `bind` returns what happened to the effort
   hooks/decisions.ts          decision log: the record, its file name, FNV-1a hash of the description; the write is injected
   hooks/key.ts                key sources and the repository-settings checks

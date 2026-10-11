@@ -9,6 +9,15 @@ async function outDir(tmpDir: OutputDeps['tmpDir']): Promise<string> {
   return `${((await tmpDir()) ?? '/tmp').replace(/\/$/, '')}/chatgpt`
 }
 
+// Where a request's file goes: its `out` when it names one, else a fresh name in outDir (tmpDir is read only then).
+async function resolveOutPath(
+  request: Request,
+  { tmpDir }: Pick<OutputDeps, 'tmpDir'>,
+  ext?: string,
+): Promise<string> {
+  return request.out ?? `${await outDir(tmpDir)}/${fileName(request.input.prompt, new Date(), ext)}`
+}
+
 // The host writes text only, so the bytes go through openssl's base64 decoder.
 async function writeImage(run: ProcessRunner, path: string, base64: string): Promise<string | undefined> {
   const dir = path.slice(0, path.lastIndexOf('/')) || '/'
@@ -36,11 +45,11 @@ async function previewOf({ run, files }: Pick<OutputDeps, 'run' | 'files'>, path
   }
 }
 
-export async function saveAnswer({ files, tmpDir }: Pick<OutputDeps, 'files' | 'tmpDir'>, result: AskResult, request: Request): Promise<Outcome> {
+export async function saveAnswer(deps: Pick<OutputDeps, 'files' | 'tmpDir'>, result: AskResult, request: Request): Promise<Outcome> {
   let path: string | undefined
   if (result.markdown) {
-    path = request.out ?? `${await outDir(tmpDir)}/${fileName(request.input.prompt, new Date())}`
-    await files.write(path, `<!-- ${result.url} -->\n\n${result.markdown}\n`)
+    path = await resolveOutPath(request, deps)
+    await deps.files.write(path, `<!-- ${result.url} -->\n\n${result.markdown}\n`)
   }
   return askOutcome(result, path, request.maxChars)
 }
@@ -52,7 +61,7 @@ export async function saveImages(deps: OutputDeps, result: ImageResult, request:
   const lines: string[] = []
   for (const [i, image] of result.images.entries()) {
     const ext = extensionOf(image.type)
-    const base = request.out ?? `${await outDir(deps.tmpDir)}/${fileName(request.input.prompt, new Date(), ext)}`
+    const base = await resolveOutPath(request, deps, ext)
     const path = variantPath(base, i, result.images.length)
     const failed = await writeImage(deps.run, path, image.base64)
     if (failed) return { ok: false, text: failed, error: failed, chatUrl: result.url, paths }

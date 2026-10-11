@@ -3,7 +3,7 @@ import type { Browser } from './model'
 /** A backend the plugin can drive ChatGPT with; `open` resolves to a Browser, or to the reason it cannot be used (or throws it). */
 export type Candidate = { name: string; open(): Promise<Browser | string> }
 
-export type Chosen = { browser: Browser; name: string }
+type Chosen = { browser: Browser; name: string }
 
 const REASON_MAX = 300
 

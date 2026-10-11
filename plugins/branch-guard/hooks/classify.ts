@@ -188,9 +188,11 @@ const pushRisk = (base: Base, args: readonly Word[]): Risk | undefined => {
   }
 }
 
-const git = (state: State, words: readonly Word[], isSure: boolean): Risk | undefined => {
+// The flags git takes before its subcommand: where `-C` moves `dir` to, whether `--git-dir`/`--work-tree` point
+// elsewhere, and the index of the subcommand.
+const parseGlobalFlags = (words: readonly Word[], dir: string) => {
   let at = 0
-  let where = state.dir
+  let where = dir
   let isElsewhere = false
 
   while ((words[at]?.text ?? '').startsWith('-')) {
@@ -201,6 +203,11 @@ const git = (state: State, words: readonly Word[], isSure: boolean): Risk | unde
     at += GIT_VALUED.has(flag) ? 2 : 1
   }
 
+  return { at, where, isElsewhere }
+}
+
+const git = (state: State, words: readonly Word[], isSure: boolean): Risk | undefined => {
+  const { at, where, isElsewhere } = parseGlobalFlags(words, state.dir)
   const sub = words[at]?.text ?? ''
   const args = words.slice(at + 1)
   const base = { dir: where, isElsewhere, ...(state.branch === undefined ? {} : { branchAfter: state.branch }) }
@@ -224,6 +231,17 @@ const git = (state: State, words: readonly Word[], isSure: boolean): Risk | unde
  */
 export const classify = (command: string): Risk[] => walk(parse(command), { dir: '.', isAdrift: false, branch: undefined, isStaged: false })
 
+// `cd`, `pushd` and `popd`: only a `cd` to one readable folder moves `dir`; the others leave it unreadable.
+const applyCd = (state: State, name: string, args: readonly Word[]) => {
+  const to = args[0]?.text ?? ''
+  // A quoted `~` is a folder name, and `~someone` is another person's home.
+  const isHomePath = args[0]?.isHome === true && IN_HOME.test(to)
+  const isKnown = name === 'cd' && args.length === 1 && args[0]?.isUnknown === false && to !== '-' && (isHomePath || !to.startsWith('~'))
+
+  state.isAdrift = isKnown ? state.isAdrift && !to.startsWith('/') && !isHomePath : true
+  state.dir = isKnown ? enter(state.dir, to) : state.dir
+}
+
 // The commands of one list in order; the substitutions a command holds run first, on a copy of the state, so what they
 // do (`cd`, `checkout`) does not leak out and what came before reaches them.
 const walk = (parsed: readonly Command[], state: State): Risk[] => {
@@ -241,14 +259,7 @@ const walk = (parsed: readonly Command[], state: State): Risk[] => {
     const args = argv.slice(1)
 
     if (name === 'cd' || name === 'pushd' || name === 'popd') {
-      const to = args[0]?.text ?? ''
-      // A quoted `~` is a folder name, and `~someone` is another person's home.
-      const isHomePath = args[0]?.isHome === true && IN_HOME.test(to)
-      const isKnown =
-        name === 'cd' && args.length === 1 && args[0]?.isUnknown === false && to !== '-' && (isHomePath || !to.startsWith('~'))
-
-      state.isAdrift = isKnown ? state.isAdrift && !to.startsWith('/') && !isHomePath : true
-      state.dir = isKnown ? enter(state.dir, to) : state.dir
+      applyCd(state, name, args)
     } else if (name === 'git') {
       const isSure = isStraight && SEQUENCE.has(one.before) && SEQUENCE.has(parsed[at + 1]?.before ?? '')
       const risk = git(state, args, isSure)

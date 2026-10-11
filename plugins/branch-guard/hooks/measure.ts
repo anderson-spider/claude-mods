@@ -101,7 +101,10 @@ const upstreamOf = (probe: Probe, dir: string) => out(probe, ['git', 'rev-parse'
 const currentOf = (probe: Probe, risk: Risk, dir: string) =>
   risk.branchAfter === undefined ? out(probe, ['git', 'branch', '--show-current'], dir) : Promise.resolve(risk.branchAfter)
 
-/** A commit or push whose target branch is protected; everything else passes without asking. */
+/**
+ * A commit or push whose target branch is protected; everything else passes without asking.
+ * A directory that cannot be resolved (`~` with no HOME) fails open: it is not protected, so the command passes.
+ */
 export const isProtectedTarget = async (probe: Probe, risk: Risk, cwd: string): Promise<boolean> => {
   const dir = locate(cwd, risk.dir, await probe.home())
 
@@ -217,6 +220,8 @@ export const measure = async (
   const home = await probe.home()
 
   for (const risk of risks) {
+    // `isProtectedTarget` only lets through a risk whose directory resolved, so `locate` gives one here unless HOME
+    // read differently the second time. Then the directory is taken from `cwd` with the `~` left as a folder name.
     parts.push(await measureOne(probe, risk, locate(cwd, risk.dir, home) ?? resolve(cwd, risk.dir)))
   }
 

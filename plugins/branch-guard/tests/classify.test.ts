@@ -219,3 +219,84 @@ test('classify keeps the substitutions in every alternative of a case pattern', 
   expect(kinds('case a in (x|$(git commit -m x)) ls;; esac')).toEqual(['commit'])
   expect(kinds('case a in b) ls;; a|`git commit -m x`) ls;; esac')).toEqual(['commit'])
 })
+
+test('classify skips assignments, wrapper names and openers before the command, but not wrapper options or paths', () => {
+  expect(kinds('FOO=1 git commit -m x')).toEqual(['commit'])
+  expect(kinds('FOO=1 BAR=2 git push origin main')).toEqual(['publish'])
+  expect(kinds('sudo git commit -m x')).toEqual(['commit'])
+  expect(kinds('env FOO=1 git commit -m x')).toEqual(['commit'])
+  expect(kinds('time nohup git push origin main')).toEqual(['publish'])
+  expect(kinds('command git commit -m x')).toEqual(['commit'])
+  expect(kinds('exec git commit -m x')).toEqual(['commit'])
+  expect(kinds('sudo FOO=1 env git commit -m x')).toEqual(['commit'])
+  expect(kinds('! git commit -m x')).toEqual(['commit'])
+  expect(kinds('while sudo git push origin main; do ls; done')).toEqual(['publish'])
+  expect(kinds('/usr/bin/git commit -m x')).toEqual(['commit'])
+  expect(kinds('FOO=1 /usr/bin/git push origin main')).toEqual(['publish'])
+
+  // A wrapper's option is the first word `bare` leaves, so what follows it is not seen as `git`.
+  expect(kinds('sudo -u root git commit -m x')).toEqual([])
+  expect(kinds('env -i git commit -m x')).toEqual([])
+  // A wrapper given by path is not skipped either.
+  expect(kinds('/usr/bin/sudo git commit -m x')).toEqual([])
+  expect(kinds('/usr/bin/env FOO=1 git commit -m x')).toEqual([])
+  // Only a command word counts: `git` as an argument is not a command.
+  expect(kinds('echo git commit -m x')).toEqual([])
+  expect(kinds('sudo')).toEqual([])
+  expect(kinds('FOO=1')).toEqual([])
+})
+
+test('classify keeps cd and the branch state across the prefix words `bare` skips', () => {
+  expect(classify('FOO=1 cd web && git commit -m x')[0]).toMatchObject({ kind: 'commit', dir: 'web' })
+  expect(classify('sudo cd web && git commit -m x')[0]).toMatchObject({ kind: 'commit', dir: 'web' })
+  expect(classify('sudo git checkout main && sudo git commit -m x')[0]).toMatchObject({ branchAfter: 'main' })
+})
+
+test('classify reads the line after a heredoc whose delimiter is quoted in the middle, escaped or spaced', () => {
+  expect(kinds('cat <<E"O"F\ngit commit -m x\nEOF\ngit push origin main')).toEqual(['publish'])
+  expect(kinds('cat <<\\EOF\ngit commit -m x\nEOF\ngit push origin main')).toEqual(['publish'])
+  expect(kinds('cat <<"END OF"\ngit commit -m x\nEND\nEND OF\ngit push origin main')).toEqual(['publish'])
+  expect(kinds('cat << EOF\ngit commit -m x\nEOF\ngit push origin main')).toEqual(['publish'])
+  // Quoting any part of the delimiter keeps the body unexpanded, so its substitutions do not run.
+  expect(kinds('cat <<E"O"F\n$(git commit -m x)\nEOF')).toEqual([])
+  expect(kinds('cat <<\\EOF\n$(git commit -m x)\nEOF')).toEqual([])
+  expect(kinds("cat << 'EOF'\n$(git commit -m x)\nEOF")).toEqual([])
+  expect(kinds('cat << EOF\n$(git commit -m x)\nEOF')).toEqual(['commit'])
+})
+
+test('classify ends the heredoc delimiter at an operator and keeps classifying the rest of the line', () => {
+  expect(kinds('cat <<EOF; git commit -m x\nbody\nEOF')).toEqual(['commit'])
+  expect(kinds('cat <<EOF&&git push origin main\nbody\nEOF')).toEqual(['publish'])
+  expect(kinds('cat <<EOF|bash\ngit commit -m x\nEOF')).toEqual(['commit'])
+  expect(kinds('cat <<EOF>out\ngit commit -m x\nEOF\ngit push origin main')).toEqual(['publish'])
+  expect(kinds('(cat <<EOF)\ngit commit -m x\nEOF\ngit push origin main')).toEqual(['publish'])
+})
+
+test('classify drops the body of each heredoc of a line, and swallows the rest when one never closes', () => {
+  expect(kinds('cat <<A <<B\ngit commit -m 1\nA\ngit commit -m 2\nB\ngit push origin main')).toEqual(['publish'])
+  expect(kinds('cat <<-A <<B\n\tgit commit -m 1\n\tA\ngit commit -m 2\nB\ngit push origin main')).toEqual(['publish'])
+  expect(kinds('cat <<EOF\nEOF\ngit commit -m x')).toEqual(['commit'])
+  expect(kinds('cat <<A <<B\ngit commit -m 1\nA\ngit commit -m 2')).toEqual([])
+  expect(kinds('cat <<A <<B\ngit commit -m 1')).toEqual([])
+  // Both bodies are commands for a shell, in order, and the line after them is read too.
+  expect(kinds('bash <<A <<B\ngit commit -m 1\nA\ngit push origin main\nB\ngit commit -m 2')).toEqual(['commit', 'publish', 'commit'])
+  // A body that holds a `)` does not close the substitution that holds the heredoc.
+  expect(kinds('echo $(cat <<EOF\n)\ngit commit -m x\nEOF\n) && git push origin main')).toEqual(['publish'])
+  expect(kinds('echo $(cat <<-EOF\n\t)\n\tEOF\n) && git push origin main')).toEqual(['publish'])
+  expect(kinds('echo $(cat <<EOF\n$(git commit -m x)\nEOF\n)')).toEqual(['commit'])
+})
+
+test('classify ends a backtick substitution at an unescaped backtick and reads the nested one and the line after it', () => {
+  expect(kinds('echo `ls` && git push origin main')).toEqual(['publish'])
+  expect(kinds('echo `git commit -m x` && git push origin main')).toEqual(['commit', 'publish'])
+  expect(kinds('echo `echo \\`git commit -m x\\``')).toEqual(['commit'])
+  expect(kinds('echo `echo \\\\` && git commit -m x')).toEqual(['commit'])
+  // A `)` inside backticks does not close the `$(…)` around them.
+  expect(kinds('echo $(echo `echo )` && git commit -m x) && git push origin main')).toEqual(['commit', 'publish'])
+  // A backtick in the body of a heredoc: read when the delimiter is unquoted, unless a backslash escapes it.
+  expect(kinds('cat <<EOF\n`git commit -m x`\nEOF')).toEqual(['commit'])
+  expect(kinds('cat <<EOF\n\\`git commit -m x\\`\nEOF')).toEqual([])
+  expect(kinds("cat <<'EOF'\n`git commit -m x`\nEOF")).toEqual([])
+  expect(kinds('cat <<EOF\n`echo \\`git commit -m x\\``\nEOF')).toEqual(['commit'])
+  expect(kinds('cat <<EOF\n`git commit -m x')).toEqual(['commit'])
+})

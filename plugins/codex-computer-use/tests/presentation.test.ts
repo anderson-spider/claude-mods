@@ -1,5 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
+import type { StatusReply } from '../hooks/model'
 import { approvalWaitText, statusReport, toAnswer } from '../hooks/presentation'
 import { limitMs } from '../hooks/routing'
 
@@ -19,8 +20,8 @@ test('statusReport preserves unreachable and error reports', () => {
 })
 
 test('statusReport preserves running helper, callers and auto-approve text', () => {
-  const reply = {
-    status: 'ok' as const, isError: false, content: [], version: '0.4.1',
+  const reply: StatusReply = {
+    version: '0.4.1',
     callers: [{ caller: 'sess-1', apps: ['TextEdit', 'Calculator'] }, { caller: 'sess-2', apps: [] }],
     settings: { autoApprove: true, always: [] },
   }
@@ -31,7 +32,7 @@ test('statusReport preserves running helper, callers and auto-approve text', () 
     '  sess-1: TextEdit, Calculator',
     '  sess-2: no apps',
   ].join('\n'))
-  expect(statusReport(false, { status: 'ok', isError: false, content: [] })).toBe([
+  expect(statusReport(false, {})).toBe([
     'Route: Claude\'s own computer use (off)',
     'Helper: ? running, 0 Codex session(s)',
     'Auto-approve: off (asks first)',

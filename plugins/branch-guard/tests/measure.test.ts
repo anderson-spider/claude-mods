@@ -2,6 +2,7 @@ import { expect, test } from 'claude-code/testing'
 
 import { classify } from '../hooks/classify'
 import { isProtectedTarget, measure } from '../hooks/measure'
+import type { Probe } from '../hooks/measure'
 import { probe } from './helpers'
 
 const guarded = async (command: string, cwd = '/proj') => {
@@ -66,4 +67,69 @@ test('measure reports what the commit or the push would do, from git itself', as
   expect(await report('git push origin :main', '/work')).toMatchObject({ summary: 'push nothing new to origin/main (compared without fetch)', lines: ['origin/main: will be deleted'] })
   expect((await report('git push --all')).summary).toBe('push all local branches to the remote (--all/--mirror)')
   expect((await report('git commit -m x && git push origin main')).title).toBe('git commit + git push')
+})
+
+// A directory in the home that cannot be placed: no `HOME`, so `~/…` has no folder to run git in.
+const HOME_TARGETS = ['cd ~/repo && git commit -m x', 'cd ~ && git push origin main', 'git -C ~/repo commit -m x', 'git -C ~/repo push origin main']
+
+test('a target whose directory cannot be resolved passes without running git (fail-open)', async () => {
+  const calls: string[] = []
+  const unhomed = { ...probe(calls), home: async () => undefined }
+
+  for (const command of HOME_TARGETS) {
+    const risks = classify(command)
+
+    expect(risks).toHaveLength(1)
+
+    for (const risk of risks) {
+      expect(await isProtectedTarget(unhomed, risk, '/proj')).toBe(false)
+    }
+  }
+
+  expect(calls).toEqual([])
+
+  // The same commands, with the home known, are held on main.
+  for (const command of HOME_TARGETS) {
+    for (const risk of classify(command)) {
+      expect(await isProtectedTarget(probe(), risk, '/proj')).toBe(true)
+    }
+  }
+})
+
+test('a risk marked adrift or elsewhere passes without running git, with the home known or not', async () => {
+  const calls: string[] = []
+  const host = probe(calls)
+
+  for (const command of ['cd "$X" && git commit -m x', 'git --git-dir /x/.git commit -m x', 'git --work-tree /x push origin main']) {
+    for (const risk of classify(command)) {
+      expect(await isProtectedTarget(host, risk, '/proj')).toBe(false)
+    }
+  }
+
+  expect(calls).toEqual([])
+})
+
+test('measure falls back to the cwd joined with the raw directory when the home is unknown', async () => {
+  const where: (string | undefined)[] = []
+  const base = probe()
+  const unhomed: Probe = {
+    ...base,
+    home: async () => undefined,
+    run: async (argv, init) => {
+      where.push(init.cwd)
+
+      return base.run(argv, init)
+    },
+  }
+
+  const report = await measure(unhomed, classify('cd ~/repo && git commit -m x'), '/proj')
+
+  expect(report.summary).toBe('commit 2 files directly on main')
+  expect(where.length).toBeGreaterThan(0)
+  expect(new Set(where)).toEqual(new Set(['/proj/~/repo']))
+
+  where.length = 0
+  await measure({ ...unhomed, home: async () => '/home/me' }, classify('cd ~/repo && git commit -m x'), '/proj')
+
+  expect(new Set(where)).toEqual(new Set(['/home/me/repo']))
 })

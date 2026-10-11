@@ -1,23 +1,39 @@
 import type { Hook, Register } from 'claude-code'
 import { SPECIALISTS } from './agents'
-import type { Effort } from './agents'
+import type { Effort, Specialist } from './agents'
 import { decisionRecord, saveDecision } from './decisions'
 import type { DecisionIo } from './decisions'
 import { createEffortBook } from './effort'
-import type { BindOutcome, Listed } from './effort'
+import type { BindOutcome, EffortBook, Listed } from './effort'
 import { deniedWrite } from './guard'
-import { createBreaker, createGate, createJev } from './jev'
-import type { JevIo } from './jev'
+import { createBreaker, createGate, createJev, failureText } from './jev'
+import type { Breaker, Gate, JevIo } from './jev'
 import { declaresOption, resolveKey } from './key'
 import type { KeyIo } from './key'
 import { JEV_MODEL } from './questions'
-import { describe, route, routable } from './routing'
-import type { Routed } from './routing'
+import { describe, moved, noticeText, route, routable } from './routing'
+import type { Moved, Routed } from './routing'
 
 /** The `$` a hook receives; it cannot be stored, so every hook builds what it needs from its own. */
 type Dollar = Parameters<Hook<'session.start'>>[0]
 
-/** Jev's host access: the request goes through the host's network and the timer is the host's clock. */
+/** The wall clock. The breaker outlives every hook's `$`, so it reads this same function rather than a `$` call. */
+const wallNow = () => Date.now()
+
+/** Time as the pure modules take it: the host's timer and the wall clock. */
+type Clock = Pick<JevIo, 'timer' | 'now'>
+
+function clockOf($: Dollar): Clock {
+  return {
+    timer: (ms, fn) => {
+      const handle = $.clock.after(ms, fn)
+      return () => handle.cancel()
+    },
+    now: wallNow,
+  }
+}
+
+/** Jev's host access: the request goes through the host's network, time is the host's clock. */
 function jevIo($: Dollar): JevIo {
   return {
     // Wrapped, not passed as a value: the engine's validate rejects the latter.
@@ -25,11 +41,7 @@ function jevIo($: Dollar): JevIo {
       const response = await $.http.fetch(url, init)
       return { status: response.status, text: response.text, headers: response.headers }
     },
-    timer: (ms, fn) => {
-      const handle = $.clock.after(ms, fn)
-      return () => handle.cancel()
-    },
-    now: () => Date.now(),
+    ...clockOf($),
   }
 }
 
@@ -48,7 +60,7 @@ const DECISION_WAIT_MS = 1_000
 async function settleDecision($: Dollar, saved: Promise<void>): Promise<void> {
   let cancel: () => void = () => {}
   const slow = new Promise<true>(resolve => {
-    cancel = jevIo($).timer(DECISION_WAIT_MS, () => resolve(true))
+    cancel = clockOf($).timer(DECISION_WAIT_MS, () => resolve(true))
   })
   const timedOut = await Promise.race([saved.then(() => false as const), slow])
   cancel()
@@ -128,115 +140,144 @@ async function listAgents($: Dollar): Promise<Listed[]> {
   return (await $.agent.list()).map(a => ({ id: a.id, type: a.type, description: a.description, parentId: a.parentId }))
 }
 
+/** Holds a subagent's write that its type's rule refuses; the main loop (no `agentId`) always passes. */
+async function guardWrite<E extends { agentId?: string; file_path?: unknown }, R>($: Dollar, e: E, next: (e: E) => Promise<R>) {
+  if (!e.agentId) return next(e)
+
+  const agents = await $.agent.list()
+  const type = agents.find(agent => agent.id === e.agentId)?.type
+  const deny = type === undefined ? undefined : deniedWrite(type, String(e.file_path ?? ''))
+
+  return deny === undefined ? next(e) : { deny }
+}
+
+/** A subagent whose write could not be checked is held; the main loop is never blocked by this guard. */
+function holdUnchecked<E extends { agentId?: string }, R>(_$: Dollar, e: E, next: ((e: E) => Promise<R>) & { called: boolean }) {
+  if (next.called || !e.agentId) return next(e)
+  return { deny: 'crew could not check this write, so it was not made' }
+}
+
+type StartHook = Parameters<Hook<'session.start'>>
+type SpawnHook = Parameters<Hook<'agent.spawn'>>
+
+async function registerSpecialists($: Dollar, e: StartHook[1], next: StartHook[2]) {
+  for (const agent of SPECIALISTS) {
+    await $.agent.register({ ...agent, tools: [...agent.tools] })
+  }
+  return next(e)
+}
+
+/** What the routing hooks share while the module lives. */
+type Routing = {
+  enabled: boolean
+  /** The `jevKey` option: the last fallback for the key. */
+  jevKey: unknown
+  breaker: Breaker
+  gate: Gate
+  book: EffortBook
+  access: Access
+}
+
+/** Asks Jev about one call. A failure is one debug line and the call goes on as it came (undefined). */
+async function askJev($: Dollar, routing: Routing, key: string, spec: Specialist, e: SpawnHook[1]): Promise<Routed | undefined> {
+  try {
+    const ask = createJev(jevIo($), key, { model: JEV_MODEL, breaker: routing.breaker, gate: routing.gate })
+    return await route(ask, await redactContext($, routing.access), spec, e)
+  } catch (error) {
+    $.ui.log(`crew jev: crew:${spec.name} not routed (${failureText(error)})`, { to: 'debug' })
+    return undefined
+  }
+}
+
+/** The debug lines and the one notice of a decision; `took` is whether the effort that was moved runs on the subagent. */
+function announce($: Dollar, spec: Specialist, routed: Routed, change: Moved, took: boolean, outcome: BindOutcome | undefined, toolUseId: string): void {
+  const notApplied = change.effort !== undefined && !took ? change.effort : undefined
+  $.ui.log(`crew jev: ${describe(spec, routed, { model: change.model, effort: change.effort !== undefined && took ? change.effort : undefined })}`, { to: 'debug' })
+  if (notApplied !== undefined) {
+    $.ui.log(`crew jev: crew:${spec.name} effort ${notApplied} not applied (${outcome ?? 'no agent id'}); it runs on ${spec.effort}`, { to: 'debug' })
+  }
+  $.ui.notice(toolUseId, noticeText(spec, routed, notApplied))
+}
+
+// Jev moves model and effort, never the type: the lane and the tool allowlist stay the lead's choice. Anything that
+// goes wrong leaves the call as it came.
+async function routeSpawn(routing: Routing, $: Dollar, e: SpawnHook[1], next: SpawnHook[2]) {
+  if (!routing.enabled) return next(e)
+  const spec = routable(e)
+  if (!spec) return next(e)
+  const key = await keyOf($, routing.access, routing.jevKey)
+  if (!key) return next(e)
+
+  const routed = await askJev($, routing, key, spec, e)
+  const change = moved(spec, routed)
+
+  // An entry for every routable call, with the default effort when nothing changes: two calls alike then stay on
+  // their defaults rather than trade the effort of the one that Jev moved. Added before the spawn continues, as the
+  // subagent can step before this hook sees its id.
+  const token = routing.book.add(e.subagentType, e.description, change.effort ?? spec.effort, e.parentAgentId, change.effort !== undefined)
+  let result: Awaited<ReturnType<SpawnHook[2]>>
+  try {
+    result = await next(change.model ? { ...e, model: change.model } : e)
+  } catch (error) {
+    routing.book.drop(token)
+    throw error
+  }
+  let outcome: BindOutcome | undefined
+  if (result.agentId) outcome = routing.book.bind(token, result.agentId)
+  else routing.book.drop(token)
+  // Nothing started when the host refused the spawn, so there is nothing to announce.
+  if (!routed || !result.agentId) return result
+
+  // What was applied, not what was asked: an effort that lost the race to the first step runs on the default.
+  const took = outcome === 'applied' || outcome === 'matched'
+
+  // The decision log: started before the notice so the write overlaps it, awaited for about a second before
+  // returning (it never rejects), so a failing write cannot change the result and a hung one cannot hold it.
+  const saved = saveDecision(decisionIo($), routing.access.home, result.agentId, decisionRecord({
+    ts: new Date().toISOString(),
+    agent: spec.name,
+    tier: routed.decision.tier,
+    confidence: routed.decision.tierConfidence,
+    depth: routed.decision.depth,
+    defaultModel: spec.model,
+    model: change.model ?? spec.model,
+    defaultEffort: spec.effort,
+    effortPlanned: routed.decision.effort,
+    effortApplied: took ? routed.decision.effort : spec.effort,
+    bind: outcome,
+    jevModel: routed.jevModel,
+    durationMs: routed.ms,
+    description: e.description,
+  }))
+  announce($, spec, routed, change, took, outcome, e.tool_use_id)
+  await settleDecision($, saved)
+  return result
+}
+
 export const register: Register = (on, options) => {
-  const enabled = options.jevRouting === true || options.jevRouting === 'true'
   // Shared while the module lives: the rate limit is the account's, and a sick Jev is not asked again for a while.
-  const breaker = createBreaker(() => Date.now())
-  const gate = createGate()
-  const book = createEffortBook()
-  const access: Access = {}
+  const routing: Routing = {
+    enabled: options.jevRouting === true || options.jevRouting === 'true',
+    jevKey: options.jevKey,
+    breaker: createBreaker(wallNow),
+    gate: createGate(),
+    book: createEffortBook(),
+    access: {},
+  }
 
-  on('session.start', async ($, e, next) => {
-    for (const agent of SPECIALISTS) {
-      await $.agent.register({ ...agent, tools: [...agent.tools] })
-    }
-    return next(e)
-  })
-
-  // Jev moves model and effort, never the type: the lane and the tool allowlist stay the lead's choice. Anything that
-  // goes wrong leaves the call as it came.
-  on('agent.spawn', async ($, e, next) => {
-    if (!enabled) return next(e)
-    const spec = routable(e)
-    if (!spec) return next(e)
-    const key = await keyOf($, access, options.jevKey)
-    if (!key) return next(e)
-
-    let routed: Routed | undefined
-    try {
-      const ask = createJev(jevIo($), key, { model: JEV_MODEL, breaker, gate })
-      routed = await route(ask, await redactContext($, access), spec, e)
-    } catch (error) {
-      const reason = (error as { reason?: unknown } | null)?.reason
-      const status = (error as { status?: unknown } | null)?.status
-      $.ui.log(`crew jev: crew:${spec.name} not routed (${typeof reason === 'string' ? reason : 'error'}${typeof status === 'number' ? ` ${status}` : ''})`, { to: 'debug' })
-    }
-
-    const model = routed && routed.decision.model !== spec.model ? routed.decision.model : undefined
-    const effort: Effort | undefined = routed && routed.decision.effort !== spec.effort ? routed.decision.effort : undefined
-
-    // An entry for every routable call, with the default effort when nothing changes: two calls alike then stay on
-    // their defaults rather than trade the effort of the one that Jev moved. Added before the spawn continues, as the
-    // subagent can step before this hook sees its id.
-    const token = book.add(e.subagentType, e.description, effort ?? spec.effort, e.parentAgentId, effort !== undefined)
-    let result: Awaited<ReturnType<typeof next>>
-    try {
-      result = await next(model ? { ...e, model } : e)
-    } catch (error) {
-      book.drop(token)
-      throw error
-    }
-    let outcome: BindOutcome | undefined
-    if (result.agentId) outcome = book.bind(token, result.agentId)
-    else book.drop(token)
-    // Nothing started when the host refused the spawn, so there is nothing to announce.
-    if (!routed || !result.agentId) return result
-
-    // What was applied, not what was asked: an effort that lost the race to the first step runs on the default.
-    const took = outcome === 'applied' || outcome === 'matched'
-
-    // The decision log: started before the notice so the write overlaps it, awaited for about a second before
-    // returning (it never rejects), so a failing write cannot change the result and a hung one cannot hold it.
-    const saved = saveDecision(decisionIo($), access.home, result.agentId, decisionRecord({
-      ts: new Date().toISOString(),
-      agent: spec.name,
-      tier: routed.decision.tier,
-      confidence: routed.decision.tierConfidence,
-      depth: routed.decision.depth,
-      defaultModel: spec.model,
-      model: model ?? spec.model,
-      defaultEffort: spec.effort,
-      effortPlanned: routed.decision.effort,
-      effortApplied: took ? routed.decision.effort : spec.effort,
-      bind: outcome,
-      jevModel: routed.jevModel,
-      durationMs: routed.ms,
-      description: e.description,
-    }))
-    $.ui.log(`crew jev: ${describe(spec, routed, { model, effort: effort !== undefined && took ? effort : undefined })}`, { to: 'debug' })
-    if (effort !== undefined && !took) {
-      $.ui.log(`crew jev: crew:${spec.name} effort ${effort} not applied (${outcome ?? 'no agent id'}); it runs on ${spec.effort}`, { to: 'debug' })
-      $.ui.notice(e.tool_use_id, `crew:${spec.name} -> ${routed.decision.model} · ${spec.effort} (jev; effort ${effort} not applied)`)
-    } else {
-      $.ui.notice(e.tool_use_id, `crew:${spec.name} -> ${routed.decision.model} · ${routed.decision.effort} (jev)`)
-    }
-    await settleDecision($, saved)
-    return result
-  }).catch(($, e, next) => next(e))
-
-  // Runs on every request of every loop: the main loop and agents that were not routed return at once.
+  on('session.start', registerSpecialists)
+  on('agent.spawn', ($, e, next) => routeSpawn(routing, $, e, next)).catch((_, e, next) => next(e))
+  // Runs on every request of every loop: the main loop and agents that were not routed return at once. A streaming
+  // hook is written inline as an async generator: the engine reads no other form.
   on('turn.step', async function* ($, e, next) {
     let effort: Effort | undefined
-    if (enabled && e.agentId && e.effort !== undefined) {
-      effort = await book.lookup(e.agentId, () => listAgents($)).catch(() => undefined)
+    if (routing.enabled && e.agentId && e.effort !== undefined) {
+      effort = await routing.book.lookup(e.agentId, () => listAgents($)).catch(() => undefined)
     }
     return yield* next(effort && effort !== e.effort ? { ...e, effort } : e)
   })
 
   // The main loop has no agentId and is never held; a subagent is held by its type's rule in guard.ts.
-  for (const tool of ['Write', 'Edit'] as const) {
-    on('tool.call', { tool }, async ($, e, next) => {
-      if (!e.agentId) return next(e)
-
-      const agents = await $.agent.list()
-      const type = agents.find(agent => agent.id === e.agentId)?.type
-      const deny = type === undefined ? undefined : deniedWrite(type, String(e.file_path ?? ''))
-
-      return deny === undefined ? next(e) : { deny }
-    }).catch(($, e, next) => {
-      // A subagent whose write could not be checked is held; the main loop is never blocked by this guard.
-      if (next.called || !e.agentId) return next(e)
-      return { deny: 'crew could not check this write, so it was not made' }
-    })
-  }
+  on('tool.call', { tool: 'Write' }, guardWrite).catch(holdUnchecked)
+  on('tool.call', { tool: 'Edit' }, guardWrite).catch(holdUnchecked)
 }

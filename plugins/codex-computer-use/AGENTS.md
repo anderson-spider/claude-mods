@@ -19,9 +19,10 @@ The helper is the MCP client of Codex's `cua_repl` server and answers its app-ap
 ## Plugin (`hooks/`)
 
 - `bridge.ts` runs the call/approval rounds.
+- `question.ts` holds one approval question at a time; the clock, the wait and the band are injected.
 - `routing.ts` and `presentation.ts` are pure text.
 - `helper.ts` is the socket link.
 
 ## Tests
 
-The helper's tests run with the ChatGPT app's `node`: `/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node --test plugins/codex-computer-use/helper/test/*.test.mjs`.
+`helper/test/contract.mjs` holds the caller and socket examples that both the plugin's tests and the helper's tests check. The helper's tests run with the ChatGPT app's `node`: `/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node --test plugins/codex-computer-use/helper/test/*.test.mjs`.

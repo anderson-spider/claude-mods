@@ -11,7 +11,8 @@
 - `scripts.ts` holds every page script and shared selector.
 - `terminal-browser.ts`, `chrome-browser.ts` and `builtin-browser.ts` adapt each backend behind the injected `Browser`. The last two share `mcp-browser.ts` (MCP calls, the page-script upload and `waitFor` polling).
 - `browsers.ts` chooses the backend.
-- `register.tsx` builds the MCP calls and, in a `tool.check` hook, allows the plugin's own browser calls that stay on chatgpt.com (auto mode's classifier gives no verdict on them).
+- `register.tsx` lists the backends once (`BACKENDS`, in the order above), builds the MCP calls and, in a `tool.check` hook, allows the plugin's own browser calls that stay on chatgpt.com (auto mode's classifier gives no verdict on them).
+- `tool-schemas.ts` holds the tools' input schemas and the `jobs` and command descriptions; `prompts.ts` holds the `ask` and `image` descriptions and the prompt section. The `$.tool.register`/`$.command.register` calls, with each name, stay in `register.tsx`.
 - `ask.ts`, `image.ts` and `conversation.ts` are the flows.
 - `runner.ts` queues requests and runs background jobs.
 - `output.ts` saves answers and images to `$TMPDIR/chatgpt/`.

@@ -1,7 +1,7 @@
 import type { CodexAsking } from '../types'
 import { callerOf } from './helper'
 import { ROUTES } from './model'
-import type { CallResult, Choice, Failure, ResetReply } from './model'
+import type { CallResult, Choice, Failure, Reply, ResetReply } from './model'
 import { approvalWaitText, toAnswer } from './presentation'
 import type { ToolAnswer } from './presentation'
 
