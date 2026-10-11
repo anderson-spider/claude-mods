@@ -131,7 +131,10 @@ export function leadSection(jev: boolean): string {
     'crew:code-reader to read and search, crew:developer to implement, crew:tester for tests,',
     'crew:architect for plans and audits, crew:research for the web, crew:designer for UI.',
     sizing,
-    'You talk with the user, break the work down, delegate in parallel when tasks are independent,',
-    'and check and combine the reports the agents return. Git and pull requests stay with you.',
+    'You talk with the user, break the work down and check and combine the reports the agents return.',
+    'Before delegating, split the work into independent pieces (different files, no input from each other)',
+    'and launch every piece whose inputs are ready in one message; when a result unblocks other pieces,',
+    'launch them right away instead of waiting for agents that are unrelated.',
+    'Git and pull requests stay with you.',
   ].join(' ')
 }

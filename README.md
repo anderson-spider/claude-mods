@@ -176,7 +176,7 @@ printf '%s' "$JEV_API_KEY" | jq -Rs '{jevKey:.}' | claude plugin configure crew@
 
 A `jevKey` that is not a string makes Claude Code refuse to load the whole plugin (all six agents), not only the routing.
 
-The plugin also ships a `brainstorm` skill that says how to plan with these agents: gather context with `code-reader` and `research` in parallel, let `architect` challenge the leading option, then write one plan before `developer` implements it. Once you approve the plan, it recommends `/goal`, `/loop` or direct execution, without starting any of them.
+The plugin also ships a `brainstorm` skill that says how to plan with these agents: gather context with `code-reader` and `research` in parallel, let `architect` challenge the leading option, then write one plan, with each step's dependencies and files and the waves of steps that can run in parallel, before `developer` implements it. Once you approve the plan, it recommends `/goal`, `/loop` or direct execution, without starting any of them.
 
 ## tailscale
 
