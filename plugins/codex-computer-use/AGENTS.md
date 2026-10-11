@@ -19,6 +19,7 @@ The helper is the MCP client of Codex's `cua_repl` server and answers its app-ap
 ## Plugin (`hooks/`)
 
 - `bridge.ts` runs the call/approval rounds.
+- `question.ts` holds one approval question at a time; the clock, the wait and the band are injected.
 - `routing.ts` and `presentation.ts` are pure text.
 - `helper.ts` is the socket link.
 
