@@ -234,6 +234,18 @@ test('write refuses a dot segment in the path, including the delete of the whole
   expect(sent).toEqual([])
 })
 
+test('write refuses an encoded or empty-segment delete of the whole tailnet and sends nothing', async ($, on) => {
+  const { sent } = world(on)
+
+  for (const path of ['/%74ailnet/-', '/tailnet//-', '/tailnet/-/\x01', '/TAILNET/-']) {
+    const result = await $.tool.call({ tool: WRITE, method: 'DELETE', path } as never)
+
+    expect(result.isError, JSON.stringify(path)).toBe(true)
+  }
+
+  expect(sent).toEqual([])
+})
+
 test('get refuses a dot segment in the path and sends nothing', async ($, on) => {
   const { sent } = world(on)
 

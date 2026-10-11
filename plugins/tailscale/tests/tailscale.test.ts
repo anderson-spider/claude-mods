@@ -192,7 +192,7 @@ test('buildUrl and checkedPath refuse a path with a blank, a backslash, a fragme
 test('buildUrl and checkedPath keep a query string and the root path as they are', () => {
   expect(buildUrl('/')).toBe('https://api.tailscale.com/api/v2/')
   expect(buildUrl('/tailnet/-/keys?all=true&x=1')).toBe('https://api.tailscale.com/api/v2/tailnet/-/keys?all=true&x=1')
-  expect(buildUrl('/a%20b')).toBe('https://api.tailscale.com/api/v2/a%20b')
+  expect(buildUrl('/a?q=%20b')).toBe('https://api.tailscale.com/api/v2/a?q=%20b')
   expect(checkedPath('/')).toBe('/')
   expect(checkedPath('/tailnet/-/keys?all=true&x=1')).toBe('/tailnet/-/keys?all=true&x=1')
 })
@@ -311,6 +311,12 @@ test('buildUrl keeps accepting dots inside a segment', () => {
   expect(buildUrl('/tailnet/-/keys?host=a.b&v=1.2')).toBe('https://api.tailscale.com/api/v2/tailnet/-/keys?host=a.b&v=1.2')
   expect(buildUrl('/tailnet/.hidden/x')).toBe('https://api.tailscale.com/api/v2/tailnet/.hidden/x')
   expect(buildUrl('/tailnet/a./x')).toBe('https://api.tailscale.com/api/v2/tailnet/a./x')
+  expect(buildUrl('/tailnet/user@example.com/keys')).toBe('https://api.tailscale.com/api/v2/tailnet/user@example.com/keys')
+  expect(buildUrl('/device/abc123/routes')).toBe('https://api.tailscale.com/api/v2/device/abc123/routes')
+  expect(buildUrl('/tailnet/-/devices/')).toBe('https://api.tailscale.com/api/v2/tailnet/-/devices/')
+  expect(buildUrl('/tailnet/-/devices?fields=all&host=a.b')).toBe(
+    'https://api.tailscale.com/api/v2/tailnet/-/devices?fields=all&host=a.b',
+  )
 })
 
 test('call never reaches fetch with a dot segment, for the delete of the whole tailnet or any other call', async () => {
@@ -336,10 +342,79 @@ test('call sends a path whose dots are inside a segment', async () => {
   expect(seen.last?.url).toBe('https://api.tailscale.com/api/v2/device/100.64.0.1')
 })
 
+// Paths that reach /tailnet/{tailnet} (or another path) on the server once the URL parser or the server normalizes them.
+const SMUGGLED_PATHS = [
+  '/tailnet/-/\x00',
+  '/tailnet/-/\x01',
+  '/tailnet/-/\x7f',
+  '/tailnet/-/.\x00',
+  '/tailnet/-/.\x01',
+  '/tailnet/\x01-',
+  '/tailnet/-\x7f/x',
+  '/tailnet/-/devices?x=\x01',
+  '/%74ailnet/-',
+  '/tailne%74/-',
+  '/tailnet/%2d',
+  '/tailnet//-',
+  '/tailnet/-//',
+  '/tailnet///-',
+  '//tailnet/-',
+  '/tailnet//',
+  '/TAILNET//-',
+]
+
+test('buildUrl and checkedPath refuse control characters, "%" in the path and empty segments', () => {
+  for (const path of SMUGGLED_PATHS) {
+    expect(buildUrl(path), JSON.stringify(path)).toBeUndefined()
+    expect(checkedPath(path), JSON.stringify(path)).toBeUndefined()
+  }
+})
+
+test('buildUrl allows "%" in the query and a single trailing slash', () => {
+  expect(buildUrl('/tailnet/-/devices?x=%2f')).toBe('https://api.tailscale.com/api/v2/tailnet/-/devices?x=%2f')
+  expect(buildUrl('/tailnet/-/')).toBe('https://api.tailscale.com/api/v2/tailnet/-/')
+})
+
+test('forbidden matches the tailnet delete in any case', () => {
+  expect(forbidden('DELETE', '/TAILNET/-')).toBeDefined()
+  expect(forbidden('DELETE', '/Tailnet/T1234CNTRL/')).toBeDefined()
+})
+
+test('call never reaches fetch with a smuggled path, for the delete of the whole tailnet or any other call', async () => {
+  const { fetch, seen } = fakeFetch('{}')
+
+  for (const path of [...SMUGGLED_PATHS, '/TAILNET/-/\x01']) {
+    for (const method of ['DELETE', 'GET', 'POST']) {
+      const r = await call(fetch, 'k', { method, path })
+      expect(r.isError, `${method} ${JSON.stringify(path)}`).toBe(true)
+    }
+  }
+
+  expect(seen.last).toBeUndefined()
+})
+
+test('call refuses DELETE /TAILNET/- without reaching fetch', async () => {
+  const { fetch, seen } = fakeFetch('{}')
+  const r = await call(fetch, 'k', { method: 'DELETE', path: '/TAILNET/-' })
+  expect(r.isError).toBe(true)
+  expect(r.text).toMatch(/^Deleting the entire tailnet/)
+  expect(seen.last).toBeUndefined()
+})
+
 test('every URL buildUrl accepts keeps the requested path after the URL parser normalizes it', () => {
-  for (const path of [...DOT_SEGMENT_PATHS, '/tailnet/-/devices', '/device/100.64.0.1', '/tailnet/example.com/devices']) {
+  const accepted = [
+    '/tailnet/-/devices',
+    '/device/100.64.0.1',
+    '/device/abc123/routes',
+    '/tailnet/example.com/devices',
+    '/tailnet/user@example.com/keys',
+    '/tailnet/-/keys?fields=all&host=a.b',
+    '/',
+  ]
+  for (const path of [...DOT_SEGMENT_PATHS, ...SMUGGLED_PATHS, ...accepted]) {
     const url = buildUrl(path)
     if (url === undefined) continue
-    expect(new URL(url).pathname, path).toBe('/api/v2' + path.split('?')[0])
+    expect(new URL(url).pathname, JSON.stringify(path)).toBe('/api/v2' + path.split('?')[0])
   }
+  for (const path of accepted) expect(buildUrl(path), path).toBeDefined()
 })
