@@ -35,7 +35,6 @@
     "building-with-typesafe-jev@anthropic-plugin-directory": false,
     "claude-code-setup@anthropic-plugin-directory": false,
     "typescript-lsp@claude-plugins-official": false,
-    "skill-creator@anthropic-plugin-directory": false,
-    "flightdeck@claude-flightdeck": true
+    "skill-creator@anthropic-plugin-directory": false
   }
 }
