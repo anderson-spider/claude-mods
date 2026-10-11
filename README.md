@@ -131,9 +131,18 @@ In a request that offers the Agent tool (the main session; the crew agents do no
 
 ### Flightdeck dashboard
 
-The plugin includes [Flightdeck](https://github.com/scasella/claude-flightdeck) 0.3.2 (MIT, vendored in `plugins/crew/hooks/flightdeck/`, with its license and a list of local changes): a pane with the main model's vitals, an architect panel, every permission check, subagent cards and swimlanes, a turn receipt and a session log, a status line, and `/flightdeck [open|close|reset|layout auto|compact|wide|mini]`. Its twelve options (`architectPattern`, `architectLabel`, `gateLabel`, `panels`, `motion`, `moments`, `matchDescriptions`, `maxCards`, `layout`, `palette`, `openOnStart`, `statusLine`) keep upstream's names and defaults, so the pane opens when a session starts unless you set `openOnStart` to `false`. `crew:architect` matches the default `architectPattern`, so its runs show in the ARCHITECT panel with its one-line verdict instead of as a card. Changing an option reloads the plugin, which also clears the Jev routing state (see below).
+The plugin includes [Flightdeck](https://github.com/scasella/claude-flightdeck) 0.3.2 (MIT, vendored in `plugins/crew/hooks/flightdeck/`, with its license and a list of local changes): a pane with the main model's vitals, an architect panel, every permission check, subagent cards and swimlanes, a turn receipt and a session log, a status line, and `/crew:panel` (it replaces upstream's `/flightdeck`). Twelve of its thirteen options (`architectPattern`, `architectLabel`, `gateLabel`, `panels`, `motion`, `moments`, `matchDescriptions`, `maxCards`, `layout`, `palette`, `openOnStart`, `statusLine`) keep upstream's names and defaults; the thirteenth, `placement`, is new. `crew:architect` matches the default `architectPattern`, so its runs show in the ARCHITECT panel with its one-line verdict instead of as a card. Changing an option reloads the plugin, which also clears the Jev routing state (see below).
 
-If you have the Flightdeck plugin installed, uninstall it before updating crew (`claude plugin uninstall flightdeck@claude-flightdeck`): both would register `/flightdeck`, a pane and a status line. Options saved for `flightdeck@claude-flightdeck` do not carry over; set them again on `crew@spider-claude-mods`.
+`/crew:panel [on|off|side|prompt|reset|layout auto|compact|wide|mini]`:
+
+- Bare `/crew:panel` toggles the panel; `on` and `off` show and hide it.
+- `side` shows it in the host's pane: beside the transcript from 110 columns in fullscreen, inline above the prompt otherwise (and on a narrow terminal an unasked pane waits undrawn until you ask for it).
+- `prompt` shows a summary band above the prompt instead (model, context, permission checks and live agents) and closes the pane. The band always yields to another plugin's band, such as a commit held by branch-guard, which shows in its place. The surface raises the band on the terminal and the desktop app only; on other surfaces `prompt` shows nothing, so use `side` there.
+- `layout auto|compact|wide|mini` sets the side pane's layout for the session; the band always shows the summary. `reset` clears the dashboard's state.
+
+The `placement` option (`side` or `prompt`, default `side`) and `openOnStart` say what a session starts with before you have picked. Your last pick (shown or hidden, side or prompt) is saved and wins in later sessions, including a hide by the pane's close mark. A pick made in one session does not change another session that is already running.
+
+If you have the Flightdeck plugin installed, uninstall it before updating crew (`claude plugin uninstall flightdeck@claude-flightdeck`): both would draw a pane and a status line. Options saved for `flightdeck@claude-flightdeck` do not carry over; set them again on `crew@spider-claude-mods`.
 
 ### Jev routing of model and effort
 

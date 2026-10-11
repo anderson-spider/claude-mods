@@ -12,6 +12,8 @@ import type {
   Loop,
   Main,
   Moment,
+  PanelChoice,
+  Placement,
   Receipt,
   Roster,
   Tally,
@@ -106,6 +108,7 @@ export type Config = {
   layout: Layout
   palette: Palette
   openOnStart: boolean
+  placement: Placement
   statusLine: boolean
 }
 
@@ -139,9 +142,43 @@ export const parseConfig = (o: Readonly<Record<string, unknown>>): Config => {
     layout: layout === 'compact' || layout === 'wide' || layout === 'mini' ? layout : 'auto',
     palette: str('palette', 'theme') === 'pastel' ? 'pastel' : 'theme',
     openOnStart: bool('openOnStart', true),
+    placement: str('placement', 'side') === 'prompt' ? 'prompt' : 'side',
     statusLine: bool('statusLine', true),
   }
 }
+
+// ---------------------------------------------------------------- panel command
+
+export const PANEL_USAGE = 'Usage: /crew:panel [on|off|side|prompt|reset|layout auto|compact|wide|mini]'
+
+export type PanelCommand =
+  | { kind: 'toggle' | 'on' | 'off' | 'side' | 'prompt' | 'reset' | 'usage' }
+  | { kind: 'layout'; layout: Layout }
+
+/** `/crew:panel`'s arguments: case and spacing are free, anything outside the grammar is `usage`. */
+export const parsePanelArgs = (args: string): PanelCommand => {
+  const [verb, arg, ...rest] = args.trim().toLowerCase().split(/\s+/).filter(Boolean)
+  if (verb === undefined) return { kind: 'toggle' }
+  if (verb === 'layout') {
+    const isLayout = arg === 'auto' || arg === 'compact' || arg === 'wide' || arg === 'mini'
+    return isLayout && rest.length === 0 ? { kind: 'layout', layout: arg } : { kind: 'usage' }
+  }
+  const isVerb = verb === 'on' || verb === 'off' || verb === 'side' || verb === 'prompt' || verb === 'reset'
+  return isVerb && arg === undefined ? { kind: verb } : { kind: 'usage' }
+}
+
+/** A panel choice read leniently: `null` unless both fields are valid. */
+export const choiceOf = (raw: unknown): PanelChoice | null =>
+  isObject(raw) && typeof raw.isVisible === 'boolean' && (raw.placement === 'side' || raw.placement === 'prompt')
+    ? { isVisible: raw.isVisible, placement: raw.placement }
+    : null
+
+/** What `$.store` holds under `panel` (`{ v: 1, isVisible, placement }`), or `null` for anything else. */
+export const storedChoice = (raw: unknown): PanelChoice | null => (isObject(raw) && raw.v === 1 ? choiceOf(raw) : null)
+
+/** The pick a pane's close leaves: hidden when the person closed it, nothing for the plugin's own close or an unload. */
+export const choiceAfterClose = (origin: { kind: string }): PanelChoice | null =>
+  origin.kind === 'person' ? { isVisible: false, placement: 'side' } : null
 
 // ---------------------------------------------------------------- palette
 

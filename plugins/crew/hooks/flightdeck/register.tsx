@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { AgentCard, Architect, Bucket, Check, Gate, Layout, LogLine, Loop, Main, Roster, Turn, Usage, View } from '../../types'
+import type { AgentCard, Architect, Bucket, Check, Gate, LogLine, Loop, Main, PanelChoice, Receipt, Roster, Turn, Usage, View } from '../../types'
 import {
   DEFAULT_ARCHITECT,
   DEFAULT_GATE,
@@ -42,8 +42,12 @@ import {
   normalizeLog,
   noteTool,
   PALETTES,
+  PANEL_USAGE,
   SVG_COLORS,
+  choiceAfterClose,
+  choiceOf,
   parseConfig,
+  parsePanelArgs,
   prettyModel,
   promptLine,
   handbackOf,
@@ -54,13 +58,16 @@ import {
   shorten,
   startConsult,
   stepLoop,
+  storedChoice,
 } from './core'
-import type { Config, Panel } from './core'
+import type { Colors, Config, Panel } from './core'
 
 const PANE = 'flightdeck'
 const TITLE = 'Flightdeck'
 const PANE_COLUMNS = 66
-
+/** The `$.store` key holding the person's pick: `{ v: 1, isVisible, placement }`. */
+const PANEL_KEY = 'panel'
+const PANEL_FAILED = 'The panel could not run this command; see the debug log.'
 
 // ---------------------------------------------------------------- state
 
@@ -76,6 +83,8 @@ const turn = atom({ plugin: 'crew', key: 'turn' } as const, DEFAULT_TURN)
 const receipt = atom({ plugin: 'crew', key: 'receipt' } as const, null)
 const view = atom({ plugin: 'crew', key: 'view' } as const, DEFAULT_VIEW)
 const roster = atom({ plugin: 'crew', key: 'roster' } as const, DEFAULT_ROSTER)
+// The session's effective choice; null until session.start has seeded it (the band passes until then).
+const panel = atom({ plugin: 'crew', key: 'panel' } as const, null)
 
 type ServerBlock = { type: string; id?: string; name?: string; tool_use_id?: string }
 
@@ -208,6 +217,173 @@ async function noteMode($: EngineInterface, mode: string | undefined) {
   if (mode) await update($, main, m => (normalize(DEFAULT_MAIN, m).mode === mode ? normalize(DEFAULT_MAIN, m) : { ...normalize(DEFAULT_MAIN, m), mode }))
 }
 
+// ---------------------------------------------------------------- shared drawing
+
+type Els = ReturnType<EngineInterface['ui']['resolve']>
+
+/** Everything a drawing reads, fetched together. */
+type Deck = {
+  m: Main
+  u: Usage
+  a: Architect
+  g: Gate
+  cards: AgentCard[]
+  lp: Loop[]
+  lines: LogLine[]
+  t: Turn
+  r: Receipt | null
+  v: View
+  now: number
+}
+
+async function loadDeck($: EngineInterface): Promise<Deck> {
+  const [m, u, a, g, cards, lp, lines, t, r, v, now] = await Promise.all([
+    getMain($),
+    getUsage($),
+    getArchitect($),
+    getGate($),
+    getCards($),
+    getLoops($),
+    getLog($),
+    getTurn($),
+    read($, receipt),
+    getView($),
+    $.clock.now(),
+  ])
+  return { m, u, a, g, cards, lp, lines, t, r, v, now }
+}
+
+const verdictColor = (C: Colors, c: Check) =>
+  c.verdict === 'rule' ? C.gate : c.verdict === 'cleared' ? C.cleared : c.verdict === 'ask' ? C.amber : C.warn
+const statusColor = (C: Colors, c: AgentCard) => (c.status === 'failed' ? C.warn : c.status === 'done' ? C.gate : C.agent)
+const glyph = (c: AgentCard) => (c.status === 'running' ? '◐' : c.status === 'done' ? '✓' : c.status === 'failed' ? '✗' : '■')
+
+/** A start time of 0 is unknown (state saved before it was recorded): no clock, not decades. */
+function makeClock(els: Els, now: number) {
+  const hasClient = 'Client' in els
+  return (key: string, since: number, endAt: number | null, color: string) =>
+    since <= 0 ? (
+      <els.Text color={color}>—</els.Text>
+    ) : hasClient ? (
+      <els.Client key={key} module="./elapsed.tsx" props={{ since, now, endAt, color }} />
+    ) : (
+      <els.Text color={color}>{fmtTimer((endAt ?? now) - since)}</els.Text>
+    )
+}
+
+/**
+ * The summary: a few rows of the model, context, gate and live agents. The pane draws it inline above the prompt (or
+ * with layout mini) and the prompt band always does; `more` names the command that shows every agent.
+ */
+function drawSummary(els: Els, deck: Deck, o: { W: number; cfg: Config; C: Colors; more: string; maxLive: number }) {
+  const { Box, Text } = els
+  const { m, u, a, g, cards, lp, r, now } = deck
+  const { W, cfg, C } = o
+  const clock = makeClock(els, now)
+  const s = gateSummary(g)
+  const decider = m.mode === 'auto' ? 'classifier' : 'you'
+  const modelName = prettyModel(m.model)
+  const advising = isAdvising(a)
+  const showArchitect = a.consults.length > 0 || a.ids.length > 0
+  const live = [...cards.filter(c => c.status === 'running'), ...cards.filter(c => c.status !== 'running').reverse()].slice(0, o.maxLive)
+  const counts = ` ${s.rule} allowed · ${s.cleared} ${decider}${s.ask > 0 ? ` · ${s.ask} pending` : ''} · ${s.deny} denied`
+  const strip = g.recent.slice(-Math.max(4, W - cfg.gateLabel.length - 1 - counts.length))
+  const mg = u.pct !== null ? gauge(u.pct, 6) : null
+  return (
+    <Box flexDirection="column" width={W}>
+      <Text wrap="truncate">
+        <Text color={C.main} bold>
+          {modelName}
+        </Text>
+        <Text color={m.isRunning ? C.main : C.dim}>{m.isRunning ? ' ● working' : ' ○ idle'}</Text>
+        {mg ? <Text dimColor> · ctx </Text> : null}
+        {mg ? <Text color={(u.pct ?? 0) >= 80 ? C.warn : C.main}>{mg.on}</Text> : null}
+        {mg ? <Text color={C.faint}>{mg.off}</Text> : null}
+        {mg ? <Text>{` ${Math.round(u.pct ?? 0)}%`}</Text> : null}
+        {u.compactions > 0 ? <Text color={C.amber}>{` ⟲${u.compactions}`}</Text> : null}
+        {u.costUsd !== null ? <Text dimColor>{` · ${fmtUsd(u.costUsd)}`}</Text> : null}
+        {showArchitect ? <Text color={C.arch}>{` · ${cfg.architectLabel.toLowerCase()} ${advising ? 'advising' : a.consults.length}`}</Text> : null}
+      </Text>
+      {strip.length > 0 ? (
+        <Box>
+          <Text dimColor>{`${cfg.gateLabel.toLowerCase()} `}</Text>
+          {strip.map(c => (
+            <Text color={verdictColor(C, c)} dimColor={c.inSubagent}>
+              {c.verdict === 'deny' ? '✗' : '■'}
+            </Text>
+          ))}
+          <Text color={s.deny > 0 ? C.warn : s.ask > 0 ? C.amber : C.dim} wrap="truncate">
+            {counts}
+          </Text>
+        </Box>
+      ) : null}
+      {live.map(c => (
+        <Box>
+          <Text color={statusColor(C, c)}>{`${glyph(c)} `}</Text>
+          <Box width={Math.max(10, W - 30)}>
+            <Text wrap="truncate">{cardTitle(c)}</Text>
+          </Box>
+          <Text dimColor>{c.steps > 0 ? ` ctx ${kTokens(c.ctx)} ` : ' '}</Text>
+          {clock(`mini-clock-${c.id}`, c.spawnedAt, c.endedAt, C.dim)}
+        </Box>
+      ))}
+      {cards.length > live.length ? (
+        <Text color={C.faint} wrap="truncate">{`+${cards.length - live.length} more agents · ${o.more}`}</Text>
+      ) : null}
+      {lp.length > 0 ? <Text dimColor>{`other loops ${lp.length} · ${lp.filter(l => isLoopActive(l, now)).length} active`}</Text> : null}
+      {!m.isRunning && r ? (
+        <Text dimColor wrap="truncate">
+          {`last turn ${fmtDuration(r.durationMs)} · ${plural(r.agents, 'agent')} · ${plural(r.edits, 'edit')} · ${plural(r.errors, 'error')}${r.costDelta !== null ? ` · +${fmtUsd(r.costDelta)}` : ''}`}
+        </Text>
+      ) : null}
+    </Box>
+  )
+}
+
+// ---------------------------------------------------------------- panel choice
+
+/** The person's pick when there is one, else what the options say. */
+async function pickedChoice($: EngineInterface, cfg: Config): Promise<PanelChoice> {
+  const stored = storedChoice(await $.store.get(PANEL_KEY).catch(() => undefined))
+  return stored ?? { isVisible: cfg.openOnStart, placement: cfg.placement }
+}
+
+/** The session's choice; before session.start has seeded it, what it would seed. */
+async function currentChoice($: EngineInterface, cfg: Config): Promise<PanelChoice> {
+  return choiceOf(await read($, panel)) ?? (await pickedChoice($, cfg))
+}
+
+/** The atom first (it redraws the band), then the store; a store that fails leaves the session's choice standing. */
+async function setChoice($: EngineInterface, choice: PanelChoice) {
+  await update($, panel, () => choice)
+  try {
+    await $.store.set(PANEL_KEY, { v: 1, ...choice })
+  } catch {
+    $.ui.log('crew panel: the choice could not be saved; it holds for this session', { to: 'debug' })
+  }
+}
+
+/** In side mode the pane the surface draws; an unasked pane waiting undrawn counts as hidden. */
+async function isShown($: EngineInterface, choice: PanelChoice) {
+  if (choice.placement === 'prompt') return choice.isVisible
+  try {
+    return (await $.ui.panes()).some(p => p.id === PANE && p.isPlaced)
+  } catch {
+    return choice.isVisible
+  }
+}
+
+function openSide($: EngineInterface) {
+  return openPane($).catch(() => ({ isPlaced: false as const, reason: 'the pane could not be opened' }))
+}
+
+function sideReply(opened: { isPlaced: boolean; reason?: string }, presentation: { isFullscreen: boolean; columns: number } | undefined) {
+  if (!opened.isPlaced) return `Panel set to the side, not shown yet: ${opened.reason ?? 'no reason given'}`
+  return presentation?.isFullscreen === true && presentation.columns >= 110
+    ? 'Panel docked beside the transcript. Focus it with ctrl+x tab; 1-6 expand cards, f/s/o open the gate rows.'
+    : 'Panel shown above the prompt (it docks in fullscreen from 110 columns). Focus it with ctrl+x tab.'
+}
+
 // ---------------------------------------------------------------- hooks
 
 // Local change: the crew's `register` calls this (one hooks module per plugin), after its own session.start hook.
@@ -222,11 +398,6 @@ export const registerFlightdeck: Register = (on, options) => {
 
   on('session.start', async ($, e, next) => {
     try {
-      await $.command.register({
-        name: 'flightdeck',
-        description: 'Flightdeck, the live agent dashboard: open, close, reset, or set the layout',
-        argumentHint: '[open|close|reset|layout auto|compact|wide|mini]',
-      })
       await migrate($)
       // A host without usage (headless, an SDK host, a session not yet bound) just starts without it.
       const u = await $.session.usage().catch(() => null)
@@ -240,8 +411,13 @@ export const registerFlightdeck: Register = (on, options) => {
           limits: u.rateLimits.map(r => ({ kind: r.kind, pct: r.percentUsed })),
         }))
       }
-      if (cfg.openOnStart) void openPane($).catch(() => undefined)
       await refreshStatus($, cfg)
+    } catch {}
+    // Its own try: a store that fails skips nothing above, and the options then decide.
+    try {
+      const choice = await pickedChoice($, cfg)
+      await update($, panel, () => choice)
+      if (choice.isVisible && choice.placement === 'side') void openPane($).catch(() => undefined)
     } catch {}
     return next(e)
   })
@@ -256,28 +432,45 @@ export const registerFlightdeck: Register = (on, options) => {
     return next(e)
   })
 
-  on('command.run', { command: 'flightdeck' }, async ($, e) => {
-    const [verb = 'open', arg = ''] = e.args.trim().split(/\s+/)
-    if (verb === 'close') {
-      await $.ui.close({ id: PANE })
-      return { text: 'Flightdeck closed.' }
-    }
-    if (verb === 'reset') {
+  // ---------------------------------------------------------------- panel
+
+  const PROMPT_REPLY = 'Panel shown in the band above the prompt. Focus it with ctrl+x tab; collapse it with ctrl+x ctrl+a.'
+  const HIDDEN_REPLY = 'Panel hidden. /crew:panel shows it again.'
+
+  // Answers the command itself, so a failure must not reach commands/panel.md (the model would run it): the catch answers.
+  on('command.run', { command: 'crew:panel' }, async ($, e) => {
+    const command = parsePanelArgs(e.args)
+    if (command.kind === 'usage') return { text: PANEL_USAGE }
+    if (command.kind === 'reset') {
       await resetAll($)
       await refreshStatus($, cfg)
-      return { text: 'Flightdeck reset.' }
+      return { text: 'Panel reset.' }
     }
-    if (verb === 'layout') {
-      const layout: Layout | null = arg === 'compact' || arg === 'wide' || arg === 'auto' || arg === 'mini' ? arg : null
-      if (!layout) return { text: 'Usage: /flightdeck layout auto|compact|wide|mini' }
+    const current = await currentChoice($, cfg)
+    if (command.kind === 'layout') {
+      const { layout } = command
       await update($, view, v => ({ ...normalize(DEFAULT_VIEW, v), layout }))
-      const opened = await openPane($)
-      return { text: opened.isPlaced ? `Flightdeck layout: ${layout}.` : `Layout set to ${layout}; the pane is not shown yet: ${opened.reason}` }
+      if (current.placement === 'prompt') {
+        return { text: `Panel layout: ${layout}; it applies to the side pane, the band always shows the summary.` }
+      }
+      await setChoice($, { isVisible: true, placement: 'side' })
+      const opened = await openSide($)
+      return { text: opened.isPlaced ? `Panel layout: ${layout}.` : sideReply(opened, e.presentation) }
     }
-    const opened = await openPane($)
-    if (!opened.isPlaced) return { text: `Flightdeck is not shown yet: ${opened.reason}` }
-    return { text: 'Flightdeck opened. Focus it with ctrl+x tab; 1-6 expand cards, f/s/o open the gate rows.' }
-  })
+    const kind = command.kind === 'toggle' ? ((await isShown($, current)) ? 'off' : 'on') : command.kind
+    if (kind === 'off') {
+      await setChoice($, { isVisible: false, placement: current.placement })
+      await $.ui.close({ id: PANE })
+      return { text: HIDDEN_REPLY }
+    }
+    const placement = kind === 'on' ? current.placement : kind === 'prompt' ? 'prompt' : 'side'
+    await setChoice($, { isVisible: true, placement })
+    if (placement === 'prompt') {
+      await $.ui.close({ id: PANE })
+      return { text: PROMPT_REPLY }
+    }
+    return { text: sideReply(await openSide($), e.presentation) }
+  }).catch(() => ({ text: PANEL_FAILED }))
 
   on('classic.UserPromptSubmit', async ($, e, next) => {
     try {
@@ -553,25 +746,47 @@ export const registerFlightdeck: Register = (on, options) => {
     }
   })
 
+  // ---------------------------------------------------------------- panel band and close
+
+  // The band is one instance: a tree returned without `next` keeps every plugin beneath from drawing, and a held commit
+  // (branch-guard) lives there. So the summary only draws over the engine's own empty band, whatever the plugin order.
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    let choice: PanelChoice | null = null
+    // Read before any early return: a later `set` redraws the band only for a hook that read the atom.
+    try {
+      choice = choiceOf(await read($, panel))
+    } catch {}
+    if (e.props.hasSurvey || !choice?.isVisible || choice.placement !== 'prompt') return next(e)
+    const below = await next(e)
+    if (below.type !== 'engine') return below
+    try {
+      const els = $.ui.resolve(e)
+      const deck = await loadDeck($)
+      const maxLive = Math.min(3, Math.max(1, e.props.maxRows - 5))
+      return drawSummary(els, deck, { W: Math.max(40, e.props.bodyColumns), cfg, C, more: '/crew:panel side for all', maxLive })
+    } catch {
+      return below
+    }
+  })
+
+  // The close mark or key hides the panel for good; our own close (off, prompt) and an unload say nothing about the person.
+  on('ui.close', { id: PANE }, async ($, e, next) => {
+    const closed = await next(e)
+    try {
+      const after = choiceAfterClose(e.origin)
+      if (after) await setChoice($, after)
+    } catch {}
+    return closed
+  })
+
   // ---------------------------------------------------------------- drawing
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const els = $.ui.resolve(e)
     const { Box, Text, Button } = els
     const hasClient = 'Client' in els
-    const [m, u, a, g, cards, lp, lines, t, r, v, now] = await Promise.all([
-      getMain($),
-      getUsage($),
-      getArchitect($),
-      getGate($),
-      getCards($),
-      getLoops($),
-      getLog($),
-      getTurn($),
-      read($, receipt),
-      getView($),
-      $.clock.now(),
-    ])
+    const deck = await loadDeck($)
+    const { m, u, a, g, cards, lp, lines, t, r, v, now } = deck
     const W = Math.max(40, e.props.bodyColumns)
     const layout = v.layout ?? cfg.layout
     const isWide = layout === 'wide' || (layout === 'auto' && W >= 110)
@@ -609,15 +824,7 @@ export const registerFlightdeck: Register = (on, options) => {
         <Text color={C.faint}>{'─'.repeat(Math.max(1, width))}</Text>
       )
 
-    // A start time of 0 is unknown (state saved before it was recorded): no clock, not decades.
-    const clock = (key: string, since: number, endAt: number | null, color: string) =>
-      since <= 0 ? (
-        <Text color={color}>—</Text>
-      ) : hasClient ? (
-        <els.Client key={key} module="./elapsed.tsx" props={{ since, now, endAt, color }} />
-      ) : (
-        <Text color={color}>{fmtTimer((endAt ?? now) - since)}</Text>
-      )
+    const clock = makeClock(els, now)
 
     // ---- main
     const effortN = { low: 1, medium: 2, high: 3, xhigh: 4, max: 4 }[m.effort] ?? 0
@@ -719,8 +926,7 @@ export const registerFlightdeck: Register = (on, options) => {
 
     // ---- gate
     const s = gateSummary(g)
-    const verdictColor = (c: Check) =>
-      c.verdict === 'rule' ? C.gate : c.verdict === 'cleared' ? C.cleared : c.verdict === 'ask' ? C.amber : C.warn
+    const verdictOf = (c: Check) => verdictColor(C, c)
     const gatePanel = (w: number) => {
       const strip = g.recent.slice(-Math.max(8, w - 4))
       const open = v.gateOpen
@@ -735,7 +941,7 @@ export const registerFlightdeck: Register = (on, options) => {
           <Box>
             {strip.length === 0 ? <Text color={C.faint}>no checks yet</Text> : null}
             {strip.map(c => (
-              <Text color={verdictColor(c)} dimColor={c.inSubagent}>
+              <Text color={verdictOf(c)} dimColor={c.inSubagent}>
                 {c.verdict === 'deny' ? '✗' : '■'}
               </Text>
             ))}
@@ -771,7 +977,7 @@ export const registerFlightdeck: Register = (on, options) => {
                 .slice(-5)
                 .map(c => (
                   <Text wrap="truncate">
-                    <Text color={verdictColor(c)}>{c.verdict === 'deny' ? '✗ ' : '■ '}</Text>
+                    <Text color={verdictOf(c)}>{c.verdict === 'deny' ? '✗ ' : '■ '}</Text>
                     <Text color={C.dim}>{`${(c.verdict === 'rule' ? 'allowed' : c.verdict === 'cleared' ? decider : c.verdict === 'ask' ? 'pending' : 'denied').padEnd(10)} `}</Text>
                     <Text dimColor={c.inSubagent}>{shorten(c.detail, Math.max(10, w - 18))}</Text>
                   </Text>
@@ -782,8 +988,7 @@ export const registerFlightdeck: Register = (on, options) => {
     }
 
     // ---- agents: cards up to the limit, swimlanes beyond it
-    const statusColor = (c: AgentCard) => (c.status === 'failed' ? C.warn : c.status === 'done' ? C.gate : C.agent)
-    const glyph = (c: AgentCard) => (c.status === 'running' ? '◐' : c.status === 'done' ? '✓' : c.status === 'failed' ? '✗' : '■')
+    const statusOf = (c: AgentCard) => statusColor(C, c)
     const expandOnPress = (id: string) => () =>
       update($, view, x => ({ ...normalize(DEFAULT_VIEW, x), expanded: normalize(DEFAULT_VIEW, x).expanded === id ? null : id }))
 
@@ -818,12 +1023,12 @@ export const registerFlightdeck: Register = (on, options) => {
               const isViewed = viewed === c.id
               return (
                 <Box>
-                  <Text color={statusColor(c)} bold={isViewed}>{`${isViewed ? '▶' : glyph(c)} `}</Text>
+                  <Text color={statusOf(c)} bold={isViewed}>{`${isViewed ? '▶' : glyph(c)} `}</Text>
                   <Box width={17}>
                     <Button key={`card-${c.id}`} plain hotkey={String(i + 1)} label={shorten(cardTitle(c), 14)} onPress={expandOnPress(c.id)} />
                   </Box>
                   <Text color={C.faint}>{' ' + '·'.repeat(gm?.before ?? 0)}</Text>
-                  <Text color={statusColor(c)}>{'━'.repeat(gm?.bar ?? 1)}</Text>
+                  <Text color={statusOf(c)}>{'━'.repeat(gm?.bar ?? 1)}</Text>
                   <Text color={C.faint}>{'·'.repeat(gm?.after ?? 0) + ' '}</Text>
                   {clock(`lane-clock-${c.id}`, c.spawnedAt, c.endedAt, C.dim)}
                 </Box>
@@ -863,7 +1068,7 @@ export const registerFlightdeck: Register = (on, options) => {
                     {c.steps > 0 ? `ctx ${kTokens(c.ctx)} · out ${kTokens(c.out)} · ${c.steps} st` : 'starting…'}
                   </Text>
                   <Box>
-                    <Text color={c.lastStop === 'max_tokens' ? C.warn : statusColor(c)}>
+                    <Text color={c.lastStop === 'max_tokens' ? C.warn : statusOf(c)}>
                       {cardW >= 26 ? `${glyph(c)} ${c.lastStop === 'max_tokens' ? 'max_tokens' : c.status} ` : `${glyph(c)} `}
                     </Text>
                     <Box flexShrink={0}>{clock(`card-clock-${c.id}`, c.spawnedAt, c.endedAt, C.dim)}</Box>
@@ -1037,61 +1242,7 @@ export const registerFlightdeck: Register = (on, options) => {
 
     // Inline above the prompt (the terminal's main screen), the pane is a summary of at most 8 rows.
     const isMini = layout === 'mini' || (layout === 'auto' && e.props.placement === 'inline')
-    if (isMini) {
-      const live = [...cards.filter(c => c.status === 'running'), ...cards.filter(c => c.status !== 'running').reverse()].slice(0, 3)
-      const counts = ` ${s.rule} allowed · ${s.cleared} ${decider}${s.ask > 0 ? ` · ${s.ask} pending` : ''} · ${s.deny} denied`
-      const strip = g.recent.slice(-Math.max(4, W - cfg.gateLabel.length - 1 - counts.length))
-      const mg = u.pct !== null ? gauge(u.pct, 6) : null
-      return (
-        <Box flexDirection="column" width={W}>
-          <Text wrap="truncate">
-            <Text color={C.main} bold>
-              {modelName}
-            </Text>
-            <Text color={m.isRunning ? C.main : C.dim}>{m.isRunning ? ' ● working' : ' ○ idle'}</Text>
-            {mg ? <Text dimColor> · ctx </Text> : null}
-            {mg ? <Text color={(u.pct ?? 0) >= 80 ? C.warn : C.main}>{mg.on}</Text> : null}
-            {mg ? <Text color={C.faint}>{mg.off}</Text> : null}
-            {mg ? <Text>{` ${Math.round(u.pct ?? 0)}%`}</Text> : null}
-            {u.compactions > 0 ? <Text color={C.amber}>{` ⟲${u.compactions}`}</Text> : null}
-            {u.costUsd !== null ? <Text dimColor>{` · ${fmtUsd(u.costUsd)}`}</Text> : null}
-            {showArchitect ? <Text color={C.arch}>{` · ${cfg.architectLabel.toLowerCase()} ${advising ? 'advising' : a.consults.length}`}</Text> : null}
-          </Text>
-          {strip.length > 0 ? (
-            <Box>
-              <Text dimColor>{`${cfg.gateLabel.toLowerCase()} `}</Text>
-              {strip.map(c => (
-                <Text color={verdictColor(c)} dimColor={c.inSubagent}>
-                  {c.verdict === 'deny' ? '✗' : '■'}
-                </Text>
-              ))}
-              <Text color={s.deny > 0 ? C.warn : s.ask > 0 ? C.amber : C.dim} wrap="truncate">
-                {counts}
-              </Text>
-            </Box>
-          ) : null}
-          {live.map(c => (
-            <Box>
-              <Text color={statusColor(c)}>{`${glyph(c)} `}</Text>
-              <Box width={Math.max(10, W - 30)}>
-                <Text wrap="truncate">{cardTitle(c)}</Text>
-              </Box>
-              <Text dimColor>{c.steps > 0 ? ` ctx ${kTokens(c.ctx)} ` : ' '}</Text>
-              {clock(`mini-clock-${c.id}`, c.spawnedAt, c.endedAt, C.dim)}
-            </Box>
-          ))}
-          {cards.length > live.length ? (
-            <Text color={C.faint} wrap="truncate">{`+${cards.length - live.length} more agents · /flightdeck layout compact for all`}</Text>
-          ) : null}
-          {lp.length > 0 ? <Text dimColor>{`other loops ${lp.length} · ${lp.filter(l => isLoopActive(l, now)).length} active`}</Text> : null}
-          {!m.isRunning && r ? (
-            <Text dimColor wrap="truncate">
-              {`last turn ${fmtDuration(r.durationMs)} · ${plural(r.agents, 'agent')} · ${plural(r.edits, 'edit')} · ${plural(r.errors, 'error')}${r.costDelta !== null ? ` · +${fmtUsd(r.costDelta)}` : ''}`}
-            </Text>
-          ) : null}
-        </Box>
-      )
-    }
+    if (isMini) return drawSummary(els, deck, { W, cfg, C, more: '/crew:panel layout compact for all', maxLive: 3 })
 
     const legend = fitLegend(
       [

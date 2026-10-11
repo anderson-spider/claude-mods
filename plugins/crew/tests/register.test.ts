@@ -148,6 +148,9 @@ function jevWorld(
     const usage = model ? { model } : null
     return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: null, usage } as never
   })
+  // Flightdeck reads and writes the panel choice in the store; the jev tests have none to keep.
+  on('store.get', async () => ({ value: undefined }))
+  on('store.set', async () => ({ value: undefined }))
   on('ui.notice', async (_$, e) => { seen.notices.push(String(e.text)); return { value: undefined } })
   on('ui.log', async (_$, e) => {
     seen.logs.push(e.text)
@@ -1247,16 +1250,17 @@ test('one crew spawn is routed by Jev and drawn as a card titled with the origin
   expect(cards[0]).toMatchObject({ id: 'ag1', type: 'crew:developer', model: 'opus', description: 'audit auth' })
 })
 
-test('a Flightdeck session.start that fails (command.register) still registers the six specialists', async ($, on) => {
+test('a Flightdeck session.start that fails (state.set of the usage) still registers the six specialists', async ($, on) => {
   const registered: string[] = []
   let attempts = 0
-  on('command.register', () => { attempts++; throw new Error('command.register unavailable') })
+  on('session.usage', () => ({ value: { context: { percent: 1, tokens: 1, window: 100 }, cost: { usd: 1 }, rateLimits: [] } }) as never)
+  on('state.set', (_$, e, next) => { if (e.key === 'usage') { attempts++; throw new Error('state unavailable') } return next(e) })
   on('agent.register', (_$, e) => (registered.push(e.name), { value: { agent: `crew:${e.name}` } }))
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
 
   await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true } as never)
 
-  // The failing call was reached, so the agents above are not registered by luck of an earlier return.
+  // The failing call was reached inside Flightdeck's first try, so the agents above are not registered by luck of an earlier return.
   expect(attempts).toBe(1)
   expect(registered).toEqual(['code-reader', 'research', 'designer', 'developer', 'tester', 'architect'])
 })
@@ -1398,3 +1402,334 @@ for (const tool of ['Write', 'Edit'] as const) {
     expect(written).toEqual(['src/app.ts'])
   })
 }
+
+// --- /crew:panel: side pane or prompt band, persisted ---
+
+const OTHER_BAND = 'OTHER-BAND'
+
+/** The host beneath the panel: a store in a Map, the pane `flightdeck` opening and closing, and a bottom band. */
+function panelWorld(
+  on: On,
+  o: {
+    /** What `$.store` holds at the start. */
+    stored?: Record<string, unknown>
+    /** The surface places the pane (`$.ui.open` answers `isPlaced`). */
+    placed?: boolean
+    /** The reason an unplaced open gives. */
+    reason?: string
+    /** What the band beneath the plugin draws: the engine's own (empty) band, or another plugin's tree. */
+    below?: 'engine' | 'other'
+    getFail?: boolean
+    setFail?: boolean
+    panesFail?: boolean
+    closeFail?: boolean
+  } = {},
+) {
+  const store = new Map<string, unknown>(Object.entries(o.stored ?? {}))
+  const w = {
+    store,
+    opens: [] as string[],
+    closes: [] as { id: string; origin: string }[],
+    sets: 0,
+    isOpen: false,
+    placed: o.placed ?? true,
+    below: o.below ?? 'engine',
+    registered: [] as string[],
+  }
+  mock.clock(on)
+  on('agent.register', (_$, e) => (w.registered.push(e.name), { value: { agent: `crew:${e.name}` } }))
+  on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  on('ui.status', () => ({ value: undefined }))
+  on('store.get', (_$, e) => {
+    if (o.getFail) throw new Error('store.get unavailable')
+    return { value: store.get(e.key) }
+  })
+  on('store.set', (_$, e) => {
+    w.sets++
+    if (o.setFail) throw new Error('store.set unavailable')
+    store.set(e.key, e.value)
+    return { value: undefined }
+  })
+  on('ui.open', (_$, e) => {
+    w.opens.push(e.id)
+    w.isOpen = true
+    return { value: w.placed ? { isPlaced: true as const } : { isPlaced: false as const, reason: o.reason ?? 'widen the terminal' } }
+  })
+  on('ui.close', (_$, e) => {
+    if (o.closeFail) throw new Error('ui.close unavailable')
+    w.closes.push({ id: e.id, origin: e.origin.kind })
+    w.isOpen = false
+    return { value: undefined }
+  })
+  on('ui.panes', () => {
+    if (o.panesFail) throw new Error('ui.panes unavailable')
+    return { value: w.isOpen ? [{ id: 'flightdeck', title: 'Flightdeck', isShown: true, isFocused: false, isPlaced: w.placed }] : [] }
+  })
+  on('ui.render', { component: 'AbovePrompt' }, ($, e) =>
+    w.below === 'other' ? $.ui.resolve(e).Text({ children: OTHER_BAND }) : ({ type: 'engine', ref: 0 } as never),
+  )
+  return w
+}
+
+const startSession = async ($: Engine) => {
+  await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true } as never)
+  // The pane opens without being awaited by the session start.
+  for (let i = 0; i < 5; i++) await pause()
+}
+
+const panel = async ($: Engine, args = '', presentation?: { isFullscreen: boolean; columns: number }) =>
+  (await $.command.run({ command: 'crew:panel', args, origin: { kind: 'composer' }, ...(presentation ? { presentation } : {}) } as never)).text
+
+const band = (hasSurvey = false) => ({
+  plugin: 'crew',
+  surface: 'terminal' as const,
+  component: 'AbovePrompt' as const,
+  props: {
+    hasSurvey,
+    isWorking: false,
+    maxRows: 12,
+    bodyColumns: 80,
+    scroll: { offset: 0, bodyRows: 11 },
+    view: {},
+  } as never,
+})
+
+const STORED = (isVisible: boolean, placement: 'side' | 'prompt') => ({ v: 1, isVisible, placement })
+
+test('bare /crew:panel toggles the side pane and saves the pick', async ($, on) => {
+  const w = panelWorld(on, { stored: { panel: STORED(false, 'side') } })
+  await startSession($)
+  expect(w.opens).toEqual([])
+
+  expect(await panel($)).toContain('Panel shown above the prompt')
+  expect(w.opens).toEqual(['flightdeck'])
+  expect(w.store.get('panel')).toEqual(STORED(true, 'side'))
+
+  expect(await panel($)).toBe('Panel hidden. /crew:panel shows it again.')
+  expect(w.closes).toEqual([{ id: 'flightdeck', origin: 'plugin' }])
+  expect(w.store.get('panel')).toEqual(STORED(false, 'side'))
+
+  expect(await panel($)).toContain('Panel shown')
+  expect(w.opens).toEqual(['flightdeck', 'flightdeck'])
+})
+
+test('on and off keep the placement', async ($, on) => {
+  const w = panelWorld(on)
+  await panel($, 'prompt')
+  await panel($, 'off')
+  expect(w.store.get('panel')).toEqual(STORED(false, 'prompt'))
+  expect(await panel($, 'on')).toContain('Panel shown in the band above the prompt')
+  expect(w.store.get('panel')).toEqual(STORED(true, 'prompt'))
+  await panel($, 'side')
+  await panel($, 'off')
+  expect(await panel($, 'ON')).toContain('Panel shown above the prompt')
+  expect(w.store.get('panel')).toEqual(STORED(true, 'side'))
+})
+
+test('an unplaced pane counts as hidden, so bare /crew:panel shows it; a failing panes call falls back to the pick', async ($, on) => {
+  const w = panelWorld(on, { placed: false, reason: 'widen the terminal to 144 columns' })
+  expect(await panel($, 'side')).toBe('Panel set to the side, not shown yet: widen the terminal to 144 columns')
+  expect(w.store.get('panel')).toEqual(STORED(true, 'side'))
+  // Open but undrawn: the toggle shows it again instead of hiding it.
+  expect(await panel($)).toContain('not shown yet')
+  expect(w.closes).toEqual([])
+})
+
+test('bare /crew:panel falls back to the saved pick when the panes call fails', async ($, on) => {
+  const w = panelWorld(on, { panesFail: true })
+  await panel($, 'side') // saved visible
+  expect(await panel($)).toBe('Panel hidden. /crew:panel shows it again.')
+  expect(w.store.get('panel')).toEqual(STORED(false, 'side'))
+  expect(await panel($)).toContain('Panel shown')
+})
+
+test('side then prompt then side: the pane closes for the band and opens again', async ($, on) => {
+  const w = panelWorld(on)
+  const ui = await $.ui.mount(band())
+  expect(await ui.find({ text: /idle/ })).toBeUndefined() // before any pick the band passes
+
+  expect(await panel($, 'side')).toContain('Panel shown above the prompt')
+  expect(w.opens).toEqual(['flightdeck'])
+  expect(await ui.find({ text: /idle/ })).toBeUndefined() // side mode: no band
+
+  expect(await panel($, 'prompt')).toBe('Panel shown in the band above the prompt. Focus it with ctrl+x tab; collapse it with ctrl+x ctrl+a.')
+  expect(w.closes).toEqual([{ id: 'flightdeck', origin: 'plugin' }])
+  expect(w.store.get('panel')).toEqual(STORED(true, 'prompt'))
+  expect(await ui.find({ text: /idle/ })).toBeDefined() // the band redraws with the summary
+
+  await panel($, 'side')
+  expect(w.opens).toEqual(['flightdeck', 'flightdeck'])
+  expect(await ui.find({ text: /idle/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('/crew:panel side words its reply by the room the command has', async ($, on) => {
+  panelWorld(on)
+  expect(await panel($, 'side', { isFullscreen: true, columns: 150 })).toBe(
+    'Panel docked beside the transcript. Focus it with ctrl+x tab; 1-6 expand cards, f/s/o open the gate rows.',
+  )
+  expect(await panel($, 'side', { isFullscreen: false, columns: 80 })).toBe(
+    'Panel shown above the prompt (it docks in fullscreen from 110 columns). Focus it with ctrl+x tab.',
+  )
+  expect(await panel($, 'side', { isFullscreen: true, columns: 100 })).toContain('above the prompt')
+})
+
+test('the band draws only in prompt mode, with the panel visible and no survey', async ($, on) => {
+  const w = panelWorld(on)
+  const drawn = async (hasSurvey = false) => {
+    const ui = await $.ui.mount(band(hasSurvey))
+    const found = await ui.find({ text: /idle/ })
+    await ui.unmount()
+    return found !== undefined
+  }
+
+  expect(await drawn()).toBe(false) // session.start has not run: null passes
+  await panel($, 'prompt')
+  expect(await drawn()).toBe(true)
+  expect(await drawn(true)).toBe(false) // a survey holds the band
+  await panel($, 'off')
+  expect(await drawn()).toBe(false)
+  await panel($, 'on')
+  expect(await drawn()).toBe(true)
+  await panel($, 'side')
+  expect(await drawn()).toBe(false)
+  expect(w.opens.length).toBe(1)
+})
+
+test('the band yields to another plugin\'s band whatever the order', async ($, on) => {
+  panelWorld(on, { below: 'other' })
+  await panel($, 'prompt')
+  const ui = await $.ui.mount(band())
+  expect(await ui.find({ text: new RegExp(OTHER_BAND) })).toBeDefined()
+  expect(await ui.find({ text: /idle/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('the band draws at most three cards and hints at the rest', async ($, on) => {
+  panelWorld(on)
+  on('agent.spawn', (_$, e) => ({ model: 'sonnet', agentId: `ag-${e.description}` }))
+  await panel($, 'prompt')
+  for (let i = 1; i <= 5; i++) await $.agent.spawn({ agent: 'crew:developer', description: `job ${i}`, prompt: 'x' } as never)
+  const ui = await $.ui.mount(band())
+  expect(await ui.find({ text: /\+2 more agents/ })).toBeDefined()
+  for (const n of [1, 2, 3]) expect(await ui.find({ text: new RegExp(`job ${n}`) })).toBeDefined()
+  for (const n of [4, 5]) expect(await ui.find({ text: new RegExp(`job ${n}`) })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('placement prompt in the options starts with the band and opens no pane', { options: { placement: 'prompt' } }, async ($, on) => {
+  const w = panelWorld(on)
+  await startSession($)
+
+  expect(w.opens).toEqual([])
+  const ui = await $.ui.mount(band())
+  expect(await ui.find({ text: /idle/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('the default options open the side pane once at the start', async ($, on) => {
+  const w = panelWorld(on)
+  await startSession($)
+
+  expect(w.opens).toEqual(['flightdeck'])
+  expect(w.store.has('panel')).toBe(false) // only a pick is saved, never the defaults
+  const ui = await $.ui.mount(band())
+  expect(await ui.find({ text: /idle/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('openOnStart false starts hidden', { options: { openOnStart: false } }, async ($, on) => {
+  const w = panelWorld(on)
+  await startSession($)
+  expect(w.opens).toEqual([])
+  expect(await panel($)).toContain('Panel shown') // the first bare command shows it
+})
+
+test('a saved pick wins over the options', async ($, on) => {
+  const w = panelWorld(on, { stored: { panel: STORED(true, 'prompt') } })
+  await startSession($)
+  expect(w.opens).toEqual([]) // the options say side and open, the pick says prompt
+  const ui = await $.ui.mount(band())
+  expect(await ui.find({ text: /idle/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a saved hidden pick opens nothing', async ($, on) => {
+  const w = panelWorld(on, { stored: { panel: STORED(false, 'side') } })
+  await startSession($)
+  expect(w.opens).toEqual([])
+})
+
+for (const [name, junk] of [
+  ['a wrong version', { v: 2, isVisible: false, placement: 'prompt' }],
+  ['a bad placement', { v: 1, isVisible: false, placement: 'floating' }],
+  ['a string', 'prompt'],
+] as const) {
+  test(`${name} in the store falls back to the options`, async ($, on) => {
+    const w = panelWorld(on, { stored: { panel: junk } })
+    await startSession($)
+    expect(w.opens).toEqual(['flightdeck'])
+  })
+}
+
+test('a store that cannot be read starts on the options, and the six specialists still register', async ($, on) => {
+  const w = panelWorld(on, { getFail: true })
+  await startSession($)
+
+  expect(w.registered.length).toBe(6)
+  expect(w.opens).toEqual(['flightdeck'])
+})
+
+test('the plugin\'s own close leaves the pick as it is: off keeps the placement, prompt keeps it visible', async ($, on) => {
+  const w = panelWorld(on)
+  await panel($, 'prompt')
+  await panel($, 'off')
+  // Both closes came through the ui.close hook with origin plugin: neither wrote a second pick.
+  expect(w.closes.map(c => c.origin)).toEqual(['plugin', 'plugin'])
+  expect(w.sets).toBe(2)
+  expect(w.store.get('panel')).toEqual(STORED(false, 'prompt'))
+})
+
+test('a store that cannot be written still switches the panel for the session, with the same reply', async ($, on) => {
+  const w = panelWorld(on, { setFail: true })
+  const ui = await $.ui.mount(band())
+  expect(await panel($, 'prompt')).toContain('Panel shown in the band')
+  expect(w.sets).toBeGreaterThan(0)
+  expect(w.store.has('panel')).toBe(false)
+  expect(await ui.find({ text: /idle/ })).toBeDefined()
+  expect(await panel($, 'off')).toBe('Panel hidden. /crew:panel shows it again.')
+  expect(await ui.find({ text: /idle/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('a command that throws answers with text and never reaches the model', async ($, on) => {
+  panelWorld(on, { closeFail: true })
+  // `off` closes the pane: the failure is caught and answered, not left to fall through.
+  expect(await panel($, 'off')).toBe('The panel could not run this command; see the debug log.')
+})
+
+test('layout in prompt mode sets the layout and opens no pane', async ($, on) => {
+  const w = panelWorld(on)
+  await panel($, 'prompt')
+  expect(await panel($, 'layout wide')).toBe('Panel layout: wide; it applies to the side pane, the band always shows the summary.')
+  expect(w.opens).toEqual([])
+  expect(w.store.get('panel')).toEqual(STORED(true, 'prompt'))
+})
+
+test('layout in side mode shows the pane', async ($, on) => {
+  const w = panelWorld(on, { stored: { panel: STORED(false, 'side') } })
+  expect(await panel($, 'layout mini')).toBe('Panel layout: mini.')
+  expect(w.opens).toEqual(['flightdeck'])
+  expect(w.store.get('panel')).toEqual(STORED(true, 'side'))
+})
+
+test('reset and a bad argument leave the panel as it is', async ($, on) => {
+  const w = panelWorld(on)
+  await panel($, 'prompt')
+  const sets = w.sets
+  expect(await panel($, 'reset')).toBe('Panel reset.')
+  expect(await panel($, 'bogus')).toBe('Usage: /crew:panel [on|off|side|prompt|reset|layout auto|compact|wide|mini]')
+  expect(await panel($, 'layout diagonal')).toContain('Usage: /crew:panel')
+  expect(w.sets).toBe(sets)
+  expect(w.store.get('panel')).toEqual(STORED(true, 'prompt'))
+})

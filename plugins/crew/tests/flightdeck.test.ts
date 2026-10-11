@@ -8,6 +8,7 @@ import {
   DEFAULT_TURN,
   afterCall,
   applyStep,
+  choiceAfterClose,
   consultTimeline,
   describeInput,
   endConsult,
@@ -21,7 +22,9 @@ import {
   normalizeGate,
   normalizeLog,
   titleLines,
+  PANEL_USAGE,
   parseConfig,
+  parsePanelArgs,
   prettyModel,
   promptLine,
   handbackOf,
@@ -30,6 +33,7 @@ import {
   recordCheck,
   redact,
   settleCheck,
+  storedChoice,
   trimRecent,
   startConsult,
 } from '../hooks/flightdeck/core'
@@ -139,6 +143,46 @@ test('config is read leniently: bad values fall back to defaults', () => {
   expect(c.architect.test('advisor')).toBe(true) // invalid regex → default
   expect([c.maxCards, c.layout, c.motion]).toEqual([6, 'auto', false])
   expect(c.panels).toEqual(['log', 'gate'])
+})
+
+test('placement defaults to side and only "prompt" moves it', () => {
+  expect(parseConfig({}).placement).toBe('side')
+  expect(parseConfig({ placement: 'prompt' }).placement).toBe('prompt')
+  expect(parseConfig({ placement: 'floating' }).placement).toBe('side')
+  expect(parseConfig({ placement: 3 }).placement).toBe('side')
+})
+
+test('/crew:panel arguments: every verb, case and spacing free, the rest is usage', () => {
+  expect(parsePanelArgs('')).toEqual({ kind: 'toggle' })
+  expect(parsePanelArgs('   ')).toEqual({ kind: 'toggle' })
+  for (const verb of ['on', 'off', 'side', 'prompt', 'reset'] as const) {
+    expect(parsePanelArgs(verb)).toEqual({ kind: verb })
+    expect(parsePanelArgs(`  ${verb.toUpperCase()}  `)).toEqual({ kind: verb })
+  }
+  for (const layout of ['auto', 'compact', 'wide', 'mini'] as const) {
+    expect(parsePanelArgs(`layout ${layout}`)).toEqual({ kind: 'layout', layout })
+    expect(parsePanelArgs(' Layout    ' + layout.toUpperCase())).toEqual({ kind: 'layout', layout })
+  }
+  for (const bad of ['layout', 'layout diagonal', 'layout mini now', 'open', 'close', 'side now', 'on off', 'flightdeck']) {
+    expect(parsePanelArgs(bad)).toEqual({ kind: 'usage' })
+  }
+  expect(PANEL_USAGE).toBe('Usage: /crew:panel [on|off|side|prompt|reset|layout auto|compact|wide|mini]')
+})
+
+test('the stored panel choice reads leniently: a good value, else null', () => {
+  expect(storedChoice({ v: 1, isVisible: true, placement: 'prompt' })).toEqual({ isVisible: true, placement: 'prompt' })
+  expect(storedChoice({ v: 1, isVisible: false, placement: 'side', extra: 1 })).toEqual({ isVisible: false, placement: 'side' })
+  expect(storedChoice({ v: 2, isVisible: true, placement: 'side' })).toBe(null)
+  expect(storedChoice({ isVisible: true, placement: 'side' })).toBe(null)
+  expect(storedChoice({ v: 1, isVisible: 'yes', placement: 'side' })).toBe(null)
+  expect(storedChoice({ v: 1, isVisible: true, placement: 'floating' })).toBe(null)
+  for (const junk of ['side', 7, null, undefined, [], [1]]) expect(storedChoice(junk)).toBe(null)
+})
+
+test('a pane close saves hidden only when the person made it', () => {
+  expect(choiceAfterClose({ kind: 'person' })).toEqual({ isVisible: false, placement: 'side' })
+  expect(choiceAfterClose({ kind: 'plugin' })).toBe(null)
+  expect(choiceAfterClose({ kind: 'unload' })).toBe(null)
 })
 
 test('state saved under an older shape still reads', () => {
