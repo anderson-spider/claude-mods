@@ -48,8 +48,6 @@ type Watch<E extends string> = {
   until: (page: PageState, settled: boolean) => E | false
   /** Called with each page read that is not the end yet. */
   onPoll: (page: PageState) => void
-  /** The wall clock, in ms, the timeout runs on; Date.now when absent. */
-  now?: () => number
 }
 
 // Checks the page as it stands, then polls it until `until` names an end, a
@@ -60,8 +58,7 @@ export async function watch<E extends string>(
   page: PageState,
   o: Watch<E>,
 ): Promise<{ end: E | 'blocked' | 'timeout'; page: PageState }> {
-  const now = o.now ?? Date.now
-  const started = now()
+  const started = Date.now()
   const script = stateScript(o.pollMs)
   const lengthOf = (p: PageState) => (p.count > o.before ? p.length : -1)
   let lastLength = lengthOf(page)
@@ -73,7 +70,7 @@ export async function watch<E extends string>(
     if (end) break
     if (page.blocker && !page.stop && isHardBlocker(page.blocker)) return { end: 'blocked', page }
     lastLength = lengthOf(page)
-    if (now() - started > o.timeoutMs) return { end: 'timeout', page }
+    if (Date.now() - started > o.timeoutMs) return { end: 'timeout', page }
     o.onPoll(page)
   }
   return { end, page }

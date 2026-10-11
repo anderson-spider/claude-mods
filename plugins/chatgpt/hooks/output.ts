@@ -12,10 +12,10 @@ async function outDir(tmpDir: OutputDeps['tmpDir']): Promise<string> {
 // Where a request's file goes: its `out` when it names one, else a fresh name in outDir (tmpDir is read only then).
 async function resolveOutPath(
   request: Request,
-  { tmpDir, now = Date.now }: Pick<OutputDeps, 'tmpDir' | 'now'>,
+  { tmpDir }: Pick<OutputDeps, 'tmpDir'>,
   ext?: string,
 ): Promise<string> {
-  return request.out ?? `${await outDir(tmpDir)}/${fileName(request.input.prompt, new Date(now()), ext)}`
+  return request.out ?? `${await outDir(tmpDir)}/${fileName(request.input.prompt, new Date(), ext)}`
 }
 
 // The host writes text only, so the bytes go through openssl's base64 decoder.
@@ -45,7 +45,7 @@ async function previewOf({ run, files }: Pick<OutputDeps, 'run' | 'files'>, path
   }
 }
 
-export async function saveAnswer(deps: Pick<OutputDeps, 'files' | 'tmpDir' | 'now'>, result: AskResult, request: Request): Promise<Outcome> {
+export async function saveAnswer(deps: Pick<OutputDeps, 'files' | 'tmpDir'>, result: AskResult, request: Request): Promise<Outcome> {
   let path: string | undefined
   if (result.markdown) {
     path = await resolveOutPath(request, deps)

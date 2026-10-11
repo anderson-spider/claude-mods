@@ -3,9 +3,9 @@ import { expect, test } from 'claude-code/testing'
 
 import { BAND, TOOL, pause, ran, textOf } from './helpers'
 
-// Characterization of the bridge's real `ask` (hooks/register.tsx), which is not
-// exported: it is reached only through `tool.call`. The test host's `mock.clock`
-// answers `$.clock`, but `ask` reads the global `Date.now()` and waits through
+// The bridge's real question flow (`holdQuestion` in hooks/question.ts, wired in
+// hooks/register.tsx) reached through `tool.call`. The test host's `mock.clock`
+// answers `$.clock`, but the flow reads the global `Date.now()` and waits through
 // `$.process.run(['sleep', '0.25'])`, so the deadline runs on the real clock
 // (`approvalMinutes: 0.001` is 60 ms) and every poll is a held `process.run`
 // the test releases or fails by hand. The host also has no way to abort a

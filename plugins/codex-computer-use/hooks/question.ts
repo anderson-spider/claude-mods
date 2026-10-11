@@ -4,7 +4,7 @@ import type { Choice } from './model'
 // One approval question at a time, held until the person answers. Pure: the
 // clock, the wait and the band are injected, and register.tsx owns the `$` calls.
 
-export type Slot = { id: string; choice: Choice | null }
+type Slot = { id: string; choice: Choice | null }
 
 /** The question being asked now; register.tsx keeps one at module scope. */
 export type Waiting = { current: Slot | undefined }

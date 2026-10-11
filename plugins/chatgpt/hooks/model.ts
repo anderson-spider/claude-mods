@@ -114,8 +114,6 @@ export type OutputDeps = {
   run: ProcessRunner
   files: OutputFiles
   tmpDir(): Promise<string | undefined>
-  /** The wall clock, in ms, that stamps a saved file's name; Date.now when absent. */
-  now?(): number
 }
 
 export type RequestDeps = {

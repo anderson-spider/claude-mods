@@ -651,7 +651,7 @@ test('a write that settles first leaves no slow line and no timer behind', ON, a
   expect(seen.logs.some(line => line.includes('decision write slow'))).toBe(false)
 })
 
-// --- Characterization: what the entry module does today, pinned so a refactor of it changes none of it ---
+// --- The entry module's observable order and log lines, pinned ---
 
 /** Wraps `on` so the host calls that matter are recorded in the order they reach the host. */
 function traced(on: On, timeline: string[]): On {
