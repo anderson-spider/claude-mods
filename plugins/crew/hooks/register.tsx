@@ -128,6 +128,23 @@ async function listAgents($: Dollar): Promise<Listed[]> {
   return (await $.agent.list()).map(a => ({ id: a.id, type: a.type, description: a.description, parentId: a.parentId }))
 }
 
+/** Holds a subagent's write that its type's rule refuses; the main loop (no `agentId`) always passes. */
+async function guardWrite<E extends { agentId?: string; file_path?: unknown }, R>($: Dollar, e: E, next: (e: E) => Promise<R>) {
+  if (!e.agentId) return next(e)
+
+  const agents = await $.agent.list()
+  const type = agents.find(agent => agent.id === e.agentId)?.type
+  const deny = type === undefined ? undefined : deniedWrite(type, String(e.file_path ?? ''))
+
+  return deny === undefined ? next(e) : { deny }
+}
+
+/** A subagent whose write could not be checked is held; the main loop is never blocked by this guard. */
+function holdUnchecked<E extends { agentId?: string }, R>(_$: Dollar, e: E, next: ((e: E) => Promise<R>) & { called: boolean }) {
+  if (next.called || !e.agentId) return next(e)
+  return { deny: 'crew could not check this write, so it was not made' }
+}
+
 export const register: Register = (on, options) => {
   const enabled = options.jevRouting === true || options.jevRouting === 'true'
   // Shared while the module lives: the rate limit is the account's, and a sick Jev is not asked again for a while.
@@ -224,19 +241,6 @@ export const register: Register = (on, options) => {
   })
 
   // The main loop has no agentId and is never held; a subagent is held by its type's rule in guard.ts.
-  for (const tool of ['Write', 'Edit'] as const) {
-    on('tool.call', { tool }, async ($, e, next) => {
-      if (!e.agentId) return next(e)
-
-      const agents = await $.agent.list()
-      const type = agents.find(agent => agent.id === e.agentId)?.type
-      const deny = type === undefined ? undefined : deniedWrite(type, String(e.file_path ?? ''))
-
-      return deny === undefined ? next(e) : { deny }
-    }).catch(($, e, next) => {
-      // A subagent whose write could not be checked is held; the main loop is never blocked by this guard.
-      if (next.called || !e.agentId) return next(e)
-      return { deny: 'crew could not check this write, so it was not made' }
-    })
-  }
+  on('tool.call', { tool: 'Write' }, guardWrite).catch(holdUnchecked)
+  on('tool.call', { tool: 'Edit' }, guardWrite).catch(holdUnchecked)
 }
