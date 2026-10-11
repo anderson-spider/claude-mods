@@ -200,10 +200,19 @@ describe('outputName', () => {
     expect(outputName('///', '...')).toBe('job')
   })
 
-  test('is bounded', () => {
-    const name = outputName('a'.repeat(500), 'b'.repeat(500))
-    expect(name.length).toBeLessThanOrEqual(40 + 1 + 16)
+  test('the description slug is capped at 40 characters and the job id is never cut', () => {
+    const name = outputName('a'.repeat(500), 'cx-mv45ftfc-ek3yw')
+    expect(name).toBe(`${'a'.repeat(40)}-cx-mv45ftfc-ek3yw`)
     expect(name).toMatch(safe)
+  })
+
+  test('a hostile job id is bounded at 64 characters', () => {
+    expect(outputName('x', 'b'.repeat(500))).toBe(`x-${'b'.repeat(64)}`)
+  })
+
+  test('a real-shaped 17-character job id survives whole', () => {
+    expect(outputName('Review the plan', 'cx-mv45ftfc-ek3yw')).toBe('review-the-plan-cx-mv45ftfc-ek3yw')
+    expect(outputName('', 'cx-mv45ftfc-ek3yw')).toBe('cx-mv45ftfc-ek3yw')
   })
 
   test('truncation leaves no trailing dash', () => {
@@ -426,7 +435,7 @@ describe('verify C5: outputName on hostile input', () => {
       expect(name.length > 0).toBe(true)
       expect(name.includes('/') || name.includes('..') || name.startsWith('-') || name.endsWith('-')).toBe(false)
       expect(/^[a-z0-9]+(-[a-z0-9]+)*$/.test(name)).toBe(true)
-      expect(name.length <= 57).toBe(true)
+      expect(name.length <= 40 + 1 + 64).toBe(true)
     }
   })
 

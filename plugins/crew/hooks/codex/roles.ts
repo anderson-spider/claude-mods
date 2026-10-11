@@ -28,7 +28,8 @@ export function isWriteRole(role: CodexRole): boolean {
 }
 
 const SLUG_MAX = 40
-const ID_MAX = 16
+// Far above a real job id (17 characters), so only a hostile id is cut.
+const ID_MAX = 64
 
 function slug(text: string, max: number): string {
   return text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+/, '').slice(0, max).replace(/-+$/, '')
