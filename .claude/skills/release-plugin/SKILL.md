@@ -20,7 +20,7 @@ Run in order and keep going after a failure so the report is complete.
 2. **Tests**: `claude plugin test plugins/<name>`. For `codex-computer-use`, also run the helper with `/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node --test plugins/codex-computer-use/helper/test/*.test.mjs`; if that node is missing, report the helper as skipped.
 3. **Consistency**: `node scripts/check-consistency.mjs`
 4. **Version bump**: `node scripts/check-version-bump.mjs origin/main`. If it flags the plugin, or the tree is dirty, compare `version` in `plugins/<name>/.claude-plugin/plugin.json` against `git show origin/main:plugins/<name>/.claude-plugin/plugin.json`.
-5. **Docs match behavior**: read `git diff origin/main -- plugins/<name>` and check that the plugin's `README.md` and `AGENTS.md` describe the new behavior (tools, options, messages, commands). `AGENTS.md` holds current invariants only; history belongs in git.
+5. **Docs match behavior**: read `git diff origin/main -- plugins/<name>` and check that the plugin's section in the root `README.md` and the plugin's `AGENTS.md` describe the new behavior (tools, options, messages, commands). `AGENTS.md` holds current invariants only; history belongs in git.
 6. **Tool inputs**: if a tool's `inputSchema` changed, `types/index.d.ts` must match it.
 
 ## Report
