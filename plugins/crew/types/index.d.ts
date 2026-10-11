@@ -91,6 +91,12 @@ export type View = { expanded: string | null; gateOpen: Bucket | null; layout: L
 
 export type Roster = { architectTypes: string[] }
 
+/** Where the panel shows: the host's pane beside (or inline above) the prompt, or the plugin's own band above the prompt. */
+export type Placement = 'side' | 'prompt'
+
+/** The person's pick for the session: whether the panel is shown and where. */
+export type PanelChoice = { isVisible: boolean; placement: Placement }
+
 declare module 'claude-code' {
   interface PluginState {
     'crew': {
@@ -106,6 +112,7 @@ declare module 'claude-code' {
       receipt: Receipt | null
       view: View
       roster: Roster
+      panel: PanelChoice | null
     }
   }
 }
