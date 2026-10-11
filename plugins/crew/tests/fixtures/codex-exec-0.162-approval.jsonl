@@ -1,0 +1,9 @@
+{"type":"thread.started","thread_id":"01a12bd2-f71f-7712-b30f-6b60bf9ef820"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"Vou executar o comando e conferir a linha de status.\n"}}
+{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc 'curl -sI https://example.com'","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc 'curl -sI https://example.com'","aggregated_output":"","exit_code":6,"status":"failed"}}
+{"type":"item.started","item":{"id":"item_2","type":"command_execution","command":"/bin/zsh -lc 'curl -sI https://example.com'","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_2","type":"command_execution","command":"/bin/zsh -lc 'curl -sI https://example.com'","aggregated_output":"HTTP/2 200 \r\ndate: Sun, 11 Oct 2026 16:36:59 GMT\r\ncontent-type: text/html; charset=utf-8\r\nserver: cloudflare\r\nlast-modified: Fri, 09 Oct 2026 20:18:28 GMT\r\nallow: GET, HEAD\r\naccept-ranges: bytes\r\nage: 1487\r\ncf-cache-status: HIT\r\ncf-ray: a48f49728eb0f256-GRU\r\nalt-svc: h3=\":443\"; ma=86400\r\n\r\n","exit_code":0,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"Linha de status: `HTTP/2 200`."}}
+{"type":"turn.completed","usage":{"input_tokens":56960,"cached_input_tokens":49792,"cache_write_input_tokens":0,"output_tokens":142,"reasoning_output_tokens":9}}

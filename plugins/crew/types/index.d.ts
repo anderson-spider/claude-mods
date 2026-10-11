@@ -97,6 +97,17 @@ export type Placement = 'side' | 'prompt'
 /** The person's pick for the session: whether the panel is shown and where. */
 export type PanelChoice = { isVisible: boolean; placement: Placement }
 
+/** A Codex job as the crew's `codexJobs` value lists it (the job's files under `.crew/codex/` hold the rest). */
+export type CodexJobSummary = {
+  id: string
+  agent: 'code-reader' | 'research' | 'designer' | 'developer' | 'tester' | 'architect'
+  description: string
+  status: 'running' | 'background' | 'done' | 'error' | 'cancelled' | 'lost'
+  startedAt: number
+  endedAt?: number
+  sessionId?: string
+}
+
 declare module 'claude-code' {
   interface PluginState {
     'crew': {
@@ -113,6 +124,24 @@ declare module 'claude-code' {
       view: View
       roster: Roster
       panel: PanelChoice | null
+      codexJobs: CodexJobSummary[]
     }
+  }
+}
+
+// The inputs of the Codex tools, in the shape the engine lays for connected MCP tools.
+// Keep them in step with the inputSchema in hooks/register.tsx.
+declare module 'claude-code' {
+  interface McpToolInputs {
+    mcp__crew__codex: {
+      agent: 'code-reader' | 'research' | 'designer' | 'developer' | 'tester' | 'architect'
+      prompt: string
+      description: string
+      cwd?: string
+      background?: boolean
+      resume?: string
+    }
+    mcp__crew__codex_result: { jobId: string }
+    mcp__crew__codex_cancel: { jobId: string }
   }
 }

@@ -88,7 +88,7 @@ export const SPECIALISTS: readonly Specialist[] = [
     prompt:
       'You are a developer. Implement the change you were given, matching the surrounding code, and keep to the files the task needs. ' +
       'Add or update tests, run them and fix what fails. Leave committing to the caller. ' +
-      'Report the files changed, the commands run and their results.',
+      'End the report with what changed, which acceptance criteria it covers, the checks run with their result and the checks not run.',
   },
   {
     name: 'tester',
@@ -131,7 +131,33 @@ export function leadSection(jev: boolean): string {
     'crew:code-reader to read and search, crew:developer to implement, crew:tester for tests,',
     'crew:architect for plans and audits, crew:research for the web, crew:designer for UI.',
     sizing,
-    'You talk with the user, break the work down, delegate in parallel when tasks are independent,',
-    'and check and combine the reports the agents return. Git and pull requests stay with you.',
+    'You talk with the user, break the work down and check and combine the reports the agents return.',
+    'Before delegating, split the work into independent pieces (different files, no input from each other)',
+    'and launch every piece whose inputs are ready in one message; when a result unblocks other pieces,',
+    'launch them right away instead of waiting for agents that are unrelated.',
+    'After each agent report, look again for work that is now unblocked or still independent and launch it without being asked;',
+    'end each update to the user with one line saying what is running, what is waiting and on what (or that nothing else can run in parallel).',
+    "A step is done only when someone other than its implementer verified it: crew:tester runs it or crew:architect audits it; the developer's own \"tests pass\" is a report, not the acceptance.",
+    'A failure goes back to the same developer (SendMessage to that agent) with the criterion, the steps and expected versus actual;',
+    'after the fix, the tester repeats the reproduction and what the fix could affect before the step closes.',
+    'Git and pull requests stay with you.',
+  ].join(' ')
+}
+
+/** The tool that runs a crew role on OpenAI Codex. */
+export const CODEX_TOOL = 'mcp__crew__codex'
+
+/** True when the request's tools include the Codex tool, so the lead section may carry `codexSection`. */
+export function offersCodex(tools: readonly string[]): boolean {
+  return tools.includes(CODEX_TOOL)
+}
+
+/** Appended to the lead section only when Codex is offered. */
+export function codexSection(): string {
+  return [
+    'Any crew role can also run on OpenAI Codex through mcp__crew__codex (agent = the role name):',
+    'use it for a second opinion or extra parallel capacity.',
+    'It runs in the background past a short wait; collect it with mcp__crew__codex_result and stop it with mcp__crew__codex_cancel.',
+    'Jev does not size Codex calls, and Codex\'s work is verified like any other step.',
   ].join(' ')
 }

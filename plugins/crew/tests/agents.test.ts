@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { EFFORTS, EFFORT_FLOOR, MODELS, MODEL_FLOORS, SPECIALISTS } from '../hooks/agents'
+import { CODEX_TOOL, EFFORTS, EFFORT_FLOOR, MODELS, MODEL_FLOORS, SPECIALISTS, codexSection, leadSection, offersCodex } from '../hooks/agents'
 
 const by = (name: string) => SPECIALISTS.find(s => s.name === name)
 
@@ -49,5 +49,26 @@ test('every default sits on the model and effort scales routing moves along', ()
     expect(MODELS).toContain(s.model)
     expect(EFFORTS).toContain(s.effort)
     expect(EFFORTS.indexOf(s.effort)).toBeGreaterThanOrEqual(EFFORTS.indexOf(EFFORT_FLOOR))
+  }
+})
+
+test('codexSection names the three Codex tools', () => {
+  const text = codexSection()
+  expect(text.length).toBeGreaterThan(0)
+  for (const name of ['mcp__crew__codex', 'mcp__crew__codex_result', 'mcp__crew__codex_cancel']) {
+    expect(text).toContain(name)
+  }
+})
+
+test('offersCodex is true only when the Codex tool is listed', () => {
+  expect(offersCodex(['Agent', CODEX_TOOL])).toBe(true)
+  expect(offersCodex(['Agent', 'mcp__crew__codex_result'])).toBe(false)
+  expect(offersCodex([])).toBe(false)
+})
+
+test('leadSection does not carry the Codex text', () => {
+  for (const jev of [true, false]) {
+    expect(leadSection(jev)).not.toContain('codex')
+    expect(leadSection(jev)).toBe(leadSection(jev))
   }
 })
