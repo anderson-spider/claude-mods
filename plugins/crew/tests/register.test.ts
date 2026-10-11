@@ -1168,13 +1168,17 @@ for (const tool of ['Write', 'Edit'] as const) {
     })
   })
 
-  test(`${tool}: the tester is held to test files, with the reason and the path`, async ($, on) => {
+  test(`${tool}: the tester is held to test files and reviews, with the reason and the path`, async ($, on) => {
     guardHost(on)
 
     expect(await call($, 't1', 'src/app.ts')).toEqual({
-      deny: 'the tester writes test files only, not src/app.ts; hand the failure back with the evidence',
+      deny: 'the tester writes test files and reports under .crew/reviews/ (.md) only, not src/app.ts; hand the failure back with the evidence',
     })
     expect(await call($, 't1', 'tests/app.test.ts')).toEqual({ result: 'written' })
+    expect(await call($, 't1', '.crew/reviews/check.md')).toEqual({ result: 'written' })
+    expect(await call($, 't1', '.crew/reviews/../plans/a.md')).toEqual({
+      deny: 'the tester writes test files and reports under .crew/reviews/ (.md) only, not .crew/reviews/../plans/a.md; hand the failure back with the evidence; a `..` segment is refused',
+    })
   })
 
   test(`${tool}: other agents, ids the list does not name and the main loop pass; the main loop never reads the list`, async ($, on) => {

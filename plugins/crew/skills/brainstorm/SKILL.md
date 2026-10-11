@@ -36,7 +36,7 @@ Run the plan by its waves: launch a whole wave in one message, and start a later
 | --- | --- |
 | Implement | `crew:developer` |
 | Specify or adjust the UI | `crew:designer` |
-| Reproduce, cover with tests, run the suite | `crew:tester` |
+| Reproduce, cover with tests, run the suite; reports to `.crew/reviews/` | `crew:tester` |
 | Audit the diff against the plan (writes the review to `.crew/reviews/<name>.md`) | `crew:architect` |
 
 Each agent runs on its default model and effort; with Jev routing (on when the `jevKey` option is set), the model and effort of a call may move one step, so do not pass a `model` unless a specific one is needed (a call that names a model is not routed).

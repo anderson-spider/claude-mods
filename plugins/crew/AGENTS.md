@@ -8,7 +8,7 @@ Registers six subagent types in `session.start`, each `crew:<name>` with a defau
 | `research` | haiku | Read, Grep, Glob, Edit, Write, WebSearch, WebFetch, Context7, terminal-browser and Claude in Chrome tools | researches docs and the web, browses pages, writes findings and docs |
 | `designer` | sonnet | Read, Grep, Glob, Edit, Write, WebSearch, WebFetch, Context7, terminal-browser and Claude in Chrome tools | specifies the UI and edits styles and layout |
 | `developer` | sonnet | Read, Grep, Glob, Edit, Write, Bash | implements a spec and runs its tests |
-| `tester` | sonnet | Read, Grep, Glob, Edit, Write, Bash | reproduces, writes tests, runs the suite; never changes production code |
+| `tester` | sonnet | Read, Grep, Glob, Edit, Write, Bash | reproduces, writes tests, runs the suite; writes test files and `.crew/reviews/**/*.md` only, never production code |
 | `architect` | opus | Read, Grep, Glob, Write, Bash | plans and reviews; answers with a one-line verdict (the dashboard's ARCHITECT panel shows it) then the path; writes `.crew/**/*.md` only, never code |
 
 ## Layout
@@ -41,7 +41,7 @@ In the project where the agents run, everything they write lives in an unversion
 ```
 <repo>/.crew/
   plans/<name>.md       the plan the user approves (brainstorm, step 5)
-  reviews/<name>.md     the architect's reviews
+  reviews/<name>.md     the architect's reviews (the tester's reports: <name>-test.md)
   research/<name>.md    the research agent's findings
 ```
 
@@ -126,6 +126,6 @@ Off until the `codex` option is true (the switch; the Codex CLI runs under the p
 - Browser and MCP tool names are listed explicitly (no wildcard); one a session does not have connected is unavailable to the agent.
 - Names stay short and avoid "advisor" and "architect" except for `architect` itself: the dashboard shows the type (`crew:<name>`) on a narrow card and files any type matching its `architectPattern` under its architect panel, not as a card.
 - `architect` is named so on purpose: it matches the dashboard's default `architectPattern`, so its runs show in the ARCHITECT panel as consults, not as cards. The panel shows the first non-empty line of the architect's answer, so the prompt asks for a one-line verdict first.
-- `hooks/guard.ts` holds the write rules and `register.tsx` enforces them in a `tool.call` hook on `Write` and `Edit`: the architect may write Markdown under `.crew/` only (plans and reviews, unversioned; the brainstorm skill adds `.crew/` to the root `.gitignore` when it is not ignored), the tester test files only. The hook finds the caller through `e.agentId` and `$.agent.list()`, never blocks the main loop, and holds a subagent whose write it could not check.
-- Not enforced, prompt only: the designer leaves logic and tests alone, and the architect's `Bash` is not screened for writes.
+- `hooks/guard.ts` holds the write rules and `register.tsx` enforces them in a `tool.call` hook on `Write` and `Edit`: the architect may write Markdown under `.crew/` only (plans and reviews, unversioned; the brainstorm skill adds `.crew/` to the root `.gitignore` when it is not ignored), the tester test files and Markdown under `.crew/reviews/`, and a path with a `..` segment is refused for both. The hook finds the caller through `e.agentId` and `$.agent.list()`, never blocks the main loop, and holds a subagent whose write it could not check.
+- Not enforced, prompt only: the designer leaves logic and tests alone, and the architect's and tester's `Bash` is not screened for writes.
 - `skills/brainstorm/SKILL.md` tells Claude how to plan with these agents (frame, gather in parallel, diverge, challenge with `architect`, plan); keep its agent names in step with `hooks/agents.ts`.
