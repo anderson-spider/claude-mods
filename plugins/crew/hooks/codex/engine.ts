@@ -73,6 +73,9 @@ export type EngineOptions = {
 /** A tool's answer: text for the model, and whether it is an error. */
 export type Answer = { text: string; isError: boolean }
 
+/** How long a job without a pid still counts as starting (the worker writes it a moment after the record). */
+const PID_GRACE_MS = 30_000
+
 const ok = (value: unknown): Answer => ({ text: JSON.stringify(value, null, 2), isError: false })
 const fail = (text: string): Answer => ({ text, isError: true })
 /** A call aborted before its job was created: nothing ran. */
@@ -197,6 +200,9 @@ export function createCodexEngine(options: EngineOptions) {
     `${job.status}|${job.lastActivity ?? ''}|${job.tokens?.output ?? ''}|${job.endedAt ?? ''}|${job.result?.length ?? ''}`
   const listKey = (jobs: readonly Job[]) => jobs.map(job => `${job.id}:${job.status}:${job.sessionId ?? ''}`).join(',')
 
+  /** Records already created private (0600) by the shell; the host's own write keeps the mode of a file that exists. */
+  const privateRecords = new Set<string>()
+
   /** Writes the job's record when its status, session, pid or cancel changed; one write at a time per job, in order. */
   function persist(dir: string, job: Job): Promise<void> {
     const extra = extraOf(job)
@@ -207,7 +213,14 @@ export function createCodexEngine(options: EngineOptions) {
     const text = `${JSON.stringify(recordOf(job, extra))}\n`
     const write = (writes.get(job.id) ?? Promise.resolve()).then(async () => {
       try {
-        await current().write(jobPaths(dir, job.id).json, text)
+        const path = jobPaths(dir, job.id).json
+        if (!privateRecords.has(job.id)) {
+          privateRecords.add(job.id)
+          // The other job files are made under umask 077 by the worker; the record gets the same mode before its first write (an existing one is tightened).
+          const made = await current().run(['/bin/sh', '-c', 'umask 077; [ -e "$1" ] || : >"$1"; chmod 600 "$1"', 'crew-codex-record', path], { timeoutMs: 10_000 }).catch(() => undefined)
+          if (made?.exitCode !== 0) current().log(`crew codex: job ${job.id} record not made private`)
+        }
+        await current().write(path, text)
       } catch (error) {
         if (persisted.get(job.id) === key) persisted.delete(job.id)
         current().log(`crew codex: job ${job.id} record not written (${errorText(error)})`)
@@ -467,6 +480,8 @@ export function createCodexEngine(options: EngineOptions) {
       const { dir } = await baseOf()
       const h = current()
       const pid = extra.pid ?? parsePid(await h.read(jobPaths(dir, id).pid).catch(() => ''))
+      // A worker writes its pid a moment after the record: no pid on a young job is a start in progress, not an end.
+      if (pid === undefined && options.now() - job.startedAt < PID_GRACE_MS) return
       const seen = await checkCodex(h, dir, id, pid)
       if (seen === 'alive' || seen === 'unknown') return
       delete extra.foreign

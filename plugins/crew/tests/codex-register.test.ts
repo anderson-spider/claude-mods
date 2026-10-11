@@ -42,6 +42,8 @@ function codexWorld(
     failCards?: () => boolean
     /** The worker does not start (the outer shell gave up waiting for the pid). */
     workerFails?: boolean
+    /** The shell step that makes the record private fails (non-zero). */
+    recordFails?: boolean
     /** The project's git ignores `.crew`. */
     crewIgnored?: boolean
   } = {},
@@ -112,7 +114,7 @@ function codexWorld(
   })
   const run = fakeProcesses({
     files, dirs, runs, alive, gitTop: () => gitTop, scenario: () => scenario, foregroundElapses: opts.foregroundElapses,
-    workerFails: opts.workerFails, crewIgnored: () => opts.crewIgnored === true,
+    workerFails: opts.workerFails, recordFails: opts.recordFails, onRecord: path => fsCalls.push(`shell ${path}`), crewIgnored: () => opts.crewIgnored === true,
   })
   on('process.run', async (_$, e) => ({ value: { ...(await run([...e.argv], e.init)), isStdoutTruncated: false, isStderrTruncated: false } }))
 
@@ -782,6 +784,53 @@ test('A: another session\'s job whose Codex is gone with no exit code settles as
   expect(world.polls()).toEqual([])
   expect(parsed(await result($, id))).toEqual(expect.objectContaining({ status: 'lost', resumable: true }))
   expect(world.transcript).toEqual([])
+})
+
+test('A: a foreign job with no pid yet is starting inside the grace window and stays read-only; past it, it is handled as ended', { ...ON }, async ($, on) => {
+  const young = 'cx-f-00003'
+  const old = 'cx-f-00004'
+  const world = codexWorld(on, {
+    files: {
+      [`${DIR}/${young}.json`]: foreignRecord(young, { pid: undefined, startedAt: Date.now() }),
+      [`${DIR}/${young}.jsonl`]: line(THREAD),
+      [`${DIR}/${old}.json`]: foreignRecord(old, { pid: undefined, startedAt: Date.now() - 60_000 }),
+      [`${DIR}/${old}.jsonl`]: line(THREAD),
+    },
+  })
+  await $.session.start(START)
+
+  // Inside the window: the worker may not have written its pid yet, so the job is not claimed and cannot be cancelled here.
+  expect(parsed(await result($, young))).toEqual(expect.objectContaining({ status: 'running', note: expect.stringContaining('another Claude session') }))
+  const cancel = await $.tool.call({ tool: 'mcp__crew__codex_cancel', jobId: young } as never)
+  expect(cancel).toEqual(expect.objectContaining({ isError: true, result: expect.stringContaining('still running') }))
+  expect(world.polls()).toEqual([])
+  expect(world.runs.some(run => run.argv[0] === 'kill')).toBe(false)
+
+  // Past it, with no pid and no exit file: lost, as before.
+  expect(parsed(await result($, old))).toEqual(expect.objectContaining({ status: 'lost' }))
+})
+
+test('the job record is created private (0600) by the shell before the first host write', { ...ON }, async ($, on) => {
+  const world = codexWorld(on)
+  const answer = parsed(await call($, { agent: 'code-reader', prompt: 'list files', description: 'list files' }))
+  const path = `${DIR}/${String(answer.jobId)}.json`
+  const made = world.runs.find(run => run.argv[3] === 'crew-codex-record' && run.argv[4] === path)
+  expect(made!.argv[2]).toContain('umask 077')
+  expect(made!.argv[2]).toContain('chmod 600')
+  // One ordered log: the shell step comes before the first host write of the record.
+  const ordered = world.fsCalls.filter(entry => entry === `shell ${path}` || entry === `write ${path}`)
+  expect(ordered[0]).toBe(`shell ${path}`)
+  expect(ordered).toContain(`write ${path}`)
+  expect(world.runs.filter(run => run.argv[3] === 'crew-codex-record' && run.argv[4] === path)).toHaveLength(1)
+})
+
+test('a failing shell step leaves the record written, with one log line', { ...ON }, async ($, on) => {
+  const world = codexWorld(on, { recordFails: true })
+  const answer = parsed(await call($, { agent: 'code-reader', prompt: 'list files', description: 'list files' }))
+  const path = `${DIR}/${String(answer.jobId)}.json`
+  expect(answer.status).toBe('done')
+  expect(JSON.parse(world.files.get(path) ?? '{}')).toEqual(expect.objectContaining({ status: 'done' }))
+  expect(world.logs.filter(text => text.includes('not made private'))).toHaveLength(1)
 })
 
 test('E: a worker that gave up waiting for its pid ends the job as an error, with no prompt file left and no poll', { ...ON }, async ($, on) => {

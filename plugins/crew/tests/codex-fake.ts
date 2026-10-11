@@ -46,6 +46,9 @@ export function fakeProcesses(opts: {
   foregroundElapses?: boolean
   /** The worker fails to start: the outer shell gave up waiting for the pid, removed the prompt and left the mark. */
   workerFails?: boolean
+  /** The record's private-creation step: seen as it runs, and failing when asked. */
+  onRecord?: (path: string) => void
+  recordFails?: boolean
   /** `git check-ignore -q .crew` succeeds: the project ignores `.crew`. */
   crewIgnored?: () => boolean
   /** The command `ps` shows for a live pid; a Codex exec by default. */
@@ -102,6 +105,14 @@ export function fakeProcesses(opts: {
         if (scenario.exit === undefined) alive.add(PID)
         else files.set(exit, `${scenario.exit}\n`)
         return out(`${PID}\n`)
+      }
+      case 'crew-codex-record': {
+        // The record's private creation: an existing file keeps its content, a new one is empty (umask 077).
+        const path = argv[4]!
+        opts.onRecord?.(path)
+        if (opts.recordFails) return out('', 1, 'chmod failed')
+        if (!files.has(path)) files.set(path, '')
+        return out()
       }
       case 'crew-codex-wait': {
         const exit = argv[4]!
