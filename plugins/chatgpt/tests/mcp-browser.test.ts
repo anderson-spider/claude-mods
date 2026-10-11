@@ -61,7 +61,9 @@ test('pollUntil answers true as soon as the check holds', async () => {
   const clock = clockOf()
   const answers = [false, false, true]
   let poll = 0
-  const sleep = async (ms: number) => clock.advance(ms)
+  const sleep = async (ms: number): Promise<void> => {
+    clock.advance(ms)
+  }
   expect(await pollUntil(async () => answers[Math.min(poll++, answers.length - 1)]!, sleep, 5000, clock.now)).toBe(true)
   expect(poll).toBe(3)
 })
