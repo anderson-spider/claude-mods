@@ -21,7 +21,7 @@ Skip it for a one-line change, a rename, a typo or a question with a known answe
    Give each a self-contained question and the files or terms to start from. Skip an agent the task does not need.
 3. **Diverge.** Write two or three options with what each costs and what each risks. For anything the user sees, ask `crew:designer` for a UI spec first (layout, states, copy) and include it in the options.
 4. **Challenge.** Send the leading option to `crew:architect` with the goal and constraints (and the `.crew/reviews/<name>.md` path to write its review to), asking whether it preserves the invariants (contracts, auth, data shapes, project rules). Fold each objection into the plan or answer it in writing.
-5. **Plan.** Write one plan: context, the chosen approach only, the files to change and the existing code to reuse, how it will be verified, and the steps. Each step names its owner, what it depends on and the files it touches, e.g. `T3 (crew:developer, after: —) src/a.ts`, `T2 (crew:tester, after: T0, T1) tests/a.test.ts`. End with the waves: groups of steps with no dependency between them and no shared files, which run at the same time. Save it as `.crew/plans/<name>.md` and pass that path to every agent that implements, tests or audits it.
+5. **Plan.** Write one plan: context, the chosen approach only, the files to change and the existing code to reuse, how it will be verified, and the steps. Each step names its owner, what it depends on and the files it touches, and carries a state (queued, implementing, ready for QA, fixes requested, verified, blocked), e.g. `T3 (crew:developer, after: —) src/a.ts`, `T2 (crew:tester, after: T0, T1) tests/a.test.ts`. End with the waves: groups of steps with no dependency between them and no shared files, which run at the same time. Save it as `.crew/plans/<name>.md` and pass that path to every agent that implements, tests or audits it.
 
 6. **Recommend how to run it.** Once the user approves, say which mode fits and give the command, then wait: starting it is the user's call.
    - `/goal` when the plan has a verifiable end (tests pass, a check is green, a file exists): offer the end condition from the plan as the goal text.
@@ -30,7 +30,7 @@ Skip it for a one-line change, a rename, a typo or a question with a known answe
 
 ## Who does what after the plan
 
-Run the plan by its waves: launch a whole wave in one message, and start a later step as soon as its own inputs are ready instead of waiting for the rest of the wave.
+Run the plan by its waves: launch a whole wave in one message, and start a later step as soon as its own inputs are ready instead of waiting for the rest of the wave. Update each step's state in the plan file as work moves; a step is verified only after `crew:tester` or `crew:architect` has checked it, not on the developer's report.
 
 | Step | Agent |
 | --- | --- |
