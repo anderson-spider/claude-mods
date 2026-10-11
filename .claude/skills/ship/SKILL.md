@@ -1,0 +1,27 @@
+---
+name: ship
+description: Ship the current branch end to end (done checklist, version bump, audit, commit, PR, CI, approved merge, plugin update); use after a plugin or repo change is ready
+disable-model-invocation: true
+argument-hint: "[<plugin-name>...]"
+---
+
+# ship
+
+Takes the current `andersonsilva/*` branch from a finished change to a merged PR and an updated installed plugin. Plugins come from `$ARGUMENTS`; with none, derive them from `git diff --name-only $(git merge-base origin/main HEAD)` plus `git ls-files --others --exclude-standard` (paths under `plugins/<name>/`).
+
+Never commit, push, rebase or reset `main`, `master` or `develop`. If `AskUserQuestion` or `crew:architect` is unavailable, stop and say so: the gate and the audit are never skipped or assumed.
+
+## Steps
+
+0. **Preconditions**: `git fetch origin main` first, so the merge base, the audit and any rebase use the current `origin/main`. The branch matches `andersonsilva/*` and runs in its own worktree. List every path in `git status --porcelain -uall` (modified, staged, untracked; `-uall` expands new directories to files). If `git diff --cached --name-only` is not empty, list those paths and ask or stop, because a commit takes the whole index. Then check `gh pr list --head <branch> --state merged --json number,headRefOid,mergedAt` and `--state open`. With a merged PR and none open, the commits already squashed into `main` would return: if `git merge-base --is-ancestor <headRefOid> <branch>` succeeds, offer `git rebase --onto origin/main <headRefOid> <branch>` before step 1; otherwise the branch name was reused, so continue to a new PR. If the remote branch exists after a rebase, push with `git push --force-with-lease origin <branch>`.
+1. **Done checklist**: read `.claude/skills/release-plugin/SKILL.md` and run its Steps section for each plugin (reading it does not substitute `$ARGUMENTS`; pass this skill's plugin list, and skip its Report section). With no plugin touched, or when `.claude-plugin/marketplace.json` or `scripts/` also changed, run `claude plugin validate .` and `node scripts/check-consistency.mjs` too.
+2. **Fix the gaps**: bump `version` in `plugin.json` for any plugin with changes outside `tests/` whose `version` still equals `origin/main`'s (so a second `/ship` does not bump again), because the plugin cache is keyed by version and users only get a change through a new one; ask before a major bump. Fix README/AGENTS.md drift. Re-run step 1; after 2 rounds, stop and report.
+3. **Audit**: `crew:architect` audits the diff from the merge base plus untracked files against the branch's intent, writes `.crew/reviews/ship-<name>.md` (the branch without the `andersonsilva/` prefix, any remaining `/` as `-`), and marks each path in `git status --porcelain -uall` taken after step 2 (step 0's list plus the step 2 edits) in or out of scope. The step 2 edits (version bumps, doc fixes) are always in scope, or the commit would ship without them. Resolve or justify each finding.
+4. **Commit and push**: `git add -- <in-scope paths>`, never `-A`, `.` or `-a`, so unrelated edits stay out. Before committing, check that `git diff --cached --name-only` equals the in-scope list. Commit with a Conventional Commit message in English and no AI attribution (no `Co-Authored-By`, no "Generated with ..."); skip the commit when nothing is staged. Then `git push -u origin <branch>` (with `--force-with-lease` after a step 0 rebase); always name the remote and branch.
+5. **PR**: look only at open PRs (`gh pr list --head <branch> --state open`).
+   - One open: it already has the push; never open a second PR.
+   - None open: `gh pr create` with a Conventional Commit title in English and the sections of `.github/pull_request_template.md`, in English. No AI attribution, and follow the user's PR-description instructions. Review the body with the `humanizer` skill first; describe validation by kind and give no test counts.
+6. **CI**: poll `gh pr checks <n>` until a check appears (about 60 s), then `gh pr checks <n> --watch`. On failure, fix, re-run steps 1 and 3 on the new diff (new edits are in scope, as in step 3), push and watch again; after 2 rounds, stop. For a failure outside the diff (setup, network), offer `gh run rerun <run-id> --failed` once (a run id is required without a TTY; take it from `gh run list --branch <branch> --limit 1 --json databaseId`).
+7. **Approval gate**: one `AskUserQuestion` showing the PR link, `baseRefName`, `isDraft`, `mergeStateStatus`, the head SHA, the CI result, the version bumps and the audit result. Options: merge or stop.
+8. **Merge and update**: `gh pr merge <n> --squash --match-head-commit <approved sha>`, so a later push is not merged unseen; never `--admin` or `--auto`. Confirm `gh pr view <n> --json state` is `MERGED`, else stop. The repository deletes the remote branch on merge, so do not delete it. Then run `mise run plugins:update`, check each shipped plugin that `claude plugin list --json` shows as installed against the merged `plugin.json` version (a mismatch is blocked), and tell the user to run `/reload-plugins`.
+9. **Report**: three sections in this order: blocked on the user, changed, found (the user's global instructions set the exact headings and language, e.g. "Blocked on me / Changed / Found"). List out-of-scope paths left in the worktree. Suggest running `/cleanup` from the main checkout or another session, since this worktree is the one just merged.
