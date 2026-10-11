@@ -27,7 +27,7 @@ test('session start registers the six specialists with their models', async ($, 
   ])
   expect(registered.find(a => a.name === 'architect')?.tools).not.toContain('Edit')
   expect(registered.find(a => a.name === 'architect')?.tools).toContain('Write')
-  expect(registered.find(a => a.name === 'architect')?.effort).toBe('high')
+  expect(registered.find(a => a.name === 'architect')?.effort).toBe('medium')
 })
 
 test('a write outside the agent\'s lane is denied, the main loop and other agents pass', async ($, on) => {
@@ -366,7 +366,7 @@ test('an agent the list shows without the tag does not take the routed effort', 
   let release: () => void = () => {}
   const held = new Promise<void>(resolve => { release = resolve })
   const { seen } = jevWorld(on, {
-    reply: async () => ok(answer('sonnet', 0.95, 0.4)),
+    reply: async () => ok(answer('sonnet', 0.95, 3.9)),
     agents: [{ id: 'a9', type: 'crew:developer', description: 'audit auth' }],
     spawn: async () => { await held; return { model: 'default', agentId: 'a1' } },
   })
@@ -543,10 +543,10 @@ test('two calls alike, one routed and one that Jev failed on, are told apart by 
   let fetched = 0
   let spawned = 0
   const { seen } = jevWorld(on, {
-    reply: async () => (fetched++ === 0 ? ok(answer('sonnet', 0.95, 0.4)) : { status: 400, ok: false, headers: {}, text: '{}' }),
+    reply: async () => (fetched++ === 0 ? ok(answer('sonnet', 0.95, 3.9)) : { status: 400, ok: false, headers: {}, text: '{}' }),
     agents: [
       // The host lists each with the description it was spawned with: the routed one carries the tag.
-      { id: 'a1', type: 'crew:developer', description: 'fix tests · sonnet/low' },
+      { id: 'a1', type: 'crew:developer', description: 'fix tests · sonnet/high' },
       { id: 'a2', type: 'crew:developer', description: 'fix tests' },
     ],
     spawn: async () => {
@@ -571,7 +571,7 @@ test('two calls alike, one routed and one that Jev failed on, are told apart by 
   await step($, 'a2', 'medium')
 
   // The routed one runs on its effort from its first step; the other keeps what the host sends.
-  expect(seen.steps).toEqual(['low', 'medium', 'low', 'medium'])
+  expect(seen.steps).toEqual(['high', 'medium', 'high', 'medium'])
   expect(seen.notices.some(text => text.includes('not applied'))).toBe(false)
 })
 
@@ -656,7 +656,7 @@ test('at most four Jev calls run at once; the fifth spawn goes through unchanged
 })
 
 test('the effort follows the spawn id on the subagent\'s steps, only when it differs from the default', ON, async ($, on) => {
-  const { seen } = jevWorld(on, { reply: async () => ok(answer('sonnet', 0.95, 0.4)) })
+  const { seen } = jevWorld(on, { reply: async () => ok(answer('sonnet', 0.95, 3.9)) })
   await $.agent.spawn(spawnInput())
 
   await step($, 'a1', 'medium')
@@ -664,15 +664,15 @@ test('the effort follows the spawn id on the subagent\'s steps, only when it dif
   await step($, undefined, 'medium')
   await step($, 'a1', null)
 
-  expect(seen.steps).toEqual(['low', 'medium', 'medium', undefined])
+  expect(seen.steps).toEqual(['high', 'medium', 'medium', undefined])
 })
 
 test('a step that arrives before the spawn resolves still gets the effort', ON, async ($, on) => {
   let release: () => void = () => {}
   const held = new Promise<void>(resolve => { release = resolve })
   const { seen } = jevWorld(on, {
-    reply: async () => ok(answer('sonnet', 0.95, 0.4)),
-    agents: [{ id: 'a1', type: 'crew:developer', description: 'audit auth · sonnet/low' }],
+    reply: async () => ok(answer('sonnet', 0.95, 3.9)),
+    agents: [{ id: 'a1', type: 'crew:developer', description: 'audit auth · sonnet/high' }],
     spawn: async () => { await held; return { model: 'default', agentId: 'a1' } },
   })
 
@@ -684,7 +684,7 @@ test('a step that arrives before the spawn resolves still gets the effort', ON, 
   await spawned
   await step($, 'a1', 'medium')
 
-  expect(seen.steps).toEqual(['low', 'low'])
+  expect(seen.steps).toEqual(['high', 'high'])
 })
 
 test('an effort that was not known at the first step is not applied later: the agent keeps the default for its run', ON, async ($, on) => {
@@ -692,7 +692,7 @@ test('an effort that was not known at the first step is not applied later: the a
   const held = new Promise<void>(resolve => { release = resolve })
   // The agent is not listed yet when it steps first.
   const { seen } = jevWorld(on, {
-    reply: async () => ok(answer('sonnet', 0.95, 0.4)),
+    reply: async () => ok(answer('sonnet', 0.95, 3.9)),
     spawn: async () => { await held; return { model: 'default', agentId: 'a1' } },
   })
 
@@ -706,14 +706,14 @@ test('an effort that was not known at the first step is not applied later: the a
 
   expect(seen.steps).toEqual(['medium', 'medium', 'medium'])
   // The notice and the debug line say what runs, not what Jev asked for.
-  expect(seen.notices).toEqual(['crew:developer -> sonnet · medium (jev; effort low not applied)'])
+  expect(seen.notices).toEqual(['crew:developer -> sonnet · medium (jev; effort high not applied)'])
   expect(seen.logs.some(line => line.includes('effort=medium (default)'))).toBe(true)
-  expect(seen.logs.some(line => line.includes('effort low not applied (stepped)'))).toBe(true)
+  expect(seen.logs.some(line => line.includes('effort high not applied (stepped)'))).toBe(true)
 })
 
 test('a spawn that the host refuses reaches the caller and leaves no effort behind', ON, async ($, on) => {
   const { seen } = jevWorld(on, {
-    reply: async () => ok(answer('sonnet', 0.95, 0.4)),
+    reply: async () => ok(answer('sonnet', 0.95, 3.9)),
     spawn: async () => ({ deny: 'spawn refused' }) as never,
     agents: [{ id: 'a1', type: 'crew:developer', description: 'audit auth' }],
   })
@@ -1014,8 +1014,8 @@ test('a routed spawn runs in order: request, spawn, decision write, debug line, 
 test('the effort entry exists before the spawn continues, and its bind is in the record that is written after', ON, async ($, on) => {
   const timeline: string[] = []
   const { seen } = jevWorld(traced(on, timeline), {
-    reply: async () => ok(answer('sonnet', 0.95, 0.4)),
-    agents: [{ id: 'a1', type: 'crew:developer', description: 'audit auth · sonnet/low' }],
+    reply: async () => ok(answer('sonnet', 0.95, 3.9)),
+    agents: [{ id: 'a1', type: 'crew:developer', description: 'audit auth · sonnet/high' }],
     spawn: async () => {
       // The subagent steps while the spawn is still in flight: only an entry added before it can answer.
       await step($, 'a1', 'medium')
@@ -1028,12 +1028,12 @@ test('the effort entry exists before the spawn continues, and its bind is in the
   expect(shape(timeline)).toEqual([
     'fetch',
     'spawn',
-    'step low',
+    'step high',
     'write',
-    'log crew jev: crew:developer tier=sonnet@0.95 depth=0.40 model=sonnet (default) effort=low jev=jev-1.13.0 Nms',
-    'notice crew:developer -> sonnet · low (jev)',
+    'log crew jev: crew:developer tier=sonnet@0.95 depth=3.90 model=sonnet (default) effort=high jev=jev-1.13.0 Nms',
+    'notice crew:developer -> sonnet · high (jev)',
   ])
-  expect(record(seen)).toMatchObject({ bind: 'matched', effortPlanned: 'low', effortApplied: 'low' })
+  expect(record(seen)).toMatchObject({ bind: 'matched', effortPlanned: 'high', effortApplied: 'high' })
 })
 
 test('an effort that did not take is announced after the decision write, line by line, and the record says what runs', ON, async ($, on) => {

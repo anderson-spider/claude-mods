@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { EFFORTS, MODELS, MODEL_FLOORS, SPECIALISTS } from '../hooks/agents'
+import { EFFORTS, EFFORT_FLOOR, MODELS, MODEL_FLOORS, SPECIALISTS } from '../hooks/agents'
 
 const by = (name: string) => SPECIALISTS.find(s => s.name === name)
 
@@ -25,10 +25,9 @@ test('designer can edit and browse, tester can run commands', () => {
   expect(by('tester')?.tools).toContain('Bash')
 })
 
-test('effort is set on purpose: architect high, reader low, the rest medium', () => {
-  expect(by('architect')?.effort).toBe('high')
-  expect(by('code-reader')?.effort).toBe('low')
-  for (const name of ['research', 'designer', 'developer', 'tester']) expect(by(name)?.effort).toBe('medium')
+test('effort is set on purpose: every specialist defaults to medium, which is also the floor', () => {
+  for (const s of SPECIALISTS) expect(s.effort).toBe('medium')
+  expect(EFFORT_FLOOR).toBe('medium')
 })
 
 test('names are unique', () => {
@@ -36,18 +35,19 @@ test('names are unique', () => {
   expect(new Set(names).size).toBe(names.length)
 })
 
-test('routing floors name real agents and tiers, and the architect never routes below sonnet', () => {
+test('routing floors name real agents and tiers, and the architect never routes below opus', () => {
   for (const [name, floor] of Object.entries(MODEL_FLOORS)) {
     expect(by(name)).toBeDefined()
     expect(MODELS).toContain(floor)
     expect(MODELS.indexOf(by(name)!.model)).toBeGreaterThanOrEqual(MODELS.indexOf(floor))
   }
-  expect(MODEL_FLOORS.architect).toBe('sonnet')
+  expect(MODEL_FLOORS.architect).toBe('opus')
 })
 
 test('every default sits on the model and effort scales routing moves along', () => {
   for (const s of SPECIALISTS) {
     expect(MODELS).toContain(s.model)
     expect(EFFORTS).toContain(s.effort)
+    expect(EFFORTS.indexOf(s.effort)).toBeGreaterThanOrEqual(EFFORTS.indexOf(EFFORT_FLOOR))
   }
 })

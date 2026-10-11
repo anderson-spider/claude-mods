@@ -11,13 +11,16 @@ export type Specialist = {
   prompt: string
   /** The default model; Jev routing may move it one tier (see `MODEL_FLOORS`). */
   model: Model
-  /** Set on purpose: Opus 5.5 and Haiku 5.5 default to `medium`, Sonnet 5.5 to `high`. */
+  /** Set on purpose: every specialist defaults to `medium`; Jev routing may raise it to `high` (see `EFFORT_FLOOR`). */
   effort: Effort
   tools: readonly string[]
 }
 
-/** The lowest model routing may pick for an agent, whatever Jev says: the architect's value is its depth. */
-export const MODEL_FLOORS: Readonly<Record<string, Model>> = { architect: 'sonnet' }
+/** The lowest model routing may pick for an agent, whatever Jev says: the reviewer never runs on a weaker model than the developer it audits, who can reach opus. */
+export const MODEL_FLOORS: Readonly<Record<string, Model>> = { architect: 'opus' }
+
+/** The lowest effort routing may pick for any agent: Jev may raise effort to `high`, never lower it below this. */
+export const EFFORT_FLOOR: Effort = 'medium'
 
 const READ_ONLY = ['Read', 'Grep', 'Glob'] as const
 
@@ -43,7 +46,7 @@ export const SPECIALISTS: readonly Specialist[] = [
     description:
       'Reads and searches the codebase and reports what it found: symbols with path:line, relations and short excerpts. Read-only; never edits.',
     model: 'haiku',
-    effort: 'low',
+    effort: 'medium',
     tools: READ_ONLY,
     prompt:
       'You are a code reader. Answer the question you were given by reading and searching the code. ' +
@@ -104,7 +107,7 @@ export const SPECIALISTS: readonly Specialist[] = [
     description:
       'Plans and reviews: challenges a design and audits a diff or files for bugs, regressions, broken project rules and missing tests. Writes plan and review documents under .crew/ only; never fixes code.',
     model: 'opus',
-    effort: 'high',
+    effort: 'medium',
     tools: [...READ_ONLY, 'Write', 'Bash'],
     prompt:
       'You are the architect and code reviewer. Judge the design as well as the diff: read `git diff` and the code around it, and run the tests when you need evidence. ' +

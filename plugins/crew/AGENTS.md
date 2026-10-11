@@ -1,6 +1,6 @@
 # crew
 
-Registers six subagent types in `session.start`, each `crew:<name>` with a default model and effort and a tool allowlist. A `prompt.compose` section (`crew:lead`, from `leadSection` in `agents.ts`) makes the main session the lead that delegates to them; it is added only to a request whose tools include `Agent`, which no crew agent has, and it mentions Jev only when routing is on with a trusted key. With the `jevRouting` option on (the default) and a key, Jev (TypeSafe) may move a call's model and effort one step from those defaults.
+Registers six subagent types in `session.start`, each `crew:<name>` with a default model and effort and a tool allowlist. A `prompt.compose` section (`crew:lead`, from `leadSection` in `agents.ts`) makes the main session the lead that delegates to them; it is added only to a request whose tools include `Agent`, which no crew agent has, and it mentions Jev only when routing is on with a trusted key. With the `jevRouting` option on (the default) and a key, Jev (TypeSafe) may move a call's model one step (the architect stays on Opus) and raise its effort to high.
 
 | Agent | Default model | Tools | Role |
 | --- | --- | --- | --- |
@@ -18,7 +18,7 @@ plugins/crew/
   .claude-plugin/plugin.json
   hooks/hooks.json            points to register.tsx
   hooks/register.tsx          $.agent.register in session.start, the lead's prompt.compose section, the Write/Edit guard, the agent.spawn and turn.step hooks of Jev routing
-  hooks/agents.ts             SPECIALISTS: name, description, prompt, model, effort, tools; MODEL_FLOORS; leadSection
+  hooks/agents.ts             SPECIALISTS: name, description, prompt, model, effort, tools; MODEL_FLOORS; EFFORT_FLOOR; leadSection
   hooks/guard.ts              deniedWrite(type, path): the lane of each agent
   hooks/jev.ts                Jev client: one 3 s deadline, one retry, breaker, cap of 4 calls in flight
   hooks/questions.ts          the two questions (tier, reasoning_depth), the pinned Jev model and the thresholds
@@ -51,7 +51,7 @@ On by default (`jevRouting`); nothing is sent without a key. On an `agent.spawn`
 
 - The agent type is never rewritten: each agent keeps its lane and tools.
 - Untouched, with no request: another type, a fork, a workflow script's agent (a hook can only refuse that spawn, so a rewritten model would be ignored: no model, no effort), a call that already names a model, `jevRouting` off, no key, a repository that declares `jevRouting` in its project or local settings (a debug log line says so once), and repository settings that cannot be read.
-- Tier: applied from confidence 0.5, else the default. Model and effort are clamped to the default one step either way; the architect is never below sonnet (`MODEL_FLOORS`). Effort: depth under 1.0 low, under 2.5 medium, else high; a depth within 0.01 of a bound keeps the default. Thresholds are untuned.
+- Tier: applied from confidence 0.5, else the default. Model and effort are clamped to the default one step either way; the architect is never below opus (`MODEL_FLOORS`, so its model stays `opus`) and no agent's effort is below medium (`EFFORT_FLOOR`). Effort: depth under 1.0 low, under 2.5 medium, else high, then raised to the floor (so under 2.5 keeps `medium` and only a high depth moves it, to `high`); a depth within 0.01 of a bound keeps the default. Thresholds are untuned.
 - Fail open: no key, an error status, a malformed body, a timeout, an open breaker or a fifth concurrent call leave the call as it came. One 3 s deadline covers both attempts; a retry (429, 5xx, dropped connection) needs one second left.
 - Key, in order: `$.env.get` of `TYPESAFE_API_KEY` then `JEV_API_KEY`, `~/.jev-router.env` through `$.fs`, the `jevKey` option. An environment key that project or local settings declare is ignored; so is `HOME` for the file when they declare it or when it is not absolute (redaction applies the same rule to the `~` it strips), and a `jevKey` they declare. The home is resolved once, with the key; when none is trusted, redaction takes `/Users/<name>` or `/home/<name>` from the session's directory (never the repository's `HOME`, and never to read a file) so the username and the dashed home still go. When those settings cannot be read routing is off completely. The key is resolved once per module life: a new key or file needs `/reload-plugins`. The key goes only in the `Authorization` header; errors and logs carry a status or a reason, never a body, a key or a prompt.
 - Sent: the agent name, the call description and the prompt, with secrets, emails and paths removed, the prompt cut to 4000 characters, to `https://api.typesafe.ai/v1/systemone` with the model `jev-1.13.0`.
@@ -70,7 +70,7 @@ On by default (`jevRouting`); nothing is sent without a key. On an `agent.spawn`
 
 ## Notes
 
-- `effort` is set on purpose: Opus 5.5 and Haiku 5.5 default to `medium` and Sonnet 5.5 to `high`. Architect `high`, code-reader `low`, the rest `medium`.
+- `effort` is set on purpose: every agent defaults to `medium` (Opus 5.5 and Haiku 5.5 default to `medium`, Sonnet 5.5 to `high`), and routing may raise it to `high` but never lower it below `medium` (`EFFORT_FLOOR`).
 - Prompts say what to do and why, not lists of prohibitions; keep new ones short and test a removal before adding a line.
 - `hooks/agents.ts` is pure (`SPECIALISTS`, `MODEL_FLOORS` and the `leadSection` text); `hooks/register.tsx` holds the one `$.agent.register` call and every other `$` call, which it passes to pure modules as injected functions.
 - Models are aliases (`haiku`, `sonnet`, `opus`), so they follow the newest model of each family. Routing moves a call between them and never to `fable` or a full id.
