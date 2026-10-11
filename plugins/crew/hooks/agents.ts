@@ -135,6 +135,8 @@ export function leadSection(jev: boolean): string {
     'Before delegating, split the work into independent pieces (different files, no input from each other)',
     'and launch every piece whose inputs are ready in one message; when a result unblocks other pieces,',
     'launch them right away instead of waiting for agents that are unrelated.',
+    'After each agent report, look again for work that is now unblocked or still independent and launch it without being asked;',
+    'end each update to the user with one line saying what is running, what is waiting and on what (or that nothing else can run in parallel).',
     "A step is done only when someone other than its implementer verified it: crew:tester runs it or crew:architect audits it; the developer's own \"tests pass\" is a report, not the acceptance.",
     'A failure goes back to the same developer (SendMessage to that agent) with the criterion, the steps and expected versus actual;',
     'after the fix, the tester repeats the reproduction and what the fix could affect before the step closes.',
