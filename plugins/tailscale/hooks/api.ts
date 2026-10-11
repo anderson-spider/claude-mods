@@ -5,10 +5,12 @@ export const WRITE_METHODS = ['POST', 'PUT', 'PATCH', 'DELETE'] as const
 
 const MAX_CHARS = 60_000
 
+type FetchResponse = { status: number; ok: boolean; text: string; headers?: Record<string, string> }
+
 export type Fetch = (
   url: string,
   init: { method: string; headers: Record<string, string>; body?: string },
-) => Promise<{ status: number; ok: boolean; text: string; headers?: Record<string, string> }>
+) => Promise<FetchResponse>
 
 export type Request = {
   method: string
@@ -109,7 +111,7 @@ export function transform(text: string, opts: { redact?: boolean; fields?: reado
 
 /** Returns the path when `buildUrl` accepts it. */
 export function checkedPath(path: unknown): string | undefined {
-  return buildUrl(path) ? (path as string) : undefined
+  return typeof path === 'string' && buildUrl(path) !== undefined ? path : undefined
 }
 
 /** Method, headers (auth, If-Match, content type) and body of the request. */
@@ -135,7 +137,7 @@ export function buildInit(
 
 /** Turns the response into the tool answer: status, ETag, transformed and truncated body. */
 export function format(
-  res: { status: number; ok: boolean; text: string; headers?: Record<string, string> },
+  res: FetchResponse,
   req: Request,
 ): { text: string; isError: boolean } {
   const raw = transform(res.text, req)
@@ -151,14 +153,15 @@ export async function call(
 ): Promise<{ text: string; isError: boolean }> {
   if (!key) return { text: 'TS_API_KEY is not set in the Claude Code environment.', isError: true }
   const path = checkedPath(req.path)
-  if (!path) {
+  const url = buildUrl(path)
+  if (path === undefined || url === undefined) {
     return { text: `Invalid path: ${String(req.path)}. Use something like /tailnet/-/devices.`, isError: true }
   }
   const blocked = forbidden(req.method, path)
   if (blocked) return { text: blocked, isError: true }
 
   try {
-    return format(await fetch(BASE + path, buildInit(req, key)), req)
+    return format(await fetch(url, buildInit(req, key)), req)
   } catch (err) {
     return { text: `Call failed: ${err instanceof Error ? err.message : String(err)}`, isError: true }
   }

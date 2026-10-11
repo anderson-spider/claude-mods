@@ -1,5 +1,5 @@
 import type { Register } from 'claude-code'
-import { WRITE_METHODS, call } from './api'
+import { WRITE_METHODS, call, type Fetch, type Request } from './api'
 
 const PATH_HELP =
   'API path under https://api.tailscale.com/api/v2, starting with "/". "-" is the default tailnet (/tailnet/-/devices).'
@@ -11,6 +11,15 @@ const AREAS =
 /** Shapes a call's output for the host: the result of a custom tool is a string, and `isError` is set only when true (the host rejects `false`). */
 function reply(out: { text: string; isError: boolean }): { result: string } | { result: string; isError: true } {
   return out.isError ? { result: out.text, isError: true as const } : { result: out.text }
+}
+
+/** Reads the key and calls the API; host access arrives as functions because `$` is only used in `on(...)` handlers. */
+async function run(
+  readKey: () => Promise<string | undefined>,
+  fetch: Fetch,
+  req: Request,
+): Promise<ReturnType<typeof reply>> {
+  return reply(await call(fetch, await readKey(), req))
 }
 
 export const register: Register = (on) => {
@@ -60,18 +69,15 @@ export const register: Register = (on) => {
   })
 
   on('tool.call', { tool: 'mcp__tailscale__tailscale_get' }, async ($, e) => {
-    // The key is read on every call, never from options or the code.
-    const key = await $.env.get('TS_API_KEY')
     const fields = Array.isArray(e.fields) ? e.fields.filter((f): f is string => typeof f === 'string') : undefined
-    return reply(
-      // $.http.fetch is wrapped, not passed as a value: the engine's validate rejects the latter.
-      await call((url, init) => $.http.fetch(url, init), key, {
-        method: 'GET',
-        path: e.path,
-        redact: true,
-        fields,
-      }),
-    )
+    // The key is read on every call, never from options or the code.
+    // $.http.fetch is wrapped, not passed as a value: the engine's validate rejects the latter.
+    return run(() => $.env.get('TS_API_KEY'), (url, init) => $.http.fetch(url, init), {
+      method: 'GET',
+      path: e.path,
+      redact: true,
+      fields,
+    })
   })
 
   on('tool.call', { tool: 'mcp__tailscale__tailscale_write' }, async ($, e) => {
@@ -79,15 +85,12 @@ export const register: Register = (on) => {
     if (!(WRITE_METHODS as readonly string[]).includes(method)) {
       return { deny: `Invalid method: ${method}. Use ${WRITE_METHODS.join(', ')}.` }
     }
-    const key = await $.env.get('TS_API_KEY')
     const ifMatch = typeof e.ifMatch === 'string' ? e.ifMatch : undefined
-    return reply(
-      await call((url, init) => $.http.fetch(url, init), key, {
-        method,
-        path: e.path,
-        body: e.body,
-        ifMatch,
-      }),
-    )
+    return run(() => $.env.get('TS_API_KEY'), (url, init) => $.http.fetch(url, init), {
+      method,
+      path: e.path,
+      body: e.body,
+      ifMatch,
+    })
   })
 }
