@@ -143,3 +143,21 @@ export function leadSection(jev: boolean): string {
     'Git and pull requests stay with you.',
   ].join(' ')
 }
+
+/** The tool that runs a crew role on OpenAI Codex. */
+export const CODEX_TOOL = 'mcp__crew__codex'
+
+/** True when the request's tools include the Codex tool, so the lead section may carry `codexSection`. */
+export function offersCodex(tools: readonly string[]): boolean {
+  return tools.includes(CODEX_TOOL)
+}
+
+/** Appended to the lead section only when Codex is offered. */
+export function codexSection(): string {
+  return [
+    'Any crew role can also run on OpenAI Codex through mcp__crew__codex (agent = the role name):',
+    'use it for a second opinion or extra parallel capacity.',
+    'It runs in the background past a short wait; collect it with mcp__crew__codex_result and stop it with mcp__crew__codex_cancel.',
+    'Jev does not size Codex calls, and Codex\'s work is verified like any other step.',
+  ].join(' ')
+}

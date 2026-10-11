@@ -9,7 +9,7 @@ Marketplace of [Claude Code](https://claude.com/claude-code) plugins made by and
 | [branch-guard](plugins/branch-guard) | Holds a `git commit` or `git push` on the protected branch and shows what would go in. |
 | [chatgpt](plugins/chatgpt) | Lets Claude ask your logged-in ChatGPT, or have it generate an image, in terminal-browser, Claude in Chrome or the Claude desktop app's built-in browser, and saves the result locally. |
 | [codex-computer-use](plugins/codex-computer-use) | Routes native Mac app control through Codex computer use from the ChatGPT app instead of Claude's own computer use, asking before each new app. |
-| [crew](plugins/crew) | Registers six specialist subagents: `code-reader` and `research` on Haiku; `designer`, `developer` and `tester` on Sonnet; `architect` on Opus. Optional Jev routing of each call's model and effort, on when the `jevKey` option is set. Includes the [Flightdeck](https://github.com/scasella/claude-flightdeck) dashboard. |
+| [crew](plugins/crew) | Registers six specialist subagents: `code-reader` and `research` on Haiku; `designer`, `developer` and `tester` on Sonnet; `architect` on Opus. Optional Jev routing of each call's model and effort, on when the `jevKey` option is set. Optional Codex engine to run a role on OpenAI Codex, on when the `codex` option is set. Includes the [Flightdeck](https://github.com/scasella/claude-flightdeck) dashboard. |
 | [tailscale](plugins/tailscale) | Lets Claude query and modify your tailnet through the Tailscale API. |
 
 ## Install
@@ -128,6 +128,27 @@ The architect can only write Markdown under `.crew/` and the tester only test fi
 ### The lead
 
 In a request that offers the Agent tool (the main session; the crew agents do not have it), a system prompt section makes Claude the lead: it talks with you, breaks the work down and hands every task that reads, searches, edits or runs anything in the project to the crew agent for that kind of work, in parallel when the tasks are independent. It does not judge a task's size: with a `jevKey`, Jev sizes each call; without one, each agent runs on the model sized for its role. A teammate's prompt does not get the section. Git and pull requests stay with the lead.
+
+### Codex engine
+
+Off by default; the `codex` option is the switch. When on, the lead can run any crew role on OpenAI Codex instead of as a Claude subagent, through the local Codex CLI (`codex` on your `PATH`, logged in). The prompt the lead writes and the repository content the job reads are sent to OpenAI by that CLI, under your Codex login and plan. With the option off nothing is registered or run.
+
+It registers three tools, which only the main session may call (a subagent's call is refused):
+
+| Tool | What it does |
+| --- | --- |
+| `mcp__crew__codex` | Runs a role (`agent`, `prompt`, `description`, optional `cwd`, `background`, `resume`) on Codex. It waits up to 20 seconds and returns as soon as the job ends; past that, or when you press Esc (which also asks Codex to stop), the job keeps running in the background. `background: true` returns at once, once the job's record is saved. A relative `cwd` is taken from the session's directory. |
+| `mcp__crew__codex_result` | Takes a `jobId` and returns JSON: status, agent, description, the answer once the job ended (up to 50,000 characters), the last activity while it runs, and the error, usage, files and resumability when they apply. |
+| `mcp__crew__codex_cancel` | Takes a `jobId` and asks Codex to stop (SIGINT), only once `ps` shows the job's pid as a running `codex exec`. It answers `cancelling`; the job ends `cancelled` once Codex has stopped. A SIGINT that could not be sent is reported and tried again by the next cancel. One that was sent is not repeated or escalated, so a Codex that ignores it stays `cancelling` until it ends. |
+
+Each role runs with a fixed sandbox that the lead cannot change:
+
+- Read-only: `code-reader`, `research` and `architect`. Codex saves the final message of `research` and `architect` to `.crew/research/<name>-<jobId>.md` and `.crew/reviews/<name>-<jobId>.md`, so they are told to make that message the whole findings or review and not to try to write files. If git does not already ignore `.crew`, a `.crew/.gitignore` of `*` is added (your root `.gitignore` is left alone).
+- Workspace-write: `developer`, `designer` and `tester`. They are refused outside a git repository and when `cwd` is outside the repository. The crew pins their extra writable roots to none and their network access off.
+
+The sandbox is not a hard limit: approvals are on-request and Codex's own auto-review answers a request to leave it (network, an install, a path outside the root); a command that fails first and is then retried is not a failed job. The crew's `Write` and `Edit` guard does not apply to Codex: the tester's and designer's lanes are prompt-only there. Your `~/.codex` configuration still applies (model, MCP servers, web search), except the sandbox, approval, writable-root and network keys the crew sets. The optional `codexModels` option picks a Codex model per role (`developer=gpt-x,architect=gpt-y`); a role left out uses Codex's own default. Jev does not route Codex calls.
+
+Each job runs in a detached worker (in its own session when `perl` is available, which also lets the cancel's SIGINT reach Codex) and keeps its files in `.crew/codex/` (in the session directory outside a git repository), which gets a `.gitignore` of `*`. A job survives `/reload-plugins`; it belongs to the Claude session that started it, and another session lists it read-only while its Codex runs; once that Codex has ended or is gone, the other session settles it from its files and can read and resume it. A job whose worker is gone comes back as `lost`; `resume` continues a job from its Codex session with the same agent and the original `cwd`, one resume of a session at a time. When a job ends in the background, a transcript line and a message to the lead give its id, role and status only; ask `codex_result` for the answer. In Flightdeck a job is a card titled `codex:<role>`, the architect included.
 
 ### Flightdeck dashboard
 

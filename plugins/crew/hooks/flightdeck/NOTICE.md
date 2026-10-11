@@ -24,6 +24,6 @@ This folder is a copy of [Flightdeck](https://github.com/scasella/claude-flightd
 
 Outside this folder:
 
-- `plugins/crew/types/index.d.ts` is upstream `types/index.d.ts` with the state keyed `'crew'`, and with `Placement`, `PanelChoice` and the `panel` key added; the manifest names it in `types`.
+- `plugins/crew/types/index.d.ts` is upstream `types/index.d.ts` with the state keyed `'crew'`, and with `Placement`, `PanelChoice` and the `panel` key added; the manifest names it in `types`. The crew's own Codex engine adds `CodexJobSummary`, the `codexJobs` key and an `McpToolInputs` block for its three `mcp__crew__codex*` tools, none of them from upstream.
 - `plugins/crew/tests/flightdeck.test.ts` is upstream `tests/flightdeck.test.ts` with its import at `../hooks/flightdeck/core` and `plugin: 'crew'` in `pane()`, plus tests of the `placement` option, the command's arguments and the stored choice.
 - The crew's `plugin.json` carries the twelve options with the upstream names and defaults, and a thirteenth, `placement` (`side` or `prompt`, default `side`); the `openOnStart` and `layout` descriptions say how the command and the stored pick change them.

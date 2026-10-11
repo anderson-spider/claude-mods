@@ -1,0 +1,4 @@
+{"type":"thread.started","thread_id":"01a12bd5-9d50-7dc2-a785-4ed4ecc5f924"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"Vou executar o comando e informar a saída quando terminar.\n"}}
+{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc 'sleep 60; echo done'","aggregated_output":"","exit_code":null,"status":"in_progress"}}
