@@ -6,7 +6,8 @@ import type { Effort, Model } from './agents'
 
 /** `<home>/.claude/crew/decisions`: the home is the trusted one, never the repository's. */
 const DIR = '.claude/crew/decisions'
-const MODEL_ID = /^[\w.:-]{1,64}$/
+// A context suffix such as `[1m]` is part of a model id.
+const MODEL_ID = /^[\w.:[\]-]{1,64}$/
 
 export type DecisionInput = {
   ts: string
@@ -44,6 +45,8 @@ export type DecisionRecord = {
   durationMs: number
   descriptionHash: string
   applied: { model: boolean; effort: boolean }
+  /** What the first confirmed step ran on: the model id the API reported and the effort sent; null until then. */
+  ran: { model: string | null; effort: string | null } | null
   /** Filled in by hand when annotating: whether the choice turned out right. */
   outcome: null
 }
@@ -78,8 +81,14 @@ export function decisionRecord(input: DecisionInput): DecisionRecord {
     durationMs: Math.max(0, Math.round(input.durationMs)),
     descriptionHash: fnv1a(input.description ?? ''),
     applied: { model: input.model !== input.defaultModel, effort: input.effortApplied !== input.defaultEffort },
+    ran: null,
     outcome: null,
   }
+}
+
+/** The record with what ran; a model id outside the safe shape is kept as null. */
+export function withRan(record: DecisionRecord, ran: { model: string; effort: string | undefined }): DecisionRecord {
+  return { ...record, ran: { model: MODEL_ID.test(ran.model) ? ran.model : null, effort: ran.effort ?? null } }
 }
 
 /** `<home>/.claude/crew/decisions/<ts with ':' replaced>-<id>.json`; the id is cut to safe characters. */

@@ -73,6 +73,8 @@ type Seen = {
   notices: string[]
   logs: string[]
   writes: { path: string; text: string }[]
+  /** The lines `$.ui.log` sent to the transcript. */
+  transcript: string[]
 }
 
 /** The host beneath the plugin: env, settings and files, Jev's endpoint, the spawn and the step the plugin routes. */
@@ -94,9 +96,11 @@ function jevWorld(
     writeFail?: boolean
     /** The decision log's write never settles. */
     writeHang?: boolean
+    /** The model id the API reports for a step; none by default (no usage). */
+    stepModel?: string | (() => string | undefined)
   } = {},
 ) {
-  const seen: Seen = { fetches: [], spawned: [], steps: [], notices: [], logs: [], writes: [] }
+  const seen: Seen = { fetches: [], spawned: [], steps: [], notices: [], logs: [], writes: [], transcript: [] }
   const flags = { settingsFail: opts.settingsFail === true }
   const clock = mock.clock(on)
   mock.env(on, { HOME, TYPESAFE_API_KEY: KEY, ...opts.env })
@@ -133,10 +137,16 @@ function jevWorld(
   })
   on('turn.step', async function* (_$, e) {
     seen.steps.push(e.effort)
-    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: null, usage: null } as never
+    const model = typeof opts.stepModel === 'function' ? opts.stepModel() : opts.stepModel
+    const usage = model ? { model } : null
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: null, usage } as never
   })
   on('ui.notice', async (_$, e) => { seen.notices.push(String(e.text)); return { value: undefined } })
-  on('ui.log', async (_$, e) => { seen.logs.push(e.text); return { value: undefined } })
+  on('ui.log', async (_$, e) => {
+    seen.logs.push(e.text)
+    if (e.to === 'transcript') seen.transcript.push(e.text)
+    return { value: undefined }
+  })
   return { seen, clock, flags }
 }
 
@@ -204,6 +214,82 @@ test('a call Jev failed on keeps its description as it came', ON, async ($, on) 
   await $.agent.spawn(spawnInput())
 
   expect(seen.spawned[0]?.description).toBe('audit auth')
+})
+
+// --- Confirmation of what ran ---
+
+test('the first step after the spawn confirms the tag in the transcript and in the decision log', ON, async ($, on) => {
+  const { seen } = jevWorld(on, { stepModel: 'claude-opus-5-5', reply: async () => ok(answer('opus', 0.9, 3.9)) })
+  await $.agent.spawn(spawnInput())
+  await step($, 'a1', 'medium')
+  await step($, 'a1', 'medium')
+
+  expect(seen.transcript).toEqual(['crew jev: audit auth: confirmed claude-opus-5-5 · high'])
+  expect(seen.writes.length).toBe(2)
+  expect(seen.writes[1]?.path).toBe(seen.writes[0]?.path)
+  expect(JSON.parse(seen.writes[1]?.text ?? '{}').ran).toEqual({ model: 'claude-opus-5-5', effort: 'high' })
+  expect(JSON.parse(seen.writes[0]?.text ?? '{}').ran).toBeNull()
+})
+
+test('a run that differs from the tag says what ran instead', ON, async ($, on) => {
+  const { seen } = jevWorld(on, { stepModel: 'claude-sonnet-5-5', reply: async () => ok(answer('opus', 0.9, 3.9)) })
+  await $.agent.spawn(spawnInput())
+  await step($, 'a1', 'medium')
+
+  expect(seen.transcript).toEqual(['crew jev: audit auth: ran claude-sonnet-5-5 · high, not opus/high'])
+})
+
+test('a step the API did not answer confirms nothing and leaves the check for the next', ON, async ($, on) => {
+  let answered: string | undefined
+  const { seen } = jevWorld(on, { stepModel: () => answered })
+  await $.agent.spawn(spawnInput())
+  await step($, 'a1', 'medium')
+  expect(seen.transcript).toEqual([])
+
+  answered = 'claude-opus-5-5[1m]'
+  await step($, 'a1', 'medium')
+  expect(seen.transcript).toEqual(['crew jev: audit auth: confirmed claude-opus-5-5[1m] · high'])
+  expect(JSON.parse(seen.writes.at(-1)?.text ?? '{}').ran).toEqual({ model: 'claude-opus-5-5[1m]', effort: 'high' })
+})
+
+test('a confirmation write that never settles does not hold the subagent\'s step past the wait', ON, async ($, on) => {
+  const { seen, clock } = jevWorld(on, { stepModel: 'claude-opus-5-5', writeHang: true })
+  const spawned = $.agent.spawn(spawnInput())
+  while (seen.notices.length === 0) await pause()
+  await clock.advance(1_000)
+  await spawned
+
+  const stepped = step($, 'a1', 'medium')
+  while (seen.transcript.length === 0) await pause()
+  await clock.advance(1_000)
+  await stepped
+  expect(seen.logs.filter(line => line === 'crew jev: decision write slow').length).toBe(2)
+})
+
+test('a call Jev failed on and a refused spawn confirm nothing', ON, async ($, on) => {
+  let refuse = false
+  const { seen } = jevWorld(on, {
+    stepModel: 'claude-opus-5-5',
+    reply: async () => (refuse ? ok(answer('opus', 0.9, 3.9)) : ok('not json')),
+    spawn: async e => (refuse ? ({ deny: 'no' } as never) : { model: String(e.model ?? 'default'), agentId: 'a1' }),
+  })
+  await $.agent.spawn(spawnInput())
+  await step($, 'a1', 'medium')
+  refuse = true
+  await $.agent.spawn(spawnInput({ tool_use_id: 'tu2' }))
+  await step($, 'a1', 'medium')
+
+  expect(seen.transcript).toEqual([])
+})
+
+test('steps of other agents and of the main loop confirm nothing', ON, async ($, on) => {
+  const { seen } = jevWorld(on, { stepModel: 'claude-opus-5-5' })
+  await $.agent.spawn(spawnInput())
+  await step($, undefined, 'high')
+  await step($, 'other', 'medium')
+
+  expect(seen.transcript).toEqual([])
+  expect(seen.writes.length).toBe(1)
 })
 
 // --- The lead's section ---
@@ -719,7 +805,7 @@ test('the record holds no prompt, description, key or path', ON, async ($, on) =
   }
   expect(Object.keys(record(seen)).sort()).toEqual([
     'agent', 'applied', 'bind', 'confidence', 'defaultEffort', 'defaultModel', 'depth', 'descriptionHash', 'durationMs',
-    'effortApplied', 'effortPlanned', 'jevModel', 'model', 'outcome', 'tier', 'ts', 'v',
+    'effortApplied', 'effortPlanned', 'jevModel', 'model', 'outcome', 'ran', 'tier', 'ts', 'v',
   ])
 })
 

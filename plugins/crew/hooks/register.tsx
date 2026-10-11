@@ -1,7 +1,9 @@
 import type { Hook, Register } from 'claude-code'
 import { SPECIALISTS, leadSection } from './agents'
 import type { Effort, Specialist } from './agents'
-import { decisionRecord, saveDecision } from './decisions'
+import { createConfirmations, confirmText } from './confirm'
+import type { Confirmations } from './confirm'
+import { decisionRecord, saveDecision, withRan } from './decisions'
 import type { DecisionIo } from './decisions'
 import { createEffortBook } from './effort'
 import type { BindOutcome, EffortBook, Listed } from './effort'
@@ -175,6 +177,8 @@ type Routing = {
   breaker: Breaker
   gate: Gate
   book: EffortBook
+  /** Routed subagents whose first step is still to be checked against their tag. */
+  confirms: Confirmations
   access: Access
 }
 
@@ -237,7 +241,7 @@ async function routeSpawn(routing: Routing, $: Dollar, e: SpawnHook[1], next: Sp
 
   // The decision log: started before the notice so the write overlaps it, awaited for about a second before
   // returning (it never rejects), so a failing write cannot change the result and a hung one cannot hold it.
-  const saved = saveDecision(decisionIo($), routing.access.home, result.agentId, decisionRecord({
+  const record = decisionRecord({
     ts: new Date().toISOString(),
     agent: spec.name,
     tier: routed.decision.tier,
@@ -252,7 +256,15 @@ async function routeSpawn(routing: Routing, $: Dollar, e: SpawnHook[1], next: Sp
     jevModel: routed.jevModel,
     durationMs: routed.ms,
     description: e.description,
-  }))
+  })
+  const saved = saveDecision(decisionIo($), routing.access.home, result.agentId, record)
+  // The tag is what Jev asked for; the subagent's next step says what ran (a step before this point is not seen).
+  routing.confirms.add(result.agentId, {
+    description: e.description,
+    planned: { model: routed.decision.model, effort: routed.decision.effort },
+    record,
+    saved,
+  })
   announce($, spec, routed, change, took, outcome, e.tool_use_id)
   await settleDecision($, saved)
   return result
@@ -266,6 +278,7 @@ export const register: Register = (on, options) => {
     breaker: createBreaker(wallNow),
     gate: createGate(),
     book: createEffortBook(),
+    confirms: createConfirmations(),
     access: {},
   }
 
@@ -286,7 +299,19 @@ export const register: Register = (on, options) => {
     if (routing.enabled && e.agentId && e.effort !== undefined) {
       effort = await routing.book.lookup(e.agentId, () => listAgents($)).catch(() => undefined)
     }
-    return yield* next(effort && effort !== e.effort ? { ...e, effort } : e)
+    const sent = effort && effort !== e.effort ? { ...e, effort } : e
+    const answer = yield* next(sent)
+    // Only a step the API answered says what ran; one that failed leaves the check for the next.
+    const pending = e.agentId && answer.usage ? routing.confirms.take(e.agentId) : undefined
+    if (pending && e.agentId && answer.usage) {
+      const ran = { model: answer.usage.model, effort: sent.effort === undefined ? undefined : String(sent.effort) }
+      $.ui.log(confirmText(pending.description, pending.planned, ran), { to: 'transcript' })
+      // After the spawn's own write, so the record with what ran is the one that stays; bounded like the spawn's, so
+      // a hung write cannot hold the subagent's step.
+      const id = e.agentId
+      await settleDecision($, pending.saved.then(() => saveDecision(decisionIo($), routing.access.home, id, withRan(pending.record, ran))))
+    }
+    return answer
   })
 
   // The main loop has no agentId and is never held; a subagent is held by its type's rule in guard.ts.
