@@ -58,7 +58,7 @@ Compare each observation with the documented behavior in the plugin's README and
 
 ## 4. After
 
-Leave the test pane open, say which pane it is, and close it only when the user asks (`herdr pane close <pane-id>`; never a pane you did not create unless asked).
+Close the test pane once the evidence is read, also when a scenario failed: `herdr pane close <pane-id>`. That covers a pane this skill created and one the user opened for the test; leave any other pane alone. Read everything the report needs before closing, since the pane's scrollback goes with it (the transcripts and the plugin's records stay on disk).
 
 ## Report
 
