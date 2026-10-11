@@ -18,7 +18,8 @@ import { isThreadId } from './events'
 import type { Tokens } from './events'
 import type { Job, JobStatus, SpawnEnd } from './jobs'
 import { isCodexRole } from './roles'
-import type { CodexJob, CodexRole } from './types'
+import { EFFORTS } from './types'
+import type { CodexJob, CodexRole, Effort } from './types'
 
 /** Where the job files live, relative to the repository (or the session's directory outside git). */
 export const JOB_DIR = '.crew/codex'
@@ -255,6 +256,7 @@ export type JobRecord = {
   startedAt: number
   endedAt?: number
   model?: string
+  effort?: Effort
   /** The `-o` file of architect and research. */
   output?: string
   /** Codex's pid, once the worker printed it. */
@@ -299,6 +301,7 @@ export function recordOf(job: Job, extra: JobExtra): JobRecord {
   }
   if (job.endedAt !== undefined) record.endedAt = job.endedAt
   if (job.model !== undefined) record.model = job.model
+  if (job.effort !== undefined) record.effort = job.effort
   if (extra.output !== undefined) record.output = extra.output
   if (extra.pid !== undefined) record.pid = extra.pid
   if (extra.cancelRequested) record.cancelRequested = true
@@ -333,6 +336,7 @@ export function parseRecord(text: string): JobRecord | undefined {
     const value = optString(raw[key])
     if (value !== undefined) record[key] = value
   }
+  if (EFFORTS.includes(raw.effort as Effort)) record.effort = raw.effort as Effort
   // The record sits in the repository a write job can edit: a session id goes to `resume` only as a UUID.
   if (isThreadId(raw.sessionId)) record.sessionId = raw.sessionId
   if (typeof raw.owner === 'string' && /^[\w-]{1,128}$/.test(raw.owner)) record.owner = raw.owner
@@ -353,6 +357,7 @@ export function jobOfRecord(record: JobRecord): Job {
   if (record.description) job.description = record.description
   if (record.endedAt !== undefined) job.endedAt = record.endedAt
   if (record.model !== undefined) job.model = record.model
+  if (record.effort !== undefined) job.effort = record.effort
   if (record.sessionId !== undefined) job.sessionId = record.sessionId
   if (record.result !== undefined) job.result = record.result
   if (record.error !== undefined) job.error = record.error
@@ -375,6 +380,7 @@ export function cardJob(job: Job, extra: JobExtra): CodexJob {
     id: job.id, agent: job.agent, description: extra.description, status: job.status, startedAt: job.startedAt, activity: [...extra.activity],
   }
   if (job.model !== undefined) card.model = job.model
+  if (job.effort !== undefined) card.effort = job.effort
   if (job.endedAt !== undefined) card.endedAt = job.endedAt
   if (job.tokens) card.usage = { input: job.tokens.input, cached: job.tokens.cached, output: job.tokens.output }
   if (job.result !== undefined) card.answer = job.result
@@ -386,6 +392,7 @@ export function cardJob(job: Job, extra: JobExtra): CodexJob {
 export function resultOf(job: Job, extra: JobExtra | undefined, whole?: string): Record<string, unknown> {
   const ended = !isActive(job.status)
   const out: Record<string, unknown> = { jobId: job.id, status: job.status, agent: job.agent }
+  if (job.effort !== undefined) out.effort = job.effort
   if (extra?.description) out.description = extra.description
   const answer = ended ? whole ?? job.result : undefined
   if (answer !== undefined) out.answer = cap(answer, RESULT_MAX)

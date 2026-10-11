@@ -1,13 +1,16 @@
 // The `codex exec` command line of a job. Pure: no host access.
 import { isThreadId } from './events'
 import { isCodexRole, CODEX_LANES, isWriteRole } from './roles'
-import type { CodexRole } from './types'
+import { EFFORTS } from './types'
+import type { CodexRole, Effort } from './types'
 
 export type CodexArgvInput = {
   role: CodexRole
   /** The role's prompt, sent as `developer_instructions`. */
   rolePrompt: string
   model?: string
+  /** `model_reasoning_effort`; absent, the person's Codex config decides. */
+  effort?: Effort
   /** The file `-o` writes the final answer to. */
   output?: string
   /** The session (thread) id to resume: a UUID, or the argv is refused. */
@@ -41,6 +44,10 @@ export function buildArgv(input: CodexArgvInput): string[] {
 
   const argv = ['codex', 'exec', '--json', '-s', sandbox, '-c', `developer_instructions=${tomlString(input.rolePrompt)}`]
   if (input.approvals) argv.push('-c', 'approval_policy="on-request"', '-c', 'approvals_reviewer="auto_review"')
+  if (input.effort !== undefined) {
+    if (!EFFORTS.includes(input.effort)) throw new Error(`Unknown effort: ${String(input.effort)}`)
+    argv.push('-c', `model_reasoning_effort="${input.effort}"`)
+  }
   // The person's ~/.codex config still applies (model, MCP servers); these keys are pinned so it cannot widen a write
   // lane without a word: no extra writable roots, no network for sandboxed commands (auto-review may still allow one).
   if (isWriteRole(input.role)) argv.push(...WRITE_LANE_PINS)

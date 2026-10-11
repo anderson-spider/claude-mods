@@ -3,8 +3,9 @@
 // answers only move model and effort, at most one step from the agent's defaults (and never below its floor), so a bad
 // answer costs money, never a lane change.
 
-import { EFFORTS, EFFORT_FLOOR, MODELS, MODEL_FLOORS, SPECIALISTS } from './agents'
+import { CODEX_BASE_EFFORT, EFFORTS, EFFORT_FLOOR, MODELS, MODEL_FLOORS, SPECIALISTS } from './agents'
 import type { Effort, Model, Specialist } from './agents'
+import { failureText } from './jev'
 import type { AskFn } from './jev'
 import { DEPTH_HIGH, DEPTH_TIE, DESCRIPTION_CHARS, PROMPT_CHARS, QUESTIONS, TIER_MIN_CONFIDENCE } from './questions'
 import { head, redact } from './redact'
@@ -86,9 +87,57 @@ export async function route(
   ctx: RedactContext,
   spec: Specialist,
   e: { prompt: string; description?: string },
+  signal?: AbortSignal,
 ): Promise<Routed> {
-  const reply = await ask(QUESTIONS, stateOf(spec, e, ctx))
+  const reply = await ask(QUESTIONS, stateOf(spec, e, ctx), signal)
   return { decision: decide(spec, reply.answers), jevModel: reply.model, ms: reply.ms }
+}
+
+/** What `sizeCodexJob` needs from the host, injected so the order of its steps and its abort checks can be tested. */
+export type CodexSizing = {
+  /** Whether routing may run at all; off, nothing below is called. */
+  enabled: boolean
+  key(): Promise<string | undefined>
+  context(): Promise<RedactContext>
+  /** The Jev client for the key; it takes the abort signal. */
+  ask(key: string): AskFn
+  log(line: string): void
+}
+
+/**
+ * The effort of a new Codex job: `CODEX_BASE_EFFORT`, or what Jev answers with the base as the agent's default (the
+ * tier is asked and ignored). Never rejects. After every await it looks at `signal`, and it hands it to the client,
+ * which looks again before each request: an Esc leaves no request behind. No key, no routing or any failure: the base.
+ */
+export async function sizeCodexJob(
+  deps: CodexSizing,
+  role: string,
+  description: string,
+  prompt: string,
+  signal: AbortSignal,
+  jobId: string,
+): Promise<Effort> {
+  if (!deps.enabled) return CODEX_BASE_EFFORT
+  try {
+    if (signal.aborted) return CODEX_BASE_EFFORT
+    const key = await deps.key()
+    const base = SPECIALISTS.find(s => s.name === role)
+    if (key === undefined || !base || signal.aborted) return CODEX_BASE_EFFORT
+    // The base replaces the agent's default so a change to a Claude agent's effort does not move Codex.
+    const spec: Specialist = { ...base, effort: CODEX_BASE_EFFORT }
+    const context = await deps.context()
+    if (signal.aborted) return CODEX_BASE_EFFORT
+    const { decision, jevModel, ms } = await route(deps.ask(key), context, spec, { prompt, description }, signal)
+    const effort = decision.effort
+    deps.log(
+      `crew jev: codex:${role} ${jobId} depth=${decision.depth === undefined ? '-' : decision.depth.toFixed(2)} ` +
+      `effort=${effort}${effort === CODEX_BASE_EFFORT ? ' (default)' : ''} jev=${jevModel ?? '-'} ${ms}ms`,
+    )
+    return effort
+  } catch (error) {
+    try { deps.log(`crew jev: codex:${role} ${jobId} not sized (${failureText(error)})`) } catch { /* the base stands */ }
+    return CODEX_BASE_EFFORT
+  }
 }
 
 /** What Jev moved from the agent's defaults; undefined where the answer is the default or there is no answer. */

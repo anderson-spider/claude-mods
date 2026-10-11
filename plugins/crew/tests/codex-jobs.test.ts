@@ -548,6 +548,24 @@ describe('codex jobs', () => {
     }
   })
 
+  test('effort is copied into the job and returned by resumeTarget; none stays absent', async () => {
+    const f = fixture()
+    const pending = f.jobs.run({ ...call, effort: 'high' }, foreground)
+    await settle()
+    f.process.session('00000000-0000-4000-8000-0000000000a1')
+    f.process.completed()
+    f.process.finish()
+    const reply = await pending
+    expect(reply.job.effort).toBe('high')
+    expect(f.jobs.resumeTarget('job-1')).toEqual(expect.objectContaining({ effort: 'high' }))
+    const g = fixture([saved('done', 'thread-x')])
+    expect(g.jobs.resumeTarget('done')).not.toHaveProperty('effort')
+    const h = fixture()
+    const plain = h.jobs.run(call, { ...foreground, background: true })
+    await settle()
+    expect((await plain).job).not.toHaveProperty('effort')
+  })
+
   test('resumeTarget refuses a session already resumed by an active job', async () => {
     const f = fixture([saved('done', '00000000-0000-4000-8000-0000000000a2')])
     void f.jobs.run({ ...call, resumeSessionId: '00000000-0000-4000-8000-0000000000a2' }, { ...foreground, background: true })

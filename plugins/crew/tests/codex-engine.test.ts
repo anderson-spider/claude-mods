@@ -8,6 +8,9 @@ import type { CodexHost } from '../hooks/codex/engine'
 import { PID, fakeProcesses, pause } from './codex-fake'
 import type { Run, Scenario } from './codex-fake'
 import { CODEX_EXEC_0_162_SUCCESS } from './fixtures/codex-exec-0.162'
+import { createGate, createJev } from '../hooks/jev'
+import type { JevIo } from '../hooks/jev'
+import { QUESTIONS } from '../hooks/questions'
 
 const ROOT = '/repo'
 const DIR = `${ROOT}/.crew/codex`
@@ -35,6 +38,8 @@ function fakeHost(opts: {
   submitFails?: () => boolean
   dead?: () => boolean
   workerFails?: boolean
+  /** The repository top-level for a directory (the session's by default). */
+  gitTop?: (cwd: string) => string | null
   killFails?: boolean
   psCommand?: (pid: number) => string
   /** A file write takes a few milliseconds, as a real one can. */
@@ -51,7 +56,7 @@ function fakeHost(opts: {
   let waiting: (() => void)[] = []
   const tick = () => { const now = waiting; waiting = []; for (const go of now) go() }
   const run = fakeProcesses({
-    files, dirs: new Set([ROOT]), runs, alive, gitTop: () => ROOT,
+    files, dirs: new Set([ROOT]), runs, alive, gitTop: opts.gitTop ?? (() => ROOT),
     gate: () => new Promise<void>(resolve => { waiting.push(resolve) }),
     scenario: opts.scenario ?? (() => ({ jsonl: CODEX_EXEC_0_162_SUCCESS.jsonl, exit: 0 })), workerFails: opts.workerFails,
     psCommand: opts.psCommand,
@@ -395,4 +400,319 @@ test('bad input is refused before anything runs', async () => {
   expect((await engine.result(42)).isError).toBe(true)
   expect((await engine.cancel('cx-0-zzzzz')).text).toContain('Unknown job')
   expect([...fake.files.keys()]).toEqual([])
+})
+
+// --- effort ---
+
+const argvOf = (fake: Fake, nth = -1) => fake.runs.filter(run => run.argv[3] === 'crew-codex').at(nth)!.argv.join(' ')
+const recordOfJob = (fake: Fake, id: unknown) => JSON.parse(fake.files.get(`${DIR}/${String(id)}.json`) ?? '{}') as Record<string, unknown>
+
+test('the sizer decides the effort: it reaches argv, the record, the card tag and codex_result', async () => {
+  const fake = fakeHost()
+  const engine = engineOf()
+  engine.useHost(fake.host)
+  const seen: unknown[][] = []
+  const size = async (...args: unknown[]) => { seen.push(args.slice(0, 3)); return 'high' as const }
+  const answer = parsed((await engine.start({ agent: 'developer', prompt: 'big task', description: 'refactor' }, fake.host, undefined, size)).text)
+  expect(seen).toEqual([['developer', 'refactor', 'big task']])
+  expect(answer.effort).toBe('high')
+  expect(argvOf(fake)).toContain('model_reasoning_effort="high"')
+  expect(recordOfJob(fake, answer.jobId).effort).toBe('high')
+  await engine.flush()
+  expect(fake.cards().at(-1)?.description).toBe('refactor · codex/high')
+  expect(parsed((await engine.result(answer.jobId)).text).effort).toBe('high')
+})
+
+test('no sizer: no effort flag and no effort on the record', async () => {
+  const fake = fakeHost()
+  const engine = engineOf()
+  engine.useHost(fake.host)
+  const answer = parsed((await engine.start({ agent: 'developer', prompt: 'p', description: 'd' }, fake.host)).text)
+  expect(argvOf(fake)).not.toContain('model_reasoning_effort')
+  expect(recordOfJob(fake, answer.jobId)).not.toHaveProperty('effort')
+  expect(answer).not.toHaveProperty('effort')
+})
+
+test('a sizer that rejects leaves the job without an effort instead of failing it', async () => {
+  const fake = fakeHost()
+  const engine = engineOf()
+  engine.useHost(fake.host)
+  const answer = parsed((await engine.start({ agent: 'developer', prompt: 'p', description: 'd' }, fake.host, undefined, () => Promise.reject(new Error('boom')))).text)
+  expect(answer.status).toBe('done')
+  expect(argvOf(fake)).not.toContain('model_reasoning_effort')
+})
+
+test('a refused call never reaches the sizer', async () => {
+  const fake = fakeHost()
+  const engine = engineOf()
+  engine.useHost(fake.host)
+  let calls = 0
+  const size = async () => { calls++; return 'high' as const }
+  await engine.start({ agent: 'planner', prompt: 'p', description: 'd' }, fake.host, undefined, size)
+  await engine.start({ agent: 'developer', prompt: ' ', description: 'd' }, fake.host, undefined, size)
+  await engine.start({ agent: 'developer', prompt: 'p', description: 'd', resume: 'cx-nope-00000' }, fake.host, undefined, size)
+  await engine.start({ agent: 'developer', prompt: 'p', description: 'd', cwd: '/nowhere' }, { ...fake.host, realPath: async path => (path === '/nowhere' ? undefined : path) }, undefined, size)
+  expect(calls).toBe(0)
+})
+
+test('Esc while the sizer is pending answers at once, runs no worker and writes no record; the sizer was not awaited', async () => {
+  const fake = fakeHost({ scenario: () => RUNNING })
+  const engine = engineOf()
+  engine.useHost(fake.host)
+  const listeners: (() => void)[] = []
+  const signal = { aborted: false, addEventListener: (_t: string, l: () => void) => { listeners.push(l) }, removeEventListener: () => {} }
+  let answered: { text: string } | undefined
+  let started = false
+  const size = () => { started = true; return new Promise<'high'>(() => {}) }
+  void engine.start({ agent: 'developer', prompt: 'p', description: 'esc' }, fake.host, signal as unknown as AbortSignal, size).then(a => { answered = a })
+  for (let i = 0; i < 50 && !started; i++) await settle(5)
+  expect(started).toBe(true)
+  await settle(100)
+  expect(answered).toBeUndefined()
+  signal.aborted = true
+  for (const listener of [...listeners]) listener()
+  for (let i = 0; i < 50 && !answered; i++) await settle(20)
+  expect(parsed(answered!.text)).toEqual(expect.objectContaining({ status: 'cancelled' }))
+  expect(fake.runs.some(run => run.argv[3] === 'crew-codex')).toBe(false)
+  expect([...fake.files.keys()].filter(path => /\/cx-[^/]+\.json$/.test(path))).toEqual([])
+})
+
+test('startedAt is taken after the sizer returns', async () => {
+  const fake = fakeHost()
+  let clock = 1000
+  const engine = createCodexEngine({ prompts: { developer: 'dev prompt' }, models: {}, now: () => clock, random: counter() })
+  engine.useHost(fake.host)
+  const size = async () => { clock = 4000; return 'medium' as const }
+  const answer = parsed((await engine.start({ agent: 'developer', prompt: 'p', description: 'd', background: true }, fake.host, undefined, size)).text)
+  expect(recordOfJob(fake, answer.jobId).startedAt).toBe(4000)
+})
+
+test('resume never calls the sizer and passes the original job\'s effort; an older record resumes with no flag', async () => {
+  const fake = fakeHost()
+  const engine = engineOf()
+  engine.useHost(fake.host)
+  const first = parsed((await engine.start({ agent: 'code-reader', prompt: 'p', description: 'd' }, fake.host, undefined, async () => 'high')).text)
+  let calls = 0
+  const size = async () => { calls++; return 'low' as const }
+  const again = parsed((await engine.start({ agent: 'code-reader', prompt: 'more', description: 'd', resume: first.jobId }, fake.host, undefined, size)).text)
+  expect(calls).toBe(0)
+  expect(argvOf(fake)).toContain('model_reasoning_effort="high"')
+  expect(argvOf(fake)).toContain('resume')
+  expect(recordOfJob(fake, again.jobId).effort).toBe('high')
+
+  // A record from before efforts were passed.
+  const legacy = recordOfJob(fake, first.jobId)
+  delete legacy.effort
+  const id = 'cx-old-00001'
+  const fake2 = fakeHost({ files: new Map([[`${DIR}/${id}.json`, JSON.stringify({ ...legacy, id, owner: 'session-1' })]]) })
+  const engine2 = engineOf()
+  engine2.useHost(fake2.host)
+  await engine2.start({ agent: 'code-reader', prompt: 'more', description: 'd', resume: id }, fake2.host, undefined, size)
+  expect(argvOf(fake2)).toContain('resume')
+  expect(argvOf(fake2)).not.toContain('model_reasoning_effort')
+  expect(calls).toBe(0)
+})
+
+test('a job followed again after a reload keeps its effort in the record when it ends', async () => {
+  const id = 'cx-rl-00001'
+  const files = new Map<string, string>([
+    [`${DIR}/${id}.json`, JSON.stringify({ v: 1, id, agent: 'developer', description: 'd', cwd: ROOT, status: 'background', startedAt: 1, pid: PID, owner: 'session-1', effort: 'high' })],
+    [`${DIR}/${id}.jsonl`, RUNNING.jsonl ?? ''],
+  ])
+  const fake = fakeHost({ files })
+  fake.alive.add(PID)
+  const engine = engineOf()
+  engine.useHost(fake.host)
+  expect((await until(engine, fake, id, ['background', 'running'], 5)).effort).toBe('high')
+  files.set(`${DIR}/${id}.jsonl`, CODEX_EXEC_0_162_SUCCESS.jsonl)
+  files.set(`${DIR}/${id}.exit`, '0\n')
+  fake.alive.clear()
+  expect((await until(engine, fake, id, ['done', 'error', 'lost'])).status).toBe('done')
+  expect(recordOfJob(fake, id)).toEqual(expect.objectContaining({ status: 'done', effort: 'high' }))
+})
+
+test('a job adopted from another session keeps its effort in the record', async () => {
+  const id = 'cx-ad-00001'
+  const files = new Map<string, string>([
+    [`${DIR}/${id}.json`, JSON.stringify({ v: 1, id, agent: 'developer', description: 'd', cwd: ROOT, status: 'running', startedAt: 1, pid: PID, owner: 'other', effort: 'high' })],
+    [`${DIR}/${id}.jsonl`, CODEX_EXEC_0_162_SUCCESS.jsonl],
+    [`${DIR}/${id}.exit`, '0\n'],
+  ])
+  const fake = fakeHost({ files })
+  const engine = engineOf()
+  engine.useHost(fake.host)
+  expect((await until(engine, fake, id, ['done', 'error', 'lost'])).effort).toBe('high')
+  expect(recordOfJob(fake, id)).toEqual(expect.objectContaining({ status: 'done', effort: 'high', owner: 'other' }))
+})
+
+// --- S: Esc with a gated Jev request still in flight ---
+
+test('S: Esc while a gated Jev fetch hangs answers at once; the slot stays held until the fetch settles, and the late answer starts nothing', async () => {
+  const fake = fakeHost({ scenario: () => RUNNING })
+  const engine = engineOf()
+  engine.useHost(fake.host)
+  const settleFetch: (() => void)[] = []
+  const body = JSON.stringify({ model: 'jev-1.13.0', answers: { tier: { choice: 'opus', confidence: 0.9 }, reasoning_depth: { score: 3.5, confidence: 0.5 } } })
+  const io: JevIo = {
+    fetch: () => new Promise(resolve => { settleFetch.push(() => resolve({ status: 200, text: body })) }),
+    // Neither the deadline nor the slot's hold ceiling fires: only the fetch settling can free the slot.
+    timer: () => () => {},
+    now: () => 0,
+  }
+  const gate = createGate(1)
+  const ask = createJev(io, ['key-', 'jev-0123456789abcdef'].join(''), { model: 'jev-1.13.0', gate })
+  let late: string | undefined
+  const size = async () => {
+    try { await ask(QUESTIONS, {}); late = 'high'; return 'high' as const } catch { late = 'medium'; return 'medium' as const }
+  }
+  const stop = new AbortController()
+  let answered: { text: string } | undefined
+  void engine.start({ agent: 'developer', prompt: 'p', description: 'esc-gated' }, fake.host, stop.signal, size).then(a => { answered = a })
+  for (let i = 0; i < 50 && settleFetch.length === 0; i++) await settle(5)
+  expect(settleFetch.length).toBe(1)
+  expect(answered).toBeUndefined()
+
+  stop.abort()
+  for (let i = 0; i < 50 && !answered; i++) await settle(20)
+  expect(parsed(answered!.text)).toEqual(expect.objectContaining({ status: 'cancelled' }))
+  expect(late).toBeUndefined()
+  // The request cannot be aborted: its slot is still taken.
+  expect(gate.acquire()).toBe(false)
+
+  settleFetch[0]!()
+  await settle(50)
+  expect(late).toBe('high')
+  // Settled after the abort: the slot is free again.
+  expect(gate.acquire()).toBe(true)
+  gate.release()
+  // The late answer creates nothing.
+  expect(fake.runs.some(run => run.argv[3] === 'crew-codex')).toBe(false)
+  expect([...fake.files.keys()].filter(path => /\/cx-[^/]+\.json$/.test(path))).toEqual([])
+  expect(await engine.list()).toEqual([])
+})
+
+test('S: Esc that lands during the checks before sizing (here the cwd lookup) sends nothing to the sizer', async () => {
+  const fake = fakeHost()
+  const engine = engineOf()
+  engine.useHost(fake.host)
+  const stop = new AbortController()
+  let calls = 0
+  const size = async () => { calls++; return 'high' as const }
+  const host: CodexHost = { ...fake.host, realPath: async path => { stop.abort(); return path } }
+  const answer = parsed((await engine.start({ agent: 'developer', prompt: 'p', description: 'late esc' }, host, stop.signal, size)).text)
+  expect(answer.status).toBe('cancelled')
+  // "No request leaves for an aborted call": the prompt must not reach Jev once Esc was pressed.
+  expect(calls).toBe(0)
+  expect(fake.runs.some(run => run.argv[3] === 'crew-codex')).toBe(false)
+})
+
+test('S: a resume aborted before sizing starts nothing, never sizes, and frees its reservation for the next resume', async () => {
+  const fake = fakeHost()
+  const engine = engineOf()
+  engine.useHost(fake.host)
+  const first = parsed((await engine.start({ agent: 'code-reader', prompt: 'p', description: 'd' }, fake.host, undefined, async () => 'high')).text)
+  expect(first.status).toBe('done')
+  const workers = () => fake.runs.filter(run => run.argv[3] === 'crew-codex').length
+  const before = workers()
+  let calls = 0
+  const size = async () => { calls++; return 'low' as const }
+  const stop = new AbortController()
+  // The resume's cwd check is the last await before the sizer; Esc lands there.
+  const host: CodexHost = { ...fake.host, realPath: async path => { stop.abort(); return path } }
+  const aborted = parsed((await engine.start({ agent: 'code-reader', prompt: 'more', description: 'd', resume: first.jobId, cwd: ROOT }, host, stop.signal, size)).text)
+  expect(aborted.status).toBe('cancelled')
+  expect(workers()).toBe(before)
+
+  const again = parsed((await engine.start({ agent: 'code-reader', prompt: 'more', description: 'd', resume: first.jobId }, fake.host, undefined, size)).text)
+  expect(again.status).toBe('done')
+  expect(workers()).toBe(before + 1)
+  expect(argvOf(fake)).toContain('model_reasoning_effort="high"')
+  expect(calls).toBe(0)
+})
+
+test('S: a normal start sizes exactly once', async () => {
+  const fake = fakeHost()
+  const engine = engineOf()
+  engine.useHost(fake.host)
+  let calls = 0
+  const stop = new AbortController()
+  const answer = parsed((await engine.start({ agent: 'developer', prompt: 'p', description: 'once' }, fake.host, stop.signal, async () => { calls++; return 'high' as const })).text)
+  expect(calls).toBe(1)
+  expect(answer.effort).toBe('high')
+  expect(argvOf(fake)).toContain('model_reasoning_effort="high"')
+})
+
+test('S: the sizer gets the job id, and a description that carries a card tag is cleaned before the sizer, the record and the output name', async () => {
+  const fake = fakeHost()
+  const engine = engineOf()
+  engine.useHost(fake.host)
+  const seen: unknown[][] = []
+  const size = async (...args: unknown[]) => { seen.push(args); return 'medium' as const }
+  const answer = parsed((await engine.start({ agent: 'architect', prompt: 'p', description: 'audit auth · codex/medium' }, fake.host, undefined, size)).text)
+  expect(seen[0]![1]).toBe('audit auth')
+  expect(seen[0]![4]).toBe(answer.jobId)
+  expect(answer.description).toBe('audit auth')
+  expect(String(answer.output)).toContain('/audit-auth-')
+  expect(String(answer.output)).not.toContain('codex')
+})
+
+test('S: a read-only job run in another repository writes its -o file and .crew there, not in the session\'s', async () => {
+  const other = '/other-repo'
+  const fake = fakeHost({ gitTop: cwd => (cwd === other || cwd.startsWith(`${other}/`) ? other : ROOT) })
+  const engine = engineOf()
+  engine.useHost(fake.host)
+  const away = parsed((await engine.start({ agent: 'architect', prompt: 'p', description: 'away', cwd: other }, fake.host)).text)
+  expect(String(away.output).startsWith(`${other}/.crew/reviews/`)).toBe(true)
+  expect(fake.files.get(`${other}/.crew/.gitignore`)).toBe('*\n')
+  const home = parsed((await engine.start({ agent: 'architect', prompt: 'p', description: 'home' }, fake.host)).text)
+  expect(String(home.output).startsWith(`${ROOT}/.crew/reviews/`)).toBe(true)
+  // The job's own files stay with the session.
+  expect(fake.files.has(`${DIR}/${String(away.jobId)}.json`)).toBe(true)
+})
+
+test('S: a read-only job outside any repository, or in a nested repository inside the session\'s tree, keeps -o and .crew in the session base', async () => {
+  const fake = fakeHost({
+    gitTop: cwd => (cwd === '/loose' || cwd.startsWith('/loose/') ? null : cwd.startsWith(`${ROOT}/pkg`) ? `${ROOT}/pkg` : ROOT),
+  })
+  const engine = engineOf()
+  engine.useHost(fake.host)
+  const loose = parsed((await engine.start({ agent: 'research', prompt: 'p', description: 'loose', cwd: '/loose' }, fake.host)).text)
+  expect(String(loose.output).startsWith(`${ROOT}/.crew/research/`)).toBe(true)
+  expect([...fake.files.keys()].some(path => path.startsWith('/loose/'))).toBe(false)
+  const sub = parsed((await engine.start({ agent: 'architect', prompt: 'p', description: 'sub', cwd: `${ROOT}/pkg/a` }, fake.host)).text)
+  expect(String(sub.output).startsWith(`${ROOT}/.crew/reviews/`)).toBe(true)
+  expect([...fake.files.keys()].some(path => path.startsWith(`${ROOT}/pkg/`))).toBe(false)
+})
+
+test('S: the record on disk keeps the untagged description; a look-alike that is not a tag is left as typed', async () => {
+  const fake = fakeHost()
+  const engine = engineOf()
+  engine.useHost(fake.host)
+  const tagged = parsed((await engine.start({ agent: 'code-reader', prompt: 'p', description: '  find it · gpt-5.3-codex-max/high  ' }, fake.host)).text)
+  expect(JSON.parse(String(fake.files.get(`${DIR}/${String(tagged.jobId)}.json`))).description).toBe('find it')
+  const agentTag = parsed((await engine.start({ agent: 'code-reader', prompt: 'p', description: 'look · sonnet/medium' }, fake.host)).text)
+  expect(agentTag.description).toBe('look')
+  const plain = parsed((await engine.start({ agent: 'code-reader', prompt: 'p', description: 'a · b/c' }, fake.host)).text)
+  expect(plain.description).toBe('a · b/c')
+})
+
+test('S: a long description is untagged before it is cut, so a copied card title does not accumulate tags; a title that is only the tag is empty', async () => {
+  const fake = fakeHost()
+  const engine = engineOf()
+  engine.useHost(fake.host)
+  const long = 'x'.repeat(190)
+  const first = parsed((await engine.start({ agent: 'code-reader', prompt: 'p', description: `${long} · codex/medium` }, fake.host)).text)
+  expect(first.description).toBe(long)
+  const second = parsed((await engine.start({ agent: 'code-reader', prompt: 'p', description: 'codex/medium' }, fake.host)).text)
+  expect(second).not.toHaveProperty('description')
+})
+
+test('S: a near-limit title carrying two tags is cleaned whole before the cut, in the answer and the record', async () => {
+  const fake = fakeHost()
+  const engine = engineOf()
+  engine.useHost(fake.host)
+  const long = 'y'.repeat(195)
+  const answer = parsed((await engine.start({ agent: 'code-reader', prompt: 'p', description: `${long} · codex/medium · gpt-5.3-codex-max/high` }, fake.host)).text)
+  expect(answer.description).toBe(long)
+  expect(JSON.parse(String(fake.files.get(`${DIR}/${String(answer.jobId)}.json`))).description).toBe(long)
 })

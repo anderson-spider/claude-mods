@@ -152,12 +152,17 @@ export function offersCodex(tools: readonly string[]): boolean {
   return tools.includes(CODEX_TOOL)
 }
 
-/** Appended to the lead section only when Codex is offered. */
-export function codexSection(): string {
+/** The effort every Codex job runs on unless Jev raises it; apart from the Claude agents' own defaults on purpose. */
+export const CODEX_BASE_EFFORT: Effort = 'medium'
+
+/** Appended to the lead section only when Codex is offered; `jev` is whether routing is on with a valid key. */
+export function codexSection(jev: boolean): string {
   return [
     'Any crew role can also run on OpenAI Codex through mcp__crew__codex (agent = the role name):',
     'use it for a second opinion or extra parallel capacity.',
     'It runs in the background past a short wait; collect it with mcp__crew__codex_result and stop it with mcp__crew__codex_cancel.',
-    'Jev does not size Codex calls, and Codex\'s work is verified like any other step.',
+    jev
+      ? `Jev sizes each Codex job's effort (${CODEX_BASE_EFFORT} or high), and Codex's work is verified like any other step.`
+      : `Codex jobs run on ${CODEX_BASE_EFFORT} effort, and Codex's work is verified like any other step.`,
   ].join(' ')
 }

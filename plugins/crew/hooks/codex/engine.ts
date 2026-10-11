@@ -8,11 +8,11 @@
 import type { AgentCard } from '../../types'
 import { createJsonlReader } from './events'
 import { buildArgv } from './argv'
-import { codexCard, createThrottle, upsertCard } from './card'
+import { codexCard, createThrottle, untaggedDescription, upsertCard } from './card'
 import { createJobs } from './jobs'
 import type { CallBase, Job, Reply, SpawnChunk, SpawnEnd, Spawned } from './jobs'
 import { CODEX_LANES, isCodexRole, isWriteRole, outputName } from './roles'
-import type { CodexRole } from './types'
+import type { CodexRole, Effort } from './types'
 import {
   FOREGROUND_MS, IDLE_POLL_MS, JOB_DIR, POLL_BYTES, POLL_MS, RECENT_JOBS, cardJob, codexRolePrompt, dirname, exitEnd,
   isActive, isInside, jobOfRecord, jobPaths, lostEnd, newJobId, noteActivity, noticeText, parseExit, parsePid, parsePoll,
@@ -60,6 +60,12 @@ export type CodexInput = {
 
 type Call = CallBase & { agent: CodexRole; rolePrompt: string; output?: string; skipGitCheck: boolean }
 
+/**
+ * Decides a new job's effort from its role, description and prompt. Never rejects; the engine calls it once per new
+ * job, after every refusal, and never for a resume.
+ */
+export type SizeEffort = (role: CodexRole, description: string, prompt: string, signal: AbortSignal, jobId: string) => Promise<Effort>
+
 export type EngineOptions = {
   /** The role prompts (SPECIALISTS), sent as `developer_instructions`. */
   prompts: Readonly<Record<string, string>>
@@ -78,6 +84,17 @@ const PID_GRACE_MS = 30_000
 
 const ok = (value: unknown): Answer => ({ text: JSON.stringify(value, null, 2), isError: false })
 const fail = (text: string): Answer => ({ text, isError: true })
+/** The promise's value, or undefined as soon as `signal` aborts (the work itself is not stopped). */
+const raceAbort = <T>(work: Promise<T>, signal?: AbortSignal): Promise<T | undefined> => {
+  if (!signal) return work
+  if (signal.aborted) return Promise.resolve(undefined)
+  return new Promise<T | undefined>(resolve => {
+    const onAbort = () => resolve(undefined)
+    signal.addEventListener('abort', onAbort, { once: true })
+    work.then(resolve, () => resolve(undefined)).finally(() => signal.removeEventListener('abort', onAbort))
+  })
+}
+
 /** A call aborted before its job was created: nothing ran. */
 const notStarted = (): Answer => ok({ status: 'cancelled', note: 'The call was cancelled before a job started; nothing ran.' })
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error))
@@ -488,7 +505,7 @@ export function createCodexEngine(options: EngineOptions) {
       if (pid !== undefined) extra.pid = pid
       adopted.add(id)
       const call: Call = {
-        agent: job.agent, prompt: '', cwd: job.cwd, model: job.model, rolePrompt: '', skipGitCheck: false,
+        agent: job.agent, prompt: '', cwd: job.cwd, model: job.model, effort: job.effort, rolePrompt: '', skipGitCheck: false,
         ...(job.sessionId ? { resumeSessionId: job.sessionId } : {}),
       }
       void jobs.run(call, {
@@ -580,7 +597,7 @@ export function createCodexEngine(options: EngineOptions) {
       },
       codec: {
         buildArgv: call => buildArgv({
-          role: call.agent, rolePrompt: call.rolePrompt, model: call.model, output: call.output,
+          role: call.agent, rolePrompt: call.rolePrompt, model: call.model, effort: call.effort, output: call.output,
           resume: call.resumeSessionId, approvals: true, skipGitCheck: call.skipGitCheck,
         }),
         createJsonlReader,
@@ -631,7 +648,7 @@ export function createCodexEngine(options: EngineOptions) {
       summaryKey = listKey(jobs.list())
       for (const r of toFollow) {
         const call: Call = {
-          agent: r.agent, prompt: '', cwd: r.cwd, model: r.model, rolePrompt: '', skipGitCheck: false,
+          agent: r.agent, prompt: '', cwd: r.cwd, model: r.model, effort: r.effort, rolePrompt: '', skipGitCheck: false,
           ...(r.sessionId ? { resumeSessionId: r.sessionId } : {}),
         }
         void jobs.run(call, {
@@ -661,11 +678,11 @@ export function createCodexEngine(options: EngineOptions) {
   }
 
   /** Starts a job on `own`, the calling hook's host. */
-  async function start(input: CodexInput, own: CodexHost, signal?: AbortSignal): Promise<Answer> {
+  async function start(input: CodexInput, own: CodexHost, signal?: AbortSignal, size?: SizeEffort): Promise<Answer> {
     const { agent, prompt } = input
     if (!isCodexRole(agent)) return fail(`Unknown agent ${JSON.stringify(agent)}; use one of ${Object.keys(CODEX_LANES).join(', ')}.`)
     if (typeof prompt !== 'string' || !prompt.trim()) return fail('prompt is required.')
-    const description = typeof input.description === 'string' ? input.description.trim().slice(0, 200) : ''
+    const description = typeof input.description === 'string' ? untaggedDescription(input.description).slice(0, 200).trim() : ''
     const background = input.background === true
     if (signal?.aborted) return notStarted()
     const jobs = await load()
@@ -673,6 +690,7 @@ export function createCodexEngine(options: EngineOptions) {
 
     let cwd: string
     let reserved: string | undefined
+    let resumedEffort: Effort | undefined
     if (input.resume !== undefined) {
       if (typeof input.resume !== 'string') return fail('resume takes a job id.')
       await claimForeign(input.resume)
@@ -685,6 +703,7 @@ export function createCodexEngine(options: EngineOptions) {
       resuming.add(target.sessionId)
       reserved = target.sessionId
       cwd = target.cwd
+      resumedEffort = target.effort
     } else {
       const asked = typeof input.cwd === 'string' && input.cwd.trim() ? input.cwd.trim() : where.sessionCwd
       const real = await own.realPath(against(where.sessionCwd, asked))
@@ -702,24 +721,36 @@ export function createCodexEngine(options: EngineOptions) {
         if (!where.root) return fail(`${agent} runs on Codex only inside a git repository; this session is not in one.`)
         if (!isInside(where.root, cwd)) return fail(`${agent} may only run inside the repository ${where.root}; ${cwd} is outside it.`)
       }
-      const skipGitCheck = !isWriteRole(agent) && (await gitRoot(cwd, own)) === undefined
-
+      // Every refusal is behind us: only now may the prompt leave for the sizer. A resume keeps its job's effort. The
+      // sizer runs beside the git and mkdir work and is raced against Esc, so an abort answers at once.
+      if (signal?.aborted) return notStarted()
       const id = newJobId(options.now(), options.random)
+      const sizing: Promise<Effort | undefined> = reserved !== undefined || !size
+        ? Promise.resolve(resumedEffort)
+        : raceAbort(Promise.resolve().then(() => (signal?.aborted ? undefined : size(agent, description, prompt, signal ?? new AbortController().signal, id))).catch(() => undefined), signal)
+      const cwdRoot = isWriteRole(agent) ? where.root : await gitRoot(cwd, own)
+      const skipGitCheck = !isWriteRole(agent) && cwdRoot === undefined
+      // `-o` files and `.crew` follow the job's directory: a read-only role run in another repository (another
+      // worktree, say) writes there, not into the session's. Inside the session's own tree, or outside any repository,
+      // nothing changes: no `.crew` is made in a directory that git does not know.
+      const outBase = isInside(where.outBase, cwd) ? where.outBase : (cwdRoot ?? where.outBase)
+
       const lane = CODEX_LANES[agent]
       // Codex writes `-o` outside the sandbox, so the path is always the lane's, under the repository, never the input's.
       const relative = lane.output ? lane.output(outputName(description, id)) : undefined
-      const output = relative ? `${where.outBase}/${relative}` : undefined
+      const output = relative ? `${outBase}/${relative}` : undefined
       const made = await own.run(['mkdir', '-p', where.dir, ...(output ? [dirname(output)] : [])], { timeoutMs: 10_000 })
       if (made.exitCode !== 0) return fail(`Could not create ${where.dir}: ${trimLine(made.stderr)}`)
       // The folder ignores itself: the JSONL holds what the job read, and a later `git add -A` must not take it.
       await own.write(`${where.dir}/.gitignore`, '*\n').catch(error => own.log(`crew codex: .gitignore not written (${errorText(error)})`))
-      if (output) await ignoreCrew(own, where.outBase)
+      if (output) await ignoreCrew(own, outBase)
 
+      const effort = await sizing
       // Esc during the awaits above: no job, no record, no worker.
       if (signal?.aborted) return notStarted()
       extras.set(id, { description, output, owner: where.owner, activity: [] })
       const call: Call = {
-        agent, prompt, cwd, model: options.models[agent],
+        agent, prompt, cwd, model: options.models[agent], ...(effort ? { effort } : {}),
         rolePrompt: codexRolePrompt(agent, options.prompts[agent] ?? '', relative), output, skipGitCheck,
         ...(reserved ? { resumeSessionId: reserved } : {}),
       }

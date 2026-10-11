@@ -1,9 +1,11 @@
 import { expect, test } from 'claude-code/testing'
 import { EFFORT_FLOOR, MODEL_FLOORS, SPECIALISTS } from '../hooks/agents'
 import type { Specialist } from '../hooks/agents'
-import { decide, describe, moved, noticeText, route, routable, stateOf } from '../hooks/routing'
-import type { Routed } from '../hooks/routing'
+import { decide, describe, moved, noticeText, route, routable, sizeCodexJob, stateOf } from '../hooks/routing'
+import type { CodexSizing, Routed } from '../hooks/routing'
 import { PROMPT_CHARS } from '../hooks/questions'
+import { JevFailure, createBreaker, createGate, createJev } from '../hooks/jev'
+import type { JevIo } from '../hooks/jev'
 
 const spec = (name: string) => SPECIALISTS.find(s => s.name === name) as Specialist
 const answers = (tier: [string, number] | undefined, depth: number | undefined) => ({
@@ -158,4 +160,104 @@ test('the notice shows the answered effort, or the default with the moved effort
 test('a default effort outside the floor and high still routes to the floor', () => {
   expect(decide({ ...spec('developer'), effort: 'high' }, answers(undefined, 0.1)).effort).toBe('medium')
   expect(decide({ ...spec('developer'), effort: 'low' }, answers(undefined, 0.1)).effort).toBe('medium')
+})
+
+test('route hands its signal to ask, so the client sees an Esc; without one ask gets none', async () => {
+  const seen: (AbortSignal | undefined)[] = []
+  const ask = async (_q: unknown, _s: unknown, signal?: AbortSignal) => {
+    seen.push(signal)
+    return { answers: answers(undefined, 1.4), ms: 1 }
+  }
+  const stop = new AbortController()
+  await route(ask, ctx, spec('developer'), { prompt: 'p', description: 'd' }, stop.signal)
+  await route(ask, ctx, spec('developer'), { prompt: 'p', description: 'd' })
+  expect(seen[0]).toBe(stop.signal)
+  expect(seen[1]).toBeUndefined()
+})
+
+test('route over the real client with an aborted signal fails aborted and sends nothing', async () => {
+  const sent: unknown[] = []
+  const io: JevIo = {
+    fetch: async (_url, init) => { sent.push(init); return { status: 200, text: '{"answers":{}}' } },
+    timer: () => () => {},
+    now: () => 0,
+  }
+  const stop = new AbortController()
+  stop.abort()
+  const ask = createJev(io, ['sk-test-', 'abcdefghijklmnopqrstuvwx'].join(''), { model: 'jev-1.13.0', gate: createGate(), breaker: createBreaker(() => 0) })
+  let reason: string | undefined
+  try {
+    await route(ask, ctx, spec('developer'), { prompt: 'p', description: 'd' }, stop.signal)
+  } catch (error) {
+    reason = error instanceof JevFailure ? error.reason : String(error)
+  }
+  expect(reason).toBe('aborted')
+  expect(sent).toEqual([])
+})
+
+// --- sizeCodexJob: the order of its steps and its abort checks ---
+
+const goodReply = { answers: answers(['opus', 0.9], 3.5), model: 'jev-1.13.0', ms: 5 }
+
+function sizing(over: Partial<CodexSizing> = {}) {
+  const calls: string[] = []
+  const signals: (AbortSignal | undefined)[] = []
+  const deps: CodexSizing = {
+    enabled: true,
+    key: async () => { calls.push('key'); return 'k' },
+    context: async () => { calls.push('context'); return { home: '', root: '' } },
+    ask: () => async (_q, _s, signal) => { calls.push('ask'); signals.push(signal); return goodReply },
+    log: line => { calls.push(`log ${line}`) },
+    ...over,
+  }
+  return { deps, calls, signals }
+}
+
+test('sizeCodexJob: Jev\'s depth gives high, the signal reaches the client, and one debug line names role and job id', async () => {
+  const s = sizing()
+  const stop = new AbortController()
+  expect(await sizeCodexJob(s.deps, 'developer', 'd', 'p', stop.signal, 'cx-1')).toBe('high')
+  expect(s.signals).toEqual([stop.signal])
+  expect(s.calls.at(-1)).toMatch(/^log crew jev: codex:developer cx-1 depth=3\.50 effort=high jev=jev-1\.13\.0 5ms$/)
+})
+
+test('sizeCodexJob: routing off answers the base without asking for the key, the context or Jev', async () => {
+  const s = sizing({ enabled: false })
+  expect(await sizeCodexJob(s.deps, 'developer', 'd', 'p', new AbortController().signal, 'cx-1')).toBe('medium')
+  expect(s.calls).toEqual([])
+})
+
+test('sizeCodexJob: no key answers the base and goes no further', async () => {
+  const s = sizing({ key: async () => undefined })
+  expect(await sizeCodexJob(s.deps, 'developer', 'd', 'p', new AbortController().signal, 'cx-1')).toBe('medium')
+  expect(s.calls).toEqual([])
+})
+
+test('sizeCodexJob: an abort before anything, during the key and during the redaction context sends no request', async () => {
+  const before = new AbortController(); before.abort()
+  const a = sizing()
+  expect(await sizeCodexJob(a.deps, 'developer', 'd', 'p', before.signal, 'cx-1')).toBe('medium')
+  expect(a.calls).toEqual([])
+
+  const duringKey = new AbortController()
+  const b = sizing({ key: async () => { duringKey.abort(); return 'k' } })
+  expect(await sizeCodexJob(b.deps, 'developer', 'd', 'p', duringKey.signal, 'cx-1')).toBe('medium')
+  expect(b.calls).toEqual([])
+
+  const duringContext = new AbortController()
+  const c = sizing({ context: async () => { duringContext.abort(); return { home: '', root: '' } } })
+  expect(await sizeCodexJob(c.deps, 'developer', 'd', 'p', duringContext.signal, 'cx-1')).toBe('medium')
+  expect(c.calls).toEqual(['key'])
+})
+
+test('sizeCodexJob: a failure answers the base with one line that carries the reason only', async () => {
+  const s = sizing({ ask: () => async () => { throw new JevFailure('busy', 'too many calls in flight') } })
+  expect(await sizeCodexJob(s.deps, 'developer', 'secret description', 'secret prompt', new AbortController().signal, 'cx-1')).toBe('medium')
+  expect(s.calls.at(-1)).toBe('log crew jev: codex:developer cx-1 not sized (busy)')
+  expect(s.calls.join('\n')).not.toContain('secret')
+})
+
+test('sizeCodexJob: a throwing log still answers the base', async () => {
+  const s = sizing({ ask: () => async () => { throw new Error('x') }, log: () => { throw new Error('log gone') } })
+  expect(await sizeCodexJob(s.deps, 'developer', 'd', 'p', new AbortController().signal, 'cx-1')).toBe('medium')
 })

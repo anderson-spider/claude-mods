@@ -2,6 +2,7 @@
 // Every effect is injected (spawn, clock, codec, ids, change and notice callbacks); in the crew the spawn is the tail
 // of a detached worker's files (engine.ts).
 import type { CodexEvent, JsonlReader, Tokens } from './events'
+import type { Effort } from './types'
 
 export type Role = 'code-reader' | 'research' | 'designer' | 'developer' | 'tester' | 'architect'
 
@@ -11,6 +12,7 @@ export type Job = {
   id: string
   agent: Role
   model?: string
+  effort?: Effort
   description?: string
   status: JobStatus
   startedAt: number
@@ -35,6 +37,7 @@ export type Job = {
 export type CallBase = {
   agent: Role
   model?: string
+  effort?: Effort
   prompt: string
   cwd: string
   resumeSessionId?: string
@@ -144,7 +147,7 @@ export function createJobs<Call extends CallBase>(deps: Deps<Call>) {
 
   async function run(call: Call, opts: RunOptions): Promise<Reply> {
     const job: Job = {
-      id: opts.id ?? deps.newId(), agent: call.agent, model: call.model, description: opts.description,
+      id: opts.id ?? deps.newId(), agent: call.agent, model: call.model, ...(call.effort ? { effort: call.effort } : {}), description: opts.description,
       status: opts.background ? 'background' : 'running',
       startedAt: opts.startedAt ?? await deps.clock.now(), cwd: call.cwd,
       // A resume owns its Codex session from the start, so the session cannot be resumed twice.
@@ -328,7 +331,7 @@ export function createJobs<Call extends CallBase>(deps: Deps<Call>) {
   return {
     run, cancel, list,
     get(id: string): Job | undefined { const job = find(id); return job && copy(job) },
-    resumeTarget(id: string): { sessionId: string; cwd: string; agent: Role } | { error: string } {
+    resumeTarget(id: string): { sessionId: string; cwd: string; agent: Role; effort?: Effort } | { error: string } {
       const job = find(id)
       if (!job) return { error: `Unknown job ${id}.` }
       if (active(job)) return { error: `Job ${id} is still active; wait for it or cancel it before resuming.` }
@@ -337,7 +340,7 @@ export function createJobs<Call extends CallBase>(deps: Deps<Call>) {
       }
       const busy = jobs.find(other => other.sessionId === job.sessionId && active(other))
       if (busy) return { error: `The Codex session of job ${id} is already in use by job ${busy.id}; wait for it or cancel it before resuming.` }
-      return { sessionId: job.sessionId, cwd: job.cwd, agent: job.agent }
+      return { sessionId: job.sessionId, cwd: job.cwd, agent: job.agent, ...(job.effort ? { effort: job.effort } : {}) }
     },
   }
 }
