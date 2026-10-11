@@ -990,6 +990,19 @@ describe('codex jobs: graceful cancel', () => {
     expect(p.asks()).toBe(1)
   })
 
+  test('a foreground run whose signal is already aborted ends cancelled at once and spawns nothing', async () => {
+    let spawned = 0
+    const spawn: Spawn = async () => { spawned++; throw new Error('must not spawn') }
+    const f = fixture(undefined, spawn)
+    const signal = { aborted: true, addEventListener: () => {}, removeEventListener: () => {} } as unknown as AbortSignal
+    const reply = await f.jobs.run(call, { ...foreground, gracefulCancel: true, signal })
+    for (let i = 0; i < 3; i++) await settle()
+    expect(reply.outcome).toBe('cancelled')
+    expect(f.jobs.get(reply.job.id)?.status).toBe('cancelled')
+    expect(spawned).toBe(0)
+    expect(f.notifications).toEqual([])
+  })
+
   test('a job that completes after the cancel was asked is done, not cancelled', async () => {
     const p = asking()
     const f = fixture(undefined, p.spawn)

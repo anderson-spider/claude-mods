@@ -314,8 +314,35 @@ test('a call whose signal was already aborted starts nothing', async () => {
   engine.useHost(fake.host)
   const signal = { aborted: true, addEventListener: () => {}, removeEventListener: () => {} } as unknown as AbortSignal
   const answer = await engine.start({ agent: 'developer', prompt: 'p', description: 'd' }, fake.host, signal)
-  expect(answer.isError).toBe(true)
+  expect(parsed(answer.text)).toEqual(expect.objectContaining({ status: 'cancelled' }))
   expect(fake.runs.some(run => run.argv[3] === 'crew-codex')).toBe(false)
+})
+
+test('Esc while the call is still preparing the job returns cancelled, leaves no job active and no record', async () => {
+  const fake = fakeHost({ scenario: () => RUNNING })
+  const engine = engineOf()
+  engine.useHost(fake.host)
+  const listeners: (() => void)[] = []
+  const signal = {
+    aborted: false,
+    addEventListener: (_type: string, listener: () => void) => { listeners.push(listener) },
+    removeEventListener: () => {},
+  }
+  let answered: { text: string } | undefined
+  void engine.start({ agent: 'developer', prompt: 'p', description: 'mid' }, fake.host, signal as unknown as AbortSignal).then(answer => { answered = answer })
+  // Aborted during start's first awaits (load, the paths, git, mkdir), before the job exists.
+  await Promise.resolve()
+  signal.aborted = true
+  for (const listener of [...listeners]) listener()
+  for (let i = 0; i < 50 && !answered; i++) await settle(20)
+
+  expect(answered).toBeDefined()
+  expect(parsed(answered!.text)).toEqual(expect.objectContaining({ status: 'cancelled' }))
+  expect(fake.runs.some(run => run.argv[3] === 'crew-codex')).toBe(false)
+  const records = [...fake.files.keys()].filter(path => /\/cx-[^/]+\.json$/.test(path))
+  expect(records).toEqual([])
+  await engine.flush()
+  expect(fake.cards()).toEqual([])
 })
 
 test('a cancel asked while the worker is still starting sends SIGINT once the worker exists', async () => {

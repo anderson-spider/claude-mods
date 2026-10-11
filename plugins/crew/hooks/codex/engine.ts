@@ -75,6 +75,8 @@ export type Answer = { text: string; isError: boolean }
 
 const ok = (value: unknown): Answer => ({ text: JSON.stringify(value, null, 2), isError: false })
 const fail = (text: string): Answer => ({ text, isError: true })
+/** A call aborted before its job was created: nothing ran. */
+const notStarted = (): Answer => ok({ status: 'cancelled', note: 'The call was cancelled before a job started; nothing ran.' })
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error))
 const trimLine = (text: string) => text.trim().split('\n')[0] ?? ''
 /** A relative cwd is the session's, not the host process's: every check runs on the joined path. */
@@ -650,7 +652,7 @@ export function createCodexEngine(options: EngineOptions) {
     if (typeof prompt !== 'string' || !prompt.trim()) return fail('prompt is required.')
     const description = typeof input.description === 'string' ? input.description.trim().slice(0, 200) : ''
     const background = input.background === true
-    if (signal?.aborted) return fail('The call was cancelled before the job started.')
+    if (signal?.aborted) return notStarted()
     const jobs = await load()
     const where = await baseOf()
 
@@ -698,6 +700,8 @@ export function createCodexEngine(options: EngineOptions) {
       await own.write(`${where.dir}/.gitignore`, '*\n').catch(error => own.log(`crew codex: .gitignore not written (${errorText(error)})`))
       if (output) await ignoreCrew(own, where.outBase)
 
+      // Esc during the awaits above: no job, no record, no worker.
+      if (signal?.aborted) return notStarted()
       extras.set(id, { description, output, owner: where.owner, activity: [] })
       const call: Call = {
         agent, prompt, cwd, model: options.models[agent],

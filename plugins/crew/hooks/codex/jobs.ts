@@ -209,7 +209,8 @@ export function createJobs<Call extends CallBase>(deps: Deps<Call>) {
     if (!opts.background) {
       opts.signal?.addEventListener('abort', abort, { once: true })
       if (opts.signal?.aborted) {
-        cancel(job.id)
+        // Nothing was spawned: there is no process to stop, so the job ends here (a graceful cancel would wait forever).
+        void finish('cancelled')
         return completion
       }
       timer = deps.clock.after(opts.foregroundMs, () => {
