@@ -1,5 +1,5 @@
-// The parser, `resolve`, `locate` and the temp repository check are trimmed from the blast-radius
-// plugin, which has since been removed; they live only here now.
+// Shell text as data: the parser that splits a command line into commands and words (substitutions and heredoc
+// bodies included), and the path helpers (`resolve`, `enter`, `locate`) that follow a `cd`.
 
 /** A word of the command, already unquoted, and what the shell would still do with it. */
 export type Word = {
@@ -54,11 +54,15 @@ const delimiterAt = (command: string, from: number) => {
   return { word, end: at }
 }
 
-type Heredoc = {
+// What a body needs to be found: the word that closes it, and whether tabs may precede that word (`<<-`).
+type Delimiter = {
   word: string
+  isTabbed: boolean
+}
+
+type Heredoc = Delimiter & {
   /** Index of the command that opened it. */
   owner: number
-  isTabbed: boolean
   /** Fed to a shell or ssh: the body is commands. */
   isShell: boolean
   /** The delimiter is quoted: the shell expands nothing in the body. */
@@ -87,37 +91,102 @@ const SHELL_VALUED = new Set(['-o', '-O', '+o', '+O', '--rcfile', '--init-file']
 
 const base = (text: string) => text.slice(text.lastIndexOf('/') + 1)
 
-// Whether what a command reads on stdin is run as commands: a shell with no `-c` and no script, or `ssh host` with no remote command.
-const readsCommands = (words: readonly Word[]) => {
+// `-c` among the letters of a shell option: the next word is the command, not a script.
+const COMMAND_OPTION = /^-[A-Za-z]*c/
+
+// The index of the first word that is not a prefix of the command (assignments, openers, wrappers). `wrapperEnd` gets a
+// word and where it is, and gives where that wrapper and its options end, or `undefined` when the word is not one.
+const skipPrefix = (words: readonly Word[], wrapperEnd: (text: string, at: number) => number | undefined) => {
   let start = 0
-  // An option of a wrapper this does not know: its value, if any, is not known, so any later shell counts.
-  let isUnsure = false
 
   while (start < words.length) {
     const text = words[start]?.text ?? ''
-    const name = base(text)
 
     if (ASSIGNMENT.test(text) || OPENERS.has(text)) {
       start += 1
-    } else if (WRAPPERS.has(name)) {
-      const { short, long } = VALUED[name] ?? { short: new Set<string>(), long: new Set<string>() }
-
-      start += 1
-
-      // The wrapper's own options, and the value of those that take one.
-      while (start < words.length && (words[start]?.text ?? '').startsWith('-')) {
-        const option = words[start]?.text ?? ''
-        const isLong = option.startsWith('--')
-
-        const flags = FLAGS[name] ?? new Set<string>()
-
-        isUnsure ||= !(isLong ? option.includes('=') || long.has(option) : [...option.slice(1)].every(char => short.has(char) || flags.has(char)))
-        start += 1 + ((isLong ? long.has(option) : option.length === 2 && short.has(option[1] ?? '-')) ? 1 : 0)
-      }
     } else {
-      break
+      const end = wrapperEnd(text, start)
+
+      if (end === undefined) {
+        break
+      }
+
+      start = end
     }
   }
+
+  return start
+}
+
+// Where the options of the wrapper `name` end (they start at `from`), and whether one of them is not known: then its
+// value, if it has one, is not known either.
+const skipOptions = (words: readonly Word[], name: string, from: number) => {
+  const { short, long } = VALUED[name] ?? { short: new Set<string>(), long: new Set<string>() }
+  const flags = FLAGS[name] ?? new Set<string>()
+  let end = from
+  let isUnsure = false
+
+  while (end < words.length && (words[end]?.text ?? '').startsWith('-')) {
+    const option = words[end]?.text ?? ''
+    const isLong = option.startsWith('--')
+
+    isUnsure ||= !(isLong ? option.includes('=') || long.has(option) : [...option.slice(1)].every(char => short.has(char) || flags.has(char)))
+    end += 1 + ((isLong ? long.has(option) : option.length === 2 && short.has(option[1] ?? '-')) ? 1 : 0)
+  }
+
+  return { end, isUnsure }
+}
+
+// A shell reads commands from stdin when no word of its arguments is a script or a `-c` command.
+const shellReadsStdin = (rest: readonly string[]) => {
+  for (let at = 0; at < rest.length; at += 1) {
+    const text = rest[at] ?? ''
+
+    if (SHELL_VALUED.has(text) || (/^[-+][A-Za-z]+[oO]$/.test(text) && !COMMAND_OPTION.test(text))) {
+      at += 1
+    } else if (!(/^[-+]/.test(text)) || COMMAND_OPTION.test(text)) {
+      return false
+    }
+  }
+
+  return true
+}
+
+// `ssh host` with no remote command: exactly one word that is not an option or an option's value.
+const sshHasOneHost = (rest: readonly string[]) => {
+  let hosts = 0
+
+  for (let at = 0; at < rest.length; at += 1) {
+    const text = rest[at] ?? ''
+
+    if (text.startsWith('-')) {
+      at += text.length === 2 && SSH_VALUED.has(text.slice(1)) ? 1 : 0
+    } else {
+      hosts += 1
+    }
+  }
+
+  return hosts === 1
+}
+
+// Whether what a command reads on stdin is run as commands: a shell with no `-c` and no script, or `ssh host` with no remote command.
+const readsCommands = (words: readonly Word[]) => {
+  // An option of a wrapper this does not know: its value, if any, is not known, so any later shell counts.
+  let isUnsure = false
+
+  const start = skipPrefix(words, (text, at) => {
+    const name = base(text)
+
+    if (!WRAPPERS.has(name)) {
+      return undefined
+    }
+
+    const options = skipOptions(words, name, at + 1)
+
+    isUnsure ||= options.isUnsure
+
+    return options.end
+  })
 
   if (isUnsure) {
     return words.slice(start).some(word => SHELLS.has(base(word.text)) || base(word.text) === 'ssh')
@@ -127,40 +196,14 @@ const readsCommands = (words: readonly Word[]) => {
   const rest = words.slice(start + 1).map(word => word.text)
 
   if (SHELLS.has(name)) {
-    for (let at = 0; at < rest.length; at += 1) {
-      const text = rest[at] ?? ''
-
-      if (SHELL_VALUED.has(text) || (/^[-+][A-Za-z]+[oO]$/.test(text) && !/^-[A-Za-z]*c/.test(text))) {
-        at += 1
-      } else if (!(/^[-+]/.test(text)) || /^-[A-Za-z]*c/.test(text)) {
-        return false
-      }
-    }
-
-    return true
+    return shellReadsStdin(rest)
   }
 
-  if (name === 'ssh') {
-    let hosts = 0
-
-    for (let at = 0; at < rest.length; at += 1) {
-      const text = rest[at] ?? ''
-
-      if (text.startsWith('-')) {
-        at += text.length === 2 && SSH_VALUED.has(text.slice(1)) ? 1 : 0
-      } else {
-        hosts += 1
-      }
-    }
-
-    return hosts === 1
-  }
-
-  return false
+  return name === 'ssh' && sshHasOneHost(rest)
 }
 
 // Where the line after the bodies starts, and the text of each body: it runs to its closing delimiter, or to the end when it never comes.
-const afterBodies = (command: string, from: number, pending: readonly Heredoc[]) => {
+const afterBodies = (command: string, from: number, pending: readonly Delimiter[]) => {
   let at = from
   const bodies: string[] = []
 
@@ -195,7 +238,7 @@ const afterBodies = (command: string, from: number, pending: readonly Heredoc[])
 // It follows quotes, escapes and heredoc bodies, so a `)` inside them does not close it.
 const closeParen = (command: string, from: number): number => {
   let depth = 1
-  let pending: Heredoc[] = []
+  let pending: Delimiter[] = []
   // Open `case`s, innermost last: reading its head, a pattern (whose `)` closes nothing) or an arm's commands.
   const cases: ('head' | 'pattern' | 'body')[] = []
   let word = ''
@@ -254,7 +297,7 @@ const closeParen = (command: string, from: number): number => {
       const skip = /^[ \t]*/.exec(command.slice(start))?.[0].length ?? 0
       const { word, end } = delimiterAt(command, start + skip)
 
-      pending.push({ word, isTabbed, isShell: false, isLiteral: false, owner: 0 })
+      pending.push({ word, isTabbed })
       at = end - 1
     } else if (char === '\n' && pending.length > 0) {
       at = afterBodies(command, at + 1, pending).end - 1
@@ -286,8 +329,15 @@ const backtickEnd = (command: string, from: number): number => {
   return command.length
 }
 
+// The commands of a nested text, the first one with the separator that came before the text.
+const prefixed = (parsed: readonly Command[], before: string): Command[] =>
+  parsed.map((one, at) => (at === 0 ? { ...one, before } : one))
+
+// What a backtick substitution holds, without the backslashes that protect `` ` ``, `$` and `\`.
+const unescapeSubstitution = (inner: string) => inner.replace(/\\([`$\\])/g, '$1')
+
 // The commands inside a substitution, as if run on their own: the shell runs them whenever it expands the word.
-const inside = (text: string): Command[] => parse(text).map((one, at) => (at === 0 ? { ...one, before: ';' } : one))
+const inside = (text: string): Command[] => prefixed(parse(text), ';')
 
 // The substitutions of a heredoc body the shell expands (unquoted delimiter), whose commands run even when the body is data.
 const bodySubstitutions = (body: string): Command[] => {
@@ -306,7 +356,7 @@ const bodySubstitutions = (body: string): Command[] => {
     } else if (char === '`') {
       const close = backtickEnd(body, at + 1)
 
-      found.push(...inside(body.slice(at + 1, close).replace(/\\([`$\\])/g, '$1')))
+      found.push(...inside(unescapeSubstitution(body.slice(at + 1, close))))
       at = close
     }
   }
@@ -363,7 +413,7 @@ export const parse = (command: string): Command[] => {
     const close = isBacktick ? backtickEnd(command, start) : closeParen(command, start)
     const inner = command.slice(start, close)
 
-    attach(commands.length - 1, inside(isBacktick ? inner.replace(/\\([`$\\])/g, '$1') : inner))
+    attach(commands.length - 1, inside(isBacktick ? unescapeSubstitution(inner) : inner))
 
     return { raw: command.slice(at, close + 1), end: Math.min(close, command.length - 1) }
   }
@@ -395,7 +445,7 @@ export const parse = (command: string): Command[] => {
 
       if (isHereShell) {
         isHereShell = false
-        commands.push(...parse(text).map((one, at) => (at === 0 ? { ...one, before: ';' } : one)), { words: [], before: ';' })
+        commands.push(...prefixed(parse(text), ';'), { words: [], before: ';' })
       }
     } else if (redirection !== null) {
       isTargetNext = redirection[1] === ''
@@ -532,7 +582,7 @@ export const parse = (command: string): Command[] => {
           }
 
           if (heredoc?.isShell === true || isPiped) {
-            commands.push(...parse(body).map((one, position) => (position === 0 ? { ...one, before: '\n' } : one)), { words: [], before: '\n' })
+            commands.push(...prefixed(parse(body), '\n'), { words: [], before: '\n' })
           } else if (heredoc !== undefined && !heredoc.isLiteral) {
             attach(heredoc.owner, bodySubstitutions(body))
           }
@@ -587,16 +637,5 @@ export const locate = (cwd: string, dir: string, home: string | undefined): stri
   return home === undefined ? undefined : resolve(home, `.${dir.slice(1)}`)
 }
 
-export const bare = (words: readonly Word[]) => {
-  let start = 0
-
-  for (; start < words.length; start += 1) {
-    const text = words[start]?.text ?? ''
-
-    if (!ASSIGNMENT.test(text) && !WRAPPERS.has(text) && !OPENERS.has(text)) {
-      break
-    }
-  }
-
-  return words.slice(start)
-}
+/** The words from the first one that is not a leading assignment, wrapper name or opener. */
+export const bare = (words: readonly Word[]) => words.slice(skipPrefix(words, (text, at) => (WRAPPERS.has(text) ? at + 1 : undefined)))
