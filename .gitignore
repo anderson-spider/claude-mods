@@ -8,3 +8,4 @@ plugins/codex-computer-use/helper/run/
 # superpowers output stays local
 docs/superpowers/
 .superpowers/
+.crew/

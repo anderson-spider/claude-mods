@@ -21,6 +21,15 @@ It reads the text of the Bash command Claude is about to run, runs `git` command
 - **Not stored:** what you see in the apps. The helper passes screen content between Claude and the computer-use server and keeps none of it.
 - The helper listens on a Unix socket under `~/.claude/mcp/codex-cu/run/`, readable by your user only. Auto-approve is off by default.
 
+## crew
+
+Routing is off unless the `jevRouting` option is on; the agents themselves read and send nothing.
+
+- **Sent** (only with `jevRouting` on, one request per `crew:*` Agent call that does not name a model and is not a fork or a workflow script's agent, to `https://api.typesafe.ai/v1/systemone`): the agent name, the call's description and its prompt. Secrets in common shapes, emails and absolute paths are removed first (paths under the repository become relative, your home becomes `~`; when no home can be trusted, the user's home under `/Users` or `/home` in the session's directory stands in for it), and the prompt is cut to 4000 characters.
+- **Read:** `TYPESAFE_API_KEY` and `JEV_API_KEY` from the environment, `~/.jev-router.env`, and the `jevKey` option, in that order. A key variable, a `HOME` or a `jevKey` declared by the repository's project or local settings is ignored (the key file is also skipped when `HOME` is not absolute), and when those settings cannot be read routing is off completely. The key is sent only in the `Authorization` header and is never logged. The settings of the repository are also read to check that it does not declare `jevRouting`.
+- **Saved:** nothing. Each decision (tier, confidence, depth, effort, Jev model id, duration) goes to the debug log of the session, without the prompt.
+- **Kept in memory:** the resolved key and home, the effort chosen for each routed subagent and the state of the breaker, until a reload (a new key or file needs `/reload-plugins`).
+
 ## tailscale
 
 - **Read:** `TS_API_KEY`, on every call. It is never taken from tool input.

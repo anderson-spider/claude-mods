@@ -1,13 +1,23 @@
+/** Model tiers and effort levels, cheapest first: Jev's routing moves an agent one step from its default at most. */
+export const MODELS = ['haiku', 'sonnet', 'opus'] as const
+export const EFFORTS = ['low', 'medium', 'high'] as const
+export type Model = (typeof MODELS)[number]
+export type Effort = (typeof EFFORTS)[number]
+
 /** One specialist: the agent type is `crew:<name>`. */
 export type Specialist = {
   name: string
   description: string
   prompt: string
-  model: 'haiku' | 'sonnet' | 'opus'
+  /** The default model; Jev routing may move it one tier (see `MODEL_FLOORS`). */
+  model: Model
   /** Set on purpose: Opus 5.5 and Haiku 5.5 default to `medium`, Sonnet 5.5 to `high`. */
-  effort: 'low' | 'medium' | 'high'
+  effort: Effort
   tools: readonly string[]
 }
+
+/** The lowest model routing may pick for an agent, whatever Jev says: the architect's value is its depth. */
+export const MODEL_FLOORS: Readonly<Record<string, Model>> = { architect: 'sonnet' }
 
 const READ_ONLY = ['Read', 'Grep', 'Glob'] as const
 

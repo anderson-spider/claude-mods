@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { SPECIALISTS } from '../hooks/agents'
+import { EFFORTS, MODELS, MODEL_FLOORS, SPECIALISTS } from '../hooks/agents'
 
 const by = (name: string) => SPECIALISTS.find(s => s.name === name)
 
@@ -34,4 +34,20 @@ test('effort is set on purpose: architect high, reader low, the rest medium', ()
 test('names are unique', () => {
   const names = SPECIALISTS.map(s => s.name)
   expect(new Set(names).size).toBe(names.length)
+})
+
+test('routing floors name real agents and tiers, and the architect never routes below sonnet', () => {
+  for (const [name, floor] of Object.entries(MODEL_FLOORS)) {
+    expect(by(name)).toBeDefined()
+    expect(MODELS).toContain(floor)
+    expect(MODELS.indexOf(by(name)!.model)).toBeGreaterThanOrEqual(MODELS.indexOf(floor))
+  }
+  expect(MODEL_FLOORS.architect).toBe('sonnet')
+})
+
+test('every default sits on the model and effort scales routing moves along', () => {
+  for (const s of SPECIALISTS) {
+    expect(MODELS).toContain(s.model)
+    expect(EFFORTS).toContain(s.effort)
+  }
 })

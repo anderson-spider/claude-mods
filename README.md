@@ -9,7 +9,7 @@ Marketplace of [Claude Code](https://claude.com/claude-code) plugins made by and
 | [branch-guard](plugins/branch-guard) | Holds a `git commit` or `git push` on the protected branch and shows what would go in. |
 | [chatgpt](plugins/chatgpt) | Lets Claude ask your logged-in ChatGPT, or have it generate an image, in terminal-browser, Claude in Chrome or the Claude desktop app's built-in browser, and saves the result locally. |
 | [codex-computer-use](plugins/codex-computer-use) | Routes native Mac app control through Codex computer use from the ChatGPT app instead of Claude's own computer use, asking before each new app. |
-| [crew](plugins/crew) | Registers six specialist subagents: `code-reader` and `research` on Haiku; `designer`, `developer` and `tester` on Sonnet; `architect` on Opus. |
+| [crew](plugins/crew) | Registers six specialist subagents: `code-reader` and `research` on Haiku; `designer`, `developer` and `tester` on Sonnet; `architect` on Opus. Optional Jev routing of each call's model and effort. |
 | [tailscale](plugins/tailscale) | Lets Claude query and modify your tailnet through the Tailscale API. |
 
 ## Install
@@ -103,9 +103,9 @@ Limitations: ownership is checked for apps named as string literals in `cua.getA
 
 ## crew
 
-Registers six subagent types when a session starts, each with a fixed model and tool allowlist. Claude delegates to them through the Agent tool by their descriptions, or you can ask for one by name:
+Registers six subagent types when a session starts, each with a default model and effort and a tool allowlist. Claude delegates to them through the Agent tool by their descriptions, or you can ask for one by name:
 
-| Agent type | Model | Tools | Role |
+| Agent type | Default model | Tools | Role |
 | --- | --- | --- | --- |
 | `crew:code-reader` | Haiku | Read, Grep, Glob | Finds and explains code; returns `path:line` summaries. Never edits. |
 | `crew:research` | Haiku | Read, Grep, Glob, Edit, Write, WebSearch, WebFetch, Context7 and browser tools (terminal-browser, Claude in Chrome) | Researches docs and the web, browsing pages when needed, and writes findings or documentation. Never edits source code. |
@@ -124,6 +124,15 @@ Layout in the project where the agents run (unversioned, added to `.gitignore` b
 ```
 
 The architect can only write Markdown under `.crew/` and the tester only test files: a hook denies any other `Write` or `Edit` by those agents. Plans and reviews live in `.crew/`, which the `brainstorm` skill adds to the repository's `.gitignore` when it is not ignored yet.
+
+### Jev routing of model and effort
+
+Off by default. With the `jevRouting` option on and a TypeSafe key, Jev decides per Agent call which model and effort a `crew:*` agent runs on, one step from its default at most (the architect never below Sonnet). The agent type stays the one Claude chose, so the tools and the write rules do not change; a call that names a model, a fork, a workflow script's agent and any other agent type are left alone. A notice shows each decision once the subagent has started (and says when an effort could not be applied), and a debug log line records the tier, confidence, depth and Jev model id.
+
+- **Key**, in order: `TYPESAFE_API_KEY` or `JEV_API_KEY` in the environment, `~/.jev-router.env` (`JEV_API_KEY=...`), then the `jevKey` option. A key, a `HOME` or a `jevKey` that the repository's own project or local settings declare is ignored, and a repository cannot turn `jevRouting` on: set `jevRouting` in user settings (local settings count as the repository, so routing stays off there). Routing is also off when those settings cannot be read, and a debug log line gives the reason. A new key or file needs `/reload-plugins`.
+- **Sent** to `api.typesafe.ai`: the agent name, the call description and the prompt with secrets, emails and paths removed and cut to 4000 characters. See [docs/PRIVACY.md](docs/PRIVACY.md).
+- **Fail open**: without a key, or on an error, a timeout (3 s) or more than four calls at once, the call runs as Claude made it.
+- The thresholds are untuned defaults; the debug log is where to tune them.
 
 The plugin also ships a `brainstorm` skill that says how to plan with these agents: gather context with `code-reader` and `research` in parallel, let `architect` challenge the leading option, then write one plan before `developer` implements it. Once you approve the plan, it recommends `/goal`, `/loop` or direct execution, without starting any of them.
 
