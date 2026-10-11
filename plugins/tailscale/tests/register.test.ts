@@ -140,3 +140,83 @@ test('tool descriptions and schema descriptions stay within the prompt budget', 
   expect(tools.length).toBe(2)
   expect(descriptionChars(tools)).toBeLessThanOrEqual(1300)
 })
+
+test('write reports a missing TS_API_KEY and sends nothing, like get', async ($, on) => {
+  const { sent } = world(on, { key: undefined })
+
+  const result = await $.tool.call({ tool: WRITE, method: 'POST', path: '/tailnet/-/acl', body: {} } as never)
+
+  expect(result.isError).toBe(true)
+  expect(text(result)).toBe('TS_API_KEY is not set in the Claude Code environment.')
+  expect(sent).toEqual([])
+})
+
+test('write checks the method before the key: a bad method is denied even without a key', async ($, on) => {
+  const { sent } = world(on, { key: undefined })
+
+  const denied = await $.tool.call({ tool: WRITE, method: 'get', path: '/tailnet/-/devices' } as never)
+
+  expect(denied.deny).toMatch(/Invalid method: GET\. Use POST, PUT, PATCH, DELETE\./)
+  expect(denied.isError).toBeUndefined()
+  expect(sent).toEqual([])
+})
+
+test('write refuses a path that leaves the API, like get, and sends nothing', async ($, on) => {
+  const { sent } = world(on)
+
+  for (const path of ['//evil.com/x', '/a/../b', 'https://evil.com', '/a%2Fb', 42, undefined]) {
+    const result = await $.tool.call({ tool: WRITE, method: 'PUT', path, body: {} } as never)
+
+    expect(result.isError).toBe(true)
+    expect(text(result)).toMatch(/^Invalid path: /)
+  }
+
+  expect(sent).toEqual([])
+})
+
+test('both tools read the key on every call and send the path under the API with its query string', async ($, on) => {
+  let key: string | undefined = 'tskey-one'
+  const sent: { url: string; auth?: string; method?: string }[] = []
+
+  on('env.get', () => ({ value: key }))
+  on('http.fetch', (_$, e) => {
+    sent.push({ url: e.url, auth: e.init?.headers?.Authorization, method: e.init?.method })
+
+    return { value: { status: 200, ok: true, headers: {}, text: '{}' } }
+  })
+
+  await $.tool.call({ tool: GET, path: '/tailnet/-/keys?all=true' } as never)
+  key = 'tskey-two'
+  await $.tool.call({ tool: WRITE, method: 'delete', path: '/tailnet/-/keys/k1?x=1' } as never)
+
+  expect(sent).toEqual([
+    { url: 'https://api.tailscale.com/api/v2/tailnet/-/keys?all=true', auth: 'Bearer tskey-one', method: 'GET' },
+    { url: 'https://api.tailscale.com/api/v2/tailnet/-/keys/k1?x=1', auth: 'Bearer tskey-two', method: 'DELETE' },
+  ])
+})
+
+test('a successful call leaves isError unset and an error response from the API sets it', async ($, on) => {
+  const { sent } = world(on, { text: '{"ok":true}' })
+
+  const ok = await $.tool.call({ tool: GET, path: '/tailnet/-/devices' } as never)
+  const written = await $.tool.call({ tool: WRITE, method: 'POST', path: '/tailnet/-/acl', body: {} } as never)
+
+  expect(sent).toHaveLength(2)
+  expect(ok.isError).toBeUndefined()
+  expect(text(ok)).toBe('HTTP 200\n{"ok":true}')
+  expect(written.isError).toBeUndefined()
+  expect(text(written)).toBe('HTTP 200\n{"ok":true}')
+})
+
+test('an error status from the API comes back as an error result for both tools', async ($, on) => {
+  on('env.get', () => ({ value: 'tskey-test' }))
+  on('http.fetch', () => ({ value: { status: 403, ok: false, headers: {}, text: '{"message":"forbidden"}' } }))
+
+  const read = await $.tool.call({ tool: GET, path: '/tailnet/-/devices' } as never)
+  const write = await $.tool.call({ tool: WRITE, method: 'PATCH', path: '/device/1', body: {} } as never)
+
+  for (const result of [read, write]) {
+    expect(result.isError).toBe(true)
+    expect(text(result)).toBe('HTTP 403\n{"message":"forbidden"}')
+  }
+})

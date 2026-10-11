@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { BAND, pause, world } from './helpers'
+import { answer, BAND, pause, world } from './helpers'
 
 test('commits and pushes on a feature branch or inside /tmp run untouched', async ($, on) => {
   const seen = world(on)
@@ -113,4 +113,118 @@ test('the band holds a commit hidden in a command substitution', async ($, on) =
   expect((await refused).deny).toMatch(/pressed Cancel/)
   expect(seen.ran).toEqual([])
   await ui.unmount()
+})
+
+test('a second held call waits for the first to be decided, then takes the band in its turn', async ($, on) => {
+  const seen = world(on)
+
+  const first = $.tool.call({ tool: 'Bash', command: 'git commit -m x' })
+  await pause(50)
+  const second = $.tool.call({ tool: 'Bash', command: 'git push origin main' })
+  await pause(50)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+
+  // Only the first is drawn; the second queues behind it, and nothing ran yet.
+  expect(await ui.findAll({ type: 'Text', text: 'commit 2 files directly on main' })).toHaveLength(1)
+  expect(await ui.findAll({ type: 'Text', text: 'push 2 commits to origin/main' })).toHaveLength(0)
+  expect(await ui.findAll({ type: 'Button' })).toHaveLength(2)
+  expect(seen.ran).toEqual([])
+
+  // Deciding the first does not decide the second: it is drawn next and waits for its own answer.
+  await ui.press({ key: 'proceed' })
+  expect((await first).deny).toBeUndefined()
+  expect(seen.ran).toEqual(['git commit -m x'])
+  await pause(50)
+  expect(await ui.findAll({ type: 'Text', text: 'commit 2 files directly on main' })).toHaveLength(0)
+  expect(await ui.findAll({ type: 'Text', text: 'push 2 commits to origin/main' })).toHaveLength(1)
+  expect(await ui.findAll({ type: 'Button' })).toHaveLength(2)
+  expect(seen.ran).toEqual(['git commit -m x'])
+
+  await ui.press({ key: 'cancel' })
+
+  expect((await second).deny).toMatch(/pressed Cancel\. It would push 2 commits to origin\/main\./)
+  expect(seen.ran).toEqual(['git commit -m x'])
+  expect(await ui.findAll({ type: 'Button' })).toHaveLength(0)
+  await ui.unmount()
+})
+
+test('cancelling the first of two held calls leaves the second to be proceeded on its own', async ($, on) => {
+  const seen = world(on)
+
+  const first = $.tool.call({ tool: 'Bash', command: 'git commit -m x' })
+  await pause(50)
+  const second = $.tool.call({ tool: 'Bash', command: 'git push origin main' })
+  await pause(50)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+
+  await ui.press({ key: 'cancel' })
+  expect((await first).deny).toMatch(/pressed Cancel\. It would commit 2 files directly on main\./)
+  await pause(50)
+  expect(await ui.findAll({ type: 'Text', text: 'push 2 commits to origin/main' })).toHaveLength(1)
+
+  await ui.press({ key: 'proceed' })
+
+  expect((await second).deny).toBeUndefined()
+  expect(seen.ran).toEqual(['git push origin main'])
+  await ui.unmount()
+})
+
+test('session start clears a held call left behind, so the next one is held at once', async ($, on) => {
+  const seen = world(on)
+
+  on('session.start', (_$, e) => ({ cwd: e.cwd }))
+
+  // A first call is held and never decided: a reload in the middle of the wait.
+  const stuck = $.tool.call({ tool: 'Bash', command: 'git commit -m x' })
+
+  stuck.catch(() => undefined)
+  await pause(50)
+
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+
+  expect(await ui.findAll({ type: 'Text', text: 'commit 2 files directly on main' })).toHaveLength(1)
+  expect(await ui.findAll({ type: 'Button' })).toHaveLength(2)
+
+  await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true } as never)
+  await pause(50)
+
+  // The band is cleared at once ...
+  expect(await ui.findAll({ type: 'Button' })).toHaveLength(0)
+  expect(await ui.findAll({ type: 'Text', text: 'commit 2 files directly on main' })).toHaveLength(0)
+
+  // ... and a new call does not queue behind the lost one: it is drawn and decided.
+  const next = $.tool.call({ tool: 'Bash', command: 'git push origin main' })
+
+  await pause(50)
+  expect(await ui.findAll({ type: 'Text', text: 'push 2 commits to origin/main' })).toHaveLength(1)
+  await ui.press({ key: 'proceed' })
+
+  expect((await next).deny).toBeUndefined()
+  expect(seen.ran).toEqual(['git push origin main'])
+  await ui.unmount()
+})
+
+test('a commit whose directory cannot be placed (no home for ~) passes without being held', async ($, on) => {
+  const ran: string[] = []
+  const git: string[] = []
+
+  on('session.cwd', () => ({ value: '/proj' }))
+  on('env.get', () => ({ value: undefined }))
+  on('fs.stat', (_$, e) => ({ value: { kind: 'dir', size: 0, mtimeMs: 0, isLink: false, realPath: e.path } }))
+  on('process.run', (_$, e) => {
+    git.push(e.argv.join(' '))
+
+    return { value: answer(e.argv, e.init?.cwd) }
+  })
+  on('tool.call', { tool: 'Bash' }, (_$, e) => {
+    ran.push(e.command)
+
+    return { result: { stdout: '', stderr: '', interrupted: false }, text: '' }
+  })
+
+  const result = await $.tool.call({ tool: 'Bash', command: 'cd ~/repo && git commit -m x' })
+
+  expect(result.deny).toBeUndefined()
+  expect(ran).toEqual(['cd ~/repo && git commit -m x'])
+  expect(git).toEqual([])
 })

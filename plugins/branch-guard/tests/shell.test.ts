@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { enter, locate, parse, resolve } from '../hooks/shell'
+import { bare, enter, locate, parse, resolve } from '../hooks/shell'
 
 const texts = (command: string) => parse(command).map(one => one.words.map(word => word.text))
 
@@ -116,4 +116,101 @@ test('parse adds the commands inside substitutions after the line, and leaves th
   expect(full("echo '$(git push)'")).toEqual([['echo', '$(git push)']])
   // Arithmetic is not a substitution: it reads as before.
   expect(full('echo $((1+2))')).toEqual([['echo', '$'], ['1+2']])
+})
+
+// The words `bare` leaves, as text, for the first command of the line.
+const left = (command: string) => bare(parse(command)[0]?.words ?? []).map(word => word.text)
+
+test('bare drops leading assignments, wrapper names and openers, and stops at the first other word', () => {
+  expect(left('git commit -m x')).toEqual(['git', 'commit', '-m', 'x'])
+  expect(left('FOO=1 BAR=2 git push origin main')).toEqual(['git', 'push', 'origin', 'main'])
+  expect(left('sudo git commit -m x')).toEqual(['git', 'commit', '-m', 'x'])
+  expect(left('env FOO=1 nohup time git commit')).toEqual(['git', 'commit'])
+  expect(left('command exec git commit')).toEqual(['git', 'commit'])
+  expect(left('{ git commit; }')).toEqual(['git', 'commit'])
+  expect(left('! git commit')).toEqual(['git', 'commit'])
+  expect(left('if git commit -m x; then ls; fi')).toEqual(['git', 'commit', '-m', 'x'])
+  expect(left('while FOO=1 sudo git push')).toEqual(['git', 'push'])
+  // Assignments, wrappers and openers mix in any order.
+  expect(left('sudo FOO=1 { git commit')).toEqual(['git', 'commit'])
+})
+
+test('bare matches wrapper names whole and stops at a wrapper option', () => {
+  // `bare` does not follow a wrapper's options: the option is the first word left.
+  expect(left('sudo -u root git commit -m x')).toEqual(['-u', 'root', 'git', 'commit', '-m', 'x'])
+  expect(left('env -i git commit')).toEqual(['-i', 'git', 'commit'])
+  // A wrapper by path is not a wrapper name: `bare` compares the whole text.
+  expect(left('/usr/bin/sudo git commit')).toEqual(['/usr/bin/sudo', 'git', 'commit'])
+  expect(left('/usr/bin/env git commit')).toEqual(['/usr/bin/env', 'git', 'commit'])
+  // A quoted assignment-looking word still counts as an assignment by its text.
+  expect(left('"FOO=1" git commit')).toEqual(['git', 'commit'])
+  expect(bare([])).toEqual([])
+  expect(left('sudo')).toEqual([])
+  expect(left('FOO=1')).toEqual([])
+})
+
+test('parse ends a heredoc delimiter at a quote, an escape or an operator, and keeps spaces inside quotes', () => {
+  // The delimiter is the unquoted word: `E"O"F` is `EOF`, `\EOF` is `EOF`.
+  expect(full('cat <<E"O"F\ngit commit -m x\nEOF\nls')).toEqual([['cat'], ['ls']])
+  expect(full('cat <<\\EOF\ngit commit -m x\nEOF\nls')).toEqual([['cat'], ['ls']])
+  expect(full("cat <<'E O F'\ngit commit -m x\nE O F\nls")).toEqual([['cat'], ['ls']])
+  // Blanks between `<<` and the word are skipped, and so are the tabs of `<<-`.
+  expect(full('cat << EOF\ngit commit -m x\nEOF\nls')).toEqual([['cat'], ['ls']])
+  expect(full("cat <<- 'EOF'\n\tgit commit -m x\n\tEOF\nls")).toEqual([['cat'], ['ls']])
+  // The shell reads the delimiter up to the next blank or operator: what follows on the line is a command.
+  expect(full('cat <<EOF; ls\nbody\nEOF')).toEqual([['cat'], ['ls']])
+  expect(full('cat <<EOF|wc\nbody\nEOF')).toEqual([['cat'], ['wc']])
+  expect(full('cat <<EOF&&ls\nbody\nEOF')).toEqual([['cat'], ['ls']])
+  expect(full('(cat <<EOF)\nbody\nEOF\nls')).toEqual([['cat'], ['ls']])
+  expect(full('cat <<EOF>out\nbody\nEOF\nls')).toEqual([['cat'], ['ls']])
+  // The closing line must equal the whole delimiter.
+  expect(full('cat <<A\nbody\nA B\nA\nls')).toEqual([['cat'], ['ls']])
+  expect(full('cat <<"A B"\nbody\nA\nA B\nls')).toEqual([['cat'], ['ls']])
+})
+
+test('parse takes the bodies of several heredocs of one line in order and swallows the rest when one never closes', () => {
+  expect(full('cat <<A <<B\none\nA\ntwo\nB\nls')).toEqual([['cat'], ['ls']])
+  expect(full('cat <<-A <<B\n\tone\n\tA\ntwo\nB\nls')).toEqual([['cat'], ['ls']])
+  // An empty body: the delimiter is the first line.
+  expect(full('cat <<EOF\nEOF\nls')).toEqual([['cat'], ['ls']])
+  // The second never closes: it runs to the end of the text, and the first still closed at its own line.
+  expect(full('cat <<A <<B\none\nA\nls')).toEqual([['cat']])
+  // The first never closes: the second has nothing left.
+  expect(full('cat <<A <<B\nls')).toEqual([['cat']])
+  // The end of the text right after the delimiter, with and without the final newline.
+  expect(full('cat <<A\none\nA')).toEqual([['cat']])
+  expect(full('cat <<A\none\nA\n')).toEqual([['cat']])
+})
+
+test('parse reads the bodies of two heredocs fed to a shell as commands, each at its place', () => {
+  expect(full('bash <<A <<B\ngit commit -m 1\nA\ngit push origin main\nB\nls')).toEqual([
+    ['bash'],
+    ['git', 'commit', '-m', '1'],
+    ['git', 'push', 'origin', 'main'],
+    ['ls'],
+  ])
+})
+
+test('parse closes a substitution at its own parenthesis, past a heredoc body, a backtick and a quote', () => {
+  // A `)` in a heredoc body inside `$(…)` does not close it.
+  expect(full('echo $(cat <<EOF\n)\nEOF\n) && ls')).toEqual([['echo', '$(cat <<EOF\n)\nEOF\n)'], ['ls']])
+  expect(full('echo $(cat <<-EOF\n\t)\n\tEOF\n) && ls')).toEqual([['echo', '$(cat <<-EOF\n\t)\n\tEOF\n)'], ['ls']])
+  // A `)` in backticks, in quotes or escaped inside `$(…)` does not close it either.
+  expect(full('echo $(echo `echo )`) && ls')).toEqual([['echo', '$(echo `echo )`)'], ['ls']])
+  expect(full("echo $(echo ')') && ls")).toEqual([['echo', "$(echo ')')"], ['ls']])
+  expect(full('echo $(echo ")") && ls')).toEqual([['echo', '$(echo ")")'], ['ls']])
+  expect(full('echo $(echo \\)) && ls')).toEqual([['echo', '$(echo \\))'], ['ls']])
+})
+
+test('parse ends a backtick substitution at the first backtick no backslash escapes, or at the end of the text', () => {
+  const inner = (command: string) => parse(command)[0]?.sub?.[0]?.words.map(word => word.text)
+
+  expect(inner('echo `git commit -m x` && ls')).toEqual(['git', 'commit', '-m', 'x'])
+  expect(full('echo `git commit -m x` && ls')).toEqual([['echo', '`git commit -m x`'], ['ls']])
+  // An escaped backtick is a nested one: the substitution runs on to the last, and the escapes come off.
+  expect(parse('echo `echo \\`git commit -m x\\`` && ls')[0]?.sub?.[0]?.sub?.[0]?.words.map(word => word.text)).toEqual(['git', 'commit', '-m', 'x'])
+  // An escaped backslash before the closing backtick closes it.
+  expect(full('echo `echo \\\\` && ls')).toEqual([['echo', '`echo \\\\`'], ['ls']])
+  // Never closed: it reads to the end.
+  expect(inner('echo `git commit -m x')).toEqual(['git', 'commit', '-m', 'x'])
 })

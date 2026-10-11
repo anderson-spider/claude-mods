@@ -182,6 +182,72 @@ test('checkedPath returns the path only when buildUrl accepts it', () => {
   expect(checkedPath(42)).toBeUndefined()
 })
 
+test('buildUrl and checkedPath refuse a path with a blank, a backslash, a fragment or two dots anywhere', () => {
+  for (const path of ['/a b', '/a\tb', '/a\nb', '/a\\b', '/a#b', '/a/..', '/a..b', 'devices', '', undefined, null, {}, ['/a']]) {
+    expect(buildUrl(path)).toBeUndefined()
+    expect(checkedPath(path)).toBeUndefined()
+  }
+})
+
+test('buildUrl and checkedPath keep a query string and the root path as they are', () => {
+  expect(buildUrl('/')).toBe('https://api.tailscale.com/api/v2/')
+  expect(buildUrl('/tailnet/-/keys?all=true&x=1')).toBe('https://api.tailscale.com/api/v2/tailnet/-/keys?all=true&x=1')
+  expect(buildUrl('/a%20b')).toBe('https://api.tailscale.com/api/v2/a%20b')
+  expect(checkedPath('/')).toBe('/')
+  expect(checkedPath('/tailnet/-/keys?all=true&x=1')).toBe('/tailnet/-/keys?all=true&x=1')
+})
+
+test('call fetches BASE plus the accepted path, with the query string untouched', async () => {
+  const { fetch, seen } = fakeFetch('{}')
+  await call(fetch, 'k', { method: 'GET', path: '/tailnet/-/keys?all=true&x=1' })
+  expect(seen.last?.url).toBe('https://api.tailscale.com/api/v2/tailnet/-/keys?all=true&x=1')
+})
+
+test('call answers an invalid path with the value it received and sends nothing', async () => {
+  const { fetch, seen } = fakeFetch('{}')
+
+  for (const [path, shown] of [
+    ['//evil.com/x', '//evil.com/x'],
+    ['/a/../b', '/a/../b'],
+    [42, '42'],
+    [undefined, 'undefined'],
+    [{ a: 1 }, '[object Object]'],
+  ] as const) {
+    const r = await call(fetch, 'k', { method: 'GET', path })
+    expect(r).toEqual({ text: `Invalid path: ${shown}. Use something like /tailnet/-/devices.`, isError: true })
+  }
+
+  expect(seen.last).toBeUndefined()
+})
+
+test('call checks the key before the path, and the path before forbidden', async () => {
+  const { fetch, seen } = fakeFetch('{}')
+
+  expect(await call(fetch, undefined, { method: 'GET', path: '//bad' })).toEqual({
+    text: 'TS_API_KEY is not set in the Claude Code environment.',
+    isError: true,
+  })
+  expect(await call(fetch, '', { method: 'GET', path: '/x' })).toEqual({
+    text: 'TS_API_KEY is not set in the Claude Code environment.',
+    isError: true,
+  })
+  expect((await call(fetch, 'k', { method: 'DELETE', path: '//tailnet/-' })).text).toMatch(/^Invalid path/)
+  expect((await call(fetch, 'k', { method: 'DELETE', path: '/tailnet/-' })).text).toMatch(/^Deleting the entire tailnet/)
+  expect(seen.last).toBeUndefined()
+})
+
+test('call turns a fetch that throws into a failed call, naming an Error message or the thrown value', async () => {
+  const boom = async () => {
+    throw new Error('connection reset')
+  }
+  const text = async () => {
+    throw 'plain text'
+  }
+
+  expect(await call(boom, 'k', { method: 'GET', path: '/x' })).toEqual({ text: 'Call failed: connection reset', isError: true })
+  expect(await call(text, 'k', { method: 'GET', path: '/x' })).toEqual({ text: 'Call failed: plain text', isError: true })
+})
+
 test('buildInit picks the content type from the body', () => {
   const json = buildInit({ method: 'POST', path: '/x', body: '{"a":1}' }, 'k')
   expect(json.headers['Content-Type']).toBe('application/json')
