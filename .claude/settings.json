@@ -4,5 +4,30 @@
       "mcp__ccd_pr__get_status",
       "mcp__ccd_session_mgmt__get_session"
     ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/block-generated-types.mjs\""
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/typecheck-plugin.mjs\"",
+            "timeout": 120
+          }
+        ]
+      }
+    ]
   }
 }
