@@ -305,6 +305,25 @@ test('buildUrl and checkedPath refuse a path with a lone dot segment at the star
   }
 })
 
+// the URL parser percent-encodes or rewrites these, so only the pathname equality check refuses them
+const REWRITTEN_PATHS = [
+  '/a<b',
+  '/tailnet/-/devices"x',
+  '/tailnet/{x}',
+  '/tailnet/-/\u3002',
+  '/tailnet/\u00e9/devices',
+  '/a^b',
+  '/a`b',
+  '/tailnet/{x}?q=1',
+]
+
+test('buildUrl and checkedPath refuse a path the URL parser rewrites or percent-encodes', () => {
+  for (const path of REWRITTEN_PATHS) {
+    expect(buildUrl(path), path).toBeUndefined()
+    expect(checkedPath(path), path).toBeUndefined()
+  }
+})
+
 test('buildUrl keeps accepting dots inside a segment', () => {
   expect(buildUrl('/tailnet/example.com/devices')).toBe('https://api.tailscale.com/api/v2/tailnet/example.com/devices')
   expect(buildUrl('/device/100.64.0.1')).toBe('https://api.tailscale.com/api/v2/device/100.64.0.1')
