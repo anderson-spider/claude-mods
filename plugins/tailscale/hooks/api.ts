@@ -27,16 +27,29 @@ export type Request = {
 /** Accepts only paths relative to the API (e.g. /tailnet/-/devices), without escaping the host. */
 export function buildUrl(path: unknown): string | undefined {
   if (typeof path !== 'string' || !path.startsWith('/')) return undefined
-  if (path.startsWith('//') || path.includes('..') || /[\s\\#]/.test(path)) return undefined
-  // a server could normalize the encoded dot, slash or backslash
-  if (/%(2e|2f|5c)/i.test(path)) return undefined
-  return BASE + path
+  // the URL parser strips trailing C0 controls and tabs/newlines, so any of them could hide a segment
+  if (path.includes('..') || /[\s\\#\x00-\x1f\x7f]/.test(path)) return undefined
+  const pathPart = path.split('?')[0] ?? ''
+  // the server decodes "%" and may clean "//", and the URL parser drops "." segments, past `forbidden`;
+  // only a single trailing slash may leave an empty segment
+  if (pathPart.includes('%')) return undefined
+  const segments = pathPart.split('/').slice(1)
+  if (segments.at(-1) === '') segments.pop()
+  if (segments.some((s) => s === '' || s === '.')) return undefined
+  const url = BASE + path
+  try {
+    // second line: any client-side normalization of the path means `forbidden` saw another path than the server
+    if (new URL(url).pathname !== new URL(BASE).pathname + pathPart) return undefined
+  } catch {
+    return undefined
+  }
+  return url
 }
 
 /** Operations the write tool never performs: deleting the whole tailnet (DELETE /tailnet/{tailnet}). */
 export function forbidden(method: string, path: string): string | undefined {
   const bare = (path.split('?')[0] ?? '').replace(/\/+$/, '')
-  if (method === 'DELETE' && /^\/tailnet\/[^/]+$/.test(bare)) {
+  if (method === 'DELETE' && /^\/tailnet\/[^/]+$/i.test(bare)) {
     return 'Deleting the entire tailnet (DELETE /tailnet/{tailnet}) is not done by this tool. Use the admin console.'
   }
   return undefined

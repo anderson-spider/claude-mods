@@ -220,3 +220,46 @@ test('an error status from the API comes back as an error result for both tools'
     expect(text(result)).toBe('HTTP 403\n{"message":"forbidden"}')
   }
 })
+
+test('write refuses a dot segment in the path, including the delete of the whole tailnet, and sends nothing', async ($, on) => {
+  const { sent } = world(on)
+
+  for (const path of ['/tailnet/./-', '/./tailnet/-', '/tailnet/-/.', '/tailnet/-/./', '/tailnet/-/.?x=1']) {
+    const result = await $.tool.call({ tool: WRITE, method: 'DELETE', path } as never)
+
+    expect(result.isError, path).toBe(true)
+    expect(text(result), path).toMatch(/^Invalid path: /)
+  }
+
+  expect(sent).toEqual([])
+})
+
+test('write refuses an encoded or empty-segment delete of the whole tailnet and sends nothing', async ($, on) => {
+  const { sent } = world(on)
+
+  for (const path of ['/%74ailnet/-', '/tailnet//-', '/tailnet/-/\x01', '/TAILNET/-']) {
+    const result = await $.tool.call({ tool: WRITE, method: 'DELETE', path } as never)
+
+    expect(result.isError, JSON.stringify(path)).toBe(true)
+  }
+
+  expect(sent).toEqual([])
+})
+
+test('get refuses a dot segment in the path and sends nothing', async ($, on) => {
+  const { sent } = world(on)
+
+  const result = await $.tool.call({ tool: GET, path: '/tailnet/./-/devices' } as never)
+
+  expect(result.isError).toBe(true)
+  expect(text(result)).toMatch(/^Invalid path: /)
+  expect(sent).toEqual([])
+})
+
+test('write still sends a path with dots inside a segment', async ($, on) => {
+  const { sent } = world(on)
+
+  await $.tool.call({ tool: WRITE, method: 'POST', path: '/device/100.64.0.1/tags', body: {} } as never)
+
+  expect(sent.map((s) => s.url)).toEqual(['https://api.tailscale.com/api/v2/device/100.64.0.1/tags'])
+})
