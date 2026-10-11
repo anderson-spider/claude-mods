@@ -1,12 +1,4 @@
 {
-  "enabledPlugins": {
-    "1password@anthropic-plugin-directory": false,
-    "building-with-typesafe-jev@anthropic-plugin-directory": false,
-    "claude-code-setup@anthropic-plugin-directory": false,
-    "typescript-lsp@claude-plugins-official": false,
-    "skill-creator@anthropic-plugin-directory": false,
-    "flightdeck@claude-flightdeck": false
-  },
   "permissions": {
     "allow": [
       "mcp__ccd_pr__get_status",
@@ -37,5 +29,13 @@
         ]
       }
     ]
+  },
+  "enabledPlugins": {
+    "1password@anthropic-plugin-directory": false,
+    "building-with-typesafe-jev@anthropic-plugin-directory": false,
+    "claude-code-setup@anthropic-plugin-directory": false,
+    "typescript-lsp@claude-plugins-official": false,
+    "skill-creator@anthropic-plugin-directory": false,
+    "flightdeck@claude-flightdeck": true
   }
 }

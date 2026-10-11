@@ -3,7 +3,7 @@
 // answers only move model and effort, at most one step from the agent's defaults (and never below its floor), so a bad
 // answer costs money, never a lane change.
 
-import { EFFORTS, MODELS, MODEL_FLOORS, SPECIALISTS } from './agents'
+import { EFFORTS, EFFORT_FLOOR, MODELS, MODEL_FLOORS, SPECIALISTS } from './agents'
 import type { Effort, Model, Specialist } from './agents'
 import type { AskFn } from './jev'
 import { DEPTH_BOUNDS, DEPTH_TIE, DESCRIPTION_CHARS, PROMPT_CHARS, QUESTIONS, TIER_MIN_CONFIDENCE } from './questions'
@@ -37,7 +37,7 @@ export type Decision = {
 const isNumber = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value)
 const clamp = (index: number, low: number, high: number) => Math.min(high, Math.max(low, index))
 
-/** Applies the answers inside the agent's window: the default tier +-1, not below its floor; effort the same. */
+/** Applies the answers inside the agent's window: the default tier +-1, not below its floor; effort the same, never below `EFFORT_FLOOR`. */
 export function decide(spec: Specialist, answers: Record<string, Record<string, unknown>>): Decision {
   const modelAt = MODELS.indexOf(spec.model)
   const floor = MODELS.indexOf(MODEL_FLOORS[spec.name] ?? MODELS[0])
@@ -58,7 +58,7 @@ export function decide(spec: Specialist, answers: Record<string, Record<string, 
   let effort = spec.effort
   if (isNumber(depth) && !DEPTH_BOUNDS.some(bound => Math.abs(depth - bound) < DEPTH_TIE)) {
     const wanted = depth < DEPTH_BOUNDS[0] ? 0 : depth < DEPTH_BOUNDS[1] ? 1 : 2
-    effort = EFFORTS[clamp(wanted, Math.max(effortAt - 1, 0), Math.min(effortAt + 1, EFFORTS.length - 1))] ?? spec.effort
+    effort = EFFORTS[clamp(wanted, Math.max(effortAt - 1, EFFORTS.indexOf(EFFORT_FLOOR)), Math.min(effortAt + 1, EFFORTS.length - 1))] ?? spec.effort
   }
 
   return {
@@ -110,6 +110,18 @@ export function noticeText(spec: Specialist, routed: Routed, notApplied: Effort 
     ? `${routed.decision.effort} (jev)`
     : `${spec.effort} (jev; effort ${notApplied} not applied)`
   return `crew:${spec.name} -> ${routed.decision.model} · ${effort}`
+}
+
+const TAG = / · (?:haiku|sonnet|opus)\/(?:low|medium|high)$/
+
+/** The description without a trailing tag of `taggedDescription`. */
+export function untagged(description: string): string {
+  return description.replace(TAG, '')
+}
+
+/** The call's description with the model and effort Jev chose, as the task list shows it: `audit auth · opus/high`. */
+export function taggedDescription(description: string, routed: Routed): string {
+  return `${description} · ${routed.decision.model}/${routed.decision.effort}`
 }
 
 /** One line for the notice and the debug log; the prompt never appears in it. */

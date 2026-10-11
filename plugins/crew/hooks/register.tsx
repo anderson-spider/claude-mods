@@ -1,7 +1,9 @@
 import type { Hook, Register } from 'claude-code'
-import { SPECIALISTS } from './agents'
+import { SPECIALISTS, leadSection } from './agents'
 import type { Effort, Specialist } from './agents'
-import { decisionRecord, saveDecision } from './decisions'
+import { createConfirmations, confirmText } from './confirm'
+import type { Confirmations } from './confirm'
+import { decisionRecord, saveDecision, withRan } from './decisions'
 import type { DecisionIo } from './decisions'
 import { createEffortBook } from './effort'
 import type { BindOutcome, EffortBook, Listed } from './effort'
@@ -11,7 +13,7 @@ import type { Breaker, Gate, JevIo } from './jev'
 import { declaresOption, resolveKey } from './key'
 import type { KeyIo } from './key'
 import { JEV_MODEL } from './questions'
-import { describe, moved, noticeText, route, routable } from './routing'
+import { describe, moved, noticeText, route, routable, taggedDescription, untagged } from './routing'
 import type { Moved, Routed } from './routing'
 
 /** The `$` a hook receives; it cannot be stored, so every hook builds what it needs from its own. */
@@ -175,6 +177,8 @@ type Routing = {
   breaker: Breaker
   gate: Gate
   book: EffortBook
+  /** Routed subagents whose first step is still to be checked against their tag. */
+  confirms: Confirmations
   access: Access
 }
 
@@ -208,16 +212,20 @@ async function routeSpawn(routing: Routing, $: Dollar, e: SpawnHook[1], next: Sp
   const key = await keyOf($, routing.access, routing.jevKey)
   if (!key) return next(e)
 
+  // A description that already carries a tag (a call copied from the task list) is sent and tagged without it.
+  e = { ...e, description: untagged(e.description) }
   const routed = await askJev($, routing, key, spec, e)
   const change = moved(spec, routed)
+  // The task shows what Jev chose, so the task list says whether routing runs; the book matches the shown description.
+  const description = routed ? taggedDescription(e.description, routed) : e.description
 
   // An entry for every routable call, with the default effort when nothing changes: two calls alike then stay on
   // their defaults rather than trade the effort of the one that Jev moved. Added before the spawn continues, as the
   // subagent can step before this hook sees its id.
-  const token = routing.book.add(e.subagentType, e.description, change.effort ?? spec.effort, e.parentAgentId, change.effort !== undefined)
+  const token = routing.book.add(e.subagentType, description, change.effort ?? spec.effort, e.parentAgentId, change.effort !== undefined)
   let result: Awaited<ReturnType<SpawnHook[2]>>
   try {
-    result = await next(change.model ? { ...e, model: change.model } : e)
+    result = await next({ ...e, description, ...(change.model ? { model: change.model } : {}) })
   } catch (error) {
     routing.book.drop(token)
     throw error
@@ -233,7 +241,7 @@ async function routeSpawn(routing: Routing, $: Dollar, e: SpawnHook[1], next: Sp
 
   // The decision log: started before the notice so the write overlaps it, awaited for about a second before
   // returning (it never rejects), so a failing write cannot change the result and a hung one cannot hold it.
-  const saved = saveDecision(decisionIo($), routing.access.home, result.agentId, decisionRecord({
+  const record = decisionRecord({
     ts: new Date().toISOString(),
     agent: spec.name,
     tier: routed.decision.tier,
@@ -248,7 +256,15 @@ async function routeSpawn(routing: Routing, $: Dollar, e: SpawnHook[1], next: Sp
     jevModel: routed.jevModel,
     durationMs: routed.ms,
     description: e.description,
-  }))
+  })
+  const saved = saveDecision(decisionIo($), routing.access.home, result.agentId, record)
+  // The tag is what Jev asked for; the subagent's next step says what ran (a step before this point is not seen).
+  routing.confirms.add(result.agentId, {
+    description: e.description,
+    planned: { model: routed.decision.model, effort: routed.decision.effort },
+    record,
+    saved,
+  })
   announce($, spec, routed, change, took, outcome, e.tool_use_id)
   await settleDecision($, saved)
   return result
@@ -262,10 +278,19 @@ export const register: Register = (on, options) => {
     breaker: createBreaker(wallNow),
     gate: createGate(),
     book: createEffortBook(),
+    confirms: createConfirmations(),
     access: {},
   }
 
   on('session.start', registerSpecialists)
+  // Only a request that offers the Agent tool gets the lead's section: the crew agents' tool lists leave it out.
+  // A teammate renders the lead's prompt too, and `bare` asks for the engine's one section alone.
+  on('prompt.compose', async ($, e, next) => {
+    const composed = await next(e)
+    if (!e.tools.includes('Agent') || e.traits.includes('teammate') || e.traits.includes('bare')) return composed
+    const jev = routing.enabled && (await keyOf($, routing.access, routing.jevKey)) !== undefined
+    return { sections: [...composed.sections, { id: 'crew:lead', text: leadSection(jev), scope: 'session' as const }] }
+  }).catch((_, e, next) => next(e))
   on('agent.spawn', ($, e, next) => routeSpawn(routing, $, e, next)).catch((_, e, next) => next(e))
   // Runs on every request of every loop: the main loop and agents that were not routed return at once. A streaming
   // hook is written inline as an async generator: the engine reads no other form.
@@ -274,7 +299,19 @@ export const register: Register = (on, options) => {
     if (routing.enabled && e.agentId && e.effort !== undefined) {
       effort = await routing.book.lookup(e.agentId, () => listAgents($)).catch(() => undefined)
     }
-    return yield* next(effort && effort !== e.effort ? { ...e, effort } : e)
+    const sent = effort && effort !== e.effort ? { ...e, effort } : e
+    const answer = yield* next(sent)
+    // Only a step the API answered says what ran; one that failed leaves the check for the next.
+    const pending = e.agentId && answer.usage ? routing.confirms.take(e.agentId) : undefined
+    if (pending && e.agentId && answer.usage) {
+      const ran = { model: answer.usage.model, effort: sent.effort === undefined ? undefined : String(sent.effort) }
+      $.ui.log(confirmText(pending.description, pending.planned, ran), { to: 'transcript' })
+      // After the spawn's own write, so the record with what ran is the one that stays; bounded like the spawn's, so
+      // a hung write cannot hold the subagent's step.
+      const id = e.agentId
+      await settleDecision($, pending.saved.then(() => saveDecision(decisionIo($), routing.access.home, id, withRan(pending.record, ran))))
+    }
+    return answer
   })
 
   // The main loop has no agentId and is never held; a subagent is held by its type's rule in guard.ts.

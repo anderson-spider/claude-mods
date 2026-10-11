@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { MODEL_FLOORS, SPECIALISTS } from '../hooks/agents'
+import { EFFORT_FLOOR, MODEL_FLOORS, SPECIALISTS } from '../hooks/agents'
 import type { Specialist } from '../hooks/agents'
 import { decide, describe, moved, noticeText, route, routable, stateOf } from '../hooks/routing'
 import type { Routed } from '../hooks/routing'
@@ -21,14 +21,14 @@ test('the tier follows Jev inside the default +-1 window', () => {
 
 test('a tier two steps from the default is clamped to one step', () => {
   expect(decide(spec('code-reader'), answers(['opus', 0.99], 1.4)).model).toBe('sonnet')
-  expect(decide(spec('architect'), answers(['haiku', 0.99], 3.9)).model).toBe('sonnet')
+  expect(decide(spec('architect'), answers(['haiku', 0.99], 3.9)).model).toBe('opus')
 })
 
-test('the architect is never below sonnet, and the floor is stated for it only', () => {
-  expect(MODEL_FLOORS).toEqual({ architect: 'sonnet' })
+test('the architect is never below opus, and the floor is stated for it only', () => {
+  expect(MODEL_FLOORS).toEqual({ architect: 'opus' })
   for (const choice of ['haiku', 'sonnet', 'opus']) {
-    const { model } = decide(spec('architect'), answers([choice, 1], 0.2))
-    expect(model).not.toBe('haiku')
+    const { model } = decide(spec('architect'), answers([choice, 0.99], 0.2))
+    expect(model).toBe('opus')
   }
 })
 
@@ -38,21 +38,21 @@ test('a tier answer below 0.5 confidence keeps the default model', () => {
   expect(decide(spec('code-reader'), answers(['sonnet', 0.2], 0.2)).model).toBe('haiku')
 })
 
-test('depth maps to effort by the 1.0 and 2.5 bounds, inside default +-1', () => {
-  // developer defaults to medium: the whole scale is within one step.
-  expect(decide(spec('developer'), answers(undefined, 0.74)).effort).toBe('low')
-  expect(decide(spec('developer'), answers(undefined, 1.43)).effort).toBe('medium')
-  expect(decide(spec('developer'), answers(undefined, 3.96)).effort).toBe('high')
-  // code-reader defaults to low: high is two steps away and is clamped to medium.
-  expect(decide(spec('code-reader'), answers(undefined, 3.96)).effort).toBe('medium')
-  // architect defaults to high: low is two steps away and is clamped to medium.
-  expect(decide(spec('architect'), answers(undefined, 0.1)).effort).toBe('medium')
+test('depth maps to effort by the 1.0 and 2.5 bounds, never below the medium floor', () => {
+  expect(EFFORT_FLOOR).toBe('medium')
+  // Every agent defaults to medium: a depth under 2.5 keeps it, a high depth raises it to high.
+  for (const s of SPECIALISTS) {
+    expect(decide(s, answers(undefined, 0.1)).effort).toBe('medium')
+    expect(decide(s, answers(undefined, 0.74)).effort).toBe('medium')
+    expect(decide(s, answers(undefined, 1.43)).effort).toBe('medium')
+    expect(decide(s, answers(undefined, 3.96)).effort).toBe('high')
+  }
 })
 
 test('a depth on a bound (within 0.01) or no depth keeps the default effort', () => {
   expect(decide(spec('developer'), answers(undefined, 1.0)).effort).toBe('medium')
   expect(decide(spec('developer'), answers(undefined, 1.005)).effort).toBe('medium')
-  expect(decide(spec('code-reader'), answers(undefined, 2.5)).effort).toBe('low')
+  expect(decide(spec('code-reader'), answers(undefined, 2.5)).effort).toBe('medium')
   expect(decide(spec('developer'), answers(undefined, undefined)).effort).toBe('medium')
   expect(decide(spec('developer'), { reasoning_depth: { score: 'high' } }).effort).toBe('medium')
 })
@@ -120,4 +120,9 @@ test('the notice shows the answered effort, or the default with the moved effort
   const routed = routedAs('opus', 'high')
   expect(noticeText(spec('developer'), routed, undefined)).toBe('crew:developer -> opus · high (jev)')
   expect(noticeText(spec('developer'), routed, 'high')).toBe('crew:developer -> opus · medium (jev; effort high not applied)')
+})
+
+test('a default effort outside the floor and high still routes to the floor', () => {
+  expect(decide({ ...spec('developer'), effort: 'high' }, answers(undefined, 0.1)).effort).toBe('medium')
+  expect(decide({ ...spec('developer'), effort: 'low' }, answers(undefined, 0.1)).effort).toBe('medium')
 })

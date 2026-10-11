@@ -7,7 +7,7 @@ Claude Code plugin marketplace `spider-claude-mods` (`anderson-spider/claude-mod
 - `.claude-plugin/marketplace.json` lists the plugins; each lives in `plugins/<name>/` with `.claude-plugin/plugin.json`, `hooks/` (`hooks.json` only points to the entry module), `tests/` and `types/index.d.ts`. codex-computer-use also has `helper/`.
 - The entry module (`register.tsx`) holds `register`, every `on(...)` and every literal `$.noun.method(...)` call; the engine reads them from source. Pure modules take host access injected and never touch `$`. Tests mirror the modules.
 - Tools are listed as `mcp__<plugin>__<name>`; their inputs are declared in `types/index.d.ts` for the matchers and must follow the `inputSchema`.
-- `.claude/` holds this repository's own session setup: the `release-plugin` skill (`/release-plugin <plugin>` runs the done checklist below) and two hooks in `.claude/hooks/` (block edits to the generated `.claude-plugin/types/`, not the hand-written `types/index.d.ts`; type-check the plugin owning an edited `.ts`/`.tsx` once its typings exist).
+- `.claude/` holds this repository's own session setup: the `release-plugin` skill (`/release-plugin <plugin>` runs the done checklist below), the `live-test` skill (`/live-test <plugin>` opens a Herdr pane on the right with `claude --plugin-dir plugins/<plugin>`, drives it, audits the result against the docs and closes the pane) and two hooks in `.claude/hooks/` (block edits to the generated `.claude-plugin/types/`, not the hand-written `types/index.d.ts`; type-check the plugin owning an edited `.ts`/`.tsx` once its typings exist).
 
 ## Plugins
 
