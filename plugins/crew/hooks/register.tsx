@@ -7,6 +7,7 @@ import { decisionRecord, saveDecision, withRan } from './decisions'
 import type { DecisionIo } from './decisions'
 import { createEffortBook } from './effort'
 import type { BindOutcome, EffortBook, Listed } from './effort'
+import { registerFlightdeck } from './flightdeck/register'
 import { deniedWrite } from './guard'
 import { createBreaker, createGate, createJev, failureText } from './jev'
 import type { Breaker, Gate, JevIo } from './jev'
@@ -261,7 +262,12 @@ export const register: Register = (on, options) => {
     access: {},
   }
 
-  on('session.start', registerSpecialists)
+  // A matcher on session.start, agent.spawn and turn.step: the engine refuses two hooks on one event without one, and
+  // the vendored Flightdeck registers those events too. The crew's session.start is outermost, so a Flightdeck failure
+  // cannot stop the agents from registering; Flightdeck is registered before the hooks below, so it wraps the spawn, the
+  // step and the write (it sees the description and model as they came, and logs the guard's refusals).
+  on('session.start', {}, registerSpecialists)
+  registerFlightdeck(on, options)
   // Only a request that offers the Agent tool gets the lead's section: the crew agents' tool lists leave it out.
   // A teammate renders the lead's prompt too, and `bare` asks for the engine's one section alone.
   on('prompt.compose', async ($, e, next) => {
@@ -270,10 +276,10 @@ export const register: Register = (on, options) => {
     const jev = routing.enabled && (await keyOf($, routing.access, routing.jevKey)) !== undefined
     return { sections: [...composed.sections, { id: 'crew:lead', text: leadSection(jev), scope: 'session' as const }] }
   }).catch((_, e, next) => next(e))
-  on('agent.spawn', ($, e, next) => routeSpawn(routing, $, e, next)).catch((_, e, next) => next(e))
+  on('agent.spawn', {}, ($, e, next) => routeSpawn(routing, $, e, next)).catch((_, e, next) => next(e))
   // Runs on every request of every loop: the main loop and agents that were not routed return at once. A streaming
   // hook is written inline as an async generator: the engine reads no other form.
-  on('turn.step', async function* ($, e, next) {
+  on('turn.step', {}, async function* ($, e, next) {
     let effort: Effort | undefined
     if (routing.enabled && e.agentId && e.effort !== undefined) {
       effort = await routing.book.lookup(e.agentId, () => listAgents($)).catch(() => undefined)

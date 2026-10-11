@@ -99,11 +99,16 @@ function jevWorld(
     writeHang?: boolean
     /** The model id the API reports for a step; none by default (no usage). */
     stepModel?: string | (() => string | undefined)
+    /** `$.clock.now` answers with this instead of the mock clock's time (the waits stay the mock clock's). */
+    now?: () => number
   } = {},
 ) {
   const seen: Seen = { fetches: [], spawned: [], steps: [], notices: [], logs: [], writes: [], transcript: [], settingsReads: 0 }
   const flags = { settingsFail: opts.settingsFail === true }
-  const clock = mock.clock(on)
+  // `mock.clock` registers `clock.now` itself and the engine refuses a second one, so a test's own is registered instead.
+  const now = opts.now
+  const clock = mock.clock(now ? (((name: string, ...rest: unknown[]) => (name === 'clock.now' ? undefined : (on as (...a: unknown[]) => unknown)(name, ...rest))) as unknown as On) : on)
+  if (now) on('clock.now', () => ({ value: now() }))
   mock.env(on, { HOME, ...opts.env })
   on('session.cwd', async () => ({ value: opts.cwd ?? ROOT }))
   on('settings.read', async (_$, e) => {
@@ -1208,3 +1213,188 @@ test('the guard answers only Write and Edit: another tool of a subagent passes w
   expect(await $.tool.call({ tool: 'Read', agentId: 'a1', file_path: 'src/app.ts' } as never)).toEqual({ result: 'ran' })
   expect(reads).toBe(0)
 })
+
+// --- The vendored Flightdeck beside the crew's hooks, through the host ---
+// The crew and Flightdeck share a plugin, so the engine skips the rest of a plugin's chain when one of its hooks fails.
+// The order of registration (crew session.start, Flightdeck, then the crew's spawn, step and write hooks) and
+// Flightdeck's never-throw rule are what these tests hold.
+
+/** Records every write of the card list Flightdeck owns under the crew; the host's own state answers beneath. */
+const watchCards = (on: On) => {
+  const writes: { plugin: string; key: string; value: unknown }[] = []
+  on('state.set', (_$, e, next) => {
+    if (e.key === 'agents') writes.push({ plugin: e.plugin, key: e.key, value: e.value })
+    return next(e)
+  })
+  return writes
+}
+
+test('one crew spawn is routed by Jev and drawn as a card titled with the original description', ON, async ($, on) => {
+  const { seen } = jevWorld(on, { spawn: async e => ({ model: String(e.model ?? 'default'), agentId: 'ag1' }) })
+  on('ui.status', () => ({ value: undefined }))
+  const writes = watchCards(on)
+  const result = await $.agent.spawn(spawnInput())
+
+  expect(seen.fetches.length).toBe(1)
+  expect(result).toMatchObject({ model: 'opus', agentId: 'ag1' })
+  expect(seen.spawned[0]).toMatchObject({ model: 'opus', description: 'audit auth · opus/high' })
+  expect(seen.notices).toEqual(['crew:developer -> opus · high (jev)'])
+
+  // Flightdeck is outer on agent.spawn: it sees the description as the lead wrote it and the model that started.
+  const cards = writes.at(-1)?.value as { id: string; type: string; model: string; description: string }[]
+  expect(writes.every(w => w.plugin === 'crew')).toBe(true)
+  expect(cards.length).toBe(1)
+  expect(cards[0]).toMatchObject({ id: 'ag1', type: 'crew:developer', model: 'opus', description: 'audit auth' })
+})
+
+test('a Flightdeck session.start that fails (command.register) still registers the six specialists', async ($, on) => {
+  const registered: string[] = []
+  let attempts = 0
+  on('command.register', () => { attempts++; throw new Error('command.register unavailable') })
+  on('agent.register', (_$, e) => (registered.push(e.name), { value: { agent: `crew:${e.name}` } }))
+  on('session.start', (_$, e) => ({ cwd: e.cwd }))
+
+  await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true } as never)
+
+  // The failing call was reached, so the agents above are not registered by luck of an earlier return.
+  expect(attempts).toBe(1)
+  expect(registered).toEqual(['code-reader', 'research', 'designer', 'developer', 'tester', 'architect'])
+})
+
+// Flightdeck's spawn and step hooks do their work after `next`, inside their own try/catch. A failure there must leave the
+// crew's routing as it came: the routed result, the notice and the effort book (the crew's hooks sit inside Flightdeck).
+
+test('a Flightdeck failure after next in agent.spawn (clock.now) leaves the routed result and the notice', ON, async ($, on) => {
+  let reads = 0
+  const { seen } = jevWorld(on, {
+    spawn: async e => ({ model: String(e.model ?? 'default'), agentId: 'ag1' }),
+    now: () => { reads++; throw new Error('clock unavailable') },
+  })
+  on('ui.status', () => ({ value: undefined }))
+  const writes = watchCards(on)
+
+  const result = await $.agent.spawn(spawnInput())
+
+  // The failing call was reached, so the result below is not Flightdeck's work going unnoticed.
+  expect(reads).toBeGreaterThan(0)
+  expect(writes).toEqual([]) // the card was never drawn: Flightdeck failed before it wrote one
+  expect(result).toMatchObject({ model: 'opus', agentId: 'ag1' })
+  expect(seen.spawned[0]).toMatchObject({ model: 'opus', description: 'audit auth · opus/high' })
+  expect(seen.notices).toEqual(['crew:developer -> opus · high (jev)'])
+})
+
+test('a Flightdeck failure in agent.spawn (card write) leaves the routed result, the notice and the effort of the first step', ON, async ($, on) => {
+  const { seen } = jevWorld(on, { spawn: async e => ({ model: String(e.model ?? 'default'), agentId: 'ag1' }) })
+  let failed = 0
+  on('ui.status', () => ({ value: undefined }))
+  on('state.set', (_$, e, next) => {
+    if (e.key === 'agents') { failed++; throw new Error('state unavailable') }
+    return next(e)
+  })
+
+  const result = await $.agent.spawn(spawnInput())
+
+  expect(failed).toBeGreaterThan(0)
+  expect(result).toMatchObject({ model: 'opus', agentId: 'ag1' })
+  expect(seen.spawned[0]).toMatchObject({ model: 'opus', description: 'audit auth · opus/high' })
+  expect(seen.notices).toEqual(['crew:developer -> opus · high (jev)'])
+  // The effort book was bound by the crew's hook, inside the failing one: the step carries the routed effort.
+  await step($, 'ag1', 'medium')
+  expect(seen.steps).toEqual(['high'])
+})
+
+test('a Flightdeck failure after next in turn.step (clock.now) leaves the crew\'s effort on the step', ON, async ($, on) => {
+  let reads = 0
+  const { seen } = jevWorld(on, {
+    spawn: async e => ({ model: String(e.model ?? 'default'), agentId: 'ag1' }),
+    stepModel: 'claude-opus-5-5',
+    now: () => { reads++; throw new Error('clock unavailable') },
+  })
+  on('ui.status', () => ({ value: undefined }))
+
+  await $.agent.spawn(spawnInput())
+  const spawnReads = reads
+  // No card was drawn (the spawn's clock read failed), so the step takes Flightdeck's loop path, which reads the clock.
+  const answer = await step($, 'ag1', 'medium')
+
+  expect(reads).toBeGreaterThan(spawnReads) // Flightdeck's step ran its failing work after the crew's
+  expect(seen.steps).toEqual(['high'])
+  expect(answer).toMatchObject({ usage: { model: 'claude-opus-5-5' } })
+  expect(seen.transcript).toEqual(['jev: audit auth: confirmed claude-opus-5-5 · high'])
+})
+
+test('a Flightdeck failure after next in turn.step (card write) leaves the crew\'s effort on the step', ON, async ($, on) => {
+  const { seen } = jevWorld(on, { spawn: async e => ({ model: String(e.model ?? 'default'), agentId: 'ag1' }), stepModel: 'claude-opus-5-5' })
+  on('ui.status', () => ({ value: undefined }))
+  let armed = false
+  let failed = 0
+  on('state.set', (_$, e, next) => {
+    if (armed && e.key === 'agents') { failed++; throw new Error('state unavailable') }
+    return next(e)
+  })
+
+  await $.agent.spawn(spawnInput()) // the card is drawn: the step takes Flightdeck's card path
+  armed = true
+  const answer = await step($, 'ag1', 'medium')
+
+  expect(failed).toBeGreaterThan(0)
+  expect(seen.steps).toEqual(['high'])
+  expect(answer).toMatchObject({ usage: { model: 'claude-opus-5-5' } })
+  expect(seen.transcript).toEqual(['jev: audit auth: confirmed claude-opus-5-5 · high'])
+})
+
+// A subagent's step has no Flightdeck work before `next`; the main loop's has (its model and effort). The crew's
+// rewrite only concerns subagents, so this holds that a failure before `next` does not stop the step reaching the host.
+test('a Flightdeck failure before next in the main loop\'s turn.step does not stop the step', ON, async ($, on) => {
+  const { seen } = jevWorld(on)
+  let failed = 0
+  on('ui.status', () => ({ value: undefined }))
+  on('state.set', () => { failed++; throw new Error('state unavailable') })
+
+  await step($, undefined, 'medium')
+
+  expect(failed).toBeGreaterThan(0)
+  expect(seen.steps).toEqual(['medium'])
+})
+
+for (const tool of ['Write', 'Edit'] as const) {
+  const failing = (on: On, list: 'agents' | 'unavailable', written: string[] = []) => {
+    const clock = { calls: 0 }
+    // Flightdeck reads the time after the call settled; the throw is its failure, not the guard's.
+    on('clock.now', () => { clock.calls++; throw new Error('clock unavailable') })
+    on('ui.status', () => ({ value: undefined }))
+    on('agent.list', () => (list === 'agents' ? { value: agents } : { deny: 'list unavailable' }) as never)
+    on('tool.call', (_$, e) => (written.push(String((e as { file_path?: unknown }).file_path)), { result: 'written' }))
+    return clock
+  }
+  const call = ($: Engine, agentId: string | undefined, file_path: string) =>
+    $.tool.call({ tool, tool_use_id: 'tc1', ...(agentId ? { agentId } : {}), file_path } as never)
+
+  test(`${tool}: with Flightdeck's tool.call failing after the call, the guard's specific denial stands`, async ($, on) => {
+    const clock = failing(on, 'agents')
+
+    expect(await call($, 'a1', 'src/app.ts')).toEqual({
+      deny: 'the architect writes plan and review documents under .crew/ (.md) only, not src/app.ts; hand the finding to the developer',
+    })
+    const afterDeny = clock.calls
+    expect(afterDeny).toBeGreaterThan(0) // Flightdeck did run its failing step after the guard answered
+    // A passed write whose Flightdeck step throws reaches the caller as it came, not as "could not check".
+    expect(await call($, 'a1', '.crew/plans/plan.md')).toEqual({ result: 'written' })
+    expect(clock.calls).toBeGreaterThan(afterDeny)
+  })
+
+  // The check fails inside the guard, so the engine skips the rest of the crew's chain for that call, Flightdeck's step
+  // after `next` included (the clock is never read here): a Flightdeck failure cannot be composed with a failed check in
+  // one call. What this holds is that, with Flightdeck registered outermost and no pass-through `.catch` on it, the
+  // write is held and not made.
+  test(`${tool}: with Flightdeck registered, a write that could not be checked is still held, not written`, async ($, on) => {
+    const written: string[] = []
+    failing(on, 'unavailable', written)
+
+    expect(await call($, 'a1', 'src/app.ts')).toEqual({ deny: 'crew could not check this write, so it was not made' })
+    expect(await call($, 'd1', '.crew/plans/plan.md')).toEqual({ deny: 'crew could not check this write, so it was not made' })
+    expect(written).toEqual([])
+    expect(await call($, undefined, 'src/app.ts')).toEqual({ result: 'written' })
+    expect(written).toEqual(['src/app.ts'])
+  })
+}

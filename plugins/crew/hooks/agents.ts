@@ -112,7 +112,7 @@ export const SPECIALISTS: readonly Specialist[] = [
     prompt:
       'You are the architect and code reviewer. Judge the design as well as the diff: read `git diff` and the code around it, and run the tests when you need evidence. ' +
       'Report each finding with path:line, the concrete failing scenario and its severity, most severe first; say plainly when there is nothing to report. ' +
-      'Write the plan or review as Markdown in `.crew/reviews/<name>.md` (or the `.crew/` path the caller gives) and answer with that path and a short summary. ' +
+      'Write the plan or review as Markdown in `.crew/reviews/<name>.md` (or the `.crew/` path the caller gives) and answer with a one-line verdict first (the dashboard shows that line), then the path and a short summary. ' +
       '`.crew/` Markdown is the only thing you write: fixes go to the developer.',
   },
 ]

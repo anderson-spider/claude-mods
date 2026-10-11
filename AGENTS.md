@@ -4,8 +4,8 @@ Claude Code plugin marketplace `spider-claude-mods` (`anderson-spider/claude-mod
 
 ## Layout
 
-- `.claude-plugin/marketplace.json` lists the plugins; each lives in `plugins/<name>/` with `.claude-plugin/plugin.json`, `hooks/` (`hooks.json` only points to the entry module), `tests/` and, except crew, `types/index.d.ts`. codex-computer-use also has `helper/`.
-- The entry module (`register.tsx`) holds `register`, every `on(...)` and every literal `$.noun.method(...)` call; the engine reads them from source. Pure modules take host access injected and never touch `$`. Tests mirror the modules.
+- `.claude-plugin/marketplace.json` lists the plugins; each lives in `plugins/<name>/` with `.claude-plugin/plugin.json`, `hooks/` (`hooks.json` only points to the entry module), `tests/` and `types/index.d.ts`. codex-computer-use also has `helper/`.
+- A plugin has one hooks module (`register.tsx`); `validate` refuses a second entry in `hooks.json`. The engine reads the `on(...)` and `$.noun.method(...)` calls from source and follows imports, but `$` is passed only to a function declared at the top of the same file, never across an import. The entry module holds `register` and its hooks; it may call a vendored `registerX(on, options)` from a subfolder whose file holds its own `on(...)` and `$` calls (crew's `hooks/flightdeck/`). Pure modules take host access injected and never touch `$`. Tests mirror the modules.
 - Tools are listed as `mcp__<plugin>__<name>`; their inputs are declared in `types/index.d.ts` for the matchers and must follow the `inputSchema`.
 - `.claude/` holds this repository's own session setup: the `release-plugin` skill (`/release-plugin <plugin>` runs the done checklist below), the `live-test` skill (`/live-test <plugin>` opens a Herdr pane on the right with `claude --plugin-dir plugins/<plugin>`, drives it, audits the result against the docs and closes the pane) and two hooks in `.claude/hooks/` (block edits to the generated `.claude-plugin/types/`, not the hand-written `types/index.d.ts`; type-check the plugin owning an edited `.ts`/`.tsx` once its typings exist).
 
@@ -16,7 +16,7 @@ Each plugin's details live in `plugins/<name>/AGENTS.md`, loaded when Claude rea
 - **branch-guard**: holds a commit or push on a protected branch until the person proceeds or cancels.
 - **chatgpt**: `ask` and `image` tools driving chatgpt.com in the first browser that works.
 - **codex-computer-use**: routes native Mac app control through Codex computer use; has a `helper/` run by the ChatGPT app's `node`.
-- **crew**: registers the `code-reader`, `research`, `designer`, `developer`, `tester` and `architect` subagent types with default models; Jev routing, on when the `jevKey` option is set, moves a call's model and effort one step.
+- **crew**: registers the `code-reader`, `research`, `designer`, `developer`, `tester` and `architect` subagent types with default models; Jev routing, on when the `jevKey` option is set, moves a call's model and effort one step; carries the vendored Flightdeck dashboard (`hooks/flightdeck/`, MIT, with its `LICENSE` and `NOTICE.md`).
 - **tailscale**: `tailscale_get` and `tailscale_write` tools over the Tailscale API.
 
 ## Commands
