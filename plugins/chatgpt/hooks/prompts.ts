@@ -1,15 +1,15 @@
-export const BOUNDARIES =
+const BOUNDARIES =
   'Never send credentials, secrets, private personal data or anything from work (Luizalabs repos, ' +
   'dashboards, logs, customer data); personal-project code or files only when the user asks.'
 
-export const IMAGE_BOUNDARIES =
+const IMAGE_BOUNDARIES =
   'Only when the user asks for an image in this conversation: it spends their ChatGPT image quota. Never upload ' +
   'or write into the prompt licensed assets, credentials, secrets, private personal data or anything from work ' +
   '(Luizalabs repos, dashboards, logs, customer data); a reference is only an image the user asked ' +
   'to use or one you produced for the task. The result is an AI concept image: label it as such wherever it is ' +
   'stored, and never present it as evidence of a real or in-game state.'
 
-export const WHERE =
+const WHERE =
   "chatgpt.com in the first browser that works: terminal-browser (Claude Code in a Ghostty or kitty pane), Claude in Chrome, or the Claude app's built-in browser"
 
 export const ASK_DESCRIPTION =
@@ -49,27 +49,3 @@ export const PROMPT = [
   '- No browser or ChatGPT login: go on without it, do not retry.',
   `- \`${IMAGE_TOOL}\` spends image quota: only when the user asks for an image.`,
 ].join('\n')
-
-export const COMMON_PROPERTIES = {
-  chatUrl: {
-    type: 'string',
-    description:
-      'Optional. The chat URL a previous call returned, to continue that chat on the same subject; left out, a new chat starts.',
-  },
-  model: {
-    type: 'string',
-    description:
-      'Optional. The model menu entry to pick for a new chat, by the start of its label as the menu shows it; an unknown one fails and lists those on offer.',
-  },
-  files: {
-    type: 'array',
-    items: { type: 'string' },
-    description: 'Optional. Absolute paths of local files to attach (documents, code, images; at most 4 MiB each).',
-  },
-  wait: {
-    type: 'boolean',
-    description:
-      'Optional, default true. false returns at once with a job id and works in the background; a message arrives when it is saved, and the jobs tool lists every job.',
-  },
-}
-

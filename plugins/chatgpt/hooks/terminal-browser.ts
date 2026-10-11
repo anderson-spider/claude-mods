@@ -3,10 +3,10 @@ import type { Browser, ProcessRunner } from './model'
 export const TERMINAL_BROWSER = 'terminal-browser'
 
 // A tab new-tab just opened takes a moment to accept automation.
-export const STARTING = /no CDP target yet/
+const STARTING = /no CDP target yet/
 
 // The JSON object a terminal-browser command prints, after any banner.
-export function jsonOf<T>(text: string): T | undefined {
+function jsonOf<T>(text: string): T | undefined {
   try {
     return JSON.parse(text.slice(text.indexOf('{'))) as T
   } catch {

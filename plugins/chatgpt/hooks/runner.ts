@@ -28,20 +28,20 @@ export function taskQueue(): <T>(task: () => Promise<T>, ahead?: (count: number)
 
 // Background jobs
 
-export function createJobs() {
+export function createJobs(now: () => number = Date.now) {
   const jobs: Job[] = []
   let nextJob = 1
 
   // Queues `request` as a background job (the list is lost on a reload); a message arrives when it ends.
   function start({ perform, notifications }: JobDeps, request: Request, timeoutMs: number): Job {
-    const job: Job = { id: nextJob++, kind: request.kind, prompt: request.input.prompt, status: 'queued', startedAt: Date.now() }
+    const job: Job = { id: nextJob++, kind: request.kind, prompt: request.input.prompt, status: 'queued', startedAt: now() }
     jobs.push(job)
     void (async () => {
       const outcome = await perform(request, timeoutMs, () => {
         job.status = 'running'
       })
       job.status = outcome.ok ? 'done' : 'failed'
-      job.endedAt = Date.now()
+      job.endedAt = now()
       job.chatUrl = outcome.chatUrl
       job.paths = outcome.paths
       notifications.toast(`ChatGPT job #${job.id} ${job.status}`)
@@ -52,7 +52,7 @@ export function createJobs() {
     return job
   }
 
-  return { start, report: () => jobsReport(jobs, Date.now()) }
+  return { start, report: () => jobsReport(jobs, now()) }
 }
 
 // Request execution

@@ -1,7 +1,17 @@
-import type { AskInput, AskOptions, Browser, Image, ImageResult } from './model'
+import type { AskInput, AskOptions, Browser, Image, ImageResult, PageState } from './model'
 import { LOAD_MS, prepare } from './browser'
 import { compose, readAnswer, send, stopped, unfinished, watch } from './conversation'
 import { GENERATED, imageChunkScript, imageScript, parseOutput } from './scripts'
+
+// One image run in a prepared tab: `start` is the page as prepare left it.
+type ImageRun = {
+  browser: Browser
+  tabId: string
+  start: PageState
+  pollMs: number
+  timeoutMs: number
+  progress: (text: string) => void
+}
 
 export async function generateImage(browser: Browser, input: AskInput, options: AskOptions = {}): Promise<ImageResult> {
   const timeoutMs = options.timeoutMs ?? 6 * 60_000
@@ -12,24 +22,27 @@ export async function generateImage(browser: Browser, input: AskInput, options: 
   if (input.saveOnly && input.chatUrl === undefined) return { ok: false, error: 'saveOnly needs the chatUrl of the chat with the image.' }
   const ready = await prepare(browser, input, { progress, tab, busy: input.saveOnly })
   if (!ready.ok) return ready
-  const { tabId } = ready
+  const run = { browser, tabId: ready.tabId, start: ready.page, pollMs, timeoutMs, progress }
+  return input.saveOnly ? saveLastImage(run) : generateNew(run, input)
+}
 
-  const start = ready.page
-  // Saving what the chat holds: wait while it still generates, then take the last image.
-  if (input.saveOnly) {
-    const { end, page: state } = await watch(browser, tabId, start, {
-      before: start.count,
-      pollMs,
-      timeoutMs,
-      until: p => !p.stop && 'finished',
-      onPoll: () => progress('waiting for the image to finish'),
-    })
-    if (end !== 'finished') return unfinished(state.href, state, timeoutMs, 'finished image', 'generating')
-    // A freshly opened chat shows the composer before its images load.
-    await browser.waitFor(tabId, `${GENERATED}.length > 0`, LOAD_MS)
-    return readImages(browser, tabId, state.href, 1, progress)
-  }
+// Saving what the chat holds: wait while it still generates, then take the last image.
+async function saveLastImage({ browser, tabId, start, pollMs, timeoutMs, progress }: ImageRun): Promise<ImageResult> {
+  const { end, page: state } = await watch(browser, tabId, start, {
+    before: start.count,
+    pollMs,
+    timeoutMs,
+    until: p => !p.stop && 'finished',
+    onPoll: () => progress('waiting for the image to finish'),
+  })
+  if (end !== 'finished') return unfinished(state.href, state, timeoutMs, 'finished image', 'generating')
+  // A freshly opened chat shows the composer before its images load.
+  await browser.waitFor(tabId, `${GENERATED}.length > 0`, LOAD_MS)
+  return readImages(browser, tabId, state.href, 1, progress)
+}
 
+// Sends the prompt and waits for the new images, or for the text ChatGPT answers instead.
+async function generateNew({ browser, tabId, start, pollMs, timeoutMs, progress }: ImageRun, input: AskInput): Promise<ImageResult> {
   const failed = await compose(browser, tabId, input, progress)
   if (failed) return { ok: false, url: start.href, error: failed }
 
