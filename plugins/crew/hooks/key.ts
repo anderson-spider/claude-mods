@@ -1,8 +1,8 @@
-// Where Jev's key comes from. Pure: the settings and environment reads are injected.
+// Where Jev's key comes from. Pure: the settings and home reads are injected.
 // The `jevKey` option is the only source and the only switch: filled in, Jev routes; empty, nothing happens. A `jevKey`
-// that the repository's own settings (project or local) declare is ignored, and so is `HOME` when they declare it or it
-// is not absolute: the prompts would go out under that repository's account. When those settings cannot be read there
-// is no routing at all. The key is never logged or put in a message.
+// that the repository's own settings (project or local) declare turns routing off (`repo-key`): the prompts would go
+// out under that repository's account. `HOME` is just not trusted when they declare it or it is not absolute. When
+// those settings cannot be read there is no routing at all. The key is never logged or put in a message.
 
 export type KeyIo = {
   /** One settings source's `env` block and `pluginConfigs`; rejects when it cannot be read. */
