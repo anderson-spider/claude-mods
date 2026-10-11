@@ -284,3 +284,62 @@ test('format keeps the ETag line, the error flag and truncates long text', () =>
   const long = format({ status: 200, ok: true, text: 'a'.repeat(60_001) }, { method: 'GET', path: '/x' })
   expect(long.text).toBe('HTTP 200\n' + 'a'.repeat(60_000) + '\n…(truncated; use "fields" to request less)')
 })
+
+const DOT_SEGMENT_PATHS = [
+  '/.',
+  '/./',
+  '/./tailnet/-',
+  '/tailnet/./-',
+  '/tailnet/-/.',
+  '/tailnet/-/./',
+  '/tailnet/-/.?x=1',
+  '/tailnet/./-?x=1',
+  '/tailnet/-/devices/.',
+  '/tailnet/././-',
+]
+
+test('buildUrl and checkedPath refuse a path with a lone dot segment at the start, middle, end or before the query', () => {
+  for (const path of DOT_SEGMENT_PATHS) {
+    expect(buildUrl(path), path).toBeUndefined()
+    expect(checkedPath(path), path).toBeUndefined()
+  }
+})
+
+test('buildUrl keeps accepting dots inside a segment', () => {
+  expect(buildUrl('/tailnet/example.com/devices')).toBe('https://api.tailscale.com/api/v2/tailnet/example.com/devices')
+  expect(buildUrl('/device/100.64.0.1')).toBe('https://api.tailscale.com/api/v2/device/100.64.0.1')
+  expect(buildUrl('/tailnet/-/keys?host=a.b&v=1.2')).toBe('https://api.tailscale.com/api/v2/tailnet/-/keys?host=a.b&v=1.2')
+  expect(buildUrl('/tailnet/.hidden/x')).toBe('https://api.tailscale.com/api/v2/tailnet/.hidden/x')
+  expect(buildUrl('/tailnet/a./x')).toBe('https://api.tailscale.com/api/v2/tailnet/a./x')
+})
+
+test('call never reaches fetch with a dot segment, for the delete of the whole tailnet or any other call', async () => {
+  const { fetch, seen } = fakeFetch('{}')
+
+  for (const path of DOT_SEGMENT_PATHS) {
+    for (const method of ['DELETE', 'GET', 'POST']) {
+      const r = await call(fetch, 'k', { method, path })
+      expect(r, `${method} ${path}`).toEqual({
+        text: `Invalid path: ${path}. Use something like /tailnet/-/devices.`,
+        isError: true,
+      })
+    }
+  }
+
+  expect(seen.last).toBeUndefined()
+})
+
+test('call sends a path whose dots are inside a segment', async () => {
+  const { fetch, seen } = fakeFetch('{}')
+  const r = await call(fetch, 'k', { method: 'GET', path: '/device/100.64.0.1' })
+  expect(r.isError).toBe(false)
+  expect(seen.last?.url).toBe('https://api.tailscale.com/api/v2/device/100.64.0.1')
+})
+
+test('every URL buildUrl accepts keeps the requested path after the URL parser normalizes it', () => {
+  for (const path of [...DOT_SEGMENT_PATHS, '/tailnet/-/devices', '/device/100.64.0.1', '/tailnet/example.com/devices']) {
+    const url = buildUrl(path)
+    if (url === undefined) continue
+    expect(new URL(url).pathname, path).toBe('/api/v2' + path.split('?')[0])
+  }
+})

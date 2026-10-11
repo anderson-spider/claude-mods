@@ -30,6 +30,8 @@ export function buildUrl(path: unknown): string | undefined {
   if (path.startsWith('//') || path.includes('..') || /[\s\\#]/.test(path)) return undefined
   // a server could normalize the encoded dot, slash or backslash
   if (/%(2e|2f|5c)/i.test(path)) return undefined
+  // the URL parser drops a "." segment, so /tailnet/./- would reach /tailnet/- past forbidden
+  if ((path.split('?')[0] ?? '').split('/').includes('.')) return undefined
   return BASE + path
 }
 
