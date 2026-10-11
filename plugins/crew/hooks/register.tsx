@@ -10,8 +10,8 @@ import type { BindOutcome, EffortBook, Listed } from './effort'
 import { deniedWrite } from './guard'
 import { createBreaker, createGate, createJev, failureText } from './jev'
 import type { Breaker, Gate, JevIo } from './jev'
-import { declaresOption, resolveKey } from './key'
-import type { KeyIo } from './key'
+import { checkKey, resolveAccess } from './key'
+import type { KeyIo, Off } from './key'
 import { JEV_MODEL } from './questions'
 import { describe, moved, noticeText, route, routable, taggedDescription, untagged } from './routing'
 import type { Moved, Routed } from './routing'
@@ -69,40 +69,19 @@ async function settleDecision($: Dollar, saved: Promise<void>): Promise<void> {
   if (timedOut) $.ui.log('crew jev: decision write slow', { to: 'debug' })
 }
 
-/** Where the key may come from; the names are literal so the engine sees which variables are read. */
+/** The repository's settings and the user's home, which decide whether the key may be used. */
 function keyIo($: Dollar): KeyIo {
   return {
-    env: async name => {
-      if (name === 'TYPESAFE_API_KEY') return $.env.get('TYPESAFE_API_KEY')
-      if (name === 'JEV_API_KEY') return $.env.get('JEV_API_KEY')
-      return undefined
+    settings: async source => {
+      const settings = await $.settings.read({ source })
+      return { env: settings?.env, pluginConfigs: settings?.pluginConfigs }
     },
-    settingsEnv: async source => (await $.settings.read({ source }))?.env as Record<string, unknown> | undefined,
-    read: async path => String(await $.fs.read(path)),
     home: () => $.env.get('HOME'),
   }
 }
 
-/** What the repository's own settings (project or local) say about this plugin's options. */
-type RepoOptions = { jevRouting: boolean; jevKey: boolean; unreadable: boolean }
-
-/** A declaration there is ignored: it is the repository's choice, not the user's. Unreadable settings turn routing off. */
-async function repoOptions($: Dollar): Promise<RepoOptions> {
-  const found: RepoOptions = { jevRouting: false, jevKey: false, unreadable: false }
-  try {
-    for (const source of ['project', 'local'] as const) {
-      const configs = (await $.settings.read({ source }))?.pluginConfigs
-      if (declaresOption(configs, 'crew', 'jevRouting')) found.jevRouting = true
-      if (declaresOption(configs, 'crew', 'jevKey')) found.jevKey = true
-    }
-  } catch {
-    found.unreadable = true
-  }
-  return found
-}
-
 /** What module life resolves once, with the key: whether routing may run and the home that redaction trusts. */
-type Access = { key?: Promise<string | undefined>; home?: string }
+type KeyCache = { key?: Promise<string | undefined>; home?: string }
 
 /** The home of `/Users/<name>/...` or `/home/<name>/...`: a stand-in for redaction only, never a place to read from. */
 function homeFromCwd(cwd: string | undefined): string | undefined {
@@ -114,26 +93,25 @@ function homeFromCwd(cwd: string | undefined): string | undefined {
  * there is none (the repository declares `HOME`, say) it is taken from the session's directory, so the username and
  * the dashed home still go. The repository's own `HOME` is never used.
  */
-async function redactContext($: Dollar, access: Access): Promise<{ home: string; root: string }> {
+async function redactContext($: Dollar, access: KeyCache): Promise<{ home: string; root: string }> {
   const root = await $.session.cwd().catch(() => undefined)
   return { home: access.home ?? homeFromCwd(root) ?? '', root: root ?? '' }
 }
 
+const OFF_TEXT: Record<Off, string> = {
+  'no-key': 'no key',
+  'bad-key': 'the jevKey option is not a valid key',
+  unreadable: 'the repository settings cannot be read',
+  'repo-key': 'the repository settings declare jevKey (set it in user settings)',
+}
+
 /** The key, or undefined when routing may not run. Resolved once; concurrent callers share the read. */
-function keyOf($: Dollar, access: Access, option: unknown): Promise<string | undefined> {
+function keyOf($: Dollar, access: KeyCache, option: unknown): Promise<string | undefined> {
   access.key ??= (async () => {
-    const repo = await repoOptions($)
-    const off = repo.unreadable
-      ? 'the repository settings cannot be read'
-      : repo.jevRouting ? 'the repository settings declare jevRouting (set it in user settings)' : undefined
-    if (off) {
-      $.ui.log(`crew jev: routing is off: ${off}`, { to: 'debug' })
-      return undefined
-    }
-    const { key, home } = await resolveKey(keyIo($), repo.jevKey ? undefined : option)
-    access.home = home
-    if (!key) $.ui.log(`crew jev: routing is off: no key${repo.jevKey ? ' (a jevKey declared by the repository is ignored)' : ''}`, { to: 'debug' })
-    return key
+    const resolved = await resolveAccess(keyIo($), option)
+    access.home = resolved.home
+    if (resolved.off) $.ui.log(`crew jev: routing is off: ${OFF_TEXT[resolved.off]}`, { to: 'debug' })
+    return resolved.key
   })().catch(() => undefined)
   return access.key
 }
@@ -172,14 +150,14 @@ async function registerSpecialists($: Dollar, e: StartHook[1], next: StartHook[2
 /** What the routing hooks share while the module lives. */
 type Routing = {
   enabled: boolean
-  /** The `jevKey` option: the last fallback for the key. */
+  /** The `jevKey` option: the key, and the switch. */
   jevKey: unknown
   breaker: Breaker
   gate: Gate
   book: EffortBook
   /** Routed subagents whose first step is still to be checked against their tag. */
   confirms: Confirmations
-  access: Access
+  access: KeyCache
 }
 
 /** Asks Jev about one call. A failure is one debug line and the call goes on as it came (undefined). */
@@ -273,7 +251,8 @@ async function routeSpawn(routing: Routing, $: Dollar, e: SpawnHook[1], next: Sp
 export const register: Register = (on, options) => {
   // Shared while the module lives: the rate limit is the account's, and a sick Jev is not asked again for a while.
   const routing: Routing = {
-    enabled: options.jevRouting === true || options.jevRouting === 'true',
+    // A filled `jevKey` is the switch; an empty one reads no settings and sends nothing. A malformed one is logged by `keyOf`.
+    enabled: checkKey(options.jevKey).off !== 'no-key',
     jevKey: options.jevKey,
     breaker: createBreaker(wallNow),
     gate: createGate(),

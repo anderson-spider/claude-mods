@@ -51,8 +51,8 @@ const KEY = ['key-', 'jev-0123456789abcdef'].join('')
 const TOKEN = ['ghp_', 'a1b2c3d4e5f6g7h8i9j0k1l2m3n4'].join('')
 const HOME = '/home/u'
 const ROOT = '/repo'
-const ON = { options: { jevRouting: true } }
-const OFF = { options: { jevRouting: false } }
+const ON = { options: { jevKey: KEY } }
+const OFF = { options: {} }
 
 const answer = (tier: string, confidence: number, depth: number) =>
   JSON.stringify({
@@ -75,6 +75,7 @@ type Seen = {
   writes: { path: string; text: string }[]
   /** The lines `$.ui.log` sent to the transcript. */
   transcript: string[]
+  settingsReads: number
 }
 
 /** The host beneath the plugin: env, settings and files, Jev's endpoint, the spawn and the step the plugin routes. */
@@ -100,12 +101,13 @@ function jevWorld(
     stepModel?: string | (() => string | undefined)
   } = {},
 ) {
-  const seen: Seen = { fetches: [], spawned: [], steps: [], notices: [], logs: [], writes: [], transcript: [] }
+  const seen: Seen = { fetches: [], spawned: [], steps: [], notices: [], logs: [], writes: [], transcript: [], settingsReads: 0 }
   const flags = { settingsFail: opts.settingsFail === true }
   const clock = mock.clock(on)
-  mock.env(on, { HOME, TYPESAFE_API_KEY: KEY, ...opts.env })
+  mock.env(on, { HOME, ...opts.env })
   on('session.cwd', async () => ({ value: opts.cwd ?? ROOT }))
   on('settings.read', async (_$, e) => {
+    seen.settingsReads++
     if (flags.settingsFail) throw new Error('settings unreadable')
     return {
       value: (e.source === 'project' ? opts.project : e.source === 'local' ? opts.local : undefined) ?? {},
@@ -194,7 +196,7 @@ test('jev sets the model of a crew call and leaves the type, with the key in the
   expect(JSON.stringify([seen.notices, seen.logs])).not.toContain(KEY)
 })
 
-test('routing is on by default: a crew call is sent and its task shows the choice', async ($, on) => {
+test('a filled jevKey turns routing on: a crew call is sent and its task shows the choice', ON, async ($, on) => {
   const { seen } = jevWorld(on)
   await $.agent.spawn(spawnInput())
 
@@ -337,8 +339,8 @@ test('the lead section reads the same on every request, so the prompt cache hold
   expect(second).toBe(first)
 })
 
-test('with routing off the lead section does not promise Jev, even with a key', OFF, async ($, on) => {
-  const { seen } = jevWorld(on)
+test('without a jevKey the lead section does not promise Jev, even with a key in the environment', OFF, async ($, on) => {
+  const { seen } = jevWorld(on, { env: { TYPESAFE_API_KEY: KEY, JEV_API_KEY: KEY } })
   on('prompt.compose', () => ({ sections: [{ id: 'intro', text: 'base', scope: 'shared' as const }] }))
   const text = (await compose($, ['Agent'])).sections.at(-1)?.text ?? ''
 
@@ -379,15 +381,6 @@ test('an agent the list shows without the tag does not take the routed effort', 
   expect(seen.steps).toEqual(['medium'])
 })
 
-test('without a key the lead section does not promise Jev', ON, async ($, on) => {
-  jevWorld(on, { env: { TYPESAFE_API_KEY: '' } })
-  on('prompt.compose', () => ({ sections: [{ id: 'intro', text: 'base', scope: 'shared' as const }] }))
-  const text = (await compose($, ['Agent'])).sections.at(-1)?.text ?? ''
-
-  expect(text).toContain('You orchestrate')
-  expect(text).not.toContain('Jev')
-})
-
 test('a decision that matches the defaults rewrites nothing', ON, async ($, on) => {
   const { seen } = jevWorld(on, { reply: async () => ok(answer('sonnet', 0.95, 1.4)) })
   await $.agent.spawn(spawnInput())
@@ -414,64 +407,53 @@ test('a call that names a model, a fork, a workflow agent and non-crew types are
   expect(seen.steps).toEqual(['medium'])
 })
 
-test('with jevRouting off nothing is sent, even with a key', OFF, async ($, on) => {
+test('without a jevKey nothing is sent and no settings are read, even with a key in the environment or in the key file', OFF, async ($, on) => {
+  const { seen } = jevWorld(on, { env: { TYPESAFE_API_KEY: KEY, JEV_API_KEY: KEY }, files: { [`${HOME}/.jev-router.env`]: `JEV_API_KEY=${KEY}\n` } })
+  await $.agent.spawn(spawnInput())
+  await step($, 'a1', 'medium')
+
+  expect(seen.fetches).toEqual([])
+  expect(seen.settingsReads).toBe(0)
+  expect(seen.spawned[0]?.model).toBeUndefined()
+  expect(seen.logs.filter(line => line.includes('routing is off'))).toEqual([])
+})
+
+test('an empty or blank jevKey is off silently', { options: { jevKey: '   ' } }, async ($, on) => {
   const { seen } = jevWorld(on)
   await $.agent.spawn(spawnInput())
 
   expect(seen.fetches).toEqual([])
-  expect(seen.spawned[0]?.model).toBeUndefined()
+  expect(seen.logs.filter(line => line.includes('routing is off'))).toEqual([])
 })
 
-test('no key anywhere fails open without a request', ON, async ($, on) => {
-  const { seen } = jevWorld(on, { env: { TYPESAFE_API_KEY: '' } })
+test('a malformed jevKey is off with one debug line that never shows it', { options: { jevKey: 'two words' } }, async ($, on) => {
+  const { seen } = jevWorld(on)
+  await $.agent.spawn(spawnInput())
   await $.agent.spawn(spawnInput())
 
   expect(seen.fetches).toEqual([])
-  expect(seen.spawned[0]?.model).toBeUndefined()
+  expect(seen.spawned.map(s => s.model)).toEqual([undefined, undefined])
+  expect(seen.logs.filter(line => line.includes('routing is off'))).toEqual(['crew jev: routing is off: the jevKey option is not a valid key'])
+  expect(JSON.stringify([seen.logs, seen.notices])).not.toContain('two words')
 })
 
-test('the key falls back to JEV_API_KEY when TYPESAFE_API_KEY is unset', ON, async ($, on) => {
-  const { seen } = jevWorld(on, { env: { TYPESAFE_API_KEY: '', JEV_API_KEY: KEY } })
-  await $.agent.spawn(spawnInput())
-
-  expect(seen.fetches[0]?.headers.Authorization).toBe(`Bearer ${KEY}`)
-})
-
-test('the key file under HOME is read when the environment has none', ON, async ($, on) => {
-  const { seen } = jevWorld(on, { env: { TYPESAFE_API_KEY: '' }, files: { [`${HOME}/.jev-router.env`]: `JEV_API_KEY=${KEY}\n` } })
+test('the jevKey option is the only source of the key', ON, async ($, on) => {
+  const { seen } = jevWorld(on, { env: { TYPESAFE_API_KEY: 'other-key-from-env', JEV_API_KEY: 'another-key-from-env' } })
   await $.agent.spawn(spawnInput())
 
   expect(seen.fetches[0]?.headers.Authorization).toBe(`Bearer ${KEY}`)
   expect(seen.spawned[0]?.model).toBe('opus')
 })
 
-test('the jevKey option is the last fallback', { options: { jevRouting: true, jevKey: KEY } }, async ($, on) => {
-  const { seen } = jevWorld(on, { env: { TYPESAFE_API_KEY: '' } })
+test('a stale jevRouting in the options is ignored: the key alone decides', { options: { jevKey: KEY, jevRouting: false } }, async ($, on) => {
+  const { seen } = jevWorld(on)
   await $.agent.spawn(spawnInput())
 
   expect(seen.fetches[0]?.headers.Authorization).toBe(`Bearer ${KEY}`)
 })
 
-test('an environment key that the repository settings declare is ignored', ON, async ($, on) => {
-  const { seen } = jevWorld(on, { project: { env: { TYPESAFE_API_KEY: KEY } } })
-  await $.agent.spawn(spawnInput())
-
-  expect(seen.fetches).toEqual([])
-  expect(seen.spawned[0]?.model).toBeUndefined()
-})
-
-test('a repository cannot turn routing on through its own settings, and the log says why', ON, async ($, on) => {
-  const { seen } = jevWorld(on, { local: { pluginConfigs: { 'crew@spider-claude-mods': { options: { jevRouting: true } } } } })
-  await $.agent.spawn(spawnInput())
-  await $.agent.spawn(spawnInput())
-
-  expect(seen.fetches).toEqual([])
-  expect(seen.spawned.map(s => s.model)).toEqual([undefined, undefined])
-  expect(seen.logs.filter(line => line.includes('routing is off') && line.includes('declare jevRouting'))).toHaveLength(1)
-})
-
 test('settings that cannot be read turn routing off completely, and the log says why', ON, async ($, on) => {
-  const { seen } = jevWorld(on, { settingsFail: true, files: { [`${HOME}/.jev-router.env`]: `JEV_API_KEY=${KEY}\n` } })
+  const { seen } = jevWorld(on, { settingsFail: true })
   await $.agent.spawn(spawnInput())
 
   expect(seen.fetches).toEqual([])
@@ -480,31 +462,19 @@ test('settings that cannot be read turn routing off completely, and the log says
   expect(JSON.stringify(seen.logs)).not.toContain(KEY)
 })
 
-test('a HOME that the repository settings declare does not give it the key file', ON, async ($, on) => {
-  const { seen } = jevWorld(on, {
-    env: { TYPESAFE_API_KEY: '' },
-    project: { env: { HOME } },
-    files: { [`${HOME}/.jev-router.env`]: `JEV_API_KEY=${KEY}\n` },
-  })
+test('a HOME that the repository settings declare keeps routing on but leaves the decision log unwritten', ON, async ($, on) => {
+  const { seen } = jevWorld(on, { project: { env: { HOME } } })
   await $.agent.spawn(spawnInput())
 
-  expect(seen.fetches).toEqual([])
-  expect(seen.spawned[0]?.model).toBeUndefined()
-})
-
-test('a relative HOME does not give the repository its own key file', ON, async ($, on) => {
-  const { seen } = jevWorld(on, { env: { TYPESAFE_API_KEY: '', HOME: '.' }, files: { './.jev-router.env': `JEV_API_KEY=${KEY}\n` } })
-  await $.agent.spawn(spawnInput())
-
-  expect(seen.fetches).toEqual([])
-  expect(seen.spawned[0]?.model).toBeUndefined()
+  expect(seen.fetches).toHaveLength(1)
+  expect(seen.writes).toEqual([])
 })
 
 test('a HOME that the repository declares is not used by redaction either', ON, async ($, on) => {
   const { seen } = jevWorld(on, { project: { env: { HOME: '.' } } })
   await $.agent.spawn(spawnInput({ prompt: `Check /Users/maria/work/secret-app/src/a.ts and ${HOME}/work/x.ts` }))
 
-  // The user's key came from the environment, so the call is sent; the home it would trust is not the repository's.
+  // The user's key is the option, so the call is sent; the home it would trust is not the repository's.
   const body = seen.fetches[0]?.body ?? ''
   expect(body).not.toContain('/Users/maria')
   expect(body).not.toContain(`${HOME}/work`)
@@ -575,15 +545,81 @@ test('two calls alike, one routed and one that Jev failed on, are told apart by 
   expect(seen.notices.some(text => text.includes('not applied'))).toBe(false)
 })
 
-test('a jevKey that the repository declares is ignored, and the log says why', { options: { jevRouting: true, jevKey: KEY } }, async ($, on) => {
+test('a jevKey that the repository declares is ignored, and the log says why', ON, async ($, on) => {
   const repo = jevWorld(on, {
-    env: { TYPESAFE_API_KEY: '' },
     project: { pluginConfigs: { 'crew@spider-claude-mods': { options: { jevKey: KEY } } } },
   })
   await $.agent.spawn(spawnInput())
 
   expect(repo.seen.fetches).toEqual([])
   expect(repo.seen.logs.some(line => line.includes('routing is off') && line.includes('jevKey'))).toBe(true)
+})
+
+const declared = (plugin: string) => ({ pluginConfigs: { [plugin]: { options: { jevKey: 'repo-key-123' } } } })
+
+for (const [source, plugin] of [
+  ['project', 'crew@inline'], ['project', 'crew@spider-claude-mods'],
+  ['local', 'crew@inline'], ['local', 'crew@spider-claude-mods'],
+] as const) {
+  test(`a jevKey declared by ${source} settings for ${plugin} turns routing off: no fetch, no tag, no Jev wording`, ON, async ($, on) => {
+    const { seen } = jevWorld(on, { [source]: declared(plugin) })
+    on('prompt.compose', () => ({ sections: [{ id: 'intro', text: 'base', scope: 'shared' as const }] }))
+    const result = await $.agent.spawn(spawnInput())
+    const lead = (await compose($, ['Agent'])).sections.at(-1)?.text ?? ''
+
+    expect(seen.fetches).toEqual([])
+    expect(seen.spawned[0]?.model).toBeUndefined()
+    expect(String(seen.spawned[0]?.description)).toBe('audit auth')
+    expect(JSON.stringify(result)).not.toContain('sonnet/')
+    expect(seen.logs.some(line => line.includes('routing is off') && line.includes('jevKey'))).toBe(true)
+    expect(JSON.stringify([seen.logs, seen.notices])).not.toContain(KEY)
+    expect(lead).not.toContain('Jev')
+  })
+}
+
+test('unreadable settings with a valid key: no fetch, no tag, no Jev wording', ON, async ($, on) => {
+  const { seen } = jevWorld(on, { settingsFail: true })
+  on('prompt.compose', () => ({ sections: [{ id: 'intro', text: 'base', scope: 'shared' as const }] }))
+  await $.agent.spawn(spawnInput())
+  const lead = (await compose($, ['Agent'])).sections.at(-1)?.text ?? ''
+
+  expect(seen.fetches).toEqual([])
+  expect(String(seen.spawned[0]?.description)).toBe('audit auth')
+  expect(lead).not.toContain('Jev')
+})
+
+test('a stale jevRouting: true in the options is ignored: the key alone decides', { options: { jevKey: KEY, jevRouting: true } }, async ($, on) => {
+  const { seen } = jevWorld(on)
+  await $.agent.spawn(spawnInput())
+
+  expect(seen.fetches[0]?.headers.Authorization).toBe(`Bearer ${KEY}`)
+})
+
+for (const [label, bad] of [
+  ['a newline', `${KEY}\nextra`],
+  ['a tab', `${KEY}\textra`],
+  ['over 512 characters', 'k'.repeat(513)],
+] as const) {
+  test(`a jevKey with ${label} sends nothing and never reaches a log or notice`, { options: { jevKey: bad } }, async ($, on) => {
+    const { seen } = jevWorld(on)
+    await $.agent.spawn(spawnInput())
+
+    expect(seen.fetches).toEqual([])
+    expect(seen.spawned[0]?.model).toBeUndefined()
+    expect(seen.logs.filter(line => line.includes('routing is off'))).toEqual(['crew jev: routing is off: the jevKey option is not a valid key'])
+    const out = JSON.stringify([seen.logs, seen.transcript, seen.notices])
+    expect(out).not.toContain(bad.slice(0, 20))
+    expect(out).not.toContain(KEY)
+  })
+}
+
+test('a blank jevKey leaves the lead section without Jev', { options: { jevKey: '   ' } }, async ($, on) => {
+  jevWorld(on)
+  on('prompt.compose', () => ({ sections: [{ id: 'intro', text: 'base', scope: 'shared' as const }] }))
+  const text = (await compose($, ['Agent'])).sections.at(-1)?.text ?? ''
+
+  expect(text).toContain('You orchestrate')
+  expect(text).not.toContain('Jev')
 })
 
 test('an error status, a malformed body and a thrown fetch leave the call untouched', ON, async ($, on) => {
@@ -943,15 +979,6 @@ test('a connection that keeps dropping is logged as network, with no status, aft
   expect(seen.fetches).toHaveLength(2)
   expect(notRouted(seen)).toEqual(['crew jev: crew:developer not routed (network)'])
   expect(JSON.stringify(seen.logs)).not.toContain(KEY)
-})
-
-test('a key with whitespace is logged as config and nothing is sent', ON, async ($, on) => {
-  const { seen } = jevWorld(on, { env: { TYPESAFE_API_KEY: 'two words' } })
-  await $.agent.spawn(spawnInput())
-
-  expect(notRouted(seen)).toEqual(['crew jev: crew:developer not routed (config)'])
-  expect(seen.fetches).toEqual([])
-  expect(seen.spawned[0]?.model).toBeUndefined()
 })
 
 test('a fifth concurrent call is logged as busy at once, and the four in flight as timeout later', ON, async ($, on) => {

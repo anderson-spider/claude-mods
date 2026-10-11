@@ -1,93 +1,69 @@
 import { expect, test } from 'claude-code/testing'
-import { declaresOption, parseEnvFile, resolveKey, trustedHome } from '../hooks/key'
+import { checkKey, declaresOption, resolveAccess } from '../hooks/key'
 import type { KeyIo } from '../hooks/key'
 
 // Key-shaped fixtures are assembled at runtime so no source literal matches a secret scanner.
-const k = (name: string) => ['key-', name, '-0123456789'].join('')
+const KEY = ['key-', 'opt', '-0123456789'].join('')
 
-function io(over: { env?: Record<string, string>; project?: Record<string, unknown>; local?: Record<string, unknown>; settingsFail?: boolean; file?: string; home?: string | undefined }): KeyIo {
+function io(over: { project?: { env?: unknown; pluginConfigs?: unknown }; local?: { env?: unknown; pluginConfigs?: unknown }; settingsFail?: boolean; home?: string | undefined }): KeyIo & { reads: string[] } {
+  const reads: string[] = []
   return {
-    env: async name => over.env?.[name],
-    settingsEnv: async source => {
+    reads,
+    settings: async source => {
+      reads.push(source)
       if (over.settingsFail) throw new Error('unreadable')
       return source === 'project' ? over.project : over.local
-    },
-    read: async path => {
-      if (over.file === undefined || path !== `${over.home ?? '/home/u'}/.jev-router.env`) throw new Error('ENOENT')
-      return over.file
     },
     home: async () => ('home' in over ? over.home : '/home/u'),
   }
 }
 
-test('TYPESAFE_API_KEY is read before JEV_API_KEY, the file and the option', async () => {
-  const both = io({ env: { TYPESAFE_API_KEY: k('ts'), JEV_API_KEY: k('jev') }, file: `JEV_API_KEY=${k('file')}` })
-  expect(await resolveKey(both, k('opt'))).toMatchObject({ key: k('ts'), source: 'env' })
-  expect(await resolveKey(io({ env: { JEV_API_KEY: ` ${k('jev')} ` } }))).toMatchObject({ key: k('jev'), source: 'env' })
+test('a key is a trimmed string of printable characters; empty is off silently, anything else is bad', () => {
+  expect(checkKey(KEY)).toEqual({ key: KEY })
+  expect(checkKey(`  ${KEY}\n`)).toEqual({ key: KEY })
+  for (const empty of [undefined, null, '', '   ']) expect(checkKey(empty)).toEqual({ off: 'no-key' })
+  for (const bad of ['two words', 'a\nb', 'a\tb', 'café', 'x'.repeat(513), 42, {}, true]) expect(checkKey(bad)).toEqual({ off: 'bad-key' })
+  expect(checkKey('x'.repeat(512))).toEqual({ key: 'x'.repeat(512) })
 })
 
-test('the file comes next, then the option', async () => {
-  const file = `# jev-router\nexport JEV_API_KEY="${k('file')}"\nOTHER=1\n`
-  expect(await resolveKey(io({ file }), k('opt'))).toMatchObject({ key: k('file'), source: 'file' })
-  expect(await resolveKey(io({}), k('opt'))).toEqual({ key: k('opt'), source: 'option', home: '/home/u' })
-  expect(await resolveKey(io({}), '  ')).toEqual({ home: '/home/u' })
-  expect(await resolveKey(io({ home: undefined, file: `JEV_API_KEY=${k('file')}` }))).toEqual({})
+test('a valid key with a trusted home gives both, reading each settings source once', async () => {
+  const source = io({})
+  expect(await resolveAccess(source, KEY)).toEqual({ key: KEY, home: '/home/u' })
+  expect(source.reads).toEqual(['project', 'local'])
+  expect(await resolveAccess(io({ home: '/home/u/' }), ` ${KEY} `)).toEqual({ key: KEY, home: '/home/u' })
 })
 
-test('an environment key that the repository settings declare is ignored, the others still count', async () => {
-  const fromRepo = io({ env: { TYPESAFE_API_KEY: k('repo'), JEV_API_KEY: k('user') }, project: { TYPESAFE_API_KEY: k('repo') } })
-  expect(await resolveKey(fromRepo)).toMatchObject({ key: k('user'), source: 'env' })
-
-  const local = io({ env: { JEV_API_KEY: k('repo') }, local: { JEV_API_KEY: k('repo') } })
-  expect(await resolveKey(local)).toEqual({ home: '/home/u' })
-})
-
-test('when the settings cannot be read there is no key at all: no environment, no file, no option', async () => {
-  const failing = io({ env: { JEV_API_KEY: k('env') }, settingsFail: true, file: `JEV_API_KEY=${k('file')}` })
-  expect(await resolveKey(failing, k('opt'))).toEqual({})
-  expect(await trustedHome(failing)).toBeUndefined()
-})
-
-test('a HOME the repository settings declare is not trusted: the key file is not read', async () => {
-  const file = `JEV_API_KEY=${k('file')}`
-  expect(await resolveKey(io({ file, project: { HOME: '/home/u' } }))).toEqual({})
-  expect(await resolveKey(io({ file, local: { HOME: '/elsewhere' } }), k('opt'))).toEqual({ key: k('opt'), source: 'option' })
-  expect(await trustedHome(io({ project: { HOME: '/home/u' } }))).toBeUndefined()
-  // Declared elsewhere in the env block, HOME is still the user's.
-  expect(await resolveKey(io({ file, project: { OTHER: '1' } }))).toMatchObject({ key: k('file'), source: 'file' })
-})
-
-test('a relative or empty HOME is not trusted: the key file is not read', async () => {
-  for (const home of ['.', 'repo', '', '  ', '~']) {
-    expect(await resolveKey(io({ home, file: `JEV_API_KEY=${k('file')}` }))).toEqual({})
-    expect(await trustedHome(io({ home }))).toBeUndefined()
+test('no key or a bad key is off without reading the settings', async () => {
+  for (const [option, off] of [[undefined, 'no-key'], ['', 'no-key'], ['  ', 'no-key'], ['two words', 'bad-key'], [7, 'bad-key']] as const) {
+    const source = io({})
+    expect(await resolveAccess(source, option)).toEqual({ off })
+    expect(source.reads).toEqual([])
   }
-  expect(await trustedHome(io({ home: '/home/u/' }))).toBe('/home/u')
 })
 
-test('dotenv parsing: export, quotes, comments and unrelated lines', () => {
-  expect(parseEnvFile("export A=1\nB='two words'\nC=\"x\" # c\nD=plain # tail\n#E=no\nnot a pair\n\nF = spaced ")).toEqual({
-    A: '1',
-    B: 'two words',
-    C: 'x',
-    D: 'plain',
-    F: 'spaced',
-  })
+test('settings that cannot be read turn routing off', async () => {
+  expect(await resolveAccess(io({ settingsFail: true }), KEY)).toEqual({ off: 'unreadable' })
+})
+
+test('a jevKey that the repository settings declare turns routing off', async () => {
+  const declared = { 'crew@spider-claude-mods': { options: { jevKey: KEY } } }
+  expect(await resolveAccess(io({ project: { pluginConfigs: declared } }), KEY)).toEqual({ off: 'repo-key' })
+  expect(await resolveAccess(io({ local: { pluginConfigs: { 'crew@inline': { options: { jevKey: 'x' } } } } }), KEY)).toEqual({ off: 'repo-key' })
+  expect(await resolveAccess(io({ project: { pluginConfigs: { crew: { options: { other: 1 } } } } }), KEY)).toEqual({ key: KEY, home: '/home/u' })
+})
+
+test('a HOME that the repository settings declare, or a relative one, is not trusted; the key still counts', async () => {
+  expect(await resolveAccess(io({ project: { env: { HOME: '/home/u' } } }), KEY)).toEqual({ key: KEY })
+  expect(await resolveAccess(io({ local: { env: { HOME: '/elsewhere' } } }), KEY)).toEqual({ key: KEY })
+  for (const home of ['.', 'repo', '', '  ', '~', undefined]) expect(await resolveAccess(io({ home }), KEY)).toEqual({ key: KEY })
+  // Declared elsewhere in the env block, HOME is still the user's.
+  expect(await resolveAccess(io({ project: { env: { OTHER: '1' } } }), KEY)).toEqual({ key: KEY, home: '/home/u' })
 })
 
 test('a repository declares the option under crew or crew@marketplace, any value', () => {
-  expect(declaresOption({ crew: { options: { jevRouting: true } } }, 'crew', 'jevRouting')).toBe(true)
-  expect(declaresOption({ 'crew@spider-claude-mods': { options: { jevRouting: false } } }, 'crew', 'jevRouting')).toBe(true)
-  expect(declaresOption({ crew: { options: {} }, other: { options: { jevRouting: true } } }, 'crew', 'jevRouting')).toBe(false)
-  expect(declaresOption({ crewx: { options: { jevRouting: true } } }, 'crew', 'jevRouting')).toBe(false)
-  expect(declaresOption(undefined, 'crew', 'jevRouting')).toBe(false)
-})
-
-test('the trusted home comes out with the key, from the same scan, and only when it is trusted', async () => {
-  expect(await resolveKey(io({ env: { TYPESAFE_API_KEY: k('ts') } }))).toEqual({ key: k('ts'), source: 'env', home: '/home/u' })
-  // No key, still a home: redaction does not depend on having one.
-  expect(await resolveKey(io({}))).toEqual({ home: '/home/u' })
-  // Declared by the repository or relative: none.
-  expect(await resolveKey(io({ env: { TYPESAFE_API_KEY: k('ts') }, project: { HOME: '/home/u' } }))).toEqual({ key: k('ts'), source: 'env' })
-  expect(await resolveKey(io({ env: { TYPESAFE_API_KEY: k('ts') }, home: '.' }))).toEqual({ key: k('ts'), source: 'env' })
+  expect(declaresOption({ crew: { options: { jevKey: 'x' } } }, 'crew', 'jevKey')).toBe(true)
+  expect(declaresOption({ 'crew@spider-claude-mods': { options: { jevKey: '' } } }, 'crew', 'jevKey')).toBe(true)
+  expect(declaresOption({ crew: { options: {} }, other: { options: { jevKey: 'x' } } }, 'crew', 'jevKey')).toBe(false)
+  expect(declaresOption({ crewx: { options: { jevKey: 'x' } } }, 'crew', 'jevKey')).toBe(false)
+  expect(declaresOption(undefined, 'crew', 'jevKey')).toBe(false)
 })
