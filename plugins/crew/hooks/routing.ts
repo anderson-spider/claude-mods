@@ -91,6 +91,27 @@ export async function route(
   return { decision: decide(spec, reply.answers), jevModel: reply.model, ms: reply.ms }
 }
 
+/** What Jev moved from the agent's defaults; undefined where the answer is the default or there is no answer. */
+export type Moved = { model: Model | undefined; effort: Effort | undefined }
+
+export function moved(spec: Specialist, routed: Routed | undefined): Moved {
+  return {
+    model: routed && routed.decision.model !== spec.model ? routed.decision.model : undefined,
+    effort: routed && routed.decision.effort !== spec.effort ? routed.decision.effort : undefined,
+  }
+}
+
+/**
+ * The notice of a decision. An effort that was moved but did not take shows the default the subagent runs on and says
+ * so; otherwise the notice shows the effort of the answer.
+ */
+export function noticeText(spec: Specialist, routed: Routed, notApplied: Effort | undefined): string {
+  const effort = notApplied === undefined
+    ? `${routed.decision.effort} (jev)`
+    : `${spec.effort} (jev; effort ${notApplied} not applied)`
+  return `crew:${spec.name} -> ${routed.decision.model} · ${effort}`
+}
+
 /** One line for the notice and the debug log; the prompt never appears in it. */
 export function describe(spec: Specialist, routed: Routed, applied: { model?: Model; effort?: Effort }): string {
   const { decision, jevModel, ms } = routed

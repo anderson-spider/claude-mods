@@ -46,6 +46,16 @@ export class JevFailure extends Error {
   }
 }
 
+/**
+ * `<reason>[ <status>]` for the debug log, read by shape: a thrown value without a string `reason` reads as `error`, and
+ * a numeric `status` is appended. Never the message, which a non-client failure could fill with request details.
+ */
+export function failureText(error: unknown): string {
+  const reason = (error as { reason?: unknown } | null)?.reason
+  const status = (error as { status?: unknown } | null)?.status
+  return `${typeof reason === 'string' ? reason : 'error'}${typeof status === 'number' ? ` ${status}` : ''}`
+}
+
 // --- Breaker and concurrency cap, shared by every call while the module lives ---
 
 export type Breaker = {
@@ -135,6 +145,16 @@ function retryAfterMs(headers: Record<string, string> | undefined): number | und
   return undefined
 }
 
+/**
+ * The typed failure of whatever a call threw (anything that is not one reads as a dropped request), and whether it
+ * counts against the breaker. A rejected request (400, 422) or an unreadable 2xx says nothing about the service's health.
+ */
+export function classifyFailure(error: unknown): { failure: JevFailure; counts: boolean } {
+  const failure = error instanceof JevFailure ? error : new JevFailure('network', 'request failed')
+  const says = failure.reason === 'malformed' || (failure.reason === 'http' && (failure.status === 400 || failure.status === 422))
+  return { failure, counts: !says }
+}
+
 export type JevOptions = { model: string; breaker?: Breaker; gate?: Gate; deadlineMs?: number; holdMs?: number }
 
 /** One call is one judgment. Throws a JevFailure, never anything else. */
@@ -193,11 +213,9 @@ export function createJev(io: JevIo, key: string, opts: JevOptions): AskFn {
       opts.breaker?.success()
       return { ...reply, ms: Math.max(0, io.now() - started) }
     } catch (error) {
-      const failure = error instanceof JevFailure ? error : new JevFailure('network', 'request failed')
-      // A rejected request or an unreadable 2xx says nothing about the service's health.
-      const says = failure.reason === 'malformed' || (failure.reason === 'http' && (failure.status === 400 || failure.status === 422))
-      if (says) opts.breaker?.release()
-      else opts.breaker?.failure()
+      const { failure, counts } = classifyFailure(error)
+      if (counts) opts.breaker?.failure()
+      else opts.breaker?.release()
       throw failure
     } finally {
       cancel()
@@ -222,23 +240,37 @@ async function once(io: JevIo, init: JevInit, deadline: Promise<'timeout'>): Pro
   return winner === 'timeout' ? { kind: 'timeout' } : winner
 }
 
+type Settled = Exclude<Outcome, { kind: 'timeout' }>
+
+/** What an attempt that did not answer 2xx failed with: the status, or the dropped connection. */
+function attemptFailure(out: Settled): JevFailure {
+  if (out.kind === 'network') return new JevFailure('network', 'request failed')
+  return new JevFailure('http', `HTTP ${out.response.status}`, out.response.status)
+}
+
+/** A dropped connection or a status in RETRY_STATUSES; any other status is final. */
+function isTransient(out: Settled): boolean {
+  return out.kind === 'network' || RETRY_STATUSES.has(out.response.status)
+}
+
+/** The pause before a retry: the server's `Retry-After` when it sent one, else the default, never above the cap. */
+function retryPauseMs(out: Settled): number {
+  const headers = out.kind === 'response' ? out.response.headers : undefined
+  return Math.min(retryAfterMs(headers) ?? RETRY_PAUSE_MS, RETRY_PAUSE_CAP_MS)
+}
+
 /** The first attempt and, while the one deadline allows, a single retry of a transient failure. */
 async function attempts(io: JevIo, init: JevInit, deadline: Promise<'timeout'>, left: () => number) {
   for (let attempt = 0; ; attempt++) {
     const out = await once(io, init, deadline)
     if (out.kind === 'timeout') throw new JevFailure('timeout', 'deadline passed')
-    let failure: JevFailure
-    let pause = RETRY_PAUSE_MS
-    if (out.kind === 'network') {
-      failure = new JevFailure('network', 'request failed')
-    } else {
-      const { status, text, headers } = out.response
+    if (out.kind === 'response') {
+      const { status, text } = out.response
       if (status >= 200 && status < 300) return parseBody(String(text ?? ''))
-      failure = new JevFailure('http', `HTTP ${status}`, status)
-      if (!RETRY_STATUSES.has(status)) throw failure
-      pause = Math.min(retryAfterMs(headers) ?? RETRY_PAUSE_MS, RETRY_PAUSE_CAP_MS)
     }
-    if (attempt >= 1 || left() < RETRY_MIN_LEFT_MS) throw failure
+    const failure = attemptFailure(out)
+    if (!isTransient(out) || attempt >= 1 || left() < RETRY_MIN_LEFT_MS) throw failure
+    const pause = retryPauseMs(out)
     const slept = await Promise.race([
       new Promise<'slept'>(resolve => { io.timer(pause, () => resolve('slept')) }),
       deadline,

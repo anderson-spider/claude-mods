@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { JEV_DEADLINE_MS, JEV_URL, JevFailure, MAX_CONCURRENT, SLOT_HOLD_MS, createBreaker, createGate, createJev, parseBody } from '../hooks/jev'
+import { JEV_DEADLINE_MS, JEV_URL, JevFailure, MAX_CONCURRENT, SLOT_HOLD_MS, classifyFailure, createBreaker, createGate, createJev, failureText, parseBody } from '../hooks/jev'
 import type { JevInit, JevIo, JevOptions } from '../hooks/jev'
 
 // A key-shaped fixture is assembled at runtime so no source literal matches a secret scanner.
@@ -479,4 +479,46 @@ test('a config failure takes no slot and does not count against the breaker', as
 
   expect(gate.acquire()).toBe(true)
   expect(breaker.allow()).toBe(true)
+})
+
+test('failureText reads a typed failure by its reason and, when it has one, its status', () => {
+  expect(failureText(new JevFailure('http', 'HTTP 429', 429))).toBe('http 429')
+  expect(failureText(new JevFailure('timeout', 'deadline passed'))).toBe('timeout')
+  expect(failureText({ reason: 'busy', status: 503 })).toBe('busy 503')
+})
+
+test('failureText reads by shape: what has no string reason is `error`, and the message never appears', () => {
+  expect(failureText(new Error('boom with a secret'))).toBe('error')
+  expect(failureText(null)).toBe('error')
+  expect(failureText(undefined)).toBe('error')
+  expect(failureText('network down')).toBe('error')
+  expect(failureText({ reason: 5 })).toBe('error')
+  expect(failureText({ reason: 5, status: 500 })).toBe('error 500')
+  expect(failureText({ reason: 'http', status: '500' })).toBe('http')
+})
+
+test('classifyFailure keeps a typed failure as it is and reads anything else as a dropped request', () => {
+  const typed = new JevFailure('http', 'HTTP 503', 503)
+  expect(classifyFailure(typed).failure).toBe(typed)
+
+  const other = classifyFailure(new TypeError('x'))
+  expect(other.failure).toBeInstanceOf(JevFailure)
+  expect([other.failure.reason, other.failure.message, other.failure.status]).toEqual(['network', 'request failed', undefined])
+  expect(classifyFailure('boom').failure.reason).toBe('network')
+  expect(classifyFailure(null).failure.reason).toBe('network')
+})
+
+test('classifyFailure counts a failure against the breaker unless the request was rejected or the body unreadable', () => {
+  const counts = (failure: JevFailure) => classifyFailure(failure).counts
+
+  expect(counts(new JevFailure('http', 'HTTP 400', 400))).toBe(false)
+  expect(counts(new JevFailure('http', 'HTTP 422', 422))).toBe(false)
+  expect(counts(new JevFailure('malformed', 'response is not JSON'))).toBe(false)
+
+  expect(counts(new JevFailure('http', 'HTTP 401', 401))).toBe(true)
+  expect(counts(new JevFailure('http', 'HTTP 429', 429))).toBe(true)
+  expect(counts(new JevFailure('http', 'HTTP 503', 503))).toBe(true)
+  expect(counts(new JevFailure('timeout', 'deadline passed'))).toBe(true)
+  expect(counts(new JevFailure('network', 'request failed'))).toBe(true)
+  expect(classifyFailure(new Error('x')).counts).toBe(true)
 })
