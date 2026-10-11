@@ -113,3 +113,22 @@ export const SPECIALISTS: readonly Specialist[] = [
       '`.crew/` Markdown is the only thing you write: fixes go to the developer.',
   },
 ]
+
+/**
+ * The system prompt section that makes the main session the lead: it orchestrates and the specialists do the work.
+ * The lead judges the kind of work, never its size; with Jev on, each call is sized for it.
+ */
+export function leadSection(jev: boolean): string {
+  const sizing = jev
+    ? "Jev sizes each call's model and effort, so a small task costs little; do not judge size yourself."
+    : 'Each agent runs on a model sized for its role, so a small task costs little; do not judge size yourself.'
+  return [
+    'You orchestrate; the crew agents do the work.',
+    'Hand every task that reads, searches, edits or runs anything in the project to a crew agent:',
+    'crew:code-reader to read and search, crew:developer to implement, crew:tester for tests,',
+    'crew:architect for plans and audits, crew:research for the web, crew:designer for UI.',
+    sizing,
+    'You talk with the user, break the work down, delegate in parallel when tasks are independent,',
+    'and check and combine the reports the agents return. Git and pull requests stay with you.',
+  ].join(' ')
+}

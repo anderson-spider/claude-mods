@@ -1,6 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
+import { fnv1a } from '../hooks/decisions'
 
 const agents = [
   { id: 'a1', type: 'crew:architect' },
@@ -51,6 +52,7 @@ const TOKEN = ['ghp_', 'a1b2c3d4e5f6g7h8i9j0k1l2m3n4'].join('')
 const HOME = '/home/u'
 const ROOT = '/repo'
 const ON = { options: { jevRouting: true } }
+const OFF = { options: { jevRouting: false } }
 
 const answer = (tier: string, confidence: number, depth: number) =>
   JSON.stringify({
@@ -182,6 +184,124 @@ test('jev sets the model of a crew call and leaves the type, with the key in the
   expect(JSON.stringify([seen.notices, seen.logs])).not.toContain(KEY)
 })
 
+test('routing is on by default: a crew call is sent and its task shows the choice', async ($, on) => {
+  const { seen } = jevWorld(on)
+  await $.agent.spawn(spawnInput())
+
+  expect(seen.fetches.length).toBe(1)
+  expect(seen.spawned[0]).toMatchObject({ model: 'opus', description: 'audit auth · opus/high' })
+})
+
+test('the task shows a kept choice too', ON, async ($, on) => {
+  const { seen } = jevWorld(on, { reply: async () => ok(answer('sonnet', 0.95, 1.4)) })
+  await $.agent.spawn(spawnInput())
+
+  expect(seen.spawned[0]?.description).toBe('audit auth · sonnet/medium')
+})
+
+test('a call Jev failed on keeps its description as it came', ON, async ($, on) => {
+  const { seen } = jevWorld(on, { reply: async () => ok('not json') })
+  await $.agent.spawn(spawnInput())
+
+  expect(seen.spawned[0]?.description).toBe('audit auth')
+})
+
+// --- The lead's section ---
+
+const compose = ($: Engine, tools: string[], traits: string[] = []) =>
+  $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: [], tools, outputStyle: null, traits } as never)
+
+test('a request that offers the Agent tool gets the lead section last, naming every specialist', ON, async ($, on) => {
+  jevWorld(on)
+  on('prompt.compose', () => ({ sections: [{ id: 'intro', text: 'base', scope: 'shared' as const }] }))
+  const composed = await compose($, ['Agent', 'Read'])
+
+  expect(composed.sections.map(section => section.id)).toEqual(['intro', 'crew:lead'])
+  const lead = composed.sections.at(-1)
+  expect(lead?.scope).toBe('session')
+  for (const name of ['code-reader', 'research', 'designer', 'developer', 'tester', 'architect']) {
+    expect(lead?.text).toContain(`crew:${name}`)
+  }
+  expect(lead?.text).toContain('Jev sizes')
+  expect(lead?.text).toContain('Git and pull requests stay with you')
+})
+
+test('a request without the Agent tool (a crew agent) gets no lead section', ON, async ($, on) => {
+  jevWorld(on)
+  on('prompt.compose', () => ({ sections: [{ id: 'intro', text: 'base', scope: 'shared' as const }] }))
+  const composed = await compose($, ['Read', 'Edit'])
+
+  expect(composed.sections.map(section => section.id)).toEqual(['intro'])
+})
+
+test('a teammate and a bare prompt get no lead section', ON, async ($, on) => {
+  jevWorld(on)
+  on('prompt.compose', () => ({ sections: [{ id: 'intro', text: 'base', scope: 'shared' as const }] }))
+
+  expect((await compose($, ['Agent'], ['teammate'])).sections.map(section => section.id)).toEqual(['intro'])
+  expect((await compose($, ['Agent'], ['bare'])).sections.map(section => section.id)).toEqual(['intro'])
+})
+
+test('the lead section reads the same on every request, so the prompt cache holds', ON, async ($, on) => {
+  jevWorld(on)
+  on('prompt.compose', () => ({ sections: [{ id: 'intro', text: 'base', scope: 'shared' as const }] }))
+  const first = (await compose($, ['Agent'])).sections.at(-1)?.text
+  const second = (await compose($, ['Agent'])).sections.at(-1)?.text
+
+  expect(second).toBe(first)
+})
+
+test('with routing off the lead section does not promise Jev, even with a key', OFF, async ($, on) => {
+  const { seen } = jevWorld(on)
+  on('prompt.compose', () => ({ sections: [{ id: 'intro', text: 'base', scope: 'shared' as const }] }))
+  const text = (await compose($, ['Agent'])).sections.at(-1)?.text ?? ''
+
+  expect(text).toContain('You orchestrate')
+  expect(text).not.toContain('Jev')
+  expect(seen.fetches).toEqual([])
+})
+
+test('a description that already carries a tag is sent without it and tagged once', ON, async ($, on) => {
+  const { seen } = jevWorld(on)
+  await $.agent.spawn(spawnInput({ description: 'audit auth · sonnet/low' }))
+
+  expect(JSON.parse(seen.fetches[0]?.body ?? '{}').state.agent.description).toBe('audit auth')
+  expect(seen.spawned[0]?.description).toBe('audit auth · opus/high')
+})
+
+test('the decision log hashes the description as the call gave it, not the tagged one', ON, async ($, on) => {
+  const { seen } = jevWorld(on)
+  await $.agent.spawn(spawnInput())
+
+  expect(JSON.parse(seen.writes[0]?.text ?? '{}').descriptionHash).toBe(fnv1a('audit auth'))
+})
+
+test('an agent the list shows without the tag does not take the routed effort', ON, async ($, on) => {
+  let release: () => void = () => {}
+  const held = new Promise<void>(resolve => { release = resolve })
+  const { seen } = jevWorld(on, {
+    reply: async () => ok(answer('sonnet', 0.95, 0.4)),
+    agents: [{ id: 'a9', type: 'crew:developer', description: 'audit auth' }],
+    spawn: async () => { await held; return { model: 'default', agentId: 'a1' } },
+  })
+  const spawned = $.agent.spawn(spawnInput())
+  while (seen.spawned.length === 0) await pause()
+  await step($, 'a9', 'medium')
+  release()
+  await spawned
+
+  expect(seen.steps).toEqual(['medium'])
+})
+
+test('without a key the lead section does not promise Jev', ON, async ($, on) => {
+  jevWorld(on, { env: { TYPESAFE_API_KEY: '' } })
+  on('prompt.compose', () => ({ sections: [{ id: 'intro', text: 'base', scope: 'shared' as const }] }))
+  const text = (await compose($, ['Agent'])).sections.at(-1)?.text ?? ''
+
+  expect(text).toContain('You orchestrate')
+  expect(text).not.toContain('Jev')
+})
+
 test('a decision that matches the defaults rewrites nothing', ON, async ($, on) => {
   const { seen } = jevWorld(on, { reply: async () => ok(answer('sonnet', 0.95, 1.4)) })
   await $.agent.spawn(spawnInput())
@@ -208,7 +328,7 @@ test('a call that names a model, a fork, a workflow agent and non-crew types are
   expect(seen.steps).toEqual(['medium'])
 })
 
-test('with jevRouting off nothing is sent, even with a key', async ($, on) => {
+test('with jevRouting off nothing is sent, even with a key', OFF, async ($, on) => {
   const { seen } = jevWorld(on)
   await $.agent.spawn(spawnInput())
 
@@ -330,7 +450,7 @@ test('a settings read that fails after the key was cached does not cost the reda
   expect(seen.logs.filter(line => line.includes('routing is off'))).toEqual([])
 })
 
-test('two calls alike, one routed and one that Jev failed on, do not swap efforts', ON, async ($, on) => {
+test('two calls alike, one routed and one that Jev failed on, are told apart by the tag', ON, async ($, on) => {
   let held = true
   let release: () => void = () => {}
   const gate = new Promise<void>(resolve => { release = resolve })
@@ -339,7 +459,8 @@ test('two calls alike, one routed and one that Jev failed on, do not swap effort
   const { seen } = jevWorld(on, {
     reply: async () => (fetched++ === 0 ? ok(answer('sonnet', 0.95, 0.4)) : { status: 400, ok: false, headers: {}, text: '{}' }),
     agents: [
-      { id: 'a1', type: 'crew:developer', description: 'fix tests' },
+      // The host lists each with the description it was spawned with: the routed one carries the tag.
+      { id: 'a1', type: 'crew:developer', description: 'fix tests · sonnet/low' },
       { id: 'a2', type: 'crew:developer', description: 'fix tests' },
     ],
     spawn: async () => {
@@ -363,10 +484,9 @@ test('two calls alike, one routed and one that Jev failed on, do not swap effort
   await step($, 'a1', 'medium')
   await step($, 'a2', 'medium')
 
-  // Neither takes the effort that was meant for the other.
-  expect(seen.steps).toEqual(['medium', 'medium', 'medium', 'medium'])
-  expect(seen.notices.some(text => text.includes('effort low not applied'))).toBe(true)
-  expect(seen.logs.some(line => line.includes('effort low not applied'))).toBe(true)
+  // The routed one runs on its effort from its first step; the other keeps what the host sends.
+  expect(seen.steps).toEqual(['low', 'medium', 'low', 'medium'])
+  expect(seen.notices.some(text => text.includes('not applied'))).toBe(false)
 })
 
 test('a jevKey that the repository declares is ignored, and the log says why', { options: { jevRouting: true, jevKey: KEY } }, async ($, on) => {
@@ -466,7 +586,7 @@ test('a step that arrives before the spawn resolves still gets the effort', ON, 
   const held = new Promise<void>(resolve => { release = resolve })
   const { seen } = jevWorld(on, {
     reply: async () => ok(answer('sonnet', 0.95, 0.4)),
-    agents: [{ id: 'a1', type: 'crew:developer', description: 'audit auth' }],
+    agents: [{ id: 'a1', type: 'crew:developer', description: 'audit auth · sonnet/low' }],
     spawn: async () => { await held; return { model: 'default', agentId: 'a1' } },
   })
 
@@ -535,7 +655,7 @@ test('a Jev failure leaves the effort of the step as the host sent it, whatever 
   expect(seen.notices).toEqual([])
 })
 
-test('the main loop and an agent that was not routed step untouched, and routing off leaves steps alone', async ($, on) => {
+test('the main loop and an agent that was not routed step untouched, and routing off leaves steps alone', OFF, async ($, on) => {
   const { seen } = jevWorld(on, { agents: [{ id: 'a1', type: 'crew:developer', description: 'audit auth' }] })
   await step($, 'a1', 'medium')
   await step($, undefined, 'high')
@@ -809,7 +929,7 @@ test('the effort entry exists before the spawn continues, and its bind is in the
   const timeline: string[] = []
   const { seen } = jevWorld(traced(on, timeline), {
     reply: async () => ok(answer('sonnet', 0.95, 0.4)),
-    agents: [{ id: 'a1', type: 'crew:developer', description: 'audit auth' }],
+    agents: [{ id: 'a1', type: 'crew:developer', description: 'audit auth · sonnet/low' }],
     spawn: async () => {
       // The subagent steps while the spawn is still in flight: only an entry added before it can answer.
       await step($, 'a1', 'medium')

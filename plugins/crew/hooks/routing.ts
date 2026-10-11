@@ -112,6 +112,18 @@ export function noticeText(spec: Specialist, routed: Routed, notApplied: Effort 
   return `crew:${spec.name} -> ${routed.decision.model} · ${effort}`
 }
 
+const TAG = / · (?:haiku|sonnet|opus)\/(?:low|medium|high)$/
+
+/** The description without a trailing tag of `taggedDescription`. */
+export function untagged(description: string): string {
+  return description.replace(TAG, '')
+}
+
+/** The call's description with the model and effort Jev chose, as the task list shows it: `audit auth · opus/high`. */
+export function taggedDescription(description: string, routed: Routed): string {
+  return `${description} · ${routed.decision.model}/${routed.decision.effort}`
+}
+
 /** One line for the notice and the debug log; the prompt never appears in it. */
 export function describe(spec: Specialist, routed: Routed, applied: { model?: Model; effort?: Effort }): string {
   const { decision, jevModel, ms } = routed

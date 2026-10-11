@@ -1,5 +1,5 @@
 import type { Hook, Register } from 'claude-code'
-import { SPECIALISTS } from './agents'
+import { SPECIALISTS, leadSection } from './agents'
 import type { Effort, Specialist } from './agents'
 import { decisionRecord, saveDecision } from './decisions'
 import type { DecisionIo } from './decisions'
@@ -11,7 +11,7 @@ import type { Breaker, Gate, JevIo } from './jev'
 import { declaresOption, resolveKey } from './key'
 import type { KeyIo } from './key'
 import { JEV_MODEL } from './questions'
-import { describe, moved, noticeText, route, routable } from './routing'
+import { describe, moved, noticeText, route, routable, taggedDescription, untagged } from './routing'
 import type { Moved, Routed } from './routing'
 
 /** The `$` a hook receives; it cannot be stored, so every hook builds what it needs from its own. */
@@ -208,16 +208,20 @@ async function routeSpawn(routing: Routing, $: Dollar, e: SpawnHook[1], next: Sp
   const key = await keyOf($, routing.access, routing.jevKey)
   if (!key) return next(e)
 
+  // A description that already carries a tag (a call copied from the task list) is sent and tagged without it.
+  e = { ...e, description: untagged(e.description) }
   const routed = await askJev($, routing, key, spec, e)
   const change = moved(spec, routed)
+  // The task shows what Jev chose, so the task list says whether routing runs; the book matches the shown description.
+  const description = routed ? taggedDescription(e.description, routed) : e.description
 
   // An entry for every routable call, with the default effort when nothing changes: two calls alike then stay on
   // their defaults rather than trade the effort of the one that Jev moved. Added before the spawn continues, as the
   // subagent can step before this hook sees its id.
-  const token = routing.book.add(e.subagentType, e.description, change.effort ?? spec.effort, e.parentAgentId, change.effort !== undefined)
+  const token = routing.book.add(e.subagentType, description, change.effort ?? spec.effort, e.parentAgentId, change.effort !== undefined)
   let result: Awaited<ReturnType<SpawnHook[2]>>
   try {
-    result = await next(change.model ? { ...e, model: change.model } : e)
+    result = await next({ ...e, description, ...(change.model ? { model: change.model } : {}) })
   } catch (error) {
     routing.book.drop(token)
     throw error
@@ -266,6 +270,14 @@ export const register: Register = (on, options) => {
   }
 
   on('session.start', registerSpecialists)
+  // Only a request that offers the Agent tool gets the lead's section: the crew agents' tool lists leave it out.
+  // A teammate renders the lead's prompt too, and `bare` asks for the engine's one section alone.
+  on('prompt.compose', async ($, e, next) => {
+    const composed = await next(e)
+    if (!e.tools.includes('Agent') || e.traits.includes('teammate') || e.traits.includes('bare')) return composed
+    const jev = routing.enabled && (await keyOf($, routing.access, routing.jevKey)) !== undefined
+    return { sections: [...composed.sections, { id: 'crew:lead', text: leadSection(jev), scope: 'session' as const }] }
+  }).catch((_, e, next) => next(e))
   on('agent.spawn', ($, e, next) => routeSpawn(routing, $, e, next)).catch((_, e, next) => next(e))
   // Runs on every request of every loop: the main loop and agents that were not routed return at once. A streaming
   // hook is written inline as an async generator: the engine reads no other form.
