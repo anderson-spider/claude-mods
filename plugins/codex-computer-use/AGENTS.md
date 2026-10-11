@@ -11,6 +11,7 @@ The helper is the MCP client of Codex's `cua_repl` server and answers its app-ap
 
 ## Helper (`helper/lib/`)
 
+- `helper.mjs` (in `helper/`): the entry point the LaunchAgent runs; serves the plugin over the Unix socket.
 - `hub.mjs`: sessions, ownership, approvals flow.
 - `approvals.mjs`: policy.
 - `codex-approvals.mjs`: Codex's saved list.

@@ -17,4 +17,4 @@ Holds a commit or push on a protected branch until the person proceeds or cancel
 
 ## Tests
 
-IMPORTANT: the test fake host (`answer`) responds by executable and subcommand. A new git command the plugin measures needs an answer there.
+IMPORTANT: the test fake host (`answer`, in `tests/helpers.ts`) responds by executable and subcommand. A new git command the plugin measures needs an answer there.
