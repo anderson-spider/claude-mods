@@ -13,9 +13,9 @@ test('a run matches when the model id is of the planned family and the effort is
 })
 
 test('the line confirms, or names what ran and the tag it missed', () => {
-  expect(confirmText('audit auth', planned, { model: 'claude-opus-5-5', effort: 'high' })).toBe('crew jev: audit auth: confirmed claude-opus-5-5 · high')
+  expect(confirmText('audit auth', planned, { model: 'claude-opus-5-5', effort: 'high' })).toBe('jev: audit auth: confirmed claude-opus-5-5 · high')
   expect(confirmText('audit auth', planned, { model: 'claude-opus-5-5', effort: undefined })).toBe(
-    'crew jev: audit auth: ran claude-opus-5-5 · no effort, not opus/high',
+    'jev: audit auth: ran claude-opus-5-5 · no effort, not opus/high',
   )
 })
 

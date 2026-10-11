@@ -28,8 +28,8 @@ export function ranAsPlanned(planned: Planned, ran: Ran): boolean {
 export function confirmText(description: string, planned: Planned, ran: Ran): string {
   const what = `${ran.model} · ${ran.effort ?? 'no effort'}`
   return ranAsPlanned(planned, ran)
-    ? `crew jev: ${description}: confirmed ${what}`
-    : `crew jev: ${description}: ran ${what}, not ${planned.model}/${planned.effort}`
+    ? `jev: ${description}: confirmed ${what}`
+    : `jev: ${description}: ran ${what}, not ${planned.model}/${planned.effort}`
 }
 
 export function createConfirmations() {

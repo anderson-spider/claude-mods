@@ -224,7 +224,7 @@ test('the first step after the spawn confirms the tag in the transcript and in t
   await step($, 'a1', 'medium')
   await step($, 'a1', 'medium')
 
-  expect(seen.transcript).toEqual(['crew jev: audit auth: confirmed claude-opus-5-5 · high'])
+  expect(seen.transcript).toEqual(['jev: audit auth: confirmed claude-opus-5-5 · high'])
   expect(seen.writes.length).toBe(2)
   expect(seen.writes[1]?.path).toBe(seen.writes[0]?.path)
   expect(JSON.parse(seen.writes[1]?.text ?? '{}').ran).toEqual({ model: 'claude-opus-5-5', effort: 'high' })
@@ -236,7 +236,7 @@ test('a run that differs from the tag says what ran instead', ON, async ($, on) 
   await $.agent.spawn(spawnInput())
   await step($, 'a1', 'medium')
 
-  expect(seen.transcript).toEqual(['crew jev: audit auth: ran claude-sonnet-5-5 · high, not opus/high'])
+  expect(seen.transcript).toEqual(['jev: audit auth: ran claude-sonnet-5-5 · high, not opus/high'])
 })
 
 test('a step the API did not answer confirms nothing and leaves the check for the next', ON, async ($, on) => {
@@ -248,7 +248,7 @@ test('a step the API did not answer confirms nothing and leaves the check for th
 
   answered = 'claude-opus-5-5[1m]'
   await step($, 'a1', 'medium')
-  expect(seen.transcript).toEqual(['crew jev: audit auth: confirmed claude-opus-5-5[1m] · high'])
+  expect(seen.transcript).toEqual(['jev: audit auth: confirmed claude-opus-5-5[1m] · high'])
   expect(JSON.parse(seen.writes.at(-1)?.text ?? '{}').ran).toEqual({ model: 'claude-opus-5-5[1m]', effort: 'high' })
 })
 
