@@ -650,3 +650,328 @@ test('a write that settles first leaves no slow line and no timer behind', ON, a
   expect(seen.writes).toHaveLength(1)
   expect(seen.logs.some(line => line.includes('decision write slow'))).toBe(false)
 })
+
+// --- Characterization: what the entry module does today, pinned so a refactor of it changes none of it ---
+
+/** Wraps `on` so the host calls that matter are recorded in the order they reach the host. */
+function traced(on: On, timeline: string[]): On {
+  const mark: Record<string, (e: Record<string, unknown>) => string> = {
+    'http.fetch': () => 'fetch',
+    'agent.spawn': () => 'spawn',
+    'fs.write': () => 'write',
+    'ui.notice': e => `notice ${String(e.text)}`,
+    'ui.log': e => `log ${String(e.text)}`,
+  }
+  const record = (event: string, hook: (host: unknown, e: Record<string, unknown>) => unknown) =>
+    (host: unknown, e: Record<string, unknown>) => {
+      timeline.push(mark[event]?.(e) ?? event)
+      return hook(host, e)
+    }
+  return ((event: string, ...rest: unknown[]) => {
+    const hook = rest[rest.length - 1]
+    if (event in mark && typeof hook === 'function') {
+      rest[rest.length - 1] = record(event, hook as (host: unknown, e: Record<string, unknown>) => unknown)
+    }
+    return (on as unknown as (...args: unknown[]) => unknown)(event, ...rest)
+  }) as unknown as On
+}
+
+/** The timeline with the measured duration of a debug line made constant. */
+const shape = (timeline: string[]) => timeline.map(entry => entry.replace(/ \d+ms$/, ' Nms'))
+
+const rejected = (status: number): Reply => ({ status, ok: false, headers: {}, text: `HTTP ${status}` })
+const notRouted = (seen: Seen) => seen.logs.filter(line => line.includes('not routed'))
+
+// The debug line of a call that Jev failed on: the reason, and the status when the failure has one. Nothing else of
+// the failure (message, body, key) reaches it, and the call goes on as it came.
+
+test('an error status is logged as its reason and status, and the call goes on untouched', ON, async ($, on) => {
+  const { seen } = jevWorld(on, { reply: async () => rejected(401) })
+  const result = await $.agent.spawn(spawnInput())
+
+  expect(notRouted(seen)).toEqual(['crew jev: crew:developer not routed (http 401)'])
+  expect(seen.fetches).toHaveLength(1)
+  expect(result).toMatchObject({ model: 'default', agentId: 'a1' })
+  expect(seen.spawned[0]?.model).toBeUndefined()
+  expect(seen.notices).toEqual([])
+  expect(seen.writes).toEqual([])
+})
+
+test('a status that is retried is logged after its one retry, with the status of the last attempt', ON, async ($, on) => {
+  const { seen, clock } = jevWorld(on, { reply: async () => rejected(503) })
+  const spawned = $.agent.spawn(spawnInput())
+  while (seen.fetches.length === 0) await pause()
+  await clock.advance(300)
+  await spawned
+
+  expect(seen.fetches).toHaveLength(2)
+  expect(notRouted(seen)).toEqual(['crew jev: crew:developer not routed (http 503)'])
+})
+
+test('a malformed body is logged by its reason alone, with no status', ON, async ($, on) => {
+  const { seen } = jevWorld(on, { reply: async () => ok('<html>') })
+  await $.agent.spawn(spawnInput())
+
+  expect(notRouted(seen)).toEqual(['crew jev: crew:developer not routed (malformed)'])
+  expect(seen.fetches).toHaveLength(1)
+})
+
+test('a deadline that passes is logged as timeout, with no status', ON, async ($, on) => {
+  const { seen, clock } = jevWorld(on, { reply: () => new Promise<Reply>(() => {}) })
+  const spawned = $.agent.spawn(spawnInput())
+  await clock.settle()
+  await pause()
+  await clock.advance(3_000)
+  await spawned
+
+  expect(notRouted(seen)).toEqual(['crew jev: crew:developer not routed (timeout)'])
+})
+
+test('a connection that keeps dropping is logged as network, with no status, after its one retry', ON, async ($, on) => {
+  const { seen, clock } = jevWorld(on, { reply: async () => { throw new Error(`connection reset, Bearer ${KEY}`) } })
+  const spawned = $.agent.spawn(spawnInput())
+  while (seen.fetches.length === 0) await pause()
+  await clock.advance(300)
+  await spawned
+
+  expect(seen.fetches).toHaveLength(2)
+  expect(notRouted(seen)).toEqual(['crew jev: crew:developer not routed (network)'])
+  expect(JSON.stringify(seen.logs)).not.toContain(KEY)
+})
+
+test('a key with whitespace is logged as config and nothing is sent', ON, async ($, on) => {
+  const { seen } = jevWorld(on, { env: { TYPESAFE_API_KEY: 'two words' } })
+  await $.agent.spawn(spawnInput())
+
+  expect(notRouted(seen)).toEqual(['crew jev: crew:developer not routed (config)'])
+  expect(seen.fetches).toEqual([])
+  expect(seen.spawned[0]?.model).toBeUndefined()
+})
+
+test('a fifth concurrent call is logged as busy at once, and the four in flight as timeout later', ON, async ($, on) => {
+  const { seen, clock } = jevWorld(on, { reply: () => new Promise<Reply>(() => {}) })
+  const first = Array.from({ length: 4 }, () => $.agent.spawn(spawnInput()))
+  await clock.settle()
+  await pause()
+  await $.agent.spawn(spawnInput())
+
+  expect(notRouted(seen)).toEqual(['crew jev: crew:developer not routed (busy)'])
+  expect(seen.fetches).toHaveLength(4)
+
+  await clock.advance(3_000)
+  await Promise.all(first)
+  expect(notRouted(seen)).toEqual([
+    'crew jev: crew:developer not routed (busy)',
+    ...Array.from({ length: 4 }, () => 'crew jev: crew:developer not routed (timeout)'),
+  ])
+})
+
+test('once three calls failed, the fourth is logged as breaker and sends no request', ON, async ($, on) => {
+  const { seen } = jevWorld(on, { reply: async () => rejected(401) })
+  for (let i = 0; i < 4; i++) await $.agent.spawn(spawnInput())
+
+  expect(seen.fetches).toHaveLength(3)
+  expect(notRouted(seen)).toEqual([
+    ...Array.from({ length: 3 }, () => 'crew jev: crew:developer not routed (http 401)'),
+    'crew jev: crew:developer not routed (breaker)',
+  ])
+  expect(seen.spawned.map(s => s.model)).toEqual([undefined, undefined, undefined, undefined])
+})
+
+test('the failure line names the agent of the call', ON, async ($, on) => {
+  const { seen } = jevWorld(on, { reply: async () => rejected(401) })
+  await $.agent.spawn(spawnInput({ subagentType: 'crew:architect' }))
+
+  expect(notRouted(seen)).toEqual(['crew jev: crew:architect not routed (http 401)'])
+})
+
+// The order inside the spawn: the effort book's entry before the spawn continues, then the record (with the book's
+// answer) and its write, the debug lines and the notice, and last the wait for the write.
+
+test('a routed spawn runs in order: request, spawn, decision write, debug line, notice', ON, async ($, on) => {
+  const timeline: string[] = []
+  const { seen } = jevWorld(traced(on, timeline), { reply: async () => ok(answer('opus', 0.9, 3.9)) })
+  await $.agent.spawn(spawnInput())
+
+  expect(shape(timeline)).toEqual([
+    'fetch',
+    'spawn',
+    'write',
+    'log crew jev: crew:developer tier=opus@0.90 depth=3.90 model=opus effort=high jev=jev-1.13.0 Nms',
+    'notice crew:developer -> opus · high (jev)',
+  ])
+  expect(seen.notices).toEqual(['crew:developer -> opus · high (jev)'])
+  // Nothing stepped, so the bind that the record carries is the plain one.
+  expect(record(seen)).toMatchObject({ bind: 'applied', effortPlanned: 'high', effortApplied: 'high' })
+})
+
+test('the effort entry exists before the spawn continues, and its bind is in the record that is written after', ON, async ($, on) => {
+  const timeline: string[] = []
+  const { seen } = jevWorld(traced(on, timeline), {
+    reply: async () => ok(answer('sonnet', 0.95, 0.4)),
+    agents: [{ id: 'a1', type: 'crew:developer', description: 'audit auth' }],
+    spawn: async () => {
+      // The subagent steps while the spawn is still in flight: only an entry added before it can answer.
+      await step($, 'a1', 'medium')
+      timeline.push(`step ${seen.steps.at(-1)}`)
+      return { model: 'default', agentId: 'a1' }
+    },
+  })
+  await $.agent.spawn(spawnInput())
+
+  expect(shape(timeline)).toEqual([
+    'fetch',
+    'spawn',
+    'step low',
+    'write',
+    'log crew jev: crew:developer tier=sonnet@0.95 depth=0.40 model=sonnet (default) effort=low jev=jev-1.13.0 Nms',
+    'notice crew:developer -> sonnet · low (jev)',
+  ])
+  expect(record(seen)).toMatchObject({ bind: 'matched', effortPlanned: 'low', effortApplied: 'low' })
+})
+
+test('an effort that did not take is announced after the decision write, line by line, and the record says what runs', ON, async ($, on) => {
+  const timeline: string[] = []
+  const { seen } = jevWorld(traced(on, timeline), {
+    reply: async () => ok(answer('sonnet', 0.95, 3.9)),
+    spawn: async () => {
+      // Not listed, so the first step runs on the default and the entry cannot take.
+      await step($, 'a1', 'medium')
+      timeline.push(`step ${seen.steps.at(-1)}`)
+      return { model: 'default', agentId: 'a1' }
+    },
+  })
+  await $.agent.spawn(spawnInput())
+
+  expect(shape(timeline)).toEqual([
+    'fetch',
+    'spawn',
+    'step medium',
+    'write',
+    'log crew jev: crew:developer tier=sonnet@0.95 depth=3.90 model=sonnet (default) effort=medium (default) jev=jev-1.13.0 Nms',
+    'log crew jev: crew:developer effort high not applied (stepped); it runs on medium',
+    'notice crew:developer -> sonnet · medium (jev; effort high not applied)',
+  ])
+  expect(record(seen)).toMatchObject({ bind: 'stepped', effortPlanned: 'high', effortApplied: 'medium' })
+})
+
+test('the result waits for the decision write for one second after the notice, and not longer', ON, async ($, on) => {
+  const timeline: string[] = []
+  const { clock } = jevWorld(traced(on, timeline), { writeHang: true })
+  let resolved = false
+  const spawned = $.agent.spawn(spawnInput()).then(result => { resolved = true; return result })
+  await clock.settle()
+  await pause()
+
+  // The notice is out and the spawn is still held on the write.
+  expect(shape(timeline)).toEqual([
+    'fetch',
+    'spawn',
+    'write',
+    'log crew jev: crew:developer tier=opus@0.90 depth=3.90 model=opus effort=high jev=jev-1.13.0 Nms',
+    'notice crew:developer -> opus · high (jev)',
+  ])
+  expect(resolved).toBe(false)
+  await clock.advance(999)
+  expect(resolved).toBe(false)
+
+  await clock.advance(1)
+  expect(await spawned).toMatchObject({ model: 'opus', agentId: 'a1' })
+  expect(timeline.at(-1)).toBe('log crew jev: decision write slow')
+})
+
+test('a call that Jev failed on logs before the spawn and announces and writes nothing', ON, async ($, on) => {
+  const timeline: string[] = []
+  const { seen } = jevWorld(traced(on, timeline), { reply: async () => rejected(401) })
+  await $.agent.spawn(spawnInput())
+
+  expect(timeline).toEqual(['fetch', 'log crew jev: crew:developer not routed (http 401)', 'spawn'])
+  expect(seen.writes).toEqual([])
+})
+
+test('a refused spawn that was routed logs, announces and writes nothing', ON, async ($, on) => {
+  const timeline: string[] = []
+  const { seen } = jevWorld(traced(on, timeline), {
+    reply: async () => ok(answer('opus', 0.9, 3.9)),
+    spawn: async () => ({ deny: 'spawn refused' }) as never,
+  })
+  await $.agent.spawn(spawnInput())
+
+  expect(timeline).toEqual(['fetch', 'spawn'])
+  expect(seen.writes).toEqual([])
+})
+
+// The write guard through the host, for both tools: a subagent is held by its type's rule, the main loop never.
+
+for (const tool of ['Write', 'Edit'] as const) {
+  const reads = { count: 0 }
+  const guardHost = (on: On) => {
+    reads.count = 0
+    on('agent.list', () => (reads.count++, { value: agents }) as never)
+    on('tool.call', () => ({ result: 'written' }))
+  }
+  const call = ($: Engine, agentId: string | undefined, file_path?: string) =>
+    $.tool.call({ tool, ...(agentId ? { agentId } : {}), ...(file_path === undefined ? {} : { file_path }) } as never)
+
+  test(`${tool}: the architect is held to Markdown under .crew, with the reason and the path`, async ($, on) => {
+    guardHost(on)
+
+    expect(await call($, 'a1', 'src/app.ts')).toEqual({
+      deny: 'the architect writes plan and review documents under .crew/ (.md) only, not src/app.ts; hand the finding to the developer',
+    })
+    expect(await call($, 'a1', '.crew/plans/plan.md')).toEqual({ result: 'written' })
+    expect(await call($, 'a1', '.crew/app.ts')).toHaveProperty('deny')
+    // A call without a path is read as an empty path.
+    expect(await call($, 'a1')).toEqual({
+      deny: 'the architect writes plan and review documents under .crew/ (.md) only, not ; hand the finding to the developer',
+    })
+  })
+
+  test(`${tool}: the tester is held to test files, with the reason and the path`, async ($, on) => {
+    guardHost(on)
+
+    expect(await call($, 't1', 'src/app.ts')).toEqual({
+      deny: 'the tester writes test files only, not src/app.ts; hand the failure back with the evidence',
+    })
+    expect(await call($, 't1', 'tests/app.test.ts')).toEqual({ result: 'written' })
+  })
+
+  test(`${tool}: other agents, ids the list does not name and the main loop pass; the main loop never reads the list`, async ($, on) => {
+    guardHost(on)
+
+    expect(await call($, 'd1', 'src/app.ts')).toEqual({ result: 'written' })
+    expect(await call($, 'ghost', 'src/app.ts')).toEqual({ result: 'written' })
+    expect(reads.count).toBe(2)
+
+    expect(await call($, undefined, 'src/app.ts')).toEqual({ result: 'written' })
+    expect(reads.count).toBe(2)
+  })
+
+  test(`${tool}: a subagent whose check fails is held with one reason, and the main loop is not`, async ($, on) => {
+    on('agent.list', () => ({ deny: 'list unavailable' }) as never)
+    on('tool.call', () => ({ result: 'written' }))
+
+    expect(await call($, 'a1', 'src/app.ts')).toEqual({ deny: 'crew could not check this write, so it was not made' })
+    expect(await call($, 'd1', '.crew/plans/plan.md')).toEqual({ deny: 'crew could not check this write, so it was not made' })
+    expect(await call($, undefined, 'src/app.ts')).toEqual({ result: 'written' })
+  })
+
+  test(`${tool}: a failure below a passed write reaches the caller as it came, never as the guard's deny`, async ($, on) => {
+    on('agent.list', () => ({ value: agents }) as never)
+    on('tool.call', () => { throw new Error('disk full') })
+
+    // The hook below failed, so the host has no answer for the call: the guard does not answer in its place.
+    await expect(call($, 'd1', 'src/app.ts')).rejects.toThrow()
+    await expect(call($, undefined, 'src/app.ts')).rejects.toThrow()
+  })
+}
+
+test('the guard answers only Write and Edit: another tool of a subagent passes without reading the list', async ($, on) => {
+  let reads = 0
+  on('agent.list', () => (reads++, { value: agents }) as never)
+  on('tool.call', () => ({ result: 'ran' }))
+
+  expect(await $.tool.call({ tool: 'Bash', agentId: 'a1', command: 'ls' } as never)).toEqual({ result: 'ran' })
+  expect(await $.tool.call({ tool: 'Read', agentId: 'a1', file_path: 'src/app.ts' } as never)).toEqual({ result: 'ran' })
+  expect(reads).toBe(0)
+})
