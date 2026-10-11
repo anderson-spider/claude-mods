@@ -54,7 +54,7 @@ What the pane shows is a claim; confirm it where the plugin leaves a record:
 - the plugin's own records, as its AGENTS.md describes them (for crew, `~/.claude/crew/decisions/*.json`, newest last by name);
 - for hooks that log only to debug, start the session with `-- --plugin-dir plugins/<name> --debug-file <scratchpad>/<name>.log` and read that file.
 
-Compare each observation with the documented behavior in the plugin's README and AGENTS.md. A difference is a finding even when the plugin "works".
+Compare each observation with the documented behavior in the root README and the plugin's AGENTS.md. A difference is a finding even when the plugin "works".
 
 ## 4. After
 
