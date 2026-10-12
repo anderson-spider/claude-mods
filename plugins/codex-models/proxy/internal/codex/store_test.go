@@ -522,3 +522,110 @@ func mustGetwd(t *testing.T) string {
 	}
 	return wd
 }
+
+// expiredOwnLogin writes an expired own login and returns a store over it
+// whose token endpoint answers status with body.
+func expiredOwnLogin(t *testing.T, status int, body string) (*Store, *atomic.Int32) {
+	t.Helper()
+	t.Setenv("CODEX_HOME", t.TempDir())
+	calls := &atomic.Int32{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(server.Close)
+	dir := t.TempDir()
+	writeNative(t, filepath.Join(dir, "codex.json"),
+		Token{AccessToken: "stale", RefreshToken: "rt-1", ExpiresAt: time.Now().Add(-time.Minute)}, 0o600)
+	return NewStore(&Client{HTTP: &http.Client{Transport: rewriteTo(server.URL)}}, StoreOptions{Dir: dir}), calls
+}
+
+// A refresh the token endpoint refuses is a lost login: ErrLoginExpired,
+// naming the fix, with the status and OAuth code but never the body.
+func TestRejectedRefreshIsLoginExpired(t *testing.T) {
+	for _, tc := range []struct {
+		status int
+		body   string
+		code   string
+	}{
+		{http.StatusBadRequest, `{"error":"invalid_grant","error_description":"echo rt-1 SECRET"}`, "invalid_grant"},
+		{http.StatusBadRequest, `{"error":"refresh_token_reused","error_description":"SECRET"}`, "refresh_token_reused"},
+		{http.StatusUnauthorized, `{"error":"invalid_client"}`, "invalid_client"},
+		{http.StatusForbidden, `SECRET plain text`, ""},
+		// Not a short token: the code is dropped rather than echoed.
+		{http.StatusBadRequest, `{"error":"SECRET with spaces, which no OAuth code has"}`, ""},
+		{http.StatusBadRequest, `{"error":{"message":"SECRET"}}`, ""},
+	} {
+		t.Run(fmt.Sprintf("%d %s", tc.status, tc.code), func(t *testing.T) {
+			store, calls := expiredOwnLogin(t, tc.status, tc.body)
+			_, _, err := store.Access(context.Background())
+			if !errors.Is(err, ErrLoginExpired) {
+				t.Fatalf("Access = %v, want ErrLoginExpired", err)
+			}
+			var tokenErr *TokenError
+			if !errors.As(err, &tokenErr) || tokenErr.StatusCode != tc.status || tokenErr.Code != tc.code {
+				t.Fatalf("TokenError = %+v, want status %d code %q", tokenErr, tc.status, tc.code)
+			}
+			message := err.Error()
+			for _, want := range []string{"`ccmproxy login codex`", fmt.Sprint(tc.status), tc.code} {
+				if !strings.Contains(message, want) {
+					t.Fatalf("error %q does not name %q", message, want)
+				}
+			}
+			if strings.Contains(message, "SECRET") || strings.Contains(message, "rt-1") {
+				t.Fatalf("error %q repeats the response body", message)
+			}
+			if calls.Load() != 1 {
+				t.Fatalf("token endpoint called %d times", calls.Load())
+			}
+		})
+	}
+}
+
+// A failure that may pass (a 5xx, a 429, the network) is not a lost login.
+func TestTransientRefreshFailureIsNotLoginExpired(t *testing.T) {
+	for _, status := range []int{http.StatusInternalServerError, http.StatusBadGateway, http.StatusTooManyRequests} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			store, _ := expiredOwnLogin(t, status, `{"error":"server_error","error_description":"SECRET"}`)
+			_, _, err := store.Access(context.Background())
+			if err == nil || errors.Is(err, ErrLoginExpired) {
+				t.Fatalf("Access = %v, want a transient error, not ErrLoginExpired", err)
+			}
+			var tokenErr *TokenError
+			if !errors.As(err, &tokenErr) || tokenErr.StatusCode != status {
+				t.Fatalf("TokenError = %+v, want status %d", tokenErr, status)
+			}
+			if strings.Contains(err.Error(), "SECRET") {
+				t.Fatalf("error %q repeats the response body", err)
+			}
+		})
+	}
+
+	t.Run("network", func(t *testing.T) {
+		t.Setenv("CODEX_HOME", t.TempDir())
+		server := httptest.NewServer(http.NotFoundHandler())
+		base := server.URL
+		server.Close()
+		dir := t.TempDir()
+		writeNative(t, filepath.Join(dir, "codex.json"),
+			Token{AccessToken: "stale", RefreshToken: "rt-1", ExpiresAt: time.Now().Add(-time.Minute)}, 0o600)
+		store := NewStore(&Client{HTTP: &http.Client{Transport: rewriteTo(base)}}, StoreOptions{Dir: dir})
+		_, _, err := store.Access(context.Background())
+		if err == nil || errors.Is(err, ErrLoginExpired) {
+			t.Fatalf("Access = %v, want a network error, not ErrLoginExpired", err)
+		}
+	})
+}
+
+// A rejected refresh with the current token still valid keeps serving it.
+func TestRejectedRefreshKeepsAStillValidToken(t *testing.T) {
+	store, _ := expiredOwnLogin(t, http.StatusBadRequest, `{"error":"invalid_grant"}`)
+	if err := store.Save(&Token{AccessToken: "still-valid", RefreshToken: "rt-1", ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if access, _, err := store.Access(context.Background()); err != nil || access != "still-valid" {
+		t.Fatalf("Access = %q, %v; want the still-valid token", access, err)
+	}
+}
