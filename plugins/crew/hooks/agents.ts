@@ -218,7 +218,7 @@ export function nativeCodexSpecs(models: Readonly<Partial<Record<string, string>
 export function nativeCodexSection(specs: readonly Pick<Agent<string>, 'name' | 'model'>[], withTool: boolean): string {
   return [
     `Some roles also run on OpenAI Codex models as native subagents: ${specs.map(spec => `crew:${spec.name} (${spec.model})`).join(', ')}.`,
-    'They are ordinary Agent calls with the base role\'s tools and write lane, in the foreground or the background.',
+    'They are ordinary Agent calls with the base role\'s tools and write lane, in the foreground or the background; never pass `model` to one, as it would override the Codex model.',
     'Pick one when the user asks for Codex or when a second model family should do or check the work; otherwise use the Claude role.',
     'A -codex agent counts as someone other than the implementer when a Claude agent built the change (and the reverse),',
     'and a failure goes back to the same -codex agent.',

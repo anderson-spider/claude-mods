@@ -143,6 +143,7 @@ test('nativeCodexSection lists every twin with its model, is stable, and compare
   expect(text).toContain('crew:architect-codex (gpt-b)')
   expect(text).not.toContain('crew:tester-codex')
   expect(text).not.toContain('mcp__crew__codex')
+  expect(text).toContain('never pass `model`')
   expect(nativeCodexSection(specs, true)).toContain('mcp__crew__codex')
   expect(nativeCodexSection(specs, true)).toContain(text.slice(0, 40))
   expect(nativeCodexSection(specs, false)).toBe(text)

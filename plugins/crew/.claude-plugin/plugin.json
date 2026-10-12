@@ -28,7 +28,7 @@
     "nativeCodex": {
       "type": "string",
       "title": "Native Codex models per role",
-      "description": "Registers a crew:<role>-codex subagent type for each role=model pair, e.g. developer=gpt-x,tester=gpt-y, running on that model with the role's prompt, tools and write lane. The model is reached through a local proxy at ANTHROPIC_BASE_URL, so the types are registered only when that URL is an http URL on a loopback address (127.0.0.0/8, ::1 or localhost); with any other base URL, or none, nothing is registered. What those subagents read and write is sent to OpenAI through the proxy. Jev routing leaves them alone. Empty by default.",
+      "description": "Registers a crew:<role>-codex subagent type for each role=model pair, e.g. developer=gpt-x,tester=gpt-y, running on that model with the role's prompt, tools and write lane. The model is reached through a local proxy at ANTHROPIC_BASE_URL, so the types are registered only when that URL is an http URL on a loopback address (127.0.0.0/8, ::1 or localhost); with any other base URL, or none, nothing is registered. What those subagents read and write is sent to OpenAI through the proxy. With a jevKey, Jev sizes their effort (never the model) from the redacted prompt, as for the other roles. Empty by default.",
       "default": ""
     },
     "architectPattern": {

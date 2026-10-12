@@ -501,7 +501,13 @@ export const register: Register = (on, options) => {
     const twins = { id: 'crew:native-codex', text: nativeCodexSection(native.registered, codex !== undefined && offersCodex(e.tools)), scope: 'session' as const }
     return { sections: [...composed.sections, lead, twins] }
   }).catch((_, e, next) => next(e))
-  on('agent.spawn', {}, ($, e, next) => routeSpawn(routing, $, e, next)).catch((_, e, next) => next(e))
+  on('agent.spawn', {}, ($, e, next) => {
+    // A `model` on a twin's call wins over its definition and would run it on Claude with no tag or confirmation.
+    if (e.model && native.registered.some(twin => e.subagentType === `crew:${twin.name}`)) {
+      return { deny: `crew: ${e.subagentType} runs on its own Codex model; call it again without \`model\`` }
+    }
+    return routeSpawn(routing, $, e, next)
+  }).catch((_, e, next) => next(e))
   // Runs on every request of every loop: the main loop and agents that were not routed return at once. A streaming
   // hook is written inline as an async generator: the engine reads no other form.
   on('turn.step', {}, async function* ($, e, next) {

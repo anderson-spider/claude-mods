@@ -1921,6 +1921,20 @@ test('a -codex spawn is routed for its effort: Jev sees the base role, the step 
   expect(JSON.stringify([seen.notices, seen.logs])).not.toContain(KEY)
 })
 
+test('a -codex spawn that passes model is refused, so it cannot run on Claude untagged; without model it is routed, and a base role with model is untouched', NATIVE_AND_JEV, async ($, on) => {
+  const { seen } = await twinWorld($, on, { reply: async () => ok(answer('opus', 0.9, 3.5)) })
+  const refused = await $.agent.spawn(spawnInput({ subagentType: 'crew:developer-codex', model: 'opus' }))
+  expect(refused).toMatchObject({ deny: expect.stringContaining('without `model`') })
+  expect(seen.spawned).toEqual([])
+  expect(seen.fetches).toEqual([])
+
+  await $.agent.spawn(spawnInput({ subagentType: 'crew:developer-codex', tool_use_id: 'tu2' }))
+  expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:developer-codex', description: 'audit auth · gpt-6-astra/high' })
+
+  await $.agent.spawn(spawnInput({ subagentType: 'crew:developer', model: 'opus', tool_use_id: 'tu3' }))
+  expect(seen.spawned[1]).toMatchObject({ subagentType: 'crew:developer', model: 'opus', description: 'audit auth' })
+})
+
 test('a -codex spawn at depth 2.0 keeps medium: tagged, announced, nothing moved', NATIVE_AND_JEV, async ($, on) => {
   const { seen } = await twinWorld($, on, { reply: async () => ok(answer('opus', 0.9, 2.0)) })
   await $.agent.spawn(spawnInput({ subagentType: 'crew:developer-codex' }))
