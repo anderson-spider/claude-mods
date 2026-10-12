@@ -7,7 +7,7 @@ Claude Code **function hooks mods** marketplace. Hooks authoring or debugging: l
 - Hooks: one entry module (`register.tsx`) in `hooks.json`. Keep `on(...)` and `$.noun.method(...)` calls visible to the engine's source analysis: pass `$` only to a top-level function in the same file, never across an import. Subfolder registrars may own their hooks and `$` calls; pure modules take injected host access. Tests mirror modules.
 - Tools: `mcp__<plugin>__<name>` inputs in `types/index.d.ts` must match `inputSchema` for the matchers.
 - Workflow skills: `/release-plugin <plugin>` checks completion; `/live-test <plugin>` verifies real-session behavior; `/ship` ships through an approved merge; `/cleanup` removes merged branches/worktrees after approval. Read the corresponding `.claude/skills/<name>/SKILL.md` when invoked.
-- `.claude/hooks/` protects generated `.claude-plugin/types/` (hand-written `types/index.d.ts` stays editable) and type-checks the plugin owning an edited `.ts`/`.tsx`. Missing typings produce a `mise run plugins:types` reminder without blocking the edit.
+- The project SessionStart hook reuses complete `.claude-plugin/types/` snapshots from the main checkout only when they match the running Claude Code version; partial destinations are left untouched. If no compatible snapshot exists, run `mise run plugins:types`. The cached `claude-code-mcp` declarations reflect the main checkout's last connected tools, not a runtime verification: regenerate after changing MCP integrations. `.claude/hooks/` protects generated typings (hand-written `types/index.d.ts` stays editable) and type-checks the plugin owning an edited `.ts`/`.tsx`. Missing typings produce a reminder without blocking the edit.
 
 ## Plugins
 

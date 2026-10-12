@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/ensure-plugin-types.mjs\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
