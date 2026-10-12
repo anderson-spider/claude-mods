@@ -713,7 +713,7 @@ func TestUsageSemantics(t *testing.T) {
 
 	// More cached than input never goes negative, and no cache fields
 	// appear when there is no caching.
-	in, out, read, write := usage(gjson.Parse(`{"input_tokens":10,"output_tokens":1,"input_tokens_details":{"cached_tokens":20}}`))
+	in, out, read, write := splitUsage(json.RawMessage(`{"input_tokens":10,"output_tokens":1,"input_tokens_details":{"cached_tokens":20}}`))
 	if in != 0 || out != 1 || read != 20 || write != 0 {
 		t.Fatalf("usage = %d %d %d %d", in, out, read, write)
 	}
@@ -759,7 +759,7 @@ func TestNothingFollowsAnError(t *testing.T) {
 }
 
 func TestUsageCacheWritesOnly(t *testing.T) {
-	in, _, read, write := usage(gjson.Parse(`{"input_tokens":1000,"output_tokens":1,"input_tokens_details":{"cache_write_tokens":250}}`))
+	in, _, read, write := splitUsage(json.RawMessage(`{"input_tokens":1000,"output_tokens":1,"input_tokens_details":{"cache_write_tokens":250}}`))
 	if in != 750 || read != 0 || write != 250 {
 		t.Fatalf("usage = %d %d %d, want 750 fresh, 0 read, 250 written", in, read, write)
 	}

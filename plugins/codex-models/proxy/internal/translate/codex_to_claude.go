@@ -1,883 +1,592 @@
 package translate
 
 import (
+	"encoding/json"
 	"strings"
-	"unicode"
-	"unicode/utf8"
-
-	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/logx"
-	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
 )
 
-// summarySeparator joins the reasoning summary parts that make up a single
-// Codex reasoning item into one Claude thinking block.
+// summarySeparator joins the summary parts of one Codex reasoning item, which
+// become one thinking block.
 const summarySeparator = "\n\n"
 
-// callState tracks one streamed function call.
-type callState struct {
-	callID     string
-	name       string
-	blockIndex int
-	arguments  string
-	emitted    int
-	sawDelta   bool
-	done       bool
-	closed     bool
-	started    bool
-	// complete is set only when the upstream says the call finished (its
-	// output_item.done or arguments.done, or a completed terminal response
-	// listing it). A call is emitted only once complete, so a call cut off
-	// by max_output_tokens never reaches the client as a usable tool_use.
-	complete bool
+// codexEvent holds the fields of every Responses stream event the translator
+// reads; each event type uses its own subset.
+type codexEvent struct {
+	Type        text            `json:"type"`
+	Response    codexResponse   `json:"response"`
+	Item        codexItem       `json:"item"`
+	Part        codexPart       `json:"part"`
+	Delta       text            `json:"delta"`
+	Arguments   text            `json:"arguments"`
+	OutputIndex json.RawMessage `json:"output_index"`
+	CallID      text            `json:"call_id"`
+	ItemID      text            `json:"item_id"`
+	Error       json.RawMessage `json:"error"`
+	Code        text            `json:"code"`
+	Message     text            `json:"message"`
 }
 
-// StreamTranslator turns the Codex Responses event stream into the Anthropic
-// Messages SSE stream Claude Code consumes. One instance handles one response
-// and is not safe for concurrent use.
+type codexResponse struct {
+	ID                text            `json:"id"`
+	Model             text            `json:"model"`
+	Output            []codexItem     `json:"output"`
+	Usage             json.RawMessage `json:"usage"`
+	StopReason        text            `json:"stop_reason"`
+	IncompleteDetails struct {
+		Reason text `json:"reason"`
+	} `json:"incomplete_details"`
+	Error codexError `json:"error"`
+}
+
+// codexItem is one output item: a message, a reasoning item or a function
+// call.
+type codexItem struct {
+	Type             text        `json:"type"`
+	ID               text        `json:"id"`
+	CallID           text        `json:"call_id"`
+	Name             text        `json:"name"`
+	Arguments        text        `json:"arguments"`
+	Status           text        `json:"status"`
+	EncryptedContent text        `json:"encrypted_content"`
+	Content          []codexPart `json:"content"`
+	Summary          []codexPart `json:"summary"`
+}
+
+// codexPart is a message content part or a reasoning summary part.
+type codexPart struct {
+	Type text `json:"type"`
+	Text text `json:"text"`
+}
+
+type codexError struct {
+	Type    text `json:"type"`
+	Code    text `json:"code"`
+	Message text `json:"message"`
+}
+
+type codexUsage struct {
+	InputTokens        count `json:"input_tokens"`
+	OutputTokens       count `json:"output_tokens"`
+	InputTokensDetails struct {
+		CachedTokens     count `json:"cached_tokens"`
+		CacheWriteTokens count `json:"cache_write_tokens"`
+	} `json:"input_tokens_details"`
+}
+
+// blockKind says which text or thinking block is open, if any. A tool_use
+// block opens and closes within one step, so it is never left open.
+type blockKind int
+
+const (
+	noBlock blockKind = iota
+	textKind
+	thinkingKind
+)
+
+// StreamTranslator turns one Codex Responses event stream into the Anthropic
+// Messages event stream Claude Code reads. Use one per response, from one
+// goroutine.
+//
+// message_start comes first, whatever the first Codex event is. Content
+// blocks open and close one at a time, with increasing indexes, and
+// the stream ends with message_delta and message_stop, or with an error event
+// after which nothing follows.
 type StreamTranslator struct {
-	// fallbackModel is reported in message_start when the upstream does not
-	// name the model that answered (response.created's response.model).
+	// fallbackModel goes in message_start when the upstream does not name
+	// the model that answered.
 	fallbackModel string
-	// toolNames maps shortened function names back to the client's names.
+	// toolNames maps the function names Codex saw to the client's own.
 	toolNames map[string]string
 
-	blockIndex   int
-	textOpen     bool
-	thinkingOpen bool
-	// thinkingSignature holds the reasoning item's encrypted state until the
-	// block closes, since only output_item.done carries the final value.
-	thinkingSignature string
-	thinkingSeen      bool
+	started bool
+	stopped bool
+	// failed is set once an error event went out.
+	failed bool
 
-	messageStarted bool
-	messageStopped bool
-	// failed is set once an error frame went out: nothing follows it, no
-	// message_delta and no message_stop.
-	failed          bool
-	hasTextDelta    bool
-	emittedThinking bool
-	emittedToolUse  bool
+	open blockKind
+	// nextIndex is the index the next content block gets.
+	nextIndex int
 
-	calls  map[string]*callState
-	queue  []*callState
-	active *callState
+	// reasoningState is the open reasoning item's encrypted content. Only
+	// its output_item.done carries the final value, so it is held until the
+	// thinking block closes.
+	reasoningState string
+	// summarized is set once the open reasoning item streamed summary text.
+	summarized bool
+
+	sawText     bool // an output_text delta, or a whole message item, was seen
+	sawThinking bool // a thinking block was opened
+	sawToolUse  bool // a tool_use block went out
+
+	calls callBook
 }
 
 // NewStreamTranslator returns a translator for one response. fallbackModel is
-// the resolved upstream model id, reported when the upstream does not name the
-// model that answered; toolNames maps upstream (shortened) tool names to the
-// client's original names.
+// the Codex model id the request resolved to, reported when the stream does
+// not name the model; toolNames maps the names sent to Codex back to the
+// client's.
 func NewStreamTranslator(fallbackModel string, toolNames map[string]string) *StreamTranslator {
 	return &StreamTranslator{
 		fallbackModel: fallbackModel,
 		toolNames:     toolNames,
-		calls:         map[string]*callState{},
+		calls:         newCallBook(),
 	}
 }
 
-// Started reports whether a message_start has been emitted, which tells the
-// caller whether an error can still be reported as an HTTP status.
-func (t *StreamTranslator) Started() bool { return t.messageStarted }
+// Started reports whether message_start went out: until then a failure can
+// still be answered with an HTTP status.
+func (t *StreamTranslator) Started() bool { return t.started }
 
-// Ended reports whether the message is over: message_stop or an error frame
-// went out, and nothing more will.
-func (t *StreamTranslator) Ended() bool { return t.messageStopped || t.failed }
+// Ended reports whether the message is over (message_stop or an error went
+// out) and nothing more will be written.
+func (t *StreamTranslator) Ended() bool { return t.stopped || t.failed }
 
-// Event translates a single Codex SSE payload (the JSON after "data:") into
-// zero or more Anthropic SSE frames.
+// Event translates one Codex event (the JSON of its data line) into the
+// Anthropic events it implies, possibly none.
 func (t *StreamTranslator) Event(payload []byte) []byte {
-	if t.failed || t.messageStopped || !gjson.ValidBytes(payload) {
+	if t.Ended() {
 		return nil
 	}
-	root := gjson.ParseBytes(payload)
-	out := make([]byte, 0, 256)
+	var ev codexEvent
+	if !readJSON(payload, &ev) {
+		return nil
+	}
 
-	switch root.Get("type").String() {
+	var out []byte
+	switch ev.Type {
 	case "response.created":
-		out = append(out, t.start(root.Get("response"))...)
+		out = t.begin(ev.Response)
 
 	case "response.reasoning_summary_part.added":
-		out = append(out, t.ensureStarted()...)
-		out = append(out, t.closeText()...)
-		// Codex splits one reasoning item into several summary parts but only
-		// reports the item's encrypted state at the end, so a single thinking
-		// block spans the whole item and the parts are separated by a blank line.
-		if t.thinkingOpen {
-			out = append(out, t.thinkingDelta(summarySeparator)...)
+		out = append(t.ensureStarted(), t.closeText()...)
+		// One reasoning item can stream several summary parts, but its
+		// encrypted state comes only at the end, so the parts share one
+		// thinking block, a blank line apart.
+		if t.open == thinkingKind {
+			out = append(out, t.thinkingText(summarySeparator)...)
 		} else {
-			out = append(out, t.openThinking()...)
+			out = append(out, t.openThinkingBlock()...)
 		}
-		t.thinkingSeen = true
+		t.summarized = true
 
 	case "response.reasoning_summary_text.delta":
-		out = append(out, t.ensureStarted()...)
-		out = append(out, t.closeText()...)
-		out = append(out, t.openThinking()...)
-		out = append(out, t.thinkingDelta(root.Get("delta").String())...)
-		t.thinkingSeen = true
+		out = append(t.ensureStarted(), t.closeText()...)
+		out = append(out, t.openThinkingBlock()...)
+		out = append(out, t.thinkingText(string(ev.Delta))...)
+		t.summarized = true
 
 	case "response.content_part.added":
-		if root.Get("part.type").String() == "output_text" {
-			out = append(out, t.ensureStarted()...)
-			out = append(out, t.closeThinking()...)
-			out = append(out, t.openText()...)
+		if ev.Part.Type == "output_text" {
+			out = append(t.ensureStarted(), t.closeThinking()...)
+			out = append(out, t.openTextBlock()...)
 		}
 
 	case "response.output_text.delta":
-		out = append(out, t.ensureStarted()...)
-		out = append(out, t.closeThinking()...)
-		out = append(out, t.openText()...)
-		out = append(out, t.textDelta(root.Get("delta").String())...)
-		t.hasTextDelta = true
+		out = append(t.ensureStarted(), t.closeThinking()...)
+		out = append(out, t.openTextBlock()...)
+		out = append(out, t.text(string(ev.Delta))...)
+		t.sawText = true
 
 	case "response.content_part.done":
-		if root.Get("part.type").String() == "output_text" {
-			out = append(out, t.closeText()...)
+		if ev.Part.Type == "output_text" {
+			out = t.closeText()
 		}
 
 	case "response.output_item.added":
-		item := root.Get("item")
-		switch item.Get("type").String() {
-		case "reasoning":
-			out = append(out, t.ensureStarted()...)
-			out = append(out, t.closeText()...)
-			// A reasoning item that never reported done must not leak its
-			// open block into the next one.
-			out = append(out, t.closeThinking()...)
-			t.thinkingSeen = false
-			// Kept only as a fallback: this is a pre-content snapshot, the
-			// authoritative value arrives with output_item.done.
-			t.thinkingSignature = item.Get("encrypted_content").String()
-		case "function_call":
-			out = append(out, t.ensureStarted()...)
-			out = append(out, t.closeThinking()...)
-			out = append(out, t.closeText()...)
-			call := t.recordCall(root, item)
-			t.updateCallIdentity(root, item, call)
-			out = append(out, t.pumpCalls()...)
-		}
+		out = t.itemAdded(ev)
 
 	case "response.output_item.done":
-		item := root.Get("item")
-		switch item.Get("type").String() {
-		case "reasoning":
-			out = append(out, t.closeText()...)
-			if signature := item.Get("encrypted_content").String(); signature != "" {
-				t.thinkingSignature = signature
-			}
-			if !t.thinkingSeen && t.thinkingSignature != "" {
-				// No summary was streamed, but the encrypted state still has
-				// to reach the client so the next turn can replay it.
-				out = append(out, t.openThinking()...)
-			}
-			out = append(out, t.closeThinking()...)
-			t.thinkingSignature = ""
-			t.thinkingSeen = false
-		case "function_call":
-			out = append(out, t.closeThinking()...)
-			out = append(out, t.closeText()...)
-			call := t.lookupCall(root, item)
-			if call == nil {
-				call = t.recordCall(root, item)
-			}
-			t.updateCallIdentity(root, item, call)
-			t.appendArguments(call, item.Get("arguments").String(), false)
-			if item.Get("status").String() != "incomplete" {
-				call.complete = true
-			}
-			out = append(out, t.pumpCalls()...)
-		case "message":
-			// Some responses deliver the whole message at once with no
-			// output_text deltas.
-			if t.hasTextDelta {
-				break
-			}
-			var text strings.Builder
-			item.Get("content").ForEach(func(_, part gjson.Result) bool {
-				if part.Get("type").String() == "output_text" {
-					text.WriteString(part.Get("text").String())
-				}
-				return true
-			})
-			if text.Len() == 0 {
-				break
-			}
-			out = append(out, t.ensureStarted()...)
-			out = append(out, t.closeThinking()...)
-			out = append(out, t.openText()...)
-			out = append(out, t.textDelta(text.String())...)
-			out = append(out, t.closeText()...)
-			t.hasTextDelta = true
-		}
+		out = t.itemDone(ev)
 
 	case "response.function_call_arguments.delta":
-		call := t.lookupCall(root, gjson.Result{})
-		if call == nil {
-			call = t.recordCall(root, gjson.Result{})
-		}
-		t.appendArguments(call, root.Get("delta").String(), true)
-		out = append(out, t.flushArguments(call)...)
+		call := t.calls.findOrAdd(eventKeys(ev, codexItem{}))
+		call.addArguments(string(ev.Delta), true)
 
 	case "response.function_call_arguments.done":
-		call := t.lookupCall(root, gjson.Result{})
-		if call == nil {
-			call = t.recordCall(root, gjson.Result{})
-		}
-		t.appendArguments(call, root.Get("arguments").String(), false)
+		call := t.calls.findOrAdd(eventKeys(ev, codexItem{}))
+		call.addArguments(string(ev.Arguments), false)
 		call.complete = true
-		out = append(out, t.pumpCalls()...)
+		out = t.releaseCalls()
 
-	case "response.completed", "response.incomplete":
-		out = append(out, t.finish(root.Get("response"), root.Get("type").String() == "response.completed")...)
+	case "response.completed":
+		out = t.finish(ev.Response, true)
+
+	case "response.incomplete":
+		out = t.finish(ev.Response, false)
 
 	case "response.failed":
-		failure := root.Get("response.error")
-		message := failure.Get("message").String()
+		failure := ev.Response.Error
+		message := string(failure.Message)
 		if message == "" {
 			message = "the Codex backend reported a failed response"
 		}
-		out = append(out, t.Error(errorKind(failure.Get("type").String(), failure.Get("code").String()), message)...)
+		out = t.Error(errorKind(string(failure.Type), string(failure.Code)), message)
 
 	case "error":
-		errorResult := root.Get("error")
-		kind := errorResult.Get("type").String()
-		code := errorResult.Get("code").String()
-		if !errorResult.Exists() {
-			kind, code = "", root.Get("code").String()
+		// The error is usually an object under "error", and sometimes its
+		// fields sit at the top of the event instead.
+		var failure codexError
+		if len(ev.Error) > 0 {
+			readJSON(ev.Error, &failure)
+		} else {
+			failure.Code = ev.Code
 		}
-		message := errorResult.Get("message").String()
+		message := string(failure.Message)
 		if message == "" {
-			message = root.Get("message").String()
+			message = string(ev.Message)
 		}
-		out = append(out, t.Error(errorKind(kind, code), message)...)
+		out = t.Error(errorKind(string(failure.Type), string(failure.Code)), message)
 	}
-
 	return out
 }
 
-// Error renders an Anthropic error frame.
-//
-// kind is passed through errorKind, so only Anthropic error types go out.
-// Nothing is emitted after an error frame: Close adds no message_stop.
+func (t *StreamTranslator) itemAdded(ev codexEvent) []byte {
+	switch ev.Item.Type {
+	case "reasoning":
+		out := append(t.ensureStarted(), t.closeText()...)
+		// A reasoning item that never reported done must not run into
+		// the next one.
+		out = append(out, t.closeThinking()...)
+		t.summarized = false
+		// Only a fallback: the value here is a snapshot from before the
+		// reasoning; output_item.done brings the final one.
+		t.reasoningState = string(ev.Item.EncryptedContent)
+		return out
+	case "function_call":
+		out := append(t.ensureStarted(), t.closeThinking()...)
+		out = append(out, t.closeText()...)
+		keys := eventKeys(ev, ev.Item)
+		call := t.calls.findOrAdd(keys)
+		t.calls.identify(call, ev.Item, keys)
+		return append(out, t.releaseCalls()...)
+	}
+	return nil
+}
+
+func (t *StreamTranslator) itemDone(ev codexEvent) []byte {
+	item := ev.Item
+	switch item.Type {
+	case "reasoning":
+		out := append(t.ensureStarted(), t.closeText()...)
+		if item.EncryptedContent != "" {
+			t.reasoningState = string(item.EncryptedContent)
+		}
+		if !t.summarized && t.reasoningState != "" {
+			// Nothing was summarized, but the state still has to reach the
+			// client for the next turn to replay it: an empty thinking
+			// block carries it.
+			out = append(out, t.openThinkingBlock()...)
+		}
+		out = append(out, t.closeThinking()...)
+		t.reasoningState = ""
+		t.summarized = false
+		return out
+
+	case "function_call":
+		out := append(t.closeThinking(), t.closeText()...)
+		keys := eventKeys(ev, item)
+		call := t.calls.findOrAdd(keys)
+		t.calls.identify(call, item, keys)
+		call.addArguments(string(item.Arguments), false)
+		if item.Status != "incomplete" {
+			call.complete = true
+		}
+		return append(out, t.releaseCalls()...)
+
+	case "message":
+		// Some responses deliver a whole message at once, with no
+		// output_text deltas before it.
+		if t.sawText {
+			return nil
+		}
+		whole := outputText(item)
+		if whole == "" {
+			return nil
+		}
+		out := append(t.ensureStarted(), t.closeThinking()...)
+		out = append(out, t.openTextBlock()...)
+		out = append(out, t.text(whole)...)
+		out = append(out, t.closeText()...)
+		t.sawText = true
+		return out
+	}
+	return nil
+}
+
+// Error writes an Anthropic error event and ends the stream: nothing is
+// written after it, and Close adds nothing. kind is mapped through errorKind,
+// so only Anthropic error types go out; message is cleaned and capped.
 func (t *StreamTranslator) Error(kind, message string) []byte {
 	if t.failed {
 		return nil
 	}
 	t.failed = true
-	kind = errorKind(kind, "")
 	message = CleanMessage(message)
 	if message == "" {
 		message = "upstream error"
 	}
-	frame := []byte(`{"type":"error","error":{"type":"","message":""}}`)
-	frame, _ = sjson.SetBytes(frame, "error.type", kind)
-	frame, _ = sjson.SetBytes(frame, "error.message", message)
-	return sseFrame("error", frame)
+	return sseFrame("error", errorEvent{Type: "error", Error: errorDetail{Type: errorKind(kind, ""), Message: message}})
 }
 
-// Close emits whatever is needed to leave the client with a well-formed
-// stream when upstream ends without a terminal event.
-//
-// A stream that ends without response.completed, response.incomplete or an
-// error was cut short: it is reported as an error, never dressed up as a
-// finished answer with an invented end_turn and zero usage.
+// Close ends the stream when the upstream stopped sending. A stream that
+// stopped before response.completed, response.incomplete or an error was cut
+// short, and is reported as an error: an answer that looks finished, with an
+// invented end_turn and no usage, would be worse.
 func (t *StreamTranslator) Close() []byte {
-	if t.messageStopped || t.failed {
+	if t.Ended() {
 		return nil
 	}
 	return t.Error("api_error", "the Codex stream ended before the response completed")
 }
 
-func (t *StreamTranslator) start(response gjson.Result) []byte {
-	if t.messageStarted {
+// begin writes message_start once, from response.created. The model is the one the upstream says
+// answered, since that is what the transcript, /cost and the log should name.
+func (t *StreamTranslator) begin(response codexResponse) []byte {
+	if t.started {
 		return nil
 	}
-	t.messageStarted = true
-
-	frame := []byte(`{"type":"message_start","message":{"id":"","type":"message","role":"assistant","model":"","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":0,"output_tokens":0}}}`)
-	id := response.Get("id").String()
+	t.started = true
+	id := string(response.ID)
 	if id == "" {
 		id = "msg_codex"
 	}
-	frame, _ = sjson.SetBytes(frame, "message.id", id)
-	// The model that actually answered goes in the transcript, /cost and the
-	// log, so it comes from the upstream when the upstream names it.
-	model := strings.TrimSpace(response.Get("model").String())
+	model := strings.TrimSpace(string(response.Model))
 	if model == "" {
 		model = t.fallbackModel
 	}
-	frame, _ = sjson.SetBytes(frame, "message.model", model)
-	return sseFrame("message_start", frame)
+	return sseFrame("message_start", messageStartEvent{
+		Type: "message_start",
+		Message: messageHeader{
+			ID:      id,
+			Type:    "message",
+			Role:    "assistant",
+			Model:   model,
+			Content: []struct{}{},
+		},
+	})
 }
 
-// ensureStarted covers streams that begin emitting content without a
-// response.created event.
+// ensureStarted covers a stream whose first event is not
+// response.created: message_start then says only what the translator knows.
 func (t *StreamTranslator) ensureStarted() []byte {
-	if t.messageStarted {
-		return nil
-	}
-	return t.start(gjson.Result{})
+	return t.begin(codexResponse{})
 }
 
-// completed is false for response.incomplete: a call the terminal payload
-// lists is then not taken as finished.
-func (t *StreamTranslator) finish(response gjson.Result, completed bool) []byte {
+// finish closes the message on a terminal event. completed is false for
+// response.incomplete, where a call the payload lists is not taken as
+// finished.
+func (t *StreamTranslator) finish(response codexResponse, completed bool) []byte {
 	out := t.ensureStarted()
 	out = append(out, t.closeThinking()...)
 	out = append(out, t.closeText()...)
-	// A terminal event may repeat items that were never streamed.
-	out = append(out, t.adoptTerminalContent(response)...)
-	out = append(out, t.adoptTerminalCalls(response, completed)...)
+	// The terminal payload may list items that were never streamed.
+	out = append(out, t.adoptContent(response.Output)...)
+	out = append(out, t.adoptCalls(response.Output, completed)...)
 	out = append(out, t.closeThinking()...)
 	out = append(out, t.closeText()...)
 
-	input, output, cacheRead, cacheWrite := usage(response.Get("usage"))
-	stopReason := mapStopReason(stopReasonOf(response), t.emittedToolUse)
-	out = append(out, t.messageDelta(stopReason, input, output, cacheRead, cacheWrite)...)
-	out = append(out, sseFrame("message_stop", []byte(`{"type":"message_stop"}`))...)
-	t.messageStopped = true
+	reason := string(response.StopReason)
+	if reason == "" {
+		reason = string(response.IncompleteDetails.Reason)
+	}
+	out = append(out, sseFrame("message_delta", messageDeltaEvent{
+		Type:  "message_delta",
+		Delta: stopDelta{StopReason: stopReason(reason, t.sawToolUse)},
+		Usage: anthropicUsage(response.Usage),
+	})...)
+	out = append(out, sseFrame("message_stop", messageStopEvent{Type: "message_stop"})...)
+	t.stopped = true
 	return out
 }
 
-func (t *StreamTranslator) messageDelta(stopReason string, input, output, cacheRead, cacheWrite int64) []byte {
-	frame := []byte(`{"type":"message_delta","delta":{"stop_reason":"","stop_sequence":null},"usage":{"input_tokens":0,"output_tokens":0}}`)
-	frame, _ = sjson.SetBytes(frame, "delta.stop_reason", stopReason)
-	frame, _ = sjson.SetBytes(frame, "usage.input_tokens", input)
-	frame, _ = sjson.SetBytes(frame, "usage.output_tokens", output)
-	if cacheRead > 0 {
-		frame, _ = sjson.SetBytes(frame, "usage.cache_read_input_tokens", cacheRead)
+// adoptContent writes the reasoning and message items that only the terminal
+// payload carries. Deployments differ on what the terminal event repeats: the
+// production backend repeats nothing it streamed, others list the whole
+// output. Taking only what did not stream covers both without duplicates.
+func (t *StreamTranslator) adoptContent(output []codexItem) []byte {
+	var out []byte
+	for _, item := range output {
+		switch item.Type {
+		case "reasoning":
+			if t.sawThinking {
+				continue
+			}
+			var summary []string
+			for _, part := range item.Summary {
+				if part.Text != "" {
+					summary = append(summary, string(part.Text))
+				}
+			}
+			if len(summary) == 0 && item.EncryptedContent == "" {
+				continue
+			}
+			t.reasoningState = string(item.EncryptedContent)
+			out = append(out, t.openThinkingBlock()...)
+			out = append(out, t.thinkingText(strings.Join(summary, summarySeparator))...)
+			out = append(out, t.closeThinking()...)
+			t.reasoningState = ""
+
+		case "message":
+			if t.sawText {
+				continue
+			}
+			whole := outputText(item)
+			if whole == "" {
+				continue
+			}
+			out = append(out, t.openTextBlock()...)
+			out = append(out, t.text(whole)...)
+			out = append(out, t.closeText()...)
+			t.sawText = true
+		}
 	}
-	if cacheWrite > 0 {
-		frame, _ = sjson.SetBytes(frame, "usage.cache_creation_input_tokens", cacheWrite)
-	}
-	return sseFrame("message_delta", frame)
+	return out
 }
 
-func (t *StreamTranslator) openText() []byte {
-	if t.textOpen {
-		return nil
+// outputText is the text of a message item's output_text parts.
+func outputText(item codexItem) string {
+	var b strings.Builder
+	for _, part := range item.Content {
+		if part.Type == "output_text" {
+			b.WriteString(string(part.Text))
+		}
 	}
-	t.textOpen = true
-	frame := []byte(`{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`)
-	frame, _ = sjson.SetBytes(frame, "index", t.blockIndex)
-	return sseFrame("content_block_start", frame)
+	return b.String()
 }
 
-func (t *StreamTranslator) textDelta(text string) []byte {
-	if text == "" {
+// Text and thinking blocks.
+
+func (t *StreamTranslator) openTextBlock() []byte {
+	if t.open == textKind {
 		return nil
 	}
-	frame := []byte(`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":""}}`)
-	frame, _ = sjson.SetBytes(frame, "index", t.blockIndex)
-	frame, _ = sjson.SetBytes(frame, "delta.text", text)
-	return sseFrame("content_block_delta", frame)
+	t.open = textKind
+	return sseFrame("content_block_start", blockStartEvent{
+		Type: "content_block_start", Index: t.nextIndex,
+		ContentBlock: textBlock{Type: "text"},
+	})
+}
+
+func (t *StreamTranslator) text(s string) []byte {
+	if s == "" {
+		return nil
+	}
+	return sseFrame("content_block_delta", blockDeltaEvent{
+		Type: "content_block_delta", Index: t.nextIndex,
+		Delta: textDelta{Type: "text_delta", Text: s},
+	})
 }
 
 func (t *StreamTranslator) closeText() []byte {
-	if !t.textOpen {
+	if t.open != textKind {
 		return nil
 	}
-	t.textOpen = false
-	out := t.blockStop(t.blockIndex)
-	t.blockIndex++
-	return out
+	return t.closeBlock()
 }
 
-func (t *StreamTranslator) openThinking() []byte {
-	if t.thinkingOpen {
+func (t *StreamTranslator) openThinkingBlock() []byte {
+	if t.open == thinkingKind {
 		return nil
 	}
-	t.thinkingOpen = true
-	t.emittedThinking = true
-	frame := []byte(`{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}}`)
-	frame, _ = sjson.SetBytes(frame, "index", t.blockIndex)
-	return sseFrame("content_block_start", frame)
+	t.open = thinkingKind
+	t.sawThinking = true
+	return sseFrame("content_block_start", blockStartEvent{
+		Type: "content_block_start", Index: t.nextIndex,
+		ContentBlock: thinkingBlock{Type: "thinking"},
+	})
 }
 
-func (t *StreamTranslator) thinkingDelta(text string) []byte {
-	if text == "" {
+func (t *StreamTranslator) thinkingText(s string) []byte {
+	if s == "" {
 		return nil
 	}
-	frame := []byte(`{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":""}}`)
-	frame, _ = sjson.SetBytes(frame, "index", t.blockIndex)
-	frame, _ = sjson.SetBytes(frame, "delta.thinking", text)
-	return sseFrame("content_block_delta", frame)
+	return sseFrame("content_block_delta", blockDeltaEvent{
+		Type: "content_block_delta", Index: t.nextIndex,
+		Delta: thinkingDelta{Type: "thinking_delta", Thinking: s},
+	})
 }
 
+// closeThinking ends the thinking block with the reasoning state, marked as
+// this proxy's, as its signature.
 func (t *StreamTranslator) closeThinking() []byte {
-	if !t.thinkingOpen {
+	if t.open != thinkingKind {
 		return nil
 	}
-	out := make([]byte, 0, 256)
-	if t.thinkingSignature != "" {
-		frame := []byte(`{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":""}}`)
-		frame, _ = sjson.SetBytes(frame, "index", t.blockIndex)
-		frame, _ = sjson.SetBytes(frame, "delta.signature", MarkSignature(t.thinkingSignature))
-		out = append(out, sseFrame("content_block_delta", frame)...)
+	var out []byte
+	if t.reasoningState != "" {
+		out = sseFrame("content_block_delta", blockDeltaEvent{
+			Type: "content_block_delta", Index: t.nextIndex,
+			Delta: signatureDelta{Type: "signature_delta", Signature: MarkSignature(t.reasoningState)},
+		})
 	}
-	out = append(out, t.blockStop(t.blockIndex)...)
-	t.thinkingOpen = false
-	t.blockIndex++
+	return append(out, t.closeBlock()...)
+}
+
+func (t *StreamTranslator) closeBlock() []byte {
+	out := sseFrame("content_block_stop", blockStopEvent{Type: "content_block_stop", Index: t.nextIndex})
+	t.open = noBlock
+	t.nextIndex++
 	return out
 }
 
-func (t *StreamTranslator) blockStop(index int) []byte {
-	frame := []byte(`{"type":"content_block_stop","index":0}`)
-	frame, _ = sjson.SetBytes(frame, "index", index)
-	return sseFrame("content_block_stop", frame)
-}
-
-// callKeys lists the identifiers an event can be correlated by. Codex labels
-// function-call events inconsistently across event types, so every available
-// identifier becomes an alias for the same call.
-func callKeys(root, item gjson.Result) []string {
-	keys := make([]string, 0, 5)
-	add := func(key string) {
-		if key == "" {
-			return
-		}
-		for _, existing := range keys {
-			if existing == key {
-				return
-			}
-		}
-		keys = append(keys, key)
-	}
-	if index := root.Get("output_index"); index.Exists() {
-		add("output:" + index.Raw)
-	}
-	add("call:" + item.Get("call_id").String())
-	add("call:" + root.Get("call_id").String())
-	add("item:" + item.Get("id").String())
-	add("item:" + root.Get("item_id").String())
-
-	filtered := keys[:0]
-	for _, key := range keys {
-		if !strings.HasSuffix(key, ":") {
-			filtered = append(filtered, key)
-		}
-	}
-	return filtered
-}
-
-func (t *StreamTranslator) lookupCall(root, item gjson.Result) *callState {
-	for _, key := range callKeys(root, item) {
-		if call, ok := t.calls[key]; ok {
-			return call
-		}
-	}
-	if t.active != nil {
-		return t.active
-	}
-	return nil
-}
-
-func (t *StreamTranslator) recordCall(root, item gjson.Result) *callState {
-	keys := callKeys(root, item)
-	for _, key := range keys {
-		if call, ok := t.calls[key]; ok {
-			t.alias(call, keys)
-			return call
-		}
-	}
-	call := &callState{blockIndex: -1}
-	t.queue = append(t.queue, call)
-	t.alias(call, keys)
-	return call
-}
-
-func (t *StreamTranslator) alias(call *callState, keys []string) {
-	for _, key := range keys {
-		t.calls[key] = call
-	}
-}
-
-func (t *StreamTranslator) updateCallIdentity(root, item gjson.Result, call *callState) {
-	if call == nil {
-		return
-	}
-	if callID := item.Get("call_id").String(); callID != "" {
-		call.callID = callID
-	}
-	if name := item.Get("name").String(); name != "" {
-		call.name = name
-	}
-	t.alias(call, callKeys(root, item))
-}
-
-func (t *StreamTranslator) appendArguments(call *callState, arguments string, delta bool) {
-	if call == nil || arguments == "" {
-		return
-	}
-	if delta {
-		call.arguments += arguments
-		call.sawDelta = true
-		return
-	}
-	if !call.sawDelta {
-		call.arguments = arguments
-		return
-	}
-	// A final value that extends what was streamed replaces it; a shorter or
-	// divergent one is ignored so partial JSON is never truncated.
-	if strings.HasPrefix(arguments, call.arguments) {
-		call.arguments = arguments
-	}
-}
-
-// flushArguments emits the not-yet-sent tail of the active call's arguments.
-func (t *StreamTranslator) flushArguments(call *callState) []byte {
-	if call == nil || t.active != call || !call.started || call.closed {
-		return nil
-	}
-	if call.emitted >= len(call.arguments) {
-		return nil
-	}
-	frame := []byte(`{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":""}}`)
-	frame, _ = sjson.SetBytes(frame, "index", call.blockIndex)
-	frame, _ = sjson.SetBytes(frame, "delta.partial_json", call.arguments[call.emitted:])
-	call.emitted = len(call.arguments)
-	return sseFrame("content_block_delta", frame)
-}
-
-// pumpCalls opens, feeds and closes queued tool_use blocks one at a time,
-// because Anthropic content blocks cannot interleave.
-func (t *StreamTranslator) pumpCalls() []byte {
-	out := make([]byte, 0, 256)
-	for {
-		if active := t.active; active != nil {
-			out = append(out, t.flushArguments(active)...)
-			if !active.done {
-				return out
-			}
-			out = append(out, t.blockStop(active.blockIndex)...)
-			if t.blockIndex <= active.blockIndex {
-				t.blockIndex = active.blockIndex + 1
-			}
-			active.closed = true
-			t.active = nil
-			t.dequeue(active)
-		}
-
-		for len(t.queue) > 0 && t.queue[0].closed {
-			t.queue = t.queue[1:]
-		}
-		if len(t.queue) == 0 {
-			return out
-		}
-
-		call := t.queue[0]
-		// Without a name there is nothing to open yet, and an unfinished
-		// call may still be cut off; wait for the event that settles it.
-		if call.name == "" || !call.complete {
-			return out
-		}
-		arguments := strings.TrimSpace(call.arguments)
-		if arguments == "" {
-			// A finished call with no arguments takes none.
-			arguments = "{}"
-		}
-		if !gjson.Valid(arguments) || !gjson.Parse(arguments).IsObject() {
-			// Unusable input is dropped rather than repaired. The arguments
-			// can carry file contents or secrets, so only their size is logged.
-			logx.Warnf("codex stream: dropped tool call %q: arguments are not a JSON object (%d bytes)",
-				t.originalToolName(call.name), len(arguments))
-			call.closed = true
-			t.queue = t.queue[1:]
-			continue
-		}
-		call.arguments = arguments
-		call.done = true
-
-		out = append(out, t.closeThinking()...)
-		out = append(out, t.closeText()...)
-		call.blockIndex = t.blockIndex
-		call.started = true
-		t.active = call
-		t.emittedToolUse = true
-
-		frame := []byte(`{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"","name":"","input":{}}}`)
-		frame, _ = sjson.SetBytes(frame, "index", call.blockIndex)
-		frame, _ = sjson.SetBytes(frame, "content_block.id", sanitizeToolID(call.callID))
-		frame, _ = sjson.SetBytes(frame, "content_block.name", t.originalToolName(call.name))
-		out = append(out, sseFrame("content_block_start", frame)...)
-		out = append(out, t.flushArguments(call)...)
-	}
-}
-
-func (t *StreamTranslator) dequeue(call *callState) {
-	for i, queued := range t.queue {
-		if queued == call {
-			t.queue = append(t.queue[:i], t.queue[i+1:]...)
-			return
-		}
-	}
-}
-
-// adoptTerminalContent emits reasoning and message items that appear only in
-// the terminal response payload.
-//
-// Which items a terminal event repeats varies: the production backend streams
-// everything and repeats nothing, while other deployments deliver a complete
-// output array. Emitting only what was not already streamed covers both
-// without duplicating content.
-func (t *StreamTranslator) adoptTerminalContent(response gjson.Result) []byte {
-	output := response.Get("output")
-	if !output.IsArray() {
-		return nil
-	}
-
-	out := make([]byte, 0, 128)
-	output.ForEach(func(_, item gjson.Result) bool {
-		switch item.Get("type").String() {
-		case "reasoning":
-			if t.emittedThinking {
-				return true
-			}
-			var thinking strings.Builder
-			item.Get("summary").ForEach(func(_, part gjson.Result) bool {
-				if text := part.Get("text").String(); text != "" {
-					if thinking.Len() > 0 {
-						thinking.WriteString(summarySeparator)
-					}
-					thinking.WriteString(text)
-				}
-				return true
-			})
-			signature := item.Get("encrypted_content").String()
-			if thinking.Len() == 0 && signature == "" {
-				return true
-			}
-			t.thinkingSignature = signature
-			out = append(out, t.openThinking()...)
-			out = append(out, t.thinkingDelta(thinking.String())...)
-			out = append(out, t.closeThinking()...)
-			t.thinkingSignature = ""
-
-		case "message":
-			if t.hasTextDelta {
-				return true
-			}
-			var text strings.Builder
-			item.Get("content").ForEach(func(_, part gjson.Result) bool {
-				if part.Get("type").String() == "output_text" {
-					text.WriteString(part.Get("text").String())
-				}
-				return true
-			})
-			if text.Len() == 0 {
-				return true
-			}
-			out = append(out, t.openText()...)
-			out = append(out, t.textDelta(text.String())...)
-			out = append(out, t.closeText()...)
-			t.hasTextDelta = true
-		}
-		return true
-	})
-	return out
-}
-
-// adoptTerminalCalls picks up function calls that only appear in the terminal
-// response payload and drains everything still queued.
-func (t *StreamTranslator) adoptTerminalCalls(response gjson.Result, completed bool) []byte {
-	response.Get("output").ForEach(func(index, item gjson.Result) bool {
-		if item.Get("type").String() != "function_call" {
-			return true
-		}
-		root := gjson.Parse(`{"output_index":` + index.String() + `}`)
-		call := t.lookupCallStrict(root, item)
-		if call == nil {
-			call = t.recordCall(root, item)
-		}
-		t.updateCallIdentity(root, item, call)
-		t.appendArguments(call, item.Get("arguments").String(), false)
-		if completed && item.Get("status").String() != "incomplete" {
-			call.complete = true
-		}
-		return true
-	})
-
-	// The response is over: a call still unfinished was cut off and is
-	// dropped, never emitted with partial or invented arguments.
-	remaining := t.queue[:0]
-	for _, call := range t.queue {
-		if call.closed {
-			continue
-		}
-		if call.name == "" || !call.complete {
-			call.closed = true
-			continue
-		}
-		remaining = append(remaining, call)
-	}
-	t.queue = remaining
-	return t.pumpCalls()
-}
-
-// lookupCallStrict resolves by alias only, without falling back to the active
-// call, so a terminal item is never merged into an unrelated one.
-func (t *StreamTranslator) lookupCallStrict(root, item gjson.Result) *callState {
-	for _, key := range callKeys(root, item) {
-		if call, ok := t.calls[key]; ok {
-			return call
-		}
-	}
-	return nil
-}
-
-func (t *StreamTranslator) originalToolName(name string) string {
+func (t *StreamTranslator) clientToolName(name string) string {
 	if original, ok := t.toolNames[name]; ok {
 		return original
 	}
 	return name
 }
 
-// sanitizeToolID keeps tool ids within the character set Anthropic accepts.
+// sanitizeToolID keeps a tool_use id to the characters Anthropic accepts.
 func sanitizeToolID(id string) string {
 	if id == "" {
 		return "toolu_codex"
 	}
-	var b strings.Builder
-	for _, r := range id {
+	return strings.Map(func(r rune) rune {
 		switch {
 		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '-':
-			b.WriteRune(r)
-		default:
-			b.WriteRune('_')
+			return r
 		}
-	}
-	return b.String()
+		return '_'
+	}, id)
 }
 
-func stopReasonOf(response gjson.Result) string {
-	if reason := response.Get("stop_reason"); reason.Exists() && reason.String() != "" {
-		return reason.String()
-	}
-	if reason := response.Get("incomplete_details.reason"); reason.Exists() {
-		return reason.String()
-	}
-	return ""
-}
-
-func mapStopReason(reason string, hasToolUse bool) string {
-	// Running out of output tokens wins: the answer is cut short even when
-	// a finished tool call came before the cut.
-	switch reason {
-	case "max_tokens", "max_output_tokens":
+// stopReason maps the Responses stop reason. Running out of output tokens
+// wins over everything, a finished tool call included: the turn was cut
+// short either way.
+func stopReason(reason string, toolUse bool) string {
+	switch {
+	case reason == "max_tokens" || reason == "max_output_tokens":
 		return "max_tokens"
-	}
-	if hasToolUse {
+	case toolUse:
 		return "tool_use"
-	}
-	switch reason {
-	case "refusal", "content_filter":
+	case reason == "refusal" || reason == "content_filter":
 		return "refusal"
-	case "pause_turn":
+	case reason == "pause_turn":
 		return "pause_turn"
-	default:
-		return "end_turn"
 	}
+	return "end_turn"
 }
 
-// usage extracts token counts, converting the Responses cached-token
-// accounting into Anthropic's split between fresh and cached input.
-func usage(u gjson.Result) (input, output, cacheRead, cacheWrite int64) {
-	if !u.Exists() {
-		return 0, 0, 0, 0
-	}
-	input = u.Get("input_tokens").Int()
-	output = u.Get("output_tokens").Int()
-	cacheRead = u.Get("input_tokens_details.cached_tokens").Int()
-	cacheWrite = u.Get("input_tokens_details.cache_write_tokens").Int()
-	// Anthropic's input_tokens counts neither cache reads nor cache writes;
-	// the Responses input_tokens includes both.
-	input -= cacheRead + cacheWrite
-	if input < 0 {
-		input = 0
-	}
-	return input, output, cacheRead, cacheWrite
+// splitUsage reads Responses usage as Anthropic counts it. The Responses
+// input_tokens includes cache reads and cache writes; Anthropic's counts
+// neither, and reports them in fields of their own.
+func splitUsage(raw json.RawMessage) (input, output, cacheRead, cacheWrite int64) {
+	var u codexUsage
+	readJSON(raw, &u)
+	cacheRead = int64(u.InputTokensDetails.CachedTokens)
+	cacheWrite = int64(u.InputTokensDetails.CacheWriteTokens)
+	input = max(int64(u.InputTokens)-cacheRead-cacheWrite, 0)
+	return input, int64(u.OutputTokens), cacheRead, cacheWrite
 }
 
-// sseFrame renders one Server-Sent Event.
-func sseFrame(event string, data []byte) []byte {
-	out := make([]byte, 0, len(data)+len(event)+16)
-	out = append(out, "event: "...)
-	out = append(out, event...)
-	out = append(out, '\n')
-	out = append(out, "data: "...)
-	out = append(out, data...)
-	out = append(out, '\n', '\n')
-	return out
-}
-
-// anthropicErrorTypes are the error types Anthropic's API sends.
-var anthropicErrorTypes = map[string]bool{
-	"invalid_request_error": true,
-	"permission_error":      true,
-	"not_found_error":       true,
-	"request_too_large":     true,
-	"rate_limit_error":      true,
-	"api_error":             true,
-	"overloaded_error":      true,
-}
-
-// errorKind maps an upstream error type or code onto an Anthropic error
-// type. authentication_error becomes permission_error: Claude Code reads an
-// authentication error as its own Anthropic login failing.
-func errorKind(kind, code string) string {
-	for _, candidate := range []string{strings.ToLower(strings.TrimSpace(kind)), strings.ToLower(strings.TrimSpace(code))} {
-		switch candidate {
-		case "":
-			continue
-		case "authentication_error", "invalid_api_key", "unauthorized":
-			return "permission_error"
-		case "rate_limit_exceeded", "usage_limit_reached", "insufficient_quota", "rate_limit":
-			return "rate_limit_error"
-		case "server_is_overloaded", "overloaded", "slow_down":
-			return "overloaded_error"
-		case "context_length_exceeded", "invalid_prompt", "invalid_request", "bad_request":
-			return "invalid_request_error"
-		case "not_found", "model_not_found":
-			return "not_found_error"
-		}
-		if anthropicErrorTypes[candidate] {
-			return candidate
-		}
+func anthropicUsage(raw json.RawMessage) tokenUsage {
+	input, output, cacheRead, cacheWrite := splitUsage(raw)
+	usage := tokenUsage{InputTokens: input, OutputTokens: output}
+	if cacheRead > 0 {
+		usage.CacheReadInputTokens = cacheRead
 	}
-	return "api_error"
-}
-
-// maxMessageRunes caps an upstream error message passed to the client.
-const maxMessageRunes = 300
-
-// CleanMessage readies an upstream error message for the client: control
-// characters become spaces, runs of space collapse, and the text is cut to
-// maxMessageRunes, then marked with "…". An upstream can echo a prompt or a
-// token in its error, so the text is passed on bounded and never logged.
-func CleanMessage(message string) string {
-	var b strings.Builder
-	space := false
-	n := 0
-	for _, r := range message {
-		if unicode.IsControl(r) || unicode.IsSpace(r) || r == utf8.RuneError {
-			space = b.Len() > 0
-			continue
-		}
-		// A pending space goes out only with the rune after it, so the cut
-		// keeps at most maxMessageRunes and never ends in " …".
-		if n >= maxMessageRunes || (space && n+2 > maxMessageRunes) {
-			b.WriteString("…")
-			return b.String()
-		}
-		if space {
-			b.WriteByte(' ')
-			n++
-			space = false
-		}
-		b.WriteRune(r)
-		n++
+	if cacheWrite > 0 {
+		usage.CacheCreationInputTokens = cacheWrite
 	}
-	return b.String()
+	return usage
 }
