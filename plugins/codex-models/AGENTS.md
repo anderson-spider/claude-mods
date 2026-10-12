@@ -1,8 +1,72 @@
 # codex-models
 
-Offers OpenAI Codex models in Claude Code through a local proxy: Claude Code reaches it with `ANTHROPIC_BASE_URL`; the proxy routes Codex model ids to the Codex backend (ChatGPT login) and passes everything else to api.anthropic.com unchanged.
+Offers OpenAI Codex models (ChatGPT login) in Claude Code through a local proxy. Claude Code reaches it with `ANTHROPIC_BASE_URL`; the proxy sends Codex model ids to the Codex backend and everything else to api.anthropic.com unchanged. `/model` rows come from `modelPicker` in `~/.claude/settings.json`; a subagent reaches Codex through an agent definition (`model: gpt-6-astra`); the crew's `nativeCodex` option registers `crew:<role>-codex` types on top. A plugin cannot set env or model settings, so `install.sh` writes them.
 
-- `proxy/` is a vendored, hardened fork of ccmproxy (Go, module path as upstream); `proxy/UPSTREAM.md` names the origin. Its tests run with `go -C plugins/codex-models/proxy test ./...`.
-- `hooks/register.tsx` is the one hooks module; `/codex-models:status` is answered by `command.run`, and `commands/status.md` is only its fallback body. `session.start` checks the proxy once (1.5 s, only for a loopback `ANTHROPIC_BASE_URL`) and logs a line naming the case and `~/.claude/codex-models/uninstall.sh`. `hooks/status.ts` is pure (network and timer injected).
-- `install.sh` and `uninstall.sh` change `~/.claude/settings.json` only through `install/cli.mjs` (files, preflight) and `install/settings.mjs` (pure merge and unmerge); both are copied to `~/.claude/codex-models/`. Install writes the settings only after the running proxy passed the preflight; uninstall takes them out before stopping the LaunchAgent. `tests/scripts/install.test.mjs` runs both scripts with `node --test` against a temporary HOME.
-- The Go version is pinned once, in the root `mise.toml`.
+## Layout
+
+- `hooks/register.tsx`: the one hooks module. The `session.start` check (observes only, never blocks the start) and `command.run` for `/codex-models:status`.
+- `hooks/status.ts`: pure; the network and timer are injected. Probe, reply reading, notice and report texts.
+- `commands/status.md`: only the fallback body of `/codex-models:status`; the `command.run` hook answers it.
+- `install.sh`, `uninstall.sh`: macOS LaunchAgent `com.anderson-spider.codex-models`. Both are copied with `install/` to `~/.claude/codex-models/`, so they run with the plugin gone or updated.
+- `install/settings.mjs`: pure merge and unmerge of settings.json, status-reply reading, masking. `install/cli.mjs`: the I/O (`version-of`, `precheck`, `preflight`, `merge`, `unmerge`).
+- `proxy/`: vendored, hardened ccmproxy (Go; `UPSTREAM.md` lists the local changes).
+  - `cmd/ccmproxy`: `serve`, `login`, `logout`, `status`, `models [--settings-json | --json]`, `env [--shell]`, `config init`, `version`.
+  - `internal/config`: the config schema, defaults, refusals, file mode.
+  - `internal/proxy`: the loopback listener.
+  - `internal/router`: `guard.go` (entry middleware), `router.go` (routing, passthrough, status), `codex.go` (Codex path, error mapping), `models.go`, `body.go` (request decoding).
+  - `internal/translate`: Anthropic Messages to Responses and back (`claude_to_codex`, `codex_to_claude`, `assemble`, `sanitize`).
+  - `internal/codex`: the ChatGPT login (`oauth`, `login`, `store`, `authfile`), the Responses client, the model catalog (`models.go`).
+  - `internal/netx`: the one outbound transport. `internal/httplog`: request logging. `internal/logx`: leveled logger. `internal/tokenize`: the local `count_tokens` estimate.
+- `types/index.d.ts`, `tsconfig.json`, `tests/`.
+- The Go version is pinned once, in the root `mise.toml`; `install.sh` names the same versions (`GO_VERSION`, `NODE_VERSION`) and `tests/scripts/install.test.mjs` checks they agree.
+
+## Proxy invariants
+
+- Listener: one plain HTTP listener on a literal loopback address (127/8 or `::1`) with an explicit port, random at install; `:port`, `0.0.0.0`, `[::]` and names are refused, and the bound socket is checked again. No CA, CONNECT, TLS listener, hosts redirect or DNS resolver.
+- Upstream: `upstream` is only `https://api.anthropic.com`; `codex.base_url` must be `https://`. `serve` refuses to start when the upstream resolves to loopback.
+- Guard (before the router): the `X-Ccmproxy-Token` header is read and deleted before anything else runs, so no outbound path can copy it; compared by SHA-256 digest in constant time; a miss is 403 `permission_error`, never 401 (a 401 makes Claude Code refresh OAuth and ask for `/login`). `Host` must be the listen address. Only GET, POST and HEAD are served, with or without the secret (OPTIONS, CONNECT, TRACE and the rest are 403). `HEAD /api/hello` (Claude Code's start probe, sent with neither secret nor bearer) is answered locally with an empty 200. No `Access-Control-*` header is ever sent. The secret keeps out other local processes and web pages, not malware running as the user.
+- `GET /__ccmproxy/status` (behind the secret) answers `{"service":"ccmproxy","version","codexLogin":bool,"models":[ids]}`. `ccmproxy models --json` prints `[{"id","label","description"}]`. `ccmproxy env --shell json` prints `ANTHROPIC_BASE_URL`, `ANTHROPIC_CUSTOM_HEADERS` (one `X-Ccmproxy-Token` line) and `ENABLE_TOOL_SEARCH=true`. The installer and the hooks read these contracts.
+- Transports: `Proxy: nil` on every outbound transport (`netx.DirectTransport`), so `HTTPS_PROXY` and the like are never used; a nil transport never falls back to the environment's proxy.
+- Errors: a Codex failure maps to Anthropic's error types (400/422 `invalid_request_error`, 403 `permission_error`, 404 `not_found_error`, 413 `request_too_large`, 429 `rate_limit_error`, 529 `overloaded_error`, else `api_error`). A Codex 401 and every login problem (`ErrNotAuthenticated`, `ErrCodexCLILoginExpired`, `ErrLoginExpired`) reach Claude Code as 403 with the fix named, never 401. A stream that ends without its terminal event is an error (an SSE `error` event, or 502 when not streaming), never a truncated success.
+- Answers: `message_start.model` is the model the upstream reported in `response.created`, falling back to the resolved id. `tool_use` blocks pass through SSE and JSON answers.
+- Effort precedence: a model-name suffix (`-high`, `:high`) wins; else the request's `output_config.effort` (Claude Code's `/effort`, also sent for an unknown id); else `thinking.budget_tokens`; else the model's default. Clamped to the real model's levels.
+- `Session_id` is an HMAC-SHA-256 of `metadata.user_id` keyed by the config's `session_salt`, shaped as a v4 UUID.
+- Codex login: the proxy's own file under `auth_dir` is the default. `~/.codex/auth.json` is used only with `codex.use_codex_cli_auth: true`, read-only: never refreshed, written or removed (`logout` removes only the proxy's own file); an `auth_file` resolving to it (directly, by symlink, `..` or case) is refused. The proxy's own login is written atomically (temp file, sync, chmod 0600, rename; `auth_dir` 0700) under an exclusive `flock` on `<auth_dir>/codex.lock`, re-read under the lock before a refresh. A rejected refresh is `ErrLoginExpired`, which answers 403.
+- Logs carry method, path, status, sizes and duration, never a query string, a secret, a token or a prompt.
+- Config (`$CCMPROXY_HOME/config.json`): `listen_http`, `upstream`, `auth_token`, `session_salt`, `auth_dir`, `log_level` and the `codex` block (`base_url`, `user_agent`, `originator`, `models`, `effort_variants`, `model_prefix`, `callback_port`, `auth_file`, `use_codex_cli_auth`). The file is mode 0600 in a 0700 directory and loading refuses a looser one; `serve` refuses to start without `auth_token` or `session_salt`; `config init` keeps every existing value, unknown keys included, and adds only the missing secrets. Removed keys (`listen_proxy`, `listen_tls`, `intercept_hosts`, `proxy_username`, `proxy_password`, `ca_dir`, `dns`) are refused by name.
+- Catalog: mirrors `codex debug models` (visibility `list`). `gpt-daybreak-blue-latest` is offered only through `codex.models`, which then restricts the catalog to the ids it names. Each row has `behavesAs` (a Claude model the installed Claude Code knows; without it the row is not offered).
+- `count_tokens` for a Codex model is a local conservative estimate; thinking blocks the proxy issued are stripped from requests that go to Anthropic.
+- macOS and Linux only (the credential lock uses `flock`); `install.sh` is macOS only.
+
+## Installer invariants
+
+- Order: `precheck` (settings readable and mergeable; a foreign `ANTHROPIC_BASE_URL`, a malformed `env`, `modelPicker` or headers refused) before any build, copy, plist or `launchctl`; then build, config init, LaunchAgent, then `preflight` against the running proxy (403 without the secret, 200 on `HEAD /api/hello`, status 200 with it, `service` `ccmproxy`, version equal to the plugin's), and only then the settings write. A proxy that is down or not ours is never pointed at.
+- The settings write adds exactly: `env.ANTHROPIC_BASE_URL`, one `X-Ccmproxy-Token` line in `env.ANTHROPIC_CUSTOM_HEADERS` (other lines kept), `env.ENABLE_TOOL_SEARCH=true`, and `modelPicker.options` rows whose description ends with `(codex-models)`. `pluginConfigs` and everything else stay. Written atomically (temp file and rename; a symlink's target is edited in place; mode kept), after a timestamped backup beside it (`settings.json.bak-codex-models-<stamp>`); no second backup when nothing changes.
+- `~/.claude/codex-models/settings-state.json` records what stood there before (no header value) so uninstall takes back only what install added; `fileCreated` makes uninstall remove a settings.json that install created once nothing else is left in it. A second install changes nothing and keeps the first state.
+- Uninstall order: settings first, then the LaunchAgent; if the settings cannot be put back, the LaunchAgent stays loaded. `--purge` also deletes `~/.claude/codex-models` (login, config, binary, scripts); without it the login and config stay.
+- The secret never appears in a process's argv, in output (dry runs mask it), in the plist, in the state file or in a backup's name.
+- `install.sh --check` changes nothing; `--dry-run` prints the masked settings diff; `--no-settings` does everything but the settings edit.
+
+## Hooks
+
+- `session.start` probes `GET /__ccmproxy/status` only when the session's `ANTHROPIC_BASE_URL` is `http://` on a loopback host with no path, sending the secret from `ANTHROPIC_CUSTOM_HEADERS`, under a 1.5 s deadline on the host's clock. Any other base URL sends nothing. A failing probe or filesystem never blocks the start.
+- A notice names the case (down, timeout, wrong secret, not ccmproxy, stale version, no Codex login, no secret) and `~/.claude/codex-models/uninstall.sh`. `ui.notice` needs a `tool_use` id, so the notice is a transcript `ui.log` line plus a `ui.toast`. A reply body is never quoted, and no secret appears in a notice, log or report.
+- `/codex-models:status` reports reachability, identity, version against the plugin's, login, models and which settings are in place, using the session's secret first and ccmproxy's config as fallback.
+
+## Tests
+
+- `claude plugin test plugins/codex-models`: `tests/status.test.ts` (pure), `tests/settings.test.ts` (pure merge), `tests/register.test.ts` (hooks through the test host with a fake `http.fetch`).
+- `go -C plugins/codex-models/proxy test ./...` (add `-race`): config, listeners, guard, router, translation, login and store, catalog, transports. No network.
+- `node --test plugins/codex-models/tests/scripts/*.test.mjs`: `install.sh` and `uninstall.sh` against a temporary HOME with a fake `launchctl` and `mise`.
+- Also `claude plugin validate plugins/codex-models`, `node scripts/check-consistency.mjs`, `node scripts/check-version-bump.mjs origin/main`, `tsc -p plugins/codex-models/tsconfig.json`.
+
+## Unverified live
+
+- A new session lists the Codex rows in `/model` and stays on Claude.
+- `crew:developer-codex` answers from Codex over several turns: thinking blocks survive across turns (a config flag echoing the requested id is the fallback if not) and the effort is the one Jev sized.
+- `crew:tester-codex` writing outside its lane is denied.
+- `mcp__crew__codex` stays logged in after the proxy refreshed its own login.
+- Proxy stopped, wrong secret and another app on the port each give their notice at session start.
+- An option change that reloads the crew without a new `session.start`: the `-codex` types and their prompt section must still work, or the gap is documented.
+- The crew's confirmation of a routed `-codex` spawn compares the exact normalized id, so an upstream-dated id in `message_start.model` would read as a mismatch.
+- Uninstall restores the settings (semantically equal; a hand-formatted file comes back as 2-space JSON).
