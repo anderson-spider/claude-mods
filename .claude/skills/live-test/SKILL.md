@@ -1,79 +1,51 @@
 ---
 name: live-test
-description: Test a plugin of this repository live: open a Herdr pane on the right running `claude --plugin-dir plugins/<name>`, drive that session with prompts and audit what it did against the plugin's documented behavior. Use when asked to test, try or audit a plugin in a real session, or after a plugin change that tests alone cannot prove.
+description: Live-test plugin behavior in a real session when requested, or when automated tests cannot prove a plugin change.
 argument-hint: <plugin-name> [what to test]
 ---
 
 # live-test
 
-Runs the plugin named in `$ARGUMENTS` in a second Claude session beside this one and audits it from here. The test session is the subject; this session drives it and checks the evidence. It does not edit the plugin: findings go in the report, and fixing them is a separate step.
+Drive the plugin in `$ARGUMENTS` in a second Claude session beside this one; audit evidence here. Keep plugin code unchanged and report findings for a separate fix.
 
 ## 0. Preconditions
 
-- `test "${HERDR_ENV:-}" = 1`, else say this session is not inside Herdr and stop.
-- `plugins/<name>/.claude-plugin/plugin.json` exists, else list the plugins under `plugins/` and stop.
-- Run `claude plugin validate plugins/<name>` and `claude plugin test plugins/<name>` first: a live test of a plugin that fails them proves nothing new.
+Require `HERDR_ENV=1` and `plugins/<name>/.claude-plugin/plugin.json`; otherwise report the missing condition (list available plugins for an unknown name) and stop. Proceed only after `claude plugin validate plugins/<name>` and `claude plugin test plugins/<name>` pass.
 
-## 1. The test session
+## 1. Session
 
-Reuse before creating. `herdr pane list --workspace "$HERDR_WORKSPACE_ID"` and look for a pane in this worktree (`cwd`) whose agent is `claude`; check that its process runs this plugin with `ps -o args= -p <pid>` or `pgrep -fl -- '--plugin-dir plugins/<name>'`. A pane the user opened for the test counts: use it and say so.
+Reuse a test pane before creating one: `herdr pane list --workspace "$HERDR_WORKSPACE_ID"`; match this worktree's cwd and a Claude process whose argv names this plugin (`ps -o args= -p <pid>`). A pane the user opened for this test qualifies; identify it in the report.
 
-Otherwise split to the right of this pane, keep focus here, and start Claude with the plugin:
+Otherwise use `herdr pane split` to the right, in this worktree, without taking focus, then `herdr agent start` with `--plugin-dir plugins/<name>`. Consult each command's `--help` for arguments. Use the trusted worktree rather than a new test repository, which would prompt for trust.
 
-```bash
-herdr pane split --current --direction right --cwd "$PWD" --no-focus     # .result.pane.pane_id
-herdr agent start <name>-live --kind claude --pane <pane-id> -- --plugin-dir plugins/<name>
-```
+Reload/unload scenarios require unchanged plugin files: `--plugin-dir` hot-reloads edits and would confound the evidence. Use `/reload-plugins` to reload hooks; a `session.start` scenario requires a new session, not a reload.
 
-The session runs in the current worktree, which is already trusted through the main checkout. Never create a new git repository for a test: even under a trusted folder it prompts for trust.
+**Approval**: read a blocked pane with `herdr agent read <target> --source visible` and ask the user. Never answer their permission, trust or approval dialogs. On a refused start, give a ready secret-free `! herdr …` command; on a refused settings write, give the exact secret-free edit command. Leave the refused action to the user rather than retrying another route.
 
-`--plugin-dir` hot-reloads the folder, so a later edit reaches the test session without a restart; send `/reload-plugins` through `herdr agent prompt` when a hook must be re-registered at `session.start`. A scenario about reload or unload runs with no edits to `plugins/<name>` meanwhile, or the hot-reload muddies what it observes.
+**Secrets**: the user sets secret options from their own terminal; never write secrets into settings, argv or transcript-producing `!` commands. For other inline option changes, use `pluginConfigs["<name>@inline"].options` in `~/.claude/settings.json` only after the user's OK, with a backup beside it first. Restore after testing, then delete this test backup, which may contain a plain-text key.
 
-If the agent is `blocked` at start (a trust or hot-reload question), read it with `herdr agent read <target> --source visible` and ask the user; never answer a permission, trust or approval dialog for them.
-
-Secrets and refusals:
-
-- Never write a secret (to settings, argv or a `!` command, whose output lands in the transcript). When an option the test needs holds a secret, the user sets it from their own terminal.
-- When a session start is refused, give the user a ready `! herdr …` command without any secret; when a settings write is refused, give the exact edit command (no secret) instead. Never try the refused action another way.
-- Option changes for `--plugin-dir` go in `pluginConfigs["<name>@inline"].options` of `~/.claude/settings.json`, which is outside the worktree: write it only after the user's OK, with a backup beside it first. Restore it after the test, then delete the backup (it may hold a plain-text key).
+Proceed when a running test session has a known pane/target and the intended plugin/options.
 
 ## 2. Scenarios
 
-Take what to check from, in order: the user's `$ARGUMENTS`, the `Live` line of `plugins/<name>/AGENTS.md` (its Checks section), then the behavior the current diff changes (`git diff origin/main -- plugins/<name>`). Write each scenario as one short prompt whose answer forces the behavior under test.
+Choose scenarios from the user's arguments, then the plugin AGENTS.md's live checks, then behavior changed by `git diff origin/main -- plugins/<name>`. Give each a short prompt that forces the tested behavior; injected context alone cannot prove a tool call or delegation. Keep the scope non-destructive and inside this worktree, with no commit or push.
 
-- A prompt the session can answer from context injected by other hooks (CodeGraph, memory) does not exercise a plugin's tool or delegation: ask for something that must run or change something, such as running a test suite or reading a file the context does not hold.
-- Keep prompts small: every prompt spends the user's quota in the test session.
-- Ask for nothing destructive, nothing outside this worktree, and no commit or push.
+Send with `herdr agent prompt <target> "<prompt>" --wait --timeout 600000`, then read `herdr agent read <target> --source recent-unwrapped --lines 150`. After a timeout or `agent_prompt_stalled`, read before resending: the prompt may already have arrived. A blocked state requires the user's answer.
 
-Send each one and wait for the session to settle:
-
-```bash
-herdr agent prompt <target> "<prompt>" --wait --timeout 600000
-herdr agent read <target> --source recent-unwrapped --lines 150
-```
-
-A timeout or `agent_prompt_stalled` does not prove the prompt was lost: read the pane before sending anything again. A `blocked` state is a question for the user, not for this session to answer.
+Finish when every scenario has an observed outcome or an identified blocker.
 
 ## 3. Evidence
 
-What the pane shows is a claim; confirm it where the plugin leaves a record:
+Treat pane claims as hypotheses; confirm each against the records:
 
-- the test session's transcript: `~/.claude/projects/<dashed cwd>/<session id>.jsonl`, its subagents under `<session id>/subagents/agent-<id>.jsonl` (each assistant row carries `message.model` and `effort`); the session id is the pane's `agent_session.value` in `herdr pane list`;
-- the plugin's own records, as its AGENTS.md describes them (for crew, `~/.claude/crew/decisions/*.json`, newest last by name);
-- for hooks that log only to debug, start the session with `-- --plugin-dir plugins/<name> --debug-file <scratchpad>/<name>.log` and read that file.
+- Transcript: `~/.claude/projects/<dashed cwd>/<session id>.jsonl`; subagents: `<session id>/subagents/agent-<id>.jsonl`. Read session id from the pane's `agent_session.value`; assistant rows carry `message.model` and `effort`.
+- Plugin records: consult its AGENTS.md for locations and fields.
+- Debug-only hooks: start with `--debug-file <scratchpad>/<name>.log` and read it.
 
-Run `git check-ignore -q .crew` before a report is written there; if it fails, write nowhere in the repository.
+Compare every scenario with the root README and plugin AGENTS.md, recording mismatches even when the plugin works. Before writing a report under `.crew/`, require `git check-ignore -q .crew`; otherwise write no report in the repository. Capture all supporting paths/fields or pane lines before closing.
 
-Compare each observation with the documented behavior in the root README and the plugin's AGENTS.md. A difference is a finding even when the plugin "works".
+## 4. Close and report
 
-## 4. After
+Close the test pane with `herdr pane close <pane-id>` after collecting evidence, including on scenario failure; this includes a pane the user opened for the test. Leave other panes alone. Restore approved settings changes and confirm cleanup or report its blocker.
 
-Close the test pane once the evidence is read, also when a scenario failed: `herdr pane close <pane-id>`. That covers a pane this skill created and one the user opened for the test; leave any other pane alone. Read everything the report needs before closing, since the pane's scrollback goes with it (the transcripts and the plugin's records stay on disk).
-
-## Report
-
-Three sections, in this order, with the headings and language of the user's global instructions:
-
-- **Blocked on the user**: dialogs that need their answer, a merge or a decision.
-- **Changed**: what this session did in the test session (pane created or reused, prompts sent); no code edits.
-- **Found**: each scenario with its result and the evidence (`path:line`, a transcript or record field, the pane lines), and each mismatch with the docs, most severe first. No test counts.
+Use the user's headings and language, ordered blocked on the user, changed, found. Include dialogs/decisions, the pane created/reused and prompts sent (no code edits), then each scenario's outcome, evidence and doc mismatches, most severe first. Describe only validation actually performed, without test counts.

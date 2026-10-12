@@ -1,46 +1,27 @@
 # AGENTS.md
 
-Claude Code plugin marketplace `spider-claude-mods` (`anderson-spider/claude-mods`) with five plugins, all **function hooks mods** (an early-access Claude Code API that may change between versions). The `claude-code` module (`atom`, `read`, `Register`, `claude-code/testing`) is not on npm: Claude Code writes its typings to `plugins/*/.claude-plugin/types/` when it loads a plugin (git-ignored), and each plugin's `tsconfig.json` extends them. There is no `package.json`, build or lint. IMPORTANT: load the `plugin-authoring` skill before writing or debugging a hooks module.
+Claude Code **function hooks mods** marketplace. Hooks authoring or debugging: load the `plugin-authoring` skill first. The `claude-code` module is host-provided, not on npm; loading a plugin generates its git-ignored `.claude-plugin/types/`, which its `tsconfig.json` extends.
 
 ## Layout
 
-- `.claude-plugin/marketplace.json` lists the plugins; each lives in `plugins/<name>/` with `.claude-plugin/plugin.json`, `hooks/` (`hooks.json` only points to the entry module), `tests/` and `types/index.d.ts`. codex-computer-use also has `helper/`; codex-models also has `proxy/` (Go), `install/`, `install.sh` and `uninstall.sh`.
-- A plugin has one hooks module (`register.tsx`); `validate` refuses a second entry in `hooks.json`. The engine reads the `on(...)` and `$.noun.method(...)` calls from source and follows imports, but `$` is passed only to a function declared at the top of the same file, never across an import. The entry module holds `register` and its hooks; it may call a `registerX(on, options, …)` from a subfolder whose file holds its own `on(...)` and `$` calls (crew's `hooks/hud/`). Pure modules take host access injected and never touch `$`. Tests mirror the modules.
-- Tools are listed as `mcp__<plugin>__<name>`; their inputs are declared in `types/index.d.ts` for the matchers and must follow the `inputSchema`.
-- `.claude/` holds this repository's own session setup: the `release-plugin` skill (`/release-plugin <plugin>` runs the done checklist below), the `live-test` skill (`/live-test <plugin>` opens a Herdr pane on the right with `claude --plugin-dir plugins/<plugin>`, drives it, audits the result against the docs and closes the pane), the `ship` skill (`/ship` takes the branch from checklist to approved merge and plugin update), the `cleanup` skill (`/cleanup` prunes merged branches and worktrees after one approval) and two hooks in `.claude/hooks/` (block edits to the generated `.claude-plugin/types/`, not the hand-written `types/index.d.ts`; type-check the plugin owning an edited `.ts`/`.tsx` once its typings exist, or print a reminder to run `mise run plugins:types` without blocking the edit).
+- Hooks: one entry module (`register.tsx`) in `hooks.json`. Keep `on(...)` and `$.noun.method(...)` calls visible to the engine's source analysis: pass `$` only to a top-level function in the same file, never across an import. Subfolder registrars may own their hooks and `$` calls (crew's `hooks/hud/`); pure modules take injected host access. Tests mirror modules.
+- Tools: `mcp__<plugin>__<name>` inputs in `types/index.d.ts` must match `inputSchema` for the matchers.
+- Workflow skills: `/release-plugin <plugin>` checks completion; `/live-test <plugin>` verifies real-session behavior; `/ship` ships through an approved merge; `/cleanup` removes merged branches/worktrees after approval. Read the corresponding `.claude/skills/<name>/SKILL.md` when invoked.
+- `.claude/hooks/` protects generated `.claude-plugin/types/` (hand-written `types/index.d.ts` stays editable) and type-checks the plugin owning an edited `.ts`/`.tsx`. Missing typings produce a `mise run plugins:types` reminder without blocking the edit.
 
 ## Plugins
 
-Each plugin's details live in `plugins/<name>/AGENTS.md`, loaded when Claude reads or edits a file under that directory (`.claude/rules/<name>.md` imports it; a `CLAUDE.md` at a plugin root draws a `claude plugin validate` warning).
+Plugin work: read `plugins/<name>/AGENTS.md`; `.claude/rules/<name>.md` imports it for that subtree. Keep plugin guidance there: a plugin-root `CLAUDE.md` draws a validation warning.
 
-- **chatgpt**: `ask` and `image` tools driving chatgpt.com in the first browser that works.
-- **codex-computer-use**: routes native Mac app control through Codex computer use; has a `helper/` run by the ChatGPT app's `node`, with fixed `run/` and `state/` directories beside the installed `helper.mjs`. App approvals have a fixed five-minute deadline, counted from before a question enters the queue. The helper's `install.sh` accepts only `--check` or no arguments; `uninstall.sh` accepts no arguments and retains code, approvals and logs. Neither script edits `settings.json`.
-- **codex-models**: Codex models as native Claude Code models through our own local Go proxy under `proxy/`, with a black-box contract suite in `proxy/contract/`; details in `plugins/codex-models/AGENTS.md`. Login uses only `ccmproxy login codex`, native credentials and one canonical credential lock. Config contains `listen_http`, `upstream`, `auth_token`, `session_salt`, `auth_dir`, `log_level` and `codex.base_url`; unknown keys are ignored, while the catalog, backend identity and callback port are fixed in code. `install.sh` writes settings after precheck and authenticated preflight, with atomic 0600 writes and private backups; its only flags are `--check` and `--dry-run`. Uninstall takes no flags, removes the current owned settings keys/header/marked rows without state or value restoration, then removes the LaunchAgent, retaining the installation directory and backups; filesystem failures abort safely, without an owner/UID check. At session start, with the local loopback proxy as the base URL, crew registers a fixed role-to-model map of twins without status discovery or filtering; the separate status read supplies quota routing.
+- **chatgpt**: ChatGPT browser tools; see `plugins/chatgpt/AGENTS.md`.
+- **codex-computer-use**: native Mac app control through Codex; see `plugins/codex-computer-use/AGENTS.md`.
+- **codex-models**: native Codex models through a local Go proxy; see `plugins/codex-models/AGENTS.md`.
 - **crew**: registers the `code-reader`, `research`, `designer`, `developer`, `tester` and `architect` subagent types with default models; Jev routing, on when the `jevKey` option is set, moves a call's model and effort one step; draws its own HUD (`hooks/hud/`: session, quota, the active plan's next steps, running agents, the architect's verdicts and a log, in a side pane or a band above the prompt); with `nativeCodex` and a loopback proxy, `crew:<role>-codex` twins run a role on a Codex model, and with `quotaRouting` a call may move to its role's twin when Codex has more weekly headroom.
-- **tailscale**: `tailscale_get` and `tailscale_write` tools over the Tailscale API.
+- **tailscale**: Tailscale API tools; see `plugins/tailscale/AGENTS.md`.
 
 ## Commands
 
-```
-mise install                                   # node, TypeScript 7 and Go 1.27.1 from mise.toml (scripts, `tsc --lsp`, `tsc -p plugins/<name>/tsconfig.json`, the proxy)
-mise run plugins:types                         # writes every plugin's .claude-plugin/types/ (a short interactive session loads each plugin from its folder)
-mise run worktree:add <name> [base]             # creates andersonsilva/<name> in ../claude-mods-worktrees/ beside the main checkout, with typings (base: <remote>/<ref>, default origin/main)
-claude plugin validate .                       # validates the marketplace
-claude plugin validate plugins/<name>          # validates the plugin
-claude plugin test plugins/<name>              # runs the plugin's tests/*.test.ts
-/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node --test plugins/codex-computer-use/helper/test/*.test.mjs   # the codex-computer-use helper's tests
-go -C plugins/codex-models/proxy test -race ./...  # the codex-models proxy's tests (no network)
-go -C plugins/codex-models/proxy test -race -tags contract ./...  # the same, plus the contract suite (the binary built with test injection points, against local fakes; also run by CI)
-node --test plugins/codex-models/tests/scripts/*.test.mjs  # codex-models install.sh and uninstall.sh against a temporary HOME, with fakes
-node scripts/check-consistency.mjs             # marketplace and plugin manifests agree (also run by CI)
-node scripts/check-version-bump.mjs origin/main  # a plugin with code changes bumped its version (run by CI on pull requests)
-claude --plugin-dir plugins/<name>             # loads the plugin with automatic reload
-mise run plugins:validate                      # validates the marketplace and every plugin, then runs check-consistency
-mise run plugins:test                          # runs the typecheck hook tests, every plugin's tests, the codex-computer-use helper's and the three codex-models commands above (mise provides Go 1.27.1)
-mise run plugins:update                        # refreshes the marketplace and updates every installed plugin from it
-```
-
-Inside a session, `/reload-plugins` reloads the hooks.
+Discover repository tasks with `mise tasks` and their arguments with `mise tasks info <task>`; `mise.toml` owns tool versions and task commands. Install tools with `mise install`. For plugin-specific checks, read that plugin's AGENTS.md; for Claude CLI options, use `claude --help`.
 
 ## Conventions
 
@@ -48,4 +29,4 @@ Inside a session, `/reload-plugins` reloads the hooks.
 - When a plugin's behavior changes, bump `version` in its `plugin.json`.
 - Done for a plugin change means: `claude plugin validate plugins/<name>` and `claude plugin test plugins/<name>` pass, `node scripts/check-consistency.mjs` passes, `version` is bumped if behavior changed, and the root README and the plugin's AGENTS.md match the new behavior.
 - PR titles follow Conventional Commits in English and descriptions are in English (`.github/pull_request_template.md`).
-- History belongs in git; invariants that explain one line of code live as a comment there.
+- AGENTS.md holds current invariants; history belongs in git. Invariants explaining one line of code belong in a comment there.
