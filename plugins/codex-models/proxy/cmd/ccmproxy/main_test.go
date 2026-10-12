@@ -278,3 +278,60 @@ func TestModelsJSONAndSettingsJSONAreExclusive(t *testing.T) {
 		t.Fatal("--json with --settings-json must be refused")
 	}
 }
+
+// cliAuthFileConfig writes a config whose codex.auth_file is the Codex CLI's
+// login (under a CODEX_HOME of its own) and returns the config and CLI paths.
+func cliAuthFileConfig(t *testing.T) (configPath, cliPath string) {
+	t.Helper()
+	home := filepath.Join(t.TempDir(), ".codex")
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	t.Setenv("CODEX_HOME", home)
+	cliPath = filepath.Join(home, "auth.json")
+	body := `{"auth_mode":"chatgpt","tokens":{"access_token":"at","refresh_token":"rt"}}`
+	if err := os.WriteFile(cliPath, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	config, err := json.Marshal(map[string]any{
+		"listen_http":  "127.0.0.1:1",
+		"auth_token":   testToken,
+		"session_salt": strings.Repeat("ab", 32),
+		"auth_dir":     filepath.Join(t.TempDir(), "auth"),
+		"codex":        map[string]any{"auth_file": cliPath},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	configPath = filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(configPath, config, 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	return configPath, cliPath
+}
+
+func TestServeRefusesAnAuthFileNamingTheCodexCLILogin(t *testing.T) {
+	configPath, cliPath := cliAuthFileConfig(t)
+	before, _ := os.ReadFile(cliPath)
+
+	err := run([]string{"serve", "--config", configPath})
+	if !errors.Is(err, codex.ErrAuthFileIsCodexCLI) {
+		t.Fatalf("serve = %v, want ErrAuthFileIsCodexCLI", err)
+	}
+	if after, _ := os.ReadFile(cliPath); string(after) != string(before) {
+		t.Fatal("serve touched the Codex CLI's login")
+	}
+}
+
+func TestStatusNamesTheRefusedAuthFile(t *testing.T) {
+	configPath, cliPath := cliAuthFileConfig(t)
+
+	out := captureStdout(t, func() error { return run([]string{"status", "--config", configPath}) })
+	if strings.Contains(out, "not signed in") {
+		t.Fatalf("status hid the refusal behind \"not signed in\":\n%s", out)
+	}
+	if !strings.Contains(out, "codex           refused: ") || !strings.Contains(out, cliPath) ||
+		!strings.Contains(out, "auth_file") {
+		t.Fatalf("status does not give the refusal reason:\n%s", out)
+	}
+}

@@ -334,9 +334,10 @@ func TestStreamMessageItemWithoutDeltas(t *testing.T) {
 	}
 }
 
-func TestStreamTruncatedUpstreamIsClosedCleanly(t *testing.T) {
+func TestStreamTruncatedUpstreamIsReportedAsAnError(t *testing.T) {
 	translator := NewStreamTranslator("gpt-5.5", nil)
-	// No terminal event: Close must still finish every open block.
+	// No terminal event: the answer was cut short, so Close reports an
+	// error instead of inventing an end_turn with zero usage.
 	frames := runStream(t, translator,
 		`{"type":"response.created","response":{"id":"resp_8"}}`,
 		`{"type":"response.output_text.delta","delta":"partial"}`,
@@ -346,10 +347,14 @@ func TestStreamTruncatedUpstreamIsClosedCleanly(t *testing.T) {
 		"message_start",
 		"content_block_start",
 		"content_block_delta",
-		"content_block_stop",
-		"message_delta",
-		"message_stop",
+		"error",
 	)
+	if got := gjson.Parse(frames[3].data).Get("error.type").String(); got != "api_error" {
+		t.Fatalf("error.type = %q", got)
+	}
+	if more := translator.Close(); len(more) != 0 {
+		t.Fatalf("a second Close emitted %q", more)
+	}
 }
 
 func TestStreamCachedTokensSplitInput(t *testing.T) {
@@ -590,8 +595,8 @@ func TestUsageSemantics(t *testing.T) {
 	}
 	assembled := assemble(t, "gpt-5.5", nil, payloads...)
 	for label, u := range map[string]gjson.Result{"stream": delta.Get("usage"), "assembled": assembled.Get("usage")} {
-		if got := u.Get("input_tokens").Int(); got != 400 {
-			t.Fatalf("%s: input_tokens = %d, want 1000 - 600 cached", label, got)
+		if got := u.Get("input_tokens").Int(); got != 150 {
+			t.Fatalf("%s: input_tokens = %d, want 1000 - 600 cache reads - 250 cache writes", label, got)
 		}
 		if got := u.Get("cache_read_input_tokens").Int(); got != 600 {
 			t.Fatalf("%s: cache_read_input_tokens = %d, want cached_tokens", label, got)
@@ -616,5 +621,44 @@ func TestUsageSemantics(t *testing.T) {
 		if f.event == "message_delta" && (strings.Contains(f.data, "cache_read") || strings.Contains(f.data, "cache_creation")) {
 			t.Fatalf("uncached usage carries cache fields: %s", f.data)
 		}
+	}
+}
+
+func TestErrorKindOnlyEmitsAnthropicTypes(t *testing.T) {
+	cases := map[[2]string]string{
+		{"overloaded_error", ""}:                "overloaded_error",
+		{"server_error", ""}:                    "api_error",
+		{"", "server_error"}:                    "api_error",
+		{"", ""}:                                "api_error",
+		{"authentication_error", ""}:            "permission_error",
+		{"", "rate_limit_exceeded"}:             "rate_limit_error",
+		{"", "usage_limit_reached"}:             "rate_limit_error",
+		{"", "context_length_exceeded"}:         "invalid_request_error",
+		{"invalid_request_error", ""}:           "invalid_request_error",
+		{"something_new", "also_new"}:           "api_error",
+		{"server_error", "rate_limit_exceeded"}: "rate_limit_error",
+	}
+	for in, want := range cases {
+		if got := errorKind(in[0], in[1]); got != want {
+			t.Errorf("errorKind(%q, %q) = %q, want %q", in[0], in[1], got, want)
+		}
+	}
+}
+
+func TestNothingFollowsAnError(t *testing.T) {
+	translator := NewStreamTranslator("gpt-5.5", nil)
+	frames := runStream(t, translator,
+		`{"type":"response.created","response":{"id":"r"}}`,
+		`{"type":"error","error":{"type":"server_error","message":"boom"}}`,
+		`{"type":"response.output_text.delta","delta":"late"}`,
+		`{"type":"response.completed","response":{"id":"r","usage":{"input_tokens":1,"output_tokens":1}}}`,
+	)
+	assertEvents(t, frames, "message_start", "error")
+}
+
+func TestUsageCacheWritesOnly(t *testing.T) {
+	in, _, read, write := usage(gjson.Parse(`{"input_tokens":1000,"output_tokens":1,"input_tokens_details":{"cache_write_tokens":250}}`))
+	if in != 750 || read != 0 || write != 250 {
+		t.Fatalf("usage = %d %d %d, want 750 fresh, 0 read, 250 written", in, read, write)
 	}
 }

@@ -17,6 +17,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/jclab-joseph/claude-code-model-proxy/internal/netx"
 )
 
 const (
@@ -128,7 +130,8 @@ type Client struct {
 // NewClient returns a Client with a sane timeout.
 func NewClient(httpClient *http.Client) *Client {
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: exchangeTimeout}
+		// Never http.DefaultTransport: it honours HTTPS_PROXY.
+		httpClient = &http.Client{Transport: netx.Shared(), Timeout: exchangeTimeout}
 	}
 	return &Client{HTTP: httpClient}
 }

@@ -105,7 +105,8 @@ install alongside them.
 go build -o ccmproxy ./cmd/ccmproxy
 ```
 
-Go 1.26 or newer. `ccmproxy version` reports `dev` for a plain `go build`;
+Go 1.26 or newer. It builds on macOS and Linux only (the credential lock uses
+`flock`). `ccmproxy version` reports `dev` for a plain `go build`;
 stamp a version with `-ldflags "-X main.version=..."`. Dependencies:
 `gjson`/`sjson` for JSON rewriting.
 
@@ -229,27 +230,43 @@ exists wins**:
 
 | Order | File | Written by |
 | --- | --- | --- |
-| 1 | `codex.auth_file`, if configured | either tool, layout detected |
-| 2 | `~/.config/ccmproxy/auth/codex.json` | `ccmproxy login codex` |
-| 3 | `~/.codex/auth.json` | the Codex CLI (`CODEX_HOME` is honoured) |
+| 1 | `~/.config/ccmproxy/auth/codex.json` (`<auth_dir>/codex.json`) | `ccmproxy login codex` |
+| 2 | `~/.codex/auth.json` (`CODEX_HOME` is honoured), read-only | the Codex CLI |
 
-The third is consulted only when `codex.use_codex_cli_auth` is `true`; it is
+`codex.auth_file`, when set, replaces both: it is the only file consulted, its
+layout is detected from its contents, and it is this proxy's own file. It must
+not be the Codex CLI's file: an `auth_file` that resolves to it (directly,
+through a symlink or `..`, or in another case on a case-insensitive volume) is
+refused.
+
+The second is consulted only when `codex.use_codex_cli_auth` is `true`; it is
 `false` by default, so the proxy keeps its own login. Both layouts are
 understood, including the CLI's, which nests the tokens under `tokens` and
 records no expiry — that is read from the access token's own `exp` claim, along
 with the account id and plan.
 
-A **refreshed token is written back to the file it came from**, in that file's
-own layout and preserving the fields this proxy does not own (`auth_mode`,
-`OPENAI_API_KEY`, anything added later). So borrowing the CLI's login keeps the
-CLI working rather than quietly invalidating it. For the same reason, a file
-that changes underneath the proxy is re-read rather than served from cache: if
-the Codex CLI refreshes on its own, its rotated refresh token is picked up
-instead of being overwritten with a stale one.
+**The Codex CLI's file is read-only for the proxy**: never refreshed, written or
+removed. OpenAI rotates refresh tokens, so a refresh by the proxy would sign
+the Codex CLI out (and the crew's `codex exec`, which runs under the same
+login). A borrowed login is used while its access token is valid; once it has
+expired, requests fail with an error asking to run `codex login` (which renews
+it) or `ccmproxy login codex` (which gives the proxy its own login). A file
+that changes underneath the proxy is re-read rather than served from cache, so
+a token the Codex CLI renewed is picked up at once.
+
+The proxy's own file is refreshed when its token is within five minutes of
+expiry, written in its own layout (an `auth_file` in the CLI's layout keeps the
+fields this proxy does not own). Writes are atomic: a temporary file in the
+same directory, synced, set to mode `600` and renamed over the old one, so a
+looser mode on an existing file does not survive; the auth directory is kept
+at `700`. A refresh and a login hold an exclusive lock on
+`<auth_dir>/codex.lock` and re-read the file under it, so two proxy processes
+never both spend the same refresh token: the second uses the token the first
+wrote.
 
 `ccmproxy login codex` always writes this proxy's own file and never touches
-`~/.codex/auth.json`; `ccmproxy logout codex` likewise removes only its own.
-Set `codex.use_codex_cli_auth` to `true` to fall back to the CLI's file.
+`~/.codex/auth.json`; `ccmproxy logout codex` likewise removes only its own,
+and refuses a file that is (or links to) the CLI's.
 
 ## Commands
 
@@ -398,9 +415,11 @@ The suite runs the whole path without network access:
 - The start-up check that refuses an upstream resolving to a local address.
 - Model-list merging and byte-for-byte pass-through fidelity.
 - The streaming translation state machine, including parallel tool calls.
-- OAuth exchange and refresh against a fake token endpoint, reading a Codex
-  CLI `auth.json`, and writing a refreshed token back into it without
-  disturbing the fields the CLI owns.
+- OAuth exchange and refresh against a fake token endpoint; reading a Codex
+  CLI `auth.json` and never writing, refreshing or removing it (an expired one
+  fails without a network call, an `auth_file` resolving to it is refused);
+  atomic `600` writes; and two stores refreshing at once spending the refresh
+  token once.
 - Effort handling: that the client's `output_config.effort` reaches the Codex
   backend, that it is clamped to the levels the real model has, and that an
   effort pinned in the model name overrides it.

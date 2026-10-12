@@ -14,6 +14,7 @@ import (
 	"github.com/jclab-joseph/claude-code-model-proxy/internal/codex"
 	"github.com/jclab-joseph/claude-code-model-proxy/internal/config"
 	"github.com/jclab-joseph/claude-code-model-proxy/internal/logx"
+	"github.com/jclab-joseph/claude-code-model-proxy/internal/netx"
 	"github.com/jclab-joseph/claude-code-model-proxy/internal/translate"
 	"github.com/tidwall/gjson"
 )
@@ -38,14 +39,16 @@ type Router struct {
 }
 
 // New builds a router. transport carries pass-through traffic to the upstream
-// API and must not itself route through this proxy.
+// API and must not itself route through this proxy; nil means the shared
+// direct transport, never http.DefaultTransport, which honours HTTPS_PROXY.
 func New(cfg *config.Config, registry *codex.Registry, backend *codex.Backend, transport http.RoundTripper) (*Router, error) {
 	upstream, err := url.Parse(cfg.Upstream)
 	if err != nil {
-		return nil, fmt.Errorf("router: parse upstream %q: %w", cfg.Upstream, err)
+		// url.Error repeats the input, which could hold credentials.
+		return nil, fmt.Errorf("router: upstream is not a valid URL")
 	}
 	if transport == nil {
-		transport = http.DefaultTransport
+		transport = netx.Shared()
 	}
 
 	r := &Router{

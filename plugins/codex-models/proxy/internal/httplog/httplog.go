@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/jclab-joseph/claude-code-model-proxy/internal/logx"
+	"github.com/jclab-joseph/claude-code-model-proxy/internal/netx"
 )
 
 // Transport wraps an http.RoundTripper to log every request it sends.
@@ -28,7 +29,8 @@ import (
 // whose body a caller never closes. Every call site in this codebase closes
 // its response bodies, so that cost is not paid in practice.
 type Transport struct {
-	// Next is the transport to call. http.DefaultTransport is used when nil.
+	// Next is the transport to call. The shared direct transport is used
+	// when nil, never http.DefaultTransport, which honours HTTPS_PROXY.
 	Next http.RoundTripper
 	// Label tags each log line, so requests from different clients (the
 	// codex backend, the OAuth token endpoint, plain pass-through) can be
@@ -38,14 +40,11 @@ type Transport struct {
 
 // RoundTrip implements http.RoundTripper.
 func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
-	next := t.Next
-	if next == nil {
-		next = http.DefaultTransport
-	}
+	next := t.next()
 
 	start := time.Now()
 	method := req.Method
-	url := req.URL.String()
+	url := outboundURL(req)
 	reqSize := req.ContentLength
 
 	resp, err := next.RoundTrip(req)
@@ -68,6 +67,13 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		},
 	}
 	return resp, nil
+}
+
+func (t *Transport) next() http.RoundTripper {
+	if t.Next == nil {
+		return netx.Shared()
+	}
+	return t.Next
 }
 
 func (t *Transport) tag() string {
@@ -127,14 +133,14 @@ func Log(handler http.Handler) http.Handler {
 
 // requestURL renders the URL the way it is meaningful for this proxy: with
 // the Host the client asked for, since an inbound req.URL carries only the
-// path.
+// path. The query is left out: it can carry anything a client puts there.
 func requestURL(req *http.Request) string {
 	host := req.Host
 	if host == "" {
 		host = req.URL.Host
 	}
 	if host == "" {
-		return req.URL.RequestURI()
+		return req.URL.EscapedPath()
 	}
 	scheme := req.URL.Scheme
 	if scheme == "" {
@@ -143,7 +149,20 @@ func requestURL(req *http.Request) string {
 			scheme = "https"
 		}
 	}
-	return scheme + "://" + host + req.URL.RequestURI()
+	return scheme + "://" + host + req.URL.EscapedPath()
+}
+
+// outboundURL renders an outbound request for the log: scheme, host and
+// path. The query and any userinfo are left out, since either can carry
+// whatever a client or a configuration put there.
+func outboundURL(req *http.Request) string {
+	u := *req.URL
+	u.User = nil
+	u.RawQuery = ""
+	u.ForceQuery = false
+	u.Fragment = ""
+	u.RawFragment = ""
+	return u.String()
 }
 
 // statusWriter records the status code and byte count of a response as it is

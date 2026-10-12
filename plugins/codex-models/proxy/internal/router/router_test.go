@@ -397,11 +397,15 @@ func TestCodexRequestWithoutCredentials(t *testing.T) {
 	h := newHarness(t, nil, nil, false)
 
 	rec := h.do(t, http.MethodPost, "/v1/messages", `{"model":"gpt-5.5","messages":[]}`)
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("status = %d, want 401 when no Codex credentials are stored", rec.Code)
+	// Never 401: Claude Code would take it for its own login expiring.
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 when no Codex credentials are stored", rec.Code)
 	}
-	if got := gjson.Get(rec.Body.String(), "error.type").String(); got != "authentication_error" {
+	if got := gjson.Get(rec.Body.String(), "error.type").String(); got != "permission_error" {
 		t.Fatalf("error.type = %q", got)
+	}
+	if got := gjson.Get(rec.Body.String(), "error.message").String(); !strings.Contains(got, "ccmproxy login") {
+		t.Fatalf("error.message = %q, want it to name `ccmproxy login`", got)
 	}
 }
 
@@ -499,8 +503,11 @@ func TestCodexStreamErrorMidStream(t *testing.T) {
 	}, true)
 
 	rec := h.do(t, http.MethodPost, "/v1/messages", `{"model":"gpt-5.5","stream":false,"messages":[]}`)
-	if rec.Code != http.StatusBadGateway {
-		t.Fatalf("status = %d, want 502 for an error that arrived mid-stream", rec.Code)
+	if rec.Code != 529 {
+		t.Fatalf("status = %d, want 529 for an overloaded error that arrived mid-stream", rec.Code)
+	}
+	if got := gjson.Get(rec.Body.String(), "error.type").String(); got != "overloaded_error" {
+		t.Fatalf("error.type = %q", got)
 	}
 	if got := gjson.Get(rec.Body.String(), "error.message").String(); got != "try again" {
 		t.Fatalf("error.message = %q", got)

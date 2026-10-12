@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jclab-joseph/claude-code-model-proxy/internal/netx"
 )
 
 // captureLogs redirects logx output for the duration of the test by
@@ -145,7 +147,14 @@ func TestTransportReturnsTheUnderlyingError(t *testing.T) {
 	}
 }
 
-func TestTransportDefaultsToDefaultTransport(t *testing.T) {
+func TestTransportDefaultsToTheDirectTransport(t *testing.T) {
+	// http.DefaultTransport honours HTTPS_PROXY; the fallback must not.
+	if next := (&Transport{}).next(); next != netx.Shared() || next == http.DefaultTransport {
+		t.Fatalf("a nil Next falls back to %#v, want netx.Shared()", next)
+	}
+}
+
+func TestTransportWithANilNextStillWorks(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
@@ -260,3 +269,28 @@ func mustRequest(t *testing.T, method, url string, body io.Reader) *http.Request
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
+
+func TestLoggedURLsCarryNoQuery(t *testing.T) {
+	const secret = "q-secret-value-1234"
+	for _, target := range []string{"/v1/messages?beta=true&key=" + secret, "/v1/models?" + secret} {
+		req := httptest.NewRequest(http.MethodPost, target, nil)
+		req.Host = "127.0.0.1:8081"
+		got := requestURL(req)
+		if strings.Contains(got, secret) || strings.Contains(got, "?") {
+			t.Fatalf("inbound log URL = %q, want no query", got)
+		}
+		req.Host = ""
+		if got := requestURL(req); strings.Contains(got, secret) || strings.Contains(got, "?") {
+			t.Fatalf("inbound log URL without Host = %q, want no query", got)
+		}
+	}
+
+	out := mustRequest(t, http.MethodGet, "https://user:"+secret+"@api.example.test/v1/x?token="+secret+"#"+secret, nil)
+	got := outboundURL(out)
+	if got != "https://api.example.test/v1/x" {
+		t.Fatalf("outbound log URL = %q, want scheme, host and path only", got)
+	}
+	if out.URL.RawQuery == "" || out.URL.User == nil {
+		t.Fatal("outboundURL changed the request itself")
+	}
+}

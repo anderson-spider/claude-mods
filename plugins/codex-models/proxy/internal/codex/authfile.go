@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -49,6 +50,70 @@ func CodexCLIAuthPath() string {
 		return ""
 	}
 	return filepath.Join(home, codexCLIFileName)
+}
+
+// refersToCodexCLI reports whether path is, or leads to, the Codex CLI's
+// credential file, which this proxy never writes or removes.
+func refersToCodexCLI(path string) bool {
+	cli := CodexCLIAuthPath()
+	if strings.TrimSpace(path) == "" || cli == "" {
+		return false
+	}
+	return sameFile(path, cli)
+}
+
+// sameFile reports whether a and b name one file, after symlinks and `..`,
+// and also when one of them does not exist yet: then the same name in the
+// same directory counts, case-insensitively on macOS, whose default volume
+// ignores case.
+func sameFile(a, b string) bool {
+	ra, rb := resolvePath(a, 0), resolvePath(b, 0)
+	if ra == rb {
+		return true
+	}
+	if ia, err := os.Stat(ra); err == nil {
+		if ib, err := os.Stat(rb); err == nil {
+			return os.SameFile(ia, ib)
+		}
+	}
+	da, errA := os.Stat(filepath.Dir(ra))
+	db, errB := os.Stat(filepath.Dir(rb))
+	if errA != nil || errB != nil || !os.SameFile(da, db) {
+		return false
+	}
+	if runtime.GOOS == "darwin" {
+		return strings.EqualFold(filepath.Base(ra), filepath.Base(rb))
+	}
+	return filepath.Base(ra) == filepath.Base(rb)
+}
+
+// resolvePath follows path's symlinks, including a dangling last one, to an
+// absolute path; what cannot be resolved is cleaned as written.
+func resolvePath(path string, depth int) string {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		if abs, err := filepath.Abs(resolved); err == nil {
+			return abs
+		}
+		return resolved
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return filepath.Clean(path)
+	}
+	if depth < 16 {
+		if info, err := os.Lstat(abs); err == nil && info.Mode()&os.ModeSymlink != 0 {
+			if target, err := os.Readlink(abs); err == nil {
+				if !filepath.IsAbs(target) {
+					target = filepath.Join(filepath.Dir(abs), target)
+				}
+				return resolvePath(target, depth+1)
+			}
+		}
+	}
+	if dir, err := filepath.EvalSymlinks(filepath.Dir(abs)); err == nil {
+		return filepath.Join(dir, filepath.Base(abs))
+	}
+	return abs
 }
 
 // decodeCredentials parses either supported layout.
