@@ -205,8 +205,10 @@ func runServe(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if err := checkUpstream(ctx, cfg.Upstream, net.DefaultResolver.LookupNetIP); err != nil {
-		return err
+	if !contractSkipsUpstreamCheck(cfg.Upstream) {
+		if err := checkUpstream(ctx, cfg.Upstream, net.DefaultResolver.LookupNetIP); err != nil {
+			return err
+		}
 	}
 
 	// Every outbound call the proxy makes — to Anthropic, to the Codex

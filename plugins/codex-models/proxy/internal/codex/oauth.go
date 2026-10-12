@@ -89,7 +89,7 @@ func AuthorizeURL(state string, pkce *PKCE, callbackPort int) (string, error) {
 		"id_token_add_organizations": {"true"},
 		"codex_cli_simplified_flow":  {"true"},
 	}
-	return AuthURL + "?" + params.Encode(), nil
+	return authURL() + "?" + params.Encode(), nil
 }
 
 // Token is the credential set persisted for a Codex account.
@@ -201,7 +201,7 @@ func (c *Client) post(ctx context.Context, form url.Values) (*Token, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, TokenURL, strings.NewReader(form.Encode()))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenURL(), strings.NewReader(form.Encode()))
 	if err != nil {
 		return nil, fmt.Errorf("codex: build token request: %w", err)
 	}

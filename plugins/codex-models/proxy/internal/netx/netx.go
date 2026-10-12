@@ -14,7 +14,7 @@ import (
 // no longer exists, or at itself, and would send the OAuth bearer through it.
 func DirectTransport() *http.Transport {
 	dialer := &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}
-	return &http.Transport{
+	t := &http.Transport{
 		Proxy:                 nil,
 		DialContext:           dialer.DialContext,
 		ForceAttemptHTTP2:     true,
@@ -23,6 +23,8 @@ func DirectTransport() *http.Transport {
 		TLSHandshakeTimeout:   15 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
 	}
+	contractTrust(t)
+	return t
 }
 
 var (
