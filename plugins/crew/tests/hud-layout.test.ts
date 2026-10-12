@@ -67,6 +67,15 @@ test('cellWidth: emoji take two, marks and joiners none', () => {
   // a family emoji (ZWJ sequence) is one wide glyph
   expect(cellWidth('👨‍👩‍👧')).toBe(2)
   expect(cellWidth('​')).toBe(0)
+  // A joiner joins only within a grapheme: the character after a stray one still counts, and a dangling one eats nothing.
+  expect(cellWidth('a\u200db')).toBe(2)
+  expect(cellWidth('👨\u200d ')).toBe(3)
+  expect(cellWidth(fit('👨\u200d', 6))).toBe(6)
+  expect(fit('👨\u200d', 6)).toBe('👨\u200d    ')
+  // flags and keycaps are one wide glyph
+  expect(cellWidth('🇧🇷')).toBe(2)
+  expect(cellWidth('1️⃣')).toBe(2)
+  expect(cellWidth('🏳️‍🌈')).toBe(2)
   expect(charWidth(0x1f680)).toBe(2)
   expect(charWidth(0x41)).toBe(1)
   expect(charWidth(0x0301)).toBe(0)
