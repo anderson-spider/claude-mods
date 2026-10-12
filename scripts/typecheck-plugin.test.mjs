@@ -29,7 +29,7 @@ for (const { name, file, config, warning } of [
     assert.equal(result.status, 0);
     assert.equal(result.stdout, "");
     assert.equal(result.stderr, warning
-      ? "typecheck skipped for plugins/example: typings missing; run mise run plugins:types\n"
+      ? "typecheck skipped for plugins/example: typings missing; run mise run plugins:types (SessionStart reuses matching main-checkout typings when available)\n"
       : "");
   });
 }
