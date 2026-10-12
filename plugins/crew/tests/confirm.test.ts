@@ -1,3 +1,4 @@
+import { SPECIALISTS } from '../hooks/agents'
 import { expect, test } from 'claude-code/testing'
 import { confirmText, createConfirmations, normalizeModel, observedEffort, ranAsPlanned } from '../hooks/confirm'
 import type { Pending } from '../hooks/confirm'
@@ -152,4 +153,11 @@ test('unobserved suffix effort confirms only the model and does not invent an ef
 // Probe: an effort suffix before the date is not stripped (normalizeModel strips only a trailing effort).
 test('a dated id with the effort inside the date (gpt-6-astra-high-2026-05-01) is reported as a mismatch', () => {
   expect(ranAsPlanned({ model: 'gpt-6-astra', effort: 'high' }, { model: 'gpt-6-astra-high-2026-05-01', effort: 'high' })).toBe(false)
+})
+
+test('confirmation compares effort against the fixed role default model, not a classifier model choice', () => {
+  const developer = SPECIALISTS.find(spec => spec.name === 'developer')!
+  const planned = { model: developer.model, effort: 'high' }
+  expect(ranAsPlanned(planned, { model: 'claude-sonnet-5-5', effort: 'high' })).toBe(true)
+  expect(ranAsPlanned(planned, { model: 'claude-opus-5-5', effort: 'high' })).toBe(false)
 })

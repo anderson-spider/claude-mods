@@ -13,8 +13,7 @@ Deliver a user-approved plan before implementation; leave source edits for the a
 1. **Frame.** State the goal, constraints and acceptance criteria. Collect blocking questions in one `AskUserQuestion`; state conventional defaults for the rest.
 2. **Gather in parallel.** In one message, send self-contained questions and starting files/terms to `crew:code-reader` for code evidence (`path:line`) and `crew:research` for sourced external facts. Use only the roles needed; spot-check claims before making them plan steps.
 3. **Compare.** Present two or three options with costs and risks. For user-visible changes, first ask `crew:designer` for layout, states and copy, then include that spec.
-4. **Challenge.** Send the leading option, goal and constraints to `crew:architect`, with `.crew/reviews/<name>.md` for its review. Ask about contracts, authentication, data shapes and project rules. Incorporate or answer every objection.
-5. **Write the plan** to `.crew/plans/<name>.md`: context, chosen approach, files, existing code to reuse, verification and steps. Pass the path to every implementing or auditing agent. Use one line per step:
+4. **Write the plan** to `.crew/plans/<name>.md`: context, chosen approach, files, existing code to reuse, verification and steps. Pass the path to every implementing or auditing agent. Use one line per step:
 
    `- <ID> (<owner>, after: <ids or —>) <action and files> — state: <state>[ (<note>)]`
 
@@ -25,7 +24,7 @@ Deliver a user-approved plan before implementation; leave source edits for the a
    Example: `- T3 (crew:developer, after: T1, T2) add the contract suite in tests/contract — state: queued`.
 
    End with `## Waves`: a numbered list of comma-separated step IDs, grouped by independent inputs and disjoint files. Keep only the chosen approach and options the user needed to weigh.
-6. **Ask for approval.** The plan is the deliverable; implementation waits for approval. After approval, recommend a mode and command, then wait for the user to start it:
+5. **Ask for approval.** The plan is the deliverable; implementation waits for approval. After approval, recommend a mode and command, then wait for the user to start it:
    - `/goal`: a verifiable end, using the plan's acceptance condition as goal text.
    - `/loop`: repeating or waiting work, with an interval.
    - Direct delegation to `crew:developer`: a few straightforward steps.
@@ -38,4 +37,4 @@ Deliver a user-approved plan before implementation; leave source edits for the a
 - A step is `verified` only after `crew:architect` or its registered twin independently audits the full diff against the plan, optionally rerunning tests. The developer's self-check is its report, not acceptance. The architect writes `.crew/reviews/<name>.md` and opens with `Approve`, `Fixes` or `Reject` and a one-line reason.
 - Send failures to the same developer, including a `-codex` developer, with the criterion and expected versus actual; the architect reaudits after the fix.
 - Mark a step `committed` when its code is committed. A code-free gate closes with the commit it gated, recording the SHA in its note.
-- Agents use role defaults; with `jevKey` set, Jev may size model/effort one step from them. Explicit `model` bypasses routing on Claude roles. Call registered Codex twins without `model`: their fixed model must remain intact.
+- Models use role defaults or fixed twin ids; with `jevKey` set, Jev sizes effort only. Any Jev request or config failure requests medium; an agent past its first sent step keeps its effort. Explicit `model` bypasses routing on Claude roles. Call registered Codex twins without `model`: their fixed model must remain intact.

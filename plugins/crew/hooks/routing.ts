@@ -1,12 +1,12 @@
 // Jev's routing of one Agent call: which of the lead's crew agents may be routed, the state Jev is given and how its
-// answers become a model and an effort. Pure: the call to Jev is injected. The answers only move model and effort, at
+// answers become effort. Pure: the call to Jev is injected. The answers only move effort, at
 // most one step from the agent's defaults (and never below its floor), so a bad answer costs money, never a lane change.
 // The type is rewritten only by the quota rule in register.tsx, and only to the same role's registered twin (`twinFor`).
 
-import { EFFORTS, EFFORT_FLOOR, MODELS, MODEL_FLOORS, NATIVE_SUFFIX, SPECIALISTS } from './agents'
-import type { Agent, Effort, Model } from './agents'
+import { EFFORTS, EFFORT_FLOOR, MODELS, NATIVE_SUFFIX, SPECIALISTS } from './agents'
+import type { Agent, Effort } from './agents'
 import type { AskFn } from './jev'
-import { DEPTH_HIGH, DEPTH_TIE, DESCRIPTION_CHARS, PROMPT_CHARS, QUESTIONS, TIER_MIN_CONFIDENCE } from './questions'
+import { DEPTH_HIGH, DEPTH_TIE, DESCRIPTION_CHARS, PROMPT_CHARS, QUESTIONS } from './questions'
 import { head, redact } from './redact'
 import type { RedactContext } from './redact'
 
@@ -15,8 +15,8 @@ const PREFIX = 'crew:'
 const REDACT_WINDOW = 4 * PROMPT_CHARS
 
 /**
- * What routing acts on: a specialist, or a `-codex` twin. `base` names the specialist a twin copies; its presence means
- * the twin's model (any id) is never moved, only its effort.
+ * What routing acts on: a specialist, or a `-codex` twin. `base` names the specialist a twin copies.
+ * Both keep their registered model; Jev moves only effort.
  */
 export type Target = Agent<string> & { base?: string }
 
@@ -55,42 +55,16 @@ export function twinFor(
 }
 
 export type Decision = {
-  /** A model alias, or for a `-codex` twin its own id, which no answer moves. */
-  model: string
   effort: Effort
   /** What Jev answered, for the log; undefined when the answer was absent or unusable. */
-  tier?: Model
-  tierConfidence?: number
   depth?: number
 }
 
 const isNumber = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value)
 const clamp = (index: number, low: number, high: number) => Math.min(high, Math.max(low, index))
 
-/** The tier inside the agent's window: the default +-1, not below its floor. A model that is no alias (a `-codex` id) never moves. */
-function decideModel(spec: Target, named: Model | undefined, confidence: unknown): string {
-  const modelAt = MODELS.findIndex(m => m === spec.model)
-  if (spec.base !== undefined || modelAt === -1) return spec.model
-  const floor = MODELS.indexOf(MODEL_FLOORS[spec.name] ?? MODELS[0])
-  const lowModel = Math.max(modelAt - 1, floor)
-  const highModel = Math.min(modelAt + 1, MODELS.length - 1)
-  if (named && isNumber(confidence) && confidence >= TIER_MIN_CONFIDENCE) {
-    return MODELS[clamp(MODELS.indexOf(named), lowModel, highModel)] ?? spec.model
-  }
-  return spec.model
-}
-
-/**
- * Applies the answers inside the agent's window: the default tier +-1, not below its floor; effort the same, never below
- * `EFFORT_FLOOR`. A `-codex` twin keeps its model whatever the tier answer says; its effort follows the same rule.
- */
+/** Applies depth inside the default effort +-1 window, never below `EFFORT_FLOOR`; models stay with the role. */
 export function decide(spec: Target, answers: Record<string, Record<string, unknown>>): Decision {
-  const tier = answers.tier
-  const choice = tier?.choice
-  const confidence = tier?.confidence
-  const named = typeof choice === 'string' ? MODELS.find(m => m === choice) : undefined
-  const model = decideModel(spec, named, confidence)
-
   const effortAt = EFFORTS.indexOf(spec.effort)
   const depth = answers.reasoning_depth?.score
   let effort = spec.effort
@@ -100,10 +74,7 @@ export function decide(spec: Target, answers: Record<string, Record<string, unkn
   }
 
   return {
-    model,
     effort,
-    ...(named ? { tier: named } : {}),
-    ...(isNumber(confidence) ? { tierConfidence: confidence } : {}),
     ...(isNumber(depth) ? { depth } : {}),
   }
 }
@@ -137,18 +108,16 @@ export function retarget(routed: Routed, spec: Target): Routed {
   return { ...routed, decision: decide(spec, routed.answers ?? {}) }
 }
 
-/** A decision that moves nothing: what a switched call without a Jev answer is tagged and confirmed with. */
-export function defaultsOf(spec: Target): Routed {
-  return { decision: { model: spec.model, effort: spec.effort }, ms: 0 }
+/** Explicit medium fallback when Jev has no answer, also used for quota-only twin calls. */
+export function defaultsOf(_spec: Target): Routed {
+  return { decision: { effort: 'medium' }, ms: 0 }
 }
 
 /** What Jev moved from the agent's defaults; undefined where the answer is the default or there is no answer. */
-export type Moved = { model: string | undefined; effort: Effort | undefined }
+export type Moved = { effort: Effort | undefined }
 
 export function moved(spec: Target, routed: Routed | undefined): Moved {
   return {
-    // The twin's canonical model never moves; register.tsx adds only the effort suffix on the wire.
-    model: spec.base === undefined && routed && routed.decision.model !== spec.model ? routed.decision.model : undefined,
     effort: routed && routed.decision.effort !== spec.effort ? routed.decision.effort : undefined,
   }
 }
@@ -157,15 +126,17 @@ export function moved(spec: Target, routed: Routed | undefined): Moved {
 export type Switch = { requested: string; reason: string }
 
 /**
- * The notice of a decision. An effort that was moved but did not take shows the default the subagent runs on and says
- * so; otherwise the notice shows the effort of the answer. A switched call names the provider and the reason; `jev` is
- * false when Jev gave no answer, so the effort is the default and not Jev's.
+ * The notice shows known configuration, or explicitly unknown effort when an apply request could not bind.
+ * A rejected request names the effort that did not take. A switched call names the provider and the reason; `jev` is
+ * false when Jev gave no answer, so medium is crew's fallback and not Jev's.
  */
-export function noticeText(spec: Target, routed: Routed, notApplied: Effort | undefined, via?: Switch, jev = true): string {
-  const tail = !jev ? '' : notApplied === undefined ? ' (jev)' : ` (jev; effort ${notApplied} not applied)`
-  const effort = `${notApplied === undefined ? routed.decision.effort : spec.effort}${tail}`
+export function noticeText(spec: Target, routed: Routed, notApplied: Effort | undefined, via?: Switch, jev = true, applied?: Effort | null): string {
+  const by = jev ? 'jev' : via ? 'quota' : 'crew'
+  const tail = notApplied !== undefined ? ` (${by}; effort ${notApplied} not applied)` : jev ? ' (jev)' : ''
+  const known = applied === undefined ? (notApplied === undefined ? routed.decision.effort : spec.effort) : applied
+  const effort = `${known ?? 'effort unknown'}${tail}`
   const head = via ? `${via.requested} -> Codex (${via.reason})` : `crew:${spec.name} -> `
-  return `${head}${via ? ' · ' : ''}${routed.decision.model} · ${effort}`
+  return `${head}${via ? ' · ' : ''}${spec.model} · ${effort}`
 }
 
 const escaped = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -180,20 +151,19 @@ export function untagged(description: string, models: readonly string[] = []): s
   return description.replace(new RegExp(` · (?:${names})/(?:low|medium|high)$`), '')
 }
 
-/** The call's description with the model and effort Jev chose, as the task list shows it: `audit auth · opus/high`. */
-export function taggedDescription(description: string, routed: Routed): string {
-  return `${description} · ${routed.decision.model}/${routed.decision.effort}`
+/** The call's description with the role model and chosen effort, as the task list shows it. */
+export function taggedDescription(description: string, routed: Routed, model: string): string {
+  return `${description} · ${model}/${routed.decision.effort}`
 }
 
 /** One line for the notice and the debug log; the prompt never appears in it. */
-export function describe(spec: Target, routed: Routed, applied: { model?: string; effort?: Effort }): string {
+export function describe(spec: Target, routed: Routed, applied: { effort?: Effort | null }): string {
   const { decision, jevModel, ms } = routed
   const parts = [
     `crew:${spec.name}`,
-    `tier=${decision.tier ?? '-'}${decision.tierConfidence === undefined ? '' : `@${decision.tierConfidence.toFixed(2)}`}`,
     `depth=${decision.depth === undefined ? '-' : decision.depth.toFixed(2)}`,
-    `model=${applied.model ?? `${spec.model} (default)`}`,
-    `effort=${applied.effort ?? `${spec.effort} (default)`}`,
+    `model=${spec.model} (default)`,
+    `effort=${applied.effort === null ? 'unknown' : applied.effort ?? `${spec.effort} (default)`}`,
     `jev=${jevModel ?? '-'}`,
     `${ms}ms`,
   ]

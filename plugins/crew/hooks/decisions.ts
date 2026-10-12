@@ -2,7 +2,7 @@
 // and the log line are injected. A record holds numbers and short names only; never the prompt, the description, the
 // key or a path.
 
-import type { Effort, Model } from './agents'
+import type { Effort } from './agents'
 import type { Provider, Reading, Window } from './quota'
 
 /** `<home>/.claude/crew/decisions`: the home is the trusted one, never the repository's. */
@@ -21,16 +21,11 @@ export type DecisionInput = {
   /** The two readings the provider was chosen from; absent when quota routing is off. */
   claude?: Reading | null
   codex?: Reading | null
-  tier?: Model
-  confidence?: number
   depth?: number
-  /** A model alias for a specialist, or any model id. */
-  defaultModel: string
-  model: string
   defaultEffort: Effort
   effortPlanned: Effort
-  /** The applied request configuration: the planned one when it took, else the default; observed execution is in `ran`. */
-  effortApplied: Effort
+  /** Known request configuration, or null when a first step prevented binding; observed execution is in `ran`. */
+  effortApplied: Effort | null
   /** Claude's effort-book outcome, or `suffix` for a successful twin spawn using a wire model suffix (defaults included). */
   bind?: string
   jevModel?: string
@@ -43,7 +38,7 @@ type LoggedWindow = { percentUsed: number; resetsAt?: string }
 export type LoggedReading = { fiveHour?: LoggedWindow; sevenDay?: LoggedWindow }
 
 export type DecisionRecord = {
-  v: 2
+  v: 3
   ts: string
   agent: string
   requested: string
@@ -51,19 +46,15 @@ export type DecisionRecord = {
   reason: string | null
   /** The 5-hour and 7-day readings of both providers when the decision was made; null where not read. */
   quota: { claude: LoggedReading | null; codex: LoggedReading | null }
-  tier: Model | null
-  confidence: number | null
   depth: number | null
-  defaultModel: string
-  model: string
   defaultEffort: Effort
   effortPlanned: Effort
-  effortApplied: Effort
+  effortApplied: Effort | null
   bind: string | null
   jevModel: string | null
   durationMs: number
   descriptionHash: string
-  applied: { model: boolean; effort: boolean }
+  applied: { effort: boolean }
   /** What the first confirmed step ran on: the model id the API reported and the effort sent; null until then. */
   ran: { model: string | null; effort: string | null } | null
   /** Filled in by hand when annotating: whether the choice turned out right. */
@@ -100,18 +91,14 @@ const numberOr = (value: number | undefined): number | null => (typeof value ===
 
 export function decisionRecord(input: DecisionInput): DecisionRecord {
   return {
-    v: 2,
+    v: 3,
     ts: input.ts,
     agent: input.agent,
     requested: input.requested,
     provider: input.provider,
     reason: input.reason ? input.reason.slice(0, REASON_CHARS) : null,
     quota: { claude: loggedReading(input.claude), codex: loggedReading(input.codex) },
-    tier: input.tier ?? null,
-    confidence: numberOr(input.confidence),
     depth: numberOr(input.depth),
-    defaultModel: input.defaultModel,
-    model: input.model,
     defaultEffort: input.defaultEffort,
     effortPlanned: input.effortPlanned,
     effortApplied: input.effortApplied,
@@ -119,7 +106,7 @@ export function decisionRecord(input: DecisionInput): DecisionRecord {
     jevModel: input.jevModel !== undefined && MODEL_ID.test(input.jevModel) ? input.jevModel : null,
     durationMs: Math.max(0, Math.round(input.durationMs)),
     descriptionHash: fnv1a(input.description ?? ''),
-    applied: { model: input.model !== input.defaultModel, effort: input.effortApplied !== input.defaultEffort },
+    applied: { effort: input.effortApplied !== null && input.effortApplied !== input.defaultEffort },
     ran: null,
     outcome: null,
   }
@@ -143,7 +130,7 @@ export type DecisionIo = {
 
 /**
  * Writes one record. Never rejects: a failure is one debug line, prefixed by what decided the call (`jev`, `quota`,
- * or `crew` for an explicit twin's medium fallback). Without a trusted home nothing is written.
+ * or `crew` for a medium fallback). Without a trusted home nothing is written.
  */
 export async function saveDecision(io: DecisionIo, home: string | undefined, id: string, record: DecisionRecord, by: 'jev' | 'quota' | 'crew' = 'jev'): Promise<void> {
   const prefix = by === 'crew' ? 'crew' : `crew ${by}`

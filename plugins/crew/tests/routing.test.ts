@@ -1,100 +1,61 @@
 import { expect, test } from 'claude-code/testing'
-import { EFFORT_FLOOR, MODEL_FLOORS, SPECIALISTS, nativeCodexSpecs } from '../hooks/agents'
+import { EFFORT_FLOOR, SPECIALISTS, nativeCodexSpecs } from '../hooks/agents'
 import type { Specialist } from '../hooks/agents'
 import { decide, defaultsOf, describe, moved, noticeText, retarget, route, routable, stateOf, taggedDescription, twinFor, untagged } from '../hooks/routing'
 import type { Routed } from '../hooks/routing'
 import { PROMPT_CHARS } from '../hooks/questions'
 
 const spec = (name: string) => SPECIALISTS.find(s => s.name === name) as Specialist
-const answers = (tier: [string, number] | undefined, depth: number | undefined) => ({
-  ...(tier ? { tier: { choice: tier[0], confidence: tier[1], probabilities: {} } } : {}),
+const answers = (depth: number | undefined) => ({
   ...(depth === undefined ? {} : { reasoning_depth: { score: depth, confidence: 0.5 } }),
 })
 const ctx = { home: '/Users/jane', root: '/Users/jane/app' }
-
-test('the tier follows Jev inside the default +-1 window', () => {
-  // developer defaults to sonnet: haiku, sonnet and opus are all one step away.
-  expect(decide(spec('developer'), answers(['haiku', 0.97], 1.4)).model).toBe('haiku')
-  expect(decide(spec('developer'), answers(['sonnet', 0.98], 1.4)).model).toBe('sonnet')
-  expect(decide(spec('developer'), answers(['opus', 0.98], 1.4)).model).toBe('opus')
-})
-
-test('a tier two steps from the default is clamped to one step', () => {
-  expect(decide(spec('code-reader'), answers(['opus', 0.99], 1.4)).model).toBe('sonnet')
-  expect(decide(spec('architect'), answers(['haiku', 0.99], 3.9)).model).toBe('opus')
-})
-
-test('the architect is never below opus, and the floor is stated for it only', () => {
-  expect(MODEL_FLOORS).toEqual({ architect: 'opus' })
-  for (const choice of ['haiku', 'sonnet', 'opus']) {
-    const { model } = decide(spec('architect'), answers([choice, 0.99], 0.2))
-    expect(model).toBe('opus')
-  }
-})
-
-test('a tier answer below 0.5 confidence keeps the default model', () => {
-  expect(decide(spec('developer'), answers(['opus', 0.49], 1.4)).model).toBe('sonnet')
-  expect(decide(spec('developer'), answers(['opus', 0.5], 1.4)).model).toBe('opus')
-  expect(decide(spec('code-reader'), answers(['sonnet', 0.2], 0.2)).model).toBe('haiku')
-})
 
 test('depth 3.0 is the bound to high; below it is medium, never below the medium floor', () => {
   expect(EFFORT_FLOOR).toBe('medium')
   // Every agent defaults to medium: a depth under 3.0 keeps it, a depth from 3.0 up raises it to high.
   for (const s of SPECIALISTS) {
-    expect(decide(s, answers(undefined, 0.1)).effort).toBe('medium')
-    expect(decide(s, answers(undefined, 0.74)).effort).toBe('medium')
-    expect(decide(s, answers(undefined, 1.43)).effort).toBe('medium')
-    expect(decide(s, answers(undefined, 2.5)).effort).toBe('medium')
-    expect(decide(s, answers(undefined, 2.9)).effort).toBe('medium')
-    expect(decide(s, answers(undefined, 3.02)).effort).toBe('high')
-    expect(decide(s, answers(undefined, 3.96)).effort).toBe('high')
+    expect(decide(s, answers(0.1)).effort).toBe('medium')
+    expect(decide(s, answers(0.74)).effort).toBe('medium')
+    expect(decide(s, answers(1.43)).effort).toBe('medium')
+    expect(decide(s, answers(2.5)).effort).toBe('medium')
+    expect(decide(s, answers(2.9)).effort).toBe('medium')
+    expect(decide(s, answers(3.02)).effort).toBe('high')
+    expect(decide(s, answers(3.96)).effort).toBe('high')
   }
 })
 
 test('a depth within 0.01 of the bound or no depth keeps the default effort', () => {
   const high = { ...spec('developer'), effort: 'high' as const }
-  expect(decide(high, answers(undefined, 3.0)).effort).toBe('high')
-  expect(decide(high, answers(undefined, 2.995)).effort).toBe('high')
-  expect(decide(high, answers(undefined, 3.005)).effort).toBe('high')
-  expect(decide(high, answers(undefined, 2.98)).effort).toBe('medium')
-  expect(decide(spec('developer'), answers(undefined, 3.0)).effort).toBe('medium')
-  expect(decide(spec('developer'), answers(undefined, 2.995)).effort).toBe('medium')
-  expect(decide(spec('developer'), answers(undefined, undefined)).effort).toBe('medium')
+  expect(decide(high, answers(3.0)).effort).toBe('high')
+  expect(decide(high, answers(2.995)).effort).toBe('high')
+  expect(decide(high, answers(3.005)).effort).toBe('high')
+  expect(decide(high, answers(2.98)).effort).toBe('medium')
+  expect(decide(spec('developer'), answers(3.0)).effort).toBe('medium')
+  expect(decide(spec('developer'), answers(2.995)).effort).toBe('medium')
+  expect(decide(spec('developer'), answers(undefined)).effort).toBe('medium')
   expect(decide(spec('developer'), { reasoning_depth: { score: 'high' } }).effort).toBe('medium')
-})
-
-test('the architect (opus, floor) keeps opus at any depth and moves effort only from the bound', () => {
-  expect(decide(spec('architect'), answers(['haiku', 0.99], 3.5))).toMatchObject({ model: 'opus', effort: 'high' })
-  expect(decide(spec('architect'), answers(['haiku', 0.99], 0.2))).toMatchObject({ model: 'opus', effort: 'medium' })
 })
 
 test('a high-default agent drops one step below the bound, never below the medium floor', () => {
   const high = { ...spec('developer'), effort: 'high' as const }
-  expect(decide(high, answers(undefined, 3.02)).effort).toBe('high')
-  expect(decide(high, answers(undefined, 2.98)).effort).toBe('medium')
-  expect(decide(high, answers(undefined, 0.2)).effort).toBe('medium')
-})
-
-test('the tier applies at confidence 0.5 and not at 0.49, whatever the depth', () => {
-  expect(decide(spec('developer'), answers(['opus', 0.49], 3.5))).toMatchObject({ model: 'sonnet', effort: 'high' })
-  expect(decide(spec('developer'), answers(['opus', 0.5], 3.5))).toMatchObject({ model: 'opus', effort: 'high' })
+  expect(decide(high, answers(3.02)).effort).toBe('high')
+  expect(decide(high, answers(2.98)).effort).toBe('medium')
+  expect(decide(high, answers(0.2)).effort).toBe('medium')
 })
 
 test('3.01 and 2.99 are ties in floating point (|d - 3.0| is 0.00999..., under 0.01): they keep the default', () => {
   // Documented as "within 0.01": both edges count as within, so the default stays; 3.011 and 2.989 are outside.
   const high = { ...spec('developer'), effort: 'high' as const }
-  expect(decide(spec('developer'), answers(undefined, 3.01)).effort).toBe('medium')
-  expect(decide(high, answers(undefined, 2.99)).effort).toBe('high')
-  expect(decide(spec('developer'), answers(undefined, 3.011)).effort).toBe('high')
-  expect(decide(high, answers(undefined, 2.989)).effort).toBe('medium')
+  expect(decide(spec('developer'), answers(3.01)).effort).toBe('medium')
+  expect(decide(high, answers(2.99)).effort).toBe('high')
+  expect(decide(spec('developer'), answers(3.011)).effort).toBe('high')
+  expect(decide(high, answers(2.989)).effort).toBe('medium')
 })
 
 test('unusable answers change nothing', () => {
   const none = decide(spec('developer'), {})
-  expect(none).toEqual({ model: 'sonnet', effort: 'medium' })
-  expect(decide(spec('developer'), answers(['gpt', 0.99], undefined)).model).toBe('sonnet')
-  expect(decide(spec('developer'), { tier: { choice: 'opus', confidence: 'high' } }).model).toBe('sonnet')
+  expect(none).toEqual({ effort: 'medium' })
 })
 
 test('only crew agents from the table, not forks, not calls that name a model', () => {
@@ -123,41 +84,39 @@ test('route asks once and decides; its log line holds no prompt', async () => {
   let asked: unknown
   const ask = async (_questions: unknown, state: unknown) => {
     asked = state
-    return { answers: answers(['opus', 0.9], 3.9), model: 'jev-1.13.0', ms: 12 }
+    return { answers: answers(3.9), model: 'jev-1.13.0', ms: 12 }
   }
   const routed = await route(ask, ctx, spec('developer'), { prompt: 'audit the auth migration', description: 'audit' })
-  expect(routed.decision).toMatchObject({ model: 'opus', effort: 'high', tier: 'opus', tierConfidence: 0.9, depth: 3.9 })
+  expect(routed.decision).toMatchObject({ effort: 'high', depth: 3.9 })
   expect(JSON.stringify(asked)).toContain('audit the auth migration')
-  const line = describe(spec('developer'), routed, { model: 'opus', effort: 'high' })
+  const line = describe(spec('developer'), routed, { effort: 'high' })
   expect(line).toContain('crew:developer')
-  expect(line).toContain('model=opus')
+  expect(line).toContain('model=sonnet (default)')
   expect(line).toContain('jev=jev-1.13.0')
   expect(line).not.toContain('auth migration')
 })
 
-const routedAs = (model: 'haiku' | 'sonnet' | 'opus', effort: 'low' | 'medium' | 'high'): Routed => ({
-  decision: { model, effort },
+const routedAs = (effort: 'low' | 'medium' | 'high'): Routed => ({
+  decision: { effort },
   ms: 5,
 })
 
 test('moved names only what differs from the agent defaults, and nothing without an answer', () => {
   // developer defaults to sonnet and medium.
-  expect(moved(spec('developer'), routedAs('opus', 'high'))).toEqual({ model: 'opus', effort: 'high' })
-  expect(moved(spec('developer'), routedAs('sonnet', 'high'))).toEqual({ model: undefined, effort: 'high' })
-  expect(moved(spec('developer'), routedAs('haiku', 'medium'))).toEqual({ model: 'haiku', effort: undefined })
-  expect(moved(spec('developer'), routedAs('sonnet', 'medium'))).toEqual({ model: undefined, effort: undefined })
-  expect(moved(spec('developer'), undefined)).toEqual({ model: undefined, effort: undefined })
+  expect(moved(spec('developer'), routedAs('high'))).toEqual({ effort: 'high' })
+  expect(moved(spec('developer'), routedAs('medium'))).toEqual({ effort: undefined })
+  expect(moved(spec('developer'), undefined)).toEqual({ effort: undefined })
 })
 
 test('the notice shows the answered effort, or the default with the moved effort named as not applied', () => {
-  const routed = routedAs('opus', 'high')
-  expect(noticeText(spec('developer'), routed, undefined)).toBe('crew:developer -> opus · high (jev)')
-  expect(noticeText(spec('developer'), routed, 'high')).toBe('crew:developer -> opus · medium (jev; effort high not applied)')
+  const routed = routedAs('high')
+  expect(noticeText(spec('developer'), routed, undefined)).toBe('crew:developer -> sonnet · high (jev)')
+  expect(noticeText(spec('developer'), routed, 'high')).toBe('crew:developer -> sonnet · medium (jev; effort high not applied)')
 })
 
 test('a default effort outside the floor and high still routes to the floor', () => {
-  expect(decide({ ...spec('developer'), effort: 'high' }, answers(undefined, 0.1)).effort).toBe('medium')
-  expect(decide({ ...spec('developer'), effort: 'low' }, answers(undefined, 0.1)).effort).toBe('medium')
+  expect(decide({ ...spec('developer'), effort: 'high' }, answers(0.1)).effort).toBe('medium')
+  expect(decide({ ...spec('developer'), effort: 'low' }, answers(0.1)).effort).toBe('medium')
 })
 
 // --- The task's tag ---
@@ -196,9 +155,9 @@ test('a model id that is no alias and not registered is user text: it stays', ()
 })
 
 test('a tag the plugin writes is stripped again, for a model alias and for a model id', () => {
-  const routed = (model: string, effort: string) => ({ decision: { model, effort }, ms: 1 }) as unknown as Routed
+  const routed = (effort: 'medium' | 'high'): Routed => ({ decision: { effort }, ms: 1 })
   for (const model of ['haiku', 'sonnet', 'opus', 'gpt-6-astra']) {
-    expect(untagged(taggedDescription('audit auth', routed(model, 'high')), ['gpt-6-astra'])).toBe('audit auth')
+    expect(untagged(taggedDescription('audit auth', routed('high'), model), ['gpt-6-astra'])).toBe('audit auth')
   }
 })
 
@@ -212,7 +171,7 @@ test('a -codex type is routable only when it is a registered twin, as its base r
     expect(routable({ subagentType: `crew:${name}` }, twins)?.name).toBe(name)
     expect(routable({ subagentType: `crew:${name}-codex` })).toBeUndefined()
   }
-  expect(twin('developer-codex')).toMatchObject({ name: 'developer-codex', base: 'developer', model: 'gpt-6-astra', effort: 'medium' })
+  expect(twin('developer-codex')).toMatchObject({ name: 'developer-codex', base: 'developer', effort: 'medium' })
   expect(twin('developer-codex').prompt).toBe(spec('developer').prompt)
   expect(routable({ subagentType: 'crew:tester-codex' }, twins)).toBeUndefined()
   expect(routable({ subagentType: 'crew:foo-codex' }, nativeCodexSpecs({ developer: 'x' }))).toBeUndefined()
@@ -222,92 +181,56 @@ test('a -codex type is routable only when it is a registered twin, as its base r
   expect(routable({ subagentType: 'crew:developer-codex', workflow: {} }, twins)).toBeUndefined()
 })
 
-test('a -codex twin keeps its model whatever the tier answer, and moves its effort by the Claude roles\' rule', () => {
-  for (const tier of ['haiku', 'sonnet', 'opus'] as const) {
-    for (const name of ['developer-codex', 'architect-codex', 'code-reader-codex']) {
-      const decision = decide(twin(name), answers([tier, 1], 1.4))
-      expect(decision.model).toBe(twin(name).model)
-      expect(decision.effort).toBe('medium')
-    }
-  }
+test('a -codex twin follows the same effort rule as Claude roles', () => {
   const t = twin('developer-codex')
-  expect(decide(t, answers(['opus', 1], 3.5))).toMatchObject({ model: 'gpt-6-astra', effort: 'high', tier: 'opus', tierConfidence: 1, depth: 3.5 })
-  expect(decide(t, answers(['haiku', 1], 2.0)).effort).toBe('medium')
-  expect(decide(t, answers(undefined, 0.1)).effort).toBe('medium')
-  expect(decide(t, answers(undefined, 3.02)).effort).toBe('high')
-  expect(decide(t, answers(undefined, 2.99)).effort).toBe('medium')
-  expect(decide(t, answers(undefined, 3.005)).effort).toBe('medium')
-  expect(decide(t, answers(undefined, undefined))).toEqual({ model: 'gpt-6-astra', effort: 'medium' })
+  expect(decide(t, answers(3.5))).toMatchObject({ effort: 'high', depth: 3.5 })
+  expect(decide(t, answers(2.0)).effort).toBe('medium')
+  expect(decide(t, answers(0.1)).effort).toBe('medium')
+  expect(decide(t, answers(3.02)).effort).toBe('high')
+  expect(decide(t, answers(2.99)).effort).toBe('medium')
+  expect(decide(t, answers(3.005)).effort).toBe('medium')
+  expect(decide(t, answers(undefined))).toEqual({ effort: 'medium' })
   for (const depth of [0.1, 1.4, 2.5, 2.9, 3.02, 3.5, 3.96, undefined]) {
     for (const base of ['developer', 'architect', 'code-reader']) {
-      expect(decide(twin(`${base}-codex`), answers(undefined, depth)).effort).toBe(decide(spec(base), answers(undefined, depth)).effort)
+      expect(decide(twin(`${base}-codex`), answers(depth)).effort).toBe(decide(spec(base), answers(depth)).effort)
     }
   }
 })
 
-test('nothing moves for a twin whose model is no alias, even without a base mark', () => {
-  const bare = { ...twin('developer-codex'), base: undefined }
-  expect(decide(bare, answers(['opus', 1], 1.4)).model).toBe('gpt-6-astra')
-})
-
-test('moved never names a model for a twin; its effort is named like any other', () => {
+test('moved names only effort for a twin, like for any other role', () => {
   const t = twin('developer-codex')
-  const routed = (depth: number): Routed => ({ decision: decide(t, answers(['opus', 1], depth)), ms: 1 })
-  expect(moved(t, routed(3.5))).toEqual({ model: undefined, effort: 'high' })
-  expect(moved(t, routed(1.4))).toEqual({ model: undefined, effort: undefined })
-  expect(moved(t, { decision: { model: 'opus', effort: 'medium' }, ms: 1 })).toEqual({ model: undefined, effort: undefined })
+  const routed = (depth: number): Routed => ({ decision: decide(t, answers(depth)), ms: 1 })
+  expect(moved(t, routed(3.5))).toEqual({ effort: 'high' })
+  expect(moved(t, routed(1.4))).toEqual({ effort: undefined })
+  expect(moved(t, { decision: { effort: 'medium' }, ms: 1 })).toEqual({ effort: undefined })
 })
 
 test('Jev is asked as for the base role, and the tag, notice and line carry the twin\'s model id', () => {
   const t = twin('developer-codex')
   const state = stateOf(t, { prompt: 'p', description: 'audit auth' }, ctx)
   expect(state.agent).toEqual({ type: 'developer', description: 'audit auth' })
-  const routed: Routed = { decision: decide(t, answers(['opus', 0.9], 3.5)), ms: 12 }
-  expect(taggedDescription('audit auth', routed)).toBe('audit auth · gpt-6-astra/high')
+  const routed: Routed = { decision: decide(t, answers(3.5)), ms: 12 }
+  expect(taggedDescription('audit auth', routed, 'gpt-6-astra')).toBe('audit auth · gpt-6-astra/high')
   expect(noticeText(t, routed, undefined)).toBe('crew:developer-codex -> gpt-6-astra · high (jev)')
   expect(describe(t, routed, { effort: 'high' })).toContain('crew:developer-codex')
   expect(describe(t, routed, { effort: 'high' })).toContain('model=gpt-6-astra (default)')
 })
 
-// --- Jev decisions for a twin, over the tier, confidence and depth grid ---
+// --- Jev decisions for a twin over the depth grid ---
 
 const GRID_TWINS = nativeCodexSpecs({ developer: 'gpt-6-astra', architect: 'gpt-6-sage' })
-const gridAnswers = (tier: string, confidence: number, depth: number) => ({
-  tier: { choice: tier, confidence },
-  reasoning_depth: { score: depth },
-})
 
-test('on the whole grid, any tier at any confidence leaves a twin\'s model alone and moved() never names one', () => {
-  for (const type of ['crew:developer-codex', 'crew:architect-codex']) {
-    const spec = routable({ subagentType: type }, GRID_TWINS)!
-    expect(spec).toBeDefined()
-    for (const tier of ['haiku', 'sonnet', 'opus', 'fable', 'gpt-6']) {
-      for (const confidence of [0, 0.49, 0.5, 0.8, 1]) {
-        for (const depth of [0, 2.9, 3, 3.5, 4]) {
-          const decision = decide(spec, gridAnswers(tier, confidence, depth))
-          expect(decision.model).toBe(spec.model)
-          const routed: Routed = { decision, ms: 1 }
-          expect(moved(spec, routed).model).toBeUndefined()
-        }
-      }
-    }
-  }
-})
-
-test('on the grid, twin effort follows the base rule: 2.9 medium, 3.0 tie keeps default, 3.5 high; architect-codex not forced to opus', () => {
+test('on the grid, twin effort follows the base rule: 2.9 medium, 3.0 tie keeps default, 3.5 high', () => {
   for (const type of ['crew:developer-codex', 'crew:architect-codex']) {
     const spec = routable({ subagentType: type }, GRID_TWINS)!
     const base = SPECIALISTS.find(s => `crew:${s.name}-codex` === type)!
     for (const depth of [2.9, 3.0, 3.5, 3.005, 2.995]) {
-      expect(decide(spec, gridAnswers('opus', 1, depth)).effort).toBe(decide(base, gridAnswers('opus', 1, depth)).effort)
+      expect(decide(spec, answers(depth)).effort).toBe(decide(base, answers(depth)).effort)
     }
-    expect(decide(spec, gridAnswers('haiku', 1, 2.9)).effort).toBe('medium')
-    expect(decide(spec, gridAnswers('haiku', 1, 3.0)).effort).toBe(spec.effort)
-    expect(decide(spec, gridAnswers('haiku', 1, 3.5)).effort).toBe('high')
+    expect(decide(spec, answers(2.9)).effort).toBe('medium')
+    expect(decide(spec, answers(3.0)).effort).toBe(spec.effort)
+    expect(decide(spec, answers(3.5)).effort).toBe('high')
   }
-  const architect = routable({ subagentType: 'crew:architect-codex' }, GRID_TWINS)!
-  expect(decide(architect, gridAnswers('haiku', 1, 3.5)).model).toBe('gpt-6-sage')
-  expect(decide(architect, gridAnswers('opus', 1, 3.5)).model).toBe('gpt-6-sage')
 })
 
 test('a twin not in the registered list, an unregistered type, a fork or a given model is not routable', () => {
@@ -318,10 +241,9 @@ test('a twin not in the registered list, an unregistered type, a fork or a given
   expect(routable({ subagentType: 'acme:developer-codex' }, GRID_TWINS)).toBeUndefined()
 })
 
-
 // --- The tag: only a known model is stripped ---
 
-const tagRouted = (model: string, effort: 'low' | 'medium' | 'high'): Routed => ({ decision: { model, effort }, ms: 1 })
+const tagRouted = (effort: 'low' | 'medium' | 'high'): Routed => ({ decision: { effort }, ms: 1 })
 
 test('strips one trailing tag of an alias or a registered id', () => {
   const ids = ['gpt-6-astra', 'gpt-6.1-codex:mini', 'x', 'y']
@@ -351,14 +273,13 @@ test('"docs · v2/high" and "compare · old/low" keep their endings', () => {
 test('round trip, tagging then untagging gives the description back, and re-tagging does not double', () => {
   for (const description of ['audit auth', 'docs · v2/high-level', 'a/b · c', 'x · y/high · z']) {
     for (const model of ['opus', 'gpt-6-astra', 'gpt-6.1-codex-max']) {
-      const tagged = taggedDescription(description, tagRouted(model, 'high'))
+      const tagged = taggedDescription(description, tagRouted('high'), model)
       expect(untagged(tagged, [model])).toBe(description)
-      const again = taggedDescription(untagged(tagged, [model]), tagRouted(model, 'medium'))
+      const again = taggedDescription(untagged(tagged, [model]), tagRouted('medium'), model)
       expect(again).toBe(`${description} · ${model}/medium`)
     }
   }
 })
-
 
 // --- untagged with registered twin ids ---
 
@@ -379,7 +300,7 @@ test('only alias tags and registered twin ids are stripped; ids are matched lite
   expect(untagged('a · opus/high · sonnet/low')).toBe('a · opus/high')
   for (const description of ['audit', 'docs · v2/high', 'x · y/high · z']) {
     for (const model of ['opus', 'gpt-6.1-codex-max']) {
-      const tagged = taggedDescription(description, { decision: { model, effort: 'high' }, ms: 1 })
+      const tagged = taggedDescription(description, { decision: { effort: 'high' }, ms: 1 }, model)
       expect(untagged(tagged, ['gpt-6.1-codex-max'])).toBe(description)
     }
   }
@@ -391,7 +312,7 @@ const QUOTA_TWINS = nativeCodexSpecs({ developer: 'gpt-6-astra', architect: 'gpt
 
 test('twinFor names the role\'s registered twin as a target with its base, for a plain specialist call', () => {
   const target = twinFor({ subagentType: 'crew:developer' }, QUOTA_TWINS)
-  expect(target).toMatchObject({ name: 'developer-codex', model: 'gpt-6-astra', base: 'developer', effort: 'medium' })
+  expect(target).toMatchObject({ name: 'developer-codex', base: 'developer', effort: 'medium' })
   expect(twinFor({ subagentType: 'crew:architect' }, QUOTA_TWINS)).toMatchObject({ name: 'architect-codex', base: 'architect' })
 })
 
@@ -412,40 +333,56 @@ test('twinFor is undefined where the call must stay as it is', () => {
 
 test('Jev\'s answers retargeted to a twin keep the effort answer and never name a model', async () => {
   const twin = twinFor({ subagentType: 'crew:developer' }, QUOTA_TWINS)!
-  const ask = async () => ({ answers: answers(['opus', 0.99], 3.9), model: 'jev-1.13.0', ms: 7 })
+  const ask = async () => ({ answers: answers(3.9), model: 'jev-1.13.0', ms: 7 })
   const onClaude = await route(ask, ctx, spec('developer'), { prompt: 'p', description: 'd' })
-  expect(onClaude.decision).toMatchObject({ model: 'opus', effort: 'high' })
+  expect(onClaude.decision).toEqual({ effort: 'high', depth: 3.9 })
 
   const onTwin = retarget(onClaude, twin)
-  expect(onTwin.decision).toMatchObject({ model: 'gpt-6-astra', effort: 'high', tier: 'opus', depth: 3.9 })
+  expect(onTwin.decision).toMatchObject({ effort: 'high', depth: 3.9 })
   expect(onTwin).toMatchObject({ jevModel: 'jev-1.13.0', ms: 7 })
-  expect(moved(twin, onTwin)).toEqual({ model: undefined, effort: 'high' })
+  expect(moved(twin, onTwin)).toEqual({ effort: 'high' })
   // The first answer is not changed by the second reading of it.
-  expect(onClaude.decision.model).toBe('opus')
 })
 
 test('retarget without stored answers reads them as empty: the twin\'s defaults', () => {
   const twin = twinFor({ subagentType: 'crew:developer' }, QUOTA_TWINS)!
-  expect(retarget({ decision: { model: 'opus', effort: 'high' }, ms: 1 }, twin).decision).toEqual({ model: 'gpt-6-astra', effort: 'medium' })
+  expect(retarget({ decision: { effort: 'high' }, ms: 1 }, twin).decision).toEqual({ effort: 'medium' })
 })
 
-test('defaultsOf is the twin\'s own model and effort, moving nothing, and tags with them', () => {
+test('defaultsOf is an explicit medium effort fallback and tags with the fixed twin model', () => {
   const twin = twinFor({ subagentType: 'crew:developer' }, QUOTA_TWINS)!
   const routed = defaultsOf(twin)
-  expect(routed).toEqual({ decision: { model: 'gpt-6-astra', effort: 'medium' }, ms: 0 })
-  expect(moved(twin, routed)).toEqual({ model: undefined, effort: undefined })
-  expect(taggedDescription('audit auth', routed)).toBe('audit auth · gpt-6-astra/medium')
+  expect(routed).toEqual({ decision: { effort: 'medium' }, ms: 0 })
+  expect(moved(twin, routed)).toEqual({ effort: undefined })
+  expect(taggedDescription('audit auth', routed, 'gpt-6-astra')).toBe('audit auth · gpt-6-astra/medium')
 })
 
 test('the notice of a switched call names the provider and the reason, with Jev\'s effort marked or the default plain', () => {
   const twin = twinFor({ subagentType: 'crew:developer' }, QUOTA_TWINS)!
   const via = { requested: 'crew:developer', reason: '7d 38% used vs Claude 7d 71%' }
-  const jev = retarget({ decision: { model: 'opus', effort: 'high' }, ms: 1, answers: answers(['opus', 1], 3.9) }, twin)
+  const jev = retarget({ decision: { effort: 'high' }, ms: 1, answers: answers(3.9) }, twin)
   expect(noticeText(twin, jev, undefined, via)).toBe('crew:developer -> Codex (7d 38% used vs Claude 7d 71%) · gpt-6-astra · high (jev)')
   expect(noticeText(twin, jev, 'high', via)).toBe('crew:developer -> Codex (7d 38% used vs Claude 7d 71%) · gpt-6-astra · medium (jev; effort high not applied)')
   expect(noticeText(twin, defaultsOf(twin), undefined, via, false)).toBe('crew:developer -> Codex (7d 38% used vs Claude 7d 71%) · gpt-6-astra · medium')
 })
 
 test('a call that was not switched keeps the notice it always had', () => {
-  expect(noticeText(spec('developer'), routedAs('opus', 'high'), undefined, undefined, true)).toBe('crew:developer -> opus · high (jev)')
+  expect(noticeText(spec('developer'), routedAs('high'), undefined, undefined, true)).toBe('crew:developer -> sonnet · high (jev)')
+})
+
+test('decide returns effort and depth only, even if an unsolicited tier answer is present', () => {
+  for (const target of [...SPECIALISTS, ...twins]) {
+    expect(decide(target, { reasoning_depth: { score: 3.5 }, tier: { choice: 'opus', confidence: 1 } })).toEqual({ effort: 'high', depth: 3.5 })
+  }
+})
+
+test('the fallback is medium even for a high-default role', () => {
+  expect(defaultsOf({ ...spec('developer'), effort: 'high' }).decision).toEqual({ effort: 'medium' })
+})
+
+test('a rejected medium fallback shows known high or explicitly unknown effort, never an applied medium', () => {
+  const target = spec('developer')
+  const routed = defaultsOf(target)
+  expect(noticeText(target, routed, 'medium', undefined, false, 'high')).toBe('crew:developer -> sonnet · high (crew; effort medium not applied)')
+  expect(noticeText(target, routed, 'medium', undefined, false, null)).toBe('crew:developer -> sonnet · effort unknown (crew; effort medium not applied)')
 })

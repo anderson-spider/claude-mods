@@ -1,35 +1,11 @@
-// What Jev is asked about one Agent call. Constants only. The wording follows TypeSafe's Jev guidance: one choice over
-// the model tiers (each option an object with the same keys) and one score whose levels are concrete situations.
+// What Jev is asked about one Agent call. Constants only. The wording follows TypeSafe's Jev guidance for
+// reasoning depth: one score whose levels are concrete situations.
 // Jev never sees the question ids.
 
 /** The pinned Jev model; its id is logged with every decision, so a change of the pin shows in the data. */
 export const JEV_MODEL = 'jev-1.13.0'
 
 export const QUESTIONS = {
-  tier: {
-    type: 'choice',
-    instructions: [
-      'Pick the cheapest model tier that can fully complete the task `task.prompt` in one pass, without retrying on a stronger one.',
-      'Judge the reasoning the task needs, not the length of the reply. Consider `agent.type`: it is the role the task runs in.',
-    ],
-    criteria: {
-      haiku: {
-        what: 'Trivial, mechanical or purely factual work.',
-        examples: ['Find where a symbol is defined', 'Rename or reformat', 'Summarize one file'],
-        not_for: 'Design judgement or multi-file reasoning.',
-      },
-      sonnet: {
-        what: 'Ordinary engineering with a clear, bounded shape.',
-        examples: ['Implement a specified function', 'Write tests for existing behaviour', 'Fix an understood local bug'],
-        not_for: 'Open-ended architecture or unknown-cause debugging.',
-      },
-      opus: {
-        what: 'Hard reasoning, ambiguity or high blast radius.',
-        examples: ['Unknown-cause debugging', 'Cross-module design, security, auth or migrations', 'Audit a diff for regressions'],
-        not_for: 'Routine work with a clear implementation.',
-      },
-    },
-  },
   reasoning_depth: {
     type: 'score',
     instructions: 'How much step-by-step reasoning does the task in `task.prompt` need before its answer is correct?',
@@ -42,9 +18,6 @@ export const QUESTIONS = {
     ],
   },
 } as const
-
-/** The tier answer applies from this confidence; below it the agent keeps its default model. */
-export const TIER_MIN_CONFIDENCE = 0.5
 
 /**
  * `reasoning_depth` (Jev's 0-4 scale) from this value is `high`, below it `medium`: a declared policy, not a fit. Every

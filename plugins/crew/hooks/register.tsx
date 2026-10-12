@@ -18,7 +18,7 @@ import { JEV_MODEL } from './questions'
 import { CACHE_MS, DEADLINE_MS, INITIAL_QUOTA, claudeReading, codexReading, proxyAccess, settle } from './quota'
 import type { ProxyAccess, Provider, Quota, RateLimitInput } from './quota'
 import { defaultsOf, describe, moved, noticeText, retarget, route, routable, taggedDescription, twinFor, untagged } from './routing'
-import type { Moved, Routed, Switch, Target } from './routing'
+import type { Routed, Switch, Target } from './routing'
 
 /**
  * The `$` a hook receives. Every hook builds what it needs from its own; nothing here keeps one past its hook.
@@ -327,7 +327,7 @@ async function chooseProvider($: Dollar, routing: Routing): Promise<Quota | unde
   }
 }
 
-/** Asks Jev about one call. A failure is one debug line and the call goes on as it came (undefined). */
+/** Asks Jev about one call. A failure is one debug line; the caller requests medium. */
 async function askJev($: Dollar, routing: Routing, key: string, spec: Target, e: SpawnHook[1]): Promise<Routed | undefined> {
   try {
     const ask = createJev(jevIo($), key, { model: JEV_MODEL, breaker: routing.breaker, gate: routing.gate })
@@ -341,24 +341,24 @@ async function askJev($: Dollar, routing: Routing, key: string, spec: Target, e:
 /** What the notice and the debug lines say about a call: the target that runs it and, when quota moved it, the switch. */
 type Announced = { spec: Target; routed: Routed; jev: boolean; via?: Switch }
 
-/** The debug lines and the one notice of a decision; `took` is whether the effort that was moved runs on the subagent. */
-function announce($: Dollar, call: Announced, change: Moved, took: boolean, outcome: BindOutcome | 'suffix' | undefined, toolUseId: string): void {
+/** The notice and debug lines distinguish requested effort from known applied configuration. */
+function announce($: Dollar, call: Announced, applied: Effort | null, requestedApply: boolean, outcome: BindOutcome | 'suffix' | undefined, toolUseId: string): void {
   const { spec, routed, jev, via } = call
-  const notApplied = change.effort !== undefined && !took ? change.effort : undefined
+  const notApplied = (requestedApply || applied !== null) && applied !== routed.decision.effort ? routed.decision.effort : undefined
   if (via) $.ui.log(`crew quota: ${via.requested} -> crew:${spec.name} (${via.reason})`, { to: 'debug' })
   if (jev) {
-    $.ui.log(`crew jev: ${describe(spec, routed, { model: change.model, effort: change.effort !== undefined && took ? change.effort : undefined })}`, { to: 'debug' })
+    $.ui.log(`crew jev: ${describe(spec, routed, { effort: applied })}`, { to: 'debug' })
   }
   if (notApplied !== undefined) {
-    $.ui.log(`crew jev: crew:${spec.name} effort ${notApplied} not applied (${outcome ?? 'no agent id'}); it runs on ${spec.effort}`, { to: 'debug' })
+    $.ui.log(`crew jev: crew:${spec.name} effort ${notApplied} not applied (${outcome ?? 'no agent id'}); ${applied === null ? 'its effort is unknown' : `it runs on ${applied}`}`, { to: 'debug' })
   }
-  $.ui.notice(toolUseId, noticeText(spec, routed, notApplied, via, jev))
+  $.ui.notice(toolUseId, noticeText(spec, routed, notApplied, via, jev, applied))
 }
 
-// Jev moves model and effort, never the type: the lane and the tool allowlist stay the lead's choice. The one rewrite of
+// Jev moves effort, never model or type: the lane and the tool allowlist stay the lead's choice. The one rewrite of
 // the type is the quota rule's, to the same role's registered twin, and it comes first: everything after it (the
-// routable check, Jev's answers, the effort book, the tag, the confirmation) reads the rewritten type. Anything that
-// goes wrong leaves the call as it came.
+// routable check, Jev's answers, the effort book, the tag, the confirmation) reads the rewritten type.
+// Any Jev failure requests medium through the same effort book.
 async function routeSpawn(routing: Routing, $: Dollar, e: SpawnHook[1], next: SpawnHook[2]) {
   if (!routing.enabled && !asksCodex(routing)) return next(e)
   const asked = routable(e, routing.twins)
@@ -366,7 +366,7 @@ async function routeSpawn(routing: Routing, $: Dollar, e: SpawnHook[1], next: Sp
   const key = routing.enabled ? await keyOf($, routing.access, routing.jevKey) : undefined
   // The twin this call could move to, when quota routing is on and the call is one that may move.
   const twin = twinFor(e, routing.twins)
-  if (!key && !twin) return next(e)
+  if (!routing.enabled && !twin) return next(e)
 
   // A description that already carries a tag (a call copied from the task list) is sent and tagged without it.
   e = { ...e, description: untagged(e.description, routing.twins.map(twin => twin.model)) }
@@ -382,21 +382,21 @@ async function routeSpawn(routing: Routing, $: Dollar, e: SpawnHook[1], next: Sp
   const via: Switch | undefined = toCodex && readings ? { requested, reason: readings.decision.reason } : undefined
   // A switch is logged where it is announced; a call that could have moved and stays says why here.
   if (twin && readings && !toCodex) $.ui.log(`crew quota: ${requested} stays on Claude (${readings.decision.reason})`, { to: 'debug' })
-  // A twin keeps its registered model family. A failed Jev request or a quota-only switch uses its bounded default.
+  // Models stay fixed. Any Jev failure requests medium; quota-only twin calls use medium too.
   const jevRouted = jevAnswer && toCodex ? retarget(jevAnswer, spec) : jevAnswer
-  const routed = jevRouted ?? (spec.base !== undefined ? defaultsOf(spec) : undefined)
+  const routed = jevRouted ?? (routing.enabled || spec.base !== undefined ? defaultsOf(spec) : undefined)
   // The proxy gives this suffix precedence over the host's output_config.effort, even on the first step.
   const suffix = spec.base !== undefined && routed ? `${spec.model}:${routed.decision.effort}` : undefined
   const change = moved(spec, routed)
   // The task shows what was chosen, so the task list says whether routing runs; the book matches the shown description.
-  const description = routed ? taggedDescription(e.description, routed) : e.description
+  const description = routed ? taggedDescription(e.description, routed, spec.model) : e.description
 
-  // Claude's effort book is unchanged. Twins use only the suffix: no late bind can alter their request effort.
-  const token = suffix ? undefined : routing.book.add(e.subagentType, description, change.effort ?? spec.effort, e.parentAgentId, change.effort !== undefined)
+  // Failures explicitly request medium even when it equals the role default. Twins use only the suffix.
+  const requestedApply = change.effort !== undefined || (routing.enabled && !jevRouted)
+  const token = suffix ? undefined : routing.book.add(e.subagentType, description, change.effort ?? spec.effort, e.parentAgentId, requestedApply)
   let result: Awaited<ReturnType<SpawnHook[2]>>
   try {
-    const model = suffix ?? change.model
-    result = await next({ ...e, description, ...(model ? { model } : {}) })
+    result = await next({ ...e, description, ...(suffix ? { model: suffix } : {}) })
   } catch (error) {
     if (token !== undefined) routing.book.drop(token)
     throw error
@@ -409,8 +409,10 @@ async function routeSpawn(routing: Routing, $: Dollar, e: SpawnHook[1], next: Sp
   // Nothing started when the host refused the spawn, so there is nothing to announce.
   if (!routed || !result.agentId) return result
 
-  // What was applied, not what was asked: an effort that lost the race to the first step runs on the default.
+  // Keep known configuration separate from the request. A first step without a binding leaves effort unknown.
   const took = outcome === 'suffix' || outcome === 'applied' || outcome === 'matched'
+  const applied = suffix ? routed.decision.effort : routing.book.bound(result.agentId)
+    ?? (took ? routed.decision.effort : requestedApply ? null : spec.effort)
 
   // The decision log: started before the notice so the write overlaps it, awaited for about a second before
   // returning (it never rejects), so a failing write cannot change the result and a hung one cannot hold it.
@@ -420,14 +422,10 @@ async function routeSpawn(routing: Routing, $: Dollar, e: SpawnHook[1], next: Sp
     requested,
     provider: spec.base !== undefined ? 'codex' : 'claude',
     ...(readings ? { reason: readings.decision.reason, claude: readings.claude, codex: readings.codex } : {}),
-    tier: routed.decision.tier,
-    confidence: routed.decision.tierConfidence,
     depth: routed.decision.depth,
-    defaultModel: spec.model,
-    model: change.model ?? spec.model,
     defaultEffort: spec.effort,
     effortPlanned: routed.decision.effort,
-    effortApplied: took ? routed.decision.effort : spec.effort,
+    effortApplied: applied,
     bind: outcome,
     jevModel: routed.jevModel,
     durationMs: routed.ms,
@@ -440,11 +438,11 @@ async function routeSpawn(routing: Routing, $: Dollar, e: SpawnHook[1], next: Sp
     via: by,
     suffix: suffix !== undefined,
     description: e.description,
-    planned: { model: routed.decision.model, effort: routed.decision.effort },
+    planned: { model: spec.model, effort: routed.decision.effort },
     record,
     saved,
   })
-  announce($, { spec, routed, jev: jevRouted !== undefined, ...(via ? { via } : {}) }, change, took, outcome, e.tool_use_id)
+  announce($, { spec, routed, jev: jevRouted !== undefined, ...(via ? { via } : {}) }, applied, requestedApply, outcome, e.tool_use_id)
   await settleDecision($, saved)
   return result
 }

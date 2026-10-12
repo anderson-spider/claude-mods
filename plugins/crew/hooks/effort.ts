@@ -3,8 +3,8 @@
 // type and description and is matched by `$.agent.list()` when an unknown id steps. Pure: the list is injected.
 //
 // An agent's effort never changes once a step has gone out (bar the exception below): the first step of an id
-// decides it. An id that stepped before its effort was known (not listed yet, or two calls alike with different efforts) runs on its default. A
-// mid-run top-level effort change invalidates the cached message blocks; this rule avoids it except in the cases
+// decides it. An id that stepped before its effort was known (not listed yet, or calls alike with different efforts
+// or apply policies) keeps what the host sent. A mid-run top-level effort change invalidates the cached message blocks; this rule avoids it except in the cases
 // AGENTS.md lists.
 //
 // One exception, by design: a step with nothing pending is not recorded (a workflow's agent steps on every request).
@@ -22,7 +22,7 @@ import type { Effort } from './agents'
 export type Listed = { id: string; type: string; description: string; parentId?: string }
 type Pending = { token: number; type: string; description: string; effort: Effort; parent?: string; apply: boolean; matchedBy?: string }
 
-/** What `bind` found: `applied` and `matched` mean the subagent runs on the entry's effort, the rest on its default. */
+/** What `bind` found: `applied` and `matched` use the entry's effort; other outcomes keep an existing or unknown effort. */
 export type BindOutcome = 'applied' | 'matched' | 'stepped' | 'known' | 'gone'
 
 /** Entries kept for the session; the oldest go first. A resumed subagent keeps its effort while its entry stays. */
@@ -98,6 +98,10 @@ export function createEffortBook() {
       remember(agentId, entry.effort)
       return 'applied'
     },
+    /** The fixed configuration already bound to an id, not observed execution or the host's default. */
+    bound(agentId: string): Effort | undefined {
+      return byAgent.get(agentId)
+    },
     /** The spawn failed or was refused. */
     drop(token: number): void {
       pending = pending.filter(p => p.token !== token)
@@ -157,8 +161,8 @@ export function createEffortBook() {
           (p.parent === undefined || agent.parentId === undefined || p.parent === agent.parentId),
       )
       const first = same[0]
-      // Two calls alike with different efforts cannot be told apart: the default stands.
-      if (!first || same.some(p => p.effort !== first.effort)) return undefined
+      // Equal efforts with different apply policies are also ambiguous: never swap a fallback with a default entry.
+      if (!first || same.some(p => p.effort !== first.effort || p.apply !== first.apply)) return undefined
       first.matchedBy = agentId
       // A default entry only blocked the ambiguity: the step keeps what the host sends.
       if (!first.apply) return undefined

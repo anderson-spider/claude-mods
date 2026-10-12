@@ -9,7 +9,7 @@ Marketplace of [Claude Code](https://claude.com/claude-code) plugins made by and
 | [chatgpt](plugins/chatgpt/README.md) | Lets Claude ask your logged-in ChatGPT, or have it generate an image, in terminal-browser, Claude in Chrome or the Claude desktop app's built-in browser, and saves the result locally. |
 | [codex-computer-use](plugins/codex-computer-use/README.md) | Routes native Mac app control through Codex computer use from the ChatGPT app instead of Claude's own computer use, asking before each new app. |
 | [codex-models](plugins/codex-models/README.md) | Offers OpenAI Codex models in Claude Code, in `/model` and in agent definitions, through a local loopback proxy that relays them to a remote CLIProxyAPI holding the Codex login; Claude models pass through to Anthropic unchanged. |
-| [crew](plugins/crew) | Registers five specialist subagents: `code-reader` and `research` on Haiku; `designer` and `developer` on Sonnet; `architect` on Opus. `jevKey` is the only option, enabling Jev model and effort routing. A local HTTP loopback proxy enables fixed-model Codex twins and automatic quota routing, so calls may go to OpenAI with or without Jev. No HUD or panel command. |
+| [crew](plugins/crew) | Registers five specialist subagents: `code-reader` and `research` on Haiku; `designer` and `developer` on Sonnet; `architect` on Opus. `jevKey` is the only option, enabling Jev effort routing. A local HTTP loopback proxy enables fixed-model Codex twins and automatic quota routing, so calls may go to OpenAI with or without Jev. No HUD or panel command. |
 | [tailscale](plugins/tailscale/README.md) | Lets Claude query and modify your tailnet through the Tailscale API. |
 
 ## Install
