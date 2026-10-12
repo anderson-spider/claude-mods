@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jclab-joseph/claude-code-model-proxy/internal/codex"
-	"github.com/jclab-joseph/claude-code-model-proxy/internal/config"
-	"github.com/jclab-joseph/claude-code-model-proxy/internal/logx"
+	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/codex"
+	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/config"
+	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/logx"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )

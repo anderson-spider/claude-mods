@@ -20,7 +20,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jclab-joseph/claude-code-model-proxy/internal/netx"
+	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/netx"
 	"github.com/tidwall/gjson"
 )
 

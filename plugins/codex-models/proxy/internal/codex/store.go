@@ -12,7 +12,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/jclab-joseph/claude-code-model-proxy/internal/logx"
+	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/logx"
 	"github.com/tidwall/gjson"
 )
 
