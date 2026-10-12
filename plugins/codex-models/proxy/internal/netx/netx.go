@@ -1,4 +1,5 @@
-// Package netx holds the one outbound transport every proxy connection uses.
+// Package netx builds the transport behind every outbound connection the
+// proxy makes: to Anthropic, to the Codex backend and to the OAuth endpoints.
 package netx
 
 import (
@@ -8,34 +9,44 @@ import (
 	"time"
 )
 
-// DirectTransport dials upstreams without consulting HTTPS_PROXY and the
-// other proxy environment variables (Proxy is nil): a value left in the shell
-// from an older CONNECT setup would otherwise aim the proxy at a listener that
-// no longer exists, or at itself, and would send the OAuth bearer through it.
-func DirectTransport() *http.Transport {
-	dialer := &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}
-	t := &http.Transport{
-		Proxy:                 nil,
-		DialContext:           dialer.DialContext,
-		ForceAttemptHTTP2:     true,
-		MaxIdleConns:          100,
-		IdleConnTimeout:       90 * time.Second,
-		TLSHandshakeTimeout:   15 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
-	}
-	contractTrust(t)
-	return t
-}
-
-var (
-	sharedOnce sync.Once
-	shared     *http.Transport
+// Connection timings. None of them bounds a whole response: a Codex stream
+// can stay open for minutes, and its deadline is the request's context.
+const (
+	dialTimeout           = 30 * time.Second
+	tcpKeepAlive          = 30 * time.Second
+	tlsHandshakeTimeout   = 15 * time.Second
+	idleConnTimeout       = 90 * time.Second
+	expectContinueTimeout = time.Second
+	maxIdleConns          = 100
 )
 
-// Shared is one DirectTransport for the constructors that are given no
-// transport, used instead of http.DefaultTransport, which honours the proxy
-// environment variables.
-func Shared() *http.Transport {
-	sharedOnce.Do(func() { shared = DirectTransport() })
-	return shared
+// DirectTransport returns a new transport that always dials the upstream
+// itself.
+//
+// Its Proxy field is nil on purpose, so HTTPS_PROXY, HTTP_PROXY, ALL_PROXY
+// and NO_PROXY are never read. A value left in the shell would otherwise
+// route requests, with the Claude OAuth bearer and the Codex token, through
+// whatever listens there, or back into this proxy. Do not copy
+// http.DefaultTransport here: its Proxy is http.ProxyFromEnvironment.
+func DirectTransport() *http.Transport {
+	dialer := &net.Dialer{Timeout: dialTimeout, KeepAlive: tcpKeepAlive}
+	transport := &http.Transport{
+		DialContext:           dialer.DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          maxIdleConns,
+		IdleConnTimeout:       idleConnTimeout,
+		TLSHandshakeTimeout:   tlsHandshakeTimeout,
+		ExpectContinueTimeout: expectContinueTimeout,
+	}
+	contractTrust(transport)
+	return transport
 }
+
+// shared is built on first use, so a contract build reads its CA file only
+// once a connection is needed.
+var shared = sync.OnceValue(DirectTransport)
+
+// Shared returns the one DirectTransport that clients built without a
+// transport of their own use, so they share its connection pool. It is what
+// they get instead of http.DefaultTransport.
+func Shared() *http.Transport { return shared() }
