@@ -1,7 +1,7 @@
 {
   "name": "crew",
-  "version": "0.18.0",
-  "description": "Makes the main session a lead that delegates to five specialist subagents: code-reader and research on Haiku; designer and developer on Sonnet; architect on Opus. The developer runs and reports its tests; the architect independently audits acceptance. With the jevKey option set (a TypeSafe key), Jev sizes only each call's effort, bounded to medium or high; models stay at role defaults or fixed twin ids, and any Jev request or config failure requests medium unless the agent has already sent its first step; that sends a redacted, truncated prompt to api.typesafe.ai. When ANTHROPIC_BASE_URL is a gateway other than Anthropic's API, each role also gets a fixed-model crew:<role>-codex twin. With the codexRemote and codexManagementKey options set, calls may be routed automatically to those twins when Codex has more weekly headroom, with or without Jev; what those subagents read and write goes to OpenAI through the gateway.",
+  "version": "0.19.0",
+  "description": "Makes the main session a lead that delegates to five specialist subagents: code-reader and research on Haiku; designer and developer on Sonnet; architect on Opus. The developer runs and reports its tests; the architect independently audits acceptance. With the jevKey option set (a TypeSafe key), Jev sizes only each call's effort, bounded to medium or high; models stay at role defaults or fixed twin ids, and any Jev request or config failure requests medium unless the agent has already sent its first step; that sends a redacted, truncated prompt to api.typesafe.ai. When ANTHROPIC_BASE_URL is a gateway other than Anthropic's API, each role also gets a fixed-model crew:<role>-codex twin. With the codexLogin option, crew:code-reader-codex runs on your Codex CLI login with no gateway, its requests sent by crew to chatgpt.com's Codex backend. In the codex crew mode (the mode option, or /crew-mode for one session), a plain crew:<role> call runs on its registered twin; what those subagents read and write goes to OpenAI through the gateway.",
   "author": {
     "name": "anderson-spider"
   },
@@ -10,19 +10,24 @@
     "jevKey": {
       "type": "string",
       "title": "Jev API key (TypeSafe)",
-      "description": "Setting this key turns Jev routing on; leaving it empty turns it off. With a key, Jev (TypeSafe) sizes only the effort of each eligible crew:* Agent call, bounded to medium or high; models stay at role defaults or fixed twin ids. Any Jev request or config failure requests medium unless the agent has already sent its first step. The choice shows in the task's description. The call's description and its prompt (secrets and paths removed, cut to 4000 characters) are sent to api.typesafe.ai. Only automatic quota routing (the codexRemote and codexManagementKey options) may move a call to its role's Codex twin, even without this key, and a base-role call that names a model keeps it. The key is sent only in the Authorization header and is never logged or stored by the plugin. A repository's own settings cannot supply it.",
+      "description": "Setting this key turns Jev routing on; leaving it empty turns it off. With a key, Jev (TypeSafe) sizes only the effort of each eligible crew:* Agent call, bounded to medium or high; models stay at role defaults or fixed twin ids. Any Jev request or config failure requests medium unless the agent has already sent its first step. The choice shows in the task's description. The call's description and its prompt (secrets and paths removed, cut to 4000 characters) are sent to api.typesafe.ai. Only the codex crew mode (the mode option or /crew-mode) may move a call to its role's Codex twin, even without this key, and a base-role call that names a model keeps it. The key is sent only in the Authorization header and is never logged or stored by the plugin. A repository's own settings cannot supply it.",
       "sensitive": true
     },
-    "codexRemote": {
+    "mode": {
       "type": "string",
-      "title": "Codex remote (OmniRoute origin)",
-      "description": "The origin of the OmniRoute that holds the Codex connection behind the gateway, for example https://omniroute.example.ts.net (http or https, no path). With codexManagementKey it turns automatic quota routing on: the first eligible spawn, then at most every five minutes, asks its management API for the one active Codex connection and that connection's live usage. A repository's own settings cannot supply it."
+      "title": "Crew mode",
+      "description": "The mode every session starts in. claude: crew:<role> calls run on Claude. codex: a plain crew:<role> call runs on the role's registered crew:<role>-codex twin, so its work goes to OpenAI; a role without a registered twin stays on Claude, and a call that names a model, a fork, a teammate, a workflow agent or a twin named by the lead is never moved. /crew-mode switches the running session without changing this option. A repository's own settings cannot start it in codex.",
+      "options": [
+        "claude",
+        "codex"
+      ],
+      "default": "claude"
     },
-    "codexManagementKey": {
-      "type": "string",
-      "title": "Codex remote management token",
-      "description": "An OmniRoute management credential with read access (an Access Token with the read scope), sent only as a bearer to codexRemote's /api/providers and /api/usage/<connection> endpoints, never to Jev, and never logged or stored by the plugin. A repository's own settings cannot supply it.",
-      "sensitive": true
+    "codexLogin": {
+      "type": "boolean",
+      "title": "Codex twins on your Codex login (experimental)",
+      "description": "Runs crew:code-reader-codex on your ChatGPT Codex login, with no gateway: crew answers that subagent's model requests itself, reading the login the Codex CLI keeps in ~/.codex/auth.json (run `codex login` first) and sending the subagent's conversation to chatgpt.com's Codex backend. The login is only read, never refreshed or written; when it expires, running `codex` refreshes it. Other twins still need a gateway. A repository's own settings cannot turn it on. Off by default.",
+      "default": false
     }
   }
 }

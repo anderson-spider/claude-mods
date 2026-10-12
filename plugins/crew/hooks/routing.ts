@@ -1,7 +1,7 @@
 // Jev's routing of one Agent call: which of the lead's crew agents may be routed, the state Jev is given and how its
 // answers become effort. Pure: the call to Jev is injected. The answers only move effort, at
 // most one step from the agent's defaults (and never below its floor), so a bad answer costs money, never a lane change.
-// The type is rewritten only by the quota rule in register.tsx, and only to the same role's registered twin (`twinFor`).
+// The type is rewritten only by the codex crew mode in register.tsx, and only to the same role's registered twin (`twinFor`).
 
 import { EFFORTS, EFFORT_FLOOR, MODELS, NATIVE_SUFFIX, SPECIALISTS } from './agents'
 import type { Agent, Effort } from './agents'
@@ -40,7 +40,7 @@ export function routable(
 }
 
 /**
- * The registered Codex twin of the role a call names, as a routing `Target`, when the quota rule may send the call
+ * The registered Codex twin of the role a call names, as a routing `Target`, when the codex crew mode sends the call
  * there: a routable specialist call (no `model`, no fork, no workflow agent) that is not a teammate's. Undefined for
  * anything else, a twin the lead named included (an explicit choice is never moved) and a role with no registered twin.
  */
@@ -87,10 +87,7 @@ export function stateOf(spec: Target, e: { prompt: string; description?: string 
   }
 }
 
-/** Jev's raw answers by question, kept so the same answers can be applied to another target (the twin of a switched call). */
-type Answers = Record<string, Record<string, unknown>>
-
-export type Routed = { decision: Decision; jevModel?: string; ms: number; answers?: Answers }
+export type Routed = { decision: Decision; jevModel?: string; ms: number }
 
 /** Asks Jev about one call. Rejects with the client's failure; the caller fails open. */
 export async function route(
@@ -100,15 +97,10 @@ export async function route(
   e: { prompt: string; description?: string },
 ): Promise<Routed> {
   const reply = await ask(QUESTIONS, stateOf(spec, e, ctx))
-  return { decision: decide(spec, reply.answers), jevModel: reply.model, ms: reply.ms, answers: reply.answers }
+  return { decision: decide(spec, reply.answers), jevModel: reply.model, ms: reply.ms }
 }
 
-/** Jev's answers applied to another target: a call that moved to its twin keeps its effort answer and fixed model family. */
-export function retarget(routed: Routed, spec: Target): Routed {
-  return { ...routed, decision: decide(spec, routed.answers ?? {}) }
-}
-
-/** Explicit medium fallback when Jev has no answer, also used for quota-only twin calls. */
+/** Explicit medium fallback when Jev has no answer, also used for a codex-mode switch without Jev. */
 export function defaultsOf(_spec: Target): Routed {
   return { decision: { effort: 'medium' }, ms: 0 }
 }
@@ -122,21 +114,20 @@ export function moved(spec: Target, routed: Routed | undefined): Moved {
   }
 }
 
-/** A call that quota moved to its Codex twin: the type the lead asked for and why. */
-export type Switch = { requested: string; reason: string }
+/** A call the codex crew mode moved to its role's twin: the type the lead asked for. */
+export type Switch = { requested: string }
 
 /**
  * The notice shows known configuration, or explicitly unknown effort when an apply request could not bind.
- * A rejected request names the effort that did not take. A switched call names the provider and the reason; `jev` is
- * false when Jev gave no answer, so medium is crew's fallback and not Jev's.
+ * A rejected request names the effort that did not take. A switched call names the type asked for; `jev` is false
+ * when Jev gave no answer, so medium is crew's fallback and not Jev's.
  */
 export function noticeText(spec: Target, routed: Routed, notApplied: Effort | undefined, via?: Switch, jev = true, applied?: Effort | null): string {
-  const by = jev ? 'jev' : via ? 'quota' : 'crew'
+  const by = jev ? 'jev' : 'crew'
   const tail = notApplied !== undefined ? ` (${by}; effort ${notApplied} not applied)` : jev ? ' (jev)' : ''
   const known = applied === undefined ? (notApplied === undefined ? routed.decision.effort : spec.effort) : applied
-  const effort = `${known ?? 'effort unknown'}${tail}`
-  const head = via ? `${via.requested} -> Codex (${via.reason})` : `crew:${spec.name} -> `
-  return `${head}${via ? ' · ' : ''}${spec.model} · ${effort}`
+  const head = via ? `${via.requested} -> Codex (crew mode) · ` : `crew:${spec.name} -> `
+  return `${head}${spec.model} · ${known ?? 'effort unknown'}${tail}`
 }
 
 const escaped = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')

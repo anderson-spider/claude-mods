@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { checkKey, declaresOption, resolveAccess } from '../hooks/key'
+import { checkKey, declaresOption, resolveAccess, resolveLoginHome } from '../hooks/key'
 import type { KeyIo } from '../hooks/key'
 
 // Key-shaped fixtures are assembled at runtime so no source literal matches a secret scanner.
@@ -66,4 +66,21 @@ test('a repository declares the option under crew or crew@marketplace, any value
   expect(declaresOption({ crew: { options: {} }, other: { options: { jevKey: 'x' } } }, 'crew', 'jevKey')).toBe(false)
   expect(declaresOption({ crewx: { options: { jevKey: 'x' } } }, 'crew', 'jevKey')).toBe(false)
   expect(declaresOption(undefined, 'crew', 'jevKey')).toBe(false)
+})
+
+// --- The Codex login's home ---
+
+test('the Codex login reads the trusted home, reading each settings source once', async () => {
+  const source = io({ home: '/home/u/' })
+  expect(await resolveLoginHome(source)).toEqual({ home: '/home/u' })
+  expect(source.reads).toEqual(['project', 'local'])
+})
+
+test('a repository that sets codexLogin or declares HOME, unreadable settings and a relative home turn the Codex login off', async () => {
+  expect(await resolveLoginHome(io({ project: { pluginConfigs: { 'crew@spider-claude-mods': { options: { codexLogin: true } } } } }))).toEqual({ off: 'repo-option' })
+  expect(await resolveLoginHome(io({ local: { pluginConfigs: { crew: { options: { codexLogin: false } } } } }))).toEqual({ off: 'repo-option' })
+  expect(await resolveLoginHome(io({ project: { env: { HOME: '/tmp/attacker' } } }))).toEqual({ off: 'repo-home' })
+  expect(await resolveLoginHome(io({ settingsFail: true }))).toEqual({ off: 'unreadable' })
+  expect(await resolveLoginHome(io({ home: 'relative/home' }))).toEqual({ off: 'no-home' })
+  expect(await resolveLoginHome(io({ home: undefined }))).toEqual({ off: 'no-home' })
 })

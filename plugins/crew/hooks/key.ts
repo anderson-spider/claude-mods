@@ -82,3 +82,30 @@ export async function resolveAccess(io: KeyIo, option: unknown): Promise<Access>
   const home = declaresHome ? undefined : (await io.home().catch(() => undefined))?.trim().replace(/\/+$/, '')
   return home && home.startsWith('/') ? { key: checked.key, home } : { key: checked.key }
 }
+
+/** Why the `codexLogin` option is off for this activation. */
+export type LoginOff = 'unreadable' | 'repo-option' | 'repo-home' | 'no-home'
+
+/**
+ * The home whose `.codex/auth.json` the `codexLogin` option reads. A repository whose own settings set `codexLogin`
+ * or declare `HOME` would choose whose Codex account its code goes out under, so either turns the option off, as do
+ * settings that cannot be read and a home that is not absolute.
+ */
+export async function resolveLoginHome(io: KeyIo): Promise<{ home: string; off?: undefined } | { home?: undefined; off: LoginOff }> {
+  let setsOption = false
+  let declaresHome = false
+  try {
+    for (const source of ['project', 'local'] as const) {
+      const settings = await io.settings(source)
+      if (declaresOption(settings?.pluginConfigs, 'crew', 'codexLogin')) setsOption = true
+      const env = settings?.env
+      if (env && typeof env === 'object' && Object.hasOwn(env, 'HOME')) declaresHome = true
+    }
+  } catch {
+    return { off: 'unreadable' }
+  }
+  if (setsOption) return { off: 'repo-option' }
+  if (declaresHome) return { off: 'repo-home' }
+  const home = (await io.home().catch(() => undefined))?.trim().replace(/\/+$/, '')
+  return home && home.startsWith('/') ? { home } : { off: 'no-home' }
+}

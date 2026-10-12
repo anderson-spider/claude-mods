@@ -1,7 +1,11 @@
-import { atom, read, update } from 'claude-code'
-import type { Hook, Register } from 'claude-code'
-import { SPECIALISTS, isGatewayBase, leadSection, nativeCodexSection, nativeCodexSpecs } from './agents'
+import type { Hook, Register, TurnStepChunk, TurnStepResult } from 'claude-code'
+import type { CrewMode as Mode } from '../types'
+import { SPECIALISTS, isGatewayBase, leadSection, nativeCodexSection, nativeCodexSpecs, onCodexLogin } from './agents'
 import type { Agent, Effort } from './agents'
+import { CODEX_URL, codexBody, codexEffort, codexHeaders, failedStep, statusReason, stepOf } from './codex'
+import type { ApiMessage, CodexEffort, CodexStep } from './codex'
+import { parseLogin } from './codex-login'
+import { TOOL_SCHEMAS, describable } from './codex-tools'
 import { createConfirmations, confirmText, observedEffort } from './confirm'
 import type { Confirmations } from './confirm'
 import { decisionRecord, saveDecision, withRan } from './decisions'
@@ -11,13 +15,11 @@ import type { BindOutcome, EffortBook, Listed } from './effort'
 import { deniedWrite } from './guard'
 import { createBreaker, createGate, createJev, failureText } from './jev'
 import type { Breaker, Gate, JevIo } from './jev'
-import { checkKey, repoDeclares, resolveAccess } from './key'
-import type { KeyIo, Off } from './key'
+import { checkKey, repoDeclares, resolveAccess, resolveLoginHome } from './key'
+import type { KeyIo, LoginOff, Off } from './key'
 import { CODEX_MODELS, CODEX_PREFIX } from './native'
 import { JEV_MODEL } from './questions'
-import { CACHE_MS, CONNECTIONS_PATH, DEADLINE_MS, INITIAL_QUOTA, activeCodexConnection, claudeReading, codexUsage, remoteAccess, settle, usagePath } from './quota'
-import type { Provider, Quota, RateLimitInput, RemoteAccess } from './quota'
-import { defaultsOf, describe, moved, noticeText, retarget, route, routable, taggedDescription, twinFor, untagged } from './routing'
+import { defaultsOf, describe, moved, noticeText, route, routable, taggedDescription, twinFor, untagged } from './routing'
 import type { Routed, Switch, Target } from './routing'
 
 /**
@@ -28,8 +30,13 @@ type Dollar = Parameters<Hook<'session.start'>>[0]
 /** The wall clock. The breaker outlives every hook's `$`, so it reads this same function rather than a `$` call. */
 const wallNow = () => Date.now()
 
-/** Both providers' limits and the provider the readings favor, kept by the router. */
-const quota = atom({ plugin: 'crew', key: 'quota' } as const, INITIAL_QUOTA)
+/** The running session's crew mode: set from the `mode` option at session start, switched by `/crew-mode`. */
+const MODE = { plugin: 'crew', key: 'mode' } as const
+
+const MODE_COMMAND = 'crew-mode'
+
+/** The option as a mode: anything but `codex` is `claude`. */
+const modeOption = (value: unknown): Mode => (value === 'codex' ? 'codex' : 'claude')
 
 /** Time as the pure modules take it: the host's timer and the wall clock. */
 type Clock = Pick<JevIo, 'timer' | 'now'>
@@ -148,6 +155,7 @@ function holdUnchecked<E extends { agentId?: string }, R>(_$: Dollar, e: E, next
 
 type StartHook = Parameters<Hook<'session.start'>>
 type SpawnHook = Parameters<Hook<'agent.spawn'>>
+type StepHook = Parameters<Hook<'turn.step'>>
 
 async function registerSpecialists($: Dollar) {
   for (const agent of SPECIALISTS) {
@@ -160,6 +168,8 @@ type Native = {
   specs: readonly Agent<string>[]
   /** The twins this activation registered, in order: empty until `session.start`, and when the gate or the registration refused. */
   registered: Agent<string>[]
+  /** The registered twins crew answers itself on the Codex login, by type (`crew:<name>`). */
+  onLogin: Map<string, Agent<string>>
 }
 
 /** The base URL the session sends its API calls to; a failing read is no URL. */
@@ -171,40 +181,226 @@ async function baseUrl($: Dollar): Promise<string | undefined> {
   }
 }
 
-/** The `-codex` types the session can reach: all of them behind a gateway base URL, none on Anthropic's API or with none set. */
-async function reachableNative($: Dollar, native: Native): Promise<readonly Agent<string>[]> {
-  return native.specs.length > 0 && isGatewayBase(await baseUrl($)) ? native.specs : []
+/**
+ * The `-codex` types the session can reach, each with how: on the Codex login (`codexLogin` on, and crew can describe
+ * every tool of the twin), else behind a gateway base URL; none on Anthropic's API or with none set.
+ */
+async function reachableNative($: Dollar, native: Native, onLogin: boolean): Promise<{ agent: Agent<string>; login: boolean }[]> {
+  if (native.specs.length === 0) return []
+  const gateway = isGatewayBase(await baseUrl($))
+  return native.specs.flatMap((agent): { agent: Agent<string>; login: boolean }[] =>
+    onLogin && describable(agent.tools) ? [{ agent: onCodexLogin(agent), login: true }] : gateway ? [{ agent, login: false }] : [],
+  )
 }
 
-/** Registers the `-codex` types when a gateway is the base URL; without it a spawn would only fail, so one debug line says why not. */
-async function registerNative($: Dollar, native: Native) {
+/** Registers the `-codex` types the session can reach; without a route a spawn would only fail, so one debug line says why not. */
+async function registerNative($: Dollar, native: Native, onLogin: boolean) {
   native.registered.length = 0
-  const reachable = await reachableNative($, native)
+  native.onLogin.clear()
+  const reachable = await reachableNative($, native, onLogin)
   if (reachable.length === 0) {
     $.ui.log('crew: Codex twins not registered (ANTHROPIC_BASE_URL is not a gateway URL)', { to: 'debug' })
   }
   // One refused registration leaves the other twins registered; only the registered ones are routed and listed.
-  for (const agent of reachable) {
+  for (const { agent, login } of reachable) {
     try {
+      // A twin on the login keeps the Codex id too: should its step ever reach Anthropic, the unknown model fails there.
       await $.agent.register({ ...agent, model: `${CODEX_PREFIX}${agent.model}`, tools: [...agent.tools] })
       native.registered.push(agent)
+      if (login) native.onLogin.set(`crew:${agent.name}`, agent)
     } catch {
       $.ui.log(`crew: Codex twin crew:${agent.name} not registered (registration failed)`, { to: 'debug' })
     }
   }
 }
 
-/** The agents, then the fixed twins behind a gateway base URL. No quota or secret is read at start. */
-async function startCrew(native: Native, $: Dollar, e: StartHook[1], next: StartHook[2]) {
+const LOGIN_OFF_TEXT: Record<LoginOff, string> = {
+  unreadable: 'the repository settings cannot be read',
+  'repo-option': 'the repository settings declare codexLogin (set it in user settings)',
+  'repo-home': 'the repository settings declare HOME',
+  'no-home': 'HOME is not an absolute path',
+}
+
+/** What the `codexLogin` option resolved to at session start, and what the twins on the login keep between steps. */
+type CodexLogin = {
+  /** The option: on, a twin whose tools crew can describe runs on the user's Codex login, with no gateway. */
+  enabled: boolean
+  /** The trusted home whose `.codex/auth.json` is read; set at session start while the option may be used. */
+  home?: string
+  /** Agent types by id, as the host listed them; a running agent's type never changes. */
+  types: Map<string, string>
+  /** Per agent on the login: the backend's session id and the reasoning kept by call id. */
+  sessions: Map<string, { id: string; reasoning: Map<string, readonly string[]> }>
+}
+
+/** The most agents and calls whose state is kept; the oldest go first. */
+const KEPT_AGENTS = 64
+const KEPT_CALLS = 256
+
+function keep<K, V>(map: Map<K, V>, key: K, value: V, cap: number): void {
+  map.delete(key)
+  map.set(key, value)
+  while (map.size > cap) map.delete(map.keys().next().value as K)
+}
+
+/** Resolves the trusted home for the Codex login, once per session start; off with one debug line when it may not be used. */
+async function resolveLogin($: Dollar, login: CodexLogin): Promise<void> {
+  login.home = undefined
+  if (!login.enabled) return
+  const resolved = await resolveLoginHome(keyIo($)).catch(() => ({ off: 'unreadable' as const, home: undefined }))
+  if (resolved.off) {
+    $.ui.log(`crew: codexLogin is off: ${LOGIN_OFF_TEXT[resolved.off]}`, { to: 'debug' })
+    return
+  }
+  login.home = resolved.home
+}
+
+/** The agents, then the fixed twins behind a gateway base URL, then the session's mode from the option. No secret is read at start. */
+async function startCrew(native: Native, login: CodexLogin, mode: Mode, $: Dollar, e: StartHook[1], next: StartHook[2]) {
   native.registered.length = 0
+  native.onLogin.clear()
   await registerSpecialists($)
   // A failed twin registration must not prevent the session from starting.
   try {
-    await registerNative($, native)
+    await resolveLogin($, login)
+    await registerNative($, native, login.home !== undefined)
   } catch {
     $.ui.log('crew: Codex twins not registered (registration failed)', { to: 'debug' })
   }
+  // Each session starts in the option's mode; neither a failed write nor a refused command holds the session. A codex
+  // mode that the repository's own settings declare would send the user's work to OpenAI on the repository's say.
+  const declared = mode === 'codex' && (await repoDeclares(keyIo($), ['mode']).catch(() => true))
+  if (declared) $.ui.log('crew: the session starts in claude: the repository settings declare the mode, or cannot be read', { to: 'debug' })
+  await setMode($, declared ? 'claude' : mode).catch(() => {
+    $.ui.log('crew: the crew mode could not be set', { to: 'debug' })
+  })
+  await $.command
+    .register({ name: MODE_COMMAND, description: 'Crew mode: claude | codex (plain crew:<role> calls on the Codex twins), for this session', argumentHint: '[claude|codex]' })
+    .catch(() => {
+      $.ui.log(`crew: /${MODE_COMMAND} not registered`, { to: 'debug' })
+    })
   return next(e)
+}
+
+/** The session's mode, and the status line that shows it while it is `codex`. */
+async function setMode($: Dollar, mode: Mode): Promise<void> {
+  await $.state.set(MODE, mode)
+  await $.ui.status(mode === 'codex' ? 'crew: codex' : undefined)
+}
+
+/** The running session's mode; `claude` when the session has none or it cannot be read, so nothing moves by default. */
+async function modeOf($: Dollar): Promise<Mode> {
+  try {
+    const { value } = await $.state.get(MODE)
+    return value === 'codex' ? 'codex' : 'claude'
+  } catch {
+    return 'claude'
+  }
+}
+
+/** `/crew-mode`: no argument toggles, `claude` or `codex` sets, anything else shows the mode and the usage. Answers in one line. */
+async function runModeCommand($: Dollar, native: Native, option: Mode, args: string): Promise<string> {
+  const current = await modeOf($)
+  const word = args.trim().toLowerCase()
+  if (word !== '' && word !== 'claude' && word !== 'codex') {
+    return `crew mode: ${current}. Usage: /${MODE_COMMAND} [claude|codex]; no argument toggles.`
+  }
+  const mode: Mode = word === 'claude' || word === 'codex' ? word : current === 'codex' ? 'claude' : 'codex'
+  try {
+    await setMode($, mode)
+  } catch {
+    return `crew mode: ${current}; it could not be switched.`
+  }
+  const start = `New sessions start in ${option} (the mode option).`
+  if (mode === 'claude') return `crew mode: claude for this session. Plain crew:<role> calls run on Claude. ${start}`
+  if (native.registered.length === 0) {
+    return `crew mode: codex for this session, but no Codex twin is registered, so every call stays on Claude. ${start}`
+  }
+  const twins = native.registered.map(twin => `crew:${twin.name}`).join(', ')
+  return `crew mode: codex for this session. Plain crew:<role> calls run on their twins (${twins}); roles without one stay on Claude. ${start}`
+}
+
+// --- Twins on the Codex login: the step hook answers their model requests itself ---
+
+/** The type of a stepping agent, as the host lists it; remembered, since it never changes. */
+async function agentType($: Dollar, login: CodexLogin, agentId: string): Promise<string | undefined> {
+  const known = login.types.get(agentId)
+  if (known !== undefined) return known
+  const type = (await $.agent.list()).find(agent => agent.id === agentId)?.type
+  if (type !== undefined) keep(login.types, agentId, type, KEPT_AGENTS)
+  return type
+}
+
+/** The twin on the login a step belongs to, or undefined. A list that fails is no twin: the step's Codex id then fails at Anthropic. */
+async function twinOnLogin($: Dollar, native: Native, login: CodexLogin, agentId: string | undefined): Promise<Agent<string> | undefined> {
+  if (!agentId || native.onLogin.size === 0) return undefined
+  const type = await agentType($, login, agentId).catch(() => undefined)
+  return type === undefined ? undefined : native.onLogin.get(type)
+}
+
+/** A v4 UUID for the backend's session id, one per agent, so the agent's requests share the backend's cache. */
+function sessionId(): string {
+  const hex = Array.from({ length: 32 }, () => Math.floor(Math.random() * 16).toString(16))
+  hex[12] = '4'
+  hex[16] = '89ab'.charAt(Math.floor(Math.random() * 4))
+  const id = hex.join('')
+  return `${id.slice(0, 8)}-${id.slice(8, 12)}-${id.slice(12, 16)}-${id.slice(16, 20)}-${id.slice(20)}`
+}
+
+/** The developer message: the twin's own prompt, then where and when it runs. */
+function systemOf(twin: Agent<string>, cwd: string | undefined, now: number): string {
+  return [
+    twin.prompt,
+    '',
+    `Working directory: ${cwd ?? 'unknown'}. Today's date: ${new Date(now).toISOString().slice(0, 10)}.`,
+    'Read and search the project only through your tools; pass absolute file paths.',
+  ].join('\n')
+}
+
+/**
+ * One step of a twin on the login: the login file, the conversation and the tool descriptions, then one request to the
+ * Codex backend. Every failure is a reason, never a throw. The token goes only to the backend and into no log.
+ */
+async function askCodex($: Dollar, login: CodexLogin, twin: Agent<string>, e: StepHook[1], effort: CodexEffort): Promise<CodexStep> {
+  if (!login.home || !e.agentId) return failedStep('the Codex login is off')
+  const now = await $.clock.now()
+  const file = await $.fs.read(`${login.home}/.codex/auth.json`).catch(() => undefined)
+  if (typeof file !== 'string') return failedStep('no Codex login file at ~/.codex/auth.json (run `codex login`)')
+  const read = parseLogin(file, now)
+  if (!read.ok) return failedStep(read.reason)
+  const messages = await $.session.messages({ agentId: e.agentId, as: 'api' }).catch(() => undefined)
+  if (!Array.isArray(messages)) return failedStep('the subagent conversation could not be read')
+  const listed = await $.tool.list().catch(() => [])
+  const tools = twin.tools.flatMap(name => {
+    const schema = TOOL_SCHEMAS[name]
+    return schema ? [{ name, description: listed.find(tool => tool.name === name)?.description || name, parameters: schema }] : []
+  })
+  const cwd = await $.session.cwd().catch(() => undefined)
+  let session = login.sessions.get(e.agentId)
+  if (!session) {
+    session = { id: sessionId(), reasoning: new Map() }
+    keep(login.sessions, e.agentId, session, KEPT_AGENTS)
+  }
+  const reasoning = session.reasoning
+  const body = codexBody({ model: twin.model, effort, system: systemOf(twin, cwd, now), messages: messages as ApiMessage[], tools, reasoning: id => reasoning.get(id) })
+  const response = await $.http.fetch(CODEX_URL, { method: 'POST', headers: codexHeaders(read.login, session.id), body: JSON.stringify(body) }).catch(() => undefined)
+  if (!response) return failedStep('the Codex backend could not be reached')
+  if (response.status < 200 || response.status >= 300) return failedStep(statusReason(response.status, response.text))
+  const step = stepOf(response.text, twin.model)
+  for (const [id, items] of step.reasoning) keep(reasoning, id, items, KEPT_CALLS)
+  return step
+}
+
+/**
+ * A step of a twin on the Codex login, answered here: nothing is sent to Anthropic. A failure answers with its reason
+ * and never throws, since a hook that throws is skipped and the engine would send the request itself.
+ */
+async function* stepOnLogin($: Dollar, login: CodexLogin, twin: Agent<string>, e: StepHook[1], effort: CodexEffort, signal: AbortSignal): AsyncGenerator<TurnStepChunk, TurnStepResult> {
+  const step = await askCodex($, login, twin, e, effort).catch(() => failedStep('the Codex request failed'))
+  // An interrupted step shows nothing: the person stopped it while Codex answered.
+  if (signal.aborted) return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: null, usage: null }
+  for (const chunk of step.chunks) yield chunk
+  return { turnId: e.turnId, index: e.index, answer: step.answer, toolUses: step.toolUses, stopReason: step.stopReason, usage: step.usage }
 }
 
 /** What the routing hooks share while the module lives. */
@@ -218,156 +414,10 @@ type Routing = {
   /** Routed subagents whose first step is still to be checked against their tag. */
   confirms: Confirmations
   access: KeyCache
-  /** The `-codex` twins that were registered (`Native.registered`): routable for their effort only. */
+  /** The `-codex` twins that were registered (`Native.registered`): routable for their effort, and the codex mode's targets. */
   twins: readonly Agent<string>[]
-  /** The quota refresh under way, shared by every caller (one at a time). */
-  flight?: Promise<void>
-  /** The `codexRemote` and `codexManagementKey` options; `set` when both are well-formed, which turns quota routing on. */
-  remote: { url: unknown; key: unknown; set: boolean; access?: Promise<RemoteAccess> }
-  /** The Codex usage read under way; it may outlive the deadline of the spawn that started it. */
-  codexFlight?: Promise<CodexRead>
-  /** A Codex read that finished after its spawn's deadline, applied by the next refresh. */
-  codexLate?: CodexRead
-}
-
-// --- The quota atom: Claude from the host, Codex from the remote's management API ---
-
-/** The options a repository's own settings may not supply: the key would go where the repository says. */
-const REMOTE_OPTIONS = ['codexRemote', 'codexManagementKey'] as const
-
-/** Where Codex's usage is read, resolved once per activation; refused when the repository's settings supply either option or cannot be read. */
-function remoteOf($: Dollar, routing: Routing): Promise<RemoteAccess> {
-  routing.remote.access ??= (async (): Promise<RemoteAccess> => {
-    const access = remoteAccess(routing.remote.url, routing.remote.key)
-    if (!access.ok) return access
-    const declared = await repoDeclares(keyIo($), REMOTE_OPTIONS).catch(() => undefined)
-    if (declared === undefined) return { ok: false, reason: 'the repository settings cannot be read' }
-    if (declared) return { ok: false, reason: 'the repository settings declare codexRemote or codexManagementKey (set them in user settings)' }
-    return access
-  })()
-  return routing.remote.access
-}
-
-/** One management request: its text on a 2xx answer, undefined on any failure. The key goes only to the remote's origin. */
-async function management($: Dollar, access: Extract<RemoteAccess, { ok: true }>, path: string): Promise<string | undefined> {
-  return $.http
-    .fetch(`${access.origin}${path}`, { method: 'GET', headers: access.headers })
-    .then(response => (response.status >= 200 && response.status < 300 ? response.text : undefined))
-    .catch(() => undefined)
-}
-
-type CodexRead = Pick<Quota, 'codex' | 'codexState' | 'fetchedAt' | 'codexObservedAt'>
-
-/** One read of Codex's usage: the remote's one active Codex connection, then its live usage. A failed request is `down`, anything else unusable `unknown`. */
-async function readCodex($: Dollar, routing: Routing, now: number): Promise<CodexRead> {
-  const failed = (codexState: 'down' | 'unknown'): CodexRead => ({ codex: null, codexState, fetchedAt: now, codexObservedAt: null })
-  try {
-    const access = await remoteOf($, routing)
-    if (!access.ok) {
-      // The reasons are fixed phrases: no URL or key text is in them.
-      $.ui.log(`crew quota: Codex not asked (${access.reason})`, { to: 'debug' })
-      return failed('unknown')
-    }
-    const connections = await management($, access, CONNECTIONS_PATH)
-    if (connections === undefined) return failed('down')
-    const id = activeCodexConnection(connections)
-    if (id === undefined) {
-      $.ui.log('crew quota: Codex not asked (the remote has no single active Codex connection)', { to: 'debug' })
-      return failed('unknown')
-    }
-    const usage = await management($, access, usagePath(id))
-    if (usage === undefined) return failed('down')
-    const read = codexUsage(usage, now)
-    return { codex: read.reading, codexState: read.state, fetchedAt: now, codexObservedAt: read.observedAt }
-  } catch {
-    return failed('down')
-  }
-}
-
-/**
- * Codex's read within DEADLINE_MS, or undefined. One read at a time; a later caller shares it. Host fetch cannot be
- * aborted, so a read that outlasts the deadline is kept in memory and applied by the next refresh.
- */
-async function codexWithin($: Dollar, routing: Routing, now: number): Promise<CodexRead | undefined> {
-  if (!routing.codexFlight) {
-    const flight: Promise<CodexRead> = readCodex($, routing, now).finally(() => {
-      if (routing.codexFlight === flight) routing.codexFlight = undefined
-    })
-    routing.codexFlight = flight
-  }
-  const flight = routing.codexFlight
-  let cancel: () => void = () => {}
-  const late = new Promise<undefined>(resolve => {
-    cancel = clockOf($).timer(DEADLINE_MS, () => resolve(undefined))
-  })
-  try {
-    const read = await Promise.race([flight, late])
-    // A late failure is dropped rather than cached: its later requests ran on a `$` whose hook had returned, so the
-    // next spawn reads again with its own.
-    if (read === undefined) void flight.then(result => { if (result.codexState !== 'down') routing.codexLate = result })
-    return read
-  } finally {
-    cancel()
-  }
-}
-
-/** Registered twins and both remote options make quota routing eligible; without them the remote is never asked. */
-const asksCodex = (routing: Routing) => routing.twins.length > 0 && routing.remote.set
-
-async function updateQuota($: Dollar, routing: Routing): Promise<void> {
-  const now = await $.clock.now()
-  const usage = await $.session.usage().catch(() => null)
-  const claude = claudeReading(usage?.rateLimits)
-  const before = await read($, quota)
-  const eligible = asksCodex(routing)
-  const age = before.fetchedAt === null ? Infinity : now - before.fetchedAt
-  // Cached for CACHE_MS, failures included, so a dead remote is not asked on every spawn. A read that came back late
-  // is applied first; one still under way leaves the cached state, and Codex unknown before any read.
-  const late = routing.codexLate
-  routing.codexLate = undefined
-  const codex: Partial<Quota> = !eligible
-    ? { codex: null, codexState: 'off', fetchedAt: null, codexObservedAt: null }
-    : late
-      ? late
-      : before.codexState !== 'off' && age >= 0 && age < CACHE_MS
-        ? {}
-        : ((await codexWithin($, routing, now)) ?? (before.codexState === 'off' ? { codexState: 'unknown' } : {}))
-  await update($, quota, q => settle({ ...q, ...codex, ...(claude ? { claude, claudeAt: now } : {}) }, eligible, now))
-}
-
-/**
- * The quota atom brought up to date: Claude from `$.session.usage()` (an empty reading keeps the last non-empty one),
- * Codex from the remote when it is asked and its last answer is older than CACHE_MS. One refresh at a time; callers
- * share it. Rejects only when the atom itself cannot be read or written; callers catch.
- */
-async function refreshQuota($: Dollar, routing: Routing): Promise<Quota> {
-  if (!routing.flight) {
-    const flight: Promise<void> = updateQuota($, routing).finally(() => {
-      if (routing.flight === flight) routing.flight = undefined
-    })
-    routing.flight = flight
-  }
-  await routing.flight
-  return read($, quota)
-}
-
-/** Keeps the last non-empty Claude reading and when it was taken; an empty one (a Codex response carries no Anthropic limits) changes nothing. */
-async function noteClaude($: Dollar, routing: Routing, rateLimits: readonly RateLimitInput[]): Promise<void> {
-  const claude = claudeReading(rateLimits)
-  if (!claude) return
-  const now = await $.clock.now()
-  const eligible = asksCodex(routing)
-  await update($, quota, q => settle({ ...q, claude, claudeAt: now }, eligible, now))
-}
-
-/** The provider the readings favor for a call that has a twin, with the readings it came from; undefined (the call stays on Claude) when the atom cannot be read. */
-async function chooseProvider($: Dollar, routing: Routing): Promise<Quota | undefined> {
-  try {
-    return await refreshQuota($, routing)
-  } catch {
-    $.ui.log('crew quota: not read, the call stays on Claude', { to: 'debug' })
-    return undefined
-  }
+  /** The `mode` option: the mode a session starts in. */
+  mode: Mode
 }
 
 /** Asks Jev about one call. A failure is one debug line; the caller requests medium. */
@@ -381,14 +431,14 @@ async function askJev($: Dollar, routing: Routing, key: string, spec: Target, e:
   }
 }
 
-/** What the notice and the debug lines say about a call: the target that runs it and, when quota moved it, the switch. */
+/** What the notice and the debug lines say about a call: the target that runs it and, when the codex mode moved it, the switch. */
 type Announced = { spec: Target; routed: Routed; jev: boolean; via?: Switch }
 
 /** The notice and debug lines distinguish requested effort from known applied configuration. */
 function announce($: Dollar, call: Announced, applied: Effort | null, requestedApply: boolean, outcome: BindOutcome | 'suffix' | undefined, toolUseId: string): void {
   const { spec, routed, jev, via } = call
   const notApplied = (requestedApply || applied !== null) && applied !== routed.decision.effort ? routed.decision.effort : undefined
-  if (via) $.ui.log(`crew quota: ${via.requested} -> crew:${spec.name} (${via.reason})`, { to: 'debug' })
+  if (via) $.ui.log(`crew mode: ${via.requested} -> crew:${spec.name}`, { to: 'debug' })
   if (jev) {
     $.ui.log(`crew jev: ${describe(spec, routed, { effort: applied })}`, { to: 'debug' })
   }
@@ -399,35 +449,30 @@ function announce($: Dollar, call: Announced, applied: Effort | null, requestedA
 }
 
 // Jev moves effort, never model or type: the lane and the tool allowlist stay the lead's choice. The one rewrite of
-// the type is the quota rule's, to the same role's registered twin, and it comes first: everything after it (the
-// routable check, Jev's answers, the effort book, the tag, the confirmation) reads the rewritten type.
+// the type is the codex mode's, to the same role's registered twin, and it comes first: everything after it (the Jev
+// request, the effort book, the tag, the confirmation) reads the rewritten type.
 // Any Jev failure requests medium through the same effort book.
 async function routeSpawn(routing: Routing, $: Dollar, e: SpawnHook[1], next: SpawnHook[2]) {
-  if (!routing.enabled && !asksCodex(routing)) return next(e)
+  // The mode is read only with twins registered: without them the codex mode moves nothing.
+  const codex = routing.twins.length > 0 && (await modeOf($)) === 'codex'
+  if (!routing.enabled && !codex) return next(e)
   const asked = routable(e, routing.twins)
   if (!asked) return next(e)
-  const key = routing.enabled ? await keyOf($, routing.access, routing.jevKey) : undefined
-  // The twin this call could move to, when quota routing is on and the call is one that may move.
-  const twin = asksCodex(routing) ? twinFor(e, routing.twins) : undefined
+  // The twin this call moves to, in the codex mode and for a call that may move.
+  const twin = codex ? twinFor(e, routing.twins) : undefined
   if (!routing.enabled && !twin) return next(e)
+  const key = routing.enabled ? await keyOf($, routing.access, routing.jevKey) : undefined
 
   // A description that already carries a tag (a call copied from the task list) is sent and tagged without it.
   e = { ...e, description: untagged(e.description, routing.twins.map(twin => twin.model)) }
   const requested = e.subagentType
-  // The quota read and Jev run together: Jev is asked about the base role either way, so its answer fits both outcomes.
-  const [readings, jevAnswer] = await Promise.all([
-    twin ? chooseProvider($, routing) : undefined,
-    key ? askJev($, routing, key, asked, e) : undefined,
-  ])
-  const toCodex = twin !== undefined && readings?.decision.provider === 'codex'
-  const spec: Target = toCodex ? twin : asked
-  if (toCodex) e = { ...e, subagentType: `crew:${spec.name}` }
-  const via: Switch | undefined = toCodex && readings ? { requested, reason: readings.decision.reason } : undefined
-  // A switch is logged where it is announced; a call that could have moved and stays says why here.
-  if (twin && readings && !toCodex) $.ui.log(`crew quota: ${requested} stays on Claude (${readings.decision.reason})`, { to: 'debug' })
-  // Models stay fixed. Any Jev failure requests medium; quota-only twin calls use medium too.
-  const jevRouted = jevAnswer && toCodex ? retarget(jevAnswer, spec) : jevAnswer
-  const routed = jevRouted ?? (routing.enabled || spec.base !== undefined ? defaultsOf(spec) : undefined)
+  const spec: Target = twin ?? asked
+  if (twin) e = { ...e, subagentType: `crew:${spec.name}` }
+  const via: Switch | undefined = twin ? { requested } : undefined
+  // Jev is asked about the target; a twin is sent as its base role, so the answer is the role's either way.
+  const jevRouted = key ? await askJev($, routing, key, spec, e) : undefined
+  // Models stay fixed. Any Jev failure requests medium; a switch without Jev uses medium too.
+  const routed = jevRouted ?? defaultsOf(spec)
   // The gateway routes `cx/<model>-<effort>` to that effort's variant, ahead of the host's output_config.effort, even on the first step.
   const suffix = spec.base !== undefined && routed ? `${CODEX_PREFIX}${spec.model}-${routed.decision.effort}` : undefined
   const change = moved(spec, routed)
@@ -450,7 +495,7 @@ async function routeSpawn(routing: Routing, $: Dollar, e: SpawnHook[1], next: Sp
     else routing.book.drop(token)
   } else if (result.agentId) outcome = 'suffix'
   // Nothing started when the host refused the spawn, so there is nothing to announce.
-  if (!routed || !result.agentId) return result
+  if (!result.agentId) return result
 
   // Keep known configuration separate from the request. A first step without a binding leaves effort unknown.
   const took = outcome === 'suffix' || outcome === 'applied' || outcome === 'matched'
@@ -464,7 +509,6 @@ async function routeSpawn(routing: Routing, $: Dollar, e: SpawnHook[1], next: Sp
     agent: spec.name,
     requested,
     provider: spec.base !== undefined ? 'codex' : 'claude',
-    ...(readings ? { reason: readings.decision.reason, claude: readings.claude, codex: readings.codex } : {}),
     depth: routed.decision.depth,
     defaultEffort: spec.effort,
     effortPlanned: routed.decision.effort,
@@ -474,7 +518,7 @@ async function routeSpawn(routing: Routing, $: Dollar, e: SpawnHook[1], next: Sp
     durationMs: routed.ms,
     description: e.description,
   })
-  const by = jevRouted ? 'jev' : via ? 'quota' : 'crew'
+  const by = jevRouted ? 'jev' : 'crew'
   const saved = saveDecision(decisionIo($), routing.access.home, result.agentId, record, by)
   // The tag is what was chosen; the subagent's next step says what ran (a step before this point is not seen).
   routing.confirms.add(result.agentId, {
@@ -492,7 +536,9 @@ async function routeSpawn(routing: Routing, $: Dollar, e: SpawnHook[1], next: Sp
 
 export const register: Register = (on, options) => {
   // Fixed twins register only at session start behind a gateway base URL, never on reload alone.
-  const native: Native = { specs: nativeCodexSpecs(CODEX_MODELS), registered: [] }
+  const native: Native = { specs: nativeCodexSpecs(CODEX_MODELS), registered: [], onLogin: new Map() }
+  // The `codexLogin` option: a twin crew can describe runs on the user's Codex login, its steps answered below.
+  const codex: CodexLogin = { enabled: options.codexLogin === true, types: new Map(), sessions: new Map() }
 
   // Shared while the module lives: the rate limit is the account's, and a sick Jev is not asked again for a while.
   const routing: Routing = {
@@ -505,22 +551,23 @@ export const register: Register = (on, options) => {
     confirms: createConfirmations(),
     access: {},
     twins: native.registered,
-    remote: { url: options.codexRemote, key: options.codexManagementKey, set: remoteAccess(options.codexRemote, options.codexManagementKey).ok },
+    mode: modeOption(options.mode),
   }
 
-  on('session.start', {}, ($, e, next) => startCrew(native, $, e, next))
+  on('session.start', {}, ($, e, next) => startCrew(native, codex, routing.mode, $, e, next))
+  on('command.run', { command: MODE_COMMAND }, async ($, e) => ({ text: await runModeCommand($, native, routing.mode, e.args) }))
+    .catch(() => ({ text: `crew: /${MODE_COMMAND} failed; run it again to see the mode.` }))
   // Only a request that offers the Agent tool gets the lead's section: the crew agents' tool lists leave it out.
   // A teammate renders the lead's prompt too, and `bare` asks for the lead's section alone.
   on('prompt.compose', async ($, e, next) => {
     const composed = await next(e)
     if (!e.tools.includes('Agent') || e.traits.includes('teammate') || e.traits.includes('bare')) return composed
     const jev = routing.enabled && (await keyOf($, routing.access, routing.jevKey)) !== undefined
-    // The quota sentences appear only with quota routing on and twins registered, so the lead section stays free of Codex otherwise.
-    const quotaOn = asksCodex(routing)
-    const lead = { id: 'crew:lead', text: leadSection(jev, quotaOn), scope: 'session' as const }
+    const lead = { id: 'crew:lead', text: leadSection(jev), scope: 'session' as const }
     // The `-codex` types get a section of their own, under the same rule and only for the twins this session registered.
+    // It reads the same in either mode, so switching the mode does not change the prompt.
     if (native.registered.length === 0) return { sections: [...composed.sections, lead] }
-    const twins = { id: 'crew:native-codex', text: nativeCodexSection(native.registered, quotaOn), scope: 'session' as const }
+    const twins = { id: 'crew:native-codex', text: nativeCodexSection(native.registered), scope: 'session' as const }
     return { sections: [...composed.sections, lead, twins] }
   }).catch((_, e, next) => next(e))
   on('agent.spawn', {}, ($, e, next) => {
@@ -534,16 +581,22 @@ export const register: Register = (on, options) => {
   // Runs on every request of every loop: the main loop and agents that were not routed return at once. A streaming
   // hook is written inline as an async generator: the engine reads no other form.
   on('turn.step', {}, async function* ($, e, next) {
+    // A twin on the Codex login is answered here and never reaches the API; every other step goes on.
+    const twin = await twinOnLogin($, native, codex, e.agentId)
     let effort: Effort | undefined
-    if (routing.enabled && e.agentId && e.effort !== undefined) {
+    if (!twin && routing.enabled && e.agentId && e.effort !== undefined) {
       effort = await routing.book.lookup(e.agentId, () => listAgents($)).catch(() => undefined)
     }
     const sent = effort && effort !== e.effort ? { ...e, effort } : e
-    const answer = yield* next(sent)
+    // The spawn's `-<effort>` suffix decides, else the host's effort, else the twin's default; it is what goes out.
+    const loginEffort = twin ? codexEffort(observedEffort(sent, true), codexEffort(twin.effort, 'medium')) : undefined
+    let answer: TurnStepResult
+    if (twin && loginEffort) answer = yield* stepOnLogin($, codex, twin, sent, loginEffort, next.signal)
+    else answer = yield* next(sent)
     // Only a step the API answered says what ran; one that failed leaves the check for the next.
     const pending = e.agentId && answer.usage ? routing.confirms.take(e.agentId) : undefined
     if (pending && e.agentId && answer.usage) {
-      const ran = { model: answer.usage.model, effort: observedEffort(sent, pending.suffix) }
+      const ran = { model: answer.usage.model, effort: loginEffort ?? observedEffort(sent, pending.suffix) }
       $.ui.log(confirmText(pending.description, pending.planned, ran, pending.via, pending.suffix), { to: 'transcript' })
       // After the spawn's own write, so the record with what ran is the one that stays; bounded like the spawn's, so
       // a hung write cannot hold the subagent's step.
@@ -551,17 +604,6 @@ export const register: Register = (on, options) => {
       const id = e.agentId
       const home = routing.access.home
       if (home) await settleDecision($, pending.saved.then(() => saveDecision(decisionIo($), home, id, withRan(pending.record, ran))))
-    }
-    return answer
-  })
-
-  // Claude's limits as the host measured them: keeps the last non-empty reading in the atom, and never throws.
-  on('session.measure', {}, async ($, e, next) => {
-    const answer = await next(e)
-    try {
-      await noteClaude($, routing, e.rateLimits)
-    } catch {
-      // The atom keeps its last reading.
     }
     return answer
   })
