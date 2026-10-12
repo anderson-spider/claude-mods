@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jclab-joseph/claude-code-model-proxy/internal/netx"
+	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/netx"
 )
 
 // captureLogs redirects logx output for the duration of the test by

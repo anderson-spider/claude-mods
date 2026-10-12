@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jclab-joseph/claude-code-model-proxy/internal/logx"
+	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/logx"
 )
 
 // defaultPingInterval is how long a streamed answer may stay silent before a

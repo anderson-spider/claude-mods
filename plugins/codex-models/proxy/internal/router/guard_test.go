@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jclab-joseph/claude-code-model-proxy/internal/config"
+	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/config"
 )
 
 const (

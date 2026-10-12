@@ -15,8 +15,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jclab-joseph/claude-code-model-proxy/internal/logx"
-	"github.com/jclab-joseph/claude-code-model-proxy/internal/netx"
+	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/logx"
+	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/netx"
 )
 
 // Transport wraps an http.RoundTripper to log every request it sends.

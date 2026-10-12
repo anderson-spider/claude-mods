@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/jclab-joseph/claude-code-model-proxy/internal/logx"
+	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/logx"
 )
 
 // requestBody is a buffered request body in both the form the client sent and

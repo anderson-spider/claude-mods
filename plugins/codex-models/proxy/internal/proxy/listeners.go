@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/jclab-joseph/claude-code-model-proxy/internal/logx"
+	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/logx"
 )
 
 // NewServer builds the HTTP server, tuned for long streaming responses.

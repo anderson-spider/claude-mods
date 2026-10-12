@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/jclab-joseph/claude-code-model-proxy/internal/config"
+	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/config"
 )
 
 // helloPath is Claude Code's start-up probe. It arrives as HEAD with neither

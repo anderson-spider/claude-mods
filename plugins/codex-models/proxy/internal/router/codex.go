@@ -12,10 +12,10 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/jclab-joseph/claude-code-model-proxy/internal/codex"
-	"github.com/jclab-joseph/claude-code-model-proxy/internal/logx"
-	"github.com/jclab-joseph/claude-code-model-proxy/internal/tokenize"
-	"github.com/jclab-joseph/claude-code-model-proxy/internal/translate"
+	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/codex"
+	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/logx"
+	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/tokenize"
+	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/translate"
 	"github.com/tidwall/gjson"
 )
 
