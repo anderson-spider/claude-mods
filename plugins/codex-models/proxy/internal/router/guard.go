@@ -15,6 +15,14 @@ import (
 // the secret nor a bearer, so it is answered here and never forwarded.
 const helloPath = "/api/hello"
 
+// servedMethods are the methods Claude Code sends to its base URL. Methods
+// are case-sensitive, so "trace" or "get" is not on the list either.
+var servedMethods = map[string]bool{
+	http.MethodGet:  true,
+	http.MethodPost: true,
+	http.MethodHead: true,
+}
+
 // Guard wraps the router so that nothing reaches it, or any upstream, unless
 // the request names this proxy in Host and carries the secret.
 //
@@ -31,78 +39,75 @@ func Guard(cfg *config.Config, next http.Handler) (http.Handler, error) {
 	if cfg.AuthToken == "" {
 		return nil, errors.New("router: no auth_token; run `ccmproxy config init`")
 	}
-	hosts, err := allowedHosts(cfg.ListenHTTP)
+	hosts, err := listenerHosts(cfg.ListenHTTP)
 	if err != nil {
 		return nil, err
 	}
-	want := sha256.Sum256([]byte(cfg.AuthToken))
-
-	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		// Taken off first, whatever happens next.
-		presented := req.Header.Values(config.TokenHeader)
-		req.Header.Del(config.TokenHeader)
-
-		if _, ok := hosts[strings.ToLower(req.Host)]; !ok {
-			writeAnthropicError(w, http.StatusForbidden, "permission_error", "ccmproxy: unexpected Host header")
-			return
-		}
-		// Claude Code sends only GET, POST and HEAD. Every other method
-		// (OPTIONS preflights, CONNECT tunnels, TRACE echoes, lowercase or
-		// extension methods) is refused, even with the secret. Methods are
-		// case-sensitive, so "trace" is not "TRACE" and is refused too.
-		if !allowedMethods[req.Method] {
-			writeAnthropicError(w, http.StatusForbidden, "permission_error", "ccmproxy: this method is not served")
-			return
-		}
-		if req.Method == http.MethodHead && req.URL.Path == helloPath {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		if !tokenMatches(presented, want) {
-			writeAnthropicError(w, http.StatusForbidden, "permission_error",
-				"ccmproxy: missing or wrong "+config.TokenHeader)
-			return
-		}
-		next.ServeHTTP(w, req)
-	}), nil
+	g := &guard{next: next, hosts: hosts, want: sha256.Sum256([]byte(cfg.AuthToken))}
+	return g, nil
 }
 
-// allowedMethods are the methods Claude Code sends to its base URL.
-var allowedMethods = map[string]bool{
-	http.MethodGet:  true,
-	http.MethodPost: true,
-	http.MethodHead: true,
+type guard struct {
+	next  http.Handler
+	hosts map[string]bool
+	want  [sha256.Size]byte
 }
 
-// tokenMatches accepts exactly one header value whose SHA-256 digest equals
-// want. Comparing digests keeps the comparison constant time and independent
-// of the length of either value.
-func tokenMatches(presented []string, want [sha256.Size]byte) bool {
+func (g *guard) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	// The secret comes off before anything else looks at the request,
+	// whatever is decided below.
+	presented := req.Header.Values(config.TokenHeader)
+	req.Header.Del(config.TokenHeader)
+
+	switch {
+	case !g.hosts[strings.ToLower(req.Host)]:
+		refuse(w, "ccmproxy: unexpected Host header")
+	case !servedMethods[req.Method]:
+		// OPTIONS preflights, CONNECT tunnels, TRACE echoes and extension
+		// methods are refused even with the secret.
+		refuse(w, "ccmproxy: this method is not served")
+	case req.Method == http.MethodHead && req.URL.Path == helloPath:
+		w.WriteHeader(http.StatusOK)
+	case !g.secretMatches(presented):
+		refuse(w, "ccmproxy: missing or wrong "+config.TokenHeader)
+	default:
+		g.next.ServeHTTP(w, req)
+	}
+}
+
+// secretMatches accepts exactly one header value whose SHA-256 digest is the
+// secret's. Comparing digests keeps the comparison constant time whatever the
+// length of either value.
+func (g *guard) secretMatches(presented []string) bool {
 	if len(presented) != 1 {
 		return false
 	}
 	got := sha256.Sum256([]byte(presented[0]))
-	return subtle.ConstantTimeCompare(got[:], want[:]) == 1
+	return subtle.ConstantTimeCompare(got[:], g.want[:]) == 1
 }
 
-// allowedHosts lists the Host values that name this proxy: the listen
-// address itself, and localhost on the same port when the listener is
-// 127.0.0.1 (which is where localhost points).
-func allowedHosts(listen string) (map[string]struct{}, error) {
+func refuse(w http.ResponseWriter, message string) {
+	writeAnthropicError(w, http.StatusForbidden, "permission_error", message)
+}
+
+// listenerHosts lists the Host values, lowercased, that name this proxy: the
+// listen address itself, localhost on the same port when the listener is
+// 127.0.0.1 (where localhost points), and each of those without the port
+// when it is 80, which a client leaves out.
+func listenerHosts(listen string) (map[string]bool, error) {
 	host, port, err := net.SplitHostPort(listen)
 	if err != nil {
 		return nil, errors.New("router: listen_http " + listen + " is not host:port")
 	}
-	hosts := map[string]struct{}{
-		strings.ToLower(net.JoinHostPort(host, port)): {},
-	}
+	names := []string{strings.ToLower(net.JoinHostPort(host, port))}
 	if host == "127.0.0.1" {
-		hosts["localhost:"+port] = struct{}{}
+		names = append(names, "localhost:"+port)
 	}
-	if port == "80" {
-		// A client omits the default port from Host.
-		for h := range hosts {
-			hosts[strings.TrimSuffix(h, ":80")] = struct{}{}
+	hosts := map[string]bool{}
+	for _, name := range names {
+		hosts[name] = true
+		if port == "80" {
+			hosts[strings.TrimSuffix(name, ":80")] = true
 		}
 	}
 	return hosts, nil
