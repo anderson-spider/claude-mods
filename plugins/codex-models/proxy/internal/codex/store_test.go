@@ -986,3 +986,183 @@ func TestStoresOnOneFileShareTheLockAcrossAuthDirs(t *testing.T) {
 		t.Fatalf("the link was replaced by the write: %v", err)
 	}
 }
+
+// An older binary takes only <auth_dir>/codex.lock. This release takes that
+// lock first, so while the old one refreshes it waits, then reads the token
+// the old one wrote: the refresh token is spent once.
+func TestTheLegacyLockExcludesAnOlderBinary(t *testing.T) {
+	t.Setenv("CODEX_HOME", t.TempDir())
+	fake, client := newOAuthServer(t, 0)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "codex.json")
+	writeNative(t, path, Token{AccessToken: "stale", RefreshToken: "rt-1", ExpiresAt: time.Now().Add(-time.Minute)}, 0o600)
+
+	// The old binary holds its lock, mid-refresh.
+	old, err := os.OpenFile(filepath.Join(dir, "codex.lock"), os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		t.Fatalf("open legacy lock: %v", err)
+	}
+	defer old.Close()
+	if err := syscall.Flock(int(old.Fd()), syscall.LOCK_EX); err != nil {
+		t.Fatalf("flock: %v", err)
+	}
+
+	waiting := make(chan struct{})
+	var once sync.Once
+	lockBusy = func() { once.Do(func() { close(waiting) }) }
+	t.Cleanup(func() { lockBusy = nil })
+
+	store := NewStore(client, StoreOptions{Dir: dir})
+	type result struct {
+		access string
+		err    error
+	}
+	done := make(chan result, 1)
+	go func() {
+		access, _, err := store.Access(context.Background())
+		done <- result{access, err}
+	}()
+	select {
+	case <-waiting:
+	case r := <-done:
+		t.Fatalf("Access did not wait for the legacy lock: %+v", r)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Access never reached the legacy lock")
+	}
+
+	// The old binary spends rt-1 and writes what it got, then unlocks.
+	refreshed, err := client.Refresh(context.Background(), "rt-1")
+	if err != nil {
+		t.Fatalf("old binary's refresh: %v", err)
+	}
+	refreshed.ExpiresAt = time.Now().Add(time.Hour)
+	writeNative(t, path, *refreshed, 0o600)
+	if err := syscall.Flock(int(old.Fd()), syscall.LOCK_UN); err != nil {
+		t.Fatalf("unlock: %v", err)
+	}
+
+	r := <-done
+	if r.err != nil || r.access != "access-from-rt-1" {
+		t.Fatalf("Access = %q, %v; want the old binary's token", r.access, r.err)
+	}
+	if n := fake.calls.Load(); n != 1 {
+		t.Fatalf("token endpoint called %d times, want 1", n)
+	}
+	// Both locks were released: another store takes them at once.
+	if unlock, err := NewStore(nil, StoreOptions{Dir: dir}).lock(context.Background()); err != nil {
+		t.Fatalf("lock after Access: %v", err)
+	} else {
+		unlock()
+	}
+}
+
+// Two stores of this release take the two locks in one order and never
+// wait on each other crosswise; both are released on every path.
+func TestLocksAreReleasedOnEveryPath(t *testing.T) {
+	t.Setenv("CODEX_HOME", t.TempDir())
+	dir := t.TempDir()
+	store := NewStore(nil, StoreOptions{Dir: dir})
+
+	// A failure on the second lock releases the first.
+	held, err := os.OpenFile(store.lockPath(), os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer held.Close()
+	if err := syscall.Flock(int(held.Fd()), syscall.LOCK_EX); err != nil {
+		t.Fatalf("flock: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if _, err := store.lock(ctx); err == nil {
+		t.Fatal("lock succeeded while the second lock was held")
+	}
+	legacy, err := os.OpenFile(store.legacyLockPath(), os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatalf("open legacy: %v", err)
+	}
+	defer legacy.Close()
+	if err := syscall.Flock(int(legacy.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		t.Fatalf("the legacy lock was left held after the second failed: %v", err)
+	}
+	_ = syscall.Flock(int(legacy.Fd()), syscall.LOCK_UN)
+	_ = syscall.Flock(int(held.Fd()), syscall.LOCK_UN)
+
+	// Concurrent stores on one dir all get through.
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			unlock, err := NewStore(nil, StoreOptions{Dir: dir}).lock(context.Background())
+			if err != nil {
+				t.Errorf("lock: %v", err)
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+			unlock()
+		}()
+	}
+	wg.Wait()
+
+	// An auth_file named "codex" in auth_dir makes the two locks one file.
+	same := NewStore(nil, StoreOptions{Dir: dir, ExplicitPath: filepath.Join(dir, "codex")})
+	if !sameFile(same.legacyLockPath(), same.lockPath()) {
+		t.Fatalf("expected one lock file, got %s and %s", same.legacyLockPath(), same.lockPath())
+	}
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel2()
+	unlock, err := same.lock(ctx2)
+	if err != nil {
+		t.Fatalf("lock on one shared file: %v", err)
+	}
+	unlock()
+}
+
+// auth_dir reached through a symlink, before the credential file exists:
+// the lock and the write target already name what a store resolves later.
+func TestLockThroughALinkedAuthDirMatchesBeforeTheFileExists(t *testing.T) {
+	t.Setenv("CODEX_HOME", t.TempDir())
+	real := t.TempDir()
+	link := filepath.Join(t.TempDir(), "auth-link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	viaLink := NewStore(nil, StoreOptions{Dir: link})
+	viaReal := NewStore(nil, StoreOptions{Dir: real})
+	before := viaLink.lockPath()
+	if before != viaReal.lockPath() {
+		t.Fatalf("before the file: lock via link %s, via real dir %s", before, viaReal.lockPath())
+	}
+	if writeTarget(viaLink.NativePath()) != writeTarget(viaReal.NativePath()) {
+		t.Fatalf("write targets differ: %s and %s", writeTarget(viaLink.NativePath()), writeTarget(viaReal.NativePath()))
+	}
+	if err := viaLink.Save(&Token{AccessToken: "at"}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if after := NewStore(nil, StoreOptions{Dir: link}).lockPath(); after != before {
+		t.Fatalf("lock moved once the file existed: %s, then %s", before, after)
+	}
+}
+
+// APIError's text carries the status and short type and code, never the body.
+func TestAPIErrorTextLeavesTheBodyOut(t *testing.T) {
+	for _, tc := range []struct {
+		body string
+		want string
+	}{
+		{`{"error":{"type":"invalid_request_error","code":"context_length_exceeded","message":"SECRET prompt"}}`,
+			"codex: backend returned 400 (type invalid_request_error, code context_length_exceeded)"},
+		{`{"error":{"type":"SECRET with spaces","message":"SECRET"}}`, "codex: backend returned 400"},
+		{`{"detail":"SECRET"}`, "codex: backend returned 400"},
+		{`SECRET plain`, "codex: backend returned 400"},
+	} {
+		err := &APIError{StatusCode: 400, Body: []byte(tc.body)}
+		if got := err.Error(); got != tc.want {
+			t.Fatalf("Error() = %q, want %q", got, tc.want)
+		}
+		if string(err.Body) != tc.body {
+			t.Fatal("the body is no longer on the struct")
+		}
+	}
+}

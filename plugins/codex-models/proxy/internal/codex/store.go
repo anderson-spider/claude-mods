@@ -52,6 +52,11 @@ const nativeFileName = "codex.json"
 // refreshes and logins across proxy processes using that file.
 const lockSuffix = ".lock"
 
+// legacyLockName is the lock earlier releases took in auth_dir. It is still
+// taken, before the one beside the file, so an older binary on the same file
+// and this one exclude each other; drop it once no such binary can run.
+const legacyLockName = "codex.lock"
+
 // lockWait bounds the wait for another process's refresh; it outlasts the
 // OAuth client's own 30 s timeout.
 const lockWait = 45 * time.Second
@@ -585,11 +590,25 @@ func (s *Store) lockPath() string {
 	return writeTarget(s.NativePath()) + lockSuffix
 }
 
+// legacyLockPath is where earlier releases locked: auth_dir, or the
+// credential file's directory without one, joined as they joined it.
+func (s *Store) legacyLockPath() string {
+	dir := strings.TrimSpace(s.options.Dir)
+	if dir == "" {
+		dir = filepath.Dir(s.NativePath())
+	}
+	return filepath.Join(dir, legacyLockName)
+}
+
 // writeTarget is the file a write to path replaces: a symlink's target when
-// it resolves, else path itself, made absolute.
+// it resolves; for a file not there yet (or a dangling link, which the write
+// replaces), path with its directory resolved, so it names what a later
+// store resolves once the file exists. Always absolute.
 func writeTarget(path string) string {
 	if resolved, err := filepath.EvalSymlinks(path); err == nil {
 		path = resolved
+	} else if dir, err := filepath.EvalSymlinks(filepath.Dir(path)); err == nil {
+		path = filepath.Join(dir, filepath.Base(path))
 	}
 	if abs, err := filepath.Abs(path); err == nil {
 		return abs
@@ -597,10 +616,36 @@ func writeTarget(path string) string {
 	return filepath.Clean(path)
 }
 
-// lock takes the exclusive flock on lockPath, waiting at most lockWait or
-// until ctx is done, and returns its release.
+// lock takes the legacy lock, then the one beside the file, always in that
+// order (two stores of this release never wait on each other crosswise; an
+// older binary takes only the first), and returns a release of both, in
+// reverse. Each wait is bounded by lockWait and ctx.
 func (s *Store) lock(ctx context.Context) (func(), error) {
-	path := s.lockPath()
+	legacy := s.legacyLockPath()
+	releaseLegacy, err := s.lockFile(ctx, legacy)
+	if err != nil {
+		return nil, err
+	}
+	current := s.lockPath()
+	if sameFile(legacy, current) {
+		// An auth_file named "codex" makes them one file: a second flock on
+		// it from another descriptor would wait on this one forever.
+		return releaseLegacy, nil
+	}
+	release, err := s.lockFile(ctx, current)
+	if err != nil {
+		releaseLegacy()
+		return nil, err
+	}
+	return func() {
+		release()
+		releaseLegacy()
+	}, nil
+}
+
+// lockFile takes the exclusive flock on path, waiting at most lockWait or
+// until ctx is done, and returns its release.
+func (s *Store) lockFile(ctx context.Context, path string) (func(), error) {
 	if err := s.ensureDir(filepath.Dir(path)); err != nil {
 		return nil, err
 	}
