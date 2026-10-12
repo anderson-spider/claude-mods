@@ -3,7 +3,7 @@
 // Run: node --test plugins/codex-models/tests/scripts/*.test.mjs   (mise run plugins:test runs it)
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
@@ -99,12 +99,12 @@ exit 6
   )
   script('launchctl', `#!/bin/sh\necho "launchctl $*" >>"${join(root, 'calls.log')}"\n[ "$1" = print ] && exit 1\nexit 0\n`)
 
-  const run = (file, args = []) =>
+  const run = (file, args = [], extra = {}) =>
     new Promise(done => {
       execFile(
         '/bin/sh',
         [join(PLUGIN, file), ...args],
-        { env: { PATH: `${bin}:/usr/bin:/bin:/usr/sbin:/sbin`, HOME: home, TMPDIR: root }, timeout: 30000 },
+        { env: { PATH: `${bin}:/usr/bin:/bin:/usr/sbin:/sbin`, HOME: home, TMPDIR: root, ...extra }, timeout: 30000 },
         (error, stdout, stderr) => done({ code: error ? error.code ?? 1 : 0, stdout, stderr }),
       )
     })
@@ -311,6 +311,117 @@ function assertUntouched(box) {
   assert.doesNotMatch(box.calls(), /launchctl|exec go/)
   assert.ok(!readdirSync(join(box.home, '.claude')).some(name => name.includes('.bak-codex-models-')))
 }
+
+/** Node, preloaded with this, reports uid 0 as the owner of FAKE_ROOT_OWNED (a real path), as after a sudo run. */
+function rootOwnedPreload(box) {
+  const file = join(box.root, 'root-owned.mjs')
+  writeFileSync(
+    file,
+    `import fs, { realpathSync } from 'node:fs'
+import { syncBuiltinESMExports } from 'node:module'
+const target = process.env.FAKE_ROOT_OWNED
+const real = (p) => { try { return realpathSync(String(p)) } catch { return String(p) } }
+for (const name of ['statSync', 'lstatSync']) {
+  const original = fs[name]
+  fs[name] = function (p, ...rest) {
+    const stat = original.call(this, p, ...rest)
+    if (stat && target && real(p) === target) stat.uid = 0
+    return stat
+  }
+}
+syncBuiltinESMExports()
+`,
+  )
+  return { NODE_OPTIONS: `--import=${file}` }
+}
+
+/** No build, no copy, no plist, no launchctl call: the install home holds only what the test put there. */
+function assertNothingInstalled(box) {
+  const target = join(box.home, '.claude/codex-models')
+  for (const name of ['bin', 'install', 'install.sh', 'uninstall.sh', 'ccmproxy', 'home']) assert.ok(!existsSync(join(target, name)), name)
+  assert.ok(!existsSync(join(box.home, 'Library/LaunchAgents')), 'no plist')
+  assert.doesNotMatch(box.calls(), /launchctl|exec go/)
+}
+
+test('a state file owned by another user is refused before anything is built or loaded, by install and uninstall', async () => {
+  const box = sandbox()
+  try {
+    const text = `${JSON.stringify(ORIGINAL, null, 2)}\n`
+    writeFileSync(box.settingsFile, text)
+    const target = join(box.home, '.claude/codex-models')
+    mkdirSync(target)
+    // /dev/null is root's: a state left behind that way cannot be restricted to mode 600.
+    symlinkSync('/dev/null', join(target, 'settings-state.json'))
+
+    const out = await box.run('install.sh')
+    assert.notEqual(out.code, 0)
+    assert.match(out.stderr, /\/dev\/null belongs to another user \(uid 0\)/)
+    assert.match(out.stderr, /nothing was changed/)
+    assert.equal(readFileSync(box.settingsFile, 'utf8'), text)
+    assertNothingInstalled(box)
+
+    const removed = await box.run('uninstall.sh')
+    assert.notEqual(removed.code, 0)
+    assert.match(removed.stderr, /belongs to another user/)
+    assert.match(removed.stderr, /LaunchAgent stays loaded/)
+    assert.equal(readFileSync(box.settingsFile, 'utf8'), text)
+    assert.doesNotMatch(box.calls(), /launchctl/)
+  } finally {
+    box.cleanup()
+  }
+})
+
+test('a regular state or settings file another user owns is refused the same way', async () => {
+  const box = sandbox()
+  try {
+    const text = `${JSON.stringify(ORIGINAL, null, 2)}\n`
+    writeFileSync(box.settingsFile, text)
+    const state = join(box.home, '.claude/codex-models/settings-state.json')
+    mkdirSync(dirname(state))
+    writeFileSync(state, '{}\n')
+
+    for (const owned of [state, box.settingsFile]) {
+      const env = { ...rootOwnedPreload(box), FAKE_ROOT_OWNED: realpathSync(owned) }
+      const out = await box.run('install.sh', [], env)
+      assert.notEqual(out.code, 0, owned)
+      assert.match(out.stderr, /belongs to another user \(uid 0\)/, owned)
+      assertNothingInstalled(box)
+
+      const removed = await box.run('uninstall.sh', [], env)
+      assert.notEqual(removed.code, 0, owned)
+      assert.match(removed.stderr, /belongs to another user/, owned)
+      assert.doesNotMatch(box.calls(), /launchctl/)
+    }
+    assert.equal(readFileSync(box.settingsFile, 'utf8'), text)
+  } finally {
+    box.cleanup()
+  }
+})
+
+test('only regular backup files are restricted: a link or a directory under the backup name is left alone', async () => {
+  mode = 'ours'
+  const box = sandbox()
+  try {
+    writeFileSync(box.settingsFile, `${JSON.stringify(ORIGINAL, null, 2)}\n`)
+    const dir = join(box.home, '.claude/settings.json.bak-codex-models-dir')
+    mkdirSync(dir)
+    chmodSync(dir, 0o755)
+    const elsewhere = join(box.root, 'elsewhere.txt')
+    writeFileSync(elsewhere, 'x')
+    chmodSync(elsewhere, 0o644)
+    symlinkSync(elsewhere, join(box.home, '.claude/settings.json.bak-codex-models-link'))
+
+    const out = await box.run('install.sh')
+    assert.equal(out.code, 0, out.stderr)
+    assert.equal(modeOf(dir), 0o755)
+    assert.equal(modeOf(elsewhere), 0o644)
+    const made = readdirSync(join(box.home, '.claude')).filter(name => /^settings\.json\.bak-codex-models-\d/.test(name))
+    assert.equal(made.length, 1)
+    assert.equal(modeOf(join(box.home, '.claude', made[0])), 0o600)
+  } finally {
+    box.cleanup()
+  }
+})
 
 test('a base URL that is not ours is refused before anything is built or loaded', async () => {
   const box = sandbox()

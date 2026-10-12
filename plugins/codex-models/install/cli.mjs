@@ -17,6 +17,7 @@ import {
   mkdtempSync,
   openSync,
   readFileSync,
+  lstatSync,
   readdirSync,
   realpathSync,
   renameSync,
@@ -116,13 +117,18 @@ function writeAtomic(file, text, expect) {
   renameSync(temp, target)
 }
 
-/** Restricts the user's own earlier backups of `target` to mode 600; returns their name prefix. */
+/**
+ * Restricts the user's own earlier backups of `target` to mode 600; returns their name prefix. Only regular files
+ * count: a link or a directory under that name is left as it is (lstat, so a link is never followed).
+ */
 function restrictBackups(target) {
   const dir = dirname(target)
   const prefix = `${basename(target)}.bak-codex-models-`
   for (const name of readdirSync(dir)) {
+    if (!name.startsWith(prefix)) continue
     const path = join(dir, name)
-    if (name.startsWith(prefix) && statSync(path).uid === process.getuid()) chmodSync(path, 0o600)
+    const entry = lstatSync(path)
+    if (entry.isFile() && entry.uid === process.getuid()) chmodSync(path, 0o600)
   }
   return prefix
 }
@@ -213,6 +219,9 @@ function merge(opts) {
 }
 
 function unmerge(opts) {
+  // Both files are written or removed below: one that is not the user's is refused before anything changes.
+  ensureOwn(opts.settings)
+  ensureOwn(opts.state)
   const state = existsSync(opts.state) ? readJson(opts.state, 'the install state') : undefined
   const current = readSettings(opts.settings)
   if (current.text === undefined) {
@@ -253,6 +262,9 @@ function unmerge(opts) {
  * from its config when one exists; before the first install there is none, and any base URL already set is refused.
  */
 function precheck(opts) {
+  // Both files get the secret later: one that is not the user's is refused before anything is built or loaded.
+  ensureOwn(opts.settings)
+  ensureOwn(opts.state)
   const prior = existsSync(opts.state) ? readJson(opts.state, 'the install state') : undefined
   const current = readSettings(opts.settings)
   let baseUrl
@@ -262,7 +274,6 @@ function precheck(opts) {
   }
   const refusal = settingsRefusal(current.value, baseUrl, prior)
   if (refusal) fail(refusal)
-  ensureOwn(opts.settings)
 }
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
