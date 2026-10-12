@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jclab-joseph/claude-code-model-proxy/internal/logx"
 	"github.com/tidwall/gjson"
 )
 
@@ -393,5 +394,64 @@ func TestEffortEdgeCasesClampSensibly(t *testing.T) {
 		if got := h.codexUpstream(t).Get("reasoning.effort").String(); got != tc.want {
 			t.Fatalf("%s: reasoning.effort = %q, want %q", tc.body, got, tc.want)
 		}
+	}
+}
+
+func TestUpstreamErrorTextNeverReachesTheLog(t *testing.T) {
+	const prompt = "PROMPT-ECHO-the-secret-plan"
+	const token = "sk-proj-TOKENVALUE1234567890"
+	var logged strings.Builder
+	restore := logx.SetOutput(&logged)
+	defer restore()
+
+	for _, body := range []string{
+		`{"error":{"message":"bad input: ` + prompt + ` with key ` + token + `","type":"invalid_request_error","code":"bad_input"}}`,
+		`{"detail":"` + prompt + ` ` + token + `"}`,
+		prompt + " " + token,
+		// Free text in type or code (spaces, long values) is not logged either.
+		`{"error":{"message":"x","type":"invalid: ` + prompt + `","code":"` + token + ` and more"}}`,
+		`{"error":{"message":"x","type":"` + strings.Repeat("a", 65) + prompt + `"}}`,
+	} {
+		logged.Reset()
+		h := newHarness(t, nil, backendStatus(http.StatusBadRequest, body), true)
+		rec := h.do(t, http.MethodPost, "/v1/messages", `{"model":"gpt-6-luna","messages":[]}`)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d", rec.Code)
+		}
+		log := logged.String()
+		if strings.Contains(log, prompt) || strings.Contains(log, token) {
+			t.Fatalf("the log carries upstream text:\n%s", log)
+		}
+		if !strings.Contains(log, "codex backend error 400") {
+			t.Fatalf("the log lost the status:\n%s", log)
+		}
+	}
+	logged.Reset()
+	h := newHarness(t, nil, backendStatus(http.StatusBadRequest, `{"error":{"message":"m","type":"invalid_request_error","code":"bad_input"}}`), true)
+	h.do(t, http.MethodPost, "/v1/messages", `{"model":"gpt-6-luna","messages":[]}`)
+	if log := logged.String(); !strings.Contains(log, `type "invalid_request_error"`) || !strings.Contains(log, `code "bad_input"`) {
+		t.Fatalf("the log lost the type or code:\n%s", log)
+	}
+}
+
+func TestUpstreamErrorMessageIsCleanedAndCapped(t *testing.T) {
+	long := strings.Repeat("word ", 400)
+	body := `{"error":{"message":"line one\u0000\u001b[31m\nline two\t` + long + `"}}`
+	h := newHarness(t, nil, backendStatus(http.StatusBadRequest, body), true)
+	rec := h.do(t, http.MethodPost, "/v1/messages", `{"model":"gpt-6-luna","messages":[]}`)
+	message := gjson.Get(rec.Body.String(), "error.message").String()
+	if !strings.HasPrefix(message, "line one [31m line two word") {
+		t.Fatalf("message = %q", message)
+	}
+	for _, r := range message {
+		if r < 0x20 || r == 0x7f {
+			t.Fatalf("message keeps control character %U: %q", r, message)
+		}
+	}
+	if n := len([]rune(message)); n > 301 {
+		t.Fatalf("message has %d characters, want at most 300 and an ellipsis", n)
+	}
+	if !strings.HasSuffix(message, "…") {
+		t.Fatalf("a cut message must say so: %q", message)
 	}
 }

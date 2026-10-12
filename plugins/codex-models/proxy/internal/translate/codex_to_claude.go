@@ -2,6 +2,8 @@ package translate
 
 import (
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
@@ -22,6 +24,11 @@ type callState struct {
 	done       bool
 	closed     bool
 	started    bool
+	// complete is set only when the upstream says the call finished (its
+	// output_item.done or arguments.done, or a completed terminal response
+	// listing it). A call is emitted only once complete, so a call cut off
+	// by max_output_tokens never reaches the client as a usable tool_use.
+	complete bool
 }
 
 // StreamTranslator turns the Codex Responses event stream into the Anthropic
@@ -171,7 +178,9 @@ func (t *StreamTranslator) Event(payload []byte) []byte {
 			}
 			t.updateCallIdentity(root, item, call)
 			t.appendArguments(call, item.Get("arguments").String(), false)
-			call.done = true
+			if item.Get("status").String() != "incomplete" {
+				call.complete = true
+			}
 			out = append(out, t.pumpCalls()...)
 		case "message":
 			// Some responses deliver the whole message at once with no
@@ -211,10 +220,11 @@ func (t *StreamTranslator) Event(payload []byte) []byte {
 			call = t.recordCall(root, gjson.Result{})
 		}
 		t.appendArguments(call, root.Get("arguments").String(), false)
-		out = append(out, t.flushArguments(call)...)
+		call.complete = true
+		out = append(out, t.pumpCalls()...)
 
 	case "response.completed", "response.incomplete":
-		out = append(out, t.finish(root.Get("response"))...)
+		out = append(out, t.finish(root.Get("response"), root.Get("type").String() == "response.completed")...)
 
 	case "response.failed":
 		failure := root.Get("response.error")
@@ -251,6 +261,7 @@ func (t *StreamTranslator) Error(kind, message string) []byte {
 	}
 	t.failed = true
 	kind = errorKind(kind, "")
+	message = CleanMessage(message)
 	if message == "" {
 		message = "upstream error"
 	}
@@ -304,13 +315,15 @@ func (t *StreamTranslator) ensureStarted() []byte {
 	return t.start(gjson.Result{})
 }
 
-func (t *StreamTranslator) finish(response gjson.Result) []byte {
+// completed is false for response.incomplete: a call the terminal payload
+// lists is then not taken as finished.
+func (t *StreamTranslator) finish(response gjson.Result, completed bool) []byte {
 	out := t.ensureStarted()
 	out = append(out, t.closeThinking()...)
 	out = append(out, t.closeText()...)
 	// A terminal event may repeat items that were never streamed.
 	out = append(out, t.adoptTerminalContent(response)...)
-	out = append(out, t.adoptTerminalCalls(response)...)
+	out = append(out, t.adoptTerminalCalls(response, completed)...)
 	out = append(out, t.closeThinking()...)
 	out = append(out, t.closeText()...)
 
@@ -550,12 +563,27 @@ func (t *StreamTranslator) pumpCalls() []byte {
 		}
 
 		call := t.queue[0]
-		// Without a name there is nothing to open yet; wait for the event
-		// that carries it.
-		if call.name == "" {
+		// Without a name there is nothing to open yet, and an unfinished
+		// call may still be cut off; wait for the event that settles it.
+		if call.name == "" || !call.complete {
 			return out
 		}
+		arguments := strings.TrimSpace(call.arguments)
+		if arguments == "" {
+			// A finished call with no arguments takes none.
+			arguments = "{}"
+		}
+		if !gjson.Valid(arguments) || !gjson.Parse(arguments).IsObject() {
+			// Unusable input is dropped rather than repaired.
+			call.closed = true
+			t.queue = t.queue[1:]
+			continue
+		}
+		call.arguments = arguments
+		call.done = true
 
+		out = append(out, t.closeThinking()...)
+		out = append(out, t.closeText()...)
 		call.blockIndex = t.blockIndex
 		call.started = true
 		t.active = call
@@ -577,15 +605,6 @@ func (t *StreamTranslator) dequeue(call *callState) {
 			return
 		}
 	}
-}
-
-func (t *StreamTranslator) closeActiveCalls() []byte {
-	out := make([]byte, 0, 64)
-	if t.active != nil {
-		t.active.done = true
-		out = append(out, t.pumpCalls()...)
-	}
-	return out
 }
 
 // adoptTerminalContent emits reasoning and message items that appear only in
@@ -654,7 +673,7 @@ func (t *StreamTranslator) adoptTerminalContent(response gjson.Result) []byte {
 
 // adoptTerminalCalls picks up function calls that only appear in the terminal
 // response payload and drains everything still queued.
-func (t *StreamTranslator) adoptTerminalCalls(response gjson.Result) []byte {
+func (t *StreamTranslator) adoptTerminalCalls(response gjson.Result, completed bool) []byte {
 	response.Get("output").ForEach(func(index, item gjson.Result) bool {
 		if item.Get("type").String() != "function_call" {
 			return true
@@ -666,20 +685,23 @@ func (t *StreamTranslator) adoptTerminalCalls(response gjson.Result) []byte {
 		}
 		t.updateCallIdentity(root, item, call)
 		t.appendArguments(call, item.Get("arguments").String(), false)
-		call.done = true
+		if completed && item.Get("status").String() != "incomplete" {
+			call.complete = true
+		}
 		return true
 	})
 
+	// The response is over: a call still unfinished was cut off and is
+	// dropped, never emitted with partial or invented arguments.
 	remaining := t.queue[:0]
 	for _, call := range t.queue {
 		if call.closed {
 			continue
 		}
-		if call.name == "" {
+		if call.name == "" || !call.complete {
 			call.closed = true
 			continue
 		}
-		call.done = true
 		remaining = append(remaining, call)
 	}
 	t.queue = remaining
@@ -732,12 +754,16 @@ func stopReasonOf(response gjson.Result) string {
 }
 
 func mapStopReason(reason string, hasToolUse bool) string {
+	// Running out of output tokens wins: the answer is cut short even when
+	// a finished tool call came before the cut.
+	switch reason {
+	case "max_tokens", "max_output_tokens":
+		return "max_tokens"
+	}
 	if hasToolUse {
 		return "tool_use"
 	}
 	switch reason {
-	case "max_tokens", "max_output_tokens":
-		return "max_tokens"
 	case "refusal", "content_filter":
 		return "refusal"
 	case "pause_turn":
@@ -813,4 +839,35 @@ func errorKind(kind, code string) string {
 		}
 	}
 	return "api_error"
+}
+
+// maxMessageRunes caps an upstream error message passed to the client.
+const maxMessageRunes = 300
+
+// CleanMessage readies an upstream error message for the client: control
+// characters become spaces, runs of space collapse, and the text is cut to
+// maxMessageRunes. An upstream can echo a prompt or a token in its error, so
+// the text is passed on bounded and never logged.
+func CleanMessage(message string) string {
+	var b strings.Builder
+	space := false
+	n := 0
+	for _, r := range message {
+		if unicode.IsControl(r) || unicode.IsSpace(r) || r == utf8.RuneError {
+			space = b.Len() > 0
+			continue
+		}
+		if n >= maxMessageRunes {
+			b.WriteString("…")
+			return b.String()
+		}
+		if space {
+			b.WriteByte(' ')
+			n++
+			space = false
+		}
+		b.WriteRune(r)
+		n++
+	}
+	return b.String()
 }

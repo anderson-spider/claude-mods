@@ -56,7 +56,16 @@ func New(cfg *config.Config, registry *codex.Registry, backend *codex.Backend, t
 		registry: registry,
 		backend:  backend,
 		upstream: upstream,
-		client:   &http.Client{Transport: transport},
+		// Redirects are never followed: a followed redirect would resend
+		// the Authorization header, possibly downgraded to http. The 3xx goes
+		// back to the client as it came. The ReverseProxy below calls the
+		// transport directly and never follows one either.
+		client: &http.Client{
+			Transport: transport,
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
 	}
 
 	r.proxy = &httputil.ReverseProxy{

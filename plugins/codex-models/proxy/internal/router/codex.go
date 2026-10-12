@@ -182,18 +182,22 @@ func writeCodexError(w http.ResponseWriter, err error) {
 
 	var apiErr *codex.APIError
 	if errors.As(err, &apiErr) {
-		message := string(bytes.TrimSpace(apiErr.Body))
+		body := bytes.TrimSpace(apiErr.Body)
 		// Surface the upstream message rather than its JSON envelope when
-		// one is available.
-		if text := gjson.Get(message, "error.message").String(); text != "" {
+		// one is available. It can echo the prompt or a token, so it is
+		// never logged and reaches the client cleaned and capped.
+		message := string(body)
+		if text := gjson.GetBytes(body, "error.message").String(); text != "" {
 			message = text
-		} else if text := gjson.Get(message, "detail").String(); text != "" {
+		} else if text := gjson.GetBytes(body, "detail").String(); text != "" {
 			message = text
 		}
+		message = translate.CleanMessage(message)
 		if message == "" {
 			message = http.StatusText(apiErr.StatusCode)
 		}
-		logx.Warnf("codex backend error %d: %s", apiErr.StatusCode, message)
+		logx.Warnf("codex backend error %d (type %q, code %q)", apiErr.StatusCode,
+			logToken(gjson.GetBytes(body, "error.type").String()), logToken(gjson.GetBytes(body, "error.code").String()))
 
 		status := apiErr.StatusCode
 		if status == http.StatusUnauthorized {
@@ -206,6 +210,20 @@ func writeCodexError(w http.ResponseWriter, err error) {
 
 	logx.Errorf("codex request failed: %v", err)
 	writeAnthropicError(w, http.StatusBadGateway, "api_error", err.Error())
+}
+
+// logToken keeps an upstream error type or code for the log only when it
+// looks like an identifier, so free text can never ride along.
+func logToken(value string) string {
+	if len(value) > 64 {
+		return ""
+	}
+	for _, r := range value {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-' || r == '.') {
+			return ""
+		}
+	}
+	return value
 }
 
 // codexErrorType maps a Codex backend status onto Anthropic's error types.
