@@ -59,6 +59,16 @@ test('the architect opens with a verdict word and the lead asks for the step id 
   for (const jev of [true, false]) expect(leadSection(jev)).toContain('start its description with the step id')
 })
 
+test('the lead updates plan step states immediately for the HUD with static wording', () => {
+  const sentence = "Update each step's `state:` in the plan file as soon as it changes; the crew HUD reads it."
+  for (const jev of [true, false]) {
+    const text = leadSection(jev)
+    expect(text).toContain(sentence)
+    expect(text.split(sentence)).toHaveLength(2)
+    expect(leadSection(jev)).toBe(text)
+  }
+})
+
 test('failed steps return to the same developer and close only after an architect reaudit', () => {
   const specs = nativeCodexSpecs({ developer: 'gpt-a', architect: 'gpt-b' })
   for (const jev of [true, false]) {

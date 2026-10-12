@@ -13,13 +13,13 @@ Deliver a user-approved plan before implementation; leave source edits for the a
 1. **Frame.** State the goal, constraints and acceptance criteria. Collect blocking questions in one `AskUserQuestion`; state conventional defaults for the rest.
 2. **Gather in parallel.** In one message, send self-contained questions and starting files/terms to `crew:code-reader` for code evidence (`path:line`) and `crew:research` for sourced external facts. Use only the roles needed; spot-check claims before making them plan steps.
 3. **Compare.** Present two or three options with costs and risks. For user-visible changes, first ask `crew:designer` for layout, states and copy, then include that spec.
-4. **Write the plan** to `.crew/plans/<name>.md`: context, chosen approach, files, existing code to reuse, verification and steps. Pass the path to every implementing or auditing agent. Use one line per step:
+4. **Write the plan** to `.crew/plans/<name>.md`: context, chosen approach, files, existing code to reuse, verification and steps. Pass the path to every implementing or auditing agent. Inside `## Steps`, group steps under `### <deliverable>` headings (one per PR or related group). Use one line per step:
 
    `- <ID> (<owner>, after: <ids or —>) <action and files> — state: <state>[ (<note>)]`
 
    - ID: uppercase letters, digits and an optional lowercase suffix (`T3`, `T3b`).
    - Owner: `lead`, `crew:code-reader`, `crew:research`, `crew:designer`, `crew:developer`, `crew:architect` or a registered twin.
-   - State: `queued`, `implementing`, `ready for QA`, `fixes requested`, `verified`, `blocked`, `committed`.
+   - State: `queued`, `implementing`, `ready for QA`, `fixes requested`, `verified`, `blocked`, `committed`, `skipped`. `skipped` counts as closed.
 
    Example: `- T3 (crew:developer, after: T1, T2) add the contract suite in tests/contract — state: queued`.
 
@@ -32,7 +32,7 @@ Deliver a user-approved plan before implementation; leave source edits for the a
 ## Execute an approved plan
 
 - Launch every ready independent piece in one message; relaunch newly unblocked work without being asked or waiting for unrelated agents. End each update with one line on what runs, what waits and on what.
-- Start call descriptions with the step ID. Update step states in place.
+- Start call descriptions with the step ID. The lead updates each step's `state:` in place as soon as it changes; the crew HUD reads the plan file.
 - `crew:developer` implements, reproduces, adds/runs tests and reports exact commands/output. `crew:designer` owns UI specification and visual edits.
 - A step is `verified` only after `crew:architect` or its registered twin independently audits the full diff against the plan, optionally rerunning tests. The developer's self-check is its report, not acceptance. The architect writes `.crew/reviews/<name>.md` and opens with `Approve`, `Fixes` or `Reject` and a one-line reason.
 - Send failures to the same developer, including a `-codex` developer, with the criterion and expected versus actual; the architect reaudits after the fix.

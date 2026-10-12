@@ -1,5 +1,8 @@
-import type { Hook, Register, TurnStepChunk, TurnStepResult } from 'claude-code'
-import type { CrewMode as Mode } from '../types'
+import { atom, read, update } from 'claude-code'
+import type { Hook, Register, Timer, TurnStepChunk, TurnStepResult } from 'claude-code'
+import type { CrewAgent, CrewMode as Mode, CrewPlanDisplay } from '../types'
+import { selectPlans } from './hud/plan'
+import { bandRows } from './hud/view'
 import { SPECIALISTS, isGatewayBase, leadSection, nativeCodexSection, nativeCodexSpecs, onCodexLogin } from './agents'
 import type { Agent, Effort } from './agents'
 import { CODEX_URL, codexBody, codexEffort, codexHeaders, failedStep, statusReason, stepOf } from './codex'
@@ -37,6 +40,17 @@ const MODE_COMMAND = 'crew-mode'
 
 /** The option as a mode: anything but `codex` is `claude`. */
 const modeOption = (value: unknown): Mode => (value === 'codex' ? 'codex' : 'claude')
+
+const plans = atom({ plugin: 'crew', key: 'plans' } as const, [] as CrewPlanDisplay[])
+const agents = atom({ plugin: 'crew', key: 'agents' } as const, [] as CrewAgent[])
+const nowAtom = atom({ plugin: 'crew', key: 'now' } as const, 0)
+
+/** HUD failures must never affect host results or router decisions. */
+async function hud($: Dollar, action: () => Promise<void>): Promise<void> {
+  try { await action() } catch {
+    try { $.ui.log('crew HUD: observation failed', { to: 'debug' }) } catch { /* Reporting cannot change the observed result. */ }
+  }
+}
 
 /** Time as the pure modules take it: the host's timer and the wall clock. */
 type Clock = Pick<JevIo, 'timer' | 'now'>
@@ -452,7 +466,7 @@ function announce($: Dollar, call: Announced, applied: Effort | null, requestedA
 // the type is the codex mode's, to the same role's registered twin, and it comes first: everything after it (the Jev
 // request, the effort book, the tag, the confirmation) reads the rewritten type.
 // Any Jev failure requests medium through the same effort book.
-async function routeSpawn(routing: Routing, $: Dollar, e: SpawnHook[1], next: SpawnHook[2]) {
+async function routeSpawn(routing: Routing, $: Dollar, e: SpawnHook[1], next: (input: SpawnHook[1]) => ReturnType<SpawnHook[2]>) {
   // The mode is read only with twins registered: without them the codex mode moves nothing.
   const codex = routing.twins.length > 0 && (await modeOf($)) === 'codex'
   if (!routing.enabled && !codex) return next(e)
@@ -534,6 +548,290 @@ async function routeSpawn(routing: Routing, $: Dollar, e: SpawnHook[1], next: Sp
   return result
 }
 
+type HudState = {
+  ticker?: Timer
+  initial?: Promise<void>
+  lifecycle: number
+  ticks: number
+  flight?: Promise<void>
+  dirty: boolean
+  contents?: string
+  touched: Set<string>
+  completed: Set<string>
+  /** Per-ID job identity advances synchronously, independent of slow atom/clock writes. */
+  generation: Map<string, number>
+  stepToken: Map<string, number>
+  provisional: Map<string, { model: string; effort?: string; observedModel?: string; generation: number }>
+  jobs: Map<string, { pending: Partial<Record<'spawn' | 'step' | 'answer', () => Promise<void>>>; lifecycle: number; running: boolean }>
+  /** The effective type is captured at the innermost spawn, not inferred from routing. */
+  effective: Map<string, string>
+}
+
+function normalizePath(path: string): string {
+  const parts: string[] = []
+  for (const part of path.split('/')) {
+    if (part === '..') parts.pop()
+    else if (part && part !== '.') parts.push(part)
+  }
+  return `/${parts.join('/')}`
+}
+
+async function planDirectory($: Dollar): Promise<{ path: string; real: string } | undefined> {
+  const cwd = normalizePath(await $.session.cwd())
+  const path = `${cwd}/.crew/plans`
+  // A stat rejection reaches a hook without its `code`, so absence is asked of `exists`: a repository with no plans is the default.
+  if (!(await $.fs.exists(path))) return undefined
+  const root = await $.fs.stat(cwd, { resolve: true })
+  const directory = await $.fs.stat(path, { resolve: true })
+  if (root.kind !== 'dir' || directory.kind !== 'dir' || directory.isLink ||
+    !root.realPath || !directory.realPath || normalizePath(directory.realPath) !== `${normalizePath(root.realPath)}/.crew/plans`) return undefined
+  return { path, real: normalizePath(directory.realPath) }
+}
+
+async function planFile($: Dollar, directory: { path: string; real: string }, path: string): Promise<string | undefined> {
+  const file = await $.fs.stat(path, { resolve: true })
+  const real = file.realPath && normalizePath(file.realPath)
+  const prefix = `${directory.real}/`
+  const name = real?.startsWith(prefix) ? real.slice(prefix.length) : ''
+  return file.kind === 'file' && !file.isLink && name && !name.includes('/') && name.endsWith('.md') ? name : undefined
+}
+
+async function planPath($: Dollar, path: unknown): Promise<string | undefined> {
+  if (typeof path !== 'string') return undefined
+  const directory = await planDirectory($)
+  if (!directory) return undefined
+  const cwd = normalizePath(await $.session.cwd())
+  const source = path.startsWith('/') ? path : `${cwd}/${path}`
+  const name = await planFile($, directory, source)
+  // A real destination is required, and only its canonical filename is retained as touched.
+  return name
+}
+
+/** A plan the filesystem no longer has: a missing-path code, or `exists` saying so. Any other failure proves nothing. */
+async function removedPlan($: Dollar, path: string, error: unknown): Promise<boolean> {
+  if (missingPlan(error)) return true
+  return $.fs.exists(path).then(present => !present, () => false)
+}
+
+/** A missing target can be removed; any other filesystem error cannot prove absence. */
+export function missingPlan(error: unknown): boolean {
+  return error !== null && typeof error === 'object' && 'code' in error &&
+    (error.code === 'ENOENT' || error.code === 'ENOTDIR')
+}
+
+/** A single read flight; writes during a read schedule another snapshot afterwards. */
+function refreshPlans($: Dollar, state: HudState): Promise<void> {
+  if (state.flight) { state.dirty = true; return state.flight }
+  const flight = (async () => {
+    do {
+      state.dirty = false
+      try {
+        let directory: Awaited<ReturnType<typeof planDirectory>>
+        try { directory = await planDirectory($) }
+        catch (error) { if (!missingPlan(error)) throw error }
+        if (!directory) { await update($, plans, () => []); state.contents = undefined; continue }
+        // If listing is unavailable, written names are candidates, never exemptions from real-path validation.
+        const names = await $.fs.list(directory.path)
+          .then(entries => entries.filter(entry => entry.kind === 'file' && !entry.isLink && entry.name.endsWith('.md')).map(entry => entry.name))
+          .catch(() => [...state.touched])
+        const files: { basename: string; text: string }[] = []
+        let unreadable = false
+        let loading = false
+        for (const name of [...new Set([...names, ...state.touched])].sort()) {
+          if (name.includes('/') || name === '.' || name === '..') continue
+          const path = `${directory.path}/${name}`
+          let valid: string | undefined
+          try { valid = await planFile($, directory, path) }
+          catch (error) { if (!(await removedPlan($, path, error))) unreadable = true; continue }
+          if (valid !== name) continue
+          if (state.contents === undefined && !loading) {
+            loading = true
+            await update($, plans, () => [{ state: 'loading' as const }])
+          }
+          try { files.push({ basename: name, text: await $.fs.read(path) }) }
+          catch (error) { if (!(await removedPlan($, path, error))) unreadable = true }
+        }
+        const contents = JSON.stringify({ files, unreadable })
+        if (contents !== state.contents) {
+          const context = await redactContext($, {})
+          const selection = selectPlans(files, context)
+          await update($, plans, (): CrewPlanDisplay[] => unreadable ? [...selection, { state: 'unknown' }] : selection)
+          state.contents = contents
+        }
+      } catch {
+        state.contents = undefined
+        await update($, plans, () => [{ state: 'unknown' as const }])
+        $.ui.log('crew HUD: plan refresh failed', { to: 'debug' })
+      }
+    } while (state.dirty)
+  })()
+  state.flight = flight.finally(() => { state.flight = undefined })
+  return state.flight
+}
+
+type Observation = 'spawn' | 'step' | 'answer'
+
+/** One active task and at most three replaceable pending observations per ID. */
+function queueJob($: Dollar, state: HudState, id: string, kind: Observation, action: () => Promise<void>): void {
+  let job = state.jobs.get(id)
+  if (!job) {
+    job = { pending: {}, lifecycle: state.lifecycle, running: false }
+    state.jobs.set(id, job)
+  }
+  job.pending[kind] = action
+  if (job.running) return
+  job.running = true
+  const current = job
+  void hud($, async () => {
+    while (state.lifecycle === current.lifecycle && state.jobs.get(id) === current) {
+      const kind = (['spawn', 'step', 'answer'] as const).find(name => current.pending[name])
+      if (!kind) break
+      const task = current.pending[kind]!
+      delete current.pending[kind]
+      await hud($, task)
+    }
+    if (state.jobs.get(id) === current) state.jobs.delete(id)
+  })
+}
+
+async function observeSpawn($: Dollar, state: HudState, id: string, type: string, model: string, generation: number): Promise<void> {
+  if (state.completed.has(id) || (state.generation.get(id) ?? 0) !== generation) return
+  const lifecycle = state.lifecycle
+  const time = await $.clock.now()
+  if (state.lifecycle !== lifecycle) return
+  await update($, agents, list => {
+    if (state.lifecycle !== lifecycle || state.completed.has(id) || (state.generation.get(id) ?? 0) !== generation) return list
+    const previous = list.find(agent => agent.id === id)
+    const early = state.provisional.get(id)
+    const record: CrewAgent = { ...previous, id, type, model: early?.model ?? previous?.model ?? model,
+      startedAt: previous?.startedAt ?? time, seenAt: undefined, status: 'running',
+      effort: early?.effort ?? previous?.effort, observedModel: early?.observedModel ?? previous?.observedModel }
+    return [...list.filter(agent => agent.id !== id), record]
+  })
+  state.provisional.delete(id)
+}
+
+async function observeStep($: Dollar, state: HudState, id: string, model: string, effort: string | undefined, generation: number): Promise<void> {
+  const lifecycle = state.lifecycle
+  const time = await $.clock.now()
+  if (state.lifecycle !== lifecycle) return
+  await update($, agents, list => {
+    if (state.lifecycle !== lifecycle || state.completed.has(id) || state.generation.get(id) !== generation) return list
+    const previous = list.find(agent => agent.id === id)
+    const type = previous?.type ?? state.effective.get(id)
+    if (!type) return list
+    const restart = previous?.status === 'ended'
+    const record: CrewAgent = { id, type, model: restart ? model : previous?.model ?? model,
+      status: 'running', ...(previous?.seenAt !== undefined && !restart ? { seenAt: previous.seenAt } :
+        { startedAt: restart ? time : previous?.startedAt ?? time }),
+      ...(restart ? {} : { observedModel: previous?.observedModel }),
+      ...(effort ? { effort } : restart ? {} : { effort: previous?.effort }),
+    }
+    return [...list.filter(agent => agent.id !== id), record]
+  })
+}
+
+async function observeAnswer($: Dollar, state: HudState, id: string, observed: string, generation: number, token: number): Promise<void> {
+  if (state.generation.get(id) !== generation || state.stepToken.get(id) !== token || state.completed.has(id)) return
+  const lifecycle = state.lifecycle
+  const early = state.provisional.get(id)
+  if (early?.generation === generation) early.observedModel = observed
+  await update($, agents, list => list.map(agent => agent.id === id && agent.status === 'running' &&
+    state.lifecycle === lifecycle && !state.completed.has(id) && state.generation.get(id) === generation && state.stepToken.get(id) === token
+    ? { ...agent, observedModel: observed } : agent))
+}
+
+async function reconcile($: Dollar, state: HudState): Promise<void> {
+  const listed = await $.agent.list()
+  const time = await $.clock.now()
+  await update($, agents, records => {
+    const result = [...records]
+    for (const entry of listed) {
+      if (!entry.type.startsWith('crew:')) continue
+      const index = result.findIndex(record => record.id === entry.id)
+      if (index < 0) {
+        if (!state.completed.has(entry.id) && (entry.status === 'running' || entry.status === 'pending')) {
+          state.effective.set(entry.id, entry.type)
+          const early = state.provisional.get(entry.id)
+          result.push({ id: entry.id, type: entry.type, model: early?.model, effort: early?.effort,
+            observedModel: early?.observedModel, status: 'running', seenAt: time })
+          state.provisional.delete(entry.id)
+        }
+      } else if (entry.status === 'completed' || entry.status === 'failed' || entry.status === 'killed' || entry.status === 'idle') {
+        result[index] = { ...result[index]!, status: 'ended' }
+        state.completed.add(entry.id)
+      }
+    }
+    return result
+  })
+}
+
+function ensureTicker($: Dollar, state: HudState): void {
+  if (state.ticker) return
+  const lifecycle = state.lifecycle
+  state.initial = hud($, async () => {
+    const time = await $.clock.now()
+    if (state.lifecycle === lifecycle) await update($, nowAtom, () => time)
+  })
+  state.ticker = $.clock.every(1_000, () => {
+    void hud($, async () => {
+      state.ticks++
+      await reconcile($, state)
+      if (state.ticks % 5 === 0) await refreshPlans($, state)
+      const active = (await read($, agents)).some(agent => agent.status === 'running')
+      if (active || state.ticks % 30 === 0) {
+        const time = await $.clock.now()
+        await update($, nowAtom, () => time)
+      }
+    })
+  })
+}
+
+/** Records a step the band will show; a failure here is logged and never alters the step. Returns the job identity. */
+function noteStep($: Dollar, state: HudState, id: string | undefined, sent: StepHook[1], loginEffort: string | undefined): { generation: number; token: number } | undefined {
+  if (!id) return undefined
+  try {
+    const generation = (state.generation.get(id) ?? 0) + (state.completed.has(id) || !state.generation.has(id) ? 1 : 0)
+    state.generation.set(id, generation)
+    const token = (state.stepToken.get(id) ?? 0) + 1
+    state.stepToken.set(id, token)
+    state.completed.delete(id)
+    const requested = loginEffort ?? /^(?:cx\/)?gpt-[\w-]+-(low|medium|high)$/.exec(sent.model)?.[1] ??
+      (typeof sent.effort === 'string' ? sent.effort : undefined)
+    if (!state.effective.has(id)) state.provisional.set(id, { model: sent.model, effort: requested, generation })
+    queueJob($, state, id, 'step', () => observeStep($, state, id, sent.model, requested, generation))
+    return { generation, token }
+  } catch {
+    try { $.ui.log('crew HUD: observation failed', { to: 'debug' }) } catch { /* Reporting cannot change the step. */ }
+    return undefined
+  }
+}
+
+/** Records the model an answered step reports, for the job `noteStep` returned; never throws. */
+function noteAnswer($: Dollar, state: HudState, id: string | undefined, noted: { generation: number; token: number } | undefined, answer: TurnStepResult): void {
+  try {
+    const observed = answer.usage?.model
+    if (!id || !noted || !observed) return
+    queueJob($, state, id, 'answer', () => observeAnswer($, state, id, observed, noted.generation, noted.token))
+  } catch {
+    try { $.ui.log('crew HUD: observation failed', { to: 'debug' }) } catch { /* Reporting cannot change the step. */ }
+  }
+}
+
+async function observeWrite<E extends { file_path?: unknown }, R extends { deny?: string; isError?: boolean }>(
+  $: Dollar, e: E, next: (input: E) => Promise<R>, display: HudState,
+): Promise<R> {
+  await hud($, async () => { ensureTicker($, display) })
+  const answer = await next(e)
+  if (answer && typeof answer === 'object' && !('deny' in answer) && !answer.isError) {
+    await hud($, async () => {
+      const name = await planPath($, e.file_path)
+      if (name) { display.touched.add(name); await refreshPlans($, display) }
+    })
+  }
+  return answer
+}
+
 export const register: Register = (on, options) => {
   // Fixed twins register only at session start behind a gateway base URL, never on reload alone.
   const native: Native = { specs: nativeCodexSpecs(CODEX_MODELS), registered: [], onLogin: new Map() }
@@ -554,12 +852,39 @@ export const register: Register = (on, options) => {
     mode: modeOption(options.mode),
   }
 
-  on('session.start', {}, ($, e, next) => startCrew(native, codex, routing.mode, $, e, next))
+  const display: HudState = { lifecycle: 0, ticks: 0, dirty: false, touched: new Set(), completed: new Set(), generation: new Map(), stepToken: new Map(), provisional: new Map(), jobs: new Map(), effective: new Map() }
+  // The start itself comes first and unchanged; the band's first plan read follows and cannot alter its result.
+  on('session.start', {}, async ($, e, next) => {
+    try {
+      return await startCrew(native, codex, routing.mode, $, e, next)
+    } finally {
+      // Neither waits on the start: the first plan read runs behind it and the tick rereads.
+      void hud($, async () => { ensureTicker($, display) })
+      void hud($, async () => {
+        await display.initial
+        await refreshPlans($, display)
+      })
+    }
+  })
   on('command.run', { command: MODE_COMMAND }, async ($, e) => ({ text: await runModeCommand($, native, routing.mode, e.args) }))
     .catch(() => ({ text: `crew: /${MODE_COMMAND} failed; run it again to see the mode.` }))
+  on('session.end', {}, (_$, e, next) => {
+    display.ticker?.cancel()
+    display.ticker = undefined
+    display.lifecycle++
+    display.jobs.clear()
+    display.provisional.clear()
+    display.effective.clear()
+    display.generation.clear()
+    display.stepToken.clear()
+    display.completed.clear()
+    display.initial = undefined
+    return next(e)
+  })
   // Only a request that offers the Agent tool gets the lead's section: the crew agents' tool lists leave it out.
   // A teammate renders the lead's prompt too, and `bare` asks for the lead's section alone.
   on('prompt.compose', async ($, e, next) => {
+    await hud($, async () => { ensureTicker($, display) })
     const composed = await next(e)
     if (!e.tools.includes('Agent') || e.traits.includes('teammate') || e.traits.includes('bare')) return composed
     const jev = routing.enabled && (await keyOf($, routing.access, routing.jevKey)) !== undefined
@@ -571,16 +896,33 @@ export const register: Register = (on, options) => {
     return { sections: [...composed.sections, lead, twins] }
   }).catch((_, e, next) => next(e))
   on('agent.spawn', {}, ($, e, next) => {
+    void hud($, async () => { ensureTicker($, display) })
     // A `model` on a twin's call wins over its definition and would run it on Claude with no tag or confirmation. The
     // fixed names decide, not the registered set: a later `session.start` that registered none leaves the host's types.
     if (e.model && native.specs.some(twin => e.subagentType === `crew:${twin.name}`)) {
       return { deny: `crew: ${e.subagentType} runs on its own Codex model; call it again without \`model\`` }
     }
-    return routeSpawn(routing, $, e, next)
+    const observeNext = async (sent: SpawnHook[1]) => {
+      // The host assigns the ID after next; a job reopened while that call waits must win over this spawn.
+      const started = new Map(display.generation)
+      const result = await next(sent)
+      if (result.agentId && sent.subagentType.startsWith('crew:')) {
+        const id = result.agentId
+        const generation = display.generation.get(id) ?? 0
+        if (!display.effective.has(id) || generation <= (started.get(id) ?? 0)) {
+          display.effective.set(id, sent.subagentType)
+          if (!display.completed.has(id))
+            queueJob($, display, id, 'spawn', () => observeSpawn($, display, id, sent.subagentType, result.model, generation))
+        }
+      }
+      return result
+    }
+    return routeSpawn(routing, $, e, observeNext)
   }).catch((_, e, next) => next(e))
   // Runs on every request of every loop: the main loop and agents that were not routed return at once. A streaming
   // hook is written inline as an async generator: the engine reads no other form.
   on('turn.step', {}, async function* ($, e, next) {
+    void hud($, async () => { ensureTicker($, display) })
     // A twin on the Codex login is answered here and never reaches the API; every other step goes on.
     const twin = await twinOnLogin($, native, codex, e.agentId)
     let effort: Effort | undefined
@@ -590,11 +932,14 @@ export const register: Register = (on, options) => {
     const sent = effort && effort !== e.effort ? { ...e, effort } : e
     // The spawn's `-<effort>` suffix decides, else the host's effort, else the twin's default; it is what goes out.
     const loginEffort = twin ? codexEffort(observedEffort(sent, true), codexEffort(twin.effort, 'medium')) : undefined
+    // The band's own record of this step: synchronous, never throws, and reads what is sent without changing it.
+    const noted = noteStep($, display, e.agentId, sent, loginEffort)
     let answer: TurnStepResult
     if (twin && loginEffort) answer = yield* stepOnLogin($, codex, twin, sent, loginEffort, next.signal)
     else answer = yield* next(sent)
     // Only a step the API answered says what ran; one that failed leaves the check for the next.
     const pending = e.agentId && answer.usage ? routing.confirms.take(e.agentId) : undefined
+    noteAnswer($, display, e.agentId, noted, answer)
     if (pending && e.agentId && answer.usage) {
       const ran = { model: answer.usage.model, effort: loginEffort ?? observedEffort(sent, pending.suffix) }
       $.ui.log(confirmText(pending.description, pending.planned, ran, pending.via, pending.suffix), { to: 'transcript' })
@@ -608,7 +953,37 @@ export const register: Register = (on, options) => {
     return answer
   })
 
+  on('turn.complete', {}, ($, e, next) => {
+    void hud($, async () => { ensureTicker($, display) })
+    if (e.agentId) {
+      const id = e.agentId
+      display.completed.add(id)
+      display.provisional.delete(id)
+      display.jobs.delete(id)
+      void hud($, async () => { await update($, agents, list => list.map(agent => agent.id === id && display.completed.has(id)
+        ? { ...agent, status: 'ended' as const } : agent)) })
+    }
+    return next(e)
+  })
+
   // The main loop has no agentId and is never held; a subagent is held by its type's rule in guard.ts.
   on('tool.call', { tool: 'Write' }, guardWrite).catch(holdUnchecked)
   on('tool.call', { tool: 'Edit' }, guardWrite).catch(holdUnchecked)
+  // Post-result only: guardWrite and holdUnchecked remain the sole write gates.
+  on('tool.call', { tool: 'Write' }, ($, e, next) => observeWrite($, e, next, display))
+  on('tool.call', { tool: 'Edit' }, ($, e, next) => observeWrite($, e, next, display))
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    if (e.props.hasSurvey) return next(e)
+    try {
+      const [shown, running, time] = await Promise.all([read($, plans), read($, agents), read($, nowAtom)])
+      const rows = bandRows(shown, running, time, e.props.bodyColumns).rows
+      if (!rows.length) return next(e)
+      const { Box, Text } = $.ui.resolve(e)
+      return <Box width={e.props.bodyColumns} flexDirection="column">{rows.map((row, index) =>
+        <Text key={`crew-hud-${index}`} wrap="wrap">{row.map(segment => segment.text).join('')}</Text>)}</Box>
+    } catch {
+      $.ui.log('crew HUD: render failed', { to: 'debug' })
+      return next(e)
+    }
+  })
 }

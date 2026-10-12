@@ -118,6 +118,7 @@ export function leadSection(jev: boolean): string {
     "A step is done only after crew:architect independently audits it, optionally rerunning tests; the developer's own commands and output are its report, not acceptance.",
     'Send failures to the same developer via SendMessage with the criterion and expected versus actual; after the fix, the architect reaudits before the step closes.',
     'For a plan step, start its description with the step id (for example `T3 contract suite`).',
+    'Update each step\'s `state:` in the plan file as soon as it changes; the crew HUD reads it.',
     'Git and pull requests stay with you.',
   ].join(' ')
 }
