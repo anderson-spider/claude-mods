@@ -1,0 +1,8 @@
+{
+  "name": "codex-models",
+  "version": "0.1.0",
+  "description": "Offers OpenAI Codex models (ChatGPT login) in Claude Code through a local loopback proxy, in /model and in agent definitions, while Claude models pass through to Anthropic unchanged.",
+  "author": {
+    "name": "anderson-spider"
+  }
+}
