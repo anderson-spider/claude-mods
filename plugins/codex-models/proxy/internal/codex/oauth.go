@@ -136,8 +136,21 @@ func NewClient(httpClient *http.Client) *Client {
 		// Never http.DefaultTransport: it honours HTTPS_PROXY.
 		httpClient = &http.Client{Transport: netx.Shared(), Timeout: exchangeTimeout}
 	}
-	return &Client{HTTP: httpClient}
+	return &Client{HTTP: withoutRedirects(httpClient)}
 }
+
+// withoutRedirects returns a copy of client that never follows a redirect:
+// the 3xx itself comes back as the response.
+func withoutRedirects(client *http.Client) *http.Client {
+	if client == nil {
+		client = &http.Client{Transport: netx.Shared()}
+	}
+	copied := *client
+	copied.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return &copied
+}
+
+func isRedirect(status int) bool { return status >= 300 && status < 400 }
 
 // Exchange trades an authorization code for tokens.
 func (c *Client) Exchange(ctx context.Context, code string, pkce *PKCE, callbackPort int) (*Token, error) {
@@ -195,11 +208,16 @@ func (c *Client) post(ctx context.Context, form url.Values) (*Token, error) {
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := c.HTTP.Do(req)
+	// The form carries the refresh token or the code: a redirect would
+	// replay it to wherever Location points, so none is followed.
+	resp, err := withoutRedirects(c.HTTP).Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("codex: token request failed: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
+	if isRedirect(resp.StatusCode) {
+		return nil, fmt.Errorf("codex: token endpoint answered %d, a redirect, which is not followed", resp.StatusCode)
+	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {

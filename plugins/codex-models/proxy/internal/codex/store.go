@@ -48,8 +48,9 @@ const refreshLead = 5 * time.Minute
 // nativeFileName is this proxy's own credential file.
 const nativeFileName = "codex.json"
 
-// lockFileName serialises refreshes and logins across proxy processes.
-const lockFileName = "codex.lock"
+// lockSuffix names the lock beside a credential file, which serialises
+// refreshes and logins across proxy processes using that file.
+const lockSuffix = ".lock"
 
 // lockWait bounds the wait for another process's refresh; it outlasts the
 // OAuth client's own 30 s timeout.
@@ -519,9 +520,7 @@ func (s *Store) writeLocked(token *Token, target source) error {
 // file and an existing looser mode does not survive. A symlink is written
 // through to its target.
 func (s *Store) writeFileAtomic(path string, data []byte) error {
-	if resolved, err := filepath.EvalSymlinks(path); err == nil {
-		path = resolved
-	}
+	path = writeTarget(path)
 	dir := filepath.Dir(path)
 	if err := s.ensureDir(dir); err != nil {
 		return err
@@ -579,13 +578,23 @@ func (s *Store) ensureDir(dir string) error {
 	return nil
 }
 
-// lockPath is the lock shared by every proxy process using this auth dir.
+// lockPath is the lock beside the file this store writes, resolved the way
+// the write resolves it, so every proxy process on that file (whatever its
+// auth_dir) shares one lock.
 func (s *Store) lockPath() string {
-	dir := strings.TrimSpace(s.options.Dir)
-	if dir == "" {
-		dir = filepath.Dir(s.NativePath())
+	return writeTarget(s.NativePath()) + lockSuffix
+}
+
+// writeTarget is the file a write to path replaces: a symlink's target when
+// it resolves, else path itself, made absolute.
+func writeTarget(path string) string {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		path = resolved
 	}
-	return filepath.Join(dir, lockFileName)
+	if abs, err := filepath.Abs(path); err == nil {
+		return abs
+	}
+	return filepath.Clean(path)
 }
 
 // lock takes the exclusive flock on lockPath, waiting at most lockWait or
