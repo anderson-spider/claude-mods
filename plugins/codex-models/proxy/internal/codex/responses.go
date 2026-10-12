@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/netx"
 )
@@ -23,6 +25,16 @@ type Backend struct {
 	Originator string
 	Store      *Store
 	HTTP       *http.Client
+
+	// Limits holds the latest reading of each rate-limit window; nil keeps
+	// none. NewBackend sets it.
+	Limits *Limits
+	// UsageTimeout bounds one usage request; zero means DefaultUsageTimeout.
+	UsageTimeout time.Duration
+
+	flightMu    sync.Mutex
+	flight      chan struct{}
+	lastAttempt time.Time
 }
 
 // NewBackend wires a backend with a streaming-friendly HTTP client. There is
@@ -40,6 +52,7 @@ func NewBackend(baseURL, userAgent, originator string, store *Store, transport h
 		Originator: originator,
 		Store:      store,
 		HTTP:       withoutRedirects(&http.Client{Transport: transport}),
+		Limits:     NewLimits(),
 	}
 }
 
@@ -86,6 +99,11 @@ func (b *Backend) Responses(ctx context.Context, body []byte, sessionID string) 
 	resp, err := withoutRedirects(b.HTTP).Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("codex: responses request failed: %w", err)
+	}
+	// The rate-limit headers come on any answer from the backend, a 429
+	// included; a redirect is not one.
+	if !isRedirect(resp.StatusCode) {
+		b.Limits.Observe(resp.Header)
 	}
 	switch {
 	case isRedirect(resp.StatusCode):

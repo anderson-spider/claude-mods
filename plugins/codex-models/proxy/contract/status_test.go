@@ -3,6 +3,7 @@
 package contract
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"testing"
@@ -30,11 +31,20 @@ func TestStatus(t *testing.T) {
 		if got.Models == nil || len(got.Models) == 0 {
 			t.Fatal("no models")
 		}
-		// Exactly these four keys, and nothing about paths or accounts.
+		// Exactly these five keys, and nothing about paths or accounts.
+		// Contract change (J1, audited): codexLimits joined the original
+		// four. It is always there, [] when nothing has been read; the other
+		// four keep their names, types and order.
 		var keys map[string]json.RawMessage
 		must(t, json.Unmarshal(r.Body, &keys))
-		if len(keys) != 4 {
+		if len(keys) != 5 {
 			t.Fatalf("status keys = %v", keys)
+		}
+		if string(keys["codexLimits"]) != "[]" {
+			t.Fatalf("codexLimits = %s, want [] before any reading", keys["codexLimits"])
+		}
+		if !bytes.HasPrefix(r.Body, []byte(`{"service":"ccmproxy","version":"contract","codexLogin":`)) {
+			t.Fatalf("status body starts %.80s", r.Body)
 		}
 		golden(t, "status_models.golden.json", canonical(t, []byte(mustMarshal(t, got.Models))))
 	}

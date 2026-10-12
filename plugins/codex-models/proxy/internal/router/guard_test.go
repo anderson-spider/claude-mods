@@ -429,8 +429,12 @@ func TestStatusShape(t *testing.T) {
 		if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
 			t.Fatalf("body %q: %v", rec.Body.String(), err)
 		}
-		if len(raw) != 4 {
-			t.Fatalf("keys = %v, want exactly service, version, codexLogin, models", raw)
+		// Audited contract change (J1): codexLimits joins the original four.
+		if len(raw) != 5 {
+			t.Fatalf("keys = %v, want exactly service, version, codexLogin, models, codexLimits", raw)
+		}
+		if string(raw["codexLimits"]) != "[]" {
+			t.Fatalf("codexLimits = %s, want [] before any reading", raw["codexLimits"])
 		}
 		var status struct {
 			Service    string   `json:"service"`
