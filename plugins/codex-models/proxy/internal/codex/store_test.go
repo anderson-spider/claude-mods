@@ -326,8 +326,8 @@ func TestAuthFileNamingAMissingCodexCLIFileIsRefused(t *testing.T) {
 	}
 }
 
-// The proxy's own file turned into a link to the CLI's is treated as the CLI's.
-func TestOwnFileLinkedToTheCodexCLIFileIsReadOnly(t *testing.T) {
+// The proxy's own file turned into a link to the CLI's is refused outright.
+func TestOwnFileLinkedToTheCodexCLIFileIsRefused(t *testing.T) {
 	_, cli := cliHome(t, -time.Hour)
 	dir := t.TempDir()
 	if err := os.Symlink(cli, filepath.Join(dir, "codex.json")); err != nil {
@@ -337,8 +337,11 @@ func TestOwnFileLinkedToTheCodexCLIFileIsReadOnly(t *testing.T) {
 	fake, client := newOAuthServer(t, 0)
 
 	store := NewStore(client, StoreOptions{Dir: dir})
-	if _, _, err := store.Access(context.Background()); !errors.Is(err, ErrCodexCLILoginExpired) {
-		t.Fatalf("Access = %v, want ErrCodexCLILoginExpired", err)
+	if err := store.Check(); !errors.Is(err, ErrInsideCodexHome) {
+		t.Fatalf("Check = %v, want ErrInsideCodexHome", err)
+	}
+	if _, _, err := store.Access(context.Background()); !errors.Is(err, ErrInsideCodexHome) {
+		t.Fatalf("Access = %v, want ErrInsideCodexHome", err)
 	}
 	if err := store.Save(&Token{AccessToken: "x"}); err == nil {
 		t.Fatal("Save wrote through a link to the Codex CLI file")
@@ -843,5 +846,89 @@ func TestSaveClearsARejectedRefresh(t *testing.T) {
 	}
 	if n := calls.Load(); n != 1 {
 		t.Fatalf("token endpoint called %d times, want 1", n)
+	}
+}
+
+// G1: a credential file that is a link into CODEX_HOME (auth_dir's codex.json,
+// or auth_file) is refused by Check before any refresh: the endpoint gets no
+// call, the refresh token on disk is not spent, the file is untouched.
+func TestCredentialFileLinkedIntoCodexHomeIsRefused(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		explicit bool
+		dangling bool
+	}{
+		{name: "auth_dir codex.json links into CODEX_HOME"},
+		{name: "auth_file links into CODEX_HOME", explicit: true},
+		{name: "auth_file dangling link into CODEX_HOME", explicit: true, dangling: true},
+		{name: "auth_dir codex.json dangling link into CODEX_HOME", dangling: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home, cli := cliHome(t, time.Hour)
+			target := filepath.Join(home, "proxy.json")
+			if !tc.dangling {
+				writeNative(t, target, Token{AccessToken: "stale", RefreshToken: "rt-1", ExpiresAt: time.Now().Add(-time.Minute)}, 0o600)
+			}
+			dir := t.TempDir()
+			link := filepath.Join(dir, "codex.json")
+			options := StoreOptions{Dir: dir}
+			if tc.explicit {
+				link = filepath.Join(t.TempDir(), "auth.json")
+				options.ExplicitPath = link
+			}
+			if err := os.Symlink(target, link); err != nil {
+				t.Fatalf("symlink: %v", err)
+			}
+			cliBefore := snap(t, cli)
+			var targetBefore snapshot
+			if !tc.dangling {
+				targetBefore = snap(t, target)
+			}
+			fake, client := newOAuthServer(t, 0)
+
+			for i, store := range []*Store{NewStore(client, options), NewStore(client, options)} {
+				err := store.Check()
+				if !errors.Is(err, ErrInsideCodexHome) {
+					t.Fatalf("store %d: Check = %v, want ErrInsideCodexHome", i, err)
+				}
+				resolvedHome := resolvePath(home, 0)
+				if message := err.Error(); !strings.Contains(message, link) || !strings.Contains(message, resolvedHome) ||
+					!strings.Contains(message, resolvePath(target, 0)) {
+					t.Fatalf("store %d: message %q should name %s, %s and %s", i, message, link, target, resolvedHome)
+				}
+				if _, _, err := store.Access(context.Background()); !errors.Is(err, ErrInsideCodexHome) {
+					t.Fatalf("store %d: Access = %v, want ErrInsideCodexHome", i, err)
+				}
+				if err := store.Save(&Token{AccessToken: "x", RefreshToken: "y"}); !errors.Is(err, ErrInsideCodexHome) {
+					t.Fatalf("store %d: Save = %v, want ErrInsideCodexHome", i, err)
+				}
+			}
+			if n := fake.calls.Load(); n != 0 {
+				t.Fatalf("token endpoint called %d times, want none", n)
+			}
+			cliBefore.assertUnchanged(t, cli, tc.name)
+			if tc.dangling {
+				if _, err := os.Lstat(target); !os.IsNotExist(err) {
+					t.Fatalf("a file was created in CODEX_HOME: %v", err)
+				}
+			} else {
+				targetBefore.assertUnchanged(t, target, tc.name)
+			}
+		})
+	}
+}
+
+// When the directory is CODEX_HOME itself, the message names it once,
+// resolved.
+func TestCodexHomeItselfIsNamedOnce(t *testing.T) {
+	home, _ := cliHome(t, time.Hour)
+	err := NewStore(nil, StoreOptions{Dir: home}).Check()
+	if !errors.Is(err, ErrInsideCodexHome) {
+		t.Fatalf("Check = %v, want ErrInsideCodexHome", err)
+	}
+	resolved := resolvePath(home, 0)
+	want := "(auth_dir is the Codex CLI's directory, " + resolved + ")"
+	if !strings.HasSuffix(err.Error(), want) {
+		t.Fatalf("message %q, want it to end %q", err, want)
 	}
 }
