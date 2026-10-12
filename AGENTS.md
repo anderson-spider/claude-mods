@@ -16,7 +16,7 @@ Each plugin's details live in `plugins/<name>/AGENTS.md`, loaded when Claude rea
 - **branch-guard**: holds a commit or push on a protected branch until the person proceeds or cancels.
 - **chatgpt**: `ask` and `image` tools driving chatgpt.com in the first browser that works.
 - **codex-computer-use**: routes native Mac app control through Codex computer use; has a `helper/` run by the ChatGPT app's `node`.
-- **codex-models**: Codex models as native Claude Code models through a local proxy; details in `plugins/codex-models/AGENTS.md`. The proxy is Go under `proxy/`, and `install.sh` writes the `~/.claude/settings.json` entries the plugin cannot set itself.
+- **codex-models**: Codex models as native Claude Code models through a local proxy; details in `plugins/codex-models/AGENTS.md`. The proxy is our own Go code under `proxy/`, with a black-box contract suite in `proxy/contract/`, and `install.sh` writes the `~/.claude/settings.json` entries the plugin cannot set itself.
 - **crew**: registers the `code-reader`, `research`, `designer`, `developer`, `tester` and `architect` subagent types with default models; Jev routing, on when the `jevKey` option is set, moves a call's model and effort one step; draws its own HUD (`hooks/hud/`: session, quota, the active plan's next steps, running agents, the architect's verdicts and a log, in a side pane or a band above the prompt); with `nativeCodex` and a loopback proxy, `crew:<role>-codex` twins run a role on a Codex model, and with `quotaRouting` a call may move to its role's twin when Codex has more weekly headroom.
 - **tailscale**: `tailscale_get` and `tailscale_write` tools over the Tailscale API.
 
@@ -30,12 +30,13 @@ claude plugin validate plugins/<name>          # validates the plugin
 claude plugin test plugins/<name>              # runs the plugin's tests/*.test.ts
 /Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node --test plugins/codex-computer-use/helper/test/*.test.mjs   # the codex-computer-use helper's tests
 go -C plugins/codex-models/proxy test -race ./...  # the codex-models proxy's tests (no network)
+go -C plugins/codex-models/proxy test -race -tags contract ./...  # the same, plus the contract suite (the binary built with test injection points, against local fakes; also run by CI)
 node --test plugins/codex-models/tests/scripts/*.test.mjs  # codex-models install.sh and uninstall.sh against a temporary HOME, with fakes
 node scripts/check-consistency.mjs             # marketplace and plugin manifests agree (also run by CI)
 node scripts/check-version-bump.mjs origin/main  # a plugin with code changes bumped its version (run by CI on pull requests)
 claude --plugin-dir plugins/<name>             # loads the plugin with automatic reload
 mise run plugins:validate                      # validates the marketplace and every plugin, then runs check-consistency
-mise run plugins:test                          # runs every plugin's tests, the codex-computer-use helper's and the two codex-models commands above (mise provides Go 1.27.1)
+mise run plugins:test                          # runs every plugin's tests, the codex-computer-use helper's and the three codex-models commands above (mise provides Go 1.27.1)
 mise run plugins:update                        # refreshes the marketplace and updates every installed plugin from it
 ```
 
