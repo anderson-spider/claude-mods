@@ -53,6 +53,12 @@ test('every default sits on the model and effort scales routing moves along', ()
   }
 })
 
+test('the architect opens with a verdict word and the lead asks for the step id in descriptions', () => {
+  const prompt = SPECIALISTS.find(s => s.name === 'architect')?.prompt ?? ''
+  expect(prompt).toContain('starts with `Approve`, `Fixes` or `Reject`')
+  for (const jev of [true, false]) expect(leadSection(jev)).toContain('start its description with the step id')
+})
+
 test('leadSection does not carry the Codex text', () => {
   for (const jev of [true, false]) {
     expect(leadSection(jev)).not.toContain('codex')
