@@ -68,10 +68,10 @@ const ok = (text: string): Reply => ({ status: 200, ok: true, headers: {}, text 
 
 type Seen = {
   fetches: { url: string; headers: Record<string, string>; body: string }[]
-  /** The remote's usage api-calls (they are not counted among Jev's `fetches`). */
+  /** The remote's usage reads (they are not counted among Jev's `fetches`). */
   statuses: { url: string; headers: Record<string, string>; body: string }[]
-  /** The remote's credential-list requests. */
-  credentials: { url: string; headers: Record<string, string> }[]
+  /** The remote's connection-list requests. */
+  connections: { url: string; headers: Record<string, string> }[]
   spawned: Record<string, unknown>[]
   steps: (string | number | undefined)[]
   notices: string[]
@@ -110,15 +110,15 @@ function jevWorld(
     /** Hooks beneath `$.session.start` and `$.agent.register`, so a test can start the session and register the agents. */
     register?: boolean
     twinFail?: (name: string) => boolean
-    /** The remote's usage api-call answers here instead of as Jev. */
+    /** The remote's usage read answers here instead of as Jev. */
     status?: () => Promise<Reply>
-    /** The remote's credential list; one active Codex account by default. */
-    credentials?: () => Promise<Reply>
+    /** The remote's connection list; one active Codex connection by default. */
+    connections?: () => Promise<Reply>
     /** `$.session.usage()` reports these limits (read each time, so a test can change them). */
     rateLimits?: () => { kind: string; percentUsed: number; resetsAt?: string }[]
   } = {},
 ) {
-  const seen: Seen = { fetches: [], statuses: [], credentials: [], spawned: [], steps: [], notices: [], logs: [], writes: [], transcript: [], settingsReads: 0 }
+  const seen: Seen = { fetches: [], statuses: [], connections: [], spawned: [], steps: [], notices: [], logs: [], writes: [], transcript: [], settingsReads: 0 }
   const flags = { settingsFail: opts.settingsFail === true, registerFail: false }
   // `mock.clock` registers `clock.now` itself and the engine refuses a second one, so a test's own is registered instead.
   const now = opts.now
@@ -149,11 +149,11 @@ function jevWorld(
     on('session.usage', () => ({ value: { startedAt: 0, context: { percent: 1, tokens: 1, window: 100 }, rateLimits: limits() } }) as never)
   }
   on('http.fetch', async (_$, e) => {
-    if (opts.status && e.url.endsWith('/v8/management/credentials')) {
-      seen.credentials.push({ url: e.url, headers: (e.init?.headers ?? {}) as Record<string, string> })
-      return { value: await (opts.credentials ?? (async () => ok(JSON.stringify({ files: [{ type: 'codex', status: 'active', auth_index: 'acct-1' }] }))))() }
+    if (opts.status && e.url.endsWith('/api/providers')) {
+      seen.connections.push({ url: e.url, headers: (e.init?.headers ?? {}) as Record<string, string> })
+      return { value: await (opts.connections ?? (async () => ok(JSON.stringify({ connections: [{ id: 'conn-1', provider: 'codex', isActive: true }] }))))() }
     }
-    if (opts.status && e.url.endsWith('/v8/management/requests/api-call')) {
+    if (opts.status && e.url.includes('/api/usage/')) {
       seen.statuses.push({ url: e.url, headers: (e.init?.headers ?? {}) as Record<string, string>, body: String(e.init?.body ?? '') })
       return { value: await opts.status() }
     }
@@ -1808,7 +1808,7 @@ test('a workflow agent on a -codex type with model is refused (a hook can only r
 // --- Quota routing: a specialist call goes to the same role's Codex twin when Codex has more 7-day headroom ---
 
 const MGMT_KEY = ['mgmt-', 'remotesecret0123456789'].join('')
-const REMOTE = 'https://cliproxy.example.ts.net'
+const REMOTE = 'https://remote.example.ts.net'
 const QUOTA_ENV = GATEWAY
 const Q_NOW = Date.parse('2026-10-12T12:00:00Z')
 const QUOTA_OPTIONS = { codexRemote: REMOTE, codexManagementKey: MGMT_KEY }
@@ -1819,15 +1819,14 @@ const claudeLimits = (five: number, seven: number) => [
   { kind: 'five_hour', percentUsed: five, resetsAt: '2026-10-12T15:00:00.000Z' },
   { kind: 'seven_day', percentUsed: seven, resetsAt: '2026-10-17T00:00:00.000Z' },
 ]
-/** The remote's api-call answer: OpenAI's usage with a Codex 7-day window (and a 5-hour one when given). */
+/** The remote's usage answer for the Codex connection: a 7-day window (and a 5-hour one when given). */
 const codexStatus = (seven: number, five?: number): Reply => ok(JSON.stringify({
-  status_code: 200,
-  body: JSON.stringify({
-    rate_limit: {
-      ...(five === undefined ? {} : { primary_window: { used_percent: five, limit_window_seconds: 300 * 60, reset_at: Date.parse('2026-10-12T15:00:00Z') / 1000 } }),
-      secondary_window: { used_percent: seven, limit_window_seconds: 10080 * 60, reset_at: Date.parse('2026-10-17T00:00:00Z') / 1000 },
-    },
-  }),
+  plan: 'pro',
+  limitReached: false,
+  quotas: {
+    ...(five === undefined ? {} : { session: { used: five, total: 100, windowSeconds: 5 * 3600, resetAt: '2026-10-12T15:00:00.000Z' } }),
+    weekly: { used: seven, total: 100, windowSeconds: 7 * 86400, resetAt: '2026-10-17T00:00:00.000Z' },
+  },
 }))
 
 /**
@@ -2144,21 +2143,16 @@ test('a good reading is cached for five minutes and read again after them', QUOT
   world.limits.value = claudeLimits(20, 40)
   await $.agent.spawn(spawnInput({ tool_use_id: 'tu4' }))
   expect(world.seen.statuses).toHaveLength(2)
-  expect(world.seen.credentials).toHaveLength(2)
+  expect(world.seen.connections).toHaveLength(2)
 })
 
 test('startup asks the remote nothing; the first eligible spawn reads Codex and sends the management key to the remote only', QUOTA_JEV, async ($, on) => {
   const { seen } = await quotaWorld($, on)
-  expect([seen.credentials, seen.statuses]).toEqual([[], []])
+  expect([seen.connections, seen.statuses]).toEqual([[], []])
   await $.agent.spawn(spawnInput())
   const bearer = { Authorization: `Bearer ${MGMT_KEY}`, Accept: 'application/json' }
-  expect(seen.credentials).toEqual([{ url: `${REMOTE}/v8/management/credentials`, headers: bearer }])
-  expect(seen.statuses).toHaveLength(1)
-  expect(seen.statuses[0]?.url).toBe(`${REMOTE}/v8/management/requests/api-call`)
-  expect(seen.statuses[0]?.headers).toEqual({ ...bearer, 'Content-Type': 'application/json' })
-  expect(JSON.parse(seen.statuses[0]?.body ?? '{}')).toEqual({
-    auth_index: 'acct-1', method: 'GET', url: 'https://chatgpt.com/backend-api/wham/usage', header: { Authorization: 'Bearer $TOKEN$' },
-  })
+  expect(seen.connections).toEqual([{ url: `${REMOTE}/api/providers`, headers: bearer }])
+  expect(seen.statuses).toEqual([{ url: `${REMOTE}/api/usage/conn-1`, headers: bearer, body: '' }])
   await $.agent.spawn(spawnInput())
   expect(seen.statuses).toHaveLength(1)
   // Jev's request carries the Jev key and never the management key.
@@ -2215,7 +2209,7 @@ test('without the remote options quota routing is off: Codex is never asked, the
   await $.agent.spawn(spawnInput())
 
   expect(seen.statuses).toEqual([])
-  expect(seen.credentials).toEqual([])
+  expect(seen.connections).toEqual([])
   expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:developer', description: 'audit auth · sonnet/high' })
   expect(seen.logs.filter(line => line.startsWith('crew quota'))).toEqual([])
   expect(atom.last?.codexState ?? 'off').toBe('off')
@@ -2230,21 +2224,21 @@ for (const source of ['project', 'local'] as const) {
     const { seen, atom } = await quotaWorld($, on, { world: { [source]: declared } })
     await $.agent.spawn(spawnInput())
 
-    expect(seen.credentials).toEqual([])
+    expect(seen.connections).toEqual([])
     expect(seen.statuses).toEqual([])
     expect(seen.logs).toContain('crew quota: Codex not asked (the repository settings declare codexRemote or codexManagementKey (set them in user settings))')
     expect(atom.last?.codexState).toBe('unknown')
   })
 }
 
-test('a remote with no single active Codex account is not asked for usage: unknown, so Claude', QUOTA_JEV, async ($, on) => {
-  const two = async () => ok(JSON.stringify({ files: [{ type: 'codex', status: 'active', auth_index: 'a' }, { type: 'codex', status: 'active', auth_index: 'b' }] }))
-  const { seen, atom } = await quotaWorld($, on, { world: { credentials: two } })
+test('a remote with no single active Codex connection is not asked for usage: unknown, so Claude', QUOTA_JEV, async ($, on) => {
+  const two = async () => ok(JSON.stringify({ connections: [{ id: 'a', provider: 'codex', isActive: true }, { id: 'b', provider: 'codex', isActive: true }] }))
+  const { seen, atom } = await quotaWorld($, on, { world: { connections: two } })
   await $.agent.spawn(spawnInput())
 
-  expect(seen.credentials).toHaveLength(1)
+  expect(seen.connections).toHaveLength(1)
   expect(seen.statuses).toEqual([])
-  expect(seen.logs).toContain('crew quota: Codex not asked (the remote has no single active Codex account)')
+  expect(seen.logs).toContain('crew quota: Codex not asked (the remote has no single active Codex connection)')
   expect(atom.last?.codexState).toBe('unknown')
 })
 
