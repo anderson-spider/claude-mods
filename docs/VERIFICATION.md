@@ -20,8 +20,8 @@ node --test plugins/codex-models/tests/scripts/*.test.mjs
 | Plugin | Tests | Host |
 | --- | --- | --- |
 | chatgpt | Page scripts' flow, tab handling, queue, jobs, attachments | A fake `Browser`; no real page |
-| codex-computer-use (plugin) | Command parsing, routing, the approval band, `limitMs` | The `claude-code/testing` host |
-| codex-computer-use (helper) | Hub, MCP client, approvals, owners, `install.sh --check` | The real hub and client against a fake MCP server, with approvals pointed at a temp file |
+| codex-computer-use (plugin) | Command parsing, routing, the approval band, the fixed five-minute approval deadline | The `claude-code/testing` host; timeout tests control `clock.now` and release held polls without real deadline waits |
+| codex-computer-use (helper) | Hub, MCP client, approvals, owners, `install.sh --check`, installer and uninstaller argument validation | Fake dependencies or a helper copied into a temporary installation layout; the real hub and client against a fake MCP server; no writes to installed run/state directories |
 | codex-models (plugin) | The status reply and report, the settings merge and unmerge, the hooks through the test host | Pure modules; a fake `http.fetch` for the hooks |
 | codex-models (proxy) | Configuration, listeners, the guard and routes, byte-for-byte pass-through, the streaming translation, OAuth and the credential store, effort, the catalog, compressed bodies, the Codex rate-limit windows in the status | The Go test packages; no network |
 | codex-models (proxy, contract) | The binary as a client sees it: the guard, pass-through, the Codex translation, login and locks, log privacy, the status and `codexLimits`, shutdown and the command line | A black-box suite that builds the proxy with `-tags contract` and runs it against local fakes of Anthropic, Codex and the token endpoint; no network |
