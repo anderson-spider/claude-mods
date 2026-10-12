@@ -28,12 +28,12 @@ const CAP = 64
 const ALIASES: readonly string[] = MODELS
 
 /**
- * A model id as compared: lower case, without a trailing context suffix (`[1m]`) and without a trailing effort suffix
- * (`(high)`, `-high`, `:high`), which a gateway may add to the id it receives or report. `max` is not stripped:
- * `gpt-x-codex-max` is a model.
+ * A model id as compared: lower case, without a gateway provider prefix (`cx/`), a trailing context suffix (`[1m]`) or a
+ * trailing effort suffix (`(high)`, `-high`, `:high`), which a gateway may add to the id it receives or drop from the one
+ * it reports. `max` is not stripped: `gpt-x-codex-max` is a model.
  */
 export function normalizeModel(id: string): string {
-  return id.trim().toLowerCase().replace(/\[\d+m\]$/, '').replace(/(?:\((?:low|medium|high|xhigh)\)|[-:](?:low|medium|high|xhigh))$/, '')
+  return id.trim().toLowerCase().replace(/^[\w.-]+\//, '').replace(/\[\d+m\]$/, '').replace(/(?:\((?:low|medium|high|xhigh)\)|[-:](?:low|medium|high|xhigh))$/, '')
 }
 
 /** A trailing snapshot date, as an upstream names a dated release of a model: `-2026-05-01` or `-20260501`. */

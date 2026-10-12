@@ -5,7 +5,7 @@ import { nativeCodexSpecs, SPECIALISTS } from '../hooks/agents'
 test('the fixed map assigns exactly the five specialist roles to their Codex models', () => {
   expect(CODEX_MODELS).toEqual({
     'code-reader': 'gpt-6-luna', research: 'gpt-6-luna',
-    designer: 'gpt-6.1-sol', developer: 'gpt-6.1-sol',
+    designer: 'gpt-6-sol', developer: 'gpt-6-sol',
     architect: 'gpt-6-astra',
   })
   expect(Object.keys(CODEX_MODELS)).toEqual(SPECIALISTS.map(s => s.name))
