@@ -232,6 +232,7 @@ test('a proxy that answers without the secret fails the preflight and the settin
     assert.notEqual(out.code, 0)
     assert.match(out.stderr, /answered 200 without the secret/)
     assert.match(out.stderr, /settings\.json was left alone/)
+    assert.match(out.stderr, /LaunchAgent is loaded; .*\/\.claude\/codex-models\/uninstall\.sh removes it/)
     assert.equal(readFileSync(box.settingsFile, 'utf8'), text)
   } finally {
     mode = 'ours'
@@ -259,7 +260,15 @@ test('a plain 403 without the secret is not ccmproxy: the preflight fails and th
   }
 })
 
-test('a base URL that is not ours is refused and the settings stay', async () => {
+/** Nothing of the install happened: no build, no home, no plist, no launchctl call, no backup. */
+function assertUntouched(box) {
+  assert.ok(!existsSync(join(box.home, '.claude/codex-models')), 'no install home')
+  assert.ok(!existsSync(join(box.home, 'Library/LaunchAgents')), 'no plist')
+  assert.doesNotMatch(box.calls(), /launchctl|exec go/)
+  assert.ok(!readdirSync(join(box.home, '.claude')).some(name => name.includes('.bak-codex-models-')))
+}
+
+test('a base URL that is not ours is refused before anything is built or loaded', async () => {
   const box = sandbox()
   try {
     const text = `${JSON.stringify({ env: { ANTHROPIC_BASE_URL: 'https://gateway.example.com' } }, null, 2)}\n`
@@ -268,8 +277,61 @@ test('a base URL that is not ours is refused and the settings stay', async () =>
 
     assert.notEqual(out.code, 0)
     assert.match(out.stderr, /already "https:\/\/gateway\.example\.com"/)
+    assert.match(out.stderr, /nothing was changed/)
     assert.equal(readFileSync(box.settingsFile, 'utf8'), text)
-    assert.ok(!readdirSync(join(box.home, '.claude')).some(name => name.includes('.bak-codex-models-')))
+    assertUntouched(box)
+
+    const check = await box.run('install.sh', ['--check'])
+    assert.notEqual(check.code, 0)
+    assert.match(check.stderr, /already "https:\/\/gateway\.example\.com"/)
+  } finally {
+    box.cleanup()
+  }
+})
+
+test('a malformed settings.json is refused before anything is built or loaded', async () => {
+  const box = sandbox()
+  try {
+    for (const text of ['{ "env": ', '{ "env": "x" }\n']) {
+      writeFileSync(box.settingsFile, text)
+      const out = await box.run('install.sh')
+
+      assert.notEqual(out.code, 0)
+      assert.match(out.stderr, /not valid JSON|"env" that is not an object/)
+      assert.equal(readFileSync(box.settingsFile, 'utf8'), text)
+      assertUntouched(box)
+    }
+  } finally {
+    box.cleanup()
+  }
+})
+
+test('with no settings.json before install, uninstall removes the file it created', async () => {
+  mode = 'ours'
+  const box = sandbox()
+  try {
+    assert.equal((await box.run('install.sh')).code, 0)
+    assert.ok(existsSync(box.settingsFile))
+    assert.equal(JSON.parse(readFileSync(join(box.home, '.claude/codex-models/settings-state.json'), 'utf8')).fileCreated, true)
+
+    const out = await box.run('uninstall.sh')
+    assert.equal(out.code, 0, out.stderr)
+    assert.ok(!existsSync(box.settingsFile))
+  } finally {
+    box.cleanup()
+  }
+})
+
+test('with no settings.json before install, a key added since keeps the file', async () => {
+  mode = 'ours'
+  const box = sandbox()
+  try {
+    assert.equal((await box.run('install.sh')).code, 0)
+    const settings = JSON.parse(readFileSync(box.settingsFile, 'utf8'))
+    writeFileSync(box.settingsFile, `${JSON.stringify({ ...settings, theme: 'dark' }, null, 2)}\n`)
+
+    assert.equal((await box.run('uninstall.sh')).code, 0)
+    assert.deepEqual(JSON.parse(readFileSync(box.settingsFile, 'utf8')), { theme: 'dark' })
   } finally {
     box.cleanup()
   }

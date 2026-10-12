@@ -19,6 +19,8 @@ export type InstallState = {
   pickerCreated: boolean
   optionsCreated: boolean
   models: string[]
+  /** settings.json did not exist before install; absent in a state an older install wrote. */
+  fileCreated?: boolean
 }
 
 export type StatusReply =
@@ -32,16 +34,18 @@ export function isOurHeader(line: string): boolean
 export function isMarked(row: unknown): boolean
 export function pickerRows(models: unknown): { rows: PickerRow[]; error?: undefined } | { error: string; rows?: undefined }
 export function checkEnv(env: unknown): string | undefined
+export function settingsRefusal(settings: unknown, baseUrl: string | undefined, prior?: unknown): string | undefined
 export function planInstall(
   settings: unknown,
   env: unknown,
   models: unknown,
   prior?: unknown,
+  fileExisted?: boolean,
 ): { settings: SettingsObject; state: InstallState; error?: undefined } | { error: string; settings?: undefined; state?: undefined }
 export function planUninstall(
   settings: unknown,
   state?: unknown,
-): { settings: SettingsObject; error?: undefined } | { error: string; settings?: undefined }
+): { settings: SettingsObject; remove: boolean; error?: undefined } | { error: string; settings?: undefined; remove?: undefined }
 export function readStatusReply(status: number, text: string): StatusReply
 export function masked(text: string, secret: string): string
 export function secretOf(headerLine: string): string

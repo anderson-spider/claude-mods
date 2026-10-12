@@ -72,40 +72,51 @@ export function checkEnv(env) {
   return undefined
 }
 
+/** Whether `prior` is a state of this format whose base URL the settings still hold. */
+const keepsPriorOf = (settings, prior) =>
+  isObject(prior) && prior.v === STATE_VERSION && isObject(settings.env) && sameUrl(settings.env.ANTHROPIC_BASE_URL, prior.baseUrl)
+
+/**
+ * Why install would refuse these settings, or undefined. `baseUrl` is the proxy's, or undefined before a config
+ * exists (then any base URL already set that `prior` does not account for is someone else's). install.sh asks this
+ * before it builds or loads anything, and planInstall asks it again with the real base URL.
+ */
+export function settingsRefusal(settings, baseUrl, prior) {
+  if (!isObject(settings)) return 'settings.json does not hold a JSON object'
+  if ('env' in settings && !isObject(settings.env)) return 'settings.json has an "env" that is not an object'
+  if ('modelPicker' in settings && !isObject(settings.modelPicker)) return 'settings.json has a "modelPicker" that is not an object'
+  if (isObject(settings.modelPicker) && 'options' in settings.modelPicker && !Array.isArray(settings.modelPicker.options)) {
+    return 'settings.json has a "modelPicker.options" that is not an array'
+  }
+  const current = settings.env?.ANTHROPIC_BASE_URL
+  if (current !== undefined && !sameUrl(current, baseUrl) && !keepsPriorOf(settings, prior)) {
+    return (
+      `env.ANTHROPIC_BASE_URL is already ${JSON.stringify(current)}; install leaves it alone because uninstall could ` +
+      'not restore it. Remove it from settings.json first, or run with --no-settings.'
+    )
+  }
+  const headers = settings.env?.ANTHROPIC_CUSTOM_HEADERS
+  if (headers !== undefined && typeof headers !== 'string') return 'settings.json has an env.ANTHROPIC_CUSTOM_HEADERS that is not a string'
+  return undefined
+}
+
 /**
  * The settings after install, and the state uninstall reads. `prior` is the state a previous install left; it is
  * kept while the settings still hold its base URL, so a second run neither changes the result nor forgets what
- * stood there before the first.
+ * stood there before the first. `fileExisted` false means settings.json was not there: uninstall then removes it
+ * when nothing else is left in it.
  */
-export function planInstall(settings, env, models, prior) {
-  if (!isObject(settings)) return { error: 'settings.json does not hold a JSON object' }
+export function planInstall(settings, env, models, prior, fileExisted = true) {
   const envError = checkEnv(env)
   if (envError) return { error: envError }
   const picked = pickerRows(models)
   if (picked.error) return { error: picked.error }
-  if ('env' in settings && !isObject(settings.env)) return { error: 'settings.json has an "env" that is not an object' }
-  if ('modelPicker' in settings && !isObject(settings.modelPicker)) {
-    return { error: 'settings.json has a "modelPicker" that is not an object' }
-  }
-  if (isObject(settings.modelPicker) && 'options' in settings.modelPicker && !Array.isArray(settings.modelPicker.options)) {
-    return { error: 'settings.json has a "modelPicker.options" that is not an array' }
-  }
+  const refusal = settingsRefusal(settings, env.ANTHROPIC_BASE_URL, prior)
+  if (refusal) return { error: refusal }
 
   const next = clone(settings)
-  const current = next.env?.ANTHROPIC_BASE_URL
-  const keepsPrior = isObject(prior) && prior.v === STATE_VERSION && current !== undefined && sameUrl(current, prior.baseUrl)
-
-  if (current !== undefined && !sameUrl(current, env.ANTHROPIC_BASE_URL) && !keepsPrior) {
-    return {
-      error:
-        `env.ANTHROPIC_BASE_URL is already ${JSON.stringify(current)}; install leaves it alone because uninstall could ` +
-        'not restore it. Remove it from settings.json first, or run with --no-settings.',
-    }
-  }
+  const keepsPrior = keepsPriorOf(settings, prior)
   const headers = next.env?.ANTHROPIC_CUSTOM_HEADERS
-  if (headers !== undefined && typeof headers !== 'string') {
-    return { error: 'settings.json has an env.ANTHROPIC_CUSTOM_HEADERS that is not a string' }
-  }
 
   const state = keepsPrior
     ? { ...prior, baseUrl: env.ANTHROPIC_BASE_URL }
@@ -117,6 +128,7 @@ export function planInstall(settings, env, models, prior) {
         toolSearch: next.env && 'ENABLE_TOOL_SEARCH' in next.env ? { present: true, value: next.env.ENABLE_TOOL_SEARCH } : { present: false },
         pickerCreated: !('modelPicker' in next),
         optionsCreated: !isObject(next.modelPicker) || !('options' in next.modelPicker),
+        fileCreated: !fileExisted,
       }
 
   next.env = next.env ?? {}
@@ -135,7 +147,10 @@ export function planInstall(settings, env, models, prior) {
   return { settings: next, state }
 }
 
-/** The settings after uninstall: what install added taken out, what it replaced put back. `state` may be missing. */
+/**
+ * The settings after uninstall: what install added taken out, what it replaced put back. `state` may be missing.
+ * `remove` is true when install created the file and nothing else was added to it since.
+ */
 export function planUninstall(settings, state) {
   if (!isObject(settings)) return { error: 'settings.json does not hold a JSON object' }
   const known = isObject(state) && state.v === STATE_VERSION ? state : undefined
@@ -171,7 +186,7 @@ export function planUninstall(settings, state) {
     if (Object.keys(picker).length === 0 && known?.pickerCreated) delete next.modelPicker
   }
 
-  return { settings: next }
+  return { settings: next, remove: known?.fileCreated === true && Object.keys(next).length === 0 }
 }
 
 /**

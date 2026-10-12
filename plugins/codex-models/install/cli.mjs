@@ -1,6 +1,7 @@
 // The file and network half of install.sh and uninstall.sh; the decisions are settings.mjs's.
 //
 //   node cli.mjs version-of <plugin.json>
+//   node cli.mjs precheck  --settings <file> --state <file> --config <file>
 //   node cli.mjs preflight --env <file> --version <v> [--wait-ms <ms>]
 //   node cli.mjs merge     --settings <file> --state <file> --env <file> --models <file> [--dry-run]
 //   node cli.mjs unmerge   --settings <file> --state <file> [--dry-run]
@@ -27,7 +28,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
-import { HEADER, isOurHeader, masked, planInstall, planUninstall, readStatusReply, secretOf } from './settings.mjs'
+import { HEADER, isOurHeader, masked, planInstall, planUninstall, readStatusReply, secretOf, settingsRefusal } from './settings.mjs'
 
 class Refusal extends Error {}
 
@@ -129,7 +130,7 @@ function merge(opts) {
   const models = readJson(opts.models, 'the model list')
   const prior = existsSync(opts.state) ? readJson(opts.state, 'the install state') : undefined
   const current = readSettings(opts.settings)
-  const plan = planInstall(current.value, env, models, prior)
+  const plan = planInstall(current.value, env, models, prior, current.text !== undefined)
   if (plan.error) fail(plan.error)
 
   const secret = typeof env.ANTHROPIC_CUSTOM_HEADERS === 'string' ? secretOf(env.ANTHROPIC_CUSTOM_HEADERS) : ''
@@ -165,12 +166,19 @@ function unmerge(opts) {
   const headers = current.value?.env?.ANTHROPIC_CUSTOM_HEADERS
   const ours = typeof headers === 'string' ? headers.split(/\r?\n/).find(isOurHeader) : undefined
   const before = formatted(current.value)
-  const after = formatted(plan.settings)
+  // A file install created, holding nothing else now, goes as it came.
+  const after = plan.remove ? '' : formatted(plan.settings)
   if (opts.dryRun) {
     printDiff(before, after, ours ? secretOf(ours) : '', opts.settings)
     return
   }
-  if (before === after) {
+  if (plan.remove) {
+    const copy = backup(opts.settings)
+    const target = landing(opts.settings)
+    if (readFileSync(target, 'utf8') !== current.text) fail(`${opts.settings} changed while this ran; nothing was written, run it again`)
+    unlinkSync(target)
+    console.log(`settings: removed ${opts.settings}, which install created and nothing else uses (previous file: ${copy})`)
+  } else if (before === after) {
     console.log(`settings: ${opts.settings} holds no codex-models entries`)
   } else {
     const copy = backup(opts.settings)
@@ -178,6 +186,22 @@ function unmerge(opts) {
     console.log(`settings: took the codex-models entries out of ${opts.settings} (previous file: ${copy})`)
   }
   if (state) rmSync(opts.state, { force: true })
+}
+
+/**
+ * Whether install would refuse the settings, asked before anything is built or loaded. The proxy's base URL comes
+ * from its config when one exists; before the first install there is none, and any base URL already set is refused.
+ */
+function precheck(opts) {
+  const prior = existsSync(opts.state) ? readJson(opts.state, 'the install state') : undefined
+  const current = readSettings(opts.settings)
+  let baseUrl
+  if (existsSync(opts.config)) {
+    const listen = readJson(opts.config, 'the proxy config').listen_http
+    if (typeof listen === 'string') baseUrl = `http://${listen}`
+  }
+  const refusal = settingsRefusal(current.value, baseUrl, prior)
+  if (refusal) fail(refusal)
 }
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
@@ -236,6 +260,7 @@ async function main([command, ...args]) {
   }
   const opts = flags(args)
   const need = names => names.forEach(name => opts[name] || fail(`${command} needs --${name}`))
+  if (command === 'precheck') return need(['settings', 'state', 'config']), precheck(opts)
   if (command === 'preflight') return need(['env', 'version']), preflight(opts)
   if (command === 'merge') return need(['settings', 'state', 'env', 'models']), merge(opts)
   if (command === 'unmerge') return need(['settings', 'state']), unmerge(opts)

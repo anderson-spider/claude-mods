@@ -72,13 +72,29 @@ else
   VERSION=$(cat "$HERE/VERSION")
 fi
 
+# The settings are checked before anything is built, copied or loaded: a refusal later would leave a running proxy
+# behind that nothing points at.
+if [ -z "$NO_SETTINGS" ]; then
+  run_node "$HERE/install/cli.mjs" precheck --settings "$SETTINGS" --state "$STATE" --config "$PROXY_HOME/config.json" ||
+    die "nothing was changed"
+fi
+
 if [ -n "$CHECK" ]; then
   say "ready to install $VERSION"
   exit 0
 fi
 
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/codex-models.XXXXXX")
-trap 'rm -rf "$TMP"' EXIT
+AGENT_LOADED=
+# Once the LaunchAgent is loaded, any failure says how to remove it.
+on_exit() {
+  code=$?
+  rm -rf "$TMP"
+  if [ "$code" -ne 0 ] && [ -n "$AGENT_LOADED" ]; then
+    echo "codex-models: the proxy's LaunchAgent is loaded; $TARGET/uninstall.sh removes it" >&2
+  fi
+}
+trap on_exit EXIT
 trap 'exit 130' INT TERM
 
 build() {
@@ -190,13 +206,14 @@ until launchctl bootstrap "$DOMAIN" "$PLIST" 2>/dev/null; do
 
   sleep 1
 done
+AGENT_LOADED=1
 say "$LABEL loaded from $PLIST"
 
 # --- Preflight, then settings ---
 
 CCMPROXY_HOME="$PROXY_HOME" "$BIN" env --shell json >"$TMP/env.json"
 run_node "$HERE/install/cli.mjs" preflight --env "$TMP/env.json" --version "$VERSION" ||
-  die "the proxy did not pass its checks, so settings.json was left alone; $TARGET/uninstall.sh removes the LaunchAgent"
+  die "the proxy did not pass its checks, so settings.json was left alone"
 
 if [ -n "$NO_SETTINGS" ]; then
   say "settings.json left alone (--no-settings); $TARGET/ccmproxy env prints what Claude Code needs"

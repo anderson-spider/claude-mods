@@ -9,6 +9,7 @@ import {
   planInstall,
   planUninstall,
   readStatusReply,
+  settingsRefusal,
 } from '../install/settings.mjs'
 import type { InstallState, SettingsObject } from '../install/settings.mjs'
 import * as status from '../hooks/status'
@@ -52,6 +53,42 @@ test('a fresh install writes the three variables and marked rows, and uninstall 
   })
   expect(installed.state.models).toEqual(['gpt-6-astra', 'gpt-6-mini'])
   expect(JSON.stringify(removed)).toBe('{}')
+})
+
+test('a file install created is removed by uninstall only while nothing else is in it', () => {
+  const installed = ok(planInstall({}, ENV, MODELS, undefined, false))
+  expect(installed.state.fileCreated).toBe(true)
+  expect(planUninstall(installed.settings, installed.state)).toEqual({ settings: {}, remove: true })
+
+  const added = { ...installed.settings, theme: 'dark' }
+  expect(planUninstall(added, installed.state)).toEqual({ settings: { theme: 'dark' }, remove: false })
+
+  // A file that existed, even empty, stays; so does one whose state is missing.
+  const existed = ok(planInstall({}, ENV, MODELS))
+  expect(existed.state.fileCreated).toBe(false)
+  expect(planUninstall(existed.settings, existed.state).remove).toBe(false)
+  expect(planUninstall(installed.settings, undefined).remove).toBe(false)
+})
+
+test('a reinstall keeps the record that the file was created', () => {
+  const first = ok(planInstall({}, ENV, MODELS, undefined, false))
+  const second = ok(planInstall(first.settings, ENV, MODELS, first.state, true))
+
+  expect(second.state.fileCreated).toBe(true)
+  expect(planUninstall(second.settings, second.state).remove).toBe(true)
+})
+
+test('the early check refuses what install would, and any base URL before a config exists', () => {
+  const gateway = { env: { ANTHROPIC_BASE_URL: 'https://gateway.example.com' } }
+  expect(settingsRefusal(gateway, ENV.ANTHROPIC_BASE_URL)).toContain('already')
+  expect(settingsRefusal({ env: { ANTHROPIC_BASE_URL: ENV.ANTHROPIC_BASE_URL } }, undefined)).toContain('already')
+  expect(settingsRefusal({ env: 'x' }, undefined)).toContain('"env"')
+  expect(settingsRefusal({}, undefined)).toBe(undefined)
+  expect(settingsRefusal({ env: { ANTHROPIC_BASE_URL: ENV.ANTHROPIC_BASE_URL } }, ENV.ANTHROPIC_BASE_URL)).toBe(undefined)
+
+  // The base URL a previous install wrote, while its state is there, is ours even without a config.
+  const first = ok(planInstall({}, ENV, MODELS))
+  expect(settingsRefusal(first.settings, undefined, first.state)).toBe(undefined)
 })
 
 test('the state never holds a header value', () => {
