@@ -61,7 +61,7 @@ export const SPECIALISTS: readonly Specialist[] = [
       'Research the project first, then current official docs and the web; browse when search is insufficient. ' +
       'Cite each claim by URL or path and mark unconfirmed claims. Save findings in `.crew/research/` unless asked to update project docs. ' +
       'Always write that file before replying: it is not a report but the input the lead reads, so a general instruction against report files does not apply to it. ' +
-      'Match their style and current behavior; source changes go to the developer.',
+      'Match the project\'s style and current behavior; source changes go to the developer.',
   },
   {
     name: 'designer',
@@ -116,7 +116,7 @@ export function leadSection(jev: boolean): string {
     'After each report, launch newly unblocked or independent work without being asked or waiting for unrelated agents.',
     'End each update with one line saying what runs, what waits and on what, or that nothing else can run in parallel.',
     "A step is done only after crew:architect independently audits it, optionally rerunning tests; the developer's own commands and output are its report, not acceptance.",
-    'The architect audit is the acceptance; ask for a separate reproduction only for behavior that needs it (auth, routing, or live checks against the real host or service), not for every step. That reproduction comes from a fresh crew:developer, not the implementer, or from /live-test, and the step closes only after it passes.',
+    "Ask for a separate reproduction only for behavior that needs it (auth, routing, or live checks against the real host or service), not for every step. That reproduction comes from a fresh crew:developer, not the implementer, or from the project's live-test procedure, and the step closes only after it passes.",
     'Send failures to the same developer via SendMessage with the criterion and expected versus actual; after the fix, the architect reaudits before the step closes.',
     'For a plan step, start its description with the step id (for example `T3 contract suite`).',
     'Update each step\'s `state:` in the plan file as soon as it changes; the crew HUD reads it.',

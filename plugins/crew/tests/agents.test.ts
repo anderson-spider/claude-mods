@@ -187,7 +187,7 @@ test('independent acceptance is the architect audit, not the developer self-chec
     expect(text).toContain('only after crew:architect independently audits it')
     expect(text).toContain('own commands and output are its report, not acceptance')
     expect(text).toContain('after the fix, the architect reaudits')
-    expect(text).toContain('The architect audit is the acceptance; ask for a separate reproduction only for behavior that needs it (auth, routing, or live checks against the real host or service), not for every step. That reproduction comes from a fresh crew:developer, not the implementer, or from /live-test, and the step closes only after it passes.')
+    expect(text).toContain("Ask for a separate reproduction only for behavior that needs it (auth, routing, or live checks against the real host or service), not for every step. That reproduction comes from a fresh crew:developer, not the implementer, or from the project's live-test procedure, and the step closes only after it passes.")
     expect(text).not.toContain('crew:tester')
   }
   const text = nativeCodexSection(nativeCodexSpecs({ developer: 'gpt-x', architect: 'gpt-y' }))
