@@ -3,7 +3,7 @@
 // Run: node --test plugins/codex-models/tests/scripts/*.test.mjs   (mise run plugins:test runs it)
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
@@ -113,6 +113,19 @@ exit 6
   return { root, home, run, calls, settingsFile, cleanup: () => rmSync(root, { recursive: true, force: true }) }
 }
 
+const modeOf = path => statSync(path).mode & 0o777
+
+/** settings.json, the state and every codex-models backup beside settings.json are mode 600. */
+function assertPrivate(box) {
+  const dir = join(box.home, '.claude')
+  if (existsSync(box.settingsFile)) assert.equal(modeOf(box.settingsFile), 0o600, 'settings.json')
+  const state = join(dir, 'codex-models/settings-state.json')
+  if (existsSync(state)) assert.equal(modeOf(state), 0o600, 'settings-state.json')
+  const backups = readdirSync(dir).filter(name => name.startsWith('settings.json.bak-codex-models-'))
+  for (const name of backups) assert.equal(modeOf(join(dir, name)), 0o600, name)
+  return backups
+}
+
 const ORIGINAL = {
   env: { USE_BUILTIN_RIPGREP: '0', ANTHROPIC_CUSTOM_HEADERS: 'X-Team: blue' },
   modelPicker: { options: [{ model: 'claude-opus-4-8', label: 'Opus' }] },
@@ -166,14 +179,36 @@ test('--dry-run prints the settings diff with the secret masked and changes noth
   }
 })
 
+test('--dry-run masks an old X-Ccmproxy-Token line as well as the new one', async () => {
+  const box = sandbox()
+  try {
+    const old = 'old-secret-from-before-5e4d'
+    writeFileSync(box.settingsFile, `${JSON.stringify({ env: { ANTHROPIC_CUSTOM_HEADERS: `X-Team: blue\nx-ccmproxy-token: ${old}` } }, null, 2)}\n`)
+    const out = await box.run('install.sh', ['--dry-run'])
+
+    assert.equal(out.code, 0, out.stderr)
+    assert.match(out.stdout, /^-.*x-ccmproxy-token: <secret>/m)
+    assert.match(out.stdout, /^\+.*X-Ccmproxy-Token: <secret>/m)
+    assert.doesNotMatch(out.stdout + out.stderr, new RegExp(`${old}|${TOKEN}`))
+  } finally {
+    box.cleanup()
+  }
+})
+
 test('install writes the settings after the preflight, and uninstall restores them', async () => {
   mode = 'ours'
   const box = sandbox()
   try {
-    writeFileSync(box.settingsFile, `${JSON.stringify(ORIGINAL, null, 2)}\n`)
+    writeFileSync(box.settingsFile, `${JSON.stringify(ORIGINAL, null, 2)}\n`, { mode: 0o644 })
+    chmodSync(box.settingsFile, 0o644)
+    // A backup an older install left readable is restricted too.
+    const old = join(box.home, '.claude/settings.json.bak-codex-models-20260101-000000')
+    writeFileSync(old, '{}\n')
+    chmodSync(old, 0o644)
     const out = await box.run('install.sh')
     assert.equal(out.code, 0, out.stderr)
     assert.doesNotMatch(out.stdout + out.stderr, new RegExp(TOKEN))
+    assert.ok(assertPrivate(box).length >= 2)
 
     const target = join(box.home, '.claude/codex-models')
     const settings = JSON.parse(readFileSync(box.settingsFile, 'utf8'))
@@ -197,8 +232,16 @@ test('install writes the settings after the preflight, and uninstall restores th
 
     // A second run leaves the settings as the first wrote them.
     const once = readFileSync(box.settingsFile, 'utf8')
+    chmodSync(box.settingsFile, 0o644) // as a person or another tool might leave it
     assert.equal((await box.run('install.sh')).code, 0)
     assert.equal(readFileSync(box.settingsFile, 'utf8'), once)
+    assertPrivate(box)
+
+    // A dry run of uninstall shows the removed header line masked.
+    const dry = await box.run('uninstall.sh', ['--dry-run'])
+    assert.equal(dry.code, 0, dry.stderr)
+    assert.match(dry.stdout, /-.*X-Ccmproxy-Token: <secret>/)
+    assert.doesNotMatch(dry.stdout + dry.stderr, new RegExp(TOKEN))
 
     // Uninstall from the copy, as a person without the plugin would.
     const removed = await new Promise(done =>
@@ -208,6 +251,7 @@ test('install writes the settings after the preflight, and uninstall restores th
     )
     assert.equal(removed.code, 0, removed.stderr)
     assert.equal(JSON.stringify(JSON.parse(readFileSync(box.settingsFile, 'utf8'))), JSON.stringify(ORIGINAL))
+    assertPrivate(box)
     assert.ok(!existsSync(join(box.home, 'Library/LaunchAgents/com.anderson-spider.codex-models.plist')))
     assert.ok(!existsSync(join(target, 'settings-state.json')))
     assert.ok(existsSync(join(target, 'home/config.json')), 'the config stays without --purge')

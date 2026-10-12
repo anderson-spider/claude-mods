@@ -8,6 +8,8 @@ import {
   pickerRows,
   planInstall,
   planUninstall,
+  maskedSettings,
+  ownerRefusal,
   readStatusReply,
   settingsRefusal,
 } from '../install/settings.mjs'
@@ -89,6 +91,74 @@ test('the early check refuses what install would, and any base URL before a conf
   // The base URL a previous install wrote, while its state is there, is ours even without a config.
   const first = ok(planInstall({}, ENV, MODELS))
   expect(settingsRefusal(first.settings, undefined, first.state)).toBe(undefined)
+})
+
+test('behavesAs is kept on a row when the model list gives one, and the row stays marked', () => {
+  const models = [
+    { id: 'gpt-6-astra', label: 'Astra', description: 'Codex', behavesAs: 'claude-opus-4-8' },
+    { id: 'gpt-6-mini', behavesAs: '' },
+    { id: 'gpt-6-nano', behavesAs: 7 },
+  ]
+  const { rows } = pickerRows(models)
+
+  expect(rows).toEqual([
+    { model: 'gpt-6-astra', label: 'Astra', description: `Codex ${MARK}`, behavesAs: 'claude-opus-4-8' },
+    { model: 'gpt-6-mini', label: 'gpt-6-mini', description: MARK },
+    { model: 'gpt-6-nano', label: 'gpt-6-nano', description: MARK },
+  ])
+  const installed = ok(planInstall({}, ENV, models))
+  expect(JSON.stringify(planUninstall(installed.settings, installed.state).settings)).toBe('{}')
+})
+
+test('an install stopped between the state and the settings writes is still undone', () => {
+  const original: SettingsObject = { env: { KEEP: '1', ENABLE_TOOL_SEARCH: 'false' } }
+  const onA = ok(planInstall(original, ENV, MODELS))
+  // The config moved to port B; the reinstall wrote its state, then stopped before the settings.
+  const envB = { ...ENV, ANTHROPIC_BASE_URL: 'http://127.0.0.1:50000', ANTHROPIC_CUSTOM_HEADERS: 'X-Ccmproxy-Token: new-secret' }
+  const onB = ok(planInstall(onA.settings, envB, MODELS, onA.state))
+  expect(onB.state.baseUrls).toEqual(['http://127.0.0.1:50000', ENV.ANTHROPIC_BASE_URL])
+
+  // Uninstall with the new state still recognizes A, which the settings hold.
+  expect(JSON.stringify(planUninstall(onA.settings, onB.state).settings)).toBe(JSON.stringify(original))
+
+  // So does a reinstall: it replaces A and keeps what stood before the first install.
+  const again = ok(planInstall(onA.settings, envB, MODELS, onB.state))
+  expect((again.settings.env as Record<string, string>).ANTHROPIC_BASE_URL).toBe('http://127.0.0.1:50000')
+  expect(again.state.toolSearch).toEqual({ present: true, value: 'false' })
+  expect(JSON.stringify(planUninstall(again.settings, again.state).settings)).toBe(JSON.stringify(original))
+})
+
+test('uninstall takes out a loopback base URL that rides with our header even when the state does not record it', () => {
+  const installed = ok(planInstall({}, ENV, MODELS))
+  const elsewhere = { ...installed.state, baseUrl: 'http://127.0.0.1:1', baseUrls: ['http://127.0.0.1:1'] }
+  const env = planUninstall(installed.settings, elsewhere).settings?.env
+
+  expect(env).toBe(undefined)
+})
+
+test('a state from before the history still recognizes its one base URL', () => {
+  const installed = ok(planInstall({}, ENV, MODELS))
+  const { baseUrls: _, ...older } = installed.state
+
+  expect(JSON.stringify(planUninstall(installed.settings, older).settings)).toBe('{}')
+  expect(ok(planInstall(installed.settings, ENV, MODELS, older)).state.envCreated).toBe(true)
+})
+
+test('maskedSettings hides every X-Ccmproxy-Token value and leaves the rest', () => {
+  const settings = { env: { ANTHROPIC_CUSTOM_HEADERS: 'X-Team: blue\nx-ccmproxy-token: old\nX-Ccmproxy-Token:  new ' }, model: 'opus' }
+
+  expect(maskedSettings(settings)).toEqual({
+    env: { ANTHROPIC_CUSTOM_HEADERS: 'X-Team: blue\nx-ccmproxy-token: <secret>\nX-Ccmproxy-Token: <secret>' },
+    model: 'opus',
+  })
+  expect(settings.env.ANTHROPIC_CUSTOM_HEADERS).toContain('old')
+  expect(maskedSettings({ env: {} })).toEqual({ env: {} })
+})
+
+test('a file of another user is refused, a missing or own one is not', () => {
+  expect(ownerRefusal('/x/settings.json', 0, 501)).toContain('belongs to another user (uid 0)')
+  expect(ownerRefusal('/x/settings.json', 501, 501)).toBe(undefined)
+  expect(ownerRefusal('/x/settings.json', undefined, 501)).toBe(undefined)
 })
 
 test('the state never holds a header value', () => {

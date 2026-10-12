@@ -43,7 +43,10 @@ export function isMarked(row) {
 
 const marked = description => (typeof description === 'string' && description.trim() !== '' ? `${description.trim()} ${MARK}` : MARK)
 
-/** The `/model` rows for `models --json` output: `{ id, label, description }` each, ids non-empty and unique. */
+/**
+ * The `/model` rows for `models --json` output: `{ id, label, description, behavesAs? }` each, ids non-empty and
+ * unique; `behavesAs` (the Claude model id Claude Code detects features from) is kept when it is a non-empty string.
+ */
 export function pickerRows(models) {
   if (!Array.isArray(models)) return { error: 'the model list is not a JSON array' }
   const rows = []
@@ -55,7 +58,8 @@ export function pickerRows(models) {
     if (seen.has(model.id)) continue
     seen.add(model.id)
     const label = typeof model.label === 'string' && model.label.trim() !== '' ? model.label : model.id
-    rows.push({ model: model.id, label, description: marked(model.description) })
+    const behavesAs = typeof model.behavesAs === 'string' && model.behavesAs.trim() !== '' ? { behavesAs: model.behavesAs } : {}
+    rows.push({ model: model.id, label, description: marked(model.description), ...behavesAs })
   }
   return { rows }
 }
@@ -72,9 +76,28 @@ export function checkEnv(env) {
   return undefined
 }
 
-/** Whether `prior` is a state of this format whose base URL the settings still hold. */
+/** How many base URLs a state remembers. */
+const HISTORY = 10
+
+/**
+ * Every base URL a state records: the current one and the ones before it. The state is written before the settings,
+ * with the new URL beside the old, so an install stopped between the two writes still knows what the settings hold.
+ */
+const baseUrlsOf = state => {
+  const urls = Array.isArray(state?.baseUrls) ? state.baseUrls.filter(url => typeof url === 'string') : []
+  return typeof state?.baseUrl === 'string' ? [state.baseUrl, ...urls] : urls
+}
+
+const recorded = (state, url) => baseUrlsOf(state).some(known => sameUrl(known, url))
+
+/** Whether `prior` is a state of this format whose base URLs include the one the settings hold. */
 const keepsPriorOf = (settings, prior) =>
-  isObject(prior) && prior.v === STATE_VERSION && isObject(settings.env) && sameUrl(settings.env.ANTHROPIC_BASE_URL, prior.baseUrl)
+  isObject(prior) && prior.v === STATE_VERSION && isObject(settings.env) && recorded(prior, settings.env.ANTHROPIC_BASE_URL)
+
+const withHistory = (state, baseUrl) => {
+  const urls = [baseUrl, ...baseUrlsOf(state)].filter((url, i, all) => all.findIndex(other => sameUrl(other, url)) === i)
+  return { ...state, baseUrl, baseUrls: urls.slice(0, HISTORY) }
+}
 
 /**
  * Why install would refuse these settings, or undefined. `baseUrl` is the proxy's, or undefined before a config
@@ -118,8 +141,8 @@ export function planInstall(settings, env, models, prior, fileExisted = true) {
   const keepsPrior = keepsPriorOf(settings, prior)
   const headers = next.env?.ANTHROPIC_CUSTOM_HEADERS
 
-  const state = keepsPrior
-    ? { ...prior, baseUrl: env.ANTHROPIC_BASE_URL }
+  const fresh = keepsPrior
+    ? prior
     : {
         v: STATE_VERSION,
         baseUrl: env.ANTHROPIC_BASE_URL,
@@ -130,6 +153,7 @@ export function planInstall(settings, env, models, prior, fileExisted = true) {
         optionsCreated: !isObject(next.modelPicker) || !('options' in next.modelPicker),
         fileCreated: !fileExisted,
       }
+  const state = withHistory(fresh, env.ANTHROPIC_BASE_URL)
 
   next.env = next.env ?? {}
   next.env.ANTHROPIC_BASE_URL = env.ANTHROPIC_BASE_URL
@@ -160,8 +184,8 @@ export function planUninstall(settings, state) {
     const env = next.env
     const headers = typeof env.ANTHROPIC_CUSTOM_HEADERS === 'string' ? env.ANTHROPIC_CUSTOM_HEADERS : undefined
     const hadOurHeader = headers !== undefined && headerLines(headers).some(isOurHeader)
-    // Without a state, the base URL is ours only when it is on loopback and our header rides with it.
-    const ourBase = known ? sameUrl(env.ANTHROPIC_BASE_URL, known.baseUrl) : isLoopbackHttp(env.ANTHROPIC_BASE_URL) && hadOurHeader
+    // Ours when a state records it, or when it is on loopback and our header rides with it (a state lost or behind).
+    const ourBase = (known && recorded(known, env.ANTHROPIC_BASE_URL)) || (isLoopbackHttp(env.ANTHROPIC_BASE_URL) && hadOurHeader)
     if (ourBase) delete env.ANTHROPIC_BASE_URL
 
     if (headers !== undefined && hadOurHeader) {
@@ -224,6 +248,25 @@ function refusalOf(text) {
   const message = error?.type === 'permission_error' && typeof error.message === 'string' ? error.message : ''
   if (!message.startsWith('ccmproxy:')) return { kind: 'foreign', reason: 'HTTP 403 not from ccmproxy' }
   return message.includes('unexpected Host header') ? { kind: 'host' } : { kind: 'forbidden' }
+}
+
+/** The settings with the value of every X-Ccmproxy-Token header line replaced, for anything printed. */
+export function maskedSettings(settings) {
+  if (!isObject(settings) || !isObject(settings.env) || typeof settings.env.ANTHROPIC_CUSTOM_HEADERS !== 'string') return settings
+  const next = clone(settings)
+  next.env.ANTHROPIC_CUSTOM_HEADERS = headerLines(next.env.ANTHROPIC_CUSTOM_HEADERS)
+    .map(line => (isOurHeader(line) ? `${line.slice(0, line.indexOf(':'))}: <secret>` : line))
+    .join('\n')
+  return next
+}
+
+/**
+ * Why a file that is to hold the secret cannot, or undefined: it must belong to the user, who can then restrict it
+ * to mode 600. `ownerUid` is undefined for a file not there yet.
+ */
+export function ownerRefusal(path, ownerUid, userUid) {
+  if (ownerUid === undefined || ownerUid === userUid) return undefined
+  return `${path} belongs to another user (uid ${ownerUid}), so it cannot be restricted to mode 600 to hold the proxy's secret; nothing was changed`
 }
 
 /** `text` with every occurrence of `secret` replaced, for anything printed. */

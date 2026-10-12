@@ -7,12 +7,14 @@ export const STATE_VERSION: number
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json }
 export type SettingsObject = { [key: string]: Json }
 
-export type ModelRow = { id: string; label?: string; description?: string }
-export type PickerRow = { model: string; label: string; description: string }
+export type ModelRow = { id: string; label?: string; description?: string; behavesAs?: string }
+export type PickerRow = { model: string; label: string; description: string; behavesAs?: string }
 
 export type InstallState = {
   v: number
   baseUrl: string
+  /** The current base URL first, then the earlier ones; absent in a state an older install wrote. */
+  baseUrls?: string[]
   envCreated: boolean
   headersExisted: boolean
   toolSearch: { present: true; value: Json } | { present: false }
@@ -47,5 +49,7 @@ export function planUninstall(
   state?: unknown,
 ): { settings: SettingsObject; remove: boolean; error?: undefined } | { error: string; settings?: undefined; remove?: undefined }
 export function readStatusReply(status: number, text: string): StatusReply
+export function maskedSettings<T>(settings: T): T
+export function ownerRefusal(path: string, ownerUid: number | undefined, userUid: number): string | undefined
 export function masked(text: string, secret: string): string
 export function secretOf(headerLine: string): string
