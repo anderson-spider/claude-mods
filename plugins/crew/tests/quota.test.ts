@@ -191,9 +191,9 @@ test('codexReading: stale after 15 minutes or without observedAt', () => {
 
 test('proxyAccess accepts a loopback http base with the token', () => {
   const access = proxyAccess('http://127.0.0.1:4567', 'X-Ccmproxy-Token: s3cret')
-  expect(access).toEqual({ ok: true, url: 'http://127.0.0.1:4567/__ccmproxy/status', headers: { 'X-Ccmproxy-Token': 's3cret' } })
+  expect(access).toEqual({ ok: true, url: 'http://127.0.0.1:4567/__ccmproxy/status?refresh=limits', headers: { 'X-Ccmproxy-Token': 's3cret' } })
   expect(proxyAccess('http://localhost:9/', 'X-Ccmproxy-Token: a').ok).toBe(true)
-  expect(proxyAccess('http://[::1]:9', 'X-Ccmproxy-Token: a')).toMatchObject({ ok: true, url: 'http://[::1]:9/__ccmproxy/status' })
+  expect(proxyAccess('http://[::1]:9', 'X-Ccmproxy-Token: a')).toMatchObject({ ok: true, url: 'http://[::1]:9/__ccmproxy/status?refresh=limits' })
 })
 
 test('proxyAccess refuses a non-loopback or https base and a missing base', () => {
@@ -228,7 +228,7 @@ test('proxyAccess never puts the token in a refusal reason', () => {
 
 test('proxyAccess drops userinfo, path, query and fragment from the status URL', () => {
   const access = proxyAccess('http://u:p@127.0.0.1:9/x/y?z#h', 'X-Ccmproxy-Token: t')
-  expect(access).toMatchObject({ ok: true, url: 'http://127.0.0.1:9/__ccmproxy/status' })
+  expect(access).toMatchObject({ ok: true, url: 'http://127.0.0.1:9/__ccmproxy/status?refresh=limits' })
 })
 
 test('codexReading: an out-of-range resetsAt makes the whole reading unknown (toISOString throws; Claude is the safe side)', () => {
@@ -241,12 +241,23 @@ test('INITIAL_QUOTA is what decide gives with nothing known and Codex off', () =
 })
 
 test('settle recomputes the decision from the quota\'s own readings and leaves the rest', () => {
-  const base = { ...INITIAL_QUOTA, claude: reading(10, 80), codex: reading(10, 20), codexState: 'ok' as const, fetchedAt: 5 }
+  const fetchedAt = NOW - 60_000
+  const base = { ...INITIAL_QUOTA, claude: reading(10, 80), codex: reading(10, 20), codexState: 'ok' as const, fetchedAt }
   const settled = settle(base, true, NOW)
   expect(settled.decision).toEqual(decide(base.claude, base.codex, 'ok', true, NOW))
   expect(settled.decision.provider).toBe('codex')
-  expect(settled).toMatchObject({ claude: base.claude, codex: base.codex, fetchedAt: 5 })
+  expect(settled).toMatchObject({ claude: base.claude, codex: base.codex, codexState: 'ok', fetchedAt })
   expect(settle(base, false, NOW).decision).toEqual({ provider: 'claude', reason: 'routing off or no Codex twin' })
+})
+
+test('settle treats a Codex reading fetched more than STALE_MS ago as stale, so neither the router nor the HUD favors Codex from it', () => {
+  const fresh = { ...INITIAL_QUOTA, claude: reading(10, 80), codex: reading(10, 20), codexState: 'ok' as const, fetchedAt: NOW - STALE_MS }
+  expect(settle(fresh, true, NOW)).toMatchObject({ codexState: 'ok', decision: { provider: 'codex' } })
+  const old = { ...fresh, fetchedAt: NOW - STALE_MS - 1 }
+  expect(settle(old, true, NOW)).toMatchObject({ codexState: 'stale', codex: old.codex, decision: { provider: 'claude', reason: 'Codex quota is stale' } })
+  // A state other than ok is left as it is, and a reading with no fetch time is not aged.
+  expect(settle({ ...old, codexState: 'down' }, true, NOW).codexState).toBe('down')
+  expect(settle({ ...fresh, fetchedAt: null }, true, NOW).codexState).toBe('ok')
 })
 
 test('the quota type in the plugin\'s types contract is the module\'s Quota, both ways (a compile-time check)', () => {

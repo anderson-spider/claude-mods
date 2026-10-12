@@ -704,7 +704,7 @@ export function runningCard(d: Derived, cw: number, lp: LevelPlan, nar: NarrowPl
   }
   const loops = o.showLoops ? loopsText(d.s.loops, d.s.now) : null
   if (loops) rows.push(fitLine([sp(loops, 'dim')], cw))
-  if (o.focus?.isFocused && o.hotkeys.size > 0) rows.push(fitLine([sp('1-9 details · esc close', 'dim')], cw))
+  if (o.focus?.isFocused && o.hotkeys.size > 0) rows.push(fitLine([sp('1-9 details (again to close)', 'dim')], cw))
   const n = running.length
   return { ...card('running', `Agents · running${n > 0 ? ` ${n}` : ''}`, rows, n > 0), ...(press.length ? { press } : {}) }
 }

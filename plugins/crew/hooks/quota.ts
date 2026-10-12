@@ -39,7 +39,8 @@ export const FUTURE_MS = 60_000
 export const VETO = 90
 /** Codex wins only with its 7-day used at least this many points below Claude's. */
 export const MARGIN = 10
-export const STATUS_PATH = '/__ccmproxy/status'
+/** The proxy calls OpenAI for fresh Codex limits only when the status request asks for it; a plain status never does. */
+export const STATUS_PATH = '/__ccmproxy/status?refresh=limits'
 export const TOKEN_HEADER = 'X-Ccmproxy-Token'
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
@@ -206,7 +207,13 @@ export const INITIAL_QUOTA: Quota = {
   decision: { provider: 'claude', reason: NOT_KNOWN.off },
 }
 
-/** The value with its `decision` recomputed from its own readings, so the atom never holds readings and a decision that disagree. */
+/**
+ * The value with its `decision` recomputed from its own readings, so the atom never holds readings and a decision that
+ * disagree. A Codex reading fetched more than STALE_MS ago is `stale` from here on, so neither the router nor the HUD
+ * favors Codex from it between spawns.
+ */
 export function settle(quota: Quota, eligible: boolean, now: number): Quota {
-  return { ...quota, decision: decide(quota.claude, quota.codex, quota.codexState, eligible, now) }
+  const isOld = quota.codexState === 'ok' && quota.fetchedAt !== null && now - quota.fetchedAt > STALE_MS
+  const codexState: CodexState = isOld ? 'stale' : quota.codexState
+  return { ...quota, codexState, decision: decide(quota.claude, quota.codex, codexState, eligible, now) }
 }

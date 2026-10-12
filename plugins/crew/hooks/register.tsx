@@ -8,8 +8,8 @@ import { decisionRecord, saveDecision, withRan } from './decisions'
 import type { DecisionIo } from './decisions'
 import { createEffortBook } from './effort'
 import type { BindOutcome, EffortBook, Listed } from './effort'
-import { registerFlightdeck } from './flightdeck/register'
 import { deniedWrite } from './guard'
+import { registerHud } from './hud/register'
 import { createBreaker, createGate, createJev, failureText } from './jev'
 import type { Breaker, Gate, JevIo } from './jev'
 import { checkKey, resolveAccess } from './key'
@@ -19,8 +19,7 @@ import { JEV_MODEL } from './questions'
 import { CACHE_MS, DEADLINE_MS, INITIAL_QUOTA, claudeReading, codexReading, proxyAccess, settle } from './quota'
 import type { ProxyAccess, Provider, Quota, RateLimitInput } from './quota'
 import { defaultsOf, describe, moved, noticeText, retarget, route, routable, shareAgent, taggedDescription, twinFor, untagged } from './routing'
-import type { Moved, Routed, SharedAgent, Switch, Target } from './routing'
-export type { SharedAgent } from './routing'
+import type { Moved, Routed, Shared, Switch, Target } from './routing'
 
 /**
  * The `$` a hook receives. Every hook builds what it needs from its own; nothing here keeps one past its hook.
@@ -32,9 +31,6 @@ const wallNow = () => Date.now()
 
 /** Both providers' limits and the provider the readings favor, for the router and the HUD alike (they cannot disagree). */
 const quota = atom({ plugin: 'crew', key: 'quota' } as const, INITIAL_QUOTA)
-
-/** Per agent id, filled by the spawn hook after a provider decision when the spawn resolves, for the HUD (`registerHud(on, options, shared)`). Nothing in this file reads it. */
-export const shared = new Map<string, SharedAgent>()
 
 /** Time as the pure modules take it: the host's timer and the wall clock. */
 type Clock = Pick<JevIo, 'timer' | 'now'>
@@ -214,7 +210,7 @@ async function registerNative($: Dollar, native: Native) {
 /** The crew's session start: the agents, then the `-codex` types the proxy can reach, then the first quota reading. */
 async function startCrew(native: Native, routing: Routing, $: Dollar, e: StartHook[1], next: StartHook[2]) {
   await registerSpecialists($)
-  // Its own try: a failure here must not keep the dashboard from starting.
+  // Its own try: a failure here must not keep the HUD from starting.
   try {
     await registerNative($, native)
   } catch (error) {
@@ -250,6 +246,8 @@ type Routing = {
   quota: boolean
   /** The Codex status request under way, shared by every caller (one at a time). */
   flight?: Promise<void>
+  /** What the HUD reads about the routed agents, the twins and Jev; nothing in this file reads it back. */
+  shared: Shared
 }
 
 // --- The quota atom: Claude from the host, Codex from the proxy's status ---
@@ -383,6 +381,7 @@ async function routeSpawn(routing: Routing, $: Dollar, e: SpawnHook[1], next: Sp
   const asked = routable(e, routing.twins)
   if (!asked) return next(e)
   const key = routing.enabled ? await keyOf($, routing.access, routing.jevKey) : undefined
+  if (routing.enabled) routing.shared.jev = key !== undefined
   // The twin this call could move to, when quota routing is on and the call is one that may move.
   const twin = routing.quota ? twinFor(e, routing.twins) : undefined
   if (!key && !twin) return next(e)
@@ -399,6 +398,8 @@ async function routeSpawn(routing: Routing, $: Dollar, e: SpawnHook[1], next: Sp
   const spec: Target = toCodex ? twin : asked
   if (toCodex) e = { ...e, subagentType: `crew:${spec.name}` }
   const via: Switch | undefined = toCodex && readings ? { requested, reason: readings.decision.reason } : undefined
+  // A switch is logged where it is announced; a call that could have moved and stays says why here.
+  if (twin && readings && !toCodex) $.ui.log(`crew quota: ${requested} stays on Claude (${readings.decision.reason})`, { to: 'debug' })
   // The answers are applied to the target that runs the call, so a twin never gets a model. A switched call without an
   // answer is still tagged and confirmed, on the twin's defaults.
   const jevRouted = jevAnswer && toCodex ? retarget(jevAnswer, spec) : jevAnswer
@@ -421,9 +422,15 @@ async function routeSpawn(routing: Routing, $: Dollar, e: SpawnHook[1], next: Sp
   let outcome: BindOutcome | undefined
   if (result.agentId) outcome = routing.book.bind(token, result.agentId)
   else routing.book.drop(token)
-  // For the HUD, which wraps this hook and sees the type as the lead wrote it.
-  if (readings && result.agentId) {
-    shareAgent(shared, result.agentId, { type: e.subagentType, provider: toCodex ? 'codex' : 'claude', reason: readings.decision.reason })
+  // For the HUD, which wraps this hook and sees the type and the description as the lead wrote them.
+  if (result.agentId) {
+    shareAgent(routing.shared.agents, result.agentId, {
+      type: e.subagentType,
+      provider: toCodex ? 'codex' : 'claude',
+      ...(readings ? { reason: readings.decision.reason } : {}),
+      description: e.description,
+      ...(change.effort !== undefined && (outcome === 'applied' || outcome === 'matched') ? { effort: change.effort } : {}),
+    })
   }
   // Nothing started when the host refused the spawn, so there is nothing to announce.
   if (!routed || !result.agentId) return result
@@ -483,20 +490,22 @@ export const register: Register = (on, options) => {
     access: {},
     twins: native.registered,
     quota: options.quotaRouting === true,
+    shared: { agents: new Map(), twins: native.registered, jev: false },
   }
 
-  // A matcher on session.start, agent.spawn and turn.step: the engine refuses two hooks on one event without one, and
-  // the vendored Flightdeck registers those events too. The crew's session.start is outermost, so a Flightdeck failure
-  // cannot stop the agents from registering; Flightdeck is registered before the hooks below, so it wraps the spawn, the
-  // step and the write (it sees the description and model as they came, and logs the guard's refusals).
+  // A matcher on session.start, agent.spawn, turn.step and session.measure: the engine refuses two hooks on one event
+  // without one, and the HUD registers those events too. The crew's session.start is outermost, so a HUD failure cannot
+  // stop the agents from registering; the HUD is registered before the hooks below, so it wraps the spawn, the step and
+  // the write (it sees the call as it came, reads what the crew routed from `shared`, and logs the guard's refusals).
   on('session.start', {}, ($, e, next) => startCrew(native, routing, $, e, next))
-  registerFlightdeck(on, options)
+  registerHud(on, options, routing.shared)
   // Only a request that offers the Agent tool gets the lead's section: the crew agents' tool lists leave it out.
   // A teammate renders the lead's prompt too, and `bare` asks for the lead's section alone.
   on('prompt.compose', async ($, e, next) => {
     const composed = await next(e)
     if (!e.tools.includes('Agent') || e.traits.includes('teammate') || e.traits.includes('bare')) return composed
     const jev = routing.enabled && (await keyOf($, routing.access, routing.jevKey)) !== undefined
+    routing.shared.jev = jev
     // The quota sentences appear only with quota routing on and twins registered, so the lead section stays free of Codex otherwise.
     const quotaOn = asksCodex(routing)
     const lead = { id: 'crew:lead', text: leadSection(jev, quotaOn), scope: 'session' as const }
@@ -529,13 +538,15 @@ export const register: Register = (on, options) => {
       $.ui.log(confirmText(pending.description, pending.planned, ran, pending.via), { to: 'transcript' })
       // After the spawn's own write, so the record with what ran is the one that stays; bounded like the spawn's, so
       // a hung write cannot hold the subagent's step.
+      // Without a trusted home the spawn already said the record was not written; nothing more is said here.
       const id = e.agentId
-      await settleDecision($, pending.saved.then(() => saveDecision(decisionIo($), routing.access.home, id, withRan(pending.record, ran))))
+      const home = routing.access.home
+      if (home) await settleDecision($, pending.saved.then(() => saveDecision(decisionIo($), home, id, withRan(pending.record, ran))))
     }
     return answer
   })
 
-  // Claude's limits as the host measured them. A matcher, as the dashboard registers this event too; it only keeps the
+  // Claude's limits as the host measured them. A matcher, as the HUD registers this event too; it only keeps the
   // last non-empty reading in the atom, and never throws.
   on('session.measure', {}, async ($, e, next) => {
     const answer = await next(e)

@@ -1,6 +1,7 @@
 // The HUD's atom value types. Plain data only (JSON-safe, no host types), so the atoms can hold them and the pure
 // modules can take them in tests. Reducers live in state.ts; views over them in plan.ts, quota-view.ts and timeline.ts.
 import type { Provider } from '../quota'
+import type { ParsedPlan } from './plan'
 
 export type { Provider }
 
@@ -155,6 +156,34 @@ export type Loop = { id: string; firstAt: number; lastAt: number; steps: number;
  */
 export type Favored = { provider: Provider; since: number; isChange: boolean }
 
+/** The active plan: its file, what was read from it (null when it could not be read) and why it is the one shown. */
+export type HudPlan = {
+  /** Absolute path of `.crew/plans/<name>.md`. */
+  path: string
+  name: string
+  parsed: ParsedPlan | null
+  /** The file's mtime when it was read; 0 when it could not be. */
+  mtimeMs: number
+  /** Pinned with `/crew:panel plan <name>`, the last written this session, or the newest unfinished at the start. */
+  why: 'pin' | 'written' | 'recent'
+}
+
+/** How the side pane is drawn and what the session chose for the HUD. */
+export type HudView = {
+  /** `/crew:panel layout`: full when docked (`auto`) or the summary always (`mini`). */
+  layout: 'auto' | 'mini'
+  /** The agent whose details are open in the focused pane. */
+  openId: string | null
+  /** The plan `/crew:panel plan <name>` pinned (its name), or null to follow the plan last written. */
+  pin: string | null
+  /** The plan file last written or edited this session (absolute path). */
+  lastWritten: string | null
+  /** The host has reported Claude's limits (or a turn's measurement) at least once this session. */
+  claudeMeasured: boolean
+}
+
+export const DEFAULT_VIEW: HudView = { layout: 'auto', openId: null, pin: null, lastWritten: null, claudeMeasured: false }
+
 /** The value types of the HUD's atoms, by atom name. */
 export type HudAtoms = {
   session: Session
@@ -163,4 +192,6 @@ export type HudAtoms = {
   log: LogLine[]
   loops: Loop[]
   favored: Favored | null
+  plan: HudPlan | null
+  view: HudView
 }

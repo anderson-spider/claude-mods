@@ -201,8 +201,18 @@ export function describe(spec: Target, routed: Routed, applied: { model?: string
   return parts.join(' ')
 }
 
-/** What the spawn hook leaves for the HUD about a started agent: the type that really ran (after a switch), the provider and why. */
-export type SharedAgent = { type: string; provider: Provider; reason: string }
+/**
+ * What the spawn hook leaves for the HUD about a started agent it routed: the type that really ran (after a switch), the
+ * provider, why (when the quota was read), the description as the lead wrote it (before the tag), and the effort the
+ * subagent runs on when the crew applied one.
+ */
+export type SharedAgent = { type: string; provider: Provider; reason?: string; description?: string; effort?: string }
+
+/**
+ * What the crew's hooks tell the HUD while the module lives (`registerHud(on, options, shared)`): the agents it routed,
+ * the twins this activation registered (the same array the crew fills) and whether Jev routing runs with a usable key.
+ */
+export type Shared = { agents: Map<string, SharedAgent>; twins: readonly { name: string }[]; jev: boolean }
 
 /** Entries kept in the map the HUD reads; the oldest go first. */
 export const SHARED_CAP = 256
