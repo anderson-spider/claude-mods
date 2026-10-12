@@ -13,7 +13,7 @@ import { createBreaker, createGate, createJev, failureText } from './jev'
 import type { Breaker, Gate, JevIo } from './jev'
 import { checkKey, repoDeclares, resolveAccess } from './key'
 import type { KeyIo, Off } from './key'
-import { CODEX_MODELS } from './native'
+import { CODEX_MODELS, CODEX_PREFIX } from './native'
 import { JEV_MODEL } from './questions'
 import { API_CALL_PATH, CACHE_MS, CREDENTIALS_PATH, DEADLINE_MS, INITIAL_QUOTA, activeCodexAccount, claudeReading, codexUsage, remoteAccess, settle, usageRequest } from './quota'
 import type { Provider, Quota, RateLimitInput, RemoteAccess } from './quota'
@@ -186,7 +186,7 @@ async function registerNative($: Dollar, native: Native) {
   // One refused registration leaves the other twins registered; only the registered ones are routed and listed.
   for (const agent of reachable) {
     try {
-      await $.agent.register({ ...agent, tools: [...agent.tools] })
+      await $.agent.register({ ...agent, model: `${CODEX_PREFIX}${agent.model}`, tools: [...agent.tools] })
       native.registered.push(agent)
     } catch {
       $.ui.log(`crew: Codex twin crew:${agent.name} not registered (registration failed)`, { to: 'debug' })
@@ -431,8 +431,8 @@ async function routeSpawn(routing: Routing, $: Dollar, e: SpawnHook[1], next: Sp
   // Models stay fixed. Any Jev failure requests medium; quota-only twin calls use medium too.
   const jevRouted = jevAnswer && toCodex ? retarget(jevAnswer, spec) : jevAnswer
   const routed = jevRouted ?? (routing.enabled || spec.base !== undefined ? defaultsOf(spec) : undefined)
-  // The remote reads `<model>(<effort>)` before the host's output_config.effort, even on the first step.
-  const suffix = spec.base !== undefined && routed ? `${spec.model}(${routed.decision.effort})` : undefined
+  // The gateway routes `cx/<model>-<effort>` to that effort's variant, ahead of the host's output_config.effort, even on the first step.
+  const suffix = spec.base !== undefined && routed ? `${CODEX_PREFIX}${spec.model}-${routed.decision.effort}` : undefined
   const change = moved(spec, routed)
   // The task shows what was chosen, so the task list says whether routing runs; the book matches the shown description.
   const description = routed ? taggedDescription(e.description, routed, spec.model) : e.description

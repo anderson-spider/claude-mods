@@ -3,7 +3,7 @@ import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import { fnv1a } from '../hooks/decisions'
 import type { Quota } from '../hooks/quota'
-import { CODEX_MODELS } from '../hooks/native'
+import { CODEX_MODELS, CODEX_PREFIX } from '../hooks/native'
 
 const agents = [
   { id: 'a1', type: 'crew:architect' },
@@ -1303,17 +1303,17 @@ for (const url of ['https://ai.example.ts.net', 'http://127.0.0.1:41237', 'http:
 
     expect(w.registered.map(a => a.name)).toEqual([...BASES, ...TWINS])
     expect(w.registered.slice(BASES.length).map(a => [a.name, a.model])).toEqual(
-      Object.entries(CODEX_MODELS).map(([role, model]) => [`${role}-codex`, model]),
+      Object.entries(CODEX_MODELS).map(([role, model]) => [`${role}-codex`, `${CODEX_PREFIX}${model}`]),
     )
     expect(w.envReads).toEqual(['ANTHROPIC_BASE_URL'])
     expect(w.fetches).toEqual([])
     const by = (name: string) => w.registered.find(a => a.name === name)!
-    expect(by('developer-codex')).toMatchObject({ model: 'gpt-6.1-sol', effort: 'medium', tools: by('developer').tools, prompt: by('developer').prompt })
-    expect(by('architect-codex')).toMatchObject({ model: 'gpt-6-astra', tools: by('architect').tools, prompt: by('architect').prompt })
+    expect(by('developer-codex')).toMatchObject({ model: 'cx/gpt-6-sol', effort: 'medium', tools: by('developer').tools, prompt: by('developer').prompt })
+    expect(by('architect-codex')).toMatchObject({ model: 'cx/gpt-6-astra', tools: by('architect').tools, prompt: by('architect').prompt })
     expect(w.registered.some(agent => agent.name === 'tester' || agent.name === 'tester-codex')).toBe(false)
     expect(by('architect-codex').tools).not.toContain('Edit')
     expect(by('developer').model).toBe('sonnet')
-    expect(by('developer-codex').description).toContain('gpt-6.1-sol')
+    expect(by('developer-codex').description).toContain('gpt-6-sol')
   })
 }
 
@@ -1407,8 +1407,8 @@ test('Jev sizes twin effort without changing either fixed model family', NATIVE_
 
   expect(seen.fetches.length).toBe(2)
   expect(seen.spawned.map(spawned => spawned.subagentType)).toEqual(['crew:developer-codex', 'crew:architect-codex'])
-  expect(seen.spawned.map(spawned => spawned.model)).toEqual(['gpt-6.1-sol(high)', 'gpt-6-astra(high)'])
-  expect(seen.spawned.map(spawned => spawned.description)).toEqual(['audit auth · gpt-6.1-sol/high', 'audit auth · gpt-6-astra/high'])
+  expect(seen.spawned.map(spawned => spawned.model)).toEqual(['cx/gpt-6-sol-high', 'cx/gpt-6-astra-high'])
+  expect(seen.spawned.map(spawned => spawned.description)).toEqual(['audit auth · gpt-6-sol/high', 'audit auth · gpt-6-astra/high'])
 })
 
 test('a -codex spawn is routed for its effort: Jev sees the base role, the spawn suffix gets high, the tag and notice name the id', NATIVE_AND_JEV, async ($, on) => {
@@ -1416,13 +1416,13 @@ test('a -codex spawn is routed for its effort: Jev sees the base role, the spawn
   const result = await $.agent.spawn(spawnInput({ subagentType: 'crew:developer-codex' }))
   await step($, 'a1', 'medium')
 
-  expect(result).toMatchObject({ model: 'gpt-6.1-sol(high)', agentId: 'a1' })
-  expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:developer-codex', description: 'audit auth · gpt-6.1-sol/high' })
-  expect(seen.spawned[0]?.model).toBe('gpt-6.1-sol(high)')
+  expect(result).toMatchObject({ model: 'cx/gpt-6-sol-high', agentId: 'a1' })
+  expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:developer-codex', description: 'audit auth · gpt-6-sol/high' })
+  expect(seen.spawned[0]?.model).toBe('cx/gpt-6-sol-high')
   expect(JSON.parse(seen.fetches[0]?.body ?? '{}').state.agent).toEqual({ type: 'developer', description: 'audit auth' })
   expect(seen.steps).toEqual(['medium'])
-  expect(seen.notices).toEqual(['crew:developer-codex -> gpt-6.1-sol · high (jev)'])
-  expect(seen.logs.some(line => line.includes('crew:developer-codex') && line.includes('model=gpt-6.1-sol (default)') && line.includes('effort=high'))).toBe(true)
+  expect(seen.notices).toEqual(['crew:developer-codex -> gpt-6-sol · high (jev)'])
+  expect(seen.logs.some(line => line.includes('crew:developer-codex') && line.includes('model=gpt-6-sol (default)') && line.includes('effort=high'))).toBe(true)
   expect(JSON.stringify([seen.notices, seen.logs])).not.toContain(KEY)
 })
 
@@ -1434,7 +1434,7 @@ test('a -codex spawn that passes model is refused, so it cannot run on Claude un
   expect(seen.fetches).toEqual([])
 
   await $.agent.spawn(spawnInput({ subagentType: 'crew:developer-codex', tool_use_id: 'tu2' }))
-  expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:developer-codex', description: 'audit auth · gpt-6.1-sol/high' })
+  expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:developer-codex', description: 'audit auth · gpt-6-sol/high' })
 
   await $.agent.spawn(spawnInput({ subagentType: 'crew:developer', model: 'opus', tool_use_id: 'tu3' }))
   expect(seen.spawned[1]).toMatchObject({ subagentType: 'crew:developer', model: 'opus', description: 'audit auth' })
@@ -1458,27 +1458,27 @@ test('a -codex spawn at depth 2.0 keeps medium: tagged, announced, nothing moved
   await $.agent.spawn(spawnInput({ subagentType: 'crew:developer-codex' }))
   await step($, 'a1', 'medium')
 
-  expect(seen.spawned[0]).toMatchObject({ description: 'audit auth · gpt-6.1-sol/medium' })
-  expect(seen.spawned[0]?.model).toBe('gpt-6.1-sol(medium)')
+  expect(seen.spawned[0]).toMatchObject({ description: 'audit auth · gpt-6-sol/medium' })
+  expect(seen.spawned[0]?.model).toBe('cx/gpt-6-sol-medium')
   expect(seen.steps).toEqual(['medium'])
-  expect(seen.notices).toEqual(['crew:developer-codex -> gpt-6.1-sol · medium (jev)'])
+  expect(seen.notices).toEqual(['crew:developer-codex -> gpt-6-sol · medium (jev)'])
 })
 
 test('a Jev error pins an explicit twin to medium with a suffix, while leaving the host step effort untouched', NATIVE_AND_JEV, async ($, on) => {
-  const { seen } = await twinWorld($, on, { stepModel: 'gpt-6.1-sol', reply: async () => ok('not json') })
+  const { seen } = await twinWorld($, on, { stepModel: 'gpt-6-sol', reply: async () => ok('not json') })
   await $.agent.spawn(spawnInput({ subagentType: 'crew:developer-codex' }))
-  await step($, 'a1', 'low', 'gpt-6.1-sol(medium)')
+  await step($, 'a1', 'low', 'cx/gpt-6-sol-medium')
 
-  expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:developer-codex', description: 'audit auth · gpt-6.1-sol/medium' })
-  expect(seen.spawned[0]?.model).toBe('gpt-6.1-sol(medium)')
+  expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:developer-codex', description: 'audit auth · gpt-6-sol/medium' })
+  expect(seen.spawned[0]?.model).toBe('cx/gpt-6-sol-medium')
   expect(seen.steps).toEqual(['low'])
-  expect(seen.notices).toEqual(['crew:developer-codex -> gpt-6.1-sol · medium'])
+  expect(seen.notices).toEqual(['crew:developer-codex -> gpt-6-sol · medium'])
   expect(record(seen)).toMatchObject({ bind: 'suffix', effortApplied: 'medium', applied: { effort: false }, jevModel: null })
-  expect(seen.transcript).toEqual(['crew: audit auth: confirmed gpt-6.1-sol · medium'])
+  expect(seen.transcript).toEqual(['crew: audit auth: confirmed gpt-6-sol · medium'])
 })
 
 test('without a jevKey a -codex spawn is untouched: no request, no tag, no settings read, nothing recorded', async ($, on) => {
-  const { seen } = await twinWorld($, on, { stepModel: 'gpt-6.1-sol' })
+  const { seen } = await twinWorld($, on, { stepModel: 'gpt-6-sol' })
   await $.agent.spawn(spawnInput({ subagentType: 'crew:developer-codex' }))
   await step($, 'a1', 'medium')
 
@@ -1501,10 +1501,10 @@ test('a -codex type outside the fixed map is not routed', NATIVE_AND_JEV, async 
 
 test('a tag copied from a -codex task is sent without it and tagged once', NATIVE_AND_JEV, async ($, on) => {
   const { seen } = await twinWorld($, on, { reply: async () => ok(answer(3.5)) })
-  await $.agent.spawn(spawnInput({ subagentType: 'crew:developer-codex', description: 'audit auth · gpt-6.1-sol/medium' }))
+  await $.agent.spawn(spawnInput({ subagentType: 'crew:developer-codex', description: 'audit auth · gpt-6-sol/medium' }))
 
   expect(JSON.parse(seen.fetches[0]?.body ?? '{}').state.agent.description).toBe('audit auth')
-  expect(seen.spawned[0]?.description).toBe('audit auth · gpt-6.1-sol/high')
+  expect(seen.spawned[0]?.description).toBe('audit auth · gpt-6-sol/high')
 })
 
 test('the record of a -codex decision keeps effort-only v3 fields and the effort that took', NATIVE_AND_JEV, async ($, on) => {
@@ -1522,34 +1522,34 @@ test('the record of a -codex decision keeps effort-only v3 fields and the effort
 })
 
 test('the first step of a routed -codex spawn is confirmed against the id and the effort, in the transcript and the record', NATIVE_AND_JEV, async ($, on) => {
-  const { seen } = await twinWorld($, on, { stepModel: 'gpt-6.1-sol', reply: async () => ok(answer(3.5)) })
+  const { seen } = await twinWorld($, on, { stepModel: 'gpt-6-sol', reply: async () => ok(answer(3.5)) })
   await $.agent.spawn(spawnInput({ subagentType: 'crew:developer-codex' }))
-  await step($, 'a1', 'medium', 'gpt-6.1-sol(high)')
-  await step($, 'a1', 'medium', 'gpt-6.1-sol(high)')
+  await step($, 'a1', 'medium', 'cx/gpt-6-sol-high')
+  await step($, 'a1', 'medium', 'cx/gpt-6-sol-high')
 
-  expect(seen.transcript).toEqual(['jev: audit auth: confirmed gpt-6.1-sol · high'])
-  expect(JSON.parse(seen.writes[1]?.text ?? '{}').ran).toEqual({ model: 'gpt-6.1-sol', effort: 'high' })
+  expect(seen.transcript).toEqual(['jev: audit auth: confirmed gpt-6-sol · high'])
+  expect(JSON.parse(seen.writes[1]?.text ?? '{}').ran).toEqual({ model: 'gpt-6-sol', effort: 'high' })
 })
 
 test('a confirmation accepts the id the proxy reports with an effort suffix', NATIVE_AND_JEV, async ($, on) => {
-  const { seen } = await twinWorld($, on, { stepModel: 'GPT-6.1-Sol-high', reply: async () => ok(answer(3.5)) })
+  const { seen } = await twinWorld($, on, { stepModel: 'GPT-6-Sol-high', reply: async () => ok(answer(3.5)) })
   await $.agent.spawn(spawnInput({ subagentType: 'crew:developer-codex' }))
-  await step($, 'a1', 'medium', 'gpt-6.1-sol(high)')
+  await step($, 'a1', 'medium', 'cx/gpt-6-sol-high')
 
-  expect(seen.transcript).toEqual(['jev: audit auth: confirmed GPT-6.1-Sol-high · high'])
+  expect(seen.transcript).toEqual(['jev: audit auth: confirmed GPT-6-Sol-high · high'])
 })
 
 test('a -codex run on another model detects the mismatch and distinguishes unobserved effort', NATIVE_AND_JEV, async ($, on) => {
   let model = 'claude-sonnet-5-5'
   const { seen } = await twinWorld($, on, { stepModel: () => model, reply: async () => ok(answer(3.5)) })
   await $.agent.spawn(spawnInput({ subagentType: 'crew:developer-codex' }))
-  await step($, 'a1', 'medium', 'gpt-6.1-sol(high)')
-  expect(seen.transcript).toEqual(['jev: audit auth: ran claude-sonnet-5-5 · high, not gpt-6.1-sol/high'])
+  await step($, 'a1', 'medium', 'cx/gpt-6-sol-high')
+  expect(seen.transcript).toEqual(['jev: audit auth: ran claude-sonnet-5-5 · high, not gpt-6-sol/high'])
 
-  model = 'gpt-6.1-sol-mini'
+  model = 'gpt-6-sol-mini'
   await $.agent.spawn(spawnInput({ subagentType: 'crew:developer-codex', tool_use_id: 'tu2' }))
-  await step($, 'a1', null, 'gpt-6.1-sol')
-  expect(seen.transcript.at(-1)).toBe('jev: audit auth: ran model gpt-6.1-sol-mini, not gpt-6.1-sol; suffix high requested, effort unobserved')
+  await step($, 'a1', null, 'gpt-6-sol')
+  expect(seen.transcript.at(-1)).toBe('jev: audit auth: ran model gpt-6-sol-mini, not gpt-6-sol; suffix high requested, effort unobserved')
 })
 
 test('a Claude role beside a -codex twin is routed only for effort', NATIVE_AND_JEV, async ($, on) => {
@@ -1558,8 +1558,8 @@ test('a Claude role beside a -codex twin is routed only for effort', NATIVE_AND_
   await $.agent.spawn(spawnInput({ tool_use_id: 'tu2' }))
 
   expect(seen.fetches.length).toBe(2)
-  expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:developer-codex', description: 'audit auth · gpt-6.1-sol/high' })
-  expect(seen.spawned[0]?.model).toBe('gpt-6.1-sol(high)')
+  expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:developer-codex', description: 'audit auth · gpt-6-sol/high' })
+  expect(seen.spawned[0]?.model).toBe('cx/gpt-6-sol-high')
   expect(seen.spawned[1]).toMatchObject({ subagentType: 'crew:developer', description: 'audit auth · sonnet/high' })
 })
 
@@ -1592,8 +1592,8 @@ for (const [depth, effort] of [[2.9, 'medium'], [3.0, 'medium'], [3.5, 'high']] 
       await $.agent.spawn(spawnInput({ subagentType: type }))
       await step($, 'a1', 'medium')
 
-      const id = type === 'crew:architect-codex' ? 'gpt-6-astra' : 'gpt-6.1-sol'
-      expect(seen.spawned[0]?.model).toBe(`${id}(${effort})`)
+      const id = type === 'crew:architect-codex' ? 'gpt-6-astra' : 'gpt-6-sol'
+      expect(seen.spawned[0]?.model).toBe(`${CODEX_PREFIX}${id}-${effort}`)
       expect(seen.spawned[0]?.description).toBe(`audit auth · ${id}/${effort}`)
       expect(seen.steps).toEqual(['medium'])
       expect(seen.notices[0]).toBe(`${type} -> ${id} · ${effort} (jev)`)
@@ -1612,7 +1612,7 @@ for (const status of [500, 429, 401]) {
     await step($, 'a1', 'low')
 
     expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:architect-codex', description: 'audit auth · gpt-6-astra/medium' })
-    expect(seen.spawned[0]?.model).toBe('gpt-6-astra(medium)')
+    expect(seen.spawned[0]?.model).toBe('cx/gpt-6-astra-medium')
     expect(seen.steps).toEqual(['low'])
     expect(seen.notices).toEqual(['crew:architect-codex -> gpt-6-astra · medium'])
     expect(record(seen)).toMatchObject({ bind: 'suffix', effortApplied: 'medium', jevModel: null })
@@ -1625,7 +1625,7 @@ test('crew:architect beside architect-codex keeps its default model and routes e
   await $.agent.spawn(spawnInput({ subagentType: 'crew:architect', tool_use_id: 'tu2' }))
   await $.agent.spawn(spawnInput({ subagentType: 'crew:developer', tool_use_id: 'tu3' }))
 
-  expect(seen.spawned[0]?.model).toBe('gpt-6-astra(high)')
+  expect(seen.spawned[0]?.model).toBe('cx/gpt-6-astra-high')
   expect(seen.spawned[1]?.model).toBeUndefined()
   expect(seen.spawned[1]?.description).toBe('audit auth · opus/high')
   expect(seen.spawned[2]).toMatchObject({ description: 'audit auth · sonnet/high' })
@@ -1674,7 +1674,7 @@ test('a description that ends like a tag of an unknown model keeps its ending wh
   await $.agent.spawn(spawnInput({ subagentType: 'crew:developer', description: 'docs · v2/high', tool_use_id: 'tu2' }))
 
   expect(JSON.parse(seen.fetches[0]?.body ?? '{}').state.agent.description).toBe('docs · v2/high')
-  expect(seen.spawned[0]?.description).toBe('docs · v2/high · gpt-6.1-sol/high')
+  expect(seen.spawned[0]?.description).toBe('docs · v2/high · gpt-6-sol/high')
   expect(seen.spawned[1]?.description).toBe('docs · v2/high · sonnet/high')
 })
 
@@ -1703,15 +1703,15 @@ test('before session.start no native section, after it behind a gateway the sect
 
 test('with twins registered, an unregistered twin and a Claude role: one request each for the Claude role and the twin', NATIVE_AND_JEV, async ($, on) => {
   const { seen } = await twinWorld($, on, { reply: async () => ok(answer(3.5)) })
-  await $.agent.spawn(spawnInput({ subagentType: 'crew:unknown-codex', description: 'find · gpt-6.1-sol/high' }))
-  await $.agent.spawn(spawnInput({ subagentType: 'crew:developer-codex', description: 'fix · gpt-6.1-sol/medium', tool_use_id: 'tu2' }))
+  await $.agent.spawn(spawnInput({ subagentType: 'crew:unknown-codex', description: 'find · gpt-6-sol/high' }))
+  await $.agent.spawn(spawnInput({ subagentType: 'crew:developer-codex', description: 'fix · gpt-6-sol/medium', tool_use_id: 'tu2' }))
   await $.agent.spawn(spawnInput({ subagentType: 'crew:developer', description: 'fix · opus/high', tool_use_id: 'tu3' }))
 
   expect(seen.fetches.length).toBe(2)
-  expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:unknown-codex', description: 'find · gpt-6.1-sol/high' })
+  expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:unknown-codex', description: 'find · gpt-6-sol/high' })
   expect(seen.spawned[0]?.model).toBeUndefined()
-  expect(seen.spawned[1]?.description).toBe('fix · gpt-6.1-sol/high')
-  expect(seen.spawned[1]?.model).toBe('gpt-6.1-sol(high)')
+  expect(seen.spawned[1]?.description).toBe('fix · gpt-6-sol/high')
+  expect(seen.spawned[1]?.model).toBe('cx/gpt-6-sol-high')
   expect(seen.spawned[2]).toMatchObject({ description: 'fix · sonnet/high' })
 })
 
@@ -1743,7 +1743,7 @@ test('without a jevKey a -codex spawn that passes model is still refused and rea
 
 test('a -codex spawn that passes its own Codex id as model is refused too', NATIVE_AND_JEV, async ($, on) => {
   const { seen } = await twinWorld($, on)
-  const refused = await $.agent.spawn(spawnInput({ subagentType: 'crew:developer-codex', model: 'gpt-6.1-sol' }))
+  const refused = await $.agent.spawn(spawnInput({ subagentType: 'crew:developer-codex', model: 'gpt-6-sol' }))
   expect(refused).toMatchObject({ deny: DENY_TEXT('crew:developer-codex') })
   expect(seen.spawned).toEqual([])
   expect(seen.fetches).toEqual([])
@@ -1754,7 +1754,7 @@ test('a -codex spawn with an empty model is not refused: it is routed and tagged
   const result = await $.agent.spawn(spawnInput({ subagentType: 'crew:developer-codex', model: '' }))
   expect(result).not.toHaveProperty('deny')
   expect(seen.fetches).toHaveLength(1)
-  expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:developer-codex', description: 'audit auth · gpt-6.1-sol/high' })
+  expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:developer-codex', description: 'audit auth · gpt-6-sol/high' })
 })
 
 test('a -codex spawn with model from inside a subagent is refused like one from the main loop', NATIVE_AND_JEV, async ($, on) => {
@@ -1931,7 +1931,7 @@ test('automatic keyless quota routing can switch every fixed-map role while keep
   for (const [role, model] of Object.entries(CODEX_MODELS)) {
     await $.agent.spawn(spawnInput({ subagentType: `crew:${role}`, tool_use_id: `tu-${role}` }))
     expect(seen.spawned.at(-1)).toMatchObject({ subagentType: `crew:${role}-codex`, description: `audit auth · ${model}/medium` })
-    expect(seen.spawned.at(-1)?.model).toBe(`${model}(medium)`)
+    expect(seen.spawned.at(-1)?.model).toBe(`${CODEX_PREFIX}${model}-medium`)
   }
   expect(seen.statuses).toHaveLength(1)
   expect(seen.fetches).toEqual([])
@@ -1945,11 +1945,11 @@ test('Codex favored: the call becomes the twin, a fixed-model effort suffix is s
 
   expect(result).toMatchObject({ agentId: 'a1' })
   expect(seen.spawned).toHaveLength(1)
-  expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:developer-codex', description: 'audit auth · gpt-6.1-sol/high' })
-  expect(seen.spawned[0]?.model).toBe('gpt-6.1-sol(high)')
+  expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:developer-codex', description: 'audit auth · gpt-6-sol/high' })
+  expect(seen.spawned[0]?.model).toBe('cx/gpt-6-sol-high')
   // Jev is asked about the base role either way.
   expect(JSON.parse(seen.fetches[0]?.body ?? '{}').state.agent).toEqual({ type: 'developer', description: 'audit auth' })
-  expect(seen.notices).toEqual(['crew:developer -> Codex (7d 38% used vs Claude 7d 71%) · gpt-6.1-sol · high (jev)'])
+  expect(seen.notices).toEqual(['crew:developer -> Codex (7d 38% used vs Claude 7d 71%) · gpt-6-sol · high (jev)'])
   expect(seen.logs).toContain('crew quota: crew:developer -> crew:developer-codex (7d 38% used vs Claude 7d 71%)')
   // The atom shows the same decision the router acted on.
   expect(atom.last?.decision).toEqual({ provider: 'codex', reason: '7d 38% used vs Claude 7d 71%' })
@@ -1974,8 +1974,8 @@ test('Codex favored: the record names the type asked for, the provider and both 
 test('Codex favored: Jev sizes effort while the twin model stays fixed', QUOTA_JEV, async ($, on) => {
   const { seen } = await quotaWorld($, on, { world: { reply: async () => ok(answer(3.5)) } })
   await $.agent.spawn(spawnInput())
-  expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:developer-codex', description: 'audit auth · gpt-6.1-sol/high' })
-  expect(seen.spawned[0]?.model).toBe('gpt-6.1-sol(high)')
+  expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:developer-codex', description: 'audit auth · gpt-6-sol/high' })
+  expect(seen.spawned[0]?.model).toBe('cx/gpt-6-sol-high')
 })
 
 test('Codex favored: the twin\'s first step, sent before the spawn resolves, already has the suffix without an effort-book bind', QUOTA_JEV, async ($, on) => {
@@ -1984,7 +1984,7 @@ test('Codex favored: the twin\'s first step, sent before the spawn resolves, alr
   const { seen } = await quotaWorld($, on, {
     world: {
       // The host lists the agent as it started: the twin's type and the tagged description.
-      agents: [{ id: 'a1', type: 'crew:developer-codex', description: 'audit auth · gpt-6.1-sol/high' }],
+      agents: [{ id: 'a1', type: 'crew:developer-codex', description: 'audit auth · gpt-6-sol/high' }],
       spawn: async () => { await held; return { model: 'default', agentId: 'a1' } },
     },
   })
@@ -1996,17 +1996,17 @@ test('Codex favored: the twin\'s first step, sent before the spawn resolves, alr
   await step($, 'a1', 'medium')
 
   expect(seen.steps).toEqual(['medium', 'medium'])
-  expect(seen.spawned[0]?.model).toBe('gpt-6.1-sol(high)')
+  expect(seen.spawned[0]?.model).toBe('cx/gpt-6-sol-high')
   expect(record(seen)).toMatchObject({ bind: 'suffix', effortApplied: 'high' })
 })
 
 test('Codex favored: the first step is confirmed against the twin\'s id and effort', QUOTA_JEV, async ($, on) => {
-  const { seen } = await quotaWorld($, on, { world: { stepModel: 'gpt-6.1-sol' } })
+  const { seen } = await quotaWorld($, on, { world: { stepModel: 'gpt-6-sol' } })
   await $.agent.spawn(spawnInput())
-  await step($, 'a1', 'medium', 'gpt-6.1-sol(high)')
+  await step($, 'a1', 'medium', 'cx/gpt-6-sol-high')
 
-  expect(seen.transcript).toEqual(['jev: audit auth: confirmed gpt-6.1-sol · high'])
-  expect(JSON.parse(seen.writes[1]?.text ?? '{}').ran).toEqual({ model: 'gpt-6.1-sol', effort: 'high' })
+  expect(seen.transcript).toEqual(['jev: audit auth: confirmed gpt-6-sol · high'])
+  expect(JSON.parse(seen.writes[1]?.text ?? '{}').ran).toEqual({ model: 'gpt-6-sol', effort: 'high' })
 })
 
 test('Codex favored: a twin step without effort stays absent, and later steps need no effort rewrite', QUOTA_JEV, async ($, on) => {
@@ -2018,7 +2018,7 @@ test('Codex favored: a twin step without effort stays absent, and later steps ne
   await step($, 'a1', 'medium')
 
   expect(seen.steps).toEqual([undefined, 'medium'])
-  expect(seen.spawned[0]?.model).toBe('gpt-6.1-sol(high)')
+  expect(seen.spawned[0]?.model).toBe('cx/gpt-6-sol-high')
 })
 
 test('Codex favored: a role switched to its twin keeps the twin\'s write lane', QUOTA_JEV, async ($, on) => {
@@ -2166,7 +2166,7 @@ test('startup asks the remote nothing; the first eligible spawn reads Codex and 
 })
 
 test('the management key reaches no notice, log, record, transcript or atom', QUOTA_JEV, async ($, on) => {
-  const { seen, atom } = await quotaWorld($, on, { world: { stepModel: 'gpt-6.1-sol' } })
+  const { seen, atom } = await quotaWorld($, on, { world: { stepModel: 'gpt-6-sol' } })
   await $.agent.spawn(spawnInput())
   await step($, 'a1', 'medium')
   const sayings = JSON.stringify([seen.notices, seen.logs, seen.writes, seen.transcript, seen.spawned, atom.last])
@@ -2303,17 +2303,17 @@ test('with no registered twins session.measure still keeps the Claude reading, a
 })
 
 test('without a jevKey the switch still happens: tagged with the default effort, noticed, confirmed, with no Jev request and no record', QUOTA_ONLY, async ($, on) => {
-  const { seen } = await quotaWorld($, on, { world: { stepModel: 'gpt-6.1-sol' } })
+  const { seen } = await quotaWorld($, on, { world: { stepModel: 'gpt-6-sol' } })
   await $.agent.spawn(spawnInput())
-  await step($, 'a1', 'medium', 'gpt-6.1-sol(medium)')
+  await step($, 'a1', 'medium', 'cx/gpt-6-sol-medium')
 
   expect(seen.fetches).toEqual([])
   // Only the remote's trust check reads settings: no Jev key is resolved.
   expect(seen.settingsReads).toBe(2)
-  expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:developer-codex', description: 'audit auth · gpt-6.1-sol/medium' })
-  expect(seen.spawned[0]?.model).toBe('gpt-6.1-sol(medium)')
-  expect(seen.notices).toEqual(['crew:developer -> Codex (7d 38% used vs Claude 7d 71%) · gpt-6.1-sol · medium'])
-  expect(seen.transcript).toEqual(['quota: audit auth: confirmed gpt-6.1-sol · medium'])
+  expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:developer-codex', description: 'audit auth · gpt-6-sol/medium' })
+  expect(seen.spawned[0]?.model).toBe('cx/gpt-6-sol-medium')
+  expect(seen.notices).toEqual(['crew:developer -> Codex (7d 38% used vs Claude 7d 71%) · gpt-6-sol · medium'])
+  expect(seen.transcript).toEqual(['quota: audit auth: confirmed gpt-6-sol · medium'])
   expect(seen.writes).toEqual([])
 })
 
@@ -2332,9 +2332,9 @@ test('a switched call that Jev could not size is still switched, on the twin\'s 
   const { seen } = await quotaWorld($, on, { world: { reply: async () => rejected(401) } })
   await $.agent.spawn(spawnInput())
 
-  expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:developer-codex', description: 'audit auth · gpt-6.1-sol/medium' })
-  expect(seen.spawned[0]?.model).toBe('gpt-6.1-sol(medium)')
-  expect(seen.notices).toEqual(['crew:developer -> Codex (7d 38% used vs Claude 7d 71%) · gpt-6.1-sol · medium'])
+  expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:developer-codex', description: 'audit auth · gpt-6-sol/medium' })
+  expect(seen.spawned[0]?.model).toBe('cx/gpt-6-sol-medium')
+  expect(seen.notices).toEqual(['crew:developer -> Codex (7d 38% used vs Claude 7d 71%) · gpt-6-sol · medium'])
   expect(record(seen)).toMatchObject({ provider: 'codex', requested: 'crew:developer', durationMs: 0, jevModel: null })
 })
 
@@ -2343,15 +2343,15 @@ test('a description tag copied from a task is stripped before the switch and the
   await $.agent.spawn(spawnInput({ description: 'audit auth · opus/medium' }))
 
   expect(JSON.parse(seen.fetches[0]?.body ?? '{}').state.agent.description).toBe('audit auth')
-  expect(seen.spawned[0]?.description).toBe('audit auth · gpt-6.1-sol/high')
+  expect(seen.spawned[0]?.description).toBe('audit auth · gpt-6-sol/high')
 })
 
 test('a twin the lead named is never moved, even with Claude favored, and still gets its own Jev effort', QUOTA_JEV, async ($, on) => {
   const { seen } = await quotaWorld($, on, { claude: [10, 10], world: { reply: async () => ok(answer(3.5)) } })
   await $.agent.spawn(spawnInput({ subagentType: 'crew:developer-codex' }))
 
-  expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:developer-codex', description: 'audit auth · gpt-6.1-sol/high' })
-  expect(seen.notices).toEqual(['crew:developer-codex -> gpt-6.1-sol · high (jev)'])
+  expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:developer-codex', description: 'audit auth · gpt-6-sol/high' })
+  expect(seen.notices).toEqual(['crew:developer-codex -> gpt-6-sol · high (jev)'])
   expect(record(seen)).toMatchObject({ requested: 'crew:developer-codex', provider: 'codex' })
 })
 
@@ -2387,9 +2387,9 @@ test('startup, routing, confirmation and measurement use only quota state and no
   on('store.set', () => (unexpected.push('store.set'), { value: undefined }))
   on('ui.open', () => (unexpected.push('ui.open'), { value: { isPlaced: false } }) as never)
   on('ui.close', () => (unexpected.push('ui.close'), { value: undefined }))
-  const world = await quotaWorld($, on, { world: { stepModel: 'gpt-6.1-sol' } })
+  const world = await quotaWorld($, on, { world: { stepModel: 'gpt-6-sol' } })
   await $.agent.spawn(spawnInput())
-  await step($, 'a1', 'medium', 'gpt-6.1-sol(high)')
+  await step($, 'a1', 'medium', 'cx/gpt-6-sol-high')
   world.time.now = Q_NOW + 5_000
   await $.session.measure({ context: { window: 100 }, rateLimits: claudeLimits(30, 60), changed: ['rateLimits'] } as never)
 
@@ -2398,7 +2398,7 @@ test('startup, routing, confirmation and measurement use only quota state and no
   expect([...new Set(world.stateKeys)]).toEqual(['quota'])
   expect(world.atom.last).toMatchObject({ claude: { sevenDay: { percentUsed: 60 } }, claudeAt: Q_NOW + 5_000 })
   expect(world.seen.spawned[0]?.subagentType).toBe('crew:developer-codex')
-  expect(world.seen.transcript).toEqual(['jev: audit auth: confirmed gpt-6.1-sol · high'])
+  expect(world.seen.transcript).toEqual(['jev: audit auth: confirmed gpt-6-sol · high'])
 })
 
 test('a call that could move to its twin and stays on Claude says why in one debug line; a switch and a role without a twin do not', QUOTA_JEV, async ($, on) => {
@@ -2418,17 +2418,17 @@ test('a call that could move to its twin and stays on Claude says why in one deb
 })
 
 test('a switched call without a key says once that no record was written, not again at its confirmation', QUOTA_ONLY, async ($, on) => {
-  const { seen } = await quotaWorld($, on, { world: { stepModel: 'gpt-6.1-sol' } })
+  const { seen } = await quotaWorld($, on, { world: { stepModel: 'gpt-6-sol' } })
   await $.agent.spawn(spawnInput())
-  await step($, 'a1', 'medium', 'gpt-6.1-sol(medium)')
+  await step($, 'a1', 'medium', 'cx/gpt-6-sol-medium')
 
-  expect(seen.transcript).toEqual(['quota: audit auth: confirmed gpt-6.1-sol · medium'])
+  expect(seen.transcript).toEqual(['quota: audit auth: confirmed gpt-6-sol · medium'])
   // Jev is off: the line names quota routing, which decided the call.
   expect(seen.logs.filter(line => line.includes('no trusted home'))).toEqual(['crew quota: decision not logged (no trusted home)'])
   expect(seen.writes).toEqual([])
 })
 
-for (const model of ['gpt-6.1-sol(medium)', 'gpt-6.1-sol(high)']) {
+for (const model of ['cx/gpt-6-sol-medium', 'cx/gpt-6-sol-high']) {
   test(`a caller-supplied twin suffix ${model} is refused before the internal rewrite`, NATIVE_AND_JEV, async ($, on) => {
     const { seen } = await twinWorld($, on)
     expect(await $.agent.spawn(spawnInput({ subagentType: 'crew:developer-codex', model }))).toMatchObject({ deny: DENY_TEXT('crew:developer-codex') })
@@ -2447,24 +2447,24 @@ for (const excluded of [{ fork: true }, { workflow: { runId: 'wf_1', agentIndex:
 }
 
 test('a twin outgoing model without effort evidence confirms only the model', NATIVE_AND_JEV, async ($, on) => {
-  const { seen } = await twinWorld($, on, { stepModel: 'gpt-6.1-sol:high' })
+  const { seen } = await twinWorld($, on, { stepModel: 'gpt-6-sol:high' })
   await $.agent.spawn(spawnInput({ subagentType: 'crew:developer-codex' }))
   // An API-reported suffix alone cannot establish outgoing effort.
-  await step($, 'a1', null, 'gpt-6.1-sol')
-  expect(seen.transcript).toEqual(['jev: audit auth: confirmed model gpt-6.1-sol:high; suffix high requested, effort unobserved'])
-  expect(JSON.parse(seen.writes[1]?.text ?? '{}').ran).toEqual({ model: 'gpt-6.1-sol:high', effort: null })
+  await step($, 'a1', null, 'gpt-6-sol')
+  expect(seen.transcript).toEqual(['jev: audit auth: confirmed model gpt-6-sol:high; suffix high requested, effort unobserved'])
+  expect(JSON.parse(seen.writes[1]?.text ?? '{}').ran).toEqual({ model: 'gpt-6-sol:high', effort: null })
   expect(record(seen)).toMatchObject({ bind: 'suffix', effortApplied: 'high', applied: { effort: true } })
 })
 
 for (const effort of ['medium', 'high']) {
   test(`a visible outgoing twin model without a suffix records the observed step effort ${effort}`, NATIVE_AND_JEV, async ($, on) => {
-    const { seen } = await twinWorld($, on, { stepModel: 'gpt-6.1-sol' })
+    const { seen } = await twinWorld($, on, { stepModel: 'gpt-6-sol' })
     await $.agent.spawn(spawnInput({ subagentType: 'crew:developer-codex' }))
-    await step($, 'a1', effort, 'gpt-6.1-sol')
-    expect(JSON.parse(seen.writes[1]?.text ?? '{}').ran).toEqual({ model: 'gpt-6.1-sol', effort })
+    await step($, 'a1', effort, 'gpt-6-sol')
+    expect(JSON.parse(seen.writes[1]?.text ?? '{}').ran).toEqual({ model: 'gpt-6-sol', effort })
     expect(seen.transcript[0]).toBe(effort === 'high'
-      ? 'jev: audit auth: confirmed gpt-6.1-sol · high'
-      : 'jev: audit auth: ran gpt-6.1-sol · medium, not gpt-6.1-sol/high')
+      ? 'jev: audit auth: confirmed gpt-6-sol · high'
+      : 'jev: audit auth: ran gpt-6-sol · medium, not gpt-6-sol/high')
   })
 }
 
@@ -2472,30 +2472,30 @@ for (const untrusted of [{ jevKey: 'bad key' }, { jevKey: KEY, repositoryKey: tr
   test(`an explicit twin with ${untrusted.repositoryKey ? 'a repository-declared' : 'an invalid'} key gets the medium fallback`, { options: { jevKey: untrusted.jevKey } }, async ($, on) => {
     const { seen } = await twinWorld($, on, untrusted.repositoryKey ? { project: { pluginConfigs: { crew: { options: { jevKey: 'repo-key' } } } } } : {})
     await $.agent.spawn(spawnInput({ subagentType: 'crew:developer-codex' }))
-    expect(seen.spawned[0]).toMatchObject({ description: 'audit auth · gpt-6.1-sol/medium', subagentType: 'crew:developer-codex' })
-    expect(seen.spawned[0]?.model).toBe('gpt-6.1-sol(medium)')
+    expect(seen.spawned[0]).toMatchObject({ description: 'audit auth · gpt-6-sol/medium', subagentType: 'crew:developer-codex' })
+    expect(seen.spawned[0]?.model).toBe('cx/gpt-6-sol-medium')
     expect(seen.fetches).toEqual([])
-    expect(seen.notices).toEqual(['crew:developer-codex -> gpt-6.1-sol · medium'])
+    expect(seen.notices).toEqual(['crew:developer-codex -> gpt-6-sol · medium'])
   })
 }
 
 test('an explicit twin teammate keeps the same Jev effort-only routing, without a quota switch', QUOTA_JEV, async ($, on) => {
   const { seen } = await quotaWorld($, on)
   await $.agent.spawn(spawnInput({ subagentType: 'crew:developer-codex', isTeammate: true }))
-  expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:developer-codex', model: 'gpt-6.1-sol(high)' })
+  expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:developer-codex', model: 'cx/gpt-6-sol-high' })
   expect(seen.statuses).toEqual([])
   expect(seen.fetches).toHaveLength(1)
 })
 
 for (const effort of ['medium', 'high']) {
   test(`an observed outgoing twin suffix ${effort} takes precedence over the opposite host effort`, NATIVE_AND_JEV, async ($, on) => {
-    const { seen } = await twinWorld($, on, { stepModel: 'gpt-6.1-sol-20261012' })
+    const { seen } = await twinWorld($, on, { stepModel: 'gpt-6-sol-20261012' })
     await $.agent.spawn(spawnInput({ subagentType: 'crew:developer-codex' }))
-    await step($, 'a1', effort === 'high' ? 'medium' : 'high', `gpt-6.1-sol(${effort})`)
-    expect(JSON.parse(seen.writes[1]?.text ?? '{}').ran).toEqual({ model: 'gpt-6.1-sol-20261012', effort })
+    await step($, 'a1', effort === 'high' ? 'medium' : 'high', `gpt-6-sol(${effort})`)
+    expect(JSON.parse(seen.writes[1]?.text ?? '{}').ran).toEqual({ model: 'gpt-6-sol-20261012', effort })
     expect(seen.transcript[0]).toBe(effort === 'high'
-      ? 'jev: audit auth: confirmed gpt-6.1-sol-20261012 · high'
-      : 'jev: audit auth: ran gpt-6.1-sol-20261012 · medium, not gpt-6.1-sol/high')
+      ? 'jev: audit auth: confirmed gpt-6-sol-20261012 · high'
+      : 'jev: audit auth: ran gpt-6-sol-20261012 · medium, not gpt-6-sol/high')
   })
 }
 
@@ -2507,23 +2507,23 @@ for (const overlap of [false, true]) {
     const heldStep = new Promise<void>(resolve => { releaseStep = resolve })
     const { seen } = await twinWorld($, on, {
       // No listed id: the first step cannot possibly bind an effort-book entry.
-      spawn: async () => { await heldSpawn; return { model: 'gpt-6.1-sol(high)', agentId: 'a1' } },
-      stepModel: 'gpt-6.1-sol',
+      spawn: async () => { await heldSpawn; return { model: 'cx/gpt-6-sol-high', agentId: 'a1' } },
+      stepModel: 'gpt-6-sol',
       stepWait: async () => { if (overlap) await heldStep },
     })
     const spawning = $.agent.spawn(spawnInput({ subagentType: 'crew:developer-codex' }))
     while (seen.spawned.length === 0) await pause()
-    const first = step($, 'a1', 'medium', 'gpt-6.1-sol(high)')
+    const first = step($, 'a1', 'medium', 'cx/gpt-6-sol-high')
     if (!overlap) await first
     releaseSpawn()
     await spawning
     releaseStep()
     await first
-    await step($, 'a1', 'medium', 'gpt-6.1-sol(high)')
-    expect(seen.spawned[0]?.model).toBe('gpt-6.1-sol(high)')
+    await step($, 'a1', 'medium', 'cx/gpt-6-sol-high')
+    expect(seen.spawned[0]?.model).toBe('cx/gpt-6-sol-high')
     expect(record(seen)).toMatchObject({ bind: 'suffix', effortApplied: 'high', applied: { effort: true } })
-    expect(seen.transcript).toEqual(['jev: audit auth: confirmed gpt-6.1-sol · high'])
-    expect(JSON.parse(seen.writes[1]?.text ?? '{}').ran).toEqual({ model: 'gpt-6.1-sol', effort: 'high' })
+    expect(seen.transcript).toEqual(['jev: audit auth: confirmed gpt-6-sol · high'])
+    expect(JSON.parse(seen.writes[1]?.text ?? '{}').ran).toEqual({ model: 'gpt-6-sol', effort: 'high' })
   })
 }
 
@@ -2534,7 +2534,7 @@ for (const throws of [false, true]) {
       return { deny: 'no' } as never
     } })
     try { await $.agent.spawn(spawnInput({ subagentType: 'crew:developer-codex' })) } catch { /* The host refused the spawn. */ }
-    expect(seen.spawned[0]?.model).toBe('gpt-6.1-sol(high)')
+    expect(seen.spawned[0]?.model).toBe('cx/gpt-6-sol-high')
     expect([seen.notices, seen.writes, seen.transcript]).toEqual([[], [], []])
   })
 }

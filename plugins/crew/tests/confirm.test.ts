@@ -50,6 +50,13 @@ test('normalizeModel strips case, a trailing context suffix and a trailing effor
   expect(normalizeModel('gpt-5.3-codex-max')).toBe('gpt-5.3-codex-max')
 })
 
+test('normalizeModel drops a gateway provider prefix, so the wire id cx/gpt-6-sol-high matches the reported gpt-6-sol', () => {
+  expect(normalizeModel('cx/gpt-6-sol-high')).toBe('gpt-6-sol')
+  expect(normalizeModel('CX/GPT-6-Sol')).toBe('gpt-6-sol')
+  expect(ranAsPlanned({ model: 'gpt-6-sol', effort: 'high' }, { model: 'gpt-6-sol-high', effort: 'high' })).toBe(true)
+  expect(observedEffort({ model: 'cx/gpt-6-sol-medium' }, true)).toBe('medium')
+})
+
 test('a model id other than an alias must match exactly once normalized, not by substring', () => {
   const codex = { model: 'gpt-6-astra', effort: 'high' }
   expect(ranAsPlanned(codex, { model: 'gpt-6-astra', effort: 'high' })).toBe(true)

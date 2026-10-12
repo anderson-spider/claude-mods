@@ -1,6 +1,6 @@
 {
   "name": "crew",
-  "version": "0.16.0",
+  "version": "0.17.0",
   "description": "Makes the main session a lead that delegates to five specialist subagents: code-reader and research on Haiku; designer and developer on Sonnet; architect on Opus. The developer runs and reports its tests; the architect independently audits acceptance. With the jevKey option set (a TypeSafe key), Jev sizes only each call's effort, bounded to medium or high; models stay at role defaults or fixed twin ids, and any Jev request or config failure requests medium unless the agent has already sent its first step; that sends a redacted, truncated prompt to api.typesafe.ai. When ANTHROPIC_BASE_URL is a gateway other than Anthropic's API, each role also gets a fixed-model crew:<role>-codex twin. With the codexRemote and codexManagementKey options set, calls may be routed automatically to those twins when Codex has more weekly headroom, with or without Jev; what those subagents read and write goes to OpenAI through the gateway.",
   "author": {
     "name": "anderson-spider"
