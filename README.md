@@ -106,7 +106,7 @@ Limitations: ownership is checked for apps named as string literals in `cua.getA
 
 ## codex-models
 
-Offers OpenAI Codex models (ChatGPT login) in Claude Code through a local loopback proxy. They appear in `/model` next to the Claude models, and an agent definition can name one in its `model:` field. Claude models pass through the proxy to Anthropic unchanged. The proxy is a vendored, hardened fork of ccmproxy, written in Go under `plugins/codex-models/proxy/`.
+Offers OpenAI Codex models (ChatGPT login) in Claude Code through a local loopback proxy. They appear in `/model` next to the Claude models, and an agent definition can name one in its `model:` field. Claude models pass through the proxy to Anthropic unchanged. The proxy is our own Go code, under `plugins/codex-models/proxy/`. Its status reply (`GET /__ccmproxy/status`) carries `codexLimits`, the Codex rate-limit windows read from the `x-codex-*` headers of the answers it already proxies. Only `?refresh=limits`, sent by the crew's `quotaRouting`, may also read OpenAI's unofficial `wham/usage` endpoint, at most once every 5 minutes; a plain status never calls OpenAI.
 
 Needs macOS, [mise](https://mise.jdx.dev) (it provides Go 1.27.1 and Node 24; `install.sh` checks and tells you what to `mise install`) and a ChatGPT account with Codex access. A plugin cannot set `env` or `modelPicker` in settings, so the installer writes them.
 
@@ -297,6 +297,7 @@ claude plugin test plugins/codex-computer-use
 claude plugin validate plugins/codex-models
 claude plugin test plugins/codex-models
 go -C plugins/codex-models/proxy test -race ./...
+go -C plugins/codex-models/proxy test -race -tags contract ./...
 node --test plugins/codex-models/tests/scripts/*.test.mjs
 claude plugin validate plugins/crew
 claude plugin test plugins/crew

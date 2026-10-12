@@ -4,7 +4,7 @@ Adds OpenAI **Codex** models to Claude Code, paid for by a ChatGPT subscription.
 
 Claude Code reaches the proxy through `ANTHROPIC_BASE_URL`, on a plain HTTP listener bound to a loopback address. There is no certificate authority, no TLS interception and no `/etc/hosts` change. The plugin's `install.sh` does the steps below for you; this file describes the proxy on its own.
 
-This is a vendored, hardened fork; see [UPSTREAM.md](UPSTREAM.md) for what differs from upstream.
+The proxy is our own Go code, module `github.com/anderson-spider/claude-mods/plugins/codex-models/proxy`.
 
 ## Quick start
 
@@ -21,7 +21,31 @@ claude
 
 `ccmproxy env` prints the secret, so treat its output like a password. `--shell fish`, `--shell powershell` and `--shell json` format it for other shells or for the `env` block of `~/.claude/settings.json`. `ENABLE_TOOL_SEARCH=true` is there because Claude Code turns MCP tool search off for a base URL that is not Anthropic's.
 
-Go 1.27 (pinned in the repository's `mise.toml`). It builds on macOS and Linux only (the credential lock uses `flock`). Dependencies: `gjson`/`sjson`.
+Go 1.27 (pinned in the repository's `mise.toml`). It builds on macOS and Linux only (the credential lock uses `flock`). The standard library only, with no module dependency. `go.mod` has no `require`; `go.sum` is empty and stays because CI's module cache path points to it. The installer builds with `env GOFLAGS=-tags= GOTOOLCHAIN=local` (`GOTOOLCHAIN=local` keeps a `go env -w GOTOOLCHAIN` from swapping the pinned Go): an empty `GOFLAGS` counts as unset and falls back to a value saved with `go env -w`, while `-tags=` clears any tags, so a stray flag cannot change the binary:
+
+```sh
+GOFLAGS=-tags= GOTOOLCHAIN=local go build -trimpath -ldflags "-X main.version=dev" -o ccmproxy ./cmd/ccmproxy
+```
+
+`go build -tags contract` makes a test binary with injection points on (see Tests). It is not for installation; `ccmproxy version` says so.
+
+## Layout
+
+```
+cmd/ccmproxy       the command line; serve and its 5 s drain
+internal/config    schema, defaults, refusals, file mode
+internal/proxy     the loopback listener and its http.Server settings
+internal/router    guard, routing, passthrough, status, Codex path
+internal/translate Anthropic Messages <-> Responses
+internal/codex     login, store and locks, Responses client, catalog, rate-limit windows
+internal/netx      the one outbound transport
+internal/httplog   request logging
+internal/logx      leveled logger
+internal/tokenize  the local count_tokens estimate
+internal/jsonread  the JSON reading rules router and translate share
+internal/jsontest  test-only JSON helpers (gjson-compatible path reads)
+contract/          black-box contract suite
+```
 
 ## What it does
 
@@ -51,7 +75,9 @@ Claude Code ──ANTHROPIC_BASE_URL──▶ http://127.0.0.1:<port>   (listen_
 
 Every request must name the listener in `Host` and carry the secret in `X-Ccmproxy-Token`. The header is removed before anything is forwarded. A miss is a `403` `permission_error`, never `401` (which would send Claude Code into an OAuth refresh). Only `GET`, `POST` and `HEAD` are served; `OPTIONS` and the other methods are refused and no `Access-Control-*` header is ever sent. The one exception to the secret is `HEAD /api/hello`, Claude Code's start-up probe, answered locally with an empty `200`.
 
-`GET /__ccmproxy/status`, behind the secret, answers `{"service":"ccmproxy","version":"…","codexLogin":true,"models":["…"]}`.
+`GET /__ccmproxy/status`, behind the secret, answers `{"service":"ccmproxy","version":"…","codexLogin":true,"models":["…"],"codexLimits":[…]}`. `codexLogin` reads the disk when the credential store is free and is the last known login when the store is busy: a status never waits on a token refresh.
+
+`codexLimits` is always present: `[]` with no reading, else one entry per window, `{"kind","percentUsed","resetsAt","windowMinutes","observedAt"}` (`resetsAt` may be absent; `kind` is `five_hour`, `seven_day`, or `window_<minutes>m` for any other length, e.g. `window_60m`). The latest reading of each window comes from the `x-codex-*` headers on every Codex answer, a `429` included. A plain status never calls OpenAI. `?refresh=limits` may read the unofficial `wham/usage` endpoint when there is no reading or the oldest one is more than 5 minutes old: one request at a time, at most one every 5 minutes whether it succeeds or not, with the token already held (never a refresh), no redirect followed, and the status waits at most 1 second for it.
 
 ## `/model` rows
 
@@ -120,7 +146,8 @@ ccmproxy models --settings-json   a modelPicker block for settings.json
 ccmproxy models --json            the picker rows
 ccmproxy env [--shell SHELL]      the environment Claude Code needs (posix, fish, powershell or json); includes the secret
 ccmproxy config init              write a config file, or add the missing secrets to an existing one
-ccmproxy version                  the version stamped at build
+ccmproxy version                  the version stamped at build, and the VCS revision when known
+ccmproxy --help                   the usage (also -help and -h)
 ```
 
 ## Configuration
@@ -155,7 +182,7 @@ ccmproxy version                  the version stamped at build
 - `session_salt`: keys the HMAC of Claude Code's `metadata.user_id` that becomes the Codex `Session_id`.
 - `codex.base_url`: must be `https://`; the ChatGPT access token is sent to it.
 
-Keys of earlier versions (`listen_proxy`, `listen_tls`, `intercept_hosts`, `proxy_username`, `proxy_password`, `ca_dir`, `dns`) are refused by name.
+A key that matches a known key only in another case is refused, naming the known key; `config init` refuses it too. Keys of earlier versions (`listen_proxy`, `listen_tls`, `intercept_hosts`, `proxy_username`, `proxy_password`, `ca_dir`, `dns`) are refused by name.
 
 ## What the translation covers
 
@@ -173,15 +200,16 @@ Anthropic Messages and OpenAI Responses, both directions:
 
 Non-streaming requests go through the same translator and are folded into one message, since the backend only streams.
 
-Claude Code gzips large request bodies. The router decodes `gzip` and `deflate` to read the model name; pass-through still forwards the original bytes and `Content-Encoding`. Anything else (`br`, `zstd`, a corrupt stream) is forwarded untouched with a warning.
+Claude Code gzips large request bodies. The router decodes `gzip` and `deflate` to read the model name; pass-through still forwards the original bytes and `Content-Encoding`. Anything else (`br`, `zstd`, a corrupt stream) is forwarded untouched with a warning. Routing reads the body the way translation does (the last duplicate key wins, keys match case-insensitively). A readable body that is not valid JSON gets a local `400` (`ccmproxy: request body is not valid JSON`) on `/v1/messages` and `count_tokens`; valid JSON that is not an object passes through. There is one shutdown path, in `cmd/ccmproxy`: `serve` drains for up to 5 seconds on SIGTERM or SIGINT and exits 0.
 
 ## Tests
 
 ```sh
-go test ./...
+go test -race ./...
+go test -race -tags contract ./...    # adds the contract suite in contract/
 ```
 
-No network access. They cover the configuration (loopback table, pinned URLs, removed keys, file modes, `config init`), the guard and the routes, byte-for-byte pass-through, the streaming translation, OAuth and the credential store (the Codex CLI's file never written, atomic `600` writes, one refresh spent once under the lock), effort handling, the catalog and compressed bodies.
+No network access. The contract suite builds the binary with `-tags contract` and runs it against local fakes of Anthropic, Codex and the token endpoint; see [contract/README.md](contract/README.md). A seam exists only in the `contract` build, and each package with one has a default-build test that checks it does nothing there. The default binary holds no `CCMPROXY_CONTRACT` string. They cover the configuration (loopback table, pinned URLs, removed keys, file modes, `config init`), the guard and the routes, byte-for-byte pass-through, the streaming translation, OAuth and the credential store (the Codex CLI's file never written, atomic `600` writes, one refresh spent once under the lock), effort handling, the catalog and compressed bodies.
 
 ## Security notes
 

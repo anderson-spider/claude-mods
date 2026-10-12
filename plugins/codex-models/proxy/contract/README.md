@@ -9,7 +9,7 @@ variables that aim the binary at the fakes exist only in the `contract` build
 (`contract_on.go` files); the default build has no such knob.
 
 ```
-go test -race -count=1 -tags contract ./contract/...      # from plugins/codex-models/proxy
+go test -race -count=1 -tags contract ./contract/...      # from plugins/codex-models/proxy (or ./... for the unit tests too)
 go vet -tags contract ./...
 ```
 
@@ -17,7 +17,7 @@ go vet -tags contract ./...
 builds the binary. With `-race` it also builds a race-instrumented binary,
 which the concurrency tests (`opts{race: true}`) run; a `DATA RACE` in any
 binary's stderr fails the test. The race binary takes about a second to start,
-so the other tests use the plain one. The suite takes about 20 s with `-race`.
+so the other tests use the plain one. The suite takes about 30 s with `-race`.
 
 ## Re-recording
 
@@ -50,6 +50,7 @@ These pin today's behavior, which is not a promise to Claude Code or Codex.
 | `codex_stream_no_terminal.golden`, `codex_error_long_message.golden` | The texts: "the Codex stream ended before the response completed", "the Codex backend reported a failed response". The type (`api_error`), the cut at 300 characters plus `…` and the absence of control characters stay. |
 | `codex_message_nonstream.golden.json` | Same stream behavior, folded into one message. |
 | `cli_models_*`, `models_*`, `status_models.golden.json` | The model catalog: ids, labels, descriptions, `behavesAs`, order. Re-record when the catalog changes on purpose; the shape of each row (four keys, the picker block, the merged list with `first_id` and `last_id`) is a contract. |
+| `status_codex_limits.golden.json` | The values of the fake's readings. The row shape (`kind`, `percentUsed`, `resetsAt`, `windowMinutes`, `observedAt`) is a contract. |
 | The guard's messages other than the `ccmproxy:` prefix and `unexpected Host header` | Wording only. |
 
 ## Must never be re-recorded
@@ -63,6 +64,15 @@ check against the Codex backend first.
 - The shortened tool names: at most 64 characters, the exact cut and de-duplication (`codex_request_longnames.golden.json`). The plan freezes them. The transcript keeps the full name and every request shortens it again, so this is a decision, not a persisted format.
 - Every `ccmp1:` value, in both directions: the marker, `ccmp1:<encrypted_content>` on the way out and its removal on the way back (`codex_stream_thinking*`, `codex_message_nonstream`, `TestCodexThinkingSignatureIsMarked`, `TestPassthroughStripsProxyThinkingBlocks`).
 - The literals in tests: the OAuth client id, the form fields, the `Session_id` shape, status mappings in `TestCodexErrorMapping`.
+
+## Status and limits
+
+The status has five keys: `service`, `version`, `codexLogin`, `models` and `codexLimits` (always present, `[]` with no reading). `limits_test.go` covers it:
+
+- readings from the `x-codex-*` answer headers, on a 429 too; the latest per window; a window of another length named `window_<minutes>m`; malformed headers ignored; `[]` before any reading;
+- a plain status, or any `refresh` value other than `limits`, never calls the usage endpoint;
+- `?refresh=limits` reads `wham/usage` when the oldest window is stale (no reading, or the oldest more than 5 minutes old): one request at a time, a back-off of 5 minutes after success or failure, the held token only (a refresh is never started), no redirect followed, at most 1 s of waiting;
+- the limits stay behind the secret and out of the log.
 
 ## Not covered here
 
