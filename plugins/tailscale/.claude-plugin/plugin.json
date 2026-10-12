@@ -1,7 +1,7 @@
 {
   "name": "tailscale",
-  "version": "0.3.4",
-  "description": "Lets Claude query and modify the tailnet through the Tailscale API, using TS_API_KEY.",
+  "version": "0.3.5",
+  "description": "Read or change your tailnet through the Tailscale API using TS_API_KEY.",
   "author": {
     "name": "anderson-spider"
   }

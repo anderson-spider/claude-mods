@@ -1,42 +1,36 @@
-// What the session.start hook registers besides the names, which register.tsx spells out at each call:
-// the tools' input schemas, the jobs tool's description and the commands' descriptions.
-
 const COMMON_PROPERTIES = {
   chatUrl: {
     type: 'string',
-    description:
-      'Optional. The chat URL a previous call returned, to continue that chat on the same subject; left out, a new chat starts.',
+    description: 'Continue the chat URL returned by an earlier call; omit for a new chat.',
   },
   model: {
     type: 'string',
-    description:
-      'Optional. The model menu entry to pick for a new chat, by the start of its label as the menu shows it; an unknown one fails and lists those on offer.',
+    description: 'New-chat model label prefix from the current menu; unknown labels return the available choices.',
   },
   files: {
     type: 'array',
     items: { type: 'string' },
-    description: 'Optional. Absolute paths of local files to attach (documents, code, images; at most 4 MiB each).',
+    description: 'Absolute attachment paths; at most 4 MiB per file.',
   },
   wait: {
     type: 'boolean',
-    description:
-      'Optional, default true. false returns at once with a job id and works in the background; a message arrives when it is saved, and the jobs tool lists every job.',
+    description: 'Default true. false starts a background job; completion sends a message. Use jobs to check it.',
   },
 }
 
 export const ASK_INPUT_SCHEMA = {
   type: 'object',
   properties: {
-    prompt: { type: 'string', description: 'The whole question, self-contained.' },
+    prompt: { type: 'string', description: 'Self-contained question.' },
     ...COMMON_PROPERTIES,
     saveOnly: {
       type: 'boolean',
-      description: 'Optional. Only save the last answer already in chatUrl, sending nothing (waits while it is still streaming).',
+      description: 'Save the last answer in chatUrl after streaming finishes; sends nothing.',
     },
-    out: { type: 'string', description: 'Optional absolute path for the Markdown file.' },
+    out: { type: 'string', description: 'Absolute Markdown output path.' },
     maxChars: {
       type: 'number',
-      description: 'How much of the answer to return inline (default 3000); the file has all of it.',
+      description: 'Inline excerpt length; default 3000. The file keeps the full answer.',
     },
   },
   required: ['prompt'],
@@ -45,34 +39,26 @@ export const ASK_INPUT_SCHEMA = {
 export const IMAGE_INPUT_SCHEMA = {
   type: 'object',
   properties: {
-    prompt: { type: 'string', description: 'What to generate or change, self-contained.' },
+    prompt: { type: 'string', description: 'Self-contained image request.' },
     reference: {
       type: 'string',
-      description: 'Optional absolute path of a PNG, JPEG, WebP or GIF image (at most 4 MiB) to attach.',
+      description: 'Absolute PNG/JPEG/WebP/GIF reference path; at most 4 MiB.',
     },
     ...COMMON_PROPERTIES,
     saveOnly: {
       type: 'boolean',
-      description:
-        'Optional. Only save the last image already in chatUrl, sending nothing and spending no quota (waits ' +
-        'while it is still generating); prompt only names the file.',
+      description: 'Save the last image in chatUrl after generation; sends nothing, spends no quota. prompt names the file.',
     },
-    out: { type: 'string', description: 'Optional absolute path for the image file (variants get -1, -2).' },
+    out: { type: 'string', description: 'Absolute image output path; variants add -1, -2.' },
   },
   required: ['prompt'],
 }
 
 export const JOBS_DESCRIPTION =
-  'Lists the ChatGPT requests of this session that ran or run in the background (ask or image with wait: ' +
-  'false, or a slow one that moved there): status, chat URL and saved files, newest first. Use it to find ' +
-  "a background request's file or chat URL, or to check whether it is still running. It sends nothing to " +
-  'ChatGPT, spends no quota and does not list requests from other sessions.'
+  'Find this session\'s background requests: status, chat URL and saved files, newest first. Local only; sends nothing to ChatGPT and spends no quota.'
 
 export const JOBS_INPUT_SCHEMA = { type: 'object', properties: {} }
 
-export const ASK_COMMAND_DESCRIPTION = 'Asks ChatGPT in the browser and shows the answer: /chatgpt-ask <question>'
-
-export const IMAGE_COMMAND_DESCRIPTION = 'Generates an image with ChatGPT in the browser and saves it: /chatgpt-image <prompt>'
-
-export const DOCTOR_COMMAND_DESCRIPTION =
-  'Checks that ChatGPT works in the browser and which page parts moved: /chatgpt-doctor [chat URL]'
+export const ASK_COMMAND_DESCRIPTION = 'Ask ChatGPT: /chatgpt-ask <question>'
+export const IMAGE_COMMAND_DESCRIPTION = 'Generate and save an image: /chatgpt-image <prompt>'
+export const DOCTOR_COMMAND_DESCRIPTION = 'Diagnose ChatGPT login and page selectors: /chatgpt-doctor [chat URL]'

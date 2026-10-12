@@ -1,94 +1,51 @@
 # Contract suite
 
-A black-box oracle for the codex-models proxy. It builds `cmd/ccmproxy` with
-`-tags contract`, runs it as a subprocess against `httptest` fakes of the
-Anthropic API, the Codex backend and the OAuth token endpoint, and checks what
-a client sees and what the fakes received. It imports no package of the proxy,
-so it stays valid whatever the packages become. The `CCMPROXY_CONTRACT_*`
-variables that aim the binary at the fakes exist only in the `contract` build
-(`contract_on.go` files); the default build has no such knob.
+Black-box checks of the built proxy against local fake Anthropic, Codex and token endpoints; imports no proxy package. Run from `proxy/`, with mise's Go on PATH:
 
-```
-go test -race -count=1 -tags contract ./contract/...      # from plugins/codex-models/proxy (or ./... for the unit tests too)
+```sh
+go test -race -count=1 -tags contract ./contract/...
 go vet -tags contract ./...
 ```
 
-`go` must be on `PATH` (`mise exec --` locally, `setup-go` in CI): `TestMain`
-builds the binary. With `-race` it also builds a race-instrumented binary,
-which the concurrency tests (`opts{race: true}`) run; a `DATA RACE` in any
-binary's stderr fails the test. The race binary takes about a second to start,
-so the other tests use the plain one. The suite takes about 30 s with `-race`.
+`TestMain` builds normal and race-instrumented **contract** binaries; concurrency cases select the latter and any `DATA RACE` in stderr fails. Test injection points belong only to this build; [AGENTS.md](../../AGENTS.md#safety-and-contracts) owns the production-build safeguards.
 
 ## Re-recording
 
-`-update` rewrites every golden a run touches. Never run it on the whole
-suite. Re-record one test at a time and list every changed file in
-`testdata/` in the change as a test edit with its reason:
+First check whether a mismatch is a regression. Re-record only an intended change in the allowed list below, one test at a time; `-update` rewrites every golden the run touches. List each changed `testdata/` file and its reason as a test edit.
 
-```
+```sh
 go test -tags contract ./contract/... -run 'TestCodexStreamTranslation/parallel_tool_calls' -update
 git diff contract/testdata
 ```
 
-`testdata/count_tokens_reference.json` is the floor of the `count_tokens`
-estimate (the test also fails above twice the floor). `-update` writes it only
-when the file is missing; to move it, edit it by hand and say why.
+`testdata/count_tokens_reference.json` sets the estimate floor; twice that floor is the ceiling. `-update` creates it only when missing. Change it by hand with a reason.
 
-If the output of a test fails, the first question is whether the proxy broke a
-contract; a golden is re-recorded only when it is in the list below and the
-new output is intended.
+### May be re-recorded, with a reason
 
-## May be re-recorded, with a written reason
-
-These pin today's behavior, which is not a promise to Claude Code or Codex.
-
-| Golden | What is incidental |
+| Golden | Incidental output; contracts that stay |
 | --- | --- |
-| `codex_stream_*` (all) | The message `id` is the Codex response id (`resp_1`), not a minted `msg_` id (if ids are minted, `mask` in `harness_test.go` must learn them). One `text_delta` per upstream delta, and the reasoning-summary separator `"\n\n"` as its own `thinking_delta`. `message_start.usage` is all zeros. |
-| `codex_stream_parallel_tool_calls.golden` | Calls come out in `output_index` order although the second finished first. Blocks must still never overlap (`wellFormed` enforces it). |
-| `codex_stream_arguments_not_an_object.golden`, `codex_stream_arguments_not_json.golden` | A call with unusable arguments is dropped. In `arguments_not_an_object` the call was the turn's only output, so the message ends with no content block; in `arguments_not_json` the text block `t` after it is kept. |
-| `codex_stream_no_terminal.golden`, `codex_error_long_message.golden` | The texts: "the Codex stream ended before the response completed", "the Codex backend reported a failed response". The type (`api_error`), the cut at 300 characters plus `…` and the absence of control characters stay. |
-| `codex_message_nonstream.golden.json` | Same stream behavior, folded into one message. |
-| `cli_models_*`, `models_*`, `status_models.golden.json` | The model catalog: ids, labels, descriptions, `behavesAs`, order. Re-record when the catalog changes on purpose; the shape of each row (four keys, the picker block, the merged list with `first_id` and `last_id`) is a contract. |
-| `status_codex_limits.golden.json` | The values of the fake's readings. The row shape (`kind`, `percentUsed`, `resetsAt`, `windowMinutes`, `observedAt`) is a contract. |
-| The guard's messages other than the `ccmproxy:` prefix and `unexpected Host header` | Wording only. |
+| `codex_stream_*` (all) | Response message id (`resp_1`; update `mask` if minting ids), delta granularity, separate `"\n\n"` reasoning separator, zero `message_start.usage`. The exclusions below still apply. |
+| `codex_stream_parallel_tool_calls.golden` | `output_index` ordering; blocks remain non-overlapping (`wellFormed`). |
+| `codex_stream_arguments_not_an_object.golden`, `codex_stream_arguments_not_json.golden` | Dropped unusable calls: empty output in the first, later text `t` retained in the second. |
+| `codex_stream_no_terminal.golden`, `codex_error_long_message.golden` | Error wording only; keep `api_error`, 300-character cut plus `…`, no control characters. |
+| `codex_message_nonstream.golden.json` | Incidental stream behavior folded into JSON. |
+| `cli_models_*`, `models_*`, `status_models.golden.json` | Intended catalog ids/labels/descriptions/`behavesAs`/order changes; keep four-key rows, picker/merged-list shape, `first_id`/`last_id`. |
+| `status_codex_limits.golden.json` | Fake reading values; keep `{kind,percentUsed,resetsAt,windowMinutes,observedAt}`. |
+| Guard messages | Wording except the `ccmproxy:` prefix and `unexpected Host header`. |
 
-## Must never be re-recorded
+### Frozen contracts
 
-Changing any of these breaks a persisted or external contract, or needs a live
-check against the Codex backend first.
+These are excluded from re-recording: changing them breaks external/persisted contracts or requires a live Codex check first.
 
-- tool_use `id` is the Codex `call_id`. It comes back as `tool_use_id` on the next turn and is matched by id (`codex_stream_single_tool_call`, `codex_stream_text_then_tool_call`, the request goldens).
-- The usage arithmetic: `input_tokens` is net of cache reads, `cache_read_input_tokens` carries the cached part (`message_delta` in every stream golden).
-- The request shape sent to Codex (`codex_request_rich.golden.json`, `codex_request_longnames.golden.json`): `include`, `store: false`, `stream: true`, `strict: false`, `instructions: ""` with the system prompt as a `developer` message, `parallel_tool_calls`, `reasoning.summary: auto`, and the reasoning item's `"content": null` with `"summary": []` (a typed struct that omits a null is a regression).
-- The shortened tool names: at most 64 characters, the exact cut and de-duplication (`codex_request_longnames.golden.json`). The plan freezes them. The transcript keeps the full name and every request shortens it again, so this is a decision, not a persisted format.
-- Every `ccmp1:` value, in both directions: the marker, `ccmp1:<encrypted_content>` on the way out and its removal on the way back (`codex_stream_thinking*`, `codex_message_nonstream`, `TestCodexThinkingSignatureIsMarked`, `TestPassthroughStripsProxyThinkingBlocks`).
-- The literals in tests: the OAuth client id, the form fields, the `Session_id` shape, status mappings in `TestCodexErrorMapping`.
+- Tool-use id is Codex `call_id`, replayed as `tool_use_id` (single/text-then-tool-call and request goldens).
+- Usage: `input_tokens` excludes cache reads; `cache_read_input_tokens` carries them.
+- Rich/long-name request shape: `include`, `store:false`, `stream:true`, `strict:false`, `instructions:""`, system as `developer`, `parallel_tool_calls`, `reasoning.summary:auto`, reasoning `content:null` and `summary:[]`.
+- Tool names: exact cut/de-duplication, at most 64 characters (`codex_request_longnames.golden.json`).
+- `ccmp1:` signatures in both directions: encrypted state out, marker stripped on replay (thinking/nonstream goldens and signature/passthrough tests).
+- Literal OAuth client id/form fields, `Session_id` shape and error-status mappings (`TestCodexErrorMapping`).
 
-## Status and limits
+## Coverage boundaries
 
-The status has five keys: `service`, `version`, `codexLogin`, `models` and `codexLimits` (always present, `[]` with no reading). `limits_test.go` covers it:
+`limits_test.go` pins status shape, answer-header readings (429 included), latest/unknown/malformed windows, local plain status, held-token-only refresh, single flight/backoff/deadline, secret gating and log privacy. Read those tests when changing limits instead of duplicating the matrix here.
 
-- readings from the `x-codex-*` answer headers, on a 429 too; the latest per window; a window of another length named `window_<minutes>m`; malformed headers ignored; `[]` before any reading;
-- a plain status, or any `refresh` value other than `limits`, never calls the usage endpoint;
-- `?refresh=limits` reads `wham/usage` when the oldest window is stale (no reading, or the oldest more than 5 minutes old): one request at a time, a back-off of 5 minutes after success or failure, the held token only (a refresh is never started), no redirect followed, at most 1 s of waiting;
-- the limits stay behind the secret and out of the log.
-
-## Not covered here
-
-Unit tests keep these: the bound-socket re-check, the constant-time compare,
-resolving a host name to loopback (needs DNS control), credential symlinks
-(dangling links included), unchanged-file-stamp refresh re-reads, cancellation
-while waiting on the canonical credential lock, and atomic private writes.
-
-The subprocess tests cover directory aliases sharing one lock, login and
-logout waiting on that lock, and unknown configuration keys that cannot
-select CLI credentials or override the fixed catalog and backend headers.
-The production schema contains `listen_http`, `upstream`, `auth_token`,
-`session_salt`, `auth_dir`, `log_level` and `codex.base_url` only. OAuth uses
-port 1455; isolated login tests choose a free port solely through
-`CCMPROXY_CONTRACT_CALLBACK_PORT` in the contract build. The default build
-asserts that this seam is inert.
-
-Catalog goldens pin the fixed bare-model rows. No effort-variant rows are
-advertised; suffix parsing is tested separately from the advertised list.
+Unit tests own bound-socket rechecks, constant-time comparisons, loopback DNS refusal, dangling credential links, unchanged-stamp refresh rereads, lock-wait cancellation and atomic private writes. Subprocess tests cover directory aliases sharing a lock, login/logout contention and obsolete config keys unable to override credentials/catalog/backend identity. The isolated callback-port seam must stay inert in the default build.

@@ -1,208 +1,37 @@
-# ccmproxy
+# ccmproxy standalone
 
-Adds OpenAI **Codex** models to Claude Code, paid for by a ChatGPT subscription. They show up in `/model` next to the Claude models; everything else goes to Anthropic untouched.
+For the managed installation, use the [plugin README](../README.md). This path is for running the proxy without its macOS installer; the proxy supports macOS/Linux. Tool versions come from the repository's `mise.toml`.
 
-Claude Code reaches the proxy through `ANTHROPIC_BASE_URL`, on a plain HTTP listener bound to a loopback address. There is no certificate authority, no TLS interception and no `/etc/hosts` change. The plugin's `install.sh` does the steps below for you; this file describes the proxy on its own.
+## Run
 
-The proxy is our own Go code, module `github.com/anderson-spider/claude-mods/plugins/codex-models/proxy`.
-
-## Quick start
-
-```sh
-go build -ldflags "-X main.version=dev" -o ccmproxy ./cmd/ccmproxy
-./ccmproxy config init      # random loopback port, secret (auth_token), session_salt; adds only missing keys to an existing file
-./ccmproxy login codex      # sign in to ChatGPT
-./ccmproxy serve
-
-# in another terminal
-eval "$(./ccmproxy env)"    # ANTHROPIC_BASE_URL, ANTHROPIC_CUSTOM_HEADERS, ENABLE_TOOL_SEARCH
-claude
-```
-
-`ccmproxy env` prints the secret, so treat its output like a password. `--shell fish`, `--shell powershell` and `--shell json` format it for other shells or for the `env` block of `~/.claude/settings.json`. `ENABLE_TOOL_SEARCH=true` is there because Claude Code turns MCP tool search off for a base URL that is not Anthropic's.
-
-Go 1.27 (pinned in the repository's `mise.toml`). It builds on macOS and Linux only (the credential lock uses `flock`). The standard library only, with no module dependency. `go.mod` has no `require`; `go.sum` is empty and stays because CI's module cache path points to it. The installer builds with `env GOFLAGS=-tags= GOTOOLCHAIN=local` (`GOTOOLCHAIN=local` keeps a `go env -w GOTOOLCHAIN` from swapping the pinned Go): an empty `GOFLAGS` counts as unset and falls back to a value saved with `go env -w`, while `-tags=` clears any tags, so a stray flag cannot change the binary:
+From this directory, with mise tools available:
 
 ```sh
 GOFLAGS=-tags= GOTOOLCHAIN=local go build -trimpath -ldflags "-X main.version=dev" -o ccmproxy ./cmd/ccmproxy
+./ccmproxy config init
+./ccmproxy login codex
+./ccmproxy serve
 ```
 
-`go build -tags contract` makes a test binary with injection points on (see Tests). It is not for installation; `ccmproxy version` says so.
-
-## Layout
-
-```
-cmd/ccmproxy       the command line; serve and its 5 s drain
-internal/config    schema, defaults, refusals, file mode
-internal/proxy     the loopback listener and its http.Server settings
-internal/router    guard, routing, passthrough, status, Codex path
-internal/translate Anthropic Messages <-> Responses
-internal/codex     login, store and lock, Responses client, catalog, rate-limit windows
-internal/netx      the one outbound transport
-internal/httplog   request logging
-internal/logx      leveled logger
-internal/tokenize  the local count_tokens estimate
-internal/jsonread  the JSON reading rules router and translate share
-internal/jsontest  test-only JSON helpers (gjson-compatible path reads)
-contract/          black-box contract suite
-```
-
-## What it does
-
-All traffic is forwarded to `api.anthropic.com` exactly as it arrives, with these exceptions:
-
-1. **`GET /v1/models`**: the upstream catalog with the added models appended. It does not drive Claude Code's `/model` picker.
-2. **Requests naming an added model** are translated and sent to the Codex backend (Responses API, OAuth, the same way the Codex CLI does).
-3. **`/v1/messages/count_tokens` for an added model** is a local, conservative length-based estimate (the backend has no counting endpoint); Claude Code uses it to decide when to compact.
-4. **Thinking blocks this proxy issued** are stripped from requests that go to Anthropic: Codex reasoning state is not a valid Anthropic signature. Requests that never touched a Codex model pass through unmodified.
-
-```
-Claude Code ──ANTHROPIC_BASE_URL──▶ http://127.0.0.1:<port>   (listen_http)
-                                         │
-                                 ┌───────────────┐
-                                 │     guard     │  secret, Host, method
-                                 └───────┬───────┘
-                                 ┌───────────────┐
-                                 │    router     │
-                                 └───┬───────┬───┘
-                    Codex model      │       │  everything else
-                                     ▼       ▼
-        chatgpt.com/backend-api/codex       https://api.anthropic.com
-        (Responses API, OAuth)              (verbatim pass-through)
-```
-
-`listen_http` must be a literal loopback IP (`127.0.0.0/8` or `::1`) with an explicit port; `:8081`, `0.0.0.0`, `[::]` and host names are refused, and the bound socket is checked again after it opens. Without the key it defaults to `127.0.0.1:8081`.
-
-Every request must name the listener in `Host` and carry the secret in `X-Ccmproxy-Token`. The header is removed before anything is forwarded. A miss is a `403` `permission_error`, never `401` (which would send Claude Code into an OAuth refresh). Only `GET`, `POST` and `HEAD` are served; `OPTIONS` and the other methods are refused and no `Access-Control-*` header is ever sent. The one exception to the secret is `HEAD /api/hello`, Claude Code's start-up probe, answered locally with an empty `200`.
-
-`GET /__ccmproxy/status`, behind the secret, answers `{"service":"ccmproxy","version":"…","codexLogin":true,"models":["…"],"codexLimits":[…]}`. `codexLogin` reads the disk when the credential store is free and is the last known login when the store is busy: a status never waits on a token refresh.
-
-`codexLimits` is always present: `[]` with no reading, else one entry per window, `{"kind","percentUsed","resetsAt","windowMinutes","observedAt"}` (`resetsAt` may be absent; `kind` is `five_hour`, `seven_day`, or `window_<minutes>m` for any other length, e.g. `window_60m`). The latest reading of each window comes from the `x-codex-*` headers on every Codex answer, a `429` included. A plain status never calls OpenAI. `?refresh=limits` may read the unofficial `wham/usage` endpoint when there is no reading or the oldest one is more than 5 minutes old: one request at a time, at most one every 5 minutes whether it succeeds or not, with the token already held (never a refresh), no redirect followed, and the status waits at most 1 second for it.
-
-## `/model` rows
-
-Claude Code's `/model` picker is not built from `GET /v1/models`. It is Claude Code's own catalog plus `additional_model_options` from its bootstrap response (fetched from Anthropic directly, never through the base URL) and `modelPicker.options` in `settings.json`, which is what this proxy uses.
+In another terminal:
 
 ```sh
-./ccmproxy models --settings-json   # a ready-to-merge modelPicker block
-./ccmproxy models --json            # [{"id","label","description","behavesAs"}], which install.sh reads
+eval "$(./ccmproxy env)"
+claude
 ```
 
-Each row carries `behavesAs`, a model the installed Claude Code knows, whose client-side handling (prompt profile, capabilities, effort defaults) is applied. Without it a row for an unknown model is not offered. The id sent upstream is unchanged. The context window Claude Code assumes comes from `behavesAs` too: append `[1m]` to the model name (the proxy strips it) or set `CLAUDE_CODE_MAX_CONTEXT_TOKENS`.
+**Secret:** `ccmproxy env` prints the proxy token; handle its output like a password. `--shell fish|powershell|json` supports other shells/settings. Contract-tagged binaries contain test injection points and are not for installation; the normal build above clears ambient tags/toolchain overrides.
 
-## The models
+## Discover current configuration
 
-The catalog mirrors `codex debug models` (visibility `list`) for a ChatGPT account; whether an account may use each one is decided upstream.
+Use `./ccmproxy --help` for commands, `./ccmproxy models --json` for catalog/picker rows and `./ccmproxy status` for config/login. `models --settings-json` prints a picker block to merge; `/model` uses `modelPicker.options`, not `/v1/models` discovery. An unknown-model row needs `behavesAs` naming a Claude model the installed client knows.
 
-| Id | Label | Context | Effort levels | Default | Behaves as |
-| --- | --- | --- | --- | --- | --- |
-| `gpt-6.1-sol` | GPT-6.1 Sol | 373k | low to ultra | low | `claude-sonnet-5-5` |
-| `gpt-6-astra` | GPT-6 Astra | 272k | low to ultra | medium | `claude-opus-5-5` |
-| `gpt-6-sol` | GPT-6 Sol | 272k | low to ultra | medium | `claude-sonnet-5-5` |
-| `gpt-6-luna` | GPT-6 Luna | 272k | low to max | medium | `claude-haiku-5-5` |
-| `gpt-5.6-sol` | GPT-5.6 Sol | 272k | low to ultra | low | `claude-sonnet-5-5` |
-| `gpt-5.6-terra` | GPT-5.6 Terra | 272k | low to ultra | medium | `claude-sonnet-5-5` |
-| `gpt-5.6-luna` | GPT-5.6 Luna | 272k | low to max | medium | `claude-haiku-5-5` |
-| `gpt-daybreak-blue-latest` | Daybreak Blue | 272k | low to ultra | low | `claude-opus-5-5` |
+For Claude Code's assumed context window, append `[1m]` to the model id or set `CLAUDE_CODE_MAX_CONTEXT_TOKENS`; the proxy strips that suffix. Effort and credentials are described in the [plugin README](../README.md#use).
 
-All take text and images. `gpt-daybreak-blue-latest` is for accounts in the Daybreak Blue access program, so it is not advertised or routed by default: the source constant `OfferDaybreakBlue` is `false`. The listed catalog is fixed; configuration cannot enable this model or restrict the list.
+The standalone config defaults under `~/.config/ccmproxy/`; relocate with `CCMPROXY_HOME`/`XDG_CONFIG_HOME` or select a file with `--config`. `config init` generates missing secrets while preserving existing members; use the generated file instead of copying defaults from documentation. Keep configuration/credentials private and load only literal-loopback listener addresses.
 
-## Model names and effort
+## Editing and contracts
 
-| Name | Meaning |
-| --- | --- |
-| `gpt-6-luna` | the model, with the effort the client asks for |
-| `gpt-6-luna-high` | pins the effort to `high`, overriding the client |
-| `gpt-6-luna:high` | the same, colon separated |
-| `codex/gpt-6-luna-high` | with a namespace prefix |
-| `gpt-6-luna[1m]` | Claude Code's context-window suffix, ignored |
+Before changing routing, auth, transport, config or installation behavior, read [AGENTS.md](../AGENTS.md#safety-and-contracts). It owns the module map, security invariants and reader/transcript contracts. For black-box expectations and golden changes, read [contract/README.md](contract/README.md).
 
-Reasoning effort is Claude Code's own control: `/effort` and `--effort` send `output_config.effort`, which the proxy maps onto the Codex `reasoning.effort`. Precedence: a name that pins the effort, then `output_config.effort`, then `thinking.budget_tokens`, then the model's default. The value is clamped to the model's levels (`ultra` on `gpt-6-luna` becomes `max`; below the lowest becomes the lowest; unknown becomes the default). Only bare model ids are advertised; effort suffixes are still accepted on requests.
-
-## Credentials
-
-The only credential file is `<auth_dir>/codex.json` (default `~/.config/ccmproxy/auth/codex.json`), in the native layout written by `ccmproxy login codex`. Credential-file symlinks are refused before read, refresh, save and logout, including dangling links; reads use `O_NOFOLLOW`. Directory symlinks are allowed: their canonical parent directory determines both the write destination and the single `<canonical auth_dir>/codex.json.lock`.
-
-The token is refreshed within five minutes of expiry and written atomically (temp file, sync, mode `600`, rename; `auth_dir` kept at `700`). Login, refresh and logout hold the same exclusive `flock`, released on every path; waiting is bounded by 45 seconds and cancellation. Refresh re-reads the credential under the lock, so processes reaching one directory through different spellings spend the refresh token once. A rejected refresh is latched until the file or refresh token changes or a new login is saved: a still-valid access token is served, otherwise requests report an expired login (`403`). Status never starts or waits on a refresh.
-
-`logout codex` removes only the native credential file. During `login codex` the loopback callback answers a non-`GET` with `405` and a missing or wrong `state` with `400`; neither ends the sign-in. The callback port is fixed at 1455.
-## Commands
-
-```
-ccmproxy serve                    run the proxy (default command)
-ccmproxy login codex              sign in to a ChatGPT account
-ccmproxy logout codex             remove the stored credentials
-ccmproxy status                   configuration and login state
-ccmproxy models                   the models this proxy adds
-ccmproxy models --settings-json   a modelPicker block for settings.json
-ccmproxy models --json            the picker rows
-ccmproxy env [--shell SHELL]      the environment Claude Code needs (posix, fish, powershell or json); includes the secret
-ccmproxy config init              write a config file, or add the missing secrets to an existing one
-ccmproxy version                  the version stamped at build, and the VCS revision when known
-ccmproxy --help                   the usage (also -help and -h)
-```
-
-## Configuration
-
-`~/.config/ccmproxy/config.json`; override with `--config`, or relocate the directory with `CCMPROXY_HOME` / `XDG_CONFIG_HOME`. A leading `~` is expanded in `auth_dir` and `--config`. Every field is optional except the two secrets, which `config init` generates. The file holds the secret, so it is written `600` in a `700` directory and loading refuses a file others can access.
-
-```json
-{
-  "listen_http": "127.0.0.1:8081",
-  "upstream": "https://api.anthropic.com",
-  "auth_token": "<64 hex characters>",
-  "session_salt": "<64 hex characters>",
-  "auth_dir": "~/.config/ccmproxy/auth",
-  "log_level": "info",
-  "codex": {
-    "base_url": "https://chatgpt.com/backend-api/codex"
-  }
-}
-```
-
-- `listen_http`: a literal loopback IP with an explicit port.
-- `upstream`: only `https://api.anthropic.com`; the passthrough carries the Claude Code login.
-- `auth_token`: the secret Claude Code sends in `X-Ccmproxy-Token` (through `ANTHROPIC_CUSTOM_HEADERS`). `serve` refuses to start without it or without `session_salt`.
-- `session_salt`: keys the HMAC of Claude Code's `metadata.user_id` that becomes the Codex `Session_id`.
-- `codex.base_url`: must be `https://`; the ChatGPT access token is sent to it.
-
-Loading uses ordinary Go JSON decoding: unknown keys are ignored uniformly, known keys match case-insensitively and wrong types for known fields fail. Effective listener, upstream, URL and secret validation still applies. `config init` preserves unknown members while adding missing secrets.
-
-The backend's `User-Agent` uses the fixed current Codex TUI string, `Originator` is `codex-tui`, and the OAuth callback port is 1455. Model selection is fixed, model prefixes are not advertised and effort-variant rows are disabled. Obsolete keys cannot override these constants or select another credential file.
-
-## What the translation covers
-
-Anthropic Messages and OpenAI Responses, both directions:
-
-- **System prompt** becomes a `developer` input message.
-- **Text, images and PDFs** become `input_text` / `input_image` / `input_file`; other documents are dropped.
-- **Tools** become `function` tools; `input_schema` is normalized. Names over 64 characters are shortened uniquely and mapped back on the way out.
-- **Tool calls and results** become `function_call` / `function_call_output`; ids over the upstream limit are shortened by hash. A `tool_use` block is sent only once its call is complete, with its input in one `input_json_delta`; a call cut off by the output limit is dropped, and `stop_reason` is `max_tokens`. A finished call whose arguments are not a JSON object is dropped too, with a warning naming the tool and the arguments' size (never the arguments), and the stop reason is what the rest of the turn gives.
-- **Keepalive**: while a streamed message is open (after `message_start`, before `message_stop` or an error), a `ping` event goes out whenever nothing was written for 10 seconds. A tool call is sent only once Codex finished its arguments, which can take minutes for a large input, and Claude Code drops a stream that stays silent for about three.
-- **Thinking**: reasoning summaries stream back as `thinking` blocks carrying the encrypted reasoning state as their signature, so the next turn can replay it. Parallel tool calls are serialized into non-overlapping content blocks.
-- **Usage** maps to `input_tokens` / `output_tokens`, with cached tokens as `cache_read_input_tokens`.
-- **Model**: `message_start.model` is the model the upstream reported, falling back to the resolved id.
-- **Errors** map to Anthropic's types; a stream that ends without its terminal event is an error. The upstream message reaches the client with control characters removed, capped at 300 characters.
-
-Non-streaming requests go through the same translator and are folded into one message, since the backend only streams.
-
-Claude Code gzips large request bodies. The router decodes `gzip` and `deflate` to read the model name; pass-through still forwards the original bytes and `Content-Encoding`. Anything else (`br`, `zstd`, a corrupt stream) is forwarded untouched with a warning. Routing reads the body the way translation does (the last duplicate key wins, keys match case-insensitively). A readable body that is not valid JSON gets a local `400` (`ccmproxy: request body is not valid JSON`) on `/v1/messages` and `count_tokens`; valid JSON that is not an object passes through. There is one shutdown path, in `cmd/ccmproxy`: `serve` drains for up to 5 seconds on SIGTERM or SIGINT and exits 0.
-
-## Tests
-
-```sh
-go test -race ./...
-go test -race -tags contract ./...    # adds the contract suite in contract/
-```
-
-No network access. The contract suite builds the binary with `-tags contract` and runs it against local fakes of Anthropic, Codex and the token endpoint; see [contract/README.md](contract/README.md). A seam exists only in the `contract` build, and each package with one has a default-build test that checks it does nothing there. The default binary holds no `CCMPROXY_CONTRACT` string. They cover the configuration (loopback table, pinned URLs, uniformly ignored unknown keys, file modes, `config init`), the guard and the routes, byte-for-byte pass-through, the streaming translation, OAuth and the credential store (credential-link refusal, atomic `600` writes, login/refresh/logout contention and one refresh spent once under the canonical lock), effort handling, the catalog and compressed bodies.
-
-## Security notes
-
-- The listener binds only to a literal loopback address, checked in the configuration and again on the bound socket.
-- Pass-through goes only to `https://api.anthropic.com`, and the Codex token only to an `https://` base URL. `serve` refuses to start when `api.anthropic.com` resolves to a local address.
-- Upstream connections ignore the ambient proxy environment variables and never follow a redirect: a `3xx` from the Codex backend or token endpoint is an error naming the status, and one from Anthropic is passed back as it came.
-- The configuration file holds `auth_token` and is kept at mode `600`; credential files are written with mode `600`.
-- Logs carry no query string, secret, token or prompt. A Codex error is logged as its status and identifier-like `type` and `code` only, never its message or body.
-- It assumes a single-user machine: while it is down, another local user can bind its port and would receive the secret header and the Claude login that Claude Code sends.
-- ID and access tokens are read for the account id, plan and expiry only; signatures are not verified, because they arrive over TLS directly from the issuer.
+Test commands, privacy/data flows and live gaps are linked from the [plugin README](../README.md#tests-and-live-gaps).

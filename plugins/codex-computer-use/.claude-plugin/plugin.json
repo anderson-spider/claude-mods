@@ -1,7 +1,7 @@
 {
   "name": "codex-computer-use",
-  "version": "0.4.6",
-  "description": "Routes desktop app control on this Mac through Codex computer use (the codex-cu helper) instead of Claude's own computer use; /codex-cu on|off.",
+  "version": "0.4.7",
+  "description": "Control native Mac apps through Codex, with per-app approval and /codex-cu on|off.",
   "author": {
     "name": "anderson-spider"
   },
