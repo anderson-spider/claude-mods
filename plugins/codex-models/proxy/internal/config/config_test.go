@@ -162,9 +162,9 @@ func TestUpstreamIsPinned(t *testing.T) {
 	}
 }
 
-func TestCodexRemoteMustBeHTTPS(t *testing.T) {
-	ok := []string{"https://chatgpt.com/backend-api/codex", "https://example.test"}
-	bad := []string{"http://chatgpt.com/backend-api/codex", "chatgpt.com/backend-api/codex", "https://", "https://u:p@chatgpt.com", "ftp://chatgpt.com"}
+func TestCodexRemoteMustBeHTTPOrHTTPS(t *testing.T) {
+	ok := []string{"https://chatgpt.com/backend-api/codex", "https://example.test", "http://chatgpt.com/backend-api/codex", "http://192.168.0.128:8317"}
+	bad := []string{"chatgpt.com/backend-api/codex", "https://", "https://u:p@chatgpt.com", "ftp://chatgpt.com"}
 	for _, base := range ok {
 		body, _ := json.Marshal(map[string]any{"codex": map[string]string{"remote": base}})
 		if _, err := Load(writeConfig(t, string(body))); err != nil {
@@ -866,7 +866,7 @@ func TestUpstreamPinned(t *testing.T) {
 }
 
 func TestCodexRemote(t *testing.T) {
-	bad := []string{"http://chatgpt.com/backend-api/codex", "https:///backend-api", "https://", "chatgpt.com", "ws://chatgpt.com", "https://u@chatgpt.com"}
+	bad := []string{"ftp://chatgpt.com/backend-api/codex", "https:///backend-api", "https://", "chatgpt.com", "ws://chatgpt.com", "https://u@chatgpt.com"}
 	for _, b := range bad {
 		body, _ := json.Marshal(map[string]any{"codex": map[string]string{"remote": b}})
 		if _, err := Load(writeConfig(t, string(body))); err == nil {

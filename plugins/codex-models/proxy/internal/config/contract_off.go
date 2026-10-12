@@ -8,7 +8,7 @@ package config
 // upstreamAllowed accepts DefaultUpstream only.
 func upstreamAllowed(upstream string) bool { return upstream == DefaultUpstream }
 
-// validateRemote accepts a TLS remote with no credentials or local address.
+// validateRemote accepts an HTTP or HTTPS remote with no credentials or local address.
 func validateRemote(raw string) error { return requireRemote(raw) }
 
 // RemoteAllowsLoopback is false in a normal build, regardless of environment.

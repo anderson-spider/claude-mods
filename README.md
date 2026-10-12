@@ -66,7 +66,7 @@ For the other plugins' checks, see their READMEs in the [plugins table](#plugins
 To bring an installation up to date in one go, run from the main checkout:
 
 ```sh
-export CLIPROXY_URL=https://<remote host>   # optional: set it to write or replace the codex-models remote
+export CLIPROXY_URL=http://192.168.0.128:8317   # optional: HTTP or HTTPS base URL to write or replace the codex-models remote
 mise run update:all
 ```
 

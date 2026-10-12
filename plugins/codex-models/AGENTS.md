@@ -13,7 +13,7 @@ Installing, using, checking privacy or planning live validation: read [README.md
 
 ## Safety and contracts
 
-- One plain HTTP listener, literal loopback IP (127/8 or `::1`), explicit port; verify the bound socket too. No TLS listener, CA, CONNECT, hosts redirect or DNS resolver. Upstream stays `https://api.anthropic.com` and must not resolve to loopback. `codex.remote` is HTTPS without userinfo/query/fragment, and every remote connection refuses loopback or unspecified addresses after resolution.
+- One plain HTTP listener, literal loopback IP (127/8 or `::1`), explicit port; verify the bound socket too. No TLS listener, CA, CONNECT, hosts redirect or DNS resolver. Upstream stays `https://api.anthropic.com` and must not resolve to loopback. `codex.remote` is HTTP or HTTPS without userinfo/query/fragment, and every remote connection refuses loopback or unspecified addresses after resolution.
 - Before routing, remove `X-Ccmproxy-Token` and compare its SHA-256 digest in constant time. Match `Host` to the listener; allow only GET/POST/HEAD, no CORS headers. Local unauthenticated `HEAD /api/hello` returns empty 200. Secret misses and remote 401 return **403 `permission_error`, never 401**.
 - Every outbound transport uses `netx.DirectTransport` (`Proxy: nil`), never environment proxies, including nil-transport fallbacks. Never follow redirects on remote, management, model-list or passthrough requests; remote 3xx is an error, Anthropic 3xx passes through.
 - Single-user assumption: while the proxy is down, another local user can bind its port and receive the secret/bearer. Keep LaunchAgent restart-on-failure and 30 s throttle; the proxy cannot eliminate this risk.

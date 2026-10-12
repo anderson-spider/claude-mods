@@ -26,7 +26,7 @@ func upstreamAllowed(upstream string) bool {
 
 func validateRemote(raw string) error {
 	if RemoteAllowsLoopback(raw) {
-		return requireHTTPS(raw)
+		return requireHTTPURL(raw)
 	}
 	return requireRemote(raw)
 }
