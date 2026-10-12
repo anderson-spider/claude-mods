@@ -2223,3 +2223,104 @@ test('with twins registered, an unregistered twin and a Claude role: one request
   expect(seen.spawned[1]?.model).toBeUndefined()
   expect(seen.spawned[2]).toMatchObject({ model: 'haiku', description: 'fix · haiku/high' })
 })
+
+// A `model` on a registered twin's spawn is refused before Jev, with routing on or off.
+
+const DENY_TEXT = (type: string) => `crew: ${type} runs on its own Codex model; call it again without \`model\``
+
+test('without a jevKey a -codex spawn that passes model is still refused, reaches no host and draws no card; without model it passes untagged', NATIVE, async ($, on) => {
+  const writes = watchCards(on)
+  const { seen } = await twinWorld($, on)
+  const before = writes.length
+  const refused = await $.agent.spawn(spawnInput({ subagentType: 'crew:developer-codex', model: 'opus' }))
+  expect(refused).toMatchObject({ deny: DENY_TEXT('crew:developer-codex') })
+  const architect = await $.agent.spawn(spawnInput({ subagentType: 'crew:architect-codex', model: 'sonnet', tool_use_id: 'tu2' }))
+  expect(architect).toMatchObject({ deny: DENY_TEXT('crew:architect-codex') })
+  expect(seen.spawned).toEqual([])
+  expect(seen.fetches).toEqual([])
+  expect(seen.notices).toEqual([])
+  expect(seen.writes).toEqual([])
+  // Flightdeck wraps the crew's hook and draws no card for a refused spawn.
+  expect(writes.length).toBe(before)
+
+  // Without model, the twin passes untouched: no Jev, no tag.
+  await $.agent.spawn(spawnInput({ subagentType: 'crew:developer-codex', tool_use_id: 'tu3' }))
+  expect(seen.spawned).toHaveLength(1)
+  expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:developer-codex', description: 'audit auth' })
+  expect(seen.spawned[0]?.model).toBeUndefined()
+  expect(writes.length).toBeGreaterThan(before)
+  // A base role with model, routing off, is untouched.
+  await $.agent.spawn(spawnInput({ subagentType: 'crew:developer', model: 'opus', tool_use_id: 'tu4' }))
+  expect(seen.spawned[1]).toMatchObject({ subagentType: 'crew:developer', model: 'opus', description: 'audit auth' })
+  expect(seen.fetches).toEqual([])
+})
+
+test('a -codex spawn that passes its own Codex id as model is refused too', NATIVE_AND_JEV, async ($, on) => {
+  const { seen } = await twinWorld($, on)
+  const refused = await $.agent.spawn(spawnInput({ subagentType: 'crew:developer-codex', model: 'gpt-6-astra' }))
+  expect(refused).toMatchObject({ deny: DENY_TEXT('crew:developer-codex') })
+  expect(seen.spawned).toEqual([])
+  expect(seen.fetches).toEqual([])
+})
+
+test('a -codex spawn with an empty model is not refused: it is routed and tagged as without one', NATIVE_AND_JEV, async ($, on) => {
+  const { seen } = await twinWorld($, on, { reply: async () => ok(answer('opus', 0.9, 3.5)) })
+  const result = await $.agent.spawn(spawnInput({ subagentType: 'crew:developer-codex', model: '' }))
+  expect(result).not.toHaveProperty('deny')
+  expect(seen.fetches).toHaveLength(1)
+  expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:developer-codex', description: 'audit auth · gpt-6-astra/high' })
+})
+
+test('a -codex spawn with model from inside a subagent is refused like one from the main loop', NATIVE_AND_JEV, async ($, on) => {
+  const { seen } = await twinWorld($, on)
+  const refused = await $.agent.spawn(spawnInput({ subagentType: 'crew:tester-codex', model: 'haiku', parentAgentId: 'p1' }))
+  expect(refused).toMatchObject({ deny: DENY_TEXT('crew:tester-codex') })
+  expect(seen.spawned).toEqual([])
+  expect(seen.fetches).toEqual([])
+})
+
+test('a fork flag on a -codex spawn with model does not lift the refusal, and a real fork with model goes on untouched', NATIVE_AND_JEV, async ($, on) => {
+  const { seen } = await twinWorld($, on)
+  const refused = await $.agent.spawn(spawnInput({ subagentType: 'crew:developer-codex', model: 'opus', fork: true }))
+  expect(refused).toMatchObject({ deny: DENY_TEXT('crew:developer-codex') })
+  expect(seen.spawned).toEqual([])
+  // A real fork (type `fork`) with model is not a twin and goes on untouched.
+  await $.agent.spawn(spawnInput({ subagentType: 'fork', model: 'opus', fork: true, tool_use_id: 'tu2' }))
+  expect(seen.spawned[0]).toMatchObject({ subagentType: 'fork', model: 'opus', description: 'audit auth' })
+  expect(seen.fetches).toEqual([])
+})
+
+test('an unregistered crew:*-codex type that passes model goes on untouched and is not sent to Jev', NATIVE_AND_JEV, async ($, on) => {
+  const { seen } = await twinWorld($, on)
+  await $.agent.spawn(spawnInput({ subagentType: 'crew:code-reader-codex', model: 'opus' }))
+  await $.agent.spawn(spawnInput({ subagentType: 'crew:mystery-codex', model: 'opus', tool_use_id: 'tu2' }))
+  expect(seen.spawned.map(s => [s.subagentType, s.model, s.description])).toEqual([
+    ['crew:code-reader-codex', 'opus', 'audit auth'],
+    ['crew:mystery-codex', 'opus', 'audit auth'],
+  ])
+  expect(seen.fetches).toEqual([])
+})
+
+test('with a non-loopback base URL a crew:developer-codex spawn that passes model is not refused: no twin is registered', NATIVE_AND_JEV, async ($, on) => {
+  const { seen } = jevWorld(on, { env: { ANTHROPIC_BASE_URL: 'https://api.anthropic.com' }, register: true })
+  await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true } as never)
+  await $.agent.spawn(spawnInput({ subagentType: 'crew:developer-codex', model: 'opus' }))
+  expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:developer-codex', model: 'opus', description: 'audit auth' })
+  expect(seen.fetches).toEqual([])
+})
+
+test('without the nativeCodex option a crew:developer-codex spawn that passes model goes on untouched', ON, async ($, on) => {
+  const { seen } = await twinWorld($, on)
+  await $.agent.spawn(spawnInput({ subagentType: 'crew:developer-codex', model: 'opus' }))
+  expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:developer-codex', model: 'opus', description: 'audit auth' })
+  expect(seen.fetches).toEqual([])
+})
+
+test('a workflow agent on a -codex type with model is refused (a hook can only refuse that spawn); without model it passes untagged', NATIVE_AND_JEV, async ($, on) => {
+  const { seen } = await twinWorld($, on)
+  const refused = await $.agent.spawn(spawnInput({ subagentType: 'crew:developer-codex', model: 'opus', workflow: { runId: 'wf_1', agentIndex: 1 } }))
+  expect(refused).toMatchObject({ deny: DENY_TEXT('crew:developer-codex') })
+  await $.agent.spawn(spawnInput({ subagentType: 'crew:developer-codex', workflow: { runId: 'wf_1', agentIndex: 2 }, tool_use_id: 'tu2' }))
+  expect(seen.spawned.map(s => [s.subagentType, s.model, s.description])).toEqual([['crew:developer-codex', undefined, 'audit auth']])
+  expect(seen.fetches).toEqual([])
+})
