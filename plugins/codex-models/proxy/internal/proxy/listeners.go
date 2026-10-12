@@ -13,12 +13,17 @@ import (
 	"github.com/jclab-joseph/claude-code-model-proxy/internal/logx"
 )
 
-// newServer builds an HTTP server tuned for long streaming responses.
-func newServer(handler http.Handler) *http.Server {
+// NewServer builds the HTTP server, tuned for long streaming responses.
+//
+// DisableGeneralOptionsHandler matters: without it net/http answers
+// `OPTIONS *` itself with a 200, before the handler (and so before the guard
+// and the log) ever sees the request.
+func NewServer(handler http.Handler) *http.Server {
 	return &http.Server{
-		Handler:           handler,
-		ReadHeaderTimeout: 30 * time.Second,
-		IdleTimeout:       5 * time.Minute,
+		Handler:                      handler,
+		ReadHeaderTimeout:            30 * time.Second,
+		IdleTimeout:                  5 * time.Minute,
+		DisableGeneralOptionsHandler: true,
 	}
 }
 
@@ -45,7 +50,7 @@ func Serve(ctx context.Context, name, addr string, handler http.Handler) error {
 	if err != nil {
 		return fmt.Errorf("%s: %w", name, err)
 	}
-	server := newServer(handler)
+	server := NewServer(handler)
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

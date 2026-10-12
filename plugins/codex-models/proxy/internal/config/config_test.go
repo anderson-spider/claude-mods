@@ -633,3 +633,46 @@ func TestEffortVariantsCanBeEnabled(t *testing.T) {
 		t.Fatal("an explicit true must be honoured")
 	}
 }
+
+func TestURLRefusalsDoNotEchoUserinfo(t *testing.T) {
+	const pw = "S3cretPassw0rdValue"
+	for _, body := range []string{
+		`{"upstream":"https://user:` + pw + `@api.anthropic.com"}`,
+		`{"upstream":"https://` + pw + `@api.anthropic.com"}`,
+		`{"upstream":"http://user:` + pw + `@evil.test/x?token=` + pw + `"}`,
+		`{"upstream":"https://api.anthropic.com/?key=` + pw + `"}`,
+		`{"upstream":"https://api.anthropic.com/#` + pw + `"}`,
+		`{"upstream":"https://user:` + pw + `@[::1"}`,
+		`{"upstream":"://user:` + pw + `@x"}`,
+		`{"codex":{"base_url":"https://user:` + pw + `@chatgpt.com"}}`,
+		`{"codex":{"base_url":"http://user:` + pw + `@chatgpt.com"}}`,
+		`{"codex":{"base_url":"https://user:` + pw + `@[::1"}}`,
+		`{"codex":{"base_url":"http://chatgpt.com/?key=` + pw + `"}}`,
+	} {
+		_, err := Load(writeConfig(t, body))
+		if err == nil {
+			t.Fatalf("%s accepted", body)
+		}
+		if strings.Contains(err.Error(), pw) {
+			t.Errorf("refusal echoes the URL secret: %v", err)
+		}
+		if !strings.Contains(err.Error(), "upstream") && !strings.Contains(err.Error(), "codex.base_url") {
+			t.Errorf("refusal does not name the key: %v", err)
+		}
+	}
+}
+
+func TestSafeURL(t *testing.T) {
+	cases := map[string]string{
+		"https://api.anthropic.com":  `"https://api.anthropic.com"`,
+		"https://u:p@host.test/path": `"https://host.test/path" (credentials removed)`,
+		"https://host.test/?k=v":     `"https://host.test/" (query removed)`,
+		"https://u:p@[::1":           "(not a valid URL)",
+		"http://evil.test:8080/v1":   `"http://evil.test:8080/v1"`,
+	}
+	for raw, want := range cases {
+		if got := safeURL(raw); got != want {
+			t.Errorf("safeURL(%q) = %s, want %s", raw, got, want)
+		}
+	}
+}

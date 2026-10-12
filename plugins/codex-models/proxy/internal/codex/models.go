@@ -194,13 +194,24 @@ func (r *Registry) AdvertisedIDs() []string {
 	return ids
 }
 
+// effortLevels are the reasoning levels in order. "ultra" is Claude Code's
+// top level, which no Codex model has; it ranks above everything so it
+// clamps to a model's highest level.
+var effortLevels = []string{"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
+
+// effortRank orders a level; unknown levels rank 99.
 func effortRank(level string) int {
-	for i, candidate := range []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"} {
+	rank, _ := knownEffortRank(level)
+	return rank
+}
+
+func knownEffortRank(level string) (int, bool) {
+	for i, candidate := range effortLevels {
 		if candidate == level {
-			return i
+			return i, true
 		}
 	}
-	return 99
+	return 99, false
 }
 
 // Resolve matches name against the catalog. The second return value is false
@@ -279,19 +290,31 @@ func normalizeEffort(model Model, effort string) string {
 			return effort
 		}
 	}
-	// Clamp to the highest supported level when the model tops out lower
-	// than requested (for instance "max" on a model that stops at xhigh).
-	requested := effortRank(effort)
-	best := ""
-	bestRank := -1
+	// A level this code does not know says nothing about how hard to
+	// think, so it gets the model's default rather than a guess.
+	requested, known := knownEffortRank(effort)
+	if !known {
+		return model.DefaultEffort
+	}
+	// Clamp to the closest supported level at or below the request (for
+	// instance "max" on a model that stops at xhigh); a request below the
+	// model's lowest level ("minimal", "none") gets that lowest level.
+	best, bestRank := "", -1
+	lowest, lowestRank := "", 1<<30
 	for _, level := range model.ReasoningLevel {
 		rank := effortRank(level)
 		if rank <= requested && rank > bestRank {
 			best, bestRank = level, rank
 		}
+		if rank < lowestRank {
+			lowest, lowestRank = level, rank
+		}
 	}
 	if best != "" {
 		return best
+	}
+	if lowest != "" {
+		return lowest
 	}
 	return model.DefaultEffort
 }

@@ -327,8 +327,8 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("config: listen_http: %w", err)
 	}
 	if c.Upstream != DefaultUpstream {
-		return fmt.Errorf("config: upstream %q is not allowed: the passthrough carries the Claude Code login, "+
-			"so it goes only to %s (remove the key)", c.Upstream, DefaultUpstream)
+		return fmt.Errorf("config: upstream %s is not allowed: the passthrough carries the Claude Code login, "+
+			"so it goes only to %s (remove the key)", safeURL(c.Upstream), DefaultUpstream)
 	}
 	if err := validateHTTPSURL(c.Codex.BaseURL); err != nil {
 		return fmt.Errorf("config: codex.base_url: %w", err)
@@ -377,15 +377,35 @@ func ValidateListenAddr(addr string) error {
 func validateHTTPSURL(raw string) error {
 	u, err := url.Parse(raw)
 	if err != nil {
-		return fmt.Errorf("%q is not a URL: %w", raw, err)
-	}
-	if u.Scheme != "https" || u.Host == "" {
-		return fmt.Errorf("%q must be an https:// URL: the ChatGPT access token is sent to it", raw)
+		// url.Error repeats the whole input, credentials included.
+		return errors.New("is not a valid URL")
 	}
 	if u.User != nil {
-		return fmt.Errorf("%q must not carry credentials", raw)
+		return fmt.Errorf("%s: credentials in the URL are not allowed; remove them", safeURL(raw))
+	}
+	if u.Scheme != "https" || u.Host == "" {
+		return fmt.Errorf("%s must be an https:// URL: the ChatGPT access token is sent to it", safeURL(raw))
 	}
 	return nil
+}
+
+// safeURL renders a configured URL for an error message: scheme, host and
+// path only, quoted. Userinfo, query and fragment can carry credentials and
+// are never repeated; a value that does not parse is not repeated at all.
+func safeURL(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return "(not a valid URL)"
+	}
+	shown := url.URL{Scheme: u.Scheme, Host: u.Host, Path: u.Path}
+	rendered := strconv.Quote(shown.String())
+	if u.User != nil {
+		rendered += " (credentials removed)"
+	}
+	if u.RawQuery != "" || u.Fragment != "" {
+		rendered += " (query removed)"
+	}
+	return rendered
 }
 
 // validateSecret keeps a secret usable as a header value: printable ASCII

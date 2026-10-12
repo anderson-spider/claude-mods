@@ -46,8 +46,12 @@ func Guard(cfg *config.Config, next http.Handler) (http.Handler, error) {
 			writeAnthropicError(w, http.StatusForbidden, "permission_error", "ccmproxy: unexpected Host header")
 			return
 		}
-		if req.Method == http.MethodOptions {
-			writeAnthropicError(w, http.StatusForbidden, "permission_error", "ccmproxy: OPTIONS is not served")
+		// Nothing Claude Code sends uses these: OPTIONS is a CORS preflight,
+		// CONNECT would ask for a tunnel and TRACE echoes the request back.
+		// They are refused even with the secret.
+		switch req.Method {
+		case http.MethodOptions, http.MethodConnect, http.MethodTrace:
+			writeAnthropicError(w, http.StatusForbidden, "permission_error", "ccmproxy: "+req.Method+" is not served")
 			return
 		}
 		if req.Method == http.MethodHead && req.URL.Path == helloPath {

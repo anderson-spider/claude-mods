@@ -28,6 +28,7 @@ import (
 	"github.com/jclab-joseph/claude-code-model-proxy/internal/config"
 	"github.com/jclab-joseph/claude-code-model-proxy/internal/httplog"
 	"github.com/jclab-joseph/claude-code-model-proxy/internal/logx"
+	"github.com/jclab-joseph/claude-code-model-proxy/internal/netx"
 	"github.com/jclab-joseph/claude-code-model-proxy/internal/proxy"
 	"github.com/jclab-joseph/claude-code-model-proxy/internal/router"
 )
@@ -148,23 +149,6 @@ func storeOptions(cfg *config.Config) codex.StoreOptions {
 	}
 }
 
-// directTransport dials upstreams without consulting HTTPS_PROXY and the
-// other proxy environment variables: a value left in the shell from an older
-// CONNECT setup would otherwise aim the proxy at a listener that no longer
-// exists, or at itself.
-func directTransport() *http.Transport {
-	dialer := &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}
-	return &http.Transport{
-		Proxy:                 nil,
-		DialContext:           dialer.DialContext,
-		ForceAttemptHTTP2:     true,
-		MaxIdleConns:          100,
-		IdleConnTimeout:       90 * time.Second,
-		TLSHandshakeTimeout:   15 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
-	}
-}
-
 // lookupFunc resolves a host name, as net.Resolver.LookupNetIP does.
 type lookupFunc func(ctx context.Context, network, host string) ([]netip.Addr, error)
 
@@ -212,6 +196,12 @@ func runServe(args []string) error {
 		return fmt.Errorf("%s has no auth_token or session_salt; run `ccmproxy config init` to generate them", cfg.Path())
 	}
 
+	// An auth_file naming the Codex CLI's login is refused before anything
+	// else, the upstream lookup included.
+	if err := codex.NewStore(nil, storeOptions(cfg)).Check(); err != nil {
+		return err
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -222,7 +212,7 @@ func runServe(args []string) error {
 	// Every outbound call the proxy makes — to Anthropic, to the Codex
 	// backend, to the OAuth token endpoint — goes through this one
 	// transport, so wrapping it here logs all of them with one change.
-	transport := &httplog.Transport{Next: directTransport()}
+	transport := &httplog.Transport{Next: netx.DirectTransport()}
 
 	oauth := codex.NewClient(&http.Client{Transport: transport, Timeout: 30 * time.Second})
 	store := codex.NewStore(oauth, storeOptions(cfg))
@@ -276,7 +266,7 @@ func runLogin(args []string) error {
 	}
 
 	oauth := codex.NewClient(&http.Client{
-		Transport: directTransport(),
+		Transport: netx.DirectTransport(),
 		Timeout:   30 * time.Second,
 	})
 	store := codex.NewStore(oauth, storeOptions(cfg))
@@ -322,15 +312,17 @@ func runLogout(args []string) error {
 	if err != nil {
 		return err
 	}
+	// Remove deletes only this proxy's own file, never the Codex CLI's.
 	store := codex.NewStore(nil, storeOptions(cfg))
-	if err := os.Remove(store.NativePath()); err != nil {
+	removed, err := store.Remove()
+	if err != nil {
 		if os.IsNotExist(err) {
 			fmt.Println("No Codex credentials were stored.")
 			return nil
 		}
 		return err
 	}
-	fmt.Printf("Removed %s\n", store.NativePath())
+	fmt.Printf("Removed %s\n", removed)
 	if path := codex.CodexCLIAuthPath(); cfg.Codex.UseCLIAuth && path != "" {
 		if _, err := os.Stat(path); err == nil {
 			fmt.Printf("The Codex CLI login at %s is untouched and will still be used.\n", path)
@@ -354,6 +346,10 @@ func runStatus(args []string) error {
 
 	store := codex.NewStore(nil, storeOptions(cfg))
 	fmt.Printf("codex sources   %s\n", strings.Join(store.Sources(), ", "))
+	if err := store.Check(); err != nil {
+		fmt.Printf("codex           refused: %v\n", err)
+		return nil
+	}
 	token, err := store.Peek()
 	if err != nil {
 		fmt.Printf("codex           not signed in\n")

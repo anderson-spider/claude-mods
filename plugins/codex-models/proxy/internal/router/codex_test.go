@@ -224,3 +224,174 @@ func TestToolUseRoundTripsInBothModes(t *testing.T) {
 		t.Fatalf("function_call_output = %s", output.Raw)
 	}
 }
+
+func backendStatus(status int, body string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(body))
+	}
+}
+
+func TestCodexBackendErrorsUseAnthropicTypes(t *testing.T) {
+	cases := []struct {
+		status     int
+		wantStatus int
+		wantType   string
+	}{
+		{400, 400, "invalid_request_error"},
+		{401, 403, "permission_error"},
+		{403, 403, "permission_error"},
+		{404, 404, "not_found_error"},
+		{413, 413, "request_too_large"},
+		{422, 422, "invalid_request_error"},
+		{429, 429, "rate_limit_error"},
+		{500, 500, "api_error"},
+		{503, 503, "api_error"},
+		{529, 529, "overloaded_error"},
+	}
+	for _, tc := range cases {
+		for _, stream := range []string{"true", "false"} {
+			h := newHarness(t, nil, backendStatus(tc.status, `{"error":{"message":"upstream says no"}}`), true)
+			rec := h.do(t, http.MethodPost, "/v1/messages", `{"model":"gpt-5.5","stream":`+stream+`,"messages":[]}`)
+			label := http.StatusText(tc.status) + " stream=" + stream
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("%s: status = %d, want %d", label, rec.Code, tc.wantStatus)
+			}
+			body := gjson.Parse(rec.Body.String())
+			if got := body.Get("error.type").String(); got != tc.wantType {
+				t.Fatalf("%s: error.type = %q, want %q", label, got, tc.wantType)
+			}
+			message := body.Get("error.message").String()
+			if !strings.Contains(message, "upstream says no") {
+				t.Fatalf("%s: error.message = %q", label, message)
+			}
+			if tc.status == 401 && !strings.Contains(message, "ccmproxy login") {
+				t.Fatalf("%s: error.message = %q, want it to name `ccmproxy login`", label, message)
+			}
+		}
+	}
+}
+
+// sseEvents splits an Anthropic SSE body into its event names and payloads.
+func sseEvents(body string) (names []string, data []gjson.Result) {
+	for _, block := range strings.Split(body, "\n\n") {
+		var name string
+		for _, line := range strings.Split(block, "\n") {
+			if v, ok := strings.CutPrefix(line, "event: "); ok {
+				name = v
+			}
+			if v, ok := strings.CutPrefix(line, "data: "); ok {
+				names = append(names, name)
+				data = append(data, gjson.Parse(v))
+			}
+		}
+	}
+	return names, data
+}
+
+func TestMidStreamErrorsUseAnthropicTypesAndEndTheStream(t *testing.T) {
+	cases := []struct {
+		name     string
+		event    string
+		wantType string
+		wantCode int
+	}{
+		{"server_error event", `{"type":"error","error":{"type":"server_error","message":"boom"}}`, "api_error", 502},
+		{"overloaded event", `{"type":"error","error":{"type":"overloaded_error","message":"boom"}}`, "overloaded_error", 529},
+		{"authentication event", `{"type":"error","error":{"type":"authentication_error","message":"boom"}}`, "permission_error", 403},
+		{"code only", `{"type":"error","code":"rate_limit_exceeded","message":"boom"}`, "rate_limit_error", 429},
+		{"failed with code", `{"type":"response.failed","response":{"error":{"code":"rate_limit_exceeded","message":"boom"}}}`, "rate_limit_error", 429},
+		{"failed with server_error", `{"type":"response.failed","response":{"error":{"code":"server_error","message":"boom"}}}`, "api_error", 502},
+		{"failed with context length", `{"type":"response.failed","response":{"error":{"code":"context_length_exceeded","message":"boom"}}}`, "invalid_request_error", 400},
+	}
+	for _, tc := range cases {
+		backend := func(w http.ResponseWriter, r *http.Request) {
+			writeSSE(w, `{"type":"response.created","response":{"id":"resp_e","model":"gpt-5.5"}}`)
+			writeSSE(w, `{"type":"response.output_text.delta","delta":"par"}`)
+			writeSSE(w, tc.event)
+			// Anything after the error must not reopen the answer.
+			writeSSE(w, `{"type":"response.completed","response":{"id":"resp_e","usage":{"input_tokens":1,"output_tokens":1}}}`)
+		}
+
+		h := newHarness(t, nil, backend, true)
+		rec := h.do(t, http.MethodPost, "/v1/messages", `{"model":"gpt-5.5","stream":true,"messages":[]}`)
+		names, data := sseEvents(rec.Body.String())
+		last := len(names) - 1
+		if last < 0 || names[last] != "error" {
+			t.Fatalf("%s: events = %v, want the stream to end at the error", tc.name, names)
+		}
+		if got := data[last].Get("error.type").String(); got != tc.wantType {
+			t.Fatalf("%s: error.type = %q, want %q", tc.name, got, tc.wantType)
+		}
+		for _, name := range names {
+			if name == "message_delta" || name == "message_stop" {
+				t.Fatalf("%s: events = %v, want no %s after an error", tc.name, names, name)
+			}
+		}
+
+		h = newHarness(t, nil, backend, true)
+		rec = h.do(t, http.MethodPost, "/v1/messages", `{"model":"gpt-5.5","stream":false,"messages":[]}`)
+		if rec.Code != tc.wantCode || gjson.Get(rec.Body.String(), "error.type").String() != tc.wantType {
+			t.Fatalf("%s: JSON answer %d %s, want %d %s", tc.name, rec.Code, rec.Body.String(), tc.wantCode, tc.wantType)
+		}
+	}
+}
+
+func TestAStreamCutShortIsAnError(t *testing.T) {
+	cut := func(w http.ResponseWriter, r *http.Request) {
+		writeSSE(w, `{"type":"response.created","response":{"id":"resp_cut","model":"gpt-5.5"}}`)
+		writeSSE(w, `{"type":"response.output_text.delta","delta":"par"}`)
+		// The connection closes cleanly, with no terminal event.
+	}
+	empty := func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+	}
+	for name, backend := range map[string]http.HandlerFunc{"cut": cut, "empty": empty} {
+		h := newHarness(t, nil, backend, true)
+		rec := h.do(t, http.MethodPost, "/v1/messages", `{"model":"gpt-5.5","stream":true,"messages":[]}`)
+		names, data := sseEvents(rec.Body.String())
+		last := len(names) - 1
+		if last < 0 || names[last] != "error" || data[last].Get("error.type").String() != "api_error" {
+			t.Fatalf("%s: events = %v, want the stream to end in an api_error", name, names)
+		}
+		for _, event := range names {
+			if event == "message_delta" || event == "message_stop" {
+				t.Fatalf("%s: events = %v, want no fabricated ending", name, names)
+			}
+		}
+
+		h = newHarness(t, nil, backend, true)
+		rec = h.do(t, http.MethodPost, "/v1/messages", `{"model":"gpt-5.5","stream":false,"messages":[]}`)
+		if rec.Code < 500 || gjson.Get(rec.Body.String(), "type").String() != "error" {
+			t.Fatalf("%s: JSON answer %d %s, want a 5xx Anthropic error", name, rec.Code, rec.Body.String())
+		}
+		if strings.Contains(rec.Body.String(), "end_turn") {
+			t.Fatalf("%s: JSON answer reports end_turn: %s", name, rec.Body.String())
+		}
+	}
+}
+
+func TestEffortEdgeCasesClampSensibly(t *testing.T) {
+	cases := []struct {
+		body string
+		want string
+	}{
+		// Below the model's lowest level: the lowest level, not the default.
+		{`{"model":"gpt-5.5","messages":[],"output_config":{"effort":"minimal"}}`, "low"},
+		{`{"model":"gpt-5.5","messages":[],"output_config":{"effort":"none"}}`, "low"},
+		// Unknown: the model's default, not its top.
+		{`{"model":"gpt-5.5","messages":[],"output_config":{"effort":"banana"}}`, "medium"},
+		{`{"model":"gpt-6-astra","messages":[],"output_config":{"effort":"banana"}}`, "medium"},
+		// Claude Code's top level still maps to the model's top.
+		{`{"model":"gpt-6-astra","messages":[],"output_config":{"effort":"ultra"}}`, "max"},
+		{`{"model":"gpt-5.5","messages":[],"output_config":{"effort":"ultra"}}`, "xhigh"},
+	}
+	for _, tc := range cases {
+		h := newHarness(t, nil, nil, true)
+		h.do(t, http.MethodPost, "/v1/messages", tc.body)
+		if got := h.codexUpstream(t).Get("reasoning.effort").String(); got != tc.want {
+			t.Fatalf("%s: reasoning.effort = %q, want %q", tc.body, got, tc.want)
+		}
+	}
+}

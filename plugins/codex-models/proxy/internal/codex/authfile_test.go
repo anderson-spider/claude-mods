@@ -187,15 +187,16 @@ func TestStorePrefersItsOwnCredentials(t *testing.T) {
 	}
 }
 
-func TestRefreshWritesBackToTheCodexCLIFile(t *testing.T) {
-	codexHome := filepath.Join(t.TempDir(), ".codex")
-	path := writeCodexCLIAuth(t, codexHome, accessToken(-time.Hour, "acct_cli", "plus"), "rt-old")
-	t.Setenv("CODEX_HOME", codexHome)
+// An auth_file in the CLI's layout that is not the CLI's own file is this
+// proxy's to refresh, and keeps that layout and its foreign fields.
+func TestRefreshWritesBackToAnExplicitFileInTheCLILayout(t *testing.T) {
+	t.Setenv("CODEX_HOME", filepath.Join(t.TempDir(), ".codex"))
+	path := writeCodexCLIAuth(t, t.TempDir(), accessToken(-time.Hour, "acct_cli", "plus"), "rt-old")
 
 	newAccess := accessToken(48*time.Hour, "acct_cli", "plus")
 	client, _ := tokenEndpoint(t, fmt.Sprintf(`{"access_token":%q,"refresh_token":"rt-new","expires_in":3600}`, newAccess), 200)
 
-	store := NewStore(client, StoreOptions{Dir: t.TempDir(), UseCodexCLI: true})
+	store := NewStore(client, StoreOptions{Dir: t.TempDir(), ExplicitPath: path})
 	access, _, err := store.Access(context.Background())
 	if err != nil {
 		t.Fatalf("Access: %v", err)
@@ -210,8 +211,7 @@ func TestRefreshWritesBackToTheCodexCLIFile(t *testing.T) {
 	}
 	updated := gjson.ParseBytes(data)
 
-	// The refreshed credentials must land in the CLI's own layout, so the
-	// CLI keeps working.
+	// The refreshed credentials must land in the file's own layout.
 	if got := updated.Get("tokens.access_token").String(); got != newAccess {
 		t.Fatalf("tokens.access_token was not updated: %s", data)
 	}

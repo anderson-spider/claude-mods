@@ -152,7 +152,7 @@ func (r *Router) bufferCodex(w http.ResponseWriter, upstream io.Reader, resoluti
 	assembler.Write(translator.Close())
 
 	if kind, message, failed := assembler.Err(); failed {
-		writeAnthropicError(w, http.StatusBadGateway, kind, message)
+		writeAnthropicError(w, errorTypeStatus(kind), kind, message)
 		return
 	}
 
@@ -171,22 +171,16 @@ func (r *Router) writeCodexTokenCount(w http.ResponseWriter, body []byte) {
 
 // writeCodexError maps a backend failure onto an Anthropic error response.
 func writeCodexError(w http.ResponseWriter, err error) {
-	if errors.Is(err, codex.ErrNotAuthenticated) {
-		writeAnthropicError(w, http.StatusUnauthorized, "authentication_error", err.Error())
+	// Never 401 toward Claude Code: it reads a 401 as its own Anthropic login
+	// expiring, refreshes it and asks for /login. A Codex login problem is
+	// a 403 that names the fix.
+	if errors.Is(err, codex.ErrNotAuthenticated) || errors.Is(err, codex.ErrCodexCLILoginExpired) {
+		writeAnthropicError(w, http.StatusForbidden, "permission_error", err.Error())
 		return
 	}
 
 	var apiErr *codex.APIError
 	if errors.As(err, &apiErr) {
-		kind := "api_error"
-		switch apiErr.StatusCode {
-		case http.StatusUnauthorized, http.StatusForbidden:
-			kind = "authentication_error"
-		case http.StatusTooManyRequests:
-			kind = "rate_limit_error"
-		case http.StatusBadRequest, http.StatusUnprocessableEntity:
-			kind = "invalid_request_error"
-		}
 		message := string(bytes.TrimSpace(apiErr.Body))
 		// Surface the upstream message rather than its JSON envelope when
 		// one is available.
@@ -199,12 +193,57 @@ func writeCodexError(w http.ResponseWriter, err error) {
 			message = http.StatusText(apiErr.StatusCode)
 		}
 		logx.Warnf("codex backend error %d: %s", apiErr.StatusCode, message)
-		writeAnthropicError(w, apiErr.StatusCode, kind, message)
+
+		status := apiErr.StatusCode
+		if status == http.StatusUnauthorized {
+			status = http.StatusForbidden
+			message = "the Codex backend refused the ChatGPT login; run `ccmproxy login codex` to sign in again: " + message
+		}
+		writeAnthropicError(w, status, codexErrorType(apiErr.StatusCode), message)
 		return
 	}
 
 	logx.Errorf("codex request failed: %v", err)
 	writeAnthropicError(w, http.StatusBadGateway, "api_error", err.Error())
+}
+
+// codexErrorType maps a Codex backend status onto Anthropic's error types.
+func codexErrorType(status int) string {
+	switch status {
+	case http.StatusBadRequest, http.StatusUnprocessableEntity:
+		return "invalid_request_error"
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return "permission_error"
+	case http.StatusNotFound:
+		return "not_found_error"
+	case http.StatusRequestEntityTooLarge:
+		return "request_too_large"
+	case http.StatusTooManyRequests:
+		return "rate_limit_error"
+	case 529:
+		return "overloaded_error"
+	}
+	return "api_error"
+}
+
+// errorTypeStatus is the HTTP status for an Anthropic error type, for a
+// non-streaming answer that failed mid-stream.
+func errorTypeStatus(kind string) int {
+	switch kind {
+	case "invalid_request_error":
+		return http.StatusBadRequest
+	case "permission_error":
+		return http.StatusForbidden
+	case "not_found_error":
+		return http.StatusNotFound
+	case "request_too_large":
+		return http.StatusRequestEntityTooLarge
+	case "rate_limit_error":
+		return http.StatusTooManyRequests
+	case "overloaded_error":
+		return 529
+	}
+	return http.StatusBadGateway
 }
 
 // scanSSE reads a Server-Sent Events stream and invokes onData once per event

@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/jclab-joseph/claude-code-model-proxy/internal/netx"
 )
 
 // Backend calls the Codex Responses endpoint on behalf of a signed-in
@@ -26,8 +28,10 @@ type Backend struct {
 // no overall request timeout because a single response can stream for
 // minutes; the caller's context bounds the call instead.
 func NewBackend(baseURL, userAgent, originator string, store *Store, transport http.RoundTripper) *Backend {
+	// Never http.DefaultTransport: it honours HTTPS_PROXY, and this
+	// transport carries the ChatGPT access token.
 	if transport == nil {
-		transport = http.DefaultTransport
+		transport = netx.Shared()
 	}
 	return &Backend{
 		BaseURL:    strings.TrimSuffix(baseURL, "/"),

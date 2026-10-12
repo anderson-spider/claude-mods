@@ -42,8 +42,11 @@ type StreamTranslator struct {
 	thinkingSignature string
 	thinkingSeen      bool
 
-	messageStarted  bool
-	messageStopped  bool
+	messageStarted bool
+	messageStopped bool
+	// failed is set once an error frame went out: nothing follows it, no
+	// message_delta and no message_stop.
+	failed          bool
 	hasTextDelta    bool
 	emittedThinking bool
 	emittedToolUse  bool
@@ -72,7 +75,7 @@ func (t *StreamTranslator) Started() bool { return t.messageStarted }
 // Event translates a single Codex SSE payload (the JSON after "data:") into
 // zero or more Anthropic SSE frames.
 func (t *StreamTranslator) Event(payload []byte) []byte {
-	if !gjson.ValidBytes(payload) {
+	if t.failed || t.messageStopped || !gjson.ValidBytes(payload) {
 		return nil
 	}
 	root := gjson.ParseBytes(payload)
@@ -214,30 +217,40 @@ func (t *StreamTranslator) Event(payload []byte) []byte {
 		out = append(out, t.finish(root.Get("response"))...)
 
 	case "response.failed":
-		message := root.Get("response.error.message").String()
+		failure := root.Get("response.error")
+		message := failure.Get("message").String()
 		if message == "" {
 			message = "the Codex backend reported a failed response"
 		}
-		out = append(out, t.Error(root.Get("response.error.type").String(), message)...)
+		out = append(out, t.Error(errorKind(failure.Get("type").String(), failure.Get("code").String()), message)...)
 
 	case "error":
 		errorResult := root.Get("error")
 		kind := errorResult.Get("type").String()
+		code := errorResult.Get("code").String()
+		if !errorResult.Exists() {
+			kind, code = "", root.Get("code").String()
+		}
 		message := errorResult.Get("message").String()
 		if message == "" {
 			message = root.Get("message").String()
 		}
-		out = append(out, t.Error(kind, message)...)
+		out = append(out, t.Error(errorKind(kind, code), message)...)
 	}
 
 	return out
 }
 
 // Error renders an Anthropic error frame.
+//
+// kind is passed through errorKind, so only Anthropic error types go out.
+// Nothing is emitted after an error frame: Close adds no message_stop.
 func (t *StreamTranslator) Error(kind, message string) []byte {
-	if kind == "" {
-		kind = "api_error"
+	if t.failed {
+		return nil
 	}
+	t.failed = true
+	kind = errorKind(kind, "")
 	if message == "" {
 		message = "upstream error"
 	}
@@ -249,20 +262,15 @@ func (t *StreamTranslator) Error(kind, message string) []byte {
 
 // Close emits whatever is needed to leave the client with a well-formed
 // stream when upstream ends without a terminal event.
+//
+// A stream that ends without response.completed, response.incomplete or an
+// error was cut short: it is reported as an error, never dressed up as a
+// finished answer with an invented end_turn and zero usage.
 func (t *StreamTranslator) Close() []byte {
-	if t.messageStopped {
+	if t.messageStopped || t.failed {
 		return nil
 	}
-	out := t.closeThinking()
-	out = append(out, t.closeText()...)
-	out = append(out, t.closeActiveCalls()...)
-	if !t.messageStarted {
-		return out
-	}
-	out = append(out, t.messageDelta("end_turn", 0, 0, 0, 0)...)
-	out = append(out, sseFrame("message_stop", []byte(`{"type":"message_stop"}`))...)
-	t.messageStopped = true
-	return out
+	return t.Error("api_error", "the Codex stream ended before the response completed")
 }
 
 func (t *StreamTranslator) start(response gjson.Result) []byte {
@@ -749,12 +757,11 @@ func usage(u gjson.Result) (input, output, cacheRead, cacheWrite int64) {
 	output = u.Get("output_tokens").Int()
 	cacheRead = u.Get("input_tokens_details.cached_tokens").Int()
 	cacheWrite = u.Get("input_tokens_details.cache_write_tokens").Int()
-	if cacheRead > 0 {
-		if input >= cacheRead {
-			input -= cacheRead
-		} else {
-			input = 0
-		}
+	// Anthropic's input_tokens counts neither cache reads nor cache writes;
+	// the Responses input_tokens includes both.
+	input -= cacheRead + cacheWrite
+	if input < 0 {
+		input = 0
 	}
 	return input, output, cacheRead, cacheWrite
 }
@@ -769,4 +776,41 @@ func sseFrame(event string, data []byte) []byte {
 	out = append(out, data...)
 	out = append(out, '\n', '\n')
 	return out
+}
+
+// anthropicErrorTypes are the error types Anthropic's API sends.
+var anthropicErrorTypes = map[string]bool{
+	"invalid_request_error": true,
+	"permission_error":      true,
+	"not_found_error":       true,
+	"request_too_large":     true,
+	"rate_limit_error":      true,
+	"api_error":             true,
+	"overloaded_error":      true,
+}
+
+// errorKind maps an upstream error type or code onto an Anthropic error
+// type. authentication_error becomes permission_error: Claude Code reads an
+// authentication error as its own Anthropic login failing.
+func errorKind(kind, code string) string {
+	for _, candidate := range []string{strings.ToLower(strings.TrimSpace(kind)), strings.ToLower(strings.TrimSpace(code))} {
+		switch candidate {
+		case "":
+			continue
+		case "authentication_error", "invalid_api_key", "unauthorized":
+			return "permission_error"
+		case "rate_limit_exceeded", "usage_limit_reached", "insufficient_quota", "rate_limit":
+			return "rate_limit_error"
+		case "server_is_overloaded", "overloaded", "slow_down":
+			return "overloaded_error"
+		case "context_length_exceeded", "invalid_prompt", "invalid_request", "bad_request":
+			return "invalid_request_error"
+		case "not_found", "model_not_found":
+			return "not_found_error"
+		}
+		if anthropicErrorTypes[candidate] {
+			return candidate
+		}
+	}
+	return "api_error"
 }

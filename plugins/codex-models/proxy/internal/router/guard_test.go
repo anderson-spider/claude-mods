@@ -471,3 +471,20 @@ func TestStatusReportsDevWithoutAVersion(t *testing.T) {
 		t.Fatalf("status = %s", rec.Body.String())
 	}
 }
+
+func TestConnectAndTraceAreRefusedEvenWithTheSecret(t *testing.T) {
+	h := newHarness(t, nil, nil, true)
+	handler := guarded(t, h, guardListen)
+	for _, method := range []string{http.MethodConnect, http.MethodTrace} {
+		for _, path := range []string{"/v1/messages", "/v1/models", "/__ccmproxy/status", "/api/hello"} {
+			h.reset()
+			rec := serve(handler, sent{method: method, target: path, header: http.Header{config.TokenHeader: {guardToken}}})
+			label := method + " " + path
+			assertForbidden(t, label, rec, method)
+			assertNoCORS(t, label, rec)
+			if h.reachedUpstream() {
+				t.Fatalf("%s reached an upstream", label)
+			}
+		}
+	}
+}
