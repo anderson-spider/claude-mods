@@ -72,7 +72,6 @@ Offers OpenAI Codex models (ChatGPT login) in Claude Code through a local proxy.
 - A new session lists the Codex rows in `/model` and stays on Claude.
 - `crew:developer-codex` answers from Codex over several turns: thinking blocks survive across turns (a config flag echoing the requested id is the fallback if not) and the effort is the one Jev sized.
 - `crew:tester-codex` writing outside its lane is denied.
-- `mcp__crew__codex` stays logged in after the proxy refreshed its own login.
 - Proxy stopped, wrong secret and another app on the port each give their notice at session start.
 - The crew's confirmation of a routed `-codex` spawn accepts the planned id or its dated release (a trailing `-YYYY-MM-DD` or `-YYYYMMDD`), but an id with the effort before the date (`gpt-6-astra-high-2026-05-01`) would read as a mismatch.
 - Uninstall restores the settings (semantically equal; a hand-formatted file comes back as 2-space JSON).

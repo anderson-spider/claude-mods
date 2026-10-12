@@ -1,7 +1,0 @@
-{"type":"thread.started","thread_id":"01a12bd5-30e4-7f12-8e42-d8db931e560d"}
-{"type":"turn.started"}
-{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"Vou listar os arquivos deste diretório.\n"}}
-{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc 'ls -la'","aggregated_output":"","exit_code":null,"status":"in_progress"}}
-{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc 'ls -la'","aggregated_output":"total 8\ndrwxr-xr-x@  6 user  staff  192 Oct 11 13:37 .\ndrwxr-xr-x@ 15 user  staff  480 Oct 11 13:37 ..\ndrwxr-xr-x@  9 user  staff  288 Oct 11 13:37 .codegraph\ndrwxr-xr-x@  3 user  staff   96 Oct 11 13:37 .crew\ndrwxr-xr-x@ 12 user  staff  384 Oct 11 13:37 .git\n-rw-r--r--@  1 user  staff    3 Oct 11 13:36 a.txt\n","exit_code":0,"status":"completed"}}
-{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"Neste diretório:\n\n- `a.txt`\n- `.codegraph/`\n- `.crew/`\n- `.git/`"}}
-{"type":"turn.completed","usage":{"input_tokens":49250,"cached_input_tokens":37632,"cache_write_input_tokens":0,"output_tokens":73,"reasoning_output_tokens":0}}

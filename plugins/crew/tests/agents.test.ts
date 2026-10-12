@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
-import { CODEX_BASE_EFFORT, CODEX_TOOL, EFFORTS, EFFORT_FLOOR, MODELS, MODEL_FLOORS, SPECIALISTS, codexSection, isLoopbackBase, leadSection, nativeCodexSection, nativeCodexSpecs, offersCodex } from '../hooks/agents'
-import { parseCodexModels } from '../hooks/codex/models'
+import { EFFORTS, EFFORT_FLOOR, MODELS, MODEL_FLOORS, SPECIALISTS, isLoopbackBase, leadSection, nativeCodexSection, nativeCodexSpecs } from '../hooks/agents'
+import { parseCodexModels } from '../hooks/native'
 
 const by = (name: string) => SPECIALISTS.find(s => s.name === name)
 
@@ -53,34 +53,6 @@ test('every default sits on the model and effort scales routing moves along', ()
   }
 })
 
-test('codexSection names the three Codex tools', () => {
-  const text = codexSection(false)
-  expect(text.length).toBeGreaterThan(0)
-  for (const name of ['mcp__crew__codex', 'mcp__crew__codex_result', 'mcp__crew__codex_cancel']) {
-    expect(text).toContain(name)
-  }
-})
-
-test('CODEX_BASE_EFFORT is medium, apart from the agents\' own defaults', () => {
-  expect(CODEX_BASE_EFFORT).toBe('medium')
-  expect(EFFORTS).toContain(CODEX_BASE_EFFORT)
-})
-
-test('codexSection says whether Jev sizes the job, and is stable for each flag', () => {
-  expect(codexSection(true)).toContain('Jev sizes each Codex job')
-  expect(codexSection(true)).not.toContain('does not size')
-  expect(codexSection(false)).not.toContain('Jev')
-  expect(codexSection(false)).toContain('medium effort')
-  expect(codexSection(true)).toBe(codexSection(true))
-  expect(codexSection(true)).not.toBe(codexSection(false))
-})
-
-test('offersCodex is true only when the Codex tool is listed', () => {
-  expect(offersCodex(['Agent', CODEX_TOOL])).toBe(true)
-  expect(offersCodex(['Agent', 'mcp__crew__codex_result'])).toBe(false)
-  expect(offersCodex([])).toBe(false)
-})
-
 test('leadSection does not carry the Codex text', () => {
   for (const jev of [true, false]) {
     expect(leadSection(jev)).not.toContain('codex')
@@ -115,7 +87,7 @@ test('only the roles named get a twin, and SPECIALISTS keep their aliases', () =
   for (const s of SPECIALISTS) expect(MODELS).toContain(s.model)
 })
 
-test('the twins are built from the Codex engine\'s parser: its roles, its id check, its errors', () => {
+test('the twins are built from the parser in native.ts: its roles, its id check, its errors', () => {
   const parsed = parseCodexModels('developer=gpt-x, bogus=gpt-y, tester=-m, architect')
   expect(nativeCodexSpecs(parsed.models).map(t => [t.name, t.model])).toEqual([['developer-codex', 'gpt-x']])
   expect(parsed.errors.length).toBe(3)
@@ -135,18 +107,16 @@ test('isLoopbackBase accepts http on 127.0.0.0/8, ::1 and localhost only', () =>
   }
 })
 
-test('nativeCodexSection lists every twin with its model, is stable, and compares with the Codex tool only when it is offered', () => {
+test('nativeCodexSection lists every twin with its model, never names the Codex engine tools, and is stable', () => {
   const specs = nativeCodexSpecs({ developer: 'gpt-a', architect: 'gpt-b' })
-  const text = nativeCodexSection(specs, false)
+  const text = nativeCodexSection(specs)
 
   expect(text).toContain('crew:developer-codex (gpt-a)')
   expect(text).toContain('crew:architect-codex (gpt-b)')
   expect(text).not.toContain('crew:tester-codex')
   expect(text).not.toContain('mcp__crew__codex')
   expect(text).toContain('never pass `model`')
-  expect(nativeCodexSection(specs, true)).toContain('mcp__crew__codex')
-  expect(nativeCodexSection(specs, true)).toContain(text.slice(0, 40))
-  expect(nativeCodexSection(specs, false)).toBe(text)
+  expect(nativeCodexSection(specs)).toBe(text)
 })
 
 // --- The loopback gate and the twins' shape ---
@@ -185,8 +155,8 @@ test('leadSection never names Codex in any case, for either Jev flag', () => {
   for (const jev of [true, false]) expect(leadSection(jev).toLowerCase()).not.toContain('codex')
 })
 
-test('the native section lists only the given twins, and not the Codex tool when it is not offered', () => {
-  const text = nativeCodexSection(nativeCodexSpecs({ tester: 'gpt-6-astra' }), false)
+test('the native section lists only the given twins and never names the Codex engine tools', () => {
+  const text = nativeCodexSection(nativeCodexSpecs({ tester: 'gpt-6-astra' }))
   expect(text).toContain('crew:tester-codex (gpt-6-astra)')
   expect(text).not.toContain('crew:developer-codex')
   expect(text).not.toContain('mcp__crew__codex')

@@ -26,7 +26,7 @@ node --test plugins/codex-models/tests/scripts/*.test.mjs
 | codex-models (plugin) | The status reply and report, the settings merge and unmerge, the hooks through the test host | Pure modules; a fake `http.fetch` for the hooks |
 | codex-models (proxy) | Configuration, listeners, the guard and routes, byte-for-byte pass-through, the streaming translation, OAuth and the credential store, effort, the catalog, compressed bodies | The Go test packages; no network |
 | codex-models (installer) | `install.sh` and `uninstall.sh` against a temporary `HOME`, with a fake `launchctl` and `mise` | The real scripts with fakes; no LaunchAgent is loaded |
-| crew | Each agent's model and effort, the write lanes, Jev routing (tier, effort, breaker, key, decision log), the Codex engine (argv, events, jobs, worker, the engine over a fake host), the Flightdeck dashboard and the `/crew:panel` command | The test host with a fake `http.fetch`; a fake process host for the Codex jobs, which never runs Codex or reaches Jev |
+| crew | Each agent's model and effort, the write lanes, Jev routing (tier, effort, breaker, key, decision log), the Flightdeck dashboard and the `/crew:panel` command | The test host with a fake `http.fetch`; nothing reaches Jev |
 | tailscale | URL building, the forbidden call, redaction, `ETag`/`If-Match` | A fake `fetch`; no fake host |
 
 ## What they do not prove

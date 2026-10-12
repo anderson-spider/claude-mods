@@ -523,64 +523,8 @@ test('classifyFailure counts a failure against the breaker unless the request wa
   expect(classifyFailure(new Error('x')).counts).toBe(true)
 })
 
-test('an aborted call sends no request, takes no slot, and does not count against the breaker', async () => {
-  const h = harness([{}])
-  const gate = createGate()
-  const breaker = createBreaker(() => h.state.now)
-  const stop = new AbortController()
-  stop.abort()
-  const failure = await failureOf(createJev(h.io, KEY, { ...OPTS, gate, breaker })({}, {}, stop.signal))
-  expect(failure.reason).toBe('aborted')
-  expect(h.calls.length).toBe(0)
-  for (let i = 0; i < MAX_CONCURRENT; i++) expect(gate.acquire()).toBe(true)
-  expect(classifyFailure(failure).counts).toBe(false)
-})
-
-test('an Esc after the first attempt failed with 503 sends no retry', async () => {
+test('a 503 is retried once while the deadline allows', async () => {
   const h = harness([{ status: 503 }, {}])
-  const stop = new AbortController()
-  const io: JevIo = { ...h.io, fetch: async (url, init) => { const r = await h.io.fetch(url, init); stop.abort(); return r } }
-  expect((await failureOf(createJev(io, KEY, OPTS)({}, {}, stop.signal))).reason).toBe('aborted')
-  expect(h.calls.length).toBe(1)
-})
-
-test('without a signal nothing changes: the 503 is retried', async () => {
-  const h = harness([{ status: 503 }, {}])
-  await createJev(h.io, KEY, OPTS)({}, {}, undefined)
+  await createJev(h.io, KEY, OPTS)({}, {})
   expect(h.calls.length).toBe(2)
-})
-
-test('an Esc during the pause before the retry sends no second request', async () => {
-  const h = harness([{ status: 503 }, {}])
-  const stop = new AbortController()
-  // The pause timer is the one that is neither the deadline nor the hold: the Esc lands while it runs.
-  const io: JevIo = {
-    ...h.io,
-    timer: (ms, fn) => h.io.timer(ms, ms !== JEV_DEADLINE_MS && ms !== SLOT_HOLD_MS ? () => { stop.abort(); fn() } : fn),
-  }
-  expect((await failureOf(createJev(io, KEY, OPTS)({}, {}, stop.signal))).reason).toBe('aborted')
-  expect(h.calls.length).toBe(1)
-})
-
-test('an Esc after a 503 frees the slot once the fetch settled and leaves a half-open breaker free to probe', async () => {
-  const h = harness([{ status: 401 }, { status: 503 }, {}])
-  const gate = createGate()
-  const breaker = createBreaker(() => h.state.now, { failures: 1, pauseMs: 100 })
-  const ask = createJev(h.io, KEY, { ...OPTS, gate, breaker })
-  // A 401 opens the breaker (limit 1); past its pause the next call is the half-open probe.
-  expect((await failureOf(ask({}, {}))).status).toBe(401)
-  expect(breaker.allow()).toBe(false)
-  h.state.now += 100
-  const stop = new AbortController()
-  const io: JevIo = { ...h.io, fetch: async (url, init) => { const r = await h.io.fetch(url, init); stop.abort(); return r } }
-  const probe = createJev(io, KEY, { ...OPTS, gate, breaker })
-  expect((await failureOf(probe({}, {}, stop.signal))).reason).toBe('aborted')
-  expect(h.calls.length).toBe(2)
-  await tick()
-  // The aborted probe did not count as a failure and gave the probe back: the next call may probe again.
-  expect(breaker.allow()).toBe(true)
-  breaker.release()
-  // And its slot was released: all MAX_CONCURRENT slots are free.
-  for (let i = 0; i < MAX_CONCURRENT; i++) expect(gate.acquire()).toBe(true)
-  expect(gate.acquire()).toBe(false)
 })
