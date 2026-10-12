@@ -3,11 +3,8 @@
 # codex-computer-use plugin expects) as a per-user LaunchAgent: started at login,
 # restarted if it crashes. Safe to run again; `state/` (approvals, log) is kept.
 #
-#   install.sh                     helper only (plugin installed from the marketplace)
-#   install.sh --plugin-dir <dir>  also load the plugin from <dir> through
-#                                  CLAUDE_CODE_PLUGIN_DIRS in ~/.claude/settings.json
-#   install.sh --check             only check the prerequisites; changes nothing
-#                                  (not combined with --plugin-dir)
+#   install.sh          helper only (plugin installed from the marketplace)
+#   install.sh --check  only check the prerequisites; changes nothing
 set -eu
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -15,21 +12,14 @@ TARGET="$HOME/.claude/mcp/codex-cu"
 LABEL=com.anderson-spider.codex-cu
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 NODE=/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node
-PLUGIN_DIR=
 CHECK=
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --plugin-dir) PLUGIN_DIR=$(cd "$2" && pwd); shift 2 ;;
     --check) CHECK=1; shift ;;
-    *) echo "usage: install.sh [--plugin-dir <dir> | --check]" >&2; exit 2 ;;
+    *) echo "usage: install.sh [--check]" >&2; exit 2 ;;
   esac
 done
-
-if [ -n "$CHECK" ] && [ -n "$PLUGIN_DIR" ]; then
-  echo "usage: install.sh [--plugin-dir <dir> | --check]" >&2
-  exit 2
-fi
 
 if [ ! -x "$NODE" ]; then
   echo "codex-cu: $NODE is missing. Install the ChatGPT desktop app and turn on Computer Use in Codex first." >&2
@@ -104,24 +94,3 @@ until launchctl bootstrap "$DOMAIN" "$PLIST" 2>/dev/null; do
   sleep 1
 done
 echo "helper: $LABEL loaded from $PLIST"
-
-[ -n "$PLUGIN_DIR" ] || exit 0
-
-# Optional: CLAUDE_CODE_PLUGIN_DIRS in the env block of ~/.claude/settings.json.
-"$NODE" - "$HOME/.claude/settings.json" "$PLUGIN_DIR" <<'EOF'
-const fs = require('node:fs')
-const [file, dir] = process.argv.slice(2)
-const settings = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {}
-settings.env = settings.env ?? {}
-const dirs = (settings.env.CLAUDE_CODE_PLUGIN_DIRS ?? '').split(':').filter(Boolean)
-if (!dirs.includes(dir)) {
-  dirs.push(dir)
-  settings.env.CLAUDE_CODE_PLUGIN_DIRS = dirs.join(':')
-  // Keep the first backup: a later run would otherwise overwrite it with an already edited file.
-  if (fs.existsSync(file) && !fs.existsSync(`${file}.bak-codex-cu`)) fs.copyFileSync(file, `${file}.bak-codex-cu`)
-  fs.writeFileSync(file, `${JSON.stringify(settings, null, 2)}\n`)
-  console.log(`plugin: added ${dir} to CLAUDE_CODE_PLUGIN_DIRS in ${file}`)
-} else {
-  console.log(`plugin: ${dir} already in CLAUDE_CODE_PLUGIN_DIRS`)
-}
-EOF

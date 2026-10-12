@@ -68,6 +68,8 @@ test('install.sh and helper.mjs place the socket where the shared socket path sa
 
   const source = readFileSync(join(HERE, '..', 'helper.mjs'), 'utf8')
   assert.equal(contract.socketUnderHome, `${installedUnder}/run/helper.sock`)
-  assert.match(source, /const RUN = process\.env\.CODEX_CU_RUN_DIR \?\? join\(HERE, 'run'\)/)
+  assert.match(source, /const RUN = join\(HERE, 'run'\)/)
+  assert.match(source, /const STATE = join\(HERE, 'state'\)/)
+  assert.doesNotMatch(source, /process\.env\.CODEX_CU_(RUN|STATE)_DIR/)
   assert.match(source, /const SOCKET = join\(RUN, 'helper\.sock'\)/)
 })

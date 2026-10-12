@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { callerOf } from '../hooks/helper'
-import { isOwnDesktopTool, limitMs, parseCommand } from '../hooks/routing'
+import { APPROVAL_MS, isOwnDesktopTool, parseCommand } from '../hooks/routing'
 
 test('routing pieces: commands, own desktop tools, callers and answers', () => {
   expect(parseCommand('on')).toEqual({ kind: 'on' })
@@ -24,13 +24,6 @@ test('routing pieces: commands, own desktop tools, callers and answers', () => {
   expect(callerOf('sess-1', 'agent 7')).toBe('sess-1/agent_7')
 })
 
-test('limitMs reads minutes, falls back and caps', () => {
-  expect(limitMs(undefined, 5)).toBe(300_000)
-  expect(limitMs('abc', 5)).toBe(300_000)
-  expect(limitMs(0, 5)).toBe(300_000)
-  expect(limitMs(-3, 5)).toBe(300_000)
-  expect(limitMs(NaN, 5)).toBe(300_000)
-  expect(limitMs(0.5, 5)).toBe(30_000)
-  expect(limitMs('12', 5)).toBe(720_000)
-  expect(limitMs(1e9, 5)).toBe(86_400_000)
+test('app approval has a fixed five-minute deadline', () => {
+  expect(APPROVAL_MS).toBe(300_000)
 })

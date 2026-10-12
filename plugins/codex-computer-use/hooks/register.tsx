@@ -12,7 +12,7 @@ import { forgetText, statusReport } from './presentation'
 import { DESCRIPTION, HELP, INPUT_SCHEMA, PROMPT, denyOwn } from './prompts'
 import { holdQuestion } from './question'
 import type { QuestionHost, Waiting } from './question'
-import { BRIDGE, isOwnDesktopTool, limitMs, parseCommand } from './routing'
+import { APPROVAL_MS, BRIDGE, isOwnDesktopTool, parseCommand } from './routing'
 import type { Command } from './routing'
 
 type Kit = Pick<Elements['terminal'], 'Box' | 'Text' | 'Button'>
@@ -25,8 +25,6 @@ const COMMAND = 'codex-cu'
 const POLL = ['sleep', '0.25']
 // How many polls `helper()` makes for the helper launchd was asked to start.
 const HELPER_RETRIES = 20
-// The `approvalMinutes` setting, refreshed by each register.
-let askLimitMs = limitMs(undefined, 5)
 
 const ref = { plugin: 'codex-computer-use', key: 'asking' } as const
 const asking = atom(ref, null)
@@ -71,7 +69,7 @@ const helper = async ($: EngineInterface, route: string, body: unknown): Promise
 }
 
 const questionHost = ($: EngineInterface): QuestionHost => ({
-  now: () => Date.now(),
+  now: () => $.clock.now(),
   wait: () => $.process.run(POLL),
   show: question => $.state.set(ref, question),
 })
@@ -142,9 +140,7 @@ const commandsOf = ($: EngineInterface): Handlers => ({
 /** Runs the handler for the command's kind; the generic ties each kind to its own command shape. */
 const runCommand = <K extends Command['kind']>(handlers: Handlers, kind: K, command: Extract<Command, { kind: K }>) => handlers[kind](command)
 
-export const register: Register = (on, options) => {
-  askLimitMs = limitMs(options?.approvalMinutes, 5)
-
+export const register: Register = on => {
   // A reload in the middle of a question would leave the band stuck.
   on('session.start', async ($, e, next) => {
     waiting.current = undefined
@@ -196,8 +192,8 @@ export const register: Register = (on, options) => {
       enabled: () => isEnabled($),
       sessionId: () => $.session.id(),
       helper: (route, body) => helper($, route, body),
-      ask: (question, signal) => holdQuestion(questionHost($), waiting, askLimitMs, question, signal),
-      limitMs: askLimitMs,
+      ask: (question, signal) => holdQuestion(questionHost($), waiting, APPROVAL_MS, question, signal),
+      limitMs: APPROVAL_MS,
     }, e as unknown as BridgeInput, next.signal).catch((error: unknown) => ({
       result: `codex-cu: the bridge failed: ${error instanceof Error ? error.message : String(error)}`,
       isError: true as const,

@@ -3,14 +3,9 @@ import { expect, test } from 'claude-code/testing'
 
 import { BAND, TOOL, pause, ran, textOf } from './helpers'
 
-// The bridge's real question flow (`holdQuestion` in hooks/question.ts, wired in
-// hooks/register.tsx) reached through `tool.call`. The test host's `mock.clock`
-// answers `$.clock`, but the flow reads the global `Date.now()` and waits through
-// `$.process.run(['sleep', '0.25'])`, so the deadline runs on the real clock
-// (`approvalMinutes: 0.001` is 60 ms) and every poll is a held `process.run`
-// the test releases or fails by hand. The host also has no way to abort a
-// dispatch's `next.signal`, so `signal.aborted` itself is not driven here: the
-// `aborted` outcome is reached through the `catch` (a poll that throws).
+// The real question flow through tool.call, with a controlled host clock and
+// held process.run polls. Advancing time never waits for the approval deadline.
+// A failing poll exercises the aborted path; the host cannot abort next.signal.
 
 type Poll = { argv: readonly string[]; settled: boolean; release: () => void; fail: () => void }
 
@@ -18,7 +13,8 @@ const NEEDS = { status: 'needs_approval', app: { bundleId: 'com.apple.TextEdit',
 const CODE = 'let app = await cua.getApp("TextEdit");'
 
 /** The helper behind `http.fetch` (TextEdit asks until the caller is approved) and every `process.run` held as a Poll. */
-const askWorld = (on: On) => {
+const askWorld = (on: On, now: () => number = Date.now, routes: string[] = []) => {
+  on('clock.now', () => ({ value: now() }))
   const polls: Poll[] = []
   const approved = new Set<string>()
   const store = new Map<string, unknown>()
@@ -40,6 +36,7 @@ const askWorld = (on: On) => {
   )
   on('http.fetch', (_$, e) => {
     const route = e.url.replace('http://codex-cu', '')
+    routes.push(route)
     const body = JSON.parse(e.init?.body ?? '{}') as Record<string, unknown>
     const reply = (value: unknown) => ({ value: { status: 200, ok: true, headers: {}, text: JSON.stringify(value) } })
 
@@ -101,8 +98,9 @@ test('ask polls with sleep 0.25 through $.process.run, one poll at a time, and t
   await ui.unmount()
 })
 
-test('a second question waits in a queue with no deadline, and its deadline counted from before the queue', { options: { approvalMinutes: 0.001 } }, async ($, on) => {
-  const polls = askWorld(on)
+test('a second question waits in a queue with no deadline, and its deadline counted from before the queue', async ($, on) => {
+  let time = 0
+  const polls = askWorld(on, () => time)
 
   const first = $.tool.call({ tool: TOOL, code: CODE, agentId: 'agent-a', tool_use_id: 'q1' } as never)
   await until(() => polls.length === 1, 'first question polling')
@@ -113,8 +111,8 @@ test('a second question waits in a queue with no deadline, and its deadline coun
   let secondDone = false
   void second.then(() => (secondDone = true))
 
-  // Past the 60 ms limit, the queued question is still waiting: its queue loop never reads the clock.
-  await pause(150)
+  // Past the five-minute limit, the queued question is still waiting: its queue loop never reads the clock.
+  time = 300_001
   polls[1]?.release()
   await until(() => polls.length === 3, 'queued question polled again after its deadline')
   expect(secondDone).toBe(false)
@@ -124,7 +122,7 @@ test('a second question waits in a queue with no deadline, and its deadline coun
   polls[0]?.release()
   const firstAnswer = await first
   expect(firstAnswer.isError).toBe(true)
-  expect(textOf(firstAnswer)).toBe('The person did not answer whether Codex may use TextEdit within 0.1 seconds; nothing was done with it.')
+  expect(textOf(firstAnswer)).toBe('The person did not answer whether Codex may use TextEdit within 5 minutes; nothing was done with it.')
   expect(secondDone).toBe(false)
 
   // The second leaves the queue, finds its deadline (taken before the queue) already past, and times out
@@ -132,7 +130,7 @@ test('a second question waits in a queue with no deadline, and its deadline coun
   polls[2]?.release()
   const secondAnswer = await second
   expect(secondAnswer.isError).toBe(true)
-  expect(textOf(secondAnswer)).toBe('The person did not answer whether Codex may use TextEdit within 0.1 seconds; nothing was done with it.')
+  expect(textOf(secondAnswer)).toBe('The person did not answer whether Codex may use TextEdit within 5 minutes; nothing was done with it.')
   expect(polls).toHaveLength(3)
 })
 
@@ -155,22 +153,63 @@ const pump = async <T>(polls: Poll[], work: Promise<T>) => {
   return work
 }
 
-test('ask ends in timeout once the deadline passes, and the band is cleared', { options: { approvalMinutes: 0.001 } }, async ($, on) => {
-  const polls = askWorld(on)
+test('ask ends in timeout once the deadline passes, and the band is cleared', async ($, on) => {
+  let time = 0
+  const polls = askWorld(on, () => time)
+  const pending = $.tool.call({ tool: TOOL, code: CODE, tool_use_id: 'q1' } as never)
+  await until(() => polls.length === 1, 'first poll issued')
 
-  const started = Date.now()
-  const answer = await pump(polls, $.tool.call({ tool: TOOL, code: CODE, tool_use_id: 'q1' } as never))
-  // The limit (60 ms) is read from the real clock: `mock.clock` does not reach `Date.now()`.
-  expect(Date.now() - started).toBeGreaterThanOrEqual(60)
+  time = 299_999
+  polls[0]?.release()
+  await until(() => polls.length === 2, 'still waiting before five minutes')
+  time = 300_000
+  polls[1]?.release()
+  const answer = await pending
   expect(answer.isError).toBe(true)
-  expect(textOf(answer)).toBe('The person did not answer whether Codex may use TextEdit within 0.1 seconds; nothing was done with it.')
-  expect(polls.length).toBeGreaterThan(0)
-  expect(polls.map(poll => poll.argv)).toEqual(polls.map(() => ['sleep', '0.25']))
+  expect(textOf(answer)).toBe('The person did not answer whether Codex may use TextEdit within 5 minutes; nothing was done with it.')
+  expect(polls.map(poll => poll.argv)).toEqual([['sleep', '0.25'], ['sleep', '0.25']])
 
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
   expect(await ui.find({ type: 'Text', text: 'idle' })).toBeDefined()
   await ui.unmount()
 })
+
+for (const failAfterPoll of [false, true]) {
+  test(`a failing host clock ${failAfterPoll ? 'after a poll' : 'before the question'} never approves and clears the band`, async ($, on) => {
+    let failed = !failAfterPoll
+    let recovering = false
+    let reads = 0
+    const routes: string[] = []
+    const polls = askWorld(on, () => {
+      if (failed) throw new Error('clock failed')
+      return recovering && reads++ > 0 ? 300_000 : 0
+    }, routes)
+    const pending = $.tool.call({ tool: TOOL, code: CODE, tool_use_id: 'clock-failure' } as never)
+
+    if (failAfterPoll) {
+      await until(() => polls.length === 1, 'question awaiting its first poll')
+      failed = true
+      polls[0]?.release()
+    }
+
+    const answer = await pending
+    expect(answer.isError).toBe(true)
+    expect(textOf(answer)).toBe('The person did not answer whether Codex may use TextEdit; nothing was done with it.')
+    expect(polls).toHaveLength(failAfterPoll ? 1 : 0)
+    expect(routes).toEqual(['/call'])
+    const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+    expect(await ui.find({ type: 'Text', text: 'idle' })).toBeDefined()
+    await ui.unmount()
+
+    // The failure must release the queue, so a later caller can time out normally.
+    failed = false
+    recovering = true
+    const later = await $.tool.call({ tool: TOOL, code: CODE, tool_use_id: 'after-clock-failure' } as never)
+    expect(later.isError).toBe(true)
+    expect(textOf(later)).toBe('The person did not answer whether Codex may use TextEdit within 5 minutes; nothing was done with it.')
+    expect(routes).toEqual(['/call', '/call'])
+  })
+}
 
 test('ask ends in aborted, not timeout, when waiting fails, and the band is cleared', async ($, on) => {
   const polls = askWorld(on)

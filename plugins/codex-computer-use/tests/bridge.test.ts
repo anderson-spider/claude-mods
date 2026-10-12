@@ -3,7 +3,7 @@ import { expect, test } from 'claude-code/testing'
 import { MAX_APPROVALS, serve } from '../hooks/bridge'
 import type { BridgeDeps } from '../hooks/bridge'
 import type { Reply } from '../hooks/model'
-import { limitMs } from '../hooks/routing'
+import { APPROVAL_MS } from '../hooks/routing'
 
 const signal = { aborted: false } as AbortSignal
 const bridgeInput = { tool_use_id: 'tool-1', code: 'let app = await cua.getApp("TextEdit");', title: 'Open editor', timeout_ms: 1000 }
@@ -15,7 +15,7 @@ const bridgeDeps = (overrides: Partial<BridgeDeps>): BridgeDeps => ({
   sessionId: async () => 'sess-1',
   helper: async () => { throw new Error('unexpected helper call') },
   ask: async () => { throw new Error('unexpected approval question') },
-  limitMs: limitMs(undefined, 5),
+  limitMs: APPROVAL_MS,
   ...overrides,
 })
 
@@ -86,7 +86,7 @@ test('serve stops on an aborted question without approving or retrying', async (
   expect(routes).toEqual(['/call'])
 })
 
-test('serve timeout uses the configured limit and stops without approving or retrying', async () => {
+test('serve timeout uses the five-minute limit and stops without approving or retrying', async () => {
   const routes: string[] = []
   const deps = bridgeDeps({
     helper: async route => (routes.push(route), approval),
@@ -94,10 +94,9 @@ test('serve timeout uses the configured limit and stops without approving or ret
       expect(question.who).toBe('main session')
       return 'timeout'
     },
-    limitMs: limitMs('2.5', 5),
   })
   expect(await serve(deps, bridgeInput, signal)).toEqual({
-    result: 'The person did not answer whether Codex may use TextEdit within 2.5 minutes; nothing was done with it.', isError: true,
+    result: 'The person did not answer whether Codex may use TextEdit within 5 minutes; nothing was done with it.', isError: true,
   })
   expect(routes).toEqual(['/call'])
 })
