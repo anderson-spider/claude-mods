@@ -5,7 +5,7 @@ export type Window = { percentUsed: number; resetsAt?: string }
 /** What a provider reports; a window it does not report is absent. */
 export type Reading = { fiveHour?: Window; sevenDay?: Window }
 export type Provider = 'claude' | 'codex'
-/** `ok` fresh reading; `unknown` none yet or none usable; `stale` too old; `down` the status request failed; `off` not asked (option off or no twin). */
+/** `ok` fresh reading; `unknown` none yet or none usable; `stale` too old; `down` the status request failed; `off` not asked (no twin). */
 export type CodexState = 'ok' | 'unknown' | 'stale' | 'down' | 'off'
 /** The provider the readings favor and why; `reason` has no provider prefix. */
 export type Decision = { provider: Provider; reason: string }

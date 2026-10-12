@@ -151,7 +151,7 @@ export function leadSection(jev: boolean, quota = false): string {
   ].join(' ')
 }
 
-// --- Native Codex models (the `nativeCodex` option) ---
+// --- Native Codex twins ---
 
 /** The suffix of a role's Codex twin: `crew:developer` has `crew:developer-codex`. */
 export const NATIVE_SUFFIX = '-codex'
@@ -173,7 +173,7 @@ export function isLoopbackBase(text: string | undefined): boolean {
 }
 
 /**
- * The `-codex` twin of each role that has a model (`models` is what `parseCodexModels` returned): the base role's
+ * The `-codex` twin of each role in the supplied model map: the base role's
  * prompt, tools and effort, on that model id. The description is one line, because every registered agent's goes into
  * the Agent tool's listing on each request of the main loop.
  */

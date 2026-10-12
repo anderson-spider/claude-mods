@@ -1,6 +1,5 @@
 import { expect, test } from 'claude-code/testing'
 import { EFFORTS, EFFORT_FLOOR, MODELS, MODEL_FLOORS, SPECIALISTS, isLoopbackBase, leadSection, nativeCodexSection, nativeCodexSpecs } from '../hooks/agents'
-import { parseCodexModels } from '../hooks/native'
 
 const by = (name: string) => SPECIALISTS.find(s => s.name === name)
 
@@ -91,12 +90,6 @@ test('only the roles named get a twin, and SPECIALISTS keep their aliases', () =
   expect(nativeCodexSpecs({})).toEqual([])
   expect(JSON.stringify(SPECIALISTS)).toBe(before)
   for (const s of SPECIALISTS) expect(MODELS).toContain(s.model)
-})
-
-test('the twins are built from the parser in native.ts: its roles, its id check, its errors', () => {
-  const parsed = parseCodexModels('developer=gpt-x, bogus=gpt-y, tester=-m, architect')
-  expect(nativeCodexSpecs(parsed.models).map(t => [t.name, t.model])).toEqual([['developer-codex', 'gpt-x']])
-  expect(parsed.errors.length).toBe(3)
 })
 
 test('isLoopbackBase accepts http on 127.0.0.0/8, ::1 and localhost only', () => {
