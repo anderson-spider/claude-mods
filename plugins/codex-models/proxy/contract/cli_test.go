@@ -416,6 +416,60 @@ func TestCLIConfigInitPreservesUppercaseSecrets(t *testing.T) {
 	}
 }
 
+func TestCLIConfigInitAppendsSaltWithoutChangingTheEffectiveToken(t *testing.T) {
+	for _, tc := range []struct {
+		name, body, token string
+	}{
+		{"alias order", `{"auth_token":"` + cliToken + `","AUTH_TOKEN":"` + cliSalt + `"}`, cliSalt},
+		{"uppercase token", `{"AUTH_TOKEN":"` + cliToken + `"}`, cliToken},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			path := filepath.Join(home, "config.json")
+			must(t, os.WriteFile(path, []byte(tc.body), 0o600))
+			envBefore, code := runCLI(t, home, nil, "env", "--shell", "json")
+			if code != 0 {
+				t.Fatalf("env before init: exit %d, %s", code, envBefore.stderr)
+			}
+			var values map[string]string
+			must(t, json.Unmarshal([]byte(envBefore.stdout), &values))
+			if values["ANTHROPIC_CUSTOM_HEADERS"] != "X-Ccmproxy-Token: "+tc.token {
+				t.Fatal("env did not use the original last-match token")
+			}
+			out, code := runCLI(t, home, nil, "config", "init")
+			if code != 0 || !strings.Contains(out.stdout, "Added session_salt to ") ||
+				strings.Contains(out.stdout, "Added auth_token") {
+				t.Fatalf("init: exit %d, %s, %s", code, out.stdout, out.stderr)
+			}
+			envAfter, code := runCLI(t, home, nil, "env", "--shell", "json")
+			if code != 0 || envAfter.stdout != envBefore.stdout {
+				t.Fatalf("init changed the effective environment: exit %d", code)
+			}
+			cfg := readLogin(t, path)
+			salt, ok := cfg["session_salt"].(string)
+			if !ok || !hex64.MatchString(salt) {
+				t.Fatal("init did not append a generated salt")
+			}
+			after, err := os.ReadFile(path)
+			must(t, err)
+			insertion := ",\n  \"session_salt\": \"" + salt + "\""
+			if !strings.Contains(string(after), insertion) ||
+				strings.Replace(string(after), insertion, "", 1) != tc.body {
+				t.Fatal("init changed original bytes or member order")
+			}
+			out, code = runCLI(t, home, nil, "config", "init")
+			if code != 0 || !strings.Contains(out.stdout, "is up to date") {
+				t.Fatalf("second init: exit %d, %s, %s", code, out.stdout, out.stderr)
+			}
+			again, err := os.ReadFile(path)
+			must(t, err)
+			if !bytes.Equal(after, again) || mode(t, path) != 0o600 {
+				t.Fatal("second init changed bytes or permissions")
+			}
+		})
+	}
+}
+
 func TestCLIRefusesAConfigOthersCanRead(t *testing.T) {
 	for _, args := range [][]string{{"env"}, {"models", "--json"}, {"status"}, {"serve"}} {
 		home := cliHome(t, nil)

@@ -23,10 +23,10 @@ func Load(path string) (*Config, error) {
 }
 
 // load is Load for both of its callers. Init passes checkMode false because
-// tightening the mode is part of its job. keys holds the file's top-level
-// members exactly as written, or nil when there is no file, so Init can write
-// them back without dropping or reformatting what it does not own.
-func load(path string, checkMode bool) (cfg *Config, keys map[string]json.RawMessage, err error) {
+// tightening the mode is part of its job. data holds the original bytes, or
+// nil when there is no file, so Init can insert missing secrets without
+// reordering aliases or re-serializing any existing member.
+func load(path string, checkMode bool) (cfg *Config, data []byte, err error) {
 	if strings.TrimSpace(path) == "" {
 		path = DefaultPath()
 	}
@@ -35,7 +35,7 @@ func load(path string, checkMode bool) (cfg *Config, keys map[string]json.RawMes
 	cfg = Default()
 	cfg.path = path
 
-	data, err := os.ReadFile(path)
+	data, err = os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		cfg.fillDefaults()
 		if err := cfg.Validate(); err != nil {
@@ -54,6 +54,7 @@ func load(path string, checkMode bool) (cfg *Config, keys map[string]json.RawMes
 	}
 	// The decoder's errors name a type or one offending character, never a
 	// value, so they are safe to show even for a file holding secrets.
+	var keys map[string]json.RawMessage
 	if err := json.Unmarshal(data, &keys); err != nil {
 		return nil, nil, fmt.Errorf("config: parse %s: %w", path, err)
 	}
@@ -69,7 +70,7 @@ func load(path string, checkMode bool) (cfg *Config, keys map[string]json.RawMes
 	if err := cfg.Validate(); err != nil {
 		return nil, nil, fmt.Errorf("%w (in %s)", err, path)
 	}
-	return cfg, keys, nil
+	return cfg, data, nil
 }
 
 // requirePrivate refuses a file that group or others can access, since it

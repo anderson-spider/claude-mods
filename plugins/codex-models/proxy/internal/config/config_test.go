@@ -442,16 +442,27 @@ func TestInitPreservesSecretsIgnoringKeyCase(t *testing.T) {
 	}
 }
 
-func TestInitFillsCaseVariantSecretsWithoutAddingAliases(t *testing.T) {
+func TestInitAppendsMissingSecretsPreservingOriginalBytes(t *testing.T) {
 	for _, tc := range []struct {
-		name, body, added, writtenKey, keptKey string
+		name, body, added string
+		empty             bool
 	}{
-		{"null auth", `{"AUTH_TOKEN":null,"SESSION_SALT":"` + validToken + `"}`, "auth_token", "AUTH_TOKEN", "SESSION_SALT"},
-		{"blank salt", `{"AUTH_TOKEN":"` + validToken + `","Session_Salt":"   "}`, "session_salt", "Session_Salt", "AUTH_TOKEN"},
-		{"absent salt", `{"AUTH_TOKEN":"` + validToken + `"}`, "session_salt", "session_salt", "AUTH_TOKEN"},
+		{"empty", `{}`, "auth_token,session_salt", true},
+		{"empty with whitespace", " \t\r\n{\t \r\n}\r\n\t", "auth_token,session_salt", true},
+		{"null auth", `{"AUTH_TOKEN":null,"SESSION_SALT":"` + validToken + `"}`, "auth_token", false},
+		{"blank salt", `{"AUTH_TOKEN":"` + validToken + `","Session_Salt":"   "}`, "session_salt", false},
+		{"absent salt with uppercase token", `{"AUTH_TOKEN":"` + validToken + `"}`, "session_salt", false},
+		{"both blank", `{"auth_token":"","SESSION_SALT":null}`, "auth_token,session_salt", false},
+		{"duplicate null retains token", `{"auth_token":"` + validToken + `","auth_token":null}`, "session_salt", false},
+		{"escaped key", `{"auth_token":"` + validToken + `"}`, "session_salt", false},
+		{"formatting and duplicate unknown members", " \r\n{\n\t\"AUTH_TOKEN\" : \"" + validToken + "\",\n\t\"unknown\": 2.5000, \"unknown\": [1e+02, {\"marker\":\"}\"}]\n  }\r\n\t", "session_salt", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := writeConfig(t, tc.body)
+			before, err := Load(path)
+			if err != nil {
+				t.Fatal(err)
+			}
 			result, err := initWith(path, fakeSecrets(), fixedAddr("127.0.0.1:1"))
 			if err != nil {
 				t.Fatal(err)
@@ -459,21 +470,29 @@ func TestInitFillsCaseVariantSecretsWithoutAddingAliases(t *testing.T) {
 			if strings.Join(result.Added, ",") != tc.added {
 				t.Fatalf("added = %v", result.Added)
 			}
-			data, err := os.ReadFile(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			var raw map[string]string
-			if err := json.Unmarshal(data, &raw); err != nil {
-				t.Fatal(err)
-			}
-			if len(raw) != 2 || raw[tc.keptKey] != validToken || raw[tc.writtenKey] == "" {
-				t.Fatal("init changed an existing secret or created a competing alias")
-			}
 			cfg, err := Load(path)
 			if err != nil || cfg.AuthToken == "" || cfg.SessionSalt == "" {
 				t.Fatalf("Load after init: %v", err)
 			}
+			if (before.AuthToken != "" && cfg.AuthToken != before.AuthToken) ||
+				(before.SessionSalt != "" && cfg.SessionSalt != before.SessionSalt) {
+				t.Fatal("init changed an effective existing secret")
+			}
+			var members []string
+			values := map[string]string{"auth_token": cfg.AuthToken, "session_salt": cfg.SessionSalt}
+			for _, key := range result.Added {
+				members = append(members, `"`+key+`": "`+values[key]+`"`)
+			}
+			insertion := "\n  " + strings.Join(members, ",\n  ")
+			if !tc.empty {
+				insertion = "," + insertion
+			}
+			data, err := os.ReadFile(path)
+			if err != nil || !strings.Contains(string(data), insertion) ||
+				strings.Replace(string(data), insertion, "", 1) != tc.body {
+				t.Fatalf("init changed existing bytes instead of inserting missing members: %v", err)
+			}
+			assertMode(t, path, 0o600)
 			again, err := initWith(path, fakeSecrets(), fixedAddr("127.0.0.1:1"))
 			if err != nil || len(again.Added) != 0 {
 				t.Fatalf("second init: %+v, %v", again, err)
@@ -483,6 +502,29 @@ func TestInitFillsCaseVariantSecretsWithoutAddingAliases(t *testing.T) {
 				t.Fatalf("second init was not idempotent: %v", err)
 			}
 		})
+	}
+}
+
+func TestInitKeepsEffectiveValuesInOriginalAliasOrder(t *testing.T) {
+	body := `{"auth_token":"` + validToken + `","AUTH_TOKEN":"` + strings.Repeat("c", 64) + `","log_level":"warn","LOG_LEVEL":"debug"}`
+	path := writeConfig(t, body)
+	before, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := initWith(path, fakeSecrets(), fixedAddr("127.0.0.1:1"))
+	if err != nil || strings.Join(result.Added, ",") != "session_salt" {
+		t.Fatalf("init: %+v, %v", result, err)
+	}
+	after, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.AuthToken != before.AuthToken || after.LogLevel != before.LogLevel {
+		t.Fatal("init changed effective values by reordering aliases")
+	}
+	if after.SessionSalt == "" {
+		t.Fatal("init did not add the missing salt")
 	}
 }
 
