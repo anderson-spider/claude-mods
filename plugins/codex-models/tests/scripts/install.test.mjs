@@ -77,7 +77,8 @@ if (args[0] === 'config') {
   writeFileSync(join(root, 'ccmproxy'), `#!/bin/sh\nexec "${node}" "${join(root, 'ccmproxy.mjs')}" "$@"\n`)
   chmodSync(join(root, 'ccmproxy'), 0o755)
 
-  // mise: `where` answers, `exec go@… -- go … build -o OUT` copies the fake proxy, `exec node@… -- node` runs node.
+  // mise: `where` answers, `exec go@… -- [env VAR=…] go … build -o OUT` records GOFLAGS as go sees it and copies the
+  // fake proxy, `exec node@… -- node` runs node.
   script(
     'mise',
     `#!/bin/sh
@@ -87,8 +88,13 @@ case "$1" in
   exec)
     shift 2; [ "$1" = "--" ] && shift
     tool=$1; shift
+    if [ "$tool" = env ]; then
+      while [ $# -gt 0 ]; do case "$1" in *=*) export "$1"; shift ;; *) break ;; esac; done
+      tool=$1; shift
+    fi
     if [ "$tool" = node ]; then exec "${node}" "$@"; fi
     if [ "$tool" = go ]; then
+      echo "go GOFLAGS=[\${GOFLAGS-unset}]" >>"${join(root, 'calls.log')}"
       while [ $# -gt 0 ]; do [ "$1" = "-o" ] && { cp "${join(root, 'ccmproxy')}" "$2"; chmod +x "$2"; exit 0; }; shift; done
       exit 4
     fi
@@ -174,6 +180,22 @@ test('--dry-run prints the settings diff with the secret masked and changes noth
     assert.equal(readFileSync(box.settingsFile, 'utf8'), text)
     assert.deepEqual(readdirSync(join(box.home, '.claude')), ['settings.json'])
     assert.doesNotMatch(box.calls(), /launchctl/)
+  } finally {
+    box.cleanup()
+  }
+})
+
+test('the proxy is built with GOFLAGS replaced, so a -tags=contract in the environment cannot reach the binary', async () => {
+  const box = sandbox()
+  try {
+    writeFileSync(box.settingsFile, `${JSON.stringify(ORIGINAL, null, 2)}\n`)
+    const out = await box.run('install.sh', ['--dry-run'], { GOFLAGS: '-tags=contract' })
+    assert.equal(out.code, 0, out.stderr)
+    const calls = box.calls()
+    // Not an empty GOFLAGS: Go would read that as unset and apply the one `go env -w` saved.
+    assert.match(calls, /exec go@\S+ -- env GOFLAGS=-tags= go -C \S+ build -trimpath /)
+    assert.match(calls, /^go GOFLAGS=\[-tags=\]$/m)
+    assert.doesNotMatch(calls, /contract/)
   } finally {
     box.cleanup()
   }

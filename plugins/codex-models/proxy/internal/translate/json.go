@@ -4,68 +4,24 @@ import (
 	"bytes"
 	"encoding/json"
 	"strconv"
-	"strings"
+
+	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/jsonread"
 )
 
 // Reading rules.
 //
 // Every incoming document is checked for syntax once; after that a field of
-// the wrong type reads as if it were absent. encoding/json already keeps
-// decoding the other fields when one has the wrong type (it reports only the
-// first such error), so readJSON drops that error on purpose. The scalar types
-// below go one step further and read any JSON value, so a number where text
-// was expected still comes through as its digits.
+// the wrong type reads as if it were absent, and the scalar types read any
+// JSON value. The rules are internal/jsonread's, which the router reads a
+// request's head by too.
 
-// readJSON decodes raw into v and reports whether raw was valid JSON. Type
-// mismatches are not failures: the field stays at its zero value.
-func readJSON(raw []byte, v any) bool {
-	if !json.Valid(raw) {
-		return false
-	}
-	_ = json.Unmarshal(raw, v)
-	return true
-}
+// text is a JSON value read as text (jsonread.Text).
+type text = jsonread.Text
 
-// text is a JSON value read as text: a string as its contents, null or absent
-// as "", true and false as those words, a number as written, and an object or
-// array as its raw JSON.
-type text string
-
-func (t *text) UnmarshalJSON(raw []byte) error {
-	*t = text(textOf(raw))
-	return nil
-}
-
-func textOf(raw []byte) string {
-	raw = bytes.TrimSpace(raw)
-	switch kindOf(raw) {
-	case 0, 'n':
-		return ""
-	case '"':
-		var s string
-		if json.Unmarshal(raw, &s) != nil {
-			return ""
-		}
-		return s
-	case '-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
-		return numberText(string(raw))
-	default:
-		return string(raw)
-	}
-}
-
-// numberText keeps a run of digits as written and spells any other number in
-// plain decimal notation (1e3 becomes 1000).
-func numberText(n string) string {
-	if digits := strings.TrimPrefix(n, "-"); digits != "" && strings.Trim(digits, "0123456789") == "" {
-		return n
-	}
-	f, err := strconv.ParseFloat(n, 64)
-	if err != nil {
-		return n
-	}
-	return strconv.FormatFloat(f, 'f', -1, 64)
-}
+func readJSON(raw []byte, v any) bool { return jsonread.Decode(raw, v) }
+func textOf(raw []byte) string        { return jsonread.TextOf(raw) }
+func flag(raw []byte) bool            { return jsonread.BoolOf(raw) }
+func kindOf(raw []byte) byte          { return jsonread.Kind(raw) }
 
 // count is a JSON value read as an integer: a number (a fraction is
 // truncated), a numeric string, or true as 1. Anything else is 0.
@@ -95,34 +51,6 @@ func parseCount(n string) int64 {
 		return 0
 	}
 	return int64(f)
-}
-
-// flag reads a JSON value as a boolean: true, a string that spells a boolean,
-// or a non-zero number.
-func flag(raw []byte) bool {
-	raw = bytes.TrimSpace(raw)
-	switch kindOf(raw) {
-	case 't':
-		return true
-	case '"':
-		b, _ := strconv.ParseBool(strings.ToLower(textOf(raw)))
-		return b
-	case '-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
-		f, _ := strconv.ParseFloat(string(raw), 64)
-		return f != 0
-	default:
-		return false
-	}
-}
-
-// kindOf returns the first byte of a JSON value ('{', '[', '"', 't', 'f',
-// 'n', or a number's first character), or 0 when there is none.
-func kindOf(raw []byte) byte {
-	raw = bytes.TrimLeft(raw, " \t\r\n")
-	if len(raw) == 0 {
-		return 0
-	}
-	return raw[0]
 }
 
 // elements returns the items of a JSON array, each as written, or nil when

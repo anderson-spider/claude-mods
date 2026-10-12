@@ -94,6 +94,10 @@ case "$1" in
   exec)
     shift 2; [ "$1" = "--" ] && shift
     tool=$1; shift
+    if [ "$tool" = env ]; then
+      while [ $# -gt 0 ]; do case "$1" in *=*) export "$1"; shift ;; *) break ;; esac; done
+      tool=$1; shift
+    fi
     if [ "$tool" = node ]; then exec "${node}" $NODE_EXTRA "$@"; fi
     if [ "$tool" = go ]; then
       while [ $# -gt 0 ]; do [ "$1" = "-o" ] && { cp "${join(root, 'ccmproxy')}" "$2"; chmod +x "$2"; exit 0; }; shift; done

@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -24,6 +25,15 @@ func startServe(t *testing.T, ctx context.Context, handler http.Handler, grace t
 	done := make(chan error, 1)
 	go func() { done <- serveHTTP(ctx, listener, handler, grace) }()
 	return listener.Addr().String(), done
+}
+
+// testClientTimeout bounds every request of these tests, body included, so a
+// stop that never cuts a stream fails with a message instead of hanging until
+// go test's own timeout.
+const testClientTimeout = 10 * time.Second
+
+func testClient() *http.Client {
+	return &http.Client{Transport: &http.Transport{Proxy: nil}, Timeout: testClientTimeout}
 }
 
 // streamingHandler writes "first\n", then waits for release (or for the
@@ -48,7 +58,7 @@ func TestServeWaitsForRequestsInFlight(t *testing.T) {
 	started, release := make(chan struct{}), make(chan struct{})
 	addr, done := startServe(t, ctx, streamingHandler(started, release), 5*time.Second)
 
-	client := &http.Client{Transport: &http.Transport{Proxy: nil}}
+	client := testClient()
 	defer client.CloseIdleConnections()
 	res, err := client.Get("http://" + addr + "/")
 	if err != nil {
@@ -94,7 +104,7 @@ func TestServeCutsWhatOutlivesTheGrace(t *testing.T) {
 	started, never := make(chan struct{}), make(chan struct{})
 	addr, done := startServe(t, ctx, streamingHandler(started, never), 200*time.Millisecond)
 
-	client := &http.Client{Transport: &http.Transport{Proxy: nil}}
+	client := testClient()
 	defer client.CloseIdleConnections()
 	res, err := client.Get("http://" + addr + "/")
 	if err != nil {
@@ -116,7 +126,10 @@ func TestServeCutsWhatOutlivesTheGrace(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("serve did not return after the grace ran out")
 	}
-	body, _ := io.ReadAll(res.Body)
+	body, err := io.ReadAll(res.Body)
+	if ne := net.Error(nil); errors.As(err, &ne) && ne.Timeout() {
+		t.Fatalf("the stream that outlived the grace was never cut: %v", err)
+	}
 	if strings.Contains(string(body), "last") {
 		t.Fatalf("the stream finished although it outlived the grace: %q", body)
 	}
@@ -129,7 +142,7 @@ func TestServeStopsAtOnceWhenIdle(t *testing.T) {
 	}), 5*time.Second)
 
 	// A kept-alive idle connection does not hold the stop.
-	client := &http.Client{Transport: &http.Transport{Proxy: nil}}
+	client := testClient()
 	defer client.CloseIdleConnections()
 	res, err := client.Get("http://" + addr + "/")
 	if err != nil {
@@ -158,5 +171,31 @@ func TestServeReportsAServerThatEnds(t *testing.T) {
 	err = serveHTTP(context.Background(), listener, http.NotFoundHandler(), time.Second)
 	if err == nil || !strings.HasPrefix(err.Error(), "http: ") {
 		t.Fatalf("serve on a closed listener = %v, want an http: error", err)
+	}
+}
+
+// The listen errors keep the "http: " prefix ahead of proxy.Listen's text.
+func TestListenHTTPReportsATakenPort(t *testing.T) {
+	held, err := proxy.Listen("127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	if listener, err := listenHTTP(held.Addr().String()); err == nil {
+		_ = listener.Close()
+		t.Fatal("listenHTTP on a taken port succeeded")
+	} else if !strings.HasPrefix(err.Error(), "http: listen on ") {
+		t.Fatalf("listenHTTP on a taken port = %v", err)
+	}
+}
+
+func TestListenHTTPRefusesAWildcardBind(t *testing.T) {
+	listener, err := listenHTTP("0.0.0.0:0")
+	if err == nil {
+		_ = listener.Close()
+		t.Fatal("listenHTTP(0.0.0.0:0) succeeded, want a refusal")
+	}
+	if !strings.HasPrefix(err.Error(), "http: ") || !strings.Contains(err.Error(), "not a loopback address") {
+		t.Fatalf("listenHTTP(0.0.0.0:0) = %v, want a refusal", err)
 	}
 }

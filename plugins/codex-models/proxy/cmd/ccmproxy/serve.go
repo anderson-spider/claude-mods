@@ -25,7 +25,7 @@ import (
 const (
 	// shutdownGrace is how long requests still running when serve is told to
 	// stop get to finish: a Codex answer streaming then is not cut at once.
-	// It is the same 5 s internal/proxy's Serve gives.
+	// It is the proxy's only stop grace.
 	shutdownGrace = 5 * time.Second
 	// upstreamLookupTimeout bounds the start-up lookup of the upstream host.
 	upstreamLookupTimeout = 5 * time.Second
@@ -66,11 +66,21 @@ func runServe(args []string) error {
 	}
 	logStart(cfg, store)
 
-	listener, err := proxy.Listen(cfg.ListenHTTP)
+	listener, err := listenHTTP(cfg.ListenHTTP)
 	if err != nil {
-		return fmt.Errorf("http: %w", err)
+		return err
 	}
 	return serveHTTP(ctx, listener, handler, shutdownGrace)
+}
+
+// listenHTTP opens the loopback listener (proxy.Listen refuses a socket
+// bound anywhere else), its errors prefixed "http: " like serveHTTP's.
+func listenHTTP(addr string) (net.Listener, error) {
+	listener, err := proxy.Listen(addr)
+	if err != nil {
+		return nil, fmt.Errorf("http: %w", err)
+	}
+	return listener, nil
 }
 
 // newHandler assembles what answers a request: the access log, then the

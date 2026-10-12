@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tidwall/gjson"
+	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/jsontest"
 )
 
 // jwt builds an unsigned JWT carrying the given claims.
@@ -209,7 +209,7 @@ func TestRefreshWritesBackToAnExplicitFileInTheCLILayout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read auth.json: %v", err)
 	}
-	updated := gjson.ParseBytes(data)
+	updated := jsontest.ParseBytes(data)
 
 	// The refreshed credentials must land in the file's own layout.
 	if got := updated.Get("tokens.access_token").String(); got != newAccess {
@@ -306,10 +306,10 @@ func TestSaveKeepsAnExplicitCodexCLIFileInItsOwnLayout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
-	if got := gjson.GetBytes(data, "tokens.access_token").String(); got != "brand-new" {
+	if got := jsontest.GetBytes(data, "tokens.access_token").String(); got != "brand-new" {
 		t.Fatalf("the file was not written in the Codex CLI layout: %s", data)
 	}
-	if got := gjson.GetBytes(data, "auth_mode").String(); got != "chatgpt" {
+	if got := jsontest.GetBytes(data, "auth_mode").String(); got != "chatgpt" {
 		t.Fatalf("auth_mode = %q, want it preserved", got)
 	}
 }

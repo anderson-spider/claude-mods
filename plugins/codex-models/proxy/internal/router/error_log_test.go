@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/jsontest"
 	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/logx"
-	"github.com/tidwall/gjson"
 )
 
 // Planted secrets: none of them may ever appear in a log line.
@@ -75,8 +75,8 @@ func TestBackendErrorLogsCarryNoUpstreamText(t *testing.T) {
 				if !strings.Contains(logged.String(), "codex backend error ") {
 					t.Fatalf("%s: no status line:\n%s", label, logged.String())
 				}
-				msg := gjson.Get(rec.Body.String(), "error.message").String()
-				kind := gjson.Get(rec.Body.String(), "error.type").String()
+				msg := jsontest.Get(rec.Body.String(), "error.message").String()
+				kind := jsontest.Get(rec.Body.String(), "error.type").String()
 				if !isAnthropicErrorType(kind) {
 					t.Fatalf("%s: error.type %q is not an Anthropic type", label, kind)
 				}
@@ -106,7 +106,7 @@ func TestErrorTypeAndCodeAreLoggedOnlyAsIdentifiers(t *testing.T) {
 		t.Fatalf("log = %q", log)
 	}
 	assertNothingPlanted(t, "429", log)
-	if gjson.Get(rec.Body.String(), "error.type").String() != "rate_limit_error" {
+	if jsontest.Get(rec.Body.String(), "error.type").String() != "rate_limit_error" {
 		t.Fatalf("body = %s", rec.Body.String())
 	}
 
@@ -165,7 +165,7 @@ func TestMidStreamErrorsAreCleanedAndNeverLogged(t *testing.T) {
 			if rec.Code == http.StatusUnauthorized {
 				t.Fatalf("%s: 401", label)
 			}
-			var errResult gjson.Result
+			var errResult jsontest.Result
 			if stream {
 				names, data := sseEvents(rec.Body.String())
 				if len(names) == 0 || names[len(names)-1] != "error" {
@@ -173,7 +173,7 @@ func TestMidStreamErrorsAreCleanedAndNeverLogged(t *testing.T) {
 				}
 				errResult = data[len(data)-1].Get("error")
 			} else {
-				errResult = gjson.Get(rec.Body.String(), "error")
+				errResult = jsontest.Get(rec.Body.String(), "error")
 				if rec.Code != errorTypeStatus(ev.wantType) {
 					t.Fatalf("%s: status %d, want %d", label, rec.Code, errorTypeStatus(ev.wantType))
 				}
@@ -235,7 +235,7 @@ func TestBackendErrorMessagesAreCappedOnEveryPath(t *testing.T) {
 			for _, stream := range []string{"true", "false"} {
 				h := newHarness(t, nil, backendStatus(status, `{"error":{"message":`+encodedJSON(in)+`}}`), true)
 				rec := h.do(t, http.MethodPost, "/v1/messages", `{"model":"gpt-6-luna","stream":`+stream+`,"messages":[]}`)
-				msg := gjson.Get(rec.Body.String(), "error.message").String()
+				msg := jsontest.Get(rec.Body.String(), "error.message").String()
 				label := name + " status " + http.StatusText(status) + " stream=" + stream
 				if status == 401 {
 					if !strings.HasPrefix(msg, loginPrefix) {
@@ -265,9 +265,9 @@ func TestBackendErrorMessagesAreCappedOnEveryPath(t *testing.T) {
 					_, data := sseEvents(rec.Body.String())
 					msg = data[len(data)-1].Get("error.message").String()
 				} else {
-					msg = gjson.Get(rec.Body.String(), "error.message").String()
+					msg = jsontest.Get(rec.Body.String(), "error.message").String()
 				}
-				check(name+" "+gjson.Get(event, "type").String(), msg, in)
+				check(name+" "+jsontest.Get(event, "type").String(), msg, in)
 			}
 		}
 	}

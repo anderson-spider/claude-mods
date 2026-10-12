@@ -14,8 +14,8 @@ import (
 
 	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/codex"
 	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/config"
+	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/jsontest"
 	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/translate"
-	"github.com/tidwall/gjson"
 )
 
 // recorded captures what a fake upstream received.
@@ -113,7 +113,7 @@ func newHarness(t *testing.T, anthropicHandler, codexHandler http.HandlerFunc, a
 
 func writeSSE(w http.ResponseWriter, payload string) {
 	w.Header().Set("Content-Type", "text/event-stream")
-	fmt.Fprintf(w, "event: %s\ndata: %s\n\n", gjson.Get(payload, "type").String(), payload)
+	fmt.Fprintf(w, "event: %s\ndata: %s\n\n", jsontest.Get(payload, "type").String(), payload)
 	if flusher, ok := w.(http.Flusher); ok {
 		flusher.Flush()
 	}
@@ -148,7 +148,7 @@ func TestModelListMergesCodexModels(t *testing.T) {
 	}
 
 	ids := map[string]string{}
-	gjson.Get(rec.Body.String(), "data").ForEach(func(_, model gjson.Result) bool {
+	jsontest.Get(rec.Body.String(), "data").ForEach(func(_, model jsontest.Result) bool {
 		ids[model.Get("id").String()] = model.Get("display_name").String()
 		return true
 	})
@@ -162,10 +162,10 @@ func TestModelListMergesCodexModels(t *testing.T) {
 	if got := ids["gpt-6-luna-high"]; !strings.Contains(got, "high") {
 		t.Fatalf("effort variant display name = %q, want it to mention the effort", got)
 	}
-	if got := gjson.Get(rec.Body.String(), "first_id").String(); got != "claude-opus-5" {
+	if got := jsontest.Get(rec.Body.String(), "first_id").String(); got != "claude-opus-5" {
 		t.Fatalf("first_id = %q", got)
 	}
-	if got := gjson.Get(rec.Body.String(), "last_id").String(); got == "claude-opus-5" {
+	if got := jsontest.Get(rec.Body.String(), "last_id").String(); got == "claude-opus-5" {
 		t.Fatal("last_id was not updated after appending models")
 	}
 }
@@ -282,7 +282,7 @@ func TestPassthroughDropsProxyIssuedThinking(t *testing.T) {
 	if strings.Contains(h.anthropic.body, translate.SignatureMarker) {
 		t.Fatalf("proxy-issued reasoning state reached Anthropic: %s", h.anthropic.body)
 	}
-	blocks := gjson.Get(h.anthropic.body, "messages.0.content").Array()
+	blocks := jsontest.Get(h.anthropic.body, "messages.0.content").Array()
 	if len(blocks) != 1 || blocks[0].Get("text").String() != "answer" {
 		t.Fatalf("upstream body = %s", h.anthropic.body)
 	}
@@ -320,7 +320,7 @@ func TestCodexStreamingRequest(t *testing.T) {
 	if h.codex.path != "/responses" {
 		t.Fatalf("codex path = %q, want /responses", h.codex.path)
 	}
-	upstream := gjson.Parse(h.codex.body)
+	upstream := jsontest.Parse(h.codex.body)
 	if got := upstream.Get("model").String(); got != "gpt-6-luna" {
 		t.Fatalf("upstream model = %q, want the bare slug", got)
 	}
@@ -361,7 +361,7 @@ func TestCodexNonStreamingRequest(t *testing.T) {
 		t.Fatalf("Content-Type = %q, want JSON for a non-streaming request", got)
 	}
 
-	message := gjson.Parse(rec.Body.String())
+	message := jsontest.Parse(rec.Body.String())
 	if got := message.Get("content.0.text").String(); got != "buffered answer" {
 		t.Fatalf("content = %s", rec.Body.String())
 	}
@@ -369,7 +369,7 @@ func TestCodexNonStreamingRequest(t *testing.T) {
 		t.Fatalf("stop_reason = %q", got)
 	}
 	// The upstream request still streams, because that is all Codex serves.
-	if !gjson.Get(h.codex.body, "stream").Bool() {
+	if !jsontest.Get(h.codex.body, "stream").Bool() {
 		t.Fatal("the upstream request must stream")
 	}
 }
@@ -384,7 +384,7 @@ func TestCodexBackendErrorIsMapped(t *testing.T) {
 	if rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("status = %d, want the upstream 429 preserved", rec.Code)
 	}
-	body := gjson.Parse(rec.Body.String())
+	body := jsontest.Parse(rec.Body.String())
 	if got := body.Get("error.type").String(); got != "rate_limit_error" {
 		t.Fatalf("error.type = %q", got)
 	}
@@ -401,10 +401,10 @@ func TestCodexRequestWithoutCredentials(t *testing.T) {
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403 when no Codex credentials are stored", rec.Code)
 	}
-	if got := gjson.Get(rec.Body.String(), "error.type").String(); got != "permission_error" {
+	if got := jsontest.Get(rec.Body.String(), "error.type").String(); got != "permission_error" {
 		t.Fatalf("error.type = %q", got)
 	}
-	if got := gjson.Get(rec.Body.String(), "error.message").String(); !strings.Contains(got, "ccmproxy login") {
+	if got := jsontest.Get(rec.Body.String(), "error.message").String(); !strings.Contains(got, "ccmproxy login") {
 		t.Fatalf("error.message = %q, want it to name `ccmproxy login`", got)
 	}
 }
@@ -416,7 +416,7 @@ func TestCountTokensForCodexModelIsAnsweredLocally(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
 	}
-	if got := gjson.Get(rec.Body.String(), "input_tokens").Int(); got < 1 {
+	if got := jsontest.Get(rec.Body.String(), "input_tokens").Int(); got < 1 {
 		t.Fatalf("input_tokens = %d, want a positive estimate", got)
 	}
 	if h.anthropic.method != "" {
@@ -431,7 +431,7 @@ func TestCountTokensForClaudeModelIsPassedThrough(t *testing.T) {
 	}, nil, true)
 
 	rec := h.do(t, http.MethodPost, "/v1/messages/count_tokens", `{"model":"claude-opus-5","messages":[]}`)
-	if got := gjson.Get(rec.Body.String(), "input_tokens").Int(); got != 17 {
+	if got := jsontest.Get(rec.Body.String(), "input_tokens").Int(); got != 17 {
 		t.Fatalf("input_tokens = %d, want the upstream answer", got)
 	}
 	if h.anthropic.path != "/v1/messages/count_tokens" {
@@ -452,7 +452,7 @@ func TestAdminEndpoints(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status endpoint returned %d", rec.Code)
 	}
-	if !gjson.Get(rec.Body.String(), "codexLogin").Bool() {
+	if !jsontest.Get(rec.Body.String(), "codexLogin").Bool() {
 		t.Fatalf("status = %s", rec.Body.String())
 	}
 	if h.anthropic.method != "" {
@@ -477,7 +477,7 @@ func TestCodexNonStreamingWhenTerminalEventOmitsOutput(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
 	}
-	message := gjson.Parse(rec.Body.String())
+	message := jsontest.Parse(rec.Body.String())
 	blocks := message.Get("content").Array()
 	if len(blocks) != 1 {
 		t.Fatalf("content = %s, want the streamed tool call", message.Get("content").Raw)
@@ -506,21 +506,21 @@ func TestCodexStreamErrorMidStream(t *testing.T) {
 	if rec.Code != 529 {
 		t.Fatalf("status = %d, want 529 for an overloaded error that arrived mid-stream", rec.Code)
 	}
-	if got := gjson.Get(rec.Body.String(), "error.type").String(); got != "overloaded_error" {
+	if got := jsontest.Get(rec.Body.String(), "error.type").String(); got != "overloaded_error" {
 		t.Fatalf("error.type = %q", got)
 	}
-	if got := gjson.Get(rec.Body.String(), "error.message").String(); got != "try again" {
+	if got := jsontest.Get(rec.Body.String(), "error.message").String(); got != "try again" {
 		t.Fatalf("error.message = %q", got)
 	}
 }
 
 // codexUpstream returns the body the Codex backend received.
-func (h *harness) codexUpstream(t *testing.T) gjson.Result {
+func (h *harness) codexUpstream(t *testing.T) jsontest.Result {
 	t.Helper()
 	if h.codex.body == "" {
 		t.Fatal("the Codex backend received no request")
 	}
-	return gjson.Parse(h.codex.body)
+	return jsontest.Parse(h.codex.body)
 }
 
 func TestClientEffortIsForwarded(t *testing.T) {
@@ -650,7 +650,7 @@ func TestTheEffortSentUpstreamIsTheOneResolved(t *testing.T) {
 		`{"model":"gpt-6-astra","messages":[],"output_config":{"effort":"ultra"}}`,
 		`{"model":"gpt-6-luna","messages":[],"thinking":{"type":"enabled","budget_tokens":2048}}`,
 	} {
-		model := gjson.Get(body, "model").String()
+		model := jsontest.Get(body, "model").String()
 		resolution, ok := registry.Resolve(model)
 		if !ok {
 			t.Fatalf("%q is not a Codex model", model)

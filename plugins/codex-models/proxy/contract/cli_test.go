@@ -119,6 +119,15 @@ func TestCLIVersionRevisionFollowsTheBuildInfo(t *testing.T) {
 		if bin == unstamped && revision != "" {
 			t.Fatalf("-buildvcs=false still stamped vcs.revision %s", revision)
 		}
+		// Outside a git checkout the suite's binary is unstamped too, and the
+		// stamped branch goes untested: CI, which runs from a checkout, must
+		// not let that pass quietly.
+		if bin == binPath && revision == "" {
+			if os.Getenv("CI") != "" {
+				t.Fatalf("CI is set but the suite's binary carries no vcs.revision, so the stamped branch is not checked:\n%s", info)
+			}
+			t.Log("the suite's binary carries no vcs.revision (not a git checkout?): the stamped branch was not exercised")
+		}
 
 		cmd := exec.Command(bin, "version")
 		cmd.Env = baseEnviron(t.TempDir())

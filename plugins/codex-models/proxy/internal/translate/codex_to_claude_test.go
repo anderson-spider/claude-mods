@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/jsontest"
 	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/logx"
-	"github.com/tidwall/gjson"
 )
 
 // frame is one decoded Anthropic SSE event.
@@ -47,7 +47,7 @@ func parseFrames(t *testing.T, stream string) []frame {
 		if current.event == "" {
 			t.Fatalf("frame without an event line: %q", block)
 		}
-		if !gjson.Valid(current.data) {
+		if !jsontest.Valid(current.data) {
 			t.Fatalf("frame data is not valid JSON: %q", current.data)
 		}
 		frames = append(frames, current)
@@ -96,7 +96,7 @@ func TestStreamTextResponse(t *testing.T) {
 		"message_stop",
 	)
 
-	start := gjson.Parse(frames[0].data)
+	start := jsontest.Parse(frames[0].data)
 	// The transcript names the model that answered, as the upstream reports it.
 	if got := start.Get("message.model").String(); got != "gpt-6-luna" {
 		t.Fatalf("message.model = %q, want the upstream's response.model", got)
@@ -105,11 +105,11 @@ func TestStreamTextResponse(t *testing.T) {
 		t.Fatalf("message.id = %q", got)
 	}
 
-	if got := gjson.Parse(frames[2].data).Get("delta.text").String(); got != "Hello" {
+	if got := jsontest.Parse(frames[2].data).Get("delta.text").String(); got != "Hello" {
 		t.Fatalf("first text delta = %q", got)
 	}
 
-	delta := gjson.Parse(frames[5].data)
+	delta := jsontest.Parse(frames[5].data)
 	if got := delta.Get("delta.stop_reason").String(); got != "end_turn" {
 		t.Fatalf("stop_reason = %q, want end_turn", got)
 	}
@@ -146,14 +146,14 @@ func TestStreamThinkingCarriesMarkedSignature(t *testing.T) {
 		"message_stop",
 	)
 
-	if got := gjson.Parse(frames[1].data).Get("content_block.type").String(); got != "thinking" {
+	if got := jsontest.Parse(frames[1].data).Get("content_block.type").String(); got != "thinking" {
 		t.Fatalf("first block type = %q, want thinking", got)
 	}
-	if got := gjson.Parse(frames[2].data).Get("delta.thinking").String(); got != "Thinking about it" {
+	if got := jsontest.Parse(frames[2].data).Get("delta.thinking").String(); got != "Thinking about it" {
 		t.Fatalf("thinking delta = %q", got)
 	}
 
-	signature := gjson.Parse(frames[3].data).Get("delta.signature").String()
+	signature := jsontest.Parse(frames[3].data).Get("delta.signature").String()
 	// The final value from output_item.done wins over the earlier snapshot,
 	// and it is marked as this proxy's own.
 	if signature != SignatureMarker+"FINAL" {
@@ -161,10 +161,10 @@ func TestStreamThinkingCarriesMarkedSignature(t *testing.T) {
 	}
 
 	// The thinking block must occupy index 0 and the text block index 1.
-	if got := gjson.Parse(frames[1].data).Get("index").Int(); got != 0 {
+	if got := jsontest.Parse(frames[1].data).Get("index").Int(); got != 0 {
 		t.Fatalf("thinking block index = %d, want 0", got)
 	}
-	if got := gjson.Parse(frames[5].data).Get("index").Int(); got != 1 {
+	if got := jsontest.Parse(frames[5].data).Get("index").Int(); got != 1 {
 		t.Fatalf("text block index = %d, want 1", got)
 	}
 }
@@ -185,7 +185,7 @@ func TestStreamReasoningWithoutSummaryStillDeliversSignature(t *testing.T) {
 		"message_delta",
 		"message_stop",
 	)
-	if got := gjson.Parse(frames[2].data).Get("delta.signature").String(); got != SignatureMarker+"ONLYSIG" {
+	if got := jsontest.Parse(frames[2].data).Get("delta.signature").String(); got != SignatureMarker+"ONLYSIG" {
 		t.Fatalf("signature = %q", got)
 	}
 }
@@ -212,7 +212,7 @@ func TestStreamToolCall(t *testing.T) {
 		"message_stop",
 	)
 
-	start := gjson.Parse(frames[1].data)
+	start := jsontest.Parse(frames[1].data)
 	if got := start.Get("content_block.type").String(); got != "tool_use" {
 		t.Fatalf("block type = %q, want tool_use", got)
 	}
@@ -224,11 +224,11 @@ func TestStreamToolCall(t *testing.T) {
 		t.Fatalf("tool name = %q, want the original client name", got)
 	}
 
-	if got := gjson.Parse(frames[2].data).Get("delta.partial_json").String(); got != `{"a":1}` {
+	if got := jsontest.Parse(frames[2].data).Get("delta.partial_json").String(); got != `{"a":1}` {
 		t.Fatalf("streamed arguments = %q", got)
 	}
 
-	if got := gjson.Parse(frames[4].data).Get("delta.stop_reason").String(); got != "tool_use" {
+	if got := jsontest.Parse(frames[4].data).Get("delta.stop_reason").String(); got != "tool_use" {
 		t.Fatalf("stop_reason = %q, want tool_use", got)
 	}
 }
@@ -256,7 +256,7 @@ func TestStreamParallelToolCallsDoNotInterleave(t *testing.T) {
 	var blocks []*block
 	var current *block
 	for _, f := range frames {
-		data := gjson.Parse(f.data)
+		data := jsontest.Parse(f.data)
 		switch f.event {
 		case "content_block_start":
 			if current != nil {
@@ -306,10 +306,10 @@ func TestStreamAdoptsToolCallsOnlyPresentInTerminalEvent(t *testing.T) {
 		"message_delta",
 		"message_stop",
 	)
-	if got := gjson.Parse(frames[1].data).Get("content_block.name").String(); got != "Bash" {
+	if got := jsontest.Parse(frames[1].data).Get("content_block.name").String(); got != "Bash" {
 		t.Fatalf("tool name = %q", got)
 	}
-	if got := gjson.Parse(frames[2].data).Get("delta.partial_json").String(); got != `{"command":"ls"}` {
+	if got := jsontest.Parse(frames[2].data).Get("delta.partial_json").String(); got != `{"command":"ls"}` {
 		t.Fatalf("arguments = %q", got)
 	}
 }
@@ -329,7 +329,7 @@ func TestStreamMessageItemWithoutDeltas(t *testing.T) {
 		"message_delta",
 		"message_stop",
 	)
-	if got := gjson.Parse(frames[2].data).Get("delta.text").String(); got != "whole answer" {
+	if got := jsontest.Parse(frames[2].data).Get("delta.text").String(); got != "whole answer" {
 		t.Fatalf("text = %q", got)
 	}
 }
@@ -349,7 +349,7 @@ func TestStreamTruncatedUpstreamIsReportedAsAnError(t *testing.T) {
 		"content_block_delta",
 		"error",
 	)
-	if got := gjson.Parse(frames[3].data).Get("error.type").String(); got != "api_error" {
+	if got := jsontest.Parse(frames[3].data).Get("error.type").String(); got != "api_error" {
 		t.Fatalf("error.type = %q", got)
 	}
 	if more := translator.Close(); len(more) != 0 {
@@ -363,7 +363,7 @@ func TestStreamCachedTokensSplitInput(t *testing.T) {
 		`{"type":"response.completed","response":{"id":"resp_9","usage":{"input_tokens":1000,"output_tokens":10,"input_tokens_details":{"cached_tokens":900}}}}`,
 	)
 
-	usage := gjson.Parse(frames[len(frames)-2].data).Get("usage")
+	usage := jsontest.Parse(frames[len(frames)-2].data).Get("usage")
 	if got := usage.Get("input_tokens").Int(); got != 100 {
 		t.Fatalf("input_tokens = %d, want 100 (cached tokens reported separately)", got)
 	}
@@ -377,7 +377,7 @@ func TestStreamMaxTokensStopReason(t *testing.T) {
 		`{"type":"response.created","response":{"id":"resp_10"}}`,
 		`{"type":"response.incomplete","response":{"id":"resp_10","incomplete_details":{"reason":"max_output_tokens"},"usage":{}}}`,
 	)
-	if got := gjson.Parse(frames[len(frames)-2].data).Get("delta.stop_reason").String(); got != "max_tokens" {
+	if got := jsontest.Parse(frames[len(frames)-2].data).Get("delta.stop_reason").String(); got != "max_tokens" {
 		t.Fatalf("stop_reason = %q, want max_tokens", got)
 	}
 }
@@ -389,7 +389,7 @@ func TestStreamErrorEvent(t *testing.T) {
 	if len(frames) != 1 || frames[0].event != "error" {
 		t.Fatalf("frames = %v, want a single error frame", eventNames(frames))
 	}
-	data := gjson.Parse(frames[0].data)
+	data := jsontest.Parse(frames[0].data)
 	if data.Get("error.type").String() != "rate_limit_error" || data.Get("error.message").String() != "slow down" {
 		t.Fatalf("error frame = %s", frames[0].data)
 	}
@@ -409,7 +409,7 @@ func TestSanitizeToolIDKeepsAcceptedCharacters(t *testing.T) {
 
 // assemble runs Codex events through the translator and folds the frames into
 // a single message, which is exactly what the non-streaming path does.
-func assemble(t *testing.T, fallbackModel string, toolNames map[string]string, payloads ...string) gjson.Result {
+func assemble(t *testing.T, fallbackModel string, toolNames map[string]string, payloads ...string) jsontest.Result {
 	t.Helper()
 	translator := NewStreamTranslator(fallbackModel, toolNames)
 	assembler := NewMessageAssembler()
@@ -418,10 +418,10 @@ func assemble(t *testing.T, fallbackModel string, toolNames map[string]string, p
 	}
 	assembler.Write(translator.Close())
 	out := assembler.Message()
-	if !gjson.ValidBytes(out) {
+	if !jsontest.ValidBytes(out) {
 		t.Fatalf("assembled message is not valid JSON: %s", out)
 	}
-	return gjson.ParseBytes(out)
+	return jsontest.ParseBytes(out)
 }
 
 func TestAssembleTextThinkingAndToolUse(t *testing.T) {
@@ -558,7 +558,7 @@ var partialCallThenIncomplete = []string{
 func TestACallCutOffByMaxTokensIsNeverEmitted(t *testing.T) {
 	frames := runStream(t, NewStreamTranslator("gpt-6-luna", nil), partialCallThenIncomplete...)
 	assertEvents(t, frames, "message_start", "message_delta", "message_stop")
-	if got := gjson.Parse(frames[1].data).Get("delta.stop_reason").String(); got != "max_tokens" {
+	if got := jsontest.Parse(frames[1].data).Get("delta.stop_reason").String(); got != "max_tokens" {
 		t.Fatalf("stop_reason = %q, want max_tokens", got)
 	}
 	for _, f := range frames {
@@ -604,7 +604,7 @@ func TestACallFinishedByArgumentsDoneIsEmitted(t *testing.T) {
 		`{"type":"response.completed","response":{"id":"r","usage":{"input_tokens":1,"output_tokens":1}}}`,
 	)
 	assertEvents(t, frames, "message_start", "content_block_start", "content_block_delta", "content_block_stop", "message_delta", "message_stop")
-	if got := gjson.Parse(frames[2].data).Get("delta.partial_json").String(); got != `{"path":"/x"}` {
+	if got := jsontest.Parse(frames[2].data).Get("delta.partial_json").String(); got != `{"path":"/x"}` {
 		t.Fatalf("arguments = %q", got)
 	}
 }
@@ -615,7 +615,7 @@ func TestAssemblerDropsBrokenToolInput(t *testing.T) {
 		"event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"c\",\"name\":\"Bash\",\"input\":{}}}\n\n" +
 		"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"command\\\":\"}}\n\n" +
 		"event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n"))
-	message := gjson.ParseBytes(assembler.Message())
+	message := jsontest.ParseBytes(assembler.Message())
 	if blocks := message.Get("content").Array(); len(blocks) != 0 {
 		t.Fatalf("content = %s, want the broken block dropped, not given {}", message.Get("content").Raw)
 	}
@@ -635,7 +635,7 @@ func TestDroppedToolCallIsLoggedWithoutItsArguments(t *testing.T) {
 		`{"type":"response.completed","response":{"id":"r","usage":{"input_tokens":1,"output_tokens":1}}}`,
 	)
 	assertEvents(t, frames, "message_start", "message_delta", "message_stop")
-	if got := gjson.Parse(frames[1].data).Get("delta.stop_reason").String(); got != "end_turn" {
+	if got := jsontest.Parse(frames[1].data).Get("delta.stop_reason").String(); got != "end_turn" {
 		t.Fatalf("stop_reason = %q, want end_turn: only a cut-off call gives max_tokens", got)
 	}
 	log := logged.String()
@@ -669,7 +669,7 @@ func TestMessageStartModelComesFromTheUpstream(t *testing.T) {
 		}
 
 		frames := runStream(t, NewStreamTranslator("gpt-6-luna", nil), payloads...)
-		if got := gjson.Parse(frames[0].data).Get("message.model").String(); got != tc.want {
+		if got := jsontest.Parse(frames[0].data).Get("message.model").String(); got != tc.want {
 			t.Fatalf("%s: streamed message.model = %q, want %q", tc.name, got, tc.want)
 		}
 		// The non-streaming answer is folded from the same frames.
@@ -689,14 +689,14 @@ func TestUsageSemantics(t *testing.T) {
 		`{"type":"response.completed","response":{"id":"r","usage":{"input_tokens":1000,"output_tokens":42,"input_tokens_details":{"cached_tokens":600,"cache_write_tokens":250}}}}`,
 	}
 	frames := runStream(t, NewStreamTranslator("gpt-6-luna", nil), payloads...)
-	var delta gjson.Result
+	var delta jsontest.Result
 	for _, f := range frames {
 		if f.event == "message_delta" {
-			delta = gjson.Parse(f.data)
+			delta = jsontest.Parse(f.data)
 		}
 	}
 	assembled := assemble(t, "gpt-6-luna", nil, payloads...)
-	for label, u := range map[string]gjson.Result{"stream": delta.Get("usage"), "assembled": assembled.Get("usage")} {
+	for label, u := range map[string]jsontest.Result{"stream": delta.Get("usage"), "assembled": assembled.Get("usage")} {
 		if got := u.Get("input_tokens").Int(); got != 150 {
 			t.Fatalf("%s: input_tokens = %d, want 1000 - 600 cache reads - 250 cache writes", label, got)
 		}
@@ -771,7 +771,7 @@ func TestStreamErrorMessagesAreCleanedAndCapped(t *testing.T) {
 		`{"type":"response.created","response":{"id":"r"}}`,
 		`{"type":"error","error":{"type":"server_error","message":"a\u0000b\nc `+long+`"}}`,
 	)
-	message := gjson.Parse(frames[len(frames)-1].data).Get("error.message").String()
+	message := jsontest.Parse(frames[len(frames)-1].data).Get("error.message").String()
 	if want := "a b c " + strings.Repeat("x", 294) + "…"; message != want {
 		t.Fatalf("message = %q, want %q", message, want)
 	}
@@ -834,7 +834,7 @@ func TestErrorMessagesAreCutAtTheBoundaryInBothModes(t *testing.T) {
 func checkCutInBothModes(t *testing.T, name, want string, events ...string) {
 	t.Helper()
 	frames := runStream(t, NewStreamTranslator("gpt-6-luna", nil), events...)
-	if got := gjson.Parse(frames[len(frames)-1].data).Get("error.message").String(); got != want {
+	if got := jsontest.Parse(frames[len(frames)-1].data).Get("error.message").String(); got != want {
 		t.Errorf("%s: streamed message = %q, want %q", name, got, want)
 	}
 	translator := NewStreamTranslator("gpt-6-luna", nil)

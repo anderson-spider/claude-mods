@@ -1,7 +1,6 @@
 package proxy
 
 import (
-	"context"
 	"net"
 	"net/http"
 	"strings"
@@ -37,34 +36,6 @@ func TestBoundAddressMustBeTCPLoopback(t *testing.T) {
 		if err := boundToLoopback(addr); err != nil {
 			t.Errorf("%v: %v", addr, err)
 		}
-	}
-}
-
-func TestServeReportsAListenFailure(t *testing.T) {
-	held, err := Listen("127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer held.Close()
-
-	done := make(chan error, 1)
-	go func() {
-		done <- Serve(context.Background(), "http", held.Addr().String(), http.NotFoundHandler())
-	}()
-	select {
-	case err := <-done:
-		if err == nil || !strings.HasPrefix(err.Error(), "http: listen on ") {
-			t.Fatalf("Serve on a taken port = %v", err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("Serve did not return on a taken port")
-	}
-}
-
-func TestServeRefusesAWildcardBind(t *testing.T) {
-	err := Serve(context.Background(), "http", "0.0.0.0:0", http.NotFoundHandler())
-	if err == nil || !strings.Contains(err.Error(), "not a loopback address") {
-		t.Fatalf("Serve(0.0.0.0:0) = %v, want a refusal", err)
 	}
 }
 

@@ -14,7 +14,7 @@ import (
 const refreshParamLimits = "limits"
 
 const (
-	// limitsMaxAge is how old the newest Codex rate-limit reading may be
+	// limitsMaxAge is how old the oldest Codex rate-limit reading may be
 	// before a status request asks the usage endpoint.
 	limitsMaxAge = 5 * time.Minute
 	// defaultUsageWait is how long a status request waits for that usage
@@ -138,7 +138,8 @@ func limitOf(w codex.Window) Limit {
 	return l
 }
 
-// codexLoggedIn reports whether a Codex login is stored.
+// codexLoggedIn reports whether a Codex login is stored. It never waits for
+// a token refresh in progress (codex.Store.Authenticated).
 func (r *Router) codexLoggedIn() bool {
 	return r.backend != nil && r.backend.Store.Authenticated()
 }

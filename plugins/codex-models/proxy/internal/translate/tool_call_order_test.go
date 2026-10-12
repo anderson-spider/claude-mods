@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tidwall/gjson"
+	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/jsontest"
 )
 
 // clientToolUse is a tool_use as the client sees it.
@@ -24,7 +24,7 @@ func toolUsesFromStream(t *testing.T, payloads ...string) ([]clientToolUse, stri
 	var stop, text string
 	open := map[int64]bool{}
 	for _, f := range frames {
-		data := gjson.Parse(f.data)
+		data := jsontest.Parse(f.data)
 		switch f.event {
 		case "content_block_start":
 			idx := data.Get("index").Int()
@@ -84,7 +84,7 @@ func assertBothPathsAgree(t *testing.T, wantStop string, want []clientToolUse, p
 		if call.deltas != 1 {
 			t.Fatalf("stream call %d had %d input_json_delta frames, want exactly one", i, call.deltas)
 		}
-		if !gjson.Valid(call.input) || !gjson.Parse(call.input).IsObject() {
+		if !jsontest.Valid(call.input) || !jsontest.Parse(call.input).IsObject() {
 			t.Fatalf("stream call %d input %q is not a JSON object", i, call.input)
 		}
 		if call.id != want[i].id || call.name != want[i].name || compactJSONForCompare(call.input) != compactJSONForCompare(want[i].input) {
@@ -96,7 +96,7 @@ func assertBothPathsAgree(t *testing.T, wantStop string, want []clientToolUse, p
 	if got := message.Get("stop_reason").String(); got != wantStop {
 		t.Fatalf("assembled stop_reason = %q, want %q", got, wantStop)
 	}
-	var assembled []gjson.Result
+	var assembled []jsontest.Result
 	for _, block := range message.Get("content").Array() {
 		if block.Get("type").String() == "tool_use" {
 			assembled = append(assembled, block)

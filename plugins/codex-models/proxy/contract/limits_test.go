@@ -301,6 +301,87 @@ func TestStatusNeverRidesOnATokenRefresh(t *testing.T) {
 	}
 }
 
+// R7: a status sent while a model request refreshes the token answers at once,
+// with the login it had, plain or opted in; it does not queue behind the
+// refresh (codexLogin used to wait for it).
+func TestStatusAnswersDuringATokenRefresh(t *testing.T) {
+	e := newEnv(t, opts{noStart: true})
+	e.writeLogin(login{expires: time.Now().Add(-time.Hour)})
+	refreshing3s := make(chan struct{})
+	var tokenCalls atomic.Int32
+	e.oauth.set(func(w http.ResponseWriter, r *http.Request, _ rec) {
+		if tokenCalls.Add(1) == 1 {
+			close(refreshing3s)
+		}
+		select {
+		case <-time.After(3 * time.Second):
+		case <-r.Context().Done():
+			return
+		}
+		refreshing("new-access", "new-refresh", false)(w, nil, rec{})
+	})
+	e.start()
+	e.cdx.set(codexHandler(t, nil, answerWith(evCreated, evCompleted)))
+
+	// The model request runs on its own goroutine, so it reports through a
+	// channel rather than the test's Fatal.
+	answered := make(chan string, 1)
+	go func() {
+		req, err := http.NewRequest(http.MethodPost, e.url("/v1/messages"), strings.NewReader(string(claudeReq("gpt-6-astra", true, nil))))
+		if err != nil {
+			answered <- err.Error()
+			return
+		}
+		req.Header.Set("X-Ccmproxy-Token", e.token)
+		req.Header.Set("Content-Type", "application/json")
+		res, err := e.client.Do(req)
+		if err != nil {
+			answered <- err.Error()
+			return
+		}
+		_ = res.Body.Close()
+		answered <- res.Status
+	}()
+	select {
+	case <-refreshing3s:
+	case got := <-answered:
+		t.Fatalf("the model request ended (%s) before refreshing the token", got)
+	case <-time.After(10 * time.Second):
+		t.Fatal("the model request never reached the token endpoint")
+	}
+
+	for _, path := range []string{plainStatus, refreshStatus} {
+		began := time.Now()
+		r := e.do(http.MethodGet, path, nil, nil)
+		took := time.Since(began)
+		if r.Status != 200 {
+			t.Fatalf("%s = %d: %s", path, r.Status, r.Body)
+		}
+		var status struct {
+			CodexLogin bool `json:"codexLogin"`
+		}
+		must(t, json.Unmarshal(r.Body, &status))
+		if took > 1500*time.Millisecond {
+			t.Fatalf("%s took %v during a token refresh", path, took)
+		}
+		if !status.CodexLogin {
+			t.Fatalf("%s: codexLogin = false during the refresh of a stored login", path)
+		}
+	}
+	if n := tokenCalls.Load(); n != 1 {
+		t.Fatalf("token endpoint calls = %d, want the model request's one", n)
+	}
+
+	select {
+	case got := <-answered:
+		if got != "200 OK" {
+			t.Fatalf("the model request answered %s after the refresh", got)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("the model request did not finish after the refresh")
+	}
+}
+
 // A failing endpoint is asked once, not once per status.
 func TestStatusBacksOffAFailingUsageEndpoint(t *testing.T) {
 	e := loggedIn(t, opts{})

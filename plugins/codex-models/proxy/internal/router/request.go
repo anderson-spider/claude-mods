@@ -1,10 +1,9 @@
 package router
 
 import (
-	"bytes"
 	"encoding/json"
-	"strconv"
-	"strings"
+
+	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/jsonread"
 )
 
 // Reading a Messages request.
@@ -19,7 +18,8 @@ import (
 // the proxy cannot undo names no model, so it goes upstream as it came.
 //
 // A value of an unexpected type counts as absent, and the scalar readers
-// below take any JSON value the way translate's do (translate/json.go).
+// take any JSON value; both rules are internal/jsonread's, which translate
+// reads by too.
 
 // messagesHead is the part of a Messages request the router reads.
 type messagesHead struct {
@@ -59,83 +59,12 @@ func (h messagesHead) clientEffort() string {
 	return string(config.Effort)
 }
 
-// readLenient decodes raw into v and reports whether raw was valid JSON,
-// exactly as translate's readJSON does. The document is checked first, so a
-// body with a syntax error anywhere decodes to nothing rather than to the
-// part before the error. A field of the wrong type is not a failure:
-// encoding/json skips it and still decodes the others, and its error is
-// dropped on purpose.
-func readLenient(raw []byte, v any) bool {
-	if !json.Valid(raw) {
-		return false
-	}
-	_ = json.Unmarshal(raw, v)
-	return true
-}
+// The reading rules are jsonread's, the same ones translate uses.
+type (
+	jsonText = jsonread.Text
+	jsonFlag = jsonread.Bool
+)
 
-// jsonText is a JSON value read as text: a string as its contents, null as
-// "", true and false as those words, a number as written (in plain decimal
-// when it is not a run of digits), and an object or array as its raw JSON.
-type jsonText string
-
-func (t *jsonText) UnmarshalJSON(raw []byte) error {
-	*t = jsonText(textOf(raw))
-	return nil
-}
-
-func textOf(raw []byte) string {
-	raw = bytes.TrimSpace(raw)
-	switch kind := kindOf(raw); {
-	case kind == 0 || kind == 'n':
-		return ""
-	case kind == '"':
-		var s string
-		if json.Unmarshal(raw, &s) != nil {
-			return ""
-		}
-		return s
-	case kind == '-' || kind >= '0' && kind <= '9':
-		n := string(raw)
-		if digits := strings.TrimPrefix(n, "-"); digits != "" && strings.Trim(digits, "0123456789") == "" {
-			return n
-		}
-		f, err := strconv.ParseFloat(n, 64)
-		if err != nil {
-			return n
-		}
-		return strconv.FormatFloat(f, 'f', -1, 64)
-	default:
-		return string(raw)
-	}
-}
-
-// jsonFlag is a JSON value read as a boolean: true, a string that spells a
-// boolean in any case, or a non-zero number. Anything else is false.
-type jsonFlag bool
-
-func (f *jsonFlag) UnmarshalJSON(raw []byte) error {
-	raw = bytes.TrimSpace(raw)
-	switch kind := kindOf(raw); {
-	case kind == 't':
-		*f = true
-	case kind == '"':
-		b, _ := strconv.ParseBool(strings.ToLower(textOf(raw)))
-		*f = jsonFlag(b)
-	case kind == '-' || kind >= '0' && kind <= '9':
-		n, _ := strconv.ParseFloat(string(raw), 64)
-		*f = n != 0
-	default:
-		*f = false
-	}
-	return nil
-}
-
-// kindOf returns the first byte of a JSON value ('{', '[', '"', 't', 'f',
-// 'n', or a number's first character), or 0 when there is none.
-func kindOf(raw []byte) byte {
-	raw = bytes.TrimLeft(raw, " \t\r\n")
-	if len(raw) == 0 {
-		return 0
-	}
-	return raw[0]
-}
+func readLenient(raw []byte, v any) bool { return jsonread.Decode(raw, v) }
+func textOf(raw []byte) string           { return jsonread.TextOf(raw) }
+func kindOf(raw []byte) byte             { return jsonread.Kind(raw) }
