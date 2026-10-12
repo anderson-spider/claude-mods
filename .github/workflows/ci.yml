@@ -25,6 +25,8 @@ jobs:
       - name: Plugins with code changes bumped their version
         if: github.event_name == 'pull_request'
         run: node scripts/check-version-bump.mjs "origin/${{ github.base_ref }}"
+      - name: Plugin typecheck hook tests
+        run: node --test scripts/typecheck-plugin.test.mjs
       - name: codex-computer-use helper tests
         run: node --test plugins/codex-computer-use/helper/test/*.test.mjs
 

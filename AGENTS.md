@@ -7,7 +7,7 @@ Claude Code plugin marketplace `spider-claude-mods` (`anderson-spider/claude-mod
 - `.claude-plugin/marketplace.json` lists the plugins; each lives in `plugins/<name>/` with `.claude-plugin/plugin.json`, `hooks/` (`hooks.json` only points to the entry module), `tests/` and `types/index.d.ts`. codex-computer-use also has `helper/`; codex-models also has `proxy/` (Go), `install/`, `install.sh` and `uninstall.sh`.
 - A plugin has one hooks module (`register.tsx`); `validate` refuses a second entry in `hooks.json`. The engine reads the `on(...)` and `$.noun.method(...)` calls from source and follows imports, but `$` is passed only to a function declared at the top of the same file, never across an import. The entry module holds `register` and its hooks; it may call a `registerX(on, options, …)` from a subfolder whose file holds its own `on(...)` and `$` calls (crew's `hooks/hud/`). Pure modules take host access injected and never touch `$`. Tests mirror the modules.
 - Tools are listed as `mcp__<plugin>__<name>`; their inputs are declared in `types/index.d.ts` for the matchers and must follow the `inputSchema`.
-- `.claude/` holds this repository's own session setup: the `release-plugin` skill (`/release-plugin <plugin>` runs the done checklist below), the `live-test` skill (`/live-test <plugin>` opens a Herdr pane on the right with `claude --plugin-dir plugins/<plugin>`, drives it, audits the result against the docs and closes the pane), the `ship` skill (`/ship` takes the branch from checklist to approved merge and plugin update), the `cleanup` skill (`/cleanup` prunes merged branches and worktrees after one approval) and two hooks in `.claude/hooks/` (block edits to the generated `.claude-plugin/types/`, not the hand-written `types/index.d.ts`; type-check the plugin owning an edited `.ts`/`.tsx` once its typings exist).
+- `.claude/` holds this repository's own session setup: the `release-plugin` skill (`/release-plugin <plugin>` runs the done checklist below), the `live-test` skill (`/live-test <plugin>` opens a Herdr pane on the right with `claude --plugin-dir plugins/<plugin>`, drives it, audits the result against the docs and closes the pane), the `ship` skill (`/ship` takes the branch from checklist to approved merge and plugin update), the `cleanup` skill (`/cleanup` prunes merged branches and worktrees after one approval) and two hooks in `.claude/hooks/` (block edits to the generated `.claude-plugin/types/`, not the hand-written `types/index.d.ts`; type-check the plugin owning an edited `.ts`/`.tsx` once its typings exist, or print a reminder to run `mise run plugins:types` without blocking the edit).
 
 ## Plugins
 
@@ -24,6 +24,7 @@ Each plugin's details live in `plugins/<name>/AGENTS.md`, loaded when Claude rea
 ```
 mise install                                   # node, TypeScript 7 and Go 1.27.1 from mise.toml (scripts, `tsc --lsp`, `tsc -p plugins/<name>/tsconfig.json`, the proxy)
 mise run plugins:types                         # writes every plugin's .claude-plugin/types/ (a short interactive session loads each plugin from its folder)
+mise run worktree:add <name> [base]             # creates andersonsilva/<name> in ../claude-mods-worktrees/ beside the main checkout, with typings (base: <remote>/<ref>, default origin/main)
 claude plugin validate .                       # validates the marketplace
 claude plugin validate plugins/<name>          # validates the plugin
 claude plugin test plugins/<name>              # runs the plugin's tests/*.test.ts
@@ -35,7 +36,7 @@ node scripts/check-consistency.mjs             # marketplace and plugin manifest
 node scripts/check-version-bump.mjs origin/main  # a plugin with code changes bumped its version (run by CI on pull requests)
 claude --plugin-dir plugins/<name>             # loads the plugin with automatic reload
 mise run plugins:validate                      # validates the marketplace and every plugin, then runs check-consistency
-mise run plugins:test                          # runs every plugin's tests, the codex-computer-use helper's and the three codex-models commands above (mise provides Go 1.27.1)
+mise run plugins:test                          # runs the typecheck hook tests, every plugin's tests, the codex-computer-use helper's and the three codex-models commands above (mise provides Go 1.27.1)
 mise run plugins:update                        # refreshes the marketplace and updates every installed plugin from it
 ```
 

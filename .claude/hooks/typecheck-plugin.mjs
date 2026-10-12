@@ -18,7 +18,9 @@ if (!match || file.includes("/.claude-plugin/types/")) process.exit(0);
 const [, root, plugin] = match;
 const tsconfig = join(root, "plugins", plugin, "tsconfig.json");
 // The typings tsconfig.json extends exist only after `mise run plugins:types`; without them tsc only reports noise.
-if (!existsSync(tsconfig) || !existsSync(join(root, "plugins", plugin, ".claude-plugin/types/tsconfig.json"))) {
+if (!existsSync(tsconfig)) process.exit(0);
+if (!existsSync(join(root, "plugins", plugin, ".claude-plugin/types/tsconfig.json"))) {
+  console.error(`typecheck skipped for plugins/${plugin}: typings missing; run mise run plugins:types`);
   process.exit(0);
 }
 
