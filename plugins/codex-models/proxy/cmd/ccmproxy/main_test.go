@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jclab-joseph/claude-code-model-proxy/internal/codex"
 	"github.com/jclab-joseph/claude-code-model-proxy/internal/config"
 )
 
@@ -235,5 +236,45 @@ func TestConfigInitThenEnv(t *testing.T) {
 	again := captureStdout(t, func() error { return run([]string{"config", "init", "--config", path}) })
 	if !strings.Contains(again, "up to date") {
 		t.Fatalf("second init output = %q", again)
+	}
+}
+
+func TestModelsJSONPrintsThePickerRows(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "absent.json")
+	out := captureStdout(t, func() error { return run([]string{"models", "--json", "--config", path}) })
+
+	var rows []map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(out), &rows); err != nil {
+		t.Fatalf("models --json output %q: %v", out, err)
+	}
+	cfg := config.Default()
+	registry := codex.NewRegistry(cfg.Codex.Models, cfg.Codex.ModelPrefix, cfg.Codex.EffortVariants)
+	options := registry.PickerOptions()
+	if len(rows) == 0 || len(rows) != len(options) {
+		t.Fatalf("%d rows for %d picker options", len(rows), len(options))
+	}
+	for i, row := range rows {
+		if len(row) != 3 {
+			t.Fatalf("row %d keys = %v, want exactly id, label, description", i, row)
+		}
+		var id, label, description string
+		for key, into := range map[string]*string{"id": &id, "label": &label, "description": &description} {
+			if err := json.Unmarshal(row[key], into); err != nil {
+				t.Fatalf("row %d %s: %v", i, key, err)
+			}
+		}
+		if id != options[i].Model || label != options[i].Label || description != options[i].Description {
+			t.Fatalf("row %d = %v, want %+v", i, row, options[i])
+		}
+		if id == "" || label == "" {
+			t.Fatalf("row %d has an empty id or label", i)
+		}
+	}
+}
+
+func TestModelsJSONAndSettingsJSONAreExclusive(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "absent.json")
+	if err := run([]string{"models", "--json", "--settings-json", "--config", path}); err == nil {
+		t.Fatal("--json with --settings-json must be refused")
 	}
 }

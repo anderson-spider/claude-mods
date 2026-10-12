@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/jclab-joseph/claude-code-model-proxy/internal/codex"
+	"github.com/jclab-joseph/claude-code-model-proxy/internal/config"
 	"github.com/jclab-joseph/claude-code-model-proxy/internal/logx"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
@@ -122,7 +123,8 @@ func (r *Router) fetchUpstream(req *http.Request, method string) (body []byte, s
 		return nil, 0, nil, err
 	}
 	for name, values := range req.Header {
-		if isHopByHop(name) {
+		// The secret is never copied out; Guard removed it already.
+		if isHopByHop(name) || strings.EqualFold(name, config.TokenHeader) {
 			continue
 		}
 		for _, value := range values {
@@ -148,7 +150,7 @@ func (r *Router) fetchUpstream(req *http.Request, method string) (body []byte, s
 
 func copyHeader(dst, src http.Header) {
 	for name, values := range src {
-		if isHopByHop(name) || strings.EqualFold(name, "Content-Length") {
+		if isHopByHop(name) || strings.EqualFold(name, "Content-Length") || isCORS(name) {
 			continue
 		}
 		for _, value := range values {
@@ -164,4 +166,17 @@ func isHopByHop(name string) bool {
 		return true
 	}
 	return false
+}
+
+// isCORS reports an Access-Control-* header, which the proxy never sends.
+func isCORS(name string) bool {
+	return strings.HasPrefix(strings.ToLower(name), "access-control-")
+}
+
+func dropCORS(header http.Header) {
+	for name := range header {
+		if isCORS(name) {
+			header.Del(name)
+		}
+	}
 }
