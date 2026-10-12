@@ -18,6 +18,12 @@ import (
 // ErrNotAuthenticated is returned when no Codex credentials can be found.
 var ErrNotAuthenticated = errors.New("codex: not authenticated, run `ccmproxy login codex`")
 
+// ErrLoginExpired is returned when the token endpoint refuses to refresh this
+// proxy's own login (expired, revoked, or its refresh token already spent):
+// only signing in again helps.
+var ErrLoginExpired = errors.New("codex: the proxy's Codex login has expired or was revoked; " +
+	"run `ccmproxy login codex` to sign in again")
+
 // ErrCodexCLILoginExpired is returned when the borrowed Codex CLI login has an
 // expired access token. The proxy never refreshes that login: OpenAI rotates
 // refresh tokens, so a refresh here would sign the Codex CLI (and the crew's

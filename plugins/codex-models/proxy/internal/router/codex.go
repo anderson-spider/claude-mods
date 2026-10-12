@@ -174,7 +174,8 @@ func writeCodexError(w http.ResponseWriter, err error) {
 	// Never 401 toward Claude Code: it reads a 401 as its own Anthropic login
 	// expiring, refreshes it and asks for /login. A Codex login problem is
 	// a 403 that names the fix.
-	if errors.Is(err, codex.ErrNotAuthenticated) || errors.Is(err, codex.ErrCodexCLILoginExpired) {
+	if errors.Is(err, codex.ErrNotAuthenticated) || errors.Is(err, codex.ErrCodexCLILoginExpired) ||
+		errors.Is(err, codex.ErrLoginExpired) {
 		writeAnthropicError(w, http.StatusForbidden, "permission_error", err.Error())
 		return
 	}

@@ -11,14 +11,17 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/jclab-joseph/claude-code-model-proxy/internal/netx"
+	"github.com/tidwall/gjson"
 )
 
 const (
@@ -164,6 +167,13 @@ func (c *Client) Refresh(ctx context.Context, refreshToken string) (*Token, erro
 	}
 	token, err := c.post(ctx, form)
 	if err != nil {
+		// The endpoint refusing the grant (invalid_grant, a reused or
+		// revoked refresh token) means the login is gone and only a new
+		// one helps; a 5xx, a 429 or a network failure may pass.
+		var tokenErr *TokenError
+		if errors.As(err, &tokenErr) && tokenErr.Rejected() {
+			return nil, fmt.Errorf("%w (%w)", ErrLoginExpired, tokenErr)
+		}
 		return nil, err
 	}
 	// A refresh response may omit the refresh token, in which case the
@@ -196,7 +206,7 @@ func (c *Client) post(ctx context.Context, form url.Values) (*Token, error) {
 		return nil, fmt.Errorf("codex: read token response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("codex: token endpoint returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return nil, newTokenError(resp.StatusCode, body)
 	}
 
 	var parsed tokenResponse
@@ -220,6 +230,43 @@ func (c *Client) post(ctx context.Context, form url.Values) (*Token, error) {
 		token.PlanType = claims.Auth.ChatGPTPlanType
 	}
 	return token, nil
+}
+
+// TokenError is a non-200 answer from the token endpoint. It keeps the status
+// and the OAuth `error` code only: the body may echo what was sent.
+type TokenError struct {
+	StatusCode int
+	// Code is the OAuth error code (`invalid_grant`, ...), kept only when it
+	// is a short token.
+	Code string
+}
+
+// oauthCode is what an OAuth error code looks like.
+var oauthCode = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,64}$`)
+
+func newTokenError(status int, body []byte) *TokenError {
+	tokenErr := &TokenError{StatusCode: status}
+	if code := gjson.GetBytes(body, "error"); code.Type == gjson.String && oauthCode.MatchString(code.String()) {
+		tokenErr.Code = code.String()
+	}
+	return tokenErr
+}
+
+func (e *TokenError) Error() string {
+	if e.Code != "" {
+		return fmt.Sprintf("codex: token endpoint returned %d (%s)", e.StatusCode, e.Code)
+	}
+	return fmt.Sprintf("codex: token endpoint returned %d", e.StatusCode)
+}
+
+// Rejected reports a refusal of the grant itself (400, 401, 403), as opposed
+// to a failure that may pass.
+func (e *TokenError) Rejected() bool {
+	switch e.StatusCode {
+	case http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden:
+		return true
+	}
+	return false
 }
 
 // Claims is the subset of the ID token payload the proxy needs.
