@@ -9,6 +9,7 @@ Agent prompts and delegation: `hooks/agents.ts`. Planning workflow: read `skills
 - `hooks/routing.ts`: eligible targets, Jev answers, tags and notices. `hooks/questions.ts`: pinned Jev model/questions and policy thresholds. `hooks/jev.ts`: client, deadline, retry, breaker and in-flight slots.
 - `hooks/key.ts`: key validation, settings trust and trusted home. `hooks/redact.ts`: outbound text redaction.
 - `hooks/effort.ts`: Claude pending/bound effort book. `hooks/confirm.ts`: requested versus observed model/effort. `hooks/decisions.ts`: v4 record, description hash and injected write.
+- `hooks/codex.ts`: Responses API request body, headers and the streamed answer as step chunks. `hooks/codex-login.ts`: the Codex CLI login, read only. `hooks/codex-tools.ts`: the tool schemas crew can send.
 - `types/index.d.ts`: the `crew.mode` session state contract.
 
 ## Invariants
@@ -24,6 +25,8 @@ Agent prompts and delegation: `hooks/agents.ts`. Planning workflow: read `skills
 - Twin registration checks the URL (any http/https base other than `api.anthropic.com`), not gateway identity or model availability; unavailable fixed models fail at the call. Reload alone has no `session.start`, leaving the registered set empty. `tests/register.test.ts` (`a fresh activation has no -codex section before session.start`).
 
 ## Security and privacy
+
+- Codex login (`codexLogin`): crew answers a login twin's `turn.step` without `next`, so nothing of it reaches Anthropic. Every failure is the step's answer, never a throw: a skipped hook would send the request itself. Read `~/.codex/auth.json` under the trusted home only; never refresh, write or log it; send the access token only in `Authorization` to `CODEX_URL`. A repository that sets the option or declares `HOME`, or unreadable settings, turn it off. `tests/register.test.ts` (`a step of the twin on the login is answered by crew: nothing goes to the API, the backend gets the conversation and the token in its header only`, `a repository that sets codexLogin, or declares HOME, keeps the twin off the login: without a gateway none registers`), `tests/key.test.ts`, `tests/codex-login.test.ts`.
 
 - Jev key: the sensitive `jevKey` option only, sent only in `Authorization`. Keep errors/logs to status or reason, without key, response body or prompt. Trust checks: `tests/key.test.ts` (`a jevKey that the repository settings declare turns routing off`, `a HOME that the repository settings declare, or a relative one, is not trusted; the key still counts`); failures: `tests/jev.test.ts` (`failures carry a status or a reason and never the key or the response body`).
 - Redact secrets, emails and absolute paths before sending descriptions/prompts to Jev; cap the prompt at 4000 characters. With no trusted home, derive redaction's home from the session directory, not repository-supplied `HOME`. Coverage: `tests/redact.test.ts` and `tests/register.test.ts` (`the prompt reaches Jev redacted and cut: no token, no home path`).

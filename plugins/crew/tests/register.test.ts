@@ -71,6 +71,8 @@ type Seen = {
   statusLine: (string | undefined)[]
   /** The slash commands the plugin registered. */
   commands: string[]
+  /** The agent types the plugin registered, as it registered them. */
+  registered: { name: string; model?: string; description: string }[]
   spawned: Record<string, unknown>[]
   steps: (string | number | undefined)[]
   notices: string[]
@@ -109,9 +111,11 @@ function jevWorld(
     /** Hooks beneath `$.session.start` and `$.agent.register`, so a test can start the session and register the agents. */
     register?: boolean
     twinFail?: (name: string) => boolean
+    /** `$.agent.list()` rejects. */
+    listFail?: boolean
   } = {},
 ) {
-  const seen: Seen = { fetches: [], statusLine: [], commands: [], spawned: [], steps: [], notices: [], logs: [], writes: [], transcript: [], settingsReads: 0 }
+  const seen: Seen = { fetches: [], statusLine: [], commands: [], registered: [], spawned: [], steps: [], notices: [], logs: [], writes: [], transcript: [], settingsReads: 0 }
   const flags = { settingsFail: opts.settingsFail === true, registerFail: false }
   // `mock.clock` registers `clock.now` itself and the engine refuses a second one, so a test's own is registered instead.
   const now = opts.now
@@ -148,13 +152,17 @@ function jevWorld(
   if (opts.register) {
     on('agent.register', (_$, e) => {
       if (e.name.endsWith('-codex') && (flags.registerFail || opts.twinFail?.(e.name))) throw new Error('refused')
+      seen.registered.push({ name: e.name, model: e.model, description: e.description })
       return { value: { agent: `crew:${e.name}` } }
     })
     on('session.start', (_$, e) => ({ cwd: e.cwd }))
     on('ui.status', (_$, e) => (seen.statusLine.push(e.text), { value: undefined }))
     on('command.register', (_$, e) => (seen.commands.push(e.name), { value: { command: e.name } }))
   }
-  on('agent.list', async () => ({ value: opts.agents ?? [] }) as never)
+  on('agent.list', async () => {
+    if (opts.listFail) throw new Error('list unavailable')
+    return { value: opts.agents ?? [] } as never
+  })
   on('agent.spawn', async (_$, e) => {
     seen.spawned.push({ ...e })
     return opts.spawn ? opts.spawn({ ...e }) : { model: String(e.model ?? 'default'), agentId: 'a1' }
@@ -1902,6 +1910,202 @@ test('a switched call without a key says once that no record was written, not ag
   await step($, 'a1', 'medium', 'cx/gpt-6-sol-medium')
   expect(seen.logs.filter(line => line.includes('no trusted home'))).toEqual(['crew: decision not logged (no trusted home)'])
   expect(seen.writes).toEqual([])
+})
+
+// --- Twins on the Codex login: crew answers their steps itself, with no gateway ---
+
+const LOGIN = { options: { codexLogin: true } }
+const LOGIN_NOW = Date.parse('2026-10-12T12:00:00Z')
+const AUTH_PATH = `${HOME}/.codex/auth.json`
+
+/** base64url of ASCII text, written out: the test environment has no `btoa` or `Buffer`. */
+function base64url(text: string): string {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'
+  let out = ''
+  let bits = 0
+  let value = 0
+  for (const char of text) {
+    value = (value << 8) | char.charCodeAt(0)
+    bits += 8
+    while (bits >= 6) {
+      bits -= 6
+      out += alphabet[(value >> bits) & 63]
+    }
+  }
+  return bits > 0 ? out + alphabet[(value << (6 - bits)) & 63] : out
+}
+
+// Token fixtures are assembled at runtime so no source literal matches a secret scanner.
+const accessToken = (exp: number) => `${base64url('{"alg":"none"}')}.${base64url(JSON.stringify({ exp, sub: ['codex', '-user'].join('') }))}.sig`
+const ACCESS_TOKEN = accessToken(LOGIN_NOW / 1000 + 3600)
+const authFile = (token = ACCESS_TOKEN) => JSON.stringify({ auth_mode: 'chatgpt', tokens: { access_token: token, account_id: 'acct-1', refresh_token: 'never-sent' } })
+
+const sse = (...events: Record<string, unknown>[]) => events.map(event => `data: ${JSON.stringify(event)}\n\n`).join('')
+const codexDone = (item: Record<string, unknown>) => ({ type: 'response.output_item.done', item })
+const codexCompleted = { type: 'response.completed', response: { model: 'gpt-6-luna', usage: { input_tokens: 50, output_tokens: 9, input_tokens_details: { cached_tokens: 10 } } } }
+const ANSWER = sse(codexDone({ type: 'message', content: [{ type: 'output_text', text: 'auth is at src/auth.ts:12' }] }), codexCompleted)
+const CALL = sse(
+  codexDone({ type: 'reasoning', encrypted_content: 'enc-1', summary: [] }),
+  codexDone({ type: 'function_call', call_id: 'call_1', name: 'Grep', arguments: '{"pattern":"auth"}' }),
+  codexCompleted,
+)
+
+type LoginOptions = Parameters<typeof jevWorld>[1] & { messages?: () => unknown[] }
+
+/** The session started with the login file under HOME, the subagent's conversation and the tool list beneath the plugin. */
+async function loginWorld($: Engine, on: On, o: LoginOptions = {}) {
+  const world = jevWorld(on, {
+    register: true,
+    files: { [AUTH_PATH]: authFile() },
+    reply: async () => ok(ANSWER),
+    agents: [{ id: 'cr1', type: 'crew:code-reader-codex', description: 'find auth' }],
+    now: () => LOGIN_NOW,
+    ...o,
+  })
+  on('session.messages', () => ({ value: o.messages?.() ?? [{ role: 'user', content: [{ type: 'text', text: 'where is auth?' }] }] }) as never)
+  on('tool.list', () => ({ value: [{ name: 'Read', description: 'Reads a file.', mcp: false }, { name: 'Grep', description: 'Searches files.', mcp: false }] }) as never)
+  await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true } as never)
+  return world
+}
+
+/** One step through the plugin: what it yielded, and what it returned. */
+async function stepThrough($: Engine, agentId: string | undefined, model = 'cx/gpt-6-luna', effort: string | undefined = 'medium') {
+  const stream = $.turn.step({ turnId: 't1', index: 0, model, messageCount: 1, ...(effort ? { effort } : {}), ...(agentId ? { agentId } : {}) } as never)
+  const chunks: unknown[] = []
+  let item = await stream.next()
+  while (!item.done) {
+    chunks.push(item.value)
+    item = await stream.next()
+  }
+  return { chunks, result: item.value }
+}
+
+const codexBodyOf = (seen: Seen, i = 0) => JSON.parse(seen.fetches[i]?.body ?? '{}')
+
+test('with codexLogin and no gateway only crew:code-reader-codex registers, on its Codex id and described as on the login', LOGIN, async ($, on) => {
+  const { seen } = await loginWorld($, on)
+  expect(seen.registered.filter(agent => agent.name.endsWith('-codex'))).toEqual([
+    { name: 'code-reader-codex', model: 'cx/gpt-6-luna', description: 'crew:code-reader on gpt-6-luna (OpenAI, on your Codex login): same job, tools and write lane.' },
+  ])
+  expect(seen.fetches).toEqual([])
+})
+
+test('a step of the twin on the login is answered by crew: nothing goes to the API, the backend gets the conversation and the token in its header only', LOGIN, async ($, on) => {
+  const { seen } = await loginWorld($, on)
+  const { chunks, result } = await stepThrough($, 'cr1')
+
+  expect(seen.steps).toEqual([])
+  expect(seen.fetches.map(fetch => fetch.url)).toEqual(['https://chatgpt.com/backend-api/codex/responses'])
+  expect(seen.fetches[0]?.headers).toMatchObject({ Authorization: `Bearer ${ACCESS_TOKEN}`, 'Chatgpt-Account-Id': 'acct-1', Originator: 'codex-tui' })
+  const body = codexBodyOf(seen)
+  expect(body).toMatchObject({ model: 'gpt-6-luna', instructions: '', store: false, stream: true, reasoning: { effort: 'medium', summary: 'auto' } })
+  expect(body.input[0].role).toBe('developer')
+  expect(body.input[0].content[0].text).toContain('Find the requested code.')
+  expect(body.input[0].content[0].text).toContain(`Working directory: ${ROOT}. Today's date: 2026-10-12.`)
+  expect(body.input[1]).toEqual({ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'where is auth?' }] })
+  expect(body.tools.map((tool: { name: string; description: string }) => [tool.name, tool.description])).toEqual([['Read', 'Reads a file.'], ['Grep', 'Searches files.'], ['Glob', 'Glob']])
+  expect(chunks[0]).toEqual({ kind: 'text', index: 0, text: 'auth is at src/auth.ts:12' })
+  expect(result).toEqual({
+    turnId: 't1', index: 0, answer: 'auth is at src/auth.ts:12', toolUses: [], stopReason: 'end_turn',
+    usage: { model: 'gpt-6-luna', input_tokens: 40, output_tokens: 9, cache_read_input_tokens: 10, cache_creation_input_tokens: 0 },
+  })
+  expect(JSON.stringify([seen.logs, seen.notices, seen.transcript, body])).not.toContain(ACCESS_TOKEN)
+  expect(JSON.stringify(seen.fetches)).not.toContain('never-sent')
+})
+
+test('the spawn\'s effort suffix decides the effort sent to Codex, before the host\'s', LOGIN, async ($, on) => {
+  const { seen } = await loginWorld($, on)
+  await stepThrough($, 'cr1', 'cx/gpt-6-luna-high', 'medium')
+  await stepThrough($, 'cr1', 'cx/gpt-6-luna', 'max')
+  expect([codexBodyOf(seen, 0).reasoning.effort, codexBodyOf(seen, 1).reasoning.effort]).toEqual(['high', 'medium'])
+})
+
+test('a tool call comes back as a tool use, and its reasoning goes back before the call on the next step, in the same backend session', LOGIN, async ($, on) => {
+  const replies = [CALL, ANSWER]
+  const conversation: unknown[][] = [
+    [{ role: 'user', content: [{ type: 'text', text: 'where is auth?' }] }],
+    [
+      { role: 'user', content: [{ type: 'text', text: 'where is auth?' }] },
+      { role: 'assistant', content: [{ type: 'tool_use', id: 'call_1', name: 'Grep', input: { pattern: 'auth' } }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_1', content: 'src/auth.ts' }] },
+    ],
+  ]
+  let turn = 0
+  const { seen } = await loginWorld($, on, { reply: async () => ok(replies[turn] ?? ANSWER), messages: () => conversation[turn] ?? [] })
+  const first = await stepThrough($, 'cr1')
+  expect(first.result).toMatchObject({ toolUses: [{ name: 'Grep', input: { pattern: 'auth' } }], stopReason: 'tool_use' })
+  expect(first.chunks.slice(0, 2)).toEqual([{ kind: 'tool', index: 0, id: 'call_1', name: 'Grep' }, { kind: 'input', index: 0, json: '{"pattern":"auth"}' }])
+  turn = 1
+  await stepThrough($, 'cr1')
+  expect(codexBodyOf(seen, 1).input.slice(2)).toEqual([
+    { type: 'reasoning', summary: [], content: null, encrypted_content: 'enc-1' },
+    { type: 'function_call', call_id: 'call_1', name: 'Grep', arguments: '{"pattern":"auth"}' },
+    { type: 'function_call_output', call_id: 'call_1', output: 'src/auth.ts' },
+  ])
+  expect(seen.fetches[1]?.headers.Session_id).toBe(seen.fetches[0]?.headers.Session_id)
+  expect(seen.fetches[0]?.headers.Session_id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+})
+
+for (const [label, over, reason] of [
+  ['no login file', { files: {} }, 'no Codex login file at ~/.codex/auth.json (run `codex login`)'],
+  ['an expired login', { files: { [AUTH_PATH]: authFile(accessToken(LOGIN_NOW / 1000 - 5)) } }, 'the Codex login has expired (run `codex` once to refresh it)'],
+  ['a login the backend refuses', { reply: async () => ({ status: 401, ok: false, headers: {}, text: '{"error":{"message":"token revoked"}}' }) }, 'the Codex backend refused the login (run `codex login`): token revoked'],
+  ['a backend that cannot be reached', { reply: async () => { throw new Error('ECONNRESET') } }, 'the Codex backend could not be reached'],
+] as const) {
+  test(`${label} answers the step with its reason, and nothing goes to the API`, LOGIN, async ($, on) => {
+    const { seen } = await loginWorld($, on, over as LoginOptions)
+    const { result } = await stepThrough($, 'cr1')
+    expect(result).toMatchObject({ answer: `crew: this Codex twin could not run: ${reason}.`, toolUses: [], stopReason: 'end_turn', usage: null })
+    expect(seen.steps).toEqual([])
+  })
+}
+
+test('steps of the main loop, a Claude role, a twin on the gateway and an agent the list cannot name go on to the API', LOGIN, async ($, on) => {
+  const { seen } = await loginWorld($, on, {
+    env: GATEWAY,
+    agents: [
+      { id: 'cr1', type: 'crew:code-reader-codex', description: 'a' },
+      { id: 'c1', type: 'crew:code-reader', description: 'b' },
+      { id: 'd1', type: 'crew:developer-codex', description: 'c' },
+    ],
+  })
+  for (const agentId of [undefined, 'c1', 'd1', 'unknown']) await stepThrough($, agentId, 'sonnet')
+  expect(seen.steps).toHaveLength(4)
+  expect(seen.fetches).toEqual([])
+  // Behind a gateway the other twins register there, the code-reader twin on the login.
+  expect(seen.registered.filter(agent => agent.name.endsWith('-codex')).map(agent => [agent.name, agent.description.includes('Codex login')])).toEqual(
+    TWINS.map(name => [name, name === 'code-reader-codex']),
+  )
+})
+
+test('an agent list that fails sends the step on, where the twin\'s Codex id fails at the API', LOGIN, async ($, on) => {
+  const { seen } = await loginWorld($, on, { listFail: true })
+  await stepThrough($, 'cr1')
+  expect(seen.fetches).toEqual([])
+  expect(seen.steps).toHaveLength(1)
+})
+
+test('a repository that sets codexLogin, or declares HOME, keeps the twin off the login: without a gateway none registers', LOGIN, async ($, on) => {
+  const { seen } = await loginWorld($, on, { project: { pluginConfigs: { crew: { options: { codexLogin: true } } } } })
+  expect(seen.registered.some(agent => agent.name.endsWith('-codex'))).toBe(false)
+  expect(seen.logs).toContain('crew: codexLogin is off: the repository settings declare codexLogin (set it in user settings)')
+})
+
+test('without the option the login is never read and no twin registers without a gateway', async ($, on) => {
+  const { seen } = await loginWorld($, on)
+  await stepThrough($, 'cr1')
+  expect(seen.registered.some(agent => agent.name.endsWith('-codex'))).toBe(false)
+  expect([seen.fetches, seen.settingsReads]).toEqual([[], 0])
+  expect(seen.steps).toHaveLength(1)
+})
+
+test('in the codex mode a plain code-reader call runs on its login twin and its first step is confirmed with the effort sent', { options: { codexLogin: true, mode: 'codex' } }, async ($, on) => {
+  const { seen } = await loginWorld($, on, { agents: [{ id: 'a1', type: 'crew:code-reader-codex', description: 'audit auth' }] })
+  await $.agent.spawn(spawnInput({ subagentType: 'crew:code-reader' }))
+  expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:code-reader-codex', model: 'cx/gpt-6-luna-medium' })
+  await stepThrough($, 'a1', 'cx/gpt-6-luna-medium')
+  expect(seen.steps).toEqual([])
+  expect(seen.transcript).toEqual(['crew: audit auth: confirmed gpt-6-luna · medium'])
 })
 
 for (const model of ['cx/gpt-6-sol-medium', 'cx/gpt-6-sol-high']) {

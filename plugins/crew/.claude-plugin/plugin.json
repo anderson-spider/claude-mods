@@ -1,7 +1,7 @@
 {
   "name": "crew",
   "version": "0.19.0",
-  "description": "Makes the main session a lead that delegates to five specialist subagents: code-reader and research on Haiku; designer and developer on Sonnet; architect on Opus. The developer runs and reports its tests; the architect independently audits acceptance. With the jevKey option set (a TypeSafe key), Jev sizes only each call's effort, bounded to medium or high; models stay at role defaults or fixed twin ids, and any Jev request or config failure requests medium unless the agent has already sent its first step; that sends a redacted, truncated prompt to api.typesafe.ai. When ANTHROPIC_BASE_URL is a gateway other than Anthropic's API, each role also gets a fixed-model crew:<role>-codex twin. In the codex crew mode (the mode option, or /crew-mode for one session), a plain crew:<role> call runs on its registered twin; what those subagents read and write goes to OpenAI through the gateway.",
+  "description": "Makes the main session a lead that delegates to five specialist subagents: code-reader and research on Haiku; designer and developer on Sonnet; architect on Opus. The developer runs and reports its tests; the architect independently audits acceptance. With the jevKey option set (a TypeSafe key), Jev sizes only each call's effort, bounded to medium or high; models stay at role defaults or fixed twin ids, and any Jev request or config failure requests medium unless the agent has already sent its first step; that sends a redacted, truncated prompt to api.typesafe.ai. When ANTHROPIC_BASE_URL is a gateway other than Anthropic's API, each role also gets a fixed-model crew:<role>-codex twin. With the codexLogin option, crew:code-reader-codex runs on your Codex CLI login with no gateway, its requests sent by crew to chatgpt.com's Codex backend. In the codex crew mode (the mode option, or /crew-mode for one session), a plain crew:<role> call runs on its registered twin; what those subagents read and write goes to OpenAI through the gateway.",
   "author": {
     "name": "anderson-spider"
   },
@@ -22,6 +22,12 @@
         "codex"
       ],
       "default": "claude"
+    },
+    "codexLogin": {
+      "type": "boolean",
+      "title": "Codex twins on your Codex login (experimental)",
+      "description": "Runs crew:code-reader-codex on your ChatGPT Codex login, with no gateway: crew answers that subagent's model requests itself, reading the login the Codex CLI keeps in ~/.codex/auth.json (run `codex login` first) and sending the subagent's conversation to chatgpt.com's Codex backend. The login is only read, never refreshed or written; when it expires, running `codex` refreshes it. Other twins still need a gateway. A repository's own settings cannot turn it on. Off by default.",
+      "default": false
     }
   }
 }

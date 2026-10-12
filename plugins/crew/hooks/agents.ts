@@ -163,6 +163,12 @@ export function nativeCodexSpecs(models: Readonly<Partial<Record<string, string>
   return twins
 }
 
+/** A twin crew runs itself on the user's Codex login (the `codexLogin` option): only its one-line description changes. */
+export function onCodexLogin(twin: Agent<string>): Agent<string> {
+  const base = twin.name.slice(0, -NATIVE_SUFFIX.length)
+  return { ...twin, description: `crew:${base} on ${twin.model} (OpenAI, on your Codex login): same job, tools and write lane.` }
+}
+
 /**
  * The lead's section for the `-codex` types, a section of its own (`leadSection` stays free of Codex). It is the same
  * text on every request, whatever the tools.
