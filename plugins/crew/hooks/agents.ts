@@ -4,17 +4,20 @@ export const EFFORTS = ['low', 'medium', 'high'] as const
 export type Model = (typeof MODELS)[number]
 export type Effort = (typeof EFFORTS)[number]
 
-/** One specialist: the agent type is `crew:<name>`. */
-export type Specialist = {
+/** One registered agent: the type is `crew:<name>`. `M` is the model: the alias union for a specialist, any id for a `-codex` type. */
+export type Agent<M extends string = Model> = {
   name: string
   description: string
   prompt: string
-  /** The default model; Jev routing may move it one tier (see `MODEL_FLOORS`). */
-  model: Model
+  /** The default model; Jev routing may move a specialist one tier (see `MODEL_FLOORS`). */
+  model: M
   /** Set on purpose: every specialist defaults to `medium`; Jev routing may raise it to `high` (see `EFFORT_FLOOR`). */
   effort: Effort
   tools: readonly string[]
 }
+
+/** One specialist, on a model alias. */
+export type Specialist = Agent<Model>
 
 /** The lowest model routing may pick for an agent, whatever Jev says: the reviewer never runs on a weaker model than the developer it audits, who can reach opus. */
 export const MODEL_FLOORS: Readonly<Record<string, Model>> = { architect: 'opus' }
@@ -165,4 +168,62 @@ export function codexSection(jev: boolean): string {
       ? `Jev sizes each Codex job's effort (${CODEX_BASE_EFFORT} or high), and Codex's work is verified like any other step.`
       : `Codex jobs run on ${CODEX_BASE_EFFORT} effort, and Codex's work is verified like any other step.`,
   ].join(' ')
+}
+
+// --- Native Codex models (the `nativeCodex` option) ---
+
+/** The suffix of a role's Codex twin: `crew:developer` has `crew:developer-codex`. */
+export const NATIVE_SUFFIX = '-codex'
+
+/** True for an `http:` URL whose host is a literal loopback address (127.0.0.0/8, ::1) or `localhost`; anything else, or text that is no URL, is false. */
+export function isLoopbackBase(text: string | undefined): boolean {
+  if (!text) return false
+  let url: URL
+  try {
+    url = new URL(text)
+  } catch {
+    return false
+  }
+  if (url.protocol !== 'http:') return false
+  const host = url.hostname.toLowerCase()
+  if (host === 'localhost' || host === '[::1]') return true
+  const octets = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host)
+  return octets !== null && octets[1] === '127' && octets.slice(1).every(octet => Number(octet) <= 255)
+}
+
+/**
+ * The `-codex` twin of each role that has a model (`models` is what `parseCodexModels` returned): the base role's
+ * prompt, tools and effort, on that model id. The description is one line, because every registered agent's goes into
+ * the Agent tool's listing on each request of the main loop.
+ */
+export function nativeCodexSpecs(models: Readonly<Partial<Record<string, string>>>): Agent<string>[] {
+  const twins: Agent<string>[] = []
+  for (const base of SPECIALISTS) {
+    const model = models[base.name]
+    if (model === undefined) continue
+    twins.push({
+      ...base,
+      name: `${base.name}${NATIVE_SUFFIX}`,
+      model,
+      description: `crew:${base.name} on ${model} (OpenAI, via the local codex-models proxy): same job, tools and write lane.`,
+    })
+  }
+  return twins
+}
+
+/**
+ * The lead's section for the `-codex` types, a section of its own (`leadSection` stays free of Codex). `withTool` is
+ * whether `mcp__crew__codex` is offered, so the text is the same on every request that offers the same tools.
+ */
+export function nativeCodexSection(specs: readonly Pick<Agent<string>, 'name' | 'model'>[], withTool: boolean): string {
+  return [
+    `Some roles also run on OpenAI Codex models as native subagents: ${specs.map(spec => `crew:${spec.name} (${spec.model})`).join(', ')}.`,
+    'They are ordinary Agent calls with the base role\'s tools and write lane, in the foreground or the background.',
+    'Pick one when the user asks for Codex or when a second model family should do or check the work; otherwise use the Claude role.',
+    'A -codex agent counts as someone other than the implementer when a Claude agent built the change (and the reverse),',
+    'and a failure goes back to the same -codex agent.',
+    withTool
+      ? 'mcp__crew__codex is different: it runs the Codex CLI with its own sandbox and tools as a job you collect, not as a subagent.'
+      : '',
+  ].filter(Boolean).join(' ')
 }

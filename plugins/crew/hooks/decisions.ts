@@ -15,8 +15,9 @@ export type DecisionInput = {
   tier?: Model
   confidence?: number
   depth?: number
-  defaultModel: Model
-  model: Model
+  /** A model alias for a specialist, or any model id. */
+  defaultModel: string
+  model: string
   defaultEffort: Effort
   effortPlanned: Effort
   /** The effort the subagent runs on: the planned one when it took, else the default. */
@@ -35,8 +36,8 @@ export type DecisionRecord = {
   tier: Model | null
   confidence: number | null
   depth: number | null
-  defaultModel: Model
-  model: Model
+  defaultModel: string
+  model: string
   defaultEffort: Effort
   effortPlanned: Effort
   effortApplied: Effort

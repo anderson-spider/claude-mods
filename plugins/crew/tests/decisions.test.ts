@@ -53,3 +53,8 @@ test('saveDecision never rejects and writes nothing without a home', async () =>
   await saveDecision({ ...io, write: async () => { throw new Error('x') } }, '/home/u', 'a1', decisionRecord(input))
   expect(logs).toHaveLength(2)
 })
+
+test('a model id that is not an alias is kept as it is, and the record stays v 1', () => {
+  const rec = decisionRecord({ ...input, tier: undefined, defaultModel: 'gpt-6-astra', model: 'gpt-6-astra', effortApplied: 'medium' })
+  expect(rec).toMatchObject({ v: 1, defaultModel: 'gpt-6-astra', model: 'gpt-6-astra', applied: { model: false, effort: false } })
+})

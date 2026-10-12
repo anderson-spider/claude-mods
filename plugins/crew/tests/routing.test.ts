@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
-import { EFFORT_FLOOR, MODEL_FLOORS, SPECIALISTS } from '../hooks/agents'
+import { EFFORT_FLOOR, MODEL_FLOORS, SPECIALISTS, nativeCodexSpecs } from '../hooks/agents'
 import type { Specialist } from '../hooks/agents'
-import { decide, describe, moved, noticeText, route, routable, sizeCodexJob, stateOf } from '../hooks/routing'
+import { decide, describe, moved, noticeText, route, routable, sizeCodexJob, stateOf, taggedDescription, untagged } from '../hooks/routing'
 import type { CodexSizing, Routed } from '../hooks/routing'
 import { PROMPT_CHARS } from '../hooks/questions'
 import { JevFailure, createBreaker, createGate, createJev } from '../hooks/jev'
@@ -260,4 +260,229 @@ test('sizeCodexJob: a failure answers the base with one line that carries the re
 test('sizeCodexJob: a throwing log still answers the base', async () => {
   const s = sizing({ ask: () => async () => { throw new Error('x') }, log: () => { throw new Error('log gone') } })
   expect(await sizeCodexJob(s.deps, 'developer', 'd', 'p', new AbortController().signal, 'cx-1')).toBe('medium')
+})
+
+// --- The task's tag ---
+
+const IDS = ['gpt-6-astra', 'gpt-5.3-codex-max', 'vendor:model.v2']
+
+test('the tag takes an alias or a registered model id before the effort, and only at the end', () => {
+  for (const [text, bare] of [
+    ['audit auth · opus/high', 'audit auth'],
+    ['audit auth · sonnet/medium', 'audit auth'],
+    ['audit auth · gpt-6-astra/medium', 'audit auth'],
+    ['audit auth · gpt-5.3-codex-max/low', 'audit auth'],
+    ['audit auth · vendor:model.v2/high', 'audit auth'],
+    ['audit auth · opus/high · gpt-6-astra/medium', 'audit auth · opus/high'],
+  ] as const) {
+    expect(untagged(text, IDS)).toBe(bare)
+  }
+  for (const text of [
+    'audit auth', 'audit auth · opus/extreme', 'audit auth · /high', 'audit auth · gpt 6/high', `audit auth · ${'m'.repeat(65)}/high`,
+    'audit auth · opus/high now', 'audit auth opus/high', 'audit auth · a/b/high',
+  ]) {
+    expect(untagged(text, IDS)).toBe(text)
+  }
+})
+
+test('a model id that is no alias and not registered is user text: it stays', () => {
+  expect(untagged('docs · v2/high')).toBe('docs · v2/high')
+  expect(untagged('docs · v2/high', IDS)).toBe('docs · v2/high')
+  expect(untagged('x · gpt-6-astra/high')).toBe('x · gpt-6-astra/high')
+  expect(untagged('x · gpt-6-astra/high', ['gpt-6-astra'])).toBe('x')
+  expect(untagged('x · sonnet/medium')).toBe('x')
+  expect(untagged('x · gpt-6-astra/high', ['gpt-6-astr'])).toBe('x · gpt-6-astra/high')
+  expect(untagged('x · gpt-6-astra/high', ['astra'])).toBe('x · gpt-6-astra/high')
+  // A dot in a registered id is a dot, not a wildcard.
+  expect(untagged('x · gpt-5x3-codex-max/high', ['gpt-5.3-codex-max'])).toBe('x · gpt-5x3-codex-max/high')
+})
+
+test('a tag the plugin writes is stripped again, for a model alias and for a model id', () => {
+  const routed = (model: string, effort: string) => ({ decision: { model, effort }, ms: 1 }) as unknown as Routed
+  for (const model of ['haiku', 'sonnet', 'opus', 'gpt-6-astra']) {
+    expect(untagged(taggedDescription('audit auth', routed(model, 'high')), ['gpt-6-astra'])).toBe('audit auth')
+  }
+})
+
+// --- The -codex twins: effort only ---
+
+const twins = nativeCodexSpecs({ developer: 'gpt-6-astra', architect: 'gpt-6-sage', 'code-reader': 'gpt-6-mini' })
+const twin = (name: string) => routable({ subagentType: `crew:${name}` }, twins)!
+
+test('a -codex type is routable only when it is a registered twin, as its base role with its own model', () => {
+  for (const { name } of SPECIALISTS) {
+    expect(routable({ subagentType: `crew:${name}` }, twins)?.name).toBe(name)
+    expect(routable({ subagentType: `crew:${name}-codex` })).toBeUndefined()
+  }
+  expect(twin('developer-codex')).toMatchObject({ name: 'developer-codex', base: 'developer', model: 'gpt-6-astra', effort: 'medium' })
+  expect(twin('developer-codex').prompt).toBe(spec('developer').prompt)
+  expect(routable({ subagentType: 'crew:tester-codex' }, twins)).toBeUndefined()
+  expect(routable({ subagentType: 'crew:foo-codex' }, nativeCodexSpecs({ developer: 'x' }))).toBeUndefined()
+  expect(routable({ subagentType: 'other:developer-codex' }, twins)).toBeUndefined()
+  expect(routable({ subagentType: 'crew:developer-codex', model: 'opus' }, twins)).toBeUndefined()
+  expect(routable({ subagentType: 'crew:developer-codex', fork: true }, twins)).toBeUndefined()
+  expect(routable({ subagentType: 'crew:developer-codex', workflow: {} }, twins)).toBeUndefined()
+})
+
+test('a -codex twin keeps its model whatever the tier answer, and moves its effort by the Claude roles\' rule', () => {
+  for (const tier of ['haiku', 'sonnet', 'opus'] as const) {
+    for (const name of ['developer-codex', 'architect-codex', 'code-reader-codex']) {
+      const decision = decide(twin(name), answers([tier, 1], 1.4))
+      expect(decision.model).toBe(twin(name).model)
+      expect(decision.effort).toBe('medium')
+    }
+  }
+  const t = twin('developer-codex')
+  expect(decide(t, answers(['opus', 1], 3.5))).toMatchObject({ model: 'gpt-6-astra', effort: 'high', tier: 'opus', tierConfidence: 1, depth: 3.5 })
+  expect(decide(t, answers(['haiku', 1], 2.0)).effort).toBe('medium')
+  expect(decide(t, answers(undefined, 0.1)).effort).toBe('medium')
+  expect(decide(t, answers(undefined, 3.02)).effort).toBe('high')
+  expect(decide(t, answers(undefined, 2.99)).effort).toBe('medium')
+  expect(decide(t, answers(undefined, 3.005)).effort).toBe('medium')
+  expect(decide(t, answers(undefined, undefined))).toEqual({ model: 'gpt-6-astra', effort: 'medium' })
+  for (const depth of [0.1, 1.4, 2.5, 2.9, 3.02, 3.5, 3.96, undefined]) {
+    for (const base of ['developer', 'architect', 'code-reader']) {
+      expect(decide(twin(`${base}-codex`), answers(undefined, depth)).effort).toBe(decide(spec(base), answers(undefined, depth)).effort)
+    }
+  }
+})
+
+test('nothing moves for a twin whose model is no alias, even without a base mark', () => {
+  const bare = { ...twin('developer-codex'), base: undefined }
+  expect(decide(bare, answers(['opus', 1], 1.4)).model).toBe('gpt-6-astra')
+})
+
+test('moved never names a model for a twin; its effort is named like any other', () => {
+  const t = twin('developer-codex')
+  const routed = (depth: number): Routed => ({ decision: decide(t, answers(['opus', 1], depth)), ms: 1 })
+  expect(moved(t, routed(3.5))).toEqual({ model: undefined, effort: 'high' })
+  expect(moved(t, routed(1.4))).toEqual({ model: undefined, effort: undefined })
+  expect(moved(t, { decision: { model: 'opus', effort: 'medium' }, ms: 1 })).toEqual({ model: undefined, effort: undefined })
+})
+
+test('Jev is asked as for the base role, and the tag, notice and line carry the twin\'s model id', () => {
+  const t = twin('developer-codex')
+  const state = stateOf(t, { prompt: 'p', description: 'audit auth' }, ctx)
+  expect(state.agent).toEqual({ type: 'developer', description: 'audit auth' })
+  const routed: Routed = { decision: decide(t, answers(['opus', 0.9], 3.5)), ms: 12 }
+  expect(taggedDescription('audit auth', routed)).toBe('audit auth · gpt-6-astra/high')
+  expect(noticeText(t, routed, undefined)).toBe('crew:developer-codex -> gpt-6-astra · high (jev)')
+  expect(describe(t, routed, { effort: 'high' })).toContain('crew:developer-codex')
+  expect(describe(t, routed, { effort: 'high' })).toContain('model=gpt-6-astra (default)')
+})
+
+// --- Jev decisions for a twin, over the tier, confidence and depth grid ---
+
+const GRID_TWINS = nativeCodexSpecs({ developer: 'gpt-6-astra', architect: 'gpt-6-sage' })
+const gridAnswers = (tier: string, confidence: number, depth: number) => ({
+  tier: { choice: tier, confidence },
+  reasoning_depth: { score: depth },
+})
+
+test('on the whole grid, any tier at any confidence leaves a twin\'s model alone and moved() never names one', () => {
+  for (const type of ['crew:developer-codex', 'crew:architect-codex']) {
+    const spec = routable({ subagentType: type }, GRID_TWINS)!
+    expect(spec).toBeDefined()
+    for (const tier of ['haiku', 'sonnet', 'opus', 'fable', 'gpt-6']) {
+      for (const confidence of [0, 0.49, 0.5, 0.8, 1]) {
+        for (const depth of [0, 2.9, 3, 3.5, 4]) {
+          const decision = decide(spec, gridAnswers(tier, confidence, depth))
+          expect(decision.model).toBe(spec.model)
+          const routed: Routed = { decision, ms: 1 }
+          expect(moved(spec, routed).model).toBeUndefined()
+        }
+      }
+    }
+  }
+})
+
+test('on the grid, twin effort follows the base rule: 2.9 medium, 3.0 tie keeps default, 3.5 high; architect-codex not forced to opus', () => {
+  for (const type of ['crew:developer-codex', 'crew:architect-codex']) {
+    const spec = routable({ subagentType: type }, GRID_TWINS)!
+    const base = SPECIALISTS.find(s => `crew:${s.name}-codex` === type)!
+    for (const depth of [2.9, 3.0, 3.5, 3.005, 2.995]) {
+      expect(decide(spec, gridAnswers('opus', 1, depth)).effort).toBe(decide(base, gridAnswers('opus', 1, depth)).effort)
+    }
+    expect(decide(spec, gridAnswers('haiku', 1, 2.9)).effort).toBe('medium')
+    expect(decide(spec, gridAnswers('haiku', 1, 3.0)).effort).toBe(spec.effort)
+    expect(decide(spec, gridAnswers('haiku', 1, 3.5)).effort).toBe('high')
+  }
+  const architect = routable({ subagentType: 'crew:architect-codex' }, GRID_TWINS)!
+  expect(decide(architect, gridAnswers('haiku', 1, 3.5)).model).toBe('gpt-6-sage')
+  expect(decide(architect, gridAnswers('opus', 1, 3.5)).model).toBe('gpt-6-sage')
+})
+
+test('a twin not in the registered list, an unregistered type, a fork or a given model is not routable', () => {
+  expect(routable({ subagentType: 'crew:tester-codex' }, GRID_TWINS)).toBeUndefined()
+  expect(routable({ subagentType: 'crew:developer-codex' })).toBeUndefined()
+  expect(routable({ subagentType: 'crew:developer-codex', model: 'opus' }, GRID_TWINS)).toBeUndefined()
+  expect(routable({ subagentType: 'crew:developer-codex', fork: true }, GRID_TWINS)).toBeUndefined()
+  expect(routable({ subagentType: 'acme:developer-codex' }, GRID_TWINS)).toBeUndefined()
+})
+
+
+// --- The tag: only a known model is stripped ---
+
+const tagRouted = (model: string, effort: 'low' | 'medium' | 'high'): Routed => ({ decision: { model, effort }, ms: 1 })
+
+test('strips one trailing tag of an alias or a registered id', () => {
+  const ids = ['gpt-6-astra', 'gpt-6.1-codex:mini', 'x', 'y']
+  expect(untagged('audit · gpt-6-astra/high', ids)).toBe('audit')
+  expect(untagged('audit · opus/medium', ids)).toBe('audit')
+  expect(untagged('audit · gpt-6.1-codex:mini/low', ids)).toBe('audit')
+  expect(untagged('a · x/high · y/low', ids)).toBe('a · x/high')
+  expect(untagged('audit', ids)).toBe('audit')
+})
+
+test('descriptions that are not a tag at the end are kept, even with a registered id in them', () => {
+  const ids = ['v2', 'x', 'gpt']
+  expect(untagged('docs · v2/high-level', ids)).toBe('docs · v2/high-level')
+  expect(untagged('migrate · api/v2/high', ids)).toBe('migrate · api/v2/high')
+  expect(untagged('a · x/xhigh', ids)).toBe('a · x/xhigh')
+  expect(untagged('a ·x/high', ids)).toBe('a ·x/high')
+  expect(untagged(`a · ${'m'.repeat(65)}/high`, ids)).toBe(`a · ${'m'.repeat(65)}/high`)
+  expect(untagged('a · gpt 6/high', ids)).toBe('a · gpt 6/high')
+})
+
+// A description whose own text ends in the tag shape names no known model, so it is not a tag.
+test('"docs · v2/high" and "compare · old/low" keep their endings', () => {
+  expect(untagged('docs · v2/high')).toBe('docs · v2/high')
+  expect(untagged('compare · old/low', ['gpt-6-astra'])).toBe('compare · old/low')
+})
+
+test('round trip, tagging then untagging gives the description back, and re-tagging does not double', () => {
+  for (const description of ['audit auth', 'docs · v2/high-level', 'a/b · c', 'x · y/high · z']) {
+    for (const model of ['opus', 'gpt-6-astra', 'gpt-6.1-codex-max']) {
+      const tagged = taggedDescription(description, tagRouted(model, 'high'))
+      expect(untagged(tagged, [model])).toBe(description)
+      const again = taggedDescription(untagged(tagged, [model]), tagRouted(model, 'medium'))
+      expect(again).toBe(`${description} · ${model}/medium`)
+    }
+  }
+})
+
+
+// --- T8 retest (tester): untagged after the F2 fix ---
+
+test('T8 retest: only alias tags and registered twin ids are stripped; ids are matched literally', () => {
+  expect(untagged('docs · v2/high')).toBe('docs · v2/high')
+  expect(untagged('docs · v2/high', ['gpt-6-astra'])).toBe('docs · v2/high')
+  expect(untagged('audit · opus/high')).toBe('audit')
+  expect(untagged('audit · haiku/low', ['gpt-6-astra'])).toBe('audit')
+  expect(untagged('audit · gpt-6-astra/high', ['gpt-6-astra'])).toBe('audit')
+  // Without the twin registered, its id is not a tag the plugin could have written.
+  expect(untagged('audit · gpt-6-astra/high')).toBe('audit · gpt-6-astra/high')
+  // The '.' in an id is literal, not a wildcard.
+  expect(untagged('audit · gpt-6x1/high', ['gpt-6.1'])).toBe('audit · gpt-6x1/high')
+  expect(untagged('audit · gpt-6.1/medium', ['gpt-6.1'])).toBe('audit')
+  // A prefix or a suffix of a known name is not that name.
+  expect(untagged('audit · xopus/high')).toBe('audit · xopus/high')
+  expect(untagged('audit · gpt-6-astra-mini/high', ['gpt-6-astra'])).toBe('audit · gpt-6-astra-mini/high')
+  expect(untagged('a · opus/high · sonnet/low')).toBe('a · opus/high')
+  for (const description of ['audit', 'docs · v2/high', 'x · y/high · z']) {
+    for (const model of ['opus', 'gpt-6.1-codex-max']) {
+      const tagged = taggedDescription(description, { decision: { model, effort: 'high' }, ms: 1 })
+      expect(untagged(tagged, ['gpt-6.1-codex-max'])).toBe(description)
+    }
+  }
 })
