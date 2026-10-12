@@ -21,6 +21,15 @@ It reads the text of the Bash command Claude is about to run, runs `git` command
 - **Not stored:** what you see in the apps. The helper passes screen content between Claude and the computer-use server and keeps none of it.
 - The helper listens on a Unix socket under `~/.claude/mcp/codex-cu/run/`, readable by your user only. Auto-approve is off by default.
 
+## codex-models
+
+- **Sent:** a session or subagent that uses a Codex model sends its conversation, including what its tools read from the repository, through the local proxy to OpenAI's Codex backend (`chatgpt.com`), under your ChatGPT login. Claude models go through the same proxy to `api.anthropic.com` unchanged, with your usual Claude Code login. The plugin's hooks never send anything off the machine: the status check at session start, and `/codex-models:status`, only probe the local proxy at its loopback address (the session's base URL when that is loopback, else the configured listen address), with the proxy's secret.
+- **Listens:** the proxy binds a loopback address only, on a random port chosen at install, and refuses any other listen address. A process on your machine that knows the secret can use it.
+- **Saved:** `~/.claude/codex-models/` holds the proxy binary, its config (with the proxy's secret, `auth_token`), the ChatGPT credential file the proxy writes (mode 600) and the install state. `~/.claude/settings.json` holds the same secret as an `X-Ccmproxy-Token` line in `env.ANTHROPIC_CUSTOM_HEADERS`. Each install or uninstall that changes that file leaves a backup, `~/.claude/settings.json.bak-codex-models-<timestamp>` (mode 600), which can hold the same line; the scripts never delete backups. The state file records what was in `settings.json` before, without the secret.
+- **Read:** the proxy reads `~/.codex/auth.json` only when `codex.use_codex_cli_auth` is set (default off), and never writes or refreshes it. The installer reads `~/.claude/settings.json` to merge its entries, and the session start probe reads the proxy's base URL and secret from the session's environment.
+- **Logged:** the proxy logs method, path, status, sizes and duration; never query strings, the secret, tokens, prompts or the message text of a Codex error.
+- **Removed:** `~/.claude/codex-models/uninstall.sh` takes back the `settings.json` entries and stops the LaunchAgent; `uninstall.sh --purge` also deletes `~/.claude/codex-models/` (the login, the config and the binary). `ccmproxy logout codex` removes only the proxy's own ChatGPT credentials.
+
 ## crew
 
 Jev routing runs only when the `jevKey` option is filled in; with it empty, nothing is sent and no settings are read. The key is kept in Claude Code's secure storage (the option is marked sensitive), not in a settings file. Whether `$.config.list()` returns a sensitive value to other plugins is unverified. The key is checked once per activation (a `/reload-plugins` or an option change resolves it again), on the first request (the lead's prompt section names Jev only when there is one). The agents themselves read and send nothing.

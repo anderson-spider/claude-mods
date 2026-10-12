@@ -9,6 +9,7 @@ Marketplace of [Claude Code](https://claude.com/claude-code) plugins made by and
 | [branch-guard](plugins/branch-guard) | Holds a `git commit` or `git push` on the protected branch and shows what would go in. |
 | [chatgpt](plugins/chatgpt) | Lets Claude ask your logged-in ChatGPT, or have it generate an image, in terminal-browser, Claude in Chrome or the Claude desktop app's built-in browser, and saves the result locally. |
 | [codex-computer-use](plugins/codex-computer-use) | Routes native Mac app control through Codex computer use from the ChatGPT app instead of Claude's own computer use, asking before each new app. |
+| [codex-models](plugins/codex-models) | Offers OpenAI Codex models (ChatGPT login) in Claude Code through a local loopback proxy, in `/model` and in agent definitions; Claude models pass through to Anthropic unchanged. |
 | [crew](plugins/crew) | Registers six specialist subagents: `code-reader` and `research` on Haiku; `designer`, `developer` and `tester` on Sonnet; `architect` on Opus. Optional Jev routing of each call's model and effort, on when the `jevKey` option is set. Optional Codex engine to run a role on OpenAI Codex, on when the `codex` option is set. Optional `crew:<role>-codex` subagents on Codex models through a local proxy, on when the `nativeCodex` option is set. Includes the [Flightdeck](https://github.com/scasella/claude-flightdeck) dashboard. |
 | [tailscale](plugins/tailscale) | Lets Claude query and modify your tailnet through the Tailscale API. |
 
@@ -21,6 +22,8 @@ Inside Claude Code, add the marketplace and install the plugin:
 /plugin install branch-guard@spider-claude-mods
 /plugin install chatgpt@spider-claude-mods
 /plugin install codex-computer-use@spider-claude-mods
+/plugin install codex-models@spider-claude-mods
+/plugin install crew@spider-claude-mods
 /plugin install tailscale@spider-claude-mods
 ```
 
@@ -100,6 +103,68 @@ plugins/codex-computer-use/helper/install.sh
 It copies the helper to `~/.claude/mcp/codex-cu` (keeping `state/`, where the approvals and the log live) and loads the LaunchAgent; run it again after a helper change. `uninstall.sh` removes the LaunchAgent and leaves the files. To load the plugin from the folder instead of the marketplace, pass `--plugin-dir plugins/codex-computer-use`, which adds it to `CLAUDE_CODE_PLUGIN_DIRS`.
 
 Limitations: ownership is checked for apps named as string literals in `cua.getApp(...)` and for the app each result reports, so an app reached through a variable is owned only after its first call; Codex refuses an action when the app changed since it was last read ("The user changed …"), so read and act in the same call.
+
+## codex-models
+
+Offers OpenAI Codex models (ChatGPT login) in Claude Code through a local loopback proxy. They appear in `/model` next to the Claude models, and an agent definition can name one in its `model:` field. Claude models pass through the proxy to Anthropic unchanged. The proxy is a vendored, hardened fork of ccmproxy, written in Go under `plugins/codex-models/proxy/`.
+
+Needs macOS, [mise](https://mise.jdx.dev) (it provides Go 1.27.1 and Node 24; `install.sh` checks and tells you what to `mise install`) and a ChatGPT account with Codex access. A plugin cannot set `env` or `modelPicker` in settings, so the installer writes them.
+
+### Install
+
+1. Install the plugin: `/plugin install codex-models@spider-claude-mods`. Its files land in `~/.claude/plugins/cache/spider-claude-mods/codex-models/<version>/`.
+2. Run the installer from that folder, or from a checkout of this repository (at `plugins/codex-models/`):
+
+   ```
+   ~/.claude/plugins/cache/spider-claude-mods/codex-models/<version>/install.sh
+   ```
+
+   `install.sh --check` only tests the prerequisites; `--dry-run` prints the `settings.json` diff it would write, with the secret masked; `--no-settings` does everything except the `settings.json` edit.
+3. Sign in to ChatGPT once: `~/.claude/codex-models/ccmproxy login codex` (inside Claude Code: `! ~/.claude/codex-models/ccmproxy login codex`).
+4. Start a new Claude Code session; running ones keep their old settings. `/codex-models:status` shows whether the proxy answers, the login, the models and the settings.
+
+The installer builds the proxy into `~/.claude/codex-models/`, loads the LaunchAgent `com.anderson-spider.codex-models` (loopback only, random port, new secret), checks that the running proxy answers as this install's, and only then edits `~/.claude/settings.json`, keeping a timestamped backup beside it when the file changes. The file holds the proxy's secret, so it and its backups are left at mode 600, and a `settings.json` owned by another user is refused before anything changes.
+
+### What changes in `settings.json`
+
+- `env.ANTHROPIC_BASE_URL`: the local proxy. The installer refuses to run if another value is already set.
+- `env.ANTHROPIC_CUSTOM_HEADERS`: one `X-Ccmproxy-Token: <secret>` line added; your other lines stay.
+- `env.ENABLE_TOOL_SEARCH=true`: Claude Code turns MCP tool search off for a custom base URL otherwise. It is set even over a `false` you had; uninstall puts your value back.
+- `modelPicker.options`: one row per Codex model, with a description ending in `(codex-models)`.
+
+Claude models still go to Anthropic through the proxy, unchanged, with your usual login.
+
+### Codex models
+
+| Id | Label | Default effort | Behaves as in Claude Code |
+| --- | --- | --- | --- |
+| `gpt-6.1-sol` | GPT-6.1 Sol | low | `claude-sonnet-5` |
+| `gpt-6-astra` | GPT-6 Astra | medium | `claude-opus-5` |
+| `gpt-6-sol` | GPT-6 Sol | medium | `claude-sonnet-5` |
+| `gpt-6-luna` | GPT-6 Luna | medium | `claude-haiku-4-5` |
+| `gpt-5.6-sol` | GPT-5.6 Sol | low | `claude-sonnet-5` |
+| `gpt-5.6-terra` | GPT-5.6 Terra | medium | `claude-sonnet-5` |
+| `gpt-5.6-luna` | GPT-5.6 Luna | medium | `claude-haiku-4-5` |
+
+The catalog mirrors `codex debug models` for your account; whether the account may use each model is decided upstream. `gpt-daybreak-blue-latest` (Daybreak Blue access program) is not offered unless you list it in the proxy's `codex.models` setting, which then limits the catalog to the ids it names. See [the proxy's README](plugins/codex-models/proxy/README.md) for the full list, the model names and the credentials.
+
+### Use the models
+
+- Main session: pick a row in `/model`; choose the effort with `/effort`. Suffixes such as `gpt-6-luna-high` pin the effort instead.
+- Subagent: put the model id in the agent's frontmatter, for example `model: gpt-6-astra`.
+- Crew plugin: set its `nativeCodex` option to `role=model` pairs (for example `developer=gpt-6-astra,tester=gpt-6-sol`); with the proxy as `ANTHROPIC_BASE_URL` it registers `crew:developer-codex`, `crew:tester-codex` and so on, with the same prompt, tools and write lane as the base role (see the crew section).
+
+What a Codex model reads and writes is sent to OpenAI. See [docs/PRIVACY.md](docs/PRIVACY.md).
+
+### Uninstall
+
+```
+~/.claude/codex-models/uninstall.sh
+```
+
+It removes exactly what the installer added to `settings.json` (a backup is left beside it), then stops and removes the LaunchAgent; restart running sessions. The Codex login, the config and the binary stay in `~/.claude/codex-models/`; `uninstall.sh --purge` deletes them too. Every install or uninstall that changes `settings.json` leaves a new backup beside it (mode 600). A backup can hold the proxy's secret, and neither script removes them, `--purge` included: delete `~/.claude/settings.json.bak-codex-models-*` yourself once you no longer need them. Then `claude plugin uninstall codex-models@spider-claude-mods`.
+
+Limitations: the proxy assumes a single-user Mac. While it is down, another local user can bind its port and would receive the secret header and the Claude login that Claude Code sends. Changing `nativeCodex` reloads crew without a session start, so the `-codex` types appear from the next session. Uninstall restores `settings.json` with the same content, but a hand-formatted file comes back as 2-space JSON.
 
 ## crew
 
@@ -243,6 +308,10 @@ claude plugin test plugins/chatgpt
 claude plugin validate plugins/codex-computer-use
 claude plugin test plugins/codex-computer-use
 /Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node --test plugins/codex-computer-use/helper/test/*.test.mjs
+claude plugin validate plugins/codex-models
+claude plugin test plugins/codex-models
+go -C plugins/codex-models/proxy test -race ./...
+node --test plugins/codex-models/tests/scripts/*.test.mjs
 claude plugin validate plugins/crew
 claude plugin test plugins/crew
 claude plugin validate plugins/tailscale
