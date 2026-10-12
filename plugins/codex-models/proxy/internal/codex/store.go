@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/logx"
@@ -77,6 +78,13 @@ type Store struct {
 	// rejected is the latch on a credential whose refresh the token endpoint
 	// refused: it is not sent again until the file changes (refresh.go).
 	rejected *rejection
+
+	// loginHeld is whether the last load, refresh, login or logout left a
+	// usable login, and loginKnown whether any has run. They are read
+	// without mu, so a status never waits behind a token refresh
+	// (Authenticated).
+	loginHeld  atomic.Bool
+	loginKnown atomic.Bool
 }
 
 // NewStore builds a store from the given options.
@@ -235,6 +243,13 @@ func (s *Store) Remove() (string, error) {
 // forgetLocked drops the cached credential, the active file and the latch.
 func (s *Store) forgetLocked() {
 	s.token, s.active, s.stamp, s.rejected = nil, source{}, fileStamp{}, nil
+	s.noteLogin(false)
+}
+
+// noteLogin records whether a usable login is held, for Authenticated.
+func (s *Store) noteLogin(held bool) {
+	s.loginHeld.Store(held)
+	s.loginKnown.Store(true)
 }
 
 // Peek returns the cached or on-disk token without refreshing it.
@@ -244,15 +259,37 @@ func (s *Store) Peek() (*Token, error) {
 	return s.loadLocked()
 }
 
-// Authenticated reports whether credentials are available.
+// Authenticated reports whether credentials are available, without waiting
+// behind another caller: a token refresh holds the store for the token
+// endpoint's whole round trip. A free store is read as Peek reads it, so a
+// login written by another process shows at once. A busy one answers what the
+// last load, refresh, login or logout found, which is not "logged in" by
+// default; it waits only when none has run yet (Access loads before it
+// refreshes, so a refresh always leaves a value).
 func (s *Store) Authenticated() bool {
+	if s.mu.TryLock() {
+		defer s.mu.Unlock()
+		_, err := s.loadLocked()
+		return err == nil
+	}
+	if s.loginKnown.Load() {
+		return s.loginHeld.Load()
+	}
 	_, err := s.Peek()
 	return err == nil
 }
 
 // loadLocked returns the cached credential while its file is unchanged, and
-// otherwise reads the first candidate that holds one.
+// otherwise reads the first candidate that holds one. Its outcome is the
+// login state Authenticated answers while the store is busy.
 func (s *Store) loadLocked() (*Token, error) {
+	token, err := s.findLocked()
+	s.noteLogin(err == nil)
+	return token, err
+}
+
+// findLocked is loadLocked without the note.
+func (s *Store) findLocked() (*Token, error) {
 	if err := s.Check(); err != nil {
 		return nil, err
 	}

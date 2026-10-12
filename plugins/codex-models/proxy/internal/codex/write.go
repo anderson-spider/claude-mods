@@ -36,6 +36,7 @@ func (s *Store) writeLocked(token *Token, target source) error {
 	}
 
 	s.token, s.active, s.stamp, s.rejected = token, target, stampOf(target.path), nil
+	s.noteLogin(true)
 	return nil
 }
 

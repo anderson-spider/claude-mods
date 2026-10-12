@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/jsontest"
 	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/logx"
-	"github.com/tidwall/gjson"
 )
 
 func TestEffortPrecedence(t *testing.T) {
@@ -150,14 +150,14 @@ func TestToolUseRoundTripsInBothModes(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("stream status = %d: %s", rec.Code, rec.Body.String())
 	}
-	var start, stop gjson.Result
+	var start, stop jsontest.Result
 	var arguments strings.Builder
 	for _, line := range strings.Split(rec.Body.String(), "\n") {
 		data, ok := strings.CutPrefix(line, "data: ")
 		if !ok {
 			continue
 		}
-		event := gjson.Parse(data)
+		event := jsontest.Parse(data)
 		switch event.Get("type").String() {
 		case "content_block_start":
 			start = event
@@ -184,7 +184,7 @@ func TestToolUseRoundTripsInBothModes(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("json status = %d: %s", rec.Code, rec.Body.String())
 	}
-	message := gjson.Parse(rec.Body.String())
+	message := jsontest.Parse(rec.Body.String())
 	block := message.Get("content.0")
 	if message.Get("content.#").Int() != 1 || block.Get("type").String() != "tool_use" ||
 		block.Get("name").String() != tool || block.Get("id").String() != "call_77" ||
@@ -209,7 +209,7 @@ func TestToolUseRoundTripsInBothModes(t *testing.T) {
 		t.Fatalf("next turn status = %d: %s", rec.Code, rec.Body.String())
 	}
 	input := h.codexUpstream(t).Get("input").Array()
-	var call, output gjson.Result
+	var call, output jsontest.Result
 	for _, item := range input {
 		switch item.Get("type").String() {
 		case "function_call":
@@ -219,7 +219,7 @@ func TestToolUseRoundTripsInBothModes(t *testing.T) {
 		}
 	}
 	if call.Get("call_id").String() != "call_77" || call.Get("name").String() != tool ||
-		gjson.Parse(call.Get("arguments").String()).Get("answer").String() != "done" {
+		jsontest.Parse(call.Get("arguments").String()).Get("answer").String() != "done" {
 		t.Fatalf("function_call = %s", call.Raw)
 	}
 	if output.Get("call_id").String() != "call_77" {
@@ -260,7 +260,7 @@ func TestCodexBackendErrorsUseAnthropicTypes(t *testing.T) {
 			if rec.Code != tc.wantStatus {
 				t.Fatalf("%s: status = %d, want %d", label, rec.Code, tc.wantStatus)
 			}
-			body := gjson.Parse(rec.Body.String())
+			body := jsontest.Parse(rec.Body.String())
 			if got := body.Get("error.type").String(); got != tc.wantType {
 				t.Fatalf("%s: error.type = %q, want %q", label, got, tc.wantType)
 			}
@@ -276,7 +276,7 @@ func TestCodexBackendErrorsUseAnthropicTypes(t *testing.T) {
 }
 
 // sseEvents splits an Anthropic SSE body into its event names and payloads.
-func sseEvents(body string) (names []string, data []gjson.Result) {
+func sseEvents(body string) (names []string, data []jsontest.Result) {
 	for _, block := range strings.Split(body, "\n\n") {
 		var name string
 		for _, line := range strings.Split(block, "\n") {
@@ -285,7 +285,7 @@ func sseEvents(body string) (names []string, data []gjson.Result) {
 			}
 			if v, ok := strings.CutPrefix(line, "data: "); ok {
 				names = append(names, name)
-				data = append(data, gjson.Parse(v))
+				data = append(data, jsontest.Parse(v))
 			}
 		}
 	}
@@ -334,7 +334,7 @@ func TestMidStreamErrorsUseAnthropicTypesAndEndTheStream(t *testing.T) {
 
 		h = newHarness(t, nil, backend, true)
 		rec = h.do(t, http.MethodPost, "/v1/messages", `{"model":"gpt-6-luna","stream":false,"messages":[]}`)
-		if rec.Code != tc.wantCode || gjson.Get(rec.Body.String(), "error.type").String() != tc.wantType {
+		if rec.Code != tc.wantCode || jsontest.Get(rec.Body.String(), "error.type").String() != tc.wantType {
 			t.Fatalf("%s: JSON answer %d %s, want %d %s", tc.name, rec.Code, rec.Body.String(), tc.wantCode, tc.wantType)
 		}
 	}
@@ -365,7 +365,7 @@ func TestAStreamCutShortIsAnError(t *testing.T) {
 
 		h = newHarness(t, nil, backend, true)
 		rec = h.do(t, http.MethodPost, "/v1/messages", `{"model":"gpt-6-luna","stream":false,"messages":[]}`)
-		if rec.Code < 500 || gjson.Get(rec.Body.String(), "type").String() != "error" {
+		if rec.Code < 500 || jsontest.Get(rec.Body.String(), "type").String() != "error" {
 			t.Fatalf("%s: JSON answer %d %s, want a 5xx Anthropic error", name, rec.Code, rec.Body.String())
 		}
 		if strings.Contains(rec.Body.String(), "end_turn") {
@@ -440,7 +440,7 @@ func TestUpstreamErrorMessageIsCleanedAndCapped(t *testing.T) {
 	body := `{"error":{"message":"line one\u0000\u001b[31m\nline two\t` + long + `"}}`
 	h := newHarness(t, nil, backendStatus(http.StatusBadRequest, body), true)
 	rec := h.do(t, http.MethodPost, "/v1/messages", `{"model":"gpt-6-luna","messages":[]}`)
-	message := gjson.Get(rec.Body.String(), "error.message").String()
+	message := jsontest.Get(rec.Body.String(), "error.message").String()
 	if !strings.HasPrefix(message, "line one [31m line two word") {
 		t.Fatalf("message = %q", message)
 	}
@@ -476,7 +476,7 @@ func TestUpstreamErrorMessageIsCleanedAndCapped(t *testing.T) {
 		}
 		h := newHarness(t, nil, backendStatus(http.StatusBadRequest, `{"error":{"message":`+string(text)+`}}`), true)
 		rec := h.do(t, http.MethodPost, "/v1/messages", `{"model":"gpt-6-luna","messages":[]}`)
-		got := gjson.Get(rec.Body.String(), "error.message").String()
+		got := jsontest.Get(rec.Body.String(), "error.message").String()
 		if got != c.want {
 			t.Errorf("%s: message = %q (%d runes), want %q", c.name, got, len([]rune(got)), c.want)
 		}

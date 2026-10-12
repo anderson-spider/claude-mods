@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/codex"
-	"github.com/tidwall/gjson"
+	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/jsontest"
 )
 
 // A refresh the token endpoint refused is a lost Codex login: a 403 naming
@@ -21,10 +21,10 @@ func TestExpiredProxyLoginIsAPermissionError(t *testing.T) {
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403", rec.Code)
 	}
-	if got := gjson.Get(rec.Body.String(), "error.type").String(); got != "permission_error" {
+	if got := jsontest.Get(rec.Body.String(), "error.type").String(); got != "permission_error" {
 		t.Fatalf("error.type = %q, want permission_error", got)
 	}
-	if got := gjson.Get(rec.Body.String(), "error.message").String(); !strings.Contains(got, "ccmproxy login codex") {
+	if got := jsontest.Get(rec.Body.String(), "error.message").String(); !strings.Contains(got, "ccmproxy login codex") {
 		t.Fatalf("error.message = %q, want it to name `ccmproxy login codex`", got)
 	}
 }
@@ -37,10 +37,10 @@ func TestTransientTokenFailureIsABadGateway(t *testing.T) {
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("status = %d, want 502", rec.Code)
 	}
-	if got := gjson.Get(rec.Body.String(), "error.type").String(); got != "api_error" {
+	if got := jsontest.Get(rec.Body.String(), "error.type").String(); got != "api_error" {
 		t.Fatalf("error.type = %q, want api_error", got)
 	}
-	if got := gjson.Get(rec.Body.String(), "error.message").String(); strings.Contains(got, "ccmproxy login") {
+	if got := jsontest.Get(rec.Body.String(), "error.message").String(); strings.Contains(got, "ccmproxy login") {
 		t.Fatalf("error.message = %q: a transient failure must not ask for a new login", got)
 	}
 }

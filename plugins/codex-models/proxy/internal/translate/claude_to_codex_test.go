@@ -4,10 +4,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tidwall/gjson"
+	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/jsontest"
 )
 
-func mustConvert(t *testing.T, opts Options, raw string) gjson.Result {
+func mustConvert(t *testing.T, opts Options, raw string) jsontest.Result {
 	t.Helper()
 	if opts.Model == "" {
 		opts.Model = "gpt-6-luna"
@@ -16,10 +16,10 @@ func mustConvert(t *testing.T, opts Options, raw string) gjson.Result {
 	if err != nil {
 		t.Fatalf("ClaudeToCodex: %v", err)
 	}
-	if !gjson.ValidBytes(request.Body) {
+	if !jsontest.ValidBytes(request.Body) {
 		t.Fatalf("translated body is not valid JSON: %s", request.Body)
 	}
-	return gjson.ParseBytes(request.Body)
+	return jsontest.ParseBytes(request.Body)
 }
 
 func TestSystemPromptBecomesDeveloperMessage(t *testing.T) {
@@ -110,7 +110,7 @@ func TestOnlyProxyIssuedThinkingIsReplayed(t *testing.T) {
 	}`)
 
 	reasoningCount := 0
-	body.Get("input").ForEach(func(_, item gjson.Result) bool {
+	body.Get("input").ForEach(func(_, item jsontest.Result) bool {
 		if item.Get("type").String() == "reasoning" {
 			reasoningCount++
 			if got := item.Get("encrypted_content").String(); got != "ENCRYPTED" {
@@ -140,9 +140,9 @@ func TestLongToolNamesAreShortenedAndMappedBack(t *testing.T) {
 		t.Fatalf("ClaudeToCodex: %v", err)
 	}
 
-	body := gjson.ParseBytes(request.Body)
+	body := jsontest.ParseBytes(request.Body)
 	seen := map[string]bool{}
-	body.Get("tools").ForEach(func(_, tool gjson.Result) bool {
+	body.Get("tools").ForEach(func(_, tool jsontest.Result) bool {
 		name := tool.Get("name").String()
 		if len(name) > nameLimit {
 			t.Fatalf("tool name %q is %d bytes, over the %d limit", name, len(name), nameLimit)
@@ -323,9 +323,9 @@ func TestStripProxySignaturesRemovesOnlyOurBlocks(t *testing.T) {
 		t.Fatal("a request carrying proxy-issued signatures must be rewritten")
 	}
 
-	blocks := gjson.GetBytes(out, "messages.1.content").Array()
+	blocks := jsontest.GetBytes(out, "messages.1.content").Array()
 	if len(blocks) != 2 {
-		t.Fatalf("kept %d blocks, want 2: %s", len(blocks), gjson.GetBytes(out, "messages.1.content").Raw)
+		t.Fatalf("kept %d blocks, want 2: %s", len(blocks), jsontest.GetBytes(out, "messages.1.content").Raw)
 	}
 	if blocks[0].Get("thinking").String() != "theirs" {
 		t.Fatalf("wrong block was dropped: %s", blocks[0].Raw)
@@ -334,7 +334,7 @@ func TestStripProxySignaturesRemovesOnlyOurBlocks(t *testing.T) {
 		t.Fatalf("text block was lost: %s", blocks[1].Raw)
 	}
 	// Untouched messages must survive intact.
-	if gjson.GetBytes(out, "messages.0.content.0.text").String() != "hi" {
+	if jsontest.GetBytes(out, "messages.0.content.0.text").String() != "hi" {
 		t.Fatal("an unrelated message was altered")
 	}
 }

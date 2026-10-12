@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"reflect"
 	"runtime"
 	"slices"
 	"strings"
@@ -28,9 +29,10 @@ var removedKeys = map[string]string{
 // expanded). A missing file is not an error: the result is the defaults.
 //
 // The file is refused when group or others can access it (it holds
-// auth_token), when it sets one of removedKeys, when it is not a JSON object
-// of the expected types, or when Validate rejects it. Unknown keys are
-// ignored. Settings the file leaves out or leaves blank take the defaults.
+// auth_token), when it sets one of removedKeys, when a key differs from a
+// known one only in case, when it is not a JSON object of the expected types,
+// or when Validate rejects it. Other unknown keys are ignored. Settings the
+// file leaves out or leaves blank take the defaults.
 func Load(path string) (*Config, error) {
 	cfg, _, err := load(path, true)
 	return cfg, err
@@ -77,6 +79,9 @@ func load(path string, checkMode bool) (cfg *Config, keys map[string]json.RawMes
 	if err := removedKeyError(path, keys); err != nil {
 		return nil, nil, err
 	}
+	if err := caseVariantError(path, keys); err != nil {
+		return nil, nil, err
+	}
 	// Decoding over Default keeps the default of every key the file omits.
 	if err := json.Unmarshal(data, cfg); err != nil {
 		return nil, nil, fmt.Errorf("config: parse %s: %w", path, err)
@@ -104,6 +109,60 @@ func removedKeyError(path string, keys map[string]json.RawMessage) error {
 	slices.Sort(lines)
 	return fmt.Errorf("config: %s sets keys this version no longer supports; delete them from the file:\n%s",
 		path, strings.Join(lines, "\n"))
+}
+
+// caseVariantError names every key, at the top level or in the codex block,
+// that matches a known key (removed ones included) only when case is
+// ignored, with the key it resembles. encoding/json would read such a key
+// into the field, while `config init`, the installer and the plugin's hooks
+// read keys exactly: {"Auth_Token": ...} would load as the secret and then
+// get a second, generated auth_token beside it.
+func caseVariantError(path string, keys map[string]json.RawMessage) error {
+	topLevel := jsonKeys(reflect.TypeFor[Config]())
+	for key := range removedKeys {
+		topLevel = append(topLevel, key)
+	}
+	lines := caseVariants("", keys, topLevel)
+	var codex map[string]json.RawMessage
+	if raw, ok := keys["codex"]; ok && json.Unmarshal(raw, &codex) == nil {
+		lines = append(lines, caseVariants("codex.", codex, jsonKeys(reflect.TypeFor[Codex]()))...)
+	}
+	if lines == nil {
+		return nil
+	}
+	slices.Sort(lines)
+	return fmt.Errorf("config: %s has keys that differ from a known key only in case; keys are case-sensitive, so rename them:\n%s",
+		path, strings.Join(lines, "\n"))
+}
+
+// caseVariants lists, as "  <prefix><key>: did you mean <prefix><known>?",
+// each key of keys that is not in known but equals one of them ignoring case.
+func caseVariants(prefix string, keys map[string]json.RawMessage, known []string) []string {
+	var lines []string
+	for key := range keys {
+		if slices.Contains(known, key) {
+			continue
+		}
+		for _, name := range known {
+			if strings.EqualFold(key, name) {
+				lines = append(lines, "  "+prefix+key+": did you mean "+prefix+name+"?")
+				break
+			}
+		}
+	}
+	return lines
+}
+
+// jsonKeys returns the JSON member names of a struct's tagged fields.
+func jsonKeys(t reflect.Type) []string {
+	var names []string
+	for i := range t.NumField() {
+		name, _, _ := strings.Cut(t.Field(i).Tag.Get("json"), ",")
+		if name != "" && name != "-" {
+			names = append(names, name)
+		}
+	}
+	return names
 }
 
 // requirePrivate refuses a file that group or others can access, since it

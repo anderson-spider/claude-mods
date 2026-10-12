@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tidwall/gjson"
+	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/jsontest"
 )
 
 func gzipBytes(t *testing.T, payload string) []byte {
@@ -75,7 +75,7 @@ func TestGzippedCodexRequestIsRouted(t *testing.T) {
 	if h.anthropic.method != "" {
 		t.Fatal("a gzipped request for an added model must not go to Anthropic")
 	}
-	upstream := gjson.Parse(h.codex.body)
+	upstream := jsontest.Parse(h.codex.body)
 	if got := upstream.Get("model").String(); got != "gpt-6-luna" {
 		t.Fatalf("upstream model = %q", got)
 	}
@@ -140,7 +140,7 @@ func TestGzippedPassthroughIsDecompressedOnlyWhenRewritten(t *testing.T) {
 	if got := h.anthropic.header.Get("Content-Encoding"); got != "" {
 		t.Fatalf("upstream Content-Encoding = %q, want it dropped with the rewrite", got)
 	}
-	if !gjson.Valid(h.anthropic.body) {
+	if !jsontest.Valid(h.anthropic.body) {
 		t.Fatalf("upstream body is not plain JSON: %q", h.anthropic.body[:min(80, len(h.anthropic.body))])
 	}
 	if strings.Contains(h.anthropic.body, "ccmp1:") {
@@ -156,7 +156,7 @@ func TestCountTokensAcceptsAGzippedBody(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
 	}
-	if got := gjson.Get(rec.Body.String(), "input_tokens").Int(); got < 1 {
+	if got := jsontest.Get(rec.Body.String(), "input_tokens").Int(); got < 1 {
 		t.Fatalf("input_tokens = %d", got)
 	}
 	if h.anthropic.method != "" {

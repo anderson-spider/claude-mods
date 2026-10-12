@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tidwall/gjson"
+	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/jsontest"
 )
 
 // TestStripKeepsEveryOtherByte: only the content arrays that held a
@@ -71,7 +71,7 @@ func TestToolInputTravelsAsWritten(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := gjson.GetBytes(request.Body, "input.0.arguments").String(); got != input {
+	if got := jsontest.GetBytes(request.Body, "input.0.arguments").String(); got != input {
 		t.Fatalf("arguments = %q, want %q", got, input)
 	}
 }
@@ -94,7 +94,7 @@ func TestSchemaEditsKeepTheRest(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := gjson.GetBytes(request.Body, "tools.0.parameters").Raw; got != want {
+		if got := jsontest.GetBytes(request.Body, "tools.0.parameters").Raw; got != want {
 			t.Errorf("schema %s became %s, want %s", schema, got, want)
 		}
 	}
@@ -177,7 +177,7 @@ func TestNoBlockBeforeMessageStart(t *testing.T) {
 		if len(frames) < 2 || frames[0].event != "message_start" || frames[1].event != "content_block_start" {
 			t.Fatalf("%s: events = %v, want message_start then the block", name, eventNames(frames))
 		}
-		if got := gjson.Parse(frames[0].data).Get("message.model").String(); got != "gpt-6-luna" {
+		if got := jsontest.Parse(frames[0].data).Get("message.model").String(); got != "gpt-6-luna" {
 			t.Fatalf("%s: message.model = %q", name, got)
 		}
 	}
@@ -185,7 +185,7 @@ func TestNoBlockBeforeMessageStart(t *testing.T) {
 	// The reasoning state still reaches the client, marked, for the next turn.
 	frames := runStream(t, NewStreamTranslator("gpt-6-luna", nil), cases["reasoning done first"][0], completed)
 	assertEvents(t, frames, "message_start", "content_block_start", "content_block_delta", "content_block_stop", "message_delta", "message_stop")
-	if got := gjson.Parse(frames[2].data).Get("delta.signature").String(); got != SignatureMarker+"STATE" {
+	if got := jsontest.Parse(frames[2].data).Get("delta.signature").String(); got != SignatureMarker+"STATE" {
 		t.Fatalf("signature = %q, want %q", got, SignatureMarker+"STATE")
 	}
 	message := assemble(t, "gpt-6-luna", nil, cases["reasoning done first"][0], completed)

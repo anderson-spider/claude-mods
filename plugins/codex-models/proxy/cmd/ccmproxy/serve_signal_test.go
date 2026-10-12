@@ -102,7 +102,8 @@ func finishesOnSignal(t *testing.T, bin string, sig syscall.Signal) {
 		}
 	}()
 
-	client := &http.Client{Transport: &http.Transport{Proxy: nil, DisableCompression: true}}
+	// The timeout covers the body too: a stop that hangs fails with a message.
+	client := &http.Client{Transport: &http.Transport{Proxy: nil, DisableCompression: true}, Timeout: 10 * time.Second}
 	defer client.CloseIdleConnections()
 	waitForHello(t, client, addr, exited)
 
