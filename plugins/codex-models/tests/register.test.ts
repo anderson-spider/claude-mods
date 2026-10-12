@@ -4,13 +4,17 @@ import type { Engine } from 'claude-code/testing'
 
 const BASE = 'http://127.0.0.1:41234'
 const SECRET = 's3cret-value'
+/** The secret in the proxy's config, when it differs from the session's. */
+const OTHER = 'config-secret-1a2b3c4d'
 const HOME = '/Users/jane'
 const CONFIG = `${HOME}/.claude/codex-models/home/config.json`
 const STATUS = JSON.stringify({ service: 'ccmproxy', version: '0.2.0', codexLogin: true, models: ['gpt-6-astra'] })
 
 const refusal = (message: string) => JSON.stringify({ type: 'error', error: { type: 'permission_error', message } })
 
-type Reply = { status: number; text: string } | 'refused' | 'hang'
+type Answer = { status: number; text: string }
+/** `later` answers when the test resolves it. */
+type Reply = Answer | 'refused' | 'hang' | { later: () => Promise<Answer> }
 
 /** A host with the session's environment, the user settings, the config file and a fake proxy behind `http.fetch`. */
 function world(
@@ -34,7 +38,8 @@ function world(
     const reply = opts.reply ?? { status: 200, text: STATUS }
     if (reply === 'refused') throw new Error('connect ECONNREFUSED')
     if (reply === 'hang') return new Promise<never>(() => {})
-    return { value: { status: reply.status, ok: reply.status < 300, headers: {}, text: reply.text } }
+    const answer = 'later' in reply ? await reply.later() : reply
+    return { value: { status: answer.status, ok: answer.status < 300, headers: {}, text: answer.text } }
   })
   on('fs.read', async (_$, e) => {
     if (opts.fsFail) throw new Error('EACCES')
@@ -228,4 +233,163 @@ test('/codex-models:status says when nothing is installed, and when the settings
   expect(seen.fetches).toEqual([])
   expect(out.text).toContain('Proxy: not installed')
   expect(out.text).toContain('could not be read')
+})
+
+// --- Edges: which base URLs are probed, the 1.5 s bound from both sides, and the secret kept out of every line,
+// toast and report, also when the answer echoes it back. ---
+
+const sessionEnv = (base: string) => ({ ANTHROPIC_BASE_URL: base, ANTHROPIC_CUSTOM_HEADERS: `X-Ccmproxy-Token: ${SECRET}` })
+
+for (const base of ['http://localhost:41234', 'http://[::1]:41234/', 'http://127.1.2.3:41234']) {
+  test(`session start probes the loopback base URL ${base}`, async ($, on) => {
+    const { seen } = world(on, { env: sessionEnv(base) })
+
+    await start($)
+
+    expect(seen.fetches).toEqual([{ url: `${base.replace(/\/$/, '')}/__ccmproxy/status`, headers: { 'X-Ccmproxy-Token': SECRET } }])
+    expect(seen.transcript).toEqual([])
+  })
+}
+
+for (const base of [
+  'http://127.0.0.1.nip.io:41234',
+  'https://127.0.0.1:41234',
+  'http://127.0.0.1:41234/v1',
+  'http://0.0.0.0:41234',
+  'http://192.168.1.20:41234',
+  'http://localhost.example.com:41234',
+  'http://user@127.0.0.1:41234',
+]) {
+  test(`session start sends nothing and says nothing for ${base}`, async ($, on) => {
+    const { seen } = world(on, { env: sessionEnv(base) })
+
+    await start($)
+
+    expect(seen.fetches).toEqual([])
+    expect(seen.transcript).toEqual([])
+    expect(seen.toasts).toEqual([])
+  })
+}
+
+test('an answer just inside 1.5 s is used, not timed out', async ($, on) => {
+  let answer: (r: Answer) => void = () => {}
+  const { seen, clock } = world(on, {
+    env: sessionEnv('http://127.0.0.1:41234'),
+    reply: { later: () => new Promise(resolve => (answer = resolve)) },
+  })
+
+  const pending = start($)
+  await clock.advance(1_499)
+  answer({ status: 200, text: STATUS })
+  await clock.advance(10)
+  await pending
+
+  expect(seen.transcript).toEqual([])
+  expect(seen.logs).toContain('status check at start: ok')
+})
+
+test('a late answer after the timeout leaves only the timeout notice', async ($, on) => {
+  let answer: (r: Answer) => void = () => {}
+  const { seen, clock } = world(on, {
+    env: sessionEnv('http://127.0.0.1:41234'),
+    reply: { later: () => new Promise(resolve => (answer = resolve)) },
+  })
+
+  const pending = start($)
+  await clock.advance(1_500)
+  await pending
+  answer({ status: 403, text: refusal('ccmproxy: missing or wrong X-Ccmproxy-Token') })
+  await clock.advance(10)
+
+  expect(seen.transcript).toHaveLength(1)
+  expect(seen.transcript[0]).toContain('did not answer within 1.5 s')
+  expect(seen.transcript[0]).toContain('~/.claude/codex-models/uninstall.sh')
+})
+
+test('a missing Codex login gets its own notice', async ($, on) => {
+  const { seen } = world(on, {
+    env: sessionEnv('http://127.0.0.1:41234'),
+    reply: { status: 200, text: JSON.stringify({ service: 'ccmproxy', version: '0.2.0', codexLogin: false, models: [] }) },
+  })
+
+  await start($)
+
+  expect(seen.transcript).toHaveLength(1)
+  expect(seen.transcript[0]).toContain('login codex')
+})
+
+const echoes: [string, Reply][] = [
+  ['a 500 echoing the secret', { status: 500, text: `bad token ${SECRET}` }],
+  ['a 200 from another server echoing the secret', { status: 200, text: JSON.stringify({ service: 'metro', token: SECRET }) }],
+  ['a 200 that is not JSON echoing the secret', { status: 200, text: `<html>${SECRET}</html>` }],
+  ['a 403 echoing the secret', { status: 403, text: `ccmproxy: wrong ${SECRET}` }],
+  ['a refused connection', 'refused'],
+]
+for (const [name, reply] of echoes) {
+  test(`session start never shows the secret: ${name}`, async ($, on) => {
+    const { seen } = world(on, { env: sessionEnv('http://127.0.0.1:41234'), reply })
+
+    await start($)
+
+    expect(seen.transcript).toHaveLength(1)
+    expect(everything(seen)).not.toContain(SECRET)
+  })
+
+  test(`/codex-models:status never shows either secret: ${name}`, async ($, on) => {
+    const { seen } = world(on, {
+      env: sessionEnv('http://127.0.0.1:41234'),
+      reply,
+      files: { [CONFIG]: JSON.stringify({ listen_http: '127.0.0.1:41234', auth_token: OTHER }) },
+      settings: { env: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:41234', ANTHROPIC_CUSTOM_HEADERS: `X-Ccmproxy-Token: ${SECRET}` } },
+    })
+
+    const out = await status($)
+
+    expect(out.text).not.toContain(SECRET)
+    expect(out.text).not.toContain(OTHER)
+    expect(everything(seen)).not.toContain(SECRET)
+  })
+}
+
+test('/codex-models:status names a settings secret that differs from the config, showing neither', async ($, on) => {
+  const { seen } = world(on, {
+    env: sessionEnv('http://127.0.0.1:41234'),
+    files: { [CONFIG]: JSON.stringify({ listen_http: '127.0.0.1:41234', auth_token: OTHER }) },
+    settings: { env: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:41234', ANTHROPIC_CUSTOM_HEADERS: `X-Team: a\nX-Ccmproxy-Token: ${SECRET}` } },
+    reply: { status: 403, text: refusal('ccmproxy: missing or wrong X-Ccmproxy-Token') },
+  })
+
+  const out = await status($)
+
+  expect(seen.fetches[0]?.headers).toEqual({ 'X-Ccmproxy-Token': SECRET })
+  expect(out.text).toContain('present, differs from the proxy config (secret not shown)')
+  expect(out.text).toContain('refused the secret (403)')
+  expect(out.text).not.toContain(SECRET)
+  expect(out.text).not.toContain(OTHER)
+})
+
+test('/codex-models:status outside the proxy checks with the config secret and does not print it', async ($, on) => {
+  const { seen } = world(on, {
+    env: {},
+    files: { [CONFIG]: JSON.stringify({ listen_http: '127.0.0.1:41234', auth_token: OTHER }) },
+  })
+
+  const out = await status($)
+
+  expect(seen.fetches).toEqual([{ url: 'http://127.0.0.1:41234/__ccmproxy/status', headers: { 'X-Ccmproxy-Token': OTHER } }])
+  expect(out.text).toContain('Proxy: ccmproxy 0.2.0 at http://127.0.0.1:41234')
+  expect(out.text).not.toContain(OTHER)
+})
+
+test('/codex-models:status does not probe a config that listens off loopback', async ($, on) => {
+  const { seen } = world(on, {
+    env: {},
+    files: { [CONFIG]: JSON.stringify({ listen_http: '0.0.0.0:41234', auth_token: OTHER }) },
+  })
+
+  const out = await status($)
+
+  expect(seen.fetches).toEqual([])
+  expect(out.text).toContain('Proxy: not installed')
+  expect(out.text).not.toContain(OTHER)
 })
