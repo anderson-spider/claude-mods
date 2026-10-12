@@ -2,6 +2,7 @@ package codex
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
@@ -99,6 +100,19 @@ type Store struct {
 	// read, so an external update (the Codex CLI or another proxy refreshing)
 	// is noticed instead of being served from a stale cache.
 	stamp fileStamp
+	// rejected remembers the credential whose refresh the token endpoint
+	// refused, so it is not sent again until the file changes.
+	rejected *rejection
+}
+
+// rejection identifies a refused credential by its file, the file's stamp and
+// a hash of the refresh token (never the token itself), with the error to
+// answer while it stands.
+type rejection struct {
+	path    string
+	stamp   fileStamp
+	refresh [sha256.Size]byte
+	err     error
 }
 
 type fileStamp struct {
@@ -230,7 +244,7 @@ func (s *Store) Remove() (string, error) {
 	if err := os.Remove(path); err != nil {
 		return path, err
 	}
-	s.token, s.active, s.stamp = nil, source{}, fileStamp{}
+	s.token, s.active, s.stamp, s.rejected = nil, source{}, fileStamp{}, nil
 	return path, nil
 }
 
@@ -331,6 +345,9 @@ func (s *Store) Access(ctx context.Context) (accessToken, accountID string, err 
 	if !token.Expired(refreshLead) {
 		return token.AccessToken, token.AccountID, nil
 	}
+	if err := s.rejectedLocked(token); err != nil {
+		return s.afterRejectionLocked(token, err)
+	}
 
 	// Another proxy process may be refreshing the same file: hold the lock,
 	// then re-read, so only one of them spends the refresh token.
@@ -360,9 +377,26 @@ func (s *Store) Access(ctx context.Context) (accessToken, accountID string, err 
 		}
 		return "", "", ErrNotAuthenticated
 	}
+	if err := s.rejectedLocked(token); err != nil {
+		return s.afterRejectionLocked(token, err)
+	}
 
 	logx.Infof("codex: refreshing access token (expires %s)", expiryLabel(token))
 	refreshed, err := s.client.Refresh(context.WithoutCancel(ctx), token.RefreshToken)
+	if errors.Is(err, ErrLoginExpired) {
+		s.rejected = &rejection{path: s.active.path, stamp: s.stamp, refresh: sha256.Sum256([]byte(token.RefreshToken)), err: err}
+		status, code := 0, "none"
+		var tokenErr *TokenError
+		if errors.As(err, &tokenErr) {
+			status = tokenErr.StatusCode
+			if tokenErr.Code != "" {
+				code = tokenErr.Code
+			}
+		}
+		logx.Warnf("codex: the token endpoint rejected the refresh of %s (status %d, error %s); "+
+			"no refresh is retried until the file changes: run `ccmproxy login codex`", s.active.path, status, code)
+		return s.afterRejectionLocked(token, err)
+	}
 	if err != nil {
 		// A still-valid token is worth trying even if the refresh failed;
 		// only a genuinely expired one is a hard error.
@@ -393,6 +427,29 @@ func (s *Store) Access(ctx context.Context) (accessToken, accountID string, err 
 		s.token = refreshed
 	}
 	return refreshed.AccessToken, refreshed.AccountID, nil
+}
+
+// rejectedLocked returns the stored refusal when token is the credential the
+// token endpoint already rejected, unchanged on disk since.
+func (s *Store) rejectedLocked(token *Token) error {
+	r := s.rejected
+	if r == nil {
+		return nil
+	}
+	if r.path != s.active.path || r.stamp != s.stamp || r.refresh != sha256.Sum256([]byte(token.RefreshToken)) {
+		s.rejected = nil
+		return nil
+	}
+	return r.err
+}
+
+// afterRejectionLocked keeps serving a still-valid access token after its
+// refresh was refused; an expired one answers the refusal.
+func (s *Store) afterRejectionLocked(token *Token, err error) (string, string, error) {
+	if !token.Expired(0) {
+		return token.AccessToken, token.AccountID, nil
+	}
+	return "", "", err
 }
 
 // borrowedLocked serves the Codex CLI's login while its access token is valid.
@@ -431,6 +488,7 @@ func (s *Store) writeLocked(token *Token, target source) error {
 	s.token = token
 	s.active = target
 	s.stamp = stampOf(target.path)
+	s.rejected = nil
 	return nil
 }
 

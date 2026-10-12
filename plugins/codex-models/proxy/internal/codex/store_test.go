@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -721,5 +722,126 @@ func TestEnsureDirRefusesCodexHome(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(home, "sub")); !os.IsNotExist(err) {
 		t.Fatal("ensureDir created a directory in CODEX_HOME")
+	}
+}
+
+// captureStderr runs fn with os.Stderr, where logx writes, sent to a pipe.
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	saved := os.Stderr
+	os.Stderr = w
+	fn()
+	os.Stderr = saved
+	_ = w.Close()
+	out, _ := io.ReadAll(r)
+	return string(out)
+}
+
+// A refresh the endpoint rejected is not sent again for the same credential:
+// a still-valid access token keeps serving, an expired one answers
+// ErrLoginExpired at once. The rejection is logged once, with the status and
+// OAuth code only. A change to the file (a new login, another instance)
+// allows a refresh again.
+func TestRejectedRefreshIsNotRetriedUntilTheFileChanges(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		expiresIn time.Duration
+	}{
+		{"access token still valid", time.Minute},
+		{"access token expired", -time.Minute},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("CODEX_HOME", t.TempDir())
+			var calls, status atomic.Int32
+			status.Store(http.StatusBadRequest)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				w.Header().Set("Content-Type", "application/json")
+				if code := int(status.Load()); code != http.StatusOK {
+					w.WriteHeader(code)
+					_, _ = w.Write([]byte(`{"error":"invalid_grant","error_description":"SECRET rt-1"}`))
+					return
+				}
+				_, _ = w.Write([]byte(`{"access_token":"renewed","refresh_token":"rt-2","expires_in":3600}`))
+			}))
+			t.Cleanup(server.Close)
+
+			dir := t.TempDir()
+			path := filepath.Join(dir, "codex.json")
+			writeNative(t, path, Token{AccessToken: "own-access", RefreshToken: "rt-1", ExpiresAt: time.Now().Add(tc.expiresIn)}, 0o600)
+			store := NewStore(&Client{HTTP: &http.Client{Transport: rewriteTo(server.URL)}}, StoreOptions{Dir: dir})
+
+			logged := captureStderr(t, func() {
+				for i := 0; i < 3; i++ {
+					access, _, err := store.Access(context.Background())
+					if tc.expiresIn > 0 {
+						if err != nil || access != "own-access" {
+							t.Fatalf("request %d: Access = %q, %v; want the still-valid token", i, access, err)
+						}
+						continue
+					}
+					if !errors.Is(err, ErrLoginExpired) || !strings.Contains(err.Error(), "`ccmproxy login codex`") {
+						t.Fatalf("request %d: Access = %v, want ErrLoginExpired naming the fix", i, err)
+					}
+				}
+			})
+			if n := calls.Load(); n != 1 {
+				t.Fatalf("token endpoint called %d times for 3 requests, want 1", n)
+			}
+			var lines []string
+			for _, line := range strings.Split(logged, "\n") {
+				if strings.Contains(line, "rejected the refresh") {
+					lines = append(lines, line)
+				}
+			}
+			if len(lines) != 1 {
+				t.Fatalf("rejection logged %d times, want once:\n%s", len(lines), logged)
+			}
+			if !strings.Contains(lines[0], "status 400") || !strings.Contains(lines[0], "error invalid_grant") {
+				t.Fatalf("log line %q lacks the status or the OAuth code", lines[0])
+			}
+			if strings.Contains(logged, "SECRET") || strings.Contains(logged, "rt-1") || strings.Contains(logged, "own-access") {
+				t.Fatalf("the log repeats a body or a token:\n%s", logged)
+			}
+
+			// The file changes (same credential, new stamp): refresh is tried again.
+			status.Store(http.StatusOK)
+			writeNative(t, path, Token{AccessToken: "own-access", RefreshToken: "rt-1", ExpiresAt: time.Now().Add(-time.Minute)}, 0o600)
+			later := time.Now().Add(2 * time.Second)
+			if err := os.Chtimes(path, later, later); err != nil {
+				t.Fatalf("chtimes: %v", err)
+			}
+			access, _, err := store.Access(context.Background())
+			if err != nil || access != "renewed" {
+				t.Fatalf("after the file changed: Access = %q, %v; want a refresh", access, err)
+			}
+			if n := calls.Load(); n != 2 {
+				t.Fatalf("token endpoint called %d times, want 2", n)
+			}
+		})
+	}
+}
+
+// A new login through this store clears the rejection at once.
+func TestSaveClearsARejectedRefresh(t *testing.T) {
+	store, calls := expiredOwnLogin(t, http.StatusBadRequest, `{"error":"invalid_grant"}`)
+	if _, _, err := store.Access(context.Background()); !errors.Is(err, ErrLoginExpired) {
+		t.Fatalf("Access = %v, want ErrLoginExpired", err)
+	}
+	if err := store.Save(&Token{AccessToken: "fresh", RefreshToken: "rt-new", ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if access, _, err := store.Access(context.Background()); err != nil || access != "fresh" {
+		t.Fatalf("Access after login = %q, %v", access, err)
+	}
+	if store.rejected != nil {
+		t.Fatal("the rejection outlived a new login")
+	}
+	if n := calls.Load(); n != 1 {
+		t.Fatalf("token endpoint called %d times, want 1", n)
 	}
 }
