@@ -1,12 +1,15 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // validToken is a secret long enough to pass validateSecret.
@@ -673,6 +676,413 @@ func TestSafeURL(t *testing.T) {
 	for raw, want := range cases {
 		if got := safeURL(raw); got != want {
 			t.Errorf("safeURL(%q) = %s, want %s", raw, got, want)
+		}
+	}
+}
+
+const echoSecret = "S3cretPassw0rdValue"
+
+func TestURLRefusalsNeverEchoSecrets(t *testing.T) {
+	shapes := []string{
+		"https://user:" + echoSecret + "@api.anthropic.com",
+		"https://user:p%40" + echoSecret + "@api.anthropic.com",
+		"https://" + echoSecret + "@api.anthropic.com",
+		"https://user:" + echoSecret + "@[::1]:443/x",
+		"https://user:" + echoSecret + "@[2001:db8::1]/v1",
+		"http://user:" + echoSecret + "@api.anthropic.com",
+		"//user:" + echoSecret + "@api.anthropic.com",
+		"https://api.anthropic.com/?key=" + echoSecret,
+		"https://api.anthropic.com/#" + echoSecret,
+		"https://user:" + echoSecret + "@api.anthropic.com:badport",
+		"https://user:" + echoSecret + "@api.anthropic.com:99999999999",
+		"https://[::1" + echoSecret,
+		"https://us er:" + echoSecret + "@host",
+		"https://user:" + echoSecret + "\x7f@host",
+		"https://user:" + echoSecret + "\n@host",
+		"%zz" + echoSecret,
+		":" + echoSecret,
+		"user:" + echoSecret + "@api.anthropic.com",
+		echoSecret + "@api.anthropic.com",
+		"ftp://user:" + echoSecret + "@host",
+	}
+	for _, shape := range shapes {
+		for _, field := range []string{"upstream", "codex.base_url"} {
+			var body []byte
+			if field == "upstream" {
+				body, _ = json.Marshal(map[string]any{"upstream": shape})
+			} else {
+				body, _ = json.Marshal(map[string]any{"codex": map[string]any{"base_url": shape}})
+			}
+			_, err := Load(writeConfig(t, string(body)))
+			if err == nil {
+				t.Errorf("%s %q accepted", field, shape)
+				continue
+			}
+			if strings.Contains(err.Error(), echoSecret) {
+				t.Errorf("%s %q: refusal echoes the secret: %v", field, shape, err)
+			}
+		}
+	}
+}
+
+func TestParseErrorsNeverEchoInput(t *testing.T) {
+	for _, body := range []string{
+		`{"auth_token": 12345, "x": "` + echoSecret + `"}`,
+		`{"codex": {"callback_port": "` + echoSecret + `"}}`,
+		`{"codex": "` + echoSecret + `"}`,
+		`{"auth_token": "` + echoSecret + `"`,
+		`{"auth_token": "` + echoSecret + `" "x"}`,
+		`["` + echoSecret + `"]`,
+		`"` + echoSecret + `"`,
+		`{"auth_token": "` + echoSecret + "\x01" + `"}`,
+	} {
+		_, err := Load(writeConfig(t, body))
+		if err == nil {
+			t.Errorf("%s loaded", body)
+			continue
+		}
+		if strings.Contains(err.Error(), echoSecret) {
+			t.Errorf("%q: error echoes input: %v", body, err)
+		}
+	}
+}
+
+func TestSafeURLKeepsHostShowsRemoval(t *testing.T) {
+	got := safeURL("https://user:pw@[::1]:443/x?k=v#f")
+	if got != `"https://[::1]:443/x" (credentials removed) (query removed)` {
+		t.Fatalf("safeURL = %s", got)
+	}
+}
+
+func TestListenTable(t *testing.T) {
+	cases := []struct {
+		addr string
+		ok   bool
+	}{
+		{"127.0.0.1:1", true},
+		{"127.255.255.254:65535", true},
+		{"[::1]:9", true},
+		{" 127.0.0.1:1 ", true},
+
+		{":8081", false},
+		{"0.0.0.0:1", false},
+		{"[::]:1", false},
+		{"localhost:1", false},
+		{"::ffff:127.0.0.1", false},
+		{"[::ffff:127.0.0.1]:1", false},
+		{"127.0.0.1:0", false},
+		{"[::1]:0", false},
+		{"127.0.0.1", false},
+		{"127.0.0.1:", false},
+		{"127.0.0.1:99999", false},
+		{"fe80::1%lo0", false},
+		{"[fe80::1%lo0]:1", false},
+		{"[::1%lo0]:1", false},
+		{"127.1:1", false},
+		{"0127.0.0.1:1", false},
+		{"127.0.0.1:-1", false},
+		{"127.0.0.1: 80", false},
+		{"", false},
+	}
+	for _, tc := range cases {
+		err := ValidateListenAddr(tc.addr)
+		if tc.ok != (err == nil) {
+			t.Errorf("ValidateListenAddr(%q) = %v, want ok=%v", tc.addr, err, tc.ok)
+		}
+	}
+}
+
+func TestMissingListenHTTPDefaults(t *testing.T) {
+	cfg, err := Load(writeConfig(t, `{"log_level":"debug"}`))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.ListenHTTP != "127.0.0.1:8081" {
+		t.Fatalf("listen_http = %q, want 127.0.0.1:8081", cfg.ListenHTTP)
+	}
+	cfg, err = Load(filepath.Join(t.TempDir(), "absent.json"))
+	if err != nil || cfg.ListenHTTP != "127.0.0.1:8081" {
+		t.Fatalf("no file: %v %v", cfg, err)
+	}
+}
+
+func TestUpstreamPinned(t *testing.T) {
+	bad := []string{
+		"http://api.anthropic.com",
+		"https://api.anthropic.com/v1",
+		"https://api.anthropic.com/v1/",
+		"https://api.anthropic.com//",
+		"https://example.com",
+		"https://api.anthropic.com.example.com",
+		"HTTPS://API.ANTHROPIC.COM",
+		"https://API.anthropic.com",
+		"Https://api.anthropic.com",
+		"https://user@api.anthropic.com",
+		"https://user:pw@api.anthropic.com",
+		"https://api.anthropic.com?x=1",
+		"https://api.anthropic.com#frag",
+		"https://api.anthropic.com:443",
+		"//api.anthropic.com",
+		"api.anthropic.com",
+	}
+	for _, up := range bad {
+		body, _ := json.Marshal(map[string]string{"upstream": up})
+		if _, err := Load(writeConfig(t, string(body))); err == nil || !strings.Contains(err.Error(), "upstream") {
+			t.Errorf("upstream %q: err = %v, want refusal", up, err)
+		}
+	}
+	for _, up := range []string{"https://api.anthropic.com", "https://api.anthropic.com/", ""} {
+		body, _ := json.Marshal(map[string]string{"upstream": up})
+		cfg, err := Load(writeConfig(t, string(body)))
+		if err != nil || cfg.Upstream != "https://api.anthropic.com" {
+			t.Errorf("upstream %q: cfg=%v err=%v, want accepted as the pin", up, cfg, err)
+		}
+	}
+}
+
+func TestCodexBaseURL(t *testing.T) {
+	bad := []string{"http://chatgpt.com/backend-api/codex", "https:///backend-api", "https://", "chatgpt.com", "ws://chatgpt.com", "https://u@chatgpt.com"}
+	for _, b := range bad {
+		body, _ := json.Marshal(map[string]any{"codex": map[string]string{"base_url": b}})
+		if _, err := Load(writeConfig(t, string(body))); err == nil {
+			t.Errorf("codex.base_url %q accepted", b)
+		}
+	}
+}
+
+func TestRemovedKeysNoEchoUnknownIgnored(t *testing.T) {
+	const secret = "VALUE-MUST-NOT-APPEAR-123"
+	for key := range removedKeys {
+		path := writeConfig(t, `{"`+key+`":"`+secret+`"}`)
+		_, err := Load(path)
+		if err == nil || !strings.Contains(err.Error(), key) {
+			t.Fatalf("%s: err = %v", key, err)
+		}
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("%s: error echoes the value: %v", key, err)
+		}
+	}
+	// Object-valued removed key.
+	_, err := Load(writeConfig(t, `{"proxy_password":{"nested":"`+secret+`"}}`))
+	if err == nil || strings.Contains(err.Error(), secret) {
+		t.Fatalf("object value: %v", err)
+	}
+	// Unknown keys (top level and nested) are ignored.
+	cfg, err := Load(writeConfig(t, `{"brand_new_key":123,"codex":{"also_new":true},"listen_http":"127.0.0.1:4000"}`))
+	if err != nil || cfg.ListenHTTP != "127.0.0.1:4000" {
+		t.Fatalf("unknown keys: cfg=%v err=%v", cfg, err)
+	}
+}
+
+func TestPermissions(t *testing.T) {
+	for _, mode := range []os.FileMode{0o644, 0o640, 0o604, 0o660, 0o700, 0o666} {
+		path := writeConfig(t, `{}`)
+		_ = os.Chmod(path, mode)
+		_, err := Load(path)
+		wantErr := mode&0o077 != 0
+		if wantErr != (err != nil) {
+			t.Errorf("mode %03o: err = %v, wantErr %v", mode, err, wantErr)
+		}
+	}
+	path := writeConfig(t, `{}`)
+	_ = os.Chmod(path, 0o600)
+	if _, err := Load(path); err != nil {
+		t.Fatalf("0600: %v", err)
+	}
+	// A 0644 file holding a token: the refusal must not echo it.
+	body, _ := json.Marshal(map[string]string{"auth_token": validToken})
+	path = writeConfig(t, string(body))
+	_ = os.Chmod(path, 0o644)
+	_, err := Load(path)
+	if err == nil || strings.Contains(err.Error(), validToken) {
+		t.Fatalf("0644 with token: %v", err)
+	}
+}
+
+func TestSaveAtomicAnd0600(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(path, []byte(`{}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := os.Stat(path)
+	cfg, _, err := load(path, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := cfg
+	c.AuthToken = validToken
+	if err := c.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	after, _ := os.Stat(path)
+	if after.Mode().Perm() != 0o600 {
+		t.Fatalf("mode = %03o", after.Mode().Perm())
+	}
+	if os.SameFile(before, after) {
+		t.Fatal("Save rewrote in place; want a new file renamed over (atomic replace)")
+	}
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != 1 {
+		names := []string{}
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Fatalf("leftover files after Save: %v", names)
+	}
+	// A failing rename (target is a directory) leaves no temp file behind.
+	dir2 := t.TempDir()
+	target := filepath.Join(dir2, "config.json")
+	if err := os.Mkdir(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "x"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c2 := Default()
+	c2.path = target
+	if err := c2.Save(); err == nil {
+		t.Fatal("Save over a directory succeeded")
+	}
+	entries, _ = os.ReadDir(dir2)
+	if len(entries) != 1 {
+		t.Fatalf("temp file left after a failed Save: %d entries", len(entries))
+	}
+}
+
+func isHex64(s string) bool {
+	return len(s) == 64 && strings.Trim(s, "0123456789abcdef") == ""
+}
+
+func TestInitNewFileReal(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "new", "config.json")
+	res, err := Init(path)
+	if err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if !res.Created {
+		t.Fatalf("res = %+v", res)
+	}
+	info, _ := os.Stat(path)
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("mode %03o", info.Mode().Perm())
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !isHex64(cfg.AuthToken) || !isHex64(cfg.SessionSalt) || cfg.AuthToken == cfg.SessionSalt {
+		t.Fatalf("secrets not two distinct 64-hex values (lens %d/%d)", len(cfg.AuthToken), len(cfg.SessionSalt))
+	}
+	if err := ValidateListenAddr(cfg.ListenHTTP); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(cfg.ListenHTTP, "127.0.0.1:") || cfg.ListenHTTP == DefaultListenHTTP {
+		t.Fatalf("listen_http = %q, want a random 127.0.0.1 port", cfg.ListenHTTP)
+	}
+	port, _ := strconv.Atoi(strings.TrimPrefix(cfg.ListenHTTP, "127.0.0.1:"))
+	if port < 1024 {
+		t.Fatalf("port %d is not high", port)
+	}
+	// Two inits pick different ports and secrets.
+	path2 := filepath.Join(t.TempDir(), "config.json")
+	if _, err := Init(path2); err != nil {
+		t.Fatal(err)
+	}
+	cfg2, _ := Load(path2)
+	if cfg2.AuthToken == cfg.AuthToken || cfg2.SessionSalt == cfg.SessionSalt {
+		t.Fatal("two inits produced the same secret")
+	}
+}
+
+func TestInitExistingKeepsAndAddsOnlyMissing(t *testing.T) {
+	original := `{
+  "listen_http": "127.0.0.1:9100",
+  "auth_token": "` + validToken + `",
+  "codex": {"models": ["a","b"], "unknown_nested": 7},
+  "zzz_unknown": {"deep": [1, 2.50, "x"]}
+}`
+	path := writeConfig(t, original)
+	_ = os.Chmod(path, 0o644)
+	res, err := Init(path)
+	if err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if strings.Join(res.Added, ",") != "session_salt" || !res.Tightened || res.Created {
+		t.Fatalf("res = %+v, want only session_salt added and tightened", res)
+	}
+	info, _ := os.Stat(path)
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("mode %03o", info.Mode().Perm())
+	}
+	data, _ := os.ReadFile(path)
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	if raw["auth_token"] != validToken {
+		t.Fatal("existing auth_token was changed")
+	}
+	if !isHex64(raw["session_salt"].(string)) {
+		t.Fatal("session_salt not 64 hex")
+	}
+	if raw["listen_http"] != "127.0.0.1:9100" {
+		t.Fatal("listen_http changed")
+	}
+	cx := raw["codex"].(map[string]any)
+	if cx["unknown_nested"] != float64(7) || len(cx["models"].([]any)) != 2 {
+		t.Fatalf("codex section changed: %v", cx)
+	}
+	z := raw["zzz_unknown"].(map[string]any)["deep"].([]any)
+	if len(z) != 3 || z[2] != "x" {
+		t.Fatalf("unknown key changed: %v", z)
+	}
+	// No default keys were written in.
+	for _, k := range []string{"upstream", "auth_dir", "log_level"} {
+		if _, ok := raw[k]; ok {
+			t.Errorf("default %q was written into an existing file", k)
+		}
+	}
+}
+
+func TestInitNullSecretIsFilled(t *testing.T) {
+	path := writeConfig(t, `{"auth_token":null,"session_salt":"   "}`)
+	res, err := Init(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(res.Added, ",") != "auth_token,session_salt" {
+		t.Fatalf("added = %v", res.Added)
+	}
+}
+
+func TestInitRefusesRemovedKeysByteIdentical(t *testing.T) {
+	for _, body := range []string{
+		`{"listen_tls":"127.0.0.1:8443","auth_token":"` + validToken + `"}`,
+		`{"dns":{"enabled":true}}`,
+		`{"ca_dir":"/x","intercept_hosts":["api.anthropic.com"]}`,
+		`{"proxy_username":"u","proxy_password":"p"}`,
+	} {
+		path := writeConfig(t, body)
+		_ = os.Chmod(path, 0o644)
+		old := time.Now().Add(-time.Hour)
+		_ = os.Chtimes(path, old, old)
+		before, _ := os.Stat(path)
+		_, err := Init(path)
+		if err == nil {
+			t.Fatalf("Init over %s succeeded", body)
+		}
+		data, _ := os.ReadFile(path)
+		if !bytes.Equal(data, []byte(body)) {
+			t.Fatalf("file changed: %s", data)
+		}
+		after, _ := os.Stat(path)
+		if after.Mode() != before.Mode() || !after.ModTime().Equal(before.ModTime()) || !os.SameFile(before, after) {
+			t.Fatalf("file metadata changed: mode %v->%v", before.Mode(), after.Mode())
+		}
+		entries, _ := os.ReadDir(filepath.Dir(path))
+		if len(entries) != 1 {
+			t.Fatalf("leftover files: %d", len(entries))
 		}
 	}
 }

@@ -62,7 +62,7 @@ func TestGzippedCodexRequestIsRouted(t *testing.T) {
 		writeSSE(w, `{"type":"response.completed","response":{"id":"resp_gz","usage":{}}}`)
 	}, true)
 
-	payload := `{"model":"gpt-5.5-high","max_tokens":1024,"stream":true,"messages":[{"role":"user","content":"` +
+	payload := `{"model":"gpt-6-luna-high","max_tokens":1024,"stream":true,"messages":[{"role":"user","content":"` +
 		strings.Repeat("padding ", 2000) + `"}]}`
 	rec := h.doEncoded(t, "/v1/messages", "gzip", gzipBytes(t, payload))
 
@@ -76,7 +76,7 @@ func TestGzippedCodexRequestIsRouted(t *testing.T) {
 		t.Fatal("a gzipped request for an added model must not go to Anthropic")
 	}
 	upstream := gjson.Parse(h.codex.body)
-	if got := upstream.Get("model").String(); got != "gpt-5.5" {
+	if got := upstream.Get("model").String(); got != "gpt-6-luna" {
 		t.Fatalf("upstream model = %q", got)
 	}
 	if got := upstream.Get("reasoning.effort").String(); got != "high" {
@@ -90,7 +90,7 @@ func TestGzippedCodexRequestIsRouted(t *testing.T) {
 func TestDeflatedCodexRequestIsRouted(t *testing.T) {
 	h := newHarness(t, nil, nil, true)
 
-	payload := `{"model":"gpt-5.5","messages":[{"role":"user","content":"hi"}]}`
+	payload := `{"model":"gpt-6-luna","messages":[{"role":"user","content":"hi"}]}`
 	rec := h.doEncoded(t, "/v1/messages", "deflate", zlibBytes(t, payload))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
@@ -151,7 +151,7 @@ func TestGzippedPassthroughIsDecompressedOnlyWhenRewritten(t *testing.T) {
 func TestCountTokensAcceptsAGzippedBody(t *testing.T) {
 	h := newHarness(t, nil, nil, true)
 
-	payload := `{"model":"gpt-5.5","messages":[{"role":"user","content":"hello there"}]}`
+	payload := `{"model":"gpt-6-luna","messages":[{"role":"user","content":"hello there"}]}`
 	rec := h.doEncoded(t, "/v1/messages/count_tokens", "gzip", gzipBytes(t, payload))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
@@ -196,7 +196,7 @@ func TestCorruptGzipIsPassedThroughUntouched(t *testing.T) {
 }
 
 func TestReadBodyReportsTheDecodedForm(t *testing.T) {
-	payload := `{"model":"gpt-5.5"}`
+	payload := `{"model":"gpt-6-luna"}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(gzipBytes(t, payload)))
 	req.Header.Set("Content-Encoding", "gzip")
 

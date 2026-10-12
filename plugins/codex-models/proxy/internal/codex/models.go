@@ -12,7 +12,6 @@ type Model struct {
 	DisplayName    string
 	Description    string
 	ContextLength  int
-	MaxOutput      int
 	ReasoningLevel []string
 	DefaultEffort  string
 	SupportsImages bool
@@ -21,79 +20,108 @@ type Model struct {
 	// a row naming a model the installed version does not know is not
 	// offered without it. The value only affects the client's own prompt
 	// profile and effort defaults; the model id sent upstream is unchanged.
+	// Frontier models behave as Opus, workhorses as Sonnet and the fast
+	// tier as Haiku.
 	BehavesAs string
+	// OptIn marks a model gated by an access program the account may not
+	// have. It is neither advertised nor resolved unless codex.models names
+	// it.
+	OptIn bool
 }
 
-// Catalog is the set of Codex models reachable with a ChatGPT subscription.
-// The ids are the slugs the ChatGPT backend expects verbatim in the request
-// body; availability still depends on the signed-in account's plan, so a model
-// listed here can legitimately be rejected upstream.
+// Catalog is the set of Codex models reachable with a ChatGPT subscription,
+// in the Codex CLI's own order. It mirrors the models `codex debug models`
+// lists (visibility "list") for the account it was taken from (Codex CLI
+// 0.162.1, October 2026): slug, description, context_window,
+// supported_reasoning_levels, default_reasoning_level and input_modalities.
+// Hidden entries (gpt-5.5, retiring on 2026-10-14; gpt-reserve;
+// codex-auto-review) are left out. gpt-daybreak-blue-latest is listed only
+// for the "daybreak_blue" access program, so it is OptIn: available only when
+// codex.models names it. The ids are the slugs the ChatGPT backend
+// expects verbatim in the request body; availability still depends on the
+// signed-in account's plan, so a model listed here can legitimately be
+// rejected upstream.
 var Catalog = []Model{
 	{
-		ID:             "gpt-5.6-sol",
-		DisplayName:    "GPT-5.6 Sol (Codex)",
-		Description:    "Frontier coding and research model. Capable at low effort; turn it up for harder work.",
-		ContextLength:  372000,
-		MaxOutput:      128000,
-		ReasoningLevel: []string{"low", "medium", "high", "xhigh", "max"},
-		DefaultEffort:  "medium",
+		ID:             "gpt-6.1-sol",
+		DisplayName:    "GPT-6.1 Sol (Codex)",
+		Description:    "Latest workhorse model for coding and everyday work.",
+		ContextLength:  373000,
+		ReasoningLevel: []string{"low", "medium", "high", "xhigh", "max", "ultra"},
+		DefaultEffort:  "low",
 		SupportsImages: true,
-		BehavesAs:      "claude-opus-5",
+		BehavesAs:      "claude-sonnet-5",
 	},
 	{
 		ID:             "gpt-6-astra",
 		DisplayName:    "GPT-6 Astra (Codex)",
-		Description:    "OpenAI's most intelligent model: computer use, browsing and software engineering.",
+		Description:    "Frontier intelligence for the most demanding work.",
 		ContextLength:  272000,
-		MaxOutput:      128000,
-		ReasoningLevel: []string{"low", "medium", "high", "xhigh", "max"},
+		ReasoningLevel: []string{"low", "medium", "high", "xhigh", "max", "ultra"},
 		DefaultEffort:  "medium",
 		SupportsImages: true,
 		BehavesAs:      "claude-opus-5",
 	},
 	{
-		ID:             "gpt-5.6-terra",
-		DisplayName:    "GPT-5.6 Terra (Codex)",
-		Description:    "Frontier model for complex, long-running work.",
-		ContextLength:  372000,
-		MaxOutput:      128000,
-		ReasoningLevel: []string{"low", "medium", "high", "xhigh", "max"},
-		DefaultEffort:  "medium",
-		SupportsImages: true,
-		BehavesAs:      "claude-opus-5",
-	},
-	{
-		ID:             "gpt-5.6-luna",
-		DisplayName:    "GPT-5.6 Luna (Codex)",
-		Description:    "Frontier model for complex, long-running work.",
-		ContextLength:  372000,
-		MaxOutput:      128000,
-		ReasoningLevel: []string{"low", "medium", "high", "xhigh", "max"},
-		DefaultEffort:  "medium",
-		SupportsImages: true,
-		BehavesAs:      "claude-opus-5",
-	},
-	{
-		ID:             "gpt-5.5",
-		DisplayName:    "GPT-5.5 (Codex)",
-		Description:    "Frontier model for complex coding, research and real-world work.",
+		ID:             "gpt-6-sol",
+		DisplayName:    "GPT-6 Sol (Codex)",
+		Description:    "Previous generation workhorse model.",
 		ContextLength:  272000,
-		MaxOutput:      128000,
-		ReasoningLevel: []string{"low", "medium", "high", "xhigh"},
+		ReasoningLevel: []string{"low", "medium", "high", "xhigh", "max", "ultra"},
 		DefaultEffort:  "medium",
 		SupportsImages: true,
 		BehavesAs:      "claude-sonnet-5",
 	},
 	{
-		ID:             "gpt-5.3-codex-spark",
-		DisplayName:    "GPT-5.3 Codex Spark",
-		Description:    "Ultra-fast coding model for quick edits.",
-		ContextLength:  128000,
-		MaxOutput:      128000,
-		ReasoningLevel: []string{"low", "medium", "high", "xhigh"},
+		ID:             "gpt-6-luna",
+		DisplayName:    "GPT-6 Luna (Codex)",
+		Description:    "Fast and affordable model for easier tasks.",
+		ContextLength:  272000,
+		ReasoningLevel: []string{"low", "medium", "high", "xhigh", "max"},
 		DefaultEffort:  "medium",
-		SupportsImages: false,
+		SupportsImages: true,
 		BehavesAs:      "claude-haiku-4-5",
+	},
+	{
+		ID:             "gpt-5.6-sol",
+		DisplayName:    "GPT-5.6 Sol (Codex)",
+		Description:    "Older generation workhorse model.",
+		ContextLength:  272000,
+		ReasoningLevel: []string{"low", "medium", "high", "xhigh", "max", "ultra"},
+		DefaultEffort:  "low",
+		SupportsImages: true,
+		BehavesAs:      "claude-sonnet-5",
+	},
+	{
+		ID:             "gpt-5.6-terra",
+		DisplayName:    "GPT-5.6 Terra (Codex)",
+		Description:    "Older balanced model for straightforward work.",
+		ContextLength:  272000,
+		ReasoningLevel: []string{"low", "medium", "high", "xhigh", "max", "ultra"},
+		DefaultEffort:  "medium",
+		SupportsImages: true,
+		BehavesAs:      "claude-sonnet-5",
+	},
+	{
+		ID:             "gpt-5.6-luna",
+		DisplayName:    "GPT-5.6 Luna (Codex)",
+		Description:    "Older fast and efficient model.",
+		ContextLength:  272000,
+		ReasoningLevel: []string{"low", "medium", "high", "xhigh", "max"},
+		DefaultEffort:  "medium",
+		SupportsImages: true,
+		BehavesAs:      "claude-haiku-4-5",
+	},
+	{
+		ID:             "gpt-daybreak-blue-latest",
+		DisplayName:    "Daybreak Blue (Codex)",
+		Description:    "Latest frontier agentic coding model for broad defensive cybersecurity work.",
+		ContextLength:  272000,
+		ReasoningLevel: []string{"low", "medium", "high", "xhigh", "max", "ultra"},
+		DefaultEffort:  "low",
+		SupportsImages: true,
+		BehavesAs:      "claude-opus-5",
+		OptIn:          true,
 	},
 }
 
@@ -103,7 +131,7 @@ var contextWindowSuffix = regexp.MustCompile(`\[[12]m\]$`)
 
 // efforts lists every reasoning level the Responses API accepts, longest first
 // so suffix matching prefers "xhigh" over "high".
-var efforts = []string{"minimal", "xhigh", "medium", "high", "max", "low", "none"}
+var efforts = []string{"minimal", "xhigh", "medium", "ultra", "high", "max", "low", "none"}
 
 // Resolution is the outcome of matching a client-supplied model name against
 // the Codex catalog.
@@ -152,7 +180,11 @@ func NewRegistry(allow []string, prefix string, variants bool) *Registry {
 		variants: variants,
 	}
 	for _, model := range Catalog {
-		if len(filter) > 0 && !filter[strings.ToLower(model.ID)] {
+		listed := filter[strings.ToLower(model.ID)]
+		if len(filter) > 0 && !listed {
+			continue
+		}
+		if model.OptIn && !listed {
 			continue
 		}
 		registry.byID[strings.ToLower(model.ID)] = model
@@ -194,9 +226,9 @@ func (r *Registry) AdvertisedIDs() []string {
 	return ids
 }
 
-// effortLevels are the reasoning levels in order. "ultra" is Claude Code's
-// top level, which no Codex model has; it ranks above everything so it
-// clamps to a model's highest level.
+// effortLevels are the reasoning levels in order. "ultra" is the top level
+// (Claude Code's and some Codex models'); on a model without it, it clamps to
+// the model's highest level.
 var effortLevels = []string{"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
 
 // effortRank orders a level; unknown levels rank 99.
@@ -220,10 +252,10 @@ func knownEffortRank(level string) (int, bool) {
 //
 // Accepted spellings, all case-insensitive:
 //
-//	gpt-5.5              the model at its default effort
-//	gpt-5.5-high         an effort variant
-//	gpt-5.5:high         the same, colon separated
-//	codex/gpt-5.5-high   with the configured prefix
+//	gpt-6-luna              the model at its default effort
+//	gpt-6-luna-high         an effort variant
+//	gpt-6-luna:high         the same, colon separated
+//	codex/gpt-6-luna-high   with the configured prefix
 func (r *Registry) Resolve(name string) (Resolution, bool) {
 	requested := strings.TrimSpace(name)
 	if requested == "" {
@@ -239,7 +271,7 @@ func (r *Registry) Resolve(name string) (Resolution, bool) {
 		candidate = strings.TrimPrefix(candidate, r.prefix)
 	} else {
 		// Tolerate the conventional namespace even when unconfigured, so a
-		// user who types codex/gpt-5.5 is not silently proxied upstream.
+		// user who types codex/gpt-6-luna is not silently proxied upstream.
 		candidate = strings.TrimPrefix(candidate, "codex/")
 	}
 
@@ -297,7 +329,7 @@ func normalizeEffort(model Model, effort string) string {
 		return model.DefaultEffort
 	}
 	// Clamp to the closest supported level at or below the request (for
-	// instance "max" on a model that stops at xhigh); a request below the
+	// instance "ultra" on a model that stops at max); a request below the
 	// model's lowest level ("minimal", "none") gets that lowest level.
 	best, bestRank := "", -1
 	lowest, lowestRank := "", 1<<30

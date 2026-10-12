@@ -46,12 +46,12 @@ func Guard(cfg *config.Config, next http.Handler) (http.Handler, error) {
 			writeAnthropicError(w, http.StatusForbidden, "permission_error", "ccmproxy: unexpected Host header")
 			return
 		}
-		// Nothing Claude Code sends uses these: OPTIONS is a CORS preflight,
-		// CONNECT would ask for a tunnel and TRACE echoes the request back.
-		// They are refused even with the secret.
-		switch req.Method {
-		case http.MethodOptions, http.MethodConnect, http.MethodTrace:
-			writeAnthropicError(w, http.StatusForbidden, "permission_error", "ccmproxy: "+req.Method+" is not served")
+		// Claude Code sends only GET, POST and HEAD. Every other method
+		// (OPTIONS preflights, CONNECT tunnels, TRACE echoes, lowercase or
+		// extension methods) is refused, even with the secret. Methods are
+		// case-sensitive, so "trace" is not "TRACE" and is refused too.
+		if !allowedMethods[req.Method] {
+			writeAnthropicError(w, http.StatusForbidden, "permission_error", "ccmproxy: this method is not served")
 			return
 		}
 		if req.Method == http.MethodHead && req.URL.Path == helloPath {
@@ -65,6 +65,13 @@ func Guard(cfg *config.Config, next http.Handler) (http.Handler, error) {
 		}
 		next.ServeHTTP(w, req)
 	}), nil
+}
+
+// allowedMethods are the methods Claude Code sends to its base URL.
+var allowedMethods = map[string]bool{
+	http.MethodGet:  true,
+	http.MethodPost: true,
+	http.MethodHead: true,
 }
 
 // tokenMatches accepts exactly one header value whose SHA-256 digest equals
