@@ -2,7 +2,7 @@ import type { On } from 'claude-code'
 import { expect, test } from 'claude-code/testing'
 import type { PageState } from '../hooks/model'
 import { ASK_DESCRIPTION, IMAGE_DESCRIPTION, PROMPT } from '../hooks/prompts'
-import { ASK_INPUT_SCHEMA, IMAGE_INPUT_SCHEMA, JOBS_DESCRIPTION, JOBS_INPUT_SCHEMA, ASK_COMMAND_DESCRIPTION, IMAGE_COMMAND_DESCRIPTION, DOCTOR_COMMAND_DESCRIPTION } from '../hooks/tool-schemas'
+import { JOBS_DESCRIPTION, ASK_COMMAND_DESCRIPTION, IMAGE_COMMAND_DESCRIPTION, DOCTOR_COMMAND_DESCRIPTION } from '../hooks/tool-schemas'
 import { printed } from './helpers'
 import { withNote } from './mcp-helpers'
 
@@ -359,10 +359,50 @@ const toolCall = ($: { tool: { call: (input: never) => Promise<unknown> } }, too
 const commandRun = ($: { command: { run: (input: never) => Promise<unknown> } }, command: string, args = '') =>
   $.command.run({ command, args } as never) as Promise<{ text?: string; context?: string[] }>
 
-// Registration wiring uses the authoritative text; safety and schema shape are asserted separately.
-const ASK_REGISTERED = { name: 'ask', description: ASK_DESCRIPTION, inputSchema: ASK_INPUT_SCHEMA }
-const IMAGE_REGISTERED = { name: 'image', description: IMAGE_DESCRIPTION, inputSchema: IMAGE_INPUT_SCHEMA }
-const JOBS_REGISTERED = { name: 'jobs', description: JOBS_DESCRIPTION, inputSchema: JOBS_INPUT_SCHEMA }
+// Pin the complete schema independently of the implementation, allowing only prose to change.
+const ASK_REGISTERED = {
+  name: 'ask',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      prompt: { type: 'string' },
+      chatUrl: { type: 'string' },
+      model: { type: 'string' },
+      files: { type: 'array', items: { type: 'string' } },
+      wait: { type: 'boolean' },
+      saveOnly: { type: 'boolean' },
+      out: { type: 'string' },
+      maxChars: { type: 'number' },
+    },
+    required: ['prompt'],
+  },
+}
+const IMAGE_REGISTERED = {
+  name: 'image',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      prompt: { type: 'string' },
+      reference: { type: 'string' },
+      chatUrl: { type: 'string' },
+      model: { type: 'string' },
+      files: { type: 'array', items: { type: 'string' } },
+      wait: { type: 'boolean' },
+      saveOnly: { type: 'boolean' },
+      out: { type: 'string' },
+    },
+    required: ['prompt'],
+  },
+}
+const JOBS_REGISTERED = { name: 'jobs', inputSchema: { type: 'object', properties: {} } }
+
+function withoutDescriptions(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(withoutDescriptions)
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).filter(([key]) => key !== 'description').map(([key, item]) => [key, withoutDescriptions(item)]))
+  }
+  return value
+}
 
 test('session start registers the ask, image and jobs tools and the three commands, in that order, with their exact payloads', async ($, on) => {
   const order: string[] = []
@@ -383,7 +423,7 @@ test('session start registers the ask, image and jobs tools and the three comman
     'command chatgpt-doctor',
     'session.start',
   ])
-  expect(tools).toEqual([ASK_REGISTERED, IMAGE_REGISTERED, JOBS_REGISTERED])
+  expect(withoutDescriptions(tools)).toEqual([ASK_REGISTERED, IMAGE_REGISTERED, JOBS_REGISTERED])
   expect(commands).toEqual([
     { name: 'chatgpt-ask', description: ASK_COMMAND_DESCRIPTION },
     { name: 'chatgpt-image', description: IMAGE_COMMAND_DESCRIPTION },
@@ -394,7 +434,7 @@ test('session start registers the ask, image and jobs tools and the three comman
   ])
 })
 
-test('the registered schemas keep their property order, their required lists and the imported descriptions', async ($, on) => {
+test('the registered schemas keep their property order and describe sending, waiting, paths and size limits', async ($, on) => {
   const tools: { name: string; description: string; inputSchema: { properties: Record<string, unknown>; required?: string[] } }[] = []
   on('tool.register', (_$, e) => (tools.push(e as never), { value: { tool: `mcp__chatgpt__${e.name}` } }))
   on('command.register', (_$, e) => ({ value: { command: e.name } }))
@@ -405,17 +445,23 @@ test('the registered schemas keep their property order, their required lists and
   expect(tools.map(t => t.name)).toEqual(['ask', 'image', 'jobs'])
   expect(Object.keys(tools[0]!.inputSchema.properties)).toEqual(['prompt', 'chatUrl', 'model', 'files', 'wait', 'saveOnly', 'out', 'maxChars'])
   expect(Object.keys(tools[1]!.inputSchema.properties)).toEqual(['prompt', 'reference', 'chatUrl', 'model', 'files', 'wait', 'saveOnly', 'out'])
-  const propertyTypes = (tool: (typeof tools)[number]) => Object.values(tool.inputSchema.properties).map(p => (p as { type: string }).type)
-  expect(propertyTypes(tools[0]!)).toEqual(['string', 'string', 'string', 'array', 'boolean', 'boolean', 'string', 'number'])
-  expect(propertyTypes(tools[1]!)).toEqual(['string', 'string', 'string', 'string', 'array', 'boolean', 'boolean', 'string'])
+  const description = (tool: (typeof tools)[number], property: string) => (tool.inputSchema.properties[property] as { description: string }).description
   for (const tool of tools.slice(0, 2)) {
-    expect((tool.inputSchema.properties.files as { items: { type: string } }).items.type).toBe('string')
+    expect(description(tool, 'saveOnly')).toMatch(/sends nothing/i)
+    expect(description(tool, 'wait')).toMatch(/default true/i)
+    expect(description(tool, 'wait')).toMatch(/false.*background job/i)
+    expect(description(tool, 'wait')).toMatch(/completion.*message/i)
+    expect(description(tool, 'files')).toMatch(/absolute.*paths/i)
+    expect(description(tool, 'files')).toMatch(/at most 4 MiB per file/i)
+    expect(description(tool, 'out')).toMatch(/absolute.*path/i)
   }
-  expect(tools[2]!.inputSchema).toEqual({ type: 'object', properties: {} })
-  expect(tools[0]!.inputSchema.required).toEqual(['prompt'])
-  expect(tools[1]!.inputSchema.required).toEqual(['prompt'])
+  expect(description(tools[1]!, 'saveOnly')).toMatch(/spends no quota/i)
+  expect(description(tools[1]!, 'reference')).toMatch(/absolute.*path/i)
+  expect(description(tools[1]!, 'reference')).toMatch(/PNG\/JPEG\/WebP\/GIF/i)
+  expect(description(tools[1]!, 'reference')).toMatch(/at most 4 MiB/i)
   expect(tools[0]!.description).toBe(ASK_DESCRIPTION)
   expect(tools[1]!.description).toBe(IMAGE_DESCRIPTION)
+  expect(tools[2]!.description).toBe(JOBS_DESCRIPTION)
 })
 
 test('the prompt section is appended after the others, scoped to the session, with the prompt text', async ($, on) => {
