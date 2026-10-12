@@ -1,6 +1,6 @@
 # codex-models
 
-Offers OpenAI Codex models (ChatGPT login) in Claude Code through a local proxy. Claude Code reaches it with `ANTHROPIC_BASE_URL`; the proxy sends Codex model ids to the Codex backend and everything else to api.anthropic.com unchanged. `/model` rows come from `modelPicker` in `~/.claude/settings.json`; a subagent reaches Codex through an agent definition (`model: gpt-6-astra`); crew automatically registers `crew:<role>-codex` twins when the proxy is the base URL and its authenticated status offers their models. A plugin cannot set env or model settings, so `install.sh` writes them.
+Offers OpenAI Codex models (ChatGPT login) in Claude Code through a local proxy. Claude Code reaches it with `ANTHROPIC_BASE_URL`; the proxy sends Codex model ids to the Codex backend and everything else to api.anthropic.com unchanged. `/model` rows come from `modelPicker` in `~/.claude/settings.json`; a subagent reaches Codex through an agent definition (`model: gpt-6-astra`); at session start, crew registers a fixed role-to-model map of `crew:<role>-codex` twins when the local loopback proxy is the base URL, without status discovery or filtering; its separate status read supplies quota routing. A plugin cannot set env or model settings, so `install.sh` writes them.
 
 ## Layout
 
@@ -85,7 +85,7 @@ Offers OpenAI Codex models (ChatGPT login) in Claude Code through a local proxy.
 
 ## Known gaps
 
-- Crew discovers offered Codex twins at session start; `/reload-plugins` alone does not establish them. Start a new session with the proxy as the base URL.
+- Crew registers its fixed Codex twins at session start when the local loopback proxy is the base URL; `/reload-plugins` alone does not establish them. Start a new session for registration. Status reads serve quota routing, not discovery.
 
 ## Unverified live
 

@@ -149,6 +149,50 @@ const ORIGINAL = {
 
 const CLEANED = { ...ORIGINAL, env: { USE_BUILTIN_RIPGREP: '0', ANTHROPIC_CUSTOM_HEADERS: 'X-Team: blue' } }
 
+test('precheck mirrors Go listen_http matching across capitalization and duplicate keys', async () => {
+  const box = sandbox()
+  try {
+    mkdirSync(dirname(box.config), { recursive: true })
+    const args = ['precheck', '--settings', box.settingsFile, '--config', box.config]
+    const cases = [
+      ['{"LISTEN_HTTP":"127.0.0.1:34567"}', '127.0.0.1:34567'],
+      ['{"Listen_Http":"127.0.0.1:34567"}', '127.0.0.1:34567'],
+      ['{"listen_http":"127.0.0.1:1111","LISTEN_HTTP":"127.0.0.1:34567"}', '127.0.0.1:34567'],
+      ['{"LISTEN_HTTP":"127.0.0.1:1111","listen_http":"127.0.0.1:34567"}', '127.0.0.1:34567'],
+      ['{"LISTEN_HTTP":"127.0.0.1:1111","listen_http":"127.0.0.1:2222","LISTEN_HTTP":"127.0.0.1:34567"}', '127.0.0.1:34567'],
+      ['{"listen_http":"127.0.0.1:1111","LISTEN_HTTP":"127.0.0.1:2222","listen_http":"127.0.0.1:34567"}', '127.0.0.1:34567'],
+      ['{"listen_http":"127.0.0.1:34567","LISTEN_HTTP":null}', '127.0.0.1:34567'],
+      ['{"liſten_http":"127.0.0.1:34567"}', '127.0.0.1:34567'],
+      [String.raw`{"listen_http":"127.0.0.1:34567"}`, '127.0.0.1:34567'],
+      ['{"listen_http":"127.0.0.1:34567","unknown":{"LISTEN_HTTP":"127.0.0.1:9999"},"rows":[{"listen_http":"127.0.0.1:9999"}],"note":"listen_http"}', '127.0.0.1:34567'],
+    ]
+    for (const [config, listen] of cases) {
+      writeFileSync(box.config, config)
+      const current = json({ env: { ANTHROPIC_BASE_URL: `http://${listen}`, ANTHROPIC_CUSTOM_HEADERS: `X-Ccmproxy-Token: ${TOKEN}` } })
+      writeFileSync(box.settingsFile, current)
+      const accepted = await box.cli(args)
+      assert.equal(accepted.code, 0, `${config}: ${accepted.stderr}`)
+      assert.equal(readFileSync(box.settingsFile, 'utf8'), current)
+      assert.deepEqual(backupsIn(box.claude), [])
+      assert.equal(box.calls(), '')
+
+      writeFileSync(box.settingsFile, json({ env: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:45678', ANTHROPIC_CUSTOM_HEADERS: `X-Ccmproxy-Token: ${TOKEN}` } }))
+      const refused = await box.cli(args)
+      assert.equal(refused.code, 1, config)
+      assert.match(refused.stderr, /uninstall first/)
+      assert.doesNotMatch(refused.stdout + refused.stderr, new RegExp(TOKEN))
+    }
+    for (const config of ['{"LISTEN_HTTP":42}', '{"listen_http":false,"LISTEN_HTTP":"127.0.0.1:34567"}']) {
+      writeFileSync(box.config, config)
+      const refused = await box.cli(args)
+      assert.equal(refused.code, 1, config)
+      assert.match(refused.stderr, /listen_http that is not a string/)
+    }
+  } finally {
+    box.cleanup()
+  }
+})
+
 // mode 600
 
 test('fresh install under umask 022: settings and backup are 0600; a no-change reinstall from 0644 and uninstall end 0600', async () => {

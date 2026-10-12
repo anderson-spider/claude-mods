@@ -226,6 +226,37 @@ function unmerge(opts) {
   }
 }
 
+/** The effective listen field under Go encoding/json's case-insensitive, input-order matching. */
+function configListen(file) {
+  let text
+  let config
+  try {
+    text = readFileSync(file, 'utf8')
+    config = JSON.parse(text)
+  } catch (error) {
+    fail(`the proxy config (${file}) is not readable JSON (${error.code ?? 'invalid JSON'})`)
+  }
+  if (typeof config !== 'object' || config === null || Array.isArray(config)) fail('the proxy config is not a JSON object')
+
+  // JSON.parse loses duplicate-key order. Scan validated top-level keys: Go applies each recognized member in
+  // input order, even after an exact-case spelling; null leaves a string field unchanged. Nested keys are ignored.
+  let depth = 0
+  let listen
+  for (const token of text.matchAll(/"(?:\\.|[^"\\])*"|[{}\[\]]/g)) {
+    if (token[0] === '{' || token[0] === '[') depth++
+    else if (token[0] === '}' || token[0] === ']') depth--
+    else if (depth === 1 && /^listen_http$/iu.test(JSON.parse(token[0]))) {
+      const rest = text.slice(token.index + token[0].length)
+      const colon = rest.match(/^\s*:\s*/)
+      if (!colon) continue // a string value, not a key
+      const value = rest.slice(colon[0].length).match(/^(null|"(?:\\.|[^"\\])*")/)
+      if (!value) fail('the proxy config has a listen_http that is not a string')
+      if (value[0] !== 'null') listen = JSON.parse(value[0])
+    }
+  }
+  return listen
+}
+
 /**
  * Whether install would refuse the settings, asked before anything is built or loaded. The proxy's base URL comes
  * from its config when one exists; before the first install there is none, and any base URL already set is refused.
@@ -234,7 +265,7 @@ function precheck(opts) {
   const current = readSettings(opts.settings)
   let proxyUrl
   if (existsSync(opts.config)) {
-    const listen = readJson(opts.config, 'the proxy config').listen_http
+    const listen = configListen(opts.config)
     if (typeof listen === 'string') proxyUrl = `http://${listen}`
   }
   const refusal = settingsRefusal(current.value, proxyUrl)

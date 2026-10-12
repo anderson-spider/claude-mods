@@ -390,6 +390,102 @@ func TestInitUpgradesAnExistingFileInPlace(t *testing.T) {
 	}
 }
 
+func TestInitPreservesSecretsIgnoringKeyCase(t *testing.T) {
+	for _, tc := range []struct {
+		name, authKey, saltKey string
+		mode                   os.FileMode
+	}{
+		{"uppercase", "AUTH_TOKEN", "SESSION_SALT", 0o600},
+		{"mixed case", "Auth_Token", "Session_Salt", 0o600},
+		{"uppercase exposed", "AUTH_TOKEN", "SESSION_SALT", 0o640},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := `{"` + tc.authKey + `":"` + validToken + `","` + tc.saltKey + `":"` + strings.Repeat("c", 64) + `"}`
+			path := writeConfig(t, body)
+			before, _, err := load(path, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(path, tc.mode); err != nil {
+				t.Fatal(err)
+			}
+			calls := 0
+			newSecret := func() (string, error) {
+				calls++
+				return strings.Repeat("d", 64), nil
+			}
+			for run := 0; run < 2; run++ {
+				result, err := initWith(path, newSecret, fixedAddr("127.0.0.1:1"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if calls != 0 || len(result.Added) != 0 || result.Created {
+					t.Fatalf("run %d: generated %d secrets, result = %+v", run, calls, result)
+				}
+				if result.Tightened != (run == 0 && tc.mode != 0o600) {
+					t.Fatalf("run %d: tightened = %v", run, result.Tightened)
+				}
+				assertMode(t, path, 0o600)
+				after, err := Load(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if after.AuthToken != before.AuthToken || after.SessionSalt != before.SessionSalt {
+					t.Fatal("init changed an effective existing secret")
+				}
+				data, err := os.ReadFile(path)
+				if err != nil || string(data) != body {
+					t.Fatalf("init rewrote existing members or added aliases: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestInitFillsCaseVariantSecretsWithoutAddingAliases(t *testing.T) {
+	for _, tc := range []struct {
+		name, body, added, writtenKey, keptKey string
+	}{
+		{"null auth", `{"AUTH_TOKEN":null,"SESSION_SALT":"` + validToken + `"}`, "auth_token", "AUTH_TOKEN", "SESSION_SALT"},
+		{"blank salt", `{"AUTH_TOKEN":"` + validToken + `","Session_Salt":"   "}`, "session_salt", "Session_Salt", "AUTH_TOKEN"},
+		{"absent salt", `{"AUTH_TOKEN":"` + validToken + `"}`, "session_salt", "session_salt", "AUTH_TOKEN"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := writeConfig(t, tc.body)
+			result, err := initWith(path, fakeSecrets(), fixedAddr("127.0.0.1:1"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Join(result.Added, ",") != tc.added {
+				t.Fatalf("added = %v", result.Added)
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var raw map[string]string
+			if err := json.Unmarshal(data, &raw); err != nil {
+				t.Fatal(err)
+			}
+			if len(raw) != 2 || raw[tc.keptKey] != validToken || raw[tc.writtenKey] == "" {
+				t.Fatal("init changed an existing secret or created a competing alias")
+			}
+			cfg, err := Load(path)
+			if err != nil || cfg.AuthToken == "" || cfg.SessionSalt == "" {
+				t.Fatalf("Load after init: %v", err)
+			}
+			again, err := initWith(path, fakeSecrets(), fixedAddr("127.0.0.1:1"))
+			if err != nil || len(again.Added) != 0 {
+				t.Fatalf("second init: %+v, %v", again, err)
+			}
+			after, err := os.ReadFile(path)
+			if err != nil || string(after) != string(data) {
+				t.Fatalf("second init was not idempotent: %v", err)
+			}
+		})
+	}
+}
+
 func TestInitTightensAFileThatNeedsNoKeys(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("file modes are POSIX")

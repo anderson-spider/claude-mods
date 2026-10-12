@@ -44,7 +44,7 @@ func initWith(path string, newSecret, freeAddr func() (string, error)) (*InitRes
 	if keys == nil {
 		return createFile(cfg, newSecret, freeAddr)
 	}
-	return completeFile(cfg.Path(), keys, newSecret)
+	return completeFile(cfg, keys, newSecret)
 }
 
 // createFile writes cfg, the defaults, as a new file with a free port and
@@ -69,16 +69,18 @@ func createFile(cfg *Config, newSecret, freeAddr func() (string, error)) (*InitR
 	return &InitResult{Path: cfg.Path(), Created: true}, nil
 }
 
-// completeFile adds the missing secrets to the file's own members and writes
-// them back, or only fixes the mode when nothing is missing. Members are
-// written back as raw JSON, so values are kept as written; only the layout
-// (key order, indentation) is the encoder's.
-func completeFile(path string, keys map[string]json.RawMessage, newSecret func() (string, error)) (*InitResult, error) {
+// completeFile uses Load's effective secrets, including case-insensitive field
+// matching, to add only what is missing. Existing key spellings are kept, so
+// filling a blank secret never adds a competing alias. Other members remain
+// raw JSON; only the layout (key order, indentation) is the encoder's.
+func completeFile(cfg *Config, keys map[string]json.RawMessage, newSecret func() (string, error)) (*InitResult, error) {
+	path := cfg.Path()
 	result := &InitResult{Path: path}
 	exposed := requirePrivate(path) != nil
 
-	for _, key := range secretKeys {
-		if !secretMissing(keys[key]) {
+	values := []string{cfg.AuthToken, cfg.SessionSalt}
+	for i, key := range secretKeys {
+		if values[i] != "" {
 			continue
 		}
 		value, err := newSecret()
@@ -89,7 +91,16 @@ func completeFile(path string, keys map[string]json.RawMessage, newSecret func()
 		if err != nil {
 			return nil, fmt.Errorf("config: encode %s: %w", key, err)
 		}
-		keys[key] = encoded
+		matched := false
+		for name := range keys {
+			if strings.EqualFold(name, key) {
+				keys[name] = encoded
+				matched = true
+			}
+		}
+		if !matched {
+			keys[key] = encoded
+		}
 		result.Added = append(result.Added, key)
 	}
 
@@ -111,17 +122,4 @@ func completeFile(path string, keys map[string]json.RawMessage, newSecret func()
 	}
 	result.Tightened = exposed
 	return result, nil
-}
-
-// secretMissing reports whether a secret member needs generating: absent,
-// null, or a blank string. Load has already refused any other type.
-func secretMissing(raw json.RawMessage) bool {
-	if raw == nil {
-		return true
-	}
-	var value *string
-	if err := json.Unmarshal(raw, &value); err != nil {
-		return false
-	}
-	return value == nil || strings.TrimSpace(*value) == ""
 }

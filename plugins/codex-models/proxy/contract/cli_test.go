@@ -373,6 +373,49 @@ func TestCLIConfigInitKeepsWhatIsThere(t *testing.T) {
 	}
 }
 
+func TestCLIConfigInitPreservesUppercaseSecrets(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, "config.json")
+	writeJSON(t, path, map[string]any{
+		"listen_http":  "127.0.0.1:40000",
+		"AUTH_TOKEN":   cliToken,
+		"SESSION_SALT": cliSalt,
+	}, 0o600)
+	before, err := os.ReadFile(path)
+	must(t, err)
+	envBefore, code := runCLI(t, home, nil, "env", "--shell", "json")
+	if code != 0 {
+		t.Fatalf("env before init: exit %d, %s", code, envBefore.stderr)
+	}
+	var values map[string]string
+	must(t, json.Unmarshal([]byte(envBefore.stdout), &values))
+	if values["ANTHROPIC_CUSTOM_HEADERS"] != "X-Ccmproxy-Token: "+cliToken {
+		t.Fatal("env did not decode the existing uppercase auth token")
+	}
+	for run := 0; run < 2; run++ {
+		out, code := runCLI(t, home, nil, "config", "init")
+		if code != 0 || !strings.Contains(out.stdout, "is up to date") {
+			t.Fatalf("init run %d: exit %d, %s, %s", run, code, out.stdout, out.stderr)
+		}
+		envAfter, code := runCLI(t, home, nil, "env", "--shell", "json")
+		if code != 0 || envAfter.stdout != envBefore.stdout {
+			t.Fatalf("env changed after init run %d: exit %d", run, code)
+		}
+		after, err := os.ReadFile(path)
+		must(t, err)
+		if !bytes.Equal(before, after) {
+			t.Fatal("init changed existing secrets or added case-variant aliases")
+		}
+		cfg := readLogin(t, path)
+		if len(cfg) != 3 || cfg["AUTH_TOKEN"] != cliToken || cfg["SESSION_SALT"] != cliSalt {
+			t.Fatal("init did not preserve uppercase secrets")
+		}
+		if mode(t, path) != 0o600 {
+			t.Fatal("config mode changed")
+		}
+	}
+}
+
 func TestCLIRefusesAConfigOthersCanRead(t *testing.T) {
 	for _, args := range [][]string{{"env"}, {"models", "--json"}, {"status"}, {"serve"}} {
 		home := cliHome(t, nil)

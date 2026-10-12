@@ -150,7 +150,7 @@ Sign-in uses `ccmproxy login codex` and the proxy's native `<auth_dir>/codex.jso
 
 - Main session: pick a row in `/model`; choose the effort with `/effort`. Suffixes such as `gpt-6-luna-high` pin the effort instead.
 - Subagent: put the model id in the agent's frontmatter, for example `model: gpt-6-astra`.
-- Crew plugin: with the proxy as `ANTHROPIC_BASE_URL`, crew automatically registers Codex twins for its roles when the authenticated proxy status offers their models. Start a new session to discover them.
+- Crew plugin: at session start, with the local loopback proxy as `ANTHROPIC_BASE_URL`, crew registers a fixed role-to-model map of Codex twins. Registration does not discover or filter models through status; the separate status read supplies quota routing.
 
 What a Codex model reads and writes is sent to OpenAI. See [docs/PRIVACY.md](docs/PRIVACY.md).
 
