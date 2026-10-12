@@ -94,7 +94,7 @@ case "$1" in
     fi
     if [ "$tool" = node ]; then exec "${node}" "$@"; fi
     if [ "$tool" = go ]; then
-      echo "go GOFLAGS=[\${GOFLAGS-unset}]" >>"${join(root, 'calls.log')}"
+      echo "go GOFLAGS=[\${GOFLAGS-unset}] GOTOOLCHAIN=[\${GOTOOLCHAIN-unset}]" >>"${join(root, 'calls.log')}"
       while [ $# -gt 0 ]; do [ "$1" = "-o" ] && { cp "${join(root, 'ccmproxy')}" "$2"; chmod +x "$2"; exit 0; }; shift; done
       exit 4
     fi
@@ -185,17 +185,18 @@ test('--dry-run prints the settings diff with the secret masked and changes noth
   }
 })
 
-test('the proxy is built with GOFLAGS replaced, so a -tags=contract in the environment cannot reach the binary', async () => {
+test('the proxy is built with GOFLAGS replaced and the pinned toolchain, whatever the environment says', async () => {
   const box = sandbox()
   try {
     writeFileSync(box.settingsFile, `${JSON.stringify(ORIGINAL, null, 2)}\n`)
-    const out = await box.run('install.sh', ['--dry-run'], { GOFLAGS: '-tags=contract' })
+    const out = await box.run('install.sh', ['--dry-run'], { GOFLAGS: '-tags=contract', GOTOOLCHAIN: 'go1.27.0' })
     assert.equal(out.code, 0, out.stderr)
     const calls = box.calls()
-    // Not an empty GOFLAGS: Go would read that as unset and apply the one `go env -w` saved.
-    assert.match(calls, /exec go@\S+ -- env GOFLAGS=-tags= go -C \S+ build -trimpath /)
-    assert.match(calls, /^go GOFLAGS=\[-tags=\]$/m)
-    assert.doesNotMatch(calls, /contract/)
+    // Not an empty GOFLAGS: Go would read that as unset and apply the one `go env -w` saved. GOTOOLCHAIN=local keeps
+    // the go@ mise pinned, rather than one a GOTOOLCHAIN in the environment or `go env -w` would download.
+    assert.match(calls, /exec go@\S+ -- env GOFLAGS=-tags= GOTOOLCHAIN=local go -C \S+ build -trimpath /)
+    assert.match(calls, /^go GOFLAGS=\[-tags=\] GOTOOLCHAIN=\[local\]$/m)
+    assert.doesNotMatch(calls, /contract|go1\.27\.0/)
   } finally {
     box.cleanup()
   }
