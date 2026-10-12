@@ -17,7 +17,7 @@ export type HudEndReason = 'answer' | 'aborted' | 'refusal' | 'error' | (string 
 export type HudRoundStatus = 'running' | 'done' | 'failed' | 'stopped'
 
 /** One job of an agent; a resumed agent adds one. */
-export type HudRound = { startedAt: number; endedAt?: number; status: HudRoundStatus; failure?: string }
+export type HudRound = { startedAt: number; endedAt?: number; status: HudRoundStatus; failure?: string; job?: number }
 
 /** What the main loop's last turn came to. */
 export type HudReceipt = {
@@ -62,6 +62,8 @@ export type HudAgent = {
   model: string
   effort: string
   spawnedAt: number
+  jobStartedAt?: number
+  isResuming?: boolean
   rounds: HudRound[]
   steps: number
   ctx: number
@@ -86,7 +88,7 @@ export type HudConsult = {
 
 export type HudLogKind = 'prompt' | 'spawn' | 'done' | 'failed' | 'stopped' | 'deny' | 'consult' | 'verdict' | 'compact' | 'plan'
 
-export type HudLogLine = { at: number; who: string; kind: HudLogKind; text: string; type?: string }
+export type HudLogLine = { at: number; who: string; kind: HudLogKind; text: string; type?: string; agent?: string; job?: number }
 
 /** A workflow agent or a fork: a loop that steps with no card. */
 export type HudLoop = { id: string; firstAt: number; lastAt: number; steps: number; isDone: boolean }

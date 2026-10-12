@@ -2,6 +2,7 @@
 // role-table order, twins in their own lane. Two cells per minute, so 30 cells span the window.
 import { ADVISOR, displayName, laneRank } from './roles'
 import { pad, spread } from './width'
+import { jobOf } from './state'
 import type { AgentCard, Consult, Session } from './types'
 
 export const WINDOW_MS = 15 * 60_000
@@ -26,7 +27,8 @@ export type Lane = {
   busyMs: number
 }
 
-type Span = { from: number; to: number; running: boolean; failed: boolean }
+/** Busy time of one round; `job` names the job it belongs to, so `×N` counts jobs, not rounds. */
+type Span = { from: number; to: number; running: boolean; failed: boolean; job: string }
 
 function cellsOf(spans: readonly Span[], now: number): LaneCell[] {
   const start = now - WINDOW_MS
@@ -81,8 +83,8 @@ export function timelineLanes(
   now: number,
 ): Lane[] {
   const lanes: Lane[] = []
-  const leadSpans: Span[] = session.turns.map(t => ({ from: t.startedAt, to: t.endedAt, running: false, failed: false }))
-  if (session.turn) leadSpans.push({ from: session.turn.startedAt, to: now, running: true, failed: false })
+  const leadSpans: Span[] = session.turns.map((t, i) => ({ from: t.startedAt, to: t.endedAt, running: false, failed: false, job: `turn:${i}` }))
+  if (session.turn) leadSpans.push({ from: session.turn.startedAt, to: now, running: true, failed: false, job: 'turn:now' })
   lanes.push({
     key: 'lead',
     name: 'lead',
@@ -105,13 +107,14 @@ export function timelineLanes(
         to: round.endedAt ?? now,
         running: round.status === 'running',
         failed: round.status === 'failed',
+        job: `${card.id}#${jobOf(round)}`,
       })
     }
   }
   for (const consult of consults) {
     // `displayName` of the consult's lane: the advisor shares the architect's lane.
     const type = consult.who === ADVISOR ? 'crew:architect' : consult.who.endsWith('·cx') ? 'crew:architect-codex' : 'crew:architect'
-    add(type, { from: consult.at, to: consult.endAt ?? now, running: consult.endAt === null, failed: false })
+    add(type, { from: consult.at, to: consult.endAt ?? now, running: consult.endAt === null, failed: false, job: `consult:${consult.id}` })
   }
 
   const types = [...byType.keys()]
@@ -124,7 +127,7 @@ export function timelineLanes(
       name: displayName(type),
       isLead: false,
       cells: cellsOf(spans, now),
-      jobs: spans.length,
+      jobs: new Set(spans.map(span => span.job)).size,
       busyMs: busyMs(spans, now),
     })
   }

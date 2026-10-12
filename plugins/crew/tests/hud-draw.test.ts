@@ -7,11 +7,12 @@ import { levelPlan } from '../hooks/hud/layout'
 import { lineText, type Line, type Span } from '../hooks/hud/line'
 import { elapsedCell, elapsedText, railRuns } from '../hooks/hud/live'
 import { colorsOption, paint, paletteOf } from '../hooks/hud/palette'
-import { parsePlan } from '../hooks/hud/plan'
+import { parsePlan, planView } from '../hooks/hud/plan'
 import { derive, linkedStep, quotaHeading, type HudContext, type HudInput } from '../hooks/hud/sections'
 import {
   agentCompleted,
   agentDenied,
+  agentMessaged,
   agentSpawned,
   agentStepped,
   agentTool,
@@ -417,14 +418,30 @@ test('extra columns from 57 to 66 go to the text columns; fixed columns keep the
   expect(at(56).find(l => l.includes('tester·cx'))).not.toContain('GPT-6')
 })
 
-test('narrow docked widths drop the job strip, then the effort, the plan owner and the quota heading', () => {
+test('narrow docked widths drop the job strip, then the effort and the plan owner; Quota keeps its heading', () => {
   const at48 = texts(pane(busy(), CTX, 48).rows)
   expect(at48.find(l => l.includes('● developer'))).toBe('│ ● developer    Sonnet 5.5 · high        3:12 │')
   expect(at48.find(l => l.includes('◇ T3'))).toBe('│ now     ◇ T3  contract suite proxy…       QA │')
-  expect(at48.some(l => l.includes('resets'))).toBe(false)
-  expect(at48).toContain('│ 5h Claude  ▰▰▱▱  41%   · Codex◆  ▱▱▱▱  12%   │')
   const at44 = texts(pane(busy(), CTX, 44).rows)
   expect(at44.find(l => l.includes('● developer'))).toBe('│ ● developer    Sonnet 5.5           3:12 │')
+})
+
+test('a docked pane of 47 or 48 columns keeps the Quota heading with each provider\'s state; gauges and resets give way', () => {
+  // The width a 277-column terminal gave the dock live: the heading must still say Claude is waiting, Codex stale or down.
+  expect(quotaRows(quota({ claude: null, claudeAt: null }), { ...CTX, claudeMeasured: false }, 48)).toEqual([
+    '│     Claude · waiting ◆   Codex        resets │',
+    '│ 5h  ╌╌╌╌╌╌    —          ▰▱▱▱▱▱  12%   4h05m │',
+    '│ 7d  ╌╌╌╌╌╌    —          ▰▰▱▱▱▱  38%    6d1h │',
+    '│ → Claude favored: no Claude plan limits      │',
+  ])
+  expect(quotaRows(quota({ claude: null, claudeAt: null }), { ...CTX, claudeMeasured: false }, 47)[0]).toBe('│     Claude · waiting ◆  Codex        resets │')
+  expect(quotaRows(quota({ codexState: 'stale', codexObservedAt: NOW - 18 * MIN }), CTX, 47)[0]).toBe('│     Claude ◆    resets  Codex · 18m old     │')
+  expect(quotaRows(quota({ codexState: 'down' }), CTX, 47)[0]).toBe('│     Claude ◆    resets  Codex · proxy down  │')
+  expect(quotaRows(quota({ codex: null, codexState: 'off' }), BARE, 47)).toEqual([
+    '│     Claude                           resets │',
+    '│ 5h  ▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱  41%   2h10m │',
+    '│ 7d  ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱  71%!   3d4h │',
+  ])
 })
 
 // ------------------------------------------------------------------ cards: Session
@@ -944,4 +961,47 @@ test('T2: an input whose getter throws reaches the same last resorts', () => {
   expect(linesOf(pane.tree)[0]?.trim()).toBe('Session could not be drawn; see the debug log.')
   expect(drawSummary(fakes(), input, CTX, { width: 56, form: 'mini', maxRows: 8, ...DRAW }).kids).toEqual([])
   expect(drawBand(fakes(), input, CTX, BAND)).toBeNull()
+})
+
+// ------------------------------------------------------------------ agent clocks: the current job
+
+/**
+ * A developer spawned 30 min ago fails at 25 min ago; the lead sends fixes 4 min ago (a new job), which ends 3 min ago
+ * and wakes for a background task 1 min ago (the same job). Its clock reads 4:00 everywhere: not 30:00 (the spawn),
+ * not 1:00 (the last round).
+ */
+function resumedDeveloper(): AgentCard[] {
+  let a = agentSpawned([], { id: 'a1', type: 'crew:developer', description: 'T3: implement the router', model: 'claude-sonnet-5-5', now: NOW - 30 * MIN })
+  a = agentStepped(a, { id: 'a1', stopReason: 'max_tokens', now: NOW - 26 * MIN })
+  a = agentCompleted(a, { id: 'a1', reason: 'error', now: NOW - 25 * MIN })
+  a = agentMessaged(a, 'a1')
+  a = agentStepped(a, { id: 'a1', usage: { input_tokens: 1 }, now: NOW - 4 * MIN })
+  a = agentCompleted(a, { id: 'a1', reason: 'answer', now: NOW - 3 * MIN })
+  return agentStepped(a, { id: 'a1', usage: { input_tokens: 1 }, now: NOW - MIN })
+}
+const RESUMED_PLAN = planOf('demo', '- T3 (crew:developer, after: —) implement the router — state: fixes requested')
+const liveSince = (spans: readonly Span[]) => spans.find(sp => sp.live !== undefined)?.live?.since
+
+test('the running card\'s clock counts the current job, as text and as the live clock', () => {
+  const rows = pane(busy({ agents: resumedDeveloper(), plan: RESUMED_PLAN, consults: [], loops: [] })).rows
+  const row = texts(rows).find(l => l.includes('● developer'))
+  expect(row).toMatch(/ 4:00 │$/)
+  expect(liveSince(spansOf(rows, '● developer'))).toBe(NOW - 4 * MIN)
+})
+
+test('the Plan\'s now row counts the linked agent\'s current job: its text and its live clock', () => {
+  const agents = resumedDeveloper()
+  const v = planView(RESUMED_PLAN.parsed, 'demo', { agents, now: NOW })
+  expect(v.now.rows.find(r => r.step.id === 'T3')?.right).toEqual({ kind: 'elapsed', text: '4:00' })
+  const rows = pane(busy({ agents, plan: RESUMED_PLAN, consults: [], loops: [] })).rows
+  const planRow = texts(rows).find(l => /◇ T3|▶ T3|↺ T3|T3 /.test(l) && !l.includes('● developer') && !l.includes('↳'))
+  expect(planRow).toMatch(/4:00 │$/)
+  expect(liveSince(spansOf(rows, planRow?.slice(2, 20) ?? 'none'))).toBe(NOW - 4 * MIN)
+})
+
+test('the mini line\'s clock counts the current job', () => {
+  const lines = summaryLines(busy({ agents: resumedDeveloper(), plan: RESUMED_PLAN, consults: [], loops: [] }), CTX, { width: 120, form: 'mini', maxRows: 8 })
+  const line = lines.find(l => lineText(l).includes('● developer'))
+  expect(line && lineText(line)).toMatch(/ 4:00$/)
+  expect(line && liveSince(line)).toBe(NOW - 4 * MIN)
 })

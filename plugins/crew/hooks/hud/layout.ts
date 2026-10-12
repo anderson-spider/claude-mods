@@ -51,7 +51,7 @@ export function leftRight(left: readonly Seg[], right: readonly Seg[], width: nu
 
 // ------------------------------------------------------------------ pane width
 
-/** The docked pane's width: 56 requested; the host may give 56-66. */
+/** The docked pane's body width: 56 requested (`$.ui.open` `columns`); a width the person set wins, so less can come. */
 export const PANE_WIDTH = 56
 export const PANE_MAX = 66
 
@@ -69,8 +69,11 @@ export function paneBudget(columns: number): PaneBudget {
   return { width, content: Math.max(0, width - 4), extra: Math.max(0, Math.min(width, PANE_MAX) - PANE_WIDTH) }
 }
 
-/** What a docked pane narrower than 56 drops: the job strip, then the effort; plan rows lose the owner; Quota loses its header. */
-export type NarrowPlan = { jobStrip: boolean; effort: boolean; planOwner: boolean; quotaHeader: boolean; finishedStrip: boolean }
+/**
+ * What a docked pane narrower than 56 drops: the job strip, then the effort; plan rows lose the owner. Quota keeps its
+ * heading (each provider's waiting, stale or down state); only its gauges and resets give way.
+ */
+export type NarrowPlan = { jobStrip: boolean; effort: boolean; planOwner: boolean; finishedStrip: boolean }
 
 export function narrowPlan(width: number): NarrowPlan {
   const narrow = width < PANE_WIDTH
@@ -79,7 +82,6 @@ export function narrowPlan(width: number): NarrowPlan {
     // The effort goes after the strip, once the model column itself gets tight.
     effort: width >= 48,
     planOwner: !narrow,
-    quotaHeader: !narrow,
     finishedStrip: !narrow,
   }
 }
