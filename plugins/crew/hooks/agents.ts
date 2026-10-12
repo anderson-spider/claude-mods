@@ -130,8 +130,11 @@ export function leadSection(jev: boolean, quota = false): string {
 /** The suffix of a role's Codex twin: `crew:developer` has `crew:developer-codex`. */
 export const NATIVE_SUFFIX = '-codex'
 
-/** True for an `http:` URL whose host is a literal loopback address (127.0.0.0/8, ::1) or `localhost`; anything else, or text that is no URL, is false. */
-export function isLoopbackBase(text: string | undefined): boolean {
+/**
+ * True for an `http:` or `https:` base URL other than Anthropic's own API: a gateway that may serve the twins' models
+ * besides Claude's. Anything else, or text that is no URL, is false. The gateway's models are not checked.
+ */
+export function isGatewayBase(text: string | undefined): boolean {
   if (!text) return false
   let url: URL
   try {
@@ -139,11 +142,8 @@ export function isLoopbackBase(text: string | undefined): boolean {
   } catch {
     return false
   }
-  if (url.protocol !== 'http:') return false
-  const host = url.hostname.toLowerCase()
-  if (host === 'localhost' || host === '[::1]') return true
-  const octets = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host)
-  return octets !== null && octets[1] === '127' && octets.slice(1).every(octet => Number(octet) <= 255)
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return false
+  return url.hostname.toLowerCase() !== 'api.anthropic.com'
 }
 
 /**
@@ -160,7 +160,7 @@ export function nativeCodexSpecs(models: Readonly<Partial<Record<string, string>
       ...base,
       name: `${base.name}${NATIVE_SUFFIX}`,
       model,
-      description: `crew:${base.name} on ${model} (OpenAI, via the local codex-models proxy): same job, tools and write lane.`,
+      description: `crew:${base.name} on ${model} (OpenAI, through the session's gateway): same job, tools and write lane.`,
     })
   }
   return twins

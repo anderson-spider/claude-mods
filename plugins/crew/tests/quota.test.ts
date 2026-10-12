@@ -7,11 +7,13 @@ import {
   STALE_MS,
   VETO,
   claudeReading,
-  codexReading,
+  activeCodexAccount,
+  codexUsage,
   decide,
-  proxyAccess,
+  remoteAccess,
   settle,
   INITIAL_QUOTA,
+  usageRequest,
   type CodexState,
   type Quota,
   type Reading,
@@ -25,7 +27,7 @@ const reading = (five: number | undefined, seven: number | undefined): Reading =
 })
 
 test('constants', () => {
-  expect([DEADLINE_MS, CACHE_MS, STALE_MS, VETO, MARGIN]).toEqual([1500, 60_000, 900_000, 90, 10])
+  expect([DEADLINE_MS, CACHE_MS, STALE_MS, VETO, MARGIN]).toEqual([1500, 300_000, 900_000, 90, 10])
 })
 
 const d = (c: Reading | null, x: Reading | null, state: CodexState, eligible = true) => decide(c, x, state, eligible, NOW)
@@ -35,7 +37,7 @@ test('decide: not eligible stays on Claude', () => {
 })
 
 test('decide: Codex unknown, stale, down or off, or no reading, stays on Claude', () => {
-  const reasons = { unknown: 'Codex quota not known yet', stale: 'Codex quota is stale', down: 'Codex proxy is down', off: 'routing off or no Codex twin' }
+  const reasons = { unknown: 'Codex quota not known yet', stale: 'Codex quota is stale', down: 'Codex quota source is down', off: 'routing off or no Codex twin' }
   for (const state of ['unknown', 'stale', 'down', 'off'] as const) {
     expect(d(reading(10, 70), reading(0, 10), state)).toEqual({ provider: 'claude', reason: reasons[state] })
   }
@@ -134,104 +136,86 @@ test('claudeReading keeps five_hour and seven_day, ignores spend_limit and unkno
   expect(claudeReading([{ kind: 'five_hour', percentUsed: Number.NaN }])).toBeNull()
 })
 
-const row = (extra: Record<string, unknown>) => ({
-  percentUsed: 40,
-  resetsAt: 1791037689,
-  observedAt: new Date(NOW - 60_000).toISOString(),
-  ...extra,
-})
+/** The remote's api-call envelope around OpenAI's usage body. */
+const envelope = (body: unknown, status = 200) => JSON.stringify({ status_code: status, body: typeof body === 'string' ? body : JSON.stringify(body) })
+const win = (minutes: number, used: number, extra: Record<string, unknown> = {}) => ({ used_percent: used, limit_window_seconds: minutes * 60, ...extra })
 
-test('codexReading parses kinds and the window_<n>m form', () => {
-  const body = JSON.stringify({
-    codexLimits: [row({ kind: 'five_hour', percentUsed: 36 }), row({ kind: 'window_10080m', percentUsed: 21 })],
-  })
-  const { reading, state } = codexReading(body, NOW)
+test('codexUsage names windows by length, not by primary or secondary, and observes them now', () => {
+  const { reading, state, observedAt } = codexUsage(envelope({ rate_limit: { primary_window: win(300, 36, { reset_at: 1791037689 }), secondary_window: win(10080, 21) } }), NOW)
   expect(state).toBe('ok')
-  expect(reading?.fiveHour?.percentUsed).toBe(36)
-  expect(reading?.sevenDay?.percentUsed).toBe(21)
-  expect(reading?.sevenDay?.resetsAt).toBe(new Date(1791037689 * 1000).toISOString())
-  // windowMinutes alone, with an odd kind.
-  const byMinutes = codexReading({ codexLimits: [row({ kind: 'primary', windowMinutes: 300 })] }, NOW)
-  expect(byMinutes.reading?.fiveHour?.percentUsed).toBe(40)
-  expect(codexReading({ codexLimits: [row({ kind: 'window_300m' })] }, NOW).reading?.fiveHour).toBeDefined()
+  expect(observedAt).toBe(NOW)
+  expect(reading?.fiveHour).toEqual({ percentUsed: 36, resetsAt: new Date(1791037689 * 1000).toISOString() })
+  expect(reading?.sevenDay).toEqual({ percentUsed: 21 })
+  // A plan that reports only a weekly window reports it as primary.
+  const weekly = codexUsage(envelope({ rate_limit: { primary_window: win(10080, 5, { reset_after_seconds: 60 }) } }), NOW)
+  expect(weekly.reading).toEqual({ sevenDay: { percentUsed: 5, resetsAt: new Date(NOW + 60_000).toISOString() } })
+  // The windows may sit at the top level.
+  expect(codexUsage(envelope({ primary_window: win(300, 9) }), NOW).reading?.fiveHour?.percentUsed).toBe(9)
 })
 
-test('codexReading: absent, empty or malformed is unknown and never throws', () => {
-  for (const input of ['not json', '', '{}', '[]', 'null', '{"codexLimits":[]}', '{"codexLimits":"x"}', undefined, null, 5, {}]) {
-    expect(codexReading(input, NOW)).toEqual({ reading: null, state: 'unknown', observedAt: null })
+test('codexUsage: a reached limit reads 100, and percent is clamped', () => {
+  expect(codexUsage(envelope({ rate_limit: { limit_reached: true, secondary_window: win(10080, 40) } }), NOW).reading?.sevenDay?.percentUsed).toBe(100)
+  expect(codexUsage(envelope({ rate_limit: { primary_window: win(300, 40, { limit_reached: true }) } }), NOW).reading?.fiveHour?.percentUsed).toBe(100)
+  expect(codexUsage(envelope({ rate_limit: { primary_window: win(300, 140) } }), NOW).reading?.fiveHour?.percentUsed).toBe(100)
+})
+
+test('codexUsage: a failed call, a malformed envelope or body, or no usable window is unknown and never throws', () => {
+  const unknown = { reading: null, state: 'unknown', observedAt: null }
+  for (const input of [
+    'not json', '', '{}', 'null', undefined, null, 5,
+    envelope({ rate_limit: { primary_window: win(300, 5) } }, 401),
+    JSON.stringify({ status_code: 200 }),
+    JSON.stringify({ status_code: 200, body: 'not json' }),
+    envelope({ rate_limit: { primary_window: win(60, 5), secondary_window: { used_percent: 'x', limit_window_seconds: 18000 } } }),
+    envelope({ rate_limit: { primary_window: win(300, -1) } }),
+    envelope({ rate_limit: { primary_window: { used_percent: 5, limit_window_seconds: 18001 } } }),
+  ]) {
+    expect(codexUsage(input, NOW)).toEqual(unknown)
   }
-  const junk = { codexLimits: [null, 3, { kind: 'five_hour' }, { kind: 'five_hour', percentUsed: 'x' }, { kind: 'monthly', percentUsed: 5 }] }
-  expect(codexReading(junk, NOW).state).toBe('unknown')
+  // An out-of-range reset is dropped, the window kept.
+  expect(codexUsage(envelope({ rate_limit: { primary_window: win(300, 5, { reset_at: 1e20 }) } }), NOW).reading).toEqual({ fiveHour: { percentUsed: 5 } })
 })
 
-test('codexReading: percent over 100 or below 0 is clamped', () => {
-  const { reading } = codexReading({ codexLimits: [row({ kind: 'five_hour', percentUsed: 140 }), row({ kind: 'seven_day', percentUsed: -3 })] }, NOW)
-  expect(reading?.fiveHour?.percentUsed).toBe(100)
-  expect(reading?.sevenDay?.percentUsed).toBe(0)
-})
-
-test('codexReading: stale after 15 minutes or without observedAt', () => {
-  const at = (ms: number) => ({ codexLimits: [row({ kind: 'seven_day', observedAt: new Date(NOW - ms).toISOString() })] })
-  expect(codexReading(at(STALE_MS), NOW).state).toBe('ok')
-  expect(codexReading(at(STALE_MS + 1000), NOW).state).toBe('stale')
-  expect(codexReading(at(STALE_MS + 1000), NOW).reading?.sevenDay).toBeDefined()
-  expect(codexReading({ codexLimits: [{ kind: 'seven_day', percentUsed: 5 }] }, NOW).state).toBe('stale')
-  // The oldest window decides, and observedAt is the oldest.
-  const mixed = codexReading({ codexLimits: [row({ kind: 'five_hour', observedAt: NOW - 1000 }), row({ kind: 'seven_day', observedAt: NOW - STALE_MS - 5000 })] }, NOW)
-  expect(mixed.state).toBe('stale')
-  expect(mixed.observedAt).toBe(NOW - STALE_MS - 5000)
-  expect(codexReading(at(60_000), NOW).observedAt).toBe(NOW - 60_000)
-  // An observedAt in the future is stale, a little skew is not.
-  expect(codexReading({ codexLimits: [row({ kind: 'seven_day', observedAt: '2030-01-01T00:00:00Z' })] }, NOW).state).toBe('stale')
-  expect(codexReading({ codexLimits: [row({ kind: 'seven_day', observedAt: NOW + 10_000 })] }, NOW).state).toBe('ok')
-  // observedAt in Unix seconds.
-  expect(codexReading({ codexLimits: [row({ kind: 'seven_day', observedAt: Math.floor(NOW / 1000) - 30 })] }, NOW).state).toBe('ok')
-})
-
-test('proxyAccess accepts a loopback http base with the token', () => {
-  const access = proxyAccess('http://127.0.0.1:4567', 'X-Ccmproxy-Token: s3cret')
-  expect(access).toEqual({ ok: true, url: 'http://127.0.0.1:4567/__ccmproxy/status?refresh=limits', headers: { 'X-Ccmproxy-Token': 's3cret' } })
-  expect(proxyAccess('http://localhost:9/', 'X-Ccmproxy-Token: a').ok).toBe(true)
-  expect(proxyAccess('http://[::1]:9', 'X-Ccmproxy-Token: a')).toMatchObject({ ok: true, url: 'http://[::1]:9/__ccmproxy/status?refresh=limits' })
-})
-
-test('proxyAccess refuses a non-loopback or https base and a missing base', () => {
-  for (const base of ['https://127.0.0.1:4567', 'http://example.com', 'http://0.0.0.0:80', 'http://127.0.0.1.evil.com', 'nope', '']) {
-    expect(proxyAccess(base, 'X-Ccmproxy-Token: s').ok).toBe(false)
+test('activeCodexAccount takes the one active, enabled, available Codex account', () => {
+  const file = (extra: Record<string, unknown>) => ({ type: 'codex', status: 'active', auth_index: 'a1', ...extra })
+  expect(activeCodexAccount(JSON.stringify({ files: [file({}), { type: 'claude', status: 'active', auth_index: 'c1' }] }))).toBe('a1')
+  expect(activeCodexAccount({ files: [file({ type: undefined, provider: 'codex' })] })).toBe('a1')
+  for (const files of [
+    [], [file({ disabled: true })], [file({ unavailable: true })], [file({ status: 'error' })], [file({ auth_index: '' })],
+    [file({}), file({ auth_index: 'a2' })],
+  ]) {
+    expect(activeCodexAccount({ files })).toBeUndefined()
   }
-  expect(proxyAccess(undefined, 'X-Ccmproxy-Token: s')).toMatchObject({ ok: false })
+  for (const input of ['not json', '{}', '{"files":"x"}', undefined, null]) expect(activeCodexAccount(input)).toBeUndefined()
 })
 
-test('proxyAccess reads the header case-insensitively among several lines', () => {
-  const headers = 'Foo: bar\r\nx-ccmproxy-token:  tok:with:colons \nBaz: qux'
-  expect(proxyAccess('http://127.0.0.1:1', headers)).toMatchObject({ ok: true, headers: { 'X-Ccmproxy-Token': 'tok:with:colons' } })
-  // The first matching line wins.
-  expect(proxyAccess('http://127.0.0.1:1', 'X-CCMPROXY-TOKEN: one\nX-Ccmproxy-Token: two')).toMatchObject({ headers: { 'X-Ccmproxy-Token': 'one' } })
+test('usageRequest asks OpenAI\'s usage with the remote\'s token placeholder, never a real token', () => {
+  expect(JSON.parse(usageRequest('a1'))).toEqual({
+    auth_index: 'a1', method: 'GET', url: 'https://chatgpt.com/backend-api/wham/usage', header: { Authorization: 'Bearer $TOKEN$' },
+  })
 })
 
-test('proxyAccess without the header, empty or under another name', () => {
-  for (const headers of [undefined, '', 'Other: x', 'X-Ccmproxy-Token:', 'X-Ccmproxy-Token:   ', 'X-Ccmproxy-Token-2: x', 'no colon']) {
-    const access = proxyAccess('http://127.0.0.1:1', headers)
+test('remoteAccess takes an http or https origin and the key as a bearer', () => {
+  expect(remoteAccess('https://cliproxy.example.ts.net', 'mgmt-key')).toEqual({
+    ok: true, origin: 'https://cliproxy.example.ts.net', headers: { Authorization: 'Bearer mgmt-key', Accept: 'application/json' },
+  })
+  expect(remoteAccess('http://10.0.0.5:8317/', ' mgmt-key ')).toMatchObject({ ok: true, origin: 'http://10.0.0.5:8317', headers: { Authorization: 'Bearer mgmt-key' } })
+})
+
+test('remoteAccess refuses a missing or malformed remote or key, and never puts either in the reason', () => {
+  const cases: [unknown, unknown][] = [
+    [undefined, 'k'], ['', 'k'], ['https://r.example', undefined], ['https://r.example', ''], ['https://r.example', 'has space'],
+    ['nope', 'k'], ['ftp://r.example', 'k'], ['https://u:p@r.example', 'k'], ['https://r.example/v1', 'k'],
+    ['https://r.example?x=1', 'k'], ['https://r.example#f', 'k'],
+  ]
+  for (const [remote, key] of cases) {
+    const access = remoteAccess(remote, key)
     expect(access.ok).toBe(false)
-    if (!access.ok) expect(access.reason).toContain('X-Ccmproxy-Token')
+    if (!access.ok) {
+      expect(access.reason).not.toContain('r.example')
+      if (typeof key === 'string' && key) expect(access.reason).not.toContain(key)
+    }
   }
-})
-
-test('proxyAccess never puts the token in a refusal reason', () => {
-  for (const [base, headers] of [['https://127.0.0.1:9', 'X-Ccmproxy-Token: s3cret'], ['http://example.com', 'X-Ccmproxy-Token: s3cret'], ['http://127.0.0.1:9', 'Other: s3cret']] as const) {
-    const access = proxyAccess(base, headers)
-    expect(access.ok).toBe(false)
-    if (!access.ok) expect(access.reason).not.toContain('s3cret')
-  }
-})
-
-test('proxyAccess drops userinfo, path, query and fragment from the status URL', () => {
-  const access = proxyAccess('http://u:p@127.0.0.1:9/x/y?z#h', 'X-Ccmproxy-Token: t')
-  expect(access).toMatchObject({ ok: true, url: 'http://127.0.0.1:9/__ccmproxy/status?refresh=limits' })
-})
-
-test('codexReading: an out-of-range resetsAt makes the whole reading unknown (toISOString throws; Claude is the safe side)', () => {
-  expect(codexReading({ codexLimits: [row({ kind: 'seven_day', resetsAt: 1e20 })] }, NOW)).toEqual({ reading: null, state: 'unknown', observedAt: null })
 })
 
 test('INITIAL_QUOTA is what decide gives with nothing known and Codex off', () => {

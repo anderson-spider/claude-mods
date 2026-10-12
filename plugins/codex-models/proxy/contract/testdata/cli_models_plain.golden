@@ -1,3 +1,0 @@
-gpt-6.1-sol                  gpt-6.1-sol              context  373000  effort low (default)    behaves as claude-sonnet-5-5
-gpt-6-astra                  gpt-6-astra              context  272000  effort medium (default) behaves as claude-opus-5-5
-gpt-6-luna                   gpt-6-luna               context  272000  effort medium (default) behaves as claude-haiku-5-5

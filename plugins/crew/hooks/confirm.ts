@@ -29,10 +29,11 @@ const ALIASES: readonly string[] = MODELS
 
 /**
  * A model id as compared: lower case, without a trailing context suffix (`[1m]`) and without a trailing effort suffix
- * (`-high`, `:high`), which a proxy may add to the id it receives or report. `max` is not stripped: `gpt-x-codex-max` is a model.
+ * (`(high)`, `-high`, `:high`), which a gateway may add to the id it receives or report. `max` is not stripped:
+ * `gpt-x-codex-max` is a model.
  */
 export function normalizeModel(id: string): string {
-  return id.trim().toLowerCase().replace(/\[\d+m\]$/, '').replace(/[-:](?:low|medium|high|xhigh)$/, '')
+  return id.trim().toLowerCase().replace(/\[\d+m\]$/, '').replace(/(?:\((?:low|medium|high|xhigh)\)|[-:](?:low|medium|high|xhigh))$/, '')
 }
 
 /** A trailing snapshot date, as an upstream names a dated release of a model: `-2026-05-01` or `-20260501`. */
@@ -59,7 +60,7 @@ export function observedEffort(sent: { model?: unknown; effort?: unknown }, suff
     // Without the wire model, output_config.effort alone cannot reveal the higher-precedence suffix.
     if (typeof sent.model !== 'string' || !sent.model) return undefined
     const model = sent.model.trim().toLowerCase().replace(/\[\d+m\]$/, '')
-    const effort = /[-:](low|medium|high|xhigh)$/.exec(model)?.[1]
+    const effort = /(?:\((low|medium|high|xhigh)\)|[-:](low|medium|high|xhigh))$/.exec(model)?.slice(1).find(Boolean)
     if (effort) return effort
   }
   return sent.effort === undefined ? undefined : String(sent.effort)
@@ -67,7 +68,7 @@ export function observedEffort(sent: { model?: unknown; effort?: unknown }, suff
 
 /** The transcript line: a confirmation, a mismatch, or explicitly unobserved suffix effort. */
 export function confirmText(description: string, planned: Planned, ran: Ran, via: 'jev' | 'quota' | 'crew' = 'jev', suffix = false): string {
-  // The proxy reports the id: only a well-formed one is written, as in the decision record.
+  // The gateway reports the id: only a well-formed one is written, as in the decision record.
   const shown = MODEL_ID.test(ran.model) ? ran.model : 'unknown model'
   if (suffix && ran.effort === undefined) {
     const model = modelAsPlanned(planned, ran) ? `confirmed model ${shown}` : `ran model ${shown}, not ${planned.model}`

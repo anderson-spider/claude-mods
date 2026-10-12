@@ -1,7 +1,7 @@
 {
   "name": "crew",
-  "version": "0.15.0",
-  "description": "Makes the main session a lead that delegates to five specialist subagents: code-reader and research on Haiku; designer and developer on Sonnet; architect on Opus. The developer runs and reports its tests; the architect independently audits acceptance. With the jevKey option set (a TypeSafe key), Jev sizes only each call's effort, bounded to medium or high; models stay at role defaults or fixed twin ids, and any Jev request or config failure requests medium unless the agent has already sent its first step; that sends a redacted, truncated prompt to api.typesafe.ai. When a local HTTP loopback proxy is ANTHROPIC_BASE_URL, each role also gets a fixed-model crew:<role>-codex twin. Calls may be routed automatically to those twins when Codex has more weekly headroom, with or without Jev; what those subagents read and write goes to OpenAI through the proxy.",
+  "version": "0.16.0",
+  "description": "Makes the main session a lead that delegates to five specialist subagents: code-reader and research on Haiku; designer and developer on Sonnet; architect on Opus. The developer runs and reports its tests; the architect independently audits acceptance. With the jevKey option set (a TypeSafe key), Jev sizes only each call's effort, bounded to medium or high; models stay at role defaults or fixed twin ids, and any Jev request or config failure requests medium unless the agent has already sent its first step; that sends a redacted, truncated prompt to api.typesafe.ai. When ANTHROPIC_BASE_URL is a gateway other than Anthropic's API, each role also gets a fixed-model crew:<role>-codex twin. With the codexRemote and codexManagementKey options set, calls may be routed automatically to those twins when Codex has more weekly headroom, with or without Jev; what those subagents read and write goes to OpenAI through the gateway.",
   "author": {
     "name": "anderson-spider"
   },
@@ -10,7 +10,18 @@
     "jevKey": {
       "type": "string",
       "title": "Jev API key (TypeSafe)",
-      "description": "Setting this key turns Jev routing on; leaving it empty turns it off. With a key, Jev (TypeSafe) sizes only the effort of each eligible crew:* Agent call, bounded to medium or high; models stay at role defaults or fixed twin ids. Any Jev request or config failure requests medium unless the agent has already sent its first step. The choice shows in the task's description. The call's description and its prompt (secrets and paths removed, cut to 4000 characters) are sent to api.typesafe.ai. Only automatic quota routing may move a call to its role's Codex twin, even without this key, and a base-role call that names a model keeps it. The key is sent only in the Authorization header and is never logged or stored by the plugin. A repository's own settings cannot supply it.",
+      "description": "Setting this key turns Jev routing on; leaving it empty turns it off. With a key, Jev (TypeSafe) sizes only the effort of each eligible crew:* Agent call, bounded to medium or high; models stay at role defaults or fixed twin ids. Any Jev request or config failure requests medium unless the agent has already sent its first step. The choice shows in the task's description. The call's description and its prompt (secrets and paths removed, cut to 4000 characters) are sent to api.typesafe.ai. Only automatic quota routing (the codexRemote and codexManagementKey options) may move a call to its role's Codex twin, even without this key, and a base-role call that names a model keeps it. The key is sent only in the Authorization header and is never logged or stored by the plugin. A repository's own settings cannot supply it.",
+      "sensitive": true
+    },
+    "codexRemote": {
+      "type": "string",
+      "title": "Codex remote (CLIProxyAPI origin)",
+      "description": "The origin of the CLIProxyAPI that holds the Codex account behind the gateway, for example https://cliproxy.example.ts.net (http or https, no path). With codexManagementKey it turns automatic quota routing on: the first eligible spawn, then at most every five minutes, asks its management API for the one active Codex account and OpenAI's usage for it. A repository's own settings cannot supply it."
+    },
+    "codexManagementKey": {
+      "type": "string",
+      "title": "Codex remote management key",
+      "description": "The CLIProxyAPI management key, sent only as a bearer to codexRemote's /v8/management credentials and api-call endpoints, never to Jev, and never logged or stored by the plugin. A repository's own settings cannot supply it.",
       "sensitive": true
     }
   }
