@@ -297,8 +297,10 @@ func TestLockSitsBesideTheCredentialFile(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "codex.json.lock")); err != nil {
 		t.Fatalf("no codex.json.lock after Save: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "codex.lock")); !os.IsNotExist(err) {
-		t.Fatalf("the old codex.lock was created: %v", err)
+	// The legacy lock is held too, for one release, so an older binary on
+	// the same file is excluded.
+	if _, err := os.Stat(filepath.Join(dir, legacyLockName)); err != nil {
+		t.Fatalf("no legacy codex.lock after Save: %v", err)
 	}
 
 	realDir, linkDir, authDir := t.TempDir(), t.TempDir(), t.TempDir()
@@ -315,7 +317,10 @@ func TestLockSitsBesideTheCredentialFile(t *testing.T) {
 	if err := ls.Save(&Token{AccessToken: "at2"}); err != nil {
 		t.Fatalf("Save via link: %v", err)
 	}
-	for _, unwanted := range []string{link + ".lock", filepath.Join(authDir, "codex.json.lock"), filepath.Join(authDir, "codex.lock")} {
+	if _, err := os.Stat(filepath.Join(authDir, legacyLockName)); err != nil {
+		t.Fatalf("no legacy codex.lock in auth_dir: %v", err)
+	}
+	for _, unwanted := range []string{link + ".lock", filepath.Join(authDir, "codex.json.lock")} {
 		if _, err := os.Lstat(unwanted); !os.IsNotExist(err) {
 			t.Fatalf("unexpected lock %s: %v", unwanted, err)
 		}

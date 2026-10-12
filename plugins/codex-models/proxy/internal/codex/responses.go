@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/jclab-joseph/claude-code-model-proxy/internal/netx"
+	"github.com/tidwall/gjson"
 )
 
 // Backend calls the Codex Responses endpoint on behalf of a signed-in
@@ -51,8 +52,20 @@ type APIError struct {
 	Body       []byte
 }
 
+// Error carries the status and the body's error type and code when they are
+// short tokens, never the body itself: it can echo the prompt or a token.
+// Body stays on the struct for the router's cleaned client message.
 func (e *APIError) Error() string {
-	return fmt.Sprintf("codex: backend returned %d: %s", e.StatusCode, strings.TrimSpace(string(e.Body)))
+	var parts []string
+	for _, field := range []string{"type", "code"} {
+		if value := gjson.GetBytes(e.Body, "error."+field); value.Type == gjson.String && oauthCode.MatchString(value.String()) {
+			parts = append(parts, field+" "+value.String())
+		}
+	}
+	if len(parts) == 0 {
+		return fmt.Sprintf("codex: backend returned %d", e.StatusCode)
+	}
+	return fmt.Sprintf("codex: backend returned %d (%s)", e.StatusCode, strings.Join(parts, ", "))
 }
 
 // Responses posts a Responses API request and returns the streaming
