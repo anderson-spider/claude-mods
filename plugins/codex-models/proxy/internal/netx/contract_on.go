@@ -5,26 +5,29 @@ package netx
 import (
 	"crypto/tls"
 	"crypto/x509"
-	"os"
-
 	"net/http"
+	"os"
 )
 
-// Contract build only: CCMPROXY_CONTRACT_CA_FILE names a PEM file whose
-// certificates are trusted instead of the system roots (for TLS fakes).
-// An unreadable or empty file panics: a contract run must not fall back.
+// contractCAFile names a PEM file whose certificates replace the system
+// roots, so the contract suite can stand up TLS fakes. Contract build only.
+const contractCAFile = "CCMPROXY_CONTRACT_CA_FILE"
+
+// contractTrust makes t trust only the certificates in contractCAFile when
+// it is set. A file that cannot be read or holds no certificate panics: a
+// contract run must fail loudly rather than fall back to the system roots.
 func contractTrust(t *http.Transport) {
-	path := os.Getenv("CCMPROXY_CONTRACT_CA_FILE")
+	path := os.Getenv(contractCAFile)
 	if path == "" {
 		return
 	}
-	pem, err := os.ReadFile(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
-		panic("CCMPROXY_CONTRACT_CA_FILE: " + err.Error())
+		panic(contractCAFile + ": " + err.Error())
 	}
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(pem) {
-		panic("CCMPROXY_CONTRACT_CA_FILE: no certificate in " + path)
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM(data) {
+		panic(contractCAFile + ": no certificate in " + path)
 	}
-	t.TLSClientConfig = &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}
+	t.TLSClientConfig = &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}
 }
