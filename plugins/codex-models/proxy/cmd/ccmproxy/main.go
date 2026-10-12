@@ -39,10 +39,12 @@ Usage:
   ccmproxy login codex [flags]  sign in to a ChatGPT account for Codex models
   ccmproxy logout codex         remove the stored Codex credentials
   ccmproxy status               show configuration and login state
-  ccmproxy models [--settings-json]
+  ccmproxy models [--settings-json | --json]
                                 list the models this proxy adds;
                                 --settings-json prints a modelPicker block
-                                to merge into Claude Code's settings.json
+                                to merge into Claude Code's settings.json;
+                                --json prints the picker rows as
+                                [{"id","label","description"}]
   ccmproxy env [--shell SHELL]  print the environment Claude Code needs
                                 (posix, fish, powershell or json); it
                                 includes the proxy's secret
@@ -231,10 +233,16 @@ func runServe(args []string) error {
 	if err != nil {
 		return err
 	}
-	// Every inbound request — passthrough, Codex, model list, admin —
-	// reaches the router through this handler, so wrapping it here logs
-	// all of them.
-	loggedHandler := httplog.Log(handler)
+	handler.Version = version
+	// Guard checks Host and the secret, and removes the secret, before the
+	// router or any upstream sees the request.
+	guarded, err := router.Guard(cfg, handler)
+	if err != nil {
+		return err
+	}
+	// Every inbound request — refused ones included — passes through this
+	// handler, so wrapping it here logs all of them. It logs no headers.
+	loggedHandler := httplog.Log(guarded)
 
 	logx.Infof("ccmproxy %s", version)
 	logx.Infof("upstream: %s", cfg.Upstream)
@@ -368,18 +376,26 @@ func presence(secret string) string {
 }
 
 func runModels(args []string) error {
-	var settingsJSON bool
+	var settingsJSON, rowsJSON bool
 	cfg, _, err := commonFlags("models", args, func(fs *flag.FlagSet) {
 		fs.BoolVar(&settingsJSON, "settings-json", false,
 			"print a modelPicker block to merge into Claude Code's settings.json")
+		fs.BoolVar(&rowsJSON, "json", false,
+			`print the picker rows as [{"id","label","description"}]`)
 	})
 	if err != nil {
 		return err
 	}
+	if settingsJSON && rowsJSON {
+		return fmt.Errorf("--settings-json and --json cannot be combined")
+	}
 	registry := codex.NewRegistry(cfg.Codex.Models, cfg.Codex.ModelPrefix, cfg.Codex.EffortVariants)
 
-	if settingsJSON {
+	switch {
+	case settingsJSON:
 		return printSettingsJSON(registry)
+	case rowsJSON:
+		return printJSON(modelRows(registry))
 	}
 
 	for _, row := range registry.PickerOptions() {
@@ -395,6 +411,23 @@ func runModels(args []string) error {
 			row.Model, resolution.Model.ID, resolution.Model.ContextLength, effort, row.BehavesAs)
 	}
 	return nil
+}
+
+// modelRow is one line of `ccmproxy models --json`: the id to put in a
+// picker row or an agent's `model`, and its label and description.
+type modelRow struct {
+	ID          string `json:"id"`
+	Label       string `json:"label"`
+	Description string `json:"description"`
+}
+
+func modelRows(registry *codex.Registry) []modelRow {
+	options := registry.PickerOptions()
+	rows := make([]modelRow, 0, len(options))
+	for _, option := range options {
+		rows = append(rows, modelRow{ID: option.Model, Label: option.Label, Description: option.Description})
+	}
+	return rows
 }
 
 // printSettingsJSON emits the settings.json fragment that puts the added

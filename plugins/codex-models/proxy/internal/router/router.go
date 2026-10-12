@@ -31,6 +31,10 @@ type Router struct {
 	upstream *url.URL
 	proxy    *httputil.ReverseProxy
 	client   *http.Client
+
+	// Version is reported by the status endpoint, so a caller can tell
+	// which build it reached.
+	Version string
 }
 
 // New builds a router. transport carries pass-through traffic to the upstream
@@ -63,9 +67,18 @@ func New(cfg *config.Config, registry *codex.Registry, backend *codex.Backend, t
 			// The upstream TLS certificate and API routing both key off the
 			// Host header, so it must name the real API, not the proxy.
 			pr.Out.Host = upstream.Host
+			// Guard already removed the secret; this keeps it off the wire
+			// should a request ever reach the router another way.
+			pr.Out.Header.Del(config.TokenHeader)
 		},
 		// Server-sent events must not sit in a buffer.
 		FlushInterval: -1,
+		// No CORS header ever leaves the proxy, so a web page cannot read
+		// an answer even if the upstream would allow it.
+		ModifyResponse: func(resp *http.Response) error {
+			dropCORS(resp.Header)
+			return nil
+		},
 		ErrorHandler: func(w http.ResponseWriter, req *http.Request, err error) {
 			logx.Errorf("passthrough %s %s: %v", req.Method, req.URL.Path, err)
 			writeAnthropicError(w, http.StatusBadGateway, "api_error", "upstream request failed: "+err.Error())
@@ -159,15 +172,41 @@ func (r *Router) serveCountTokens(w http.ResponseWriter, req *http.Request) {
 func (r *Router) serveAdmin(w http.ResponseWriter, req *http.Request) {
 	switch req.URL.Path {
 	case "/__ccmproxy/status":
-		status := map[string]any{
-			"upstream":        r.cfg.Upstream,
-			"codex_models":    r.registry.AdvertisedIDs(),
-			"codex_logged_in": r.backend != nil && r.backend.Store.Authenticated(),
+		if req.Method != http.MethodGet {
+			w.Header().Set("Allow", http.MethodGet)
+			writeAnthropicError(w, http.StatusMethodNotAllowed, "invalid_request_error", "ccmproxy: status is GET only")
+			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(status)
+		_ = json.NewEncoder(w).Encode(r.status())
 	default:
 		http.NotFound(w, req)
+	}
+}
+
+// Status is the body of GET /__ccmproxy/status. It names the service so a
+// caller knows it reached this proxy, and carries no paths, emails or tokens.
+type Status struct {
+	Service    string   `json:"service"`
+	Version    string   `json:"version"`
+	CodexLogin bool     `json:"codexLogin"`
+	Models     []string `json:"models"`
+}
+
+func (r *Router) status() Status {
+	version := r.Version
+	if version == "" {
+		version = "dev"
+	}
+	models := r.registry.AdvertisedIDs()
+	if models == nil {
+		models = []string{}
+	}
+	return Status{
+		Service:    "ccmproxy",
+		Version:    version,
+		CodexLogin: r.backend != nil && r.backend.Store.Authenticated(),
+		Models:     models,
 	}
 }
 

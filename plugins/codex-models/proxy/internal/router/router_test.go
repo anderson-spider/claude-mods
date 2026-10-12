@@ -447,7 +447,7 @@ func TestAdminEndpoints(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status endpoint returned %d", rec.Code)
 	}
-	if !gjson.Get(rec.Body.String(), "codex_logged_in").Bool() {
+	if !gjson.Get(rec.Body.String(), "codexLogin").Bool() {
 		t.Fatalf("status = %s", rec.Body.String())
 	}
 	if h.anthropic.method != "" {

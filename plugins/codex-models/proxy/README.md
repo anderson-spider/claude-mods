@@ -260,6 +260,7 @@ ccmproxy logout codex         remove the stored credentials
 ccmproxy status               configuration and login state
 ccmproxy models               the models this proxy adds
 ccmproxy models --settings-json   a modelPicker block for settings.json
+ccmproxy models --json        the picker rows as [{"id","label","description"}]
 ccmproxy env [--shell SHELL]  the environment Claude Code needs (posix,
                               fish, powershell or json); includes the secret
 ccmproxy config init          write a config file, or add the missing
@@ -267,7 +268,15 @@ ccmproxy config init          write a config file, or add the missing
 ccmproxy version              the version stamped at build and build details
 ```
 
-`GET /__ccmproxy/status` is served on the listener itself.
+Every request must name the listener in `Host` and carry the secret in
+`X-Ccmproxy-Token`; the header is removed before anything is forwarded, and a
+miss is a `403` `permission_error` (never `401`, which would send Claude Code
+into an OAuth refresh). `OPTIONS` is refused and no `Access-Control-*` header
+is ever sent. The one exception is `HEAD /api/hello`, Claude Code's start-up
+probe, which is answered locally with an empty `200`.
+
+`GET /__ccmproxy/status`, behind the secret, answers
+`{"service":"ccmproxy","version":"…","codexLogin":true,"models":["…"]}`.
 
 ## Configuration
 
