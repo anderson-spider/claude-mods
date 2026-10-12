@@ -14,8 +14,8 @@ import { McpStdioClient } from './lib/mcp-client.mjs'
 import { VERSION } from './lib/version.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
-const RUN = process.env.CODEX_CU_RUN_DIR ?? join(HERE, 'run')
-const STATE = process.env.CODEX_CU_STATE_DIR ?? join(HERE, 'state')
+const RUN = join(HERE, 'run')
+const STATE = join(HERE, 'state')
 const SOCKET = join(RUN, 'helper.sock')
 const MAX_BODY = 1_000_000
 

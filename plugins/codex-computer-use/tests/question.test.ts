@@ -98,6 +98,33 @@ test('holdQuestion queued behind another question aborts without touching its ba
   expect(world.waiting.current).toBe(earlier)
 })
 
+test('holdQuestion aborts on a failing host clock without approving or taking the queue', async () => {
+  const { world, host } = worldOf()
+  const failing: QuestionHost = { ...host, now: async () => { throw new Error('clock failed') } }
+
+  expect(await holdQuestion(failing, world.waiting, LIMIT, question, world.signal as AbortSignal)).toBe('aborted')
+  expect(world.polls).toBe(0)
+  expect(world.log).toEqual([])
+  expect(world.waiting.current).toBeUndefined()
+})
+
+test('holdQuestion aborts on an asynchronous clock failure during polling and frees the queue', async () => {
+  const { world, host } = worldOf()
+  let reads = 0
+  const failing: QuestionHost = {
+    ...host,
+    now: async () => {
+      if (++reads === 3) throw new Error('clock failed')
+      return world.time
+    },
+  }
+
+  expect(await holdQuestion(failing, world.waiting, LIMIT, question, world.signal as AbortSignal)).toBe('aborted')
+  expect(world.polls).toBe(1)
+  expect(world.log).toEqual(['show q1', 'clear'])
+  expect(world.waiting.current).toBeUndefined()
+})
+
 test('holdQuestion ends in aborted when the band fails, and still frees the queue', async () => {
   const { world, host } = worldOf()
   const failing: QuestionHost = { ...host, show: async () => { throw new Error('band failed') } }

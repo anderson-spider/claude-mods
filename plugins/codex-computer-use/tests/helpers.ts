@@ -20,7 +20,8 @@ type Posted = { route: string; body: Record<string, unknown>; socketPath?: strin
  * A fake helper behind curl: TextEdit needs approval until the caller answers,
  * Calculator is approved, and `get n` reads back what `set n=` stored per caller.
  */
-export const world = (on: On) => {
+export const world = (on: On, now: () => number = Date.now) => {
+  on('clock.now', () => ({ value: now() }))
   const posted: Posted[] = []
   const allowed = new Map<string, string>()
   const vars = new Map<string, string>()

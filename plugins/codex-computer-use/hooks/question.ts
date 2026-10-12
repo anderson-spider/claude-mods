@@ -11,7 +11,7 @@ export type Waiting = { current: Slot | undefined }
 
 /** What holding a question needs from the host. */
 export type QuestionHost = {
-  now(): number
+  now(): number | Promise<number>
   /** One poll's worth of waiting. */
   wait(): Promise<unknown>
   /** Puts the question on the band, or clears it with `null`. */
@@ -27,9 +27,8 @@ export const holdQuestion = async (
   signal: AbortSignal,
 ): Promise<Choice | 'aborted' | 'timeout'> => {
   const slot: Slot = { id: question.id, choice: null }
-  const deadline = host.now() + limitMs
-
   try {
+    const deadline = await host.now() + limitMs
     // One question at a time: a second caller waits for the first to be answered.
     while (waiting.current !== undefined) {
       if (signal.aborted) {
@@ -42,7 +41,7 @@ export const holdQuestion = async (
     waiting.current = slot
     await host.show(question)
 
-    while (slot.choice === null && !signal.aborted && host.now() < deadline) {
+    while (slot.choice === null && !signal.aborted && await host.now() < deadline) {
       await host.wait()
     }
 

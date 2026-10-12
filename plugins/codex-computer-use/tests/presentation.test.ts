@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 
 import type { StatusReply } from '../hooks/model'
 import { approvalWaitText, statusReport, toAnswer } from '../hooks/presentation'
-import { limitMs } from '../hooks/routing'
+import { APPROVAL_MS } from '../hooks/routing'
 
 test('toAnswer words busy, denied and ok replies', () => {
   expect(toAnswer({ status: 'busy', app: { bundleId: 'b', displayName: 'Calculator' }, owner: 'sess-2' }).result).toMatch(/in use by another/)
@@ -39,10 +39,10 @@ test('statusReport preserves running helper, callers and auto-approve text', () 
   ].join('\n'))
 })
 
-test('approval wait text uses the configured minutes, singular and fractional durations', () => {
-  expect(approvalWaitText(limitMs(5, 5))).toBe(' within 5 minutes')
-  expect(approvalWaitText(limitMs(1, 5))).toBe(' within 1 minute')
-  expect(approvalWaitText(limitMs(1.25, 5))).toBe(' within 1.3 minutes')
-  expect(approvalWaitText(limitMs(0.5, 5))).toBe(' within 30 seconds')
+test('approval wait text describes the fixed deadline and formats pure-test durations', () => {
+  expect(approvalWaitText(APPROVAL_MS)).toBe(' within 5 minutes')
+  expect(approvalWaitText(60_000)).toBe(' within 1 minute')
+  expect(approvalWaitText(75_000)).toBe(' within 1.3 minutes')
+  expect(approvalWaitText(30_000)).toBe(' within 30 seconds')
   expect(approvalWaitText(1000)).toBe(' within 1 second')
 })

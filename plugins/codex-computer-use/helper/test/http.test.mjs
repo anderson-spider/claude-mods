@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { request } from 'node:http'
-import { join } from 'node:path'
 import { test } from 'node:test'
 
 import { handler } from '../helper.mjs'
@@ -9,9 +8,11 @@ import { hubWith, temp } from './support.mjs'
 
 test('socket API routes calls, approvals, settings and rejects bad callers', async () => {
   const { hub } = hubWith()
-  const socket = join(temp(), 'h.sock')
+  // Unix socket paths are bounded even when the temporary directory is long.
+  const cwd = process.cwd()
+  process.chdir(temp())
+  const socket = 'h.sock'
   const server = createServer(handler(hub))
-  await new Promise(resolve => server.listen(socket, resolve))
   const post = (path, body) =>
     new Promise((resolve, reject) => {
       const req = request({ socketPath: socket, path, method: 'POST' }, res => {
@@ -24,6 +25,10 @@ test('socket API routes calls, approvals, settings and rejects bad callers', asy
     })
 
   try {
+    await new Promise((resolve, reject) => {
+      server.once('error', reject)
+      server.listen(socket, resolve)
+    })
     assert.equal((await post('/call', { caller: '../x', code: 'x' })).code, 400)
     assert.equal((await post('/call', { caller: 's1', code: 'await cua.getState();' })).body.status, 'ok')
     assert.equal((await post('/settings', {})).body.settings.autoApprove, false)
@@ -34,8 +39,9 @@ test('socket API routes calls, approvals, settings and rejects bad callers', asy
     assert.equal(forgot.body.bundleId, 'com.fake.Grapher')
     assert.equal((await post('/forget', { app: '' })).code, 400)
   } finally {
-    server.close()
+    await new Promise(resolve => server.close(resolve))
     hub.close()
+    process.chdir(cwd)
   }
 })
 

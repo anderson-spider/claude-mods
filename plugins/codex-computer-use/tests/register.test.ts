@@ -87,10 +87,11 @@ test('/codex-cu forget <app> asks the helper to drop it from both always-allow l
   expect(failed.text).toMatch(/could not forget Nowhere: no app found/)
 })
 
-test('the bridge timeout describes the configured approval wait', { options: { approvalMinutes: 0.001 } }, async ($, on) => {
-  world(on)
+test('the bridge timeout describes the fixed five-minute approval wait', async ($, on) => {
+  let reads = 0
+  world(on, () => reads++ === 0 ? 0 : 300_000)
 
   const answer = await $.tool.call({ tool: TOOL, code: 'let app = await cua.getApp("TextEdit");' } as never)
   expect(answer.isError).toBe(true)
-  expect(textOf(answer)).toBe('The person did not answer whether Codex may use TextEdit within 0.1 seconds; nothing was done with it.')
+  expect(textOf(answer)).toBe('The person did not answer whether Codex may use TextEdit within 5 minutes; nothing was done with it.')
 })
