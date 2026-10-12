@@ -3,7 +3,9 @@
 // key or a path.
 
 import type { Effort } from './agents'
-import type { Provider, Reading, Window } from './quota'
+
+/** Who serves the agent that ran: Anthropic for a Claude role, OpenAI for a `-codex` twin. */
+export type Provider = 'claude' | 'codex'
 
 /** `<home>/.claude/crew/decisions`: the home is the trusted one, never the repository's. */
 const DIR = '.claude/crew/decisions'
@@ -13,14 +15,9 @@ export const MODEL_ID = /^[\w./:[\]-]{1,64}$/
 export type DecisionInput = {
   ts: string
   agent: string
-  /** The type the lead asked for (`crew:developer`); `agent` is the one that ran, which differs when quota moved the call to a twin. */
+  /** The type the lead asked for (`crew:developer`); `agent` is the one that ran, which differs when the codex crew mode moved the call to a twin. */
   requested: string
   provider: Provider
-  /** Why quota chose the provider (a fixed phrase with percentages); absent when it did not decide. */
-  reason?: string
-  /** The two readings the provider was chosen from; absent when quota routing is off. */
-  claude?: Reading | null
-  codex?: Reading | null
   depth?: number
   defaultEffort: Effort
   effortPlanned: Effort
@@ -33,19 +30,12 @@ export type DecisionInput = {
   description?: string
 }
 
-/** A window as logged: the percentage and the reset time, nothing else. */
-type LoggedWindow = { percentUsed: number; resetsAt?: string }
-export type LoggedReading = { fiveHour?: LoggedWindow; sevenDay?: LoggedWindow }
-
 export type DecisionRecord = {
-  v: 3
+  v: 4
   ts: string
   agent: string
   requested: string
   provider: Provider
-  reason: string | null
-  /** The 5-hour and 7-day readings of both providers when the decision was made; null where not read. */
-  quota: { claude: LoggedReading | null; codex: LoggedReading | null }
   depth: number | null
   defaultEffort: Effort
   effortPlanned: Effort
@@ -71,33 +61,15 @@ export function fnv1a(text: string): string {
   return hash.toString(16).padStart(8, '0')
 }
 
-const REASON_CHARS = 80
-const TIME = /^[\w:.+-]{1,40}$/
-
-function loggedWindow(window: Window | undefined): LoggedWindow | undefined {
-  if (!window || typeof window.percentUsed !== 'number' || !Number.isFinite(window.percentUsed)) return undefined
-  return { percentUsed: window.percentUsed, ...(typeof window.resetsAt === 'string' && TIME.test(window.resetsAt) ? { resetsAt: window.resetsAt } : {}) }
-}
-
-/** A reading cut to percentages and reset times, whatever else the object carries. */
-function loggedReading(reading: Reading | null | undefined): LoggedReading | null {
-  if (!reading) return null
-  const fiveHour = loggedWindow(reading.fiveHour)
-  const sevenDay = loggedWindow(reading.sevenDay)
-  return fiveHour || sevenDay ? { ...(fiveHour ? { fiveHour } : {}), ...(sevenDay ? { sevenDay } : {}) } : null
-}
-
 const numberOr = (value: number | undefined): number | null => (typeof value === 'number' && Number.isFinite(value) ? value : null)
 
 export function decisionRecord(input: DecisionInput): DecisionRecord {
   return {
-    v: 3,
+    v: 4,
     ts: input.ts,
     agent: input.agent,
     requested: input.requested,
     provider: input.provider,
-    reason: input.reason ? input.reason.slice(0, REASON_CHARS) : null,
-    quota: { claude: loggedReading(input.claude), codex: loggedReading(input.codex) },
     depth: numberOr(input.depth),
     defaultEffort: input.defaultEffort,
     effortPlanned: input.effortPlanned,
@@ -129,10 +101,10 @@ export type DecisionIo = {
 }
 
 /**
- * Writes one record. Never rejects: a failure is one debug line, prefixed by what decided the call (`jev`, `quota`,
- * or `crew` for a medium fallback). Without a trusted home nothing is written.
+ * Writes one record. Never rejects: a failure is one debug line, prefixed by what decided the call (`jev`, or `crew`
+ * for a medium fallback). Without a trusted home nothing is written.
  */
-export async function saveDecision(io: DecisionIo, home: string | undefined, id: string, record: DecisionRecord, by: 'jev' | 'quota' | 'crew' = 'jev'): Promise<void> {
+export async function saveDecision(io: DecisionIo, home: string | undefined, id: string, record: DecisionRecord, by: 'jev' | 'crew' = 'jev'): Promise<void> {
   const prefix = by === 'crew' ? 'crew' : `crew ${by}`
   if (!home) {
     io.log(`${prefix}: decision not logged (no trusted home)`)

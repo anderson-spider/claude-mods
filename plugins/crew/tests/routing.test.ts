@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import { EFFORT_FLOOR, SPECIALISTS, nativeCodexSpecs } from '../hooks/agents'
 import type { Specialist } from '../hooks/agents'
-import { decide, defaultsOf, describe, moved, noticeText, retarget, route, routable, stateOf, taggedDescription, twinFor, untagged } from '../hooks/routing'
+import { decide, defaultsOf, describe, moved, noticeText, route, routable, stateOf, taggedDescription, twinFor, untagged } from '../hooks/routing'
 import type { Routed } from '../hooks/routing'
 import { PROMPT_CHARS } from '../hooks/questions'
 
@@ -306,64 +306,58 @@ test('only alias tags and registered twin ids are stripped; ids are matched lite
   }
 })
 
-// --- Quota routing: the twin a call may move to ---
+// --- The codex crew mode: the twin a call may move to ---
 
-const QUOTA_TWINS = nativeCodexSpecs({ developer: 'gpt-6-astra', architect: 'gpt-6-sage' })
+const MODE_TWINS = nativeCodexSpecs({ developer: 'gpt-6-astra', architect: 'gpt-6-sage' })
 
 test('twinFor names the role\'s registered twin as a target with its base, for a plain specialist call', () => {
-  const target = twinFor({ subagentType: 'crew:developer' }, QUOTA_TWINS)
+  const target = twinFor({ subagentType: 'crew:developer' }, MODE_TWINS)
   expect(target).toMatchObject({ name: 'developer-codex', base: 'developer', effort: 'medium' })
-  expect(twinFor({ subagentType: 'crew:architect' }, QUOTA_TWINS)).toMatchObject({ name: 'architect-codex', base: 'architect' })
+  expect(twinFor({ subagentType: 'crew:architect' }, MODE_TWINS)).toMatchObject({ name: 'architect-codex', base: 'architect' })
 })
 
 test('twinFor is undefined where the call must stay as it is', () => {
   // A role with no registered twin, and no twins at all.
-  expect(twinFor({ subagentType: 'crew:tester' }, QUOTA_TWINS)).toBeUndefined()
+  expect(twinFor({ subagentType: 'crew:tester' }, MODE_TWINS)).toBeUndefined()
   expect(twinFor({ subagentType: 'crew:developer' }, [])).toBeUndefined()
   // An explicit model, a fork, a workflow agent and a teammate.
-  expect(twinFor({ subagentType: 'crew:developer', model: 'opus' }, QUOTA_TWINS)).toBeUndefined()
-  expect(twinFor({ subagentType: 'crew:developer', fork: true }, QUOTA_TWINS)).toBeUndefined()
-  expect(twinFor({ subagentType: 'crew:developer', workflow: { runId: 'wf_1', agentIndex: 1 } }, QUOTA_TWINS)).toBeUndefined()
-  expect(twinFor({ subagentType: 'crew:developer', isTeammate: true }, QUOTA_TWINS)).toBeUndefined()
+  expect(twinFor({ subagentType: 'crew:developer', model: 'opus' }, MODE_TWINS)).toBeUndefined()
+  expect(twinFor({ subagentType: 'crew:developer', fork: true }, MODE_TWINS)).toBeUndefined()
+  expect(twinFor({ subagentType: 'crew:developer', workflow: { runId: 'wf_1', agentIndex: 1 } }, MODE_TWINS)).toBeUndefined()
+  expect(twinFor({ subagentType: 'crew:developer', isTeammate: true }, MODE_TWINS)).toBeUndefined()
   // Another plugin's type, an unknown crew type, and a twin the lead named (an explicit choice is never moved).
-  expect(twinFor({ subagentType: 'acme:developer' }, QUOTA_TWINS)).toBeUndefined()
-  expect(twinFor({ subagentType: 'crew:mystery' }, QUOTA_TWINS)).toBeUndefined()
-  expect(twinFor({ subagentType: 'crew:developer-codex' }, QUOTA_TWINS)).toBeUndefined()
+  expect(twinFor({ subagentType: 'acme:developer' }, MODE_TWINS)).toBeUndefined()
+  expect(twinFor({ subagentType: 'crew:mystery' }, MODE_TWINS)).toBeUndefined()
+  expect(twinFor({ subagentType: 'crew:developer-codex' }, MODE_TWINS)).toBeUndefined()
 })
 
-test('Jev\'s answers retargeted to a twin keep the effort answer and never name a model', async () => {
-  const twin = twinFor({ subagentType: 'crew:developer' }, QUOTA_TWINS)!
-  const ask = async () => ({ answers: answers(3.9), model: 'jev-1.13.0', ms: 7 })
-  const onClaude = await route(ask, ctx, spec('developer'), { prompt: 'p', description: 'd' })
-  expect(onClaude.decision).toEqual({ effort: 'high', depth: 3.9 })
-
-  const onTwin = retarget(onClaude, twin)
-  expect(onTwin.decision).toMatchObject({ effort: 'high', depth: 3.9 })
-  expect(onTwin).toMatchObject({ jevModel: 'jev-1.13.0', ms: 7 })
+test('Jev asked about a moved call\'s twin answers as for its base role and never names a model', async () => {
+  const twin = twinFor({ subagentType: 'crew:developer' }, MODE_TWINS)!
+  const states: unknown[] = []
+  const ask = async (_questions: unknown, state: unknown) => (states.push(state), { answers: answers(3.9), model: 'jev-1.13.0', ms: 7 })
+  const onClaude = await route(ask as never, ctx, spec('developer'), { prompt: 'p', description: 'd' })
+  const onTwin = await route(ask as never, ctx, twin, { prompt: 'p', description: 'd' })
+  expect(states[1]).toEqual(states[0])
+  expect(onTwin.decision).toEqual(onClaude.decision)
+  expect(onTwin).toMatchObject({ decision: { effort: 'high', depth: 3.9 }, jevModel: 'jev-1.13.0', ms: 7 })
   expect(moved(twin, onTwin)).toEqual({ effort: 'high' })
-  // The first answer is not changed by the second reading of it.
-})
-
-test('retarget without stored answers reads them as empty: the twin\'s defaults', () => {
-  const twin = twinFor({ subagentType: 'crew:developer' }, QUOTA_TWINS)!
-  expect(retarget({ decision: { effort: 'high' }, ms: 1 }, twin).decision).toEqual({ effort: 'medium' })
 })
 
 test('defaultsOf is an explicit medium effort fallback and tags with the fixed twin model', () => {
-  const twin = twinFor({ subagentType: 'crew:developer' }, QUOTA_TWINS)!
+  const twin = twinFor({ subagentType: 'crew:developer' }, MODE_TWINS)!
   const routed = defaultsOf(twin)
   expect(routed).toEqual({ decision: { effort: 'medium' }, ms: 0 })
   expect(moved(twin, routed)).toEqual({ effort: undefined })
   expect(taggedDescription('audit auth', routed, 'gpt-6-astra')).toBe('audit auth · gpt-6-astra/medium')
 })
 
-test('the notice of a switched call names the provider and the reason, with Jev\'s effort marked or the default plain', () => {
-  const twin = twinFor({ subagentType: 'crew:developer' }, QUOTA_TWINS)!
-  const via = { requested: 'crew:developer', reason: '7d 38% used vs Claude 7d 71%' }
-  const jev = retarget({ decision: { effort: 'high' }, ms: 1, answers: answers(3.9) }, twin)
-  expect(noticeText(twin, jev, undefined, via)).toBe('crew:developer -> Codex (7d 38% used vs Claude 7d 71%) · gpt-6-astra · high (jev)')
-  expect(noticeText(twin, jev, 'high', via)).toBe('crew:developer -> Codex (7d 38% used vs Claude 7d 71%) · gpt-6-astra · medium (jev; effort high not applied)')
-  expect(noticeText(twin, defaultsOf(twin), undefined, via, false)).toBe('crew:developer -> Codex (7d 38% used vs Claude 7d 71%) · gpt-6-astra · medium')
+test('the notice of a switched call names the type asked for and the crew mode, with Jev\'s effort marked or the default plain', () => {
+  const twin = twinFor({ subagentType: 'crew:developer' }, MODE_TWINS)!
+  const via = { requested: 'crew:developer' }
+  const jev: Routed = { decision: { effort: 'high' }, ms: 1 }
+  expect(noticeText(twin, jev, undefined, via)).toBe('crew:developer -> Codex (crew mode) · gpt-6-astra · high (jev)')
+  expect(noticeText(twin, jev, 'high', via)).toBe('crew:developer -> Codex (crew mode) · gpt-6-astra · medium (jev; effort high not applied)')
+  expect(noticeText(twin, defaultsOf(twin), undefined, via, false)).toBe('crew:developer -> Codex (crew mode) · gpt-6-astra · medium')
 })
 
 test('a call that was not switched keeps the notice it always had', () => {

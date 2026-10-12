@@ -28,7 +28,7 @@ test('fnv1a is the 32-bit FNV-1a in hex', () => {
 test('the record is fixed in shape, has an empty outcome and never the description', () => {
   const rec = decisionRecord(input)
   expect(rec).toMatchObject({
-    v: 3, agent: 'developer', requested: 'crew:developer', provider: 'claude', reason: null, quota: { claude: null, codex: null }, durationMs: 413, outcome: null,
+    v: 4, agent: 'developer', requested: 'crew:developer', provider: 'claude', durationMs: 413, outcome: null,
     applied: { effort: true }, jevModel: 'jev-1.13.0', descriptionHash: fnv1a('audit auth'),
   })
   expect(JSON.stringify(rec)).not.toContain('audit auth')
@@ -54,8 +54,6 @@ test('saveDecision never rejects and writes nothing without a home', async () =>
   expect(writes).toEqual([])
   await saveDecision({ ...io, write: async () => { throw new Error('x') } }, '/home/u', 'a1', decisionRecord(input))
   expect(logs).toEqual(['crew jev: decision not logged (no trusted home)', 'crew jev: decision not logged (write failed)'])
-  await saveDecision(io, undefined, 'a1', decisionRecord(input), 'quota')
-  expect(logs.at(-1)).toBe('crew quota: decision not logged (no trusted home)')
   await saveDecision(io, undefined, 'a1', decisionRecord(input), 'crew')
   expect(logs.at(-1)).toBe('crew: decision not logged (no trusted home)')
   await saveDecision({ ...io, write: async () => { throw new Error('x') } }, '/home/u', 'a1', decisionRecord(input), 'crew')
@@ -64,34 +62,14 @@ test('saveDecision never rejects and writes nothing without a home', async () =>
 
 test('a record keeps only effort choice, not model choice', () => {
   const rec = decisionRecord({ ...input, effortApplied: 'medium' })
-  expect(rec).toMatchObject({ v: 3, applied: { effort: false } })
+  expect(rec).toMatchObject({ v: 4, applied: { effort: false } })
 })
 
-test('a switched call records the type asked for, the provider, the reason and both readings as percentages and times only', () => {
-  const claude = { fiveHour: { percentUsed: 12.5, resetsAt: '2026-10-12T15:00:00.000Z' }, sevenDay: { percentUsed: 71 } }
-  const codex = { sevenDay: { percentUsed: 38, resetsAt: '2026-10-17T00:00:00.000Z' } }
-  const rec = decisionRecord({
-    ...input, agent: 'developer-codex', provider: 'codex', reason: '7d 38% used vs Claude 7d 71%', claude, codex,
-    effortApplied: 'medium',
-  })
-  expect(rec).toMatchObject({
-    v: 3, agent: 'developer-codex', requested: 'crew:developer', provider: 'codex', reason: '7d 38% used vs Claude 7d 71%',
-    quota: { claude, codex },
-  })
-})
-
-test('a reading is cut to percentages and reset times: other fields, odd times and non-numbers do not reach the record', () => {
-  const rec = decisionRecord({
-    ...input,
-    claude: { fiveHour: { percentUsed: 10, resetsAt: 'x'.repeat(41), token: 's3cret' }, sevenDay: { percentUsed: Number.NaN }, extra: 1 } as never,
-    codex: {} as never,
-  })
-  expect(rec.quota).toEqual({ claude: { fiveHour: { percentUsed: 10 } }, codex: null })
-  expect(JSON.stringify(rec)).not.toContain('s3cret')
-})
-
-test('a long reason is cut', () => {
-  expect(decisionRecord({ ...input, reason: 'r'.repeat(200) }).reason).toHaveLength(80)
+test('a call the codex mode moved records the type asked for and the provider, with no quota fields', () => {
+  const rec = decisionRecord({ ...input, agent: 'developer-codex', provider: 'codex', effortApplied: 'medium' })
+  expect(rec).toMatchObject({ v: 4, agent: 'developer-codex', requested: 'crew:developer', provider: 'codex' })
+  expect(Object.keys(rec)).not.toContain('reason')
+  expect(Object.keys(rec)).not.toContain('quota')
 })
 
 test('unknown applied configuration is null and not a claimed change from the default', () => {

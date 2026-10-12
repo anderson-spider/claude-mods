@@ -103,7 +103,7 @@ export const SPECIALISTS: readonly Specialist[] = [
  * The system prompt section that makes the main session the lead: it orchestrates and the specialists do the work.
  * The lead judges the kind of work, never its size; with Jev on, each call is sized for it.
  */
-export function leadSection(jev: boolean, quota = false): string {
+export function leadSection(jev: boolean): string {
   const sizing = jev
     ? "Jev sizes each call's effort; delegate by role, not task size."
     : 'Role defaults size each agent; delegate by role, not task size.'
@@ -118,9 +118,6 @@ export function leadSection(jev: boolean, quota = false): string {
     "A step is done only after crew:architect independently audits it, optionally rerunning tests; the developer's own commands and output are its report, not acceptance.",
     'Send failures to the same developer via SendMessage with the criterion and expected versus actual; after the fix, the architect reaudits before the step closes.',
     'For a plan step, start its description with the step id (for example `T3 contract suite`).',
-    ...(quota
-      ? ['With quota routing on, a call to a role that has a Codex twin may run on the twin when Codex has more weekly headroom; the task shows it.']
-      : []),
     'Git and pull requests stay with you.',
   ].join(' ')
 }
@@ -170,15 +167,13 @@ export function nativeCodexSpecs(models: Readonly<Partial<Record<string, string>
  * The lead's section for the `-codex` types, a section of its own (`leadSection` stays free of Codex). It is the same
  * text on every request, whatever the tools.
  */
-export function nativeCodexSection(specs: readonly Pick<Agent<string>, 'name' | 'model'>[], quota = false): string {
+export function nativeCodexSection(specs: readonly Pick<Agent<string>, 'name' | 'model'>[]): string {
   return [
     `Registered OpenAI Codex twins: ${specs.map(spec => `crew:${spec.name} (${spec.model})`).join(', ')}.`,
     'Use ordinary foreground/background Agent calls with the base role\'s tools and write lane; never pass `model` to a twin (it overrides the fixed model).',
     'Choose a twin for a user-requested Codex call or a second-family implementation or audit; otherwise use the Claude role.',
     "Only crew:architect or its registered -codex twin independently accepts a step; a developer twin's own commands and output are its report, not acceptance.",
     'Return failures to the same developer, including a -codex developer, then have the architect reaudit.',
-    ...(quota
-      ? ['With quota routing on, crew may run a plain crew:<role> call on its Codex twin when Codex has more weekly headroom than Claude; passing `model` keeps a call on Claude.']
-      : []),
+    'In the codex crew mode, crew runs a plain crew:<role> call on its registered twin and the task shows it; passing `model` keeps a call on Claude.',
   ].join(' ')
 }

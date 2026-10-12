@@ -149,8 +149,8 @@ test('unobserved suffix effort confirms only the model and does not invent an ef
   expect(confirmText('find code', p, { model: 'gpt-6-luna-20261012', effort: undefined }, 'jev', true)).toBe(
     'jev: find code: confirmed model gpt-6-luna-20261012; suffix high requested, effort unobserved',
   )
-  expect(confirmText('find code', p, { model: 'gpt-6-luna-mini', effort: undefined }, 'quota', true)).toBe(
-    'quota: find code: ran model gpt-6-luna-mini, not gpt-6-luna; suffix high requested, effort unobserved',
+  expect(confirmText('find code', p, { model: 'gpt-6-luna-mini', effort: undefined }, 'crew', true)).toBe(
+    'crew: find code: ran model gpt-6-luna-mini, not gpt-6-luna; suffix high requested, effort unobserved',
   )
   expect(confirmText('find code', p, { model: 'gpt-6-luna', effort: 'medium' }, 'jev', true)).toBe(
     'jev: find code: ran gpt-6-luna · medium, not gpt-6-luna/high',

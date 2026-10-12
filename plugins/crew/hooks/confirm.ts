@@ -12,8 +12,8 @@ export type Ran = { model: string; effort: string | undefined }
 
 /** One routed subagent waiting for its first step; `saved` is the spawn's own write, which the confirmation follows. */
 export type Pending = {
-  /** Jev's answer, quota's switch without an answer, or crew's medium fallback after a Jev failure. */
-  via?: 'jev' | 'quota' | 'crew'
+  /** Jev's answer, or crew's medium fallback after a Jev failure. */
+  via?: 'jev' | 'crew'
   /** Effort was requested in the spawn model suffix, not through the Claude effort book. */
   suffix?: boolean
   description: string
@@ -67,7 +67,7 @@ export function observedEffort(sent: { model?: unknown; effort?: unknown }, suff
 }
 
 /** The transcript line: a confirmation, a mismatch, or explicitly unobserved suffix effort. */
-export function confirmText(description: string, planned: Planned, ran: Ran, via: 'jev' | 'quota' | 'crew' = 'jev', suffix = false): string {
+export function confirmText(description: string, planned: Planned, ran: Ran, via: 'jev' | 'crew' = 'jev', suffix = false): string {
   // The gateway reports the id: only a well-formed one is written, as in the decision record.
   const shown = MODEL_ID.test(ran.model) ? ran.model : 'unknown model'
   if (suffix && ran.effort === undefined) {

@@ -8,7 +8,7 @@ Marketplace of [Claude Code](https://claude.com/claude-code) plugins made by and
 | --- | --- |
 | [chatgpt](plugins/chatgpt/README.md) | Lets Claude ask your logged-in ChatGPT, or have it generate an image, in terminal-browser, Claude in Chrome or the Claude desktop app's built-in browser, and saves the result locally. |
 | [codex-computer-use](plugins/codex-computer-use/README.md) | Routes native Mac app control through Codex computer use from the ChatGPT app instead of Claude's own computer use, asking before each new app. |
-| [crew](plugins/crew) | Registers five specialist subagents: `code-reader` and `research` on Haiku; `designer` and `developer` on Sonnet; `architect` on Opus. `jevKey` enables Jev effort routing. A gateway as `ANTHROPIC_BASE_URL` (such as Tailscale Aperture routing Codex models to an OmniRoute) enables fixed-model Codex twins; the `codexRemote` and `codexManagementKey` options enable automatic quota routing, so calls may go to OpenAI with or without Jev. No HUD or panel command. |
+| [crew](plugins/crew) | Registers five specialist subagents: `code-reader` and `research` on Haiku; `designer` and `developer` on Sonnet; `architect` on Opus. `jevKey` enables Jev effort routing. A gateway as `ANTHROPIC_BASE_URL` (such as Tailscale Aperture routing Codex models to an OmniRoute) enables fixed-model Codex twins; the `mode` option and `/crew-mode` switch plain calls to those twins (`codex`) or keep them on Claude (`claude`, the default), so calls may go to OpenAI with or without Jev. No HUD or panel command. |
 | [tailscale](plugins/tailscale/README.md) | Lets Claude query and modify your tailnet through the Tailscale API. |
 
 ## Install
@@ -37,7 +37,7 @@ Plugin READMEs cover setup, privacy and validation. [Privacy](docs/PRIVACY.md) a
 
 ## crew
 
-Five specialist subagents, optional Jev sizing, fixed-model Codex twins and automatic quota routing. See [the crew README](plugins/crew/README.md) for setup, delegation, privacy and verification.
+Five specialist subagents, optional Jev sizing, fixed-model Codex twins and a claude/codex crew mode. See [the crew README](plugins/crew/README.md) for setup, delegation, privacy and verification.
 
 ## Development
 
