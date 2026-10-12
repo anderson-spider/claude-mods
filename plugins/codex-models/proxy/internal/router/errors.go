@@ -8,7 +8,6 @@ import (
 
 	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/codex"
 	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/logx"
-	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/translate"
 )
 
 // anthropicError is an error in the shape Anthropic clients expect. The
@@ -40,16 +39,15 @@ func writeCodexError(w http.ResponseWriter, err error) {
 	// Never 401 toward Claude Code: it reads a 401 as its own Anthropic login
 	// expiring, refreshes it and asks for /login. A Codex login problem is a
 	// 403 that names the fix.
-	if errors.Is(err, codex.ErrNotAuthenticated) ||
-		errors.Is(err, codex.ErrLoginExpired) {
-		writeAnthropicError(w, http.StatusForbidden, "permission_error", err.Error())
+	if errors.Is(err, codex.ErrUnreachable) {
+		writeAnthropicError(w, http.StatusServiceUnavailable, "api_error", codex.ErrUnreachable.Error())
 		return
 	}
 
 	var apiErr *codex.APIError
 	if !errors.As(err, &apiErr) {
-		logx.Errorf("codex request failed: %v", err)
-		writeAnthropicError(w, http.StatusBadGateway, "api_error", err.Error())
+		logx.Errorf("codex remote request failed")
+		writeAnthropicError(w, http.StatusBadGateway, "api_error", "ccmproxy: Codex remote request failed")
 		return
 	}
 
@@ -66,14 +64,18 @@ func writeCodexError(w http.ResponseWriter, err error) {
 	status := apiErr.StatusCode
 	if status == http.StatusUnauthorized {
 		status = http.StatusForbidden
-		message = "the Codex backend refused the ChatGPT login; run `ccmproxy login codex` to sign in again: " + message
+		message = "the Codex remote refused the request; check its Codex account or API access: " + message
 	}
-	writeAnthropicError(w, status, codexErrorType(apiErr.StatusCode), message)
+	if status >= 300 && status < 400 {
+		status = http.StatusBadGateway
+		message = "ccmproxy: Codex remote redirect refused"
+	}
+	writeAnthropicError(w, status, codexErrorType(apiErr.StatusCode), CleanMessage(message))
 }
 
 // upstreamMessage is what the client is told of a Codex error body: its
 // error.message, else its detail, else the body itself, cleaned of control
-// characters and capped (translate.CleanMessage).
+// characters and capped (CleanMessage).
 func upstreamMessage(body []byte) string {
 	message := lookupText(body, "error", "message")
 	if message == "" {
@@ -82,7 +84,7 @@ func upstreamMessage(body []byte) string {
 	if message == "" {
 		message = string(body)
 	}
-	return translate.CleanMessage(message)
+	return CleanMessage(message)
 }
 
 // logToken keeps an upstream error type or code for the log only when it

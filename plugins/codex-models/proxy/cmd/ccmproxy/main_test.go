@@ -249,7 +249,8 @@ func TestModelsJSONPrintsThePickerRows(t *testing.T) {
 	}
 	registry := codex.NewRegistry()
 	options := registry.PickerOptions()
-	if len(rows) == 0 || len(rows) != len(options) {
+	wantIDs := []string{"gpt-6.1-sol", "gpt-6-astra", "gpt-6-luna"}
+	if len(rows) != len(wantIDs) || len(rows) != len(options) {
 		t.Fatalf("%d rows for %d picker options", len(rows), len(options))
 	}
 	for i, row := range rows {
@@ -262,7 +263,7 @@ func TestModelsJSONPrintsThePickerRows(t *testing.T) {
 				t.Fatalf("row %d %s: %v", i, key, err)
 			}
 		}
-		if id != options[i].Model || label != options[i].Label || description != options[i].Description || behavesAs != options[i].BehavesAs {
+		if id != wantIDs[i] || id != options[i].Model || label != options[i].Label || description != options[i].Description || behavesAs != options[i].BehavesAs {
 			t.Fatalf("row %d = %v, want %+v", i, row, options[i])
 		}
 		if id == "" || label == "" || !strings.HasPrefix(behavesAs, "claude-") {
@@ -275,52 +276,5 @@ func TestModelsJSONAndSettingsJSONAreExclusive(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "absent.json")
 	if err := run([]string{"models", "--json", "--settings-json", "--config", path}); err == nil {
 		t.Fatal("--json with --settings-json must be refused")
-	}
-}
-
-// linkedCredentialConfig writes a config whose codex.auth_file is the Codex CLI's
-// login (under a CODEX_HOME of its own) and returns the config and CLI paths.
-func linkedCredentialConfig(t *testing.T) (configPath, targetPath string) {
-	t.Helper()
-	home := filepath.Join(t.TempDir(), "auth")
-	if err := os.MkdirAll(home, 0o700); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	targetPath = filepath.Join(home, "auth.json")
-	body := `{"access_token":"at","refresh_token":"rt"}`
-	if err := os.WriteFile(targetPath, []byte(body), 0o600); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-	config, err := json.Marshal(map[string]any{
-		"listen_http":  "127.0.0.1:1",
-		"auth_token":   testToken,
-		"session_salt": strings.Repeat("ab", 32),
-		"auth_dir":     home,
-		"codex":        map[string]any{},
-	})
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-	configPath = filepath.Join(t.TempDir(), "config.json")
-	if err := os.WriteFile(configPath, config, 0o600); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-	link := filepath.Join(home, "codex.json")
-	if err := os.Symlink(targetPath, link); err != nil {
-		t.Fatal(err)
-	}
-	return configPath, link
-}
-
-func TestStatusNamesTheRefusedCredentialLink(t *testing.T) {
-	configPath, targetPath := linkedCredentialConfig(t)
-
-	out := captureStdout(t, func() error { return run([]string{"status", "--config", configPath}) })
-	if strings.Contains(out, "not signed in") {
-		t.Fatalf("status hid the refusal behind \"not signed in\":\n%s", out)
-	}
-	if !strings.Contains(out, "codex           refused: ") || !strings.Contains(out, targetPath) ||
-		!strings.Contains(out, "symlink") {
-		t.Fatalf("status does not give the refusal reason:\n%s", out)
 	}
 }

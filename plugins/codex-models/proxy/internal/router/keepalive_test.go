@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"runtime"
@@ -20,15 +22,21 @@ const pingTestInterval = 20 * time.Millisecond
 // writes a long input.
 func pausedToolCallBackend(short string, pause time.Duration) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeSSE(w, `{"type":"response.created","response":{"id":"resp_tool","model":"gpt-6-luna"}}`)
-		writeSSE(w, `{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_77","name":"`+short+`"}}`)
+		body, _ := io.ReadAll(r.Body)
+		if !readHead(body).Stream {
+			time.Sleep(pause)
+			fmt.Fprint(w, `{"type":"message","content":[{"type":"tool_use","id":"call_77","name":"`+short+`","input":{"answer":"done"}}],"stop_reason":"tool_use"}`)
+			return
+		}
+
+		writeSSE(w, `{"type":"message_start","message":{"id":"resp_tool","model":"gpt-6-luna"}}`)
+		writeSSE(w, `{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"call_77","name":"`+short+`","input":{}}}`)
 		time.Sleep(pause)
-		writeSSE(w, `{"type":"response.function_call_arguments.delta","output_index":0,"item_id":"fc_1","delta":"{\"answer\":"}`)
+		writeSSE(w, `{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"answer\":\"done\"}"}}`)
 		time.Sleep(pause)
-		writeSSE(w, `{"type":"response.function_call_arguments.delta","output_index":0,"item_id":"fc_1","delta":"\"done\"}"}`)
-		time.Sleep(pause)
-		writeSSE(w, `{"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_77","name":"`+short+`","arguments":"{\"answer\":\"done\"}"}}`)
-		writeSSE(w, `{"type":"response.completed","response":{"id":"resp_tool","usage":{"input_tokens":10,"output_tokens":5}}}`)
+		writeSSE(w, `{"type":"content_block_stop","index":0}`)
+		writeSSE(w, `{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":5}}`)
+		writeSSE(w, `{"type":"message_stop"}`)
 	}
 }
 
@@ -107,17 +115,17 @@ func TestNoPingOutsideTheMessage(t *testing.T) {
 	cases := map[string]http.HandlerFunc{
 		"before message_start": func(w http.ResponseWriter, r *http.Request) {
 			time.Sleep(stall)
-			writeSSE(w, `{"type":"response.created","response":{"id":"r"}}`)
-			writeSSE(w, `{"type":"response.completed","response":{"id":"r","usage":{}}}`)
+			writeSSE(w, `{"type":"message_start","message":{"id":"r"}}`)
+			writeSSE(w, `{"type":"message_stop"}`)
 		},
 		"after message_stop": func(w http.ResponseWriter, r *http.Request) {
-			writeSSE(w, `{"type":"response.created","response":{"id":"r"}}`)
-			writeSSE(w, `{"type":"response.output_text.delta","delta":"Hi"}`)
-			writeSSE(w, `{"type":"response.completed","response":{"id":"r","usage":{}}}`)
+			writeSSE(w, `{"type":"message_start","message":{"id":"r"}}`)
+			writeSSE(w, `{"type":"content_block_delta","delta":{"type":"text_delta","text":"Hi"}}`)
+			writeSSE(w, `{"type":"message_stop"}`)
 			time.Sleep(stall)
 		},
 		"after an error": func(w http.ResponseWriter, r *http.Request) {
-			writeSSE(w, `{"type":"response.created","response":{"id":"r"}}`)
+			writeSSE(w, `{"type":"message_start","message":{"id":"r"}}`)
 			writeSSE(w, `{"type":"error","error":{"type":"server_error","message":"boom"}}`)
 			time.Sleep(stall)
 		},
@@ -162,8 +170,8 @@ func (s *streamRecorder) String() string {
 
 func TestACancelledClientStopsThePings(t *testing.T) {
 	h := newHarness(t, nil, func(w http.ResponseWriter, r *http.Request) {
-		writeSSE(w, `{"type":"response.created","response":{"id":"r"}}`)
-		writeSSE(w, `{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"StructuredOutput"}}`)
+		writeSSE(w, `{"type":"message_start","message":{"id":"r"}}`)
+		writeSSE(w, `{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"call_1","name":"StructuredOutput","input":{}}}`)
 		<-r.Context().Done()
 	}, true)
 	h.router.pingInterval = pingTestInterval
@@ -306,3 +314,5 @@ func (b *safeBuffer) String() string {
 	defer b.mu.Unlock()
 	return b.buf.String()
 }
+
+func toolCallBackend(short string) http.HandlerFunc { return pausedToolCallBackend(short, 0) }

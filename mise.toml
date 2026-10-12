@@ -86,6 +86,52 @@ fi
 description = "Refresh the marketplace and update every installed plugin from it, in its own scope"
 run = "node scripts/update-plugins.mjs"
 
+# The proxy is reinstalled from the installed plugin's own folder, so its version matches the plugin the sessions load.
+[tasks."update:all"]
+description = "From the main checkout: pull main, update every installed plugin, reinstall the codex-models proxy (CLIPROXY_URL/CLIPROXY_MGMT_KEY from the environment, or the key on stdin)"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+if [ "$(git rev-parse --path-format=absolute --git-dir)" != "$(git rev-parse --path-format=absolute --git-common-dir)" ]; then
+  echo "run update:all from the main checkout, not a worktree" >&2
+  exit 1
+fi
+if [ -n "$(git status --porcelain)" ]; then
+  echo "the working tree has changes; commit or stash them first" >&2
+  exit 1
+fi
+# A remote URL without its key: read the key from stdin (hidden on a terminal), so it never enters argv.
+if [ -n "${CLIPROXY_URL:-}" ] && [ -z "${CLIPROXY_MGMT_KEY:-}" ]; then
+  if [ -t 0 ]; then
+    read -rsp "CLIProxyAPI management key: " CLIPROXY_MGMT_KEY
+    echo
+  else
+    IFS= read -r CLIPROXY_MGMT_KEY || true
+  fi
+  [ -n "$CLIPROXY_MGMT_KEY" ] || { echo "no management key given" >&2; exit 1; }
+  export CLIPROXY_MGMT_KEY
+fi
+echo "==> main"
+git switch main
+git pull --ff-only
+echo "==> plugins"
+mise run plugins:update
+installed=$(claude plugin list --json | node -e '
+  const rows = JSON.parse(require("fs").readFileSync(0, "utf8")).filter(p => p.id.endsWith("@spider-claude-mods"))
+  for (const p of rows) console.error(`${p.id} ${p.version} (${p.scope}${p.enabled ? "" : ", disabled"})`)
+  const cm = rows.find(p => p.id === "codex-models@spider-claude-mods")
+  if (cm) console.log(cm.installPath)
+')
+if [ -n "$installed" ]; then
+  echo "==> codex-models proxy"
+  "$installed/install.sh" --check
+  "$installed/install.sh"
+else
+  echo "==> codex-models proxy: skipped, the plugin is not installed"
+fi
+echo "done: run /reload-plugins in running sessions, or start a new one (crew twins register only in a new session)"
+'''
+
 # Claude Code writes plugins/*/.claude-plugin/types/ only when an interactive session loads a plugin from its folder,
 # so this opens one on a pseudo-terminal with every plugin and exits once all of them have their typings.
 [tasks."plugins:types"]

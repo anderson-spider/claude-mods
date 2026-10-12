@@ -6,13 +6,14 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 )
 
-func TestCodexErrorMapping(t *testing.T) {
-	e := loggedIn(t, opts{})
+func TestRemoteErrorMapping(t *testing.T) {
+	e := withAccount(t, opts{})
 	cases := []struct {
-		codex      int
+		remote     int
 		wantStatus int
 		wantType   string
 	}{
@@ -30,27 +31,23 @@ func TestCodexErrorMapping(t *testing.T) {
 	}
 	for _, stream := range []bool{true, false} {
 		for _, c := range cases {
-			name := strings.Join([]string{itoa3(c.codex), map[bool]string{true: "stream", false: "json"}[stream]}, "/")
+			name := strings.Join([]string{itoa3(c.remote), map[bool]string{true: "stream", false: "json"}[stream]}, "/")
 			t.Run(name, func(t *testing.T) {
 				e.cdx.set(func(w http.ResponseWriter, _ *http.Request, _ rec) {
 					w.Header().Set("Content-Type", "application/json")
-					w.WriteHeader(c.codex)
-					_, _ = w.Write([]byte(`{"error":{"message":"  the  backend\n\tsaid   no ","type":"some_type","code":"some_code"}}`))
+					w.WriteHeader(c.remote)
+					_, _ = w.Write([]byte(`{"type":"error","error":{"message":"  the  backend\n\tsaid   no ","type":"some_type"}}`))
 				})
 				r := e.post("/v1/messages", claudeReq("gpt-6-astra", stream, nil))
 				if r.Status != c.wantStatus {
 					t.Fatalf("status = %d, want %d: %s", r.Status, c.wantStatus, r.Body)
 				}
-				if r.Status == 401 {
-					t.Fatal("a 401 reached the client")
-				}
 				kind, msg := r.errInfo(t)
 				if kind != c.wantType {
 					t.Fatalf("error type = %q, want %q", kind, c.wantType)
 				}
-				if c.codex == 401 {
-					if !strings.HasPrefix(msg, "the Codex backend refused the ChatGPT login; run `ccmproxy login codex` to sign in again: ") ||
-						!strings.HasSuffix(msg, "the backend said no") {
+				if c.remote == 401 {
+					if !strings.HasPrefix(msg, "the Codex remote refused the request") || !strings.HasSuffix(msg, "the backend said no") {
 						t.Fatalf("401 message = %q", msg)
 					}
 				} else if msg != "the backend said no" {
@@ -65,8 +62,8 @@ func itoa3(n int) string {
 	return string([]byte{byte('0' + n/100), byte('0' + n/10%10), byte('0' + n%10)})
 }
 
-func TestCodexErrorMessageShapes(t *testing.T) {
-	e := loggedIn(t, opts{})
+func TestRemoteErrorMessageShapes(t *testing.T) {
+	e := withAccount(t, opts{})
 	reply := func(status int, body string) resp {
 		e.cdx.set(func(w http.ResponseWriter, _ *http.Request, _ rec) {
 			w.WriteHeader(status)
@@ -121,6 +118,16 @@ func TestCodexErrorMessageShapes(t *testing.T) {
 			t.Fatal("the redirect was followed")
 		}
 	})
+	t.Run("an error answered with 200 keeps its type", func(t *testing.T) {
+		e.cdx.set(func(w http.ResponseWriter, _ *http.Request, _ rec) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"type":"error","error":{"type":"overloaded_error","message":"busy"}}`))
+		})
+		r := e.post("/v1/messages", claudeReq("gpt-6-astra", false, nil))
+		if kind, _ := r.errInfo(t); r.Status != 529 || kind != "overloaded_error" {
+			t.Fatalf("status = %d, type %q: %s", r.Status, kind, r.Body)
+		}
+	})
 	t.Run("invalid request body", func(t *testing.T) {
 		r := e.post("/v1/messages", []byte(`{"model":"gpt-6-astra","messages":`))
 		// The model cannot be read, so it is treated as a Claude model.
@@ -130,19 +137,34 @@ func TestCodexErrorMessageShapes(t *testing.T) {
 	})
 }
 
-func TestCodexWithoutALogin(t *testing.T) {
-	e := newEnv(t, opts{})
-	for _, stream := range []bool{true, false} {
-		r := e.post("/v1/messages", claudeReq("gpt-6-astra", stream, nil))
-		if r.Status != http.StatusForbidden {
-			t.Fatalf("stream=%v: status = %d", stream, r.Status)
+// Without a remote, or with the remote down, a Codex request fails fast with
+// 503 api_error and nothing reaches Anthropic.
+func TestRemoteMissingOrDown(t *testing.T) {
+	t.Run("no remote configured", func(t *testing.T) {
+		e := newEnv(t, opts{noRemote: true})
+		for _, stream := range []bool{true, false} {
+			r := e.post("/v1/messages", claudeReq("gpt-6-astra", stream, nil))
+			if kind, _ := r.errInfo(t); r.Status != http.StatusServiceUnavailable || kind != "api_error" {
+				t.Fatalf("stream=%v: %d %s", stream, r.Status, r.Body)
+			}
 		}
-		kind, msg := r.errInfo(t)
-		if kind != "permission_error" || !strings.Contains(msg, "ccmproxy login codex") {
-			t.Fatalf("got %s %q", kind, msg)
+		if e.anth.count() != 0 {
+			t.Fatal("a Codex request went to Anthropic")
 		}
-	}
-	if e.cdx.count() != 0 {
-		t.Fatal("Codex was called without a login")
-	}
+	})
+	t.Run("remote down", func(t *testing.T) {
+		e := withAccount(t, opts{})
+		e.cdx.Close()
+		start := time.Now()
+		r := e.post("/v1/messages", claudeReq("gpt-6-astra", true, nil))
+		if kind, _ := r.errInfo(t); r.Status != http.StatusServiceUnavailable || kind != "api_error" {
+			t.Fatalf("%d %s", r.Status, r.Body)
+		}
+		if d := time.Since(start); d > 5*time.Second {
+			t.Fatalf("the failure took %v", d)
+		}
+		if e.anth.count() != 0 {
+			t.Fatal("a Codex request went to Anthropic")
+		}
+	})
 }

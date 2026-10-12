@@ -1,6 +1,5 @@
-// Package jsonread holds the JSON reading rules that routing
-// (internal/router) and translation (internal/translate) share, so both read
-// a request the same way.
+// Package jsonread holds the JSON reading rules used by routing, effort
+// resolution and controlled-field rewrites.
 //
 // A document is checked for syntax once; after that a field of the wrong
 // type reads as if it were absent. encoding/json already keeps decoding the

@@ -57,9 +57,9 @@ func TestGzippedCodexRequestIsRouted(t *testing.T) {
 	// Claude Code gzips request bodies once they grow, which is most real
 	// sessions; an unread model name would send them all to Anthropic.
 	h := newHarness(t, nil, func(w http.ResponseWriter, r *http.Request) {
-		writeSSE(w, `{"type":"response.created","response":{"id":"resp_gz"}}`)
-		writeSSE(w, `{"type":"response.output_text.delta","delta":"Hi"}`)
-		writeSSE(w, `{"type":"response.completed","response":{"id":"resp_gz","usage":{}}}`)
+		writeSSE(w, `{"type":"message_start","message":{"id":"msg_gz"}}`)
+		writeSSE(w, `{"type":"content_block_delta","delta":{"type":"text_delta","text":"Hi"}}`)
+		writeSSE(w, `{"type":"message_stop"}`)
 	}, true)
 
 	payload := `{"model":"gpt-6-luna-high","max_tokens":1024,"stream":true,"messages":[{"role":"user","content":"` +
@@ -69,17 +69,17 @@ func TestGzippedCodexRequestIsRouted(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
 	}
-	if h.codex.path != "/responses" {
+	if h.codex.path != "/v1/messages" {
 		t.Fatalf("the request did not reach the Codex backend (anthropic saw %q)", h.anthropic.path)
 	}
 	if h.anthropic.method != "" {
 		t.Fatal("a gzipped request for an added model must not go to Anthropic")
 	}
 	upstream := jsontest.Parse(h.codex.body)
-	if got := upstream.Get("model").String(); got != "gpt-6-luna" {
+	if got := upstream.Get("model").String(); got != "gpt-6-luna(high)" {
 		t.Fatalf("upstream model = %q", got)
 	}
-	if got := upstream.Get("reasoning.effort").String(); got != "high" {
+	if got := upstream.Get("model").String(); got != "gpt-6-luna(high)" {
 		t.Fatalf("upstream effort = %q", got)
 	}
 	if !strings.Contains(rec.Body.String(), "event: message_start") {
@@ -95,7 +95,7 @@ func TestDeflatedCodexRequestIsRouted(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
 	}
-	if h.codex.path != "/responses" {
+	if h.codex.path != "/v1/messages" {
 		t.Fatal("a deflated request for an added model was not routed to Codex")
 	}
 }

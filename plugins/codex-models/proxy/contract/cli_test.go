@@ -22,7 +22,6 @@ func baseEnviron(home string) []string {
 		"HOME=" + home,
 		"TMPDIR=" + home,
 		"CCMPROXY_HOME=" + home,
-		"CODEX_HOME=" + filepath.Join(home, "codex-cli"),
 	}
 }
 
@@ -251,7 +250,7 @@ func TestCLIStatusAndHelp(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d: %s", code, out.stderr)
 	}
-	for _, want := range []string{"version         contract", "http listener   127.0.0.1:34567", "auth token      set", "session salt    set", "codex           not signed in"} {
+	for _, want := range []string{"version         contract", "http listener   127.0.0.1:34567", "auth token      set", "session salt    set", "codex remote    \n", "management key  missing"} {
 		if !strings.Contains(out.stdout, want) {
 			t.Fatalf("status lacks %q:\n%s", want, out.stdout)
 		}
@@ -288,7 +287,7 @@ func TestCLIConfigInitCreatesTheFile(t *testing.T) {
 	if m := mode(t, home); m != 0o700 {
 		t.Fatalf("config dir mode = %o", m)
 	}
-	cfg := readLogin(t, path)
+	cfg := readConfig(t, path)
 	if !hex64.MatchString(cfg["auth_token"].(string)) || !hex64.MatchString(cfg["session_salt"].(string)) || cfg["auth_token"] == cfg["session_salt"] {
 		t.Fatalf("secrets = %v / %v", cfg["auth_token"], cfg["session_salt"])
 	}
@@ -299,7 +298,7 @@ func TestCLIConfigInitCreatesTheFile(t *testing.T) {
 		t.Fatalf("upstream = %v", cfg["upstream"])
 	}
 	cdx := cfg["codex"].(map[string]any)
-	if cdx["base_url"] != "https://chatgpt.com/backend-api/codex" || len(cdx) != 1 {
+	if len(cdx) != 0 {
 		t.Fatalf("codex defaults = %v", cdx)
 	}
 	// The file it wrote is a working config.
@@ -317,7 +316,7 @@ func TestCLIConfigInitKeepsWhatIsThere(t *testing.T) {
 		"auth_token":  "keepme-" + strings.Repeat("t", 30),
 		"custom":      map[string]any{"x": []any{1, 2}},
 		"log_level":   "warn",
-		"codex":       map[string]any{"callback_port": 1455, "future_key": "v", "models": []string{"gpt-6-luna"}},
+		"codex":       map[string]any{"remote": "https://codex.example.net", "future_key": "v"},
 	}, 0o644)
 
 	out, code := runCLI(t, home, nil, "config", "init")
@@ -333,7 +332,7 @@ func TestCLIConfigInitKeepsWhatIsThere(t *testing.T) {
 	if m := mode(t, path); m != 0o600 {
 		t.Fatalf("mode = %o", m)
 	}
-	cfg := readLogin(t, path)
+	cfg := readConfig(t, path)
 	if cfg["auth_token"] != "keepme-"+strings.Repeat("t", 30) || cfg["listen_http"] != "127.0.0.1:40000" || cfg["log_level"] != "warn" {
 		t.Fatalf("existing values changed: %v", cfg)
 	}
@@ -343,7 +342,7 @@ func TestCLIConfigInitKeepsWhatIsThere(t *testing.T) {
 	if b, _ := json.Marshal(cfg["custom"]); string(b) != `{"x":[1,2]}` {
 		t.Fatalf("unknown key changed: %s", b)
 	}
-	if cdx := cfg["codex"].(map[string]any); cdx["future_key"] != "v" || cdx["callback_port"].(float64) != 1455 {
+	if cdx := cfg["codex"].(map[string]any); cdx["future_key"] != "v" || cdx["remote"] != "https://codex.example.net" {
 		t.Fatalf("codex block changed: %v", cdx)
 	}
 
@@ -361,7 +360,7 @@ func TestCLIConfigInitKeepsWhatIsThere(t *testing.T) {
 	if code != 0 || !strings.Contains(out.stdout, "Added auth_token to ") {
 		t.Fatalf("empty auth_token: exit %d %q", code, out.stdout)
 	}
-	if cfg := readLogin(t, path); !hex64.MatchString(cfg["auth_token"].(string)) || cfg["session_salt"] != cliSalt {
+	if cfg := readConfig(t, path); !hex64.MatchString(cfg["auth_token"].(string)) || cfg["session_salt"] != cliSalt {
 		t.Fatalf("config = %v", cfg)
 	}
 
@@ -406,7 +405,7 @@ func TestCLIConfigInitPreservesUppercaseSecrets(t *testing.T) {
 		if !bytes.Equal(before, after) {
 			t.Fatal("init changed existing secrets or added case-variant aliases")
 		}
-		cfg := readLogin(t, path)
+		cfg := readConfig(t, path)
 		if len(cfg) != 3 || cfg["AUTH_TOKEN"] != cliToken || cfg["SESSION_SALT"] != cliSalt {
 			t.Fatal("init did not preserve uppercase secrets")
 		}
@@ -445,7 +444,7 @@ func TestCLIConfigInitAppendsSaltWithoutChangingTheEffectiveToken(t *testing.T) 
 			if code != 0 || envAfter.stdout != envBefore.stdout {
 				t.Fatalf("init changed the effective environment: exit %d", code)
 			}
-			cfg := readLogin(t, path)
+			cfg := readConfig(t, path)
 			salt, ok := cfg["session_salt"].(string)
 			if !ok || !hex64.MatchString(salt) {
 				t.Fatal("init did not append a generated salt")
@@ -493,9 +492,10 @@ func TestCLIRefusesUnsafeDestinations(t *testing.T) {
 	}{
 		{"other upstream", map[string]any{"upstream": "https://example.com"}, "is not allowed"},
 		{"loopback upstream", map[string]any{"upstream": "http://127.0.0.1:9"}, "is not allowed"},
-		{"http codex base_url", map[string]any{"codex": map[string]any{"base_url": "http://chatgpt.com/backend-api/codex"}}, "must be an https:// URL"},
-		{"codex base_url with a query", map[string]any{"codex": map[string]any{"base_url": "https://chatgpt.com/x?a=1"}}, "must not carry a query"},
-		{"codex base_url with credentials", map[string]any{"codex": map[string]any{"base_url": "https://u:p@chatgpt.com/x"}}, "credentials in the URL"},
+		{"http codex remote", map[string]any{"codex": map[string]any{"remote": "http://codex.example.net"}}, "must be an https:// URL"},
+		{"codex remote with a query", map[string]any{"codex": map[string]any{"remote": "https://codex.example.net/x?a=1"}}, "must not carry a query"},
+		{"codex remote with credentials", map[string]any{"codex": map[string]any{"remote": "https://u:p@codex.example.net"}}, "credentials in the URL"},
+		{"loopback codex remote", map[string]any{"codex": map[string]any{"remote": "https://127.0.0.1:8317"}}, "must not use a loopback"},
 		{"listen on all interfaces", map[string]any{"listen_http": "0.0.0.0:8081"}, "not a loopback address"},
 		{"listen on a name", map[string]any{"listen_http": "localhost:8081"}, "literal loopback IP"},
 		{"listen without a port", map[string]any{"listen_http": "127.0.0.1"}, "listen_http"},
@@ -522,4 +522,22 @@ func TestCLIServeNeedsSecrets(t *testing.T) {
 	if code != 1 || !strings.Contains(out.stderr, "no auth_token or session_salt") {
 		t.Fatalf("exit %d, stderr %q", code, out.stderr)
 	}
+}
+
+// readConfig decodes the JSON object at path.
+func readConfig(t *testing.T, path string) map[string]any {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	must(t, err)
+	var v map[string]any
+	must(t, json.Unmarshal(data, &v))
+	return v
+}
+
+// mode returns the permission bits of path.
+func mode(t *testing.T, path string) os.FileMode {
+	t.Helper()
+	info, err := os.Stat(path)
+	must(t, err)
+	return info.Mode().Perm()
 }

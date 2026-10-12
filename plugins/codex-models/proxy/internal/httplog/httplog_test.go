@@ -235,7 +235,7 @@ func TestLogPreservesRequestHostInTheURL(t *testing.T) {
 // TestLogSupportsResponseControllerFlush is the regression this package
 // exists to not cause: the streaming Codex path calls
 // http.NewResponseController(w).Flush() to push SSE chunks to the client as
-// they are translated. If Log's wrapper does not expose the underlying
+// they are relayed. If Log's wrapper does not expose the underlying
 // ResponseWriter via Unwrap, that call silently fails and streaming breaks.
 func TestLogSupportsResponseControllerFlush(t *testing.T) {
 	var flushErr error

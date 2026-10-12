@@ -2,14 +2,15 @@ package router
 
 import (
 	"encoding/json"
+	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/jsontest"
+	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/logx"
 	"net/http"
 	"regexp"
 	"strings"
 	"testing"
-
-	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/jsontest"
-	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/logx"
 )
+
+var uuidV4 = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 
 func TestEffortPrecedence(t *testing.T) {
 	// Claude Code sends a subagent's own effort as output_config.effort next
@@ -41,13 +42,12 @@ func TestEffortPrecedence(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Fatalf("%s: status = %d: %s", tc.name, rec.Code, rec.Body.String())
 		}
-		if got := h.codexUpstream(t).Get("reasoning.effort").String(); got != tc.want {
+		resolution, _ := h.router.registry.Resolve(string(readHead([]byte(tc.body)).Model))
+		if got := h.codexUpstream(t).Get("model").String(); got != resolution.Model.ID+"("+tc.want+")" {
 			t.Fatalf("%s: reasoning.effort = %q, want %q", tc.name, got, tc.want)
 		}
 	}
 }
-
-var uuidV4 = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 
 func TestUserIDIsHashedBeforeItReachesCodex(t *testing.T) {
 	const salt = "5a175a175a175a175a175a175a175a175a175a175a175a175a175a175a175a17"
@@ -63,7 +63,7 @@ func TestUserIDIsHashedBeforeItReachesCodex(t *testing.T) {
 		if rec := h.do(t, http.MethodPost, "/v1/messages", body); rec.Code != http.StatusOK {
 			t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
 		}
-		return h.codex.header.Get("Session_id"), h
+		return lookupText([]byte(h.codex.body), "metadata", "user_id"), h
 	}
 
 	first, h := send(salt, rawID)
@@ -97,8 +97,8 @@ func TestUserIDIsHashedBeforeItReachesCodex(t *testing.T) {
 		t.Fatal("another salt gave the same session id")
 	}
 
-	a, _ := send(salt, "")
-	b, _ := send(salt, "")
+	a := codexSessionID(salt, "")
+	b := codexSessionID(salt, "")
 	if !uuidV4.MatchString(a) || a == b {
 		t.Fatalf("without a user_id: %q and %q, want two random UUIDs", a, b)
 	}
@@ -116,115 +116,6 @@ func jsonString(s string) string {
 	}
 	b.WriteByte('"')
 	return b.String()
-}
-
-// toolCallBackend answers with one function call to a shortened tool name.
-func toolCallBackend(short string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		writeSSE(w, `{"type":"response.created","response":{"id":"resp_tool","model":"gpt-6-luna"}}`)
-		writeSSE(w, `{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_77","name":"`+short+`"}}`)
-		writeSSE(w, `{"type":"response.function_call_arguments.delta","output_index":0,"item_id":"fc_1","delta":"{\"answer\":"}`)
-		writeSSE(w, `{"type":"response.function_call_arguments.delta","output_index":0,"item_id":"fc_1","delta":"\"done\"}"}`)
-		writeSSE(w, `{"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_77","name":"`+short+`","arguments":"{\"answer\":\"done\"}"}}`)
-		writeSSE(w, `{"type":"response.completed","response":{"id":"resp_tool","usage":{"input_tokens":10,"output_tokens":5}}}`)
-	}
-}
-
-// A subagent answers its parent through a tool call (T0b), so tool_use has to
-// survive both answer shapes and come back on the next turn.
-func TestToolUseRoundTripsInBothModes(t *testing.T) {
-	const tool = "StructuredOutput"
-	request := func(stream bool) string {
-		s := "false"
-		if stream {
-			s = "true"
-		}
-		return `{"model":"gpt-6-luna","max_tokens":300,"stream":` + s + `,
-			"messages":[{"role":"user","content":"report back"}],
-			"tools":[{"name":"` + tool + `","input_schema":{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"]}}]}`
-	}
-
-	// Streaming: the SSE carries a tool_use block with the arguments.
-	h := newHarness(t, nil, toolCallBackend(tool), true)
-	rec := h.do(t, http.MethodPost, "/v1/messages", request(true))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("stream status = %d: %s", rec.Code, rec.Body.String())
-	}
-	var start, stop jsontest.Result
-	var arguments strings.Builder
-	for _, line := range strings.Split(rec.Body.String(), "\n") {
-		data, ok := strings.CutPrefix(line, "data: ")
-		if !ok {
-			continue
-		}
-		event := jsontest.Parse(data)
-		switch event.Get("type").String() {
-		case "content_block_start":
-			start = event
-		case "content_block_delta":
-			arguments.WriteString(event.Get("delta.partial_json").String())
-		case "message_delta":
-			stop = event
-		}
-	}
-	if start.Get("content_block.type").String() != "tool_use" || start.Get("content_block.name").String() != tool ||
-		start.Get("content_block.id").String() != "call_77" {
-		t.Fatalf("content_block_start = %s", start.Raw)
-	}
-	if arguments.String() != `{"answer":"done"}` {
-		t.Fatalf("streamed arguments = %q", arguments.String())
-	}
-	if stop.Get("delta.stop_reason").String() != "tool_use" {
-		t.Fatalf("message_delta = %s", stop.Raw)
-	}
-
-	// JSON: the assembled message carries the same block.
-	h = newHarness(t, nil, toolCallBackend(tool), true)
-	rec = h.do(t, http.MethodPost, "/v1/messages", request(false))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("json status = %d: %s", rec.Code, rec.Body.String())
-	}
-	message := jsontest.Parse(rec.Body.String())
-	block := message.Get("content.0")
-	if message.Get("content.#").Int() != 1 || block.Get("type").String() != "tool_use" ||
-		block.Get("name").String() != tool || block.Get("id").String() != "call_77" ||
-		block.Get("input.answer").String() != "done" {
-		t.Fatalf("message = %s", rec.Body.String())
-	}
-	if message.Get("stop_reason").String() != "tool_use" || message.Get("model").String() != "gpt-6-luna" {
-		t.Fatalf("message = %s", rec.Body.String())
-	}
-
-	// Next turn: the tool_use and its result go back to Codex as a
-	// function_call and its output, on the same call id.
-	h = newHarness(t, nil, nil, true)
-	next := `{"model":"gpt-6-luna","max_tokens":300,"stream":true,
-		"messages":[
-			{"role":"user","content":"report back"},
-			{"role":"assistant","content":[` + block.Raw + `]},
-			{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_77","content":"ok"}]}
-		],
-		"tools":[{"name":"` + tool + `","input_schema":{"type":"object","properties":{"answer":{"type":"string"}}}}]}`
-	if rec := h.do(t, http.MethodPost, "/v1/messages", next); rec.Code != http.StatusOK {
-		t.Fatalf("next turn status = %d: %s", rec.Code, rec.Body.String())
-	}
-	input := h.codexUpstream(t).Get("input").Array()
-	var call, output jsontest.Result
-	for _, item := range input {
-		switch item.Get("type").String() {
-		case "function_call":
-			call = item
-		case "function_call_output":
-			output = item
-		}
-	}
-	if call.Get("call_id").String() != "call_77" || call.Get("name").String() != tool ||
-		jsontest.Parse(call.Get("arguments").String()).Get("answer").String() != "done" {
-		t.Fatalf("function_call = %s", call.Raw)
-	}
-	if output.Get("call_id").String() != "call_77" {
-		t.Fatalf("function_call_output = %s", output.Raw)
-	}
 }
 
 func backendStatus(status int, body string) http.HandlerFunc {
@@ -268,14 +159,13 @@ func TestCodexBackendErrorsUseAnthropicTypes(t *testing.T) {
 			if !strings.Contains(message, "upstream says no") {
 				t.Fatalf("%s: error.message = %q", label, message)
 			}
-			if tc.status == 401 && !strings.Contains(message, "ccmproxy login") {
-				t.Fatalf("%s: error.message = %q, want it to name `ccmproxy login`", label, message)
+			if tc.status == 401 && (!strings.Contains(message, "Codex remote") || strings.Contains(message, "ccmproxy login")) {
+				t.Fatalf("%s: error.message = %q, want guidance for the remote account", label, message)
 			}
 		}
 	}
 }
 
-// sseEvents splits an Anthropic SSE body into its event names and payloads.
 func sseEvents(body string) (names []string, data []jsontest.Result) {
 	for _, block := range strings.Split(body, "\n\n") {
 		var name string
@@ -290,88 +180,6 @@ func sseEvents(body string) (names []string, data []jsontest.Result) {
 		}
 	}
 	return names, data
-}
-
-func TestMidStreamErrorsUseAnthropicTypesAndEndTheStream(t *testing.T) {
-	cases := []struct {
-		name     string
-		event    string
-		wantType string
-		wantCode int
-	}{
-		{"server_error event", `{"type":"error","error":{"type":"server_error","message":"boom"}}`, "api_error", 502},
-		{"overloaded event", `{"type":"error","error":{"type":"overloaded_error","message":"boom"}}`, "overloaded_error", 529},
-		{"authentication event", `{"type":"error","error":{"type":"authentication_error","message":"boom"}}`, "permission_error", 403},
-		{"code only", `{"type":"error","code":"rate_limit_exceeded","message":"boom"}`, "rate_limit_error", 429},
-		{"failed with code", `{"type":"response.failed","response":{"error":{"code":"rate_limit_exceeded","message":"boom"}}}`, "rate_limit_error", 429},
-		{"failed with server_error", `{"type":"response.failed","response":{"error":{"code":"server_error","message":"boom"}}}`, "api_error", 502},
-		{"failed with context length", `{"type":"response.failed","response":{"error":{"code":"context_length_exceeded","message":"boom"}}}`, "invalid_request_error", 400},
-	}
-	for _, tc := range cases {
-		backend := func(w http.ResponseWriter, r *http.Request) {
-			writeSSE(w, `{"type":"response.created","response":{"id":"resp_e","model":"gpt-6-luna"}}`)
-			writeSSE(w, `{"type":"response.output_text.delta","delta":"par"}`)
-			writeSSE(w, tc.event)
-			// Anything after the error must not reopen the answer.
-			writeSSE(w, `{"type":"response.completed","response":{"id":"resp_e","usage":{"input_tokens":1,"output_tokens":1}}}`)
-		}
-
-		h := newHarness(t, nil, backend, true)
-		rec := h.do(t, http.MethodPost, "/v1/messages", `{"model":"gpt-6-luna","stream":true,"messages":[]}`)
-		names, data := sseEvents(rec.Body.String())
-		last := len(names) - 1
-		if last < 0 || names[last] != "error" {
-			t.Fatalf("%s: events = %v, want the stream to end at the error", tc.name, names)
-		}
-		if got := data[last].Get("error.type").String(); got != tc.wantType {
-			t.Fatalf("%s: error.type = %q, want %q", tc.name, got, tc.wantType)
-		}
-		for _, name := range names {
-			if name == "message_delta" || name == "message_stop" {
-				t.Fatalf("%s: events = %v, want no %s after an error", tc.name, names, name)
-			}
-		}
-
-		h = newHarness(t, nil, backend, true)
-		rec = h.do(t, http.MethodPost, "/v1/messages", `{"model":"gpt-6-luna","stream":false,"messages":[]}`)
-		if rec.Code != tc.wantCode || jsontest.Get(rec.Body.String(), "error.type").String() != tc.wantType {
-			t.Fatalf("%s: JSON answer %d %s, want %d %s", tc.name, rec.Code, rec.Body.String(), tc.wantCode, tc.wantType)
-		}
-	}
-}
-
-func TestAStreamCutShortIsAnError(t *testing.T) {
-	cut := func(w http.ResponseWriter, r *http.Request) {
-		writeSSE(w, `{"type":"response.created","response":{"id":"resp_cut","model":"gpt-6-luna"}}`)
-		writeSSE(w, `{"type":"response.output_text.delta","delta":"par"}`)
-		// The connection closes cleanly, with no terminal event.
-	}
-	empty := func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/event-stream")
-	}
-	for name, backend := range map[string]http.HandlerFunc{"cut": cut, "empty": empty} {
-		h := newHarness(t, nil, backend, true)
-		rec := h.do(t, http.MethodPost, "/v1/messages", `{"model":"gpt-6-luna","stream":true,"messages":[]}`)
-		names, data := sseEvents(rec.Body.String())
-		last := len(names) - 1
-		if last < 0 || names[last] != "error" || data[last].Get("error.type").String() != "api_error" {
-			t.Fatalf("%s: events = %v, want the stream to end in an api_error", name, names)
-		}
-		for _, event := range names {
-			if event == "message_delta" || event == "message_stop" {
-				t.Fatalf("%s: events = %v, want no fabricated ending", name, names)
-			}
-		}
-
-		h = newHarness(t, nil, backend, true)
-		rec = h.do(t, http.MethodPost, "/v1/messages", `{"model":"gpt-6-luna","stream":false,"messages":[]}`)
-		if rec.Code < 500 || jsontest.Get(rec.Body.String(), "type").String() != "error" {
-			t.Fatalf("%s: JSON answer %d %s, want a 5xx Anthropic error", name, rec.Code, rec.Body.String())
-		}
-		if strings.Contains(rec.Body.String(), "end_turn") {
-			t.Fatalf("%s: JSON answer reports end_turn: %s", name, rec.Body.String())
-		}
-	}
 }
 
 func TestEffortEdgeCasesClampSensibly(t *testing.T) {
@@ -392,7 +200,8 @@ func TestEffortEdgeCasesClampSensibly(t *testing.T) {
 	for _, tc := range cases {
 		h := newHarness(t, nil, nil, true)
 		h.do(t, http.MethodPost, "/v1/messages", tc.body)
-		if got := h.codexUpstream(t).Get("reasoning.effort").String(); got != tc.want {
+		resolution, _ := h.router.registry.Resolve(string(readHead([]byte(tc.body)).Model))
+		if got := h.codexUpstream(t).Get("model").String(); got != resolution.Model.ID+"("+tc.want+")" {
 			t.Fatalf("%s: reasoning.effort = %q, want %q", tc.body, got, tc.want)
 		}
 	}

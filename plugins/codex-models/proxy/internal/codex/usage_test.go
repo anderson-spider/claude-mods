@@ -2,431 +2,333 @@ package codex
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
-	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/config"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 )
 
-// usageBody is a usage answer with both windows.
-const usageBody = `{"plan_type":"plus","rate_limit":{"primary_window":{"used_percent":30,"limit_window_seconds":18000,"reset_at":1790000000},` +
-	`"secondary_window":{"used_percent":60,"limit_window_seconds":604800,"reset_at":1790500000}}}`
+const usageBody = `{"rate_limit":{"primary_window":{"used_percent":12,"limit_window_seconds":604800,"reset_after_seconds":60}}}`
+const oneAccount = `{"files":[{"provider":"codex","type":"codex","status":"active","disabled":false,"unavailable":false,"auth_index":"account-test"}]}`
 
-// loggedInStore saves a token that does not expire soon.
-func loggedInStore(t *testing.T) *Store {
+func testBackend(t *testing.T, handler http.HandlerFunc) *Backend {
 	t.Helper()
-	store := NewStore(nil, StoreOptions{Dir: t.TempDir()})
-	if err := store.Save(&Token{AccessToken: "secret-access", AccountID: "acct-1", ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
-		t.Fatalf("Save: %v", err)
-	}
-	return store
+	server := httptest.NewTLSServer(handler)
+	t.Cleanup(server.Close)
+	return NewBackend(server.URL, "private-management-key", server.Client().Transport)
 }
 
-// usageServer serves handler under /backend-api and counts the requests it gets.
-type usageServer struct {
-	*httptest.Server
-	hits atomic.Int32
-	mu   sync.Mutex
-	last *http.Request
-}
-
-func newUsageServer(t *testing.T, handler http.HandlerFunc) *usageServer {
-	t.Helper()
-	s := &usageServer{}
-	s.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		s.hits.Add(1)
-		s.mu.Lock()
-		s.last = r.Clone(context.Background())
-		s.mu.Unlock()
-		handler(w, r)
-	}))
-	t.Cleanup(s.Close)
-	return s
-}
-
-func (s *usageServer) lastRequest() *http.Request {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.last
-}
-
-func waitDone(t *testing.T, done <-chan struct{}) {
+func await(t *testing.T, done <-chan struct{}) {
 	t.Helper()
 	if done == nil {
-		t.Fatal("no usage request was started")
+		t.Fatal("request was not started")
 	}
 	select {
 	case <-done:
-	case <-time.After(10 * time.Second):
-		t.Fatal("the usage request did not end")
+	case <-time.After(3 * time.Second):
+		t.Fatal("request did not finish")
 	}
 }
 
-func TestResponsesObservesTheRateLimitHeadersOnAnyAnswer(t *testing.T) {
-	for _, status := range []int{http.StatusOK, http.StatusTooManyRequests} {
-		server := newUsageServer(t, func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("X-Codex-Primary-Used-Percent", "44")
-			w.Header().Set("X-Codex-Primary-Window-Minutes", "300")
-			w.Header().Set("X-Codex-Primary-Reset-At", "1790000000")
-			w.WriteHeader(status)
-			_, _ = io.WriteString(w, `{"error":{"type":"usage_limit_reached"}}`)
-		})
-		backend := NewBackend(server.URL, loggedInStore(t), nil)
-		resp, err := backend.Responses(context.Background(), []byte(`{}`), "")
-		if resp != nil {
-			_ = resp.Body.Close()
-		}
-		if (status == http.StatusOK) != (err == nil) {
-			t.Fatalf("status %d: err = %v", status, err)
-		}
-		got := backend.Limits.Snapshot()
-		if len(got) != 1 || got[0].Kind != "five_hour" || got[0].PercentUsed != 44 || got[0].ResetsAt.Unix() != 1790000000 {
-			t.Fatalf("status %d: Snapshot = %+v", status, got)
-		}
-	}
+func usageReply(w http.ResponseWriter) {
+	_ = json.NewEncoder(w).Encode(map[string]any{"status_code": 200, "body": usageBody})
 }
 
-func TestResponsesWithoutLimitsOrHeadersIsUnchanged(t *testing.T) {
-	server := newUsageServer(t, func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, "ok") })
-	bare := &Backend{BaseURL: server.URL, Store: loggedInStore(t), HTTP: server.Client()}
-	resp, err := bare.Responses(context.Background(), []byte(`{}`), "")
-	if err != nil {
-		t.Fatalf("bare Backend: %v", err)
-	}
-	_ = resp.Body.Close()
-
-	backend := NewBackend(server.URL, loggedInStore(t), nil)
-	resp, err = backend.Responses(context.Background(), []byte(`{}`), "")
-	if err != nil {
-		t.Fatalf("Responses: %v", err)
-	}
-	_ = resp.Body.Close()
-	if got := backend.Limits.Snapshot(); len(got) != 0 {
-		t.Fatalf("Snapshot = %+v, want none", got)
-	}
-}
-
-func TestRefreshLimitsAsksOnceWhenStaleWithTheResponsesCredentials(t *testing.T) {
-	server := newUsageServer(t, func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, usageBody)
-	})
-	backend := NewBackend(server.URL+"/backend-api/codex", loggedInStore(t), nil)
-
-	waitDone(t, backend.RefreshLimits(5*time.Minute))
-	if server.hits.Load() != 1 {
-		t.Fatalf("hits = %d, want 1", server.hits.Load())
-	}
-	req := server.lastRequest()
-	if req.Method != http.MethodGet || req.URL.Path != "/backend-api/wham/usage" || req.URL.RawQuery != "" {
-		t.Fatalf("request = %s %s?%s", req.Method, req.URL.Path, req.URL.RawQuery)
-	}
-	for header, want := range map[string]string{
-		"Authorization": "Bearer secret-access", "Chatgpt-Account-Id": "acct-1", "User-Agent": config.UserAgent, "Originator": config.Originator,
-	} {
-		if got := req.Header.Get(header); got != want {
-			t.Errorf("%s = %q, want %q", header, got, want)
-		}
-	}
-	if got := backend.Limits.Snapshot(); len(got) != 2 || got[0].Kind != "five_hour" || got[1].PercentUsed != 60 {
-		t.Fatalf("Snapshot = %+v", got)
-	}
-
-	// Fresh now: no second request.
-	if done := backend.RefreshLimits(5 * time.Minute); done != nil {
-		t.Fatal("a fresh reading started a request")
-	}
-	if server.hits.Load() != 1 {
-		t.Fatalf("hits = %d after a fresh call", server.hits.Load())
-	}
-	// Older than maxAge: asks again.
-	backend.Limits.now = func() time.Time { return time.Now().Add(6 * time.Minute) }
-	waitDone(t, backend.RefreshLimits(5*time.Minute))
-	if server.hits.Load() != 2 {
-		t.Fatalf("hits = %d after a stale call, want 2", server.hits.Load())
-	}
-}
-
-func TestRefreshLimitsSkipsAFreshReading(t *testing.T) {
-	server := newUsageServer(t, func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, usageBody) })
-	backend := NewBackend(server.URL, loggedInStore(t), nil)
-	backend.Limits.Observe(headers("x-codex-primary-used-percent", "1", "x-codex-primary-window-minutes", "300"))
-	if done := backend.RefreshLimits(5 * time.Minute); done != nil {
-		t.Fatal("a fresh passive reading started a request")
-	}
-	if server.hits.Load() != 0 {
-		t.Fatalf("hits = %d", server.hits.Load())
-	}
-}
-
-func TestRefreshLimitsIsSingleFlight(t *testing.T) {
+func TestCredentialsAreCachedNonblockingAndQuotaUsesTheOnlyAccount(t *testing.T) {
+	var auth, usage atomic.Int32
 	release := make(chan struct{})
-	var once sync.Once
-	closeRelease := func() { once.Do(func() { close(release) }) }
-	// Registered after the server's own cleanup, so it runs first: a failure
-	// before the explicit release still lets the held handler end.
-	t.Cleanup(closeRelease)
-	server := newUsageServer(t, func(w http.ResponseWriter, r *http.Request) {
-		select {
-		case <-release:
-		case <-r.Context().Done():
-			return
-		}
-		_, _ = io.WriteString(w, usageBody)
-	})
-	backend := NewBackend(server.URL, loggedInStore(t), nil)
-
-	const callers = 8
-	channels := make([]<-chan struct{}, callers)
-	var wg sync.WaitGroup
-	for i := range channels {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			channels[i] = backend.RefreshLimits(5 * time.Minute)
-		}()
-	}
-	wg.Wait()
-	for i, ch := range channels {
-		if ch == nil || ch != channels[0] {
-			t.Fatalf("caller %d got a different flight", i)
-		}
-	}
-	closeRelease()
-	waitDone(t, channels[0])
-	if server.hits.Load() != 1 {
-		t.Fatalf("hits = %d, want 1", server.hits.Load())
-	}
-}
-
-func TestRefreshLimitsFailureLeavesTheReadingsAlone(t *testing.T) {
-	cases := map[string]http.HandlerFunc{
-		"500":         func(w http.ResponseWriter, r *http.Request) { http.Error(w, "boom", http.StatusInternalServerError) },
-		"404":         func(w http.ResponseWriter, r *http.Request) { http.NotFound(w, r) },
-		"not json":    func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, "<html>") },
-		"other shape": func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, `{"limits":[1,2]}`) },
-	}
-	for name, handler := range cases {
-		t.Run(name, func(t *testing.T) {
-			server := newUsageServer(t, handler)
-			backend := NewBackend(server.URL, loggedInStore(t), nil)
-			backend.Limits.put(Window{Kind: "five_hour", PercentUsed: 7, WindowMinutes: 300, ObservedAt: time.Now().Add(-time.Hour)})
-			waitDone(t, backend.RefreshLimits(5*time.Minute))
-			got := backend.Limits.Snapshot()
-			if len(got) != 1 || got[0].PercentUsed != 7 {
-				t.Fatalf("Snapshot = %+v, want the earlier reading", got)
-			}
-			// The flight is over and the failure counts as an attempt: no
-			// new request until maxAge has passed.
-			if done := backend.RefreshLimits(5 * time.Minute); done != nil {
-				t.Fatal("a failed request was repeated at once")
-			}
-			backend.Limits.now = func() time.Time { return time.Now().Add(6 * time.Minute) }
-			if done := backend.RefreshLimits(5 * time.Minute); done == nil {
-				t.Fatal("a failed request left the flight held")
-			}
-		})
-	}
-}
-
-func TestRefreshLimitsTimesOut(t *testing.T) {
-	release := make(chan struct{})
-	server := newUsageServer(t, func(w http.ResponseWriter, r *http.Request) {
-		select {
-		case <-release:
-		case <-r.Context().Done():
-		}
-	})
 	defer close(release)
-	backend := NewBackend(server.URL, loggedInStore(t), nil)
-	backend.UsageTimeout = 100 * time.Millisecond
-	began := time.Now()
-	waitDone(t, backend.RefreshLimits(5*time.Minute))
-	if took := time.Since(began); took > 3*time.Second {
-		t.Fatalf("the request took %v with a 100 ms timeout", took)
-	}
-	if len(backend.Limits.Snapshot()) != 0 {
-		t.Fatal("a timed out request left a reading")
-	}
-}
-
-func TestRefreshLimitsWithoutALoginAsksNothing(t *testing.T) {
-	server := newUsageServer(t, func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, usageBody) })
-	empty := NewStore(nil, StoreOptions{Dir: t.TempDir()})
-	for name, backend := range map[string]*Backend{
-		"no token":    NewBackend(server.URL, empty, nil),
-		"no store":    NewBackend(server.URL, nil, nil),
-		"no limits":   {BaseURL: server.URL, Store: loggedInStore(t), HTTP: server.Client()},
-		"nil backend": nil,
-	} {
-		if done := backend.RefreshLimits(5 * time.Minute); done != nil {
-			t.Errorf("%s: started a request", name)
+	b := testBackend(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer private-management-key" {
+			t.Error("management credential missing")
 		}
+		switch r.URL.Path {
+		case "/v8/management/credentials":
+			auth.Add(1)
+			select {
+			case <-release:
+			case <-r.Context().Done():
+				return
+			}
+			fmt.Fprint(w, oneAccount)
+		case "/v8/management/requests/api-call":
+			usage.Add(1)
+			if r.Method != http.MethodPost {
+				t.Error("usage is not POST")
+			}
+			data, _ := io.ReadAll(r.Body)
+			var payload struct {
+				AuthIndex string            `json:"auth_index"`
+				Method    string            `json:"method"`
+				URL       string            `json:"url"`
+				Header    map[string]string `json:"header"`
+			}
+			if json.Unmarshal(data, &payload) != nil || payload.AuthIndex != "account-test" || payload.Method != "GET" || payload.URL != usageTarget || len(payload.Header) != 1 || payload.Header["Authorization"] != "Bearer $TOKEN$" {
+				t.Errorf("unexpected api-call body: %s", data)
+			}
+			usageReply(w)
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+	})
+	began := time.Now()
+	flight := b.RefreshAuth()
+	if b.LoggedIn() || b.RefreshAuth() != flight || time.Since(began) > time.Second {
+		t.Fatal("account check blocks or duplicates requests")
 	}
-	if server.hits.Load() != 0 {
-		t.Fatalf("hits = %d, want 0", server.hits.Load())
+	if b.RefreshLimits(5*time.Minute) != nil {
+		t.Fatal("unknown account may not read quota")
+	}
+	release <- struct{}{}
+	await(t, flight)
+	if !b.LoggedIn() || auth.Load() != 1 || b.RefreshAuth() != nil || usage.Load() != 0 {
+		t.Fatal("account caching made a usage call")
+	}
+	await(t, b.RefreshLimits(5*time.Minute))
+	rows := b.LimitSnapshot()
+	if len(rows) != 1 || rows[0].Kind != KindSevenDay || rows[0].PercentUsed != 12 {
+		t.Fatalf("limits: %+v", rows)
+	}
+	if b.RefreshLimits(5*time.Minute) != nil || usage.Load() != 1 {
+		t.Fatal("fresh usage was re-read")
 	}
 }
 
-// The usage request carries the access token: no redirect is followed.
-func TestUsageRedirectIsNotFollowed(t *testing.T) {
-	for _, tc := range redirectCases {
-		t.Run(strings.Join([]string{http.StatusText(tc.status), tc.host}, " to "), func(t *testing.T) {
-			origin, elsewhere, hits := redirectPair(t, tc.status, tc.host)
-			backend := NewBackend(origin.URL+"/backend-api/codex", loggedInStore(t), origin.Client().Transport)
-			_, err := backend.fetchUsage(context.Background(), "secret-access", "acct-1")
-			assertRedirectRefused(t, err, tc.status, elsewhere, hits)
-			if strings.Contains(err.Error(), "secret-access") {
-				t.Fatalf("error %q repeats the access token", err)
-			}
-
-			waitDone(t, backend.RefreshLimits(5*time.Minute))
-			if hits.Load() != 0 || len(backend.Limits.Snapshot()) != 0 {
-				t.Fatalf("redirect target hits = %d, readings = %+v", hits.Load(), backend.Limits.Snapshot())
+func TestAccountSelectionFailsClosed(t *testing.T) {
+	for name, body := range map[string]string{
+		"none":          `{"files":[]}`,
+		"disabled":      `{"files":[{"type":"codex","status":"active","disabled":true,"auth_index":"x"}]}`,
+		"unavailable":   `{"files":[{"type":"codex","status":"active","unavailable":true,"auth_index":"x"}]}`,
+		"inactive":      `{"files":[{"type":"codex","status":"error","auth_index":"x"}]}`,
+		"missing index": `{"files":[{"type":"codex","status":"active"}]}`,
+		"multiple":      `{"files":[{"type":"codex","status":"active","auth_index":"x"},{"provider":"codex","status":"active","auth_index":"y"}]}`,
+		"malformed":     `{"files":false}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			b := testBackend(t, func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, body) })
+			b.authIndex = "old"
+			b.Limits.put(Window{Kind: KindSevenDay, WindowMinutes: 10080, ObservedAt: time.Now()})
+			await(t, b.RefreshAuth())
+			if b.LoggedIn() || len(b.LimitSnapshot()) != 0 || len(b.Limits.Snapshot()) != 0 || b.RefreshLimits(5*time.Minute) != nil {
+				t.Fatal("ambiguous or unavailable account retained quota")
 			}
 		})
 	}
 }
 
-func TestReasonOfDropsTheURL(t *testing.T) {
-	server := newUsageServer(t, func(w http.ResponseWriter, r *http.Request) {})
-	url := server.URL
-	server.Close()
-	backend := NewBackend(url+"/backend-api/codex", loggedInStore(t), nil)
-	_, err := backend.fetchUsage(context.Background(), "secret-access", "acct-1")
-	if err == nil {
-		t.Fatal("a closed server answered")
-	}
-	if reason := reasonOf(err); strings.Contains(reason, url) || strings.Contains(reason, "secret-access") {
-		t.Fatalf("reason %q carries the URL or the token", reason)
-	}
-}
-
-// A failing endpoint is asked at most once per maxAge, whatever the outcome.
-func TestRefreshLimitsBacksOffAfterAFailure(t *testing.T) {
-	server := newUsageServer(t, func(w http.ResponseWriter, r *http.Request) { http.NotFound(w, r) })
-	backend := NewBackend(server.URL, loggedInStore(t), nil)
-	for range 5 {
-		if done := backend.RefreshLimits(5 * time.Minute); done != nil {
-			waitDone(t, done)
-		}
-	}
-	if server.hits.Load() != 1 {
-		t.Fatalf("hits = %d after 5 calls against a 404, want 1", server.hits.Load())
-	}
-	now := time.Now().Add(5*time.Minute + time.Second)
-	backend.Limits.now = func() time.Time { return now }
-	waitDone(t, backend.RefreshLimits(5*time.Minute))
-	if server.hits.Load() != 2 {
-		t.Fatalf("hits = %d after maxAge, want 2", server.hits.Load())
-	}
-}
-
-// The usage request never refreshes a token or waits for a refresh: a token
-// due for expiry skips it, and the token endpoint is not called.
-func TestRefreshLimitsNeverRefreshesTheToken(t *testing.T) {
-	var tokenCalls atomic.Int32
-	oauth := newUsageServer(t, func(w http.ResponseWriter, r *http.Request) {
-		tokenCalls.Add(1)
-		time.Sleep(2 * time.Second) // a slow token endpoint
-		_, _ = io.WriteString(w, `{"access_token":"new","refresh_token":"rt2","expires_in":3600}`)
+func TestUsageSingleFlightAndFiveMinuteBackoffIncludingFailure(t *testing.T) {
+	var hits atomic.Int32
+	entered, release := make(chan struct{}), make(chan struct{})
+	b := testBackend(t, func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		close(entered)
+		<-release
+		w.WriteHeader(500)
 	})
-	usage := newUsageServer(t, func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, usageBody) })
-	store := NewStore(NewClient(&http.Client{Transport: redirectTo(oauth.URL)}), StoreOptions{Dir: t.TempDir()})
-	for name, expires := range map[string]time.Time{"expired": time.Now().Add(-time.Hour), "due": time.Now().Add(time.Minute)} {
-		if err := store.Save(&Token{AccessToken: "old", RefreshToken: "rt", AccountID: "acct-1", ExpiresAt: expires}); err != nil {
-			t.Fatalf("Save: %v", err)
-		}
-		backend := NewBackend(usage.URL, store, nil)
-		began := time.Now()
-		if done := backend.RefreshLimits(5 * time.Minute); done != nil {
-			t.Fatalf("%s: a token due for refresh started a usage request", name)
-		}
-		if took := time.Since(began); took > time.Second {
-			t.Fatalf("%s: RefreshLimits took %v", name, took)
+	b.authIndex = "account-test"
+	flight := b.RefreshLimits(5 * time.Minute)
+	<-entered
+	for range 20 {
+		if b.RefreshLimits(5*time.Minute) != flight {
+			t.Fatal("usage flight was not shared")
 		}
 	}
-	if tokenCalls.Load() != 0 || usage.hits.Load() != 0 {
-		t.Fatalf("token endpoint calls = %d, usage hits = %d, want 0 and 0", tokenCalls.Load(), usage.hits.Load())
+	close(release)
+	await(t, flight)
+	if b.RefreshLimits(5*time.Minute) != nil || hits.Load() != 1 {
+		t.Fatal("failed refresh was not backed off")
 	}
 }
 
-func TestHeldNeitherRefreshesNorWaits(t *testing.T) {
-	store := loggedInStore(t)
-	if access, account, err := store.Held(); err != nil || access != "secret-access" || account != "acct-1" {
-		t.Fatalf("Held = %q, %q, %v", access, account, err)
+func TestUsageEnvelopeFailuresKeepReadingsButRemoteFailureClearsThem(t *testing.T) {
+	for name, tc := range map[string]struct {
+		status int
+		body   string
+		clear  bool
+	}{
+		"inner 401":      {200, `{"status_code":401,"body":"private error"}`, false},
+		"inner 500":      {200, `{"status_code":500,"body":"private error"}`, false},
+		"missing status": {200, `{"body":"{}"}`, false},
+		"body object":    {200, `{"status_code":200,"body":{}}`, false},
+		"body null":      {200, `{"status_code":200,"body":null}`, false},
+		"malformed body": {200, `{"status_code":200,"body":"{"}`, false},
+		"outer 500":      {500, `private error`, true},
+		"outer 403":      {403, `private error`, false},
+		"redirect":       {307, `private error`, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			b := testBackend(t, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(tc.status); fmt.Fprint(w, tc.body) })
+			b.authIndex = "account-test"
+			b.Limits.put(Window{Kind: KindSevenDay, WindowMinutes: 10080, ObservedAt: time.Now().Add(-time.Hour)})
+			await(t, b.RefreshLimits(5*time.Minute))
+			if (len(b.Limits.Snapshot()) == 0) != tc.clear {
+				t.Fatalf("readings changed incorrectly: %+v", b.Limits.Snapshot())
+			}
+		})
 	}
-	// A busy store (a refresh in progress holds it) is skipped, not waited for.
-	store.mu.Lock()
-	done := make(chan error, 1)
-	go func() { _, _, err := store.Held(); done <- err }()
-	select {
-	case err := <-done:
-		if err == nil {
-			t.Error("Held answered from a busy store")
-		}
-	case <-time.After(2 * time.Second):
-		t.Error("Held waited for the store")
+	b := NewBackend("https://remote.invalid", "private-management-key", roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("transport private-management-key")
+	}))
+	b.authIndex = "account-test"
+	b.Limits.put(Window{Kind: KindSevenDay, WindowMinutes: 10080, ObservedAt: time.Now().Add(-time.Hour)})
+	await(t, b.RefreshLimits(5*time.Minute))
+	if len(b.Limits.Snapshot()) != 0 {
+		t.Fatal("transport failure kept readings")
 	}
-	store.mu.Unlock()
+}
 
-	empty := NewStore(nil, StoreOptions{Dir: t.TempDir()})
-	if _, _, err := empty.Held(); !errors.Is(err, ErrNotAuthenticated) {
-		t.Fatalf("Held without a login = %v", err)
+func TestAccountChangeOrInferenceFailureDiscardsInFlightQuota(t *testing.T) {
+	for _, changeAccount := range []bool{true, false} {
+		release, entered := make(chan struct{}), make(chan struct{})
+		b := testBackend(t, func(w http.ResponseWriter, r *http.Request) { close(entered); <-release; usageReply(w) })
+		b.authIndex = "account-test"
+		flight := b.RefreshLimits(5 * time.Minute)
+		<-entered
+		if changeAccount {
+			b.mu.Lock()
+			b.authIndex = "different"
+			b.generation++
+			b.mu.Unlock()
+		} else {
+			b.ClearLimits()
+		}
+		close(release)
+		await(t, flight)
+		if len(b.Limits.Snapshot()) != 0 {
+			t.Fatal("old in-flight usage resurrected invalidated readings")
+		}
 	}
-	if err := store.Save(&Token{AccessToken: "x", ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
+}
+
+func TestMissingManagementKeyDoesNotDisableInference(t *testing.T) {
+	b := testBackend(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/messages" || r.Header.Get("Authorization") != "" {
+			t.Error("inference carried a credential or reached management")
+		}
+		fmt.Fprint(w, `{"type":"message","content":[]}`)
+	})
+	b.ManagementKey = ""
+	if b.RefreshAuth() != nil || b.RefreshLimits(time.Minute) != nil || b.LoggedIn() {
+		t.Fatal("missing key triggered management")
+	}
+	resp, err := b.Messages(context.Background(), []byte(`{}`), http.Header{})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.Held(); !errors.Is(err, ErrTokenDue) {
-		t.Fatalf("Held within the refresh lead = %v, want ErrTokenDue", err)
-	}
-}
-
-// A window the headers stopped carrying must not hide behind the fresh ones:
-// staleness follows the oldest window, and the usage answer that no longer
-// lists it drops it.
-func TestRefreshLimitsFollowsTheOldestWindow(t *testing.T) {
-	server := newUsageServer(t, func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.WriteString(w, `{"rate_limit":{"primary_window":{"used_percent":9,"limit_window_seconds":604800,"reset_at":1790500000}}}`)
-	})
-	backend := NewBackend(server.URL, loggedInStore(t), nil)
-	now := time.Now()
-	backend.Limits.now = func() time.Time { return now }
-	backend.Limits.Observe(headers(
-		"x-codex-primary-used-percent", "80", "x-codex-primary-window-minutes", "300",
-		"x-codex-secondary-used-percent", "10", "x-codex-secondary-window-minutes", "10080"))
-	// Four minutes on, only the weekly window is still sent.
-	now = now.Add(4 * time.Minute)
-	backend.Limits.Observe(headers("x-codex-primary-used-percent", "11", "x-codex-primary-window-minutes", "10080"))
-	if done := backend.RefreshLimits(5 * time.Minute); done != nil {
-		t.Fatal("asked before any window was 5 minutes old")
-	}
-	now = now.Add(2 * time.Minute)
-	waitDone(t, backend.RefreshLimits(5*time.Minute))
-	got := backend.Limits.Snapshot()
-	if len(got) != 1 || got[0].Kind != "seven_day" || got[0].PercentUsed != 9 {
-		t.Fatalf("Snapshot = %+v, want only the weekly window from the usage answer", got)
-	}
-}
-
-// redirectTo sends every request to the server at base, whatever its host,
-// so a client built for the real token endpoint reaches a fake.
-func redirectTo(base string) http.RoundTripper {
-	target, _ := url.Parse(base)
-	return roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		req = req.Clone(req.Context())
-		req.URL.Scheme, req.URL.Host = target.Scheme, target.Host
-		return http.DefaultTransport.RoundTrip(req)
-	})
+	resp.Body.Close()
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
-func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestManagementAndInferenceNeverFollowRedirects(t *testing.T) {
+	var hits atomic.Int32
+	target := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hits.Add(1) }))
+	defer target.Close()
+	b := testBackend(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Location", target.URL)
+		w.WriteHeader(307)
+	})
+	if _, err := b.fetchAuth(context.Background()); err == nil {
+		t.Fatal("account redirect accepted")
+	}
+	if _, err := b.fetchUsage(context.Background(), "x"); err == nil {
+		t.Fatal("usage redirect accepted")
+	}
+	if _, err := b.Messages(context.Background(), nil, http.Header{}); err == nil {
+		t.Fatal("inference redirect accepted")
+	}
+	if hits.Load() != 0 {
+		t.Fatal("redirect was followed")
+	}
+}
+
+func TestLimitReachedOverridesUsedPercent(t *testing.T) {
+	for _, body := range []string{
+		`{"rate_limit":{"limit_reached":true,"primary_window":{"used_percent":8,"limit_window_seconds":604800}}}`,
+		`{"rate_limit":{"primary_window":{"limit_reached":true,"used_percent":8,"limit_window_seconds":604800}}}`,
+	} {
+		rows := parseUsage([]byte(body), time.Now())
+		if len(rows) != 1 || rows[0].PercentUsed != 100 || rows[0].Kind != KindSevenDay {
+			t.Fatalf("limit reached: %+v", rows)
+		}
+	}
+}
+
+func TestMessagesHeaderAllowlist(t *testing.T) {
+	b := testBackend(t, func(w http.ResponseWriter, r *http.Request) {
+		for _, name := range []string{"Authorization", "X-Api-Key", "Cookie", "User-Agent", "X-Ccmproxy-Token", "X-Ccmproxy-Future", "X-Unrelated"} {
+			if r.Header.Get(name) != "" {
+				t.Errorf("forbidden header %s", name)
+			}
+		}
+		if r.Header.Get("Anthropic-Beta") != "beta-a,beta-b" || r.Header.Get("Anthropic-Version") != "2023-06-01" {
+			t.Error("allowed headers lost")
+		}
+		fmt.Fprint(w, `{}`)
+	})
+	headers := http.Header{}
+	for _, name := range []string{"Authorization", "X-Api-Key", "Cookie", "User-Agent", "X-Ccmproxy-Token", "X-Ccmproxy-Future", "X-Unrelated"} {
+		headers.Set(name, "private-anthropic-token")
+	}
+	headers.Set("Content-Type", "application/json")
+	headers.Set("Accept", "text/event-stream")
+	headers.Set("Anthropic-Beta", "beta-a,beta-b")
+	headers.Set("Anthropic-Version", "2023-06-01")
+	resp, err := b.Messages(context.Background(), []byte(`{}`), headers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+}
+
+func TestTransportErrorsNeverContainTheCredential(t *testing.T) {
+	b := NewBackend("https://remote.invalid", "private-management-key", roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("private-management-key in a planted transport error")
+	}))
+	_, err := b.Messages(context.Background(), nil, http.Header{})
+	if !errors.Is(err, ErrUnreachable) || strings.Contains(err.Error(), b.ManagementKey) {
+		t.Fatalf("unsafe error: %v", err)
+	}
+}
+
+func TestAccountInvalidationDoesNotResetUsageFailureBackoff(t *testing.T) {
+	var usage atomic.Int32
+	now := time.Now()
+	b := testBackend(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v8/management/credentials" {
+			fmt.Fprint(w, oneAccount)
+			return
+		}
+		usage.Add(1)
+		w.WriteHeader(500)
+	})
+	b.Limits.now = func() time.Time { return now }
+	b.authIndex = "account-test"
+	await(t, b.RefreshLimits(5*time.Minute))
+	b.mu.Lock()
+	b.authIndex = ""
+	b.mu.Unlock()
+	now = now.Add(time.Minute)
+	await(t, b.RefreshAuth())
+	if b.RefreshLimits(5*time.Minute) != nil || usage.Load() != 1 {
+		t.Fatal("account recheck bypassed the usage failure backoff")
+	}
+}
+
+func TestNilHTTPFallbackRemainsDirectAndShortDial(t *testing.T) {
+	for _, client := range []*http.Client{nil, {}} {
+		configured := withoutRedirects(client, "https://remote.example")
+		transport, ok := configured.Transport.(*http.Transport)
+		if !ok || transport.Proxy != nil || transport.TLSHandshakeTimeout != 3*time.Second || configured.CheckRedirect(nil, nil) != http.ErrUseLastResponse {
+			t.Fatal("fallback lost the remote safety settings")
+		}
+	}
+}

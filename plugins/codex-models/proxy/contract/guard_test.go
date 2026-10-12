@@ -9,7 +9,7 @@ import (
 )
 
 func TestGuard(t *testing.T) {
-	e := loggedIn(t, opts{})
+	e := withAccount(t, opts{})
 
 	refused := func(t *testing.T, r resp, message string) {
 		t.Helper()
@@ -113,7 +113,7 @@ func TestGuard(t *testing.T) {
 		noCORS(t, r)
 	})
 
-	if n := e.anth.count() + e.cdx.count() + e.oauth.count(); n != 0 {
+	if n := e.anth.count() + e.cdx.count(); n != 0 {
 		t.Fatalf("a refused request reached a fake (%d requests)", n)
 	}
 }
@@ -131,12 +131,12 @@ func noCORS(t *testing.T, r resp) {
 // The secret is removed before any outbound call: no fake sees the header, or
 // the secret anywhere else in a request.
 func TestTokenHeaderNeverReachesAFake(t *testing.T) {
-	e := loggedIn(t, opts{})
+	e := withAccount(t, opts{})
 	e.anth.set(func(w http.ResponseWriter, _ *http.Request, _ rec) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"data":[],"has_more":false,"first_id":null,"last_id":null}`))
 	})
-	e.cdx.set(answerWith(evCreated, evText("ok"), evCompleted))
+	e.cdx.set(answerWith(textAnswer("ok")...))
 
 	e.do(http.MethodGet, "/v1/models", nil, nil)
 	e.do(http.MethodGet, "/v1/organizations/x", nil, nil)
@@ -153,7 +153,7 @@ func TestTokenHeaderNeverReachesAFake(t *testing.T) {
 	if log := e.stderr.String(); strings.Contains(log, e.token) || strings.Contains(log, e.salt) {
 		t.Fatalf("the proxy's log carries a secret:\n%s", log)
 	}
-	for _, f := range []*fake{e.anth, e.cdx, e.oauth} {
+	for _, f := range []*fake{e.anth, e.cdx, e.mgmt} {
 		for _, r := range f.all() {
 			if _, ok := r.Header["X-Ccmproxy-Token"]; ok {
 				t.Fatalf("%s %s carried X-Ccmproxy-Token", r.Method, r.Path)

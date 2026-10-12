@@ -8,6 +8,10 @@
 #   install.sh --check        only checks the prerequisites; changes nothing
 #   install.sh --dry-run      prints the settings.json diff it would write (secret masked); changes nothing
 #
+# Codex models run on a remote translating proxy that holds the Codex login. Set CLIPROXY_URL (its https:// base URL)
+# and CLIPROXY_MGMT_KEY (its management key) to write or replace them in the config; without either, the config
+# keeps what it has. The key goes to ccmproxy on stdin, never in argv, the plist or the output.
+#
 # The settings are written only after the proxy answered as this install's: every Claude Code session on the
 # machine reads them, so a proxy that is down or not ours would take them all down. uninstall.sh undoes it.
 set -eu
@@ -41,6 +45,15 @@ while [ $# -gt 0 ]; do
   shift
 done
 [ -n "$CHECK" ] && [ -n "$DRY_RUN" ] && usage
+if [ -n "${CLIPROXY_URL:-}" ] || [ -n "${CLIPROXY_MGMT_KEY:-}" ]; then
+  [ -n "${CLIPROXY_URL:-}" ] && [ -n "${CLIPROXY_MGMT_KEY:-}" ] || {
+    echo "codex-models: set both CLIPROXY_URL and CLIPROXY_MGMT_KEY, or neither to keep the configured remote" >&2
+    exit 2
+  }
+  REMOTE=1
+else
+  REMOTE=
+fi
 
 say() { echo "codex-models: $*"; }
 die() {
@@ -51,6 +64,14 @@ die() {
 # mise runs from / so no project's mise.toml (and its trust prompt) applies; every path passed is absolute.
 tool() { (cd / && mise exec "$@"); }
 run_node() { tool "node@$NODE_VERSION" -- node "$@"; }
+# config init on CCMPROXY_HOME=$1 with proxy $2; the remote settings, when given, travel as JSON on stdin.
+config_init() {
+  if [ -n "$REMOTE" ]; then
+    run_node "$HERE/install/cli.mjs" remote-input | CCMPROXY_HOME="$1" "$2" config init --stdin
+  else
+    CCMPROXY_HOME="$1" "$2" config init
+  fi
+}
 
 # --- Prerequisites ---
 
@@ -111,7 +132,7 @@ if [ -n "$DRY_RUN" ]; then
   fi
   mkdir -p "$TMP/home"
   [ -f "$PROXY_HOME/config.json" ] && cp -p "$PROXY_HOME/config.json" "$TMP/home/config.json"
-  CCMPROXY_HOME="$TMP/home" "$PROXY" config init >/dev/null
+  config_init "$TMP/home" "$PROXY" >/dev/null
   CCMPROXY_HOME="$TMP/home" "$PROXY" env --shell json >"$TMP/env.json"
   CCMPROXY_HOME="$TMP/home" "$PROXY" models --json >"$TMP/models.json"
   say "dry run: would install ccmproxy $VERSION into $BIN and load $LABEL from $PLIST"
@@ -142,12 +163,12 @@ fi
 
 cat >"$TARGET/ccmproxy" <<EOF
 #!/bin/sh
-# ccmproxy on this install's config and login, e.g. ~/.claude/codex-models/ccmproxy login codex
+# ccmproxy on this install's config, e.g. ~/.claude/codex-models/ccmproxy status
 CCMPROXY_HOME="$PROXY_HOME" exec "$BIN" "\$@"
 EOF
 chmod +x "$TARGET/ccmproxy"
 
-CCMPROXY_HOME="$PROXY_HOME" "$BIN" config init
+config_init "$PROXY_HOME" "$BIN"
 
 # --- LaunchAgent ---
 
@@ -214,5 +235,4 @@ mkdir -p "$HOME/.claude"
 run_node "$HERE/install/cli.mjs" merge --settings "$SETTINGS" --env "$TMP/env.json" --models "$TMP/models.json"
 
 say "installed $VERSION. New Claude Code sessions go through the proxy; running ones keep their settings until restarted."
-say "sign in to Codex once: $TARGET/ccmproxy login codex (inside Claude Code: ! $TARGET/ccmproxy login codex)"
 say "to undo: $TARGET/uninstall.sh"

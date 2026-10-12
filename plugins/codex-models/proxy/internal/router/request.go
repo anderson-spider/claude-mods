@@ -11,15 +11,14 @@ import (
 // The router reads only what decides where a request goes and how it is
 // answered: the model, whether to stream, the user id behind the Codex
 // session and, for the log, the effort asked for. It reads them with
-// encoding/json, as translate reads the rest of the body, so both see the
+// encoding/json, as the relay reads controlled fields, so both see the
 // same document: a key matches whatever its case, and of two equal keys the
 // last one counts. A body the proxy can read but that is not valid JSON is
 // refused before it is read here (refuseInvalidJSON); a body under a coding
 // the proxy cannot undo names no model, so it goes upstream as it came.
 //
 // A value of an unexpected type counts as absent, and the scalar readers
-// take any JSON value; both rules are internal/jsonread's, which translate
-// reads by too.
+// take any JSON value; both rules come from internal/jsonread.
 
 // messagesHead is the part of a Messages request the router reads.
 type messagesHead struct {
@@ -59,7 +58,7 @@ func (h messagesHead) clientEffort() string {
 	return string(config.Effort)
 }
 
-// The reading rules are jsonread's, the same ones translate uses.
+// The reading rules are jsonread's, also used by the relay.
 type (
 	jsonText = jsonread.Text
 	jsonFlag = jsonread.Bool

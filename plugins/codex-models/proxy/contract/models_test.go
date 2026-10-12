@@ -45,8 +45,8 @@ func TestModelsListMergesTheAddedModels(t *testing.T) {
 }
 
 func TestModelsListWhenTheUpstreamFails(t *testing.T) {
-	t.Run("with a login only the added models", func(t *testing.T) {
-		e := loggedIn(t, opts{})
+	t.Run("with a remote account only the added models", func(t *testing.T) {
+		e := withAccount(t, opts{})
 		e.anth.set(func(w http.ResponseWriter, _ *http.Request, _ rec) { w.WriteHeader(http.StatusUnauthorized) })
 		r := e.do(http.MethodGet, "/v1/models", nil, nil)
 		if r.Status != 200 {
@@ -54,8 +54,8 @@ func TestModelsListWhenTheUpstreamFails(t *testing.T) {
 		}
 		golden(t, "models_upstream_failed.golden.json", canonical(t, r.Body))
 	})
-	t.Run("without a login the upstream answer passes", func(t *testing.T) {
-		e := newEnv(t, opts{})
+	t.Run("without a remote account the upstream answer passes", func(t *testing.T) {
+		e := newEnv(t, opts{noAccount: true})
 		e.anth.set(func(w http.ResponseWriter, _ *http.Request, _ rec) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnauthorized)
@@ -66,8 +66,8 @@ func TestModelsListWhenTheUpstreamFails(t *testing.T) {
 			t.Fatalf("response = %d %s", r.Status, r.Body)
 		}
 	})
-	t.Run("unreachable upstream without a login", func(t *testing.T) {
-		e := newEnv(t, opts{})
+	t.Run("unreachable upstream without a remote account", func(t *testing.T) {
+		e := newEnv(t, opts{noAccount: true})
 		e.anth.Close()
 		if r := e.do(http.MethodGet, "/v1/models", nil, nil); r.Status != http.StatusBadGateway {
 			t.Fatalf("status = %d", r.Status)
@@ -76,7 +76,7 @@ func TestModelsListWhenTheUpstreamFails(t *testing.T) {
 }
 
 func TestModelsListPaginatedPagesPassThrough(t *testing.T) {
-	e := loggedIn(t, opts{})
+	e := withAccount(t, opts{})
 	page := `{"data":[{"type":"model","id":"claude-old"}],"has_more":false}`
 	e.anth.set(func(w http.ResponseWriter, _ *http.Request, _ rec) { _, _ = w.Write([]byte(page)) })
 	for _, q := range []string{"after_id=a", "before_id=b"} {
@@ -88,13 +88,13 @@ func TestModelsListPaginatedPagesPassThrough(t *testing.T) {
 }
 
 func TestPrefixedAndSuffixedModelNamesRouteToCodex(t *testing.T) {
-	e := loggedIn(t, opts{codexCfg: map[string]any{"model_prefix": "codex"}})
-	e.cdx.set(answerWith(evCreated, evText("a"), evCompleted))
+	e := withAccount(t, opts{rawConfig: func(cfg map[string]any) { cfg["codex"].(map[string]any)["model_prefix"] = "codex" }})
+	e.cdx.set(answerWith(textAnswer("a")...))
 	for model, want := range map[string]string{
-		"codex/gpt-6-luna":      "gpt-6-luna",
-		"codex/gpt-6-luna-high": "gpt-6-luna",
-		"GPT-6-LUNA":            "gpt-6-luna", // the unconfigured namespace and case are tolerated
-		"gpt-6-luna[1m]":        "gpt-6-luna",
+		"codex/gpt-6-luna":      "gpt-6-luna(",
+		"codex/gpt-6-luna-high": "gpt-6-luna(high)",
+		"GPT-6-LUNA":            "gpt-6-luna(", // the unconfigured namespace and case are tolerated
+		"gpt-6-luna[1m]":        "gpt-6-luna(",
 	} {
 		r := e.post("/v1/messages", claudeReq(model, true, nil))
 		if r.Status != 200 {
@@ -104,8 +104,8 @@ func TestPrefixedAndSuffixedModelNamesRouteToCodex(t *testing.T) {
 			Model string `json:"model"`
 		}
 		must(t, json.Unmarshal(e.cdx.last(t).Body, &sent))
-		if sent.Model != want {
-			t.Fatalf("%s: Codex got model %q, want %q", model, sent.Model, want)
+		if !strings.HasPrefix(sent.Model, want) || !strings.HasSuffix(sent.Model, ")") {
+			t.Fatalf("%s: the remote got model %q, want %q...)", model, sent.Model, want)
 		}
 	}
 	if e.anth.count() != 0 {
@@ -120,7 +120,7 @@ func TestPrefixedAndSuffixedModelNamesRouteToCodex(t *testing.T) {
 }
 
 func TestCountTokens(t *testing.T) {
-	e := loggedIn(t, opts{})
+	e := withAccount(t, opts{})
 	req := map[string]any{
 		"model":  "gpt-6-astra",
 		"system": "You are a careful assistant. " + strings.Repeat("Follow the rules. ", 40),
@@ -152,7 +152,7 @@ func TestCountTokens(t *testing.T) {
 	}
 	got := count(body)
 	if e.anth.count() != 0 || e.cdx.count() != 0 {
-		t.Fatal("a Codex count_tokens request left the proxy")
+		t.Fatal("a Codex count_tokens request left the proxy (the local estimate answers it)")
 	}
 
 	// The estimate must stay conservative (not below the floor recorded from
@@ -196,9 +196,13 @@ func TestCountTokens(t *testing.T) {
 }
 
 func TestObsoleteCatalogKnobsCannotOverrideFixedCatalog(t *testing.T) {
-	e := newEnv(t, opts{codexCfg: map[string]any{"models": []string{"gpt-daybreak-blue-latest"}, "model_prefix": "other", "effort_variants": true}})
+	e := newEnv(t, opts{rawConfig: func(cfg map[string]any) {
+		for k, v := range map[string]any{"models": []string{"gpt-daybreak-blue-latest"}, "model_prefix": "other", "effort_variants": true} {
+			cfg["codex"].(map[string]any)[k] = v
+		}
+	}})
 	models := e.do(http.MethodGet, "/__ccmproxy/status", nil, nil).json(t)["models"].([]any)
-	if len(models) != 7 {
+	if len(models) != 3 {
 		t.Fatalf("catalog = %v", models)
 	}
 	for _, value := range models {

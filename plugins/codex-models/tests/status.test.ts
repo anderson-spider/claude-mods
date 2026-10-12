@@ -120,9 +120,9 @@ test('each case has its own notice and the way back; a healthy proxy has none', 
   expect(noticeText(OK, CTX)).toBe(undefined)
 })
 
-test('a stale binary and a missing login get their own notices', () => {
+test('a stale binary and a missing remote account get their own notices', () => {
   expect(noticeText({ ...OK, version: '0.1.0' }, CTX)).toContain('runs 0.1.0 and the plugin is 0.2.0')
-  expect(noticeText({ ...OK, codexLogin: false }, CTX)).toContain('login codex')
+  expect(noticeText({ ...OK, codexLogin: false }, CTX)).toContain('CLIPROXY_URL and CLIPROXY_MGMT_KEY')
 })
 
 test('the settings view finds the entries install wrote, without the secret in the report', () => {
@@ -134,7 +134,7 @@ test('the settings view finds the entries install wrote, without the secret in t
   expect(view.rows).toEqual(['gpt-6-astra'])
   const text = reportText({ pluginVersion: '0.2.0', pluginRoot: '/p', base: BASE, probe: OK, configToken: SECRET, settings: view })
   expect(text).toContain('Proxy: ccmproxy 0.2.0 at http://127.0.0.1:41234 (matches the plugin)')
-  expect(text).toContain('Codex login: signed in')
+  expect(text).toContain('Codex remote account: found')
   expect(text).toContain('Models: gpt-6-astra')
   expect(text).toContain('X-Ccmproxy-Token header: present, matches the proxy config (secret not shown)')
   expect(text).toContain('ENABLE_TOOL_SEARCH: true')

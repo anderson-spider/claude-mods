@@ -20,20 +20,17 @@ func TestUnknownKeysAreIgnoredUniformly(t *testing.T) {
 			t.Fatalf("obsolete key in effective config: %s", key)
 		}
 	}
-	if CallbackPort != 1455 || Originator != "codex-tui" || UserAgent == "" {
-		t.Fatal("protocol constants changed")
-	}
 }
 
 func TestKnownFieldsUseStandardJSONDecoding(t *testing.T) {
-	cfg, err := Load(writeConfig(t, `{"Listen_HTTP":"127.0.0.1:43210","CODEX":{"BASE_URL":"https://chatgpt.com/custom"}}`))
+	cfg, err := Load(writeConfig(t, `{"Listen_HTTP":"127.0.0.1:43210","CODEX":{"REMOTE":"https://chatgpt.com/custom"}}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.ListenHTTP != "127.0.0.1:43210" || cfg.Codex.BaseURL != "https://chatgpt.com/custom" {
+	if cfg.ListenHTTP != "127.0.0.1:43210" || cfg.Codex.Remote != "https://chatgpt.com/custom" {
 		t.Fatalf("config = %+v", cfg)
 	}
-	for _, body := range []string{`{"auth_dir":false}`, `{"codex":{"base_url":123}}`, `{"listen_http":[]}`} {
+	for _, body := range []string{`{"codex":{"management_key":false}}`, `{"codex":{"remote":123}}`, `{"listen_http":[]}`} {
 		if _, err := Load(writeConfig(t, body)); err == nil {
 			t.Fatalf("wrong known-field type accepted: %s", body)
 		}

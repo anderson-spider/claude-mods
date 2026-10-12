@@ -29,8 +29,6 @@ const (
 	shutdownGrace = 5 * time.Second
 	// upstreamLookupTimeout bounds the start-up lookup of the upstream host.
 	upstreamLookupTimeout = 5 * time.Second
-	// outboundTimeout bounds a whole OAuth token call.
-	outboundTimeout = 30 * time.Second
 )
 
 // runServe checks the config, builds the handler and serves it on the
@@ -45,11 +43,6 @@ func runServe(args []string) error {
 	if cfg.AuthToken == "" || cfg.SessionSalt == "" {
 		return fmt.Errorf("%s has no auth_token or session_salt; run `ccmproxy config init` to generate them", cfg.Path())
 	}
-	// An auth_file naming the Codex CLI's login is refused before anything
-	// else, the upstream lookup included.
-	if err := codex.NewStore(nil, storeOptions(cfg)).Check(); err != nil {
-		return err
-	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -60,11 +53,17 @@ func runServe(args []string) error {
 		}
 	}
 
-	handler, store, err := newHandler(cfg)
+	if cfg.Codex.Remote != "" && !config.RemoteAllowsLoopback(cfg.Codex.Remote) {
+		if err := checkUpstream(ctx, cfg.Codex.Remote, net.DefaultResolver.LookupNetIP); err != nil {
+			return fmt.Errorf("Codex remote: %w", err)
+		}
+	}
+
+	handler, err := newHandler(cfg)
 	if err != nil {
 		return err
 	}
-	logStart(cfg, store)
+	logStart(cfg)
 
 	listener, err := listenHTTP(cfg.ListenHTTP)
 	if err != nil {
@@ -83,46 +82,32 @@ func listenHTTP(addr string) (net.Listener, error) {
 	return listener, nil
 }
 
-// newHandler assembles what answers a request: the access log, then the
-// guard, then the router with its Codex backend. It also returns the
-// credential store, for the start-up lines.
-func newHandler(cfg *config.Config) (http.Handler, *codex.Store, error) {
-	// Every outbound call — to Anthropic, to the Codex backend, to the OAuth
-	// token endpoint — goes through this one transport, so it logs them all.
+// newHandler wires independent direct transports for Anthropic and the remote.
+func newHandler(cfg *config.Config) (http.Handler, error) {
 	transport := &httplog.Transport{Next: netx.DirectTransport()}
-
-	oauth := codex.NewClient(&http.Client{Transport: transport, Timeout: outboundTimeout})
-	store := codex.NewStore(oauth, storeOptions(cfg))
-	backend := codex.NewBackend(cfg.Codex.BaseURL, store, transport)
-	registry := codex.NewRegistry()
-
-	routes, err := router.New(cfg, registry, backend, transport)
+	remoteTransport := &httplog.Transport{Next: netx.RemoteTransport(cfg.Codex.Remote)}
+	backend := codex.NewBackend(cfg.Codex.Remote, cfg.Codex.ManagementKey, remoteTransport)
+	backend.RefreshAuth()
+	routes, err := router.New(cfg, codex.NewRegistry(), backend, transport)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	routes.Version = version
-	// The guard checks Host and the secret, and removes the secret, before
-	// the router or any upstream sees the request.
 	guarded, err := router.Guard(cfg, routes)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	// Every inbound request, refused ones included, is logged here; the log
-	// carries no header.
-	return httplog.Log(guarded), store, nil
+	return httplog.Log(guarded), nil
 }
 
-// logStart writes the start-up lines: the version, the upstream, the Codex
-// account (never a token) and where Claude Code should point.
-func logStart(cfg *config.Config, store *codex.Store) {
+func logStart(cfg *config.Config) {
 	logx.Infof("ccmproxy %s", version)
 	logx.Infof("upstream: %s", cfg.Upstream)
-	if store.Authenticated() {
-		if token, err := store.Peek(); err == nil {
-			logx.Infof("codex account: %s (%s)", accountLabel(token), planLabel(token))
-		}
-	} else {
-		logx.Warnf("no Codex credentials yet; run `ccmproxy login codex` to enable the added models")
+	if cfg.Codex.Remote == "" {
+		logx.Warnf("Codex remote is not configured")
+	}
+	if cfg.Codex.ManagementKey == "" {
+		logx.Warnf("Codex management key is missing; quota is unavailable")
 	}
 	logx.Infof("point Claude Code at http://%s (`ccmproxy env` prints the settings)", cfg.ListenHTTP)
 }

@@ -11,8 +11,6 @@
 // relaxes.
 package config
 
-import "path/filepath"
-
 const (
 	// DefaultUpstream is where every request that is not for a Codex model
 	// goes, unchanged. It is also the only upstream accepted, because those
@@ -29,16 +27,7 @@ const (
 	TokenHeader = "X-Ccmproxy-Token"
 )
 
-// Backend protocol constants and defaults. They are not configurable.
-const (
-	defaultLogLevel     = "info"
-	defaultCodexBaseURL = "https://chatgpt.com/backend-api/codex"
-	UserAgent           = "codex-tui/0.153.3 (Mac OS 26.5.1; arm64) iTerm.app/3.6.11 (codex-tui; 0.153.3)"
-	Originator          = "codex-tui"
-	// CallbackPort is fixed by the OAuth client the login uses: its
-	// registered redirect URI names this port.
-	CallbackPort = 1455
-)
+const defaultLogLevel = "info"
 
 // Config is everything config.json can set. The field order is the key order
 // Save writes.
@@ -57,11 +46,8 @@ type Config struct {
 	AuthToken string `json:"auth_token,omitempty"`
 
 	// SessionSalt keys the hash that turns Claude Code's metadata.user_id
-	// into the session id sent to the Codex backend.
+	// into the metadata.user_id sent to the Codex remote.
 	SessionSalt string `json:"session_salt,omitempty"`
-
-	// AuthDir is where the proxy keeps its own Codex login.
-	AuthDir string `json:"auth_dir"`
 
 	// LogLevel is debug, info, warn or error.
 	LogLevel string `json:"log_level"`
@@ -72,11 +58,10 @@ type Config struct {
 	path string
 }
 
-// Codex is the "codex" block: the ChatGPT-subscription Responses backend.
+// Codex configures the credential-owning remote. An empty remote disables inference.
 type Codex struct {
-	// BaseURL is the Responses endpoint. The ChatGPT access token is sent to
-	// it, so it must be https.
-	BaseURL string `json:"base_url"`
+	Remote        string `json:"remote,omitempty"`
+	ManagementKey string `json:"management_key,omitempty"`
 }
 
 // Default returns the configuration used for every setting a file leaves
@@ -85,15 +70,9 @@ func Default() *Config {
 	return &Config{
 		ListenHTTP: DefaultListenHTTP,
 		Upstream:   DefaultUpstream,
-		AuthDir:    defaultAuthDir(),
 		LogLevel:   defaultLogLevel,
-		Codex: Codex{
-			BaseURL: defaultCodexBaseURL,
-		},
 	}
 }
-
-func defaultAuthDir() string { return filepath.Join(Root(), "auth") }
 
 // Path is the file the configuration was loaded from, or DefaultPath for a
 // value that was not loaded.

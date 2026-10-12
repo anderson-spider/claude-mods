@@ -4,10 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"math"
-	"net/http"
 	"sort"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 )
@@ -58,8 +56,7 @@ func KindOf(minutes int) string {
 }
 
 // Limits keeps the latest reading of each Codex rate-limit window, in
-// memory. It fills from the headers of the answers the proxy already
-// relays and from one lazy usage request; it never asks the backend by
+// memory. It fills from an on-demand management usage request; it never asks the backend by
 // itself. A nil *Limits ignores every call and holds nothing.
 type Limits struct {
 	mu        sync.Mutex
@@ -79,86 +76,14 @@ func (l *Limits) clock() time.Time {
 	return time.Now()
 }
 
-// Observe reads the primary and secondary windows of the
-// x-codex-<slot>-{used-percent,window-minutes,reset-at,reset-after-seconds}
-// headers of one answer. A slot with no percent or no length is skipped, and
-// so is a slot with any value that is present but malformed: a reading that
-// cannot be trusted is no reading. It never fails and logs nothing.
-func (l *Limits) Observe(h http.Header) {
-	if l == nil || h == nil {
+// Clear invalidates readings when the remote or the selected account is unavailable.
+func (l *Limits) Clear() {
+	if l == nil {
 		return
 	}
-	at := l.clock()
-	for _, slot := range []string{"Primary", "Secondary"} {
-		if w, ok := headerWindow(h, slot, at); ok {
-			l.put(w)
-		}
-	}
-}
-
-func headerWindow(h http.Header, slot string, at time.Time) (Window, bool) {
-	get := func(name string) string { return strings.TrimSpace(h.Get("X-Codex-" + slot + "-" + name)) }
-	rawPercent, rawMinutes := get("Used-Percent"), get("Window-Minutes")
-	if rawPercent == "" || rawMinutes == "" {
-		return Window{}, false
-	}
-	percent, ok := parsePercent(rawPercent)
-	if !ok {
-		return Window{}, false
-	}
-	minutes, ok := parseWhole(rawMinutes, 1, maxWindowMinutes)
-	if !ok {
-		return Window{}, false
-	}
-	w := Window{Kind: KindOf(int(minutes)), PercentUsed: percent, WindowMinutes: int(minutes), ObservedAt: at}
-	if raw := get("Reset-At"); raw != "" {
-		sec, ok := parseWhole(raw, 1, maxResetUnix)
-		if !ok {
-			return Window{}, false
-		}
-		w.ResetsAt = time.Unix(sec, 0).UTC()
-	} else if raw := get("Reset-After-Seconds"); raw != "" {
-		sec, ok := parseWhole(raw, 0, maxResetAfterSec)
-		if !ok {
-			return Window{}, false
-		}
-		w.ResetsAt = at.Add(time.Duration(sec) * time.Second).UTC()
-	}
-	return w, true
-}
-
-// parsePercent reads a plain decimal such as "36" or "36.5", clamped to 100.
-// Signs, exponents, hex, "NaN" and "Inf" are malformed.
-func parsePercent(s string) (float64, bool) {
-	dots := 0
-	for _, c := range s {
-		switch {
-		case c == '.':
-			dots++
-		case c < '0' || c > '9':
-			return 0, false
-		}
-	}
-	if dots > 1 || strings.HasPrefix(s, ".") || strings.HasSuffix(s, ".") {
-		return 0, false
-	}
-	f, err := strconv.ParseFloat(s, 64)
-	if err != nil || math.IsNaN(f) || math.IsInf(f, 0) {
-		return 0, false
-	}
-	return math.Min(f, 100), true
-}
-
-// parseWhole reads a run of digits within [lo, hi].
-func parseWhole(s string, lo, hi int64) (int64, bool) {
-	if s == "" || strings.Trim(s, "0123456789") != "" {
-		return 0, false
-	}
-	n, err := strconv.ParseInt(s, 10, 64)
-	if err != nil || n < lo || n > hi {
-		return 0, false
-	}
-	return n, true
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.byMinutes = map[int]Window{}
 }
 
 // put keeps w unless a newer reading of the same window is already held.
@@ -224,7 +149,7 @@ func (l *Limits) Oldest() (time.Time, bool) {
 
 // Stale reports whether there is no reading, or any held window was observed
 // more than maxAge ago. The oldest window decides, as the status's reader
-// judges each window on its own: a window the answers' headers stopped
+// judges each window on its own: a window the plan stopped
 // carrying would otherwise stay as an old row beside fresh ones, and the
 // usage request that drops it would never run.
 func (l *Limits) Stale(maxAge time.Duration) bool {
@@ -274,6 +199,12 @@ func parseUsage(body []byte, at time.Time) []Window {
 	for _, key := range []string{"primary_window", "secondary_window"} {
 		if raw, ok := holder[key].(map[string]any); ok {
 			if w, ok := usageWindow(raw, at); ok {
+				if reached, _ := holder["limit_reached"].(bool); reached {
+					w.PercentUsed = 100
+				}
+				if reached, _ := raw["limit_reached"].(bool); reached {
+					w.PercentUsed = 100
+				}
 				out = append(out, w)
 			}
 		}

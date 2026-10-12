@@ -451,7 +451,7 @@ func TestStatusShape(t *testing.T) {
 		if strings.Join(status.Models, ",") != strings.Join(h.router.registry.AdvertisedIDs(), ",") || len(status.Models) == 0 {
 			t.Fatalf("models = %v", status.Models)
 		}
-		for _, leak := range []string{"user@example.com", h.router.cfg.AuthDir, guardToken, "acct_test"} {
+		for _, leak := range []string{"user@example.com", "private-auth-dir", guardToken, "acct_test"} {
 			if strings.Contains(rec.Body.String(), leak) {
 				t.Fatalf("status leaks %q", leak)
 			}

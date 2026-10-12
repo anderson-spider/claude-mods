@@ -56,62 +56,16 @@ func TestStatusAddsCodexLimitsAfterTheOtherKeys(t *testing.T) {
 	}
 }
 
-func TestStatusReportsWhatTheAnswersCarried(t *testing.T) {
-	var usage atomic.Int32
-	h := newHarness(t, nil, func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasSuffix(r.URL.Path, "/wham/usage") {
-			usage.Add(1)
-			return
-		}
-		w.Header().Set("X-Codex-Primary-Used-Percent", "44.5")
-		w.Header().Set("X-Codex-Primary-Window-Minutes", "300")
-		w.Header().Set("X-Codex-Primary-Reset-At", "1790000000")
-		w.Header().Set("X-Codex-Secondary-Used-Percent", "12")
-		w.Header().Set("X-Codex-Secondary-Window-Minutes", "90")
-		w.Header().Set("X-Codex-Secondary-Reset-After-Seconds", "600")
-		writeSSE(w, `{"type":"response.created","response":{"id":"resp_test"}}`)
-		writeSSE(w, `{"type":"response.completed","response":{"id":"resp_test","usage":{}}}`)
-	}, true)
-
-	before := time.Now().UTC().Add(-time.Second)
-	if rec := h.do(t, http.MethodPost, "/v1/messages",
-		`{"model":"gpt-6-astra","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}`); rec.Code != http.StatusOK {
-		t.Fatalf("message = %d: %s", rec.Code, rec.Body.String())
-	}
-	_, keys := statusRefresh(t, h)
-	var limits []Limit
-	if err := json.Unmarshal(keys["codexLimits"], &limits); err != nil || len(limits) != 2 {
-		t.Fatalf("codexLimits = %s (%v)", keys["codexLimits"], err)
-	}
-	if usage.Load() != 0 {
-		t.Fatal("a fresh passive reading still asked the usage endpoint")
-	}
-	first, second := limits[0], limits[1]
-	if first.Kind != "window_90m" || first.PercentUsed != 12 || first.WindowMinutes != 90 || first.ResetsAt == "" {
-		t.Fatalf("first = %+v", first)
-	}
-	if second.Kind != "five_hour" || second.PercentUsed != 44.5 || second.WindowMinutes != 300 || second.ResetsAt != "2026-09-21T14:13:20Z" {
-		t.Fatalf("second = %+v", second)
-	}
-	observed, err := time.Parse(time.RFC3339, second.ObservedAt)
-	if err != nil || observed.Before(before.Truncate(time.Second)) || observed.After(time.Now().UTC().Add(time.Second)) {
-		t.Fatalf("observedAt = %q (%v)", second.ObservedAt, err)
-	}
-	if !strings.Contains(string(keys["codexLimits"]), `"kind":"five_hour","percentUsed":44.5,"resetsAt":"2026-09-21T14:13:20Z","windowMinutes":300,"observedAt":"`) {
-		t.Fatalf("row layout = %s", keys["codexLimits"])
-	}
-}
-
 func TestStatusAsksTheUsageEndpointWhenThereIsNoReading(t *testing.T) {
 	var usage atomic.Int32
 	h := newHarness(t, nil, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/wham/usage" {
+		if r.URL.Path != "/v8/management/requests/api-call" {
 			http.NotFound(w, r)
 			return
 		}
 		usage.Add(1)
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, wham)
+		_, _ = io.WriteString(w, usageEnvelope(wham))
 	}, true)
 
 	_, keys := statusRefresh(t, h)
@@ -151,7 +105,7 @@ func TestStatusDoesNotWaitLongerThanUsageWait(t *testing.T) {
 		case <-r.Context().Done():
 			return
 		}
-		_, _ = io.WriteString(w, wham)
+		_, _ = io.WriteString(w, usageEnvelope(wham))
 	}, true)
 	h.router.usageWait = 50 * time.Millisecond
 
@@ -187,7 +141,7 @@ func TestStatusWithoutTheOptInNeverCallsTheUsageEndpoint(t *testing.T) {
 	var usage atomic.Int32
 	h := newHarness(t, nil, func(w http.ResponseWriter, r *http.Request) {
 		usage.Add(1)
-		_, _ = io.WriteString(w, wham)
+		_, _ = io.WriteString(w, usageEnvelope(wham))
 	}, true)
 
 	for _, target := range []string{
@@ -226,4 +180,9 @@ func TestStatusBacksOffAFailingUsageEndpoint(t *testing.T) {
 	if usage.Load() != 1 {
 		t.Fatalf("usage requests = %d after 5 opted-in statuses, want 1", usage.Load())
 	}
+}
+
+func usageEnvelope(body string) string {
+	data, _ := json.Marshal(map[string]any{"status_code": 200, "body": body})
+	return string(data)
 }

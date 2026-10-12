@@ -65,13 +65,16 @@ func (r *Router) serveAdmin(w http.ResponseWriter, req *http.Request) {
 	}
 	// Only a request that asks for it (?refresh=limits) may start, or wait
 	// for, the usage request to OpenAI: the installer, the session-start
-	// probe and /codex-models:status send a plain status and cost nothing
-	// beyond the proxy. Any other value is ignored.
+	// probe and /codex-models:status never read OpenAI usage. Plain status
+	// may asynchronously check the remote account cache. Other values are ignored.
 	refresh := slices.Contains(req.URL.Query()["refresh"], refreshParamLimits)
 	writeJSON(w, http.StatusOK, r.status(req.Context(), refresh))
 }
 
 func (r *Router) status(ctx context.Context, refresh bool) Status {
+	if r.backend != nil {
+		r.backend.RefreshAuth()
+	}
 	if refresh {
 		r.refreshLimits(ctx)
 	}
@@ -119,7 +122,7 @@ func (r *Router) codexLimits() []Limit {
 	if r.backend == nil {
 		return out
 	}
-	for _, w := range r.backend.Limits.Snapshot() {
+	for _, w := range r.backend.LimitSnapshot() {
 		out = append(out, limitOf(w))
 	}
 	return out
@@ -138,8 +141,7 @@ func limitOf(w codex.Window) Limit {
 	return l
 }
 
-// codexLoggedIn reports whether a Codex login is stored. It never waits for
-// a token refresh in progress (codex.Store.Authenticated).
+// codexLoggedIn reports the cached single-active-account state without waiting.
 func (r *Router) codexLoggedIn() bool {
-	return r.backend != nil && r.backend.Store.Authenticated()
+	return r.backend != nil && r.backend.LoggedIn()
 }

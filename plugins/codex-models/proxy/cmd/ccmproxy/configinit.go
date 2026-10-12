@@ -1,7 +1,10 @@
 package main
 
 import (
+	"encoding/json"
+	"flag"
 	"fmt"
+	"io"
 	"os"
 	"slices"
 	"strings"
@@ -23,14 +26,32 @@ func runConfig(args []string) error {
 
 	// The file is not loaded: Load refuses a file others can read, and init
 	// is what fixes that.
-	configPath, _, err := parseFlags("config", args, nil)
+	var stdin bool
+	configPath, _, err := parseFlags("config", args, func(flags *flag.FlagSet) {
+		flags.BoolVar(&stdin, "stdin", false, "read codex remote and management key as JSON from stdin")
+	})
 	if err != nil {
 		return err
 	}
 	if strings.TrimSpace(configPath) == "" {
 		configPath = config.DefaultPath()
 	}
-	result, err := config.Init(config.ExpandUser(configPath))
+	var result *config.InitResult
+	if stdin {
+		data, readErr := io.ReadAll(io.LimitReader(os.Stdin, (64<<10)+1))
+		if readErr != nil || len(data) > 64<<10 {
+			return fmt.Errorf("config: stdin could not be read")
+		}
+		var input struct {
+			Codex *config.Codex `json:"codex"`
+		}
+		if json.Unmarshal(data, &input) != nil || input.Codex == nil {
+			return fmt.Errorf("config: stdin must be a JSON object with a codex object")
+		}
+		result, err = config.InitRemote(config.ExpandUser(configPath), *input.Codex)
+	} else {
+		result, err = config.Init(config.ExpandUser(configPath))
+	}
 	if err != nil {
 		return err
 	}

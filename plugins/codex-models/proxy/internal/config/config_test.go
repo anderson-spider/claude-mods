@@ -62,7 +62,7 @@ func TestLoadFillsUnsetFields(t *testing.T) {
 	if cfg.Upstream != DefaultUpstream {
 		t.Fatalf("upstream = %q, want the default filled in", cfg.Upstream)
 	}
-	if cfg.Codex.BaseURL == "" || UserAgent == "" || Originator == "" {
+	if cfg.Codex.Remote != "" || cfg.Codex.ManagementKey != "" {
 		t.Fatalf("codex defaults were not filled in: %+v", cfg.Codex)
 	}
 }
@@ -162,19 +162,19 @@ func TestUpstreamIsPinned(t *testing.T) {
 	}
 }
 
-func TestCodexBaseURLMustBeHTTPS(t *testing.T) {
+func TestCodexRemoteMustBeHTTPS(t *testing.T) {
 	ok := []string{"https://chatgpt.com/backend-api/codex", "https://example.test"}
 	bad := []string{"http://chatgpt.com/backend-api/codex", "chatgpt.com/backend-api/codex", "https://", "https://u:p@chatgpt.com", "ftp://chatgpt.com"}
 	for _, base := range ok {
-		body, _ := json.Marshal(map[string]any{"codex": map[string]string{"base_url": base}})
+		body, _ := json.Marshal(map[string]any{"codex": map[string]string{"remote": base}})
 		if _, err := Load(writeConfig(t, string(body))); err != nil {
-			t.Fatalf("Load with codex.base_url %q: %v", base, err)
+			t.Fatalf("Load with codex.remote %q: %v", base, err)
 		}
 	}
 	for _, base := range bad {
-		body, _ := json.Marshal(map[string]any{"codex": map[string]string{"base_url": base}})
-		if _, err := Load(writeConfig(t, string(body))); err == nil || !strings.Contains(err.Error(), "codex.base_url") {
-			t.Fatalf("Load with codex.base_url %q = %v, want a refusal", base, err)
+		body, _ := json.Marshal(map[string]any{"codex": map[string]string{"remote": base}})
+		if _, err := Load(writeConfig(t, string(body))); err == nil || !strings.Contains(err.Error(), "codex.remote") {
+			t.Fatalf("Load with codex.remote %q = %v, want a refusal", base, err)
 		}
 	}
 }
@@ -633,32 +633,6 @@ func TestExpandUser(t *testing.T) {
 	}
 }
 
-func TestTildePathsInConfigAreExpanded(t *testing.T) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		t.Skipf("no home directory: %v", err)
-	}
-
-	path := writeConfig(t, `{
-        "auth_dir": "~/.config/ccmproxy/auth",
-        "codex": { "auth_file": "~/.config/ccmproxy/other.json" }
-    }`)
-	cfg, err := Load(path)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-
-	// A literal "~" would be created as a directory next to the working
-	// directory, which is the bug this guards against.
-	for name, got := range map[string]string{
-		"auth_dir": cfg.AuthDir,
-	} {
-		if strings.Contains(got, "~") || !filepath.IsAbs(got) || !strings.HasPrefix(got, home) {
-			t.Fatalf("%s = %q, want an absolute path under %q", name, got, home)
-		}
-	}
-}
-
 func TestTildeInTheConfigPathIsExpanded(t *testing.T) {
 	// A quoted --config value reaches the program unexpanded.
 	cfg, err := Load("~/definitely-not-a-real-ccmproxy-config.json")
@@ -688,16 +662,6 @@ func TestRootExpandsTildeInEnvironment(t *testing.T) {
 	}
 }
 
-func TestDefaultsAreAlreadyAbsolute(t *testing.T) {
-	cfg, err := Load(filepath.Join(t.TempDir(), "absent.json"))
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if !filepath.IsAbs(cfg.AuthDir) {
-		t.Fatalf("auth_dir = %q, want an absolute path even with no config file", cfg.AuthDir)
-	}
-}
-
 func TestURLRefusalsDoNotEchoUserinfo(t *testing.T) {
 	const pw = "S3cretPassw0rdValue"
 	for _, body := range []string{
@@ -708,10 +672,10 @@ func TestURLRefusalsDoNotEchoUserinfo(t *testing.T) {
 		`{"upstream":"https://api.anthropic.com/#` + pw + `"}`,
 		`{"upstream":"https://user:` + pw + `@[::1"}`,
 		`{"upstream":"://user:` + pw + `@x"}`,
-		`{"codex":{"base_url":"https://user:` + pw + `@chatgpt.com"}}`,
-		`{"codex":{"base_url":"http://user:` + pw + `@chatgpt.com"}}`,
-		`{"codex":{"base_url":"https://user:` + pw + `@[::1"}}`,
-		`{"codex":{"base_url":"http://chatgpt.com/?key=` + pw + `"}}`,
+		`{"codex":{"remote":"https://user:` + pw + `@chatgpt.com"}}`,
+		`{"codex":{"remote":"http://user:` + pw + `@chatgpt.com"}}`,
+		`{"codex":{"remote":"https://user:` + pw + `@[::1"}}`,
+		`{"codex":{"remote":"http://chatgpt.com/?key=` + pw + `"}}`,
 	} {
 		_, err := Load(writeConfig(t, body))
 		if err == nil {
@@ -720,7 +684,7 @@ func TestURLRefusalsDoNotEchoUserinfo(t *testing.T) {
 		if strings.Contains(err.Error(), pw) {
 			t.Errorf("refusal echoes the URL secret: %v", err)
 		}
-		if !strings.Contains(err.Error(), "upstream") && !strings.Contains(err.Error(), "codex.base_url") {
+		if !strings.Contains(err.Error(), "upstream") && !strings.Contains(err.Error(), "codex.remote") {
 			t.Errorf("refusal does not name the key: %v", err)
 		}
 	}
@@ -767,12 +731,12 @@ func TestURLRefusalsNeverEchoSecrets(t *testing.T) {
 		"ftp://user:" + echoSecret + "@host",
 	}
 	for _, shape := range shapes {
-		for _, field := range []string{"upstream", "codex.base_url"} {
+		for _, field := range []string{"upstream", "codex.remote"} {
 			var body []byte
 			if field == "upstream" {
 				body, _ = json.Marshal(map[string]any{"upstream": shape})
 			} else {
-				body, _ = json.Marshal(map[string]any{"codex": map[string]any{"base_url": shape}})
+				body, _ = json.Marshal(map[string]any{"codex": map[string]any{"remote": shape}})
 			}
 			_, err := Load(writeConfig(t, string(body)))
 			if err == nil {
@@ -789,7 +753,7 @@ func TestURLRefusalsNeverEchoSecrets(t *testing.T) {
 func TestParseErrorsNeverEchoInput(t *testing.T) {
 	for _, body := range []string{
 		`{"auth_token": 12345, "x": "` + echoSecret + `"}`,
-		`{"codex": {"base_url": 12345}, "x":"` + echoSecret + `"}`,
+		`{"codex": {"remote": 12345}, "x":"` + echoSecret + `"}`,
 		`{"codex": "` + echoSecret + `"}`,
 		`{"auth_token": "` + echoSecret + `"`,
 		`{"auth_token": "` + echoSecret + `" "x"}`,
@@ -901,12 +865,12 @@ func TestUpstreamPinned(t *testing.T) {
 	}
 }
 
-func TestCodexBaseURL(t *testing.T) {
+func TestCodexRemote(t *testing.T) {
 	bad := []string{"http://chatgpt.com/backend-api/codex", "https:///backend-api", "https://", "chatgpt.com", "ws://chatgpt.com", "https://u@chatgpt.com"}
 	for _, b := range bad {
-		body, _ := json.Marshal(map[string]any{"codex": map[string]string{"base_url": b}})
+		body, _ := json.Marshal(map[string]any{"codex": map[string]string{"remote": b}})
 		if _, err := Load(writeConfig(t, string(body))); err == nil {
-			t.Errorf("codex.base_url %q accepted", b)
+			t.Errorf("codex.remote %q accepted", b)
 		}
 	}
 }
@@ -1075,7 +1039,7 @@ func TestInitExistingKeepsAndAddsOnlyMissing(t *testing.T) {
 		t.Fatalf("unknown key changed: %v", z)
 	}
 	// No default keys were written in.
-	for _, k := range []string{"upstream", "auth_dir", "log_level"} {
+	for _, k := range []string{"upstream", "log_level"} {
 		if _, ok := raw[k]; ok {
 			t.Errorf("default %q was written into an existing file", k)
 		}
