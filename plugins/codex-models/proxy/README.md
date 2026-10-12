@@ -59,7 +59,7 @@ Claude Code's `/model` picker is not built from `GET /v1/models`. It is Claude C
 
 ```sh
 ./ccmproxy models --settings-json   # a ready-to-merge modelPicker block
-./ccmproxy models --json            # [{"id","label","description"}], which install.sh reads
+./ccmproxy models --json            # [{"id","label","description","behavesAs"}], which install.sh reads
 ```
 
 Each row carries `behavesAs`, a model the installed Claude Code knows, whose client-side handling (prompt profile, capabilities, effort defaults) is applied. Without it a row for an unknown model is not offered. The id sent upstream is unchanged. The context window Claude Code assumes comes from `behavesAs` too: append `[1m]` to the model name (the proxy strips it) or set `CLAUDE_CODE_MAX_CONTEXT_TOKENS`.

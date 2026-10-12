@@ -175,12 +175,14 @@ func (block *assembledBlock) render() ([]byte, bool) {
 		out := []byte(`{"type":"tool_use","id":"","name":"","input":{}}`)
 		out, _ = sjson.SetBytes(out, "id", block.toolID)
 		out, _ = sjson.SetBytes(out, "name", block.toolName)
-		// Partial arguments would make the block unusable; an empty object
-		// is at least well formed.
-		if arguments := block.arguments.String(); arguments != "" && gjson.Valid(arguments) {
-			if parsed := gjson.Parse(arguments); parsed.IsObject() {
-				out, _ = sjson.SetRawBytes(out, "input", []byte(parsed.Raw))
+		// A block with no input deltas takes no input. Arguments that are
+		// not a JSON object were cut short: the block is dropped, never
+		// replaced with an invented {}.
+		if arguments := strings.TrimSpace(block.arguments.String()); arguments != "" {
+			if !gjson.Valid(arguments) || !gjson.Parse(arguments).IsObject() {
+				return nil, false
 			}
+			out, _ = sjson.SetRawBytes(out, "input", []byte(arguments))
 		}
 		return out, true
 

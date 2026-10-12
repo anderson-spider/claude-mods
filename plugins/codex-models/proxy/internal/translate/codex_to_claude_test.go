@@ -198,10 +198,11 @@ func TestStreamToolCall(t *testing.T) {
 		`{"type":"response.completed","response":{"id":"resp_4","output":[{"type":"function_call","id":"fc_1","call_id":"call_abc","name":"mcp__srv__do_thing","arguments":"{\"a\":1}"}],"usage":{"input_tokens":5,"output_tokens":2}}}`,
 	)
 
+	// A call is emitted once the upstream finishes it, with its whole
+	// input in one delta, so a call cut off later can never go out half done.
 	assertEvents(t, frames,
 		"message_start",
 		"content_block_start",
-		"content_block_delta",
 		"content_block_delta",
 		"content_block_stop",
 		"message_delta",
@@ -220,15 +221,11 @@ func TestStreamToolCall(t *testing.T) {
 		t.Fatalf("tool name = %q, want the original client name", got)
 	}
 
-	var arguments strings.Builder
-	for _, f := range frames[2:4] {
-		arguments.WriteString(gjson.Parse(f.data).Get("delta.partial_json").String())
-	}
-	if got := arguments.String(); got != `{"a":1}` {
+	if got := gjson.Parse(frames[2].data).Get("delta.partial_json").String(); got != `{"a":1}` {
 		t.Fatalf("streamed arguments = %q", got)
 	}
 
-	if got := gjson.Parse(frames[5].data).Get("delta.stop_reason").String(); got != "tool_use" {
+	if got := gjson.Parse(frames[4].data).Get("delta.stop_reason").String(); got != "tool_use" {
 		t.Fatalf("stop_reason = %q, want tool_use", got)
 	}
 }
@@ -537,12 +534,87 @@ func TestAssembleDiscardsPartialToolArguments(t *testing.T) {
 		`{"type":"response.function_call_arguments.delta","output_index":0,"item_id":"fc","delta":"{\"command\":\"l"}`,
 	)
 
-	blocks := message.Get("content").Array()
-	if len(blocks) != 1 {
-		t.Fatalf("content = %s", message.Get("content").Raw)
+	// The call never finished, so it is not in the answer at all: neither
+	// with broken JSON nor with an invented {}.
+	if blocks := message.Get("content").Array(); len(blocks) != 0 {
+		t.Fatalf("content = %s, want the unfinished call left out", message.Get("content").Raw)
 	}
-	if got := blocks[0].Get("input").Raw; got != "{}" {
-		t.Fatalf("input = %s, want an empty object rather than broken JSON", got)
+}
+
+// partialCallThenIncomplete is a call cut off by max_output_tokens: its
+// arguments stop mid-value and the response ends incomplete.
+var partialCallThenIncomplete = []string{
+	`{"type":"response.created","response":{"id":"resp_cut","model":"gpt-6-luna"}}`,
+	`{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc","call_id":"call_cut","name":"Bash"}}`,
+	`{"type":"response.function_call_arguments.delta","output_index":0,"item_id":"fc","delta":"{\"command\":"}`,
+	`{"type":"response.incomplete","response":{"id":"resp_cut","status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},` +
+		`"output":[{"type":"function_call","id":"fc","call_id":"call_cut","name":"Bash","arguments":"{\"command\":","status":"incomplete"}],` +
+		`"usage":{"input_tokens":10,"output_tokens":64}}}`,
+}
+
+func TestACallCutOffByMaxTokensIsNeverEmitted(t *testing.T) {
+	frames := runStream(t, NewStreamTranslator("gpt-6-luna", nil), partialCallThenIncomplete...)
+	assertEvents(t, frames, "message_start", "message_delta", "message_stop")
+	if got := gjson.Parse(frames[1].data).Get("delta.stop_reason").String(); got != "max_tokens" {
+		t.Fatalf("stop_reason = %q, want max_tokens", got)
+	}
+	for _, f := range frames {
+		if strings.Contains(f.data, "tool_use") || strings.Contains(f.data, "input_json_delta") {
+			t.Fatalf("a cut-off call leaked into the stream: %s", f.data)
+		}
+	}
+
+	message := assemble(t, "gpt-6-luna", nil, partialCallThenIncomplete...)
+	if blocks := message.Get("content").Array(); len(blocks) != 0 {
+		t.Fatalf("content = %s, want no tool_use", message.Get("content").Raw)
+	}
+	if got := message.Get("stop_reason").String(); got != "max_tokens" {
+		t.Fatalf("stop_reason = %q, want max_tokens", got)
+	}
+}
+
+func TestMaxTokensWinsOverAFinishedToolCall(t *testing.T) {
+	payloads := []string{
+		`{"type":"response.created","response":{"id":"r"}}`,
+		`{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc","call_id":"call_ok","name":"Read"}}`,
+		`{"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","id":"fc","call_id":"call_ok","name":"Read","arguments":"{\"path\":\"/x\"}","status":"completed"}}`,
+		`{"type":"response.output_item.added","output_index":1,"item":{"type":"function_call","id":"fc2","call_id":"call_cut","name":"Bash"}}`,
+		`{"type":"response.function_call_arguments.delta","output_index":1,"item_id":"fc2","delta":"{\"comm"}`,
+		`{"type":"response.incomplete","response":{"id":"r","incomplete_details":{"reason":"max_output_tokens"},"usage":{"input_tokens":1,"output_tokens":1}}}`,
+	}
+	message := assemble(t, "gpt-6-luna", nil, payloads...)
+	blocks := message.Get("content").Array()
+	if len(blocks) != 1 || blocks[0].Get("id").String() != "call_ok" || blocks[0].Get("input.path").String() != "/x" {
+		t.Fatalf("content = %s, want only the finished call", message.Get("content").Raw)
+	}
+	if got := message.Get("stop_reason").String(); got != "max_tokens" {
+		t.Fatalf("stop_reason = %q, want max_tokens", got)
+	}
+}
+
+func TestACallFinishedByArgumentsDoneIsEmitted(t *testing.T) {
+	frames := runStream(t, NewStreamTranslator("gpt-6-luna", nil),
+		`{"type":"response.created","response":{"id":"r"}}`,
+		`{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc","call_id":"call_1","name":"Read"}}`,
+		`{"type":"response.function_call_arguments.delta","output_index":0,"item_id":"fc","delta":"{\"path\":"}`,
+		`{"type":"response.function_call_arguments.done","output_index":0,"item_id":"fc","arguments":"{\"path\":\"/x\"}"}`,
+		`{"type":"response.completed","response":{"id":"r","usage":{"input_tokens":1,"output_tokens":1}}}`,
+	)
+	assertEvents(t, frames, "message_start", "content_block_start", "content_block_delta", "content_block_stop", "message_delta", "message_stop")
+	if got := gjson.Parse(frames[2].data).Get("delta.partial_json").String(); got != `{"path":"/x"}` {
+		t.Fatalf("arguments = %q", got)
+	}
+}
+
+func TestAssemblerDropsBrokenToolInput(t *testing.T) {
+	assembler := NewMessageAssembler()
+	assembler.Write([]byte("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"m\",\"model\":\"x\"}}\n\n" +
+		"event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"c\",\"name\":\"Bash\",\"input\":{}}}\n\n" +
+		"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"command\\\":\"}}\n\n" +
+		"event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n"))
+	message := gjson.ParseBytes(assembler.Message())
+	if blocks := message.Get("content").Array(); len(blocks) != 0 {
+		t.Fatalf("content = %s, want the broken block dropped, not given {}", message.Get("content").Raw)
 	}
 }
 
@@ -660,5 +732,20 @@ func TestUsageCacheWritesOnly(t *testing.T) {
 	in, _, read, write := usage(gjson.Parse(`{"input_tokens":1000,"output_tokens":1,"input_tokens_details":{"cache_write_tokens":250}}`))
 	if in != 750 || read != 0 || write != 250 {
 		t.Fatalf("usage = %d %d %d, want 750 fresh, 0 read, 250 written", in, read, write)
+	}
+}
+
+func TestStreamErrorMessagesAreCleanedAndCapped(t *testing.T) {
+	long := strings.Repeat("x", 1000)
+	frames := runStream(t, NewStreamTranslator("gpt-6-luna", nil),
+		`{"type":"response.created","response":{"id":"r"}}`,
+		`{"type":"error","error":{"type":"server_error","message":"a\u0000b\nc `+long+`"}}`,
+	)
+	message := gjson.Parse(frames[len(frames)-1].data).Get("error.message").String()
+	if !strings.HasPrefix(message, "a b c x") || !strings.HasSuffix(message, "…") || len([]rune(message)) > 301 {
+		t.Fatalf("message = %q", message)
+	}
+	if got := CleanMessage("  plain   text \r\n"); got != "plain text" {
+		t.Fatalf("CleanMessage = %q", got)
 	}
 }

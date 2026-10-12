@@ -254,20 +254,20 @@ func TestModelsJSONPrintsThePickerRows(t *testing.T) {
 		t.Fatalf("%d rows for %d picker options", len(rows), len(options))
 	}
 	for i, row := range rows {
-		if len(row) != 3 {
-			t.Fatalf("row %d keys = %v, want exactly id, label, description", i, row)
+		if len(row) != 4 {
+			t.Fatalf("row %d keys = %v, want exactly id, label, description, behavesAs", i, row)
 		}
-		var id, label, description string
-		for key, into := range map[string]*string{"id": &id, "label": &label, "description": &description} {
+		var id, label, description, behavesAs string
+		for key, into := range map[string]*string{"id": &id, "label": &label, "description": &description, "behavesAs": &behavesAs} {
 			if err := json.Unmarshal(row[key], into); err != nil {
 				t.Fatalf("row %d %s: %v", i, key, err)
 			}
 		}
-		if id != options[i].Model || label != options[i].Label || description != options[i].Description {
+		if id != options[i].Model || label != options[i].Label || description != options[i].Description || behavesAs != options[i].BehavesAs {
 			t.Fatalf("row %d = %v, want %+v", i, row, options[i])
 		}
-		if id == "" || label == "" {
-			t.Fatalf("row %d has an empty id or label", i)
+		if id == "" || label == "" || !strings.HasPrefix(behavesAs, "claude-") {
+			t.Fatalf("row %d has an empty id or label, or no Claude behavesAs", i)
 		}
 	}
 }

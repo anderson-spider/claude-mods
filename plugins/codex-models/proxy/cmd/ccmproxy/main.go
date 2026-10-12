@@ -45,7 +45,7 @@ Usage:
                                 --settings-json prints a modelPicker block
                                 to merge into Claude Code's settings.json;
                                 --json prints the picker rows as
-                                [{"id","label","description"}]
+                                [{"id","label","description","behavesAs"}]
   ccmproxy env [--shell SHELL]  print the environment Claude Code needs
                                 (posix, fish, powershell or json); it
                                 includes the proxy's secret
@@ -377,7 +377,7 @@ func runModels(args []string) error {
 		fs.BoolVar(&settingsJSON, "settings-json", false,
 			"print a modelPicker block to merge into Claude Code's settings.json")
 		fs.BoolVar(&rowsJSON, "json", false,
-			`print the picker rows as [{"id","label","description"}]`)
+			`print the picker rows as [{"id","label","description","behavesAs"}]`)
 	})
 	if err != nil {
 		return err
@@ -410,18 +410,21 @@ func runModels(args []string) error {
 }
 
 // modelRow is one line of `ccmproxy models --json`: the id to put in a
-// picker row or an agent's `model`, and its label and description.
+// picker row or an agent's `model`, its label and description, and the
+// Claude model it behaves as, which a picker row for a model Claude Code does
+// not know needs.
 type modelRow struct {
 	ID          string `json:"id"`
 	Label       string `json:"label"`
 	Description string `json:"description"`
+	BehavesAs   string `json:"behavesAs"`
 }
 
 func modelRows(registry *codex.Registry) []modelRow {
 	options := registry.PickerOptions()
 	rows := make([]modelRow, 0, len(options))
 	for _, option := range options {
-		rows = append(rows, modelRow{ID: option.Model, Label: option.Label, Description: option.Description})
+		rows = append(rows, modelRow{ID: option.Model, Label: option.Label, Description: option.Description, BehavesAs: option.BehavesAs})
 	}
 	return rows
 }
