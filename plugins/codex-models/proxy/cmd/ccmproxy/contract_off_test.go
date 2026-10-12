@@ -2,7 +2,10 @@
 
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestContractVariablesAreInertInTheDefaultBuild(t *testing.T) {
 	for name, value := range map[string]string{
@@ -20,5 +23,12 @@ func TestContractVariablesAreInertInTheDefaultBuild(t *testing.T) {
 	}
 	if err := checkUpstream(t.Context(), "http://127.0.0.1:9", fixedLookup()); err == nil {
 		t.Fatal("a loopback upstream was accepted")
+	}
+}
+
+func TestVersionHasNoBuildLineInTheDefaultBuild(t *testing.T) {
+	out := captureStdout(t, func() error { return run([]string{"version"}) })
+	if strings.Contains(out, "  build ") || strings.Contains(out, "contract") {
+		t.Fatalf("the default build's version names a contract build:\n%s", out)
 	}
 }
