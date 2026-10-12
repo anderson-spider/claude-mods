@@ -2,10 +2,11 @@
 
 package config
 
-// upstreamAllowed reports whether upstream may be configured. The default
-// build accepts DefaultUpstream only.
+// The default build: no override exists, and nothing here reads the
+// environment. contract_on.go is the test build's version of these two.
+
+// upstreamAllowed accepts DefaultUpstream only.
 func upstreamAllowed(upstream string) bool { return upstream == DefaultUpstream }
 
-// validateCodexBaseURL checks codex.base_url. The default build accepts
-// https URLs only.
-func validateCodexBaseURL(raw string) error { return validateHTTPSURL(raw) }
+// validateCodexBaseURL accepts an https URL only.
+func validateCodexBaseURL(raw string) error { return requireHTTPS(raw) }
