@@ -326,11 +326,11 @@ func (c *Config) Validate() error {
 	if err := ValidateListenAddr(c.ListenHTTP); err != nil {
 		return fmt.Errorf("config: listen_http: %w", err)
 	}
-	if c.Upstream != DefaultUpstream {
+	if !upstreamAllowed(c.Upstream) {
 		return fmt.Errorf("config: upstream %s is not allowed: the passthrough carries the Claude Code login, "+
 			"so it goes only to %s (remove the key)", safeURL(c.Upstream), DefaultUpstream)
 	}
-	if err := validateHTTPSURL(c.Codex.BaseURL); err != nil {
+	if err := validateCodexBaseURL(c.Codex.BaseURL); err != nil {
 		return fmt.Errorf("config: codex.base_url: %w", err)
 	}
 	if c.AuthToken != "" {

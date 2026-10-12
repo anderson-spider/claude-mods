@@ -62,7 +62,7 @@ func New(cfg *config.Config, registry *codex.Registry, backend *codex.Backend, t
 		backend:  backend,
 		upstream: upstream,
 
-		pingInterval: defaultPingInterval,
+		pingInterval: initialPingInterval(),
 		// Redirects are never followed: a followed redirect would resend
 		// the Authorization header, possibly downgraded to http. The 3xx goes
 		// back to the client as it came. The ReverseProxy below calls the
