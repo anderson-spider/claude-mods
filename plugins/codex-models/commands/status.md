@@ -1,6 +1,6 @@
 ---
-description: Show whether the Codex models proxy is reachable, its login, models and settings
+description: Check proxy reachability, login, models and settings
 disable-model-invocation: true
 ---
 
-The codex-models plugin's hooks did not answer /codex-models:status. Tell the user to run /reload-plugins; do nothing else.
+Report that the status hook is unavailable and ask the user to run /reload-plugins. End this command response.

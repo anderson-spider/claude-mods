@@ -1,35 +1,17 @@
 # codex-computer-use
 
-Routes native Mac app control through Codex computer use, refusing Claude's own desktop tools while on. `/codex-cu` controls it.
+Setup, use, privacy or live desktop checks: read [README.md](README.md). MCP app-approval elicitation belongs to the helper; the plugin cannot answer it.
 
-Two halves over a Unix socket:
+## Map and safety
 
-- The plugin (`hooks/`).
-- `helper/`: plain Node ESM run by the ChatGPT app's `node`, installed by `helper/install.sh` as LaunchAgent `com.anderson-spider.codex-cu` into `~/.claude/mcp/codex-cu`.
+- `hooks/register.tsx`: registration/routing; `bridge.ts`: call/approval rounds; `question.ts`: queued question with injected clock/wait/band; `routing.ts`/`presentation.ts`: pure text; `helper.ts`: socket link.
+- `helper/helper.mjs`: Unix-socket entry point; `helper/lib/hub.mjs`: sessions/ownership/approvals; `approvals.mjs`: policy; `codex-approvals.mjs`: saved list; `config.mjs` and `helper/launch.mjs`: connection.
+- Helper is Node ESM, run by the ChatGPT app's `node`; `helper/install.sh` installs LaunchAgent `com.anderson-spider.codex-cu` in `~/.claude/mcp/codex-cu`.
+- Socket `run/helper.sock` and approvals `state/approvals.json` are fixed beside installed `helper.mjs`. Neither installer nor uninstaller edits Claude settings; uninstall retains code/approvals/logs. Install accepts only `--check` or no arguments; uninstall takes none (`helper/test/config.test.mjs`).
+- App approvals expire five minutes from **before entering the queue**; clock/poll failure must never approve. Coverage: `tests/question.test.ts`; Claude desktop-tool refusal while on: `tests/register.test.ts`.
 
-The helper stores its socket in `run/helper.sock` and its approvals in `state/approvals.json`, both beside the installed `helper.mjs`. These directories are fixed. Install accepts only `--check` or no arguments; uninstall accepts no arguments and retains code, approvals and logs. Neither script edits Claude settings.
+## Checks
 
-The helper is the MCP client of Codex's `cua_repl` server and answers its app-approval questions from the person's choices, because the plugin cannot answer an MCP elicitation.
-
-## Helper (`helper/lib/`)
-
-- `helper.mjs` (in `helper/`): the entry point the LaunchAgent runs; serves the plugin over the Unix socket.
-- `hub.mjs`: sessions, ownership, approvals flow.
-- `approvals.mjs`: policy.
-- `codex-approvals.mjs`: Codex's saved list.
-- `config.mjs` and `launch.mjs`: the connection (`launch.mjs` sits in `helper/`).
-
-## Plugin (`hooks/`)
-
-- `bridge.ts` runs the call/approval rounds.
-- `question.ts` holds one approval question at a time; the clock, the wait and the band are injected.
-- `routing.ts` and `presentation.ts` are pure text.
-- `helper.ts` is the socket link.
-
-App approvals have a fixed five-minute deadline, counted from before a question enters the queue. The host clock is injected into the pure question flow; a clock or polling failure never approves an app.
-
-## Tests
-
-Host timeout tests control `clock.now` and release held polls without real deadline waits. Helper tests inject fake dependencies or copy the helper into a temporary installation layout; they never write to installed run/state directories.
-
-`helper/test/contract.mjs` holds the caller and socket examples that both the plugin's tests and the helper's tests check. The helper's tests run with the ChatGPT app's `node`: `/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node --test plugins/codex-computer-use/helper/test/*.test.mjs`.
+- `claude plugin validate plugins/codex-computer-use`; `claude plugin test plugins/codex-computer-use`; `node scripts/check-consistency.mjs`.
+- `/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node --test plugins/codex-computer-use/helper/test/*.test.mjs`.
+- `helper/test/contract.mjs` is shared caller/socket evidence. Host timeout tests inject `clock.now` and release held polls; helper tests use injected fakes or an isolated copied installation, never installed run/state directories.

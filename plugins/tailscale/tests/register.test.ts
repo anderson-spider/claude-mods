@@ -139,6 +139,15 @@ test('tool descriptions and schema descriptions stay within the prompt budget', 
 
   expect(tools.length).toBe(2)
   expect(descriptionChars(tools)).toBeLessThanOrEqual(1300)
+  const [get, write] = tools as { description: string; inputSchema: { properties: Record<string, { description?: string }> } }[]
+  expect(get!.description).toContain('Secret fields (*Key, *Secret, *Token) are filtered')
+  expect(write!.description).toContain('after user confirmation')
+  expect(write!.description).toContain('Whole-tailnet deletion is refused')
+  expect(write!.description).toContain('GET first and pass its ETag in ifMatch')
+  expect(write!.description).toContain('Write responses retain new-key secrets')
+  expect(write!.inputSchema.properties.path!.description).toBe(get!.inputSchema.properties.path!.description)
+  expect(write!.inputSchema.properties.path!.description).toContain('https://api.tailscale.com/api/v2')
+  expect(write!.inputSchema.properties.body!.description).toContain('non-JSON strings are sent as HuJSON')
 })
 
 test('write reports a missing TS_API_KEY and sends nothing, like get', async ($, on) => {
