@@ -36,6 +36,11 @@ var ErrCodexCLILoginExpired = errors.New("codex: the Codex CLI login has expired
 var ErrAuthFileIsCodexCLI = errors.New("codex: auth_file is the Codex CLI's login file, which this proxy never writes; " +
 	"leave auth_file empty (and set use_codex_cli_auth to borrow that login read-only) or point it at another file")
 
+// ErrInsideCodexHome is returned when this proxy's own files (auth_dir, or the
+// directory of auth_file) would go in the Codex CLI's directory, CODEX_HOME.
+var ErrInsideCodexHome = errors.New("codex: the proxy's credential files would go in the Codex CLI's directory, " +
+	"which this proxy never writes; point auth_dir (and auth_file, if set) at a directory of its own")
+
 // refreshLead refreshes an access token this far before it expires.
 const refreshLead = 5 * time.Minute
 
@@ -113,13 +118,22 @@ func NewStore(client *Client, options StoreOptions) *Store {
 // credential file (directly, through a symlink, `..` or a different case on
 // a case-insensitive volume). Every read, write and removal runs it; call it
 // at start to fail early.
+//
+// It also refuses an auth_dir, or an auth_file's directory, that is the Codex
+// CLI's directory or inside it (resolved the same way), so the proxy's file,
+// its lock and the 0700 it sets never land there.
 func (s *Store) Check() error {
 	path := strings.TrimSpace(s.options.ExplicitPath)
-	if path == "" {
-		return nil
+	if path != "" {
+		if cli := CodexCLIAuthPath(); cli != "" && sameFile(path, cli) {
+			return fmt.Errorf("%w (%s is %s)", ErrAuthFileIsCodexCLI, path, cli)
+		}
+		if insideCodexHome(filepath.Dir(path)) {
+			return fmt.Errorf("%w (auth_file %s is in %s)", ErrInsideCodexHome, path, CodexCLIHome())
+		}
 	}
-	if cli := CodexCLIAuthPath(); cli != "" && sameFile(path, cli) {
-		return fmt.Errorf("%w (%s is %s)", ErrAuthFileIsCodexCLI, path, cli)
+	if dir := strings.TrimSpace(s.options.Dir); dir != "" && insideCodexHome(dir) {
+		return fmt.Errorf("%w (auth_dir %s is in %s)", ErrInsideCodexHome, dir, CodexCLIHome())
 	}
 	return nil
 }
@@ -471,6 +485,9 @@ func (s *Store) writeFileAtomic(path string, data []byte) error {
 // ensureDir creates dir at 0700; this proxy's own auth directory is also
 // tightened to 0700 when it already exists.
 func (s *Store) ensureDir(dir string) error {
+	if insideCodexHome(dir) {
+		return fmt.Errorf("%w (%s is in %s)", ErrInsideCodexHome, dir, CodexCLIHome())
+	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("codex: create %s: %w", dir, err)
 	}
