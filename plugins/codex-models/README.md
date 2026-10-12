@@ -54,9 +54,10 @@ Uninstall accepts no arguments. It removes the base URL only when it is loopback
 
 Plugin tests use pure modules and a fake host/network. Proxy unit/contract tests use local fakes; installer tests use a temporary HOME and fake services, never loading the real LaunchAgent. Commands for contributors are in [AGENTS.md](AGENTS.md); golden rules are in [contract/README.md](proxy/contract/README.md).
 
+Live validation confirmed Codex `/model` rows in a new session and a successful chat with `gpt-6.1-sol`. The same session then continued on Claude (Opus) through the proxy, with `ANTHROPIC_BASE_URL` pointing at ccmproxy, including spawning subagents. Streaming responses and multi-round tool calls (Grep, Read, Bash) worked through the real remote with `crew:code-reader-codex` on `gpt-6-luna`, `crew:developer-codex` on `gpt-6.1-sol` and `crew:architect-codex` on `gpt-6-astra`. The remote accepted `<model>(medium)` ids; this does not establish that the effort took effect upstream.
+
 Still unverified live:
-- A new session offering Codex `/model` rows while staying on Claude.
-- The relay against a real remote: streaming, tool calls, `<model>(<effort>)` ids and remote error shapes.
+- Effort actually applied upstream and remote error shapes.
 - Real `wham/usage` fields through the api-call (`rate_limit.primary_window`/`secondary_window`, `used_percent`, `limit_window_seconds`, `reset_at`/`reset_after_seconds`); the schema is third-party-reported and unreadable fields are skipped.
 - Multi-turn Codex reasoning replay and Jev effort; `crew:architect-codex` denial outside `.crew/`.
 - Startup notices with stopped proxy, wrong secret or another app on the port.
