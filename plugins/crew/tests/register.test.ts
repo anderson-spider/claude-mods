@@ -1863,7 +1863,7 @@ const mountPane = ($: Engine, over: Partial<typeof PANE_PROPS> = {}) =>
 /** Every text the drawing shows, one string per Text element, in order. */
 const shown = async (ui: { findAll: (q: { type?: string }) => Promise<{ text: string }[]> }) => (await ui.findAll({ type: 'Text' })).map(t => t.text).join('\n')
 
-test('a load with every removed Flightdeck option still saved starts, opens the pane and draws', {
+test('a load with stored options the plugin does not read (architectPattern, palette, statusLine, …) starts, opens the pane and draws', {
   options: {
     architectPattern: 'reviewer', architectLabel: 'REVIEW', gateLabel: 'GATE', panels: 'main,log', moments: false,
     matchDescriptions: true, maxCards: 6, layout: 'wide', palette: 'pastel', statusLine: false,
