@@ -2,43 +2,83 @@ package translate
 
 import (
 	"bytes"
+	"encoding/json"
 	"strings"
-
-	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
 )
 
-// MessageAssembler folds the Anthropic SSE frames a StreamTranslator produces
-// back into a single non-streaming message.
+// MessageAssembler folds the events a StreamTranslator writes into one
+// Messages response, for a client that did not ask to stream.
 //
-// A client that did not ask for streaming still has to be answered from a
-// stream, because that is all the Codex backend serves. Rebuilding the message
-// from the translated frames rather than from the terminal upstream payload
-// keeps one translation path for both cases: the real backend does not repeat
-// the output items in response.completed, so anything reading only that event
-// would return an empty message.
+// The Codex backend answers only as a stream, so the non-streaming answer is
+// built from the same translated events as the streaming one: one translation
+// path for both. Building it from the terminal payload instead would come out
+// empty, because the production backend does not repeat streamed items there.
 type MessageAssembler struct {
-	id     string
-	model  string
-	blocks []*assembledBlock
-	open   *assembledBlock
+	id    string
+	model string
+
+	blocks  []*assembledBlock
+	current *assembledBlock
 
 	stopReason   string
 	stopSequence string
-	usage        []byte
+	usage        json.RawMessage
 
-	errorType    string
-	errorMessage string
+	errType    string
+	errMessage string
 }
 
+// assembledBlock gathers one content block's start and deltas.
 type assembledBlock struct {
 	kind      string
+	id        string
+	name      string
 	text      strings.Builder
 	thinking  strings.Builder
 	signature string
-	toolID    string
-	toolName  string
-	arguments strings.Builder
+	input     strings.Builder
+}
+
+// translatedEvent holds the fields of every event a StreamTranslator writes
+// that the assembler reads.
+type translatedEvent struct {
+	Type    text `json:"type"`
+	Message struct {
+		ID    text `json:"id"`
+		Model text `json:"model"`
+	} `json:"message"`
+	ContentBlock struct {
+		Type text `json:"type"`
+		ID   text `json:"id"`
+		Name text `json:"name"`
+		Text text `json:"text"`
+	} `json:"content_block"`
+	Delta struct {
+		Type         text            `json:"type"`
+		Text         text            `json:"text"`
+		Thinking     text            `json:"thinking"`
+		Signature    text            `json:"signature"`
+		PartialJSON  text            `json:"partial_json"`
+		StopReason   json.RawMessage `json:"stop_reason"`
+		StopSequence json.RawMessage `json:"stop_sequence"`
+	} `json:"delta"`
+	Usage json.RawMessage `json:"usage"`
+	Error struct {
+		Type    text `json:"type"`
+		Message text `json:"message"`
+	} `json:"error"`
+}
+
+// assembledMessage is the Messages response body.
+type assembledMessage struct {
+	ID           string          `json:"id"`
+	Type         string          `json:"type"`
+	Role         string          `json:"role"`
+	Model        string          `json:"model"`
+	Content      []any           `json:"content"`
+	StopReason   *string         `json:"stop_reason"`
+	StopSequence *string         `json:"stop_sequence"`
+	Usage        json.RawMessage `json:"usage"`
 }
 
 // NewMessageAssembler returns an assembler for one response.
@@ -46,161 +86,150 @@ func NewMessageAssembler() *MessageAssembler {
 	return &MessageAssembler{}
 }
 
-// Write consumes SSE frames emitted by a StreamTranslator.
+// Write takes SSE bytes written by a StreamTranslator.
 func (a *MessageAssembler) Write(frames []byte) {
-	for _, payload := range ssePayloads(frames) {
-		a.event(payload)
+	for _, payload := range eventPayloads(frames) {
+		var ev translatedEvent
+		readJSON(payload, &ev)
+		a.take(ev)
 	}
 }
 
-// Err reports the error type and message if the stream carried one.
+// Err returns the error type and message when the stream ended in an error.
 func (a *MessageAssembler) Err() (kind string, message string, ok bool) {
-	if a.errorMessage == "" {
+	if a.errMessage == "" {
 		return "", "", false
 	}
-	return a.errorType, a.errorMessage, true
+	return a.errType, a.errMessage, true
 }
 
-func (a *MessageAssembler) event(payload []byte) {
-	event := gjson.ParseBytes(payload)
-	switch event.Get("type").String() {
+func (a *MessageAssembler) take(ev translatedEvent) {
+	switch ev.Type {
 	case "message_start":
-		a.id = event.Get("message.id").String()
-		a.model = event.Get("message.model").String()
+		a.id = string(ev.Message.ID)
+		a.model = string(ev.Message.Model)
 
 	case "content_block_start":
 		block := &assembledBlock{
-			kind:     event.Get("content_block.type").String(),
-			toolID:   event.Get("content_block.id").String(),
-			toolName: event.Get("content_block.name").String(),
+			kind: string(ev.ContentBlock.Type),
+			id:   string(ev.ContentBlock.ID),
+			name: string(ev.ContentBlock.Name),
 		}
-		if text := event.Get("content_block.text").String(); text != "" {
-			block.text.WriteString(text)
-		}
+		block.text.WriteString(string(ev.ContentBlock.Text))
 		a.blocks = append(a.blocks, block)
-		a.open = block
+		a.current = block
 
 	case "content_block_delta":
-		if a.open == nil {
+		if a.current == nil {
 			return
 		}
-		delta := event.Get("delta")
-		switch delta.Get("type").String() {
+		switch ev.Delta.Type {
 		case "text_delta":
-			a.open.text.WriteString(delta.Get("text").String())
+			a.current.text.WriteString(string(ev.Delta.Text))
 		case "thinking_delta":
-			a.open.thinking.WriteString(delta.Get("thinking").String())
+			a.current.thinking.WriteString(string(ev.Delta.Thinking))
 		case "signature_delta":
-			a.open.signature = delta.Get("signature").String()
+			a.current.signature = string(ev.Delta.Signature)
 		case "input_json_delta":
-			a.open.arguments.WriteString(delta.Get("partial_json").String())
+			a.current.input.WriteString(string(ev.Delta.PartialJSON))
 		}
 
 	case "content_block_stop":
-		a.open = nil
+		a.current = nil
 
 	case "message_delta":
-		if reason := event.Get("delta.stop_reason"); reason.Exists() {
-			a.stopReason = reason.String()
+		if len(ev.Delta.StopReason) > 0 {
+			a.stopReason = textOf(ev.Delta.StopReason)
 		}
-		if sequence := event.Get("delta.stop_sequence"); sequence.Type == gjson.String {
-			a.stopSequence = sequence.String()
+		if kindOf(ev.Delta.StopSequence) == '"' {
+			a.stopSequence = textOf(ev.Delta.StopSequence)
 		}
-		if usage := event.Get("usage"); usage.IsObject() {
-			a.usage = []byte(usage.Raw)
+		if kindOf(ev.Usage) == '{' {
+			a.usage = ev.Usage
 		}
 
 	case "error":
-		a.errorType = event.Get("error.type").String()
-		a.errorMessage = event.Get("error.message").String()
+		a.errType = string(ev.Error.Type)
+		a.errMessage = string(ev.Error.Message)
 	}
 }
 
-// Message renders the assembled Anthropic message.
+// Message returns the assembled Messages response.
 func (a *MessageAssembler) Message() []byte {
-	out := []byte(`{"id":"","type":"message","role":"assistant","model":"","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":0,"output_tokens":0}}`)
-
-	id := a.id
-	if id == "" {
-		id = "msg_codex"
+	message := assembledMessage{
+		ID:      a.id,
+		Type:    "message",
+		Role:    "assistant",
+		Model:   a.model,
+		Content: []any{},
+		Usage:   a.usage,
 	}
-	out, _ = sjson.SetBytes(out, "id", id)
-	out, _ = sjson.SetBytes(out, "model", a.model)
-
-	rendered := make([][]byte, 0, len(a.blocks))
+	if message.ID == "" {
+		message.ID = "msg_codex"
+	}
 	for _, block := range a.blocks {
-		if encoded, ok := block.render(); ok {
-			rendered = append(rendered, encoded)
+		if content, ok := block.content(); ok {
+			message.Content = append(message.Content, content)
 		}
 	}
-	if len(rendered) > 0 {
-		out, _ = sjson.SetRawBytes(out, "content", joinRawArray(rendered))
-	}
-
 	if a.stopReason != "" {
-		out, _ = sjson.SetBytes(out, "stop_reason", a.stopReason)
+		message.StopReason = &a.stopReason
 	}
 	if a.stopSequence != "" {
-		out, _ = sjson.SetBytes(out, "stop_sequence", a.stopSequence)
+		message.StopSequence = &a.stopSequence
 	}
-	if len(a.usage) > 0 {
-		out, _ = sjson.SetRawBytes(out, "usage", a.usage)
+	if len(message.Usage) == 0 {
+		message.Usage = encode(tokenUsage{})
 	}
-	return out
+	return encode(message)
 }
 
-func (block *assembledBlock) render() ([]byte, bool) {
-	switch block.kind {
+// content is the block as it stands in the message; an empty block, or a
+// tool_use whose input is not a JSON object, has no place there.
+func (b *assembledBlock) content() (any, bool) {
+	switch b.kind {
 	case "text":
-		if block.text.Len() == 0 {
+		if b.text.Len() == 0 {
 			return nil, false
 		}
-		out := []byte(`{"type":"text","text":""}`)
-		out, _ = sjson.SetBytes(out, "text", block.text.String())
-		return out, true
+		return textBlock{Type: "text", Text: b.text.String()}, true
 
 	case "thinking":
-		if block.thinking.Len() == 0 && block.signature == "" {
+		if b.thinking.Len() == 0 && b.signature == "" {
 			return nil, false
 		}
-		out := []byte(`{"type":"thinking","thinking":"","signature":""}`)
-		out, _ = sjson.SetBytes(out, "thinking", block.thinking.String())
-		out, _ = sjson.SetBytes(out, "signature", block.signature)
-		return out, true
+		return thinkingBlock{Type: "thinking", Thinking: b.thinking.String(), Signature: b.signature}, true
 
 	case "tool_use":
-		if block.toolName == "" {
+		if b.name == "" {
 			return nil, false
 		}
-		out := []byte(`{"type":"tool_use","id":"","name":"","input":{}}`)
-		out, _ = sjson.SetBytes(out, "id", block.toolID)
-		out, _ = sjson.SetBytes(out, "name", block.toolName)
-		// A block with no input deltas takes no input. Arguments that are
-		// not a JSON object were cut short: the block is dropped, never
-		// replaced with an invented {}.
-		if arguments := strings.TrimSpace(block.arguments.String()); arguments != "" {
-			if !gjson.Valid(arguments) || !gjson.Parse(arguments).IsObject() {
+		// No input deltas means no input. Input that is not a JSON object
+		// was cut short: the block is dropped, never given an invented {}.
+		input := emptyInput
+		if s := strings.TrimSpace(b.input.String()); s != "" {
+			if !isObject(s) {
 				return nil, false
 			}
-			out, _ = sjson.SetRawBytes(out, "input", []byte(arguments))
+			input = json.RawMessage(s)
 		}
-		return out, true
-
-	default:
-		return nil, false
+		return toolUseBlock{Type: "tool_use", ID: b.id, Name: b.name, Input: input}, true
 	}
+	return nil, false
 }
 
-// ssePayloads extracts the data payload of each event in an SSE byte stream.
-func ssePayloads(frames []byte) [][]byte {
+// eventPayloads returns the data of each event in SSE bytes, a multi-line
+// data field joined with newlines.
+func eventPayloads(frames []byte) [][]byte {
 	var payloads [][]byte
-	for _, block := range bytes.Split(frames, []byte("\n\n")) {
+	for _, event := range bytes.Split(frames, []byte("\n\n")) {
 		var payload []byte
-		for _, line := range bytes.Split(block, []byte("\n")) {
-			if !bytes.HasPrefix(line, []byte("data:")) {
+		for _, line := range bytes.Split(event, []byte("\n")) {
+			value, ok := bytes.CutPrefix(line, []byte("data:"))
+			if !ok {
 				continue
 			}
-			value := bytes.TrimPrefix(bytes.TrimPrefix(line, []byte("data:")), []byte(" "))
+			value = bytes.TrimPrefix(value, []byte(" "))
 			if len(payload) > 0 {
 				payload = append(payload, '\n')
 			}

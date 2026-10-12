@@ -1,620 +1,374 @@
-// Package translate converts between the Anthropic Messages API that Claude
-// Code speaks and the OpenAI Responses API exposed by the Codex backend.
 package translate
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
-	"fmt"
-	"sort"
-	"strconv"
+	"encoding/json"
+	"errors"
 	"strings"
-
-	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
 )
 
-// SignatureMarker prefixes every thinking signature the proxy hands to Claude
-// Code. Codex reasoning state and Anthropic reasoning signatures are not
-// interchangeable, so the marker lets both directions recognise their own
-// blocks and drop the other's instead of failing a request upstream.
-const SignatureMarker = "ccmp1:"
-
-// nameLimit is the maximum function name length the Responses API accepts.
-const nameLimit = 64
-
-// Request is the outcome of translating one Claude request.
+// Request is one Claude request translated for the Codex backend.
 type Request struct {
-	// Body is the JSON payload to POST to the Codex Responses endpoint.
+	// Body is the Responses request to POST.
 	Body []byte
-	// ToolNames maps the shortened names sent upstream back to the names the
-	// client used, so tool_use blocks can be reported under the original name.
+	// ToolNames maps each tool name sent to Codex back to the client's own,
+	// for the names that had to be shortened (and every other tool's).
 	ToolNames map[string]string
 }
 
-// Options controls the translation.
+// Options says what to ask Codex for.
 type Options struct {
-	// Model is the Codex slug to request.
+	// Model is the Codex model id.
 	Model string
-	// Effort overrides the reasoning effort. When empty the effort is derived
-	// from the Claude thinking configuration.
+	// Effort is the reasoning effort to send. Empty means: read it from the
+	// request (see EffortFrom).
 	Effort string
-	// DefaultEffort is used when neither Effort nor the request implies one.
+	// DefaultEffort is what EffortFrom falls back to.
 	DefaultEffort string
 }
 
-// ClaudeToCodex translates an Anthropic Messages request into a Codex
-// Responses request. The Codex backend only serves streaming responses, so the
-// generated body always sets stream.
+// claudeRequest is what the translation reads of a Messages request.
+type claudeRequest struct {
+	preferences
+	System     json.RawMessage `json:"system"`
+	Messages   json.RawMessage `json:"messages"`
+	Tools      json.RawMessage `json:"tools"`
+	ToolChoice json.RawMessage `json:"tool_choice"`
+}
+
+type claudeMessage struct {
+	Role    text            `json:"role"`
+	Content json.RawMessage `json:"content"`
+}
+
+// claudeBlock holds the fields of every content block type the translation
+// reads; each type uses its own subset.
+type claudeBlock struct {
+	Type      text            `json:"type"`
+	Text      text            `json:"text"`
+	Source    json.RawMessage `json:"source"`
+	Signature text            `json:"signature"`
+	ID        text            `json:"id"`
+	Name      text            `json:"name"`
+	Input     json.RawMessage `json:"input"`
+	ToolUseID text            `json:"tool_use_id"`
+	Content   json.RawMessage `json:"content"`
+}
+
+type claudeSource struct {
+	Type      text `json:"type"`
+	MediaType text `json:"media_type"`
+	Data      text `json:"data"`
+	URL       text `json:"url"`
+}
+
+// codexRequest is the Responses request body. The field order is the order
+// on the wire.
+type codexRequest struct {
+	Model string `json:"model"`
+	// Instructions stays empty: the system prompt goes in as a developer
+	// message instead.
+	Instructions      string          `json:"instructions"`
+	Input             []any           `json:"input"`
+	Tools             *[]any          `json:"tools,omitempty"`
+	ToolChoice        any             `json:"tool_choice,omitempty"`
+	ParallelToolCalls bool            `json:"parallel_tool_calls"`
+	Reasoning         codexReasoning  `json:"reasoning"`
+	Store             bool            `json:"store"`
+	Stream            bool            `json:"stream"`
+	Include           []string        `json:"include"`
+	Text              *codexTextBlock `json:"text,omitempty"`
+}
+
+type codexReasoning struct {
+	Effort  string `json:"effort"`
+	Summary string `json:"summary"`
+}
+
+type codexTextBlock struct {
+	Format json.RawMessage `json:"format"`
+}
+
+// Input items.
+
+type messageItem struct {
+	Type    string `json:"type"`
+	Role    string `json:"role"`
+	Content []any  `json:"content"`
+}
+
+// reasoningItem replays the reasoning state of an earlier Codex turn. The
+// backend expects "summary": [] and "content": null, written out, not left
+// absent.
+type reasoningItem struct {
+	Type             string     `json:"type"`
+	Summary          []struct{} `json:"summary"`
+	Content          []struct{} `json:"content"`
+	EncryptedContent string     `json:"encrypted_content"`
+}
+
+type functionCallItem struct {
+	Type      string `json:"type"`
+	CallID    string `json:"call_id"`
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+}
+
+// functionCallOutputItem carries a tool result; Output is a string or a list
+// of parts.
+type functionCallOutputItem struct {
+	Type   string `json:"type"`
+	CallID string `json:"call_id"`
+	Output any    `json:"output"`
+}
+
+// Content parts.
+
+type textPart struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+type imagePart struct {
+	Type     string `json:"type"`
+	ImageURL string `json:"image_url"`
+}
+
+type filePart struct {
+	Type     string `json:"type"`
+	FileData string `json:"file_data"`
+	Filename string `json:"filename"`
+}
+
+// ClaudeToCodex translates a Messages request into a Responses request. The
+// Codex backend answers only as a stream, so the body always asks for one,
+// whatever the client asked; the router folds the stream back into a single
+// message for a client that did not stream.
 func ClaudeToCodex(opts Options, raw []byte) (*Request, error) {
-	if !gjson.ValidBytes(raw) {
-		return nil, fmt.Errorf("translate: request body is not valid JSON")
-	}
-	root := gjson.ParseBytes(raw)
-
-	body := []byte(`{"model":"","instructions":"","input":[]}`)
-	body, _ = sjson.SetBytes(body, "model", opts.Model)
-
-	shortNames, originalNames := buildToolNameMaps(root.Get("tools"))
-
-	items := make([][]byte, 0, 16)
-	items = appendSystemItem(items, root.Get("system"))
-	items = appendMessageItems(items, root.Get("messages"), shortNames)
-	body = setRawArray(body, "input", items)
-
-	if tools := root.Get("tools"); tools.IsArray() {
-		converted := convertTools(tools, shortNames)
-		body = setRawArray(body, "tools", converted)
-		body, _ = sjson.SetRawBytes(body, "tool_choice", convertToolChoice(root.Get("tool_choice"), shortNames))
+	var req claudeRequest
+	if !readJSON(raw, &req) {
+		return nil, errors.New("translate: request body is not valid JSON")
 	}
 
-	parallel := true
-	if disable := root.Get("tool_choice.disable_parallel_tool_use"); disable.Exists() {
-		parallel = !disable.Bool()
-	}
-	body, _ = sjson.SetBytes(body, "parallel_tool_calls", parallel)
-
-	effort := opts.Effort
-	if effort == "" {
-		effort = effortFrom(root, opts.DefaultEffort)
-	}
-	body, _ = sjson.SetBytes(body, "reasoning.effort", effort)
-	// Reasoning summaries are opt-in on the Responses API and are what becomes
-	// the thinking blocks Claude Code renders.
-	body, _ = sjson.SetBytes(body, "reasoning.summary", "auto")
-
-	body, _ = sjson.SetBytes(body, "store", false)
-	body, _ = sjson.SetBytes(body, "stream", true)
-	// The encrypted reasoning state must be echoed back on the next turn for
-	// the model to keep its chain of thought across tool calls.
-	body, _ = sjson.SetBytes(body, "include", []string{"reasoning.encrypted_content"})
-
-	if format := root.Get("output_config.format"); format.IsObject() && format.Get("type").String() == "json_schema" && format.Get("schema").IsObject() {
-		body, _ = sjson.SetRawBytes(body, "text.format", convertJSONSchemaFormat(format))
+	short, original := toolNameMaps(req.Tools)
+	input := inputBuilder{shortNames: short, items: []any{}}
+	input.addSystem(req.System)
+	for _, raw := range elements(req.Messages) {
+		var message claudeMessage
+		readJSON(raw, &message)
+		input.addMessage(message)
 	}
 
-	return &Request{Body: body, ToolNames: originalNames}, nil
+	body := codexRequest{
+		Model:             opts.Model,
+		Input:             input.items,
+		ParallelToolCalls: parallelToolCalls(req.ToolChoice),
+		Reasoning: codexReasoning{
+			Effort: opts.Effort,
+			// Summaries are opt-in on the Responses API, and they are what
+			// Claude Code shows as thinking.
+			Summary: "auto",
+		},
+		Store:  false,
+		Stream: true,
+		// The encrypted reasoning state has to come back on the next turn
+		// for the model to keep its chain of thought across tool calls.
+		Include: []string{"reasoning.encrypted_content"},
+	}
+	if body.Reasoning.Effort == "" {
+		body.Reasoning.Effort = req.effort(opts.DefaultEffort)
+	}
+	if kindOf(req.Tools) == '[' {
+		tools := codexTools(req.Tools, short)
+		body.Tools = &tools
+		body.ToolChoice = codexToolChoice(req.ToolChoice, short)
+	}
+	if format, ok := req.structuredOutput(); ok {
+		body.Text = &codexTextBlock{Format: format}
+	}
+
+	encoded := encode(body)
+	if encoded == nil {
+		return nil, errors.New("translate: the Codex request could not be encoded")
+	}
+	return &Request{Body: encoded, ToolNames: original}, nil
 }
 
-// appendSystemItem folds the Claude system prompt into a developer message,
-// which is where the Responses API expects out-of-band instructions.
-func appendSystemItem(items [][]byte, system gjson.Result) [][]byte {
-	if !system.Exists() {
-		return items
-	}
+// inputBuilder turns the system prompt and the conversation into Responses
+// input items. Consecutive text, image and document blocks of one message
+// share a message item; a thinking, tool_use or tool_result block is an item
+// of its own and closes the message item before it.
+type inputBuilder struct {
+	shortNames map[string]string
+	items      []any
+}
 
-	parts := make([][]byte, 0, 2)
-	add := func(text string) {
-		if strings.TrimSpace(text) == "" {
-			return
+// addSystem puts the system prompt in a developer message, where the
+// Responses API takes instructions that are not part of the conversation.
+func (b *inputBuilder) addSystem(system json.RawMessage) {
+	var parts []any
+	add := func(s string) {
+		if strings.TrimSpace(s) != "" {
+			parts = append(parts, textPart{Type: "input_text", Text: s})
 		}
-		part := []byte(`{"type":"input_text","text":""}`)
-		part, _ = sjson.SetBytes(part, "text", text)
-		parts = append(parts, part)
 	}
-
-	switch {
-	case system.Type == gjson.String:
-		add(system.String())
-	case system.IsArray():
-		for _, block := range system.Array() {
-			if block.Get("type").String() == "text" {
-				add(block.Get("text").String())
+	switch kindOf(system) {
+	case '"':
+		add(textOf(system))
+	case '[':
+		for _, raw := range elements(system) {
+			var block claudeBlock
+			readJSON(raw, &block)
+			if block.Type == "text" {
+				add(string(block.Text))
 			}
 		}
 	}
-
-	if len(parts) == 0 {
-		return items
+	if len(parts) > 0 {
+		b.items = append(b.items, messageItem{Type: "message", Role: "developer", Content: parts})
 	}
-	message := []byte(`{"type":"message","role":"developer"}`)
-	message, _ = sjson.SetRawBytes(message, "content", joinRawArray(parts))
-	return append(items, message)
 }
 
-func appendMessageItems(items [][]byte, messages gjson.Result, shortNames map[string]string) [][]byte {
-	if !messages.IsArray() {
-		return items
+func (b *inputBuilder) addMessage(message claudeMessage) {
+	role := string(message.Role)
+	if role != "user" && role != "assistant" {
+		// A Messages request has only user and assistant turns; anything
+		// else is read as the user's.
+		role = "user"
 	}
 
-	for _, message := range messages.Array() {
-		role := message.Get("role").String()
-		if role != "user" && role != "assistant" {
-			// Anthropic requests only carry user and assistant turns; a
-			// stray system message is folded in as user text.
-			role = "user"
+	var parts []any
+	closeMessage := func() {
+		if len(parts) > 0 {
+			b.items = append(b.items, messageItem{Type: "message", Role: role, Content: parts})
+			parts = nil
 		}
-		content := message.Get("content")
-
-		parts := make([][]byte, 0, 4)
-		flush := func() {
-			if len(parts) == 0 {
-				return
-			}
-			item := []byte(`{"type":"message","role":""}`)
-			item, _ = sjson.SetBytes(item, "role", role)
-			item, _ = sjson.SetRawBytes(item, "content", joinRawArray(parts))
-			items = append(items, item)
-			parts = parts[:0]
-		}
-
-		if content.Type == gjson.String {
-			parts = append(parts, textPart(role, content.String()))
-			flush()
-			continue
-		}
-		if !content.IsArray() {
-			continue
-		}
-
-		for _, block := range content.Array() {
-			switch block.Get("type").String() {
-			case "text":
-				parts = append(parts, textPart(role, block.Get("text").String()))
-			case "image":
-				if part, ok := imagePart(block.Get("source")); ok {
-					parts = append(parts, part)
-				}
-			case "document":
-				if part, ok := documentPart(block.Get("source")); ok {
-					parts = append(parts, part)
-				}
-			case "thinking":
-				// Only reasoning state this proxy produced can be replayed to
-				// Codex; anything else is dropped rather than rejected upstream.
-				signature := block.Get("signature").String()
-				encrypted, ok := stripSignatureMarker(signature)
-				if !ok || encrypted == "" {
-					continue
-				}
-				flush()
-				item := []byte(`{"type":"reasoning","summary":[],"content":null}`)
-				item, _ = sjson.SetBytes(item, "encrypted_content", encrypted)
-				items = append(items, item)
-			case "tool_use":
-				flush()
-				items = append(items, functionCallItem(block, shortNames))
-			case "tool_result":
-				flush()
-				items = append(items, functionCallOutputItem(block))
-			}
-		}
-		flush()
 	}
-	return items
+
+	switch kindOf(message.Content) {
+	case '"':
+		parts = append(parts, roleText(role, textOf(message.Content)))
+		closeMessage()
+		return
+	case '[':
+	default:
+		return
+	}
+
+	for _, raw := range elements(message.Content) {
+		var block claudeBlock
+		readJSON(raw, &block)
+		switch block.Type {
+		case "text":
+			parts = append(parts, roleText(role, string(block.Text)))
+		case "image":
+			if part, ok := imageFrom(block.Source); ok {
+				parts = append(parts, part)
+			}
+		case "document":
+			if part, ok := pdfFrom(block.Source); ok {
+				parts = append(parts, part)
+			}
+		case "thinking":
+			// Codex can resume only from reasoning state it produced, which
+			// is what the marker says. Anthropic's thinking is left out
+			// rather than sent to fail upstream.
+			state, ours := codexState(string(block.Signature))
+			if !ours || state == "" {
+				continue
+			}
+			closeMessage()
+			b.items = append(b.items, reasoningItem{Type: "reasoning", Summary: []struct{}{}, EncryptedContent: state})
+		case "tool_use":
+			closeMessage()
+			b.items = append(b.items, b.toolCall(block))
+		case "tool_result":
+			closeMessage()
+			b.items = append(b.items, toolResult(block))
+		}
+	}
+	closeMessage()
 }
 
-func textPart(role, text string) []byte {
-	partType := "input_text"
+// roleText is a text part: input_text from the user, output_text from the
+// assistant.
+func roleText(role, s string) textPart {
 	if role == "assistant" {
-		partType = "output_text"
+		return textPart{Type: "output_text", Text: s}
 	}
-	part := []byte(`{"type":"","text":""}`)
-	part, _ = sjson.SetBytes(part, "type", partType)
-	part, _ = sjson.SetBytes(part, "text", text)
-	return part
+	return textPart{Type: "input_text", Text: s}
 }
 
-func imagePart(source gjson.Result) ([]byte, bool) {
-	if !source.Exists() {
-		return nil, false
+// imageFrom reads an image source: a URL as is, base64 data as a data: URL.
+func imageFrom(raw json.RawMessage) (imagePart, bool) {
+	if len(raw) == 0 {
+		return imagePart{}, false
 	}
-	if url := source.Get("url").String(); url != "" {
-		part := []byte(`{"type":"input_image","image_url":""}`)
-		part, _ = sjson.SetBytes(part, "image_url", url)
-		return part, true
+	var source claudeSource
+	readJSON(raw, &source)
+	if source.URL != "" {
+		return imagePart{Type: "input_image", ImageURL: string(source.URL)}, true
 	}
-	data := source.Get("data").String()
-	if data == "" {
-		return nil, false
+	if source.Data == "" {
+		return imagePart{}, false
 	}
-	mediaType := source.Get("media_type").String()
+	mediaType := string(source.MediaType)
 	if mediaType == "" {
 		mediaType = "application/octet-stream"
 	}
-	part := []byte(`{"type":"input_image","image_url":""}`)
-	part, _ = sjson.SetBytes(part, "image_url", fmt.Sprintf("data:%s;base64,%s", mediaType, data))
-	return part, true
+	return imagePart{Type: "input_image", ImageURL: "data:" + mediaType + ";base64," + string(source.Data)}, true
 }
 
-func documentPart(source gjson.Result) ([]byte, bool) {
-	if source.Get("type").String() != "base64" {
-		return nil, false
+// pdfFrom reads a document source. Only a base64 PDF has a Responses
+// equivalent; any other document is left out.
+func pdfFrom(raw json.RawMessage) (filePart, bool) {
+	var source claudeSource
+	readJSON(raw, &source)
+	if source.Type != "base64" {
+		return filePart{}, false
 	}
-	mediaType := strings.TrimSpace(source.Get("media_type").String())
-	if !strings.EqualFold(mediaType, "application/pdf") {
-		return nil, false
+	mediaType := strings.TrimSpace(string(source.MediaType))
+	if !strings.EqualFold(mediaType, "application/pdf") || source.Data == "" {
+		return filePart{}, false
 	}
-	data := source.Get("data").String()
-	if data == "" {
-		return nil, false
-	}
-	part := []byte(`{"type":"input_file","file_data":"","filename":"document.pdf"}`)
-	part, _ = sjson.SetBytes(part, "file_data", fmt.Sprintf("data:%s;base64,%s", mediaType, data))
-	return part, true
+	return filePart{Type: "input_file", FileData: "data:" + mediaType + ";base64," + string(source.Data), Filename: "document.pdf"}, true
 }
 
-func functionCallItem(block gjson.Result, shortNames map[string]string) []byte {
-	item := []byte(`{"type":"function_call"}`)
-	item, _ = sjson.SetBytes(item, "call_id", shortenCallID(block.Get("id").String()))
-	item, _ = sjson.SetBytes(item, "name", shortenToolName(block.Get("name").String(), shortNames))
-	arguments := block.Get("input").Raw
+// toolCall replays a tool_use as a function_call. Its input goes over as the
+// JSON text the client sent, inside a string.
+func (b *inputBuilder) toolCall(block claudeBlock) functionCallItem {
+	arguments := string(block.Input)
 	if strings.TrimSpace(arguments) == "" {
 		arguments = "{}"
 	}
-	item, _ = sjson.SetBytes(item, "arguments", arguments)
-	return item
+	return functionCallItem{
+		Type:      "function_call",
+		CallID:    fitCallID(string(block.ID)),
+		Name:      shortToolName(string(block.Name), b.shortNames),
+		Arguments: arguments,
+	}
 }
 
-func functionCallOutputItem(block gjson.Result) []byte {
-	item := []byte(`{"type":"function_call_output"}`)
-	item, _ = sjson.SetBytes(item, "call_id", shortenCallID(block.Get("tool_use_id").String()))
-
-	content := block.Get("content")
-	if content.IsArray() {
-		parts := make([][]byte, 0, len(content.Array()))
-		for _, entry := range content.Array() {
-			switch entry.Get("type").String() {
-			case "text":
-				part := []byte(`{"type":"input_text","text":""}`)
-				part, _ = sjson.SetBytes(part, "text", entry.Get("text").String())
+// toolResult replays a tool_result as a function_call_output: its text and
+// images as parts when it has any, else its content as text.
+func toolResult(block claudeBlock) functionCallOutputItem {
+	item := functionCallOutputItem{Type: "function_call_output", CallID: fitCallID(string(block.ToolUseID))}
+	var parts []any
+	for _, raw := range elements(block.Content) {
+		var entry claudeBlock
+		readJSON(raw, &entry)
+		switch entry.Type {
+		case "text":
+			parts = append(parts, textPart{Type: "input_text", Text: string(entry.Text)})
+		case "image":
+			if part, ok := imageFrom(entry.Source); ok {
 				parts = append(parts, part)
-			case "image":
-				if part, ok := imagePart(entry.Get("source")); ok {
-					parts = append(parts, part)
-				}
 			}
 		}
-		if len(parts) > 0 {
-			item, _ = sjson.SetRawBytes(item, "output", joinRawArray(parts))
-			return item
-		}
 	}
-	item, _ = sjson.SetBytes(item, "output", content.String())
+	if len(parts) > 0 {
+		item.Output = parts
+	} else {
+		item.Output = textOf(block.Content)
+	}
 	return item
-}
-
-func convertTools(tools gjson.Result, shortNames map[string]string) [][]byte {
-	entries := tools.Array()
-	converted := make([][]byte, 0, len(entries))
-	for _, tool := range entries {
-		if isWebSearchTool(tool.Get("type").String()) {
-			converted = append(converted, convertWebSearchTool(tool))
-			continue
-		}
-		name := tool.Get("name").String()
-		if name == "" {
-			continue
-		}
-
-		out := []byte(`{"type":"function","name":"","strict":false}`)
-		out, _ = sjson.SetBytes(out, "name", shortenToolName(name, shortNames))
-		if description := tool.Get("description"); description.Exists() {
-			out, _ = sjson.SetBytes(out, "description", description.String())
-		}
-		out, _ = sjson.SetRawBytes(out, "parameters", normalizeSchema(tool.Get("input_schema")))
-		converted = append(converted, out)
-	}
-	return converted
-}
-
-func isWebSearchTool(toolType string) bool {
-	return strings.HasPrefix(toolType, "web_search_")
-}
-
-func convertWebSearchTool(tool gjson.Result) []byte {
-	out := []byte(`{"type":"web_search"}`)
-	if allowed := tool.Get("allowed_domains"); allowed.IsArray() {
-		out, _ = sjson.SetRawBytes(out, "filters.allowed_domains", []byte(allowed.Raw))
-	}
-	if location := tool.Get("user_location"); location.IsObject() {
-		out, _ = sjson.SetRawBytes(out, "user_location", []byte(location.Raw))
-	}
-	return out
-}
-
-func convertToolChoice(choice gjson.Result, shortNames map[string]string) []byte {
-	kind := choice.Get("type").String()
-	if kind == "" && choice.Type == gjson.String {
-		kind = choice.String()
-	}
-	switch kind {
-	case "any":
-		return []byte(`"required"`)
-	case "none":
-		return []byte(`"none"`)
-	case "tool":
-		name := shortenToolName(choice.Get("name").String(), shortNames)
-		if name == "" {
-			return []byte(`"auto"`)
-		}
-		out := []byte(`{"type":"function","name":""}`)
-		out, _ = sjson.SetBytes(out, "name", name)
-		return out
-	default:
-		return []byte(`"auto"`)
-	}
-}
-
-// normalizeSchema makes a Claude input_schema acceptable as Responses tool
-// parameters: object schemas need a properties map, and the $schema keyword is
-// rejected.
-func normalizeSchema(schema gjson.Result) []byte {
-	raw := strings.TrimSpace(schema.Raw)
-	if raw == "" || raw == "null" || !gjson.Valid(raw) {
-		return []byte(`{"type":"object","properties":{}}`)
-	}
-	out := []byte(raw)
-	kind := schema.Get("type").String()
-	if kind == "" {
-		out, _ = sjson.SetBytes(out, "type", "object")
-		kind = "object"
-	}
-	if kind == "object" && !schema.Get("properties").Exists() {
-		out, _ = sjson.SetRawBytes(out, "properties", []byte(`{}`))
-	}
-	// The Responses API rejects the $schema keyword Claude tools often carry.
-	if gjson.GetBytes(out, "$schema").Exists() {
-		out, _ = sjson.DeleteBytes(out, "$schema")
-	}
-	return out
-}
-
-func convertJSONSchemaFormat(format gjson.Result) []byte {
-	name := format.Get("name").String()
-	if name == "" {
-		name = "structured_output"
-	}
-	strict := true
-	if value := format.Get("strict"); value.Exists() && value.Type == gjson.False {
-		strict = false
-	}
-	// Strict mode requires every declared property to be listed as required;
-	// downgrading beats an upstream 400 on a schema that cannot be satisfied.
-	if strict && schemaMissesRequired(format.Get("schema")) {
-		strict = false
-	}
-	out := []byte(`{"type":"json_schema","name":"","strict":true,"schema":{}}`)
-	out, _ = sjson.SetBytes(out, "name", name)
-	out, _ = sjson.SetBytes(out, "strict", strict)
-	out, _ = sjson.SetRawBytes(out, "schema", []byte(format.Get("schema").Raw))
-	return out
-}
-
-func schemaMissesRequired(schema gjson.Result) bool {
-	if schema.IsArray() {
-		missing := false
-		schema.ForEach(func(_, child gjson.Result) bool {
-			if schemaMissesRequired(child) {
-				missing = true
-				return false
-			}
-			return true
-		})
-		return missing
-	}
-	if !schema.IsObject() {
-		return false
-	}
-	if properties := schema.Get("properties"); properties.IsObject() {
-		required := schema.Get("required")
-		if !required.IsArray() {
-			return len(properties.Map()) > 0
-		}
-		names := make(map[string]struct{}, len(required.Array()))
-		for _, entry := range required.Array() {
-			names[entry.String()] = struct{}{}
-		}
-		for name := range properties.Map() {
-			if _, ok := names[name]; !ok {
-				return true
-			}
-		}
-	}
-	for _, keyword := range []string{"properties", "$defs", "definitions", "patternProperties"} {
-		children := schema.Get(keyword)
-		if !children.IsObject() {
-			continue
-		}
-		missing := false
-		children.ForEach(func(_, child gjson.Result) bool {
-			if schemaMissesRequired(child) {
-				missing = true
-				return false
-			}
-			return true
-		})
-		if missing {
-			return true
-		}
-	}
-	for _, keyword := range []string{"items", "prefixItems", "anyOf", "oneOf", "allOf", "not", "if", "then", "else", "contains"} {
-		if child := schema.Get(keyword); child.Exists() && schemaMissesRequired(child) {
-			return true
-		}
-	}
-	return false
-}
-
-// EffortFrom reads the client's reasoning preference out of an Anthropic
-// Messages request and maps it onto a Responses reasoning effort. fallback is
-// returned when the request states no preference.
-//
-// An explicit output_config.effort wins over everything else: it is what
-// Claude Code's /effort and --effort set, and it says exactly what the user
-// asked for rather than implying it through a token budget.
-func EffortFrom(raw []byte, fallback string) string {
-	return effortFrom(gjson.ParseBytes(raw), fallback)
-}
-
-func effortFrom(root gjson.Result, fallback string) string {
-	if fallback == "" {
-		fallback = "medium"
-	}
-	if effort := root.Get("output_config.effort"); effort.Type == gjson.String {
-		if value := strings.ToLower(strings.TrimSpace(effort.String())); value != "" {
-			return value
-		}
-	}
-
-	thinking := root.Get("thinking")
-	if !thinking.IsObject() {
-		return fallback
-	}
-
-	switch thinking.Get("type").String() {
-	case "enabled":
-		budget := thinking.Get("budget_tokens").Int()
-		switch {
-		case budget <= 0:
-			return "low"
-		case budget <= 4096:
-			return "low"
-		case budget <= 16384:
-			return "medium"
-		case budget <= 32768:
-			return "high"
-		default:
-			return "xhigh"
-		}
-	case "adaptive", "auto":
-		// Adaptive thinking with no stated effort means "think as needed".
-		return "xhigh"
-	case "disabled":
-		return "low"
-	}
-	return fallback
-}
-
-// buildToolNameMaps returns original->short and short->original maps for the
-// request's tools, keeping the shortened names unique.
-func buildToolNameMaps(tools gjson.Result) (map[string]string, map[string]string) {
-	short := map[string]string{}
-	original := map[string]string{}
-	if !tools.IsArray() {
-		return short, original
-	}
-
-	names := make([]string, 0, len(tools.Array()))
-	for _, tool := range tools.Array() {
-		if name := tool.Get("name").String(); name != "" {
-			names = append(names, name)
-		}
-	}
-	sort.Strings(names)
-
-	used := map[string]struct{}{}
-	for _, name := range names {
-		candidate := truncateToolName(name)
-		if _, taken := used[candidate]; taken {
-			base := candidate
-			for i := 1; ; i++ {
-				suffix := "_" + strconv.Itoa(i)
-				trimmed := base
-				if len(trimmed) > nameLimit-len(suffix) {
-					trimmed = trimmed[:nameLimit-len(suffix)]
-				}
-				candidate = trimmed + suffix
-				if _, taken := used[candidate]; !taken {
-					break
-				}
-			}
-		}
-		used[candidate] = struct{}{}
-		short[name] = candidate
-		original[candidate] = name
-	}
-	return short, original
-}
-
-func truncateToolName(name string) string {
-	if len(name) <= nameLimit {
-		return name
-	}
-	// MCP tools are namespaced as mcp__<server>__<tool>; keeping the leaf name
-	// is far more informative than a blind prefix cut.
-	if strings.HasPrefix(name, "mcp__") {
-		if idx := strings.LastIndex(name, "__"); idx > 0 {
-			candidate := "mcp__" + name[idx+2:]
-			if len(candidate) > nameLimit {
-				return candidate[:nameLimit]
-			}
-			return candidate
-		}
-	}
-	return name[:nameLimit]
-}
-
-func shortenToolName(name string, shortNames map[string]string) string {
-	if name == "" {
-		return ""
-	}
-	if short, ok := shortNames[name]; ok {
-		return short
-	}
-	return truncateToolName(name)
-}
-
-// shortenCallID keeps tool ids inside the Responses call_id limit while
-// staying stable and collision resistant.
-func shortenCallID(id string) string {
-	if len(id) <= nameLimit {
-		return id
-	}
-	sum := sha256.Sum256([]byte(id))
-	suffix := "_" + hex.EncodeToString(sum[:8])
-	return id[:nameLimit-len(suffix)] + suffix
-}
-
-// MarkSignature tags Codex reasoning state as this proxy's own.
-func MarkSignature(encrypted string) string {
-	if encrypted == "" {
-		return ""
-	}
-	return SignatureMarker + encrypted
-}
-
-// stripSignatureMarker removes the marker, reporting whether it was present.
-func stripSignatureMarker(signature string) (string, bool) {
-	if !strings.HasPrefix(signature, SignatureMarker) {
-		return "", false
-	}
-	return strings.TrimPrefix(signature, SignatureMarker), true
-}
-
-func joinRawArray(items [][]byte) []byte {
-	out := make([]byte, 0, 64)
-	out = append(out, '[')
-	for i, item := range items {
-		if i > 0 {
-			out = append(out, ',')
-		}
-		out = append(out, item...)
-	}
-	return append(out, ']')
-}
-
-func setRawArray(body []byte, path string, items [][]byte) []byte {
-	out, _ := sjson.SetRawBytes(body, path, joinRawArray(items))
-	return out
 }
