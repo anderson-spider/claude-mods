@@ -266,7 +266,18 @@ test('mini footer carries the docking hint when it fits', () => {
   expect(lineText(lines[2] as Line).trim()).toBe(`+1 more running · ${MINI_HINT}`)
 })
 
-test('band: at most min(6, maxRows - 4) rows and min(3, max(1, maxRows - 5)) agents, sized to bodyColumns (40 at least)', () => {
+test('F8: a docked pane under layout mini has no docking hint; the footer keeps what was left out', () => {
+  const lines = summaryLines(busy({ loops: [] }), CTX, { width: 120, form: 'mini', maxRows: 3, docked: true })
+  expect(lines).toHaveLength(3)
+  expect(lineText(lines[2] as Line).trim()).toBe('+1 more running')
+  const tree = drawSummary(fakes(), busy(), CTX, { width: 120, form: 'mini', maxRows: 3, docked: true, colors: 'theme', motion: false })
+  expect(linesOf(tree).join('\n')).not.toContain(MINI_HINT)
+  // Nothing left out but the docking hint: no footer row at all.
+  const roomy = summaryLines(busy({ loops: [], agents: busyAgents().slice(0, 1) }), CTX, { width: 120, form: 'mini', maxRows: 8, docked: true })
+  expect(roomy.map(lineText).some(l => l.trim() === '')).toBe(false)
+})
+
+test('band: at most min(6, maxRows - 4) rows and min(3, max(1, maxRows - 5)) agents, exactly bodyColumns wide (below 40 too)', () => {
   const four = busyAgents().concat(
     agentSpawned([], { id: 'a5', type: 'crew:developer-codex', description: 'R3 typed structs', model: 'gpt-6-astra', effort: 'high', now: NOW - 30_000 }),
     agentSpawned([], { id: 'a6', type: 'crew:designer', description: 'HUD spec', now: NOW - 20_000 }),
@@ -375,7 +386,7 @@ test('the pressable agent rows: Buttons with hotkeys 1-9 in display order when f
   expect(lines).toContain('│   ┆ T2: contract injection point: //go:build         │')
   expect(lines).toContain('│   ┆ Sonnet 5.5 · high · 1 step · 0 out               │')
   expect(lines).toContain('│   ┆ · Edit internal/config/contract_on.go            │')
-  expect(lines).toContain('│ 1-9 details · esc close                              │')
+  expect(lines).toContain('│ 1-9 details (again to close)                         │')
   // Unfocused: no buttons, no footer.
   const plain = linesOf(drawPane(fakes({ button: true }), busy(), CTX, { width: 56, rows: 200, surface: 'terminal', colors: 'theme', motion: false }).tree)
   expect(plain.join('\n')).not.toContain('1-9 details')
@@ -822,6 +833,8 @@ test('no input shape makes drawPane, drawSummary or drawBand throw: a null sessi
     { loops: undefined as never },
     { agents: null as never, consults: null as never, log: null as never },
     { plan: 'x' as never, favored: 3 as never, now: Number.NaN },
+    // T3: a list with a malformed element among good ones.
+    { loops: [null, { id: 1 }, { id: 'l9', firstAt: NOW, lastAt: NOW, steps: 1, isDone: false }] as never },
   ]
   for (const over of shapes) {
     for (const surface of ['terminal', 'desktop'] as const) {
@@ -866,4 +879,69 @@ test('the crew-harness plan draws too (external ids wait)', () => {
   const lines = texts(pane(busy({ plan: { name: 'crew-harness', parsed: parsePlan(CREW_HARNESS) } })).rows)
   expect(lines.some(l => l.includes('Plan · crew-harness'))).toBe(true)
   expectExact(lines, 56)
+})
+
+// ------------------------------------------------------------------ H2 re-audit gaps
+
+test('T1: on a focused pane an agent row without a hotkey (the 10th and later) keeps its columns where a keyed row has them', () => {
+  let agents: AgentCard[] = []
+  for (let i = 1; i <= 11; i++) {
+    agents = agentSpawned(agents, { id: `r${i}`, type: 'crew:developer', description: `job ${i}`, model: 'claude-sonnet-5-5', effort: 'high', now: NOW - i * 1000 })
+  }
+  const drawn = drawPane(fakes({ button: true }), busy({ agents, consults: [], plan: null }), CTX, {
+    width: 56, rows: 400, surface: 'terminal', colors: 'theme', motion: false, focus: { isFocused: true, openId: null }, onOpen: () => {},
+  })
+  const lines = linesOf(drawn.tree)
+  expectExact(lines, 56)
+  const rows = lines.filter(l => l.includes('● developer'))
+  expect(rows).toHaveLength(11)
+  expect(findAll(drawn.tree, n => n.type === 'Button')).toHaveLength(9)
+  const keyed = rows.filter(l => /^│ \d: /.test(l))
+  const unkeyed = rows.filter(l => l.startsWith('│    ● '))
+  expect([keyed.length, unkeyed.length]).toEqual([9, 2])
+  // Every column starts at the same cell: the status, the model, the strip and the clock.
+  const at = (l: string, text: string) => cellWidth(l.slice(0, l.indexOf(text)))
+  for (const text of ['● developer', 'Sonnet 5.5']) expect(new Set(rows.map(l => at(l, text))).size).toBe(1)
+  expect(new Set(rows.map(l => cellWidth(l.trimEnd())))).toEqual(new Set([56]))
+})
+
+test('T2: each entry point\'s last resort is reached: a Box constructor that throws once gives the red row, the empty column and a null band', () => {
+  const throwingOnce = (): HudEls<Node> => {
+    const els = fakes()
+    let thrown = false
+    return {
+      ...els,
+      Box: props => {
+        if (!thrown) {
+          thrown = true
+          throw new Error('Box refused')
+        }
+        return els.Box(props)
+      },
+    }
+  }
+  const pane = drawPane(throwingOnce(), busy(), CTX, { width: 56, rows: 40, surface: 'terminal', ...DRAW })
+  expect(pane.errors).toEqual(['session'])
+  expect(linesOf(pane.tree)).toEqual(['Session could not be drawn; see the debug log.'.padEnd(56)])
+  const desk = drawPane(throwingOnce(), busy(), CTX, { width: 72, rows: 40, surface: 'desktop', ...DRAW })
+  expect(desk.errors).toEqual(['session'])
+
+  const summary = drawSummary(throwingOnce(), busy(), CTX, { width: 56, form: 'mini', maxRows: 8, ...DRAW })
+  expect(summary.type).toBe('Box')
+  expect(summary.kids).toEqual([])
+
+  expect(drawBand(throwingOnce(), busy(), CTX, BAND)).toBeNull()
+  // The same input draws whole with constructors that do not throw.
+  expect(drawBand(fakes(), busy(), CTX, BAND)).not.toBeNull()
+  expect(drawPane(fakes(), busy(), CTX, { width: 56, rows: 40, surface: 'terminal', ...DRAW }).errors).toEqual([])
+})
+
+test('T2: an input whose getter throws reaches the same last resorts', () => {
+  const input = busy()
+  Object.defineProperty(input, 'agents', { get: () => { throw new Error('atom unreadable') } })
+  const pane = drawPane(fakes(), input, CTX, { width: 56, rows: 40, surface: 'terminal', ...DRAW })
+  expect(pane.errors).toEqual(['session'])
+  expect(linesOf(pane.tree)[0]?.trim()).toBe('Session could not be drawn; see the debug log.')
+  expect(drawSummary(fakes(), input, CTX, { width: 56, form: 'mini', maxRows: 8, ...DRAW }).kids).toEqual([])
+  expect(drawBand(fakes(), input, CTX, BAND)).toBeNull()
 })

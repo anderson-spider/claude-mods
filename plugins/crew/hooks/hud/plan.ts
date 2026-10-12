@@ -161,11 +161,12 @@ export const RECENT_MS = 7 * 86_400_000
 /** The plan's name: the file name without `.md`. */
 export const planNameOf = (path: string): string => (path.split('/').pop() ?? path).replace(/\.md$/, '')
 
-/** Whether a tool's `file_path` is a plan file under `.crew/plans/`. */
-export const isPlanPath = (path: string): boolean => /(^|\/)\.crew\/plans\/[^/]+\.md$/.test(path)
+/** Whether an absolute `file_path` is a plan file directly in this repository's plans folder (`<root>/.crew/plans`). */
+export const isPlanPath = (path: string, plansDir: string): boolean =>
+  path.startsWith(`${plansDir}/`) && /^[^/]+\.md$/.test(path.slice(plansDir.length + 1)) && planNameOf(path) !== '..'
 
-/** Whether a pin (`name` or `name.md`) names this path. */
-export const pinMatches = (pin: string, path: string): boolean => planNameOf(path) === pin.replace(/\.md$/, '')
+/** Whether a pin (`name` or `name.md`) names this path in the plans folder: the whole path, not only the name. */
+export const pinMatches = (pin: string, path: string, plansDir: string): boolean => path === `${plansDir}/${pin.replace(/\.md$/, '')}.md`
 
 const newest = (a: PlanCandidate, b: PlanCandidate): number => b.mtimeMs - a.mtimeMs || a.path.localeCompare(b.path)
 

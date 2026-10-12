@@ -228,7 +228,7 @@ export function drawPane<E>(els: HudEls<E>, input: HudInput, ctx: HudContext, o:
   }
 }
 
-export type SummaryDrawOptions = DrawOptions & { width: number; form: SummaryForm; maxRows: number }
+export type SummaryDrawOptions = DrawOptions & { width: number; form: SummaryForm; maxRows: number; docked?: boolean }
 
 function summaryTree<E>(els: HudEls<E>, input: HudInput, ctx: HudContext, o: SummaryDrawOptions): E {
   const P = paletteOf(o.colors, o.light)

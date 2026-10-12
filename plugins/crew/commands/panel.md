@@ -1,6 +1,6 @@
 ---
-description: Show, hide or move the crew panel (side pane or band above the prompt)
-argument-hint: "[on|off|side|prompt|reset|layout auto|compact|wide|mini]"
+description: Show, hide or move the crew panel (side pane or band above the prompt), or pin the plan it follows
+argument-hint: "[on|off|side|prompt|reset|layout auto|mini|plan <name>|plan auto]"
 disable-model-invocation: true
 ---
 

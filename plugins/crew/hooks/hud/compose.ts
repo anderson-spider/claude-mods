@@ -250,6 +250,8 @@ export type SummaryOptions = {
   form: SummaryForm
   /** The band's `maxRows`, or the inline pane's rows (mini: 8 at most). */
   maxRows: number
+  /** The pane is docked beside the transcript (layout `mini` there): the mini's docking hint is left out. */
+  docked?: boolean
 }
 
 /** Rows the summary may take: mini 8, the band `min(6, maxRows - 4)`. */
@@ -386,10 +388,10 @@ export function summaryLines(input: HudInput, ctx: HudContext, o: SummaryOptions
   const lines = [...picked].sort((a, b) => a.order - b.order).map(x => x.line)
   if ((dropped > 0 || hiddenRuns > 0 || loops > 0) && lines.length < cap) {
     const parts = [...(hiddenRuns > 0 ? [`+${hiddenRuns} more running`] : []), ...(loops > 0 ? [plural(loops, 'loop')] : [])]
-    const hint = o.form === 'band' ? BAND_HINT : MINI_HINT
-    const withHint = [...parts, hint].join(' · ')
+    const hint = o.form === 'band' ? BAND_HINT : o.docked ? null : MINI_HINT
+    const withHint = [...parts, ...(hint === null ? [] : [hint])].join(' · ')
     const text = cellWidth(withHint) <= W || parts.length === 0 ? withHint : parts.join(' · ')
-    lines.push(fitLine([sp(text, 'dim')], W))
+    if (text !== '') lines.push(fitLine([sp(text, 'dim')], W))
   }
   return lines
 }

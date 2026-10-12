@@ -222,12 +222,14 @@ export type SpawnEvent = {
   effort?: string
   /** From the crew's `shared` info; otherwise a `-codex` type means Codex. */
   provider?: Provider
+  /** The description is the lead's own, from before the crew tagged it (`shared`): no tag is stripped from it. */
+  isUntagged?: boolean
   now: number
 }
 
 /** A subagent was spawned: a card with one running round. A spawn of a known id restarts its card. */
 export function agentSpawned(list: readonly AgentCard[], e: SpawnEvent): AgentCard[] {
-  const description = safeText(stripTag(e.description))
+  const description = safeText(e.isUntagged ? e.description : stripTag(e.description))
   const card: AgentCard = {
     id: e.id,
     type: e.type,
@@ -373,11 +375,11 @@ export function parseVerdict(answer: string): { line: string; verdict: Verdict |
   return { line, verdict, reason: truncate(first.slice(match[0].length).trim(), VERDICT_CELLS) }
 }
 
-export type ConsultStart = { id: string; type: string; description: string; now: number }
+export type ConsultStart = { id: string; type: string; description: string; now: number; isUntagged?: boolean }
 
 /** A consult began (an architect spawn, or the advisor tool). */
 export function consultStarted(list: readonly Consult[], e: ConsultStart): Consult[] {
-  const description = safeText(stripTag(e.description))
+  const description = safeText(e.isUntagged ? e.description : stripTag(e.description))
   const consult: Consult = {
     id: e.id,
     who: e.type === ADVISOR ? ADVISOR : displayName(e.type),

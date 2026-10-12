@@ -190,14 +190,19 @@ test('waves: a ## Waves heading with a numbered list; other lists and later head
 test('plan names, paths and pins', () => {
   expect(planNameOf('/repo/.crew/plans/proxy-rewrite.md')).toBe('proxy-rewrite')
   expect(planNameOf('proxy-rewrite.md')).toBe('proxy-rewrite')
-  expect(isPlanPath('/repo/.crew/plans/x.md')).toBe(true)
-  expect(isPlanPath('.crew/plans/x.md')).toBe(true)
-  expect(isPlanPath('/repo/.crew/plans/sub/x.md')).toBe(false)
-  expect(isPlanPath('/repo/.crew/reviews/x.md')).toBe(false)
-  expect(isPlanPath('/repo/.crew/plans/x.txt')).toBe(false)
-  expect(pinMatches('proxy-rewrite', '/r/.crew/plans/proxy-rewrite.md')).toBe(true)
-  expect(pinMatches('proxy-rewrite.md', '/r/.crew/plans/proxy-rewrite.md')).toBe(true)
-  expect(pinMatches('proxy', '/r/.crew/plans/proxy-rewrite.md')).toBe(false)
+  const dir = '/repo/.crew/plans'
+  expect(isPlanPath('/repo/.crew/plans/x.md', dir)).toBe(true)
+  expect(isPlanPath('.crew/plans/x.md', dir)).toBe(false)
+  expect(isPlanPath('/other/.crew/plans/x.md', dir)).toBe(false)
+  expect(isPlanPath('/repo/sub/.crew/plans/x.md', dir)).toBe(false)
+  expect(isPlanPath('/repo/.crew/plans/sub/x.md', dir)).toBe(false)
+  expect(isPlanPath('/repo/.crew/plans/../x.md', dir)).toBe(false)
+  expect(isPlanPath('/repo/.crew/reviews/x.md', dir)).toBe(false)
+  expect(isPlanPath('/repo/.crew/plans/x.txt', dir)).toBe(false)
+  expect(pinMatches('proxy-rewrite', '/repo/.crew/plans/proxy-rewrite.md', dir)).toBe(true)
+  expect(pinMatches('proxy-rewrite.md', '/repo/.crew/plans/proxy-rewrite.md', dir)).toBe(true)
+  expect(pinMatches('proxy', '/repo/.crew/plans/proxy-rewrite.md', dir)).toBe(false)
+  expect(pinMatches('proxy-rewrite', '/other/.crew/plans/proxy-rewrite.md', dir)).toBe(false)
 })
 
 // ------------------------------------------------------------------ active plan
