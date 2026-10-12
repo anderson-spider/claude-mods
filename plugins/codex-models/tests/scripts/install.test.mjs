@@ -28,7 +28,9 @@ before(async () => {
       res.writeHead(200, { 'content-type': 'application/json' })
       return res.end(JSON.stringify({ service: 'ccmproxy', version: VERSION, codexLogin: false, models: ['gpt-fake'] }))
     }
-    res.writeHead(403).end('ccmproxy: forbidden')
+    if (mode === 'plain403') return res.writeHead(403).end('Forbidden')
+    res.writeHead(403, { 'content-type': 'application/json' })
+    res.end(JSON.stringify({ type: 'error', error: { type: 'permission_error', message: 'ccmproxy: missing or wrong X-Ccmproxy-Token' } }))
   })
   await new Promise(done => server.listen(0, '127.0.0.1', done))
   port = server.address().port
@@ -231,6 +233,26 @@ test('a proxy that answers without the secret fails the preflight and the settin
     assert.match(out.stderr, /answered 200 without the secret/)
     assert.match(out.stderr, /settings\.json was left alone/)
     assert.equal(readFileSync(box.settingsFile, 'utf8'), text)
+  } finally {
+    mode = 'ours'
+    box.cleanup()
+  }
+})
+
+test('a plain 403 without the secret is not ccmproxy: the preflight fails and the settings stay', async () => {
+  mode = 'plain403'
+  const box = sandbox()
+  try {
+    const text = `${JSON.stringify(ORIGINAL, null, 2)}\n`
+    writeFileSync(box.settingsFile, text)
+    const out = await box.run('install.sh')
+
+    assert.notEqual(out.code, 0)
+    assert.match(out.stderr, /answered a 403 that is not its refusal without the secret/)
+    assert.match(out.stderr, /not ccmproxy/)
+    assert.match(out.stderr, /settings\.json was left alone/)
+    assert.equal(readFileSync(box.settingsFile, 'utf8'), text)
+    assert.ok(!readdirSync(join(box.home, '.claude')).some(name => name.includes('.bak-codex-models-')))
   } finally {
     mode = 'ours'
     box.cleanup()

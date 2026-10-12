@@ -206,8 +206,10 @@ async function preflight(opts) {
     if (Date.now() > deadline) fail(`nothing answers at ${base}; see ~/.claude/codex-models/home/log/ccmproxy.log`)
     await sleep(250)
   }
-  if (bare.status !== 403) {
-    fail(`${base}/__ccmproxy/status answered ${bare.status} without the secret (403 expected): another server may hold the port`)
+  // Only ccmproxy's own refusal counts: any server can answer a bare 403.
+  if (readStatusReply(bare.status, bare.text).kind !== 'forbidden') {
+    const answer = bare.status === 403 ? 'a 403 that is not its refusal' : String(bare.status)
+    fail(`${base}/__ccmproxy/status answered ${answer} without the secret (ccmproxy's 403 expected): not ccmproxy, another server may hold the port`)
   }
 
   const hello = await request(`${base}/api/hello`, { method: 'HEAD' })
@@ -217,6 +219,7 @@ async function preflight(opts) {
   if (!signed) fail(`${base} stopped answering`)
   const reply = readStatusReply(signed.status, signed.text)
   if (reply.kind === 'forbidden') fail(`${base} refused the secret from the config: the running proxy reads another config`)
+  if (reply.kind === 'host') fail(`${base} refused the Host header: the running proxy listens on another address`)
   if (reply.kind === 'foreign') fail(`${base} is not ccmproxy (${reply.reason})`)
   if (reply.version !== opts.version) {
     fail(`${base} runs ccmproxy ${reply.version || 'of no version'}, ${opts.version} expected: an older proxy may still hold the port`)

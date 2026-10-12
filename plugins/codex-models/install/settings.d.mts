@@ -24,6 +24,7 @@ export type InstallState = {
 export type StatusReply =
   | { kind: 'ok'; version: string; codexLogin: boolean; models: string[] }
   | { kind: 'forbidden' }
+  | { kind: 'host' }
   | { kind: 'foreign'; reason: string }
 
 export function isLoopbackHttp(url: unknown): boolean

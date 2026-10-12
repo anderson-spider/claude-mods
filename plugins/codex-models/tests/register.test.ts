@@ -8,6 +8,8 @@ const HOME = '/Users/jane'
 const CONFIG = `${HOME}/.claude/codex-models/home/config.json`
 const STATUS = JSON.stringify({ service: 'ccmproxy', version: '0.2.0', codexLogin: true, models: ['gpt-6-astra'] })
 
+const refusal = (message: string) => JSON.stringify({ type: 'error', error: { type: 'permission_error', message } })
+
 type Reply = { status: number; text: string } | 'refused' | 'hang'
 
 /** A host with the session's environment, the user settings, the config file and a fake proxy behind `http.fetch`. */
@@ -107,12 +109,30 @@ test('a proxy that is down gets a notice with the way back', async ($, on) => {
 })
 
 test('a 403 is named as a wrong secret', async ($, on) => {
-  const { seen } = world(on, { reply: { status: 403, text: 'ccmproxy: forbidden' } })
+  const { seen } = world(on, { reply: { status: 403, text: refusal('ccmproxy: missing or wrong X-Ccmproxy-Token') } })
 
   await start($)
 
   expect(seen.transcript[0]).toContain("refused this session's secret (403)")
   expect(everything(seen)).not.toContain(SECRET)
+})
+
+test('a 403 for the Host header is named as such', async ($, on) => {
+  const { seen } = world(on, { reply: { status: 403, text: refusal('ccmproxy: unexpected Host header') } })
+
+  await start($)
+
+  expect(seen.transcript[0]).toContain('refused the Host header (403)')
+})
+
+test('a 403 not in ccmproxy\'s error shape is named as not ccmproxy', async ($, on) => {
+  const { seen } = world(on, { reply: { status: 403, text: '<html>Forbidden</html>' } })
+
+  await start($)
+
+  expect(seen.transcript[0]).toContain('something other than ccmproxy answers')
+  expect(seen.transcript[0]).toContain('HTTP 403 not from ccmproxy')
+  expect(seen.transcript[0]).not.toContain('Forbidden')
 })
 
 test('another server on the port is named as not ccmproxy', async ($, on) => {
@@ -156,7 +176,7 @@ test('no secret header is named, and nothing is sent', async ($, on) => {
 })
 
 test('a failing file system does not stop the start', async ($, on) => {
-  const { seen } = world(on, { fsFail: true, reply: { status: 403, text: '' } })
+  const { seen } = world(on, { fsFail: true, reply: { status: 403, text: refusal('ccmproxy: missing or wrong X-Ccmproxy-Token') } })
 
   const out = await start($)
 
