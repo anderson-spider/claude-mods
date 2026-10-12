@@ -193,9 +193,13 @@ func TestCountTokens(t *testing.T) {
 		t.Fatal("a Codex count_tokens request left the proxy")
 	}
 
-	// The estimate must stay conservative: not below what today's build gives.
+	// The estimate must stay conservative (not below the floor recorded from
+	// today's build) without being absurd (not above twice it). The floor is
+	// written only when the file is missing: -update never lowers it. To move
+	// it on purpose, edit testdata/count_tokens_reference.json by hand and say
+	// why in the change.
 	refPath := filepath.Join("testdata", "count_tokens_reference.json")
-	if *update {
+	if _, err := os.Stat(refPath); err != nil && *update {
 		must(t, os.WriteFile(refPath, []byte(mustMarshal(t, map[string]int64{"input_tokens": got})+"\n"), 0o644))
 	}
 	data, err := os.ReadFile(refPath)
@@ -203,7 +207,10 @@ func TestCountTokens(t *testing.T) {
 	var ref map[string]int64
 	must(t, json.Unmarshal(data, &ref))
 	if got < ref["input_tokens"] {
-		t.Fatalf("estimate %d is below the recorded reference %d", got, ref["input_tokens"])
+		t.Fatalf("estimate %d is below the recorded floor %d", got, ref["input_tokens"])
+	}
+	if got > 2*ref["input_tokens"] {
+		t.Fatalf("estimate %d is above twice the recorded floor %d", got, ref["input_tokens"])
 	}
 
 	// More text never counts less.

@@ -49,6 +49,9 @@ func runCLI(t *testing.T, home string, environ []string, args ...string) (cliOut
 		} else if err != nil {
 			t.Fatal(err)
 		}
+		if strings.Contains(stderr.String(), "DATA RACE") {
+			t.Errorf("ccmproxy %v reported a data race:\n%s", args, stderr.String())
+		}
 		return cliOut{stdout.String(), stderr.String()}, code
 	case <-time.After(20 * time.Second):
 		_ = cmd.Process.Kill()

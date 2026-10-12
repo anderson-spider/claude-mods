@@ -35,7 +35,7 @@ import (
 
 var update = flag.Bool("update", false, "rewrite the golden files in testdata/")
 
-var binPath string
+var binPath, raceBinPath string
 
 func TestMain(m *testing.M) {
 	flag.Parse()
@@ -45,10 +45,22 @@ func TestMain(m *testing.M) {
 		os.Exit(2)
 	}
 	binPath = filepath.Join(dir, "ccmproxy")
-	build := exec.Command("go", "build", "-tags", "contract", "-ldflags", "-X main.version=contract", "-o", binPath, "../cmd/ccmproxy")
-	if out, err := build.CombinedOutput(); err != nil {
-		fmt.Fprintf(os.Stderr, "building ccmproxy: %v\n%s", err, out)
-		os.Exit(2)
+	build := func(out string, extra ...string) {
+		args := append([]string{"build"}, extra...)
+		args = append(args, "-tags", "contract", "-ldflags", "-X main.version=contract", "-o", out, "../cmd/ccmproxy")
+		if b, err := exec.Command("go", args...).CombinedOutput(); err != nil {
+			fmt.Fprintf(os.Stderr, "building ccmproxy: %v\n%s", err, b)
+			os.Exit(2)
+		}
+	}
+	build(binPath)
+	if raceBuild {
+		// A second, race-instrumented binary for the tests that exercise
+		// concurrency (opts.race). It costs about a second to start, so the
+		// other tests keep the plain one. A DATA RACE in either one's stderr
+		// fails the test that ran it.
+		raceBinPath = filepath.Join(dir, "ccmproxy-race")
+		build(raceBinPath, "-race")
 	}
 	code := m.Run()
 	_ = os.RemoveAll(dir)
@@ -135,6 +147,9 @@ type opts struct {
 	extraEnv   []string
 	rawConfig  func(cfg map[string]any) // last edit of the config before it is written
 	skipConfig bool
+	race       bool   // run the race-instrumented binary when the suite has one
+	authDir    string // share this auth_dir (another env's) instead of the home's own
+	oauthFake  *fake  // share this token endpoint instead of a new one
 }
 
 type env struct {
@@ -151,6 +166,10 @@ type env struct {
 	oauth     *fake
 	opts      opts
 	cmd       *exec.Cmd
+	exited    chan struct{}
+	waitErr   error
+	killed    bool
+	stopOnce  sync.Once
 	stderr    *syncBuf
 	client    *http.Client
 }
@@ -188,11 +207,18 @@ func newEnv(t *testing.T, o opts) *env {
 	e := &env{t: t, opts: o, token: "tok-" + randHex(t, 16), salt: "salt-" + randHex(t, 16)}
 	e.anth = newFake(t, false)
 	e.cdx = newFake(t, false)
-	e.oauth = newFake(t, o.tlsOAuth)
+	if o.oauthFake != nil {
+		e.oauth = o.oauthFake
+	} else {
+		e.oauth = newFake(t, o.tlsOAuth)
+	}
 	e.home = t.TempDir()
 	must(t, os.Chmod(e.home, 0o700))
 	e.codexHome = filepath.Join(e.home, "codex-cli")
 	e.authDir = filepath.Join(e.home, "auth")
+	if o.authDir != "" {
+		e.authDir = o.authDir
+	}
 	e.cfgPath = filepath.Join(e.home, "config.json")
 	e.addr = freeAddr(t)
 	e.stderr = &syncBuf{}
@@ -260,21 +286,19 @@ func (e *env) environ() []string {
 func (e *env) start() {
 	t := e.t
 	t.Helper()
-	e.cmd = exec.Command(binPath, "serve")
+	bin := binPath
+	if e.opts.race && raceBinPath != "" {
+		bin = raceBinPath
+	}
+	e.cmd = exec.Command(bin, "serve")
 	e.cmd.Env = e.environ()
 	e.cmd.Stderr = e.stderr
 	e.cmd.Stdout = e.stderr
 	must(t, e.cmd.Start())
-	exited := make(chan struct{})
-	go func() { _ = e.cmd.Wait(); close(exited) }()
+	e.exited = make(chan struct{})
+	go func() { e.waitErr = e.cmd.Wait(); close(e.exited) }()
 	t.Cleanup(func() {
-		_ = e.cmd.Process.Signal(syscall.SIGTERM)
-		select {
-		case <-exited:
-		case <-time.After(5 * time.Second):
-			_ = e.cmd.Process.Kill()
-			<-exited
-		}
+		e.stop()
 		if t.Failed() {
 			t.Logf("ccmproxy log:\n%s", e.stderr.String())
 		}
@@ -282,7 +306,7 @@ func (e *env) start() {
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		select {
-		case <-exited:
+		case <-e.exited:
 			t.Fatalf("ccmproxy exited at start:\n%s", e.stderr.String())
 		default:
 		}
@@ -296,6 +320,32 @@ func (e *env) start() {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatalf("ccmproxy did not answer HEAD /api/hello:\n%s", e.stderr.String())
+}
+
+// stop sends SIGTERM, waits up to 5 s (then kills) and reports how the
+// process ended: nil is a clean exit 0. It is safe to call twice, and it
+// fails the test when the race-built binary reported a data race.
+func (e *env) stop() error {
+	if e.cmd == nil {
+		return nil
+	}
+	e.stopOnce.Do(func() {
+		_ = e.cmd.Process.Signal(syscall.SIGTERM)
+		select {
+		case <-e.exited:
+		case <-time.After(5 * time.Second):
+			e.killed = true
+			_ = e.cmd.Process.Kill()
+			<-e.exited
+		}
+		if strings.Contains(e.stderr.String(), "DATA RACE") {
+			e.t.Errorf("ccmproxy reported a data race:\n%s", e.stderr.String())
+		}
+	})
+	if e.killed {
+		return fmt.Errorf("did not exit within 5 s of SIGTERM")
+	}
+	return e.waitErr
 }
 
 func (e *env) url(path string) string { return "http://" + e.addr + path }
