@@ -94,9 +94,9 @@ func TestStreamTextResponse(t *testing.T) {
 	)
 
 	start := gjson.Parse(frames[0].data)
-	// The client must see the name it asked for, not the upstream slug.
-	if got := start.Get("message.model").String(); got != "gpt-5.5-high" {
-		t.Fatalf("message.model = %q, want the requested name", got)
+	// The transcript names the model that answered, as the upstream reports it.
+	if got := start.Get("message.model").String(); got != "gpt-5.5" {
+		t.Fatalf("message.model = %q, want the upstream's response.model", got)
 	}
 	if got := start.Get("message.id").String(); got != "resp_1" {
 		t.Fatalf("message.id = %q", got)
@@ -404,9 +404,9 @@ func TestSanitizeToolIDKeepsAcceptedCharacters(t *testing.T) {
 
 // assemble runs Codex events through the translator and folds the frames into
 // a single message, which is exactly what the non-streaming path does.
-func assemble(t *testing.T, clientModel string, toolNames map[string]string, payloads ...string) gjson.Result {
+func assemble(t *testing.T, fallbackModel string, toolNames map[string]string, payloads ...string) gjson.Result {
 	t.Helper()
-	translator := NewStreamTranslator(clientModel, toolNames)
+	translator := NewStreamTranslator(fallbackModel, toolNames)
 	assembler := NewMessageAssembler()
 	for _, payload := range payloads {
 		assembler.Write(translator.Event([]byte(payload)))
@@ -538,5 +538,83 @@ func TestAssembleDiscardsPartialToolArguments(t *testing.T) {
 	}
 	if got := blocks[0].Get("input").Raw; got != "{}" {
 		t.Fatalf("input = %s, want an empty object rather than broken JSON", got)
+	}
+}
+
+func TestMessageStartModelComesFromTheUpstream(t *testing.T) {
+	cases := []struct {
+		name    string
+		created string
+		want    string
+	}{
+		{"upstream names a dated slug", `{"type":"response.created","response":{"id":"r","model":"gpt-5.5-2026-03-01"}}`, "gpt-5.5-2026-03-01"},
+		{"upstream names none", `{"type":"response.created","response":{"id":"r"}}`, "gpt-5.5"},
+		{"upstream names an empty one", `{"type":"response.created","response":{"id":"r","model":"  "}}`, "gpt-5.5"},
+		{"no response.created at all", "", "gpt-5.5"},
+	}
+	for _, tc := range cases {
+		payloads := []string{
+			`{"type":"response.output_text.delta","delta":"x"}`,
+			`{"type":"response.completed","response":{"id":"r","usage":{"input_tokens":1,"output_tokens":1}}}`,
+		}
+		if tc.created != "" {
+			payloads = append([]string{tc.created}, payloads...)
+		}
+
+		frames := runStream(t, NewStreamTranslator("gpt-5.5", nil), payloads...)
+		if got := gjson.Parse(frames[0].data).Get("message.model").String(); got != tc.want {
+			t.Fatalf("%s: streamed message.model = %q, want %q", tc.name, got, tc.want)
+		}
+		// The non-streaming answer is folded from the same frames.
+		if got := assemble(t, "gpt-5.5", nil, payloads...).Get("model").String(); got != tc.want {
+			t.Fatalf("%s: assembled model = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestUsageSemantics(t *testing.T) {
+	// Responses counts cached tokens inside input_tokens; Anthropic reports
+	// fresh input and cache reads separately. Pinned here so a change is a
+	// decision, not an accident.
+	payloads := []string{
+		`{"type":"response.created","response":{"id":"r","model":"gpt-5.5"}}`,
+		`{"type":"response.output_text.delta","delta":"x"}`,
+		`{"type":"response.completed","response":{"id":"r","usage":{"input_tokens":1000,"output_tokens":42,"input_tokens_details":{"cached_tokens":600,"cache_write_tokens":250}}}}`,
+	}
+	frames := runStream(t, NewStreamTranslator("gpt-5.5", nil), payloads...)
+	var delta gjson.Result
+	for _, f := range frames {
+		if f.event == "message_delta" {
+			delta = gjson.Parse(f.data)
+		}
+	}
+	assembled := assemble(t, "gpt-5.5", nil, payloads...)
+	for label, u := range map[string]gjson.Result{"stream": delta.Get("usage"), "assembled": assembled.Get("usage")} {
+		if got := u.Get("input_tokens").Int(); got != 400 {
+			t.Fatalf("%s: input_tokens = %d, want 1000 - 600 cached", label, got)
+		}
+		if got := u.Get("cache_read_input_tokens").Int(); got != 600 {
+			t.Fatalf("%s: cache_read_input_tokens = %d, want cached_tokens", label, got)
+		}
+		if got := u.Get("cache_creation_input_tokens").Int(); got != 250 {
+			t.Fatalf("%s: cache_creation_input_tokens = %d, want cache_write_tokens", label, got)
+		}
+		if got := u.Get("output_tokens").Int(); got != 42 {
+			t.Fatalf("%s: output_tokens = %d", label, got)
+		}
+	}
+
+	// More cached than input never goes negative, and no cache fields
+	// appear when there is no caching.
+	in, out, read, write := usage(gjson.Parse(`{"input_tokens":10,"output_tokens":1,"input_tokens_details":{"cached_tokens":20}}`))
+	if in != 0 || out != 1 || read != 20 || write != 0 {
+		t.Fatalf("usage = %d %d %d %d", in, out, read, write)
+	}
+	plain := runStream(t, NewStreamTranslator("gpt-5.5", nil),
+		`{"type":"response.completed","response":{"id":"r","usage":{"input_tokens":5,"output_tokens":2}}}`)
+	for _, f := range plain {
+		if f.event == "message_delta" && (strings.Contains(f.data, "cache_read") || strings.Contains(f.data, "cache_creation")) {
+			t.Fatalf("uncached usage carries cache fields: %s", f.data)
+		}
 	}
 }

@@ -311,8 +311,9 @@ func TestCodexStreamingRequest(t *testing.T) {
 			t.Fatalf("stream is missing %q:\n%s", want, stream)
 		}
 	}
-	if !strings.Contains(stream, `"model":"gpt-5.5-high"`) {
-		t.Fatalf("the client must see the model name it requested:\n%s", stream)
+	// response.created names no model here, so the resolved id stands in.
+	if !strings.Contains(stream, `"model":"gpt-5.5"`) {
+		t.Fatalf("message_start must name the resolved model:\n%s", stream)
 	}
 
 	// Verify what the Codex backend received.

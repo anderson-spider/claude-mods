@@ -28,9 +28,9 @@ type callState struct {
 // Messages SSE stream Claude Code consumes. One instance handles one response
 // and is not safe for concurrent use.
 type StreamTranslator struct {
-	// clientModel is echoed back so the client sees the name it requested
-	// rather than the upstream slug.
-	clientModel string
+	// fallbackModel is reported in message_start when the upstream does not
+	// name the model that answered (response.created's response.model).
+	fallbackModel string
 	// toolNames maps shortened function names back to the client's names.
 	toolNames map[string]string
 
@@ -53,14 +53,15 @@ type StreamTranslator struct {
 	active *callState
 }
 
-// NewStreamTranslator returns a translator for one response. clientModel is
-// the model name the client asked for; toolNames maps upstream (shortened)
-// tool names to the client's original names.
-func NewStreamTranslator(clientModel string, toolNames map[string]string) *StreamTranslator {
+// NewStreamTranslator returns a translator for one response. fallbackModel is
+// the resolved upstream model id, reported when the upstream does not name the
+// model that answered; toolNames maps upstream (shortened) tool names to the
+// client's original names.
+func NewStreamTranslator(fallbackModel string, toolNames map[string]string) *StreamTranslator {
 	return &StreamTranslator{
-		clientModel: clientModel,
-		toolNames:   toolNames,
-		calls:       map[string]*callState{},
+		fallbackModel: fallbackModel,
+		toolNames:     toolNames,
+		calls:         map[string]*callState{},
 	}
 }
 
@@ -276,7 +277,13 @@ func (t *StreamTranslator) start(response gjson.Result) []byte {
 		id = "msg_codex"
 	}
 	frame, _ = sjson.SetBytes(frame, "message.id", id)
-	frame, _ = sjson.SetBytes(frame, "message.model", t.clientModel)
+	// The model that actually answered goes in the transcript, /cost and the
+	// log, so it comes from the upstream when the upstream names it.
+	model := strings.TrimSpace(response.Get("model").String())
+	if model == "" {
+		model = t.fallbackModel
+	}
+	frame, _ = sjson.SetBytes(frame, "message.model", model)
 	return sseFrame("message_start", frame)
 }
 

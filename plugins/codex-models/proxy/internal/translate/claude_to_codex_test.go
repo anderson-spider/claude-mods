@@ -388,3 +388,17 @@ func TestEffortFrom(t *testing.T) {
 		}
 	}
 }
+
+func TestOutputConfigEffortWinsOverAdaptiveThinking(t *testing.T) {
+	// A subagent on a non-Anthropic id sends its own effort next to
+	// thinking: adaptive; the stated effort is what it asked for.
+	for _, effort := range []string{"low", "medium", "high"} {
+		raw := `{"model":"gpt-5.5","messages":[],"thinking":{"type":"adaptive"},"output_config":{"effort":"` + effort + `"}}`
+		if got := EffortFrom([]byte(raw), "medium"); got != effort {
+			t.Fatalf("EffortFrom(%s) = %q, want %q", raw, got, effort)
+		}
+		if got := mustConvert(t, Options{}, raw).Get("reasoning.effort").String(); got != effort {
+			t.Fatalf("reasoning.effort = %q, want %q", got, effort)
+		}
+	}
+}
