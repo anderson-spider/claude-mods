@@ -18,6 +18,7 @@ const ENV = {
   ANTHROPIC_CUSTOM_HEADERS: 'X-Ccmproxy-Token: s3cret-value',
   ENABLE_TOOL_SEARCH: 'true',
 }
+const refusal = (message: string) => JSON.stringify({ type: 'error', error: { type: 'permission_error', message } })
 const MODELS = [
   { id: 'gpt-6-astra', label: 'GPT-6 Astra', description: 'Codex, high reasoning' },
   { id: 'gpt-6-mini', label: '', description: '' },
@@ -203,10 +204,20 @@ test('the status reply is ok only when it names ccmproxy', () => {
     codexLogin: true,
     models: ['a'],
   })
-  expect(readStatusReply(403, 'ccmproxy: forbidden')).toEqual({ kind: 'forbidden' })
+  expect(readStatusReply(403, refusal('ccmproxy: missing or wrong X-Ccmproxy-Token'))).toEqual({ kind: 'forbidden' })
+  expect(readStatusReply(403, refusal('ccmproxy: unexpected Host header'))).toEqual({ kind: 'host' })
   expect(readStatusReply(200, '{"service":"metro"}').kind).toBe('foreign')
   expect(readStatusReply(200, '<html>').kind).toBe('foreign')
   expect(readStatusReply(404, '')).toEqual({ kind: 'foreign', reason: 'HTTP 404' })
+})
+
+test('a 403 not in ccmproxy\'s error shape is not ccmproxy', () => {
+  const other = { kind: 'foreign', reason: 'HTTP 403 not from ccmproxy' }
+  expect(readStatusReply(403, 'ccmproxy: forbidden')).toEqual(other)
+  expect(readStatusReply(403, '')).toEqual(other)
+  expect(readStatusReply(403, refusal('forbidden'))).toEqual(other)
+  expect(readStatusReply(403, JSON.stringify({ type: 'error', error: { type: 'auth_error', message: 'ccmproxy: x' } }))).toEqual(other)
+  expect(readStatusReply(403, JSON.stringify({ error: { type: 'permission_error', message: 'ccmproxy: x' } }))).toEqual(other)
 })
 
 test('masked hides every occurrence of the secret', () => {

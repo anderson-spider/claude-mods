@@ -17,6 +17,7 @@ import type { Probe, ProbeIo } from '../hooks/status'
 const BASE = 'http://127.0.0.1:41234'
 const SECRET = 's3cret-value'
 const CTX = { base: BASE, pluginVersion: '0.2.0', pluginRoot: '/plugins/codex-models' }
+const refusal = (message: string) => JSON.stringify({ type: 'error', error: { type: 'permission_error', message } })
 const OK: Probe = { kind: 'ok', version: '0.2.0', codexLogin: true, models: ['gpt-6-astra'] }
 
 /** A fake network and a timer the test fires by hand. */
@@ -61,9 +62,19 @@ test('the config gives the listen address and the secret, and nothing when malfo
 
 test('the reply is read without quoting its body', () => {
   expect(readReply(200, JSON.stringify({ service: 'ccmproxy', version: '0.2.0', codexLogin: true, models: ['gpt-6-astra'] }))).toEqual(OK)
-  expect(readReply(403, 'ccmproxy: forbidden')).toEqual({ kind: 'forbidden' })
+  expect(readReply(403, refusal('ccmproxy: missing or wrong X-Ccmproxy-Token'))).toEqual({ kind: 'forbidden' })
+  expect(readReply(403, refusal('ccmproxy: unexpected Host header'))).toEqual({ kind: 'host' })
   expect(readReply(200, '{"service":"metro","token":"leak"}')).toEqual({ kind: 'foreign', reason: 'the answer does not name ccmproxy' })
   expect(readReply(502, 'leak')).toEqual({ kind: 'foreign', reason: 'HTTP 502' })
+})
+
+test('a 403 not in ccmproxy\'s error shape is not ccmproxy', () => {
+  const other = { kind: 'foreign', reason: 'HTTP 403 not from ccmproxy' }
+  expect(readReply(403, 'ccmproxy: forbidden')).toEqual(other)
+  expect(readReply(403, '<html>Forbidden</html>')).toEqual(other)
+  expect(readReply(403, refusal('Forbidden'))).toEqual(other)
+  expect(readReply(403, JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: 'ccmproxy: x' } }))).toEqual(other)
+  expect(readReply(403, JSON.stringify([1]))).toEqual(other)
 })
 
 test('the probe sends the secret to the status path and cancels its deadline on an answer', async () => {
@@ -95,6 +106,7 @@ test('each case has its own notice and the way back; a healthy proxy has none', 
     [{ kind: 'down' }, 'is down'],
     [{ kind: 'timeout' }, 'did not answer within 1.5 s'],
     [{ kind: 'forbidden' }, 'refused this session\'s secret (403)'],
+    [{ kind: 'host' }, 'refused the Host header (403)'],
     [{ kind: 'foreign', reason: 'HTTP 404' }, 'something other than ccmproxy answers'],
     [{ kind: 'no-secret' }, 'no X-Ccmproxy-Token header is set'],
   ]
@@ -152,4 +164,7 @@ test('the report names what is missing and what to do', () => {
   expect(wrong).not.toContain(SECRET)
 
   expect(reportText({ pluginVersion: '0.2.0', pluginRoot: '/p' })).toContain('could not be read')
+  expect(reportText({ pluginVersion: '0.2.0', pluginRoot: '/p', base: BASE, probe: { kind: 'host' } })).toContain(
+    'Proxy: http://127.0.0.1:41234 refused the Host header (403)',
+  )
 })

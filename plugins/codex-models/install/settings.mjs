@@ -176,10 +176,11 @@ export function planUninstall(settings, state) {
 
 /**
  * What `GET /__ccmproxy/status` answered, sent with the secret: `ok` only for a 200 whose JSON names the service
- * `ccmproxy`; `forbidden` for a 403; anything else is `foreign`, with a short reason that carries no body.
+ * `ccmproxy`; a 403 in ccmproxy's own error shape is `forbidden` (the secret) or `host` (the Host header); anything
+ * else, another 403 included, is `foreign`, with a short reason that carries no body.
  */
 export function readStatusReply(status, text) {
-  if (status === 403) return { kind: 'forbidden' }
+  if (status === 403) return refusalOf(text)
   if (status !== 200) return { kind: 'foreign', reason: `HTTP ${status}` }
   let body
   try {
@@ -194,6 +195,20 @@ export function readStatusReply(status, text) {
     codexLogin: body.codexLogin === true,
     models: Array.isArray(body.models) ? body.models.filter(id => typeof id === 'string') : [],
   }
+}
+
+/** A 403 from ccmproxy: `{"type":"error","error":{"type":"permission_error","message":"ccmproxy: ..."}}`. */
+function refusalOf(text) {
+  let body
+  try {
+    body = JSON.parse(text)
+  } catch {
+    return { kind: 'foreign', reason: 'HTTP 403 not from ccmproxy' }
+  }
+  const error = isObject(body) && body.type === 'error' && isObject(body.error) ? body.error : undefined
+  const message = error?.type === 'permission_error' && typeof error.message === 'string' ? error.message : ''
+  if (!message.startsWith('ccmproxy:')) return { kind: 'foreign', reason: 'HTTP 403 not from ccmproxy' }
+  return message.includes('unexpected Host header') ? { kind: 'host' } : { kind: 'forbidden' }
 }
 
 /** `text` with every occurrence of `secret` replaced, for anything printed. */

@@ -65,14 +65,18 @@ export function versionOf(pluginJson: string): string {
 export type Probe =
   | { kind: 'ok'; version: string; codexLogin: boolean; models: string[] }
   | { kind: 'forbidden' }
+  | { kind: 'host' }
   | { kind: 'foreign'; reason: string }
   | { kind: 'down' }
   | { kind: 'timeout' }
   | { kind: 'no-secret' }
 
-/** The status answer: `ok` only for a 200 whose JSON names `ccmproxy`; the reason of `foreign` never quotes the body. */
+/**
+ * The status answer: `ok` only for a 200 whose JSON names `ccmproxy`; a 403 in ccmproxy's own error shape is
+ * `forbidden` (the secret) or `host` (the Host header), any other 403 `foreign`. A reason never quotes the body.
+ */
 export function readReply(status: number, text: string): Probe {
-  if (status === 403) return { kind: 'forbidden' }
+  if (status === 403) return refusalOf(text)
   if (status !== 200) return { kind: 'foreign', reason: `HTTP ${status}` }
   let body: unknown
   try {
@@ -87,6 +91,20 @@ export function readReply(status: number, text: string): Probe {
     codexLogin: body.codexLogin === true,
     models: Array.isArray(body.models) ? body.models.filter((id): id is string => typeof id === 'string') : [],
   }
+}
+
+/** A 403 from ccmproxy: `{"type":"error","error":{"type":"permission_error","message":"ccmproxy: ..."}}`. */
+function refusalOf(text: string): Probe {
+  let body: unknown
+  try {
+    body = JSON.parse(text)
+  } catch {
+    return { kind: 'foreign', reason: 'HTTP 403 not from ccmproxy' }
+  }
+  const error = isObject(body) && body.type === 'error' && isObject(body.error) ? body.error : undefined
+  const message = error?.type === 'permission_error' && typeof error.message === 'string' ? error.message : ''
+  if (!message.startsWith('ccmproxy:')) return { kind: 'foreign', reason: 'HTTP 403 not from ccmproxy' }
+  return message.includes('unexpected Host header') ? { kind: 'host' } : { kind: 'forbidden' }
 }
 
 export type ProbeIo = {
@@ -131,6 +149,8 @@ export function problemText(found: Probe, c: Context): string | undefined {
       return `the proxy at ${c.base} did not answer within ${DEADLINE_MS / 1000} s, so this session's requests may fail. Restart it with ${restart}, ${wayBack}.`
     case 'forbidden':
       return `the proxy at ${c.base} refused this session's secret (403): the ${HEADER} header in ~/.claude/settings.json does not match its config. Write it again with ${reinstall(c.pluginRoot)}, ${wayBack}.`
+    case 'host':
+      return `the proxy at ${c.base} refused the Host header (403): it listens on another address than ANTHROPIC_BASE_URL names. Write it again with ${reinstall(c.pluginRoot)}, ${wayBack}.`
     case 'foreign':
       return `something other than ccmproxy answers at ${c.base} (${found.reason}), and this session's requests, with your login, go to it. Run ${UNINSTALL} and restart Claude Code.`
     case 'no-secret':
@@ -192,6 +212,8 @@ const probeLine = (found: Probe, base: string, pluginVersion: string): string =>
       return `Proxy: no answer at ${base} within ${DEADLINE_MS / 1000} s`
     case 'forbidden':
       return `Proxy: ${base} refused the secret (403)`
+    case 'host':
+      return `Proxy: ${base} refused the Host header (403)`
     case 'foreign':
       return `Proxy: ${base} is not ccmproxy (${found.reason})`
     case 'no-secret':
