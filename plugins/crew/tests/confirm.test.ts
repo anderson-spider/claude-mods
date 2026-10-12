@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { confirmText, createConfirmations, normalizeModel, ranAsPlanned } from '../hooks/confirm'
+import { confirmText, createConfirmations, normalizeModel, observedEffort, ranAsPlanned } from '../hooks/confirm'
 import type { Pending } from '../hooks/confirm'
 
 const planned = { model: 'opus', effort: 'high' }
@@ -120,6 +120,33 @@ test('a dated upstream id confirms its model, a dated sibling does not, Claude i
   expect(ranAsPlanned({ model: 'claude-opus-5-5', effort: 'high' }, { model: 'opus', effort: 'high' })).toBe(false)
   expect(ranAsPlanned({ model: 'claude-opus-5-5', effort: 'high' }, { model: 'claude-opus-5-5-1', effort: 'high' })).toBe(false)
   expect(ranAsPlanned({ model: 'sonnet', effort: 'high' }, { model: 'claude-opus-5-5-20260101', effort: 'high' })).toBe(false)
+})
+
+test('outgoing model suffix evidence wins over the host effort, without inferring effort from a plan', () => {
+  expect(observedEffort({ model: 'gpt-6-luna:high', effort: 'medium' }, true)).toBe('high')
+  expect(observedEffort({ model: 'gpt-6-luna:medium', effort: 'high' }, true)).toBe('medium')
+  expect(observedEffort({ model: 'gpt-6-luna:high' }, true)).toBe('high')
+  expect(observedEffort({ model: 'GPT-6-LUNA:HIGH', effort: 'medium' }, true)).toBe('high')
+  expect(observedEffort({ model: 'gpt-6-luna-high[1m]', effort: 'medium' }, true)).toBe('high')
+  expect(observedEffort({ model: 'gpt-6-luna', effort: 'medium' }, true)).toBe('medium')
+  expect(observedEffort({ model: 'gpt-6-luna' }, true)).toBeUndefined()
+  expect(observedEffort({ effort: 'medium' }, true)).toBeUndefined()
+  expect(observedEffort({}, true)).toBeUndefined()
+  expect(observedEffort({ effort: 'high' })).toBe('high')
+  expect(observedEffort({ model: 'opus:high' })).toBeUndefined()
+})
+
+test('unobserved suffix effort confirms only the model and does not invent an effort mismatch', () => {
+  const p = { model: 'gpt-6-luna', effort: 'high' }
+  expect(confirmText('find code', p, { model: 'gpt-6-luna-20261012', effort: undefined }, 'jev', true)).toBe(
+    'jev: find code: confirmed model gpt-6-luna-20261012; suffix high requested, effort unobserved',
+  )
+  expect(confirmText('find code', p, { model: 'gpt-6-luna-mini', effort: undefined }, 'quota', true)).toBe(
+    'quota: find code: ran model gpt-6-luna-mini, not gpt-6-luna; suffix high requested, effort unobserved',
+  )
+  expect(confirmText('find code', p, { model: 'gpt-6-luna', effort: 'medium' }, 'jev', true)).toBe(
+    'jev: find code: ran gpt-6-luna · medium, not gpt-6-luna/high',
+  )
 })
 
 // Probe: an effort suffix before the date is not stripped (normalizeModel strips only a trailing effort).

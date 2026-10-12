@@ -2,24 +2,23 @@ import { atom, read, update } from 'claude-code'
 import type { Hook, Register } from 'claude-code'
 import { SPECIALISTS, isLoopbackBase, leadSection, nativeCodexSection, nativeCodexSpecs } from './agents'
 import type { Agent, Effort } from './agents'
-import { createConfirmations, confirmText } from './confirm'
+import { createConfirmations, confirmText, observedEffort } from './confirm'
 import type { Confirmations } from './confirm'
 import { decisionRecord, saveDecision, withRan } from './decisions'
 import type { DecisionIo } from './decisions'
 import { createEffortBook } from './effort'
 import type { BindOutcome, EffortBook, Listed } from './effort'
 import { deniedWrite } from './guard'
-import { registerHud } from './hud/register'
 import { createBreaker, createGate, createJev, failureText } from './jev'
 import type { Breaker, Gate, JevIo } from './jev'
 import { checkKey, resolveAccess } from './key'
 import type { KeyIo, Off } from './key'
-import { parseCodexModels } from './native'
+import { CODEX_MODELS } from './native'
 import { JEV_MODEL } from './questions'
 import { CACHE_MS, DEADLINE_MS, INITIAL_QUOTA, claudeReading, codexReading, proxyAccess, settle } from './quota'
 import type { ProxyAccess, Provider, Quota, RateLimitInput } from './quota'
-import { defaultsOf, describe, moved, noticeText, retarget, route, routable, shareAgent, taggedDescription, twinFor, untagged } from './routing'
-import type { Moved, Routed, Shared, Switch, Target } from './routing'
+import { defaultsOf, describe, moved, noticeText, retarget, route, routable, taggedDescription, twinFor, untagged } from './routing'
+import type { Moved, Routed, Switch, Target } from './routing'
 
 /**
  * The `$` a hook receives. Every hook builds what it needs from its own; nothing here keeps one past its hook.
@@ -29,7 +28,7 @@ type Dollar = Parameters<Hook<'session.start'>>[0]
 /** The wall clock. The breaker outlives every hook's `$`, so it reads this same function rather than a `$` call. */
 const wallNow = () => Date.now()
 
-/** Both providers' limits and the provider the readings favor, for the router and the HUD alike (they cannot disagree). */
+/** Both providers' limits and the provider the readings favor, kept by the router. */
 const quota = atom({ plugin: 'crew', key: 'quota' } as const, INITIAL_QUOTA)
 
 /** Time as the pure modules take it: the host's timer and the wall clock. */
@@ -156,10 +155,9 @@ async function registerSpecialists($: Dollar) {
   }
 }
 
-/** The `-codex` types the `nativeCodex` option names, and what its parser could not use. */
+/** The fixed `-codex` definitions and the twins this activation registered. */
 type Native = {
   specs: readonly Agent<string>[]
-  errors: readonly string[]
   /** The twins this activation registered, in order: empty until `session.start`, and when the gate or the registration refused. */
   registered: Agent<string>[]
 }
@@ -190,43 +188,32 @@ async function reachableNative($: Dollar, native: Native): Promise<readonly Agen
 /** Registers the `-codex` types when the proxy is the base URL; without it a spawn would only fail, so one debug line says why not. */
 async function registerNative($: Dollar, native: Native) {
   native.registered.length = 0
-  if (native.specs.length === 0 && native.errors.length === 0) return
-  if (native.errors.length) $.ui.log(`crew: nativeCodex ignored in part: ${native.errors.join('; ')}`, { to: 'debug' })
   const reachable = await reachableNative($, native)
-  if (reachable.length === 0 && native.specs.length > 0) {
-    $.ui.log('crew: nativeCodex types not registered (ANTHROPIC_BASE_URL is not a loopback http URL)', { to: 'debug' })
+  if (reachable.length === 0) {
+    $.ui.log('crew: Codex twins not registered (ANTHROPIC_BASE_URL is not a loopback http URL)', { to: 'debug' })
   }
   // One refused registration leaves the other twins registered; only the registered ones are routed and listed.
   for (const agent of reachable) {
     try {
       await $.agent.register({ ...agent, tools: [...agent.tools] })
       native.registered.push(agent)
-    } catch (error) {
-      $.ui.log(`crew: nativeCodex crew:${agent.name} not registered (${error instanceof Error ? error.message : String(error)})`, { to: 'debug' })
+    } catch {
+      $.ui.log(`crew: Codex twin crew:${agent.name} not registered (registration failed)`, { to: 'debug' })
     }
   }
 }
 
-/** The crew's session start: the agents, then the `-codex` types the proxy can reach, then the first quota reading. */
-async function startCrew(native: Native, routing: Routing, $: Dollar, e: StartHook[1], next: StartHook[2]) {
+/** The agents, then the fixed twins behind a loopback base URL. No status or secret is read at start. */
+async function startCrew(native: Native, $: Dollar, e: StartHook[1], next: StartHook[2]) {
+  native.registered.length = 0
   await registerSpecialists($)
-  // Its own try: a failure here must not keep the HUD from starting.
+  // A failed twin registration must not prevent the session from starting.
   try {
     await registerNative($, native)
-  } catch (error) {
-    $.ui.log(`crew: nativeCodex types not registered (${error instanceof Error ? error.message : String(error)})`, { to: 'debug' })
+  } catch {
+    $.ui.log('crew: Codex twins not registered (registration failed)', { to: 'debug' })
   }
-  const started = await next(e)
-  // Only with quota routing on, and after the rest of the start: the first spawn then finds the Codex reading cached,
-  // and a proxy that does not answer delays this hook's return by the deadline at most. Never throws.
-  if (routing.quota) {
-    try {
-      await refreshQuota($, routing)
-    } catch {
-      // The reading stays as it was; the next spawn asks again.
-    }
-  }
-  return started
+  return next(e)
 }
 
 /** What the routing hooks share while the module lives. */
@@ -242,12 +229,8 @@ type Routing = {
   access: KeyCache
   /** The `-codex` twins that were registered (`Native.registered`): routable for their effort only. */
   twins: readonly Agent<string>[]
-  /** The `quotaRouting` option: a routable call may move to its role's registered twin when Codex has more 7-day headroom. */
-  quota: boolean
   /** The Codex status request under way, shared by every caller (one at a time). */
   flight?: Promise<void>
-  /** What the HUD reads about the routed agents, the twins and Jev; nothing in this file reads it back. */
-  shared: Shared
 }
 
 // --- The quota atom: Claude from the host, Codex from the proxy's status ---
@@ -290,8 +273,8 @@ async function readCodex($: Dollar, now: number): Promise<CodexRead> {
   }
 }
 
-/** The Codex side is read only when quota routing is on and twins are registered. */
-const asksCodex = (routing: Routing) => routing.quota && routing.twins.length > 0
+/** Registered twins make quota routing eligible; without them the proxy is never asked. */
+const asksCodex = (routing: Routing) => routing.twins.length > 0
 
 async function updateQuota($: Dollar, routing: Routing): Promise<void> {
   const now = await $.clock.now()
@@ -359,7 +342,7 @@ async function askJev($: Dollar, routing: Routing, key: string, spec: Target, e:
 type Announced = { spec: Target; routed: Routed; jev: boolean; via?: Switch }
 
 /** The debug lines and the one notice of a decision; `took` is whether the effort that was moved runs on the subagent. */
-function announce($: Dollar, call: Announced, change: Moved, took: boolean, outcome: BindOutcome | undefined, toolUseId: string): void {
+function announce($: Dollar, call: Announced, change: Moved, took: boolean, outcome: BindOutcome | 'suffix' | undefined, toolUseId: string): void {
   const { spec, routed, jev, via } = call
   const notApplied = change.effort !== undefined && !took ? change.effort : undefined
   if (via) $.ui.log(`crew quota: ${via.requested} -> crew:${spec.name} (${via.reason})`, { to: 'debug' })
@@ -377,13 +360,12 @@ function announce($: Dollar, call: Announced, change: Moved, took: boolean, outc
 // routable check, Jev's answers, the effort book, the tag, the confirmation) reads the rewritten type. Anything that
 // goes wrong leaves the call as it came.
 async function routeSpawn(routing: Routing, $: Dollar, e: SpawnHook[1], next: SpawnHook[2]) {
-  if (!routing.enabled && !routing.quota) return next(e)
+  if (!routing.enabled && !asksCodex(routing)) return next(e)
   const asked = routable(e, routing.twins)
   if (!asked) return next(e)
   const key = routing.enabled ? await keyOf($, routing.access, routing.jevKey) : undefined
-  if (routing.enabled) routing.shared.jev = key !== undefined
   // The twin this call could move to, when quota routing is on and the call is one that may move.
-  const twin = routing.quota ? twinFor(e, routing.twins) : undefined
+  const twin = twinFor(e, routing.twins)
   if (!key && !twin) return next(e)
 
   // A description that already carries a tag (a call copied from the task list) is sent and tagged without it.
@@ -400,43 +382,35 @@ async function routeSpawn(routing: Routing, $: Dollar, e: SpawnHook[1], next: Sp
   const via: Switch | undefined = toCodex && readings ? { requested, reason: readings.decision.reason } : undefined
   // A switch is logged where it is announced; a call that could have moved and stays says why here.
   if (twin && readings && !toCodex) $.ui.log(`crew quota: ${requested} stays on Claude (${readings.decision.reason})`, { to: 'debug' })
-  // The answers are applied to the target that runs the call, so a twin never gets a model. A switched call without an
-  // answer is still tagged and confirmed, on the twin's defaults.
+  // A twin keeps its registered model family. A failed Jev request or a quota-only switch uses its bounded default.
   const jevRouted = jevAnswer && toCodex ? retarget(jevAnswer, spec) : jevAnswer
-  const routed = jevRouted ?? (toCodex ? defaultsOf(spec) : undefined)
+  const routed = jevRouted ?? (spec.base !== undefined ? defaultsOf(spec) : undefined)
+  // The proxy gives this suffix precedence over the host's output_config.effort, even on the first step.
+  const suffix = spec.base !== undefined && routed ? `${spec.model}:${routed.decision.effort}` : undefined
   const change = moved(spec, routed)
   // The task shows what was chosen, so the task list says whether routing runs; the book matches the shown description.
   const description = routed ? taggedDescription(e.description, routed) : e.description
 
-  // An entry for every routable call, with the default effort when nothing changes: two calls alike then stay on
-  // their defaults rather than trade the effort of the one that Jev moved. Added before the spawn continues, as the
-  // subagent can step before this hook sees its id. Under the final type: a twin's steps are listed as the twin.
-  const token = routing.book.add(e.subagentType, description, change.effort ?? spec.effort, e.parentAgentId, change.effort !== undefined)
+  // Claude's effort book is unchanged. Twins use only the suffix: no late bind can alter their request effort.
+  const token = suffix ? undefined : routing.book.add(e.subagentType, description, change.effort ?? spec.effort, e.parentAgentId, change.effort !== undefined)
   let result: Awaited<ReturnType<SpawnHook[2]>>
   try {
-    result = await next({ ...e, description, ...(change.model ? { model: change.model } : {}) })
+    const model = suffix ?? change.model
+    result = await next({ ...e, description, ...(model ? { model } : {}) })
   } catch (error) {
-    routing.book.drop(token)
+    if (token !== undefined) routing.book.drop(token)
     throw error
   }
-  let outcome: BindOutcome | undefined
-  if (result.agentId) outcome = routing.book.bind(token, result.agentId)
-  else routing.book.drop(token)
-  // For the HUD, which wraps this hook and sees the type and the description as the lead wrote them.
-  if (result.agentId) {
-    shareAgent(routing.shared.agents, result.agentId, {
-      type: e.subagentType,
-      provider: spec.base !== undefined ? 'codex' : 'claude',
-      ...(readings ? { reason: readings.decision.reason } : {}),
-      description: e.description,
-      ...(change.effort !== undefined && (outcome === 'applied' || outcome === 'matched') ? { effort: change.effort } : {}),
-    })
-  }
+  let outcome: BindOutcome | 'suffix' | undefined
+  if (token !== undefined) {
+    if (result.agentId) outcome = routing.book.bind(token, result.agentId)
+    else routing.book.drop(token)
+  } else if (result.agentId) outcome = 'suffix'
   // Nothing started when the host refused the spawn, so there is nothing to announce.
   if (!routed || !result.agentId) return result
 
   // What was applied, not what was asked: an effort that lost the race to the first step runs on the default.
-  const took = outcome === 'applied' || outcome === 'matched'
+  const took = outcome === 'suffix' || outcome === 'applied' || outcome === 'matched'
 
   // The decision log: started before the notice so the write overlaps it, awaited for about a second before
   // returning (it never rejects), so a failing write cannot change the result and a hung one cannot hold it.
@@ -459,10 +433,12 @@ async function routeSpawn(routing: Routing, $: Dollar, e: SpawnHook[1], next: Sp
     durationMs: routed.ms,
     description: e.description,
   })
-  const saved = saveDecision(decisionIo($), routing.access.home, result.agentId, record, key ? 'jev' : 'quota')
+  const by = jevRouted ? 'jev' : via ? 'quota' : 'crew'
+  const saved = saveDecision(decisionIo($), routing.access.home, result.agentId, record, by)
   // The tag is what was chosen; the subagent's next step says what ran (a step before this point is not seen).
   routing.confirms.add(result.agentId, {
-    via: jevRouted ? 'jev' : 'quota',
+    via: by,
+    suffix: suffix !== undefined,
     description: e.description,
     planned: { model: routed.decision.model, effort: routed.decision.effort },
     record,
@@ -474,9 +450,8 @@ async function routeSpawn(routing: Routing, $: Dollar, e: SpawnHook[1], next: Sp
 }
 
 export const register: Register = (on, options) => {
-  // The `nativeCodex` option is the switch of the `-codex` types; they register only behind the proxy.
-  const nativeModels = parseCodexModels(options.nativeCodex)
-  const native: Native = { specs: nativeCodexSpecs(nativeModels.models), errors: nativeModels.errors, registered: [] }
+  // Fixed twins register only at session start behind a loopback base URL, never on reload alone.
+  const native: Native = { specs: nativeCodexSpecs(CODEX_MODELS), registered: [] }
 
   // Shared while the module lives: the rate limit is the account's, and a sick Jev is not asked again for a while.
   const routing: Routing = {
@@ -489,34 +464,26 @@ export const register: Register = (on, options) => {
     confirms: createConfirmations(),
     access: {},
     twins: native.registered,
-    quota: options.quotaRouting === true,
-    shared: { agents: new Map(), twins: native.registered, jev: false },
   }
 
-  // A matcher on session.start, agent.spawn, turn.step and session.measure: the engine refuses two hooks on one event
-  // without one, and the HUD registers those events too. The crew's session.start is outermost, so a HUD failure cannot
-  // stop the agents from registering; the HUD is registered before the hooks below, so it wraps the spawn, the step and
-  // the write (it sees the call as it came, reads what the crew routed from `shared`, and logs the guard's refusals).
-  on('session.start', {}, ($, e, next) => startCrew(native, routing, $, e, next))
-  registerHud(on, options, routing.shared)
+  on('session.start', {}, ($, e, next) => startCrew(native, $, e, next))
   // Only a request that offers the Agent tool gets the lead's section: the crew agents' tool lists leave it out.
   // A teammate renders the lead's prompt too, and `bare` asks for the lead's section alone.
   on('prompt.compose', async ($, e, next) => {
     const composed = await next(e)
     if (!e.tools.includes('Agent') || e.traits.includes('teammate') || e.traits.includes('bare')) return composed
     const jev = routing.enabled && (await keyOf($, routing.access, routing.jevKey)) !== undefined
-    routing.shared.jev = jev
     // The quota sentences appear only with quota routing on and twins registered, so the lead section stays free of Codex otherwise.
     const quotaOn = asksCodex(routing)
     const lead = { id: 'crew:lead', text: leadSection(jev, quotaOn), scope: 'session' as const }
     // The `-codex` types get a section of their own, under the same rule and only for the twins this session registered.
     if (native.registered.length === 0) return { sections: [...composed.sections, lead] }
-    const twins = { id: 'crew:native-codex', text: nativeCodexSection(native.registered, routing.quota), scope: 'session' as const }
+    const twins = { id: 'crew:native-codex', text: nativeCodexSection(native.registered, quotaOn), scope: 'session' as const }
     return { sections: [...composed.sections, lead, twins] }
   }).catch((_, e, next) => next(e))
   on('agent.spawn', {}, ($, e, next) => {
     // A `model` on a twin's call wins over its definition and would run it on Claude with no tag or confirmation. The
-    // option's names decide, not the registered set: a later `session.start` that registered none leaves the host's types.
+    // fixed names decide, not the registered set: a later `session.start` that registered none leaves the host's types.
     if (e.model && native.specs.some(twin => e.subagentType === `crew:${twin.name}`)) {
       return { deny: `crew: ${e.subagentType} runs on its own Codex model; call it again without \`model\`` }
     }
@@ -534,8 +501,8 @@ export const register: Register = (on, options) => {
     // Only a step the API answered says what ran; one that failed leaves the check for the next.
     const pending = e.agentId && answer.usage ? routing.confirms.take(e.agentId) : undefined
     if (pending && e.agentId && answer.usage) {
-      const ran = { model: answer.usage.model, effort: sent.effort === undefined ? undefined : String(sent.effort) }
-      $.ui.log(confirmText(pending.description, pending.planned, ran, pending.via), { to: 'transcript' })
+      const ran = { model: answer.usage.model, effort: observedEffort(sent, pending.suffix) }
+      $.ui.log(confirmText(pending.description, pending.planned, ran, pending.via, pending.suffix), { to: 'transcript' })
       // After the spawn's own write, so the record with what ran is the one that stays; bounded like the spawn's, so
       // a hung write cannot hold the subagent's step.
       // Without a trusted home the spawn already said the record was not written; nothing more is said here.
@@ -546,8 +513,7 @@ export const register: Register = (on, options) => {
     return answer
   })
 
-  // Claude's limits as the host measured them. A matcher, as the HUD registers this event too; it only keeps the
-  // last non-empty reading in the atom, and never throws.
+  // Claude's limits as the host measured them: keeps the last non-empty reading in the atom, and never throws.
   on('session.measure', {}, async ($, e, next) => {
     const answer = await next(e)
     try {

@@ -5,12 +5,9 @@ export type Window = { percentUsed: number; resetsAt?: string }
 /** What a provider reports; a window it does not report is absent. */
 export type Reading = { fiveHour?: Window; sevenDay?: Window }
 export type Provider = 'claude' | 'codex'
-/** `ok` fresh reading; `unknown` none yet or none usable; `stale` too old; `down` the status request failed; `off` not asked (option off or no twin). */
+/** `ok` fresh reading; `unknown` none yet or none usable; `stale` too old; `down` the status request failed; `off` not asked (no twin). */
 export type CodexState = 'ok' | 'unknown' | 'stale' | 'down' | 'off'
-/**
- * The provider the readings favor and why. `reason` has no provider prefix and fits 34 cells: the HUD shows it after
- * `→ <Provider> favored: `.
- */
+/** The provider the readings favor and why; `reason` has no provider prefix. */
 export type Decision = { provider: Provider; reason: string }
 /** The value of the `quota` atom. */
 export type Quota = {
@@ -19,7 +16,7 @@ export type Quota = {
   codexState: CodexState
   /** When the Codex status was fetched (ms since epoch), or null before the first fetch. */
   fetchedAt: number | null
-  /** When the Codex limits were observed (ms; the oldest window's), or null: the HUD's "18m old". */
+  /** When the Codex limits were observed (ms; the oldest window's), or null. */
   codexObservedAt: number | null
   /** When the last non-empty Claude reading was taken (ms), or null; the caller keeps the reading and stamps it. */
   claudeAt: number | null
@@ -209,8 +206,8 @@ export const INITIAL_QUOTA: Quota = {
 
 /**
  * The value with its `decision` recomputed from its own readings, so the atom never holds readings and a decision that
- * disagree. A Codex reading fetched more than STALE_MS ago is `stale` from here on, so neither the router nor the HUD
- * favors Codex from it between spawns.
+ * disagree. A Codex reading fetched more than STALE_MS ago is `stale` from here on, so the router never favors Codex
+ * from it between spawns.
  */
 export function settle(quota: Quota, eligible: boolean, now: number): Quota {
   const isOld = quota.codexState === 'ok' && quota.fetchedAt !== null && now - quota.fetchedAt > STALE_MS

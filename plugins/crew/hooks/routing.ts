@@ -6,7 +6,6 @@
 import { EFFORTS, EFFORT_FLOOR, MODELS, MODEL_FLOORS, NATIVE_SUFFIX, SPECIALISTS } from './agents'
 import type { Agent, Effort, Model } from './agents'
 import type { AskFn } from './jev'
-import type { Provider } from './quota'
 import { DEPTH_HIGH, DEPTH_TIE, DESCRIPTION_CHARS, PROMPT_CHARS, QUESTIONS, TIER_MIN_CONFIDENCE } from './questions'
 import { head, redact } from './redact'
 import type { RedactContext } from './redact'
@@ -133,7 +132,7 @@ export async function route(
   return { decision: decide(spec, reply.answers), jevModel: reply.model, ms: reply.ms, answers: reply.answers }
 }
 
-/** Jev's answers applied to another target: a call that moved to its twin keeps its effort answer and never gets a model. */
+/** Jev's answers applied to another target: a call that moved to its twin keeps its effort answer and fixed model family. */
 export function retarget(routed: Routed, spec: Target): Routed {
   return { ...routed, decision: decide(spec, routed.answers ?? {}) }
 }
@@ -148,7 +147,7 @@ export type Moved = { model: string | undefined; effort: Effort | undefined }
 
 export function moved(spec: Target, routed: Routed | undefined): Moved {
   return {
-    // A twin's model is never sent: the spawn keeps the definition's.
+    // The twin's canonical model never moves; register.tsx adds only the effort suffix on the wire.
     model: spec.base === undefined && routed && routed.decision.model !== spec.model ? routed.decision.model : undefined,
     effort: routed && routed.decision.effort !== spec.effort ? routed.decision.effort : undefined,
   }
@@ -199,27 +198,4 @@ export function describe(spec: Target, routed: Routed, applied: { model?: string
     `${ms}ms`,
   ]
   return parts.join(' ')
-}
-
-/**
- * What the spawn hook leaves for the HUD about a started agent it routed: the type that really ran (after a switch), the
- * provider, why (when the quota was read), the description as the lead wrote it (before the tag), and the effort the
- * subagent runs on when the crew applied one.
- */
-export type SharedAgent = { type: string; provider: Provider; reason?: string; description?: string; effort?: string }
-
-/**
- * What the crew's hooks tell the HUD while the module lives (`registerHud(on, options, shared)`): the agents it routed,
- * the twins this activation registered (the same array the crew fills) and whether Jev routing runs with a usable key.
- */
-export type Shared = { agents: Map<string, SharedAgent>; twins: readonly { name: string }[]; jev: boolean }
-
-/** Entries kept in the map the HUD reads; the oldest go first. */
-export const SHARED_CAP = 256
-
-/** Puts (or refreshes) an agent's entry, keeping the map to SHARED_CAP. */
-export function shareAgent(map: Map<string, SharedAgent>, id: string, entry: SharedAgent): void {
-  map.delete(id)
-  map.set(id, entry)
-  while (map.size > SHARED_CAP) map.delete(map.keys().next().value as string)
 }
