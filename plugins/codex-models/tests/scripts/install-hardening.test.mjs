@@ -123,21 +123,21 @@ exit 6
       const pre = extra.NODE_EXTRA ? extra.NODE_EXTRA.split(' ') : []
       execFile(node, [...pre, CLI, ...args], { env: env(extra), timeout: 30000 }, (error, stdout, stderr) => done({ code: error ? 1 : 0, stdout, stderr }))
     })
+  /** Inject filesystem failures into child Node processes, never the test runner. */
+  const preload = body => {
+    const file = join(root, 'io-preload.mjs')
+    writeFileSync(file, `import fs from 'node:fs'\nimport { syncBuiltinESMExports } from 'node:module'\n${body}\nsyncBuiltinESMExports()\n`)
+    return { NODE_EXTRA: `--import ${file}` }
+  }
   const calls = () => (existsSync(join(root, 'calls.log')) ? readFileSync(join(root, 'calls.log'), 'utf8') : '')
   const claude = join(home, '.claude')
   const settingsFile = join(claude, 'settings.json')
   const config = join(claude, 'codex-models/home/config.json')
-  return { root, home, claude, run, cli, calls, settingsFile, config, cleanup: () => { chmodSync(claude, 0o755); rmSync(root, { recursive: true, force: true }) } }
+  return { root, home, claude, run, cli, preload, calls, settingsFile, config, cleanup: () => { chmodSync(claude, 0o755); rmSync(root, { recursive: true, force: true }) } }
 }
 
 const modeOf = path => statSync(path).mode & 0o777
 
-/** Inject filesystem failures into child Node processes, never the test runner. */
-function ioPreload(box, body) {
-  const file = join(box.root, 'io-preload.mjs')
-  writeFileSync(file, `import fs from 'node:fs'\nimport { syncBuiltinESMExports } from 'node:module'\n${body}\nsyncBuiltinESMExports()\n`)
-  return { NODE_EXTRA: `--import ${file}` }
-}
 const json = value => `${JSON.stringify(value, null, 2)}\n`
 const backupsIn = dir => readdirSync(dir).filter(name => name.includes('.bak-codex-models-'))
 
@@ -354,7 +354,7 @@ test('old state and lock files are inert across check, dry run, install, reinsta
     mkdirSync(target)
     const oldFiles = ['settings-state.json', 'codex.lock'].map(name => join(target, name))
     for (const file of oldFiles) writeFileSync(file, 'not JSON: leave untouched\n', { mode: 0o644 })
-    const extra = ioPreload(box, `
+    const extra = box.preload(`
 for (const name of ['existsSync', 'readFileSync', 'writeFileSync', 'openSync', 'statSync', 'lstatSync', 'chmodSync', 'realpathSync', 'renameSync', 'unlinkSync', 'rmSync']) {
   const original = fs[name]
   fs[name] = function (...args) {
@@ -452,7 +452,7 @@ test('backup or atomic write failure keeps settings and the LaunchAgent loaded',
       assert.equal((await box.run('install.sh')).code, 0)
       const current = readFileSync(box.settingsFile, 'utf8')
       const names = backupsIn(box.claude)
-      const extra = ioPreload(box, `
+      const extra = box.preload(`
 const open = fs.openSync
 fs.openSync = function (path, ...args) {
   if (${JSON.stringify(failure)} === 'backup' && String(path).includes('.bak-codex-models-') || ${JSON.stringify(failure)} === 'temp' && String(path).endsWith('.tmp')) {
@@ -488,7 +488,7 @@ test('a concurrent settings edit is not overwritten and keeps the LaunchAgent lo
     assert.equal((await box.run('install.sh')).code, 0)
     const installed = readFileSync(box.settingsFile, 'utf8')
     const changed = json({ ...JSON.parse(installed), theme: 'concurrent' })
-    const extra = ioPreload(box, `
+    const extra = box.preload(`
 const open = fs.openSync
 fs.openSync = function (path, ...args) {
   const fd = open.call(this, path, ...args)

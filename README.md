@@ -96,7 +96,7 @@ Limitations: ownership is checked for apps named as string literals in `cua.getA
 
 ## codex-models
 
-Offers OpenAI Codex models (ChatGPT login) in Claude Code through a local loopback proxy. They appear in `/model` next to the Claude models, and an agent definition can name one in its `model:` field. Claude models pass through the proxy to Anthropic unchanged. The proxy is our own Go code, under `plugins/codex-models/proxy/`. Its status reply (`GET /__ccmproxy/status`) carries `codexLimits`, the Codex rate-limit windows read from the `x-codex-*` headers of the answers it already proxies. Only `?refresh=limits`, sent by the crew's `quotaRouting`, may also read OpenAI's unofficial `wham/usage` endpoint, at most once every 5 minutes; a plain status never calls OpenAI.
+Offers OpenAI Codex models (ChatGPT login) in Claude Code through a local loopback proxy. They appear in `/model` next to the Claude models, and an agent definition can name one in its `model:` field. Claude models pass through the proxy to Anthropic unchanged. The proxy is our own Go code, under `plugins/codex-models/proxy/`. Its status reply (`GET /__ccmproxy/status`) carries `codexLimits`, the Codex rate-limit windows read from the `x-codex-*` headers of the answers it already proxies. Only `?refresh=limits`, requested by crew's quota routing, may also read OpenAI's unofficial `wham/usage` endpoint, at most once every 5 minutes; a plain status never calls OpenAI.
 
 Needs macOS, [mise](https://mise.jdx.dev) (it provides Go 1.27.1 and Node 24; `install.sh` checks and tells you what to `mise install`) and a ChatGPT account with Codex access. A plugin cannot set `env` or `modelPicker` in settings, so the installer writes them.
 
@@ -109,17 +109,19 @@ Needs macOS, [mise](https://mise.jdx.dev) (it provides Go 1.27.1 and Node 24; `i
    ~/.claude/plugins/cache/spider-claude-mods/codex-models/<version>/install.sh
    ```
 
-   `install.sh --check` only tests the prerequisites; `--dry-run` prints the `settings.json` diff it would write, with the secret masked; `--no-settings` does everything except the `settings.json` edit.
+   `install.sh --check` checks prerequisites and settings without changing anything; `--dry-run` prints the `settings.json` diff it would write, with every proxy token masked, without changing the installation. These are the installer's only flags.
 3. Sign in to ChatGPT once: `~/.claude/codex-models/ccmproxy login codex` (inside Claude Code: `! ~/.claude/codex-models/ccmproxy login codex`).
 4. Start a new Claude Code session; running ones keep their old settings. `/codex-models:status` shows whether the proxy answers, the login, the models and the settings.
 
-The installer builds the proxy into `~/.claude/codex-models/`, loads the LaunchAgent `com.anderson-spider.codex-models` (loopback only, random port, new secret), checks that the running proxy answers as this install's, and only then edits `~/.claude/settings.json`, keeping a timestamped backup beside it when the file changes. The file holds the proxy's secret, so it and its backups are left at mode 600, and a `settings.json` owned by another user is refused before anything changes.
+The installer checks settings before building, copying files or touching the LaunchAgent. It accepts no existing `ANTHROPIC_BASE_URL` or the current configured proxy URL; a different URL, or a missing proxy config with a URL already set, requires uninstall first. Reinstalling with the same config is idempotent.
+
+It builds the proxy into `~/.claude/codex-models/`, initializes the config (loopback only, random port and secret), loads the LaunchAgent `com.anderson-spider.codex-models`, and verifies the running proxy before editing `~/.claude/settings.json`: the status must refuse a request without the secret, accept it with the secret, identify `ccmproxy` at the installed version, and answer the session-start probe. A changed settings file gets a timestamped backup beside its symlink-resolved target, then an atomic write that refuses concurrent changes. Settings and regular backups are restricted to mode 600; filesystem failures abort the operation.
 
 ### What changes in `settings.json`
 
 - `env.ANTHROPIC_BASE_URL`: the local proxy. The installer refuses to run if another value is already set.
 - `env.ANTHROPIC_CUSTOM_HEADERS`: one `X-Ccmproxy-Token: <secret>` line added; your other lines stay.
-- `env.ENABLE_TOOL_SEARCH=true`: Claude Code turns MCP tool search off for a custom base URL otherwise. It is set even over a `false` you had; uninstall puts your value back.
+- `env.ENABLE_TOOL_SEARCH=true`: Claude Code turns MCP tool search off for a custom base URL otherwise. Install sets it regardless of its previous value; uninstall removes the key.
 - `modelPicker.options`: one row per Codex model, with a description ending in `(codex-models)`.
 
 Claude models still go to Anthropic through the proxy, unchanged, with your usual login.
@@ -136,13 +138,19 @@ Claude models still go to Anthropic through the proxy, unchanged, with your usua
 | `gpt-5.6-terra` | GPT-5.6 Terra | medium | `claude-sonnet-5` |
 | `gpt-5.6-luna` | GPT-5.6 Luna | medium | `claude-haiku-4-5` |
 
-The catalog mirrors `codex debug models` for your account; whether the account may use each model is decided upstream. `gpt-daybreak-blue-latest` (Daybreak Blue access program) is not offered unless you list it in the proxy's `codex.models` setting, which then limits the catalog to the ids it names. See [the proxy's README](plugins/codex-models/proxy/README.md) for the full list, the model names and the credentials.
+The catalog is fixed to the listed models; access to each model is decided upstream. `gpt-daybreak-blue-latest` is gated by the false `OfferDaybreakBlue` constant and is not offered. Picker rows use bare model ids; effort suffixes are accepted in requests but are not advertised as separate rows. See [the proxy's README](plugins/codex-models/proxy/README.md) for the model names and credentials.
+
+### Proxy config and login
+
+`~/.claude/codex-models/home/config.json` contains `listen_http`, `upstream`, `auth_token`, `session_salt`, `auth_dir`, `log_level` and `codex.base_url`. Unknown keys are ignored; known fields retain JSON type checks and validation of destinations, secrets and file permissions. `config init` preserves existing values, including unknown keys, and adds missing secrets. The backend user agent, originator (`codex-tui`), OAuth callback port (1455), model catalog and picker-row policy are fixed in code.
+
+Sign-in uses `ccmproxy login codex` and the proxy's native `<auth_dir>/codex.json` credential file, written atomically at mode 600 in a mode-700 directory. It does not reuse Codex CLI credentials. One exclusive lock, `<canonical auth_dir>/codex.json.lock`, coordinates login, refresh and logout; directory aliases converge on that lock, and credential-file symlinks are refused.
 
 ### Use the models
 
 - Main session: pick a row in `/model`; choose the effort with `/effort`. Suffixes such as `gpt-6-luna-high` pin the effort instead.
 - Subagent: put the model id in the agent's frontmatter, for example `model: gpt-6-astra`.
-- Crew plugin: set its `nativeCodex` option to `role=model` pairs (for example `developer=gpt-6-astra,tester=gpt-6-sol`); with the proxy as `ANTHROPIC_BASE_URL` it registers `crew:developer-codex`, `crew:tester-codex` and so on, with the same prompt, tools and write lane as the base role (see the crew section).
+- Crew plugin: with the proxy as `ANTHROPIC_BASE_URL`, crew automatically registers Codex twins for its roles when the authenticated proxy status offers their models. Start a new session to discover them.
 
 What a Codex model reads and writes is sent to OpenAI. See [docs/PRIVACY.md](docs/PRIVACY.md).
 
@@ -152,9 +160,11 @@ What a Codex model reads and writes is sent to OpenAI. See [docs/PRIVACY.md](doc
 ~/.claude/codex-models/uninstall.sh
 ```
 
-It removes exactly what the installer added to `settings.json` (a backup is left beside it), then stops and removes the LaunchAgent; restart running sessions. The Codex login, the config and the binary stay in `~/.claude/codex-models/`; `uninstall.sh --purge` deletes them too. Every install or uninstall that changes `settings.json` leaves a new backup beside it (mode 600). A backup can hold the proxy's secret, and neither script removes them, `--purge` included: delete `~/.claude/settings.json.bak-codex-models-*` yourself once you no longer need them. Then `claude plugin uninstall codex-models@spider-claude-mods`.
+Uninstall takes no flags. It cleans the current settings without an install-state file or restoring previous values: removes `ANTHROPIC_BASE_URL` only when it is loopback HTTP and our token header was present, removes our token header lines while keeping others, removes `ENABLE_TOOL_SEARCH` by name, and removes only picker rows marked `(codex-models)`. Unrelated settings stay; empty owned keys and containers are dropped, but `settings.json` stays even when its result is `{}`.
 
-Limitations: the proxy assumes a single-user Mac. While it is down, another local user can bind its port and would receive the secret header and the Claude login that Claude Code sends. Changing `nativeCodex` reloads crew without a session start, so the `-codex` types appear from the next session. Uninstall restores `settings.json` with the same content, but a hand-formatted file comes back as 2-space JSON.
+Settings cleanup and its mode-600 backup must succeed before the LaunchAgent is stopped and removed; malformed containers or a write failure keep the service loaded. Restart running sessions. `~/.claude/codex-models/` stays with its native login, config, logs, binary and scripts for inspection and reinstall. The scripts never delete backups, which may hold the proxy's secret. Uninstall the plugin with `claude plugin uninstall codex-models@spider-claude-mods`.
+
+Limitations: the proxy assumes a single-user Mac. While it is down, another local user can bind its port and would receive the secret header and the Claude login that Claude Code sends. A changed settings file is written as 2-space JSON.
 
 ## crew
 
