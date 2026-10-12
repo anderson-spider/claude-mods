@@ -85,7 +85,8 @@ func (o object) set(key string, value json.RawMessage) object {
 
 // encode renders the object with two-space indentation, the layout the Codex
 // CLI writes, so a file it wrote comes back byte for byte apart from the
-// values that changed.
+// values that changed and, since encodeCodexCLI ends the file with a newline
+// and the Codex CLI does not, a final newline on the first rewrite.
 func (o object) encode() ([]byte, error) {
 	var compact bytes.Buffer
 	compact.WriteByte('{')

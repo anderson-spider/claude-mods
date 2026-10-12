@@ -49,6 +49,9 @@ func (s *Store) Access(ctx context.Context) (accessToken, accountID string, err 
 // refreshLocked reads the credential again under the file locks and refreshes
 // it if it still needs it.
 func (s *Store) refreshLocked(ctx context.Context) (string, string, error) {
+	// Read the file even when its stamp looks unchanged: another process may
+	// have refreshed it with a token of the same size within the file
+	// system's mtime granularity, and the cached refresh token is then spent.
 	s.token = nil
 	token, err := s.loadLocked()
 	switch {

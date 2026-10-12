@@ -12,8 +12,10 @@
 //   - store.go, refresh.go, lock.go, write.go: where the login lives on disk,
 //     how it is refreshed, and the two flocks that serialise that across
 //     processes;
-//   - paths.go and layout.go: the Codex CLI's files, which are only ever
-//     read, and the two on-disk layouts;
+//   - paths.go and layout.go: where the Codex CLI keeps its login
+//     (~/.codex/auth.json, which this proxy only ever reads), and the two
+//     on-disk layouts: this proxy's own, and the Codex CLI's, which an
+//     explicit auth_file may use and is then written in;
 //   - responses.go: the Responses API call;
 //   - catalog.go and registry.go: the models offered and how a client's
 //     model name resolves to one.
