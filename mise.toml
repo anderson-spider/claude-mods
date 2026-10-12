@@ -25,6 +25,8 @@ set -euo pipefail
 for p in plugins/*/; do echo "==> $(basename "$p")"; claude plugin test "${p%/}"; done
 echo "==> codex-models proxy"
 go -C plugins/codex-models/proxy test -race ./...
+echo "==> codex-models proxy contract suite"
+go -C plugins/codex-models/proxy test -race -tags contract ./...
 echo "==> codex-models install scripts"
 node --test plugins/codex-models/tests/scripts/*.test.mjs
 cua_node=/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node
