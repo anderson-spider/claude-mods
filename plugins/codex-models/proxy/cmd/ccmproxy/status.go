@@ -3,12 +3,9 @@ package main
 import (
 	"fmt"
 	"os"
-	"time"
-
-	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/codex"
 )
 
-// runStatus prints the config and the Codex login without contacting
+// runStatus prints the config and remote settings without contacting
 // anything. A secret is shown only as set or missing.
 func runStatus(args []string) error {
 	cfg, err := loadConfig("status", args, nil)
@@ -27,21 +24,8 @@ func runStatus(args []string) error {
 	line("auth token", "%s", presence(cfg.AuthToken))
 	line("session salt", "%s", presence(cfg.SessionSalt))
 
-	store := codex.NewStore(nil, storeOptions(cfg))
-	line("codex file", "%s", store.NativePath())
-	if err := store.Check(); err != nil {
-		line("codex", "refused: %v", err)
-		return nil
-	}
-	token, err := store.Peek()
-	if err != nil {
-		line("codex", "not signed in")
-		return nil
-	}
-	line("codex", "%s (%s)", accountLabel(token), planLabel(token))
-	if !token.ExpiresAt.IsZero() {
-		line("codex token", "expires %s", token.ExpiresAt.Local().Format(time.RFC3339))
-	}
+	line("codex remote", "%s", cfg.Codex.Remote)
+	line("management key", "%s", presence(cfg.Codex.ManagementKey))
 	return nil
 }
 

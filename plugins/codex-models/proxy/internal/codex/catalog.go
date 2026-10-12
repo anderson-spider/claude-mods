@@ -18,24 +18,11 @@ type Model struct {
 	// tier as Haiku. Use full ids known to Claude Code, not aliases:
 	// https://code.claude.com/docs/en/settings-reference#modelpicker
 	BehavesAs string
-	// OptIn marks a model gated by an access program the account may not
-	// have. It is neither advertised nor resolved unless OfferDaybreakBlue
-	// is enabled in the source.
-	OptIn bool
 }
 
-// Catalog is the set of Codex models reachable with a ChatGPT subscription,
-// in the Codex CLI's own order. It mirrors the models `codex debug models`
-// lists (visibility "list") for the account it was taken from (Codex CLI
-// 0.162.1, October 2026): slug, description, context_window,
-// supported_reasoning_levels, default_reasoning_level and input_modalities.
-// Hidden entries (gpt-5.5, retiring on 2026-10-14; gpt-reserve;
-// codex-auto-review) are left out. gpt-daybreak-blue-latest is listed only
-// for the "daybreak_blue" access program, so it is OptIn: available only when
-// OfferDaybreakBlue is enabled in the source. The ids are the slugs the ChatGPT backend
-// expects verbatim in the request body; availability still depends on the
-// signed-in account's plan, so a model listed here can legitimately be
-// rejected upstream.
+// Catalog contains exactly the three crew twin models enabled on the remote.
+// Effort levels and client-side BehavesAs profiles remain local; availability
+// still depends on the remote's Codex account.
 var Catalog = []Model{
 	{
 		ID:             "gpt-6.1-sol",
@@ -58,16 +45,6 @@ var Catalog = []Model{
 		BehavesAs:      "claude-opus-5-5",
 	},
 	{
-		ID:             "gpt-6-sol",
-		DisplayName:    "GPT-6 Sol (Codex)",
-		Description:    "Previous generation workhorse model.",
-		ContextLength:  272000,
-		ReasoningLevel: []string{"low", "medium", "high", "xhigh", "max", "ultra"},
-		DefaultEffort:  "medium",
-		SupportsImages: true,
-		BehavesAs:      "claude-sonnet-5-5",
-	},
-	{
 		ID:             "gpt-6-luna",
 		DisplayName:    "GPT-6 Luna (Codex)",
 		Description:    "Fast and affordable model for easier tasks.",
@@ -76,46 +53,5 @@ var Catalog = []Model{
 		DefaultEffort:  "medium",
 		SupportsImages: true,
 		BehavesAs:      "claude-haiku-5-5",
-	},
-	{
-		ID:             "gpt-5.6-sol",
-		DisplayName:    "GPT-5.6 Sol (Codex)",
-		Description:    "Older generation workhorse model.",
-		ContextLength:  272000,
-		ReasoningLevel: []string{"low", "medium", "high", "xhigh", "max", "ultra"},
-		DefaultEffort:  "low",
-		SupportsImages: true,
-		BehavesAs:      "claude-sonnet-5-5",
-	},
-	{
-		ID:             "gpt-5.6-terra",
-		DisplayName:    "GPT-5.6 Terra (Codex)",
-		Description:    "Older balanced model for straightforward work.",
-		ContextLength:  272000,
-		ReasoningLevel: []string{"low", "medium", "high", "xhigh", "max", "ultra"},
-		DefaultEffort:  "medium",
-		SupportsImages: true,
-		BehavesAs:      "claude-sonnet-5-5",
-	},
-	{
-		ID:             "gpt-5.6-luna",
-		DisplayName:    "GPT-5.6 Luna (Codex)",
-		Description:    "Older fast and efficient model.",
-		ContextLength:  272000,
-		ReasoningLevel: []string{"low", "medium", "high", "xhigh", "max"},
-		DefaultEffort:  "medium",
-		SupportsImages: true,
-		BehavesAs:      "claude-haiku-5-5",
-	},
-	{
-		ID:             "gpt-daybreak-blue-latest",
-		DisplayName:    "Daybreak Blue (Codex)",
-		Description:    "Latest frontier agentic coding model for broad defensive cybersecurity work.",
-		ContextLength:  272000,
-		ReasoningLevel: []string{"low", "medium", "high", "xhigh", "max", "ultra"},
-		DefaultEffort:  "low",
-		SupportsImages: true,
-		BehavesAs:      "claude-opus-5-5",
-		OptIn:          true,
 	},
 }

@@ -2,7 +2,7 @@
 
 // Package contract is a black-box suite for the ccmproxy binary: it builds
 // the binary with -tags contract, starts it against httptest fakes of the
-// Anthropic API, the Codex backend and the OAuth token endpoint, and checks
+// Anthropic API and of the remote translating proxy (inference and management), and checks
 // what a client sees and what the fakes received. It imports no package of
 // the proxy, so it outlives any rewrite of them.
 //
@@ -13,7 +13,6 @@ package contract
 import (
 	"bufio"
 	"bytes"
-	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"flag"
@@ -81,8 +80,9 @@ type rec struct {
 
 type handlerFunc func(w http.ResponseWriter, r *http.Request, got rec)
 
-// fake is an httptest server that records every request and answers from a
-// scripted handler.
+// fake records every request it receives and answers from a scripted
+// handler. Several fakes can share one server (the remote's inference and
+// management sides), each owning its paths.
 type fake struct {
 	*httptest.Server
 	mu      sync.Mutex
@@ -90,21 +90,28 @@ type fake struct {
 	handler handlerFunc
 }
 
-func newFake(t *testing.T, tlsServer bool) *fake {
-	t.Helper()
+func newHandlerFake() *fake {
 	f := &fake{}
 	f.handler = func(w http.ResponseWriter, _ *http.Request, _ rec) {
 		http.Error(w, "unscripted fake", http.StatusInternalServerError)
 	}
-	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-		got := rec{Method: r.Method, Path: r.URL.Path, Query: r.URL.RawQuery, Host: r.Host, Header: r.Header.Clone(), Body: body}
-		f.mu.Lock()
-		f.recs = append(f.recs, got)
-		handler := f.handler
-		f.mu.Unlock()
-		handler(w, r, got)
-	})
+	return f
+}
+
+func (f *fake) serve(w http.ResponseWriter, r *http.Request) {
+	body, _ := io.ReadAll(r.Body)
+	got := rec{Method: r.Method, Path: r.URL.Path, Query: r.URL.RawQuery, Host: r.Host, Header: r.Header.Clone(), Body: body}
+	f.mu.Lock()
+	f.recs = append(f.recs, got)
+	handler := f.handler
+	f.mu.Unlock()
+	handler(w, r, got)
+}
+
+func newFake(t *testing.T, tlsServer bool) *fake {
+	t.Helper()
+	f := newHandlerFake()
+	h := http.HandlerFunc(f.serve)
 	if tlsServer {
 		f.Server = httptest.NewTLSServer(h)
 	} else {
@@ -112,6 +119,23 @@ func newFake(t *testing.T, tlsServer bool) *fake {
 	}
 	t.Cleanup(f.Server.Close)
 	return f
+}
+
+// newRemote is a TLS fake of the remote translating proxy: /v8/management/
+// goes to mgmt, everything else (inference) to cdx. Both report the same URL.
+func newRemote(t *testing.T) (cdx, mgmt *fake) {
+	t.Helper()
+	cdx, mgmt = newHandlerFake(), newHandlerFake()
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/v8/management/") {
+			mgmt.serve(w, r)
+			return
+		}
+		cdx.serve(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	cdx.Server, mgmt.Server = srv, srv
+	return cdx, mgmt
 }
 
 func (f *fake) set(h handlerFunc) {
@@ -128,6 +152,17 @@ func (f *fake) all() []rec {
 
 func (f *fake) count() int { return len(f.all()) }
 
+// countPath counts the requests to one path.
+func (f *fake) countPath(path string) int {
+	n := 0
+	for _, r := range f.all() {
+		if r.Path == path {
+			n++
+		}
+	}
+	return n
+}
+
 func (f *fake) last(t *testing.T) rec {
 	t.Helper()
 	all := f.all()
@@ -140,38 +175,35 @@ func (f *fake) last(t *testing.T) rec {
 // ---- environment -----------------------------------------------------------
 
 type opts struct {
-	ping       string         // CCMPROXY_CONTRACT_PING_INTERVAL
-	codexCfg   map[string]any // merged into the config's codex block
-	tlsOAuth   bool           // serve the OAuth fake over TLS, trusted through CCMPROXY_CONTRACT_CA_FILE
+	ping       string // CCMPROXY_CONTRACT_PING_INTERVAL
+	noRemote   bool   // configure no codex.remote at all
+	noAccount  bool   // the remote's credentials list holds no Codex account
 	noStart    bool
 	extraEnv   []string
 	rawConfig  func(cfg map[string]any) // last edit of the config before it is written
 	skipConfig bool
-	race       bool   // run the race-instrumented binary when the suite has one
-	authDir    string // share this auth_dir (another env's) instead of the home's own
-	oauthFake  *fake  // share this token endpoint instead of a new one
+	race       bool // run the race-instrumented binary when the suite has one
 }
 
 type env struct {
-	t         *testing.T
-	home      string
-	codexHome string
-	authDir   string
-	cfgPath   string
-	addr      string
-	token     string
-	salt      string
-	anth      *fake
-	cdx       *fake
-	oauth     *fake
-	opts      opts
-	cmd       *exec.Cmd
-	exited    chan struct{}
-	waitErr   error
-	killed    bool
-	stopOnce  sync.Once
-	stderr    *syncBuf
-	client    *http.Client
+	t        *testing.T
+	home     string
+	cfgPath  string
+	addr     string
+	token    string
+	salt     string
+	mgmtKey  string
+	anth     *fake
+	cdx      *fake // the remote's inference side
+	mgmt     *fake // the remote's management side
+	opts     opts
+	cmd      *exec.Cmd
+	exited   chan struct{}
+	waitErr  error
+	killed   bool
+	stopOnce sync.Once
+	stderr   *syncBuf
+	client   *http.Client
 }
 
 type syncBuf struct {
@@ -202,23 +234,17 @@ func freeAddr(t *testing.T) string {
 	return addr
 }
 
+// accountIndex is the auth_index of the fake remote's one Codex account.
+const accountIndex = "idx-codex-1"
+
 func newEnv(t *testing.T, o opts) *env {
 	t.Helper()
-	e := &env{t: t, opts: o, token: "tok-" + randHex(t, 16), salt: "salt-" + randHex(t, 16)}
+	e := &env{t: t, opts: o, token: "tok-" + randHex(t, 16), salt: "salt-" + randHex(t, 16), mgmtKey: "mgmt-" + randHex(t, 16)}
 	e.anth = newFake(t, false)
-	e.cdx = newFake(t, false)
-	if o.oauthFake != nil {
-		e.oauth = o.oauthFake
-	} else {
-		e.oauth = newFake(t, o.tlsOAuth)
-	}
+	e.cdx, e.mgmt = newRemote(t)
+	e.mgmt.set(e.management(o.noAccount, usageBody(12, false)))
 	e.home = t.TempDir()
 	must(t, os.Chmod(e.home, 0o700))
-	e.codexHome = filepath.Join(e.home, "codex-cli")
-	e.authDir = filepath.Join(e.home, "auth")
-	if o.authDir != "" {
-		e.authDir = o.authDir
-	}
 	e.cfgPath = filepath.Join(e.home, "config.json")
 	e.addr = freeAddr(t)
 	e.stderr = &syncBuf{}
@@ -233,18 +259,15 @@ func newEnv(t *testing.T, o opts) *env {
 	t.Cleanup(e.client.CloseIdleConnections)
 
 	if !o.skipConfig {
-		cdxCfg := map[string]any{"base_url": e.cdxBase()}
-		for k, v := range o.codexCfg {
-			cdxCfg[k] = v
-		}
 		cfg := map[string]any{
 			"listen_http":  e.addr,
 			"upstream":     e.anth.URL,
 			"auth_token":   e.token,
 			"session_salt": e.salt,
-			"auth_dir":     e.authDir,
 			"log_level":    "debug",
-			"codex":        cdxCfg,
+		}
+		if !o.noRemote {
+			cfg["codex"] = map[string]any{"remote": e.cdx.URL, "management_key": e.mgmtKey}
 		}
 		if o.rawConfig != nil {
 			o.rawConfig(cfg)
@@ -257,28 +280,21 @@ func newEnv(t *testing.T, o opts) *env {
 	return e
 }
 
-func (e *env) cdxBase() string { return e.cdx.URL + "/backend-api/codex" }
-
 func (e *env) environ() []string {
+	ca := filepath.Join(e.home, "remote-ca.pem")
+	block := &pem.Block{Type: "CERTIFICATE", Bytes: e.cdx.Certificate().Raw}
+	must(e.t, os.WriteFile(ca, pem.EncodeToMemory(block), 0o600))
 	env := []string{
 		"PATH=" + os.Getenv("PATH"),
 		"HOME=" + e.home,
 		"TMPDIR=" + e.home,
 		"CCMPROXY_HOME=" + e.home,
-		"CODEX_HOME=" + e.codexHome,
 		"CCMPROXY_CONTRACT_UPSTREAM=" + e.anth.URL,
-		"CCMPROXY_CONTRACT_CODEX_BASE_URL=" + e.cdxBase(),
-		"CCMPROXY_CONTRACT_OAUTH_TOKEN_URL=" + e.oauth.URL + "/token",
-		"CCMPROXY_CONTRACT_OAUTH_AUTH_URL=" + e.oauth.URL + "/authorize",
+		"CCMPROXY_CONTRACT_REMOTE=" + e.cdx.URL,
+		"CCMPROXY_CONTRACT_CA_FILE=" + ca,
 	}
 	if e.opts.ping != "" {
 		env = append(env, "CCMPROXY_CONTRACT_PING_INTERVAL="+e.opts.ping)
-	}
-	if e.opts.tlsOAuth {
-		ca := filepath.Join(e.home, "oauth-ca.pem")
-		block := &pem.Block{Type: "CERTIFICATE", Bytes: e.oauth.Certificate().Raw}
-		must(e.t, os.WriteFile(ca, pem.EncodeToMemory(block), 0o600))
-		env = append(env, "CCMPROXY_CONTRACT_CA_FILE="+ca)
 	}
 	return append(env, e.opts.extraEnv...)
 }
@@ -320,6 +336,72 @@ func (e *env) start() {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatalf("ccmproxy did not answer HEAD /api/hello:\n%s", e.stderr.String())
+}
+
+// withAccount starts a proxy whose remote has one active Codex account and
+// waits until the proxy has read it (the start-up check is asynchronous).
+func withAccount(t *testing.T, o opts) *env {
+	t.Helper()
+	e := newEnv(t, o)
+	e.waitLoggedIn()
+	return e
+}
+
+// waitLoggedIn waits for status to report the remote's account.
+func (e *env) waitLoggedIn() {
+	e.t.Helper()
+	waitUntil(e.t, "codexLogin true", 5*time.Second, func() bool {
+		r := e.do(http.MethodGet, "/__ccmproxy/status", nil, nil)
+		var s struct {
+			CodexLogin bool `json:"codexLogin"`
+		}
+		return r.Status == 200 && json.Unmarshal(r.Body, &s) == nil && s.CodexLogin
+	})
+}
+
+func waitUntil(t *testing.T, what string, within time.Duration, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(within)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", what)
+}
+
+// ---- the remote's management side ------------------------------------------
+
+// usageBody is a wham/usage answer: a weekly window at percent used.
+func usageBody(percent int, limitReached bool) string {
+	return fmt.Sprintf(`{"plan_type":"pro","rate_limit":{"allowed":true,"limit_reached":%t,`+
+		`"primary_window":{"used_percent":%d,"limit_window_seconds":604800,"reset_after_seconds":3600,"reset_at":%d},`+
+		`"secondary_window":null}}`, limitReached, percent, time.Now().Add(time.Hour).Unix())
+}
+
+// management answers the credentials list and the usage api-call when the
+// management key is right; usage is the wham/usage body to wrap.
+func (e *env) management(noAccount bool, usage string) handlerFunc {
+	return func(w http.ResponseWriter, r *http.Request, got rec) {
+		if got.Header.Get("Authorization") != "Bearer "+e.mgmtKey {
+			http.Error(w, `{"error":"invalid management key"}`, http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch got.Path {
+		case "/v8/management/credentials":
+			if noAccount {
+				_, _ = w.Write([]byte(`{"files":[],"observed_at":"2026-10-12T00:00:00Z"}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"files":[{"auth_index":"` + accountIndex + `","provider":"codex","type":"codex","status":"active","disabled":false,"unavailable":false}],"observed_at":"2026-10-12T00:00:00Z"}`))
+		case "/v8/management/requests/api-call":
+			_, _ = w.Write([]byte(`{"status_code":200,"header":{},"body":` + jsonStr(usage) + `}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}
 }
 
 // stop sends SIGTERM, waits up to 5 s (then kills) and reports how the
@@ -449,88 +531,6 @@ func (e *env) rawRequest(method, target string, withSecret bool) resp {
 	defer res.Body.Close()
 	data, _ := io.ReadAll(res.Body)
 	return resp{Status: res.StatusCode, Header: res.Header, Body: data}
-}
-
-// ---- credentials -----------------------------------------------------------
-
-func jwt(claims map[string]any) string {
-	enc := func(v any) string {
-		b, _ := json.Marshal(v)
-		return base64.RawURLEncoding.EncodeToString(b)
-	}
-	return enc(map[string]any{"alg": "none", "typ": "JWT"}) + "." + enc(claims) + ".c2ln"
-}
-
-// accessToken is a JWT shaped like the ones the Codex login issues: the proxy
-// reads exp and the account claims from it.
-func accessToken(tag string, exp time.Time) string {
-	return jwt(map[string]any{
-		"exp": exp.Unix(),
-		"sub": tag,
-		"https://api.openai.com/auth": map[string]any{
-			"chatgpt_account_id": "acct-1",
-			"chatgpt_plan_type":  "plus",
-		},
-	})
-}
-
-func idToken(tag string) string {
-	return jwt(map[string]any{
-		"email": "user@example.test",
-		"sub":   tag,
-		"https://api.openai.com/auth": map[string]any{
-			"chatgpt_account_id": "acct-1",
-			"chatgpt_plan_type":  "plus",
-		},
-	})
-}
-
-type login struct {
-	access  string
-	refresh string
-	expires time.Time
-	mode    os.FileMode
-}
-
-// writeLogin writes the proxy's own credential file (auth_dir/codex.json).
-func (e *env) writeLogin(l login) string {
-	e.t.Helper()
-	if l.expires.IsZero() {
-		l.expires = time.Now().Add(time.Hour)
-	}
-	if l.access == "" {
-		l.access = accessToken("access-1", l.expires)
-	}
-	if l.refresh == "" {
-		l.refresh = "refresh-1"
-	}
-	if l.mode == 0 {
-		l.mode = 0o600
-	}
-	must(e.t, os.MkdirAll(e.authDir, 0o700))
-	path := filepath.Join(e.authDir, "codex.json")
-	writeJSON(e.t, path, map[string]any{
-		"id_token":      idToken("id-1"),
-		"access_token":  l.access,
-		"refresh_token": l.refresh,
-		"account_id":    "acct-1",
-		"email":         "user@example.test",
-		"plan_type":     "plus",
-		"expires_at":    l.expires.UTC().Format(time.RFC3339),
-		"last_refresh":  time.Now().UTC().Format(time.RFC3339),
-		"type":          "codex",
-	}, l.mode)
-	return path
-}
-
-// loggedIn is the common case: a valid login.
-func loggedIn(t *testing.T, o opts) *env {
-	t.Helper()
-	o.noStart = true
-	e := newEnv(t, o)
-	e.writeLogin(login{})
-	e.start()
-	return e
 }
 
 // ---- files and golden data -------------------------------------------------
@@ -756,9 +756,10 @@ func blocksOf(evs []sseEvent) []map[string]any {
 	return out
 }
 
-// ---- scripted Codex answers ------------------------------------------------
+// ---- scripted remote answers -------------------------------------------------
 
-// sseAnswerBody writes one event frame without touching headers.
+// sseAnswerBody writes one Messages event frame without touching headers;
+// the event name is the payload's type.
 func sseAnswerBody(w io.Writer, ev string) {
 	var head struct {
 		Type string `json:"type"`
@@ -767,17 +768,13 @@ func sseAnswerBody(w io.Writer, ev string) {
 	fmt.Fprintf(w, "event: %s\ndata: %s\n\n", head.Type, ev)
 }
 
-// sseAnswer writes events as a Codex Responses stream and flushes after each.
+// sseAnswer writes events as a Messages stream and flushes after each.
 func sseAnswer(w http.ResponseWriter, events ...string) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.WriteHeader(http.StatusOK)
 	fl, _ := w.(http.Flusher)
 	for _, ev := range events {
-		var head struct {
-			Type string `json:"type"`
-		}
-		_ = json.Unmarshal([]byte(ev), &head)
-		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", head.Type, ev)
+		sseAnswerBody(w, ev)
 		if fl != nil {
 			fl.Flush()
 		}
@@ -788,18 +785,41 @@ func answerWith(events ...string) handlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request, _ rec) { sseAnswer(w, events...) }
 }
 
+func sseChunk(w http.ResponseWriter, fl http.Flusher, ev string) {
+	sseAnswerBody(w, ev)
+	fl.Flush()
+}
+
 func jsonStr(s string) string {
 	b, _ := json.Marshal(s)
 	return string(b)
 }
 
+// The events of a Messages stream as the remote sends them.
 const (
-	evCreated   = `{"type":"response.created","response":{"id":"resp_1","model":"gpt-6-astra-2026-01-01"}}`
-	evCompleted = `{"type":"response.completed","response":{"id":"resp_1","usage":{"input_tokens":12,"output_tokens":5,"input_tokens_details":{"cached_tokens":2}}}}`
+	evStart     = `{"type":"message_start","message":{"id":"msg_r1","type":"message","role":"assistant","model":"gpt-6-astra","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":12,"output_tokens":0}}}`
+	evTextStart = `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`
+	evStop0     = `{"type":"content_block_stop","index":0}`
+	evMsgDelta  = `{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":5}}`
+	evMsgStop   = `{"type":"message_stop"}`
 )
 
 func evText(s string) string {
-	return `{"type":"response.output_text.delta","delta":` + jsonStr(s) + `}`
+	return `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":` + jsonStr(s) + `}}`
+}
+
+// textAnswer is a whole streamed answer of one text block.
+func textAnswer(s string) []string {
+	return []string{evStart, evTextStart, evText(s), evStop0, evMsgDelta, evMsgStop}
+}
+
+// jsonAnswer is a non-streamed Messages answer.
+func jsonAnswer(content string) handlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request, _ rec) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"msg_r1","type":"message","role":"assistant","model":"gpt-6-astra","content":` + content +
+			`,"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":12,"output_tokens":5}}`))
+	}
 }
 
 // claudeReq builds a Messages request; extra keys replace the defaults.

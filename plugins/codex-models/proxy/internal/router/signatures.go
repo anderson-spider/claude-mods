@@ -1,9 +1,10 @@
-package translate
+package router
 
 import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"strings"
 )
 
 // StripProxySignatures removes, from a request going to Anthropic, the
@@ -35,23 +36,23 @@ func StripProxySignatures(raw []byte) ([]byte, bool) {
 }
 
 // edit replaces raw[start:end] with with.
-type edit struct {
+type signatureEdit struct {
 	start, end int
 	with       []byte
 }
 
-var errUnexpectedJSON = errors.New("translate: unexpected JSON while scanning messages")
+var errUnexpectedJSON = errors.New("router: unexpected JSON while scanning messages")
 
 // proxyThinkingEdits walks the body's messages[*].content arrays, in order,
 // and returns an edit for each one holding a proxy-issued thinking block. It
 // reads the body as a token stream, so it knows where each array starts and
 // ends in the original bytes.
-func proxyThinkingEdits(raw []byte) ([]edit, error) {
+func proxyThinkingEdits(raw []byte) ([]signatureEdit, error) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	if opened, err := openDelim(dec, '{'); err != nil || !opened {
 		return nil, errUnexpectedJSON
 	}
-	var edits []edit
+	var edits []signatureEdit
 	for dec.More() {
 		name, err := memberName(dec)
 		if err != nil {
@@ -112,7 +113,7 @@ func proxyThinkingEdits(raw []byte) ([]edit, error) {
 // contentEdit reads one content array whose '[' was just read, and returns
 // the edit that drops its proxy-issued thinking blocks, or nil when it has
 // none.
-func contentEdit(dec *json.Decoder, raw []byte) (*edit, error) {
+func contentEdit(dec *json.Decoder, raw []byte) (*signatureEdit, error) {
 	start := int(dec.InputOffset()) - 1
 	var kept []json.RawMessage
 	dropped := false
@@ -137,19 +138,19 @@ func contentEdit(dec *json.Decoder, raw []byte) (*edit, error) {
 	if !dropped {
 		return nil, nil
 	}
-	return &edit{start: start, end: end, with: joinArray(kept)}, nil
+	return &signatureEdit{start: start, end: end, with: joinArray(kept)}, nil
 }
 
 func isProxyThinking(block json.RawMessage) bool {
 	var b struct {
-		Type      text `json:"type"`
-		Signature text `json:"signature"`
+		Type      jsonText `json:"type"`
+		Signature jsonText `json:"signature"`
 	}
-	readJSON(block, &b)
+	readLenient(block, &b)
 	if b.Type != "thinking" {
 		return false
 	}
-	_, ours := codexState(string(b.Signature))
+	ours := strings.HasPrefix(string(b.Signature), SignatureMarker)
 	return ours
 }
 
@@ -165,7 +166,7 @@ func openDelim(dec *json.Decoder, want json.Delim) (bool, error) {
 		return true, nil
 	}
 	if d, ok := tok.(json.Delim); ok && (d == '{' || d == '[') {
-		return false, skipRest(dec)
+		return false, skipSignatureRest(dec)
 	}
 	return false, nil
 }
@@ -194,7 +195,7 @@ func skipValue(dec *json.Decoder) error {
 
 // skipRest consumes the rest of an object or array whose opening delimiter
 // was just read.
-func skipRest(dec *json.Decoder) error {
+func skipSignatureRest(dec *json.Decoder) error {
 	for depth := 1; depth > 0; {
 		tok, err := dec.Token()
 		if err != nil {
@@ -209,3 +210,6 @@ func skipRest(dec *json.Decoder) error {
 	}
 	return nil
 }
+
+// SignatureMarker identifies remote reasoning state in a shared transcript.
+const SignatureMarker = "ccmp1:"

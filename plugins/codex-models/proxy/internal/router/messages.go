@@ -5,7 +5,6 @@ import (
 	"net/http"
 
 	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/logx"
-	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/translate"
 )
 
 // serveMessages routes a Messages request to the Codex backend or to
@@ -80,10 +79,10 @@ func refuseInvalidJSON(w http.ResponseWriter, body *requestBody) bool {
 // reports whether it had to be rewritten. Reasoning state this proxy issued
 // for a Codex turn would be refused by Anthropic, so it is dropped when a
 // session switches back to a Claude model. Otherwise the bytes go out as the
-// client sent them, under their content coding; translate drops the blocks
+// client sent them, under their content coding; the signature filter drops the blocks
 // without re-encoding the rest.
 func forwardUpstream(req *http.Request, body *requestBody) bool {
-	cleaned, changed := translate.StripProxySignatures(body.JSON)
+	cleaned, changed := StripProxySignatures(body.JSON)
 	if !changed {
 		body.forward(req)
 		return false

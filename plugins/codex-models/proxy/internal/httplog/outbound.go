@@ -1,7 +1,7 @@
 // Package httplog writes one access line per HTTP exchange, in both
 // directions: Log wraps the proxy's handler (what Claude Code sends in) and
 // Transport wraps a client's round tripper (what the proxy sends out to
-// Anthropic, the Codex backend or the OAuth token endpoint).
+// Anthropic or the Codex remote).
 //
 // A line holds the method, scheme, host and path, the status, the request and
 // response sizes and the duration. It never holds a query string, userinfo,
@@ -34,7 +34,7 @@ type Transport struct {
 	// Next sends the request. Nil means netx.Shared(), never
 	// http.DefaultTransport, which would honour HTTPS_PROXY.
 	Next http.RoundTripper
-	// Label names the client in each line ("codex", "oauth", ...); empty
+	// Label names the client in each line ("codex", "management", ...); empty
 	// leaves it out.
 	Label string
 }

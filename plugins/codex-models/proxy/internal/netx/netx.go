@@ -1,5 +1,5 @@
 // Package netx builds the transport behind every outbound connection the
-// proxy makes: to Anthropic, to the Codex backend and to the OAuth endpoints.
+// proxy makes: to Anthropic and to the credential-owning Codex remote.
 package netx
 
 import (
@@ -25,7 +25,7 @@ const (
 //
 // Its Proxy field is nil on purpose, so HTTPS_PROXY, HTTP_PROXY, ALL_PROXY
 // and NO_PROXY are never read. A value left in the shell would otherwise
-// route requests, with the Claude OAuth bearer and the Codex token, through
+// route requests, with the Claude bearer or the management credential, through
 // whatever listens there, or back into this proxy. Do not copy
 // http.DefaultTransport here: its Proxy is http.ProxyFromEnvironment.
 func DirectTransport() *http.Transport {

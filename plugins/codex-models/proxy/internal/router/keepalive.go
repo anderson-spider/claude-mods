@@ -62,7 +62,7 @@ func (s *sseWriter) write(frames []byte, open bool) bool {
 		s.timer = time.AfterFunc(s.interval, s.ping)
 	case len(frames) > 0:
 		// Only bytes that went out restart the wait; an event that made no
-		// frame (a call's argument delta) leaves it running.
+		// frame (a remote comment without bytes) leaves it running.
 		s.timer.Reset(s.interval)
 	}
 	return true

@@ -205,25 +205,6 @@ func TestALongStallPingsAtASteadyPace(t *testing.T) {
 
 // TestFrameFreeEventsDoNotDelayPingsThroughTheRouter streams argument deltas
 // faster than the interval for a long time: pings still go out.
-func TestFrameFreeEventsDoNotDelayPingsThroughTheRouter(t *testing.T) {
-	h := newHarness(t, nil, func(w http.ResponseWriter, r *http.Request) {
-		writeSSE(w, `{"type":"response.created","response":{"id":"r","model":"gpt-6-luna"}}`)
-		writeSSE(w, `{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"StructuredOutput"}}`)
-		writeSSE(w, `{"type":"response.function_call_arguments.delta","output_index":0,"item_id":"fc_1","delta":"{\"answer\":\""}`)
-		for i := 0; i < 60; i++ {
-			time.Sleep(pingTestInterval / 4)
-			writeSSE(w, `{"type":"response.function_call_arguments.delta","output_index":0,"item_id":"fc_1","delta":"x"}`)
-		}
-		writeSSE(w, `{"type":"response.function_call_arguments.delta","output_index":0,"item_id":"fc_1","delta":"\"}"}`)
-		writeSSE(w, `{"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"StructuredOutput"}}`)
-		writeSSE(w, `{"type":"response.completed","response":{"id":"r","usage":{}}}`)
-	}, true)
-	h.router.pingInterval = pingTestInterval
-	rec := h.do(t, http.MethodPost, "/v1/messages", toolStreamRequest)
-	if pings := checkPingPlacement(t, rec.Body.String()); pings < 3 {
-		t.Fatalf("%d pings while frame-free deltas trickled for 15 intervals:\n%s", pings, rec.Body.String())
-	}
-}
 
 // TestAnUpstreamFailureMidStallEndsWithAnErrorAndNoLaterPing: the upstream
 // connection breaks during a stall, and an upstream error event arrives
@@ -232,25 +213,25 @@ func TestAnUpstreamFailureMidStallEndsWithAnErrorAndNoLaterPing(t *testing.T) {
 	stall := 5 * pingTestInterval
 	cases := map[string]http.HandlerFunc{
 		"connection broken": func(w http.ResponseWriter, r *http.Request) {
-			writeSSE(w, `{"type":"response.created","response":{"id":"r"}}`)
-			writeSSE(w, `{"type":"response.output_text.delta","delta":"Hi"}`)
+			writeSSE(w, `{"type":"message_start","message":{"id":"r"}}`)
+			writeSSE(w, `{"type":"content_block_delta","delta":{"type":"text_delta","text":"Hi"}}`)
 			time.Sleep(stall)
 			panic(http.ErrAbortHandler)
 		},
 		"error event": func(w http.ResponseWriter, r *http.Request) {
-			writeSSE(w, `{"type":"response.created","response":{"id":"r"}}`)
+			writeSSE(w, `{"type":"message_start","message":{"id":"r"}}`)
 			time.Sleep(stall)
 			writeSSE(w, `{"type":"error","error":{"type":"server_error","message":"boom"}}`)
 			time.Sleep(stall)
 		},
 		"response.failed": func(w http.ResponseWriter, r *http.Request) {
-			writeSSE(w, `{"type":"response.created","response":{"id":"r"}}`)
+			writeSSE(w, `{"type":"message_start","message":{"id":"r"}}`)
 			time.Sleep(stall)
-			writeSSE(w, `{"type":"response.failed","response":{"id":"r","error":{"code":"server_error","message":"boom"}}}`)
+			writeSSE(w, `{"type":"error","error":{"type":"api_error","message":"boom"}}`)
 			time.Sleep(stall)
 		},
 		"ends silently": func(w http.ResponseWriter, r *http.Request) {
-			writeSSE(w, `{"type":"response.created","response":{"id":"r"}}`)
+			writeSSE(w, `{"type":"message_start","message":{"id":"r"}}`)
 			time.Sleep(stall)
 		},
 	}
@@ -288,13 +269,13 @@ func TestTheNonStreamingAnswerNeverCarriesAPing(t *testing.T) {
 func TestStreamingWithPingsLeavesNoGoroutineBehind(t *testing.T) {
 	stall := 4 * pingTestInterval
 	h := newHarness(t, nil, func(w http.ResponseWriter, r *http.Request) {
-		writeSSE(w, `{"type":"response.created","response":{"id":"r"}}`)
+		writeSSE(w, `{"type":"message_start","message":{"id":"r"}}`)
 		select {
 		case <-time.After(stall):
 		case <-r.Context().Done():
 			return
 		}
-		writeSSE(w, `{"type":"response.completed","response":{"id":"r","usage":{}}}`)
+		writeSSE(w, `{"type":"message_stop"}`)
 	}, true)
 	h.router.pingInterval = pingTestInterval
 	server := httptest.NewServer(h.router)

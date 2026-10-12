@@ -1,13 +1,13 @@
 // Command ccmproxy routes Claude Code's Anthropic API traffic: everything is
 // forwarded to the real API untouched except the model list, which is extended
 // with OpenAI Codex models, and requests naming one of those models, which are
-// answered from a ChatGPT subscription over OAuth.
+// answered by a remote that owns the Codex credentials.
 //
 // Claude Code reaches the proxy through ANTHROPIC_BASE_URL, on a plain HTTP
 // listener bound to a loopback address; `ccmproxy env` prints the settings.
 //
 // The files split the commands by job: main.go dispatches, flags.go reads the
-// flags every command shares, and serve.go, login.go, status.go, models.go,
+// flags every command shares, and serve.go, status.go, models.go,
 // env.go, version.go and configinit.go each hold one command. The installer
 // and the plugin's hooks read the output of `env --shell json`,
 // `models --json` and `version`, and the `ccmproxy:` prefix of an error, so
@@ -27,9 +27,7 @@ const usage = `ccmproxy - add models to Claude Code by proxying the Anthropic AP
 
 Usage:
   ccmproxy serve [flags]        run the proxy (default command)
-  ccmproxy login codex [flags]  sign in to a ChatGPT account for Codex models
-  ccmproxy logout codex         remove the stored Codex credentials
-  ccmproxy status               show configuration and login state
+  ccmproxy status               show configuration and remote settings
   ccmproxy models [--settings-json | --json]
                                 list the models this proxy adds;
                                 --settings-json prints a modelPicker block
@@ -39,9 +37,11 @@ Usage:
   ccmproxy env [--shell SHELL]  print the environment Claude Code needs
                                 (posix, fish, powershell or json); it
                                 includes the proxy's secret
-  ccmproxy config init          write a config file with a random port and
+  ccmproxy config init [--stdin]
+                                write a config file with a random port and
                                 new secrets, or add the missing secrets to
-                                an existing one
+                                an existing one; --stdin reads
+                                {"codex":{"remote","management_key"}} JSON
   ccmproxy version              print the version and build details
 
 Common flags:
@@ -83,10 +83,6 @@ func run(args []string) error {
 	switch command {
 	case "serve":
 		return runServe(rest)
-	case "login":
-		return runLogin(rest)
-	case "logout":
-		return runLogout(rest)
 	case "status":
 		return runStatus(rest)
 	case "models":

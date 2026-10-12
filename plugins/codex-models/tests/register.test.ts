@@ -202,7 +202,7 @@ test('/codex-models:status reports the proxy and the settings without the secret
 
   expect(out.text).toContain('codex-models 0.2.0')
   expect(out.text).toContain('Proxy: ccmproxy 0.2.0 at http://127.0.0.1:41234 (matches the plugin)')
-  expect(out.text).toContain('Codex login: signed in')
+  expect(out.text).toContain('Codex remote account: found')
   expect(out.text).toContain('Models: gpt-6-astra')
   expect(out.text).toContain('present, matches the proxy config (secret not shown)')
   expect(out.text).toContain('/model rows: 1 (gpt-6-astra)')
@@ -306,7 +306,7 @@ test('a late answer after the timeout leaves only the timeout notice', async ($,
   expect(seen.transcript[0]).toContain('~/.claude/codex-models/uninstall.sh')
 })
 
-test('a missing Codex login gets its own notice', async ($, on) => {
+test('a missing Codex remote account gets its own notice', async ($, on) => {
   const { seen } = world(on, {
     env: sessionEnv('http://127.0.0.1:41234'),
     reply: { status: 200, text: JSON.stringify({ service: 'ccmproxy', version: '0.2.0', codexLogin: false, models: [] }) },
@@ -315,7 +315,7 @@ test('a missing Codex login gets its own notice', async ($, on) => {
   await start($)
 
   expect(seen.transcript).toHaveLength(1)
-  expect(seen.transcript[0]).toContain('login codex')
+  expect(seen.transcript[0]).toContain('CLIPROXY_MGMT_KEY')
 })
 
 const echoes: [string, Reply][] = [

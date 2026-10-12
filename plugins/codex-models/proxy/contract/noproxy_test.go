@@ -45,43 +45,33 @@ func proxyVars(addr string) []string {
 // that cannot resolve, which a proxy-honouring client would hand to the trap.
 func TestProxyEnvironmentVariablesAreIgnored(t *testing.T) {
 	trap := newProxyTrap(t)
+	const remote = "https://codex.invalid:1"
 	e := newEnv(t, opts{
 		noStart: true,
 		rawConfig: func(cfg map[string]any) {
 			cfg["upstream"] = "http://anthropic.invalid:1"
-			cfg["codex"].(map[string]any)["base_url"] = "http://codex.invalid:1/backend-api/codex"
+			cfg["codex"].(map[string]any)["remote"] = remote
 		},
-		extraEnv: append(proxyVars(trap.addr),
-			"CCMPROXY_CONTRACT_UPSTREAM=http://anthropic.invalid:1",
-			"CCMPROXY_CONTRACT_CODEX_BASE_URL=http://codex.invalid:1/backend-api/codex",
-			"CCMPROXY_CONTRACT_OAUTH_TOKEN_URL=http://oauth.invalid:1/token",
-			"CCMPROXY_CONTRACT_OAUTH_AUTH_URL=http://oauth.invalid:1/authorize",
-		),
 	})
-	past := time.Now().Add(-time.Hour)
-	e.writeLogin(login{expires: past, access: accessToken("old", past)})
+	e.opts.extraEnv = append(proxyVars(trap.addr),
+		"CCMPROXY_CONTRACT_UPSTREAM=http://anthropic.invalid:1",
+		"CCMPROXY_CONTRACT_REMOTE="+remote,
+	)
 	e.start()
 
-	check := func(name string, r resp) {
+	check := func(name string, r resp, status int) {
 		t.Helper()
-		if r.Status != http.StatusBadGateway {
-			t.Fatalf("%s: status = %d, want 502: %s", name, r.Status, r.Body)
+		if r.Status != status {
+			t.Fatalf("%s: status = %d, want %d: %s", name, r.Status, status, r.Body)
 		}
 		if kind, _ := r.errInfo(t); kind != "api_error" {
 			t.Fatalf("%s: error type = %q", name, kind)
 		}
 	}
-	check("passthrough", e.post("/v1/messages", claudeReq("claude-sonnet-5", false, nil)))
-	check("models without a usable login", e.do(http.MethodGet, "/v1/organizations/o", nil, nil))
-	// The expired login needs the token endpoint, which is unreachable too.
-	check("codex refresh", e.post("/v1/messages", claudeReq("gpt-6-astra", true, nil)))
-	// With a still-valid login the upstream failure is hidden behind the added models.
-	e.writeLogin(login{})
-	time.Sleep(30 * time.Millisecond)
-	if r := e.do(http.MethodGet, "/v1/models", nil, nil); r.Status != 200 {
-		t.Fatalf("models: status = %d: %s", r.Status, r.Body)
-	}
-	check("codex backend", e.post("/v1/messages", claudeReq("gpt-6-astra", true, nil)))
+	check("passthrough", e.post("/v1/messages", claudeReq("claude-sonnet-5", false, nil)), http.StatusBadGateway)
+	check("other path", e.do(http.MethodGet, "/v1/organizations/o", nil, nil), http.StatusBadGateway)
+	check("codex relay", e.post("/v1/messages", claudeReq("gpt-6-astra", true, nil)), http.StatusServiceUnavailable)
+	e.do(http.MethodGet, "/__ccmproxy/status?refresh=limits", nil, nil)
 
 	time.Sleep(200 * time.Millisecond)
 	if n := trap.conns.Load(); n != 0 {
@@ -93,12 +83,10 @@ func TestProxyEnvironmentVariablesAreIgnored(t *testing.T) {
 func TestProxyEnvironmentVariablesDoNotDisturbTheFakes(t *testing.T) {
 	trap := newProxyTrap(t)
 	e := newEnv(t, opts{noStart: true, extraEnv: proxyVars(trap.addr)})
-	past := time.Now().Add(-time.Hour)
-	e.writeLogin(login{expires: past, access: accessToken("old", past)})
-	e.oauth.set(refreshing(accessToken("new", time.Now().Add(time.Hour)), "refresh-2", false))
-	e.cdx.set(answerWith(evCreated, evText("a"), evCompleted))
+	e.cdx.set(answerWith(textAnswer("a")...))
 	e.anth.set(func(w http.ResponseWriter, _ *http.Request, _ rec) { _, _ = w.Write([]byte(`{}`)) })
 	e.start()
+	e.waitLoggedIn()
 	for _, r := range []resp{
 		e.post("/v1/messages", claudeReq("claude-sonnet-5", false, nil)),
 		e.post("/v1/messages", claudeReq("gpt-6-astra", true, nil)),
@@ -107,8 +95,8 @@ func TestProxyEnvironmentVariablesDoNotDisturbTheFakes(t *testing.T) {
 			t.Fatalf("status = %d: %s", r.Status, r.Body)
 		}
 	}
-	if e.anth.count() != 1 || e.cdx.count() != 1 || e.oauth.count() != 1 {
-		t.Fatalf("fakes saw anthropic=%d codex=%d oauth=%d", e.anth.count(), e.cdx.count(), e.oauth.count())
+	if e.anth.count() != 1 || e.cdx.count() != 1 {
+		t.Fatalf("fakes saw anthropic=%d remote=%d", e.anth.count(), e.cdx.count())
 	}
 	if n := trap.conns.Load(); n != 0 {
 		t.Fatalf("%d connections to the trap", n)

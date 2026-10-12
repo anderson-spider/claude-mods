@@ -8,5 +8,8 @@ package config
 // upstreamAllowed accepts DefaultUpstream only.
 func upstreamAllowed(upstream string) bool { return upstream == DefaultUpstream }
 
-// validateCodexBaseURL accepts an https URL only.
-func validateCodexBaseURL(raw string) error { return requireHTTPS(raw) }
+// validateRemote accepts a TLS remote with no credentials or local address.
+func validateRemote(raw string) error { return requireRemote(raw) }
+
+// RemoteAllowsLoopback is false in a normal build, regardless of environment.
+func RemoteAllowsLoopback(raw string) bool { return false }

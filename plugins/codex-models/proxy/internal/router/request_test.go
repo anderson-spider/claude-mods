@@ -10,10 +10,10 @@ import (
 )
 
 // The model, the stream flag and the user id are read with encoding/json,
-// as translate reads the rest of the body: of two equal keys the last one
-// counts, whatever its case. A body routed by one reading and translated by
+// as the relay reads controlled fields: of two equal keys the last one
+// counts, whatever its case. A body routed by one reading and rewritten by
 // another could otherwise be sent to Codex with settings it did not ask for.
-func TestRoutingReadsTheBodyAsTranslateDoes(t *testing.T) {
+func TestRoutingAndRelayShareJSONReadingRules(t *testing.T) {
 	cases := []struct {
 		name    string
 		body    string
@@ -48,7 +48,7 @@ func TestRoutingReadsTheBodyAsTranslateDoes(t *testing.T) {
 	h = newHarness(t, nil, nil, true)
 	h.do(t, http.MethodPost, "/v1/messages",
 		`{"model":"gpt-6-luna","metadata":{"user_id":"first"},"messages":[],"metadata":{"user_id":"last"}}`)
-	if got, want := h.codex.header.Get("Session_id"), codexSessionID(h.router.cfg.SessionSalt, "last"); got != want {
+	if got, want := lookupText([]byte(h.codex.body), "metadata", "user_id"), codexSessionID(h.router.cfg.SessionSalt, "last"); got != want {
 		t.Fatalf("Session_id = %q, want the one for the last user_id (%q)", got, want)
 	}
 }

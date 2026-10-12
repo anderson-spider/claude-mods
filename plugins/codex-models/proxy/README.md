@@ -8,8 +8,7 @@ From this directory, with mise tools available:
 
 ```sh
 GOFLAGS=-tags= GOTOOLCHAIN=local go build -trimpath -ldflags "-X main.version=dev" -o ccmproxy ./cmd/ccmproxy
-./ccmproxy config init
-./ccmproxy login codex
+printf '{"codex":{"remote":"https://<remote host>","management_key":"%s"}}' "$CLIPROXY_MGMT_KEY" | ./ccmproxy config init --stdin
 ./ccmproxy serve
 ```
 
@@ -24,11 +23,11 @@ claude
 
 ## Discover current configuration
 
-Use `./ccmproxy --help` for commands, `./ccmproxy models --json` for catalog/picker rows and `./ccmproxy status` for config/login. `models --settings-json` prints a picker block to merge; `/model` uses `modelPicker.options`, not `/v1/models` discovery. An unknown-model row needs `behavesAs` naming a Claude model the installed client knows.
+Use `./ccmproxy --help` for commands, `./ccmproxy models --json` for catalog/picker rows and `./ccmproxy status` for config and the configured remote. `models --settings-json` prints a picker block to merge; `/model` uses `modelPicker.options`, not `/v1/models` discovery. An unknown-model row needs `behavesAs` naming a Claude model the installed client knows.
 
 For Claude Code's assumed context window, append `[1m]` to the model id or set `CLAUDE_CODE_MAX_CONTEXT_TOKENS`; the proxy strips that suffix. Effort and credentials are described in the [plugin README](../README.md#use).
 
-The standalone config defaults under `~/.config/ccmproxy/`; relocate with `CCMPROXY_HOME`/`XDG_CONFIG_HOME` or select a file with `--config`. `config init` generates missing secrets while preserving existing members; use the generated file instead of copying defaults from documentation. Keep configuration/credentials private and load only literal-loopback listener addresses.
+The standalone config defaults under `~/.config/ccmproxy/`; relocate with `CCMPROXY_HOME`/`XDG_CONFIG_HOME` or select a file with `--config`. `config init` generates missing secrets while preserving existing members; use the generated file instead of copying defaults from documentation. Keep the configuration private and load only literal-loopback listener addresses.
 
 ## Editing and contracts
 

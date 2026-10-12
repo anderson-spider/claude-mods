@@ -5,6 +5,7 @@
 //   node cli.mjs preflight --env <file> --version <v> [--wait-ms <ms>]
 //   node cli.mjs merge     --settings <file> --env <file> --models <file> [--dry-run]
 //   node cli.mjs unmerge   --settings <file>
+//   node cli.mjs remote-input   (CLIPROXY_URL and CLIPROXY_MGMT_KEY as `ccmproxy config init --stdin` JSON, to a pipe)
 //
 // <env> is `ccmproxy env --shell json` output and <models> `ccmproxy models --json`, both in files rather than
 // arguments, so the secret never shows in a process list. Nothing printed carries the secret.
@@ -316,7 +317,26 @@ async function preflight(opts) {
   if (reply.version !== opts.version) {
     fail(`${base} runs ccmproxy ${reply.version || 'of no version'}, ${opts.version} expected: an older proxy may still hold the port`)
   }
-  console.log(`preflight: ccmproxy ${reply.version} answers at ${base}; Codex login ${reply.codexLogin ? 'present' : 'missing'}`)
+  // The proxy reads the remote's account in the background after it starts.
+  let login = reply.codexLogin === true
+  for (const until = Date.now() + 3000; !login && Date.now() < until; ) {
+    await sleep(250)
+    const again = await request(`${base}/__ccmproxy/status`, { headers: { [HEADER]: secret } })
+    login = again !== undefined && readStatusReply(again.status, again.text).codexLogin === true
+  }
+  const account = login
+    ? 'found'
+    : 'not confirmed, so quota is unavailable (to set the remote, set CLIPROXY_URL and CLIPROXY_MGMT_KEY, then run install.sh again)'
+  console.log(`preflight: ccmproxy ${reply.version} answers at ${base}; Codex remote account ${account}`)
+}
+
+/** Writes the remote settings for `config init --stdin`; refuses a terminal so the key is never shown. */
+function remoteInput() {
+  if (process.stdout.isTTY) fail('remote-input writes the management key: pipe it into ccmproxy config init --stdin')
+  const remote = process.env.CLIPROXY_URL ?? ''
+  const key = process.env.CLIPROXY_MGMT_KEY ?? ''
+  if (!remote || !key) fail('remote-input needs CLIPROXY_URL and CLIPROXY_MGMT_KEY')
+  process.stdout.write(JSON.stringify({ codex: { remote, management_key: key } }))
 }
 
 async function main([command, ...args]) {
@@ -325,6 +345,10 @@ async function main([command, ...args]) {
     if (typeof version !== 'string' || !/^\d+\.\d+\.\d+$/.test(version)) fail(`${args[0]} has no version`)
     console.log(version)
     return
+  }
+  if (command === 'remote-input') {
+    if (args.length) fail(`unexpected argument ${args[0]}`)
+    return remoteInput()
   }
   const opts = flags(command, args)
   const need = names => names.forEach(name => opts[name] || fail(`${command} needs --${name}`))

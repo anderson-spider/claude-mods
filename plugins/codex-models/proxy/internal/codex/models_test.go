@@ -83,14 +83,9 @@ func TestResolveIgnoresClaudeModels(t *testing.T) {
 
 func TestCatalogBehavesAsPreservesTiersWithKnownFullIDs(t *testing.T) {
 	want := map[string]string{
-		"gpt-6.1-sol":              "claude-sonnet-5-5",
-		"gpt-6-astra":              "claude-opus-5-5",
-		"gpt-6-sol":                "claude-sonnet-5-5",
-		"gpt-6-luna":               "claude-haiku-5-5",
-		"gpt-5.6-sol":              "claude-sonnet-5-5",
-		"gpt-5.6-terra":            "claude-sonnet-5-5",
-		"gpt-5.6-luna":             "claude-haiku-5-5",
-		"gpt-daybreak-blue-latest": "claude-opus-5-5",
+		"gpt-6.1-sol": "claude-sonnet-5-5",
+		"gpt-6-astra": "claude-opus-5-5",
+		"gpt-6-luna":  "claude-haiku-5-5",
 	}
 	if len(Catalog) != len(want) {
 		t.Fatalf("catalog has %d models, want %d", len(Catalog), len(want))
@@ -159,7 +154,7 @@ func TestResolveStripsTheContextWindowSuffix(t *testing.T) {
 
 	// Claude Code appends [1m]/[2m] to ask for a larger context window; the
 	// suffix is a client-side hint and no upstream model id carries it.
-	for _, name := range []string{"gpt-6-luna[1m]", "gpt-6-luna-high[1m]", "gpt-5.6-sol[2m]"} {
+	for _, name := range []string{"gpt-6-luna[1m]", "gpt-6-luna-high[1m]", "gpt-6.1-sol[2m]"} {
 		resolution, ok := registry.Resolve(name)
 		if !ok {
 			t.Fatalf("%q was not recognised", name)
@@ -212,10 +207,8 @@ func TestClampEffort(t *testing.T) {
 	}
 }
 
-// TestCatalogMatchesTheCodexListing pins the catalog to what `codex debug
-// models` listed (visibility "list") when it was last taken. A change here is
-// a catalog update, made on purpose.
-func TestCatalogMatchesTheCodexListing(t *testing.T) {
+// The remote only serves the three crew twin models, with these local profiles.
+func TestCatalogMatchesTheCrewTwinModels(t *testing.T) {
 	want := []struct {
 		id, effort string
 		levels     string
@@ -223,14 +216,8 @@ func TestCatalogMatchesTheCodexListing(t *testing.T) {
 	}{
 		{"gpt-6.1-sol", "low", "low,medium,high,xhigh,max,ultra", 373000},
 		{"gpt-6-astra", "medium", "low,medium,high,xhigh,max,ultra", 272000},
-		{"gpt-6-sol", "medium", "low,medium,high,xhigh,max,ultra", 272000},
 		{"gpt-6-luna", "medium", "low,medium,high,xhigh,max", 272000},
-		{"gpt-5.6-sol", "low", "low,medium,high,xhigh,max,ultra", 272000},
-		{"gpt-5.6-terra", "medium", "low,medium,high,xhigh,max,ultra", 272000},
-		{"gpt-5.6-luna", "medium", "low,medium,high,xhigh,max", 272000},
-		{"gpt-daybreak-blue-latest", "low", "low,medium,high,xhigh,max,ultra", 272000},
 	}
-	optIn := map[string]bool{"gpt-daybreak-blue-latest": true}
 	if len(Catalog) != len(want) {
 		t.Fatalf("catalog has %d models, want %d", len(Catalog), len(want))
 	}
@@ -238,9 +225,6 @@ func TestCatalogMatchesTheCodexListing(t *testing.T) {
 		m := Catalog[i]
 		if m.ID != w.id || m.DefaultEffort != w.effort || strings.Join(m.ReasoningLevel, ",") != w.levels || m.ContextLength != w.context || !m.SupportsImages {
 			t.Fatalf("catalog[%d] = %+v, want %+v", i, m, w)
-		}
-		if m.OptIn != optIn[m.ID] {
-			t.Fatalf("%s OptIn = %v", m.ID, m.OptIn)
 		}
 		if effortRank(m.DefaultEffort) == 99 {
 			t.Fatalf("%s default effort %q is not a known level", m.ID, m.DefaultEffort)
@@ -253,9 +237,9 @@ func TestCatalogMatchesTheCodexListing(t *testing.T) {
 	}
 }
 
-func TestFixedCatalogDoesNotAdvertiseVariantsOrDaybreak(t *testing.T) {
+func TestFixedCatalogDoesNotAdvertiseVariants(t *testing.T) {
 	r := NewRegistry()
-	if len(r.AdvertisedIDs()) != len(Catalog)-1 {
+	if len(r.AdvertisedIDs()) != len(Catalog) {
 		t.Fatal("unexpected advertised catalog")
 	}
 	for _, id := range r.AdvertisedIDs() {
@@ -272,5 +256,19 @@ func TestFixedCatalogDoesNotAdvertiseVariantsOrDaybreak(t *testing.T) {
 	}
 	if resolved, ok := r.Resolve("gpt-6-luna:high"); !ok || resolved.Effort != "high" {
 		t.Fatal("effort suffix lost")
+	}
+}
+
+func TestExcludedModelsDoNotResolveEvenWithEffortVariants(t *testing.T) {
+	r := NewRegistry()
+	for _, base := range []string{"gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-6-sol", "gpt-daybreak-blue-latest"} {
+		if _, ok := r.Lookup(base); ok {
+			t.Fatalf("excluded model can be looked up: %s", base)
+		}
+		for _, name := range []string{base, base + "-high", base + ":medium", "codex/" + base + ":medium[1m]"} {
+			if _, ok := r.Resolve(name); ok {
+				t.Fatalf("excluded model resolves: %s", name)
+			}
+		}
 	}
 }

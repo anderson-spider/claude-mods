@@ -14,7 +14,7 @@ import (
 // checked as in the default build.
 //
 //	CCMPROXY_CONTRACT_UPSTREAM        one more accepted upstream
-//	CCMPROXY_CONTRACT_CODEX_BASE_URL  one more accepted codex.base_url (http allowed)
+//	CCMPROXY_CONTRACT_REMOTE          one accepted TLS fake codex.remote
 
 func upstreamAllowed(upstream string) bool {
 	if upstream == DefaultUpstream {
@@ -24,13 +24,21 @@ func upstreamAllowed(upstream string) bool {
 	return extra != "" && upstream == extra
 }
 
-func validateCodexBaseURL(raw string) error {
-	if extra := contractURL("CCMPROXY_CONTRACT_CODEX_BASE_URL"); extra != "" && raw == extra {
-		if u, err := url.Parse(raw); err == nil && u.Host != "" && (u.Scheme == "http" || u.Scheme == "https") {
-			return nil
-		}
+func validateRemote(raw string) error {
+	if RemoteAllowsLoopback(raw) {
+		return requireHTTPS(raw)
 	}
-	return requireHTTPS(raw)
+	return requireRemote(raw)
+}
+
+// RemoteAllowsLoopback is the sole TLS fake-remote exception in contract builds.
+func RemoteAllowsLoopback(raw string) bool {
+	extra := contractURL("CCMPROXY_CONTRACT_REMOTE")
+	if extra == "" || raw != extra {
+		return false
+	}
+	u, err := url.Parse(raw)
+	return err == nil && u.Scheme == "https" && u.Host != "" && u.User == nil && u.RawQuery == "" && !u.ForceQuery && u.Fragment == "" && !strings.Contains(raw, "#")
 }
 
 // contractURL reads a contract variable without its trailing "/", as the

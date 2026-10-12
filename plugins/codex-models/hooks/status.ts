@@ -12,7 +12,6 @@ export const STATUS_PATH = '/__ccmproxy/status'
 export const LABEL = 'com.anderson-spider.codex-models'
 export const TARGET = '~/.claude/codex-models'
 export const UNINSTALL = `${TARGET}/uninstall.sh`
-export const CLI = `${TARGET}/ccmproxy`
 
 type Json = Readonly<Record<string, unknown>>
 
@@ -159,12 +158,14 @@ export function problemText(found: Probe, c: Context): string | undefined {
       if (found.version !== c.pluginVersion) {
         return `the proxy runs ${found.version || 'an unknown version'} and the plugin is ${c.pluginVersion}: rebuild it with ${reinstall(c.pluginRoot)}.`
       }
-      if (!found.codexLogin) return `the proxy has no Codex login, so Codex models fail until you run ! ${CLI} login codex.`
+      if (!found.codexLogin) {
+        return `the proxy has not confirmed one active Codex account on its remote (no remote or management key, several accounts, or the check is still pending), so Codex quota is unavailable and crew stays on Claude. Codex models may still answer. To set the remote, set CLIPROXY_URL and CLIPROXY_MGMT_KEY, then run ${reinstall(c.pluginRoot)}.`
+      }
       return undefined
   }
 }
 
-/** The `session.start` notice, or undefined when the proxy is this install's, current and signed in. */
+/** The `session.start` notice, or undefined when the proxy is this install's, current and its remote has an account. */
 export function noticeText(found: Probe, c: Context): string | undefined {
   const problem = problemText(found, c)
   return problem ? `codex-models: ${problem}` : undefined
@@ -229,7 +230,7 @@ export function reportText(r: Report): string {
   } else {
     lines.push(probeLine(r.probe, r.base, r.pluginVersion))
     if (r.probe.kind === 'ok') {
-      lines.push(`Codex login: ${r.probe.codexLogin ? 'signed in' : `missing; run ! ${CLI} login codex`}`)
+      lines.push(`Codex remote account: ${r.probe.codexLogin ? 'found' : `not confirmed, so quota is unavailable (Codex models may still answer); to set the remote, set CLIPROXY_URL and CLIPROXY_MGMT_KEY, then run ${reinstall(r.pluginRoot)}`}`)
       lines.push(`Models: ${r.probe.models.length > 0 ? r.probe.models.join(', ') : 'none'}`)
     }
   }

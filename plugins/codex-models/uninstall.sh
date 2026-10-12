@@ -1,7 +1,7 @@
 #!/bin/sh
 # Undoes install.sh: first takes exactly what it added out of ~/.claude/settings.json (a timestamped backup beside
 # it), then stops and removes the LaunchAgent. The order matters: a session started in between reaches Anthropic
-# directly instead of a proxy that is gone. The Codex login, the config and the binary under ~/.claude/codex-models
+# directly instead of a proxy that is gone. The config (with the remote and its key) and the binary under ~/.claude/codex-models
 # stay for inspection and reinstall.
 #
 #   uninstall.sh            settings, then the LaunchAgent; installed files and backups stay
@@ -53,4 +53,4 @@ rm -f "$PLIST"
 say "$LABEL stopped and removed"
 say "running Claude Code sessions still point at the stopped proxy: restart them"
 
-say "kept $TARGET (the Codex login, config, logs, binary and scripts)"
+say "kept $TARGET (config, logs, binary and scripts)"

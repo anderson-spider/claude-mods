@@ -1,5 +1,5 @@
 ---
-description: Check proxy reachability, login, models and settings
+description: Check proxy reachability, Codex remote account, models and settings
 disable-model-invocation: true
 ---
 

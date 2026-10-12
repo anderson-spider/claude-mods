@@ -98,11 +98,11 @@ func (c *Config) fillDefaults() {
 	c.Upstream = trimURL(orDefault(c.Upstream, DefaultUpstream))
 	c.AuthToken = strings.TrimSpace(c.AuthToken)
 	c.SessionSalt = strings.TrimSpace(c.SessionSalt)
-	c.AuthDir = ExpandUser(orDefault(c.AuthDir, defaultAuthDir()))
 	c.LogLevel = orDefault(c.LogLevel, defaultLogLevel)
 
 	x := &c.Codex
-	x.BaseURL = trimURL(orDefault(x.BaseURL, defaultCodexBaseURL))
+	x.Remote = trimURL(x.Remote)
+	x.ManagementKey = strings.TrimSpace(x.ManagementKey)
 }
 
 // orDefault is value, or def when value is blank. A value that is not blank

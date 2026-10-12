@@ -26,7 +26,7 @@ before(async () => {
     const signed = req.headers['x-ccmproxy-token'] === TOKEN
     if (mode === 'open' || signed) {
       res.writeHead(200, { 'content-type': 'application/json' })
-      return res.end(JSON.stringify({ service: 'ccmproxy', version: VERSION, codexLogin: false, models: ['gpt-fake'] }))
+      return res.end(JSON.stringify({ service: 'ccmproxy', version: VERSION, codexLogin: mode !== 'nologin', models: ['gpt-fake'] }))
     }
     if (mode === 'plain403') return res.writeHead(403).end('Forbidden')
     res.writeHead(403, { 'content-type': 'application/json' })
@@ -55,9 +55,11 @@ function sandbox() {
   // The proxy's CLI as install.sh uses it: config init, env --shell json, models --json.
   writeFileSync(
     join(root, 'ccmproxy.mjs'),
-    `import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+    `import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 const args = process.argv.slice(2)
+appendFileSync(${JSON.stringify(join(root, 'calls.log'))}, 'ccmproxy ' + args.join(' ') + '\\n')
+if (args.includes('--stdin')) writeFileSync(${JSON.stringify(join(root, 'stdin.json'))}, readFileSync(0))
 const flag = name => { const i = args.indexOf(name); return i < 0 ? undefined : args[i + 1] }
 const config = flag('--config') ?? join(process.env.CCMPROXY_HOME, 'config.json')
 if (args[0] === 'config') {
@@ -419,6 +421,61 @@ test('with no settings.json before install, a key added since keeps the file', a
     assert.equal((await box.run('uninstall.sh')).code, 0)
     assert.deepEqual(JSON.parse(readFileSync(box.settingsFile, 'utf8')), { theme: 'dark' })
   } finally {
+    box.cleanup()
+  }
+})
+
+test('the remote URL and management key reach config init on stdin, never argv, plist or output', async () => {
+  mode = 'ours'
+  const box = sandbox()
+  try {
+    const key = 'mgmt-key-sentinel-9f8e7d'
+    const remote = 'https://remote.example.net'
+    for (const args of [['--dry-run'], []]) {
+      rmSync(join(box.root, 'stdin.json'), { force: true })
+      const out = await box.run('install.sh', args, { CLIPROXY_URL: remote, CLIPROXY_MGMT_KEY: key })
+      assert.equal(out.code, 0, out.stderr)
+      assert.deepEqual(JSON.parse(readFileSync(join(box.root, 'stdin.json'), 'utf8')), { codex: { remote, management_key: key } })
+      assert.doesNotMatch(out.stdout + out.stderr, new RegExp(key))
+    }
+    assert.match(box.calls(), /^ccmproxy config init --stdin$/m)
+    assert.doesNotMatch(box.calls(), new RegExp(key))
+    assert.doesNotMatch(readFileSync(join(box.home, 'Library/LaunchAgents/com.anderson-spider.codex-models.plist'), 'utf8'), new RegExp(key))
+
+    // Without either variable a reinstall keeps the configured remote: plain config init.
+    const mark = box.calls().length
+    assert.equal((await box.run('install.sh')).code, 0)
+    assert.match(box.calls().slice(mark), /^ccmproxy config init$/m)
+  } finally {
+    box.cleanup()
+  }
+})
+
+test('only one of CLIPROXY_URL and CLIPROXY_MGMT_KEY is a usage error before anything changes', async () => {
+  const box = sandbox()
+  try {
+    for (const extra of [{ CLIPROXY_URL: 'https://remote.example.net' }, { CLIPROXY_MGMT_KEY: 'k' }]) {
+      const out = await box.run('install.sh', [], extra)
+      assert.equal(out.code, 2, out.stderr)
+      assert.match(out.stderr, /set both CLIPROXY_URL and CLIPROXY_MGMT_KEY/)
+      assert.equal(box.calls(), '')
+      assert.deepEqual(readdirSync(join(box.home, '.claude')), [])
+    }
+  } finally {
+    box.cleanup()
+  }
+})
+
+test('the preflight names a missing remote account and how to add it', async () => {
+  mode = 'nologin'
+  const box = sandbox()
+  try {
+    const out = await box.run('install.sh')
+    assert.equal(out.code, 0, out.stderr)
+    assert.match(out.stdout, /Codex remote account not confirmed, so quota is unavailable \(to set the remote, set CLIPROXY_URL and CLIPROXY_MGMT_KEY/)
+    assert.doesNotMatch(out.stdout, /login codex/)
+  } finally {
+    mode = 'ours'
     box.cleanup()
   }
 })

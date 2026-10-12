@@ -37,7 +37,7 @@ before(async () => {
       if (req.url !== '/__ccmproxy/status') return res.writeHead(404).end()
       if (req.headers['x-ccmproxy-token'] === TOKEN) {
         res.writeHead(200, { 'content-type': 'application/json' })
-        return res.end(JSON.stringify({ service: 'ccmproxy', version: VERSION, codexLogin: false, models: [] }))
+        return res.end(JSON.stringify({ service: 'ccmproxy', version: VERSION, codexLogin: true, models: [] }))
       }
       res.writeHead(403, { 'content-type': 'application/json' })
       res.end(JSON.stringify({ type: 'error', error: { type: 'permission_error', message: 'ccmproxy: missing or wrong X-Ccmproxy-Token' } }))
@@ -424,7 +424,7 @@ for (const name of ['existsSync', 'readFileSync', 'writeFileSync', 'openSync', '
   }
 })
 
-test('config loss or a changed port refuses install before build/copy/launchctl; uninstall then reinstall retains login and logs', async () => {
+test('config loss or a changed port refuses install before build/copy/launchctl; uninstall then reinstall retains the config and logs', async () => {
   const box = sandbox()
   try {
     assert.equal((await box.run('install.sh')).code, 0)
@@ -447,17 +447,14 @@ test('config loss or a changed port refuses install before build/copy/launchctl;
         assert.deepEqual(backupsIn(box.claude), backupNames)
       }
     }
-    const auth = join(box.claude, 'codex-models/home/auth')
-    mkdirSync(auth)
-    const login = join(auth, 'codex.json')
+    const kept = readFileSync(box.config, 'utf8')
     const log = join(box.claude, 'codex-models/home/log/ccmproxy.log')
-    writeFileSync(login, 'native login fixture\n', { mode: 0o600 })
     writeFileSync(log, 'log fixture\n')
     assert.equal((await box.run('uninstall.sh')).code, 0)
     assert.deepEqual(JSON.parse(readFileSync(box.settingsFile, 'utf8')), {})
     assert.equal((await box.run('install.sh')).code, 0)
     assert.equal(JSON.parse(readFileSync(box.settingsFile, 'utf8')).env.ANTHROPIC_BASE_URL, `http://127.0.0.1:${ports[1]}`)
-    assert.equal(readFileSync(login, 'utf8'), 'native login fixture\n')
+    assert.equal(readFileSync(box.config, 'utf8'), kept)
     assert.equal(readFileSync(log, 'utf8'), 'log fixture\n')
     for (const name of backupNames) assert.ok(existsSync(join(box.claude, name)))
   } finally {

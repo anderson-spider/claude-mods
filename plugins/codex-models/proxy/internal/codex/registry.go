@@ -30,9 +30,6 @@ var contextWindowHints = []string{"[1m]", "[2m]"}
 // who types codex/gpt-6-luna is not silently proxied upstream.
 const defaultNamespace = "codex/"
 
-// OfferDaybreakBlue controls the unlisted model at build time, not through config.
-const OfferDaybreakBlue = false
-
 // Resolution is the outcome of matching a client-supplied model name against
 // the Codex catalog.
 type Resolution struct {
@@ -52,13 +49,10 @@ type Registry struct {
 	ordered []Model
 }
 
-// NewRegistry offers the fixed catalog, excluding the gated unlisted model.
+// NewRegistry offers the fixed crew twin catalog.
 func NewRegistry() *Registry {
 	r := &Registry{byID: map[string]Model{}}
 	for _, model := range Catalog {
-		if model.OptIn && !OfferDaybreakBlue {
-			continue
-		}
 		r.byID[strings.ToLower(model.ID)] = model
 		r.ordered = append(r.ordered, model)
 	}

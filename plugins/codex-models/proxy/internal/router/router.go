@@ -3,8 +3,7 @@
 // for the added models from their own provider.
 //
 // Which way a Messages request goes is read from its body with the same JSON
-// rules translate uses, so a request is never routed by one reading of the
-// body and translated by another.
+// rules used to resolve effort and rewrite the outbound request.
 package router
 
 import (

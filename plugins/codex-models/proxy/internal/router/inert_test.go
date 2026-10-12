@@ -23,22 +23,20 @@ func TestContractVariablesDoNotReachTheRouter(t *testing.T) {
 	t.Cleanup(decoy.Close)
 
 	for name, value := range map[string]string{
-		"CCMPROXY_CONTRACT_UPSTREAM":        decoy.URL,
-		"CCMPROXY_CONTRACT_CODEX_BASE_URL":  decoy.URL,
-		"CCMPROXY_CONTRACT_OAUTH_AUTH_URL":  decoy.URL + "/authorize",
-		"CCMPROXY_CONTRACT_OAUTH_TOKEN_URL": decoy.URL + "/token",
-		"CCMPROXY_CONTRACT_CA_FILE":         "/nonexistent/ca.pem",
-		"CCMPROXY_CONTRACT_PING_INTERVAL":   "20ms",
+		"CCMPROXY_CONTRACT_UPSTREAM":      decoy.URL,
+		"CCMPROXY_CONTRACT_REMOTE":        decoy.URL,
+		"CCMPROXY_CONTRACT_CA_FILE":       "/nonexistent/ca.pem",
+		"CCMPROXY_CONTRACT_PING_INTERVAL": "20ms",
 	} {
 		t.Setenv(name, value)
 	}
 
 	// A stream that stays silent for well over the variable's interval.
 	h := newHarness(t, nil, func(w http.ResponseWriter, r *http.Request) {
-		writeSSE(w, `{"type":"response.created","response":{"id":"resp_inert","model":"gpt-6-luna"}}`)
+		writeSSE(w, `{"type":"message_start","message":{"id":"msg_inert","model":"gpt-6-luna"}}`)
 		time.Sleep(200 * time.Millisecond)
-		writeSSE(w, `{"type":"response.output_text.delta","delta":"Hi"}`)
-		writeSSE(w, `{"type":"response.completed","response":{"id":"resp_inert","usage":{}}}`)
+		writeSSE(w, `{"type":"content_block_delta","delta":{"type":"text_delta","text":"Hi"}}`)
+		writeSSE(w, `{"type":"message_stop"}`)
 	}, true)
 
 	if got := h.router.pingInterval; got != defaultPingInterval {

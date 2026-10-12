@@ -2,10 +2,7 @@ package main
 
 import (
 	"flag"
-	"fmt"
-	"strings"
 
-	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/codex"
 	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/config"
 	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/logx"
 )
@@ -46,23 +43,4 @@ func loadConfig(command string, args []string, extra func(*flag.FlagSet)) (*conf
 	}
 	logx.SetLevel(cfg.LogLevel)
 	return cfg, nil
-}
-
-// storeOptions maps the config onto the credential lookup order.
-func storeOptions(cfg *config.Config) codex.StoreOptions {
-	return codex.StoreOptions{
-		Dir: cfg.AuthDir,
-	}
-}
-
-// providerArg takes the optional provider word of `login` and `logout`
-// (only codex exists) off the front of args.
-func providerArg(args []string) ([]string, error) {
-	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
-		return args, nil
-	}
-	if args[0] != "codex" {
-		return nil, fmt.Errorf("unknown provider %q; only `codex` is supported", args[0])
-	}
-	return args[1:], nil
 }

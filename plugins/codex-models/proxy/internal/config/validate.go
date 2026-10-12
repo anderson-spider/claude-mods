@@ -11,7 +11,7 @@ import (
 )
 
 // Validate checks the settings that decide where traffic and credentials go:
-// the listener, the upstream, the Codex base URL and the secrets' shape. An
+// the listener, the upstream, the Codex remote and the secrets' shape. An
 // error names the key and never contains a secret.
 func (c *Config) Validate() error {
 	if err := ValidateListenAddr(c.ListenHTTP); err != nil {
@@ -21,8 +21,8 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("config: upstream %s is not allowed: requests to it carry the Claude Code login, "+
 			"so only %s is accepted (delete the key)", safeURL(c.Upstream), DefaultUpstream)
 	}
-	if err := validateCodexBaseURL(c.Codex.BaseURL); err != nil {
-		return fmt.Errorf("config: codex.base_url: %w", err)
+	if err := validateRemote(c.Codex.Remote); err != nil {
+		return fmt.Errorf("config: codex.remote: %w", err)
 	}
 	secrets := []struct{ key, value string }{
 		{"auth_token", c.AuthToken},
@@ -34,6 +34,17 @@ func (c *Config) Validate() error {
 		}
 		if err := validateSecret(s.value); err != nil {
 			return fmt.Errorf("config: %s: %w", s.key, err)
+		}
+	}
+	if key := c.Codex.ManagementKey; key != "" {
+		// This is a user-supplied bearer, not a generated proxy secret.
+		if len(key) > 512 {
+			return errors.New("config: codex.management_key: exceeds 512 characters")
+		}
+		for _, c := range []byte(key) {
+			if c < '!' || c > '~' {
+				return errors.New("config: codex.management_key: must be printable ASCII with no spaces")
+			}
 		}
 	}
 	return nil
@@ -83,11 +94,11 @@ func requireHTTPS(raw string) error {
 		// url.Error quotes the whole input, credentials included.
 		return errors.New("is not a valid URL")
 	case u.User != nil:
-		return fmt.Errorf("%s: credentials in the URL are not allowed; remove them", safeURL(raw))
+		return errors.New("credentials in the URL are not allowed; remove them")
 	case u.Scheme != "https" || u.Host == "":
-		return fmt.Errorf("%s must be an https:// URL: the ChatGPT access token is sent to it", safeURL(raw))
+		return errors.New("must be an https:// URL")
 	case u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || strings.Contains(raw, "#"):
-		return fmt.Errorf("%s must not carry a query or fragment; remove them", safeURL(raw))
+		return errors.New("must not carry a query or fragment; remove them")
 	}
 	return nil
 }
@@ -128,6 +139,26 @@ func validateSecret(value string) error {
 		if value[i] < '!' || value[i] > '~' {
 			return errors.New("must be printable ASCII with no spaces")
 		}
+	}
+	return nil
+}
+
+func requireRemote(raw string) error {
+	if raw == "" {
+		return nil
+	}
+	if err := requireHTTPS(raw); err != nil {
+		return err
+	}
+	u, _ := url.Parse(raw)
+	if u.Opaque != "" || u.Hostname() == "" {
+		return errors.New("must name a remote host")
+	}
+	if port := u.Port(); port != "" && !validPort(port) {
+		return errors.New("invalid remote port")
+	}
+	if ip, err := netip.ParseAddr(u.Hostname()); err == nil && (ip.Unmap().IsLoopback() || ip.Unmap().IsUnspecified()) {
+		return errors.New("must not use a loopback or unspecified address")
 	}
 	return nil
 }

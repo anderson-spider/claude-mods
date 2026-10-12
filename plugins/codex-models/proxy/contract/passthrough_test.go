@@ -16,7 +16,7 @@ import (
 var oddBody = []byte("{ \"stream\" : false,\n\t\"model\":\"claude-sonnet-5\", \"max_tokens\":  1.0e3,\n \"messages\":[ {\"role\":\"user\",\"content\":\"caf\\u00e9 \\/ <b>&amp;</b>\"} ] }\n")
 
 func TestPassthroughBytesBothWays(t *testing.T) {
-	e := loggedIn(t, opts{})
+	e := withAccount(t, opts{})
 	reply := []byte("{\"id\":\"msg_x\",  \"type\":\"message\",\"note\":\"caf\\u00e9\"}\n")
 	e.anth.set(func(w http.ResponseWriter, _ *http.Request, _ rec) {
 		w.Header().Set("Content-Type", "application/json")
@@ -185,7 +185,7 @@ func TestPassthroughStripsProxyThinkingBlocks(t *testing.T) {
 
 // A gzip body is forwarded as the client sent it, and still routes by model.
 func TestGzipBodies(t *testing.T) {
-	e := loggedIn(t, opts{})
+	e := withAccount(t, opts{})
 	gz := func(b []byte) []byte {
 		var buf bytes.Buffer
 		w := gzip.NewWriter(&buf)
@@ -204,7 +204,7 @@ func TestGzipBodies(t *testing.T) {
 		t.Fatal("the gzip body was not forwarded as sent")
 	}
 
-	e.cdx.set(answerWith(evCreated, evText("ok"), evCompleted))
+	e.cdx.set(answerWith(textAnswer("ok")...))
 	r = e.do(http.MethodPost, "/v1/messages", gz(claudeReq("gpt-6-astra", true, nil)), map[string]string{"Content-Encoding": "gzip"})
 	if r.Status != 200 || e.cdx.count() != 1 {
 		t.Fatalf("a gzip body for a Codex model: status %d, codex requests %d", r.Status, e.cdx.count())

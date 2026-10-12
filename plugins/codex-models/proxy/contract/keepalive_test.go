@@ -8,21 +8,24 @@ import (
 	"time"
 )
 
-// With a 50 ms interval, a stream that stalls inside the message gets pings;
-// none go out before message_start or after message_stop.
+// With a 50 ms interval, a remote stream that stalls inside the message gets
+// pings; none go out before message_start or after message_stop.
 func TestKeepalivePingsOnlyInsideTheMessage(t *testing.T) {
-	e := loggedIn(t, opts{ping: "50ms", race: true})
+	e := withAccount(t, opts{ping: "50ms", race: true})
 	e.cdx.set(func(w http.ResponseWriter, _ *http.Request, _ rec) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
 		fl := w.(http.Flusher)
 		fl.Flush()
 		time.Sleep(400 * time.Millisecond) // headers sent, message not started
-		sseChunk(w, fl, evCreated)
+		sseChunk(w, fl, evStart)
 		time.Sleep(500 * time.Millisecond) // stalled inside the message
+		sseChunk(w, fl, evTextStart)
 		sseChunk(w, fl, evText("a"))
 		time.Sleep(300 * time.Millisecond) // stalled inside a text block
-		sseChunk(w, fl, evCompleted)
+		for _, ev := range []string{evStop0, evMsgDelta, evMsgStop} {
+			sseChunk(w, fl, ev)
+		}
 		time.Sleep(400 * time.Millisecond) // the connection stays open after the end
 	})
 	r := e.post("/v1/messages", claudeReq("gpt-6-astra", true, nil))
@@ -63,15 +66,10 @@ func TestKeepalivePingsOnlyInsideTheMessage(t *testing.T) {
 
 func TestNoPingsOnAFastStream(t *testing.T) {
 	// A long interval: a stall on a loaded runner must not look like a ping.
-	e := loggedIn(t, opts{ping: "1s", race: true})
-	e.cdx.set(answerWith(evCreated, evText("a"), evCompleted))
+	e := withAccount(t, opts{ping: "1s", race: true})
+	e.cdx.set(answerWith(textAnswer("a")...))
 	evs := parseSSE(t, e.post("/v1/messages", claudeReq("gpt-6-astra", true, nil)).Body)
 	if indexOf(evs, "ping") >= 0 {
 		t.Fatalf("pings on a fast stream: %v", names(evs))
 	}
-}
-
-func sseChunk(w http.ResponseWriter, fl http.Flusher, ev string) {
-	sseAnswerBody(w, ev)
-	fl.Flush()
 }

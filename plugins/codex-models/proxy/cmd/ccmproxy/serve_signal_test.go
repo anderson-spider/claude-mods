@@ -73,7 +73,6 @@ func finishesOnSignal(t *testing.T, bin string, sig syscall.Signal) {
 		"upstream":     upstream.URL,
 		"auth_token":   testToken,
 		"session_salt": strings.Repeat("ab", 32),
-		"auth_dir":     filepath.Join(home, "auth"),
 	})
 	if err := os.WriteFile(filepath.Join(home, "config.json"), cfg, 0o600); err != nil {
 		t.Fatal(err)

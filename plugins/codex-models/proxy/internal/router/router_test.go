@@ -1,21 +1,16 @@
 package router
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/codex"
 	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/config"
 	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/jsontest"
-	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/translate"
 )
 
 // recorded captures what a fake upstream received.
@@ -49,6 +44,7 @@ func newHarness(t *testing.T, anthropicHandler, codexHandler http.HandlerFunc, a
 		into.query = r.URL.RawQuery
 		into.header = r.Header.Clone()
 		into.body = string(body)
+		r.Body = io.NopCloser(strings.NewReader(string(body)))
 	}
 
 	if anthropicHandler == nil {
@@ -65,11 +61,19 @@ func newHarness(t *testing.T, anthropicHandler, codexHandler http.HandlerFunc, a
 
 	if codexHandler == nil {
 		codexHandler = func(w http.ResponseWriter, r *http.Request) {
-			writeSSE(w, `{"type":"response.created","response":{"id":"resp_test"}}`)
-			writeSSE(w, `{"type":"response.completed","response":{"id":"resp_test","usage":{}}}`)
+			if readHead([]byte(h.codex.body)).Stream {
+				writeSSE(w, `{"type":"message_start","message":{"id":"msg_test","type":"message","content":[],"usage":{}}}`)
+				writeSSE(w, `{"type":"message_stop"}`)
+			} else {
+				fmt.Fprint(w, `{"id":"msg_test","type":"message","content":[],"stop_reason":"end_turn","usage":{}}`)
+			}
 		}
 	}
 	codexServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v8/management/credentials" {
+			fmt.Fprint(w, `{"files":[{"type":"codex","provider":"codex","status":"active","auth_index":"account-test"}]}`)
+			return
+		}
 		record(h.codex, r)
 		codexHandler(w, r)
 	}))
@@ -77,30 +81,15 @@ func newHarness(t *testing.T, anthropicHandler, codexHandler http.HandlerFunc, a
 
 	cfg := config.Default()
 	cfg.Upstream = anthropicServer.URL
-	cfg.Codex.BaseURL = codexServer.URL
-	cfg.AuthDir = t.TempDir()
-
+	cfg.Codex.Remote = codexServer.URL
+	cfg.SessionSalt = strings.Repeat("a", 64)
 	if authenticate {
-		token := codex.Token{
-			AccessToken: "test-access-token",
-			AccountID:   "acct_test",
-			Email:       "user@example.com",
-			PlanType:    "pro",
-			ExpiresAt:   time.Now().Add(24 * time.Hour),
-			Type:        "codex",
-		}
-		data, err := json.Marshal(token)
-		if err != nil {
-			t.Fatalf("marshal token: %v", err)
-		}
-		if err := os.WriteFile(filepath.Join(cfg.AuthDir, "codex.json"), data, 0o600); err != nil {
-			t.Fatalf("write token: %v", err)
-		}
+		cfg.Codex.ManagementKey = "management-test-key"
 	}
-
-	oauth := codex.NewClient(nil)
-	store := codex.NewStore(oauth, codex.StoreOptions{Dir: cfg.AuthDir})
-	backend := codex.NewBackend(cfg.Codex.BaseURL, store, nil)
+	backend := codex.NewBackend(cfg.Codex.Remote, cfg.Codex.ManagementKey, codexServer.Client().Transport)
+	if authenticate {
+		<-backend.RefreshAuth()
+	}
 	registry := codex.NewRegistry()
 
 	router, err := New(cfg, registry, backend, nil)
@@ -156,8 +145,13 @@ func TestModelListMergesCodexModels(t *testing.T) {
 	if _, ok := ids["claude-opus-5"]; !ok {
 		t.Fatalf("upstream models were dropped: %v", ids)
 	}
-	if _, ok := ids["gpt-6-luna"]; !ok {
-		t.Fatalf("codex models were not added: %v", ids)
+	if len(ids) != 4 {
+		t.Fatalf("expected one Anthropic model and exactly the three crew twins: %v", ids)
+	}
+	for _, id := range []string{"gpt-6-luna", "gpt-6.1-sol", "gpt-6-astra"} {
+		if _, ok := ids[id]; !ok {
+			t.Fatalf("crew twin model %s was not added: %v", id, ids)
+		}
 	}
 	if _, ok := ids["gpt-6-luna-high"]; ok {
 		t.Fatal("effort variant must not be advertised")
@@ -275,102 +269,16 @@ func TestPassthroughDropsProxyIssuedThinking(t *testing.T) {
 	h := newHarness(t, nil, nil, true)
 
 	body := `{"model":"claude-opus-5","messages":[{"role":"assistant","content":[` +
-		`{"type":"thinking","thinking":"codex","signature":"` + translate.SignatureMarker + `SIG"},` +
+		`{"type":"thinking","thinking":"codex","signature":"` + SignatureMarker + `SIG"},` +
 		`{"type":"text","text":"answer"}]}]}`
 	h.do(t, http.MethodPost, "/v1/messages", body)
 
-	if strings.Contains(h.anthropic.body, translate.SignatureMarker) {
+	if strings.Contains(h.anthropic.body, SignatureMarker) {
 		t.Fatalf("proxy-issued reasoning state reached Anthropic: %s", h.anthropic.body)
 	}
 	blocks := jsontest.Get(h.anthropic.body, "messages.0.content").Array()
 	if len(blocks) != 1 || blocks[0].Get("text").String() != "answer" {
 		t.Fatalf("upstream body = %s", h.anthropic.body)
-	}
-}
-
-func TestCodexStreamingRequest(t *testing.T) {
-	h := newHarness(t, nil, func(w http.ResponseWriter, r *http.Request) {
-		writeSSE(w, `{"type":"response.created","response":{"id":"resp_1"}}`)
-		writeSSE(w, `{"type":"response.output_text.delta","delta":"Hi"}`)
-		writeSSE(w, `{"type":"response.completed","response":{"id":"resp_1","usage":{"input_tokens":3,"output_tokens":1}}}`)
-	}, true)
-
-	body := `{"model":"gpt-6-luna-high","max_tokens":1024,"stream":true,"system":"be brief","messages":[{"role":"user","content":"hi"}]}`
-	rec := h.do(t, http.MethodPost, "/v1/messages", body)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
-	}
-	if got := rec.Header().Get("Content-Type"); !strings.HasPrefix(got, "text/event-stream") {
-		t.Fatalf("Content-Type = %q", got)
-	}
-
-	stream := rec.Body.String()
-	for _, want := range []string{"event: message_start", "event: content_block_delta", "event: message_stop"} {
-		if !strings.Contains(stream, want) {
-			t.Fatalf("stream is missing %q:\n%s", want, stream)
-		}
-	}
-	// response.created names no model here, so the resolved id stands in.
-	if !strings.Contains(stream, `"model":"gpt-6-luna"`) {
-		t.Fatalf("message_start must name the resolved model:\n%s", stream)
-	}
-
-	// Verify what the Codex backend received.
-	if h.codex.path != "/responses" {
-		t.Fatalf("codex path = %q, want /responses", h.codex.path)
-	}
-	upstream := jsontest.Parse(h.codex.body)
-	if got := upstream.Get("model").String(); got != "gpt-6-luna" {
-		t.Fatalf("upstream model = %q, want the bare slug", got)
-	}
-	if got := upstream.Get("reasoning.effort").String(); got != "high" {
-		t.Fatalf("upstream effort = %q, want high from the model suffix", got)
-	}
-	if got := upstream.Get("input.0.role").String(); got != "developer" {
-		t.Fatalf("system prompt was not folded into a developer message: %s", h.codex.body)
-	}
-	if got := h.codex.header.Get("Authorization"); got != "Bearer test-access-token" {
-		t.Fatalf("Authorization = %q", got)
-	}
-	if got := h.codex.header.Get("Chatgpt-Account-Id"); got != "acct_test" {
-		t.Fatalf("Chatgpt-Account-Id = %q", got)
-	}
-	if got := h.codex.header.Get("Originator"); got != "codex-tui" {
-		t.Fatalf("Originator = %q", got)
-	}
-	if h.codex.header.Get("Session_id") == "" {
-		t.Fatal("Session_id header is missing")
-	}
-	if h.anthropic.method != "" {
-		t.Fatal("a Codex model request must never reach Anthropic")
-	}
-}
-
-func TestCodexNonStreamingRequest(t *testing.T) {
-	h := newHarness(t, nil, func(w http.ResponseWriter, r *http.Request) {
-		writeSSE(w, `{"type":"response.created","response":{"id":"resp_2"}}`)
-		writeSSE(w, `{"type":"response.completed","response":{"id":"resp_2","output":[{"type":"message","content":[{"type":"output_text","text":"buffered answer"}]}],"usage":{"input_tokens":9,"output_tokens":2}}}`)
-	}, true)
-
-	rec := h.do(t, http.MethodPost, "/v1/messages", `{"model":"gpt-6-luna","max_tokens":100,"messages":[{"role":"user","content":"hi"}]}`)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
-	}
-	if got := rec.Header().Get("Content-Type"); !strings.HasPrefix(got, "application/json") {
-		t.Fatalf("Content-Type = %q, want JSON for a non-streaming request", got)
-	}
-
-	message := jsontest.Parse(rec.Body.String())
-	if got := message.Get("content.0.text").String(); got != "buffered answer" {
-		t.Fatalf("content = %s", rec.Body.String())
-	}
-	if got := message.Get("stop_reason").String(); got != "end_turn" {
-		t.Fatalf("stop_reason = %q", got)
-	}
-	// The upstream request still streams, because that is all Codex serves.
-	if !jsontest.Get(h.codex.body, "stream").Bool() {
-		t.Fatal("the upstream request must stream")
 	}
 }
 
@@ -390,22 +298,6 @@ func TestCodexBackendErrorIsMapped(t *testing.T) {
 	}
 	if got := body.Get("error.message").String(); got != "usage limit reached" {
 		t.Fatalf("error.message = %q", got)
-	}
-}
-
-func TestCodexRequestWithoutCredentials(t *testing.T) {
-	h := newHarness(t, nil, nil, false)
-
-	rec := h.do(t, http.MethodPost, "/v1/messages", `{"model":"gpt-6-luna","messages":[]}`)
-	// Never 401: Claude Code would take it for its own login expiring.
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want 403 when no Codex credentials are stored", rec.Code)
-	}
-	if got := jsontest.Get(rec.Body.String(), "error.type").String(); got != "permission_error" {
-		t.Fatalf("error.type = %q", got)
-	}
-	if got := jsontest.Get(rec.Body.String(), "error.message").String(); !strings.Contains(got, "ccmproxy login") {
-		t.Fatalf("error.message = %q, want it to name `ccmproxy login`", got)
 	}
 }
 
@@ -460,61 +352,6 @@ func TestAdminEndpoints(t *testing.T) {
 	}
 }
 
-func TestCodexNonStreamingWhenTerminalEventOmitsOutput(t *testing.T) {
-	// This is the shape the production Codex backend actually sends: the
-	// items are streamed and response.completed does not repeat them.
-	h := newHarness(t, nil, func(w http.ResponseWriter, r *http.Request) {
-		writeSSE(w, `{"type":"response.created","response":{"id":"resp_real"}}`)
-		writeSSE(w, `{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc","call_id":"call_1","name":"Read"}}`)
-		writeSSE(w, `{"type":"response.function_call_arguments.delta","output_index":0,"item_id":"fc","delta":"{\"file_path\":\"/tmp/x\"}"}`)
-		writeSSE(w, `{"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","id":"fc","call_id":"call_1","name":"Read","arguments":"{\"file_path\":\"/tmp/x\"}"}}`)
-		writeSSE(w, `{"type":"response.completed","response":{"id":"resp_real","usage":{"input_tokens":64,"output_tokens":32}}}`)
-	}, true)
-
-	rec := h.do(t, http.MethodPost, "/v1/messages", `{"model":"gpt-6-luna","max_tokens":300,"messages":[{"role":"user","content":"read it"}],
-		"tools":[{"name":"Read","input_schema":{"type":"object","properties":{"file_path":{"type":"string"}},"required":["file_path"]}}]}`)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
-	}
-	message := jsontest.Parse(rec.Body.String())
-	blocks := message.Get("content").Array()
-	if len(blocks) != 1 {
-		t.Fatalf("content = %s, want the streamed tool call", message.Get("content").Raw)
-	}
-	if blocks[0].Get("type").String() != "tool_use" || blocks[0].Get("name").String() != "Read" {
-		t.Fatalf("block = %s", blocks[0].Raw)
-	}
-	if got := blocks[0].Get("input.file_path").String(); got != "/tmp/x" {
-		t.Fatalf("input.file_path = %q", got)
-	}
-	if got := message.Get("stop_reason").String(); got != "tool_use" {
-		t.Fatalf("stop_reason = %q", got)
-	}
-	if got := message.Get("usage.output_tokens").Int(); got != 32 {
-		t.Fatalf("output_tokens = %d", got)
-	}
-}
-
-func TestCodexStreamErrorMidStream(t *testing.T) {
-	h := newHarness(t, nil, func(w http.ResponseWriter, r *http.Request) {
-		writeSSE(w, `{"type":"response.created","response":{"id":"resp_err"}}`)
-		writeSSE(w, `{"type":"error","error":{"type":"overloaded_error","message":"try again"}}`)
-	}, true)
-
-	rec := h.do(t, http.MethodPost, "/v1/messages", `{"model":"gpt-6-luna","stream":false,"messages":[]}`)
-	if rec.Code != 529 {
-		t.Fatalf("status = %d, want 529 for an overloaded error that arrived mid-stream", rec.Code)
-	}
-	if got := jsontest.Get(rec.Body.String(), "error.type").String(); got != "overloaded_error" {
-		t.Fatalf("error.type = %q", got)
-	}
-	if got := jsontest.Get(rec.Body.String(), "error.message").String(); got != "try again" {
-		t.Fatalf("error.message = %q", got)
-	}
-}
-
-// codexUpstream returns the body the Codex backend received.
 func (h *harness) codexUpstream(t *testing.T) jsontest.Result {
 	t.Helper()
 	if h.codex.body == "" {
@@ -535,7 +372,7 @@ func TestClientEffortIsForwarded(t *testing.T) {
 			"thinking":{"type":"adaptive"},
 			"output_config":{"effort":"`+effort+`"}
 		}`)
-		if got := h.codexUpstream(t).Get("reasoning.effort").String(); got != effort {
+		if got := h.codexUpstream(t).Get("model").String(); got != "gpt-6-luna("+effort+")" {
 			t.Fatalf("output_config.effort %q became reasoning.effort %q", effort, got)
 		}
 	}
@@ -551,7 +388,7 @@ func TestClientEffortIsClampedToWhatTheModelSupports(t *testing.T) {
 		"output_config":{"effort":"ultra"}
 	}`)
 	// gpt-6-luna stops at max.
-	if got := h.codexUpstream(t).Get("reasoning.effort").String(); got != "max" {
+	if got := h.codexUpstream(t).Get("model").String(); got != "gpt-6-luna(max)" {
 		t.Fatalf("reasoning.effort = %q, want it clamped to max", got)
 	}
 
@@ -562,7 +399,7 @@ func TestClientEffortIsClampedToWhatTheModelSupports(t *testing.T) {
 		"messages":[],
 		"output_config":{"effort":"ultra"}
 	}`)
-	if got := h.codexUpstream(t).Get("reasoning.effort").String(); got != "ultra" {
+	if got := h.codexUpstream(t).Get("model").String(); got != "gpt-6-astra(ultra)" {
 		t.Fatalf("reasoning.effort = %q, want ultra", got)
 	}
 }
@@ -575,7 +412,7 @@ func TestUnknownClientEffortIsClamped(t *testing.T) {
 		"messages":[],
 		"output_config":{"effort":"ultra"}
 	}`)
-	if got := h.codexUpstream(t).Get("reasoning.effort").String(); got != "max" {
+	if got := h.codexUpstream(t).Get("model").String(); got != "gpt-6-luna(max)" {
 		t.Fatalf("reasoning.effort = %q, want the highest supported level", got)
 	}
 }
@@ -588,7 +425,7 @@ func TestModelNameEffortOverridesTheClient(t *testing.T) {
 		"messages":[],
 		"output_config":{"effort":"high"}
 	}`)
-	if got := h.codexUpstream(t).Get("reasoning.effort").String(); got != "low" {
+	if got := h.codexUpstream(t).Get("model").String(); got != "gpt-6-luna(low)" {
 		t.Fatalf("reasoning.effort = %q, want the model name to win", got)
 	}
 }
@@ -596,7 +433,7 @@ func TestModelNameEffortOverridesTheClient(t *testing.T) {
 func TestEffortFallsBackWithoutAnyClientPreference(t *testing.T) {
 	h := newHarness(t, nil, nil, true)
 	h.do(t, http.MethodPost, "/v1/messages", `{"model":"gpt-6-luna","messages":[]}`)
-	if got := h.codexUpstream(t).Get("reasoning.effort").String(); got != "medium" {
+	if got := h.codexUpstream(t).Get("model").String(); got != "gpt-6-luna(medium)" {
 		t.Fatalf("reasoning.effort = %q, want the model default", got)
 	}
 }
@@ -659,8 +496,18 @@ func TestTheEffortSentUpstreamIsTheOneResolved(t *testing.T) {
 
 		h := newHarness(t, nil, nil, true)
 		h.do(t, http.MethodPost, "/v1/messages", body)
-		if got := h.codexUpstream(t).Get("reasoning.effort").String(); got != want {
-			t.Fatalf("%s: sent reasoning.effort %q but resolveEffort said %q", body, got, want)
+		if got := h.codexUpstream(t).Get("model").String(); got != resolution.Model.ID+"("+want+")" {
+			t.Fatalf("%s: sent model %q but resolveEffort said %q", body, got, want)
+		}
+	}
+}
+
+func TestExcludedModelNeverReachesTheCodexRemote(t *testing.T) {
+	for _, model := range []string{"gpt-5.6-luna", "gpt-5.6-sol:high", "gpt-5.6-terra", "codex/gpt-6-sol:medium[1m]"} {
+		h := newHarness(t, nil, nil, true)
+		h.do(t, http.MethodPost, "/v1/messages", `{"model":"`+model+`","messages":[]}`)
+		if h.codex.method != "" {
+			t.Fatalf("excluded model %s reached remote", model)
 		}
 	}
 }

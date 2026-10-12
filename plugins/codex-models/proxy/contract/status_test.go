@@ -48,8 +48,8 @@ func TestStatus(t *testing.T) {
 		}
 		golden(t, "status_models.golden.json", canonical(t, []byte(mustMarshal(t, got.Models))))
 	}
-	t.Run("without a login", func(t *testing.T) { check(t, newEnv(t, opts{}), false) })
-	t.Run("with a login", func(t *testing.T) { check(t, loggedIn(t, opts{}), true) })
+	t.Run("without a remote account", func(t *testing.T) { check(t, newEnv(t, opts{noAccount: true}), false) })
+	t.Run("with a remote account", func(t *testing.T) { check(t, withAccount(t, opts{}), true) })
 
 	t.Run("other methods and paths", func(t *testing.T) {
 		e := newEnv(t, opts{})

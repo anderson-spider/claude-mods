@@ -8,7 +8,7 @@ Marketplace of [Claude Code](https://claude.com/claude-code) plugins made by and
 | --- | --- |
 | [chatgpt](plugins/chatgpt/README.md) | Lets Claude ask your logged-in ChatGPT, or have it generate an image, in terminal-browser, Claude in Chrome or the Claude desktop app's built-in browser, and saves the result locally. |
 | [codex-computer-use](plugins/codex-computer-use/README.md) | Routes native Mac app control through Codex computer use from the ChatGPT app instead of Claude's own computer use, asking before each new app. |
-| [codex-models](plugins/codex-models/README.md) | Offers OpenAI Codex models (ChatGPT login) in Claude Code through a local loopback proxy, in `/model` and in agent definitions; Claude models pass through to Anthropic unchanged. |
+| [codex-models](plugins/codex-models/README.md) | Offers OpenAI Codex models in Claude Code, in `/model` and in agent definitions, through a local loopback proxy that relays them to a remote CLIProxyAPI holding the Codex login; Claude models pass through to Anthropic unchanged. |
 | [crew](plugins/crew) | Registers five specialist subagents: `code-reader` and `research` on Haiku; `designer` and `developer` on Sonnet; `architect` on Opus. `jevKey` is the only option, enabling Jev model and effort routing. A local HTTP loopback proxy enables fixed-model Codex twins and automatic quota routing, so calls may go to OpenAI with or without Jev. No HUD or panel command. |
 | [tailscale](plugins/tailscale/README.md) | Lets Claude query and modify your tailnet through the Tailscale API. |
 
@@ -62,3 +62,12 @@ claude plugin test plugins/crew
 ```
 
 For the other plugins' checks, see their READMEs in the [plugins table](#plugins).
+
+To bring an installation up to date in one go, run from the main checkout:
+
+```sh
+export CLIPROXY_URL=https://<remote host>   # optional: set it to write or replace the codex-models remote
+mise run update:all
+```
+
+It refuses a worktree or a dirty tree, pulls `main` with `--ff-only`, runs `mise run plugins:update`, prints the installed versions, then runs the installed codex-models `install.sh --check` and `install.sh`. With `CLIPROXY_URL` set and no `CLIPROXY_MGMT_KEY`, it reads the key from stdin, hidden on a terminal. Run `/reload-plugins` afterwards, or start a new session for crew twins.
