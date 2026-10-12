@@ -58,8 +58,35 @@ test('every default sits on the model and effort scales routing moves along', ()
 
 test('the architect opens with a verdict word and the lead asks for the step id in descriptions', () => {
   const prompt = SPECIALISTS.find(s => s.name === 'architect')?.prompt ?? ''
-  expect(prompt).toContain('starts with `Approve`, `Fixes` or `Reject`')
+  expect(prompt).toContain('starts with `Approve`, `Fixes` or `Reject` and a one-line reason')
   for (const jev of [true, false]) expect(leadSection(jev)).toContain('start its description with the step id')
+})
+
+test('failed steps return to the same developer and close only after an architect reaudit', () => {
+  const specs = nativeCodexSpecs({ developer: 'gpt-a', architect: 'gpt-b' })
+  for (const jev of [true, false]) {
+    const lead = leadSection(jev)
+    expect(lead).toContain('done only after crew:architect independently audits it')
+    expect(lead).toContain("developer's own commands and output are its report, not acceptance")
+    expect(lead).toContain('Send failures to the same developer via SendMessage with the criterion and expected versus actual')
+    expect(lead).toContain('after the fix, the architect reaudits before the step closes')
+  }
+  const native = nativeCodexSection(specs)
+  expect(native).toContain('Only crew:architect or its registered -codex twin independently accepts a step')
+  expect(native).toContain("developer twin's own commands and output are its report, not acceptance")
+  expect(native).toContain('same developer, including a -codex developer, then have the architect reaudit')
+  expect(native).toContain('otherwise use the Claude role')
+})
+
+test('the lead delegates in waves, relaunches unblocked work unasked and ends updates with run/wait status', () => {
+  for (const jev of [true, false]) {
+    const lead = leadSection(jev)
+    expect(lead).toContain('launch every independent piece with ready inputs in one message')
+    expect(lead).toContain('separate files, no mutual dependencies')
+    expect(lead).toContain('After each report, launch newly unblocked or independent work without being asked or waiting for unrelated agents')
+    expect(lead).toContain('End each update with one line saying what runs, what waits and on what')
+    expect(lead).toContain('nothing else can run in parallel')
+  }
 })
 
 test('leadSection does not carry the Codex text', () => {
@@ -169,15 +196,15 @@ test('the native section lists only the given twins and never names the Codex en
 test('independent acceptance is the architect audit, not the developer self-check or a different family', () => {
   for (const jev of [true, false]) {
     const text = leadSection(jev)
-    expect(text).toContain('crew:developer to implement and test')
+    expect(text).toContain('crew:developer for implementation and tests')
     expect(text).toContain('only after crew:architect independently audits it')
     expect(text).toContain('own commands and output are its report, not acceptance')
     expect(text).toContain('after the fix, the architect reaudits')
     expect(text).not.toContain('crew:tester')
   }
   const text = nativeCodexSection(nativeCodexSpecs({ developer: 'gpt-x', architect: 'gpt-y' }))
-  expect(text).toContain('Only crew:architect or its registered -codex twin independently verifies a step')
-  expect(text).toContain("a developer twin's own tests are its report, not acceptance")
+  expect(text).toContain('Only crew:architect or its registered -codex twin independently accepts a step')
+  expect(text).toContain("a developer twin's own commands and output are its report, not acceptance")
   expect(text).toContain('same developer, including a -codex developer')
   expect(text).not.toContain('counts as someone other than the implementer')
 })

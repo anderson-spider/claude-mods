@@ -346,7 +346,14 @@ test('a request that offers the Agent tool gets the lead section last, naming ev
   }
   expect(lead?.text).toContain('Jev sizes')
   expect(lead?.text).toContain('Git and pull requests stay with you')
-  expect(lead?.text).toContain('start its description with the step id')
+  expect(lead?.text).toContain('For a plan step, start its description with the step id')
+  expect(lead?.text).toContain('launch every independent piece with ready inputs in one message')
+  expect(lead?.text).toContain('launch newly unblocked or independent work without being asked or waiting for unrelated agents')
+  expect(lead?.text).toContain('End each update with one line saying what runs, what waits and on what')
+  expect(lead?.text).toContain('done only after crew:architect independently audits it')
+  expect(lead?.text).toContain("developer's own commands and output are its report, not acceptance")
+  expect(lead?.text).toContain('Send failures to the same developer via SendMessage')
+  expect(lead?.text).toContain('after the fix, the architect reaudits before the step closes')
 })
 
 test('a request without the Agent tool (a crew agent) gets no lead section', ON, async ($, on) => {
