@@ -81,6 +81,27 @@ func TestResolveIgnoresClaudeModels(t *testing.T) {
 	}
 }
 
+func TestCatalogBehavesAsPreservesTiersWithKnownFullIDs(t *testing.T) {
+	want := map[string]string{
+		"gpt-6.1-sol":              "claude-sonnet-5-5",
+		"gpt-6-astra":              "claude-opus-5-5",
+		"gpt-6-sol":                "claude-sonnet-5-5",
+		"gpt-6-luna":               "claude-haiku-5-5",
+		"gpt-5.6-sol":              "claude-sonnet-5-5",
+		"gpt-5.6-terra":            "claude-sonnet-5-5",
+		"gpt-5.6-luna":             "claude-haiku-5-5",
+		"gpt-daybreak-blue-latest": "claude-opus-5-5",
+	}
+	if len(Catalog) != len(want) {
+		t.Fatalf("catalog has %d models, want %d", len(Catalog), len(want))
+	}
+	for _, model := range Catalog {
+		if model.BehavesAs != want[model.ID] {
+			t.Errorf("%s behaves as %q, want %q", model.ID, model.BehavesAs, want[model.ID])
+		}
+	}
+}
+
 func TestEveryCatalogEntryCanBeOfferedToClaudeCode(t *testing.T) {
 	for _, model := range Catalog {
 		// Without behavesAs, Claude Code does not offer a picker row for a

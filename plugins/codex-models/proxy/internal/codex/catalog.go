@@ -15,7 +15,8 @@ type Model struct {
 	// offered without it. The value only affects the client's own prompt
 	// profile and effort defaults; the model id sent upstream is unchanged.
 	// Frontier models behave as Opus, workhorses as Sonnet and the fast
-	// tier as Haiku.
+	// tier as Haiku. Use full ids known to Claude Code, not aliases:
+	// https://code.claude.com/docs/en/settings-reference#modelpicker
 	BehavesAs string
 	// OptIn marks a model gated by an access program the account may not
 	// have. It is neither advertised nor resolved unless OfferDaybreakBlue
@@ -44,7 +45,7 @@ var Catalog = []Model{
 		ReasoningLevel: []string{"low", "medium", "high", "xhigh", "max", "ultra"},
 		DefaultEffort:  "low",
 		SupportsImages: true,
-		BehavesAs:      "claude-sonnet-5",
+		BehavesAs:      "claude-sonnet-5-5",
 	},
 	{
 		ID:             "gpt-6-astra",
@@ -54,7 +55,7 @@ var Catalog = []Model{
 		ReasoningLevel: []string{"low", "medium", "high", "xhigh", "max", "ultra"},
 		DefaultEffort:  "medium",
 		SupportsImages: true,
-		BehavesAs:      "claude-opus-5",
+		BehavesAs:      "claude-opus-5-5",
 	},
 	{
 		ID:             "gpt-6-sol",
@@ -64,7 +65,7 @@ var Catalog = []Model{
 		ReasoningLevel: []string{"low", "medium", "high", "xhigh", "max", "ultra"},
 		DefaultEffort:  "medium",
 		SupportsImages: true,
-		BehavesAs:      "claude-sonnet-5",
+		BehavesAs:      "claude-sonnet-5-5",
 	},
 	{
 		ID:             "gpt-6-luna",
@@ -74,7 +75,7 @@ var Catalog = []Model{
 		ReasoningLevel: []string{"low", "medium", "high", "xhigh", "max"},
 		DefaultEffort:  "medium",
 		SupportsImages: true,
-		BehavesAs:      "claude-haiku-4-5",
+		BehavesAs:      "claude-haiku-5-5",
 	},
 	{
 		ID:             "gpt-5.6-sol",
@@ -84,7 +85,7 @@ var Catalog = []Model{
 		ReasoningLevel: []string{"low", "medium", "high", "xhigh", "max", "ultra"},
 		DefaultEffort:  "low",
 		SupportsImages: true,
-		BehavesAs:      "claude-sonnet-5",
+		BehavesAs:      "claude-sonnet-5-5",
 	},
 	{
 		ID:             "gpt-5.6-terra",
@@ -94,7 +95,7 @@ var Catalog = []Model{
 		ReasoningLevel: []string{"low", "medium", "high", "xhigh", "max", "ultra"},
 		DefaultEffort:  "medium",
 		SupportsImages: true,
-		BehavesAs:      "claude-sonnet-5",
+		BehavesAs:      "claude-sonnet-5-5",
 	},
 	{
 		ID:             "gpt-5.6-luna",
@@ -104,7 +105,7 @@ var Catalog = []Model{
 		ReasoningLevel: []string{"low", "medium", "high", "xhigh", "max"},
 		DefaultEffort:  "medium",
 		SupportsImages: true,
-		BehavesAs:      "claude-haiku-4-5",
+		BehavesAs:      "claude-haiku-5-5",
 	},
 	{
 		ID:             "gpt-daybreak-blue-latest",
@@ -114,7 +115,7 @@ var Catalog = []Model{
 		ReasoningLevel: []string{"low", "medium", "high", "xhigh", "max", "ultra"},
 		DefaultEffort:  "low",
 		SupportsImages: true,
-		BehavesAs:      "claude-opus-5",
+		BehavesAs:      "claude-opus-5-5",
 		OptIn:          true,
 	},
 }
