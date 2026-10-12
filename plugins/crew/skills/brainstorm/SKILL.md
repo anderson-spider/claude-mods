@@ -1,48 +1,41 @@
 ---
 name: brainstorm
-description: Plan a non-trivial change before implementing it, using the crew agents for each step. Use when the user asks to plan, brainstorm, design an approach or compare options for a feature, refactor or fix, and before delegating work to crew:developer.
+description: Plan multi-file changes, compare approaches or protect contracts with the crew before implementation. Use for planning, brainstorming or choosing a feature, refactor or fix approach.
 ---
 
 # Brainstorm with the crew
 
-Plan first, implement later. This skill produces a plan the user can approve; it does not edit code.
+Deliver a user-approved plan before implementation; leave source edits for the approved run. For a one-line change, rename, typo or known-answer question, delegate directly to `crew:developer` or answer.
 
-## When not to use
+## Plan
 
-Skip it for a one-line change, a rename, a typo or a question with a known answer: go straight to `crew:developer` or answer directly. Use it when the change touches several files, has more than one reasonable approach, or can break a contract.
+0. **Ignore output.** Agent artifacts live under `.crew/` at the repository root. Before writing, check `git check-ignore -q .crew`; if needed, append `.crew/` to the root `.gitignore` (create it if missing) and tell the user. Outside git, create the folder.
+1. **Frame.** State the goal, constraints and acceptance criteria. Collect blocking questions in one `AskUserQuestion`; state conventional defaults for the rest.
+2. **Gather in parallel.** In one message, send self-contained questions and starting files/terms to `crew:code-reader` for code evidence (`path:line`) and `crew:research` for sourced external facts. Use only the roles needed; spot-check claims before making them plan steps.
+3. **Compare.** Present two or three options with costs and risks. For user-visible changes, first ask `crew:designer` for layout, states and copy, then include that spec.
+4. **Challenge.** Send the leading option, goal and constraints to `crew:architect`, with `.crew/reviews/<name>.md` for its review. Ask about contracts, authentication, data shapes and project rules. Incorporate or answer every objection.
+5. **Write the plan** to `.crew/plans/<name>.md`: context, chosen approach, files, existing code to reuse, verification and steps. Pass the path to every implementing or auditing agent. Use one line per step:
 
-## Flow
+   `- <ID> (<owner>, after: <ids or —>) <action and files> — state: <state>[ (<note>)]`
 
-0. **Keep the output out of git.** Everything the agents write goes in `.crew/` at the repository root. Before the first write, check `git check-ignore -q .crew`; when it is not ignored, append `.crew/` to the root `.gitignore` (create the file if missing) and tell the user in one line. Outside a git repository, just create the folder.
-1. **Frame.** Restate the goal, the constraints and how success will be checked. Ask the user only what blocks the plan, in one `AskUserQuestion`; take the conventional default for the rest and say which you took.
-2. **Gather, in parallel.** In one message, delegate the independent lookups:
-   - `crew:code-reader` for where the code lives and how it works (answer as `path:line`).
-   - `crew:research` for external facts: library docs, API behavior, release notes, with sources.
-   Give each a self-contained question and the files or terms to start from. Skip an agent the task does not need.
-3. **Diverge.** Write two or three options with what each costs and what each risks. For anything the user sees, ask `crew:designer` for a UI spec first (layout, states, copy) and include it in the options.
-4. **Challenge.** Send the leading option to `crew:architect` with the goal and constraints (and the `.crew/reviews/<name>.md` path to write its review to), asking whether it preserves the invariants (contracts, auth, data shapes, project rules). Fold each objection into the plan or answer it in writing.
-5. **Plan.** Write one plan: context, the chosen approach only, the files to change and the existing code to reuse, how it will be verified, and the steps. Every step is one list line: `- <ID> (<owner>, after: <ids or —>) <text> — state: <state>[ (<note>)]`, with the files it touches in the text. The ID is uppercase letters, digits and an optional lowercase suffix (`T3`, `T3b` for a follow-up); the owner is `lead` or a current `crew:<role>` agent type (`code-reader`, `research`, `designer`, `developer`, `architect`, or a registered twin). The state is one of `queued`, `implementing`, `ready for QA`, `fixes requested`, `verified`, `blocked`, `committed`. Example: `- T3 (crew:developer, after: T1, T2) add the contract suite in tests/contract — state: queued`. End with a `## Waves` heading and a numbered list, one wave per item with its step ids comma-separated: groups of steps with no dependency between them and no shared files, which run at the same time. Save it as `.crew/plans/<name>.md` and pass that path to every agent that implements, tests or audits it.
+   - ID: uppercase letters, digits and an optional lowercase suffix (`T3`, `T3b`).
+   - Owner: `lead`, `crew:code-reader`, `crew:research`, `crew:designer`, `crew:developer`, `crew:architect` or a registered twin.
+   - State: `queued`, `implementing`, `ready for QA`, `fixes requested`, `verified`, `blocked`, `committed`.
 
-6. **Recommend how to run it.** Once the user approves, say which mode fits and give the command, then wait: starting it is the user's call.
-   - `/goal` when the plan has a verifiable end (tests pass, a check is green, a file exists): offer the end condition from the plan as the goal text.
-   - `/loop` when the work repeats or waits (watching CI, re-running until stable, babysitting a PR): offer an interval.
-   - Neither when the plan is a few direct steps: delegate to `crew:developer` as is.
+   Example: `- T3 (crew:developer, after: T1, T2) add the contract suite in tests/contract — state: queued`.
 
-## Who does what after the plan
+   End with `## Waves`: a numbered list of comma-separated step IDs, grouped by independent inputs and disjoint files. Keep only the chosen approach and options the user needed to weigh.
+6. **Ask for approval.** The plan is the deliverable; implementation waits for approval. After approval, recommend a mode and command, then wait for the user to start it:
+   - `/goal`: a verifiable end, using the plan's acceptance condition as goal text.
+   - `/loop`: repeating or waiting work, with an interval.
+   - Direct delegation to `crew:developer`: a few straightforward steps.
 
-Run the plan by its waves: launch a whole wave in one message, and start a later step as soon as its own inputs are ready instead of waiting for the rest of the wave. Update each step's state in place in the plan file as work moves; the developer runs relevant tests itself and reports exact commands and output; a step is verified only after `crew:architect` (or its registered twin) independently audits it, optionally rerunning the tests. A failure goes back to the same developer, followed by another architect audit. A step is `committed` once its code is in a commit; a step with no code of its own closes as `committed` with the commit it gated, the sha in the note (`— state: committed (<sha>)`). Start each agent call's description with the step id.
+## Execute an approved plan
 
-| Step | Agent |
-| --- | --- |
-| Implement, reproduce, add tests and run them; report exact commands and output | `crew:developer` |
-| Specify or adjust the UI | `crew:designer` |
-| Audit the diff against the plan (writes the review to `.crew/reviews/<name>.md`) | `crew:architect` |
-
-Each agent runs on its default model and effort; with Jev routing (on when the `jevKey` option is set), the model and effort of a call may move one step, so do not pass a `model` unless a specific one is needed (a call that names a model is not routed).
-
-## Rules
-
-- No edits during brainstorming; the plan is the deliverable.
-- Treat every agent answer as unverified input: spot-check a claim before it becomes a step.
-- Keep the plan short enough to scan; options the user did not need to weigh stay out.
-- End by asking the user to approve the plan before any agent implements it; the run mode is a recommendation, never started on its own.
+- Launch every ready independent piece in one message; relaunch newly unblocked work without being asked or waiting for unrelated agents. End each update with one line on what runs, what waits and on what.
+- Start call descriptions with the step ID. Update step states in place.
+- `crew:developer` implements, reproduces, adds/runs tests and reports exact commands/output. `crew:designer` owns UI specification and visual edits.
+- A step is `verified` only after `crew:architect` or its registered twin independently audits the full diff against the plan, optionally rerunning tests. The developer's self-check is its report, not acceptance. The architect writes `.crew/reviews/<name>.md` and opens with `Approve`, `Fixes` or `Reject` and a one-line reason.
+- Send failures to the same developer, including a `-codex` developer, with the criterion and expected versus actual; the architect reaudits after the fix.
+- Mark a step `committed` when its code is committed. A code-free gate closes with the commit it gated, recording the SHA in its note.
+- Agents use role defaults; with `jevKey` set, Jev may size model/effort one step from them. Explicit `model` bypasses routing on Claude roles. Call registered Codex twins without `model`: their fixed model must remain intact.

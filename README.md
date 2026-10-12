@@ -168,74 +168,7 @@ Limitations: the proxy assumes a single-user Mac. While it is down, another loca
 
 ## crew
 
-Registers five subagent types when a session starts, each with a default model and effort and a tool allowlist. Claude delegates to them through the Agent tool by their descriptions, or you can ask for one by name:
-
-| Agent type | Default model | Tools | Role |
-| --- | --- | --- | --- |
-| `crew:code-reader` | Haiku | Read, Grep, Glob | Finds and explains code; returns `path:line` summaries. Never edits. |
-| `crew:research` | Haiku | Read, Grep, Glob, Edit, Write, WebSearch, WebFetch, Context7 and browser tools (terminal-browser, Claude in Chrome) | Researches docs and the web, browsing pages when needed, and writes findings or documentation. Never edits source code. |
-| `crew:designer` | Sonnet | Read, Grep, Glob, Edit, Write, WebSearch, WebFetch, Context7 and browser tools | Specifies the UI and experience (layout, states, accessibility, copy) and edits styles and layout. Leaves logic and tests to the developer. |
-| `crew:developer` | Sonnet | Read, Grep, Glob, Edit, Write, Bash | Implements a spec, adds and runs relevant tests, and reports exact commands/output for the independent architect audit. |
-| `crew:architect` | Opus | Read, Grep, Glob, Write, Bash | The architect: plans and reviews a design or diff for bugs, regressions and missing tests. Writes plan and review documents under `.crew/` only, never code. |
-
-Layout in the project where the agents run (unversioned, added to `.gitignore` by the skill):
-
-```
-.crew/
-  plans/<name>.md       the plan you approve
-  reviews/<name>.md     the architect's independent reviews
-  research/<name>.md    the research agent's findings
-```
-
-The architect can only write Markdown under `.crew/`: a hook denies any other `Write` or `Edit` by that role. Unknown `crew:` types, including stale removed-role definitions, have no lane and their `Write`/`Edit` calls are held. This guard does not screen `Bash` writes. Plans and reviews live in `.crew/`, which the `brainstorm` skill adds to the repository's `.gitignore` when it is not ignored yet.
-
-### The lead
-
-In a request that offers the Agent tool (the main session; the crew agents do not have it), a system prompt section makes Claude the lead: it talks with you, breaks the work down and hands every task that reads, searches, edits or runs anything in the project to the crew agent for that kind of work. It plans in waves: it splits the work into independent pieces, launches every piece whose inputs are ready in one message and, after each report, launches what is newly unblocked without being asked. Each update ends with one line on what runs and what waits. The developer runs relevant tests itself and reports exact commands/output; a step counts as done only after someone other than its implementer independently audits it (`crew:architect`, or its registered Codex twin). The architect may rerun tests. A failure goes back to the same developer, then the architect reaudits. It does not judge a task's size: with a `jevKey`, Jev sizes each call; without one, each agent runs on the model sized for its role. A teammate's prompt does not get the section. Git and pull requests stay with the lead.
-
-### Native Codex subagents
-
-At session start, a local HTTP loopback proxy as `ANTHROPIC_BASE_URL` enables a `crew:<role>-codex` twin for each of the five roles. The model map is fixed:
-
-| Base role | Codex model |
-| --- | --- |
-| `code-reader`, `research` | `gpt-6-luna` |
-| `designer`, `developer` | `gpt-6.1-sol` |
-| `architect` | `gpt-6-astra` |
-
-Twins use the base role's prompt, tools and write rules. They are ordinary foreground or background subagents and need no Codex CLI. The URL must be `http` on `127.0.0.0/8`, `::1` or `localhost`; with any other base URL, or none, no twins are registered. There is no discovery request, model filtering or secret read at startup: the gate checks the URL, not proxy identity or model availability. The proxy must serve the fixed ids. One failed registration leaves the others available. What these subagents read and write goes to OpenAI through the proxy.
-
-When twins are registered, a separate prompt section tells the lead it can pick one when you ask for Codex or when a second model family should do or audit the work. Only the architect role or its registered twin independently accepts a step; a developer twin's own test run remains its report, not acceptance. Never pass `model` to a twin: the call is refused rather than overriding its fixed model. A new session registers twins; `/reload-plugins` alone (or a `jevKey` change) leaves the new activation's registered set empty, so quota routing and the twin section wait for the next session.
-
-With a `jevKey`, Jev may size a twin's effort, but never changes its model family. Crew internally supplies `<fixed model id>:<effort>` on the spawn, with effort bounded to medium or high. A Jev failure on an explicit twin uses `:medium`; quota-switched calls also use `:medium` when Jev is absent or fails. Caller-supplied `model` values, including suffixes, remain refused. This does not depend on a late step bind or on the host sending an effort field. A real-host spike against a local fake verified that `:medium` and `:high` reached the outgoing request unchanged while the host's own effort stayed medium; the proxy gives the suffix precedence.
-
-The task and notice show the canonical `<model>/<effort>` request configuration. Confirmation compares the API-reported model against the exact id or its dated release, and records effort only from outgoing request evidence (the model suffix takes precedence over the step effort). If effort cannot be observed, the line confirms only the model and says `suffix <effort> requested, effort unobserved`; the record keeps `ran.effort: null`, never the planned value. Multiple-turn/backend validation remains separate from the spike.
-
-### Quota-aware routing
-
-Automatic whenever twins are registered, with or without Jev. An eligible `crew:<role>` call goes to its registered `crew:<role>-codex` twin when Codex has clearly more 7-day headroom than Claude (at least 10 points less used; a provider with its 5-hour window at 90% or more is avoided). Claude's limits come from the host. Codex's come from `GET /__ccmproxy/status?refresh=limits` on the local loopback proxy, with the secret header from `ANTHROPIC_CUSTOM_HEADERS`, under a 1.5-second deadline. The first eligible spawn reads the quota, not session start; readings and failures are cached for 60 seconds, concurrent callers share one refresh, and readings more than 15 minutes old are stale. With no registered twins, there is no quota fetch.
-
-Anything uncertain (no limits, a stale or failed read) keeps the call on Claude. A base-role call that names a model, a twin you named, a fork, a teammate and a workflow script's agent are never moved. The task and a notice name a switched call's provider. This is the one case where crew changes a call's agent type; the twin has the same tools and write rules. With a Codex decision, the call's work goes to OpenAI through the proxy even when `jevKey` is empty. With a key, Jev sizes the twin's bounded effort through the internal model suffix above; without an answer, the suffix is `:medium`. Crew has no HUD or `/crew:panel` command.
-
-### Jev routing of model and effort
-
-The only configurable option is `jevKey`: with a TypeSafe key there, Jev routes; with it empty, no Jev request or trust-settings read is made. Automatic quota routing is independent of this key. Save the key in the plugin's config, which keeps it in secure storage and not in a settings file:
-
-```sh
-read -rs k && printf '%s' "$k" | jq -Rs '{jevKey:.}' | claude plugin configure crew@spider-claude-mods --values-stdin; unset k
-```
-
-(Paste the key at the silent prompt; it is not echoed or kept in shell history. `claude plugin configure crew@spider-claude-mods` without `--values-stdin` only lists the options and which are unset, so use it to check that the key is set; inside Claude Code, `/plugin configure crew@spider-claude-mods` also sets it, which is where the CLI points.) With a key, Jev decides per Agent call which model and effort a `crew:*` agent runs on, one step from its default at most (the architect never below Opus, and no agent's effort below medium). The agent type stays the one Claude chose (unless quota-aware routing moves the call to its role's twin, which has the same tools and write rules), so those do not change; a call that names a model (a `-codex` twin that names one is refused instead), a fork, a workflow script's agent and any other agent type are left alone. The task's description ends with the choice (`audit auth · opus/high`); on the subagent's first step a transcript line confirms what ran or says what ran instead (`crew: jev: audit auth: confirmed claude-opus-5-5 · high`), a notice shows each decision once the subagent has started (and says when an effort could not be applied), and a debug log line records the tier, confidence, depth and Jev model id.
-
-- **Key**: the `jevKey` option is the only source and the only switch. It must be printable ASCII of 512 characters or fewer with no spaces; an empty value turns Jev routing off silently, and a malformed one turns it off with a debug log line (never showing the value). A `jevKey` that the repository's own project or local settings declare turns Jev routing off; a `HOME` they declare is ignored. Jev routing is also off when those settings cannot be read; a debug log line gives the reason. Changing `jevKey` reloads the plugin. Environment variables (`TYPESAFE_API_KEY`, `JEV_API_KEY`) and `~/.jev-router.env` are not read. With `--plugin-dir` the plugin is `crew@inline`, which `configure` refuses because it is not installed; the key is read from `pluginConfigs["crew@inline"].options.jevKey` in `~/.claude/settings.json` (plain text there), so prefer testing with the installed plugin.
-- **Sent** to `api.typesafe.ai`: the agent name, the call description and the prompt with secrets, emails and paths removed and cut to 4000 characters. See [docs/PRIVACY.md](docs/PRIVACY.md).
-- **Fail open**: on a Jev error, a timeout (3 s) or more than four calls at once, Claude calls keep their model and effort. An explicit twin whose Jev request fails uses its fixed model with `:medium`, and automatic quota routing can still choose a twin with the same default suffix.
-- **Thresholds**: a depth of 3.0 or more on Jev's 0-4 scale gives `high` effort, below it `medium`, and a depth within 0.01 of 3.0 keeps the agent's default; a tier answer applies from confidence 0.5. The decision log and the debug log are where to revisit them.
-- **Decision log**: with a key set and a trusted home, each routed decision is also saved as a small JSON file in `~/.claude/crew/decisions/` (tier, confidence, depth, models, efforts, duration, a hash of the description, and an empty `outcome` for you to fill in; no prompt, description, key or path). The v2 schema keeps twin model fields canonical (no suffix). `bind: "suffix"` means a twin spawn succeeded with the effort suffix, including medium defaults; `applied.model` remains false, and `applied.effort` indicates a change from the default configuration, not observed execution. `ran` holds only API model/outgoing effort evidence. It stays on your machine and is never pruned: delete the folder to clear it. For example: `duckdb -c "select tier, effortApplied, count(*) from read_json_auto('~/.claude/crew/decisions/*.json') group by all"`.
-
-A `jevKey` that is not a string makes Claude Code refuse to load the whole plugin (all five agents), not only the routing.
-
-The plugin also ships a `brainstorm` skill that says how to plan with these agents: gather context with `code-reader` and `research` in parallel, let `architect` challenge the leading option, then write one plan, with each step's dependencies and files and the waves of steps that can run in parallel, before `developer` implements it. Once you approve the plan, it recommends `/goal`, `/loop` or direct execution, without starting any of them.
+Five specialist subagents, optional Jev sizing, fixed-model Codex twins and automatic quota routing. See [the crew README](plugins/crew/README.md) for setup, delegation, privacy and verification.
 
 ## tailscale
 
