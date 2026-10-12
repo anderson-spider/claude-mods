@@ -1,7 +1,7 @@
 import { atom, update } from 'claude-code'
 import type { Hook, Register } from 'claude-code'
-import { CODEX_BASE_EFFORT, SPECIALISTS, codexSection, leadSection, offersCodex } from './agents'
-import type { Effort, Specialist } from './agents'
+import { CODEX_BASE_EFFORT, SPECIALISTS, codexSection, isLoopbackBase, leadSection, nativeCodexSection, nativeCodexSpecs, offersCodex } from './agents'
+import type { Agent, Effort } from './agents'
 import { createConfirmations, confirmText } from './confirm'
 import type { Confirmations } from './confirm'
 import { decisionRecord, saveDecision, withRan } from './decisions'
@@ -21,7 +21,7 @@ import { checkKey, resolveAccess } from './key'
 import type { KeyIo, Off } from './key'
 import { JEV_MODEL } from './questions'
 import { describe, moved, noticeText, route, routable, sizeCodexJob, taggedDescription, untagged } from './routing'
-import type { CodexSizing, Moved, Routed } from './routing'
+import type { CodexSizing, Moved, Routed, Target } from './routing'
 
 /**
  * The `$` a hook receives. Every hook builds what it needs from its own, and nothing here keeps one past its hook, with
@@ -159,6 +159,48 @@ async function registerSpecialists($: Dollar) {
   }
 }
 
+/** The `-codex` types the `nativeCodex` option names, and what its parser could not use. */
+type Native = {
+  specs: readonly Agent<string>[]
+  errors: readonly string[]
+  /** The twins this activation registered, in order: empty until `session.start`, and when the gate or the registration refused. */
+  registered: Agent<string>[]
+}
+
+/** The base URL the session sends its API calls to; a failing read is no URL. */
+async function baseUrl($: Dollar): Promise<string | undefined> {
+  try {
+    return await $.env.get('ANTHROPIC_BASE_URL')
+  } catch {
+    return undefined
+  }
+}
+
+/** The `-codex` types the session can reach: all of them behind a loopback base URL (the local proxy), none otherwise. */
+async function reachableNative($: Dollar, native: Native): Promise<readonly Agent<string>[]> {
+  return native.specs.length > 0 && isLoopbackBase(await baseUrl($)) ? native.specs : []
+}
+
+/** Registers the `-codex` types when the proxy is the base URL; without it a spawn would only fail, so one debug line says why not. */
+async function registerNative($: Dollar, native: Native) {
+  native.registered.length = 0
+  if (native.specs.length === 0 && native.errors.length === 0) return
+  if (native.errors.length) $.ui.log(`crew: nativeCodex ignored in part: ${native.errors.join('; ')}`, { to: 'debug' })
+  const reachable = await reachableNative($, native)
+  if (reachable.length === 0 && native.specs.length > 0) {
+    $.ui.log('crew: nativeCodex types not registered (ANTHROPIC_BASE_URL is not a loopback http URL)', { to: 'debug' })
+  }
+  // One refused registration leaves the other twins registered; only the registered ones are routed and listed.
+  for (const agent of reachable) {
+    try {
+      await $.agent.register({ ...agent, tools: [...agent.tools] })
+      native.registered.push(agent)
+    } catch (error) {
+      $.ui.log(`crew: nativeCodex crew:${agent.name} not registered (${error instanceof Error ? error.message : String(error)})`, { to: 'debug' })
+    }
+  }
+}
+
 // --- Codex engine (on only with the `codex` option) ---
 
 /** The Codex jobs of the session, for any reader; the job files under `.crew/codex/` are what a reload reads back. */
@@ -240,10 +282,15 @@ async function registerCodexTools($: Dollar) {
 }
 
 /** The crew's session start: the agents, then (with the option) the Codex tools and the jobs read back from disk. */
-async function startCrew(engine: CodexEngine | undefined, modelErrors: readonly string[], $: Dollar, e: StartHook[1], next: StartHook[2]) {
+async function startCrew(engine: CodexEngine | undefined, modelErrors: readonly string[], native: Native, $: Dollar, e: StartHook[1], next: StartHook[2]) {
   await registerSpecialists($)
+  // Its own try: a failure here must not keep the Codex tools or the dashboard from starting.
+  try {
+    await registerNative($, native)
+  } catch (error) {
+    $.ui.log(`crew: nativeCodex types not registered (${error instanceof Error ? error.message : String(error)})`, { to: 'debug' })
+  }
   if (!engine) return next(e)
-  // Its own try: a failure here must not keep the agents or the dashboard from starting.
   try {
     await registerCodexTools($)
   } catch (error) {
@@ -314,10 +361,12 @@ type Routing = {
   /** Routed subagents whose first step is still to be checked against their tag. */
   confirms: Confirmations
   access: KeyCache
+  /** The `-codex` twins that were registered (`Native.registered`): routable for their effort only. */
+  twins: readonly Agent<string>[]
 }
 
 /** Asks Jev about one call. A failure is one debug line and the call goes on as it came (undefined). */
-async function askJev($: Dollar, routing: Routing, key: string, spec: Specialist, e: SpawnHook[1]): Promise<Routed | undefined> {
+async function askJev($: Dollar, routing: Routing, key: string, spec: Target, e: SpawnHook[1]): Promise<Routed | undefined> {
   try {
     const ask = createJev(jevIo($), key, { model: JEV_MODEL, breaker: routing.breaker, gate: routing.gate })
     return await route(ask, await redactContext($, routing.access), spec, e)
@@ -328,7 +377,7 @@ async function askJev($: Dollar, routing: Routing, key: string, spec: Specialist
 }
 
 /** The debug lines and the one notice of a decision; `took` is whether the effort that was moved runs on the subagent. */
-function announce($: Dollar, spec: Specialist, routed: Routed, change: Moved, took: boolean, outcome: BindOutcome | undefined, toolUseId: string): void {
+function announce($: Dollar, spec: Target, routed: Routed, change: Moved, took: boolean, outcome: BindOutcome | undefined, toolUseId: string): void {
   const notApplied = change.effort !== undefined && !took ? change.effort : undefined
   $.ui.log(`crew jev: ${describe(spec, routed, { model: change.model, effort: change.effort !== undefined && took ? change.effort : undefined })}`, { to: 'debug' })
   if (notApplied !== undefined) {
@@ -341,13 +390,13 @@ function announce($: Dollar, spec: Specialist, routed: Routed, change: Moved, to
 // goes wrong leaves the call as it came.
 async function routeSpawn(routing: Routing, $: Dollar, e: SpawnHook[1], next: SpawnHook[2]) {
   if (!routing.enabled) return next(e)
-  const spec = routable(e)
+  const spec = routable(e, routing.twins)
   if (!spec) return next(e)
   const key = await keyOf($, routing.access, routing.jevKey)
   if (!key) return next(e)
 
   // A description that already carries a tag (a call copied from the task list) is sent and tagged without it.
-  e = { ...e, description: untagged(e.description) }
+  e = { ...e, description: untagged(e.description, routing.twins.map(twin => twin.model)) }
   const routed = await askJev($, routing, key, spec, e)
   const change = moved(spec, routed)
   // The task shows what Jev chose, so the task list says whether routing runs; the book matches the shown description.
@@ -407,6 +456,9 @@ async function routeSpawn(routing: Routing, $: Dollar, e: SpawnHook[1], next: Sp
 export const register: Register = (on, options) => {
   // The `codex` option is the switch: off, no tool is registered, nothing runs and the lead section is unchanged.
   const codexModels = parseCodexModels(options.codexModels)
+  // The `nativeCodex` option is the switch of the `-codex` types, parsed like `codexModels`; they register only behind the proxy.
+  const nativeModels = parseCodexModels(options.nativeCodex)
+  const native: Native = { specs: nativeCodexSpecs(nativeModels.models), errors: nativeModels.errors, registered: [] }
   const codex = options.codex === true
     ? createCodexEngine({
       prompts: Object.fromEntries(SPECIALISTS.map(agent => [agent.name, agent.prompt])),
@@ -426,13 +478,14 @@ export const register: Register = (on, options) => {
     book: createEffortBook(),
     confirms: createConfirmations(),
     access: {},
+    twins: native.registered,
   }
 
   // A matcher on session.start, agent.spawn and turn.step: the engine refuses two hooks on one event without one, and
   // the vendored Flightdeck registers those events too. The crew's session.start is outermost, so a Flightdeck failure
   // cannot stop the agents from registering; Flightdeck is registered before the hooks below, so it wraps the spawn, the
   // step and the write (it sees the description and model as they came, and logs the guard's refusals).
-  on('session.start', {}, ($, e, next) => startCrew(codex, codexModels.errors, $, e, next))
+  on('session.start', {}, ($, e, next) => startCrew(codex, codexModels.errors, native, $, e, next))
   registerFlightdeck(on, options)
   // Only a request that offers the Agent tool gets the lead's section: the crew agents' tool lists leave it out.
   // A teammate renders the lead's prompt too, and `bare` asks for the engine's one section alone.
@@ -442,9 +495,20 @@ export const register: Register = (on, options) => {
     const jev = routing.enabled && (await keyOf($, routing.access, routing.jevKey)) !== undefined
     // The Codex sentence follows the tools offered, so the text is the same on every request of a session.
     const text = codex && offersCodex(e.tools) ? `${leadSection(jev)} ${codexSection(jev)}` : leadSection(jev)
-    return { sections: [...composed.sections, { id: 'crew:lead', text, scope: 'session' as const }] }
+    const lead = { id: 'crew:lead', text, scope: 'session' as const }
+    // The `-codex` types get a section of their own, under the same rule and only for the twins this session registered.
+    if (native.registered.length === 0) return { sections: [...composed.sections, lead] }
+    const twins = { id: 'crew:native-codex', text: nativeCodexSection(native.registered, codex !== undefined && offersCodex(e.tools)), scope: 'session' as const }
+    return { sections: [...composed.sections, lead, twins] }
   }).catch((_, e, next) => next(e))
-  on('agent.spawn', {}, ($, e, next) => routeSpawn(routing, $, e, next)).catch((_, e, next) => next(e))
+  on('agent.spawn', {}, ($, e, next) => {
+    // A `model` on a twin's call wins over its definition and would run it on Claude with no tag or confirmation. The
+    // option's names decide, not the registered set: a later `session.start` that registered none leaves the host's types.
+    if (e.model && native.specs.some(twin => e.subagentType === `crew:${twin.name}`)) {
+      return { deny: `crew: ${e.subagentType} runs on its own Codex model; call it again without \`model\`` }
+    }
+    return routeSpawn(routing, $, e, next)
+  }).catch((_, e, next) => next(e))
   // Runs on every request of every loop: the main loop and agents that were not routed return at once. A streaming
   // hook is written inline as an async generator: the engine reads no other form.
   on('turn.step', {}, async function* ($, e, next) {

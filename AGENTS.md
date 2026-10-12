@@ -16,7 +16,7 @@ Each plugin's details live in `plugins/<name>/AGENTS.md`, loaded when Claude rea
 - **branch-guard**: holds a commit or push on a protected branch until the person proceeds or cancels.
 - **chatgpt**: `ask` and `image` tools driving chatgpt.com in the first browser that works.
 - **codex-computer-use**: routes native Mac app control through Codex computer use; has a `helper/` run by the ChatGPT app's `node`.
-- **crew**: registers the `code-reader`, `research`, `designer`, `developer`, `tester` and `architect` subagent types with default models; Jev routing, on when the `jevKey` option is set, moves a call's model and effort one step; carries the vendored Flightdeck dashboard (`hooks/flightdeck/`, MIT, with its `LICENSE` and `NOTICE.md`); with the `codex` option on, the lead can run any role on OpenAI Codex (`mcp__crew__codex`).
+- **crew**: registers the `code-reader`, `research`, `designer`, `developer`, `tester` and `architect` subagent types with default models; Jev routing, on when the `jevKey` option is set, moves a call's model and effort one step; carries the vendored Flightdeck dashboard (`hooks/flightdeck/`, MIT, with its `LICENSE` and `NOTICE.md`); with the `codex` option on, the lead can run any role on OpenAI Codex (`mcp__crew__codex`); with `nativeCodex` and a loopback proxy, `crew:<role>-codex` twins run a role on a Codex model.
 - **tailscale**: `tailscale_get` and `tailscale_write` tools over the Tailscale API.
 
 ## Commands

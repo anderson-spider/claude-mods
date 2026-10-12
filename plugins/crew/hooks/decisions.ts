@@ -7,7 +7,7 @@ import type { Effort, Model } from './agents'
 /** `<home>/.claude/crew/decisions`: the home is the trusted one, never the repository's. */
 const DIR = '.claude/crew/decisions'
 // A context suffix such as `[1m]` is part of a model id.
-const MODEL_ID = /^[\w.:[\]-]{1,64}$/
+export const MODEL_ID = /^[\w.:[\]-]{1,64}$/
 
 export type DecisionInput = {
   ts: string
@@ -15,8 +15,9 @@ export type DecisionInput = {
   tier?: Model
   confidence?: number
   depth?: number
-  defaultModel: Model
-  model: Model
+  /** A model alias for a specialist, or any model id. */
+  defaultModel: string
+  model: string
   defaultEffort: Effort
   effortPlanned: Effort
   /** The effort the subagent runs on: the planned one when it took, else the default. */
@@ -35,8 +36,8 @@ export type DecisionRecord = {
   tier: Model | null
   confidence: number | null
   depth: number | null
-  defaultModel: Model
-  model: Model
+  defaultModel: string
+  model: string
   defaultEffort: Effort
   effortPlanned: Effort
   effortApplied: Effort
