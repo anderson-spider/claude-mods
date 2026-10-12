@@ -268,110 +268,19 @@ func unchanged(t *testing.T, path string, data []byte, mtime time.Time) {
 	}
 }
 
-func TestCodexCLILoginIsBorrowedReadOnly(t *testing.T) {
-	t.Run("valid token is used as it is", func(t *testing.T) {
-		e := newEnv(t, opts{noStart: true, codexCfg: map[string]any{"use_codex_cli_auth": true}})
-		access := accessToken("cli-access", time.Now().Add(time.Hour))
-		path, data, mtime := writeCLILogin(t, e, access)
-		e.cdx.set(answerWith(evCreated, evText("a"), evCompleted))
-		e.start()
-
-		for i := 0; i < 2; i++ {
-			if r := e.post("/v1/messages", claudeReq("gpt-6-astra", true, nil)); r.Status != 200 {
-				t.Fatalf("status = %d: %s", r.Status, r.Body)
-			}
-		}
-		got := e.cdx.last(t)
-		if got.Header.Get("Authorization") != "Bearer "+access || got.Header.Get("Chatgpt-Account-Id") != "acct-cli" {
-			t.Fatalf("Codex saw %q / %q", got.Header.Get("Authorization"), got.Header.Get("Chatgpt-Account-Id"))
-		}
-		if e.oauth.count() != 0 {
-			t.Fatal("the borrowed login was refreshed")
-		}
-		unchanged(t, path, data, mtime)
-		if _, err := os.Stat(filepath.Join(e.authDir, "codex.json")); err == nil {
-			t.Fatal("the proxy wrote its own login file from the borrowed one")
-		}
-		status := e.do(http.MethodGet, "/__ccmproxy/status", nil, nil).json(t)
-		if status["codexLogin"] != true {
-			t.Fatalf("status = %v", status)
-		}
-	})
-
-	t.Run("expired token is never refreshed", func(t *testing.T) {
-		e := newEnv(t, opts{noStart: true, codexCfg: map[string]any{"use_codex_cli_auth": true}})
-		path, data, mtime := writeCLILogin(t, e, accessToken("cli-access", time.Now().Add(-time.Hour)))
-		e.oauth.set(refreshing(accessToken("x", time.Now().Add(time.Hour)), "r", false))
-		e.start()
-		for i := 0; i < 2; i++ {
-			r := e.post("/v1/messages", claudeReq("gpt-6-astra", true, nil))
-			if r.Status != http.StatusForbidden {
-				t.Fatalf("status = %d: %s", r.Status, r.Body)
-			}
-			kind, msg := r.errInfo(t)
-			if kind != "permission_error" || !strings.Contains(msg, "Codex CLI login has expired") || !strings.Contains(msg, "codex login") {
-				t.Fatalf("%s %q", kind, msg)
-			}
-		}
-		if e.oauth.count() != 0 || e.cdx.count() != 0 {
-			t.Fatalf("oauth=%d codex=%d calls", e.oauth.count(), e.cdx.count())
-		}
-		unchanged(t, path, data, mtime)
-	})
-
-	t.Run("not read unless enabled", func(t *testing.T) {
-		e := newEnv(t, opts{noStart: true})
-		writeCLILogin(t, e, accessToken("cli-access", time.Now().Add(time.Hour)))
-		e.start()
-		r := e.post("/v1/messages", claudeReq("gpt-6-astra", true, nil))
-		if r.Status != http.StatusForbidden || e.cdx.count() != 0 {
-			t.Fatalf("status = %d, codex calls = %d", r.Status, e.cdx.count())
-		}
-	})
-
-	t.Run("the proxy's own login wins", func(t *testing.T) {
-		e := newEnv(t, opts{noStart: true, codexCfg: map[string]any{"use_codex_cli_auth": true}})
-		own := accessToken("own", time.Now().Add(time.Hour))
-		e.writeLogin(login{access: own})
-		writeCLILogin(t, e, accessToken("cli-access", time.Now().Add(time.Hour)))
-		e.cdx.set(answerWith(evCreated, evText("a"), evCompleted))
-		e.start()
-		e.post("/v1/messages", claudeReq("gpt-6-astra", true, nil))
-		if got := e.cdx.last(t).Header.Get("Authorization"); got != "Bearer "+own {
-			t.Fatal("the CLI login was preferred to the proxy's own")
-		}
-	})
-
-	t.Run("auth_file in the CLI layout is read in place", func(t *testing.T) {
-		e := newEnv(t, opts{noStart: true})
-		access := accessToken("explicit", time.Now().Add(time.Hour))
-		path := filepath.Join(e.home, "explicit-auth.json")
-		writeJSON(t, path, cliAuthJSON(access, "r"), 0o600)
-		cfg := readLogin(t, e.cfgPath)
-		cfg["codex"].(map[string]any)["auth_file"] = path
-		writeJSON(t, e.cfgPath, cfg, 0o600)
-		e.cdx.set(answerWith(evCreated, evText("a"), evCompleted))
-		e.start()
-		if r := e.post("/v1/messages", claudeReq("gpt-6-astra", true, nil)); r.Status != 200 {
-			t.Fatalf("status = %d: %s", r.Status, r.Body)
-		}
-		if got := e.cdx.last(t).Header.Get("Authorization"); got != "Bearer "+access {
-			t.Fatalf("Authorization = %q", got)
-		}
-	})
-}
-
-// auth_file naming the Codex CLI's own file is refused at start.
-func TestAuthFileCannotBeTheCodexCLIFile(t *testing.T) {
-	e := newEnv(t, opts{noStart: true})
-	must(t, os.MkdirAll(e.codexHome, 0o700))
-	cli := filepath.Join(e.codexHome, "auth.json")
-	writeJSON(t, cli, cliAuthJSON(accessToken("x", time.Now().Add(time.Hour)), "r"), 0o600)
+func TestObsoleteAuthKnobsNeverReadCLICredentials(t *testing.T) {
+	e := newEnv(t, opts{noStart: true, codexCfg: map[string]any{"use_codex_cli_auth": true, "auth_file": "ignored"}})
+	path, data, mtime := writeCLILogin(t, e, accessToken("cli", time.Now().Add(time.Hour)))
 	cfg := readLogin(t, e.cfgPath)
-	cfg["codex"].(map[string]any)["auth_file"] = cli
+	cfg["codex"].(map[string]any)["auth_file"] = path
 	writeJSON(t, e.cfgPath, cfg, 0o600)
-	out, code := runCLI(t, e.home, e.environ(), "serve")
-	if code == 0 || !strings.Contains(out.stderr, "never writes") {
-		t.Fatalf("exit %d, stderr: %s", code, out.stderr)
+	e.start()
+	r := e.post("/v1/messages", claudeReq("gpt-6-astra", true, nil))
+	if r.Status != http.StatusForbidden || e.oauth.count() != 0 || e.cdx.count() != 0 {
+		t.Fatalf("obsolete auth knob used: %d", r.Status)
 	}
+	if e.do(http.MethodGet, "/__ccmproxy/status", nil, nil).json(t)["codexLogin"] != false {
+		t.Fatal("CLI credentials advertised")
+	}
+	unchanged(t, path, data, mtime)
 }

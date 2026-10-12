@@ -26,9 +26,12 @@ func effortRank(level string) int {
 // part of any upstream model id.
 var contextWindowHints = []string{"[1m]", "[2m]"}
 
-// defaultNamespace is the prefix tolerated when none is configured, so a user
+// defaultNamespace is the input spelling tolerated, so a user
 // who types codex/gpt-6-luna is not silently proxied upstream.
 const defaultNamespace = "codex/"
+
+// OfferDaybreakBlue controls the unlisted model at build time, not through config.
+const OfferDaybreakBlue = false
 
 // Resolution is the outcome of matching a client-supplied model name against
 // the Codex catalog.
@@ -45,72 +48,29 @@ type Resolution struct {
 // Registry resolves client model names to Codex models. It is immutable after
 // construction and safe for concurrent use.
 type Registry struct {
-	prefix   string
-	byID     map[string]Model
-	ordered  []Model
-	variants bool
+	byID    map[string]Model
+	ordered []Model
 }
 
-// NewRegistry builds a registry over the catalog. allow, when non-empty,
-// restricts the catalog to those ids. prefix is an optional namespace clients
-// may use in front of an id (for example "codex/"). variants controls whether
-// per-effort model ids are advertised.
-func NewRegistry(allow []string, prefix string, variants bool) *Registry {
-	allowed := map[string]bool{}
-	for _, id := range allow {
-		if id = strings.ToLower(strings.TrimSpace(id)); id != "" {
-			allowed[id] = true
-		}
-	}
-	r := &Registry{prefix: namespace(prefix), byID: map[string]Model{}, variants: variants}
+// NewRegistry offers the fixed catalog, excluding the gated unlisted model.
+func NewRegistry() *Registry {
+	r := &Registry{byID: map[string]Model{}}
 	for _, model := range Catalog {
-		id := strings.ToLower(model.ID)
-		named := allowed[id]
-		// A list keeps only what it names; an opt-in model needs naming.
-		if (len(allowed) > 0 || model.OptIn) && !named {
+		if model.OptIn && !OfferDaybreakBlue {
 			continue
 		}
-		r.byID[id] = model
+		r.byID[strings.ToLower(model.ID)] = model
 		r.ordered = append(r.ordered, model)
 	}
 	return r
 }
 
-// namespace is prefix lower-cased and ending in its separator, so "codex"
-// and "codex/" are one namespace; empty stays empty.
-func namespace(prefix string) string {
-	prefix = strings.ToLower(strings.TrimSpace(prefix))
-	if prefix == "" {
-		return ""
-	}
-	return strings.TrimSuffix(prefix, "/") + "/"
-}
-
-// Prefix reports the configured model namespace, if any.
-func (r *Registry) Prefix() string { return r.prefix }
-
-// Models returns the catalog entries in advertised order.
-func (r *Registry) Models() []Model {
-	return append(make([]Model, 0, len(r.ordered)), r.ordered...)
-}
-
-// AdvertisedIDs lists every model id the proxy adds to the Anthropic model
-// list, including per-effort variants when enabled: each model, then its
-// other levels, lowest first.
+// AdvertisedIDs lists the bare model ids in catalog order. Effort suffixes
+// remain accepted on requests but are never advertised as separate rows.
 func (r *Registry) AdvertisedIDs() []string {
-	ids := make([]string, 0, len(r.ordered)*3)
+	ids := make([]string, 0, len(r.ordered))
 	for _, model := range r.ordered {
-		ids = append(ids, r.prefix+model.ID)
-		if !r.variants {
-			continue
-		}
-		levels := slices.Clone(model.ReasoningLevel)
-		slices.SortStableFunc(levels, func(a, b string) int { return effortRank(a) - effortRank(b) })
-		for _, level := range levels {
-			if level != model.DefaultEffort {
-				ids = append(ids, r.prefix+model.ID+"-"+level)
-			}
-		}
+		ids = append(ids, model.ID)
 	}
 	return ids
 }
@@ -124,7 +84,7 @@ func (r *Registry) AdvertisedIDs() []string {
 //	gpt-6-luna              the model at its default effort
 //	gpt-6-luna-high         an effort variant
 //	gpt-6-luna:high         the same, colon separated
-//	codex/gpt-6-luna-high   with the configured prefix
+//	codex/gpt-6-luna-high   with the tolerated input namespace
 func (r *Registry) Resolve(name string) (Resolution, bool) {
 	requested := strings.TrimSpace(name)
 	if requested == "" {
@@ -137,11 +97,7 @@ func (r *Registry) Resolve(name string) (Resolution, bool) {
 			break
 		}
 	}
-	if r.prefix != "" {
-		candidate = strings.TrimPrefix(candidate, r.prefix)
-	} else {
-		candidate = strings.TrimPrefix(candidate, defaultNamespace)
-	}
+	candidate = strings.TrimPrefix(candidate, defaultNamespace)
 	found := func(model Model, effort string) (Resolution, bool) {
 		return Resolution{Model: model, Effort: normalizeEffort(model, effort), Requested: requested}, true
 	}
@@ -226,22 +182,10 @@ type PickerRow struct {
 }
 
 // PickerOptions renders one settings.json picker row per advertised model.
-// A row for an effort variant names its effort in the label and description.
 func (r *Registry) PickerOptions() []PickerRow {
-	ids := r.AdvertisedIDs()
-	rows := make([]PickerRow, 0, len(ids))
-	for _, id := range ids {
-		resolution, ok := r.Resolve(id)
-		if !ok {
-			continue
-		}
-		model := resolution.Model
-		row := PickerRow{Model: id, Label: model.DisplayName, Description: model.Description, BehavesAs: model.BehavesAs}
-		if effort := resolution.Effort; effort != "" {
-			row.Label += " · " + effort
-			row.Description = strings.TrimSuffix(row.Description, ".") + ". Reasoning effort: " + effort + "."
-		}
-		rows = append(rows, row)
+	rows := make([]PickerRow, 0, len(r.ordered))
+	for _, model := range r.ordered {
+		rows = append(rows, PickerRow{Model: model.ID, Label: model.DisplayName, Description: model.Description, BehavesAs: model.BehavesAs})
 	}
 	return rows
 }

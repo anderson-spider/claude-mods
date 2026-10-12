@@ -4,13 +4,12 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
-
-	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/jsontest"
 )
 
 // jwt builds an unsigned JWT carrying the given claims.
@@ -27,289 +26,133 @@ func accessToken(expiresIn time.Duration, account, plan string) string {
 		time.Now().Add(expiresIn).Unix(), account, plan))
 }
 
-// writeCodexCLIAuth writes a ~/.codex/auth.json in the Codex CLI's layout and
-// returns its path.
-func writeCodexCLIAuth(t *testing.T, dir string, access, refresh string) string {
-	t.Helper()
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	path := filepath.Join(dir, "auth.json")
-	body := fmt.Sprintf(`{
-  "auth_mode": "chatgpt",
-  "OPENAI_API_KEY": null,
-  "tokens": {
-    "id_token": %q,
-    "access_token": %q,
-    "refresh_token": %q,
-    "account_id": "acct_cli"
-  },
-  "last_refresh": "2026-08-29T01:17:11.660495951Z"
-}`, jwt(`{"email":"cli@example.com"}`), access, refresh)
-	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
-		t.Fatalf("write auth.json: %v", err)
-	}
-	return path
-}
-
-func TestCodexCLIHomeHonoursEnvironment(t *testing.T) {
-	t.Setenv("CODEX_HOME", "/tmp/codex-home-test")
-	if got := CodexCLIHome(); got != "/tmp/codex-home-test" {
-		t.Fatalf("CodexCLIHome() = %q", got)
-	}
-	if got := CodexCLIAuthPath(); got != "/tmp/codex-home-test/auth.json" {
-		t.Fatalf("CodexCLIAuthPath() = %q", got)
-	}
-}
-
-func TestDecodeCodexCLIAuth(t *testing.T) {
-	dir := t.TempDir()
-	path := writeCodexCLIAuth(t, dir, accessToken(48*time.Hour, "acct_from_token", "pro"), "rt-cli")
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read: %v", err)
-	}
-	token, err := decodeCredentials(data, formatCodexCLI)
-	if err != nil {
-		t.Fatalf("decodeCredentials: %v", err)
-	}
-
-	if token.RefreshToken != "rt-cli" {
-		t.Fatalf("refresh token = %q", token.RefreshToken)
-	}
-	// account_id is recorded in the file itself and wins over the claim.
-	if token.AccountID != "acct_cli" {
-		t.Fatalf("account id = %q, want the value from the file", token.AccountID)
-	}
-	if token.Email != "cli@example.com" {
-		t.Fatalf("email = %q, want it read from the ID token", token.Email)
-	}
-	if token.PlanType != "pro" {
-		t.Fatalf("plan = %q, want it read from the access token", token.PlanType)
-	}
-	// The file records no expiry, so it comes from the access token's exp.
-	if token.ExpiresAt.IsZero() {
-		t.Fatal("expiry was not derived from the access token")
-	}
-	if remaining := time.Until(token.ExpiresAt); remaining < 47*time.Hour {
-		t.Fatalf("expiry is %v away, want about 48h", remaining)
-	}
-	if token.Expired(refreshLead) {
-		t.Fatal("a token valid for two days must not be treated as expired")
-	}
-}
-
-func TestDecodeCodexCLIRejectsApiKeyMode(t *testing.T) {
-	body := `{"auth_mode":"apikey","OPENAI_API_KEY":"sk-test","tokens":{"access_token":"at","refresh_token":"rt"}}`
-	if _, err := decodeCredentials([]byte(body), formatCodexCLI); err == nil {
-		t.Fatal("an API-key login cannot drive the subscription endpoint and must be rejected")
-	}
-}
-
-func TestDecodeCodexCLIRejectsMalformedFile(t *testing.T) {
-	if _, err := decodeCredentials([]byte(`{oops`), formatCodexCLI); err == nil {
-		t.Fatal("invalid JSON must be rejected")
-	}
-	if _, err := decodeCredentials([]byte(`{"auth_mode":"chatgpt"}`), formatCodexCLI); err == nil {
-		t.Fatal("a file with no tokens object must be rejected")
-	}
-}
-
-func TestDetectFormat(t *testing.T) {
-	if got := detectFormat([]byte(`{"tokens":{"access_token":"at"}}`)); got != formatCodexCLI {
-		t.Fatalf("detectFormat on a CLI file = %v", got)
-	}
-	if got := detectFormat([]byte(`{"access_token":"at"}`)); got != formatNative {
-		t.Fatalf("detectFormat on a native file = %v", got)
-	}
-}
-
-func TestStoreFallsBackToCodexCLILogin(t *testing.T) {
-	codexHome := filepath.Join(t.TempDir(), ".codex")
-	writeCodexCLIAuth(t, codexHome, accessToken(48*time.Hour, "acct_x", "plus"), "rt-cli")
-	t.Setenv("CODEX_HOME", codexHome)
-
-	// This proxy has no credentials of its own.
-	store := NewStore(nil, StoreOptions{Dir: t.TempDir(), UseCodexCLI: true})
-
-	if !store.Authenticated() {
-		t.Fatal("an existing Codex CLI login must be usable as is")
-	}
-	access, account, err := store.Access(context.Background())
-	if err != nil {
-		t.Fatalf("Access: %v", err)
-	}
-	if access == "" {
-		t.Fatal("no access token was returned")
-	}
-	if account != "acct_cli" {
-		t.Fatalf("account id = %q", account)
-	}
-	if store.Path() != filepath.Join(codexHome, "auth.json") {
-		t.Fatalf("active file = %q, want the Codex CLI file", store.Path())
-	}
-}
-
-func TestStoreIgnoresCodexCLIWhenDisabled(t *testing.T) {
-	codexHome := filepath.Join(t.TempDir(), ".codex")
-	writeCodexCLIAuth(t, codexHome, accessToken(48*time.Hour, "acct_x", "plus"), "rt-cli")
-	t.Setenv("CODEX_HOME", codexHome)
-
-	store := NewStore(nil, StoreOptions{Dir: t.TempDir(), UseCodexCLI: false})
-	if store.Authenticated() {
-		t.Fatal("the Codex CLI file must not be read when the fallback is disabled")
-	}
-}
-
-func TestStorePrefersItsOwnCredentials(t *testing.T) {
-	codexHome := filepath.Join(t.TempDir(), ".codex")
-	writeCodexCLIAuth(t, codexHome, accessToken(48*time.Hour, "acct_cli", "plus"), "rt-cli")
-	t.Setenv("CODEX_HOME", codexHome)
-
-	dir := t.TempDir()
-	own := NewStore(nil, StoreOptions{Dir: dir, UseCodexCLI: true})
-	if err := own.Save(&Token{
-		AccessToken: "own-access",
-		AccountID:   "acct_own",
-		ExpiresAt:   time.Now().Add(time.Hour),
-	}); err != nil {
-		t.Fatalf("Save: %v", err)
-	}
-
-	store := NewStore(nil, StoreOptions{Dir: dir, UseCodexCLI: true})
-	access, account, err := store.Access(context.Background())
-	if err != nil {
-		t.Fatalf("Access: %v", err)
-	}
-	if access != "own-access" || account != "acct_own" {
-		t.Fatalf("used %q/%q, want this proxy's own credentials to win", access, account)
-	}
-}
-
-// An auth_file in the CLI's layout that is not the CLI's own file is this
-// proxy's to refresh, and keeps that layout and its foreign fields.
-func TestRefreshWritesBackToAnExplicitFileInTheCLILayout(t *testing.T) {
-	t.Setenv("CODEX_HOME", filepath.Join(t.TempDir(), ".codex"))
-	path := writeCodexCLIAuth(t, t.TempDir(), accessToken(-time.Hour, "acct_cli", "plus"), "rt-old")
-
-	newAccess := accessToken(48*time.Hour, "acct_cli", "plus")
-	client, _ := tokenEndpoint(t, fmt.Sprintf(`{"access_token":%q,"refresh_token":"rt-new","expires_in":3600}`, newAccess), 200)
-
-	store := NewStore(client, StoreOptions{Dir: t.TempDir(), ExplicitPath: path})
-	access, _, err := store.Access(context.Background())
-	if err != nil {
-		t.Fatalf("Access: %v", err)
-	}
-	if access != newAccess {
-		t.Fatal("the expired token was not refreshed")
-	}
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read auth.json: %v", err)
-	}
-	updated := jsontest.ParseBytes(data)
-
-	// The refreshed credentials must land in the file's own layout.
-	if got := updated.Get("tokens.access_token").String(); got != newAccess {
-		t.Fatalf("tokens.access_token was not updated: %s", data)
-	}
-	if got := updated.Get("tokens.refresh_token").String(); got != "rt-new" {
-		t.Fatalf("tokens.refresh_token = %q", got)
-	}
-	// Fields this proxy does not own must survive untouched.
-	if got := updated.Get("auth_mode").String(); got != "chatgpt" {
-		t.Fatalf("auth_mode = %q, want it preserved", got)
-	}
-	if !updated.Get("OPENAI_API_KEY").Exists() {
-		t.Fatalf("OPENAI_API_KEY was dropped: %s", data)
-	}
-	if got := updated.Get("last_refresh").String(); got == "2026-08-29T01:17:11.660495951Z" {
-		t.Fatal("last_refresh was not advanced")
-	}
-	// The rewritten file must still be parseable as a CLI credential file.
-	if _, err := decodeCredentials(data, formatCodexCLI); err != nil {
-		t.Fatalf("the rewritten file no longer decodes: %v", err)
-	}
-}
-
 func TestStoreNoticesAnExternalUpdate(t *testing.T) {
-	codexHome := filepath.Join(t.TempDir(), ".codex")
-	writeCodexCLIAuth(t, codexHome, accessToken(48*time.Hour, "acct_cli", "plus"), "rt-1")
-	t.Setenv("CODEX_HOME", codexHome)
-
-	store := NewStore(nil, StoreOptions{Dir: t.TempDir(), UseCodexCLI: true})
+	dir := t.TempDir()
+	store := NewStore(nil, StoreOptions{Dir: dir})
+	if err := store.Save(&Token{AccessToken: "first"}); err != nil {
+		t.Fatal(err)
+	}
 	first, _, err := store.Access(context.Background())
 	if err != nil {
-		t.Fatalf("Access: %v", err)
+		t.Fatal(err)
 	}
-
-	// The Codex CLI refreshes its own token behind our back; the cached copy
-	// must not be used, because its refresh token may already be rotated.
-	time.Sleep(10 * time.Millisecond)
-	replacement := accessToken(72*time.Hour, "acct_cli", "plus")
-	writeCodexCLIAuth(t, codexHome, replacement, "rt-2")
-
+	writeNative(t, store.NativePath(), Token{AccessToken: "replacement"}, 0o600)
 	second, _, err := store.Access(context.Background())
-	if err != nil {
-		t.Fatalf("Access after external update: %v", err)
-	}
-	if second == first {
-		t.Fatal("the store kept using a stale cached token after the file changed")
-	}
-	if second != replacement {
-		t.Fatalf("access token = %q, want the one now on disk", second)
+	if err != nil || second == first || second != "replacement" {
+		t.Fatalf("Access = %q, %v", second, err)
 	}
 }
 
-func TestExplicitAuthFileDetectsEitherLayout(t *testing.T) {
-	codexHome := t.TempDir()
-	path := writeCodexCLIAuth(t, codexHome, accessToken(48*time.Hour, "acct_cli", "plus"), "rt")
-
-	store := NewStore(nil, StoreOptions{ExplicitPath: path})
-	if sources := store.Sources(); len(sources) != 1 || sources[0] != path {
-		t.Fatalf("sources = %v, want only the configured file", sources)
-	}
-	token, err := store.Peek()
-	if err != nil {
-		t.Fatalf("Peek: %v", err)
-	}
-	if token.AccountID != "acct_cli" {
-		t.Fatalf("account id = %q", token.AccountID)
-	}
-
-	// A native file at an explicit path must work too.
-	nativePath := filepath.Join(t.TempDir(), "creds.json")
-	data, _ := json.Marshal(Token{AccessToken: "native", ExpiresAt: time.Now().Add(time.Hour)})
-	if err := os.WriteFile(nativePath, data, 0o600); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-	nativeStore := NewStore(nil, StoreOptions{ExplicitPath: nativePath})
-	if token, err := nativeStore.Peek(); err != nil {
-		t.Fatalf("Peek: %v", err)
-	} else if token.AccessToken != "native" {
-		t.Fatalf("access token = %q", token.AccessToken)
+func TestCredentialSymlinkIsRefusedForEveryOperation(t *testing.T) {
+	for _, dangling := range []bool{false, true} {
+		t.Run(fmt.Sprint(dangling), func(t *testing.T) {
+			fake, client := newOAuthServer(t, 0)
+			dir, targetDir := t.TempDir(), t.TempDir()
+			target := filepath.Join(targetDir, "credential.json")
+			if !dangling {
+				writeNative(t, target, Token{AccessToken: "expired", RefreshToken: "secret", ExpiresAt: time.Now().Add(-time.Hour)}, 0o600)
+			}
+			before, _ := os.ReadFile(target)
+			link := filepath.Join(dir, nativeFileName)
+			if err := os.Symlink(target, link); err != nil {
+				t.Fatal(err)
+			}
+			store := NewStore(client, StoreOptions{Dir: dir})
+			if err := store.Check(); err == nil {
+				t.Fatal("Check followed a link")
+			}
+			if _, err := store.Peek(); err == nil {
+				t.Fatal("Peek read a link")
+			}
+			if store.Authenticated() {
+				t.Fatal("linked credential advertised")
+			}
+			if _, _, err := store.Held(); err == nil {
+				t.Fatal("Held read a link")
+			}
+			if _, _, err := store.Access(context.Background()); err == nil {
+				t.Fatal("Access refreshed a link")
+			}
+			if err := store.Save(&Token{AccessToken: "replacement"}); err == nil {
+				t.Fatal("Save overwrote a link")
+			}
+			if _, err := store.Remove(); err == nil {
+				t.Fatal("Remove deleted a link")
+			}
+			after, err := os.ReadFile(target)
+			if dangling && !os.IsNotExist(err) {
+				t.Fatalf("dangling target created: %v", err)
+			}
+			if string(before) != string(after) {
+				t.Fatal("target changed")
+			}
+			if info, err := os.Lstat(link); err != nil || info.Mode()&os.ModeSymlink == 0 {
+				t.Fatal("credential link removed")
+			}
+			if fake.calls.Load() != 0 {
+				t.Fatal("linked refresh token sent")
+			}
+		})
 	}
 }
 
-func TestSaveKeepsAnExplicitCodexCLIFileInItsOwnLayout(t *testing.T) {
-	codexHome := t.TempDir()
-	path := writeCodexCLIAuth(t, codexHome, accessToken(48*time.Hour, "acct_cli", "plus"), "rt")
-
-	store := NewStore(nil, StoreOptions{ExplicitPath: path})
-	if err := store.Save(&Token{AccessToken: "brand-new", RefreshToken: "rt2", AccountID: "acct_new"}); err != nil {
-		t.Fatalf("Save: %v", err)
+func TestCredentialLinkReplacingCachedFileIsRefused(t *testing.T) {
+	store := NewStore(nil, StoreOptions{Dir: t.TempDir()})
+	if err := store.Save(&Token{AccessToken: "held"}); err != nil {
+		t.Fatal(err)
 	}
+	target := filepath.Join(t.TempDir(), "other.json")
+	writeNative(t, target, Token{AccessToken: "other"}, 0o600)
+	if err := os.Remove(store.NativePath()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, store.NativePath()); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.Access(context.Background()); err == nil {
+		t.Fatal("cache hid credential link")
+	}
+}
 
-	data, err := os.ReadFile(path)
+func TestNativeCredentialClaimsAndSerialization(t *testing.T) {
+	access := accessToken(2*time.Hour, "native-account", "plus")
+	id := jwt(`{"email":"user@example.test"}`)
+	data, err := json.Marshal(Token{AccessToken: access, IDToken: id, RefreshToken: "native-refresh"})
 	if err != nil {
-		t.Fatalf("read: %v", err)
+		t.Fatal(err)
 	}
-	if got := jsontest.GetBytes(data, "tokens.access_token").String(); got != "brand-new" {
-		t.Fatalf("the file was not written in the Codex CLI layout: %s", data)
+	token, err := decodeNative(data)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got := jsontest.GetBytes(data, "auth_mode").String(); got != "chatgpt" {
-		t.Fatalf("auth_mode = %q, want it preserved", got)
+	if token.AccountID != "native-account" || token.PlanType != "plus" || token.Email != "user@example.test" || token.Type != tokenType || !token.ExpiresAt.After(time.Now()) {
+		t.Fatalf("native claims = %+v", token)
+	}
+	store := NewStore(nil, StoreOptions{Dir: t.TempDir()})
+	if err := store.Save(token); err != nil {
+		t.Fatal(err)
+	}
+	want, err := json.MarshalIndent(token, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(store.NativePath())
+	if err != nil || string(got) != string(append(want, '\n')) {
+		t.Fatalf("native serialization changed: %v", err)
+	}
+}
+
+func TestNativeCredentialFileDoesNotDecodeCLILayout(t *testing.T) {
+	fake, client := newOAuthServer(t, 0)
+	store := NewStore(client, StoreOptions{Dir: t.TempDir()})
+	body := `{"auth_mode":"chatgpt","tokens":{"access_token":"cli-access","refresh_token":"cli-refresh"}}`
+	if err := os.WriteFile(store.NativePath(), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.Access(context.Background()); !errors.Is(err, ErrNotAuthenticated) {
+		t.Fatalf("CLI layout used: %v", err)
+	}
+	if fake.calls.Load() != 0 {
+		t.Fatal("CLI refresh token sent")
 	}
 }

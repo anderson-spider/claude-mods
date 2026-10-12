@@ -91,24 +91,8 @@ func loginEnv(t *testing.T, extra map[string]any) (*env, string) {
 	t.Helper()
 	port := freeAddr(t)
 	port = port[strings.LastIndex(port, ":")+1:]
-	e := newEnv(t, opts{noStart: true, codexCfg: mergeMaps(map[string]any{"callback_port": mustAtoi(t, port)}, extra)})
+	e := newEnv(t, opts{noStart: true, codexCfg: extra, extraEnv: []string{"CCMPROXY_CONTRACT_CALLBACK_PORT=" + port}})
 	return e, port
-}
-
-func mergeMaps(a, b map[string]any) map[string]any {
-	for k, v := range b {
-		a[k] = v
-	}
-	return a
-}
-
-func mustAtoi(t *testing.T, s string) int {
-	t.Helper()
-	n := 0
-	for _, c := range s {
-		n = n*10 + int(c-'0')
-	}
-	return n
 }
 
 func TestLoginNoBrowser(t *testing.T) {
@@ -241,8 +225,7 @@ func TestLogoutRemovesOnlyTheProxysOwnLogin(t *testing.T) {
 	cli, data, mtime := writeCLILogin(t, e, accessToken("cli", time.Now().Add(time.Hour)))
 
 	out, code := runCLI(t, e.home, e.environ(), "logout")
-	if code != 0 || !strings.Contains(out.stdout, "Removed ") || !strings.Contains(out.stdout, "codex.json") ||
-		!strings.Contains(out.stdout, "is untouched and will still be used.") {
+	if code != 0 || !strings.Contains(out.stdout, "Removed ") || !strings.Contains(out.stdout, "codex.json") {
 		t.Fatalf("exit %d, stdout %q, stderr %q", code, out.stdout, out.stderr)
 	}
 	if _, err := os.Stat(own); err == nil {
@@ -258,5 +241,72 @@ func TestLogoutRemovesOnlyTheProxysOwnLogin(t *testing.T) {
 
 	if out, code := runCLI(t, e.home, e.environ(), "logout", "other"); code != 1 || !strings.Contains(out.stderr, "only `codex` is supported") {
 		t.Fatalf("other provider: exit %d %q", code, out.stderr)
+	}
+}
+
+func TestLoginSaveWaitsForTheCredentialLock(t *testing.T) {
+	e, port := loginEnv(t, nil)
+	e.writeLogin(login{access: "old-login"})
+	release := hold(t, filepath.Join(e.authDir, "codex.json.lock"))
+	defer release()
+	e.oauth.set(refreshing(accessToken("new-login", time.Now().Add(time.Hour)), "new-refresh", false))
+	l := startLogin(t, e)
+	callbackGet(t, port, http.MethodGet, "?state="+l.url.Query().Get("state")+"&code=abc")
+	waitUntil(t, "the login exchange", 5*time.Second, func() bool { return e.oauth.count() == 1 })
+	select {
+	case <-l.done:
+		t.Fatalf("login completed while credentials locked: %v", l.err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if readLogin(t, filepath.Join(e.authDir, "codex.json"))["access_token"] != "old-login" {
+		t.Fatal("login save skipped the lock")
+	}
+	release()
+	if err := l.wait(t); err != nil {
+		t.Fatalf("login: %v %s", err, l.stderr.String())
+	}
+	if readLogin(t, filepath.Join(e.authDir, "codex.json"))["refresh_token"] != "new-refresh" {
+		t.Fatal("new login not saved")
+	}
+	if isHeld(t, filepath.Join(e.authDir, "codex.json.lock")) {
+		t.Fatal("login kept the lock")
+	}
+}
+
+func TestLogoutWaitsForTheCredentialLock(t *testing.T) {
+	e := newEnv(t, opts{noStart: true})
+	path := e.writeLogin(login{})
+	release := hold(t, filepath.Join(e.authDir, "codex.json.lock"))
+	defer release()
+	cmd := exec.Command(binPath, "logout", "codex")
+	cmd.Env = e.environ()
+	stderr := &syncBuf{}
+	cmd.Stderr = stderr
+	must(t, cmd.Start())
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	t.Cleanup(func() { _ = cmd.Process.Kill() })
+	select {
+	case err := <-done:
+		t.Fatalf("logout completed while locked: %v %s", err, stderr.String())
+	case <-time.After(150 * time.Millisecond):
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatal("logout removed a locked login")
+	}
+	release()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("logout did not finish")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatal("logout did not remove login")
+	}
+	if isHeld(t, filepath.Join(e.authDir, "codex.json.lock")) {
+		t.Fatal("logout kept the lock")
 	}
 }

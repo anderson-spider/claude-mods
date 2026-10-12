@@ -37,7 +37,7 @@ internal/config    schema, defaults, refusals, file mode
 internal/proxy     the loopback listener and its http.Server settings
 internal/router    guard, routing, passthrough, status, Codex path
 internal/translate Anthropic Messages <-> Responses
-internal/codex     login, store and locks, Responses client, catalog, rate-limit windows
+internal/codex     login, store and lock, Responses client, catalog, rate-limit windows
 internal/netx      the one outbound transport
 internal/httplog   request logging
 internal/logx      leveled logger
@@ -105,7 +105,7 @@ The catalog mirrors `codex debug models` (visibility `list`) for a ChatGPT accou
 | `gpt-5.6-luna` | GPT-5.6 Luna | 272k | low to max | medium | `claude-haiku-4-5` |
 | `gpt-daybreak-blue-latest` | Daybreak Blue | 272k | low to ultra | low | `claude-opus-5` |
 
-All take text and images. `gpt-daybreak-blue-latest` is for accounts in the Daybreak Blue access program, so it is not advertised or routed by default: list it in `codex.models` to use it (that list then restricts the catalog to the ids it names).
+All take text and images. `gpt-daybreak-blue-latest` is for accounts in the Daybreak Blue access program, so it is not advertised or routed by default: the source constant `OfferDaybreakBlue` is `false`. The listed catalog is fixed; configuration cannot enable this model or restrict the list.
 
 ## Model names and effort
 
@@ -117,23 +117,15 @@ All take text and images. `gpt-daybreak-blue-latest` is for accounts in the Dayb
 | `codex/gpt-6-luna-high` | with a namespace prefix |
 | `gpt-6-luna[1m]` | Claude Code's context-window suffix, ignored |
 
-Reasoning effort is Claude Code's own control: `/effort` and `--effort` send `output_config.effort`, which the proxy maps onto the Codex `reasoning.effort`. Precedence: a name that pins the effort, then `output_config.effort`, then `thinking.budget_tokens`, then the model's default. The value is clamped to the model's levels (`ultra` on `gpt-6-luna` becomes `max`; below the lowest becomes the lowest; unknown becomes the default). The per-effort ids are not advertised unless `codex.effort_variants` is `true`.
+Reasoning effort is Claude Code's own control: `/effort` and `--effort` send `output_config.effort`, which the proxy maps onto the Codex `reasoning.effort`. Precedence: a name that pins the effort, then `output_config.effort`, then `thinking.budget_tokens`, then the model's default. The value is clamped to the model's levels (`ultra` on `gpt-6-luna` becomes `max`; below the lowest becomes the lowest; unknown becomes the default). Only bare model ids are advertised; effort suffixes are still accepted on requests.
 
 ## Credentials
 
-Codex credentials are looked for in this order; the first file that exists wins:
+The only credential file is `<auth_dir>/codex.json` (default `~/.config/ccmproxy/auth/codex.json`), in the native layout written by `ccmproxy login codex`. Credential-file symlinks are refused before read, refresh, save and logout, including dangling links; reads use `O_NOFOLLOW`. Directory symlinks are allowed: their canonical parent directory determines both the write destination and the single `<canonical auth_dir>/codex.json.lock`.
 
-| Order | File | Written by |
-| --- | --- | --- |
-| 1 | `<auth_dir>/codex.json` (default `~/.config/ccmproxy/auth`) | `ccmproxy login codex` |
-| 2 | `~/.codex/auth.json` (`CODEX_HOME` honoured), read-only | the Codex CLI |
+The token is refreshed within five minutes of expiry and written atomically (temp file, sync, mode `600`, rename; `auth_dir` kept at `700`). Login, refresh and logout hold the same exclusive `flock`, released on every path; waiting is bounded by 45 seconds and cancellation. Refresh re-reads the credential under the lock, so processes reaching one directory through different spellings spend the refresh token once. A rejected refresh is latched until the file or refresh token changes or a new login is saved: a still-valid access token is served, otherwise requests report an expired login (`403`). Status never starts or waits on a refresh.
 
-The second is consulted only when `codex.use_codex_cli_auth` is `true` (default `false`). `codex.auth_file`, when set, replaces both and must not be the Codex CLI's file: one that resolves to it (directly, by symlink or `..`, or in another case on a case-insensitive volume) is refused.
-
-**The Codex CLI's file is read-only for the proxy**: never refreshed, written or removed. OpenAI rotates refresh tokens, so a refresh here would sign the Codex CLI out. A borrowed login is used while its access token is valid; once expired, requests fail with a `403` asking for `codex login` or `ccmproxy login codex`. A changed file is re-read, so a token the CLI renewed is picked up at once.
-
-The proxy's own file is refreshed within five minutes of expiry and written atomically (temp file, sync, mode `600`, rename; `auth_dir` kept at `700`). A refresh and a login hold two exclusive `flock`s, always in this order and released in reverse on every path: the legacy `<auth_dir>/codex.lock`, which earlier releases took, so an older binary on the same file is kept out too; then `<credential file>.lock`, beside the file actually written (symlinks resolved; `<auth_dir>/codex.json.lock` by default, next to `codex.auth_file` when set). When the two are one file it is taken once. The file is re-read under the locks, so two proxy processes on one file never spend the same refresh token, whatever their `auth_dir` or the symlink they reach it by. A rejected refresh is reported as an expired login (`403`). `login codex` always writes the proxy's own file; `logout codex` removes only that, and refuses a file that is (or links to) the CLI's. During `login codex` the loopback callback answers a non-`GET` with `405` and a missing or wrong `state` with `400`; neither ends the sign-in.
-
+`logout codex` removes only the native credential file. During `login codex` the loopback callback answers a non-`GET` with `405` and a missing or wrong `state` with `400`; neither ends the sign-in. The callback port is fixed at 1455.
 ## Commands
 
 ```
@@ -152,7 +144,7 @@ ccmproxy --help                   the usage (also -help and -h)
 
 ## Configuration
 
-`~/.config/ccmproxy/config.json`; override with `--config`, or relocate the directory with `CCMPROXY_HOME` / `XDG_CONFIG_HOME`. A leading `~` is expanded in `auth_dir`, `codex.auth_file` and `--config`. Every field is optional except the two secrets, which `config init` generates. The file holds the secret, so it is written `600` in a `700` directory and loading refuses a file others can access.
+`~/.config/ccmproxy/config.json`; override with `--config`, or relocate the directory with `CCMPROXY_HOME` / `XDG_CONFIG_HOME`. A leading `~` is expanded in `auth_dir` and `--config`. Every field is optional except the two secrets, which `config init` generates. The file holds the secret, so it is written `600` in a `700` directory and loading refuses a file others can access.
 
 ```json
 {
@@ -163,15 +155,7 @@ ccmproxy --help                   the usage (also -help and -h)
   "auth_dir": "~/.config/ccmproxy/auth",
   "log_level": "info",
   "codex": {
-    "base_url": "https://chatgpt.com/backend-api/codex",
-    "user_agent": "codex-tui/...",
-    "originator": "codex-tui",
-    "models": [],
-    "effort_variants": false,
-    "model_prefix": "",
-    "callback_port": 1455,
-    "auth_file": "",
-    "use_codex_cli_auth": false
+    "base_url": "https://chatgpt.com/backend-api/codex"
   }
 }
 ```
@@ -182,7 +166,9 @@ ccmproxy --help                   the usage (also -help and -h)
 - `session_salt`: keys the HMAC of Claude Code's `metadata.user_id` that becomes the Codex `Session_id`.
 - `codex.base_url`: must be `https://`; the ChatGPT access token is sent to it.
 
-A key that matches a known key only in another case is refused, naming the known key; `config init` refuses it too. Keys of earlier versions (`listen_proxy`, `listen_tls`, `intercept_hosts`, `proxy_username`, `proxy_password`, `ca_dir`, `dns`) are refused by name.
+Loading uses ordinary Go JSON decoding: unknown keys are ignored uniformly, known keys match case-insensitively and wrong types for known fields fail. Effective listener, upstream, URL and secret validation still applies. `config init` preserves unknown members while adding missing secrets.
+
+The backend's `User-Agent` uses the fixed current Codex TUI string, `Originator` is `codex-tui`, and the OAuth callback port is 1455. Model selection is fixed, model prefixes are not advertised and effort-variant rows are disabled. Obsolete keys cannot override these constants or select another credential file.
 
 ## What the translation covers
 
@@ -209,7 +195,7 @@ go test -race ./...
 go test -race -tags contract ./...    # adds the contract suite in contract/
 ```
 
-No network access. The contract suite builds the binary with `-tags contract` and runs it against local fakes of Anthropic, Codex and the token endpoint; see [contract/README.md](contract/README.md). A seam exists only in the `contract` build, and each package with one has a default-build test that checks it does nothing there. The default binary holds no `CCMPROXY_CONTRACT` string. They cover the configuration (loopback table, pinned URLs, removed keys, file modes, `config init`), the guard and the routes, byte-for-byte pass-through, the streaming translation, OAuth and the credential store (the Codex CLI's file never written, atomic `600` writes, one refresh spent once under the lock), effort handling, the catalog and compressed bodies.
+No network access. The contract suite builds the binary with `-tags contract` and runs it against local fakes of Anthropic, Codex and the token endpoint; see [contract/README.md](contract/README.md). A seam exists only in the `contract` build, and each package with one has a default-build test that checks it does nothing there. The default binary holds no `CCMPROXY_CONTRACT` string. They cover the configuration (loopback table, pinned URLs, uniformly ignored unknown keys, file modes, `config init`), the guard and the routes, byte-for-byte pass-through, the streaming translation, OAuth and the credential store (credential-link refusal, atomic `600` writes, login/refresh/logout contention and one refresh spent once under the canonical lock), effort handling, the catalog and compressed bodies.
 
 ## Security notes
 

@@ -299,8 +299,7 @@ func TestCLIConfigInitCreatesTheFile(t *testing.T) {
 		t.Fatalf("upstream = %v", cfg["upstream"])
 	}
 	cdx := cfg["codex"].(map[string]any)
-	if cdx["base_url"] != "https://chatgpt.com/backend-api/codex" || cdx["callback_port"].(float64) != 1455 ||
-		cdx["use_codex_cli_auth"] != false || cdx["effort_variants"] != false {
+	if cdx["base_url"] != "https://chatgpt.com/backend-api/codex" || len(cdx) != 1 {
 		t.Fatalf("codex defaults = %v", cdx)
 	}
 	// The file it wrote is a working config.
@@ -371,23 +370,6 @@ func TestCLIConfigInitKeepsWhatIsThere(t *testing.T) {
 	out, code = runCLI(t, home, nil, "config", "init")
 	if code != 0 || !strings.Contains(out.stdout, "already had every key") || mode(t, path) != 0o600 {
 		t.Fatalf("mode only: exit %d %q mode %o", code, out.stdout, mode(t, path))
-	}
-}
-
-func TestCLIRefusesRemovedKeysByName(t *testing.T) {
-	for _, key := range []string{"listen_proxy", "listen_tls", "intercept_hosts", "proxy_username", "proxy_password", "ca_dir", "dns"} {
-		for _, args := range [][]string{{"config", "init"}, {"env"}, {"models", "--json"}, {"status"}, {"serve"}} {
-			home := cliHome(t, map[string]any{key: "x"})
-			before, _ := os.ReadFile(filepath.Join(home, "config.json"))
-			out, code := runCLI(t, home, nil, args...)
-			if code != 1 || !strings.Contains(out.stderr, key+":") || !strings.Contains(out.stderr, "no longer supports") {
-				t.Fatalf("%s %v: exit %d, stderr %q", key, args, code, out.stderr)
-			}
-			after, _ := os.ReadFile(filepath.Join(home, "config.json"))
-			if !bytes.Equal(before, after) {
-				t.Fatalf("%s %v rewrote the config", key, args)
-			}
-		}
 	}
 }
 

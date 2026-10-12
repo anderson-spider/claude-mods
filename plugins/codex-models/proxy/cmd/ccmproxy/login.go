@@ -38,9 +38,9 @@ func runLogin(args []string) error {
 
 	out := os.Stdout
 	announce := func(authorizeURL string) {
-		announceLogin(out, authorizeURL, codex.RedirectURI(cfg.Codex.CallbackPort), noBrowser)
+		announceLogin(out, authorizeURL, codex.RedirectURI(codex.CallbackPort()), noBrowser)
 	}
-	result, err := oauth.Login(ctx, cfg.Codex.CallbackPort, !noBrowser, announce)
+	result, err := oauth.Login(ctx, codex.CallbackPort(), !noBrowser, announce)
 	if err != nil {
 		return err
 	}
@@ -64,8 +64,7 @@ func announceLogin(out io.Writer, authorizeURL, redirectURI string, noBrowser bo
 	fmt.Fprintf(out, "Waiting for the callback on %s ...\n", redirectURI)
 }
 
-// runLogout removes the proxy's own credential file. It never removes the
-// Codex CLI's login, and says so when that login stays in use.
+// runLogout removes the native credential file under the exclusive lock.
 func runLogout(args []string) error {
 	args, err := providerArg(args)
 	if err != nil {
@@ -85,11 +84,6 @@ func runLogout(args []string) error {
 		return err
 	}
 	fmt.Fprintf(out, "Removed %s\n", removed)
-	if cli := codex.CodexCLIAuthPath(); cfg.Codex.UseCLIAuth && cli != "" {
-		if _, err := os.Stat(cli); err == nil {
-			fmt.Fprintf(out, "The Codex CLI login at %s is untouched and will still be used.\n", cli)
-		}
-	}
 	return nil
 }
 

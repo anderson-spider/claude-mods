@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/config"
 	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/netx"
 )
 
@@ -20,11 +21,9 @@ const maxErrorBody = 1 << 20
 // Backend calls the Codex Responses endpoint on behalf of a signed-in
 // ChatGPT account.
 type Backend struct {
-	BaseURL    string
-	UserAgent  string
-	Originator string
-	Store      *Store
-	HTTP       *http.Client
+	BaseURL string
+	Store   *Store
+	HTTP    *http.Client
 
 	// Limits holds the latest reading of each rate-limit window; nil keeps
 	// none. NewBackend sets it.
@@ -40,19 +39,17 @@ type Backend struct {
 // NewBackend wires a backend with a streaming-friendly HTTP client. There is
 // no overall request timeout because a single response can stream for
 // minutes; the caller's context bounds the call instead.
-func NewBackend(baseURL, userAgent, originator string, store *Store, transport http.RoundTripper) *Backend {
+func NewBackend(baseURL string, store *Store, transport http.RoundTripper) *Backend {
 	// Never http.DefaultTransport: it honours HTTPS_PROXY, and this
 	// transport carries the ChatGPT access token.
 	if transport == nil {
 		transport = netx.Shared()
 	}
 	return &Backend{
-		BaseURL:    strings.TrimSuffix(baseURL, "/"),
-		UserAgent:  userAgent,
-		Originator: originator,
-		Store:      store,
-		HTTP:       withoutRedirects(&http.Client{Transport: transport}),
-		Limits:     NewLimits(),
+		BaseURL: strings.TrimSuffix(baseURL, "/"),
+		Store:   store,
+		HTTP:    withoutRedirects(&http.Client{Transport: transport}),
+		Limits:  NewLimits(),
 	}
 }
 
@@ -124,10 +121,10 @@ func (b *Backend) setHeaders(h http.Header, accessToken, accountID, sessionID st
 	h.Set("Authorization", "Bearer "+accessToken)
 	h.Set("Accept", "text/event-stream")
 	h.Set("Connection", "Keep-Alive")
-	h.Set("User-Agent", b.UserAgent)
+	h.Set("User-Agent", config.UserAgent)
 	// The endpoint identifies its client by originator; requests without it
 	// are rejected.
-	h.Set("Originator", b.Originator)
+	h.Set("Originator", config.Originator)
 	if accountID != "" {
 		h.Set("Chatgpt-Account-Id", accountID)
 	}

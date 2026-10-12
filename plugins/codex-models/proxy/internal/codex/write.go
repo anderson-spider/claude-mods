@@ -1,41 +1,36 @@
 package codex
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 )
 
-// writeLocked persists token to target, keeping the fields of a Codex CLI
-// layout file this proxy does not own, and installs it as the active
-// credential (which also drops the rejected-refresh latch). The caller holds
-// the file locks.
-func (s *Store) writeLocked(token *Token, target source) error {
-	if target.path == "" {
+// writeLocked persists the native token and installs it as the active
+// credential, dropping the rejected-refresh latch. The caller holds the lock.
+func (s *Store) writeLocked(token *Token, target string) error {
+	if target == "" {
 		return fmt.Errorf("codex: no credential file to write to")
 	}
-	if target.readOnly || refersToCodexCLI(target.path) {
-		return fmt.Errorf("codex: %s is the Codex CLI's login file; this proxy never writes it", target.path)
+	if err := s.Check(); err != nil {
+		return err
 	}
 	if token.LastRefresh.IsZero() {
 		token.LastRefresh = time.Now()
 	}
 
-	var previous []byte
-	if target.format == formatCodexCLI {
-		previous, _ = os.ReadFile(target.path)
-	}
-	data, err := encodeCredentials(token, target.format, previous)
+	token.Type = tokenType
+	data, err := json.MarshalIndent(token, "", "  ")
 	if err != nil {
 		return err
 	}
-	if err := s.writeFileAtomic(target.path, data); err != nil {
+	if err := s.writeFileAtomic(target, append(data, '\n')); err != nil {
 		return err
 	}
 
-	s.token, s.active, s.stamp, s.rejected = token, target, stampOf(target.path), nil
+	s.token, s.active, s.stamp, s.rejected = token, target, stampOf(target), nil
 	s.noteLogin(true)
 	return nil
 }
@@ -43,8 +38,11 @@ func (s *Store) writeLocked(token *Token, target source) error {
 // writeFileAtomic replaces path with data at mode 0600: a temporary file in
 // the same directory, written and synced, set to 0600, then renamed over the
 // old one, so a reader never sees half a file and a looser mode does not
-// survive. A symlink is written through to its target.
+// survive. A credential-file symlink is refused.
 func (s *Store) writeFileAtomic(path string, data []byte) error {
+	if err := refuseCredentialLink(path); err != nil {
+		return err
+	}
 	path = writeTarget(path)
 	dir := filepath.Dir(path)
 	if err := s.ensureDir(dir); err != nil {
@@ -60,6 +58,10 @@ func (s *Store) writeFileAtomic(path string, data []byte) error {
 	if err := fillAndClose(tmp, data); err != nil {
 		_ = os.Remove(tmpName)
 		return failed(err)
+	}
+	if err := refuseCredentialLink(path); err != nil {
+		_ = os.Remove(tmpName)
+		return err
 	}
 	if err := os.Rename(tmpName, path); err != nil {
 		_ = os.Remove(tmpName)
@@ -89,20 +91,14 @@ func fillAndClose(file *os.File, data []byte) error {
 	return err
 }
 
-// ensureDir creates dir at 0700, refusing CODEX_HOME and anything in it
-// whatever Check was told; this proxy's own auth directory is also tightened
-// to 0700 when it already exists.
+// ensureDir creates the credential directory at 0700, tightening an existing
+// directory to the same mode.
 func (s *Store) ensureDir(dir string) error {
-	if insideCodexHome(dir) {
-		return insideHomeError("the directory", dir)
-	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("codex: create %s: %w", dir, err)
 	}
-	if own := strings.TrimSpace(s.options.Dir); own != "" && sameFile(dir, own) {
-		if err := os.Chmod(dir, 0o700); err != nil {
-			return fmt.Errorf("codex: chmod %s: %w", dir, err)
-		}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		return fmt.Errorf("codex: chmod %s: %w", dir, err)
 	}
 	return nil
 }

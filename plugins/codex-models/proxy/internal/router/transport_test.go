@@ -10,7 +10,7 @@ import (
 )
 
 func TestANilTransportIsTheDirectOne(t *testing.T) {
-	r, err := New(config.Default(), codex.NewRegistry(nil, "", false), nil, nil)
+	r, err := New(config.Default(), codex.NewRegistry(), nil, nil)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

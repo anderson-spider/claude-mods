@@ -12,10 +12,6 @@ import (
 	"time"
 )
 
-// The refresh token is single-use, so every proxy on one login (this release,
-// or an older one that takes only the legacy lock) must exclude the others.
-// The test process plays the other proxy with flock(2).
-
 func lockFile(t *testing.T, path string) *os.File {
 	t.Helper()
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
@@ -87,9 +83,8 @@ func awaitResp(t *testing.T, ch <-chan resp) resp {
 	}
 }
 
-// While another process holds the lock beside the file, the binary holds the
-// legacy lock and waits: legacy first, then the second, and no refresh yet.
-func TestRefreshTakesTheLegacyLockThenTheOneBesideTheFile(t *testing.T) {
+// A refresh waits while another process holds the credential lock.
+func TestRefreshWaitsForTheCredentialLock(t *testing.T) {
 	e := expiredEnv(t, 0)
 	// The auth directory resolves through /var -> /private/var on macOS; the
 	// locks are keyed by file, so the paths below name the same files.
@@ -100,9 +95,7 @@ func TestRefreshTakesTheLegacyLockThenTheOneBesideTheFile(t *testing.T) {
 	e.start()
 
 	done := asyncPost(e, "gpt-6-astra")
-	waitUntil(t, "the binary to hold the legacy lock codex.lock", 10*time.Second, func() bool {
-		return isHeld(t, filepath.Join(dir, "codex.lock"))
-	})
+
 	time.Sleep(300 * time.Millisecond)
 	if e.oauth.count() != 0 {
 		t.Fatal("the token endpoint was called while the lock beside the file was held")
@@ -120,36 +113,8 @@ func TestRefreshTakesTheLegacyLockThenTheOneBesideTheFile(t *testing.T) {
 		t.Fatalf("token endpoint calls = %d, want 1", e.oauth.count())
 	}
 	waitUntil(t, "the locks to be released", 5*time.Second, func() bool {
-		return !isHeld(t, filepath.Join(dir, "codex.lock")) && !isHeld(t, filepath.Join(dir, "codex.json.lock"))
+		return !isHeld(t, filepath.Join(dir, "codex.json.lock"))
 	})
-}
-
-// An older binary takes only codex.lock; this one must wait for it.
-func TestRefreshWaitsForTheLegacyLockAlone(t *testing.T) {
-	e := expiredEnv(t, 0)
-	dir, err := filepath.EvalSymlinks(e.authDir)
-	must(t, err)
-	release := hold(t, filepath.Join(dir, "codex.lock"))
-	defer release()
-	e.start()
-
-	done := asyncPost(e, "gpt-6-astra")
-	time.Sleep(400 * time.Millisecond)
-	if e.oauth.count() != 0 {
-		t.Fatal("the token endpoint was called while the legacy lock was held")
-	}
-	select {
-	case <-done:
-		t.Fatal("the request finished while the legacy lock was held")
-	default:
-	}
-	release()
-	if r := awaitResp(t, done); r.Status != 200 {
-		t.Fatalf("status = %d: %s", r.Status, r.Body)
-	}
-	if e.oauth.count() != 1 {
-		t.Fatalf("token endpoint calls = %d, want 1", e.oauth.count())
-	}
 }
 
 // A request that waited for another process's refresh re-reads the file and
@@ -163,9 +128,10 @@ func TestRefreshReReadsTheFileAfterTheLock(t *testing.T) {
 	e.start()
 
 	done := asyncPost(e, "gpt-6-astra")
-	waitUntil(t, "the binary to wait on the lock", 10*time.Second, func() bool {
-		return isHeld(t, filepath.Join(dir, "codex.lock"))
-	})
+	time.Sleep(300 * time.Millisecond)
+	if e.oauth.count() != 0 {
+		t.Fatal("refresh while the credential lock is held")
+	}
 	// The other process refreshes and writes the login while holding the lock.
 	other := accessToken("other-process", time.Now().Add(time.Hour))
 	e.writeLogin(login{access: other, refresh: "refresh-by-other"})
@@ -205,7 +171,9 @@ func TestConcurrentRequestsRefreshOnce(t *testing.T) {
 func TestTwoProxiesOnOneAuthDirRefreshOnce(t *testing.T) {
 	first := newEnv(t, opts{noStart: true, race: true})
 	first.writeLogin(login{expires: time.Now().Add(-time.Hour), refresh: "refresh-1"})
-	second := newEnv(t, opts{noStart: true, race: true, authDir: first.authDir, oauthFake: first.oauth})
+	alias := filepath.Join(t.TempDir(), "auth-alias")
+	must(t, os.Symlink(first.authDir, alias))
+	second := newEnv(t, opts{noStart: true, race: true, authDir: alias, oauthFake: first.oauth})
 
 	fresh := accessToken("new", time.Now().Add(time.Hour))
 	slow := refreshing(fresh, "refresh-2", false)

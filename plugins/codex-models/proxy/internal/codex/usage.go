@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/config"
 	"io"
 	"net/http"
 	"net/url"
@@ -106,8 +107,8 @@ func (b *Backend) fetchUsage(ctx context.Context, accessToken, accountID string)
 	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", b.UserAgent)
-	req.Header.Set("Originator", b.Originator)
+	req.Header.Set("User-Agent", config.UserAgent)
+	req.Header.Set("Originator", config.Originator)
 	if accountID != "" {
 		req.Header.Set("Chatgpt-Account-Id", accountID)
 	}
