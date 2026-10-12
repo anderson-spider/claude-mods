@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Claude Code plugin marketplace `spider-claude-mods` (`anderson-spider/claude-mods`) with six plugins, all **function hooks mods** (an early-access Claude Code API that may change between versions). The `claude-code` module (`atom`, `read`, `Register`, `claude-code/testing`) is not on npm: Claude Code writes its typings to `plugins/*/.claude-plugin/types/` when it loads a plugin (git-ignored), and each plugin's `tsconfig.json` extends them. There is no `package.json`, build or lint. IMPORTANT: load the `plugin-authoring` skill before writing or debugging a hooks module.
+Claude Code plugin marketplace `spider-claude-mods` (`anderson-spider/claude-mods`) with five plugins, all **function hooks mods** (an early-access Claude Code API that may change between versions). The `claude-code` module (`atom`, `read`, `Register`, `claude-code/testing`) is not on npm: Claude Code writes its typings to `plugins/*/.claude-plugin/types/` when it loads a plugin (git-ignored), and each plugin's `tsconfig.json` extends them. There is no `package.json`, build or lint. IMPORTANT: load the `plugin-authoring` skill before writing or debugging a hooks module.
 
 ## Layout
 
@@ -13,7 +13,6 @@ Claude Code plugin marketplace `spider-claude-mods` (`anderson-spider/claude-mod
 
 Each plugin's details live in `plugins/<name>/AGENTS.md`, loaded when Claude reads or edits a file under that directory (`.claude/rules/<name>.md` imports it; a `CLAUDE.md` at a plugin root draws a `claude plugin validate` warning).
 
-- **branch-guard**: holds a commit or push on a protected branch until the person proceeds or cancels.
 - **chatgpt**: `ask` and `image` tools driving chatgpt.com in the first browser that works.
 - **codex-computer-use**: routes native Mac app control through Codex computer use; has a `helper/` run by the ChatGPT app's `node`.
 - **codex-models**: Codex models as native Claude Code models through a local proxy; details in `plugins/codex-models/AGENTS.md`. The proxy is our own Go code under `proxy/`, with a black-box contract suite in `proxy/contract/`, and `install.sh` writes the `~/.claude/settings.json` entries the plugin cannot set itself.
