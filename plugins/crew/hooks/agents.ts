@@ -147,29 +147,6 @@ export function leadSection(jev: boolean): string {
   ].join(' ')
 }
 
-/** The tool that runs a crew role on OpenAI Codex. */
-export const CODEX_TOOL = 'mcp__crew__codex'
-
-/** True when the request's tools include the Codex tool, so the lead section may carry `codexSection`. */
-export function offersCodex(tools: readonly string[]): boolean {
-  return tools.includes(CODEX_TOOL)
-}
-
-/** The effort every Codex job runs on unless Jev raises it; apart from the Claude agents' own defaults on purpose. */
-export const CODEX_BASE_EFFORT: Effort = 'medium'
-
-/** Appended to the lead section only when Codex is offered; `jev` is whether routing is on with a valid key. */
-export function codexSection(jev: boolean): string {
-  return [
-    'Any crew role can also run on OpenAI Codex through mcp__crew__codex (agent = the role name):',
-    'use it for a second opinion or extra parallel capacity.',
-    'It runs in the background past a short wait; collect it with mcp__crew__codex_result and stop it with mcp__crew__codex_cancel.',
-    jev
-      ? `Jev sizes each Codex job's effort (${CODEX_BASE_EFFORT} or high), and Codex's work is verified like any other step.`
-      : `Codex jobs run on ${CODEX_BASE_EFFORT} effort, and Codex's work is verified like any other step.`,
-  ].join(' ')
-}
-
 // --- Native Codex models (the `nativeCodex` option) ---
 
 /** The suffix of a role's Codex twin: `crew:developer` has `crew:developer-codex`. */
@@ -212,18 +189,15 @@ export function nativeCodexSpecs(models: Readonly<Partial<Record<string, string>
 }
 
 /**
- * The lead's section for the `-codex` types, a section of its own (`leadSection` stays free of Codex). `withTool` is
- * whether `mcp__crew__codex` is offered, so the text is the same on every request that offers the same tools.
+ * The lead's section for the `-codex` types, a section of its own (`leadSection` stays free of Codex). It is the same
+ * text on every request, whatever the tools.
  */
-export function nativeCodexSection(specs: readonly Pick<Agent<string>, 'name' | 'model'>[], withTool: boolean): string {
+export function nativeCodexSection(specs: readonly Pick<Agent<string>, 'name' | 'model'>[]): string {
   return [
     `Some roles also run on OpenAI Codex models as native subagents: ${specs.map(spec => `crew:${spec.name} (${spec.model})`).join(', ')}.`,
     'They are ordinary Agent calls with the base role\'s tools and write lane, in the foreground or the background; never pass `model` to one, as it would override the Codex model.',
     'Pick one when the user asks for Codex or when a second model family should do or check the work; otherwise use the Claude role.',
     'A -codex agent counts as someone other than the implementer when a Claude agent built the change (and the reverse),',
     'and a failure goes back to the same -codex agent.',
-    withTool
-      ? 'mcp__crew__codex is different: it runs the Codex CLI with its own sandbox and tools as a job you collect, not as a subagent.'
-      : '',
-  ].filter(Boolean).join(' ')
+  ].join(' ')
 }

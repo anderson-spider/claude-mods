@@ -32,7 +32,7 @@ export type JevIo = {
 
 // --- Typed failures ---
 
-export type JevFailureReason = 'http' | 'timeout' | 'network' | 'malformed' | 'breaker' | 'busy' | 'config' | 'aborted'
+export type JevFailureReason = 'http' | 'timeout' | 'network' | 'malformed' | 'breaker' | 'busy' | 'config'
 
 export class JevFailure extends Error {
   readonly reason: JevFailureReason
@@ -112,8 +112,7 @@ export function createGate(max = MAX_CONCURRENT): Gate {
 
 export type Answers = Record<string, Record<string, unknown>>
 export type JevReply = { answers: Answers; model?: string; ms: number }
-/** `signal`: once aborted, no request is sent (checked before each attempt, the retry included) and the call fails with `aborted`. */
-export type AskFn = (questions: unknown, state: unknown, signal?: AbortSignal) => Promise<JevReply>
+export type AskFn = (questions: unknown, state: unknown) => Promise<JevReply>
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -152,7 +151,7 @@ function retryAfterMs(headers: Record<string, string> | undefined): number | und
  */
 export function classifyFailure(error: unknown): { failure: JevFailure; counts: boolean } {
   const failure = error instanceof JevFailure ? error : new JevFailure('network', 'request failed')
-  const says = failure.reason === 'aborted' || failure.reason === 'malformed' || (failure.reason === 'http' && (failure.status === 400 || failure.status === 422))
+  const says = failure.reason === 'malformed' || (failure.reason === 'http' && (failure.status === 400 || failure.status === 422))
   return { failure, counts: !says }
 }
 
@@ -164,8 +163,7 @@ export function createJev(io: JevIo, key: string, opts: JevOptions): AskFn {
   const deadlineMs = opts.deadlineMs ?? JEV_DEADLINE_MS
   const holdMs = opts.holdMs ?? SLOT_HOLD_MS
 
-  return async (questions, state, signal) => {
-    if (signal?.aborted) throw new JevFailure('aborted', 'the call was aborted')
+  return async (questions, state) => {
     if (!token) throw new JevFailure('config', 'no key')
     if (CONTROL.test(token)) throw new JevFailure('config', 'the key has whitespace or control characters')
     if (opts.gate && !opts.gate.acquire()) throw new JevFailure('busy', 'too many calls in flight')
@@ -211,7 +209,7 @@ export function createJev(io: JevIo, key: string, opts: JevOptions): AskFn {
     if (opts.gate) cancelHold = io.timer(holdMs, release)
 
     try {
-      const reply = await attempts(tracked, init, deadline, left, signal)
+      const reply = await attempts(tracked, init, deadline, left)
       opts.breaker?.success()
       return { ...reply, ms: Math.max(0, io.now() - started) }
     } catch (error) {
@@ -262,10 +260,8 @@ function retryPauseMs(out: Settled): number {
 }
 
 /** The first attempt and, while the one deadline allows, a single retry of a transient failure. */
-async function attempts(io: JevIo, init: JevInit, deadline: Promise<'timeout'>, left: () => number, signal?: AbortSignal) {
+async function attempts(io: JevIo, init: JevInit, deadline: Promise<'timeout'>, left: () => number) {
   for (let attempt = 0; ; attempt++) {
-    // Right before each request, the retry included: an Esc during the pause must not send the second one.
-    if (signal?.aborted) throw new JevFailure('aborted', 'the call was aborted')
     const out = await once(io, init, deadline)
     if (out.kind === 'timeout') throw new JevFailure('timeout', 'deadline passed')
     if (out.kind === 'response') {

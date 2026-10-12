@@ -25,7 +25,7 @@
     {
       "name": "crew",
       "source": "./plugins/crew",
-      "description": "Makes the main session a lead that delegates to six specialist subagents: code-reader and research on Haiku; designer, developer and tester on Sonnet; architect on Opus. It also shows a live dashboard of the session (Flightdeck, vendored). With the jevKey option set (a TypeSafe key), Jev may move each call's model one step (the architect stays on Opus) and raise its effort to high; that sends a redacted, truncated prompt to api.typesafe.ai. With the codex option on, the lead can run a role on OpenAI Codex through the local Codex CLI, which sends the prompt and the repository content the job reads to OpenAI. With the nativeCodex option set and a local proxy as ANTHROPIC_BASE_URL, roles also get crew:<role>-codex subagent types that run on a Codex model through that proxy, which sends what those subagents read and write to OpenAI."
+      "description": "Makes the main session a lead that delegates to six specialist subagents: code-reader and research on Haiku; designer, developer and tester on Sonnet; architect on Opus. It also shows a live dashboard of the session (Flightdeck, vendored). With the jevKey option set (a TypeSafe key), Jev may move each call's model one step (the architect stays on Opus) and raise its effort to high; that sends a redacted, truncated prompt to api.typesafe.ai. With the nativeCodex option set and a local proxy as ANTHROPIC_BASE_URL, roles also get crew:<role>-codex subagent types that run on a Codex model through that proxy, which sends what those subagents read and write to OpenAI."
     },
     {
       "name": "tailscale",

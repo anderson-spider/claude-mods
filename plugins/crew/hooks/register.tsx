@@ -1,6 +1,5 @@
-import { atom, update } from 'claude-code'
 import type { Hook, Register } from 'claude-code'
-import { CODEX_BASE_EFFORT, SPECIALISTS, codexSection, isLoopbackBase, leadSection, nativeCodexSection, nativeCodexSpecs, offersCodex } from './agents'
+import { SPECIALISTS, isLoopbackBase, leadSection, nativeCodexSection, nativeCodexSpecs } from './agents'
 import type { Agent, Effort } from './agents'
 import { createConfirmations, confirmText } from './confirm'
 import type { Confirmations } from './confirm'
@@ -8,27 +7,19 @@ import { decisionRecord, saveDecision, withRan } from './decisions'
 import type { DecisionIo } from './decisions'
 import { createEffortBook } from './effort'
 import type { BindOutcome, EffortBook, Listed } from './effort'
-import { createCodexEngine } from './codex/engine'
-import type { Answer, CodexEngine, CodexHost, CodexInput, SizeEffort } from './codex/engine'
-import { parseCodexModels } from './codex/models'
-import { CODEX_LANES } from './codex/roles'
-import type { JobSummary } from './codex/worker'
 import { registerFlightdeck } from './flightdeck/register'
 import { deniedWrite } from './guard'
 import { createBreaker, createGate, createJev, failureText } from './jev'
 import type { Breaker, Gate, JevIo } from './jev'
 import { checkKey, resolveAccess } from './key'
 import type { KeyIo, Off } from './key'
+import { parseCodexModels } from './native'
 import { JEV_MODEL } from './questions'
-import { describe, moved, noticeText, route, routable, sizeCodexJob, taggedDescription, untagged } from './routing'
-import type { CodexSizing, Moved, Routed, Target } from './routing'
+import { describe, moved, noticeText, route, routable, taggedDescription, untagged } from './routing'
+import type { Moved, Routed, Target } from './routing'
 
 /**
- * The `$` a hook receives. Every hook builds what it needs from its own, and nothing here keeps one past its hook, with
- * one exception: the Codex engine keeps the newest `codexHost($)` a crew hook handed it, because a Codex job outlives
- * the hook that started it (its poller, its card writes and its end notice run later). The typings show `$` used
- * after its hook only by example (a `process.spawn` loop), so the engine treats a failing host as gone: a poll waits
- * for the next hook's host, and a card or notice is retried on the main loop's next step.
+ * The `$` a hook receives. Every hook builds what it needs from its own; nothing here keeps one past its hook.
  */
 type Dollar = Parameters<Hook<'session.start'>>[0]
 
@@ -201,153 +192,16 @@ async function registerNative($: Dollar, native: Native) {
   }
 }
 
-// --- Codex engine (on only with the `codex` option) ---
-
-/** The Codex jobs of the session, for any reader; the job files under `.crew/codex/` are what a reload reads back. */
-const codexJobs = atom({ plugin: 'crew', key: 'codexJobs' } as const, [] as JobSummary[])
-
-const CODEX_ROLES = Object.keys(CODEX_LANES)
-
-/** The engine's host access, built from one hook's `$`; the engine keeps the newest for the jobs that outlive a hook. */
-function codexHost($: Dollar): CodexHost {
-  return {
-    run: async (argv, init) => {
-      const out = await $.process.run(argv, init)
-      return { exitCode: out.exitCode, stdout: out.stdout, stderr: out.stderr }
-    },
-    read: path => $.fs.read(path),
-    write: (path, text) => $.fs.write(path, text),
-    list: async path => (await $.fs.list(path)).map(entry => entry.name),
-    realPath: async path => (await $.fs.stat(path, { resolve: true }).catch(() => undefined))?.realPath,
-    cwd: () => $.session.cwd(),
-    sessionId: () => $.session.id(),
-    // A host process, not a clock wait: a clock wait spends the hook's budget, and the call waits up to 20 s.
-    sleep: async ms => { await $.process.run(['sleep', String(ms / 1000)], { timeoutMs: ms + 10_000 }) },
-    log: text => $.ui.log(text, { to: 'debug' }),
-    note: text => $.ui.log(text, { to: 'transcript' }),
-    // The lead reads it as a turn of its own once the session is idle; the text is only an id, a role and a status.
-    submit: text => $.prompt.submit({ text }),
-    // The dashboard's `agents` value by its literal ref: the validate scan does not follow the atom across an import.
-    writeCards: change => update($, { plugin: 'crew', key: 'agents' } as const, list => change(list ?? [])),
-    writeJobs: jobs => update($, codexJobs, () => jobs),
-  }
-}
-
-/** A custom tool's result is a string; `isError` is set only when true (the host rejects `false`). */
-function codexReply(answer: Answer): { result: string } | { result: string; isError: true } {
-  return answer.isError ? { result: answer.text, isError: true as const } : { result: answer.text }
-}
-
-const LEAD_ONLY = 'Codex jobs are started, read and stopped by the main session (the lead) only, not by a subagent.'
-
-async function registerCodexTools($: Dollar) {
-  await $.tool.register({
-    name: 'codex',
-    description:
-      'Runs a crew role on OpenAI Codex (the local Codex CLI) instead of a Claude subagent: for a second opinion or extra parallel capacity. ' +
-      'The prompt and what the job reads are sent to OpenAI. Each role runs in a Codex sandbox: read-only for code-reader, research and architect; ' +
-      'workspace-write in this repository for developer, designer and tester (refused outside it). ' +
-      "Approvals are on-request and Codex's own auto-review decides any request to leave the sandbox, so the sandbox is not a hard limit; " +
-      "the person's ~/.codex config applies too (model, MCP servers), with the write lanes' writable roots and network pinned off. " +
-      'architect and research run read-only and their final message is saved under .crew/. ' +
-      'Each job runs on medium reasoning effort; when Jev routing is on (a jevKey), Jev may raise it to high, and then the redacted prompt is sent to Jev (api.typesafe.ai) too, adding about 3 s before the job starts. ' +
-      'Waits up to 20 s and returns as soon as the job ends; past that the job goes on in the background and you get a message when it ends: ' +
-      'collect it with codex_result, stop it with codex_cancel.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        agent: { type: 'string', enum: CODEX_ROLES, description: 'The crew role to run.' },
-        prompt: { type: 'string', description: 'The task, briefed as for the crew agent.' },
-        description: { type: 'string', description: 'A few words naming the job (shown on its card and in its output file name).' },
-        cwd: { type: 'string', description: "Directory to run in; the session's by default. Write roles must stay inside the repository." },
-        background: { type: 'boolean', description: 'Return at once with the job id instead of waiting.' },
-        resume: { type: 'string', description: 'The id of an ended job to continue in its Codex session, as the same agent.' },
-      },
-      required: ['agent', 'prompt', 'description'],
-    },
-    isDeferred: false,
-  })
-  await $.tool.register({
-    name: 'codex_result',
-    description: "Reads a Codex job started with codex: its status, Codex's final answer, token usage, files changed and output file.",
-    inputSchema: { type: 'object', properties: { jobId: { type: 'string' } }, required: ['jobId'] },
-    isDeferred: true,
-  })
-  await $.tool.register({
-    name: 'codex_cancel',
-    description: 'Stops a running Codex job (SIGINT): it answers cancelling, and the job ends cancelled once Codex stops; what it already changed stays changed.',
-    inputSchema: { type: 'object', properties: { jobId: { type: 'string' } }, required: ['jobId'] },
-    isDeferred: true,
-  })
-}
-
-/** The crew's session start: the agents, then (with the option) the Codex tools and the jobs read back from disk. */
-async function startCrew(engine: CodexEngine | undefined, modelErrors: readonly string[], native: Native, $: Dollar, e: StartHook[1], next: StartHook[2]) {
+/** The crew's session start: the agents, then the `-codex` types the proxy can reach. */
+async function startCrew(native: Native, $: Dollar, e: StartHook[1], next: StartHook[2]) {
   await registerSpecialists($)
-  // Its own try: a failure here must not keep the Codex tools or the dashboard from starting.
+  // Its own try: a failure here must not keep the dashboard from starting.
   try {
     await registerNative($, native)
   } catch (error) {
     $.ui.log(`crew: nativeCodex types not registered (${error instanceof Error ? error.message : String(error)})`, { to: 'debug' })
   }
-  if (!engine) return next(e)
-  try {
-    await registerCodexTools($)
-  } catch (error) {
-    $.ui.log(`crew codex: tools not registered (${error instanceof Error ? error.message : String(error)})`, { to: 'debug' })
-  }
-  if (modelErrors.length) $.ui.log(`crew codex: codexModels ignored in part: ${modelErrors.join('; ')}`, { to: 'debug' })
-  const started = await next(e)
-  try {
-    engine.useHost(codexHost($))
-    await engine.load()
-  } catch (error) {
-    $.ui.log(`crew codex: jobs not read back (${error instanceof Error ? error.message : String(error)})`, { to: 'debug' })
-  }
-  return started
-}
-
-type CodexCall = CodexInput & { agentId?: string; jobId?: unknown }
-
-/** A Codex job's effort. Never rejects: no routing, no valid key or any failure of Jev gives the base. */
-function sizeCodexEffort($: Dollar, routing: Routing): SizeEffort {
-  const deps: CodexSizing = {
-    enabled: routing.enabled,
-    key: () => keyOf($, routing.access, routing.jevKey),
-    context: () => redactContext($, routing.access),
-    ask: key => createJev(jevIo($), key, { model: JEV_MODEL, breaker: routing.breaker, gate: routing.gate }),
-    log: line => $.ui.log(line, { to: 'debug' }),
-  }
-  return (role, description, prompt, signal, jobId) => sizeCodexJob(deps, role, description, prompt, signal, jobId)
-}
-
-async function codexStart(engine: CodexEngine, $: Dollar, routing: Routing, e: CodexCall, signal: AbortSignal) {
-  if (e.agentId) return codexReply({ text: LEAD_ONLY, isError: true })
-  const host = codexHost($)
-  engine.useHost(host)
-  return codexReply(await engine.start(e, host, signal, sizeCodexEffort($, routing)))
-}
-
-async function codexResult(engine: CodexEngine, $: Dollar, e: CodexCall) {
-  if (e.agentId) return codexReply({ text: LEAD_ONLY, isError: true })
-  engine.useHost(codexHost($))
-  return codexReply(await engine.result(e.jobId))
-}
-
-async function codexCancel(engine: CodexEngine, $: Dollar, e: CodexCall) {
-  if (e.agentId) return codexReply({ text: LEAD_ONLY, isError: true })
-  engine.useHost(codexHost($))
-  return codexReply(await engine.cancel(e.jobId))
-}
-
-/**
- * The main loop's step: a newer host for the jobs, the jobs read back if no session.start did it since the module
- * loaded (once; later steps find them loaded), and the card writes that failed after their hook returned.
- */
-async function codexStep(engine: CodexEngine, $: Dollar) {
-  engine.useHost(codexHost($))
-  await engine.load()
-  await engine.flush()
+  return next(e)
 }
 
 /** What the routing hooks share while the module lives. */
@@ -454,19 +308,9 @@ async function routeSpawn(routing: Routing, $: Dollar, e: SpawnHook[1], next: Sp
 }
 
 export const register: Register = (on, options) => {
-  // The `codex` option is the switch: off, no tool is registered, nothing runs and the lead section is unchanged.
-  const codexModels = parseCodexModels(options.codexModels)
-  // The `nativeCodex` option is the switch of the `-codex` types, parsed like `codexModels`; they register only behind the proxy.
+  // The `nativeCodex` option is the switch of the `-codex` types; they register only behind the proxy.
   const nativeModels = parseCodexModels(options.nativeCodex)
   const native: Native = { specs: nativeCodexSpecs(nativeModels.models), errors: nativeModels.errors, registered: [] }
-  const codex = options.codex === true
-    ? createCodexEngine({
-      prompts: Object.fromEntries(SPECIALISTS.map(agent => [agent.name, agent.prompt])),
-      models: codexModels.models,
-      now: wallNow,
-      random: () => Math.random(),
-    })
-    : undefined
 
   // Shared while the module lives: the rate limit is the account's, and a sick Jev is not asked again for a while.
   const routing: Routing = {
@@ -485,20 +329,18 @@ export const register: Register = (on, options) => {
   // the vendored Flightdeck registers those events too. The crew's session.start is outermost, so a Flightdeck failure
   // cannot stop the agents from registering; Flightdeck is registered before the hooks below, so it wraps the spawn, the
   // step and the write (it sees the description and model as they came, and logs the guard's refusals).
-  on('session.start', {}, ($, e, next) => startCrew(codex, codexModels.errors, native, $, e, next))
+  on('session.start', {}, ($, e, next) => startCrew(native, $, e, next))
   registerFlightdeck(on, options)
   // Only a request that offers the Agent tool gets the lead's section: the crew agents' tool lists leave it out.
-  // A teammate renders the lead's prompt too, and `bare` asks for the engine's one section alone.
+  // A teammate renders the lead's prompt too, and `bare` asks for the lead's section alone.
   on('prompt.compose', async ($, e, next) => {
     const composed = await next(e)
     if (!e.tools.includes('Agent') || e.traits.includes('teammate') || e.traits.includes('bare')) return composed
     const jev = routing.enabled && (await keyOf($, routing.access, routing.jevKey)) !== undefined
-    // The Codex sentence follows the tools offered, so the text is the same on every request of a session.
-    const text = codex && offersCodex(e.tools) ? `${leadSection(jev)} ${codexSection(jev)}` : leadSection(jev)
-    const lead = { id: 'crew:lead', text, scope: 'session' as const }
+    const lead = { id: 'crew:lead', text: leadSection(jev), scope: 'session' as const }
     // The `-codex` types get a section of their own, under the same rule and only for the twins this session registered.
     if (native.registered.length === 0) return { sections: [...composed.sections, lead] }
-    const twins = { id: 'crew:native-codex', text: nativeCodexSection(native.registered, codex !== undefined && offersCodex(e.tools)), scope: 'session' as const }
+    const twins = { id: 'crew:native-codex', text: nativeCodexSection(native.registered), scope: 'session' as const }
     return { sections: [...composed.sections, lead, twins] }
   }).catch((_, e, next) => next(e))
   on('agent.spawn', {}, ($, e, next) => {
@@ -512,9 +354,6 @@ export const register: Register = (on, options) => {
   // Runs on every request of every loop: the main loop and agents that were not routed return at once. A streaming
   // hook is written inline as an async generator: the engine reads no other form.
   on('turn.step', {}, async function* ($, e, next) {
-    // The main loop hands the Codex jobs a newer host and writes the cards that could not be written before.
-    // Not awaited: a panel write that hangs must not hold the step.
-    if (codex && !e.agentId) void codexStep(codex, $).catch(() => {})
     let effort: Effort | undefined
     if (routing.enabled && e.agentId && e.effort !== undefined) {
       effort = await routing.book.lookup(e.agentId, () => listAgents($)).catch(() => undefined)
@@ -537,14 +376,4 @@ export const register: Register = (on, options) => {
   // The main loop has no agentId and is never held; a subagent is held by its type's rule in guard.ts.
   on('tool.call', { tool: 'Write' }, guardWrite).catch(holdUnchecked)
   on('tool.call', { tool: 'Edit' }, guardWrite).catch(holdUnchecked)
-
-  // After registerFlightdeck, so the dashboard wraps them. Registered only with the option on: off, a call to these
-  // names (none is offered) fails as for any unknown tool.
-  if (codex) {
-    const failed = (error: { message?: string; kind: string }) =>
-      codexReply({ text: `crew codex failed: ${error.message ?? error.kind}`, isError: true })
-    on('tool.call', { tool: 'mcp__crew__codex' }, ($, e, next) => codexStart(codex, $, routing, e, next.signal)).catch((_$, _e, next) => failed(next.error))
-    on('tool.call', { tool: 'mcp__crew__codex_result' }, ($, e) => codexResult(codex, $, e)).catch((_$, _e, next) => failed(next.error))
-    on('tool.call', { tool: 'mcp__crew__codex_cancel' }, ($, e) => codexCancel(codex, $, e)).catch((_$, _e, next) => failed(next.error))
-  }
 }

@@ -1826,7 +1826,7 @@ test('a -codex type whose registration fails leaves the six specialists register
   expect(w.registered.map(a => a.name)).toEqual(BASES)
 })
 
-test('the parser is the Codex engine\'s: an unknown role or a bad id is skipped with one debug line, the rest registers', { options: { nativeCodex: 'developer=gpt-x, bogus=gpt-y, tester=-m, architect' } }, async ($, on) => {
+test('the parser in native.ts: an unknown role or a bad id is skipped with one debug line, the rest registers', { options: { nativeCodex: 'developer=gpt-x, bogus=gpt-y, tester=-m, architect' } }, async ($, on) => {
   const w = nativeWorld(on, 'http://127.0.0.1:41237')
   await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true } as never)
 
@@ -1850,17 +1850,7 @@ test('the -codex section follows the registration: its own section after the lea
   expect(twins?.scope).toBe('session')
   for (const name of TWINS) expect(twins?.text).toContain(`crew:${name}`)
   expect(twins?.text).toContain('gpt-6-sage')
-  expect(twins?.text).not.toContain('mcp__crew__codex')
   expect((await compose($, ['Agent', 'Read'])).sections[2]?.text).toBe(twins?.text)
-})
-
-test('the -codex section compares with mcp__crew__codex only when the Codex engine offers it', { options: { ...NATIVE.options, codex: true } }, async ($, on) => {
-  nativeWorld(on, 'http://localhost:41237')
-  on('prompt.compose', () => ({ sections: [] }))
-  await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true } as never)
-
-  expect((await compose($, ['Agent', 'mcp__crew__codex'])).sections.at(-1)?.text).toContain('mcp__crew__codex is different')
-  expect((await compose($, ['Agent'])).sections.at(-1)?.text).not.toContain('mcp__crew__codex')
 })
 
 test('no -codex section without a loopback base URL: the request gets the lead section alone', NATIVE, async ($, on) => {

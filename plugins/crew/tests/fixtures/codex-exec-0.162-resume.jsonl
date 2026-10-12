@@ -1,4 +1,0 @@
-{"type":"thread.started","thread_id":"01a12bd5-30e4-7f12-8e42-d8db931e560d"}
-{"type":"turn.started"}
-{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"Seu pedido anterior foi: “List the files in this directory” — listar os arquivos deste diretório."}}
-{"type":"turn.completed","usage":{"input_tokens":75061,"cached_input_tokens":62208,"cache_write_input_tokens":0,"output_tokens":98,"reasoning_output_tokens":0}}
