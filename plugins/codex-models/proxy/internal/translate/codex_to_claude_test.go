@@ -1,6 +1,7 @@
 package translate
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -742,10 +743,86 @@ func TestStreamErrorMessagesAreCleanedAndCapped(t *testing.T) {
 		`{"type":"error","error":{"type":"server_error","message":"a\u0000b\nc `+long+`"}}`,
 	)
 	message := gjson.Parse(frames[len(frames)-1].data).Get("error.message").String()
-	if !strings.HasPrefix(message, "a b c x") || !strings.HasSuffix(message, "…") || len([]rune(message)) > 301 {
-		t.Fatalf("message = %q", message)
+	if want := "a b c " + strings.Repeat("x", 294) + "…"; message != want {
+		t.Fatalf("message = %q, want %q", message, want)
 	}
 	if got := CleanMessage("  plain   text \r\n"); got != "plain text" {
 		t.Fatalf("CleanMessage = %q", got)
 	}
+}
+
+// cleanMessageCuts are inputs around the 300-rune cap, with and without a
+// space where the cut falls, and the exact text each one must become.
+var cleanMessageCuts = []struct {
+	name, in, want string
+}{
+	{"299 runes", strings.Repeat("a", 299), strings.Repeat("a", 299)},
+	{"300 runes", strings.Repeat("a", 300), strings.Repeat("a", 300)},
+	{"301 runes", strings.Repeat("a", 301), strings.Repeat("a", 300) + "…"},
+	{"space at 299", strings.Repeat("a", 298) + " b", strings.Repeat("a", 298) + " b"},
+	{"space at 299, then more", strings.Repeat("a", 298) + " bcd", strings.Repeat("a", 298) + " b…"},
+	{"space at 300", strings.Repeat("a", 299) + " b", strings.Repeat("a", 299) + "…"},
+	{"space at 300, then more", strings.Repeat("a", 299) + " bbb", strings.Repeat("a", 299) + "…"},
+	{"space at 301", strings.Repeat("a", 300) + " b", strings.Repeat("a", 300) + "…"},
+	{"control at 300", strings.Repeat("a", 299) + "\u001b\nb", strings.Repeat("a", 299) + "…"},
+	{"trailing space at 300", strings.Repeat("a", 299) + " ", strings.Repeat("a", 299)},
+	{"trailing space at 301", strings.Repeat("a", 300) + " \n", strings.Repeat("a", 300)},
+	{"multibyte 301 runes", strings.Repeat("é", 301), strings.Repeat("é", 300) + "…"},
+}
+
+func TestCleanMessageCutsAtTheBoundary(t *testing.T) {
+	for _, c := range cleanMessageCuts {
+		got := CleanMessage(c.in)
+		if got != c.want {
+			t.Errorf("%s: CleanMessage = %q (%d runes), want %q", c.name, got, len([]rune(got)), c.want)
+		}
+		if n := len([]rune(got)); n > 301 {
+			t.Errorf("%s: %d runes, want at most 300 and an ellipsis", c.name, n)
+		}
+		if strings.HasSuffix(got, " …") || strings.HasSuffix(got, " ") {
+			t.Errorf("%s: cut ends in a space: %q", c.name, got)
+		}
+	}
+}
+
+func TestErrorMessagesAreCutAtTheBoundaryInBothModes(t *testing.T) {
+	failures := map[string]func(string) string{
+		"response.failed": func(m string) string {
+			return `{"type":"response.failed","response":{"id":"r","error":{"code":"server_error","message":` + m + `}}}`
+		},
+		"error": func(m string) string {
+			return `{"type":"error","error":{"type":"server_error","message":` + m + `}}`
+		},
+	}
+	for event, failure := range failures {
+		for _, c := range cleanMessageCuts {
+			checkCutInBothModes(t, event+": "+c.name, c.want,
+				`{"type":"response.created","response":{"id":"r"}}`, failure(jsonString(c.in)))
+		}
+	}
+}
+
+func checkCutInBothModes(t *testing.T, name, want string, events ...string) {
+	t.Helper()
+	frames := runStream(t, NewStreamTranslator("gpt-6-luna", nil), events...)
+	if got := gjson.Parse(frames[len(frames)-1].data).Get("error.message").String(); got != want {
+		t.Errorf("%s: streamed message = %q, want %q", name, got, want)
+	}
+	translator := NewStreamTranslator("gpt-6-luna", nil)
+	assembler := NewMessageAssembler()
+	for _, event := range events {
+		assembler.Write(translator.Event([]byte(event)))
+	}
+	assembler.Write(translator.Close())
+	if _, got, failed := assembler.Err(); !failed || got != want {
+		t.Errorf("%s: assembled error = %q (failed %v), want %q", name, got, failed, want)
+	}
+}
+
+func jsonString(s string) string {
+	out, err := json.Marshal(s)
+	if err != nil {
+		panic(err)
+	}
+	return string(out)
 }
