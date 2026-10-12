@@ -115,6 +115,39 @@ func carryOver(refreshed, previous *Token) {
 	}
 }
 
+// ErrTokenDue is returned by Held when the access token is expired or close
+// to it: only a Responses call refreshes it.
+var ErrTokenDue = errors.New("codex: the access token is due for refresh")
+
+// errCredentialsBusy is returned by Held while another caller holds the
+// store, for instance in the middle of a token refresh.
+var errCredentialsBusy = errors.New("codex: the credential store is busy")
+
+// Held returns the access token and account id as they are stored, and never
+// refreshes or waits for a refresh: a store that is busy, a missing login and
+// a token within refreshLead of expiry (a borrowed Codex CLI token is never
+// refreshed, so only an expired one counts) each give an error. The status
+// endpoint's usage request uses it, so a status never rides on, or starts, a
+// token refresh.
+func (s *Store) Held() (accessToken, accountID string, err error) {
+	if !s.mu.TryLock() {
+		return "", "", errCredentialsBusy
+	}
+	defer s.mu.Unlock()
+	token, err := s.loadLocked()
+	if err != nil {
+		return "", "", err
+	}
+	lead := refreshLead
+	if s.active.readOnly {
+		lead = 0
+	}
+	if token.Expired(lead) {
+		return "", "", ErrTokenDue
+	}
+	return serve(token)
+}
+
 func serve(token *Token) (string, string, error) {
 	return token.AccessToken, token.AccountID, nil
 }

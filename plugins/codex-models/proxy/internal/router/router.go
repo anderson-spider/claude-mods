@@ -44,6 +44,9 @@ type Router struct {
 	// pingInterval is how long a streamed Codex answer may stay silent
 	// before a ping goes out; tests shorten it.
 	pingInterval time.Duration
+	// usageWait is how long a status request waits for the Codex usage
+	// request it started; tests change it.
+	usageWait time.Duration
 }
 
 // New builds a router. transport carries pass-through traffic to the upstream
@@ -66,6 +69,7 @@ func New(cfg *config.Config, registry *codex.Registry, backend *codex.Backend, t
 		proxy:        passthroughProxy(upstream, transport),
 		client:       listClient(transport),
 		pingInterval: initialPingInterval(),
+		usageWait:    defaultUsageWait,
 	}, nil
 }
 
