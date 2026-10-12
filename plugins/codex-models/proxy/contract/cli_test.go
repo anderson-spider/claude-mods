@@ -95,6 +95,53 @@ func TestCLIVersion(t *testing.T) {
 	}
 }
 
+// `version` prints the commit the binary was built from exactly when the Go
+// toolchain stamped one (`vcs.revision` in `go version -m`), and no revision
+// line when it did not, as in a build outside a git checkout. The suite's
+// binary covers whichever case this checkout gives; a second build with
+// -buildvcs=false always covers the unstamped one.
+func TestCLIVersionRevisionFollowsTheBuildInfo(t *testing.T) {
+	unstamped := filepath.Join(t.TempDir(), "ccmproxy-novcs")
+	if b, err := exec.Command("go", "build", "-buildvcs=false", "-tags", "contract", "-o", unstamped, "../cmd/ccmproxy").CombinedOutput(); err != nil {
+		t.Fatalf("building without VCS stamping: %v\n%s", err, b)
+	}
+	for _, bin := range []string{binPath, unstamped} {
+		info, err := exec.Command("go", "version", "-m", bin).Output()
+		if err != nil {
+			t.Fatalf("go version -m %s: %v", bin, err)
+		}
+		revision := ""
+		for _, line := range strings.Split(string(info), "\n") {
+			if fields := strings.Fields(line); len(fields) == 2 && fields[0] == "build" && strings.HasPrefix(fields[1], "vcs.revision=") {
+				revision = strings.TrimPrefix(fields[1], "vcs.revision=")
+			}
+		}
+		if bin == unstamped && revision != "" {
+			t.Fatalf("-buildvcs=false still stamped vcs.revision %s", revision)
+		}
+
+		cmd := exec.Command(bin, "version")
+		cmd.Env = baseEnviron(t.TempDir())
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("%s version: %v", bin, err)
+		}
+		var printed []string
+		for _, line := range strings.Split(string(out), "\n") {
+			if strings.HasPrefix(strings.TrimSpace(line), "revision") {
+				printed = append(printed, line)
+			}
+		}
+		switch {
+		case revision == "" && len(printed) != 0:
+			t.Fatalf("%s has no vcs.revision but version printed %q", filepath.Base(bin), printed)
+		case revision != "" && (len(printed) != 1 || printed[0] != "  revision "+revision):
+			t.Fatalf("%s has vcs.revision %s but version printed %q:\n%s", filepath.Base(bin), revision, printed, out)
+		}
+		t.Logf("%s: vcs.revision %q", filepath.Base(bin), revision)
+	}
+}
+
 func TestCLIEnvShells(t *testing.T) {
 	home := cliHome(t, nil)
 	url, header := "http://127.0.0.1:34567", "X-Ccmproxy-Token: "+cliToken

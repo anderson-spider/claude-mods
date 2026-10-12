@@ -2,7 +2,10 @@
 
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestContractUpstreamSkipsTheLocalCheck(t *testing.T) {
 	if contractSkipsUpstreamCheck("http://127.0.0.1:9") {
@@ -14,5 +17,13 @@ func TestContractUpstreamSkipsTheLocalCheck(t *testing.T) {
 	}
 	if contractSkipsUpstreamCheck("http://127.0.0.1:10") {
 		t.Fatal("skipped for another upstream")
+	}
+}
+
+func TestVersionMarksTheContractBuild(t *testing.T) {
+	out := captureStdout(t, func() error { return run([]string{"version"}) })
+	lines := strings.Split(out, "\n")
+	if len(lines) < 4 || lines[3] != "  build    contract (test injection points on; not for installation)" {
+		t.Fatalf("version does not mark the contract build on its fourth line:\n%s", out)
 	}
 }
