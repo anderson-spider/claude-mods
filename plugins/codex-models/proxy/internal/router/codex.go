@@ -3,8 +3,11 @@ package router
 import (
 	"bufio"
 	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -35,6 +38,25 @@ func resolveEffort(body []byte, resolution codex.Resolution) string {
 	return resolution.Model.ClampEffort(effort)
 }
 
+// codexSessionID derives the Codex Session_id from Claude Code's
+// metadata.user_id. Reusing one id per Claude Code session keeps a
+// conversation on one upstream session, but the raw value carries Anthropic
+// account and device identifiers, so only an HMAC-SHA256 of it keyed with the
+// install's session_salt is sent: stable for the same input, meaningless
+// without the salt. It is shaped as a version 4 UUID, like the ids the Codex
+// CLI sends. Without a user_id a random id is used.
+func codexSessionID(salt, userID string) string {
+	if userID == "" {
+		return codex.NewSessionID()
+	}
+	mac := hmac.New(sha256.New, []byte(salt))
+	mac.Write([]byte(userID))
+	b := mac.Sum(nil)[:16]
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+}
+
 // serveCodexMessages answers a Messages request from the Codex backend. effort
 // comes from resolveEffort, so the value logged upstream and the value sent
 // are the same one.
@@ -60,13 +82,7 @@ func (r *Router) serveCodexMessages(w http.ResponseWriter, req *http.Request, bo
 		return
 	}
 
-	// Reusing the client's session id keeps a conversation on one upstream
-	// session; Claude Code sends one per session in its metadata.
-	sessionID := gjson.GetBytes(body, "metadata.user_id").String()
-	if sessionID == "" {
-		sessionID = codex.NewSessionID()
-	}
-
+	sessionID := codexSessionID(r.cfg.SessionSalt, gjson.GetBytes(body, "metadata.user_id").String())
 	resp, err := r.backend.Responses(req.Context(), translated.Body, sessionID)
 	if err != nil {
 		writeCodexError(w, err)
@@ -95,7 +111,7 @@ func (r *Router) streamCodex(w http.ResponseWriter, req *http.Request, upstream 
 	controller := http.NewResponseController(w)
 	_ = controller.Flush()
 
-	translator := translate.NewStreamTranslator(resolution.Requested, toolNames)
+	translator := translate.NewStreamTranslator(resolution.Model.ID, toolNames)
 	write := func(frames []byte) bool {
 		if len(frames) == 0 {
 			return true
@@ -122,7 +138,7 @@ func (r *Router) streamCodex(w http.ResponseWriter, req *http.Request, upstream 
 // backend only serves streaming responses, so the events go through the same
 // translator as the streaming path and are then folded into one message.
 func (r *Router) bufferCodex(w http.ResponseWriter, upstream io.Reader, resolution codex.Resolution, toolNames map[string]string) {
-	translator := translate.NewStreamTranslator(resolution.Requested, toolNames)
+	translator := translate.NewStreamTranslator(resolution.Model.ID, toolNames)
 	assembler := translate.NewMessageAssembler()
 
 	err := scanSSE(upstream, func(payload []byte) bool {
