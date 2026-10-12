@@ -11,7 +11,7 @@ import (
 // With a 50 ms interval, a stream that stalls inside the message gets pings;
 // none go out before message_start or after message_stop.
 func TestKeepalivePingsOnlyInsideTheMessage(t *testing.T) {
-	e := loggedIn(t, opts{ping: "50ms"})
+	e := loggedIn(t, opts{ping: "50ms", race: true})
 	e.cdx.set(func(w http.ResponseWriter, _ *http.Request, _ rec) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
@@ -62,7 +62,8 @@ func TestKeepalivePingsOnlyInsideTheMessage(t *testing.T) {
 }
 
 func TestNoPingsOnAFastStream(t *testing.T) {
-	e := loggedIn(t, opts{ping: "50ms"})
+	// A long interval: a stall on a loaded runner must not look like a ping.
+	e := loggedIn(t, opts{ping: "1s", race: true})
 	e.cdx.set(answerWith(evCreated, evText("a"), evCompleted))
 	evs := parseSSE(t, e.post("/v1/messages", claudeReq("gpt-6-astra", true, nil)).Body)
 	if indexOf(evs, "ping") >= 0 {
