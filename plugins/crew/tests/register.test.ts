@@ -3,7 +3,6 @@ import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import { fnv1a } from '../hooks/decisions'
 import type { Quota } from '../hooks/quota'
-import { registerHud } from '../hooks/hud/register'
 
 const agents = [
   { id: 'a1', type: 'crew:architect' },
@@ -174,9 +173,6 @@ function jevWorld(
     const usage = model ? { model } : null
     return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: null, usage } as never
   })
-  // The HUD reads and writes the panel choice in the store; the jev tests have none to keep.
-  on('store.get', async () => ({ value: undefined }))
-  on('store.set', async () => ({ value: undefined }))
   on('ui.notice', async (_$, e) => { seen.notices.push(String(e.text)); return { value: undefined } })
   on('ui.log', async (_$, e) => {
     seen.logs.push(e.text)
@@ -1220,14 +1216,22 @@ for (const tool of ['Write', 'Edit'] as const) {
     expect(reads.count).toBe(2)
   })
 
-  test(`${tool}: a subagent whose check fails is held with one reason, and the main loop is not`, async ($, on) => {
-    on('agent.list', () => ({ deny: 'list unavailable' }) as never)
-    on('tool.call', () => ({ result: 'written' }))
+  for (const failure of ['denied', 'throwing'] as const) {
+    test(`${tool}: a ${failure} agent-list check holds subagent writes, while the main loop still passes`, async ($, on) => {
+      const written: string[] = []
+      on('agent.list', () => {
+        if (failure === 'throwing') throw new Error('list unavailable')
+        return { deny: 'list unavailable' } as never
+      })
+      on('tool.call', (_$, e) => (written.push(String((e as { file_path?: unknown }).file_path)), { result: 'written' }))
 
-    expect(await call($, 'a1', 'src/app.ts')).toEqual({ deny: 'crew could not check this write, so it was not made' })
-    expect(await call($, 'd1', '.crew/plans/plan.md')).toEqual({ deny: 'crew could not check this write, so it was not made' })
-    expect(await call($, undefined, 'src/app.ts')).toEqual({ result: 'written' })
-  })
+      expect(await call($, 'a1', 'src/app.ts')).toEqual({ deny: 'crew could not check this write, so it was not made' })
+      expect(await call($, 'd1', '.crew/plans/plan.md')).toEqual({ deny: 'crew could not check this write, so it was not made' })
+      expect(written).toEqual([])
+      expect(await call($, undefined, 'src/app.ts')).toEqual({ result: 'written' })
+      expect(written).toEqual(['src/app.ts'])
+    })
+  }
 
   test(`${tool}: a failure below a passed write reaches the caller as it came, never as the guard's deny`, async ($, on) => {
     on('agent.list', () => ({ value: agents }) as never)
@@ -1247,1017 +1251,6 @@ test('the guard answers only Write and Edit: another tool of a subagent passes w
   expect(await $.tool.call({ tool: 'Bash', agentId: 'a1', command: 'ls' } as never)).toEqual({ result: 'ran' })
   expect(await $.tool.call({ tool: 'Read', agentId: 'a1', file_path: 'src/app.ts' } as never)).toEqual({ result: 'ran' })
   expect(reads).toBe(0)
-})
-
-// --- The HUD beside the crew's hooks, through the host ---
-// The crew and the HUD share a plugin, so the engine skips the rest of a plugin's chain when one of its hooks fails.
-// The order of registration (crew session.start, the HUD, then the crew's spawn, step and write hooks) and the HUD's
-// never-throw rule are what these tests hold.
-
-/** Records every write of the card list the HUD keeps under the crew; the host's own state answers beneath. */
-const watchCards = (on: On) => {
-  const writes: { plugin: string; key: string; value: unknown }[] = []
-  on('state.set', (_$, e, next) => {
-    if (e.key === 'hudAgents') writes.push({ plugin: e.plugin, key: e.key, value: e.value })
-    return next(e)
-  })
-  return writes
-}
-
-test('one crew spawn is routed by Jev and drawn as a card titled with the original description', ON, async ($, on) => {
-  const { seen } = jevWorld(on, { spawn: async e => ({ model: String(e.model ?? 'default'), agentId: 'ag1' }) })
-  on('ui.status', () => ({ value: undefined }))
-  const writes = watchCards(on)
-  const result = await $.agent.spawn(spawnInput())
-
-  expect(seen.fetches.length).toBe(1)
-  expect(result).toMatchObject({ model: 'opus', agentId: 'ag1' })
-  expect(seen.spawned[0]).toMatchObject({ model: 'opus', description: 'audit auth · opus/high' })
-  expect(seen.notices).toEqual(['crew:developer -> opus · high (jev)'])
-
-  // The HUD is outer on agent.spawn: it takes the description as the lead wrote it from what the crew shared, and the model that started.
-  const cards = writes.at(-1)?.value as { id: string; type: string; model: string; description: string }[]
-  expect(writes.every(w => w.plugin === 'crew')).toBe(true)
-  expect(cards.length).toBe(1)
-  expect(cards[0]).toMatchObject({ id: 'ag1', type: 'crew:developer', model: 'opus', description: 'audit auth' })
-})
-
-test('a HUD session.start that fails (state.set of the session) still registers the six specialists', async ($, on) => {
-  const registered: string[] = []
-  let attempts = 0
-  mock.clock(on)
-  on('session.usage', () => ({ value: { context: { percent: 1, tokens: 1, window: 100 }, cost: { usd: 1 }, rateLimits: [] } }) as never)
-  on('state.set', (_$, e, next) => { if (e.key === 'hudSession') { attempts++; throw new Error('state unavailable') } return next(e) })
-  on('agent.register', (_$, e) => (registered.push(e.name), { value: { agent: `crew:${e.name}` } }))
-  on('session.start', (_$, e) => ({ cwd: e.cwd }))
-
-  await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true } as never)
-
-  // The failing call was reached inside the HUD's first try (`update` tries the write again once), so the agents above
-  // are not registered by luck of an earlier return.
-  expect(attempts).toBeGreaterThan(0)
-  expect(registered).toEqual(['code-reader', 'research', 'designer', 'developer', 'tester', 'architect'])
-})
-
-// The HUD's spawn and step hooks do their work after `next`, inside their own try/catch. A failure there must leave the
-// crew's routing as it came: the routed result, the notice and the effort book (the crew's hooks sit inside the HUD's).
-
-test('a HUD failure after next in agent.spawn (clock.now) leaves the routed result and the notice', ON, async ($, on) => {
-  let reads = 0
-  const { seen } = jevWorld(on, {
-    spawn: async e => ({ model: String(e.model ?? 'default'), agentId: 'ag1' }),
-    now: () => { reads++; throw new Error('clock unavailable') },
-  })
-  on('ui.status', () => ({ value: undefined }))
-  const writes = watchCards(on)
-
-  const result = await $.agent.spawn(spawnInput())
-
-  // The failing call was reached, so the result below is not the HUD's work going unnoticed.
-  expect(reads).toBeGreaterThan(0)
-  expect(writes).toEqual([]) // the card was never drawn: the HUD failed before it wrote one
-  expect(result).toMatchObject({ model: 'opus', agentId: 'ag1' })
-  expect(seen.spawned[0]).toMatchObject({ model: 'opus', description: 'audit auth · opus/high' })
-  expect(seen.notices).toEqual(['crew:developer -> opus · high (jev)'])
-})
-
-test('a HUD failure in agent.spawn (card write) leaves the routed result, the notice and the effort of the first step', ON, async ($, on) => {
-  const { seen } = jevWorld(on, { spawn: async e => ({ model: String(e.model ?? 'default'), agentId: 'ag1' }) })
-  let failed = 0
-  on('ui.status', () => ({ value: undefined }))
-  on('state.set', (_$, e, next) => {
-    if (e.key === 'hudAgents') { failed++; throw new Error('state unavailable') }
-    return next(e)
-  })
-
-  const result = await $.agent.spawn(spawnInput())
-
-  expect(failed).toBeGreaterThan(0)
-  expect(result).toMatchObject({ model: 'opus', agentId: 'ag1' })
-  expect(seen.spawned[0]).toMatchObject({ model: 'opus', description: 'audit auth · opus/high' })
-  expect(seen.notices).toEqual(['crew:developer -> opus · high (jev)'])
-  // The effort book was bound by the crew's hook, inside the failing one: the step carries the routed effort.
-  await step($, 'ag1', 'medium')
-  expect(seen.steps).toEqual(['high'])
-})
-
-test('a HUD failure after next in turn.step (clock.now) leaves the crew\'s effort on the step', ON, async ($, on) => {
-  let reads = 0
-  const { seen } = jevWorld(on, {
-    spawn: async e => ({ model: String(e.model ?? 'default'), agentId: 'ag1' }),
-    stepModel: 'claude-opus-5-5',
-    now: () => { reads++; throw new Error('clock unavailable') },
-  })
-  on('ui.status', () => ({ value: undefined }))
-
-  await $.agent.spawn(spawnInput())
-  const spawnReads = reads
-  // No card was drawn (the spawn's clock read failed); the HUD's step reads the clock first, after the crew's step.
-  const answer = await step($, 'ag1', 'medium')
-
-  expect(reads).toBeGreaterThan(spawnReads) // the HUD's step ran its failing work after the crew's
-  expect(seen.steps).toEqual(['high'])
-  expect(answer).toMatchObject({ usage: { model: 'claude-opus-5-5' } })
-  expect(seen.transcript).toEqual(['jev: audit auth: confirmed claude-opus-5-5 · high'])
-})
-
-test('a HUD failure after next in turn.step (card write) leaves the crew\'s effort on the step', ON, async ($, on) => {
-  const { seen } = jevWorld(on, { spawn: async e => ({ model: String(e.model ?? 'default'), agentId: 'ag1' }), stepModel: 'claude-opus-5-5' })
-  on('ui.status', () => ({ value: undefined }))
-  let armed = false
-  let failed = 0
-  on('state.set', (_$, e, next) => {
-    if (armed && e.key === 'hudAgents') { failed++; throw new Error('state unavailable') }
-    return next(e)
-  })
-
-  await $.agent.spawn(spawnInput()) // the card is drawn: the step takes the HUD's card path
-  armed = true
-  const answer = await step($, 'ag1', 'medium')
-
-  expect(failed).toBeGreaterThan(0)
-  expect(seen.steps).toEqual(['high'])
-  expect(answer).toMatchObject({ usage: { model: 'claude-opus-5-5' } })
-  expect(seen.transcript).toEqual(['jev: audit auth: confirmed claude-opus-5-5 · high'])
-})
-
-// A subagent's step has no HUD work before `next`; the main loop's has (its model and effort). The crew's
-// rewrite only concerns subagents, so this holds that a failure before `next` does not stop the step reaching the host.
-test('a HUD failure before next in the main loop\'s turn.step does not stop the step', ON, async ($, on) => {
-  const { seen } = jevWorld(on)
-  let failed = 0
-  on('ui.status', () => ({ value: undefined }))
-  on('state.set', () => { failed++; throw new Error('state unavailable') })
-
-  await step($, undefined, 'medium')
-
-  expect(failed).toBeGreaterThan(0)
-  expect(seen.steps).toEqual(['medium'])
-})
-
-// The test host passes only plain data, so an event the HUD cannot read is driven on its hook directly: the guard
-// beneath answers through `next`, and what it answered must come back whatever the HUD failed to build.
-test('a tool line the HUD cannot build leaves the guard\'s specific denial and a passed write as they were', async () => {
-  const hooks = new Map<string, (...args: unknown[]) => unknown>()
-  const fakeOn = ((name: string, ...rest: unknown[]) => {
-    hooks.set(name, rest.at(-1) as (...args: unknown[]) => unknown)
-    return { catch: () => undefined }
-  }) as unknown as On
-  registerHud(fakeOn, {}, { agents: new Map(), twins: [], jev: false })
-  const toolCall = hooks.get('tool.call')
-  if (!toolCall) throw new Error('no tool.call hook')
-  const specific = { deny: 'the architect writes plan and review documents under .crew/ (.md) only, not src/app.ts; hand the finding to the developer' }
-  const unreadableInput = {
-    tool: 'Write', tool_use_id: 'tc1', agentId: 'a1', file_path: 'src/app.ts',
-    get command(): string { throw new Error('unreadable input') },
-  }
-  const unreadableTool = { tool: { toString(): string { throw new Error('unreadable tool') } }, tool_use_id: 'tc2', agentId: 'a1', file_path: 'src/app.ts' }
-  for (const e of [unreadableInput, unreadableTool]) {
-    expect(await toolCall({}, e, async () => specific)).toEqual(specific)
-    expect(await toolCall({}, e, async () => ({ result: 'written' }))).toEqual({ result: 'written' })
-  }
-})
-
-for (const tool of ['Write', 'Edit'] as const) {
-  const failing = (on: On, list: 'agents' | 'unavailable', written: string[] = []) => {
-    const clock = { calls: 0 }
-    // The HUD reads the time (a refusal's Log line) and the working directory (a plan write's path) after the call
-    // settled; the throws are its failures, not the guard's.
-    on('clock.now', () => { clock.calls++; throw new Error('clock unavailable') })
-    on('session.cwd', () => { clock.calls++; throw new Error('cwd unavailable') })
-    on('ui.status', () => ({ value: undefined }))
-    on('agent.list', () => (list === 'agents' ? { value: agents } : { deny: 'list unavailable' }) as never)
-    on('tool.call', (_$, e) => (written.push(String((e as { file_path?: unknown }).file_path)), { result: 'written' }))
-    return clock
-  }
-  const call = ($: Engine, agentId: string | undefined, file_path: string) =>
-    $.tool.call({ tool, tool_use_id: 'tc1', ...(agentId ? { agentId } : {}), file_path } as never)
-
-  test(`${tool}: with the HUD's tool.call failing after the call, the guard's specific denial stands`, async ($, on) => {
-    const clock = failing(on, 'agents')
-
-    expect(await call($, 'a1', 'src/app.ts')).toEqual({
-      deny: 'the architect writes plan and review documents under .crew/ (.md) only, not src/app.ts; hand the finding to the developer',
-    })
-    const afterDeny = clock.calls
-    expect(afterDeny).toBeGreaterThan(0) // the HUD did run its failing step after the guard answered
-    // A passed write whose HUD step throws reaches the caller as it came, not as "could not check".
-    expect(await call($, 'a1', '.crew/plans/plan.md')).toEqual({ result: 'written' })
-    expect(clock.calls).toBeGreaterThan(afterDeny)
-  })
-
-  // The check fails inside the guard, so the engine skips the rest of the crew's chain for that call, the HUD's step
-  // after `next` included (the clock is never read here): a HUD failure cannot be composed with a failed check in
-  // one call. What this holds is that, with the HUD registered outermost and no pass-through `.catch` on it, the
-  // write is held and not made.
-  test(`${tool}: with the HUD registered, a write that could not be checked is still held, not written`, async ($, on) => {
-    const written: string[] = []
-    failing(on, 'unavailable', written)
-
-    expect(await call($, 'a1', 'src/app.ts')).toEqual({ deny: 'crew could not check this write, so it was not made' })
-    expect(await call($, 'd1', '.crew/plans/plan.md')).toEqual({ deny: 'crew could not check this write, so it was not made' })
-    expect(written).toEqual([])
-    expect(await call($, undefined, 'src/app.ts')).toEqual({ result: 'written' })
-    expect(written).toEqual(['src/app.ts'])
-  })
-}
-
-// --- /crew:panel: side pane or prompt band, persisted ---
-
-const OTHER_BAND = 'OTHER-BAND'
-
-/** The host beneath the panel: a store in a Map, the pane `crew` opening and closing, and a bottom band. */
-function panelWorld(
-  on: On,
-  o: {
-    /** What `$.store` holds at the start. */
-    stored?: Record<string, unknown>
-    /** The surface places the pane (`$.ui.open` answers `isPlaced`). */
-    placed?: boolean
-    /** The reason an unplaced open gives. */
-    reason?: string
-    /** What the band beneath the plugin draws: the engine's own (empty) band, or another plugin's tree. */
-    below?: 'engine' | 'other'
-    getFail?: boolean
-    setFail?: boolean
-    panesFail?: boolean
-    closeFail?: boolean
-    /** `$.clock.now` answers with this instead of the mock clock's time (it may throw). */
-    now?: () => number
-  } = {},
-) {
-  const store = new Map<string, unknown>(Object.entries(o.stored ?? {}))
-  const w = {
-    store,
-    opens: [] as string[],
-    /** Every `$.ui.open` argument whole. */
-    openArgs: [] as Record<string, unknown>[],
-    closes: [] as { id: string; origin: string }[],
-    sets: 0,
-    isOpen: false,
-    placed: o.placed ?? true,
-    below: o.below ?? 'engine',
-    registered: [] as string[],
-  }
-  const now = o.now
-  // `mock.clock` registers `clock.now` itself and the engine refuses a second one, so a test's own is registered instead.
-  mock.clock(now ? (((name: string, ...rest: unknown[]) => (name === 'clock.now' ? undefined : (on as (...a: unknown[]) => unknown)(name, ...rest))) as unknown as On) : on)
-  if (now) on('clock.now', () => ({ value: now() }))
-  on('agent.register', (_$, e) => (w.registered.push(e.name), { value: { agent: `crew:${e.name}` } }))
-  on('session.start', (_$, e) => ({ cwd: e.cwd }))
-  on('ui.status', () => ({ value: undefined }))
-  on('store.get', (_$, e) => {
-    if (o.getFail) throw new Error('store.get unavailable')
-    return { value: store.get(e.key) }
-  })
-  on('store.set', (_$, e) => {
-    w.sets++
-    if (o.setFail) throw new Error('store.set unavailable')
-    store.set(e.key, e.value)
-    return { value: undefined }
-  })
-  on('ui.open', (_$, e) => {
-    w.opens.push(e.id)
-    w.openArgs.push({ ...e })
-    w.isOpen = true
-    return { value: w.placed ? { isPlaced: true as const } : { isPlaced: false as const, reason: o.reason ?? 'widen the terminal' } }
-  })
-  on('ui.close', (_$, e) => {
-    if (o.closeFail) throw new Error('ui.close unavailable')
-    w.closes.push({ id: e.id, origin: e.origin.kind })
-    w.isOpen = false
-    return { value: undefined }
-  })
-  on('ui.panes', () => {
-    if (o.panesFail) throw new Error('ui.panes unavailable')
-    return { value: w.isOpen ? [{ id: 'crew', title: 'Crew', isShown: true, isFocused: false, isPlaced: w.placed }] : [] }
-  })
-  on('ui.render', { component: 'AbovePrompt' }, ($, e) =>
-    w.below === 'other' ? $.ui.resolve(e).Text({ children: OTHER_BAND }) : ({ type: 'engine', ref: 0 } as never),
-  )
-  return w
-}
-
-const startSession = async ($: Engine) => {
-  await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true } as never)
-  // The pane opens without being awaited by the session start.
-  for (let i = 0; i < 5; i++) await pause()
-}
-
-const panel = async ($: Engine, args = '', presentation?: { isFullscreen: boolean; columns: number }) =>
-  (await $.command.run({ command: 'crew:panel', args, origin: { kind: 'composer' }, ...(presentation ? { presentation } : {}) } as never)).text
-
-const band = (hasSurvey = false) => ({
-  plugin: 'crew',
-  surface: 'terminal' as const,
-  component: 'AbovePrompt' as const,
-  props: {
-    hasSurvey,
-    isWorking: false,
-    maxRows: 12,
-    bodyColumns: 80,
-    scroll: { offset: 0, bodyRows: 11 },
-    view: {},
-  } as never,
-})
-
-const STORED = (isVisible: boolean, placement: 'side' | 'prompt') => ({ v: 1, isVisible, placement })
-
-test('bare /crew:panel toggles the side pane and saves the pick', async ($, on) => {
-  const w = panelWorld(on, { stored: { panel: STORED(false, 'side') } })
-  await startSession($)
-  expect(w.opens).toEqual([])
-
-  expect(await panel($)).toContain('Panel shown above the prompt')
-  expect(w.opens).toEqual(['crew'])
-  expect(w.store.get('panel')).toEqual(STORED(true, 'side'))
-
-  expect(await panel($)).toBe('Panel hidden. /crew:panel shows it again.')
-  expect(w.closes).toEqual([{ id: 'crew', origin: 'plugin' }])
-  expect(w.store.get('panel')).toEqual(STORED(false, 'side'))
-
-  expect(await panel($)).toContain('Panel shown')
-  expect(w.opens).toEqual(['crew', 'crew'])
-})
-
-test('on and off keep the placement', async ($, on) => {
-  const w = panelWorld(on)
-  await panel($, 'prompt')
-  await panel($, 'off')
-  expect(w.store.get('panel')).toEqual(STORED(false, 'prompt'))
-  expect(await panel($, 'on')).toContain('Panel shown in the band above the prompt')
-  expect(w.store.get('panel')).toEqual(STORED(true, 'prompt'))
-  await panel($, 'side')
-  await panel($, 'off')
-  expect(await panel($, 'ON')).toContain('Panel shown above the prompt')
-  expect(w.store.get('panel')).toEqual(STORED(true, 'side'))
-})
-
-test('an unplaced pane counts as hidden, so bare /crew:panel shows it; a failing panes call falls back to the pick', async ($, on) => {
-  const w = panelWorld(on, { placed: false, reason: 'widen the terminal to 144 columns' })
-  expect(await panel($, 'side')).toBe('Panel set to the side, not shown yet: widen the terminal to 144 columns')
-  expect(w.store.get('panel')).toEqual(STORED(true, 'side'))
-  // Open but undrawn: the toggle shows it again instead of hiding it.
-  expect(await panel($)).toContain('not shown yet')
-  expect(w.closes).toEqual([])
-})
-
-test('bare /crew:panel falls back to the saved pick when the panes call fails', async ($, on) => {
-  const w = panelWorld(on, { panesFail: true })
-  await panel($, 'side') // saved visible
-  expect(await panel($)).toBe('Panel hidden. /crew:panel shows it again.')
-  expect(w.store.get('panel')).toEqual(STORED(false, 'side'))
-  expect(await panel($)).toContain('Panel shown')
-})
-
-test('side then prompt then side: the pane closes for the band and opens again', async ($, on) => {
-  const w = panelWorld(on)
-  const ui = await $.ui.mount(band())
-  expect(await ui.find({ text: /idle/ })).toBeUndefined() // before any pick the band passes
-
-  expect(await panel($, 'side')).toContain('Panel shown above the prompt')
-  expect(w.opens).toEqual(['crew'])
-  expect(await ui.find({ text: /idle/ })).toBeUndefined() // side mode: no band
-
-  expect(await panel($, 'prompt')).toBe('Panel shown in the band above the prompt; another plugin\'s band takes its place while it shows.')
-  expect(w.closes).toEqual([{ id: 'crew', origin: 'plugin' }])
-  expect(w.store.get('panel')).toEqual(STORED(true, 'prompt'))
-  expect(await ui.find({ text: /idle/ })).toBeDefined() // the band redraws with the summary
-
-  await panel($, 'side')
-  expect(w.opens).toEqual(['crew', 'crew'])
-  expect(await ui.find({ text: /idle/ })).toBeUndefined()
-  await ui.unmount()
-})
-
-test('the docked pane asks for the 56 body columns its full layout needs, and 8 rows inline', async ($, on) => {
-  const w = panelWorld(on)
-  await startSession($)
-  await panel($, 'side', { isFullscreen: true, columns: 277 })
-  expect(w.openArgs.length).toBeGreaterThan(0)
-  // `columns` is the body inside the frame (the Pane's `bodyColumns`), the width the full layout is drawn at.
-  for (const args of w.openArgs) expect(args).toMatchObject({ id: 'crew', title: 'Crew', columns: 56, rows: 8 })
-})
-
-test('/crew:panel side words its reply by the room the command has', async ($, on) => {
-  panelWorld(on)
-  expect(await panel($, 'side', { isFullscreen: true, columns: 150 })).toBe(
-    'Panel docked beside the transcript. Focus it with ctrl+x tab; 1-9 open an agent\'s details.',
-  )
-  expect(await panel($, 'side', { isFullscreen: false, columns: 80 })).toBe(
-    'Panel shown above the prompt (it docks in fullscreen from 110 columns). Focus it with ctrl+x tab.',
-  )
-  expect(await panel($, 'side', { isFullscreen: true, columns: 100 })).toContain('above the prompt')
-})
-
-test('the band draws only in prompt mode, with the panel visible and no survey', async ($, on) => {
-  const w = panelWorld(on)
-  const drawn = async (hasSurvey = false) => {
-    const ui = await $.ui.mount(band(hasSurvey))
-    const found = await ui.find({ text: /idle/ })
-    await ui.unmount()
-    return found !== undefined
-  }
-
-  expect(await drawn()).toBe(false) // session.start has not run: null passes
-  await panel($, 'prompt')
-  expect(await drawn()).toBe(true)
-  expect(await drawn(true)).toBe(false) // a survey holds the band
-  await panel($, 'off')
-  expect(await drawn()).toBe(false)
-  await panel($, 'on')
-  expect(await drawn()).toBe(true)
-  await panel($, 'side')
-  expect(await drawn()).toBe(false)
-  expect(w.opens.length).toBe(1)
-})
-
-test('the band yields to another plugin\'s band whatever the order', async ($, on) => {
-  panelWorld(on, { below: 'other' })
-  await panel($, 'prompt')
-  const ui = await $.ui.mount(band())
-  expect(await ui.find({ text: new RegExp(OTHER_BAND) })).toBeDefined()
-  expect(await ui.find({ text: /idle/ })).toBeUndefined()
-  await ui.unmount()
-})
-
-test('the band draws at most three running agents and hints at the rest', async ($, on) => {
-  panelWorld(on)
-  on('agent.spawn', (_$, e) => ({ model: 'sonnet', agentId: `ag-${e.description}` }))
-  await panel($, 'prompt')
-  for (let i = 1; i <= 5; i++) await $.agent.spawn({ subagentType: 'crew:developer', description: `job ${i}`, prompt: 'x' } as never)
-  const ui = await $.ui.mount(band())
-  expect(await ui.find({ text: /\+2 more running · \/crew:panel side shows everything/ })).toBeDefined()
-  for (const n of [1, 2, 3]) expect(await ui.find({ text: new RegExp(`job ${n}`) })).toBeDefined()
-  for (const n of [4, 5]) expect(await ui.find({ text: new RegExp(`job ${n}`) })).toBeUndefined()
-  await ui.unmount()
-})
-
-test('placement prompt in the options starts with the band and opens no pane', { options: { placement: 'prompt' } }, async ($, on) => {
-  const w = panelWorld(on)
-  await startSession($)
-
-  expect(w.opens).toEqual([])
-  const ui = await $.ui.mount(band())
-  expect(await ui.find({ text: /idle/ })).toBeDefined()
-  await ui.unmount()
-})
-
-test('the default options open the side pane once at the start', async ($, on) => {
-  const w = panelWorld(on)
-  await startSession($)
-
-  expect(w.opens).toEqual(['crew'])
-  expect(w.store.has('panel')).toBe(false) // only a pick is saved, never the defaults
-  const ui = await $.ui.mount(band())
-  expect(await ui.find({ text: /idle/ })).toBeUndefined()
-  await ui.unmount()
-})
-
-test('openOnStart false starts hidden', { options: { openOnStart: false } }, async ($, on) => {
-  const w = panelWorld(on)
-  await startSession($)
-  expect(w.opens).toEqual([])
-  expect(await panel($)).toContain('Panel shown') // the first bare command shows it
-})
-
-test('a saved pick wins over the options', async ($, on) => {
-  const w = panelWorld(on, { stored: { panel: STORED(true, 'prompt') } })
-  await startSession($)
-  expect(w.opens).toEqual([]) // the options say side and open, the pick says prompt
-  const ui = await $.ui.mount(band())
-  expect(await ui.find({ text: /idle/ })).toBeDefined()
-  await ui.unmount()
-})
-
-test('a saved hidden pick opens nothing', async ($, on) => {
-  const w = panelWorld(on, { stored: { panel: STORED(false, 'side') } })
-  await startSession($)
-  expect(w.opens).toEqual([])
-})
-
-for (const [name, junk] of [
-  ['a wrong version', { v: 2, isVisible: false, placement: 'prompt' }],
-  ['a bad placement', { v: 1, isVisible: false, placement: 'floating' }],
-  ['a string', 'prompt'],
-] as const) {
-  test(`${name} in the store falls back to the options`, async ($, on) => {
-    const w = panelWorld(on, { stored: { panel: junk } })
-    await startSession($)
-    expect(w.opens).toEqual(['crew'])
-  })
-}
-
-test('a store that cannot be read starts on the options, and the six specialists still register', async ($, on) => {
-  const w = panelWorld(on, { getFail: true })
-  await startSession($)
-
-  expect(w.registered.length).toBe(6)
-  expect(w.opens).toEqual(['crew'])
-})
-
-test('the plugin\'s own close leaves the pick as it is: off keeps the placement, prompt keeps it visible', async ($, on) => {
-  const w = panelWorld(on)
-  await panel($, 'prompt')
-  await panel($, 'off')
-  // Both closes came through the ui.close hook with origin plugin: neither wrote a second pick.
-  expect(w.closes.map(c => c.origin)).toEqual(['plugin', 'plugin'])
-  expect(w.sets).toBe(2)
-  expect(w.store.get('panel')).toEqual(STORED(false, 'prompt'))
-})
-
-test('a store that cannot be written still switches the panel for the session, with the same reply', async ($, on) => {
-  const w = panelWorld(on, { setFail: true })
-  const ui = await $.ui.mount(band())
-  expect(await panel($, 'prompt')).toContain('Panel shown in the band')
-  expect(w.sets).toBeGreaterThan(0)
-  expect(w.store.has('panel')).toBe(false)
-  expect(await ui.find({ text: /idle/ })).toBeDefined()
-  expect(await panel($, 'off')).toBe('Panel hidden. /crew:panel shows it again.')
-  expect(await ui.find({ text: /idle/ })).toBeUndefined()
-  await ui.unmount()
-})
-
-test('a command that throws answers with text and never reaches the model', async ($, on) => {
-  panelWorld(on, { closeFail: true })
-  // `off` closes the pane: the failure is caught and answered, not left to fall through.
-  expect(await panel($, 'off')).toBe('The panel could not run this command; see the debug log.')
-})
-
-test('layout in prompt mode sets the layout and opens no pane', async ($, on) => {
-  const w = panelWorld(on)
-  await panel($, 'prompt')
-  expect(await panel($, 'layout mini')).toBe('Layout applies to the side pane; the band always shows the summary.')
-  expect(w.opens).toEqual([])
-  expect(w.store.get('panel')).toEqual(STORED(true, 'prompt'))
-})
-
-test('layout in side mode shows the pane', async ($, on) => {
-  const w = panelWorld(on, { stored: { panel: STORED(false, 'side') } })
-  expect(await panel($, 'layout mini')).toBe('Panel layout: mini.')
-  expect(w.opens).toEqual(['crew'])
-  expect(w.store.get('panel')).toEqual(STORED(true, 'side'))
-})
-
-test('reset and a bad argument leave the panel as it is', async ($, on) => {
-  const w = panelWorld(on)
-  await panel($, 'prompt')
-  const sets = w.sets
-  expect(await panel($, 'reset')).toBe('Panel reset. The plan file is untouched.')
-  expect(await panel($, 'bogus')).toBe('Usage: /crew:panel [on|off|side|prompt|reset|layout auto|mini|plan <name>|plan auto]')
-  expect(await panel($, 'layout diagonal')).toContain('Usage: /crew:panel')
-  expect(w.sets).toBe(sets)
-  expect(w.store.get('panel')).toEqual(STORED(true, 'prompt'))
-})
-
-// --- The HUD through the host: the pane, the band, the plan, the crew's routing as drawn ---
-
-const PROJ = '/proj'
-const PLANS = `${PROJ}/.crew/plans`
-const DAY = 86_400_000
-
-type PlanFile = { text: string; mtimeMs: number }
-
-/**
- * The panel's host plus the project's files under `.crew/plans` (absolute paths), the spawn, the turn and the tools a
- * session raises. `files` may be changed by the test; `reads` counts the plan reads.
- */
-function hudWorld(on: On, o: Parameters<typeof panelWorld>[1] & { files?: Record<string, PlanFile>; usage?: boolean } = {}) {
-  const w = panelWorld(on, o)
-  const files = new Map<string, PlanFile>(Object.entries(o.files ?? {}))
-  const fsCalls = { reads: 0 }
-  on('session.root', () => ({ value: PROJ }))
-  on('session.cwd', () => ({ value: PROJ }))
-  on('fs.list', (_$, e) => {
-    const dir = `${String(e.path).replace(/\/+$/, '')}/`
-    const entries = [...files].filter(([path]) => path.startsWith(dir) && !path.slice(dir.length).includes('/'))
-    return { value: entries.map(([path, f]) => ({ name: path.slice(dir.length), kind: 'file' as const, size: f.text.length, mtimeMs: f.mtimeMs, isLink: false })) }
-  })
-  on('fs.read', (_$, e) => {
-    fsCalls.reads++
-    const f = files.get(String(e.path))
-    if (!f) throw new Error(`ENOENT: ${e.path}`)
-    return { value: f.text }
-  })
-  on('fs.stat', (_$, e) => {
-    const f = files.get(String(e.path))
-    if (!f) throw new Error(`ENOENT: ${e.path}`)
-    return { value: { kind: 'file' as const, size: f.text.length, mtimeMs: f.mtimeMs, isLink: false } }
-  })
-  if (o.usage) on('session.usage', () => ({ value: { startedAt: 0, context: { percent: 12, tokens: 24_000, window: 200_000 }, cost: { usd: 0.5 }, rateLimits: [] } }) as never)
-  on('session.measure', (_$, e) => ({ changed: e.changed }))
-  on('agent.spawn', (_$, e) => ({ model: 'sonnet', agentId: `ag-${String(e.description).split(' ')[0]}` }))
-  on('turn.start', (_$, e) => ({ turnId: e.turnId }))
-  on('turn.complete', () => ({ text: '' }))
-  // A call whose id is in `refuse` is refused beneath the plugin (a rule); the rest run.
-  const refuse = new Set<string>()
-  // A call whose id is in `fail` throws beneath the plugin.
-  const fail = new Set<string>()
-  on('tool.call', (_$, e) => {
-    if (fail.has(e.tool_use_id)) throw new Error('the call failed beneath')
-    return refuse.has(e.tool_use_id) ? { deny: 'refused by a rule' } : { result: 'ok' }
-  })
-  let decision: 'allow' | 'ask' | 'deny' = 'allow'
-  on('tool.check', () => ({ decision }))
-  on('agent.list', () => ({ value: [] }) as never)
-  // A permission request no hook beneath decides shows the dialog; `answer` makes one beneath decide it.
-  let answer: { decision?: { behavior: 'allow' } | { behavior: 'deny'; message?: string } } = {}
-  on('classic.PermissionRequest', () => answer as never)
-  on('classic.UserPromptSubmit', () => ({}) as never)
-  return {
-    ...w, files, fsCalls, refuse, fail,
-    check: (d: typeof decision) => { decision = d },
-    permission: (a: typeof answer) => { answer = a },
-  }
-}
-
-const planText = (...steps: string[]) => ['# Plan', '', '## Steps', '', ...steps].join('\n')
-
-const PANE_PROPS = { title: 'Crew', isFocused: false, bodyColumns: 56, placement: 'dock' as 'dock' | 'inline', scroll: { offset: 0, bodyRows: 80 }, view: {} }
-const mountPane = ($: Engine, over: Partial<typeof PANE_PROPS> = {}) =>
-  $.ui.mount({ plugin: 'crew', surface: 'terminal', component: 'Pane', requestId: 'crew', props: { ...PANE_PROPS, ...over } } as never)
-
-/** Every text the drawing shows, one string per Text element, in order. */
-const shown = async (ui: { findAll: (q: { type?: string }) => Promise<{ text: string }[]> }) => (await ui.findAll({ type: 'Text' })).map(t => t.text).join('\n')
-
-test('a load with stored options the plugin does not read (architectPattern, palette, statusLine, …) starts, opens the pane and draws', {
-  options: {
-    architectPattern: 'reviewer', architectLabel: 'REVIEW', gateLabel: 'GATE', panels: 'main,log', moments: false,
-    matchDescriptions: true, maxCards: 6, layout: 'wide', palette: 'pastel', statusLine: false,
-  },
-}, async ($, on) => {
-  const w = hudWorld(on)
-  await startSession($)
-
-  expect(w.registered).toEqual(['code-reader', 'research', 'designer', 'developer', 'tester', 'architect'])
-  expect(w.opens).toEqual(['crew'])
-  const ui = await mountPane($)
-  expect(await ui.find({ text: /╭─ Session ─/ })).toBeDefined()
-  expect(await ui.find({ text: /No agents yet; delegated work shows here\./ })).toBeDefined()
-  await ui.unmount()
-  expect(await panel($, 'layout wide')).toContain('Layouts compact and wide were removed; auto picks the form.')
-})
-
-test('the pane is the full HUD when docked, the summary inline and under layout mini (no docking hint while docked)', async ($, on) => {
-  hudWorld(on)
-  await startSession($)
-  for (let i = 1; i <= 5; i++) await $.agent.spawn({ subagentType: 'crew:developer', description: `job${i} work`, prompt: 'x', tool_use_id: `tu${i}` } as never)
-
-  const docked = await mountPane($)
-  expect(await docked.find({ text: /Agents · running 5/ })).toBeDefined()
-  await docked.unmount()
-
-  const inline = await mountPane($, { placement: 'inline', bodyColumns: 120, scroll: { offset: 0, bodyRows: 8 } })
-  expect(await inline.find({ text: /Agents · running/ })).toBeUndefined()
-  expect(await inline.find({ text: /\+2 more running · docks beside the transcript in fullscreen from 110 columns/ })).toBeDefined()
-  await inline.unmount()
-
-  expect(await panel($, 'layout mini')).toBe('Panel layout: mini.')
-  const mini = await mountPane($, { bodyColumns: 120 })
-  expect(await mini.find({ text: /\+2 more running/ })).toBeDefined()
-  expect(await mini.find({ text: /docks beside the transcript/ })).toBeUndefined()
-  await mini.unmount()
-})
-
-test('the HUD follows a turn: your prompt in the Log, an agent\'s card while it runs and when it ends, then the receipt', async ($, on) => {
-  hudWorld(on)
-  await startSession($)
-  await $.turn.start({ text: 'split the proxy rewrite\nmore detail', turnId: 'T1' })
-  await $.agent.spawn({ subagentType: 'crew:developer', description: 'R3 typed structs', prompt: 'x', tool_use_id: 'tu1' } as never)
-  await $.tool.call({ tool: 'Edit', tool_use_id: 'e1', agentId: 'ag-R3', file_path: `${PROJ}/proxy/internal/translate/claude.go` } as never)
-
-  const ui = await mountPane($)
-  expect(await ui.find({ text: /you +split the proxy rewrite/ })).toBeDefined()
-  expect(await ui.find({ text: /● developer +Sonnet +▶/ })).toBeDefined()
-  expect(await ui.find({ text: /Edit internal\/translate\/claude\.go/ })).toBeDefined()
-  expect(await ui.find({ text: /● working/ })).toBeDefined()
-
-  await $.turn.complete({ turnId: 'R3', agentId: 'ag-R3', reason: 'answer', answer: 'done', durationMs: 1000, isAborted: false } as never)
-  await $.turn.complete({ turnId: 'T1', reason: 'answer', answer: 'ok', durationMs: 2000, isAborted: false } as never)
-  expect(await ui.find({ text: /Agents · finished 1/ })).toBeDefined()
-  expect(await ui.find({ text: /done · R3 typed structs/ })).toBeDefined()
-  expect(await ui.find({ text: /✓ last turn 0:02 · .* 1 agent/ })).toBeDefined()
-  expect(await ui.find({ text: /○ idle/ })).toBeDefined()
-  await ui.unmount()
-})
-
-test('the lead\'s SendMessage to an ended agent starts a new job; a refused one does not, and a failure stays in the Log', async ($, on) => {
-  let t = 0
-  const w = hudWorld(on, { now: () => t })
-  on('turn.step', async function* (_$, e) {
-    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: null, usage: { input_tokens: 1 } } as never
-  })
-  await startSession($)
-  await $.agent.spawn({ subagentType: 'crew:developer', description: 'T3 implement', prompt: 'x', tool_use_id: 'tu1' } as never)
-  t = 5 * 60_000
-  await $.turn.complete({ turnId: 'D1', agentId: 'ag-T3', reason: 'error', answer: '', durationMs: 1, isAborted: false } as never)
-  // The timeline's lane counts jobs: `×1`, then `×2` once the lead's message resumed the agent.
-  const jobs = async () => {
-    const ui = await mountPane($)
-    const lane = (await ui.findAll({ type: 'Text' })).map(x => x.text).find(x => /×\d/.test(x)) ?? ''
-    const failures = (await ui.findAll({ type: 'Text' })).filter(x => /^│ \d\d:\d\d:\d\d developer +✗ failed · error/.test(x.text)).length
-    await ui.unmount()
-    return { lane: /×(\d)/.exec(lane)?.[1], failures }
-  }
-
-  // A refused message is no resume: the wake stays in the first job (its two failures both stay).
-  w.refuse.add('sm1')
-  await $.tool.call({ tool: 'SendMessage', tool_use_id: 'sm1', to: 'ag-T3', message: 'fix it' } as never)
-  t = 20 * 60_000
-  await step($, 'ag-T3', null)
-  await $.turn.complete({ turnId: 'D2', agentId: 'ag-T3', reason: 'error', answer: '', durationMs: 1, isAborted: false } as never)
-  expect(await jobs()).toEqual({ lane: '1', failures: 2 })
-
-  // The lead sends the fixes: a new job, and the first job's failures stay beside the second's.
-  t = 26 * 60_000
-  await $.tool.call({ tool: 'SendMessage', tool_use_id: 'sm2', to: 'ag-T3', message: 'fix it' } as never)
-  await step($, 'ag-T3', null)
-  t = 27 * 60_000
-  await $.turn.complete({ turnId: 'D3', agentId: 'ag-T3', reason: 'error', answer: '', durationMs: 1, isAborted: false } as never)
-  expect(await jobs()).toEqual({ lane: '2', failures: 3 })
-})
-
-test('a SendMessage whose call throws resumes nothing: the error comes back as it was and a later wake stays in the job', async ($, on) => {
-  let t = 0
-  const w = hudWorld(on, { now: () => t })
-  on('turn.step', async function* (_$, e) {
-    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: null, usage: { input_tokens: 1 } } as never
-  })
-  await startSession($)
-  await $.agent.spawn({ subagentType: 'crew:developer', description: 'T3 implement', prompt: 'x', tool_use_id: 'tu1' } as never)
-  t = 60_000
-  await $.turn.complete({ turnId: 'D1', agentId: 'ag-T3', reason: 'answer', answer: '', durationMs: 1, isAborted: false } as never)
-
-  w.fail.add('sm1')
-  let thrown: unknown
-  try {
-    await $.tool.call({ tool: 'SendMessage', tool_use_id: 'sm1', to: 'ag-T3', message: 'fix it' } as never)
-  } catch (error) {
-    thrown = error
-  }
-  // The host answers a failing hook beneath with its own error; the HUD lets it through as it came.
-  expect(String(thrown)).toBe('HooksError: no implementation for tool.call')
-
-  // A background task wakes the agent later: still job 1 (`×1`), its clock from the spawn.
-  t = 120_000
-  await step($, 'ag-T3', null)
-  t = 130_000
-  await $.turn.complete({ turnId: 'D2', agentId: 'ag-T3', reason: 'answer', answer: '', durationMs: 1, isAborted: false } as never)
-  const ui = await mountPane($)
-  const lane = (await ui.findAll({ type: 'Text' })).map(x => x.text).find(x => /×\d/.test(x)) ?? ''
-  expect(/×(\d)/.exec(lane)?.[1]).toBe('1')
-  await ui.unmount()
-})
-
-test('a permission ask waits on you in the band until its call settles; a refusal is one Log line', async ($, on) => {
-  const w = hudWorld(on)
-  w.check('ask')
-  await startSession($)
-  await panel($, 'prompt')
-  await $.agent.spawn({ subagentType: 'crew:developer', description: 'R3 typed structs', prompt: 'x', tool_use_id: 'tu1' } as never)
-  const ui = await $.ui.mount(band())
-
-  // A verdict of `ask` is no dialog yet; the permission request is.
-  await $.tool.check({ tool: 'Bash', input: { command: 'go test' }, tool_use_id: 'b1', agentId: 'ag-R3' } as never)
-  expect(await ui.find({ text: /Waiting on you/ })).toBeUndefined()
-  await $.classic.PermissionRequest({ tool_name: 'Bash', tool_input: { command: 'go test' }, agent_id: 'ag-R3', permission_mode: 'default' } as never)
-  expect(await ui.find({ text: /! Waiting on you · developer asks to run Bash/ })).toBeDefined()
-  await $.tool.call({ tool: 'Bash', tool_use_id: 'b1', agentId: 'ag-R3', command: 'go test' } as never)
-  expect(await ui.find({ text: /Waiting on you/ })).toBeUndefined()
-
-  // A request a hook beneath decided never reached the person.
-  w.permission({ decision: { behavior: 'allow' } })
-  await $.classic.PermissionRequest({ tool_name: 'Read', tool_input: {}, permission_mode: 'default' } as never)
-  expect(await ui.find({ text: /Waiting on you/ })).toBeUndefined()
-  await ui.unmount()
-
-  // The check refuses and the call reports the refusal again: one Log line, and the agent's row says it.
-  w.check('deny')
-  w.refuse.add('b2')
-  await $.tool.check({ tool: 'Bash', input: { command: 'git push' }, tool_use_id: 'b2', agentId: 'ag-R3' } as never)
-  await $.tool.call({ tool: 'Bash', tool_use_id: 'b2', agentId: 'ag-R3', command: 'git push' } as never)
-  const pane = await mountPane($)
-  expect((await pane.findAll({ type: 'Text' })).filter(t => /developer +✗ denied Bash git push/.test(t.text))).toHaveLength(1)
-  expect(await pane.find({ text: /✗ denied Bash git push/ })).toBeDefined()
-  await pane.unmount()
-})
-
-test('no ask shows in the modes that answer without the person (auto, dontAsk, bypassPermissions), whatever the verdict', async ($, on) => {
-  const w = hudWorld(on)
-  w.check('ask')
-  await startSession($)
-  await panel($, 'prompt')
-  await $.classic.UserPromptSubmit({ prompt: 'go', permission_mode: 'auto' } as never)
-  const ui = await $.ui.mount(band())
-
-  // Auto mode's classifier answers an `ask` verdict alone: nothing waits on the person.
-  await $.tool.check({ tool: 'Bash', input: { command: 'go test' }, tool_use_id: 'b1' } as never)
-  expect(await ui.find({ text: /Waiting on you/ })).toBeUndefined()
-  await $.classic.PermissionRequest({ tool_name: 'Bash', tool_input: {} } as never)
-  expect(await ui.find({ text: /Waiting on you/ })).toBeUndefined()
-  for (const mode of ['dontAsk', 'bypassPermissions']) {
-    await $.classic.PermissionRequest({ tool_name: 'Bash', tool_input: {}, permission_mode: mode } as never)
-    expect(await ui.find({ text: /Waiting on you/ })).toBeUndefined()
-  }
-
-  // Back in default mode the request is a dialog: it shows, and the call's end closes it.
-  await $.classic.UserPromptSubmit({ prompt: 'go', permission_mode: 'default' } as never)
-  await $.classic.PermissionRequest({ tool_name: 'Bash', tool_input: {} } as never)
-  expect(await ui.find({ text: /! Waiting on you · lead asks to run Bash/ })).toBeDefined()
-  await $.tool.call({ tool: 'Bash', tool_use_id: 'b2', command: 'go test' } as never)
-  expect(await ui.find({ text: /Waiting on you/ })).toBeUndefined()
-  await ui.unmount()
-})
-
-test('the permission request hook returns what was decided beneath it unchanged, with the HUD healthy or failing', async ($, on) => {
-  let failing = false
-  const w = hudWorld(on, { now: () => { if (failing) throw new Error('clock unavailable'); return 1_000 } })
-  on('state.get', (_$, e, next) => { if (failing) throw new Error('state unavailable'); return next(e) })
-  on('state.set', (_$, e, next) => { if (failing) throw new Error('state unavailable'); return next(e) })
-  await startSession($)
-  const answers = [{}, { decision: { behavior: 'allow' as const } }, { decision: { behavior: 'deny' as const, message: 'not on this branch' } }]
-  for (const isFailing of [false, true]) {
-    failing = isFailing
-    for (const answer of answers) {
-      w.permission(answer)
-      expect(await $.classic.PermissionRequest({ tool_name: 'Bash', tool_input: { command: 'git push' }, agent_id: 'ag-R3', permission_mode: 'default' } as never)).toEqual(answer)
-    }
-  }
-})
-
-test('an agent\'s asks end with its run and the lead\'s with its turn, also when two agents ask for the same tool', async ($, on) => {
-  hudWorld(on)
-  await startSession($)
-  await panel($, 'prompt')
-  await $.agent.spawn({ subagentType: 'crew:developer', description: 'R3 typed structs', prompt: 'x', tool_use_id: 'tu1' } as never)
-  await $.agent.spawn({ subagentType: 'crew:tester', description: 'R4 cover it', prompt: 'x', tool_use_id: 'tu2' } as never)
-  const ui = await $.ui.mount(band())
-
-  await $.classic.PermissionRequest({ tool_name: 'Bash', tool_input: {}, agent_id: 'ag-R3', permission_mode: 'default' } as never)
-  await $.classic.PermissionRequest({ tool_name: 'Bash', tool_input: {}, agent_id: 'ag-R4', permission_mode: 'default' } as never)
-  await $.classic.PermissionRequest({ tool_name: 'Read', tool_input: {}, permission_mode: 'default' } as never)
-  expect(await ui.find({ text: /Waiting on you · developer asks to run Bash/ })).toBeDefined()
-
-  // The developer's run ends with its dialog unanswered: the tester's ask, for the same tool, still waits.
-  await $.turn.complete({ turnId: 'R3', agentId: 'ag-R3', reason: 'aborted', answer: '', durationMs: 10, isAborted: true } as never)
-  expect(await ui.find({ text: /Waiting on you · tester asks to run Bash/ })).toBeDefined()
-  await $.turn.complete({ turnId: 'R4', agentId: 'ag-R4', reason: 'answer', answer: 'done', durationMs: 10, isAborted: false } as never)
-  expect(await ui.find({ text: /Waiting on you · lead asks to run Read/ })).toBeDefined()
-
-  // The lead's turn ends: its ask goes too.
-  await $.turn.complete({ turnId: 'T1', reason: 'aborted', answer: '', durationMs: 10, isAborted: true } as never)
-  expect(await ui.find({ text: /asks to run/ })).toBeUndefined()
-  await ui.unmount()
-})
-
-test('the band draws only over the engine\'s band; a drawing that fails gives the band beneath back', async ($, on) => {
-  let failing = false
-  hudWorld(on, { now: () => { if (failing) throw new Error('clock unavailable'); return 1_000 } })
-  await startSession($)
-  await panel($, 'prompt')
-  const ui = await $.ui.mount(band())
-  expect(await ui.find({ text: /○ idle/ })).toBeDefined()
-  failing = true
-  await panel($, 'prompt') // a write the band reads: it draws again, and its reads fail
-  expect(await ui.find({ text: /idle|working/ })).toBeUndefined()
-  expect(await ui.drawn()).toMatchObject({ type: 'engine' })
-  await ui.unmount()
-})
-
-test('the active plan: the newest unfinished one at the start, read again after a Write under .crew/plans, pinned with /crew:panel plan', async ($, on) => {
-  const now = Date.now()
-  const w = hudWorld(on, {
-    files: {
-      [`${PLANS}/demo.md`]: { text: planText('- T1 (crew:developer, after: —) build the parser — state: queued'), mtimeMs: now - 3_600_000 },
-      [`${PLANS}/done.md`]: { text: planText('- D1 (lead, after: —) ship — state: committed (abc123)'), mtimeMs: now - 60_000 },
-      [`${PLANS}/old.md`]: { text: planText('- O1 (lead, after: —) someday — state: queued'), mtimeMs: now - 30 * DAY },
-      [`${PROJ}/notes.md`]: { text: planText('- N1 (lead, after: —) not a plan — state: queued'), mtimeMs: now },
-    },
-  })
-  await startSession($)
-  const ui = await mountPane($)
-  expect(await ui.find({ text: /╭─ Plan · demo ─/ })).toBeDefined()
-  expect(await ui.find({ text: /next +▱ T1 +developer +build the parser/ })).toBeDefined()
-
-  // A Write to the active plan: read again, the state change logged.
-  w.files.set(`${PLANS}/demo.md`, { text: planText('- T1 (crew:developer, after: —) build the parser — state: implementing'), mtimeMs: now })
-  await $.tool.call({ tool: 'Write', tool_use_id: 'w1', file_path: `${PLANS}/demo.md`, content: '' } as never)
-  expect(await ui.find({ text: /now +▶ T1/ })).toBeDefined()
-  expect(await ui.find({ text: /plan +T1 queued → implementing/ })).toBeDefined()
-
-  // A Write to another plan, relative to the working directory, makes it the active one.
-  w.files.set(`${PLANS}/other.md`, { text: planText('- X1 (crew:tester, after: —) cover it — state: queued'), mtimeMs: now })
-  await $.tool.call({ tool: 'Edit', tool_use_id: 'w2', file_path: '.crew/plans/other.md' } as never)
-  expect(await ui.find({ text: /╭─ Plan · other ─/ })).toBeDefined()
-
-  // A pin holds against later writes; a missing name is said; `plan auto` follows the last written again.
-  expect(await panel($, 'plan demo')).toBe('Panel follows plan demo.')
-  expect(await ui.find({ text: /╭─ Plan · demo ─/ })).toBeDefined()
-  await $.tool.call({ tool: 'Write', tool_use_id: 'w3', file_path: `${PLANS}/other.md` } as never)
-  expect(await ui.find({ text: /╭─ Plan · demo ─/ })).toBeDefined()
-  expect(await panel($, 'plan nope')).toBe('No plan named nope in .crew/plans/.')
-  expect(await panel($, 'plan ../demo')).toContain('Usage: /crew:panel')
-  expect(await panel($, 'plan auto')).toBe('Panel follows the plan last written in this session.')
-  expect(await ui.find({ text: /╭─ Plan · other ─/ })).toBeDefined()
-  // A write outside .crew/plans changes nothing.
-  await $.tool.call({ tool: 'Write', tool_use_id: 'w4', file_path: `${PROJ}/notes.md` } as never)
-  expect(await ui.find({ text: /╭─ Plan · other ─/ })).toBeDefined()
-  await ui.unmount()
-})
-
-test('only plans in this repository\'s .crew/plans count: a write to another repository\'s plan, even one named like the pin, changes nothing', async ($, on) => {
-  const now = Date.now()
-  const w = hudWorld(on, {
-    files: {
-      [`${PLANS}/demo.md`]: { text: planText('- T1 (lead, after: —) build — state: queued'), mtimeMs: now - 1000 },
-      ['/elsewhere/.crew/plans/demo.md']: { text: planText('- E1 (lead, after: —) foreign — state: implementing'), mtimeMs: now },
-      ['/elsewhere/.crew/plans/other.md']: { text: planText('- E2 (lead, after: —) foreign — state: queued'), mtimeMs: now },
-    },
-  })
-  await startSession($)
-  const ui = await mountPane($)
-  expect(await ui.find({ text: /╭─ Plan · demo ─/ })).toBeDefined()
-
-  // Unpinned: a write outside the repository's plans folder is not a plan write.
-  await $.tool.call({ tool: 'Write', tool_use_id: 'w1', file_path: '/elsewhere/.crew/plans/other.md' } as never)
-  await $.tool.call({ tool: 'Write', tool_use_id: 'w2', file_path: '../elsewhere/.crew/plans/other.md' } as never)
-  expect(await ui.find({ text: /╭─ Plan · demo ─/ })).toBeDefined()
-
-  // Pinned: the pin is this repository's demo.md, not any file named demo.md.
-  expect(await panel($, 'plan demo')).toBe('Panel follows plan demo.')
-  await $.tool.call({ tool: 'Write', tool_use_id: 'w3', file_path: '/elsewhere/.crew/plans/demo.md' } as never)
-  expect(await ui.find({ text: /T1/ })).toBeDefined()
-  expect(await ui.find({ text: /E1/ })).toBeUndefined()
-  expect(await panel($, 'plan auto')).toBe('Panel follows plan demo, the newest with steps left; a plan written in this session takes over.')
-  expect(w.files.size).toBe(3)
-  await ui.unmount()
-})
-
-test('`plan auto` with nothing written this session ranks the plans as at the start, and says when none qualifies', async ($, on) => {
-  const now = Date.now()
-  const w = hudWorld(on, {
-    now: () => now,
-    files: {
-      [`${PLANS}/fresh.md`]: { text: planText('- F1 (lead, after: —) next — state: queued'), mtimeMs: now - 60_000 },
-      [`${PLANS}/old.md`]: { text: planText('- O1 (lead, after: —) someday — state: queued'), mtimeMs: now - 30 * DAY },
-    },
-  })
-  await startSession($)
-  const ui = await mountPane($)
-  expect(await panel($, 'plan old')).toBe('Panel follows plan old.')
-  expect(await ui.find({ text: /╭─ Plan · old ─/ })).toBeDefined()
-
-  // The pin goes; the plan shown is the one the start would pick, not the old pin.
-  expect(await panel($, 'plan auto')).toBe('Panel follows plan fresh, the newest with steps left; a plan written in this session takes over.')
-  expect(await ui.find({ text: /╭─ Plan · fresh ─/ })).toBeDefined()
-
-  // With no plan left that qualifies, the panel shows none and the reply says why.
-  w.files.delete(`${PLANS}/fresh.md`)
-  expect(await panel($, 'plan old')).toBe('Panel follows plan old.')
-  expect(await panel($, 'plan auto')).toBe('No plan was written in this session or has steps left from the last 7 days; the panel shows a plan once one is written.')
-  expect(await ui.find({ text: /Plan · / })).toBeUndefined()
-  await ui.unmount()
-})
-
-test('the active plan is read again after a main-loop turn only when its file changed; a subagent\'s turn does not read it', async ($, on) => {
-  const now = Date.now()
-  const w = hudWorld(on, { files: { [`${PLANS}/demo.md`]: { text: planText('- T1 (lead, after: —) decide — state: queued'), mtimeMs: now - 1000 } } })
-  await startSession($)
-  const ui = await mountPane($)
-  const readsAtStart = w.fsCalls.reads
-  await $.turn.complete({ turnId: 'T1', reason: 'answer', answer: '', durationMs: 10, isAborted: false } as never)
-  expect(w.fsCalls.reads).toBe(readsAtStart) // same mtime: only a stat
-
-  w.files.set(`${PLANS}/demo.md`, { text: planText('- T1 (lead, after: —) decide — state: blocked (needs the user)'), mtimeMs: now })
-  await $.turn.complete({ turnId: 'S1', agentId: 'ag-x', reason: 'answer', answer: '', durationMs: 10, isAborted: false } as never)
-  expect(w.fsCalls.reads).toBe(readsAtStart)
-  await $.turn.complete({ turnId: 'T2', reason: 'answer', answer: '', durationMs: 10, isAborted: false } as never)
-  expect(w.fsCalls.reads).toBe(readsAtStart + 1)
-  expect(await ui.find({ text: /blocked ⊘ T1/ })).toBeDefined()
-  await ui.unmount()
-})
-
-test('claudeMeasured: Claude reads "waiting" until the host first measures; with no limits then, "no plan limits"', async ($, on) => {
-  hudWorld(on, { usage: true })
-  await startSession($)
-  const ui = await mountPane($)
-  expect(await ui.find({ text: /Claude · waiting/ })).toBeDefined()
-  await $.session.measure({ context: { window: 200_000, tokens: 30_000, percent: 15 }, rateLimits: [], changed: ['context'] } as never)
-  expect(await ui.find({ text: /Claude · waiting/ })).toBeUndefined()
-  expect(await ui.find({ text: /Claude · no plan limits/ })).toBeDefined()
-  expect(await ui.find({ text: /ctx ▰+▱+ 15%/ })).toBeDefined()
-  await ui.unmount()
-})
-
-test('a Jev-routed card keeps the lead\'s own description, even one that ends like a tag; an unrouted copied tag is stripped', ON, async ($, on) => {
-  const { seen } = jevWorld(on, { spawn: async e => ({ model: String(e.model ?? 'default'), agentId: e.subagentType === 'other:agent' ? 'ag2' : 'ag1' }) })
-  const writes = watchCards(on)
-  await $.agent.spawn(spawnInput({ description: 'compare · old-api/low' }))
-  expect(seen.spawned[0]).toMatchObject({ description: 'compare · old-api/low · opus/high' })
-  expect((writes.at(-1)?.value as { description: string }[])[0]).toMatchObject({ id: 'ag1', description: 'compare · old-api/low' })
-
-  await $.agent.spawn(spawnInput({ subagentType: 'other:agent', description: 'audit auth · opus/high', tool_use_id: 'tu2' }))
-  expect((writes.at(-1)?.value as { id: string; description: string }[]).find(c => c.id === 'ag2')).toMatchObject({ description: 'audit auth' })
 })
 
 // --- The -codex types (nativeCodex) ---
@@ -2280,8 +1273,6 @@ function nativeWorld(on: On, baseUrl?: string, o: { envFail?: boolean; twinFail?
   })
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('ui.status', () => ({ value: undefined }))
-  on('store.get', () => ({ value: undefined }))
-  on('store.set', () => ({ value: undefined }))
   on('ui.log', (_$, e) => (w.logs.push(e.text), { value: undefined }))
   return w
 }
@@ -2586,32 +1577,6 @@ for (const tool of ['Write', 'Edit'] as const) {
   })
 }
 
-test('architect-codex lands in the Review card as a consult, not as a card; developer-codex is a card', NATIVE, async ($, on) => {
-  on('agent.spawn', (_$, e) => ({ model: 'gpt-6-sage', agentId: e.subagentType === 'crew:architect-codex' ? 'ar1' : 'de1' }))
-  on('turn.start', (_$, e) => ({ turnId: e.turnId }))
-  on('turn.complete', () => ({ text: '' }))
-  on('ui.status', () => ({ value: undefined }))
-  mock.clock(on)
-  const writes = watchCards(on)
-
-  await $.turn.start({ text: 'plan it', turnId: 'T1' })
-  await $.agent.spawn(spawnInput({ subagentType: 'crew:architect-codex', description: 'review the plan', background: true }))
-  const pane = {
-    plugin: 'crew', component: 'Pane' as const, requestId: 'crew', surface: 'terminal' as const,
-    props: { title: 'Crew', isFocused: true, bodyColumns: 64, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 70 }, view: {} },
-  }
-  const ui = await $.ui.mount(pane as never)
-  expect(await ui.find({ text: /Review 1/ })).toBeDefined()
-  expect(await ui.find({ text: /● \d\d:\d\d architect·cx +consulting · 0:00 · review the plan/ })).toBeDefined()
-  await ui.unmount()
-  expect(writes.length).toBe(0)
-
-  await $.agent.spawn(spawnInput({ subagentType: 'crew:developer-codex', description: 'write the parser', background: true, tool_use_id: 'tu2' }))
-  const cards = writes.at(-1)?.value as { id: string; type: string; model: string }[]
-  expect(cards.map(card => card.id)).toEqual(['de1'])
-  expect(cards[0]).toMatchObject({ type: 'crew:developer-codex', model: 'gpt-6-sage' })
-})
-
 // --- Jev on the -codex twins, the gate and the registered set, through the host ---
 
 for (const [depth, effort] of [[2.9, 'medium'], [3.0, 'medium'], [3.5, 'high']] as const) {
@@ -2747,10 +1712,8 @@ test('with twins registered, an unregistered twin and a Claude role: one request
 
 const DENY_TEXT = (type: string) => `crew: ${type} runs on its own Codex model; call it again without \`model\``
 
-test('without a jevKey a -codex spawn that passes model is still refused, reaches no host and draws no card; without model it passes untagged', NATIVE, async ($, on) => {
-  const writes = watchCards(on)
+test('without a jevKey a -codex spawn that passes model is still refused and reaches no host; without model it passes untagged', NATIVE, async ($, on) => {
   const { seen } = await twinWorld($, on)
-  const before = writes.length
   const refused = await $.agent.spawn(spawnInput({ subagentType: 'crew:developer-codex', model: 'opus' }))
   expect(refused).toMatchObject({ deny: DENY_TEXT('crew:developer-codex') })
   const architect = await $.agent.spawn(spawnInput({ subagentType: 'crew:architect-codex', model: 'sonnet', tool_use_id: 'tu2' }))
@@ -2759,15 +1722,12 @@ test('without a jevKey a -codex spawn that passes model is still refused, reache
   expect(seen.fetches).toEqual([])
   expect(seen.notices).toEqual([])
   expect(seen.writes).toEqual([])
-  // The HUD wraps the crew's hook and draws no card for a refused spawn.
-  expect(writes.length).toBe(before)
 
   // Without model, the twin passes untouched: no Jev, no tag.
   await $.agent.spawn(spawnInput({ subagentType: 'crew:developer-codex', tool_use_id: 'tu3' }))
   expect(seen.spawned).toHaveLength(1)
   expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:developer-codex', description: 'audit auth' })
   expect(seen.spawned[0]?.model).toBeUndefined()
-  expect(writes.length).toBeGreaterThan(before)
   // A base role with model, routing off, is untouched.
   await $.agent.spawn(spawnInput({ subagentType: 'crew:developer', model: 'opus', tool_use_id: 'tu4' }))
   expect(seen.spawned[1]).toMatchObject({ subagentType: 'crew:developer', model: 'opus', description: 'audit auth' })
@@ -2882,26 +1842,19 @@ async function quotaWorld(
     deferStart?: boolean
     /** The atom cannot be written. */
     quotaWriteFails?: boolean
-    /** The HUD's own atoms cannot be written (its hooks fail after `next`). */
-    hudWriteFails?: boolean
   } = {},
 ) {
   const time = { now: Q_NOW }
   const limits = { value: o.claude === null ? [] : claudeLimits(...(o.claude ?? [20, 71])) }
   const atom: { last?: Quota } = {}
-  /** Every write of the card list the HUD keeps. */
-  const cards: { plugin: string; key: string; value: unknown }[] = []
-  /** Every write of the favored provider the HUD keeps. */
-  const favored: unknown[] = []
+  const stateKeys: string[] = []
   const world = jevWorld(on, {
     env: QUOTA_ENV, register: true, now: () => time.now, rateLimits: () => limits.value,
     status: o.status ?? (async () => codexStatus(38)), reply: async () => ok(answer('opus', 0.9, 3.9)), ...o.world,
   })
-  // The last value written to the atom: the test engine has no `$.state`, and the value is what the HUD would read.
+  // The last value written to the atom: the test engine has no `$.state`.
   on('state.set', (_$, e, next) => {
-    if (e.key === 'hudAgents') cards.push({ plugin: e.plugin, key: e.key, value: e.value })
-    if (e.key === 'hudFavored') favored.push(e.value)
-    if (o.hudWriteFails && e.key.startsWith('hud')) throw new Error('state unavailable')
+    stateKeys.push(e.key)
     if (e.key !== 'quota') return next(e)
     if (o.quotaWriteFails) return { deny: 'state unavailable' }
     atom.last = e.value as Quota
@@ -2912,7 +1865,7 @@ async function quotaWorld(
   on('tool.call', () => ({ result: 'written' }))
   const started = $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true } as never)
   if (!o.deferStart) await started
-  return { ...world, time, limits, atom, cards, favored, started }
+  return { ...world, time, limits, atom, stateKeys, started }
 }
 
 test('quotaRouting off: Jev routes as before, Codex is never asked and the record is v 2 with no readings', { options: { ...TWIN_OPTIONS, jevKey: KEY } }, async ($, on) => {
@@ -3001,6 +1954,17 @@ test('Codex favored: the first step is confirmed against the twin\'s id and effo
 
   expect(seen.transcript).toEqual(['jev: audit auth: confirmed gpt-6-astra · high'])
   expect(JSON.parse(seen.writes[1]?.text ?? '{}').ran).toEqual({ model: 'gpt-6-astra', effort: 'high' })
+})
+
+test('Codex favored: a twin step without effort stays absent, and a later step with effort receives the routed effort', QUOTA_JEV, async ($, on) => {
+  const { seen } = await quotaWorld($, on)
+  await $.agent.spawn(spawnInput())
+  expect(seen.spawned[0]?.subagentType).toBe('crew:developer-codex')
+
+  await step($, 'a1', null)
+  await step($, 'a1', 'medium')
+
+  expect(seen.steps).toEqual([undefined, 'high'])
 })
 
 test('Codex favored: a role switched to its twin keeps the twin\'s write lane', QUOTA_JEV, async ($, on) => {
@@ -3252,26 +2216,13 @@ test('a description tag copied from a task is stripped before the switch and the
   expect(seen.spawned[0]?.description).toBe('audit auth · gpt-6-astra/high')
 })
 
-test('the HUD draws the card of a switched call as the twin that runs it, on Codex, with the lead\'s description', QUOTA_JEV, async ($, on) => {
-  const { seen, cards: writes } = await quotaWorld($, on, { world: { spawn: async e => ({ model: String(e.model ?? 'default'), agentId: 'ag1' }) } })
-  await $.agent.spawn(spawnInput())
-
-  expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:developer-codex' })
-  const cards = writes.at(-1)?.value as { id: string; type: string; provider: string; description: string }[]
-  expect(cards).toHaveLength(1)
-  // The HUD wraps the crew's spawn and sees the type the lead wrote; the crew's `shared` tells it the twin ran.
-  expect(cards[0]).toMatchObject({ id: 'ag1', type: 'crew:developer-codex', provider: 'codex', description: 'audit auth' })
-})
-
 test('a twin the lead named is never moved, even with Claude favored, and still gets its own Jev effort', QUOTA_JEV, async ($, on) => {
-  const { seen, cards: writes } = await quotaWorld($, on, { claude: [10, 10], world: { reply: async () => ok(answer('opus', 0.9, 3.5)) } })
+  const { seen } = await quotaWorld($, on, { claude: [10, 10], world: { reply: async () => ok(answer('opus', 0.9, 3.5)) } })
   await $.agent.spawn(spawnInput({ subagentType: 'crew:developer-codex' }))
 
   expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:developer-codex', description: 'audit auth · gpt-6-astra/high' })
   expect(seen.notices).toEqual(['crew:developer-codex -> gpt-6-astra · high (jev)'])
-  // The card says Codex, as the decision record does: the lead named the twin, nothing switched it.
-  const cards = writes.at(-1)?.value as { type: string; provider: string }[]
-  expect(cards[0]).toMatchObject({ type: 'crew:developer-codex', provider: 'codex' })
+  expect(record(seen)).toMatchObject({ requested: 'crew:developer-codex', provider: 'codex' })
 })
 
 test('a refused spawn of a switched call announces and records nothing, and leaves no effort behind', QUOTA_JEV, async ($, on) => {
@@ -3308,57 +2259,24 @@ test('with quota routing off neither section mentions it', { options: { ...TWIN_
   for (const section of composed.sections) expect(section.text).not.toContain('quota routing')
 })
 
-// --- The HUD with quota routing: the twin as drawn ---
-
-test('a switched call is drawn as its twin (·cx, on the Codex model) in the pane, and Codex is favored in the Quota card', QUOTA_JEV, async ($, on) => {
-  await quotaWorld($, on, { world: { spawn: async e => ({ model: e.subagentType === 'crew:developer-codex' ? 'gpt-6-astra' : 'sonnet', agentId: 'ag1' }) } })
+test('startup, routing, confirmation and measurement use only quota state and no presentation or persistent-choice APIs', QUOTA_JEV, async ($, on) => {
+  const unexpected: string[] = []
+  on('store.get', () => (unexpected.push('store.get'), { value: undefined }))
+  on('store.set', () => (unexpected.push('store.set'), { value: undefined }))
+  on('ui.open', () => (unexpected.push('ui.open'), { value: { isPlaced: false } }) as never)
+  on('ui.close', () => (unexpected.push('ui.close'), { value: undefined }))
+  const world = await quotaWorld($, on, { world: { stepModel: 'gpt-6-astra' } })
   await $.agent.spawn(spawnInput())
-  const ui = await mountPane($)
-  expect(await ui.find({ text: /● developer·cx +GPT-6 Astra/ })).toBeDefined()
-  expect(await ui.find({ text: /→ Codex favored: 7d 38% used vs Claude 7d 71%/ })).toBeDefined()
-  expect(await ui.find({ text: /CREW +jev · cx/ })).toBeDefined()
-  await ui.unmount()
-})
-
-test('the first Codex reading of a session sets the favored baseline: Codex favored from the start is no change', QUOTA_JEV, async ($, on) => {
-  const world = await quotaWorld($, on)
-  expect(world.atom.last?.decision.provider).toBe('codex')
-  world.time.now = Q_NOW + 5_000
-  await $.session.measure({ context: { window: 100 }, rateLimits: claudeLimits(20, 71), changed: ['rateLimits'] } as never)
-  await $.agent.spawn(spawnInput())
-
-  // No stamp before Codex was read; the first is Codex, not a change from a Claude placeholder.
-  expect(world.favored.length).toBeGreaterThan(0)
-  expect(world.favored[0]).toMatchObject({ provider: 'codex', isChange: false })
-  expect(world.favored.every(f => (f as { isChange: boolean }).isChange === false)).toBe(true)
-})
-
-test('the twin\'s step shows the effort the crew applied beneath the HUD, not the one the host sent', QUOTA_JEV, async ($, on) => {
-  const { seen } = await quotaWorld($, on, { world: { spawn: async () => ({ model: 'gpt-6-astra', agentId: 'ag1' }), stepModel: 'gpt-6-astra', reply: async () => ok(answer('opus', 0.9, 3.9)) } })
-  await $.agent.spawn(spawnInput())
-  // The effort shows once a step carried one: not at the spawn, not on a step that sent none.
-  const spawned = await mountPane($)
-  expect(await spawned.find({ text: /developer·cx +GPT-6 Astra · high/ })).toBeUndefined()
-  await spawned.unmount()
-  await step($, 'ag1', null)
-  const bare = await mountPane($)
-  expect(await bare.find({ text: /developer·cx +GPT-6 Astra · high/ })).toBeUndefined()
-  await bare.unmount()
-  await step($, 'ag1', 'medium')
-  expect(seen.steps).toEqual([undefined, 'high'])
-  const ui = await mountPane($)
-  expect(await ui.find({ text: /developer·cx +GPT-6 Astra · high/ })).toBeDefined()
-  await ui.unmount()
-})
-
-// --- Carry-overs into the swap: the HUD's measure failing, the stay line, one "no trusted home" line ---
-
-test('a HUD session.measure that fails still lets the crew keep the Claude reading', QUOTA_JEV, async ($, on) => {
-  const world = await quotaWorld($, on, { claude: null, hudWriteFails: true })
+  await step($, 'a1', 'medium')
   world.time.now = Q_NOW + 5_000
   await $.session.measure({ context: { window: 100 }, rateLimits: claudeLimits(30, 60), changed: ['rateLimits'] } as never)
 
+  expect(unexpected).toEqual([])
+  expect(world.stateKeys.length).toBeGreaterThan(0)
+  expect([...new Set(world.stateKeys)]).toEqual(['quota'])
   expect(world.atom.last).toMatchObject({ claude: { sevenDay: { percentUsed: 60 } }, claudeAt: Q_NOW + 5_000 })
+  expect(world.seen.spawned[0]?.subagentType).toBe('crew:developer-codex')
+  expect(world.seen.transcript).toEqual(['jev: audit auth: confirmed gpt-6-astra · high'])
 })
 
 test('a call that could move to its twin and stays on Claude says why in one debug line; a switch and a role without a twin do not', { options: { nativeCodex: 'developer=gpt-6-astra', quotaRouting: true, jevKey: KEY } }, async ($, on) => {

@@ -101,7 +101,7 @@ test('decide: a window whose reset has passed counts as unknown', () => {
   expect(d({ sevenDay: w(80, future) }, { fiveHour: w(10, future), sevenDay: w(10, past) }, 'ok').provider).toBe('claude')
 })
 
-test('every reason fits the favored row (34 cells) and has no provider prefix', () => {
+test('every reason has no provider prefix', () => {
   const cases = [
     d(reading(10, 100), reading(10, 100), 'ok'),
     d(reading(100, 100), reading(10, 89), 'ok'),
@@ -115,7 +115,6 @@ test('every reason fits the favored row (34 cells) and has no provider prefix', 
     d(null, null, 'off', false),
   ]
   for (const { reason } of cases) {
-    expect(reason.length).toBeLessThanOrEqual(34)
     expect(reason).not.toMatch(/^(Claude|Codex): /)
   }
 })
@@ -250,7 +249,7 @@ test('settle recomputes the decision from the quota\'s own readings and leaves t
   expect(settle(base, false, NOW).decision).toEqual({ provider: 'claude', reason: 'routing off or no Codex twin' })
 })
 
-test('settle treats a Codex reading fetched more than STALE_MS ago as stale, so neither the router nor the HUD favors Codex from it', () => {
+test('settle treats a Codex reading fetched more than STALE_MS ago as stale, so the router never favors Codex from it', () => {
   const fresh = { ...INITIAL_QUOTA, claude: reading(10, 80), codex: reading(10, 20), codexState: 'ok' as const, fetchedAt: NOW - STALE_MS }
   expect(settle(fresh, true, NOW)).toMatchObject({ codexState: 'ok', decision: { provider: 'codex' } })
   const old = { ...fresh, fetchedAt: NOW - STALE_MS - 1 }

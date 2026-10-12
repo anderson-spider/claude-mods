@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import { EFFORT_FLOOR, MODEL_FLOORS, SPECIALISTS, nativeCodexSpecs } from '../hooks/agents'
 import type { Specialist } from '../hooks/agents'
-import { decide, defaultsOf, describe, moved, noticeText, retarget, route, routable, SHARED_CAP, shareAgent, stateOf, taggedDescription, twinFor, untagged } from '../hooks/routing'
+import { decide, defaultsOf, describe, moved, noticeText, retarget, route, routable, stateOf, taggedDescription, twinFor, untagged } from '../hooks/routing'
 import type { Routed } from '../hooks/routing'
 import { PROMPT_CHARS } from '../hooks/questions'
 
@@ -448,19 +448,4 @@ test('the notice of a switched call names the provider and the reason, with Jev\
 
 test('a call that was not switched keeps the notice it always had', () => {
   expect(noticeText(spec('developer'), routedAs('opus', 'high'), undefined, undefined, true)).toBe('crew:developer -> opus · high (jev)')
-})
-
-test('shareAgent keeps one entry per agent id, refreshes a repeated one and drops the oldest past the cap', () => {
-  const map = new Map<string, { type: string; provider: 'claude' | 'codex'; reason: string }>()
-  shareAgent(map, 'a1', { type: 'crew:developer-codex', provider: 'codex', reason: '7d 38% used vs Claude 7d 71%' })
-  shareAgent(map, 'a2', { type: 'crew:developer', provider: 'claude', reason: 'Codex quota not known yet' })
-  expect(map.get('a1')).toEqual({ type: 'crew:developer-codex', provider: 'codex', reason: '7d 38% used vs Claude 7d 71%' })
-
-  shareAgent(map, 'a1', { type: 'crew:developer', provider: 'claude', reason: 'again' })
-  expect([...map.keys()]).toEqual(['a2', 'a1'])
-
-  for (let i = 0; i < SHARED_CAP + 5; i++) shareAgent(map, `x${i}`, { type: 'crew:tester', provider: 'claude', reason: '' })
-  expect(map.size).toBe(SHARED_CAP)
-  expect(map.has('a2')).toBe(false)
-  expect(map.has(`x${SHARED_CAP + 4}`)).toBe(true)
 })
