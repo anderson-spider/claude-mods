@@ -15,7 +15,7 @@ import { checkKey, repoDeclares, resolveAccess } from './key'
 import type { KeyIo, Off } from './key'
 import { CODEX_MODELS, CODEX_PREFIX } from './native'
 import { JEV_MODEL } from './questions'
-import { API_CALL_PATH, CACHE_MS, CREDENTIALS_PATH, DEADLINE_MS, INITIAL_QUOTA, activeCodexAccount, claudeReading, codexUsage, remoteAccess, settle, usageRequest } from './quota'
+import { CACHE_MS, CONNECTIONS_PATH, DEADLINE_MS, INITIAL_QUOTA, activeCodexConnection, claudeReading, codexUsage, remoteAccess, settle, usagePath } from './quota'
 import type { Provider, Quota, RateLimitInput, RemoteAccess } from './quota'
 import { defaultsOf, describe, moved, noticeText, retarget, route, routable, taggedDescription, twinFor, untagged } from './routing'
 import type { Routed, Switch, Target } from './routing'
@@ -249,19 +249,16 @@ function remoteOf($: Dollar, routing: Routing): Promise<RemoteAccess> {
 }
 
 /** One management request: its text on a 2xx answer, undefined on any failure. The key goes only to the remote's origin. */
-async function management($: Dollar, access: Extract<RemoteAccess, { ok: true }>, path: string, body?: string): Promise<string | undefined> {
-  const init = body === undefined
-    ? { method: 'GET', headers: access.headers }
-    : { method: 'POST', headers: { ...access.headers, 'Content-Type': 'application/json' }, body }
+async function management($: Dollar, access: Extract<RemoteAccess, { ok: true }>, path: string): Promise<string | undefined> {
   return $.http
-    .fetch(`${access.origin}${path}`, init)
+    .fetch(`${access.origin}${path}`, { method: 'GET', headers: access.headers })
     .then(response => (response.status >= 200 && response.status < 300 ? response.text : undefined))
     .catch(() => undefined)
 }
 
 type CodexRead = Pick<Quota, 'codex' | 'codexState' | 'fetchedAt' | 'codexObservedAt'>
 
-/** One read of Codex's usage: the remote's one active Codex account, then OpenAI's usage through it. A failed request is `down`, anything else unusable `unknown`. */
+/** One read of Codex's usage: the remote's one active Codex connection, then its live usage. A failed request is `down`, anything else unusable `unknown`. */
 async function readCodex($: Dollar, routing: Routing, now: number): Promise<CodexRead> {
   const failed = (codexState: 'down' | 'unknown'): CodexRead => ({ codex: null, codexState, fetchedAt: now, codexObservedAt: null })
   try {
@@ -271,14 +268,14 @@ async function readCodex($: Dollar, routing: Routing, now: number): Promise<Code
       $.ui.log(`crew quota: Codex not asked (${access.reason})`, { to: 'debug' })
       return failed('unknown')
     }
-    const credentials = await management($, access, CREDENTIALS_PATH)
-    if (credentials === undefined) return failed('down')
-    const index = activeCodexAccount(credentials)
-    if (index === undefined) {
-      $.ui.log('crew quota: Codex not asked (the remote has no single active Codex account)', { to: 'debug' })
+    const connections = await management($, access, CONNECTIONS_PATH)
+    if (connections === undefined) return failed('down')
+    const id = activeCodexConnection(connections)
+    if (id === undefined) {
+      $.ui.log('crew quota: Codex not asked (the remote has no single active Codex connection)', { to: 'debug' })
       return failed('unknown')
     }
-    const usage = await management($, access, API_CALL_PATH, usageRequest(index))
+    const usage = await management($, access, usagePath(id))
     if (usage === undefined) return failed('down')
     const read = codexUsage(usage, now)
     return { codex: read.reading, codexState: read.state, fetchedAt: now, codexObservedAt: read.observedAt }

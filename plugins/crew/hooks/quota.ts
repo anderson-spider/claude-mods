@@ -27,18 +27,16 @@ export type Quota = {
 export type RateLimitInput = { kind: string; percentUsed: number; resetsAt?: string }
 
 export const DEADLINE_MS = 1500
-/** A Codex usage result, failures included, is reused for this long: each read asks OpenAI through the remote. */
+/** A Codex usage result, failures included, is reused for this long: each read has the remote ask OpenAI. */
 export const CACHE_MS = 5 * 60_000
 export const STALE_MS = 15 * 60_000
 /** A provider whose 5-hour window is used at least this much is not chosen. */
 export const VETO = 90
 /** Codex wins only with its 7-day used at least this many points below Claude's. */
 export const MARGIN = 10
-/** The remote's management API: its Codex accounts, and a request it sends with an account's own token. */
-export const CREDENTIALS_PATH = '/v8/management/credentials'
-export const API_CALL_PATH = '/v8/management/requests/api-call'
-/** What the remote asks OpenAI for the plan's limits; `$TOKEN$` is the remote's placeholder for the account's token. */
-export const USAGE_URL = 'https://chatgpt.com/backend-api/wham/usage'
+/** The remote's management API: its provider connections, and one connection's live usage. */
+export const CONNECTIONS_PATH = '/api/providers'
+export const usagePath = (connectionId: string): string => `/api/usage/${encodeURIComponent(connectionId)}`
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -63,37 +61,33 @@ export function claudeReading(rateLimits: readonly RateLimitInput[] | undefined 
 
 const isNumber = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value)
 
-/** One `wham/usage` window as a Reading key and Window; anything malformed or of another length is skipped. */
-function usageWindow(raw: unknown, reached: boolean, now: number): ['fiveHour' | 'sevenDay', Window] | undefined {
-  if (!isObject(raw) || !isNumber(raw.used_percent) || raw.used_percent < 0) return undefined
-  const seconds = raw.limit_window_seconds
-  const key = seconds === 300 * 60 ? 'fiveHour' : seconds === 10080 * 60 ? 'sevenDay' : undefined
+/** A connection id as the remote writes it; anything else is not put in a request path. */
+const CONNECTION_ID = /^[\w-]{1,64}$/
+
+/** One usage quota as a Reading key and Window; unlimited, malformed or of another length is skipped. */
+function usageWindow(raw: unknown, reached: boolean): ['fiveHour' | 'sevenDay', Window] | undefined {
+  if (!isObject(raw) || raw.unlimited === true || !isNumber(raw.used) || !isNumber(raw.total) || raw.total <= 0 || raw.used < 0) return undefined
+  const key = raw.windowSeconds === 5 * 3600 ? 'fiveHour' : raw.windowSeconds === 7 * 86400 ? 'sevenDay' : undefined
   if (key === undefined) return undefined
-  const percentUsed = reached || raw.limit_reached === true ? 100 : clampPercent(raw.used_percent)
-  let resets: number | undefined
-  if (isNumber(raw.reset_at) && Number.isInteger(raw.reset_at) && raw.reset_at >= 1 && raw.reset_at < 1e11) resets = raw.reset_at * 1000
-  else if (isNumber(raw.reset_after_seconds) && raw.reset_after_seconds >= 0 && raw.reset_after_seconds < 1e9) resets = now + raw.reset_after_seconds * 1000
-  return [key, { percentUsed, ...(resets !== undefined ? { resetsAt: new Date(resets).toISOString() } : {}) }]
+  const percentUsed = reached ? 100 : clampPercent((raw.used / raw.total) * 100)
+  const resets = typeof raw.resetAt === 'string' ? Date.parse(raw.resetAt) : NaN
+  return [key, { percentUsed, ...(Number.isNaN(resets) ? {} : { resetsAt: new Date(resets).toISOString() }) }]
 }
 
 /**
- * Codex's windows from the remote's api-call answer: an envelope `{status_code, body}` whose body is OpenAI's usage JSON
- * (`rate_limit.primary_window` / `secondary_window`). The windows are named by length, not by primary/secondary, and
- * observed now. A non-2xx call, a malformed envelope or no usable window is `unknown`. Never throws.
+ * Codex's windows from the remote's usage answer for one connection: `quotas` holds windows `{used, total, resetAt,
+ * windowSeconds}` under any name, so they are named by length and observed now. `limitReached` reads 100. A malformed
+ * answer or no usable window is `unknown`. Never throws.
  */
 export function codexUsage(text: unknown, now: number): { reading: Reading | null; state: 'ok' | 'unknown'; observedAt: number | null } {
   const unknown = { reading: null, state: 'unknown' as const, observedAt: null }
   try {
-    const envelope: unknown = typeof text === 'string' ? JSON.parse(text) : text
-    if (!isObject(envelope) || !isNumber(envelope.status_code) || envelope.status_code < 200 || envelope.status_code >= 300) return unknown
-    if (typeof envelope.body !== 'string') return unknown
-    const root: unknown = JSON.parse(envelope.body)
-    if (!isObject(root)) return unknown
-    const holder = isObject(root.rate_limit) ? root.rate_limit : root
-    const reached = holder.limit_reached === true
+    const root: unknown = typeof text === 'string' ? JSON.parse(text) : text
+    if (!isObject(root) || !isObject(root.quotas)) return unknown
+    const reached = root.limitReached === true
     const reading: Reading = {}
-    for (const name of ['primary_window', 'secondary_window']) {
-      const window = usageWindow(holder[name], reached, now)
+    for (const quota of Object.values(root.quotas)) {
+      const window = usageWindow(quota, reached)
       if (window && reading[window[0]] === undefined) reading[window[0]] = window[1]
     }
     if (!reading.fiveHour && !reading.sevenDay) return unknown
@@ -103,36 +97,27 @@ export function codexUsage(text: unknown, now: number): { reading: Reading | nul
   }
 }
 
-/** The one active, enabled, available Codex account in the remote's credential list; none, or several, is undefined. */
-export function activeCodexAccount(text: unknown): string | undefined {
+/** The id of the remote's one active Codex connection; none, or several, is undefined. */
+export function activeCodexConnection(text: unknown): string | undefined {
   try {
-    const envelope: unknown = typeof text === 'string' ? JSON.parse(text) : text
-    if (!isObject(envelope) || !Array.isArray(envelope.files)) return undefined
-    const active = envelope.files.filter(
-      (file): file is Record<string, unknown> =>
-        isObject(file) &&
-        (file.type === 'codex' || file.provider === 'codex') &&
-        file.status === 'active' &&
-        file.disabled !== true &&
-        file.unavailable !== true,
+    const root: unknown = typeof text === 'string' ? JSON.parse(text) : text
+    if (!isObject(root) || !Array.isArray(root.connections)) return undefined
+    const active = root.connections.filter(
+      (connection): connection is Record<string, unknown> =>
+        isObject(connection) && connection.provider === 'codex' && connection.isActive === true,
     )
-    const index = active.length === 1 ? active[0]?.auth_index : undefined
-    return typeof index === 'string' && index !== '' ? index : undefined
+    const id = active.length === 1 ? active[0]?.id : undefined
+    return typeof id === 'string' && CONNECTION_ID.test(id) ? id : undefined
   } catch {
     return undefined
   }
-}
-
-/** The api-call body that has the remote ask OpenAI's usage endpoint with the account's own token. */
-export function usageRequest(authIndex: string): string {
-  return JSON.stringify({ auth_index: authIndex, method: 'GET', url: USAGE_URL, header: { Authorization: 'Bearer $TOKEN$' } })
 }
 
 export type RemoteAccess = { ok: true; origin: string; headers: Record<string, string> } | { ok: false; reason: string }
 
 /**
  * Where and how to ask the remote's management API: an `http:` or `https:` origin with no userinfo, path, query or
- * fragment, and the management key as a bearer. Reasons are fixed phrases: no URL or key text is in them.
+ * fragment, and the management token as a bearer. Reasons are fixed phrases: no URL or key text is in them.
  */
 export function remoteAccess(remote: unknown, key: unknown): RemoteAccess {
   if (remote === undefined || remote === null || (typeof remote === 'string' && remote.trim() === '')) return { ok: false, reason: 'no codexRemote option' }

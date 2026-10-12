@@ -7,13 +7,13 @@ import {
   STALE_MS,
   VETO,
   claudeReading,
-  activeCodexAccount,
+  activeCodexConnection,
   codexUsage,
   decide,
   remoteAccess,
   settle,
   INITIAL_QUOTA,
-  usageRequest,
+  usagePath,
   type CodexState,
   type Quota,
   type Reading,
@@ -136,68 +136,68 @@ test('claudeReading keeps five_hour and seven_day, ignores spend_limit and unkno
   expect(claudeReading([{ kind: 'five_hour', percentUsed: Number.NaN }])).toBeNull()
 })
 
-/** The remote's api-call envelope around OpenAI's usage body. */
-const envelope = (body: unknown, status = 200) => JSON.stringify({ status_code: status, body: typeof body === 'string' ? body : JSON.stringify(body) })
-const win = (minutes: number, used: number, extra: Record<string, unknown> = {}) => ({ used_percent: used, limit_window_seconds: minutes * 60, ...extra })
+/** The remote's usage answer for one connection, shaped as a live read returns it. */
+const usage = (quotas: Record<string, unknown>, extra: Record<string, unknown> = {}) => JSON.stringify({ plan: 'pro', limitReached: false, quotas, ...extra })
+const win = (seconds: number, used: number, extra: Record<string, unknown> = {}) => ({ used, total: 100, remaining: 100 - used, windowSeconds: seconds, unlimited: false, ...extra })
+const FIVE = 5 * 3600
+const WEEK = 7 * 86400
 
-test('codexUsage names windows by length, not by primary or secondary, and observes them now', () => {
-  const { reading, state, observedAt } = codexUsage(envelope({ rate_limit: { primary_window: win(300, 36, { reset_at: 1791037689 }), secondary_window: win(10080, 21) } }), NOW)
+test('codexUsage names windows by length, not by their key, and observes them now', () => {
+  const { reading, state, observedAt } = codexUsage(usage({ session: win(FIVE, 36, { resetAt: '2026-10-12T15:00:00.000Z' }), weekly: win(WEEK, 21) }), NOW)
   expect(state).toBe('ok')
   expect(observedAt).toBe(NOW)
-  expect(reading?.fiveHour).toEqual({ percentUsed: 36, resetsAt: new Date(1791037689 * 1000).toISOString() })
+  expect(reading?.fiveHour).toEqual({ percentUsed: 36, resetsAt: '2026-10-12T15:00:00.000Z' })
   expect(reading?.sevenDay).toEqual({ percentUsed: 21 })
-  // A plan that reports only a weekly window reports it as primary.
-  const weekly = codexUsage(envelope({ rate_limit: { primary_window: win(10080, 5, { reset_after_seconds: 60 }) } }), NOW)
-  expect(weekly.reading).toEqual({ sevenDay: { percentUsed: 5, resetsAt: new Date(NOW + 60_000).toISOString() } })
-  // The windows may sit at the top level.
-  expect(codexUsage(envelope({ primary_window: win(300, 9) }), NOW).reading?.fiveHour?.percentUsed).toBe(9)
+  // A plan that reports only a weekly window may file it under `session`, as the remote does today.
+  expect(codexUsage(usage({ session: win(WEEK, 20, { resetAt: '2026-10-18T04:48:45.000Z', displayName: 'Weekly' }) }), NOW).reading).toEqual({
+    sevenDay: { percentUsed: 20, resetsAt: '2026-10-18T04:48:45.000Z' },
+  })
+  // Percent is used over total, not an assumed 100.
+  expect(codexUsage(usage({ a: win(WEEK, 50, { total: 200 }) }), NOW).reading?.sevenDay?.percentUsed).toBe(25)
 })
 
 test('codexUsage: a reached limit reads 100, and percent is clamped', () => {
-  expect(codexUsage(envelope({ rate_limit: { limit_reached: true, secondary_window: win(10080, 40) } }), NOW).reading?.sevenDay?.percentUsed).toBe(100)
-  expect(codexUsage(envelope({ rate_limit: { primary_window: win(300, 40, { limit_reached: true }) } }), NOW).reading?.fiveHour?.percentUsed).toBe(100)
-  expect(codexUsage(envelope({ rate_limit: { primary_window: win(300, 140) } }), NOW).reading?.fiveHour?.percentUsed).toBe(100)
+  expect(codexUsage(usage({ w: win(WEEK, 40) }, { limitReached: true }), NOW).reading?.sevenDay?.percentUsed).toBe(100)
+  expect(codexUsage(usage({ w: win(FIVE, 140) }), NOW).reading?.fiveHour?.percentUsed).toBe(100)
 })
 
-test('codexUsage: a failed call, a malformed envelope or body, or no usable window is unknown and never throws', () => {
+test('codexUsage: a malformed answer, an unlimited or unknown-length window, or no usable window is unknown and never throws', () => {
   const unknown = { reading: null, state: 'unknown', observedAt: null }
   for (const input of [
     'not json', '', '{}', 'null', undefined, null, 5,
-    envelope({ rate_limit: { primary_window: win(300, 5) } }, 401),
-    JSON.stringify({ status_code: 200 }),
-    JSON.stringify({ status_code: 200, body: 'not json' }),
-    envelope({ rate_limit: { primary_window: win(60, 5), secondary_window: { used_percent: 'x', limit_window_seconds: 18000 } } }),
-    envelope({ rate_limit: { primary_window: win(300, -1) } }),
-    envelope({ rate_limit: { primary_window: { used_percent: 5, limit_window_seconds: 18001 } } }),
+    JSON.stringify({ quotas: 'x' }),
+    usage({}),
+    usage({ w: win(WEEK, 5, { unlimited: true }) }),
+    usage({ w: win(3600, 5), x: { used: 'x', total: 100, windowSeconds: FIVE } }),
+    usage({ w: win(FIVE, -1) }),
+    usage({ w: win(FIVE, 5, { total: 0 }) }),
+    usage({ w: win(FIVE + 1, 5) }),
   ]) {
     expect(codexUsage(input, NOW)).toEqual(unknown)
   }
-  // An out-of-range reset is dropped, the window kept.
-  expect(codexUsage(envelope({ rate_limit: { primary_window: win(300, 5, { reset_at: 1e20 }) } }), NOW).reading).toEqual({ fiveHour: { percentUsed: 5 } })
+  // An unreadable reset is dropped, the window kept.
+  expect(codexUsage(usage({ w: win(FIVE, 5, { resetAt: 'soon' }) }), NOW).reading).toEqual({ fiveHour: { percentUsed: 5 } })
 })
 
-test('activeCodexAccount takes the one active, enabled, available Codex account', () => {
-  const file = (extra: Record<string, unknown>) => ({ type: 'codex', status: 'active', auth_index: 'a1', ...extra })
-  expect(activeCodexAccount(JSON.stringify({ files: [file({}), { type: 'claude', status: 'active', auth_index: 'c1' }] }))).toBe('a1')
-  expect(activeCodexAccount({ files: [file({ type: undefined, provider: 'codex' })] })).toBe('a1')
-  for (const files of [
-    [], [file({ disabled: true })], [file({ unavailable: true })], [file({ status: 'error' })], [file({ auth_index: '' })],
-    [file({}), file({ auth_index: 'a2' })],
+test('activeCodexConnection takes the one active Codex connection', () => {
+  const connection = (extra: Record<string, unknown>) => ({ id: 'c-1', provider: 'codex', isActive: true, ...extra })
+  expect(activeCodexConnection(JSON.stringify({ connections: [connection({}), { id: 'x', provider: 'claude', isActive: true }] }))).toBe('c-1')
+  for (const connections of [
+    [], [connection({ isActive: false })], [connection({ provider: 'openai' })], [connection({ id: '' })],
+    [connection({ id: '../x' })], [connection({ id: 7 })], [connection({}), connection({ id: 'c-2' })],
   ]) {
-    expect(activeCodexAccount({ files })).toBeUndefined()
+    expect(activeCodexConnection({ connections })).toBeUndefined()
   }
-  for (const input of ['not json', '{}', '{"files":"x"}', undefined, null]) expect(activeCodexAccount(input)).toBeUndefined()
+  for (const input of ['not json', '{}', '{"connections":"x"}', undefined, null]) expect(activeCodexConnection(input)).toBeUndefined()
 })
 
-test('usageRequest asks OpenAI\'s usage with the remote\'s token placeholder, never a real token', () => {
-  expect(JSON.parse(usageRequest('a1'))).toEqual({
-    auth_index: 'a1', method: 'GET', url: 'https://chatgpt.com/backend-api/wham/usage', header: { Authorization: 'Bearer $TOKEN$' },
-  })
+test('usagePath reads one connection\'s live usage', () => {
+  expect(usagePath('47aeb5c0-297d-47e6')).toBe('/api/usage/47aeb5c0-297d-47e6')
 })
 
 test('remoteAccess takes an http or https origin and the key as a bearer', () => {
-  expect(remoteAccess('https://cliproxy.example.ts.net', 'mgmt-key')).toEqual({
-    ok: true, origin: 'https://cliproxy.example.ts.net', headers: { Authorization: 'Bearer mgmt-key', Accept: 'application/json' },
+  expect(remoteAccess('https://remote.example.ts.net', 'mgmt-key')).toEqual({
+    ok: true, origin: 'https://remote.example.ts.net', headers: { Authorization: 'Bearer mgmt-key', Accept: 'application/json' },
   })
   expect(remoteAccess('http://10.0.0.5:8317/', ' mgmt-key ')).toMatchObject({ ok: true, origin: 'http://10.0.0.5:8317', headers: { Authorization: 'Bearer mgmt-key' } })
 })
