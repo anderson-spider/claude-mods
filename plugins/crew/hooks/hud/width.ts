@@ -99,28 +99,38 @@ export function charWidth(cp: number): 0 | 1 | 2 {
   return inRanges(cp, WIDE) ? 2 : 1
 }
 
+const graphemes = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
+
+const isRegionalIndicator = (cp: number): boolean => cp >= 0x1f1e6 && cp <= 0x1f1ff
+
 /**
- * The cells a string takes. A base character followed by VS16 (emoji presentation) takes two; a character after a
- * ZWJ joins the sequence and adds nothing, so a family emoji counts as one wide glyph.
+ * The cells one grapheme cluster takes: 2 when it holds VS16 (emoji presentation), a ZWJ joining visible characters (a
+ * family emoji is one wide glyph), a pair of regional indicators (a flag) or a wide code point; otherwise the widest of
+ * its code points (0 for a lone mark or joiner).
+ */
+function clusterWidth(cluster: string): number {
+  const points = Array.from(cluster, ch => ch.codePointAt(0) as number)
+  let widest = 0
+  let visible = 0
+  let flags = 0
+  for (const cp of points) {
+    const w = charWidth(cp)
+    if (w > 0) visible++
+    if (w > widest) widest = w
+    if (isRegionalIndicator(cp)) flags++
+  }
+  if (widest === 0) return 0
+  if (points.includes(VS16) || flags >= 2 || (points.includes(ZWJ) && visible > 1)) return 2
+  return widest
+}
+
+/**
+ * The cells a string takes, summed over its grapheme clusters (clusterWidth): a ZWJ joins only within a cluster, so a
+ * character after a stray joiner still counts.
  */
 export function cellWidth(text: string): number {
   let width = 0
-  let afterJoiner = false
-  const points = Array.from(text, ch => ch.codePointAt(0) as number)
-  for (let i = 0; i < points.length; i++) {
-    const cp = points[i] as number
-    if (cp === ZWJ) {
-      afterJoiner = true
-      continue
-    }
-    const w = charWidth(cp)
-    if (afterJoiner) {
-      afterJoiner = false
-      if (w > 0) continue
-    }
-    if (w === 0) continue
-    width += points[i + 1] === VS16 ? 2 : w
-  }
+  for (const { segment } of graphemes.segment(text)) width += clusterWidth(segment)
   return width
 }
 
@@ -132,8 +142,6 @@ export const cleanControls = (text: string): string => text.replace(CONTROL, ' '
 
 /** Text for one row: controls and whitespace runs collapse to one space, ends trimmed. */
 export const oneLine = (text: string): string => text.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029\s]+/g, ' ').trim()
-
-const graphemes = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
 
 /**
  * Cuts a string to at most `max` cells, ending in `…` (one cell) when something was cut, with a trailing space trimmed
