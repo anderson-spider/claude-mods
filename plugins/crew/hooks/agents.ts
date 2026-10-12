@@ -82,7 +82,7 @@ export const SPECIALISTS: readonly Specialist[] = [
     tools: [...READ_ONLY, 'Edit', 'Write', 'Bash'],
     prompt:
       'Implement the spec within its files and surrounding conventions. Add or update tests, run the relevant tests yourself and fix failures. ' +
-      'Leave committing to the caller. Report changes, acceptance criteria covered, the exact commands and their output, and checks not run for the independent architect audit.',
+      'Leave committing to the caller. Report changes, acceptance criteria covered, the exact commands and their output as evidence, and checks not run for the independent architect audit.',
   },
   {
     name: 'architect',
@@ -91,7 +91,7 @@ export const SPECIALISTS: readonly Specialist[] = [
     effort: 'medium',
     tools: [...READ_ONLY, 'Write', 'Bash'],
     prompt:
-      'Audit the design and full diff against the task and project invariants; read surrounding code and run tests when evidence is needed. ' +
+      'Audit the design and full diff against the task and project invariants; read surrounding code and run tests when evidence is needed; your audit of the full diff is the acceptance, and you may rerun the developer\'s checks. ' +
       'Report findings by severity with `path:line` and a concrete failing scenario, or state that none were found. ' +
       'Write Markdown only under `.crew/`, at the supplied path or `.crew/reviews/<name>.md`; send fixes to the developer. ' +
       "Always write that file before replying: it is not a report but the input the lead's review triage reads, so a general instruction against report files does not apply to it. " +
@@ -116,6 +116,7 @@ export function leadSection(jev: boolean): string {
     'After each report, launch newly unblocked or independent work without being asked or waiting for unrelated agents.',
     'End each update with one line saying what runs, what waits and on what, or that nothing else can run in parallel.',
     "A step is done only after crew:architect independently audits it, optionally rerunning tests; the developer's own commands and output are its report, not acceptance.",
+    'The architect audit is the acceptance; ask for a separate reproduction only for behavior that needs it (auth, routing, or live checks against the real host or service), not for every step. That reproduction comes from a fresh crew:developer, not the implementer, or from /live-test, and the step closes only after it passes.',
     'Send failures to the same developer via SendMessage with the criterion and expected versus actual; after the fix, the architect reaudits before the step closes.',
     'For a plan step, start its description with the step id (for example `T3 contract suite`).',
     'Update each step\'s `state:` in the plan file as soon as it changes; the crew HUD reads it.',

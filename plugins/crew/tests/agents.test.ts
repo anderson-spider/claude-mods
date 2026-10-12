@@ -180,12 +180,14 @@ test('the native section lists only the given twins and never names the Codex en
 })
 
 test('independent acceptance is the architect audit, not the developer self-check or a different family', () => {
+  expect(SPECIALISTS.find(s => s.name === 'architect')?.prompt).toContain('your audit of the full diff is the acceptance')
   for (const jev of [true, false]) {
     const text = leadSection(jev)
     expect(text).toContain('crew:developer for implementation and tests')
     expect(text).toContain('only after crew:architect independently audits it')
     expect(text).toContain('own commands and output are its report, not acceptance')
     expect(text).toContain('after the fix, the architect reaudits')
+    expect(text).toContain('The architect audit is the acceptance; ask for a separate reproduction only for behavior that needs it (auth, routing, or live checks against the real host or service), not for every step. That reproduction comes from a fresh crew:developer, not the implementer, or from /live-test, and the step closes only after it passes.')
     expect(text).not.toContain('crew:tester')
   }
   const text = nativeCodexSection(nativeCodexSpecs({ developer: 'gpt-x', architect: 'gpt-y' }))
