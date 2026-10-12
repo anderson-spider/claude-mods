@@ -846,8 +846,8 @@ const maxMessageRunes = 300
 
 // CleanMessage readies an upstream error message for the client: control
 // characters become spaces, runs of space collapse, and the text is cut to
-// maxMessageRunes. An upstream can echo a prompt or a token in its error, so
-// the text is passed on bounded and never logged.
+// maxMessageRunes, then marked with "…". An upstream can echo a prompt or a
+// token in its error, so the text is passed on bounded and never logged.
 func CleanMessage(message string) string {
 	var b strings.Builder
 	space := false
@@ -857,7 +857,9 @@ func CleanMessage(message string) string {
 			space = b.Len() > 0
 			continue
 		}
-		if n >= maxMessageRunes {
+		// A pending space goes out only with the rune after it, so the cut
+		// keeps at most maxMessageRunes and never ends in " …".
+		if n >= maxMessageRunes || (space && n+2 > maxMessageRunes) {
 			b.WriteString("…")
 			return b.String()
 		}

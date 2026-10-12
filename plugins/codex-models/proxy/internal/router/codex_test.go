@@ -1,6 +1,7 @@
 package router
 
 import (
+	"encoding/json"
 	"net/http"
 	"regexp"
 	"strings"
@@ -451,7 +452,36 @@ func TestUpstreamErrorMessageIsCleanedAndCapped(t *testing.T) {
 	if n := len([]rune(message)); n > 301 {
 		t.Fatalf("message has %d characters, want at most 300 and an ellipsis", n)
 	}
-	if !strings.HasSuffix(message, "…") {
-		t.Fatalf("a cut message must say so: %q", message)
+	if !strings.HasSuffix(message, "…") || strings.HasSuffix(message, " …") {
+		t.Fatalf("a cut message must say so, after a word: %q", message)
+	}
+
+	// Around the cap, with and without a space where the cut falls.
+	a := strings.Repeat("a", 300)
+	cases := []struct{ name, in, want string }{
+		{"300 runes", a, a},
+		{"301 runes", a + "b", a + "…"},
+		{"space at 299", a[:298] + " b", a[:298] + " b"},
+		{"space at 299, then more", a[:298] + " bcd", a[:298] + " b…"},
+		{"space at 300", a[:299] + " b", a[:299] + "…"},
+		{"space at 300, then more", a[:299] + " bbb ccc", a[:299] + "…"},
+		{"space at 301", a + " b", a + "…"},
+		{"newline at 300", a[:299] + "\nb", a[:299] + "…"},
+		{"trailing space", a[:299] + " ", a[:299]},
+	}
+	for _, c := range cases {
+		text, err := json.Marshal(c.in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		h := newHarness(t, nil, backendStatus(http.StatusBadRequest, `{"error":{"message":`+string(text)+`}}`), true)
+		rec := h.do(t, http.MethodPost, "/v1/messages", `{"model":"gpt-6-luna","messages":[]}`)
+		got := gjson.Get(rec.Body.String(), "error.message").String()
+		if got != c.want {
+			t.Errorf("%s: message = %q (%d runes), want %q", c.name, got, len([]rune(got)), c.want)
+		}
+		if n := len([]rune(got)); n > 301 || strings.HasSuffix(got, " …") {
+			t.Errorf("%s: message = %q (%d runes)", c.name, got, n)
+		}
 	}
 }
