@@ -629,3 +629,97 @@ func TestRejectedRefreshKeepsAStillValidToken(t *testing.T) {
 		t.Fatalf("Access = %q, %v; want the still-valid token", access, err)
 	}
 }
+
+// An auth_dir that is CODEX_HOME, inside it, or a link to either is refused:
+// no codex.json, no codex.lock and no chmod in the Codex CLI's directory.
+func TestAuthDirInsideCodexHomeIsRefused(t *testing.T) {
+	home, cli := cliHome(t, time.Hour)
+	if err := os.Chmod(home, 0o755); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	links := t.TempDir()
+	homeLink := filepath.Join(links, "home-link")
+	if err := os.Symlink(home, homeLink); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	dangling := filepath.Join(links, "dangling")
+	if err := os.Symlink(filepath.Join(home, "not-yet"), dangling); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	sep := string(filepath.Separator)
+	cases := map[string]StoreOptions{
+		"auth_dir is CODEX_HOME":           {Dir: home},
+		"auth_dir inside it":               {Dir: filepath.Join(home, "proxy", "auth")},
+		"auth_dir links to it":             {Dir: homeLink},
+		"auth_dir under a link to it":      {Dir: filepath.Join(homeLink, "auth")},
+		"auth_dir dangling link into it":   {Dir: dangling},
+		"auth_dir through dotdot":          {Dir: home + sep + "x" + sep + ".." + sep + "auth"},
+		"auth_file in it":                  {Dir: t.TempDir(), ExplicitPath: filepath.Join(home, "proxy.json")},
+		"auth_file under a link to it":     {Dir: t.TempDir(), ExplicitPath: filepath.Join(homeLink, "proxy.json")},
+		"auth_dir is CODEX_HOME, with CLI": {Dir: home, UseCodexCLI: true},
+	}
+	if runtime.GOOS == "darwin" && caseInsensitive(home) {
+		cases["auth_dir in another case"] = StoreOptions{
+			Dir: filepath.Join(filepath.Dir(home), strings.ToUpper(filepath.Base(home)), "auth"),
+		}
+	}
+
+	for name, options := range cases {
+		t.Run(name, func(t *testing.T) {
+			before := snap(t, cli)
+			homeInfo, _ := os.Stat(home)
+			fake, client := newOAuthServer(t, 0)
+			store := NewStore(client, options)
+
+			if err := store.Check(); !errors.Is(err, ErrInsideCodexHome) {
+				t.Fatalf("Check() = %v, want ErrInsideCodexHome", err)
+			}
+			if err := store.Save(&Token{AccessToken: "x", RefreshToken: "y"}); !errors.Is(err, ErrInsideCodexHome) {
+				t.Fatalf("Save() = %v, want ErrInsideCodexHome", err)
+			}
+			if _, _, err := store.Access(context.Background()); !errors.Is(err, ErrInsideCodexHome) {
+				t.Fatalf("Access() = %v, want ErrInsideCodexHome", err)
+			}
+			if _, err := store.Remove(); !errors.Is(err, ErrInsideCodexHome) {
+				t.Fatalf("Remove() = %v, want ErrInsideCodexHome", err)
+			}
+			if !strings.Contains(fmt.Sprint(store.Check()), home) {
+				t.Fatalf("Check() = %v, want it to name %s", store.Check(), home)
+			}
+			if n := fake.calls.Load(); n != 0 {
+				t.Fatalf("token endpoint called %d times", n)
+			}
+			before.assertUnchanged(t, cli, name)
+			if info, _ := os.Stat(home); info.Mode() != homeInfo.Mode() {
+				t.Fatalf("CODEX_HOME mode changed: %v -> %v", homeInfo.Mode(), info.Mode())
+			}
+			if _, err := os.Lstat(filepath.Join(home, "proxy")); !os.IsNotExist(err) {
+				t.Fatalf("a directory was created in CODEX_HOME: %v", err)
+			}
+		})
+	}
+}
+
+// A sibling that only shares CODEX_HOME's name as a prefix is not inside it.
+func TestAuthDirBesideCodexHomeIsAccepted(t *testing.T) {
+	home, _ := cliHome(t, time.Hour)
+	store := NewStore(nil, StoreOptions{Dir: home + "-proxy"})
+	if err := store.Check(); err != nil {
+		t.Fatalf("Check() = %v, want nil for a sibling directory", err)
+	}
+	if err := store.Save(&Token{AccessToken: "at"}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+}
+
+// ensureDir refuses CODEX_HOME on its own, whatever Check was told.
+func TestEnsureDirRefusesCodexHome(t *testing.T) {
+	home, _ := cliHome(t, time.Hour)
+	store := NewStore(nil, StoreOptions{Dir: t.TempDir()})
+	if err := store.ensureDir(filepath.Join(home, "sub")); !errors.Is(err, ErrInsideCodexHome) {
+		t.Fatalf("ensureDir = %v, want ErrInsideCodexHome", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, "sub")); !os.IsNotExist(err) {
+		t.Fatal("ensureDir created a directory in CODEX_HOME")
+	}
+}

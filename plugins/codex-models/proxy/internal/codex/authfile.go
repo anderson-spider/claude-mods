@@ -62,6 +62,26 @@ func refersToCodexCLI(path string) bool {
 	return sameFile(path, cli)
 }
 
+// insideCodexHome reports whether dir is the Codex CLI's directory or lies
+// inside it, after symlinks (a dangling one included), `..` and, on macOS,
+// case.
+func insideCodexHome(dir string) bool {
+	home := CodexCLIHome()
+	if strings.TrimSpace(dir) == "" || home == "" {
+		return false
+	}
+	for current := resolvePath(dir, 0); ; {
+		if sameFile(current, home) {
+			return true
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return false
+		}
+		current = parent
+	}
+}
+
 // sameFile reports whether a and b name one file, after symlinks and `..`,
 // and also when one of them does not exist yet: then the same name in the
 // same directory counts, case-insensitively on macOS, whose default volume
