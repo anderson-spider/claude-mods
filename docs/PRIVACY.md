@@ -2,10 +2,6 @@
 
 What each plugin reads, saves and sends. Everything stays on your machine except where a section says otherwise.
 
-## branch-guard
-
-It reads the text of the Bash command Claude is about to run, runs `git` commands to measure it, and shows the result in a band. It saves nothing and sends nothing out. State lives in the session only and is cleared on reload.
-
 ## chatgpt
 
 - **Sent:** the prompt, and any files you attach, go to chatgpt.com through the tab of your logged-in browser (terminal-browser). The plugin never sees your ChatGPT credentials; it drives the page you are already signed in to.

@@ -6,7 +6,6 @@ Marketplace of [Claude Code](https://claude.com/claude-code) plugins made by and
 
 | Plugin | What it does |
 | --- | --- |
-| [branch-guard](plugins/branch-guard) | Holds a `git commit` or `git push` on the protected branch and shows what would go in. |
 | [chatgpt](plugins/chatgpt) | Lets Claude ask your logged-in ChatGPT, or have it generate an image, in terminal-browser, Claude in Chrome or the Claude desktop app's built-in browser, and saves the result locally. |
 | [codex-computer-use](plugins/codex-computer-use) | Routes native Mac app control through Codex computer use from the ChatGPT app instead of Claude's own computer use, asking before each new app. |
 | [codex-models](plugins/codex-models) | Offers OpenAI Codex models (ChatGPT login) in Claude Code through a local loopback proxy, in `/model` and in agent definitions; Claude models pass through to Anthropic unchanged. |
@@ -19,7 +18,6 @@ Inside Claude Code, add the marketplace and install the plugin:
 
 ```
 /plugin marketplace add anderson-spider/claude-mods
-/plugin install branch-guard@spider-claude-mods
 /plugin install chatgpt@spider-claude-mods
 /plugin install codex-computer-use@spider-claude-mods
 /plugin install codex-models@spider-claude-mods
@@ -36,14 +34,6 @@ To use a local copy instead of GitHub, pass the folder path:
 The plugins here are function hooks mods, a Claude Code API still in early access that may change between versions.
 
 See [Privacy and permissions](docs/PRIVACY.md) for what each plugin reads and saves, and [Verification](docs/VERIFICATION.md) for what the tests cover and what they do not.
-
-## branch-guard
-
-When Claude calls Bash with `git commit` or `git push` and the target branch is `main`, `master`, `develop`, `release` or `release/*` (also `release-*` and `release_*`), Branch Guard holds the call and shows in the band above the prompt what would go in: the commit's files or the commits that would be pushed, in the same band layout (`Command`, `Would`, `… and N more`, `Proceed` on key `1`, `Cancel` on key `2`). On cancel, Claude gets the refusal with guidance to open a working branch (`git switch -c`) and redo the command there, or to open a PR when the push is `HEAD:<protected>` from another branch.
-
-Passes without asking: commits and pushes on other branches, on a detached HEAD, in a repository inside `/tmp`, `git commit --dry-run`, `git push --dry-run`, tag-only pushes and commits with nothing staged. Force push is not handled here. To turn the warning off, disable only this plugin.
-
-Limitations: the plugin reads the command text, so `merge`, `cherry-pick`, `rebase`, `pull`, aliases and `bash -c "git commit"` do not go through it; a stray `"` or `'` in the body of a `-m "$(cat <<EOF …)"` can confuse the parsing; it only sees what Claude types, not your terminal.
 
 ## chatgpt
 
@@ -204,7 +194,7 @@ The active plan is a Markdown file in `.crew/plans/` (the `brainstorm` skill wri
 
 - Bare `/crew:panel` toggles the panel; `on` and `off` show and hide it.
 - `side` shows it in the host's pane: beside the transcript from 110 columns in fullscreen, inline above the prompt otherwise (and on a narrow terminal an unasked pane waits undrawn until you ask for it).
-- `prompt` shows a summary band above the prompt instead and closes the pane. The band always yields to another plugin's band, such as a commit held by branch-guard, which shows in its place. The surface raises the band on the terminal and the desktop app only; on other surfaces `prompt` shows nothing, so use `side` there.
+- `prompt` shows a summary band above the prompt instead and closes the pane. The band always yields to another plugin's band, which shows in its place. The surface raises the band on the terminal and the desktop app only; on other surfaces `prompt` shows nothing, so use `side` there.
 - `layout auto|mini` sets the side pane's layout for the session (`mini` keeps the summary even when docked); the band always shows the summary. `reset` clears what the HUD shows of the session's work and keeps the plan.
 - `plan <name>` pins the plan `.crew/plans/<name>.md`; `plan auto` drops the pin and follows the plan last written, or, with none written in the session, the newest plan with steps left (as at the start). Only a `.md` directly under `.crew/plans/` counts.
 
@@ -278,7 +268,7 @@ To edit a plugin with automatic reload, point Claude Code straight at its folder
 ```json
 {
   "env": {
-    "CLAUDE_CODE_PLUGIN_DIRS": "/path/to/claude-mods/plugins/branch-guard"
+    "CLAUDE_CODE_PLUGIN_DIRS": "/path/to/claude-mods/plugins/<name>"
   }
 }
 ```
@@ -287,8 +277,6 @@ To validate and test:
 
 ```
 claude plugin validate .
-claude plugin validate plugins/branch-guard
-claude plugin test plugins/branch-guard
 claude plugin validate plugins/chatgpt
 claude plugin test plugins/chatgpt
 claude plugin validate plugins/codex-computer-use

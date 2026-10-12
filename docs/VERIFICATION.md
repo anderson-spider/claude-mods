@@ -4,7 +4,6 @@ How each plugin is checked and what that does not prove. Run the commands to get
 
 ```
 claude plugin validate .
-claude plugin test plugins/branch-guard
 claude plugin test plugins/chatgpt
 claude plugin test plugins/codex-computer-use
 claude plugin test plugins/codex-models
@@ -20,7 +19,6 @@ node --test plugins/codex-models/tests/scripts/*.test.mjs
 
 | Plugin | Tests | Host |
 | --- | --- | --- |
-| branch-guard | Classification of commands, protected-branch detection, the held band and its buttons | A fake host that answers by executable and subcommand |
 | chatgpt | Page scripts' flow, tab handling, queue, jobs, attachments | A fake `Browser`; no real page |
 | codex-computer-use (plugin) | Command parsing, routing, the approval band, `limitMs` | The `claude-code/testing` host |
 | codex-computer-use (helper) | Hub, MCP client, approvals, owners, `install.sh --check` | The real hub and client against a fake MCP server, with approvals pointed at a temp file |
@@ -38,4 +36,3 @@ node --test plugins/codex-models/tests/scripts/*.test.mjs
 - The crew HUD was checked live in the terminal: the docked and the inline pane, `/crew:panel` and its saved pick, the Session, Quota, Plan, agent, Review, timeline and Log cards, the Waiting on you row on a real Bash dialog and an MCP tool's dialog (and its absence in `auto` mode), a narrow docked pane, and agent timing by job (one end line per job, a background wake kept in its job, a resume through `SendMessage` opening a new one). Quota routing's switch to a `-codex` twin was checked live against a local fake Codex, not a real account: the type rewrite, the tag and confirmation, the decision record, the Quota card, routing off, a Codex reading too high to switch, and no key or token in the logs and records. Still unverified live: the pane's close mark, the Agent tool's ask, the advisor tool's block, the notice of a switched or background spawn, the full layout at 56 columns (the host's kept dock width won in every run), the `×N` job counts, the Quota heading's stale and down words, a name as a `SendMessage` target, a refused or throwing `SendMessage` (covered by host tests), the Codex 5-hour veto and the stale-reading rule, and a real Codex twin's tool use. The desktop surface is covered only by mounted tests, which do not establish visual acceptance.
 - The plugins use the function hooks API, in early access, so a Claude Code update can break them without a test failing here.
 - codex-models: no real ChatGPT login, Codex request or Claude Code session is exercised by the tests; the installer tests never load the LaunchAgent. Whether a new session lists the Codex rows in `/model` and what a `crew:*-codex` agent answers is checked live only. The `wham/usage` field names come from a third-party report, and a real `?refresh=limits` against OpenAI (and the status during a real token refresh) has not been run.
-- `branch-guard` reads command text. Aliases, scripts and anything the text does not show get past it (commands inside `$(…)` and `bash -c` are classified); it is a safety net, not a permission system.
