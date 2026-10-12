@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/codex"
@@ -29,7 +28,7 @@ func runStatus(args []string) error {
 	line("session salt", "%s", presence(cfg.SessionSalt))
 
 	store := codex.NewStore(nil, storeOptions(cfg))
-	line("codex sources", "%s", strings.Join(store.Sources(), ", "))
+	line("codex file", "%s", store.NativePath())
 	if err := store.Check(); err != nil {
 		line("codex", "refused: %v", err)
 		return nil
@@ -40,7 +39,6 @@ func runStatus(args []string) error {
 		return nil
 	}
 	line("codex", "%s (%s)", accountLabel(token), planLabel(token))
-	line("codex file", "%s", store.Path())
 	if !token.ExpiresAt.IsZero() {
 		line("codex token", "expires %s", token.ExpiresAt.Local().Format(time.RFC3339))
 	}

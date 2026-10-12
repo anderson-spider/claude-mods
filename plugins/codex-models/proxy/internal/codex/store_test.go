@@ -1,7 +1,6 @@
 package codex
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,7 +10,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -60,58 +58,6 @@ func newOAuthServer(t *testing.T, delay time.Duration) (*oauthServer, *Client) {
 }
 
 // snapshot is everything about a file that a write or removal would change.
-type snapshot struct {
-	data    []byte
-	mode    os.FileMode
-	modTime time.Time
-	entries []string
-}
-
-func snap(t *testing.T, path string) snapshot {
-	t.Helper()
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatalf("stat %s: %v", path, err)
-	}
-	listing, err := os.ReadDir(filepath.Dir(path))
-	if err != nil {
-		t.Fatalf("list %s: %v", filepath.Dir(path), err)
-	}
-	var entries []string
-	for _, entry := range listing {
-		entries = append(entries, entry.Name())
-	}
-	return snapshot{data: data, mode: info.Mode(), modTime: info.ModTime(), entries: entries}
-}
-
-func (s snapshot) assertUnchanged(t *testing.T, path, step string) {
-	t.Helper()
-	now := snap(t, path)
-	if !bytes.Equal(now.data, s.data) {
-		t.Fatalf("%s: the Codex CLI file was rewritten:\n%s", step, now.data)
-	}
-	if now.mode != s.mode || !now.modTime.Equal(s.modTime) {
-		t.Fatalf("%s: the Codex CLI file was touched (mode %v -> %v, mtime %v -> %v)",
-			step, s.mode, now.mode, s.modTime, now.modTime)
-	}
-	if strings.Join(now.entries, ",") != strings.Join(s.entries, ",") {
-		t.Fatalf("%s: the Codex CLI directory changed: %v -> %v", step, s.entries, now.entries)
-	}
-}
-
-// cliHome points CODEX_HOME at a fresh directory and writes a CLI login there.
-func cliHome(t *testing.T, expiresIn time.Duration) (home, path string) {
-	t.Helper()
-	home = filepath.Join(t.TempDir(), ".codex")
-	path = writeCodexCLIAuth(t, home, accessToken(expiresIn, "acct_cli", "plus"), "rt-cli")
-	t.Setenv("CODEX_HOME", home)
-	return home, path
-}
-
 func writeNative(t *testing.T, path string, token Token, mode os.FileMode) {
 	t.Helper()
 	data, err := json.Marshal(token)
@@ -123,240 +69,7 @@ func writeNative(t *testing.T, path string, token Token, mode os.FileMode) {
 	}
 }
 
-func TestCandidateOrder(t *testing.T) {
-	home, _ := cliHome(t, time.Hour)
-	dir := t.TempDir()
-	own := filepath.Join(dir, "codex.json")
-	cli := filepath.Join(home, "auth.json")
-
-	for _, tc := range []struct {
-		name    string
-		options StoreOptions
-		want    []string
-	}{
-		{"own file only by default", StoreOptions{Dir: dir}, []string{own}},
-		{"own file, then the CLI's", StoreOptions{Dir: dir, UseCodexCLI: true}, []string{own, cli}},
-		{"auth_file alone", StoreOptions{Dir: dir, ExplicitPath: "/elsewhere/creds.json", UseCodexCLI: true},
-			[]string{"/elsewhere/creds.json"}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			got := NewStore(nil, tc.options).Sources()
-			if strings.Join(got, ",") != strings.Join(tc.want, ",") {
-				t.Fatalf("Sources() = %v, want %v", got, tc.want)
-			}
-		})
-	}
-}
-
-// The CLI's login is borrowed as is: Access within the refresh lead, a Save,
-// a refresh of the proxy's own token and a logout all leave it byte for byte.
-func TestCodexCLIFileIsNeverWrittenOrRemoved(t *testing.T) {
-	// Inside the refresh lead: an own file would be refreshed here.
-	_, cli := cliHome(t, 2*time.Minute)
-	before := snap(t, cli)
-	time.Sleep(10 * time.Millisecond)
-
-	fake, client := newOAuthServer(t, 0)
-	dir := t.TempDir()
-	store := NewStore(client, StoreOptions{Dir: dir, UseCodexCLI: true})
-
-	access, account, err := store.Access(context.Background())
-	if err != nil {
-		t.Fatalf("Access: %v", err)
-	}
-	if access == "" || account != "acct_cli" {
-		t.Fatalf("Access = %q/%q, want the CLI's token", access, account)
-	}
-	if n := fake.calls.Load(); n != 0 {
-		t.Fatalf("the CLI's token was refreshed (%d calls)", n)
-	}
-	before.assertUnchanged(t, cli, "Access")
-
-	// login: the proxy's own file, never the CLI's.
-	if err := store.Save(&Token{AccessToken: "own", RefreshToken: "rt-1", ExpiresAt: time.Now().Add(-time.Minute)}); err != nil {
-		t.Fatalf("Save: %v", err)
-	}
-	before.assertUnchanged(t, cli, "Save")
-
-	// The proxy's own expired token is refreshed into its own file.
-	access, _, err = store.Access(context.Background())
-	if err != nil {
-		t.Fatalf("Access after Save: %v", err)
-	}
-	if access != "access-from-rt-1" {
-		t.Fatalf("access = %q, want the refreshed own token", access)
-	}
-	before.assertUnchanged(t, cli, "refresh")
-
-	removed, err := store.Remove()
-	if err != nil {
-		t.Fatalf("Remove: %v", err)
-	}
-	if removed != filepath.Join(dir, "codex.json") {
-		t.Fatalf("Remove removed %s, want the proxy's own file", removed)
-	}
-	if _, err := os.Stat(removed); !os.IsNotExist(err) {
-		t.Fatalf("the proxy's own file is still there: %v", err)
-	}
-	before.assertUnchanged(t, cli, "Remove")
-
-	// Nothing of the proxy's own is left: logout does not move on to the CLI's.
-	if _, err := store.Remove(); !os.IsNotExist(err) {
-		t.Fatalf("a second Remove = %v, want not-exist", err)
-	}
-	before.assertUnchanged(t, cli, "second Remove")
-	if n := fake.calls.Load(); n != 1 {
-		t.Fatalf("refresh calls = %d, want only the proxy's own one", n)
-	}
-}
-
-func TestExpiredCodexCLILoginFailsWithoutRefreshing(t *testing.T) {
-	_, cli := cliHome(t, -time.Hour)
-	before := snap(t, cli)
-	fake, client := newOAuthServer(t, 0)
-
-	store := NewStore(client, StoreOptions{Dir: t.TempDir(), UseCodexCLI: true})
-	_, _, err := store.Access(context.Background())
-	if !errors.Is(err, ErrCodexCLILoginExpired) {
-		t.Fatalf("Access error = %v, want ErrCodexCLILoginExpired", err)
-	}
-	for _, hint := range []string{"`codex login`", "`ccmproxy login codex`", cli} {
-		if !strings.Contains(err.Error(), hint) {
-			t.Fatalf("error %q does not mention %s", err, hint)
-		}
-	}
-	if n := fake.calls.Load(); n != 0 {
-		t.Fatalf("an expired CLI login reached the token endpoint (%d calls)", n)
-	}
-	before.assertUnchanged(t, cli, "Access")
-}
-
-// caseInsensitive reports whether dir's volume ignores case.
-func caseInsensitive(dir string) bool {
-	upper := filepath.Join(filepath.Dir(dir), strings.ToUpper(filepath.Base(dir)))
-	if upper == dir {
-		return false
-	}
-	a, errA := os.Stat(dir)
-	b, errB := os.Stat(upper)
-	return errA == nil && errB == nil && os.SameFile(a, b)
-}
-
-func TestAuthFileNamingTheCodexCLIFileIsRefused(t *testing.T) {
-	home, cli := cliHome(t, -time.Hour)
-	links := t.TempDir()
-
-	symlink := filepath.Join(links, "link.json")
-	if err := os.Symlink(cli, symlink); err != nil {
-		t.Fatalf("symlink: %v", err)
-	}
-	dirLink := filepath.Join(links, "codex-dir")
-	if err := os.Symlink(home, dirLink); err != nil {
-		t.Fatalf("symlink: %v", err)
-	}
-	// Joined by hand: filepath.Join would clean the `..` away.
-	dotdot := home + string(filepath.Separator) + ".." + string(filepath.Separator) + ".codex" +
-		string(filepath.Separator) + "auth.json"
-	cases := map[string]string{
-		"direct":      cli,
-		"symlink":     symlink,
-		"dotdot":      dotdot,
-		"dir symlink": filepath.Join(dirLink, "auth.json"),
-	}
-	if rel, err := filepath.Rel(mustGetwd(t), cli); err == nil {
-		cases["relative"] = rel
-	}
-	if runtime.GOOS == "darwin" && caseInsensitive(home) {
-		cases["case"] = filepath.Join(filepath.Dir(home), strings.ToUpper(filepath.Base(home)), "AUTH.JSON")
-	}
-
-	for name, path := range cases {
-		t.Run(name, func(t *testing.T) {
-			before := snap(t, cli)
-			fake, client := newOAuthServer(t, 0)
-			store := NewStore(client, StoreOptions{Dir: t.TempDir(), ExplicitPath: path})
-
-			if err := store.Check(); !errors.Is(err, ErrAuthFileIsCodexCLI) {
-				t.Fatalf("Check() = %v, want ErrAuthFileIsCodexCLI", err)
-			}
-			if _, err := store.Peek(); !errors.Is(err, ErrAuthFileIsCodexCLI) {
-				t.Fatalf("Peek() = %v, want ErrAuthFileIsCodexCLI", err)
-			}
-			if _, _, err := store.Access(context.Background()); !errors.Is(err, ErrAuthFileIsCodexCLI) {
-				t.Fatalf("Access() = %v, want ErrAuthFileIsCodexCLI", err)
-			}
-			if err := store.Save(&Token{AccessToken: "x", RefreshToken: "y"}); !errors.Is(err, ErrAuthFileIsCodexCLI) {
-				t.Fatalf("Save() = %v, want ErrAuthFileIsCodexCLI", err)
-			}
-			if _, err := store.Remove(); !errors.Is(err, ErrAuthFileIsCodexCLI) {
-				t.Fatalf("Remove() = %v, want ErrAuthFileIsCodexCLI", err)
-			}
-			if n := fake.calls.Load(); n != 0 {
-				t.Fatalf("token endpoint called %d times", n)
-			}
-			before.assertUnchanged(t, cli, name)
-			if _, err := os.Lstat(symlink); err != nil {
-				t.Fatalf("the symlink was removed: %v", err)
-			}
-		})
-	}
-}
-
-// Before the Codex CLI has signed in its file does not exist; an auth_file
-// naming it (or a link to it) is refused all the same.
-func TestAuthFileNamingAMissingCodexCLIFileIsRefused(t *testing.T) {
-	home := filepath.Join(t.TempDir(), ".codex")
-	if err := os.MkdirAll(home, 0o700); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	t.Setenv("CODEX_HOME", home)
-	dangling := filepath.Join(t.TempDir(), "link.json")
-	if err := os.Symlink(filepath.Join(home, "auth.json"), dangling); err != nil {
-		t.Fatalf("symlink: %v", err)
-	}
-
-	for _, path := range []string{filepath.Join(home, "auth.json"), dangling} {
-		store := NewStore(nil, StoreOptions{Dir: t.TempDir(), ExplicitPath: path})
-		if err := store.Save(&Token{AccessToken: "x"}); !errors.Is(err, ErrAuthFileIsCodexCLI) {
-			t.Fatalf("Save to %s = %v, want ErrAuthFileIsCodexCLI", path, err)
-		}
-		if _, err := os.Stat(filepath.Join(home, "auth.json")); !os.IsNotExist(err) {
-			t.Fatalf("the Codex CLI file was created through %s", path)
-		}
-	}
-}
-
-// The proxy's own file turned into a link to the CLI's is refused outright.
-func TestOwnFileLinkedToTheCodexCLIFileIsRefused(t *testing.T) {
-	_, cli := cliHome(t, -time.Hour)
-	dir := t.TempDir()
-	if err := os.Symlink(cli, filepath.Join(dir, "codex.json")); err != nil {
-		t.Fatalf("symlink: %v", err)
-	}
-	before := snap(t, cli)
-	fake, client := newOAuthServer(t, 0)
-
-	store := NewStore(client, StoreOptions{Dir: dir})
-	if err := store.Check(); !errors.Is(err, ErrInsideCodexHome) {
-		t.Fatalf("Check = %v, want ErrInsideCodexHome", err)
-	}
-	if _, _, err := store.Access(context.Background()); !errors.Is(err, ErrInsideCodexHome) {
-		t.Fatalf("Access = %v, want ErrInsideCodexHome", err)
-	}
-	if err := store.Save(&Token{AccessToken: "x"}); err == nil {
-		t.Fatal("Save wrote through a link to the Codex CLI file")
-	}
-	if _, err := store.Remove(); err == nil {
-		t.Fatal("Remove accepted a link to the Codex CLI file")
-	}
-	if n := fake.calls.Load(); n != 0 {
-		t.Fatalf("token endpoint called %d times", n)
-	}
-	before.assertUnchanged(t, cli, "linked own file")
-}
-
 func TestAtomicWriteTightensAnExistingFile(t *testing.T) {
-	t.Setenv("CODEX_HOME", t.TempDir())
 	dir := filepath.Join(t.TempDir(), "auth")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
@@ -397,7 +110,6 @@ func TestAtomicWriteTightensAnExistingFile(t *testing.T) {
 }
 
 func TestAtomicWriteCreatesThePrivateDir(t *testing.T) {
-	t.Setenv("CODEX_HOME", t.TempDir())
 	dir := filepath.Join(t.TempDir(), "a", "auth")
 	store := NewStore(nil, StoreOptions{Dir: dir})
 	if err := store.Save(&Token{AccessToken: "at"}); err != nil {
@@ -411,7 +123,6 @@ func TestAtomicWriteCreatesThePrivateDir(t *testing.T) {
 // Two proxies sharing an auth dir, both finding the token expired, spend the
 // refresh token once: the second waits for the lock and reads the first's.
 func TestConcurrentRefreshRotatesOnce(t *testing.T) {
-	t.Setenv("CODEX_HOME", t.TempDir())
 	fake, client := newOAuthServer(t, 100*time.Millisecond)
 	dir := t.TempDir()
 	writeNative(t, filepath.Join(dir, "codex.json"),
@@ -460,7 +171,6 @@ func TestConcurrentRefreshRotatesOnce(t *testing.T) {
 // A token another instance writes while this one waits for the lock is used
 // as is, without a refresh.
 func TestRefreshRereadsTheFileUnderTheLock(t *testing.T) {
-	t.Setenv("CODEX_HOME", t.TempDir())
 	fake, client := newOAuthServer(t, 0)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "codex.json")
@@ -476,11 +186,6 @@ func TestRefreshRereadsTheFileUnderTheLock(t *testing.T) {
 		t.Fatalf("flock: %v", err)
 	}
 
-	waiting := make(chan struct{})
-	var once sync.Once
-	lockBusy = func() { once.Do(func() { close(waiting) }) }
-	t.Cleanup(func() { lockBusy = nil })
-
 	store := NewStore(client, StoreOptions{Dir: dir})
 	type result struct {
 		access string
@@ -493,11 +198,9 @@ func TestRefreshRereadsTheFileUnderTheLock(t *testing.T) {
 	}()
 
 	select {
-	case <-waiting:
+	case <-time.After(100 * time.Millisecond):
 	case r := <-done:
 		t.Fatalf("Access returned without waiting for the lock: %+v", r)
-	case <-time.After(5 * time.Second):
-		t.Fatal("Access never reached the lock")
 	}
 
 	// The other instance finishes: a fresh token on disk, then the unlock.
@@ -531,7 +234,6 @@ func mustGetwd(t *testing.T) string {
 // whose token endpoint answers status with body.
 func expiredOwnLogin(t *testing.T, status int, body string) (*Store, *atomic.Int32) {
 	t.Helper()
-	t.Setenv("CODEX_HOME", t.TempDir())
 	calls := &atomic.Int32{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
@@ -608,7 +310,6 @@ func TestTransientRefreshFailureIsNotLoginExpired(t *testing.T) {
 	}
 
 	t.Run("network", func(t *testing.T) {
-		t.Setenv("CODEX_HOME", t.TempDir())
 		server := httptest.NewServer(http.NotFoundHandler())
 		base := server.URL
 		server.Close()
@@ -631,100 +332,6 @@ func TestRejectedRefreshKeepsAStillValidToken(t *testing.T) {
 	}
 	if access, _, err := store.Access(context.Background()); err != nil || access != "still-valid" {
 		t.Fatalf("Access = %q, %v; want the still-valid token", access, err)
-	}
-}
-
-// An auth_dir that is CODEX_HOME, inside it, or a link to either is refused:
-// no codex.json, no codex.json.lock and no chmod in the Codex CLI's directory.
-func TestAuthDirInsideCodexHomeIsRefused(t *testing.T) {
-	home, cli := cliHome(t, time.Hour)
-	if err := os.Chmod(home, 0o755); err != nil {
-		t.Fatalf("chmod: %v", err)
-	}
-	links := t.TempDir()
-	homeLink := filepath.Join(links, "home-link")
-	if err := os.Symlink(home, homeLink); err != nil {
-		t.Fatalf("symlink: %v", err)
-	}
-	dangling := filepath.Join(links, "dangling")
-	if err := os.Symlink(filepath.Join(home, "not-yet"), dangling); err != nil {
-		t.Fatalf("symlink: %v", err)
-	}
-	sep := string(filepath.Separator)
-	cases := map[string]StoreOptions{
-		"auth_dir is CODEX_HOME":           {Dir: home},
-		"auth_dir inside it":               {Dir: filepath.Join(home, "proxy", "auth")},
-		"auth_dir links to it":             {Dir: homeLink},
-		"auth_dir under a link to it":      {Dir: filepath.Join(homeLink, "auth")},
-		"auth_dir dangling link into it":   {Dir: dangling},
-		"auth_dir through dotdot":          {Dir: home + sep + "x" + sep + ".." + sep + "auth"},
-		"auth_file in it":                  {Dir: t.TempDir(), ExplicitPath: filepath.Join(home, "proxy.json")},
-		"auth_file under a link to it":     {Dir: t.TempDir(), ExplicitPath: filepath.Join(homeLink, "proxy.json")},
-		"auth_dir is CODEX_HOME, with CLI": {Dir: home, UseCodexCLI: true},
-	}
-	if runtime.GOOS == "darwin" && caseInsensitive(home) {
-		cases["auth_dir in another case"] = StoreOptions{
-			Dir: filepath.Join(filepath.Dir(home), strings.ToUpper(filepath.Base(home)), "auth"),
-		}
-	}
-
-	for name, options := range cases {
-		t.Run(name, func(t *testing.T) {
-			before := snap(t, cli)
-			homeInfo, _ := os.Stat(home)
-			fake, client := newOAuthServer(t, 0)
-			store := NewStore(client, options)
-
-			if err := store.Check(); !errors.Is(err, ErrInsideCodexHome) {
-				t.Fatalf("Check() = %v, want ErrInsideCodexHome", err)
-			}
-			if err := store.Save(&Token{AccessToken: "x", RefreshToken: "y"}); !errors.Is(err, ErrInsideCodexHome) {
-				t.Fatalf("Save() = %v, want ErrInsideCodexHome", err)
-			}
-			if _, _, err := store.Access(context.Background()); !errors.Is(err, ErrInsideCodexHome) {
-				t.Fatalf("Access() = %v, want ErrInsideCodexHome", err)
-			}
-			if _, err := store.Remove(); !errors.Is(err, ErrInsideCodexHome) {
-				t.Fatalf("Remove() = %v, want ErrInsideCodexHome", err)
-			}
-			if !strings.Contains(fmt.Sprint(store.Check()), home) {
-				t.Fatalf("Check() = %v, want it to name %s", store.Check(), home)
-			}
-			if n := fake.calls.Load(); n != 0 {
-				t.Fatalf("token endpoint called %d times", n)
-			}
-			before.assertUnchanged(t, cli, name)
-			if info, _ := os.Stat(home); info.Mode() != homeInfo.Mode() {
-				t.Fatalf("CODEX_HOME mode changed: %v -> %v", homeInfo.Mode(), info.Mode())
-			}
-			if _, err := os.Lstat(filepath.Join(home, "proxy")); !os.IsNotExist(err) {
-				t.Fatalf("a directory was created in CODEX_HOME: %v", err)
-			}
-		})
-	}
-}
-
-// A sibling that only shares CODEX_HOME's name as a prefix is not inside it.
-func TestAuthDirBesideCodexHomeIsAccepted(t *testing.T) {
-	home, _ := cliHome(t, time.Hour)
-	store := NewStore(nil, StoreOptions{Dir: home + "-proxy"})
-	if err := store.Check(); err != nil {
-		t.Fatalf("Check() = %v, want nil for a sibling directory", err)
-	}
-	if err := store.Save(&Token{AccessToken: "at"}); err != nil {
-		t.Fatalf("Save: %v", err)
-	}
-}
-
-// ensureDir refuses CODEX_HOME on its own, whatever Check was told.
-func TestEnsureDirRefusesCodexHome(t *testing.T) {
-	home, _ := cliHome(t, time.Hour)
-	store := NewStore(nil, StoreOptions{Dir: t.TempDir()})
-	if err := store.ensureDir(filepath.Join(home, "sub")); !errors.Is(err, ErrInsideCodexHome) {
-		t.Fatalf("ensureDir = %v, want ErrInsideCodexHome", err)
-	}
-	if _, err := os.Stat(filepath.Join(home, "sub")); !os.IsNotExist(err) {
-		t.Fatal("ensureDir created a directory in CODEX_HOME")
 	}
 }
 
@@ -758,7 +365,6 @@ func TestRejectedRefreshIsNotRetriedUntilTheFileChanges(t *testing.T) {
 		{"access token expired", -time.Minute},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv("CODEX_HOME", t.TempDir())
 			var calls, status atomic.Int32
 			status.Store(http.StatusBadRequest)
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -849,221 +455,13 @@ func TestSaveClearsARejectedRefresh(t *testing.T) {
 	}
 }
 
-// G1: a credential file that is a link into CODEX_HOME (auth_dir's codex.json,
-// or auth_file) is refused by Check before any refresh: the endpoint gets no
-// call, the refresh token on disk is not spent, the file is untouched.
-func TestCredentialFileLinkedIntoCodexHomeIsRefused(t *testing.T) {
-	for _, tc := range []struct {
-		name     string
-		explicit bool
-		dangling bool
-	}{
-		{name: "auth_dir codex.json links into CODEX_HOME"},
-		{name: "auth_file links into CODEX_HOME", explicit: true},
-		{name: "auth_file dangling link into CODEX_HOME", explicit: true, dangling: true},
-		{name: "auth_dir codex.json dangling link into CODEX_HOME", dangling: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			home, cli := cliHome(t, time.Hour)
-			target := filepath.Join(home, "proxy.json")
-			if !tc.dangling {
-				writeNative(t, target, Token{AccessToken: "stale", RefreshToken: "rt-1", ExpiresAt: time.Now().Add(-time.Minute)}, 0o600)
-			}
-			dir := t.TempDir()
-			link := filepath.Join(dir, "codex.json")
-			options := StoreOptions{Dir: dir}
-			if tc.explicit {
-				link = filepath.Join(t.TempDir(), "auth.json")
-				options.ExplicitPath = link
-			}
-			if err := os.Symlink(target, link); err != nil {
-				t.Fatalf("symlink: %v", err)
-			}
-			cliBefore := snap(t, cli)
-			var targetBefore snapshot
-			if !tc.dangling {
-				targetBefore = snap(t, target)
-			}
-			fake, client := newOAuthServer(t, 0)
-
-			for i, store := range []*Store{NewStore(client, options), NewStore(client, options)} {
-				err := store.Check()
-				if !errors.Is(err, ErrInsideCodexHome) {
-					t.Fatalf("store %d: Check = %v, want ErrInsideCodexHome", i, err)
-				}
-				resolvedHome := resolvePath(home, 0)
-				if message := err.Error(); !strings.Contains(message, link) || !strings.Contains(message, resolvedHome) ||
-					!strings.Contains(message, resolvePath(target, 0)) {
-					t.Fatalf("store %d: message %q should name %s, %s and %s", i, message, link, target, resolvedHome)
-				}
-				if _, _, err := store.Access(context.Background()); !errors.Is(err, ErrInsideCodexHome) {
-					t.Fatalf("store %d: Access = %v, want ErrInsideCodexHome", i, err)
-				}
-				if err := store.Save(&Token{AccessToken: "x", RefreshToken: "y"}); !errors.Is(err, ErrInsideCodexHome) {
-					t.Fatalf("store %d: Save = %v, want ErrInsideCodexHome", i, err)
-				}
-			}
-			if n := fake.calls.Load(); n != 0 {
-				t.Fatalf("token endpoint called %d times, want none", n)
-			}
-			cliBefore.assertUnchanged(t, cli, tc.name)
-			if tc.dangling {
-				if _, err := os.Lstat(target); !os.IsNotExist(err) {
-					t.Fatalf("a file was created in CODEX_HOME: %v", err)
-				}
-			} else {
-				targetBefore.assertUnchanged(t, target, tc.name)
-			}
-		})
-	}
-}
-
-// When the directory is CODEX_HOME itself, the message names it once,
-// resolved.
-func TestCodexHomeItselfIsNamedOnce(t *testing.T) {
-	home, _ := cliHome(t, time.Hour)
-	err := NewStore(nil, StoreOptions{Dir: home}).Check()
-	if !errors.Is(err, ErrInsideCodexHome) {
-		t.Fatalf("Check = %v, want ErrInsideCodexHome", err)
-	}
-	resolved := resolvePath(home, 0)
-	want := "(auth_dir is the Codex CLI's directory, " + resolved + ")"
-	if !strings.HasSuffix(err.Error(), want) {
-		t.Fatalf("message %q, want it to end %q", err, want)
-	}
-}
-
-// Two proxies on one auth_file with different auth_dirs (one through a
-// link) share the lock beside the file, so the refresh token rotates once.
-func TestStoresOnOneFileShareTheLockAcrossAuthDirs(t *testing.T) {
-	t.Setenv("CODEX_HOME", t.TempDir())
-	fake, client := newOAuthServer(t, 100*time.Millisecond)
-	file := filepath.Join(t.TempDir(), "creds.json")
-	writeNative(t, file, Token{AccessToken: "stale", RefreshToken: "rt-1", ExpiresAt: time.Now().Add(-time.Minute)}, 0o600)
-	link := filepath.Join(t.TempDir(), "creds-link.json")
-	if err := os.Symlink(file, link); err != nil {
-		t.Fatalf("symlink: %v", err)
-	}
-
-	stores := []*Store{
-		NewStore(client, StoreOptions{Dir: t.TempDir(), ExplicitPath: file}),
-		NewStore(client, StoreOptions{Dir: t.TempDir(), ExplicitPath: file}),
-		NewStore(client, StoreOptions{Dir: t.TempDir(), ExplicitPath: link}),
-	}
-	for i, store := range stores[1:] {
-		if store.lockPath() != stores[0].lockPath() {
-			t.Fatalf("store %d locks %s, store 0 locks %s", i+1, store.lockPath(), stores[0].lockPath())
-		}
-		if _, err := store.Peek(); err != nil {
-			t.Fatalf("Peek: %v", err)
-		}
-	}
-
-	start := make(chan struct{})
-	results := make([]string, len(stores))
-	errs := make([]error, len(stores))
-	var wg sync.WaitGroup
-	for i, store := range stores {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			<-start
-			results[i], _, errs[i] = store.Access(context.Background())
-		}()
-	}
-	close(start)
-	wg.Wait()
-
-	for i := range stores {
-		if errs[i] != nil || results[i] != "access-from-rt-1" {
-			t.Fatalf("store %d: %q, %v; want the one refreshed token", i, results[i], errs[i])
-		}
-	}
-	if n := fake.calls.Load(); n != 1 {
-		t.Fatalf("token endpoint called %d times, want 1", n)
-	}
-	if info, err := os.Lstat(link); err != nil || info.Mode()&os.ModeSymlink == 0 {
-		t.Fatalf("the link was replaced by the write: %v", err)
-	}
-}
-
-// An older binary takes only <auth_dir>/codex.lock. This release takes that
-// lock first, so while the old one refreshes it waits, then reads the token
-// the old one wrote: the refresh token is spent once.
-func TestTheLegacyLockExcludesAnOlderBinary(t *testing.T) {
-	t.Setenv("CODEX_HOME", t.TempDir())
-	fake, client := newOAuthServer(t, 0)
-	dir := t.TempDir()
-	path := filepath.Join(dir, "codex.json")
-	writeNative(t, path, Token{AccessToken: "stale", RefreshToken: "rt-1", ExpiresAt: time.Now().Add(-time.Minute)}, 0o600)
-
-	// The old binary holds its lock, mid-refresh.
-	old, err := os.OpenFile(filepath.Join(dir, "codex.lock"), os.O_RDWR|os.O_CREATE, 0o600)
-	if err != nil {
-		t.Fatalf("open legacy lock: %v", err)
-	}
-	defer old.Close()
-	if err := syscall.Flock(int(old.Fd()), syscall.LOCK_EX); err != nil {
-		t.Fatalf("flock: %v", err)
-	}
-
-	waiting := make(chan struct{})
-	var once sync.Once
-	lockBusy = func() { once.Do(func() { close(waiting) }) }
-	t.Cleanup(func() { lockBusy = nil })
-
-	store := NewStore(client, StoreOptions{Dir: dir})
-	type result struct {
-		access string
-		err    error
-	}
-	done := make(chan result, 1)
-	go func() {
-		access, _, err := store.Access(context.Background())
-		done <- result{access, err}
-	}()
-	select {
-	case <-waiting:
-	case r := <-done:
-		t.Fatalf("Access did not wait for the legacy lock: %+v", r)
-	case <-time.After(5 * time.Second):
-		t.Fatal("Access never reached the legacy lock")
-	}
-
-	// The old binary spends rt-1 and writes what it got, then unlocks.
-	refreshed, err := client.Refresh(context.Background(), "rt-1")
-	if err != nil {
-		t.Fatalf("old binary's refresh: %v", err)
-	}
-	refreshed.ExpiresAt = time.Now().Add(time.Hour)
-	writeNative(t, path, *refreshed, 0o600)
-	if err := syscall.Flock(int(old.Fd()), syscall.LOCK_UN); err != nil {
-		t.Fatalf("unlock: %v", err)
-	}
-
-	r := <-done
-	if r.err != nil || r.access != "access-from-rt-1" {
-		t.Fatalf("Access = %q, %v; want the old binary's token", r.access, r.err)
-	}
-	if n := fake.calls.Load(); n != 1 {
-		t.Fatalf("token endpoint called %d times, want 1", n)
-	}
-	// Both locks were released: another store takes them at once.
-	if unlock, err := NewStore(nil, StoreOptions{Dir: dir}).lock(context.Background()); err != nil {
-		t.Fatalf("lock after Access: %v", err)
-	} else {
-		unlock()
-	}
-}
-
-// Two stores of this release take the two locks in one order and never
-// wait on each other crosswise; both are released on every path.
+// Waiting is cancelled without leaving a lock held; competing stores all
+// acquire and release the same exclusive credential lock.
 func TestLocksAreReleasedOnEveryPath(t *testing.T) {
-	t.Setenv("CODEX_HOME", t.TempDir())
 	dir := t.TempDir()
 	store := NewStore(nil, StoreOptions{Dir: dir})
 
-	// A failure on the second lock releases the first.
+	// A bounded cancellation closes the waiting descriptor.
 	held, err := os.OpenFile(store.lockPath(), os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
 		t.Fatalf("open: %v", err)
@@ -1075,17 +473,8 @@ func TestLocksAreReleasedOnEveryPath(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	if _, err := store.lock(ctx); err == nil {
-		t.Fatal("lock succeeded while the second lock was held")
+		t.Fatal("lock succeeded while the credential lock was held")
 	}
-	legacy, err := os.OpenFile(store.legacyLockPath(), os.O_RDWR, 0o600)
-	if err != nil {
-		t.Fatalf("open legacy: %v", err)
-	}
-	defer legacy.Close()
-	if err := syscall.Flock(int(legacy.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		t.Fatalf("the legacy lock was left held after the second failed: %v", err)
-	}
-	_ = syscall.Flock(int(legacy.Fd()), syscall.LOCK_UN)
 	_ = syscall.Flock(int(held.Fd()), syscall.LOCK_UN)
 
 	// Concurrent stores on one dir all get through.
@@ -1105,24 +494,11 @@ func TestLocksAreReleasedOnEveryPath(t *testing.T) {
 	}
 	wg.Wait()
 
-	// An auth_file named "codex" in auth_dir makes the two locks one file.
-	same := NewStore(nil, StoreOptions{Dir: dir, ExplicitPath: filepath.Join(dir, "codex")})
-	if !sameFile(same.legacyLockPath(), same.lockPath()) {
-		t.Fatalf("expected one lock file, got %s and %s", same.legacyLockPath(), same.lockPath())
-	}
-	ctx2, cancel2 := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel2()
-	unlock, err := same.lock(ctx2)
-	if err != nil {
-		t.Fatalf("lock on one shared file: %v", err)
-	}
-	unlock()
 }
 
 // auth_dir reached through a symlink, before the credential file exists:
 // the lock and the write target already name what a store resolves later.
 func TestLockThroughALinkedAuthDirMatchesBeforeTheFileExists(t *testing.T) {
-	t.Setenv("CODEX_HOME", t.TempDir())
 	real := t.TempDir()
 	link := filepath.Join(t.TempDir(), "auth-link")
 	if err := os.Symlink(real, link); err != nil {

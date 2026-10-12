@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -37,14 +38,14 @@ func Init(path string) (*InitResult, error) {
 
 // initWith is Init with the secret and port sources injected for tests.
 func initWith(path string, newSecret, freeAddr func() (string, error)) (*InitResult, error) {
-	cfg, keys, err := load(path, false)
+	cfg, data, err := load(path, false)
 	if err != nil {
 		return nil, err
 	}
-	if keys == nil {
+	if data == nil {
 		return createFile(cfg, newSecret, freeAddr)
 	}
-	return completeFile(cfg.Path(), keys, newSecret)
+	return completeFile(cfg, data, newSecret)
 }
 
 // createFile writes cfg, the defaults, as a new file with a free port and
@@ -69,16 +70,19 @@ func createFile(cfg *Config, newSecret, freeAddr func() (string, error)) (*InitR
 	return &InitResult{Path: cfg.Path(), Created: true}, nil
 }
 
-// completeFile adds the missing secrets to the file's own members and writes
-// them back, or only fixes the mode when nothing is missing. Members are
-// written back as raw JSON, so values are kept as written; only the layout
-// (key order, indentation) is the encoder's.
-func completeFile(path string, keys map[string]json.RawMessage, newSecret func() (string, error)) (*InitResult, error) {
+// completeFile appends only Load's effectively missing secrets as the last
+// members of the original object. Existing bytes, including duplicate keys,
+// aliases and formatting, remain unchanged; the appended secret wins under
+// the decoder's last-match rule. With no missing secret only the mode may change.
+func completeFile(cfg *Config, data []byte, newSecret func() (string, error)) (*InitResult, error) {
+	path := cfg.Path()
 	result := &InitResult{Path: path}
 	exposed := requirePrivate(path) != nil
 
-	for _, key := range secretKeys {
-		if !secretMissing(keys[key]) {
+	values := []string{cfg.AuthToken, cfg.SessionSalt}
+	var additions []string
+	for i, key := range secretKeys {
+		if values[i] != "" {
 			continue
 		}
 		value, err := newSecret()
@@ -89,19 +93,28 @@ func completeFile(path string, keys map[string]json.RawMessage, newSecret func()
 		if err != nil {
 			return nil, fmt.Errorf("config: encode %s: %w", key, err)
 		}
-		keys[key] = encoded
+		additions = append(additions, fmt.Sprintf("%q: %s", key, encoded))
 		result.Added = append(result.Added, key)
 	}
 
 	switch {
 	case len(result.Added) > 0:
-		data, err := json.MarshalIndent(keys, "", "  ")
-		if err != nil {
-			return nil, fmt.Errorf("config: encode: %w", err)
+		// Load validated a complete top-level object. Insert after its last
+		// member, before the whitespace preceding its final closing brace.
+		const whitespace = " \t\r\n"
+		end := len(bytes.TrimRight(data, whitespace)) - 1
+		at := len(bytes.TrimRight(data[:end], whitespace))
+		insertion := "\n  " + strings.Join(additions, ",\n  ")
+		if data[at-1] != '{' {
+			insertion = "," + insertion
 		}
+		completed := make([]byte, 0, len(data)+len(insertion))
+		completed = append(completed, data[:at]...)
+		completed = append(completed, insertion...)
+		completed = append(completed, data[at:]...)
 		// The replacement is always 0600, so an exposed file is tightened
 		// by the write itself.
-		if err := writePrivateFile(path, append(data, '\n')); err != nil {
+		if err := writePrivateFile(path, completed); err != nil {
 			return nil, err
 		}
 	case exposed:
@@ -111,17 +124,4 @@ func completeFile(path string, keys map[string]json.RawMessage, newSecret func()
 	}
 	result.Tightened = exposed
 	return result, nil
-}
-
-// secretMissing reports whether a secret member needs generating: absent,
-// null, or a blank string. Load has already refused any other type.
-func secretMissing(raw json.RawMessage) bool {
-	if raw == nil {
-		return true
-	}
-	var value *string
-	if err := json.Unmarshal(raw, &value); err != nil {
-		return false
-	}
-	return value == nil || strings.TrimSpace(*value) == ""
 }

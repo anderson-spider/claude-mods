@@ -1,10 +1,10 @@
 // The file and network half of install.sh and uninstall.sh; the decisions are settings.mjs's.
 //
 //   node cli.mjs version-of <plugin.json>
-//   node cli.mjs precheck  --settings <file> --state <file> --config <file>
+//   node cli.mjs precheck  --settings <file> --config <file>
 //   node cli.mjs preflight --env <file> --version <v> [--wait-ms <ms>]
-//   node cli.mjs merge     --settings <file> --state <file> --env <file> --models <file> [--dry-run]
-//   node cli.mjs unmerge   --settings <file> --state <file> [--dry-run]
+//   node cli.mjs merge     --settings <file> --env <file> --models <file> [--dry-run]
+//   node cli.mjs unmerge   --settings <file>
 //
 // <env> is `ccmproxy env --shell json` output and <models> `ccmproxy models --json`, both in files rather than
 // arguments, so the secret never shows in a process list. Nothing printed carries the secret.
@@ -22,7 +22,6 @@ import {
   realpathSync,
   renameSync,
   rmSync,
-  statSync,
   unlinkSync,
   writeFileSync,
   writeSync,
@@ -31,10 +30,8 @@ import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import {
   HEADER,
-  isOurHeader,
   masked,
   maskedSettings,
-  ownerRefusal,
   planInstall,
   planUninstall,
   readStatusReply,
@@ -48,12 +45,15 @@ const fail = message => {
   throw new Refusal(message)
 }
 
-function flags(args) {
+function flags(command, args) {
+  const allowed = { precheck: ['settings', 'config'], preflight: ['env', 'version', 'wait-ms'], merge: ['settings', 'env', 'models', 'dry-run'], unmerge: ['settings'] }[command]
+  if (!allowed) fail(`unknown command ${command ?? '(none)'}`)
   const out = {}
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]
     if (!arg.startsWith('--')) fail(`unexpected argument ${arg}`)
     const name = arg.slice(2)
+    if (!allowed.includes(name)) fail(`unexpected argument ${arg}`)
     if (name === 'dry-run') out.dryRun = true
     else if (i + 1 < args.length) out[name] = args[++i]
     else fail(`${arg} needs a value`)
@@ -73,14 +73,6 @@ function readJson(file, what) {
 const landing = file => (existsSync(file) ? realpathSync(file) : file)
 
 const stamp = () => new Date().toISOString().replace(/[-:]/g, '').replace(/\..*$/, '').replace('T', '-')
-
-/** Refuses a file that holds or will hold the secret when it is not the user's own (mode 600 needs the owner). */
-function ensureOwn(file) {
-  const target = landing(file)
-  const refusal = ownerRefusal(target, existsSync(target) ? statSync(target).uid : undefined, process.getuid())
-  if (refusal) fail(refusal)
-  return target
-}
 
 /** Creates `path` with `text`, mode 600 from the first byte, or fails naming the path; `flag` `wx` never overwrites. */
 function writePrivate(path, text) {
@@ -105,7 +97,7 @@ function writePrivate(path, text) {
  * secret); `expect` is what must still be there.
  */
 function writeAtomic(file, text, expect) {
-  const target = ensureOwn(file)
+  const target = landing(file)
   const temp = join(dirname(target), `.${basename(target)}.codex-models-${process.pid}.tmp`)
   writePrivate(temp, text)
   // Claude Code rewrites this file too (/config, plugin configure): a change since it was read is not overwritten.
@@ -118,7 +110,7 @@ function writeAtomic(file, text, expect) {
 }
 
 /**
- * Restricts the user's own earlier backups of `target` to mode 600; returns their name prefix. Only regular files
+ * Restricts earlier backups of `target` to mode 600; returns their name prefix. Only regular files
  * count: a link or a directory under that name is left as it is (lstat, so a link is never followed).
  */
 function restrictBackups(target) {
@@ -128,17 +120,17 @@ function restrictBackups(target) {
     if (!name.startsWith(prefix)) continue
     const path = join(dir, name)
     const entry = lstatSync(path)
-    if (entry.isFile() && entry.uid === process.getuid()) chmodSync(path, 0o600)
+    if (entry.isFile()) chmodSync(path, 0o600)
   }
   return prefix
 }
 
 /**
  * A copy beside the file, mode 600, under a name no earlier backup has (install and uninstall can run within one
- * second). Earlier backups of the user's own are restricted too: an older install may have left them readable.
+ * second). Earlier backups are restricted too: an older install may have left them readable.
  */
 function backup(file) {
-  const target = ensureOwn(file)
+  const target = landing(file)
   const dir = dirname(target)
   const prefix = restrictBackups(target)
   const text = readFileSync(target, 'utf8')
@@ -188,9 +180,8 @@ function printDiff(beforeValue, afterValue, secret, label) {
 function merge(opts) {
   const env = readJson(opts.env, 'the proxy environment')
   const models = readJson(opts.models, 'the model list')
-  const prior = existsSync(opts.state) ? readJson(opts.state, 'the install state') : undefined
   const current = readSettings(opts.settings)
-  const plan = planInstall(current.value, env, models, prior, current.text !== undefined)
+  const plan = planInstall(current.value, env, models)
   if (plan.error) fail(plan.error)
 
   const secret = typeof env.ANTHROPIC_CUSTOM_HEADERS === 'string' ? secretOf(env.ANTHROPIC_CUSTOM_HEADERS) : ''
@@ -200,10 +191,6 @@ function merge(opts) {
     return
   }
 
-  // The state goes first and records the new base URL beside the old ones, so an install stopped before the
-  // settings write still lets uninstall recognize whichever URL the settings hold.
-  ensureOwn(opts.settings)
-  writeAtomic(opts.state, formatted(plan.state), existsSync(opts.state) ? readFileSync(landing(opts.state), 'utf8') : undefined)
   if (current.text !== undefined && after === current.text) {
     // Nothing to write, but the file holds the secret: an earlier install may have left it readable.
     const target = landing(opts.settings)
@@ -214,47 +201,60 @@ function merge(opts) {
   }
   const copy = current.text === undefined ? undefined : backup(opts.settings)
   writeAtomic(opts.settings, after, current.text)
-  console.log(`settings: wrote ANTHROPIC_BASE_URL, the ${HEADER} header, ENABLE_TOOL_SEARCH and ${plan.state.models.length} /model rows to ${opts.settings}`)
+  console.log(`settings: wrote ANTHROPIC_BASE_URL, the ${HEADER} header, ENABLE_TOOL_SEARCH and marked /model rows to ${opts.settings}`)
   if (copy) console.log(`settings: the previous file is in ${copy}`)
 }
 
 function unmerge(opts) {
-  // Both files are written or removed below: one that is not the user's is refused before anything changes.
-  ensureOwn(opts.settings)
-  ensureOwn(opts.state)
-  const state = existsSync(opts.state) ? readJson(opts.state, 'the install state') : undefined
   const current = readSettings(opts.settings)
   if (current.text === undefined) {
     console.log(`settings: ${opts.settings} does not exist; nothing to take out`)
-    if (!opts.dryRun && state) rmSync(opts.state, { force: true })
     return
   }
-  const plan = planUninstall(current.value, state)
+  const plan = planUninstall(current.value)
   if (plan.error) fail(plan.error)
-
-  const headers = current.value?.env?.ANTHROPIC_CUSTOM_HEADERS
-  const ours = typeof headers === 'string' ? headers.split(/\r?\n/).find(isOurHeader) : undefined
-  const before = formatted(current.value)
-  // A file install created, holding nothing else now, goes as it came.
-  const after = plan.remove ? '' : formatted(plan.settings)
-  if (opts.dryRun) {
-    printDiff(current.value, plan.remove ? undefined : plan.settings, ours ? secretOf(ours) : '', opts.settings)
-    return
-  }
-  if (plan.remove) {
-    const copy = backup(opts.settings)
+  const after = formatted(plan.settings)
+  if (formatted(current.value) === after) {
     const target = landing(opts.settings)
-    if (readFileSync(target, 'utf8') !== current.text) fail(`${opts.settings} changed while this ran; nothing was written, run it again`)
-    unlinkSync(target)
-    console.log(`settings: removed ${opts.settings}, which install created and nothing else uses (previous file: ${copy})`)
-  } else if (before === after) {
+    chmodSync(target, 0o600)
+    restrictBackups(target)
     console.log(`settings: ${opts.settings} holds no codex-models entries`)
   } else {
     const copy = backup(opts.settings)
     writeAtomic(opts.settings, after, current.text)
     console.log(`settings: took the codex-models entries out of ${opts.settings} (previous file: ${copy})`)
   }
-  if (state) rmSync(opts.state, { force: true })
+}
+
+/** The effective listen field under Go encoding/json's case-insensitive, input-order matching. */
+function configListen(file) {
+  let text
+  let config
+  try {
+    text = readFileSync(file, 'utf8')
+    config = JSON.parse(text)
+  } catch (error) {
+    fail(`the proxy config (${file}) is not readable JSON (${error.code ?? 'invalid JSON'})`)
+  }
+  if (typeof config !== 'object' || config === null || Array.isArray(config)) fail('the proxy config is not a JSON object')
+
+  // JSON.parse loses duplicate-key order. Scan validated top-level keys: Go applies each recognized member in
+  // input order, even after an exact-case spelling; null leaves a string field unchanged. Nested keys are ignored.
+  let depth = 0
+  let listen
+  for (const token of text.matchAll(/"(?:\\.|[^"\\])*"|[{}\[\]]/g)) {
+    if (token[0] === '{' || token[0] === '[') depth++
+    else if (token[0] === '}' || token[0] === ']') depth--
+    else if (depth === 1 && /^listen_http$/iu.test(JSON.parse(token[0]))) {
+      const rest = text.slice(token.index + token[0].length)
+      const colon = rest.match(/^\s*:\s*/)
+      if (!colon) continue // a string value, not a key
+      const value = rest.slice(colon[0].length).match(/^(null|"(?:\\.|[^"\\])*")/)
+      if (!value) fail('the proxy config has a listen_http that is not a string')
+      if (value[0] !== 'null') listen = JSON.parse(value[0])
+    }
+  }
+  return listen
 }
 
 /**
@@ -262,17 +262,13 @@ function unmerge(opts) {
  * from its config when one exists; before the first install there is none, and any base URL already set is refused.
  */
 function precheck(opts) {
-  // Both files get the secret later: one that is not the user's is refused before anything is built or loaded.
-  ensureOwn(opts.settings)
-  ensureOwn(opts.state)
-  const prior = existsSync(opts.state) ? readJson(opts.state, 'the install state') : undefined
   const current = readSettings(opts.settings)
-  let baseUrl
+  let proxyUrl
   if (existsSync(opts.config)) {
-    const listen = readJson(opts.config, 'the proxy config').listen_http
-    if (typeof listen === 'string') baseUrl = `http://${listen}`
+    const listen = configListen(opts.config)
+    if (typeof listen === 'string') proxyUrl = `http://${listen}`
   }
-  const refusal = settingsRefusal(current.value, baseUrl, prior)
+  const refusal = settingsRefusal(current.value, proxyUrl)
   if (refusal) fail(refusal)
 }
 
@@ -330,12 +326,12 @@ async function main([command, ...args]) {
     console.log(version)
     return
   }
-  const opts = flags(args)
+  const opts = flags(command, args)
   const need = names => names.forEach(name => opts[name] || fail(`${command} needs --${name}`))
-  if (command === 'precheck') return need(['settings', 'state', 'config']), precheck(opts)
+  if (command === 'precheck') return need(['settings', 'config']), precheck(opts)
   if (command === 'preflight') return need(['env', 'version']), preflight(opts)
-  if (command === 'merge') return need(['settings', 'state', 'env', 'models']), merge(opts)
-  if (command === 'unmerge') return need(['settings', 'state']), unmerge(opts)
+  if (command === 'merge') return need(['settings', 'env', 'models']), merge(opts)
+  if (command === 'unmerge') return need(['settings']), unmerge(opts)
   fail(`unknown command ${command ?? '(none)'}`)
 }
 

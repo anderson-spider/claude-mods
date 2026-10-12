@@ -87,44 +87,6 @@ func TestModelsListPaginatedPagesPassThrough(t *testing.T) {
 	}
 }
 
-func TestAdvertisedModelsFollowTheConfig(t *testing.T) {
-	ids := func(t *testing.T, o opts) []string {
-		e := newEnv(t, o)
-		var s struct {
-			Models []string `json:"models"`
-		}
-		must(t, json.Unmarshal(e.do(http.MethodGet, "/__ccmproxy/status", nil, nil).Body, &s))
-		return s.Models
-	}
-	t.Run("restricted to the named models", func(t *testing.T) {
-		got := ids(t, opts{codexCfg: map[string]any{"models": []string{"gpt-6-luna"}}})
-		if len(got) != 1 || got[0] != "gpt-6-luna" {
-			t.Fatalf("models = %v", got)
-		}
-	})
-	t.Run("opt-in model only when named", func(t *testing.T) {
-		got := ids(t, opts{codexCfg: map[string]any{"models": []string{"gpt-daybreak-blue-latest"}}})
-		if len(got) != 1 || got[0] != "gpt-daybreak-blue-latest" {
-			t.Fatalf("models = %v", got)
-		}
-		for _, id := range ids(t, opts{}) {
-			if strings.Contains(id, "daybreak") {
-				t.Fatal("the opt-in model is advertised by default")
-			}
-		}
-	})
-	t.Run("prefix", func(t *testing.T) {
-		got := ids(t, opts{codexCfg: map[string]any{"model_prefix": "codex", "models": []string{"gpt-6-luna"}}})
-		if len(got) != 1 || got[0] != "codex/gpt-6-luna" {
-			t.Fatalf("models = %v", got)
-		}
-	})
-	t.Run("effort variants", func(t *testing.T) {
-		got := ids(t, opts{codexCfg: map[string]any{"effort_variants": true, "models": []string{"gpt-6-luna"}}})
-		golden(t, "models_variants.golden.json", canonical(t, []byte(mustMarshal(t, got))))
-	})
-}
-
 func TestPrefixedAndSuffixedModelNamesRouteToCodex(t *testing.T) {
 	e := loggedIn(t, opts{codexCfg: map[string]any{"model_prefix": "codex"}})
 	e.cdx.set(answerWith(evCreated, evText("a"), evCompleted))
@@ -230,5 +192,19 @@ func TestCountTokens(t *testing.T) {
 	r := e.post("/v1/messages/count_tokens", claude)
 	if r.Status != 200 || string(r.Body) != `{"input_tokens":4242}` {
 		t.Fatalf("response = %d %s", r.Status, r.Body)
+	}
+}
+
+func TestObsoleteCatalogKnobsCannotOverrideFixedCatalog(t *testing.T) {
+	e := newEnv(t, opts{codexCfg: map[string]any{"models": []string{"gpt-daybreak-blue-latest"}, "model_prefix": "other", "effort_variants": true}})
+	models := e.do(http.MethodGet, "/__ccmproxy/status", nil, nil).json(t)["models"].([]any)
+	if len(models) != 7 {
+		t.Fatalf("catalog = %v", models)
+	}
+	for _, value := range models {
+		id := value.(string)
+		if strings.Contains(id, "daybreak") || strings.Contains(id, "/") || strings.HasSuffix(id, "-high") {
+			t.Fatalf("obsolete knob changed catalog: %s", id)
+		}
 	}
 }

@@ -26,7 +26,7 @@ func TestModelRowsBehavesAsMatchesTheCatalog(t *testing.T) {
 		prefix   string
 		variants bool
 	}{{nil, "", true}, {all, "", true}, {all, "codex", true}, {all, "codex/", false}} {
-		registry := codex.NewRegistry(setup.filter, setup.prefix, setup.variants)
+		registry := codex.NewRegistry()
 		rows := modelRows(registry)
 		if len(rows) != len(registry.AdvertisedIDs()) {
 			t.Fatalf("%+v: %d rows for %d ids", setup, len(rows), len(registry.AdvertisedIDs()))

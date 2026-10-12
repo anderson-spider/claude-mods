@@ -18,8 +18,8 @@ type Model struct {
 	// tier as Haiku.
 	BehavesAs string
 	// OptIn marks a model gated by an access program the account may not
-	// have. It is neither advertised nor resolved unless codex.models names
-	// it.
+	// have. It is neither advertised nor resolved unless OfferDaybreakBlue
+	// is enabled in the source.
 	OptIn bool
 }
 
@@ -31,7 +31,7 @@ type Model struct {
 // Hidden entries (gpt-5.5, retiring on 2026-10-14; gpt-reserve;
 // codex-auto-review) are left out. gpt-daybreak-blue-latest is listed only
 // for the "daybreak_blue" access program, so it is OptIn: available only when
-// codex.models names it. The ids are the slugs the ChatGPT backend
+// OfferDaybreakBlue is enabled in the source. The ids are the slugs the ChatGPT backend
 // expects verbatim in the request body; availability still depends on the
 // signed-in account's plan, so a model listed here can legitimately be
 // rejected upstream.

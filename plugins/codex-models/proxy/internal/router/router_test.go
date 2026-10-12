@@ -100,8 +100,8 @@ func newHarness(t *testing.T, anthropicHandler, codexHandler http.HandlerFunc, a
 
 	oauth := codex.NewClient(nil)
 	store := codex.NewStore(oauth, codex.StoreOptions{Dir: cfg.AuthDir})
-	backend := codex.NewBackend(cfg.Codex.BaseURL, "test-agent", "codex-tui", store, nil)
-	registry := codex.NewRegistry(nil, "", true)
+	backend := codex.NewBackend(cfg.Codex.BaseURL, store, nil)
+	registry := codex.NewRegistry()
 
 	router, err := New(cfg, registry, backend, nil)
 	if err != nil {
@@ -159,8 +159,8 @@ func TestModelListMergesCodexModels(t *testing.T) {
 	if _, ok := ids["gpt-6-luna"]; !ok {
 		t.Fatalf("codex models were not added: %v", ids)
 	}
-	if got := ids["gpt-6-luna-high"]; !strings.Contains(got, "high") {
-		t.Fatalf("effort variant display name = %q, want it to mention the effort", got)
+	if _, ok := ids["gpt-6-luna-high"]; ok {
+		t.Fatal("effort variant must not be advertised")
 	}
 	if got := jsontest.Get(rec.Body.String(), "first_id").String(); got != "claude-opus-5" {
 		t.Fatalf("first_id = %q", got)
@@ -602,7 +602,7 @@ func TestEffortFallsBackWithoutAnyClientPreference(t *testing.T) {
 }
 
 func TestResolveEffortAlwaysReturnsAConcreteLevel(t *testing.T) {
-	registry := codex.NewRegistry(nil, "", true)
+	registry := codex.NewRegistry()
 	resolve := func(model, body string) string {
 		resolution, ok := registry.Resolve(model)
 		if !ok {
@@ -640,7 +640,7 @@ func TestResolveEffortAlwaysReturnsAConcreteLevel(t *testing.T) {
 }
 
 func TestTheEffortSentUpstreamIsTheOneResolved(t *testing.T) {
-	registry := codex.NewRegistry(nil, "", true)
+	registry := codex.NewRegistry()
 
 	for _, body := range []string{
 		`{"model":"gpt-6-luna","messages":[]}`,

@@ -468,3 +468,16 @@ func TestCodexInStreamErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestObsoleteHeaderKnobsCannotOverrideBackendConstants(t *testing.T) {
+	e := loggedIn(t, opts{codexCfg: map[string]any{"user_agent": "obsolete-agent", "originator": "obsolete-origin"}})
+	e.cdx.set(answerWith(evCreated, evText("a"), evCompleted))
+	r := e.post("/v1/messages", claudeReq("gpt-6-astra", true, nil))
+	if r.Status != 200 {
+		t.Fatalf("status = %d", r.Status)
+	}
+	h := e.cdx.last(t).Header
+	if h.Get("Originator") != "codex-tui" || !strings.HasPrefix(h.Get("User-Agent"), "codex-tui/") {
+		t.Fatal("obsolete keys overrode protocol headers")
+	}
+}

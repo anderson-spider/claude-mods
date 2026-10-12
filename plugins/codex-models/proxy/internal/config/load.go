@@ -6,43 +6,27 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"reflect"
 	"runtime"
-	"slices"
 	"strings"
 )
-
-// removedKeys maps each top-level key that earlier versions read, and that
-// means nothing now, to the reason. A file still setting one is refused, so
-// nobody runs believing the setting applies.
-var removedKeys = map[string]string{
-	"listen_proxy":    "the CONNECT listener is gone; Claude Code reaches the proxy at listen_http through ANTHROPIC_BASE_URL",
-	"listen_tls":      "the TLS listener is gone; Claude Code reaches the proxy at listen_http through ANTHROPIC_BASE_URL",
-	"intercept_hosts": "TLS interception is gone; the proxy serves only ANTHROPIC_BASE_URL",
-	"proxy_username":  "the CONNECT listener and its credentials are gone; auth_token guards listen_http",
-	"proxy_password":  "the CONNECT listener and its credentials are gone; auth_token guards listen_http",
-	"ca_dir":          "the local certificate authority is gone",
-	"dns":             "the built-in resolver is gone; the system resolver is used",
-}
 
 // Load reads the config file at path ("" means DefaultPath; a leading "~" is
 // expanded). A missing file is not an error: the result is the defaults.
 //
 // The file is refused when group or others can access it (it holds
-// auth_token), when it sets one of removedKeys, when a key differs from a
-// known one only in case, when it is not a JSON object of the expected types,
-// or when Validate rejects it. Other unknown keys are ignored. Settings the
-// file leaves out or leaves blank take the defaults.
+// auth_token), when it is not a JSON object of the expected types, or when
+// Validate rejects it. Unknown keys are ignored uniformly; known fields use
+// ordinary encoding/json decoding. Settings left out or blank take the defaults.
 func Load(path string) (*Config, error) {
 	cfg, _, err := load(path, true)
 	return cfg, err
 }
 
 // load is Load for both of its callers. Init passes checkMode false because
-// tightening the mode is part of its job. keys holds the file's top-level
-// members exactly as written, or nil when there is no file, so Init can write
-// them back without dropping or reformatting what it does not own.
-func load(path string, checkMode bool) (cfg *Config, keys map[string]json.RawMessage, err error) {
+// tightening the mode is part of its job. data holds the original bytes, or
+// nil when there is no file, so Init can insert missing secrets without
+// reordering aliases or re-serializing any existing member.
+func load(path string, checkMode bool) (cfg *Config, data []byte, err error) {
 	if strings.TrimSpace(path) == "" {
 		path = DefaultPath()
 	}
@@ -51,7 +35,7 @@ func load(path string, checkMode bool) (cfg *Config, keys map[string]json.RawMes
 	cfg = Default()
 	cfg.path = path
 
-	data, err := os.ReadFile(path)
+	data, err = os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		cfg.fillDefaults()
 		if err := cfg.Validate(); err != nil {
@@ -70,17 +54,12 @@ func load(path string, checkMode bool) (cfg *Config, keys map[string]json.RawMes
 	}
 	// The decoder's errors name a type or one offending character, never a
 	// value, so they are safe to show even for a file holding secrets.
+	var keys map[string]json.RawMessage
 	if err := json.Unmarshal(data, &keys); err != nil {
 		return nil, nil, fmt.Errorf("config: parse %s: %w", path, err)
 	}
 	if keys == nil {
 		return nil, nil, fmt.Errorf("config: parse %s: the file must hold a JSON object", path)
-	}
-	if err := removedKeyError(path, keys); err != nil {
-		return nil, nil, err
-	}
-	if err := caseVariantError(path, keys); err != nil {
-		return nil, nil, err
 	}
 	// Decoding over Default keeps the default of every key the file omits.
 	if err := json.Unmarshal(data, cfg); err != nil {
@@ -91,88 +70,7 @@ func load(path string, checkMode bool) (cfg *Config, keys map[string]json.RawMes
 	if err := cfg.Validate(); err != nil {
 		return nil, nil, fmt.Errorf("%w (in %s)", err, path)
 	}
-	return cfg, keys, nil
-}
-
-// removedKeyError names, with its reason, every key of removedKeys the file
-// sets, and never repeats a value.
-func removedKeyError(path string, keys map[string]json.RawMessage) error {
-	var lines []string
-	for key, reason := range removedKeys {
-		if _, set := keys[key]; set {
-			lines = append(lines, "  "+key+": "+reason)
-		}
-	}
-	if lines == nil {
-		return nil
-	}
-	slices.Sort(lines)
-	return fmt.Errorf("config: %s sets keys this version no longer supports; delete them from the file:\n%s",
-		path, strings.Join(lines, "\n"))
-}
-
-// caseVariantError names every key, at the top level or in the codex block,
-// that matches a known key only when case is ignored, with the key it
-// resembles; one that resembles a removed key is to be deleted, not renamed. encoding/json would read such a key
-// into the field, while `config init`, the installer and the plugin's hooks
-// read keys exactly: {"Auth_Token": ...} would load as the secret and then
-// get a second, generated auth_token beside it.
-func caseVariantError(path string, keys map[string]json.RawMessage) error {
-	lines := caseVariants("", keys, jsonKeys(reflect.TypeFor[Config]()), removedKeys)
-	var codex map[string]json.RawMessage
-	if raw, ok := keys["codex"]; ok && json.Unmarshal(raw, &codex) == nil {
-		lines = append(lines, caseVariants("codex.", codex, jsonKeys(reflect.TypeFor[Codex]()), nil)...)
-	}
-	if lines == nil {
-		return nil
-	}
-	slices.Sort(lines)
-	return fmt.Errorf("config: %s has keys that differ from a known key only in case; keys are case-sensitive:\n%s",
-		path, strings.Join(lines, "\n"))
-}
-
-// caseVariants lists each key of keys that is not in known (or removed) but
-// equals one of them ignoring case: "  <prefix><key>: did you mean
-// <prefix><known>?" for a key in use, and, for a removed one, that it is no
-// longer supported and must be deleted (renaming it would only meet the
-// removed-key refusal).
-func caseVariants(prefix string, keys map[string]json.RawMessage, known []string, removed map[string]string) []string {
-	var lines []string
-	for key := range keys {
-		if slices.Contains(known, key) {
-			continue
-		}
-		if line, ok := caseVariantLine(prefix, key, known, removed); ok {
-			lines = append(lines, line)
-		}
-	}
-	return lines
-}
-
-func caseVariantLine(prefix, key string, known []string, removed map[string]string) (string, bool) {
-	for _, name := range known {
-		if strings.EqualFold(key, name) {
-			return "  " + prefix + key + ": did you mean " + prefix + name + "?", true
-		}
-	}
-	for name, reason := range removed {
-		if key != name && strings.EqualFold(key, name) {
-			return "  " + prefix + key + ": " + prefix + name + " is no longer supported (" + reason + "); delete it", true
-		}
-	}
-	return "", false
-}
-
-// jsonKeys returns the JSON member names of a struct's tagged fields.
-func jsonKeys(t reflect.Type) []string {
-	var names []string
-	for i := range t.NumField() {
-		name, _, _ := strings.Cut(t.Field(i).Tag.Get("json"), ",")
-		if name != "" && name != "-" {
-			names = append(names, name)
-		}
-	}
-	return names
+	return cfg, data, nil
 }
 
 // requirePrivate refuses a file that group or others can access, since it
@@ -194,7 +92,7 @@ func requirePrivate(path string) error {
 
 // fillDefaults gives every blank setting its default and puts the rest in
 // the form the other packages expect: trimmed values, URLs without a
-// trailing "/", "~" expanded in paths and a model prefix ending in "/".
+// trailing "/" and "~" expanded in paths.
 func (c *Config) fillDefaults() {
 	c.ListenHTTP = orDefault(strings.TrimSpace(c.ListenHTTP), DefaultListenHTTP)
 	c.Upstream = trimURL(orDefault(c.Upstream, DefaultUpstream))
@@ -205,15 +103,6 @@ func (c *Config) fillDefaults() {
 
 	x := &c.Codex
 	x.BaseURL = trimURL(orDefault(x.BaseURL, defaultCodexBaseURL))
-	x.UserAgent = orDefault(x.UserAgent, defaultUserAgent)
-	x.Originator = orDefault(x.Originator, defaultOriginator)
-	if x.CallbackPort <= 0 {
-		x.CallbackPort = defaultCallbackPort
-	}
-	x.AuthFile = ExpandUser(x.AuthFile)
-	if prefix := strings.TrimSpace(x.ModelPrefix); prefix != "" {
-		x.ModelPrefix = strings.TrimSuffix(prefix, "/") + "/"
-	}
 }
 
 // orDefault is value, or def when value is blank. A value that is not blank

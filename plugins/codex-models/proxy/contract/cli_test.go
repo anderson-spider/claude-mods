@@ -299,8 +299,7 @@ func TestCLIConfigInitCreatesTheFile(t *testing.T) {
 		t.Fatalf("upstream = %v", cfg["upstream"])
 	}
 	cdx := cfg["codex"].(map[string]any)
-	if cdx["base_url"] != "https://chatgpt.com/backend-api/codex" || cdx["callback_port"].(float64) != 1455 ||
-		cdx["use_codex_cli_auth"] != false || cdx["effort_variants"] != false {
+	if cdx["base_url"] != "https://chatgpt.com/backend-api/codex" || len(cdx) != 1 {
 		t.Fatalf("codex defaults = %v", cdx)
 	}
 	// The file it wrote is a working config.
@@ -374,20 +373,100 @@ func TestCLIConfigInitKeepsWhatIsThere(t *testing.T) {
 	}
 }
 
-func TestCLIRefusesRemovedKeysByName(t *testing.T) {
-	for _, key := range []string{"listen_proxy", "listen_tls", "intercept_hosts", "proxy_username", "proxy_password", "ca_dir", "dns"} {
-		for _, args := range [][]string{{"config", "init"}, {"env"}, {"models", "--json"}, {"status"}, {"serve"}} {
-			home := cliHome(t, map[string]any{key: "x"})
-			before, _ := os.ReadFile(filepath.Join(home, "config.json"))
-			out, code := runCLI(t, home, nil, args...)
-			if code != 1 || !strings.Contains(out.stderr, key+":") || !strings.Contains(out.stderr, "no longer supports") {
-				t.Fatalf("%s %v: exit %d, stderr %q", key, args, code, out.stderr)
-			}
-			after, _ := os.ReadFile(filepath.Join(home, "config.json"))
-			if !bytes.Equal(before, after) {
-				t.Fatalf("%s %v rewrote the config", key, args)
-			}
+func TestCLIConfigInitPreservesUppercaseSecrets(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, "config.json")
+	writeJSON(t, path, map[string]any{
+		"listen_http":  "127.0.0.1:40000",
+		"AUTH_TOKEN":   cliToken,
+		"SESSION_SALT": cliSalt,
+	}, 0o600)
+	before, err := os.ReadFile(path)
+	must(t, err)
+	envBefore, code := runCLI(t, home, nil, "env", "--shell", "json")
+	if code != 0 {
+		t.Fatalf("env before init: exit %d, %s", code, envBefore.stderr)
+	}
+	var values map[string]string
+	must(t, json.Unmarshal([]byte(envBefore.stdout), &values))
+	if values["ANTHROPIC_CUSTOM_HEADERS"] != "X-Ccmproxy-Token: "+cliToken {
+		t.Fatal("env did not decode the existing uppercase auth token")
+	}
+	for run := 0; run < 2; run++ {
+		out, code := runCLI(t, home, nil, "config", "init")
+		if code != 0 || !strings.Contains(out.stdout, "is up to date") {
+			t.Fatalf("init run %d: exit %d, %s, %s", run, code, out.stdout, out.stderr)
 		}
+		envAfter, code := runCLI(t, home, nil, "env", "--shell", "json")
+		if code != 0 || envAfter.stdout != envBefore.stdout {
+			t.Fatalf("env changed after init run %d: exit %d", run, code)
+		}
+		after, err := os.ReadFile(path)
+		must(t, err)
+		if !bytes.Equal(before, after) {
+			t.Fatal("init changed existing secrets or added case-variant aliases")
+		}
+		cfg := readLogin(t, path)
+		if len(cfg) != 3 || cfg["AUTH_TOKEN"] != cliToken || cfg["SESSION_SALT"] != cliSalt {
+			t.Fatal("init did not preserve uppercase secrets")
+		}
+		if mode(t, path) != 0o600 {
+			t.Fatal("config mode changed")
+		}
+	}
+}
+
+func TestCLIConfigInitAppendsSaltWithoutChangingTheEffectiveToken(t *testing.T) {
+	for _, tc := range []struct {
+		name, body, token string
+	}{
+		{"alias order", `{"auth_token":"` + cliToken + `","AUTH_TOKEN":"` + cliSalt + `"}`, cliSalt},
+		{"uppercase token", `{"AUTH_TOKEN":"` + cliToken + `"}`, cliToken},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			path := filepath.Join(home, "config.json")
+			must(t, os.WriteFile(path, []byte(tc.body), 0o600))
+			envBefore, code := runCLI(t, home, nil, "env", "--shell", "json")
+			if code != 0 {
+				t.Fatalf("env before init: exit %d, %s", code, envBefore.stderr)
+			}
+			var values map[string]string
+			must(t, json.Unmarshal([]byte(envBefore.stdout), &values))
+			if values["ANTHROPIC_CUSTOM_HEADERS"] != "X-Ccmproxy-Token: "+tc.token {
+				t.Fatal("env did not use the original last-match token")
+			}
+			out, code := runCLI(t, home, nil, "config", "init")
+			if code != 0 || !strings.Contains(out.stdout, "Added session_salt to ") ||
+				strings.Contains(out.stdout, "Added auth_token") {
+				t.Fatalf("init: exit %d, %s, %s", code, out.stdout, out.stderr)
+			}
+			envAfter, code := runCLI(t, home, nil, "env", "--shell", "json")
+			if code != 0 || envAfter.stdout != envBefore.stdout {
+				t.Fatalf("init changed the effective environment: exit %d", code)
+			}
+			cfg := readLogin(t, path)
+			salt, ok := cfg["session_salt"].(string)
+			if !ok || !hex64.MatchString(salt) {
+				t.Fatal("init did not append a generated salt")
+			}
+			after, err := os.ReadFile(path)
+			must(t, err)
+			insertion := ",\n  \"session_salt\": \"" + salt + "\""
+			if !strings.Contains(string(after), insertion) ||
+				strings.Replace(string(after), insertion, "", 1) != tc.body {
+				t.Fatal("init changed original bytes or member order")
+			}
+			out, code = runCLI(t, home, nil, "config", "init")
+			if code != 0 || !strings.Contains(out.stdout, "is up to date") {
+				t.Fatalf("second init: exit %d, %s, %s", code, out.stdout, out.stderr)
+			}
+			again, err := os.ReadFile(path)
+			must(t, err)
+			if !bytes.Equal(after, again) || mode(t, path) != 0o600 {
+				t.Fatal("second init changed bytes or permissions")
+			}
+		})
 	}
 }
 

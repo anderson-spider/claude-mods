@@ -9,11 +9,10 @@ import {
   planInstall,
   planUninstall,
   maskedSettings,
-  ownerRefusal,
   readStatusReply,
   settingsRefusal,
 } from '../install/settings.mjs'
-import type { InstallState, SettingsObject } from '../install/settings.mjs'
+import type { SettingsObject } from '../install/settings.mjs'
 import * as status from '../hooks/status'
 
 const ENV = {
@@ -27,11 +26,10 @@ const MODELS = [
   { id: 'gpt-6-mini', label: '', description: '' },
 ]
 
-/** Install, then uninstall with the state install returned. */
+/** Install, then remove the current owned entries. */
 function roundTrip(original: SettingsObject) {
-  const installed = planInstall(original, ENV, MODELS)
-  if (installed.error !== undefined) throw new Error(installed.error)
-  const removed = planUninstall(installed.settings, installed.state)
+  const installed = ok(planInstall(original, ENV, MODELS))
+  const removed = planUninstall(installed.settings)
   if (removed.error !== undefined) throw new Error(removed.error)
   return { installed, removed: removed.settings }
 }
@@ -43,241 +41,107 @@ const ok = (plan: ReturnType<typeof planInstall>) => {
 
 test('a fresh install writes the three variables and marked rows, and uninstall leaves {}', () => {
   const { installed, removed } = roundTrip({})
-
   expect(installed.settings).toEqual({
     env: ENV,
-    modelPicker: {
-      options: [
-        { model: 'gpt-6-astra', label: 'GPT-6 Astra', description: `Codex, high reasoning ${MARK}` },
-        { model: 'gpt-6-mini', label: 'gpt-6-mini', description: MARK },
-      ],
-    },
+    modelPicker: { options: [
+      { model: 'gpt-6-astra', label: 'GPT-6 Astra', description: `Codex, high reasoning ${MARK}` },
+      { model: 'gpt-6-mini', label: 'gpt-6-mini', description: MARK },
+    ] },
   })
-  expect(installed.state.models).toEqual(['gpt-6-astra', 'gpt-6-mini'])
-  expect(JSON.stringify(removed)).toBe('{}')
+  expect(removed).toEqual({})
 })
 
-test('a file install created is removed by uninstall only while nothing else is in it', () => {
-  const installed = ok(planInstall({}, ENV, MODELS, undefined, false))
-  expect(installed.state.fileCreated).toBe(true)
-  expect(planUninstall(installed.settings, installed.state)).toEqual({ settings: {}, remove: true })
-
-  const added = { ...installed.settings, theme: 'dark' }
-  expect(planUninstall(added, installed.state)).toEqual({ settings: { theme: 'dark' }, remove: false })
-
-  // A file that existed, even empty, stays; so does one whose state is missing.
-  const existed = ok(planInstall({}, ENV, MODELS))
-  expect(existed.state.fileCreated).toBe(false)
-  expect(planUninstall(existed.settings, existed.state).remove).toBe(false)
-  expect(planUninstall(installed.settings, undefined).remove).toBe(false)
-})
-
-test('a reinstall keeps the record that the file was created', () => {
-  const first = ok(planInstall({}, ENV, MODELS, undefined, false))
-  const second = ok(planInstall(first.settings, ENV, MODELS, first.state, true))
-
-  expect(second.state.fileCreated).toBe(true)
-  expect(planUninstall(second.settings, second.state).remove).toBe(true)
-})
-
-test('the early check refuses what install would, and any base URL before a config exists', () => {
-  const gateway = { env: { ANTHROPIC_BASE_URL: 'https://gateway.example.com' } }
-  expect(settingsRefusal(gateway, ENV.ANTHROPIC_BASE_URL)).toContain('already')
-  expect(settingsRefusal({ env: { ANTHROPIC_BASE_URL: ENV.ANTHROPIC_BASE_URL } }, undefined)).toContain('already')
-  expect(settingsRefusal({ env: 'x' }, undefined)).toContain('"env"')
+test('precheck accepts no URL or the configured URL, never a different URL or a lost config', () => {
   expect(settingsRefusal({}, undefined)).toBe(undefined)
-  expect(settingsRefusal({ env: { ANTHROPIC_BASE_URL: ENV.ANTHROPIC_BASE_URL } }, ENV.ANTHROPIC_BASE_URL)).toBe(undefined)
-
-  // The base URL a previous install wrote, while its state is there, is ours even without a config.
-  const first = ok(planInstall({}, ENV, MODELS))
-  expect(settingsRefusal(first.settings, undefined, first.state)).toBe(undefined)
+  expect(settingsRefusal({ env: { ANTHROPIC_BASE_URL: `${ENV.ANTHROPIC_BASE_URL}/` } }, ENV.ANTHROPIC_BASE_URL)).toBe(undefined)
+  for (const proxyUrl of [undefined, 'http://127.0.0.1:50000', 'https://gateway.example.com']) {
+    const settings = { env: { ANTHROPIC_BASE_URL: ENV.ANTHROPIC_BASE_URL, ANTHROPIC_CUSTOM_HEADERS: ENV.ANTHROPIC_CUSTOM_HEADERS } }
+    expect(settingsRefusal(settings, proxyUrl)).toContain('uninstall first')
+  }
 })
 
-test('behavesAs is kept on a row when the model list gives one, and the row stays marked', () => {
-  const models = [
-    { id: 'gpt-6-astra', label: 'Astra', description: 'Codex', behavesAs: 'claude-opus-4-8' },
-    { id: 'gpt-6-mini', behavesAs: '' },
-    { id: 'gpt-6-nano', behavesAs: 7 },
-  ]
-  const { rows } = pickerRows(models)
-
-  expect(rows).toEqual([
-    { model: 'gpt-6-astra', label: 'Astra', description: `Codex ${MARK}`, behavesAs: 'claude-opus-4-8' },
-    { model: 'gpt-6-mini', label: 'gpt-6-mini', description: MARK },
-    { model: 'gpt-6-nano', label: 'gpt-6-nano', description: MARK },
+test('behavesAs is kept only when a non-empty string and rows stay marked', () => {
+  expect(pickerRows([
+    { id: 'a', label: 'A', description: 'Codex', behavesAs: 'claude-opus-4-8' },
+    { id: 'b', behavesAs: '' }, { id: 'c', behavesAs: 7 },
+  ]).rows).toEqual([
+    { model: 'a', label: 'A', description: `Codex ${MARK}`, behavesAs: 'claude-opus-4-8' },
+    { model: 'b', label: 'b', description: MARK }, { model: 'c', label: 'c', description: MARK },
   ])
-  const installed = ok(planInstall({}, ENV, models))
-  expect(JSON.stringify(planUninstall(installed.settings, installed.state).settings)).toBe('{}')
 })
 
-test('an install stopped between the state and the settings writes is still undone', () => {
-  const original: SettingsObject = { env: { KEEP: '1', ENABLE_TOOL_SEARCH: 'false' } }
-  const onA = ok(planInstall(original, ENV, MODELS))
-  // The config moved to port B; the reinstall wrote its state, then stopped before the settings.
-  const envB = { ...ENV, ANTHROPIC_BASE_URL: 'http://127.0.0.1:50000', ANTHROPIC_CUSTOM_HEADERS: 'X-Ccmproxy-Token: new-secret' }
-  const onB = ok(planInstall(onA.settings, envB, MODELS, onA.state))
-  expect(onB.state.baseUrls).toEqual(['http://127.0.0.1:50000', ENV.ANTHROPIC_BASE_URL])
-
-  // Uninstall with the new state still recognizes A, which the settings hold.
-  expect(JSON.stringify(planUninstall(onA.settings, onB.state).settings)).toBe(JSON.stringify(original))
-
-  // So does a reinstall: it replaces A and keeps what stood before the first install.
-  const again = ok(planInstall(onA.settings, envB, MODELS, onB.state))
-  expect((again.settings.env as Record<string, string>).ANTHROPIC_BASE_URL).toBe('http://127.0.0.1:50000')
-  expect(again.state.toolSearch).toEqual({ present: true, value: 'false' })
-  expect(JSON.stringify(planUninstall(again.settings, again.state).settings)).toBe(JSON.stringify(original))
-})
-
-test('uninstall takes out a loopback base URL that rides with our header even when the state does not record it', () => {
-  const installed = ok(planInstall({}, ENV, MODELS))
-  const elsewhere = { ...installed.state, baseUrl: 'http://127.0.0.1:1', baseUrls: ['http://127.0.0.1:1'] }
-  const env = planUninstall(installed.settings, elsewhere).settings?.env
-
-  expect(env).toBe(undefined)
-})
-
-test('a state from before the history still recognizes its one base URL', () => {
-  const installed = ok(planInstall({}, ENV, MODELS))
-  const { baseUrls: _, ...older } = installed.state
-
-  expect(JSON.stringify(planUninstall(installed.settings, older).settings)).toBe('{}')
-  expect(ok(planInstall(installed.settings, ENV, MODELS, older)).state.envCreated).toBe(true)
-})
-
-test('maskedSettings hides every X-Ccmproxy-Token value and leaves the rest', () => {
-  const settings = { env: { ANTHROPIC_CUSTOM_HEADERS: 'X-Team: blue\nx-ccmproxy-token: old\nX-Ccmproxy-Token:  new ' }, model: 'opus' }
-
-  expect(maskedSettings(settings)).toEqual({
-    env: { ANTHROPIC_CUSTOM_HEADERS: 'X-Team: blue\nx-ccmproxy-token: <secret>\nX-Ccmproxy-Token: <secret>' },
-    model: 'opus',
-  })
-  expect(settings.env.ANTHROPIC_CUSTOM_HEADERS).toContain('old')
-  expect(maskedSettings({ env: {} })).toEqual({ env: {} })
-})
-
-test('a file of another user is refused, a missing or own one is not', () => {
-  expect(ownerRefusal('/x/settings.json', 0, 501)).toContain('belongs to another user (uid 0)')
-  expect(ownerRefusal('/x/settings.json', 501, 501)).toBe(undefined)
-  expect(ownerRefusal('/x/settings.json', undefined, 501)).toBe(undefined)
-})
-
-test('the state never holds a header value', () => {
-  const { installed } = roundTrip({ env: { ANTHROPIC_CUSTOM_HEADERS: 'Authorization: Bearer other-secret' } })
-
-  expect(JSON.stringify(installed.state)).not.toContain('s3cret-value')
-  expect(JSON.stringify(installed.state)).not.toContain('other-secret')
-})
-
-test('other env keys, header lines, picker settings and pluginConfigs are kept, and uninstall restores them exactly', () => {
+test('unrelated settings stay, but tool search is removed by name rather than restored', () => {
   const original: SettingsObject = {
     model: 'opus',
-    env: { USE_BUILTIN_RIPGREP: '0', ANTHROPIC_CUSTOM_HEADERS: 'X-Team: blue\nX-Trace: on', ENABLE_TOOL_SEARCH: 'false' },
-    modelPicker: { replaceBuiltInOptions: false, options: [{ model: 'claude-opus-4-8', label: 'Opus (production)' }] },
-    pluginConfigs: { 'crew@spider-claude-mods': { options: { nativeCodex: 'developer=gpt-6-astra' } } },
+    env: { KEEP: '1', ANTHROPIC_CUSTOM_HEADERS: 'X-Team: blue\nX-Trace: on', ENABLE_TOOL_SEARCH: 'false' },
+    modelPicker: { replaceBuiltInOptions: false, options: [{ model: 'claude-opus-4-8', label: 'Opus' }] },
+    pluginConfigs: { 'crew@spider-claude-mods': { options: { jevKey: '' } } },
   }
+  const before = JSON.stringify(original)
   const { installed, removed } = roundTrip(original)
-  const env = installed.settings.env as Record<string, string>
-  const picker = installed.settings.modelPicker as { replaceBuiltInOptions: boolean; options: unknown[] }
-
-  expect(env.USE_BUILTIN_RIPGREP).toBe('0')
-  expect(env.ANTHROPIC_CUSTOM_HEADERS).toBe('X-Team: blue\nX-Trace: on\nX-Ccmproxy-Token: s3cret-value')
-  expect(env.ENABLE_TOOL_SEARCH).toBe('true')
-  expect(picker.replaceBuiltInOptions).toBe(false)
-  expect(picker.options).toHaveLength(3)
-  expect(installed.settings.pluginConfigs).toEqual(original.pluginConfigs)
-  // Byte-identical once formatted the same way: key order included.
-  expect(JSON.stringify(removed)).toBe(JSON.stringify(original))
-})
-
-test('an existing X-Ccmproxy-Token line is replaced, not doubled', () => {
-  const plan = ok(planInstall({ env: { ANTHROPIC_CUSTOM_HEADERS: 'x-ccmproxy-token: old\nX-Team: blue' } }, ENV, MODELS))
-
-  expect((plan.settings.env as Record<string, string>).ANTHROPIC_CUSTOM_HEADERS).toBe('X-Team: blue\nX-Ccmproxy-Token: s3cret-value')
-})
-
-test('a base URL that is not ours is refused and named', () => {
-  const plan = planInstall({ env: { ANTHROPIC_BASE_URL: 'https://gateway.example.com' } }, ENV, MODELS)
-
-  expect(plan.error).toContain('https://gateway.example.com')
-  expect(plan.settings).toBe(undefined)
-})
-
-test('a second run changes nothing, keeps the first state, and uninstall still restores the original', () => {
-  const original: SettingsObject = { env: { ENABLE_TOOL_SEARCH: 'false' }, modelPicker: { options: [] } }
-  const first = ok(planInstall(original, ENV, MODELS))
-  const second = ok(planInstall(first.settings, ENV, MODELS, first.state))
-
-  expect(JSON.stringify(second.settings)).toBe(JSON.stringify(first.settings))
-  expect(second.state).toEqual(first.state)
-  const removed = planUninstall(second.settings, second.state)
-  expect(JSON.stringify(removed.settings)).toBe(JSON.stringify(original))
-})
-
-test('a reinstall on a new port replaces the base URL the previous install wrote', () => {
-  const first = ok(planInstall({}, ENV, MODELS))
-  const moved = { ...ENV, ANTHROPIC_BASE_URL: 'http://127.0.0.1:50000' }
-  const second = ok(planInstall(first.settings, moved, MODELS, first.state))
-
-  expect((second.settings.env as Record<string, string>).ANTHROPIC_BASE_URL).toBe('http://127.0.0.1:50000')
-  expect(JSON.stringify(planUninstall(second.settings, second.state).settings)).toBe('{}')
-})
-
-test('without a matching base URL in the settings, an old state is not trusted', () => {
-  const stale: InstallState = {
-    v: 1,
-    baseUrl: 'http://127.0.0.1:1',
-    envCreated: true,
-    headersExisted: false,
-    toolSearch: { present: false },
-    pickerCreated: true,
-    optionsCreated: true,
-    models: [],
+  expect((installed.settings.env as Record<string, string>).ENABLE_TOOL_SEARCH).toBe('true')
+  expect(removed).toEqual({ ...original, env: { KEEP: '1', ANTHROPIC_CUSTOM_HEADERS: 'X-Team: blue\nX-Trace: on' } })
+  expect(JSON.stringify(original)).toBe(before)
+  for (const value of ['true', 'false', false, 7, null]) {
+    expect(planUninstall({ env: { ENABLE_TOOL_SEARCH: value } }).settings).toEqual({})
   }
-  const plan = ok(planInstall({ env: { ENABLE_TOOL_SEARCH: '1' } }, ENV, MODELS, stale))
+})
 
-  expect(plan.state.envCreated).toBe(false)
-  expect(plan.state.toolSearch).toEqual({ present: true, value: '1' })
+test('reinstall is idempotent and a changed port requires uninstall first', () => {
+  const first = ok(planInstall({}, ENV, MODELS))
+  expect(ok(planInstall(first.settings, ENV, MODELS)).settings).toEqual(first.settings)
+  const moved = { ...ENV, ANTHROPIC_BASE_URL: 'http://127.0.0.1:50000' }
+  expect(planInstall(first.settings, moved, MODELS).error).toContain('uninstall first')
+  expect(ok(planInstall(planUninstall(first.settings).settings, moved, MODELS)).settings.env).toEqual(moved)
 })
 
 test('a row the person added for the same id stays and gets no marked twin', () => {
   const mine = { model: 'gpt-6-astra', label: 'Mine' }
   const { installed, removed } = roundTrip({ modelPicker: { options: [mine] } })
-  const options = (installed.settings.modelPicker as { options: { model: string }[] }).options
-
-  expect(options.map(row => row.model)).toEqual(['gpt-6-astra', 'gpt-6-mini'])
-  expect(options[0]).toEqual(mine)
-  expect(installed.state.models).toEqual(['gpt-6-mini'])
+  const rows = (installed.settings.modelPicker as { options: { model: string }[] }).options
+  expect(rows.map(row => row.model)).toEqual(['gpt-6-astra', 'gpt-6-mini'])
+  expect(rows[0]).toEqual(mine)
   expect(removed).toEqual({ modelPicker: { options: [mine] } })
 })
 
-test('uninstall without a state takes out the base URL, the header and the rows, and leaves tool search', () => {
-  const installed = ok(planInstall({ env: { KEEP: '1' } }, ENV, MODELS)).settings
-  const removed = planUninstall(installed, undefined).settings
-
-  expect(removed).toEqual({ env: { KEEP: '1', ENABLE_TOOL_SEARCH: 'true' }, modelPicker: { options: [] } })
+test('uninstall removes only a loopback HTTP URL that carried our header', () => {
+  for (const url of ['http://127.0.0.1:9999', 'http://localhost:3/', 'http://[::1]:9']) {
+    expect(planUninstall({ env: { ANTHROPIC_BASE_URL: url, ANTHROPIC_CUSTOM_HEADERS: 'x-ccmproxy-token: old' } }).settings).toEqual({})
+    expect(planUninstall({ env: { ANTHROPIC_BASE_URL: url } }).settings).toEqual({ env: { ANTHROPIC_BASE_URL: url } })
+  }
+  for (const url of ['https://gateway.example.com', 'https://127.0.0.1:3', 'http://10.0.0.1:3', 'http://127.0.0.1:3/v1']) {
+    expect(planUninstall({ env: { ANTHROPIC_BASE_URL: url, ANTHROPIC_CUSTOM_HEADERS: ENV.ANTHROPIC_CUSTOM_HEADERS } }).settings).toEqual({ env: { ANTHROPIC_BASE_URL: url } })
+  }
 })
 
-test('uninstall without a state leaves a base URL that carries no header of ours', () => {
-  const settings = { env: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:9999' } }
-
-  expect(planUninstall(settings, undefined).settings).toEqual(settings)
+test('header replacement and removal keep unrelated lines and remove every owned line', () => {
+  const headers = 'X-Team: blue\nx-ccmproxy-token: old\n  X-Ccmproxy-Token : another\nX-Trace: on'
+  const installed = ok(planInstall({ env: { ANTHROPIC_CUSTOM_HEADERS: headers } }, ENV, MODELS))
+  expect((installed.settings.env as Record<string, string>).ANTHROPIC_CUSTOM_HEADERS).toBe(`X-Team: blue\nX-Trace: on\n${ENV.ANTHROPIC_CUSTOM_HEADERS}`)
+  expect(planUninstall({ env: { ANTHROPIC_CUSTOM_HEADERS: headers } }).settings).toEqual({ env: { ANTHROPIC_CUSTOM_HEADERS: 'X-Team: blue\nX-Trace: on' } })
 })
 
-test('uninstall leaves a base URL the person changed after install', () => {
-  const first = ok(planInstall({}, ENV, MODELS))
-  const changed = { ...first.settings, env: { ...(first.settings.env as object), ANTHROPIC_BASE_URL: 'https://gateway.example.com' } }
-  const env = planUninstall(changed, first.state).settings?.env as Record<string, string>
-
-  expect(env.ANTHROPIC_BASE_URL).toBe('https://gateway.example.com')
-  expect(env.ANTHROPIC_CUSTOM_HEADERS).toBe(undefined)
+test('empty owned keys and containers drop deterministically, other picker keys and unmarked rows stay', () => {
+  expect(planUninstall({ env: { ANTHROPIC_CUSTOM_HEADERS: '' }, modelPicker: { options: [] } }).settings).toEqual({})
+  const settings = { modelPicker: { replaceBuiltInOptions: false, options: [null, 'x', { model: 'a', description: `not ${MARK} ours` }, { model: 'b', description: MARK }] } }
+  expect(planUninstall(settings).settings).toEqual({ modelPicker: { replaceBuiltInOptions: false, options: settings.modelPicker.options.slice(0, -1) } })
 })
 
-test('malformed settings are refused rather than rewritten', () => {
-  expect(planInstall([], ENV, MODELS).error).toContain('JSON object')
-  expect(planInstall({ env: 'x' }, ENV, MODELS).error).toContain('"env"')
-  expect(planInstall({ modelPicker: { options: {} } }, ENV, MODELS).error).toContain('modelPicker.options')
-  expect(planInstall({ env: { ANTHROPIC_CUSTOM_HEADERS: 3 } }, ENV, MODELS).error).toContain('ANTHROPIC_CUSTOM_HEADERS')
-  expect(planUninstall('x').error).toContain('JSON object')
+test('malformed settings are refused by both transformations', () => {
+  for (const [settings, message] of [
+    [[], 'JSON object'], [{ env: 'x' }, '"env"'], [{ modelPicker: null }, '"modelPicker"'],
+    [{ modelPicker: { options: {} } }, 'modelPicker.options'], [{ env: { ANTHROPIC_CUSTOM_HEADERS: 3 } }, 'ANTHROPIC_CUSTOM_HEADERS'],
+  ] as const) {
+    expect(planInstall(settings, ENV, MODELS).error).toContain(message)
+    expect(planUninstall(settings).error).toContain(message)
+  }
+})
+
+test('maskedSettings hides every token value without mutating the input', () => {
+  const settings = { env: { ANTHROPIC_CUSTOM_HEADERS: 'X-Team: blue\nx-ccmproxy-token: old\nX-Ccmproxy-Token:  new ' }, model: 'opus' }
+  expect(maskedSettings(settings)).toEqual({ env: { ANTHROPIC_CUSTOM_HEADERS: 'X-Team: blue\nx-ccmproxy-token: <secret>\nX-Ccmproxy-Token: <secret>' }, model: 'opus' })
+  expect(settings.env.ANTHROPIC_CUSTOM_HEADERS).toContain('old')
+  expect(maskedSettings({ env: {} })).toEqual({ env: {} })
 })
 
 test('the proxy environment must be loopback, one header line and tool search', () => {

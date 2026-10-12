@@ -76,7 +76,19 @@ The status has five keys: `service`, `version`, `codexLogin`, `models` and `code
 
 ## Not covered here
 
-Unit tests keep these: the exact ordering of the two flocks as an unexported
-detail beyond what `locks_test.go` observes, the bound-socket re-check, the
-constant-time compare, resolving a host name to loopback (needs DNS control),
-and a case-insensitive `auth_file` match (needs such a file system).
+Unit tests keep these: the bound-socket re-check, the constant-time compare,
+resolving a host name to loopback (needs DNS control), credential symlinks
+(dangling links included), unchanged-file-stamp refresh re-reads, cancellation
+while waiting on the canonical credential lock, and atomic private writes.
+
+The subprocess tests cover directory aliases sharing one lock, login and
+logout waiting on that lock, and unknown configuration keys that cannot
+select CLI credentials or override the fixed catalog and backend headers.
+The production schema contains `listen_http`, `upstream`, `auth_token`,
+`session_salt`, `auth_dir`, `log_level` and `codex.base_url` only. OAuth uses
+port 1455; isolated login tests choose a free port solely through
+`CCMPROXY_CONTRACT_CALLBACK_PORT` in the contract build. The default build
+asserts that this seam is inert.
+
+Catalog goldens pin the fixed bare-model rows. No effort-variant rows are
+advertised; suffix parsing is tested separately from the advertised list.

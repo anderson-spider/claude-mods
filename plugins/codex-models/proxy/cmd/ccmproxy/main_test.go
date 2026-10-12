@@ -247,8 +247,7 @@ func TestModelsJSONPrintsThePickerRows(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &rows); err != nil {
 		t.Fatalf("models --json output %q: %v", out, err)
 	}
-	cfg := config.Default()
-	registry := codex.NewRegistry(cfg.Codex.Models, cfg.Codex.ModelPrefix, cfg.Codex.EffortVariants)
+	registry := codex.NewRegistry()
 	options := registry.PickerOptions()
 	if len(rows) == 0 || len(rows) != len(options) {
 		t.Fatalf("%d rows for %d picker options", len(rows), len(options))
@@ -279,26 +278,25 @@ func TestModelsJSONAndSettingsJSONAreExclusive(t *testing.T) {
 	}
 }
 
-// cliAuthFileConfig writes a config whose codex.auth_file is the Codex CLI's
+// linkedCredentialConfig writes a config whose codex.auth_file is the Codex CLI's
 // login (under a CODEX_HOME of its own) and returns the config and CLI paths.
-func cliAuthFileConfig(t *testing.T) (configPath, cliPath string) {
+func linkedCredentialConfig(t *testing.T) (configPath, targetPath string) {
 	t.Helper()
-	home := filepath.Join(t.TempDir(), ".codex")
+	home := filepath.Join(t.TempDir(), "auth")
 	if err := os.MkdirAll(home, 0o700); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	t.Setenv("CODEX_HOME", home)
-	cliPath = filepath.Join(home, "auth.json")
-	body := `{"auth_mode":"chatgpt","tokens":{"access_token":"at","refresh_token":"rt"}}`
-	if err := os.WriteFile(cliPath, []byte(body), 0o600); err != nil {
+	targetPath = filepath.Join(home, "auth.json")
+	body := `{"access_token":"at","refresh_token":"rt"}`
+	if err := os.WriteFile(targetPath, []byte(body), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 	config, err := json.Marshal(map[string]any{
 		"listen_http":  "127.0.0.1:1",
 		"auth_token":   testToken,
 		"session_salt": strings.Repeat("ab", 32),
-		"auth_dir":     filepath.Join(t.TempDir(), "auth"),
-		"codex":        map[string]any{"auth_file": cliPath},
+		"auth_dir":     home,
+		"codex":        map[string]any{},
 	})
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -307,31 +305,22 @@ func cliAuthFileConfig(t *testing.T) (configPath, cliPath string) {
 	if err := os.WriteFile(configPath, config, 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	return configPath, cliPath
+	link := filepath.Join(home, "codex.json")
+	if err := os.Symlink(targetPath, link); err != nil {
+		t.Fatal(err)
+	}
+	return configPath, link
 }
 
-func TestServeRefusesAnAuthFileNamingTheCodexCLILogin(t *testing.T) {
-	configPath, cliPath := cliAuthFileConfig(t)
-	before, _ := os.ReadFile(cliPath)
-
-	err := run([]string{"serve", "--config", configPath})
-	if !errors.Is(err, codex.ErrAuthFileIsCodexCLI) {
-		t.Fatalf("serve = %v, want ErrAuthFileIsCodexCLI", err)
-	}
-	if after, _ := os.ReadFile(cliPath); string(after) != string(before) {
-		t.Fatal("serve touched the Codex CLI's login")
-	}
-}
-
-func TestStatusNamesTheRefusedAuthFile(t *testing.T) {
-	configPath, cliPath := cliAuthFileConfig(t)
+func TestStatusNamesTheRefusedCredentialLink(t *testing.T) {
+	configPath, targetPath := linkedCredentialConfig(t)
 
 	out := captureStdout(t, func() error { return run([]string{"status", "--config", configPath}) })
 	if strings.Contains(out, "not signed in") {
 		t.Fatalf("status hid the refusal behind \"not signed in\":\n%s", out)
 	}
-	if !strings.Contains(out, "codex           refused: ") || !strings.Contains(out, cliPath) ||
-		!strings.Contains(out, "auth_file") {
+	if !strings.Contains(out, "codex           refused: ") || !strings.Contains(out, targetPath) ||
+		!strings.Contains(out, "symlink") {
 		t.Fatalf("status does not give the refusal reason:\n%s", out)
 	}
 }

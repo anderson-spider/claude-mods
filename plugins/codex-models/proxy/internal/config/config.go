@@ -29,15 +29,15 @@ const (
 	TokenHeader = "X-Ccmproxy-Token"
 )
 
-// Defaults that have no exported name.
+// Backend protocol constants and defaults. They are not configurable.
 const (
 	defaultLogLevel     = "info"
 	defaultCodexBaseURL = "https://chatgpt.com/backend-api/codex"
-	defaultUserAgent    = "codex-tui/0.153.3 (Mac OS 26.5.1; arm64) iTerm.app/3.6.11 (codex-tui; 0.153.3)"
-	defaultOriginator   = "codex-tui"
-	// defaultCallbackPort is fixed by the OAuth client the login uses: its
+	UserAgent           = "codex-tui/0.153.3 (Mac OS 26.5.1; arm64) iTerm.app/3.6.11 (codex-tui; 0.153.3)"
+	Originator          = "codex-tui"
+	// CallbackPort is fixed by the OAuth client the login uses: its
 	// registered redirect URI names this port.
-	defaultCallbackPort = 1455
+	CallbackPort = 1455
 )
 
 // Config is everything config.json can set. The field order is the key order
@@ -77,38 +77,6 @@ type Codex struct {
 	// BaseURL is the Responses endpoint. The ChatGPT access token is sent to
 	// it, so it must be https.
 	BaseURL string `json:"base_url"`
-
-	// UserAgent and Originator present the requests as the Codex CLI's, the
-	// client the subscription endpoint expects.
-	UserAgent  string `json:"user_agent"`
-	Originator string `json:"originator"`
-
-	// Models, when not empty, restricts the advertised catalog to these ids.
-	Models []string `json:"models,omitempty"`
-
-	// EffortVariants advertises one extra id per reasoning level (such as
-	// gpt-6-luna-high). Off by default: Claude Code sends its own effort
-	// (/effort, --effort) with each request, so the extra rows would only
-	// crowd the model picker. It is for clients with no effort control.
-	EffortVariants bool `json:"effort_variants"`
-
-	// ModelPrefix, when set, is accepted and advertised in front of every
-	// Codex id ("codex/gpt-6-luna"). It always ends in exactly one "/" after
-	// loading.
-	ModelPrefix string `json:"model_prefix,omitempty"`
-
-	// CallbackPort is the loopback port of the OAuth redirect URI. Leave it
-	// alone: the OAuth client registration fixes it.
-	CallbackPort int `json:"callback_port"`
-
-	// AuthFile, when set, is the one credential file used, in the proxy's
-	// layout or the Codex CLI's.
-	AuthFile string `json:"auth_file,omitempty"`
-
-	// UseCLIAuth lets the proxy read the Codex CLI's ~/.codex/auth.json when
-	// it has no login of its own. Off by default, so the proxy and the Codex
-	// CLI never race over one refresh token.
-	UseCLIAuth bool `json:"use_codex_cli_auth"`
 }
 
 // Default returns the configuration used for every setting a file leaves
@@ -120,10 +88,7 @@ func Default() *Config {
 		AuthDir:    defaultAuthDir(),
 		LogLevel:   defaultLogLevel,
 		Codex: Codex{
-			BaseURL:      defaultCodexBaseURL,
-			UserAgent:    defaultUserAgent,
-			Originator:   defaultOriginator,
-			CallbackPort: defaultCallbackPort,
+			BaseURL: defaultCodexBaseURL,
 		},
 	}
 }

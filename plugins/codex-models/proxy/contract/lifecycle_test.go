@@ -86,40 +86,6 @@ func TestModelsRequestDoesNotFollowRedirects(t *testing.T) {
 	}
 }
 
-// auth_file may not lead to the Codex CLI's file, by a link or a `..` path.
-func TestAuthFileLeadingToTheCodexCLIFileIsRefused(t *testing.T) {
-	for name, build := range map[string]func(e *env, cli string) string{
-		"symlink": func(e *env, cli string) string {
-			link := filepath.Join(e.home, "link.json")
-			must(t, os.Symlink(cli, link))
-			return link
-		},
-		"dot dot": func(e *env, cli string) string {
-			return filepath.Join(e.codexHome, "..", filepath.Base(e.codexHome), "auth.json")
-		},
-		"symlink to a symlink": func(e *env, cli string) string {
-			first := filepath.Join(e.home, "first.json")
-			must(t, os.Symlink(cli, first))
-			second := filepath.Join(e.home, "second.json")
-			must(t, os.Symlink(first, second))
-			return second
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			e := newEnv(t, opts{noStart: true})
-			cli, data, mtime := writeCLILogin(t, e, accessToken("x", time.Now().Add(time.Hour)))
-			cfg := readLogin(t, e.cfgPath)
-			cfg["codex"].(map[string]any)["auth_file"] = build(e, cli)
-			writeJSON(t, e.cfgPath, cfg, 0o600)
-			out, code := runCLI(t, e.home, e.environ(), "serve")
-			if code == 0 || !strings.Contains(out.stderr, "never writes") {
-				t.Fatalf("exit %d, stderr %s", code, out.stderr)
-			}
-			unchanged(t, cli, data, mtime)
-		})
-	}
-}
-
 // The LaunchAgent restarts the proxy unless it exited cleanly.
 func TestServeExitsCleanlyOnSIGTERM(t *testing.T) {
 	e := loggedIn(t, opts{})
@@ -128,5 +94,49 @@ func TestServeExitsCleanlyOnSIGTERM(t *testing.T) {
 	}
 	if _, err := e.client.Head(e.url("/api/hello")); err == nil {
 		t.Fatal("the listener is still open")
+	}
+}
+
+func TestCredentialLinkRefusedWithoutTouchingItsTarget(t *testing.T) {
+	for _, dangling := range []bool{false, true} {
+		name := "existing"
+		if dangling {
+			name = "dangling"
+		}
+		t.Run(name, func(t *testing.T) {
+			e := newEnv(t, opts{noStart: true})
+			must(t, os.MkdirAll(e.authDir, 0o700))
+			target := filepath.Join(t.TempDir(), "target.json")
+			if !dangling {
+				writeJSON(t, target, map[string]any{"access_token": "linked", "refresh_token": "linked-refresh"}, 0o600)
+			}
+			before, _ := os.ReadFile(target)
+			link := filepath.Join(e.authDir, "codex.json")
+			must(t, os.Symlink(target, link))
+			for _, command := range []string{"serve", "logout", "status"} {
+				out, code := runCLI(t, e.home, e.environ(), command)
+				text := out.stdout + out.stderr
+				if !strings.Contains(text, "credential file must not be a symlink") {
+					t.Fatalf("%s: exit %d %s", command, code, text)
+				}
+				if command != "status" && code == 0 {
+					t.Fatalf("%s accepted a link", command)
+				}
+			}
+			if e.oauth.count() != 0 || e.cdx.count() != 0 {
+				t.Fatal("linked credentials were sent")
+			}
+			after, err := os.ReadFile(target)
+			if dangling && !os.IsNotExist(err) {
+				t.Fatal("dangling target created")
+			}
+			if string(before) != string(after) {
+				t.Fatal("link target changed")
+			}
+			info, err := os.Lstat(link)
+			if err != nil || info.Mode()&os.ModeSymlink == 0 {
+				t.Fatal("credential link removed")
+			}
+		})
 	}
 }

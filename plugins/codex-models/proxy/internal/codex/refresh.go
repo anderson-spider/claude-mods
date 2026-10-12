@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/logx"
@@ -23,8 +22,6 @@ func (s *Store) Access(ctx context.Context) (accessToken, accountID string, err 
 	switch {
 	case err != nil:
 		return "", "", err
-	case s.active.readOnly:
-		return s.borrowedLocked(token)
 	case !token.Expired(refreshLead):
 		return serve(token)
 	}
@@ -32,7 +29,7 @@ func (s *Store) Access(ctx context.Context) (accessToken, accountID string, err 
 		return afterRejection(token, err)
 	}
 
-	// Another proxy process may be refreshing the same file: hold the locks,
+	// Another proxy process may be refreshing the same file: hold the lock,
 	// then read the file again, so only one of them spends the refresh token.
 	unlock, err := s.lock(ctx)
 	if err != nil {
@@ -46,7 +43,7 @@ func (s *Store) Access(ctx context.Context) (accessToken, accountID string, err 
 	return s.refreshLocked(ctx)
 }
 
-// refreshLocked reads the credential again under the file locks and refreshes
+// refreshLocked reads the credential again under the file lock and refreshes
 // it if it still needs it.
 func (s *Store) refreshLocked(ctx context.Context) (string, string, error) {
 	// Read the file even when its stamp looks unchanged: another process may
@@ -57,8 +54,6 @@ func (s *Store) refreshLocked(ctx context.Context) (string, string, error) {
 	switch {
 	case err != nil:
 		return "", "", err
-	case s.active.readOnly:
-		return s.borrowedLocked(token)
 	case !token.Expired(refreshLead):
 		// Another process refreshed it while this one waited.
 		return serve(token)
@@ -125,8 +120,7 @@ var errCredentialsBusy = errors.New("codex: the credential store is busy")
 
 // Held returns the access token and account id as they are stored, and never
 // refreshes or waits for a refresh: a store that is busy, a missing login and
-// a token within refreshLead of expiry (a borrowed Codex CLI token is never
-// refreshed, so only an expired one counts) each give an error. The status
+// a token within refreshLead of expiry each give an error. The status
 // endpoint's usage request uses it, so a status never rides on, or starts, a
 // token refresh.
 func (s *Store) Held() (accessToken, accountID string, err error) {
@@ -138,11 +132,7 @@ func (s *Store) Held() (accessToken, accountID string, err error) {
 	if err != nil {
 		return "", "", err
 	}
-	lead := refreshLead
-	if s.active.readOnly {
-		lead = 0
-	}
-	if token.Expired(lead) {
+	if token.Expired(refreshLead) {
 		return "", "", ErrTokenDue
 	}
 	return serve(token)
@@ -163,7 +153,7 @@ func serve(token *Token) (string, string, error) {
 // the status and the OAuth code only.
 func (s *Store) latchLocked(token *Token, err error) {
 	s.rejected = &rejection{
-		path:    s.active.path,
+		path:    s.active,
 		stamp:   s.stamp,
 		refresh: sha256.Sum256([]byte(token.RefreshToken)),
 		err:     err,
@@ -177,7 +167,7 @@ func (s *Store) latchLocked(token *Token, err error) {
 		}
 	}
 	logx.Warnf("codex: the token endpoint rejected the refresh of %s (status %d, error %s); "+
-		"no refresh is retried until the file changes: run `ccmproxy login codex`", s.active.path, status, code)
+		"no refresh is retried until the file changes: run `ccmproxy login codex`", s.active, status, code)
 }
 
 // rejectedLocked returns the latched refusal when token is the credential the
@@ -188,7 +178,7 @@ func (s *Store) rejectedLocked(token *Token) error {
 	if r == nil {
 		return nil
 	}
-	if r.path != s.active.path || r.stamp != s.stamp || r.refresh != sha256.Sum256([]byte(token.RefreshToken)) {
+	if r.path != s.active || r.stamp != s.stamp || r.refresh != sha256.Sum256([]byte(token.RefreshToken)) {
 		s.rejected = nil
 		return nil
 	}
@@ -202,12 +192,4 @@ func afterRejection(token *Token, err error) (string, string, error) {
 		return serve(token)
 	}
 	return "", "", err
-}
-
-// borrowedLocked serves the Codex CLI's login while its access token is valid.
-func (s *Store) borrowedLocked(token *Token) (string, string, error) {
-	if token.Expired(0) {
-		return "", "", fmt.Errorf("%w (%s)", ErrCodexCLILoginExpired, s.active.path)
-	}
-	return serve(token)
 }

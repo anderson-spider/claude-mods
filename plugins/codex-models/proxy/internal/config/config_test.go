@@ -1,7 +1,6 @@
 package config
 
 import (
-	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -9,7 +8,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 )
 
 // validToken is a secret long enough to pass validateSecret.
@@ -64,14 +62,8 @@ func TestLoadFillsUnsetFields(t *testing.T) {
 	if cfg.Upstream != DefaultUpstream {
 		t.Fatalf("upstream = %q, want the default filled in", cfg.Upstream)
 	}
-	if cfg.Codex.BaseURL == "" || cfg.Codex.UserAgent == "" || cfg.Codex.Originator == "" {
+	if cfg.Codex.BaseURL == "" || UserAgent == "" || Originator == "" {
 		t.Fatalf("codex defaults were not filled in: %+v", cfg.Codex)
-	}
-	if cfg.Codex.ModelPrefix != "codex/" {
-		t.Fatalf("model_prefix = %q, want the separator normalized", cfg.Codex.ModelPrefix)
-	}
-	if cfg.Codex.CallbackPort != 1455 {
-		t.Fatalf("callback_port = %d", cfg.Codex.CallbackPort)
 	}
 }
 
@@ -140,35 +132,6 @@ func TestAnEmptyListenHTTPUsesTheDefault(t *testing.T) {
 	}
 	if cfg.ListenHTTP != DefaultListenHTTP {
 		t.Fatalf("listen_http = %q", cfg.ListenHTTP)
-	}
-}
-
-func TestRemovedKeysAreRefusedByName(t *testing.T) {
-	for key := range removedKeys {
-		path := writeConfig(t, `{"`+key+`": null}`)
-		_, err := Load(path)
-		if err == nil {
-			t.Fatalf("a file setting %q loaded, want a refusal", key)
-		}
-		if !strings.Contains(err.Error(), key) {
-			t.Fatalf("error for %q does not name it: %v", key, err)
-		}
-	}
-}
-
-func TestRemovedKeysAreAllNamedTogether(t *testing.T) {
-	path := writeConfig(t, `{"listen_tls":"127.0.0.1:8443","dns":{"enabled":true},"proxy_password":"x"}`)
-	_, err := Load(path)
-	if err == nil {
-		t.Fatal("want a refusal")
-	}
-	for _, key := range []string{"listen_tls", "dns", "proxy_password"} {
-		if !strings.Contains(err.Error(), key) {
-			t.Fatalf("error does not name %q: %v", key, err)
-		}
-	}
-	if strings.Contains(err.Error(), `"x"`) {
-		t.Fatalf("error repeats a removed value: %v", err)
 	}
 }
 
@@ -261,23 +224,6 @@ func TestLoadRefusesAFileOthersCanRead(t *testing.T) {
 	}
 }
 
-func TestCodexAuthDefaults(t *testing.T) {
-	cfg := Default()
-	if cfg.Codex.UseCLIAuth {
-		t.Fatal("codex.use_codex_cli_auth must default to false: the proxy keeps its own login")
-	}
-	if cfg.Codex.AuthFile != "" {
-		t.Fatalf("codex.auth_file = %q, want empty so discovery applies", cfg.Codex.AuthFile)
-	}
-	cfg, err := Load(writeConfig(t, `{"codex":{"use_codex_cli_auth":true}}`))
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if !cfg.Codex.UseCLIAuth {
-		t.Fatal("an explicit true must be honoured")
-	}
-}
-
 func TestSaveRoundTripAndMode(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nested", "config.json")
 	cfg, err := Load(path)
@@ -366,9 +312,6 @@ func TestInitCreatesAFileWithSecretsAndARandomPort(t *testing.T) {
 	if cfg.AuthToken == "" || cfg.SessionSalt == "" || cfg.AuthToken == cfg.SessionSalt {
 		t.Fatalf("auth_token %q / session_salt %q, want two distinct generated secrets", cfg.AuthToken, cfg.SessionSalt)
 	}
-	if cfg.Codex.UseCLIAuth {
-		t.Fatal("a new file must not opt into the Codex CLI login")
-	}
 }
 
 func TestInitUpgradesAnExistingFileInPlace(t *testing.T) {
@@ -447,6 +390,144 @@ func TestInitUpgradesAnExistingFileInPlace(t *testing.T) {
 	}
 }
 
+func TestInitPreservesSecretsIgnoringKeyCase(t *testing.T) {
+	for _, tc := range []struct {
+		name, authKey, saltKey string
+		mode                   os.FileMode
+	}{
+		{"uppercase", "AUTH_TOKEN", "SESSION_SALT", 0o600},
+		{"mixed case", "Auth_Token", "Session_Salt", 0o600},
+		{"uppercase exposed", "AUTH_TOKEN", "SESSION_SALT", 0o640},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := `{"` + tc.authKey + `":"` + validToken + `","` + tc.saltKey + `":"` + strings.Repeat("c", 64) + `"}`
+			path := writeConfig(t, body)
+			before, _, err := load(path, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(path, tc.mode); err != nil {
+				t.Fatal(err)
+			}
+			calls := 0
+			newSecret := func() (string, error) {
+				calls++
+				return strings.Repeat("d", 64), nil
+			}
+			for run := 0; run < 2; run++ {
+				result, err := initWith(path, newSecret, fixedAddr("127.0.0.1:1"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if calls != 0 || len(result.Added) != 0 || result.Created {
+					t.Fatalf("run %d: generated %d secrets, result = %+v", run, calls, result)
+				}
+				if result.Tightened != (run == 0 && tc.mode != 0o600) {
+					t.Fatalf("run %d: tightened = %v", run, result.Tightened)
+				}
+				assertMode(t, path, 0o600)
+				after, err := Load(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if after.AuthToken != before.AuthToken || after.SessionSalt != before.SessionSalt {
+					t.Fatal("init changed an effective existing secret")
+				}
+				data, err := os.ReadFile(path)
+				if err != nil || string(data) != body {
+					t.Fatalf("init rewrote existing members or added aliases: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestInitAppendsMissingSecretsPreservingOriginalBytes(t *testing.T) {
+	for _, tc := range []struct {
+		name, body, added string
+		empty             bool
+	}{
+		{"empty", `{}`, "auth_token,session_salt", true},
+		{"empty with whitespace", " \t\r\n{\t \r\n}\r\n\t", "auth_token,session_salt", true},
+		{"null auth", `{"AUTH_TOKEN":null,"SESSION_SALT":"` + validToken + `"}`, "auth_token", false},
+		{"blank salt", `{"AUTH_TOKEN":"` + validToken + `","Session_Salt":"   "}`, "session_salt", false},
+		{"absent salt with uppercase token", `{"AUTH_TOKEN":"` + validToken + `"}`, "session_salt", false},
+		{"both blank", `{"auth_token":"","SESSION_SALT":null}`, "auth_token,session_salt", false},
+		{"duplicate null retains token", `{"auth_token":"` + validToken + `","auth_token":null}`, "session_salt", false},
+		{"escaped key", `{"auth_token":"` + validToken + `"}`, "session_salt", false},
+		{"formatting and duplicate unknown members", " \r\n{\n\t\"AUTH_TOKEN\" : \"" + validToken + "\",\n\t\"unknown\": 2.5000, \"unknown\": [1e+02, {\"marker\":\"}\"}]\n  }\r\n\t", "session_salt", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := writeConfig(t, tc.body)
+			before, err := Load(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := initWith(path, fakeSecrets(), fixedAddr("127.0.0.1:1"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Join(result.Added, ",") != tc.added {
+				t.Fatalf("added = %v", result.Added)
+			}
+			cfg, err := Load(path)
+			if err != nil || cfg.AuthToken == "" || cfg.SessionSalt == "" {
+				t.Fatalf("Load after init: %v", err)
+			}
+			if (before.AuthToken != "" && cfg.AuthToken != before.AuthToken) ||
+				(before.SessionSalt != "" && cfg.SessionSalt != before.SessionSalt) {
+				t.Fatal("init changed an effective existing secret")
+			}
+			var members []string
+			values := map[string]string{"auth_token": cfg.AuthToken, "session_salt": cfg.SessionSalt}
+			for _, key := range result.Added {
+				members = append(members, `"`+key+`": "`+values[key]+`"`)
+			}
+			insertion := "\n  " + strings.Join(members, ",\n  ")
+			if !tc.empty {
+				insertion = "," + insertion
+			}
+			data, err := os.ReadFile(path)
+			if err != nil || !strings.Contains(string(data), insertion) ||
+				strings.Replace(string(data), insertion, "", 1) != tc.body {
+				t.Fatalf("init changed existing bytes instead of inserting missing members: %v", err)
+			}
+			assertMode(t, path, 0o600)
+			again, err := initWith(path, fakeSecrets(), fixedAddr("127.0.0.1:1"))
+			if err != nil || len(again.Added) != 0 {
+				t.Fatalf("second init: %+v, %v", again, err)
+			}
+			after, err := os.ReadFile(path)
+			if err != nil || string(after) != string(data) {
+				t.Fatalf("second init was not idempotent: %v", err)
+			}
+		})
+	}
+}
+
+func TestInitKeepsEffectiveValuesInOriginalAliasOrder(t *testing.T) {
+	body := `{"auth_token":"` + validToken + `","AUTH_TOKEN":"` + strings.Repeat("c", 64) + `","log_level":"warn","LOG_LEVEL":"debug"}`
+	path := writeConfig(t, body)
+	before, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := initWith(path, fakeSecrets(), fixedAddr("127.0.0.1:1"))
+	if err != nil || strings.Join(result.Added, ",") != "session_salt" {
+		t.Fatalf("init: %+v, %v", result, err)
+	}
+	after, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.AuthToken != before.AuthToken || after.LogLevel != before.LogLevel {
+		t.Fatal("init changed effective values by reordering aliases")
+	}
+	if after.SessionSalt == "" {
+		t.Fatal("init did not add the missing salt")
+	}
+}
+
 func TestInitTightensAFileThatNeedsNoKeys(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("file modes are POSIX")
@@ -468,7 +549,6 @@ func TestInitTightensAFileThatNeedsNoKeys(t *testing.T) {
 
 func TestInitRefusesAFileItWouldHaveToRewrite(t *testing.T) {
 	for _, body := range []string{
-		`{"listen_proxy":"127.0.0.1:8080"}`,
 		`{"listen_http":"0.0.0.0:8081"}`,
 		`{"upstream":"https://evil.test"}`,
 		`{oops`,
@@ -571,8 +651,7 @@ func TestTildePathsInConfigAreExpanded(t *testing.T) {
 	// A literal "~" would be created as a directory next to the working
 	// directory, which is the bug this guards against.
 	for name, got := range map[string]string{
-		"auth_dir":  cfg.AuthDir,
-		"auth_file": cfg.Codex.AuthFile,
+		"auth_dir": cfg.AuthDir,
 	} {
 		if strings.Contains(got, "~") || !filepath.IsAbs(got) || !strings.HasPrefix(got, home) {
 			t.Fatalf("%s = %q, want an absolute path under %q", name, got, home)
@@ -616,24 +695,6 @@ func TestDefaultsAreAlreadyAbsolute(t *testing.T) {
 	}
 	if !filepath.IsAbs(cfg.AuthDir) {
 		t.Fatalf("auth_dir = %q, want an absolute path even with no config file", cfg.AuthDir)
-	}
-}
-
-func TestEffortVariantsAreOffByDefault(t *testing.T) {
-	// Claude Code picks effort itself and sends it with the request, so a
-	// row per effort would only multiply the picker entries.
-	if Default().Codex.EffortVariants {
-		t.Fatal("codex.effort_variants must default to false")
-	}
-}
-
-func TestEffortVariantsCanBeEnabled(t *testing.T) {
-	cfg, err := Load(writeConfig(t, `{"codex":{"effort_variants":true}}`))
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if !cfg.Codex.EffortVariants {
-		t.Fatal("an explicit true must be honoured")
 	}
 }
 
@@ -728,7 +789,7 @@ func TestURLRefusalsNeverEchoSecrets(t *testing.T) {
 func TestParseErrorsNeverEchoInput(t *testing.T) {
 	for _, body := range []string{
 		`{"auth_token": 12345, "x": "` + echoSecret + `"}`,
-		`{"codex": {"callback_port": "` + echoSecret + `"}}`,
+		`{"codex": {"base_url": 12345}, "x":"` + echoSecret + `"}`,
 		`{"codex": "` + echoSecret + `"}`,
 		`{"auth_token": "` + echoSecret + `"`,
 		`{"auth_token": "` + echoSecret + `" "x"}`,
@@ -847,30 +908,6 @@ func TestCodexBaseURL(t *testing.T) {
 		if _, err := Load(writeConfig(t, string(body))); err == nil {
 			t.Errorf("codex.base_url %q accepted", b)
 		}
-	}
-}
-
-func TestRemovedKeysNoEchoUnknownIgnored(t *testing.T) {
-	const secret = "VALUE-MUST-NOT-APPEAR-123"
-	for key := range removedKeys {
-		path := writeConfig(t, `{"`+key+`":"`+secret+`"}`)
-		_, err := Load(path)
-		if err == nil || !strings.Contains(err.Error(), key) {
-			t.Fatalf("%s: err = %v", key, err)
-		}
-		if strings.Contains(err.Error(), secret) {
-			t.Fatalf("%s: error echoes the value: %v", key, err)
-		}
-	}
-	// Object-valued removed key.
-	_, err := Load(writeConfig(t, `{"proxy_password":{"nested":"`+secret+`"}}`))
-	if err == nil || strings.Contains(err.Error(), secret) {
-		t.Fatalf("object value: %v", err)
-	}
-	// Unknown keys (top level and nested) are ignored.
-	cfg, err := Load(writeConfig(t, `{"brand_new_key":123,"codex":{"also_new":true},"listen_http":"127.0.0.1:4000"}`))
-	if err != nil || cfg.ListenHTTP != "127.0.0.1:4000" {
-		t.Fatalf("unknown keys: cfg=%v err=%v", cfg, err)
 	}
 }
 
@@ -1053,36 +1090,5 @@ func TestInitNullSecretIsFilled(t *testing.T) {
 	}
 	if strings.Join(res.Added, ",") != "auth_token,session_salt" {
 		t.Fatalf("added = %v", res.Added)
-	}
-}
-
-func TestInitRefusesRemovedKeysByteIdentical(t *testing.T) {
-	for _, body := range []string{
-		`{"listen_tls":"127.0.0.1:8443","auth_token":"` + validToken + `"}`,
-		`{"dns":{"enabled":true}}`,
-		`{"ca_dir":"/x","intercept_hosts":["api.anthropic.com"]}`,
-		`{"proxy_username":"u","proxy_password":"p"}`,
-	} {
-		path := writeConfig(t, body)
-		_ = os.Chmod(path, 0o644)
-		old := time.Now().Add(-time.Hour)
-		_ = os.Chtimes(path, old, old)
-		before, _ := os.Stat(path)
-		_, err := Init(path)
-		if err == nil {
-			t.Fatalf("Init over %s succeeded", body)
-		}
-		data, _ := os.ReadFile(path)
-		if !bytes.Equal(data, []byte(body)) {
-			t.Fatalf("file changed: %s", data)
-		}
-		after, _ := os.Stat(path)
-		if after.Mode() != before.Mode() || !after.ModTime().Equal(before.ModTime()) || !os.SameFile(before, after) {
-			t.Fatalf("file metadata changed: mode %v->%v", before.Mode(), after.Mode())
-		}
-		entries, _ := os.ReadDir(filepath.Dir(path))
-		if len(entries) != 1 {
-			t.Fatalf("leftover files: %d", len(entries))
-		}
 	}
 }

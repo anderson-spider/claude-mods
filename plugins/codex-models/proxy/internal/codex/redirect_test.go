@@ -120,7 +120,6 @@ func TestNewClientLeavesTheCallersClientAlone(t *testing.T) {
 func TestBackendRedirectIsNotFollowed(t *testing.T) {
 	for _, tc := range redirectCases {
 		t.Run(fmt.Sprintf("%d to %s", tc.status, tc.host), func(t *testing.T) {
-			t.Setenv("CODEX_HOME", t.TempDir())
 			origin, elsewhere, hits := redirectPair(t, tc.status, tc.host)
 			store := NewStore(nil, StoreOptions{Dir: t.TempDir()})
 			if err := store.Save(&Token{AccessToken: "secret-access", AccountID: "acct", ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
@@ -128,7 +127,7 @@ func TestBackendRedirectIsNotFollowed(t *testing.T) {
 			}
 
 			for name, backend := range map[string]*Backend{
-				"NewBackend":   NewBackend(origin.URL, "ua", "orig", store, origin.Client().Transport),
+				"NewBackend":   NewBackend(origin.URL, store, origin.Client().Transport),
 				"bare Backend": {BaseURL: origin.URL, Store: store, HTTP: origin.Client()},
 			} {
 				resp, err := backend.Responses(context.Background(), []byte(`{}`), "")

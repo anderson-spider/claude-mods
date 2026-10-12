@@ -10,7 +10,6 @@ import (
 // A refresh holds the store for the token endpoint's round trip; Authenticated
 // answers meanwhile from the state the refresh's own load left.
 func TestAuthenticatedDoesNotWaitForARefresh(t *testing.T) {
-	t.Setenv("CODEX_HOME", t.TempDir())
 	fake, client := newOAuthServer(t, 2*time.Second)
 	dir := t.TempDir()
 	writeNative(t, filepath.Join(dir, "codex.json"),
@@ -43,7 +42,6 @@ func TestAuthenticatedDoesNotWaitForARefresh(t *testing.T) {
 // A busy store answers the last known state, not "logged in"; a free one
 // reads the files again.
 func TestAuthenticatedWhileBusyAnswersTheLastKnownState(t *testing.T) {
-	t.Setenv("CODEX_HOME", t.TempDir())
 	dir := t.TempDir()
 	path := filepath.Join(dir, "codex.json")
 	store := NewStore(nil, StoreOptions{Dir: dir})
@@ -104,7 +102,6 @@ func busyAuthenticated(t *testing.T, store *Store) bool {
 
 // Before anything has loaded, a busy store is waited for once.
 func TestAuthenticatedWaitsOnlyBeforeAnyState(t *testing.T) {
-	t.Setenv("CODEX_HOME", t.TempDir())
 	dir := t.TempDir()
 	writeNative(t, filepath.Join(dir, "codex.json"), Token{AccessToken: "a", RefreshToken: "r", ExpiresAt: time.Now().Add(time.Hour)}, 0o600)
 	store := NewStore(nil, StoreOptions{Dir: dir})

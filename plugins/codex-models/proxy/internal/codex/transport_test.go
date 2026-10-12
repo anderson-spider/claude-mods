@@ -8,7 +8,7 @@ import (
 )
 
 func TestNilTransportsAreTheDirectOne(t *testing.T) {
-	backend := NewBackend("https://chatgpt.com/backend-api/codex", "ua", "codex-tui", nil, nil)
+	backend := NewBackend("https://chatgpt.com/backend-api/codex", nil, nil)
 	client := NewClient(nil)
 	for name, rt := range map[string]http.RoundTripper{"backend": backend.HTTP.Transport, "oauth": client.HTTP.Transport} {
 		if rt == nil || rt == http.DefaultTransport {

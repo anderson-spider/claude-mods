@@ -51,9 +51,7 @@ func loadConfig(command string, args []string, extra func(*flag.FlagSet)) (*conf
 // storeOptions maps the config onto the credential lookup order.
 func storeOptions(cfg *config.Config) codex.StoreOptions {
 	return codex.StoreOptions{
-		Dir:          cfg.AuthDir,
-		ExplicitPath: cfg.Codex.AuthFile,
-		UseCodexCLI:  cfg.Codex.UseCLIAuth,
+		Dir: cfg.AuthDir,
 	}
 }
 

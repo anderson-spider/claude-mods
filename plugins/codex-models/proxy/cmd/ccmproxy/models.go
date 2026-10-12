@@ -16,7 +16,7 @@ import (
 // --settings-json.
 func runModels(args []string) error {
 	var settingsJSON, rowsJSON bool
-	cfg, err := loadConfig("models", args, func(fs *flag.FlagSet) {
+	_, err := loadConfig("models", args, func(fs *flag.FlagSet) {
 		fs.BoolVar(&settingsJSON, "settings-json", false,
 			"print a modelPicker block to merge into Claude Code's settings.json")
 		fs.BoolVar(&rowsJSON, "json", false,
@@ -28,7 +28,7 @@ func runModels(args []string) error {
 	if settingsJSON && rowsJSON {
 		return errors.New("--settings-json and --json cannot be combined")
 	}
-	registry := codex.NewRegistry(cfg.Codex.Models, cfg.Codex.ModelPrefix, cfg.Codex.EffortVariants)
+	registry := codex.NewRegistry()
 
 	switch {
 	case settingsJSON:

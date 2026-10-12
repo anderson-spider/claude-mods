@@ -6,28 +6,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
 )
 
-// Two exclusive flocks serialise logins, refreshes and removals across proxy
-// processes, always taken in this order and released in reverse:
-//
-//  1. legacyLockName in auth_dir, the one earlier releases took, so an older
-//     binary on the same file and this one exclude each other (drop it once
-//     no such binary can run);
-//  2. lockSuffix beside the credential file as a write resolves it, so every
-//     process on that file shares it whatever its auth_dir or link.
-//
-// Taking them in one order means two stores of this release never wait on
-// each other crosswise. When both name one file it is taken once.
-
 // lockSuffix names the lock beside a credential file.
 const lockSuffix = ".lock"
-
-// legacyLockName is the lock earlier releases took in auth_dir.
-const legacyLockName = "codex.lock"
 
 // lockWait bounds the wait for another process's refresh; it outlasts the
 // OAuth client's own 30 s timeout.
@@ -36,54 +20,22 @@ const lockWait = 45 * time.Second
 // lockPoll is how often a held lock is tried again.
 const lockPoll = 25 * time.Millisecond
 
-// lockBusy, when set (by tests), runs once each time lockFile finds the lock
-// held.
-var lockBusy func()
-
-// lockReleased, when set (by tests), runs with a lock's path each time it is
-// released.
-var lockReleased func(path string)
-
 // lockPath is the lock beside the file this store writes, resolved the way
 // the write resolves it.
 func (s *Store) lockPath() string {
 	return writeTarget(s.NativePath()) + lockSuffix
 }
 
-// legacyLockPath is where earlier releases locked: auth_dir, or the
-// credential file's directory without one, joined as they joined it.
-func (s *Store) legacyLockPath() string {
-	dir := strings.TrimSpace(s.options.Dir)
-	if dir == "" {
-		dir = filepath.Dir(s.NativePath())
-	}
-	return filepath.Join(dir, legacyLockName)
-}
-
-// lock takes both locks in order and returns their release, in reverse. Each
-// wait is bounded by lockWait and ctx; a failure on the second releases the
-// first.
+// lock serialises credential mutation across processes; waiting is bounded
+// by lockWait and ctx. The caller releases the lock on every path.
 func (s *Store) lock(ctx context.Context) (func(), error) {
-	legacy := s.legacyLockPath()
-	releaseLegacy, err := s.lockFile(ctx, legacy)
-	if err != nil {
+	if err := s.Check(); err != nil {
 		return nil, err
 	}
-	current := s.lockPath()
-	if sameFile(legacy, current) {
-		// An auth_file named "codex" makes them one file: a second flock on
-		// it from another descriptor would wait on this one forever.
-		return releaseLegacy, nil
-	}
-	releaseCurrent, err := s.lockFile(ctx, current)
-	if err != nil {
-		releaseLegacy()
+	if err := s.ensureDir(s.options.Dir); err != nil {
 		return nil, err
 	}
-	return func() {
-		releaseCurrent()
-		releaseLegacy()
-	}, nil
+	return s.lockFile(ctx, s.lockPath())
 }
 
 // lockFile takes the exclusive flock on path, creating it (and its directory,
@@ -103,9 +55,6 @@ func (s *Store) lockFile(ctx context.Context, path string) (func(), error) {
 	return func() {
 		_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
 		_ = file.Close()
-		if lockReleased != nil {
-			lockReleased(path)
-		}
 	}, nil
 }
 
@@ -114,16 +63,13 @@ func (s *Store) lockFile(ctx context.Context, path string) (func(), error) {
 func waitForFlock(ctx context.Context, file *os.File, path string) error {
 	fd := int(file.Fd())
 	deadline := time.Now().Add(lockWait)
-	for first := true; ; first = false {
+	for {
 		err := syscall.Flock(fd, syscall.LOCK_EX|syscall.LOCK_NB)
 		switch {
 		case err == nil:
 			return nil
 		case !errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EINTR):
 			return fmt.Errorf("codex: lock %s: %w", path, err)
-		}
-		if first && lockBusy != nil {
-			lockBusy()
 		}
 		if time.Now().After(deadline) {
 			return fmt.Errorf("codex: timed out waiting for the lock %s", path)

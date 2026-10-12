@@ -4,11 +4,12 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/anderson-spider/claude-mods/plugins/codex-models/proxy/internal/logx"
@@ -17,26 +18,9 @@ import (
 // nativeFileName is this proxy's own credential file in auth_dir.
 const nativeFileName = "codex.json"
 
-// StoreOptions configures where credentials are looked for.
+// StoreOptions names the directory of the proxy's native credentials.
 type StoreOptions struct {
-	// Dir is where this proxy keeps its own credential file and its lock.
 	Dir string
-	// ExplicitPath, when set, is the only file consulted, in whichever
-	// layout it turns out to be. It must not be the Codex CLI's file.
-	ExplicitPath string
-	// UseCodexCLI enables reading the Codex CLI's ~/.codex/auth.json,
-	// read-only, when this proxy has no credentials of its own.
-	UseCodexCLI bool
-}
-
-// source is one candidate credential file.
-type source struct {
-	path   string
-	format format
-	// readOnly marks the Codex CLI's file (by whatever path it was reached):
-	// it is used while its access token is valid and never refreshed,
-	// written or removed.
-	readOnly bool
 }
 
 // fileStamp is a file's size and modification time, enough to notice that
@@ -58,21 +42,19 @@ func (f fileStamp) missing() bool { return f.size == 0 && f.modTime.IsZero() }
 
 // Store finds, caches and refreshes Codex credentials.
 //
-// Credentials are looked for in order: an explicitly configured file, or else
-// this proxy's own file, then (when enabled) the Codex CLI's
-// ~/.codex/auth.json. Only this proxy's own files are refreshed and written;
-// the Codex CLI's login is borrowed read-only.
+// The only credential file is codex.json under auth_dir. Directory aliases
+// share the canonical file lock; credential-file symlinks are refused.
 type Store struct {
 	client  *Client
 	options StoreOptions
 
 	// mu guards everything below and is held across a whole refresh, so one
-	// process refreshes once; the file locks do the same across processes.
+	// process refreshes once; the file lock do the same across processes.
 	mu     sync.Mutex
 	token  *Token
-	active source
+	active string
 	// stamp is the active file's stamp when it was read, so an external
-	// update (the Codex CLI or another proxy refreshing) is noticed instead
+	// update (another proxy refreshing) is noticed instead
 	// of served from a stale cache.
 	stamp fileStamp
 	// rejected is the latch on a credential whose refresh the token endpoint
@@ -95,61 +77,12 @@ func NewStore(client *Client, options StoreOptions) *Store {
 	return &Store{client: client, options: options}
 }
 
-func (s *Store) explicitPath() string { return strings.TrimSpace(s.options.ExplicitPath) }
-
-// Check refuses a configuration whose auth_file resolves to the Codex CLI's
-// credential file (directly, through a symlink, `..` or a different case on
-// a case-insensitive volume). Every read, write and removal runs it; call it
-// at start to fail early.
-//
-// It also refuses an auth_dir that is the Codex CLI's directory or inside it,
-// and a credential file (auth_file, or auth_dir's codex.json) that resolves
-// there through its own links (a dangling one included), so the proxy's
-// file, its lock and the 0700 it sets never land there and a refresh token
-// is never spent on a file the proxy may not write.
-func (s *Store) Check() error {
-	explicit := s.explicitPath()
-	if explicit != "" {
-		if cli := CodexCLIAuthPath(); cli != "" && sameFile(explicit, cli) {
-			return fmt.Errorf("%w (%s is %s)", ErrAuthFileIsCodexCLI, explicit, cli)
-		}
-		if insideCodexHome(explicit) {
-			return insideHomeError("auth_file", explicit)
-		}
-	}
-	dir := strings.TrimSpace(s.options.Dir)
-	if dir == "" {
-		return nil
-	}
-	if insideCodexHome(dir) {
-		return insideHomeError("auth_dir", dir)
-	}
-	if native := filepath.Join(dir, nativeFileName); explicit == "" && insideCodexHome(native) {
-		return insideHomeError("auth_dir's "+nativeFileName, native)
-	}
-	return nil
-}
-
-// insideHomeError names what lands in CODEX_HOME, with both paths resolved
-// the same way so they read alike.
-func insideHomeError(what, path string) error {
-	home := resolvePath(CodexCLIHome(), 0)
-	resolved := resolvePath(path, 0)
-	switch {
-	case sameFile(resolved, home):
-		return fmt.Errorf("%w (%s is the Codex CLI's directory, %s)", ErrInsideCodexHome, what, home)
-	case resolved == filepath.Clean(path):
-		return fmt.Errorf("%w (%s %s is in the Codex CLI's directory, %s)", ErrInsideCodexHome, what, path, home)
-	default:
-		return fmt.Errorf("%w (%s %s leads to %s, in the Codex CLI's directory, %s)", ErrInsideCodexHome, what, path, resolved, home)
-	}
-}
+// Check refuses credential symlinks, dangling links included, before reads,
+// refreshes, saves and removals. Directory aliases remain allowed.
+func (s *Store) Check() error { return refuseCredentialLink(s.NativePath()) }
 
 // NativePath reports this proxy's own credential file.
 func (s *Store) NativePath() string {
-	if explicit := s.explicitPath(); explicit != "" {
-		return explicit
-	}
 	return filepath.Join(s.options.Dir, nativeFileName)
 }
 
@@ -158,36 +91,10 @@ func (s *Store) NativePath() string {
 func (s *Store) Path() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.active.path != "" {
-		return s.active.path
+	if s.active != "" {
+		return s.active
 	}
 	return s.NativePath()
-}
-
-// Sources lists the candidate files in the order they are consulted.
-func (s *Store) Sources() []string {
-	candidates := s.candidates()
-	paths := make([]string, 0, len(candidates))
-	for _, candidate := range candidates {
-		paths = append(paths, candidate.path)
-	}
-	return paths
-}
-
-// candidates are the files to try, in order: an explicitly named one alone
-// (its layout read from its contents), else this proxy's own file and, when
-// enabled, the Codex CLI's.
-func (s *Store) candidates() []source {
-	if explicit := s.explicitPath(); explicit != "" {
-		return []source{{path: explicit, format: formatUnknown}}
-	}
-	candidates := []source{{path: filepath.Join(s.options.Dir, nativeFileName), format: formatNative}}
-	if s.options.UseCodexCLI {
-		if cli := CodexCLIAuthPath(); cli != "" {
-			candidates = append(candidates, source{path: cli, format: formatCodexCLI, readOnly: true})
-		}
-	}
-	return candidates
 }
 
 // Save writes token to this proxy's own credential file and installs it as the
@@ -199,11 +106,7 @@ func (s *Store) Save(token *Token) error {
 	if err := s.Check(); err != nil {
 		return err
 	}
-	target := source{path: s.NativePath(), format: formatNative}
-	// An explicitly configured file keeps its layout.
-	if s.explicitPath() != "" {
-		target.format = detectFormatOfFile(target.path)
-	}
+	target := s.NativePath()
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -215,16 +118,13 @@ func (s *Store) Save(token *Token) error {
 	return s.writeLocked(token, target)
 }
 
-// Remove deletes this proxy's own credential file and reports its path. It
-// never removes the Codex CLI's file; a missing file is an os.ErrNotExist.
+// Remove deletes the native credential file and reports its path. A missing
+// file is an os.ErrNotExist; a symlink is refused before removal.
 func (s *Store) Remove() (string, error) {
 	if err := s.Check(); err != nil {
 		return "", err
 	}
 	path := s.NativePath()
-	if refersToCodexCLI(path) {
-		return path, fmt.Errorf("codex: %s is the Codex CLI's login file; this proxy never removes it", path)
-	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -233,7 +133,10 @@ func (s *Store) Remove() (string, error) {
 		return path, err
 	}
 	defer unlock()
-	if err := os.Remove(path); err != nil {
+	if err := s.Check(); err != nil {
+		return path, err
+	}
+	if err := os.Remove(writeTarget(path)); err != nil {
 		return path, err
 	}
 	s.forgetLocked()
@@ -242,7 +145,7 @@ func (s *Store) Remove() (string, error) {
 
 // forgetLocked drops the cached credential, the active file and the latch.
 func (s *Store) forgetLocked() {
-	s.token, s.active, s.stamp, s.rejected = nil, source{}, fileStamp{}, nil
+	s.token, s.active, s.stamp, s.rejected = nil, "", fileStamp{}, nil
 	s.noteLogin(false)
 }
 
@@ -280,7 +183,7 @@ func (s *Store) Authenticated() bool {
 }
 
 // loadLocked returns the cached credential while its file is unchanged, and
-// otherwise reads the first candidate that holds one. Its outcome is the
+// otherwise reads the native credential file. Its outcome is the
 // login state Authenticated answers while the store is busy.
 func (s *Store) loadLocked() (*Token, error) {
 	token, err := s.findLocked()
@@ -293,72 +196,49 @@ func (s *Store) findLocked() (*Token, error) {
 	if err := s.Check(); err != nil {
 		return nil, err
 	}
-	// A file changed underneath (the Codex CLI or another proxy refreshing)
+	// A file changed underneath (another proxy refreshing)
 	// invalidates the cache: its refresh token may have been rotated.
 	if s.token != nil && !s.staleLocked() {
 		return s.token, nil
 	}
 
-	var lastErr error
-	for _, candidate := range s.candidates() {
-		token, used, err := s.read(candidate)
-		switch {
-		case err != nil:
-			lastErr = err
-			continue
-		case token == nil:
-			continue
+	path := s.NativePath()
+	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, ErrNotAuthenticated
 		}
-		if s.active.path != used.path {
-			if used.readOnly {
-				logx.Infof("codex: using credentials from %s (read-only, never refreshed)", used.path)
-			} else {
-				logx.Infof("codex: using credentials from %s", used.path)
-			}
-		}
-		s.token, s.active, s.stamp = token, used, stampOf(used.path)
-		return token, nil
+		return nil, fmt.Errorf("codex: read %s: %w", path, err)
 	}
-	if lastErr != nil {
-		return nil, lastErr
-	}
-	return nil, ErrNotAuthenticated
-}
-
-// read decodes one candidate. It returns no token and no error for a file
-// that is missing or holds neither an access nor a refresh token, and the
-// source as it was read: a candidate that leads to the Codex CLI's file
-// (this proxy's own file may be a link to it) is read in that file's layout
-// and borrowed read-only.
-func (s *Store) read(candidate source) (*Token, source, error) {
-	data, err := os.ReadFile(candidate.path)
+	defer file.Close()
+	data, err := io.ReadAll(file)
 	if os.IsNotExist(err) {
-		return nil, candidate, nil
+		return nil, ErrNotAuthenticated
 	}
 	if err != nil {
-		return nil, candidate, fmt.Errorf("codex: read %s: %w", candidate.path, err)
+		return nil, fmt.Errorf("codex: read %s: %w", path, err)
 	}
-	candidate.readOnly = candidate.readOnly || refersToCodexCLI(candidate.path)
-	if candidate.format == formatUnknown || candidate.readOnly {
-		candidate.format = detectFormat(data)
-	}
-	token, err := decodeCredentials(data, candidate.format)
+	token, err := decodeNative(data)
 	if err != nil {
-		return nil, candidate, err
+		return nil, err
 	}
 	if token.AccessToken == "" && token.RefreshToken == "" {
-		return nil, candidate, nil
+		return nil, ErrNotAuthenticated
 	}
-	return token, candidate, nil
+	if s.active != path {
+		logx.Infof("codex: using credentials from %s", path)
+	}
+	s.token, s.active, s.stamp = token, path, stampOf(path)
+	return token, nil
 }
 
 // staleLocked reports whether the active file changed (or went away) since
 // it was read.
 func (s *Store) staleLocked() bool {
-	if s.active.path == "" {
+	if s.active == "" {
 		return true
 	}
-	current := stampOf(s.active.path)
+	current := stampOf(s.active)
 	return current.missing() || current != s.stamp
 }
 

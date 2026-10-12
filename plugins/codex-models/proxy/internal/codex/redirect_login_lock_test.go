@@ -1,9 +1,5 @@
 package codex
 
-// Redirects refused for every 3xx and both clients, the login callback's
-// method and state checks, and the lock beside the effective credential file.
-// Everything runs on temp dirs and local httptest servers.
-
 import (
 	"context"
 	"errors"
@@ -145,7 +141,6 @@ func TestBackendRefusesEveryRedirectStatus(t *testing.T) {
 	for _, status := range everyRedirectStatus {
 		for _, host := range redirectHosts {
 			t.Run(fmt.Sprintf("%d-%s", status, host), func(t *testing.T) {
-				t.Setenv("CODEX_HOME", t.TempDir())
 				origin, location, hits := redirectPairWithBody(t, status, host)
 				store := NewStore(nil, StoreOptions{Dir: t.TempDir()})
 				if err := store.Save(&Token{AccessToken: "secret-access", RefreshToken: "secret-refresh", AccountID: "acct", ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
@@ -158,7 +153,7 @@ func TestBackendRefusesEveryRedirectStatus(t *testing.T) {
 				wantPtr := reflect.ValueOf(follow).Pointer()
 
 				for name, backend := range map[string]*Backend{
-					"NewBackend":   NewBackend(origin.URL, "ua", "orig", store, origin.Client().Transport),
+					"NewBackend":   NewBackend(origin.URL, store, origin.Client().Transport),
 					"bare Backend": {BaseURL: origin.URL, Store: store, HTTP: mine},
 				} {
 					resp, err := backend.Responses(context.Background(), []byte(`{}`), "")
@@ -282,80 +277,44 @@ func TestLoginCallbackRefusesOtherMethodsAndStates(t *testing.T) {
 	}
 }
 
-// Default lock path is <auth_dir>/codex.json.lock; an auth_file reached through
-// a link locks beside its target; the old codex.lock is never created.
+// The only lock sits beside the native credential in its canonical directory.
 func TestLockSitsBesideTheCredentialFile(t *testing.T) {
-	t.Setenv("CODEX_HOME", t.TempDir())
 	dir := t.TempDir()
 	store := NewStore(nil, StoreOptions{Dir: dir})
-	if want := filepath.Join(resolvePath(dir, 0), "codex.json.lock"); resolvePath(store.lockPath(), 0) != want {
-		t.Fatalf("default lockPath = %s, want %s", store.lockPath(), want)
+	if want := writeTarget(filepath.Join(dir, nativeFileName)) + lockSuffix; store.lockPath() != want {
+		t.Fatalf("lock = %s, want %s", store.lockPath(), want)
 	}
 	if err := store.Save(&Token{AccessToken: "at"}); err != nil {
-		t.Fatalf("Save: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(dir, "codex.json.lock")); err != nil {
-		t.Fatalf("no codex.json.lock after Save: %v", err)
-	}
-	// The legacy lock is held too, for one release, so an older binary on
-	// the same file is excluded.
-	if _, err := os.Stat(filepath.Join(dir, legacyLockName)); err != nil {
-		t.Fatalf("no legacy codex.lock after Save: %v", err)
-	}
-
-	realDir, linkDir, authDir := t.TempDir(), t.TempDir(), t.TempDir()
-	file := filepath.Join(realDir, "creds.json")
-	writeNative(t, file, Token{AccessToken: "at", ExpiresAt: time.Now().Add(time.Hour)}, 0o600)
-	link := filepath.Join(linkDir, "link.json")
-	if err := os.Symlink(file, link); err != nil {
 		t.Fatal(err)
 	}
-	ls := NewStore(nil, StoreOptions{Dir: authDir, ExplicitPath: link})
-	if got, want := ls.lockPath(), resolvePath(file, 0)+".lock"; got != want {
-		t.Fatalf("lockPath via link = %s, want %s", got, want)
+	if _, err := os.Stat(filepath.Join(dir, "codex.json.lock")); err != nil {
+		t.Fatal(err)
 	}
-	if err := ls.Save(&Token{AccessToken: "at2"}); err != nil {
-		t.Fatalf("Save via link: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(authDir, legacyLockName)); err != nil {
-		t.Fatalf("no legacy codex.lock in auth_dir: %v", err)
-	}
-	for _, unwanted := range []string{link + ".lock", filepath.Join(authDir, "codex.json.lock")} {
-		if _, err := os.Lstat(unwanted); !os.IsNotExist(err) {
-			t.Fatalf("unexpected lock %s: %v", unwanted, err)
-		}
-	}
-	if info, err := os.Lstat(link); err != nil || info.Mode()&os.ModeSymlink == 0 {
-		t.Fatalf("link replaced by Save: %v", err)
+	if _, err := os.Lstat(filepath.Join(dir, "codex.lock")); !os.IsNotExist(err) {
+		t.Fatalf("obsolete lock created: %v", err)
 	}
 }
 
-// Five stores on one credential file, reached as the file, through a file
-// symlink, through a symlinked directory and through a relative `..` path,
-// each with its own auth_dir: one endpoint call per round, repeated.
+// Stores on one credential directory, including a directory alias, spend
+// one refresh token per round.
 func TestStoresReachingOneFileRotateOnce(t *testing.T) {
-	t.Setenv("CODEX_HOME", t.TempDir())
 	for round := 0; round < 15; round++ {
 		fake, client := newOAuthServer(t, 30*time.Millisecond)
 		realDir := t.TempDir()
-		file := filepath.Join(realDir, "creds.json")
+		file := filepath.Join(realDir, nativeFileName)
 		writeNative(t, file, Token{AccessToken: "stale", RefreshToken: "rt-1", ExpiresAt: time.Now().Add(-time.Minute)}, 0o600)
-		fileLink := filepath.Join(t.TempDir(), "creds-link.json")
-		if err := os.Symlink(file, fileLink); err != nil {
-			t.Fatal(err)
-		}
 		dirLink := filepath.Join(t.TempDir(), "dirlink")
 		if err := os.Symlink(realDir, dirLink); err != nil {
 			t.Fatal(err)
 		}
-		dotted := filepath.Join(realDir, "sub", "..", "creds.json")
+		dotted := filepath.Join(realDir, "sub", "..", nativeFileName)
 		if err := os.MkdirAll(filepath.Join(realDir, "sub"), 0o700); err != nil {
 			t.Fatal(err)
 		}
-		paths := []string{file, file, fileLink, filepath.Join(dirLink, "creds.json"), dotted}
+		paths := []string{file, file, filepath.Join(dirLink, nativeFileName), dotted}
 		stores := make([]*Store, len(paths))
 		for i, p := range paths {
-			stores[i] = NewStore(client, StoreOptions{Dir: t.TempDir(), ExplicitPath: p})
+			stores[i] = NewStore(client, StoreOptions{Dir: filepath.Dir(p)})
 			if _, err := stores[i].Peek(); err != nil {
 				t.Fatalf("Peek %d: %v", i, err)
 			}
@@ -385,7 +344,7 @@ func TestStoresReachingOneFileRotateOnce(t *testing.T) {
 		if n := fake.calls.Load(); n != 1 {
 			t.Fatalf("round %d: token endpoint called %d times, want 1", round, n)
 		}
-		for _, l := range []string{fileLink, dirLink} {
+		for _, l := range []string{dirLink} {
 			if info, err := os.Lstat(l); err != nil || info.Mode()&os.ModeSymlink == 0 {
 				t.Fatalf("round %d: %s is no longer a symlink: %v", round, l, err)
 			}
@@ -395,31 +354,3 @@ func TestStoresReachingOneFileRotateOnce(t *testing.T) {
 
 // The store reached through the symlink is the one that refreshes: the
 // write goes through to the target and the link stays a link.
-func TestRefreshThroughSymlinkKeepsTheLink(t *testing.T) {
-	t.Setenv("CODEX_HOME", t.TempDir())
-	fake, client := newOAuthServer(t, 0)
-	file := filepath.Join(t.TempDir(), "creds.json")
-	writeNative(t, file, Token{AccessToken: "stale", RefreshToken: "rt-1", ExpiresAt: time.Now().Add(-time.Minute)}, 0o600)
-	link := filepath.Join(t.TempDir(), "link.json")
-	if err := os.Symlink(file, link); err != nil {
-		t.Fatal(err)
-	}
-	s := NewStore(client, StoreOptions{Dir: t.TempDir(), ExplicitPath: link})
-	at, _, err := s.Access(context.Background())
-	if err != nil || at != "access-from-rt-1" {
-		t.Fatalf("Access = %q, %v", at, err)
-	}
-	if info, err := os.Lstat(link); err != nil || info.Mode()&os.ModeSymlink == 0 {
-		t.Fatalf("link replaced: %v", err)
-	}
-	tok, err := NewStore(nil, StoreOptions{Dir: t.TempDir(), ExplicitPath: file}).Peek()
-	if err != nil || tok.RefreshToken != "rt-2" {
-		t.Fatalf("target not updated: %+v %v", tok, err)
-	}
-	if info, _ := os.Stat(file); info.Mode().Perm() != 0o600 {
-		t.Fatalf("target mode %v", info.Mode().Perm())
-	}
-	if fake.calls.Load() != 1 {
-		t.Fatalf("calls = %d", fake.calls.Load())
-	}
-}

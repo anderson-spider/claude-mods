@@ -7,7 +7,6 @@
 #                             rows to ~/.claude/settings.json (a timestamped backup beside it)
 #   install.sh --check        only checks the prerequisites; changes nothing
 #   install.sh --dry-run      prints the settings.json diff it would write (secret masked); changes nothing
-#   install.sh --no-settings  everything but the settings.json edit
 #
 # The settings are written only after the proxy answered as this install's: every Claude Code session on the
 # machine reads them, so a proxy that is down or not ours would take them all down. uninstall.sh undoes it.
@@ -17,7 +16,6 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 TARGET="$HOME/.claude/codex-models"
 PROXY_HOME="$TARGET/home"
 BIN="$TARGET/bin/ccmproxy"
-STATE="$TARGET/settings-state.json"
 SETTINGS="$HOME/.claude/settings.json"
 LABEL=com.anderson-spider.codex-models
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
@@ -28,10 +26,9 @@ NODE_VERSION=24
 
 CHECK=
 DRY_RUN=
-NO_SETTINGS=
 
 usage() {
-  echo "usage: install.sh [--check | --dry-run] [--no-settings]" >&2
+  echo "usage: install.sh [--check | --dry-run]" >&2
   exit 2
 }
 
@@ -39,7 +36,6 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --check) CHECK=1 ;;
     --dry-run) DRY_RUN=1 ;;
-    --no-settings) NO_SETTINGS=1 ;;
     *) usage ;;
   esac
   shift
@@ -74,10 +70,8 @@ fi
 
 # The settings are checked before anything is built, copied or loaded: a refusal later would leave a running proxy
 # behind that nothing points at.
-if [ -z "$NO_SETTINGS" ]; then
-  run_node "$HERE/install/cli.mjs" precheck --settings "$SETTINGS" --state "$STATE" --config "$PROXY_HOME/config.json" ||
-    die "nothing was changed"
-fi
+run_node "$HERE/install/cli.mjs" precheck --settings "$SETTINGS" --config "$PROXY_HOME/config.json" ||
+  die "nothing was changed"
 
 if [ -n "$CHECK" ]; then
   say "ready to install $VERSION"
@@ -121,12 +115,8 @@ if [ -n "$DRY_RUN" ]; then
   CCMPROXY_HOME="$TMP/home" "$PROXY" env --shell json >"$TMP/env.json"
   CCMPROXY_HOME="$TMP/home" "$PROXY" models --json >"$TMP/models.json"
   say "dry run: would install ccmproxy $VERSION into $BIN and load $LABEL from $PLIST"
-  if [ -n "$NO_SETTINGS" ]; then
-    say "dry run: settings left alone (--no-settings)"
-  else
-    [ -f "$PROXY_HOME/config.json" ] || say "dry run: no config yet, so the port and secret below are examples"
-    run_node "$HERE/install/cli.mjs" merge --dry-run --settings "$SETTINGS" --state "$STATE" --env "$TMP/env.json" --models "$TMP/models.json"
-  fi
+  [ -f "$PROXY_HOME/config.json" ] || say "dry run: no config yet, so the port and secret below are examples"
+  run_node "$HERE/install/cli.mjs" merge --dry-run --settings "$SETTINGS" --env "$TMP/env.json" --models "$TMP/models.json"
   exit 0
 fi
 
@@ -219,13 +209,9 @@ CCMPROXY_HOME="$PROXY_HOME" "$BIN" env --shell json >"$TMP/env.json"
 run_node "$HERE/install/cli.mjs" preflight --env "$TMP/env.json" --version "$VERSION" ||
   die "the proxy did not pass its checks, so settings.json was left alone"
 
-if [ -n "$NO_SETTINGS" ]; then
-  say "settings.json left alone (--no-settings); $TARGET/ccmproxy env prints what Claude Code needs"
-else
-  CCMPROXY_HOME="$PROXY_HOME" "$BIN" models --json >"$TMP/models.json"
-  mkdir -p "$HOME/.claude"
-  run_node "$HERE/install/cli.mjs" merge --settings "$SETTINGS" --state "$STATE" --env "$TMP/env.json" --models "$TMP/models.json"
-fi
+CCMPROXY_HOME="$PROXY_HOME" "$BIN" models --json >"$TMP/models.json"
+mkdir -p "$HOME/.claude"
+run_node "$HERE/install/cli.mjs" merge --settings "$SETTINGS" --env "$TMP/env.json" --models "$TMP/models.json"
 
 say "installed $VERSION. New Claude Code sessions go through the proxy; running ones keep their settings until restarted."
 say "sign in to Codex once: $TARGET/ccmproxy login codex (inside Claude Code: ! $TARGET/ccmproxy login codex)"

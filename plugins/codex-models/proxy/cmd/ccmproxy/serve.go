@@ -93,8 +93,8 @@ func newHandler(cfg *config.Config) (http.Handler, *codex.Store, error) {
 
 	oauth := codex.NewClient(&http.Client{Transport: transport, Timeout: outboundTimeout})
 	store := codex.NewStore(oauth, storeOptions(cfg))
-	backend := codex.NewBackend(cfg.Codex.BaseURL, cfg.Codex.UserAgent, cfg.Codex.Originator, store, transport)
-	registry := codex.NewRegistry(cfg.Codex.Models, cfg.Codex.ModelPrefix, cfg.Codex.EffortVariants)
+	backend := codex.NewBackend(cfg.Codex.BaseURL, store, transport)
+	registry := codex.NewRegistry()
 
 	routes, err := router.New(cfg, registry, backend, transport)
 	if err != nil {
