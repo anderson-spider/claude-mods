@@ -1,6 +1,7 @@
 package router
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
@@ -184,6 +185,10 @@ func TestMidStreamErrorsAreCleanedAndNeverLogged(t *testing.T) {
 			if !strings.HasPrefix(msg, "[2J"+plantedSecrets[0]) || !strings.HasSuffix(msg, "…") {
 				t.Fatalf("%s: message %q", label, msg)
 			}
+			// At most 300 runes of text, then the ellipsis, never after a space.
+			if n := len([]rune(msg)); n > 301 || strings.HasSuffix(msg, " …") {
+				t.Fatalf("%s: message has %d runes, ends %q", label, n, msg[len(msg)-6:])
+			}
 			for _, r := range msg {
 				if r < 0x20 || r == 0x7f {
 					t.Fatalf("%s: control char in %q", label, msg)
@@ -191,4 +196,85 @@ func TestMidStreamErrorsAreCleanedAndNeverLogged(t *testing.T) {
 			}
 		}
 	}
+}
+
+// TestBackendErrorMessagesAreCappedOnEveryPath cuts multibyte text with a
+// space or a control character at the boundary, through a backend error
+// status (401 included, which adds its own prefix) and through a mid-stream
+// error and response.failed, streamed and not.
+func TestBackendErrorMessagesAreCappedOnEveryPath(t *testing.T) {
+	const loginPrefix = "the Codex backend refused the ChatGPT login; run `ccmproxy login codex` to sign in again: "
+	inputs := map[string]string{
+		"space at 300":   strings.Repeat("é", 299) + " " + strings.Repeat("界", 20),
+		"control at 300": strings.Repeat("🙂", 299) + "\u001b\n" + strings.Repeat("b", 20),
+		"word pairs":     strings.Repeat("w ", 400),
+		"short":          "upstream said no",
+	}
+	check := func(label, msg, original string) {
+		t.Helper()
+		if strings.HasSuffix(msg, " …") || strings.HasSuffix(msg, " ") {
+			t.Fatalf("%s: ends in a space: %q", label, msg)
+		}
+		if n := len([]rune(msg)); n > 301 {
+			t.Fatalf("%s: %d runes", label, n)
+		}
+		if original == "upstream said no" && msg != original {
+			t.Fatalf("%s: a short message changed: %q", label, msg)
+		}
+		if original != "upstream said no" && !strings.HasSuffix(msg, "…") {
+			t.Fatalf("%s: a cut message must say so: %q", label, msg)
+		}
+		for _, r := range msg {
+			if r < 0x20 || r == 0x7f {
+				t.Fatalf("%s: control char in %q", label, msg)
+			}
+		}
+	}
+	for name, in := range inputs {
+		for _, status := range []int{400, 401, 429, 500} {
+			for _, stream := range []string{"true", "false"} {
+				h := newHarness(t, nil, backendStatus(status, `{"error":{"message":`+encodedJSON(in)+`}}`), true)
+				rec := h.do(t, http.MethodPost, "/v1/messages", `{"model":"gpt-6-luna","stream":`+stream+`,"messages":[]}`)
+				msg := gjson.Get(rec.Body.String(), "error.message").String()
+				label := name + " status " + http.StatusText(status) + " stream=" + stream
+				if status == 401 {
+					if !strings.HasPrefix(msg, loginPrefix) {
+						t.Fatalf("%s: %q", label, msg)
+					}
+					msg = strings.TrimPrefix(msg, loginPrefix)
+				}
+				check(label, msg, in)
+			}
+		}
+		for _, event := range []string{
+			`{"type":"error","error":{"type":"server_error","message":` + encodedJSON(in) + `}}`,
+			`{"type":"response.failed","response":{"id":"r","error":{"code":"server_error","message":` + encodedJSON(in) + `}}}`,
+		} {
+			for _, stream := range []bool{true, false} {
+				h := newHarness(t, nil, func(w http.ResponseWriter, r *http.Request) {
+					writeSSE(w, `{"type":"response.created","response":{"id":"r"}}`)
+					writeSSE(w, event)
+				}, true)
+				body := `{"model":"gpt-6-luna","stream":false,"messages":[]}`
+				if stream {
+					body = `{"model":"gpt-6-luna","stream":true,"messages":[]}`
+				}
+				rec := h.do(t, http.MethodPost, "/v1/messages", body)
+				var msg string
+				if stream {
+					_, data := sseEvents(rec.Body.String())
+					msg = data[len(data)-1].Get("error.message").String()
+				} else {
+					msg = gjson.Get(rec.Body.String(), "error.message").String()
+				}
+				check(name+" "+gjson.Get(event, "type").String(), msg, in)
+			}
+		}
+	}
+}
+
+// encodedJSON renders s as a JSON string, control characters escaped.
+func encodedJSON(s string) string {
+	out, _ := json.Marshal(s)
+	return string(out)
 }
