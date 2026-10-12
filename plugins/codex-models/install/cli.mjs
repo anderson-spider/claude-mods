@@ -10,14 +10,14 @@
 // arguments, so the secret never shows in a process list. Nothing printed carries the secret.
 import { spawnSync } from 'node:child_process'
 import {
+  chmodSync,
   closeSync,
-  copyFileSync,
-  constants,
   existsSync,
   fsyncSync,
   mkdtempSync,
   openSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   renameSync,
   rmSync,
@@ -28,7 +28,18 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
-import { HEADER, isOurHeader, masked, planInstall, planUninstall, readStatusReply, secretOf, settingsRefusal } from './settings.mjs'
+import {
+  HEADER,
+  isOurHeader,
+  masked,
+  maskedSettings,
+  ownerRefusal,
+  planInstall,
+  planUninstall,
+  readStatusReply,
+  secretOf,
+  settingsRefusal,
+} from './settings.mjs'
 
 class Refusal extends Error {}
 
@@ -62,18 +73,40 @@ const landing = file => (existsSync(file) ? realpathSync(file) : file)
 
 const stamp = () => new Date().toISOString().replace(/[-:]/g, '').replace(/\..*$/, '').replace('T', '-')
 
-/** Writes `text` beside `file` and renames it over, keeping the file's mode; `expect` is what must still be there. */
-function writeAtomic(file, text, expect) {
+/** Refuses a file that holds or will hold the secret when it is not the user's own (mode 600 needs the owner). */
+function ensureOwn(file) {
   const target = landing(file)
-  const mode = existsSync(target) ? statSync(target).mode & 0o777 : 0o600
-  const temp = join(dirname(target), `.${basename(target)}.codex-models-${process.pid}.tmp`)
-  const fd = openSync(temp, 'wx', mode)
+  const refusal = ownerRefusal(target, existsSync(target) ? statSync(target).uid : undefined, process.getuid())
+  if (refusal) fail(refusal)
+  return target
+}
+
+/** Creates `path` with `text`, mode 600 from the first byte, or fails naming the path; `flag` `wx` never overwrites. */
+function writePrivate(path, text) {
+  let fd
+  try {
+    fd = openSync(path, 'wx', 0o600)
+  } catch (error) {
+    if (error.code === 'EEXIST') throw error
+    fail(`cannot write ${path} (${error.code}): the file holding the proxy's secret must be restricted to mode 600; nothing was changed`)
+  }
   try {
     writeSync(fd, text)
     fsyncSync(fd)
   } finally {
     closeSync(fd)
   }
+  chmodSync(path, 0o600) // the umask can only narrow the mode; this states it
+}
+
+/**
+ * Writes `text` beside `file` and renames it over, so the file ends at mode 600 whatever it was (it holds the
+ * secret); `expect` is what must still be there.
+ */
+function writeAtomic(file, text, expect) {
+  const target = ensureOwn(file)
+  const temp = join(dirname(target), `.${basename(target)}.codex-models-${process.pid}.tmp`)
+  writePrivate(temp, text)
   // Claude Code rewrites this file too (/config, plugin configure): a change since it was read is not overwritten.
   const now = existsSync(target) ? readFileSync(target, 'utf8') : undefined
   if (now !== expect) {
@@ -83,14 +116,31 @@ function writeAtomic(file, text, expect) {
   renameSync(temp, target)
 }
 
-/** A copy beside the file under a name no earlier backup has: install and uninstall can run within one second. */
+/** Restricts the user's own earlier backups of `target` to mode 600; returns their name prefix. */
+function restrictBackups(target) {
+  const dir = dirname(target)
+  const prefix = `${basename(target)}.bak-codex-models-`
+  for (const name of readdirSync(dir)) {
+    const path = join(dir, name)
+    if (name.startsWith(prefix) && statSync(path).uid === process.getuid()) chmodSync(path, 0o600)
+  }
+  return prefix
+}
+
+/**
+ * A copy beside the file, mode 600, under a name no earlier backup has (install and uninstall can run within one
+ * second). Earlier backups of the user's own are restricted too: an older install may have left them readable.
+ */
 function backup(file) {
-  const target = landing(file)
-  const base = `${target}.bak-codex-models-${stamp()}`
+  const target = ensureOwn(file)
+  const dir = dirname(target)
+  const prefix = restrictBackups(target)
+  const text = readFileSync(target, 'utf8')
+  const base = join(dir, `${prefix}${stamp()}`)
   for (let n = 0; ; n++) {
     const copy = n === 0 ? base : `${base}-${n}`
     try {
-      copyFileSync(target, copy, constants.COPYFILE_EXCL)
+      writePrivate(copy, text)
       return copy
     } catch (error) {
       if (error.code !== 'EEXIST' || n >= 99) throw error
@@ -111,13 +161,17 @@ function readSettings(file) {
   }
 }
 
-function printDiff(before, after, secret, label) {
+/** Prints the diff of two settings values (undefined: no file), every X-Ccmproxy-Token value masked in both. */
+function printDiff(beforeValue, afterValue, secret, label) {
+  const show = value => (value === undefined ? '' : masked(formatted(maskedSettings(value)), secret))
+  const before = show(beforeValue)
+  const after = show(afterValue)
   const dir = mkdtempSync(join(tmpdir(), 'codex-models-'))
   try {
     const a = join(dir, 'before.json')
     const b = join(dir, 'after.json')
-    writeFileSync(a, masked(before, secret), { mode: 0o600 })
-    writeFileSync(b, masked(after, secret), { mode: 0o600 })
+    writeFileSync(a, before, { mode: 0o600 })
+    writeFileSync(b, after, { mode: 0o600 })
     const diff = spawnSync('diff', ['-u', '--label', `${label} (now)`, '--label', `${label} (after)`, a, b], { encoding: 'utf8' })
     process.stdout.write(diff.stdout || 'no change\n')
   } finally {
@@ -134,15 +188,21 @@ function merge(opts) {
   if (plan.error) fail(plan.error)
 
   const secret = typeof env.ANTHROPIC_CUSTOM_HEADERS === 'string' ? secretOf(env.ANTHROPIC_CUSTOM_HEADERS) : ''
-  const before = current.text === undefined ? '' : formatted(current.value)
   const after = formatted(plan.settings)
   if (opts.dryRun) {
-    printDiff(before, after, secret, opts.settings)
+    printDiff(current.text === undefined ? undefined : current.value, plan.settings, secret, opts.settings)
     return
   }
 
+  // The state goes first and records the new base URL beside the old ones, so an install stopped before the
+  // settings write still lets uninstall recognize whichever URL the settings hold.
+  ensureOwn(opts.settings)
   writeAtomic(opts.state, formatted(plan.state), existsSync(opts.state) ? readFileSync(landing(opts.state), 'utf8') : undefined)
   if (current.text !== undefined && after === current.text) {
+    // Nothing to write, but the file holds the secret: an earlier install may have left it readable.
+    const target = landing(opts.settings)
+    chmodSync(target, 0o600)
+    restrictBackups(target)
     console.log(`settings: ${opts.settings} already holds the codex-models entries`)
     return
   }
@@ -169,7 +229,7 @@ function unmerge(opts) {
   // A file install created, holding nothing else now, goes as it came.
   const after = plan.remove ? '' : formatted(plan.settings)
   if (opts.dryRun) {
-    printDiff(before, after, ours ? secretOf(ours) : '', opts.settings)
+    printDiff(current.value, plan.remove ? undefined : plan.settings, ours ? secretOf(ours) : '', opts.settings)
     return
   }
   if (plan.remove) {
@@ -202,6 +262,7 @@ function precheck(opts) {
   }
   const refusal = settingsRefusal(current.value, baseUrl, prior)
   if (refusal) fail(refusal)
+  ensureOwn(opts.settings)
 }
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
