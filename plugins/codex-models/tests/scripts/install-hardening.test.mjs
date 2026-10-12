@@ -1,5 +1,5 @@
-// install.sh, uninstall.sh and install/cli.mjs on the files that hold the secret: mode 600, owner, symbolic links,
-// behavesAs rows, a state ahead of the settings, and every X-Ccmproxy-Token value masked in dry runs.
+// install.sh, uninstall.sh and install/cli.mjs: private atomic writes, symbolic links,
+// behavesAs rows, failure ordering and every token value masked in install dry runs.
 // Same fakes as install.test.mjs: a temporary HOME, fake mise/launchctl/ccmproxy and an in-process proxy on two ports.
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
@@ -126,35 +126,20 @@ exit 6
   const calls = () => (existsSync(join(root, 'calls.log')) ? readFileSync(join(root, 'calls.log'), 'utf8') : '')
   const claude = join(home, '.claude')
   const settingsFile = join(claude, 'settings.json')
-  const state = join(claude, 'codex-models/settings-state.json')
   const config = join(claude, 'codex-models/home/config.json')
-  return { root, home, claude, run, cli, calls, settingsFile, state, config, cleanup: () => { chmodSync(claude, 0o755); rmSync(root, { recursive: true, force: true }) } }
+  return { root, home, claude, run, cli, calls, settingsFile, config, cleanup: () => { chmodSync(claude, 0o755); rmSync(root, { recursive: true, force: true }) } }
 }
 
 const modeOf = path => statSync(path).mode & 0o777
+
+/** Inject filesystem failures into child Node processes, never the test runner. */
+function ioPreload(box, body) {
+  const file = join(box.root, 'io-preload.mjs')
+  writeFileSync(file, `import fs from 'node:fs'\nimport { syncBuiltinESMExports } from 'node:module'\n${body}\nsyncBuiltinESMExports()\n`)
+  return { NODE_EXTRA: `--import ${file}` }
+}
 const json = value => `${JSON.stringify(value, null, 2)}\n`
 const backupsIn = dir => readdirSync(dir).filter(name => name.includes('.bak-codex-models-'))
-
-/** A preload that makes statSync and lstatSync report uid 0 for paths matching FOREIGN_RE (chown needs root). */
-function foreignPreload(root) {
-  const file = join(root, 'foreign.mjs')
-  writeFileSync(
-    file,
-    `import fs from 'node:fs'
-import { syncBuiltinESMExports } from 'node:module'
-const re = new RegExp(process.env.FOREIGN_RE)
-const foreign = original => (path, ...rest) => {
-  const s = original(path, ...rest)
-  if (s && re.test(String(path))) return Object.assign(Object.create(Object.getPrototypeOf(s)), s, { uid: 0 })
-  return s
-}
-fs.statSync = foreign(fs.statSync)
-fs.lstatSync = foreign(fs.lstatSync)
-syncBuiltinESMExports()
-`,
-  )
-  return `--import ${file}`
-}
 
 const ORIGINAL = {
   env: { USE_BUILTIN_RIPGREP: '0', ANTHROPIC_CUSTOM_HEADERS: 'X-Team: blue', ENABLE_TOOL_SEARCH: 'false' },
@@ -162,9 +147,11 @@ const ORIGINAL = {
   theme: 'dark',
 }
 
+const CLEANED = { ...ORIGINAL, env: { USE_BUILTIN_RIPGREP: '0', ANTHROPIC_CUSTOM_HEADERS: 'X-Team: blue' } }
+
 // mode 600
 
-test('fresh install under umask 022: settings, state and backup are 0600; a no-change reinstall from 0644 and uninstall end 0600', async () => {
+test('fresh install under umask 022: settings and backup are 0600; a no-change reinstall from 0644 and uninstall end 0600', async () => {
   const box = sandbox()
   try {
     writeFileSync(box.settingsFile, json(ORIGINAL))
@@ -172,13 +159,11 @@ test('fresh install under umask 022: settings, state and backup are 0600; a no-c
     const out = await box.run('install.sh')
     assert.equal(out.code, 0, out.stderr)
     assert.equal(modeOf(box.settingsFile), 0o600)
-    assert.equal(modeOf(box.state), 0o600)
     const backups = backupsIn(box.claude)
     assert.equal(backups.length, 1)
     for (const name of backups) assert.equal(modeOf(join(box.claude, name)), 0o600, name)
 
     chmodSync(box.settingsFile, 0o644)
-    chmodSync(box.state, 0o644)
     chmodSync(join(box.claude, backups[0]), 0o644)
     const once = readFileSync(box.settingsFile, 'utf8')
     const again = await box.run('install.sh')
@@ -186,13 +171,12 @@ test('fresh install under umask 022: settings, state and backup are 0600; a no-c
     assert.match(again.stdout, /already holds the codex-models entries/)
     assert.equal(readFileSync(box.settingsFile, 'utf8'), once)
     assert.equal(modeOf(box.settingsFile), 0o600)
-    assert.equal(modeOf(box.state), 0o600)
     assert.equal(modeOf(join(box.claude, backups[0])), 0o600, 'older backup restricted on a no-change reinstall')
 
     chmodSync(box.settingsFile, 0o644)
     const removed = await box.run('uninstall.sh')
     assert.equal(removed.code, 0, removed.stderr)
-    assert.deepEqual(JSON.parse(readFileSync(box.settingsFile, 'utf8')), ORIGINAL)
+    assert.deepEqual(JSON.parse(readFileSync(box.settingsFile, 'utf8')), CLEANED)
     assert.equal(modeOf(box.settingsFile), 0o600)
     for (const name of backupsIn(box.claude)) assert.equal(modeOf(join(box.claude, name)), 0o600, name)
     assert.equal(backupsIn(box.claude).length, 2)
@@ -228,182 +212,9 @@ test('a symlinked settings.json stays a link; its target and backups beside the 
     const removed = await box.run('uninstall.sh')
     assert.equal(removed.code, 0, removed.stderr)
     assert.ok(lstatSync(box.settingsFile).isSymbolicLink(), 'still a link after uninstall')
-    assert.deepEqual(JSON.parse(readFileSync(real, 'utf8')), ORIGINAL)
+    assert.deepEqual(JSON.parse(readFileSync(real, 'utf8')), CLEANED)
     assert.equal(modeOf(real), 0o600)
     for (const name of backupsIn(dots)) assert.equal(modeOf(join(dots, name)), 0o600)
-  } finally {
-    box.cleanup()
-  }
-})
-
-test('a settings.json that lands on a root-owned file (/dev/null) is refused in precheck, before anything runs', async () => {
-  const box = sandbox()
-  try {
-    symlinkSync('/dev/null', box.settingsFile)
-    const out = await box.run('install.sh')
-    assert.notEqual(out.code, 0)
-    assert.match(out.stderr, /\/dev\/null belongs to another user \(uid 0\)/)
-    assert.match(out.stderr, /nothing was changed/)
-    assert.ok(!existsSync(join(box.claude, 'codex-models')), 'no install home')
-    assert.ok(!existsSync(join(box.home, 'Library')), 'no plist')
-    assert.doesNotMatch(box.calls(), /launchctl|exec go/)
-    assert.deepEqual(backupsIn(box.claude), [])
-
-    const check = await box.run('install.sh', ['--check'])
-    assert.notEqual(check.code, 0)
-    assert.match(check.stderr, /belongs to another user/)
-  } finally {
-    box.cleanup()
-  }
-})
-
-test('merge refuses a foreign settings file before the state write, and a foreign state file with nothing changed', async () => {
-  const box = sandbox()
-  try {
-    const envFile = join(box.root, 'env.json')
-    const modelsFile = join(box.root, 'models.json')
-    writeFileSync(envFile, JSON.stringify({ ANTHROPIC_BASE_URL: `http://127.0.0.1:${ports[0]}`, ANTHROPIC_CUSTOM_HEADERS: `X-Ccmproxy-Token: ${TOKEN}`, ENABLE_TOOL_SEARCH: 'true' }))
-    const text = json(ORIGINAL)
-    writeFileSync(box.settingsFile, text)
-    chmodSync(box.settingsFile, 0o644)
-    mkdirSync(dirname(box.state), { recursive: true })
-    const NODE_EXTRA = foreignPreload(box.root)
-    const args = ['merge', '--settings', box.settingsFile, '--state', box.state, '--env', envFile, '--models', modelsFile]
-
-    // Settings foreign (a race after precheck): refused before the state is written.
-    const a = await box.cli(args, { NODE_EXTRA, FOREIGN_RE: 'settings\\.json$' })
-    assert.equal(a.code, 1)
-    assert.match(a.stderr, /settings\.json belongs to another user \(uid 0\)/)
-    assert.ok(!existsSync(box.state), 'no state written')
-    assert.equal(readFileSync(box.settingsFile, 'utf8'), text)
-    assert.equal(modeOf(box.settingsFile), 0o644, 'mode untouched')
-    assert.deepEqual(backupsIn(box.claude), [])
-
-    // State foreign: refused before any write.
-    const priorState = json({ v: 1, junk: true })
-    writeFileSync(box.state, priorState)
-    const b = await box.cli(args, { NODE_EXTRA, FOREIGN_RE: 'settings-state\\.json$' })
-    assert.equal(b.code, 1)
-    assert.match(b.stderr, /settings-state\.json belongs to another user/)
-    assert.equal(readFileSync(box.state, 'utf8'), priorState)
-    assert.equal(readFileSync(box.settingsFile, 'utf8'), text)
-    assert.deepEqual(backupsIn(box.claude), [])
-    rmSync(box.state)
-
-    // Unmerge on a foreign settings file with our entries: refused, nothing changed, no backup.
-    const installed = await box.cli(args)
-    assert.equal(installed.code, 0, installed.stderr)
-    const now = readFileSync(box.settingsFile, 'utf8')
-    for (const name of backupsIn(box.claude)) rmSync(join(box.claude, name))
-    const c = await box.cli(['unmerge', '--settings', box.settingsFile, '--state', box.state], { NODE_EXTRA, FOREIGN_RE: 'settings\\.json$' })
-    assert.equal(c.code, 1)
-    assert.match(c.stderr, /belongs to another user/)
-    assert.equal(readFileSync(box.settingsFile, 'utf8'), now)
-    assert.ok(existsSync(box.state))
-    assert.deepEqual(backupsIn(box.claude), [])
-  } finally {
-    box.cleanup()
-  }
-})
-
-test('an older backup that is not the user\'s own is left at its mode', async () => {
-  const box = sandbox()
-  try {
-    writeFileSync(box.settingsFile, json(ORIGINAL))
-    const theirs = join(box.claude, 'settings.json.bak-codex-models-20250101-000000')
-    const mine = join(box.claude, 'settings.json.bak-codex-models-20250101-000001')
-    writeFileSync(theirs, '{}\n')
-    writeFileSync(mine, '{}\n')
-    chmodSync(theirs, 0o644)
-    chmodSync(mine, 0o644)
-    const envFile = join(box.root, 'env.json')
-    writeFileSync(envFile, JSON.stringify({ ANTHROPIC_BASE_URL: `http://127.0.0.1:${ports[0]}`, ANTHROPIC_CUSTOM_HEADERS: `X-Ccmproxy-Token: ${TOKEN}`, ENABLE_TOOL_SEARCH: 'true' }))
-    mkdirSync(dirname(box.state), { recursive: true })
-    const out = await box.cli(['merge', '--settings', box.settingsFile, '--state', box.state, '--env', envFile, '--models', join(box.root, 'models.json')], {
-      NODE_EXTRA: foreignPreload(box.root),
-      FOREIGN_RE: '000000$',
-    })
-    assert.equal(out.code, 0, out.stderr)
-    assert.equal(modeOf(theirs), 0o644)
-    assert.equal(modeOf(mine), 0o600)
-  } finally {
-    box.cleanup()
-  }
-})
-
-/** What an install left on disk that a refused run must not touch. */
-function snapshot(box) {
-  const target = join(box.claude, 'codex-models')
-  const plist = join(box.home, 'Library/LaunchAgents/com.anderson-spider.codex-models.plist')
-  const id = path => {
-    const s = lstatSync(path)
-    return `${s.ino}:${s.mtimeMs}:${s.mode}`
-  }
-  return {
-    settings: readFileSync(box.settingsFile, 'utf8'),
-    state: lstatSync(box.state).isSymbolicLink() ? 'link' : readFileSync(box.state, 'utf8'),
-    files: ['bin/ccmproxy', 'install/cli.mjs', 'install.sh', 'uninstall.sh', 'ccmproxy', 'VERSION'].map(name => id(join(target, name))),
-    plist: id(plist),
-    backups: backupsIn(box.claude).sort(),
-  }
-}
-
-test('after a real install, a foreign state file stops install (also --dry-run, --check) and uninstall (also --dry-run, --purge) before any build, copy or launchctl call', async () => {
-  const box = sandbox()
-  try {
-    writeFileSync(box.settingsFile, json(ORIGINAL))
-    assert.equal((await box.run('install.sh')).code, 0)
-    const saved = readFileSync(box.state, 'utf8')
-    const NODE_EXTRA = foreignPreload(box.root)
-
-    for (const how of ['uid 0', '/dev/null']) {
-      const extra = how === 'uid 0' ? { NODE_EXTRA, FOREIGN_RE: 'settings-state\\.json$' } : {}
-      if (how === '/dev/null') {
-        rmSync(box.state)
-        symlinkSync('/dev/null', box.state)
-      }
-      const before = snapshot(box)
-      for (const [file, args] of [
-        ['install.sh', []],
-        ['install.sh', ['--dry-run']],
-        ['install.sh', ['--check']],
-        ['uninstall.sh', []],
-        ['uninstall.sh', ['--dry-run']],
-        ['uninstall.sh', ['--purge']],
-      ]) {
-        const mark = box.calls().length
-        const out = await box.run(file, args, extra)
-        const label = `${how}: ${file} ${args.join(' ')}`
-        assert.notEqual(out.code, 0, label)
-        assert.match(out.stderr, /belongs to another user \(uid 0\)/, label)
-        assert.doesNotMatch(box.calls().slice(mark), /launchctl|exec go/, label)
-        assert.deepEqual(snapshot(box), before, label)
-        assert.doesNotMatch(out.stdout + out.stderr, new RegExp(TOKEN), label)
-      }
-    }
-
-    // Once the state is the user's again, uninstall works and restores the original.
-    rmSync(box.state)
-    writeFileSync(box.state, saved, { mode: 0o600 })
-    const removed = await box.run('uninstall.sh')
-    assert.equal(removed.code, 0, removed.stderr)
-    assert.equal(readFileSync(box.settingsFile, 'utf8'), json(ORIGINAL))
-  } finally {
-    box.cleanup()
-  }
-})
-
-test('--no-settings skips the settings and the state, so a foreign state file neither stops it nor is touched', async () => {
-  const box = sandbox()
-  try {
-    mkdirSync(dirname(box.state), { recursive: true })
-    writeFileSync(box.state, '{"v":1}\n')
-    chmodSync(box.state, 0o644)
-    const out = await box.run('install.sh', ['--no-settings'], { NODE_EXTRA: foreignPreload(box.root), FOREIGN_RE: 'settings-state\\.json$' })
-    assert.equal(out.code, 0, out.stderr)
-    assert.equal(readFileSync(box.state, 'utf8'), '{"v":1}\n')
-    assert.equal(modeOf(box.state), 0o644)
-    assert.ok(!existsSync(box.settingsFile))
   } finally {
     box.cleanup()
   }
@@ -431,7 +242,7 @@ test('a dangling link and a link to an own file under the backup name are left a
     const removed = await box.run('uninstall.sh')
     assert.equal(removed.code, 0, removed.stderr)
     assert.equal(modeOf(own), 0o644)
-    assert.equal(readFileSync(box.settingsFile, 'utf8'), json(ORIGINAL))
+    assert.equal(readFileSync(box.settingsFile, 'utf8'), json(CLEANED))
   } finally {
     box.cleanup()
   }
@@ -439,7 +250,7 @@ test('a dangling link and a link to an own file under the backup name are left a
 
 // behavesAs
 
-test('behavesAs reaches the picker rows through install.sh only when a non-empty string, and uninstall restores the original', async () => {
+test('behavesAs reaches the picker rows through install.sh only when a non-empty string, and uninstall removes owned settings', async () => {
   const models = [
     { id: 'gpt-a', label: 'A', description: 'alpha', behavesAs: 'claude-opus-4-8' },
     { id: 'gpt-b', label: 'B', behavesAs: '' },
@@ -464,108 +275,7 @@ test('behavesAs reaches the picker rows through install.sh only when a non-empty
 
     const removed = await box.run('uninstall.sh')
     assert.equal(removed.code, 0, removed.stderr)
-    assert.equal(readFileSync(box.settingsFile, 'utf8'), json(ORIGINAL))
-  } finally {
-    box.cleanup()
-  }
-})
-
-// state/settings divergence
-
-test('install on A, config moves to B, an install that writes the state but not the settings is still undone; a reinstall works', async () => {
-  const box = sandbox()
-  try {
-    writeFileSync(box.settingsFile, json(ORIGINAL))
-    assert.equal((await box.run('install.sh')).code, 0)
-    const onA = readFileSync(box.settingsFile, 'utf8')
-    assert.match(onA, new RegExp(`127\\.0\\.0\\.1:${ports[0]}`))
-
-    // The config now listens on B (as a regenerated port would).
-    const cfg = JSON.parse(readFileSync(box.config, 'utf8'))
-    writeFileSync(box.config, JSON.stringify({ ...cfg, listen_http: `127.0.0.1:${ports[1]}` }))
-
-    // ~/.claude read-only: the state (in codex-models/) is written, the backup/settings write beside settings.json fails.
-    chmodSync(box.claude, 0o555)
-    const stopped = await box.run('install.sh')
-    chmodSync(box.claude, 0o755)
-    assert.notEqual(stopped.code, 0)
-    assert.equal(readFileSync(box.settingsFile, 'utf8'), onA, 'settings still on A')
-    const state = JSON.parse(readFileSync(box.state, 'utf8'))
-    assert.deepEqual(state.baseUrls, [`http://127.0.0.1:${ports[1]}`, `http://127.0.0.1:${ports[0]}`])
-    assert.equal(state.baseUrl, `http://127.0.0.1:${ports[1]}`)
-    assert.doesNotMatch(JSON.stringify(state), new RegExp(TOKEN))
-    assert.equal(modeOf(box.state), 0o600)
-
-    // Uninstall from here restores the original exactly.
-    const saved = readFileSync(box.state, 'utf8')
-    const removed = await box.run('uninstall.sh')
-    assert.equal(removed.code, 0, removed.stderr)
-    assert.equal(readFileSync(box.settingsFile, 'utf8'), json(ORIGINAL))
-
-    // Same divergence, then a reinstall instead: it moves to B and uninstall still restores the original.
-    writeFileSync(box.settingsFile, onA)
-    writeFileSync(box.state, saved)
-    const again = await box.run('install.sh')
-    assert.equal(again.code, 0, again.stderr)
-    assert.equal(JSON.parse(readFileSync(box.settingsFile, 'utf8')).env.ANTHROPIC_BASE_URL, `http://127.0.0.1:${ports[1]}`)
-    assert.equal((await box.run('uninstall.sh')).code, 0)
-    assert.equal(readFileSync(box.settingsFile, 'utf8'), json(ORIGINAL))
-  } finally {
-    box.cleanup()
-  }
-})
-
-test('an older state holding only baseUrl still uninstalls and reinstalls', async () => {
-  const box = sandbox()
-  try {
-    writeFileSync(box.settingsFile, json(ORIGINAL))
-    assert.equal((await box.run('install.sh')).code, 0)
-    const { baseUrls, ...older } = JSON.parse(readFileSync(box.state, 'utf8'))
-    assert.ok(Array.isArray(baseUrls))
-    writeFileSync(box.state, json(older))
-
-    const re = await box.run('install.sh')
-    assert.equal(re.code, 0, re.stderr)
-    assert.equal(JSON.parse(readFileSync(box.state, 'utf8')).envCreated, false)
-
-    writeFileSync(box.state, json(older))
-    const removed = await box.run('uninstall.sh')
-    assert.equal(removed.code, 0, removed.stderr)
-    assert.equal(readFileSync(box.settingsFile, 'utf8'), json(ORIGINAL))
-  } finally {
-    box.cleanup()
-  }
-})
-
-test('uninstall takes out an unrecorded loopback base URL with our header and leaves foreign ones', async () => {
-  const box = sandbox()
-  try {
-    const unmerge = () => box.cli(['unmerge', '--settings', box.settingsFile, '--state', box.state])
-    const cases = [
-      // [settings env, expected env after]
-      [{ ANTHROPIC_BASE_URL: 'http://127.0.0.1:1111', ANTHROPIC_CUSTOM_HEADERS: 'x-CCMPROXY-token: zz' }, {}],
-      [{ ANTHROPIC_BASE_URL: 'http://localhost:2222/', ANTHROPIC_CUSTOM_HEADERS: 'X-Team: blue\nX-Ccmproxy-Token: zz' }, { ANTHROPIC_CUSTOM_HEADERS: 'X-Team: blue' }],
-      [{ ANTHROPIC_BASE_URL: 'http://[::1]:3333', ANTHROPIC_CUSTOM_HEADERS: 'X-Ccmproxy-Token: zz' }, {}],
-      [{ ANTHROPIC_BASE_URL: 'http://127.0.0.1:4444' }, { ANTHROPIC_BASE_URL: 'http://127.0.0.1:4444' }],
-      [{ ANTHROPIC_BASE_URL: 'http://127.0.0.1:4444', ANTHROPIC_CUSTOM_HEADERS: 'X-Team: blue' }, { ANTHROPIC_BASE_URL: 'http://127.0.0.1:4444', ANTHROPIC_CUSTOM_HEADERS: 'X-Team: blue' }],
-      [{ ANTHROPIC_BASE_URL: 'https://gw.example.com', ANTHROPIC_CUSTOM_HEADERS: 'X-Ccmproxy-Token: zz' }, { ANTHROPIC_BASE_URL: 'https://gw.example.com' }],
-      [{ ANTHROPIC_BASE_URL: 'http://10.0.0.5:1111', ANTHROPIC_CUSTOM_HEADERS: 'X-Ccmproxy-Token: zz' }, { ANTHROPIC_BASE_URL: 'http://10.0.0.5:1111' }],
-      [{ ANTHROPIC_BASE_URL: 'http://127.0.0.1:1111/v1', ANTHROPIC_CUSTOM_HEADERS: 'X-Ccmproxy-Token: zz' }, { ANTHROPIC_BASE_URL: 'http://127.0.0.1:1111/v1' }],
-    ]
-    for (const withState of [false, true]) {
-      for (const [envBefore, envAfter] of cases) {
-        writeFileSync(box.settingsFile, json({ env: envBefore, theme: 'x' }))
-        if (withState) {
-          mkdirSync(dirname(box.state), { recursive: true })
-          // A state recording only some other port.
-          writeFileSync(box.state, json({ v: 1, baseUrl: 'http://127.0.0.1:9', baseUrls: ['http://127.0.0.1:9'], envCreated: false, headersExisted: false, toolSearch: { present: false }, pickerCreated: true, optionsCreated: true, fileCreated: false }))
-        } else if (existsSync(box.state)) rmSync(box.state)
-        const out = await unmerge()
-        assert.equal(out.code, 0, out.stderr)
-        assert.deepEqual(JSON.parse(readFileSync(box.settingsFile, 'utf8')).env, envAfter, `${withState ? 'state' : 'no state'}: ${JSON.stringify(envBefore)}`)
-        assert.doesNotMatch(out.stdout + out.stderr, /zz/)
-      }
-    }
+    assert.equal(readFileSync(box.settingsFile, 'utf8'), json(CLEANED))
   } finally {
     box.cleanup()
   }
@@ -617,47 +327,200 @@ test('install --dry-run masks every token line, any case and spacing, old and ne
   }
 })
 
-test('after a real install, both dry runs hide the live secret and an extra old token', async () => {
+test('after install, its dry run masks live and old tokens without changing settings', async () => {
   const box = sandbox()
   try {
     writeFileSync(box.settingsFile, json(ORIGINAL))
     assert.equal((await box.run('install.sh')).code, 0)
-    const s = JSON.parse(readFileSync(box.settingsFile, 'utf8'))
-    s.env.ANTHROPIC_CUSTOM_HEADERS = `x-ccmproxy-token: ${OLD1}\n${s.env.ANTHROPIC_CUSTOM_HEADERS}`
-    writeFileSync(box.settingsFile, json(s))
+    const settings = JSON.parse(readFileSync(box.settingsFile, 'utf8'))
+    settings.env.ANTHROPIC_CUSTOM_HEADERS = `x-ccmproxy-token: ${OLD1}\n${settings.env.ANTHROPIC_CUSTOM_HEADERS}`
+    writeFileSync(box.settingsFile, json(settings))
     const before = readFileSync(box.settingsFile, 'utf8')
-
-    const dryInstall = await box.run('install.sh', ['--dry-run'])
-    assert.equal(dryInstall.code, 0, dryInstall.stderr)
-    const dryUninstall = await box.run('uninstall.sh', ['--dry-run'])
-    assert.equal(dryUninstall.code, 0, dryUninstall.stderr)
-    for (const out of [dryInstall, dryUninstall]) {
-      const all = out.stdout + out.stderr
-      for (const secret of [OLD1, TOKEN]) assert.ok(!all.includes(secret), `${secret} printed`)
-      assert.match(out.stdout, /x-ccmproxy-token: <secret>/)
-    }
-    assert.match(dryUninstall.stdout, /^-.*X-Ccmproxy-Token: <secret>/m)
+    const out = await box.run('install.sh', ['--dry-run'])
+    assert.equal(out.code, 0, out.stderr)
+    for (const secret of [OLD1, TOKEN]) assert.ok(!(out.stdout + out.stderr).includes(secret))
+    assert.match(out.stdout, /x-ccmproxy-token: <secret>/)
     assert.equal(readFileSync(box.settingsFile, 'utf8'), before)
-    assert.deepEqual(filesHolding(box.root, [OLD1, TOKEN], [box.settingsFile, box.config, join(box.root, "ccmproxy.mjs"), ...backupsIn(box.claude).map(n => join(box.claude, n))]), [])
+    assert.deepEqual(filesHolding(box.root, [OLD1, TOKEN], [box.settingsFile, box.config, join(box.root, 'ccmproxy.mjs'), ...backupsIn(box.claude).map(n => join(box.claude, n))]), [])
   } finally {
     box.cleanup()
   }
 })
 
-test('uninstall --dry-run masks a token in a file install did not write (no state), and a file that would be removed', async () => {
+test('old state and lock files are inert across check, dry run, install, reinstall and uninstall', async () => {
   const box = sandbox()
   try {
-    writeFileSync(box.settingsFile, json({ env: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:1', ANTHROPIC_CUSTOM_HEADERS: `X-CCMPROXY-TOKEN: ${OLD1}\nx-ccmproxy-token:${OLD2}` } }))
-    const dry = await box.run('uninstall.sh', ['--dry-run'])
-    assert.equal(dry.code, 0, dry.stderr)
-    for (const secret of [OLD1, OLD2]) assert.ok(!(dry.stdout + dry.stderr).includes(secret), `${secret} printed`)
+    const target = join(box.claude, 'codex-models')
+    mkdirSync(target)
+    const oldFiles = ['settings-state.json', 'codex.lock'].map(name => join(target, name))
+    for (const file of oldFiles) writeFileSync(file, 'not JSON: leave untouched\n', { mode: 0o644 })
+    const extra = ioPreload(box, `
+for (const name of ['existsSync', 'readFileSync', 'writeFileSync', 'openSync', 'statSync', 'lstatSync', 'chmodSync', 'realpathSync', 'renameSync', 'unlinkSync', 'rmSync']) {
+  const original = fs[name]
+  fs[name] = function (...args) {
+    if (args.slice(0, 2).some(path => typeof path === 'string' && /(?:settings-state\\.json|codex\\.lock)$/.test(path))) {
+      throw new Error('obsolete file I/O: ' + name)
+    }
+    return original.apply(this, args)
+  }
+}`)
+    for (const args of [['--check'], ['--dry-run'], [], []]) {
+      const out = await box.run('install.sh', args, extra)
+      assert.equal(out.code, 0, out.stderr)
+    }
+    const removed = await box.run('uninstall.sh', [], extra)
+    assert.equal(removed.code, 0, removed.stderr)
+    for (const file of oldFiles) {
+      assert.equal(readFileSync(file, 'utf8'), 'not JSON: leave untouched\n')
+      assert.equal(modeOf(file), 0o644)
+    }
+    assert.deepEqual(JSON.parse(readFileSync(box.settingsFile, 'utf8')), {})
+  } finally {
+    box.cleanup()
+  }
+})
 
-    rmSync(box.settingsFile)
+test('config loss or a changed port refuses install before build/copy/launchctl; uninstall then reinstall retains login and logs', async () => {
+  const box = sandbox()
+  try {
     assert.equal((await box.run('install.sh')).code, 0)
-    const gone = await box.run('uninstall.sh', ['--dry-run'])
-    assert.equal(gone.code, 0, gone.stderr)
-    assert.ok(!(gone.stdout + gone.stderr).includes(TOKEN))
-    assert.match(gone.stdout, /^-.*X-Ccmproxy-Token: <secret>/m)
+    const installed = readFileSync(box.settingsFile, 'utf8')
+    const config = readFileSync(box.config, 'utf8')
+    const copied = join(box.claude, 'codex-models/install/cli.mjs')
+    const inode = lstatSync(copied).ino
+    const backupNames = backupsIn(box.claude)
+    for (const cfg of [undefined, JSON.stringify({ ...JSON.parse(config), listen_http: `127.0.0.1:${ports[1]}` })]) {
+      if (cfg === undefined) rmSync(box.config)
+      else writeFileSync(box.config, cfg)
+      for (const args of [[], ['--check'], ['--dry-run']]) {
+        const mark = box.calls().length
+        const out = await box.run('install.sh', args)
+        assert.notEqual(out.code, 0)
+        assert.match(out.stderr, /uninstall first/)
+        assert.doesNotMatch(box.calls().slice(mark), /launchctl|exec go/)
+        assert.equal(readFileSync(box.settingsFile, 'utf8'), installed)
+        assert.equal(lstatSync(copied).ino, inode)
+        assert.deepEqual(backupsIn(box.claude), backupNames)
+      }
+    }
+    const auth = join(box.claude, 'codex-models/home/auth')
+    mkdirSync(auth)
+    const login = join(auth, 'codex.json')
+    const log = join(box.claude, 'codex-models/home/log/ccmproxy.log')
+    writeFileSync(login, 'native login fixture\n', { mode: 0o600 })
+    writeFileSync(log, 'log fixture\n')
+    assert.equal((await box.run('uninstall.sh')).code, 0)
+    assert.deepEqual(JSON.parse(readFileSync(box.settingsFile, 'utf8')), {})
+    assert.equal((await box.run('install.sh')).code, 0)
+    assert.equal(JSON.parse(readFileSync(box.settingsFile, 'utf8')).env.ANTHROPIC_BASE_URL, `http://127.0.0.1:${ports[1]}`)
+    assert.equal(readFileSync(login, 'utf8'), 'native login fixture\n')
+    assert.equal(readFileSync(log, 'utf8'), 'log fixture\n')
+    for (const name of backupNames) assert.ok(existsSync(join(box.claude, name)))
+  } finally {
+    box.cleanup()
+  }
+})
+
+test('malformed containers abort uninstall before touching the LaunchAgent or backups', async () => {
+  const box = sandbox()
+  try {
+    assert.equal((await box.run('install.sh')).code, 0)
+    const plist = join(box.home, 'Library/LaunchAgents/com.anderson-spider.codex-models.plist')
+    const before = readFileSync(plist, 'utf8')
+    const names = backupsIn(box.claude)
+    for (const value of [[], { env: [] }, { modelPicker: 'x' }, { modelPicker: { options: {} } }, { env: { ANTHROPIC_CUSTOM_HEADERS: 1 } }]) {
+      const text = json(value)
+      writeFileSync(box.settingsFile, text)
+      const mark = box.calls().length
+      const out = await box.run('uninstall.sh')
+      assert.notEqual(out.code, 0)
+      assert.match(out.stderr, /LaunchAgent stays loaded/)
+      assert.doesNotMatch(box.calls().slice(mark), /launchctl/)
+      assert.equal(readFileSync(box.settingsFile, 'utf8'), text)
+      assert.equal(readFileSync(plist, 'utf8'), before)
+      assert.deepEqual(backupsIn(box.claude), names)
+    }
+  } finally {
+    box.cleanup()
+  }
+})
+
+test('backup or atomic write failure keeps settings and the LaunchAgent loaded', async () => {
+  for (const failure of ['backup', 'temp', 'rename']) {
+    const box = sandbox()
+    try {
+      assert.equal((await box.run('install.sh')).code, 0)
+      const current = readFileSync(box.settingsFile, 'utf8')
+      const names = backupsIn(box.claude)
+      const extra = ioPreload(box, `
+const open = fs.openSync
+fs.openSync = function (path, ...args) {
+  if (${JSON.stringify(failure)} === 'backup' && String(path).includes('.bak-codex-models-') || ${JSON.stringify(failure)} === 'temp' && String(path).endsWith('.tmp')) {
+    throw Object.assign(new Error('injected write refusal'), { code: 'EACCES' })
+  }
+  return open.call(this, path, ...args)
+}
+const rename = fs.renameSync
+fs.renameSync = function (...args) {
+  if (${JSON.stringify(failure)} === 'rename') throw Object.assign(new Error('injected rename refusal'), { code: 'EACCES' })
+  return rename.apply(this, args)
+}`)
+      const mark = box.calls().length
+      const out = await box.run('uninstall.sh', [], extra)
+      assert.notEqual(out.code, 0, failure)
+      assert.match(out.stderr, /LaunchAgent stays loaded/)
+      assert.doesNotMatch(out.stdout + out.stderr, new RegExp(TOKEN))
+      assert.doesNotMatch(box.calls().slice(mark), /launchctl/)
+      assert.equal(readFileSync(box.settingsFile, 'utf8'), current)
+      assert.ok(existsSync(join(box.home, 'Library/LaunchAgents/com.anderson-spider.codex-models.plist')))
+      const backups = backupsIn(box.claude)
+      assert.equal(backups.length, names.length + (failure === 'backup' ? 0 : 1))
+      for (const name of backups) assert.equal(modeOf(join(box.claude, name)), 0o600)
+    } finally {
+      box.cleanup()
+    }
+  }
+})
+
+test('a concurrent settings edit is not overwritten and keeps the LaunchAgent loaded', async () => {
+  const box = sandbox()
+  try {
+    assert.equal((await box.run('install.sh')).code, 0)
+    const installed = readFileSync(box.settingsFile, 'utf8')
+    const changed = json({ ...JSON.parse(installed), theme: 'concurrent' })
+    const extra = ioPreload(box, `
+const open = fs.openSync
+fs.openSync = function (path, ...args) {
+  const fd = open.call(this, path, ...args)
+  if (String(path).endsWith('.tmp')) fs.writeFileSync(${JSON.stringify(box.settingsFile)}, ${JSON.stringify(changed)})
+  return fd
+}`)
+    const mark = box.calls().length
+    const out = await box.run('uninstall.sh', [], extra)
+    assert.notEqual(out.code, 0)
+    assert.match(out.stderr, /changed while this ran/)
+    assert.match(out.stderr, /LaunchAgent stays loaded/)
+    assert.doesNotMatch(box.calls().slice(mark), /launchctl/)
+    assert.equal(readFileSync(box.settingsFile, 'utf8'), changed)
+    const backups = backupsIn(box.claude)
+    assert.equal(readFileSync(join(box.claude, backups.at(-1)), 'utf8'), installed)
+    assert.equal(readdirSync(box.claude).filter(name => name.endsWith('.tmp')).length, 0)
+  } finally {
+    box.cleanup()
+  }
+})
+
+test('CLI rejects removed state arguments and unmerge dry run rather than ignoring them', async () => {
+  const box = sandbox()
+  try {
+    for (const args of [
+      ['precheck', '--state', 'unused'], ['merge', '--state', 'unused'], ['unmerge', '--state', 'unused'], ['unmerge', '--dry-run'],
+    ]) {
+      const out = await box.cli(args)
+      assert.notEqual(out.code, 0)
+      assert.match(out.stderr, /unexpected argument/)
+      assert.deepEqual(readdirSync(box.claude), [])
+    }
   } finally {
     box.cleanup()
   }

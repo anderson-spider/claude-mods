@@ -2,12 +2,10 @@
 // network or clock access here (install/cli.mjs does the I/O), so tests run them on plain values.
 //
 // Install adds exactly: env.ANTHROPIC_BASE_URL, one `X-Ccmproxy-Token: <secret>` line in env.ANTHROPIC_CUSTOM_HEADERS,
-// env.ENABLE_TOOL_SEARCH=true, and modelPicker.options rows whose description ends with MARK. The state it returns
-// records what stood there before, without any header value, so uninstall can take back only those.
+// env.ENABLE_TOOL_SEARCH=true, and modelPicker.options rows whose description ends with MARK.
 
 export const HEADER = 'X-Ccmproxy-Token'
 export const MARK = '(codex-models)'
-export const STATE_VERSION = 1
 
 const LOOPBACK = /^http:\/\/(127\.\d{1,3}\.\d{1,3}\.\d{1,3}|\[::1\]|localhost)(:\d{1,5})?\/?$/
 
@@ -76,85 +74,41 @@ export function checkEnv(env) {
   return undefined
 }
 
-/** How many base URLs a state remembers. */
-const HISTORY = 10
-
-/**
- * Every base URL a state records: the current one and the ones before it. The state is written before the settings,
- * with the new URL beside the old, so an install stopped between the two writes still knows what the settings hold.
- */
-const baseUrlsOf = state => {
-  const urls = Array.isArray(state?.baseUrls) ? state.baseUrls.filter(url => typeof url === 'string') : []
-  return typeof state?.baseUrl === 'string' ? [state.baseUrl, ...urls] : urls
-}
-
-const recorded = (state, url) => baseUrlsOf(state).some(known => sameUrl(known, url))
-
-/** Whether `prior` is a state of this format whose base URLs include the one the settings hold. */
-const keepsPriorOf = (settings, prior) =>
-  isObject(prior) && prior.v === STATE_VERSION && isObject(settings.env) && recorded(prior, settings.env.ANTHROPIC_BASE_URL)
-
-const withHistory = (state, baseUrl) => {
-  const urls = [baseUrl, ...baseUrlsOf(state)].filter((url, i, all) => all.findIndex(other => sameUrl(other, url)) === i)
-  return { ...state, baseUrl, baseUrls: urls.slice(0, HISTORY) }
-}
-
-/**
- * Why install would refuse these settings, or undefined. `baseUrl` is the proxy's, or undefined before a config
- * exists (then any base URL already set that `prior` does not account for is someone else's). install.sh asks this
- * before it builds or loads anything, and planInstall asks it again with the real base URL.
- */
-export function settingsRefusal(settings, baseUrl, prior) {
+/** Refuses malformed containers before either install or uninstall changes anything. */
+function containerRefusal(settings) {
   if (!isObject(settings)) return 'settings.json does not hold a JSON object'
   if ('env' in settings && !isObject(settings.env)) return 'settings.json has an "env" that is not an object'
   if ('modelPicker' in settings && !isObject(settings.modelPicker)) return 'settings.json has a "modelPicker" that is not an object'
   if (isObject(settings.modelPicker) && 'options' in settings.modelPicker && !Array.isArray(settings.modelPicker.options)) {
     return 'settings.json has a "modelPicker.options" that is not an array'
   }
-  const current = settings.env?.ANTHROPIC_BASE_URL
-  if (current !== undefined && !sameUrl(current, baseUrl) && !keepsPriorOf(settings, prior)) {
-    return (
-      `env.ANTHROPIC_BASE_URL is already ${JSON.stringify(current)}; install leaves it alone because uninstall could ` +
-      'not restore it. Remove it from settings.json first, or run with --no-settings.'
-    )
-  }
   const headers = settings.env?.ANTHROPIC_CUSTOM_HEADERS
   if (headers !== undefined && typeof headers !== 'string') return 'settings.json has an env.ANTHROPIC_CUSTOM_HEADERS that is not a string'
   return undefined
 }
 
-/**
- * The settings after install, and the state uninstall reads. `prior` is the state a previous install left; it is
- * kept while the settings still hold its base URL, so a second run neither changes the result nor forgets what
- * stood there before the first. `fileExisted` false means settings.json was not there: uninstall then removes it
- * when nothing else is left in it.
- */
-export function planInstall(settings, env, models, prior, fileExisted = true) {
+/** Install accepts no base URL or only the current configured proxy URL. */
+export function settingsRefusal(settings, proxyUrl) {
+  const malformed = containerRefusal(settings)
+  if (malformed) return malformed
+  const current = settings.env?.ANTHROPIC_BASE_URL
+  if (current !== undefined && !sameUrl(current, proxyUrl)) {
+    return 'env.ANTHROPIC_BASE_URL is already set to a different URL; uninstall first, then reinstall'
+  }
+  return undefined
+}
+
+/** The settings after install; unrelated keys, header lines and unmarked picker rows stay. */
+export function planInstall(settings, env, models) {
   const envError = checkEnv(env)
   if (envError) return { error: envError }
   const picked = pickerRows(models)
   if (picked.error) return { error: picked.error }
-  const refusal = settingsRefusal(settings, env.ANTHROPIC_BASE_URL, prior)
+  const refusal = settingsRefusal(settings, env.ANTHROPIC_BASE_URL)
   if (refusal) return { error: refusal }
 
   const next = clone(settings)
-  const keepsPrior = keepsPriorOf(settings, prior)
   const headers = next.env?.ANTHROPIC_CUSTOM_HEADERS
-
-  const fresh = keepsPrior
-    ? prior
-    : {
-        v: STATE_VERSION,
-        baseUrl: env.ANTHROPIC_BASE_URL,
-        envCreated: !('env' in next),
-        headersExisted: headers !== undefined,
-        toolSearch: next.env && 'ENABLE_TOOL_SEARCH' in next.env ? { present: true, value: next.env.ENABLE_TOOL_SEARCH } : { present: false },
-        pickerCreated: !('modelPicker' in next),
-        optionsCreated: !isObject(next.modelPicker) || !('options' in next.modelPicker),
-        fileCreated: !fileExisted,
-      }
-  const state = withHistory(fresh, env.ANTHROPIC_BASE_URL)
-
   next.env = next.env ?? {}
   next.env.ANTHROPIC_BASE_URL = env.ANTHROPIC_BASE_URL
   next.env.ANTHROPIC_CUSTOM_HEADERS = [...withoutOurHeader(headers ?? ''), env.ANTHROPIC_CUSTOM_HEADERS].join('\n')
@@ -164,53 +118,37 @@ export function planInstall(settings, env, models, prior, fileExisted = true) {
   const kept = (next.modelPicker.options ?? []).filter(row => !isMarked(row))
   // A row the person added for the same id is theirs: it stays, and no marked twin is added beside it.
   const theirs = new Set(kept.filter(isObject).map(row => row.model))
-  const added = picked.rows.filter(row => !theirs.has(row.model))
-  next.modelPicker.options = [...kept, ...added]
-  state.models = added.map(row => row.model)
-
-  return { settings: next, state }
+  next.modelPicker.options = [...kept, ...picked.rows.filter(row => !theirs.has(row.model))]
+  return { settings: next }
 }
 
-/**
- * The settings after uninstall: what install added taken out, what it replaced put back. `state` may be missing.
- * `remove` is true when install created the file and nothing else was added to it since.
- */
-export function planUninstall(settings, state) {
-  if (!isObject(settings)) return { error: 'settings.json does not hold a JSON object' }
-  const known = isObject(state) && state.v === STATE_VERSION ? state : undefined
+/** Remove the current owned entries; no earlier values are restored. */
+export function planUninstall(settings) {
+  const refusal = containerRefusal(settings)
+  if (refusal) return { error: refusal }
   const next = clone(settings)
-
-  if (isObject(next.env)) {
+  if (next.env) {
     const env = next.env
-    const headers = typeof env.ANTHROPIC_CUSTOM_HEADERS === 'string' ? env.ANTHROPIC_CUSTOM_HEADERS : undefined
-    const hadOurHeader = headers !== undefined && headerLines(headers).some(isOurHeader)
-    // Ours when a state records it, or when it is on loopback and our header rides with it (a state lost or behind).
-    const ourBase = (known && recorded(known, env.ANTHROPIC_BASE_URL)) || (isLoopbackHttp(env.ANTHROPIC_BASE_URL) && hadOurHeader)
-    if (ourBase) delete env.ANTHROPIC_BASE_URL
-
-    if (headers !== undefined && hadOurHeader) {
+    const headers = env.ANTHROPIC_CUSTOM_HEADERS
+    const hadOurHeader = typeof headers === 'string' && headerLines(headers).some(isOurHeader)
+    if (isLoopbackHttp(env.ANTHROPIC_BASE_URL) && hadOurHeader) delete env.ANTHROPIC_BASE_URL
+    if (headers !== undefined) {
       const rest = withoutOurHeader(headers)
-      if (rest.length === 0 && !(known?.headersExisted ?? false)) delete env.ANTHROPIC_CUSTOM_HEADERS
+      if (rest.length === 0) delete env.ANTHROPIC_CUSTOM_HEADERS
       else env.ANTHROPIC_CUSTOM_HEADERS = rest.join('\n')
     }
-
-    // Without a state, tool search stays: it is harmless, and it may have been there before.
-    if (known && env.ENABLE_TOOL_SEARCH === 'true') {
-      if (known.toolSearch?.present) env.ENABLE_TOOL_SEARCH = known.toolSearch.value
-      else delete env.ENABLE_TOOL_SEARCH
-    }
-
-    if (known?.envCreated && Object.keys(env).length === 0) delete next.env
+    delete env.ENABLE_TOOL_SEARCH
+    if (Object.keys(env).length === 0) delete next.env
   }
-
-  if (isObject(next.modelPicker) && Array.isArray(next.modelPicker.options)) {
+  if (next.modelPicker) {
     const picker = next.modelPicker
-    picker.options = picker.options.filter(row => !isMarked(row))
-    if (picker.options.length === 0 && known?.optionsCreated) delete picker.options
-    if (Object.keys(picker).length === 0 && known?.pickerCreated) delete next.modelPicker
+    if (picker.options) {
+      picker.options = picker.options.filter(row => !isMarked(row))
+      if (picker.options.length === 0) delete picker.options
+    }
+    if (Object.keys(picker).length === 0) delete next.modelPicker
   }
-
-  return { settings: next, remove: known?.fileCreated === true && Object.keys(next).length === 0 }
+  return { settings: next }
 }
 
 /**
@@ -258,15 +196,6 @@ export function maskedSettings(settings) {
     .map(line => (isOurHeader(line) ? `${line.slice(0, line.indexOf(':'))}: <secret>` : line))
     .join('\n')
   return next
-}
-
-/**
- * Why a file that is to hold the secret cannot, or undefined: it must belong to the user, who can then restrict it
- * to mode 600. `ownerUid` is undefined for a file not there yet.
- */
-export function ownerRefusal(path, ownerUid, userUid) {
-  if (ownerUid === undefined || ownerUid === userUid) return undefined
-  return `${path} belongs to another user (uid ${ownerUid}), so it cannot be restricted to mode 600 to hold the proxy's secret; nothing was changed`
 }
 
 /** `text` with every occurrence of `secret` replaced, for anything printed. */

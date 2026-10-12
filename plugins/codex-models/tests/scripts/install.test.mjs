@@ -3,7 +3,7 @@
 // Run: node --test plugins/codex-models/tests/scripts/*.test.mjs   (mise run plugins:test runs it)
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
@@ -121,12 +121,10 @@ exit 6
 
 const modeOf = path => statSync(path).mode & 0o777
 
-/** settings.json, the state and every codex-models backup beside settings.json are mode 600. */
+/** settings.json and every codex-models backup beside it are mode 600. */
 function assertPrivate(box) {
   const dir = join(box.home, '.claude')
   if (existsSync(box.settingsFile)) assert.equal(modeOf(box.settingsFile), 0o600, 'settings.json')
-  const state = join(dir, 'codex-models/settings-state.json')
-  if (existsSync(state)) assert.equal(modeOf(state), 0o600, 'settings-state.json')
   const backups = readdirSync(dir).filter(name => name.startsWith('settings.json.bak-codex-models-'))
   for (const name of backups) assert.equal(modeOf(join(dir, name)), 0o600, name)
   return backups
@@ -218,7 +216,7 @@ test('--dry-run masks an old X-Ccmproxy-Token line as well as the new one', asyn
   }
 })
 
-test('install writes the settings after the preflight, and uninstall restores them', async () => {
+test('install writes the settings after the preflight, and uninstall removes owned entries', async () => {
   mode = 'ours'
   const box = sandbox()
   try {
@@ -241,7 +239,7 @@ test('install writes the settings after the preflight, and uninstall restores th
     assert.deepEqual(settings.modelPicker.options.at(-1), { model: 'gpt-fake', label: 'GPT Fake', description: 'A fake Codex model (codex-models)' })
     assert.deepEqual(settings.pluginConfigs, ORIGINAL.pluginConfigs)
     assert.ok(readdirSync(join(box.home, '.claude')).some(name => name.startsWith('settings.json.bak-codex-models-')))
-    assert.doesNotMatch(readFileSync(join(target, 'settings-state.json'), 'utf8'), new RegExp(TOKEN))
+    assert.ok(!existsSync(join(target, 'settings-state.json')), 'no state file created')
     for (const file of ['install.sh', 'uninstall.sh', 'install/cli.mjs', 'install/settings.mjs', 'ccmproxy', 'bin/ccmproxy', 'VERSION']) {
       assert.ok(existsSync(join(target, file)), file)
     }
@@ -252,6 +250,11 @@ test('install writes the settings after the preflight, and uninstall restores th
     assert.match(plist, /<key>ThrottleInterval<\/key><integer>30<\/integer>/)
     assert.match(plist, /home\/log\/ccmproxy\.log/)
     assert.match(box.calls(), /launchctl bootstrap gui\/\d+ /)
+    const installCalls = box.calls()
+    assert.ok(installCalls.indexOf('precheck --settings') < installCalls.indexOf('exec go@'))
+    assert.ok(installCalls.indexOf('launchctl bootstrap') < installCalls.indexOf('preflight --env'))
+    assert.ok(installCalls.indexOf('preflight --env') < installCalls.indexOf('merge --settings'))
+    assert.doesNotMatch(installCalls, new RegExp(TOKEN))
 
     // A second run leaves the settings as the first wrote them.
     const once = readFileSync(box.settingsFile, 'utf8')
@@ -259,12 +262,6 @@ test('install writes the settings after the preflight, and uninstall restores th
     assert.equal((await box.run('install.sh')).code, 0)
     assert.equal(readFileSync(box.settingsFile, 'utf8'), once)
     assertPrivate(box)
-
-    // A dry run of uninstall shows the removed header line masked.
-    const dry = await box.run('uninstall.sh', ['--dry-run'])
-    assert.equal(dry.code, 0, dry.stderr)
-    assert.match(dry.stdout, /-.*X-Ccmproxy-Token: <secret>/)
-    assert.doesNotMatch(dry.stdout + dry.stderr, new RegExp(TOKEN))
 
     // Uninstall from the copy, as a person without the plugin would.
     const removed = await new Promise(done =>
@@ -277,12 +274,10 @@ test('install writes the settings after the preflight, and uninstall restores th
     assertPrivate(box)
     assert.ok(!existsSync(join(box.home, 'Library/LaunchAgents/com.anderson-spider.codex-models.plist')))
     assert.ok(!existsSync(join(target, 'settings-state.json')))
-    assert.ok(existsSync(join(target, 'home/config.json')), 'the config stays without --purge')
+    assert.ok(existsSync(join(target, 'home/config.json')), 'the config stays')
     const calls = box.calls()
     assert.ok(calls.lastIndexOf('launchctl bootout') > calls.lastIndexOf('launchctl bootstrap'))
 
-    assert.equal((await box.run('uninstall.sh', ['--purge'])).code, 0)
-    assert.ok(!existsSync(target))
   } finally {
     box.cleanup()
   }
@@ -335,92 +330,6 @@ function assertUntouched(box) {
   assert.ok(!readdirSync(join(box.home, '.claude')).some(name => name.includes('.bak-codex-models-')))
 }
 
-/** Node, preloaded with this, reports uid 0 as the owner of FAKE_ROOT_OWNED (a real path), as after a sudo run. */
-function rootOwnedPreload(box) {
-  const file = join(box.root, 'root-owned.mjs')
-  writeFileSync(
-    file,
-    `import fs, { realpathSync } from 'node:fs'
-import { syncBuiltinESMExports } from 'node:module'
-const target = process.env.FAKE_ROOT_OWNED
-const real = (p) => { try { return realpathSync(String(p)) } catch { return String(p) } }
-for (const name of ['statSync', 'lstatSync']) {
-  const original = fs[name]
-  fs[name] = function (p, ...rest) {
-    const stat = original.call(this, p, ...rest)
-    if (stat && target && real(p) === target) stat.uid = 0
-    return stat
-  }
-}
-syncBuiltinESMExports()
-`,
-  )
-  return { NODE_OPTIONS: `--import=${file}` }
-}
-
-/** No build, no copy, no plist, no launchctl call: the install home holds only what the test put there. */
-function assertNothingInstalled(box) {
-  const target = join(box.home, '.claude/codex-models')
-  for (const name of ['bin', 'install', 'install.sh', 'uninstall.sh', 'ccmproxy', 'home']) assert.ok(!existsSync(join(target, name)), name)
-  assert.ok(!existsSync(join(box.home, 'Library/LaunchAgents')), 'no plist')
-  assert.doesNotMatch(box.calls(), /launchctl|exec go/)
-}
-
-test('a state file owned by another user is refused before anything is built or loaded, by install and uninstall', async () => {
-  const box = sandbox()
-  try {
-    const text = `${JSON.stringify(ORIGINAL, null, 2)}\n`
-    writeFileSync(box.settingsFile, text)
-    const target = join(box.home, '.claude/codex-models')
-    mkdirSync(target)
-    // /dev/null is root's: a state left behind that way cannot be restricted to mode 600.
-    symlinkSync('/dev/null', join(target, 'settings-state.json'))
-
-    const out = await box.run('install.sh')
-    assert.notEqual(out.code, 0)
-    assert.match(out.stderr, /\/dev\/null belongs to another user \(uid 0\)/)
-    assert.match(out.stderr, /nothing was changed/)
-    assert.equal(readFileSync(box.settingsFile, 'utf8'), text)
-    assertNothingInstalled(box)
-
-    const removed = await box.run('uninstall.sh')
-    assert.notEqual(removed.code, 0)
-    assert.match(removed.stderr, /belongs to another user/)
-    assert.match(removed.stderr, /LaunchAgent stays loaded/)
-    assert.equal(readFileSync(box.settingsFile, 'utf8'), text)
-    assert.doesNotMatch(box.calls(), /launchctl/)
-  } finally {
-    box.cleanup()
-  }
-})
-
-test('a regular state or settings file another user owns is refused the same way', async () => {
-  const box = sandbox()
-  try {
-    const text = `${JSON.stringify(ORIGINAL, null, 2)}\n`
-    writeFileSync(box.settingsFile, text)
-    const state = join(box.home, '.claude/codex-models/settings-state.json')
-    mkdirSync(dirname(state))
-    writeFileSync(state, '{}\n')
-
-    for (const owned of [state, box.settingsFile]) {
-      const env = { ...rootOwnedPreload(box), FAKE_ROOT_OWNED: realpathSync(owned) }
-      const out = await box.run('install.sh', [], env)
-      assert.notEqual(out.code, 0, owned)
-      assert.match(out.stderr, /belongs to another user \(uid 0\)/, owned)
-      assertNothingInstalled(box)
-
-      const removed = await box.run('uninstall.sh', [], env)
-      assert.notEqual(removed.code, 0, owned)
-      assert.match(removed.stderr, /belongs to another user/, owned)
-      assert.doesNotMatch(box.calls(), /launchctl/)
-    }
-    assert.equal(readFileSync(box.settingsFile, 'utf8'), text)
-  } finally {
-    box.cleanup()
-  }
-})
-
 test('only regular backup files are restricted: a link or a directory under the backup name is left alone', async () => {
   mode = 'ours'
   const box = sandbox()
@@ -454,14 +363,14 @@ test('a base URL that is not ours is refused before anything is built or loaded'
     const out = await box.run('install.sh')
 
     assert.notEqual(out.code, 0)
-    assert.match(out.stderr, /already "https:\/\/gateway\.example\.com"/)
+    assert.match(out.stderr, /already set to a different URL/)
     assert.match(out.stderr, /nothing was changed/)
     assert.equal(readFileSync(box.settingsFile, 'utf8'), text)
     assertUntouched(box)
 
     const check = await box.run('install.sh', ['--check'])
     assert.notEqual(check.code, 0)
-    assert.match(check.stderr, /already "https:\/\/gateway\.example\.com"/)
+    assert.match(check.stderr, /already set to a different URL/)
   } finally {
     box.cleanup()
   }
@@ -484,17 +393,16 @@ test('a malformed settings.json is refused before anything is built or loaded', 
   }
 })
 
-test('with no settings.json before install, uninstall removes the file it created', async () => {
+test('with no settings.json before install, uninstall keeps the file as {}', async () => {
   mode = 'ours'
   const box = sandbox()
   try {
     assert.equal((await box.run('install.sh')).code, 0)
     assert.ok(existsSync(box.settingsFile))
-    assert.equal(JSON.parse(readFileSync(join(box.home, '.claude/codex-models/settings-state.json'), 'utf8')).fileCreated, true)
 
     const out = await box.run('uninstall.sh')
     assert.equal(out.code, 0, out.stderr)
-    assert.ok(!existsSync(box.settingsFile))
+    assert.deepEqual(JSON.parse(readFileSync(box.settingsFile, 'utf8')), {})
   } finally {
     box.cleanup()
   }
@@ -515,14 +423,18 @@ test('with no settings.json before install, a key added since keeps the file', a
   }
 })
 
-test('--no-settings installs and leaves the settings alone', async () => {
+test('removed flags are usage errors before any prerequisites or filesystem changes', async () => {
   const box = sandbox()
   try {
-    const out = await box.run('install.sh', ['--no-settings'])
-
-    assert.equal(out.code, 0, out.stderr)
-    assert.ok(!existsSync(box.settingsFile))
-    assert.match(out.stdout, /--no-settings/)
+    for (const [file, args] of [
+      ['install.sh', ['--no-settings']], ['uninstall.sh', ['--dry-run']], ['uninstall.sh', ['--purge']],
+    ]) {
+      const out = await box.run(file, args)
+      assert.equal(out.code, 2, out.stderr)
+      assert.match(out.stderr, /usage:/)
+      assert.equal(box.calls(), '')
+      assert.deepEqual(readdirSync(join(box.home, '.claude')), [])
+    }
   } finally {
     box.cleanup()
   }
