@@ -551,6 +551,12 @@ func TestStatusCodexLimitsStayBehindTheSecretAndOutOfTheLog(t *testing.T) {
 		t.Fatal("a refused status request reached Codex")
 	}
 	limitsOf(t, e)
+	e.waitLog("codex usage: 2 window(s) read")
+	// The access line is written after the handler returns; drain it too before
+	// checking that neither the usage request nor the status leaked anything.
+	if err := e.stop(); err != nil {
+		t.Fatalf("serve ended with %v", err)
+	}
 	log := e.stderr.String()
 	for _, leak := range []string{"SENTINEL_WHAM", "Bearer", e.token, "1790000000", "60.5"} {
 		if strings.Contains(log, leak) {
@@ -560,8 +566,5 @@ func TestStatusCodexLimitsStayBehindTheSecretAndOutOfTheLog(t *testing.T) {
 	// Logs carry the path, never the query.
 	if strings.Contains(log, "refresh=") {
 		t.Fatalf("the log carries the query:\n%s", log)
-	}
-	if !strings.Contains(log, "codex usage") {
-		t.Fatalf("the usage request left no debug line:\n%s", log)
 	}
 }

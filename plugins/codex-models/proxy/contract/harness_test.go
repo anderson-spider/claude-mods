@@ -348,6 +348,15 @@ func (e *env) stop() error {
 	return e.waitErr
 }
 
+// waitLog waits for the asynchronous subprocess pipe copy, not just the HTTP
+// response. Later log lines may still be pending; stop drains them all.
+func (e *env) waitLog(substring string) {
+	e.t.Helper()
+	waitUntil(e.t, fmt.Sprintf("ccmproxy log containing %q", substring), 5*time.Second, func() bool {
+		return strings.Contains(e.stderr.String(), substring)
+	})
+}
+
 func (e *env) url(path string) string { return "http://" + e.addr + path }
 
 // ---- requests --------------------------------------------------------------

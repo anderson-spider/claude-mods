@@ -146,6 +146,10 @@ func TestTokenHeaderNeverReachesAFake(t *testing.T) {
 	if e.anth.count() != 4 || e.cdx.count() != 1 {
 		t.Fatalf("fakes received anthropic=%d codex=%d requests, want 4 and 1", e.anth.count(), e.cdx.count())
 	}
+	// Drain the subprocess log before checking that no request leaked a secret.
+	if err := e.stop(); err != nil {
+		t.Fatalf("serve ended with %v", err)
+	}
 	if log := e.stderr.String(); strings.Contains(log, e.token) || strings.Contains(log, e.salt) {
 		t.Fatalf("the proxy's log carries a secret:\n%s", log)
 	}
