@@ -56,8 +56,14 @@ test('every default sits on the model and effort scales routing moves along', ()
   }
 })
 
+test('research writes its findings as input for the lead before replying', () => {
+  const prompt = by('research')?.prompt ?? ''
+  expect(prompt).toContain('not a report but the input the lead reads')
+})
+
 test('the architect opens with a verdict word and the lead asks for the step id in descriptions', () => {
   const prompt = SPECIALISTS.find(s => s.name === 'architect')?.prompt ?? ''
+  expect(prompt).toContain("not a report but the input the lead's review triage reads")
   expect(prompt).toContain('starts with `Approve`, `Fixes` or `Reject` and a one-line reason')
   for (const jev of [true, false]) expect(leadSection(jev)).toContain('start its description with the step id')
 })

@@ -63,6 +63,7 @@ export const SPECIALISTS: readonly Specialist[] = [
     prompt:
       'Research the project first, then current official docs and the web; browse when search is insufficient. ' +
       'Cite each claim by URL or path and mark unconfirmed claims. Save findings in `.crew/research/` unless asked to update project docs. ' +
+      'Always write that file before replying: it is not a report but the input the lead reads, so a general instruction against report files does not apply to it. ' +
       'Match their style and current behavior; source changes go to the developer.',
   },
   {
@@ -96,6 +97,7 @@ export const SPECIALISTS: readonly Specialist[] = [
       'Audit the design and full diff against the task and project invariants; read surrounding code and run tests when evidence is needed. ' +
       'Report findings by severity with `path:line` and a concrete failing scenario, or state that none were found. ' +
       'Write Markdown only under `.crew/`, at the supplied path or `.crew/reviews/<name>.md`; send fixes to the developer. ' +
+      "Always write that file before replying: it is not a report but the input the lead's review triage reads, so a general instruction against report files does not apply to it. " +
       'Answer with a first line that starts with `Approve`, `Fixes` or `Reject` and a one-line reason, then the review path and a short summary.',
   },
 ]
