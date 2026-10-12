@@ -13,8 +13,12 @@ if (!base) {
 const git = (...args) => execFileSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
 const changed = git('diff', '--name-only', `${base}...HEAD`).split('\n').filter(Boolean)
 
-// Behavior lives in hooks/ and helper/; tests and docs do not change it.
-const isCode = file => /^plugins\/[^/]+\/(hooks|helper)\//.test(file) && !/^plugins\/[^/]+\/helper\/test\//.test(file)
+// Behavior lives in hooks/, helper/, proxy/, install/ and the install scripts.
+// Exclude helper/test/ and the Go tests, testdata and Markdown under proxy/ and install/.
+const isCode = file =>
+  (/^plugins\/[^/]+\/(hooks|helper)\//.test(file) && !/^plugins\/[^/]+\/helper\/test\//.test(file)) ||
+  (/^plugins\/[^/]+\/(proxy|install)\//.test(file) && !/_test\.go$|\/testdata\/|\.md$/.test(file)) ||
+  /^plugins\/[^/]+\/(install|uninstall)\.sh$/.test(file)
 const versionOf = text => JSON.parse(text).version
 
 const errors = []
