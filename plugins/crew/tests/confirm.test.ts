@@ -96,9 +96,9 @@ test('Claude aliases still match their full ids, as before; a full planned id al
 })
 
 
-// --- T8 retest (tester): dated ids after the fix ---
+// --- Dated upstream ids ---
 
-test('T8 retest: a dated upstream id confirms its model, a dated sibling does not, Claude ids keep their rule', () => {
+test('a dated upstream id confirms its model, a dated sibling does not, Claude ids keep their rule', () => {
   const p = { model: 'gpt-6-astra', effort: 'high' }
   for (const model of ['gpt-6-astra-2026-05-01', 'gpt-6-astra-20260501', 'gpt-6-astra-2026-05-01-high', 'gpt-6-astra-2026-05-01[1m]']) {
     expect(ranAsPlanned(p, { model, effort: 'high' })).toBe(true)
@@ -117,6 +117,6 @@ test('T8 retest: a dated upstream id confirms its model, a dated sibling does no
 })
 
 // Probe: an effort suffix before the date is not stripped (normalizeModel strips only a trailing effort).
-test('T8 retest probe: gpt-6-astra-high-2026-05-01 is reported as a mismatch', () => {
+test('a dated id with the effort inside the date (gpt-6-astra-high-2026-05-01) is reported as a mismatch', () => {
   expect(ranAsPlanned({ model: 'gpt-6-astra', effort: 'high' }, { model: 'gpt-6-astra-high-2026-05-01', effort: 'high' })).toBe(false)
 })

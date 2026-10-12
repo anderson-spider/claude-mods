@@ -9,7 +9,7 @@ Marketplace of [Claude Code](https://claude.com/claude-code) plugins made by and
 | [branch-guard](plugins/branch-guard) | Holds a `git commit` or `git push` on the protected branch and shows what would go in. |
 | [chatgpt](plugins/chatgpt) | Lets Claude ask your logged-in ChatGPT, or have it generate an image, in terminal-browser, Claude in Chrome or the Claude desktop app's built-in browser, and saves the result locally. |
 | [codex-computer-use](plugins/codex-computer-use) | Routes native Mac app control through Codex computer use from the ChatGPT app instead of Claude's own computer use, asking before each new app. |
-| [crew](plugins/crew) | Registers six specialist subagents: `code-reader` and `research` on Haiku; `designer`, `developer` and `tester` on Sonnet; `architect` on Opus. Optional Jev routing of each call's model and effort, on when the `jevKey` option is set. Optional Codex engine to run a role on OpenAI Codex, on when the `codex` option is set. Includes the [Flightdeck](https://github.com/scasella/claude-flightdeck) dashboard. |
+| [crew](plugins/crew) | Registers six specialist subagents: `code-reader` and `research` on Haiku; `designer`, `developer` and `tester` on Sonnet; `architect` on Opus. Optional Jev routing of each call's model and effort, on when the `jevKey` option is set. Optional Codex engine to run a role on OpenAI Codex, on when the `codex` option is set. Optional `crew:<role>-codex` subagents on Codex models through a local proxy, on when the `nativeCodex` option is set. Includes the [Flightdeck](https://github.com/scasella/claude-flightdeck) dashboard. |
 | [tailscale](plugins/tailscale) | Lets Claude query and modify your tailnet through the Tailscale API. |
 
 ## Install
@@ -164,6 +164,12 @@ The plugin includes [Flightdeck](https://github.com/scasella/claude-flightdeck) 
 The `placement` option (`side` or `prompt`, default `side`) and `openOnStart` say what a session starts with before you have picked. Your last pick (shown or hidden, side or prompt) is saved and wins in later sessions, including a hide by the pane's close mark. A pick made in one session does not change another session that is already running.
 
 If you have the Flightdeck plugin installed, uninstall it before updating crew (`claude plugin uninstall flightdeck@claude-flightdeck`): both would draw a pane and a status line. Options saved for `flightdeck@claude-flightdeck` do not carry over; set them again on `crew@spider-claude-mods`.
+
+### Native Codex subagents
+
+Off by default; the `nativeCodex` option is the switch. Give it `role=model` pairs (for example `developer=gpt-x,tester=gpt-y`) and each role named there gets a `crew:<role>-codex` subagent type, such as `crew:developer-codex`, that runs on that model with the base role's prompt, tools and write rules. Unlike the Codex engine above, these are ordinary subagents: they run in the foreground or the background like any other and need no Codex CLI, but they reach their model through a local proxy set as `ANTHROPIC_BASE_URL` in the environment Claude Code starts in. The types are registered only when that URL is an `http` URL on a loopback address (`127.0.0.0/8`, `::1` or `localhost`); with any other base URL, or none, nothing is registered. What those subagents read and write is sent to OpenAI through the proxy.
+
+When twins are registered, a separate section tells the lead it can pick one when you ask for Codex or when a second model family should do or check the work. Changing the option reloads the plugin, and the twins are not routed or offered to the lead until the next session. With a `jevKey`, Jev sizes only a twin's effort and never changes its model; the task shows `audit auth · <model>/<effort>`, and the transcript line confirms the model id the proxy reported. `crew:architect-codex` shows in Flightdeck's architect panel; the others are cards.
 
 ### Jev routing of model and effort
 

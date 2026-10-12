@@ -462,9 +462,9 @@ test('round trip, tagging then untagging gives the description back, and re-tagg
 })
 
 
-// --- T8 retest (tester): untagged after the F2 fix ---
+// --- untagged with registered twin ids ---
 
-test('T8 retest: only alias tags and registered twin ids are stripped; ids are matched literally', () => {
+test('only alias tags and registered twin ids are stripped; ids are matched literally', () => {
   expect(untagged('docs · v2/high')).toBe('docs · v2/high')
   expect(untagged('docs · v2/high', ['gpt-6-astra'])).toBe('docs · v2/high')
   expect(untagged('audit · opus/high')).toBe('audit')

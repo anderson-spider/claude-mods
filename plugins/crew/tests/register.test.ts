@@ -2173,9 +2173,9 @@ test('a description that ends like a tag of an unknown model keeps its ending wh
   expect(seen.spawned[1]?.description).toBe('docs · v2/high · opus/high')
 })
 
-// --- T8 retest (tester): registration drives routing and the section ---
+// --- Registration drives routing and the native section ---
 
-test('T8 retest: twins refused by the host compose no native section and are not sent to Jev', NATIVE, async ($, on) => {
+test('twins refused by the host compose no native section and are not sent to Jev', NATIVE, async ($, on) => {
   const w = nativeWorld(on, 'http://127.0.0.1:41237', { twinFail: true })
   on('prompt.compose', () => ({ sections: [] }))
   await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true } as never)
@@ -2185,7 +2185,7 @@ test('T8 retest: twins refused by the host compose no native section and are not
   expect(w.logs.filter(line => line.includes('nativeCodex crew:') && line.includes('not registered')).length).toBe(TWINS.length)
 })
 
-test('T8 retest: before session.start no native section, after it behind loopback the section lists the twins', NATIVE, async ($, on) => {
+test('before session.start no native section, after it behind loopback the section lists the twins', NATIVE, async ($, on) => {
   nativeWorld(on, 'http://127.0.0.1:41237')
   on('prompt.compose', () => ({ sections: [] }))
   expect((await compose($, ['Agent'])).sections.map(section => section.id)).toEqual(['crew:lead'])
@@ -2196,7 +2196,7 @@ test('T8 retest: before session.start no native section, after it behind loopbac
   expect(sections[0]?.text.toLowerCase()).not.toContain('codex')
 })
 
-test('T8 retest: with twins registered, an unregistered twin and a Claude role: one request each for the Claude role and the twin', NATIVE_AND_JEV, async ($, on) => {
+test('with twins registered, an unregistered twin and a Claude role: one request each for the Claude role and the twin', NATIVE_AND_JEV, async ($, on) => {
   const { seen } = await twinWorld($, on, { reply: async () => ok(answer('haiku', 1, 3.5)) })
   await $.agent.spawn(spawnInput({ subagentType: 'crew:code-reader-codex', description: 'find · gpt-6-astra/high' }))
   await $.agent.spawn(spawnInput({ subagentType: 'crew:developer-codex', description: 'fix · gpt-6-astra/medium', tool_use_id: 'tu2' }))
