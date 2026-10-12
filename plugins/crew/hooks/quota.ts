@@ -153,11 +153,14 @@ function live(window: Window | undefined, now: number): Window | undefined {
   return window
 }
 
+/** The reason of a decision for a call that is not eligible (routing off or no twin): it names no provider. */
+export const ROUTING_OFF_REASON = 'routing off or no Codex twin'
+
 const NOT_KNOWN: Record<'unknown' | 'stale' | 'down' | 'off', string> = {
   unknown: 'Codex quota not known yet',
   stale: 'Codex quota is stale',
   down: 'Codex proxy is down',
-  off: 'routing off or no Codex twin',
+  off: ROUTING_OFF_REASON,
 }
 
 /**
