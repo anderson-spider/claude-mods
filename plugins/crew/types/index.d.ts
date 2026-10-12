@@ -97,6 +97,31 @@ export type Placement = 'side' | 'prompt'
 /** The person's pick for the session: whether the panel is shown and where. */
 export type PanelChoice = { isVisible: boolean; placement: Placement }
 
+/** One rate-limit window: how much is used (0-100) and when it resets (ISO 8601). */
+export type QuotaWindow = { percentUsed: number; resetsAt?: string }
+
+/** What a provider reports; a window it does not report is absent. */
+export type QuotaReading = { fiveHour?: QuotaWindow; sevenDay?: QuotaWindow }
+
+/**
+ * Both providers' limits and the provider they favor, kept by the router and read by the HUD. The contract is
+ * self-contained, so these mirror `Quota` in `hooks/quota.ts`; `tests/quota.test.ts` checks the two agree.
+ */
+export type QuotaState = {
+  claude: QuotaReading | null
+  codex: QuotaReading | null
+  /** `ok` fresh; `unknown` none yet or none usable; `stale` too old; `down` the status request failed; `off` not asked. */
+  codexState: 'ok' | 'unknown' | 'stale' | 'down' | 'off'
+  /** When the Codex status was fetched (ms since epoch), or null before the first fetch. */
+  fetchedAt: number | null
+  /** When the Codex limits were observed (ms; the oldest window's), or null. */
+  codexObservedAt: number | null
+  /** When the last non-empty Claude reading was taken (ms), or null. */
+  claudeAt: number | null
+  /** The decision for these readings; `reason` has no provider prefix and fits 34 cells. */
+  decision: { provider: 'claude' | 'codex'; reason: string }
+}
+
 declare module 'claude-code' {
   interface PluginState {
     'crew': {
@@ -113,6 +138,8 @@ declare module 'claude-code' {
       view: View
       roster: Roster
       panel: PanelChoice | null
+      /** Claude's and Codex's limits and the provider they favor (`hooks/quota.ts`). */
+      quota: QuotaState
     }
   }
 }

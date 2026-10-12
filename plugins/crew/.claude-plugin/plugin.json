@@ -19,6 +19,12 @@
       "description": "Registers a crew:<role>-codex subagent type for each role=model pair, e.g. developer=gpt-x,tester=gpt-y, running on that model with the role's prompt, tools and write lane. The model is reached through a local proxy at ANTHROPIC_BASE_URL, so the types are registered only when that URL is an http URL on a loopback address (127.0.0.0/8, ::1 or localhost); with any other base URL, or none, nothing is registered. What those subagents read and write is sent to OpenAI through the proxy. With a jevKey, Jev may size their effort when the host sends one (never the model) from the redacted prompt, as for the other roles. Empty by default.",
       "default": ""
     },
+    "quotaRouting": {
+      "type": "boolean",
+      "title": "Quota-aware provider routing",
+      "description": "Lets crew send a crew:<role> call to the same role's Codex twin when Codex has more 7-day headroom than Claude, which sends that call's work to OpenAI through the local proxy; off by default.",
+      "default": false
+    },
     "architectPattern": {
       "title": "Architect pattern",
       "description": "Regular expression (case-insensitive) for the agent types and server tools that count as the on-call architect, e.g. advisor|architect|reviewer",

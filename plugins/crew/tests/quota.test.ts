@@ -1,4 +1,5 @@
 import { expect, test } from 'claude-code/testing'
+import type { PluginState } from 'claude-code'
 import {
   CACHE_MS,
   DEADLINE_MS,
@@ -9,7 +10,10 @@ import {
   codexReading,
   decide,
   proxyAccess,
+  settle,
+  INITIAL_QUOTA,
   type CodexState,
+  type Quota,
   type Reading,
 } from '../hooks/quota'
 
@@ -229,4 +233,24 @@ test('proxyAccess drops userinfo, path, query and fragment from the status URL',
 
 test('codexReading: an out-of-range resetsAt makes the whole reading unknown (toISOString throws; Claude is the safe side)', () => {
   expect(codexReading({ codexLimits: [row({ kind: 'seven_day', resetsAt: 1e20 })] }, NOW)).toEqual({ reading: null, state: 'unknown', observedAt: null })
+})
+
+test('INITIAL_QUOTA is what decide gives with nothing known and Codex off', () => {
+  expect(INITIAL_QUOTA.decision).toEqual(decide(null, null, 'off', false, NOW))
+  expect(INITIAL_QUOTA).toMatchObject({ claude: null, codex: null, codexState: 'off', fetchedAt: null, codexObservedAt: null, claudeAt: null })
+})
+
+test('settle recomputes the decision from the quota\'s own readings and leaves the rest', () => {
+  const base = { ...INITIAL_QUOTA, claude: reading(10, 80), codex: reading(10, 20), codexState: 'ok' as const, fetchedAt: 5 }
+  const settled = settle(base, true, NOW)
+  expect(settled.decision).toEqual(decide(base.claude, base.codex, 'ok', true, NOW))
+  expect(settled.decision.provider).toBe('codex')
+  expect(settled).toMatchObject({ claude: base.claude, codex: base.codex, fetchedAt: 5 })
+  expect(settle(base, false, NOW).decision).toEqual({ provider: 'claude', reason: 'routing off or no Codex twin' })
+})
+
+test('the quota type in the plugin\'s types contract is the module\'s Quota, both ways (a compile-time check)', () => {
+  const contract: PluginState['crew']['quota'] = INITIAL_QUOTA
+  const module: Quota = contract
+  expect(module).toBe(INITIAL_QUOTA)
 })

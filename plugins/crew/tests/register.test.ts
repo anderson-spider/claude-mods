@@ -2,6 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import { fnv1a } from '../hooks/decisions'
+import type { Quota } from '../hooks/quota'
 
 const agents = [
   { id: 'a1', type: 'crew:architect' },
@@ -68,6 +69,8 @@ const ok = (text: string): Reply => ({ status: 200, ok: true, headers: {}, text 
 
 type Seen = {
   fetches: { url: string; headers: Record<string, string>; body: string }[]
+  /** The Codex status requests to the proxy (they are not counted among Jev's `fetches`). */
+  statuses: { url: string; headers: Record<string, string> }[]
   spawned: Record<string, unknown>[]
   steps: (string | number | undefined)[]
   notices: string[]
@@ -103,9 +106,13 @@ function jevWorld(
     now?: () => number
     /** Hooks beneath `$.session.start` and `$.agent.register`, so a test can start the session and register the agents. */
     register?: boolean
+    /** The proxy's `/__ccmproxy/status` answers here instead of as Jev. */
+    status?: () => Promise<Reply>
+    /** `$.session.usage()` reports these limits (read each time, so a test can change them). */
+    rateLimits?: () => { kind: string; percentUsed: number; resetsAt?: string }[]
   } = {},
 ) {
-  const seen: Seen = { fetches: [], spawned: [], steps: [], notices: [], logs: [], writes: [], transcript: [], settingsReads: 0 }
+  const seen: Seen = { fetches: [], statuses: [], spawned: [], steps: [], notices: [], logs: [], writes: [], transcript: [], settingsReads: 0 }
   const flags = { settingsFail: opts.settingsFail === true, registerFail: false }
   // `mock.clock` registers `clock.now` itself and the engine refuses a second one, so a test's own is registered instead.
   const now = opts.now
@@ -131,7 +138,15 @@ function jevWorld(
     seen.writes.push({ path: e.path, text: e.text })
     return { value: undefined }
   })
+  if (opts.rateLimits) {
+    const limits = opts.rateLimits
+    on('session.usage', () => ({ value: { startedAt: 0, context: { percent: 1, tokens: 1, window: 100 }, rateLimits: limits() } }) as never)
+  }
   on('http.fetch', async (_$, e) => {
+    if (opts.status && e.url.endsWith('/__ccmproxy/status')) {
+      seen.statuses.push({ url: e.url, headers: (e.init?.headers ?? {}) as Record<string, string> })
+      return { value: await opts.status() }
+    }
     seen.fetches.push({
       url: e.url,
       headers: (e.init?.headers ?? {}) as Record<string, string>,
@@ -818,7 +833,8 @@ test('an applied decision is logged once, in a file named by time and agent id',
   expect(path.startsWith(`${DIR}/`)).toBe(true)
   expect(path).toMatch(/\/\d{4}-\d\d-\d\dT\d\d-\d\d-\d\d\.\d{3}Z-a1\.json$/)
   expect(record(seen)).toMatchObject({
-    v: 1, agent: 'developer', tier: 'opus', confidence: 0.9, depth: 3.9,
+    v: 2, agent: 'developer', requested: 'crew:developer', provider: 'claude', reason: null, quota: { claude: null, codex: null },
+    tier: 'opus', confidence: 0.9, depth: 3.9,
     defaultModel: 'sonnet', model: 'opus', defaultEffort: 'medium', effortPlanned: 'high', effortApplied: 'high',
     jevModel: 'jev-1.13.0', applied: { model: true, effort: true }, outcome: null,
   })
@@ -860,7 +876,7 @@ test('the record holds no prompt, description, key or path', ON, async ($, on) =
   }
   expect(Object.keys(record(seen)).sort()).toEqual([
     'agent', 'applied', 'bind', 'confidence', 'defaultEffort', 'defaultModel', 'depth', 'descriptionHash', 'durationMs',
-    'effortApplied', 'effortPlanned', 'jevModel', 'model', 'outcome', 'ran', 'tier', 'ts', 'v',
+    'effortApplied', 'effortPlanned', 'jevModel', 'model', 'outcome', 'provider', 'quota', 'ran', 'reason', 'requested', 'tier', 'ts', 'v',
   ])
 })
 
@@ -1996,14 +2012,14 @@ test('a tag copied from a -codex task is sent without it and tagged once', NATIV
   expect(seen.spawned[0]?.description).toBe('audit auth · gpt-6-astra/high')
 })
 
-test('the record of a -codex decision holds the id as model and default model, stays v 1, and keeps the effort that took', NATIVE_AND_JEV, async ($, on) => {
+test('the record of a -codex decision holds the id as model and default model, and keeps the effort that took', NATIVE_AND_JEV, async ($, on) => {
   const { seen } = await twinWorld($, on, { reply: async () => ok(answer('haiku', 0.9, 3.5)) })
   await $.agent.spawn(spawnInput({ subagentType: 'crew:developer-codex' }))
 
   expect(seen.writes.length).toBe(1)
   const record = JSON.parse(seen.writes[0]?.text ?? '{}')
   expect(record).toMatchObject({
-    v: 1, agent: 'developer-codex', defaultModel: 'gpt-6-astra', model: 'gpt-6-astra', defaultEffort: 'medium',
+    v: 2, agent: 'developer-codex', requested: 'crew:developer-codex', provider: 'codex', reason: null, defaultModel: 'gpt-6-astra', model: 'gpt-6-astra', defaultEffort: 'medium',
     effortPlanned: 'high', effortApplied: 'high', bind: 'applied', applied: { model: false, effort: true }, ran: null, outcome: null,
   })
   expect(seen.writes[0]?.path).toContain('-a1.json')
@@ -2331,4 +2347,457 @@ test('a workflow agent on a -codex type with model is refused (a hook can only r
   await $.agent.spawn(spawnInput({ subagentType: 'crew:developer-codex', workflow: { runId: 'wf_1', agentIndex: 2 }, tool_use_id: 'tu2' }))
   expect(seen.spawned.map(s => [s.subagentType, s.model, s.description])).toEqual([['crew:developer-codex', undefined, 'audit auth']])
   expect(seen.fetches).toEqual([])
+})
+
+// --- Quota routing: a specialist call goes to the same role's Codex twin when Codex has more 7-day headroom ---
+
+const PROXY_TOKEN = ['tok-', 'proxysecret0123456789'].join('')
+const QUOTA_ENV = { ...LOOPBACK, ANTHROPIC_CUSTOM_HEADERS: `X-Other: other\nX-Ccmproxy-Token: ${PROXY_TOKEN}` }
+const Q_NOW = Date.parse('2026-10-12T12:00:00Z')
+const TWIN_OPTIONS = { nativeCodex: 'developer=gpt-6-astra, architect=gpt-6-sage, tester=gpt-6-astra' }
+const QUOTA_JEV = { options: { ...TWIN_OPTIONS, quotaRouting: true, jevKey: KEY } }
+const QUOTA_ONLY = { options: { ...TWIN_OPTIONS, quotaRouting: true } }
+
+const claudeLimits = (five: number, seven: number) => [
+  { kind: 'five_hour', percentUsed: five, resetsAt: '2026-10-12T15:00:00.000Z' },
+  { kind: 'seven_day', percentUsed: seven, resetsAt: '2026-10-17T00:00:00.000Z' },
+]
+/** The proxy's status with a Codex 7-day window (and a 5-hour one when given), observed 30 s before `Q_NOW`. */
+const codexStatus = (seven: number, five?: number, observedAgoS = 30): Reply => ok(JSON.stringify({
+  service: 'ccmproxy',
+  codexLimits: [
+    ...(five === undefined ? [] : [{ kind: 'five_hour', percentUsed: five, resetsAt: Date.parse('2026-10-12T15:00:00Z') / 1000, windowMinutes: 300, observedAt: Q_NOW / 1000 - observedAgoS }]),
+    { kind: 'seven_day', percentUsed: seven, resetsAt: Date.parse('2026-10-17T00:00:00Z') / 1000, windowMinutes: 10080, observedAt: Q_NOW / 1000 - observedAgoS },
+  ],
+}))
+
+/**
+ * The session started behind the proxy with the twins registered, Claude at the given [5h, 7d] and Codex's status as given.
+ * Every hook a test needs beneath the plugin is registered here, before the first `$` call. `deferStart` leaves the
+ * session start running (it reads Codex once) for a test that has to move the clock to end it.
+ */
+async function quotaWorld(
+  $: Engine,
+  on: On,
+  o: {
+    claude?: [number, number] | null
+    status?: () => Promise<Reply>
+    world?: Parameters<typeof jevWorld>[1]
+    deferStart?: boolean
+    /** The atom cannot be written. */
+    quotaWriteFails?: boolean
+  } = {},
+) {
+  const time = { now: Q_NOW }
+  const limits = { value: o.claude === null ? [] : claudeLimits(...(o.claude ?? [20, 71])) }
+  const atom: { last?: Quota } = {}
+  /** Every write of the card list Flightdeck owns. */
+  const cards: { plugin: string; key: string; value: unknown }[] = []
+  const world = jevWorld(on, {
+    env: QUOTA_ENV, register: true, now: () => time.now, rateLimits: () => limits.value,
+    status: o.status ?? (async () => codexStatus(38)), reply: async () => ok(answer('opus', 0.9, 3.9)), ...o.world,
+  })
+  // The last value written to the atom: the test engine has no `$.state`, and the value is what the HUD would read.
+  on('state.set', (_$, e, next) => {
+    if (e.key === 'agents') cards.push({ plugin: e.plugin, key: e.key, value: e.value })
+    if (e.key !== 'quota') return next(e)
+    if (o.quotaWriteFails) return { deny: 'state unavailable' }
+    atom.last = e.value as Quota
+    return next(e)
+  })
+  on('session.measure', (_$, e) => ({ changed: e.changed }))
+  on('prompt.compose', () => ({ sections: [] }))
+  on('tool.call', () => ({ result: 'written' }))
+  const started = $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true } as never)
+  if (!o.deferStart) await started
+  return { ...world, time, limits, atom, cards, started }
+}
+
+test('quotaRouting off: Jev routes as before, Codex is never asked and the record is v 2 with no readings', { options: { ...TWIN_OPTIONS, jevKey: KEY } }, async ($, on) => {
+  const { seen } = await quotaWorld($, on)
+  await $.agent.spawn(spawnInput())
+
+  expect(seen.statuses).toEqual([])
+  expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:developer', model: 'opus', description: 'audit auth · opus/high' })
+  expect(seen.notices).toEqual(['crew:developer -> opus · high (jev)'])
+  expect(record(seen)).toMatchObject({ v: 2, agent: 'developer', requested: 'crew:developer', provider: 'claude', reason: null, quota: { claude: null, codex: null } })
+})
+
+test('quotaRouting false and absent behave the same, and a call with no twin in the registered set is untouched', { options: { ...TWIN_OPTIONS, jevKey: KEY, quotaRouting: false } }, async ($, on) => {
+  const { seen } = await quotaWorld($, on)
+  await $.agent.spawn(spawnInput({ subagentType: 'crew:code-reader' }))
+
+  expect(seen.statuses).toEqual([])
+  expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:code-reader' })
+})
+
+test('Codex favored: the call becomes the twin, no model is sent, the tag and notice name the provider, the id and the reason', QUOTA_JEV, async ($, on) => {
+  const { seen, atom } = await quotaWorld($, on)
+  const result = await $.agent.spawn(spawnInput())
+
+  expect(result).toMatchObject({ agentId: 'a1' })
+  expect(seen.spawned).toHaveLength(1)
+  expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:developer-codex', description: 'audit auth · gpt-6-astra/high' })
+  expect(seen.spawned[0]?.model).toBeUndefined()
+  // Jev is asked about the base role either way.
+  expect(JSON.parse(seen.fetches[0]?.body ?? '{}').state.agent).toEqual({ type: 'developer', description: 'audit auth' })
+  expect(seen.notices).toEqual(['crew:developer -> Codex (7d 38% used vs Claude 7d 71%) · gpt-6-astra · high (jev)'])
+  expect(seen.logs).toContain('crew quota: crew:developer -> crew:developer-codex (7d 38% used vs Claude 7d 71%)')
+  // The atom shows the same decision the router acted on.
+  expect(atom.last?.decision).toEqual({ provider: 'codex', reason: '7d 38% used vs Claude 7d 71%' })
+})
+
+test('Codex favored: the record names the type asked for, the provider and both readings, with percentages and times only', QUOTA_JEV, async ($, on) => {
+  const { seen } = await quotaWorld($, on)
+  await $.agent.spawn(spawnInput())
+
+  expect(seen.writes).toHaveLength(1)
+  const rec = record(seen)
+  expect(rec).toMatchObject({
+    v: 2, agent: 'developer-codex', requested: 'crew:developer', provider: 'codex', reason: '7d 38% used vs Claude 7d 71%',
+    defaultModel: 'gpt-6-astra', model: 'gpt-6-astra', effortPlanned: 'high', effortApplied: 'high', bind: 'applied',
+    quota: {
+      claude: { fiveHour: { percentUsed: 20, resetsAt: '2026-10-12T15:00:00.000Z' }, sevenDay: { percentUsed: 71, resetsAt: '2026-10-17T00:00:00.000Z' } },
+      codex: { sevenDay: { percentUsed: 38, resetsAt: '2026-10-17T00:00:00.000Z' } },
+    },
+  })
+})
+
+for (const tier of ['haiku', 'sonnet', 'opus']) {
+  test(`Codex favored: a Jev tier answer of ${tier} never puts a model on the twin`, QUOTA_JEV, async ($, on) => {
+    const { seen } = await quotaWorld($, on, { world: { reply: async () => ok(answer(tier, 1, 3.5)) } })
+    await $.agent.spawn(spawnInput())
+    expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:developer-codex', description: 'audit auth · gpt-6-astra/high' })
+    expect(seen.spawned[0]?.model).toBeUndefined()
+  })
+}
+
+test('Codex favored: the twin\'s first step, sent before the spawn resolves, gets the effort planned for it', QUOTA_JEV, async ($, on) => {
+  let release: () => void = () => {}
+  const held = new Promise<void>(resolve => { release = resolve })
+  const { seen } = await quotaWorld($, on, {
+    world: {
+      // The host lists the agent as it started: the twin's type and the tagged description.
+      agents: [{ id: 'a1', type: 'crew:developer-codex', description: 'audit auth · gpt-6-astra/high' }],
+      spawn: async () => { await held; return { model: 'default', agentId: 'a1' } },
+    },
+  })
+  const spawned = $.agent.spawn(spawnInput())
+  while (seen.spawned.length === 0) await pause()
+  await step($, 'a1', 'medium')
+  release()
+  await spawned
+  await step($, 'a1', 'medium')
+
+  expect(seen.steps).toEqual(['high', 'high'])
+})
+
+test('Codex favored: the first step is confirmed against the twin\'s id and effort', QUOTA_JEV, async ($, on) => {
+  const { seen } = await quotaWorld($, on, { world: { stepModel: 'gpt-6-astra' } })
+  await $.agent.spawn(spawnInput())
+  await step($, 'a1', 'medium')
+
+  expect(seen.transcript).toEqual(['jev: audit auth: confirmed gpt-6-astra · high'])
+  expect(JSON.parse(seen.writes[1]?.text ?? '{}').ran).toEqual({ model: 'gpt-6-astra', effort: 'high' })
+})
+
+test('Codex favored: a role switched to its twin keeps the twin\'s write lane', QUOTA_JEV, async ($, on) => {
+  const { seen } = await quotaWorld($, on, { world: { agents: [{ id: 'a1', type: 'crew:tester-codex', description: 'audit auth · gpt-6-astra/high' }] } })
+  await $.agent.spawn(spawnInput({ subagentType: 'crew:tester' }))
+  const write = (file_path: string) => $.tool.call({ tool: 'Write', agentId: 'a1', file_path } as never)
+
+  expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:tester-codex' })
+  expect(await write('src/app.ts')).toHaveProperty('deny')
+  expect(await write('tests/app.test.ts')).not.toHaveProperty('deny')
+})
+
+test('Claude favored: Codex is read and the call goes on as without the feature, notice included', QUOTA_JEV, async ($, on) => {
+  const { seen, atom } = await quotaWorld($, on, { claude: [20, 40], status: async () => codexStatus(38) })
+  await $.agent.spawn(spawnInput())
+
+  expect(seen.statuses).toHaveLength(1)
+  expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:developer', model: 'opus', description: 'audit auth · opus/high' })
+  expect(seen.notices).toEqual(['crew:developer -> opus · high (jev)'])
+  expect(record(seen)).toMatchObject({ agent: 'developer', requested: 'crew:developer', provider: 'claude', reason: '7d 40% used vs Codex 7d 38%' })
+  expect(atom.last?.decision.provider).toBe('claude')
+})
+
+const UNCERTAIN: [string, () => Promise<Reply>][] = [
+  ['no limits yet', async () => ok(JSON.stringify({ codexLimits: [] }))],
+  ['an older proxy without the key', async () => ok(JSON.stringify({ service: 'ccmproxy' }))],
+  ['a reading 20 minutes old', async () => codexStatus(5, undefined, 20 * 60)],
+  ['an error status', async () => rejected(500)],
+  ['a body that is no JSON', async () => ok('not json')],
+  ['a fetch that throws', async () => { throw new Error('ECONNREFUSED') }],
+  ['a 5-hour window at the veto and a low 7-day', async () => codexStatus(5, 95)],
+]
+for (const [label, status] of UNCERTAIN) {
+  test(`Codex unknown, down or stale (${label}): the call stays on Claude, as Jev sized it`, QUOTA_JEV, async ($, on) => {
+    const { seen } = await quotaWorld($, on, { status })
+    await $.agent.spawn(spawnInput())
+
+    expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:developer', model: 'opus', description: 'audit auth · opus/high' })
+    expect(seen.notices).toEqual(['crew:developer -> opus · high (jev)'])
+    expect(record(seen)).toMatchObject({ provider: 'claude', requested: 'crew:developer' })
+  })
+}
+
+test('no Claude plan limits (API billing): the call stays on Claude', QUOTA_JEV, async ($, on) => {
+  const { seen } = await quotaWorld($, on, { claude: null })
+  await $.agent.spawn(spawnInput())
+
+  expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:developer' })
+})
+
+test('a proxy status that never answers fails open at the deadline: the spawn goes on, on Claude, and a failure is cached', QUOTA_JEV, async ($, on) => {
+  let asked = 0
+  const world = await quotaWorld($, on, { deferStart: true, status: () => { asked++; return new Promise<Reply>(() => {}) } })
+  const { atom } = world
+  // The session start asked once and is still waiting; the deadline ends it.
+  await world.clock.settle()
+  await pause()
+  await world.clock.advance(1_500)
+  await world.started
+  expect(asked).toBe(1)
+  expect(atom.last?.codexState).toBe('down')
+
+  const spawned = $.agent.spawn(spawnInput())
+  await world.clock.settle()
+  await spawned
+  expect(world.seen.spawned[0]).toMatchObject({ subagentType: 'crew:developer', model: 'opus' })
+  // Cached as down for the minute: no second request.
+  expect(asked).toBe(1)
+
+  world.time.now += 61_000
+  const later = $.agent.spawn(spawnInput({ tool_use_id: 'tu2' }))
+  await world.clock.settle()
+  await pause()
+  await world.clock.advance(1_500)
+  await later
+  expect(asked).toBe(2)
+})
+
+test('a good reading is cached for a minute and read again after it', QUOTA_JEV, async ($, on) => {
+  const world = await quotaWorld($, on)
+  await $.agent.spawn(spawnInput())
+  await $.agent.spawn(spawnInput({ tool_use_id: 'tu2' }))
+  expect(world.seen.statuses).toHaveLength(1)
+
+  world.time.now += 61_000
+  world.limits.value = claudeLimits(20, 40)
+  await $.agent.spawn(spawnInput({ tool_use_id: 'tu3' }))
+  expect(world.seen.statuses).toHaveLength(2)
+})
+
+test('the session start reads Codex once, so the first spawn finds it cached; the secret goes in the header of the status request only', QUOTA_JEV, async ($, on) => {
+  const { seen } = await quotaWorld($, on)
+  expect(seen.statuses).toHaveLength(1)
+  expect(seen.statuses[0]?.url).toBe('http://127.0.0.1:41237/__ccmproxy/status')
+  expect(seen.statuses[0]?.headers).toEqual({ 'X-Ccmproxy-Token': PROXY_TOKEN })
+  await $.agent.spawn(spawnInput())
+  expect(seen.statuses).toHaveLength(1)
+  // Jev's request carries the Jev key and never the proxy's secret.
+  expect(JSON.stringify(seen.fetches)).not.toContain(PROXY_TOKEN)
+})
+
+test('the proxy\'s secret reaches no notice, log, record, transcript or atom', QUOTA_JEV, async ($, on) => {
+  const { seen, atom } = await quotaWorld($, on, { world: { stepModel: 'gpt-6-astra' } })
+  await $.agent.spawn(spawnInput())
+  await step($, 'a1', 'medium')
+  const sayings = JSON.stringify([seen.notices, seen.logs, seen.writes, seen.transcript, seen.spawned, atom.last])
+
+  expect(sayings).not.toContain(PROXY_TOKEN)
+  expect(sayings).not.toContain('X-Ccmproxy-Token')
+  expect(sayings).not.toContain(KEY)
+})
+
+test('calls that may not move are untouched and ask Codex nothing more: explicit model, fork, workflow agent, teammate, a twin the lead named, another plugin\'s type', QUOTA_JEV, async ($, on) => {
+  const { seen } = await quotaWorld($, on)
+  const before = seen.statuses.length
+  await $.agent.spawn(spawnInput({ model: 'haiku', tool_use_id: 'a' }))
+  await $.agent.spawn(spawnInput({ fork: true, tool_use_id: 'b' }))
+  await $.agent.spawn(spawnInput({ workflow: { runId: 'wf_1', agentIndex: 1 }, tool_use_id: 'c' }))
+  await $.agent.spawn(spawnInput({ isTeammate: true, tool_use_id: 'd' }))
+  await $.agent.spawn(spawnInput({ subagentType: 'crew:developer-codex', tool_use_id: 'e' }))
+  await $.agent.spawn(spawnInput({ subagentType: 'acme:developer', tool_use_id: 'f' }))
+
+  expect(seen.statuses).toHaveLength(before)
+  expect(seen.spawned.map(spawned => spawned.subagentType)).toEqual([
+    'crew:developer', 'crew:developer', 'crew:developer', 'crew:developer', 'crew:developer-codex', 'acme:developer',
+  ])
+  expect(seen.spawned[0]).toMatchObject({ model: 'haiku', description: 'audit auth' })
+  expect(seen.spawned[3]?.description).toContain('audit auth')
+})
+
+test('a role without a registered twin is untouched, though Codex favors the others', { options: { nativeCodex: 'developer=gpt-6-astra', quotaRouting: true, jevKey: KEY } }, async ($, on) => {
+  const { seen } = await quotaWorld($, on)
+  await $.agent.spawn(spawnInput({ subagentType: 'crew:tester' }))
+  await $.agent.spawn(spawnInput({ subagentType: 'crew:developer', tool_use_id: 'tu2' }))
+
+  expect(seen.spawned.map(spawned => spawned.subagentType)).toEqual(['crew:tester', 'crew:developer-codex'])
+})
+
+test('twins that were not registered (the base URL is not the proxy) leave every call on Claude and Codex unasked', QUOTA_JEV, async ($, on) => {
+  const { seen } = await quotaWorld($, on, { world: { env: { ANTHROPIC_BASE_URL: 'https://api.anthropic.com', ANTHROPIC_CUSTOM_HEADERS: QUOTA_ENV.ANTHROPIC_CUSTOM_HEADERS } } })
+  await $.agent.spawn(spawnInput())
+
+  expect(seen.statuses).toEqual([])
+  expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:developer', model: 'opus' })
+})
+
+test('without the secret in the custom headers Codex is not asked: unknown, so Claude, with a debug line that shows no secret', QUOTA_JEV, async ($, on) => {
+  const { seen, atom } = await quotaWorld($, on, { world: { env: { ...LOOPBACK, ANTHROPIC_CUSTOM_HEADERS: 'X-Other: other' } } })
+  await $.agent.spawn(spawnInput())
+
+  expect(seen.statuses).toEqual([])
+  expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:developer', model: 'opus' })
+  expect(seen.logs).toContain('crew quota: Codex not asked (no X-Ccmproxy-Token in ANTHROPIC_CUSTOM_HEADERS)')
+  expect(atom.last?.codexState).toBe('unknown')
+})
+
+test('a quota read that fails (the atom cannot be written) never blocks the spawn: it stays on Claude', QUOTA_JEV, async ($, on) => {
+  const { seen } = await quotaWorld($, on, { quotaWriteFails: true })
+  const result = await $.agent.spawn(spawnInput())
+
+  expect(result).toMatchObject({ agentId: 'a1' })
+  expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:developer', model: 'opus', description: 'audit auth · opus/high' })
+  expect(seen.logs).toContain('crew quota: not read, the call stays on Claude')
+})
+
+test('a session.usage that fails, or reports nothing, keeps the last Claude reading and still decides', QUOTA_JEV, async ($, on) => {
+  const world = await quotaWorld($, on)
+  const { atom } = world
+  await $.agent.spawn(spawnInput())
+  expect(atom.last?.claude?.sevenDay?.percentUsed).toBe(71)
+
+  world.limits.value = []
+  world.time.now += 61_000
+  const result = await $.agent.spawn(spawnInput({ tool_use_id: 'tu2' }))
+  const quota = atom.last
+  expect(result).toMatchObject({ agentId: 'a1' })
+  expect(quota?.claude?.sevenDay?.percentUsed).toBe(71)
+  expect(quota?.claudeAt).toBe(Q_NOW)
+  expect(world.seen.spawned[1]).toMatchObject({ subagentType: 'crew:developer-codex' })
+})
+
+test('session.measure keeps the last non-empty Claude reading and stamps when it was taken; an empty one changes nothing', QUOTA_JEV, async ($, on) => {
+  const world = await quotaWorld($, on, { claude: null })
+  const { atom } = world
+  const measure = (rateLimits: unknown[]) => $.session.measure({ context: { window: 100 }, rateLimits, changed: ['rateLimits'] } as never)
+
+  expect(atom.last?.claude).toBeNull()
+  world.time.now = Q_NOW + 5_000
+  await measure(claudeLimits(30, 60))
+  expect(atom.last).toMatchObject({ claude: { fiveHour: { percentUsed: 30 }, sevenDay: { percentUsed: 60 } }, claudeAt: Q_NOW + 5_000 })
+
+  world.time.now = Q_NOW + 9_000
+  await measure([])
+  expect(atom.last).toMatchObject({ claude: { sevenDay: { percentUsed: 60 } }, claudeAt: Q_NOW + 5_000 })
+  // The decision follows the readings: Codex at 38 against Claude at 60 is 22 points apart.
+  expect(atom.last?.decision.provider).toBe('codex')
+})
+
+test('with quota routing off session.measure still keeps the Claude reading, and Codex stays off', { options: { ...TWIN_OPTIONS, jevKey: KEY } }, async ($, on) => {
+  const world = await quotaWorld($, on, { claude: null })
+  const { atom } = world
+  world.time.now = Q_NOW
+  await $.session.measure({ context: { window: 100 }, rateLimits: claudeLimits(30, 60), changed: ['rateLimits'] } as never)
+
+  expect(atom.last).toMatchObject({ claude: { sevenDay: { percentUsed: 60 } }, codex: null, codexState: 'off', decision: { provider: 'claude', reason: 'routing off or no Codex twin' } })
+  expect(world.seen.statuses).toEqual([])
+})
+
+test('without a jevKey the switch still happens: tagged with the default effort, noticed, confirmed, with no Jev request, no settings read and no record', QUOTA_ONLY, async ($, on) => {
+  const { seen } = await quotaWorld($, on, { world: { stepModel: 'gpt-6-astra' } })
+  await $.agent.spawn(spawnInput())
+  await step($, 'a1', 'medium')
+
+  expect(seen.fetches).toEqual([])
+  expect(seen.settingsReads).toBe(0)
+  expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:developer-codex', description: 'audit auth · gpt-6-astra/medium' })
+  expect(seen.spawned[0]?.model).toBeUndefined()
+  expect(seen.notices).toEqual(['crew:developer -> Codex (7d 38% used vs Claude 7d 71%) · gpt-6-astra · medium'])
+  expect(seen.transcript).toEqual(['quota: audit auth: confirmed gpt-6-astra · medium'])
+  expect(seen.writes).toEqual([])
+})
+
+test('without a jevKey and with Claude favored (or Codex unknown) a call is untouched: no tag, no notice, no request', QUOTA_ONLY, async ($, on) => {
+  const { seen } = await quotaWorld($, on, { claude: [20, 40] })
+  await $.agent.spawn(spawnInput())
+
+  expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:developer', description: 'audit auth' })
+  expect(seen.spawned[0]?.model).toBeUndefined()
+  expect(seen.notices).toEqual([])
+  expect(seen.fetches).toEqual([])
+  expect(seen.settingsReads).toBe(0)
+})
+
+test('a switched call that Jev could not size is still switched, on the twin\'s defaults, and recorded', QUOTA_JEV, async ($, on) => {
+  const { seen } = await quotaWorld($, on, { world: { reply: async () => rejected(401) } })
+  await $.agent.spawn(spawnInput())
+
+  expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:developer-codex', description: 'audit auth · gpt-6-astra/medium' })
+  expect(seen.spawned[0]?.model).toBeUndefined()
+  expect(seen.notices).toEqual(['crew:developer -> Codex (7d 38% used vs Claude 7d 71%) · gpt-6-astra · medium'])
+  expect(record(seen)).toMatchObject({ provider: 'codex', requested: 'crew:developer', tier: null, durationMs: 0, jevModel: null })
+})
+
+test('a description tag copied from a task is stripped before the switch and the call is tagged once for the twin', QUOTA_JEV, async ($, on) => {
+  const { seen } = await quotaWorld($, on)
+  await $.agent.spawn(spawnInput({ description: 'audit auth · opus/medium' }))
+
+  expect(JSON.parse(seen.fetches[0]?.body ?? '{}').state.agent.description).toBe('audit auth')
+  expect(seen.spawned[0]?.description).toBe('audit auth · gpt-6-astra/high')
+})
+
+test('Flightdeck still draws the card of a switched call, as it sees the type the lead wrote', QUOTA_JEV, async ($, on) => {
+  const { seen, cards: writes } = await quotaWorld($, on, { world: { spawn: async e => ({ model: String(e.model ?? 'default'), agentId: 'ag1' }) } })
+  await $.agent.spawn(spawnInput())
+
+  expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:developer-codex' })
+  const cards = writes.at(-1)?.value as { id: string; type: string; description: string }[]
+  expect(cards).toHaveLength(1)
+  expect(cards[0]).toMatchObject({ id: 'ag1', type: 'crew:developer', description: 'audit auth' })
+})
+
+test('a twin the lead named is never moved, even with Claude favored, and still gets its own Jev effort', QUOTA_JEV, async ($, on) => {
+  const { seen } = await quotaWorld($, on, { claude: [10, 10], world: { reply: async () => ok(answer('opus', 0.9, 3.5)) } })
+  await $.agent.spawn(spawnInput({ subagentType: 'crew:developer-codex' }))
+
+  expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:developer-codex', description: 'audit auth · gpt-6-astra/high' })
+  expect(seen.notices).toEqual(['crew:developer-codex -> gpt-6-astra · high (jev)'])
+})
+
+test('a refused spawn of a switched call announces and records nothing, and leaves no effort behind', QUOTA_JEV, async ($, on) => {
+  const { seen } = await quotaWorld($, on, { world: { spawn: async () => ({ deny: 'no' }) as never } })
+  const result = await $.agent.spawn(spawnInput())
+
+  expect(result).toMatchObject({ deny: 'no' })
+  expect(seen.notices).toEqual([])
+  expect(seen.writes).toEqual([])
+})
+
+test('the lead section names the quota rule only with quota routing on and twins registered; the twin section whenever it is shown with the option on', QUOTA_JEV, async ($, on) => {
+  await quotaWorld($, on)
+  const composed = await compose($, ['Agent'])
+  expect(composed.sections.map(section => section.id)).toEqual(['crew:lead', 'crew:native-codex'])
+  expect(composed.sections[0]?.text).toContain('With quota routing on')
+  expect(composed.sections[1]?.text).toContain('more weekly headroom than Claude')
+})
+
+test('the lead section stays free of Codex when quota routing is on but no twin registered', QUOTA_JEV, async ($, on) => {
+  await quotaWorld($, on, { world: { env: { ANTHROPIC_BASE_URL: 'https://api.anthropic.com' } } })
+  const composed = await compose($, ['Agent'])
+
+  expect(composed.sections.map(section => section.id)).toEqual(['crew:lead'])
+  expect(composed.sections[0]?.text.toLowerCase()).not.toContain('codex')
+  expect(composed.sections[0]?.text).not.toContain('quota routing')
+})
+
+test('with quota routing off neither section mentions it', { options: { ...TWIN_OPTIONS, jevKey: KEY } }, async ($, on) => {
+  await quotaWorld($, on)
+  const composed = await compose($, ['Agent'])
+
+  expect(composed.sections.map(section => section.id)).toEqual(['crew:lead', 'crew:native-codex'])
+  for (const section of composed.sections) expect(section.text).not.toContain('quota routing')
 })

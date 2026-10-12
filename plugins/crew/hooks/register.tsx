@@ -1,3 +1,4 @@
+import { atom, read, update } from 'claude-code'
 import type { Hook, Register } from 'claude-code'
 import { SPECIALISTS, isLoopbackBase, leadSection, nativeCodexSection, nativeCodexSpecs } from './agents'
 import type { Agent, Effort } from './agents'
@@ -15,8 +16,11 @@ import { checkKey, resolveAccess } from './key'
 import type { KeyIo, Off } from './key'
 import { parseCodexModels } from './native'
 import { JEV_MODEL } from './questions'
-import { describe, moved, noticeText, route, routable, taggedDescription, untagged } from './routing'
-import type { Moved, Routed, Target } from './routing'
+import { CACHE_MS, DEADLINE_MS, INITIAL_QUOTA, claudeReading, codexReading, proxyAccess, settle } from './quota'
+import type { ProxyAccess, Provider, Quota, RateLimitInput } from './quota'
+import { defaultsOf, describe, moved, noticeText, retarget, route, routable, shareAgent, taggedDescription, twinFor, untagged } from './routing'
+import type { Moved, Routed, SharedAgent, Switch, Target } from './routing'
+export type { SharedAgent } from './routing'
 
 /**
  * The `$` a hook receives. Every hook builds what it needs from its own; nothing here keeps one past its hook.
@@ -25,6 +29,12 @@ type Dollar = Parameters<Hook<'session.start'>>[0]
 
 /** The wall clock. The breaker outlives every hook's `$`, so it reads this same function rather than a `$` call. */
 const wallNow = () => Date.now()
+
+/** Both providers' limits and the provider the readings favor, for the router and the HUD alike (they cannot disagree). */
+const quota = atom({ plugin: 'crew', key: 'quota' } as const, INITIAL_QUOTA)
+
+/** Per agent id, filled by the spawn hook after a provider decision when the spawn resolves, for the HUD (`registerHud(on, options, shared)`). Nothing in this file reads it. */
+export const shared = new Map<string, SharedAgent>()
 
 /** Time as the pure modules take it: the host's timer and the wall clock. */
 type Clock = Pick<JevIo, 'timer' | 'now'>
@@ -167,6 +177,15 @@ async function baseUrl($: Dollar): Promise<string | undefined> {
   }
 }
 
+/** The session's custom request headers (one of them carries the proxy's secret); a failing read is none. Only the token line is ever taken from it. */
+async function customHeaders($: Dollar): Promise<string | undefined> {
+  try {
+    return await $.env.get('ANTHROPIC_CUSTOM_HEADERS')
+  } catch {
+    return undefined
+  }
+}
+
 /** The `-codex` types the session can reach: all of them behind a loopback base URL (the local proxy), none otherwise. */
 async function reachableNative($: Dollar, native: Native): Promise<readonly Agent<string>[]> {
   return native.specs.length > 0 && isLoopbackBase(await baseUrl($)) ? native.specs : []
@@ -192,8 +211,8 @@ async function registerNative($: Dollar, native: Native) {
   }
 }
 
-/** The crew's session start: the agents, then the `-codex` types the proxy can reach. */
-async function startCrew(native: Native, $: Dollar, e: StartHook[1], next: StartHook[2]) {
+/** The crew's session start: the agents, then the `-codex` types the proxy can reach, then the first quota reading. */
+async function startCrew(native: Native, routing: Routing, $: Dollar, e: StartHook[1], next: StartHook[2]) {
   await registerSpecialists($)
   // Its own try: a failure here must not keep the dashboard from starting.
   try {
@@ -201,7 +220,17 @@ async function startCrew(native: Native, $: Dollar, e: StartHook[1], next: Start
   } catch (error) {
     $.ui.log(`crew: nativeCodex types not registered (${error instanceof Error ? error.message : String(error)})`, { to: 'debug' })
   }
-  return next(e)
+  const started = await next(e)
+  // Only with quota routing on, and after the rest of the start: the first spawn then finds the Codex reading cached,
+  // and a proxy that does not answer delays this hook's return by the deadline at most. Never throws.
+  if (routing.quota) {
+    try {
+      await refreshQuota($, routing)
+    } catch {
+      // The reading stays as it was; the next spawn asks again.
+    }
+  }
+  return started
 }
 
 /** What the routing hooks share while the module lives. */
@@ -217,6 +246,104 @@ type Routing = {
   access: KeyCache
   /** The `-codex` twins that were registered (`Native.registered`): routable for their effort only. */
   twins: readonly Agent<string>[]
+  /** The `quotaRouting` option: a routable call may move to its role's registered twin when Codex has more 7-day headroom. */
+  quota: boolean
+  /** The Codex status request under way, shared by every caller (one at a time). */
+  flight?: Promise<void>
+}
+
+// --- The quota atom: Claude from the host, Codex from the proxy's status ---
+
+/** The Codex status text within DEADLINE_MS, or undefined: a failure, a non-2xx status or a fetch that outlasts the deadline (it cannot be aborted, so it is left to settle). */
+async function fetchStatus($: Dollar, access: Extract<ProxyAccess, { ok: true }>): Promise<string | undefined> {
+  let cancel: () => void = () => {}
+  const late = new Promise<undefined>(resolve => {
+    cancel = clockOf($).timer(DEADLINE_MS, () => resolve(undefined))
+  })
+  const asked = $.http
+    .fetch(access.url, { method: 'GET', headers: access.headers })
+    .then(response => (response.status >= 200 && response.status < 300 ? response.text : undefined))
+    .catch(() => undefined)
+  try {
+    return await Promise.race([asked, late])
+  } finally {
+    cancel()
+  }
+}
+
+type CodexRead = Pick<Quota, 'codex' | 'codexState' | 'fetchedAt' | 'codexObservedAt'>
+
+/** One look at the proxy's status. Every failure is `down` (or `unknown` without a usable secret) and is cached like a reading. */
+async function readCodex($: Dollar, now: number): Promise<CodexRead> {
+  const failed = (codexState: 'down' | 'unknown'): CodexRead => ({ codex: null, codexState, fetchedAt: now, codexObservedAt: null })
+  try {
+    const access = proxyAccess(await baseUrl($), await customHeaders($))
+    if (!access.ok) {
+      // The reasons are fixed phrases: no URL, token or header text is in them.
+      $.ui.log(`crew quota: Codex not asked (${access.reason})`, { to: 'debug' })
+      return failed('unknown')
+    }
+    const text = await fetchStatus($, access)
+    if (text === undefined) return failed('down')
+    const read = codexReading(text, now)
+    return { codex: read.reading, codexState: read.state, fetchedAt: now, codexObservedAt: read.observedAt }
+  } catch {
+    return failed('down')
+  }
+}
+
+/** The Codex side is read only when quota routing is on and twins are registered. */
+const asksCodex = (routing: Routing) => routing.quota && routing.twins.length > 0
+
+async function updateQuota($: Dollar, routing: Routing): Promise<void> {
+  const now = await $.clock.now()
+  const usage = await $.session.usage().catch(() => null)
+  const claude = claudeReading(usage?.rateLimits)
+  const before = await read($, quota)
+  const eligible = asksCodex(routing)
+  const age = before.fetchedAt === null ? Infinity : now - before.fetchedAt
+  // Cached for CACHE_MS, failures included, so a dead proxy is not asked on every spawn.
+  const codex: Partial<Quota> = !eligible
+    ? { codex: null, codexState: 'off', fetchedAt: null, codexObservedAt: null }
+    : before.codexState !== 'off' && age >= 0 && age < CACHE_MS
+      ? {}
+      : await readCodex($, now)
+  await update($, quota, q => settle({ ...q, ...codex, ...(claude ? { claude, claudeAt: now } : {}) }, eligible, now))
+}
+
+/**
+ * The quota atom brought up to date: Claude from `$.session.usage()` (an empty reading keeps the last non-empty one),
+ * Codex from the proxy when it is asked and its last answer is older than CACHE_MS. One refresh at a time; callers
+ * share it. Rejects only when the atom itself cannot be read or written; callers catch.
+ */
+async function refreshQuota($: Dollar, routing: Routing): Promise<Quota> {
+  if (!routing.flight) {
+    const flight: Promise<void> = updateQuota($, routing).finally(() => {
+      if (routing.flight === flight) routing.flight = undefined
+    })
+    routing.flight = flight
+  }
+  await routing.flight
+  return read($, quota)
+}
+
+/** Keeps the last non-empty Claude reading and when it was taken; an empty one (a Codex response carries no Anthropic limits) changes nothing. */
+async function noteClaude($: Dollar, routing: Routing, rateLimits: readonly RateLimitInput[]): Promise<void> {
+  const claude = claudeReading(rateLimits)
+  if (!claude) return
+  const now = await $.clock.now()
+  const eligible = asksCodex(routing)
+  await update($, quota, q => settle({ ...q, claude, claudeAt: now }, eligible, now))
+}
+
+/** The provider the readings favor for a call that has a twin, with the readings it came from; undefined (the call stays on Claude) when the atom cannot be read. */
+async function chooseProvider($: Dollar, routing: Routing): Promise<Quota | undefined> {
+  try {
+    return await refreshQuota($, routing)
+  } catch {
+    $.ui.log('crew quota: not read, the call stays on Claude', { to: 'debug' })
+    return undefined
+  }
 }
 
 /** Asks Jev about one call. A failure is one debug line and the call goes on as it came (undefined). */
@@ -230,35 +357,59 @@ async function askJev($: Dollar, routing: Routing, key: string, spec: Target, e:
   }
 }
 
+/** What the notice and the debug lines say about a call: the target that runs it and, when quota moved it, the switch. */
+type Announced = { spec: Target; routed: Routed; jev: boolean; via?: Switch }
+
 /** The debug lines and the one notice of a decision; `took` is whether the effort that was moved runs on the subagent. */
-function announce($: Dollar, spec: Target, routed: Routed, change: Moved, took: boolean, outcome: BindOutcome | undefined, toolUseId: string): void {
+function announce($: Dollar, call: Announced, change: Moved, took: boolean, outcome: BindOutcome | undefined, toolUseId: string): void {
+  const { spec, routed, jev, via } = call
   const notApplied = change.effort !== undefined && !took ? change.effort : undefined
-  $.ui.log(`crew jev: ${describe(spec, routed, { model: change.model, effort: change.effort !== undefined && took ? change.effort : undefined })}`, { to: 'debug' })
+  if (via) $.ui.log(`crew quota: ${via.requested} -> crew:${spec.name} (${via.reason})`, { to: 'debug' })
+  if (jev) {
+    $.ui.log(`crew jev: ${describe(spec, routed, { model: change.model, effort: change.effort !== undefined && took ? change.effort : undefined })}`, { to: 'debug' })
+  }
   if (notApplied !== undefined) {
     $.ui.log(`crew jev: crew:${spec.name} effort ${notApplied} not applied (${outcome ?? 'no agent id'}); it runs on ${spec.effort}`, { to: 'debug' })
   }
-  $.ui.notice(toolUseId, noticeText(spec, routed, notApplied))
+  $.ui.notice(toolUseId, noticeText(spec, routed, notApplied, via, jev))
 }
 
-// Jev moves model and effort, never the type: the lane and the tool allowlist stay the lead's choice. Anything that
+// Jev moves model and effort, never the type: the lane and the tool allowlist stay the lead's choice. The one rewrite of
+// the type is the quota rule's, to the same role's registered twin, and it comes first: everything after it (the
+// routable check, Jev's answers, the effort book, the tag, the confirmation) reads the rewritten type. Anything that
 // goes wrong leaves the call as it came.
 async function routeSpawn(routing: Routing, $: Dollar, e: SpawnHook[1], next: SpawnHook[2]) {
-  if (!routing.enabled) return next(e)
-  const spec = routable(e, routing.twins)
-  if (!spec) return next(e)
-  const key = await keyOf($, routing.access, routing.jevKey)
-  if (!key) return next(e)
+  if (!routing.enabled && !routing.quota) return next(e)
+  const asked = routable(e, routing.twins)
+  if (!asked) return next(e)
+  const key = routing.enabled ? await keyOf($, routing.access, routing.jevKey) : undefined
+  // The twin this call could move to, when quota routing is on and the call is one that may move.
+  const twin = routing.quota ? twinFor(e, routing.twins) : undefined
+  if (!key && !twin) return next(e)
 
   // A description that already carries a tag (a call copied from the task list) is sent and tagged without it.
   e = { ...e, description: untagged(e.description, routing.twins.map(twin => twin.model)) }
-  const routed = await askJev($, routing, key, spec, e)
+  const requested = e.subagentType
+  // The quota read and Jev run together: Jev is asked about the base role either way, so its answer fits both outcomes.
+  const [readings, jevAnswer] = await Promise.all([
+    twin ? chooseProvider($, routing) : undefined,
+    key ? askJev($, routing, key, asked, e) : undefined,
+  ])
+  const toCodex = twin !== undefined && readings?.decision.provider === 'codex'
+  const spec: Target = toCodex ? twin : asked
+  if (toCodex) e = { ...e, subagentType: `crew:${spec.name}` }
+  const via: Switch | undefined = toCodex && readings ? { requested, reason: readings.decision.reason } : undefined
+  // The answers are applied to the target that runs the call, so a twin never gets a model. A switched call without an
+  // answer is still tagged and confirmed, on the twin's defaults.
+  const jevRouted = jevAnswer && toCodex ? retarget(jevAnswer, spec) : jevAnswer
+  const routed = jevRouted ?? (toCodex ? defaultsOf(spec) : undefined)
   const change = moved(spec, routed)
-  // The task shows what Jev chose, so the task list says whether routing runs; the book matches the shown description.
+  // The task shows what was chosen, so the task list says whether routing runs; the book matches the shown description.
   const description = routed ? taggedDescription(e.description, routed) : e.description
 
   // An entry for every routable call, with the default effort when nothing changes: two calls alike then stay on
   // their defaults rather than trade the effort of the one that Jev moved. Added before the spawn continues, as the
-  // subagent can step before this hook sees its id.
+  // subagent can step before this hook sees its id. Under the final type: a twin's steps are listed as the twin.
   const token = routing.book.add(e.subagentType, description, change.effort ?? spec.effort, e.parentAgentId, change.effort !== undefined)
   let result: Awaited<ReturnType<SpawnHook[2]>>
   try {
@@ -270,6 +421,10 @@ async function routeSpawn(routing: Routing, $: Dollar, e: SpawnHook[1], next: Sp
   let outcome: BindOutcome | undefined
   if (result.agentId) outcome = routing.book.bind(token, result.agentId)
   else routing.book.drop(token)
+  // For the HUD, which wraps this hook and sees the type as the lead wrote it.
+  if (readings && result.agentId) {
+    shareAgent(shared, result.agentId, { type: e.subagentType, provider: toCodex ? 'codex' : 'claude', reason: readings.decision.reason })
+  }
   // Nothing started when the host refused the spawn, so there is nothing to announce.
   if (!routed || !result.agentId) return result
 
@@ -281,6 +436,9 @@ async function routeSpawn(routing: Routing, $: Dollar, e: SpawnHook[1], next: Sp
   const record = decisionRecord({
     ts: new Date().toISOString(),
     agent: spec.name,
+    requested,
+    provider: spec.base !== undefined ? 'codex' : 'claude',
+    ...(readings ? { reason: readings.decision.reason, claude: readings.claude, codex: readings.codex } : {}),
     tier: routed.decision.tier,
     confidence: routed.decision.tierConfidence,
     depth: routed.decision.depth,
@@ -295,14 +453,15 @@ async function routeSpawn(routing: Routing, $: Dollar, e: SpawnHook[1], next: Sp
     description: e.description,
   })
   const saved = saveDecision(decisionIo($), routing.access.home, result.agentId, record)
-  // The tag is what Jev asked for; the subagent's next step says what ran (a step before this point is not seen).
+  // The tag is what was chosen; the subagent's next step says what ran (a step before this point is not seen).
   routing.confirms.add(result.agentId, {
+    via: jevRouted ? 'jev' : 'quota',
     description: e.description,
     planned: { model: routed.decision.model, effort: routed.decision.effort },
     record,
     saved,
   })
-  announce($, spec, routed, change, took, outcome, e.tool_use_id)
+  announce($, { spec, routed, jev: jevRouted !== undefined, ...(via ? { via } : {}) }, change, took, outcome, e.tool_use_id)
   await settleDecision($, saved)
   return result
 }
@@ -323,13 +482,14 @@ export const register: Register = (on, options) => {
     confirms: createConfirmations(),
     access: {},
     twins: native.registered,
+    quota: options.quotaRouting === true,
   }
 
   // A matcher on session.start, agent.spawn and turn.step: the engine refuses two hooks on one event without one, and
   // the vendored Flightdeck registers those events too. The crew's session.start is outermost, so a Flightdeck failure
   // cannot stop the agents from registering; Flightdeck is registered before the hooks below, so it wraps the spawn, the
   // step and the write (it sees the description and model as they came, and logs the guard's refusals).
-  on('session.start', {}, ($, e, next) => startCrew(native, $, e, next))
+  on('session.start', {}, ($, e, next) => startCrew(native, routing, $, e, next))
   registerFlightdeck(on, options)
   // Only a request that offers the Agent tool gets the lead's section: the crew agents' tool lists leave it out.
   // A teammate renders the lead's prompt too, and `bare` asks for the lead's section alone.
@@ -337,10 +497,12 @@ export const register: Register = (on, options) => {
     const composed = await next(e)
     if (!e.tools.includes('Agent') || e.traits.includes('teammate') || e.traits.includes('bare')) return composed
     const jev = routing.enabled && (await keyOf($, routing.access, routing.jevKey)) !== undefined
-    const lead = { id: 'crew:lead', text: leadSection(jev), scope: 'session' as const }
+    // The quota sentences appear only with quota routing on and twins registered, so the lead section stays free of Codex otherwise.
+    const quotaOn = asksCodex(routing)
+    const lead = { id: 'crew:lead', text: leadSection(jev, quotaOn), scope: 'session' as const }
     // The `-codex` types get a section of their own, under the same rule and only for the twins this session registered.
     if (native.registered.length === 0) return { sections: [...composed.sections, lead] }
-    const twins = { id: 'crew:native-codex', text: nativeCodexSection(native.registered), scope: 'session' as const }
+    const twins = { id: 'crew:native-codex', text: nativeCodexSection(native.registered, routing.quota), scope: 'session' as const }
     return { sections: [...composed.sections, lead, twins] }
   }).catch((_, e, next) => next(e))
   on('agent.spawn', {}, ($, e, next) => {
@@ -364,11 +526,23 @@ export const register: Register = (on, options) => {
     const pending = e.agentId && answer.usage ? routing.confirms.take(e.agentId) : undefined
     if (pending && e.agentId && answer.usage) {
       const ran = { model: answer.usage.model, effort: sent.effort === undefined ? undefined : String(sent.effort) }
-      $.ui.log(confirmText(pending.description, pending.planned, ran), { to: 'transcript' })
+      $.ui.log(confirmText(pending.description, pending.planned, ran, pending.via), { to: 'transcript' })
       // After the spawn's own write, so the record with what ran is the one that stays; bounded like the spawn's, so
       // a hung write cannot hold the subagent's step.
       const id = e.agentId
       await settleDecision($, pending.saved.then(() => saveDecision(decisionIo($), routing.access.home, id, withRan(pending.record, ran))))
+    }
+    return answer
+  })
+
+  // Claude's limits as the host measured them. A matcher, as the dashboard registers this event too; it only keeps the
+  // last non-empty reading in the atom, and never throws.
+  on('session.measure', {}, async ($, e, next) => {
+    const answer = await next(e)
+    try {
+      await noteClaude($, routing, e.rateLimits)
+    } catch {
+      // The atom keeps its last reading.
     }
     return answer
   })

@@ -12,6 +12,8 @@ export type Ran = { model: string; effort: string | undefined }
 
 /** One routed subagent waiting for its first step; `saved` is the spawn's own write, which the confirmation follows. */
 export type Pending = {
+  /** Who chose what the tag promises: Jev (the default), or quota alone when Jev gave no answer for a switched call. */
+  via?: 'jev' | 'quota'
   description: string
   planned: Planned
   record: DecisionRecord
@@ -47,13 +49,13 @@ export function ranAsPlanned(planned: Planned, ran: Ran): boolean {
 }
 
 /** The transcript line: a confirmation, or what ran instead of the tag. */
-export function confirmText(description: string, planned: Planned, ran: Ran): string {
+export function confirmText(description: string, planned: Planned, ran: Ran, via: 'jev' | 'quota' = 'jev'): string {
   // The proxy reports the id: only a well-formed one is written, as in the decision record.
   const shown = MODEL_ID.test(ran.model) ? ran.model : 'unknown model'
   const what = `${shown} · ${ran.effort ?? 'no effort'}`
   return ranAsPlanned(planned, ran)
-    ? `jev: ${description}: confirmed ${what}`
-    : `jev: ${description}: ran ${what}, not ${planned.model}/${planned.effort}`
+    ? `${via}: ${description}: confirmed ${what}`
+    : `${via}: ${description}: ran ${what}, not ${planned.model}/${planned.effort}`
 }
 
 export function createConfirmations() {

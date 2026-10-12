@@ -124,7 +124,7 @@ export const SPECIALISTS: readonly Specialist[] = [
  * The system prompt section that makes the main session the lead: it orchestrates and the specialists do the work.
  * The lead judges the kind of work, never its size; with Jev on, each call is sized for it.
  */
-export function leadSection(jev: boolean): string {
+export function leadSection(jev: boolean, quota = false): string {
   const sizing = jev
     ? "Jev sizes each call's model and effort, so a small task costs little; do not judge size yourself."
     : 'Each agent runs on a model sized for its role, so a small task costs little; do not judge size yourself.'
@@ -144,6 +144,9 @@ export function leadSection(jev: boolean): string {
     'A failure goes back to the same developer (SendMessage to that agent) with the criterion, the steps and expected versus actual;',
     'after the fix, the tester repeats the reproduction and what the fix could affect before the step closes.',
     'When a call works on a plan step, start its description with the step id (for example `T3 contract suite`).',
+    ...(quota
+      ? ['With quota routing on, a call to a role that has a Codex twin may run on the twin when Codex has more weekly headroom; the task shows it.']
+      : []),
     'Git and pull requests stay with you.',
   ].join(' ')
 }
@@ -193,12 +196,15 @@ export function nativeCodexSpecs(models: Readonly<Partial<Record<string, string>
  * The lead's section for the `-codex` types, a section of its own (`leadSection` stays free of Codex). It is the same
  * text on every request, whatever the tools.
  */
-export function nativeCodexSection(specs: readonly Pick<Agent<string>, 'name' | 'model'>[]): string {
+export function nativeCodexSection(specs: readonly Pick<Agent<string>, 'name' | 'model'>[], quota = false): string {
   return [
     `Some roles also run on OpenAI Codex models as native subagents: ${specs.map(spec => `crew:${spec.name} (${spec.model})`).join(', ')}.`,
     'They are ordinary Agent calls with the base role\'s tools and write lane, in the foreground or the background; never pass `model` to one, as it would override the Codex model.',
     'Pick one when the user asks for Codex or when a second model family should do or check the work; otherwise use the Claude role.',
     'A -codex agent counts as someone other than the implementer when a Claude agent built the change (and the reverse),',
     'and a failure goes back to the same -codex agent.',
+    ...(quota
+      ? ['With quota routing on, crew may run a plain crew:<role> call on its Codex twin when Codex has more weekly headroom than Claude; passing `model` keeps a call on Claude.']
+      : []),
   ].join(' ')
 }
