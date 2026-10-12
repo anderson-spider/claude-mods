@@ -159,7 +159,7 @@ export function problemText(found: Probe, c: Context): string | undefined {
         return `the proxy runs ${found.version || 'an unknown version'} and the plugin is ${c.pluginVersion}: rebuild it with ${reinstall(c.pluginRoot)}.`
       }
       if (!found.codexLogin) {
-        return `the proxy's Codex remote has no active Codex account or is not configured, so Codex models fail. Set CLIPROXY_URL and CLIPROXY_MGMT_KEY, then run ${reinstall(c.pluginRoot)}.`
+        return `the proxy has not confirmed one active Codex account on its remote (no remote or management key, several accounts, or the check is still pending), so Codex quota is unavailable and crew stays on Claude. Codex models may still answer. To set the remote, set CLIPROXY_URL and CLIPROXY_MGMT_KEY, then run ${reinstall(c.pluginRoot)}.`
       }
       return undefined
   }
@@ -230,7 +230,7 @@ export function reportText(r: Report): string {
   } else {
     lines.push(probeLine(r.probe, r.base, r.pluginVersion))
     if (r.probe.kind === 'ok') {
-      lines.push(`Codex remote account: ${r.probe.codexLogin ? 'found' : `not found; set CLIPROXY_URL and CLIPROXY_MGMT_KEY, then run ${reinstall(r.pluginRoot)}`}`)
+      lines.push(`Codex remote account: ${r.probe.codexLogin ? 'found' : `not confirmed, so quota is unavailable (Codex models may still answer); to set the remote, set CLIPROXY_URL and CLIPROXY_MGMT_KEY, then run ${reinstall(r.pluginRoot)}`}`)
       lines.push(`Models: ${r.probe.models.length > 0 ? r.probe.models.join(', ') : 'none'}`)
     }
   }

@@ -472,7 +472,7 @@ test('the preflight names a missing remote account and how to add it', async () 
   try {
     const out = await box.run('install.sh')
     assert.equal(out.code, 0, out.stderr)
-    assert.match(out.stdout, /Codex remote account not found \(set CLIPROXY_URL and CLIPROXY_MGMT_KEY/)
+    assert.match(out.stdout, /Codex remote account not confirmed, so quota is unavailable \(to set the remote, set CLIPROXY_URL and CLIPROXY_MGMT_KEY/)
     assert.doesNotMatch(out.stdout, /login codex/)
   } finally {
     mode = 'ours'

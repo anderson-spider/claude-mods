@@ -2,6 +2,7 @@ package router
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -39,6 +40,10 @@ func writeCodexError(w http.ResponseWriter, err error) {
 	// Never 401 toward Claude Code: it reads a 401 as its own Anthropic login
 	// expiring, refreshes it and asks for /login. A Codex login problem is a
 	// 403 that names the fix.
+	// The client is gone: there is no one to answer.
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return
+	}
 	if errors.Is(err, codex.ErrUnreachable) {
 		writeAnthropicError(w, http.StatusServiceUnavailable, "api_error", codex.ErrUnreachable.Error())
 		return

@@ -122,7 +122,10 @@ test('each case has its own notice and the way back; a healthy proxy has none', 
 
 test('a stale binary and a missing remote account get their own notices', () => {
   expect(noticeText({ ...OK, version: '0.1.0' }, CTX)).toContain('runs 0.1.0 and the plugin is 0.2.0')
-  expect(noticeText({ ...OK, codexLogin: false }, CTX)).toContain('CLIPROXY_URL and CLIPROXY_MGMT_KEY')
+  const unconfirmed = noticeText({ ...OK, codexLogin: false }, CTX)
+  expect(unconfirmed).toContain('CLIPROXY_URL and CLIPROXY_MGMT_KEY')
+  expect(unconfirmed).toContain('Codex models may still answer')
+  expect(unconfirmed).not.toContain('fail')
 })
 
 test('the settings view finds the entries install wrote, without the secret in the report', () => {

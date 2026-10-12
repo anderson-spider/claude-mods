@@ -3,7 +3,9 @@
 package contract
 
 import (
+	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -155,5 +157,54 @@ func TestRemoteDownClearsTheReadings(t *testing.T) {
 	}
 	if s := e.limits(false); len(s.CodexLimits) != 0 {
 		t.Fatalf("stale readings kept: %+v", s.CodexLimits)
+	}
+}
+
+// A client that hangs up, before the remote answers or mid-stream, says
+// nothing about the remote: the readings stay.
+func TestClientCancelKeepsTheReadings(t *testing.T) {
+	for _, midStream := range []bool{false, true} {
+		name := map[bool]string{false: "before headers", true: "mid-stream"}[midStream]
+		t.Run(name, func(t *testing.T) {
+			e := withAccount(t, opts{})
+			if s := e.limits(true); len(s.CodexLimits) != 1 {
+				t.Fatalf("limits = %+v", s.CodexLimits)
+			}
+			reached := make(chan struct{})
+			e.cdx.set(func(w http.ResponseWriter, r *http.Request, _ rec) {
+				if midStream {
+					w.Header().Set("Content-Type", "text/event-stream")
+					w.WriteHeader(http.StatusOK)
+					fl := w.(http.Flusher)
+					sseChunk(w, fl, evStart)
+					sseChunk(w, fl, evTextStart)
+				}
+				close(reached)
+				select {
+				case <-r.Context().Done():
+				case <-time.After(10 * time.Second):
+				}
+			})
+			ctx, cancel := context.WithCancel(context.Background())
+			req, err := http.NewRequestWithContext(ctx, http.MethodPost, e.url("/v1/messages"), strings.NewReader(string(claudeReq("gpt-6-astra", true, nil))))
+			must(t, err)
+			req.Header.Set("X-Ccmproxy-Token", e.token)
+			req.Header.Set("Content-Type", "application/json")
+			done := make(chan struct{})
+			go func() {
+				if res, err := e.client.Do(req); err == nil {
+					_, _ = io.Copy(io.Discard, res.Body)
+					_ = res.Body.Close()
+				}
+				close(done)
+			}()
+			<-reached
+			cancel()
+			<-done
+			time.Sleep(200 * time.Millisecond) // let the proxy see the cancellation
+			if s := e.limits(false); len(s.CodexLimits) != 1 {
+				t.Fatalf("readings cleared by a client cancel: %+v", s.CodexLimits)
+			}
+		})
 	}
 }

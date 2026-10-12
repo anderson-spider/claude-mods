@@ -84,6 +84,10 @@ func (b *Backend) Messages(ctx context.Context, body []byte, headers http.Header
 	req.Header["User-Agent"] = []string{""}
 	resp, err := withoutRedirects(b.HTTP, b.Remote).Do(req)
 	if err != nil {
+		// A client that went away says nothing about the remote: keep the readings.
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		b.ClearLimits()
 		return nil, ErrUnreachable
 	}

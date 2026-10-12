@@ -70,7 +70,7 @@ func (r *Router) serveCodexMessages(w http.ResponseWriter, req *http.Request, bo
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxRequestBody+1))
 	if err != nil || len(data) > maxRequestBody {
-		if err != nil {
+		if err != nil && req.Context().Err() == nil {
 			r.backend.ClearLimits()
 		}
 		writeAnthropicError(w, 502, "api_error", "ccmproxy: Codex remote answer could not be read")

@@ -324,7 +324,9 @@ async function preflight(opts) {
     const again = await request(`${base}/__ccmproxy/status`, { headers: { [HEADER]: secret } })
     login = again !== undefined && readStatusReply(again.status, again.text).codexLogin === true
   }
-  const account = login ? 'found' : 'not found (set CLIPROXY_URL and CLIPROXY_MGMT_KEY, then run install.sh again)'
+  const account = login
+    ? 'found'
+    : 'not confirmed, so quota is unavailable (to set the remote, set CLIPROXY_URL and CLIPROXY_MGMT_KEY, then run install.sh again)'
   console.log(`preflight: ccmproxy ${reply.version} answers at ${base}; Codex remote account ${account}`)
 }
 

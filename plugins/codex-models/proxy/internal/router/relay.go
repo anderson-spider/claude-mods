@@ -121,7 +121,7 @@ func (r *Router) streamCodex(w http.ResponseWriter, req *http.Request, upstream 
 		}
 		return !terminal
 	})
-	if err != nil && r.backend != nil {
+	if err != nil && r.backend != nil && req.Context().Err() == nil {
 		r.backend.ClearLimits()
 	}
 	if !terminal && !clientGone && req.Context().Err() == nil {
