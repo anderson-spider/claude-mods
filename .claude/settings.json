@@ -2,7 +2,28 @@
   "permissions": {
     "allow": [
       "mcp__ccd_pr__get_status",
-      "mcp__ccd_session_mgmt__get_session"
+      "mcp__ccd_session_mgmt__get_session",
+      "mcp__pixellab__wait_for_jobs",
+      "Bash(git check-ignore *)",
+      "mcp__unity__unity_editor_state",
+      "mcp__pixellab__get_object",
+      "mcp__unity__unity_get_compilation_errors",
+      "Bash(shasum *)",
+      "mcp__unity__unity_console_log",
+      "mcp__pixellab__get_image",
+      "Bash(herdr agent read *)",
+      "Bash(herdr pane read *)",
+      "Bash(node scripts/check-version-bump.mjs origin/main)",
+      "Bash(claude plugin list *)",
+      "Bash(tea issues ls *)",
+      "Bash(tea issues list *)",
+      "Bash(glab-personal ci status *)",
+      "Bash(claude plugin validate *)",
+      "Bash(glab-personal mr view *)",
+      "mcp__ai-memory__memory_query",
+      "mcp__ai-memory__memory_read_page",
+      "mcp__unity__unity_list_advanced_tools",
+      "mcp__pixellab__get_balance"
     ]
   },
   "hooks": {
