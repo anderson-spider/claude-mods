@@ -8,7 +8,8 @@ test('each specialist runs on its model', () => {
   expect(by('research')?.model).toBe('haiku')
   expect(by('developer')?.model).toBe('sonnet')
   expect(by('designer')?.model).toBe('sonnet')
-  expect(by('tester')?.model).toBe('sonnet')
+  expect(by('tester')).toBeUndefined()
+  expect(SPECIALISTS).toHaveLength(5)
   expect(by('architect')?.model).toBe('opus')
 })
 
@@ -19,10 +20,13 @@ test('code reader cannot write and architect cannot edit', () => {
   expect(by('architect')?.tools).not.toContain('Edit')
 })
 
-test('designer can edit and browse, tester can run commands', () => {
+test('designer can edit and browse, developer runs its own tests for the architect audit', () => {
   expect(by('designer')?.tools).toContain('Edit')
   expect(by('designer')?.tools).toContain('mcp__claude-in-chrome__navigate')
-  expect(by('tester')?.tools).toContain('Bash')
+  expect(by('developer')?.tools).toContain('Bash')
+  expect(by('developer')?.prompt).toContain('run the relevant tests yourself')
+  expect(by('developer')?.prompt).toContain('the exact commands and their output')
+  expect(by('architect')?.tools).toContain('Bash')
 })
 
 test('effort is set on purpose: every specialist defaults to medium, which is also the floor', () => {
@@ -86,7 +90,8 @@ test('each -codex twin keeps its base role\'s prompt, tools and effort, on the m
 
 test('only the roles named get a twin, and SPECIALISTS keep their aliases', () => {
   const before = JSON.stringify(SPECIALISTS)
-  expect(nativeCodexSpecs({ tester: 'gpt-x' }).map(t => t.name)).toEqual(['tester-codex'])
+  expect(nativeCodexSpecs({ developer: 'gpt-x' }).map(t => t.name)).toEqual(['developer-codex'])
+  expect(nativeCodexSpecs({ tester: 'gpt-x' })).toEqual([])
   expect(nativeCodexSpecs({})).toEqual([])
   expect(JSON.stringify(SPECIALISTS)).toBe(before)
   for (const s of SPECIALISTS) expect(MODELS).toContain(s.model)
@@ -155,10 +160,26 @@ test('leadSection never names Codex in any case, for either Jev flag', () => {
 })
 
 test('the native section lists only the given twins and never names the Codex engine tools', () => {
-  const text = nativeCodexSection(nativeCodexSpecs({ tester: 'gpt-6-astra' }))
-  expect(text).toContain('crew:tester-codex (gpt-6-astra)')
+  const text = nativeCodexSection(nativeCodexSpecs({ architect: 'gpt-6-astra' }))
+  expect(text).toContain('crew:architect-codex (gpt-6-astra)')
   expect(text).not.toContain('crew:developer-codex')
   expect(text).not.toContain('mcp__crew__codex')
+})
+
+test('independent acceptance is the architect audit, not the developer self-check or a different family', () => {
+  for (const jev of [true, false]) {
+    const text = leadSection(jev)
+    expect(text).toContain('crew:developer to implement and test')
+    expect(text).toContain('only after crew:architect independently audits it')
+    expect(text).toContain('own commands and output are its report, not acceptance')
+    expect(text).toContain('after the fix, the architect reaudits')
+    expect(text).not.toContain('crew:tester')
+  }
+  const text = nativeCodexSection(nativeCodexSpecs({ developer: 'gpt-x', architect: 'gpt-y' }))
+  expect(text).toContain('Only crew:architect or its registered -codex twin independently verifies a step')
+  expect(text).toContain("a developer twin's own tests are its report, not acceptance")
+  expect(text).toContain('same developer, including a -codex developer')
+  expect(text).not.toContain('counts as someone other than the implementer')
 })
 
 // --- Quota routing sentences ---

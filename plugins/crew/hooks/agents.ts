@@ -90,20 +90,8 @@ export const SPECIALISTS: readonly Specialist[] = [
     tools: [...READ_ONLY, 'Edit', 'Write', 'Bash'],
     prompt:
       'You are a developer. Implement the change you were given, matching the surrounding code, and keep to the files the task needs. ' +
-      'Add or update tests, run them and fix what fails. Leave committing to the caller. ' +
-      'End the report with what changed, which acceptance criteria it covers, the checks run with their result and the checks not run.',
-  },
-  {
-    name: 'tester',
-    description:
-      'Reproduces a reported behavior, writes or updates tests, runs the suite and reports the exact command and output; long reports go to .crew/reviews/<name>-test.md. Never changes production code.',
-    model: 'sonnet',
-    effort: 'medium',
-    tools: [...READ_ONLY, 'Edit', 'Write', 'Bash'],
-    prompt:
-      'You are a tester. Reproduce the behavior you were given, cover it by writing or updating test files, run the suite ' +
-      'and report the exact command, its output and what it proves; write a longer report to .crew/reviews/<name>-test.md (or the .crew/reviews/ path the caller gives), apart from the architect review. A failure caused by the code goes back to the caller with the evidence, ' +
-      'because a test made to pass by changing production code proves nothing.',
+      'Add or update tests, run the relevant tests yourself and fix what fails. Leave committing to the caller. ' +
+      'Report what changed, the acceptance criteria covered, the exact commands and their output, and the checks not run so the architect can audit independently.',
   },
   {
     name: 'architect',
@@ -131,7 +119,7 @@ export function leadSection(jev: boolean, quota = false): string {
   return [
     'You orchestrate; the crew agents do the work.',
     'Hand every task that reads, searches, edits or runs anything in the project to a crew agent:',
-    'crew:code-reader to read and search, crew:developer to implement, crew:tester for tests,',
+    'crew:code-reader to read and search, crew:developer to implement and test,',
     'crew:architect for plans and audits, crew:research for the web, crew:designer for UI.',
     sizing,
     'You talk with the user, break the work down and check and combine the reports the agents return.',
@@ -140,9 +128,8 @@ export function leadSection(jev: boolean, quota = false): string {
     'launch them right away instead of waiting for agents that are unrelated.',
     'After each agent report, look again for work that is now unblocked or still independent and launch it without being asked;',
     'end each update to the user with one line saying what is running, what is waiting and on what (or that nothing else can run in parallel).',
-    "A step is done only when someone other than its implementer verified it: crew:tester runs it or crew:architect audits it; the developer's own \"tests pass\" is a report, not the acceptance.",
-    'A failure goes back to the same developer (SendMessage to that agent) with the criterion, the steps and expected versus actual;',
-    'after the fix, the tester repeats the reproduction and what the fix could affect before the step closes.',
+    "A step is done only after crew:architect independently audits it (and may run the tests); the developer's own commands and output are its report, not acceptance.",
+    'A failure goes back to the same developer (SendMessage to that agent) with the criterion and expected versus actual; after the fix, the architect reaudits before the step closes.',
     'When a call works on a plan step, start its description with the step id (for example `T3 contract suite`).',
     ...(quota
       ? ['With quota routing on, a call to a role that has a Codex twin may run on the twin when Codex has more weekly headroom; the task shows it.']
@@ -201,8 +188,8 @@ export function nativeCodexSection(specs: readonly Pick<Agent<string>, 'name' | 
     `Some roles also run on OpenAI Codex models as native subagents: ${specs.map(spec => `crew:${spec.name} (${spec.model})`).join(', ')}.`,
     'They are ordinary Agent calls with the base role\'s tools and write lane, in the foreground or the background; never pass `model` to one, as it would override the Codex model.',
     'Pick one when the user asks for Codex or when a second model family should do or check the work; otherwise use the Claude role.',
-    'A -codex agent counts as someone other than the implementer when a Claude agent built the change (and the reverse),',
-    'and a failure goes back to the same -codex agent.',
+    "Only crew:architect or its registered -codex twin independently verifies a step; a developer twin's own tests are its report, not acceptance.",
+    'A failure goes back to the same developer, including a -codex developer.',
     ...(quota
       ? ['With quota routing on, crew may run a plain crew:<role> call on its Codex twin when Codex has more weekly headroom than Claude; passing `model` keeps a call on Claude.']
       : []),

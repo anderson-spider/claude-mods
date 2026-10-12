@@ -132,7 +132,7 @@ export async function route(
   return { decision: decide(spec, reply.answers), jevModel: reply.model, ms: reply.ms, answers: reply.answers }
 }
 
-/** Jev's answers applied to another target: a call that moved to its twin keeps its effort answer and never gets a model. */
+/** Jev's answers applied to another target: a call that moved to its twin keeps its effort answer and fixed model family. */
 export function retarget(routed: Routed, spec: Target): Routed {
   return { ...routed, decision: decide(spec, routed.answers ?? {}) }
 }
@@ -147,7 +147,7 @@ export type Moved = { model: string | undefined; effort: Effort | undefined }
 
 export function moved(spec: Target, routed: Routed | undefined): Moved {
   return {
-    // A twin's model is never sent: the spawn keeps the definition's.
+    // The twin's canonical model never moves; register.tsx adds only the effort suffix on the wire.
     model: spec.base === undefined && routed && routed.decision.model !== spec.model ? routed.decision.model : undefined,
     effort: routed && routed.decision.effort !== spec.effort ? routed.decision.effort : undefined,
   }

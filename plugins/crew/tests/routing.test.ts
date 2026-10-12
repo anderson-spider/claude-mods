@@ -91,10 +91,10 @@ test('3.01 and 2.99 are ties in floating point (|d - 3.0| is 0.00999..., under 0
 })
 
 test('unusable answers change nothing', () => {
-  const none = decide(spec('tester'), {})
+  const none = decide(spec('developer'), {})
   expect(none).toEqual({ model: 'sonnet', effort: 'medium' })
-  expect(decide(spec('tester'), answers(['gpt', 0.99], undefined)).model).toBe('sonnet')
-  expect(decide(spec('tester'), { tier: { choice: 'opus', confidence: 'high' } }).model).toBe('sonnet')
+  expect(decide(spec('developer'), answers(['gpt', 0.99], undefined)).model).toBe('sonnet')
+  expect(decide(spec('developer'), { tier: { choice: 'opus', confidence: 'high' } }).model).toBe('sonnet')
 })
 
 test('only crew agents from the table, not forks, not calls that name a model', () => {

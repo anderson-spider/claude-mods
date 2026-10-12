@@ -29,9 +29,9 @@ export type DecisionInput = {
   model: string
   defaultEffort: Effort
   effortPlanned: Effort
-  /** The effort the subagent runs on: the planned one when it took, else the default. */
+  /** The applied request configuration: the planned one when it took, else the default; observed execution is in `ran`. */
   effortApplied: Effort
-  /** What the effort book said when the spawn resolved; absent when nothing was bound. */
+  /** Claude's effort-book outcome, or `suffix` for a successful twin spawn using a wire model suffix (defaults included). */
   bind?: string
   jevModel?: string
   durationMs: number
@@ -142,17 +142,18 @@ export type DecisionIo = {
 }
 
 /**
- * Writes one record. Never rejects: a failure is one debug line, prefixed by what decided the call (`jev`, or `quota`
- * for a call quota routing switched with Jev off). Without a trusted home nothing is written.
+ * Writes one record. Never rejects: a failure is one debug line, prefixed by what decided the call (`jev`, `quota`,
+ * or `crew` for an explicit twin's medium fallback). Without a trusted home nothing is written.
  */
-export async function saveDecision(io: DecisionIo, home: string | undefined, id: string, record: DecisionRecord, by: 'jev' | 'quota' = 'jev'): Promise<void> {
+export async function saveDecision(io: DecisionIo, home: string | undefined, id: string, record: DecisionRecord, by: 'jev' | 'quota' | 'crew' = 'jev'): Promise<void> {
+  const prefix = by === 'crew' ? 'crew' : `crew ${by}`
   if (!home) {
-    io.log(`crew ${by}: decision not logged (no trusted home)`)
+    io.log(`${prefix}: decision not logged (no trusted home)`)
     return
   }
   try {
     await io.write(decisionPath(home, record.ts, id), `${JSON.stringify(record)}\n`)
   } catch {
-    io.log(`crew ${by}: decision not logged (write failed)`)
+    io.log(`${prefix}: decision not logged (write failed)`)
   }
 }

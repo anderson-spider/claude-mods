@@ -5,15 +5,17 @@ import { MODELS } from './agents'
 import { MODEL_ID } from './decisions'
 import type { DecisionRecord } from './decisions'
 
-/** What the task's tag promised: the model alias and the effort Jev chose. */
+/** What the task's tag requested: the canonical model alias/id and bounded effort. */
 export type Planned = { model: string; effort: string }
 /** What the request carried: the model id the API reported and the effort sent (absent for a model without one). */
 export type Ran = { model: string; effort: string | undefined }
 
 /** One routed subagent waiting for its first step; `saved` is the spawn's own write, which the confirmation follows. */
 export type Pending = {
-  /** Who chose what the tag promises: Jev (the default), or quota alone when Jev gave no answer for a switched call. */
-  via?: 'jev' | 'quota'
+  /** Jev's answer, quota's switch without an answer, or crew's medium fallback after an explicit twin's Jev failure. */
+  via?: 'jev' | 'quota' | 'crew'
+  /** Effort was requested in the spawn model suffix, not through the Claude effort book. */
+  suffix?: boolean
   description: string
   planned: Planned
   record: DecisionRecord
@@ -42,16 +44,35 @@ const DATE_SUFFIX = /-(?:\d{4}-\d{2}-\d{2}|\d{8})$/
  * dated release (`gpt-6-astra-2026-05-01`), so `gpt-6` does not accept `gpt-6-mini`.
  */
 export function ranAsPlanned(planned: Planned, ran: Ran): boolean {
-  if (ran.effort !== planned.effort) return false
+  return ran.effort === planned.effort && modelAsPlanned(planned, ran)
+}
+
+function modelAsPlanned(planned: Planned, ran: Ran): boolean {
   const wanted = normalizeModel(planned.model)
   const got = normalizeModel(ran.model)
   return ALIASES.includes(wanted) ? got.includes(wanted) : got === wanted || got.replace(DATE_SUFFIX, '') === wanted
 }
 
-/** The transcript line: a confirmation, or what ran instead of the tag. */
-export function confirmText(description: string, planned: Planned, ran: Ran, via: 'jev' | 'quota' = 'jev'): string {
+/** Only outgoing request evidence counts; an API model suffix is not evidence of the outgoing effort. */
+export function observedEffort(sent: { model?: unknown; effort?: unknown }, suffix = false): string | undefined {
+  if (suffix) {
+    // Without the wire model, output_config.effort alone cannot reveal the higher-precedence suffix.
+    if (typeof sent.model !== 'string' || !sent.model) return undefined
+    const model = sent.model.trim().toLowerCase().replace(/\[\d+m\]$/, '')
+    const effort = /[-:](low|medium|high|xhigh)$/.exec(model)?.[1]
+    if (effort) return effort
+  }
+  return sent.effort === undefined ? undefined : String(sent.effort)
+}
+
+/** The transcript line: a confirmation, a mismatch, or explicitly unobserved suffix effort. */
+export function confirmText(description: string, planned: Planned, ran: Ran, via: 'jev' | 'quota' | 'crew' = 'jev', suffix = false): string {
   // The proxy reports the id: only a well-formed one is written, as in the decision record.
   const shown = MODEL_ID.test(ran.model) ? ran.model : 'unknown model'
+  if (suffix && ran.effort === undefined) {
+    const model = modelAsPlanned(planned, ran) ? `confirmed model ${shown}` : `ran model ${shown}, not ${planned.model}`
+    return `${via}: ${description}: ${model}; suffix ${planned.effort} requested, effort unobserved`
+  }
   const what = `${shown} · ${ran.effort ?? 'no effort'}`
   return ranAsPlanned(planned, ran)
     ? `${via}: ${description}: confirmed ${what}`
