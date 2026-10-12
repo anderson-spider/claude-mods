@@ -40,6 +40,10 @@ const lockPoll = 25 * time.Millisecond
 // held.
 var lockBusy func()
 
+// lockReleased, when set (by tests), runs with a lock's path each time it is
+// released.
+var lockReleased func(path string)
+
 // lockPath is the lock beside the file this store writes, resolved the way
 // the write resolves it.
 func (s *Store) lockPath() string {
@@ -99,6 +103,9 @@ func (s *Store) lockFile(ctx context.Context, path string) (func(), error) {
 	return func() {
 		_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
 		_ = file.Close()
+		if lockReleased != nil {
+			lockReleased(path)
+		}
 	}, nil
 }
 
