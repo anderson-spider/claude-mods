@@ -8,7 +8,7 @@
 #   install.sh --check        only checks the prerequisites; changes nothing
 #   install.sh --dry-run      prints the settings.json diff it would write (secret masked); changes nothing
 #
-# Codex models run on a remote translating proxy that holds the Codex login. Set CLIPROXY_URL (its https:// base URL)
+# Codex models run on a remote translating proxy that holds the Codex login. Set CLIPROXY_URL (its http:// or https:// base URL)
 # and CLIPROXY_MGMT_KEY (its management key) to write or replace them in the config; without either, the config
 # keeps what it has. The key goes to ccmproxy on stdin, never in argv, the plist or the output.
 #

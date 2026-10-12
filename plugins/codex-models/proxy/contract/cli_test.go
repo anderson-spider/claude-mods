@@ -484,6 +484,27 @@ func TestCLIRefusesAConfigOthersCanRead(t *testing.T) {
 	}
 }
 
+func TestCLIConfigInitAcceptsHTTPRemoteFromStdin(t *testing.T) {
+	home := cliHome(t, nil)
+	const remote = "http://192.168.0.128:8317"
+	const managementKey = "synthetic-management-key"
+	cmd := exec.Command(binPath, "config", "init", "--stdin")
+	cmd.Env = baseEnviron(home)
+	cmd.Stdin = strings.NewReader(`{"codex":{"remote":"` + remote + `","management_key":"` + managementKey + `"}}`)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("config init --stdin: %v, %s", err, out)
+	}
+	if strings.Contains(string(out), managementKey) || strings.Contains(string(out), "DATA RACE") {
+		t.Fatal("config init printed a management key or reported a data race")
+	}
+	cfg := readConfig(t, filepath.Join(home, "config.json"))
+	cdx := cfg["codex"].(map[string]any)
+	if cdx["remote"] != remote || cdx["management_key"] != managementKey {
+		t.Fatal("config init did not preserve the HTTP remote settings")
+	}
+}
+
 func TestCLIRefusesUnsafeDestinations(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -492,7 +513,7 @@ func TestCLIRefusesUnsafeDestinations(t *testing.T) {
 	}{
 		{"other upstream", map[string]any{"upstream": "https://example.com"}, "is not allowed"},
 		{"loopback upstream", map[string]any{"upstream": "http://127.0.0.1:9"}, "is not allowed"},
-		{"http codex remote", map[string]any{"codex": map[string]any{"remote": "http://codex.example.net"}}, "must be an https:// URL"},
+		{"ftp codex remote", map[string]any{"codex": map[string]any{"remote": "ftp://codex.example.net"}}, "must be an http:// or https:// URL"},
 		{"codex remote with a query", map[string]any{"codex": map[string]any{"remote": "https://codex.example.net/x?a=1"}}, "must not carry a query"},
 		{"codex remote with credentials", map[string]any{"codex": map[string]any{"remote": "https://u:p@codex.example.net"}}, "credentials in the URL"},
 		{"loopback codex remote", map[string]any{"codex": map[string]any{"remote": "https://127.0.0.1:8317"}}, "must not use a loopback"},

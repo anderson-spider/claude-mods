@@ -9,7 +9,7 @@ import (
 )
 
 func TestRemoteRefusesLocalAddressesAndUnsafeURLs(t *testing.T) {
-	for _, remote := range []string{"https://127.0.0.1", "https://127.2.3.4", "https://[::1]", "https://[::ffff:127.0.0.1]", "https://0.0.0.0", "https://[::ffff:0.0.0.0]", "https://[::]", "https://user:private-key@remote.example", "https://remote.example?key=private-key", "https://remote.example#private-key", "https://remote.example?", "https://remote.example#", "http://remote.example", "https://remote.example:0"} {
+	for _, remote := range []string{"https://127.0.0.1", "https://127.2.3.4", "https://[::1]", "https://[::ffff:127.0.0.1]", "https://0.0.0.0", "https://[::ffff:0.0.0.0]", "https://[::]", "https://user:private-key@remote.example", "https://remote.example?key=private-key", "https://remote.example#private-key", "https://remote.example?", "https://remote.example#", "ftp://remote.example", "https://remote.example:0", "http://127.0.0.1", "http://[::1]", "http://[::ffff:127.0.0.1]", "http://0.0.0.0", "http://[::]", "http://user:private-key@remote.example", "http://remote.example?key=private-key", "http://remote.example#private-key", "http://remote.example?", "http://remote.example#", "http://remote.example:0", "http://remote.example:65536", "http://"} {
 		cfg := Default()
 		cfg.Codex.Remote = remote
 		err := cfg.Validate()
@@ -17,11 +17,13 @@ func TestRemoteRefusesLocalAddressesAndUnsafeURLs(t *testing.T) {
 			t.Fatalf("unsafe remote accepted/echoed: %q, %v", remote, err)
 		}
 	}
-	cfg := Default()
-	cfg.Codex.Remote = "https://remote.example/prefix"
-	cfg.Codex.ManagementKey = "valid-private-key"
-	if err := cfg.Validate(); err != nil {
-		t.Fatal(err)
+	for _, remote := range []string{"https://remote.example/prefix", "http://remote.example", "http://192.168.0.128:8317"} {
+		cfg := Default()
+		cfg.Codex.Remote = remote
+		cfg.Codex.ManagementKey = "valid-private-key"
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("valid remote %q refused: %v", remote, err)
+		}
 	}
 }
 

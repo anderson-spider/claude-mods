@@ -4,11 +4,11 @@ For the managed installation, use the [plugin README](../README.md). This path i
 
 ## Run
 
-From this directory, with mise tools available:
+The remote base URL can use HTTP or HTTPS. From this directory, with mise tools available:
 
 ```sh
 GOFLAGS=-tags= GOTOOLCHAIN=local go build -trimpath -ldflags "-X main.version=dev" -o ccmproxy ./cmd/ccmproxy
-printf '{"codex":{"remote":"https://<remote host>","management_key":"%s"}}' "$CLIPROXY_MGMT_KEY" | ./ccmproxy config init --stdin
+printf '{"codex":{"remote":"http://192.168.0.128:8317","management_key":"%s"}}' "$CLIPROXY_MGMT_KEY" | ./ccmproxy config init --stdin
 ./ccmproxy serve
 ```
 

@@ -4,7 +4,7 @@ Use ChatGPT's Codex models in Claude Code through a local loopback proxy. The lo
 
 ## Install
 
-Requires macOS, [mise](https://mise.jdx.dev), and a CLIProxyAPI instance (v8 management API) reachable over HTTPS with a ChatGPT Codex account signed in. Only you should be able to reach it: its inference endpoints may have no authentication. The proxy needs its remote management (`remote-management.allow-remote`), and the management key can act with the Codex login, so restrict network access to the remote to this Mac.
+Requires macOS, [mise](https://mise.jdx.dev), and a CLIProxyAPI instance (v8 management API) reachable over HTTP or HTTPS with a ChatGPT Codex account signed in. Only you should be able to reach it: its inference endpoints may have no authentication. The proxy needs its remote management (`remote-management.allow-remote`), and the management key can act with the Codex login, so restrict network access to the remote to this Mac.
 
 ```text
 /plugin install codex-models --marketplace anderson-spider/claude-mods
@@ -13,7 +13,7 @@ Requires macOS, [mise](https://mise.jdx.dev), and a CLIProxyAPI instance (v8 man
 Run `install.sh` from the installed plugin folder or this checkout, with the remote's base URL and management key in the environment:
 
 ```sh
-export CLIPROXY_URL=https://<remote host>
+export CLIPROXY_URL=http://192.168.0.128:8317   # HTTP or HTTPS base URL
 export CLIPROXY_MGMT_KEY=<management key>
 plugins/codex-models/install.sh
 ```

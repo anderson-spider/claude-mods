@@ -451,6 +451,27 @@ test('the remote URL and management key reach config init on stdin, never argv, 
   }
 })
 
+test('remote-input passes an HTTP LAN URL unchanged to config init on stdin', async () => {
+  mode = 'ours'
+  const box = sandbox()
+  try {
+    const remote = 'http://192.168.0.128:8317'
+    const key = 'mgmt-key-sentinel-http'
+    for (const args of [['--dry-run'], []]) {
+      rmSync(join(box.root, 'stdin.json'), { force: true })
+      const out = await box.run('install.sh', args, { CLIPROXY_URL: remote, CLIPROXY_MGMT_KEY: key })
+      assert.equal(out.code, 0, out.stderr)
+      assert.deepEqual(JSON.parse(readFileSync(join(box.root, 'stdin.json'), 'utf8')), { codex: { remote, management_key: key } })
+      assert.doesNotMatch(out.stdout + out.stderr, new RegExp(key))
+    }
+    assert.match(box.calls(), /^ccmproxy config init --stdin$/m)
+    assert.doesNotMatch(box.calls(), new RegExp(key))
+    assert.doesNotMatch(readFileSync(join(box.home, 'Library/LaunchAgents/com.anderson-spider.codex-models.plist'), 'utf8'), new RegExp(key))
+  } finally {
+    box.cleanup()
+  }
+})
+
 test('only one of CLIPROXY_URL and CLIPROXY_MGMT_KEY is a usage error before anything changes', async () => {
   const box = sandbox()
   try {

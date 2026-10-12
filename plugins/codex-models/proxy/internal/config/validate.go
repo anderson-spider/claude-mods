@@ -85,9 +85,9 @@ func validPort(port string) bool {
 	return err == nil && n >= 1 && n <= 65535
 }
 
-// requireHTTPS accepts an absolute https URL with a host and no credentials,
+// requireHTTPURL accepts an absolute HTTP or HTTPS URL with a host and no credentials,
 // query or fragment.
-func requireHTTPS(raw string) error {
+func requireHTTPURL(raw string) error {
 	u, err := url.Parse(raw)
 	switch {
 	case err != nil:
@@ -95,8 +95,8 @@ func requireHTTPS(raw string) error {
 		return errors.New("is not a valid URL")
 	case u.User != nil:
 		return errors.New("credentials in the URL are not allowed; remove them")
-	case u.Scheme != "https" || u.Host == "":
-		return errors.New("must be an https:// URL")
+	case (u.Scheme != "http" && u.Scheme != "https") || u.Host == "":
+		return errors.New("must be an http:// or https:// URL")
 	case u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || strings.Contains(raw, "#"):
 		return errors.New("must not carry a query or fragment; remove them")
 	}
@@ -147,7 +147,7 @@ func requireRemote(raw string) error {
 	if raw == "" {
 		return nil
 	}
-	if err := requireHTTPS(raw); err != nil {
+	if err := requireHTTPURL(raw); err != nil {
 		return err
 	}
 	u, _ := url.Parse(raw)
