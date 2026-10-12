@@ -112,16 +112,10 @@ func (r *Router) streamCodex(w http.ResponseWriter, req *http.Request, upstream 
 	_ = controller.Flush()
 
 	translator := translate.NewStreamTranslator(resolution.Model.ID, toolNames)
+	out := newSSEWriter(req.Context(), w, controller.Flush, r.pingInterval)
+	defer out.close()
 	write := func(frames []byte) bool {
-		if len(frames) == 0 {
-			return true
-		}
-		if _, err := w.Write(frames); err != nil {
-			logx.Debugf("codex stream: client write failed: %v", err)
-			return false
-		}
-		_ = controller.Flush()
-		return true
+		return out.write(frames, translator.Started() && !translator.Ended())
 	}
 
 	err := scanSSE(upstream, func(payload []byte) bool {

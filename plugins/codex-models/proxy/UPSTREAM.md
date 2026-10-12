@@ -19,6 +19,7 @@ One line each, so a new upstream release can be diffed against this copy.
 - `GET /__ccmproxy/status` and `ccmproxy models --json`; `ccmproxy env` prints the secret header and `ENABLE_TOOL_SEARCH`, and has a `json` shell.
 - Version stamped at build (`-X main.version`).
 - `message_start.model` reports the model the upstream returned; `output_config.effort` takes precedence over the adaptive-thinking mapping; `tool_use` blocks pass through both SSE and JSON answers.
+- A streamed answer gets a `ping` after 10 s with nothing written, while the message is open.
 - `Session_id` is an HMAC of `metadata.user_id` keyed by `session_salt`.
 - Error mapping to Anthropic's types; no 401 toward Claude Code (a Codex 401 or login problem is 403 naming the fix); a stream that ends without its terminal event is an error.
 - Codex login: the proxy's own file by default; the Codex CLI's `auth.json` only read, never refreshed, written or removed; `auth_file` resolving to it refused; atomic 0600 write under `flock` with a re-read before refresh; a rejected refresh is `ErrLoginExpired`.

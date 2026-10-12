@@ -2,9 +2,11 @@ package translate
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
+	"github.com/jclab-joseph/claude-code-model-proxy/internal/logx"
 	"github.com/tidwall/gjson"
 )
 
@@ -616,6 +618,33 @@ func TestAssemblerDropsBrokenToolInput(t *testing.T) {
 	message := gjson.ParseBytes(assembler.Message())
 	if blocks := message.Get("content").Array(); len(blocks) != 0 {
 		t.Fatalf("content = %s, want the broken block dropped, not given {}", message.Get("content").Raw)
+	}
+}
+
+func TestDroppedToolCallIsLoggedWithoutItsArguments(t *testing.T) {
+	var logged strings.Builder
+	restore := logx.SetOutput(&logged)
+	defer restore()
+
+	const secret = "SECRET-FILE-CONTENTS"
+	arguments := `["` + secret + `"]`
+	frames := runStream(t, NewStreamTranslator("gpt-6-luna", map[string]string{"short_write": "Write"}),
+		`{"type":"response.created","response":{"id":"r"}}`,
+		`{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc","call_id":"call_1","name":"short_write"}}`,
+		`{"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","id":"fc","call_id":"call_1","name":"short_write","arguments":`+jsonString(arguments)+`}}`,
+		`{"type":"response.completed","response":{"id":"r","usage":{"input_tokens":1,"output_tokens":1}}}`,
+	)
+	assertEvents(t, frames, "message_start", "message_delta", "message_stop")
+	if got := gjson.Parse(frames[1].data).Get("delta.stop_reason").String(); got != "end_turn" {
+		t.Fatalf("stop_reason = %q, want end_turn: only a cut-off call gives max_tokens", got)
+	}
+	log := logged.String()
+	want := fmt.Sprintf(`dropped tool call "Write": arguments are not a JSON object (%d bytes)`, len(arguments))
+	if !strings.Contains(log, want) {
+		t.Fatalf("log = %q, want a line with %q", log, want)
+	}
+	if strings.Contains(log, secret) {
+		t.Fatalf("the log carries the arguments: %q", log)
 	}
 }
 

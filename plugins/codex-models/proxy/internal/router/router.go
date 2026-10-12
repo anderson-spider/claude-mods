@@ -10,6 +10,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/jclab-joseph/claude-code-model-proxy/internal/codex"
 	"github.com/jclab-joseph/claude-code-model-proxy/internal/config"
@@ -36,6 +37,10 @@ type Router struct {
 	// Version is reported by the status endpoint, so a caller can tell
 	// which build it reached.
 	Version string
+
+	// pingInterval is how long a streamed Codex answer may stay silent
+	// before a ping goes out; tests shorten it.
+	pingInterval time.Duration
 }
 
 // New builds a router. transport carries pass-through traffic to the upstream
@@ -56,6 +61,8 @@ func New(cfg *config.Config, registry *codex.Registry, backend *codex.Backend, t
 		registry: registry,
 		backend:  backend,
 		upstream: upstream,
+
+		pingInterval: defaultPingInterval,
 		// Redirects are never followed: a followed redirect would resend
 		// the Authorization header, possibly downgraded to http. The 3xx goes
 		// back to the client as it came. The ReverseProxy below calls the

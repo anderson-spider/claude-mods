@@ -5,6 +5,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/jclab-joseph/claude-code-model-proxy/internal/logx"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -78,6 +79,10 @@ func NewStreamTranslator(fallbackModel string, toolNames map[string]string) *Str
 // Started reports whether a message_start has been emitted, which tells the
 // caller whether an error can still be reported as an HTTP status.
 func (t *StreamTranslator) Started() bool { return t.messageStarted }
+
+// Ended reports whether the message is over: message_stop or an error frame
+// went out, and nothing more will.
+func (t *StreamTranslator) Ended() bool { return t.messageStopped || t.failed }
 
 // Event translates a single Codex SSE payload (the JSON after "data:") into
 // zero or more Anthropic SSE frames.
@@ -574,7 +579,10 @@ func (t *StreamTranslator) pumpCalls() []byte {
 			arguments = "{}"
 		}
 		if !gjson.Valid(arguments) || !gjson.Parse(arguments).IsObject() {
-			// Unusable input is dropped rather than repaired.
+			// Unusable input is dropped rather than repaired. The arguments
+			// can carry file contents or secrets, so only their size is logged.
+			logx.Warnf("codex stream: dropped tool call %q: arguments are not a JSON object (%d bytes)",
+				t.originalToolName(call.name), len(arguments))
 			call.closed = true
 			t.queue = t.queue[1:]
 			continue
