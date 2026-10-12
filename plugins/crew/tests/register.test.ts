@@ -330,6 +330,7 @@ test('a request that offers the Agent tool gets the lead section last, naming ev
   }
   expect(lead?.text).toContain('Jev sizes')
   expect(lead?.text).toContain('Git and pull requests stay with you')
+  expect(lead?.text).toContain('start its description with the step id')
 })
 
 test('a request without the Agent tool (a crew agent) gets no lead section', ON, async ($, on) => {

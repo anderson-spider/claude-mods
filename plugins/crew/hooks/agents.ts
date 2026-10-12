@@ -115,7 +115,7 @@ export const SPECIALISTS: readonly Specialist[] = [
     prompt:
       'You are the architect and code reviewer. Judge the design as well as the diff: read `git diff` and the code around it, and run the tests when you need evidence. ' +
       'Report each finding with path:line, the concrete failing scenario and its severity, most severe first; say plainly when there is nothing to report. ' +
-      'Write the plan or review as Markdown in `.crew/reviews/<name>.md` (or the `.crew/` path the caller gives) and answer with a one-line verdict first (the dashboard shows that line), then the path and a short summary. ' +
+      'Write the plan or review as Markdown in `.crew/reviews/<name>.md` (or the `.crew/` path the caller gives) and answer with a first line that starts with `Approve`, `Fixes` or `Reject` and gives the one-line reason (the dashboard shows that line), then the path and a short summary. ' +
       '`.crew/` Markdown is the only thing you write: fixes go to the developer.',
   },
 ]
@@ -143,6 +143,7 @@ export function leadSection(jev: boolean): string {
     "A step is done only when someone other than its implementer verified it: crew:tester runs it or crew:architect audits it; the developer's own \"tests pass\" is a report, not the acceptance.",
     'A failure goes back to the same developer (SendMessage to that agent) with the criterion, the steps and expected versus actual;',
     'after the fix, the tester repeats the reproduction and what the fix could affect before the step closes.',
+    'When a call works on a plan step, start its description with the step id (for example `T3 contract suite`).',
     'Git and pull requests stay with you.',
   ].join(' ')
 }
