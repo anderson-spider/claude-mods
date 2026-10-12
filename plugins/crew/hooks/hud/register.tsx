@@ -84,7 +84,7 @@ const PANE = 'crew'
 const TITLE = 'Crew'
 /**
  * The pane's body columns when docked (inside the frame, as `bodyColumns`) and its rows when seated inline. Both are
- * requests: a width the person dragged or keyed the dock to wins, this session's or a kept one.
+ * requests: a width the person dragged or keyed the dock to wins, this session's or the host's kept dock width.
  */
 const PANE_COLUMNS = 56
 const MINI_ROWS = 8
@@ -206,6 +206,9 @@ async function readUsage($: Dollar) {
 async function noteFavored($: Dollar, isOn: boolean) {
   if (!isOn) return
   const [quota, prev, now] = await Promise.all([read($, quotaAtom), read($, favoredAtom), $.clock.now()])
+  // Codex not read yet (the crew reads it after the session start runs): its first reading sets the baseline, so the
+  // provider it favors is not a change.
+  if (quota?.codexState === 'off') return
   const provider = quota?.decision?.provider
   if (provider !== 'claude' && provider !== 'codex') return
   const before = isObject(prev) ? (prev as Favored) : null

@@ -53,7 +53,9 @@ test('saveDecision never rejects and writes nothing without a home', async () =>
   await saveDecision(io, undefined, 'a1', decisionRecord(input))
   expect(writes).toEqual([])
   await saveDecision({ ...io, write: async () => { throw new Error('x') } }, '/home/u', 'a1', decisionRecord(input))
-  expect(logs).toHaveLength(2)
+  expect(logs).toEqual(['crew jev: decision not logged (no trusted home)', 'crew jev: decision not logged (write failed)'])
+  await saveDecision(io, undefined, 'a1', decisionRecord(input), 'quota')
+  expect(logs.at(-1)).toBe('crew quota: decision not logged (no trusted home)')
 })
 
 test('a model id that is not an alias is kept as it is', () => {

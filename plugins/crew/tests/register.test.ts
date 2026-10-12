@@ -2891,6 +2891,8 @@ async function quotaWorld(
   const atom: { last?: Quota } = {}
   /** Every write of the card list the HUD keeps. */
   const cards: { plugin: string; key: string; value: unknown }[] = []
+  /** Every write of the favored provider the HUD keeps. */
+  const favored: unknown[] = []
   const world = jevWorld(on, {
     env: QUOTA_ENV, register: true, now: () => time.now, rateLimits: () => limits.value,
     status: o.status ?? (async () => codexStatus(38)), reply: async () => ok(answer('opus', 0.9, 3.9)), ...o.world,
@@ -2898,6 +2900,7 @@ async function quotaWorld(
   // The last value written to the atom: the test engine has no `$.state`, and the value is what the HUD would read.
   on('state.set', (_$, e, next) => {
     if (e.key === 'hudAgents') cards.push({ plugin: e.plugin, key: e.key, value: e.value })
+    if (e.key === 'hudFavored') favored.push(e.value)
     if (o.hudWriteFails && e.key.startsWith('hud')) throw new Error('state unavailable')
     if (e.key !== 'quota') return next(e)
     if (o.quotaWriteFails) return { deny: 'state unavailable' }
@@ -2909,7 +2912,7 @@ async function quotaWorld(
   on('tool.call', () => ({ result: 'written' }))
   const started = $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true } as never)
   if (!o.deferStart) await started
-  return { ...world, time, limits, atom, cards, started }
+  return { ...world, time, limits, atom, cards, favored, started }
 }
 
 test('quotaRouting off: Jev routes as before, Codex is never asked and the record is v 2 with no readings', { options: { ...TWIN_OPTIONS, jevKey: KEY } }, async ($, on) => {
@@ -3261,11 +3264,14 @@ test('the HUD draws the card of a switched call as the twin that runs it, on Cod
 })
 
 test('a twin the lead named is never moved, even with Claude favored, and still gets its own Jev effort', QUOTA_JEV, async ($, on) => {
-  const { seen } = await quotaWorld($, on, { claude: [10, 10], world: { reply: async () => ok(answer('opus', 0.9, 3.5)) } })
+  const { seen, cards: writes } = await quotaWorld($, on, { claude: [10, 10], world: { reply: async () => ok(answer('opus', 0.9, 3.5)) } })
   await $.agent.spawn(spawnInput({ subagentType: 'crew:developer-codex' }))
 
   expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:developer-codex', description: 'audit auth · gpt-6-astra/high' })
   expect(seen.notices).toEqual(['crew:developer-codex -> gpt-6-astra · high (jev)'])
+  // The card says Codex, as the decision record does: the lead named the twin, nothing switched it.
+  const cards = writes.at(-1)?.value as { type: string; provider: string }[]
+  expect(cards[0]).toMatchObject({ type: 'crew:developer-codex', provider: 'codex' })
 })
 
 test('a refused spawn of a switched call announces and records nothing, and leaves no effort behind', QUOTA_JEV, async ($, on) => {
@@ -3312,6 +3318,19 @@ test('a switched call is drawn as its twin (·cx, on the Codex model) in the pan
   expect(await ui.find({ text: /→ Codex favored: 7d 38% used vs Claude 7d 71%/ })).toBeDefined()
   expect(await ui.find({ text: /CREW +jev · cx/ })).toBeDefined()
   await ui.unmount()
+})
+
+test('the first Codex reading of a session sets the favored baseline: Codex favored from the start is no change', QUOTA_JEV, async ($, on) => {
+  const world = await quotaWorld($, on)
+  expect(world.atom.last?.decision.provider).toBe('codex')
+  world.time.now = Q_NOW + 5_000
+  await $.session.measure({ context: { window: 100 }, rateLimits: claudeLimits(20, 71), changed: ['rateLimits'] } as never)
+  await $.agent.spawn(spawnInput())
+
+  // No stamp before Codex was read; the first is Codex, not a change from a Claude placeholder.
+  expect(world.favored.length).toBeGreaterThan(0)
+  expect(world.favored[0]).toMatchObject({ provider: 'codex', isChange: false })
+  expect(world.favored.every(f => (f as { isChange: boolean }).isChange === false)).toBe(true)
 })
 
 test('the twin\'s step shows the effort the crew applied beneath the HUD, not the one the host sent', QUOTA_JEV, async ($, on) => {
@@ -3364,6 +3383,7 @@ test('a switched call without a key says once that no record was written, not ag
   await step($, 'a1', 'medium')
 
   expect(seen.transcript).toEqual(['quota: audit auth: confirmed gpt-6-astra · medium'])
-  expect(seen.logs.filter(line => line.includes('no trusted home'))).toEqual(['crew jev: decision not logged (no trusted home)'])
+  // Jev is off: the line names quota routing, which decided the call.
+  expect(seen.logs.filter(line => line.includes('no trusted home'))).toEqual(['crew quota: decision not logged (no trusted home)'])
   expect(seen.writes).toEqual([])
 })

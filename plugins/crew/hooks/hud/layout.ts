@@ -51,8 +51,12 @@ export function leftRight(left: readonly Seg[], right: readonly Seg[], width: nu
 
 // ------------------------------------------------------------------ pane width
 
-/** The docked pane's body width: 56 requested (`$.ui.open` `columns`); a width the person set wins, so less can come. */
+/**
+ * The docked pane's body width the full layout needs, and requests (`$.ui.open` `columns`). A request, not a grant: a
+ * dock width the person dragged or keyed, or the host's kept dock width, wins; below it the pane takes the narrow path.
+ */
 export const PANE_WIDTH = 56
+/** Columns beyond 56 go to the text columns up to this width; more adds nothing. */
 export const PANE_MAX = 66
 
 export type PaneBudget = {
