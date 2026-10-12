@@ -502,8 +502,9 @@ export const register: Register = (on, options) => {
     return { sections: [...composed.sections, lead, twins] }
   }).catch((_, e, next) => next(e))
   on('agent.spawn', {}, ($, e, next) => {
-    // A `model` on a twin's call wins over its definition and would run it on Claude with no tag or confirmation.
-    if (e.model && native.registered.some(twin => e.subagentType === `crew:${twin.name}`)) {
+    // A `model` on a twin's call wins over its definition and would run it on Claude with no tag or confirmation. The
+    // option's names decide, not the registered set: a later `session.start` that registered none leaves the host's types.
+    if (e.model && native.specs.some(twin => e.subagentType === `crew:${twin.name}`)) {
       return { deny: `crew: ${e.subagentType} runs on its own Codex model; call it again without \`model\`` }
     }
     return routeSpawn(routing, $, e, next)

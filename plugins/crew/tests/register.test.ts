@@ -106,7 +106,7 @@ function jevWorld(
   } = {},
 ) {
   const seen: Seen = { fetches: [], spawned: [], steps: [], notices: [], logs: [], writes: [], transcript: [], settingsReads: 0 }
-  const flags = { settingsFail: opts.settingsFail === true }
+  const flags = { settingsFail: opts.settingsFail === true, registerFail: false }
   // `mock.clock` registers `clock.now` itself and the engine refuses a second one, so a test's own is registered instead.
   const now = opts.now
   const clock = mock.clock(now ? (((name: string, ...rest: unknown[]) => (name === 'clock.now' ? undefined : (on as (...a: unknown[]) => unknown)(name, ...rest))) as unknown as On) : on)
@@ -140,7 +140,10 @@ function jevWorld(
     return { value: await (opts.reply ?? (async () => ok(answer('opus', 0.9, 3.9))))() }
   })
   if (opts.register) {
-    on('agent.register', (_$, e) => ({ value: { agent: `crew:${e.name}` } }))
+    on('agent.register', (_$, e) => {
+      if (flags.registerFail && e.name.endsWith('-codex')) throw new Error('refused')
+      return { value: { agent: `crew:${e.name}` } }
+    })
     on('session.start', (_$, e) => ({ cwd: e.cwd }))
     on('ui.status', () => ({ value: undefined }))
   }
@@ -1935,6 +1938,19 @@ test('a -codex spawn that passes model is refused, so it cannot run on Claude un
   expect(seen.spawned[1]).toMatchObject({ subagentType: 'crew:developer', model: 'opus', description: 'audit auth' })
 })
 
+test('a -codex spawn that passes model stays refused after a later session.start registered no twin', NATIVE_AND_JEV, async ($, on) => {
+  const { seen, flags } = await twinWorld($, on)
+  flags.registerFail = true
+  await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true } as never)
+  const refused = await $.agent.spawn(spawnInput({ subagentType: 'crew:developer-codex', model: 'sonnet' }))
+
+  expect(refused).toMatchObject({ deny: expect.stringContaining('without `model`') })
+  expect(seen.spawned).toEqual([])
+  // Not registered now, so the spawn is not routed (the host rejects an unknown type anyway).
+  await $.agent.spawn(spawnInput({ subagentType: 'crew:developer-codex', tool_use_id: 'tu2' }))
+  expect(seen.fetches).toEqual([])
+})
+
 test('a -codex spawn at depth 2.0 keeps medium: tagged, announced, nothing moved', NATIVE_AND_JEV, async ($, on) => {
   const { seen } = await twinWorld($, on, { reply: async () => ok(answer('opus', 0.9, 2.0)) })
   await $.agent.spawn(spawnInput({ subagentType: 'crew:developer-codex' }))
@@ -2301,11 +2317,12 @@ test('an unregistered crew:*-codex type that passes model goes on untouched and 
   expect(seen.fetches).toEqual([])
 })
 
-test('with a non-loopback base URL a crew:developer-codex spawn that passes model is not refused: no twin is registered', NATIVE_AND_JEV, async ($, on) => {
+test('with a non-loopback base URL no twin is registered, yet a crew:developer-codex spawn that passes model is still refused: the option names it', NATIVE_AND_JEV, async ($, on) => {
   const { seen } = jevWorld(on, { env: { ANTHROPIC_BASE_URL: 'https://api.anthropic.com' }, register: true })
   await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true } as never)
-  await $.agent.spawn(spawnInput({ subagentType: 'crew:developer-codex', model: 'opus' }))
-  expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:developer-codex', model: 'opus', description: 'audit auth' })
+  const refused = await $.agent.spawn(spawnInput({ subagentType: 'crew:developer-codex', model: 'opus' }))
+  expect(refused).toMatchObject({ deny: expect.stringContaining('without `model`') })
+  expect(seen.spawned).toEqual([])
   expect(seen.fetches).toEqual([])
 })
 

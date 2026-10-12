@@ -7,7 +7,7 @@ import type { Effort, Model } from './agents'
 /** `<home>/.claude/crew/decisions`: the home is the trusted one, never the repository's. */
 const DIR = '.claude/crew/decisions'
 // A context suffix such as `[1m]` is part of a model id.
-const MODEL_ID = /^[\w.:[\]-]{1,64}$/
+export const MODEL_ID = /^[\w.:[\]-]{1,64}$/
 
 export type DecisionInput = {
   ts: string

@@ -2,6 +2,7 @@
 // the API's answer names the model. Pure: the step hook in register.tsx feeds it and does the writes.
 
 import { MODELS } from './agents'
+import { MODEL_ID } from './decisions'
 import type { DecisionRecord } from './decisions'
 
 /** What the task's tag promised: the model alias and the effort Jev chose. */
@@ -47,7 +48,9 @@ export function ranAsPlanned(planned: Planned, ran: Ran): boolean {
 
 /** The transcript line: a confirmation, or what ran instead of the tag. */
 export function confirmText(description: string, planned: Planned, ran: Ran): string {
-  const what = `${ran.model} · ${ran.effort ?? 'no effort'}`
+  // The proxy reports the id: only a well-formed one is written, as in the decision record.
+  const shown = MODEL_ID.test(ran.model) ? ran.model : 'unknown model'
+  const what = `${shown} · ${ran.effort ?? 'no effort'}`
   return ranAsPlanned(planned, ran)
     ? `jev: ${description}: confirmed ${what}`
     : `jev: ${description}: ran ${what}, not ${planned.model}/${planned.effort}`
