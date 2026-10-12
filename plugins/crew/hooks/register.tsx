@@ -426,7 +426,7 @@ async function routeSpawn(routing: Routing, $: Dollar, e: SpawnHook[1], next: Sp
   if (result.agentId) {
     shareAgent(routing.shared.agents, result.agentId, {
       type: e.subagentType,
-      provider: toCodex ? 'codex' : 'claude',
+      provider: spec.base !== undefined ? 'codex' : 'claude',
       ...(readings ? { reason: readings.decision.reason } : {}),
       description: e.description,
       ...(change.effort !== undefined && (outcome === 'applied' || outcome === 'matched') ? { effort: change.effort } : {}),
@@ -459,7 +459,7 @@ async function routeSpawn(routing: Routing, $: Dollar, e: SpawnHook[1], next: Sp
     durationMs: routed.ms,
     description: e.description,
   })
-  const saved = saveDecision(decisionIo($), routing.access.home, result.agentId, record)
+  const saved = saveDecision(decisionIo($), routing.access.home, result.agentId, record, key ? 'jev' : 'quota')
   // The tag is what was chosen; the subagent's next step says what ran (a step before this point is not seen).
   routing.confirms.add(result.agentId, {
     via: jevRouted ? 'jev' : 'quota',

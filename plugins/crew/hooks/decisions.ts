@@ -141,15 +141,18 @@ export type DecisionIo = {
   log: (text: string) => void
 }
 
-/** Writes one record. Never rejects: a failure is one debug line. Without a trusted home nothing is written. */
-export async function saveDecision(io: DecisionIo, home: string | undefined, id: string, record: DecisionRecord): Promise<void> {
+/**
+ * Writes one record. Never rejects: a failure is one debug line, prefixed by what decided the call (`jev`, or `quota`
+ * for a call quota routing switched with Jev off). Without a trusted home nothing is written.
+ */
+export async function saveDecision(io: DecisionIo, home: string | undefined, id: string, record: DecisionRecord, by: 'jev' | 'quota' = 'jev'): Promise<void> {
   if (!home) {
-    io.log('crew jev: decision not logged (no trusted home)')
+    io.log(`crew ${by}: decision not logged (no trusted home)`)
     return
   }
   try {
     await io.write(decisionPath(home, record.ts, id), `${JSON.stringify(record)}\n`)
   } catch {
-    io.log('crew jev: decision not logged (write failed)')
+    io.log(`crew ${by}: decision not logged (write failed)`)
   }
 }
