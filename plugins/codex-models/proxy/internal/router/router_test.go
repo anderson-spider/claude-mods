@@ -156,10 +156,10 @@ func TestModelListMergesCodexModels(t *testing.T) {
 	if _, ok := ids["claude-opus-5"]; !ok {
 		t.Fatalf("upstream models were dropped: %v", ids)
 	}
-	if _, ok := ids["gpt-5.5"]; !ok {
+	if _, ok := ids["gpt-6-luna"]; !ok {
 		t.Fatalf("codex models were not added: %v", ids)
 	}
-	if got := ids["gpt-5.5-high"]; !strings.Contains(got, "high") {
+	if got := ids["gpt-6-luna-high"]; !strings.Contains(got, "high") {
 		t.Fatalf("effort variant display name = %q, want it to mention the effort", got)
 	}
 	if got := gjson.Get(rec.Body.String(), "first_id").String(); got != "claude-opus-5" {
@@ -180,7 +180,7 @@ func TestModelListFallsBackToCodexOnlyWhenUpstreamRejects(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 so the added models stay usable: %s", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), `"gpt-5.5"`) {
+	if !strings.Contains(rec.Body.String(), `"gpt-6-luna"`) {
 		t.Fatalf("body = %s", rec.Body.String())
 	}
 }
@@ -204,7 +204,7 @@ func TestModelListPaginatedPageIsPassedThrough(t *testing.T) {
 	}, nil, true)
 
 	rec := h.do(t, http.MethodGet, "/v1/models?after_id=claude-opus-5", "")
-	if strings.Contains(rec.Body.String(), "gpt-5.5") {
+	if strings.Contains(rec.Body.String(), "gpt-6-luna") {
 		t.Fatal("models must not be appended to a cursor page, which would duplicate them")
 	}
 }
@@ -295,7 +295,7 @@ func TestCodexStreamingRequest(t *testing.T) {
 		writeSSE(w, `{"type":"response.completed","response":{"id":"resp_1","usage":{"input_tokens":3,"output_tokens":1}}}`)
 	}, true)
 
-	body := `{"model":"gpt-5.5-high","max_tokens":1024,"stream":true,"system":"be brief","messages":[{"role":"user","content":"hi"}]}`
+	body := `{"model":"gpt-6-luna-high","max_tokens":1024,"stream":true,"system":"be brief","messages":[{"role":"user","content":"hi"}]}`
 	rec := h.do(t, http.MethodPost, "/v1/messages", body)
 
 	if rec.Code != http.StatusOK {
@@ -312,7 +312,7 @@ func TestCodexStreamingRequest(t *testing.T) {
 		}
 	}
 	// response.created names no model here, so the resolved id stands in.
-	if !strings.Contains(stream, `"model":"gpt-5.5"`) {
+	if !strings.Contains(stream, `"model":"gpt-6-luna"`) {
 		t.Fatalf("message_start must name the resolved model:\n%s", stream)
 	}
 
@@ -321,7 +321,7 @@ func TestCodexStreamingRequest(t *testing.T) {
 		t.Fatalf("codex path = %q, want /responses", h.codex.path)
 	}
 	upstream := gjson.Parse(h.codex.body)
-	if got := upstream.Get("model").String(); got != "gpt-5.5" {
+	if got := upstream.Get("model").String(); got != "gpt-6-luna" {
 		t.Fatalf("upstream model = %q, want the bare slug", got)
 	}
 	if got := upstream.Get("reasoning.effort").String(); got != "high" {
@@ -353,7 +353,7 @@ func TestCodexNonStreamingRequest(t *testing.T) {
 		writeSSE(w, `{"type":"response.completed","response":{"id":"resp_2","output":[{"type":"message","content":[{"type":"output_text","text":"buffered answer"}]}],"usage":{"input_tokens":9,"output_tokens":2}}}`)
 	}, true)
 
-	rec := h.do(t, http.MethodPost, "/v1/messages", `{"model":"gpt-5.5","max_tokens":100,"messages":[{"role":"user","content":"hi"}]}`)
+	rec := h.do(t, http.MethodPost, "/v1/messages", `{"model":"gpt-6-luna","max_tokens":100,"messages":[{"role":"user","content":"hi"}]}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
 	}
@@ -380,7 +380,7 @@ func TestCodexBackendErrorIsMapped(t *testing.T) {
 		_, _ = w.Write([]byte(`{"error":{"message":"usage limit reached"}}`))
 	}, true)
 
-	rec := h.do(t, http.MethodPost, "/v1/messages", `{"model":"gpt-5.5","stream":true,"messages":[]}`)
+	rec := h.do(t, http.MethodPost, "/v1/messages", `{"model":"gpt-6-luna","stream":true,"messages":[]}`)
 	if rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("status = %d, want the upstream 429 preserved", rec.Code)
 	}
@@ -396,7 +396,7 @@ func TestCodexBackendErrorIsMapped(t *testing.T) {
 func TestCodexRequestWithoutCredentials(t *testing.T) {
 	h := newHarness(t, nil, nil, false)
 
-	rec := h.do(t, http.MethodPost, "/v1/messages", `{"model":"gpt-5.5","messages":[]}`)
+	rec := h.do(t, http.MethodPost, "/v1/messages", `{"model":"gpt-6-luna","messages":[]}`)
 	// Never 401: Claude Code would take it for its own login expiring.
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403 when no Codex credentials are stored", rec.Code)
@@ -412,7 +412,7 @@ func TestCodexRequestWithoutCredentials(t *testing.T) {
 func TestCountTokensForCodexModelIsAnsweredLocally(t *testing.T) {
 	h := newHarness(t, nil, nil, true)
 
-	rec := h.do(t, http.MethodPost, "/v1/messages/count_tokens", `{"model":"gpt-5.5","messages":[{"role":"user","content":"hello there friend"}]}`)
+	rec := h.do(t, http.MethodPost, "/v1/messages/count_tokens", `{"model":"gpt-6-luna","messages":[{"role":"user","content":"hello there friend"}]}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
 	}
@@ -471,7 +471,7 @@ func TestCodexNonStreamingWhenTerminalEventOmitsOutput(t *testing.T) {
 		writeSSE(w, `{"type":"response.completed","response":{"id":"resp_real","usage":{"input_tokens":64,"output_tokens":32}}}`)
 	}, true)
 
-	rec := h.do(t, http.MethodPost, "/v1/messages", `{"model":"gpt-5.5","max_tokens":300,"messages":[{"role":"user","content":"read it"}],
+	rec := h.do(t, http.MethodPost, "/v1/messages", `{"model":"gpt-6-luna","max_tokens":300,"messages":[{"role":"user","content":"read it"}],
 		"tools":[{"name":"Read","input_schema":{"type":"object","properties":{"file_path":{"type":"string"}},"required":["file_path"]}}]}`)
 
 	if rec.Code != http.StatusOK {
@@ -502,7 +502,7 @@ func TestCodexStreamErrorMidStream(t *testing.T) {
 		writeSSE(w, `{"type":"error","error":{"type":"overloaded_error","message":"try again"}}`)
 	}, true)
 
-	rec := h.do(t, http.MethodPost, "/v1/messages", `{"model":"gpt-5.5","stream":false,"messages":[]}`)
+	rec := h.do(t, http.MethodPost, "/v1/messages", `{"model":"gpt-6-luna","stream":false,"messages":[]}`)
 	if rec.Code != 529 {
 		t.Fatalf("status = %d, want 529 for an overloaded error that arrived mid-stream", rec.Code)
 	}
@@ -529,7 +529,7 @@ func TestClientEffortIsForwarded(t *testing.T) {
 	for _, effort := range []string{"low", "medium", "high", "xhigh"} {
 		h := newHarness(t, nil, nil, true)
 		h.do(t, http.MethodPost, "/v1/messages", `{
-			"model":"gpt-5.5",
+			"model":"gpt-6-luna",
 			"max_tokens":100,
 			"messages":[{"role":"user","content":"hi"}],
 			"thinking":{"type":"adaptive"},
@@ -546,32 +546,32 @@ func TestClientEffortIsClampedToWhatTheModelSupports(t *testing.T) {
 	// to behave as, which can exceed the real model's range.
 	h := newHarness(t, nil, nil, true)
 	h.do(t, http.MethodPost, "/v1/messages", `{
-		"model":"gpt-5.5",
+		"model":"gpt-6-luna",
 		"messages":[],
-		"output_config":{"effort":"max"}
+		"output_config":{"effort":"ultra"}
 	}`)
-	// gpt-5.5 stops at xhigh.
-	if got := h.codexUpstream(t).Get("reasoning.effort").String(); got != "xhigh" {
-		t.Fatalf("reasoning.effort = %q, want it clamped to xhigh", got)
+	// gpt-6-luna stops at max.
+	if got := h.codexUpstream(t).Get("reasoning.effort").String(); got != "max" {
+		t.Fatalf("reasoning.effort = %q, want it clamped to max", got)
 	}
 
-	// A model that does support max passes it through.
+	// A model that does support ultra passes it through.
 	h = newHarness(t, nil, nil, true)
 	h.do(t, http.MethodPost, "/v1/messages", `{
 		"model":"gpt-6-astra",
 		"messages":[],
-		"output_config":{"effort":"max"}
+		"output_config":{"effort":"ultra"}
 	}`)
-	if got := h.codexUpstream(t).Get("reasoning.effort").String(); got != "max" {
-		t.Fatalf("reasoning.effort = %q, want max", got)
+	if got := h.codexUpstream(t).Get("reasoning.effort").String(); got != "ultra" {
+		t.Fatalf("reasoning.effort = %q, want ultra", got)
 	}
 }
 
 func TestUnknownClientEffortIsClamped(t *testing.T) {
-	// "ultra" exists in Claude Code but in no Codex model.
+	// "ultra" exists in Claude Code but not in every Codex model.
 	h := newHarness(t, nil, nil, true)
 	h.do(t, http.MethodPost, "/v1/messages", `{
-		"model":"gpt-6-astra",
+		"model":"gpt-6-luna",
 		"messages":[],
 		"output_config":{"effort":"ultra"}
 	}`)
@@ -584,7 +584,7 @@ func TestModelNameEffortOverridesTheClient(t *testing.T) {
 	// A per-effort id is still honoured, and is an explicit override.
 	h := newHarness(t, nil, nil, true)
 	h.do(t, http.MethodPost, "/v1/messages", `{
-		"model":"gpt-5.5-low",
+		"model":"gpt-6-luna-low",
 		"messages":[],
 		"output_config":{"effort":"high"}
 	}`)
@@ -595,7 +595,7 @@ func TestModelNameEffortOverridesTheClient(t *testing.T) {
 
 func TestEffortFallsBackWithoutAnyClientPreference(t *testing.T) {
 	h := newHarness(t, nil, nil, true)
-	h.do(t, http.MethodPost, "/v1/messages", `{"model":"gpt-5.5","messages":[]}`)
+	h.do(t, http.MethodPost, "/v1/messages", `{"model":"gpt-6-luna","messages":[]}`)
 	if got := h.codexUpstream(t).Get("reasoning.effort").String(); got != "medium" {
 		t.Fatalf("reasoning.effort = %q, want the model default", got)
 	}
@@ -617,14 +617,14 @@ func TestResolveEffortAlwaysReturnsAConcreteLevel(t *testing.T) {
 		body  string
 		want  string
 	}{
-		{"model default", "gpt-5.5", `{}`, "medium"},
-		{"client choice", "gpt-5.5", `{"output_config":{"effort":"high"}}`, "high"},
-		{"model name pin", "gpt-5.5-low", `{"output_config":{"effort":"high"}}`, "low"},
-		{"clamped client choice", "gpt-5.5", `{"output_config":{"effort":"max"}}`, "xhigh"},
-		{"thinking budget", "gpt-5.5", `{"thinking":{"type":"enabled","budget_tokens":40000}}`, "xhigh"},
-		{"thinking disabled", "gpt-5.5", `{"thinking":{"type":"disabled"}}`, "low"},
-		{"adaptive with no effort", "gpt-5.5", `{"thinking":{"type":"adaptive"}}`, "xhigh"},
-		{"unparseable body", "gpt-5.5", `not json`, "medium"},
+		{"model default", "gpt-6-luna", `{}`, "medium"},
+		{"client choice", "gpt-6-luna", `{"output_config":{"effort":"high"}}`, "high"},
+		{"model name pin", "gpt-6-luna-low", `{"output_config":{"effort":"high"}}`, "low"},
+		{"clamped client choice", "gpt-6-luna", `{"output_config":{"effort":"ultra"}}`, "max"},
+		{"thinking budget", "gpt-6-luna", `{"thinking":{"type":"enabled","budget_tokens":40000}}`, "xhigh"},
+		{"thinking disabled", "gpt-6-luna", `{"thinking":{"type":"disabled"}}`, "low"},
+		{"adaptive with no effort", "gpt-6-luna", `{"thinking":{"type":"adaptive"}}`, "xhigh"},
+		{"unparseable body", "gpt-6-luna", `not json`, "medium"},
 	}
 	for _, c := range cases {
 		got := resolve(c.model, c.body)
@@ -643,12 +643,12 @@ func TestTheEffortSentUpstreamIsTheOneResolved(t *testing.T) {
 	registry := codex.NewRegistry(nil, "", true)
 
 	for _, body := range []string{
-		`{"model":"gpt-5.5","messages":[]}`,
-		`{"model":"gpt-5.5","messages":[],"output_config":{"effort":"high"}}`,
-		`{"model":"gpt-5.5","messages":[],"output_config":{"effort":"max"}}`,
-		`{"model":"gpt-5.5-low","messages":[],"output_config":{"effort":"high"}}`,
+		`{"model":"gpt-6-luna","messages":[]}`,
+		`{"model":"gpt-6-luna","messages":[],"output_config":{"effort":"high"}}`,
+		`{"model":"gpt-6-luna","messages":[],"output_config":{"effort":"max"}}`,
+		`{"model":"gpt-6-luna-low","messages":[],"output_config":{"effort":"high"}}`,
 		`{"model":"gpt-6-astra","messages":[],"output_config":{"effort":"ultra"}}`,
-		`{"model":"gpt-5.5","messages":[],"thinking":{"type":"enabled","budget_tokens":2048}}`,
+		`{"model":"gpt-6-luna","messages":[],"thinking":{"type":"enabled","budget_tokens":2048}}`,
 	} {
 		model := gjson.Get(body, "model").String()
 		resolution, ok := registry.Resolve(model)

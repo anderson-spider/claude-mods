@@ -64,7 +64,7 @@ type Codex struct {
 	// Models restricts the exposed catalog to these ids when non-empty.
 	Models []string `json:"models,omitempty"`
 	// EffortVariants adds one model entry per supported reasoning level
-	// (for example gpt-5.5-high) to the advertised model list.
+	// (for example gpt-6-luna-high) to the advertised model list.
 	//
 	// It is off by default: Claude Code selects effort itself, with /effort
 	// and --effort, and sends it with the request, so per-effort ids only
@@ -72,7 +72,7 @@ type Codex struct {
 	// control of its own.
 	EffortVariants bool `json:"effort_variants"`
 	// ModelPrefix, when set, is accepted (and advertised) in front of every
-	// Codex model id, e.g. "codex/gpt-5.5".
+	// Codex model id, e.g. "codex/gpt-6-luna".
 	ModelPrefix string `json:"model_prefix,omitempty"`
 	// CallbackPort is the loopback port the OAuth redirect URI points at. The
 	// value is fixed by the registered OAuth client and should not change.
@@ -386,18 +386,28 @@ func validateHTTPSURL(raw string) error {
 	if u.Scheme != "https" || u.Host == "" {
 		return fmt.Errorf("%s must be an https:// URL: the ChatGPT access token is sent to it", safeURL(raw))
 	}
+	if u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || strings.Contains(raw, "#") {
+		return fmt.Errorf("%s must not carry a query or fragment; remove them", safeURL(raw))
+	}
 	return nil
 }
 
 // safeURL renders a configured URL for an error message: scheme, host and
 // path only, quoted. Userinfo, query and fragment can carry credentials and
-// are never repeated; a value that does not parse is not repeated at all.
+// are never repeated. A value without both a scheme and a host (url.Parse
+// then puts everything, credentials included, in Path), one that does not
+// parse, and any rendering that would still contain "@" are not repeated at
+// all.
 func safeURL(raw string) string {
+	const invalid = "(not a valid URL)"
 	u, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil {
-		return "(not a valid URL)"
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return invalid
 	}
 	shown := url.URL{Scheme: u.Scheme, Host: u.Host, Path: u.Path}
+	if strings.Contains(shown.String(), "@") {
+		return invalid
+	}
 	rendered := strconv.Quote(shown.String())
 	if u.User != nil {
 		rendered += " (credentials removed)"

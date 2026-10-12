@@ -12,6 +12,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/jclab-joseph/claude-code-model-proxy/internal/logx"
@@ -149,7 +150,12 @@ func requestURL(req *http.Request) string {
 			scheme = "https"
 		}
 	}
-	return scheme + "://" + host + req.URL.EscapedPath()
+	path := req.URL.EscapedPath()
+	if path != "" && !strings.HasPrefix(path, "/") {
+		// `OPTIONS *` and the like: keep the target apart from the host.
+		return scheme + "://" + host + " " + path
+	}
+	return scheme + "://" + host + path
 }
 
 // outboundURL renders an outbound request for the log: scheme, host and

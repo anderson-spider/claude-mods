@@ -74,8 +74,8 @@ func assertEvents(t *testing.T, frames []frame, want ...string) {
 }
 
 func TestStreamTextResponse(t *testing.T) {
-	frames := runStream(t, NewStreamTranslator("gpt-5.5-high", nil),
-		`{"type":"response.created","response":{"id":"resp_1","model":"gpt-5.5"}}`,
+	frames := runStream(t, NewStreamTranslator("gpt-6-luna-high", nil),
+		`{"type":"response.created","response":{"id":"resp_1","model":"gpt-6-luna"}}`,
 		`{"type":"response.content_part.added","part":{"type":"output_text"}}`,
 		`{"type":"response.output_text.delta","delta":"Hello"}`,
 		`{"type":"response.output_text.delta","delta":" world"}`,
@@ -95,7 +95,7 @@ func TestStreamTextResponse(t *testing.T) {
 
 	start := gjson.Parse(frames[0].data)
 	// The transcript names the model that answered, as the upstream reports it.
-	if got := start.Get("message.model").String(); got != "gpt-5.5" {
+	if got := start.Get("message.model").String(); got != "gpt-6-luna" {
 		t.Fatalf("message.model = %q, want the upstream's response.model", got)
 	}
 	if got := start.Get("message.id").String(); got != "resp_1" {
@@ -119,7 +119,7 @@ func TestStreamTextResponse(t *testing.T) {
 }
 
 func TestStreamThinkingCarriesMarkedSignature(t *testing.T) {
-	frames := runStream(t, NewStreamTranslator("gpt-5.5", nil),
+	frames := runStream(t, NewStreamTranslator("gpt-6-luna", nil),
 		`{"type":"response.created","response":{"id":"resp_2"}}`,
 		`{"type":"response.output_item.added","item":{"type":"reasoning","encrypted_content":"PARTIAL"}}`,
 		`{"type":"response.reasoning_summary_part.added","part":{"type":"summary_text"}}`,
@@ -167,7 +167,7 @@ func TestStreamThinkingCarriesMarkedSignature(t *testing.T) {
 }
 
 func TestStreamReasoningWithoutSummaryStillDeliversSignature(t *testing.T) {
-	frames := runStream(t, NewStreamTranslator("gpt-5.5", nil),
+	frames := runStream(t, NewStreamTranslator("gpt-6-luna", nil),
 		`{"type":"response.created","response":{"id":"resp_3"}}`,
 		`{"type":"response.output_item.added","item":{"type":"reasoning"}}`,
 		`{"type":"response.output_item.done","item":{"type":"reasoning","encrypted_content":"ONLYSIG"}}`,
@@ -189,7 +189,7 @@ func TestStreamReasoningWithoutSummaryStillDeliversSignature(t *testing.T) {
 
 func TestStreamToolCall(t *testing.T) {
 	toolNames := map[string]string{"mcp__srv__do_thing": "mcp__a-very-long-server__do_thing"}
-	frames := runStream(t, NewStreamTranslator("gpt-5.5", toolNames),
+	frames := runStream(t, NewStreamTranslator("gpt-6-luna", toolNames),
 		`{"type":"response.created","response":{"id":"resp_4"}}`,
 		`{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_abc","name":"mcp__srv__do_thing"}}`,
 		`{"type":"response.function_call_arguments.delta","output_index":0,"item_id":"fc_1","delta":"{\"a\":"}`,
@@ -234,7 +234,7 @@ func TestStreamToolCall(t *testing.T) {
 }
 
 func TestStreamParallelToolCallsDoNotInterleave(t *testing.T) {
-	frames := runStream(t, NewStreamTranslator("gpt-5.5", nil),
+	frames := runStream(t, NewStreamTranslator("gpt-6-luna", nil),
 		`{"type":"response.created","response":{"id":"resp_5"}}`,
 		`{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"Read"}}`,
 		`{"type":"response.output_item.added","output_index":1,"item":{"type":"function_call","id":"fc_2","call_id":"call_2","name":"Write"}}`,
@@ -293,7 +293,7 @@ func TestStreamParallelToolCallsDoNotInterleave(t *testing.T) {
 }
 
 func TestStreamAdoptsToolCallsOnlyPresentInTerminalEvent(t *testing.T) {
-	frames := runStream(t, NewStreamTranslator("gpt-5.5", nil),
+	frames := runStream(t, NewStreamTranslator("gpt-6-luna", nil),
 		`{"type":"response.created","response":{"id":"resp_6"}}`,
 		`{"type":"response.completed","response":{"id":"resp_6","output":[{"type":"function_call","call_id":"call_9","name":"Bash","arguments":"{\"command\":\"ls\"}"}],"usage":{}}}`,
 	)
@@ -315,7 +315,7 @@ func TestStreamAdoptsToolCallsOnlyPresentInTerminalEvent(t *testing.T) {
 }
 
 func TestStreamMessageItemWithoutDeltas(t *testing.T) {
-	frames := runStream(t, NewStreamTranslator("gpt-5.5", nil),
+	frames := runStream(t, NewStreamTranslator("gpt-6-luna", nil),
 		`{"type":"response.created","response":{"id":"resp_7"}}`,
 		`{"type":"response.output_item.done","item":{"type":"message","content":[{"type":"output_text","text":"whole answer"}]}}`,
 		`{"type":"response.completed","response":{"id":"resp_7","usage":{}}}`,
@@ -335,7 +335,7 @@ func TestStreamMessageItemWithoutDeltas(t *testing.T) {
 }
 
 func TestStreamTruncatedUpstreamIsReportedAsAnError(t *testing.T) {
-	translator := NewStreamTranslator("gpt-5.5", nil)
+	translator := NewStreamTranslator("gpt-6-luna", nil)
 	// No terminal event: the answer was cut short, so Close reports an
 	// error instead of inventing an end_turn with zero usage.
 	frames := runStream(t, translator,
@@ -358,7 +358,7 @@ func TestStreamTruncatedUpstreamIsReportedAsAnError(t *testing.T) {
 }
 
 func TestStreamCachedTokensSplitInput(t *testing.T) {
-	frames := runStream(t, NewStreamTranslator("gpt-5.5", nil),
+	frames := runStream(t, NewStreamTranslator("gpt-6-luna", nil),
 		`{"type":"response.created","response":{"id":"resp_9"}}`,
 		`{"type":"response.completed","response":{"id":"resp_9","usage":{"input_tokens":1000,"output_tokens":10,"input_tokens_details":{"cached_tokens":900}}}}`,
 	)
@@ -373,7 +373,7 @@ func TestStreamCachedTokensSplitInput(t *testing.T) {
 }
 
 func TestStreamMaxTokensStopReason(t *testing.T) {
-	frames := runStream(t, NewStreamTranslator("gpt-5.5", nil),
+	frames := runStream(t, NewStreamTranslator("gpt-6-luna", nil),
 		`{"type":"response.created","response":{"id":"resp_10"}}`,
 		`{"type":"response.incomplete","response":{"id":"resp_10","incomplete_details":{"reason":"max_output_tokens"},"usage":{}}}`,
 	)
@@ -383,7 +383,7 @@ func TestStreamMaxTokensStopReason(t *testing.T) {
 }
 
 func TestStreamErrorEvent(t *testing.T) {
-	translator := NewStreamTranslator("gpt-5.5", nil)
+	translator := NewStreamTranslator("gpt-6-luna", nil)
 	frames := parseFrames(t, string(translator.Event([]byte(`{"type":"error","error":{"type":"rate_limit_error","message":"slow down"}}`))))
 
 	if len(frames) != 1 || frames[0].event != "error" {
@@ -425,7 +425,7 @@ func assemble(t *testing.T, fallbackModel string, toolNames map[string]string, p
 }
 
 func TestAssembleTextThinkingAndToolUse(t *testing.T) {
-	message := assemble(t, "gpt-5.5-high", map[string]string{"short_name": "original_name"},
+	message := assemble(t, "gpt-6-luna-high", map[string]string{"short_name": "original_name"},
 		`{"type":"response.created","response":{"id":"resp_a"}}`,
 		`{"type":"response.output_item.added","item":{"type":"reasoning"}}`,
 		`{"type":"response.reasoning_summary_text.delta","delta":"pondering"}`,
@@ -440,7 +440,7 @@ func TestAssembleTextThinkingAndToolUse(t *testing.T) {
 		`{"type":"response.completed","response":{"id":"resp_a","usage":{"input_tokens":42,"output_tokens":7}}}`,
 	)
 
-	if got := message.Get("model").String(); got != "gpt-5.5-high" {
+	if got := message.Get("model").String(); got != "gpt-6-luna-high" {
 		t.Fatalf("model = %q", got)
 	}
 	if got := message.Get("id").String(); got != "resp_a" {
@@ -478,7 +478,7 @@ func TestAssembleTextThinkingAndToolUse(t *testing.T) {
 func TestAssembleWhenTerminalEventOmitsOutput(t *testing.T) {
 	// The real Codex backend does not repeat the output items in
 	// response.completed. A non-streaming answer must still carry them.
-	message := assemble(t, "gpt-5.5-low", nil,
+	message := assemble(t, "gpt-6-luna-low", nil,
 		`{"type":"response.created","response":{"id":"resp_b"}}`,
 		`{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_9","call_id":"call_9","name":"read_file"}}`,
 		`{"type":"response.function_call_arguments.delta","output_index":0,"item_id":"fc_9","delta":"{\"path\":\"/etc/hostname\"}"}`,
@@ -502,7 +502,7 @@ func TestAssembleWhenTerminalEventOmitsOutput(t *testing.T) {
 }
 
 func TestAssembleReportsAStreamError(t *testing.T) {
-	translator := NewStreamTranslator("gpt-5.5", nil)
+	translator := NewStreamTranslator("gpt-6-luna", nil)
 	assembler := NewMessageAssembler()
 	assembler.Write(translator.Event([]byte(`{"type":"response.created","response":{"id":"resp_c"}}`)))
 	assembler.Write(translator.Event([]byte(`{"type":"error","error":{"type":"rate_limit_error","message":"slow down"}}`)))
@@ -517,7 +517,7 @@ func TestAssembleReportsAStreamError(t *testing.T) {
 }
 
 func TestAssembleEmptyResponse(t *testing.T) {
-	message := assemble(t, "gpt-5.5", nil,
+	message := assemble(t, "gpt-6-luna", nil,
 		`{"type":"response.created","response":{"id":"resp_d"}}`,
 		`{"type":"response.completed","response":{"id":"resp_d","usage":{}}}`,
 	)
@@ -531,7 +531,7 @@ func TestAssembleEmptyResponse(t *testing.T) {
 
 func TestAssembleDiscardsPartialToolArguments(t *testing.T) {
 	// A stream cut off mid-arguments must not yield invalid tool input.
-	message := assemble(t, "gpt-5.5", nil,
+	message := assemble(t, "gpt-6-luna", nil,
 		`{"type":"response.created","response":{"id":"resp_e"}}`,
 		`{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc","call_id":"call","name":"Bash"}}`,
 		`{"type":"response.function_call_arguments.delta","output_index":0,"item_id":"fc","delta":"{\"command\":\"l"}`,
@@ -552,10 +552,10 @@ func TestMessageStartModelComesFromTheUpstream(t *testing.T) {
 		created string
 		want    string
 	}{
-		{"upstream names a dated slug", `{"type":"response.created","response":{"id":"r","model":"gpt-5.5-2026-03-01"}}`, "gpt-5.5-2026-03-01"},
-		{"upstream names none", `{"type":"response.created","response":{"id":"r"}}`, "gpt-5.5"},
-		{"upstream names an empty one", `{"type":"response.created","response":{"id":"r","model":"  "}}`, "gpt-5.5"},
-		{"no response.created at all", "", "gpt-5.5"},
+		{"upstream names a dated slug", `{"type":"response.created","response":{"id":"r","model":"gpt-6-luna-2026-03-01"}}`, "gpt-6-luna-2026-03-01"},
+		{"upstream names none", `{"type":"response.created","response":{"id":"r"}}`, "gpt-6-luna"},
+		{"upstream names an empty one", `{"type":"response.created","response":{"id":"r","model":"  "}}`, "gpt-6-luna"},
+		{"no response.created at all", "", "gpt-6-luna"},
 	}
 	for _, tc := range cases {
 		payloads := []string{
@@ -566,12 +566,12 @@ func TestMessageStartModelComesFromTheUpstream(t *testing.T) {
 			payloads = append([]string{tc.created}, payloads...)
 		}
 
-		frames := runStream(t, NewStreamTranslator("gpt-5.5", nil), payloads...)
+		frames := runStream(t, NewStreamTranslator("gpt-6-luna", nil), payloads...)
 		if got := gjson.Parse(frames[0].data).Get("message.model").String(); got != tc.want {
 			t.Fatalf("%s: streamed message.model = %q, want %q", tc.name, got, tc.want)
 		}
 		// The non-streaming answer is folded from the same frames.
-		if got := assemble(t, "gpt-5.5", nil, payloads...).Get("model").String(); got != tc.want {
+		if got := assemble(t, "gpt-6-luna", nil, payloads...).Get("model").String(); got != tc.want {
 			t.Fatalf("%s: assembled model = %q, want %q", tc.name, got, tc.want)
 		}
 	}
@@ -582,18 +582,18 @@ func TestUsageSemantics(t *testing.T) {
 	// fresh input and cache reads separately. Pinned here so a change is a
 	// decision, not an accident.
 	payloads := []string{
-		`{"type":"response.created","response":{"id":"r","model":"gpt-5.5"}}`,
+		`{"type":"response.created","response":{"id":"r","model":"gpt-6-luna"}}`,
 		`{"type":"response.output_text.delta","delta":"x"}`,
 		`{"type":"response.completed","response":{"id":"r","usage":{"input_tokens":1000,"output_tokens":42,"input_tokens_details":{"cached_tokens":600,"cache_write_tokens":250}}}}`,
 	}
-	frames := runStream(t, NewStreamTranslator("gpt-5.5", nil), payloads...)
+	frames := runStream(t, NewStreamTranslator("gpt-6-luna", nil), payloads...)
 	var delta gjson.Result
 	for _, f := range frames {
 		if f.event == "message_delta" {
 			delta = gjson.Parse(f.data)
 		}
 	}
-	assembled := assemble(t, "gpt-5.5", nil, payloads...)
+	assembled := assemble(t, "gpt-6-luna", nil, payloads...)
 	for label, u := range map[string]gjson.Result{"stream": delta.Get("usage"), "assembled": assembled.Get("usage")} {
 		if got := u.Get("input_tokens").Int(); got != 150 {
 			t.Fatalf("%s: input_tokens = %d, want 1000 - 600 cache reads - 250 cache writes", label, got)
@@ -615,7 +615,7 @@ func TestUsageSemantics(t *testing.T) {
 	if in != 0 || out != 1 || read != 20 || write != 0 {
 		t.Fatalf("usage = %d %d %d %d", in, out, read, write)
 	}
-	plain := runStream(t, NewStreamTranslator("gpt-5.5", nil),
+	plain := runStream(t, NewStreamTranslator("gpt-6-luna", nil),
 		`{"type":"response.completed","response":{"id":"r","usage":{"input_tokens":5,"output_tokens":2}}}`)
 	for _, f := range plain {
 		if f.event == "message_delta" && (strings.Contains(f.data, "cache_read") || strings.Contains(f.data, "cache_creation")) {
@@ -646,7 +646,7 @@ func TestErrorKindOnlyEmitsAnthropicTypes(t *testing.T) {
 }
 
 func TestNothingFollowsAnError(t *testing.T) {
-	translator := NewStreamTranslator("gpt-5.5", nil)
+	translator := NewStreamTranslator("gpt-6-luna", nil)
 	frames := runStream(t, translator,
 		`{"type":"response.created","response":{"id":"r"}}`,
 		`{"type":"error","error":{"type":"server_error","message":"boom"}}`,

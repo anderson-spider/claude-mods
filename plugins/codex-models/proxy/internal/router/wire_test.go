@@ -86,7 +86,7 @@ func TestOptionsStarIsRefusedOnTheWire(t *testing.T) {
 	}
 }
 
-func TestConnectAndTraceAreRefusedOnTheWire(t *testing.T) {
+func TestOnlyGetPostAndHeadPassOnTheWire(t *testing.T) {
 	w := newWireServer(t)
 	secret := config.TokenHeader + ": " + guardToken
 	for _, line := range []string{
@@ -94,6 +94,11 @@ func TestConnectAndTraceAreRefusedOnTheWire(t *testing.T) {
 		"CONNECT api.anthropic.com:443 HTTP/1.1",
 		"TRACE /v1/messages HTTP/1.1",
 		"TRACE * HTTP/1.1",
+		"trace /v1/messages HTTP/1.1",
+		"FOO /v1/messages HTTP/1.1",
+		"get /v1/models HTTP/1.1",
+		"PUT /v1/messages HTTP/1.1",
+		"DELETE /v1/models HTTP/1.1",
 	} {
 		w.h.reset()
 		host := w.addr
@@ -109,6 +114,17 @@ func TestConnectAndTraceAreRefusedOnTheWire(t *testing.T) {
 		}
 		if w.h.reachedUpstream() {
 			t.Fatalf("%s reached an upstream", line)
+		}
+	}
+}
+
+func TestGetPostAndHeadStillPassOnTheWire(t *testing.T) {
+	w := newWireServer(t)
+	secret := config.TokenHeader + ": " + guardToken
+	for _, line := range []string{"GET /v1/models HTTP/1.1", "HEAD /v1/models HTTP/1.1", "GET /__ccmproxy/status HTTP/1.1"} {
+		resp, body := w.raw(t, line, "Host: "+w.addr, secret)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s: %d %q, want 200", line, resp.StatusCode, body)
 		}
 	}
 }

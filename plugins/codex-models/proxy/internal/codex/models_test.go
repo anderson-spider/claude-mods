@@ -8,17 +8,17 @@ import (
 func TestResolveBareModel(t *testing.T) {
 	registry := NewRegistry(nil, "", true)
 
-	resolution, ok := registry.Resolve("gpt-5.5")
+	resolution, ok := registry.Resolve("gpt-6-luna")
 	if !ok {
-		t.Fatal("gpt-5.5 was not recognised as a Codex model")
+		t.Fatal("gpt-6-luna was not recognised as a Codex model")
 	}
-	if resolution.Model.ID != "gpt-5.5" {
-		t.Fatalf("model = %q, want gpt-5.5", resolution.Model.ID)
+	if resolution.Model.ID != "gpt-6-luna" {
+		t.Fatalf("model = %q, want gpt-6-luna", resolution.Model.ID)
 	}
 	if resolution.Effort != "" {
 		t.Fatalf("effort = %q, want empty for a bare model name", resolution.Effort)
 	}
-	if resolution.Requested != "gpt-5.5" {
+	if resolution.Requested != "gpt-6-luna" {
 		t.Fatalf("requested = %q, want the name as sent", resolution.Requested)
 	}
 }
@@ -26,13 +26,13 @@ func TestResolveBareModel(t *testing.T) {
 func TestResolveEffortSpellings(t *testing.T) {
 	registry := NewRegistry(nil, "", true)
 
-	for _, name := range []string{"gpt-5.5-high", "gpt-5.5:high", "codex/gpt-5.5-high", "GPT-5.5-High"} {
+	for _, name := range []string{"gpt-6-luna-high", "gpt-6-luna:high", "codex/gpt-6-luna-high", "GPT-6-Luna-High"} {
 		resolution, ok := registry.Resolve(name)
 		if !ok {
 			t.Fatalf("%q was not recognised", name)
 		}
-		if resolution.Model.ID != "gpt-5.5" || resolution.Effort != "high" {
-			t.Fatalf("%q resolved to %q effort %q, want gpt-5.5/high", name, resolution.Model.ID, resolution.Effort)
+		if resolution.Model.ID != "gpt-6-luna" || resolution.Effort != "high" {
+			t.Fatalf("%q resolved to %q effort %q, want gpt-6-luna/high", name, resolution.Model.ID, resolution.Effort)
 		}
 	}
 }
@@ -40,9 +40,9 @@ func TestResolveEffortSpellings(t *testing.T) {
 func TestResolvePrefersLongerEffortSuffix(t *testing.T) {
 	registry := NewRegistry(nil, "", true)
 
-	resolution, ok := registry.Resolve("gpt-5.5-xhigh")
+	resolution, ok := registry.Resolve("gpt-6-luna-xhigh")
 	if !ok {
-		t.Fatal("gpt-5.5-xhigh was not recognised")
+		t.Fatal("gpt-6-luna-xhigh was not recognised")
 	}
 	if resolution.Effort != "xhigh" {
 		t.Fatalf("effort = %q, want xhigh (not a partial match on high)", resolution.Effort)
@@ -52,13 +52,13 @@ func TestResolvePrefersLongerEffortSuffix(t *testing.T) {
 func TestResolveClampsUnsupportedEffort(t *testing.T) {
 	registry := NewRegistry(nil, "", true)
 
-	// gpt-5.5 stops at xhigh, so "max" must clamp rather than be forwarded.
-	resolution, ok := registry.Resolve("gpt-5.5-max")
+	// gpt-6-luna stops at max, so "ultra" must clamp rather than be forwarded.
+	resolution, ok := registry.Resolve("gpt-6-luna-ultra")
 	if !ok {
-		t.Fatal("gpt-5.5-max was not recognised")
+		t.Fatal("gpt-6-luna-ultra was not recognised")
 	}
-	if resolution.Effort != "xhigh" {
-		t.Fatalf("effort = %q, want it clamped to xhigh", resolution.Effort)
+	if resolution.Effort != "max" {
+		t.Fatalf("effort = %q, want it clamped to max", resolution.Effort)
 	}
 
 	// gpt-6-astra supports max, so it passes through.
@@ -82,31 +82,31 @@ func TestResolveIgnoresClaudeModels(t *testing.T) {
 }
 
 func TestRegistryFilterAndPrefix(t *testing.T) {
-	registry := NewRegistry([]string{"gpt-5.5"}, "codex", false)
+	registry := NewRegistry([]string{"gpt-6-luna"}, "codex", false)
 
 	if _, ok := registry.Resolve("gpt-6-astra"); ok {
 		t.Fatal("a filtered-out model must not resolve")
 	}
 
-	resolution, ok := registry.Resolve("codex/gpt-5.5")
+	resolution, ok := registry.Resolve("codex/gpt-6-luna")
 	if !ok {
-		t.Fatal("codex/gpt-5.5 was not recognised with a configured prefix")
+		t.Fatal("codex/gpt-6-luna was not recognised with a configured prefix")
 	}
-	if resolution.Model.ID != "gpt-5.5" {
-		t.Fatalf("model = %q, want gpt-5.5", resolution.Model.ID)
+	if resolution.Model.ID != "gpt-6-luna" {
+		t.Fatalf("model = %q, want gpt-6-luna", resolution.Model.ID)
 	}
 
 	ids := registry.AdvertisedIDs()
-	if len(ids) != 1 || ids[0] != "codex/gpt-5.5" {
-		t.Fatalf("advertised ids = %v, want exactly [codex/gpt-5.5] with variants disabled", ids)
+	if len(ids) != 1 || ids[0] != "codex/gpt-6-luna" {
+		t.Fatalf("advertised ids = %v, want exactly [codex/gpt-6-luna] with variants disabled", ids)
 	}
 }
 
 func TestAdvertisedIDsIncludeEffortVariants(t *testing.T) {
-	registry := NewRegistry([]string{"gpt-5.5"}, "", true)
+	registry := NewRegistry([]string{"gpt-6-luna"}, "", true)
 
 	ids := registry.AdvertisedIDs()
-	want := []string{"gpt-5.5", "gpt-5.5-low", "gpt-5.5-high", "gpt-5.5-xhigh"}
+	want := []string{"gpt-6-luna", "gpt-6-luna-low", "gpt-6-luna-high", "gpt-6-luna-xhigh", "gpt-6-luna-max"}
 	if len(ids) != len(want) {
 		t.Fatalf("advertised ids = %v, want %v", ids, want)
 	}
@@ -123,7 +123,7 @@ func TestAdvertisedIDsIncludeEffortVariants(t *testing.T) {
 	}
 	// The default effort is already covered by the bare id.
 	for _, id := range ids {
-		if id == "gpt-5.5-medium" {
+		if id == "gpt-6-luna-medium" {
 			t.Fatal("the default effort must not be advertised as a separate variant")
 		}
 	}
@@ -182,7 +182,7 @@ func TestPickerOptionLabelsAreDistinct(t *testing.T) {
 }
 
 func TestPickerOptionLabelCarriesTheEffort(t *testing.T) {
-	registry := NewRegistry([]string{"gpt-5.5"}, "", true)
+	registry := NewRegistry([]string{"gpt-6-luna"}, "", true)
 
 	for _, row := range registry.PickerOptions() {
 		resolution, ok := registry.Resolve(row.Model)
@@ -204,7 +204,7 @@ func TestResolveStripsTheContextWindowSuffix(t *testing.T) {
 
 	// Claude Code appends [1m]/[2m] to ask for a larger context window; the
 	// suffix is a client-side hint and no upstream model id carries it.
-	for _, name := range []string{"gpt-5.5[1m]", "gpt-5.5-high[1m]", "gpt-5.6-sol[2m]"} {
+	for _, name := range []string{"gpt-6-luna[1m]", "gpt-6-luna-high[1m]", "gpt-5.6-sol[2m]"} {
 		resolution, ok := registry.Resolve(name)
 		if !ok {
 			t.Fatalf("%q was not recognised", name)
@@ -217,19 +217,19 @@ func TestResolveStripsTheContextWindowSuffix(t *testing.T) {
 		}
 	}
 
-	if resolution, _ := registry.Resolve("gpt-5.5-high[1m]"); resolution.Effort != "high" {
+	if resolution, _ := registry.Resolve("gpt-6-luna-high[1m]"); resolution.Effort != "high" {
 		t.Fatalf("effort = %q, want high", resolution.Effort)
 	}
 	// A bracket that is not the window hint must not be silently accepted.
-	if _, ok := registry.Resolve("gpt-5.5[9m]"); ok {
-		t.Fatal("gpt-5.5[9m] must not resolve")
+	if _, ok := registry.Resolve("gpt-6-luna[9m]"); ok {
+		t.Fatal("gpt-6-luna[9m] must not resolve")
 	}
 }
 
 func TestClampEffort(t *testing.T) {
-	gpt55, ok := NewRegistry(nil, "", false).Lookup("gpt-5.5")
+	luna, ok := NewRegistry(nil, "", false).Lookup("gpt-6-luna")
 	if !ok {
-		t.Fatal("gpt-5.5 is not in the catalog")
+		t.Fatal("gpt-6-luna is not in the catalog")
 	}
 	astra, ok := NewRegistry(nil, "", false).Lookup("gpt-6-astra")
 	if !ok {
@@ -241,18 +241,91 @@ func TestClampEffort(t *testing.T) {
 		effort string
 		want   string
 	}{
-		{gpt55, "", ""}, // no preference stays no preference
-		{gpt55, "low", "low"},
-		{gpt55, "xhigh", "xhigh"},
-		{gpt55, "max", "xhigh"}, // gpt-5.5 stops at xhigh
-		{gpt55, "ultra", "xhigh"},
+		{luna, "", ""}, // no preference stays no preference
+		{luna, "low", "low"},
+		{luna, "xhigh", "xhigh"},
+		{luna, "max", "max"},
+		{luna, "ultra", "max"}, // gpt-6-luna stops at max
 		{astra, "max", "max"},
-		{astra, "ultra", "max"},
+		{astra, "ultra", "ultra"},
 		{astra, "HIGH", "high"},
 	}
 	for _, c := range cases {
 		if got := c.model.ClampEffort(c.effort); got != c.want {
 			t.Fatalf("%s.ClampEffort(%q) = %q, want %q", c.model.ID, c.effort, got, c.want)
 		}
+	}
+}
+
+// TestCatalogMatchesTheCodexListing pins the catalog to what `codex debug
+// models` listed (visibility "list") when it was last taken. A change here is
+// a catalog update, made on purpose.
+func TestCatalogMatchesTheCodexListing(t *testing.T) {
+	want := []struct {
+		id, effort string
+		levels     string
+		context    int
+	}{
+		{"gpt-6.1-sol", "low", "low,medium,high,xhigh,max,ultra", 373000},
+		{"gpt-6-astra", "medium", "low,medium,high,xhigh,max,ultra", 272000},
+		{"gpt-6-sol", "medium", "low,medium,high,xhigh,max,ultra", 272000},
+		{"gpt-6-luna", "medium", "low,medium,high,xhigh,max", 272000},
+		{"gpt-5.6-sol", "low", "low,medium,high,xhigh,max,ultra", 272000},
+		{"gpt-5.6-terra", "medium", "low,medium,high,xhigh,max,ultra", 272000},
+		{"gpt-5.6-luna", "medium", "low,medium,high,xhigh,max", 272000},
+		{"gpt-daybreak-blue-latest", "low", "low,medium,high,xhigh,max,ultra", 272000},
+	}
+	optIn := map[string]bool{"gpt-daybreak-blue-latest": true}
+	if len(Catalog) != len(want) {
+		t.Fatalf("catalog has %d models, want %d", len(Catalog), len(want))
+	}
+	for i, w := range want {
+		m := Catalog[i]
+		if m.ID != w.id || m.DefaultEffort != w.effort || strings.Join(m.ReasoningLevel, ",") != w.levels || m.ContextLength != w.context || !m.SupportsImages {
+			t.Fatalf("catalog[%d] = %+v, want %+v", i, m, w)
+		}
+		if m.OptIn != optIn[m.ID] {
+			t.Fatalf("%s OptIn = %v", m.ID, m.OptIn)
+		}
+		if effortRank(m.DefaultEffort) == 99 {
+			t.Fatalf("%s default effort %q is not a known level", m.ID, m.DefaultEffort)
+		}
+	}
+	for _, retired := range []string{"gpt-5.5", "gpt-5.3-codex-spark", "gpt-reserve", "codex-auto-review"} {
+		if _, ok := NewRegistry(nil, "", false).Resolve(retired); ok {
+			t.Fatalf("%s is still in the catalog", retired)
+		}
+	}
+}
+
+func TestDaybreakBlueIsOptIn(t *testing.T) {
+	const id = "gpt-daybreak-blue-latest"
+	for _, variants := range []bool{false, true} {
+		registry := NewRegistry(nil, "", variants)
+		for _, advertised := range registry.AdvertisedIDs() {
+			if strings.HasPrefix(advertised, id) {
+				t.Fatalf("%s is advertised by default", advertised)
+			}
+		}
+		for _, row := range registry.PickerOptions() {
+			if strings.HasPrefix(row.Model, id) {
+				t.Fatalf("%s is in the default picker", row.Model)
+			}
+		}
+		if _, ok := registry.Resolve(id); ok {
+			t.Fatalf("%s resolves without being listed in codex.models", id)
+		}
+	}
+	if got := len(NewRegistry(nil, "", false).AdvertisedIDs()); got != len(Catalog)-1 {
+		t.Fatalf("default registry advertises %d models, want every catalog entry but the opt-in one", got)
+	}
+
+	listed := NewRegistry([]string{"gpt-6-astra", id}, "", false)
+	resolution, ok := listed.Resolve(id)
+	if !ok || resolution.Model.ID != id {
+		t.Fatalf("%s does not resolve when codex.models lists it", id)
+	}
+	if ids := listed.AdvertisedIDs(); strings.Join(ids, ",") != "gpt-6-astra,"+id {
+		t.Fatalf("advertised = %v", ids)
 	}
 }

@@ -10,7 +10,7 @@ import (
 func mustConvert(t *testing.T, opts Options, raw string) gjson.Result {
 	t.Helper()
 	if opts.Model == "" {
-		opts.Model = "gpt-5.5"
+		opts.Model = "gpt-6-luna"
 	}
 	request, err := ClaudeToCodex(opts, []byte(raw))
 	if err != nil {
@@ -24,7 +24,7 @@ func mustConvert(t *testing.T, opts Options, raw string) gjson.Result {
 
 func TestSystemPromptBecomesDeveloperMessage(t *testing.T) {
 	body := mustConvert(t, Options{}, `{
-		"model": "gpt-5.5",
+		"model": "gpt-6-luna",
 		"system": [{"type":"text","text":"You are Claude Code."},{"type":"text","text":"Be brief."}],
 		"messages": [{"role":"user","content":"hi"}]
 	}`)
@@ -46,7 +46,7 @@ func TestSystemPromptBecomesDeveloperMessage(t *testing.T) {
 
 func TestStringSystemAndStringContent(t *testing.T) {
 	body := mustConvert(t, Options{}, `{
-		"model": "gpt-5.5",
+		"model": "gpt-6-luna",
 		"system": "system prompt",
 		"messages": [{"role":"user","content":"hello"},{"role":"assistant","content":"hi there"}]
 	}`)
@@ -62,7 +62,7 @@ func TestStringSystemAndStringContent(t *testing.T) {
 
 func TestToolUseAndResultBecomeFunctionCallItems(t *testing.T) {
 	body := mustConvert(t, Options{}, `{
-		"model": "gpt-5.5",
+		"model": "gpt-6-luna",
 		"messages": [
 			{"role":"assistant","content":[
 				{"type":"text","text":"Let me look."},
@@ -101,7 +101,7 @@ func TestToolUseAndResultBecomeFunctionCallItems(t *testing.T) {
 
 func TestOnlyProxyIssuedThinkingIsReplayed(t *testing.T) {
 	body := mustConvert(t, Options{}, `{
-		"model": "gpt-5.5",
+		"model": "gpt-6-luna",
 		"messages": [{"role":"assistant","content":[
 			{"type":"thinking","thinking":"ours","signature":"`+SignatureMarker+`ENCRYPTED"},
 			{"type":"thinking","thinking":"anthropic's","signature":"ErUBCkYIBxgCKkA..."},
@@ -128,8 +128,8 @@ func TestLongToolNamesAreShortenedAndMappedBack(t *testing.T) {
 	longName := "mcp__some-very-long-server-name-here__do_the_thing_with_extras"
 	longer := "mcp__another-extremely-long-server-name-goes-here__do_the_thing_with_extras"
 
-	request, err := ClaudeToCodex(Options{Model: "gpt-5.5"}, []byte(`{
-		"model": "gpt-5.5",
+	request, err := ClaudeToCodex(Options{Model: "gpt-6-luna"}, []byte(`{
+		"model": "gpt-6-luna",
 		"messages": [{"role":"user","content":"go"}],
 		"tools": [
 			{"name":"`+longName+`","input_schema":{"type":"object","properties":{}}},
@@ -165,7 +165,7 @@ func TestLongToolNamesAreShortenedAndMappedBack(t *testing.T) {
 
 func TestToolSchemaNormalization(t *testing.T) {
 	body := mustConvert(t, Options{}, `{
-		"model": "gpt-5.5",
+		"model": "gpt-6-luna",
 		"messages": [{"role":"user","content":"go"}],
 		"tools": [
 			{"name":"NoSchema","input_schema":null},
@@ -203,7 +203,7 @@ func TestToolChoiceMapping(t *testing.T) {
 	}
 	for choice, want := range cases {
 		body := mustConvert(t, Options{}, `{
-			"model":"gpt-5.5",
+			"model":"gpt-6-luna",
 			"messages":[{"role":"user","content":"go"}],
 			"tools":[{"name":"Read","input_schema":{"type":"object","properties":{}}}],
 			"tool_choice":`+choice+`
@@ -216,7 +216,7 @@ func TestToolChoiceMapping(t *testing.T) {
 
 func TestDisableParallelToolUse(t *testing.T) {
 	body := mustConvert(t, Options{}, `{
-		"model":"gpt-5.5",
+		"model":"gpt-6-luna",
 		"messages":[{"role":"user","content":"go"}],
 		"tools":[{"name":"Read","input_schema":{"type":"object","properties":{}}}],
 		"tool_choice":{"type":"auto","disable_parallel_tool_use":true}
@@ -227,29 +227,29 @@ func TestDisableParallelToolUse(t *testing.T) {
 }
 
 func TestEffortSelection(t *testing.T) {
-	explicit := mustConvert(t, Options{Effort: "high"}, `{"model":"gpt-5.5","messages":[]}`)
+	explicit := mustConvert(t, Options{Effort: "high"}, `{"model":"gpt-6-luna","messages":[]}`)
 	if got := explicit.Get("reasoning.effort").String(); got != "high" {
 		t.Fatalf("explicit effort = %q, want high", got)
 	}
 
-	fromBudget := mustConvert(t, Options{}, `{"model":"gpt-5.5","messages":[],"thinking":{"type":"enabled","budget_tokens":31999}}`)
+	fromBudget := mustConvert(t, Options{}, `{"model":"gpt-6-luna","messages":[],"thinking":{"type":"enabled","budget_tokens":31999}}`)
 	if got := fromBudget.Get("reasoning.effort").String(); got != "high" {
 		t.Fatalf("budget 31999 mapped to %q, want high", got)
 	}
 
-	disabled := mustConvert(t, Options{}, `{"model":"gpt-5.5","messages":[],"thinking":{"type":"disabled"}}`)
+	disabled := mustConvert(t, Options{}, `{"model":"gpt-6-luna","messages":[],"thinking":{"type":"disabled"}}`)
 	if got := disabled.Get("reasoning.effort").String(); got != "low" {
 		t.Fatalf("disabled thinking mapped to %q, want low", got)
 	}
 
-	fallback := mustConvert(t, Options{DefaultEffort: "medium"}, `{"model":"gpt-5.5","messages":[]}`)
+	fallback := mustConvert(t, Options{DefaultEffort: "medium"}, `{"model":"gpt-6-luna","messages":[]}`)
 	if got := fallback.Get("reasoning.effort").String(); got != "medium" {
 		t.Fatalf("fallback effort = %q, want medium", got)
 	}
 }
 
 func TestFixedUpstreamFields(t *testing.T) {
-	body := mustConvert(t, Options{}, `{"model":"gpt-5.5","messages":[{"role":"user","content":"go"}]}`)
+	body := mustConvert(t, Options{}, `{"model":"gpt-6-luna","messages":[{"role":"user","content":"go"}]}`)
 
 	if !body.Get("stream").Bool() {
 		t.Fatal("stream must be set: the Codex backend only serves streaming responses")
@@ -270,7 +270,7 @@ func TestFixedUpstreamFields(t *testing.T) {
 
 func TestImageAndDocumentParts(t *testing.T) {
 	body := mustConvert(t, Options{}, `{
-		"model":"gpt-5.5",
+		"model":"gpt-6-luna",
 		"messages":[{"role":"user","content":[
 			{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AAAA"}},
 			{"type":"document","source":{"type":"base64","media_type":"application/pdf","data":"BBBB"}},
@@ -291,7 +291,7 @@ func TestImageAndDocumentParts(t *testing.T) {
 }
 
 func TestInvalidJSONIsRejected(t *testing.T) {
-	if _, err := ClaudeToCodex(Options{Model: "gpt-5.5"}, []byte(`{not json`)); err == nil {
+	if _, err := ClaudeToCodex(Options{Model: "gpt-6-luna"}, []byte(`{not json`)); err == nil {
 		t.Fatal("invalid JSON must be rejected")
 	}
 }
@@ -343,7 +343,7 @@ func TestOutputConfigEffortWinsOverThinkingBudget(t *testing.T) {
 	// A client that states an effort means it, whatever the token budget
 	// alongside it implies.
 	body := mustConvert(t, Options{}, `{
-		"model":"gpt-5.5",
+		"model":"gpt-6-luna",
 		"messages":[],
 		"thinking":{"type":"enabled","budget_tokens":1024},
 		"output_config":{"effort":"xhigh"}
@@ -355,7 +355,7 @@ func TestOutputConfigEffortWinsOverThinkingBudget(t *testing.T) {
 
 func TestAdaptiveThinkingWithoutAnEffort(t *testing.T) {
 	body := mustConvert(t, Options{}, `{
-		"model":"gpt-5.5",
+		"model":"gpt-6-luna",
 		"messages":[],
 		"thinking":{"type":"adaptive"}
 	}`)
@@ -393,7 +393,7 @@ func TestOutputConfigEffortWinsOverAdaptiveThinking(t *testing.T) {
 	// A subagent on a non-Anthropic id sends its own effort next to
 	// thinking: adaptive; the stated effort is what it asked for.
 	for _, effort := range []string{"low", "medium", "high"} {
-		raw := `{"model":"gpt-5.5","messages":[],"thinking":{"type":"adaptive"},"output_config":{"effort":"` + effort + `"}}`
+		raw := `{"model":"gpt-6-luna","messages":[],"thinking":{"type":"adaptive"},"output_config":{"effort":"` + effort + `"}}`
 		if got := EffortFrom([]byte(raw), "medium"); got != effort {
 			t.Fatalf("EffortFrom(%s) = %q, want %q", raw, got, effort)
 		}

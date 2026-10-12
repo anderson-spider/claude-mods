@@ -156,10 +156,10 @@ func TestEveryMethodAndPathNeedsTheSecret(t *testing.T) {
 				config.TokenHeader: {guardToken},
 			}})
 			assertNoCORS(t, label, rec)
-			if method == http.MethodOptions {
+			if method != http.MethodGet && method != http.MethodPost && method != http.MethodHead {
 				assertForbidden(t, label, rec, method)
 				if h.reachedUpstream() {
-					t.Fatalf("%s: OPTIONS reached an upstream", label)
+					t.Fatalf("%s: a method outside GET, POST and HEAD reached an upstream", label)
 				}
 				continue
 			}
@@ -367,7 +367,7 @@ func TestTheSecretNeverReachesTheCodexBackend(t *testing.T) {
 	header.Set(config.TokenHeader, guardToken)
 	header.Set("Content-Type", "application/json")
 	rec := serve(handler, sent{method: http.MethodPost, target: "/v1/messages", header: header,
-		body: []byte(`{"model":"gpt-5.5","stream":true,"max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`)})
+		body: []byte(`{"model":"gpt-6-luna","stream":true,"max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`)})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
 	}
@@ -472,10 +472,13 @@ func TestStatusReportsDevWithoutAVersion(t *testing.T) {
 	}
 }
 
-func TestConnectAndTraceAreRefusedEvenWithTheSecret(t *testing.T) {
+func TestOnlyGetPostAndHeadPassEvenWithTheSecret(t *testing.T) {
 	h := newHarness(t, nil, nil, true)
 	handler := guarded(t, h, guardListen)
-	for _, method := range []string{http.MethodConnect, http.MethodTrace} {
+	for _, method := range []string{
+		http.MethodConnect, http.MethodTrace, http.MethodOptions, http.MethodPut, http.MethodPatch, http.MethodDelete,
+		"trace", "get", "post", "head", "FOO", "PROPFIND", "MKCOL",
+	} {
 		for _, path := range []string{"/v1/messages", "/v1/models", "/__ccmproxy/status", "/api/hello"} {
 			h.reset()
 			rec := serve(handler, sent{method: method, target: path, header: http.Header{config.TokenHeader: {guardToken}}})

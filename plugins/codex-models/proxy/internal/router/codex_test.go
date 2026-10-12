@@ -18,20 +18,20 @@ func TestEffortPrecedence(t *testing.T) {
 		body string
 		want string
 	}{
-		{"effort only", `{"model":"gpt-5.5","messages":[],"output_config":{"effort":"low"}}`, "low"},
-		{"adaptive only", `{"model":"gpt-5.5","messages":[],"thinking":{"type":"adaptive"}}`, "xhigh"},
-		{"effort and adaptive", `{"model":"gpt-5.5","messages":[],"thinking":{"type":"adaptive"},"output_config":{"effort":"low"}}`, "low"},
-		{"medium effort and adaptive", `{"model":"gpt-5.5","messages":[],"thinking":{"type":"adaptive"},"output_config":{"effort":"medium"}}`, "medium"},
-		{"effort above the model and adaptive", `{"model":"gpt-5.5","messages":[],"thinking":{"type":"adaptive"},"output_config":{"effort":"max"}}`, "xhigh"},
-		{"ultra and adaptive on a max model", `{"model":"gpt-6-astra","messages":[],"thinking":{"type":"adaptive"},"output_config":{"effort":"ultra"}}`, "max"},
-		{"effort and a large budget", `{"model":"gpt-5.5","messages":[],"thinking":{"type":"enabled","budget_tokens":64000},"output_config":{"effort":"low"}}`, "low"},
-		{"budget 2k", `{"model":"gpt-5.5","messages":[],"thinking":{"type":"enabled","budget_tokens":2000}}`, "low"},
-		{"budget 10k", `{"model":"gpt-5.5","messages":[],"thinking":{"type":"enabled","budget_tokens":10000}}`, "medium"},
-		{"budget 30k", `{"model":"gpt-5.5","messages":[],"thinking":{"type":"enabled","budget_tokens":30000}}`, "high"},
-		{"budget 64k", `{"model":"gpt-5.5","messages":[],"thinking":{"type":"enabled","budget_tokens":64000}}`, "xhigh"},
-		{"pinned in the name", `{"model":"gpt-5.5-low","messages":[],"thinking":{"type":"adaptive"},"output_config":{"effort":"high"}}`, "low"},
-		{"pinned with a colon", `{"model":"gpt-5.5:high","messages":[],"output_config":{"effort":"low"}}`, "high"},
-		{"nothing stated", `{"model":"gpt-5.5","messages":[]}`, "medium"},
+		{"effort only", `{"model":"gpt-6-luna","messages":[],"output_config":{"effort":"low"}}`, "low"},
+		{"adaptive only", `{"model":"gpt-6-luna","messages":[],"thinking":{"type":"adaptive"}}`, "xhigh"},
+		{"effort and adaptive", `{"model":"gpt-6-luna","messages":[],"thinking":{"type":"adaptive"},"output_config":{"effort":"low"}}`, "low"},
+		{"medium effort and adaptive", `{"model":"gpt-6-luna","messages":[],"thinking":{"type":"adaptive"},"output_config":{"effort":"medium"}}`, "medium"},
+		{"effort above the model and adaptive", `{"model":"gpt-6-luna","messages":[],"thinking":{"type":"adaptive"},"output_config":{"effort":"ultra"}}`, "max"},
+		{"ultra and adaptive on an ultra model", `{"model":"gpt-6-astra","messages":[],"thinking":{"type":"adaptive"},"output_config":{"effort":"ultra"}}`, "ultra"},
+		{"effort and a large budget", `{"model":"gpt-6-luna","messages":[],"thinking":{"type":"enabled","budget_tokens":64000},"output_config":{"effort":"low"}}`, "low"},
+		{"budget 2k", `{"model":"gpt-6-luna","messages":[],"thinking":{"type":"enabled","budget_tokens":2000}}`, "low"},
+		{"budget 10k", `{"model":"gpt-6-luna","messages":[],"thinking":{"type":"enabled","budget_tokens":10000}}`, "medium"},
+		{"budget 30k", `{"model":"gpt-6-luna","messages":[],"thinking":{"type":"enabled","budget_tokens":30000}}`, "high"},
+		{"budget 64k", `{"model":"gpt-6-luna","messages":[],"thinking":{"type":"enabled","budget_tokens":64000}}`, "xhigh"},
+		{"pinned in the name", `{"model":"gpt-6-luna-low","messages":[],"thinking":{"type":"adaptive"},"output_config":{"effort":"high"}}`, "low"},
+		{"pinned with a colon", `{"model":"gpt-6-luna:high","messages":[],"output_config":{"effort":"low"}}`, "high"},
+		{"nothing stated", `{"model":"gpt-6-luna","messages":[]}`, "medium"},
 	}
 	for _, tc := range cases {
 		h := newHarness(t, nil, nil, true)
@@ -54,9 +54,9 @@ func TestUserIDIsHashedBeforeItReachesCodex(t *testing.T) {
 	send := func(salt, userID string) (string, *harness) {
 		h := newHarness(t, nil, nil, true)
 		h.router.cfg.SessionSalt = salt
-		body := `{"model":"gpt-5.5","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`
+		body := `{"model":"gpt-6-luna","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`
 		if userID != "" {
-			body = `{"model":"gpt-5.5","max_tokens":16,"metadata":{"user_id":` + jsonString(userID) + `},"messages":[{"role":"user","content":"hi"}]}`
+			body = `{"model":"gpt-6-luna","max_tokens":16,"metadata":{"user_id":` + jsonString(userID) + `},"messages":[{"role":"user","content":"hi"}]}`
 		}
 		if rec := h.do(t, http.MethodPost, "/v1/messages", body); rec.Code != http.StatusOK {
 			t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
@@ -119,7 +119,7 @@ func jsonString(s string) string {
 // toolCallBackend answers with one function call to a shortened tool name.
 func toolCallBackend(short string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeSSE(w, `{"type":"response.created","response":{"id":"resp_tool","model":"gpt-5.5"}}`)
+		writeSSE(w, `{"type":"response.created","response":{"id":"resp_tool","model":"gpt-6-luna"}}`)
 		writeSSE(w, `{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_77","name":"`+short+`"}}`)
 		writeSSE(w, `{"type":"response.function_call_arguments.delta","output_index":0,"item_id":"fc_1","delta":"{\"answer\":"}`)
 		writeSSE(w, `{"type":"response.function_call_arguments.delta","output_index":0,"item_id":"fc_1","delta":"\"done\"}"}`)
@@ -137,7 +137,7 @@ func TestToolUseRoundTripsInBothModes(t *testing.T) {
 		if stream {
 			s = "true"
 		}
-		return `{"model":"gpt-5.5","max_tokens":300,"stream":` + s + `,
+		return `{"model":"gpt-6-luna","max_tokens":300,"stream":` + s + `,
 			"messages":[{"role":"user","content":"report back"}],
 			"tools":[{"name":"` + tool + `","input_schema":{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"]}}]}`
 	}
@@ -189,14 +189,14 @@ func TestToolUseRoundTripsInBothModes(t *testing.T) {
 		block.Get("input.answer").String() != "done" {
 		t.Fatalf("message = %s", rec.Body.String())
 	}
-	if message.Get("stop_reason").String() != "tool_use" || message.Get("model").String() != "gpt-5.5" {
+	if message.Get("stop_reason").String() != "tool_use" || message.Get("model").String() != "gpt-6-luna" {
 		t.Fatalf("message = %s", rec.Body.String())
 	}
 
 	// Next turn: the tool_use and its result go back to Codex as a
 	// function_call and its output, on the same call id.
 	h = newHarness(t, nil, nil, true)
-	next := `{"model":"gpt-5.5","max_tokens":300,"stream":true,
+	next := `{"model":"gpt-6-luna","max_tokens":300,"stream":true,
 		"messages":[
 			{"role":"user","content":"report back"},
 			{"role":"assistant","content":[` + block.Raw + `]},
@@ -253,7 +253,7 @@ func TestCodexBackendErrorsUseAnthropicTypes(t *testing.T) {
 	for _, tc := range cases {
 		for _, stream := range []string{"true", "false"} {
 			h := newHarness(t, nil, backendStatus(tc.status, `{"error":{"message":"upstream says no"}}`), true)
-			rec := h.do(t, http.MethodPost, "/v1/messages", `{"model":"gpt-5.5","stream":`+stream+`,"messages":[]}`)
+			rec := h.do(t, http.MethodPost, "/v1/messages", `{"model":"gpt-6-luna","stream":`+stream+`,"messages":[]}`)
 			label := http.StatusText(tc.status) + " stream=" + stream
 			if rec.Code != tc.wantStatus {
 				t.Fatalf("%s: status = %d, want %d", label, rec.Code, tc.wantStatus)
@@ -307,7 +307,7 @@ func TestMidStreamErrorsUseAnthropicTypesAndEndTheStream(t *testing.T) {
 	}
 	for _, tc := range cases {
 		backend := func(w http.ResponseWriter, r *http.Request) {
-			writeSSE(w, `{"type":"response.created","response":{"id":"resp_e","model":"gpt-5.5"}}`)
+			writeSSE(w, `{"type":"response.created","response":{"id":"resp_e","model":"gpt-6-luna"}}`)
 			writeSSE(w, `{"type":"response.output_text.delta","delta":"par"}`)
 			writeSSE(w, tc.event)
 			// Anything after the error must not reopen the answer.
@@ -315,7 +315,7 @@ func TestMidStreamErrorsUseAnthropicTypesAndEndTheStream(t *testing.T) {
 		}
 
 		h := newHarness(t, nil, backend, true)
-		rec := h.do(t, http.MethodPost, "/v1/messages", `{"model":"gpt-5.5","stream":true,"messages":[]}`)
+		rec := h.do(t, http.MethodPost, "/v1/messages", `{"model":"gpt-6-luna","stream":true,"messages":[]}`)
 		names, data := sseEvents(rec.Body.String())
 		last := len(names) - 1
 		if last < 0 || names[last] != "error" {
@@ -331,7 +331,7 @@ func TestMidStreamErrorsUseAnthropicTypesAndEndTheStream(t *testing.T) {
 		}
 
 		h = newHarness(t, nil, backend, true)
-		rec = h.do(t, http.MethodPost, "/v1/messages", `{"model":"gpt-5.5","stream":false,"messages":[]}`)
+		rec = h.do(t, http.MethodPost, "/v1/messages", `{"model":"gpt-6-luna","stream":false,"messages":[]}`)
 		if rec.Code != tc.wantCode || gjson.Get(rec.Body.String(), "error.type").String() != tc.wantType {
 			t.Fatalf("%s: JSON answer %d %s, want %d %s", tc.name, rec.Code, rec.Body.String(), tc.wantCode, tc.wantType)
 		}
@@ -340,7 +340,7 @@ func TestMidStreamErrorsUseAnthropicTypesAndEndTheStream(t *testing.T) {
 
 func TestAStreamCutShortIsAnError(t *testing.T) {
 	cut := func(w http.ResponseWriter, r *http.Request) {
-		writeSSE(w, `{"type":"response.created","response":{"id":"resp_cut","model":"gpt-5.5"}}`)
+		writeSSE(w, `{"type":"response.created","response":{"id":"resp_cut","model":"gpt-6-luna"}}`)
 		writeSSE(w, `{"type":"response.output_text.delta","delta":"par"}`)
 		// The connection closes cleanly, with no terminal event.
 	}
@@ -349,7 +349,7 @@ func TestAStreamCutShortIsAnError(t *testing.T) {
 	}
 	for name, backend := range map[string]http.HandlerFunc{"cut": cut, "empty": empty} {
 		h := newHarness(t, nil, backend, true)
-		rec := h.do(t, http.MethodPost, "/v1/messages", `{"model":"gpt-5.5","stream":true,"messages":[]}`)
+		rec := h.do(t, http.MethodPost, "/v1/messages", `{"model":"gpt-6-luna","stream":true,"messages":[]}`)
 		names, data := sseEvents(rec.Body.String())
 		last := len(names) - 1
 		if last < 0 || names[last] != "error" || data[last].Get("error.type").String() != "api_error" {
@@ -362,7 +362,7 @@ func TestAStreamCutShortIsAnError(t *testing.T) {
 		}
 
 		h = newHarness(t, nil, backend, true)
-		rec = h.do(t, http.MethodPost, "/v1/messages", `{"model":"gpt-5.5","stream":false,"messages":[]}`)
+		rec = h.do(t, http.MethodPost, "/v1/messages", `{"model":"gpt-6-luna","stream":false,"messages":[]}`)
 		if rec.Code < 500 || gjson.Get(rec.Body.String(), "type").String() != "error" {
 			t.Fatalf("%s: JSON answer %d %s, want a 5xx Anthropic error", name, rec.Code, rec.Body.String())
 		}
@@ -378,14 +378,14 @@ func TestEffortEdgeCasesClampSensibly(t *testing.T) {
 		want string
 	}{
 		// Below the model's lowest level: the lowest level, not the default.
-		{`{"model":"gpt-5.5","messages":[],"output_config":{"effort":"minimal"}}`, "low"},
-		{`{"model":"gpt-5.5","messages":[],"output_config":{"effort":"none"}}`, "low"},
+		{`{"model":"gpt-6-luna","messages":[],"output_config":{"effort":"minimal"}}`, "low"},
+		{`{"model":"gpt-6-luna","messages":[],"output_config":{"effort":"none"}}`, "low"},
 		// Unknown: the model's default, not its top.
-		{`{"model":"gpt-5.5","messages":[],"output_config":{"effort":"banana"}}`, "medium"},
+		{`{"model":"gpt-6-luna","messages":[],"output_config":{"effort":"banana"}}`, "medium"},
 		{`{"model":"gpt-6-astra","messages":[],"output_config":{"effort":"banana"}}`, "medium"},
 		// Claude Code's top level still maps to the model's top.
-		{`{"model":"gpt-6-astra","messages":[],"output_config":{"effort":"ultra"}}`, "max"},
-		{`{"model":"gpt-5.5","messages":[],"output_config":{"effort":"ultra"}}`, "xhigh"},
+		{`{"model":"gpt-6-astra","messages":[],"output_config":{"effort":"ultra"}}`, "ultra"},
+		{`{"model":"gpt-6-luna","messages":[],"output_config":{"effort":"ultra"}}`, "max"},
 	}
 	for _, tc := range cases {
 		h := newHarness(t, nil, nil, true)

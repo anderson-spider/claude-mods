@@ -294,3 +294,11 @@ func TestLoggedURLsCarryNoQuery(t *testing.T) {
 		t.Fatal("outboundURL changed the request itself")
 	}
 }
+
+func TestAsteriskTargetIsKeptApartFromTheHost(t *testing.T) {
+	req := httptest.NewRequest(http.MethodOptions, "*", nil)
+	req.Host = "evil.example"
+	if got := requestURL(req); got != "http://evil.example *" {
+		t.Fatalf("requestURL = %q, want the * apart from the host", got)
+	}
+}

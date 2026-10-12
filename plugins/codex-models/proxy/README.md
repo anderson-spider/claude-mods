@@ -137,7 +137,7 @@ function Dp(){ …; if(po()) return false; if(!a.ANTHROPIC_BASE_URL) return fals
 ```
 
 With `ANTHROPIC_BASE_URL` pointing at this proxy the first condition holds,
-but the second would still discard `gpt-5.5`. So the model list is still merged
+but the second would still discard `gpt-6-astra`. So the model list is still merged
 for correctness and for other clients (`curl`, the SDKs), but it is not what
 makes the picker work.
 
@@ -154,9 +154,9 @@ emits a ready-to-merge block:
   "modelPicker": {
     "options": [
       {
-        "model": "gpt-5.6-sol",
-        "label": "GPT-5.6 Sol (Codex)",
-        "description": "Frontier coding and research model. …",
+        "model": "gpt-6-astra",
+        "label": "GPT-6 Astra (Codex)",
+        "description": "Frontier intelligence for the most demanding work.",
         "behavesAs": "claude-opus-5"
       }
     ]
@@ -170,7 +170,7 @@ defaults — is applied. Without it, *a row for a model this version does not
 know is not offered at all*, and selecting the model prints
 
 ```
-"gpt-5.5" isn't described by this version's model catalog …
+"gpt-6-astra" isn't described by this version's model catalog …
 ```
 
 The model id sent upstream is unchanged; only the client's own assumptions
@@ -182,17 +182,39 @@ with a larger one is compacted earlier than it needs to be. Either append
 `[1m]` to the model name (the proxy strips the suffix before routing) or set
 `CLAUDE_CODE_MAX_CONTEXT_TOKENS` to the real window.
 
+## The models
+
+The catalog mirrors what `codex debug models` lists (visibility `list`) for a
+ChatGPT account; whether a given account may use each one is decided upstream.
+
+| Id | Label | Context | Effort levels | Default | Behaves as |
+| --- | --- | --- | --- | --- | --- |
+| `gpt-6.1-sol` | GPT-6.1 Sol | 373k | low to ultra | low | `claude-sonnet-5` |
+| `gpt-6-astra` | GPT-6 Astra | 272k | low to ultra | medium | `claude-opus-5` |
+| `gpt-6-sol` | GPT-6 Sol | 272k | low to ultra | medium | `claude-sonnet-5` |
+| `gpt-6-luna` | GPT-6 Luna | 272k | low to max | medium | `claude-haiku-4-5` |
+| `gpt-5.6-sol` | GPT-5.6 Sol | 272k | low to ultra | low | `claude-sonnet-5` |
+| `gpt-5.6-terra` | GPT-5.6 Terra | 272k | low to ultra | medium | `claude-sonnet-5` |
+| `gpt-5.6-luna` | GPT-5.6 Luna | 272k | low to max | medium | `claude-haiku-4-5` |
+| `gpt-daybreak-blue-latest` | Daybreak Blue | 272k | low to ultra | low | `claude-opus-5` |
+
+All take text and images. `gpt-daybreak-blue-latest` is offered only to
+accounts in the Daybreak Blue access program, so it is not advertised or
+routed by default: list it in `codex.models` to use it (that list then
+restricts the catalog to the ids it names). Frontier models behave as Opus, workhorses as
+Sonnet and the fast tier as Haiku.
+
 ## Model names and effort
 
 Every model is accepted under several spellings:
 
 | Name | Meaning |
 | --- | --- |
-| `gpt-5.5` | the model, with the effort the client asks for |
-| `gpt-5.5-high` | pins the effort to `high`, overriding the client |
-| `gpt-5.5:high` | the same, colon separated |
-| `codex/gpt-5.5-high` | with a namespace prefix |
-| `gpt-5.5[1m]` | Claude Code's context-window suffix, ignored |
+| `gpt-6-luna` | the model, with the effort the client asks for |
+| `gpt-6-luna-high` | pins the effort to `high`, overriding the client |
+| `gpt-6-luna:high` | the same, colon separated |
+| `codex/gpt-6-luna-high` | with a namespace prefix |
+| `gpt-6-luna[1m]` | Claude Code's context-window suffix, ignored |
 
 **Reasoning effort is Claude Code's own control, not a model name.** `/effort`
 and `--effort` send the choice with the request as `output_config.effort`, and
@@ -211,9 +233,10 @@ guessing it. Token counting ignores effort, since it does not affect the
 prompt.
 
 Claude Code offers the effort levels of the model a picker row *behaves as*,
-which can exceed the real model's range, so the value is clamped: `max` on
-`gpt-5.5` (which stops at `xhigh`) becomes `xhigh`, and Claude Code's `ultra`
-becomes the highest level the model has.
+which can exceed the real model's range, so the value is clamped: `ultra` on
+`gpt-6-luna` (which stops at `max`) becomes `max`. A level below the model's
+lowest (`minimal`, `none`) becomes its lowest, and an unknown level its
+default.
 
 A name that pins the effort still works and wins over the client's choice.
 Those per-effort ids are **not** advertised by default — they would multiply
