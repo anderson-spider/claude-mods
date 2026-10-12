@@ -2,6 +2,7 @@ package codex
 
 import (
 	"context"
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"net"
@@ -55,7 +56,20 @@ func (c *Client) Login(ctx context.Context, callbackPort int, openBrowser bool, 
 	results := make(chan callback, 1)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/auth/callback", func(w http.ResponseWriter, r *http.Request) {
+		// Only the provider's redirect, carrying this login's state, may end
+		// the wait; anything else is answered and ignored.
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", http.MethodGet)
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
 		query := r.URL.Query()
+		if subtle.ConstantTimeCompare([]byte(query.Get("state")), []byte(state)) != 1 {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(failurePage("this callback does not belong to the sign-in in progress")))
+			return
+		}
 		result := callback{
 			code:  query.Get("code"),
 			state: query.Get("state"),

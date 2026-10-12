@@ -467,7 +467,7 @@ func TestRefreshRereadsTheFileUnderTheLock(t *testing.T) {
 	writeNative(t, path, Token{AccessToken: "stale", RefreshToken: "rt-1", ExpiresAt: time.Now().Add(-time.Minute)}, 0o600)
 
 	// Another instance holds the lock, mid-refresh.
-	held, err := os.OpenFile(filepath.Join(dir, lockFileName), os.O_RDWR|os.O_CREATE, 0o600)
+	held, err := os.OpenFile(path+lockSuffix, os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
 		t.Fatalf("open lock: %v", err)
 	}
@@ -635,7 +635,7 @@ func TestRejectedRefreshKeepsAStillValidToken(t *testing.T) {
 }
 
 // An auth_dir that is CODEX_HOME, inside it, or a link to either is refused:
-// no codex.json, no codex.lock and no chmod in the Codex CLI's directory.
+// no codex.json, no codex.json.lock and no chmod in the Codex CLI's directory.
 func TestAuthDirInsideCodexHomeIsRefused(t *testing.T) {
 	home, cli := cliHome(t, time.Hour)
 	if err := os.Chmod(home, 0o755); err != nil {
@@ -930,5 +930,59 @@ func TestCodexHomeItselfIsNamedOnce(t *testing.T) {
 	want := "(auth_dir is the Codex CLI's directory, " + resolved + ")"
 	if !strings.HasSuffix(err.Error(), want) {
 		t.Fatalf("message %q, want it to end %q", err, want)
+	}
+}
+
+// Two proxies on one auth_file with different auth_dirs (one through a
+// link) share the lock beside the file, so the refresh token rotates once.
+func TestStoresOnOneFileShareTheLockAcrossAuthDirs(t *testing.T) {
+	t.Setenv("CODEX_HOME", t.TempDir())
+	fake, client := newOAuthServer(t, 100*time.Millisecond)
+	file := filepath.Join(t.TempDir(), "creds.json")
+	writeNative(t, file, Token{AccessToken: "stale", RefreshToken: "rt-1", ExpiresAt: time.Now().Add(-time.Minute)}, 0o600)
+	link := filepath.Join(t.TempDir(), "creds-link.json")
+	if err := os.Symlink(file, link); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	stores := []*Store{
+		NewStore(client, StoreOptions{Dir: t.TempDir(), ExplicitPath: file}),
+		NewStore(client, StoreOptions{Dir: t.TempDir(), ExplicitPath: file}),
+		NewStore(client, StoreOptions{Dir: t.TempDir(), ExplicitPath: link}),
+	}
+	for i, store := range stores[1:] {
+		if store.lockPath() != stores[0].lockPath() {
+			t.Fatalf("store %d locks %s, store 0 locks %s", i+1, store.lockPath(), stores[0].lockPath())
+		}
+		if _, err := store.Peek(); err != nil {
+			t.Fatalf("Peek: %v", err)
+		}
+	}
+
+	start := make(chan struct{})
+	results := make([]string, len(stores))
+	errs := make([]error, len(stores))
+	var wg sync.WaitGroup
+	for i, store := range stores {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			results[i], _, errs[i] = store.Access(context.Background())
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	for i := range stores {
+		if errs[i] != nil || results[i] != "access-from-rt-1" {
+			t.Fatalf("store %d: %q, %v; want the one refreshed token", i, results[i], errs[i])
+		}
+	}
+	if n := fake.calls.Load(); n != 1 {
+		t.Fatalf("token endpoint called %d times, want 1", n)
+	}
+	if info, err := os.Lstat(link); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("the link was replaced by the write: %v", err)
 	}
 }

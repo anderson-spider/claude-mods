@@ -38,10 +38,10 @@ func NewBackend(baseURL, userAgent, originator string, store *Store, transport h
 		UserAgent:  userAgent,
 		Originator: originator,
 		Store:      store,
-		HTTP: &http.Client{
+		HTTP: withoutRedirects(&http.Client{
 			Transport: transport,
 			Timeout:   0,
-		},
+		}),
 	}
 }
 
@@ -85,9 +85,15 @@ func (b *Backend) Responses(ctx context.Context, body []byte, sessionID string) 
 	}
 	req.Header.Set("Session_id", sessionID)
 
-	resp, err := b.HTTP.Do(req)
+	// The request carries the ChatGPT access token: a redirect, even to the
+	// same host or to http, is refused rather than followed.
+	resp, err := withoutRedirects(b.HTTP).Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("codex: responses request failed: %w", err)
+	}
+	if isRedirect(resp.StatusCode) {
+		_ = resp.Body.Close()
+		return nil, fmt.Errorf("codex: backend answered %d, a redirect, which is not followed", resp.StatusCode)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		data, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
