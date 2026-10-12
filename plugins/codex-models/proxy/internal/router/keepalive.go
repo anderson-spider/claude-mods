@@ -19,20 +19,24 @@ const defaultPingInterval = 10 * time.Second
 var pingFrame = []byte("event: ping\ndata: {\"type\": \"ping\"}\n\n")
 
 // sseWriter writes a streamed answer and keeps it alive: while the message is
-// open (after message_start, before message_stop or an error), a ping goes out
-// whenever nothing was written for the interval. Frames and pings are written
-// under one lock, so a ping always falls between two whole events.
+// open (after message_start, before message_stop or an error), a ping goes
+// out whenever nothing was written for the interval. Frames and pings are
+// written under one lock, so a ping always falls between two whole events.
 type sseWriter struct {
 	ctx      context.Context
 	w        io.Writer
 	flush    func() error
 	interval time.Duration
 
-	mu     sync.Mutex
-	timer  *time.Timer
-	open   bool
-	closed bool
-	failed bool
+	mu sync.Mutex
+	// timer fires ping; it exists from the first write that leaves the
+	// message open and is stopped whenever the message is not open.
+	timer *time.Timer
+	// open is whether the message is open after the last write.
+	open bool
+	// done is set by close, or by a write to the client that failed;
+	// nothing is written after it.
+	done bool
 }
 
 func newSSEWriter(ctx context.Context, w io.Writer, flush func() error, interval time.Duration) *sseWriter {
@@ -44,17 +48,11 @@ func newSSEWriter(ctx context.Context, w io.Writer, flush func() error, interval
 func (s *sseWriter) write(frames []byte, open bool) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed || s.failed {
+	if s.done {
 		return false
 	}
-	if len(frames) > 0 {
-		if _, err := s.w.Write(frames); err != nil {
-			logx.Debugf("codex stream: client write failed: %v", err)
-			s.failed = true
-			s.stopLocked()
-			return false
-		}
-		_ = s.flush()
+	if len(frames) > 0 && !s.sendLocked(frames, "write") {
+		return false
 	}
 	s.open = open
 	switch {
@@ -63,8 +61,8 @@ func (s *sseWriter) write(frames []byte, open bool) bool {
 	case s.timer == nil:
 		s.timer = time.AfterFunc(s.interval, s.ping)
 	case len(frames) > 0:
-		// Only bytes that went out restart the wait; events that produced
-		// no frame (a call's argument deltas) leave it running.
+		// Only bytes that went out restart the wait; an event that made no
+		// frame (a call's argument delta) leaves it running.
 		s.timer.Reset(s.interval)
 	}
 	return true
@@ -74,23 +72,33 @@ func (s *sseWriter) write(frames []byte, open bool) bool {
 func (s *sseWriter) ping() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed || s.failed || !s.open || s.ctx.Err() != nil {
+	if s.done || !s.open || s.ctx.Err() != nil {
 		return
 	}
-	if _, err := s.w.Write(pingFrame); err != nil {
-		logx.Debugf("codex stream: client ping failed: %v", err)
-		s.failed = true
-		return
+	if s.sendLocked(pingFrame, "ping") {
+		s.timer.Reset(s.interval)
+	}
+}
+
+// sendLocked writes and flushes b, a whole event (what names it in the log).
+// A failed write marks the writer done and stops the pings: the client has
+// gone.
+func (s *sseWriter) sendLocked(b []byte, what string) bool {
+	if _, err := s.w.Write(b); err != nil {
+		logx.Debugf("codex stream: client %s failed: %v", what, err)
+		s.done = true
+		s.stopLocked()
+		return false
 	}
 	_ = s.flush()
-	s.timer.Reset(s.interval)
+	return true
 }
 
 // close stops the pings; nothing is written after it returns.
 func (s *sseWriter) close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.closed = true
+	s.done = true
 	s.stopLocked()
 }
 
