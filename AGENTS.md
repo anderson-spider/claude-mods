@@ -15,7 +15,6 @@ Plugin work: read `plugins/<name>/AGENTS.md`; `.claude/rules/<name>.md` imports 
 
 - **chatgpt**: ChatGPT browser tools; see `plugins/chatgpt/AGENTS.md`.
 - **codex-computer-use**: native Mac app control through Codex; see `plugins/codex-computer-use/AGENTS.md`.
-- **codex-models**: native Codex models through a local Go proxy; see `plugins/codex-models/AGENTS.md`.
 - **crew**: specialist subagents with Jev routing and Codex twins; see `plugins/crew/AGENTS.md`.
 - **tailscale**: Tailscale API tools; see `plugins/tailscale/AGENTS.md`.
 

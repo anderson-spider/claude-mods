@@ -1,11 +1,11 @@
-import { isLoopbackBase } from './agents'
+import { checkKey } from './key'
 
 /** One rate-limit window: how much is used (0-100) and when it resets (ISO 8601). */
 export type Window = { percentUsed: number; resetsAt?: string }
 /** What a provider reports; a window it does not report is absent. */
 export type Reading = { fiveHour?: Window; sevenDay?: Window }
 export type Provider = 'claude' | 'codex'
-/** `ok` fresh reading; `unknown` none yet or none usable; `stale` too old; `down` the status request failed; `off` not asked (no twin). */
+/** `ok` fresh reading; `unknown` none yet or none usable; `stale` too old; `down` the remote's management request failed; `off` not asked (no twin). */
 export type CodexState = 'ok' | 'unknown' | 'stale' | 'down' | 'off'
 /** The provider the readings favor and why; `reason` has no provider prefix. */
 export type Decision = { provider: Provider; reason: string }
@@ -14,7 +14,7 @@ export type Quota = {
   claude: Reading | null
   codex: Reading | null
   codexState: CodexState
-  /** When the Codex status was fetched (ms since epoch), or null before the first fetch. */
+  /** When the Codex usage was fetched (ms since epoch), or null before the first fetch. */
   fetchedAt: number | null
   /** When the Codex limits were observed (ms; the oldest window's), or null. */
   codexObservedAt: number | null
@@ -27,18 +27,18 @@ export type Quota = {
 export type RateLimitInput = { kind: string; percentUsed: number; resetsAt?: string }
 
 export const DEADLINE_MS = 1500
-/** A status result, failures included, is reused for this long. */
-export const CACHE_MS = 60_000
+/** A Codex usage result, failures included, is reused for this long: each read asks OpenAI through the remote. */
+export const CACHE_MS = 5 * 60_000
 export const STALE_MS = 15 * 60_000
-/** An `observedAt` further ahead than this counts as stale (clock skew allowed). */
-export const FUTURE_MS = 60_000
 /** A provider whose 5-hour window is used at least this much is not chosen. */
 export const VETO = 90
 /** Codex wins only with its 7-day used at least this many points below Claude's. */
 export const MARGIN = 10
-/** The proxy calls OpenAI for fresh Codex limits only when the status request asks for it; a plain status never does. */
-export const STATUS_PATH = '/__ccmproxy/status?refresh=limits'
-export const TOKEN_HEADER = 'X-Ccmproxy-Token'
+/** The remote's management API: its Codex accounts, and a request it sends with an account's own token. */
+export const CREDENTIALS_PATH = '/v8/management/credentials'
+export const API_CALL_PATH = '/v8/management/requests/api-call'
+/** What the remote asks OpenAI for the plan's limits; `$TOKEN$` is the remote's placeholder for the account's token. */
+export const USAGE_URL = 'https://chatgpt.com/backend-api/wham/usage'
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -61,82 +61,94 @@ export function claudeReading(rateLimits: readonly RateLimitInput[] | undefined 
   return reading.fiveHour || reading.sevenDay ? reading : null
 }
 
-/** A time as ms since epoch: ISO text, or a number (Unix seconds below 1e12, else ms). */
-function toMs(value: unknown): number | undefined {
-  if (typeof value === 'number' && Number.isFinite(value)) return value < 1e12 ? value * 1000 : value
-  if (typeof value === 'string' && value !== '') {
-    const ms = Date.parse(value)
-    return Number.isNaN(ms) ? undefined : ms
-  }
-  return undefined
-}
+const isNumber = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value)
 
-function windowOf(kind: unknown, minutes: unknown): 'fiveHour' | 'sevenDay' | undefined {
-  if (kind === 'five_hour') return 'fiveHour'
-  if (kind === 'seven_day') return 'sevenDay'
-  const fromKind = typeof kind === 'string' ? /^window_(\d+)m$/.exec(kind) : null
-  const m = fromKind ? Number(fromKind[1]) : typeof minutes === 'number' ? minutes : undefined
-  return m === 300 ? 'fiveHour' : m === 10080 ? 'sevenDay' : undefined
+/** One `wham/usage` window as a Reading key and Window; anything malformed or of another length is skipped. */
+function usageWindow(raw: unknown, reached: boolean, now: number): ['fiveHour' | 'sevenDay', Window] | undefined {
+  if (!isObject(raw) || !isNumber(raw.used_percent) || raw.used_percent < 0) return undefined
+  const seconds = raw.limit_window_seconds
+  const key = seconds === 300 * 60 ? 'fiveHour' : seconds === 10080 * 60 ? 'sevenDay' : undefined
+  if (key === undefined) return undefined
+  const percentUsed = reached || raw.limit_reached === true ? 100 : clampPercent(raw.used_percent)
+  let resets: number | undefined
+  if (isNumber(raw.reset_at) && Number.isInteger(raw.reset_at) && raw.reset_at >= 1 && raw.reset_at < 1e11) resets = raw.reset_at * 1000
+  else if (isNumber(raw.reset_after_seconds) && raw.reset_after_seconds >= 0 && raw.reset_after_seconds < 1e9) resets = now + raw.reset_after_seconds * 1000
+  return [key, { percentUsed, ...(resets !== undefined ? { resetsAt: new Date(resets).toISOString() } : {}) }]
 }
 
 /**
- * Codex's windows from the proxy status body (text or parsed). `unknown` when `codexLimits` is absent, empty, malformed or
- * holds no usable window; `stale` when any window's `observedAt` is missing, older than STALE_MS or in the future; `observedAt` is the oldest window's. Never throws.
+ * Codex's windows from the remote's api-call answer: an envelope `{status_code, body}` whose body is OpenAI's usage JSON
+ * (`rate_limit.primary_window` / `secondary_window`). The windows are named by length, not by primary/secondary, and
+ * observed now. A non-2xx call, a malformed envelope or no usable window is `unknown`. Never throws.
  */
-export function codexReading(
-  statusJson: unknown,
-  now: number,
-): { reading: Reading | null; state: 'ok' | 'unknown' | 'stale'; observedAt: number | null } {
+export function codexUsage(text: unknown, now: number): { reading: Reading | null; state: 'ok' | 'unknown'; observedAt: number | null } {
+  const unknown = { reading: null, state: 'unknown' as const, observedAt: null }
   try {
-    let body = statusJson
-    if (typeof body === 'string') body = JSON.parse(body)
-    if (!isObject(body) || !Array.isArray(body.codexLimits)) return { reading: null, state: 'unknown', observedAt: null }
+    const envelope: unknown = typeof text === 'string' ? JSON.parse(text) : text
+    if (!isObject(envelope) || !isNumber(envelope.status_code) || envelope.status_code < 200 || envelope.status_code >= 300) return unknown
+    if (typeof envelope.body !== 'string') return unknown
+    const root: unknown = JSON.parse(envelope.body)
+    if (!isObject(root)) return unknown
+    const holder = isObject(root.rate_limit) ? root.rate_limit : root
+    const reached = holder.limit_reached === true
     const reading: Reading = {}
-    let oldest: number | undefined
-    let stale = false
-    for (const row of body.codexLimits) {
-      if (!isObject(row) || typeof row.percentUsed !== 'number' || !Number.isFinite(row.percentUsed)) continue
-      const key = windowOf(row.kind, row.windowMinutes)
-      if (key === undefined || reading[key] !== undefined) continue
-      const resets = toMs(row.resetsAt)
-      reading[key] = {
-        percentUsed: clampPercent(row.percentUsed),
-        ...(resets !== undefined ? { resetsAt: new Date(resets).toISOString() } : {}),
-      }
-      // Each window is judged on its own observedAt: missing, older than STALE_MS or in the future makes the reading stale.
-      const seen = toMs(row.observedAt)
-      if (seen === undefined || now - seen > STALE_MS || seen - now > FUTURE_MS) stale = true
-      if (seen !== undefined && (oldest === undefined || seen < oldest)) oldest = seen
+    for (const name of ['primary_window', 'secondary_window']) {
+      const window = usageWindow(holder[name], reached, now)
+      if (window && reading[window[0]] === undefined) reading[window[0]] = window[1]
     }
-    if (!reading.fiveHour && !reading.sevenDay) return { reading: null, state: 'unknown', observedAt: null }
-    return { reading, state: stale ? 'stale' : 'ok', observedAt: oldest ?? null }
+    if (!reading.fiveHour && !reading.sevenDay) return unknown
+    return { reading, state: 'ok', observedAt: now }
   } catch {
-    // Also an out-of-range resetsAt (toISOString throws): the whole reading is unknown, which routes to Claude.
-    return { reading: null, state: 'unknown', observedAt: null }
+    return unknown
   }
 }
 
-/** The secret from ANTHROPIC_CUSTOM_HEADERS (newline-separated `Name: value` lines; the name is case-insensitive). */
-function tokenOf(headers: unknown): string | undefined {
-  if (typeof headers !== 'string') return undefined
-  const line = headers.split(/\r?\n/).find(row => {
-    const colon = row.indexOf(':')
-    return colon > 0 && row.slice(0, colon).trim().toLowerCase() === TOKEN_HEADER.toLowerCase()
-  })
-  const token = line?.slice(line.indexOf(':') + 1).trim()
-  return token ? token : undefined
+/** The one active, enabled, available Codex account in the remote's credential list; none, or several, is undefined. */
+export function activeCodexAccount(text: unknown): string | undefined {
+  try {
+    const envelope: unknown = typeof text === 'string' ? JSON.parse(text) : text
+    if (!isObject(envelope) || !Array.isArray(envelope.files)) return undefined
+    const active = envelope.files.filter(
+      (file): file is Record<string, unknown> =>
+        isObject(file) &&
+        (file.type === 'codex' || file.provider === 'codex') &&
+        file.status === 'active' &&
+        file.disabled !== true &&
+        file.unavailable !== true,
+    )
+    const index = active.length === 1 ? active[0]?.auth_index : undefined
+    return typeof index === 'string' && index !== '' ? index : undefined
+  } catch {
+    return undefined
+  }
 }
 
-export type ProxyAccess = { ok: true; url: string; headers: Record<string, string> } | { ok: false; reason: string }
+/** The api-call body that has the remote ask OpenAI's usage endpoint with the account's own token. */
+export function usageRequest(authIndex: string): string {
+  return JSON.stringify({ auth_index: authIndex, method: 'GET', url: USAGE_URL, header: { Authorization: 'Bearer $TOKEN$' } })
+}
 
-/** Where and how to ask the proxy's status: a loopback `http:` base and the secret from the custom headers. */
-export function proxyAccess(baseUrl: string | undefined, customHeaders: string | undefined): ProxyAccess {
-  if (!baseUrl) return { ok: false, reason: 'no ANTHROPIC_BASE_URL' }
-  if (!isLoopbackBase(baseUrl)) return { ok: false, reason: 'ANTHROPIC_BASE_URL is not a loopback http URL' }
-  const token = tokenOf(customHeaders)
-  if (!token) return { ok: false, reason: `no ${TOKEN_HEADER} in ANTHROPIC_CUSTOM_HEADERS` }
-  const origin = new URL(baseUrl).origin
-  return { ok: true, url: `${origin}${STATUS_PATH}`, headers: { [TOKEN_HEADER]: token } }
+export type RemoteAccess = { ok: true; origin: string; headers: Record<string, string> } | { ok: false; reason: string }
+
+/**
+ * Where and how to ask the remote's management API: an `http:` or `https:` origin with no userinfo, path, query or
+ * fragment, and the management key as a bearer. Reasons are fixed phrases: no URL or key text is in them.
+ */
+export function remoteAccess(remote: unknown, key: unknown): RemoteAccess {
+  if (remote === undefined || remote === null || (typeof remote === 'string' && remote.trim() === '')) return { ok: false, reason: 'no codexRemote option' }
+  const checked = checkKey(key)
+  if (checked.key === undefined) return { ok: false, reason: checked.off === 'no-key' ? 'no codexManagementKey option' : 'the codexManagementKey option is not a valid key' }
+  let url: URL
+  try {
+    url = new URL(String(remote).trim())
+  } catch {
+    return { ok: false, reason: 'the codexRemote option is not a URL' }
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return { ok: false, reason: 'the codexRemote option is not an http or https URL' }
+  if (url.username || url.password || (url.pathname !== '' && url.pathname !== '/') || url.search || url.hash) {
+    return { ok: false, reason: 'the codexRemote option must be an origin with no userinfo, path, query or fragment' }
+  }
+  return { ok: true, origin: url.origin, headers: { Authorization: `Bearer ${checked.key}`, Accept: 'application/json' } }
 }
 
 const pct = (window: Window | undefined): string => (window ? `${Math.round(window.percentUsed)}%` : 'n/a')
@@ -157,7 +169,7 @@ export const ROUTING_OFF_REASON = 'routing off or no Codex twin'
 const NOT_KNOWN: Record<'unknown' | 'stale' | 'down' | 'off', string> = {
   unknown: 'Codex quota not known yet',
   stale: 'Codex quota is stale',
-  down: 'Codex proxy is down',
+  down: 'Codex quota source is down',
   off: ROUTING_OFF_REASON,
 }
 

@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { EFFORTS, EFFORT_FLOOR, MODELS, SPECIALISTS, isLoopbackBase, leadSection, nativeCodexSection, nativeCodexSpecs } from '../hooks/agents'
+import { EFFORTS, EFFORT_FLOOR, MODELS, SPECIALISTS, isGatewayBase, leadSection, nativeCodexSection, nativeCodexSpecs } from '../hooks/agents'
 
 const by = (name: string) => SPECIALISTS.find(s => s.name === name)
 
@@ -121,17 +121,12 @@ test('only the roles named get a twin, and SPECIALISTS keep their aliases', () =
   for (const s of SPECIALISTS) expect(MODELS).toContain(s.model)
 })
 
-test('isLoopbackBase accepts http on 127.0.0.0/8, ::1 and localhost only', () => {
-  for (const url of ['http://127.0.0.1:8081', 'http://127.0.0.1', 'http://127.255.0.9:1/', 'http://127.1:9', 'http://[::1]:8081', 'http://localhost:8081', 'http://LOCALHOST', 'http://user@127.0.0.1:5']) {
-    expect(isLoopbackBase(url)).toBe(true)
+test('isGatewayBase accepts any http or https base URL except Anthropic\'s API', () => {
+  for (const url of ['https://ai.example.ts.net', 'http://127.0.0.1:8081', 'https://gateway.example.com/v1', 'HTTPS://GW.EXAMPLE']) {
+    expect(isGatewayBase(url)).toBe(true)
   }
-  for (const url of [
-    undefined, '', 'localhost', '127.0.0.1:8081', 'not a url', 'https://127.0.0.1:8081', 'https://localhost',
-    'http://api.anthropic.com', 'http://128.0.0.1', 'http://10.0.0.1', 'http://0.0.0.0', 'http://[::2]:1', 'http://[::ffff:8.8.8.8]',
-    'http://127.0.0.1.evil.com', 'http://localhost.evil.com', 'http://evil.com/127.0.0.1', 'http://127.0.0.1@evil.com', 'http://evil.com#@127.0.0.1',
-    'http://127.0.0.256', 'ftp://127.0.0.1',
-  ]) {
-    expect(isLoopbackBase(url)).toBe(false)
+  for (const url of [undefined, '', 'gateway.example', 'not a url', 'ftp://gateway.example', 'https://api.anthropic.com', 'https://API.ANTHROPIC.COM/']) {
+    expect(isGatewayBase(url)).toBe(false)
   }
 })
 
@@ -147,22 +142,7 @@ test('nativeCodexSection lists every twin with its model, never names the Codex 
   expect(nativeCodexSection(specs)).toBe(text)
 })
 
-// --- The loopback gate and the twins' shape ---
-
-const LOOPBACK_URLS = [
-  'http://127.0.0.1:41237', 'HTTP://127.0.0.1', 'http://127.255.255.255', 'http://[::1]:9', 'http://localhost', 'http://LOCALHOST:1',
-  'http://user:pass@127.0.0.1:41237', 'http://evil.com@127.0.0.1', 'http://127.0.0.1:41237/v1', ' http://127.0.0.1 ',
-  // Normalized by the URL parser to 127.0.0.1 or ::1, which is where a client would connect.
-  'http://0x7f000001', 'http://127.1', 'http://2130706433', 'http://0177.0.0.1', 'http://[0:0:0:0:0:0:0:1]', 'http:127.0.0.1',
-]
-const OTHER_URLS = [
-  'http://127.0.0.1.nip.io', 'http://[::ffff:127.0.0.1]', 'http://localhost.evil', 'http://localhost.', 'http://127.0.0.1@evil.com',
-  'http://128.0.0.1', 'http://0.0.0.0', 'http://[::]', 'ws://127.0.0.1', 'https://127.0.0.1', 'http://sub.localhost',
-  'http://10.0.0.1', 'localhost:41237', '127.0.0.1', '', undefined, 'http://', 'http://127.0.0.256', 'file:///127.0.0.1',
-]
-
-for (const url of LOOPBACK_URLS) test(`the gate accepts ${JSON.stringify(url)}`, () => expect(isLoopbackBase(url)).toBe(true))
-for (const url of OTHER_URLS) test(`the gate refuses ${JSON.stringify(url)}`, () => expect(isLoopbackBase(url)).toBe(false))
+// --- The twins' shape ---
 
 test('a twin changes only name, model and description of its base, over a three-role option', () => {
   const twins = nativeCodexSpecs({ developer: 'gpt-6-astra', architect: 'gpt-6-sage', 'code-reader': 'gpt-6-mini' })

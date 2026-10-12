@@ -1,6 +1,6 @@
 import { atom, read, update } from 'claude-code'
 import type { Hook, Register } from 'claude-code'
-import { SPECIALISTS, isLoopbackBase, leadSection, nativeCodexSection, nativeCodexSpecs } from './agents'
+import { SPECIALISTS, isGatewayBase, leadSection, nativeCodexSection, nativeCodexSpecs } from './agents'
 import type { Agent, Effort } from './agents'
 import { createConfirmations, confirmText, observedEffort } from './confirm'
 import type { Confirmations } from './confirm'
@@ -11,12 +11,12 @@ import type { BindOutcome, EffortBook, Listed } from './effort'
 import { deniedWrite } from './guard'
 import { createBreaker, createGate, createJev, failureText } from './jev'
 import type { Breaker, Gate, JevIo } from './jev'
-import { checkKey, resolveAccess } from './key'
+import { checkKey, repoDeclares, resolveAccess } from './key'
 import type { KeyIo, Off } from './key'
 import { CODEX_MODELS } from './native'
 import { JEV_MODEL } from './questions'
-import { CACHE_MS, DEADLINE_MS, INITIAL_QUOTA, claudeReading, codexReading, proxyAccess, settle } from './quota'
-import type { ProxyAccess, Provider, Quota, RateLimitInput } from './quota'
+import { API_CALL_PATH, CACHE_MS, CREDENTIALS_PATH, DEADLINE_MS, INITIAL_QUOTA, activeCodexAccount, claudeReading, codexUsage, remoteAccess, settle, usageRequest } from './quota'
+import type { Provider, Quota, RateLimitInput, RemoteAccess } from './quota'
 import { defaultsOf, describe, moved, noticeText, retarget, route, routable, taggedDescription, twinFor, untagged } from './routing'
 import type { Routed, Switch, Target } from './routing'
 
@@ -171,26 +171,17 @@ async function baseUrl($: Dollar): Promise<string | undefined> {
   }
 }
 
-/** The session's custom request headers (one of them carries the proxy's secret); a failing read is none. Only the token line is ever taken from it. */
-async function customHeaders($: Dollar): Promise<string | undefined> {
-  try {
-    return await $.env.get('ANTHROPIC_CUSTOM_HEADERS')
-  } catch {
-    return undefined
-  }
-}
-
-/** The `-codex` types the session can reach: all of them behind a loopback base URL (the local proxy), none otherwise. */
+/** The `-codex` types the session can reach: all of them behind a gateway base URL, none on Anthropic's API or with none set. */
 async function reachableNative($: Dollar, native: Native): Promise<readonly Agent<string>[]> {
-  return native.specs.length > 0 && isLoopbackBase(await baseUrl($)) ? native.specs : []
+  return native.specs.length > 0 && isGatewayBase(await baseUrl($)) ? native.specs : []
 }
 
-/** Registers the `-codex` types when the proxy is the base URL; without it a spawn would only fail, so one debug line says why not. */
+/** Registers the `-codex` types when a gateway is the base URL; without it a spawn would only fail, so one debug line says why not. */
 async function registerNative($: Dollar, native: Native) {
   native.registered.length = 0
   const reachable = await reachableNative($, native)
   if (reachable.length === 0) {
-    $.ui.log('crew: Codex twins not registered (ANTHROPIC_BASE_URL is not a loopback http URL)', { to: 'debug' })
+    $.ui.log('crew: Codex twins not registered (ANTHROPIC_BASE_URL is not a gateway URL)', { to: 'debug' })
   }
   // One refused registration leaves the other twins registered; only the registered ones are routed and listed.
   for (const agent of reachable) {
@@ -203,7 +194,7 @@ async function registerNative($: Dollar, native: Native) {
   }
 }
 
-/** The agents, then the fixed twins behind a loopback base URL. No status or secret is read at start. */
+/** The agents, then the fixed twins behind a gateway base URL. No quota or secret is read at start. */
 async function startCrew(native: Native, $: Dollar, e: StartHook[1], next: StartHook[2]) {
   native.registered.length = 0
   await registerSpecialists($)
@@ -229,52 +220,102 @@ type Routing = {
   access: KeyCache
   /** The `-codex` twins that were registered (`Native.registered`): routable for their effort only. */
   twins: readonly Agent<string>[]
-  /** The Codex status request under way, shared by every caller (one at a time). */
+  /** The quota refresh under way, shared by every caller (one at a time). */
   flight?: Promise<void>
+  /** The `codexRemote` and `codexManagementKey` options; `set` when both are well-formed, which turns quota routing on. */
+  remote: { url: unknown; key: unknown; set: boolean; access?: Promise<RemoteAccess> }
+  /** The Codex usage read under way; it may outlive the deadline of the spawn that started it. */
+  codexFlight?: Promise<CodexRead>
+  /** A Codex read that finished after its spawn's deadline, applied by the next refresh. */
+  codexLate?: CodexRead
 }
 
-// --- The quota atom: Claude from the host, Codex from the proxy's status ---
+// --- The quota atom: Claude from the host, Codex from the remote's management API ---
 
-/** The Codex status text within DEADLINE_MS, or undefined: a failure, a non-2xx status or a fetch that outlasts the deadline (it cannot be aborted, so it is left to settle). */
-async function fetchStatus($: Dollar, access: Extract<ProxyAccess, { ok: true }>): Promise<string | undefined> {
-  let cancel: () => void = () => {}
-  const late = new Promise<undefined>(resolve => {
-    cancel = clockOf($).timer(DEADLINE_MS, () => resolve(undefined))
-  })
-  const asked = $.http
-    .fetch(access.url, { method: 'GET', headers: access.headers })
+/** The options a repository's own settings may not supply: the key would go where the repository says. */
+const REMOTE_OPTIONS = ['codexRemote', 'codexManagementKey'] as const
+
+/** Where Codex's usage is read, resolved once per activation; refused when the repository's settings supply either option or cannot be read. */
+function remoteOf($: Dollar, routing: Routing): Promise<RemoteAccess> {
+  routing.remote.access ??= (async (): Promise<RemoteAccess> => {
+    const access = remoteAccess(routing.remote.url, routing.remote.key)
+    if (!access.ok) return access
+    const declared = await repoDeclares(keyIo($), REMOTE_OPTIONS).catch(() => undefined)
+    if (declared === undefined) return { ok: false, reason: 'the repository settings cannot be read' }
+    if (declared) return { ok: false, reason: 'the repository settings declare codexRemote or codexManagementKey (set them in user settings)' }
+    return access
+  })()
+  return routing.remote.access
+}
+
+/** One management request: its text on a 2xx answer, undefined on any failure. The key goes only to the remote's origin. */
+async function management($: Dollar, access: Extract<RemoteAccess, { ok: true }>, path: string, body?: string): Promise<string | undefined> {
+  const init = body === undefined
+    ? { method: 'GET', headers: access.headers }
+    : { method: 'POST', headers: { ...access.headers, 'Content-Type': 'application/json' }, body }
+  return $.http
+    .fetch(`${access.origin}${path}`, init)
     .then(response => (response.status >= 200 && response.status < 300 ? response.text : undefined))
     .catch(() => undefined)
-  try {
-    return await Promise.race([asked, late])
-  } finally {
-    cancel()
-  }
 }
 
 type CodexRead = Pick<Quota, 'codex' | 'codexState' | 'fetchedAt' | 'codexObservedAt'>
 
-/** One look at the proxy's status. Every failure is `down` (or `unknown` without a usable secret) and is cached like a reading. */
-async function readCodex($: Dollar, now: number): Promise<CodexRead> {
+/** One read of Codex's usage: the remote's one active Codex account, then OpenAI's usage through it. A failed request is `down`, anything else unusable `unknown`. */
+async function readCodex($: Dollar, routing: Routing, now: number): Promise<CodexRead> {
   const failed = (codexState: 'down' | 'unknown'): CodexRead => ({ codex: null, codexState, fetchedAt: now, codexObservedAt: null })
   try {
-    const access = proxyAccess(await baseUrl($), await customHeaders($))
+    const access = await remoteOf($, routing)
     if (!access.ok) {
-      // The reasons are fixed phrases: no URL, token or header text is in them.
+      // The reasons are fixed phrases: no URL or key text is in them.
       $.ui.log(`crew quota: Codex not asked (${access.reason})`, { to: 'debug' })
       return failed('unknown')
     }
-    const text = await fetchStatus($, access)
-    if (text === undefined) return failed('down')
-    const read = codexReading(text, now)
+    const credentials = await management($, access, CREDENTIALS_PATH)
+    if (credentials === undefined) return failed('down')
+    const index = activeCodexAccount(credentials)
+    if (index === undefined) {
+      $.ui.log('crew quota: Codex not asked (the remote has no single active Codex account)', { to: 'debug' })
+      return failed('unknown')
+    }
+    const usage = await management($, access, API_CALL_PATH, usageRequest(index))
+    if (usage === undefined) return failed('down')
+    const read = codexUsage(usage, now)
     return { codex: read.reading, codexState: read.state, fetchedAt: now, codexObservedAt: read.observedAt }
   } catch {
     return failed('down')
   }
 }
 
-/** Registered twins make quota routing eligible; without them the proxy is never asked. */
-const asksCodex = (routing: Routing) => routing.twins.length > 0
+/**
+ * Codex's read within DEADLINE_MS, or undefined. One read at a time; a later caller shares it. Host fetch cannot be
+ * aborted, so a read that outlasts the deadline is kept in memory and applied by the next refresh.
+ */
+async function codexWithin($: Dollar, routing: Routing, now: number): Promise<CodexRead | undefined> {
+  if (!routing.codexFlight) {
+    const flight: Promise<CodexRead> = readCodex($, routing, now).finally(() => {
+      if (routing.codexFlight === flight) routing.codexFlight = undefined
+    })
+    routing.codexFlight = flight
+  }
+  const flight = routing.codexFlight
+  let cancel: () => void = () => {}
+  const late = new Promise<undefined>(resolve => {
+    cancel = clockOf($).timer(DEADLINE_MS, () => resolve(undefined))
+  })
+  try {
+    const read = await Promise.race([flight, late])
+    // A late failure is dropped rather than cached: its later requests ran on a `$` whose hook had returned, so the
+    // next spawn reads again with its own.
+    if (read === undefined) void flight.then(result => { if (result.codexState !== 'down') routing.codexLate = result })
+    return read
+  } finally {
+    cancel()
+  }
+}
+
+/** Registered twins and both remote options make quota routing eligible; without them the remote is never asked. */
+const asksCodex = (routing: Routing) => routing.twins.length > 0 && routing.remote.set
 
 async function updateQuota($: Dollar, routing: Routing): Promise<void> {
   const now = await $.clock.now()
@@ -283,18 +324,23 @@ async function updateQuota($: Dollar, routing: Routing): Promise<void> {
   const before = await read($, quota)
   const eligible = asksCodex(routing)
   const age = before.fetchedAt === null ? Infinity : now - before.fetchedAt
-  // Cached for CACHE_MS, failures included, so a dead proxy is not asked on every spawn.
+  // Cached for CACHE_MS, failures included, so a dead remote is not asked on every spawn. A read that came back late
+  // is applied first; one still under way leaves the cached state, and Codex unknown before any read.
+  const late = routing.codexLate
+  routing.codexLate = undefined
   const codex: Partial<Quota> = !eligible
     ? { codex: null, codexState: 'off', fetchedAt: null, codexObservedAt: null }
-    : before.codexState !== 'off' && age >= 0 && age < CACHE_MS
-      ? {}
-      : await readCodex($, now)
+    : late
+      ? late
+      : before.codexState !== 'off' && age >= 0 && age < CACHE_MS
+        ? {}
+        : ((await codexWithin($, routing, now)) ?? (before.codexState === 'off' ? { codexState: 'unknown' } : {}))
   await update($, quota, q => settle({ ...q, ...codex, ...(claude ? { claude, claudeAt: now } : {}) }, eligible, now))
 }
 
 /**
  * The quota atom brought up to date: Claude from `$.session.usage()` (an empty reading keeps the last non-empty one),
- * Codex from the proxy when it is asked and its last answer is older than CACHE_MS. One refresh at a time; callers
+ * Codex from the remote when it is asked and its last answer is older than CACHE_MS. One refresh at a time; callers
  * share it. Rejects only when the atom itself cannot be read or written; callers catch.
  */
 async function refreshQuota($: Dollar, routing: Routing): Promise<Quota> {
@@ -365,7 +411,7 @@ async function routeSpawn(routing: Routing, $: Dollar, e: SpawnHook[1], next: Sp
   if (!asked) return next(e)
   const key = routing.enabled ? await keyOf($, routing.access, routing.jevKey) : undefined
   // The twin this call could move to, when quota routing is on and the call is one that may move.
-  const twin = twinFor(e, routing.twins)
+  const twin = asksCodex(routing) ? twinFor(e, routing.twins) : undefined
   if (!routing.enabled && !twin) return next(e)
 
   // A description that already carries a tag (a call copied from the task list) is sent and tagged without it.
@@ -385,8 +431,8 @@ async function routeSpawn(routing: Routing, $: Dollar, e: SpawnHook[1], next: Sp
   // Models stay fixed. Any Jev failure requests medium; quota-only twin calls use medium too.
   const jevRouted = jevAnswer && toCodex ? retarget(jevAnswer, spec) : jevAnswer
   const routed = jevRouted ?? (routing.enabled || spec.base !== undefined ? defaultsOf(spec) : undefined)
-  // The proxy gives this suffix precedence over the host's output_config.effort, even on the first step.
-  const suffix = spec.base !== undefined && routed ? `${spec.model}:${routed.decision.effort}` : undefined
+  // The remote reads `<model>(<effort>)` before the host's output_config.effort, even on the first step.
+  const suffix = spec.base !== undefined && routed ? `${spec.model}(${routed.decision.effort})` : undefined
   const change = moved(spec, routed)
   // The task shows what was chosen, so the task list says whether routing runs; the book matches the shown description.
   const description = routed ? taggedDescription(e.description, routed, spec.model) : e.description
@@ -448,7 +494,7 @@ async function routeSpawn(routing: Routing, $: Dollar, e: SpawnHook[1], next: Sp
 }
 
 export const register: Register = (on, options) => {
-  // Fixed twins register only at session start behind a loopback base URL, never on reload alone.
+  // Fixed twins register only at session start behind a gateway base URL, never on reload alone.
   const native: Native = { specs: nativeCodexSpecs(CODEX_MODELS), registered: [] }
 
   // Shared while the module lives: the rate limit is the account's, and a sick Jev is not asked again for a while.
@@ -462,6 +508,7 @@ export const register: Register = (on, options) => {
     confirms: createConfirmations(),
     access: {},
     twins: native.registered,
+    remote: { url: options.codexRemote, key: options.codexManagementKey, set: remoteAccess(options.codexRemote, options.codexManagementKey).ok },
   }
 
   on('session.start', {}, ($, e, next) => startCrew(native, $, e, next))

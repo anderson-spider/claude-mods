@@ -44,6 +44,19 @@ export function declaresOption(configs: unknown, plugin: string, option: string)
 }
 
 /**
+ * Whether the repository's own settings (project or local) give crew any of `options`: a value the repository supplies
+ * could send a secret where the repository chooses. Rejects when those settings cannot be read.
+ */
+export async function repoDeclares(io: KeyIo, options: readonly string[]): Promise<boolean> {
+  let declared = false
+  for (const source of ['project', 'local'] as const) {
+    const settings = await io.settings(source)
+    if (options.some(option => declaresOption(settings?.pluginConfigs, 'crew', option))) declared = true
+  }
+  return declared
+}
+
+/**
  * Whether routing may run, with the key and the home that redaction trusts. The settings are read once, and only for
  * a valid key; unreadable ones, or a `jevKey` the repository declares, turn routing off. The home is absolute and not
  * declared by the repository's settings, or there is none.
