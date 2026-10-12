@@ -26,14 +26,14 @@ node --test plugins/codex-models/tests/scripts/*.test.mjs
 | codex-models (plugin) | The status reply and report, the settings merge and unmerge, the hooks through the test host | Pure modules; a fake `http.fetch` for the hooks |
 | codex-models (proxy) | Configuration, listeners, the guard and routes, byte-for-byte pass-through, the streaming translation, OAuth and the credential store, effort, the catalog, compressed bodies | The Go test packages; no network |
 | codex-models (installer) | `install.sh` and `uninstall.sh` against a temporary `HOME`, with a fake `launchctl` and `mise` | The real scripts with fakes; no LaunchAgent is loaded |
-| crew | Each agent's model and effort, the write lanes, Jev routing (tier, effort, breaker, key, decision log), the Flightdeck dashboard and the `/crew:panel` command | The test host with a fake `http.fetch`; nothing reaches Jev |
+| crew | Each agent's model and effort, the write lanes, Jev routing (tier, effort, breaker, key, decision log), quota-aware routing (the status read, the provider decision, the type rewrite), the HUD (its state, drawing, active plan) and the `/crew:panel` command | The test host with a fake `http.fetch`; nothing reaches Jev |
 | tailscale | URL building, the forbidden call, redaction, `ETag`/`If-Match` | A fake `fetch`; no fake host |
 
 ## What they do not prove
 
 - No end-to-end run on a real desktop: Codex's computer-use runtime is not in this repository, so the app-control path is tested only against a fake server.
 - chatgpt's selectors follow chatgpt.com as of 2026-10. When the UI changes, `/chatgpt-doctor` finds the break; the tests will not.
-- The terminal pane has been verified live. The desktop surface is still covered only by tests; they need a real app session with code-reader and architect running in parallel to check rendering, motion and live tracking. Mounted tests do not establish visual acceptance.
+- The crew HUD (terminal pane, band and the Waiting on you row against a real permission dialog) is covered by the test host only; live checks of it, and of quota routing's switch to a `-codex` twin, are still to run. The desktop surface is covered only by mounted tests, which do not establish visual acceptance.
 - The plugins use the function hooks API, in early access, so a Claude Code update can break them without a test failing here.
 - codex-models: no real ChatGPT login, Codex request or Claude Code session is exercised by the tests; the installer tests never load the LaunchAgent. Whether a new session lists the Codex rows in `/model` and what a `crew:*-codex` agent answers is checked live only.
 - `branch-guard` reads command text. Aliases, scripts and anything the text does not show get past it (commands inside `$(…)` and `bash -c` are classified); it is a safety net, not a permission system.
