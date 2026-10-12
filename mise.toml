@@ -7,6 +7,48 @@ node = "24"
 "npm:typescript" = "7.0.2"
 go = "1.27.1"
 
+[tasks."worktree:add"]
+description = "Create an andersonsilva worktree and generate every plugin's typings"
+usage = '''
+arg "<name>" help="Worktree name"
+arg "[base]" help="Base ref (<remote>/<ref>)" default="origin/main"
+'''
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+name=${usage_name?}
+base=${usage_base?}
+[[ "$name" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ ]] || { echo "invalid worktree name: $name" >&2; exit 1; }
+remote=${base%%/*}
+ref=${base#*/}
+if [[ "$base" != */* || "$base" == *:* || "$base" == -* || "$ref" == -* || "$base" == *..* || "$base" == *@\{* ]]; then
+  echo "invalid base ref: $base (expected <remote>/<ref>)" >&2
+  exit 1
+fi
+if ! git remote get-url "$remote" >/dev/null 2>&1 || ! git check-ref-format --branch "$ref" >/dev/null 2>&1; then
+  echo "invalid base ref: $base (expected an existing remote and a valid ref)" >&2
+  exit 1
+fi
+branch="andersonsilva/$name"
+git check-ref-format --branch "$branch" >/dev/null
+# The shared Git directory anchors the sibling worktree directory even from another worktree.
+common=$(git rev-parse --path-format=absolute --git-common-dir)
+path="$(dirname "$(dirname "$common")")/claude-mods-worktrees/$name"
+if git show-ref --verify --quiet "refs/heads/$branch"; then
+  echo "branch already exists: $branch" >&2
+  exit 1
+fi
+if [ -e "$path" ] || [ -L "$path" ]; then
+  echo "worktree path already exists: $path" >&2
+  exit 1
+fi
+git fetch -- "$remote" "$ref"
+git worktree add -b "$branch" -- "$path" "$base"
+mise trust "$path/mise.toml"
+mise -C "$path" run plugins:types
+printf '%s\n' "$path"
+'''
+
 [tasks."plugins:validate"]
 description = "Validate the marketplace and every plugin, then check that the manifests agree"
 run = '''
@@ -18,10 +60,12 @@ node scripts/check-consistency.mjs
 '''
 
 [tasks."plugins:test"]
-description = "Run every plugin's tests, the proxy's Go tests, the install scripts' tests, and the codex-computer-use helper's when the ChatGPT app's node is present"
+description = "Run the typecheck hook tests, every plugin's tests, the proxy's Go tests, the install scripts' tests, and the codex-computer-use helper's when the ChatGPT app's node is present"
 run = '''
 #!/usr/bin/env bash
 set -euo pipefail
+echo "==> plugin typecheck hook"
+node --test scripts/typecheck-plugin.test.mjs
 for p in plugins/*/; do echo "==> $(basename "$p")"; claude plugin test "${p%/}"; done
 echo "==> codex-models proxy"
 go -C plugins/codex-models/proxy test -race ./...
