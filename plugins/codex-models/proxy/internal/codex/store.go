@@ -133,23 +133,45 @@ func NewStore(client *Client, options StoreOptions) *Store {
 // a case-insensitive volume). Every read, write and removal runs it; call it
 // at start to fail early.
 //
-// It also refuses an auth_dir, or an auth_file's directory, that is the Codex
-// CLI's directory or inside it (resolved the same way), so the proxy's file,
-// its lock and the 0700 it sets never land there.
+// It also refuses an auth_dir that is the Codex CLI's directory or inside it,
+// and a credential file (auth_file, or auth_dir's codex.json) that resolves
+// there through its own links (a dangling one included), so the proxy's
+// file, its lock and the 0700 it sets never land there and a refresh token
+// is never spent on a file the proxy may not write.
 func (s *Store) Check() error {
 	path := strings.TrimSpace(s.options.ExplicitPath)
 	if path != "" {
 		if cli := CodexCLIAuthPath(); cli != "" && sameFile(path, cli) {
 			return fmt.Errorf("%w (%s is %s)", ErrAuthFileIsCodexCLI, path, cli)
 		}
-		if insideCodexHome(filepath.Dir(path)) {
-			return fmt.Errorf("%w (auth_file %s is in %s)", ErrInsideCodexHome, path, CodexCLIHome())
+		if insideCodexHome(path) {
+			return insideHomeError("auth_file", path)
 		}
 	}
-	if dir := strings.TrimSpace(s.options.Dir); dir != "" && insideCodexHome(dir) {
-		return fmt.Errorf("%w (auth_dir %s is in %s)", ErrInsideCodexHome, dir, CodexCLIHome())
+	if dir := strings.TrimSpace(s.options.Dir); dir != "" {
+		if insideCodexHome(dir) {
+			return insideHomeError("auth_dir", dir)
+		}
+		if native := filepath.Join(dir, nativeFileName); path == "" && insideCodexHome(native) {
+			return insideHomeError("auth_dir's "+nativeFileName, native)
+		}
 	}
 	return nil
+}
+
+// insideHomeError names what lands in CODEX_HOME, with both paths resolved
+// the same way so they read alike.
+func insideHomeError(what, path string) error {
+	home := resolvePath(CodexCLIHome(), 0)
+	resolved := resolvePath(path, 0)
+	switch {
+	case sameFile(resolved, home):
+		return fmt.Errorf("%w (%s is the Codex CLI's directory, %s)", ErrInsideCodexHome, what, home)
+	case resolved == filepath.Clean(path):
+		return fmt.Errorf("%w (%s %s is in the Codex CLI's directory, %s)", ErrInsideCodexHome, what, path, home)
+	default:
+		return fmt.Errorf("%w (%s %s leads to %s, in the Codex CLI's directory, %s)", ErrInsideCodexHome, what, path, resolved, home)
+	}
 }
 
 // NativePath reports this proxy's own credential file.
@@ -544,7 +566,7 @@ func (s *Store) writeFileAtomic(path string, data []byte) error {
 // tightened to 0700 when it already exists.
 func (s *Store) ensureDir(dir string) error {
 	if insideCodexHome(dir) {
-		return fmt.Errorf("%w (%s is in %s)", ErrInsideCodexHome, dir, CodexCLIHome())
+		return insideHomeError("the directory", dir)
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("codex: create %s: %w", dir, err)
