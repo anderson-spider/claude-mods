@@ -191,3 +191,19 @@ export function decide(claude: Reading | null, codex: Reading | null, codexState
   }
   return toClaude(`7d ${pct(claude7)} used vs Codex 7d ${pct(codex7)}`)
 }
+
+/** The atom's value before any reading: Codex is not asked (`off`) and the call stays on Claude. */
+export const INITIAL_QUOTA: Quota = {
+  claude: null,
+  codex: null,
+  codexState: 'off',
+  fetchedAt: null,
+  codexObservedAt: null,
+  claudeAt: null,
+  decision: { provider: 'claude', reason: NOT_KNOWN.off },
+}
+
+/** The value with its `decision` recomputed from its own readings, so the atom never holds readings and a decision that disagree. */
+export function settle(quota: Quota, eligible: boolean, now: number): Quota {
+  return { ...quota, decision: decide(quota.claude, quota.codex, quota.codexState, eligible, now) }
+}

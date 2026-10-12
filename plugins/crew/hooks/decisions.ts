@@ -3,6 +3,7 @@
 // key or a path.
 
 import type { Effort, Model } from './agents'
+import type { Provider, Reading, Window } from './quota'
 
 /** `<home>/.claude/crew/decisions`: the home is the trusted one, never the repository's. */
 const DIR = '.claude/crew/decisions'
@@ -12,6 +13,14 @@ export const MODEL_ID = /^[\w.:[\]-]{1,64}$/
 export type DecisionInput = {
   ts: string
   agent: string
+  /** The type the lead asked for (`crew:developer`); `agent` is the one that ran, which differs when quota moved the call to a twin. */
+  requested: string
+  provider: Provider
+  /** Why quota chose the provider (a fixed phrase with percentages); absent when it did not decide. */
+  reason?: string
+  /** The two readings the provider was chosen from; absent when quota routing is off. */
+  claude?: Reading | null
+  codex?: Reading | null
   tier?: Model
   confidence?: number
   depth?: number
@@ -29,10 +38,19 @@ export type DecisionInput = {
   description?: string
 }
 
+/** A window as logged: the percentage and the reset time, nothing else. */
+type LoggedWindow = { percentUsed: number; resetsAt?: string }
+export type LoggedReading = { fiveHour?: LoggedWindow; sevenDay?: LoggedWindow }
+
 export type DecisionRecord = {
-  v: 1
+  v: 2
   ts: string
   agent: string
+  requested: string
+  provider: Provider
+  reason: string | null
+  /** The 5-hour and 7-day readings of both providers when the decision was made; null where not read. */
+  quota: { claude: LoggedReading | null; codex: LoggedReading | null }
   tier: Model | null
   confidence: number | null
   depth: number | null
@@ -62,13 +80,33 @@ export function fnv1a(text: string): string {
   return hash.toString(16).padStart(8, '0')
 }
 
+const REASON_CHARS = 80
+const TIME = /^[\w:.+-]{1,40}$/
+
+function loggedWindow(window: Window | undefined): LoggedWindow | undefined {
+  if (!window || typeof window.percentUsed !== 'number' || !Number.isFinite(window.percentUsed)) return undefined
+  return { percentUsed: window.percentUsed, ...(typeof window.resetsAt === 'string' && TIME.test(window.resetsAt) ? { resetsAt: window.resetsAt } : {}) }
+}
+
+/** A reading cut to percentages and reset times, whatever else the object carries. */
+function loggedReading(reading: Reading | null | undefined): LoggedReading | null {
+  if (!reading) return null
+  const fiveHour = loggedWindow(reading.fiveHour)
+  const sevenDay = loggedWindow(reading.sevenDay)
+  return fiveHour || sevenDay ? { ...(fiveHour ? { fiveHour } : {}), ...(sevenDay ? { sevenDay } : {}) } : null
+}
+
 const numberOr = (value: number | undefined): number | null => (typeof value === 'number' && Number.isFinite(value) ? value : null)
 
 export function decisionRecord(input: DecisionInput): DecisionRecord {
   return {
-    v: 1,
+    v: 2,
     ts: input.ts,
     agent: input.agent,
+    requested: input.requested,
+    provider: input.provider,
+    reason: input.reason ? input.reason.slice(0, REASON_CHARS) : null,
+    quota: { claude: loggedReading(input.claude), codex: loggedReading(input.codex) },
     tier: input.tier ?? null,
     confidence: numberOr(input.confidence),
     depth: numberOr(input.depth),

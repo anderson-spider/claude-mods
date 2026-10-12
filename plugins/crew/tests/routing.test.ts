@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import { EFFORT_FLOOR, MODEL_FLOORS, SPECIALISTS, nativeCodexSpecs } from '../hooks/agents'
 import type { Specialist } from '../hooks/agents'
-import { decide, describe, moved, noticeText, route, routable, stateOf, taggedDescription, untagged } from '../hooks/routing'
+import { decide, defaultsOf, describe, moved, noticeText, retarget, route, routable, SHARED_CAP, shareAgent, stateOf, taggedDescription, twinFor, untagged } from '../hooks/routing'
 import type { Routed } from '../hooks/routing'
 import { PROMPT_CHARS } from '../hooks/questions'
 
@@ -383,4 +383,84 @@ test('only alias tags and registered twin ids are stripped; ids are matched lite
       expect(untagged(tagged, ['gpt-6.1-codex-max'])).toBe(description)
     }
   }
+})
+
+// --- Quota routing: the twin a call may move to ---
+
+const QUOTA_TWINS = nativeCodexSpecs({ developer: 'gpt-6-astra', architect: 'gpt-6-sage' })
+
+test('twinFor names the role\'s registered twin as a target with its base, for a plain specialist call', () => {
+  const target = twinFor({ subagentType: 'crew:developer' }, QUOTA_TWINS)
+  expect(target).toMatchObject({ name: 'developer-codex', model: 'gpt-6-astra', base: 'developer', effort: 'medium' })
+  expect(twinFor({ subagentType: 'crew:architect' }, QUOTA_TWINS)).toMatchObject({ name: 'architect-codex', base: 'architect' })
+})
+
+test('twinFor is undefined where the call must stay as it is', () => {
+  // A role with no registered twin, and no twins at all.
+  expect(twinFor({ subagentType: 'crew:tester' }, QUOTA_TWINS)).toBeUndefined()
+  expect(twinFor({ subagentType: 'crew:developer' }, [])).toBeUndefined()
+  // An explicit model, a fork, a workflow agent and a teammate.
+  expect(twinFor({ subagentType: 'crew:developer', model: 'opus' }, QUOTA_TWINS)).toBeUndefined()
+  expect(twinFor({ subagentType: 'crew:developer', fork: true }, QUOTA_TWINS)).toBeUndefined()
+  expect(twinFor({ subagentType: 'crew:developer', workflow: { runId: 'wf_1', agentIndex: 1 } }, QUOTA_TWINS)).toBeUndefined()
+  expect(twinFor({ subagentType: 'crew:developer', isTeammate: true }, QUOTA_TWINS)).toBeUndefined()
+  // Another plugin's type, an unknown crew type, and a twin the lead named (an explicit choice is never moved).
+  expect(twinFor({ subagentType: 'acme:developer' }, QUOTA_TWINS)).toBeUndefined()
+  expect(twinFor({ subagentType: 'crew:mystery' }, QUOTA_TWINS)).toBeUndefined()
+  expect(twinFor({ subagentType: 'crew:developer-codex' }, QUOTA_TWINS)).toBeUndefined()
+})
+
+test('Jev\'s answers retargeted to a twin keep the effort answer and never name a model', async () => {
+  const twin = twinFor({ subagentType: 'crew:developer' }, QUOTA_TWINS)!
+  const ask = async () => ({ answers: answers(['opus', 0.99], 3.9), model: 'jev-1.13.0', ms: 7 })
+  const onClaude = await route(ask, ctx, spec('developer'), { prompt: 'p', description: 'd' })
+  expect(onClaude.decision).toMatchObject({ model: 'opus', effort: 'high' })
+
+  const onTwin = retarget(onClaude, twin)
+  expect(onTwin.decision).toMatchObject({ model: 'gpt-6-astra', effort: 'high', tier: 'opus', depth: 3.9 })
+  expect(onTwin).toMatchObject({ jevModel: 'jev-1.13.0', ms: 7 })
+  expect(moved(twin, onTwin)).toEqual({ model: undefined, effort: 'high' })
+  // The first answer is not changed by the second reading of it.
+  expect(onClaude.decision.model).toBe('opus')
+})
+
+test('retarget without stored answers reads them as empty: the twin\'s defaults', () => {
+  const twin = twinFor({ subagentType: 'crew:developer' }, QUOTA_TWINS)!
+  expect(retarget({ decision: { model: 'opus', effort: 'high' }, ms: 1 }, twin).decision).toEqual({ model: 'gpt-6-astra', effort: 'medium' })
+})
+
+test('defaultsOf is the twin\'s own model and effort, moving nothing, and tags with them', () => {
+  const twin = twinFor({ subagentType: 'crew:developer' }, QUOTA_TWINS)!
+  const routed = defaultsOf(twin)
+  expect(routed).toEqual({ decision: { model: 'gpt-6-astra', effort: 'medium' }, ms: 0 })
+  expect(moved(twin, routed)).toEqual({ model: undefined, effort: undefined })
+  expect(taggedDescription('audit auth', routed)).toBe('audit auth · gpt-6-astra/medium')
+})
+
+test('the notice of a switched call names the provider and the reason, with Jev\'s effort marked or the default plain', () => {
+  const twin = twinFor({ subagentType: 'crew:developer' }, QUOTA_TWINS)!
+  const via = { requested: 'crew:developer', reason: '7d 38% used vs Claude 7d 71%' }
+  const jev = retarget({ decision: { model: 'opus', effort: 'high' }, ms: 1, answers: answers(['opus', 1], 3.9) }, twin)
+  expect(noticeText(twin, jev, undefined, via)).toBe('crew:developer -> Codex (7d 38% used vs Claude 7d 71%) · gpt-6-astra · high (jev)')
+  expect(noticeText(twin, jev, 'high', via)).toBe('crew:developer -> Codex (7d 38% used vs Claude 7d 71%) · gpt-6-astra · medium (jev; effort high not applied)')
+  expect(noticeText(twin, defaultsOf(twin), undefined, via, false)).toBe('crew:developer -> Codex (7d 38% used vs Claude 7d 71%) · gpt-6-astra · medium')
+})
+
+test('a call that was not switched keeps the notice it always had', () => {
+  expect(noticeText(spec('developer'), routedAs('opus', 'high'), undefined, undefined, true)).toBe('crew:developer -> opus · high (jev)')
+})
+
+test('shareAgent keeps one entry per agent id, refreshes a repeated one and drops the oldest past the cap', () => {
+  const map = new Map<string, { type: string; provider: 'claude' | 'codex'; reason: string }>()
+  shareAgent(map, 'a1', { type: 'crew:developer-codex', provider: 'codex', reason: '7d 38% used vs Claude 7d 71%' })
+  shareAgent(map, 'a2', { type: 'crew:developer', provider: 'claude', reason: 'Codex quota not known yet' })
+  expect(map.get('a1')).toEqual({ type: 'crew:developer-codex', provider: 'codex', reason: '7d 38% used vs Claude 7d 71%' })
+
+  shareAgent(map, 'a1', { type: 'crew:developer', provider: 'claude', reason: 'again' })
+  expect([...map.keys()]).toEqual(['a2', 'a1'])
+
+  for (let i = 0; i < SHARED_CAP + 5; i++) shareAgent(map, `x${i}`, { type: 'crew:tester', provider: 'claude', reason: '' })
+  expect(map.size).toBe(SHARED_CAP)
+  expect(map.has('a2')).toBe(false)
+  expect(map.has(`x${SHARED_CAP + 4}`)).toBe(true)
 })

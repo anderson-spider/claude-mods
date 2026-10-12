@@ -1,11 +1,12 @@
 // Jev's routing of one Agent call: which of the lead's crew agents may be routed, the state Jev is given and how its
-// answers become a model and an effort. Pure: the call to Jev is injected. The agent type is never rewritten; the
-// answers only move model and effort, at most one step from the agent's defaults (and never below its floor), so a bad
-// answer costs money, never a lane change.
+// answers become a model and an effort. Pure: the call to Jev is injected. The answers only move model and effort, at
+// most one step from the agent's defaults (and never below its floor), so a bad answer costs money, never a lane change.
+// The type is rewritten only by the quota rule in register.tsx, and only to the same role's registered twin (`twinFor`).
 
 import { EFFORTS, EFFORT_FLOOR, MODELS, MODEL_FLOORS, NATIVE_SUFFIX, SPECIALISTS } from './agents'
 import type { Agent, Effort, Model } from './agents'
 import type { AskFn } from './jev'
+import type { Provider } from './quota'
 import { DEPTH_HIGH, DEPTH_TIE, DESCRIPTION_CHARS, PROMPT_CHARS, QUESTIONS, TIER_MIN_CONFIDENCE } from './questions'
 import { head, redact } from './redact'
 import type { RedactContext } from './redact'
@@ -37,6 +38,21 @@ export function routable(
   const twin = twins.find(t => t.name === name)
   const base = name.endsWith(NATIVE_SUFFIX) ? name.slice(0, -NATIVE_SUFFIX.length) : undefined
   return twin && base !== undefined && SPECIALISTS.some(s => s.name === base) ? { ...twin, base } : undefined
+}
+
+/**
+ * The registered Codex twin of the role a call names, as a routing `Target`, when the quota rule may send the call
+ * there: a routable specialist call (no `model`, no fork, no workflow agent) that is not a teammate's. Undefined for
+ * anything else, a twin the lead named included (an explicit choice is never moved) and a role with no registered twin.
+ */
+export function twinFor(
+  e: { subagentType: string; fork?: boolean; model?: string; workflow?: unknown; isTeammate?: boolean },
+  twins: readonly Agent<string>[],
+): Target | undefined {
+  if (e.isTeammate) return undefined
+  const spec = routable(e, twins)
+  if (!spec || spec.base !== undefined) return undefined
+  return routable({ ...e, subagentType: `${PREFIX}${spec.name}${NATIVE_SUFFIX}` }, twins)
 }
 
 export type Decision = {
@@ -101,7 +117,10 @@ export function stateOf(spec: Target, e: { prompt: string; description?: string 
   }
 }
 
-export type Routed = { decision: Decision; jevModel?: string; ms: number }
+/** Jev's raw answers by question, kept so the same answers can be applied to another target (the twin of a switched call). */
+type Answers = Record<string, Record<string, unknown>>
+
+export type Routed = { decision: Decision; jevModel?: string; ms: number; answers?: Answers }
 
 /** Asks Jev about one call. Rejects with the client's failure; the caller fails open. */
 export async function route(
@@ -111,7 +130,17 @@ export async function route(
   e: { prompt: string; description?: string },
 ): Promise<Routed> {
   const reply = await ask(QUESTIONS, stateOf(spec, e, ctx))
-  return { decision: decide(spec, reply.answers), jevModel: reply.model, ms: reply.ms }
+  return { decision: decide(spec, reply.answers), jevModel: reply.model, ms: reply.ms, answers: reply.answers }
+}
+
+/** Jev's answers applied to another target: a call that moved to its twin keeps its effort answer and never gets a model. */
+export function retarget(routed: Routed, spec: Target): Routed {
+  return { ...routed, decision: decide(spec, routed.answers ?? {}) }
+}
+
+/** A decision that moves nothing: what a switched call without a Jev answer is tagged and confirmed with. */
+export function defaultsOf(spec: Target): Routed {
+  return { decision: { model: spec.model, effort: spec.effort }, ms: 0 }
 }
 
 /** What Jev moved from the agent's defaults; undefined where the answer is the default or there is no answer. */
@@ -125,15 +154,19 @@ export function moved(spec: Target, routed: Routed | undefined): Moved {
   }
 }
 
+/** A call that quota moved to its Codex twin: the type the lead asked for and why. */
+export type Switch = { requested: string; reason: string }
+
 /**
  * The notice of a decision. An effort that was moved but did not take shows the default the subagent runs on and says
- * so; otherwise the notice shows the effort of the answer.
+ * so; otherwise the notice shows the effort of the answer. A switched call names the provider and the reason; `jev` is
+ * false when Jev gave no answer, so the effort is the default and not Jev's.
  */
-export function noticeText(spec: Target, routed: Routed, notApplied: Effort | undefined): string {
-  const effort = notApplied === undefined
-    ? `${routed.decision.effort} (jev)`
-    : `${spec.effort} (jev; effort ${notApplied} not applied)`
-  return `crew:${spec.name} -> ${routed.decision.model} · ${effort}`
+export function noticeText(spec: Target, routed: Routed, notApplied: Effort | undefined, via?: Switch, jev = true): string {
+  const tail = !jev ? '' : notApplied === undefined ? ' (jev)' : ` (jev; effort ${notApplied} not applied)`
+  const effort = `${notApplied === undefined ? routed.decision.effort : spec.effort}${tail}`
+  const head = via ? `${via.requested} -> Codex (${via.reason})` : `crew:${spec.name} -> `
+  return `${head}${via ? ' · ' : ''}${routed.decision.model} · ${effort}`
 }
 
 const escaped = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -166,4 +199,17 @@ export function describe(spec: Target, routed: Routed, applied: { model?: string
     `${ms}ms`,
   ]
   return parts.join(' ')
+}
+
+/** What the spawn hook leaves for the HUD about a started agent: the type that really ran (after a switch), the provider and why. */
+export type SharedAgent = { type: string; provider: Provider; reason: string }
+
+/** Entries kept in the map the HUD reads; the oldest go first. */
+export const SHARED_CAP = 256
+
+/** Puts (or refreshes) an agent's entry, keeping the map to SHARED_CAP. */
+export function shareAgent(map: Map<string, SharedAgent>, id: string, entry: SharedAgent): void {
+  map.delete(id)
+  map.set(id, entry)
+  while (map.size > SHARED_CAP) map.delete(map.keys().next().value as string)
 }

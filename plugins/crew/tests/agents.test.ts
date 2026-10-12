@@ -167,3 +167,28 @@ test('the native section lists only the given twins and never names the Codex en
   expect(text).not.toContain('crew:developer-codex')
   expect(text).not.toContain('mcp__crew__codex')
 })
+
+// --- Quota routing sentences ---
+
+test('with quota routing off the lead and native sections are exactly what they were, for either flag', () => {
+  const specs = nativeCodexSpecs({ developer: 'gpt-a' })
+  for (const jev of [true, false]) expect(leadSection(jev, false)).toBe(leadSection(jev))
+  expect(nativeCodexSection(specs, false)).toBe(nativeCodexSection(specs))
+  expect(nativeCodexSection(specs)).not.toContain('quota routing')
+})
+
+test('with quota routing on each section adds one sentence about weekly headroom, and the rest is unchanged', () => {
+  const specs = nativeCodexSpecs({ developer: 'gpt-a' })
+  for (const jev of [true, false]) {
+    const plain = leadSection(jev)
+    const withQuota = leadSection(jev, true)
+    expect(withQuota).toContain('With quota routing on, a call to a role that has a Codex twin may run on the twin when Codex has more weekly headroom; the task shows it.')
+    expect(withQuota.replace(' With quota routing on, a call to a role that has a Codex twin may run on the twin when Codex has more weekly headroom; the task shows it.', '')).toBe(plain)
+    expect(leadSection(jev, true)).toBe(withQuota)
+  }
+  const plain = nativeCodexSection(specs)
+  const withQuota = nativeCodexSection(specs, true)
+  expect(withQuota.startsWith(plain)).toBe(true)
+  expect(withQuota.slice(plain.length)).toContain('more weekly headroom than Claude')
+  expect(withQuota.slice(plain.length)).toContain('passing `model` keeps a call on Claude')
+})
