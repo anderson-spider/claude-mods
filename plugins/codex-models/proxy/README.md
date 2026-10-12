@@ -106,7 +106,7 @@ The second is consulted only when `codex.use_codex_cli_auth` is `true` (default 
 
 **The Codex CLI's file is read-only for the proxy**: never refreshed, written or removed. OpenAI rotates refresh tokens, so a refresh here would sign the Codex CLI out. A borrowed login is used while its access token is valid; once expired, requests fail with a `403` asking for `codex login` or `ccmproxy login codex`. A changed file is re-read, so a token the CLI renewed is picked up at once.
 
-The proxy's own file is refreshed within five minutes of expiry and written atomically (temp file, sync, mode `600`, rename; `auth_dir` kept at `700`). A refresh and a login hold an exclusive lock on `<auth_dir>/codex.lock` and re-read the file under it, so two proxy processes never spend the same refresh token. A rejected refresh is reported as an expired login (`403`). `login codex` always writes the proxy's own file; `logout codex` removes only that, and refuses a file that is (or links to) the CLI's.
+The proxy's own file is refreshed within five minutes of expiry and written atomically (temp file, sync, mode `600`, rename; `auth_dir` kept at `700`). A refresh and a login hold an exclusive lock on `<credential file>.lock`, beside the file actually written (symlinks resolved; `<auth_dir>/codex.json.lock` by default, next to `codex.auth_file` when set), and re-read the file under it, so two proxy processes on one file never spend the same refresh token, whatever their `auth_dir` or the symlink they reach it by. A rejected refresh is reported as an expired login (`403`). `login codex` always writes the proxy's own file; `logout codex` removes only that, and refuses a file that is (or links to) the CLI's. During `login codex` the loopback callback answers a non-`GET` with `405` and a missing or wrong `state` with `400`; neither ends the sign-in.
 
 ## Commands
 
@@ -164,11 +164,11 @@ Anthropic Messages and OpenAI Responses, both directions:
 - **System prompt** becomes a `developer` input message.
 - **Text, images and PDFs** become `input_text` / `input_image` / `input_file`; other documents are dropped.
 - **Tools** become `function` tools; `input_schema` is normalized. Names over 64 characters are shortened uniquely and mapped back on the way out.
-- **Tool calls and results** become `function_call` / `function_call_output`; ids over the upstream limit are shortened by hash.
+- **Tool calls and results** become `function_call` / `function_call_output`; ids over the upstream limit are shortened by hash. A `tool_use` block is sent only once its call is complete, with its input in one `input_json_delta`; a call cut off by the output limit (or with arguments that are not a JSON object) is dropped, and `stop_reason` is `max_tokens`.
 - **Thinking**: reasoning summaries stream back as `thinking` blocks carrying the encrypted reasoning state as their signature, so the next turn can replay it. Parallel tool calls are serialized into non-overlapping content blocks.
 - **Usage** maps to `input_tokens` / `output_tokens`, with cached tokens as `cache_read_input_tokens`.
 - **Model**: `message_start.model` is the model the upstream reported, falling back to the resolved id.
-- **Errors** map to Anthropic's types; a stream that ends without its terminal event is an error.
+- **Errors** map to Anthropic's types; a stream that ends without its terminal event is an error. The upstream message reaches the client with control characters removed, capped at 300 characters.
 
 Non-streaming requests go through the same translator and are folded into one message, since the backend only streams.
 
@@ -186,7 +186,8 @@ No network access. They cover the configuration (loopback table, pinned URLs, re
 
 - The listener binds only to a literal loopback address, checked in the configuration and again on the bound socket.
 - Pass-through goes only to `https://api.anthropic.com`, and the Codex token only to an `https://` base URL. `serve` refuses to start when `api.anthropic.com` resolves to a local address.
-- Upstream connections ignore the ambient proxy environment variables.
+- Upstream connections ignore the ambient proxy environment variables and never follow a redirect: a `3xx` from the Codex backend or token endpoint is an error naming the status, and one from Anthropic is passed back as it came.
 - The configuration file holds `auth_token` and is kept at mode `600`; credential files are written with mode `600`.
-- Logs carry no query string, secret, token or prompt.
+- Logs carry no query string, secret, token or prompt. A Codex error is logged as its status and identifier-like `type` and `code` only, never its message or body.
+- It assumes a single-user machine: while it is down, another local user can bind its port and would receive the secret header and the Claude login that Claude Code sends.
 - ID and access tokens are read for the account id, plan and expiry only; signatures are not verified, because they arrive over TLS directly from the issuer.
