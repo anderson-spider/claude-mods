@@ -60,7 +60,12 @@ test('normal install and uninstall keep settings and state in an isolated copied
   mkdirSync(join(target, 'state'), { recursive: true })
   mkdirSync(bin)
   cpSync(fileURLToPath(new URL('..', import.meta.url)), source, { recursive: true })
-  // Only the temporary copy skips the external Codex prerequisite. No real service is loaded.
+  // Only the temporary copy replaces the platform-specific Node and Codex prerequisites.
+  // The production installer keeps its fixed executable; no real service is loaded.
+  const installScript = join(source, 'install.sh')
+  const installer = readFileSync(installScript, 'utf8')
+  assert.match(installer, /^NODE=\/Applications\/ChatGPT\.app\/Contents\/Resources\/cua_node\/bin\/node$/m)
+  const withNode = executable => installer.replace(/^NODE=.*$/m, () => `NODE='${executable.replaceAll("'", "'\\''")}'`)
   writeFileSync(join(source, 'launch.mjs'), 'process.exit(0)\n')
   writeFileSync(join(bin, 'launchctl'), '#!/bin/sh\n[ "$1" != print ]\n', { mode: 0o700 })
   writeFileSync(state, '{"always":["com.fake.Editor"]}\n')
@@ -70,7 +75,20 @@ test('normal install and uninstall keep settings and state in an isolated copied
     env: { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}` }, encoding: 'utf8',
   })
 
-  const installed = run(join(source, 'install.sh'))
+  // Simulate the missing desktop-app executable without touching the installed app.
+  const missingNode = join(root, 'missing-node')
+  writeFileSync(installScript, withNode(missingNode))
+  const refused = run(installScript)
+  assert.equal(refused.status, 1)
+  assert.ok(refused.stderr.includes(`codex-cu: ${missingNode} is missing.`))
+  assert.equal(existsSync(plist), false)
+  assert.equal(existsSync(join(target, 'helper.mjs')), false)
+  assert.equal(readFileSync(settings, 'utf8'), before)
+  assert.equal(readFileSync(state, 'utf8'), '{"always":["com.fake.Editor"]}\n')
+
+  // Exercise installation on Linux too, using the same Node that runs this test.
+  writeFileSync(installScript, withNode(process.execPath))
+  const installed = run(installScript)
   assert.equal(installed.status, 0, installed.stderr)
   assert.equal(readFileSync(settings, 'utf8'), before)
   assert.deepEqual(readdirSync(join(home, '.claude')).sort(), ['mcp', 'settings.json'])
