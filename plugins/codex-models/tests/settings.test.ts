@@ -62,10 +62,10 @@ test('precheck accepts no URL or the configured URL, never a different URL or a 
 
 test('behavesAs is kept only when a non-empty string and rows stay marked', () => {
   expect(pickerRows([
-    { id: 'a', label: 'A', description: 'Codex', behavesAs: 'claude-opus-4-8' },
+    { id: 'a', label: 'A', description: 'Codex', behavesAs: 'claude-opus-5-5' },
     { id: 'b', behavesAs: '' }, { id: 'c', behavesAs: 7 },
   ]).rows).toEqual([
-    { model: 'a', label: 'A', description: `Codex ${MARK}`, behavesAs: 'claude-opus-4-8' },
+    { model: 'a', label: 'A', description: `Codex ${MARK}`, behavesAs: 'claude-opus-5-5' },
     { model: 'b', label: 'b', description: MARK }, { model: 'c', label: 'c', description: MARK },
   ])
 })

@@ -296,12 +296,12 @@ test('a dangling link and a link to an own file under the backup name are left a
 
 test('behavesAs reaches the picker rows through install.sh only when a non-empty string, and uninstall removes owned settings', async () => {
   const models = [
-    { id: 'gpt-a', label: 'A', description: 'alpha', behavesAs: 'claude-opus-4-8' },
+    { id: 'gpt-a', label: 'A', description: 'alpha', behavesAs: 'claude-opus-5-5' },
     { id: 'gpt-b', label: 'B', behavesAs: '' },
     { id: 'gpt-c', label: 'C', behavesAs: '   ' },
     { id: 'gpt-d', label: 'D', behavesAs: 42 },
     { id: 'gpt-e', label: 'E', behavesAs: null },
-    { id: 'gpt-f', label: 'F', behavesAs: ['claude-opus-4-8'] },
+    { id: 'gpt-f', label: 'F', behavesAs: ['claude-opus-5-5'] },
     { id: 'gpt-g', label: 'G' },
   ]
   const box = sandbox(models)
@@ -314,7 +314,7 @@ test('behavesAs reaches the picker rows through install.sh only when a non-empty
     const ours = rows.slice(1)
     assert.equal(ours.length, 7)
     for (const row of ours) assert.ok(row.description.endsWith('(codex-models)'), row.model)
-    assert.deepEqual(ours[0], { model: 'gpt-a', label: 'A', description: 'alpha (codex-models)', behavesAs: 'claude-opus-4-8' })
+    assert.deepEqual(ours[0], { model: 'gpt-a', label: 'A', description: 'alpha (codex-models)', behavesAs: 'claude-opus-5-5' })
     for (const row of ours.slice(1)) assert.ok(!('behavesAs' in row), `${row.model} has no behavesAs`)
 
     const removed = await box.run('uninstall.sh')

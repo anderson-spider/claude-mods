@@ -96,14 +96,14 @@ The catalog mirrors `codex debug models` (visibility `list`) for a ChatGPT accou
 
 | Id | Label | Context | Effort levels | Default | Behaves as |
 | --- | --- | --- | --- | --- | --- |
-| `gpt-6.1-sol` | GPT-6.1 Sol | 373k | low to ultra | low | `claude-sonnet-5` |
-| `gpt-6-astra` | GPT-6 Astra | 272k | low to ultra | medium | `claude-opus-5` |
-| `gpt-6-sol` | GPT-6 Sol | 272k | low to ultra | medium | `claude-sonnet-5` |
-| `gpt-6-luna` | GPT-6 Luna | 272k | low to max | medium | `claude-haiku-4-5` |
-| `gpt-5.6-sol` | GPT-5.6 Sol | 272k | low to ultra | low | `claude-sonnet-5` |
-| `gpt-5.6-terra` | GPT-5.6 Terra | 272k | low to ultra | medium | `claude-sonnet-5` |
-| `gpt-5.6-luna` | GPT-5.6 Luna | 272k | low to max | medium | `claude-haiku-4-5` |
-| `gpt-daybreak-blue-latest` | Daybreak Blue | 272k | low to ultra | low | `claude-opus-5` |
+| `gpt-6.1-sol` | GPT-6.1 Sol | 373k | low to ultra | low | `claude-sonnet-5-5` |
+| `gpt-6-astra` | GPT-6 Astra | 272k | low to ultra | medium | `claude-opus-5-5` |
+| `gpt-6-sol` | GPT-6 Sol | 272k | low to ultra | medium | `claude-sonnet-5-5` |
+| `gpt-6-luna` | GPT-6 Luna | 272k | low to max | medium | `claude-haiku-5-5` |
+| `gpt-5.6-sol` | GPT-5.6 Sol | 272k | low to ultra | low | `claude-sonnet-5-5` |
+| `gpt-5.6-terra` | GPT-5.6 Terra | 272k | low to ultra | medium | `claude-sonnet-5-5` |
+| `gpt-5.6-luna` | GPT-5.6 Luna | 272k | low to max | medium | `claude-haiku-5-5` |
+| `gpt-daybreak-blue-latest` | Daybreak Blue | 272k | low to ultra | low | `claude-opus-5-5` |
 
 All take text and images. `gpt-daybreak-blue-latest` is for accounts in the Daybreak Blue access program, so it is not advertised or routed by default: the source constant `OfferDaybreakBlue` is `false`. The listed catalog is fixed; configuration cannot enable this model or restrict the list.
 

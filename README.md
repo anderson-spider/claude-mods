@@ -130,13 +130,13 @@ Claude models still go to Anthropic through the proxy, unchanged, with your usua
 
 | Id | Label | Default effort | Behaves as in Claude Code |
 | --- | --- | --- | --- |
-| `gpt-6.1-sol` | GPT-6.1 Sol | low | `claude-sonnet-5` |
-| `gpt-6-astra` | GPT-6 Astra | medium | `claude-opus-5` |
-| `gpt-6-sol` | GPT-6 Sol | medium | `claude-sonnet-5` |
-| `gpt-6-luna` | GPT-6 Luna | medium | `claude-haiku-4-5` |
-| `gpt-5.6-sol` | GPT-5.6 Sol | low | `claude-sonnet-5` |
-| `gpt-5.6-terra` | GPT-5.6 Terra | medium | `claude-sonnet-5` |
-| `gpt-5.6-luna` | GPT-5.6 Luna | medium | `claude-haiku-4-5` |
+| `gpt-6.1-sol` | GPT-6.1 Sol | low | `claude-sonnet-5-5` |
+| `gpt-6-astra` | GPT-6 Astra | medium | `claude-opus-5-5` |
+| `gpt-6-sol` | GPT-6 Sol | medium | `claude-sonnet-5-5` |
+| `gpt-6-luna` | GPT-6 Luna | medium | `claude-haiku-5-5` |
+| `gpt-5.6-sol` | GPT-5.6 Sol | low | `claude-sonnet-5-5` |
+| `gpt-5.6-terra` | GPT-5.6 Terra | medium | `claude-sonnet-5-5` |
+| `gpt-5.6-luna` | GPT-5.6 Luna | medium | `claude-haiku-5-5` |
 
 The catalog is fixed to the listed models; access to each model is decided upstream. `gpt-daybreak-blue-latest` is gated by the false `OfferDaybreakBlue` constant and is not offered. Picker rows use bare model ids; effort suffixes are accepted in requests but are not advertised as separate rows. See [the proxy's README](plugins/codex-models/proxy/README.md) for the model names and credentials.
 
