@@ -8,27 +8,33 @@ import (
 	"strings"
 )
 
-// Contract build only (go build -tags contract): lets the black-box suite
-// point the proxy at local fakes. Each override is an exact allow-list entry:
-// the config file must name the same URL as the variable.
+// The contract build (go build -tags contract) only: the black-box suite
+// points the proxy at local fakes. Each variable adds exactly one accepted
+// value, and the config file must name the same URL; everything else is
+// checked as in the default build.
 //
-//	CCMPROXY_CONTRACT_UPSTREAM        the one extra upstream accepted
-//	CCMPROXY_CONTRACT_CODEX_BASE_URL  the one extra codex.base_url accepted (http allowed)
+//	CCMPROXY_CONTRACT_UPSTREAM        one more accepted upstream
+//	CCMPROXY_CONTRACT_CODEX_BASE_URL  one more accepted codex.base_url (http allowed)
 
 func upstreamAllowed(upstream string) bool {
 	if upstream == DefaultUpstream {
 		return true
 	}
-	extra := strings.TrimSuffix(os.Getenv("CCMPROXY_CONTRACT_UPSTREAM"), "/")
+	extra := contractURL("CCMPROXY_CONTRACT_UPSTREAM")
 	return extra != "" && upstream == extra
 }
 
 func validateCodexBaseURL(raw string) error {
-	extra := strings.TrimSuffix(os.Getenv("CCMPROXY_CONTRACT_CODEX_BASE_URL"), "/")
-	if extra != "" && raw == extra {
+	if extra := contractURL("CCMPROXY_CONTRACT_CODEX_BASE_URL"); extra != "" && raw == extra {
 		if u, err := url.Parse(raw); err == nil && u.Host != "" && (u.Scheme == "http" || u.Scheme == "https") {
 			return nil
 		}
 	}
-	return validateHTTPSURL(raw)
+	return requireHTTPS(raw)
+}
+
+// contractURL reads a contract variable without its trailing "/", as the
+// loaded config holds URLs.
+func contractURL(name string) string {
+	return strings.TrimSuffix(os.Getenv(name), "/")
 }
