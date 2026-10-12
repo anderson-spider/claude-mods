@@ -1,4 +1,4 @@
-/** Model tiers and effort levels, cheapest first: Jev's routing moves an agent one step from its default at most. */
+/** Role model aliases and effort levels, cheapest first: Jev moves only effort, one step from its default at most. */
 export const MODELS = ['haiku', 'sonnet', 'opus'] as const
 export const EFFORTS = ['low', 'medium', 'high'] as const
 export type Model = (typeof MODELS)[number]
@@ -9,7 +9,7 @@ export type Agent<M extends string = Model> = {
   name: string
   description: string
   prompt: string
-  /** The default model; Jev routing may move a specialist one tier (see `MODEL_FLOORS`). */
+  /** The role's default model; Jev never changes it. */
   model: M
   /** Set on purpose: every specialist defaults to `medium`; Jev routing may raise it to `high` (see `EFFORT_FLOOR`). */
   effort: Effort
@@ -18,9 +18,6 @@ export type Agent<M extends string = Model> = {
 
 /** One specialist, on a model alias. */
 export type Specialist = Agent<Model>
-
-/** The lowest model routing may pick for an agent, whatever Jev says: the reviewer never runs on a weaker model than the developer it audits, who can reach opus. */
-export const MODEL_FLOORS: Readonly<Record<string, Model>> = { architect: 'opus' }
 
 /** The lowest effort routing may pick for any agent: Jev may raise effort to `high`, never lower it below this. */
 export const EFFORT_FLOOR: Effort = 'medium'
@@ -108,12 +105,12 @@ export const SPECIALISTS: readonly Specialist[] = [
  */
 export function leadSection(jev: boolean, quota = false): string {
   const sizing = jev
-    ? "Jev sizes each call's model and effort; delegate by role, not task size."
+    ? "Jev sizes each call's effort; delegate by role, not task size."
     : 'Role defaults size each agent; delegate by role, not task size.'
   return [
     'You orchestrate, talk with the user and check/combine reports; delegate all project reading, searches, edits and execution:',
     'crew:code-reader for code lookup, crew:developer for implementation and tests,',
-    'crew:architect for plans and audits, crew:research for web research, crew:designer for UI.',
+    'crew:architect for audits, crew:research for web research, crew:designer for UI.',
     sizing,
     'Delegate in waves: launch every independent piece with ready inputs in one message (separate files, no mutual dependencies).',
     'After each report, launch newly unblocked or independent work without being asked or waiting for unrelated agents.',

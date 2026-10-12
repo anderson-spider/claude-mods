@@ -6,11 +6,9 @@ const input = {
   agent: 'developer',
   requested: 'crew:developer',
   provider: 'claude',
-  tier: 'opus',
-  confidence: 0.9,
+
   depth: 3.9,
-  defaultModel: 'sonnet',
-  model: 'opus',
+
   defaultEffort: 'medium',
   effortPlanned: 'high',
   effortApplied: 'high',
@@ -30,15 +28,17 @@ test('fnv1a is the 32-bit FNV-1a in hex', () => {
 test('the record is fixed in shape, has an empty outcome and never the description', () => {
   const rec = decisionRecord(input)
   expect(rec).toMatchObject({
-    v: 2, agent: 'developer', requested: 'crew:developer', provider: 'claude', reason: null, quota: { claude: null, codex: null }, tier: 'opus', model: 'opus', durationMs: 413, outcome: null,
-    applied: { model: true, effort: true }, jevModel: 'jev-1.13.0', descriptionHash: fnv1a('audit auth'),
+    v: 3, agent: 'developer', requested: 'crew:developer', provider: 'claude', reason: null, quota: { claude: null, codex: null }, durationMs: 413, outcome: null,
+    applied: { effort: true }, jevModel: 'jev-1.13.0', descriptionHash: fnv1a('audit auth'),
   })
   expect(JSON.stringify(rec)).not.toContain('audit auth')
+  for (const field of ['tier', 'confidence', 'model', 'defaultModel']) expect(rec).not.toHaveProperty(field)
+  expect(rec.applied).not.toHaveProperty('model')
 })
 
 test('absent answers are null and a kept decision applies nothing', () => {
-  const rec = decisionRecord({ ...input, tier: undefined, confidence: undefined, depth: undefined, bind: undefined, jevModel: 'bad id!', model: 'sonnet', effortApplied: 'medium' })
-  expect(rec).toMatchObject({ tier: null, confidence: null, depth: null, bind: null, jevModel: null, applied: { model: false, effort: false } })
+  const rec = decisionRecord({ ...input, depth: undefined, bind: undefined, jevModel: 'bad id!', effortApplied: 'medium' })
+  expect(rec).toMatchObject({ depth: null, bind: null, jevModel: null, applied: { effort: false } })
 })
 
 test('the path is under the trusted home, the colons replaced and the id made safe', () => {
@@ -62,9 +62,9 @@ test('saveDecision never rejects and writes nothing without a home', async () =>
   expect(logs.at(-1)).toBe('crew: decision not logged (write failed)')
 })
 
-test('a model id that is not an alias is kept as it is', () => {
-  const rec = decisionRecord({ ...input, tier: undefined, defaultModel: 'gpt-6-astra', model: 'gpt-6-astra', effortApplied: 'medium' })
-  expect(rec).toMatchObject({ v: 2, defaultModel: 'gpt-6-astra', model: 'gpt-6-astra', applied: { model: false, effort: false } })
+test('a record keeps only effort choice, not model choice', () => {
+  const rec = decisionRecord({ ...input, effortApplied: 'medium' })
+  expect(rec).toMatchObject({ v: 3, applied: { effort: false } })
 })
 
 test('a switched call records the type asked for, the provider, the reason and both readings as percentages and times only', () => {
@@ -72,10 +72,10 @@ test('a switched call records the type asked for, the provider, the reason and b
   const codex = { sevenDay: { percentUsed: 38, resetsAt: '2026-10-17T00:00:00.000Z' } }
   const rec = decisionRecord({
     ...input, agent: 'developer-codex', provider: 'codex', reason: '7d 38% used vs Claude 7d 71%', claude, codex,
-    defaultModel: 'gpt-6-astra', model: 'gpt-6-astra', effortApplied: 'medium',
+    effortApplied: 'medium',
   })
   expect(rec).toMatchObject({
-    v: 2, agent: 'developer-codex', requested: 'crew:developer', provider: 'codex', reason: '7d 38% used vs Claude 7d 71%',
+    v: 3, agent: 'developer-codex', requested: 'crew:developer', provider: 'codex', reason: '7d 38% used vs Claude 7d 71%',
     quota: { claude, codex },
   })
 })
@@ -92,4 +92,8 @@ test('a reading is cut to percentages and reset times: other fields, odd times a
 
 test('a long reason is cut', () => {
   expect(decisionRecord({ ...input, reason: 'r'.repeat(200) }).reason).toHaveLength(80)
+})
+
+test('unknown applied configuration is null and not a claimed change from the default', () => {
+  expect(decisionRecord({ ...input, effortApplied: null })).toMatchObject({ effortApplied: null, applied: { effort: false } })
 })

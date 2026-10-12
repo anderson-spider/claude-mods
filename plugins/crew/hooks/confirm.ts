@@ -5,14 +5,14 @@ import { MODELS } from './agents'
 import { MODEL_ID } from './decisions'
 import type { DecisionRecord } from './decisions'
 
-/** What the task's tag requested: the canonical model alias/id and bounded effort. */
+/** The role's default model (or fixed twin id) and the requested bounded effort. */
 export type Planned = { model: string; effort: string }
 /** What the request carried: the model id the API reported and the effort sent (absent for a model without one). */
 export type Ran = { model: string; effort: string | undefined }
 
 /** One routed subagent waiting for its first step; `saved` is the spawn's own write, which the confirmation follows. */
 export type Pending = {
-  /** Jev's answer, quota's switch without an answer, or crew's medium fallback after an explicit twin's Jev failure. */
+  /** Jev's answer, quota's switch without an answer, or crew's medium fallback after a Jev failure. */
   via?: 'jev' | 'quota' | 'crew'
   /** Effort was requested in the spawn model suffix, not through the Claude effort book. */
   suffix?: boolean

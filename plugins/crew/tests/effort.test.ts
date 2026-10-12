@@ -309,3 +309,46 @@ test('an entry dropped during the list read leaves the step on the default and r
   book.add('crew:developer', 'fix it', 'high')
   expect(await book.lookup('a1', async () => [agent('a1')])).toBe('high')
 })
+
+for (const first of ['A', 'B']) {
+  test(`equal-effort entries with different apply policies are ambiguous when ${first} steps first`, async () => {
+    const book = createEffortBook()
+    const a = book.add('crew:developer', 'audit auth', 'medium', undefined, false)
+    const b = book.add('crew:developer', 'audit auth', 'medium', undefined, true)
+    const list = async () => [agent('A', 'crew:developer', 'audit auth'), agent('B', 'crew:developer', 'audit auth')]
+    const second = first === 'A' ? 'B' : 'A'
+    expect(await book.lookup(first, list)).toBeUndefined()
+    expect(await book.lookup(second, list)).toBeUndefined()
+    expect(book.bound('A')).toBeUndefined()
+    expect(book.bound('B')).toBeUndefined()
+    expect(book.bind(a, 'A')).toBe('known')
+    expect(book.bind(b, 'B')).toBe('stepped')
+    expect(await book.lookup(first, list)).toBeUndefined()
+    expect(await book.lookup(second, list)).toBeUndefined()
+  })
+}
+
+test('bound reports an existing fixed effort without changing it after a rejected bind', async () => {
+  const book = createEffortBook()
+  expect(book.bound('A')).toBeUndefined()
+  expect(book.bind(book.add('crew:developer', 'audit auth', 'high'), 'A')).toBe('applied')
+  expect(await book.lookup('A', async () => [])).toBe('high')
+  expect(book.bind(book.add('crew:developer', 'audit auth', 'medium'), 'A')).toBe('known')
+  expect(book.bound('A')).toBe('high')
+})
+
+test('different known parents identify equal-effort entries with opposite apply policies', async () => {
+  const book = createEffortBook()
+  const a = book.add('crew:developer', 'audit auth', 'medium', 'parent-A', false)
+  const b = book.add('crew:developer', 'audit auth', 'medium', 'parent-B', true)
+  const list = async () => [
+    { ...agent('A', 'crew:developer', 'audit auth'), parentId: 'parent-A' },
+    { ...agent('B', 'crew:developer', 'audit auth'), parentId: 'parent-B' },
+  ]
+  expect(await book.lookup('B', list)).toBe('medium')
+  expect(await book.lookup('A', list)).toBeUndefined()
+  expect(book.bind(b, 'B')).toBe('matched')
+  expect(book.bind(a, 'A')).toBe('known')
+  expect(await book.lookup('B', list)).toBe('medium')
+  expect(await book.lookup('A', list)).toBeUndefined()
+})

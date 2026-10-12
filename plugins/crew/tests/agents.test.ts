@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { EFFORTS, EFFORT_FLOOR, MODELS, MODEL_FLOORS, SPECIALISTS, isLoopbackBase, leadSection, nativeCodexSection, nativeCodexSpecs } from '../hooks/agents'
+import { EFFORTS, EFFORT_FLOOR, MODELS, SPECIALISTS, isLoopbackBase, leadSection, nativeCodexSection, nativeCodexSpecs } from '../hooks/agents'
 
 const by = (name: string) => SPECIALISTS.find(s => s.name === name)
 
@@ -39,16 +39,7 @@ test('names are unique', () => {
   expect(new Set(names).size).toBe(names.length)
 })
 
-test('routing floors name real agents and tiers, and the architect never routes below opus', () => {
-  for (const [name, floor] of Object.entries(MODEL_FLOORS)) {
-    expect(by(name)).toBeDefined()
-    expect(MODELS).toContain(floor)
-    expect(MODELS.indexOf(by(name)!.model)).toBeGreaterThanOrEqual(MODELS.indexOf(floor))
-  }
-  expect(MODEL_FLOORS.architect).toBe('opus')
-})
-
-test('every default sits on the model and effort scales routing moves along', () => {
+test('every default sits on the effort scales routing moves along', () => {
   for (const s of SPECIALISTS) {
     expect(MODELS).toContain(s.model)
     expect(EFFORTS).toContain(s.effort)
@@ -185,7 +176,6 @@ test('a twin changes only name, model and description of its base, over a three-
   }
 })
 
-
 // --- The lead text ---
 
 test('leadSection never names Codex in any case, for either Jev flag', () => {
@@ -238,4 +228,12 @@ test('with quota routing on each section adds one sentence about weekly headroom
   expect(withQuota.startsWith(plain)).toBe(true)
   expect(withQuota.slice(plain.length)).toContain('more weekly headroom than Claude')
   expect(withQuota.slice(plain.length)).toContain('passing `model` keeps a call on Claude')
+})
+
+// Planning belongs to the lead; the architect accepts the implemented diff.
+test('the lead delegates audits, not plans, to the architect', () => {
+  for (const jev of [true, false]) {
+    expect(leadSection(jev)).toContain('crew:architect for audits')
+    expect(leadSection(jev)).not.toContain('crew:architect for plans')
+  }
 })
