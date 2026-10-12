@@ -99,9 +99,11 @@ trap 'exit 130' INT TERM
 
 # GOFLAGS is replaced, not emptied: Go reads an empty GOFLAGS as unset and falls back to the one `go env -w` saved, so a
 # stray -tags=contract (or -race, or -buildvcs=false) there or in the environment would shape the installed binary.
+# GOTOOLCHAIN=local keeps the pinned Go: a GOTOOLCHAIN saved by `go env -w` or set in the environment would otherwise
+# download and build with another release.
 build() {
   say "building ccmproxy $VERSION with Go $GO_VERSION"
-  tool "go@$GO_VERSION" -- env GOFLAGS=-tags= go -C "$HERE/proxy" build -trimpath -ldflags "-X main.version=$VERSION" -o "$1" ./cmd/ccmproxy
+  tool "go@$GO_VERSION" -- env GOFLAGS=-tags= GOTOOLCHAIN=local go -C "$HERE/proxy" build -trimpath -ldflags "-X main.version=$VERSION" -o "$1" ./cmd/ccmproxy
 }
 
 # --- Dry run: the same steps on copies under $TMP ---

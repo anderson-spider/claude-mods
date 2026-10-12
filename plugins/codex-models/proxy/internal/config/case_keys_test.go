@@ -21,7 +21,6 @@ func TestCaseVariantKeysAreRefusedNamingTheKnownKey(t *testing.T) {
 		{`{"Auth_Token":"` + secret + `"}`, []string{"Auth_Token: did you mean auth_token?"}},
 		{`{"CODEX":{}}`, []string{"CODEX: did you mean codex?"}},
 		{`{"codex":{"Base_URL":"https://chatgpt.com/backend-api/codex","use_codex_cli_auth":false}}`, []string{"codex.Base_URL: did you mean codex.base_url?"}},
-		{`{"Listen_Proxy":"127.0.0.1:1"}`, []string{"Listen_Proxy: did you mean listen_proxy?"}},
 		{`{"Upstream":"https://api.anthropic.com","codex":{"Use_Codex_CLI_Auth":true}}`, []string{
 			"Upstream: did you mean upstream?", "codex.Use_Codex_CLI_Auth: did you mean codex.use_codex_cli_auth?",
 		}},
@@ -84,5 +83,39 @@ func TestKnownKeysComeFromTheStructTags(t *testing.T) {
 	path := writeConfig(t, `{"codex":{"Effort_Variants":true}}`)
 	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "codex.effort_variants") {
 		t.Fatalf("Load = %v", err)
+	}
+}
+
+// A case variant of a removed key is to be deleted: the hint never names the
+// removed key as the one to write, which would only meet its own refusal.
+func TestCaseVariantOfARemovedKeyIsToBeDeleted(t *testing.T) {
+	path := writeConfig(t, `{"Listen_Proxy":"127.0.0.1:1","DNS":{"enabled":true},"Listen_HTTP":"127.0.0.1:2"}`)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("want a refusal")
+	}
+	msg := err.Error()
+	for _, want := range []string{
+		"  Listen_Proxy: listen_proxy is no longer supported (" + removedKeys["listen_proxy"] + "); delete it",
+		"  DNS: dns is no longer supported (" + removedKeys["dns"] + "); delete it",
+		"  Listen_HTTP: did you mean listen_http?",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("error does not say %q: %v", want, msg)
+		}
+	}
+	if strings.Contains(msg, "did you mean listen_proxy") || strings.Contains(msg, "did you mean dns") {
+		t.Errorf("the error suggests writing a removed key: %v", msg)
+	}
+	if strings.Contains(msg, "127.0.0.1:1") {
+		t.Errorf("the error repeats a value: %v", msg)
+	}
+	// Every removed key, in another case, gets the same answer.
+	for key := range removedKeys {
+		variant := strings.ToUpper(key)
+		if _, err := Load(writeConfig(t, `{"`+variant+`":null}`)); err == nil ||
+			!strings.Contains(err.Error(), "  "+variant+": "+key+" is no longer supported") {
+			t.Errorf("%s: %v", variant, err)
+		}
 	}
 }

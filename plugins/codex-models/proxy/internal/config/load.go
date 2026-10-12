@@ -112,45 +112,55 @@ func removedKeyError(path string, keys map[string]json.RawMessage) error {
 }
 
 // caseVariantError names every key, at the top level or in the codex block,
-// that matches a known key (removed ones included) only when case is
-// ignored, with the key it resembles. encoding/json would read such a key
+// that matches a known key only when case is ignored, with the key it
+// resembles; one that resembles a removed key is to be deleted, not renamed. encoding/json would read such a key
 // into the field, while `config init`, the installer and the plugin's hooks
 // read keys exactly: {"Auth_Token": ...} would load as the secret and then
 // get a second, generated auth_token beside it.
 func caseVariantError(path string, keys map[string]json.RawMessage) error {
-	topLevel := jsonKeys(reflect.TypeFor[Config]())
-	for key := range removedKeys {
-		topLevel = append(topLevel, key)
-	}
-	lines := caseVariants("", keys, topLevel)
+	lines := caseVariants("", keys, jsonKeys(reflect.TypeFor[Config]()), removedKeys)
 	var codex map[string]json.RawMessage
 	if raw, ok := keys["codex"]; ok && json.Unmarshal(raw, &codex) == nil {
-		lines = append(lines, caseVariants("codex.", codex, jsonKeys(reflect.TypeFor[Codex]()))...)
+		lines = append(lines, caseVariants("codex.", codex, jsonKeys(reflect.TypeFor[Codex]()), nil)...)
 	}
 	if lines == nil {
 		return nil
 	}
 	slices.Sort(lines)
-	return fmt.Errorf("config: %s has keys that differ from a known key only in case; keys are case-sensitive, so rename them:\n%s",
+	return fmt.Errorf("config: %s has keys that differ from a known key only in case; keys are case-sensitive:\n%s",
 		path, strings.Join(lines, "\n"))
 }
 
-// caseVariants lists, as "  <prefix><key>: did you mean <prefix><known>?",
-// each key of keys that is not in known but equals one of them ignoring case.
-func caseVariants(prefix string, keys map[string]json.RawMessage, known []string) []string {
+// caseVariants lists each key of keys that is not in known (or removed) but
+// equals one of them ignoring case: "  <prefix><key>: did you mean
+// <prefix><known>?" for a key in use, and, for a removed one, that it is no
+// longer supported and must be deleted (renaming it would only meet the
+// removed-key refusal).
+func caseVariants(prefix string, keys map[string]json.RawMessage, known []string, removed map[string]string) []string {
 	var lines []string
 	for key := range keys {
 		if slices.Contains(known, key) {
 			continue
 		}
-		for _, name := range known {
-			if strings.EqualFold(key, name) {
-				lines = append(lines, "  "+prefix+key+": did you mean "+prefix+name+"?")
-				break
-			}
+		if line, ok := caseVariantLine(prefix, key, known, removed); ok {
+			lines = append(lines, line)
 		}
 	}
 	return lines
+}
+
+func caseVariantLine(prefix, key string, known []string, removed map[string]string) (string, bool) {
+	for _, name := range known {
+		if strings.EqualFold(key, name) {
+			return "  " + prefix + key + ": did you mean " + prefix + name + "?", true
+		}
+	}
+	for name, reason := range removed {
+		if key != name && strings.EqualFold(key, name) {
+			return "  " + prefix + key + ": " + prefix + name + " is no longer supported (" + reason + "); delete it", true
+		}
+	}
+	return "", false
 }
 
 // jsonKeys returns the JSON member names of a struct's tagged fields.
