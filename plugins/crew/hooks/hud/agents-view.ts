@@ -3,7 +3,7 @@
 import { fmtDuration } from './format'
 import { AGENT_GLYPH, AGENT_TONE, JOB_GLYPH, JOB_TONE, PLANNED_GLYPH, type Cell } from './glyphs'
 import { displayName } from './roles'
-import { agentContextPct, isRunning, lastEndedAt, lastRound, runningAgents, statusOfCard } from './state'
+import { agentContextPct, agentSince, isRunning, jobOf, lastEndedAt, lastRound, runningAgents, statusOfCard } from './state'
 import type { AgentCard, Consult, RoundStatus } from './types'
 
 /** Glyphs a strip shows before `+N`. */
@@ -16,9 +16,17 @@ export type Strip = { cells: Cell[]; more: number }
  * oldest finished jobs are folded into `more` (a running job and the planned cells stay).
  */
 export function jobStrip(agents: readonly AgentCard[], type: string, planned: number, max = STRIP_MAX): Strip {
+  // A job's cell is its first round's start and its last round's outcome (rounds of one job: background wakes).
   const jobs = agents
     .filter(card => card.type === type)
-    .flatMap(card => card.rounds.map(round => ({ at: round.startedAt, status: round.status })))
+    .flatMap(card => {
+      const byJob = new Map<number, { at: number; status: RoundStatus }>()
+      for (const round of card.rounds) {
+        const seen = byJob.get(jobOf(round))
+        byJob.set(jobOf(round), { at: seen?.at ?? round.startedAt, status: round.status })
+      }
+      return [...byJob.values()]
+    })
     .sort((a, b) => a.at - b.at)
   const items = [
     ...jobs.map(job => ({
@@ -49,11 +57,11 @@ export function activityOf(card: AgentCard, window: number): Activity {
   return card.lastTool === '' ? { kind: 'idle', text: '', ctxPct } : { kind: 'tool', text: card.lastTool, ctxPct }
 }
 
-/** Elapsed time of the running round, or of the last round for a finished card. */
+/** Elapsed time since the current job started (`agentSince`): to now while it runs, to its last end once finished. */
 export function elapsedOf(card: AgentCard, now: number): number {
   const round = lastRound(card)
   if (!round) return 0
-  return (round.endedAt ?? now) - round.startedAt
+  return Math.max(0, (round.status === 'running' ? now : (round.endedAt ?? now)) - agentSince(card))
 }
 
 export type RunningRow = {
@@ -132,7 +140,7 @@ export function finishedRows(
         name: displayName(card.type),
         status,
         glyph: AGENT_GLYPH[status],
-        duration: fmtDuration((round.endedAt ?? round.startedAt) - round.startedAt),
+        duration: fmtDuration(Math.max(0, (round.endedAt ?? round.startedAt) - agentSince(card))),
         task:
           status === 'failed'
             ? `failed · ${round.failure ?? 'error'}`

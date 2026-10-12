@@ -45,6 +45,7 @@ import type { HudContext, HudInput } from './sections'
 import {
   agentCompleted,
   agentDenied,
+  agentMessaged,
   agentSpawned,
   agentStepped,
   agentTool,
@@ -81,7 +82,10 @@ type Options = Parameters<Register>[1]
 
 const PANE = 'crew'
 const TITLE = 'Crew'
-/** The pane's requested width when docked (the host may give 56 to 66) and its rows when seated inline. */
+/**
+ * The pane's body columns when docked (inside the frame, as `bodyColumns`) and its rows when seated inline. Both are
+ * requests: a width the person dragged or keyed the dock to wins, this session's or a kept one.
+ */
 const PANE_COLUMNS = 56
 const MINI_ROWS = 8
 /** The `$.store` key holding the person's pick: `{ v: 1, isVisible, placement }`. */
@@ -710,16 +714,40 @@ export function registerHud(on: On, options: Options, shared: Shared): void {
       text = tool
       text = toolLine(tool, e)
     } catch {}
+    // The lead messages an ended agent (the crew's fix loop): its next round is a new job. Marked before the call, as the
+    // resumed agent may step before the call returns. A `to` that is the Agent call's `name` matches no card id: that
+    // resume stays in the job it continues.
+    let messaged: string | undefined
+    try {
+      const to = (e as unknown as { to?: unknown }).to
+      if (!e.agentId && tool === 'SendMessage' && typeof to === 'string' && (await getCards($)).some(c => c.id === to)) {
+        messaged = to
+        await update($, agentsAtom, list => agentMessaged(cardsOf(list), to))
+      }
+    } catch {}
     try {
       await toolStarted($, e.agentId, text)
     } catch {}
+    // A message that was not sent (refused, or the call failed) resumes nothing: the mark goes. Its own try, so a state
+    // failure here neither changes the call's outcome nor skips the lines below.
+    const unmark = async () => {
+      const sentTo = messaged
+      if (sentTo === undefined) return
+      try {
+        await update($, agentsAtom, list => agentMessaged(cardsOf(list), sentTo, false))
+      } catch {}
+    }
     let ran: Awaited<ReturnType<typeof next>>
     try {
       ran = await next(e)
+    } catch (error) {
+      await unmark()
+      throw error
     } finally {
       // The call settled (run, refused or failed): a permission ask it raised is no longer waiting.
       if (tool) await askSettled($, askKey(e.agentId, tool)).catch(() => undefined)
     }
+    if (ran.deny !== undefined) await unmark()
     try {
       const wasDenied = denied.delete(e.tool_use_id)
       if (ran.deny !== undefined && !wasDenied) await toolDenied($, e.agentId, text)

@@ -34,7 +34,7 @@ import {
   type HudContext,
   type HudInput,
 } from './sections'
-import { favoredChangedRecently } from './state'
+import { agentSince, favoredChangedRecently } from './state'
 import type { Waiting } from './plan'
 import { contextView } from './session-view'
 import { cellWidth, fit, pad, truncate } from './width'
@@ -104,7 +104,7 @@ function layoutAt(d: Derived, o: PaneOptions, lp: LevelPlan, knobs: Knobs): Pane
   const drop = knobs.drop
   const cards = [
     safe('session', () => sessionCard(d, cwOf('session'), lp)),
-    drop.has('quota') ? null : safe('quota', () => quotaCard(d, cwOf('quota'), lp, narOf('quota'))),
+    drop.has('quota') ? null : safe('quota', () => quotaCard(d, cwOf('quota'), lp)),
     drop.has('plan') ? null : safe('plan', () => planCard(d, cwOf('plan'), lp, narOf('plan'))),
     safe('running', () =>
       runningCard(d, cwOf('running'), lp, narOf('running'), {
@@ -315,7 +315,7 @@ export function sessionMiniLine(d: Derived, width: number): Line {
 export function runningMiniLine(d: Derived, r: RunningRow, width: number): Line {
   const c = r.card
   const role = typeInfo(c.type).role
-  const since = c.rounds[c.rounds.length - 1]?.startedAt ?? c.spawnedAt
+  const since = agentSince(c)
   const step = linkedStep(c, d.planIds)
   const task = step === null ? c.description : `${step} ${withoutStepId(c.description)}`
   const taskWidth = Math.max(0, width - 2 - 13 - 6)

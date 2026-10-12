@@ -48,7 +48,7 @@ import {
 import { filled, quotaView, type GaugeRow, type ProviderBlock, type QuotaView } from './quota-view'
 import { typeInfo, withoutStepId, type Role } from './roles'
 import { contextView, headerProfile, modelLine, receiptLine, tokenRow } from './session-view'
-import { defaultSession, isRunning, lastRound, loopSummary, statusOfCard } from './state'
+import { agentSince, defaultSession, isRunning, lastRound, loopSummary, statusOfCard } from './state'
 import { LANE_GLYPH, laneStats, timelineAxis, timelineLanes, type Lane } from './timeline'
 import type { AgentCard, Consult, Favored, LogLine, Loop, Session } from './types'
 import type { Quota } from '../quota'
@@ -456,10 +456,10 @@ export function quotaLine(d: Derived, width: number): Line {
   return fitLine(spans, width)
 }
 
-export function quotaCard(d: Derived, cw: number, lp: LevelPlan, nar: NarrowPlan): CardModel {
+export function quotaCard(d: Derived, cw: number, lp: LevelPlan): CardModel {
   const v = need(d.quota)
   if (lp.quota === 'line') return card('quota', 'Quota', [quotaLine(d, cw)])
-  const flat = lp.quota !== 'card' || !nar.quotaHeader
+  const flat = lp.quota !== 'card'
   const rows = flat ? quotaFlatRows(v, cw) : quotaBlockRows(v, cw)
   const hot = (v.hottest ?? 0) >= 70
   if (v.favoredRow !== null && (lp.quota !== 'favored-when-hot' || hot)) rows.push(fitLine([sp(v.favoredRow, 'text')], cw))
@@ -494,10 +494,10 @@ const RIGHT_TONE: Readonly<Record<StepRow['right']['kind'], Tone | undefined>> =
   none: undefined,
 }
 
-/** When the running agent linked to a step started its round, or null. */
+/** When the running agent linked to a step started its current job (its clock's start), or null. */
 function linkedSince(d: Derived, stepId: string): number | null {
   const running = d.s.agents.filter(a => a.stepId === stepId && isRunning(a)).sort((a, b) => a.spawnedAt - b.spawnedAt)[0]
-  return running ? (lastRound(running)?.startedAt ?? running.spawnedAt) : null
+  return running ? agentSince(running) : null
 }
 
 const BUCKETS: readonly { key: 'now' | 'blocked' | 'next' | 'waits'; label: string; more: string }[] = [
@@ -627,7 +627,7 @@ function agentLines(d: Derived, r: RunningRow, cw: number, lp: LevelPlan, nar: N
   const stripWidth = nar.jobStrip ? 9 : 0
   const keyCells = focus?.isFocused ? HOTKEY_CELLS : 0
   const modelWidth = Math.max(0, cw - keyCells - 2 - 13 - stripWidth - 8)
-  const since = lastRound(c)?.startedAt ?? c.spawnedAt
+  const since = agentSince(c)
   const row1 = keyedRow(
     [
       sp('● ', 'role', { role }),

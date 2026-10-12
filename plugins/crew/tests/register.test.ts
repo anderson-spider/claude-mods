@@ -1490,6 +1490,8 @@ function panelWorld(
   const w = {
     store,
     opens: [] as string[],
+    /** Every `$.ui.open` argument whole. */
+    openArgs: [] as Record<string, unknown>[],
     closes: [] as { id: string; origin: string }[],
     sets: 0,
     isOpen: false,
@@ -1516,6 +1518,7 @@ function panelWorld(
   })
   on('ui.open', (_$, e) => {
     w.opens.push(e.id)
+    w.openArgs.push({ ...e })
     w.isOpen = true
     return { value: w.placed ? { isPlaced: true as const } : { isPlaced: false as const, reason: o.reason ?? 'widen the terminal' } }
   })
@@ -1625,6 +1628,15 @@ test('side then prompt then side: the pane closes for the band and opens again',
   expect(w.opens).toEqual(['crew', 'crew'])
   expect(await ui.find({ text: /idle/ })).toBeUndefined()
   await ui.unmount()
+})
+
+test('the docked pane asks for the 56 body columns its full layout needs, and 8 rows inline', async ($, on) => {
+  const w = panelWorld(on)
+  await startSession($)
+  await panel($, 'side', { isFullscreen: true, columns: 277 })
+  expect(w.openArgs.length).toBeGreaterThan(0)
+  // `columns` is the body inside the frame (the Pane's `bodyColumns`), the width the full layout is drawn at.
+  for (const args of w.openArgs) expect(args).toMatchObject({ id: 'crew', title: 'Crew', columns: 56, rows: 8 })
 })
 
 test('/crew:panel side words its reply by the room the command has', async ($, on) => {
@@ -1839,7 +1851,12 @@ function hudWorld(on: On, o: Parameters<typeof panelWorld>[1] & { files?: Record
   on('turn.complete', () => ({ text: '' }))
   // A call whose id is in `refuse` is refused beneath the plugin (a rule); the rest run.
   const refuse = new Set<string>()
-  on('tool.call', (_$, e) => (refuse.has(e.tool_use_id) ? { deny: 'refused by a rule' } : { result: 'ok' }))
+  // A call whose id is in `fail` throws beneath the plugin.
+  const fail = new Set<string>()
+  on('tool.call', (_$, e) => {
+    if (fail.has(e.tool_use_id)) throw new Error('the call failed beneath')
+    return refuse.has(e.tool_use_id) ? { deny: 'refused by a rule' } : { result: 'ok' }
+  })
   let decision: 'allow' | 'ask' | 'deny' = 'allow'
   on('tool.check', () => ({ decision }))
   on('agent.list', () => ({ value: [] }) as never)
@@ -1848,7 +1865,7 @@ function hudWorld(on: On, o: Parameters<typeof panelWorld>[1] & { files?: Record
   on('classic.PermissionRequest', () => answer as never)
   on('classic.UserPromptSubmit', () => ({}) as never)
   return {
-    ...w, files, fsCalls, refuse,
+    ...w, files, fsCalls, refuse, fail,
     check: (d: typeof decision) => { decision = d },
     permission: (a: typeof answer) => { answer = a },
   }
@@ -1921,6 +1938,74 @@ test('the HUD follows a turn: your prompt in the Log, an agent\'s card while it 
   expect(await ui.find({ text: /done · R3 typed structs/ })).toBeDefined()
   expect(await ui.find({ text: /✓ last turn 0:02 · .* 1 agent/ })).toBeDefined()
   expect(await ui.find({ text: /○ idle/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('the lead\'s SendMessage to an ended agent starts a new job; a refused one does not, and a failure stays in the Log', async ($, on) => {
+  let t = 0
+  const w = hudWorld(on, { now: () => t })
+  on('turn.step', async function* (_$, e) {
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: null, usage: { input_tokens: 1 } } as never
+  })
+  await startSession($)
+  await $.agent.spawn({ subagentType: 'crew:developer', description: 'T3 implement', prompt: 'x', tool_use_id: 'tu1' } as never)
+  t = 5 * 60_000
+  await $.turn.complete({ turnId: 'D1', agentId: 'ag-T3', reason: 'error', answer: '', durationMs: 1, isAborted: false } as never)
+  // The timeline's lane counts jobs: `×1`, then `×2` once the lead's message resumed the agent.
+  const jobs = async () => {
+    const ui = await mountPane($)
+    const lane = (await ui.findAll({ type: 'Text' })).map(x => x.text).find(x => /×\d/.test(x)) ?? ''
+    const failures = (await ui.findAll({ type: 'Text' })).filter(x => /^│ \d\d:\d\d:\d\d developer +✗ failed · error/.test(x.text)).length
+    await ui.unmount()
+    return { lane: /×(\d)/.exec(lane)?.[1], failures }
+  }
+
+  // A refused message is no resume: the wake stays in the first job (its two failures both stay).
+  w.refuse.add('sm1')
+  await $.tool.call({ tool: 'SendMessage', tool_use_id: 'sm1', to: 'ag-T3', message: 'fix it' } as never)
+  t = 20 * 60_000
+  await step($, 'ag-T3', null)
+  await $.turn.complete({ turnId: 'D2', agentId: 'ag-T3', reason: 'error', answer: '', durationMs: 1, isAborted: false } as never)
+  expect(await jobs()).toEqual({ lane: '1', failures: 2 })
+
+  // The lead sends the fixes: a new job, and the first job's failures stay beside the second's.
+  t = 26 * 60_000
+  await $.tool.call({ tool: 'SendMessage', tool_use_id: 'sm2', to: 'ag-T3', message: 'fix it' } as never)
+  await step($, 'ag-T3', null)
+  t = 27 * 60_000
+  await $.turn.complete({ turnId: 'D3', agentId: 'ag-T3', reason: 'error', answer: '', durationMs: 1, isAborted: false } as never)
+  expect(await jobs()).toEqual({ lane: '2', failures: 3 })
+})
+
+test('a SendMessage whose call throws resumes nothing: the error comes back as it was and a later wake stays in the job', async ($, on) => {
+  let t = 0
+  const w = hudWorld(on, { now: () => t })
+  on('turn.step', async function* (_$, e) {
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: null, usage: { input_tokens: 1 } } as never
+  })
+  await startSession($)
+  await $.agent.spawn({ subagentType: 'crew:developer', description: 'T3 implement', prompt: 'x', tool_use_id: 'tu1' } as never)
+  t = 60_000
+  await $.turn.complete({ turnId: 'D1', agentId: 'ag-T3', reason: 'answer', answer: '', durationMs: 1, isAborted: false } as never)
+
+  w.fail.add('sm1')
+  let thrown: unknown
+  try {
+    await $.tool.call({ tool: 'SendMessage', tool_use_id: 'sm1', to: 'ag-T3', message: 'fix it' } as never)
+  } catch (error) {
+    thrown = error
+  }
+  // The host answers a failing hook beneath with its own error; the HUD lets it through as it came.
+  expect(String(thrown)).toBe('HooksError: no implementation for tool.call')
+
+  // A background task wakes the agent later: still job 1 (`×1`), its clock from the spawn.
+  t = 120_000
+  await step($, 'ag-T3', null)
+  t = 130_000
+  await $.turn.complete({ turnId: 'D2', agentId: 'ag-T3', reason: 'answer', answer: '', durationMs: 1, isAborted: false } as never)
+  const ui = await mountPane($)
+  const lane = (await ui.findAll({ type: 'Text' })).map(x => x.text).find(x => /×\d/.test(x)) ?? ''
+  expect(/×(\d)/.exec(lane)?.[1]).toBe('1')
   await ui.unmount()
 })
 

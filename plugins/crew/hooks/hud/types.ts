@@ -33,6 +33,11 @@ export type Round = {
   startedAt: number
   endedAt?: number
   status: RoundStatus
+  /**
+   * The job the round belongs to, from 1: a SendMessage from the lead to the ended agent starts the next job, a wake
+   * after a background task stays in the same one. Absent counts as 1.
+   */
+  job?: number
   /** Why a failed round failed: `max_tokens`, `refusal` or `error`. */
   failure?: string
 }
@@ -103,6 +108,10 @@ export type AgentCard = {
   /** '' when none was sent. */
   effort: string
   spawnedAt: number
+  /** When the current job started (the spawn, or the lead's SendMessage resume); absent reads as the spawn. */
+  jobStartedAt?: number
+  /** The lead sent the ended agent a message: its next round starts a new job. */
+  isResuming?: boolean
   /** Oldest first. */
   rounds: Round[]
   steps: number
@@ -145,6 +154,9 @@ export type LogLine = {
   text: string
   /** The agent type the line is about, when it is one (for the role color). */
   type?: string
+  /** The agent id and job on an end line (done, failed, stopped): a later end of that job replaces a `done` of it. */
+  agent?: string
+  job?: number
 }
 
 /** A workflow agent or fork: stepping without a card. */

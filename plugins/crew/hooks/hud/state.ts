@@ -199,6 +199,17 @@ export const isRunning = (card: AgentCard): boolean => lastRound(card)?.status =
 
 export const lastRound = (card: AgentCard): Round | undefined => card.rounds[card.rounds.length - 1]
 
+/** The job a round belongs to (absent: the first). */
+export const jobOf = (round: Round): number => (typeof round.job === 'number' && Number.isFinite(round.job) ? round.job : 1)
+
+/**
+ * Where an agent's clock starts: its current job's start. A wake after a background task is a new round of the same
+ * job, so the clock runs on from the spawn as the host's does; the lead's SendMessage to the ended agent (the crew's
+ * fix loop) starts a new job and the clock with it.
+ */
+export const agentSince = (card: AgentCard): number =>
+  typeof card.jobStartedAt === 'number' && Number.isFinite(card.jobStartedAt) ? card.jobStartedAt : card.spawnedAt
+
 /** The status an agent row shows: its latest round's. */
 export const statusOfCard = (card: AgentCard): RoundStatus => lastRound(card)?.status ?? 'done'
 
@@ -239,7 +250,8 @@ export function agentSpawned(list: readonly AgentCard[], e: SpawnEvent): AgentCa
     model: e.model ?? '',
     effort: e.effort ?? '',
     spawnedAt: e.now,
-    rounds: [{ startedAt: e.now, status: 'running' }],
+    jobStartedAt: e.now,
+    rounds: [{ startedAt: e.now, status: 'running', job: 1 }],
     steps: 0,
     ctx: 0,
     output: 0,
@@ -264,19 +276,24 @@ export type StepEvent = {
 }
 
 /**
- * An agent's model step. A step of an agent whose last round ended starts a new round (a resumed subagent). The model
- * the API reported replaces the planned one; context is the request's input tokens.
+ * An agent's model step. A step of an agent whose last round ended starts a new round (a resumed subagent): of a new
+ * job when the lead messaged it (`agentMessaged`), else of the same job. The model the API reported replaces the
+ * planned one; context is the request's input tokens.
  */
 export function agentStepped(list: readonly AgentCard[], e: StepEvent): AgentCard[] {
   return update(list, e.id, card => {
     const last = lastRound(card)
-    const rounds =
-      last && last.status === 'running'
-        ? card.rounds
-        : keepLast([...card.rounds, { startedAt: e.now, status: 'running' as const }], MAX_ROUNDS)
+    const isLive = last !== undefined && last.status === 'running'
+    const lastJob = last ? jobOf(last) : 1
+    const isNewJob = !isLive && card.isResuming === true
+    const rounds = isLive
+      ? card.rounds
+      : keepLast([...card.rounds, { startedAt: e.now, status: 'running' as const, job: isNewJob ? lastJob + 1 : lastJob }], MAX_ROUNDS)
     const ctx = inputOf(e.usage)
+    const { isResuming: _resuming, ...rest } = card
     return {
-      ...card,
+      ...(isNewJob ? rest : card),
+      ...(isNewJob ? { jobStartedAt: e.now } : {}),
       rounds,
       model: e.model && e.model !== '' ? e.model : card.model,
       effort: e.effort !== undefined && e.effort !== '' ? String(e.effort) : card.effort,
@@ -285,6 +302,20 @@ export function agentStepped(list: readonly AgentCard[], e: StepEvent): AgentCar
       output: card.output + n(e.usage?.output_tokens),
       lastStop: e.stopReason !== undefined ? e.stopReason : card.lastStop,
     }
+  })
+}
+
+/**
+ * The lead's SendMessage to an agent (`isSent` false: the call was refused). An ended agent's next round is a new job;
+ * a running one is only steered, and stays in its job.
+ */
+export function agentMessaged(list: readonly AgentCard[], id: string, isSent = true): AgentCard[] {
+  return update(list, id, card => {
+    if (!isSent) {
+      const { isResuming: _resuming, ...rest } = card
+      return rest
+    }
+    return lastRound(card)?.status === 'running' ? card : { ...card, isResuming: true }
   })
 }
 
@@ -406,9 +437,17 @@ export const consulting = (list: readonly Consult[]): Consult[] => list.filter(c
 
 // ------------------------------------------------------------------ log
 
-/** Appends a line; the ring keeps the newest 60. */
+const END_KINDS: ReadonlySet<LogKind> = new Set<LogKind>(['done', 'failed', 'stopped'])
+const isEnd = (line: LogLine) => END_KINDS.has(line.kind)
+
+/**
+ * Appends a line; the ring keeps the newest 60. An agent's end replaces an earlier `done` of the same job (a wake after
+ * a background task ends the job again); a failure or a stop stays, and each job keeps its own end.
+ */
 export function logged(list: readonly LogLine[], line: LogLine): LogLine[] {
-  return keepLast([...list, line], MAX_LOG)
+  const replaces = (l: LogLine) => l.agent === line.agent && l.kind === 'done' && (l.job ?? 1) === (line.job ?? 1)
+  const kept = line.agent !== undefined && isEnd(line) ? list.filter(l => !replaces(l)) : list
+  return keepLast([...kept, line], MAX_LOG)
 }
 
 const squash = (text: string): string => text.replace(/\s+/g, ' ').trim()
@@ -435,7 +474,7 @@ export function endLine(card: AgentCard, now: number): LogLine | null {
       : round.status === 'failed'
         ? `✗ failed · ${round.failure ?? 'error'}`
         : `stopped · ${card.description}`
-  return { at: now, who, kind, text, type: card.type }
+  return { at: now, who, kind, text, type: card.type, agent: card.id, job: jobOf(round) }
 }
 
 export function denyLine(who: string, text: string, now: number, type?: string): LogLine {

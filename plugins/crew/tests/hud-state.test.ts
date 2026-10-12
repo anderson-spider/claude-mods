@@ -23,6 +23,8 @@ import {
   agentCompleted,
   agentContextPct,
   agentDenied,
+  agentMessaged,
+  agentSince,
   agentSpawned,
   agentStepped,
   agentTool,
@@ -74,6 +76,7 @@ import {
   timelineAxis,
   timelineLanes,
 } from '../hooks/hud/timeline'
+import { jobStrip } from '../hooks/hud/agents-view'
 import type { AgentCard, Consult, LogLine, Loop } from '../hooks/hud/types'
 import { cellWidth } from '../hooks/hud/width'
 
@@ -347,7 +350,7 @@ test('completion by reason: answer is done, aborted is stopped, anything else fa
     list = agentStepped(list, { id: 'a1', usage: { input_tokens: 1 }, stopReason: lastStop, now: T0 + 1 })
     return agentCompleted(list, { id: 'a1', reason, now: T0 + 500 })[0] as AgentCard
   }
-  expect(finish('answer').rounds[0]).toEqual({ startedAt: T0, endedAt: T0 + 500, status: 'done' })
+  expect(finish('answer').rounds[0]).toEqual({ startedAt: T0, endedAt: T0 + 500, status: 'done', job: 1 })
   expect(finish('aborted').rounds[0]).toMatchObject({ status: 'stopped', endedAt: T0 + 500 })
   expect(finish('error').rounds[0]).toMatchObject({ status: 'failed', failure: 'error' })
   expect(finish('error', 'max_tokens').rounds[0]).toMatchObject({ status: 'failed', failure: 'max_tokens' })
@@ -359,15 +362,33 @@ test('completion by reason: answer is done, aborted is stopped, anything else fa
   expect(agentCompleted([done], { id: 'a1', reason: 'error', now: T0 + 900 })[0]).toEqual(done)
 })
 
-test('a step after the round ended starts a new round (a resumed subagent)', () => {
+test('a step after the round ended starts a new round: of the same job after a wake, of a new job after the lead\'s message', () => {
   let list = agentCompleted(spawn([], 'a1'), { id: 'a1', reason: 'answer', now: T0 + 100 })
   list = agentStepped(list, { id: 'a1', usage: { input_tokens: 1 }, now: T0 + 200 })
   expect(list[0]?.rounds).toEqual([
-    { startedAt: T0, endedAt: T0 + 100, status: 'done' },
-    { startedAt: T0 + 200, status: 'running' },
+    { startedAt: T0, endedAt: T0 + 100, status: 'done', job: 1 },
+    { startedAt: T0 + 200, status: 'running', job: 1 },
   ])
+  expect(agentSince(list[0] as AgentCard)).toBe(T0)
   list = agentCompleted(list, { id: 'a1', reason: 'error', now: T0 + 300 })
   expect(list[0]?.rounds.map(r => r.status)).toEqual(['done', 'failed'])
+
+  // The lead sends the fixes: the next round is job 2, and the clock starts there.
+  list = agentMessaged(list, 'a1')
+  expect(list[0]?.isResuming).toBe(true)
+  list = agentStepped(list, { id: 'a1', usage: { input_tokens: 1 }, now: T0 + 1000 })
+  expect(list[0]?.rounds[2]).toEqual({ startedAt: T0 + 1000, status: 'running', job: 2 })
+  expect(list[0]?.isResuming).toBeUndefined()
+  expect(agentSince(list[0] as AgentCard)).toBe(T0 + 1000)
+  // A message to a running agent steers it: no new job.
+  list = agentMessaged(list, 'a1')
+  expect(list[0]?.isResuming).toBeUndefined()
+  // A refused message clears the mark.
+  list = agentCompleted(list, { id: 'a1', reason: 'answer', now: T0 + 2000 })
+  list = agentMessaged(agentMessaged(list, 'a1'), 'a1', false)
+  list = agentStepped(list, { id: 'a1', usage: { input_tokens: 1 }, now: T0 + 3000 })
+  expect(list[0]?.rounds[3]?.job).toBe(2)
+  expect(agentSince(list[0] as AgentCard)).toBe(T0 + 1000)
 })
 
 test('running agents are listed oldest first; stopping marks the running ones', () => {
@@ -378,7 +399,7 @@ test('running agents are listed oldest first; stopping marks the running ones', 
   expect(runningAgents(list).map(c => c.id)).toEqual(['a', 'b'])
   const stopped = agentsStopped(list, T0 + 99)
   expect(runningAgents(stopped)).toEqual([])
-  expect(stopped.find(c => c.id === 'a')?.rounds[0]).toEqual({ startedAt: T0, endedAt: T0 + 99, status: 'stopped' })
+  expect(stopped.find(c => c.id === 'a')?.rounds[0]).toEqual({ startedAt: T0, endedAt: T0 + 99, status: 'stopped', job: 1 })
   expect(stopped.find(c => c.id === 'c')?.rounds[0]?.status).toBe('done')
 })
 
@@ -473,6 +494,43 @@ test('the log keeps the newest 60 lines', () => {
   expect(log[MAX_LOG - 1]?.text).toBe(`l${MAX_LOG + 6}`)
 })
 
+test('end lines: a wake ends the same job again and replaces its done; two developers keep one each; a failure stays', () => {
+  const endAt = (cards: AgentCard[], id: string, reason: string, at: number, log: LogLine[]) => {
+    const next = agentCompleted(cards, { id, reason, now: at })
+    return { cards: next, log: logged(log, endLine(next.find(c => c.id === id) as AgentCard, at) as LogLine) }
+  }
+  const wake = (cards: AgentCard[], id: string, at: number) => agentStepped(cards, { id, usage: { input_tokens: 1 }, now: at })
+  // Two developers of one wave: same type, same display name, each its own end line.
+  let cards = spawn([], 'a1', { type: 'crew:developer', description: 'E1 fix typo' })
+  cards = spawn(cards, 'a2', { type: 'crew:developer', description: 'E2 fix link' })
+  let log: LogLine[] = []
+  ;({ cards, log } = endAt(cards, 'a1', 'answer', T0 + 11_000, log))
+  ;({ cards, log } = endAt(cards, 'a2', 'answer', T0 + 12_000, log))
+  // a1 wakes for a background task and ends again: the same job, one done line, at the last end.
+  cards = wake(cards, 'a1', T0 + 31_000)
+  ;({ cards, log } = endAt(cards, 'a1', 'answer', T0 + 33_000, log))
+  expect(log.map(l => `${l.agent} ${l.kind} ${l.at - T0}`)).toEqual(['a2 done 12000', 'a1 done 33000'])
+
+  // a2 is resumed with fixes (a new job) and fails, then resumed again and done: every job keeps its end.
+  cards = wake(agentMessaged(cards, 'a2'), 'a2', T0 + 40_000)
+  ;({ cards, log } = endAt(cards, 'a2', 'error', T0 + 41_000, log))
+  cards = wake(agentMessaged(cards, 'a2'), 'a2', T0 + 50_000)
+  ;({ cards, log } = endAt(cards, 'a2', 'answer', T0 + 51_000, log))
+  expect(log.filter(l => l.agent === 'a2').map(l => `${l.kind} ${l.job}`)).toEqual(['done 1', 'failed 2', 'done 3'])
+
+  // A failure is never replaced, even by a later end of its job (a wake after the failure).
+  let solo = spawn([], 'b1')
+  let soloLog: LogLine[] = []
+  ;({ cards: solo, log: soloLog } = endAt(solo, 'b1', 'error', T0 + 5_000, soloLog))
+  solo = wake(solo, 'b1', T0 + 6_000)
+  ;({ cards: solo, log: soloLog } = endAt(solo, 'b1', 'answer', T0 + 7_000, soloLog))
+  expect(soloLog.map(l => l.kind)).toEqual(['failed', 'done'])
+
+  // Lines without an agent id (older atoms, prompts) are never merged.
+  log = logged(log, { at: T0 + 60_000, who: 'developer', kind: 'done', text: 'done · E1 fix typo' })
+  expect(log.filter(l => l.agent === undefined && l.kind === 'done')).toHaveLength(1)
+})
+
 test('log lines: prompts, spawns, ends, denials, consults, compaction', () => {
   expect(promptLine('\n  split the proxy   rewrite into\nsteps', T0)).toEqual({ at: T0, who: 'you', kind: 'prompt', text: 'split the proxy rewrite into' })
   expect(promptLine('use sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789 please', T0).text).not.toContain('sk-ant')
@@ -562,6 +620,27 @@ test('timeline: the lead lane comes from turns, an agent lane from rounds, 30 ce
   expect(dev?.cells[12]).toBe('busy')
   expect(dev?.jobs).toBe(2)
   expect(busyText(dev?.busyMs ?? 0)).toBe('5m')
+})
+
+test('the job strip and the timeline\'s ×N count jobs: a background wake is the same job, the lead\'s message a new one', () => {
+  const now = T0 + 30 * MIN
+  // One run that woke once for a background task: one job, two busy spans.
+  let agents = spawn([], 'd1', { now: now - 9 * MIN })
+  agents = agentCompleted(agents, { id: 'd1', reason: 'answer', now: now - 8 * MIN })
+  agents = agentStepped(agents, { id: 'd1', usage: { input_tokens: 1 }, now: now - 7 * MIN })
+  // While woken, the job's cell takes its last round's outcome: running, not the first round's done.
+  expect(jobStrip(agents, 'crew:developer', 0).cells.map(c => c.glyph).join('')).toBe('▶')
+  agents = agentCompleted(agents, { id: 'd1', reason: 'answer', now: now - 6 * MIN })
+  expect(jobStrip(agents, 'crew:developer', 0).cells.map(c => c.glyph).join('')).toBe('▰')
+  expect(timelineLanes(agents, [], defaultSession(T0), now)[1]?.jobs).toBe(1)
+
+  // The lead sends fixes to a failed run: two jobs, the failure first.
+  let fixed = spawn([], 'd2', { now: now - 9 * MIN })
+  fixed = agentCompleted(fixed, { id: 'd2', reason: 'error', now: now - 8 * MIN })
+  fixed = agentStepped(agentMessaged(fixed, 'd2'), { id: 'd2', usage: { input_tokens: 1 }, now: now - 4 * MIN })
+  fixed = agentCompleted(fixed, { id: 'd2', reason: 'answer', now: now - 3 * MIN })
+  expect(jobStrip(fixed, 'crew:developer', 0).cells.map(c => c.glyph).join('')).toBe('✗▰')
+  expect(timelineLanes(fixed, [], defaultSession(T0), now)[1]?.jobs).toBe(2)
 })
 
 test('timeline: failed jobs mark their last minute; lanes sort by role, twins apart; idle types are left out', () => {

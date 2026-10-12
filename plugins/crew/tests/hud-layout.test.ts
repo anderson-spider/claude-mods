@@ -328,8 +328,8 @@ test('paneBudget: content is width minus the frame; extra cells beyond 56 go to 
 })
 
 test('narrowPlan drops the strip, then the effort, below 56', () => {
-  expect(narrowPlan(56)).toEqual({ jobStrip: true, effort: true, planOwner: true, quotaHeader: true, finishedStrip: true })
-  expect(narrowPlan(52)).toEqual({ jobStrip: false, effort: true, planOwner: false, quotaHeader: false, finishedStrip: false })
+  expect(narrowPlan(56)).toEqual({ jobStrip: true, effort: true, planOwner: true, finishedStrip: true })
+  expect(narrowPlan(52)).toEqual({ jobStrip: false, effort: true, planOwner: false, finishedStrip: false })
   expect(narrowPlan(44).effort).toBe(false)
 })
 

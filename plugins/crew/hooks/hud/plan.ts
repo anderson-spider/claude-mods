@@ -8,7 +8,7 @@ import { fmtDuration, plural } from './format'
 import { cellWidth, oneLine, truncate } from './width'
 import { stepCell, type Cell, type StepKind } from './glyphs'
 import { displayName, STEP_ID, typeInfo, shortLabel } from './roles'
-import { isRunning, lastRound, runningAgents } from './state'
+import { agentSince, isRunning, lastRound, runningAgents } from './state'
 import type { AgentCard, Consult, LogLine, Session } from './types'
 
 // ------------------------------------------------------------------ parser
@@ -302,8 +302,7 @@ function rightOf(row: { step: Step; kind: StepKind; bucket: Bucket }, byId: Read
   const linked = ctx.agents.filter(card => card.stepId === step.id)
   const running = linked.filter(isRunning).sort((a, b) => a.spawnedAt - b.spawnedAt)[0]
   if (running) {
-    const round = lastRound(running)
-    return { kind: 'elapsed', text: fmtDuration(ctx.now - (round?.startedAt ?? running.spawnedAt)) }
+    return { kind: 'elapsed', text: fmtDuration(ctx.now - agentSince(running)) }
   }
   const latest = [...linked].sort((a, b) => b.spawnedAt - a.spawnedAt)[0]
   if (latest && lastRound(latest)?.status === 'failed' && (step.state === 'implementing' || step.state === 'fixes requested')) {
