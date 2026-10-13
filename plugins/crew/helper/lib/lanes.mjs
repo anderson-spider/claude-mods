@@ -1,5 +1,6 @@
 // The roles a twin can run as, and the fixed thread and sandbox settings. The lane is the thread's working directory,
-// the repository, in Codex's read-only sandbox: nothing is writable, the cwd included, and the network is off.
+// the repository, in Codex's workspace-write sandbox: the cwd and the temporary directories are writable and commands
+// have the network.
 
 /** One row per role. A role with no row is refused (`laneOf` is undefined). */
 export const LANES = Object.freeze({
@@ -19,9 +20,9 @@ export const laneCwd = (role, repo) => {
   return repo
 }
 
-/** Fixed for every lane: no escalation, no network, nothing writable. */
-export const THREAD = Object.freeze({ approvalPolicy: 'never', approvalsReviewer: 'user', sandbox: 'read-only', ephemeral: true })
-export const SANDBOX_POLICY = Object.freeze({ type: 'readOnly', networkAccess: false })
+/** Fixed for every lane: no escalation; the repository and the temporary directories writable, the network on. */
+export const THREAD = Object.freeze({ approvalPolicy: 'never', approvalsReviewer: 'user', sandbox: 'workspace-write', ephemeral: true })
+export const SANDBOX_POLICY = Object.freeze({ type: 'workspaceWrite', writableRoots: Object.freeze([]), networkAccess: true, excludeTmpdirEnvVar: false, excludeSlashTmp: false })
 
 /**
  * What crew answers when the server asks for an approval despite `never`: always a refusal, by the method's own shape.

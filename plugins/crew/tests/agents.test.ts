@@ -19,24 +19,23 @@ test('no removed role is registered: no developer, architect, auditor, QA, desig
   }
 })
 
-test('every helper is read-only and cannot delegate: no Write, Edit, NotebookEdit or Agent', () => {
+test('every helper can write on request and cannot delegate: no NotebookEdit or Agent', () => {
   for (const s of SPECIALISTS) {
-    for (const tool of ['Write', 'Edit', 'NotebookEdit', 'Agent']) expect(s.tools).not.toContain(tool)
-    expect(s.prompt).toContain('never edit files')
-    expect(s.prompt).toContain('call other agents')
+    for (const tool of ['Write', 'Edit']) expect(s.tools).toContain(tool)
+    for (const tool of ['NotebookEdit', 'Agent']) expect(s.tools).not.toContain(tool)
+    expect(s.prompt).toContain('Change files only when the request asks you to; otherwise only read and run commands.')
+    expect(s.prompt).toContain('Never call other agents.')
   }
 })
 
-test('planner and challenger only read the code; the digger also reads git, docs, the web and pages', () => {
-  expect(by('planner')?.tools).toEqual(['Read', 'Grep', 'Glob'])
-  expect(by('challenger')?.tools).toEqual(['Read', 'Grep', 'Glob'])
-  const digger = by('digger')?.tools ?? []
-  for (const tool of ['Read', 'Grep', 'Glob', 'Bash', 'WebSearch', 'WebFetch', 'mcp__claude_ai_Context7__query-docs', 'mcp__claude-in-chrome__get_page_text']) {
-    expect(digger).toContain(tool)
+test('every helper shares the tools for files, commands, docs, the web and reading pages', () => {
+  for (const s of SPECIALISTS) {
+    expect(s.tools).toEqual(by('digger')?.tools)
+    for (const tool of ['Read', 'Grep', 'Glob', 'Bash', 'Write', 'Edit', 'WebSearch', 'WebFetch', 'mcp__claude_ai_Context7__query-docs', 'mcp__codegraph__codegraph_explore', 'mcp__claude-in-chrome__get_page_text']) {
+      expect(s.tools).toContain(tool)
+    }
+    expect(s.tools).not.toContain('mcp__claude-in-chrome__computer')
   }
-  // Pages are read, never clicked or typed into.
-  expect(digger).not.toContain('mcp__claude-in-chrome__computer')
-  expect(by('digger')?.prompt).toContain('Run only commands that change nothing')
 })
 
 test('each helper answers in its own shape: a plan, a challenge, evidence', () => {
@@ -129,7 +128,7 @@ test('each -codex twin keeps its base role\'s prompt, tools and effort, on the m
     expect(twin.tools).toEqual(base.tools)
     expect(twin.effort).toBe(base.effort)
     expect(twin.model).toBe(`gpt-${base.name}`)
-    expect(twin.description).toBe(`crew:${base.name} on ${twin.model} (OpenAI, through the session's gateway): same job, read-only.`)
+    expect(twin.description).toBe(`crew:${base.name} on ${twin.model} (OpenAI, through the session's gateway): same job.`)
   }
 })
 

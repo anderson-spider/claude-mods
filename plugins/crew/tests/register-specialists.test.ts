@@ -14,8 +14,8 @@ test('session start registers the three helpers with their models', async ($, on
     ['digger', 'haiku'],
   ])
   for (const agent of registered) {
-    expect(agent.tools).not.toContain('Write')
-    expect(agent.tools).not.toContain('Edit')
+    expect(agent.tools).toContain('Write')
+    expect(agent.tools).toContain('Edit')
     expect(agent.tools).not.toContain('Agent')
     expect(agent.effort).toBe('high')
   }

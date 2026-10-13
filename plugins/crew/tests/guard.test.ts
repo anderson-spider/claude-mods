@@ -7,10 +7,10 @@ const PATHS = [
   '/repo/.crew/reviews/x.mdx', 'docs/x.md', '.crew/x.ts', 'a/b.spec.js', '',
 ]
 
-test('every crew helper and its twin is read-only: each Write/Edit path is refused, .crew/ included', () => {
+test('every crew helper and its twin may write: no Write/Edit path is refused, .crew/ included', () => {
   for (const { name } of SPECIALISTS) {
     for (const type of [`crew:${name}`, `crew:${name}-codex`]) {
-      for (const path of PATHS) expect(deniedWrite(type, path)).toBe(`the ${name} is read-only, so its write to ${path} was not made; the main session makes changes`)
+      for (const path of PATHS) expect(deniedWrite(type, path)).toBeUndefined()
     }
   }
 })
@@ -30,14 +30,12 @@ test('unknown crew types, including removed roles and their twins, are denied on
   }
 })
 
-test('the guard knows every valid crew type: none is refused as unknown', () => {
+test('the guard knows every valid crew type: none is refused', () => {
   for (const type of CREW_TYPES) {
-    for (const path of PATHS) expect(deniedWrite(type, path) ?? '').not.toContain('is not a crew agent')
+    for (const path of PATHS) expect(deniedWrite(type, path)).toBeUndefined()
   }
 })
 
-// The role is read from the name after the last colon.
-test('another plugin\'s type named like a helper is held like it', () => {
-  for (const type of ['acme:digger', 'acme:digger-codex', 'x:y:planner']) expect(deniedWrite(type, 'src/a.ts')).toContain('is read-only')
-  for (const type of ['acme:developer', 'acme:architect-codex']) expect(deniedWrite(type, 'src/a.ts')).toBeUndefined()
+test('another plugin\'s type named like a helper is not held', () => {
+  for (const type of ['acme:digger', 'acme:digger-codex', 'x:y:planner', 'acme:developer']) expect(deniedWrite(type, 'src/a.ts')).toBeUndefined()
 })

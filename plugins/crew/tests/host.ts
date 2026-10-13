@@ -69,6 +69,7 @@ export type Seen = {
   writes: { path: string; text: string }[]
   /** The lines `$.ui.log` sent to the transcript. */
   transcript: string[]
+  reads: string[]
   settingsReads: number
   /** What the plugin sent to the crew Codex helper's socket (the API calls are in `fetches`). */
   helper: Fetched[]
@@ -110,7 +111,7 @@ export function jevWorld(
     listFail?: boolean
   } = {},
 ) {
-  const seen: Seen = { fetches: [], statusLine: [], commands: [], registered: [], spawned: [], steps: [], notices: [], logs: [], writes: [], transcript: [], settingsReads: 0, helper: [] }
+  const seen: Seen = { fetches: [], statusLine: [], commands: [], registered: [], spawned: [], steps: [], notices: [], logs: [], writes: [], transcript: [], settingsReads: 0, reads: [], helper: [] }
   const flags = { settingsFail: opts.settingsFail === true, registerFail: false }
   // `mock.clock` registers `clock.now` itself and the engine refuses a second one, so a test's own is registered instead.
   const now = opts.now
@@ -129,6 +130,7 @@ export function jevWorld(
   on('fs.stat', (_$, e) => ({ value: hudStat(e.path, opts.files) }) as never)
   on('fs.exists', (_$, e) => ({ value: hudExists(e.path, opts.files) }) as never)
   on('fs.read', async (_$, e) => {
+    seen.reads.push(e.path)
     const text = opts.files?.[e.path]
     if (text === undefined) throw new Error(`ENOENT: ${e.path}`)
     return { value: text }

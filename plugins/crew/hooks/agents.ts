@@ -22,8 +22,6 @@ export type Specialist = Agent<Model>
 /** The lowest effort routing may pick for any agent: Jev may lower effort to `medium`, never below it. */
 export const EFFORT_FLOOR: Effort = 'medium'
 
-const READ_ONLY = ['Read', 'Grep', 'Glob'] as const
-
 // Names the session may not have connected are simply unavailable to the agent.
 const SOURCES = [
   'WebSearch',
@@ -51,19 +49,27 @@ const BROWSER = [
 /** The suffix of a role's Codex twin: `crew:digger` has `crew:digger-codex`. */
 export const NATIVE_SUFFIX = '-codex'
 
+// The one tool set of every role, on Claude and on its twin alike: reading, the shell, writing, the sources and the
+// browser. No Agent or NotebookEdit: a helper never delegates.
+const TOOLS = ['Read', 'Grep', 'Glob', 'Bash', 'Write', 'Edit', ...SOURCES, ...BROWSER] as const
+
+// Every role's rule for changing files: the sandbox and the guard allow writes, the request decides them.
+const WRITES = 'Change files only when the request asks you to; otherwise only read and run commands. Never call other agents. '
+
 /**
- * The optional helpers of the main session, which implements everything itself. Each one is read-only (no Write, Edit
- * or Agent in its tools, so it can neither change files nor delegate) and answers only the main session.
+ * The optional helpers of the main session. Each one has the same tools (`TOOLS`: no Agent, so none delegates), changes
+ * files only when its request asks, and answers only the main session.
  */
 export const SPECIALISTS = [
   {
     name: 'planner',
-    description: 'Plans complex or ambiguous work: read-only; returns decisions, dependencies, steps and acceptance criteria. Optional.',
+    description: 'Plans complex or ambiguous work: returns decisions, dependencies, steps and acceptance criteria. Optional.',
     model: 'opus',
     effort: 'high',
-    tools: READ_ONLY,
+    tools: TOOLS,
     prompt:
-      'Plan the change the main session asks about; the main session implements it. Read the code you need; never edit files or call other agents. ' +
+      'Plan the change the main session asks about; the main session implements it. Read the code you need. ' +
+      WRITES +
       'Return a concise, executable plan: the decisions and their reasons, the files and existing code to reuse, ordered steps with their dependencies, ' +
       'the risks, and acceptance criteria with how to verify each. Mark every assumption you could not confirm. ' +
       'Write each step as one line, `- T1 (main, after: —) <action and files> — state: queued`, with ids T1, T2, T3, `after:` naming the ids a step needs (or —), ' +
@@ -74,22 +80,24 @@ export const SPECIALISTS = [
     description: 'Challenges a decision, design or change when an independent view adds value: premises, real risks, simpler options. Optional, never a gate.',
     model: 'opus',
     effort: 'high',
-    tools: READ_ONLY,
+    tools: TOOLS,
     prompt:
-      'Challenge the decision or change the main session gives you. Read the code you need; never edit files or call other agents. ' +
+      'Challenge the decision or change the main session gives you. Read the code you need. ' +
+      WRITES +
       'Question its premises, find significant risks, reasoning gaps and architectural problems, propose simpler alternatives, and disagree when you have a technical reason. ' +
       'Report only what matters, most important first, each with `path:line` evidence or a concrete failing scenario; say plainly when you find nothing significant. ' +
       'Do not restate the request, repeat analysis you were given or approve routine work.',
   },
   {
     name: 'digger',
-    description: 'Read-only investigation: code, git history, docs, Context7, web, GitHub, APIs and logs; returns evidence with paths and URLs.',
+    description: 'Investigation: code, git history, docs, Context7, web, GitHub, APIs and logs; returns evidence with paths and URLs.',
     model: 'haiku',
     effort: 'high',
-    tools: [...READ_ONLY, 'Bash', ...SOURCES, ...BROWSER],
+    tools: TOOLS,
     prompt:
-      'Investigate the question the main session gives you, read-only. Choose only the sources it needs (code, git history, local docs, Context7, the web, GitHub, APIs, connected tools, logs) and stop once the evidence answers it. ' +
-      'Run only commands that change nothing; never edit files, take decisions for the main session or call other agents. ' +
+      'Investigate the question the main session gives you. Choose only the sources it needs (code, git history, local docs, Context7, the web, GitHub, APIs, connected tools, logs) and stop once the evidence answers it. ' +
+      WRITES +
+      'Never take decisions for the main session. ' +
       'Answer briefly: each finding with its `path:line`, commit or URL, marked confirmed or inferred, then what you could not find.',
   },
 ] as const satisfies readonly Specialist[]
@@ -123,7 +131,7 @@ export function mainSection(jev: boolean): string {
   return [
     'You are the main session: you implement, edit files, run commands and tests, review your own changes, commit and open pull requests.',
     'Simple and medium tasks need no subagent; every helper is optional and none is a required step.',
-    'Read-only helpers, each answering only you: crew:planner to plan complex or ambiguous work,',
+    'Helpers, each answering only you and changing files only when your request asks: crew:planner to plan complex or ambiguous work,',
     'crew:challenger to question a decision or change when an independent challenge adds real value (never a routine review),',
     'crew:digger to investigate code, git history, docs, the web or logs; run several diggers at once only for independent questions.',
     'Do not call a helper for trivial work, to confirm what is settled or to ask the same thing twice; give it the context it needs and use its summary.',
@@ -165,7 +173,7 @@ export function nativeCodexSpecs(models: Readonly<Partial<Record<string, string>
       ...base,
       name: `${base.name}${NATIVE_SUFFIX}`,
       model,
-      description: `crew:${base.name} on ${model} (OpenAI, through the session's gateway): same job, read-only.`,
+      description: `crew:${base.name} on ${model} (OpenAI, through the session's gateway): same job.`,
     })
   }
   return twins
@@ -174,7 +182,7 @@ export function nativeCodexSpecs(models: Readonly<Partial<Record<string, string>
 /** A twin crew runs itself on the user's Codex login (the `codexLogin` option): only its one-line description changes. */
 export function onCodexLogin(twin: Agent<string>): Agent<string> {
   const base = twin.name.slice(0, -NATIVE_SUFFIX.length)
-  return { ...twin, description: `crew:${base} on ${twin.model} (OpenAI, on your Codex login): same job, read-only.` }
+  return { ...twin, description: `crew:${base} on ${twin.model} (OpenAI, on your Codex login): same job.` }
 }
 
 /**

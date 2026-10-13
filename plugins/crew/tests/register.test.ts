@@ -6,6 +6,7 @@ import {
   twinWorld,
 } from './host'
 import type { Seen } from './host'
+import type { CrewAgent } from '../types'
 import { CODEX_MODELS, CODEX_PREFIX } from '../hooks/native'
 
 // Crew mode, the Codex login and the native twins that nativeWorld registers. Other host concerns: register-*.test.ts.
@@ -58,7 +59,7 @@ for (const url of ['https://ai.example.ts.net', 'http://127.0.0.1:41237', 'http:
     expect(by('digger-codex')).toMatchObject({ model: 'cx/gpt-6-luna', effort: 'high', tools: by('digger').tools, prompt: by('digger').prompt })
     expect(by('challenger-codex')).toMatchObject({ model: 'cx/gpt-6-astra', tools: by('challenger').tools, prompt: by('challenger').prompt })
     expect(w.registered.some(agent => agent.name === 'tester' || agent.name === 'tester-codex')).toBe(false)
-    expect(by('challenger-codex').tools).not.toContain('Edit')
+    expect(by('challenger-codex').tools).toContain('Edit')
     expect(by('digger').model).toBe('haiku')
     expect(by('digger-codex').description).toContain('gpt-6-luna')
   })
@@ -300,56 +301,18 @@ const LOGIN = { options: { codexLogin: true } }
 
 const LOGIN_NOW = Date.parse('2026-10-12T12:00:00Z')
 
-const AUTH_PATH = `${HOME}/.codex/auth.json`
-
-/** base64url of ASCII text, written out: the test environment has no `btoa` or `Buffer`. */
-
-function base64url(text: string): string {
-  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'
-  let out = ''
-  let bits = 0
-  let value = 0
-  for (const char of text) {
-    value = (value << 8) | char.charCodeAt(0)
-    bits += 8
-    while (bits >= 6) {
-      bits -= 6
-      out += alphabet[(value >> bits) & 63]
-    }
-  }
-  return bits > 0 ? out + alphabet[(value << (6 - bits)) & 63] : out
-}
-
-// Token fixtures are assembled at runtime so no source literal matches a secret scanner.
-const accessToken = (exp: number) => `${base64url('{"alg":"none"}')}.${base64url(JSON.stringify({ exp, sub: ['codex', '-user'].join('') }))}.sig`
-
-const ACCESS_TOKEN = accessToken(LOGIN_NOW / 1000 + 3600)
-
-const authFile = (token = ACCESS_TOKEN) => JSON.stringify({ auth_mode: 'chatgpt', tokens: { access_token: token, account_id: 'acct-1', refresh_token: 'never-sent' } })
-
-const sse = (...events: Record<string, unknown>[]) => events.map(event => `data: ${JSON.stringify(event)}\n\n`).join('')
-
-const codexDone = (item: Record<string, unknown>) => ({ type: 'response.output_item.done', item })
-
-const codexCompleted = { type: 'response.completed', response: { model: 'gpt-6-astra', usage: { input_tokens: 50, output_tokens: 9, input_tokens_details: { cached_tokens: 10 } } } }
-
-const ANSWER = sse(codexDone({ type: 'message', content: [{ type: 'output_text', text: 'auth is at src/auth.ts:12' }] }), codexCompleted)
-
-const CALL = sse(
-  codexDone({ type: 'reasoning', encrypted_content: 'enc-1', summary: [] }),
-  codexDone({ type: 'function_call', call_id: 'call_1', name: 'Grep', arguments: '{"pattern":"auth"}' }),
-  codexCompleted,
-)
-
 type LoginOptions = Parameters<typeof jevWorld>[1] & { messages?: () => unknown[] }
 
-/** The session started with the login file under HOME, the subagent's conversation and the tool list beneath the plugin. */
+/** The session started with a ready helper and the subagent conversation beneath the plugin. */
 
 async function loginWorld($: Engine, on: On, o: LoginOptions = {}) {
   const world = jevWorld(on, {
     register: true,
-    files: { [AUTH_PATH]: authFile() },
-    reply: async () => ok(ANSWER),
+    files: {},
+    helper: async call => ok(JSON.stringify(call.url.endsWith('/status')
+      ? { status: 'ok', codex: true, login: true, roles: BASES }
+      : call.url.endsWith('/start') ? { status: 'started' }
+        : { status: 'ok', turn: 'completed', text: 'auth is at src/auth.ts:12', files: [], commands: [], declined: 0, error: null })),
     agents: [{ id: 'cr1', type: 'crew:planner-codex', description: 'find auth' }],
     now: () => LOGIN_NOW,
     ...o,
@@ -373,38 +336,25 @@ async function stepThrough($: Engine, agentId: string | undefined, model = 'cx/g
   return { chunks, result: item.value }
 }
 
-const codexBodyOf = (seen: Seen, i = 0) => JSON.parse(seen.fetches[i]?.body ?? '{}')
+const helperStarts = (seen: Seen) => seen.helper.filter(call => call.url.endsWith('/start')).map(call => JSON.parse(call.body ?? '{}'))
 
-test('with codexLogin and no gateway only the planner and challenger twins register, on their Codex ids and described as on the login', LOGIN, async ($, on) => {
+test('with codexLogin and a ready helper every twin registers on its Codex id and is described as on the login', LOGIN, async ($, on) => {
   const { seen } = await loginWorld($, on)
-  expect(seen.registered.filter(agent => agent.name.endsWith('-codex'))).toEqual([
-    { name: 'planner-codex', model: 'cx/gpt-6-astra', description: 'crew:planner on gpt-6-astra (OpenAI, on your Codex login): same job, read-only.' },
-    { name: 'challenger-codex', model: 'cx/gpt-6-astra', description: 'crew:challenger on gpt-6-astra (OpenAI, on your Codex login): same job, read-only.' },
-  ])
+  expect(seen.registered.filter(agent => agent.name.endsWith('-codex'))).toEqual(
+    Object.entries(CODEX_MODELS).map(([role, model]) => ({ name: `${role}-codex`, model: `cx/${model}`, description: `crew:${role} on ${model} (OpenAI, on your Codex login): same job.` })),
+  )
   expect(seen.fetches).toEqual([])
 })
 
-test('a step of the twin on the login is answered by crew: nothing goes to the API, the backend gets the conversation and the token in its header only', LOGIN, async ($, on) => {
+test('a step of the twin on the login is answered by the helper without reaching the API or reading credentials', LOGIN, async ($, on) => {
   const { seen } = await loginWorld($, on)
   const { chunks, result } = await stepThrough($, 'cr1')
-
   expect(seen.steps).toEqual([])
-  expect(seen.fetches.map(fetch => fetch.url)).toEqual(['https://chatgpt.com/backend-api/codex/responses'])
-  expect(seen.fetches[0]?.headers).toMatchObject({ Authorization: `Bearer ${ACCESS_TOKEN}`, 'Chatgpt-Account-Id': 'acct-1', Originator: 'codex-tui' })
-  const body = codexBodyOf(seen)
-  expect(body).toMatchObject({ model: 'gpt-6-astra', instructions: '', store: false, stream: true, reasoning: { effort: 'high', summary: 'auto' } })
-  expect(body.input[0].role).toBe('developer')
-  expect(body.input[0].content[0].text).toContain('Plan the change the main session asks about')
-  expect(body.input[0].content[0].text).toContain(`Working directory: ${ROOT}. Today's date: 2026-10-12.`)
-  expect(body.input[1]).toEqual({ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'where is auth?' }] })
-  expect(body.tools.map((tool: { name: string; description: string }) => [tool.name, tool.description])).toEqual([['Read', 'Reads a file.'], ['Grep', 'Searches files.'], ['Glob', 'Glob']])
+  expect(seen.fetches).toEqual([])
+  expect(seen.reads.some(path => path.endsWith('/.codex/auth.json'))).toBe(false)
+  expect(helperStarts(seen)[0]).toMatchObject({ role: 'planner', model: 'gpt-6-astra', effort: 'high', prompt: 'where is auth?' })
   expect(chunks[0]).toEqual({ kind: 'text', index: 0, text: 'auth is at src/auth.ts:12' })
-  expect(result).toEqual({
-    turnId: 't1', index: 0, answer: 'auth is at src/auth.ts:12', toolUses: [], stopReason: 'end_turn',
-    usage: { model: 'gpt-6-astra', input_tokens: 40, output_tokens: 9, cache_read_input_tokens: 10, cache_creation_input_tokens: 0 },
-  })
-  expect(JSON.stringify([seen.logs, seen.notices, seen.transcript, body])).not.toContain(ACCESS_TOKEN)
-  expect(JSON.stringify(seen.fetches)).not.toContain('never-sent')
+  expect(result).toEqual({ turnId: 't1', index: 0, answer: 'auth is at src/auth.ts:12', toolUses: [], stopReason: 'end_turn', usage: null })
 })
 
 test('a final answer of the planner twin is handed back through SubagentHandback when the conversation names it', LOGIN, async ($, on) => {
@@ -423,53 +373,13 @@ test('the spawn\'s effort suffix decides the effort sent to Codex, before the ho
   const { seen } = await loginWorld($, on)
   await stepThrough($, 'cr1', 'cx/gpt-6-astra-medium', 'high')
   await stepThrough($, 'cr1', 'cx/gpt-6-astra', 'max')
-  expect([codexBodyOf(seen, 0).reasoning.effort, codexBodyOf(seen, 1).reasoning.effort]).toEqual(['medium', 'high'])
+  expect(helperStarts(seen).map(start => start.effort)).toEqual(['medium', 'high'])
 })
-
-test('a tool call comes back as a tool use, and its reasoning goes back before the call on the next step, in the same backend session', LOGIN, async ($, on) => {
-  const replies = [CALL, ANSWER]
-  const conversation: unknown[][] = [
-    [{ role: 'user', content: [{ type: 'text', text: 'where is auth?' }] }],
-    [
-      { role: 'user', content: [{ type: 'text', text: 'where is auth?' }] },
-      { role: 'assistant', content: [{ type: 'tool_use', id: 'call_1', name: 'Grep', input: { pattern: 'auth' } }] },
-      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_1', content: 'src/auth.ts' }] },
-    ],
-  ]
-  let turn = 0
-  const { seen } = await loginWorld($, on, { reply: async () => ok(replies[turn] ?? ANSWER), messages: () => conversation[turn] ?? [] })
-  const first = await stepThrough($, 'cr1')
-  expect(first.result).toMatchObject({ toolUses: [{ name: 'Grep', input: { pattern: 'auth' } }], stopReason: 'tool_use' })
-  expect(first.chunks.slice(0, 2)).toEqual([{ kind: 'tool', index: 0, id: 'call_1', name: 'Grep' }, { kind: 'input', index: 0, json: '{"pattern":"auth"}' }])
-  turn = 1
-  await stepThrough($, 'cr1')
-  expect(codexBodyOf(seen, 1).input.slice(2)).toEqual([
-    { type: 'reasoning', summary: [], content: null, encrypted_content: 'enc-1' },
-    { type: 'function_call', call_id: 'call_1', name: 'Grep', arguments: '{"pattern":"auth"}' },
-    { type: 'function_call_output', call_id: 'call_1', output: 'src/auth.ts' },
-  ])
-  expect(seen.fetches[1]?.headers.Session_id).toBe(seen.fetches[0]?.headers.Session_id)
-  expect(seen.fetches[0]?.headers.Session_id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
-})
-
-for (const [label, over, reason] of [
-  ['no login file', { files: {} }, 'no Codex login file at ~/.codex/auth.json (run `codex login`)'],
-  ['an expired login', { files: { [AUTH_PATH]: authFile(accessToken(LOGIN_NOW / 1000 - 5)) } }, 'the Codex login has expired (run `codex` once to refresh it)'],
-  ['a login the backend refuses', { reply: async () => ({ status: 401, ok: false, headers: {}, text: '{"error":{"message":"token revoked"}}' }) }, 'the Codex backend refused the login (run `codex login`): token revoked'],
-  // The host's rejection of a failed fetch is a HooksError; the note keeps its name, and a code only when it carries one.
-  ['a backend that cannot be reached', { reply: async () => { throw new Error('ECONNRESET') } }, 'the Codex backend could not be reached (HooksError)'],
-] as const) {
-  test(`${label} answers the step with its reason, and nothing goes to the API`, LOGIN, async ($, on) => {
-    const { seen } = await loginWorld($, on, over as LoginOptions)
-    const { result } = await stepThrough($, 'cr1')
-    expect(result).toMatchObject({ answer: `crew: this Codex twin could not run: ${reason}.`, toolUses: [], stopReason: 'end_turn', usage: null })
-    expect(seen.steps).toEqual([])
-  })
-}
 
 test('steps of the main loop, a Claude role, a twin on the gateway and an agent the list cannot name go on to the API', LOGIN, async ($, on) => {
   const { seen } = await loginWorld($, on, {
     env: GATEWAY,
+    helper: async () => ok(JSON.stringify({ status: 'ok', codex: false, login: false })),
     agents: [
       { id: 'cr1', type: 'crew:planner-codex', description: 'a' },
       { id: 'c1', type: 'crew:planner', description: 'b' },
@@ -479,9 +389,9 @@ test('steps of the main loop, a Claude role, a twin on the gateway and an agent 
   for (const agentId of [undefined, 'c1', 'd1', 'unknown']) await stepThrough($, agentId, 'sonnet')
   expect(seen.steps).toHaveLength(4)
   expect(seen.fetches).toEqual([])
-  // Behind a gateway the digger twin registers there (no helper in this world), the planner and challenger twins on the login.
+  // Without a ready helper every twin uses the gateway.
   expect(seen.registered.filter(agent => agent.name.endsWith('-codex')).map(agent => [agent.name, agent.description.includes('Codex login')])).toEqual(
-    TWINS.map(name => [name, name !== 'digger-codex']),
+    TWINS.map(name => [name, false]),
   )
 })
 
@@ -506,13 +416,14 @@ test('without the option the login is never read and no twin registers without a
   expect(seen.steps).toHaveLength(1)
 })
 
-test('in the codex mode a plain planner call runs on its login twin and its first step is confirmed with the effort sent', { options: { codexLogin: true, mode: 'codex' } }, async ($, on) => {
+test('in the codex mode a plain planner call runs on its login twin and its helper step has no usage confirmation', { options: { codexLogin: true, mode: 'codex' } }, async ($, on) => {
   const { seen } = await loginWorld($, on, { agents: [{ id: 'a1', type: 'crew:planner-codex', description: 'audit auth' }] })
   await $.agent.spawn(spawnInput({ subagentType: 'crew:planner' }))
   expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:planner-codex', model: 'cx/gpt-6-astra-high' })
   await stepThrough($, 'a1', 'cx/gpt-6-astra-high')
   expect(seen.steps).toEqual([])
-  expect(seen.transcript).toEqual(['crew: audit auth: confirmed gpt-6-astra · high'])
+  expect(seen.transcript).toEqual([])
+  expect(helperStarts(seen)[0].effort).toBe('high')
 })
 
 test('an explicit twin teammate keeps the same Jev effort-only routing in the codex mode', CODEX_MODE_JEV, async ($, on) => {
@@ -563,12 +474,13 @@ test('HUD observes a step the Codex login answers without changing its result, a
   const { result } = await stepThrough($, 'cr1')
   await pause()
   expect(seen.steps).toEqual([])
-  expect(seen.fetches.map(fetch => fetch.url)).toEqual(['https://chatgpt.com/backend-api/codex/responses'])
+  expect(seen.fetches).toEqual([])
   expect(result).toEqual({
     turnId: 't1', index: 0, answer: 'auth is at src/auth.ts:12', toolUses: [], stopReason: 'end_turn',
-    usage: { model: 'gpt-6-astra', input_tokens: 40, output_tokens: 9, cache_read_input_tokens: 10, cache_creation_input_tokens: 0 },
+    usage: null,
   })
-  expect(values.agents).toMatchObject([{ type: 'crew:planner-codex', effort: 'high', observedModel: 'gpt-6-astra', status: 'running' }])
+  expect(values.agents).toMatchObject([{ type: 'crew:planner-codex', effort: 'high', status: 'running' }])
+  expect((values.agents as CrewAgent[])[0]?.observedModel).toBeUndefined()
 })
 
 test('HUD never writes the crew mode or the status line', CODEX_MODE, async ($, on) => {

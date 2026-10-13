@@ -486,7 +486,7 @@ function helperInstructions(twin: Agent<string>, repo: string, now: number): str
     twin.prompt,
     '',
     `Repository: ${repo}. Today's date: ${new Date(now).toISOString().slice(0, 10)}.`,
-    'Your working directory is the repository. The sandbox is read-only: every write and all network access are refused, so work from the repository, its git history and local files.',
+    'Your working directory is the repository. The sandbox lets you write in the repository and the temporary directories, and commands have the network; change files only when the request asks for it.',
   ].join('\n')
 }
 

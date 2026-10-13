@@ -46,7 +46,7 @@ test('start then poll: one thread in the lane cwd with the fixed sandbox, and th
     model: 'gpt-6-luna',
     approvalPolicy: 'never',
     approvalsReviewer: 'user',
-    sandbox: 'read-only',
+    sandbox: 'workspace-write',
     ephemeral: true,
     developerInstructions: 'be a digger',
   })
@@ -54,7 +54,7 @@ test('start then poll: one thread in the lane cwd with the fixed sandbox, and th
     threadId: 'th-1',
     model: 'gpt-6-luna',
     effort: 'medium',
-    sandboxPolicy: { type: 'readOnly', networkAccess: false },
+    sandboxPolicy: { type: 'workspaceWrite', writableRoots: [], networkAccess: true, excludeTmpdirEnvVar: false, excludeSlashTmp: false },
     input: [{ type: 'text', text: 'do it', text_elements: [] }],
   })
 
@@ -77,7 +77,7 @@ test('a follow-up for the same caller reuses its thread; a changed repository st
   assert.equal(fake.params('thread/start').length, 2)
 })
 
-test('the planner and the challenger each keep their thread across follow-ups, in the same read-only lane', async () => {
+test('the planner and the challenger each keep their thread across follow-ups, in the same lane', async () => {
   for (const role of ['planner', 'challenger']) {
     const { fake, engine } = world({ autoComplete: true })
     assert.deepEqual(await engine.start({ ...base, role }), { status: 'started' })
@@ -87,7 +87,7 @@ test('the planner and the challenger each keep their thread across follow-ups, i
 
     assert.equal(fake.params('thread/start').length, 1, role)
     assert.deepEqual(fake.params('turn/start').map(p => p.threadId), ['th-1', 'th-1'], role)
-    assert.equal(fake.params('thread/start')[0].sandbox, 'read-only', role)
+    assert.equal(fake.params('thread/start')[0].sandbox, 'workspace-write', role)
     assert.equal(fake.params('thread/start')[0].ephemeral, true, role)
   }
 })

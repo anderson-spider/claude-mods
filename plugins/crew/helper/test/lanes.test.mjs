@@ -20,9 +20,9 @@ test('a repository that is not an absolute path without .. has no lane cwd', () 
   }
 })
 
-test('the thread never escalates: approvalPolicy never, a read-only sandbox, no network', () => {
-  assert.deepEqual(THREAD, { approvalPolicy: 'never', approvalsReviewer: 'user', sandbox: 'read-only', ephemeral: true })
-  assert.deepEqual(SANDBOX_POLICY, { type: 'readOnly', networkAccess: false })
+test('the thread never escalates: approvalPolicy never, a workspace-write sandbox on the repository, with the network', () => {
+  assert.deepEqual(THREAD, { approvalPolicy: 'never', approvalsReviewer: 'user', sandbox: 'workspace-write', ephemeral: true })
+  assert.deepEqual(SANDBOX_POLICY, { type: 'workspaceWrite', writableRoots: [], networkAccess: true, excludeTmpdirEnvVar: false, excludeSlashTmp: false })
   assert.equal(Object.isFrozen(LANES), true)
   assert.equal(Object.isFrozen(THREAD), true)
 })

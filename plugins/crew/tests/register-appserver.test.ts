@@ -8,7 +8,7 @@ import type { Replies } from './host'
 
 const LOGIN = { options: { codexLogin: true } }
 
-const STATUS = { status: 'ok', version: '0.6.0', pid: 1, jobs: 0, threads: 0, codex: true, login: true, roles: ['challenger', 'digger', 'planner'] }
+const STATUS = { status: 'ok', version: '0.7.0', pid: 1, jobs: 0, threads: 0, codex: true, login: true, roles: ['challenger', 'digger', 'planner'] }
 /** A helper from before the planner and challenger lanes: its status has no `roles`. */
 const { roles: _roles, ...OLD_STATUS } = STATUS
 const DONE = { status: 'ok', turn: 'completed', text: 'the flag is parsed at a.ts:3', files: [], commands: [{ command: 'git log -3', status: 'completed', exitCode: 0 }], declined: 0, error: null }
@@ -60,47 +60,43 @@ test('with the helper ready, digger-codex registers on the login beside the plan
   expect(names(seen)).toEqual(['planner-codex', 'challenger-codex', 'digger-codex'])
   expect(seen.registered.filter(agent => agent.name === 'digger-codex')[0]).toMatchObject({
     model: 'cx/gpt-6-luna',
-    description: 'crew:digger on gpt-6-luna (OpenAI, on your Codex login): same job, read-only.',
+    description: 'crew:digger on gpt-6-luna (OpenAI, on your Codex login): same job.',
   })
   expect(seen.helper.map(call => call.url)).toEqual(['http://crew-codex/status'])
   expect(seen.fetches).toEqual([])
 })
 
-test('without the helper the planner and challenger twins stay on the backend and the digger is left out, and one debug line says why', LOGIN, async ($, on) => {
+test('without the helper no twin registers on the login, and one debug line says why', LOGIN, async ($, on) => {
   const { seen } = await helperWorld($, on, { down: true })
 
-  expect(names(seen)).toEqual(['planner-codex', 'challenger-codex'])
+  expect(names(seen)).toEqual([])
   expect(seen.logs.filter(line => line.includes('not on the helper'))).toEqual([
     'crew: the helper twins are not on the helper: the crew Codex helper is not running (run plugins/crew/helper/install.sh)',
   ])
 })
 
-test('a running helper from before the planner and challenger lanes serves only the digger, and the other twins use the backend', LOGIN, async ($, on) => {
-  const { seen } = await helperWorld($, on, { status: { ...OLD_STATUS, version: '0.5.1' } }, { id: 'r1', type: 'crew:planner-codex', description: 'think' })
-  const { result } = await stepThrough($, 'r1', 'cx/gpt-6-astra')
-
-  expect(names(seen)).toEqual(['planner-codex', 'challenger-codex', 'digger-codex'])
+test('a running helper from before the planner and challenger lanes serves only the digger', LOGIN, async ($, on) => {
+  const { seen } = await helperWorld($, on, { status: { ...OLD_STATUS, version: '0.5.1' } })
+  expect(names(seen)).toEqual(['digger-codex'])
   expect(seen.logs.filter(line => line.includes('no lane for every twin'))).toHaveLength(1)
-  // No login file in this world: the backend answers with its reason, and the helper was never asked to start a turn.
-  expect(result).toMatchObject({ answer: expect.stringContaining('no Codex login file'), usage: null })
   expect(seen.helper.some(call => call.url.endsWith('/start'))).toBe(false)
-  expect(seen.registered.filter(agent => agent.name === 'planner-codex')[0]?.description).toContain('on your Codex login')
+  expect(seen.fetches).toEqual([])
 })
 
 for (const [label, status] of [['no codex binary', { ...STATUS, codex: false }], ['no Codex login', { ...STATUS, login: false }]] as const) {
   test(`a helper with ${label} does not take the twins`, LOGIN, async ($, on) => {
     const { seen } = await helperWorld($, on, { status })
 
-    expect(names(seen)).toEqual(['planner-codex', 'challenger-codex'])
+    expect(names(seen)).toEqual([])
     expect(seen.logs.some(line => line.includes('not on the helper'))).toBe(true)
   })
 }
 
-test('behind a gateway an unready helper leaves the digger on the gateway', LOGIN, async ($, on) => {
+test('behind a gateway an unready helper leaves every twin on the gateway', LOGIN, async ($, on) => {
   const { seen } = await helperWorld($, on, { down: true, env: GATEWAY })
 
   expect(names(seen)).toEqual(['planner-codex', 'challenger-codex', 'digger-codex'])
-  expect(seen.registered.filter(agent => agent.name === 'digger-codex')[0]?.description).toContain('through the session')
+  for (const agent of seen.registered.filter(agent => agent.name.endsWith('-codex'))) expect(agent.description).toContain('through the session')
 })
 
 test('the option off asks the helper nothing', { options: {} }, async ($, on) => {
@@ -118,7 +114,7 @@ test('a step of the digger twin is one turn on the helper: the request, the poll
   expect(start).toMatchObject({ caller: 'd1', role: 'digger', repo: ROOT, model: 'gpt-6-luna', effort: 'medium', prompt: 'where is the flag parsed' })
   expect(start.instructions).toContain('Investigate the question')
   expect(start.instructions).toContain(`Repository: ${ROOT}.`)
-  expect(start.instructions).toContain('The sandbox is read-only: every write and all network access are refused')
+  expect(start.instructions).toContain('The sandbox lets you write in the repository and the temporary directories, and commands have the network')
   expect(JSON.stringify(seen.helper.map(call => call.headers))).not.toContain('Authorization')
   expect(seen.steps).toEqual([])
   expect(seen.fetches).toEqual([])
@@ -139,22 +135,13 @@ for (const role of ['planner', 'challenger'] as const) {
     expect(starts[0]).toMatchObject({ caller: 'r1', role, repo: ROOT, model: 'gpt-6-astra', effort: 'high', prompt: 'where is the flag parsed' })
     expect(starts[1]).toMatchObject({ caller: 'r1', role })
     expect(starts[0].instructions).toContain(`Repository: ${ROOT}.`)
-    expect(starts[0].instructions).toContain('The sandbox is read-only')
+    expect(starts[0].instructions).toContain('The sandbox lets you write in the repository')
     expect(JSON.stringify(seen.helper.map(call => call.headers))).not.toContain('Authorization')
     expect(first.result).toMatchObject({ answer: 'the flag is parsed at a.ts:3', toolUses: [], usage: null })
     expect(seen.steps).toEqual([])
     expect(seen.fetches).toEqual([])
   })
 }
-
-test('without the helper the challenger twin falls back to the backend, which answers with its reason when there is no login file', LOGIN, async ($, on) => {
-  const { seen } = await helperWorld($, on, { down: true }, { id: 'r1', type: 'crew:challenger-codex', description: 'challenge' })
-  const { result } = await stepThrough($, 'r1', 'cx/gpt-6-astra')
-
-  expect(result).toMatchObject({ answer: expect.stringContaining('no Codex login file'), usage: null })
-  expect(seen.helper.some(call => call.url.endsWith('/start'))).toBe(false)
-  expect(seen.steps).toEqual([])
-})
 
 test('a helper that fails the turn answers the step with the reason, never a throw', LOGIN, async ($, on) => {
   const { seen } = await helperWorld($, on, { poll: { ...DONE, turn: 'failed', error: 'boom' } })
