@@ -8,7 +8,9 @@ import type { Replies } from './host'
 
 const LOGIN = { options: { codexLogin: true } }
 
-const STATUS = { status: 'ok', version: '0.1.0', pid: 1, jobs: 0, threads: 0, codex: true, login: true }
+const STATUS = { status: 'ok', version: '0.6.0', pid: 1, jobs: 0, threads: 0, codex: true, login: true, roles: ['challenger', 'digger', 'planner'] }
+/** A helper from before the planner and challenger lanes: its status has no `roles`. */
+const { roles: _roles, ...OLD_STATUS } = STATUS
 const DONE = { status: 'ok', turn: 'completed', text: 'the flag is parsed at a.ts:3', files: [], commands: [{ command: 'git log -3', status: 'completed', exitCode: 0 }], declined: 0, error: null }
 
 const json = (value: unknown) => ok(JSON.stringify(value))
@@ -71,6 +73,18 @@ test('without the helper the planner and challenger twins stay on the backend an
   expect(seen.logs.filter(line => line.includes('not on the helper'))).toEqual([
     'crew: the helper twins are not on the helper: the crew Codex helper is not running (run plugins/crew/helper/install.sh)',
   ])
+})
+
+test('a running helper from before the planner and challenger lanes serves only the digger, and the other twins use the backend', LOGIN, async ($, on) => {
+  const { seen } = await helperWorld($, on, { status: { ...OLD_STATUS, version: '0.5.1' } }, { id: 'r1', type: 'crew:planner-codex', description: 'think' })
+  const { result } = await stepThrough($, 'r1', 'cx/gpt-6-astra')
+
+  expect(names(seen)).toEqual(['planner-codex', 'challenger-codex', 'digger-codex'])
+  expect(seen.logs.filter(line => line.includes('no lane for every twin'))).toHaveLength(1)
+  // No login file in this world: the backend answers with its reason, and the helper was never asked to start a turn.
+  expect(result).toMatchObject({ answer: expect.stringContaining('no Codex login file'), usage: null })
+  expect(seen.helper.some(call => call.url.endsWith('/start'))).toBe(false)
+  expect(seen.registered.filter(agent => agent.name === 'planner-codex')[0]?.description).toContain('on your Codex login')
 })
 
 for (const [label, status] of [['no codex binary', { ...STATUS, codex: false }], ['no Codex login', { ...STATUS, login: false }]] as const) {

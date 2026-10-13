@@ -17,7 +17,7 @@ export const contract = {
     poll: { running: ['seconds', 'status'], idle: ['status'], ok: ['commands', 'declined', 'error', 'files', 'status', 'text', 'turn'] },
     interrupt: { ok: ['interrupted', 'status'] },
     reset: { ok: ['status'] },
-    status: { ok: ['codex', 'jobs', 'login', 'pid', 'status', 'threads', 'version'] },
+    status: { ok: ['codex', 'jobs', 'login', 'pid', 'roles', 'status', 'threads', 'version'] },
   },
   // The keys of a `/start` body, which hooks send and the helper reads.
   startRequest: ['caller', 'effort', 'instructions', 'model', 'prompt', 'repo', 'role'],
@@ -45,6 +45,6 @@ export const contract = {
   // A reply of each shape, as the helper sends it, that hooks must consume.
   examples: {
     pollOk: { status: 'ok', turn: 'completed', text: 'done', files: [{ status: 'completed', paths: ['/r/a.ts'] }], commands: [{ command: 'ls', status: 'completed', exitCode: 0 }], declined: 0, error: null },
-    status: { status: 'ok', version: '0.4.0', pid: 1, jobs: 0, threads: 0, codex: true, login: true },
+    status: { status: 'ok', version: '0.6.0', pid: 1, jobs: 0, threads: 0, codex: true, login: true, roles: ['challenger', 'digger', 'planner'] },
   },
 }

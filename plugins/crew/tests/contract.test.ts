@@ -43,6 +43,6 @@ test('the helper\'s shared examples are consumed: a finished poll is the answer 
   const turn = probe(route => (route === '/start' ? { status: 'started' } : contract.examples.pollOk))
 
   expect(await runTurn(turn, socketOf('/h'), request, () => false)).toEqual({ kind: 'text', text: 'done\n\n(crew: files changed: /r/a.ts)' })
-  expect(await helperReady(probe(() => contract.examples.status), socketOf('/h'))).toEqual({ ready: true })
+  expect(await helperReady(probe(() => contract.examples.status), socketOf('/h'))).toEqual({ ready: true, roles: ['challenger', 'digger', 'planner'] })
   expect(await postStarting(turn, socketOf('/h'), '/start', request)).toEqual({ status: 'started' })
 })

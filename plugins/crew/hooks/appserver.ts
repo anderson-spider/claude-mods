@@ -31,7 +31,7 @@ export type RouteReplies = {
   '/poll': { status: 'running'; seconds: number } | { status: 'idle' } | Finished | Failure
   '/interrupt': { status: 'ok'; interrupted: boolean } | Failure
   '/reset': { status: 'ok' } | Failure
-  '/status': { status: 'ok'; version: string; pid: number; jobs: number; threads: number; codex: boolean; login: boolean } | Failure
+  '/status': { status: 'ok'; version: string; pid: number; jobs: number; threads: number; codex: boolean; login: boolean; roles?: string[] } | Failure
 }
 
 /** The turn's request: one caller (an agent id), its role, repository, model, effort and the text to answer. */
@@ -42,6 +42,9 @@ export const callerOf = (agentId: string) => agentId.replace(/[^A-Za-z0-9._:-]/g
 
 /** True when the twin named `crew:<role>-codex`'s base role runs on the helper. */
 export const helperRole = (twinName: string) => HELPER_ROLES.includes(twinName.replace(/-codex$/, ''))
+
+/** True when the twin's role is a helper role and the running helper reports a lane for it. */
+export const helperServes = (twinName: string, roles: readonly string[]) => helperRole(twinName) && roles.includes(twinName.replace(/-codex$/, ''))
 
 /** POSTs `body` to `route` and answers that route's reply; never rejects. */
 export async function post<R extends Route>(probe: Probe, socket: string, route: R, body: unknown): Promise<RouteReplies[R]> {
@@ -91,13 +94,15 @@ export async function postStarting<R extends Route>(probe: Probe, socket: string
 }
 
 /** Whether the helper runs, found a `codex` binary and has a login to share: all a twin needs before its first step. */
-export async function helperReady(probe: Probe, socket: string): Promise<{ ready: true } | { ready: false; reason: string }> {
+export async function helperReady(probe: Probe, socket: string): Promise<{ ready: true; roles: string[] } | { ready: false; reason: string }> {
   const reply = await post(probe, socket, ROUTES.status, {})
   if (reply.status === 'unreachable') return { ready: false, reason: 'the crew Codex helper is not running (run plugins/crew/helper/install.sh)' }
   if (reply.status !== 'ok' || !('codex' in reply)) return { ready: false, reason: 'the crew Codex helper did not answer its status' }
   if (!reply.codex) return { ready: false, reason: 'the crew Codex helper found no codex binary' }
   if (!reply.login) return { ready: false, reason: 'the crew Codex helper found no Codex login (run `codex login`)' }
-  return { ready: true }
+  // A helper from before the field has only the digger lane: running it still serves that twin, and only that one.
+  const roles = Array.isArray(reply.roles) ? reply.roles.filter((role): role is string => typeof role === 'string') : ['digger']
+  return { ready: true, roles }
 }
 
 /** What a turn came to: the answer text, or why there is none. Never a throw. */
