@@ -2,9 +2,11 @@
 
 A three-row card above the prompt:
 
-1. A dot, green between turns and yellow with the running turn's time (`working 12s`) while one runs; the model and its effort; the context bar with its tokens (`88% · 440k/500k`), measured against the window the session compacts at (an `autoCompactWindow` smaller than the model's limit counts); the share of the input read from the prompt cache; and the session's cost (`session $4.59`).
+1. A dot, green between turns and yellow with the running turn's time (`working 12s`) while one runs; the model and its effort; the context bar with its tokens (`88% · 440k/500k`), measured against the window the session compacts at (an `autoCompactWindow` smaller than the model's limit counts); the share of the input read from the prompt cache; the output tokens; and the session's cost, its hourly rate and age (`session $4.59 · $15.30/h · 18m`).
 2. The five-hour and seven-day limits, side by side: a bar of at most thirty cells lit to the percent used with a tick at the time passed, `▲N` for the points above an even pace, the time left and where the pace ends (`~85% at reset`, or `100% in 2d 7h` when it runs out first).
-3. The last turn's duration, the crew's running helpers, the session's edits and errors and what the last turn cost; on the right, the crew's open plans (`done`, `running`, `left`) and the running steps.
+3. The last turn's duration, the turns so far, the crew's running helpers, the session's edits and errors and what the last turn cost; on the right, the crew's open plans (`done`, `running`, `left`) and the running steps.
+
+From about 150 columns the context and the two windows sit as three aligned blocks under the first row: each with a thirty-cell bar, and the context's block adds the tokens left in the window, the cache share and the output tokens.
 
 ```text
 /plugin install session-hud --marketplace anderson-spider/claude-mods

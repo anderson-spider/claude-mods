@@ -17,6 +17,12 @@ export type SessionHudCard = {
   cache?: number
   /** US dollars the session has cost so far. */
   cost?: number
+  /** When the session's figures count from (its first launch when resumed), in epoch milliseconds. */
+  startedAt?: number
+  /** Main-session turns completed since the plugin loaded. */
+  turns: number
+  /** Output tokens of the main session's steps since the plugin loaded. */
+  output: number
   limits: SessionHudLimit[]
   /** When the running main-session turn began, in epoch milliseconds; absent between turns. */
   turnStartedAt?: number

@@ -59,35 +59,52 @@ function tokens(n: number): string {
   return n >= 1000 ? `${Math.round(n / 1000)}k` : String(Math.round(n))
 }
 const finite = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n)
-/**
- * `ctx ━━━ 88% · 440k/500k`: the last input against the window the host compacts at when it is known (a smaller
- * `autoCompactWindow`), else the host's own percent of the model's window.
- */
-function contextCells(card: SessionHudCard): Row {
+/** The context's figures: the last input against the window the host compacts at when it is known (a smaller `autoCompactWindow`), else the host's own percent of the model's window. */
+function contextOf(card: SessionHudCard): { percent: number; used?: number; window?: number } | undefined {
   const used = card.context?.tokens
   const window = finite(card.contextWindow) && card.contextWindow > 0 ? card.contextWindow : card.context?.window
-  const percent = finite(used) && used >= 0 && finite(window) && window > 0 ? (used / window) * 100 : card.context?.percent
-  if (!finite(percent)) return []
-  const shown = Math.max(0, Math.round(percent))
-  const lit = Math.min(BAR, Math.round((Math.min(100, shown) / 100) * BAR))
-  const row = [seg('ctx ', 'secondary'), seg('━'.repeat(lit), 'success'), seg('━'.repeat(BAR - lit), 'track'), seg(` ${shown}%`, 'strong')]
-  if (finite(used) && used >= 0 && finite(window) && window > 0) row.push(seg(` · ${tokens(used)}/${tokens(window)}`, 'secondary'))
+  if (finite(used) && used >= 0 && finite(window) && window > 0) return { percent: Math.max(0, Math.round((used / window) * 100)), used, window }
+  const percent = card.context?.percent
+  return finite(percent) ? { percent: Math.max(0, Math.round(percent)) } : undefined
+}
+/** A bar of `length` cells lit to `percent` (capped at 100). */
+function contextBar(percent: number, length: number): Row {
+  const lit = Math.min(length, Math.round((Math.min(100, percent) / 100) * length))
+  return [seg('━'.repeat(lit), 'success'), seg('━'.repeat(length - lit), 'track')]
+}
+/** `ctx ━━━ 88% · 440k/500k`, the compact form on the first row. */
+function contextCells(card: SessionHudCard): Row {
+  const context = contextOf(card)
+  if (!context) return []
+  const row = [seg('ctx ', 'secondary'), ...contextBar(context.percent, BAR), seg(` ${context.percent}%`, 'strong')]
+  if (context.used !== undefined && context.window !== undefined) row.push(seg(` · ${tokens(context.used)}/${tokens(context.window)}`, 'secondary'))
+  return row
+}
+const outputCells = (card: SessionHudCard): Row => (count(card.output) > 0 ? [seg(`out ${tokens(card.output)}`, 'secondary')] : [])
+const cacheCells = (card: SessionHudCard): Row => (card.cache !== undefined && Number.isFinite(card.cache) ? [seg(`cache ${Math.round(card.cache)}%`, 'secondary')] : [])
+/** Segments joined with ` · `, empty parts dropped. */
+const joined = (parts: Row[], gap = ' · '): Row => parts.filter(part => part.length).flatMap((part, at) => (at ? [seg(gap, 'secondary'), ...part] : part))
+
+/** The session's cost, its hourly rate once a minute has passed, and its age: `session $0.43 · $1.70/h · 18m`. */
+function costCells(card: SessionHudCard, now: number): Row {
+  if (card.cost === undefined) return []
+  const row: Row = [seg('session ', 'secondary'), seg(money(card.cost), 'strong')]
+  const age = finite(card.startedAt) && finite(now) ? now - card.startedAt : undefined
+  if (age !== undefined && age >= 60_000) row.push(seg(` · ${money(card.cost / (age / 3_600_000))}/h · ${span(age)}`, 'secondary'))
   return row
 }
 
-/** The first row: the dot (yellow with the turn's time while one runs), the model and its effort, the context bar, the cache share; the session's cost on the right. */
-function modelRow(card: SessionHudCard, now: number, working: boolean, inner: number): Row | undefined {
+/** The first row: the dot (yellow with the turn's time while one runs), the model and its effort; on a narrow card the context, cache and output too; the session's cost on the right. */
+function modelRow(card: SessionHudCard, now: number, working: boolean, inner: number, wide: boolean): Row | undefined {
   const name = modelName(card.model)
-  const left: Row = []
+  const head: Row = []
   if (name !== undefined) {
-    left.push(seg('● ', working ? 'warning' : 'success'), seg(name, 'model'))
-    if (card.effort !== undefined && EFFORTS.has(card.effort)) left.push(seg(` · ${card.effort}`, 'secondary'))
-    if (working && finite(card.turnStartedAt) && finite(now)) left.push(seg(` · working ${span(Math.max(0, now - card.turnStartedAt))}`, 'warning'))
+    head.push(seg('● ', working ? 'warning' : 'success'), seg(name, 'model'))
+    if (card.effort !== undefined && EFFORTS.has(card.effort)) head.push(seg(` · ${card.effort}`, 'secondary'))
+    if (working && finite(card.turnStartedAt) && finite(now)) head.push(seg(` · working ${span(Math.max(0, now - card.turnStartedAt))}`, 'warning'))
   }
-  const context = contextCells(card)
-  if (context.length) left.push(...(left.length ? [seg('   ')] : []), ...context)
-  if (card.cache !== undefined && Number.isFinite(card.cache)) left.push(...(left.length ? [seg('   ')] : []), seg(`cache ${Math.round(card.cache)}%`, 'secondary'))
-  const right = card.cost !== undefined ? [seg('session ', 'secondary'), seg(money(card.cost), 'strong')] : []
+  const left = wide ? head : joined([head, contextCells(card), cacheCells(card), outputCells(card)], '   ')
+  const right = costCells(card, now)
   if (!left.length && !right.length) return undefined
   return spread(left, right, inner)
 }
@@ -140,10 +157,47 @@ function limitRows(card: SessionHudCard, now: number, inner: number): Row[] {
   return rows
 }
 
+/** Three blocks fit side by side from this inner width: the context, then each window, a gap of four between. */
+const WIDE = 3 * LIMIT_BLOCK + 8
+
+/** The context as a block like a window's: its bar, then its tokens and what is left of the window, then cache and output. */
+function contextBlock(card: SessionHudCard): Row[] {
+  const context = contextOf(card)
+  const lines: Row[] = []
+  if (context) lines.push([seg('ctx ', 'secondary'), ...contextBar(context.percent, LIMIT_BAR), seg(` ${context.percent}%`, 'strong')])
+  if (context?.used !== undefined && context.window !== undefined) {
+    lines.push([seg('    '), seg(`${tokens(context.used)}/${tokens(context.window)}`, 'secondary'),
+      seg(` · ${tokens(Math.max(0, context.window - context.used))} left`, 'secondary')])
+  }
+  const extra = joined([cacheCells(card), outputCells(card)])
+  if (extra.length) lines.push([seg('    '), ...extra])
+  return lines
+}
+
+/** A wide card: the context and the windows as three aligned blocks. */
+function wideRows(card: SessionHudCard, now: number): Row[] {
+  const limits = card.limits.filter(limit => WINDOW_MS[limit.kind] !== undefined && LABELS[limit.kind] !== undefined)
+    .sort((a, b) => WINDOW_MS[a.kind]! - WINDOW_MS[b.kind]!).slice(0, 2)
+  const blocks = [contextBlock(card), ...limits.map(limit => limitLines(limit, now, LIMIT_BLOCK))].filter(block => block.length)
+  const rows: Row[] = []
+  for (let i = 0; i < Math.max(0, ...blocks.map(block => block.length)); i++) {
+    const row: Row = []
+    blocks.forEach((block, at) => {
+      const part = block[i] ?? []
+      if (at < blocks.length - 1) row.push(...part, seg(' '.repeat(LIMIT_BLOCK - cells(part) + 4)))
+      else row.push(...part)
+    })
+    while (row.length && !row[row.length - 1]!.text.trim()) row.pop()
+    rows.push(row)
+  }
+  return rows
+}
+
 /** The row under the rule: the last turn, the crew's helpers, edits, errors and the turn's cost; the crew's plan on the right. */
 function turnRow(card: SessionHudCard, crew: CrewSummary | undefined, inner: number): Row {
   const parts: string[] = []
   if (card.lastTurnMs !== undefined) parts.push(`last turn ${span(card.lastTurnMs)}`)
+  if (count(card.turns) > 0) parts.push(plural(count(card.turns), 'turn'))
   if (crew) parts.push(plural(count(crew.agents), 'agent'))
   parts.push(plural(count(card.edits), 'edit'), plural(count(card.errors), 'error'))
   if (card.lastTurnCost !== undefined && Number.isFinite(card.lastTurnCost) && card.lastTurnCost >= 0) parts.push(`+${money(card.lastTurnCost)}`)
@@ -165,7 +219,9 @@ function turnRow(card: SessionHudCard, crew: CrewSummary | undefined, inner: num
 /** The card from one snapshot: rows sized to the band's width less the border and padding (four cells). */
 export function cardView({ card, crew, now, columns, working = false }: Snapshot): Card {
   const inner = widthOf(columns) - 4
-  const top = [modelRow(card, now, working, inner), ...limitRows(card, now, inner)].filter((row): row is Row => row !== undefined)
+  const wide = inner >= WIDE
+  const top = [modelRow(card, now, working, inner, wide), ...(wide ? wideRows(card, now) : limitRows(card, now, inner))]
+    .filter((row): row is Row => row !== undefined)
   if (!top.length && !crew) return { top: [], bottom: [] }
   return { top, bottom: [turnRow(card, crew, inner)] }
 }
