@@ -14,6 +14,7 @@ Claude Code **function hooks mods** marketplace.
 - Plugin work: read `plugins/<name>/AGENTS.md`; `.claude/rules/<name>.md` imports it for that subtree. Keep plugin guidance there: a plugin-root `CLAUDE.md` draws a validation warning.
 - ChatGPT browser tools: `plugins/chatgpt/AGENTS.md`.
 - Native Mac app control through Codex: `plugins/codex-computer-use/AGENTS.md`.
+- Codex team in Herdr, led by the session (developer, analyst, architect): `plugins/codex-team/AGENTS.md`.
 - Main-session helpers (planner, challenger, digger), Jev routing and Codex twins: `plugins/crew/AGENTS.md`.
 - Session card above the prompt (model, context, limits, the turn, the crew's row): `plugins/session-hud/AGENTS.md`.
 - Tailscale API tools: `plugins/tailscale/AGENTS.md`.
