@@ -86,6 +86,7 @@ Two views over the same local state. The **band** above the prompt is one line: 
 - **Plans** come from local `.crew/plans/*.md`, in filename order, while they have unfinished steps. A step line carries its dependencies (`after:`), which the tree reads.
 - **States:** `queued` and `blocked` are left, `implementing` is running, and `verified`, `committed` and `skipped` are done. Any other state is counted as left and marked `?`.
 - **Owners:** `main` and the helper types are shown; any other owner is shown as `?`.
+- **Agent activity:** a running helper's card also shows its plan step, model requests, context and output tokens, and its last three tool calls by name (never the input), when the host reports them. A twin on the Codex helper runs in Codex's sandbox: it shows no tools or tokens.
 - **What it never does:** rendering reads only local in-memory state, without network or filesystem access, and it never changes the crew mode or the status line. It needs no external tool.
 - The tree's shape follows herdr-dagr (MIT OR Apache-2.0).
 
