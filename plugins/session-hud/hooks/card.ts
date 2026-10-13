@@ -2,13 +2,14 @@
 import type { SessionHudCard, SessionHudLimit } from '../types'
 import { cacheShare } from './usage'
 
-export const EMPTY: SessionHudCard = { limits: [], edits: 0, errors: 0 }
+export const EMPTY: SessionHudCard = { limits: [], edits: 0, errors: 0, turns: 0, output: 0 }
 
 /** What the host measures: the context, the rate-limit windows and the cost (`session.measure`, `$.session.usage()`). */
 export type Measured = {
   context: { tokens?: number; window: number; percent?: number }
   rateLimits: readonly SessionHudLimit[]
   cost?: { usd: number }
+  startedAt?: number
 }
 
 const finite = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n)
@@ -23,13 +24,14 @@ export function measured(card: SessionHudCard, usage: Measured, baseline: number
   const next: SessionHudCard = { ...card, limits }
   if (context) next.context = context
   if (cost !== undefined) next.cost = cost
+  if (finite(usage.startedAt)) next.startedAt = usage.startedAt
   if (cost !== undefined && baseline !== undefined && cost >= baseline) next.lastTurnCost = cost - baseline
   return next
 }
 
-/** A main-session step: its effort and, from its usage, the model that answered and the cache share. */
+/** A main-session step: its effort and, from its usage, the model that answered, the cache share and its output tokens. */
 export function stepped(card: SessionHudCard, effort: unknown, usage: {
-  model: string; input_tokens: number; cache_read_input_tokens: number; cache_creation_input_tokens: number
+  model: string; input_tokens: number; output_tokens?: number; cache_read_input_tokens: number; cache_creation_input_tokens: number
 } | null): SessionHudCard {
   const next = { ...card }
   if (typeof effort === 'string') next.effort = effort
@@ -37,13 +39,24 @@ export function stepped(card: SessionHudCard, effort: unknown, usage: {
     if (typeof usage.model === 'string') next.model = usage.model
     const share = cacheShare(usage)
     if (share !== undefined) next.cache = share
+    if (finite(usage.output_tokens) && usage.output_tokens >= 0) next.output = card.output + usage.output_tokens
   }
   return next
 }
 
-/** A main-session turn ended after `durationMs`. */
-export const completed = (card: SessionHudCard, durationMs: unknown): SessionHudCard =>
-  finite(durationMs) && durationMs >= 0 ? { ...card, lastTurnMs: durationMs } : card
+/** The window the host compacts against (`rawMaxTokens` of a context breakdown); anything but a positive count leaves it. */
+export const windowed = (card: SessionHudCard, window: unknown): SessionHudCard =>
+  finite(window) && window > 0 ? { ...card, contextWindow: window } : card
+
+/** A main-session turn began at `at`. */
+export const began = (card: SessionHudCard, at: unknown): SessionHudCard => (finite(at) ? { ...card, turnStartedAt: at } : card)
+
+/** A main-session turn ended after `durationMs`: it is no longer running, and it counts. */
+export function completed(card: SessionHudCard, durationMs: unknown): SessionHudCard {
+  const { turnStartedAt: _ended, ...rest } = card
+  const counted = { ...rest, turns: card.turns + 1 }
+  return finite(durationMs) && durationMs >= 0 ? { ...counted, lastTurnMs: durationMs } : counted
+}
 
 const EDITS: ReadonlySet<string> = new Set(['Write', 'Edit', 'NotebookEdit'])
 

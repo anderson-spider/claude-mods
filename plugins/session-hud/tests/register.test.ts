@@ -73,3 +73,31 @@ test('a survey keeps the band, and a light theme paints with theme keys', async 
   expect((await ui.find({ type: 'Text', text: /^Opus 5\.5$/ }))?.props).toMatchObject({ color: 'claude', bold: true })
   await ui.unmount()
 })
+
+test('the context is measured against the configured compaction window, read again after a setting changes', async ($, on) => {
+  world(on, { window: 500_000 })
+  await start($)
+  await flush()
+  const ui = await $.ui.mount(band())
+  expect((await ui.findAll({ type: 'Text' })).map(found => found.text).join('\n')).toContain('40% · 200k/500k')
+  await ui.unmount()
+})
+
+test('a running turn shows its time, beating every second until it completes', async ($, on) => {
+  const { clock } = world(on)
+  await start($)
+  await flush()
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  await flush()
+  const running = await $.ui.mount(band(110, false, true))
+  expect((await running.findAll({ type: 'Text' })).map(found => found.text).join('\n')).toContain('working 0s')
+  await running.unmount()
+  await $.turn.complete({ turnId: 't1', answer: '', durationMs: 3_000, isAborted: false, reason: 'answer' } as never)
+  await flush()
+  const idle = await $.ui.mount(band())
+  const drawn = (await idle.findAll({ type: 'Text' })).map(found => found.text).join('\n')
+  expect(drawn).not.toContain('working')
+  expect(drawn).toContain('last turn 3s')
+  await idle.unmount()
+  void clock
+})

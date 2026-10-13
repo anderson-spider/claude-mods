@@ -11,11 +11,21 @@ export type SessionHudCard = {
   effort?: string
   /** The context window's fill: tokens of the last response's input against the window. */
   context?: { tokens?: number; window: number; percent?: number }
+  /** The window the host measures and compacts against: the model's limit or a smaller `autoCompactWindow`. */
+  contextWindow?: number
   /** The share of the main session's last input read from the prompt cache, 0 to 100. */
   cache?: number
   /** US dollars the session has cost so far. */
   cost?: number
+  /** When the session's figures count from (its first launch when resumed), in epoch milliseconds. */
+  startedAt?: number
+  /** Main-session turns completed since the plugin loaded. */
+  turns: number
+  /** Output tokens of the main session's steps since the plugin loaded. */
+  output: number
   limits: SessionHudLimit[]
+  /** When the running main-session turn began, in epoch milliseconds; absent between turns. */
+  turnStartedAt?: number
   /** How long the main session's last turn took, in milliseconds. */
   lastTurnMs?: number
   /** What the session cost between the measurements around the last turn, in US dollars. */
