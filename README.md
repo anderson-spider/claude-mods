@@ -23,6 +23,17 @@ Inside Claude Code, add the marketplace and install the plugin:
 /plugin install tailscale@spider-claude-mods
 ```
 
+### One step on a Mac
+
+`scripts/bootstrap.sh` adds the marketplace, installs or updates the four plugins and installs the crew and codex-computer-use helpers (LaunchAgents) from the installed plugins. The repository is private, so the command borrows the token of `gh`:
+
+```
+curl -fsSL -H "Authorization: Bearer $(gh auth token)" -H 'Accept: application/vnd.github.raw' \
+  https://api.github.com/repos/anderson-spider/claude-mods/contents/scripts/bootstrap.sh | sh
+```
+
+Add `-s -- --check` after `sh` to see what it would do, or `-s -- --only crew,chatgpt` to limit the plugins. It is safe to run again. A helper whose prerequisite is missing (the ChatGPT app, or the Codex CLI and its login for crew) is skipped with a reason. Secret options (`jevKey`, `apiKey`) are never set by it: use `claude plugin configure <plugin>`.
+
 To use a local copy instead of GitHub, pass the folder path:
 
 ```
