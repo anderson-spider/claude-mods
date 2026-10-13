@@ -35,9 +35,10 @@ export function treeRows(steps: readonly GraphStep[], states: ReadonlyMap<string
     const first = step.after.find(id => id !== step.id && byId.has(id))
     if (first !== undefined) parent.set(step.id, first)
   }
-  // A cycle has no root: the step that closes it is drawn as a root and says so.
+  // A cycle has no root: the step that closes it is drawn as a root and says so. A step that waits on itself is one.
   const cyclic = new Set<string>()
   for (const step of steps) {
+    if (step.after.includes(step.id)) cyclic.add(step.id)
     const seen = new Set([step.id])
     for (let at = parent.get(step.id); at !== undefined; at = parent.get(at)) {
       if (seen.has(at)) {
