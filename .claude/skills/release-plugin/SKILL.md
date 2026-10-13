@@ -12,7 +12,7 @@ Check the plugins in `$ARGUMENTS` against the done definition in root `AGENTS.md
 ## Steps
 
 0. **Base**: fetch `origin main`; record dirty/untracked paths under each plugin. Review the working-tree diff against `origin/main` plus untracked files. The version script compares `HEAD`, so compare dirty versions manually in step 4. Finish with every changed and untracked plugin path accounted for.
-1. **Validate**: run `claude plugin validate plugins/<name>`; record its result.
+1. **Validate**: run `claude plugin validate --strict plugins/<name>`; record its result.
 2. **Tests**: run `claude plugin test plugins/<name>` and the plugin-specific automated checks in its AGENTS.md (Tests/Checks: helper and type-check commands). Record every result or skipped prerequisite; live scenarios belong to `/live-test`.
 3. **Consistency**: run `node scripts/check-consistency.mjs`; record its result.
 4. **Version**: run `node scripts/check-version-bump.mjs origin/main`. For a flagged or dirty plugin, compare its manifest version with `git show origin/main:plugins/<name>/.claude-plugin/plugin.json`; finish with the root version rule assessed for every such plugin.

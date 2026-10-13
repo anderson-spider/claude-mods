@@ -52,8 +52,8 @@ description = "Validate the marketplace and every plugin, then check that the ma
 run = '''
 #!/usr/bin/env bash
 set -euo pipefail
-claude plugin validate .
-for p in plugins/*/; do echo "==> $(basename "$p")"; claude plugin validate "${p%/}"; done
+claude plugin validate --strict .
+for p in plugins/*/; do echo "==> $(basename "$p")"; claude plugin validate --strict "${p%/}"; done
 node scripts/check-consistency.mjs
 '''
 

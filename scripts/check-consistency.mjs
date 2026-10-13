@@ -13,6 +13,34 @@ const readText = path => readFileSync(path, 'utf8')
 const readJson = path => JSON.parse(readText(path))
 const listDir = (path, keep) => (existsSync(path) ? readdirSync(path, { withFileTypes: true }).filter(keep).map(entry => entry.name) : [])
 const escapeRegex = text => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+// A rule's `paths` frontmatter lists the globs that load it: a `paths:` key with `  - "plugins/<name>/**"` items, or a
+// one-line value. Items under other keys do not count.
+const rulePaths = text => {
+  const front = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text)?.[1] ?? ''
+  const globs = []
+  let inPaths = false
+  for (const line of front.split(/\r?\n/)) {
+    const key = /^(\w[\w-]*):\s*(.*)$/.exec(line)
+    if (key) {
+      inPaths = key[1] === 'paths'
+      if (inPaths) globs.push(...key[2].replace(/^\[|\]$/g, '').split(',').map(item => item.trim().replace(/^["']|["']$/g, '')))
+    } else if (inPaths) {
+      const item = /^\s*-\s*["']?([^"'\r\n]*?)["']?\s*$/.exec(line)
+      if (item) globs.push(item[1])
+    }
+  }
+  return globs.filter(Boolean)
+}
+// True when the folder holds nothing but `.claude-plugin/types/`, the typings a loaded plugin gets.
+const onlyGeneratedTypes = dir => {
+  try {
+    const left = name => name !== '.DS_Store'
+    const entries = readdirSync(dir).filter(left)
+    return entries.length === 1 && entries[0] === '.claude-plugin' && readdirSync(join(dir, '.claude-plugin')).filter(left).every(name => name === 'types')
+  } catch {
+    return false // `.claude-plugin` is a file, or the folder cannot be read: the plain message stands
+  }
+}
 const sameSet = (a, b) => a.length === b.length && a.every(item => b.includes(item))
 const alternatives = matcher => (matcher ?? '').split('|').filter(item => item && item !== '*').sort()
 
@@ -36,7 +64,8 @@ export function declaredTests(source) {
 
 /**
  * The test names an AGENTS.md cites. Only backticked spans count, and only in two positions after a test file
- * reference (`tests/<file>.test.ts`, or `tests/{a,b}.test.ts`, whose files are then alternatives):
+ * reference (`tests/<file>.test.ts`, `helper/test/<file>.test.mjs`, or `tests/{a,b}.test.ts`, whose files are then
+ * alternatives):
  *   - a parenthesised list right after the reference: (`name`, `name` and `name`)
  *   - a single span after a colon: `tests/<file>.test.ts`: `name`
  * Every other backticked span is code, not a citation. A name belongs to the nearest reference before it.
@@ -45,10 +74,10 @@ export function citedTests(markdown) {
   const spans = [...markdown.matchAll(/`([^`\n]*)`/g)].map(m => ({ text: m[1], start: m.index, end: m.index + m[0].length }))
   const gapAfter = i => markdown.slice(spans[i].end, spans[i + 1]?.start ?? markdown.length)
   const fileRef = text => {
-    const single = /^tests\/([\w.-]+\.test\.(?:ts|tsx|mjs))$/.exec(text)
-    if (single) return [`tests/${single[1]}`]
-    const group = /^tests\/\{([\w.,-]+)\}(\.test\.(?:ts|tsx|mjs))$/.exec(text)
-    return group ? group[1].split(',').map(name => `tests/${name}${group[2]}`) : undefined
+    const single = /^((?:tests|helper\/test)\/)([\w.-]+\.test\.(?:ts|tsx|mjs))$/.exec(text)
+    if (single) return [`${single[1]}${single[2]}`]
+    const group = /^((?:tests|helper\/test)\/)\{([\w.,-]+)\}(\.test\.(?:ts|tsx|mjs))$/.exec(text)
+    return group ? group[2].split(',').map(name => `${group[1]}${name}${group[3]}`) : undefined
   }
   const referenced = new Set()
   const cites = []
@@ -67,6 +96,17 @@ export function citedTests(markdown) {
     }
   })
   return { cites, referenced }
+}
+
+// CI installs the Claude Code CLI at `CLAUDE_CLI_PIN`; the README says which version the repository is checked with.
+function checkCliPin(root, errors) {
+  const workflow = join(root, '.github/workflows/ci.yml')
+  if (!existsSync(workflow)) return
+  const pin = /^\s*CLAUDE_CLI_PIN:\s*["']?([\w.-]+)["']?\s*$/m.exec(readText(workflow))?.[1]
+  const readme = join(root, 'README.md')
+  const checked = existsSync(readme) ? /checked with v([\d.]+)/.exec(readText(readme))?.[1] : undefined
+  if (!pin) errors.push('.github/workflows/ci.yml: no CLAUDE_CLI_PIN: <version> line')
+  else if (pin !== checked) errors.push(`.github/workflows/ci.yml: CLAUDE_CLI_PIN is ${pin}, but README.md says the repository is checked with ${checked ? `v${checked}` : 'no version ("checked with vX.Y.Z")'}`)
 }
 
 // Each project hook script is wired under the event and matcher its header declares, with its exact command.
@@ -123,9 +163,16 @@ function checkPlugin(root, entry, marketplace, rootDocs, errors) {
   const plugin = readJson(join(root, manifest))
   if (plugin.name !== name) fail(`plugin.json name is "${plugin.name}"`)
   if (!/^\d+\.\d+\.\d+$/.test(plugin.version ?? '')) fail(`invalid version "${plugin.version}"`)
-  if (plugin.description !== entry.description) fail('marketplace.json description differs from plugin.json (copy the plugin.json text)')
+  if (typeof plugin.description !== 'string' || !plugin.description.trim()) fail('plugin.json has no description')
+  else if (plugin.description !== entry.description) fail('marketplace.json description differs from plugin.json (copy the plugin.json text)')
   if (!existsSync(join(dir, 'hooks/hooks.json'))) fail('hooks/hooks.json is missing')
-  else readJson(join(dir, 'hooks/hooks.json'))
+  else {
+    try {
+      readJson(join(dir, 'hooks/hooks.json'))
+    } catch {
+      fail('hooks/hooks.json is not valid JSON')
+    }
+  }
 
   // The plugin's TypeScript checks against the typings Claude Code generates when it loads the plugin.
   if (!existsSync(join(dir, 'tsconfig.json'))) fail('tsconfig.json is missing')
@@ -142,7 +189,11 @@ function checkPlugin(root, entry, marketplace, rootDocs, errors) {
 
   const rule = join(root, `.claude/rules/${name}.md`)
   if (!existsSync(rule)) fail(`.claude/rules/${name}.md is missing`)
-  else if (!readText(rule).split('\n').includes(`@../../plugins/${name}/AGENTS.md`)) fail(`.claude/rules/${name}.md does not import @../../plugins/${name}/AGENTS.md`)
+  else {
+    const text = readText(rule)
+    if (!text.split('\n').includes(`@../../plugins/${name}/AGENTS.md`)) fail(`.claude/rules/${name}.md does not import @../../plugins/${name}/AGENTS.md`)
+    if (!rulePaths(text).includes(`plugins/${name}/**`)) fail(`.claude/rules/${name}.md paths frontmatter does not list "plugins/${name}/**"`)
+  }
 
   if (!rootDocs.agents.includes(`\`plugins/${name}/AGENTS.md\``)) fail(`root AGENTS.md does not cite \`plugins/${name}/AGENTS.md\``)
   const row = new RegExp(`^\\| \\[${escapeRegex(name)}\\]\\(plugins/${escapeRegex(name)}(?:/README\\.md)?\\) \\|`, 'm')
@@ -174,13 +225,17 @@ export function checkRepo(root = '.') {
 
   // The reverse direction: whatever the globs in mise would validate must be listed, and a rule needs its plugin.
   for (const dir of listDir(join(root, 'plugins'), e => e.isDirectory())) {
-    if (!listed.has(dir)) errors.push(`plugins/${dir}: no marketplace.json entry`)
+    if (listed.has(dir)) continue
+    // Claude Code writes the git-ignored typings into a plugin that is loaded, and they outlive its removal.
+    const leftover = onlyGeneratedTypes(join(root, 'plugins', dir))
+    errors.push(`plugins/${dir}: no marketplace.json entry${leftover ? ' (only the generated .claude-plugin/types/ is left; delete the directory)' : ''}`)
   }
   for (const file of listDir(join(root, '.claude/rules'), e => e.isFile() && e.name.endsWith('.md'))) {
     const rule = file.slice(0, -3)
-    if (!listed.has(rule)) errors.push(`.claude/rules/${file}: no marketplace.json entry for plugin "${rule}"`)
+    if (!listed.has(rule)) errors.push(`.claude/rules/${file}: no marketplace.json entry for plugin "${rule}" (a rule that is not a plugin's goes in a subdirectory of .claude/rules/)`)
   }
 
+  checkCliPin(root, errors)
   checkHooks(root, errors)
   return { errors, count: marketplace.plugins.length }
 }
