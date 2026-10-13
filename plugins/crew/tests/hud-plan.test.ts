@@ -6,12 +6,12 @@ const context = { home: '/Users/jane', root: '/Users/jane/work/app' }
 const step = (id: string, owner: string, state: string) => `- ${id} (${owner}, after: —) secret action — state: ${state}`
 const parse = (text: string, basename = 'crew-hud.md') => parsePlan(basename, text, context)
 
-test('each known state is counted and skipped is done; running steps retain only id and owner', () => {
+test('each known state is counted and skipped is done; a step keeps only its id, owner, dependencies and state', () => {
   const states = ['verified', 'committed', 'skipped', 'implementing', 'queued', 'blocked']
   const plan = parse(['## Steps', '### Release', ...states.map((state, i) => step(`T${i}`, 'main', state))].join('\n'))
   expect(plan).toEqual({ name: 'crew-hud', open: true, groups: [{
     heading: 'Release', done: 3, running: 1, left: 2, unknownStates: false,
-    runningSteps: [{ id: 'T3', owner: 'main' }],
+    steps: states.map((state, i) => ({ id: `T${i}`, owner: 'main', after: [], state })),
   }] })
   expect(JSON.stringify(plan)).not.toContain('secret action')
 })
@@ -24,9 +24,9 @@ test('only headings within Steps and steps outside fences count; repeated headin
     '## Next', step('N1', 'main', 'queued'),
   ].join('\n'))
   expect(plan.groups).toEqual([
-    { heading: 'crew-hud', done: 0, running: 0, left: 1, runningSteps: [], unknownStates: false },
-    { heading: 'Build', done: 1, running: 0, left: 0, runningSteps: [], unknownStates: false },
-    { heading: 'Build', done: 0, running: 1, left: 0, runningSteps: [{ id: 'B1', owner: 'main' }], unknownStates: false },
+    { heading: 'crew-hud', done: 0, running: 0, left: 1, steps: [{ id: 'P1', owner: 'main', after: [], state: 'queued' }], unknownStates: false },
+    { heading: 'Build', done: 1, running: 0, left: 0, steps: [{ id: 'A1', owner: 'main', after: [], state: 'verified' }], unknownStates: false },
+    { heading: 'Build', done: 0, running: 1, left: 0, steps: [{ id: 'B1', owner: 'main', after: [], state: 'implementing' }], unknownStates: false },
   ])
 })
 
@@ -38,14 +38,31 @@ test('invalid lines are ignored, duplicates keep first, and the final state mark
     '- T4 (main, after: —) action — state: verified — state: implementing (retry)',
     step('T5', 'main', 'not-real'),
   ].join('\n'))
-  expect(plan.groups[0]).toEqual({ heading: 'crew-hud', done: 0, running: 1, left: 2,
-    runningSteps: [{ id: 'T4', owner: 'main' }], unknownStates: true })
+  expect(plan.groups[0]).toEqual({ heading: 'crew-hud', done: 0, running: 1, left: 2, unknownStates: true,
+    steps: [{ id: 'T1', owner: 'main', after: [], state: 'queued' }, { id: 'T4', owner: 'main', after: [], state: 'implementing' },
+      { id: 'T5', owner: 'main', after: [], state: '?' }] })
 })
 
 test('allowlisted helper roles, twins and main retain their names; strangers and removed roles become ?', () => {
   const owners = ['main', ...SPECIALISTS.flatMap(s => [`crew:${s.name}`, `crew:${s.name}-codex`]), 'crew:stranger', 'lead', 'crew:developer', 'crew:architect']
   const plan = parse(['## Steps', ...owners.map((owner, i) => step(`T${i}`, owner, 'implementing'))].join('\n'))
-  expect(plan.groups[0]!.runningSteps.map(s => s.owner)).toEqual([...owners.slice(0, -4), '?', '?', '?', '?'])
+  expect(plan.groups[0]!.steps.map(s => s.owner)).toEqual([...owners.slice(0, -4), '?', '?', '?', '?'])
+})
+
+test('dependencies keep only grammar-valid ids, in the order written, and an unknown state is a ? step', () => {
+  const plan = parse(['## Steps', '### Build',
+    '- T1 (main, after: —) first — state: verified',
+    '- T2 (main, after: T1) second — state: implementing',
+    '- T3 (crew:digger, after: T1, T2) third — state: queued',
+    '- T4 (main, after: T3, C5a) fourth — state: weird',
+  ].join('\n'))
+  expect(plan.groups[0]!.steps).toEqual([
+    { id: 'T1', owner: 'main', after: [], state: 'verified' },
+    { id: 'T2', owner: 'main', after: ['T1'], state: 'implementing' },
+    { id: 'T3', owner: 'crew:digger', after: ['T1', 'T2'], state: 'queued' },
+    { id: 'T4', owner: 'main', after: ['T3', 'C5a'], state: '?' },
+  ])
+  expect(JSON.stringify(plan)).not.toContain('second')
 })
 
 test('the audit and QA states of the old flow are no longer known: they count as left with a ?', () => {
@@ -99,7 +116,7 @@ test('nested notes and trailing spaces do not change closed or running states', 
   expect(closed.open).toBe(false)
   const running = parse(`## Steps\n${step('T2', 'main', 'implementing (running (mock))  ')}`)
   expect(running.groups[0]!.running).toBe(1)
-  expect(running.groups[0]!.runningSteps).toEqual([{ id: 'T2', owner: 'main' }])
+  expect(running.groups[0]!.steps).toEqual([{ id: 'T2', owner: 'main', after: [], state: 'implementing' }])
   expect(running.groups[0]!.unknownStates).toBe(false)
 })
 

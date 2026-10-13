@@ -2,12 +2,17 @@ import { CREW_TYPES } from '../agents'
 import { redact } from '../redact'
 import type { RedactContext } from '../redact'
 
+/** The states a plan step can be in; any other written state is `?`. */
+export type StepState = 'queued' | 'implementing' | 'verified' | 'blocked' | 'committed' | 'skipped' | '?'
+/** One step as the screen may know it: grammar-valid ids, an allowlisted owner and a known state, never the action or note. */
+export type PlanStep = { id: string; owner: string; after: string[]; state: StepState }
+
 export type PlanGroup = {
   heading: string
   done: number
   running: number
   left: number
-  runningSteps: { id: string; owner: string }[]
+  steps: PlanStep[]
   unknownStates: boolean
 }
 
@@ -15,6 +20,7 @@ export type Plan = { name: string; groups: PlanGroup[]; open: boolean; malformed
 export type PlanFile = { basename: string; text: string }
 
 const ID = /^[A-Z][A-Z0-9]*[a-z]?$/
+const STATES: ReadonlySet<string> = new Set(['queued', 'implementing', 'verified', 'blocked', 'committed', 'skipped'])
 const OWNERS = new Set(['main', ...CREW_TYPES])
 const MAX_LABEL = 120
 
@@ -28,7 +34,7 @@ function label(value: string, context: RedactContext): string {
 }
 
 function group(heading: string): PlanGroup {
-  return { heading, done: 0, running: 0, left: 0, runningSteps: [], unknownStates: false }
+  return { heading, done: 0, running: 0, left: 0, steps: [], unknownStates: false }
 }
 
 export function parsePlan(basename: string, text: string, context: RedactContext): Plan {
@@ -63,9 +69,9 @@ export function parsePlan(basename: string, text: string, context: RedactContext
     // A candidate without a valid state must not silently disappear as a closed plan.
     if (/^- [A-Z][A-Z0-9]*[a-z]? \(/.test(line)) stepCandidates++
     // The action and note never enter the result. Require the entire step prefix and a final state marker.
-    const step = /^- ([A-Z][A-Z0-9]*[a-z]?) \(([^(),]+), after: (?:—|[A-Z][A-Z0-9]*[a-z]?(?:, [A-Z][A-Z0-9]*[a-z]?)*)\) (.+) — state: (.+)$/.exec(line)
+    const step = /^- ([A-Z][A-Z0-9]*[a-z]?) \(([^(),]+), after: (—|[A-Z][A-Z0-9]*[a-z]?(?:, [A-Z][A-Z0-9]*[a-z]?)*)\) (.+) — state: (.+)$/.exec(line)
     if (!step || !ID.test(step[1]!) || ids.has(step[1]!)) continue
-    const actionAndState = `${step[3]!} — state: ${step[4]!}`
+    const actionAndState = `${step[4]!} — state: ${step[5]!}`
     const marker = actionAndState.lastIndexOf(' — state: ')
     const tail = actionAndState.slice(marker + ' — state: '.length).trim()
     // A note begins at the first space-parenthesis and may itself contain parentheses.
@@ -76,11 +82,15 @@ export function parsePlan(basename: string, text: string, context: RedactContext
       current = group(name)
       groups.push(current)
     }
+    current.steps.push({
+      id: step[1]!,
+      owner: OWNERS.has(step[2]!) ? step[2]! : '?',
+      after: step[3] === '—' ? [] : step[3]!.split(', ').filter(id => ID.test(id)),
+      state: STATES.has(state) ? (state as StepState) : '?',
+    })
     if (state === 'verified' || state === 'committed' || state === 'skipped') current.done++
-    else if (state === 'implementing') {
-      current.running++
-      current.runningSteps.push({ id: step[1]!, owner: OWNERS.has(step[2]!) ? step[2]! : '?' })
-    } else {
+    else if (state === 'implementing') current.running++
+    else {
       current.left++
       if (state !== 'queued' && state !== 'blocked') current.unknownStates = true
     }

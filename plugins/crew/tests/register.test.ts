@@ -2,7 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import {
-  GATEWAY, HOME, KEY, ROOT, answer, compose, hudBand, hudCapture, jevWorld, ok, pause, record, spawnInput, step,
+  GATEWAY, HOME, KEY, ROOT, answer, compose, hudBand, hudPane, hudCapture, jevWorld, ok, pause, record, spawnInput, step,
   twinWorld,
 } from './host'
 import type { Seen } from './host'
@@ -192,7 +192,7 @@ test('the mode option defaults to claude: a plain call stays on Claude, untouche
   expect(seen.spawned[0]?.model).toBeUndefined()
   expect([seen.fetches, seen.notices, seen.writes]).toEqual([[], [], []])
   expect(seen.statusLine).toEqual([undefined])
-  expect(seen.commands).toEqual(['crew-mode'])
+  expect(seen.commands).toEqual(['crew-mode', 'crew-hud'])
 })
 
 test('in the codex mode without Jev a plain call becomes its twin on high: tagged, noticed, confirmed, with no request', CODEX_MODE, async ($, on) => {
@@ -549,10 +549,13 @@ test('HUD records the twin a codex-mode switch chose, its sent suffix effort and
   const world = await twinWorld($, on, { stepModel: 'gpt-6-luna', reply: async () => ok(answer(2.1)) })
   await $.agent.spawn(spawnInput())
   const band = await $.ui.mount(hudBand())
-  expect(await band.find({ type: 'Text', text: /crew:digger-codex/ })).toBeDefined()
-  await step($, 'a1', 'high', 'cx/gpt-6-luna-medium')
-  expect(await band.find({ type: 'Text', text: /effort medium/ })).toBeDefined()
+  expect(await band.find({ type: 'Text', text: /1 agent/ })).toBeDefined()
   await band.unmount()
+  const pane = await $.ui.mount(hudPane())
+  expect(await pane.find({ type: 'Text', text: /crew:digger-codex/ })).toBeDefined()
+  await step($, 'a1', 'high', 'cx/gpt-6-luna-medium')
+  expect(await pane.find({ type: 'Text', text: /effort medium/ })).toBeDefined()
+  await pane.unmount()
   expect(record(world.seen, 0)).toMatchObject({ requested: 'crew:digger', effortApplied: 'medium', ran: null })
   expect(record(world.seen, 1)).toMatchObject({ ran: { model: 'gpt-6-luna', effort: 'medium' } })
 })

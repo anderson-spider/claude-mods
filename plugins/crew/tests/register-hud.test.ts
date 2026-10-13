@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
-import { OFF, ON, ROOT, compose, flush, hudBand, hudCapture, hudExists, hudStat, hudText, jevWorld, pause, record, spawnInput, step } from './host'
+import { OFF, ON, ROOT, compose, flush, hudBand, hudCapture, hudExists, hudPane, hudStat, hudText, jevWorld, pause, record, spawnInput, step } from './host'
 
 // --- HUD host integration ---
 
@@ -59,14 +59,29 @@ test('HUD render reads atoms only and yields the band during a survey', OFF, asy
   await pause()
   for (const surface of ['terminal', 'desktop'] as const) {
     const band = await $.ui.mount(hudBand(surface))
-    expect(await band.find({ type: 'Text', text: /Agents/ })).toBeDefined()
+    expect(await band.find({ type: 'Text', text: /1 agent/ })).toBeDefined()
     await band.unmount()
   }
   expect(seen.fetches).toEqual([])
   const survey = await $.ui.mount(hudBand('terminal', true))
-  expect(await survey.find({ type: 'Text', text: /Agents/ })).toBeUndefined()
+  expect(await survey.find({ type: 'Text', text: /1 agent/ })).toBeUndefined()
   await survey.unmount()
   expect(seen.writes).toEqual([])
+})
+
+test('HUD pane draws the plan tree and the agents from the same atoms, and /crew-hud opens it', ON, async ($, on) => {
+  jevWorld(on, { files: { '/repo/.crew/plans/live.md': hudText } })
+  on('tool.call', () => ({ result: 'written' }))
+  on('ui.open', () => ({ value: { isPlaced: true } }) as never)
+  await $.agent.spawn(spawnInput())
+  await $.tool.call({ tool: 'Write', file_path: '.crew/plans/live.md', content: hudText } as never)
+  await pause()
+  const pane = await $.ui.mount(hudPane())
+  expect(await pane.find({ type: 'Text', text: /Plan live/ })).toBeDefined()
+  expect(await pane.find({ type: 'Text', text: /T1 crew:digger {2}working/ })).toBeDefined()
+  expect(await pane.find({ type: 'Text', text: /Agents/ })).toBeDefined()
+  await pane.unmount()
+  expect(await $.command.run({ command: 'crew-hud', args: '' } as never)).toEqual({ text: 'crew: the pane is open.' })
 })
 
 test('HUD keeps the prompt sections byte-identical after observation and plan refresh', ON, async ($, on) => {
