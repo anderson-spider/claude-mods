@@ -2,8 +2,11 @@ import type { Hook, McpToolInputs, Register } from 'claude-code'
 import type { SchemaFor } from './schema'
 import { dispatch } from './team'
 import type { TeamIo } from './team'
+import { createBreaker, createGate } from './jev'
 
 type Dollar = Parameters<Hook<'session.start'>>[0]
+const breaker = createBreaker(() => Date.now())
+const gate = createGate()
 
 /** The host access the team needs, built from one hook's `$`. */
 function teamIo($: Dollar): TeamIo {
@@ -16,7 +19,25 @@ function teamIo($: Dollar): TeamIo {
       HERDR_ENV: await $.env.get('HERDR_ENV'),
       HERDR_WORKSPACE_ID: await $.env.get('HERDR_WORKSPACE_ID'),
       HOME: await $.env.get('HOME'),
+      JEV_API_KEY: await $.env.get('JEV_API_KEY'),
     }),
+    settings: async source => {
+      const settings = await $.settings.read({ source })
+      return { env: settings?.env }
+    },
+    jev: {
+      fetch: async (url, init) => {
+        const response = await $.http.fetch(url, init)
+        return { status: response.status, text: response.text, headers: response.headers }
+      },
+      timer: (ms, fn) => {
+        const handle = $.clock.after(ms, fn)
+        return () => handle.cancel()
+      },
+      now: () => Date.now(),
+    },
+    breaker,
+    gate,
     root: () => $.session.root(),
     now: () => $.clock.now(),
     write: (path, text) => $.fs.write(path, text),
@@ -38,7 +59,7 @@ export const register: Register = (on) => {
           task: { type: 'string', description: 'A self-contained brief: the agent has none of this conversation.' },
           slug: { type: 'string', description: 'A short task id: lowercase letters, digits and hyphens, at most 28 characters. Names the developer (dev-<slug>) and the report.' },
           cwd: { type: 'string', description: 'Developer only: the absolute path of the task worktree, never the repository itself.' },
-          effort: { type: 'string', enum: ['low', 'medium', 'high', 'xhigh'], description: "Overrides the role's default effort." },
+          effort: { type: 'string', enum: ['low', 'medium', 'high', 'xhigh'], description: 'Pins the effort, skipping Jev assessment.' },
         },
         required: ['role', 'task', 'slug'],
       } satisfies SchemaFor<McpToolInputs['mcp__codex-team__dispatch']>,

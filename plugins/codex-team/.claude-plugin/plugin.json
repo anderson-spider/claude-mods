@@ -1,6 +1,6 @@
 {
   "name": "codex-team",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Dispatches Codex team agents (developer, analyst, architect) into named Herdr panes with confirmed delivery and short reports.",
   "author": {
     "name": "anderson-spider"

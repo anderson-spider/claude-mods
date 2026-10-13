@@ -2,18 +2,25 @@
 // holds names, counts and a hash of the task, never the task, a key or a path.
 import type { Effort, Role } from './roles'
 import type { PromptStatus } from './herdr'
+import type { JevReason, Levels } from './effort'
 
-/** Where the effort came from: the role's default, or the call's own `effort`. Jev joins in a later version. */
-export type EffortSource = 'default' | 'pinned'
+/** Where the effort came from: Jev, the role's default, or the call's own `effort`. */
+export type EffortSource = 'jev' | 'default' | 'pinned'
 
 export type DecisionRecord = {
-  v: 1
+  v: 2
   ts: string
   role: Role
   agent: string
   model: string
   effort: Effort
+  /** True only when this dispatch started the agent with the chosen effort. */
+  effortApplied: boolean
   source: EffortSource
+  jevModel: string
+  /** Expected level per dimension, rounded to one decimal; null when no assessment was used. */
+  expected: Levels | null
+  jevReason: JevReason | null
   taskHash: string
   started: boolean
   promptStatus: PromptStatus
