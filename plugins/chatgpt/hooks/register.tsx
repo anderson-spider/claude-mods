@@ -16,34 +16,9 @@ import {
   JOBS_INPUT_SCHEMA,
 } from './tool-schemas'
 import { type Candidate, chooseBrowser } from './browsers'
-import { BUILTIN, BUILTIN_SERVER, builtinBrowserOf, builtinStaysOnChatgpt } from './builtin-browser'
-import { CHROME, CHROME_SERVER, chromeBrowserOf, chromeStaysOnChatgpt } from './chrome-browser'
+import { BACKENDS, ownCallAllowed } from './backends'
 import { type BrowserDeps, type McpCall, type McpHost, bytesOf, mcpCallOf } from './mcp-browser'
-import { TERMINAL_BROWSER, openTerminalBrowser } from './terminal-browser'
 import { serve } from './tools'
-
-const PLUGIN = 'chatgpt'
-
-// A backend: terminal-browser runs as a host process; the others are MCP servers, whose `stays` says which of the
-// plugin's own calls to them stay on chatgpt.com.
-type Backend =
-  | { name: string; open(run: ProcessRunner): Promise<Browser | string> }
-  | {
-      name: string
-      server: string
-      open(deps: BrowserDeps): Promise<Browser>
-      stays(tool: string, input: unknown, tabId: string | undefined): boolean
-    }
-
-// The backends in the order the plugin tries them.
-const BACKENDS: Backend[] = [
-  { name: TERMINAL_BROWSER, open: openTerminalBrowser },
-  { name: CHROME, server: CHROME_SERVER, open: chromeBrowserOf, stays: chromeStaysOnChatgpt },
-  { name: BUILTIN, server: BUILTIN_SERVER, open: builtinBrowserOf, stays: builtinStaysOnChatgpt },
-]
-
-// Which of the plugin's own calls to each browser server stay on chatgpt.com, by the tool's `mcp__` prefix.
-const OWN_CALLS = BACKENDS.flatMap(backend => ('server' in backend ? [{ prefix: `mcp__${backend.server}__`, stays: backend.stays }] : []))
 
 // Requests take turns in the plugin's own tab, kept across them.
 const queue = taskQueue()
@@ -196,8 +171,7 @@ export const register: Register = (on, options) => {
   // Auto mode's classifier gives no verdict on a call no prompt asked for, so the plugin allows its own browser
   // calls that stay on chatgpt.com; every other call goes on to the session's rules.
   on('tool.check', async (_$, e, next) => {
-    const own = next.origin.plugin === PLUGIN ? OWN_CALLS.find(({ prefix }) => e.tool.startsWith(prefix)) : undefined
-    if (!own?.stays(e.tool.slice(own.prefix.length), e.input, tab.id)) return next(e)
+    if (!ownCallAllowed({ plugin: next.origin.plugin, tool: e.tool, input: e.input, tab })) return next(e)
     return { decision: 'allow' as const, reason: 'chatgpt plugin driving chatgpt.com in its own browser tab' }
   })
 
