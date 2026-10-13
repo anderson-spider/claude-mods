@@ -4,6 +4,7 @@ import { ASK_DESCRIPTION, IMAGE_DESCRIPTION, PROMPT } from '../hooks/prompts'
 import { JOBS_DESCRIPTION, ASK_COMMAND_DESCRIPTION, IMAGE_COMMAND_DESCRIPTION, DOCTOR_COMMAND_DESCRIPTION } from '../hooks/tool-schemas'
 import type { PageState } from '../hooks/model'
 import { fakePage, printed, scriptKind, type PageScript } from './fake-page'
+import { register } from '../hooks/register'
 import { withNote } from './mcp-helpers'
 
 test('the system prompt tells Claude to reach for ask on its own', async ($, on) => {
@@ -873,4 +874,74 @@ test('a tool error with no text is reported as the tool failing', async ($, on) 
   const answer = await commandRun($, 'chatgpt-doctor')
 
   expect(answer.text).toContain('Claude in Chrome said: tabs_context_mcp failed.')
+})
+
+// The test host asks `tool.check` as the engine, so the plugin's own allow is reached by calling the handler this module
+// registers, with the origin the host gives it (`next.origin`). This pins the wiring tests/backends.test.ts cannot: the
+// handler asks the decision with the call's origin, tool and input, and with the plugin's own tab.
+type Handler = (...args: never[]) => unknown
+type ToolCheck = (
+  _$: unknown,
+  e: { tool: string; input: unknown },
+  next: ((e: unknown) => Promise<unknown>) & { origin: { plugin: string } },
+) => Promise<unknown>
+
+/** The handlers `register` hands to `on`, by event (and tool, for `tool.call`); the tab they share belongs to this instance. */
+function registered(): { toolCheck: ToolCheck; ask: Handler } {
+  const handlers: Record<string, unknown> = {}
+  const on = ((name: string, ...rest: unknown[]) => {
+    const matcher = rest.length > 1 ? (rest[0] as { tool?: string }).tool : undefined
+    handlers[matcher ? `${name}:${matcher}` : name] = rest[rest.length - 1]
+  }) as never
+  ;(register as (on: never, options?: unknown) => void)(on, {})
+  return { toolCheck: handlers['tool.check'] as ToolCheck, ask: handlers['tool.call:mcp__chatgpt__ask'] as Handler }
+}
+
+const GOES_ON = { decision: 'ask' }
+const nextOf = (plugin: string) => Object.assign(async () => GOES_ON, { origin: { plugin } })
+const NAVIGATE = { url: 'https://chatgpt.com/' }
+
+test("tool.check allows the plugin's own calls that stay on chatgpt.com and passes every other call on", async () => {
+  const { toolCheck: check } = registered()
+  const allow = { decision: 'allow', reason: 'chatgpt plugin driving chatgpt.com in its own browser tab' }
+  expect(await check(undefined, { tool: `${CHROME_PREFIX}tabs_context_mcp`, input: {} }, nextOf('chatgpt'))).toEqual(allow)
+  expect(await check(undefined, { tool: `${BUILTIN_PREFIX}navigate`, input: NAVIGATE }, nextOf('chatgpt'))).toEqual(allow)
+  // The model's call (any other origin), a URL off chatgpt.com, an unknown tool and another plugin's tool go on to the rules.
+  expect(await check(undefined, { tool: `${CHROME_PREFIX}tabs_context_mcp`, input: {} }, nextOf('engine'))).toEqual(GOES_ON)
+  expect(await check(undefined, { tool: `${BUILTIN_PREFIX}navigate`, input: NAVIGATE }, nextOf('engine'))).toEqual(GOES_ON)
+  expect(await check(undefined, { tool: `${BUILTIN_PREFIX}navigate`, input: { url: 'https://example.com/' } }, nextOf('chatgpt'))).toEqual(GOES_ON)
+  expect(await check(undefined, { tool: `${CHROME_PREFIX}computer`, input: {} }, nextOf('chatgpt'))).toEqual(GOES_ON)
+  expect(await check(undefined, { tool: 'Bash', input: {} }, nextOf('chatgpt'))).toEqual(GOES_ON)
+})
+
+// What this module's own handlers use of the host, over the fake world: terminal-browser is down, `$.mcp.call` refuses so
+// the plugin goes through `$.tool.call`, and the rest is inert.
+function hostOf($: { tool: unknown }) {
+  const refused = async () => {
+    throw new Error('unknown server')
+  }
+  const down = async () => ran(1, '', 'no pane').value
+  return {
+    tool: $.tool,
+    mcp: { call: refused },
+    process: { run: down },
+    env: { get: async () => '/tmp/t/' },
+    fs: { stat: refused, read: refused, write: async () => undefined },
+    ui: { status: () => undefined, toast: () => undefined },
+  }
+}
+
+test("tool.check allows a script only in the plugin's own tab, the one its last request used", async ($, on) => {
+  const w = world(on, { chromeRoute: 'tool' })
+  const { toolCheck: check, ask } = registered()
+  const script = (tabId: number) => ({ tool: `${CHROME_PREFIX}javascript_tool`, input: { action: 'javascript_exec', tabId, text: '1' } })
+  // Before any request the plugin has no tab.
+  expect(await check(undefined, script(7), nextOf('chatgpt'))).toEqual(GOES_ON)
+  // A request of this module opens the tab in the fake Chrome: tab 7.
+  const answer = await (ask as (...args: unknown[]) => Promise<{ isError?: boolean }>)(hostOf($), { tool: 'mcp__chatgpt__ask', prompt: 'first' }, undefined)
+  expect(answer.isError).toBeUndefined()
+  expect(w.scripts.at(-1)?.tabId).toBe(7)
+  expect(((await check(undefined, script(7), nextOf('chatgpt'))) as { decision: string }).decision).toBe('allow')
+  expect(await check(undefined, script(8), nextOf('chatgpt'))).toEqual(GOES_ON)
+  expect(await check(undefined, script(7), nextOf('engine'))).toEqual(GOES_ON)
 })
