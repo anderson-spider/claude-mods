@@ -26,7 +26,7 @@ export const parseRequest = params => {
 }
 
 /** The person's answers to an approval question; hooks/model.ts `CHOICES` and `helper/test/contract.mjs` must list the same. */
-export const CHOICES = ['session', 'always', 'deny']
+export const CHOICES = Object.freeze(['session', 'always', 'deny'])
 
 /** The elicitation result for a decision; only allowing answers accept. */
 export const answerFor = (decision, request) => {

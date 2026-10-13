@@ -1,13 +1,23 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { StatusReply } from '../hooks/model'
-import { approvalWaitText, statusReport, toAnswer } from '../hooks/presentation'
+import { approvalWaitText, forgetText, statusReport, toAnswer } from '../hooks/presentation'
 import { APPROVAL_MS } from '../hooks/routing'
 
 test('toAnswer words busy, denied and ok replies', () => {
   expect(toAnswer({ status: 'busy', app: { bundleId: 'b', displayName: 'Calculator' }, owner: 'sess-2' }).result).toMatch(/in use by another/)
   expect(toAnswer({ status: 'denied', app: { bundleId: 'b', displayName: 'TextEdit' } }).isError).toBe(true)
   expect(toAnswer({ status: 'ok', isError: false, content: [{ type: 'text', text: '100' }], notes: [] })).toEqual({ result: '100' })
+})
+
+test('forgetText words a forgotten app, a failure, and an ok reply that names no app', () => {
+  expect(forgetText('Grapher', { status: 'ok', bundleId: 'com.x', helper: true, codex: 'removed' })).toBe([
+    'codex-cu: Grapher (com.x) is no longer always allowed; its next use asks again.',
+    '  helper list: removed',
+    '  Codex ComputerUseAppApprovals.json: removed',
+  ].join('\n'))
+  expect(forgetText('Nowhere', { status: 'error', message: 'no app found' })).toBe('codex-cu: could not forget Nowhere: no app found')
+  expect(forgetText('X', { status: 'ok' } as never)).toBe('codex-cu: could not forget X: {"status":"ok"}')
 })
 
 test('statusReport preserves unreachable and error reports', () => {

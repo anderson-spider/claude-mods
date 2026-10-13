@@ -268,7 +268,7 @@ export class Hub {
     const held = this.#holder(request.bundleId)
 
     if (held !== undefined && held.owner !== caller) {
-      ctx.busy = { bundleId: request.bundleId, displayName: request.displayName, ...held }
+      ctx.busy = { app: { bundleId: request.bundleId, displayName: request.displayName }, ...held }
 
       return { action: 'decline' }
     }
@@ -380,7 +380,7 @@ export class Hub {
     }
 
     if (ctx.busy !== undefined) {
-      return { status: 'busy', app: ctx.busy, owner: ctx.busy.owner, idleSeconds: ctx.busy.idleSeconds }
+      return { status: 'busy', ...ctx.busy }
     }
 
     if (ctx.denied !== undefined) {
