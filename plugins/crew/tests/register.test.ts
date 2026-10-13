@@ -456,7 +456,8 @@ for (const [label, over, reason] of [
   ['no login file', { files: {} }, 'no Codex login file at ~/.codex/auth.json (run `codex login`)'],
   ['an expired login', { files: { [AUTH_PATH]: authFile(accessToken(LOGIN_NOW / 1000 - 5)) } }, 'the Codex login has expired (run `codex` once to refresh it)'],
   ['a login the backend refuses', { reply: async () => ({ status: 401, ok: false, headers: {}, text: '{"error":{"message":"token revoked"}}' }) }, 'the Codex backend refused the login (run `codex login`): token revoked'],
-  ['a backend that cannot be reached', { reply: async () => { throw new Error('ECONNRESET') } }, 'the Codex backend could not be reached'],
+  // The host's rejection of a failed fetch is a HooksError; the note keeps its name, and a code only when it carries one.
+  ['a backend that cannot be reached', { reply: async () => { throw new Error('ECONNRESET') } }, 'the Codex backend could not be reached (HooksError)'],
 ] as const) {
   test(`${label} answers the step with its reason, and nothing goes to the API`, LOGIN, async ($, on) => {
     const { seen } = await loginWorld($, on, over as LoginOptions)

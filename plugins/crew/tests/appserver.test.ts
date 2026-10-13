@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { handedBackMessage, LABEL, MAX_POLLS, POLL, ROUTES, answerText, callerOf, helperReady, helperRole, kickstart, lastUserText, post, postStarting, runTurn, socketOf } from '../hooks/appserver'
+import { handedBackMessage, LABEL, MAX_POLLS, POLL, ROUTES, answerText, callerOf, helperReady, helperRole, helperServes, kickstart, lastUserText, post, postStarting, runTurn, socketOf } from '../hooks/appserver'
 import type { Probe, TurnRequest } from '../hooks/appserver'
 
 type Call = { route: string; body: Record<string, unknown>; socketPath?: string }
@@ -46,12 +46,20 @@ test('the socket and label are fixed beside the installed helper', () => {
   expect(Object.values(ROUTES)).toEqual(['/start', '/poll', '/interrupt', '/reset', '/status'])
 })
 
-test('only the digger runs on the helper; a caller is made safe for the helper\'s grammar', () => {
-  expect(['digger-codex', 'digger'].map(helperRole)).toEqual([true, true])
-  expect(['planner-codex', 'challenger-codex', 'developer-codex', 'architect-codex'].map(helperRole)).toEqual([false, false, false, false])
+test('the digger, planner and challenger run on the helper; a caller is made safe for the helper\'s grammar', () => {
+  expect(['digger-codex', 'digger', 'planner-codex', 'planner', 'challenger-codex', 'challenger'].map(helperRole)).toEqual([true, true, true, true, true, true])
+  expect(['developer-codex', 'architect-codex', 'auditor', ''].map(helperRole)).toEqual([false, false, false, false])
   expect(callerOf('agent id/1')).toBe('agent_id_1')
   expect(callerOf('___')).toBe('x')
   expect(callerOf('a'.repeat(300)).length).toBe(128)
+})
+
+test('a twin runs on the helper only when the running helper reports a lane for its role', () => {
+  expect(helperServes('planner-codex', ['digger'])).toBe(false)
+  expect(helperServes('digger-codex', ['digger'])).toBe(true)
+  expect(helperServes('planner-codex', ['digger', 'planner', 'challenger'])).toBe(true)
+  expect(helperServes('developer-codex', ['developer'])).toBe(false)
+  expect(helperServes('challenger', [])).toBe(false)
 })
 
 test('post sends JSON over the socket, answers the helper\'s reply and never rejects', async () => {
@@ -74,7 +82,9 @@ test('postStarting asks launchd once when nothing listens, then polls until the 
 
 test('the helper is ready only when it runs and found a binary and a login; each lack has its own reason', async () => {
   const status = (over: Record<string, unknown>) => world({ '/status': { status: 'ok', version: '1', pid: 1, jobs: 0, threads: 0, codex: true, login: true, ...over } }).probe
-  expect(await helperReady(status({}), SOCKET)).toEqual({ ready: true })
+  // A status with no `roles` is a helper from before the field: the digger lane only.
+  expect(await helperReady(status({}), SOCKET)).toEqual({ ready: true, roles: ['digger'] })
+  expect(await helperReady(status({ roles: ['challenger', 'digger', 'planner'] }), SOCKET)).toEqual({ ready: true, roles: ['challenger', 'digger', 'planner'] })
   expect(await helperReady(status({ codex: false }), SOCKET)).toEqual({ ready: false, reason: 'the crew Codex helper found no codex binary' })
   expect(await helperReady(status({ login: false }), SOCKET)).toMatchObject({ ready: false, reason: expect.stringContaining('codex login') })
   expect(await helperReady(world({}).probe, SOCKET)).toMatchObject({ ready: false, reason: expect.stringContaining('install.sh') })

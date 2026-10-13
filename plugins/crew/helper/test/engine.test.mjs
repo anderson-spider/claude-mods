@@ -77,6 +77,36 @@ test('a follow-up for the same caller reuses its thread; a changed repository st
   assert.equal(fake.params('thread/start').length, 2)
 })
 
+test('the planner and the challenger each keep their thread across follow-ups, in the same read-only lane', async () => {
+  for (const role of ['planner', 'challenger']) {
+    const { fake, engine } = world({ autoComplete: true })
+    assert.deepEqual(await engine.start({ ...base, role }), { status: 'started' })
+    await finish(engine)
+    await engine.start({ ...base, role, prompt: 'and then this' })
+    await finish(engine)
+
+    assert.equal(fake.params('thread/start').length, 1, role)
+    assert.deepEqual(fake.params('turn/start').map(p => p.threadId), ['th-1', 'th-1'], role)
+    assert.equal(fake.params('thread/start')[0].sandbox, 'read-only', role)
+    assert.equal(fake.params('thread/start')[0].ephemeral, true, role)
+  }
+})
+
+test('the status names the roles the helper has a lane for, so a hook never sends a role this helper would refuse', () => {
+  const { engine } = world()
+  assert.deepEqual(engine.status().roles, ['digger', 'planner', 'challenger'])
+})
+
+test('a caller that changes role gets a new thread', async () => {
+  const { fake, engine } = world({ autoComplete: true })
+  await engine.start({ ...base, role: 'planner' })
+  await finish(engine)
+  await engine.start({ ...base, role: 'challenger' })
+  await finish(engine)
+
+  assert.equal(fake.params('thread/start').length, 2)
+})
+
 test('many callers share one server process, each with its own thread', async () => {
   const { fake, engine, made } = world({ autoComplete: true })
   await Promise.all(['a', 'b', 'c'].map(caller => engine.start({ ...base, caller })))
@@ -92,7 +122,7 @@ test('a second start for a running caller is busy, and a start past the limit is
   assert.equal((await engine.start({ ...base, caller: 'a' })).status, 'busy')
   assert.equal((await engine.start({ ...base, caller: 'b' })).status, 'started')
   assert.equal((await engine.start({ ...base, caller: 'c' })).status, 'full')
-  assert.deepEqual(engine.status(), { jobs: 2, threads: 2 })
+  assert.deepEqual({ jobs: engine.status().jobs, threads: engine.status().threads }, { jobs: 2, threads: 2 })
   assert.equal(engine.poll('a').status, 'running')
 })
 
@@ -177,7 +207,7 @@ test('reset interrupts the turn, forgets the thread and the next start makes a n
   await engine.start(base)
   assert.deepEqual(await engine.reset('a1'), { status: 'ok' })
   assert.equal(fake.params('turn/interrupt').length, 1)
-  assert.deepEqual(engine.status(), { jobs: 0, threads: 0 })
+  assert.deepEqual({ jobs: engine.status().jobs, threads: engine.status().threads }, { jobs: 0, threads: 0 })
   await engine.start(base)
   assert.equal(fake.params('thread/start').length, 2)
 })
@@ -235,7 +265,7 @@ test('an interrupt the server never confirms ends the turn after the grace perio
 
   const ended = await finish(w.engine)
   assert.equal(ended.turn, 'timeout')
-  assert.deepEqual(w.engine.status(), { jobs: 0, threads: 0 })
+  assert.deepEqual({ jobs: w.engine.status().jobs, threads: w.engine.status().threads }, { jobs: 0, threads: 0 })
   assert.equal((await w.engine.start({ ...base, caller: 'other' })).status, 'started')
 })
 

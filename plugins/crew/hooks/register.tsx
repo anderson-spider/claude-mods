@@ -8,9 +8,9 @@ import type { PlanIo, PlanRefresher } from './hud/files'
 import { bandRows } from './hud/view'
 import { SPECIALISTS, isGatewayBase, mainSection, nativeCodexSection, nativeCodexSpecs, onCodexLogin } from './agents'
 import type { Agent, Effort } from './agents'
-import { HANDBACK_ID, callerOf, handedBackMessage, helperReady, helperRole, lastUserText, runTurn, socketOf } from './appserver'
+import { HANDBACK_ID, HELPER_ROLES, callerOf, handedBackMessage, helperReady, helperServes, lastUserText, runTurn, socketOf } from './appserver'
 import type { Probe } from './appserver'
-import { CODEX_URL, HANDBACK, codexBody, codexEffort, codexHeaders, failedStep, handbackStep, statusReason, stepOf, textStep } from './codex'
+import { CODEX_URL, HANDBACK, codexBody, codexEffort, codexHeaders, failedStep, handbackStep, rejectionNote, statusReason, stepOf, textStep } from './codex'
 import type { ApiMessage, CodexEffort, CodexStep } from './codex'
 import { parseLogin } from './codex-login'
 import { TOOL_SCHEMAS, describable } from './codex-tools'
@@ -211,18 +211,19 @@ async function baseUrl($: Dollar): Promise<string | undefined> {
 type Via = 'backend' | 'helper' | 'gateway'
 
 /**
- * The `-codex` types the session can reach, each with how: on the Codex login (`codexLogin` on) either through the
- * backend when crew can describe every tool of the twin, or through the helper for the digger (when the helper is
- * ready); else behind a gateway base URL; none on Anthropic's API or with none set.
+ * The `-codex` types the session can reach, each with how: on the Codex login (`codexLogin` on) through the helper
+ * for a helper role when the helper is ready, else through the backend when crew can describe every tool of the twin
+ * (the fallback of the planner and the challenger); else behind a gateway base URL; none on Anthropic's API or with
+ * none set.
  */
-async function reachableNative($: Dollar, native: Native, onLogin: boolean, helper: boolean): Promise<{ agent: Agent<string>; via: Via }[]> {
+async function reachableNative($: Dollar, native: Native, onLogin: boolean, helperRoles: readonly string[]): Promise<{ agent: Agent<string>; via: Via }[]> {
   if (native.specs.length === 0) return []
   const gateway = isGatewayBase(await baseUrl($))
   return native.specs.flatMap((agent): { agent: Agent<string>; via: Via }[] =>
-    onLogin && describable(agent.tools)
-      ? [{ agent: onCodexLogin(agent), via: 'backend' }]
-      : onLogin && helper && helperRole(agent.name)
-        ? [{ agent: onCodexLogin(agent), via: 'helper' }]
+    onLogin && helperServes(agent.name, helperRoles)
+      ? [{ agent: onCodexLogin(agent), via: 'helper' }]
+      : onLogin && describable(agent.tools)
+        ? [{ agent: onCodexLogin(agent), via: 'backend' }]
         : gateway ? [{ agent, via: 'gateway' }] : [],
   )
 }
@@ -241,13 +242,18 @@ async function registerNative($: Dollar, native: Native, home: string | undefine
   native.onLogin.clear()
   native.helped.clear()
   // The helper is asked only for a login the session may use; one status call, which starts nothing.
-  let helper = false
+  let helperRoles: readonly string[] = []
   if (home !== undefined) {
     const ready = await helperReady(probeOf($), socketOf(home)).catch(() => ({ ready: false as const, reason: 'the crew Codex helper could not be asked' }))
-    helper = ready.ready
-    if (!ready.ready) $.ui.log(`crew: the digger twin is not on the Codex login: ${ready.reason}`, { to: 'debug' })
+    if (ready.ready) {
+      helperRoles = ready.roles
+      // A helper from before a role's lane is ready for the roles it has, and serves no more: the rest fall back.
+      if (HELPER_ROLES.some(role => !helperRoles.includes(role))) $.ui.log('crew: the running crew Codex helper has no lane for every twin (rerun plugins/crew/helper/install.sh)', { to: 'debug' })
+    } else {
+      $.ui.log(`crew: the helper twins are not on the helper: ${ready.reason}`, { to: 'debug' })
+    }
   }
-  const reachable = await reachableNative($, native, home !== undefined, helper)
+  const reachable = await reachableNative($, native, home !== undefined, helperRoles)
   if (reachable.length === 0) {
     $.ui.log('crew: Codex twins not registered (no gateway URL, and no twin can run on the Codex login)', { to: 'debug' })
   }
@@ -446,8 +452,12 @@ async function askCodex($: Dollar, login: CodexLogin, twin: Agent<string>, e: St
   }
   const reasoning = session.reasoning
   const body = codexBody({ model: twin.model, effort, system: systemOf(twin, cwd, now), messages: messages as ApiMessage[], tools, reasoning: id => reasoning.get(id) })
-  const response = await $.http.fetch(CODEX_URL, { method: 'POST', headers: codexHeaders(read.login, session.id), body: JSON.stringify(body) }).catch(() => undefined)
-  if (!response) return failedStep('the Codex backend could not be reached')
+  let rejection: unknown
+  const response = await $.http.fetch(CODEX_URL, { method: 'POST', headers: codexHeaders(read.login, session.id), body: JSON.stringify(body) }).catch((error: unknown) => {
+    rejection = error
+    return undefined
+  })
+  if (!response) return failedStep(`the Codex backend could not be reached${rejectionNote(rejection)}`)
   if (response.status < 200 || response.status >= 300) return failedStep(statusReason(response.status, response.text))
   const step = stepOf(response.text, twin.model)
   for (const [id, items] of step.reasoning) keep(reasoning, id, items, KEPT_CALLS)

@@ -159,6 +159,27 @@ export function failedStep(reason: string): CodexStep {
   return textStep(`crew: this Codex twin could not run: ${reason}.`)
 }
 
+/** An errno-style token (`ECONNRESET`, `ETIMEDOUT`): the only part of a message that is ever repeated. */
+const ERRNO = /\bE(?!RROR\b)[A-Z][A-Z0-9_]{2,30}\b/
+
+/**
+ * What a rejected request says about itself, for the step's reason: ` (<kind>[, <code>])` from the error's name and
+ * its (or its cause's) code or, failing those, an errno-style token in its message, each only when it has the shape
+ * of an identifier. Never the message text, which can carry the URL or headers. Empty when the rejection tells
+ * nothing beyond "an error".
+ */
+export function rejectionNote(error: unknown): string {
+  const read = (value: unknown, key: string): unknown => (value && typeof value === 'object' ? (value as Record<string, unknown>)[key] : undefined)
+  const message = read(error, 'message')
+  const code = [read(error, 'code'), read(read(error, 'cause'), 'code'), typeof message === 'string' ? ERRNO.exec(message)?.[0] : undefined].find(
+    (candidate): candidate is string => typeof candidate === 'string' && /^[A-Z][A-Z0-9_]{1,39}$/.test(candidate),
+  )
+  const name = read(error, 'name')
+  const kind = typeof name === 'string' && name !== 'Error' && /^[A-Za-z][A-Za-z0-9]{0,39}$/.test(name) ? name : undefined
+  const parts = [kind, code].filter((part): part is string => part !== undefined)
+  return parts.length === 0 ? '' : ` (${parts.join(', ')})`
+}
+
 /** The payloads of an event stream's `data:` lines, one per event, parsed; anything that is no JSON object is skipped. */
 function events(text: string): Item[] {
   const parsed: Item[] = []

@@ -200,6 +200,8 @@ export class Engine {
     return {
       jobs: [...this.#jobs.values()].filter(job => !job.collector.finished).length,
       threads: this.#threads.size,
+      // What this helper has a lane for: a helper older than this field has only the digger.
+      roles: Object.keys(LANES),
     }
   }
 

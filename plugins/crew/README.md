@@ -35,7 +35,7 @@ A twin keeps its base role's prompt, tools and high effort. Never pass `model` t
 
 A twin registers at session start in one of three ways:
 
-- **Codex login** (the `codexLogin` option): the planner and challenger twins, whose tools crew can describe, are answered by crew itself from the Codex backend. The digger twin runs through the crew Codex helper when it is installed and ready.
+- **Codex login** (the `codexLogin` option): the planner, challenger and digger twins run through the crew Codex helper when it is installed and ready. Without it, the planner and challenger twins, whose tools crew can describe, are answered by crew itself from the Codex backend, and the digger twin is not registered.
 - **Gateway:** a gateway as `ANTHROPIC_BASE_URL` (any `http` or `https` URL other than `api.anthropic.com`) serves every twin not on the login. Crew sends the fixed ids with the gateway's `cx/` prefix (`cx/gpt-6-luna`), and the gateway must route them and their `-medium` and `-high` variants to an endpoint that serves Codex.
 - **Neither:** with Anthropic's API as base URL and no login, no twin registers.
 
@@ -47,16 +47,16 @@ With a `jevKey`, Jev may size a twin's effort but never changes its model. Crew 
 
 With `codexLogin` on (under `--plugin-dir` a plugin's options live under `crew@inline`), the twins run on your ChatGPT Codex login with no gateway. It needs the Codex CLI signed in with ChatGPT (`codex login`). Crew reads the login from `~/.codex/auth.json` and never refreshes or writes it; when the access token is within a minute of expiring, the twin answers that the login has expired, and running `codex` once refreshes it.
 
-**Planner and challenger twins: the backend path.**
+**Planner and challenger twins: the backend path (the fallback when the helper is not ready).**
 
 - Crew's `turn.step` hook answers each step itself. It sends the subagent's conversation, the role's prompt and the schemas of `Read`, `Grep` and `Glob` to `https://chatgpt.com/backend-api/codex/responses` (`store: false`), and turns the answer into the step's text and tool calls.
 - The tools run in Claude Code, under its permissions, and nothing of the step goes to Anthropic.
-- A failure (no login file, an expired or refused login, a backend error or limit) answers the step with its reason and never moves it to Claude.
+- A failure (no login file, an expired or refused login, a backend error or limit) answers the step with its reason and never moves it to Claude. A request the host rejects adds the error's name and an errno code when it has one, never its message, the URL or a header.
 - Each step arrives whole rather than streamed. Codex's reasoning between steps is kept in memory per agent, and a reload drops it.
 
-**Digger twin: the crew Codex helper.**
+**Helper twins: the crew Codex helper.**
 
-The digger runs shell commands, which crew cannot describe to the backend tool by tool, so its twin runs in `codex app-server`. A per-user helper owns the server: `helper/install.sh` installs the LaunchAgent `com.anderson-spider.crew-codex` and copies the helper to `~/.claude/mcp/crew-codex`, and `helper/uninstall.sh` removes it. Run `install.sh --check` first: it needs the ChatGPT app's `node`, a `codex` binary and `codex login`. Rerun `install.sh` after an update: helper 0.5.0 has only the digger lane, in a read-only sandbox.
+The digger runs shell commands, which crew cannot describe to the backend tool by tool, so the helper runs the digger, planner and challenger twins in `codex app-server`, in Codex's own read-only sandbox. A per-user helper owns the server: `helper/install.sh` installs the LaunchAgent `com.anderson-spider.crew-codex` and copies the helper to `~/.claude/mcp/crew-codex`, and `helper/uninstall.sh` removes it. Run `install.sh --check` first: it needs the ChatGPT app's `node`, a `codex` binary and `codex login`. Rerun `install.sh` after an update: helper 0.6.0 has the digger, planner and challenger lanes, each in a read-only sandbox.
 
 - **One turn per step:** the twin's step sends the agent's last request to the helper. The helper runs it as a turn on that agent's Codex thread and returns the final text.
   - Where the host runs the agent as a subagent, it only delivers a result through `SubagentHandback`, so the final answer is returned as that call, a failure included. The planner and challenger twins do the same.
@@ -65,11 +65,11 @@ The digger runs shell commands, which crew cannot describe to the backend tool b
 - **The sandbox is read-only:** the thread works in the repository with Codex's `readOnly` sandbox, no network for commands and `approvalPolicy: never`, so any write fails inside Codex. The Context7 tool is the one network exit: it sends the library name and the question the model writes to `mcp.context7.com`.
   - The helper resolves the directory on every turn. It refuses the filesystem root, your home or a parent of it, and anything inside or containing `~/.codex`, `~/.claude` or the helper itself.
   - A repository with its own `.codex/config.toml` (or under a directory that has one, up to your home) is refused: Codex would load it and could run the programs it names outside the sandbox.
-  - Web search is off, and commands run in a non-login shell with Codex's core environment. On the helper the digger reads the code and git history and has two MCP tools, Context7 and CodeGraph (below); the web needs the Claude digger or a gateway twin.
+  - Web search is off, and commands run in a non-login shell with Codex's core environment. On the helper a twin reads the code and git history and has two MCP tools, Context7 and CodeGraph (below); the web needs the Claude digger or a gateway twin.
 - **Isolated Codex home:** the server runs with its own `CODEX_HOME` (`~/.claude/mcp/crew-codex/state/codex-home`, mode 0700), holding only a link to your `~/.codex/auth.json`. Codex apps, plugins, hooks, computer use and browser use are disabled, so none of your Codex MCP servers or hooks load into a crew thread, and your Codex config is never read.
 - **Two fixed MCP servers:** the helper declares `context7` (`https://mcp.context7.com/mcp`, anonymous, so with the service's anonymous rate limit) and `codegraph` (your `codegraph serve --mcp`, found under `~/.local/bin`, `/opt/homebrew/bin` or `/usr/local/bin`; left out when absent; started with the helper's own `node` first on its `PATH`, because a launchd job has none) itself, one `-c mcp_servers.<name>...` each. Nothing else is configurable. The CodeGraph tool needs the repository's `.codegraph/` index, and it runs outside Codex's sandbox, as you. Crew never reads or writes `auth.json`.
 - **Shared limits:** at most four turns run at once, and a turn is stopped after fifteen minutes. A turn that does not stop within thirty seconds of an interrupt is abandoned with its thread. Threads are ephemeral and live until the cap or a restart.
-- **Registration:** with `codexLogin` on, crew asks the helper's status once at session start, which starts nothing. When the helper is not ready, the digger twin is not registered on the login and one debug line says why; a gateway still serves it.
+- **Registration:** with `codexLogin` on, crew asks the helper's status once at session start, which starts nothing. When the helper is not ready, the planner and challenger twins fall back to the backend path, the digger twin is not registered on the login and one debug line says why; a gateway still serves the digger.
 
 The option is off by default, and a repository's own settings that set it, or declare `HOME`, keep it off.
 
@@ -113,7 +113,7 @@ The `brainstorm` skill says how the main session plans a larger change: route th
 - **Sent to Jev** (only with `jevKey` set, one request per eligible helper call, to `https://api.typesafe.ai/v1/systemone`): the agent name, the call's description and its prompt. Secrets in common shapes, emails and absolute paths are removed first, and the prompt is cut to 4000 characters. The key goes only in the `Authorization` header and is never logged. Calls that name a model, forks and workflow agents are not sent.
 - **Saved:** with a key and a trusted home, a routed decision is one small JSON file in `~/.claude/crew/decisions/`. It holds the time, agent name, requested type, provider, depth, default/planned/applied effort, what the first step ran on, the Jev model id, the duration and a short non-cryptographic hash of the description. It never holds the prompt, description, key or a path. To delete the files: `rm -r ~/.claude/crew/decisions`.
 - **Sent to OpenAI on the Codex login** (with `codexLogin` on, for each step of the planner or challenger twin, to `https://chatgpt.com/backend-api/codex/responses`): the role's prompt with the working directory and date, the subagent's whole conversation (file contents its tools read included) and the schemas of its tools. The access token goes only in `Authorization` and the account id in `Chatgpt-Account-Id`; the refresh token is never sent.
-- **Sent to OpenAI through the crew Codex helper** (with `codexLogin` on and the helper installed, for each step of the digger twin): the role's prompt with the repository path and date, the agent's request, and whatever Codex reads or runs inside its read-only sandbox. The helper listens on a Unix socket only you can open; crew sends no token to it and returns command names and statuses, never their output. The digger's Context7 tool also sends the library name and question the model writes to `mcp.context7.com`, anonymously.
+- **Sent to OpenAI through the crew Codex helper** (with `codexLogin` on and the helper installed, for each step of a helper twin): the role's prompt with the repository path and date, the agent's request, and whatever Codex reads or runs inside its read-only sandbox. The helper listens on a Unix socket only you can open; crew sends no token to it and returns command names and statuses, never their output. A helper twin's Context7 tool also sends the library name and question the model writes to `mcp.context7.com`, anonymously.
 - **Sent through a gateway:** in the codex mode or on an explicit twin call behind a gateway, the twin's conversation, including what its tools read, goes to OpenAI through the gateway, with or without a `jevKey`.
 - **Kept in memory/session state:** the resolved key and home, the effort book, pending confirmations, the breaker and registered twins; for twins on the login, each agent's type, its backend session id and Codex's encrypted reasoning; the session's crew mode (`crew.mode`, readable by other plugins); and the HUD's plan and running-helper snapshots.
 
@@ -136,11 +136,11 @@ node scripts/check-version-bump.mjs origin/main
 - **Jev:** effort-only routing with the role-default fallback, first-step effort locking, breaker, key, decision log and confirmation.
 - **Crew mode:** the mode from the option and `/crew-mode`, with and without Jev, and the calls it never moves.
 - **Planner and challenger twins on the login:** registration, request body and headers, tool calls and kept reasoning, and every failure answered without reaching the API.
-- **Digger twin on the helper:** registration only when the helper is ready, the turn's request, polls and text, and failures. The helper's read-only lane, thread registry, limits, interrupt and refusals run against a fake `codex app-server` (`helper/test`).
+- **Helper twins:** registration only when the helper is ready (the planner and challenger fall back to the backend), the turn's request, caller and role for each of the three twins, polls and text, and failures. The helper's read-only lane, thread registry, limits, interrupt and refusals run against a fake `codex app-server` (`helper/test`).
 - **HUD:** plan states and owners, the running-helper rows and the band's width handling.
 
 Tests use the host with a fake `http.fetch` and a fake login file; nothing reaches Jev, OpenAI or a gateway.
 
 ### Live limits
 
-Host tests establish routing and confirmation against fakes, not a real Codex account. The helper's read-only digger lane was run live against the real Codex backend, outside the host: a digger turn ran `git log`, its `touch` in the repository was refused by the sandbox and no file was written, and a role with no lane was refused. The digger twin through a real host session, the twins behind a gateway and the backend path for the planner and challenger twins are verified against fakes only. Using a Codex model in a session switches the auto-mode classifier to Claude Code's own (billed) requests for the rest of that session.
+Host tests establish routing and confirmation against fakes, not a real Codex account. The helper's read-only digger lane was run live against the real Codex backend, outside the host: a digger turn ran `git log`, its `touch` in the repository was refused by the sandbox and no file was written, and a role with no lane was refused. The three twins through a real host session, the twins behind a gateway and the backend fallback for the planner and challenger twins are verified against fakes only. Using a Codex model in a session switches the auto-mode classifier to Claude Code's own (billed) requests for the rest of that session.

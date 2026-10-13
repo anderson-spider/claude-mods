@@ -4,6 +4,8 @@
 /** One row per role. A role with no row is refused (`laneOf` is undefined). */
 export const LANES = Object.freeze({
   digger: Object.freeze({}),
+  planner: Object.freeze({}),
+  challenger: Object.freeze({}),
 })
 
 export const laneOf = role => (typeof role === 'string' && Object.hasOwn(LANES, role) ? LANES[role] : undefined)
