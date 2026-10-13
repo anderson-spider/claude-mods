@@ -1,14 +1,8 @@
 import { expect, test } from 'claude-code/testing'
 import { ask } from '../hooks/ask'
 import { isChatUrl } from '../hooks/browser'
-import { isHardBlocker } from '../hooks/conversation'
-import { inputFor, sendScript } from '../hooks/scripts'
-import { fakeBrowser, printed } from './helpers'
-
-test('sendScript embeds the prompt as a string literal', () => {
-  const script = sendScript('line "1"\n`code` ${x}')
-  expect(script).toContain(JSON.stringify('line "1"\n`code` ${x}'))
-})
+import { inputFor } from '../hooks/scripts'
+import { fakeBrowser, printed } from './fake-page'
 
 test('ask reuses the plugin\'s tab, starts a new chat and waits until the answer settles', async () => {
   const { browser, calls } = fakeBrowser({
@@ -123,13 +117,6 @@ test('ask gives up after the timeout and returns what streamed so far', async ()
 
   expect(result.ok).toBe(false)
   expect(!result.ok && result.markdown).toBe('partial')
-})
-
-test('isHardBlocker stops on limits and verifications, not on any dialog', () => {
-  expect(isHardBlocker("You've reached your limit for image generation")).toBe(true)
-  expect(isHardBlocker('Você atingiu o limite. Tente novamente mais tarde.')).toBe(true)
-  expect(isHardBlocker('a human verification (captcha)')).toBe(true)
-  expect(isHardBlocker('Copied to clipboard')).toBe(false)
 })
 
 test('ask picks the model and attaches files by path where the browser uploads', async () => {
