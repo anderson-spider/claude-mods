@@ -1,3 +1,4 @@
+import type { CodexCuInput } from '../types'
 import { LEASE_MINUTES } from './routing'
 
 export const denyOwn = (bridge: string) =>
@@ -34,6 +35,11 @@ export const INPUT_SCHEMA = {
   },
   additionalProperties: false,
 } as const
+
+// Compile-time: the schema's property names are exactly the tool input's keys (types/index.d.ts), so renaming one without the other fails tsc.
+type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false
+type Assert<T extends true> = T
+export type SchemaMatchesInput = Assert<Same<keyof typeof INPUT_SCHEMA.properties, keyof CodexCuInput>>
 
 export const HELP = [
   '/codex-cu on            use Codex for native apps (default)',

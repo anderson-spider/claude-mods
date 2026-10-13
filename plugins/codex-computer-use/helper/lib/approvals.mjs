@@ -25,6 +25,9 @@ export const parseRequest = params => {
   return { kind: 'other', message: typeof params?.message === 'string' ? params.message : 'an approval request' }
 }
 
+/** The person's answers to an approval question; hooks/model.ts `CHOICES` and `helper/test/contract.mjs` must list the same. */
+export const CHOICES = ['session', 'always', 'deny']
+
 /** The elicitation result for a decision; only allowing answers accept. */
 export const answerFor = (decision, request) => {
   switch (decision) {
@@ -77,7 +80,7 @@ export class Approvals {
 
   /** Records the person's answer: `session`, `always` or `deny`. */
   record(caller, bundleId, choice) {
-    if (!['session', 'always', 'deny'].includes(choice)) {
+    if (!CHOICES.includes(choice)) {
       throw new Error(`unknown choice: ${choice}`)
     }
 

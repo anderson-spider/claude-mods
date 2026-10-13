@@ -189,3 +189,30 @@ test('hubWith without options keeps the codex approvals file in the temp directo
     hub.close()
   }
 })
+
+// hooks/model.ts types these three replies and nothing else; a field here that the plugin does not read is dead weight on the wire.
+// With no name resolved before the run, the server's own question decides, so these are the replies `#outcome` builds.
+test('hub: a held call answers only the fields the plugin types', async () => {
+  const { hub } = hubWith('Calculator', { resolve: async () => undefined })
+
+  try {
+    const code = 'let app = await cua.getApp("TextEdit");'
+    const asked = await hub.call('s1', { code })
+    assert.deepEqual(Object.keys(asked).sort(), ['app', 'status'])
+    assert.equal(asked.status, 'needs_approval')
+
+    hub.approve('s1', 'com.fake.TextEdit', 'session')
+    assert.equal((await hub.call('s1', { code })).status, 'ok')
+    const busy = await hub.call('s2', { code })
+    assert.equal(busy.status, 'busy')
+    assert.deepEqual(Object.keys(busy).sort(), ['app', 'idleSeconds', 'owner', 'status'])
+
+    hub.release('s1')
+    hub.approve('s2', 'com.fake.TextEdit', 'deny')
+    const denied = await hub.call('s2', { code })
+    assert.equal(denied.status, 'denied')
+    assert.deepEqual(Object.keys(denied).sort(), ['app', 'status'])
+  } finally {
+    hub.close()
+  }
+})

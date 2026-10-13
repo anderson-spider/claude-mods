@@ -47,7 +47,6 @@ export class McpStdioClient {
     )
 
     this.#send({ jsonrpc: '2.0', method: 'notifications/initialized' })
-    this.serverInfo = init.serverInfo
 
     return init
   }

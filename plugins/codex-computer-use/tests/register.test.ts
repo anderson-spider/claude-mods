@@ -14,18 +14,18 @@ test('a busy app names its holder and when it is freed', async ($, on) => {
 test('while on, Claude’s own desktop tools are refused; /codex-cu off restores them', async ($, on) => {
   world(on)
 
-  const refused = await $.tool.call({ tool: OWN })
+  const refused = await $.tool.call({ tool: OWN } as never)
   expect(refused.deny).toMatch(/codex-computer-use is on/)
 
   await $.command.run({ command: 'codex-cu', args: 'off' } as never)
-  const allowed = await $.tool.call({ tool: OWN })
+  const allowed = await $.tool.call({ tool: OWN } as never)
   expect(allowed.deny).toBeUndefined()
 
   const bridge = await $.tool.call({ tool: TOOL, code: 'await cua.getState();' } as never)
   expect(textOf(bridge)).toMatch(/is off/)
 
   await $.command.run({ command: 'codex-cu', args: 'on' } as never)
-  expect((await $.tool.call({ tool: OWN })).deny).toMatch(/codex-computer-use is on/)
+  expect((await $.tool.call({ tool: OWN } as never)).deny).toMatch(/codex-computer-use is on/)
 })
 
 test('the bridge keeps state per caller and gives each subagent its own session', async ($, on) => {

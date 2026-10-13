@@ -3,23 +3,21 @@ import type { Elements, EngineInterface, Register, RenderElement } from 'claude-
 
 import type { CodexAsking } from '../types'
 import { serve } from './bridge'
-import type { BridgeInput } from './bridge'
 import { callerOf, kickstart, post, socketOf } from './helper'
 import type { Probe } from './helper'
 import { ROUTES } from './model'
-import type { Choice, Failure, Reply, StatusReply } from './model'
+import type { Choice, Route, RouteReplies } from './model'
 import { forgetText, statusReport } from './presentation'
 import { DESCRIPTION, HELP, INPUT_SCHEMA, PROMPT, denyOwn } from './prompts'
 import { holdQuestion } from './question'
 import type { QuestionHost, Waiting } from './question'
-import { APPROVAL_MS, BRIDGE, isOwnDesktopTool, parseCommand } from './routing'
+import { APPROVAL_MS, BRIDGE, TOOL, isOwnDesktopTool, parseCommand } from './routing'
 import type { Command } from './routing'
 
 type Kit = Pick<Elements['terminal'], 'Box' | 'Text' | 'Button'>
 type Handlers = { [K in Command['kind']]: (command: Extract<Command, { kind: K }>) => Promise<{ text: string }> }
 
 const PLUGIN = 'codex-computer-use'
-const TOOL = `mcp__${PLUGIN}__${BRIDGE}`
 const COMMAND = 'codex-cu'
 // Waiting inside a `$` call does not use up the hook's time; `$.clock.sleep` would.
 const POLL = ['sleep', '0.25']
@@ -47,7 +45,7 @@ const choose = (choice: Choice) => {
 }
 
 /** Sends to the helper, starting it through launchd once if nothing listens. */
-const helper = async ($: EngineInterface, route: string, body: unknown): Promise<Reply> => {
+const helper = async <R extends Route>($: EngineInterface, route: R, body: unknown): Promise<RouteReplies[R]> => {
   const host = probe($)
   const socket = socketOf((await $.env.get('HOME')) ?? '')
   const first = await post(host, socket, route, body)
@@ -93,8 +91,7 @@ const draw = ({ Box, Text, Button }: Kit, now: CodexAsking): RenderElement => (
 
 const statusText = async ($: EngineInterface) => {
   const enabled = await isEnabled($)
-  // `/status` answers the helper's own report, or a failure.
-  const reply = (await helper($, ROUTES.status, {})) as StatusReply | Failure
+  const reply = await helper($, ROUTES.status, {})
 
   return statusReport(enabled, reply)
 }
@@ -187,14 +184,15 @@ export const register: Register = on => {
     return enabled ? { deny: denyOwn(TOOL) } : next(e)
   })
 
-  on('tool.call', { tool: TOOL }, ($, e, next) =>
+  // The matcher stays a literal for the host's source analysis; tests/contract.test.ts pins it to TOOL.
+  on('tool.call', { tool: 'mcp__codex-computer-use__codex_cu' }, ($, e, next) =>
     serve({
       enabled: () => isEnabled($),
       sessionId: () => $.session.id(),
       helper: (route, body) => helper($, route, body),
       ask: (question, signal) => holdQuestion(questionHost($), waiting, APPROVAL_MS, question, signal),
       limitMs: APPROVAL_MS,
-    }, e as unknown as BridgeInput, next.signal).catch((error: unknown) => ({
+    }, e, next.signal).catch((error: unknown) => ({
       result: `codex-cu: the bridge failed: ${error instanceof Error ? error.message : String(error)}`,
       isError: true as const,
     })),

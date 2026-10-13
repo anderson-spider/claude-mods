@@ -7,7 +7,8 @@ import { namedApps, resolveBundleId, usedApp } from './apps.mjs'
 import { Owners, isUnder } from './owners.mjs'
 
 export const IDLE_MS = 15 * 60_000
-// An app stays with the caller that used it until this long after that caller's last call.
+// An app stays with the caller that used it until this long after that caller's last call;
+// hooks/routing.ts `LEASE_MINUTES` tells the model the same, and helper/test/contract.mjs pins both.
 export const LEASE_MS = 2 * 60_000
 // At most this many Codex sessions run at once; the quietest idle one makes room.
 export const MAX_SESSIONS = 8
@@ -25,12 +26,6 @@ export const isEntryCall = code => {
 
   return first !== undefined && ENTRY.test(first)
 }
-
-const textOf = result =>
-  (result?.content ?? [])
-    .filter(block => block?.type === 'text')
-    .map(block => block.text)
-    .join('\n')
 
 export class Hub {
   /**
@@ -385,16 +380,16 @@ export class Hub {
     }
 
     if (ctx.busy !== undefined) {
-      return { status: 'busy', app: ctx.busy, owner: ctx.busy.owner, idleSeconds: ctx.busy.idleSeconds, text: textOf(result) }
+      return { status: 'busy', app: ctx.busy, owner: ctx.busy.owner, idleSeconds: ctx.busy.idleSeconds }
     }
 
     if (ctx.denied !== undefined) {
-      return { status: 'denied', app: ctx.denied, text: textOf(result) }
+      return { status: 'denied', app: ctx.denied }
     }
 
     if (ctx.needs !== undefined) {
       // The call is run again only after the person allows, so the retried code runs from the start.
-      return { status: 'needs_approval', app: ctx.needs, text: textOf(result) }
+      return { status: 'needs_approval', app: ctx.needs }
     }
 
     if (ctx.unsupported !== undefined) {

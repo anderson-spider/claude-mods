@@ -1,7 +1,26 @@
-// Examples both halves of the wire contract are checked against: the plugin's
-// `callerOf` and `socketOf` (tests/contract.test.ts) and the helper's `isCaller`
-// and socket (contract.test.mjs). Types in contract.d.mts.
+// The one declared copy of everything that crosses the hooks/helper/scripts
+// boundary, and the examples both halves are checked against. The plugin half
+// (tests/contract.test.ts) compares hooks/model.ts and hooks/helper.ts with it;
+// the helper half (contract.test.mjs) compares helper.mjs, lib/approvals.mjs,
+// lib/hub.mjs, install.sh and uninstall.sh. Changing a route, a choice, the lease
+// or the label here fails both halves until each side follows. Types in contract.d.mts.
 export const contract = {
+  // Route name -> path the helper serves, POSTed over its Unix socket (`/status` answers any method).
+  routes: {
+    call: '/call',
+    reset: '/reset',
+    approve: '/approve',
+    release: '/release',
+    settings: '/settings',
+    forget: '/forget',
+    status: '/status',
+  },
+  // The person's answers to an approval question, as `/approve` takes them.
+  choices: ['session', 'always', 'deny'],
+  // How long an app stays with the caller that last used it (hub.mjs `LEASE_MS`, the text the model reads).
+  leaseMinutes: 2,
+  // The LaunchAgent label: install.sh and uninstall.sh declare it, hooks/helper.ts kickstarts it.
+  label: 'com.anderson-spider.codex-cu',
   // `callerOf(session, agent)` must give `caller`, and the helper must accept it.
   callers: [
     { session: 'sess-1', caller: 'sess-1' },

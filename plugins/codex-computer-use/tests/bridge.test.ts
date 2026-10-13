@@ -2,13 +2,17 @@ import { expect, test } from 'claude-code/testing'
 
 import { MAX_APPROVALS, serve } from '../hooks/bridge'
 import type { BridgeDeps } from '../hooks/bridge'
-import type { Reply } from '../hooks/model'
+import type { CallResult, Route } from '../hooks/model'
 import { APPROVAL_MS } from '../hooks/routing'
 
 const signal = { aborted: false } as AbortSignal
 const bridgeInput = { tool_use_id: 'tool-1', code: 'let app = await cua.getApp("TextEdit");', title: 'Open editor', timeout_ms: 1000 }
-const approval: Reply = { status: 'needs_approval', app: { bundleId: 'com.apple.TextEdit', displayName: 'TextEdit', canAlways: true } }
-const ok: Reply = { status: 'ok', isError: false, content: [{ type: 'text', text: 'done' }] }
+const approval: CallResult = { status: 'needs_approval', app: { bundleId: 'com.apple.TextEdit', displayName: 'TextEdit', canAlways: true } }
+const ok: CallResult = { status: 'ok', isError: false, content: [{ type: 'text', text: 'done' }] }
+
+/** A fake helper that answers what a test needs, even a reply its route never sends (the reset fallback); production code is typed per route. */
+const answering = (answer: (route: Route, body: unknown) => unknown) =>
+  (async (route: Route, body: unknown) => answer(route, body)) as unknown as BridgeDeps['helper']
 
 const bridgeDeps = (overrides: Partial<BridgeDeps>): BridgeDeps => ({
   enabled: async () => true,
@@ -32,10 +36,10 @@ test('serve refuses disabled calls before reading the session or reaching the he
 
 test('serve resets the caller and preserves the helper message and reset fallback', async () => {
   const posted: { route: string; body: unknown }[] = []
-  const deps = bridgeDeps({ helper: async (route, body) => (posted.push({ route, body }), { ...ok, message: 'cleared' }) })
+  const deps = bridgeDeps({ helper: answering((route, body) => (posted.push({ route, body }), { ...ok, message: 'cleared' })) })
   expect(await serve(deps, { ...bridgeInput, reset: true, agentId: 'agent a' }, signal)).toEqual({ result: 'cleared' })
   expect(posted).toEqual([{ route: '/reset', body: { caller: 'sess-1/agent_a' } }])
-  expect(await serve(bridgeDeps({ helper: async () => ok }), { ...bridgeInput, reset: true }, signal)).toEqual({ result: 'reset' })
+  expect(await serve(bridgeDeps({ helper: answering(() => ok) }), { ...bridgeInput, reset: true }, signal)).toEqual({ result: 'reset' })
 })
 
 test('serve asks for approval, sends the choice and retries the same call', async () => {
@@ -43,10 +47,10 @@ test('serve asks for approval, sends the choice and retries the same call', asyn
     const posted: { route: string; body: unknown }[] = []
     let calls = 0
     const deps = bridgeDeps({
-      helper: async (route, body) => {
+      helper: answering((route, body) => {
         posted.push({ route, body })
         return route === '/call' && calls++ === 0 ? approval : ok
-      },
+      }),
       ask: async (question, receivedSignal) => {
         expect(question).toEqual({ id: 'tool-1', bundleId: 'com.apple.TextEdit', displayName: 'TextEdit', canAlways: true, who: 'subagent agent-a' })
         expect(receivedSignal).toBe(signal)
@@ -66,7 +70,7 @@ test('serve asks for approval, sends the choice and retries the same call', asyn
 test('serve records denial without retrying the code', async () => {
   const posted: { route: string; body: unknown }[] = []
   const deps = bridgeDeps({
-    helper: async (route, body) => (posted.push({ route, body }), approval),
+    helper: answering((route, body) => (posted.push({ route, body }), approval)),
     ask: async () => 'deny',
   })
   expect(await serve(deps, bridgeInput, signal)).toEqual({
@@ -79,7 +83,7 @@ test('serve records denial without retrying the code', async () => {
 
 test('serve stops on an aborted question without approving or retrying', async () => {
   const routes: string[] = []
-  const deps = bridgeDeps({ helper: async route => (routes.push(route), approval), ask: async () => 'aborted' })
+  const deps = bridgeDeps({ helper: answering(route => (routes.push(route), approval)), ask: async () => 'aborted' })
   expect(await serve(deps, bridgeInput, signal)).toEqual({
     result: 'The person did not answer whether Codex may use TextEdit; nothing was done with it.', isError: true,
   })
@@ -89,7 +93,7 @@ test('serve stops on an aborted question without approving or retrying', async (
 test('serve timeout uses the five-minute limit and stops without approving or retrying', async () => {
   const routes: string[] = []
   const deps = bridgeDeps({
-    helper: async route => (routes.push(route), approval),
+    helper: answering(route => (routes.push(route), approval)),
     ask: async question => {
       expect(question.who).toBe('main session')
       return 'timeout'
@@ -105,7 +109,7 @@ test('serve stops after the existing maximum approval rounds', async () => {
   const routes: string[] = []
   let questions = 0
   const deps = bridgeDeps({
-    helper: async route => (routes.push(route), approval),
+    helper: answering(route => (routes.push(route), approval)),
     ask: async () => { questions++; return 'session' },
   })
   expect(await serve(deps, bridgeInput, signal)).toEqual({ result: 'codex-cu: too many approval rounds for one call.', isError: true })
