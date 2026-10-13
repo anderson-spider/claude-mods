@@ -81,7 +81,7 @@ In codex, a plain `crew:<role>` call goes to its registered twin, and a role wit
 
 ### HUD
 
-Two views over the same local state. The **band** above the prompt is one line: `done`/`running`/`left` totals, the running step IDs with their owner and the number of running helpers. `/crew-hud` opens a **pane** of bordered boxes, scrolled by the host while it has the keyboard and closed by Escape. Its head names a lone plan and counts running and recent helpers; its foot counts every helper:
+`/crew-hud` opens a **pane** of bordered boxes, scrolled by the host while it has the keyboard and closed by Escape. Its head names a lone plan and counts running and recent helpers; its foot counts every helper:
 
 - **Plan:** each plan's deliverables as a tree, with the plan's totals on its title row. A step hangs under its first dependency, one glyph shows its state (`●` done, `◎` working, `■` blocked, `○` queued, `?` unknown), a queued step says `waits <id>` or `ready` from its dependencies, a fully done branch folds into `[+N done]`, and a step a running helper was spawned for shows `← <role>`.
 - **Agents · running:** a card per running helper: role (`·codex` for a twin), plan step, model and effort, elapsed time, a context bar (the last step's input against a 200k window for Claude models; a twin's window is unknown), steps, input and output tokens, and its last three tool calls by name with the call and failure counts. A wide pane draws a card's figures on its first line, a narrow one on a second.
@@ -145,7 +145,7 @@ node scripts/check-version-bump.mjs origin/main
 - **Crew mode:** the mode from the option and `/crew-mode`, with and without Jev, and the calls it never moves.
 - **Planner and challenger twins on the login:** registration, request body and headers, tool calls and kept reasoning, and every failure answered without reaching the API.
 - **Helper twins:** registration only when the helper is ready (the planner and challenger fall back to the backend), the turn's request, caller and role for each of the three twins, polls and text, and failures. The helper's read-only lane, thread registry, limits, interrupt and refusals run against a fake `codex app-server` (`helper/test`).
-- **HUD:** plan states and owners, the running-helper rows and the band's width handling.
+- **HUD:** plan states and owners, the running-helper rows and the pane's width handling.
 
 Tests use the host with a fake `http.fetch` and a fake login file; nothing reaches Jev, OpenAI or a gateway.
 

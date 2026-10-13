@@ -2,7 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import {
-  GATEWAY, HOME, KEY, ROOT, answer, compose, hudBand, hudPane, hudCapture, jevWorld, ok, pause, record, spawnInput, step,
+  GATEWAY, HOME, KEY, ROOT, answer, compose, hudPane, hudCapture, jevWorld, ok, pause, record, spawnInput, step,
   twinWorld,
 } from './host'
 import type { Seen } from './host'
@@ -33,7 +33,7 @@ function nativeWorld(on: On, baseUrl?: string, o: { envFail?: boolean; twinFail?
   on('ui.status', () => ({ value: undefined }))
   on('command.register', (_$, e) => ({ value: { command: e.name } }))
   on('ui.log', (_$, e) => (w.logs.push(e.text), { value: undefined }))
-  // The band's plan read finds no plans directory, and says nothing.
+  // The HUD's plan read finds no plans directory, and says nothing.
   on('session.cwd', () => ({ value: ROOT }))
   on('fs.exists', () => ({ value: false }))
   return w
@@ -545,12 +545,8 @@ for (const type of ['crew:tester', 'crew:tester-codex', 'crew:tester-extra']) {
 }
 
 test('HUD records the twin a codex-mode switch chose, its sent suffix effort and the observed model', CODEX_MODE_JEV, async ($, on) => {
-  on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'Text', children: ['idle'] }))
   const world = await twinWorld($, on, { stepModel: 'gpt-6-luna', reply: async () => ok(answer(2.1)) })
   await $.agent.spawn(spawnInput())
-  const band = await $.ui.mount(hudBand())
-  expect(await band.find({ type: 'Text', text: /1 agent/ })).toBeDefined()
-  await band.unmount()
   const pane = await $.ui.mount(hudPane())
   expect(await pane.find({ type: 'Text', text: /·codex/ })).toBeDefined()
   await step($, 'a1', 'high', 'cx/gpt-6-luna-medium')
