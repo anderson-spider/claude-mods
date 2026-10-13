@@ -21,30 +21,31 @@ const world = run => {
   }
 }
 
-test('the developer lane is the repository, resolved through links', () =>
+test('the digger lane is the repository, resolved through links', () =>
   world(({ root, repo, options }) => {
-    assert.deepEqual(resolveLane('developer', repo, options), { ok: true, cwd: repo })
+    assert.deepEqual(resolveLane('digger', repo, options), { ok: true, cwd: repo })
     symlinkSync(repo, join(root, 'alias'))
-    assert.deepEqual(resolveLane('developer', join(root, 'alias'), options), { ok: true, cwd: repo })
+    assert.deepEqual(resolveLane('digger', join(root, 'alias'), options), { ok: true, cwd: repo })
   }))
 
-test('a repo that is missing, a file, relative or with .. is refused', () =>
+test('a repo that is missing, a file, relative or with .. is refused, and so is a role with no lane', () =>
   world(({ repo, options }) => {
     writeFileSync(join(repo, 'f'), 'x')
 
     for (const bad of [join(repo, 'nope'), join(repo, 'f'), 'repo', `${repo}/../repo`, '', undefined]) {
-      assert.equal(resolveLane('developer', bad, options).ok, false, String(bad))
+      assert.equal(resolveLane('digger', bad, options).ok, false, String(bad))
     }
+
+    assert.equal(resolveLane('developer', repo, options).ok, false)
   }))
 
 test('the filesystem root, the home and its parents are refused; a directory under the home is fine', () =>
   world(({ root, home, repo, options }) => {
     for (const bad of ['/', home, root]) {
-      assert.equal(resolveLane('developer', bad, options).ok, false, bad)
-      assert.equal(resolveLane('architect', bad, options).ok, false, bad)
+      assert.equal(resolveLane('digger', bad, options).ok, false, bad)
     }
 
-    assert.equal(resolveLane('developer', repo, options).ok, true)
+    assert.equal(resolveLane('digger', repo, options).ok, true)
   }))
 
 test('the Codex and Claude homes and the helper directory are refused, and so is a repo that contains one', () =>
@@ -53,50 +54,24 @@ test('the Codex and Claude homes and the helper directory are refused, and so is
     mkdirSync(join(home, '.codex', 'sub'))
 
     for (const bad of [join(home, '.codex'), join(home, '.codex', 'sub'), join(home, '.claude'), join(root, 'helper')]) {
-      assert.equal(resolveLane('developer', bad, options).ok, false, bad)
+      assert.equal(resolveLane('digger', bad, options).ok, false, bad)
     }
-  }))
-
-test('the architect lane is .crew, made when missing, and never a link or a file', () =>
-  world(({ root, repo, options }) => {
-    assert.deepEqual(resolveLane('architect', repo, options), { ok: true, cwd: join(repo, '.crew') })
-    assert.deepEqual(resolveLane('architect', repo, options), { ok: true, cwd: join(repo, '.crew') })
-    rmSync(join(repo, '.crew'), { recursive: true })
-    symlinkSync(root, join(repo, '.crew'))
-
-    const linked = resolveLane('architect', repo, options)
-    assert.equal(linked.ok, false)
-    assert.match(linked.message, /link/)
-    rmSync(join(repo, '.crew'))
-    writeFileSync(join(repo, '.crew'), 'file')
-    assert.equal(resolveLane('architect', repo, options).ok, false)
   }))
 
 test('a repository with a project Codex config, or under a directory that has one, is refused; the home\'s own is not a project', () =>
   world(({ home, repo, options }) => {
     mkdirSync(join(home, '.codex'), { recursive: true })
     writeFileSync(join(home, '.codex', 'config.toml'), '')
-    assert.equal(resolveLane('developer', repo, options).ok, true)
+    assert.equal(resolveLane('digger', repo, options).ok, true)
 
     mkdirSync(join(repo, '.codex'))
     writeFileSync(join(repo, '.codex', 'config.toml'), '[mcp_servers.x]\ncommand="/usr/bin/touch"\n')
-    const refused = resolveLane('developer', repo, options)
+    const refused = resolveLane('digger', repo, options)
     assert.equal(refused.ok, false)
     assert.match(refused.message, /outside the sandbox/)
 
     rmSync(join(repo, '.codex'), { recursive: true })
     mkdirSync(join(home, 'work', '.codex'))
     writeFileSync(join(home, 'work', '.codex', 'config.toml'), '')
-    assert.equal(resolveLane('architect', repo, options).ok, false)
-  }))
-
-test('the architect lane is checked for a project Codex config of its own, not only the repository above it', () =>
-  world(({ repo, options }) => {
-    mkdirSync(join(repo, '.crew', '.codex'), { recursive: true })
-    writeFileSync(join(repo, '.crew', '.codex', 'config.toml'), '[mcp_servers.x]\ncommand="/usr/bin/touch"\n')
-
-    assert.equal(resolveLane('developer', repo, options).ok, true)
-    const refused = resolveLane('architect', repo, options)
-    assert.equal(refused.ok, false)
-    assert.match(refused.message, /\.crew\/\.codex\/config\.toml/)
+    assert.equal(resolveLane('digger', repo, options).ok, false)
   }))

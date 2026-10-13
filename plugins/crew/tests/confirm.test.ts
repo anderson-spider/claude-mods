@@ -163,8 +163,8 @@ test('a dated id with the effort inside the date (gpt-6-astra-high-2026-05-01) i
 })
 
 test('confirmation compares effort against the fixed role default model, not a classifier model choice', () => {
-  const developer = SPECIALISTS.find(spec => spec.name === 'developer')!
-  const planned = { model: developer.model, effort: 'high' }
-  expect(ranAsPlanned(planned, { model: 'claude-sonnet-5-5', effort: 'high' })).toBe(true)
-  expect(ranAsPlanned(planned, { model: 'claude-opus-5-5', effort: 'high' })).toBe(false)
+  const planner = SPECIALISTS.find(spec => spec.name === 'planner')!
+  const planned = { model: planner.model, effort: 'high' }
+  expect(ranAsPlanned(planned, { model: 'claude-opus-5-5', effort: 'high' })).toBe(true)
+  expect(ranAsPlanned(planned, { model: 'claude-sonnet-5-5', effort: 'high' })).toBe(false)
 })

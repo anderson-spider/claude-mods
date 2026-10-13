@@ -43,7 +43,7 @@ test('the roles the helper has a lane for are the roles the contract lists', () 
 
 test('every reply has the key set the contract lists', async () => {
   const { engine } = engineWith()
-  const body = { caller: 'a1', role: 'developer', repo: '/repo', model: 'gpt-6-sol', effort: 'low', instructions: 'i', prompt: 'p' }
+  const body = { caller: 'a1', role: 'digger', repo: '/repo', model: 'gpt-6-luna', effort: 'low', instructions: 'i', prompt: 'p' }
 
   assert.deepEqual(keys(body), [...contract.startRequest].sort())
   const started = await send('/start', body, { engine })
@@ -71,7 +71,7 @@ test('every reply has the key set the contract lists', async () => {
 
 test('a full helper answers with its message and the full key set', async () => {
   const { engine } = engineWith({ autoComplete: false })
-  const body = { role: 'developer', repo: '/repo', model: 'gpt-6-sol', prompt: 'p' }
+  const body = { role: 'digger', repo: '/repo', model: 'gpt-6-luna', prompt: 'p' }
 
   for (const caller of ['a', 'b', 'c', 'd']) {
     assert.equal((await send('/start', { ...body, caller }, { engine })).body.status, 'started')

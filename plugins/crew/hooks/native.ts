@@ -1,10 +1,8 @@
-// Fixed model ids for the five roles' Codex twins. Pure: no host access.
+// Fixed model ids for the three helpers' Codex twins. Pure: no host access.
 export const CODEX_MODELS = {
-  'code-reader': 'gpt-6-luna',
-  research: 'gpt-6-luna',
-  designer: 'gpt-6-sol',
-  developer: 'gpt-6-sol',
-  architect: 'gpt-6-astra',
+  planner: 'gpt-6-astra',
+  challenger: 'gpt-6-astra',
+  digger: 'gpt-6-luna',
 } as const
 
 /** The gateway's provider prefix on the wire; the bare id names the twin in tags, notices and confirmations. */

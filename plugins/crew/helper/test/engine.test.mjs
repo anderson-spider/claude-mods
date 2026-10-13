@@ -5,7 +5,7 @@ import { Engine } from '../lib/engine.mjs'
 import { RpcClient } from '../lib/rpc.mjs'
 import { fakeChild, nominal, tick, until } from './fake-server.mjs'
 
-const base = { caller: 'a1', role: 'developer', repo: '/repo', model: 'gpt-6-sol', effort: 'medium', prompt: 'do it' }
+const base = { caller: 'a1', role: 'digger', repo: '/repo', model: 'gpt-6-luna', effort: 'medium', prompt: 'do it' }
 
 /** An engine over one fake server; `clock.t` is the engine's time. */
 const world = (options = {}, limit) => {
@@ -39,22 +39,22 @@ const finish = async (engine, caller = 'a1') => {
 test('start then poll: one thread in the lane cwd with the fixed sandbox, and the turn answers with its text', async () => {
   const { fake, engine } = world({ autoComplete: true, text: 'all done' })
 
-  assert.deepEqual(await engine.start({ ...base, instructions: 'be a developer' }), { status: 'started' })
+  assert.deepEqual(await engine.start({ ...base, instructions: 'be a digger' }), { status: 'started' })
   assert.deepEqual(fake.methods(), ['initialize', 'initialized', 'thread/start', 'turn/start'])
   assert.deepEqual(fake.params('thread/start')[0], {
     cwd: '/repo',
-    model: 'gpt-6-sol',
+    model: 'gpt-6-luna',
     approvalPolicy: 'never',
     approvalsReviewer: 'user',
-    sandbox: 'workspace-write',
+    sandbox: 'read-only',
     ephemeral: true,
-    developerInstructions: 'be a developer',
+    developerInstructions: 'be a digger',
   })
   assert.deepEqual(fake.params('turn/start')[0], {
     threadId: 'th-1',
-    model: 'gpt-6-sol',
+    model: 'gpt-6-luna',
     effort: 'medium',
-    sandboxPolicy: { type: 'workspaceWrite', writableRoots: [], networkAccess: false, excludeTmpdirEnvVar: true, excludeSlashTmp: true },
+    sandboxPolicy: { type: 'readOnly', networkAccess: false },
     input: [{ type: 'text', text: 'do it', text_elements: [] }],
   })
 
@@ -63,14 +63,7 @@ test('start then poll: one thread in the lane cwd with the fixed sandbox, and th
   assert.deepEqual(engine.poll('a1'), { status: 'idle' })
 })
 
-test('the architect thread runs in .crew', async () => {
-  const { fake, engine } = world({ autoComplete: true })
-  await engine.start({ ...base, caller: 'r1', role: 'architect' })
-
-  assert.equal(fake.params('thread/start')[0].cwd, '/repo/.crew')
-})
-
-test('a follow-up for the same caller reuses its thread; a changed role starts a new one', async () => {
+test('a follow-up for the same caller reuses its thread; a changed repository starts a new one', async () => {
   const { fake, engine } = world({ autoComplete: true })
   await engine.start(base)
   await finish(engine)
@@ -80,7 +73,7 @@ test('a follow-up for the same caller reuses its thread; a changed role starts a
   assert.equal(fake.params('thread/start').length, 1)
   assert.deepEqual(fake.params('turn/start').map(p => p.threadId), ['th-1', 'th-1'])
 
-  await engine.start({ ...base, role: 'architect' })
+  await engine.start({ ...base, repo: '/other' })
   assert.equal(fake.params('thread/start').length, 2)
 })
 

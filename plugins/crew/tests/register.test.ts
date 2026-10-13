@@ -39,7 +39,7 @@ function nativeWorld(on: On, baseUrl?: string, o: { envFail?: boolean; twinFail?
   return w
 }
 
-const BASES = ['code-reader', 'research', 'designer', 'developer', 'architect']
+const BASES = ['planner', 'challenger', 'digger']
 
 const TWINS = BASES.map(role => `${role}-codex`)
 
@@ -55,12 +55,12 @@ for (const url of ['https://ai.example.ts.net', 'http://127.0.0.1:41237', 'http:
     expect(w.envReads).toEqual(['ANTHROPIC_BASE_URL'])
     expect(w.fetches).toEqual([])
     const by = (name: string) => w.registered.find(a => a.name === name)!
-    expect(by('developer-codex')).toMatchObject({ model: 'cx/gpt-6-sol', effort: 'medium', tools: by('developer').tools, prompt: by('developer').prompt })
-    expect(by('architect-codex')).toMatchObject({ model: 'cx/gpt-6-astra', tools: by('architect').tools, prompt: by('architect').prompt })
+    expect(by('digger-codex')).toMatchObject({ model: 'cx/gpt-6-luna', effort: 'high', tools: by('digger').tools, prompt: by('digger').prompt })
+    expect(by('challenger-codex')).toMatchObject({ model: 'cx/gpt-6-astra', tools: by('challenger').tools, prompt: by('challenger').prompt })
     expect(w.registered.some(agent => agent.name === 'tester' || agent.name === 'tester-codex')).toBe(false)
-    expect(by('architect-codex').tools).not.toContain('Edit')
-    expect(by('developer').model).toBe('sonnet')
-    expect(by('developer-codex').description).toContain('gpt-6-sol')
+    expect(by('challenger-codex').tools).not.toContain('Edit')
+    expect(by('digger').model).toBe('haiku')
+    expect(by('digger-codex').description).toContain('gpt-6-luna')
   })
 }
 
@@ -74,14 +74,14 @@ for (const url of [undefined, '', 'https://api.anthropic.com', 'https://API.ANTH
   })
 }
 
-test('an env read that fails registers the five specialists and no -codex type', async ($, on) => {
+test('an env read that fails registers the three helpers and no -codex type', async ($, on) => {
   const w = nativeWorld(on, 'https://ai.example.ts.net', { envFail: true })
   await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true } as never)
 
   expect(w.registered.map(a => a.name)).toEqual(BASES)
 })
 
-test('a -codex type whose registration fails leaves the five specialists registered and the session started', async ($, on) => {
+test('a -codex type whose registration fails leaves the three helpers registered and the session started', async ($, on) => {
   const w = nativeWorld(on, 'https://ai.example.ts.net', { twinFail: true })
   const started = await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true } as never)
 
@@ -90,21 +90,21 @@ test('a -codex type whose registration fails leaves the five specialists registe
 })
 
 test('one twin registration failure leaves every other twin and the session intact, without leaking exception text', async ($, on) => {
-  const w = nativeWorld(on, 'https://ai.example.ts.net', { failName: 'designer-codex' })
+  const w = nativeWorld(on, 'https://ai.example.ts.net', { failName: 'planner-codex' })
   const started = await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true } as never)
   expect(started).toMatchObject({ cwd: '/proj' })
-  expect(w.registered.map(a => a.name)).toEqual([...BASES, ...TWINS.filter(name => name !== 'designer-codex')])
-  expect(w.logs).toEqual(['crew: Codex twin crew:designer-codex not registered (registration failed)'])
+  expect(w.registered.map(a => a.name)).toEqual([...BASES, ...TWINS.filter(name => name !== 'planner-codex')])
+  expect(w.logs).toEqual(['crew: Codex twin crew:planner-codex not registered (registration failed)'])
   expect(w.fetches).toEqual([])
 })
 
-test('the -codex section follows the registration: its own section after the lead, only behind a gateway base URL', async ($, on) => {
+test('the -codex section follows the registration: its own section after the main section, only behind a gateway base URL', async ($, on) => {
   nativeWorld(on, 'https://ai.example.ts.net')
   on('prompt.compose', () => ({ sections: [{ id: 'intro', text: 'base', scope: 'shared' as const }] }))
   await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true } as never)
   const composed = await compose($, ['Agent', 'Read'])
 
-  expect(composed.sections.map(section => section.id)).toEqual(['intro', 'crew:lead', 'crew:native-codex'])
+  expect(composed.sections.map(section => section.id)).toEqual(['intro', 'crew:main', 'crew:native-codex'])
   const lead = composed.sections[1]
   const twins = composed.sections[2]
   expect(lead?.text).not.toMatch(/codex/i)
@@ -114,11 +114,11 @@ test('the -codex section follows the registration: its own section after the lea
   expect((await compose($, ['Agent', 'Read'])).sections[2]?.text).toBe(twins?.text)
 })
 
-test('no -codex section without a gateway base URL: the request gets the lead section alone', async ($, on) => {
+test('no -codex section without a gateway base URL: the request gets the main section alone', async ($, on) => {
   nativeWorld(on, 'https://api.anthropic.com')
   on('prompt.compose', () => ({ sections: [] }))
   await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true } as never)
-  expect((await compose($, ['Agent'])).sections.map(section => section.id)).toEqual(['crew:lead'])
+  expect((await compose($, ['Agent'])).sections.map(section => section.id)).toEqual(['crew:main'])
 })
 
 test('no -codex section on a request without the Agent tool, for a teammate or a bare prompt, even behind a gateway URL', async ($, on) => {
@@ -135,7 +135,7 @@ test('a fresh activation has no -codex section before session.start', async ($, 
   nativeWorld(on, 'https://ai.example.ts.net')
   on('prompt.compose', () => ({ sections: [] }))
 
-  expect((await compose($, ['Agent'])).sections.map(section => section.id)).toEqual(['crew:lead'])
+  expect((await compose($, ['Agent'])).sections.map(section => section.id)).toEqual(['crew:main'])
 })
 
 test('an uppercase scheme on a gateway registers the twins and adds their section', async ($, on) => {
@@ -150,7 +150,7 @@ for (const url of ['ws://ai.example.ts.net', 'file:///gateway', 'https://api.ant
     on('prompt.compose', () => ({ sections: [] }))
     await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true } as never)
     expect(w.registered.map(a => a.name)).toEqual(BASES)
-    expect((await compose($, ['Agent'])).sections.map(section => section.id)).toEqual(['crew:lead'])
+    expect((await compose($, ['Agent'])).sections.map(section => section.id)).toEqual(['crew:main'])
   })
 }
 
@@ -162,17 +162,17 @@ test('twins refused by the host compose no native section and are not sent to Je
   await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true } as never)
 
   expect(w.registered.map(a => a.name)).toEqual(BASES)
-  expect((await compose($, ['Agent'])).sections.map(section => section.id)).toEqual(['crew:lead'])
+  expect((await compose($, ['Agent'])).sections.map(section => section.id)).toEqual(['crew:main'])
   expect(w.logs.filter(line => line.includes('Codex twin crew:') && line.includes('not registered')).length).toBe(TWINS.length)
 })
 
 test('before session.start no native section, after it behind a gateway the section lists the twins', async ($, on) => {
   nativeWorld(on, 'https://ai.example.ts.net')
   on('prompt.compose', () => ({ sections: [] }))
-  expect((await compose($, ['Agent'])).sections.map(section => section.id)).toEqual(['crew:lead'])
+  expect((await compose($, ['Agent'])).sections.map(section => section.id)).toEqual(['crew:main'])
   await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true } as never)
   const sections = (await compose($, ['Agent'])).sections
-  expect(sections.map(section => section.id)).toEqual(['crew:lead', 'crew:native-codex'])
+  expect(sections.map(section => section.id)).toEqual(['crew:main', 'crew:native-codex'])
   for (const name of TWINS) expect(sections[1]?.text).toContain(`crew:${name}`)
   expect(sections[0]?.text).not.toMatch(/codex/i)
 })
@@ -188,68 +188,68 @@ const runMode = async ($: Engine, args: string) => (await $.command.run({ comman
 test('the mode option defaults to claude: a plain call stays on Claude, untouched, and the status line shows nothing', async ($, on) => {
   const { seen } = await twinWorld($, on)
   await $.agent.spawn(spawnInput())
-  expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:developer', description: 'audit auth' })
+  expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:digger', description: 'audit auth' })
   expect(seen.spawned[0]?.model).toBeUndefined()
   expect([seen.fetches, seen.notices, seen.writes]).toEqual([[], [], []])
   expect(seen.statusLine).toEqual([undefined])
   expect(seen.commands).toEqual(['crew-mode'])
 })
 
-test('in the codex mode without Jev a plain call becomes its twin on medium: tagged, noticed, confirmed, with no request', CODEX_MODE, async ($, on) => {
-  const { seen } = await twinWorld($, on, { stepModel: 'gpt-6-sol' })
+test('in the codex mode without Jev a plain call becomes its twin on high: tagged, noticed, confirmed, with no request', CODEX_MODE, async ($, on) => {
+  const { seen } = await twinWorld($, on, { stepModel: 'gpt-6-luna' })
   await $.agent.spawn(spawnInput())
-  await step($, 'a1', 'medium', 'cx/gpt-6-sol-medium')
+  await step($, 'a1', 'high', 'cx/gpt-6-luna-high')
 
-  expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:developer-codex', model: 'cx/gpt-6-sol-medium', description: 'audit auth · gpt-6-sol/medium' })
-  expect(seen.notices).toEqual(['crew:developer -> Codex (crew mode) · gpt-6-sol · medium'])
-  expect(seen.transcript).toEqual(['crew: audit auth: confirmed gpt-6-sol · medium'])
-  expect(seen.logs).toContain('crew mode: crew:developer -> crew:developer-codex')
+  expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:digger-codex', model: 'cx/gpt-6-luna-high', description: 'audit auth · gpt-6-luna/high' })
+  expect(seen.notices).toEqual(['crew:digger -> Codex (crew mode) · gpt-6-luna · high'])
+  expect(seen.transcript).toEqual(['crew: audit auth: confirmed gpt-6-luna · high'])
+  expect(seen.logs).toContain('crew mode: crew:digger -> crew:digger-codex')
   expect(seen.fetches).toEqual([])
   expect(seen.statusLine).toEqual(['crew: codex'])
 })
 
 test('in the codex mode Jev sizes the twin as its base role while the twin model stays fixed, and the record names the type asked for', CODEX_MODE_JEV, async ($, on) => {
-  const { seen } = await twinWorld($, on, { reply: async () => ok(answer(3.9)) })
+  const { seen } = await twinWorld($, on, { reply: async () => ok(answer(2.1)) })
   await $.agent.spawn(spawnInput())
 
-  expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:developer-codex', model: 'cx/gpt-6-sol-high', description: 'audit auth · gpt-6-sol/high' })
-  expect(JSON.parse(seen.fetches[0]?.body ?? '{}').state.agent).toEqual({ type: 'developer', description: 'audit auth' })
-  expect(seen.notices).toEqual(['crew:developer -> Codex (crew mode) · gpt-6-sol · high (jev)'])
-  expect(record(seen)).toMatchObject({ v: 4, agent: 'developer-codex', requested: 'crew:developer', provider: 'codex', bind: 'suffix', effortApplied: 'high' })
+  expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:digger-codex', model: 'cx/gpt-6-luna-medium', description: 'audit auth · gpt-6-luna/medium' })
+  expect(JSON.parse(seen.fetches[0]?.body ?? '{}').state.agent).toEqual({ type: 'digger', description: 'audit auth' })
+  expect(seen.notices).toEqual(['crew:digger -> Codex (crew mode) · gpt-6-luna · medium (jev)'])
+  expect(record(seen)).toMatchObject({ v: 4, agent: 'digger-codex', requested: 'crew:digger', provider: 'codex', bind: 'suffix', effortApplied: 'medium' })
 })
 
 test('in the codex mode every fixed-map role moves to its own twin', CODEX_MODE, async ($, on) => {
   const { seen } = await twinWorld($, on)
   for (const [i, role] of BASES.entries()) await $.agent.spawn(spawnInput({ subagentType: `crew:${role}`, tool_use_id: `tu${i}` }))
   expect(seen.spawned.map(spawned => [spawned.subagentType, spawned.model])).toEqual(
-    Object.entries(CODEX_MODELS).map(([role, model]) => [`crew:${role}-codex`, `${CODEX_PREFIX}${model}-medium`]),
+    Object.entries(CODEX_MODELS).map(([role, model]) => [`crew:${role}-codex`, `${CODEX_PREFIX}${model}-high`]),
   )
 })
 
-test('in the codex mode calls that may not move are untouched: explicit model, fork, workflow agent, teammate, a twin the lead named, another plugin\'s type', CODEX_MODE, async ($, on) => {
+test('in the codex mode calls that may not move are untouched: explicit model, fork, workflow agent, teammate, a twin the main session named, another plugin\'s type', CODEX_MODE, async ($, on) => {
   const { seen } = await twinWorld($, on)
   const calls = [
     { model: 'opus' }, { fork: true }, { workflow: { runId: 'wf_1', agentIndex: 1 } }, { isTeammate: true },
-    { subagentType: 'crew:architect-codex' }, { subagentType: 'acme:developer' },
+    { subagentType: 'crew:challenger-codex' }, { subagentType: 'acme:digger' },
   ]
   for (const [i, over] of calls.entries()) await $.agent.spawn(spawnInput({ ...over, tool_use_id: `tu${i}` }))
-  expect(seen.spawned.map(spawned => spawned.subagentType)).toEqual(['crew:developer', 'crew:developer', 'crew:developer', 'crew:developer', 'crew:architect-codex', 'acme:developer'])
+  expect(seen.spawned.map(spawned => spawned.subagentType)).toEqual(['crew:digger', 'crew:digger', 'crew:digger', 'crew:digger', 'crew:challenger-codex', 'acme:digger'])
   expect(seen.spawned.map(spawned => spawned.description)).toEqual(Array(6).fill('audit auth'))
   expect([seen.fetches, seen.notices, seen.writes]).toEqual([[], [], []])
 })
 
 test('in the codex mode a role whose twin was refused stays on Claude while the others move', CODEX_MODE, async ($, on) => {
-  const { seen } = await twinWorld($, on, { twinFail: name => name === 'developer-codex' })
+  const { seen } = await twinWorld($, on, { twinFail: name => name === 'digger-codex' })
   await $.agent.spawn(spawnInput())
-  await $.agent.spawn(spawnInput({ subagentType: 'crew:architect', tool_use_id: 'tu2' }))
-  expect(seen.spawned.map(spawned => spawned.subagentType)).toEqual(['crew:developer', 'crew:architect-codex'])
+  await $.agent.spawn(spawnInput({ subagentType: 'crew:challenger', tool_use_id: 'tu2' }))
+  expect(seen.spawned.map(spawned => spawned.subagentType)).toEqual(['crew:digger', 'crew:challenger-codex'])
 })
 
 test('without registered twins the codex mode moves nothing and reads no mode', CODEX_MODE, async ($, on) => {
   const { seen } = jevWorld(on, { register: true })
   await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true } as never)
   await $.agent.spawn(spawnInput())
-  expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:developer', description: 'audit auth' })
+  expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:digger', description: 'audit auth' })
   expect([seen.fetches, seen.notices]).toEqual([[], []])
   expect(await runMode($, 'codex')).toBe('crew mode: codex for this session, but no Codex twin is registered, so every call stays on Claude. New sessions start in codex (the mode option).')
 })
@@ -262,14 +262,14 @@ test('/crew-mode switches the running session: no argument toggles, a word sets 
   await $.agent.spawn(spawnInput({ tool_use_id: 'tu2' }))
   expect(await runMode($, ' CODEX ')).toContain('crew mode: codex for this session.')
   expect(await runMode($, 'gpt')).toBe('crew mode: codex. Usage: /crew-mode [claude|codex]; no argument toggles.')
-  expect(seen.spawned.map(spawned => spawned.subagentType)).toEqual(['crew:developer-codex', 'crew:developer'])
+  expect(seen.spawned.map(spawned => spawned.subagentType)).toEqual(['crew:digger-codex', 'crew:digger'])
   expect(seen.statusLine).toEqual([undefined, 'crew: codex', undefined, 'crew: codex'])
 })
 
 test('a codex mode that the repository settings declare, or settings that cannot be read, start the session in claude', CODEX_MODE, async ($, on) => {
   const { seen } = await twinWorld($, on, { project: { pluginConfigs: { crew: { options: { mode: 'codex' } } } } })
   await $.agent.spawn(spawnInput())
-  expect(seen.spawned[0]?.subagentType).toBe('crew:developer')
+  expect(seen.spawned[0]?.subagentType).toBe('crew:digger')
   expect(seen.statusLine).toEqual([undefined])
   expect(seen.logs).toContain('crew: the session starts in claude: the repository settings declare the mode, or cannot be read')
 })
@@ -277,19 +277,19 @@ test('a codex mode that the repository settings declare, or settings that cannot
 test('settings that cannot be read start a codex-option session in claude too', CODEX_MODE, async ($, on) => {
   const { seen } = await twinWorld($, on, { settingsFail: true })
   await $.agent.spawn(spawnInput())
-  expect(seen.spawned[0]?.subagentType).toBe('crew:developer')
+  expect(seen.spawned[0]?.subagentType).toBe('crew:digger')
 })
 
 test('a fresh activation has no mode before session.start: a plain call stays on Claude', CODEX_MODE, async ($, on) => {
   const { seen } = jevWorld(on, { env: GATEWAY, register: true })
   await $.agent.spawn(spawnInput())
-  expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:developer', description: 'audit auth' })
+  expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:digger', description: 'audit auth' })
 })
 
 test('a switched call without a key says once that no record was written, not again at its confirmation', CODEX_MODE, async ($, on) => {
-  const { seen } = await twinWorld($, on, { stepModel: 'gpt-6-sol' })
+  const { seen } = await twinWorld($, on, { stepModel: 'gpt-6-luna' })
   await $.agent.spawn(spawnInput())
-  await step($, 'a1', 'medium', 'cx/gpt-6-sol-medium')
+  await step($, 'a1', 'high', 'cx/gpt-6-luna-high')
   expect(seen.logs.filter(line => line.includes('no trusted home'))).toEqual(['crew: decision not logged (no trusted home)'])
   expect(seen.writes).toEqual([])
 })
@@ -331,7 +331,7 @@ const sse = (...events: Record<string, unknown>[]) => events.map(event => `data:
 
 const codexDone = (item: Record<string, unknown>) => ({ type: 'response.output_item.done', item })
 
-const codexCompleted = { type: 'response.completed', response: { model: 'gpt-6-luna', usage: { input_tokens: 50, output_tokens: 9, input_tokens_details: { cached_tokens: 10 } } } }
+const codexCompleted = { type: 'response.completed', response: { model: 'gpt-6-astra', usage: { input_tokens: 50, output_tokens: 9, input_tokens_details: { cached_tokens: 10 } } } }
 
 const ANSWER = sse(codexDone({ type: 'message', content: [{ type: 'output_text', text: 'auth is at src/auth.ts:12' }] }), codexCompleted)
 
@@ -350,7 +350,7 @@ async function loginWorld($: Engine, on: On, o: LoginOptions = {}) {
     register: true,
     files: { [AUTH_PATH]: authFile() },
     reply: async () => ok(ANSWER),
-    agents: [{ id: 'cr1', type: 'crew:code-reader-codex', description: 'find auth' }],
+    agents: [{ id: 'cr1', type: 'crew:planner-codex', description: 'find auth' }],
     now: () => LOGIN_NOW,
     ...o,
   })
@@ -362,7 +362,7 @@ async function loginWorld($: Engine, on: On, o: LoginOptions = {}) {
 
 /** One step through the plugin: what it yielded, and what it returned. */
 
-async function stepThrough($: Engine, agentId: string | undefined, model = 'cx/gpt-6-luna', effort: string | undefined = 'medium') {
+async function stepThrough($: Engine, agentId: string | undefined, model = 'cx/gpt-6-astra', effort: string | undefined = 'high') {
   const stream = $.turn.step({ turnId: 't1', index: 0, model, messageCount: 1, ...(effort ? { effort } : {}), ...(agentId ? { agentId } : {}) } as never)
   const chunks: unknown[] = []
   let item = await stream.next()
@@ -375,10 +375,11 @@ async function stepThrough($: Engine, agentId: string | undefined, model = 'cx/g
 
 const codexBodyOf = (seen: Seen, i = 0) => JSON.parse(seen.fetches[i]?.body ?? '{}')
 
-test('with codexLogin and no gateway only crew:code-reader-codex registers, on its Codex id and described as on the login', LOGIN, async ($, on) => {
+test('with codexLogin and no gateway only the planner and challenger twins register, on their Codex ids and described as on the login', LOGIN, async ($, on) => {
   const { seen } = await loginWorld($, on)
   expect(seen.registered.filter(agent => agent.name.endsWith('-codex'))).toEqual([
-    { name: 'code-reader-codex', model: 'cx/gpt-6-luna', description: 'crew:code-reader on gpt-6-luna (OpenAI, on your Codex login): same job, tools and write lane.' },
+    { name: 'planner-codex', model: 'cx/gpt-6-astra', description: 'crew:planner on gpt-6-astra (OpenAI, on your Codex login): same job, read-only.' },
+    { name: 'challenger-codex', model: 'cx/gpt-6-astra', description: 'crew:challenger on gpt-6-astra (OpenAI, on your Codex login): same job, read-only.' },
   ])
   expect(seen.fetches).toEqual([])
 })
@@ -391,22 +392,22 @@ test('a step of the twin on the login is answered by crew: nothing goes to the A
   expect(seen.fetches.map(fetch => fetch.url)).toEqual(['https://chatgpt.com/backend-api/codex/responses'])
   expect(seen.fetches[0]?.headers).toMatchObject({ Authorization: `Bearer ${ACCESS_TOKEN}`, 'Chatgpt-Account-Id': 'acct-1', Originator: 'codex-tui' })
   const body = codexBodyOf(seen)
-  expect(body).toMatchObject({ model: 'gpt-6-luna', instructions: '', store: false, stream: true, reasoning: { effort: 'medium', summary: 'auto' } })
+  expect(body).toMatchObject({ model: 'gpt-6-astra', instructions: '', store: false, stream: true, reasoning: { effort: 'high', summary: 'auto' } })
   expect(body.input[0].role).toBe('developer')
-  expect(body.input[0].content[0].text).toContain('Find the requested code.')
+  expect(body.input[0].content[0].text).toContain('Plan the change the main session asks about')
   expect(body.input[0].content[0].text).toContain(`Working directory: ${ROOT}. Today's date: 2026-10-12.`)
   expect(body.input[1]).toEqual({ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'where is auth?' }] })
   expect(body.tools.map((tool: { name: string; description: string }) => [tool.name, tool.description])).toEqual([['Read', 'Reads a file.'], ['Grep', 'Searches files.'], ['Glob', 'Glob']])
   expect(chunks[0]).toEqual({ kind: 'text', index: 0, text: 'auth is at src/auth.ts:12' })
   expect(result).toEqual({
     turnId: 't1', index: 0, answer: 'auth is at src/auth.ts:12', toolUses: [], stopReason: 'end_turn',
-    usage: { model: 'gpt-6-luna', input_tokens: 40, output_tokens: 9, cache_read_input_tokens: 10, cache_creation_input_tokens: 0 },
+    usage: { model: 'gpt-6-astra', input_tokens: 40, output_tokens: 9, cache_read_input_tokens: 10, cache_creation_input_tokens: 0 },
   })
   expect(JSON.stringify([seen.logs, seen.notices, seen.transcript, body])).not.toContain(ACCESS_TOKEN)
   expect(JSON.stringify(seen.fetches)).not.toContain('never-sent')
 })
 
-test('a final answer of the code-reader twin is handed back through SubagentHandback when the conversation names it', LOGIN, async ($, on) => {
+test('a final answer of the planner twin is handed back through SubagentHandback when the conversation names it', LOGIN, async ($, on) => {
   const reminder = 'SubagentHandback: when your work is complete, call SubagentHandback({message: <your full report>}).'
   await loginWorld($, on, { messages: () => [{ role: 'user', content: [{ type: 'text', text: `where is auth?\n<system-reminder>${reminder}</system-reminder>` }] }] })
   const { result } = await stepThrough($, 'cr1')
@@ -420,9 +421,9 @@ test('a final answer of the code-reader twin is handed back through SubagentHand
 
 test('the spawn\'s effort suffix decides the effort sent to Codex, before the host\'s', LOGIN, async ($, on) => {
   const { seen } = await loginWorld($, on)
-  await stepThrough($, 'cr1', 'cx/gpt-6-luna-high', 'medium')
-  await stepThrough($, 'cr1', 'cx/gpt-6-luna', 'max')
-  expect([codexBodyOf(seen, 0).reasoning.effort, codexBodyOf(seen, 1).reasoning.effort]).toEqual(['high', 'medium'])
+  await stepThrough($, 'cr1', 'cx/gpt-6-astra-medium', 'high')
+  await stepThrough($, 'cr1', 'cx/gpt-6-astra', 'max')
+  expect([codexBodyOf(seen, 0).reasoning.effort, codexBodyOf(seen, 1).reasoning.effort]).toEqual(['medium', 'high'])
 })
 
 test('a tool call comes back as a tool use, and its reasoning goes back before the call on the next step, in the same backend session', LOGIN, async ($, on) => {
@@ -469,17 +470,17 @@ test('steps of the main loop, a Claude role, a twin on the gateway and an agent 
   const { seen } = await loginWorld($, on, {
     env: GATEWAY,
     agents: [
-      { id: 'cr1', type: 'crew:code-reader-codex', description: 'a' },
-      { id: 'c1', type: 'crew:code-reader', description: 'b' },
-      { id: 'd1', type: 'crew:developer-codex', description: 'c' },
+      { id: 'cr1', type: 'crew:planner-codex', description: 'a' },
+      { id: 'c1', type: 'crew:planner', description: 'b' },
+      { id: 'd1', type: 'crew:digger-codex', description: 'c' },
     ],
   })
   for (const agentId of [undefined, 'c1', 'd1', 'unknown']) await stepThrough($, agentId, 'sonnet')
   expect(seen.steps).toHaveLength(4)
   expect(seen.fetches).toEqual([])
-  // Behind a gateway the other twins register there, the code-reader twin on the login.
+  // Behind a gateway the digger twin registers there (no helper in this world), the planner and challenger twins on the login.
   expect(seen.registered.filter(agent => agent.name.endsWith('-codex')).map(agent => [agent.name, agent.description.includes('Codex login')])).toEqual(
-    TWINS.map(name => [name, name === 'code-reader-codex']),
+    TWINS.map(name => [name, name !== 'digger-codex']),
   )
 })
 
@@ -504,19 +505,19 @@ test('without the option the login is never read and no twin registers without a
   expect(seen.steps).toHaveLength(1)
 })
 
-test('in the codex mode a plain code-reader call runs on its login twin and its first step is confirmed with the effort sent', { options: { codexLogin: true, mode: 'codex' } }, async ($, on) => {
-  const { seen } = await loginWorld($, on, { agents: [{ id: 'a1', type: 'crew:code-reader-codex', description: 'audit auth' }] })
-  await $.agent.spawn(spawnInput({ subagentType: 'crew:code-reader' }))
-  expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:code-reader-codex', model: 'cx/gpt-6-luna-medium' })
-  await stepThrough($, 'a1', 'cx/gpt-6-luna-medium')
+test('in the codex mode a plain planner call runs on its login twin and its first step is confirmed with the effort sent', { options: { codexLogin: true, mode: 'codex' } }, async ($, on) => {
+  const { seen } = await loginWorld($, on, { agents: [{ id: 'a1', type: 'crew:planner-codex', description: 'audit auth' }] })
+  await $.agent.spawn(spawnInput({ subagentType: 'crew:planner' }))
+  expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:planner-codex', model: 'cx/gpt-6-astra-high' })
+  await stepThrough($, 'a1', 'cx/gpt-6-astra-high')
   expect(seen.steps).toEqual([])
-  expect(seen.transcript).toEqual(['crew: audit auth: confirmed gpt-6-luna · medium'])
+  expect(seen.transcript).toEqual(['crew: audit auth: confirmed gpt-6-astra · high'])
 })
 
 test('an explicit twin teammate keeps the same Jev effort-only routing in the codex mode', CODEX_MODE_JEV, async ($, on) => {
   const { seen } = await twinWorld($, on)
-  await $.agent.spawn(spawnInput({ subagentType: 'crew:developer-codex', isTeammate: true }))
-  expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:developer-codex', model: 'cx/gpt-6-sol-high' })
+  await $.agent.spawn(spawnInput({ subagentType: 'crew:digger-codex', isTeammate: true }))
+  expect(seen.spawned[0]).toMatchObject({ subagentType: 'crew:digger-codex', model: 'cx/gpt-6-luna-medium' })
   expect(seen.fetches).toHaveLength(1)
 })
 
@@ -544,30 +545,30 @@ for (const type of ['crew:tester', 'crew:tester-codex', 'crew:tester-extra']) {
 
 test('HUD records the twin a codex-mode switch chose, its sent suffix effort and the observed model', CODEX_MODE_JEV, async ($, on) => {
   on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'Text', children: ['idle'] }))
-  const world = await twinWorld($, on, { stepModel: 'gpt-6-sol', reply: async () => ok(answer(3.9)) })
+  const world = await twinWorld($, on, { stepModel: 'gpt-6-luna', reply: async () => ok(answer(2.1)) })
   await $.agent.spawn(spawnInput())
   const band = await $.ui.mount(hudBand())
-  expect(await band.find({ type: 'Text', text: /crew:developer-codex/ })).toBeDefined()
-  await step($, 'a1', 'medium', 'cx/gpt-6-sol-high')
-  expect(await band.find({ type: 'Text', text: /effort high/ })).toBeDefined()
+  expect(await band.find({ type: 'Text', text: /crew:digger-codex/ })).toBeDefined()
+  await step($, 'a1', 'high', 'cx/gpt-6-luna-medium')
+  expect(await band.find({ type: 'Text', text: /effort medium/ })).toBeDefined()
   await band.unmount()
-  expect(record(world.seen, 0)).toMatchObject({ requested: 'crew:developer', effortApplied: 'high', ran: null })
-  expect(record(world.seen, 1)).toMatchObject({ ran: { model: 'gpt-6-sol', effort: 'high' } })
+  expect(record(world.seen, 0)).toMatchObject({ requested: 'crew:digger', effortApplied: 'medium', ran: null })
+  expect(record(world.seen, 1)).toMatchObject({ ran: { model: 'gpt-6-luna', effort: 'medium' } })
 })
 
 test('HUD observes a step the Codex login answers without changing its result, and never sends it to the API', LOGIN, async ($, on) => {
   const values = hudCapture(on)
-  const { seen } = await loginWorld($, on, { spawn: async () => ({ model: 'cx/gpt-6-luna', agentId: 'cr1' }) })
-  await $.agent.spawn(spawnInput({ subagentType: 'crew:code-reader-codex' }))
+  const { seen } = await loginWorld($, on, { spawn: async () => ({ model: 'cx/gpt-6-astra', agentId: 'cr1' }) })
+  await $.agent.spawn(spawnInput({ subagentType: 'crew:planner-codex' }))
   const { result } = await stepThrough($, 'cr1')
   await pause()
   expect(seen.steps).toEqual([])
   expect(seen.fetches.map(fetch => fetch.url)).toEqual(['https://chatgpt.com/backend-api/codex/responses'])
   expect(result).toEqual({
     turnId: 't1', index: 0, answer: 'auth is at src/auth.ts:12', toolUses: [], stopReason: 'end_turn',
-    usage: { model: 'gpt-6-luna', input_tokens: 40, output_tokens: 9, cache_read_input_tokens: 10, cache_creation_input_tokens: 0 },
+    usage: { model: 'gpt-6-astra', input_tokens: 40, output_tokens: 9, cache_read_input_tokens: 10, cache_creation_input_tokens: 0 },
   })
-  expect(values.agents).toMatchObject([{ type: 'crew:code-reader-codex', effort: 'medium', observedModel: 'gpt-6-luna', status: 'running' }])
+  expect(values.agents).toMatchObject([{ type: 'crew:planner-codex', effort: 'high', observedModel: 'gpt-6-astra', status: 'running' }])
 })
 
 test('HUD never writes the crew mode or the status line', CODEX_MODE, async ($, on) => {
@@ -575,11 +576,11 @@ test('HUD never writes the crew mode or the status line', CODEX_MODE, async ($, 
   const writes: string[] = []
   on('state.set', (_$, e, next) => (tracking && writes.push(e.key), next(e)))
   on('turn.complete', () => ({ text: 'done' }))
-  const { seen } = await twinWorld($, on, { stepModel: 'gpt-6-sol' })
+  const { seen } = await twinWorld($, on, { stepModel: 'gpt-6-luna' })
   const statusBefore = [...seen.statusLine]
   tracking = true
   await $.agent.spawn(spawnInput())
-  await step($, 'a1', 'medium', 'cx/gpt-6-sol-medium')
+  await step($, 'a1', 'high', 'cx/gpt-6-luna-high')
   await $.turn.complete({ agentId: 'a1', answer: '', reason: 'answer', turnId: 't1', durationMs: 1, isAborted: false } as never)
   await pause()
   expect(writes.length).toBeGreaterThan(0)

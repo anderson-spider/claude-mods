@@ -11,7 +11,7 @@ export type Agent<M extends string = Model> = {
   prompt: string
   /** The role's default model; Jev never changes it. */
   model: M
-  /** Set on purpose: every specialist defaults to `medium`; Jev routing may raise it to `high` (see `EFFORT_FLOOR`). */
+  /** Set on purpose: every helper defaults to `high`; Jev routing may lower it to `medium` (see `EFFORT_FLOOR`). */
   effort: Effort
   tools: readonly string[]
 }
@@ -19,14 +19,23 @@ export type Agent<M extends string = Model> = {
 /** One specialist, on a model alias. */
 export type Specialist = Agent<Model>
 
-/** The lowest effort routing may pick for any agent: Jev may raise effort to `high`, never lower it below this. */
+/** The lowest effort routing may pick for any agent: Jev may lower effort to `medium`, never below it. */
 export const EFFORT_FLOOR: Effort = 'medium'
 
 const READ_ONLY = ['Read', 'Grep', 'Glob'] as const
 
 // Names the session may not have connected are simply unavailable to the agent.
-const WEB = ['WebSearch', 'WebFetch', 'mcp__claude_ai_Context7__resolve-library-id', 'mcp__claude_ai_Context7__query-docs'] as const
+const SOURCES = [
+  'WebSearch',
+  'WebFetch',
+  'mcp__claude_ai_Context7__resolve-library-id',
+  'mcp__claude_ai_Context7__query-docs',
+  'mcp__plugin_context7_context7__resolve-library-id',
+  'mcp__plugin_context7_context7__query-docs',
+  'mcp__codegraph__codegraph_explore',
+] as const
 
+// Reading pages only: no clicks or typing.
 const BROWSER = [
   'mcp__terminal-browser__open',
   'mcp__terminal-browser__close',
@@ -37,91 +46,54 @@ const BROWSER = [
   'mcp__claude-in-chrome__read_page',
   'mcp__claude-in-chrome__get_page_text',
   'mcp__claude-in-chrome__find',
-  'mcp__claude-in-chrome__computer',
 ] as const
 
-/** The suffix of a role's Codex twin: `crew:developer` has `crew:developer-codex`. */
+/** The suffix of a role's Codex twin: `crew:digger` has `crew:digger-codex`. */
 export const NATIVE_SUFFIX = '-codex'
 
+/**
+ * The optional helpers of the main session, which implements everything itself. Each one is read-only (no Write, Edit
+ * or Agent in its tools, so it can neither change files nor delegate) and answers only the main session.
+ */
 export const SPECIALISTS = [
   {
-    name: 'code-reader',
-    description: 'Code lookup: read-only symbols, relations and evidence at path:line.',
-    model: 'haiku',
-    effort: 'medium',
+    name: 'planner',
+    description: 'Plans complex or ambiguous work: read-only; returns decisions, dependencies, steps and acceptance criteria. Optional.',
+    model: 'opus',
+    effort: 'high',
     tools: READ_ONLY,
     prompt:
-      'Find the requested code. Report symbols at `path:line`, their relations and snippets that carry the answer. ' +
-      'Mark missing evidence explicitly so the caller can distinguish findings from inference.',
+      'Plan the change the main session asks about; the main session implements it. Read the code you need; never edit files or call other agents. ' +
+      'Return a concise, executable plan: the decisions and their reasons, the files and existing code to reuse, ordered steps with their dependencies, ' +
+      'the risks, and acceptance criteria with how to verify each. Mark every assumption you could not confirm.',
   },
   {
-    name: 'research',
-    description: 'Documentation and web research; writes findings or docs, leaving source code to the developer.',
-    model: 'haiku',
-    effort: 'medium',
-    tools: [...READ_ONLY, 'Edit', 'Write', ...WEB, ...BROWSER],
-    prompt:
-      'Research the project first, then current official docs and the web; browse when search is insufficient. ' +
-      'Cite each claim by URL or path and mark unconfirmed claims. Save findings in `.crew/research/` unless asked to update project docs. ' +
-      'Always write that file before replying: it is not a report but the input the lead reads, so a general instruction against report files does not apply to it. ' +
-      'Match the project\'s style and current behavior; source changes go to the developer.',
-  },
-  {
-    name: 'designer',
-    description: 'UI design: layout, states, accessibility and copy; edits visuals and hands logic, data and tests to the developer.',
-    model: 'sonnet',
-    effort: 'medium',
-    tools: [...READ_ONLY, 'Edit', 'Write', ...WEB, ...BROWSER],
-    prompt:
-      'Design from existing screens, the design system and references; browse the running app when available. ' +
-      'Specify hierarchy, layout, empty/loading/error states, accessibility and copy; apply styles, layout and UI text. ' +
-      'Hand the developer a spec for logic, data handling and tests.',
-  },
-  {
-    name: 'developer',
-    description: 'Implementation and tests: changes scoped code, runs checks and reports evidence for the architect audit.',
-    model: 'sonnet',
-    effort: 'medium',
-    tools: [...READ_ONLY, 'Edit', 'Write', 'Bash'],
-    prompt:
-      'Implement the spec within its files and surrounding conventions. Add or update tests, run the relevant tests yourself and fix failures. ' +
-      'Leave committing to the caller. Report changes, acceptance criteria covered, the exact commands and their output as evidence, and checks not run for the independent architect audit.',
-  },
-  {
-    name: 'architect',
-    description: 'Architecture and diff audit: contracts, bugs, regressions, project rules and test gaps; writes .crew/ Markdown reviews.',
+    name: 'challenger',
+    description: 'Challenges a decision, design or change when an independent view adds value: premises, real risks, simpler options. Optional, never a gate.',
     model: 'opus',
-    effort: 'medium',
-    tools: [...READ_ONLY, 'Write', 'Bash'],
+    effort: 'high',
+    tools: READ_ONLY,
     prompt:
-      'Audit the design and full diff against the task and project invariants; read surrounding code and run tests when evidence is needed; your audit of the full diff is the acceptance, and you may rerun the developer\'s checks. ' +
-      'Report findings by severity with `path:line` and a concrete failing scenario, or state that none were found. ' +
-      'Write Markdown only under `.crew/`, at the supplied path or `.crew/reviews/<name>.md`; send fixes to the developer. ' +
-      "Always write that file before replying: it is not a report but the input the lead's review triage reads, so a general instruction against report files does not apply to it. " +
-      'Answer with a first line that starts with `Approve`, `Fixes` or `Reject` and a one-line reason, then the review path and a short summary.',
+      'Challenge the decision or change the main session gives you. Read the code you need; never edit files or call other agents. ' +
+      'Question its premises, find significant risks, reasoning gaps and architectural problems, propose simpler alternatives, and disagree when you have a technical reason. ' +
+      'Report only what matters, most important first, each with `path:line` evidence or a concrete failing scenario; say plainly when you find nothing significant. ' +
+      'Do not restate the request, repeat analysis you were given or approve routine work.',
+  },
+  {
+    name: 'digger',
+    description: 'Read-only investigation: code, git history, docs, Context7, web, GitHub, APIs and logs; returns evidence with paths and URLs.',
+    model: 'haiku',
+    effort: 'high',
+    tools: [...READ_ONLY, 'Bash', ...SOURCES, ...BROWSER],
+    prompt:
+      'Investigate the question the main session gives you, read-only. Choose only the sources it needs (code, git history, local docs, Context7, the web, GitHub, APIs, connected tools, logs) and stop once the evidence answers it. ' +
+      'Run only commands that change nothing; never edit files, take decisions for the main session or call other agents. ' +
+      'Answer briefly: each finding with its `path:line`, commit or URL, marked confirmed or inferred, then what you could not find.',
   },
 ] as const satisfies readonly Specialist[]
 
 /** The role names, read from the definitions above. */
 export type SpecialistName = (typeof SPECIALISTS)[number]['name']
-
-/**
- * Where a specialist's `Write` and `Edit` may land; `guard.ts` holds one rule per lane.
- * `unrestricted`: anywhere. `crew-documents`: Markdown under `.crew/` only.
- */
-export type Lane = 'unrestricted' | 'crew-documents'
-
-/**
- * The lane of each specialist. A role without an entry does not compile. It lives beside `SPECIALISTS`, not in the
- * definitions, so a spread of a definition into `$.agent.register` can never carry a lane to the host.
- */
-export const LANES: Readonly<Record<SpecialistName, Lane>> = {
-  'code-reader': 'unrestricted',
-  research: 'unrestricted',
-  designer: 'unrestricted',
-  developer: 'unrestricted',
-  architect: 'crew-documents',
-}
 
 /**
  * The agent types of the roles: `crew:<name>` and its `crew:<name>-codex` twin, for every specialist. The only list of
@@ -130,7 +102,7 @@ export const LANES: Readonly<Record<SpecialistName, Lane>> = {
 export const CREW_TYPES: readonly string[] = SPECIALISTS.flatMap(s => [`crew:${s.name}`, `crew:${s.name}${NATIVE_SUFFIX}`])
 
 /**
- * The specialist a bare role name stands for: `architect`, or its twin `architect-codex`. Any other name, a suffixed
+ * The specialist a bare role name stands for: `digger`, or its twin `digger-codex`. Any other name, a suffixed
  * one whose base is no specialist included, is undefined.
  */
 export function specialistOf(role: string): (typeof SPECIALISTS)[number] | undefined {
@@ -141,28 +113,21 @@ export function specialistOf(role: string): (typeof SPECIALISTS)[number] | undef
 }
 
 /**
- * The system prompt section that makes the main session the lead: it orchestrates and the specialists do the work.
- * The lead judges the kind of work, never its size; with Jev on, each call is sized for it.
+ * The system prompt section of the main session: it does the work itself, and the helpers are optional. With Jev on,
+ * each helper call's effort is sized for it.
  */
-export function leadSection(jev: boolean): string {
-  const sizing = jev
-    ? "Jev sizes each call's effort; delegate by role, not task size."
-    : 'Role defaults size each agent; delegate by role, not task size.'
+export function mainSection(jev: boolean): string {
+  const sizing = jev ? "Jev sizes each helper call's effort." : "Each helper runs on its role's model and effort."
   return [
-    'You orchestrate, talk with the user and check/combine reports; delegate all project reading, searches, edits and execution:',
-    'crew:code-reader for code lookup, crew:developer for implementation and tests,',
-    'crew:architect for audits, crew:research for web research, crew:designer for UI.',
+    'You are the main session: you implement, edit files, run commands and tests, review your own changes, commit and open pull requests.',
+    'Simple and medium tasks need no subagent; every helper is optional and none is a required step.',
+    'Read-only helpers, each answering only you: crew:planner to plan complex or ambiguous work,',
+    'crew:challenger to question a decision or change when an independent challenge adds real value (never a routine review),',
+    'crew:digger to investigate code, git history, docs, the web or logs; run several diggers at once only for independent questions.',
+    'Do not call a helper for trivial work, to confirm what is settled or to ask the same thing twice; give it the context it needs and use its summary.',
     sizing,
-    'Delegate in waves: launch every independent piece with ready inputs in one message (separate files, no mutual dependencies).',
-    'After each report, launch newly unblocked or independent work without being asked or waiting for unrelated agents.',
-    'End each update with one line saying what runs, what waits and on what, or that nothing else can run in parallel.',
-    "A deliverable is one PR: its steps close as `ready for QA` on their developer's report; the developer's own commands and output are never acceptance.",
-    "Before the PR opens, crew:architect independently audits the deliverable's full diff, optionally rerunning tests, and only then do its steps become `verified`; a single step gets an early audit only when the plan marks it `risky` (auth, security, a contract, or a behavior that later steps build on).",
-    "Ask for a separate reproduction only for behavior that needs it (auth, routing, or live checks against the real host or service), not for every step: it comes from a fresh crew:developer, not the implementer, or from the project's live-test procedure, and it must pass before the PR opens.",
-    'Send failures to the developer who owns the step via SendMessage with the criterion and expected versus actual; after the fix, the architect reaudits before the PR opens.',
     'For a plan step, start its description with the step id (for example `T3 contract suite`).',
     'Update each step\'s `state:` in the plan file as soon as it changes; the crew HUD reads it.',
-    'Git and pull requests stay with you.',
   ].join(' ')
 }
 
@@ -198,7 +163,7 @@ export function nativeCodexSpecs(models: Readonly<Partial<Record<string, string>
       ...base,
       name: `${base.name}${NATIVE_SUFFIX}`,
       model,
-      description: `crew:${base.name} on ${model} (OpenAI, through the session's gateway): same job, tools and write lane.`,
+      description: `crew:${base.name} on ${model} (OpenAI, through the session's gateway): same job, read-only.`,
     })
   }
   return twins
@@ -207,20 +172,17 @@ export function nativeCodexSpecs(models: Readonly<Partial<Record<string, string>
 /** A twin crew runs itself on the user's Codex login (the `codexLogin` option): only its one-line description changes. */
 export function onCodexLogin(twin: Agent<string>): Agent<string> {
   const base = twin.name.slice(0, -NATIVE_SUFFIX.length)
-  return { ...twin, description: `crew:${base} on ${twin.model} (OpenAI, on your Codex login): same job, tools and write lane.` }
+  return { ...twin, description: `crew:${base} on ${twin.model} (OpenAI, on your Codex login): same job, read-only.` }
 }
 
 /**
- * The lead's section for the `-codex` types, a section of its own (`leadSection` stays free of Codex). It is the same
- * text on every request, whatever the tools.
+ * The main session's section for the `-codex` types, a section of its own (`mainSection` stays free of Codex). It is the
+ * same text on every request, whatever the tools.
  */
 export function nativeCodexSection(specs: readonly Pick<Agent<string>, 'name' | 'model'>[]): string {
   return [
     `Registered OpenAI Codex twins: ${specs.map(spec => `crew:${spec.name} (${spec.model})`).join(', ')}.`,
-    'Use ordinary foreground/background Agent calls with the base role\'s tools and write lane; never pass `model` to a twin (it overrides the fixed model).',
-    'Choose a twin for a user-requested Codex call or a second-family implementation or audit; otherwise use the Claude role.',
-    "Only crew:architect or its registered -codex twin independently accepts a deliverable's diff; a developer twin's own commands and output are its report, not acceptance.",
-    'Return failures to the same developer, including a -codex developer, then have the architect reaudit before the PR opens.',
+    "Call a twin like its base role, for a user-requested Codex call or a second model family's view; never pass `model` to a twin (it overrides the fixed model).",
     'In the codex crew mode, crew runs a plain crew:<role> call on its registered twin and the task shows it; passing `model` keeps a call on Claude.',
   ].join(' ')
 }

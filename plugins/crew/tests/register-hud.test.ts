@@ -10,10 +10,10 @@ test('HUD observes bypass, routed and twin spawns separately from decision recor
   const values = hudCapture(on)
   await $.agent.spawn(spawnInput({ model: 'sonnet' }))
   await pause()
-  expect(values.agents).toMatchObject([{ type: 'crew:developer', model: 'sonnet', status: 'running' }])
-  await step($, 'a1', 'medium')
+  expect(values.agents).toMatchObject([{ type: 'crew:digger', model: 'sonnet', status: 'running' }])
+  await step($, 'a1', 'high')
   await pause()
-  expect(values.agents).toMatchObject([{ effort: 'medium', observedModel: 'claude-sonnet-5-5' }])
+  expect(values.agents).toMatchObject([{ effort: 'high', observedModel: 'claude-sonnet-5-5' }])
   expect(seen.writes).toHaveLength(0)
 })
 
@@ -29,12 +29,12 @@ test('HUD preserves completion before late spawn, then a new step restarts the j
   release()
   await spawning
   expect(values.agents).toEqual([])
-  await step($, 'a1', 'medium')
-  expect(values.agents).toMatchObject([{ status: 'running', effort: 'medium' }])
-  await $.turn.complete({ agentId: 'a1', answer: 'private', reason: 'aborted', turnId: 't1', durationMs: 1, isAborted: true } as never)
-  expect(values.agents).toMatchObject([{ status: 'ended' }])
   await step($, 'a1', 'high')
   expect(values.agents).toMatchObject([{ status: 'running', effort: 'high' }])
+  await $.turn.complete({ agentId: 'a1', answer: 'private', reason: 'aborted', turnId: 't1', durationMs: 1, isAborted: true } as never)
+  expect(values.agents).toMatchObject([{ status: 'ended' }])
+  await step($, 'a1', 'medium')
+  expect(values.agents).toMatchObject([{ status: 'running', effort: 'medium' }])
 })
 
 test('HUD refreshes plans after successful in-scope Write and never for denies, errors or foreign paths', OFF, async ($, on) => {
@@ -76,7 +76,7 @@ test('HUD keeps the prompt sections byte-identical after observation and plan re
   on('prompt.compose', () => ({ sections: [{ id: 'intro', text: 'base', scope: 'shared' as const }] }))
   const before = JSON.stringify((await compose($, ['Agent'])).sections)
   await $.agent.spawn(spawnInput())
-  await step($, 'a1', 'medium')
+  await step($, 'a1', 'high')
   await $.turn.complete({ agentId: 'a1', answer: 'private', reason: 'answer', turnId: 't1', durationMs: 1, isAborted: false } as never)
   await $.tool.call({ tool: 'Write', file_path: '.crew/plans/live.md', content: hudText } as never)
   await clock.advance(5_000)
@@ -84,7 +84,7 @@ test('HUD keeps the prompt sections byte-identical after observation and plan re
 })
 
 test('HUD reconciles a running listed agent as seen, ends it, and ticks once across repeated hooks', OFF, async ($, on) => {
-  let listed = [{ id: 'unseen', type: 'crew:architect', status: 'running', description: 'private' }]
+  let listed = [{ id: 'unseen', type: 'crew:challenger', status: 'running', description: 'private' }]
   const clock = mock.clock(on)
   on('agent.list', () => ({ value: listed }) as never)
   on('session.cwd', () => ({ value: '/repo' }))
@@ -98,7 +98,7 @@ test('HUD reconciles a running listed agent as seen, ends it, and ticks once acr
   await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true } as never)
   await $.prompt.compose({ tools: [], traits: [], model: 'm', promptModel: 'm', surfaces: [], outputStyle: null } as never)
   await clock.advance(1_000)
-  expect(values.agents).toMatchObject([{ type: 'crew:architect', seenAt: 1_000, status: 'running' }])
+  expect(values.agents).toMatchObject([{ type: 'crew:challenger', seenAt: 1_000, status: 'running' }])
   expect(values.now).toBe(1_000)
   listed = [{ ...listed[0]!, status: 'completed' }]
   await clock.advance(1_000)
@@ -115,7 +115,7 @@ test('HUD state write failure never changes spawn result or routed decision reco
   const result = await $.agent.spawn(spawnInput())
   expect(result).toMatchObject({ agentId: 'a1', model: 'default' })
   expect(seen.writes).toHaveLength(1)
-  expect(record(seen)).toMatchObject({ v: 4, agent: 'developer', ran: null })
+  expect(record(seen)).toMatchObject({ v: 4, agent: 'digger', ran: null })
 })
 
 test('HUD lists several active plans in filename order, hides closed plans and drops a removed file on reread', OFF, async ($, on) => {
@@ -154,13 +154,13 @@ for (const tool of ['Write', 'Edit'] as const) {
     mock.clock(on)
     on('session.cwd', () => ({ value: '/repo' }))
     on('fs.list', () => (calls++, { value: [] }))
-    on('agent.list', () => ({ value: [{ id: 'architect', type: 'crew:architect' }] }) as never)
+    on('agent.list', () => ({ value: [{ id: 'helper', type: 'general-purpose' }] }) as never)
     const denied = { deny: 'permission denied' }
     const failed = { result: 'IO failure', isError: true as const }
     on('tool.call', (_$, e) => 'file_path' in e && String(e.file_path).includes('failed') ? failed : denied)
     const invoke = (path: string, agentId?: string) => $.tool.call({ tool, file_path: path, agentId, content: hudText,
       old_string: 'a', new_string: 'b' } as never)
-    expect(await invoke('.crew/plans/denied.md', 'architect')).toEqual(denied)
+    expect(await invoke('.crew/plans/denied.md', 'helper')).toEqual(denied)
     expect(calls).toBe(0)
     expect(await invoke('.crew/plans/failed.md')).toEqual(failed)
     expect(calls).toBe(0)
@@ -214,12 +214,12 @@ test('HUD late step after completion starts a new timed job, and a delayed spawn
   await spawning
   expect(values.agents).toEqual([])
   await clock.advance(3_000)
-  await step($, 'a1', 'medium')
+  await step($, 'a1', 'high')
   expect(values.agents).toMatchObject([{ startedAt: 5_000, status: 'running' }])
   await $.turn.complete({ agentId: 'a1', answer: '', reason: 'aborted', turnId: 't1', durationMs: 1, isAborted: true } as never)
   await clock.advance(2_000)
-  await step($, 'a1', 'high')
-  expect(values.agents).toMatchObject([{ startedAt: 7_000, effort: 'high', status: 'running' }])
+  await step($, 'a1', 'medium')
+  expect(values.agents).toMatchObject([{ startedAt: 7_000, effort: 'medium', status: 'running' }])
 })
 
 test('HUD answer arriving after completion never reactivates the finished job', OFF, async ($, on) => {
@@ -235,7 +235,7 @@ test('HUD answer arriving after completion never reactivates the finished job', 
   on('turn.complete', () => ({ text: 'done' }))
   const values = hudCapture(on)
   await $.agent.spawn(spawnInput())
-  const ongoing = step($, 'a1', 'medium')
+  const ongoing = step($, 'a1', 'high')
   await pause()
   await $.turn.complete({ agentId: 'a1', answer: '', reason: 'error', turnId: 't1', durationMs: 1, isAborted: false } as never)
   release()
@@ -247,17 +247,17 @@ for (const twin of [false, true]) {
   test(`HUD retains a first step and answer before ${twin ? 'twin' : 'bypass'} spawn resolves`, OFF, async ($, on) => {
     let release: () => void = () => {}
     const held = new Promise<void>(resolve => { release = resolve })
-    const { seen } = jevWorld(on, { stepModel: twin ? 'gpt-6-sol' : 'claude-sonnet-5-5',
-      spawn: async () => { await held; return { agentId: 'a1', model: twin ? 'cx/gpt-6-sol-high' : 'sonnet' } } })
+    const { seen } = jevWorld(on, { stepModel: twin ? 'gpt-6-luna' : 'claude-sonnet-5-5',
+      spawn: async () => { await held; return { agentId: 'a1', model: twin ? 'cx/gpt-6-luna-medium' : 'sonnet' } } })
     const values = hudCapture(on)
-    const spawning = $.agent.spawn(spawnInput({ subagentType: twin ? 'crew:developer-codex' : 'crew:developer', model: twin ? undefined : 'sonnet' }))
+    const spawning = $.agent.spawn(spawnInput({ subagentType: twin ? 'crew:digger-codex' : 'crew:digger', model: twin ? undefined : 'sonnet' }))
     await pause()
-    await step($, 'a1', 'high', twin ? 'cx/gpt-6-sol-high' : 'sonnet')
+    await step($, 'a1', 'medium', twin ? 'cx/gpt-6-luna-medium' : 'sonnet')
     release()
     await spawning
     await pause()
-    expect(values.agents).toMatchObject([{ type: twin ? 'crew:developer-codex' : 'crew:developer', effort: 'high',
-      observedModel: twin ? 'gpt-6-sol' : 'claude-sonnet-5-5' }])
+    expect(values.agents).toMatchObject([{ type: twin ? 'crew:digger-codex' : 'crew:digger', effort: 'medium',
+      observedModel: twin ? 'gpt-6-luna' : 'claude-sonnet-5-5' }])
     expect(seen.fetches).toEqual([])
   })
 }
@@ -275,15 +275,15 @@ test('HUD ignores an answer from job A after completion and restart of job B', O
   on('turn.complete', () => ({ text: 'done' }))
   const values = hudCapture(on)
   await $.agent.spawn(spawnInput())
-  const first = step($, 'a1', 'medium', 'sonnet')
+  const first = step($, 'a1', 'high', 'sonnet')
   await pause()
   await $.turn.complete({ agentId: 'a1', answer: '', reason: 'answer', turnId: 't1', durationMs: 1, isAborted: false } as never)
-  await step($, 'a1', 'high', 'opus')
+  await step($, 'a1', 'medium', 'opus')
   await pause()
   release()
   await first
   await pause()
-  expect(values.agents).toMatchObject([{ model: 'opus', effort: 'high', observedModel: 'claude-opus-5-5', status: 'running' }])
+  expect(values.agents).toMatchObject([{ model: 'opus', effort: 'medium', observedModel: 'claude-opus-5-5', status: 'running' }])
 })
 
 test('HUD checks real destinations for listing, touched names, directory links, cwd aliases and link traversal', OFF, async ($, on) => {
@@ -465,7 +465,7 @@ test('HUD held agent state and clock never delay routing bind, decision or confi
   const result = await $.agent.spawn(spawnInput())
   expect(result).toMatchObject({ agentId: 'a1' })
   expect(record(seen)).toMatchObject({ bind: 'applied' })
-  await step($, 'a1', 'medium')
+  await step($, 'a1', 'high')
   expect(seen.transcript).toHaveLength(1)
   expect(record(seen, 1)).toMatchObject({ ran: { model: 'claude-sonnet-5-5' } })
   release()
@@ -479,7 +479,7 @@ test('HUD held clock does not delay the spawn decision or API confirmation', ON,
   on('state.set', (_$, e, next) => e.key === 'now' ? held.then(() => next(e)) : next(e))
   await $.agent.spawn(spawnInput())
   expect(record(seen)).toMatchObject({ bind: 'applied' })
-  await step($, 'a1', 'medium')
+  await step($, 'a1', 'high')
   expect(seen.transcript).toHaveLength(1)
   release()
 })
@@ -498,12 +498,12 @@ test('HUD old spawn cannot replace a restarted job with the same ID', OFF, async
   const old = $.agent.spawn(spawnInput())
   await pause()
   await $.turn.complete({ agentId: 'a1', answer: '', reason: 'answer', turnId: 't1', durationMs: 1, isAborted: false } as never)
-  await $.agent.spawn(spawnInput({ tool_use_id: 'tu2', subagentType: 'crew:architect' }))
-  await step($, 'a1', 'high', 'opus')
+  await $.agent.spawn(spawnInput({ tool_use_id: 'tu2', subagentType: 'crew:challenger' }))
+  await step($, 'a1', 'medium', 'opus')
   release()
   await old
   await pause()
-  expect(values.agents).toMatchObject([{ type: 'crew:architect', model: 'opus', effort: 'high', status: 'running' }])
+  expect(values.agents).toMatchObject([{ type: 'crew:challenger', model: 'opus', effort: 'medium', status: 'running' }])
 })
 
 const fsFailure = (code: string, message: string) => Object.assign(new Error(message), { code })
@@ -627,7 +627,7 @@ test('HUD bounds queued observations and drops them at completion and session en
   })) : next(e))
   on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'Text', children: ['idle'] }))
   await $.agent.spawn(spawnInput())
-  for (let i = 0; i < 40; i++) await step($, 'a1', 'medium')
+  for (let i = 0; i < 40; i++) await step($, 'a1', 'high')
   expect(calls).toBe(1)
   await $.turn.complete({ agentId: 'a1', answer: '', reason: 'answer', turnId: 't1', durationMs: 1, isAborted: false } as never)
   await $.session.end({ reason: 'exit', sessionId: 'test-session' } as never)
@@ -672,10 +672,10 @@ test('HUD restarts a persisted ended agent on its first step after a reload: new
   const { values, clock } = await endedThenReset($, on, undefined, gate)
   const first = (values.agents as { startedAt: number }[])[0]!.startedAt
   await clock.advance(100_000)
-  const stepping = step($, 'a1', 'high', 'opus')
+  const stepping = step($, 'a1', 'medium', 'opus')
   await pause()
   const [record] = values.agents as Record<string, unknown>[]
-  expect(record).toMatchObject({ id: 'a1', type: 'crew:developer', model: 'opus', effort: 'high', status: 'running' })
+  expect(record).toMatchObject({ id: 'a1', type: 'crew:digger', model: 'opus', effort: 'medium', status: 'running' })
   expect(record).not.toHaveProperty('observedModel')
   expect(record?.startedAt).toBeGreaterThanOrEqual(first + 100_000)
   release()
@@ -691,13 +691,13 @@ test('HUD keeps the restart when two steps of the new job coalesce behind a held
   const { values, clock } = await endedThenReset($, on, { from: 4, until })
   const first = (values.agents as { startedAt: number }[])[0]!.startedAt
   await clock.advance(100_000)
-  await step($, 'a1', 'high', 'opus')
-  await step($, 'a1', 'high', 'opus')
+  await step($, 'a1', 'medium', 'opus')
+  await step($, 'a1', 'medium', 'opus')
   release()
   await pause()
   await pause()
   const [record] = values.agents as Record<string, unknown>[]
-  expect(record).toMatchObject({ model: 'opus', effort: 'high', status: 'running' })
+  expect(record).toMatchObject({ model: 'opus', effort: 'medium', status: 'running' })
   expect(record).not.toHaveProperty('observedModel', 'claude-sonnet-5-5')
   expect(record?.startedAt).toBeGreaterThanOrEqual(first + 100_000)
 })

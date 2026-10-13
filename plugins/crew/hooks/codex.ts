@@ -177,7 +177,7 @@ function events(text: string): Item[] {
 
 const num = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) ? value : 0)
 
-/** A message from the backend, cut to one short line: it is shown to the lead, never the request. */
+/** A message from the backend, cut to one short line: it is shown to the main session, never the request. */
 function shortText(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined
   const line = value.replace(/[\u0000-\u001f\u007f\s]+/g, ' ').trim()

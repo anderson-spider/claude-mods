@@ -15,7 +15,7 @@ export const MODEL_ID = /^[\w./:[\]-]{1,64}$/
 export type DecisionInput = {
   ts: string
   agent: string
-  /** The type the lead asked for (`crew:developer`); `agent` is the one that ran, which differs when the codex crew mode moved the call to a twin. */
+  /** The type the main session asked for (`crew:digger`); `agent` is the one that ran, which differs when the codex crew mode moved the call to a twin. */
   requested: string
   provider: Provider
   depth?: number

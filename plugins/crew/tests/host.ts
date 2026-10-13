@@ -137,7 +137,7 @@ export function jevWorld(
     seen.writes.push({ path: e.path, text: e.text })
     return { value: undefined }
   })
-  fakeFetch(on, opts.reply ?? (async () => ok(answer(3.9))), seen.fetches, {
+  fakeFetch(on, opts.reply ?? (async () => ok(answer(2.1))), seen.fetches, {
     calls: seen.helper,
     replies: opts.helper ?? (async () => { throw new Error('connect ENOENT') }),
   })
@@ -179,7 +179,7 @@ export const spawnInput = (over: Record<string, unknown> = {}) => ({
   tool_use_id: 'tu1',
   prompt: 'Audit the auth token refresh flow for race conditions.',
   description: 'audit auth',
-  subagentType: 'crew:developer',
+  subagentType: 'crew:digger',
   provider: { plugin: 'crew', tier: 'user' },
   parentModel: 'opus',
   background: false,
@@ -188,7 +188,7 @@ export const spawnInput = (over: Record<string, unknown> = {}) => ({
 }) as never
 
 /** `effort: null` is a model without effort: the field is absent. */
-export const step = async ($: Engine, agentId?: string, effort: string | null = 'medium', model: string | null = 'sonnet') => {
+export const step = async ($: Engine, agentId?: string, effort: string | null = 'high', model: string | null = 'sonnet') => {
   const stream = $.turn.step({
     turnId: 't1', index: 0, ...(model === null ? {} : { model }), messageCount: 1,
     ...(effort === null ? {} : { effort }), ...(agentId ? { agentId } : {}),
@@ -274,4 +274,4 @@ export const hudBand = (surface: 'terminal' | 'desktop' = 'terminal', hasSurvey 
   props: { hasSurvey, isWorking: false, maxRows: 20, bodyColumns: 60, scroll: { offset: 0, bodyRows: 20 }, view: {} },
 }) as never
 
-export const hudText = '## Steps\n### Delivery\n- T1 (crew:developer, after: —) private task — state: implementing'
+export const hudText = '## Steps\n### Delivery\n- T1 (crew:digger, after: —) private task — state: implementing'

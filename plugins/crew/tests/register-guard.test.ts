@@ -4,17 +4,18 @@ import type { On } from 'claude-code'
 
 import { agents } from './register-world'
 
-test('a write outside the agent\'s lane is denied, the main loop and other agents pass', async ($, on) => {
+test('every crew agent\'s write is denied; the main loop and other agents pass', async ($, on) => {
   on('agent.list', () => ({ value: agents }) as never)
   on('tool.call', () => ({ result: 'written' }))
 
   const call = (agentId: string | undefined, file_path: string) => $.tool.call({ tool: 'Write', agentId, file_path } as never)
 
   expect(await call('a1', 'src/app.ts')).toHaveProperty('deny')
-  expect(await call('a1', '.crew/plans/plan.md')).not.toHaveProperty('deny')
+  expect(await call('a1', '.crew/plans/plan.md')).toHaveProperty('deny')
   expect(await call('t1', 'src/app.ts')).toHaveProperty('deny')
   expect(await call('t1', 'tests/app.test.ts')).toHaveProperty('deny')
-  expect(await call('d1', 'src/app.ts')).not.toHaveProperty('deny')
+  expect(await call('d1', 'src/app.ts')).toHaveProperty('deny')
+  expect(await call('g1', 'src/app.ts')).not.toHaveProperty('deny')
   expect(await call(undefined, 'src/app.ts')).not.toHaveProperty('deny')
 })
 
@@ -30,25 +31,22 @@ for (const tool of ['Write', 'Edit'] as const) {
   const call = ($: Engine, agentId: string | undefined, file_path?: string) =>
     $.tool.call({ tool, ...(agentId ? { agentId } : {}), ...(file_path === undefined ? {} : { file_path }) } as never)
 
-  test(`${tool}: the architect is held to Markdown under .crew, with the reason and the path`, async ($, on) => {
+  test(`${tool}: a crew helper is read-only everywhere, .crew included, with the reason and the path`, async ($, on) => {
     guardHost(on)
 
-    expect(await call($, 'a1', 'src/app.ts')).toEqual({
-      deny: 'the architect writes plan and review documents under .crew/ (.md) only, not src/app.ts; hand the finding to the developer',
-    })
-    expect(await call($, 'a1', '.crew/plans/plan.md')).toEqual({ result: 'written' })
-    expect(await call($, 'a1', '.crew/app.ts')).toHaveProperty('deny')
+    for (const path of ['src/app.ts', '.crew/plans/plan.md']) {
+      expect(await call($, 'a1', path)).toEqual({ deny: `the challenger is read-only, so its write to ${path} was not made; the main session makes changes` })
+      expect(await call($, 'd1', path)).toEqual({ deny: `the digger is read-only, so its write to ${path} was not made; the main session makes changes` })
+    }
     // A call without a path is read as an empty path.
-    expect(await call($, 'a1')).toEqual({
-      deny: 'the architect writes plan and review documents under .crew/ (.md) only, not ; hand the finding to the developer',
-    })
+    expect(await call($, 'a1')).toEqual({ deny: 'the challenger is read-only, so its write to  was not made; the main session makes changes' })
   })
 
   test(`${tool}: a removed role has no lane, even for former test and review paths`, async ($, on) => {
     guardHost(on)
     for (const path of ['src/app.ts', 'tests/app.test.ts', '.crew/reviews/check.md', '.crew/reviews/../plans/a.md']) {
       expect(await call($, 't1', path)).toEqual({
-        deny: `crew:tester is not a crew agent with a known lane, so its write to ${path} was not made`,
+        deny: `crew:tester is not a crew agent, so its write to ${path} was not made`,
       })
     }
   })
@@ -56,7 +54,7 @@ for (const tool of ['Write', 'Edit'] as const) {
   test(`${tool}: other agents, ids the list does not name and the main loop pass; the main loop never reads the list`, async ($, on) => {
     guardHost(on)
 
-    expect(await call($, 'd1', 'src/app.ts')).toEqual({ result: 'written' })
+    expect(await call($, 'g1', 'src/app.ts')).toEqual({ result: 'written' })
     expect(await call($, 'ghost', 'src/app.ts')).toEqual({ result: 'written' })
     expect(reads.count).toBe(2)
 
@@ -86,7 +84,7 @@ for (const tool of ['Write', 'Edit'] as const) {
     on('tool.call', () => { throw new Error('disk full') })
 
     // The hook below failed, so the host has no answer for the call: the guard does not answer in its place.
-    await expect(call($, 'd1', 'src/app.ts')).rejects.toThrow()
+    await expect(call($, 'g1', 'src/app.ts')).rejects.toThrow()
     await expect(call($, undefined, 'src/app.ts')).rejects.toThrow()
   })
 }
@@ -102,20 +100,20 @@ test('the guard answers only Write and Edit: another tool of a subagent passes w
 })
 
 const codexAgents = [
-  { id: 'ar1', type: 'crew:architect-codex' },
-  { id: 'de1', type: 'crew:developer-codex' },
+  { id: 'ar1', type: 'crew:challenger-codex' },
+  { id: 'de1', type: 'crew:digger-codex' },
   { id: 'xx1', type: 'crew:mystery-codex' },
 ]
 
 for (const tool of ['Write', 'Edit'] as const) {
-  test(`${tool}: each -codex twin is held to its base role's lane, and an unknown crew -codex type is held`, async ($, on) => {
+  test(`${tool}: each -codex twin is read-only like its base role, and an unknown crew -codex type is held`, async ($, on) => {
     on('agent.list', () => ({ value: codexAgents }) as never)
     on('tool.call', () => ({ result: 'written' }))
     const call = (agentId: string, file_path: string) => $.tool.call({ tool, agentId, file_path } as never)
 
     expect(await call('ar1', 'src/app.ts')).toHaveProperty('deny')
-    expect(await call('ar1', '.crew/plans/plan.md')).toEqual({ result: 'written' })
-    expect(await call('de1', 'src/app.ts')).toEqual({ result: 'written' })
+    expect(await call('ar1', '.crew/plans/plan.md')).toHaveProperty('deny')
+    expect(await call('de1', 'src/app.ts')).toHaveProperty('deny')
     expect(await call('xx1', 'src/app.ts')).toHaveProperty('deny')
     expect(await call('xx1', '.crew/plans/plan.md')).toHaveProperty('deny')
   })

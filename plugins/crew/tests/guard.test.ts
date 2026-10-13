@@ -1,88 +1,43 @@
 import { expect, test } from 'claude-code/testing'
-import { CREW_TYPES, LANES, SPECIALISTS } from '../hooks/agents'
-import { deniedWrite, laneRole } from '../hooks/guard'
+import { CREW_TYPES, SPECIALISTS } from '../hooks/agents'
+import { deniedWrite } from '../hooks/guard'
 
-test('the architect writes markdown under .crew only', () => {
-  expect(deniedWrite('crew:architect', '.crew/plans/login.md')).toBeUndefined()
-  expect(deniedWrite('crew:architect', '/repo/.crew/reviews/pr.md')).toBeUndefined()
-  expect(deniedWrite('crew:architect', '.crew/reviews/x.md')).toBeUndefined()
-  expect(deniedWrite('crew:architect', 'docs/plan.md')).toContain('.crew/')
-  expect(deniedWrite('crew:architect', '.crew/app.ts')).toContain('.crew/')
-  expect(deniedWrite('crew:architect', '.crew/../src/app.md')).toContain('.crew/')
-})
-
-test('known agents without a path restriction and non-crew unknown types are not held', () => {
-  for (const role of ['code-reader', 'research', 'designer', 'developer']) {
-    expect(deniedWrite(`crew:${role}`, 'src/app.ts')).toBeUndefined()
-  }
-  expect(deniedWrite('general-purpose', 'src/app.ts')).toBeUndefined()
-})
-
-test('laneRole strips the twin suffix only from a specialist\'s name', () => {
-  expect(laneRole('crew:architect-codex')).toBe('architect')
-  expect(laneRole('crew:architect')).toBe('architect')
-  expect(laneRole('crew:tester-codex')).toBe('tester-codex')
-  expect(laneRole('crew:foo-codex')).toBe('foo-codex')
-  expect(laneRole('crew:architect-codex-codex')).toBe('architect-codex-codex')
-  expect(laneRole('crew:-codex')).toBe('-codex')
-})
-
-const LANE_PATHS = [
+const PATHS = [
   '.crew/reviews/x.md', 'tests/a.test.ts', 'src/a.ts', 'tests/../src/a.ts', '.crew/plans/p.md', '.crew/reviews/../plans/p.md',
   '/repo/.crew/reviews/x.mdx', 'docs/x.md', '.crew/x.ts', 'a/b.spec.js', '',
 ]
 
-test('every crew:<role>-codex answers exactly as crew:<role> for Write/Edit paths', () => {
+test('every crew helper and its twin is read-only: each Write/Edit path is refused, .crew/ included', () => {
   for (const { name } of SPECIALISTS) {
-    for (const path of LANE_PATHS) expect(deniedWrite(`crew:${name}-codex`, path)).toBe(deniedWrite(`crew:${name}`, path))
+    for (const type of [`crew:${name}`, `crew:${name}-codex`]) {
+      for (const path of PATHS) expect(deniedWrite(type, path)).toBe(`the ${name} is read-only, so its write to ${path} was not made; the main session makes changes`)
+    }
   }
-  expect(deniedWrite('crew:architect-codex', '.crew/reviews/x.md')).toBeUndefined()
-  expect(deniedWrite('crew:architect-codex', 'tests/a.test.ts')).toBeDefined()
-  expect(deniedWrite('crew:architect-codex', 'src/a.ts')).toBeDefined()
-  expect(deniedWrite('crew:developer-codex', 'tests/a.test.ts')).toBeUndefined()
+})
+
+test('a non-crew type is not held', () => {
+  for (const type of ['general-purpose', 'general-purpose-codex', 'acme:foo-codex', 'acme:tester']) {
+    for (const path of PATHS) expect(deniedWrite(type, path)).toBeUndefined()
+  }
 })
 
 test('unknown crew types, including removed roles and their twins, are denied on every path', () => {
   for (const type of [
-    'crew:tester', 'crew:tester-codex', 'crew:tester-extra', 'crew:tester-codex-codex', 'crew:tester:developer',
-    'crew:foo', 'crew:foo-codex', 'crew:Developer-codex', 'crew:developer-codex-codex', 'crew:-codex', 'crew:code-reader-Codex-codex',
+    'crew:developer', 'crew:developer-codex', 'crew:architect', 'crew:architect-codex', 'crew:code-reader', 'crew:research', 'crew:designer',
+    'crew:foo', 'crew:foo-codex', 'crew:Digger-codex', 'crew:digger-codex-codex', 'crew:-codex', 'crew:tester:digger',
   ]) {
-    for (const path of LANE_PATHS) expect(deniedWrite(type, path)).toContain(type)
-  }
-})
-
-test('another plugin\'s unknown types, including the removed role name, stay untouched', () => {
-  for (const type of ['acme:foo-codex', 'general-purpose-codex', 'acme:tester', 'acme:tester-codex']) {
-    for (const path of LANE_PATHS) expect(deniedWrite(type, path)).toBeUndefined()
-  }
-})
-
-// Another plugin's type still follows a known role's lane, read from the name after the last colon.
-test('acme:architect-codex follows the same rule as acme:architect', () => {
-  for (const path of LANE_PATHS) {
-    expect(deniedWrite('acme:architect-codex', path)).toBe(deniedWrite('acme:architect', path))
-  }
-  expect(deniedWrite('acme:architect-codex', 'src/a.ts')).toBeDefined()
-})
-
-test('a specialist\'s declared lane decides its writes, for the role and its twin', () => {
-  for (const { name } of SPECIALISTS) {
-    const lane = LANES[name]
-    for (const type of [`crew:${name}`, `crew:${name}-codex`]) {
-      expect(deniedWrite(type, '.crew/reviews/x.md')).toBeUndefined()
-      expect(deniedWrite(type, 'src/a.ts') === undefined).toBe(lane === 'unrestricted')
-      if (lane === 'crew-documents') expect(deniedWrite(type, 'src/a.ts')).toBe(`the ${name} writes plan and review documents under .crew/ (.md) only, not src/a.ts; hand the finding to the developer`)
-    }
+    for (const path of PATHS) expect(deniedWrite(type, path)).toBe(`${type} is not a crew agent, so its write to ${path} was not made`)
   }
 })
 
 test('the guard knows every valid crew type: none is refused as unknown', () => {
   for (const type of CREW_TYPES) {
-    for (const path of LANE_PATHS) expect(deniedWrite(type, path) ?? '').not.toContain('known lane')
+    for (const path of PATHS) expect(deniedWrite(type, path) ?? '').not.toContain('is not a crew agent')
   }
 })
 
-test('another plugin\'s role types follow the lane of the role by name', () => {
-  for (const type of ['acme:architect', 'acme:architect-codex', 'x:y:architect']) expect(deniedWrite(type, 'src/a.ts')).toContain('.crew/')
-  for (const type of ['acme:developer', 'acme:developer-codex', 'acme:code-reader']) expect(deniedWrite(type, 'src/a.ts')).toBeUndefined()
+// The role is read from the name after the last colon.
+test('another plugin\'s type named like a helper is held like it', () => {
+  for (const type of ['acme:digger', 'acme:digger-codex', 'x:y:planner']) expect(deniedWrite(type, 'src/a.ts')).toContain('is read-only')
+  for (const type of ['acme:developer', 'acme:architect-codex']) expect(deniedWrite(type, 'src/a.ts')).toBeUndefined()
 })

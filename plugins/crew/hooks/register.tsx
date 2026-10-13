@@ -6,7 +6,7 @@ import type { AgentIo, AgentTracker } from './hud/agents'
 import { createPlanRefresher } from './hud/files'
 import type { PlanIo, PlanRefresher } from './hud/files'
 import { bandRows } from './hud/view'
-import { SPECIALISTS, isGatewayBase, leadSection, nativeCodexSection, nativeCodexSpecs, onCodexLogin } from './agents'
+import { SPECIALISTS, isGatewayBase, mainSection, nativeCodexSection, nativeCodexSpecs, onCodexLogin } from './agents'
 import type { Agent, Effort } from './agents'
 import { HANDBACK_ID, callerOf, handedBackMessage, helperReady, helperRole, lastUserText, runTurn, socketOf } from './appserver'
 import type { Probe } from './appserver'
@@ -212,8 +212,8 @@ type Via = 'backend' | 'helper' | 'gateway'
 
 /**
  * The `-codex` types the session can reach, each with how: on the Codex login (`codexLogin` on) either through the
- * backend when crew can describe every tool of the twin, or through the helper for the roles that write (when the
- * helper is ready); else behind a gateway base URL; none on Anthropic's API or with none set.
+ * backend when crew can describe every tool of the twin, or through the helper for the digger (when the helper is
+ * ready); else behind a gateway base URL; none on Anthropic's API or with none set.
  */
 async function reachableNative($: Dollar, native: Native, onLogin: boolean, helper: boolean): Promise<{ agent: Agent<string>; via: Via }[]> {
   if (native.specs.length === 0) return []
@@ -245,7 +245,7 @@ async function registerNative($: Dollar, native: Native, home: string | undefine
   if (home !== undefined) {
     const ready = await helperReady(probeOf($), socketOf(home)).catch(() => ({ ready: false as const, reason: 'the crew Codex helper could not be asked' }))
     helper = ready.ready
-    if (!ready.ready) $.ui.log(`crew: the developer and architect twins are not on the Codex login: ${ready.reason}`, { to: 'debug' })
+    if (!ready.ready) $.ui.log(`crew: the digger twin is not on the Codex login: ${ready.reason}`, { to: 'debug' })
   }
   const reachable = await reachableNative($, native, home !== undefined, helper)
   if (reachable.length === 0) {
@@ -456,14 +456,11 @@ async function askCodex($: Dollar, login: CodexLogin, twin: Agent<string>, e: St
 
 /** The helper twin's developer message: the role's prompt, then where it runs and what its sandbox allows. */
 function helperInstructions(twin: Agent<string>, repo: string, now: number): string {
-  const architect = twin.name.startsWith('architect')
   return [
     twin.prompt,
     '',
     `Repository: ${repo}. Today's date: ${new Date(now).toISOString().slice(0, 10)}.`,
-    architect
-      ? `Your working directory is ${repo}/.crew, the only place you can write; read anything in the repository by absolute path. Writes elsewhere and network access are refused.`
-      : 'Your working directory is the repository; write only inside it. Writes elsewhere, temporary directories and network access are refused.',
+    'Your working directory is the repository. The sandbox is read-only: every write and all network access are refused, so work from the repository, its git history and local files.',
   ].join('\n')
 }
 
@@ -526,7 +523,7 @@ type Routing = {
   mode: Mode
 }
 
-/** Asks Jev about one call. A failure is one debug line; the caller requests medium. */
+/** Asks Jev about one call. A failure is one debug line; the caller requests the role default. */
 async function askJev($: Dollar, routing: Routing, key: string, spec: Target, e: SpawnHook[1]): Promise<Routed | undefined> {
   try {
     const ask = createJev(jevIo($), key, { model: JEV_MODEL, breaker: routing.breaker, gate: routing.gate })
@@ -554,10 +551,10 @@ function announce($: Dollar, call: Announced, applied: Effort | null, requestedA
   $.ui.notice(toolUseId, noticeText(spec, routed, notApplied, via, jev, applied))
 }
 
-// Jev moves effort, never model or type: the lane and the tool allowlist stay the lead's choice. The one rewrite of
-// the type is the codex mode's, to the same role's registered twin, and it comes first: everything after it (the Jev
+// Jev moves effort, never model or type: the tool allowlist stays the main session's choice. The one rewrite of the
+// type is the codex mode's, to the same role's registered twin, and it comes first: everything after it (the Jev
 // request, the effort book, the tag, the confirmation) reads the rewritten type.
-// Any Jev failure requests medium through the same effort book.
+// Any Jev failure requests the role default through the same effort book.
 async function routeSpawn(routing: Routing, $: Dollar, e: SpawnHook[1], next: (input: SpawnHook[1]) => ReturnType<SpawnHook[2]>) {
   // The mode is read only with twins registered: without them the codex mode moves nothing.
   const codex = routing.twins.length > 0 && (await modeOf($)) === 'codex'
@@ -577,7 +574,7 @@ async function routeSpawn(routing: Routing, $: Dollar, e: SpawnHook[1], next: (i
   const via: Switch | undefined = twin ? { requested } : undefined
   // Jev is asked about the target; a twin is sent as its base role, so the answer is the role's either way.
   const jevRouted = key ? await askJev($, routing, key, spec, e) : undefined
-  // Models stay fixed. Any Jev failure requests medium; a switch without Jev uses medium too.
+  // Models stay fixed. Any Jev failure requests the role default; a switch without Jev uses it too.
   const routed = jevRouted ?? defaultsOf(spec)
   // The task shows what was chosen, so the task list says whether routing runs; the book matches the shown description.
   // A twin's suffix is the gateway's `cx/<model>-<effort>`, ahead of the host's output_config.effort, even on the first step.
@@ -587,7 +584,7 @@ async function routeSpawn(routing: Routing, $: Dollar, e: SpawnHook[1], next: (i
     description: e.description,
   })
 
-  // Failures explicitly request medium even when it equals the role default. Twins use only the suffix.
+  // Failures explicitly request the role default. Twins use only the suffix.
   const token = suffix ? undefined : routing.book.add(e.subagentType, description, bookEffort, e.parentAgentId, requestedApply)
   let result: Awaited<ReturnType<SpawnHook[2]>>
   try {
@@ -769,19 +766,19 @@ export const register: Register = (on, options) => {
     display.initial = undefined
     return next(e)
   })
-  // Only a request that offers the Agent tool gets the lead's section: the crew agents' tool lists leave it out.
-  // A teammate renders the lead's prompt too, and `bare` asks for the lead's section alone.
+  // Only a request that offers the Agent tool gets the main section: the crew agents' tool lists leave it out.
+  // A teammate renders the main session's prompt too, and `bare` asks for that prompt alone.
   on('prompt.compose', async ($, e, next) => {
     await hud($, async () => { ensureTicker($, display) })
     const composed = await next(e)
     if (!e.tools.includes('Agent') || e.traits.includes('teammate') || e.traits.includes('bare')) return composed
     const jev = routing.enabled && (await keyOf($, routing.access, routing.jevKey)) !== undefined
-    const lead = { id: 'crew:lead', text: leadSection(jev), scope: 'session' as const }
+    const main = { id: 'crew:main', text: mainSection(jev), scope: 'session' as const }
     // The `-codex` types get a section of their own, under the same rule and only for the twins this session registered.
     // It reads the same in either mode, so switching the mode does not change the prompt.
-    if (native.registered.length === 0) return { sections: [...composed.sections, lead] }
+    if (native.registered.length === 0) return { sections: [...composed.sections, main] }
     const twins = { id: 'crew:native-codex', text: nativeCodexSection(native.registered), scope: 'session' as const }
-    return { sections: [...composed.sections, lead, twins] }
+    return { sections: [...composed.sections, main, twins] }
   }).catch((_, e, next) => next(e))
   on('agent.spawn', {}, ($, e, next) => {
     void hud($, async () => { ensureTicker($, display) })

@@ -13,7 +13,7 @@ type Ran = { model: string; effort: string | undefined }
 
 /** One routed subagent waiting for its first step; `saved` is the spawn's own write, which the confirmation follows. */
 export type Pending = {
-  /** Jev's answer, or crew's medium fallback after a Jev failure. */
+  /** Jev's answer, or the role default crew falls back to after a Jev failure. */
   via?: 'jev' | 'crew'
   /** Effort was requested in the spawn model suffix, not through the Claude effort book. */
   suffix?: boolean

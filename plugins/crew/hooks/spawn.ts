@@ -14,7 +14,7 @@ export type SpawnRequest = {
   description: string
   /** A twin's model with the effort suffix (`cx/<model>-<effort>`), which the gateway routes ahead of the host's effort. */
   suffix?: string
-  /** Whether the book entry is an apply request: an effort change, or a Jev failure or switch that asks for medium. */
+  /** Whether the book entry is an apply request: an effort change, or a Jev failure that asks for the role default. */
   requestedApply: boolean
   /** The effort the book entry starts the subagent with when nothing else binds it: the change, else the role default. */
   bookEffort: Effort
@@ -22,8 +22,7 @@ export type SpawnRequest = {
 
 /**
  * The request for one routed call. `enabled` is whether Jev routing runs and `jevAnswered` whether Jev's answer is what
- * was routed. A failure explicitly requests medium even when it equals the role default; a twin is sent with its
- * suffix only.
+ * was routed. A failure explicitly requests the role default; a twin is sent with its suffix only.
  */
 export function spawnRequest(
   spec: Target,

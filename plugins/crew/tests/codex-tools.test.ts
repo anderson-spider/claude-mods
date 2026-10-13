@@ -14,8 +14,8 @@ test('crew describes Read, Glob and Grep, each an object schema with its require
   }
 })
 
-test('only a role whose every tool has a schema can run on the login: today the code-reader alone', () => {
-  expect(SPECIALISTS.filter(role => describable(role.tools)).map(role => role.name)).toEqual(['code-reader'])
+test('only a role whose every tool has a schema can run on the login backend: the planner and the challenger', () => {
+  expect(SPECIALISTS.filter(role => describable(role.tools)).map(role => role.name)).toEqual(['planner', 'challenger'])
   expect(describable([])).toBe(false)
   expect(describable(['Read', 'Bash'])).toBe(false)
 })
