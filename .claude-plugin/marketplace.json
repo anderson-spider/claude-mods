@@ -25,7 +25,7 @@
     {
       "name": "tailscale",
       "source": "./plugins/tailscale",
-      "description": "Read or change your tailnet through the Tailscale API using TS_API_KEY."
+      "description": "Read or change your tailnet through the Tailscale API using the apiKey plugin option."
     }
   ]
 }

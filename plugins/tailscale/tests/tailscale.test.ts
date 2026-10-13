@@ -150,11 +150,11 @@ test('call checks the key before the path, and the path before forbidden', async
   const { fetch, seen } = fakeFetch('{}')
 
   expect(await call(fetch, undefined, { method: 'GET', path: '//bad' })).toEqual({
-    text: 'TS_API_KEY is not set in the Claude Code environment.',
+    text: 'The tailscale apiKey option is not set. Set it in the plugin options (/plugin, tailscale, configure).',
     isError: true,
   })
   expect(await call(fetch, '', { method: 'GET', path: '/x' })).toEqual({
-    text: 'TS_API_KEY is not set in the Claude Code environment.',
+    text: 'The tailscale apiKey option is not set. Set it in the plugin options (/plugin, tailscale, configure).',
     isError: true,
   })
   expect((await call(fetch, 'k', { method: 'DELETE', path: '//tailnet/-' })).text).toMatch(/^Invalid path/)

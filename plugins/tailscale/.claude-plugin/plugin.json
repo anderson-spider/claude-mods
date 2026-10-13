@@ -1,8 +1,16 @@
 {
   "name": "tailscale",
-  "version": "0.3.6",
-  "description": "Read or change your tailnet through the Tailscale API using TS_API_KEY.",
+  "version": "0.4.0",
+  "description": "Read or change your tailnet through the Tailscale API using the apiKey plugin option.",
   "author": {
     "name": "anderson-spider"
+  },
+  "userConfig": {
+    "apiKey": {
+      "type": "string",
+      "title": "Tailscale API key",
+      "description": "A tskey-api-... key. Sent only to api.tailscale.com in the Authorization header; leave it out of repository settings, which would make the plugin refuse it. OAuth secrets (tskey-client-...) are not supported.",
+      "sensitive": true
+    }
   }
 }

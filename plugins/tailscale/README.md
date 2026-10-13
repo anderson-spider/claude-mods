@@ -6,7 +6,7 @@ Query or modify your tailnet through the Tailscale API.
 /plugin install tailscale --marketplace anderson-spider/claude-mods
 ```
 
-Export `TS_API_KEY` before starting Claude Code. Use a `tskey-api-...` API key; `tskey-client-...` OAuth secrets require a token exchange this plugin does not provide.
+Set the `apiKey` plugin option (a sensitive field, kept in secure storage) with a `tskey-api-...` API key, from the plugin's configuration in `/plugin`. Set it in your user options, not in a repository's settings. `tskey-client-...` OAuth secrets require a token exchange this plugin does not provide. Without the option the tools answer with an error that says where to set it.
 
 ## Use
 
@@ -19,10 +19,10 @@ For ACL updates, GET `/tailnet/-/acl`, then POST with its quoted ETag in `ifMatc
 
 ## Privacy
 
-`TS_API_KEY` is read from the environment on every call, not from tool input. Requests go only to the Tailscale API. Read responses remove named secrets and fields ending in `Key`, `Secret` or `Token`; write responses are unfiltered, so handle new secrets privately.
+The key comes only from the `apiKey` option, not from tool input or the environment. It is sent only in the `Authorization` header to the Tailscale API and never appears in a result or error. On every call the plugin reads the project and local settings; if either declares `apiKey` for this plugin, or the settings cannot be read, the call is refused and nothing is sent, because the repository could otherwise choose which account the key is used under. Requests go only to the Tailscale API. Read responses remove named secrets and fields ending in `Key`, `Secret` or `Token`; write responses are unfiltered, so handle new secrets privately.
 
 ## Tests
 
-Pure API and host tests use fake fetches: URL refusals, whole-tailnet deletion, redaction, registration and ETag/If-Match behavior. They do not exercise a real tailnet.
+Pure API, key and host tests use fake fetches and settings: key sources and refusals, URL refusals, whole-tailnet deletion, redaction, registration and ETag/If-Match behavior. They do not exercise a real tailnet.
 
 For editing pointers and check commands, see [AGENTS.md](AGENTS.md).
