@@ -110,3 +110,31 @@ test('a $.tool.call denial or tool error is thrown to the caller', async () => {
   const failed = fakeHost({ mcp: () => { throw new Error('not connected') }, tool: () => ({ isError: true, text: 'tab closed' }) })
   expect(String(await mcpCallOf(failed.host, 'S')('x', {}).catch(e => e))).toContain('tab closed')
 })
+
+// The host's words for a server that is not connected, as the Claude in Chrome log shows them.
+const NOT_CONNECTED = 'no tool "tabs_context" on a server named "Claude_Browser"; servers with tools: ai-memory, chatgpt, claude-in-chrome'
+
+test('the host refusal for a server that is not connected falls back to $.tool.call on the first call only', async () => {
+  const first = fakeHost({
+    mcp: () => {
+      throw new Error(NOT_CONNECTED)
+    },
+    tool: input => ({ text: `ran ${String(input.tool)}` }),
+  })
+  expect(await mcpCallOf(first.host, 'Claude_Browser')('tabs_context', {})).toBe('ran mcp__Claude_Browser__tabs_context')
+  expect(first.tool).toEqual(['mcp__Claude_Browser__tabs_context'])
+
+  // Once $.mcp.call answered, the same words do not move the server to $.tool.call.
+  let answered = false
+  const later = fakeHost({
+    mcp: () => {
+      if (answered) throw new Error(NOT_CONNECTED)
+      answered = true
+      return text('ok')
+    },
+  })
+  const call = mcpCallOf(later.host, 'Claude_Browser')
+  expect(await call('tabs_context', {})).toBe('ok')
+  expect(String(await call('tabs_context', {}).catch(e => e))).toContain('on a server named')
+  expect(later.tool).toEqual([])
+})

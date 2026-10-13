@@ -731,7 +731,7 @@ test('/chatgpt-doctor answers a failure of its own as a browser line', async ($,
 
   const broken = await commandRun($, 'chatgpt-doctor')
 
-  expect(broken.text).toMatch(/^✗ browser: unexpected browser output: /)
+  expect(broken.text).toMatch(/^✗ browser: Claude in Chrome failed: unexpected browser output: /)
   expect(w.statuses).toEqual(['ChatGPT: checking the page', undefined])
 })
 
@@ -844,7 +844,7 @@ test('MCP calls of a reachable server go through $.mcp.call with the tool and ar
   const script = w.mcp.at(-1)
   expect(script?.tool).toBe('javascript_tool')
   expect(script?.args).toMatchObject({ action: 'javascript_exec', tabId: 7 })
-  expect(String(script?.args.text)).toMatch(/^\(async \(\) => \{\n[\s\S]*\n\}\)\(\)$/)
+  expect(String(script?.args.text)).toMatch(/^await \(async \(\) => \{\n[\s\S]*\n\}\)\(\)$/)
 })
 
 test('a server $.mcp.call cannot reach is called through $.tool.call, spread flat, and remembered per server', async ($, on) => {

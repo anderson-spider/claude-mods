@@ -61,6 +61,7 @@ function terminalBrowserOf(run: ProcessRunner, listed?: string): Browser {
     return ['action', '--browser', browser, '--tab', tab, '--']
   }
   return {
+    name: TERMINAL_BROWSER,
     tabs: async () => {
       const text = listed ?? (await terminalBrowser(run, ['ls', '--json']))
       listed = undefined
@@ -88,7 +89,7 @@ function terminalBrowserOf(run: ProcessRunner, listed?: string): Browser {
 export const NO_PANE = 'not running inside a terminal pane terminal-browser can drive'
 
 // terminal-browser answers only where Claude Code runs in a terminal pane it
-// can find (Ghostty, kitty); not under tmux, Herdr or a background session.
+// can find (a Ghostty or kitty pane, or a multiplexer pane running inside Ghostty); a background session has no pane.
 // The string is why it cannot answer; the chooser in chooser.ts says so for it.
 export async function openTerminalBrowser(run: ProcessRunner): Promise<Browser | string> {
   const listed = await run([TERMINAL_BROWSER, 'ls', '--json'], { timeoutMs: 15_000 }).catch(() => undefined)

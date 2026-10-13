@@ -34,3 +34,11 @@ test('diagnose waits for the model menu, which renders after the composer, befor
   expect(calls.indexOf('wait model')).toBeGreaterThan(-1)
   expect(calls.indexOf('wait model')).toBeLessThan(calls.indexOf('read page'))
 })
+
+test('diagnose fails by the backend name when the page answers no page report, not with a TypeError', async () => {
+  const { browser } = fakeBrowser({ tabs: [], pages: [{}], markdown: '', name: 'Claude in Chrome' })
+  browser.js = async () => printed({})
+  const error = String(await diagnose(browser, undefined, {}).catch(e => e))
+  expect(error).toContain('Claude in Chrome returned no page state')
+  expect(error).not.toContain('TypeError')
+})

@@ -14,7 +14,8 @@ export type McpHost = {
 }
 
 // A rejection of `$.mcp.call` that says the server cannot be reached that way. A tool's own error is an `isError` result, never one of these.
-const UNREACHABLE = /unknown server|no such server|not connected|not configured|not found/i
+// The host words an unconnected server as `no tool "<tool>" on a server named "<server>"; servers with tools: ...`.
+const UNREACHABLE = /unknown server|no such server|not connected|not configured|not found|no tool "[^"]*" on a server named/i
 
 // How the engine words a `$.mcp.call` it refused before the tool ran (`<plugin>: $.mcp.call(<server>, <tool>) refused: <reason>`),
 // as auto mode's classifier does with a call no prompt asked for.

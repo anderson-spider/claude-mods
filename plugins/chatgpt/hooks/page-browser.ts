@@ -30,18 +30,24 @@ export async function pollUntil(
   }
 }
 
-/** What a backend must say: its tabs, how it opens one, and how it runs a function body in a tab. */
+/** What a backend must say: its name, its tabs, how it opens one, and how it runs a function body in a tab. */
 export type Page = {
+  name: string
+  /** Whether the backend's javascript_tool returns the last expression's value only when it is awaited (see `run`). */
+  awaitResult?: boolean
   tabs(): Promise<string[]>
   openTab(url: string): Promise<string>
-  /** Runs `expression` (an async IIFE) in the tab and returns its text, as `scriptText` reads it. */
+  /** Runs `expression` in the tab, a page-context program whose last expression is the result; returns its text, as `scriptText` reads it. */
   evaluate(tabId: string, expression: string): Promise<string>
 }
 
 /** The Browser the flows use, built on a backend's `Page`. */
 export function pageBrowser(page: Page, deps: Pick<BrowserDeps, 'readBytes' | 'sleep' | 'now'>): Browser {
-  const run = (tabId: string, body: string) => page.evaluate(tabId, `(async () => {\n${body}\n})()`)
+  // A backend whose tool returns the last expression's value (awaitResult) gets an awaited IIFE: a bare async IIFE
+  // would return its Promise, which serializes as {}. Other backends keep the bare IIFE they always had.
+  const run = (tabId: string, body: string) => page.evaluate(tabId, `${page.awaitResult ? 'await ' : ''}(async () => {\n${body}\n})()`)
   return {
+    name: page.name,
     tabs: () => page.tabs(),
     openTab: url => page.openTab(url),
     waitFor: (tabId, fn, timeoutMs) =>

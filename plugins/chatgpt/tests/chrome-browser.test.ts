@@ -34,7 +34,7 @@ test('js returns the page text as a JSON string, so parseOutput reads the page r
   expect(parseOutput<{ href: string }>(out)).toEqual({ href: 'https://chatgpt.com/' })
   expect(calls.at(-1)).toEqual({
     tool: 'javascript_tool',
-    args: { action: 'javascript_exec', tabId: 2145352169, text: '(async () => {\nreturn JSON.stringify({ href: location.href })\n})()' },
+    args: { action: 'javascript_exec', tabId: 2145352169, text: 'await (async () => {\nreturn JSON.stringify({ href: location.href })\n})()' },
   })
 })
 
@@ -178,4 +178,22 @@ test('chromeStaysOnChatgpt allows a script only in the plugin tab of this backen
   expect(chromeStaysOnChatgpt('javascript_tool', script, 'chrome:7')).toBe(true)
   expect(chromeStaysOnChatgpt('javascript_tool', script, 'builtin:7')).toBe(false)
   expect(chromeStaysOnChatgpt('javascript_tool', script, undefined)).toBe(false)
+})
+
+const NO_GROUP = 'This session has no tab group of its own. Any tabs opened earlier in this conversation may still be open in Chrome, in a group this session cannot see or control. Use createIfEmpty: true to create this session\'s group.'
+
+test('a session with no tab group of its own has no tabs, and openTab starts the group with createIfEmpty', async () => {
+  const { call, calls } = fakeMcp({
+    tabs_context_mcp: args => (args.createIfEmpty ? withNote({ availableTabs: [{ tabId: 7, url: 'chrome://newtab/' }], tabGroupId: 9 }) : NO_GROUP),
+    navigate: 'Navigated.',
+  })
+  const browser = await chromeBrowserOf(fakeDeps(call).deps)
+  expect(await browser.tabs()).toEqual([])
+  expect(await browser.openTab('https://chatgpt.com/')).toBe('chrome:7')
+  expect(calls.filter(c => c.args.createIfEmpty === true)).toEqual([{ tool: 'tabs_context_mcp', args: { createIfEmpty: true } }])
+})
+
+test('other plain text from tabs_context_mcp is still unexpected output', async () => {
+  const { call } = fakeMcp({ tabs_context_mcp: 'The Chrome extension is busy.' })
+  expect(String(await chromeBrowserOf(fakeDeps(call).deps).catch(e => e))).toContain('unexpected output from tabs_context_mcp')
 })

@@ -14,6 +14,16 @@ export function chatUrlError(url: string): string | undefined {
   return isChatUrl(url) ? undefined : `chatUrl must be a chat link like https://chatgpt.com/c/<id>, not ${url}.`
 }
 
+/**
+ * The page report a backend's page script printed, parsed as `T`. A result of another shape (a page script that
+ * returned no value, say) fails here, named after the backend that answered it.
+ */
+export function pageStateOf<T extends { href: string } = PageState>(browser: Pick<Browser, 'name'>, text: string): T {
+  const state = parseOutput<Partial<T>>(text)
+  if (typeof state?.href !== 'string') throw new Error(`${browser.name} returned no page state: ${text.slice(0, 200)}`)
+  return state as T
+}
+
 // Goes to `target` in the plugin's own tab, opening one when it is gone, and
 // waits for the composer (or a login page); never touches a tab it did not
 // open. The home page is a new chat, so going there is what the "New chat"
@@ -45,7 +55,7 @@ export function blocked(page: { blocker: string }): string {
 // `busy` accepts a chat still answering (to save what it is writing); `backends` names the browsers the plugin tries
 // (it cannot import them: the list lives in a module that imports this one).
 export async function prepare(
-  browser: Pick<Browser, 'tabs' | 'openTab' | 'js' | 'waitFor'>,
+  browser: Pick<Browser, 'name' | 'tabs' | 'openTab' | 'js' | 'waitFor'>,
   input: { chatUrl?: string },
   options: { progress: (text: string) => void; tab: TabHolder; busy?: boolean; backends: readonly string[] },
 ): Promise<Ready> {
@@ -55,7 +65,7 @@ export async function prepare(
   options.progress('opening chatgpt.com')
   const tabId = await findTab(browser, chatUrl ?? CHATGPT_URL, options.tab)
 
-  let page = parseOutput<PageState>(await browser.js(tabId, stateScript(0)))
+  let page = pageStateOf(browser, await browser.js(tabId, stateScript(0)))
   if (!page.href.startsWith(ORIGIN) || page.login || !page.composer) {
     const named = options.backends.length ? ` (${orList(options.backends)})` : ''
     return {

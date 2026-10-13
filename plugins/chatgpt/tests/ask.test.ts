@@ -203,3 +203,11 @@ test('ask stops at a usage limit and marks a timeout that may still finish', asy
   const late = await ask(slow.browser, { prompt: 'hi' }, { pollMs: 0, timeoutMs: -1 })
   expect(!late.ok && late.timedOut).toBe(true)
 })
+
+test('a page that answers no page state fails by the backend name, not with a TypeError', async () => {
+  const { browser } = fakeBrowser({ tabs: ['seed'], pages: [{}], markdown: '', name: 'Claude in Chrome' })
+  browser.js = async () => printed({})
+  const error = String(await ask(browser, { prompt: 'hi' }, { pollMs: 0, tab: { id: 'seed' } }).catch(e => e))
+  expect(error).toContain('Claude in Chrome returned no page state')
+  expect(error).not.toContain('TypeError')
+})
