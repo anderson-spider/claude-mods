@@ -2,13 +2,14 @@
 // the API's answer names the model. Pure: the step hook in register.tsx feeds it and does the writes.
 
 import { MODELS } from './agents'
+import { keepLatest } from './bounded'
 import { MODEL_ID } from './decisions'
 import type { DecisionRecord } from './decisions'
 
 /** The role's default model (or fixed twin id) and the requested bounded effort. */
-export type Planned = { model: string; effort: string }
+type Planned = { model: string; effort: string }
 /** What the request carried: the model id the API reported and the effort sent (absent for a model without one). */
-export type Ran = { model: string; effort: string | undefined }
+type Ran = { model: string; effort: string | undefined }
 
 /** One routed subagent waiting for its first step; `saved` is the spawn's own write, which the confirmation follows. */
 export type Pending = {
@@ -84,9 +85,7 @@ export function createConfirmations() {
   const pending = new Map<string, Pending>()
   return {
     add(agentId: string, entry: Pending): void {
-      pending.delete(agentId)
-      pending.set(agentId, entry)
-      while (pending.size > CAP) pending.delete(pending.keys().next().value as string)
+      keepLatest(pending, agentId, entry, CAP)
     },
     /** The entry of a stepping agent, taken once: later steps find nothing. */
     take(agentId: string): Pending | undefined {
