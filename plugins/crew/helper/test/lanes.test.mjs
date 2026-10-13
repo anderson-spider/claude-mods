@@ -3,9 +3,12 @@ import { test } from 'node:test'
 
 import { LANES, laneCwd, laneOf, refusalFor, SANDBOX_POLICY, THREAD } from '../lib/lanes.mjs'
 
-test('the digger works in the repository; any other role has no lane', () => {
-  assert.equal(laneCwd('digger', '/repo'), '/repo')
-  for (const role of ['developer', 'architect', 'planner', 'challenger', '', undefined, 'constructor', '__proto__']) {
+test('the digger, planner and challenger work in the repository; any other role has no lane', () => {
+  for (const role of ['digger', 'planner', 'challenger']) {
+    assert.equal(laneCwd(role, '/repo'), '/repo', role)
+    assert.deepEqual(laneOf(role), {}, role)
+  }
+  for (const role of ['developer', 'architect', 'auditor', 'qa', '', undefined, 'constructor', '__proto__']) {
     assert.equal(laneOf(role), undefined, String(role))
     assert.equal(laneCwd(role, '/repo'), undefined, String(role))
   }

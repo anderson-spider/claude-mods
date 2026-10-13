@@ -22,7 +22,7 @@ export const contract = {
   // The keys of a `/start` body, which hooks send and the helper reads.
   startRequest: ['caller', 'effort', 'instructions', 'model', 'prompt', 'repo', 'role'],
   // The roles the helper has a lane for, and hooks sends.
-  roles: ['digger'],
+  roles: ['challenger', 'digger', 'planner'],
   // The LaunchAgent label: install.sh and uninstall.sh declare it, hooks/appserver.ts kickstarts it.
   label: 'com.anderson-spider.crew-codex',
   // `callerOf(agentId)` must give `caller`, and the helper must accept it.

@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { CODEX_URL, codexBody, codexEffort, codexHeaders, failedStep, inputItems, statusReason, stepOf } from '../hooks/codex'
+import { CODEX_URL, codexBody, codexEffort, codexHeaders, failedStep, inputItems, rejectionNote, statusReason, stepOf } from '../hooks/codex'
 import type { ApiMessage } from '../hooks/codex'
 import { fnv1a } from '../hooks/decisions'
 
@@ -139,6 +139,23 @@ test('a failed step is one text block and an end_turn stop with no usage', () =>
     usage: null,
     reasoning: new Map(),
   })
+})
+
+test('a rejected request keeps its name and an errno code, and never the message text, the URL or a header', () => {
+  const secret = 'Bearer abc123 https://chatgpt.com/backend-api/codex/responses account-1'
+  const wrapped = Object.assign(new Error(`fetch hook was skipped: crew: connect ECONNRESET ${secret}`), { name: 'HooksError' })
+  expect(rejectionNote(wrapped)).toBe(' (HooksError, ECONNRESET)')
+  expect(rejectionNote(wrapped)).not.toContain('abc123')
+  expect(rejectionNote(wrapped)).not.toContain('chatgpt.com')
+  // A code on the error, or on its cause, comes before one found in the message.
+  expect(rejectionNote(Object.assign(new TypeError('fetch failed'), { cause: { code: 'ETIMEDOUT' } }))).toBe(' (TypeError, ETIMEDOUT)')
+  expect(rejectionNote(Object.assign(new Error('x ECONNRESET'), { code: 'EPIPE' }))).toBe(' (EPIPE)')
+})
+
+test('a rejection that tells nothing, or that is no error at all, adds nothing', () => {
+  for (const value of [new Error('boom'), new Error(''), new Error('a fatal ERROR happened'), undefined, null, 'ECONNRESET', 3, {}, { name: 'not an identifier!', code: 'lower' }, { code: 'A'.repeat(60) }]) {
+    expect(rejectionNote(value)).toBe('')
+  }
 })
 
 test('an HTTP failure names the login, the usage limit or the status, with the backend message cut to one short line', () => {

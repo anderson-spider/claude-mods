@@ -46,9 +46,9 @@ test('the socket and label are fixed beside the installed helper', () => {
   expect(Object.values(ROUTES)).toEqual(['/start', '/poll', '/interrupt', '/reset', '/status'])
 })
 
-test('only the digger runs on the helper; a caller is made safe for the helper\'s grammar', () => {
-  expect(['digger-codex', 'digger'].map(helperRole)).toEqual([true, true])
-  expect(['planner-codex', 'challenger-codex', 'developer-codex', 'architect-codex'].map(helperRole)).toEqual([false, false, false, false])
+test('the digger, planner and challenger run on the helper; a caller is made safe for the helper\'s grammar', () => {
+  expect(['digger-codex', 'digger', 'planner-codex', 'planner', 'challenger-codex', 'challenger'].map(helperRole)).toEqual([true, true, true, true, true, true])
+  expect(['developer-codex', 'architect-codex', 'auditor', ''].map(helperRole)).toEqual([false, false, false, false])
   expect(callerOf('agent id/1')).toBe('agent_id_1')
   expect(callerOf('___')).toBe('x')
   expect(callerOf('a'.repeat(300)).length).toBe(128)

@@ -77,6 +77,31 @@ test('a follow-up for the same caller reuses its thread; a changed repository st
   assert.equal(fake.params('thread/start').length, 2)
 })
 
+test('the planner and the challenger each keep their thread across follow-ups, in the same read-only lane', async () => {
+  for (const role of ['planner', 'challenger']) {
+    const { fake, engine } = world({ autoComplete: true })
+    assert.deepEqual(await engine.start({ ...base, role }), { status: 'started' })
+    await finish(engine)
+    await engine.start({ ...base, role, prompt: 'and then this' })
+    await finish(engine)
+
+    assert.equal(fake.params('thread/start').length, 1, role)
+    assert.deepEqual(fake.params('turn/start').map(p => p.threadId), ['th-1', 'th-1'], role)
+    assert.equal(fake.params('thread/start')[0].sandbox, 'read-only', role)
+    assert.equal(fake.params('thread/start')[0].ephemeral, true, role)
+  }
+})
+
+test('a caller that changes role gets a new thread', async () => {
+  const { fake, engine } = world({ autoComplete: true })
+  await engine.start({ ...base, role: 'planner' })
+  await finish(engine)
+  await engine.start({ ...base, role: 'challenger' })
+  await finish(engine)
+
+  assert.equal(fake.params('thread/start').length, 2)
+})
+
 test('many callers share one server process, each with its own thread', async () => {
   const { fake, engine, made } = world({ autoComplete: true })
   await Promise.all(['a', 'b', 'c'].map(caller => engine.start({ ...base, caller })))

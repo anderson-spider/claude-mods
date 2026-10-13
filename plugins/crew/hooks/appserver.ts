@@ -16,9 +16,10 @@ export const LABEL = 'com.anderson-spider.crew-codex'
 export const ROUTES = { start: '/start', poll: '/poll', interrupt: '/interrupt', reset: '/reset', status: '/status' } as const
 export type Route = (typeof ROUTES)[keyof typeof ROUTES]
 
-/** The roles whose twin runs on the helper: the digger, whose shell crew cannot describe to the backend, runs in
- * Codex's own read-only sandbox. */
-export const HELPER_ROLES: readonly string[] = ['digger']
+/** The roles whose twin runs on the helper, in Codex's own read-only sandbox: the digger, whose shell crew cannot
+ * describe to the backend, and the planner and the challenger, which fall back to the backend when the helper is not
+ * ready. */
+export const HELPER_ROLES: readonly string[] = ['digger', 'planner', 'challenger']
 
 export const socketOf = (home: string) => `${home}/.claude/mcp/crew-codex/run/helper.sock`
 

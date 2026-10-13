@@ -64,12 +64,12 @@ test('with the helper ready, digger-codex registers on the login beside the plan
   expect(seen.fetches).toEqual([])
 })
 
-test('without the helper only the planner and challenger twins register, and one debug line says why', LOGIN, async ($, on) => {
+test('without the helper the planner and challenger twins stay on the backend and the digger is left out, and one debug line says why', LOGIN, async ($, on) => {
   const { seen } = await helperWorld($, on, { down: true })
 
   expect(names(seen)).toEqual(['planner-codex', 'challenger-codex'])
-  expect(seen.logs.filter(line => line.includes('not on the Codex login'))).toEqual([
-    'crew: the digger twin is not on the Codex login: the crew Codex helper is not running (run plugins/crew/helper/install.sh)',
+  expect(seen.logs.filter(line => line.includes('not on the helper'))).toEqual([
+    'crew: the helper twins are not on the helper: the crew Codex helper is not running (run plugins/crew/helper/install.sh)',
   ])
 })
 
@@ -78,7 +78,7 @@ for (const [label, status] of [['no codex binary', { ...STATUS, codex: false }],
     const { seen } = await helperWorld($, on, { status })
 
     expect(names(seen)).toEqual(['planner-codex', 'challenger-codex'])
-    expect(seen.logs.some(line => line.includes('not on the Codex login'))).toBe(true)
+    expect(seen.logs.some(line => line.includes('not on the helper'))).toBe(true)
   })
 }
 
@@ -114,13 +114,31 @@ test('a step of the digger twin is one turn on the helper: the request, the poll
   expect(result).toEqual({ turnId: 't1', index: 0, answer: text, toolUses: [], stopReason: 'end_turn', usage: null })
 })
 
-test('the planner and challenger twins on the login never reach the helper: their steps go to the backend', LOGIN, async ($, on) => {
-  const { seen } = await helperWorld($, on, {}, { id: 'r1', type: 'crew:challenger-codex', description: 'challenge' })
+for (const role of ['planner', 'challenger'] as const) {
+  test(`with the helper ready the ${role} twin runs on it: one turn per step, the same caller and thread for a follow-up, nothing to the API or the backend`, LOGIN, async ($, on) => {
+    const { seen } = await helperWorld($, on, {}, { id: 'r1', type: `crew:${role}-codex`, description: 'think' })
+    const first = await stepThrough($, 'r1', 'cx/gpt-6-astra-high', 'high')
+    await stepThrough($, 'r1', 'cx/gpt-6-astra-high', 'high')
+
+    const starts = seen.helper.filter(call => call.url.endsWith('/start')).map(call => JSON.parse(call.body ?? '{}'))
+    expect(starts).toHaveLength(2)
+    expect(starts[0]).toMatchObject({ caller: 'r1', role, repo: ROOT, model: 'gpt-6-astra', effort: 'high', prompt: 'where is the flag parsed' })
+    expect(starts[1]).toMatchObject({ caller: 'r1', role })
+    expect(starts[0].instructions).toContain(`Repository: ${ROOT}.`)
+    expect(starts[0].instructions).toContain('The sandbox is read-only')
+    expect(JSON.stringify(seen.helper.map(call => call.headers))).not.toContain('Authorization')
+    expect(first.result).toMatchObject({ answer: 'the flag is parsed at a.ts:3', toolUses: [], usage: null })
+    expect(seen.steps).toEqual([])
+    expect(seen.fetches).toEqual([])
+  })
+}
+
+test('without the helper the challenger twin falls back to the backend, which answers with its reason when there is no login file', LOGIN, async ($, on) => {
+  const { seen } = await helperWorld($, on, { down: true }, { id: 'r1', type: 'crew:challenger-codex', description: 'challenge' })
   const { result } = await stepThrough($, 'r1', 'cx/gpt-6-astra')
 
-  // No login file in this world: the backend path answers with its reason, and the helper saw only the status call.
   expect(result).toMatchObject({ answer: expect.stringContaining('no Codex login file'), usage: null })
-  expect(seen.helper.map(call => call.url)).toEqual(['http://crew-codex/status'])
+  expect(seen.helper.some(call => call.url.endsWith('/start'))).toBe(false)
   expect(seen.steps).toEqual([])
 })
 
