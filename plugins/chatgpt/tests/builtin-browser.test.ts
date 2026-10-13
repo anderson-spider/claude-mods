@@ -1,7 +1,12 @@
 import { expect, test } from 'claude-code/testing'
-import { builtinBrowserOf, builtinStaysOnChatgpt } from '../hooks/builtin-browser'
+import { BUILTIN_SPEC } from '../hooks/builtin-browser'
+import { mcpBackend } from '../hooks/mcp-backend'
 import { parseOutput } from '../hooks/scripts'
 import { fakeDeps, fakeMcp, withNote } from './mcp-helpers'
+
+const builtin = mcpBackend(BUILTIN_SPEC)
+const builtinBrowserOf = builtin.open
+const builtinStaysOnChatgpt = builtin.stays
 
 const PANE_CLOSED = withNote({ browserOpen: false, tabs: [] })
 const paneWith = (ids: string[]) => withNote({ browserOpen: true, tabs: ids.map(tabId => ({ tabId, origin: 'https://chatgpt.com', isActive: true })) })

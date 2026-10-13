@@ -79,6 +79,18 @@ test('ask refuses a logged-out page without sending anything', async () => {
   expect(calls.some(call => call.startsWith('send'))).toBe(false)
 })
 
+test('ask lists the browsers it was given in the not-ready advice, and no list when it has none', async () => {
+  const page = { composer: false, login: true }
+  const given = fakeBrowser({ tabs: ['seed'], pages: [page], markdown: '' })
+  const none = fakeBrowser({ tabs: ['seed'], pages: [page], markdown: '' })
+  const text = (browsers: string) =>
+    `ChatGPT is not ready in the browser (at https://chatgpt.com/). Ask the user to log in to chatgpt.com in the browser the plugin uses${browsers}, ` +
+    'or to clear what the page shows, and try again; never type credentials.'
+
+  expect(await ask(given.browser, { prompt: 'hi' }, { pollMs: 0, backends: ['one', 'two', 'three'] })).toEqual({ ok: false, url: 'https://chatgpt.com/', error: text(' (one, two or three)') })
+  expect(await ask(none.browser, { prompt: 'hi' }, { pollMs: 0 })).toEqual({ ok: false, url: 'https://chatgpt.com/', error: text('') })
+})
+
 test('ask sends the prompt once even when the send fails after running', async () => {
   const { browser, calls } = fakeBrowser({
     tabs: ['seed'],

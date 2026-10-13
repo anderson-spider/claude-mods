@@ -599,6 +599,31 @@ test('/chatgpt-ask answers with the usage for a blank question, and otherwise wi
   expect(answer.context).toEqual([`The user asked ChatGPT through /chatgpt-ask; its answer is saved to ${path} (chat https://chatgpt.com/c/abc).`])
 })
 
+// What ask and image answer when the browser opens but ChatGPT is not usable in it: the backends the plugin tries are
+// named in the advice, and the plugin's tab never types credentials.
+const NOT_READY_ADVICE =
+  "Ask the user to log in to chatgpt.com in the browser the plugin uses (terminal-browser, Claude in Chrome or the Claude app's built-in browser), " +
+  'or to clear what the page shows, and try again; never type credentials.'
+
+test('a logged-out page ends ask and image with the not-ready text that names every backend, byte for byte', async ($, on) => {
+  world(on, { pages: [{ composer: false, login: true, href: 'https://chatgpt.com/auth/login' }] })
+
+  const text = `ChatGPT is not ready in the browser (at https://chatgpt.com/auth/login). ${NOT_READY_ADVICE}`
+  expect(await toolCall($, 'ask', { prompt: 'hi' })).toEqual({ result: text, isError: true })
+  expect(await toolCall($, 'image', { prompt: 'a cat' })).toEqual({ result: text, isError: true })
+})
+
+test('a dialog on the page is quoted in the not-ready text, before the advice', async ($, on) => {
+  world(on, { pages: [{ composer: false, href: 'https://chatgpt.com/', blocker: 'You hit the limit' }] })
+
+  const answer = await toolCall($, 'ask', { prompt: 'hi' })
+
+  expect(answer).toEqual({
+    result: `ChatGPT is not ready in the browser (at https://chatgpt.com/). ChatGPT shows: "You hit the limit". ${NOT_READY_ADVICE}`,
+    isError: true,
+  })
+})
+
 test('/chatgpt-ask relays the reason when no backend works, with no context for the model', async ($, on) => {
   world(on, { chrome: 'down' })
 

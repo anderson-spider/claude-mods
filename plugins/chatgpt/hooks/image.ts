@@ -20,7 +20,7 @@ export async function generateImage(browser: Browser, input: AskInput, options: 
   const tab = options.tab ?? {}
 
   if (input.saveOnly && input.chatUrl === undefined) return { ok: false, error: 'saveOnly needs the chatUrl of the chat with the image.' }
-  const ready = await prepare(browser, input, { progress, tab, busy: input.saveOnly })
+  const ready = await prepare(browser, input, { progress, tab, busy: input.saveOnly, backends: options.backends ?? [] })
   if (!ready.ok) return ready
   const run = { browser, tabId: ready.tabId, start: ready.page, pollMs, timeoutMs, progress }
   return input.saveOnly ? saveLastImage(run) : generateNew(run, input)

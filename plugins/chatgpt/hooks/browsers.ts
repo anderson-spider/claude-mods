@@ -1,7 +1,10 @@
 import type { Browser } from './model'
 
-/** A backend the plugin can drive ChatGPT with; `open` resolves to a Browser, or to the reason it cannot be used (or throws it). */
-export type Candidate = { name: string; open(): Promise<Browser | string> }
+/**
+ * A backend the plugin can drive ChatGPT with; `open` resolves to a Browser, or to the reason it cannot be used (or
+ * throws it). `hint` is what the person can do to make it usable, as a clause that follows "or".
+ */
+export type Candidate = { name: string; hint: string; open(): Promise<Browser | string> }
 
 type Chosen = { browser: Browser; name: string }
 
@@ -9,7 +12,7 @@ const REASON_MAX = 300
 
 /**
  * The first backend that works, in the order given, with its name. When none
- * does, the string says what each one answered.
+ * does, the string says what each one answered, then what to do to get one working.
  */
 export async function chooseBrowser(candidates: Candidate[]): Promise<Chosen | string> {
   const said: string[] = []
@@ -23,9 +26,5 @@ export async function chooseBrowser(candidates: Candidate[]): Promise<Chosen | s
       said.push(`${candidate.name} said: ${reason.slice(0, REASON_MAX)}.`)
     }
   }
-  return (
-    `No browser to drive ChatGPT with. ${said.join(' ')} ` +
-    'Run Claude Code in a Ghostty or kitty pane with terminal-browser (https://terminal-browser.sh), or connect Claude in Chrome, ' +
-    "or log in to chatgpt.com in the Claude app's built-in browser, then try again."
-  )
+  return `No browser to drive ChatGPT with. ${said.join(' ')} ${candidates.map(candidate => candidate.hint).join(', or ')}, then try again.`
 }
