@@ -2,7 +2,7 @@
 import type { Role } from './roles'
 
 /** The report's fields, in order: the lead reads only this file. */
-export const REPORT_FIELDS = ['status', 'summary', 'files', 'commits', 'checks', 'blockers', 'questions', 'drafts'] as const
+export const REPORT_FIELDS = ['status', 'summary', 'files', 'checks', 'blockers', 'questions', 'drafts'] as const
 
 /** `<reports root>/<repository name>/<slug>-<role>.md`. */
 export function reportPath(root: string, repo: string, slug: string, role: Role): string {
@@ -24,7 +24,6 @@ export function brief(input: { role: Role; slug: string; repo: string; cwd: stri
     'status: done | blocked | partial',
     'summary: at most five lines',
     'files: the paths you changed, one per line, or none',
-    'commits: hash and subject, one per line, or none',
     'checks: each command you ran and its result (pass or fail), one per line',
     'blockers: what stops you, or none',
     'questions: what the lead must decide, or none',

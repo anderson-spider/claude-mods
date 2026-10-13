@@ -9,7 +9,7 @@ export type Effort = (typeof EFFORTS)[number]
 export type RoleSpec = {
   model: string
   effort: Effort
-  /** `true`: the agent works in a task worktree and may write and commit there; `false`: it reads the repository and writes only reports. */
+  /** `true`: the agent works in a task worktree and may write there; `false`: it reads the repository and writes only reports. */
   writes: boolean
   instructions: string
 }
@@ -24,7 +24,7 @@ export const SPECS: Readonly<Record<Role, RoleSpec>> = {
     writes: true,
     instructions:
       'You are the developer of a team led by another agent. You implement the task in your working directory, a git worktree of its own: ' +
-      "follow the repository's AGENTS.md, write and run the tests, and commit locally in Conventional Commits. Never push, open pull requests or touch other worktrees or branches. " +
+      "follow the repository's AGENTS.md, write and run the tests, and leave every change uncommitted in the worktree: the lead reviews the diff and git work belongs to the lead. Stay in your worktree. " +
       REPORT_RULE,
   },
   analyst: {
@@ -60,8 +60,8 @@ const toml = (value: string) => JSON.stringify(value)
 
 /**
  * The `codex` arguments for a role: model, effort, a workspace-write sandbox with the network, no approvals, the role's
- * instructions. `writableRoots` adds directories beyond the working directory (the repository's git directory for the
- * developer, so it can commit; the reports directory).
+ * instructions. `writableRoots` adds directories beyond the working directory (the reports directory, for the developer).
+ * Codex keeps every `.git` read-only under this sandbox, so no role can commit.
  */
 export function codexArgs(spec: RoleSpec, effort: Effort, writableRoots: readonly string[]): string[] {
   return [

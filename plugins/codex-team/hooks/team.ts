@@ -25,16 +25,14 @@ export type Answer = { ok: boolean; text: string }
 
 const refuse = (text: string): Answer => ({ ok: false, text: `codex-team: ${text}` })
 
-/** A directory the role's agent may run in; the developer's must be a git worktree other than the repository itself. */
-async function developerDir(io: TeamIo, repo: string, cwd: unknown): Promise<{ cwd: string; gitDir: string } | string> {
+/** The developer's directory: a git worktree other than the repository itself. */
+async function developerDir(io: TeamIo, repo: string, cwd: unknown): Promise<{ cwd: string } | string> {
   if (typeof cwd !== 'string' || !cwd.startsWith('/') || cwd.split('/').includes('..')) return 'the developer needs `cwd`: the absolute path of the task worktree'
   const top = await io.run(['git', '-C', cwd, 'rev-parse', '--show-toplevel'])
   if (top.exitCode !== 0) return '`cwd` is not a git working tree'
   const toplevel = top.stdout.trim().replace(/\/+$/, '')
   if (toplevel === repo.replace(/\/+$/, '')) return '`cwd` is the repository itself: give the developer a worktree of its own (`git worktree add`)'
-  const common = await io.run(['git', '-C', cwd, 'rev-parse', '--path-format=absolute', '--git-common-dir'])
-  if (common.exitCode !== 0) return 'the git directory of `cwd` could not be read'
-  return { cwd: toplevel, gitDir: common.stdout.trim() }
+  return { cwd: toplevel }
 }
 
 /** Answers one `dispatch` call. Never throws: every failure is the answer's text. */
@@ -65,7 +63,7 @@ export async function dispatch(io: TeamIo, input: { role?: unknown; task?: unkno
     const dir = await developerDir(io, repo, input.cwd)
     if (typeof dir === 'string') return refuse(dir)
     cwd = dir.cwd
-    roots = [dir.gitDir, reports]
+    roots = [reports]
   }
 
   const effort = (input.effort as Effort | undefined) ?? spec.effort

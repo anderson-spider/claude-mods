@@ -29,7 +29,7 @@ export const register: Register = (on) => {
     await $.tool.register({
       name: 'dispatch',
       description:
-        'Hands a task to a Codex team agent in Herdr: the developer (implements and commits in a task worktree), the analyst (investigates and drafts docs) or the architect (designs). ' +
+        'Hands a task to a Codex team agent in Herdr: the developer (implements in a task worktree, leaving changes uncommitted), the analyst (investigates and drafts docs) or the architect (designs). ' +
         'Starts the agent in the team tab, or reuses it, and reports delivery: confirmed, unknown (never resend) or not_sent. The agent writes a short report at the path given. Only inside Herdr.',
       inputSchema: {
         type: 'object',

@@ -20,7 +20,7 @@ The team does the work in its own Codex quota; you spend yours on judgement. For
 
 | Role | Hand it | Where it works |
 | --- | --- | --- |
-| `developer` | implementation, tests, local commits; corrections after your review | its task worktree (`cwd`), one per task |
+| `developer` | implementation and tests, left uncommitted; corrections after your review | its task worktree (`cwd`), one per task |
 | `analyst` | investigation (code, history, docs, web), documentation drafts | reads the repository; writes only its report |
 | `architect` | design, trade-offs, ordered steps | reads the repository; writes only its report |
 
@@ -40,11 +40,11 @@ Done for a dispatch: delivery `confirmed` and its background wait running.
 
 1. Read its report (the path `dispatch` returned). Read the terminal (`herdr agent read <agent> --source recent-unwrapped --lines 80`) only when the report is missing or the agent is `blocked`; a `blocked` agent is asking for an approval or an answer: show the user what it asks.
 2. `status: blocked` or open `questions`: answer them yourself when the plan settles them, otherwise ask the user; then dispatch the answer to the same agent (same role and slug).
-3. Developer `done`: review `git -C <cwd> diff <base>...HEAD` in full against the brief and the repository's rules (what changed, what is missing, hidden regressions, tests that cover it), and run the checks yourself when the report's `checks` leave any doubt. Send every correction back to the same developer, as one brief.
+3. Developer `done`: review `git -C <cwd> status --short` and `git -C <cwd> diff` in full (new files included) against the brief and the repository's rules (what changed, what is missing, hidden regressions, tests that cover it), and run the checks yourself when the report's `checks` leave any doubt. Send every correction back to the same developer, as one brief.
 4. Analyst or architect `done`: use the findings in the next brief; hand `drafts` to the developer.
 
 Done for a task: its report read, every finding resolved or answered, and, for a developer, a diff you reviewed and accept.
 
 ## Pull request
 
-After your review accepts the diff, hand the push and the pull request to a `general-purpose` subagent on `haiku` (`git-master` once installed): give it the worktree, the branch, the base, the title in Conventional Commits and the description you wrote, and the repository's rules for pull requests. Then tell the user the PR link.
+Codex's sandbox keeps `.git` read-only, so the team never commits: git work is the lead's. After your review accepts the diff, hand the commits, the push and the pull request to a `general-purpose` subagent on `haiku` (`git-master` once installed): give it the worktree, the branch, the base, the commit messages and the PR title in Conventional Commits, the description you wrote, and the repository's rules for pull requests. Then tell the user the PR link.

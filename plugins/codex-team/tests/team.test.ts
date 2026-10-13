@@ -53,10 +53,9 @@ test('an analyst task starts the analyst in the reports directory, read-only on 
   expect(prompt).toContain('/home/u/.claude/codex-team/reports/repo/find-x-analyst.md')
 })
 
-test('the developer works in its worktree and may write only there, in the git directory and the reports', async () => {
+test('the developer works in its worktree and may write only there and in the reports, never in the git directory', async () => {
   const world = io([
     [['git', '-C', '/wt/feat', 'rev-parse', '--show-toplevel'], text('/wt/feat\n')],
-    [['git', '-C', '/wt/feat', 'rev-parse', '--path-format=absolute', '--git-common-dir'], text('/repo/.git\n')],
     ...freshTeam,
   ])
   const answer = await dispatch(world.team, { role: 'developer', task: 'Build', slug: 'feat', cwd: '/wt/feat', effort: 'xhigh' })
@@ -64,7 +63,8 @@ test('the developer works in its worktree and may write only there, in the git d
   expect(answer.text).toContain('agent: dev-feat')
   expect(answer.text).toContain('effort xhigh (pinned)')
   const start = world.calls.find(call => call[2] === 'start')!
-  expect(start).toContain('sandbox_workspace_write.writable_roots=["/repo/.git", "/home/u/.claude/codex-team/reports"]')
+  expect(start).toContain('sandbox_workspace_write.writable_roots=["/home/u/.claude/codex-team/reports"]')
+  expect(world.calls.some(call => call.includes('--git-common-dir'))).toBe(false)
   expect(start).toContain('gpt-6.1-sol')
 })
 
