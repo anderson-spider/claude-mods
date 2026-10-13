@@ -1,3 +1,5 @@
+import { OFF_TEXT } from './key'
+
 // The OpenAPI spec is at https://api.tailscale.com/api/v2?outputOpenapiSchema=true (the /api-docs page is
 // rendered by JS, so WebFetch cannot read it). The API declares itself unstable.
 export const BASE = 'https://api.tailscale.com/api/v2'
@@ -159,7 +161,7 @@ export async function call(
   key: string | undefined,
   req: Request,
 ): Promise<{ text: string; isError: boolean }> {
-  if (!key) return { text: 'TS_API_KEY is not set in the Claude Code environment.', isError: true }
+  if (!key) return { text: OFF_TEXT['no-key'], isError: true }
   // the one path validation: `buildUrl` returns BASE + path, so the checked path is what follows BASE
   const url = buildUrl(req.path)
   if (url === undefined) {

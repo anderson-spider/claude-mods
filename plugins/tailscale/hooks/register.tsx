@@ -1,5 +1,6 @@
 import type { EngineInterface, McpToolInputs, Register } from 'claude-code'
 import { WRITE_METHODS, call, type Request } from './api'
+import { OFF_TEXT, resolveKey, type KeyIo } from './key'
 
 const PATH_HELP =
   'API path under https://api.tailscale.com/api/v2, starting with "/". "-" is the default tailnet (/tailnet/-/devices).'
@@ -38,15 +39,26 @@ function reply(out: { text: string; isError: boolean }): { result: string } | { 
   return out.isError ? { result: out.text, isError: true as const } : { result: out.text }
 }
 
-/** The host wiring every tool shares: reads the key and calls the API. `$` is passed only to this top-level function so the engine's source analysis still sees each `$` call. */
-async function run($: EngineInterface, req: Request): Promise<ReturnType<typeof reply>> {
-  // The key is read on every call, never from options or the code.
-  const key = await $.env.get('TS_API_KEY')
-  // $.http.fetch is wrapped, not passed as a value: the engine's validate rejects the latter.
-  return reply(await call((url, init) => $.http.fetch(url, init), key, req))
+/** The repository's settings, which decide whether the key option may be used. */
+function keyIo($: EngineInterface): KeyIo {
+  return {
+    settings: async (source) => {
+      const settings = await $.settings.read({ source })
+      return { pluginConfigs: settings?.pluginConfigs }
+    },
+  }
 }
 
-export const register: Register = (on) => {
+/** The host wiring every tool shares: resolves the key and calls the API. `$` is passed only to this top-level function so the engine's source analysis still sees each `$` call. */
+async function run($: EngineInterface, req: Request, option: unknown): Promise<ReturnType<typeof reply>> {
+  // The key comes from the `apiKey` option only, checked against the repository's settings on every call.
+  const access = await resolveKey(keyIo($), option)
+  if (access.off !== undefined) return reply({ text: OFF_TEXT[access.off], isError: true })
+  // $.http.fetch is wrapped, not passed as a value: the engine's validate rejects the latter.
+  return reply(await call((url, init) => $.http.fetch(url, init), access.key, req))
+}
+
+export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     await $.tool.register({
       name: 'tailscale_get',
@@ -91,7 +103,7 @@ export const register: Register = (on) => {
 
   on('tool.call', { tool: 'mcp__tailscale__tailscale_get' }, async ($, e) => {
     const fields = Array.isArray(e.fields) ? e.fields.filter((f): f is string => typeof f === 'string') : undefined
-    return run($, { method: 'GET', path: e.path, redact: true, fields })
+    return run($, { method: 'GET', path: e.path, redact: true, fields }, options.apiKey)
   })
 
   on('tool.call', { tool: 'mcp__tailscale__tailscale_write' }, async ($, e) => {
@@ -100,6 +112,6 @@ export const register: Register = (on) => {
       return { deny: `Invalid method: ${method}. Use ${WRITE_METHODS.join(', ')}.` }
     }
     const ifMatch = typeof e.ifMatch === 'string' ? e.ifMatch : undefined
-    return run($, { method, path: e.path, body: e.body, ifMatch })
+    return run($, { method, path: e.path, body: e.body, ifMatch }, options.apiKey)
   })
 }

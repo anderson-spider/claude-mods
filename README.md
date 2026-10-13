@@ -9,7 +9,7 @@ Marketplace of [Claude Code](https://claude.com/claude-code) plugins made by and
 | [chatgpt](plugins/chatgpt/README.md) | Lets Claude ask your logged-in ChatGPT, or have it generate an image, in terminal-browser, Claude in Chrome or the Claude desktop app's built-in browser, and saves the result locally. |
 | [codex-computer-use](plugins/codex-computer-use/README.md) | Routes native Mac app control through Codex computer use from the ChatGPT app instead of Claude's own computer use, asking before each new app. |
 | [crew](plugins/crew) | Registers five specialist subagents: `code-reader` and `research` on Haiku; `designer` and `developer` on Sonnet; `architect` on Opus. `jevKey` enables Jev effort routing. A gateway as `ANTHROPIC_BASE_URL` (such as Tailscale Aperture routing Codex models to an OmniRoute) enables fixed-model Codex twins; the `mode` option and `/crew-mode` switch plain calls to those twins (`codex`) or keep them on Claude (`claude`, the default), so calls may go to OpenAI with or without Jev. The experimental `codexLogin` option runs the code-reader twin on your Codex CLI login with no gateway. An always-visible HUD band shows plan progress and running agents; no panel command. |
-| [tailscale](plugins/tailscale/README.md) | Lets Claude query and modify your tailnet through the Tailscale API. |
+| [tailscale](plugins/tailscale/README.md) | Lets Claude query and modify your tailnet through the Tailscale API, with the key in the sensitive `apiKey` plugin option. |
 
 ## Install
 
@@ -31,7 +31,7 @@ To use a local copy instead of GitHub, pass the folder path:
 
 The plugins here are function hooks mods, a Claude Code API still in early access that may change between versions.
 
-Requires Claude Code v2.1.287 or later, the first version that runs mods without an opt-in flag ([mods overview](https://code.claude.com/docs/en/plugins/mods)); crew's `mode` option uses `userConfig` `options`, which need v2.1.271 ([plugins reference](https://code.claude.com/docs/en/plugins-reference)), which that floor already covers. The repository is checked with v2.1.296 (`claude --version`). The mods reference marks host calls that need a later version; the plugins have not been audited against those marks.
+Requires Claude Code v2.1.287 or later, the first version that runs mods without an opt-in flag ([mods overview](https://code.claude.com/docs/en/plugins/mods)); crew's `mode` option uses `userConfig` `options`, which need v2.1.271 ([plugins reference](https://code.claude.com/docs/en/plugins-reference)), which that floor already covers; tailscale's sensitive `apiKey` is a `userConfig` option too, for which no separate minimum was found beyond that floor. The repository is checked with v2.1.296 (`claude --version`). The mods reference marks host calls that need a later version; the plugins have not been audited against those marks.
 
 See [Privacy and permissions](docs/PRIVACY.md) for what each plugin reads and saves, and [Verification](docs/VERIFICATION.md) for what the tests cover and what they do not.
 
