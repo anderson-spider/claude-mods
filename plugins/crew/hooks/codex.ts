@@ -125,9 +125,8 @@ export function codexBody(input: { model: string; effort: CodexEffort; system: s
 /** The step as crew yields it: the chunks in order, then the result's fields; `reasoning` is what to keep for later steps. */
 export type CodexStep = Omit<TurnStepResult, 'turnId' | 'index'> & { chunks: TurnStepChunk[]; reasoning: Map<string, string[]> }
 
-/** A step that answers with why Codex was not asked or did not answer: never a throw, which would send the request to Anthropic. */
-export function failedStep(reason: string): CodexStep {
-  const text = `crew: this Codex twin could not run: ${reason}.`
+/** A step that answers with plain text: no tool, no reasoning to keep. */
+export function textStep(text: string): CodexStep {
   return {
     chunks: [{ kind: 'text', index: 0, text }, { kind: 'stop', stopReason: 'end_turn', usage: null }],
     answer: text,
@@ -136,6 +135,11 @@ export function failedStep(reason: string): CodexStep {
     usage: null,
     reasoning: new Map(),
   }
+}
+
+/** A step that answers with why Codex was not asked or did not answer: never a throw, which would send the request to Anthropic. */
+export function failedStep(reason: string): CodexStep {
+  return textStep(`crew: this Codex twin could not run: ${reason}.`)
 }
 
 /** The payloads of an event stream's `data:` lines, one per event, parsed; anything that is no JSON object is skipped. */

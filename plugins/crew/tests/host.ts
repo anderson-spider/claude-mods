@@ -33,18 +33,26 @@ export type Replies = (call: Fetched) => Promise<Reply>
  * The host's `http.fetch`, no network: it records each request in `calls` before it awaits `reply`, which answers every
  * URL. Routing by URL comes back with its first consumer and a test.
  */
-export function fakeFetch(on: On, reply: Replies, calls: Fetched[] = []): Fetched[] {
+export function fakeFetch(on: On, reply: Replies, calls: Fetched[] = [], helper?: { replies: Replies; calls: Fetched[] }): Fetched[] {
   on('http.fetch', async (_$, e) => {
     const call = {
       url: e.url,
       headers: (e.init?.headers ?? {}) as Record<string, string>,
       body: String(e.init?.body ?? ''),
     }
+    // The crew Codex helper's socket is its own world: its calls are kept apart, and no socket answers by default.
+    if (helper && call.url.startsWith(HELPER_URL)) {
+      helper.calls.push(call)
+      return { value: await helper.replies(call) }
+    }
     calls.push(call)
     return { value: await reply(call) }
   })
   return calls
 }
+
+/** The URL prefix of every request to the crew Codex helper (`hooks/appserver.ts`). */
+export const HELPER_URL = 'http://crew-codex/'
 
 export type Seen = {
   fetches: Fetched[]
@@ -62,6 +70,8 @@ export type Seen = {
   /** The lines `$.ui.log` sent to the transcript. */
   transcript: string[]
   settingsReads: number
+  /** What the plugin sent to the crew Codex helper's socket (the API calls are in `fetches`). */
+  helper: Fetched[]
 }
 
 /** The host beneath the plugin: env, settings and files, Jev's endpoint, the spawn and the step the plugin routes. */
@@ -78,6 +88,8 @@ export function jevWorld(
     cwd?: string
     /** What the API answers, for every URL (see `fakeFetch`). */
     reply?: Replies
+    /** What the crew Codex helper's socket answers; by default nothing listens on it. */
+    helper?: Replies
     spawn?: (e: Record<string, unknown>) => Promise<{ model: string; agentId: string }>
     agents?: { id: string; type: string; description: string }[]
     /** The decision log's write rejects. */
@@ -97,7 +109,7 @@ export function jevWorld(
     listFail?: boolean
   } = {},
 ) {
-  const seen: Seen = { fetches: [], statusLine: [], commands: [], registered: [], spawned: [], steps: [], notices: [], logs: [], writes: [], transcript: [], settingsReads: 0 }
+  const seen: Seen = { fetches: [], statusLine: [], commands: [], registered: [], spawned: [], steps: [], notices: [], logs: [], writes: [], transcript: [], settingsReads: 0, helper: [] }
   const flags = { settingsFail: opts.settingsFail === true, registerFail: false }
   // `mock.clock` registers `clock.now` itself and the engine refuses a second one, so a test's own is registered instead.
   const now = opts.now
@@ -125,7 +137,10 @@ export function jevWorld(
     seen.writes.push({ path: e.path, text: e.text })
     return { value: undefined }
   })
-  fakeFetch(on, opts.reply ?? (async () => ok(answer(3.9))), seen.fetches)
+  fakeFetch(on, opts.reply ?? (async () => ok(answer(3.9))), seen.fetches, {
+    calls: seen.helper,
+    replies: opts.helper ?? (async () => { throw new Error('connect ENOENT') }),
+  })
   if (opts.register) {
     on('agent.register', (_$, e) => {
       if (e.name.endsWith('-codex') && (flags.registerFail || opts.twinFail?.(e.name))) throw new Error('refused')
