@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 
-import { binCandidates, candidates, DISABLED, findCodex, MCP_SERVERS, mcpServers, prepareHome, serverArgs, serverEnv } from '../lib/codex-bin.mjs'
+import { binCandidates, candidates, DISABLED, findCodex, MCP_SERVERS, mcpServers, prepareHome, serverArgs, serverEnv, serverPath } from '../lib/codex-bin.mjs'
 
 test('candidates are the link locations then the standalone releases, newest version first', () => {
   const list = () => ['0.9.0-x', '0.162.1-x', '0.20.0-x']
@@ -50,14 +50,28 @@ test('a server program is looked up by absolute path, and one that is not found 
   assert.deepEqual(mcpServers('/h', { can: () => false }).map(({ name }) => name), ['context7'])
 })
 
+test('a server program gets the directory of the helper\'s node first on its PATH, then the helper\'s PATH, with no repeats', () => {
+  assert.equal(serverPath('/n/bin/node', '/usr/bin:/bin'), '/n/bin:/usr/bin:/bin')
+  assert.equal(serverPath('/n/bin/node', '/usr/bin:/n/bin::/bin'), '/n/bin:/usr/bin:/bin')
+  assert.equal(serverPath('/n/bin/node', ''), '/n/bin')
+
+  const found = mcpServers('/h', { can: path => path === '/usr/local/bin/codegraph', path: '/n/bin:/usr/bin' })
+
+  assert.deepEqual(found.map(({ name, env }) => [name, env]), [
+    ['context7', undefined],
+    ['codegraph', { PATH: '/n/bin:/usr/bin' }],
+  ])
+})
+
 test('each resolved server is declared with -c after the shell settings and before the server, and none is the default', () => {
-  const args = serverArgs(mcpServers('/h', { can: path => path === '/usr/local/bin/codegraph' }))
+  const args = serverArgs(mcpServers('/h', { can: path => path === '/usr/local/bin/codegraph', path: '/n/bin:/usr/bin' }))
 
   assert.equal(args.at(-1), 'app-server')
   assert.deepEqual(args.slice(16, -1), [
     '-c', 'mcp_servers.context7.url="https://mcp.context7.com/mcp"',
     '-c', 'mcp_servers.codegraph.command="/usr/local/bin/codegraph"',
     '-c', 'mcp_servers.codegraph.args=["serve","--mcp"]',
+    '-c', 'mcp_servers.codegraph.env.PATH="/n/bin:/usr/bin"',
   ])
   assert.equal(serverArgs().some(arg => arg.startsWith('mcp_servers.')), false)
 })

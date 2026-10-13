@@ -3,7 +3,7 @@
 // plugins load into a crew thread (the one exception is the fixed `MCP_SERVERS` table below), and the login stays the
 // Codex CLI's file: crew never writes it.
 import { existsSync, readdirSync, lstatSync, mkdirSync, readlinkSync, symlinkSync, unlinkSync, accessSync, constants } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, delimiter, join } from 'node:path'
 
 /** Global flags that keep the user's apps, plugins, hooks and desktop tools out of a crew thread. */
 export const DISABLED = ['apps', 'plugins', 'hooks', 'computer_use', 'browser_use']
@@ -84,8 +84,18 @@ export const MCP_SERVERS = Object.freeze([
 /** Where a server program may be: the usual link locations, like `candidates`. */
 export const binCandidates = (home, name) => [join(home, '.local/bin', name), `/opt/homebrew/bin/${name}`, `/usr/local/bin/${name}`]
 
-/** `MCP_SERVERS` with each `command` resolved to an absolute path; a server with no executable program is dropped. */
-export const mcpServers = (home, { can = executable } = {}) =>
+/**
+ * The PATH of a server program: the directory of the helper's own `node` first, then the helper's PATH. A launchd job has
+ * no user PATH, and a program installed as a `#!/usr/bin/env node` shim dies at start without a `node` on it.
+ */
+export const serverPath = (execPath = process.execPath, path = process.env.PATH ?? '') =>
+  [...new Set([dirname(execPath), ...path.split(delimiter)].filter(Boolean))].join(delimiter)
+
+/**
+ * `MCP_SERVERS` with each `command` resolved to an absolute path and given the `serverPath` env; a server with no
+ * executable program is dropped.
+ */
+export const mcpServers = (home, { can = executable, path = serverPath() } = {}) =>
   MCP_SERVERS.flatMap(server => {
     if (server.command === undefined) {
       return [server]
@@ -93,16 +103,17 @@ export const mcpServers = (home, { can = executable } = {}) =>
 
     const command = binCandidates(home, server.command).find(can)
 
-    return command === undefined ? [] : [{ ...server, command }]
+    return command === undefined ? [] : [{ ...server, command, env: { PATH: path } }]
   })
 
 const toml = value => JSON.stringify(value)
 
 /** The `-c` settings that declare one server. */
-const mcpSettings = ({ name, url, command, args }) => [
+const mcpSettings = ({ name, url, command, args, env }) => [
   ...(url === undefined ? [] : [`mcp_servers.${name}.url=${toml(url)}`]),
   ...(command === undefined ? [] : [`mcp_servers.${name}.command=${toml(command)}`]),
   ...(args === undefined ? [] : [`mcp_servers.${name}.args=${toml(args)}`]),
+  ...Object.entries(env ?? {}).map(([key, value]) => `mcp_servers.${name}.env.${key}=${toml(value)}`),
 ]
 
 /**

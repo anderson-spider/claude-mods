@@ -1,2 +1,2 @@
 // Bump when helper behavior changes; users rerun install.sh to load it.
-export const VERSION = '0.5.0'
+export const VERSION = '0.5.1'
