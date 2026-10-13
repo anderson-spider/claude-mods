@@ -706,6 +706,7 @@ function agentIo($: Dollar): AgentIo {
 /** The plan files' host access: the session directory, the files and the displayed plans. */
 function planIo($: Dollar): PlanIo {
   return {
+    root: () => $.session.root(),
     cwd: () => $.session.cwd(),
     exists: path => $.fs.exists(path),
     stat: path => $.fs.stat(path, { resolve: true }),

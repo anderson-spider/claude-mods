@@ -86,6 +86,7 @@ export function jevWorld(
     settingsFail?: boolean
     /** The session's directory; the repository root by default. */
     cwd?: string
+    root?: string
     /** What the API answers, for every URL (see `fakeFetch`). */
     reply?: Replies
     /** What the crew Codex helper's socket answers; by default nothing listens on it. */
@@ -117,6 +118,7 @@ export function jevWorld(
   if (now) on('clock.now', () => ({ value: now() }))
   mock.env(on, { HOME, ...opts.env })
   on('session.cwd', async () => ({ value: opts.cwd ?? ROOT }))
+  on('session.root', async () => ({ value: opts.root ?? opts.cwd ?? ROOT }))
   on('settings.read', async (_$, e) => {
     seen.settingsReads++
     if (flags.settingsFail) throw new Error('settings unreadable')

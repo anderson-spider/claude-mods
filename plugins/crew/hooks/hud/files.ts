@@ -4,6 +4,9 @@ import { selectPlans } from './plan'
 
 /** The plan files' host access: reads and the published display, never the host itself. */
 export type PlanIo = {
+  /** The session's project root, where the plans live: a shell `cd` does not move it. */
+  root(): Promise<string>
+  /** The shell's directory, which a relative written path is resolved against. */
   cwd(): Promise<string>
   /** Absence is asked of `exists`: a stat rejection reaches a hook without its `code`. */
   exists(path: string): Promise<boolean>
@@ -41,7 +44,7 @@ async function removedPlan(io: PlanIo, path: string, error: unknown): Promise<bo
 }
 
 async function planDirectory(io: PlanIo): Promise<Directory | undefined> {
-  const cwd = normalizePath(await io.cwd())
+  const cwd = normalizePath(await io.root())
   const path = `${cwd}/.crew/plans`
   // A stat rejection reaches a hook without its `code`, so absence is asked of `exists`: a repository with no plans is the default.
   if (!(await io.exists(path))) return undefined

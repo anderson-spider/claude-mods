@@ -27,9 +27,11 @@ function world(files: Record<string, string> = {}) {
     logs: [] as string[],
     reads: 0,
     statFirst: undefined as undefined | (() => Promise<void>),
+    cwd: ROOT,
   }
   const io: PlanIo = {
-    cwd: async () => ROOT,
+    root: async () => ROOT,
+    cwd: async () => w.cwd,
     exists: async path => w.existsFails.has(path) ? Promise.reject(new Error('exists failed')) : path === DIR ? w.directory !== 'missing' : path.startsWith(`${DIR}/`) && path.slice(DIR.length + 1) in w.files && !w.existsHidesFiles.has(path),
     stat: async given => {
       const path = normalizePath(given)
@@ -84,6 +86,17 @@ test('a refresh publishes loading before the first read, then the plans, and the
   w.files['a.md'] = plan('T1', 'T3')
   await refresher.refresh(io)
   expect(w.published).toHaveLength(3)
+})
+
+test('a shell cd into a subdirectory keeps the plans: they are read under the root, and a relative write resolves from the shell', async () => {
+  const { w, io } = world({ 'a.md': plan('T1') })
+  w.cwd = `${ROOT}/plugins/app`
+  const refresher = createPlanRefresher()
+  await refresher.refresh(io)
+  expect(names(w.shown)).toEqual(['a'])
+  w.files['b.md'] = plan('T2')
+  await refresher.written(io, '../../.crew/plans/b.md')
+  expect(names(w.shown)).toEqual(['a', 'b'])
 })
 
 test('a repository with no plans directory publishes an empty list without logging, and one that is a link or elsewhere too', async () => {
