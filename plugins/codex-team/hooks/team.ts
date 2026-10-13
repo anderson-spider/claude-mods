@@ -1,17 +1,19 @@
 // The `dispatch` tool's work: check the call, pick the agent, its directory and effort, deliver the brief and log the
 // decision. Pure: every host access is injected.
 import { saveDecision, fnv1a } from './decisions'
-import type { DecisionRecord, EffortSource } from './decisions'
+import type { DecisionRecord } from './decisions'
+import { assessEffort } from './effort'
+import type { EffortIo } from './effort'
 import { deliver } from './herdr'
 import type { Delivery, Run } from './herdr'
 import { brief, reportPath } from './report'
-import { EFFORTS, ROLES, SLUG, SPECS, agentName, codexArgs } from './roles'
+import { EFFORTS, ROLES, SLUG, SPECS, agentName, codexArgs, startEffort } from './roles'
 import type { Effort, Role } from './roles'
 
-export type TeamIo = {
+export type TeamIo = EffortIo & {
   run: Run
-  /** The three variables the team reads; the engine requires each name to be literal. */
-  env: () => Promise<{ HERDR_ENV?: string; HERDR_WORKSPACE_ID?: string; HOME?: string }>
+  /** The engine requires each environment variable name to be literal. */
+  env: () => Promise<{ HERDR_ENV?: string; HERDR_WORKSPACE_ID?: string; HOME?: string; JEV_API_KEY?: string }>
   /** The session's project root: the repository the team works on. */
   root: () => Promise<string>
   now: () => Promise<number>
@@ -66,13 +68,16 @@ export async function dispatch(io: TeamIo, input: { role?: unknown; task?: unkno
     roots = [reports]
   }
 
-  const effort = (input.effort as Effort | undefined) ?? spec.effort
-  const source: EffortSource = input.effort === undefined ? 'default' : 'pinned'
+  const selected = await assessEffort(io, { role, task: input.task, key: env.JEV_API_KEY, home, root: repo, pinned: input.effort as Effort | undefined })
+  const capped = startEffort(spec.model, selected.effort)
+  const choice = { ...selected, effort: capped.effort }
+  const { effort, source } = choice
   const name = agentName(role, input.slug)
   const started = await io.now()
   const ts = new Date(started).toISOString()
   const record = (delivery: Delivery, at: number): DecisionRecord => ({
-    v: 1, ts, role, agent: name, model: spec.model, effort, source, taskHash: fnv1a(input.task as string),
+    v: 2, ts, role, agent: name, model: spec.model, ...choice, taskHash: fnv1a(input.task as string),
+    effortApplied: delivery.started,
     started: delivery.started, promptStatus: delivery.status, reason: delivery.reason ?? null, durationMs: Math.max(0, at - started),
   })
 
@@ -84,13 +89,15 @@ export async function dispatch(io: TeamIo, input: { role?: unknown; task?: unkno
     codexArgs: codexArgs(spec, effort, roots),
     prompt: brief({ role, slug: input.slug, repo, cwd, task: input.task, report }),
     // `unknown` is on disk before the prompt can reach the agent, so a crash never leaves a sent task unrecorded.
-    beforeSend: async () => saveDecision(io, home, record({ agent: name, started: true, status: 'unknown' }, await io.now())),
+    beforeSend: async started => {
+      await saveDecision(io, home, record({ agent: name, started, existed: !started, status: 'unknown' }, await io.now()))
+    },
   })
   await saveDecision(io, home, record(delivery, await io.now()))
 
   const lines = [
-    `agent: ${delivery.agent}${delivery.pane ? ` (pane ${delivery.pane})` : ''}${delivery.started ? ', started now' : ', reused'}`,
-    `role: ${role}, model ${spec.model}, effort ${effort} (${source})`,
+    `agent: ${delivery.agent}${delivery.pane ? ` (pane ${delivery.pane})` : ''}${delivery.started ? ', started now' : delivery.existed ? ', reused' : ', not started'}`,
+    `role: ${role}, model ${spec.model}, effort ${effort} (${source})${capped.reason ? `, ${capped.reason}` : ''}${delivery.existed ? ', not applied: reused agent keeps its start effort' : ''}`,
     `delivery: ${delivery.status}${delivery.reason ? ` (${delivery.reason})` : ''}`,
     `report: ${report}`,
     delivery.status === 'confirmed'

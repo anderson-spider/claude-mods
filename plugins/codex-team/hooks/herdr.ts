@@ -15,6 +15,8 @@ export type Delivery = {
   pane?: string
   /** Whether this call started the agent (and its pane). */
   started: boolean
+  /** Whether the target was already live in the agent list, including refused dispatches. */
+  existed: boolean
   status: PromptStatus
   /** Why it was not confirmed: a Herdr error code or a short reason; never the prompt. */
   reason?: string
@@ -28,8 +30,8 @@ export type DispatchInput = {
   cwd: string
   codexArgs: readonly string[]
   prompt: string
-  /** Called once the prompt is about to be written: the caller records `unknown` before anything can reach the agent. */
-  beforeSend?: () => Promise<void>
+  /** Called before writing the prompt, with whether this call started the agent, so its `unknown` record is accurate. */
+  beforeSend?: (started: boolean) => Promise<void>
 }
 
 /** Herdr refuses a prompt above this; the router does the same. */
@@ -85,12 +87,13 @@ async function newPane(run: Run, input: DispatchInput, team: readonly Listed[]):
  * was not seen starting is `unknown`, and is never sent again.
  */
 export async function deliver(run: Run, input: DispatchInput): Promise<Delivery> {
-  const base = { agent: input.name, started: false }
+  const base = { agent: input.name, started: false, existed: false }
   if (new TextEncoder().encode(input.prompt).length > MAX_PROMPT_BYTES) return { ...base, status: 'not_sent', reason: 'prompt over 64 KiB' }
 
   const agents = await listAgents(run)
   if (typeof agents === 'string') return { ...base, status: 'not_sent', reason: agents }
   const live = agents.find(agent => agent.name === input.name)
+  base.existed = live !== undefined
 
   if (input.writes) {
     const other = agents.find(agent => agent.name !== input.name && isTeamName(agent.name) && agent.name?.startsWith('dev-') && normal(agent.cwd) === normal(input.cwd))
@@ -112,15 +115,15 @@ export async function deliver(run: Run, input: DispatchInput): Promise<Delivery>
     started = true
   }
 
-  await input.beforeSend?.()
+  await input.beforeSend?.(started)
   const sent = await run(
     ['herdr', 'agent', 'prompt', input.name, input.prompt, '--wait', '--until', 'working', '--until', 'blocked', '--timeout', String(PROMPT_TIMEOUT_MS)],
     { timeoutMs: PROMPT_TIMEOUT_MS + 10_000 },
   ).catch(() => undefined)
-  if (!sent) return { agent: input.name, pane, started, status: 'unknown', reason: 'prompt call failed' }
-  if (sent.exitCode === 0) return { agent: input.name, pane, started, status: 'confirmed' }
+  if (!sent) return { ...base, pane, started, status: 'unknown', reason: 'prompt call failed' }
+  if (sent.exitCode === 0) return { ...base, pane, started, status: 'confirmed' }
   const reason = errorOf(sent)
   // Refused before any byte was written: the agent never saw it.
   const refused = reason === 'agent_blocked' || reason === 'agent_not_found'
-  return { agent: input.name, pane, started, status: refused ? 'not_sent' : 'unknown', reason }
+  return { ...base, pane, started, status: refused ? 'not_sent' : 'unknown', reason }
 }
