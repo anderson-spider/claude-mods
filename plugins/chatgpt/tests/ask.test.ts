@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import { ask } from '../hooks/ask'
-import { isChatUrl } from '../hooks/browser'
+import { isChatUrl } from '../hooks/tab'
 import { inputFor } from '../hooks/scripts'
 import { fakeBrowser, printed } from './fake-page'
 

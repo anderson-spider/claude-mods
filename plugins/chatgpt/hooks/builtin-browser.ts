@@ -1,4 +1,4 @@
-import { leadingJson } from './mcp-browser'
+import { leadingJson } from './tool-text'
 import type { McpSpec } from './mcp-backend'
 
 export const BUILTIN = "the Claude app's built-in browser"

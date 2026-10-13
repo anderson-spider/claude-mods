@@ -1,6 +1,6 @@
 import type { Browser, Check, TabHolder } from './model'
-import { CHATGPT_URL, ORIGIN, chatUrlError, findTab } from './browser'
-import { DOCTOR_SCRIPT, MODEL_READY, parseOutput } from './scripts'
+import { CHATGPT_URL, DOCTOR_SCRIPT, MODEL_READY, ORIGIN, parseOutput } from './scripts'
+import { chatUrlError, findTab } from './tab'
 
 // How long the doctor gives the model menu to render after the composer; a page without it still gets its report.
 const MODEL_MS = 5_000

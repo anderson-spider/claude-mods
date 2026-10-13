@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { parseOutput, sendScript } from '../hooks/scripts'
+import { parseOutput, sendScript, uploadBody } from '../hooks/scripts'
 import { printed } from './fake-page'
 
 test('the send script checks it runs on chatgpt.com before it touches the composer', () => {
@@ -16,4 +16,8 @@ test('sendScript embeds the prompt as a string literal', () => {
 test('parseOutput reads the JSON a page script returns', () => {
   expect(parseOutput(printed({ a: 'x "y"\nz', b: [1] }))).toEqual({ a: 'x "y"\nz', b: [1] })
   expect(() => parseOutput('Error: no tab')).toThrow()
+})
+
+test('the page upload script first checks it runs on chatgpt.com', () => {
+  expect(uploadBody('input[type=file]', []).trimStart().startsWith('if (location.origin !== "https://chatgpt.com") return')).toBe(true)
 })

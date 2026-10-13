@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { type McpSpec, mcpBackend } from '../hooks/mcp-backend'
+import { type McpSpec, mcpBackend, staysOnChatgpt } from '../hooks/mcp-backend'
 import { fakeDeps, fakeMcp } from './mcp-helpers'
 
 // A made-up backend whose tab ids are numbers: the factory, not the spec, owns the prefix and the allow.
@@ -66,4 +66,19 @@ test('the allow keeps to the spec: its listing tools, and a script only in a tab
   // A prefix of the same length would slice to the same id: the prefix itself decides, not the length.
   expect(fox.stays('javascript_tool', script, 'cat:12')).toBe(false)
   expect(fox.stays('javascript_tool', script, undefined)).toBe(false)
+})
+
+test('staysOnChatgpt allows only listing, navigating to chatgpt.com and scripts in the plugin tab', () => {
+  const listing = ['tabs_context', 'tabs_create']
+  expect(staysOnChatgpt('tabs_context', {}, listing, undefined)).toBe(true)
+  expect(staysOnChatgpt('tabs_create', { foreground: false }, listing, undefined)).toBe(true)
+  expect(staysOnChatgpt('navigate', { url: 'https://chatgpt.com/' }, listing, undefined)).toBe(true)
+  expect(staysOnChatgpt('navigate', { tabId: 't1', url: 'https://chatgpt.com/c/abc-123' }, listing, undefined)).toBe(true)
+  expect(staysOnChatgpt('navigate', { url: 'https://example.com/' }, listing, undefined)).toBe(false)
+  expect(staysOnChatgpt('navigate', { url: 'https://chatgpt.com.evil.io/' }, listing, undefined)).toBe(false)
+  expect(staysOnChatgpt('javascript_tool', { action: 'javascript_exec', tabId: 't1', text: '1' }, listing, 't1')).toBe(true)
+  expect(staysOnChatgpt('javascript_tool', { action: 'javascript_exec', tabId: 7, text: '1' }, listing, '7')).toBe(true)
+  expect(staysOnChatgpt('javascript_tool', { action: 'javascript_exec', tabId: 'other', text: '1' }, listing, 't1')).toBe(false)
+  expect(staysOnChatgpt('javascript_tool', { action: 'javascript_exec', tabId: 't1', text: '1' }, listing, undefined)).toBe(false)
+  expect(staysOnChatgpt('computer', { action: 'left_click' }, listing, 't1')).toBe(false)
 })

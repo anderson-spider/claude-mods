@@ -1,4 +1,4 @@
-import { chatUrlError } from './browser'
+import { chatUrlError } from './tab'
 import { mimeOf, typeOf } from './files'
 import type { Attachment, AttachmentFiles, Request } from './model'
 

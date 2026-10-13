@@ -15,9 +15,11 @@ import {
   JOBS_DESCRIPTION,
   JOBS_INPUT_SCHEMA,
 } from './tool-schemas'
-import { type Candidate, chooseBrowser } from './browsers'
+import { type Candidate, chooseBrowser } from './chooser'
 import { BACKENDS, ownCallAllowed } from './backends'
-import { type BrowserDeps, type McpCall, type McpHost, bytesOf, mcpCallOf } from './mcp-browser'
+import { type McpCall, type McpHost, mcpCallOf } from './mcp-call'
+import type { BrowserDeps } from './page-browser'
+import { bytesOf } from './upload'
 import { serve } from './tools'
 
 // Requests take turns in the plugin's own tab, kept across them.

@@ -1,5 +1,22 @@
 import type { Browser } from './model'
-import { type BrowserDeps, type McpCall, pageBrowser, scriptText, staysOnChatgpt } from './mcp-browser'
+import type { McpCall } from './mcp-call'
+import { type BrowserDeps, pageBrowser } from './page-browser'
+import { CHATGPT_URL } from './scripts'
+import { isChatUrl } from './tab'
+import { scriptText } from './tool-text'
+
+/**
+ * Whether a backend's call stays on chatgpt.com, so the plugin's `tool.check` hook may allow it: auto mode's
+ * classifier gives no verdict on a call no prompt asked for. `listing` names the backend's tools that only list or
+ * open tabs; a script runs only in `ownTab`, the plugin's tab as the backend names it.
+ */
+export function staysOnChatgpt(tool: string, input: unknown, listing: readonly string[], ownTab: string | undefined): boolean {
+  const args = (input ?? {}) as Record<string, unknown>
+  if (listing.includes(tool)) return true
+  if (tool === 'navigate') return typeof args.url === 'string' && (args.url === CHATGPT_URL || isChatUrl(args.url))
+  if (tool === 'javascript_tool') return args.action === 'javascript_exec' && ownTab !== undefined && String(args.tabId) === ownTab
+  return false
+}
 
 /**
  * What differs between two MCP browser backends. A backend's tab ids are its own (`tabs` and `openTab` speak them);
