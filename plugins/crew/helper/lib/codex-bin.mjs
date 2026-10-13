@@ -1,6 +1,7 @@
 // Where the `codex` binary and the isolated Codex home are. A launchd job has no user PATH, so the binary is found by
 // absolute candidates; the home holds only a link to the user's login, so none of the user's MCP servers, hooks or
-// plugins load into a crew thread, and the login stays the Codex CLI's file: crew never writes it.
+// plugins load into a crew thread (the one exception is the fixed `MCP_SERVERS` table below), and the login stays the
+// Codex CLI's file: crew never writes it.
 import { existsSync, readdirSync, lstatSync, mkdirSync, readlinkSync, symlinkSync, unlinkSync, accessSync, constants } from 'node:fs'
 import { join } from 'node:path'
 
@@ -70,11 +71,50 @@ export const prepareHome = (dir, home) => {
   return existsSync(login)
 }
 
-/** argv for `codex`: the global disables, the settings that keep a turn's shell lean and offline, then the server. */
-export const serverArgs = () => [
+/**
+ * The only MCP servers a crew thread gets, declared here and never read from the user's config. `url` is a remote server
+ * (anonymous: the user's OAuth credentials are not in the isolated home); `command` is a program looked up by `binCandidates`,
+ * because a launchd job has no user PATH. A server whose program is not found is left out.
+ */
+export const MCP_SERVERS = Object.freeze([
+  Object.freeze({ name: 'context7', url: 'https://mcp.context7.com/mcp' }),
+  Object.freeze({ name: 'codegraph', command: 'codegraph', args: Object.freeze(['serve', '--mcp']) }),
+])
+
+/** Where a server program may be: the usual link locations, like `candidates`. */
+export const binCandidates = (home, name) => [join(home, '.local/bin', name), `/opt/homebrew/bin/${name}`, `/usr/local/bin/${name}`]
+
+/** `MCP_SERVERS` with each `command` resolved to an absolute path; a server with no executable program is dropped. */
+export const mcpServers = (home, { can = executable } = {}) =>
+  MCP_SERVERS.flatMap(server => {
+    if (server.command === undefined) {
+      return [server]
+    }
+
+    const command = binCandidates(home, server.command).find(can)
+
+    return command === undefined ? [] : [{ ...server, command }]
+  })
+
+const toml = value => JSON.stringify(value)
+
+/** The `-c` settings that declare one server. */
+const mcpSettings = ({ name, url, command, args }) => [
+  ...(url === undefined ? [] : [`mcp_servers.${name}.url=${toml(url)}`]),
+  ...(command === undefined ? [] : [`mcp_servers.${name}.command=${toml(command)}`]),
+  ...(args === undefined ? [] : [`mcp_servers.${name}.args=${toml(args)}`]),
+]
+
+/**
+ * argv for `codex`: the global disables, the settings that keep a turn's shell lean and offline, the fixed MCP servers,
+ * then the server.
+ */
+export const serverArgs = (servers = []) => [
   ...DISABLED.flatMap(name => ['--disable', name]),
   // Web search is not covered by networkAccess; a login shell would reload the user's profile (and its secrets).
-  ...['web_search="disabled"', 'allow_login_shell=false', 'shell_environment_policy.inherit="core"'].flatMap(setting => ['-c', setting]),
+  ...['web_search="disabled"', 'allow_login_shell=false', 'shell_environment_policy.inherit="core"', ...servers.flatMap(mcpSettings)].flatMap(
+    setting => ['-c', setting],
+  ),
   'app-server',
 ]
 
