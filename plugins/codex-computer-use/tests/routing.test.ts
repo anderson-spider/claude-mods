@@ -1,7 +1,8 @@
 import { expect, test } from 'claude-code/testing'
 
+import { parseCommand } from '../hooks/commands'
 import { callerOf } from '../hooks/helper'
-import { APPROVAL_MS, isOwnDesktopTool, parseCommand } from '../hooks/routing'
+import { APPROVAL_MS, isOwnDesktopTool } from '../hooks/routing'
 
 test('routing pieces: commands, own desktop tools, callers and answers', () => {
   expect(parseCommand('on')).toEqual({ kind: 'on' })

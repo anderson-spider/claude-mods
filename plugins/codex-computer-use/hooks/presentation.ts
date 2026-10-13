@@ -1,9 +1,14 @@
-import type { CallResult, ContentBlock, Failure, ForgetReply, StatusReply } from './model'
+import type { CodexAsking } from '../types'
+import type { CallResult, ContentBlock, Failure, ForgetReply, ReleaseReply, ResetReply, SettingsReply, StatusReply } from './model'
 import { LEASE_MINUTES } from './routing'
 
-// What the model and the person are told about a helper reply. Pure.
+// Everything the model and the person are told: helper replies, the bridge's
+// refusals, the `/codex-cu` command texts and the approval band's wording. Pure.
 
 export type ToolAnswer = { result: string | ContentBlock[]; isError?: true }
+
+/** A tool answer that tells the model the call did not happen. */
+export const refusal = (text: string) => ({ result: text, isError: true as const })
 
 const withNotes = (text: string, notes: readonly string[] | undefined) =>
   notes === undefined || notes.length === 0 ? text : `${notes.join('\n')}\n\n${text}`
@@ -88,3 +93,64 @@ export const approvalWaitText = (ms: number): string => {
 
   return ` within ${amount} ${unit}${amount === 1 ? '' : 's'}`
 }
+
+/** The help and synopsis of each `/codex-cu` usage; hooks/commands.ts lists them. */
+export const COMMAND_TEXT = {
+  on: { help: '/codex-cu on            use Codex for native apps (default)', synopsis: 'on' },
+  off: { help: '/codex-cu off           restore Claude\'s desktop tools', synopsis: 'off' },
+  status: { help: '/codex-cu status        show route, helper and app owners', synopsis: 'status' },
+  'auto-approve': { help: '/codex-cu auto-approve on|off   skip (on) or ask (off) for new apps', synopsis: 'auto-approve on|off' },
+  forget: { help: '/codex-cu forget        clear this session\'s app answers', synopsis: 'forget [app]' },
+  'forget-app': { help: '/codex-cu forget <app>  remove always-allow from helper and Codex; ask again' },
+} as const
+
+/** The `/codex-cu help` text: one line per usage. */
+export const helpText = (lines: readonly string[]) => lines.join('\n')
+
+/** The description `$.command.register` shows: the synopses, in order. */
+export const commandDescription = (synopses: readonly string[]) => `Codex computer use: ${synopses.join(' | ')}`
+
+/** What `/codex-cu on` and `/codex-cu off` tell the person. */
+export const routeText = (isOn: boolean) =>
+  isOn
+    ? 'codex-cu on: desktop apps go through Codex computer use; Claude’s own computer use is blocked.'
+    : 'codex-cu off: Claude’s own desktop computer use is back; the Codex bridge refuses calls.'
+
+/** What `/codex-cu auto-approve on|off` tells the person. */
+export const autoApproveText = (isOn: boolean, reply: SettingsReply | Failure) =>
+  reply.status === 'unreachable' || reply.status === 'error'
+    ? `codex-cu: could not reach the helper (${reply.message}).`
+    : isOn
+      ? 'codex-cu auto-approve on: apps are used without asking (organization and safety blocks still apply).'
+      : 'codex-cu auto-approve off: a new app asks first.'
+
+/** What `/codex-cu forget` tells the person. */
+export const releaseText = (reply: ReleaseReply | Failure) =>
+  reply.status === 'ok' ? 'codex-cu: this session’s Codex sessions ended and its app answers were dropped.' : `codex-cu: ${JSON.stringify(reply)}`
+
+/** What the model is told when the bridge is called while the mod is off. */
+export const BRIDGE_OFF =
+  'codex-computer-use is off (/codex-cu off): use the default desktop route, or ask the person to type /codex-cu on.'
+
+/** What the model is told after it asked to reset its Codex session. */
+export const resetText = (reply: ResetReply) => reply.message ?? 'reset'
+
+/** What the model is told when the person did not answer an approval question in time or at all. */
+export const unansweredText = (displayName: string, outcome: 'aborted' | 'timeout', limitMs: number) =>
+  `The person did not answer whether Codex may use ${displayName}${outcome === 'timeout' ? approvalWaitText(limitMs) : ''}; nothing was done with it.`
+
+/** What the model is told when one call kept needing approvals. */
+export const TOO_MANY_ROUNDS = 'codex-cu: too many approval rounds for one call.'
+
+/** What the model is told when the bridge itself threw. */
+export const bridgeFailedText = (error: unknown) => `codex-cu: the bridge failed: ${error instanceof Error ? error.message : String(error)}`
+
+/** Who the approval question names as the asker. */
+export const askerText = (agentId: string | undefined) => (agentId === undefined ? 'main session' : `subagent ${agentId}`)
+
+/** The approval band: heading, sentence, the three buttons and the hint beside them. */
+export const askTitle = (now: Pick<CodexAsking, 'displayName'>) => `Codex computer use · Allow “${now.displayName}”?`
+export const askBody = (now: Pick<CodexAsking, 'displayName' | 'who'>) =>
+  `Asked by the ${now.who}. Codex will see what ${now.displayName} shows and can click and type in it.`
+export const ASK_LABELS = { session: 'This session', always: 'Always', deny: 'No' } as const
+export const ASK_HINT = '/codex-cu auto-approve on stops asking'

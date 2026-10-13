@@ -2,7 +2,7 @@ import type { CodexAsking, CodexCuInput } from '../types'
 import { callerOf } from './helper'
 import { ROUTES } from './model'
 import type { Choice, Route, RouteReplies } from './model'
-import { approvalWaitText, toAnswer } from './presentation'
+import { BRIDGE_OFF, TOO_MANY_ROUNDS, askerText, refusal, resetText, toAnswer, unansweredText } from './presentation'
 import type { ToolAnswer } from './presentation'
 
 export type BridgeDeps = {
@@ -22,7 +22,7 @@ export type BridgeInput = CodexCuInput & { tool_use_id: string; agentId?: string
 /** One bridge call: run the code, asking the person for each new app on the way. */
 export const serve = async (deps: BridgeDeps, input: BridgeInput, signal: AbortSignal): Promise<ToolAnswer> => {
   if (!(await deps.enabled())) {
-    return { result: 'codex-computer-use is off (/codex-cu off): use the default desktop route, or ask the person to type /codex-cu on.', isError: true as const }
+    return refusal(BRIDGE_OFF)
   }
 
   const caller = callerOf(await deps.sessionId(), input.agentId)
@@ -30,7 +30,7 @@ export const serve = async (deps: BridgeDeps, input: BridgeInput, signal: AbortS
   if (input.reset === true) {
     const reply = await deps.helper(ROUTES.reset, { caller })
 
-    return reply.status === 'ok' ? { result: reply.message ?? 'reset' } : toAnswer(reply)
+    return reply.status === 'ok' ? { result: resetText(reply) } : toAnswer(reply)
   }
 
   const body = { caller, code: input.code, title: input.title, timeout_ms: input.timeout_ms }
@@ -47,15 +47,12 @@ export const serve = async (deps: BridgeDeps, input: BridgeInput, signal: AbortS
       bundleId: reply.app.bundleId,
       displayName: reply.app.displayName,
       canAlways: reply.app.canAlways === true,
-      who: input.agentId === undefined ? 'main session' : `subagent ${input.agentId}`,
+      who: askerText(input.agentId),
     }
     const choice = await deps.ask(question, signal)
 
     if (choice === 'aborted' || choice === 'timeout') {
-      return {
-        result: `The person did not answer whether Codex may use ${reply.app.displayName}${choice === 'timeout' ? approvalWaitText(deps.limitMs) : ''}; nothing was done with it.`,
-        isError: true as const,
-      }
+      return refusal(unansweredText(reply.app.displayName, choice, deps.limitMs))
     }
 
     await deps.helper(ROUTES.approve, { caller, bundleId: reply.app.bundleId, choice })
@@ -65,5 +62,5 @@ export const serve = async (deps: BridgeDeps, input: BridgeInput, signal: AbortS
     }
   }
 
-  return { result: 'codex-cu: too many approval rounds for one call.', isError: true as const }
+  return refusal(TOO_MANY_ROUNDS)
 }
