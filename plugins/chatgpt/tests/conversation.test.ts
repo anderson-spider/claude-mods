@@ -1,8 +1,8 @@
 import { expect, test } from 'claude-code/testing'
-import { send, watch } from '../hooks/conversation'
+import { isHardBlocker, send, watch } from '../hooks/conversation'
 import type { PageState } from '../hooks/model'
 import { stateScript } from '../hooks/scripts'
-import { printed } from './helpers'
+import { basePage, printed } from './fake-page'
 
 test('send reports why the prompt could not be sent, and nothing on success', async () => {
   const answering = (value: unknown) => ({ js: async () => printed(value) })
@@ -12,17 +12,7 @@ test('send reports why the prompt could not be sent, and nothing on success', as
 
 // watch: the first comparison of the page against itself, and the length that must hold across two reads.
 
-const pageOf = (state: Partial<PageState> = {}): PageState => ({
-  href: 'https://chatgpt.com/c/abc',
-  composer: true,
-  login: false,
-  stop: false,
-  count: 0,
-  length: 0,
-  images: 0,
-  blocker: '',
-  ...state,
-})
+const pageOf = (state: Partial<PageState> = {}): PageState => ({ ...basePage, href: 'https://chatgpt.com/c/abc', ...state })
 
 // A browser whose state polls answer `polls` in order (the last one repeats), recording every script it runs.
 function polled(polls: Partial<PageState>[]) {
@@ -246,4 +236,11 @@ test('watch returns whatever end `until` names, a plain string for the image flo
   })
   expect(watched.end).toBe('finished')
   expect(ran).toHaveLength(2)
+})
+
+test('isHardBlocker stops on limits and verifications, not on any dialog', () => {
+  expect(isHardBlocker("You've reached your limit for image generation")).toBe(true)
+  expect(isHardBlocker('Você atingiu o limite. Tente novamente mais tarde.')).toBe(true)
+  expect(isHardBlocker('a human verification (captcha)')).toBe(true)
+  expect(isHardBlocker('Copied to clipboard')).toBe(false)
 })

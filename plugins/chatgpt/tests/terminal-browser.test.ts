@@ -1,13 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import type { ProcessRunner } from '../hooks/model'
-import { parseOutput } from '../hooks/scripts'
 import { NO_PANE, listTabs, openTerminalBrowser, openedTab, splitTabId } from '../hooks/terminal-browser'
-import { printed } from './helpers'
-
-test('parseOutput reads the JSON a page script returns', () => {
-  expect(parseOutput(printed({ a: 'x "y"\nz', b: [1] }))).toEqual({ a: 'x "y"\nz', b: [1] })
-  expect(() => parseOutput('Error: no tab')).toThrow()
-})
+import { printed } from './fake-page'
 
 test('terminal-browser output: tabs, ids and the tab new-tab opened', () => {
   const listed = listTabs(

@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import { diagnose, report } from '../hooks/doctor'
-import { fakeBrowser, printed } from './helpers'
+import { fakeBrowser, printed } from './fake-page'
 
 test('diagnose reports which page parts are in place', async () => {
   const { browser } = fakeBrowser({ tabs: [], pages: [{}], markdown: '' })

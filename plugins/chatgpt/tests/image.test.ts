@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import { generateImage } from '../hooks/image'
 import { CHUNK_CHARS, inputFor } from '../hooks/scripts'
-import { fakeImageBrowser } from './helpers'
+import { fakeImageBrowser } from './fake-page'
 
 test('generateImage uploads the reference by path, waits for a finished image and reads it back', async () => {
   const reference = { name: 'ref.png', type: 'image/png', path: '/x/ref.png' }
