@@ -9,7 +9,8 @@ const snap = (changes: Partial<Snapshot> = {}): Snapshot => ({ ...EMPTY, ...chan
 const band = (changes: Partial<Snapshot> = {}) => bandRows(snap(changes))
 const pane = (changes: Partial<Snapshot> = {}, maxRows?: number) => paneRows(snap(changes), maxRows)
 const text = (rows: { rows: { text: string }[][] }) => rows.rows.map(row => row.map(s => s.text).join('')).join('\n')
-const styled = (rows: { rows: { text: string; style: string }[][] }) => rows.rows.map(row => row.map(s => `${s.style}|${s.text}`).join(''))
+const styled = (rows: { rows: { text: string; style: string; bold?: boolean }[][] }) =>
+  rows.rows.map(row => row.map(s => `${s.style}${s.bold ? '!' : ''}|${s.text}`).join(''))
 const stepOf = (id: string, state: string, after: string[] = [], owner = 'main') => ({ id, owner, after, state })
 const plan: PlanProjection = {
   name: 'crew-hud', groups: [{ heading: 'PR 1 - HUD', done: 2, running: 2, left: 3, unknownStates: false, steps: [
@@ -48,18 +49,31 @@ test('the band wraps by width and names every running step without truncation', 
 
 test('the pane draws each deliverable as a tree under its counts line, with the rail dim and each body by state', () => {
   expect(styled(pane({ plans: [plan], columns: 80 }))).toEqual([
-    'heading|Crew',
-    'heading|Plansecondary|  crew-hud',
-    'plain|PR 1 - HUDsecondary|  2 done / 2 running / 3 left',
-    'secondary|  secondary|● T1 main  done',
-    'secondary|  └─ secondary|● T2 main  done',
+    'title|Crewsecondary|  crew-hud',
+    `info!|Plansecondary|  PR 1 - HUDplain|${' '.repeat(33)}secondary|2 done / warning|2 runningsecondary| / 3 left`,
+    'secondary|  secondary|● plain|T1 mainsecondary|  done',
+    'secondary|  └─ secondary|● plain|T2 mainsecondary|  done',
     'secondary|     ├─ warning|◎ T3 crew:digger  working',
     'secondary|     │  └─ secondary|○ T5 main  waits T3  <- T4',
     'secondary|     │     ├─ secondary|○ T6 main  waits T5',
     'secondary|     │     └─ error|■ T7 main  blocked',
     'secondary|     └─ warning|◎ T4 crew:digger  working',
-    'secondary|0 agents',
+    'success!|Agents · running 0',
+    'secondary|no agent running',
+    `secondary|0 agentsplain|${' '.repeat(51)}secondary|↑↓ scroll · esc close`,
   ])
+})
+
+test('the head names a lone plan and carries the pills; several plans or deliverables are titled by name', () => {
+  const two: PlanProjection = { ...plan, name: 'other' }
+  const head = (changes: Partial<Snapshot>) => styled(pane({ columns: 80, ...changes }))[0]
+  expect(head({ plans: [plan, two] })).toBe('title|Crew')
+  expect(head({ agents: [agent(), agent({ id: 'b', status: 'ended' })] }))
+    .toBe(`title|Crewplain|${' '.repeat(52)}pill-running| ● 1 running plain| pill-recent| 1 recent `)
+  const output = text(pane({ plans: [plan, two], columns: 80 }))
+  expect(output).toContain('Plan  crew-hud')
+  expect(output).toContain('Plan  other')
+  expect(output).toContain('PR 1 - HUD')
 })
 
 test('a step a running agent was spawned for says so, by role', () => {
@@ -83,8 +97,8 @@ test('rows are cut to the width with an ellipsis, and the viewport hides what do
   expect(text(rows)).toContain('…')
   const cut = pane({ plans: [plan], columns: 80 }, 4)
   expect(cut.rows).toHaveLength(4)
-  expect(text(cut).split('\n').at(-1)).toBe('  … 8 more rows')
-  expect(pane({ plans: [plan], columns: 80 }, 100).rows).toHaveLength(11)
+  expect(text(cut).split('\n').at(-1)).toBe('  … 9 more rows')
+  expect(pane({ plans: [plan], columns: 80 }, 100).rows).toHaveLength(12)
 })
 
 test('the pane lists the running crew agents after the plans, with the model and the elapsed time as observed', () => {
@@ -93,12 +107,15 @@ test('the pane lists the running crew agents after the plans, with the model and
     agent({ id: 'c', model: undefined, effort: undefined, startedAt: undefined, seenAt: now - 4_000 }),
     agent({ id: 'd', startedAt: now + 100_000 }), agent({ id: 'f', type: 'general-purpose' })] }))
   expect(output).toContain('Agents · running 4')
-  expect(output).toContain('haiku · medium  59:59')
-  expect(output).toContain('claude-opus-4-1-20260205 · medium  requested haiku  1:00:00')
-  expect(output).toContain('unknown  seen 0:04')
-  expect(output).toContain('haiku · medium  0:00')
+  expect(output).toMatch(/haiku · medium {9}59:59/u)
+  expect(output).toContain('opus 4.1 · medium  requested haiku 1:00:00')
+  expect(output).toMatch(/unknown {14}seen 0:04/u)
+  expect(output).toMatch(/haiku · medium {10}0:00/u)
   expect(output).not.toContain('general')
-  expect(output.split('\n').at(-1)).toBe('4 agents')
+  expect(output.split('\n').at(-1)).toMatch(/^4 agents +↑↓ scroll · esc close$/u)
+  const same = text(pane({ columns: 120, agents: [agent({ observedModel: 'claude-haiku-4-5-20251001' })] }))
+  expect(same).toContain('haiku 4.5 · medium')
+  expect(same).not.toContain('requested')
 })
 
 test('a running agent shows its context, output, steps, last three calls and failures; a twin with none says so', () => {
@@ -106,13 +123,18 @@ test('a running agent shows its context, output, steps, last three calls and fai
     tools: [{ name: 'Grep', failed: false }, { name: 'Read', failed: true }, { name: 'mcp', failed: false }, { name: 'Bash', failed: false }] })
   const wide = pane({ columns: 120, agents: [busy, agent({ id: 'b', type: 'crew:planner-codex', model: 'gpt-6-astra', effort: 'high' })] })
   const lines = text(wide).split('\n')
-  expect(lines.find(l => l.includes('digger') && l.includes('A4'))).toMatch(/^[●○] digger {2}A4 {2}haiku · medium {2}3:07 {2}ctx 18\.4k {2}out 1\.2k {2}6 steps$/u)
+  expect(lines.find(l => l.includes('digger') && l.includes('A4')))
+    .toMatch(/^[●○] digger {9}A4 {3}haiku · medium {10}3:07 {2}ctx ▰▱{7} 9% {4}6 steps +↑ 18\.4k {2}↓ 1\.2k$/u)
   expect(lines).toContain('  └ Read · mcp · Bash  9 calls  ✗ 1')
-  expect(lines.find(l => l.includes('planner'))).toMatch(/^[●○] planner·codex {2}gpt-6-astra · high {2}3:07$/u)
-  expect(lines).toContain('  └ no tool events or tokens reported')
+  expect(lines.find(l => l.includes('planner'))).toMatch(/^[●○] planner·codex {7}gpt-6-astra · high {6}3:07 {2}ctx — {14}steps — +on helper$/u)
+  expect(lines).toContain('  └ runs in the Codex sandbox: no tool events or tokens')
+  expect(lines.every(l => l.length <= 116 || !l.startsWith('●'))).toBe(true)
   const narrow = text(pane({ columns: 60, agents: [busy] })).split('\n')
-  expect(narrow).toContain('  ctx 18.4k  out 1.2k  6 steps')
-  expect(narrow.every(l => l.length <= 56 || l === 'Crew')).toBe(true)
+  expect(narrow).toContain(`● digger  A4  haiku · medium${' '.repeat(24)}3:07`)
+  expect(narrow).toContain(`  ctx ▰▱▱▱▱▱▱▱ 9%  6 steps${' '.repeat(15)}↑ 18.4k  ↓ 1.2k`)
+  expect(narrow.slice(1, -1).every(l => l.length <= 56)).toBe(true)
+  const full = text(pane({ columns: 120, agents: [agent({ inTokens: 400_000 })] }))
+  expect(full).toContain('ctx ▰▰▰▰▰▰▰▰ 100%')
   const none = text(pane({ columns: 120, agents: [agent()] })).split('\n')
   expect(none).toContain('  └ no calls yet')
 })
@@ -131,8 +153,12 @@ test('the recent box lists the last five ended agents, newest first, and marks m
   expect(output).toContain('Recent · 5')
   const rows = output.filter(l => /^[●✗] digger/u.test(l))
   expect(rows).toHaveLength(5)
-  expect(rows[0]).toBe('✗ digger  A1  haiku · medium  9:00  ctx 41.0k  out 3.2k  1 step  max_tokens  1 min ago')
+  expect(rows[0]).toMatch(/^✗ digger {9}A1 {3}haiku · medium {10}9:00 {2}1 step +max_tokens {3}1 min ago$/u)
+  expect(rows[1]).toMatch(/^● digger {9}A2 {3}haiku · medium {10}8:00 {2}2 steps +↑ 41\.0k {2}↓ 3\.2k {3}2 min ago$/u)
   expect(rows[4]).toContain('A5')
+  const narrow = text(pane({ columns: 60, agents: [ended(2), ended(1, { stop: 'max_tokens' })] })).split('\n')
+  expect(narrow).toContain(`✗ digger  A1${' '.repeat(27)}9:00 · max_tokens`)
+  expect(narrow).toContain(`● digger  A2${' '.repeat(22)}8:00 · ↑ 41.0k  ↓ 3.2k`)
   const recent = output.slice(output.indexOf('Recent · 5'), output.indexOf('Last 15 minutes'))
   expect(recent.join('\n')).not.toContain('A6')
 })
@@ -146,9 +172,12 @@ test('the timeline puts each agent that ran in the last fifteen minutes on one b
   const at = rows.indexOf('Last 15 minutes')
   expect(at).toBeGreaterThan(0)
   const bars = rows.slice(at + 1, at + 3)
-  expect(bars[0]).toMatch(/^challenger {6}·+█+·+$/u)
-  expect(bars[1]).toMatch(/^digger A4 {7}·+█+$/u)
-  expect(rows[at + 3]).toMatch(/^ {16}-15m +-10m +-5m +now$/u)
+  expect(bars[0]).toMatch(/^challenger {2}█{44}$/u)
+  expect(bars[1]).toMatch(/^digger A4 {3}█{44}$/u)
+  expect(rows[at + 3]).toBe(`${' '.repeat(12)}−15m           −10m          −5m         now`)
+  expect(rows[at + 4]).toBe(`${' '.repeat(12)}█ running   █ ended   █ max_tokens`)
+  const styledRows = styled(pane({ columns: 60, agents: [agent({ id: 'e', type: 'crew:challenger', status: 'ended', startedAt: now - 600_000, endedAt: now - 300_000 })] }))
+  expect(styledRows.find(l => l.startsWith('warning|challenger'))).toBe(`warning|challenger  track|${'█'.repeat(15)}secondary|${'█'.repeat(14)}track|${'█'.repeat(15)}`)
   expect(rows.join('\n')).not.toMatch(/old/u)
 })
 
@@ -168,7 +197,7 @@ test('untrusted projection and models never reach display', () => {
     for (const secret of ['/Users/', 'https:', 'sk-secret', '\u001b', 'crew:unknown']) expect(output).not.toContain(secret)
   }
   expect(text(paneRows(view))).toContain('Plan  ?')
-  expect(text(paneRows(view))).toMatch(/digger {2}\? {2}\d/u)
+  expect(text(paneRows(view))).toMatch(/● digger +\? +3:07/u)
   expect(text(paneRows(view))).toContain('◎ T1 ?  working')
 })
 

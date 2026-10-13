@@ -6,7 +6,9 @@ import type { AgentIo, AgentTracker } from './hud/agents'
 import { createPlanRefresher } from './hud/files'
 import type { PlanIo, PlanRefresher } from './hud/files'
 import { bandRows, paneView } from './hud/view'
-import type { Segment, Style } from './hud/view'
+import type { Segment } from './hud/view'
+import { paint, paletteOf } from './hud/palette'
+import type { Palette } from './hud/palette'
 import { SPECIALISTS, isGatewayBase, mainSection, nativeCodexSection, nativeCodexSpecs, onCodexLogin } from './agents'
 import type { Agent, Effort } from './agents'
 import { HANDBACK_ID, HELPER_ROLES, callerOf, handedBackMessage, helperReady, helperServes, lastUserText, runTurn, socketOf } from './appserver'
@@ -48,10 +50,6 @@ const MODE_COMMAND = 'crew-mode'
 /** The pane that draws the plans as trees: `/crew-hud` opens it, and its id keys the `ui.render` hook. */
 const HUD_COMMAND = 'crew-hud'
 const HUD_PANE = 'crew-hud'
-/** The pane's styles as the host's theme keys, so every theme reads; `heading` and `secondary` are weights, not colours. */
-const PANE_COLOURS: Partial<Record<Style, string>> = {
-  success: 'success', warning: 'warning', error: 'error', info: 'planMode', accent: 'suggestion',
-}
 
 /** The option as a mode: anything but `codex` is `claude`. */
 const modeOption = (value: unknown): Mode => (value === 'codex' ? 'codex' : 'claude')
@@ -59,6 +57,13 @@ const modeOption = (value: unknown): Mode => (value === 'codex' ? 'codex' : 'cla
 const plans = atom({ plugin: 'crew', key: 'plans' } as const, [] as CrewPlanDisplay[])
 const agents = atom({ plugin: 'crew', key: 'agents' } as const, [] as CrewAgent[])
 const nowAtom = atom({ plugin: 'crew', key: 'now' } as const, 0)
+const paletteAtom = atom({ plugin: 'crew', key: 'palette' } as const, 'theme' as Palette)
+
+/** The pane's palette from the person's theme; an unreadable theme keeps the theme's keys. */
+async function readPalette($: Dollar): Promise<void> {
+  const theme = await $.config.list().then(rows => rows.find(row => row.key === 'theme')?.value, () => undefined)
+  await update($, paletteAtom, () => paletteOf(theme))
+}
 
 /** HUD failures must never affect host results or router decisions. */
 async function hud($: Dollar, action: () => Promise<void>): Promise<void> {
@@ -776,37 +781,38 @@ export const register: Register = (on, options) => {
         await display.initial
         await display.plans.refresh(planIo($))
       })
+      void hud($, () => readPalette($))
     }
+  })
+  // A theme change repaints the pane; the change itself is the person's and passes unchanged.
+  on('config.set', { key: 'theme' }, async ($, e, next) => {
+    const result = await next(e)
+    if (!result.deny) await hud($, async () => { await update($, paletteAtom, () => paletteOf(result.value)) })
+    return result
   })
   on('command.run', { command: MODE_COMMAND }, async ($, e) => ({ text: await runModeCommand($, native, routing.mode, e.args) }))
     .catch(() => ({ text: `crew: /${MODE_COMMAND} failed; run it again to see the mode.` }))
   on('command.run', { command: HUD_COMMAND }, async $ => {
-    const opened = await $.ui.open({ id: HUD_PANE, title: 'Crew' })
+    const opened = await $.ui.open({ id: HUD_PANE, title: 'Crew', closeOnEscape: true })
     return { text: opened.isPlaced ? 'the pane is open.' : 'the pane waits for a wider terminal; the band above the prompt shows the summary.' }
   }).catch(() => ({ text: `/${HUD_COMMAND} failed; the band above the prompt still shows the summary.` }))
   // Reads the same prepared atoms as the band, never a host: a failure draws nothing and leaves the pane as it was.
   // The width is the body's; the rows are all drawn and the host scrolls them while the pane has the keyboard.
   on('ui.render', { component: 'Pane', requestId: HUD_PANE }, async ($, e, next) => {
     try {
-      const [shown, running, time] = await Promise.all([read($, plans), read($, agents), read($, nowAtom)])
+      const [shown, running, time, palette] = await Promise.all([read($, plans), read($, agents), read($, nowAtom), read($, paletteAtom)])
       const columns = e.props?.bodyColumns ?? e.viewport?.columns ?? 80
       const view = paneView({ plans: shown, agents: running, now: time, columns })
       const { Box, Text } = $.ui.resolve(e)
       if (view.empty) {
         return <Box flexDirection="column"><Text dimColor>No plan or helper yet. Plans live in .crew/plans/.</Text></Box>
       }
-      const colour = (style: Style): string | undefined => PANE_COLOURS[style]
-      const line = (row: Segment[], key: string) => <Text key={key} wrap="truncate">{row.map((part, at) => {
-        const key2 = `${key}-${at}`
-        if (part.style === 'heading') return <Text key={key2} bold>{part.text}</Text>
-        if (part.style === 'secondary') return <Text key={key2} dimColor>{part.text}</Text>
-        const color = colour(part.style)
-        return color ? <Text key={key2} color={color}>{part.text}</Text> : <Text key={key2}>{part.text}</Text>
-      })}</Text>
+      const line = (row: Segment[], key: string) => <Text key={key} wrap="truncate">{row.map((part, at) =>
+        <Text key={`${key}-${at}`} {...paint(palette, part.style, part.bold)}>{part.text}</Text>)}</Text>
       return <Box flexDirection="column">
         {line(view.head, 'head')}
         {view.boxes.map((box, index) =>
-          <Box key={`box-${index}`} flexDirection="column" borderStyle="round" borderColor={colour(box.tone) ?? 'inactive'} paddingX={1}>
+          <Box key={`box-${index}`} flexDirection="column" borderStyle="round" borderColor={paint(palette, box.tone).color ?? 'inactive'} paddingX={1}>
             {line(box.title, `title-${index}`)}
             {box.rows.map((row, at) => line(row, `row-${index}-${at}`))}
           </Box>)}
