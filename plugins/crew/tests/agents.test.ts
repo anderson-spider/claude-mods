@@ -69,19 +69,20 @@ test('the lead updates plan step states immediately for the HUD with static word
   }
 })
 
-test('failed steps return to the same developer and close only after an architect reaudit', () => {
+test('failed steps return to the same developer and the PR opens only after an architect reaudit', () => {
   const specs = nativeCodexSpecs({ developer: 'gpt-a', architect: 'gpt-b' })
   for (const jev of [true, false]) {
     const lead = leadSection(jev)
-    expect(lead).toContain('done only after crew:architect independently audits it')
-    expect(lead).toContain("developer's own commands and output are its report, not acceptance")
-    expect(lead).toContain('Send failures to the same developer via SendMessage with the criterion and expected versus actual')
-    expect(lead).toContain('after the fix, the architect reaudits before the step closes')
+    expect(lead).toContain("Before the PR opens, crew:architect independently audits the deliverable's full diff")
+    expect(lead).toContain('only then do its steps become `verified`')
+    expect(lead).toContain("the developer's own commands and output are never acceptance")
+    expect(lead).toContain('Send failures to the developer who owns the step via SendMessage with the criterion and expected versus actual')
+    expect(lead).toContain('after the fix, the architect reaudits before the PR opens')
   }
   const native = nativeCodexSection(specs)
-  expect(native).toContain('Only crew:architect or its registered -codex twin independently accepts a step')
+  expect(native).toContain("Only crew:architect or its registered -codex twin independently accepts a deliverable's diff")
   expect(native).toContain("developer twin's own commands and output are its report, not acceptance")
-  expect(native).toContain('same developer, including a -codex developer, then have the architect reaudit')
+  expect(native).toContain('same developer, including a -codex developer, then have the architect reaudit before the PR opens')
   expect(native).toContain('otherwise use the Claude role')
 })
 
@@ -222,14 +223,15 @@ test('independent acceptance is the architect audit, not the developer self-chec
   for (const jev of [true, false]) {
     const text = leadSection(jev)
     expect(text).toContain('crew:developer for implementation and tests')
-    expect(text).toContain('only after crew:architect independently audits it')
-    expect(text).toContain('own commands and output are its report, not acceptance')
-    expect(text).toContain('after the fix, the architect reaudits')
-    expect(text).toContain("Ask for a separate reproduction only for behavior that needs it (auth, routing, or live checks against the real host or service), not for every step. That reproduction comes from a fresh crew:developer, not the implementer, or from the project's live-test procedure, and the step closes only after it passes.")
+    expect(text).toContain("Before the PR opens, crew:architect independently audits the deliverable's full diff")
+    expect(text).toContain('the developer\'s own commands and output are never acceptance')
+    expect(text).toContain('a single step gets an early audit only when the plan marks it `risky`')
+    expect(text).toContain('after the fix, the architect reaudits before the PR opens')
+    expect(text).toContain("Ask for a separate reproduction only for behavior that needs it (auth, routing, or live checks against the real host or service), not for every step: it comes from a fresh crew:developer, not the implementer, or from the project's live-test procedure, and it must pass before the PR opens.")
     expect(text).not.toContain('crew:tester')
   }
   const text = nativeCodexSection(nativeCodexSpecs({ developer: 'gpt-x', architect: 'gpt-y' }))
-  expect(text).toContain('Only crew:architect or its registered -codex twin independently accepts a step')
+  expect(text).toContain("Only crew:architect or its registered -codex twin independently accepts a deliverable's diff")
   expect(text).toContain("a developer twin's own commands and output are its report, not acceptance")
   expect(text).toContain('same developer, including a -codex developer')
   expect(text).not.toContain('counts as someone other than the implementer')
