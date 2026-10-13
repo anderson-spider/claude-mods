@@ -1,5 +1,5 @@
 import { ask } from './ask'
-import { isChatUrl } from './browser'
+import { isChatUrl } from './tab'
 import { generateImage } from './image'
 import { readAttachments } from './input'
 import type { AskOptions, BackgroundStart, Job, JobDeps, Outcome, Request, RequestDeps, RequestRunner } from './model'

@@ -1,8 +1,5 @@
 import type { Browser, PageState, TabHolder } from './model'
-import { COMPOSER, LANDED, LOGIN, leaveScript, parseOutput, stateScript } from './scripts'
-
-export const CHATGPT_URL = 'https://chatgpt.com/'
-export const ORIGIN = 'https://chatgpt.com'
+import { CHATGPT_URL, COMPOSER, LANDED, LOGIN, ORIGIN, leaveScript, parseOutput, stateScript } from './scripts'
 
 // How long a page may take to load and show the composer.
 export const LOAD_MS = 20_000

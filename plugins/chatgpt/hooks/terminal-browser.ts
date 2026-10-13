@@ -89,7 +89,7 @@ export const NO_PANE = 'not running inside a terminal pane terminal-browser can 
 
 // terminal-browser answers only where Claude Code runs in a terminal pane it
 // can find (Ghostty, kitty); not under tmux, Herdr or a background session.
-// The string is why it cannot answer; the chooser in browsers.ts says so for it.
+// The string is why it cannot answer; the chooser in chooser.ts says so for it.
 export async function openTerminalBrowser(run: ProcessRunner): Promise<Browser | string> {
   const listed = await run([TERMINAL_BROWSER, 'ls', '--json'], { timeoutMs: 15_000 }).catch(() => undefined)
   if (listed?.exitCode === 0) {

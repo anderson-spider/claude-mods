@@ -1,5 +1,5 @@
 import type { AskInput, AskOptions, Browser, Image, ImageResult, PageState } from './model'
-import { LOAD_MS, prepare } from './browser'
+import { LOAD_MS, prepare } from './tab'
 import { compose, readAnswer, send, stopped, unfinished, watch } from './conversation'
 import { GENERATED, imageChunkScript, imageScript, parseOutput } from './scripts'
 

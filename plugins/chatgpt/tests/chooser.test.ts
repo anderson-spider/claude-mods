@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { type Candidate, chooseBrowser } from '../hooks/browsers'
+import { type Candidate, chooseBrowser } from '../hooks/chooser'
 import type { Browser } from '../hooks/model'
 
 // The chooser never calls a browser's methods, so a bare object stands for one.

@@ -1,5 +1,5 @@
 import type { AskInput, Browser, PageState } from './model'
-import { blocked, isChatUrl } from './browser'
+import { blocked, isChatUrl } from './tab'
 import { chipScript, inputFor, modelScript, parseOutput, READ_SCRIPT, sendScript, stateScript } from './scripts'
 
 /** A blocker that ends a run at once (a limit, a verification), not just any dialog. */

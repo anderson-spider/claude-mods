@@ -1,4 +1,5 @@
-import type { BrowserDeps, McpCall } from '../hooks/mcp-browser'
+import type { McpCall } from '../hooks/mcp-call'
+import type { BrowserDeps } from '../hooks/page-browser'
 
 /** A tool's answer: its text, or a function of the arguments (it may throw). */
 export type Answer = string | ((args: Record<string, unknown>) => string)

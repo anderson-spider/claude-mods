@@ -304,3 +304,22 @@ export function parseOutput<T>(text: string): T {
     throw new Error(`unexpected browser output: ${text.slice(0, 200)}`)
   }
 }
+
+export const CHATGPT_URL = 'https://chatgpt.com/'
+export const ORIGIN = 'https://chatgpt.com'
+
+// The page script that puts the files on the first input `selector` names, and prints `{ uploaded }`.
+// It runs only on chatgpt.com, so the files never reach another page.
+export function uploadBody(selector: string, files: { name: string; type: string; base64: string }[]): string {
+  return `
+if (location.origin !== ${JSON.stringify(ORIGIN)}) return JSON.stringify({ uploaded: false, reason: 'not on chatgpt.com' });
+const bytes = b64 => Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+const transfer = new DataTransfer();
+for (const f of ${JSON.stringify(files)}) transfer.items.add(new File([bytes(f.base64)], f.name, { type: f.type }));
+const input = document.querySelector(${JSON.stringify(selector)});
+if (!input) return JSON.stringify({ uploaded: false, reason: 'no input matched ' + ${JSON.stringify(selector)} });
+input.files = transfer.files;
+input.dispatchEvent(new Event('input', { bubbles: true }));
+input.dispatchEvent(new Event('change', { bubbles: true }));
+return JSON.stringify({ uploaded: true });`
+}

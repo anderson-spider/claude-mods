@@ -3,7 +3,7 @@ import { BACKENDS, OWN_CALLS, ownCallAllowed } from '../hooks/backends'
 import { BUILTIN, BUILTIN_SERVER } from '../hooks/builtin-browser'
 import { CHROME, CHROME_SERVER } from '../hooks/chrome-browser'
 import { ask } from '../hooks/ask'
-import { chooseBrowser } from '../hooks/browsers'
+import { chooseBrowser } from '../hooks/chooser'
 import { TERMINAL_BROWSER } from '../hooks/terminal-browser'
 import { fakeBrowser } from './fake-page'
 

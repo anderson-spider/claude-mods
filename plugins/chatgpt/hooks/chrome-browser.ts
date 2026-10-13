@@ -1,4 +1,5 @@
-import { type McpCall, leadingJson } from './mcp-browser'
+import type { McpCall } from './mcp-call'
+import { leadingJson } from './tool-text'
 import type { McpSpec } from './mcp-backend'
 
 export const CHROME = 'Claude in Chrome'

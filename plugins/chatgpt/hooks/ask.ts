@@ -1,5 +1,5 @@
 import type { AskInput, AskOptions, AskResult, Browser } from './model'
-import { prepare } from './browser'
+import { prepare } from './tab'
 import { compose, readAnswer, send, stopped, unfinished, watch } from './conversation'
 
 export async function ask(browser: Browser, input: AskInput, options: AskOptions = {}): Promise<AskResult> {
