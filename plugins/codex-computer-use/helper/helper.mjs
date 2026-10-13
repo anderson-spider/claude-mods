@@ -47,7 +47,8 @@ const readBody = request =>
   })
 
 // The routes this socket serves. hooks/model.ts holds the reply shape of each
-// (`RouteReplies`) and the same `ROUTES`; helper/test/contract.mjs pins both lists.
+// (`RouteReplies`) and the same `ROUTES`; helper/test/contract.mjs pins both lists
+// and the key set of every reply.
 export const ROUTES = {
   call: '/call',
   reset: '/reset',
@@ -60,6 +61,61 @@ export const ROUTES = {
 
 const isCaller = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}(\/[A-Za-z0-9][A-Za-z0-9._:-]{0,127})?$/.test(value)
 
+/**
+ * What each route does, keyed by the paths in `ROUTES`: `run(hub, body)` answers
+ * `[status, reply]`. A route takes a valid `caller` in its body unless it says
+ * `caller: false`, and takes POST only unless it says `anyMethod: true`, which also
+ * skips reading the body. A new route is one entry here, its hub method and its
+ * entries in hooks/model.ts and helper/test/contract.mjs.
+ */
+export const ROUTE_TABLE = {
+  [ROUTES.status]: {
+    anyMethod: true,
+    run: hub => [200, { version: VERSION, pid: process.pid, ...hub.status() }],
+  },
+  [ROUTES.settings]: {
+    caller: false,
+    run: (hub, body) => {
+      if (typeof body.autoApprove === 'boolean') {
+        hub.approvals.setAutoApprove(body.autoApprove)
+        log(`auto-approve ${body.autoApprove ? 'on' : 'off'}`)
+      }
+
+      return [200, { status: 'ok', settings: hub.approvals.settings }]
+    },
+  },
+  [ROUTES.forget]: {
+    caller: false,
+    run: async (hub, body) => {
+      const forgotten = await hub.forget(body.app)
+
+      if (forgotten.status === 'ok') {
+        log(`forgot always for ${forgotten.bundleId} (helper: ${forgotten.helper ? 'removed' : 'absent'}, codex: ${forgotten.codex})`)
+      }
+
+      return [forgotten.status === 'ok' ? 200 : 400, forgotten]
+    },
+  },
+  [ROUTES.call]: { run: async (hub, body) => [200, await hub.call(body.caller, body)] },
+  [ROUTES.reset]: { run: async (hub, body) => [200, await hub.reset(body.caller)] },
+  [ROUTES.approve]: {
+    run: (hub, body) => {
+      if (typeof body.bundleId !== 'string' || !CHOICES.includes(body.choice)) {
+        return [400, { status: 'error', message: `approve needs bundleId and choice ${CHOICES.join('|')}` }]
+      }
+
+      hub.approve(body.caller, body.bundleId, body.choice)
+      log(`approval ${body.choice} for ${body.bundleId}`)
+
+      return [200, { status: 'ok' }]
+    },
+  },
+  [ROUTES.release]: { run: (hub, body) => [200, hub.release(body.caller)] },
+}
+
+// The checks run in this order: /status (any method, no body), POST only, the JSON
+// body, the caller, then the route. An unknown url is checked for a caller too, so a
+// bad caller answers 400 before the 404.
 export const handler = hub => async (request, response) => {
   const reply = (status, body) => {
     response.writeHead(status, { 'content-type': 'application/json' })
@@ -67,8 +123,10 @@ export const handler = hub => async (request, response) => {
   }
 
   try {
-    if (request.url === ROUTES.status) {
-      return reply(200, { version: VERSION, pid: process.pid, ...hub.status() })
+    const route = Object.hasOwn(ROUTE_TABLE, request.url) ? ROUTE_TABLE[request.url] : undefined
+
+    if (route?.anyMethod) {
+      return reply(...route.run(hub))
     }
 
     if (request.method !== 'POST') {
@@ -77,48 +135,15 @@ export const handler = hub => async (request, response) => {
 
     const body = JSON.parse((await readBody(request)) || '{}')
 
-    if (request.url === ROUTES.settings) {
-      if (typeof body.autoApprove === 'boolean') {
-        hub.approvals.setAutoApprove(body.autoApprove)
-        log(`auto-approve ${body.autoApprove ? 'on' : 'off'}`)
-      }
-
-      return reply(200, { status: 'ok', settings: hub.approvals.settings })
-    }
-
-    if (request.url === ROUTES.forget) {
-      const forgotten = await hub.forget(body.app)
-
-      if (forgotten.status === 'ok') {
-        log(`forgot always for ${forgotten.bundleId} (helper: ${forgotten.helper ? 'removed' : 'absent'}, codex: ${forgotten.codex})`)
-      }
-
-      return reply(forgotten.status === 'ok' ? 200 : 400, forgotten)
-    }
-
-    if (!isCaller(body.caller)) {
+    if ((route === undefined || route.caller !== false) && !isCaller(body.caller)) {
       return reply(400, { status: 'error', message: 'caller must be "<session>" or "<session>/<agent>"' })
     }
 
-    switch (request.url) {
-      case ROUTES.call:
-        return reply(200, await hub.call(body.caller, body))
-      case ROUTES.reset:
-        return reply(200, await hub.reset(body.caller))
-      case ROUTES.approve:
-        if (typeof body.bundleId !== 'string' || !CHOICES.includes(body.choice)) {
-          return reply(400, { status: 'error', message: `approve needs bundleId and choice ${CHOICES.join('|')}` })
-        }
-
-        hub.approve(body.caller, body.bundleId, body.choice)
-        log(`approval ${body.choice} for ${body.bundleId}`)
-
-        return reply(200, { status: 'ok' })
-      case ROUTES.release:
-        return reply(200, hub.release(body.caller))
-      default:
-        return reply(404, { status: 'error', message: `unknown route ${request.url}` })
+    if (route === undefined) {
+      return reply(404, { status: 'error', message: `unknown route ${request.url}` })
     }
+
+    return reply(...(await route.run(hub, body)))
   } catch (error) {
     return reply(500, { status: 'error', message: error instanceof Error ? error.message : String(error) })
   }

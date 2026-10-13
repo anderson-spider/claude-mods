@@ -2,6 +2,7 @@ import { expect, test } from 'claude-code/testing'
 
 import { LABEL, callerOf, socketOf } from '../hooks/helper'
 import { CHOICES, ROUTES } from '../hooks/model'
+import type { ApproveReply, CallReply, ForgetReply, Held, ReleaseReply, ResetReply, SettingsReply, StatusReply } from '../hooks/model'
 import { BRIDGE, LEASE_MINUTES, TOOL } from '../hooks/routing'
 import { contract } from '../helper/test/contract.mjs'
 
@@ -61,4 +62,33 @@ test('the label hooks kickstart is the label the install scripts declare', () =>
 test('TOOL is the bridge as the engine names it, and the host tests use the same name the literal matcher spells', () => {
   expect(TOOL).toBe(`mcp__codex-computer-use__${BRIDGE}`)
   expect(HOST_TOOL).toBe(TOOL)
+})
+
+// `satisfies Keys<T>` fails to compile when a reply type has a field the sample lacks or the sample names one it lacks
+// (tsc, not `claude plugin test`); the sample's keys are then compared with the key sets the helper's tests check its real replies against.
+type Keys<T> = { [K in keyof T]-?: true }
+type HeldBy<S extends Held['status']> = Extract<Held, { status: S }>
+
+test('the reply types in model.ts have exactly the key sets the shared contract lists', () => {
+  const ok = {
+    call: { status: true, isError: true, content: true, notes: true } satisfies Keys<CallReply>,
+    reset: { status: true, message: true } satisfies Keys<ResetReply>,
+    approve: { status: true } satisfies Keys<ApproveReply>,
+    release: { status: true, ended: true } satisfies Keys<ReleaseReply>,
+    settings: { status: true, settings: true } satisfies Keys<SettingsReply>,
+    forget: { status: true, bundleId: true, helper: true, codex: true } satisfies Keys<ForgetReply>,
+    // The status report has no `status` field: the type only declares it undefined so a Failure narrows.
+    status: { version: true, pid: true, callers: true, owners: true, settings: true } satisfies Keys<Omit<StatusReply, 'status'>>,
+  } satisfies Record<keyof typeof ROUTES, object>
+  const held = {
+    needs_approval: { status: true, app: true } satisfies Keys<HeldBy<'needs_approval'>>,
+    denied: { status: true, app: true } satisfies Keys<HeldBy<'denied'>>,
+    busy: { status: true, app: true, owner: true, idleSeconds: true } satisfies Keys<HeldBy<'busy'>>,
+    full: { status: true, message: true } satisfies Keys<HeldBy<'full'>>,
+  } satisfies Record<Held['status'], object>
+  const sorted = (sample: object) => Object.keys(sample).sort()
+
+  expect(Object.keys(ok).sort()).toEqual(Object.keys(contract.routes).sort())
+  expect(Object.fromEntries(Object.entries(ok).map(([route, sample]) => [route, sorted(sample)]))).toEqual(contract.replies.ok)
+  expect(Object.fromEntries(Object.entries(held).map(([status, sample]) => [status, sorted(sample)]))).toEqual(contract.replies.held)
 })

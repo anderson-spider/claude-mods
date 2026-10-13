@@ -2,8 +2,9 @@
 // boundary, and the examples both halves are checked against. The plugin half
 // (tests/contract.test.ts) compares hooks/model.ts and hooks/helper.ts with it;
 // the helper half (contract.test.mjs) compares helper.mjs, lib/approvals.mjs,
-// lib/hub.mjs, install.sh and uninstall.sh. Changing a route, a choice, the lease
-// or the label here fails both halves until each side follows. Types in contract.d.mts.
+// lib/hub.mjs, install.sh and uninstall.sh. Changing a route, a choice, a reply's
+// keys, the lease or the label here fails both halves until each side follows.
+// Types in contract.d.mts.
 export const contract = {
   // Route name -> path the helper serves, POSTed over its Unix socket (`/status` answers any method).
   routes: {
@@ -14,6 +15,26 @@ export const contract = {
     settings: '/settings',
     forget: '/forget',
     status: '/status',
+  },
+  // The sorted key set of every reply, as the helper sends it and hooks/model.ts types it.
+  replies: {
+    // What each route answers when it succeeds, by route name. `status` answers no `status` field.
+    ok: {
+      call: ['content', 'isError', 'notes', 'status'],
+      reset: ['message', 'status'],
+      approve: ['status'],
+      release: ['ended', 'status'],
+      settings: ['settings', 'status'],
+      forget: ['bundleId', 'codex', 'helper', 'status'],
+      status: ['callers', 'owners', 'pid', 'settings', 'version'],
+    },
+    // What a `/call` answers instead of `ok`, by its `status`: the hub builds each one in more than one place.
+    held: {
+      needs_approval: ['app', 'status'],
+      denied: ['app', 'status'],
+      busy: ['app', 'idleSeconds', 'owner', 'status'],
+      full: ['message', 'status'],
+    },
   },
   // The person's answers to an approval question, as `/approve` takes them.
   choices: ['session', 'always', 'deny'],

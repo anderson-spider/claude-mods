@@ -1,35 +1,18 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { Readable } from 'node:stream'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 
-import { handler, ROUTES } from '../helper.mjs'
+import { handler, ROUTE_TABLE, ROUTES } from '../helper.mjs'
 import { CHOICES } from '../lib/approvals.mjs'
 import { LEASE_MS } from '../lib/hub.mjs'
 import { contract } from './contract.mjs'
+import { hubWith, send, stubHub } from './support.mjs'
 
 // The helper's half of the contract with hooks/helper.ts, over the examples in
 // contract.mjs; the plugin's half is tests/contract.test.ts.
 const HERE = dirname(fileURLToPath(import.meta.url))
-
-/** Runs the real `handler` on one request and reports what it answered; the hub is a stub, so only the handler's own routing and checks decide. */
-const send = async (url, payload, { method = 'POST', hub } = {}) => {
-  const request = Readable.from([Buffer.from(JSON.stringify(payload))])
-  request.url = url
-  request.method = method
-  let status
-  let body
-  const response = {
-    writeHead: code => (status = code),
-    end: text => (body = JSON.parse(text)),
-  }
-
-  await handler(hub)(request, response)
-
-  return { status, body }
-}
 
 /** One POST /release; the stub hub records what it was asked to release. */
 const releaseStatus = async caller => {
@@ -37,23 +20,6 @@ const releaseStatus = async caller => {
   const hub = { release: value => (released.push(value), { status: 'ok', ended: [value] }) }
 
   return { ...(await send('/release', { caller }, { hub })), released }
-}
-
-/** A hub that answers every method the routes reach, and counts the calls per method. */
-const stubHub = () => {
-  const seen = []
-  const note = name => (...args) => (seen.push(name), name === 'forget' ? { status: 'ok', bundleId: 'b', helper: true, codex: 'absent' } : { status: 'ok', args })
-
-  return {
-    seen,
-    call: note('call'),
-    reset: note('reset'),
-    approve: note('approve'),
-    release: note('release'),
-    forget: note('forget'),
-    status: () => (seen.push('status'), {}),
-    approvals: { settings: { autoApprove: false, always: [] }, setAutoApprove: () => seen.push('settings') },
-  }
 }
 
 test('the helper accepts every caller callerOf makes, and the session and agent parts up to the limit', async () => {
@@ -101,28 +67,27 @@ test('install.sh and helper.mjs place the socket where the shared socket path sa
 
 test('the helper serves exactly the routes the shared contract lists, and no other', async () => {
   assert.deepEqual(ROUTES, contract.routes)
+  assert.deepEqual(Object.keys(ROUTE_TABLE).sort(), Object.values(contract.routes).sort(), 'the route table has one entry per contract route')
 
   for (const [name, path] of Object.entries(contract.routes)) {
     const hub = stubHub()
     const answered = await send(path, { caller: 's1', bundleId: 'com.x', choice: contract.choices[0], app: 'x', autoApprove: true }, { hub, method: path === '/status' ? 'GET' : 'POST' })
 
     assert.equal(answered.status, 200, `route ${name} (${path})`)
-    assert.equal(hub.seen.length, 1, `route ${name} reaches one hub method`)
+    assert.deepEqual(hub.seen, [name], `route ${name} reaches its own hub method, once`)
   }
 
   const refused = await send('/nope', { caller: 's1' }, { hub: stubHub() })
   assert.equal(refused.status, 404)
   assert.equal((await send('/call', { caller: 's1' }, { hub: stubHub(), method: 'GET' })).status, 405)
 
-  // A path written as a literal beside ROUTES would be served without the contract listing it.
-  const source = readFileSync(join(HERE, '..', 'helper.mjs'), 'utf8')
-  const written = [...source.matchAll(/['"`](\/[a-z]+)['"`]/g)].map(found => found[1]).sort()
-
-  assert.deepEqual(written, Object.values(contract.routes).sort(), 'each path is written once, in ROUTES')
+  // The table is the only place a path is served: a comparison on the url written in the handler would serve a route the contract does not list.
+  assert.doesNotMatch(handler.toString(), /request\.url\s*[!=]==?/, 'the handler looks routes up in ROUTE_TABLE only')
 })
 
 test('the helper takes exactly the choices the shared contract lists', async () => {
   assert.deepEqual(CHOICES, contract.choices)
+  assert.ok(Object.isFrozen(CHOICES), 'a caller cannot add a choice at run time')
 
   for (const choice of contract.choices) {
     const hub = stubHub()
@@ -155,4 +120,106 @@ test('install.sh and uninstall.sh declare the LaunchAgent label the shared contr
 
   assert.match(install, /<key>Label<\/key><string>\$LABEL<\/string>/)
   assert.match(install, /launchctl bootstrap "\$DOMAIN" "\$PLIST"/)
+})
+
+// The key sets of the replies, from the real hub through the real handler: hooks/model.ts types the same shapes, checked in tests/contract.test.ts.
+const keysOf = reply => Object.keys(reply).sort()
+
+test('the helper answers each route with the key set the shared contract lists', async () => {
+  const { hub } = hubWith()
+  const ask = async (path, payload, method) => {
+    const answered = await send(path, payload, { hub, method })
+
+    assert.equal(answered.status, 200, path)
+
+    return answered.body
+  }
+
+  try {
+    const replies = {
+      call: await ask('/call', { caller: 's1', code: 'await cua.getState();' }),
+      reset: await ask('/reset', { caller: 's1' }),
+      approve: await ask('/approve', { caller: 's1', bundleId: 'com.x', choice: 'session' }),
+      release: await ask('/release', { caller: 's1' }),
+      settings: await ask('/settings', { autoApprove: false }),
+      forget: await ask('/forget', { app: 'Grapher' }),
+      status: await ask('/status', undefined, 'GET'),
+    }
+
+    // /reset ends in the same reply with no session to reset.
+    assert.deepEqual(keysOf(await ask('/reset', { caller: 's9' })), contract.replies.ok.reset, 'reset with no session')
+    assert.deepEqual(Object.keys(replies).sort(), Object.keys(contract.routes).sort())
+    assert.deepEqual(Object.keys(contract.replies.ok).sort(), Object.keys(contract.routes).sort())
+
+    for (const [name, reply] of Object.entries(replies)) {
+      assert.deepEqual(keysOf(reply), contract.replies.ok[name], `${name} reply`)
+
+      if (name !== 'status') {
+        assert.equal(reply.status, 'ok', name)
+      }
+    }
+  } finally {
+    hub.close()
+  }
+})
+
+/** The held replies of a /call through the handler, by status, and whether s2's busy call got as far as starting its Codex session. */
+const heldReplies = async options => {
+  const { hub } = hubWith('Calculator', options)
+  const code = 'let app = await cua.getApp("TextEdit");'
+  const call = async caller => (await send('/call', { caller, code }, { hub })).body
+  const found = {}
+
+  try {
+    found.needs_approval = await call('s1')
+    hub.approve('s1', 'com.fake.TextEdit', 'session')
+    assert.equal((await call('s1')).status, 'ok')
+    found.busy = await call('s2')
+    found.started = hub.sessions.get('s2').client !== undefined
+    hub.release('s1')
+    hub.approve('s2', 'com.fake.TextEdit', 'deny')
+    found.denied = await call('s2')
+  } finally {
+    hub.close()
+  }
+
+  return found
+}
+
+// With names resolved before the run, `#precheck` answers busy and denied before a Codex session starts; with none resolved, `#outcome` builds them from what the server asked.
+test('the held replies of a call have the key sets the shared contract lists, whether the precheck or the outcome builds them', async () => {
+  const viaPrecheck = await heldReplies({})
+  const viaOutcome = await heldReplies({ resolve: async () => undefined })
+
+  assert.equal(viaPrecheck.started, false, 'the precheck answered busy before s2 started a Codex session')
+  assert.equal(viaOutcome.started, true, 'the outcome answered busy after the server asked')
+
+  for (const found of [viaPrecheck, viaOutcome]) {
+    for (const status of ['needs_approval', 'busy', 'denied']) {
+      assert.equal(found[status].status, status)
+      assert.deepEqual(keysOf(found[status]), contract.replies.held[status], status)
+    }
+  }
+
+  // The app a held reply names is the same two fields on both paths.
+  assert.deepEqual(keysOf(viaPrecheck.busy.app), ['bundleId', 'displayName'])
+  assert.deepEqual(keysOf(viaOutcome.busy.app), ['bundleId', 'displayName'])
+})
+
+test('a call with every Codex session mid-call answers full with the key set the shared contract lists', async () => {
+  const { hub } = hubWith('Calculator', { maxSessions: 1 })
+  const entry = { code: 'await cua.getState();' }
+
+  try {
+    assert.equal((await hub.call('s2', entry)).status, 'ok')
+    const slow = hub.call('s2', { code: 'sleep 300' })
+    await new Promise(resolve => setTimeout(resolve, 50))
+    const full = (await send('/call', { caller: 's3', ...entry }, { hub })).body
+
+    assert.equal(full.status, 'full')
+    assert.deepEqual(keysOf(full), contract.replies.held.full)
+    await slow
+  } finally {
+    hub.close()
+  }
 })
