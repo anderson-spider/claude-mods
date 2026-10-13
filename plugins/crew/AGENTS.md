@@ -11,6 +11,7 @@ Agent prompts and delegation: `hooks/agents.ts`. Planning workflow: read `skills
 - `hooks/effort.ts`: Claude pending/bound effort book. `hooks/confirm.ts`: requested versus observed model/effort. `hooks/decisions.ts`: v4 record, description hash and injected write.
 - `hooks/codex.ts`: Responses API request body, headers and the streamed answer as step chunks. `hooks/codex-login.ts`: the Codex CLI login, read only. `hooks/codex-tools.ts`: the tool schemas crew can send.
 - `hooks/hud/plan.ts`: pure plan parsing, deliverable grouping and selection. `hooks/hud/view.ts`: pure, width-aware, sanitized band rows from one snapshot (plans, agents, clock, width), built by a `SECTIONS` table with one entry per row kind.
+- `hooks/hud/agents.ts`: agent observation (job identity, queued observations, reconcile) over injected `AgentIo`. `hooks/hud/files.ts`: plan file discovery, validation and the single read flight (`missingPlan`) over injected `PlanIo`. `register.tsx` builds both io objects (`agentIo`, `planIo`) and keeps every `on(...)`, atom and `$` call; tests mirror them (`tests/hud-agents.test.ts`, `tests/hud-files.test.ts`).
 - `types/index.d.ts`: the `crew.mode` and HUD session state contract.
 
 ## Invariants

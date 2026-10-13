@@ -80,7 +80,7 @@ function add(rows: Row[], text: string, columns: number, style: Style = 'plain',
   flush()
 }
 
-/** Everything a section may read: prepared atoms and the clock, never a host. */
+/** Everything a section may read: prepared atoms, the clock and the render width, never a host. */
 export type Snapshot = { plans: readonly PlanDisplay[]; agents: readonly AgentRecord[]; now: number; columns: number }
 type Section = (snapshot: Snapshot) => Row[]
 
