@@ -12,9 +12,14 @@ const BLANK = /^(chrome:\/\/newtab\/?|about:blank)$/
 type ListedTab = { tabId: number; url?: string }
 type Listing = { tabGroupId?: number | null; availableTabs?: ListedTab[] }
 
+// What tabs_context_mcp says, as plain text, when this session has no group of its own yet (createIfEmpty starts one).
+const NO_GROUP = /no tab group of its own/
+
 // Lists the group without creating anything, so probing never leaves a tab behind.
 async function listing(call: McpCall, args: Record<string, unknown> = {}): Promise<Listing> {
-  const listed = leadingJson<Listing>(await call('tabs_context_mcp', args))
+  const text = await call('tabs_context_mcp', args)
+  if (NO_GROUP.test(text)) return {}
+  const listed = leadingJson<Listing>(text)
   if (!listed) throw new Error('unexpected output from tabs_context_mcp')
   return listed
 }
@@ -44,6 +49,7 @@ export const CHROME_SPEC: McpSpec = {
   hint: 'connect Claude in Chrome',
   idPrefix: 'chrome:',
   listing: ['tabs_context_mcp', 'tabs_create_mcp'],
+  awaitResult: true,
   tabArg: id => Number(id),
   tabs: async call => ((await listing(call)).availableTabs ?? []).map(tab => `${tab.tabId}`),
   openTab: async (call, url) => {

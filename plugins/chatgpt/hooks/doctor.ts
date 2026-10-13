@@ -1,6 +1,6 @@
 import type { Browser, Check, TabHolder } from './model'
-import { CHATGPT_URL, DOCTOR_SCRIPT, MODEL_READY, ORIGIN, parseOutput } from './scripts'
-import { chatUrlError, findTab } from './tab'
+import { CHATGPT_URL, DOCTOR_SCRIPT, MODEL_READY, ORIGIN } from './scripts'
+import { chatUrlError, findTab, pageStateOf } from './tab'
 
 // How long the doctor gives the model menu to render after the composer; a page without it still gets its report.
 const MODEL_MS = 5_000
@@ -24,12 +24,12 @@ type Doctor = {
  * the plugin's tab and reports which of the page parts the plugin relies on
  * are where it expects them.
  */
-export async function diagnose(browser: Pick<Browser, 'tabs' | 'openTab' | 'js' | 'waitFor'>, chatUrl: string | undefined, tab: TabHolder): Promise<Check[]> {
+export async function diagnose(browser: Pick<Browser, 'name' | 'tabs' | 'openTab' | 'js' | 'waitFor'>, chatUrl: string | undefined, tab: TabHolder): Promise<Check[]> {
   const invalid = chatUrl === undefined ? undefined : chatUrlError(chatUrl)
   if (invalid) return [{ name: 'chat link', ok: false, detail: invalid }]
   const tabId = await findTab(browser, chatUrl ?? CHATGPT_URL, tab)
   await browser.waitFor(tabId, MODEL_READY, MODEL_MS)
-  const page = parseOutput<Doctor>(await browser.js(tabId, DOCTOR_SCRIPT))
+  const page = pageStateOf<Doctor>(browser, await browser.js(tabId, DOCTOR_SCRIPT))
   const checks: Check[] = [
     { name: 'page', ok: page.href.startsWith(ORIGIN), detail: page.href },
     { name: 'logged in', ok: !page.login, detail: page.login ? 'the page asks for a login' : 'yes' },

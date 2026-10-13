@@ -129,10 +129,11 @@ export function fakePage(script: PageScript) {
 }
 
 /** A fake browser: each state poll returns the next page in `pages` (the last one repeats). */
-export function fakeBrowser(options: { tabs: string[]; pages: Partial<PageState>[]; markdown: string; sent?: boolean }) {
+export function fakeBrowser(options: { tabs: string[]; pages: Partial<PageState>[]; markdown: string; sent?: boolean; name?: string }) {
   const calls: string[] = []
   const page = fakePage({ pages: options.pages, markdown: options.markdown, sent: options.sent })
   const browser: Browser = {
+    name: options.name ?? 'fake browser',
     tabs: async () => {
       calls.push('tabs')
       return options.tabs
@@ -170,6 +171,7 @@ export function fakeImageBrowser(options: { shots: Shot[]; base64: string; attac
     base: { ...basePage, href: 'https://chatgpt.com/c/img' },
   })
   const browser: Browser = {
+    name: 'fake browser',
     tabs: async () => [],
     openTab: async url => {
       calls.push(`navigate ${url}`)

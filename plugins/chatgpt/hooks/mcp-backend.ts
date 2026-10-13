@@ -33,6 +33,8 @@ export type McpSpec = {
   idPrefix: string
   /** The backend's tools that only list or open tabs (see `staysOnChatgpt`). */
   listing: readonly string[]
+  /** Whether its javascript_tool returns a page script's last expression only when it is awaited (see `pageBrowser`). */
+  awaitResult?: boolean
   /** How a script call names the backend's own tab id. */
   tabArg(id: string): string | number
   /** The ids of the backend's tabs; it throws when the backend cannot be reached or prints no tab list. */
@@ -64,6 +66,8 @@ export function mcpBackend(spec: McpSpec): McpBackend {
       const { call } = deps
       const tabs = async () => (await spec.tabs(call)).map(id => `${idPrefix}${id}`)
       const page = {
+        name,
+        awaitResult: spec.awaitResult,
         tabs,
         openTab: async (url: string) => `${idPrefix}${await spec.openTab(call, url)}`,
         evaluate: async (id: string, expression: string) =>

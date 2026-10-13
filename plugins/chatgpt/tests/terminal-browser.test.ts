@@ -74,3 +74,16 @@ test('the CLI adapter reports why it is unavailable and turns wait failures into
     init: { timeoutMs: 10_025 },
   })
 })
+
+test('terminal-browser js keeps the async wrapper its eval waits on, so a page result is the resolved value', async () => {
+  const calls: string[][] = []
+  const run: ProcessRunner = async argv => {
+    calls.push(argv)
+    if (argv[0] === 'terminal-browser' && argv[1] === 'ls') return { exitCode: 0, stdout: JSON.stringify({ self: {}, browsers: [{ key: 'k', tabs: [{ id: 1 }] }] }), stderr: '' }
+    return { exitCode: 0, stdout: '"{}"', stderr: '' }
+  }
+  const browser = await openTerminalBrowser(run)
+  if (typeof browser === 'string') throw new Error(browser)
+  await browser.js('k:1', 'return JSON.stringify({ ok: true })')
+  expect(calls.at(-1)?.at(-1)).toBe('(async () => {\nreturn JSON.stringify({ ok: true })\n})()')
+})

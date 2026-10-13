@@ -8,7 +8,7 @@ Ask your logged-in ChatGPT for self-contained long answers; generate or edit ima
 
 ## Setup and use
 
-Log in to chatgpt.com in one supported browser: [terminal-browser](https://terminal-browser.sh) in a direct Ghostty/kitty pane (not a multiplexer/background session), Claude in Chrome, or the Claude app's built-in browser. The plugin tries them in that order; `/chatgpt-doctor` names the selected backend and checks login, composer, attachments and selectors. A login prompt stops the request; credentials are yours to enter.
+Log in to chatgpt.com in one supported browser: [terminal-browser](https://terminal-browser.sh) in a terminal pane it can drive (a Ghostty or kitty pane; a terminal multiplexer pane running inside Ghostty was observed working, other setups are not verified; a background session has no pane), Claude in Chrome, or the Claude app's built-in browser. The plugin tries them in that order; `/chatgpt-doctor` names the selected backend and checks login, composer, attachments and selectors. A login prompt stops the request; credentials are yours to enter.
 
 | Command | Use |
 | --- | --- |

@@ -202,14 +202,16 @@ export const register: Register = (on, options) => {
   on('command.run', { command: 'chatgpt-doctor' }, async ($, e) => {
     const chatUrl = chatUrlOf(e.args)
     return queue(async () => {
+      let backend: string | undefined
       try {
         const picked = await pickBrowser($)
         if (typeof picked === 'string') return { text: `✗ browser: ${picked}` }
+        backend = picked.name
         $.ui.status('ChatGPT: checking the page')
         const checks = await diagnose(picked.browser, chatUrl, tab)
         return { text: report([{ name: 'browser', ok: true, detail: picked.name }, ...checks]) }
       } catch (error) {
-        return { text: `✗ browser: ${errorText(error)}` }
+        return { text: backend ? `✗ browser: ${backend} failed: ${errorText(error)}` : `✗ browser: ${errorText(error)}` }
       } finally {
         $.ui.status(undefined)
       }
