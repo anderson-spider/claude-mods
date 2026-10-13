@@ -43,11 +43,11 @@ export class RpcClient {
     const id = this.#nextId++
 
     return new Promise((resolve, reject) => {
+      // Referenced on purpose: a pending request keeps the loop alive until its answer or its timeout.
       const timer = setTimeout(() => {
         this.#pending.delete(id)
         reject(new Error(`${method}: the Codex app-server did not answer in ${Math.round(this.#timeoutMs / 1000)} s`))
       }, this.#timeoutMs)
-      timer.unref?.()
       this.#pending.set(id, {
         resolve: value => (clearTimeout(timer), resolve(value)),
         reject: error => (clearTimeout(timer), reject(error)),
