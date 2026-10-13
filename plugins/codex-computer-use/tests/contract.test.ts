@@ -3,7 +3,10 @@ import { expect, test } from 'claude-code/testing'
 import { LABEL, callerOf, socketOf } from '../hooks/helper'
 import { CHOICES, ROUTES } from '../hooks/model'
 import type { ApproveReply, CallReply, ForgetReply, Held, ReleaseReply, ResetReply, SettingsReply, StatusReply } from '../hooks/model'
-import { BRIDGE, LEASE_MINUTES, TOOL } from '../hooks/routing'
+import { serve } from '../hooks/bridge'
+import type { BridgeDeps } from '../hooks/bridge'
+import { toAnswer } from '../hooks/presentation'
+import { APPROVAL_MS, BRIDGE, LEASE_MINUTES, TOOL } from '../hooks/routing'
 import { contract } from '../helper/test/contract.mjs'
 
 import { TOOL as HOST_TOOL } from './helpers'
@@ -91,4 +94,48 @@ test('the reply types in model.ts have exactly the key sets the shared contract 
   expect(Object.keys(ok).sort()).toEqual(Object.keys(contract.routes).sort())
   expect(Object.fromEntries(Object.entries(ok).map(([route, sample]) => [route, sorted(sample)]))).toEqual(contract.replies.ok)
   expect(Object.fromEntries(Object.entries(held).map(([status, sample]) => [status, sorted(sample)]))).toEqual(contract.replies.held)
+})
+
+// What hooks reads of the `app` in a held reply is measured, not declared: each app below is a proxy that records the
+// properties touched while the bridge and `toAnswer` handle the reply. A field the helper sends and nothing reads is
+// in the contract's `sent` sets and not in `read`, so a later trim has the evidence in one place.
+const recorded = (keys: readonly string[]) => {
+  const reads = new Set<string>()
+  const app = new Proxy(Object.fromEntries(keys.map(key => [key, key === 'canAlways' ? true : `${key}-value`])), {
+    get: (target, key, receiver) => (typeof key === 'string' && reads.add(key), Reflect.get(target, key, receiver)),
+  })
+
+  return { app, reads: () => [...reads].sort() }
+}
+
+const sentKeys = (status: keyof typeof contract.replies.app) => [...contract.replies.app[status].always, ...contract.replies.app[status].sometimes]
+const signal = { aborted: false } as AbortSignal
+
+test('the bridge reads of the app a needs_approval reply names are the keys the shared contract lists as read', async () => {
+  const approval = recorded(sentKeys('needs_approval'))
+  const calls = [{ status: 'needs_approval', app: approval.app }, { status: 'ok', isError: false, content: [] }]
+  const deps: BridgeDeps = {
+    enabled: async () => true,
+    sessionId: async () => 'sess-1',
+    helper: (async (route: string) => (route === ROUTES.call ? calls.shift() : { status: 'ok' })) as unknown as BridgeDeps['helper'],
+    ask: async () => 'session',
+    limitMs: APPROVAL_MS,
+  }
+
+  // The bridge asks about the app (bundle id, name, whether "Always" is offered), approves it and runs the call again.
+  await serve(deps, { tool_use_id: 't', code: 'x' }, signal)
+  toAnswer({ status: 'needs_approval', app: approval.app as never })
+
+  expect(approval.reads()).toEqual(contract.replies.app.needs_approval.read)
+})
+
+test('the answer to a denied or busy reply reads the displayName of its app and nothing else', () => {
+  const denied = recorded(sentKeys('denied'))
+  const busy = recorded(sentKeys('busy'))
+
+  toAnswer({ status: 'denied', app: denied.app as never })
+  toAnswer({ status: 'busy', app: busy.app as never, owner: 's2' })
+
+  expect(denied.reads()).toEqual(contract.replies.app.denied.read)
+  expect(busy.reads()).toEqual(contract.replies.app.busy.read)
 })

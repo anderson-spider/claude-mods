@@ -9,7 +9,7 @@ import { POLL, callerOf, post, postStarting, socketOf } from './helper'
 import type { Probe } from './helper'
 import { ROUTES } from './model'
 import type { Choice, Route, RouteReplies } from './model'
-import { ASK_HINT, ASK_LABELS, askBody, askTitle, autoApproveText, bridgeFailedText, forgetText, refusal, releaseText, routeText, statusReport } from './presentation'
+import { ASK_HINT, ASK_LABELS, UNCHECKED_OWN, askBody, askTitle, autoApproveText, bridgeFailedText, forgetText, refusal, releaseText, routeText, statusReport } from './presentation'
 import { DESCRIPTION, INPUT_SCHEMA, PROMPT, denyOwn } from './prompts'
 import { holdQuestion } from './question'
 import type { QuestionHost, Waiting } from './question'
@@ -119,15 +119,20 @@ const commandsOf = ($: EngineInterface): Handlers => ({
 const runCommand = <K extends Command['kind']>(handlers: Handlers, kind: K, command: Extract<Command, { kind: K }>) => handlers[kind](command)
 
 /**
- * The guard's `.catch`: a hook that fails is skipped and the own desktop tool would run while the mod is on.
- * It has no matcher, so it sees every tool and re-checks. Named at top level so tests reach it.
+ * The guard's `.catch`: a hook that fails is skipped and Claude's own desktop tool would run while the mod is on.
+ * It has no matcher, so it sees every tool and re-checks. On a re-entry the hook never ran and its `$` calls reject,
+ * so it cannot tell whether the mod is on: the refusal then says so. Named at top level so tests reach it.
  */
-export function holdOwnDesktop<E extends { tool: string }, R>(_$: EngineInterface, e: E, next: ((e: E) => Promise<R>) & { called: boolean }) {
-  if (next.called || e.tool === TOOL || !isOwnDesktopTool(e.tool)) {
+export function holdOwnDesktop<E extends { tool: string }, R>(
+  _$: EngineInterface,
+  e: E,
+  next: ((e: E) => Promise<R>) & { called: boolean; error: { kind: string } },
+) {
+  if (next.called || !isOwnDesktopTool(e.tool)) {
     return next(e)
   }
 
-  return { deny: denyOwn(TOOL) }
+  return { deny: next.error.kind === 're-entry' ? UNCHECKED_OWN : denyOwn(TOOL) }
 }
 
 export const register: Register = on => {

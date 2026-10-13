@@ -8,8 +8,9 @@ import { temp } from './support.mjs'
 
 // Characterization of what the hub does with each approval decision, and of how it tears a
 // session down. Written against the hub before its decision effects became a table, so
-// every expectation is today's behavior, including the odd cases (a denied app is still
-// claimed at the start of a call; an unknown decision claims the app and declines it).
+// every expectation was today's behavior, including the odd case that a denied app is still
+// claimed at the start of a call. An unknown decision then claimed the app and declined it;
+// it now fails closed (declines, claims nothing).
 // The Codex session is a fake client: no process starts, and the approvals file and the
 // codex approvals file are in the temp directory.
 
@@ -33,9 +34,9 @@ const surface = appId => ({ content: [], _meta: { 'codex/toolSurface': { app: { 
 /**
  * A hub on a fake Codex client. `decisions` is what `approvals.decide` answers, one entry per
  * question (the last one repeats). `onCall({ client, args, caller })` is the fake `js` tool.
- * `events` collects each client close, with what the hub still held at that moment.
+ * `onStart()` runs while a client starts. `events` collects each client close, with what the hub still held at that moment.
  */
-const rig = ({ decisions = ['ask'], onCall = async () => ({ content: [] }), ...extra } = {}) => {
+const rig = ({ decisions = ['ask'], onCall = async () => ({ content: [] }), onStart = async () => undefined, ...extra } = {}) => {
   const events = []
   const clients = []
   const queue = [...decisions]
@@ -52,6 +53,7 @@ const rig = ({ decisions = ['ask'], onCall = async () => ({ content: [] }), ...e
         },
         start: async () => {
           alive = true
+          await onStart()
         },
         close: () => {
           alive = false
@@ -104,7 +106,7 @@ test('#elicit: each known decision sets its slot, claims or not, and answers as 
   }
 })
 
-test('#elicit: a decision the hub does not list claims the app and declines it, as it does today', async () => {
+test('#elicit: a decision the hub does not list fails closed: it declines the app and claims nothing', async () => {
   for (const decision of UNKNOWN) {
     let answered
     const { hub } = rig({
@@ -115,7 +117,7 @@ test('#elicit: a decision the hub does not list claims the app and declines it, 
 
     assert.deepEqual(answered, { action: 'decline' }, String(decision))
     assert.deepEqual(reply, { status: 'ok', isError: false, content: [], notes: [] }, String(decision))
-    assert.equal(hub.owners.ownerOf(PAD), 's1', String(decision))
+    assert.equal(hub.owners.ownerOf(PAD), undefined, String(decision))
   }
 })
 
@@ -171,7 +173,7 @@ test('#precheck: only deny stops a call that names the app, and nothing is claim
   }
 })
 
-test('#invoke: it claims each named app before the run for every decision but ask, deny and unknown ones included', async () => {
+test('#invoke: it claims each named app before the run for every listed decision but ask, deny included; an unlisted one claims nothing', async () => {
   for (const decision of [...KNOWN, ...UNKNOWN]) {
     let heldAtRun
     // The precheck sees an allowing decision and the invoke sees `decision`, as when a choice lands between the two.
@@ -180,7 +182,7 @@ test('#invoke: it claims each named app before the run for every decision but as
     const label = String(decision)
 
     assert.equal(reply.status, 'ok', label)
-    assert.equal(heldAtRun, decision === 'ask' ? undefined : 's1', label)
+    assert.equal(heldAtRun, decision === 'ask' || UNKNOWN.includes(decision) ? undefined : 's1', label)
   }
 })
 
@@ -361,4 +363,142 @@ test('every decision the real Approvals returns has a row in the table, and ever
 
   assert.equal(seen.size, 5, 'the five states give five different decisions')
   assert.deepEqual([...seen].sort(), [...DECISION_KINDS].sort())
+})
+
+const tick = () => new Promise(resolve => setImmediate(resolve))
+const LATE = /reset or released/
+
+test('reset: a call that arrives while the reset waits for the queue is refused and starts no session', async () => {
+  let release
+  const gate = new Promise(resolve => (release = resolve))
+  const { hub, clients } = rig({ onCall: async ({ args }) => (args.title === 'slow' ? (await gate, { content: [] }) : { content: [] }) })
+  const slow = hub.call('s1', { code: ENTRY, title: 'slow' })
+  await tick()
+  const reset = hub.reset('s1')
+  const late = hub.call('s1', { code: ENTRY })
+
+  release()
+  await slow
+  await reset
+  const refused = await late
+
+  assert.equal(refused.status, 'error')
+  assert.match(refused.message, LATE)
+  assert.equal(clients.length, 1, 'no second Codex client was started for the reset caller')
+  assert.equal(hub.sessions.has('s1'), false)
+  assert.equal(clients[0].isAlive, false)
+
+  // A call after the reset has finished is a new caller session, as before.
+  assert.equal((await hub.call('s1', { code: ENTRY })).status, 'ok')
+  assert.equal(clients.length, 2)
+  assert.ok(hub.sessions.has('s1'))
+})
+
+test('reset: an app a call claims while the reset waits is freed when the session ends', async () => {
+  let release
+  const gate = new Promise(resolve => (release = resolve))
+  const { hub } = rig({ onCall: async () => (await gate, surface(PAD)) })
+  const slow = hub.call('s1', { code: ENTRY })
+  await tick()
+  const reset = hub.reset('s1')
+
+  release()
+  await slow
+  await reset
+
+  assert.equal(hub.owners.ownerOf(PAD), undefined)
+  assert.deepEqual(hub.owners.apps(), [])
+})
+
+test('release: queued calls of the released caller are refused, start no client and claim no app', async () => {
+  let release
+  const gate = new Promise(resolve => (release = resolve))
+  const { hub, clients } = rig({ onCall: async () => (await gate, surface(PAD)) })
+  const running = hub.call('s1', { code: ENTRY })
+  await tick()
+  const queued = hub.call('s1', { code: ENTRY })
+
+  assert.deepEqual(hub.release('s1'), { status: 'ok', ended: ['s1'] })
+  release()
+  const [first, second] = await Promise.all([running, queued])
+
+  assert.equal(second.status, 'error')
+  assert.match(second.message, LATE)
+  assert.equal(first.status, 'error', 'the call that was running when its client closed does not report a result')
+  assert.equal(clients.length, 1)
+  assert.equal(hub.sessions.size, 0)
+  assert.equal(hub.owners.ownerOf(PAD), undefined)
+})
+
+test('release: a release that lands while the Codex client is starting leaves no session, no running call and no claim', async () => {
+  let release
+  const gate = new Promise(resolve => (release = resolve))
+  let calls = 0
+  const { hub, clients } = rig({ decisions: ['session'], onStart: () => gate, onCall: async () => (calls++, surface(PAD)) })
+  const pending = hub.call('s1', { code: NAMED })
+  await tick()
+
+  hub.release('s1')
+  release()
+  const reply = await pending
+
+  assert.equal(reply.status, 'error')
+  assert.match(reply.message, LATE)
+  assert.equal(calls, 0, 'the code never ran')
+  assert.equal(clients.length, 1)
+  assert.equal(clients[0].isAlive, false, 'the started client was closed')
+  assert.equal(hub.sessions.size, 0)
+  assert.equal(hub.owners.ownerOf(PAD), undefined)
+})
+
+test('close: calls still queued when the hub closes are refused and start no client', async () => {
+  let release
+  const gate = new Promise(resolve => (release = resolve))
+  const { hub, clients } = rig({ onCall: async () => (await gate, { content: [] }) })
+  const running = hub.call('s1', { code: ENTRY })
+  await tick()
+  const queued = hub.call('s1', { code: ENTRY })
+
+  hub.close()
+  release()
+  await running
+
+  assert.equal((await queued).status, 'error')
+  assert.equal(clients.length, 1)
+  assert.equal(hub.sessions.size, 0)
+})
+
+test('status: an app whose lease lapsed is in neither the owners nor its caller apps; a live lease and a running call stay', async () => {
+  let clock = 0
+  let release
+  const gate = new Promise(resolve => (release = resolve))
+  const { hub } = rig({
+    now: () => clock,
+    leaseMs: 1000,
+    onCall: async ({ args }) => (args.title === 'slow' ? (await gate, { content: [] }) : surface(args.title)),
+  })
+
+  await hub.call('s1', { code: ENTRY, title: PAD })
+  clock = 400
+  let report = hub.status()
+
+  assert.deepEqual(report.callers, [{ caller: 's1', apps: [PAD], isFresh: false, idleSeconds: 0 }])
+  assert.deepEqual(report.owners, { [PAD]: { owner: 's1', idleSeconds: 0 } })
+
+  clock = 1500
+  report = hub.status()
+
+  assert.deepEqual(report.callers, [{ caller: 's1', apps: [], isFresh: false, idleSeconds: 2 }])
+  assert.deepEqual(report.owners, {})
+  assert.equal(hub.owners.ownerOf(PAD), undefined, 'the lapsed lease is freed')
+
+  await hub.call('s2', { code: ENTRY, title: 'com.fake.Held' })
+  const slow = hub.call('s2', { code: ENTRY, title: 'slow' })
+  await tick()
+  clock = 9000
+  report = hub.status()
+
+  assert.deepEqual(report.callers.find(row => row.caller === 's2').apps, ['com.fake.Held'], 'a call in flight keeps its app')
+  release()
+  await slow
 })

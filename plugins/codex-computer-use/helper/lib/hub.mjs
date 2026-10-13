@@ -56,8 +56,8 @@ const DECISION_EFFECTS = new Map(
 )
 /** The decisions that have a row, for the test that ties them to what `Approvals#decide` returns. */
 export const DECISION_KINDS = Object.freeze([...DECISION_EFFECTS.keys()])
-// A decision no row lists claims the app and declines the question, as before the table; failing closed is a separate change.
-const UNLISTED = Object.freeze({ slot: undefined, claims: true, stops: false, claimsOnRun: true, answer: DECLINE })
+// A decision no row lists fails closed: the question is declined and the app is claimed nowhere.
+const UNLISTED = Object.freeze({ slot: undefined, claims: false, stops: false, claimsOnRun: false, answer: DECLINE })
 const effectsOf = decision => DECISION_EFFECTS.get(decision) ?? UNLISTED
 
 export class Hub {
@@ -113,7 +113,11 @@ export class Hub {
    * their next call, so none keeps an approval it read before.
    */
   async forget(app) {
-    const bundleId = typeof app === 'string' && app.trim() !== '' ? await this.resolve(app.trim(), this.aliases) : undefined
+    if (typeof app !== 'string' || app.trim() === '') {
+      return { status: 'error', message: 'forget needs an "app" field: the app\'s name as Finder shows it, or its bundle id.' }
+    }
+
+    const bundleId = await this.resolve(app.trim(), this.aliases)
 
     if (bundleId === undefined) {
       return { status: 'error', message: `no app found for "${app}"; give its name as Finder shows it, or its bundle id.` }
@@ -148,6 +152,8 @@ export class Hub {
 
     await session.queue
     this.#end(caller, session)
+    // A call that ran while the reset waited may have claimed an app again.
+    this.owners.release(caller)
 
     return { status: 'ok', message: 'Codex session reset; the next call must be an entry call.' }
   }
@@ -183,6 +189,12 @@ export class Hub {
 
   status() {
     const now = this.now()
+    // Read first: `#holder` frees every lapsed lease, so the callers' apps below are the live ones.
+    const owners = Object.fromEntries(this.owners.apps().flatMap(app => {
+      const held = this.#holder(app)
+
+      return held === undefined ? [] : [[app, held]]
+    }))
 
     return {
       callers: [...this.sessions].map(([caller, session]) => ({
@@ -191,27 +203,36 @@ export class Hub {
         isFresh: session.isFresh,
         idleSeconds: Math.round((now - session.lastUsed) / 1000),
       })),
-      owners: Object.fromEntries(this.owners.apps().flatMap(app => {
-        const held = this.#holder(app)
-
-        return held === undefined ? [] : [[app, held]]
-      })),
+      owners,
       settings: this.approvals.settings,
     }
   }
 
   close() {
     for (const session of this.sessions.values()) {
+      session.ended = true
       session.client?.close()
     }
 
     this.sessions.clear()
   }
 
-  /** Closes `caller`'s Codex client and forgets its session; its apps and approvals are the caller's business. */
+  /**
+   * Closes `caller`'s Codex client and forgets its session; its apps and approvals are the caller's business.
+   * The session is marked ended: a call still queued on it must not start a client or claim an app for a caller that has none.
+   */
   #end(caller, session) {
+    session.ended = true
     session.client?.close()
     this.sessions.delete(caller)
+  }
+
+  /** The reply of a call whose session ended (reset, release, eviction or close) before the call could run to its end. */
+  #lost() {
+    return {
+      status: 'error',
+      message: 'The Codex session was reset or released while this call was waiting, so it did not run. Send it again, starting with an entry call.',
+    }
   }
 
   /** Ends `caller`'s session and frees its apps. */
@@ -272,7 +293,7 @@ export class Hub {
     let session = this.sessions.get(caller)
 
     if (session === undefined) {
-      session = { client: undefined, queue: Promise.resolve(), lastUsed: this.now(), running: 0, isFresh: true, ctx: undefined }
+      session = { client: undefined, queue: Promise.resolve(), lastUsed: this.now(), running: 0, isFresh: true, ctx: undefined, ended: false }
       this.sessions.set(caller, session)
     }
 
@@ -359,11 +380,21 @@ export class Hub {
 
   /** Runs `code` in the caller's Codex session: a finished reply, or the tool result with what the server asked on the way. */
   async #invoke(caller, session, named, { code, title, timeoutMs }) {
+    if (session.ended) {
+      return { reply: this.#lost() }
+    }
+
     if (!this.#makeRoom(session)) {
       return { reply: { status: 'full', message: `${this.maxSessions} Codex sessions are mid-call.` } }
     }
 
     const client = await this.#client(caller, session)
+
+    // A reset or release that landed while the client started has closed it: nothing runs and nothing is claimed.
+    if (session.ended) {
+      return { reply: this.#lost() }
+    }
+
     const notes = client === 'restarted' ? ['The Codex session had stopped and was started again; earlier variables are gone.'] : []
 
     if (session.isFresh && !isEntryCall(code)) {
@@ -450,6 +481,10 @@ export class Hub {
       }
 
       const invoked = await this.#invoke(caller, session, checked.named, { code, title, timeoutMs })
+
+      if (session.ended) {
+        return this.#lost()
+      }
 
       return invoked.reply ?? this.#outcome(caller, invoked)
     } catch (error) {
