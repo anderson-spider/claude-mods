@@ -2,14 +2,15 @@
 // time per caller, a bounded number of turns at once. A turn is started, then polled: the caller never holds a
 // request open for the length of a turn.
 import { createCollector } from './collector.mjs'
-import { laneCwd, laneOf, refusalFor, SANDBOX_POLICY, THREAD } from './lanes.mjs'
+import { laneOf, refusalFor, SANDBOX_POLICY, THREAD } from './lanes.mjs'
+import { resolveLane } from './paths.mjs'
 
 const MODEL = /^[A-Za-z0-9._-]{1,64}$/
 const EFFORTS = ['low', 'medium', 'high', 'xhigh']
 const MAX_PROMPT = 200_000
 const MAX_INSTRUCTIONS = 50_000
 
-export const DEFAULTS = Object.freeze({ limit: 4, turnTimeoutMs: 15 * 60_000, keepThreads: 64 })
+export const DEFAULTS = Object.freeze({ limit: 4, turnTimeoutMs: 15 * 60_000, keepThreads: 64, graceMs: 30_000 })
 
 const fail = message => ({ status: 'error', message })
 
@@ -18,6 +19,8 @@ export class Engine {
   #limit
   #turnTimeoutMs
   #keepThreads
+  #graceMs
+  #resolve
   #now
   #client
   #starting
@@ -25,8 +28,10 @@ export class Engine {
   #jobs = new Map()
   #byThread = new Map()
 
-  constructor({ createClient, limit = DEFAULTS.limit, turnTimeoutMs = DEFAULTS.turnTimeoutMs, keepThreads = DEFAULTS.keepThreads, now = Date.now }) {
+  constructor({ createClient, limit = DEFAULTS.limit, turnTimeoutMs = DEFAULTS.turnTimeoutMs, keepThreads = DEFAULTS.keepThreads, graceMs = DEFAULTS.graceMs, resolve = resolveLane, now = Date.now }) {
     this.#createClient = createClient
+    this.#graceMs = graceMs
+    this.#resolve = resolve
     this.#limit = limit
     this.#turnTimeoutMs = turnTimeoutMs
     this.#keepThreads = keepThreads
@@ -42,6 +47,13 @@ export class Engine {
     }
 
     const { caller, role, repo, model, prompt } = input
+    // The lane is resolved on every start: a link swapped in after the thread began must not widen it.
+    const lane = this.#resolve(role, repo)
+
+    if (!lane.ok) {
+      return fail(lane.message)
+    }
+
     const existing = this.#jobs.get(caller)
 
     if (existing !== undefined && !existing.collector.finished) {
@@ -58,7 +70,7 @@ export class Engine {
 
     try {
       const client = await this.#connect()
-      const cwd = laneCwd(role, repo)
+      const cwd = lane.cwd
       let known = this.#threads.get(caller)
 
       if (known === undefined || known.role !== role || known.cwd !== cwd) {
@@ -153,16 +165,34 @@ export class Engine {
   async sweep() {
     const now = this.#now()
 
-    for (const job of this.#jobs.values()) {
-      if (!job.collector.finished && now - job.startedAt > this.#turnTimeoutMs) {
+    for (const job of [...this.#jobs.values()]) {
+      if (job.collector.finished) {
+        continue
+      }
+
+      // An interrupt the server took but never confirmed ends the turn for the caller after the grace period, and the
+      // thread is dropped: it may still be running, so a new turn must not share it.
+      if (job.interruptedAt !== undefined && now - job.interruptedAt > this.#graceMs) {
+        this.#abandon(job, 'the turn did not stop after the interrupt')
+      } else if (now - job.startedAt > this.#turnTimeoutMs) {
         job.timedOut = true
         job.stop = true
 
         if (!(await this.#interrupt(job))) {
-          // The server did not take the interrupt: the turn is over for the caller all the same.
-          job.collector.feed('turn/completed', { turn: { status: 'failed', error: { message: 'the turn timed out' } } })
+          this.#abandon(job, 'the turn timed out')
         }
       }
+    }
+  }
+
+  #abandon(job, message) {
+    job.timedOut = true
+    job.collector.feed('turn/completed', { turn: { status: 'failed', error: { message } } })
+    const known = this.#threads.get(job.caller)
+
+    if (known !== undefined) {
+      this.#byThread.delete(known.threadId)
+      this.#threads.delete(job.caller)
     }
   }
 
@@ -189,10 +219,6 @@ export class Engine {
 
     if (laneOf(input.role) === undefined) {
       return 'role must be developer or architect'
-    }
-
-    if (laneCwd(input.role, input.repo) === undefined) {
-      return 'repo must be an absolute path without ..'
     }
 
     if (typeof input.model !== 'string' || !MODEL.test(input.model)) {
@@ -242,6 +268,7 @@ export class Engine {
 
     try {
       await this.#client.request('turn/interrupt', { threadId: job.threadId, turnId: job.turnId })
+      job.interruptedAt ??= this.#now()
 
       return true
     } catch {

@@ -43,3 +43,16 @@ test('files and commands are capped so a long turn keeps a bounded record', () =
   assert.equal(c.result().commands.length, 50)
   assert.equal(c.result().files.length, 100)
 })
+
+test('what a turn keeps is bounded: the answer, the paths of a change and the length of a command', () => {
+  const c = createCollector()
+  c.feed('item/completed', { item: { type: 'agentMessage', text: 'x'.repeat(200_000) } })
+  c.feed('item/completed', { item: { type: 'fileChange', status: 'completed', changes: Array.from({ length: 500 }, (_, i) => ({ path: `/${'p'.repeat(2000)}${i}` })) } })
+  c.feed('item/completed', { item: { type: 'commandExecution', command: 'c'.repeat(5000), status: 'completed', exitCode: 0 } })
+  const result = c.result()
+
+  assert.equal(result.text.length, 100_000)
+  assert.equal(result.files[0].paths.length, 20)
+  assert.equal(result.files[0].paths[0].length, 512)
+  assert.equal(result.commands[0].command.length, 512)
+})

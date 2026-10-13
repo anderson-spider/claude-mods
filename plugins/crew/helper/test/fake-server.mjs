@@ -102,3 +102,12 @@ export const until = async (predicate, tries = 200) => {
 
   throw new Error('condition not reached')
 }
+
+import { laneCwd } from '../lib/lanes.mjs'
+
+/** The lane's nominal cwd as the resolver: no filesystem, so tests use paths that need not exist. */
+export const nominal = (role, repo) => {
+  const cwd = laneCwd(role, repo)
+
+  return cwd === undefined ? { ok: false, message: 'repo must be an absolute path without ..' } : { ok: true, cwd }
+}

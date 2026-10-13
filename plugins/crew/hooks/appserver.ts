@@ -116,6 +116,8 @@ export function answerText(done: Finished): string {
  * when `aborted()` turns true. The helper's own time limit ends a turn that hangs.
  */
 export async function runTurn(probe: Probe, socket: string, request: TurnRequest, aborted: () => boolean, maxPolls = MAX_POLLS): Promise<Outcome> {
+  // An abort before the start asks nothing: there is no turn to stop.
+  if (aborted()) return { kind: 'aborted' }
   const started = await postStarting(probe, socket, ROUTES.start, request)
   if (started.status === 'unreachable') return { kind: 'failed', reason: 'the crew Codex helper is not running (run plugins/crew/helper/install.sh)' }
   if (started.status === 'busy') return { kind: 'failed', reason: 'this agent already has a Codex turn running' }

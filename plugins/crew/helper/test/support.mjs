@@ -6,7 +6,7 @@ import { Readable } from 'node:stream'
 import { handler } from '../helper.mjs'
 import { Engine } from '../lib/engine.mjs'
 import { RpcClient } from '../lib/rpc.mjs'
-import { fakeChild } from './fake-server.mjs'
+import { fakeChild, nominal } from './fake-server.mjs'
 
 export const temp = () => mkdtempSync(join(tmpdir(), 'crew-codex-'))
 
@@ -17,7 +17,7 @@ export const envWith = (over = {}) => ({ codex: () => '/bin/codex', login: () =>
 export const engineWith = (options = {}) => {
   const fake = fakeChild({ autoComplete: true, text: 'done', ...options })
 
-  return { fake, engine: new Engine({ createClient: () => new RpcClient(fake.child) }) }
+  return { fake, engine: new Engine({ createClient: () => new RpcClient(fake.child), resolve: nominal }) }
 }
 
 /**

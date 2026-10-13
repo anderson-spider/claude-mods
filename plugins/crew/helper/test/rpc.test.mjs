@@ -61,3 +61,21 @@ test('close ends stdin, which is how the server is asked to stop', async () => {
 
   assert.equal(fake.ended, true)
 })
+
+test('a request the server never answers rejects after the timeout, and a late answer changes nothing', async () => {
+  const fake = fakeChild({ handlers: { 'a/hang': () => 'silent' } })
+  const client = new RpcClient(fake.child, { timeoutMs: 20 })
+
+  await assert.rejects(client.request('a/hang'), /did not answer/)
+  fake.emit({ id: 1, result: {} })
+})
+
+test('a write to a server that is gone does not throw', async () => {
+  const fake = fakeChild()
+  fake.child.stdin.write = () => {
+    throw new Error('EPIPE')
+  }
+  const client = new RpcClient(fake.child, { timeoutMs: 20 })
+
+  await assert.rejects(client.request('a/x'), /did not answer/)
+})

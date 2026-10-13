@@ -42,20 +42,41 @@ export const prepareHome = (dir, home) => {
   const login = join(home, '.codex/auth.json')
 
   mkdirSync(dir, { recursive: true, mode: 0o700 })
+
+  if (lstatSync(dir).isSymbolicLink()) {
+    throw new Error(`${dir} is a link: the isolated Codex home must be a real directory`)
+  }
+
   const link = join(dir, 'auth.json')
+  let current
 
   try {
-    if (lstatSync(link).isSymbolicLink() && readlinkSync(link) === login) {
-      return existsSync(login)
-    }
-
-    unlinkSync(link)
+    current = lstatSync(link)
   } catch {}
 
-  symlinkSync(login, link)
+  // Only a link is ours to replace; a file or directory there is somebody's, and is left for a person to remove.
+  if (current !== undefined && !current.isSymbolicLink()) {
+    throw new Error(`${link} is not a link to the Codex login: remove it by hand`)
+  }
+
+  if (current === undefined || readlinkSync(link) !== login) {
+    if (current !== undefined) {
+      unlinkSync(link)
+    }
+
+    symlinkSync(login, link)
+  }
 
   return existsSync(login)
 }
 
-/** argv for `codex`: the global disables, then the server. */
-export const serverArgs = () => [...DISABLED.flatMap(name => ['--disable', name]), 'app-server']
+/** argv for `codex`: the global disables, web search off (networkAccess does not cover it), then the server. */
+export const serverArgs = () => [...DISABLED.flatMap(name => ['--disable', name]), '-c', 'web_search="disabled"', 'app-server']
+
+/** The environment the server gets: what a shell and Codex need, never the rest of the helper's. */
+const ENV_KEEP = ['PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'TMPDIR', 'LANG', 'TERM']
+
+export const serverEnv = (env, home) => ({
+  ...Object.fromEntries(Object.entries(env).filter(([key]) => ENV_KEEP.includes(key) || key.startsWith('LC_'))),
+  CODEX_HOME: home,
+})

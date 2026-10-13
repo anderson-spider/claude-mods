@@ -9,8 +9,9 @@ import { connect } from 'node:net'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { findCodex, prepareHome, serverArgs } from './lib/codex-bin.mjs'
+import { findCodex, prepareHome, serverArgs, serverEnv } from './lib/codex-bin.mjs'
 import { Engine } from './lib/engine.mjs'
+import { resolveLane } from './lib/paths.mjs'
 import { RpcClient } from './lib/rpc.mjs'
 import { VERSION } from './lib/version.mjs'
 
@@ -125,11 +126,14 @@ export const handler = (engine, env) => async (request, response) => {
 }
 
 /** Starts `codex app-server` in the isolated home and wraps it as an `RpcClient`. */
-export const startServer = ({ codex, home = CODEX_HOME, env = process.env } = {}) => {
-  const child = spawn(codex, serverArgs(), { env: { ...env, CODEX_HOME: home }, stdio: ['pipe', 'pipe', 'ignore'] })
+export const startServer = ({ codex, home = CODEX_HOME, env = process.env, spawnFn = spawn } = {}) => {
+  const child = spawnFn(codex, serverArgs(), { env: serverEnv(env, home), stdio: ['pipe', 'pipe', 'ignore'] })
   let onExit = () => {}
   child.on('exit', () => onExit())
   child.on('error', () => onExit())
+  // A server that dies mid-write must end its turns through its exit, not take the helper down with an EPIPE.
+  child.stdin.on('error', () => {})
+  child.stdout.on('error', () => {})
 
   return new RpcClient({
     stdin: child.stdin,
@@ -186,7 +190,9 @@ const main = async () => {
 
   const env = environment()
   prepareHome(CODEX_HOME, homedir())
+  const protectedDirs = [join(homedir(), '.codex'), join(homedir(), '.claude'), HERE]
   const engine = new Engine({
+    resolve: (role, repo) => resolveLane(role, repo, { home: homedir(), forbidden: protectedDirs }),
     createClient: () => {
       const codex = env.codex()
 

@@ -53,3 +53,12 @@ test('an engine that throws answers 500 with the message and no stack', async ()
 
   assert.deepEqual([answered.status, answered.body], [500, { status: 'error', message: 'boom' }])
 })
+
+test('a body over the size limit is refused before the engine sees it', async () => {
+  const engine = stubEngine()
+  const answered = await send('/start', undefined, { engine, raw: JSON.stringify({ caller: 'a1', prompt: 'x'.repeat(1_100_000) }) })
+
+  assert.equal(answered.status, 500)
+  assert.match(answered.body.message, /too large/)
+  assert.deepEqual(engine.seen, [])
+})

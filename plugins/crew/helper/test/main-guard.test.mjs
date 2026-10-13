@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { cpSync, mkdirSync, symlinkSync, writeFileSync } from 'node:fs'
+import { cpSync, mkdirSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { request } from 'node:http'
 import { spawn } from 'node:child_process'
 import { dirname, join } from 'node:path'
@@ -79,6 +79,9 @@ test('the copy listens when it is the main module, answers /status over its sock
 
   try {
     const status = await statusOver(socket)
+    assert.equal(statSync(socket).mode & 0o777, 0o600)
+    assert.equal(statSync(join(copy, 'run')).mode & 0o777, 0o700)
+    assert.equal(statSync(join(copy, 'state')).mode & 0o777, 0o700)
     assert.equal(status.status, 'ok')
     assert.equal(status.login, true)
     assert.equal(typeof status.version, 'string')

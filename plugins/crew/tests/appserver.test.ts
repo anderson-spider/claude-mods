@@ -133,3 +133,10 @@ test('the next request is the last user message\'s text; tool results and empty 
   expect(lastUserText([user({ type: 'text', text: 'asked' }), user({ type: 'tool_result', tool_use_id: 'x', content: 'r' })])).toBe('asked')
   expect(lastUserText([])).toBeUndefined()
 })
+
+test('an abort before the start asks the helper nothing', async () => {
+  const w = world({ '/start': { status: 'started' } })
+
+  expect(await runTurn(w.probe, SOCKET, REQUEST, () => true)).toEqual({ kind: 'aborted' })
+  expect(w.calls).toEqual([])
+})

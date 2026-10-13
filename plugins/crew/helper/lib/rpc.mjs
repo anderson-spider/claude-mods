@@ -8,9 +8,12 @@ export class RpcClient {
   #buffer = ''
   #closed = false
   #listeners = { notification: () => {}, request: () => undefined, exit: () => {} }
+  #timeoutMs
 
-  constructor(child) {
+  /** `timeoutMs`: how long a request waits for its response; a server that goes silent rejects it instead of holding it. */
+  constructor(child, { timeoutMs = 30_000 } = {}) {
     this.#child = child
+    this.#timeoutMs = timeoutMs
     child.stdout.on('data', chunk => this.#read(String(chunk)))
     child.onExit(() => this.#ended(new Error('the Codex app-server exited')))
   }
@@ -40,7 +43,16 @@ export class RpcClient {
     const id = this.#nextId++
 
     return new Promise((resolve, reject) => {
-      this.#pending.set(id, { resolve, reject, method })
+      const timer = setTimeout(() => {
+        this.#pending.delete(id)
+        reject(new Error(`${method}: the Codex app-server did not answer in ${Math.round(this.#timeoutMs / 1000)} s`))
+      }, this.#timeoutMs)
+      timer.unref?.()
+      this.#pending.set(id, {
+        resolve: value => (clearTimeout(timer), resolve(value)),
+        reject: error => (clearTimeout(timer), reject(error)),
+        method,
+      })
       this.#send(params === undefined ? { id, method } : { id, method, params })
     })
   }
@@ -63,7 +75,11 @@ export class RpcClient {
   }
 
   #send(message) {
-    this.#child.stdin.write(`${JSON.stringify(message)}\n`)
+    try {
+      this.#child.stdin.write(`${JSON.stringify(message)}\n`)
+    } catch {
+      // A server that is gone answers through its exit, which rejects what is pending.
+    }
   }
 
   #read(text) {

@@ -3,7 +3,7 @@ import { test } from 'node:test'
 
 import { Engine } from '../lib/engine.mjs'
 import { RpcClient } from '../lib/rpc.mjs'
-import { fakeChild, tick, until } from './fake-server.mjs'
+import { fakeChild, nominal, tick, until } from './fake-server.mjs'
 
 const base = { caller: 'a1', role: 'developer', repo: '/repo', model: 'gpt-6-sol', effort: 'medium', prompt: 'do it' }
 
@@ -15,6 +15,7 @@ const world = (options = {}, limit) => {
   const engine = new Engine({
     createClient: () => (made++, new RpcClient(fake.child)),
     now: () => clock.t,
+    resolve: nominal,
     ...(limit ? { limit } : {}),
   })
 
@@ -133,7 +134,7 @@ test('a server that exits ends the running turn as failed and the next start spa
   const fake1 = fakeChild({ autoComplete: false })
   const fake2 = fakeChild({ autoComplete: true })
   const children = [fake1, fake2]
-  const engine = new Engine({ createClient: () => new RpcClient(children.shift().child) })
+  const engine = new Engine({ createClient: () => new RpcClient(children.shift().child), resolve: nominal })
   await engine.start(base)
   fake1.exit()
   const lost = await finish(engine)
@@ -190,7 +191,7 @@ test('reset interrupts the turn, forgets the thread and the next start makes a n
 
 test('threads past the cap are dropped oldest first, never one with a turn running', async () => {
   const fake = fakeChild({ autoComplete: true })
-  const engine = new Engine({ createClient: () => new RpcClient(fake.child), keepThreads: 2 })
+  const engine = new Engine({ createClient: () => new RpcClient(fake.child), keepThreads: 2, resolve: nominal })
   for (const caller of ['a', 'b', 'c']) {
     await engine.start({ ...base, caller })
     await finish(engine, caller)
@@ -204,7 +205,7 @@ test('threads past the cap are dropped oldest first, never one with a turn runni
 test('a failing thread/start is an error reply, and the caller can start again', async () => {
   let fail = true
   const fake = fakeChild({ autoComplete: true, handlers: { 'thread/start': () => (fail ? new Error('no model') : { thread: { id: 'th-9' } }) } })
-  const engine = new Engine({ createClient: () => new RpcClient(fake.child) })
+  const engine = new Engine({ createClient: () => new RpcClient(fake.child), resolve: nominal })
   const first = await engine.start(base)
   fail = false
 
@@ -212,4 +213,53 @@ test('a failing thread/start is an error reply, and the caller can start again',
   assert.match(first.message, /no model/)
   assert.equal((await engine.start(base)).status, 'started')
   await until(() => engine.poll('a1').status === 'ok')
+})
+
+test('the lane is resolved on every start: a cwd that changed between turns gets a new thread, and a refused one starts nothing', async () => {
+  let cwd = '/real/a'
+  const fake = fakeChild({ autoComplete: true })
+  const engine = new Engine({ createClient: () => new RpcClient(fake.child), resolve: () => (cwd === null ? { ok: false, message: 'repo contains or is inside a directory crew protects' } : { ok: true, cwd }) })
+  await engine.start(base)
+  await finish(engine)
+  cwd = '/real/b'
+  await engine.start(base)
+  await finish(engine)
+
+  assert.deepEqual(fake.params('thread/start').map(p => p.cwd), ['/real/a', '/real/b'])
+  cwd = null
+  const refused = await engine.start(base)
+  assert.equal(refused.status, 'error')
+  assert.match(refused.message, /protects/)
+  assert.equal(fake.params('turn/start').length, 2)
+})
+
+test('an interrupt the server never confirms ends the turn after the grace period and drops the thread, so the slot frees', async () => {
+  const w = world({}, 1)
+  await w.engine.start(base)
+  await w.engine.interrupt('a1')
+  w.clock.t = 31_000
+  await w.engine.sweep()
+
+  const ended = await finish(w.engine)
+  assert.equal(ended.turn, 'timeout')
+  assert.deepEqual(w.engine.status(), { jobs: 0, threads: 0 })
+  assert.equal((await w.engine.start({ ...base, caller: 'other' })).status, 'started')
+})
+
+test('a server that never answers a request rejects it, so a start is an error and not a hang', async () => {
+  const fake = fakeChild({ handlers: { initialize: () => 'silent' } })
+  const engine = new Engine({ createClient: () => new RpcClient(fake.child, { timeoutMs: 20 }), resolve: nominal })
+  const answered = await engine.start(base)
+
+  assert.equal(answered.status, 'error')
+  assert.match(answered.message, /did not answer/)
+})
+
+test('a prompt or instructions past the limit is refused, and an effort that is not known is not sent', async () => {
+  const { fake, engine } = world({ autoComplete: true })
+
+  assert.equal((await engine.start({ ...base, prompt: 'x'.repeat(200_001) })).status, 'error')
+  assert.equal((await engine.start({ ...base, instructions: 'x'.repeat(50_001) })).status, 'error')
+  assert.equal((await engine.start({ ...base, effort: 'ultra' })).status, 'started')
+  assert.equal('effort' in fake.params('turn/start')[0], false)
 })
