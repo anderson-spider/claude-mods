@@ -1,36 +1,116 @@
 import type { On } from 'claude-code'
 import { expect, test } from 'claude-code/testing'
-
-const GET = 'mcp__tailscale__tailscale_get'
-const WRITE = 'mcp__tailscale__tailscale_write'
+import { ACCEPTED, ALLOWED_DELETES, REJECTED, invalidPathText, urlOf } from './paths'
 
 type Sent = { url: string; method?: string; headers?: Record<string, string>; body?: string }
+type Tool = { name: string; description: string; inputSchema: { properties: Record<string, { description?: string }> } }
+type Input = Record<string, unknown>
+
+const id = (name: string) => `mcp__tailscale__${name}`
+const GET = id('tailscale_get')
+const WRITE = id('tailscale_write')
+
+/** Per registered tool: a valid call for a given path. A new tool adds one entry here and its own tests. */
+const CALLS: Record<string, { method: string; input: (path: unknown) => Input }> = {
+  tailscale_get: { method: 'GET', input: (path) => ({ tool: GET, path }) },
+  tailscale_write: { method: 'PATCH', input: (path) => ({ tool: WRITE, method: 'patch', path, body: {} }) },
+}
 
 /** A host with a key in the environment and a fake Tailscale API behind `http.fetch`. */
-function world(on: On, opts: { key?: string; text?: string } = {}) {
+function world(on: On, opts: { key?: string | (() => string | undefined); text?: string; status?: number } = {}) {
   const sent: Sent[] = []
-  const registered: string[] = []
+  const tools: Tool[] = []
+  const readKey = () => ('key' in opts ? (typeof opts.key === 'function' ? opts.key() : opts.key) : 'tskey-test')
+  const status = opts.status ?? 200
 
-  on('env.get', () => ({ value: 'key' in opts ? opts.key : 'tskey-test' }))
-  on('tool.register', (_$, e) => (registered.push(e.name), { value: { tool: `mcp__tailscale__${e.name}` } }))
+  on('env.get', () => ({ value: readKey() }))
+  on('tool.register', (_$, e) => (tools.push(e as unknown as Tool), { value: { tool: id(e.name) } }))
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('http.fetch', (_$, e) => {
     sent.push({ url: e.url, method: e.init?.method, headers: e.init?.headers, body: e.init?.body })
 
-    return { value: { status: 200, ok: true, headers: {}, text: opts.text ?? '{}' } }
+    return { value: { status, ok: status < 400, headers: {}, text: opts.text ?? '{}' } }
   })
 
-  return { sent, registered }
+  return { sent, tools }
 }
 
 const text = (result: { result?: unknown }) => String(result.result)
 
-test('session start registers the get and write tools', async ($, on) => {
-  const { registered } = world(on)
-
+/** Starts the session and returns the registered tools that have a case in `CALLS`. */
+async function started(
+  $: { session: { start: (e: never) => Promise<unknown> } },
+  tools: Tool[],
+): Promise<string[]> {
   await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true } as never)
 
-  expect(registered).toEqual(['tailscale_get', 'tailscale_write'])
+  // a tool of CALLS that failed to register must fail the test, not be skipped
+  const registered = tools.map((t) => t.name)
+  expect(registered).toEqual(expect.arrayContaining(Object.keys(CALLS)))
+
+  return registered.filter((name) => name in CALLS)
+}
+
+for (const name of Object.keys(CALLS)) {
+  test(`session start registers ${name}`, async ($, on) => {
+    const { tools } = world(on)
+    await started($, tools)
+
+    expect(tools.map((t) => t.name)).toContain(name)
+  })
+}
+
+test('every registered tool has a host case in CALLS', async ($, on) => {
+  const { tools } = world(on)
+  await started($, tools)
+
+  expect(tools.map((t) => t.name).filter((name) => !(name in CALLS))).toEqual([])
+})
+
+/** Sums every description string (tool and schema properties) in a registered tool. */
+function descriptionChars(node: unknown): number {
+  if (Array.isArray(node)) return node.reduce((n: number, v) => n + descriptionChars(v), 0)
+  if (node === null || typeof node !== 'object') return 0
+  return Object.entries(node).reduce(
+    (n, [k, v]) => n + (k === 'description' && typeof v === 'string' ? v.length : descriptionChars(v)),
+    0,
+  )
+}
+
+// every tool's descriptions ride in each request's prompt, so the budget is per tool
+const TOOL_BUDGET = 650
+
+test('each tool keeps its tool and schema descriptions within the prompt budget', async ($, on) => {
+  const { tools } = world(on)
+  await started($, tools)
+
+  for (const tool of tools) expect(descriptionChars(tool), tool.name).toBeLessThanOrEqual(TOOL_BUDGET)
+})
+
+test('every tool that takes a path describes it the same way', async ($, on) => {
+  const { tools } = world(on)
+  await started($, tools)
+  const paths = tools.map((t) => t.inputSchema.properties.path?.description).filter((d) => d !== undefined)
+
+  expect(paths.length).toBeGreaterThan(0)
+  for (const description of paths) {
+    expect(description).toBe(paths[0])
+    expect(description).toContain('https://api.tailscale.com/api/v2')
+  }
+})
+
+test('the tool descriptions state their rules', async ($, on) => {
+  const { tools } = world(on)
+  await started($, tools)
+  const byName = Object.fromEntries(tools.map((t) => [t.name, t]))
+
+  expect(byName.tailscale_get!.description).toContain('Secret fields (*Key, *Secret, *Token) are filtered')
+  const write = byName.tailscale_write!
+  expect(write.description).toContain('after user confirmation')
+  expect(write.description).toContain('Whole-tailnet deletion is refused')
+  expect(write.description).toContain('GET first and pass its ETag in ifMatch')
+  expect(write.description).toContain('Write responses retain new-key secrets')
+  expect(write.inputSchema.properties.body!.description).toContain('non-JSON strings are sent as HuJSON')
 })
 
 test('get sends a GET with the key, redacts secrets and keeps only the asked fields', async ($, on) => {
@@ -55,31 +135,22 @@ test('get ignores a fields value that is not an array', async ($, on) => {
   expect(text(result)).toContain('linux')
 })
 
-test('get refuses a path that leaves the API and a missing key without a request', async ($, on) => {
-  const { sent } = world(on)
-
-  const escaped = await $.tool.call({ tool: GET, path: '//evil.com/x' } as never)
-  expect(escaped.isError).toBe(true)
-  expect(text(escaped)).toMatch(/Invalid path/)
-  expect(sent).toEqual([])
-})
-
-test('a missing TS_API_KEY is reported and nothing is sent', async ($, on) => {
-  const { sent } = world(on, { key: undefined })
-
-  const result = await $.tool.call({ tool: GET, path: '/tailnet/-/devices' } as never)
-
-  expect(result.isError).toBe(true)
-  expect(text(result)).toMatch(/TS_API_KEY is not set/)
-  expect(sent).toEqual([])
-})
-
 test('write denies a method that is not a write and sends nothing', async ($, on) => {
   const { sent } = world(on)
 
   const denied = await $.tool.call({ tool: WRITE, method: 'GET', path: '/tailnet/-/devices' } as never)
 
   expect(denied.deny).toMatch(/Invalid method: GET/)
+  expect(sent).toEqual([])
+})
+
+test('write checks the method before the key: a bad method is denied even without a key', async ($, on) => {
+  const { sent } = world(on, { key: undefined })
+
+  const denied = await $.tool.call({ tool: WRITE, method: 'get', path: '/tailnet/-/devices' } as never)
+
+  expect(denied.deny).toMatch(/Invalid method: GET\. Use POST, PUT, PATCH, DELETE\./)
+  expect(denied.isError).toBeUndefined()
   expect(sent).toEqual([])
 })
 
@@ -109,6 +180,17 @@ test('write ignores an ifMatch that is not a string', async ($, on) => {
   expect(sent[0]?.headers?.['If-Match']).toBeUndefined()
 })
 
+test('write sends every allowed DELETE, whatever the case of the method', async ($, on) => {
+  const { sent } = world(on)
+
+  for (const path of ALLOWED_DELETES) {
+    const result = await $.tool.call({ tool: WRITE, method: 'delete', path } as never)
+    expect(result.isError, path).toBeUndefined()
+  }
+
+  expect(sent.map((s) => [s.method, s.url])).toEqual(ALLOWED_DELETES.map((p) => ['DELETE', urlOf(p)]))
+})
+
 test('write refuses to delete the whole tailnet', async ($, on) => {
   const { sent } = world(on)
 
@@ -119,156 +201,99 @@ test('write refuses to delete the whole tailnet', async ($, on) => {
   expect(sent).toEqual([])
 })
 
-/** Sums every description string (tool and schema properties) in a registered tool. */
-function descriptionChars(node: unknown): number {
-  if (Array.isArray(node)) return node.reduce((n: number, v) => n + descriptionChars(v), 0)
-  if (node === null || typeof node !== 'object') return 0
-  return Object.entries(node).reduce(
-    (n, [k, v]) => n + (k === 'description' && typeof v === 'string' ? v.length : descriptionChars(v)),
-    0,
-  )
-}
-
-test('tool descriptions and schema descriptions stay within the prompt budget', async ($, on) => {
-  const tools: unknown[] = []
-  on('env.get', () => ({ value: 'tskey-test' }))
-  on('tool.register', (_$, e) => (tools.push(e), { value: { tool: `mcp__tailscale__${e.name}` } }))
-  on('session.start', (_$, e) => ({ cwd: e.cwd }))
-
-  await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true } as never)
-
-  expect(tools.length).toBe(2)
-  expect(descriptionChars(tools)).toBeLessThanOrEqual(1300)
-  const [get, write] = tools as { description: string; inputSchema: { properties: Record<string, { description?: string }> } }[]
-  expect(get!.description).toContain('Secret fields (*Key, *Secret, *Token) are filtered')
-  expect(write!.description).toContain('after user confirmation')
-  expect(write!.description).toContain('Whole-tailnet deletion is refused')
-  expect(write!.description).toContain('GET first and pass its ETag in ifMatch')
-  expect(write!.description).toContain('Write responses retain new-key secrets')
-  expect(write!.inputSchema.properties.path!.description).toBe(get!.inputSchema.properties.path!.description)
-  expect(write!.inputSchema.properties.path!.description).toContain('https://api.tailscale.com/api/v2')
-  expect(write!.inputSchema.properties.body!.description).toContain('non-JSON strings are sent as HuJSON')
-})
-
-test('write reports a missing TS_API_KEY and sends nothing, like get', async ($, on) => {
-  const { sent } = world(on, { key: undefined })
-
-  const result = await $.tool.call({ tool: WRITE, method: 'POST', path: '/tailnet/-/acl', body: {} } as never)
-
-  expect(result.isError).toBe(true)
-  expect(text(result)).toBe('TS_API_KEY is not set in the Claude Code environment.')
-  expect(sent).toEqual([])
-})
-
-test('write checks the method before the key: a bad method is denied even without a key', async ($, on) => {
-  const { sent } = world(on, { key: undefined })
-
-  const denied = await $.tool.call({ tool: WRITE, method: 'get', path: '/tailnet/-/devices' } as never)
-
-  expect(denied.deny).toMatch(/Invalid method: GET\. Use POST, PUT, PATCH, DELETE\./)
-  expect(denied.isError).toBeUndefined()
-  expect(sent).toEqual([])
-})
-
-test('write refuses a path that leaves the API, like get, and sends nothing', async ($, on) => {
+test('write refuses every rejected path for DELETE too, so no smuggled path deletes the whole tailnet', async ($, on) => {
   const { sent } = world(on)
 
-  for (const path of ['//evil.com/x', '/a/../b', 'https://evil.com', '/a%2Fb', 42, undefined]) {
-    const result = await $.tool.call({ tool: WRITE, method: 'PUT', path, body: {} } as never)
-
-    expect(result.isError).toBe(true)
-    expect(text(result)).toMatch(/^Invalid path: /)
-  }
-
-  expect(sent).toEqual([])
-})
-
-test('both tools read the key on every call and send the path under the API with its query string', async ($, on) => {
-  let key: string | undefined = 'tskey-one'
-  const sent: { url: string; auth?: string; method?: string }[] = []
-
-  on('env.get', () => ({ value: key }))
-  on('http.fetch', (_$, e) => {
-    sent.push({ url: e.url, auth: e.init?.headers?.Authorization, method: e.init?.method })
-
-    return { value: { status: 200, ok: true, headers: {}, text: '{}' } }
-  })
-
-  await $.tool.call({ tool: GET, path: '/tailnet/-/keys?all=true' } as never)
-  key = 'tskey-two'
-  await $.tool.call({ tool: WRITE, method: 'delete', path: '/tailnet/-/keys/k1?x=1' } as never)
-
-  expect(sent).toEqual([
-    { url: 'https://api.tailscale.com/api/v2/tailnet/-/keys?all=true', auth: 'Bearer tskey-one', method: 'GET' },
-    { url: 'https://api.tailscale.com/api/v2/tailnet/-/keys/k1?x=1', auth: 'Bearer tskey-two', method: 'DELETE' },
-  ])
-})
-
-test('a successful call leaves isError unset and an error response from the API sets it', async ($, on) => {
-  const { sent } = world(on, { text: '{"ok":true}' })
-
-  const ok = await $.tool.call({ tool: GET, path: '/tailnet/-/devices' } as never)
-  const written = await $.tool.call({ tool: WRITE, method: 'POST', path: '/tailnet/-/acl', body: {} } as never)
-
-  expect(sent).toHaveLength(2)
-  expect(ok.isError).toBeUndefined()
-  expect(text(ok)).toBe('HTTP 200\n{"ok":true}')
-  expect(written.isError).toBeUndefined()
-  expect(text(written)).toBe('HTTP 200\n{"ok":true}')
-})
-
-test('an error status from the API comes back as an error result for both tools', async ($, on) => {
-  on('env.get', () => ({ value: 'tskey-test' }))
-  on('http.fetch', () => ({ value: { status: 403, ok: false, headers: {}, text: '{"message":"forbidden"}' } }))
-
-  const read = await $.tool.call({ tool: GET, path: '/tailnet/-/devices' } as never)
-  const write = await $.tool.call({ tool: WRITE, method: 'PATCH', path: '/device/1', body: {} } as never)
-
-  for (const result of [read, write]) {
-    expect(result.isError).toBe(true)
-    expect(text(result)).toBe('HTTP 403\n{"message":"forbidden"}')
-  }
-})
-
-test('write refuses a dot segment in the path, including the delete of the whole tailnet, and sends nothing', async ($, on) => {
-  const { sent } = world(on)
-
-  for (const path of ['/tailnet/./-', '/./tailnet/-', '/tailnet/-/.', '/tailnet/-/./', '/tailnet/-/.?x=1']) {
-    const result = await $.tool.call({ tool: WRITE, method: 'DELETE', path } as never)
-
-    expect(result.isError, path).toBe(true)
-    expect(text(result), path).toMatch(/^Invalid path: /)
-  }
-
-  expect(sent).toEqual([])
-})
-
-test('write refuses an encoded or empty-segment delete of the whole tailnet and sends nothing', async ($, on) => {
-  const { sent } = world(on)
-
-  for (const path of ['/%74ailnet/-', '/tailnet//-', '/tailnet/-/\x01', '/TAILNET/-']) {
+  for (const path of REJECTED) {
     const result = await $.tool.call({ tool: WRITE, method: 'DELETE', path } as never)
 
     expect(result.isError, JSON.stringify(path)).toBe(true)
+    expect(text(result), JSON.stringify(path)).toBe(invalidPathText(path))
   }
 
   expect(sent).toEqual([])
 })
 
-test('get refuses a dot segment in the path and sends nothing', async ($, on) => {
-  const { sent } = world(on)
+// The tests below run once per registered tool: a new tool adds its entry to CALLS and nothing else.
 
-  const result = await $.tool.call({ tool: GET, path: '/tailnet/./-/devices' } as never)
+test('every tool reports a missing TS_API_KEY and sends nothing', async ($, on) => {
+  const { sent, tools } = world(on, { key: undefined })
 
-  expect(result.isError).toBe(true)
-  expect(text(result)).toMatch(/^Invalid path: /)
+  for (const name of await started($, tools)) {
+    const result = await $.tool.call(CALLS[name]!.input('/tailnet/-/devices') as never)
+
+    expect(result.isError, name).toBe(true)
+    expect(text(result), name).toBe('TS_API_KEY is not set in the Claude Code environment.')
+  }
+
   expect(sent).toEqual([])
 })
 
-test('write still sends a path with dots inside a segment', async ($, on) => {
-  const { sent } = world(on)
+test('every tool refuses a rejected path and sends nothing', async ($, on) => {
+  const { sent, tools } = world(on)
 
-  await $.tool.call({ tool: WRITE, method: 'POST', path: '/device/100.64.0.1/tags', body: {} } as never)
+  for (const name of await started($, tools)) {
+    for (const path of REJECTED) {
+      const result = await $.tool.call(CALLS[name]!.input(path) as never)
 
-  expect(sent.map((s) => s.url)).toEqual(['https://api.tailscale.com/api/v2/device/100.64.0.1/tags'])
+      expect(result.isError, `${name} ${JSON.stringify(path)}`).toBe(true)
+      expect(text(result), `${name} ${JSON.stringify(path)}`).toBe(invalidPathText(path))
+    }
+  }
+
+  expect(sent).toEqual([])
+})
+
+test('every tool sends an accepted path under the API, query string included', async ($, on) => {
+  const { sent, tools } = world(on)
+
+  for (const name of await started($, tools)) {
+    sent.length = 0
+    for (const path of ACCEPTED) await $.tool.call(CALLS[name]!.input(path) as never)
+
+    expect(sent.map((s) => s.url), name).toEqual(ACCEPTED.map(urlOf))
+    expect(new Set(sent.map((s) => s.method)), name).toEqual(new Set([CALLS[name]!.method]))
+  }
+})
+
+test('every tool reads the key on every call', async ($, on) => {
+  let key: string | undefined
+  const { sent, tools } = world(on, { key: () => key })
+
+  for (const name of await started($, tools)) {
+    sent.length = 0
+    const method = CALLS[name]!.method
+    key = `tskey-${name}-one`
+    await $.tool.call(CALLS[name]!.input('/tailnet/-/keys?all=true') as never)
+    key = `tskey-${name}-two`
+    await $.tool.call(CALLS[name]!.input('/tailnet/-/keys/k1?x=1') as never)
+
+    expect(
+      sent.map((s) => ({ url: s.url, auth: s.headers?.Authorization, method: s.method })),
+      name,
+    ).toEqual([
+      { url: 'https://api.tailscale.com/api/v2/tailnet/-/keys?all=true', auth: `Bearer tskey-${name}-one`, method },
+      { url: 'https://api.tailscale.com/api/v2/tailnet/-/keys/k1?x=1', auth: `Bearer tskey-${name}-two`, method },
+    ])
+  }
+})
+
+test('every tool leaves isError unset on success and sets it on an error status', async ($, on) => {
+  const ok = world(on, { text: '{"ok":true}' })
+  for (const name of await started($, ok.tools)) {
+    const result = await $.tool.call(CALLS[name]!.input('/tailnet/-/devices') as never)
+
+    expect(result.isError, name).toBeUndefined()
+    expect(text(result), name).toBe('HTTP 200\n{"ok":true}')
+  }
+})
+
+test('every tool returns an error status from the API as an error result', async ($, on) => {
+  const failing = world(on, { status: 403, text: '{"message":"forbidden"}' })
+  for (const name of await started($, failing.tools)) {
+    const result = await $.tool.call(CALLS[name]!.input('/tailnet/-/devices') as never)
+
+    expect(result.isError, name).toBe(true)
+    expect(text(result), name).toBe('HTTP 403\n{"message":"forbidden"}')
+  }
 })
