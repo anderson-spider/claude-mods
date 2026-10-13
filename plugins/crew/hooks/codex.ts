@@ -137,6 +137,22 @@ export function textStep(text: string): CodexStep {
   }
 }
 
+/** The tool a subagent's result reaches its caller through on hosts that run it as a subagent: plain text is not delivered. */
+export const HANDBACK = 'SubagentHandback'
+
+/** The same step, its answer handed back through `SubagentHandback({ message })` instead of as plain text. */
+export function handbackStep(step: CodexStep, id: string): CodexStep {
+  const message = step.answer
+  return {
+    chunks: [{ kind: 'tool', index: 0, id, name: HANDBACK }, { kind: 'input', index: 0, json: JSON.stringify({ message }) }, { kind: 'stop', stopReason: 'tool_use', usage: step.usage }],
+    answer: message,
+    toolUses: [{ name: HANDBACK, input: { message } }],
+    stopReason: 'tool_use',
+    usage: step.usage,
+    reasoning: step.reasoning,
+  }
+}
+
 /** A step that answers with why Codex was not asked or did not answer: never a throw, which would send the request to Anthropic. */
 export function failedStep(reason: string): CodexStep {
   return textStep(`crew: this Codex twin could not run: ${reason}.`)

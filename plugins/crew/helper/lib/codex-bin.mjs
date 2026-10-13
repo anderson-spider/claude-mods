@@ -70,8 +70,13 @@ export const prepareHome = (dir, home) => {
   return existsSync(login)
 }
 
-/** argv for `codex`: the global disables, web search off (networkAccess does not cover it), then the server. */
-export const serverArgs = () => [...DISABLED.flatMap(name => ['--disable', name]), '-c', 'web_search="disabled"', 'app-server']
+/** argv for `codex`: the global disables, the settings that keep a turn's shell lean and offline, then the server. */
+export const serverArgs = () => [
+  ...DISABLED.flatMap(name => ['--disable', name]),
+  // Web search is not covered by networkAccess; a login shell would reload the user's profile (and its secrets).
+  ...['web_search="disabled"', 'allow_login_shell=false', 'shell_environment_policy.inherit="core"'].flatMap(setting => ['-c', setting]),
+  'app-server',
+]
 
 /** The environment the server gets: what a shell and Codex need, never the rest of the helper's. */
 const ENV_KEEP = ['PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'TMPDIR', 'LANG', 'TERM']

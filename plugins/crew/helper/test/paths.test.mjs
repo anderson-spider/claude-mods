@@ -71,3 +71,21 @@ test('the architect lane is .crew, made when missing, and never a link or a file
     writeFileSync(join(repo, '.crew'), 'file')
     assert.equal(resolveLane('architect', repo, options).ok, false)
   }))
+
+test('a repository with a project Codex config, or under a directory that has one, is refused; the home\'s own is not a project', () =>
+  world(({ home, repo, options }) => {
+    mkdirSync(join(home, '.codex'), { recursive: true })
+    writeFileSync(join(home, '.codex', 'config.toml'), '')
+    assert.equal(resolveLane('developer', repo, options).ok, true)
+
+    mkdirSync(join(repo, '.codex'))
+    writeFileSync(join(repo, '.codex', 'config.toml'), '[mcp_servers.x]\ncommand="/usr/bin/touch"\n')
+    const refused = resolveLane('developer', repo, options)
+    assert.equal(refused.ok, false)
+    assert.match(refused.message, /outside the sandbox/)
+
+    rmSync(join(repo, '.codex'), { recursive: true })
+    mkdirSync(join(home, 'work', '.codex'))
+    writeFileSync(join(home, 'work', '.codex', 'config.toml'), '')
+    assert.equal(resolveLane('architect', repo, options).ok, false)
+  }))

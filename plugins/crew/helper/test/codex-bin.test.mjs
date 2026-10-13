@@ -28,7 +28,7 @@ test('the server runs with the user apps, plugins, hooks and desktop tools disab
   assert.equal(args.at(-1), 'app-server')
   assert.deepEqual(DISABLED, ['apps', 'plugins', 'hooks', 'computer_use', 'browser_use'])
   assert.deepEqual(args.slice(0, 10).filter((_, i) => i % 2 === 1), DISABLED)
-  assert.deepEqual(args.slice(10, 12), ['-c', 'web_search="disabled"'])
+  assert.deepEqual(args.slice(10, 16), ['-c', 'web_search="disabled"', '-c', 'allow_login_shell=false', '-c', 'shell_environment_policy.inherit="core"'])
 })
 
 test('the isolated home holds one link to the login and is not rewritten when it already points there', () => {

@@ -10,7 +10,7 @@ import { SPECIALISTS, isGatewayBase, leadSection, nativeCodexSection, nativeCode
 import type { Agent, Effort } from './agents'
 import { callerOf, helperReady, helperRole, lastUserText, runTurn, socketOf } from './appserver'
 import type { Probe } from './appserver'
-import { CODEX_URL, codexBody, codexEffort, codexHeaders, failedStep, statusReason, stepOf, textStep } from './codex'
+import { CODEX_URL, HANDBACK, codexBody, codexEffort, codexHeaders, failedStep, handbackStep, statusReason, stepOf, textStep } from './codex'
 import type { ApiMessage, CodexEffort, CodexStep } from './codex'
 import { parseLogin } from './codex-login'
 import { TOOL_SCHEMAS, describable } from './codex-tools'
@@ -399,6 +399,16 @@ function sessionId(): string {
   return `${id.slice(0, 8)}-${id.slice(8, 12)}-${id.slice(12, 16)}-${id.slice(16, 20)}-${id.slice(20)}`
 }
 
+/** Whether the host gave this agent the SubagentHandback tool: in its tool list or named in its conversation. */
+async function handbackOffered($: Dollar, agentId: string | undefined): Promise<boolean> {
+  if (!agentId) return false
+  const listed = await $.tool.list().catch(() => [])
+  if (listed.some(tool => tool.name === HANDBACK)) return true
+  const messages = await $.session.messages({ agentId, as: 'api' }).catch(() => undefined)
+  if (!Array.isArray(messages)) return false
+  return (messages as ApiMessage[]).some(message => message.content.some(block => typeof block.text === 'string' && block.text.includes(HANDBACK)))
+}
+
 /** The developer message: the twin's own prompt, then where and when it runs. */
 function systemOf(twin: Agent<string>, cwd: string | undefined, now: number): string {
   return [
@@ -486,9 +496,12 @@ async function askHelper($: Dollar, login: CodexLogin, twin: Agent<string>, e: S
  */
 async function* stepOnLogin($: Dollar, login: CodexLogin, twin: Agent<string>, helped: boolean, e: StepHook[1], effort: CodexEffort, signal: AbortSignal): AsyncGenerator<TurnStepChunk, TurnStepResult> {
   const asked = helped ? askHelper($, login, twin, e, effort, signal) : askCodex($, login, twin, e, effort)
-  const step = await asked.catch(() => failedStep('the Codex request failed'))
+  const answered = await asked.catch(() => failedStep('the Codex request failed'))
   // An interrupted step shows nothing: the person stopped it while Codex answered.
   if (signal.aborted) return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: null, usage: null }
+  // A final answer (no tool call) reaches the caller only through SubagentHandback where the host runs the agent as a subagent.
+  const handback = answered.toolUses.length === 0 && answered.answer !== '' && (await handbackOffered($, e.agentId).catch(() => false))
+  const step = handback ? handbackStep(answered, `crew_handback_${e.turnId}_${e.index}`.replace(/[^A-Za-z0-9_-]/g, '_')) : answered
   for (const chunk of step.chunks) yield chunk
   return { turnId: e.turnId, index: e.index, answer: step.answer, toolUses: step.toolUses, stopReason: step.stopReason, usage: step.usage }
 }
