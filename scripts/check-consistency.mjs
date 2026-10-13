@@ -22,8 +22,6 @@ for (const entry of marketplace.plugins) {
   else read(`${dir}/hooks/hooks.json`)
 
   // Each skill is skills/<name>/SKILL.md whose frontmatter names the directory and describes it.
-  // Size ceilings in bytes; skills not listed here are not measured.
-  const ceilings = {}
   const skills = `${dir}/skills`
 
   for (const name of existsSync(skills) ? readdirSync(skills) : []) {
@@ -32,12 +30,17 @@ for (const entry of marketplace.plugins) {
     const front = /^---\nname: (.+)\ndescription: (.+)\n---\n/.exec(text)
 
     if (front?.[1] !== name) errors.push(`${entry.name}: ${file} is missing or its frontmatter does not name "${name}"`)
-
-    const max = ceilings[entry.name]?.[name]
-    const n = Buffer.byteLength(text)
-
-    if (max !== undefined && n > max) errors.push(`${entry.name}: ${file} is ${n} bytes; the ceiling is ${max}`)
   }
+}
+
+// Every project hook script must be wired in the versioned settings, or it silently stops running.
+const commands = Object.values(read('.claude/settings.json').hooks ?? {})
+  .flat()
+  .flatMap(group => group.hooks ?? [])
+  .map(hook => hook.command ?? '')
+
+for (const file of readdirSync('.claude/hooks').filter(f => f.endsWith('.mjs') && !f.endsWith('.test.mjs'))) {
+  if (!commands.some(command => command.includes(`/.claude/hooks/${file}"`))) errors.push(`.claude/hooks/${file} is not wired in .claude/settings.json`)
 }
 
 if (errors.length) {

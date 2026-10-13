@@ -18,14 +18,14 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      # `claude plugin validate` and `claude plugin test` need the Claude Code CLI
-      # and its generated typings, so they stay a local check (see AGENTS.md).
+      # `claude plugin validate` and `claude plugin test` need the Claude Code CLI,
+      # so they stay a local check (see AGENTS.md).
       - name: Marketplace and plugin manifests agree
         run: node scripts/check-consistency.mjs
       - name: Plugins with code changes bumped their version
         if: github.event_name == 'pull_request'
         run: node scripts/check-version-bump.mjs "origin/${{ github.base_ref }}"
-      - name: Plugin typecheck hook tests
-        run: node --test scripts/typecheck-plugin.test.mjs
+      - name: Script and hook tests
+        run: node --test scripts/*.test.mjs
       - name: codex-computer-use helper tests
         run: node --test plugins/codex-computer-use/helper/test/*.test.mjs
