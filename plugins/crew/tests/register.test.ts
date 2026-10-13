@@ -406,6 +406,18 @@ test('a step of the twin on the login is answered by crew: nothing goes to the A
   expect(JSON.stringify(seen.fetches)).not.toContain('never-sent')
 })
 
+test('a final answer of the code-reader twin is handed back through SubagentHandback when the conversation names it', LOGIN, async ($, on) => {
+  const reminder = 'SubagentHandback: when your work is complete, call SubagentHandback({message: <your full report>}).'
+  await loginWorld($, on, { messages: () => [{ role: 'user', content: [{ type: 'text', text: `where is auth?\n<system-reminder>${reminder}</system-reminder>` }] }] })
+  const { result } = await stepThrough($, 'cr1')
+
+  expect(result).toMatchObject({
+    answer: '',
+    stopReason: 'tool_use',
+    toolUses: [{ name: 'SubagentHandback', input: { message: 'auth is at src/auth.ts:12' } }],
+  })
+})
+
 test('the spawn\'s effort suffix decides the effort sent to Codex, before the host\'s', LOGIN, async ($, on) => {
   const { seen } = await loginWorld($, on)
   await stepThrough($, 'cr1', 'cx/gpt-6-luna-high', 'medium')
