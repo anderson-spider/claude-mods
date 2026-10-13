@@ -3,6 +3,9 @@
 /** Which provider serves a plain `crew:<role>` call: `codex` sends it to the role's registered Codex twin. */
 export type CrewMode = 'claude' | 'codex'
 
+export type CrewStepState = 'queued' | 'implementing' | 'verified' | 'blocked' | 'committed' | 'skipped' | '?'
+/** A plan step as the screen may know it: ids, an allowlisted owner, its dependencies and a known state. */
+export type CrewPlanStep = { id: string; owner: string; after: string[]; state: CrewStepState }
 export type CrewPlan = {
   name: string
   groups: {
@@ -10,7 +13,7 @@ export type CrewPlan = {
     done: number
     running: number
     left: number
-    runningSteps: { id: string; owner: string }[]
+    steps: CrewPlanStep[]
     unknownStates: boolean
   }[]
 }
