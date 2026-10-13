@@ -11,6 +11,13 @@ test('prompt budget: the fixed text stays lean and the first-call rule lives in 
   expect(denyOwn('mcp__codex-computer-use__codex_cu')).toContain('mcp__codex-computer-use__codex_cu')
 })
 
+test('denyOwn is pinned byte for byte', () => {
+  expect(denyOwn('mcp__codex-computer-use__codex_cu')).toBe(
+    'codex-computer-use is on: use mcp__codex-computer-use__codex_cu for native apps. Report bridge failures; do not switch desktop-control routes. ' +
+      'The person can type /codex-cu off to restore this tool.',
+  )
+})
+
 test('routing instructions keep consent, fresh state and private-input guardrails', () => {
   const prompt = PROMPT('bridge')
   expect(prompt).toContain('re-read after each action')
