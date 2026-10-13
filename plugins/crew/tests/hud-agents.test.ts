@@ -345,3 +345,110 @@ test('a step of an agent whose type is known keeps no early observation for a la
   await settle()
   expect(only(w, 'a1')?.model).toBe('sonnet')
 })
+
+test('an answer with usage counts a step, takes the request context as the whole input and adds the output', async () => {
+  const { w, io } = world()
+  const tracker = createAgentTracker()
+  tracker.spawning(io)({ id: 'a1', type: 'crew:digger', model: 'sonnet' })
+  await settle()
+  const first = tracker.stepped(io, 'a1', { model: 'sonnet' }, undefined)
+  tracker.answered(io, 'a1', first, { usage: { model: 'claude-sonnet', input_tokens: 10, cache_read_input_tokens: 90, output_tokens: 7 } })
+  await settle()
+  expect(only(w, 'a1')).toMatchObject({ steps: 1, inTokens: 100, outTokens: 7 })
+  const second = tracker.stepped(io, 'a1', { model: 'sonnet' }, undefined)
+  tracker.answered(io, 'a1', second, { usage: { model: 'claude-sonnet', input_tokens: 20, cache_creation_input_tokens: 180, output_tokens: 5 },
+    stopReason: 'max_tokens' })
+  await settle()
+  expect(only(w, 'a1')).toMatchObject({ steps: 2, inTokens: 200, outTokens: 12, stop: 'max_tokens' })
+})
+
+test('an answer with no usage, as a twin on the helper gives, counts no step and no tokens', async () => {
+  const { w, io } = world()
+  const tracker = createAgentTracker()
+  tracker.spawning(io)({ id: 'a1', type: 'crew:planner-codex', model: 'gpt-6-astra' })
+  await settle()
+  const noted = tracker.stepped(io, 'a1', { model: 'gpt-6-astra' }, 'high')
+  tracker.answered(io, 'a1', noted, {})
+  await settle()
+  expect(only(w, 'a1')?.steps).toBeUndefined()
+  expect(only(w, 'a1')?.outTokens).toBeUndefined()
+})
+
+test('a tool call notes the name from the set, counts, and marks a failure; an ended or unknown agent is untouched', async () => {
+  const { w, io } = world()
+  const tracker = createAgentTracker()
+  tracker.spawning(io)({ id: 'a1', type: 'crew:digger', model: 'sonnet' })
+  await settle()
+  for (const [tool, failed] of [['Grep', false], ['Read', false], ['mcp__srv__do', true], ['Bash', false]] as const) {
+    tracker.tooled(io, 'a1', tool, failed)
+    await settle()
+  }
+  const writes = w.writes
+  tracker.tooled(io, 'ghost', 'Read', false)
+  tracker.tooled(io, undefined, 'Read', false)
+  await settle()
+  expect(w.writes).toBe(writes)
+  expect(only(w, 'a1')).toMatchObject({ toolCount: 4, failures: 1,
+    tools: [{ name: 'Read', failed: false }, { name: 'mcp', failed: true }, { name: 'Bash', failed: false }] })
+  expect(w.records).toHaveLength(1)
+  tracker.completed(io, 'a1')
+  await settle()
+  tracker.tooled(io, 'a1', 'Write', false)
+  await settle()
+  expect(only(w, 'a1')).toMatchObject({ status: 'ended', toolCount: 4 })
+})
+
+test('the spawn keeps the plan step its description started with, and nothing else of the description', async () => {
+  const { w, io } = world()
+  const tracker = createAgentTracker()
+  tracker.spawning(io)({ id: 'a1', type: 'crew:digger', model: 'sonnet', description: 'A4 read /Users/private/secrets' })
+  tracker.spawning(io)({ id: 'a2', type: 'crew:digger', model: 'sonnet', description: 'audit auth' })
+  await settle()
+  expect(only(w, 'a1')?.planStep).toBe('A4')
+  expect(only(w, 'a2')?.planStep).toBeUndefined()
+  expect(JSON.stringify(w.records)).not.toContain('private')
+})
+
+test('completion and reconcile stamp the end, and only the newest twelve ended agents stay', async () => {
+  const { w, io } = world()
+  const tracker = createAgentTracker()
+  for (let i = 0; i < 14; i++) {
+    tracker.spawning(io)({ id: `a${i}`, type: 'crew:digger', model: 'sonnet' })
+    await settle()
+    w.time += 1_000
+    tracker.completed(io, `a${i}`)
+    await settle()
+  }
+  expect(w.records.filter(r => r.status === 'ended')).toHaveLength(12)
+  expect(only(w, 'a0')).toBeUndefined()
+  expect(only(w, 'a13')?.endedAt).toBe(15_000)
+  tracker.spawning(io)({ id: 'late', type: 'crew:digger', model: 'sonnet' })
+  await settle()
+  w.listed = [{ id: 'late', type: 'crew:digger', status: 'completed' }]
+  w.time = 99_000
+  await tracker.reconcile(io)
+  expect(only(w, 'late')).toMatchObject({ status: 'ended', endedAt: 99_000 })
+})
+
+test('a step keeps the activity of its job, and a restart after the end begins it again but keeps the plan step', async () => {
+  const { w, io } = world()
+  const tracker = createAgentTracker()
+  tracker.spawning(io)({ id: 'a1', type: 'crew:digger', model: 'sonnet', description: 'A4 grep' })
+  await settle()
+  const noted = tracker.stepped(io, 'a1', { model: 'sonnet' }, undefined)
+  tracker.answered(io, 'a1', noted, { usage: { model: 'claude-sonnet', input_tokens: 1, output_tokens: 2 } })
+  tracker.tooled(io, 'a1', 'Read', false)
+  await settle()
+  tracker.stepped(io, 'a1', { model: 'sonnet' }, undefined)
+  await settle()
+  expect(only(w, 'a1')).toMatchObject({ steps: 1, outTokens: 2, toolCount: 1, planStep: 'A4' })
+  tracker.completed(io, 'a1')
+  await settle()
+  tracker.stepped(io, 'a1', { model: 'sonnet' }, undefined)
+  await settle()
+  const again = only(w, 'a1')
+  expect(again).toMatchObject({ status: 'running', planStep: 'A4' })
+  expect(again?.steps).toBeUndefined()
+  expect(again?.toolCount).toBeUndefined()
+  expect(again?.endedAt).toBeUndefined()
+})

@@ -830,7 +830,7 @@ export const register: Register = (on, options) => {
     const observeNext = async (sent: SpawnHook[1]) => {
       const spawned = display.agents.spawning(agentIo($))
       const result = await next(sent)
-      if (result.agentId) spawned({ id: result.agentId, type: sent.subagentType, model: result.model })
+      if (result.agentId) spawned({ id: result.agentId, type: sent.subagentType, model: result.model, description: sent.description })
       return result
     }
     return routeSpawn(routing, $, e, observeNext)
@@ -866,6 +866,16 @@ export const register: Register = (on, options) => {
   // Post-result only: guardWrite and holdUnchecked remain the sole write gates.
   on('tool.call', { tool: 'Write' }, ($, e, next) => observeWrite($, e, next, display))
   on('tool.call', { tool: 'Edit' }, ($, e, next) => observeWrite($, e, next, display))
+  // A crew agent's tool calls, after their result: the HUD keeps the name from a fixed set, never the input, and the
+  // result goes on exactly as it came.
+  on('tool.call', async ($, e, next) => {
+    const result = await next(e)
+    if (e.agentId) {
+      const failed = result.isError === true || result.deny !== undefined
+      void hud($, async () => { display.agents.tooled(agentIo($), e.agentId, (e as { tool?: unknown }).tool, failed) })
+    }
+    return result
+  })
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
     try {

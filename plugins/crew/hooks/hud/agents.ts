@@ -1,4 +1,5 @@
 import type { CrewAgent } from '../../types'
+import { noteTool, planStepOf, tokensOf, trimEnded } from './activity'
 
 /** The agent observation's host access: the clock, the agent list, the displayed records and the debug log. */
 export type AgentIo = {
@@ -6,6 +7,18 @@ export type AgentIo = {
   list(): Promise<{ id: string; type: string; status: string }[]>
   update(change: (list: CrewAgent[]) => CrewAgent[]): Promise<void>
   log(text: string): void
+}
+
+/** What an answered step reports that the HUD keeps: the model and the usage, and why it stopped. */
+export type AnsweredStep = {
+  usage?: {
+    model: string
+    input_tokens?: number
+    output_tokens?: number
+    cache_read_input_tokens?: number
+    cache_creation_input_tokens?: number
+  } | null
+  stopReason?: string | null
 }
 
 /** What a step sent that the band shows: its model, and the host's effort when it names one. */
@@ -22,11 +35,13 @@ export type AgentTracker = {
   /** Advances on `reset`; a write that began in an earlier lifecycle is dropped. */
   lifecycle(): number
   /** Before the spawn's `next`: the returned function records the spawn once the host has assigned its ID. */
-  spawning(io: AgentIo): (spawn: { id: string; type: string; model: string }) => void
+  spawning(io: AgentIo): (spawn: { id: string; type: string; model: string; description?: string }) => void
   /** A step the band will show; a failure is logged and never alters the step. Returns the job identity. */
   stepped(io: AgentIo, id: string | undefined, sent: SentStep, loginEffort: string | undefined): NotedStep | undefined
   /** The model an answered step reports, for the job `stepped` returned; never throws. */
-  answered(io: AgentIo, id: string | undefined, noted: NotedStep | undefined, answer: { usage?: { model: string } | null }): void
+  answered(io: AgentIo, id: string | undefined, noted: NotedStep | undefined, answer: AnsweredStep): void
+  /** A tool call the agent made, after its result: the name is kept from a fixed set, never the input. Never throws. */
+  tooled(io: AgentIo, id: string | undefined, tool: unknown, failed: boolean): void
   /** The agent's turn is over: drops its queued observations and marks it ended. */
   completed(io: AgentIo, id: string): void
   /** The host's list is the truth about who is running or over; fills in agents the hooks did not see. */
@@ -76,7 +91,7 @@ export function createAgentTracker(): AgentTracker {
     })
   }
 
-  async function observeSpawn(io: AgentIo, id: string, type: string, model: string, spawned: number): Promise<void> {
+  async function observeSpawn(io: AgentIo, id: string, type: string, model: string, spawned: number, planStep: string | undefined): Promise<void> {
     if (finished.has(id) || (generation.get(id) ?? 0) !== spawned) return
     const started = lifecycle
     const time = await io.now()
@@ -87,7 +102,8 @@ export function createAgentTracker(): AgentTracker {
       const early = provisional.get(id)
       const record: CrewAgent = { ...previous, id, type, model: early?.model ?? previous?.model ?? model,
         startedAt: previous?.startedAt ?? time, seenAt: undefined, status: 'running',
-        effort: early?.effort ?? previous?.effort, observedModel: early?.observedModel ?? previous?.observedModel }
+        effort: early?.effort ?? previous?.effort, observedModel: early?.observedModel ?? previous?.observedModel,
+        ...(planStep !== undefined || previous?.planStep !== undefined ? { planStep: planStep ?? previous?.planStep } : {}) }
       return [...list.filter(agent => agent.id !== id), record]
     })
     provisional.delete(id)
@@ -103,7 +119,18 @@ export function createAgentTracker(): AgentTracker {
       const type = previous?.type ?? effective.get(id)
       if (!type) return list
       const restart = previous?.status === 'ended'
-      const record: CrewAgent = { id, type, model: restart ? model : previous?.model ?? model,
+      // The activity belongs to the job: a restart begins it again, and only the plan step stays.
+      const activity: Partial<CrewAgent> = previous === undefined ? {} : restart ? (previous.planStep === undefined ? {} : { planStep: previous.planStep }) : {
+        ...(previous.steps === undefined ? {} : { steps: previous.steps }),
+        ...(previous.inTokens === undefined ? {} : { inTokens: previous.inTokens }),
+        ...(previous.outTokens === undefined ? {} : { outTokens: previous.outTokens }),
+        ...(previous.tools === undefined ? {} : { tools: previous.tools }),
+        ...(previous.toolCount === undefined ? {} : { toolCount: previous.toolCount }),
+        ...(previous.failures === undefined ? {} : { failures: previous.failures }),
+        ...(previous.planStep === undefined ? {} : { planStep: previous.planStep }),
+        ...(previous.stop === undefined ? {} : { stop: previous.stop }),
+      }
+      const record: CrewAgent = { ...activity, id, type, model: restart ? model : previous?.model ?? model,
         status: 'running', ...(previous?.seenAt !== undefined && !restart ? { seenAt: previous.seenAt } :
           { startedAt: restart ? time : previous?.startedAt ?? time }),
         ...(restart ? {} : { observedModel: previous?.observedModel }),
@@ -113,14 +140,18 @@ export function createAgentTracker(): AgentTracker {
     })
   }
 
-  async function observeAnswer(io: AgentIo, id: string, observed: string, answered: number, token: number): Promise<void> {
+  async function observeAnswer(io: AgentIo, id: string, answer: AnsweredStep & { usage: NonNullable<AnsweredStep['usage']> },
+    answered: number, token: number): Promise<void> {
+    const observed = answer.usage.model
+    const { inTokens, outTokens } = tokensOf(answer.usage)
     if (generation.get(id) !== answered || stepToken.get(id) !== token || finished.has(id)) return
     const started = lifecycle
     const early = provisional.get(id)
     if (early?.generation === answered) early.observedModel = observed
     await io.update(list => list.map(agent => agent.id === id && agent.status === 'running' &&
       lifecycle === started && !finished.has(id) && generation.get(id) === answered && stepToken.get(id) === token
-      ? { ...agent, observedModel: observed } : agent))
+      ? { ...agent, observedModel: observed, steps: (agent.steps ?? 0) + 1, inTokens, outTokens: (agent.outTokens ?? 0) + outTokens,
+        ...(answer.stopReason === 'max_tokens' ? { stop: 'max_tokens' as const } : {}) } : agent))
   }
 
   return {
@@ -129,12 +160,13 @@ export function createAgentTracker(): AgentTracker {
     spawning(io) {
       // The host assigns the ID after next; a job reopened while that call waits must win over this spawn.
       const before = new Map(generation)
-      return ({ id, type, model }) => {
+      return ({ id, type, model, description }) => {
         if (!type.startsWith('crew:')) return
         const current = generation.get(id) ?? 0
         if (effective.has(id) && current > (before.get(id) ?? 0)) return
         effective.set(id, type)
-        if (!finished.has(id)) queue(io, id, 'spawn', () => observeSpawn(io, id, type, model, current))
+        const planStep = planStepOf(description)
+        if (!finished.has(id)) queue(io, id, 'spawn', () => observeSpawn(io, id, type, model, current, planStep))
       }
     },
 
@@ -159,11 +191,26 @@ export function createAgentTracker(): AgentTracker {
 
     answered(io, id, noted, answer) {
       try {
-        const observed = answer.usage?.model
-        if (!id || !noted || !observed) return
-        queue(io, id, 'answer', () => observeAnswer(io, id, observed, noted.generation, noted.token))
+        const usage = answer.usage
+        if (!id || !noted || !usage?.model) return
+        queue(io, id, 'answer', () => observeAnswer(io, id, { usage, stopReason: answer.stopReason }, noted.generation, noted.token))
       } catch {
         try { io.log('crew HUD: observation failed') } catch { /* Reporting cannot change the step. */ }
+      }
+    },
+
+    tooled(io, id, tool, failed) {
+      try {
+        // Only crew agents the tracker knows: another agent's calls cost no write.
+        if (!id || !effective.has(id)) return
+        const started = lifecycle
+        void guarded(io, async () => {
+          await io.update(list => lifecycle !== started ? list : list.map(agent => agent.id === id && agent.status === 'running'
+            ? { ...agent, tools: noteTool(agent.tools, tool, failed), toolCount: (agent.toolCount ?? 0) + 1,
+              failures: (agent.failures ?? 0) + (failed ? 1 : 0) } : agent))
+        })
+      } catch {
+        try { io.log('crew HUD: observation failed') } catch { /* Reporting cannot change the call. */ }
       }
     },
 
@@ -171,8 +218,11 @@ export function createAgentTracker(): AgentTracker {
       finished.add(id)
       provisional.delete(id)
       jobs.delete(id)
-      void guarded(io, async () => { await io.update(list => list.map(agent => agent.id === id && finished.has(id)
-        ? { ...agent, status: 'ended' as const } : agent)) })
+      void guarded(io, async () => {
+        const time = await io.now()
+        await io.update(list => trimEnded(list.map(agent => agent.id === id && finished.has(id)
+          ? { ...agent, status: 'ended' as const, endedAt: time } : agent)))
+      })
     },
 
     async reconcile(io) {
@@ -192,11 +242,12 @@ export function createAgentTracker(): AgentTracker {
               provisional.delete(entry.id)
             }
           } else if (entry.status === 'completed' || entry.status === 'failed' || entry.status === 'killed' || entry.status === 'idle') {
-            result[index] = { ...result[index]!, status: 'ended' }
+            if (result[index]!.status !== 'ended') result[index] = { ...result[index]!, status: 'ended', endedAt: time }
+            else result[index] = { ...result[index]!, status: 'ended' }
             finished.add(entry.id)
           }
         }
-        return result
+        return trimEnded(result)
       })
     },
 

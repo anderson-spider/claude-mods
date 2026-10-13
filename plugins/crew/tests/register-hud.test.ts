@@ -84,6 +84,28 @@ test('HUD pane draws the plan tree and the agents from the same atoms, and /crew
   expect(await $.command.run({ command: 'crew-hud', args: '' } as never)).toEqual({ text: 'the pane is open.' })
 })
 
+test('HUD notes a crew agent tool call by name and leaves its result, deny and error exactly as they came', ON, async ($, on) => {
+  jevWorld(on, { stepModel: 'claude-sonnet-5-5' })
+  const values = hudCapture(on)
+  on('tool.call', (_$, e) => {
+    const tool = (e as { tool?: string }).tool
+    if (tool === 'Bash') return { deny: 'no' }
+    if (tool === 'Grep') return { result: 'failed', isError: true }
+    return { result: 'ran' }
+  })
+  await $.agent.spawn(spawnInput())
+  await step($, 'a1', 'high')
+  await pause()
+  expect(await $.tool.call({ tool: 'Read', agentId: 'a1', file_path: '/Users/private/secret.ts' } as never)).toEqual({ result: 'ran' })
+  expect(await $.tool.call({ tool: 'Bash', agentId: 'a1', command: 'cat ~/.ssh/id_rsa' } as never)).toEqual({ deny: 'no' })
+  expect(await $.tool.call({ tool: 'Grep', agentId: 'a1', pattern: 'token' } as never)).toEqual({ result: 'failed', isError: true })
+  expect(await $.tool.call({ tool: 'Read', file_path: 'main-loop.ts' } as never)).toEqual({ result: 'ran' })
+  await pause()
+  expect(values.agents).toMatchObject([{ id: 'a1', toolCount: 3, failures: 2,
+    tools: [{ name: 'Read', failed: false }, { name: 'Bash', failed: true }, { name: 'Grep', failed: true }] }])
+  expect(JSON.stringify(values.agents)).not.toMatch(/private|ssh|token|main-loop/)
+})
+
 test('HUD keeps the prompt sections byte-identical after observation and plan refresh', ON, async ($, on) => {
   const { clock } = jevWorld(on, { files: { '/repo/.crew/plans/live.md': hudText }, stepModel: 'claude-sonnet-5-5' })
   on('tool.call', () => ({ result: 'written' }))

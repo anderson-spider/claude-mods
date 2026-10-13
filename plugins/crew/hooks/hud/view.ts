@@ -23,6 +23,15 @@ export type AgentRecord = {
   startedAt?: number
   seenAt?: number
   status: 'running' | 'ended'
+  steps?: number
+  inTokens?: number
+  outTokens?: number
+  tools?: readonly { name: string; failed: boolean }[]
+  toolCount?: number
+  failures?: number
+  planStep?: string
+  endedAt?: number
+  stop?: 'max_tokens'
 }
 export type Style = 'plain' | 'heading' | 'secondary' | 'success' | 'warning' | 'error'
 export type Segment = { text: string; style: Style }
