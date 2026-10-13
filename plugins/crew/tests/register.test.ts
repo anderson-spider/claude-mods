@@ -412,7 +412,7 @@ test('a final answer of the code-reader twin is handed back through SubagentHand
   const { result } = await stepThrough($, 'cr1')
 
   expect(result).toMatchObject({
-    answer: 'auth is at src/auth.ts:12',
+    answer: '',
     stopReason: 'tool_use',
     toolUses: [{ name: 'SubagentHandback', input: { message: 'auth is at src/auth.ts:12' } }],
   })

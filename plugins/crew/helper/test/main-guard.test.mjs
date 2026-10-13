@@ -6,7 +6,10 @@ import { dirname, join } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 
-import { isMain } from '../helper.mjs'
+import { EventEmitter } from 'node:events'
+
+import { isMain, startServer } from '../helper.mjs'
+import { serverArgs } from '../lib/codex-bin.mjs'
 import { temp } from './support.mjs'
 
 // The main guard decides whether helper.mjs starts listening. Every run below is an isolated copy of the helper in a
@@ -109,4 +112,25 @@ test('--check reports the binary and the login and exits 1 when one is missing',
   const ran = await run([join(copy, 'helper.mjs'), '--check'], { ...process.env, HOME: empty })
 
   assert.equal(ran.code, 1)
+})
+
+test('the server starts with the isolated home, the flags and the filtered environment, and a broken pipe does not take the helper down', () => {
+  let seen
+  const child = new EventEmitter()
+  child.stdin = new EventEmitter()
+  child.stdout = new EventEmitter()
+  child.kill = () => {}
+  startServer({
+    codex: '/bin/codex',
+    home: '/isolated',
+    env: { PATH: '/bin', HOME: '/h', OPENAI_API_KEY: 'k' },
+    spawnFn: (...args) => ((seen = args), child),
+  })
+
+  assert.equal(seen[0], '/bin/codex')
+  assert.deepEqual(seen[1], serverArgs())
+  assert.deepEqual(seen[2].env, { PATH: '/bin', HOME: '/h', CODEX_HOME: '/isolated' })
+  assert.deepEqual(seen[2].stdio, ['pipe', 'pipe', 'ignore'])
+  assert.doesNotThrow(() => child.stdin.emit('error', new Error('EPIPE')))
+  assert.doesNotThrow(() => child.stdout.emit('error', new Error('EPIPE')))
 })

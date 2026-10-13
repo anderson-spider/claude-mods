@@ -145,7 +145,8 @@ export function handbackStep(step: CodexStep, id: string): CodexStep {
   const message = step.answer
   return {
     chunks: [{ kind: 'tool', index: 0, id, name: HANDBACK }, { kind: 'input', index: 0, json: JSON.stringify({ message }) }, { kind: 'stop', stopReason: 'tool_use', usage: step.usage }],
-    answer: message,
+    // The host's typing: `answer` is empty when the step only called tools.
+    answer: '',
     toolUses: [{ name: HANDBACK, input: { message } }],
     stopReason: 'tool_use',
     usage: step.usage,

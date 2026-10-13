@@ -122,7 +122,7 @@ export async function runTurn(probe: Probe, socket: string, request: TurnRequest
   if (started.status === 'unreachable') return { kind: 'failed', reason: 'the crew Codex helper is not running (run plugins/crew/helper/install.sh)' }
   if (started.status === 'busy') return { kind: 'failed', reason: 'this agent already has a Codex turn running' }
   if (started.status === 'full') return { kind: 'failed', reason: `the crew Codex helper is full${started.message ? `: ${started.message}` : ''}` }
-  if (started.status !== 'started') return { kind: 'failed', reason: `the crew Codex helper refused the turn${'message' in started && started.message ? `: ${started.message}` : ''}` }
+  if (started.status !== 'started') return { kind: 'failed', reason: `the crew Codex helper refused the turn${'message' in started && started.message ? `: ${started.message}` : ''}`.slice(0, 400) }
   for (let polls = 0; polls < maxPolls; polls++) {
     if (aborted()) {
       await post(probe, socket, ROUTES.interrupt, { caller: request.caller })
@@ -132,7 +132,7 @@ export async function runTurn(probe: Probe, socket: string, request: TurnRequest
     if (reply.status === 'ok' && 'turn' in reply) {
       if (reply.turn === 'completed') return { kind: 'text', text: answerText(reply) }
       const why = reply.error ? `: ${reply.error}` : ''
-      return { kind: 'failed', reason: `the Codex turn ${reply.turn}${why}` }
+      return { kind: 'failed', reason: `the Codex turn ${reply.turn}${why}`.slice(0, 300) }
     }
     if (reply.status === 'idle') return { kind: 'failed', reason: 'the crew Codex helper lost the turn' }
     if (reply.status !== 'running') return { kind: 'failed', reason: reply.status === 'unreachable' ? 'the crew Codex helper stopped answering' : `the crew Codex helper failed: ${'message' in reply && reply.message ? reply.message : reply.status}` }
@@ -147,8 +147,25 @@ export function lastUserText(messages: readonly { role: string; content: readonl
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i]
     if (message?.role !== 'user') continue
-    const text = message.content.flatMap(block => (block.type === 'text' && typeof block.text === 'string' ? [block.text] : [])).join('\n').trim()
+    // The host's own reminders are not the person's request.
+    const text = message.content
+      .flatMap(block => (block.type === 'text' && typeof block.text === 'string' ? [block.text] : []))
+      .join('\n')
+      .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '')
+      .trim()
     if (text !== '') return text
   }
   return undefined
+}
+
+/** The id prefix of the tool call a handed-back answer is made with. */
+export const HANDBACK_ID = 'crew_handback_'
+
+/**
+ * True when the conversation ends with the result of crew's own handback call: the host asked for another step after the
+ * answer was handed back (it refused the call, say), and answering again would run the whole task a second time.
+ */
+export function afterHandback(messages: readonly { role: string; content: readonly { type: string; [field: string]: unknown }[] }[]): boolean {
+  const last = messages.at(-1)
+  return last?.role === 'user' && last.content.some(block => block.type === 'tool_result' && typeof block.tool_use_id === 'string' && block.tool_use_id.startsWith(HANDBACK_ID))
 }

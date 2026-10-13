@@ -45,6 +45,6 @@ export const contract = {
   // A reply of each shape, as the helper sends it, that hooks must consume.
   examples: {
     pollOk: { status: 'ok', turn: 'completed', text: 'done', files: [{ status: 'completed', paths: ['/r/a.ts'] }], commands: [{ command: 'ls', status: 'completed', exitCode: 0 }], declined: 0, error: null },
-    status: { status: 'ok', version: '0.3.0', pid: 1, jobs: 0, threads: 0, codex: true, login: true },
+    status: { status: 'ok', version: '0.3.1', pid: 1, jobs: 0, threads: 0, codex: true, login: true },
   },
 }

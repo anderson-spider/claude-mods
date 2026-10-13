@@ -13,6 +13,23 @@ const inside = (path, root) => path === root || path.startsWith(root.endsWith(se
  * `forbidden` are directories a lane may not be in or contain (the user's Codex and Claude homes, the helper itself);
  * the filesystem root and the user's home (and so every ancestor of it) are always refused.
  */
+/**
+ * Codex loads a project's `.codex/config.toml`, and an MCP server it names runs as the user, outside the sandbox: a lane
+ * whose directory carries one, or sits under a directory that does (up to the home), is refused. The walk starts at the
+ * lane's own directory, so the architect's `.crew` is checked too.
+ */
+const configRefusal = (start, homes, fs) => {
+  for (let dir = start; dir !== sep && dir !== dirname(dir) && !homes.includes(dir); dir = dirname(dir)) {
+    const config = join(dir, '.codex', 'config.toml')
+
+    if (fs.existsSync(config)) {
+      return { ok: false, message: `${config} would be loaded by Codex and can run programs outside the sandbox: remove it or work elsewhere` }
+    }
+  }
+
+  return undefined
+}
+
 export const resolveLane = (role, repo, { home, forbidden = [], fs = { existsSync, lstatSync, mkdirSync, realpathSync, statSync } } = {}) => {
   const nominal = laneCwd(role, repo)
 
@@ -50,18 +67,10 @@ export const resolveLane = (role, repo, { home, forbidden = [], fs = { existsSyn
     return { ok: false, message: 'repo contains or is inside a directory crew protects' }
   }
 
-  // Codex loads a project's `.codex/config.toml`, and an MCP server it names runs as the user, outside the sandbox: a
-  // repository that carries one, or sits under a directory that does (up to the home), is refused.
-  for (let dir = real; dir !== sep && dir !== dirname(dir) && !homes.includes(dir); dir = dirname(dir)) {
-    if (fs.existsSync(join(dir, '.codex', 'config.toml'))) {
-      return { ok: false, message: `${join(dir, '.codex', 'config.toml')} would be loaded by Codex and can run programs outside the sandbox: remove it or work elsewhere` }
-    }
-  }
-
   const lane = laneOf(role)
 
   if (lane.dir === '') {
-    return { ok: true, cwd: real }
+    return configRefusal(real, homes, fs) ?? { ok: true, cwd: real }
   }
 
   const target = join(real, lane.dir)
@@ -87,5 +96,5 @@ export const resolveLane = (role, repo, { home, forbidden = [], fs = { existsSyn
     return { ok: false, message: `${lane.dir} cannot be used` }
   }
 
-  return { ok: true, cwd: target }
+  return configRefusal(target, homes, fs) ?? { ok: true, cwd: target }
 }

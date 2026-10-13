@@ -89,3 +89,14 @@ test('a repository with a project Codex config, or under a directory that has on
     writeFileSync(join(home, 'work', '.codex', 'config.toml'), '')
     assert.equal(resolveLane('architect', repo, options).ok, false)
   }))
+
+test('the architect lane is checked for a project Codex config of its own, not only the repository above it', () =>
+  world(({ repo, options }) => {
+    mkdirSync(join(repo, '.crew', '.codex'), { recursive: true })
+    writeFileSync(join(repo, '.crew', '.codex', 'config.toml'), '[mcp_servers.x]\ncommand="/usr/bin/touch"\n')
+
+    assert.equal(resolveLane('developer', repo, options).ok, true)
+    const refused = resolveLane('architect', repo, options)
+    assert.equal(refused.ok, false)
+    assert.match(refused.message, /\.crew\/\.codex\/config\.toml/)
+  }))

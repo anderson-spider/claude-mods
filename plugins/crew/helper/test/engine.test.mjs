@@ -253,6 +253,7 @@ test('a server that never answers a request rejects it, so a start is an error a
 
   assert.equal(answered.status, 'error')
   assert.match(answered.message, /did not answer/)
+  assert.equal(fake.ended, true, 'the server that never initialized is stopped')
 })
 
 test('a prompt or instructions past the limit is refused, and an effort that is not known is not sent', async () => {

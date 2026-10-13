@@ -13,7 +13,7 @@ const DONE = { status: 'ok', turn: 'completed', text: 'implemented it', files: [
 
 const json = (value: unknown) => ok(JSON.stringify(value))
 
-type HelperOptions = { handback?: boolean; status?: unknown; start?: unknown; poll?: unknown | unknown[]; down?: boolean; env?: Record<string, string> }
+type HelperOptions = { messages?: () => unknown[]; handback?: boolean; status?: unknown; start?: unknown; poll?: unknown | unknown[]; down?: boolean; env?: Record<string, string> }
 
 /** The helper's switch: a test sets `down` after the session started, as when the helper stops later. */
 const helperState = { down: false }
@@ -33,7 +33,7 @@ async function helperWorld($: Engine, on: On, o: HelperOptions = {}, agent = { i
   }
   const world = jevWorld(on, { register: true, files: {}, env: o.env, agents: [agent], helper })
   on('process.run', (_$, e) => (runs.push([...e.argv]), { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }) as never)
-  on('session.messages', () => ({ value: [{ role: 'user', content: [{ type: 'text', text: 'add the flag' }] }] }) as never)
+  on('session.messages', () => ({ value: o.messages?.() ?? [{ role: 'user', content: [{ type: 'text', text: 'add the flag' }] }] }) as never)
   on('tool.list', () => ({ value: o.handback ? [{ name: 'SubagentHandback', description: 'Hand back.', mcp: false }] : [] }) as never)
   await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true } as never)
   return { ...world, runs }
@@ -150,7 +150,7 @@ test('where the host runs the agent as a subagent the answer goes through Subage
     { kind: 'input', index: 0, json: JSON.stringify({ message }) },
     { kind: 'stop', stopReason: 'tool_use', usage: null },
   ])
-  expect(result).toEqual({ turnId: 't1', index: 0, answer: message, toolUses: [{ name: 'SubagentHandback', input: { message } }], stopReason: 'tool_use', usage: null })
+  expect(result).toEqual({ turnId: 't1', index: 0, answer: '', toolUses: [{ name: 'SubagentHandback', input: { message } }], stopReason: 'tool_use', usage: null })
   expect(seen.steps).toEqual([])
 })
 
@@ -160,4 +160,19 @@ test('a failure is handed back the same way, so the lead reads why', LOGIN, asyn
   const { result } = await stepThrough($, 'd1')
 
   expect(result).toMatchObject({ stopReason: 'tool_use', toolUses: [{ name: 'SubagentHandback', input: { message: expect.stringContaining('could not run') } }] })
+})
+
+test('a step the host asks for after the answer was handed back does not run the task again', LOGIN, async ($, on) => {
+  const { seen } = await helperWorld($, on, {
+    handback: true,
+    messages: () => [
+      { role: 'user', content: [{ type: 'text', text: 'add the flag' }] },
+      { role: 'assistant', content: [{ type: 'tool_use', id: 'crew_handback_t1_0', name: 'SubagentHandback', input: { message: 'done' } }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'crew_handback_t1_0', content: 'refused' }] },
+    ],
+  })
+  const { result } = await stepThrough($, 'd1')
+
+  expect(result).toMatchObject({ answer: 'crew: the answer was handed back.', toolUses: [], stopReason: 'end_turn' })
+  expect(seen.helper.filter(call => call.url.endsWith('/start'))).toEqual([])
 })

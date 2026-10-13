@@ -288,16 +288,26 @@ export class Engine {
       client.serve(method => refusalFor(method))
       client.onExit(() => this.#lost(client))
 
-      await client.request('initialize', {
-        clientInfo: { name: 'crew', title: null, version: '0.0.0' },
-        capabilities: { experimentalApi: false, requestAttestation: false },
-      })
+      try {
+        await client.request('initialize', {
+          clientInfo: { name: 'crew', title: null, version: '0.0.0' },
+          capabilities: { experimentalApi: false, requestAttestation: false },
+        })
+      } catch (error) {
+        client.close()
+        throw error
+      }
+
       client.notify('initialized')
       // Published only once initialized: a caller that arrives meanwhile waits for this start, never for a half-open client.
       this.#client = client
 
       return client
-    })().finally(() => {
+    })().catch(error => {
+      // A server that never initialized is not kept: a stuck child must not outlive the start that spawned it.
+      this.#starting = undefined
+      throw error
+    }).finally(() => {
       this.#starting = undefined
     })
 

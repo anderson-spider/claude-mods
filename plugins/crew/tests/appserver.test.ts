@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { LABEL, MAX_POLLS, POLL, ROUTES, answerText, callerOf, helperReady, helperRole, kickstart, lastUserText, post, postStarting, runTurn, socketOf } from '../hooks/appserver'
+import { afterHandback, LABEL, MAX_POLLS, POLL, ROUTES, answerText, callerOf, helperReady, helperRole, kickstart, lastUserText, post, postStarting, runTurn, socketOf } from '../hooks/appserver'
 import type { Probe, TurnRequest } from '../hooks/appserver'
 
 type Call = { route: string; body: Record<string, unknown>; socketPath?: string }
@@ -139,4 +139,12 @@ test('an abort before the start asks the helper nothing', async () => {
 
   expect(await runTurn(w.probe, SOCKET, REQUEST, () => true)).toEqual({ kind: 'aborted' })
   expect(w.calls).toEqual([])
+})
+
+test('the host\'s system reminders are not the request, and a conversation that ends with crew\'s own handback result is recognised', () => {
+  const user = (...content: Record<string, unknown>[]) => ({ role: 'user', content }) as never
+  expect(lastUserText([user({ type: 'text', text: 'do it\n<system-reminder>SubagentHandback: report</system-reminder>' })])).toBe('do it')
+  expect(afterHandback([user({ type: 'text', text: 'x' }), user({ type: 'tool_result', tool_use_id: 'crew_handback_t1_0', content: 'r' })])).toBe(true)
+  expect(afterHandback([user({ type: 'tool_result', tool_use_id: 'toolu_1', content: 'r' })])).toBe(false)
+  expect(afterHandback([])).toBe(false)
 })
