@@ -364,6 +364,60 @@ test('the registered schemas keep their property order and describe sending, wai
   expect(tools[2]!.description).toBe(JOBS_DESCRIPTION)
 })
 
+// Characterization of what the host receives: each registered name, description and input schema, byte for byte, as
+// the session starts (JSON.stringify of the schema, so key order and every value are pinned).
+test('every registered tool and command keeps its name, description and input schema byte for byte', async ($, on) => {
+  const tools: { name: string; description: string; inputSchema: unknown }[] = []
+  const commands: { name: string; description: string }[] = []
+  on('tool.register', (_$, e) => (tools.push(e as never), { value: { tool: `mcp__chatgpt__${e.name}` } }))
+  on('command.register', (_$, e) => (commands.push(e as never), { value: { command: e.name } }))
+  on('session.start', (_$, e) => ({ cwd: e.cwd }))
+
+  await $.session.start(SESSION)
+
+  expect(tools.map(({ name, description, inputSchema }) => ({ name, description, schema: JSON.stringify(inputSchema) }))).toEqual([
+    {
+      name: 'ask',
+      description:
+        "Ask the user's logged-in ChatGPT for a self-contained long answer, or when the user requests ChatGPT. Keep repository-dependent work local. Include the goal, minimum context, output format and language. Returns a Markdown file, chat URL and answer excerpt. Use non-sensitive context; personal-project code or files require the user's request. Never send credentials, secrets, private personal data or work data (Luizalabs repos, dashboards, logs, customer data).",
+      schema:
+        '{"type":"object","properties":{"prompt":{"type":"string","description":"Self-contained question."},"chatUrl":{"type":"string","description":"Continue the chat URL returned by an earlier call; omit for a new chat."},"model":{"type":"string","description":"New-chat model label prefix from the current menu; unknown labels return the available choices."},"files":{"type":"array","items":{"type":"string"},"description":"Absolute attachment paths; at most 4 MiB per file."},"wait":{"type":"boolean","description":"Default true. false starts a background job; completion sends a message. Use jobs to check it."},"saveOnly":{"type":"boolean","description":"Save the last answer in chatUrl after streaming finishes; sends nothing."},"out":{"type":"string","description":"Absolute Markdown output path."},"maxChars":{"type":"number","description":"Inline excerpt length; default 3000. The file keeps the full answer."}},"required":["prompt"]}',
+    },
+    {
+      name: 'image',
+      description:
+        "Generate or edit an image in the user's logged-in ChatGPT only when they ask for an image in this conversation; this spends their image quota. Describe the scene and reference features to keep in the user's language. Use original scenes without people, text or copies of games/brands. Attach only references the user requested or you produced for this task; never upload or prompt with licensed assets. Returns saved variants, sizes, chat URL and previews. Relay a refusal or question verbatim; do not rephrase around it. Label every saved result as an AI concept, never evidence of a real or in-game state. Use non-sensitive context; personal-project code or files require the user's request. Never send credentials, secrets, private personal data or work data (Luizalabs repos, dashboards, logs, customer data).",
+      schema:
+        '{"type":"object","properties":{"prompt":{"type":"string","description":"Self-contained image request."},"reference":{"type":"string","description":"Absolute PNG/JPEG/WebP/GIF reference path; at most 4 MiB."},"chatUrl":{"type":"string","description":"Continue the chat URL returned by an earlier call; omit for a new chat."},"model":{"type":"string","description":"New-chat model label prefix from the current menu; unknown labels return the available choices."},"files":{"type":"array","items":{"type":"string"},"description":"Absolute attachment paths; at most 4 MiB per file."},"wait":{"type":"boolean","description":"Default true. false starts a background job; completion sends a message. Use jobs to check it."},"saveOnly":{"type":"boolean","description":"Save the last image in chatUrl after generation; sends nothing, spends no quota. prompt names the file."},"out":{"type":"string","description":"Absolute image output path; variants add -1, -2."}},"required":["prompt"]}',
+    },
+    {
+      name: 'jobs',
+      description:
+        "Find this session's background requests: status, chat URL and saved files, newest first. Local only; sends nothing to ChatGPT and spends no quota.",
+      schema: '{"type":"object","properties":{}}',
+    },
+  ])
+  expect(commands).toEqual([
+    { name: 'chatgpt-ask', description: 'Ask ChatGPT: /chatgpt-ask <question>' },
+    { name: 'chatgpt-image', description: 'Generate and save an image: /chatgpt-image <prompt>' },
+    { name: 'chatgpt-doctor', description: 'Diagnose ChatGPT login and page selectors: /chatgpt-doctor [chat URL]' },
+  ])
+})
+
+// What a command makes of its text: the trimmed text is the whole request, and a blank text is the usage, with nothing sent.
+test('a command turns its text into the request as trimmed text: a blank text is the usage and nothing is sent', async ($, on) => {
+  const w = world(on)
+
+  expect(await commandRun($, 'chatgpt-ask', '\t  ')).toEqual({ text: 'Usage: /chatgpt-ask <question>' })
+  expect(await commandRun($, 'chatgpt-image', '')).toEqual({ text: 'Usage: /chatgpt-image <prompt>' })
+  expect(w.log).toEqual([])
+
+  await commandRun($, 'chatgpt-ask', '  what is 2+2  ')
+  const sent = w.scripts.map(s => s.text).join('\n')
+  expect(sent).toContain('what is 2+2')
+  expect(sent).not.toContain('  what is 2+2')
+})
+
 test('the prompt section is appended after the others, scoped to the session, with the prompt text', async ($, on) => {
   on('prompt.compose', () => ({ sections: [{ id: 'intro', text: 'base', scope: 'shared' as const }] }))
 

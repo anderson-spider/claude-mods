@@ -7,9 +7,36 @@ import {
   IMAGE_INPUT_SCHEMA,
   JOBS_DESCRIPTION,
   JOBS_INPUT_SCHEMA,
+  TOOLS,
+  type ToolDef,
 } from '../hooks/tool-schemas'
 
 // The tool and command wording and the input schemas the model and the user read, pinned byte for byte.
+
+test('TOOLS lists ask, image and jobs in the order the model sees them, and only ask and image have a command', () => {
+  const list: ToolDef[] = Object.values(TOOLS)
+  expect(list.map(tool => tool.name)).toEqual(['ask', 'image', 'jobs'])
+  expect(list.map(tool => tool.command?.name)).toEqual(['chatgpt-ask', 'chatgpt-image', undefined])
+  expect(TOOLS.ask.inputSchema).toBe(ASK_INPUT_SCHEMA)
+  expect(TOOLS.image.inputSchema).toBe(IMAGE_INPUT_SCHEMA)
+  expect(TOOLS.jobs.inputSchema).toBe(JOBS_INPUT_SCHEMA)
+  expect(TOOLS.jobs.description).toBe(JOBS_DESCRIPTION)
+  expect(TOOLS.ask.command?.description).toBe(ASK_COMMAND_DESCRIPTION)
+  expect(TOOLS.image.command?.description).toBe(IMAGE_COMMAND_DESCRIPTION)
+})
+
+test('a tool is served as the request kind of its name, and jobs has none', () => {
+  expect(TOOLS.ask.kind).toBe('ask')
+  expect(TOOLS.image.kind).toBe('image')
+  expect((TOOLS.jobs as ToolDef).kind).toBeUndefined()
+})
+
+test('commandRequest turns the trimmed text into the whole request, and a blank text into the usage', () => {
+  expect(TOOLS.ask.commandRequest('  what is 2+2  ')).toEqual({ kind: 'ask', input: { prompt: 'what is 2+2' }, filePaths: [] })
+  expect(TOOLS.image.commandRequest(' a cat ')).toEqual({ kind: 'image', input: { prompt: 'a cat' }, filePaths: [] })
+  expect(TOOLS.ask.commandRequest(' \t ')).toBe('Usage: /chatgpt-ask <question>')
+  expect(TOOLS.image.commandRequest('')).toBe('Usage: /chatgpt-image <prompt>')
+})
 
 test('JOBS_DESCRIPTION is pinned byte for byte', () => {
   expect(JOBS_DESCRIPTION).toBe(
