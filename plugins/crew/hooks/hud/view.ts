@@ -42,7 +42,7 @@ function label(value: string): string {
   return value.trim() || '?'
 }
 const role = (value: string): string => roles.has(value) ? value : '?'
-const owner = (value: string): string => value === 'lead' ? 'lead' : role(value)
+const owner = (value: string): string => value === 'main' ? 'main' : role(value)
 function model(value: string | undefined): string {
   if (value === undefined) return 'unknown'
   if (!value || value.length > 100) return '?'

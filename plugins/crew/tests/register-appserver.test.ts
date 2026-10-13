@@ -4,12 +4,12 @@ import type { On } from 'claude-code'
 import { GATEWAY, ROOT, jevWorld, ok } from './host'
 import type { Replies } from './host'
 
-// The developer and architect twins run on the crew Codex helper: registration needs the helper ready, and a step is one turn.
+// The digger twin runs on the crew Codex helper: registration needs the helper ready, and a step is one turn.
 
 const LOGIN = { options: { codexLogin: true } }
 
 const STATUS = { status: 'ok', version: '0.1.0', pid: 1, jobs: 0, threads: 0, codex: true, login: true }
-const DONE = { status: 'ok', turn: 'completed', text: 'implemented it', files: [{ status: 'completed', paths: [`${ROOT}/a.ts`] }], commands: [], declined: 0, error: null }
+const DONE = { status: 'ok', turn: 'completed', text: 'the flag is parsed at a.ts:3', files: [], commands: [{ command: 'git log -3', status: 'completed', exitCode: 0 }], declined: 0, error: null }
 
 const json = (value: unknown) => ok(JSON.stringify(value))
 
@@ -18,8 +18,8 @@ type HelperOptions = { messages?: () => unknown[]; handback?: boolean; status?: 
 /** The helper's switch: a test sets `down` after the session started, as when the helper stops later. */
 const helperState = { down: false }
 
-/** The session started on the login with the helper behind its socket, and the conversation of one developer twin. */
-async function helperWorld($: Engine, on: On, o: HelperOptions = {}, agent = { id: 'd1', type: 'crew:developer-codex', description: 'build it' }) {
+/** The session started on the login with the helper behind its socket, and the conversation of one digger twin. */
+async function helperWorld($: Engine, on: On, o: HelperOptions = {}, agent = { id: 'd1', type: 'crew:digger-codex', description: 'find it' }) {
   const polls = Array.isArray(o.poll) ? [...o.poll] : [o.poll ?? DONE]
   const runs: string[][] = []
   helperState.down = o.down === true
@@ -33,13 +33,13 @@ async function helperWorld($: Engine, on: On, o: HelperOptions = {}, agent = { i
   }
   const world = jevWorld(on, { register: true, files: {}, env: o.env, agents: [agent], helper })
   on('process.run', (_$, e) => (runs.push([...e.argv]), { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }) as never)
-  on('session.messages', () => ({ value: o.messages?.() ?? [{ role: 'user', content: [{ type: 'text', text: 'add the flag' }] }] }) as never)
+  on('session.messages', () => ({ value: o.messages?.() ?? [{ role: 'user', content: [{ type: 'text', text: 'where is the flag parsed' }] }] }) as never)
   on('tool.list', () => ({ value: o.handback ? [{ name: 'SubagentHandback', description: 'Hand back.', mcp: false }] : [] }) as never)
   await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true } as never)
   return { ...world, runs }
 }
 
-async function stepThrough($: Engine, agentId: string, model = 'cx/gpt-6-sol', effort: string | undefined = 'medium') {
+async function stepThrough($: Engine, agentId: string, model = 'cx/gpt-6-luna', effort: string | undefined = 'high') {
   const stream = $.turn.step({ turnId: 't1', index: 0, model, messageCount: 1, ...(effort ? { effort } : {}), agentId } as never)
   const chunks: unknown[] = []
   let item = await stream.next()
@@ -52,24 +52,24 @@ async function stepThrough($: Engine, agentId: string, model = 'cx/gpt-6-sol', e
 
 const names = (seen: { registered: { name: string }[] }) => seen.registered.filter(agent => agent.name.endsWith('-codex')).map(agent => agent.name)
 
-test('with the helper ready, developer-codex and architect-codex register on the login beside the code-reader twin, with no gateway', LOGIN, async ($, on) => {
+test('with the helper ready, digger-codex registers on the login beside the planner and challenger twins, with no gateway', LOGIN, async ($, on) => {
   const { seen } = await helperWorld($, on)
 
-  expect(names(seen)).toEqual(['code-reader-codex', 'developer-codex', 'architect-codex'])
-  expect(seen.registered.filter(agent => agent.name === 'developer-codex')[0]).toMatchObject({
-    model: 'cx/gpt-6-sol',
-    description: 'crew:developer on gpt-6-sol (OpenAI, on your Codex login): same job, tools and write lane.',
+  expect(names(seen)).toEqual(['planner-codex', 'challenger-codex', 'digger-codex'])
+  expect(seen.registered.filter(agent => agent.name === 'digger-codex')[0]).toMatchObject({
+    model: 'cx/gpt-6-luna',
+    description: 'crew:digger on gpt-6-luna (OpenAI, on your Codex login): same job, read-only.',
   })
   expect(seen.helper.map(call => call.url)).toEqual(['http://crew-codex/status'])
   expect(seen.fetches).toEqual([])
 })
 
-test('without the helper only the code-reader twin registers, and one debug line says why', LOGIN, async ($, on) => {
+test('without the helper only the planner and challenger twins register, and one debug line says why', LOGIN, async ($, on) => {
   const { seen } = await helperWorld($, on, { down: true })
 
-  expect(names(seen)).toEqual(['code-reader-codex'])
+  expect(names(seen)).toEqual(['planner-codex', 'challenger-codex'])
   expect(seen.logs.filter(line => line.includes('not on the Codex login'))).toEqual([
-    'crew: the developer and architect twins are not on the Codex login: the crew Codex helper is not running (run plugins/crew/helper/install.sh)',
+    'crew: the digger twin is not on the Codex login: the crew Codex helper is not running (run plugins/crew/helper/install.sh)',
   ])
 })
 
@@ -77,16 +77,16 @@ for (const [label, status] of [['no codex binary', { ...STATUS, codex: false }],
   test(`a helper with ${label} does not take the twins`, LOGIN, async ($, on) => {
     const { seen } = await helperWorld($, on, { status })
 
-    expect(names(seen)).toEqual(['code-reader-codex'])
+    expect(names(seen)).toEqual(['planner-codex', 'challenger-codex'])
     expect(seen.logs.some(line => line.includes('not on the Codex login'))).toBe(true)
   })
 }
 
-test('behind a gateway an unready helper leaves developer and architect on the gateway', LOGIN, async ($, on) => {
+test('behind a gateway an unready helper leaves the digger on the gateway', LOGIN, async ($, on) => {
   const { seen } = await helperWorld($, on, { down: true, env: GATEWAY })
 
-  expect(names(seen)).toEqual(['code-reader-codex', 'research-codex', 'designer-codex', 'developer-codex', 'architect-codex'])
-  expect(seen.registered.filter(agent => agent.name === 'developer-codex')[0]?.description).toContain('through the session')
+  expect(names(seen)).toEqual(['planner-codex', 'challenger-codex', 'digger-codex'])
+  expect(seen.registered.filter(agent => agent.name === 'digger-codex')[0]?.description).toContain('through the session')
 })
 
 test('the option off asks the helper nothing', { options: {} }, async ($, on) => {
@@ -96,30 +96,32 @@ test('the option off asks the helper nothing', { options: {} }, async ($, on) =>
   expect(names(seen)).toEqual([])
 })
 
-test('a step of the developer twin is one turn on the helper: the request, the polls, the text; nothing goes to the API or the backend', LOGIN, async ($, on) => {
+test('a step of the digger twin is one turn on the helper: the request, the polls, the text; nothing goes to the API or the backend', LOGIN, async ($, on) => {
   const { seen, runs } = await helperWorld($, on, { poll: [{ status: 'running', seconds: 1 }, DONE] })
-  const { chunks, result } = await stepThrough($, 'd1', 'cx/gpt-6-sol-high', 'medium')
+  const { chunks, result } = await stepThrough($, 'd1', 'cx/gpt-6-luna-medium', 'high')
 
   const start = JSON.parse(seen.helper.find(call => call.url.endsWith('/start'))?.body ?? '{}')
-  expect(start).toMatchObject({ caller: 'd1', role: 'developer', repo: ROOT, model: 'gpt-6-sol', effort: 'high', prompt: 'add the flag' })
-  expect(start.instructions).toContain('Implement the spec')
+  expect(start).toMatchObject({ caller: 'd1', role: 'digger', repo: ROOT, model: 'gpt-6-luna', effort: 'medium', prompt: 'where is the flag parsed' })
+  expect(start.instructions).toContain('Investigate the question')
   expect(start.instructions).toContain(`Repository: ${ROOT}.`)
+  expect(start.instructions).toContain('The sandbox is read-only: every write and all network access are refused')
   expect(JSON.stringify(seen.helper.map(call => call.headers))).not.toContain('Authorization')
   expect(seen.steps).toEqual([])
   expect(seen.fetches).toEqual([])
   expect(runs.filter(argv => argv[0] === 'sleep')).toHaveLength(1)
-  const text = `implemented it\n\n(crew: files changed: ${ROOT}/a.ts)`
+  const text = 'the flag is parsed at a.ts:3'
   expect(chunks[0]).toEqual({ kind: 'text', index: 0, text })
   expect(result).toEqual({ turnId: 't1', index: 0, answer: text, toolUses: [], stopReason: 'end_turn', usage: null })
 })
 
-test('the architect twin runs as architect, and its instructions place it in .crew', LOGIN, async ($, on) => {
-  const { seen } = await helperWorld($, on, {}, { id: 'r1', type: 'crew:architect-codex', description: 'audit' })
-  await stepThrough($, 'r1', 'cx/gpt-6-astra')
-  const start = JSON.parse(seen.helper.find(call => call.url.endsWith('/start'))?.body ?? '{}')
+test('the planner and challenger twins on the login never reach the helper: their steps go to the backend', LOGIN, async ($, on) => {
+  const { seen } = await helperWorld($, on, {}, { id: 'r1', type: 'crew:challenger-codex', description: 'challenge' })
+  const { result } = await stepThrough($, 'r1', 'cx/gpt-6-astra')
 
-  expect(start).toMatchObject({ caller: 'r1', role: 'architect', model: 'gpt-6-astra' })
-  expect(start.instructions).toContain(`${ROOT}/.crew`)
+  // No login file in this world: the backend path answers with its reason, and the helper saw only the status call.
+  expect(result).toMatchObject({ answer: expect.stringContaining('no Codex login file'), usage: null })
+  expect(seen.helper.map(call => call.url)).toEqual(['http://crew-codex/status'])
+  expect(seen.steps).toEqual([])
 })
 
 test('a helper that fails the turn answers the step with the reason, never a throw', LOGIN, async ($, on) => {
@@ -143,7 +145,7 @@ test('a helper that stops after registration answers the step with a reason, and
 test('where the host runs the agent as a subagent the answer goes through SubagentHandback, not as plain text', LOGIN, async ($, on) => {
   const { seen } = await helperWorld($, on, { handback: true })
   const { chunks, result } = await stepThrough($, 'd1')
-  const message = `implemented it\n\n(crew: files changed: ${ROOT}/a.ts)`
+  const message = 'the flag is parsed at a.ts:3'
 
   expect(chunks).toEqual([
     { kind: 'tool', index: 0, id: 'crew_handback_t1_0', name: 'SubagentHandback' },
@@ -154,7 +156,7 @@ test('where the host runs the agent as a subagent the answer goes through Subage
   expect(seen.steps).toEqual([])
 })
 
-test('a failure is handed back the same way, so the lead reads why', LOGIN, async ($, on) => {
+test('a failure is handed back the same way, so the main session reads why', LOGIN, async ($, on) => {
   await helperWorld($, on, { handback: true })
   helperState.down = true
   const { result } = await stepThrough($, 'd1')

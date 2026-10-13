@@ -5,8 +5,9 @@ import type { BindOutcome } from '../hooks/effort'
 import type { Routed, Target } from '../hooks/routing'
 import { appliedEffort, spawnRequest } from '../hooks/spawn'
 
-const developer = SPECIALISTS.find(s => s.name === 'developer') as Specialist
-const twin: Target = { ...nativeCodexSpecs({ developer: 'gpt-6-sol' })[0] as Target, base: 'developer' }
+// A role on a medium default, so a Jev answer of high is a change from it.
+const role = { ...SPECIALISTS.find(s => s.name === 'digger'), effort: 'medium' } as Specialist
+const twin: Target = { ...nativeCodexSpecs({ digger: 'gpt-6-luna' })[0] as Target, effort: 'medium', base: 'digger' }
 const routedAt = (effort: Effort): Routed => ({ decision: { effort }, ms: 0 })
 
 // Planned effort is high, the role default medium, the bound effort low: each source has its own value.
@@ -58,38 +59,38 @@ const ROWS: [boolean, Outcome, Effort | undefined, boolean, Effort | null][] = [
 test('appliedEffort matches the table for every suffix, outcome, bound and apply policy, as the inline expression did', () => {
   expect(ROWS).toHaveLength(40)
   for (const [suffix, outcome, bound, requestedApply, expected] of ROWS) {
-    const applied = appliedEffort({ suffix, outcome, bound, routed: routedAt('high'), requestedApply, spec: { ...developer, effort: 'medium' } })
+    const applied = appliedEffort({ suffix, outcome, bound, routed: routedAt('high'), requestedApply, spec: { ...role, effort: 'medium' } })
     expect(applied).toBe(expected)
   }
 })
 
 test('appliedEffort: an apply request that did not bind is unknown, never a claimed change from the default', () => {
-  expect(appliedEffort({ suffix: false, outcome: 'stepped', bound: undefined, routed: routedAt('high'), requestedApply: true, spec: developer })).toBeNull()
-  expect(appliedEffort({ suffix: false, outcome: 'stepped', bound: undefined, routed: routedAt('high'), requestedApply: false, spec: developer })).toBe('medium')
+  expect(appliedEffort({ suffix: false, outcome: 'stepped', bound: undefined, routed: routedAt('high'), requestedApply: true, spec: role })).toBeNull()
+  expect(appliedEffort({ suffix: false, outcome: 'stepped', bound: undefined, routed: routedAt('high'), requestedApply: false, spec: role })).toBe('medium')
 })
 
 test('spawnRequest tags the description with the chosen effort and sends a change as an apply request', () => {
-  const request = spawnRequest(developer, routedAt('high'), { enabled: true, jevAnswered: true, description: 'fix it' })
-  expect(request).toEqual({ description: `fix it · ${developer.model}/high`, requestedApply: true, bookEffort: 'high' })
+  const request = spawnRequest(role, routedAt('high'), { enabled: true, jevAnswered: true, description: 'fix it' })
+  expect(request).toEqual({ description: `fix it · ${role.model}/high`, requestedApply: true, bookEffort: 'high' })
 })
 
 test('spawnRequest asks for no apply when Jev answers the role default', () => {
-  const request = spawnRequest(developer, routedAt('medium'), { enabled: true, jevAnswered: true, description: 'fix it' })
-  expect(request).toEqual({ description: `fix it · ${developer.model}/medium`, requestedApply: false, bookEffort: 'medium' })
+  const request = spawnRequest(role, routedAt('medium'), { enabled: true, jevAnswered: true, description: 'fix it' })
+  expect(request).toEqual({ description: `fix it · ${role.model}/medium`, requestedApply: false, bookEffort: 'medium' })
 })
 
 test('spawnRequest requests medium on a Jev failure even when medium is the role default', () => {
-  const request = spawnRequest(developer, routedAt('medium'), { enabled: true, jevAnswered: false, description: 'fix it' })
+  const request = spawnRequest(role, routedAt('medium'), { enabled: true, jevAnswered: false, description: 'fix it' })
   expect(request.requestedApply).toBe(true)
   expect(request.bookEffort).toBe('medium')
 })
 
 test('spawnRequest sends a twin with its suffix only, and asks for no apply when routing is off and the effort is the default', () => {
   const request = spawnRequest(twin, routedAt('medium'), { enabled: false, jevAnswered: false, description: 'fix it' })
-  expect(request).toEqual({ description: 'fix it · gpt-6-sol/medium', suffix: 'cx/gpt-6-sol-medium', requestedApply: false, bookEffort: 'medium' })
+  expect(request).toEqual({ description: 'fix it · gpt-6-luna/medium', suffix: 'cx/gpt-6-luna-medium', requestedApply: false, bookEffort: 'medium' })
 })
 
 test('spawnRequest gives a twin a Jev change as its suffix effort and as the book effort', () => {
   const request = spawnRequest(twin, routedAt('high'), { enabled: true, jevAnswered: true, description: 'fix it' })
-  expect(request).toEqual({ description: 'fix it · gpt-6-sol/high', suffix: 'cx/gpt-6-sol-high', requestedApply: true, bookEffort: 'high' })
+  expect(request).toEqual({ description: 'fix it · gpt-6-luna/high', suffix: 'cx/gpt-6-luna-high', requestedApply: true, bookEffort: 'high' })
 })

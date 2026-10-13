@@ -36,7 +36,7 @@ function world(routes: Record<string, unknown | unknown[] | (() => unknown)>, op
 }
 
 const SOCKET = socketOf('/home/u')
-const REQUEST: TurnRequest = { caller: 'a1', role: 'developer', repo: '/repo', model: 'gpt-6-sol', effort: 'medium', instructions: 'be a developer', prompt: 'do it' }
+const REQUEST: TurnRequest = { caller: 'a1', role: 'digger', repo: '/repo', model: 'gpt-6-luna', effort: 'high', instructions: 'be a digger', prompt: 'look it up' }
 const DONE = { status: 'ok', turn: 'completed', text: 'all done', files: [], commands: [], declined: 0, error: null }
 const never = () => false
 
@@ -46,9 +46,9 @@ test('the socket and label are fixed beside the installed helper', () => {
   expect(Object.values(ROUTES)).toEqual(['/start', '/poll', '/interrupt', '/reset', '/status'])
 })
 
-test('only the roles that write run on the helper; a caller is made safe for the helper\'s grammar', () => {
-  expect(['developer-codex', 'architect-codex'].map(helperRole)).toEqual([true, true])
-  expect(['code-reader-codex', 'research-codex', 'designer-codex', 'developer'].map(helperRole)).toEqual([false, false, false, true])
+test('only the digger runs on the helper; a caller is made safe for the helper\'s grammar', () => {
+  expect(['digger-codex', 'digger'].map(helperRole)).toEqual([true, true])
+  expect(['planner-codex', 'challenger-codex', 'developer-codex', 'architect-codex'].map(helperRole)).toEqual([false, false, false, false])
   expect(callerOf('agent id/1')).toBe('agent_id_1')
   expect(callerOf('___')).toBe('x')
   expect(callerOf('a'.repeat(300)).length).toBe(128)
@@ -106,7 +106,7 @@ test('a turn that does not complete, a busy or full helper and a lost turn each 
   expect(await run({ '/start': { status: 'started' }, '/poll': { ...DONE, turn: 'failed', error: 'boom' } })).toEqual({ kind: 'failed', reason: 'the Codex turn failed: boom' })
   expect(await run({ '/start': { status: 'busy' } })).toMatchObject({ kind: 'failed', reason: expect.stringContaining('already has a Codex turn') })
   expect(await run({ '/start': { status: 'full', message: '4 turns are already running' } })).toMatchObject({ kind: 'failed', reason: expect.stringContaining('full: 4 turns') })
-  expect(await run({ '/start': { status: 'error', message: 'role must be developer or architect' } })).toMatchObject({ kind: 'failed', reason: expect.stringContaining('role must be') })
+  expect(await run({ '/start': { status: 'error', message: 'role must be digger' } })).toMatchObject({ kind: 'failed', reason: expect.stringContaining('role must be') })
   expect(await run({ '/start': { status: 'started' }, '/poll': { status: 'idle' } })).toMatchObject({ kind: 'failed', reason: expect.stringContaining('lost the turn') })
   expect(await run({})).toMatchObject({ kind: 'failed', reason: expect.stringContaining('install.sh') })
 })

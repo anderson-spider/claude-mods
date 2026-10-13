@@ -15,7 +15,7 @@ export type Plan = { name: string; groups: PlanGroup[]; open: boolean; malformed
 export type PlanFile = { basename: string; text: string }
 
 const ID = /^[A-Z][A-Z0-9]*[a-z]?$/
-const OWNERS = new Set(['lead', ...CREW_TYPES])
+const OWNERS = new Set(['main', ...CREW_TYPES])
 const MAX_LABEL = 120
 
 /** Only redacted, printable and bounded projections are retained for display. */
@@ -77,7 +77,7 @@ export function parsePlan(basename: string, text: string, context: RedactContext
       groups.push(current)
     }
     if (state === 'verified' || state === 'committed' || state === 'skipped') current.done++
-    else if (state === 'implementing' || state === 'ready for QA' || state === 'fixes requested') {
+    else if (state === 'implementing') {
       current.running++
       current.runningSteps.push({ id: step[1]!, owner: OWNERS.has(step[2]!) ? step[2]! : '?' })
     } else {

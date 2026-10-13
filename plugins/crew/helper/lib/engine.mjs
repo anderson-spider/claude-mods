@@ -2,7 +2,7 @@
 // time per caller, a bounded number of turns at once. A turn is started, then polled: the caller never holds a
 // request open for the length of a turn.
 import { createCollector } from './collector.mjs'
-import { laneOf, refusalFor, SANDBOX_POLICY, THREAD } from './lanes.mjs'
+import { LANES, laneOf, refusalFor, SANDBOX_POLICY, THREAD } from './lanes.mjs'
 import { resolveLane } from './paths.mjs'
 
 const MODEL = /^[A-Za-z0-9._-]{1,64}$/
@@ -218,7 +218,7 @@ export class Engine {
     }
 
     if (laneOf(input.role) === undefined) {
-      return 'role must be developer or architect'
+      return `role must be ${Object.keys(LANES).join(' or ')}`
     }
 
     if (typeof input.model !== 'string' || !MODEL.test(input.model)) {

@@ -1,38 +1,25 @@
-// The lane of each role a twin can run as: where its Codex thread may write, and what happens to an approval
-// request. The lane is the thread's working directory: Codex keeps its cwd writable, so the sandbox needs no other root.
-import { join } from 'node:path'
+// The roles a twin can run as, and the fixed thread and sandbox settings. The lane is the thread's working directory,
+// the repository, in Codex's read-only sandbox: nothing is writable, the cwd included, and the network is off.
 
-/**
- * One row per role. `dir` is the thread's cwd below the repository: the developer writes anywhere in the repository,
- * the architect only under `.crew/`. A role with no row is refused (`laneOf` is undefined).
- */
+/** One row per role. A role with no row is refused (`laneOf` is undefined). */
 export const LANES = Object.freeze({
-  developer: Object.freeze({ dir: '' }),
-  architect: Object.freeze({ dir: '.crew' }),
+  digger: Object.freeze({}),
 })
 
 export const laneOf = role => (typeof role === 'string' && Object.hasOwn(LANES, role) ? LANES[role] : undefined)
 
 /** The thread's cwd for a role in `repo` (an absolute path), or undefined for an unknown role or a bad repo. */
 export const laneCwd = (role, repo) => {
-  const lane = laneOf(role)
-
-  if (lane === undefined || typeof repo !== 'string' || !repo.startsWith('/') || repo.split('/').includes('..')) {
+  if (laneOf(role) === undefined || typeof repo !== 'string' || !repo.startsWith('/') || repo.split('/').includes('..')) {
     return undefined
   }
 
-  return lane.dir === '' ? repo : join(repo, lane.dir)
+  return repo
 }
 
-/** Fixed for every lane: no escalation, no network, nothing writable beyond the thread's cwd, no temp directories. */
-export const THREAD = Object.freeze({ approvalPolicy: 'never', approvalsReviewer: 'user', sandbox: 'workspace-write', ephemeral: true })
-export const SANDBOX_POLICY = Object.freeze({
-  type: 'workspaceWrite',
-  writableRoots: [],
-  networkAccess: false,
-  excludeTmpdirEnvVar: true,
-  excludeSlashTmp: true,
-})
+/** Fixed for every lane: no escalation, no network, nothing writable. */
+export const THREAD = Object.freeze({ approvalPolicy: 'never', approvalsReviewer: 'user', sandbox: 'read-only', ephemeral: true })
+export const SANDBOX_POLICY = Object.freeze({ type: 'readOnly', networkAccess: false })
 
 /**
  * What crew answers when the server asks for an approval despite `never`: always a refusal, by the method's own shape.

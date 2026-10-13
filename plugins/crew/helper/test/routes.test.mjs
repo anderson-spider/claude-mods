@@ -28,7 +28,7 @@ test('a route that is not /status takes POST only, then a JSON object, then a va
 
 test('each route reaches its own engine method once, with the caller or the body', async () => {
   const engine = stubEngine()
-  const body = { caller: 'a1', role: 'developer' }
+  const body = { caller: 'a1', role: 'digger' }
 
   await send('/start', body, { engine })
   await send('/poll', { caller: 'a1' }, { engine })
@@ -39,11 +39,11 @@ test('each route reaches its own engine method once, with the caller or the body
 })
 
 test('a start the engine refuses as invalid is a 400 with its message; a busy or full one is a 200 the caller reads', async () => {
-  const engine = { start: async () => ({ status: 'error', message: 'role must be developer or architect' }) }
+  const engine = { start: async () => ({ status: 'error', message: 'role must be digger' }) }
   const refused = await send('/start', { caller: 'a1', role: 'x' }, { engine })
 
   assert.equal(refused.status, 400)
-  assert.equal(refused.body.message, 'role must be developer or architect')
+  assert.equal(refused.body.message, 'role must be digger')
   assert.equal((await send('/start', { caller: 'a1' }, { engine: { start: async () => ({ status: 'busy' }) } })).status, 200)
 })
 

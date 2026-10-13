@@ -1,5 +1,5 @@
-// Jev's routing of one Agent call: which of the lead's crew agents may be routed, the state Jev is given and how its
-// answers become effort. Pure: the call to Jev is injected. The answers only move effort, at
+// Jev's routing of one Agent call: which crew agents may be routed, the state Jev is given and how its answers become
+// effort. Pure: the call to Jev is injected. The answers only move effort, at
 // most one step from the agent's defaults (and never below its floor), so a bad answer costs money, never a lane change.
 // The type is rewritten only by the codex crew mode in register.tsx, and only to the same role's registered twin (`twinFor`).
 
@@ -42,7 +42,8 @@ export function routable(
 /**
  * The registered Codex twin of the role a call names, as a routing `Target`, when the codex crew mode sends the call
  * there: a routable specialist call (no `model`, no fork, no workflow agent) that is not a teammate's. Undefined for
- * anything else, a twin the lead named included (an explicit choice is never moved) and a role with no registered twin.
+ * anything else, a twin the main session named included (an explicit choice is never moved) and a role with no
+ * registered twin.
  */
 export function twinFor(
   e: { subagentType: string; fork?: boolean; model?: string; workflow?: unknown; isTeammate?: boolean },
@@ -100,9 +101,9 @@ export async function route(
   return { decision: decide(spec, reply.answers), jevModel: reply.model, ms: reply.ms }
 }
 
-/** Explicit medium fallback when Jev has no answer, also used for a codex-mode switch without Jev. */
-export function defaultsOf(_spec: Target): Routed {
-  return { decision: { effort: 'medium' }, ms: 0 }
+/** The role's default effort when Jev has no answer, also used for a codex-mode switch without Jev. */
+export function defaultsOf(spec: Target): Routed {
+  return { decision: { effort: spec.effort }, ms: 0 }
 }
 
 /** What Jev moved from the agent's defaults; undefined where the answer is the default or there is no answer. */
@@ -114,13 +115,13 @@ export function moved(spec: Target, routed: Routed | undefined): Moved {
   }
 }
 
-/** A call the codex crew mode moved to its role's twin: the type the lead asked for. */
+/** A call the codex crew mode moved to its role's twin: the type the main session asked for. */
 export type Switch = { requested: string }
 
 /**
  * The notice shows known configuration, or explicitly unknown effort when an apply request could not bind.
  * A rejected request names the effort that did not take. A switched call names the type asked for; `jev` is false
- * when Jev gave no answer, so medium is crew's fallback and not Jev's.
+ * when Jev gave no answer, so the effort is the role default crew fell back to, not Jev's.
  */
 export function noticeText(spec: Target, routed: Routed, notApplied: Effort | undefined, via?: Switch, jev = true, applied?: Effort | null): string {
   const by = jev ? 'jev' : 'crew'
