@@ -1,6 +1,6 @@
 import type { HttpInit, HttpResponse, ProcessRunInit, ProcessRunResult } from 'claude-code'
 
-import type { Reply } from './model'
+import type { Failure, Route, RouteReplies } from './model'
 
 // The private link to the codex-cu helper: HTTP over its Unix socket through
 // `$.http.fetch({ socketPath })`. Pure apart from `probe`.
@@ -11,6 +11,7 @@ export type Probe = {
   run: (argv: string[], init?: ProcessRunInit) => Promise<ProcessRunResult>
 }
 
+// The LaunchAgent label helper/install.sh and uninstall.sh declare; helper/test/contract.mjs pins both.
 export const LABEL = 'com.anderson-spider.codex-cu'
 
 export const socketOf = (home: string) => `${home}/.claude/mcp/codex-cu/run/helper.sock`
@@ -22,8 +23,10 @@ export const callerOf = (sessionId: string, agentId?: string) => {
   return agentId === undefined || agentId === '' ? clean(sessionId) : `${clean(sessionId)}/${clean(agentId)}`
 }
 
-/** POSTs `body` to `route` on the helper's socket; never rejects. */
-export const post = async (probe: Probe, socket: string, route: string, body: unknown): Promise<Reply> => {
+/** POSTs `body` to `route` on the helper's socket and answers that route's reply (`RouteReplies`); never rejects. */
+export const post = async <R extends Route>(probe: Probe, socket: string, route: R, body: unknown): Promise<RouteReplies[R]> => {
+  // Every route's reply includes `Failure`, which the generic cannot see.
+  const failed = (failure: Failure) => failure as RouteReplies[R]
   let response: HttpResponse
 
   try {
@@ -35,13 +38,13 @@ export const post = async (probe: Probe, socket: string, route: string, body: un
     })
   } catch (error) {
     // No socket, or nothing listening on it.
-    return { status: 'unreachable', message: error instanceof Error ? error.message : String(error) }
+    return failed({ status: 'unreachable', message: error instanceof Error ? error.message : String(error) })
   }
 
   try {
-    return JSON.parse(response.text) as Reply
+    return JSON.parse(response.text) as RouteReplies[R]
   } catch {
-    return { status: 'error', message: `the helper answered ${response.status} with something that is not JSON: ${response.text.slice(0, 200)}` }
+    return failed({ status: 'error', message: `the helper answered ${response.status} with something that is not JSON: ${response.text.slice(0, 200)}` })
   }
 }
 

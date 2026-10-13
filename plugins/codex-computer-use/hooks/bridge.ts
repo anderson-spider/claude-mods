@@ -1,14 +1,14 @@
-import type { CodexAsking } from '../types'
+import type { CodexAsking, CodexCuInput } from '../types'
 import { callerOf } from './helper'
 import { ROUTES } from './model'
-import type { CallResult, Choice, Failure, Reply, ResetReply } from './model'
+import type { Choice, Route, RouteReplies } from './model'
 import { approvalWaitText, toAnswer } from './presentation'
 import type { ToolAnswer } from './presentation'
 
 export type BridgeDeps = {
   enabled(): Promise<boolean>
   sessionId(): Promise<string>
-  helper(route: string, body: unknown): Promise<Reply>
+  helper<R extends Route>(route: R, body: unknown): Promise<RouteReplies[R]>
   ask(question: CodexAsking, signal: AbortSignal): Promise<Choice | 'aborted' | 'timeout'>
   limitMs: number
 }
@@ -16,7 +16,8 @@ export type BridgeDeps = {
 // A call may need several apps approved, one after another.
 export const MAX_APPROVALS = 5
 
-export type BridgeInput = { tool_use_id: string; code?: string; title?: string; timeout_ms?: number; reset?: boolean; agentId?: string }
+/** The bridge tool's arguments (`types/index.d.ts`) with the event fields the call reads. */
+export type BridgeInput = CodexCuInput & { tool_use_id: string; agentId?: string }
 
 /** One bridge call: run the code, asking the person for each new app on the way. */
 export const serve = async (deps: BridgeDeps, input: BridgeInput, signal: AbortSignal): Promise<ToolAnswer> => {
@@ -27,8 +28,7 @@ export const serve = async (deps: BridgeDeps, input: BridgeInput, signal: AbortS
   const caller = callerOf(await deps.sessionId(), input.agentId)
 
   if (input.reset === true) {
-    // `/reset` answers its message, or a failure.
-    const reply = (await deps.helper(ROUTES.reset, { caller })) as ResetReply | Failure
+    const reply = await deps.helper(ROUTES.reset, { caller })
 
     return reply.status === 'ok' ? { result: reply.message ?? 'reset' } : toAnswer(reply)
   }
@@ -36,8 +36,7 @@ export const serve = async (deps: BridgeDeps, input: BridgeInput, signal: AbortS
   const body = { caller, code: input.code, title: input.title, timeout_ms: input.timeout_ms }
 
   for (let round = 0; round <= MAX_APPROVALS; round++) {
-    // `/call` answers a result, a held call or a failure.
-    const reply = (await deps.helper(ROUTES.call, body)) as CallResult
+    const reply = await deps.helper(ROUTES.call, body)
 
     if (reply.status !== 'needs_approval') {
       return toAnswer(reply)

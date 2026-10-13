@@ -3,8 +3,9 @@
 // native app control goes through the bridge tool. Pure.
 
 export const BRIDGE = 'codex_cu'
-// Must match LEASE_MS in helper/lib/hub.mjs.
-/** How long an app stays with the caller that last used it. */
+/** The bridge tool as the engine names it (`mcp__<plugin>__<tool>`); the `tool.call` matcher in register.tsx spells it literally. */
+export const TOOL = 'mcp__codex-computer-use__codex_cu'
+/** How long an app stays with the caller that last used it; helper/lib/hub.mjs `LEASE_MS` is the same time, pinned by helper/test/contract.mjs. */
 export const LEASE_MINUTES = 2
 
 /**

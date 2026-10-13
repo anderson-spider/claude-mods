@@ -1,4 +1,4 @@
-import type { CallResult, ContentBlock, Failure, Reply, StatusReply } from './model'
+import type { CallResult, ContentBlock, Failure, ForgetReply, StatusReply } from './model'
 import { LEASE_MINUTES } from './routing'
 
 // What the model and the person are told about a helper reply. Pure.
@@ -49,9 +49,9 @@ export const toAnswer = (reply: CallResult): ToolAnswer => {
 }
 
 /** What `/codex-cu forget <app>` tells the person. */
-export const forgetText = (app: string, reply: Reply) => {
-  if (reply.status !== 'ok' || !('bundleId' in reply)) {
-    return `codex-cu: could not forget ${app}: ${'message' in reply ? reply.message : JSON.stringify(reply)}`
+export const forgetText = (app: string, reply: ForgetReply | Failure) => {
+  if (reply.status !== 'ok') {
+    return `codex-cu: could not forget ${app}: ${reply.message}`
   }
 
   const codex = { removed: 'removed', absent: 'was not there', missing: 'no file found' }[reply.codex ?? 'missing']

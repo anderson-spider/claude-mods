@@ -1,6 +1,6 @@
 {
   "name": "codex-computer-use",
-  "version": "0.4.7",
+  "version": "0.4.8",
   "description": "Control native Mac apps through Codex, with per-app approval and /codex-cu on|off.",
   "author": {
     "name": "anderson-spider"

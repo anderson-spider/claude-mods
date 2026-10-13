@@ -8,7 +8,7 @@ import { createServer } from 'node:http'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { Approvals } from './lib/approvals.mjs'
+import { Approvals, CHOICES } from './lib/approvals.mjs'
 import { Hub } from './lib/hub.mjs'
 import { McpStdioClient } from './lib/mcp-client.mjs'
 import { VERSION } from './lib/version.mjs'
@@ -46,30 +46,18 @@ const readBody = request =>
     request.on('error', reject)
   })
 
-// The wire contract, mirrored from plugins/codex-computer-use/hooks/model.ts
-// (`ROUTES`, `Reply`); keep the two in step.
-/**
- * @typedef {{ bundleId: string, displayName: string, canAlways?: boolean }} AppRef
- * @typedef {'session' | 'always' | 'deny'} Choice The person's answer to an approval question.
- * @typedef {{ type: string, text?: string, data?: string, mimeType?: string }} ContentBlock
- * @typedef {{ autoApprove: boolean, always: string[] }} Settings
- *
- * A `/call` answers one of:
- * @typedef {{ status: 'ok', isError: boolean, content: ContentBlock[], notes?: string[] }} CallReply
- * @typedef {{ status: 'needs_approval', app: AppRef, text?: string }
- *   | { status: 'denied', app: AppRef, text?: string }
- *   | { status: 'busy', app: AppRef, owner: string, idleSeconds?: number, text?: string }
- *   | { status: 'full', message: string }} Held
- * @typedef {{ status: 'error', message: string, notes?: string[] }} Failure
- *
- * The other routes:
- * @typedef {{ status: 'ok', message: string }} ResetReply `/reset`
- * @typedef {{ status: 'ok', ended: string[] }} ReleaseReply `/release`
- * @typedef {{ status: 'ok', bundleId: string, helper: boolean, codex?: 'removed' | 'absent' | 'missing' }} ForgetReply `/forget`
- * @typedef {{ status: 'ok', settings?: Settings }} SettingsReply `/settings` (`/approve` answers a bare `ok`)
- * @typedef {{ version: string, pid: number, callers: { caller: string, apps: string[], isFresh: boolean, idleSeconds: number }[],
- *   owners: Record<string, { owner: string, idleSeconds: number }>, settings: Settings }} StatusReply `/status`, which has no `status` field
- */
+// The routes this socket serves. hooks/model.ts holds the reply shape of each
+// (`RouteReplies`) and the same `ROUTES`; helper/test/contract.mjs pins both lists.
+export const ROUTES = {
+  call: '/call',
+  reset: '/reset',
+  approve: '/approve',
+  release: '/release',
+  settings: '/settings',
+  forget: '/forget',
+  status: '/status',
+}
+
 const isCaller = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}(\/[A-Za-z0-9][A-Za-z0-9._:-]{0,127})?$/.test(value)
 
 export const handler = hub => async (request, response) => {
@@ -79,7 +67,7 @@ export const handler = hub => async (request, response) => {
   }
 
   try {
-    if (request.url === '/status') {
+    if (request.url === ROUTES.status) {
       return reply(200, { version: VERSION, pid: process.pid, ...hub.status() })
     }
 
@@ -89,7 +77,7 @@ export const handler = hub => async (request, response) => {
 
     const body = JSON.parse((await readBody(request)) || '{}')
 
-    if (request.url === '/settings') {
+    if (request.url === ROUTES.settings) {
       if (typeof body.autoApprove === 'boolean') {
         hub.approvals.setAutoApprove(body.autoApprove)
         log(`auto-approve ${body.autoApprove ? 'on' : 'off'}`)
@@ -98,7 +86,7 @@ export const handler = hub => async (request, response) => {
       return reply(200, { status: 'ok', settings: hub.approvals.settings })
     }
 
-    if (request.url === '/forget') {
+    if (request.url === ROUTES.forget) {
       const forgotten = await hub.forget(body.app)
 
       if (forgotten.status === 'ok') {
@@ -113,20 +101,20 @@ export const handler = hub => async (request, response) => {
     }
 
     switch (request.url) {
-      case '/call':
+      case ROUTES.call:
         return reply(200, await hub.call(body.caller, body))
-      case '/reset':
+      case ROUTES.reset:
         return reply(200, await hub.reset(body.caller))
-      case '/approve':
-        if (typeof body.bundleId !== 'string' || !['session', 'always', 'deny'].includes(body.choice)) {
-          return reply(400, { status: 'error', message: 'approve needs bundleId and choice session|always|deny' })
+      case ROUTES.approve:
+        if (typeof body.bundleId !== 'string' || !CHOICES.includes(body.choice)) {
+          return reply(400, { status: 'error', message: `approve needs bundleId and choice ${CHOICES.join('|')}` })
         }
 
         hub.approve(body.caller, body.bundleId, body.choice)
         log(`approval ${body.choice} for ${body.bundleId}`)
 
         return reply(200, { status: 'ok' })
-      case '/release':
+      case ROUTES.release:
         return reply(200, hub.release(body.caller))
       default:
         return reply(404, { status: 'error', message: `unknown route ${request.url}` })

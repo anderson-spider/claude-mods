@@ -89,7 +89,7 @@ export const world = (on: On, now: () => number = Date.now) => {
     return reply({ status: 'ok', ended: [] })
   })
   on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'Text', children: ['idle'] }))
-  on('tool.call', { tool: OWN }, () => ({ result: 'clicked' }))
+  on('tool.call', { tool: OWN as never }, () => ({ result: 'clicked' }))
 
   return posted
 }
