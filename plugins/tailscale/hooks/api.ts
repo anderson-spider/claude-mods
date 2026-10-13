@@ -122,11 +122,6 @@ export function transform(text: string, opts: { redact?: boolean; fields?: reado
   }
 }
 
-/** Returns the path when `buildUrl` accepts it. */
-export function checkedPath(path: unknown): string | undefined {
-  return typeof path === 'string' && buildUrl(path) !== undefined ? path : undefined
-}
-
 /** Method, headers (auth, If-Match, content type) and body of the request. */
 export function buildInit(
   req: Request,

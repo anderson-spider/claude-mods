@@ -23,7 +23,7 @@ function world(on: On, opts: { key?: string | (() => string | undefined); text?:
   const readKey = () => ('key' in opts ? (typeof opts.key === 'function' ? opts.key() : opts.key) : 'tskey-test')
   const status = opts.status ?? 200
 
-  on('env.get', () => ({ value: readKey() }))
+  on('env.get', (_$, e) => ({ value: e.name === 'TS_API_KEY' ? readKey() : undefined }))
   on('tool.register', (_$, e) => (tools.push(e as unknown as Tool), { value: { tool: id(e.name) } }))
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('http.fetch', (_$, e) => {
