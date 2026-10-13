@@ -24,7 +24,7 @@ function baseFiles() {
     }),
     "plugins/alpha/.claude-plugin/plugin.json": json({ name: "alpha", version: "1.2.3", description: "Alpha does things." }),
     "plugins/alpha/hooks/hooks.json": "{}",
-    "plugins/alpha/tsconfig.json": json({ extends: "./.claude-plugin/types/tsconfig.json" }),
+    "plugins/alpha/tsconfig.json": json({ extends: "./.claude-plugin/types/tsconfig.json", compilerOptions: { noEmit: true } }),
     "plugins/alpha/README.md": "# alpha\n",
     "plugins/alpha/AGENTS.md": [
       "# alpha",
@@ -131,8 +131,13 @@ for (const { name, change, expected } of [
   { name: "tsconfig missing", change: edit("plugins/alpha/tsconfig.json", () => undefined), expected: ["alpha: tsconfig.json is missing"] },
   {
     name: "tsconfig that does not extend the generated typings",
-    change: edit("plugins/alpha/tsconfig.json", () => json({ extends: "../../tsconfig.base.json" })),
+    change: edit("plugins/alpha/tsconfig.json", () => json({ extends: "../../tsconfig.base.json", compilerOptions: { noEmit: true } })),
     expected: ['alpha: tsconfig.json must extend "./.claude-plugin/types/tsconfig.json"'],
+  },
+  {
+    name: "tsconfig that lets tsc emit JavaScript",
+    change: edit("plugins/alpha/tsconfig.json", () => json({ extends: "./.claude-plugin/types/tsconfig.json" })),
+    expected: ['alpha: tsconfig.json must set "compilerOptions": { "noEmit": true }'],
   },
   { name: "tsconfig that is not JSON", change: edit("plugins/alpha/tsconfig.json", () => "{"), expected: ["alpha: tsconfig.json is not valid JSON"] },
   { name: "plugin AGENTS.md missing", change: edit("plugins/alpha/AGENTS.md", () => undefined), expected: ["alpha: AGENTS.md is missing"] },

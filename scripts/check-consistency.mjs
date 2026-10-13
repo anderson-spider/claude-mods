@@ -194,7 +194,10 @@ function checkPlugin(root, entry, marketplace, rootDocs, errors) {
   if (!existsSync(join(dir, 'tsconfig.json'))) fail('tsconfig.json is missing')
   else {
     try {
-      if (readJson(join(dir, 'tsconfig.json')).extends !== TYPES_TSCONFIG) fail(`tsconfig.json must extend "${TYPES_TSCONFIG}"`)
+      const config = readJson(join(dir, 'tsconfig.json'))
+      if (config.extends !== TYPES_TSCONFIG) fail(`tsconfig.json must extend "${TYPES_TSCONFIG}"`)
+      // Without the generated typings `tsc` would write a .js beside every .ts; the plugin's own setting forbids it.
+      if (config.compilerOptions?.noEmit !== true) fail('tsconfig.json must set "compilerOptions": { "noEmit": true }')
     } catch {
       fail('tsconfig.json is not valid JSON')
     }

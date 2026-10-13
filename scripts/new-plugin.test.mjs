@@ -24,7 +24,7 @@ function fixture(t) {
     }),
     "plugins/mid/.claude-plugin/plugin.json": json({ name: "mid", version: "1.0.0", description: "Mid does things." }),
     "plugins/mid/hooks/hooks.json": "{}",
-    "plugins/mid/tsconfig.json": json({ extends: "./.claude-plugin/types/tsconfig.json" }),
+    "plugins/mid/tsconfig.json": json({ extends: "./.claude-plugin/types/tsconfig.json", compilerOptions: { noEmit: true } }),
     "plugins/mid/README.md": "# mid\n",
     "plugins/mid/AGENTS.md": "# mid\n",
     ".claude/rules/mid.md": '---\npaths:\n  - "plugins/mid/**"\n---\n\n@../../plugins/mid/AGENTS.md\n',
