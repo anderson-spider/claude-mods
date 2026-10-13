@@ -80,8 +80,11 @@ function add(rows: Row[], text: string, columns: number, style: Style = 'plain',
   flush()
 }
 
-/** Pure, host-independent rows from plan, agent and clock snapshots. */
-export function bandRows(plans: readonly PlanDisplay[], agents: readonly AgentRecord[], now: number, columns: number): Band {
+/** Everything a section may read: prepared atoms and the clock, never a host. */
+export type Snapshot = { plans: readonly PlanDisplay[]; agents: readonly AgentRecord[]; now: number; columns: number }
+type Section = (snapshot: Snapshot) => Row[]
+
+function planRows({ plans, columns }: Snapshot): Row[] {
   const rows: Row[] = []
   for (const plan of plans) {
     if ('state' in plan) { add(rows, `Plan ${plan.state}`, columns, 'heading'); continue }
@@ -98,6 +101,11 @@ export function bandRows(plans: readonly PlanDisplay[], agents: readonly AgentRe
       }
     }
   }
+  return rows
+}
+
+function agentRows({ agents, now, columns }: Snapshot): Row[] {
+  const rows: Row[] = []
   const active = agents.filter(a => a.status === 'running' && a.type.startsWith('crew:'))
     .sort((a, b) => (a.startedAt ?? a.seenAt ?? Infinity) - (b.startedAt ?? b.seenAt ?? Infinity) || a.id.localeCompare(b.id))
   if (active.length) add(rows, 'Agents', columns, 'heading')
@@ -108,5 +116,13 @@ export function bandRows(plans: readonly PlanDisplay[], agents: readonly AgentRe
     const text = `  ${role(agent.type)}  requested ${requested}${agent.observedModel !== undefined ? `  observed ${observed}` : ''}  effort ${['low', 'medium', 'high'].includes(agent.effort ?? '') ? agent.effort : 'unknown'}  ${stamp}`
     add(rows, text, columns, 'plain', 2)
   }
-  return { rows }
+  return rows
+}
+
+/** One entry per row kind, top to bottom. A new HUD row is a section here and its own test. */
+const SECTIONS: readonly Section[] = [planRows, agentRows]
+
+/** Pure, host-independent rows from one snapshot of plans, agents, clock and width. */
+export function bandRows(snapshot: Snapshot): Band {
+  return { rows: SECTIONS.flatMap(section => section(snapshot)) }
 }
