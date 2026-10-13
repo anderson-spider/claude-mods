@@ -11,6 +11,8 @@ for (const { name, cwd, file, blocked } of [
   { name: "an absolute path to generated typings is blocked", cwd: "/elsewhere", file: "/repo/plugins/crew/.claude-plugin/types/tsconfig.json", blocked: true },
   { name: "a relative path that climbs into generated typings is blocked", cwd: "/repo/plugins/crew/hooks", file: "../.claude-plugin/types/index.d.ts", blocked: true },
   { name: "a Windows separator does not bypass the block", cwd: "/repo", file: "plugins\\crew\\.claude-plugin\\types\\index.d.ts", blocked: true },
+  { name: "a mixed-case path to generated typings is blocked", cwd: "/repo", file: "plugins/crew/.Claude-Plugin/TYPES/x.d.ts", blocked: true },
+  { name: "a path that leaves the typings folder again stays editable", cwd: "/repo", file: "plugins/crew/.claude-plugin/types/../plugin.json", blocked: false },
   { name: "the hand-written typings of a plugin stay editable", cwd: "/repo", file: "plugins/crew/types/index.d.ts", blocked: false },
   { name: "plugin sources stay editable", cwd: "/repo", file: "plugins/crew/hooks/register.tsx", blocked: false },
   { name: "the plugin manifest stays editable", cwd: "/repo", file: "plugins/crew/.claude-plugin/plugin.json", blocked: false },
