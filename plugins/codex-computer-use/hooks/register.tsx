@@ -5,7 +5,7 @@ import type { CodexAsking } from '../types'
 import { serve } from './bridge'
 import { COMMAND_DESCRIPTION, HELP, parseCommand } from './commands'
 import type { Command } from './commands'
-import { POLL, callerOf, postStarting, socketOf } from './helper'
+import { POLL, callerOf, post, postStarting, socketOf } from './helper'
 import type { Probe } from './helper'
 import { ROUTES } from './model'
 import type { Choice, Route, RouteReplies } from './model'
@@ -44,6 +44,15 @@ const choose = (choice: Choice) => {
 /** Sends to the helper, starting it through launchd once if nothing listens. */
 const helper = async <R extends Route>($: EngineInterface, route: R, body: unknown): Promise<RouteReplies[R]> =>
   postStarting(probe($), socketOf((await $.env.get('HOME')) ?? ''), route, body)
+
+/** The release at session end: `post` never rejects, and a probe or home read that does is swallowed. */
+const releaseOnce = async ($: EngineInterface, caller: string) => {
+  try {
+    await post(probe($), socketOf((await $.env.get('HOME')) ?? ''), ROUTES.release, { caller })
+  } catch {
+    // Nothing to do at exit.
+  }
+}
 
 const questionHost = ($: EngineInterface): QuestionHost => ({
   now: () => $.clock.now(),
@@ -109,6 +118,18 @@ const commandsOf = ($: EngineInterface): Handlers => ({
 /** Runs the handler for the command's kind; the generic ties each kind to its own command shape. */
 const runCommand = <K extends Command['kind']>(handlers: Handlers, kind: K, command: Extract<Command, { kind: K }>) => handlers[kind](command)
 
+/**
+ * The guard's `.catch`: a hook that fails is skipped and the own desktop tool would run while the mod is on.
+ * It has no matcher, so it sees every tool and re-checks. Named at top level so tests reach it.
+ */
+export function holdOwnDesktop<E extends { tool: string }, R>(_$: EngineInterface, e: E, next: ((e: E) => Promise<R>) & { called: boolean }) {
+  if (next.called || e.tool === TOOL || !isOwnDesktopTool(e.tool)) {
+    return next(e)
+  }
+
+  return { deny: denyOwn(TOOL) }
+}
+
 export const register: Register = on => {
   // A reload in the middle of a question would leave the band stuck.
   on('session.start', async ($, e, next) => {
@@ -122,7 +143,8 @@ export const register: Register = on => {
   })
 
   on('session.end', async ($, e, next) => {
-    await helper($, ROUTES.release, { caller: callerOf(e.sessionId) }).catch(() => undefined)
+    // One post, no kickstart or retry: session.end shares a 1.5 s budget, and a helper that is not running holds no session to release.
+    await releaseOnce($, callerOf(e.sessionId))
 
     return next(e)
   })
@@ -150,11 +172,9 @@ export const register: Register = on => {
       return next(e)
     }
 
-    // Fails closed: when the switch cannot be read, the own tool stays blocked.
-    const enabled = await isEnabled($).catch(() => true)
-
-    return enabled ? { deny: denyOwn(TOOL) } : next(e)
-  })
+    // A failed read of the switch fails the hook; its `.catch` below keeps the own tool blocked.
+    return (await isEnabled($)) ? { deny: denyOwn(TOOL) } : next(e)
+  }).catch(holdOwnDesktop)
 
   // The matcher stays a literal for the host's source analysis; tests/contract.test.ts pins it to TOOL.
   on('tool.call', { tool: 'mcp__codex-computer-use__codex_cu' }, ($, e, next) =>
