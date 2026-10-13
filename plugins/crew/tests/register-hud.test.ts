@@ -52,6 +52,15 @@ test('HUD refreshes plans after successful in-scope Write and never for denies, 
   expect(values.plans).toMatchObject([{ name: 'live' }])
 })
 
+test('HUD keeps the plans after a shell cd into a subdirectory: they are read under the session root', OFF, async ($, on) => {
+  jevWorld(on, { files: { '/repo/.crew/plans/live.md': hudText }, cwd: '/repo/plugins/app', root: '/repo' })
+  const values = hudCapture(on)
+  on('tool.call', () => ({ result: 'written' }))
+  // A relative path resolves from the shell's directory; the plans themselves are read under the root.
+  await $.tool.call({ tool: 'Write', file_path: '../../.crew/plans/live.md', content: hudText } as never)
+  expect(values.plans).toMatchObject([{ name: 'live' }])
+})
+
 test('HUD render reads atoms only, and the crew draws nothing above the prompt', OFF, async ($, on) => {
   const { seen } = jevWorld(on)
   on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'Text', children: ['idle'] }))
@@ -144,6 +153,7 @@ test('HUD reconciles a running listed agent as seen, ends it, and ticks once acr
   const clock = mock.clock(on)
   on('agent.list', () => ({ value: listed }) as never)
   on('session.cwd', () => ({ value: '/repo' }))
+  on('session.root', () => ({ value: '/repo' }))
   on('fs.list', () => ({ value: [] }))
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('agent.register', (_$, e) => ({ value: { agent: `crew:${e.name}` } }))
@@ -183,6 +193,7 @@ test('HUD lists several active plans in filename order, hides closed plans and d
   let entries = ['z.md', 'closed.md', 'a.md']
   mock.clock(on)
   on('session.cwd', () => ({ value: '/repo' }))
+  on('session.root', () => ({ value: '/repo' }))
   on('fs.stat', (_$, e) => ({ value: hudStat(e.path, files) }) as never)
   on('fs.exists', (_$, e) => ({ value: hudExists(e.path, files) }) as never)
   on('fs.list', () => ({ value: entries.map(name => ({ name, kind: 'file', isLink: false, size: 1, mtimeMs: 1 })) }) as never)
@@ -209,6 +220,7 @@ for (const tool of ['Write', 'Edit'] as const) {
     let calls = 0
     mock.clock(on)
     on('session.cwd', () => ({ value: '/repo' }))
+    on('session.root', () => ({ value: '/repo' }))
     on('fs.list', () => (calls++, { value: [] }))
     on('agent.list', () => ({ value: [{ id: 'helper', type: 'general-purpose' }] }) as never)
     const denied = { deny: 'permission denied' }
@@ -227,6 +239,7 @@ test('HUD ticker updates running time each second, idle time each thirtieth, pla
   const clock = mock.clock(on)
   let listings = 0
   on('session.cwd', () => ({ value: '/repo' }))
+  on('session.root', () => ({ value: '/repo' }))
   on('agent.list', () => ({ value: [] }) as never)
   on('fs.stat', (_$, e) => ({ value: hudStat(e.path) }) as never)
   on('fs.exists', (_$, e) => ({ value: hudExists(e.path) }) as never)
@@ -348,6 +361,7 @@ test('HUD checks real destinations for listing, touched names, directory links, 
   const read: string[] = []
   mock.clock(on)
   on('session.cwd', () => ({ value: '/alias' }))
+  on('session.root', () => ({ value: '/alias' }))
   on('fs.stat', (_$, e) => {
     const path = e.path as string
     if (path === '/alias') return { value: { kind: 'dir', isLink: true, realPath: '/repo' } } as never
@@ -386,6 +400,7 @@ test('HUD publishes loading for a pending first read, unknown on read failure, a
   let listings = 0
   const clock = mock.clock(on)
   on('session.cwd', () => ({ value: ROOT }))
+  on('session.root', () => ({ value: ROOT }))
   on('agent.list', () => ({ value: [] }) as never)
   // A removed plan rejects its stat without a usable code: only `exists` says it is gone.
   const files = (): Record<string, string> => present ? { [`${ROOT}/.crew/plans/live.md`]: hudText } : {}
@@ -420,6 +435,7 @@ test('HUD initializes a nonzero clock at session start and again after session r
     ? undefined : (on as (...a: unknown[]) => unknown)(name, ...rest))) as On)
   on('clock.now', () => ({ value: time }))
   on('session.cwd', () => ({ value: ROOT }))
+  on('session.root', () => ({ value: ROOT }))
   on('fs.stat', (_$, e) => ({ value: hudStat(e.path) }) as never)
   on('fs.exists', (_$, e) => ({ value: hudExists(e.path) }) as never)
   on('fs.list', () => ({ value: [] }))
@@ -460,6 +476,7 @@ test('HUD a clock reading that arrives after session end is not written', OFF, a
     ? undefined : (on as (...a: unknown[]) => unknown)(name, ...rest))) as On)
   on('clock.now', async () => { await held; return { value: 1_800_000_000_000 } })
   on('session.cwd', () => ({ value: ROOT }))
+  on('session.root', () => ({ value: ROOT }))
   on('fs.stat', (_$, e) => ({ value: hudStat(e.path) }) as never)
   on('fs.exists', (_$, e) => ({ value: hudExists(e.path) }) as never)
   on('fs.list', () => ({ value: [] }))
@@ -480,6 +497,7 @@ test('HUD asks the host for the real destination of every path it stats', OFF, a
   const asked: boolean[] = []
   mock.clock(on)
   on('session.cwd', () => ({ value: ROOT }))
+  on('session.root', () => ({ value: ROOT }))
   on('fs.stat', (_$, e) => (asked.push(e.resolve), { value: hudStat(e.path, { [`${ROOT}/.crew/plans/live.md`]: hudText }) }) as never)
   on('fs.exists', (_$, e) => ({ value: hudExists(e.path, { [`${ROOT}/.crew/plans/live.md`]: hudText }) }) as never)
   on('fs.list', () => ({ value: [{ name: 'live.md', kind: 'file', isLink: false }] }) as never)
@@ -499,6 +517,7 @@ test('HUD redacts a plan name with the home taken from the session directory', O
   const file = `${cwd}/.crew/plans/jane.md`
   mock.clock(on)
   on('session.cwd', () => ({ value: cwd }))
+  on('session.root', () => ({ value: cwd }))
   on('fs.stat', (_$, e) => ({ value: e.path === file ? { kind: 'file', isLink: false, realPath: file, size: 1, mtimeMs: 0 }
     : { kind: 'dir', isLink: false, realPath: e.path, size: 0, mtimeMs: 0 } }) as never)
   on('fs.exists', () => ({ value: true }))
@@ -569,6 +588,7 @@ test('HUD treats a plans directory that does not exist as no plan, silently, on 
   const logs: string[] = []
   const clock = mock.clock(on)
   on('session.cwd', () => ({ value: ROOT }))
+  on('session.root', () => ({ value: ROOT }))
   on('agent.list', () => ({ value: [] }) as never)
   on('ui.log', (_$, e) => (logs.push(e.text), { value: undefined }))
   // The host rejects a missing path, and a hook sees that rejection without its `code`: only `exists` says it is absent.
@@ -608,6 +628,7 @@ test('HUD recovers unchanged plan bytes after directory and context failures', O
   let fail = ''
   mock.clock(on)
   on('session.cwd', () => { if (fail === 'context') throw new Error('context failure'); return { value: ROOT } })
+  on('session.root', () => { if (fail === 'context') throw new Error('context failure'); return { value: ROOT } })
   on('fs.stat', (_$, e) => {
     if (fail === 'directory' && e.path === `${ROOT}/.crew/plans`) throw fsFailure('EACCES', 'not readable')
     return { value: hudStat(e.path, { [`${ROOT}/.crew/plans/live.md`]: hudText }) } as never
@@ -638,6 +659,7 @@ test('HUD proves a plan gone by its code or by exists, never by ENOENT appearing
   let failure: string | undefined
   mock.clock(on)
   on('session.cwd', () => ({ value: ROOT }))
+  on('session.root', () => ({ value: ROOT }))
   const file = `${ROOT}/.crew/plans/ENOENT.md`
   on('fs.stat', (_$, e) => {
     if (failure && e.path === file) throw fsFailure(failure, `${failure}: cannot stat '${e.path}'`)

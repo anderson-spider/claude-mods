@@ -153,6 +153,8 @@ test('the timeline puts each agent that ran in the last fifteen minutes on one b
   const styledRows = styled(pane({ columns: 60, agents: [agent({ id: 'e', type: 'crew:challenger', status: 'ended', startedAt: now - 600_000, endedAt: now - 300_000 })] }))
   expect(styledRows.find(l => l.startsWith('warning|challenger'))).toBe(`warning|challenger  track|${'█'.repeat(15)}secondary|${'█'.repeat(14)}track|${'█'.repeat(15)}`)
   expect(rows.join('\n')).not.toMatch(/old/u)
+  const twin = text(pane({ columns: 120, agents: [agent({ id: 't', type: 'crew:digger-codex', startedAt: now - 60_000 })] })).split('\n')
+  expect(twin[twin.indexOf('Last 15 minutes') + 1]).toMatch(/^digger·codex {4}█+$/u)
 })
 
 test('parser owner main survives the view while unknown owners and states stay hidden', () => {

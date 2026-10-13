@@ -352,8 +352,8 @@ function timelineBox({ agents, now, columns }: Snapshot): Box | undefined {
     const running = agent.status === 'running'
     const to = running ? span : Math.max(from + 1, at(agent.endedAt ?? now))
     const style: Style = running ? 'success' : agent.stop === 'max_tokens' ? 'error' : 'secondary'
-    const name = roleName(agent.type).base
-    const label = `${name}${agent.planStep !== undefined && STEP_ID.test(agent.planStep) ? ` ${agent.planStep}` : ''}`
+    const { base: name, twin } = roleName(agent.type)
+    const label = `${name}${twin ? '·codex' : ''}${agent.planStep !== undefined && STEP_ID.test(agent.planStep) ? ` ${agent.planStep}` : ''}`
     return [seg(label.slice(0, labelWidth - 1).padEnd(labelWidth), ROLE_STYLE[name] ?? 'plain'), seg('█'.repeat(Math.min(from, span)), 'track'),
       seg('█'.repeat(Math.max(0, Math.min(to, span) - from)), style), seg('█'.repeat(Math.max(0, span - to)), 'track')]
   })
