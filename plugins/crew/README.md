@@ -81,12 +81,17 @@ In codex, a plain `crew:<role>` call goes to its registered twin, and a role wit
 
 ### HUD
 
-Two views over the same local state. The **band** above the prompt is one line: `done`/`running`/`left` totals, the running step IDs with their owner and the number of running helpers. `/crew-hud` opens a **pane** with each plan's deliverables drawn as a tree: a step hangs under its first dependency, one glyph shows its state (`●` done, `◎` working, `■` blocked, `○` queued, `?` unknown), a queued step says `waits <id>` or `ready` from its dependencies, and a branch that is fully done folds into one `[+N done]` row. Running helpers follow, with the requested or observed model, sent effort and elapsed time, only while they run.
+Two views over the same local state. The **band** above the prompt is one line: `done`/`running`/`left` totals, the running step IDs with their owner and the number of running helpers. `/crew-hud` opens a **pane** of bordered boxes, scrolled by the host while it has the keyboard:
+
+- **Plan:** each plan's deliverables as a tree. A step hangs under its first dependency, one glyph shows its state (`●` done, `◎` working, `■` blocked, `○` queued, `?` unknown), a queued step says `waits <id>` or `ready` from its dependencies, a fully done branch folds into `[+N done]`, and a step a running helper was spawned for shows `← <role>`.
+- **Agents · running:** a card per running helper: role (`·codex` for a twin), plan step, model and effort, elapsed time, context and output tokens, steps, and its last three tool calls by name with the call and failure counts.
+- **Recent:** the last five ended helpers with their time, tokens, steps and how long ago; `max_tokens` is marked as failed.
+- **Last 15 minutes:** one bar per helper, a running one reaching the right edge.
 
 - **Plans** come from local `.crew/plans/*.md`, in filename order, while they have unfinished steps. A step line carries its dependencies (`after:`), which the tree reads.
 - **States:** `queued` and `blocked` are left, `implementing` is running, and `verified`, `committed` and `skipped` are done. Any other state is counted as left and marked `?`.
 - **Owners:** `main` and the helper types are shown; any other owner is shown as `?`.
-- **Agent activity:** a running helper's card also shows its plan step, model requests, context and output tokens, and its last three tool calls by name (never the input), when the host reports them. A twin on the Codex helper runs in Codex's sandbox: it shows no tools or tokens.
+- **Agent activity:** tool names come from a fixed set (a server's tool is `mcp`, any other `?`), never an input. Tokens and steps come from the host's usage on each step. A twin on the Codex helper runs in Codex's sandbox and reports no tools or tokens.
 - **What it never does:** rendering reads only local in-memory state, without network or filesystem access, and it never changes the crew mode or the status line. It needs no external tool.
 - The tree's shape follows herdr-dagr (MIT OR Apache-2.0).
 
