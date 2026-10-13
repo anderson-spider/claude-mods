@@ -1,4 +1,5 @@
-import { NATIVE_SUFFIX, SPECIALISTS } from './agents'
+import { CREW_TYPES, LANES, specialistOf } from './agents'
+import type { Lane } from './agents'
 
 /**
  * Where a crew agent may write. The tool allowlist cannot limit a path, so
@@ -19,26 +20,22 @@ const roleOf = (type: string) => type.slice(type.lastIndexOf(':') + 1)
  */
 export function laneRole(type: string): string {
   const role = roleOf(type)
-  if (!role.endsWith(NATIVE_SUFFIX)) return role
-  const base = role.slice(0, -NATIVE_SUFFIX.length)
-  return SPECIALISTS.some(specialist => specialist.name === base) ? base : role
+  return specialistOf(role)?.name ?? role
+}
+
+/** The rule of each lane: why a write to `path` by the `role` is refused, or `undefined`. A lane without a rule fails to compile. */
+const LANE_RULES: Record<Lane, (role: string, path: string) => string | undefined> = {
+  unrestricted: () => undefined,
+  'crew-documents': (role, path) =>
+    isCrewDocument(path) ? undefined : `the ${role} writes plan and review documents under .crew/ (.md) only, not ${path}; hand the finding to the developer`,
 }
 
 export function deniedWrite(type: string, path: string): string | undefined {
-  const role = laneRole(type)
   // Unknown crew types have no lane, including removed roles; another plugin's unknown types stay untouched.
-  if (type.startsWith('crew:') && !SPECIALISTS.some(specialist => type === `crew:${specialist.name}` || type === `crew:${specialist.name}${NATIVE_SUFFIX}`)) {
+  if (type.startsWith('crew:') && !CREW_TYPES.includes(type)) {
     return `${type} is not a crew agent with a known lane, so its write to ${path} was not made`
   }
-  switch (role) {
-    case 'architect':
-      return isCrewDocument(path) ? undefined : `the architect writes plan and review documents under .crew/ (.md) only, not ${path}; hand the finding to the developer`
-    case 'code-reader':
-    case 'research':
-    case 'designer':
-    case 'developer':
-      return undefined
-    default:
-      return undefined
-  }
+  // The lane follows the role name after the last colon, so another plugin's `acme:architect` follows the architect's.
+  const specialist = specialistOf(roleOf(type))
+  return specialist && LANE_RULES[LANES[specialist.name]](specialist.name, path)
 }

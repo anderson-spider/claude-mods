@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { SPECIALISTS } from '../hooks/agents'
+import { CREW_TYPES, LANES, SPECIALISTS } from '../hooks/agents'
 import { deniedWrite, laneRole } from '../hooks/guard'
 
 test('the architect writes markdown under .crew only', () => {
@@ -63,4 +63,26 @@ test('acme:architect-codex follows the same rule as acme:architect', () => {
     expect(deniedWrite('acme:architect-codex', path)).toBe(deniedWrite('acme:architect', path))
   }
   expect(deniedWrite('acme:architect-codex', 'src/a.ts')).toBeDefined()
+})
+
+test('a specialist\'s declared lane decides its writes, for the role and its twin', () => {
+  for (const { name } of SPECIALISTS) {
+    const lane = LANES[name]
+    for (const type of [`crew:${name}`, `crew:${name}-codex`]) {
+      expect(deniedWrite(type, '.crew/reviews/x.md')).toBeUndefined()
+      expect(deniedWrite(type, 'src/a.ts') === undefined).toBe(lane === 'unrestricted')
+      if (lane === 'crew-documents') expect(deniedWrite(type, 'src/a.ts')).toBe(`the ${name} writes plan and review documents under .crew/ (.md) only, not src/a.ts; hand the finding to the developer`)
+    }
+  }
+})
+
+test('the guard knows every valid crew type: none is refused as unknown', () => {
+  for (const type of CREW_TYPES) {
+    for (const path of LANE_PATHS) expect(deniedWrite(type, path) ?? '').not.toContain('known lane')
+  }
+})
+
+test('another plugin\'s role types follow the lane of the role by name', () => {
+  for (const type of ['acme:architect', 'acme:architect-codex', 'x:y:architect']) expect(deniedWrite(type, 'src/a.ts')).toContain('.crew/')
+  for (const type of ['acme:developer', 'acme:developer-codex', 'acme:code-reader']) expect(deniedWrite(type, 'src/a.ts')).toBeUndefined()
 })

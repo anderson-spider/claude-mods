@@ -1,4 +1,4 @@
-import { NATIVE_SUFFIX, SPECIALISTS } from '../agents'
+import { CREW_TYPES } from '../agents'
 import { redact } from '../redact'
 import type { RedactContext } from '../redact'
 
@@ -15,9 +15,7 @@ export type Plan = { name: string; groups: PlanGroup[]; open: boolean; malformed
 export type PlanFile = { basename: string; text: string }
 
 const ID = /^[A-Z][A-Z0-9]*[a-z]?$/
-const OWNERS = new Set(['lead', ...SPECIALISTS.flatMap(role => [
-  `crew:${role.name}`, `crew:${role.name}${NATIVE_SUFFIX}`,
-])])
+const OWNERS = new Set(['lead', ...CREW_TYPES])
 const MAX_LABEL = 120
 
 /** Only redacted, printable and bounded projections are retained for display. */

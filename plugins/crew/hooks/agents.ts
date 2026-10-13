@@ -40,7 +40,10 @@ const BROWSER = [
   'mcp__claude-in-chrome__computer',
 ] as const
 
-export const SPECIALISTS: readonly Specialist[] = [
+/** The suffix of a role's Codex twin: `crew:developer` has `crew:developer-codex`. */
+export const NATIVE_SUFFIX = '-codex'
+
+export const SPECIALISTS = [
   {
     name: 'code-reader',
     description: 'Code lookup: read-only symbols, relations and evidence at path:line.',
@@ -97,7 +100,45 @@ export const SPECIALISTS: readonly Specialist[] = [
       "Always write that file before replying: it is not a report but the input the lead's review triage reads, so a general instruction against report files does not apply to it. " +
       'Answer with a first line that starts with `Approve`, `Fixes` or `Reject` and a one-line reason, then the review path and a short summary.',
   },
-]
+] as const satisfies readonly Specialist[]
+
+/** The role names, read from the definitions above. */
+export type SpecialistName = (typeof SPECIALISTS)[number]['name']
+
+/**
+ * Where a specialist's `Write` and `Edit` may land; `guard.ts` holds one rule per lane.
+ * `unrestricted`: anywhere. `crew-documents`: Markdown under `.crew/` only.
+ */
+export type Lane = 'unrestricted' | 'crew-documents'
+
+/**
+ * The lane of each specialist. A role without an entry does not compile. It lives beside `SPECIALISTS`, not in the
+ * definitions, so a spread of a definition into `$.agent.register` can never carry a lane to the host.
+ */
+export const LANES: Readonly<Record<SpecialistName, Lane>> = {
+  'code-reader': 'unrestricted',
+  research: 'unrestricted',
+  designer: 'unrestricted',
+  developer: 'unrestricted',
+  architect: 'crew-documents',
+}
+
+/**
+ * The agent types of the roles: `crew:<name>` and its `crew:<name>-codex` twin, for every specialist. The only list of
+ * valid crew types; the guard and the HUD read it instead of rebuilding it.
+ */
+export const CREW_TYPES: readonly string[] = SPECIALISTS.flatMap(s => [`crew:${s.name}`, `crew:${s.name}${NATIVE_SUFFIX}`])
+
+/**
+ * The specialist a bare role name stands for: `architect`, or its twin `architect-codex`. Any other name, a suffixed
+ * one whose base is no specialist included, is undefined.
+ */
+export function specialistOf(role: string): (typeof SPECIALISTS)[number] | undefined {
+  const exact = SPECIALISTS.find(s => s.name === role)
+  if (exact || !role.endsWith(NATIVE_SUFFIX)) return exact
+  const base = role.slice(0, -NATIVE_SUFFIX.length)
+  return SPECIALISTS.find(s => s.name === base)
+}
 
 /**
  * The system prompt section that makes the main session the lead: it orchestrates and the specialists do the work.
@@ -125,9 +166,6 @@ export function leadSection(jev: boolean): string {
 }
 
 // --- Native Codex twins ---
-
-/** The suffix of a role's Codex twin: `crew:developer` has `crew:developer-codex`. */
-export const NATIVE_SUFFIX = '-codex'
 
 /**
  * True for an `http:` or `https:` base URL other than Anthropic's own API: a gateway that may serve the twins' models
