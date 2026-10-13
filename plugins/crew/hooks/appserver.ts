@@ -135,7 +135,7 @@ export async function runTurn(probe: Probe, socket: string, request: TurnRequest
       return { kind: 'failed', reason: `the Codex turn ${reply.turn}${why}`.slice(0, 300) }
     }
     if (reply.status === 'idle') return { kind: 'failed', reason: 'the crew Codex helper lost the turn' }
-    if (reply.status !== 'running') return { kind: 'failed', reason: reply.status === 'unreachable' ? 'the crew Codex helper stopped answering' : `the crew Codex helper failed: ${'message' in reply && reply.message ? reply.message : reply.status}` }
+    if (reply.status !== 'running') return { kind: 'failed', reason: reply.status === 'unreachable' ? 'the crew Codex helper stopped answering' : `the crew Codex helper failed: ${'message' in reply && reply.message ? reply.message : reply.status}`.slice(0, 300) }
     await probe.run([...POLL])
   }
   await post(probe, socket, ROUTES.interrupt, { caller: request.caller })
