@@ -976,7 +976,7 @@ export const register: Register = (on, options) => {
     if (e.props.hasSurvey) return next(e)
     try {
       const [shown, running, time] = await Promise.all([read($, plans), read($, agents), read($, nowAtom)])
-      const rows = bandRows(shown, running, time, e.props.bodyColumns).rows
+      const rows = bandRows({ plans: shown, agents: running, now: time, columns: e.props.bodyColumns }).rows
       if (!rows.length) return next(e)
       const { Box, Text } = $.ui.resolve(e)
       return <Box width={e.props.bodyColumns} flexDirection="column">{rows.map((row, index) =>
