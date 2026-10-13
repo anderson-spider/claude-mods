@@ -1,5 +1,6 @@
 import { test, expect } from 'claude-code/testing'
 import { buildInit, buildUrl, call, checkedPath, forbidden, format, transform } from '../hooks/api'
+import { ACCEPTED, ALLOWED_DELETES, REJECTED, REJECTED_GROUPS, TAILNET_DELETES, invalidPathText, urlOf } from './paths'
 
 type Seen = { url: string; init: { method: string; headers: Record<string, string>; body?: string } }
 
@@ -25,37 +26,6 @@ const devices = JSON.stringify({
       tags: ['tag:t'],
     },
   ],
-})
-
-test('buildUrl accepts only API paths', () => {
-  expect(buildUrl('/tailnet/-/devices')).toBe('https://api.tailscale.com/api/v2/tailnet/-/devices')
-  expect(buildUrl('//evil.com/x')).toBeUndefined()
-  expect(buildUrl('/a/../b')).toBeUndefined()
-  expect(buildUrl('https://evil.com')).toBeUndefined()
-})
-
-test('buildUrl rejects encoded dot, slash and backslash', () => {
-  expect(buildUrl('/a/%2e%2e/b')).toBeUndefined()
-  expect(buildUrl('/a/%2E%2E/b')).toBeUndefined()
-  expect(buildUrl('/a%2Fb')).toBeUndefined()
-  expect(buildUrl('/a%5cb')).toBeUndefined()
-  expect(buildUrl('/tailnet/-/devices?x=%20')).toBeDefined()
-})
-
-test('forbidden refuses only deleting the entire tailnet', () => {
-  expect(forbidden('DELETE', '/tailnet/-')).toBeDefined()
-  expect(forbidden('DELETE', '/tailnet/T1234CNTRL/')).toBeDefined()
-  expect(forbidden('DELETE', '/tailnet/-?x=1')).toBeDefined()
-  expect(forbidden('DELETE', '/tailnet/-/keys/k1')).toBeUndefined()
-  expect(forbidden('DELETE', '/device/1')).toBeUndefined()
-  expect(forbidden('GET', '/tailnet/-')).toBeUndefined()
-})
-
-test('call does not reach the network when deleting the tailnet', async () => {
-  const { fetch, seen } = fakeFetch('{}')
-  const r = await call(fetch, 'k', { method: 'DELETE', path: '/tailnet/-' })
-  expect(r.isError).toBe(true)
-  expect(seen.last).toBeUndefined()
 })
 
 test('call sends Bearer and JSON body', async () => {
@@ -176,50 +146,6 @@ test('call truncates a huge response and suggests fields', async () => {
   expect(r.text.length).toBeLessThan(61_000)
 })
 
-test('checkedPath returns the path only when buildUrl accepts it', () => {
-  expect(checkedPath('/tailnet/-/devices')).toBe('/tailnet/-/devices')
-  expect(checkedPath('//evil.com/x')).toBeUndefined()
-  expect(checkedPath(42)).toBeUndefined()
-})
-
-test('buildUrl and checkedPath refuse a path with a blank, a backslash, a fragment or two dots anywhere', () => {
-  for (const path of ['/a b', '/a\tb', '/a\nb', '/a\\b', '/a#b', '/a/..', '/a..b', 'devices', '', undefined, null, {}, ['/a']]) {
-    expect(buildUrl(path)).toBeUndefined()
-    expect(checkedPath(path)).toBeUndefined()
-  }
-})
-
-test('buildUrl and checkedPath keep a query string and the root path as they are', () => {
-  expect(buildUrl('/')).toBe('https://api.tailscale.com/api/v2/')
-  expect(buildUrl('/tailnet/-/keys?all=true&x=1')).toBe('https://api.tailscale.com/api/v2/tailnet/-/keys?all=true&x=1')
-  expect(buildUrl('/a?q=%20b')).toBe('https://api.tailscale.com/api/v2/a?q=%20b')
-  expect(checkedPath('/')).toBe('/')
-  expect(checkedPath('/tailnet/-/keys?all=true&x=1')).toBe('/tailnet/-/keys?all=true&x=1')
-})
-
-test('call fetches BASE plus the accepted path, with the query string untouched', async () => {
-  const { fetch, seen } = fakeFetch('{}')
-  await call(fetch, 'k', { method: 'GET', path: '/tailnet/-/keys?all=true&x=1' })
-  expect(seen.last?.url).toBe('https://api.tailscale.com/api/v2/tailnet/-/keys?all=true&x=1')
-})
-
-test('call answers an invalid path with the value it received and sends nothing', async () => {
-  const { fetch, seen } = fakeFetch('{}')
-
-  for (const [path, shown] of [
-    ['//evil.com/x', '//evil.com/x'],
-    ['/a/../b', '/a/../b'],
-    [42, '42'],
-    [undefined, 'undefined'],
-    [{ a: 1 }, '[object Object]'],
-  ] as const) {
-    const r = await call(fetch, 'k', { method: 'GET', path })
-    expect(r).toEqual({ text: `Invalid path: ${shown}. Use something like /tailnet/-/devices.`, isError: true })
-  }
-
-  expect(seen.last).toBeUndefined()
-})
-
 test('call checks the key before the path, and the path before forbidden', async () => {
   const { fetch, seen } = fakeFetch('{}')
 
@@ -285,155 +211,76 @@ test('format keeps the ETag line, the error flag and truncates long text', () =>
   expect(long.text).toBe('HTTP 200\n' + 'a'.repeat(60_000) + '\n…(truncated; use "fields" to request less)')
 })
 
-const DOT_SEGMENT_PATHS = [
-  '/.',
-  '/./',
-  '/./tailnet/-',
-  '/tailnet/./-',
-  '/tailnet/-/.',
-  '/tailnet/-/./',
-  '/tailnet/-/.?x=1',
-  '/tailnet/./-?x=1',
-  '/tailnet/-/devices/.',
-  '/tailnet/././-',
-]
-
-test('buildUrl and checkedPath refuse a path with a lone dot segment at the start, middle, end or before the query', () => {
-  for (const path of DOT_SEGMENT_PATHS) {
-    expect(buildUrl(path), path).toBeUndefined()
-    expect(checkedPath(path), path).toBeUndefined()
-  }
-})
-
-// the URL parser percent-encodes or rewrites these, so only the pathname equality check refuses them
-const REWRITTEN_PATHS = [
-  '/a<b',
-  '/tailnet/-/devices"x',
-  '/tailnet/{x}',
-  '/tailnet/-/\u3002',
-  '/tailnet/\u00e9/devices',
-  '/a^b',
-  '/a`b',
-  '/tailnet/{x}?q=1',
-]
-
-test('buildUrl and checkedPath refuse a path the URL parser rewrites or percent-encodes', () => {
-  for (const path of REWRITTEN_PATHS) {
-    expect(buildUrl(path), path).toBeUndefined()
-    expect(checkedPath(path), path).toBeUndefined()
-  }
-})
-
-test('buildUrl keeps accepting dots inside a segment', () => {
-  expect(buildUrl('/tailnet/example.com/devices')).toBe('https://api.tailscale.com/api/v2/tailnet/example.com/devices')
-  expect(buildUrl('/device/100.64.0.1')).toBe('https://api.tailscale.com/api/v2/device/100.64.0.1')
-  expect(buildUrl('/tailnet/-/keys?host=a.b&v=1.2')).toBe('https://api.tailscale.com/api/v2/tailnet/-/keys?host=a.b&v=1.2')
-  expect(buildUrl('/tailnet/.hidden/x')).toBe('https://api.tailscale.com/api/v2/tailnet/.hidden/x')
-  expect(buildUrl('/tailnet/a./x')).toBe('https://api.tailscale.com/api/v2/tailnet/a./x')
-  expect(buildUrl('/tailnet/user@example.com/keys')).toBe('https://api.tailscale.com/api/v2/tailnet/user@example.com/keys')
-  expect(buildUrl('/device/abc123/routes')).toBe('https://api.tailscale.com/api/v2/device/abc123/routes')
-  expect(buildUrl('/tailnet/-/devices/')).toBe('https://api.tailscale.com/api/v2/tailnet/-/devices/')
-  expect(buildUrl('/tailnet/-/devices?fields=all&host=a.b')).toBe(
-    'https://api.tailscale.com/api/v2/tailnet/-/devices?fields=all&host=a.b',
-  )
-})
-
-test('call never reaches fetch with a dot segment, for the delete of the whole tailnet or any other call', async () => {
-  const { fetch, seen } = fakeFetch('{}')
-
-  for (const path of DOT_SEGMENT_PATHS) {
-    for (const method of ['DELETE', 'GET', 'POST']) {
-      const r = await call(fetch, 'k', { method, path })
-      expect(r, `${method} ${path}`).toEqual({
-        text: `Invalid path: ${path}. Use something like /tailnet/-/devices.`,
-        isError: true,
-      })
+for (const [group, paths] of Object.entries(REJECTED_GROUPS)) {
+  test(`buildUrl and checkedPath refuse ${group}`, () => {
+    for (const path of paths) {
+      expect(buildUrl(path), JSON.stringify(path)).toBeUndefined()
+      expect(checkedPath(path), JSON.stringify(path)).toBeUndefined()
     }
+  })
+}
+
+test('buildUrl maps every accepted path to the API base plus the path, and checkedPath returns it as is', () => {
+  for (const path of ACCEPTED) {
+    expect(buildUrl(path), path).toBe(urlOf(path))
+    expect(checkedPath(path), path).toBe(path)
   }
-
-  expect(seen.last).toBeUndefined()
-})
-
-test('call sends a path whose dots are inside a segment', async () => {
-  const { fetch, seen } = fakeFetch('{}')
-  const r = await call(fetch, 'k', { method: 'GET', path: '/device/100.64.0.1' })
-  expect(r.isError).toBe(false)
-  expect(seen.last?.url).toBe('https://api.tailscale.com/api/v2/device/100.64.0.1')
-})
-
-// Paths that reach /tailnet/{tailnet} (or another path) on the server once the URL parser or the server normalizes them.
-const SMUGGLED_PATHS = [
-  '/tailnet/-/\x00',
-  '/tailnet/-/\x01',
-  '/tailnet/-/\x7f',
-  '/tailnet/-/.\x00',
-  '/tailnet/-/.\x01',
-  '/tailnet/\x01-',
-  '/tailnet/-\x7f/x',
-  '/tailnet/-/devices?x=\x01',
-  '/%74ailnet/-',
-  '/tailne%74/-',
-  '/tailnet/%2d',
-  '/tailnet//-',
-  '/tailnet/-//',
-  '/tailnet///-',
-  '//tailnet/-',
-  '/tailnet//',
-  '/TAILNET//-',
-]
-
-test('buildUrl and checkedPath refuse control characters, "%" in the path and empty segments', () => {
-  for (const path of SMUGGLED_PATHS) {
-    expect(buildUrl(path), JSON.stringify(path)).toBeUndefined()
-    expect(checkedPath(path), JSON.stringify(path)).toBeUndefined()
-  }
-})
-
-test('buildUrl allows "%" in the query and a single trailing slash', () => {
-  expect(buildUrl('/tailnet/-/devices?x=%2f')).toBe('https://api.tailscale.com/api/v2/tailnet/-/devices?x=%2f')
-  expect(buildUrl('/tailnet/-/')).toBe('https://api.tailscale.com/api/v2/tailnet/-/')
-})
-
-test('forbidden matches the tailnet delete in any case', () => {
-  expect(forbidden('DELETE', '/TAILNET/-')).toBeDefined()
-  expect(forbidden('DELETE', '/Tailnet/T1234CNTRL/')).toBeDefined()
-})
-
-test('call never reaches fetch with a smuggled path, for the delete of the whole tailnet or any other call', async () => {
-  const { fetch, seen } = fakeFetch('{}')
-
-  for (const path of [...SMUGGLED_PATHS, '/TAILNET/-/\x01']) {
-    for (const method of ['DELETE', 'GET', 'POST']) {
-      const r = await call(fetch, 'k', { method, path })
-      expect(r.isError, `${method} ${JSON.stringify(path)}`).toBe(true)
-    }
-  }
-
-  expect(seen.last).toBeUndefined()
-})
-
-test('call refuses DELETE /TAILNET/- without reaching fetch', async () => {
-  const { fetch, seen } = fakeFetch('{}')
-  const r = await call(fetch, 'k', { method: 'DELETE', path: '/TAILNET/-' })
-  expect(r.isError).toBe(true)
-  expect(r.text).toMatch(/^Deleting the entire tailnet/)
-  expect(seen.last).toBeUndefined()
 })
 
 test('every URL buildUrl accepts keeps the requested path after the URL parser normalizes it', () => {
-  const accepted = [
-    '/tailnet/-/devices',
-    '/device/100.64.0.1',
-    '/device/abc123/routes',
-    '/tailnet/example.com/devices',
-    '/tailnet/user@example.com/keys',
-    '/tailnet/-/keys?fields=all&host=a.b',
-    '/',
-  ]
-  for (const path of [...DOT_SEGMENT_PATHS, ...SMUGGLED_PATHS, ...accepted]) {
+  for (const path of [...REJECTED, ...ACCEPTED]) {
     const url = buildUrl(path)
     if (url === undefined) continue
-    expect(new URL(url).pathname, JSON.stringify(path)).toBe('/api/v2' + path.split('?')[0])
+    expect(new URL(url).pathname, JSON.stringify(path)).toBe('/api/v2' + String(path).split('?')[0])
   }
-  for (const path of accepted) expect(buildUrl(path), path).toBeDefined()
+})
+
+test('call never reaches fetch with a rejected path, for any method, and answers with the value it received', async () => {
+  const { fetch, seen } = fakeFetch('{}')
+
+  for (const path of REJECTED) {
+    for (const method of ['DELETE', 'GET', 'POST']) {
+      const r = await call(fetch, 'k', { method, path })
+      expect(r, `${method} ${JSON.stringify(path)}`).toEqual({ text: invalidPathText(path), isError: true })
+    }
+  }
+
+  expect(seen.last).toBeUndefined()
+})
+
+test('call fetches BASE plus every accepted path, with the query string untouched', async () => {
+  for (const path of ACCEPTED) {
+    const { fetch, seen } = fakeFetch('{}')
+    const r = await call(fetch, 'k', { method: 'GET', path })
+    expect(r.isError, path).toBe(false)
+    expect(seen.last?.url, path).toBe(urlOf(path))
+  }
+})
+
+test('forbidden refuses only deleting the entire tailnet, in any case, with a trailing slash or a query string', () => {
+  for (const path of TAILNET_DELETES) expect(forbidden('DELETE', path), path).toBeDefined()
+  for (const path of ALLOWED_DELETES) expect(forbidden('DELETE', path), path).toBeUndefined()
+  expect(forbidden('GET', '/tailnet/-')).toBeUndefined()
+})
+
+test('call does not reach the network when deleting the tailnet', async () => {
+  const { fetch, seen } = fakeFetch('{}')
+
+  for (const path of TAILNET_DELETES) {
+    const r = await call(fetch, 'k', { method: 'DELETE', path })
+    expect(r.isError, path).toBe(true)
+    expect(r.text, path).toMatch(/^Deleting the entire tailnet/)
+  }
+
+  expect(seen.last).toBeUndefined()
+})
+
+test('call sends every allowed DELETE', async () => {
+  for (const path of ALLOWED_DELETES) {
+    const { fetch, seen } = fakeFetch('{}')
+    const r = await call(fetch, 'k', { method: 'DELETE', path })
+    expect(r.isError, path).toBe(false)
+    expect(seen.last?.url, path).toBe(urlOf(path))
+    expect(seen.last?.init.method, path).toBe('DELETE')
+  }
 })
