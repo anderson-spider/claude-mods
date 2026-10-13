@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test } from 'node:test'
 
-import { Approvals, answerFor, parseRequest } from '../lib/approvals.mjs'
+import { Approvals, parseRequest } from '../lib/approvals.mjs'
 import { removeCodexApproval } from '../lib/codex-approvals.mjs'
 import { namedApps, usedApp } from '../lib/apps.mjs'
 import { isEntryCall } from '../lib/hub.mjs'
@@ -32,8 +32,6 @@ test('approval policy: deny beats everything, auto-approve starts off, callers a
 
   const request = parseRequest({ _meta: { connector_id: 'computer-use', persist: ['session'], tool_params: { app: 'com.z' } } })
   assert.equal(request.canAlways, false)
-  assert.deepEqual(answerFor('always', request)._meta, { persist: 'session' })
-  assert.deepEqual(answerFor('ask', request), { action: 'decline' })
   assert.equal(parseRequest({ message: 'record audio?', _meta: { connector_id: 'computer-use' } }).kind, 'other')
 })
 test('code scanning finds named apps and the used app; entry calls are recognised', () => {

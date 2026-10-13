@@ -28,19 +28,6 @@ export const parseRequest = params => {
 /** The person's answers to an approval question; hooks/model.ts `CHOICES` and `helper/test/contract.mjs` must list the same. */
 export const CHOICES = Object.freeze(['session', 'always', 'deny'])
 
-/** The elicitation result for a decision; only allowing answers accept. */
-export const answerFor = (decision, request) => {
-  switch (decision) {
-    case 'session':
-    case 'auto':
-      return { action: 'accept', content: {}, _meta: { persist: 'session' } }
-    case 'always':
-      return { action: 'accept', content: {}, _meta: { persist: request.canAlways ? 'always' : 'session' } }
-    default:
-      return { action: 'decline' }
-  }
-}
-
 export class Approvals {
   /** `file` keeps the person's "always" apps and the auto-approve switch; session choices stay in memory. */
   constructor(file) {

@@ -1,7 +1,7 @@
 // The helper's core: one persistent Codex session per caller (a Claude session,
 // or one of its subagents as `<session>/<agent>`), calls serialized per caller,
 // app approvals asked of the person through the mod, and one owner per app.
-import { answerFor, parseRequest } from './approvals.mjs'
+import { parseRequest } from './approvals.mjs'
 import { CODEX_APPROVALS, removeCodexApproval } from './codex-approvals.mjs'
 import { namedApps, resolveBundleId, usedApp } from './apps.mjs'
 import { Owners, isUnder } from './owners.mjs'
@@ -26,6 +26,39 @@ export const isEntryCall = code => {
 
   return first !== undefined && ENTRY.test(first)
 }
+
+const DECLINE = () => ({ action: 'decline' })
+const ACCEPT_SESSION = () => ({ action: 'accept', content: {}, _meta: { persist: 'session' } })
+
+/**
+ * What the hub does with each decision of `Approvals#decide`, in one row each:
+ * - `slot`: the `ctx` slot a server question fills, which `#outcome` turns into the reply (`denied`, `needs`);
+ * - `claims`: `#elicit` takes the app for the asking caller;
+ * - `stops`: `#precheck` refuses a call that names the app;
+ * - `claimsOnRun`: `#invoke` takes each named app before the run (so a denied app is claimed too);
+ * - `answer(request)`: what the server is told; only allowing decisions accept.
+ * A new decision kind is a branch of `Approvals#decide` and a row here.
+ */
+const DECISION_EFFECTS = new Map(
+  Object.entries({
+    deny: { slot: 'denied', claims: false, stops: true, claimsOnRun: true, answer: DECLINE },
+    ask: { slot: 'needs', claims: false, stops: false, claimsOnRun: false, answer: DECLINE },
+    session: { slot: undefined, claims: true, stops: false, claimsOnRun: true, answer: ACCEPT_SESSION },
+    auto: { slot: undefined, claims: true, stops: false, claimsOnRun: true, answer: ACCEPT_SESSION },
+    always: {
+      slot: undefined,
+      claims: true,
+      stops: false,
+      claimsOnRun: true,
+      answer: request => ({ action: 'accept', content: {}, _meta: { persist: request.canAlways ? 'always' : 'session' } }),
+    },
+  }).map(([decision, effects]) => [decision, Object.freeze(effects)]),
+)
+/** The decisions that have a row, for the test that ties them to what `Approvals#decide` returns. */
+export const DECISION_KINDS = Object.freeze([...DECISION_EFFECTS.keys()])
+// A decision no row lists claims the app and declines the question, as before the table; failing closed is a separate change.
+const UNLISTED = Object.freeze({ slot: undefined, claims: true, stops: false, claimsOnRun: true, answer: DECLINE })
+const effectsOf = decision => DECISION_EFFECTS.get(decision) ?? UNLISTED
 
 export class Hub {
   /**
@@ -114,8 +147,7 @@ export class Hub {
     }
 
     await session.queue
-    session.client?.close()
-    this.sessions.delete(caller)
+    this.#end(caller, session)
 
     return { status: 'ok', message: 'Codex session reset; the next call must be an entry call.' }
   }
@@ -126,8 +158,7 @@ export class Hub {
 
     for (const [caller, session] of [...this.sessions]) {
       if (isUnder(prefix, caller)) {
-        session.client?.close()
-        this.sessions.delete(caller)
+        this.#end(caller, session)
         ended.push(caller)
       }
     }
@@ -145,9 +176,7 @@ export class Hub {
 
     for (const [caller, session] of [...this.sessions]) {
       if (session.running === 0 && now - session.lastUsed > this.idleMs) {
-        session.client?.close()
-        this.sessions.delete(caller)
-        this.owners.release(caller)
+        this.#evict(caller, session)
       }
     }
   }
@@ -177,6 +206,18 @@ export class Hub {
     }
 
     this.sessions.clear()
+  }
+
+  /** Closes `caller`'s Codex client and forgets its session; its apps and approvals are the caller's business. */
+  #end(caller, session) {
+    session.client?.close()
+    this.sessions.delete(caller)
+  }
+
+  /** Ends `caller`'s session and frees its apps. */
+  #evict(caller, session) {
+    this.#end(caller, session)
+    this.owners.release(caller)
   }
 
   /** Who holds `app` now, or undefined: a lease lapses `leaseMs` after its holder's last call, or with its session. */
@@ -222,9 +263,7 @@ export class Hub {
       return false
     }
 
-    quiet[1].client.close()
-    this.sessions.delete(quiet[0])
-    this.owners.release(quiet[0])
+    this.#evict(quiet[0], quiet[1])
 
     return true
   }
@@ -273,17 +312,17 @@ export class Hub {
       return { action: 'decline' }
     }
 
-    const decision = this.approvals.decide(caller, request.bundleId)
+    const effects = effectsOf(this.approvals.decide(caller, request.bundleId))
 
-    if (decision === 'deny') {
-      ctx.denied = request
-    } else if (decision === 'ask') {
-      ctx.needs = request
-    } else {
+    if (effects.slot !== undefined) {
+      ctx[effects.slot] = request
+    }
+
+    if (effects.claims) {
       this.owners.claim(request.bundleId, caller)
     }
 
-    return answerFor(decision, request)
+    return effects.answer(request)
   }
 
   /** Checks the code and the apps it names before anything runs: a finished reply, or the named apps. */
@@ -310,7 +349,7 @@ export class Hub {
         return { reply: { status: 'busy', app: { bundleId, displayName: name }, ...held } }
       }
 
-      if (this.approvals.decide(caller, bundleId) === 'deny') {
+      if (effectsOf(this.approvals.decide(caller, bundleId)).stops) {
         return { reply: { status: 'denied', app: { bundleId, displayName: name } } }
       }
     }
@@ -339,7 +378,7 @@ export class Hub {
     }
 
     for (const { bundleId } of named) {
-      if (this.approvals.decide(caller, bundleId) !== 'ask') {
+      if (effectsOf(this.approvals.decide(caller, bundleId)).claimsOnRun) {
         this.owners.claim(bundleId, caller)
       }
     }

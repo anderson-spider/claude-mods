@@ -79,6 +79,8 @@ test('hub: auto-approve answers only when switched on; always is persisted for t
   try {
     hub.approvals.setAutoApprove(true)
     assert.equal((await hub.call('s1', { code: 'let a = await cua.getApp("Notepad");' })).status, 'ok')
+    // The server was told to accept, not just left to run: an auto decision the hub does not know would decline.
+    assert.equal(textOf(await hub.call('s1', { code: 'get lastPersist' })), 'session')
     hub.approvals.setAutoApprove(false)
     assert.equal((await hub.call('s2', { code: 'let a = await cua.getApp("Paint");' })).status, 'needs_approval')
     hub.approve('s2', 'com.fake.Paint', 'always')
