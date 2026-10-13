@@ -39,7 +39,8 @@ test('a cycle or a self-dependency draws every step once and never loops', () =>
   const cyclic = shown([step('A', 'queued', ['B']), step('B', 'queued', ['A'])])
   expect(cyclic).toHaveLength(2)
   expect(cyclic.filter(line => line.includes('(cycle)'))).toHaveLength(1)
-  expect(shown([step('S1', 'queued', ['S1'])])).toEqual(['○ S1 main  waits S1'])
+  expect(shown([step('S1', 'queued', ['S1'])])).toEqual(['○ S1 main  waits S1  (cycle)'])
+  expect(shown([step('B1', 'verified'), step('S2', 'queued', ['B1', 'S2'])])).toEqual(['● B1 main  done', '└─ ○ S2 main  waits S2  (cycle)'])
 })
 
 test('siblings and roots keep the order the plan wrote them in', () => {

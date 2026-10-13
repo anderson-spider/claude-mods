@@ -728,13 +728,13 @@ function ensureTicker($: Dollar, state: HudState): void {
   })
 }
 
-async function observeWrite<E extends { file_path?: unknown }, R extends { deny?: string; isError?: boolean }>(
+async function observeWrite<E extends object, R extends { deny?: string; isError?: boolean }>(
   $: Dollar, e: E, next: (input: E) => Promise<R>, display: HudState,
 ): Promise<R> {
   await hud($, async () => { ensureTicker($, display) })
   const answer = await next(e)
   if (answer && typeof answer === 'object' && !('deny' in answer) && !answer.isError) {
-    await hud($, async () => { await display.plans.written(planIo($), e.file_path) })
+    await hud($, async () => { await display.plans.written(planIo($), (e as { file_path?: unknown }).file_path) })
   }
   return answer
 }
@@ -777,8 +777,8 @@ export const register: Register = (on, options) => {
     .catch(() => ({ text: `crew: /${MODE_COMMAND} failed; run it again to see the mode.` }))
   on('command.run', { command: HUD_COMMAND }, async $ => {
     const opened = await $.ui.open({ id: HUD_PANE, title: 'Crew' })
-    return { text: opened.isPlaced ? 'crew: the pane is open.' : 'crew: the pane waits for a wider terminal; the band above the prompt shows the summary.' }
-  }).catch(() => ({ text: `crew: /${HUD_COMMAND} failed; the band above the prompt still shows the summary.` }))
+    return { text: opened.isPlaced ? 'the pane is open.' : 'the pane waits for a wider terminal; the band above the prompt shows the summary.' }
+  }).catch(() => ({ text: `/${HUD_COMMAND} failed; the band above the prompt still shows the summary.` }))
   // Reads the same prepared atoms as the band, never a host: a failure draws nothing and leaves the pane as it was.
   on('ui.render', { component: 'Pane', requestId: HUD_PANE }, async ($, e, next) => {
     try {

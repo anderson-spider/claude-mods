@@ -81,7 +81,7 @@ test('HUD pane draws the plan tree and the agents from the same atoms, and /crew
   expect(await pane.find({ type: 'Text', text: /T1 crew:digger {2}working/ })).toBeDefined()
   expect(await pane.find({ type: 'Text', text: /Agents/ })).toBeDefined()
   await pane.unmount()
-  expect(await $.command.run({ command: 'crew-hud', args: '' } as never)).toEqual({ text: 'crew: the pane is open.' })
+  expect(await $.command.run({ command: 'crew-hud', args: '' } as never)).toEqual({ text: 'the pane is open.' })
 })
 
 test('HUD keeps the prompt sections byte-identical after observation and plan refresh', ON, async ($, on) => {
