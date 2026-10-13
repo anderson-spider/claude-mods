@@ -10,22 +10,22 @@
     {
       "name": "chatgpt",
       "source": "./plugins/chatgpt",
-      "description": "Lets Claude ask your logged-in ChatGPT, or have it generate an image, through terminal-browser, and saves the result locally."
+      "description": "Ask ChatGPT or generate requested images in a logged-in browser; save results locally."
     },
     {
       "name": "codex-computer-use",
       "source": "./plugins/codex-computer-use",
-      "description": "Routes native Mac app control through Codex computer use from the ChatGPT app, with per-app approval, one Codex session per Claude session or subagent, and /codex-cu on|off."
+      "description": "Control native Mac apps through Codex, with per-app approval and /codex-cu on|off."
     },
     {
       "name": "crew",
       "source": "./plugins/crew",
-      "description": "Makes the main session a lead that delegates to five specialist subagents: code-reader and research on Haiku; designer and developer on Sonnet; architect on Opus. The developer runs and reports its tests; the architect independently audits acceptance. With the jevKey option set (a TypeSafe key), Jev sizes only each call's effort, bounded to medium or high; models stay at role defaults or fixed twin ids, and any Jev request or config failure requests medium unless the agent has already sent its first step; that sends a redacted, truncated prompt to api.typesafe.ai. When ANTHROPIC_BASE_URL is a gateway other than Anthropic's API, each role also gets a fixed-model crew:<role>-codex twin. With the codexRemote and codexManagementKey options set, calls may be routed automatically to those twins when Codex has more weekly headroom, with or without Jev; what those subagents read and write goes to OpenAI through the gateway."
+      "description": "Makes the main session a lead that delegates to five specialist subagents: code-reader and research on Haiku; designer and developer on Sonnet; architect on Opus. The developer runs and reports its tests; the architect independently audits acceptance. With the jevKey option set (a TypeSafe key), Jev sizes only each call's effort, bounded to medium or high; models stay at role defaults or fixed twin ids, and any Jev request or config failure requests medium unless the agent has already sent its first step; that sends a redacted, truncated prompt to api.typesafe.ai. When ANTHROPIC_BASE_URL is a gateway other than Anthropic's API, each role also gets a fixed-model crew:<role>-codex twin. With the codexLogin option, crew:code-reader-codex runs on your Codex CLI login with no gateway, its requests sent by crew to chatgpt.com's Codex backend. In the codex crew mode (the mode option, or /crew-mode for one session), a plain crew:<role> call runs on its registered twin; what those subagents read and write goes to OpenAI through the gateway. An always-visible HUD band above the prompt shows plan progress and running agents."
     },
     {
       "name": "tailscale",
       "source": "./plugins/tailscale",
-      "description": "Lets Claude query and modify the tailnet through the Tailscale API, using TS_API_KEY."
+      "description": "Read or change your tailnet through the Tailscale API using TS_API_KEY."
     }
   ]
 }
