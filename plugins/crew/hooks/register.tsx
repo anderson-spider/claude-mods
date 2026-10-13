@@ -25,8 +25,9 @@ import { checkKey, repoDeclares, resolveAccess, resolveLoginHome } from './key'
 import type { KeyIo, LoginOff, Off } from './key'
 import { CODEX_MODELS, CODEX_PREFIX } from './native'
 import { JEV_MODEL } from './questions'
-import { defaultsOf, describe, moved, noticeText, route, routable, taggedDescription, twinFor, untagged } from './routing'
+import { defaultsOf, describe, noticeText, route, routable, twinFor, untagged } from './routing'
 import type { Routed, Switch, Target } from './routing'
+import { appliedEffort, spawnRequest } from './spawn'
 
 /**
  * The `$` a hook receives. Every hook builds what it needs from its own. The HUD ticker, its queued observations and the
@@ -69,16 +70,19 @@ function clockOf($: Dollar): Clock {
   }
 }
 
-/** Jev's host access: the request goes through the host's network, time is the host's clock. */
-function jevIo($: Dollar): JevIo {
+/** The host's HTTP access for the pure modules: wrapped, not passed as a value, since the engine's validate rejects the latter. */
+function httpIo($: Dollar): Pick<JevIo, 'fetch'> {
   return {
-    // Wrapped, not passed as a value: the engine's validate rejects the latter.
     fetch: async (url, init) => {
       const response = await $.http.fetch(url, init)
       return { status: response.status, text: response.text, headers: response.headers }
     },
-    ...clockOf($),
   }
+}
+
+/** Jev's host access: the request goes through the host's network, time is the host's clock. */
+function jevIo($: Dollar): JevIo {
+  return { ...httpIo($), ...clockOf($) }
 }
 
 /** The decision log's host access: one file write and the debug log. */
@@ -491,15 +495,16 @@ async function routeSpawn(routing: Routing, $: Dollar, e: SpawnHook[1], next: (i
   const jevRouted = key ? await askJev($, routing, key, spec, e) : undefined
   // Models stay fixed. Any Jev failure requests medium; a switch without Jev uses medium too.
   const routed = jevRouted ?? defaultsOf(spec)
-  // The gateway routes `cx/<model>-<effort>` to that effort's variant, ahead of the host's output_config.effort, even on the first step.
-  const suffix = spec.base !== undefined && routed ? `${CODEX_PREFIX}${spec.model}-${routed.decision.effort}` : undefined
-  const change = moved(spec, routed)
   // The task shows what was chosen, so the task list says whether routing runs; the book matches the shown description.
-  const description = routed ? taggedDescription(e.description, routed, spec.model) : e.description
+  // A twin's suffix is the gateway's `cx/<model>-<effort>`, ahead of the host's output_config.effort, even on the first step.
+  const { description, suffix, requestedApply, bookEffort } = spawnRequest(spec, routed, {
+    enabled: routing.enabled,
+    jevAnswered: jevRouted !== undefined,
+    description: e.description,
+  })
 
   // Failures explicitly request medium even when it equals the role default. Twins use only the suffix.
-  const requestedApply = change.effort !== undefined || (routing.enabled && !jevRouted)
-  const token = suffix ? undefined : routing.book.add(e.subagentType, description, change.effort ?? spec.effort, e.parentAgentId, requestedApply)
+  const token = suffix ? undefined : routing.book.add(e.subagentType, description, bookEffort, e.parentAgentId, requestedApply)
   let result: Awaited<ReturnType<SpawnHook[2]>>
   try {
     result = await next({ ...e, description, ...(suffix ? { model: suffix } : {}) })
@@ -516,9 +521,7 @@ async function routeSpawn(routing: Routing, $: Dollar, e: SpawnHook[1], next: (i
   if (!result.agentId) return result
 
   // Keep known configuration separate from the request. A first step without a binding leaves effort unknown.
-  const took = outcome === 'suffix' || outcome === 'applied' || outcome === 'matched'
-  const applied = suffix ? routed.decision.effort : routing.book.bound(result.agentId)
-    ?? (took ? routed.decision.effort : requestedApply ? null : spec.effort)
+  const applied = appliedEffort({ suffix: suffix !== undefined, outcome, bound: routing.book.bound(result.agentId), routed, requestedApply, spec })
 
   // The decision log: started before the notice so the write overlaps it, awaited for about a second before
   // returning (it never rejects), so a failing write cannot change the result and a hung one cannot hold it.
@@ -550,6 +553,34 @@ async function routeSpawn(routing: Routing, $: Dollar, e: SpawnHook[1], next: (i
   announce($, { spec, routed, jev: jevRouted !== undefined, ...(via ? { via } : {}) }, applied, requestedApply, outcome, e.tool_use_id)
   await settleDecision($, saved)
   return result
+}
+
+/**
+ * The step as it goes out: a routed subagent's effort from the book, which the first step decides. A twin on the login and
+ * a step with no routing keep the step as the host sent it.
+ */
+async function bindStepEffort($: Dollar, routing: Routing, e: StepHook[1], twin: Agent<string> | undefined): Promise<StepHook[1]> {
+  let effort: Effort | undefined
+  if (!twin && routing.enabled && e.agentId && e.effort !== undefined) {
+    effort = await routing.book.lookup(e.agentId, () => listAgents($)).catch(() => undefined)
+  }
+  return effort && effort !== e.effort ? { ...e, effort } : e
+}
+
+/**
+ * The first step after a routed spawn: what ran goes to the transcript and the decision log. Only a step the API answered
+ * says what ran; one that failed leaves the check for the next. The log write is bounded like the spawn's, so a hung write
+ * cannot hold the subagent's step.
+ */
+async function confirmStep($: Dollar, routing: Routing, agentId: string | undefined, sent: StepHook[1], answer: TurnStepResult, loginEffort: string | undefined): Promise<void> {
+  const pending = agentId && answer.usage ? routing.confirms.take(agentId) : undefined
+  if (!pending || !agentId || !answer.usage) return
+  const ran = { model: answer.usage.model, effort: loginEffort ?? observedEffort(sent, pending.suffix) }
+  $.ui.log(confirmText(pending.description, pending.planned, ran, pending.via, pending.suffix), { to: 'transcript' })
+  // After the spawn's own write, so the record with what ran is the one that stays.
+  // Without a trusted home the spawn already said the record was not written; nothing more is said here.
+  const home = routing.access.home
+  if (home) await settleDecision($, pending.saved.then(() => saveDecision(decisionIo($), home, agentId, withRan(pending.record, ran))))
 }
 
 /** The band's own state. Agent observation and the plan read are kept apart from routing, effort and confirmation. */
@@ -689,11 +720,7 @@ export const register: Register = (on, options) => {
     void hud($, async () => { ensureTicker($, display) })
     // A twin on the Codex login is answered here and never reaches the API; every other step goes on.
     const twin = await twinOnLogin($, native, codex, e.agentId)
-    let effort: Effort | undefined
-    if (!twin && routing.enabled && e.agentId && e.effort !== undefined) {
-      effort = await routing.book.lookup(e.agentId, () => listAgents($)).catch(() => undefined)
-    }
-    const sent = effort && effort !== e.effort ? { ...e, effort } : e
+    const sent = await bindStepEffort($, routing, e, twin)
     // The spawn's `-<effort>` suffix decides, else the host's effort, else the twin's default; it is what goes out.
     const loginEffort = twin ? codexEffort(observedEffort(sent, true), codexEffort(twin.effort, 'medium')) : undefined
     // The band's own record of this step: synchronous, never throws, and reads what is sent without changing it.
@@ -701,19 +728,8 @@ export const register: Register = (on, options) => {
     let answer: TurnStepResult
     if (twin && loginEffort) answer = yield* stepOnLogin($, codex, twin, sent, loginEffort, next.signal)
     else answer = yield* next(sent)
-    // Only a step the API answered says what ran; one that failed leaves the check for the next.
-    const pending = e.agentId && answer.usage ? routing.confirms.take(e.agentId) : undefined
     display.agents.answered(agentIo($), e.agentId, noted, answer)
-    if (pending && e.agentId && answer.usage) {
-      const ran = { model: answer.usage.model, effort: loginEffort ?? observedEffort(sent, pending.suffix) }
-      $.ui.log(confirmText(pending.description, pending.planned, ran, pending.via, pending.suffix), { to: 'transcript' })
-      // After the spawn's own write, so the record with what ran is the one that stays; bounded like the spawn's, so
-      // a hung write cannot hold the subagent's step.
-      // Without a trusted home the spawn already said the record was not written; nothing more is said here.
-      const id = e.agentId
-      const home = routing.access.home
-      if (home) await settleDecision($, pending.saved.then(() => saveDecision(decisionIo($), home, id, withRan(pending.record, ran))))
-    }
+    await confirmStep($, routing, e.agentId, sent, answer, loginEffort)
     return answer
   })
 

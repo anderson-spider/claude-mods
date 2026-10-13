@@ -18,6 +18,7 @@
 // agents, the engine's forks) never enter `stepped` or `byAgent`.
 
 import type { Effort } from './agents'
+import { keepLatest, keepLatestIn } from './bounded'
 
 export type Listed = { id: string; type: string; description: string; parentId?: string }
 type Pending = { token: number; type: string; description: string; effort: Effort; parent?: string; apply: boolean; matchedBy?: string }
@@ -40,16 +41,8 @@ export function createEffortBook() {
   /** Ids that stepped while no list named them; kept only while an entry is pending, because the spawn may name them. */
   const unlisted = new Set<string>()
 
-  const remember = (id: string, effort: Effort) => {
-    byAgent.delete(id)
-    byAgent.set(id, effort)
-    while (byAgent.size > CAP) byAgent.delete(byAgent.keys().next().value as string)
-  }
-  const markStepped = (id: string) => {
-    stepped.delete(id)
-    stepped.add(id)
-    while (stepped.size > STEPPED_CAP) stepped.delete(stepped.values().next().value as string)
-  }
+  const remember = (id: string, effort: Effort) => keepLatest(byAgent, id, effort, CAP)
+  const markStepped = (id: string) => keepLatestIn(stepped, id, STEPPED_CAP)
 
   const settle = () => {
     if (pending.length === 0) unlisted.clear()
@@ -126,8 +119,7 @@ export function createEffortBook() {
       if (pending.length === 0) return undefined
       // From here an entry is pending and this id's first step goes out on its default: it stays there.
       const skip = () => {
-        unlisted.add(agentId)
-        while (unlisted.size > UNLISTED_CAP) unlisted.delete(unlisted.values().next().value as string)
+        keepLatestIn(unlisted, agentId, UNLISTED_CAP)
         return undefined
       }
       if (!pending.some(p => p.matchedBy === undefined)) return skip()
