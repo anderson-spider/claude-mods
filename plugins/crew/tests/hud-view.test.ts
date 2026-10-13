@@ -4,7 +4,8 @@ import { parsePlan } from '../hooks/hud/plan'
 
 const now = Date.parse('2026-10-12T12:00:00Z')
 // A snapshot with nothing in it; a test names only what it exercises, so a new field never touches the others.
-const band = (changes: Partial<Snapshot> = {}) => bandRows({ plans: [], agents: [], now, columns: 60, ...changes })
+const EMPTY: Snapshot = { plans: [], agents: [], now, columns: 60 }
+const band = (changes: Partial<Snapshot> = {}) => bandRows({ ...EMPTY, ...changes })
 const text = (rows: ReturnType<typeof bandRows>) => rows.rows.map(row => row.map(s => s.text).join('')).join('\n')
 const plan: PlanProjection = {
   name: 'crew-hud', groups: [{ heading: 'PR 1 - HUD band', done: 2, running: 2, left: 3,
@@ -393,7 +394,7 @@ test('a mixed snapshot yields these exact rows, styles and wrapping at every wid
 })
 
 test('the view reads the snapshot and leaves it as it was', () => {
-  const snapshot = { plans: mixedPlans, agents: mixedAgents, now, columns: 60 }
+  const snapshot: Snapshot = { ...EMPTY, plans: mixedPlans, agents: mixedAgents }
   const before = JSON.stringify(snapshot)
   expect(lines(bandRows(snapshot))).toEqual(GOLDEN['mixed@60']!)
   expect(JSON.stringify(snapshot)).toBe(before)

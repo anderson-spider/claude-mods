@@ -7,7 +7,6 @@ import {
 } from './host'
 import type { Reply, Seen } from './host'
 import { fnv1a } from '../hooks/decisions'
-import { missingPlan } from '../hooks/register'
 import { CODEX_MODELS, CODEX_PREFIX } from '../hooks/native'
 
 const agents = [
@@ -2524,6 +2523,82 @@ test('HUD initializes a nonzero clock at session start and again after session r
   await clock.settle()
 })
 
+test('HUD session end forgets which agents ended, so the same ID spawned in the next session shows running', OFF, async ($, on) => {
+  mock.clock(on)
+  on('agent.spawn', () => ({ agentId: 'a1', model: 'sonnet' }))
+  on('turn.complete', () => ({ text: 'done' }))
+  on('session.end', (_$, e) => ({ sessionId: e.sessionId }))
+  const values = hudCapture(on)
+  await $.agent.spawn(spawnInput())
+  await pause()
+  await $.turn.complete({ agentId: 'a1', answer: '', reason: 'answer', turnId: 't1', durationMs: 1, isAborted: false } as never)
+  expect(values.agents).toMatchObject([{ id: 'a1', status: 'ended' }])
+  await $.session.end({ reason: 'exit', sessionId: 'test-session' } as never)
+  await $.agent.spawn(spawnInput({ tool_use_id: 'tu2' }))
+  await pause()
+  expect(values.agents).toMatchObject([{ id: 'a1', status: 'running' }])
+})
+
+test('HUD a clock reading that arrives after session end is not written', OFF, async ($, on) => {
+  let release: () => void = () => {}
+  const held = new Promise<void>(resolve => { release = resolve })
+  const clock = mock.clock(((name: string, ...rest: unknown[]) => (name === 'clock.now'
+    ? undefined : (on as (...a: unknown[]) => unknown)(name, ...rest))) as On)
+  on('clock.now', async () => { await held; return { value: 1_800_000_000_000 } })
+  on('session.cwd', () => ({ value: ROOT }))
+  on('fs.stat', (_$, e) => ({ value: hudStat(e.path) }) as never)
+  on('fs.exists', (_$, e) => ({ value: hudExists(e.path) }) as never)
+  on('fs.list', () => ({ value: [] }))
+  on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  on('agent.register', (_$, e) => ({ value: { agent: `crew:${e.name}` } }))
+  on('session.end', (_$, e) => ({ sessionId: e.sessionId }))
+  const values = hudCapture(on)
+  await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true } as never)
+  await flush()
+  await $.session.end({ reason: 'exit', sessionId: 'test-session' } as never)
+  release()
+  await flush()
+  expect(values.now).toBeUndefined()
+  await clock.settle()
+})
+
+test('HUD asks the host for the real destination of every path it stats', OFF, async ($, on) => {
+  const asked: boolean[] = []
+  mock.clock(on)
+  on('session.cwd', () => ({ value: ROOT }))
+  on('fs.stat', (_$, e) => (asked.push(e.resolve), { value: hudStat(e.path, { [`${ROOT}/.crew/plans/live.md`]: hudText }) }) as never)
+  on('fs.exists', (_$, e) => ({ value: hudExists(e.path, { [`${ROOT}/.crew/plans/live.md`]: hudText }) }) as never)
+  on('fs.list', () => ({ value: [{ name: 'live.md', kind: 'file', isLink: false }] }) as never)
+  on('fs.read', () => ({ value: hudText }))
+  on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  on('agent.register', (_$, e) => ({ value: { agent: `crew:${e.name}` } }))
+  const values = hudCapture(on)
+  await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true } as never)
+  await flush()
+  expect(asked.length).toBeGreaterThan(0)
+  expect(asked.every(resolve => resolve)).toBe(true)
+  expect(values.plans).toMatchObject([{ name: 'live' }])
+})
+
+test('HUD redacts a plan name with the home taken from the session directory', OFF, async ($, on) => {
+  const cwd = '/Users/jane/app'
+  const file = `${cwd}/.crew/plans/jane.md`
+  mock.clock(on)
+  on('session.cwd', () => ({ value: cwd }))
+  on('fs.stat', (_$, e) => ({ value: e.path === file ? { kind: 'file', isLink: false, realPath: file, size: 1, mtimeMs: 0 }
+    : { kind: 'dir', isLink: false, realPath: e.path, size: 0, mtimeMs: 0 } }) as never)
+  on('fs.exists', () => ({ value: true }))
+  on('fs.list', () => ({ value: [{ name: 'jane.md', kind: 'file', isLink: false }] }) as never)
+  on('fs.read', () => ({ value: hudText }))
+  on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  on('agent.register', (_$, e) => ({ value: { agent: `crew:${e.name}` } }))
+  const values = hudCapture(on)
+  await $.session.start({ cwd, surface: 'terminal', isInteractive: true } as never)
+  await flush()
+  expect(JSON.stringify(values.plans)).toContain('Delivery')
+  expect(JSON.stringify(values.plans)).not.toContain('jane')
+})
+
 test('HUD held agent state and clock never delay routing bind, decision or confirmation', ON, async ($, on) => {
   let release: () => void = () => {}
   const held = new Promise<void>(resolve => { release = resolve })
@@ -2646,10 +2721,6 @@ test('HUD recovers unchanged plan bytes after directory and context failures', O
 })
 
 test('HUD proves a plan gone by its code or by exists, never by ENOENT appearing in a message or filename', OFF, async ($, on) => {
-  expect(missingPlan(fsFailure('ENOENT', 'missing'))).toBe(true)
-  expect(missingPlan(fsFailure('ENOTDIR', 'not a directory'))).toBe(true)
-  expect(missingPlan(fsFailure('EACCES', 'permission denied for ENOENT.md'))).toBe(false)
-  expect(missingPlan(new Error('ENOENT: filename contains ENOENT.md'))).toBe(false)
   let failure: string | undefined
   mock.clock(on)
   on('session.cwd', () => ({ value: ROOT }))
