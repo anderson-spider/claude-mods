@@ -1,5 +1,5 @@
 import { test, expect } from 'claude-code/testing'
-import { buildInit, buildUrl, call, checkedPath, forbidden, format, transform } from '../hooks/api'
+import { buildInit, buildUrl, call, forbidden, format, transform } from '../hooks/api'
 import { ACCEPTED, ALLOWED_DELETES, REJECTED, REJECTED_GROUPS, TAILNET_DELETES, invalidPathText, urlOf } from './paths'
 
 type Seen = { url: string; init: { method: string; headers: Record<string, string>; body?: string } }
@@ -212,18 +212,16 @@ test('format keeps the ETag line, the error flag and truncates long text', () =>
 })
 
 for (const [group, paths] of Object.entries(REJECTED_GROUPS)) {
-  test(`buildUrl and checkedPath refuse ${group}`, () => {
+  test(`buildUrl refuses ${group}`, () => {
     for (const path of paths) {
       expect(buildUrl(path), JSON.stringify(path)).toBeUndefined()
-      expect(checkedPath(path), JSON.stringify(path)).toBeUndefined()
     }
   })
 }
 
-test('buildUrl maps every accepted path to the API base plus the path, and checkedPath returns it as is', () => {
+test('buildUrl maps every accepted path to the API base plus the path', () => {
   for (const path of ACCEPTED) {
     expect(buildUrl(path), path).toBe(urlOf(path))
-    expect(checkedPath(path), path).toBe(path)
   }
 })
 

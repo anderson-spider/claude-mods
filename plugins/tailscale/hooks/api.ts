@@ -122,11 +122,6 @@ export function transform(text: string, opts: { redact?: boolean; fields?: reado
   }
 }
 
-/** Returns the path when `buildUrl` accepts it. */
-export function checkedPath(path: unknown): string | undefined {
-  return typeof path === 'string' && buildUrl(path) !== undefined ? path : undefined
-}
-
 /** Method, headers (auth, If-Match, content type) and body of the request. */
 export function buildInit(
   req: Request,
@@ -165,12 +160,12 @@ export async function call(
   req: Request,
 ): Promise<{ text: string; isError: boolean }> {
   if (!key) return { text: 'TS_API_KEY is not set in the Claude Code environment.', isError: true }
-  const path = checkedPath(req.path)
-  const url = buildUrl(path)
-  if (path === undefined || url === undefined) {
+  // the one path validation: `buildUrl` returns BASE + path, so the checked path is what follows BASE
+  const url = buildUrl(req.path)
+  if (url === undefined) {
     return { text: `Invalid path: ${String(req.path)}. Use something like /tailnet/-/devices.`, isError: true }
   }
-  const blocked = forbidden(req.method, path)
+  const blocked = forbidden(req.method, url.slice(BASE.length))
   if (blocked) return { text: blocked, isError: true }
 
   try {
