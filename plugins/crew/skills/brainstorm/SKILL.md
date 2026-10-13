@@ -1,19 +1,33 @@
 ---
 name: brainstorm
-description: Plan multi-file changes, compare approaches or protect contracts before implementation. Use for planning, brainstorming or choosing a feature, refactor or fix approach; the main session plans and implements, calling the planner, challenger or digger helpers only when they add value.
+description: Plan multi-file changes, fixes or contract changes before implementation: routes the request, compares approaches and protects invariants. Use for planning, brainstorming or choosing a feature, refactor or fix approach; the main session plans and implements, calling the planner, challenger or digger helpers only when they add value.
 ---
 
 # Brainstorm
 
-Deliver a user-approved plan before implementing. The main session does every step itself; a helper is a tool it may use, never a required stage. For a one-line change, a rename, a typo or a known-answer question, skip the plan and do it.
+Deliver a user-approved plan before implementing. The main session does every step itself; a helper is a tool it may use, never a required stage.
+
+## Route
+
+Classify the request first and ask only what would change the route. Take one route; combine two only when the request needs both. The route sets how deep the plan goes, never who does the work.
+
+| Route | When | Do |
+| --- | --- | --- |
+| question | asks how or why; no change wanted | answer; no plan |
+| small | one-line change, rename, typo, known fix | do it; no plan |
+| fix | a bug or a failing test | plan below, with `references/fix.md` |
+| change | a feature or refactor over several files | plan below, with `references/change.md` |
+| contract | touches auth, a schema, an API or wire shape, a guard, a pinned text or another invariant | the change route plus `references/contract.md` |
+
+Read a route's reference only when the route is taken. State the route and its reason in one line before the plan.
 
 ## Plan
 
 0. **Ignore output.** Plans live under `.crew/plans/` at the repository root. Create the folder, then run `git check-ignore -q .crew/`. Exit 1: append `.crew/` to the root `.gitignore` (create it if missing), once, and tell the user. Exit 0: nothing more. Exit 128 (outside git): the folder alone, no `.gitignore`.
 1. **Frame.** State the goal, constraints and acceptance criteria. Collect blocking questions in one `AskUserQuestion`; state conventional defaults for the rest.
 2. **Investigate.** Read what you need yourself. When a question is independent and costly to answer inline (another module, git history, external docs), ask `crew:digger`; send several diggers in one message only for independent questions. Spot-check a claim before a step rests on it.
-3. **Compare.** Present two or three options with costs and risks. For complex or ambiguous work, `crew:planner` may draft the plan; for a decision with real risk, `crew:challenger` may question it once. Skip both when the answer is clear.
-4. **Write the plan** to `.crew/plans/<name>.md`: context, chosen approach, files, existing code to reuse, verification and steps. Inside `## Steps`, group steps under `### <deliverable>` headings, one per PR (the HUD shows each heading as a deliverable). Use one line per step:
+3. **Compare.** Present two or three options with costs and risks. For complex or ambiguous work, `crew:planner` may draft the plan; it returns steps already in the line format of step 4, which you check against the code before using. For a decision with real risk, `crew:challenger` may question it once. Skip both when the answer is clear.
+4. **Write the plan** to `.crew/plans/<name>.md`: context, chosen approach, files, existing code to reuse, verification (what each check proves and what it cannot, such as live behavior) and steps. Mark every assumption you could not confirm. Inside `## Steps`, group steps under `### <deliverable>` headings, one per PR (the HUD shows each heading as a deliverable). Use one line per step:
 
    `- <ID> (<owner>, after: <ids or —>) <action and files> — state: <state>[ (<note>)]`
 

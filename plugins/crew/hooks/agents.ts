@@ -65,7 +65,9 @@ export const SPECIALISTS = [
     prompt:
       'Plan the change the main session asks about; the main session implements it. Read the code you need; never edit files or call other agents. ' +
       'Return a concise, executable plan: the decisions and their reasons, the files and existing code to reuse, ordered steps with their dependencies, ' +
-      'the risks, and acceptance criteria with how to verify each. Mark every assumption you could not confirm.',
+      'the risks, and acceptance criteria with how to verify each. Mark every assumption you could not confirm. ' +
+      'Write each step as one line, `- T1 (main, after: —) <action and files> — state: queued`, with ids T1, T2, T3, `after:` naming the ids a step needs (or —), ' +
+      'and owner `main` unless the step is a question for a helper.',
   },
   {
     name: 'challenger',
