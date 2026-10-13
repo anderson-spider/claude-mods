@@ -89,6 +89,7 @@ test('a completed turn is its text, with the files it changed and what the sandb
     "all done\n\n(crew: files changed: /repo/a.ts; 2 actions were refused outside this role's lane)",
   )
   expect(answerText(done({ declined: 1 }))).toContain('1 action was refused')
+  expect(answerText(done({ files: [{ status: 'completed', paths: ['/repo/a.ts'] }, { status: 'completed', paths: ['/repo/a.ts'] }] }))).toBe('all done\n\n(crew: files changed: /repo/a.ts)')
 })
 
 test('a turn starts with the request, polls until it ends and answers its text', async () => {

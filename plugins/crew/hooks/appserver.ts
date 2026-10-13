@@ -105,7 +105,7 @@ export type Outcome = { kind: 'text'; text: string } | { kind: 'failed'; reason:
 export function answerText(done: Finished): string {
   const text = done.text.trim() === '' ? 'The Codex turn ended without a message.' : done.text
   const notes: string[] = []
-  const changed = done.files.filter(file => file.status === 'completed').flatMap(file => file.paths)
+  const changed = [...new Set(done.files.filter(file => file.status === 'completed').flatMap(file => file.paths))]
   if (changed.length > 0) notes.push(`files changed: ${changed.join(', ')}`)
   if (done.declined > 0) notes.push(`${done.declined} action${done.declined === 1 ? ' was' : 's were'} refused outside this role's lane`)
   return notes.length === 0 ? text : `${text}\n\n(crew: ${notes.join('; ')})`
