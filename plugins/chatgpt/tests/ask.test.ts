@@ -182,7 +182,8 @@ test('ask with saveOnly waits for a streaming answer and saves it without sendin
     markdown: 'the long answer',
   })
   const chatUrl = 'https://chatgpt.com/c/abc-1'
-  const result = await ask(browser, { prompt: 'x', chatUrl, saveOnly: true }, { pollMs: 0 })
+  // A short limit: a run that never settles (a mutated `before`) times out and fails the assertion, instead of hanging.
+  const result = await ask(browser, { prompt: 'x', chatUrl, saveOnly: true }, { pollMs: 0, timeoutMs: 1000 })
 
   expect(result).toEqual({ ok: true, url: 'https://chatgpt.com/c/abc', markdown: 'the long answer' })
   expect(calls.some(call => call.startsWith('send'))).toBe(false)

@@ -1,33 +1,19 @@
-import type { AskInput, AskOptions, Browser, Image, ImageResult, PageState } from './model'
-import { LOAD_MS, prepare } from './tab'
-import { compose, readAnswer, send, stopped, unfinished, watch } from './conversation'
+import type { AskInput, AskOptions, Browser, Image, ImageResult } from './model'
+import { LOAD_MS } from './tab'
+import { openRun, readAnswer, stopped, submit, unfinished, watch, type OpenRun } from './conversation'
 import { GENERATED, imageChunkScript, imageScript, parseOutput } from './scripts'
 
-// One image run in a prepared tab: `start` is the page as prepare left it.
-type ImageRun = {
-  browser: Browser
-  tabId: string
-  start: PageState
-  pollMs: number
-  timeoutMs: number
-  progress: (text: string) => void
-}
+// The image flow's noun for the saveOnly guard, and its poll interval.
+const IMAGE = { noun: 'image', pollMs: 5000 }
 
 export async function generateImage(browser: Browser, input: AskInput, options: AskOptions = {}): Promise<ImageResult> {
-  const timeoutMs = options.timeoutMs ?? 6 * 60_000
-  const pollMs = options.pollMs ?? 5000
-  const progress = options.progress ?? (() => {})
-  const tab = options.tab ?? {}
-
-  if (input.saveOnly && input.chatUrl === undefined) return { ok: false, error: 'saveOnly needs the chatUrl of the chat with the image.' }
-  const ready = await prepare(browser, input, { progress, tab, busy: input.saveOnly, backends: options.backends ?? [] })
-  if (!ready.ok) return ready
-  const run = { browser, tabId: ready.tabId, start: ready.page, pollMs, timeoutMs, progress }
+  const run = await openRun(browser, input, options, IMAGE)
+  if (!run.ok) return run
   return input.saveOnly ? saveLastImage(run) : generateNew(run, input)
 }
 
 // Saving what the chat holds: wait while it still generates, then take the last image.
-async function saveLastImage({ browser, tabId, start, pollMs, timeoutMs, progress }: ImageRun): Promise<ImageResult> {
+async function saveLastImage({ browser, tabId, start, pollMs, timeoutMs, progress }: OpenRun): Promise<ImageResult> {
   const { end, page: state } = await watch(browser, tabId, start, {
     before: start.count,
     pollMs,
@@ -42,12 +28,10 @@ async function saveLastImage({ browser, tabId, start, pollMs, timeoutMs, progres
 }
 
 // Sends the prompt and waits for the new images, or for the text ChatGPT answers instead.
-async function generateNew({ browser, tabId, start, pollMs, timeoutMs, progress }: ImageRun, input: AskInput): Promise<ImageResult> {
-  const failed = await compose(browser, tabId, input, progress)
-  if (failed) return { ok: false, url: start.href, error: failed }
-
-  const sent = await send(browser, tabId, input.prompt)
-  if (!sent.ok) return { ok: false, url: start.href, error: sent.text }
+async function generateNew(run: OpenRun, input: AskInput): Promise<ImageResult> {
+  const { browser, tabId, start, pollMs, timeoutMs, progress } = run
+  const failed = await submit(run, input)
+  if (failed) return failed
 
   progress('waiting for the image')
   const { end, page: state } = await watch(browser, tabId, start, {

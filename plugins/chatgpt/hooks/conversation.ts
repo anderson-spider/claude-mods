@@ -1,10 +1,49 @@
-import type { AskInput, Browser, PageState } from './model'
-import { blocked, isChatUrl } from './tab'
+import type { AskInput, AskOptions, Browser, PageState } from './model'
+import { blocked, isChatUrl, prepare } from './tab'
 import { chipScript, inputFor, modelScript, parseOutput, READ_SCRIPT, sendScript, stateScript } from './scripts'
 
 /** A blocker that ends a run at once (a limit, a verification), not just any dialog. */
 export function isHardBlocker(text: string): boolean {
   return /limit|limite|cap\b|captcha|verif|unusual activity|atividade incomum|try again|tente novamente|too many|muitas/i.test(text)
+}
+
+/** A prepared run: the plugin's tab, the page as prepare left it, and the run's limits. */
+export type OpenRun = {
+  ok: true
+  browser: Browser
+  tabId: string
+  start: PageState
+  pollMs: number
+  timeoutMs: number
+  progress: (text: string) => void
+}
+
+/**
+ * The prologue every flow shares: the saveOnly guard, then the plugin's tab at the chat (see `prepare`).
+ * `flow` gives the noun the guard names and the flow's default poll interval.
+ */
+export async function openRun(
+  browser: Browser,
+  input: AskInput,
+  options: AskOptions,
+  flow: { noun: string; pollMs: number },
+): Promise<OpenRun | { ok: false; error: string; url?: string }> {
+  const timeoutMs = options.timeoutMs ?? 6 * 60_000
+  const pollMs = options.pollMs ?? flow.pollMs
+  const progress = options.progress ?? (() => {})
+  if (input.saveOnly && input.chatUrl === undefined) return { ok: false, error: `saveOnly needs the chatUrl of the chat with the ${flow.noun}.` }
+  const ready = await prepare(browser, input, { progress, tab: options.tab ?? {}, busy: input.saveOnly, backends: options.backends ?? [] })
+  if (!ready.ok) return ready
+  return { ok: true, browser, tabId: ready.tabId, start: ready.page, pollMs, timeoutMs, progress }
+}
+
+/** Picks the model, attaches the files and sends the prompt of a run; the failure as the run's answer, or undefined once sent. */
+export async function submit(run: OpenRun, input: AskInput): Promise<{ ok: false; url: string; error: string } | undefined> {
+  const failed = await compose(run.browser, run.tabId, input, run.progress)
+  if (failed) return { ok: false, url: run.start.href, error: failed }
+  const sent = await send(run.browser, run.tabId, input.prompt)
+  if (!sent.ok) return { ok: false, url: run.start.href, error: sent.text }
+  return undefined
 }
 
 // Picks the model and attaches the files, in that order; an error string stops the run.

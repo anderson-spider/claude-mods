@@ -1,0 +1,488 @@
+import { expect, test } from 'claude-code/testing'
+import type { Browser, Outcome, Request, RequestDeps } from '../hooks/model'
+import { createJobs, performRequest, runNow, taskQueue } from '../hooks/runner'
+import { askCommandAnswer, imageCommandAnswer, NOTICE } from '../hooks/presentation'
+import { inputFor, sendScript, stateScript } from '../hooks/scripts'
+import { fakeBrowser, fakeImageBrowser, printed } from './fake-page'
+
+// Characterization of the ask and image flows end to end, through the runner: run start, submit, waiting,
+// saved files, errors, job records and every text the user or the model reads. The expectations are what the
+// code does today; a refactor keeps them byte for byte.
+
+const REFERENCE = { name: 'ref.png', type: 'image/png', path: '/x/ref.png' }
+
+/** The host side of a request: the browser, the attachment checks, and the files and processes the save writes. */
+function harness(browser: Browser, options: { previews?: boolean } = {}) {
+  const writes: { path: string; text: string }[] = []
+  const runs: string[][] = []
+  const deps: RequestDeps = {
+    browser: async () => browser,
+    attachments: { stat: async () => ({ size: 12 }) },
+    output: {
+      run: async argv => {
+        runs.push(argv)
+        // sips makes the preview; without it the image is saved with the file note only.
+        return { exitCode: argv[0] === 'sips' && !options.previews ? 1 : 0, stdout: '', stderr: '' }
+      },
+      files: {
+        write: async (path, text) => {
+          writes.push({ path, text })
+        },
+        readBytes: async () => ({ base64: 'UFJFVklFVw==' }),
+      },
+      tmpDir: async () => '/tmp/t/',
+    },
+  }
+  return { deps, writes, runs }
+}
+
+const ASK_SETTLED = [{ count: 0 }, { count: 1, length: 5 }, { count: 1, length: 5 }]
+
+test('an ask run starts in the plugin tab, sends, waits for the settled answer and saves it at out', async () => {
+  const { browser, calls } = fakeBrowser({
+    tabs: ['seed'],
+    pages: [
+      { count: 2 },
+      { count: 2, stop: true },
+      { count: 3, stop: true, length: 10 },
+      { count: 3, stop: false, length: 40 },
+      { count: 3, stop: false, length: 40 },
+    ],
+    markdown: '## Answer',
+  })
+  const h = harness(browser)
+  const progress: string[] = []
+  const outcome = await performRequest(h.deps, { kind: 'ask', input: { prompt: 'hi' }, filePaths: [], out: '/out/answer.md' }, {
+    pollMs: 0,
+    timeoutMs: 60_000,
+    tab: { id: 'seed' },
+    progress: text => progress.push(text),
+  })
+
+  expect(calls).toEqual(['tabs', 'navigate seed https://chatgpt.com/', 'send seed', 'read seed'])
+  expect(progress).toEqual(['opening chatgpt.com', 'waiting for the answer', 'waiting for the answer', 'receiving (10 chars)', 'receiving (40 chars)'])
+  expect(h.writes).toEqual([{ path: '/out/answer.md', text: '<!-- https://chatgpt.com/c/abc -->\n\n## Answer\n' }])
+  expect(h.runs).toEqual([])
+  expect(outcome).toEqual({
+    ok: true,
+    text: "ChatGPT's answer (unverified; check facts before using them) saved to /out/answer.md\nChat: https://chatgpt.com/c/abc\n\n## Answer",
+    chatUrl: 'https://chatgpt.com/c/abc',
+    paths: ['/out/answer.md'],
+    markdown: '## Answer',
+  })
+})
+
+test('an ask without out saves under TMPDIR/chatgpt with a timestamp and a slug of the prompt', async () => {
+  const { browser } = fakeBrowser({ tabs: ['seed'], pages: ASK_SETTLED, markdown: 'a' })
+  const h = harness(browser)
+  const outcome = await performRequest(h.deps, { kind: 'ask', input: { prompt: 'Explain: the tradeoffs?' }, filePaths: [] }, { pollMs: 0, tab: { id: 'seed' } })
+
+  expect(h.writes.length).toBe(1)
+  expect(h.writes[0]!.path).toMatch(/^\/tmp\/t\/chatgpt\/\d{8}-\d{6}-explain-the-tradeoffs\.md$/)
+  expect(outcome).toMatchObject({ ok: true, paths: [h.writes[0]!.path] })
+})
+
+test('an ask with saveOnly saves the chat\'s last answer, sends nothing and says the chat it came from', async () => {
+  const { browser, calls } = fakeBrowser({
+    tabs: [],
+    pages: [{ count: 4, stop: true, length: 10 }, { count: 4, stop: true, length: 30 }, { count: 4, length: 50 }, { count: 4, length: 50 }],
+    markdown: 'the long answer',
+  })
+  const h = harness(browser)
+  const progress: string[] = []
+  // A short limit: if the run never settles (a mutated `before`), it times out and the assertions below fail, instead of hanging.
+  const outcome = await performRequest(h.deps, { kind: 'ask', input: { prompt: 'x', chatUrl: 'https://chatgpt.com/c/abc-1', saveOnly: true }, filePaths: [], out: '/out/saved.md' }, {
+    pollMs: 0,
+    timeoutMs: 1000,
+    progress: text => progress.push(text),
+  })
+
+  expect(calls).toEqual(['open https://chatgpt.com/c/abc-1', 'read t2'])
+  expect(progress).toEqual(['opening chatgpt.com', 'waiting for the answer', 'receiving (30 chars)', 'receiving (50 chars)'])
+  expect(h.writes).toEqual([{ path: '/out/saved.md', text: '<!-- https://chatgpt.com/c/abc -->\n\nthe long answer\n' }])
+  expect(outcome).toMatchObject({ ok: true, chatUrl: 'https://chatgpt.com/c/abc', text: expect.stringContaining('saved to /out/saved.md\nChat: https://chatgpt.com/c/abc') })
+})
+
+test('an ask whose answer is empty says the page layout changed and saves nothing', async () => {
+  const { browser } = fakeBrowser({ tabs: ['seed'], pages: ASK_SETTLED, markdown: '' })
+  const h = harness(browser)
+  const outcome = await performRequest(h.deps, { kind: 'ask', input: { prompt: 'hi' }, filePaths: [] }, { pollMs: 0, tab: { id: 'seed' } })
+
+  expect(h.writes).toEqual([])
+  expect(outcome).toEqual({
+    ok: false,
+    text: 'The answer was empty or the page layout changed.',
+    error: 'The answer was empty or the page layout changed.',
+    chatUrl: 'https://chatgpt.com/c/abc',
+  })
+})
+
+test('an ask refused by a limit answers the stop text with its url and saves nothing', async () => {
+  const { browser } = fakeBrowser({
+    tabs: [],
+    pages: [{ count: 0 }, { count: 0, blocker: "You've reached your message limit" }],
+    markdown: '',
+  })
+  const h = harness(browser)
+  const outcome = await performRequest(h.deps, { kind: 'ask', input: { prompt: 'hi' }, filePaths: [] }, { pollMs: 0 })
+
+  expect(h.writes).toEqual([])
+  expect(outcome).toEqual({
+    ok: false,
+    text: 'ChatGPT stopped: "You\'ve reached your message limit".',
+    error: 'ChatGPT stopped: "You\'ve reached your message limit".',
+    chatUrl: 'https://chatgpt.com/',
+  })
+})
+
+test('an ask that times out keeps the streamed part in a file and says the chat may still finish', async () => {
+  const { browser } = fakeBrowser({ tabs: [], pages: [{ count: 0 }, { count: 1, stop: true, length: 3 }], markdown: 'par' })
+  const h = harness(browser)
+  const outcome = await performRequest(h.deps, { kind: 'ask', input: { prompt: 'hi' }, filePaths: [], out: '/out/partial.md' }, { pollMs: 0, timeoutMs: -1 })
+
+  expect(h.writes).toEqual([{ path: '/out/partial.md', text: '<!-- https://chatgpt.com/c/abc -->\n\npar\n' }])
+  expect(outcome).toEqual({
+    ok: false,
+    text: 'No complete answer after 0 s; it may still be streaming at https://chatgpt.com/c/abc.\nPartial answer saved to /out/partial.md.',
+    error: 'No complete answer after 0 s; it may still be streaming at https://chatgpt.com/c/abc.',
+    chatUrl: 'https://chatgpt.com/c/abc',
+    paths: ['/out/partial.md'],
+    timedOut: true,
+  })
+})
+
+test('an ask whose prompt the page refuses answers the send text, with the page url and no file', async () => {
+  const { browser } = fakeBrowser({ tabs: ['seed'], pages: [{}], markdown: '', sent: false })
+  const h = harness(browser)
+  const outcome = await performRequest(h.deps, { kind: 'ask', input: { prompt: 'hi' }, filePaths: [] }, { pollMs: 0, tab: { id: 'seed' } })
+
+  expect(h.writes).toEqual([])
+  expect(outcome).toEqual({
+    ok: false,
+    text: 'Could not send the prompt: send button not found.',
+    error: 'Could not send the prompt: send button not found.',
+    chatUrl: 'https://chatgpt.com/',
+  })
+})
+
+test('an ask on a logged-out page answers the not-ready text that names the browsers, and sends nothing', async () => {
+  const { browser, calls } = fakeBrowser({ tabs: ['seed'], pages: [{ composer: false, login: true }], markdown: '' })
+  const h = harness(browser)
+  const outcome = await performRequest(h.deps, { kind: 'ask', input: { prompt: 'hi' }, filePaths: [] }, { pollMs: 0, tab: { id: 'seed' }, backends: ['one', 'two'] })
+
+  expect(calls.some(call => call.startsWith('send'))).toBe(false)
+  expect(h.writes).toEqual([])
+  expect(outcome).toEqual({
+    ok: false,
+    text:
+      'ChatGPT is not ready in the browser (at https://chatgpt.com/). Ask the user to log in to chatgpt.com in the browser the plugin uses (one or two), ' +
+      'or to clear what the page shows, and try again; never type credentials.',
+    error:
+      'ChatGPT is not ready in the browser (at https://chatgpt.com/). Ask the user to log in to chatgpt.com in the browser the plugin uses (one or two), ' +
+      'or to clear what the page shows, and try again; never type credentials.',
+    chatUrl: 'https://chatgpt.com/',
+  })
+})
+
+test('an ask with an invalid chatUrl, or saveOnly without one, answers its error before any page is touched', async () => {
+  const { browser, calls } = fakeBrowser({ tabs: [], pages: [{}], markdown: '' })
+  const h = harness(browser)
+  const bad = await performRequest(h.deps, { kind: 'ask', input: { prompt: 'more', chatUrl: 'https://evil.example/c/1' }, filePaths: [] }, { pollMs: 0 })
+  const unsaved = await performRequest(h.deps, { kind: 'ask', input: { prompt: 'more', saveOnly: true }, filePaths: [] }, { pollMs: 0 })
+
+  expect(calls).toEqual([])
+  expect(bad).toEqual({
+    ok: false,
+    text: 'chatUrl must be a chat link like https://chatgpt.com/c/<id>, not https://evil.example/c/1.',
+    error: 'chatUrl must be a chat link like https://chatgpt.com/c/<id>, not https://evil.example/c/1.',
+  })
+  expect(unsaved).toEqual({
+    ok: false,
+    text: 'saveOnly needs the chatUrl of the chat with the answer.',
+    error: 'saveOnly needs the chatUrl of the chat with the answer.',
+  })
+})
+
+test('an ask with a model that is not on the menu answers the offered models and sends nothing', async () => {
+  const { browser, calls } = fakeBrowser({ tabs: ['seed'], pages: [{}], markdown: '' })
+  const js = browser.js
+  browser.js = async (tabId, code) =>
+    code.includes('Selecionar modelo') ? printed({ picked: false, reason: 'no such entry', offered: ['latest'] }) : js(tabId, code)
+  const h = harness(browser)
+  const outcome = await performRequest(h.deps, { kind: 'ask', input: { prompt: 'hi', model: 'gpt-9' }, filePaths: [] }, { pollMs: 0, tab: { id: 'seed' } })
+
+  expect(calls.some(call => call.startsWith('send'))).toBe(false)
+  expect(outcome).toMatchObject({
+    ok: false,
+    text: 'Could not pick the model "gpt-9": no such entry. The menu offers: latest.',
+    error: 'Could not pick the model "gpt-9": no such entry. The menu offers: latest.',
+  })
+})
+
+test('an image run attaches the reference, sends, waits for the image and saves it with its preview', async () => {
+  const { browser, calls } = fakeImageBrowser({ shots: [{}, { stop: true }, { stop: true, images: 1 }, { images: 1 }], base64: 'B'.repeat(10) })
+  const h = harness(browser, { previews: true })
+  const progress: string[] = []
+  const outcome = await performRequest(h.deps, { kind: 'image', input: { prompt: 'a lamp' }, filePaths: ['/x/ref.png'], out: '/out/lamp.png' }, {
+    pollMs: 0,
+    progress: text => progress.push(text),
+  })
+
+  expect(calls).toEqual(['navigate https://chatgpt.com/', `upload ${inputFor('image/png')} /x/ref.png`, 'attach', 'send', 'image'])
+  expect(progress).toEqual(['opening chatgpt.com', `attaching ${REFERENCE.name}`, 'waiting for the image', 'generating the image', 'generating the image', 'saving the image'])
+  expect(h.runs).toEqual([
+    ['mkdir', '-p', '/out'],
+    ['openssl', 'base64', '-d', '-A', '-out', '/out/lamp.png'],
+    ['sips', '-Z', '768', '-s', 'format', 'jpeg', '/out/lamp.png', '--out', '/out/lamp.png.preview.jpg'],
+    ['rm', '-f', '/out/lamp.png.preview.jpg'],
+  ])
+  expect(outcome).toEqual({
+    ok: true,
+    text:
+      'AI concept image generated by ChatGPT, saved to:\n- /out/lamp.png (1024x1024, image/png)\nChat: https://chatgpt.com/c/img\n' +
+      'A preview of each follows; ask before storing them in a repository and label them as AI concepts.',
+    chatUrl: 'https://chatgpt.com/c/img',
+    paths: ['/out/lamp.png'],
+    previews: [{ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: 'UFJFVklFVw==' } }],
+  })
+})
+
+test('an image without a preview keeps the file note, and every variant is saved oldest first', async () => {
+  const { browser } = fakeImageBrowser({ shots: [{}, { stop: true, images: 2 }, { images: 2 }], base64: 'B'.repeat(10) })
+  const h = harness(browser)
+  const outcome = await performRequest(h.deps, { kind: 'image', input: { prompt: 'two lamps' }, filePaths: [], out: '/out/lamp.png' }, { pollMs: 0 })
+
+  expect(outcome).toEqual({
+    ok: true,
+    text:
+      'AI concept images generated by ChatGPT, saved to:\n- /out/lamp-1.png (1024x1024, image/png)\n- /out/lamp-2.png (1024x1024, image/png)\n' +
+      'Chat: https://chatgpt.com/c/img\nLook at the file before describing it, and ask before storing it in a repository; label it as an AI concept.',
+    chatUrl: 'https://chatgpt.com/c/img',
+    paths: ['/out/lamp-1.png', '/out/lamp-2.png'],
+    previews: [],
+  })
+  expect(h.runs.filter(argv => argv[0] === 'openssl').map(argv => argv.at(-1))).toEqual(['/out/lamp-1.png', '/out/lamp-2.png'])
+})
+
+test('an image answered with text is a refusal: the plugin error comes first, then ChatGPT\'s words', async () => {
+  const { browser, calls } = fakeImageBrowser({ shots: [{}, { count: 1, length: 20 }, { count: 1, length: 20 }], base64: '', text: 'I cannot create that image.' })
+  const h = harness(browser)
+  const outcome = await performRequest(h.deps, { kind: 'image', input: { prompt: 'a logo' }, filePaths: [] }, { pollMs: 0 })
+
+  expect(calls).not.toContain('image')
+  expect(h.writes).toEqual([])
+  expect(outcome).toEqual({
+    ok: false,
+    text:
+      'ChatGPT answered with text instead of an image (a refusal or a question); relay it, do not rephrase around a refusal.\n\nChatGPT said:\nI cannot create that image.',
+    error: 'ChatGPT answered with text instead of an image (a refusal or a question); relay it, do not rephrase around a refusal.',
+    chatUrl: 'https://chatgpt.com/c/img',
+    timedOut: undefined,
+  })
+})
+
+test('an image that never arrives says it may still be generating, and marks the run timed out', async () => {
+  const { browser } = fakeImageBrowser({ shots: [{}, { stop: true }], base64: '' })
+  const h = harness(browser)
+  const outcome = await performRequest(h.deps, { kind: 'image', input: { prompt: 'lamp' }, filePaths: [] }, { pollMs: 0, timeoutMs: -1 })
+
+  expect(outcome).toEqual({
+    ok: false,
+    text: 'No image after 0 s; it may still be generating at https://chatgpt.com/c/img.',
+    error: 'No image after 0 s; it may still be generating at https://chatgpt.com/c/img.',
+    chatUrl: 'https://chatgpt.com/c/img',
+    timedOut: true,
+  })
+})
+
+test('an image whose bytes cannot be read back says so, and nothing is written', async () => {
+  const { browser } = fakeImageBrowser({ shots: [{}, { stop: true, images: 1 }, { images: 1 }], base64: '' })
+  const h = harness(browser)
+  const outcome = await performRequest(h.deps, { kind: 'image', input: { prompt: 'lamp' }, filePaths: [] }, { pollMs: 0 })
+
+  expect(h.writes).toEqual([])
+  expect(outcome).toEqual({
+    ok: false,
+    text: 'No generated image could be read from the page.',
+    error: 'No generated image could be read from the page.',
+    chatUrl: 'https://chatgpt.com/c/img',
+  })
+})
+
+test('an image whose reference does not attach stops before the prompt is sent', async () => {
+  const { browser, calls } = fakeImageBrowser({ shots: [{}], base64: '', attached: false })
+  const h = harness(browser)
+  const outcome = await performRequest(h.deps, { kind: 'image', input: { prompt: 'a lamp' }, filePaths: ['/x/ref.png'] }, { pollMs: 0 })
+
+  expect(calls).not.toContain('send')
+  expect(outcome).toEqual({
+    ok: false,
+    text: 'Could not attach ref.png: the attachment did not show up in the composer.',
+    error: 'Could not attach ref.png: the attachment did not show up in the composer.',
+    chatUrl: 'https://chatgpt.com/c/img',
+  })
+})
+
+test('an image with saveOnly reads the chat\'s last image, sends nothing and names the image in its guard text', async () => {
+  const { browser, calls } = fakeImageBrowser({ shots: [{}], base64: 'C'.repeat(11) })
+  const h = harness(browser)
+  const chatUrl = 'https://chatgpt.com/c/6ac53b54-ec00'
+  const outcome = await performRequest(h.deps, { kind: 'image', input: { prompt: 'lamp', chatUrl, saveOnly: true }, filePaths: [], out: '/out/saved.png' }, { pollMs: 0 })
+
+  expect(calls).toEqual([`navigate ${chatUrl}`, 'image'])
+  expect(outcome).toMatchObject({ ok: true, paths: ['/out/saved.png'], chatUrl: 'https://chatgpt.com/c/img' })
+  const unsaved = await performRequest(h.deps, { kind: 'image', input: { prompt: 'lamp', saveOnly: true }, filePaths: [] }, { pollMs: 0 })
+  expect(unsaved).toEqual({
+    ok: false,
+    text: 'saveOnly needs the chatUrl of the chat with the image.',
+    error: 'saveOnly needs the chatUrl of the chat with the image.',
+  })
+})
+
+test('the job records: a finished ask and image each toast, send a notice without the content, and show in jobs', async () => {
+  const askBrowser = fakeBrowser({ tabs: ['seed'], pages: ASK_SETTLED, markdown: 'the answer' })
+  const askHarness = harness(askBrowser.browser)
+  const askOutcome = await performRequest(askHarness.deps, { kind: 'ask', input: { prompt: 'Explain the tradeoffs' }, filePaths: [], out: '/out/a.md' }, { pollMs: 0, tab: { id: 'seed' } })
+  const imageBrowser = fakeImageBrowser({ shots: [{}, { stop: true, images: 1 }, { images: 1 }], base64: 'B'.repeat(10) })
+  const imageHarness = harness(imageBrowser.browser)
+  const imageOutcome = await performRequest(imageHarness.deps, { kind: 'image', input: { prompt: 'x'.repeat(70) }, filePaths: [], out: '/out/lamp.png' }, { pollMs: 0 })
+
+  const queue = taskQueue()
+  const jobs = createJobs()
+  const toasts: string[] = []
+  const messages: string[] = []
+  const submitted = new Promise<void>(resolve => {
+    const perform = async (request: Request): Promise<Outcome> => (request.kind === 'ask' ? askOutcome : imageOutcome)
+    const deps = {
+      perform: (request: Request, timeoutMs: number, onStart?: () => void) => queue(async () => {
+        onStart?.()
+        return perform(request)
+      }),
+      notifications: {
+        toast: (text: string) => {
+          toasts.push(text)
+        },
+        submit: async (text: string) => {
+          messages.push(text)
+          if (messages.length === 2) resolve()
+        },
+      },
+    }
+    jobs.start(deps, { kind: 'ask', input: { prompt: 'Explain the tradeoffs' }, filePaths: [], out: '/out/a.md' }, 30 * 60_000)
+    jobs.start(deps, { kind: 'image', input: { prompt: 'x'.repeat(70) }, filePaths: [], out: '/out/lamp.png' }, 30 * 60_000)
+  })
+  await submitted
+
+  expect(toasts).toEqual(['ChatGPT job #1 done', 'ChatGPT job #2 done'])
+  expect(messages).toEqual([
+    [
+      NOTICE,
+      'job #1 done: ask "Explain the tradeoffs"',
+      'Saved to: /out/a.md',
+      'Chat: https://chatgpt.com/c/abc',
+      'Read the saved file for the answer.',
+    ].join('\n'),
+    [
+      NOTICE,
+      `job #2 done: image "${'x'.repeat(60)}"`,
+      'Saved to: /out/lamp.png',
+      'Chat: https://chatgpt.com/c/img',
+      'Look at the file before describing it, and ask before storing it in a repository; label it as an AI concept.',
+    ].join('\n'),
+  ])
+  expect(messages.join('\n')).not.toContain('the answer\n')
+  expect(jobs.report()).toBe(
+    [
+      `#2 image done (took 0 min): ${'x'.repeat(60)}…\n  chat ${'https://chatgpt.com/c/img'}; saved to /out/lamp.png`,
+      '#1 ask done (took 0 min): Explain the tradeoffs\n  chat https://chatgpt.com/c/abc; saved to /out/a.md',
+    ].join('\n'),
+  )
+})
+
+test('a foreground ask that outlives its wait continues as a saveOnly job, and the answer says so', async () => {
+  const { browser } = fakeBrowser({ tabs: [], pages: [{ count: 0 }, { count: 1, stop: true, length: 3 }], markdown: 'par' })
+  const h = harness(browser)
+  const request: Request = { kind: 'ask', input: { prompt: 'long', model: undefined }, filePaths: ['/ref.md'], out: '/out/long.md' }
+  const started: Request[] = []
+  const outcome = await runNow(
+    async (given, timeoutMs) => {
+      expect(timeoutMs).toBe(60_000)
+      return performRequest(h.deps, given, { pollMs: 0, timeoutMs: -1 })
+    },
+    follow => {
+      started.push(follow)
+      return { id: 3, kind: follow.kind, prompt: follow.input.prompt, status: 'queued', startedAt: 0 }
+    },
+    request,
+    60_000,
+  )
+
+  expect(started).toEqual([{ kind: 'ask', input: { prompt: 'long', chatUrl: 'https://chatgpt.com/c/abc', saveOnly: true }, filePaths: [], out: '/out/long.md' }])
+  expect(outcome.text).toBe(
+    'No complete answer after 0 s; it may still be streaming at https://chatgpt.com/c/abc.\nPartial answer saved to /out/long.md.' +
+      '\nStill going: job #3 saves it in the background when it finishes; a message will arrive (the jobs tool shows it meanwhile).',
+  )
+})
+
+test('the command answers: an ask gives the answer with its file, an image its file as context, and a failure its text alone', async () => {
+  const { browser } = fakeBrowser({ tabs: ['seed'], pages: ASK_SETTLED, markdown: '## Answer' })
+  const ask = await performRequest(harness(browser).deps, { kind: 'ask', input: { prompt: 'hi' }, filePaths: [], out: '/out/answer.md' }, { pollMs: 0, tab: { id: 'seed' } })
+  const image = await performRequest(harness(fakeImageBrowser({ shots: [{}, { stop: true, images: 1 }, { images: 1 }], base64: 'B'.repeat(10) }).browser).deps, { kind: 'image', input: { prompt: 'lamp' }, filePaths: [], out: '/out/lamp.png' }, { pollMs: 0 })
+  const failed = await performRequest(harness(fakeBrowser({ tabs: [], pages: [{ composer: false, login: true }], markdown: '' }).browser).deps, { kind: 'image', input: { prompt: 'lamp' }, filePaths: [] }, { pollMs: 0 })
+
+  expect(askCommandAnswer(ask)).toEqual({
+    text: '## Answer\n\n— ChatGPT, https://chatgpt.com/c/abc\nSaved to /out/answer.md',
+    context: ['The user asked ChatGPT through /chatgpt-ask; its answer is saved to /out/answer.md (chat https://chatgpt.com/c/abc).'],
+  })
+  expect(imageCommandAnswer(image)).toEqual({
+    text: image.text,
+    context: ['The user generated an AI concept image with /chatgpt-image; it is saved to /out/lamp.png (chat https://chatgpt.com/c/img).'],
+  })
+  expect(askCommandAnswer(failed)).toEqual({ text: failed.text })
+  expect(imageCommandAnswer(failed).context).toBeUndefined()
+})
+
+test('without a pollMs option, an ask polls the page every 3 s and an image every 5 s, inside the page script', async () => {
+  const ask = fakeBrowser({ tabs: ['seed'], pages: ASK_SETTLED, markdown: 'a' })
+  const askJs = ask.browser.js
+  const askPolls: string[] = []
+  ask.browser.js = async (tabId, code) => {
+    if (code === stateScript(3000)) askPolls.push(code)
+    return askJs(tabId, code)
+  }
+  await performRequest(harness(ask.browser).deps, { kind: 'ask', input: { prompt: 'hi' }, filePaths: [] }, { tab: { id: 'seed' } })
+  expect(askPolls.length).toBe(2)
+
+  const image = fakeImageBrowser({ shots: [{}, { stop: true, images: 1 }, { images: 1 }], base64: 'B'.repeat(10) })
+  const imageJs = image.browser.js
+  const imagePolls: string[] = []
+  image.browser.js = async (tabId, code) => {
+    if (code === stateScript(5000)) imagePolls.push(code)
+    return imageJs(tabId, code)
+  }
+  await performRequest(harness(image.browser).deps, { kind: 'image', input: { prompt: 'lamp' }, filePaths: [], out: '/out/lamp.png' }, {})
+  expect(imagePolls.length).toBe(2)
+})
+
+test('the prompt of each flow reaches the page unchanged, in the send script of its submit step', async () => {
+  const prompt = 'Explain: "quotes" \\ and\nlines'
+  const ask = fakeBrowser({ tabs: ['seed'], pages: ASK_SETTLED, markdown: 'a' })
+  const askJs = ask.browser.js
+  const askSends: string[] = []
+  ask.browser.js = async (tabId, code) => {
+    if (code === sendScript(prompt)) askSends.push(code)
+    return askJs(tabId, code)
+  }
+  await performRequest(harness(ask.browser).deps, { kind: 'ask', input: { prompt }, filePaths: [] }, { pollMs: 0, tab: { id: 'seed' } })
+  expect(askSends.length).toBe(1)
+
+  const image = fakeImageBrowser({ shots: [{}, { stop: true, images: 1 }, { images: 1 }], base64: 'B'.repeat(10) })
+  const imageJs = image.browser.js
+  const imageSends: string[] = []
+  image.browser.js = async (tabId, code) => {
+    if (code === sendScript(prompt)) imageSends.push(code)
+    return imageJs(tabId, code)
+  }
+  await performRequest(harness(image.browser).deps, { kind: 'image', input: { prompt }, filePaths: [], out: '/out/lamp.png' }, { pollMs: 0 })
+  expect(imageSends.length).toBe(1)
+})

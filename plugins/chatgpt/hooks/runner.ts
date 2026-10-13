@@ -1,9 +1,7 @@
-import { ask } from './ask'
 import { isChatUrl } from './tab'
-import { generateImage } from './image'
+import { FLOWS } from './flows'
 import { readAttachments } from './input'
 import type { AskOptions, BackgroundStart, Job, JobDeps, Outcome, Request, RequestDeps, RequestRunner } from './model'
-import { saveAnswer, saveImages } from './output'
 import { jobMessage, jobsReport } from './presentation'
 
 // Request queue
@@ -64,9 +62,10 @@ export async function performRequest(deps: RequestDeps, request: Request, option
   const browser = await deps.browser()
   if (typeof browser === 'string') return { ok: false, text: browser, error: browser }
   const input = { ...request.input, files }
-  if (request.kind === 'ask') return await saveAnswer(deps.output, await ask(browser, input, options), request)
-  const result = await generateImage(browser, input, options)
-  return await saveImages(deps.output, result, request)
+  // The row runs the flow and saves its result; the row's save takes the result its run gives (see FLOWS).
+  const flow = FLOWS[request.kind]
+  const result = await flow.run(browser, input, options)
+  return await flow.save(deps.output, result as never, request)
 }
 
 // A foreground request; past its wait, a chat that is still going is saved in the background.

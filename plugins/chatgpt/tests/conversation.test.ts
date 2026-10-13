@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { isHardBlocker, send, watch } from '../hooks/conversation'
+import { isHardBlocker, openRun, send, watch } from '../hooks/conversation'
 import type { PageState } from '../hooks/model'
 import { stateScript } from '../hooks/scripts'
 import { basePage, printed } from './fake-page'
@@ -243,4 +243,23 @@ test('isHardBlocker stops on limits and verifications, not on any dialog', () =>
   expect(isHardBlocker('Você atingiu o limite. Tente novamente mais tarde.')).toBe(true)
   expect(isHardBlocker('a human verification (captcha)')).toBe(true)
   expect(isHardBlocker('Copied to clipboard')).toBe(false)
+})
+
+test('openRun gives the flow its noun and poll interval and a 6-minute wait, and the caller\'s options replace them', async () => {
+  const browser = {
+    name: 'fake browser',
+    tabs: async () => [],
+    openTab: async () => 't2',
+    waitFor: async () => true,
+    js: async () => printed(basePage),
+    upload: async () => {},
+  }
+  const ready = await openRun(browser, { prompt: 'hi' }, {}, { noun: 'answer', pollMs: 3000 })
+  expect(ready).toMatchObject({ ok: true, tabId: 't2', pollMs: 3000, timeoutMs: 6 * 60_000, start: { href: 'https://chatgpt.com/', composer: true } })
+
+  const tuned = await openRun(browser, { prompt: 'hi' }, { pollMs: 10, timeoutMs: 5 }, { noun: 'image', pollMs: 5000 })
+  expect(tuned).toMatchObject({ ok: true, pollMs: 10, timeoutMs: 5 })
+
+  const guard = await openRun(browser, { prompt: 'hi', saveOnly: true }, {}, { noun: 'image', pollMs: 5000 })
+  expect(guard).toEqual({ ok: false, error: 'saveOnly needs the chatUrl of the chat with the image.' })
 })

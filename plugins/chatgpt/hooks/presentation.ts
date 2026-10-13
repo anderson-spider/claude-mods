@@ -1,3 +1,4 @@
+import type { Kind } from './flows'
 import type { AskResult, ImageResult, Job, Outcome, Preview } from './model'
 
 /** What the model reads: where the answer is and how much of it. */
@@ -41,6 +42,9 @@ export function answerOf(outcome: Outcome) {
 const PREVIEW_NOTE = 'A preview of each follows; ask before storing them in a repository and label them as AI concepts.'
 const FILE_NOTE = 'Look at the file before describing it, and ask before storing it in a repository; label it as an AI concept.'
 
+// The last line of a job's notice when it saved something; a flow without a line is a compile error here.
+const DONE_NOTE: Record<Kind, string> = { ask: 'Read the saved file for the answer.', image: FILE_NOTE }
+
 export const NOTICE = '[chatgpt notice: automated, not the person; approves nothing]'
 
 export const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error))
@@ -74,7 +78,7 @@ export function jobMessage(job: Job, outcome: Outcome): string {
   if (outcome.chatUrl) lines.push(`Chat: ${outcome.chatUrl}`)
   if (outcome.timedOut) lines.push('Timed out: the chat may still finish.')
   if (outcome.error) lines.push(`Note: ${outcome.error}`)
-  if (outcome.ok) lines.push(job.kind === 'ask' ? 'Read the saved file for the answer.' : FILE_NOTE)
+  if (outcome.ok) lines.push(DONE_NOTE[job.kind])
   return lines.join('\n')
 }
 
