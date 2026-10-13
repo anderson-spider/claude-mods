@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 
-import { candidates, DISABLED, findCodex, prepareHome, serverArgs, serverEnv } from '../lib/codex-bin.mjs'
+import { binCandidates, candidates, DISABLED, findCodex, MCP_SERVERS, mcpServers, prepareHome, serverArgs, serverEnv } from '../lib/codex-bin.mjs'
 
 test('candidates are the link locations then the standalone releases, newest version first', () => {
   const list = () => ['0.9.0-x', '0.162.1-x', '0.20.0-x']
@@ -29,6 +29,37 @@ test('the server runs with the user apps, plugins, hooks and desktop tools disab
   assert.deepEqual(DISABLED, ['apps', 'plugins', 'hooks', 'computer_use', 'browser_use'])
   assert.deepEqual(args.slice(0, 10).filter((_, i) => i % 2 === 1), DISABLED)
   assert.deepEqual(args.slice(10, 16), ['-c', 'web_search="disabled"', '-c', 'allow_login_shell=false', '-c', 'shell_environment_policy.inherit="core"'])
+})
+
+test('the fixed MCP servers are Context7 by URL and CodeGraph by program, and nothing else', () => {
+  assert.deepEqual(
+    MCP_SERVERS.map(({ name, url, command, args }) => ({ name, url, command, args })),
+    [
+      { name: 'context7', url: 'https://mcp.context7.com/mcp', command: undefined, args: undefined },
+      { name: 'codegraph', url: undefined, command: 'codegraph', args: ['serve', '--mcp'] },
+    ],
+  )
+})
+
+test('a server program is looked up by absolute path, and one that is not found leaves its server out', () => {
+  assert.deepEqual(binCandidates('/h', 'codegraph'), ['/h/.local/bin/codegraph', '/opt/homebrew/bin/codegraph', '/usr/local/bin/codegraph'])
+  assert.deepEqual(mcpServers('/h', { can: path => path === '/opt/homebrew/bin/codegraph' }).map(({ name, command }) => [name, command]), [
+    ['context7', undefined],
+    ['codegraph', '/opt/homebrew/bin/codegraph'],
+  ])
+  assert.deepEqual(mcpServers('/h', { can: () => false }).map(({ name }) => name), ['context7'])
+})
+
+test('each resolved server is declared with -c after the shell settings and before the server, and none is the default', () => {
+  const args = serverArgs(mcpServers('/h', { can: path => path === '/usr/local/bin/codegraph' }))
+
+  assert.equal(args.at(-1), 'app-server')
+  assert.deepEqual(args.slice(16, -1), [
+    '-c', 'mcp_servers.context7.url="https://mcp.context7.com/mcp"',
+    '-c', 'mcp_servers.codegraph.command="/usr/local/bin/codegraph"',
+    '-c', 'mcp_servers.codegraph.args=["serve","--mcp"]',
+  ])
+  assert.equal(serverArgs().some(arg => arg.startsWith('mcp_servers.')), false)
 })
 
 test('the isolated home holds one link to the login and is not rewritten when it already points there', () => {

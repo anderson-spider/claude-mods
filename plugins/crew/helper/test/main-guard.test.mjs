@@ -124,11 +124,12 @@ test('the server starts with the isolated home, the flags and the filtered envir
     codex: '/bin/codex',
     home: '/isolated',
     env: { PATH: '/bin', HOME: '/h', OPENAI_API_KEY: 'k' },
+    mcp: [{ name: 'context7', url: 'https://mcp.context7.com/mcp' }],
     spawnFn: (...args) => ((seen = args), child),
   })
 
   assert.equal(seen[0], '/bin/codex')
-  assert.deepEqual(seen[1], serverArgs())
+  assert.deepEqual(seen[1], serverArgs([{ name: 'context7', url: 'https://mcp.context7.com/mcp' }]))
   assert.deepEqual(seen[2].env, { PATH: '/bin', HOME: '/h', CODEX_HOME: '/isolated' })
   assert.deepEqual(seen[2].stdio, ['pipe', 'pipe', 'ignore'])
   assert.doesNotThrow(() => child.stdin.emit('error', new Error('EPIPE')))

@@ -9,7 +9,7 @@ import { connect } from 'node:net'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { findCodex, prepareHome, serverArgs, serverEnv } from './lib/codex-bin.mjs'
+import { findCodex, mcpServers, prepareHome, serverArgs, serverEnv } from './lib/codex-bin.mjs'
 import { Engine } from './lib/engine.mjs'
 import { resolveLane } from './lib/paths.mjs'
 import { RpcClient } from './lib/rpc.mjs'
@@ -126,8 +126,8 @@ export const handler = (engine, env) => async (request, response) => {
 }
 
 /** Starts `codex app-server` in the isolated home and wraps it as an `RpcClient`. */
-export const startServer = ({ codex, home = CODEX_HOME, env = process.env, spawnFn = spawn } = {}) => {
-  const child = spawnFn(codex, serverArgs(), { env: serverEnv(env, home), stdio: ['pipe', 'pipe', 'ignore'] })
+export const startServer = ({ codex, home = CODEX_HOME, env = process.env, spawnFn = spawn, mcp = mcpServers(homedir()) } = {}) => {
+  const child = spawnFn(codex, serverArgs(mcp), { env: serverEnv(env, home), stdio: ['pipe', 'pipe', 'ignore'] })
   let onExit = () => {}
   child.on('exit', () => onExit())
   child.on('error', () => onExit())
