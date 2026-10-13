@@ -218,3 +218,21 @@ test('hub: a held call answers only the fields the plugin types', async () => {
     hub.close()
   }
 })
+
+test('hub.forget without an app names the missing field, and a name that matches no app still says which', async () => {
+  const { hub } = hubWith('Calculator', { resolve: async () => undefined })
+  const missing = /forget needs an "app"/
+
+  for (const app of [undefined, null, '', '   ', 7, {}]) {
+    const reply = await hub.forget(app)
+
+    assert.equal(reply.status, 'error', String(app))
+    assert.match(reply.message, missing, String(app))
+    assert.doesNotMatch(reply.message, /undefined|no app found/, String(app))
+  }
+
+  const unknown = await hub.forget('Nope')
+
+  assert.equal(unknown.status, 'error')
+  assert.match(unknown.message, /no app found for "Nope"/)
+})

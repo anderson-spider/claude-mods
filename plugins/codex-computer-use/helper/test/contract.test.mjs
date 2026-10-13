@@ -243,6 +243,27 @@ test('the held replies of a call have the key sets the shared contract lists, wh
   assert.deepEqual(keysOf(viaOutcome.busy.app), ['bundleId', 'displayName'])
 })
 
+test('the app inside each held reply has the key sets the shared contract lists: always sent, sent by one path only, and what hooks reads', async () => {
+  const paths = [await heldReplies({}), await heldReplies({ resolve: async () => undefined })]
+
+  assert.deepEqual(Object.keys(contract.replies.app).sort(), Object.keys(contract.replies.held).filter(status => contract.replies.held[status].includes('app')).sort())
+
+  for (const [status, keys] of Object.entries(contract.replies.app)) {
+    const seen = paths.map(found => keysOf(found[status].app))
+
+    for (const sent of seen) {
+      assert.deepEqual(sent.filter(key => keys.always.includes(key)), [...keys.always].sort(), `${status}: every path sends the always keys`)
+      assert.deepEqual(sent.filter(key => !keys.always.includes(key) && !keys.sometimes.includes(key)), [], `${status}: no key outside the contract`)
+    }
+
+    assert.deepEqual([...new Set(seen.flat())].sort(), [...keys.always, ...keys.sometimes].sort(), `${status}: the paths together send exactly always + sometimes`)
+    assert.ok(keys.read.every(key => keys.always.includes(key) || keys.sometimes.includes(key)), `${status}: hooks reads only what is sent`)
+    assert.deepEqual(keys.always, [...keys.always].sort())
+    assert.deepEqual(keys.sometimes, [...keys.sometimes].sort())
+    assert.deepEqual(keys.read, [...keys.read].sort())
+  }
+})
+
 test('a call with every Codex session mid-call answers full with the key set the shared contract lists', async () => {
   const { hub } = hubWith('Calculator', { maxSessions: 1 })
   const entry = { code: 'await cua.getState();' }

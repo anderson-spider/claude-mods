@@ -35,6 +35,16 @@ export const contract = {
       busy: ['app', 'idleSeconds', 'owner', 'status'],
       full: ['message', 'status'],
     },
+    // The `app` object inside the held replies that carry one, by status, as sorted key sets:
+    // - `always`: sent on every path that builds the reply (`#precheck` builds a denied or busy app from the name it resolved, `#outcome` from what the server asked);
+    // - `sometimes`: sent on one path only;
+    // - `read`: what hooks reads of it (bridge.ts, presentation.ts), measured in tests/contract.test.ts.
+    // Sent minus read is what a trim could drop: `kind` is read nowhere, `canAlways` only by `needs_approval` (it drives the "Always" button), `bundleId` only by `needs_approval`.
+    app: {
+      needs_approval: { always: ['bundleId', 'canAlways', 'displayName', 'kind'], sometimes: [], read: ['bundleId', 'canAlways', 'displayName'] },
+      denied: { always: ['bundleId', 'displayName'], sometimes: ['canAlways', 'kind'], read: ['displayName'] },
+      busy: { always: ['bundleId', 'displayName'], sometimes: [], read: ['displayName'] },
+    },
   },
   // The person's answers to an approval question, as `/approve` takes them.
   choices: ['session', 'always', 'deny'],

@@ -29,7 +29,7 @@ While on, native desktop control uses `mcp__codex-computer-use__codex_cu`; Claud
 
 New apps ask in a band: **This session**, **Always** or **No**. Auto-approve defaults off; organization/safety blocks remain in force when it is on. A refusal is final for that caller. Questions expire five minutes from before entering the queue, including queue time; failures/timeouts do not approve. `forget` clears this session's answers; `forget <app>` removes always-allow in both the helper and Codex.
 
-Each Claude session/subagent gets a persistent Codex session. App ownership lasts two minutes after its last use. Literal `cua.getApp(...)` names are checked before calls; an app reached through a variable is owned only after its first reported result. Read and act in one call to avoid Codex's stale-state refusal. These ownership checks are not an isolation sandbox.
+Each Claude session/subagent gets a persistent Codex session. App ownership lasts two minutes after its last use, and `/codex-cu status` lists only apps still held. Literal `cua.getApp(...)` names are checked before calls; an app reached through a variable is owned only after its first reported result. Read and act in one call to avoid Codex's stale-state refusal. These ownership checks are not an isolation sandbox.
 
 ## Privacy
 

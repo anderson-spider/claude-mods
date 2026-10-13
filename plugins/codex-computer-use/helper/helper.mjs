@@ -3,7 +3,7 @@
 // (launch.mjs), one Codex session per caller, served to the codex-computer-use
 // mod over a Unix socket in a directory only this user can enter.
 import { connect } from 'node:net'
-import { chmodSync, existsSync, mkdirSync, unlinkSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, realpathSync, unlinkSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -198,6 +198,19 @@ const main = async () => {
   process.on('SIGINT', stop)
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+const realPath = path => {
+  try {
+    return realpathSync(path)
+  } catch {
+    return path
+  }
+}
+
+/** True when `argv1` (the script node was started with) is the module at `moduleUrl`, whichever symlinks lead to it. */
+export const isMain = (argv1, moduleUrl) => argv1 !== undefined && realPath(argv1) === realPath(fileURLToPath(moduleUrl))
+
+if (isMain(process.argv[1], import.meta.url)) {
   void main()
+} else {
+  log(`not started: ${process.argv[1] ?? 'no script'} is not ${fileURLToPath(import.meta.url)}`)
 }

@@ -3,6 +3,7 @@ export const contract: {
   replies: {
     ok: Readonly<Record<string, readonly string[]>>
     held: Readonly<Record<string, readonly string[]>>
+    app: Readonly<Record<'needs_approval' | 'denied' | 'busy', { always: readonly string[]; sometimes: readonly string[]; read: readonly string[] }>>
   }
   choices: readonly string[]
   leaseMinutes: number

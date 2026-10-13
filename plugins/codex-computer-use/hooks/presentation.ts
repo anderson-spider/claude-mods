@@ -132,6 +132,13 @@ export const releaseText = (reply: ReleaseReply | Failure) =>
 export const BRIDGE_OFF =
   'codex-computer-use is off (/codex-cu off): use the default desktop route, or ask the person to type /codex-cu on.'
 
+/**
+ * What the model is told when Claude's own desktop tool was refused without a check of the switch:
+ * the guard ran in place of a hook that could not run (a re-entry), so it cannot say the mod is on.
+ */
+export const UNCHECKED_OWN =
+  "codex-computer-use could not check whether it is on from inside another tool call, so Claude's own desktop tool was refused. Try it again from a normal turn; the person can type /codex-cu off to restore this tool."
+
 /** What the model is told after it asked to reset its Codex session. */
 export const resetText = (reply: ResetReply) => reply.message ?? 'reset'
 
