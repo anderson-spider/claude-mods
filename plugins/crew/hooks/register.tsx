@@ -5,7 +5,7 @@ import { createAgentTracker } from './hud/agents'
 import type { AgentIo, AgentTracker } from './hud/agents'
 import { createPlanRefresher } from './hud/files'
 import type { PlanIo, PlanRefresher } from './hud/files'
-import { bandRows } from './hud/view'
+import { bandRows, paneRows } from './hud/view'
 import { SPECIALISTS, isGatewayBase, mainSection, nativeCodexSection, nativeCodexSpecs, onCodexLogin } from './agents'
 import type { Agent, Effort } from './agents'
 import { HANDBACK_ID, HELPER_ROLES, callerOf, handedBackMessage, helperReady, helperServes, lastUserText, runTurn, socketOf } from './appserver'
@@ -44,6 +44,9 @@ const wallNow = () => Date.now()
 const MODE = { plugin: 'crew', key: 'mode' } as const
 
 const MODE_COMMAND = 'crew-mode'
+/** The pane that draws the plans as trees: `/crew-hud` opens it, and its id keys the `ui.render` hook. */
+const HUD_COMMAND = 'crew-hud'
+const HUD_PANE = 'crew-hud'
 
 /** The option as a mode: anything but `codex` is `claude`. */
 const modeOption = (value: unknown): Mode => (value === 'codex' ? 'codex' : 'claude')
@@ -337,6 +340,9 @@ async function startCrew(native: Native, login: CodexLogin, mode: Mode, $: Dolla
     .catch(() => {
       $.ui.log(`crew: /${MODE_COMMAND} not registered`, { to: 'debug' })
     })
+  await $.command.register({ name: HUD_COMMAND, description: 'Open the crew pane: plan steps as a tree and the running helpers' }).catch(() => {
+    $.ui.log(`crew: /${HUD_COMMAND} not registered`, { to: 'debug' })
+  })
   return next(e)
 }
 
@@ -722,13 +728,13 @@ function ensureTicker($: Dollar, state: HudState): void {
   })
 }
 
-async function observeWrite<E extends { file_path?: unknown }, R extends { deny?: string; isError?: boolean }>(
+async function observeWrite<E extends object, R extends { deny?: string; isError?: boolean }>(
   $: Dollar, e: E, next: (input: E) => Promise<R>, display: HudState,
 ): Promise<R> {
   await hud($, async () => { ensureTicker($, display) })
   const answer = await next(e)
   if (answer && typeof answer === 'object' && !('deny' in answer) && !answer.isError) {
-    await hud($, async () => { await display.plans.written(planIo($), e.file_path) })
+    await hud($, async () => { await display.plans.written(planIo($), (e as { file_path?: unknown }).file_path) })
   }
   return answer
 }
@@ -769,6 +775,30 @@ export const register: Register = (on, options) => {
   })
   on('command.run', { command: MODE_COMMAND }, async ($, e) => ({ text: await runModeCommand($, native, routing.mode, e.args) }))
     .catch(() => ({ text: `crew: /${MODE_COMMAND} failed; run it again to see the mode.` }))
+  on('command.run', { command: HUD_COMMAND }, async $ => {
+    const opened = await $.ui.open({ id: HUD_PANE, title: 'Crew' })
+    return { text: opened.isPlaced ? 'the pane is open.' : 'the pane waits for a wider terminal; the band above the prompt shows the summary.' }
+  }).catch(() => ({ text: `/${HUD_COMMAND} failed; the band above the prompt still shows the summary.` }))
+  // Reads the same prepared atoms as the band, never a host: a failure draws nothing and leaves the pane as it was.
+  on('ui.render', { component: 'Pane', requestId: HUD_PANE }, async ($, e, next) => {
+    try {
+      const [shown, running, time] = await Promise.all([read($, plans), read($, agents), read($, nowAtom)])
+      const rows = paneRows({ plans: shown, agents: running, now: time, columns: e.viewport?.columns ?? 80 }, (e.viewport?.rows ?? 24) - 2).rows
+      const { Box, Text } = $.ui.resolve(e)
+      if (!rows.length) return <Box flexDirection="column"><Text dimColor>No plan or helper yet. Plans live in .crew/plans/.</Text></Box>
+      return <Box flexDirection="column">{rows.map((row, index) =>
+        <Text key={`crew-pane-${index}`} wrap="truncate">{row.map((segment, at) => {
+          const key = `${index}-${at}`
+          if (segment.style === 'heading') return <Text key={key} bold>{segment.text}</Text>
+          if (segment.style === 'secondary') return <Text key={key} dimColor>{segment.text}</Text>
+          if (segment.style === 'success' || segment.style === 'warning' || segment.style === 'error') return <Text key={key} color={segment.style}>{segment.text}</Text>
+          return <Text key={key}>{segment.text}</Text>
+        })}</Text>)}</Box>
+    } catch {
+      $.ui.log('crew HUD: pane render failed', { to: 'debug' })
+      return next(e)
+    }
+  })
   on('session.end', {}, (_$, e, next) => {
     display.ticker?.cancel()
     display.ticker = undefined

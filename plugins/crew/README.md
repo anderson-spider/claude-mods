@@ -79,14 +79,15 @@ The `mode` option (`claude` or `codex`, `claude` by default) is the mode every s
 
 In codex, a plain `crew:<role>` call goes to its registered twin, and a role without one stays on Claude. A call that names a model, a twin you named, a fork, a teammate and a workflow script's agent are never moved. The task and a notice name a switched call (`crew:digger -> Codex (crew mode) · gpt-6-luna · high`), and its work goes to OpenAI. A `mode` that the repository's own settings declare, or settings that cannot be read, start the session in claude.
 
-### HUD band
+### HUD
 
-The always-visible band above the prompt shows active plans by deliverable and running helpers. A deliverable row shows `done`/`running`/`left` with every running step's ID and owner (`main` or a helper). A helper row shows its requested or observed model, sent effort and elapsed time, and appears only while it runs.
+Two views over the same local state. The **band** above the prompt is one line: `done`/`running`/`left` totals, the running step IDs with their owner and the number of running helpers. `/crew-hud` opens a **pane** with each plan's deliverables drawn as a tree: a step hangs under its first dependency, one glyph shows its state (`●` done, `◎` working, `■` blocked, `○` queued, `?` unknown), a queued step says `waits <id>` or `ready` from its dependencies, and a branch that is fully done folds into one `[+N done]` row. Running helpers follow, with the requested or observed model, sent effort and elapsed time, only while they run.
 
-- **Plans** come from local `.crew/plans/*.md`, in filename order, while they have unfinished steps.
+- **Plans** come from local `.crew/plans/*.md`, in filename order, while they have unfinished steps. A step line carries its dependencies (`after:`), which the tree reads.
 - **States:** `queued` and `blocked` are left, `implementing` is running, and `verified`, `committed` and `skipped` are done. Any other state is counted as left and marked `?`.
 - **Owners:** `main` and the helper types are shown; any other owner is shown as `?`.
-- **What it never does:** rendering reads only local in-memory state, without network or filesystem access, and the band never changes the crew mode or the status line. There is no panel command.
+- **What it never does:** rendering reads only local in-memory state, without network or filesystem access, and it never changes the crew mode or the status line. It needs no external tool.
+- The tree's shape follows herdr-dagr (MIT OR Apache-2.0).
 
 ### Jev effort routing
 
