@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { afterHandback, LABEL, MAX_POLLS, POLL, ROUTES, answerText, callerOf, helperReady, helperRole, kickstart, lastUserText, post, postStarting, runTurn, socketOf } from '../hooks/appserver'
+import { handedBackMessage, LABEL, MAX_POLLS, POLL, ROUTES, answerText, callerOf, helperReady, helperRole, kickstart, lastUserText, post, postStarting, runTurn, socketOf } from '../hooks/appserver'
 import type { Probe, TurnRequest } from '../hooks/appserver'
 
 type Call = { route: string; body: Record<string, unknown>; socketPath?: string }
@@ -142,10 +142,20 @@ test('an abort before the start asks the helper nothing', async () => {
   expect(w.calls).toEqual([])
 })
 
-test('the host\'s system reminders are not the request, and a conversation that ends with crew\'s own handback result is recognised', () => {
+test('the host\'s system reminders are not the request', () => {
   const user = (...content: Record<string, unknown>[]) => ({ role: 'user', content }) as never
   expect(lastUserText([user({ type: 'text', text: 'do it\n<system-reminder>SubagentHandback: report</system-reminder>' })])).toBe('do it')
-  expect(afterHandback([user({ type: 'text', text: 'x' }), user({ type: 'tool_result', tool_use_id: 'crew_handback_t1_0', content: 'r' })])).toBe(true)
-  expect(afterHandback([user({ type: 'tool_result', tool_use_id: 'toolu_1', content: 'r' })])).toBe(false)
-  expect(afterHandback([])).toBe(false)
+})
+
+test('a conversation that ends with the result of crew\'s own handback gives its message back, and new text after it is new work', () => {
+  const call = { role: 'assistant', content: [{ type: 'tool_use', id: 'crew_handback_t1_0', name: 'SubagentHandback', input: { message: 'the report' } }] } as never
+  const result = { type: 'tool_result', tool_use_id: 'crew_handback_t1_0', content: 'refused' }
+  const user = (...content: Record<string, unknown>[]) => ({ role: 'user', content }) as never
+
+  expect(handedBackMessage([user({ type: 'text', text: 'x' }), call, user(result)])).toBe('the report')
+  expect(handedBackMessage([call, user(result, { type: 'text', text: '<system-reminder>r</system-reminder>' })])).toBe('the report')
+  // The engine may merge a SendMessage into the result's message: that is a request, and runs.
+  expect(handedBackMessage([call, user(result, { type: 'text', text: 'and what did you change?' })])).toBeUndefined()
+  expect(handedBackMessage([user({ type: 'tool_result', tool_use_id: 'toolu_1', content: 'r' })])).toBeUndefined()
+  expect(handedBackMessage([])).toBeUndefined()
 })

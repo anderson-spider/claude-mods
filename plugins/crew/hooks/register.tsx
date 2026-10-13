@@ -8,7 +8,7 @@ import type { PlanIo, PlanRefresher } from './hud/files'
 import { bandRows } from './hud/view'
 import { SPECIALISTS, isGatewayBase, leadSection, nativeCodexSection, nativeCodexSpecs, onCodexLogin } from './agents'
 import type { Agent, Effort } from './agents'
-import { HANDBACK_ID, afterHandback, callerOf, helperReady, helperRole, lastUserText, runTurn, socketOf } from './appserver'
+import { HANDBACK_ID, callerOf, handedBackMessage, helperReady, helperRole, lastUserText, runTurn, socketOf } from './appserver'
 import type { Probe } from './appserver'
 import { CODEX_URL, HANDBACK, codexBody, codexEffort, codexHeaders, failedStep, handbackStep, statusReason, stepOf, textStep } from './codex'
 import type { ApiMessage, CodexEffort, CodexStep } from './codex'
@@ -249,7 +249,7 @@ async function registerNative($: Dollar, native: Native, home: string | undefine
   }
   const reachable = await reachableNative($, native, home !== undefined, helper)
   if (reachable.length === 0) {
-    $.ui.log('crew: Codex twins not registered (ANTHROPIC_BASE_URL is not a gateway URL)', { to: 'debug' })
+    $.ui.log('crew: Codex twins not registered (no gateway URL, and no twin can run on the Codex login)', { to: 'debug' })
   }
   // One refused registration leaves the other twins registered; only the registered ones are routed and listed.
   for (const { agent, via } of reachable) {
@@ -406,7 +406,8 @@ async function handbackOffered($: Dollar, agentId: string | undefined): Promise<
   if (listed.some(tool => tool.name === HANDBACK)) return true
   const messages = await $.session.messages({ agentId, as: 'api' }).catch(() => undefined)
   if (!Array.isArray(messages)) return false
-  return (messages as ApiMessage[]).some(message => message.content.some(block => typeof block.text === 'string' && block.text.includes(HANDBACK)))
+  // Only the host's own reminder counts: a conversation that merely mentions the tool does not give the agent one.
+  return (messages as ApiMessage[]).some(message => message.content.some(block => typeof block.text === 'string' && /<system-reminder>[\s\S]*?SubagentHandback[\s\S]*?<\/system-reminder>/.test(block.text)))
 }
 
 /** The developer message: the twin's own prompt, then where and when it runs. */
@@ -496,13 +497,13 @@ async function askHelper($: Dollar, login: CodexLogin, twin: Agent<string>, e: S
  */
 async function* stepOnLogin($: Dollar, login: CodexLogin, twin: Agent<string>, helped: boolean, e: StepHook[1], effort: CodexEffort, signal: AbortSignal): AsyncGenerator<TurnStepChunk, TurnStepResult> {
   // The host asked for another step after the answer was handed back: the task is done, and is not run again.
-  const handed = e.agentId ? await $.session.messages({ agentId: e.agentId, as: 'api' }).then(list => Array.isArray(list) && afterHandback(list as ApiMessage[])).catch(() => false) : false
-  const asked = handed ? Promise.resolve(textStep('crew: the answer was handed back.')) : helped ? askHelper($, login, twin, e, effort, signal) : askCodex($, login, twin, e, effort)
+  const handed = e.agentId ? await $.session.messages({ agentId: e.agentId, as: 'api' }).then(list => (Array.isArray(list) ? handedBackMessage(list as ApiMessage[]) : undefined)).catch(() => undefined) : undefined
+  const asked = handed !== undefined ? Promise.resolve(textStep(handed)) : helped ? askHelper($, login, twin, e, effort, signal) : askCodex($, login, twin, e, effort)
   const answered = await asked.catch(() => failedStep('the Codex request failed'))
   // An interrupted step shows nothing: the person stopped it while Codex answered.
   if (signal.aborted) return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: null, usage: null }
   // A final answer (no tool call) reaches the caller only through SubagentHandback where the host runs the agent as a subagent.
-  const handback = !handed && answered.toolUses.length === 0 && answered.answer !== '' && (await handbackOffered($, e.agentId).catch(() => false))
+  const handback = handed === undefined && answered.toolUses.length === 0 && answered.answer !== '' && (await handbackOffered($, e.agentId).catch(() => false))
   const step = handback ? handbackStep(answered, `${HANDBACK_ID}${e.turnId}_${e.index}`.replace(/[^A-Za-z0-9_-]/g, '_')) : answered
   for (const chunk of step.chunks) yield chunk
   return { turnId: e.turnId, index: e.index, answer: step.answer, toolUses: step.toolUses, stopReason: step.stopReason, usage: step.usage }

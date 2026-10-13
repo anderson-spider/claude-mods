@@ -173,6 +173,20 @@ test('a step the host asks for after the answer was handed back does not run the
   })
   const { result } = await stepThrough($, 'd1')
 
-  expect(result).toMatchObject({ answer: 'crew: the answer was handed back.', toolUses: [], stopReason: 'end_turn' })
+  expect(result).toMatchObject({ answer: 'done', toolUses: [], stopReason: 'end_turn' })
   expect(seen.helper.filter(call => call.url.endsWith('/start'))).toEqual([])
+})
+
+test('a follow-up merged into the handback result\'s message is a new request and runs', LOGIN, async ($, on) => {
+  const { seen } = await helperWorld($, on, {
+    handback: true,
+    messages: () => [
+      { role: 'user', content: [{ type: 'text', text: 'add the flag' }] },
+      { role: 'assistant', content: [{ type: 'tool_use', id: 'crew_handback_t1_0', name: 'SubagentHandback', input: { message: 'done' } }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'crew_handback_t1_0', content: 'Report delivered.' }, { type: 'text', text: 'which file did you change?' }] },
+    ],
+  })
+  await stepThrough($, 'd1')
+
+  expect(JSON.parse(seen.helper.find(call => call.url.endsWith('/start'))?.body ?? '{}').prompt).toBe('which file did you change?')
 })

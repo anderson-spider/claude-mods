@@ -121,7 +121,7 @@ export async function runTurn(probe: Probe, socket: string, request: TurnRequest
   const started = await postStarting(probe, socket, ROUTES.start, request)
   if (started.status === 'unreachable') return { kind: 'failed', reason: 'the crew Codex helper is not running (run plugins/crew/helper/install.sh)' }
   if (started.status === 'busy') return { kind: 'failed', reason: 'this agent already has a Codex turn running' }
-  if (started.status === 'full') return { kind: 'failed', reason: `the crew Codex helper is full${started.message ? `: ${started.message}` : ''}` }
+  if (started.status === 'full') return { kind: 'failed', reason: `the crew Codex helper is full${started.message ? `: ${started.message}` : ''}`.slice(0, 300) }
   if (started.status !== 'started') return { kind: 'failed', reason: `the crew Codex helper refused the turn${'message' in started && started.message ? `: ${started.message}` : ''}`.slice(0, 400) }
   for (let polls = 0; polls < maxPolls; polls++) {
     if (aborted()) {
@@ -147,12 +147,7 @@ export function lastUserText(messages: readonly { role: string; content: readonl
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i]
     if (message?.role !== 'user') continue
-    // The host's own reminders are not the person's request.
-    const text = message.content
-      .flatMap(block => (block.type === 'text' && typeof block.text === 'string' ? [block.text] : []))
-      .join('\n')
-      .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '')
-      .trim()
+    const text = requestText(message)
     if (text !== '') return text
   }
   return undefined
@@ -161,11 +156,28 @@ export function lastUserText(messages: readonly { role: string; content: readonl
 /** The id prefix of the tool call a handed-back answer is made with. */
 export const HANDBACK_ID = 'crew_handback_'
 
+/** Text blocks of a message, without the host's own reminders. */
+const requestText = (message: { content: readonly { type: string; [field: string]: unknown }[] }) =>
+  message.content
+    .flatMap(block => (block.type === 'text' && typeof block.text === 'string' ? [block.text] : []))
+    .join('\n')
+    .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '')
+    .trim()
+
 /**
- * True when the conversation ends with the result of crew's own handback call: the host asked for another step after the
- * answer was handed back (it refused the call, say), and answering again would run the whole task a second time.
+ * The message of crew's own handback call when the conversation ends with its result and nothing new: the host asked
+ * for another step after the answer was handed back (it refused the call, say), and answering again would run the whole
+ * task a second time. A request that follows the result (a `SendMessage`, which the engine may merge into the same user
+ * message) is new work and gives `undefined`.
  */
-export function afterHandback(messages: readonly { role: string; content: readonly { type: string; [field: string]: unknown }[] }[]): boolean {
+export function handedBackMessage(messages: readonly { role: string; content: readonly { type: string; [field: string]: unknown }[] }[]): string | undefined {
   const last = messages.at(-1)
-  return last?.role === 'user' && last.content.some(block => block.type === 'tool_result' && typeof block.tool_use_id === 'string' && block.tool_use_id.startsWith(HANDBACK_ID))
+  if (last?.role !== 'user') return undefined
+  const result = last.content.find(block => block.type === 'tool_result' && typeof block.tool_use_id === 'string' && block.tool_use_id.startsWith(HANDBACK_ID))
+  if (!result || requestText(last) !== '') return undefined
+  const call = messages
+    .flatMap(message => message.content)
+    .find(block => block.type === 'tool_use' && block.id === result.tool_use_id)
+  const input = call?.input as { message?: unknown } | undefined
+  return typeof input?.message === 'string' && input.message !== '' ? input.message : 'crew: the answer was handed back.'
 }
