@@ -20,7 +20,7 @@ Type `/codex-team:using-codex-team`. Outside Herdr it says it cannot be used and
 | `analyst` | `analyst` | the reports directory; reads the repository | `gpt-6-luna`, effort `medium`; writes only reports |
 | `architect` | `architect` | the reports directory; reads the repository | `gpt-6.1-sol`, effort `high`; writes only reports |
 
-Every agent runs Codex's `workspace-write` sandbox with the network on and no approval prompts (`-a never`). The sandbox keeps `.git` read-only, so the team never commits: the session reviews the uncommitted diff and commits, pushes and opens the pull request through a Haiku subagent. `effort` overrides the role's default.
+Every agent runs Codex's `workspace-write` sandbox with the network on and no approval prompts (`-a never`). The sandbox keeps `.git` read-only, so the team never commits: the session reviews the uncommitted diff and commits, pushes and opens the pull request through the [git-master](../git-master/README.md) subagent (Haiku). `effort` overrides the role's default.
 
 - **Team tab:** the first agent opens a tab labelled `codex team` in the current workspace; later agents split beside a live team agent. Focus never moves.
 - **Reuse:** a live agent with the role's name gets the next task; a busy or blocked one gets nothing.

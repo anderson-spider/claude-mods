@@ -47,4 +47,4 @@ Done for a task: its report read, every finding resolved or answered, and, for a
 
 ## Pull request
 
-Codex's sandbox keeps `.git` read-only, so the team never commits: git work is the lead's. After your review accepts the diff, hand the commits, the push and the pull request to a `general-purpose` subagent on `haiku` (`git-master` once installed): give it the worktree, the branch, the base, the commit messages and the PR title in Conventional Commits, the description you wrote, and the repository's rules for pull requests. Then tell the user the PR link.
+Codex's sandbox keeps `.git` read-only, so the team never commits: git work is the lead's. After your review accepts the diff, hand the commits, the push and the pull request to the `git-master:git-master` subagent (with the git-master plugin; otherwise a `general-purpose` subagent on `haiku`): give it the worktree, the branch, the base, the commit messages and the PR title in Conventional Commits, the description you wrote, and the repository's rules for pull requests. Then tell the user the PR link.
