@@ -85,6 +85,7 @@ export const ACCEPTED: readonly string[] = [
   '/tailnet/a./x',
   '/tailnet/user@example.com/keys',
   '/device/abc123/routes',
+  '/tailnet/-/devices?q="a"', // a quote in the query string is not a path character
 ]
 
 export const urlOf = (path: string): string => BASE + path
@@ -101,7 +102,7 @@ export const TAILNET_DELETES: readonly string[] = [
 ]
 
 /** DELETEs the write tool must still send: only the whole-tailnet delete is forbidden. */
-export const ALLOWED_DELETES: readonly string[] = ['/tailnet/-/keys/k1', '/tailnet/-/keys/k1?x=1', '/device/1']
+export const ALLOWED_DELETES: readonly string[] = ['/tailnet/-/keys/k1', '/tailnet/-/keys/k1?x=1', '/device/1', '/tailnet/-/x']
 
 /** What the error text says for a path that `buildUrl` refused. */
 export const invalidPathText = (path: unknown): string =>
