@@ -7,6 +7,9 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { checkRepo, citedTests, declaredTests } from "./check-consistency.mjs";
 
+const RULE_FRONT = '---\npaths:\n  - "plugins/alpha/**"\n---\n\n';
+const IMPORT = "@../../plugins/alpha/AGENTS.md";
+
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 const script = fileURLToPath(new URL("./check-consistency.mjs", import.meta.url));
 const json = (value) => JSON.stringify(value, null, 2);
@@ -39,7 +42,7 @@ function baseFiles() {
     ].join("\n"),
     "plugins/alpha/tests/beta.test.ts": "test.skip('only in beta', () => {})\n",
     "plugins/alpha/skills/s/SKILL.md": "---\nname: s\ndescription: A skill.\n---\nBody\n",
-    ".claude/rules/alpha.md": '---\npaths:\n  - "plugins/alpha/**"\n---\n\n@../../plugins/alpha/AGENTS.md\n',
+    ".claude/rules/alpha.md": `${RULE_FRONT}${IMPORT}\n`,
     "AGENTS.md": "# AGENTS.md\n\n- Alpha things: `plugins/alpha/AGENTS.md`.\n",
     "README.md": [
       "| Plugin | What it does |",
@@ -142,8 +145,43 @@ for (const { name, change, expected } of [
   { name: "rule file missing", change: edit(".claude/rules/alpha.md", () => undefined), expected: ["alpha: .claude/rules/alpha.md is missing"] },
   {
     name: "rule that imports another file",
-    change: edit(".claude/rules/alpha.md", () => "@../../plugins/beta/AGENTS.md\n"),
+    change: edit(".claude/rules/alpha.md", () => `${RULE_FRONT}@../../plugins/beta/AGENTS.md\n`),
     expected: ["alpha: .claude/rules/alpha.md does not import @../../plugins/alpha/AGENTS.md"],
+  },
+  {
+    name: "rule that only mentions the import inside a sentence",
+    change: edit(".claude/rules/alpha.md", () => `${RULE_FRONT}Read ${IMPORT} first.\n`),
+    expected: ["alpha: .claude/rules/alpha.md does not import @../../plugins/alpha/AGENTS.md"],
+  },
+  {
+    name: "rule whose import has a prefix",
+    change: edit(".claude/rules/alpha.md", () => `${RULE_FRONT}- ${IMPORT}\n`),
+    expected: ["alpha: .claude/rules/alpha.md does not import @../../plugins/alpha/AGENTS.md"],
+  },
+  {
+    name: "rule whose import names a longer path",
+    change: edit(".claude/rules/alpha.md", () => `${RULE_FRONT}${IMPORT}.old\n`),
+    expected: ["alpha: .claude/rules/alpha.md does not import @../../plugins/alpha/AGENTS.md"],
+  },
+  {
+    name: "rule copied from another plugin: its paths frontmatter lists that plugin",
+    change: edit(".claude/rules/alpha.md", (text) => text.replace("plugins/alpha/**", "plugins/crew/**")),
+    expected: ['alpha: .claude/rules/alpha.md paths frontmatter does not list "plugins/alpha/**"'],
+  },
+  {
+    name: "rule without paths frontmatter",
+    change: edit(".claude/rules/alpha.md", () => `${IMPORT}\n`),
+    expected: ['alpha: .claude/rules/alpha.md paths frontmatter does not list "plugins/alpha/**"'],
+  },
+  {
+    name: "rule whose paths glob stops at the plugin folder",
+    change: edit(".claude/rules/alpha.md", (text) => text.replace("plugins/alpha/**", "plugins/alpha")),
+    expected: ['alpha: .claude/rules/alpha.md paths frontmatter does not list "plugins/alpha/**"'],
+  },
+  {
+    name: "rule whose plugin glob sits in the body, not the frontmatter",
+    change: edit(".claude/rules/alpha.md", () => `---\npaths:\n  - "other/**"\n---\n\n- "plugins/alpha/**"\n${IMPORT}\n`),
+    expected: ['alpha: .claude/rules/alpha.md paths frontmatter does not list "plugins/alpha/**"'],
   },
   {
     name: "root AGENTS.md without the plugin",
@@ -172,8 +210,85 @@ for (const { name, change, expected } of [
     change: (files) => {
       files[".claude/rules/ghost.md"] = "@../../plugins/ghost/AGENTS.md\n";
     },
-    expected: ['.claude/rules/ghost.md: no marketplace.json entry for plugin "ghost"'],
+    expected: [
+      '.claude/rules/ghost.md: no marketplace.json entry for plugin "ghost" (a rule that is not a plugin\'s goes in a subdirectory of .claude/rules/)',
+    ],
   },
+  {
+    name: "plugin directory that holds only the generated typings",
+    change: (files) => {
+      files["plugins/ghost/.claude-plugin/types/tsconfig.json"] = "{}";
+    },
+    expected: ["plugins/ghost: no marketplace.json entry (only the generated .claude-plugin/types/ is left; delete the directory)"],
+  },
+  {
+    name: "plugin directory with a manifest beside the generated typings",
+    change: (files) => {
+      files["plugins/ghost/.claude-plugin/types/tsconfig.json"] = "{}";
+      files["plugins/ghost/.claude-plugin/plugin.json"] = "{}";
+    },
+    expected: ["plugins/ghost: no marketplace.json entry"],
+  },
+  {
+    name: "plugin directory with source beside the generated typings",
+    change: (files) => {
+      files["plugins/ghost/.claude-plugin/types/tsconfig.json"] = "{}";
+      files["plugins/ghost/hooks/register.tsx"] = "export {}\n";
+    },
+    expected: ["plugins/ghost: no marketplace.json entry"],
+  },
+  {
+    name: "plugin.json name that is not the directory name",
+    change: edit("plugins/alpha/.claude-plugin/plugin.json", (text) => text.replace('"name": "alpha"', '"name": "omega"')),
+    expected: ['alpha: plugin.json name is "omega"'],
+  },
+  ...["1.2", "v1.2.3", "1.2.3.4", "1.2.3-rc.1", "1.2.x", ""].map((version) => ({
+    name: `plugin.json version "${version}"`,
+    change: edit("plugins/alpha/.claude-plugin/plugin.json", (text) => text.replace("1.2.3", version)),
+    expected: [`alpha: invalid version "${version}"`],
+  })),
+  {
+    name: "plugin.json without a version",
+    change: edit("plugins/alpha/.claude-plugin/plugin.json", () => json({ name: "alpha", description: "Alpha does things." })),
+    expected: ['alpha: invalid version "undefined"'],
+  },
+  {
+    name: "plugin.json and marketplace entry that both lack a description",
+    change: (files) => {
+      files["plugins/alpha/.claude-plugin/plugin.json"] = json({ name: "alpha", version: "1.2.3" });
+      files[".claude-plugin/marketplace.json"] = json({ name: "market", plugins: [{ name: "alpha", source: "./plugins/alpha" }] });
+    },
+    expected: ["alpha: plugin.json has no description"],
+  },
+  {
+    name: "plugin.json and marketplace entry with a blank description",
+    change: (files) => {
+      files["plugins/alpha/.claude-plugin/plugin.json"] = json({ name: "alpha", version: "1.2.3", description: "  " });
+      files[".claude-plugin/marketplace.json"] = json({ name: "market", plugins: [{ name: "alpha", source: "./plugins/alpha", description: "  " }] });
+    },
+    expected: ["alpha: plugin.json has no description"],
+  },
+  {
+    name: "hooks.json missing",
+    change: edit("plugins/alpha/hooks/hooks.json", () => undefined),
+    expected: ["alpha: hooks/hooks.json is missing"],
+  },
+  {
+    name: "hooks.json that is not JSON",
+    change: edit("plugins/alpha/hooks/hooks.json", () => "{"),
+    expected: ["alpha: hooks/hooks.json is not valid JSON"],
+  },
+  ...[
+    ["a cell with text after the link", "| [alpha](plugins/alpha/README.md) and more | Short summary. |"],
+    ["a row that does not start at the line start", "see | [alpha](plugins/alpha/README.md) | Short summary. |"],
+    ["a link without the closing cell bar", "| [alpha](plugins/alpha/README.md) Short summary."],
+    ["a plugin whose name only starts like it", "| [alpha](plugins/alpha-two/README.md) | Short summary. |"],
+    ["the plugin name in a longer link text", "| [alpha-two](plugins/alpha/README.md) | Short summary. |"],
+  ].map(([name, row]) => ({
+    name: `root README row with ${name}`,
+    change: edit("README.md", (text) => text.replace("| [alpha](plugins/alpha/README.md) | Short summary. |", row)),
+    expected: ["alpha: root README.md has no table row whose first cell links plugins/alpha"],
+  })),
   {
     name: "marketplace entry without a plugin directory",
     change: marketplace((m) => ({ ...m, plugins: [...m.plugins, { name: "gone", source: "./plugins/gone", description: "x" }] })),
@@ -354,5 +469,219 @@ test("hook tests next to the scripts are not hook scripts", (t) => {
       files[".claude/hooks/guard.test.mjs"] = "import 'node:test'\n";
     }),
     [],
+  );
+});
+
+test("a rule in a subdirectory of .claude/rules is not an orphan plugin rule", (t) => {
+  assert.deepEqual(
+    problems(t, (files) => {
+      files[".claude/rules/docs/style.md"] = "Write plainly.\n";
+    }),
+    [],
+  );
+});
+
+test("a helper/test file counts as a test file reference, alone or in braces", (t) => {
+  const { cites, referenced } = citedTests("Pinned by `helper/test/config.test.mjs` (`one`) and `helper/test/{a,b}.test.mjs`: `two`; `tests/c.test.ts`.");
+  assert.deepEqual(cites, [
+    { files: ["helper/test/config.test.mjs"], name: "one" },
+    { files: ["helper/test/a.test.mjs", "helper/test/b.test.mjs"], name: "two" },
+  ]);
+  assert.deepEqual([...referenced].sort(), ["helper/test/a.test.mjs", "helper/test/b.test.mjs", "helper/test/config.test.mjs", "tests/c.test.ts"]);
+  assert.deepEqual(citedTests("`helper/test/contract.mjs` and `other/test/x.test.mjs` are not test files.").referenced.size, 0);
+});
+
+for (const { name, change, expected } of [
+  {
+    name: "a helper/test file that does not exist",
+    change: edit("plugins/alpha/AGENTS.md", (text) => text + "- Helper: `helper/test/config.test.mjs` (`a name`).\n"),
+    expected: ["alpha: AGENTS.md cites helper/test/config.test.mjs, which does not exist"],
+  },
+  {
+    name: "a helper/test name that the file does not declare",
+    change: (files) => {
+      files["plugins/alpha/AGENTS.md"] += "- Helper: `helper/test/config.test.mjs`: `old name`.\n";
+      files["plugins/alpha/helper/test/config.test.mjs"] = "test('new name', () => {})\n";
+    },
+    expected: ['alpha: AGENTS.md cites test "old name", which helper/test/config.test.mjs does not declare'],
+  },
+]) {
+  test(`fails: ${name}`, (t) => {
+    assert.deepEqual(problems(t, change), expected);
+  });
+}
+
+test("a helper/test name that the file declares passes", (t) => {
+  assert.deepEqual(
+    problems(t, (files) => {
+      files["plugins/alpha/AGENTS.md"] += "- Helper: `helper/test/config.test.mjs`: `new name`.\n";
+      files["plugins/alpha/helper/test/config.test.mjs"] = "test('new name', () => {})\n";
+    }),
+    [],
+  );
+});
+
+// Shapes outside the grammar are not citations: they must not be read as one, whatever sits between the spans.
+for (const [name, markdown] of [
+  ["a space before the colon", "`tests/a.test.ts` : `x`"],
+  ["words after the colon", "`tests/a.test.ts`: see `x`"],
+  ["words before the parenthesis", "`tests/a.test.ts` words (`x`)"],
+  ["words inside the parenthesis", "`tests/a.test.ts` (see `x`)"],
+  ["a comma instead of the parenthesis", "`tests/a.test.ts`, `x`"],
+  ["a period after the reference", "`tests/a.test.ts`. `x`"],
+  ["a dash instead of the colon", "`tests/a.test.ts` - `x`"],
+  ["a bracket instead of the parenthesis", "`tests/a.test.ts` [`x`]"],
+  ["a reference with a trailing slash", "`tests/a.test.ts/`: `x`"],
+  ["a reference outside tests", "`src/a.test.ts`: `x`"],
+]) {
+  test(`citation grammar ignores ${name}`, () => {
+    assert.deepEqual(citedTests(markdown).cites, []);
+  });
+}
+
+test("citation grammar accepts the colon and the parenthesis with the spacing the docs use", () => {
+  const files = ["tests/a.test.ts"];
+  assert.deepEqual(citedTests("`tests/a.test.ts`: `x`").cites, [{ files, name: "x" }]);
+  assert.deepEqual(citedTests("`tests/a.test.ts`:   `x`").cites, [{ files, name: "x" }]);
+  assert.deepEqual(citedTests("`tests/a.test.ts`:\n`x`").cites, [{ files, name: "x" }]);
+  assert.deepEqual(citedTests("`tests/a.test.ts` (`x`)").cites, [{ files, name: "x" }]);
+  assert.deepEqual(citedTests("`tests/a.test.ts`(`x`)").cites, [{ files, name: "x" }]);
+  assert.deepEqual(citedTests("`tests/a.test.ts` ( `x`)").cites, [{ files, name: "x" }]);
+});
+
+test("a citation list continues across a comma, 'and', ', and' or a semicolon, and stops at any other word", () => {
+  const names = (markdown) => citedTests(markdown).cites.map((cite) => cite.name);
+  assert.deepEqual(names("`tests/a.test.ts` (`a`, `b`)"), ["a", "b"]);
+  assert.deepEqual(names("`tests/a.test.ts` (`a` and `b`)"), ["a", "b"]);
+  assert.deepEqual(names("`tests/a.test.ts` (`a`, and `b`)"), ["a", "b"]);
+  assert.deepEqual(names("`tests/a.test.ts` (`a`; `b`)"), ["a", "b"]);
+  assert.deepEqual(names("`tests/a.test.ts` (`a`,`b`)"), ["a", "b"]);
+  assert.deepEqual(names("`tests/a.test.ts` (`a` or `b`)"), ["a"]);
+  assert.deepEqual(names("`tests/a.test.ts` (`a`. `b`)"), ["a"]);
+  assert.deepEqual(names("`tests/a.test.ts` (`a` and also `b`)"), ["a"]);
+  assert.deepEqual(names("`tests/a.test.ts` (`a`) `b`"), ["a"]);
+});
+
+test("declared test names drop an escaped line break, LF or CRLF, and keep the text around it", () => {
+  assert.deepEqual([...declaredTests("test('one \\\ntwo', () => {})")], ["one two"]);
+  assert.deepEqual([...declaredTests("test('one \\\r\ntwo', () => {})")], ["one two"]);
+  assert.deepEqual([...declaredTests("test('a\\nb', () => {})")], ["a\nb"]);
+  assert.deepEqual([...declaredTests("test('a \\q b', () => {})")], ["a q b"]);
+});
+
+// A hook with no matcher runs for every tool, which is what `*` says too; a header or a group may use either.
+for (const { name, change, expected } of [
+  {
+    name: "a hook without a matcher wired under the match-all matcher",
+    change: settings((s) => {
+      s.hooks.SessionStart[0].matcher = "*";
+    }),
+    expected: [],
+  },
+  {
+    name: "a header that declares the match-all matcher wired without one",
+    change: edit(".claude/hooks/start.mjs", () => "// SessionStart (*): prepares something.\n"),
+    expected: [],
+  },
+  {
+    name: "a matcher with empty alternatives",
+    change: settings((s) => {
+      s.hooks.PreToolUse[0].matcher = "Edit||Write|";
+    }),
+    expected: [],
+  },
+  {
+    name: "a specific matcher wired under the match-all matcher",
+    change: settings((s) => {
+      s.hooks.PreToolUse[0].matcher = "*";
+    }),
+    expected: ["guard.mjs: not wired under PreToolUse (Edit|Write)"],
+  },
+  {
+    name: "a hook without a matcher wired under a specific one",
+    change: settings((s) => {
+      s.hooks.SessionStart[0].matcher = "startup";
+    }),
+    expected: ["start.mjs: not wired under SessionStart in"],
+  },
+  {
+    name: "a matcher with an extra alternative",
+    change: settings((s) => {
+      s.hooks.PreToolUse[0].matcher = "Edit|Write|Bash";
+    }),
+    expected: ["guard.mjs: not wired under PreToolUse (Edit|Write)"],
+  },
+]) {
+  test(`hook matcher: ${name}`, (t) => {
+    const found = problems(t, change);
+    assert.equal(found.length, expected.length, found.join("\n") || "(no problems)");
+    expected.forEach((line, i) => assert.ok(found[i].includes(line), `expected "${line}" in "${found[i]}"`));
+  });
+}
+
+const CI_YML = (pin) => `jobs:\n  plugins:\n    env:\n      # note\n      CLAUDE_CLI_PIN: ${pin}\n      OTHER: 1\n`;
+const WITH_PIN = (ci, readmeSuffix = "The repository is checked with v2.1.296 (`claude --version`).") => (files) => {
+  files[".github/workflows/ci.yml"] = ci;
+  files["README.md"] += `\n${readmeSuffix}\n`;
+};
+
+test("the CI CLI pin passes when the README says the repository is checked with that version", (t) => {
+  assert.deepEqual(problems(t, WITH_PIN(CI_YML("2.1.296"))), []);
+  assert.deepEqual(problems(t, WITH_PIN(CI_YML('"2.1.296"'))), []);
+});
+
+for (const { name, change, expected } of [
+  {
+    name: "a pin that differs from the README",
+    change: WITH_PIN(CI_YML("2.1.300")),
+    expected: ['.github/workflows/ci.yml: CLAUDE_CLI_PIN is 2.1.300, but README.md says the repository is checked with v2.1.296'],
+  },
+  {
+    name: "a pin when the README states no version",
+    change: WITH_PIN(CI_YML("2.1.296"), "Nothing about versions."),
+    expected: ['.github/workflows/ci.yml: CLAUDE_CLI_PIN is 2.1.296, but README.md says the repository is checked with no version ("checked with vX.Y.Z")'],
+  },
+  {
+    name: "a workflow without the pin line",
+    change: WITH_PIN("jobs: {}\n"),
+    expected: [".github/workflows/ci.yml: no CLAUDE_CLI_PIN: <version> line"],
+  },
+  {
+    name: "a pin under another variable name",
+    change: WITH_PIN(CI_YML("2.1.296").replace("CLAUDE_CLI_PIN", "CLAUDE_CODE_VERSION")),
+    expected: [".github/workflows/ci.yml: no CLAUDE_CLI_PIN: <version> line"],
+  },
+  {
+    name: "a rule whose plugin glob sits under another frontmatter key",
+    change: edit(".claude/rules/alpha.md", () => `---\nglobs:\n  - "plugins/alpha/**"\npaths:\n  - "other/**"\n---\n\n${IMPORT}\n`),
+    expected: ['alpha: .claude/rules/alpha.md paths frontmatter does not list "plugins/alpha/**"'],
+  },
+  {
+    name: "a plugin directory whose .claude-plugin is a file",
+    change: (files) => {
+      files["plugins/ghost/.claude-plugin"] = "not a directory";
+    },
+    expected: ["plugins/ghost: no marketplace.json entry"],
+  },
+]) {
+  test(`fails: ${name}`, (t) => {
+    assert.deepEqual(problems(t, change), expected);
+  });
+}
+
+test("a rule can list its plugin glob in the one-line forms or among others", (t) => {
+  for (const front of ['paths: "plugins/alpha/**"', 'paths: ["x/**", "plugins/alpha/**"]', 'paths:\n  - "x/**"\n  - plugins/alpha/**\nother: 1']) {
+    assert.deepEqual(problems(t, edit(".claude/rules/alpha.md", () => `---\n${front}\n---\n\n${IMPORT}\n`)), [], front);
+  }
+});
+
+test("a .DS_Store beside the generated typings keeps the delete-the-directory hint", (t) => {
+  assert.deepEqual(
+    problems(t, (files) => {
+      files["plugins/ghost/.DS_Store"] = "x";
+      files["plugins/ghost/.claude-plugin/.DS_Store"] = "x";
+      files["plugins/ghost/.claude-plugin/types/tsconfig.json"] = "{}";
+    }),
+    ["plugins/ghost: no marketplace.json entry (only the generated .claude-plugin/types/ is left; delete the directory)"],
   );
 });

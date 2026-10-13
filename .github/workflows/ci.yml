@@ -18,8 +18,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      # `claude plugin validate` and `claude plugin test` need the Claude Code CLI,
-      # so they stay a local check (see AGENTS.md).
       - name: Marketplace and plugin manifests agree
         run: node scripts/check-consistency.mjs
       - name: Plugins with code changes bumped their version
@@ -29,3 +27,37 @@ jobs:
         run: node --test scripts/*.test.mjs
       - name: codex-computer-use helper tests
         run: node --test plugins/codex-computer-use/helper/test/*.test.mjs
+
+  # Neither command logs in or needs the typings Claude Code generates when it loads a plugin.
+  plugins:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # The version the README says the repository is checked with; check-consistency fails when they differ.
+      CLAUDE_CLI_PIN: 2.1.296
+      DISABLE_AUTOUPDATER: 1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install Claude Code
+        run: npm install --global "@anthropic-ai/claude-code@${CLAUDE_CLI_PIN}"
+      # Each step runs every plugin, then fails with the list of those that failed.
+      - name: Validate the marketplace and every plugin
+        run: |
+          failed=()
+          claude plugin validate --strict . || failed+=(marketplace)
+          for source in $(node -p "require('./.claude-plugin/marketplace.json').plugins.map(p => p.source).join(' ')"); do
+            echo "==> validate $source"
+            claude plugin validate --strict "$source" || failed+=("$source")
+          done
+          if [ "${#failed[@]}" -gt 0 ]; then echo "validate failed: ${failed[*]}" >&2; exit 1; fi
+      - name: Test every plugin
+        run: |
+          failed=()
+          for source in $(node -p "require('./.claude-plugin/marketplace.json').plugins.map(p => p.source).join(' ')"); do
+            echo "==> test $source"
+            claude plugin test "$source" || failed+=("$source")
+          done
+          if [ "${#failed[@]}" -gt 0 ]; then echo "test failed: ${failed[*]}" >&2; exit 1; fi
