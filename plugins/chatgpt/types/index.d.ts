@@ -1,7 +1,8 @@
-// The inputs of the tools this plugin registers in session.start, in the shape
-// the engine lays for connected MCP tools (.claude-plugin/types/claude-code-mcp),
-// so `{ tool: 'mcp__chatgpt__ask' }` matchers type `e` before a save regenerates
-// that file. Keep them in step with the inputSchema in hooks/register.tsx.
+// The inputs of the tools this plugin registers, in the shape the engine lays for
+// connected MCP tools (.claude-plugin/types/claude-code-mcp), so
+// `{ tool: 'mcp__chatgpt__ask' }` matchers type `e` before a save regenerates that
+// file. Each inputSchema in TOOLS (hooks/tool-schemas.ts) satisfies SchemaFor of its
+// entry here, so tsc fails when they differ.
 export {}
 declare module 'claude-code' {
   interface McpToolInputs {

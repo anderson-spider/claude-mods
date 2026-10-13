@@ -5,16 +5,8 @@ import { chatUrlOf } from './input'
 import { limitMs } from './settings'
 import type { Browser, Outcome, ProcessRunner, Request, RequestDeps, TabHolder } from './model'
 import { askCommandAnswer, errorText, imageCommandAnswer } from './presentation'
-import { ASK_DESCRIPTION, IMAGE_DESCRIPTION, PROMPT } from './prompts'
-import {
-  ASK_COMMAND_DESCRIPTION,
-  ASK_INPUT_SCHEMA,
-  DOCTOR_COMMAND_DESCRIPTION,
-  IMAGE_COMMAND_DESCRIPTION,
-  IMAGE_INPUT_SCHEMA,
-  JOBS_DESCRIPTION,
-  JOBS_INPUT_SCHEMA,
-} from './tool-schemas'
+import { PROMPT } from './prompts'
+import { DOCTOR_COMMAND_DESCRIPTION, TOOLS } from './tool-schemas'
 import { type Candidate, chooseBrowser } from './chooser'
 import { BACKENDS, ownCallAllowed } from './backends'
 import { type McpCall, type McpHost, mcpCallOf } from './mcp-call'
@@ -162,12 +154,13 @@ export const register: Register = (on, options) => {
     return { sections: [...composed.sections, { id: 'chatgpt:ask', text: PROMPT, scope: 'session' as const }] }
   })
 
+  // The names stay literal in each call: the engine's scan reads them to classify the command hooks below.
   on('session.start', async ($, e, next) => {
-    await $.tool.register({ name: 'ask', description: ASK_DESCRIPTION, inputSchema: ASK_INPUT_SCHEMA })
-    await $.tool.register({ name: 'image', description: IMAGE_DESCRIPTION, inputSchema: IMAGE_INPUT_SCHEMA })
-    await $.tool.register({ name: 'jobs', description: JOBS_DESCRIPTION, inputSchema: JOBS_INPUT_SCHEMA })
-    await $.command.register({ name: 'chatgpt-ask', description: ASK_COMMAND_DESCRIPTION })
-    await $.command.register({ name: 'chatgpt-image', description: IMAGE_COMMAND_DESCRIPTION })
+    await $.tool.register({ name: 'ask', description: TOOLS.ask.description, inputSchema: TOOLS.ask.inputSchema })
+    await $.tool.register({ name: 'image', description: TOOLS.image.description, inputSchema: TOOLS.image.inputSchema })
+    await $.tool.register({ name: 'jobs', description: TOOLS.jobs.description, inputSchema: TOOLS.jobs.inputSchema })
+    await $.command.register({ name: 'chatgpt-ask', description: TOOLS.ask.command.description })
+    await $.command.register({ name: 'chatgpt-image', description: TOOLS.image.command.description })
     await $.command.register({ name: 'chatgpt-doctor', description: DOCTOR_COMMAND_DESCRIPTION })
     return next(e)
   })
@@ -179,23 +172,23 @@ export const register: Register = (on, options) => {
     return { decision: 'allow' as const, reason: 'chatgpt plugin driving chatgpt.com in its own browser tab' }
   })
 
-  on('tool.call', { tool: 'mcp__chatgpt__ask' }, ($, e) => serve('ask', e, handlers($)))
+  on('tool.call', { tool: 'mcp__chatgpt__ask' }, ($, e) => serve(TOOLS.ask.kind, e, handlers($)))
 
-  on('tool.call', { tool: 'mcp__chatgpt__image' }, ($, e) => serve('image', e, handlers($)))
+  on('tool.call', { tool: 'mcp__chatgpt__image' }, ($, e) => serve(TOOLS.image.kind, e, handlers($)))
 
   on('tool.call', { tool: 'mcp__chatgpt__jobs' }, async () => ({ result: jobs.report() }))
 
   on('command.run', { command: 'chatgpt-ask' }, async ($, e) => {
-    const prompt = e.args.trim()
-    if (!prompt) return { text: 'Usage: /chatgpt-ask <question>' }
-    const outcome = await handlers($).runNow({ kind: 'ask', input: { prompt }, filePaths: [] })
+    const request = TOOLS.ask.commandRequest(e.args)
+    if (typeof request === 'string') return { text: request }
+    const outcome = await handlers($).runNow(request)
     return askCommandAnswer(outcome)
   })
 
   on('command.run', { command: 'chatgpt-image' }, async ($, e) => {
-    const prompt = e.args.trim()
-    if (!prompt) return { text: 'Usage: /chatgpt-image <prompt>' }
-    const outcome = await handlers($).runNow({ kind: 'image', input: { prompt }, filePaths: [] })
+    const request = TOOLS.image.commandRequest(e.args)
+    if (typeof request === 'string') return { text: request }
+    const outcome = await handlers($).runNow(request)
     return imageCommandAnswer(outcome)
   })
 
