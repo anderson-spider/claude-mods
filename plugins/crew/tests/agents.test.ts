@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { EFFORTS, EFFORT_FLOOR, MODELS, SPECIALISTS, isGatewayBase, leadSection, nativeCodexSection, nativeCodexSpecs } from '../hooks/agents'
+import { CREW_TYPES, EFFORTS, EFFORT_FLOOR, LANES, MODELS, SPECIALISTS, isGatewayBase, leadSection, nativeCodexSection, nativeCodexSpecs, specialistOf } from '../hooks/agents'
 
 const by = (name: string) => SPECIALISTS.find(s => s.name === name)
 
@@ -100,6 +100,44 @@ test('leadSection does not carry the Codex text', () => {
   for (const jev of [true, false]) {
     expect(leadSection(jev)).not.toContain('codex')
     expect(leadSection(jev)).toBe(leadSection(jev))
+  }
+})
+
+// --- Lanes and crew types ---
+
+test('each specialist declares its write lane: the architect writes crew documents, every other role is unrestricted', () => {
+  expect(Object.keys(LANES)).toEqual(SPECIALISTS.map(s => s.name))
+  expect(SPECIALISTS.map(s => [s.name, LANES[s.name]])).toEqual([
+    ['code-reader', 'unrestricted'],
+    ['research', 'unrestricted'],
+    ['designer', 'unrestricted'],
+    ['developer', 'unrestricted'],
+    ['architect', 'crew-documents'],
+  ])
+})
+
+test('CREW_TYPES lists each specialist and its -codex twin, and nothing else', () => {
+  expect(CREW_TYPES).toEqual([
+    'crew:code-reader', 'crew:code-reader-codex', 'crew:research', 'crew:research-codex', 'crew:designer', 'crew:designer-codex',
+    'crew:developer', 'crew:developer-codex', 'crew:architect', 'crew:architect-codex',
+  ])
+  expect(CREW_TYPES).toEqual(SPECIALISTS.flatMap(s => [`crew:${s.name}`, `crew:${s.name}-codex`]))
+})
+
+test('specialistOf names the specialist of a role or of its twin, and no one for any other name', () => {
+  for (const s of SPECIALISTS) {
+    expect(specialistOf(s.name)).toBe(s)
+    expect(specialistOf(`${s.name}-codex`)).toBe(s)
+    expect(specialistOf(`${s.name}-codex-codex`)).toBeUndefined()
+  }
+  for (const role of ['tester', 'tester-codex', '-codex', '', 'Developer', 'crew:developer']) expect(specialistOf(role)).toBeUndefined()
+})
+
+test('a specialist and a twin hold the agent definition fields only: the lane is kept in LANES, out of what is registered', () => {
+  const fields = ['description', 'effort', 'model', 'name', 'prompt', 'tools']
+  for (const s of SPECIALISTS) expect(Object.keys(s).sort()).toEqual(fields)
+  for (const twin of nativeCodexSpecs(Object.fromEntries(SPECIALISTS.map(s => [s.name, `gpt-${s.name}`])))) {
+    expect(Object.keys(twin).sort()).toEqual(fields)
   }
 })
 

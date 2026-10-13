@@ -3,7 +3,7 @@
 // most one step from the agent's defaults (and never below its floor), so a bad answer costs money, never a lane change.
 // The type is rewritten only by the codex crew mode in register.tsx, and only to the same role's registered twin (`twinFor`).
 
-import { EFFORTS, EFFORT_FLOOR, MODELS, NATIVE_SUFFIX, SPECIALISTS } from './agents'
+import { EFFORTS, EFFORT_FLOOR, MODELS, NATIVE_SUFFIX, specialistOf } from './agents'
 import type { Agent, Effort } from './agents'
 import type { AskFn } from './jev'
 import { DEPTH_HIGH, DEPTH_TIE, DESCRIPTION_CHARS, PROMPT_CHARS, QUESTIONS } from './questions'
@@ -32,11 +32,11 @@ export function routable(
   if (e.fork || e.model || e.workflow) return undefined
   if (!e.subagentType.startsWith(PREFIX)) return undefined
   const name = e.subagentType.slice(PREFIX.length)
-  const specialist = SPECIALISTS.find(s => s.name === name)
-  if (specialist) return specialist
+  const specialist = specialistOf(name)
+  if (!specialist) return undefined
+  if (specialist.name === name) return specialist
   const twin = twins.find(t => t.name === name)
-  const base = name.endsWith(NATIVE_SUFFIX) ? name.slice(0, -NATIVE_SUFFIX.length) : undefined
-  return twin && base !== undefined && SPECIALISTS.some(s => s.name === base) ? { ...twin, base } : undefined
+  return twin ? { ...twin, base: specialist.name } : undefined
 }
 
 /**

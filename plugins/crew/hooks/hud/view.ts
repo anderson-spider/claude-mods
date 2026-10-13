@@ -1,4 +1,4 @@
-import { SPECIALISTS, NATIVE_SUFFIX } from '../agents'
+import { CREW_TYPES, SPECIALISTS } from '../agents'
 import { CODEX_MODELS, CODEX_PREFIX } from '../native'
 
 export type PlanProjection = {
@@ -28,7 +28,7 @@ export type Row = Segment[]
 export type Band = { rows: Row[] }
 export type PlanDisplay = PlanProjection | { state: 'loading' | 'unknown' }
 
-const roles = new Set(SPECIALISTS.flatMap(s => [`crew:${s.name}`, `crew:${s.name}${NATIVE_SUFFIX}`]))
+const roles: ReadonlySet<string> = new Set(CREW_TYPES)
 const models: ReadonlySet<string> = new Set(SPECIALISTS.map(s => s.model))
 const codex: ReadonlySet<string> = new Set(Object.values(CODEX_MODELS))
 const CLAUDE_ID = /^claude-(opus|sonnet|haiku|fable)-[0-9]+(-[0-9]+)*(-[0-9]{8})?$/
