@@ -1,25 +1,19 @@
 import type { AskInput, AskOptions, AskResult, Browser } from './model'
-import { prepare } from './tab'
-import { compose, readAnswer, send, stopped, unfinished, watch } from './conversation'
+import { openRun, readAnswer, stopped, submit, unfinished, watch } from './conversation'
+
+// The ask flow's noun for the saveOnly guard, and its poll interval.
+const ASK = { noun: 'answer', pollMs: 3000 }
 
 export async function ask(browser: Browser, input: AskInput, options: AskOptions = {}): Promise<AskResult> {
-  const timeoutMs = options.timeoutMs ?? 6 * 60_000
-  const pollMs = options.pollMs ?? 3000
-  const progress = options.progress ?? (() => {})
-  const tab = options.tab ?? {}
-
-  if (input.saveOnly && input.chatUrl === undefined) return { ok: false, error: 'saveOnly needs the chatUrl of the chat with the answer.' }
-  const ready = await prepare(browser, input, { progress, tab, busy: input.saveOnly, backends: options.backends ?? [] })
-  if (!ready.ok) return ready
-  const { tabId, page } = ready
+  const run = await openRun(browser, input, options, ASK)
+  if (!run.ok) return run
+  const { tabId, start: page, pollMs, timeoutMs, progress } = run
 
   // Saving what the chat holds: its last answer counts as the new one.
   const before = input.saveOnly ? page.count - 1 : page.count
   if (!input.saveOnly) {
-    const failed = await compose(browser, tabId, input, progress)
-    if (failed) return { ok: false, url: page.href, error: failed }
-    const sent = await send(browser, tabId, input.prompt)
-    if (!sent.ok) return { ok: false, url: page.href, error: sent.text }
+    const failed = await submit(run, input)
+    if (failed) return failed
   }
 
   progress('waiting for the answer')

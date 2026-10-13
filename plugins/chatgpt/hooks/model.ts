@@ -1,3 +1,5 @@
+import type { Kind } from './flows'
+
 export type Browser = {
   /** The backend's name, as the chooser and the advice name it; an error about the backend starts with it. */
   name: string
@@ -75,7 +77,7 @@ export type ImageResult =
 
 export type Job = {
   id: number
-  kind: 'ask' | 'image'
+  kind: Kind
   prompt: string
   status: 'queued' | 'running' | 'done' | 'failed'
   startedAt: number
@@ -94,7 +96,7 @@ export type Preview = { type: 'image'; source: { type: 'base64'; media_type: str
 export type Outcome = { ok: boolean; text: string; error?: string; chatUrl?: string; paths?: string[]; timedOut?: boolean; previews?: Preview[]; markdown?: string }
 
 export type Request = {
-  kind: 'ask' | 'image'
+  kind: Kind
   input: AskInput
   /** For an image, the reference first. */
   filePaths: string[]

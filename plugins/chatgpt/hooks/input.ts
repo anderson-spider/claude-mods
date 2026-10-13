@@ -1,5 +1,6 @@
 import { chatUrlError } from './tab'
 import { mimeOf, typeOf } from './files'
+import type { Kind } from './flows'
 import type { Attachment, AttachmentFiles, Request } from './model'
 
 // Attachment checks
@@ -39,7 +40,7 @@ const trimmedOf = (value: unknown) => (typeof value === 'string' && value.trim()
 export const chatUrlOf = trimmedOf
 
 // Reads a tool call's input into a request, or the error to answer.
-export function requestOf(kind: 'ask' | 'image', e: Record<string, unknown>): Request | string {
+export function requestOf(kind: Kind, e: Record<string, unknown>): Request | string {
   const prompt = typeof e.prompt === 'string' ? e.prompt.trim() : ''
   if (!prompt) return 'Give a non-empty prompt.'
   const chatUrl = chatUrlOf(e.chatUrl)
