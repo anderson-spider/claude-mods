@@ -276,7 +276,7 @@ export const hudBand = (surface: 'terminal' | 'desktop' = 'terminal', hasSurvey 
 
 export const hudPane = (columns = 100, rows = 30) => ({
   plugin: 'crew', component: 'Pane', requestId: 'crew-hud', surface: 'terminal',
-  viewport: { columns, rows }, props: {},
+  viewport: { columns, rows }, props: { bodyColumns: columns },
 }) as never
 
 export const hudText = '## Steps\n### Delivery\n- T1 (crew:digger, after: —) private task — state: implementing'
