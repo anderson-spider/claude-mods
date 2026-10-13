@@ -320,6 +320,11 @@ for (const { name, change, expected } of [
     expected: ['alpha: ./plugins/alpha/skills/s/SKILL.md is missing or its frontmatter does not name "s"'],
   },
   {
+    name: "a skill with a further frontmatter field after its description",
+    change: edit("plugins/alpha/skills/s/SKILL.md", (text) => text.replace(/(description: .+\n)/, "$1disable-model-invocation: true\n")),
+    expected: [],
+  },
+  {
     name: "a cited test that was renamed",
     change: edit("plugins/alpha/tests/alpha.test.ts", (text) => text.replace("the first one", "the first one, renamed")),
     expected: ['alpha: AGENTS.md cites test "the first one", which tests/alpha.test.ts does not declare'],

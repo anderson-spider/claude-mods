@@ -223,7 +223,8 @@ function checkPlugin(root, entry, marketplace, rootDocs, errors) {
   for (const skill of listDir(join(dir, 'skills'), () => true)) {
     const file = `${entry.source}/skills/${skill}/SKILL.md`
     const text = existsSync(join(root, file)) ? readText(join(root, file)) : ''
-    const front = /^---\nname: (.+)\ndescription: (.+)\n---\n/.exec(text)
+    // Further fields (`disable-model-invocation`) may follow the description.
+    const front = /^---\nname: (.+)\ndescription: (.+)\n(?:[\w-]+: .+\n)*---\n/.exec(text)
     if (front?.[1] !== skill) fail(`${file} is missing or its frontmatter does not name "${skill}"`)
   }
 
