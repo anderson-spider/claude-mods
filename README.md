@@ -8,7 +8,8 @@ Marketplace of [Claude Code](https://claude.com/claude-code) plugins made by and
 | --- | --- |
 | [chatgpt](plugins/chatgpt/README.md) | Lets Claude ask your logged-in ChatGPT, or have it generate an image, in terminal-browser, Claude in Chrome or the Claude desktop app's built-in browser, and saves the result locally. |
 | [codex-computer-use](plugins/codex-computer-use/README.md) | Routes native Mac app control through Codex computer use from the ChatGPT app instead of Claude's own computer use, asking before each new app. |
-| [crew](plugins/crew) | The main session implements; crew adds three optional read-only helpers: `planner` and `challenger` on Opus, `digger` on Haiku, all at high effort, and no task requires one. `jevKey` enables Jev effort routing. Each helper has a fixed-model Codex twin, served by a gateway as `ANTHROPIC_BASE_URL` or, with the experimental `codexLogin` option, by your Codex CLI login (the three twins through the crew Codex helper, in Codex's read-only sandbox, when it is installed and running; the planner and challenger twins fall back to the backend without it); the `mode` option and `/crew-mode` switch plain calls to those twins (`codex`) or keep them on Claude (`claude`, the default), so calls may go to OpenAI with or without Jev. A HUD band above the prompt shows plan progress and running helpers, and /crew-hud opens a pane with each plan as a tree and each helper's activity, in the design's colours under a dark or automatic theme. |
+| [crew](plugins/crew) | The main session implements; crew adds three optional read-only helpers: `planner` and `challenger` on Opus, `digger` on Haiku, all at high effort, and no task requires one. `jevKey` enables Jev effort routing. Each helper has a fixed-model Codex twin, served by a gateway as `ANTHROPIC_BASE_URL` or, with the experimental `codexLogin` option, by your Codex CLI login (the three twins through the crew Codex helper, in Codex's read-only sandbox, when it is installed and running; the planner and challenger twins fall back to the backend without it); the `mode` option and `/crew-mode` switch plain calls to those twins (`codex`) or keep them on Claude (`claude`, the default), so calls may go to OpenAI with or without Jev. /crew-hud opens a pane with each plan as a tree and each helper's activity, in the design's colours under a dark or automatic theme. |
+| [session-hud](plugins/session-hud/README.md) | A three-row card above the prompt: model, context, cache and cost; the five-hour and seven-day limits with their pace; the last turn, edits, errors and the crew's agents and plan. Requires crew, which no longer draws above the prompt. |
 | [tailscale](plugins/tailscale/README.md) | Lets Claude query and modify your tailnet through the Tailscale API, with the key in the sensitive `apiKey` plugin option. |
 
 ## Install
@@ -20,6 +21,7 @@ Inside Claude Code, add the marketplace and install the plugin:
 /plugin install chatgpt@spider-claude-mods
 /plugin install codex-computer-use@spider-claude-mods
 /plugin install crew@spider-claude-mods
+/plugin install session-hud@spider-claude-mods
 /plugin install tailscale@spider-claude-mods
 ```
 

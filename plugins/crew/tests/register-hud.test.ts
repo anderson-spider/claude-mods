@@ -52,20 +52,18 @@ test('HUD refreshes plans after successful in-scope Write and never for denies, 
   expect(values.plans).toMatchObject([{ name: 'live' }])
 })
 
-test('HUD render reads atoms only and yields the band during a survey', OFF, async ($, on) => {
+test('HUD render reads atoms only, and the crew draws nothing above the prompt', OFF, async ($, on) => {
   const { seen } = jevWorld(on)
   on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'Text', children: ['idle'] }))
   await $.agent.spawn(spawnInput())
   await pause()
-  for (const surface of ['terminal', 'desktop'] as const) {
-    const band = await $.ui.mount(hudBand(surface))
-    expect(await band.find({ type: 'Text', text: /1 agent/ })).toBeDefined()
-    await band.unmount()
-  }
+  const pane = await $.ui.mount(hudPane())
+  expect(await pane.find({ type: 'Text', text: /Agents · running 1/ })).toBeDefined()
+  await pane.unmount()
+  const band = await $.ui.mount(hudBand())
+  expect((await band.find({ type: 'Text' }))?.text).toBe('idle')
+  await band.unmount()
   expect(seen.fetches).toEqual([])
-  const survey = await $.ui.mount(hudBand('terminal', true))
-  expect(await survey.find({ type: 'Text', text: /1 agent/ })).toBeUndefined()
-  await survey.unmount()
   expect(seen.writes).toEqual([])
 })
 

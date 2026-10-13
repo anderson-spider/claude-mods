@@ -1,12 +1,11 @@
 import { expect, test } from 'claude-code/testing'
-import { bandRows, paneRows, type AgentRecord, type PlanDisplay, type PlanProjection, type Snapshot } from '../hooks/hud/view'
+import { paneRows, type AgentRecord, type PlanDisplay, type PlanProjection, type Snapshot } from '../hooks/hud/view'
 import { parsePlan } from '../hooks/hud/plan'
 
 const now = Date.parse('2026-10-12T12:00:00Z')
 // A snapshot with nothing in it; a test names only what it exercises, so a new field never touches the others.
 const EMPTY: Snapshot = { plans: [], agents: [], now, columns: 60 }
 const snap = (changes: Partial<Snapshot> = {}): Snapshot => ({ ...EMPTY, ...changes })
-const band = (changes: Partial<Snapshot> = {}) => bandRows(snap(changes))
 const pane = (changes: Partial<Snapshot> = {}, maxRows?: number) => paneRows(snap(changes), maxRows)
 const text = (rows: { rows: { text: string }[][] }) => rows.rows.map(row => row.map(s => s.text).join('')).join('\n')
 const styled = (rows: { rows: { text: string; style: string; bold?: boolean }[][] }) =>
@@ -21,31 +20,6 @@ const plan: PlanProjection = {
 }
 const agent = (changes: Partial<AgentRecord> = {}): AgentRecord => ({ id: 'a', type: 'crew:digger', model: 'haiku',
   effort: 'medium', startedAt: now - 187_000, status: 'running', ...changes })
-
-test('the band is empty when nothing is active, and says when a plan is loading or cannot be read', () => {
-  expect(band().rows).toEqual([])
-  expect(text(band({ plans: [{ state: 'loading' }, { state: 'unknown' }] }))).toBe('crew  plan loading  |  plan unknown')
-  expect(text(band({ agents: [agent({ status: 'ended' }), agent({ type: 'general-purpose' })] }))).toBe('')
-})
-
-test('the band is one line with the totals, the running steps and the running agents', () => {
-  expect(text(band({ plans: [plan], agents: [agent()], columns: 120 })))
-    .toBe('crew  2 done / 2 running / 3 left  |  T3 crew:digger  T4 crew:digger  |  1 agent')
-  expect(text(band({ plans: [plan, { state: 'loading' }], agents: [agent(), agent({ id: 'b' })], columns: 200 })))
-    .toBe('crew  2 done / 2 running / 3 left  |  plan loading  |  T3 crew:digger  T4 crew:digger  |  2 agents')
-})
-
-test('the band wraps by width and names every running step without truncation', () => {
-  const steps = Array.from({ length: 40 }, (_, i) => stepOf(`T${i}`, 'implementing', [], 'crew:digger'))
-  const many: PlanProjection = { name: 'p', groups: [{ heading: 'h', done: 0, running: 40, left: 0, unknownStates: false, steps }] }
-  for (const width of [20, 40, 60, 120]) {
-    const rows = band({ plans: [many], columns: width })
-    const output = text(rows)
-    for (let i = 0; i < 40; i++) expect(output).toContain(`T${i}`)
-    expect(output).not.toContain('more')
-    expect(rows.rows.every(row => row.map(s => s.text).join('').length <= width)).toBe(true)
-  }
-})
 
 test('the pane draws each deliverable as a tree under its counts line, with the rail dim and each body by state', () => {
   expect(styled(pane({ plans: [plan], columns: 80 }))).toEqual([
@@ -186,16 +160,14 @@ test('parser owner main survives the view while unknown owners and states stay h
   const output = text(pane({ plans: [parsed], columns: 120 }))
   expect(output).toContain('◎ T9 main  working')
   expect(output).toContain('? T10 ?  ?')
-  expect(text(band({ plans: [parsed], columns: 120 }))).toContain('T9 main')
 })
 
 test('untrusted projection and models never reach display', () => {
   const malicious: PlanProjection = { name: '/Users/private/token', groups: [{ heading: 'https://host/secret', done: 0, running: 1, left: 0,
     unknownStates: false, steps: [stepOf('evil\u001b', 'implementing', [], 'crew:unknown'), stepOf('T1', 'implementing', ['evil\u001b', 'T0\u001b'], 'crew:unknown')] }] }
   const view = snap({ plans: [malicious], columns: 120, agents: [agent({ model: 'sk-secret', observedModel: 'https://bad', effort: 'high\u001b' })] })
-  for (const output of [text(paneRows(view)), text(bandRows(view))]) {
-    for (const secret of ['/Users/', 'https:', 'sk-secret', '\u001b', 'crew:unknown']) expect(output).not.toContain(secret)
-  }
+  const output = text(paneRows(view))
+  for (const secret of ['/Users/', 'https:', 'sk-secret', '\u001b', 'crew:unknown']) expect(output).not.toContain(secret)
   expect(text(paneRows(view))).toContain('Plan  ?')
   expect(text(paneRows(view))).toMatch(/● digger +\? +3:07/u)
   expect(text(paneRows(view))).toContain('◎ T1 ?  working')
@@ -213,14 +185,11 @@ test('the view reads the snapshot and leaves it as it was', () => {
   const view = snap({ plans: [plan, { state: 'loading' }] as PlanDisplay[], agents: [agent()] })
   const before = JSON.stringify(view)
   paneRows(view)
-  bandRows(view)
   expect(JSON.stringify(view)).toBe(before)
 })
 
 test('width edges: the minimum is four cells and a NaN width reads as sixty', () => {
-  expect(band({ plans: [plan], columns: 3 })).toEqual(band({ plans: [plan], columns: 4 }))
-  expect(band({ plans: [plan], columns: 4 }).rows.every(row => row.map(s => s.text).join('').length <= 4)).toBe(true)
-  expect(band({ plans: [plan], columns: Number.NaN })).toEqual(band({ plans: [plan], columns: 60 }))
+  expect(pane({ plans: [plan], columns: 3 })).toEqual(pane({ plans: [plan], columns: 4 }))
   expect(pane({ plans: [plan], columns: Number.NaN })).toEqual(pane({ plans: [plan], columns: 60 }))
 })
 

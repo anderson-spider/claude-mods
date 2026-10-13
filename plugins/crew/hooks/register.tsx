@@ -5,7 +5,7 @@ import { createAgentTracker } from './hud/agents'
 import type { AgentIo, AgentTracker } from './hud/agents'
 import { createPlanRefresher } from './hud/files'
 import type { PlanIo, PlanRefresher } from './hud/files'
-import { bandRows, paneView } from './hud/view'
+import { paneView } from './hud/view'
 import type { Segment } from './hud/view'
 import { paint, paletteOf } from './hud/palette'
 import type { Palette } from './hud/palette'
@@ -690,7 +690,7 @@ async function confirmStep($: Dollar, routing: Routing, agentId: string | undefi
   if (home) await settleDecision($, pending.saved.then(() => saveDecision(decisionIo($), home, agentId, withRan(pending.record, ran))))
 }
 
-/** The band's own state. Agent observation and the plan read are kept apart from routing, effort and confirmation. */
+/** The HUD's own state. Agent observation and the plan read are kept apart from routing, effort and confirmation. */
 type HudState = { agents: AgentTracker; plans: PlanRefresher; ticker?: Timer; initial?: Promise<void>; ticks: number }
 
 /** The agent observation's host access: the clock, the agent list and the displayed records. */
@@ -770,7 +770,7 @@ export const register: Register = (on, options) => {
   }
 
   const display: HudState = { agents: createAgentTracker(), plans: createPlanRefresher(), ticks: 0 }
-  // The start itself comes first and unchanged; the band's first plan read follows and cannot alter its result.
+  // The start itself comes first and unchanged; the HUD's first plan read follows and cannot alter its result.
   on('session.start', {}, async ($, e, next) => {
     try {
       return await startCrew(native, codex, routing.mode, $, e, next)
@@ -794,9 +794,9 @@ export const register: Register = (on, options) => {
     .catch(() => ({ text: `crew: /${MODE_COMMAND} failed; run it again to see the mode.` }))
   on('command.run', { command: HUD_COMMAND }, async $ => {
     const opened = await $.ui.open({ id: HUD_PANE, title: 'Crew', closeOnEscape: true })
-    return { text: opened.isPlaced ? 'the pane is open.' : 'the pane waits for a wider terminal; the band above the prompt shows the summary.' }
-  }).catch(() => ({ text: `/${HUD_COMMAND} failed; the band above the prompt still shows the summary.` }))
-  // Reads the same prepared atoms as the band, never a host: a failure draws nothing and leaves the pane as it was.
+    return { text: opened.isPlaced ? 'the pane is open.' : 'the pane waits for a wider terminal.' }
+  }).catch(() => ({ text: `/${HUD_COMMAND} failed; run it again to open the pane.` }))
+  // Reads prepared atoms only, never a host: a failure draws nothing and leaves the pane as it was.
   // The width is the body's; the rows are all drawn and the host scrolls them while the pane has the keyboard.
   on('ui.render', { component: 'Pane', requestId: HUD_PANE }, async ($, e, next) => {
     try {
@@ -868,7 +868,7 @@ export const register: Register = (on, options) => {
     const sent = await bindStepEffort($, routing, e, twin)
     // The spawn's `-<effort>` suffix decides, else the host's effort, else the twin's default; it is what goes out.
     const loginEffort = twin ? codexEffort(observedEffort(sent, true), codexEffort(twin.effort, 'medium')) : undefined
-    // The band's own record of this step: synchronous, never throws, and reads what is sent without changing it.
+    // The HUD's own record of this step: synchronous, never throws, and reads what is sent without changing it.
     const noted = display.agents.stepped(agentIo($), e.agentId, sent, loginEffort)
     let answer: TurnStepResult
     if (twin && loginEffort) answer = yield* stepOnLogin($, codex, twin, native.helped.has(`crew:${twin.name}`), sent, loginEffort, next.signal)
@@ -899,19 +899,5 @@ export const register: Register = (on, options) => {
       void hud($, async () => { display.agents.tooled(agentIo($), e.agentId, (e as { tool?: unknown }).tool, failed) })
     }
     return result
-  })
-  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    if (e.props.hasSurvey) return next(e)
-    try {
-      const [shown, running, time] = await Promise.all([read($, plans), read($, agents), read($, nowAtom)])
-      const rows = bandRows({ plans: shown, agents: running, now: time, columns: e.props.bodyColumns }).rows
-      if (!rows.length) return next(e)
-      const { Box, Text } = $.ui.resolve(e)
-      return <Box width={e.props.bodyColumns} flexDirection="column">{rows.map((row, index) =>
-        <Text key={`crew-hud-${index}`} wrap="wrap">{row.map(segment => segment.text).join('')}</Text>)}</Box>
-    } catch {
-      $.ui.log('crew HUD: render failed', { to: 'debug' })
-      return next(e)
-    }
   })
 }

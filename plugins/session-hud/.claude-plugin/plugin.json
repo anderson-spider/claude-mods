@@ -1,0 +1,12 @@
+{
+  "name": "session-hud",
+  "version": "0.1.0",
+  "description": "A three-row card above the prompt: model, context, cache and cost; the five-hour and seven-day limits with their pace; the last turn, edits, errors and the crew's agents and plan.",
+  "author": {
+    "name": "anderson-spider"
+  },
+  "dependencies": [
+    "crew"
+  ],
+  "types": "./types/index.d.ts"
+}

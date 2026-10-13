@@ -21,7 +21,7 @@ export type AnsweredStep = {
   stopReason?: string | null
 }
 
-/** What a step sent that the band shows: its model, and the host's effort when it names one. */
+/** What a step sent that the HUD shows: its model, and the host's effort when it names one. */
 export type SentStep = { model: string; effort?: unknown }
 
 /** A step's identity for its answer: the job generation and the step's token. */
@@ -36,7 +36,7 @@ export type AgentTracker = {
   lifecycle(): number
   /** Before the spawn's `next`: the returned function records the spawn once the host has assigned its ID. */
   spawning(io: AgentIo): (spawn: { id: string; type: string; model: string; description?: string }) => void
-  /** A step the band will show; a failure is logged and never alters the step. Returns the job identity. */
+  /** A step the HUD will show; a failure is logged and never alters the step. Returns the job identity. */
   stepped(io: AgentIo, id: string | undefined, sent: SentStep, loginEffort: string | undefined): NotedStep | undefined
   /** The model an answered step reports, for the job `stepped` returned; never throws. */
   answered(io: AgentIo, id: string | undefined, noted: NotedStep | undefined, answer: AnsweredStep): void
