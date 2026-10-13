@@ -69,6 +69,8 @@ export function declaredTests(source) {
  *   - a parenthesised list right after the reference: (`name`, `name` and `name`)
  *   - a single span after a colon: `tests/<file>.test.ts`: `name`
  * Every other backticked span is code, not a citation. A name belongs to the nearest reference before it.
+ * A span naming a support file under `tests/` or `helper/test/` (`tests/host.ts`, `helper/test/contract.mjs`) is
+ * also referenced, so it must exist, but it is never an anchor and ends a list of names.
  */
 export function citedTests(markdown) {
   const spans = [...markdown.matchAll(/`([^`\n]*)`/g)].map(m => ({ text: m[1], start: m.index, end: m.index + m[0].length }))
@@ -79,17 +81,24 @@ export function citedTests(markdown) {
     const group = /^((?:tests|helper\/test)\/)\{([\w.,-]+)\}(\.test\.(?:ts|tsx|mjs))$/.exec(text)
     return group ? group[2].split(',').map(name => `${group[1]}${name}${group[3]}`) : undefined
   }
+  // A helper beside the tests: no `.test.` in the name, and no `..` to climb out of the plugin.
+  const supportRef = text => (/^(?:tests|helper\/test)\/(?!.*\.\.)[\w./-]+\.(?:ts|tsx|mjs|mts)$/.test(text) ? text : undefined)
+  const isFileRef = text => fileRef(text) ?? supportRef(text)
   const referenced = new Set()
   const cites = []
 
   spans.forEach((span, i) => {
     const files = fileRef(span.text)
-    if (!files) return
+    if (!files) {
+      const support = supportRef(span.text)
+      if (support) referenced.add(support)
+      return
+    }
     files.forEach(file => referenced.add(file))
-    if (/^:\s*$/.test(gapAfter(i)) && i + 1 < spans.length && !fileRef(spans[i + 1].text)) {
+    if (/^:\s*$/.test(gapAfter(i)) && i + 1 < spans.length && !isFileRef(spans[i + 1].text)) {
       cites.push({ files, name: spans[i + 1].text })
     } else if (/^\s*\(\s*$/.test(gapAfter(i))) {
-      for (let j = i + 1; j < spans.length && !fileRef(spans[j].text); j++) {
+      for (let j = i + 1; j < spans.length && !isFileRef(spans[j].text); j++) {
         cites.push({ files, name: spans[j].text })
         if (!/^(?:,|,?\s+and|;)?\s*$/.test(gapAfter(j))) break
       }
@@ -98,15 +107,22 @@ export function citedTests(markdown) {
   return { cites, referenced }
 }
 
-// CI installs the Claude Code CLI at `CLAUDE_CLI_PIN`; the README says which version the repository is checked with.
+// CI installs the Claude Code CLI at `CLAUDE_CLI_PIN`, set in a workflow file; the README says which version the
+// repository is checked with. Skipped only for a repository with no ci.yml, no pin in any workflow and no README version.
 function checkCliPin(root, errors) {
-  const workflow = join(root, '.github/workflows/ci.yml')
-  if (!existsSync(workflow)) return
-  const pin = /^\s*CLAUDE_CLI_PIN:\s*["']?([\w.-]+)["']?\s*$/m.exec(readText(workflow))?.[1]
+  const workflows = listDir(join(root, '.github/workflows'), e => e.isFile() && /\.ya?ml$/.test(e.name)).sort()
+  const pins = workflows.flatMap(file => {
+    const pin = /^\s*CLAUDE_CLI_PIN:\s*["']?([\w.-]+)["']?\s*$/m.exec(readText(join(root, '.github/workflows', file)))?.[1]
+    return pin ? [{ file: `.github/workflows/${file}`, pin }] : []
+  })
   const readme = join(root, 'README.md')
-  const checked = existsSync(readme) ? /checked with v([\d.]+)/.exec(readText(readme))?.[1] : undefined
-  if (!pin) errors.push('.github/workflows/ci.yml: no CLAUDE_CLI_PIN: <version> line')
-  else if (pin !== checked) errors.push(`.github/workflows/ci.yml: CLAUDE_CLI_PIN is ${pin}, but README.md says the repository is checked with ${checked ? `v${checked}` : 'no version ("checked with vX.Y.Z")'}`)
+  const checked = existsSync(readme) ? /checked with v(\d+(?:\.\d+)*)/.exec(readText(readme))?.[1] : undefined
+  const hasCi = workflows.includes('ci.yml')
+  if (!hasCi && !pins.length && !checked) return
+  if (!pins.length) errors.push(`${hasCi ? '.github/workflows/ci.yml' : '.github/workflows'}: no CLAUDE_CLI_PIN: <version> line`)
+  for (const { file, pin } of pins) {
+    if (pin !== checked) errors.push(`${file}: CLAUDE_CLI_PIN is ${pin}, but README.md says the repository is checked with ${checked ? `v${checked}` : 'no version ("checked with vX.Y.Z")'}`)
+  }
 }
 
 // Each project hook script is wired under the event and matcher its header declares, with its exact command.

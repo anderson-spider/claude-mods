@@ -124,17 +124,41 @@ echo "done: run /reload-plugins in running sessions, or start a new one (crew tw
 '''
 
 # Claude Code writes plugins/*/.claude-plugin/types/ only when an interactive session loads a plugin from its folder,
-# so this opens one on a pseudo-terminal with every plugin and exits once all of them have their typings.
+# so this opens one on a pseudo-terminal with the plugin (or every plugin) and exits once each has its typings.
 [tasks."plugins:types"]
-description = "Generate the claude-code typings every plugin's tsconfig.json extends"
+description = "Generate the claude-code typings one plugin's (or every plugin's) tsconfig.json extends"
+usage = '''
+arg "[name]" help="Plugin to generate for (default: every plugin)"
+'''
 run = '''
 #!/usr/bin/env bash
 set -euo pipefail
-dirs=(plugins/*/)
+name=${usage_name:-}
+if [ -n "$name" ]; then
+  [[ "$name" =~ ^[a-z][a-z0-9-]*$ && -d "plugins/$name" ]] || { echo "no such plugin: $name" >&2; exit 1; }
+  dirs=("plugins/$name/")
+else
+  dirs=(plugins/*/)
+fi
 args=()
 for d in "${dirs[@]}"; do args+=(--plugin-dir "${d%/}"); done
 ready() { for d in "${dirs[@]}"; do [ -f "${d}.claude-plugin/types/tsconfig.json" ] || return 1; done; }
 { for _ in $(seq 120); do ready && break; sleep 1; done; sleep 2; printf '/exit\r'; } | script -q /dev/null claude "${args[@]}" >/dev/null 2>&1 || true
-ready || { echo "typings were not written for every plugin" >&2; exit 1; }
-echo "typings written for every plugin"
+ready || { echo "typings were not written for ${name:-every plugin}" >&2; exit 1; }
+echo "typings written for ${name:-every plugin}"
+'''
+
+# Everything check-consistency requires is written, so the plugin passes it with only the text left to fill in.
+[tasks."plugin:new"]
+description = "Scaffold a plugin that passes the consistency checks, then generate its typings"
+usage = '''
+arg "<name>" help="Plugin name: lowercase words joined by single hyphens"
+arg "[description]" help="One-line description (default: a placeholder to replace)"
+'''
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+name=${usage_name?}
+node scripts/new-plugin.mjs "$name" ${usage_description:+"$usage_description"}
+mise run plugins:types "$name" || { echo "scaffolded, but the typings were not written: run mise run plugins:types $name" >&2; exit 1; }
 '''

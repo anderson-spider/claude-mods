@@ -1,0 +1,14 @@
+// The sample tool's logic, pure so tests call it directly. Replace it with the plugin's own.
+export const MODES = ['plain', 'upper'] as const
+
+/** The tool's input as the model may send it: nothing is trusted until checked here. */
+export type EchoInput = { text?: unknown; mode?: unknown; tags?: unknown }
+
+/** Returns the text (upper-cased in `upper` mode) followed by its string tags as `#tag`. */
+export function echo(input: EchoInput): string {
+  const text = typeof input.text === 'string' ? input.text : ''
+  const tags = Array.isArray(input.tags) ? input.tags.filter((tag): tag is string => typeof tag === 'string') : []
+  const body = input.mode === 'upper' ? text.toUpperCase() : text
+
+  return [body, ...tags.map((tag) => `#${tag}`)].join(' ')
+}

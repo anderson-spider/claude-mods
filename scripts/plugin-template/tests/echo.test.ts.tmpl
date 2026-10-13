@@ -1,0 +1,22 @@
+import { expect, test } from 'claude-code/testing'
+import { echo } from '../hooks/echo'
+
+test('echo returns the text as given in plain mode', () => {
+  expect(echo({ text: 'Hi there' })).toBe('Hi there')
+  expect(echo({ text: 'Hi there', mode: 'plain' })).toBe('Hi there')
+})
+
+test('echo upper-cases the text in upper mode only', () => {
+  expect(echo({ text: 'Hi', mode: 'upper' })).toBe('HI')
+  expect(echo({ text: 'Hi', mode: 'shout' })).toBe('Hi')
+})
+
+test('echo appends the string tags and ignores the rest', () => {
+  expect(echo({ text: 'Hi', tags: ['a', 3, 'b'] })).toBe('Hi #a #b')
+  expect(echo({ text: 'Hi', tags: 'a' })).toBe('Hi')
+})
+
+test('echo treats a text that is not a string as empty', () => {
+  expect(echo({ text: 42 })).toBe('')
+  expect(echo({})).toBe('')
+})

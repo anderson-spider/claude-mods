@@ -488,7 +488,43 @@ test("a helper/test file counts as a test file reference, alone or in braces", (
     { files: ["helper/test/a.test.mjs", "helper/test/b.test.mjs"], name: "two" },
   ]);
   assert.deepEqual([...referenced].sort(), ["helper/test/a.test.mjs", "helper/test/b.test.mjs", "helper/test/config.test.mjs", "tests/c.test.ts"]);
-  assert.deepEqual(citedTests("`helper/test/contract.mjs` and `other/test/x.test.mjs` are not test files.").referenced.size, 0);
+  assert.deepEqual(citedTests("`other/test/x.test.mjs` and `src/host.ts` are not test files.").referenced.size, 0);
+});
+
+test("a support file under tests/ or helper/test/ is referenced but never an anchor or a name", () => {
+  const { cites, referenced } = citedTests(
+    "Fake in `tests/host.ts`, contract in `helper/test/contract.mjs`, `tests/sub/x.mts` and `tests/a.test.ts` (`one`, `tests/host.ts` and `two`); `tests/a.test.ts`: `tests/host.ts`; `tests/host.ts`: `not a name`; `tests/../x.ts`.",
+  );
+  assert.deepEqual(cites, [{ files: ["tests/a.test.ts"], name: "one" }]);
+  assert.deepEqual([...referenced].sort(), ["helper/test/contract.mjs", "tests/a.test.ts", "tests/host.ts", "tests/sub/x.mts"]);
+});
+
+for (const { name, change, expected } of [
+  {
+    name: "a cited support file that does not exist",
+    change: edit("plugins/alpha/AGENTS.md", (text) => text + "- Fake: `tests/host.ts`.\n"),
+    expected: ["alpha: AGENTS.md cites tests/host.ts, which does not exist"],
+  },
+  {
+    name: "a cited helper/test support file that does not exist",
+    change: edit("plugins/alpha/AGENTS.md", (text) => text + "- Contract: `helper/test/contract.mjs`.\n"),
+    expected: ["alpha: AGENTS.md cites helper/test/contract.mjs, which does not exist"],
+  },
+]) {
+  test(`fails: ${name}`, (t) => {
+    assert.deepEqual(problems(t, change), expected);
+  });
+}
+
+test("a cited support file that exists passes, and so does one beside a citation list", (t) => {
+  assert.deepEqual(
+    problems(t, (files) => {
+      files["plugins/alpha/AGENTS.md"] += "- Fake: `tests/host.ts`; contract `helper/test/contract.mjs`; `tests/alpha.test.ts` (`third` and `tests/host.ts`).\n";
+      files["plugins/alpha/tests/host.ts"] = "export {}\n";
+      files["plugins/alpha/helper/test/contract.mjs"] = "export {}\n";
+    }),
+    [],
+  );
 });
 
 for (const { name, change, expected } of [
@@ -668,6 +704,64 @@ for (const { name, change, expected } of [
     assert.deepEqual(problems(t, change), expected);
   });
 }
+
+for (const { name, change, expected } of [
+  {
+    name: "a pin in a workflow other than ci.yml that differs from the README",
+    change: (files) => {
+      files[".github/workflows/release.yaml"] = CI_YML("2.1.300");
+      files["README.md"] += "\nThe repository is checked with v2.1.296.\n";
+    },
+    expected: [".github/workflows/release.yaml: CLAUDE_CLI_PIN is 2.1.300, but README.md says the repository is checked with v2.1.296"],
+  },
+  {
+    name: "a pin elsewhere when the README states no version, with no ci.yml",
+    change: (files) => {
+      files[".github/workflows/release.yml"] = CI_YML("2.1.296");
+    },
+    expected: [".github/workflows/release.yml: CLAUDE_CLI_PIN is 2.1.296, but README.md says the repository is checked with no version"],
+  },
+  {
+    name: "a README version with no ci.yml and no pin in any workflow",
+    change: (files) => {
+      files[".github/workflows/release.yml"] = "jobs: {}\n";
+      files["README.md"] += "\nThe repository is checked with v2.1.296.\n";
+    },
+    expected: [".github/workflows: no CLAUDE_CLI_PIN: <version> line"],
+  },
+  {
+    name: "a README version with no workflow at all",
+    change: (files) => {
+      files["README.md"] += "\nThe repository is checked with v2.1.296.\n";
+    },
+    expected: [".github/workflows: no CLAUDE_CLI_PIN: <version> line"],
+  },
+  {
+    name: "a ci.yml without the pin when the README states no version",
+    change: (files) => {
+      files[".github/workflows/ci.yml"] = "jobs: {}\n";
+    },
+    expected: [".github/workflows/ci.yml: no CLAUDE_CLI_PIN: <version> line"],
+  },
+]) {
+  test(`fails: ${name}`, (t) => {
+    const found = problems(t, change);
+    assert.equal(found.length, expected.length, found.join("\n") || "(no problems)");
+    expected.forEach((line, i) => assert.ok(found[i].includes(line), `expected "${line}" in "${found[i]}"`));
+  });
+}
+
+test("the pin is found in any workflow file, and a repository with no workflow, pin or README version skips the check", (t) => {
+  assert.deepEqual(
+    problems(t, (files) => {
+      files[".github/workflows/release.yml"] = CI_YML("2.1.296");
+      files[".github/workflows/ci.yml"] = "jobs: {}\n";
+      files["README.md"] += "\nThe repository is checked with v2.1.296.\n";
+    }),
+    [],
+  );
+  assert.deepEqual(problems(t), []);
+});
 
 test("a rule can list its plugin glob in the one-line forms or among others", (t) => {
   for (const front of ['paths: "plugins/alpha/**"', 'paths: ["x/**", "plugins/alpha/**"]', 'paths:\n  - "x/**"\n  - plugins/alpha/**\nother: 1']) {

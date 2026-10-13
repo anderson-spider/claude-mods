@@ -179,7 +179,7 @@ test("the command passes when only tests and docs changed", (t) => {
   repo.commit();
   const result = repo.run("main");
   assert.equal(result.status, 0);
-  assert.equal(result.stdout, "ok: every plugin with code changes bumped its version\n");
+  assert.equal(result.stdout, "ok: every plugin with changed shipped files bumped its version\n");
   assert.equal(result.stderr, "");
 });
 
@@ -212,7 +212,7 @@ test("the command passes when each changed plugin bumped, and a new plugin needs
   repo.commit();
   const result = repo.run("main");
   assert.equal(result.status, 0);
-  assert.equal(result.stdout, "ok: every plugin with code changes bumped its version\n");
+  assert.equal(result.stdout, "ok: every plugin with changed shipped files bumped its version\n");
 });
 
 // A move is a removal at the old path: git reports a rename by its destination alone unless told not to.

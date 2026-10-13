@@ -56,11 +56,13 @@ To edit a plugin with automatic reload, point Claude Code straight at its folder
 To validate and test:
 
 ```
-claude plugin validate .
-claude plugin validate plugins/crew
+claude plugin validate --strict .
+claude plugin validate --strict plugins/crew
 claude plugin test plugins/crew
 ```
 
 For the other plugins' checks, see their READMEs in the [plugins table](#plugins).
+
+To start a plugin, run `mise run plugin:new <name> [description]`: it writes the plugin folder, its marketplace entry, rule file and README rows, and generates the typings. `mise run plugins:types [name]` regenerates them for one plugin or all.
 
 To bring an installation up to date in one go, run `mise run update:all` from the main checkout. It refuses a worktree or a dirty tree, pulls `main` with `--ff-only`, runs `mise run plugins:update` and prints the installed versions. Run `/reload-plugins` afterwards, or start a new session for crew twins.
