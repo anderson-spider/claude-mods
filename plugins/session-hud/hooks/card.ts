@@ -41,9 +41,18 @@ export function stepped(card: SessionHudCard, effort: unknown, usage: {
   return next
 }
 
-/** A main-session turn ended after `durationMs`. */
-export const completed = (card: SessionHudCard, durationMs: unknown): SessionHudCard =>
-  finite(durationMs) && durationMs >= 0 ? { ...card, lastTurnMs: durationMs } : card
+/** The window the host compacts against (`rawMaxTokens` of a context breakdown); anything but a positive count leaves it. */
+export const windowed = (card: SessionHudCard, window: unknown): SessionHudCard =>
+  finite(window) && window > 0 ? { ...card, contextWindow: window } : card
+
+/** A main-session turn began at `at`. */
+export const began = (card: SessionHudCard, at: unknown): SessionHudCard => (finite(at) ? { ...card, turnStartedAt: at } : card)
+
+/** A main-session turn ended after `durationMs`: it is no longer running. */
+export function completed(card: SessionHudCard, durationMs: unknown): SessionHudCard {
+  const { turnStartedAt: _ended, ...rest } = card
+  return finite(durationMs) && durationMs >= 0 ? { ...rest, lastTurnMs: durationMs } : rest
+}
 
 const EDITS: ReadonlySet<string> = new Set(['Write', 'Edit', 'NotebookEdit'])
 

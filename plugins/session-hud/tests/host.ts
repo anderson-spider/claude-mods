@@ -18,13 +18,14 @@ export const USAGE = {
 }
 
 /** A host with the session's model, usage, theme and clock; `crew` answers the crew's HUD atoms when given. */
-export function world(on: On, opts: { theme?: string; crew?: { plans: unknown[]; agents: unknown[] } } = {}) {
+export function world(on: On, opts: { theme?: string; window?: number; crew?: { plans: unknown[]; agents: unknown[] } } = {}) {
   // `mock.clock` registers `clock.now` itself and the engine refuses a second one: the test's own reads NOW.
   const clock = mock.clock(((name: string, ...rest: unknown[]) => (name === 'clock.now' ? undefined : (on as (...a: unknown[]) => unknown)(name, ...rest))) as unknown as On)
   on('clock.now', () => ({ value: NOW }))
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('session.model', () => ({ value: 'claude-opus-5-5' }))
-  on('session.usage', () => ({ value: USAGE }) as never)
+  on('session.usage', (_$, e) => ({ value: (e as { breakdown?: string }).breakdown
+    ? { ...USAGE, context: { ...USAGE.context, breakdown: { rawMaxTokens: opts.window ?? 1_000_000 } } } : USAGE }) as never)
   on('config.list', () => ({ value: [{ key: 'theme', label: 'Theme', kind: 'choice', value: opts.theme ?? 'dark' }] }) as never)
   on('config.set', (_$, e) => ({ value: e.value }))
   on('session.measure', (_$, e) => ({ changed: e.changed }))
@@ -45,9 +46,9 @@ export function world(on: On, opts: { theme?: string; crew?: { plans: unknown[];
 export const start = ($: { session: { start: (e: never) => Promise<unknown> } }) =>
   $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true } as never)
 
-export const band = (columns = 110, hasSurvey = false) => ({
+export const band = (columns = 110, hasSurvey = false, isWorking = false) => ({
   plugin: 'session-hud', component: 'AbovePrompt', surface: 'terminal',
-  props: { hasSurvey, isWorking: false, maxRows: 20, bodyColumns: columns, scroll: { offset: 0, bodyRows: 20 }, view: {} },
+  props: { hasSurvey, isWorking, maxRows: 20, bodyColumns: columns, scroll: { offset: 0, bodyRows: 20 }, view: {} },
 }) as never
 
 /** A main-session step (or a subagent's, with `agentId`), run to its result. */

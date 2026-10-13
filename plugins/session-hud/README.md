@@ -2,8 +2,8 @@
 
 A three-row card above the prompt:
 
-1. The model and its effort, the context bar, the share of the input read from the prompt cache, and the session's cost.
-2. The five-hour and seven-day limits: a bar lit to the percent used with a tick at the time passed, `▲N` for the points above an even pace, the time left and where the pace ends (`~85% at reset`, or `100% in 2d 7h` when it runs out first).
+1. A dot, green between turns and yellow with the running turn's time (`working 12s`) while one runs; the model and its effort; the context bar with its tokens (`88% · 440k/500k`), measured against the window the session compacts at (an `autoCompactWindow` smaller than the model's limit counts); the share of the input read from the prompt cache; and the session's cost (`session $4.59`).
+2. The five-hour and seven-day limits, side by side: a bar of at most thirty cells lit to the percent used with a tick at the time passed, `▲N` for the points above an even pace, the time left and where the pace ends (`~85% at reset`, or `100% in 2d 7h` when it runs out first).
 3. The last turn's duration, the crew's running helpers, the session's edits and errors and what the last turn cost; on the right, the crew's open plans (`done`, `running`, `left`) and the running steps.
 
 ```text

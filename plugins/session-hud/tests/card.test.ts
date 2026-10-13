@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { EMPTY, completed, measured, stepped, tooled } from '../hooks/card'
+import { EMPTY, began, completed, measured, stepped, tooled, windowed } from '../hooks/card'
 
 test('a measurement keeps the context, the readable windows and the cost; the turn cost runs from the baseline', () => {
   const card = measured(EMPTY, { context: { tokens: 10, window: 100, percent: 10 }, cost: { usd: 1.5 },
@@ -13,6 +13,15 @@ test('a step brings the effort, the model that answered and the cache share; a s
   const card = stepped(EMPTY, 'high', { model: 'claude-opus-5-5', input_tokens: 10, cache_read_input_tokens: 950, cache_creation_input_tokens: 40 })
   expect(card).toMatchObject({ effort: 'high', model: 'claude-opus-5-5', cache: 95 })
   expect(stepped(card, 3, null)).toEqual(card)
+})
+
+test('the compaction window is kept when positive, and the turn start is cleared when it ends', () => {
+  expect(windowed(EMPTY, 500_000)).toMatchObject({ contextWindow: 500_000 })
+  for (const bad of [0, -1, Number.NaN, undefined, '500000']) expect(windowed(EMPTY, bad)).toEqual(EMPTY)
+  const running = began(EMPTY, 1_000)
+  expect(running).toMatchObject({ turnStartedAt: 1_000 })
+  expect(completed(running, 5_000)).toEqual({ ...EMPTY, lastTurnMs: 5_000 })
+  expect(completed(running, Number.NaN)).toEqual(EMPTY)
 })
 
 test('a turn keeps its duration; an edit or an error counts, a refused edit and a plain call do not', () => {

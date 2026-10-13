@@ -17,7 +17,7 @@ const text = (rows: { text: string }[][]) => rows.map(row => row.map(s => s.text
 test('the card is three rows wide: model, context, cache and cost; both windows side by side; the turn and the plan', () => {
   const card = view()
   const [model, bars, ends] = text(card.top)
-  expect(model).toMatch(/^● Opus 5\.5 · medium {3}ctx ━{8} 20% {3}cache 95% +\$4\.59$/u)
+  expect(model).toMatch(/^● Opus 5\.5 · medium {3}ctx ━{8} 20% · 200k\/1M {3}cache 95% +session \$4\.59$/u)
   expect(bars).toMatch(/^5h {2}━+│━+ 74% +7d {2}━+│━+ 60% ▲10$/u)
   expect(ends).toMatch(/^ {4}38m left · ~85% at reset +3d 12h left · 100% in 2d 8h$/u)
   expect(text(card.bottom)).toEqual([expect.stringMatching(/^last turn 5s · 1 agent · 2 edits · 1 error · \+\$0\.16 +plan 7 done · 1 running · 1 left {2}L1 main$/u)])
@@ -32,6 +32,31 @@ test('the bar is lit to the percent used and its tick marks the time passed', ()
   // 74% used of a five-hour window with 38 minutes left: lit to 74% and ticked at 87% of the bar.
   expect(five[0]!.text.length).toBe(Math.round(0.74 * width))
   expect(five[0]!.text.length + five[1]!.text.length).toBe(Math.round((1 - 38 / 300) * width))
+})
+
+test('the context is measured against the window the host compacts at, and its tokens are shown', () => {
+  const [model] = text(view({ card: { ...full, context: { tokens: 440_000, window: 1_000_000, percent: 44 }, contextWindow: 500_000 } }).top)
+  expect(model).toContain('ctx ━━━━━━━━ 88% · 440k/500k')
+  const [past] = text(view({ card: { ...full, context: { tokens: 520_000, window: 1_000_000, percent: 52 }, contextWindow: 500_000 } }).top)
+  expect(past).toContain('ctx ━━━━━━━━ 104% · 520k/500k')
+  const [host] = text(view({ card: { ...full, context: { window: 1_000_000, percent: 44 } } }).top)
+  expect(host).toMatch(/ctx ━+ 44% {3}cache/u)
+})
+
+test('on a wide card a window bar stops at thirty cells, its percent beside it, and the second window follows the first', () => {
+  const [, bars] = view({ columns: 240 }).top
+  const five = bars!.slice(0, bars!.findIndex(s => s.text === ' 74%') + 1)
+  expect(five.filter(s => ['bar', 'track', 'tick'].includes(s.style)).reduce((n, s) => n + s.text.length, 0)).toBe(30)
+  expect(text([bars!])[0]).toMatch(/^5h {2}[━│]{30} 74% {12}7d {2}[━│]{30} 60% ▲10$/u)
+})
+
+test('while a turn runs the dot turns yellow and the turn time counts; between turns it is green with no time', () => {
+  const running = view({ working: true, card: { ...full, turnStartedAt: now - 12_000 } }).top[0]!
+  expect(running[0]).toEqual({ text: '● ', style: 'warning' })
+  expect(text([running])[0]).toContain('Opus 5.5 · medium · working 12s   ctx')
+  const idle = view({ working: false, card: { ...full, turnStartedAt: now - 12_000 } }).top[0]!
+  expect(idle[0]).toEqual({ text: '● ', style: 'success' })
+  expect(text([idle])[0]).not.toContain('working')
 })
 
 test('a narrow card stacks the windows and shrinks the plan to its counts', () => {
