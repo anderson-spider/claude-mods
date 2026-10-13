@@ -1,0 +1,19 @@
+import { expect, test } from 'claude-code/testing'
+import { id, started, world } from './host'
+
+const ECHO = id('{{id}}_echo')
+
+test('session start registers the echo tool', async ($, on) => {
+  const { tools } = world(on)
+
+  expect(await started($, tools)).toContain('{{id}}_echo')
+})
+
+test('the echo tool call returns the text through the plugin', async ($, on) => {
+  const { tools } = world(on)
+  await started($, tools)
+
+  const result = await $.tool.call({ tool: ECHO, text: 'Hi', mode: 'upper', tags: ['a'] } as never)
+
+  expect(result.result).toBe('HI #a')
+})

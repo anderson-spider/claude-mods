@@ -7,4 +7,4 @@ Setup, use, privacy or live browser checks: read [README.md](README.md). Editing
 - `register.tsx`: MCP calls, named `$.tool.register`/`$.command.register` calls, and the literal `on('tool.check', ...)` that passes the call's origin, tool, input and the plugin's tab to `ownCallAllowed` (`tests/register.test.ts` pins that wiring). `backends.ts` takes no `$`.
 - `tool-schemas.ts`: schemas/jobs/commands; `prompts.ts`: ask/image descriptions and prompt section; `ask.ts`, `image.ts`, `conversation.ts`: flows; `runner.ts`: queue/jobs; `output.ts`: `$TMPDIR/chatgpt/` files.
 
-Checks: `claude plugin validate plugins/chatgpt`; `claude plugin test plugins/chatgpt`; `node scripts/check-consistency.mjs`.
+Checks: `claude plugin validate --strict plugins/chatgpt`; `claude plugin test plugins/chatgpt`; `node scripts/check-consistency.mjs`.

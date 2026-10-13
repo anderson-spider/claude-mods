@@ -20,7 +20,7 @@ jobs:
           node-version: 22
       - name: Marketplace and plugin manifests agree
         run: node scripts/check-consistency.mjs
-      - name: Plugins with code changes bumped their version
+      - name: Plugins with changed shipped files bumped their version
         if: github.event_name == 'pull_request'
         run: node scripts/check-version-bump.mjs "origin/${{ github.base_ref }}"
       - name: Script and hook tests
@@ -61,3 +61,11 @@ jobs:
             claude plugin test "$source" || failed+=("$source")
           done
           if [ "${#failed[@]}" -gt 0 ]; then echo "test failed: ${failed[*]}" >&2; exit 1; fi
+      # The scaffold runs in a copy so the checkout stays clean. Its tsc is not run here: typings need an interactive session.
+      - name: Scaffold a sample plugin and check it
+        run: |
+          cp -R . "$RUNNER_TEMP/scaffold"
+          cd "$RUNNER_TEMP/scaffold"
+          node scripts/new-plugin.mjs ci-sample "CI sample plugin."
+          claude plugin validate --strict plugins/ci-sample
+          claude plugin test plugins/ci-sample

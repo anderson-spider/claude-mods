@@ -16,6 +16,6 @@ Setup, use, privacy or live desktop checks: read [README.md](README.md). MCP app
 
 ## Checks
 
-- `claude plugin validate plugins/codex-computer-use`; `claude plugin test plugins/codex-computer-use`; `node scripts/check-consistency.mjs`.
+- `claude plugin validate --strict plugins/codex-computer-use`; `claude plugin test plugins/codex-computer-use`; `node scripts/check-consistency.mjs`.
 - `/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node --test plugins/codex-computer-use/helper/test/*.test.mjs`.
 - `helper/test/contract.mjs` is the shared caller, socket, route, choice, lease and label evidence. Host timeout tests inject `clock.now` and release held polls; helper tests use injected fakes or an isolated copied installation, never installed run/state directories.

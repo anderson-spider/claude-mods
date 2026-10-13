@@ -108,7 +108,7 @@ In the codex mode, a moved call becomes `crew:<role>-codex` and that subagent's 
 ## Verification
 
 ```sh
-claude plugin validate plugins/crew
+claude plugin validate --strict plugins/crew
 claude plugin test plugins/crew
 mise exec -- tsc -p plugins/crew/tsconfig.json
 node scripts/check-consistency.mjs

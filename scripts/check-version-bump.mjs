@@ -67,5 +67,5 @@ if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.me
     process.exit(1)
   }
 
-  console.log('ok: every plugin with code changes bumped its version')
+  console.log('ok: every plugin with changed shipped files bumped its version')
 }

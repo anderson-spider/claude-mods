@@ -1,0 +1,26 @@
+import type { McpToolInputs, Register } from 'claude-code'
+import { MODES, echo } from './echo'
+import type { SchemaFor } from './schema'
+
+export const register: Register = (on) => {
+  on('session.start', async ($, e, next) => {
+    await $.tool.register({
+      name: '{{id}}_echo',
+      description: 'Returns the text it is given. A sample tool: replace it with the first tool of this plugin.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          text: { type: 'string', description: 'The text to return.' },
+          mode: { type: 'string', enum: [...MODES], description: '"upper" upper-cases the text; "plain" keeps it.' },
+          tags: { type: 'array', items: { type: 'string' }, description: 'Words appended to the text as #tag.' },
+        },
+        required: ['text'],
+      } satisfies SchemaFor<McpToolInputs['mcp__{{name}}__{{id}}_echo']>,
+    })
+    return next(e)
+  })
+
+  on('tool.call', { tool: 'mcp__{{name}}__{{id}}_echo' }, async (_$, e) => {
+    return { result: echo(e) }
+  })
+}
