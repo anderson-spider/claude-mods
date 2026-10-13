@@ -1,28 +1,32 @@
 import type { Browser, ProcessRunner, TabHolder } from './model'
-import { BUILTIN, BUILTIN_SERVER, builtinBrowserOf, builtinStaysOnChatgpt } from './builtin-browser'
-import { CHROME, CHROME_SERVER, chromeBrowserOf, chromeStaysOnChatgpt } from './chrome-browser'
-import type { BrowserDeps } from './mcp-browser'
+import { BUILTIN_SPEC } from './builtin-browser'
+import { CHROME_SPEC } from './chrome-browser'
+import { type McpBackend, mcpBackend } from './mcp-backend'
 import { TERMINAL_BROWSER, openTerminalBrowser } from './terminal-browser'
 
 /** The plugin's own name: the origin the host reports for its calls. */
 const PLUGIN = 'chatgpt'
 
-// A backend: terminal-browser runs as a host process; the others are MCP servers, whose `stays` says which of the
-// plugin's own calls to them stay on chatgpt.com.
+// A backend: terminal-browser runs as a host process; the others are MCP servers (see `mcpBackend`), whose `stays` says
+// which of the plugin's own calls to them stay on chatgpt.com. Every backend's `hint` is its setup advice, which the
+// chooser strings together when none works.
 export type Backend =
-  | { name: string; open(run: ProcessRunner): Promise<Browser | string> }
-  | {
-      name: string
-      server: string
-      open(deps: BrowserDeps): Promise<Browser>
-      stays(tool: string, input: unknown, tabId: string | undefined): boolean
-    }
+  | { name: string; hint: string; open(run: ProcessRunner): Promise<Browser | string> }
+  | McpBackend
 
-/** The backends in the order the plugin tries them. */
+/**
+ * The backends in the order the plugin tries them, and the only place that lists them: the chooser's advice, the
+ * "not ready" advice and the plugin's own-call allow below all read this list. A new MCP backend is a spec here (or
+ * in a module of its own, like the two below) and its row in `tests/backends.test.ts`.
+ */
 export const BACKENDS: Backend[] = [
-  { name: TERMINAL_BROWSER, open: openTerminalBrowser },
-  { name: CHROME, server: CHROME_SERVER, open: chromeBrowserOf, stays: chromeStaysOnChatgpt },
-  { name: BUILTIN, server: BUILTIN_SERVER, open: builtinBrowserOf, stays: builtinStaysOnChatgpt },
+  {
+    name: TERMINAL_BROWSER,
+    hint: 'Run Claude Code in a Ghostty or kitty pane with terminal-browser (https://terminal-browser.sh)',
+    open: openTerminalBrowser,
+  },
+  mcpBackend(CHROME_SPEC),
+  mcpBackend(BUILTIN_SPEC),
 ]
 
 export type OwnCall = { prefix: string; stays: (tool: string, input: unknown, tabId: string | undefined) => boolean }

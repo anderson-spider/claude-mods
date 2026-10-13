@@ -1,7 +1,12 @@
 import { expect, test } from 'claude-code/testing'
-import { chromeBrowserOf, chromeStaysOnChatgpt } from '../hooks/chrome-browser'
+import { CHROME_SPEC } from '../hooks/chrome-browser'
+import { mcpBackend } from '../hooks/mcp-backend'
 import { parseOutput } from '../hooks/scripts'
 import { fakeDeps, fakeMcp, withNote } from './mcp-helpers'
+
+const chrome = mcpBackend(CHROME_SPEC)
+const chromeBrowserOf = chrome.open
+const chromeStaysOnChatgpt = chrome.stays
 
 const tabList = (ids: number[]) => withNote({ availableTabs: ids.map(tabId => ({ tabId, title: 'ChatGPT', url: 'https://chatgpt.com/' })), tabGroupId: 1840516207 })
 

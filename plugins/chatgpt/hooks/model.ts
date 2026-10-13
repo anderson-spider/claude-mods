@@ -49,6 +49,8 @@ export type AskOptions = {
   progress?: (text: string) => void
   /** The plugin's tab; a new one is opened (and recorded here) when it is gone. */
   tab?: TabHolder
+  /** The names of the browsers the plugin tries, for the advice when ChatGPT is not usable in the one it opened. */
+  backends?: readonly string[]
 }
 
 export type PageState = {

@@ -2,7 +2,10 @@ import { expect, test } from 'claude-code/testing'
 import { BACKENDS, OWN_CALLS, ownCallAllowed } from '../hooks/backends'
 import { BUILTIN, BUILTIN_SERVER } from '../hooks/builtin-browser'
 import { CHROME, CHROME_SERVER } from '../hooks/chrome-browser'
+import { ask } from '../hooks/ask'
+import { chooseBrowser } from '../hooks/browsers'
 import { TERMINAL_BROWSER } from '../hooks/terminal-browser'
+import { fakeBrowser } from './fake-page'
 
 const PLUGIN = 'chatgpt'
 
@@ -11,15 +14,51 @@ const check = (plugin: string, tool: string, input: unknown, tabId: string | und
 // What each MCP backend must allow, written out per backend so that a new backend needs its own row here: `own` is
 // the plugin's tab as the plugin names it, `elsewhere` a tab of the other backend, `tabArg` how the call names `own`.
 const MCP = [
-  { name: CHROME, server: CHROME_SERVER, listing: ['tabs_context_mcp', 'tabs_create_mcp'], own: 'chrome:7', tabArg: 7, elsewhere: 'builtin:7' },
-  { name: BUILTIN, server: BUILTIN_SERVER, listing: ['tabs_context', 'tabs_create'], own: 'builtin:t1', tabArg: 't1', elsewhere: 'chrome:7' },
+  {
+    name: CHROME,
+    server: CHROME_SERVER,
+    hint: 'connect Claude in Chrome',
+    listing: ['tabs_context_mcp', 'tabs_create_mcp'],
+    own: 'chrome:7',
+    tabArg: 7,
+    elsewhere: 'builtin:7',
+  },
+  {
+    name: BUILTIN,
+    server: BUILTIN_SERVER,
+    hint: "log in to chatgpt.com in the Claude app's built-in browser",
+    listing: ['tabs_context', 'tabs_create'],
+    own: 'builtin:t1',
+    tabArg: 't1',
+    elsewhere: 'chrome:7',
+  },
 ]
+
+const TERMINAL_HINT = 'Run Claude Code in a Ghostty or kitty pane with terminal-browser (https://terminal-browser.sh)'
 
 test('the backends are tried in a fixed order, and every MCP one has a row in this table', () => {
   expect(BACKENDS.map(backend => backend.name)).toEqual([TERMINAL_BROWSER, CHROME, BUILTIN])
   const servers = BACKENDS.flatMap(backend => ('server' in backend ? [backend.server] : []))
   expect(servers).toEqual(MCP.map(row => row.server))
   expect(OWN_CALLS.map(call => call.prefix)).toEqual(MCP.map(row => `mcp__${row.server}__`))
+})
+
+test("every backend's setup advice is the one its row pins, in the order the chooser strings them together", async () => {
+  expect(BACKENDS.map(backend => backend.hint)).toEqual([TERMINAL_HINT, ...MCP.map(row => row.hint)])
+
+  const none = BACKENDS.map(({ name, hint }) => ({ name, hint, open: async () => 'down' }))
+  const advice = [TERMINAL_HINT, ...MCP.map(row => row.hint)].join(', or ')
+  expect(await chooseBrowser(none)).toBe(`No browser to drive ChatGPT with. ${BACKENDS.map(({ name }) => `${name} said: down.`).join(' ')} ${advice}, then try again.`)
+})
+
+test('the not-ready advice names every backend in the order of the list', async () => {
+  const { browser } = fakeBrowser({ tabs: ['seed'], pages: [{ composer: false, login: true }], markdown: '' })
+  const names = BACKENDS.map(backend => backend.name)
+
+  const result = await ask(browser, { prompt: 'hi' }, { pollMs: 0, backends: names })
+
+  const first = names.slice(0, -1).join(', ')
+  expect(!result.ok && result.error).toContain(`the browser the plugin uses (${first} or ${names.at(-1)}), or to clear`)
 })
 
 for (const row of MCP) {

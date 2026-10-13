@@ -77,7 +77,9 @@ function candidatesOf($: EngineInterface): Candidate[] {
     now: () => Date.now(),
   })
   return BACKENDS.map(backend =>
-    'server' in backend ? { name: backend.name, open: () => backend.open(deps(backend.server)) } : { name: backend.name, open: () => backend.open(run) },
+    'server' in backend
+      ? { name: backend.name, hint: backend.hint, open: () => backend.open(deps(backend.server)) }
+      : { name: backend.name, hint: backend.hint, open: () => backend.open(run) },
   )
 }
 
@@ -118,7 +120,7 @@ async function perform($: EngineInterface, request: Request, timeoutMs: number, 
     async () => {
       onStart?.()
       try {
-        return await performRequest(requestDeps($), request, { progress: status, tab, timeoutMs })
+        return await performRequest(requestDeps($), request, { progress: status, tab, timeoutMs, backends: BACKENDS.map(({ name }) => name) })
       } catch (error) {
         const text = `The browser failed: ${errorText(error)}`
         return { ok: false, text, error: text }
