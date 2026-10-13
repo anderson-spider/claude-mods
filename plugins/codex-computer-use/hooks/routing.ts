@@ -17,38 +17,5 @@ const OWN_DESKTOP = /^(mcp__computer-use__|mcp__remote-devices__computer|enable_
 
 export const isOwnDesktopTool = (tool: string) => OWN_DESKTOP.test(tool)
 
-export type Command =
-  | { kind: 'on' }
-  | { kind: 'off' }
-  | { kind: 'status' }
-  | { kind: 'auto-approve'; isOn: boolean }
-  | { kind: 'forget' }
-  | { kind: 'forget-app'; app: string }
-  | { kind: 'help' }
-
-/** `/codex-cu on|off|status|forget [app]|auto-approve on|off`. */
-export const parseCommand = (args: string): Command => {
-  const words = args.trim().toLowerCase().split(/\s+/).filter(word => word !== '')
-
-  switch (words[0]) {
-    case 'forget': {
-      // The app keeps its spelling: "TextEdit", "/Applications/Foo Bar.app", "com.apple.grapher".
-      const app = args.trim().slice('forget'.length).trim()
-
-      return app === '' ? { kind: 'forget' } : { kind: 'forget-app', app }
-    }
-    case 'on':
-    case 'off':
-    case 'status':
-      return words.length === 1 ? { kind: words[0] } : { kind: 'help' }
-    case 'auto-approve':
-      return words[1] === 'on' || words[1] === 'off' ? { kind: 'auto-approve', isOn: words[1] === 'on' } : { kind: 'help' }
-    case undefined:
-      return { kind: 'status' }
-    default:
-      return { kind: 'help' }
-  }
-}
-
 /** App approval deadline, counted from before a question enters the queue. */
 export const APPROVAL_MS = 5 * 60_000

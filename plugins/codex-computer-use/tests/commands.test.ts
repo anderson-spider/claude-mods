@@ -1,8 +1,8 @@
 import { expect, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
+import { HELP } from '../hooks/commands'
 import { statusReport } from '../hooks/presentation'
-import { HELP } from '../hooks/prompts'
 import { ran, world } from './helpers'
 
 // Characterization of what /codex-cu answers for each command kind and which

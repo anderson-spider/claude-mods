@@ -40,12 +40,3 @@ export const INPUT_SCHEMA = {
 type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false
 type Assert<T extends true> = T
 export type SchemaMatchesInput = Assert<Same<keyof typeof INPUT_SCHEMA.properties, keyof CodexCuInput>>
-
-export const HELP = [
-  '/codex-cu on            use Codex for native apps (default)',
-  '/codex-cu off           restore Claude\'s desktop tools',
-  '/codex-cu status        show route, helper and app owners',
-  '/codex-cu auto-approve on|off   skip (on) or ask (off) for new apps',
-  '/codex-cu forget        clear this session\'s app answers',
-  '/codex-cu forget <app>  remove always-allow from helper and Codex; ask again',
-].join('\n')

@@ -3,26 +3,23 @@ import type { Elements, EngineInterface, Register, RenderElement } from 'claude-
 
 import type { CodexAsking } from '../types'
 import { serve } from './bridge'
-import { callerOf, kickstart, post, socketOf } from './helper'
+import { COMMAND_DESCRIPTION, HELP, parseCommand } from './commands'
+import type { Command } from './commands'
+import { POLL, callerOf, postStarting, socketOf } from './helper'
 import type { Probe } from './helper'
 import { ROUTES } from './model'
 import type { Choice, Route, RouteReplies } from './model'
-import { forgetText, statusReport } from './presentation'
-import { DESCRIPTION, HELP, INPUT_SCHEMA, PROMPT, denyOwn } from './prompts'
+import { ASK_HINT, ASK_LABELS, askBody, askTitle, autoApproveText, bridgeFailedText, forgetText, refusal, releaseText, routeText, statusReport } from './presentation'
+import { DESCRIPTION, INPUT_SCHEMA, PROMPT, denyOwn } from './prompts'
 import { holdQuestion } from './question'
 import type { QuestionHost, Waiting } from './question'
-import { APPROVAL_MS, BRIDGE, TOOL, isOwnDesktopTool, parseCommand } from './routing'
-import type { Command } from './routing'
+import { APPROVAL_MS, BRIDGE, TOOL, isOwnDesktopTool } from './routing'
 
 type Kit = Pick<Elements['terminal'], 'Box' | 'Text' | 'Button'>
 type Handlers = { [K in Command['kind']]: (command: Extract<Command, { kind: K }>) => Promise<{ text: string }> }
 
 const PLUGIN = 'codex-computer-use'
 const COMMAND = 'codex-cu'
-// Waiting inside a `$` call does not use up the hook's time; `$.clock.sleep` would.
-const POLL = ['sleep', '0.25']
-// How many polls `helper()` makes for the helper launchd was asked to start.
-const HELPER_RETRIES = 20
 
 const ref = { plugin: 'codex-computer-use', key: 'asking' } as const
 const asking = atom(ref, null)
@@ -45,26 +42,8 @@ const choose = (choice: Choice) => {
 }
 
 /** Sends to the helper, starting it through launchd once if nothing listens. */
-const helper = async <R extends Route>($: EngineInterface, route: R, body: unknown): Promise<RouteReplies[R]> => {
-  const host = probe($)
-  const socket = socketOf((await $.env.get('HOME')) ?? '')
-  const first = await post(host, socket, route, body)
-
-  if (first.status !== 'unreachable' || !(await kickstart(host))) {
-    return first
-  }
-
-  for (let i = 0; i < HELPER_RETRIES; i++) {
-    await $.process.run(POLL)
-    const again = await post(host, socket, route, body)
-
-    if (again.status !== 'unreachable') {
-      return again
-    }
-  }
-
-  return first
-}
+const helper = async <R extends Route>($: EngineInterface, route: R, body: unknown): Promise<RouteReplies[R]> =>
+  postStarting(probe($), socketOf((await $.env.get('HOME')) ?? ''), route, body)
 
 const questionHost = ($: EngineInterface): QuestionHost => ({
   now: () => $.clock.now(),
@@ -75,16 +54,16 @@ const questionHost = ($: EngineInterface): QuestionHost => ({
 const draw = ({ Box, Text, Button }: Kit, now: CodexAsking): RenderElement => (
   <Box flexDirection="column" borderStyle="round" borderColor="suggestion" paddingX={1}>
     <Text bold color="suggestion">
-      Codex computer use · Allow “{now.displayName}”?
+      {askTitle(now)}
     </Text>
     <Text dimColor wrap="truncate-end">
-      {`Asked by the ${now.who}. Codex will see what ${now.displayName} shows and can click and type in it.`}
+      {askBody(now)}
     </Text>
     <Box marginTop={1} gap={2}>
-      <Button key="session" label="This session" hotkey="1" plain onPress={() => choose('session')} />
-      {now.canAlways && <Button key="always" label="Always" hotkey="2" plain onPress={() => choose('always')} />}
-      <Button key="deny" label="No" hotkey="3" plain autoFocus onPress={() => choose('deny')} />
-      <Text dimColor>/codex-cu auto-approve on stops asking</Text>
+      <Button key="session" label={ASK_LABELS.session} hotkey="1" plain onPress={() => choose('session')} />
+      {now.canAlways && <Button key="always" label={ASK_LABELS.always} hotkey="2" plain onPress={() => choose('always')} />}
+      <Button key="deny" label={ASK_LABELS.deny} hotkey="3" plain autoFocus onPress={() => choose('deny')} />
+      <Text dimColor>{ASK_HINT}</Text>
     </Box>
   </Box>
 )
@@ -105,25 +84,18 @@ const turn = async ($: EngineInterface, isOn: boolean, text: string) => {
 
 // One handler per command kind. `$` is only closed over: the engine rejects it as an argument to a computed call.
 const commandsOf = ($: EngineInterface): Handlers => ({
-  on: () => turn($, true, 'codex-cu on: desktop apps go through Codex computer use; Claude’s own computer use is blocked.'),
-  off: () => turn($, false, 'codex-cu off: Claude’s own desktop computer use is back; the Codex bridge refuses calls.'),
+  on: () => turn($, true, routeText(true)),
+  off: () => turn($, false, routeText(false)),
   'auto-approve': async command => {
     const reply = await helper($, ROUTES.settings, { autoApprove: command.isOn })
 
-    return {
-      text:
-        reply.status === 'unreachable' || reply.status === 'error'
-          ? `codex-cu: could not reach the helper (${reply.message}).`
-          : command.isOn
-            ? 'codex-cu auto-approve on: apps are used without asking (organization and safety blocks still apply).'
-            : 'codex-cu auto-approve off: a new app asks first.',
-    }
+    return { text: autoApproveText(command.isOn, reply) }
   },
   forget: async () => {
     const caller = callerOf(await $.session.id())
     const reply = await helper($, ROUTES.release, { caller })
 
-    return { text: reply.status === 'ok' ? 'codex-cu: this session’s Codex sessions ended and its app answers were dropped.' : `codex-cu: ${JSON.stringify(reply)}` }
+    return { text: releaseText(reply) }
   },
   'forget-app': async command => {
     const reply = await helper($, ROUTES.forget, { app: command.app })
@@ -144,7 +116,7 @@ export const register: Register = on => {
     await $.state.set(ref, null)
     const started = await next(e)
     await $.tool.register({ name: BRIDGE, description: DESCRIPTION, inputSchema: INPUT_SCHEMA })
-    await $.command.register({ name: COMMAND, description: 'Codex computer use: on | off | status | auto-approve on|off | forget [app]' })
+    await $.command.register({ name: COMMAND, description: COMMAND_DESCRIPTION })
 
     return started
   })
@@ -192,10 +164,7 @@ export const register: Register = on => {
       helper: (route, body) => helper($, route, body),
       ask: (question, signal) => holdQuestion(questionHost($), waiting, APPROVAL_MS, question, signal),
       limitMs: APPROVAL_MS,
-    }, e, next.signal).catch((error: unknown) => ({
-      result: `codex-cu: the bridge failed: ${error instanceof Error ? error.message : String(error)}`,
-      isError: true as const,
-    })),
+    }, e, next.signal).catch((error: unknown) => refusal(bridgeFailedText(error))),
   )
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {

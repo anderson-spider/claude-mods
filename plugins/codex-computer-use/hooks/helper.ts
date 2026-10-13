@@ -11,6 +11,9 @@ export type Probe = {
   run: (argv: string[], init?: ProcessRunInit) => Promise<ProcessRunResult>
 }
 
+// Waiting inside a `$` call does not use up the hook's time; `$.clock.sleep` would.
+export const POLL = ['sleep', '0.25']
+
 // The LaunchAgent label helper/install.sh and uninstall.sh declare; helper/test/contract.mjs pins both.
 export const LABEL = 'com.anderson-spider.codex-cu'
 
@@ -54,4 +57,37 @@ export const kickstart = async (probe: Probe) => {
   const ran = await probe.run(['/bin/launchctl', 'kickstart', `gui/${uid}/${LABEL}`])
 
   return ran.exitCode === 0
+}
+
+/** How many polls `postStarting` makes for the helper launchd was asked to start. */
+export const START_RETRIES = 20
+
+/**
+ * Sends to the helper like `post`, but starts it through launchd once if
+ * nothing listens, then polls up to `retries` times. A start that fails gives
+ * the first reply; a probe that rejects rejects.
+ */
+export const postStarting = async <R extends Route>(
+  probe: Probe,
+  socket: string,
+  route: R,
+  body: unknown,
+  retries = START_RETRIES,
+): Promise<RouteReplies[R]> => {
+  const first = await post(probe, socket, route, body)
+
+  if (first.status !== 'unreachable' || !(await kickstart(probe))) {
+    return first
+  }
+
+  for (let i = 0; i < retries; i++) {
+    await probe.run(POLL)
+    const again = await post(probe, socket, route, body)
+
+    if (again.status !== 'unreachable') {
+      return again
+    }
+  }
+
+  return first
 }
