@@ -33,8 +33,10 @@ export type AgentRecord = {
   endedAt?: number
   stop?: 'max_tokens'
 }
-export type Style = 'plain' | 'heading' | 'secondary' | 'success' | 'warning' | 'error' | 'info' | 'accent'
-export type Segment = { text: string; style: Style }
+export type Style = 'plain' | 'heading' | 'secondary' | 'success' | 'warning' | 'error' | 'info' | 'accent' | 'title' | 'frame' | 'track'
+  | 'pill-running' | 'pill-recent'
+/** A run of text in one style; `bold` adds weight (a role's name, a box title). */
+export type Segment = { text: string; style: Style; bold?: boolean }
 export type Row = Segment[]
 export type Band = { rows: Row[] }
 export type PlanDisplay = PlanProjection | { state: 'loading' | 'unknown' }
@@ -103,26 +105,42 @@ const stepState = (state: string) => (STATES.has(state) ? state : '?')
 
 /** One line cut to the width: the tree's rows are not wrapped, a cut one ends in an ellipsis. */
 function fit(text: string, columns: number): string {
-  const width = Math.max(4, Math.floor(Number.isFinite(columns) ? columns : 60))
+  const width = widthOf(columns)
   return text.length <= width ? text : `${text.slice(0, width - 1)}…`
 }
 
-const seg = (text: string, style: Style = 'plain'): Segment => ({ text, style })
+const widthOf = (columns: number) => Math.max(4, Math.floor(Number.isFinite(columns) ? columns : 60))
+const seg = (text: string, style: Style = 'plain', bold = false): Segment => (bold ? { text, style, bold } : { text, style })
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
+const cells = (row: Row) => row.reduce((n, part) => n + part.text.length, 0)
 
 /** One row cut to the width, the cut ending in an ellipsis; segments keep their styles. */
 function cutRow(row: Row, columns: number): Row {
-  const width = Math.max(4, Math.floor(Number.isFinite(columns) ? columns : 60))
+  const width = widthOf(columns)
   const out: Row = []
   let used = 0
   for (const part of row) {
     if (used + part.text.length <= width) { out.push(part); used += part.text.length; continue }
     const room = width - used
-    if (room > 1) out.push({ text: `${part.text.slice(0, room - 1)}…`, style: part.style })
+    if (room > 1) out.push({ ...part, text: `${part.text.slice(0, room - 1)}…` })
     else if (out.length) out[out.length - 1] = { ...out[out.length - 1]!, text: `${out[out.length - 1]!.text.slice(0, -1)}…` }
     return out
   }
   return out
+}
+
+/** `left` at the start and `right` against the edge; when both do not fit, one row cut to the width. */
+function spread(left: Row, right: Row, columns: number): Row {
+  const room = widthOf(columns) - cells(left) - cells(right)
+  if (!right.length) return cutRow(left, columns)
+  if (room < 2) return cutRow([...left, seg('  '), ...right], columns)
+  return [...left, seg(' '.repeat(room)), ...right]
+}
+
+/** Segments padded with spaces to a column's width; a longer cell is kept whole. */
+function pad(row: Row, width: number): Row {
+  const room = width - cells(row)
+  return room > 0 ? [...row, seg(' '.repeat(room))] : row
 }
 
 /** One bordered section of the pane: its title, its tone (the border's colour) and its rows. */
@@ -132,6 +150,8 @@ export type Pane = { head: Row; boxes: Box[]; foot: Row; empty: boolean }
 
 const ROLE_STYLE: Record<string, Style> = { digger: 'success', planner: 'accent', challenger: 'warning' }
 const isCrew = (agent: AgentRecord) => agent.type.startsWith('crew:')
+/** At this inner width an agent's card and a recent row fit on one line, as the wide design draws them. */
+const WIDE = 92
 
 /** The role's short name and whether it is the twin on Codex: `crew:planner-codex` is `planner`, twin. */
 function roleName(type: string): { name: string; base: string; twin: boolean } {
@@ -144,7 +164,7 @@ function roleName(type: string): { name: string; base: string; twin: boolean } {
 const roleRow = (type: string): Segment[] => {
   const { name, base, twin } = roleName(type)
   const style = ROLE_STYLE[base] ?? 'plain'
-  return twin ? [seg(base, style), seg('·codex', 'info')] : [seg(name, style)]
+  return twin ? [seg(base, style, true), seg('·codex', 'info')] : [seg(name, style, true)]
 }
 
 function tokens(n: number | undefined): string {
@@ -161,29 +181,55 @@ const toolNames = new Set(['Read', 'Grep', 'Glob', 'Bash', 'Edit', 'Write', 'Not
   'TodoWrite', 'Skill', 'LSP', 'Monitor', 'SendMessage', 'mcp'])
 const toolLabel = (name: string) => (toolNames.has(name) ? name : '?')
 
-/** The model as observed, else as requested; a differing request stays visible. */
+const CLAUDE_SHORT = /^claude-(opus|sonnet|haiku|fable)-([0-9]{1,2}(?:-[0-9]{1,2})*)(?:-[0-9]{8})?$/
+/** An allowlisted model as the card names it: `claude-haiku-4-5` is `haiku 4.5`, a twin's id loses its prefix. */
+function shortModel(value: string): string {
+  const claude = CLAUDE_SHORT.exec(value)
+  if (claude) return `${claude[1]} ${claude[2]!.replace(/-/g, '.')}`
+  return value.startsWith(CODEX_PREFIX) ? value.slice(CODEX_PREFIX.length) : value
+}
+/** The model's family, so a requested alias and the id it resolved to compare equal. */
+const familyOf = (value: string) => CLAUDE_SHORT.exec(value)?.[1] ?? shortModel(value).replace(/-(low|medium|high)$/, '')
+
+/** The model as observed, else as requested; a request of another family stays visible. */
 function modelCells(agent: AgentRecord): Segment[] {
   const requested = model(agent.model)
   const observed = agent.observedModel !== undefined ? model(agent.observedModel) : undefined
   const effort = ['low', 'medium', 'high'].includes(agent.effort ?? '') ? ` · ${agent.effort}` : ''
-  const cells = [seg(`${observed ?? requested}${effort}`, 'secondary')]
-  if (observed !== undefined && observed !== requested) cells.push(seg(`  requested ${requested}`, 'secondary'))
+  const cells = [seg(`${shortModel(observed ?? requested)}${effort}`, 'secondary')]
+  if (observed !== undefined && !['?', 'unknown'].includes(requested) && familyOf(observed) !== familyOf(requested)) {
+    cells.push(seg(`  requested ${shortModel(requested)}`, 'secondary'))
+  }
   return cells
 }
 
-function statsText(agent: AgentRecord): string | undefined {
-  const parts: string[] = []
-  if (agent.inTokens !== undefined) parts.push(`ctx ${tokens(agent.inTokens)}`)
-  if (agent.outTokens !== undefined) parts.push(`out ${tokens(agent.outTokens)}`)
-  if (agent.steps !== undefined && Number.isSafeInteger(agent.steps)) parts.push(plural(agent.steps, 'step'))
-  return parts.length ? parts.join('  ') : undefined
+/** The window the context bar is drawn against: Claude models answer within 200k tokens; a twin's is not known. */
+function windowOf(agent: AgentRecord): number | undefined {
+  const id = model(agent.observedModel ?? agent.model)
+  return models.has(id) || CLAUDE_ID.test(id) ? 200_000 : undefined
 }
+
+const BAR = 8
+/** `ctx ▰▰▱▱▱▱▱▱ 24%` from the last step's input, or `ctx —` when there is no step or no known window. */
+function contextCells(agent: AgentRecord): Row {
+  const window = windowOf(agent)
+  const used = agent.inTokens
+  if (window === undefined || used === undefined || !Number.isSafeInteger(used) || used < 0) return [seg('ctx —', 'secondary')]
+  const percent = Math.min(100, Math.round((used / window) * 100))
+  const lit = Math.min(BAR, Math.round((percent / 100) * BAR))
+  return [seg('ctx ', 'secondary'), seg('▰'.repeat(lit), 'success'), seg('▱'.repeat(BAR - lit), 'track'), seg(` ${percent}%`)]
+}
+const stepsText = (agent: AgentRecord) =>
+  agent.steps !== undefined && Number.isSafeInteger(agent.steps) && agent.steps >= 0 ? plural(agent.steps, 'step') : 'steps —'
+const tokensText = (agent: AgentRecord) =>
+  agent.inTokens === undefined && agent.outTokens === undefined ? '' : `↑ ${tokens(agent.inTokens)}  ↓ ${tokens(agent.outTokens)}`
+/** A twin on the helper runs in Codex's sandbox: no tool event and no usage ever reach the hooks. */
+const onHelper = (agent: AgentRecord) => roleName(agent.type).twin && agent.steps === undefined
 
 function toolRow(agent: AgentRecord): Row {
   const tools = (agent.tools ?? []).slice(-3)
   if (!tools.length) {
-    const none = roleName(agent.type).twin && agent.steps === undefined ? 'no tool events or tokens reported' : 'no calls yet'
-    return [seg('  └ ', 'secondary'), seg(none, 'secondary')]
+    return [seg('  └ ', 'secondary'), seg(onHelper(agent) ? 'runs in the Codex sandbox: no tool events or tokens' : 'no calls yet', 'secondary')]
   }
   const row: Row = [seg('  └ ', 'secondary')]
   tools.forEach((note, index) => {
@@ -197,7 +243,23 @@ function toolRow(agent: AgentRecord): Row {
   return row
 }
 
+/** `2 done / 1 running / 3 left`, the running count in the running colour. */
+const totals = (done: number, running: number, left: number, open: boolean): Row => [
+  seg(`${count(done)} done / `, 'secondary'), seg(`${count(running)} running`, count(running) ? 'warning' : 'secondary'),
+  seg(` / ${count(left)} left${open ? ' ?' : ''}`, 'secondary')]
+
+/** A settled step's glyph and word are dim and its id and owner plain; any other body takes its tone. */
+function bodyCells(body: string, tone: Tone): Row {
+  if (tone !== 'done') return [seg(body, TONES[tone])]
+  const word = body.indexOf('  ')
+  if (word < 2) return [seg(body, 'secondary')]
+  return [seg(body.slice(0, 2), 'secondary'), seg(body.slice(2, word)), seg(body.slice(word), 'secondary')]
+}
+
 function planBoxes({ plans, agents, columns }: Snapshot): Box[] {
+  const inner = columns - 4
+  // The head names a lone plan, so its box is titled by its deliverable when it has only one, as the design draws it.
+  const lone = plans.filter(plan => !('state' in plan)).length === 1
   const boxes: Box[] = []
   const working = new Map<string, string[]>()
   for (const agent of agents) {
@@ -205,14 +267,16 @@ function planBoxes({ plans, agents, columns }: Snapshot): Box[] {
     working.set(agent.planStep, [...(working.get(agent.planStep) ?? []), roleName(agent.type).name])
   }
   for (const plan of plans) {
-    if ('state' in plan) { boxes.push({ title: [seg(`Plan ${plan.state}`, 'heading')], tone: 'info', rows: [] }); continue }
+    if ('state' in plan) { boxes.push({ title: [seg('Plan', 'info', true), seg(`  ${plan.state}`, 'secondary')], tone: 'info', rows: [] }); continue }
     const rows: Row[] = []
     // Every step by id, so a dependency on another deliverable reads its state.
     const states = new Map<string, string>()
     for (const group of plan.groups) for (const step of group.steps) if (STEP_ID.test(step.id)) states.set(step.id, stepState(step.state))
+    const several = plan.groups.length > 1
+    const byHeading = lone && plan.groups.length === 1
     for (const group of plan.groups) {
-      rows.push(cutRow([seg(label(group.heading)),
-        seg(`  ${count(group.done)} done / ${count(group.running)} running / ${count(group.left)} left${group.unknownStates ? ' ?' : ''}`, 'secondary')], columns - 4))
+      if (!byHeading) rows.push(spread([seg(label(group.heading), 'secondary')],
+        several ? totals(group.done, group.running, group.left, group.unknownStates) : [], inner))
       const steps = group.steps.filter(step => STEP_ID.test(step.id)).map(step => ({
         id: step.id,
         owner: owner(step.owner),
@@ -222,61 +286,75 @@ function planBoxes({ plans, agents, columns }: Snapshot): Box[] {
       for (const treeRow of treeRows(steps, states)) {
         const id = /^[^ ]+ ([A-Z][A-Z0-9]*[a-z]?) /.exec(treeRow.body)?.[1]
         const who = id !== undefined ? working.get(id) : undefined
-        const row: Row = [seg(`  ${treeRow.rail}`, 'secondary'), seg(treeRow.body, TONES[treeRow.tone])]
+        const row: Row = [seg(`  ${treeRow.rail}`, 'secondary'), ...bodyCells(treeRow.body, treeRow.tone)]
         if (who?.length) row.push(seg(`  ← ${who.join(', ')}`, 'secondary'))
-        rows.push(cutRow(row, columns - 4))
+        rows.push(cutRow(row, inner))
       }
     }
-    boxes.push({ title: [seg('Plan', 'heading'), seg(`  ${label(plan.name)}`, 'secondary')], tone: 'info', rows })
+    const sum = (pick: (group: PlanProjection['groups'][number]) => number) => plan.groups.reduce((n, group) => n + count(pick(group)), 0)
+    const title = spread([seg('Plan', 'info', true), seg(`  ${label(byHeading ? plan.groups[0]!.heading : plan.name)}`, 'secondary')],
+      plan.groups.length ? totals(sum(g => g.done), sum(g => g.running), sum(g => g.left), plan.groups.some(g => g.unknownStates)) : [], inner)
+    boxes.push({ title, tone: 'info', rows })
   }
   return boxes
 }
 
-function agentsBox({ agents, now, columns }: Snapshot): Box | undefined {
+function agentsBox({ agents, now, columns }: Snapshot): Box {
   const inner = columns - 4
-  const compact = inner < 76
+  const wide = inner >= WIDE
   const active = agents.filter(a => a.status === 'running' && isCrew(a))
     .sort((a, b) => (a.startedAt ?? a.seenAt ?? Infinity) - (b.startedAt ?? b.seenAt ?? Infinity) || a.id.localeCompare(b.id))
-  if (!active.length) return undefined
+  const title = [seg(`Agents · running ${active.length}`, 'success', true)]
+  if (!active.length) return { title, tone: 'success', rows: [[seg('no agent running', 'secondary')]] }
   const rows: Row[] = []
   // The dot beats once a second: it turns hollow on odd seconds, so a stalled clock shows as a still dot.
   const lit = Number.isFinite(now) && Math.floor(now / 1000) % 2 === 0
   for (const agent of active) {
-    const step = agent.planStep !== undefined && STEP_ID.test(agent.planStep) ? agent.planStep : undefined
+    const step = agent.planStep !== undefined && STEP_ID.test(agent.planStep) ? agent.planStep : ''
     const stamp = agent.startedAt !== undefined ? duration(agent.startedAt, now) : `seen ${duration(agent.seenAt, now)}`
-    const stats = statsText(agent)
-    const line: Row = [seg(lit ? '● ' : '○ ', 'success'), ...roleRow(agent.type)]
-    if (step) line.push(seg(`  ${step}`, 'warning'))
-    line.push(seg('  '), ...modelCells(agent), seg(`  ${stamp}`))
-    if (stats && !compact) line.push(seg(`  ${stats}`, 'secondary'))
-    rows.push(cutRow(line, inner))
-    if (stats && compact) rows.push(cutRow([seg(`  ${stats}`, 'secondary')], inner))
+    const dot = seg(lit ? '● ' : '○ ', 'success')
+    const usage = onHelper(agent) ? 'on helper' : tokensText(agent)
+    if (wide) {
+      const left = [dot, ...pad(roleRow(agent.type), 15), ...pad([seg(step, 'warning')], 5), ...pad(modelCells(agent), 20),
+        seg(` ${stamp.padStart(7)}`), seg('  '), ...pad(contextCells(agent), 19), seg(stepsText(agent), 'secondary')]
+      rows.push(spread(left, usage ? [seg(usage, 'secondary')] : [], inner))
+    } else {
+      const left = [dot, ...roleRow(agent.type), ...(step ? [seg(`  ${step}`, 'warning')] : []), seg('  '), ...modelCells(agent)]
+      rows.push(spread(left, [seg(stamp)], inner))
+      rows.push(spread([seg('  '), ...contextCells(agent), seg('  '), seg(stepsText(agent), 'secondary')], usage ? [seg(usage, 'secondary')] : [], inner))
+    }
     rows.push(cutRow(toolRow(agent), inner))
   }
-  return { title: [seg(`Agents · running ${active.length}`, 'heading')], tone: 'success', rows }
+  return { title, tone: 'success', rows }
 }
 
 function recentBox({ agents, now, columns }: Snapshot): Box | undefined {
   const inner = columns - 4
+  const wide = inner >= WIDE
   const ended = agents.filter(a => a.status === 'ended' && isCrew(a))
     .sort((a, b) => (b.endedAt ?? 0) - (a.endedAt ?? 0) || a.id.localeCompare(b.id)).slice(0, 5)
   if (!ended.length) return undefined
   const rows = ended.map((agent): Row => {
     const failed = agent.stop === 'max_tokens'
-    const step = agent.planStep !== undefined && STEP_ID.test(agent.planStep) ? agent.planStep : undefined
-    const took = agent.startedAt !== undefined && agent.endedAt !== undefined ? duration(agent.startedAt, agent.endedAt) : undefined
-    const stats = statsText(agent)
-    const row: Row = [seg(failed ? '✗ ' : '● ', failed ? 'error' : 'secondary'), ...roleRow(agent.type)]
-    if (step) row.push(seg(`  ${step}`, 'warning'))
-    row.push(seg('  '), ...modelCells(agent))
-    if (took) row.push(seg(`  ${took}`))
-    if (stats) row.push(seg(`  ${stats}`, 'secondary'))
-    if (failed) row.push(seg('  max_tokens', 'error'))
+    const step = agent.planStep !== undefined && STEP_ID.test(agent.planStep) ? agent.planStep : ''
+    const took = agent.startedAt !== undefined && agent.endedAt !== undefined ? duration(agent.startedAt, agent.endedAt) : ''
+    const glyph = seg(failed ? '✗ ' : '● ', failed ? 'error' : 'secondary')
+    const usage = tokensText(agent)
     const when = ago(agent.endedAt, now)
-    if (when) row.push(seg(`  ${when}`, 'secondary'))
-    return cutRow(row, inner)
+    if (!wide) {
+      const right = [seg([took, failed ? '' : usage].filter(Boolean).join(' · '), 'secondary')]
+      if (failed) right.push(seg(`${took ? ' · ' : ''}max_tokens`, 'error'))
+      return spread([glyph, ...roleRow(agent.type), ...(step ? [seg(`  ${step}`, 'warning')] : [])], right, inner)
+    }
+    const left = [glyph, ...pad(roleRow(agent.type), 15), ...pad([seg(step, 'warning')], 5), ...pad(modelCells(agent), 20),
+      seg(` ${took.padStart(7)}`), seg('  '), seg(stepsText(agent), 'secondary')]
+    const right: Row = []
+    if (failed) right.push(seg('max_tokens', 'error'))
+    else if (usage) right.push(seg(usage, 'secondary'))
+    if (when) right.push(seg(`   ${when}`, 'secondary'))
+    return spread(left, right, inner)
   })
-  return { title: [seg(`Recent · ${ended.length}`, 'secondary')], tone: 'secondary', rows }
+  return { title: [seg(`Recent · ${ended.length}`, 'secondary', true)], tone: 'frame', rows }
 }
 
 /** The timeline window: every agent that ran in it, one bar each; a running agent's bar reaches the right edge. */
@@ -289,36 +367,50 @@ function timelineBox({ agents, now, columns }: Snapshot): Box | undefined {
     (a.status === 'running' || (a.endedAt !== undefined && a.endedAt >= start)))
     .sort((a, b) => (a.startedAt ?? a.seenAt ?? 0) - (b.startedAt ?? b.seenAt ?? 0) || a.id.localeCompare(b.id)).slice(-8)
   if (!inWindow.length) return undefined
-  const labelWidth = 16
-  const cells = Math.max(8, inner - labelWidth - 1)
-  const at = (time: number) => Math.min(cells, Math.max(0, Math.round(((time - start) / WINDOW_MS) * cells)))
+  const labelWidth = inner >= 60 ? 16 : 12
+  const span = Math.max(8, inner - labelWidth)
+  const at = (time: number) => Math.min(span, Math.max(0, Math.round(((time - start) / WINDOW_MS) * span)))
   const rows = inWindow.map((agent): Row => {
     const from = at(agent.startedAt ?? agent.seenAt ?? start)
     const running = agent.status === 'running'
-    const to = running ? cells : Math.max(from + 1, at(agent.endedAt ?? now))
+    const to = running ? span : Math.max(from + 1, at(agent.endedAt ?? now))
     const style: Style = running ? 'success' : agent.stop === 'max_tokens' ? 'error' : 'secondary'
     const name = roleName(agent.type).base
     const label = `${name}${agent.planStep !== undefined && STEP_ID.test(agent.planStep) ? ` ${agent.planStep}` : ''}`
-    return [seg(label.slice(0, labelWidth - 1).padEnd(labelWidth), ROLE_STYLE[name] ?? 'plain'), seg('·'.repeat(Math.min(from, cells)), 'secondary'),
-      seg('█'.repeat(Math.max(0, Math.min(to, cells) - from)), style), seg('·'.repeat(Math.max(0, cells - to)), 'secondary')]
+    return [seg(label.slice(0, labelWidth - 1).padEnd(labelWidth), ROLE_STYLE[name] ?? 'plain'), seg('█'.repeat(Math.min(from, span)), 'track'),
+      seg('█'.repeat(Math.max(0, Math.min(to, span) - from)), style), seg('█'.repeat(Math.max(0, span - to)), 'track')]
   })
-  const axis = '-15m'.padEnd(Math.floor(cells / 3)) + '-10m'.padEnd(Math.floor(cells / 3)) + '-5m'
-  rows.push([seg(' '.repeat(labelWidth)), seg(`${axis.padEnd(cells - 3)}now`.slice(0, cells), 'secondary')])
-  return { title: [seg('Last 15 minutes', 'accent')], tone: 'accent', rows }
+  // The axis marks sit at a third and two thirds of the bar; `now` ends at its right edge.
+  const axis = Array.from({ length: span }, () => ' ')
+  const mark = (text: string, from: number) => { for (let i = 0; i < text.length && from + i < span; i++) axis[from + i] = text[i]! }
+  mark('−15m', 0)
+  mark('−10m', Math.round(span / 3))
+  mark('−5m', Math.round((2 * span) / 3))
+  mark('now', span - 3)
+  rows.push([seg(' '.repeat(labelWidth)), seg(axis.join(''), 'secondary')])
+  rows.push(cutRow([seg(' '.repeat(labelWidth)), seg('█', 'success'), seg(' running   ', 'secondary'), seg('█', 'secondary'),
+    seg(' ended   ', 'secondary'), seg('█', 'error'), seg(' max_tokens', 'secondary')], inner))
+  return { title: [seg('Last 15 minutes', 'accent', true)], tone: 'accent', rows }
 }
 
 /** The pane's parts from one snapshot, top to bottom; the screen draws the boxes, scrolling is the host's. */
-export function paneView(snapshot: Snapshot): Pane {
+export function paneView(given: Snapshot): Pane {
+  const snapshot = { ...given, columns: widthOf(given.columns) }
   const crew = snapshot.agents.filter(isCrew)
   const running = crew.filter(a => a.status === 'running').length
   const recent = crew.length - running
-  const head: Row = [seg('Crew', 'heading')]
-  if (running) head.push(seg(`  ● ${running} running`, 'success'))
-  if (recent) head.push(seg(`  ${recent} recent`, 'secondary'))
-  const boxes = [...planBoxes(snapshot), agentsBox(snapshot), recentBox(snapshot), timelineBox(snapshot)]
+  const named = snapshot.plans.filter((plan): plan is PlanProjection => !('state' in plan))
+  const head: Row = [seg('Crew', 'title')]
+  if (named.length === 1) head.push(seg(`  ${label(named[0]!.name)}`, 'secondary'))
+  const pills: Row = []
+  if (running) pills.push(seg(` ● ${running} running `, 'pill-running'))
+  if (running && recent) pills.push(seg(' '))
+  if (recent) pills.push(seg(` ${recent} recent `, 'pill-recent'))
+  const empty = snapshot.plans.length === 0 && crew.length === 0
+  const boxes = empty ? [] : [...planBoxes(snapshot), agentsBox(snapshot), recentBox(snapshot), timelineBox(snapshot)]
     .filter((box): box is Box => box !== undefined)
-  return { head: cutRow(head, snapshot.columns), boxes, foot: [seg(plural(crew.length, 'agent'), 'secondary')],
-    empty: boxes.length === 0 && crew.length === 0 }
+  const foot = spread([seg(plural(crew.length, 'agent'), 'secondary')], [seg('↑↓ scroll · esc close', 'secondary')], snapshot.columns)
+  return { head: spread(head, pills, snapshot.columns), boxes, foot, empty }
 }
 
 /**

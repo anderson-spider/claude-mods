@@ -84,6 +84,27 @@ test('HUD pane draws the plan tree and the agents from the same atoms, and /crew
   expect(await $.command.run({ command: 'crew-hud', args: '' } as never)).toEqual({ text: 'the pane is open.' })
 })
 
+test('HUD pane paints with the design palette under a dark theme and with theme keys after the theme turns light', ON, async ($, on) => {
+  jevWorld(on, { files: { '/repo/.crew/plans/live.md': hudText }, register: true })
+  let theme = 'dark'
+  on('config.list', () => ({ value: [{ key: 'theme', label: 'Theme', kind: 'choice', value: theme }] }) as never)
+  on('config.set', (_$, e) => { theme = String(e.value); return { value: e.value } })
+  on('fs.list', () => ({ value: ['live.md'] }) as never)
+  on('tool.call', () => ({ result: 'written' }))
+  await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true } as never)
+  await $.tool.call({ tool: 'Write', file_path: '.crew/plans/live.md', content: hudText } as never)
+  await flush()
+  const dark = await $.ui.mount(hudPane())
+  expect((await dark.find({ type: 'Text', text: /^Plan$/ }))?.props).toMatchObject({ color: '#61afef', bold: true })
+  expect((await dark.findAll({ type: 'Box' })).some(box => box.props.borderColor === '#61afef')).toBe(true)
+  await dark.unmount()
+  await $.config.set({ key: 'theme', value: 'light' } as never)
+  await flush()
+  const light = await $.ui.mount(hudPane())
+  expect((await light.find({ type: 'Text', text: /^Plan$/ }))?.props).toMatchObject({ color: 'permission', bold: true })
+  await light.unmount()
+})
+
 test('HUD notes a crew agent tool call by name and leaves its result, deny and error exactly as they came', ON, async ($, on) => {
   jevWorld(on, { stepModel: 'claude-sonnet-5-5' })
   const values = hudCapture(on)

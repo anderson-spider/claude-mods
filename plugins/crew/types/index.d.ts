@@ -55,6 +55,8 @@ declare module 'claude-code' {
       agents: CrewAgent[]
       /** The clock reading, in epoch milliseconds, the band's elapsed times are drawn from. */
       now: number
+      /** The pane's colours: `mockup` (the design's fixed colours) under a dark or automatic theme, `theme` (the theme's keys) under a light or ANSI one. */
+      palette: 'mockup' | 'theme'
     }
   }
 }
