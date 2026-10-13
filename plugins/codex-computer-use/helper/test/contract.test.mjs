@@ -81,8 +81,45 @@ test('the helper serves exactly the routes the shared contract lists, and no oth
   assert.equal(refused.status, 404)
   assert.equal((await send('/call', { caller: 's1' }, { hub: stubHub(), method: 'GET' })).status, 405)
 
-  // The table is the only place a path is served: a comparison on the url written in the handler would serve a route the contract does not list.
-  assert.doesNotMatch(handler.toString(), /request\.url\s*[!=]==?/, 'the handler looks routes up in ROUTE_TABLE only')
+  // The table is the only place a path is served: routing on the url written in the handler would serve a route the contract does not list.
+  assert.deepEqual(routingOnUrl(handler.toString()), [], 'the handler looks routes up in ROUTE_TABLE only')
+  assert.ok(Object.isFrozen(ROUTE_TABLE), 'a route cannot be added once the module is loaded')
+  assert.ok(Object.values(ROUTE_TABLE).every(Object.isFrozen), 'a route cannot be changed once the module is loaded')
+})
+
+/** The ways a handler's source can pick a route from `request.url` other than the table lookup; empty when it does not. */
+const routingOnUrl = source =>
+  Object.entries({
+    comparison: /request\.url\s*[!=]==?/,
+    'switch on the url': /switch\s*\(\s*request\.url\s*\)/,
+    'string method on the url': /request\.url\s*\??\.\s*(startsWith|endsWith|includes|match|test|slice|indexOf|split|replace)\s*\(/,
+    'startsWith routing': /\.\s*startsWith\s*\(/,
+    'url passed to a matcher': /\.\s*(test|includes|match|has)\s*\(\s*request\.url\b/,
+    'url copied to a name': /(?:const|let|var)\s+\w+\s*=\s*request\.url\b|\burl\b[^=\n]*\}\s*=\s*request\b/,
+  })
+    .filter(([, pattern]) => pattern.test(source))
+    .map(([name]) => name)
+
+test('the guard on how the handler routes catches each way of choosing a route by the url, and passes the table lookup', () => {
+  const lookup = 'async (request, response) => { const route = Object.hasOwn(ROUTE_TABLE, request.url) ? ROUTE_TABLE[request.url] : undefined; return `unknown route ${request.url}` }'
+
+  assert.deepEqual(routingOnUrl(lookup), [])
+
+  for (const [source, found] of [
+    ["if (request.url === '/call') {}", 'comparison'],
+    ["if (request.url != '/call') {}", 'comparison'],
+    ["switch (request.url) { case '/call': break }", 'switch on the url'],
+    ["switch(request.url){}", 'switch on the url'],
+    ["if (request.url.startsWith('/x/')) {}", 'string method on the url'],
+    ["if (request.url?.endsWith('/x')) {}", 'string method on the url'],
+    ["if (path.startsWith('/x/')) {}", 'startsWith routing'],
+    ['if (/^\\/x/.test(request.url)) {}', 'url passed to a matcher'],
+    ["if (['/call'].includes(request.url)) {}", 'url passed to a matcher'],
+    ['const path = request.url', 'url copied to a name'],
+    ['const { url } = request', 'url copied to a name'],
+  ]) {
+    assert.ok(routingOnUrl(source).includes(found), `${source} is caught as ${found}`)
+  }
 })
 
 test('the helper takes exactly the choices the shared contract lists', async () => {

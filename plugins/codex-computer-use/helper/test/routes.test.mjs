@@ -210,8 +210,7 @@ test('/call, /reset and /release pass the caller (and /call the whole body) to t
   assert.equal(failed.status, 200)
 })
 
-// `/release` does not await its hub call (Hub#release is synchronous), so only a throw ends in 500 there.
-test('/call, /reset and /release answer 500 with the message when the hub throws, and with the text of a non-error; /call and /reset also when it rejects', async () => {
+test('/call, /reset and /release answer 500 with the message when the hub throws, and with the text of a non-error, or when it rejects', async () => {
   for (const url of ['/call', '/reset', '/release']) {
     const name = url.slice(1)
     const fails = failure => send(url, CALLER, { hub: stubHub({ [name]: failure }) })
@@ -219,9 +218,19 @@ test('/call, /reset and /release answer 500 with the message when the hub throws
     assert.deepEqual(await fails(() => { throw new Error('sync') }), { status: 500, headers: { 'content-type': 'application/json' }, body: { status: 'error', message: 'sync' } })
     assert.deepEqual((await fails(() => { throw 42 })).body, { status: 'error', message: '42' })
 
-    if (name !== 'release') {
-      assert.deepEqual((await fails(async () => { throw new Error('async') })).body, { status: 'error', message: 'async' })
-    }
+    assert.deepEqual((await fails(async () => { throw new Error('async') })).body, { status: 'error', message: 'async' })
+  }
+})
+
+// A hub whose methods answer later must still reach the person with the reply, not with `{}`.
+test('/call, /reset and /release answer with what the hub settles to, not with the pending promise', async () => {
+  for (const url of ['/call', '/reset', '/release']) {
+    const name = url.slice(1)
+    const later = new Promise(resolve => setTimeout(() => resolve({ status: 'ok', later: name }), 5))
+    const answered = await send(url, CALLER, { hub: stubHub({ [name]: () => later }) })
+
+    assert.deepEqual(answered.body, { status: 'ok', later: name }, url)
+    assert.equal(answered.status, 200, url)
   }
 })
 

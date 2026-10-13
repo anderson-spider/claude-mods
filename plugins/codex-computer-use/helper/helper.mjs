@@ -61,14 +61,8 @@ export const ROUTES = {
 
 const isCaller = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}(\/[A-Za-z0-9][A-Za-z0-9._:-]{0,127})?$/.test(value)
 
-/**
- * What each route does, keyed by the paths in `ROUTES`: `run(hub, body)` answers
- * `[status, reply]`. A route takes a valid `caller` in its body unless it says
- * `caller: false`, and takes POST only unless it says `anyMethod: true`, which also
- * skips reading the body. A new route is one entry here, its hub method and its
- * entries in hooks/model.ts and helper/test/contract.mjs.
- */
-export const ROUTE_TABLE = {
+// The routes as written; `ROUTE_TABLE` below is the frozen copy the handler and the tests read.
+const ROUTE_ENTRIES = {
   [ROUTES.status]: {
     anyMethod: true,
     run: hub => [200, { version: VERSION, pid: process.pid, ...hub.status() }],
@@ -110,8 +104,20 @@ export const ROUTE_TABLE = {
       return [200, { status: 'ok' }]
     },
   },
-  [ROUTES.release]: { run: (hub, body) => [200, hub.release(body.caller)] },
+  [ROUTES.release]: { run: async (hub, body) => [200, await hub.release(body.caller)] },
 }
+
+/**
+ * What each route does, keyed by the paths in `ROUTES`: `run(hub, body)` answers
+ * `[status, reply]`. A route takes a valid `caller` in its body unless it says
+ * `caller: false`, and takes POST only unless it says `anyMethod: true`, which also
+ * skips reading the body. A new route is one entry here, its hub method and its
+ * entries in hooks/model.ts and helper/test/contract.mjs. The table and its entries
+ * are frozen: a route cannot be added or changed once the module is loaded.
+ */
+export const ROUTE_TABLE = Object.freeze(
+  Object.fromEntries(Object.entries(ROUTE_ENTRIES).map(([path, route]) => [path, Object.freeze(route)])),
+)
 
 // The checks run in this order: /status (any method, no body), POST only, the JSON
 // body, the caller, then the route. An unknown url is checked for a caller too, so a
