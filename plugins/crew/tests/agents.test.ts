@@ -41,6 +41,7 @@ test('planner and challenger only read the code; the digger also reads git, docs
 
 test('each helper answers in its own shape: a plan, a challenge, evidence', () => {
   expect(by('planner')?.prompt).toContain('acceptance criteria')
+  expect(by('planner')?.prompt).toContain('- T1 (main, after: —) <action and files> — state: queued')
   expect(by('challenger')?.prompt).toContain('say plainly when you find nothing significant')
   expect(by('challenger')?.prompt).toContain('approve routine work')
   expect(by('digger')?.prompt).toContain('marked confirmed or inferred')

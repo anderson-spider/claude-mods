@@ -103,7 +103,7 @@ read -rs k && printf '%s' "$k" | jq -Rs '{jevKey:.}' | claude plugin configure c
 
 A `jevKey` that is not a string makes Claude Code refuse to load the whole plugin.
 
-The `brainstorm` skill says how the main session plans a larger change: frame it, investigate (itself or with diggers), compare options, write one plan whose steps the main session owns, and ask you to approve it before implementing. A planner or a challenger call is optional, never a fixed step.
+The `brainstorm` skill says how the main session plans a larger change: route the request (question, small, fix, change or contract; a route's own checklist loads only when it is taken), frame it, investigate (itself or with diggers), compare options, write one plan whose steps the main session owns, and ask you to approve it before implementing. A planner or a challenger call is optional, never a fixed step; the planner returns its steps in the plan's line format.
 
 ## Privacy and permissions
 
