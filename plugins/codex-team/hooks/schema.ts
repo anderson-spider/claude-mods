@@ -8,6 +8,8 @@ type RequiredKeys<T> = { [K in keyof T]-?: {} extends Pick<T, K> ? never : K }[k
 /** The JSON Schema of one property, tied to the type `V` of the same property in `McpToolInputs`. A union of literals needs an `enum` listing each member once. */
 type PropertySchema<V> = { description?: string } & (unknown extends V
   ? unknown
+  : [V] extends [boolean]
+    ? { type: 'boolean' }
   : [V] extends [string]
     ? string extends V
       ? { type: 'string' }
@@ -20,7 +22,7 @@ type PropertySchema<V> = { description?: string } & (unknown extends V
  * Ties a tool's `inputSchema` to its `McpToolInputs` entry in types/index.d.ts: `satisfies SchemaFor<McpToolInputs[...]>`
  * fails tsc when the schema has a property the type lacks or omits one, when `required` is not exactly the type's
  * required keys (any order), when a property's `type` or `items` disagrees, or when a literal union lacks an `enum`
- * with exactly its members (any order). A property type the helper does not know (number, boolean, object) fails
+ * with exactly its members (any order). A property type the helper does not know (number, object) fails
  * closed. Descriptions are not checked. Permutations: up to ~6 keys or members.
  */
 export type SchemaFor<T> = {

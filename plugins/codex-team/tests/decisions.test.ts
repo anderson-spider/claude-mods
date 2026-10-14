@@ -21,8 +21,9 @@ test('dispatch v3 projection and finish v2 retain only allowed metadata and dist
   } as DecisionRecord
   expect(decisionData(hostile)).toEqual(record)
   expect(JSON.stringify(decisionData(hostile))).not.toContain(secret)
-  const ended = { v: 2, action: 'finish', ts: record.ts, agent: record.agent, effectiveAgent: record.effectiveAgent, uuid: 'uuid', closed: true, archived: false, reason: 'archive exit 9' } as const
+  const ended = { v: 2, action: 'finish', trigger: 'report', ts: record.ts, agent: record.agent, effectiveAgent: record.effectiveAgent, uuid: 'uuid', closed: true, archived: false, reason: 'archive exit 9' } as const
   expect(decisionData({ ...ended, secret } as FinishRecord)).toEqual(ended)
+  expect(decisionData({ ...ended, trigger: secret } as unknown as FinishRecord)).not.toHaveProperty('trigger')
   const paths: string[] = [], bodies: string[] = []
   const io = { write: async (path: string, body: string) => { paths.push(path); bodies.push(body) }, log: () => {} }
   await saveDecision(io, '/home/u', hostile)

@@ -11,6 +11,7 @@ import { SPECS } from '../hooks/roles'
 import { ASTRA_REFUSAL } from '../hooks/model-policy'
 import type { Role } from '../hooks/roles'
 import { fnv1a } from '../hooks/decisions'
+import { lifecycle, UUID } from './lifecycle'
 
 const ENV: Record<string, string> = { HERDR_ENV: '1', HERDR_WORKSPACE_ID: 'w1', HERDR_PANE_ID: 'lead', HOME: '/home/u' }
 
@@ -133,16 +134,16 @@ test('a shared finish failure refuses dispatch without starting or prompting a r
   expect(JSON.stringify([w.writes, answer])).not.toContain('private')
 })
 
-test('shared working or blocked analyst keeps its task fallback and architect remains busy', async () => {
+test('shared working or blocked analyst and architect keep their task fallbacks', async () => {
   for (const status of ['working', 'blocked']) {
     const w = io([agents([{ name: effectiveName('analyst', 'w1')!, pane_id: 'home', agent_status: status }]), ...freshTeam.slice(1)])
     const answer = await dispatch(w.team, { role: 'analyst', slug: 'busy', task: 'Inspect', effort: 'low' })
     expect(answer.text).toContain('agent: analyst-busy')
     expect(w.calls.find(call => call[2] === 'create')).toContain('codex - busy')
     expect(w.calls.some(call => call[2] === 'get' || call[2] === 'close' || call[0] === 'codex')).toBe(false)
-    const architect = io([agents([{ name: effectiveName('architect', 'w1')!, pane_id: 'home', agent_status: status }])])
-    expect((await dispatch(architect.team, { role: 'architect', slug: 'busy', task: 'Design', effort: 'high' })).ok).toBe(false)
-    expect(architect.calls.filter(call => call[0] === 'herdr')).toEqual([['herdr', 'agent', 'list']])
+    const architect = io([agents([{ name: effectiveName('architect', 'w1')!, pane_id: 'home', agent_status: status }]), ...freshTeam.slice(1)])
+    expect((await dispatch(architect.team, { role: 'architect', slug: 'busy', task: 'Design', effort: 'high' })).text).toContain('agent: architect-busy')
+    expect(architect.calls.some(call => call[2] === 'get' || call[2] === 'close' || call[0] === 'codex')).toBe(false)
   }
 })
 
@@ -376,7 +377,7 @@ test('developer reviewer and task analyst followups retire prior sessions and ap
     expect(w.calls.find(c => c[0] === 'codex')![2]).toBe(w.uuid)
     const prompt = w.calls.find(c => c[2] === 'prompt')![4]!
     if (role === 'developer') {
-      expect(prompt).toContain('read your previous report at /home/u/.claude/codex-team/reports/repo/1r/assess-developer.md and inspect the git diff in your worktree before continuing.')
+      expect(prompt).toContain('read your previous report at /home/u/.claude/codex-team/reports/repo/1r/assess-developer.md, inspect the git diff in your worktree and read the branch git log before continuing.')
       expect(w.tasks.get('developer:w1:/repo:assess')).toEqual({ cwd: '/wt/task', task: 'Original task' })
     }
   }
@@ -800,13 +801,14 @@ test('refused deliveries and failed shared finish never read settings or ask Jev
     const w = kind === 'finish' ? settledAgent('architect', 'idle', 9) : assessedWorld()
     if (kind !== 'finish') w.team.run = fakeRun([[['mkdir'], text('')], [['git'], text('/wt/task\n')], agents([
       kind === 'writer' ? { name: effectiveName('dev-other', 'w1')!, pane_id: 'p', cwd: '/wt/task' }
-        : { name: effectiveName('architect', 'w1')!, pane_id: 'p', workspace_id: kind === 'foreign' ? 'w2' : 'w1', agent_status: 'working' },
+        : { name: effectiveName(kind === 'busy' ? 'architect-assess' : 'architect', 'w1')!, pane_id: 'p', workspace_id: kind === 'foreign' ? 'w2' : 'w1', agent_status: 'working' },
     ])]).run
     let settings = 0, requests = 0
+    if (kind === 'busy') w.tasks.set('developer:w1:/repo:assess', { cwd: '/wt/task', task: 'original' })
     w.team.env = async () => ({ ...ENV, JEV_API_KEY: KEY })
     w.team.settings = async () => { settings++; return {} }
     w.team.jev.fetch = async () => { requests++; throw new Error('must not request') }
-    const result = await dispatch(w.team, { ...call(kind === 'writer' ? 'developer' : 'architect') })
+    const result = await dispatch(w.team, { ...call(kind === 'writer' ? 'developer' : kind === 'busy' ? 'reviewer' : 'architect') })
     expect(result.ok).toBe(false)
     expect(settings).toBe(0)
     expect(requests).toBe(0)
@@ -955,7 +957,7 @@ test('foreign shared roles and equal developer or reviewer names do not block lo
     expect(answer.ok).toBe(true)
     expect(answer.text).toContain(`agent: ${name}`)
     expect(answer.text).toContain(`Herdr: ${effectiveName(name, 'w1')}`)
-    expect(answer.text).toContain(`herdr agent wait ${effectiveName(name, 'w1')}`)
+    expect(answer.text).toContain('agent_not_found means check the report and finish receipt')
     expect(w.calls.some(call => call[2] === 'split' || call[2] === 'get')).toBe(false)
     expect(JSON.parse(w.writes[w.writes.length - 1]!.text)).toMatchObject({ agent: name, effectiveAgent: effectiveName(name, 'w1'), promptStatus: 'confirmed' })
   }
@@ -1129,4 +1131,72 @@ test('Fast mode follows the plugin option unless the dispatch chooses, and a mal
   expect(await dispatch(world.team, { role: 'analyst', task: 'Find X', slug: 'find-x', fast: 'yes' })).toEqual({ ok: false, text: 'codex-team: fast must be true or false' })
   expect(world.calls).toEqual([])
   expect(world.writes).toEqual([])
+})
+
+test('auto finish shares dispatch and finish queue and a refusal preserves the current watcher', async () => {
+  const w = lifecycle()
+  await dispatch(w.io, { role: 'developer', slug: 'fix', task: 'original', cwd: '/wt/fix', effort: 'low' })
+  const tracked = { workspace: 'w1', effectiveAgent: effectiveName('dev-fix', 'w1')!, pane: 'w1:p1', uuid: UUID, role: 'developer' as const, report: '/home/u/.claude/codex-team/reports/repo/1r/fix-developer.md', submittedAt: 1_000, baselineMtime: 0 }
+  w.closer.track(tracked)
+  expect((await dispatch(w.io, { role: 'developer', slug: 'fix', task: 'followup', cwd: '/wt/fix', effort: 'low' })).ok).toBe(false)
+  expect(w.closer.current(tracked)).toBe(true)
+  w.state.agents[0]!.agent_status = 'done'; w.put(tracked.report)
+  let release!: () => void
+  const runner = w.io.run
+  w.io.run = async (argv, init) => { if (argv[0] === 'mkdir') await new Promise<void>(resolve => { release = resolve }); return runner(argv, init) }
+  const dispatching = dispatch(w.io, { role: 'architect', slug: 'other', task: 'task', effort: 'low' })
+  for (let i = 0; i < 30 && !release; i++) await Promise.resolve()
+  const observing = w.closer.observe()
+  for (let i = 0; i < 30; i++) await Promise.resolve()
+  expect(w.calls.some(call => call[2] === 'close')).toBe(false)
+  release(); await dispatching; await observing
+  const commands = w.calls.map(call => call[2])
+  expect(commands.lastIndexOf('prompt')).toBeLessThan(commands.indexOf('close'))
+  expect(w.state.agents).toHaveLength(1)
+  expect(w.state.agents[0]!.name).toBe(effectiveName('architect', 'w1'))
+})
+
+test('concurrent analyst architect and developer dispatches get distinct panes without interleaving', async () => {
+  const w = lifecycle()
+  const answers = await Promise.all(['analyst', 'architect', 'developer'].map(role => dispatch(w.io, { role, task: 'independent', slug: role, cwd: '/wt/fix', effort: 'low' })))
+  expect(answers.every(answer => answer.ok)).toBe(true)
+  expect(new Set(w.state.agents.map(agent => agent.pane_id)).size).toBe(3)
+  expect(w.calls.filter(call => ['create', 'start', 'prompt'].includes(call[2] ?? '')).map(call => call[2])).toEqual(['create', 'start', 'prompt', 'create', 'start', 'prompt', 'create', 'start', 'prompt'])
+  expect(w.timer().timers).toBe(1)
+})
+
+test('concurrent busy shared architects fall back to distinct task agents', async () => {
+  const w = lifecycle()
+  w.state.agents.push({ name: effectiveName('architect', 'w1')!, workspace_id: 'w1', pane_id: 'busy', agent_status: 'working' })
+  const answers = await Promise.all(['one', 'two', 'three'].map(slug => dispatch(w.io, { role: 'architect', slug, task: 'design', effort: 'low' })))
+  expect(answers.every(answer => answer.ok)).toBe(true)
+  expect(new Set(w.state.agents.map(agent => agent.name)).size).toBe(4)
+  expect(w.state.agents[0]!.pane_id).toBe('busy')
+  expect(w.calls.some(call => call[2] === 'close')).toBe(false)
+})
+
+test('failed startup rolls back only its new empty pane and preserves pre-existing tabs and sibling agents', async () => {
+  for (const occupied of [false, true]) {
+    const w = lifecycle()
+    w.state.startFail = true
+    const peer = { name: effectiveName('architect-fix', 'w1')!, workspace_id: 'w1', pane_id: 'old', agent_status: 'working' }
+    w.state.agents.push(peer)
+    w.panes.set('old', { pane_id: 'old', terminal_id: 'old-terminal', workspace_id: 'w1', tab_id: 'old-tab' })
+    const run = w.io.run
+    if (occupied) w.io.run = async (argv, init) => { const result = await run(argv, init); if (argv[2] === 'start') w.state.agents.push({ ...peer, name: 'another', pane_id: 'w1:p1' }); return result }
+    expect((await dispatch(w.io, { role: 'developer', slug: 'fix', task: 'task', cwd: '/wt/fix', effort: 'low' })).text).toContain('delivery: not_sent (start_failed)')
+    expect(w.panes.has('old')).toBe(true)
+    expect(w.state.agents[0]).toEqual(peer)
+    expect(w.calls.filter(call => call[2] === 'close')).toEqual(occupied ? [] : [['herdr', 'pane', 'close', 'w1:p1']])
+    expect(w.calls.some(call => call[0] === 'codex' || call[2] === 'prompt' || call[1] === 'tab' && call[2] === 'close')).toBe(false)
+  }
+  const w = lifecycle(); w.state.startFail = w.state.closeFail = true
+  const answer = await dispatch(w.io, { role: 'analyst', slug: 'fix', task: 'task', effort: 'low' })
+  expect(answer.text).toContain('delivery: not_sent (start_failed)')
+  expect(w.logs).toEqual(['codex-team: startup pane cleanup failed'])
+  expect(w.panes.size).toBe(1)
+  const existing = lifecycle()
+  existing.state.agents.push({ name: effectiveName('analyst', 'w1')!, workspace_id: 'w1', pane_id: 'old', agent_status: 'unknown' })
+  expect((await dispatch(existing.io, { role: 'analyst', slug: 'fix', task: 'task', effort: 'low' })).ok).toBe(false)
+  expect(existing.calls.some(call => call[2] === 'close' || call[2] === 'create')).toBe(false)
 })

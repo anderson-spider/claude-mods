@@ -4,14 +4,16 @@ import { saveDecision, fnv1a } from './decisions'
 import type { DecisionRecord } from './decisions'
 import { assessProfile, INVALID_PINS, JEV_MODEL, parsePins, pinnedPair } from './effort'
 import type { EffortIo, ProfileChoice } from './effort'
-import { effectiveName, workspaceToken } from './names'
+import { effectiveName, logicalName, workspaceToken } from './names'
 import { deliver, isTeamName, listAgents } from './herdr'
 import type { Delivery, Run } from './herdr'
 import { brief, reportPath, reviewTask } from './report'
 import { ROLES, SLUG, SPECS, agentName, codexArgs, startEffort } from './roles'
 import type { Role } from './roles'
-import { finishAgent } from './finish'
-import type { Finish } from './finish'
+import { finishAgent, finishEmptyPane } from './finish'
+import type { Finish, FinishGuard } from './finish'
+import { codexUuid, readyReport } from './auto-close'
+import type { AutoCloser, ReportIo, Tracked } from './auto-close'
 import { ASTRA_REFUSAL, modelAllowed, resolveAllowAstra } from './model-policy'
 import type { ModelPolicyIo } from './model-policy'
 
@@ -30,6 +32,8 @@ export type TeamIo = EffortIo & ModelPolicyIo & {
   log: (text: string) => void
   store: { get: (key: string) => Promise<unknown>; set: (key: string, value: unknown) => Promise<void>; delete: (key: string) => Promise<void> }
   publish?: (root: string) => Promise<void>
+  reports?: ReportIo
+  autoCloser?: AutoCloser
 }
 
 export const NOT_IN_HERDR = 'codex-team can only be used inside a Herdr pane (HERDR_ENV=1); nothing was started.'
@@ -70,11 +74,25 @@ function queued<T>(action: () => Promise<T>): Promise<T> {
   return result
 }
 
-async function finishInWorkspace(io: TeamIo, env: Awaited<ReturnType<TeamIo['env']>>, agent: string): Promise<Finish> {
+async function finishInWorkspace(io: TeamIo, env: Awaited<ReturnType<TeamIo['env']>>, agent: string, guard: FinishGuard & { trigger?: 'report'; empty?: { pane: string; terminal: string } } = {}): Promise<Finish> {
   const ts = new Date(await io.now()).toISOString()
-  const result = await finishAgent(io.run, io.sleep, { agent, workspace: env.HERDR_WORKSPACE_ID!, leadPane: env.HERDR_PANE_ID })
-  await saveDecision(io, env.HOME, { v: 2, action: 'finish', ts, agent, effectiveAgent: result.effectiveAgent, uuid: result.uuid, closed: result.closed, archived: result.archived, reason: result.reason ?? null })
+  const input = { agent, workspace: env.HERDR_WORKSPACE_ID!, leadPane: env.HERDR_PANE_ID, ...guard }
+  const result = guard.empty ? await finishEmptyPane(io.run, { ...input, ...guard.empty }) : await finishAgent(io.run, io.sleep, input)
+  if (result.closed) io.autoCloser?.forget(input.workspace, result.effectiveAgent)
+  await saveDecision(io, env.HOME, { v: 2, action: 'finish', ...(guard.trigger ? { trigger: guard.trigger } : {}), ts, agent, effectiveAgent: result.effectiveAgent, uuid: result.uuid, closed: result.closed, archived: result.archived, reason: result.reason ?? null })
   return result
+}
+
+/** Observation's candidates join the same queue as dispatch, then recheck their report and generation. */
+export function autoFinish(io: TeamIo, entry: Tracked, current: () => boolean): Promise<Finish | undefined> {
+  return queued(async () => {
+    if (!current() || !io.reports) return
+    const env = await io.env()
+    const agent = logicalName(entry.effectiveAgent, entry.workspace)
+    if (!agent || env.HERDR_ENV !== '1' || env.HERDR_WORKSPACE_ID !== entry.workspace
+      || !await readyReport(io.reports, entry.role, entry.report, Math.max(entry.submittedAt, entry.baselineMtime)) || !current()) return
+    return finishInWorkspace(io, env, agent, { expected: { pane: entry.pane, uuid: entry.uuid }, current, trigger: 'report' })
+  })
 }
 
 /** Explicit finish shares dispatch's queue and automatic previous-agent retirement. */
@@ -165,10 +183,17 @@ async function dispatchTask(io: TeamIo, input: Input): Promise<Answer> {
   })
 
   let createdRecord = false
+  let reportBaseline: Pick<Tracked, 'baselineMtime' | 'submittedAt'> | undefined
   const delivery = await deliver(io.run, {
     name,
     slug: input.slug,
     analystSlug: role === 'analyst' ? input.slug : undefined,
+    architectSlug: role === 'architect' ? input.slug : undefined,
+    sleep: io.sleep, now: io.now,
+    rollbackPane: async (pane, terminal, agent) => {
+      const result = await finishInWorkspace(io, env, agent, { empty: { pane, terminal } })
+      if (!result.closed) { try { io.log('codex-team: startup pane cleanup failed') } catch { /* Keep the dispatch result. */ } }
+    },
     finishPrevious: agent => finishInWorkspace(io, env, agent),
     reviewDeveloper: role === 'reviewer' ? `dev-${input.slug}` : undefined,
     writes: spec.writes,
@@ -192,12 +217,43 @@ async function dispatchTask(io: TeamIo, input: Input): Promise<Answer> {
         createdRecord = true
       }
       await saveDecision(io, home, record({ agent, effectiveAgent: effectiveName(agent, workspace)!, started, existed: !started, status: 'unknown' }, await io.now()))
+      if (io.autoCloser && io.reports) {
+        try {
+          const baseline = await io.reports.stat(report)
+          const baselineMtime = baseline?.mtimeMs ?? 0, submittedAt = await io.now()
+          if (!Number.isFinite(baselineMtime) || !Number.isFinite(submittedAt)) throw new Error('uncertain timestamp')
+          reportBaseline = { baselineMtime, submittedAt }
+        } catch { try { io.log('codex-team: report observation unavailable') } catch { /* Keep delivery available. */ } }
+      }
     },
   }).catch(async error => {
     if (createdRecord) await io.store.delete(key)
     throw error
   })
   if (createdRecord && delivery.status === 'not_sent') await io.store.delete(key)
+  if (delivery.status === 'confirmed' && reportBaseline && io.autoCloser) {
+    try {
+      // Codex creates its session id only once the first prompt starts a turn.
+      const deadline = await io.now() + 5_000
+      if (!Number.isFinite(deadline) || !delivery.pane) throw new Error('uncertain identity')
+      let uuid: string | undefined
+      for (let attempt = 0; attempt < 20; attempt++) {
+        const remaining = deadline - await io.now()
+        if (!Number.isFinite(remaining) || remaining <= 0) break
+        const got = await io.run(['herdr', 'agent', 'get', delivery.effectiveAgent], { timeoutMs: Math.min(2_000, remaining) })
+        const live = !got.isStdoutTruncated && got.exitCode === 0 ? JSON.parse(got.stdout)?.result?.agent : undefined
+        if (!live || live.workspace_id !== workspace || live.name !== delivery.effectiveAgent || live.pane_id !== delivery.pane || live.agent !== 'codex') throw new Error('uncertain identity')
+        uuid = codexUuid(live)
+        if (uuid) break
+        if (live.agent_session?.value !== undefined) throw new Error('uncertain identity')
+        const pause = Math.min(250, deadline - await io.now())
+        if (!Number.isFinite(pause) || pause <= 0) break
+        await io.sleep(pause)
+      }
+      if (!uuid) throw new Error('uncertain identity')
+      io.autoCloser.track({ workspace, effectiveAgent: delivery.effectiveAgent, pane: delivery.pane, uuid, role, report, ...reportBaseline })
+    } catch { try { io.log('codex-team: report observation unavailable') } catch { /* Keep delivery available. */ } }
+  }
   await saveDecision(io, home, record(delivery, await io.now()))
   if (io.publish) await io.publish(repo).catch(() => io.log('codex-team: dagr not published (publication failed)'))
   if (delivery.reason === ASTRA_REFUSAL) return { ok: false, text: ASTRA_REFUSAL }
@@ -212,7 +268,7 @@ async function dispatchTask(io: TeamIo, input: Input): Promise<Answer> {
     `report: ${report}`,
     `Herdr: ${delivery.effectiveAgent}`,
     delivery.status === 'confirmed'
-      ? `next: \`herdr agent wait ${delivery.effectiveAgent}\`, then read the report.`
+      ? `next: read the report when complete. The settled agent closes and archives automatically; agent_not_found means check the report and finish receipt.`
       : delivery.status === 'unknown'
         ? `next: do not send it again; check with \`herdr agent get ${delivery.effectiveAgent}\` and \`herdr agent wait ${delivery.effectiveAgent}\`.`
         : 'next: fix the cause, then dispatch again.',
