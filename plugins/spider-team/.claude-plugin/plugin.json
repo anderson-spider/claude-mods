@@ -1,8 +1,16 @@
 {
   "name": "spider-team",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Read-only analyst, planner and reviewer subagents; Jev picks each one's model and effort from the task.",
   "author": {
     "name": "anderson-spider"
+  },
+  "userConfig": {
+    "judgeEvery": {
+      "type": "number",
+      "title": "Judge one run in N",
+      "description": "How often the outcome judge asks Jev about a finished agent's answer: 1 judges every run, N one in N, 0 turns the judge off. Each judged run is one more Jev request.",
+      "default": 1
+    }
   }
 }
