@@ -33,7 +33,7 @@ A hook on the `Agent` tool picks the model and effort of the four Spider types; 
 
 - An explicit Agent `model` or `effort`, or a profile directive in the task, wins and skips Jev; omitted fields come from the role default. Model pins accept opus, sonnet and haiku; effort pins accept low, medium, high, xhigh and max, with xhigh/max sent as high. Other models and malformed or contradictory directives refuse the call.
 - Otherwise, with `JEV_API_KEY` in the user's environment, Jev assesses difficulty, duration, scope and task type, and the closest profile below is chosen. A project/local settings declaration of the key, even empty, or unreadable settings turn Jev off.
-- Otherwise, or when Jev fails, the role default applies. A failure inside the hook itself dispatches the call exactly as the lead wrote it.
+- Otherwise, or when Jev fails, the role default applies. The chosen pair is appended to the call's description, so the transcript shows it beside the task. A failure inside the hook itself dispatches the call exactly as the lead wrote it.
 
 | Directive | Pair | Difficulty / duration / scope | Rank |
 | --- | --- | --- | --- |

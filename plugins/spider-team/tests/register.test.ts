@@ -14,11 +14,11 @@ test('session start registers the four native agents and no tools', async ($, on
   expect(h.specs.map(s => s.name)).toEqual(['analyst', 'developer', 'reviewer', 'architect'])
   for (const spec of h.specs) expect(spec).toEqual(SPECS[spec.name as keyof typeof SPECS])
 })
-test('Jev picks the pair for a Spider role and other agents pass untouched', async ($, on) => {
+test('Jev picks the pair for a Spider role, shown in its description, and other agents pass untouched', async ($, on) => {
   const h = world(on), received = dispatched(on); h.env.JEV_API_KEY = 'test-key'
   await started($)
   expect(await $.tool.call(call() as never)).toHaveProperty('result', 'native answer')
-  expect(received[0]).toMatchObject({ prompt: 'Private task', model: 'haiku', effort: 'low' })
+  expect(received[0]).toMatchObject({ prompt: 'Private task', description: 'Fixture (haiku/low)', model: 'haiku', effort: 'low' })
   expect(h.requests).toHaveLength(1)
   const other = call('x', { subagent_type: 'Explore', model: 'fable', effort: 'max' })
   await $.tool.call(other as never); expect(received[1]).toEqual(other); expect(h.requests).toHaveLength(1)

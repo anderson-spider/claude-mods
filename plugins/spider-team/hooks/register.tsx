@@ -49,8 +49,10 @@ export const register: Register = on => {
       role, task: parsed.task, pins: parsed.pins,
       home: await $.env.get('HOME') ?? '', root: await $.session.root(), key: await $.env.get('JEV_API_KEY'),
     })
-    $.ui.log(`spider-team: ${role} → ${choice.model}/${capEffort(choice.effort)} (${choice.source})`, { to: 'debug' })
-    return next({ ...e, prompt: parsed.task, model: choice.model, effort: capEffort(choice.effort) })
+    const model = choice.model, effort = capEffort(choice.effort)
+    $.ui.log(`spider-team: ${role} → ${model}/${effort} (${choice.source})`, { to: 'debug' })
+    // The pair shows beside the task in the transcript.
+    return next({ ...e, prompt: parsed.task, description: `${call.description} (${model}/${effort})`, model, effort })
   }).catch(async ($, e, next) => {
     // Routing is advisory: a failure before dispatch runs the call as asked, with the role's own model and effort.
     try { $.ui.log('spider-team: routing failed; dispatching unchanged.', { to: 'debug' }) } catch { /* Never block dispatch on logging. */ }
