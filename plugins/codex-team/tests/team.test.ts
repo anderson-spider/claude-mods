@@ -14,9 +14,11 @@ function io(rules: Rule[], env: Record<string, string | undefined> = ENV) {
   const { run, calls } = fakeRun([[['mkdir'], text('')], ...rules])
   const writes: { path: string; text: string }[] = []
   const logs: string[] = []
+  const tasks = new Map<string, unknown>()
   let clock = 1_000
   const team: TeamIo = {
     run,
+    store: { get: async key => tasks.get(key), set: async (key, value) => { tasks.set(key, value) }, delete: async key => { tasks.delete(key) } },
     env: async () => ({ HERDR_ENV: env.HERDR_ENV, HERDR_WORKSPACE_ID: env.HERDR_WORKSPACE_ID, HOME: env.HOME, JEV_API_KEY: env.JEV_API_KEY }),
     settings: async () => undefined,
     jev: { fetch: async () => { throw new Error('unexpected fetch') }, timer: () => () => {}, now: () => clock },
@@ -27,7 +29,7 @@ function io(rules: Rule[], env: Record<string, string | undefined> = ENV) {
     write: async (path, body) => { writes.push({ path, text: body }) },
     log: line => { logs.push(line) },
   }
-  return { team, calls, writes, logs }
+  return { team, calls, writes, logs, tasks }
 }
 
 const freshTeam: Rule[] = [agents([]), [['herdr', 'tab', 'create'], ok({ root_pane: { pane_id: 'w1:p7' } })], [['herdr', 'agent', 'start'], ok({})], [['herdr', 'agent', 'prompt'], ok({})]]
@@ -98,7 +100,7 @@ test('bad input is refused before Herdr is asked anything', async () => {
     [{ role: 'qa', task: 't', slug: 's' }, 'role must be one of'],
     [{ role: 'analyst', task: '  ', slug: 's' }, 'task is empty'],
     [{ role: 'analyst', task: 't', slug: 'Bad Slug' }, 'slug must be'],
-    [{ role: 'analyst', task: 't', slug: 'x'.repeat(29) }, 'slug must be'],
+    [{ role: 'analyst', task: 't', slug: 'x'.repeat(23) }, 'slug must be'],
     [{ role: 'analyst', task: 't', slug: 's', effort: 'max' }, 'effort must be one of'],
   ] as const) {
     const world = io(freshTeam)
@@ -130,7 +132,7 @@ test('a delivery that may have reached the agent says not to resend; one that di
   expect(said.text).toContain('delivery: unknown (agent_prompt_stalled)')
   expect(said.text).toContain('do not send it again')
 
-  const busy = io([agents([{ name: 'analyst', pane_id: 'p', agent_status: 'working' }])])
+  const busy = io([agents([{ name: 'analyst', pane_id: 'p', agent_status: 'working' }, { name: 'analyst-s', pane_id: 'q', agent_status: 'working' }])])
   const refused = await dispatch(busy.team, { role: 'analyst', task: 't', slug: 's' })
   expect(refused).toEqual({ ok: false, text: expect.stringContaining('delivery: not_sent (agent busy)') })
 })
@@ -232,7 +234,7 @@ test('an agent that failed to start never records its chosen effort as applied',
 
 test('working and blocked live agents disclose unapplied effort even when dispatch is refused', async () => {
   for (const [status, reason] of [['working', 'agent busy'], ['blocked', 'agent blocked']] as const) {
-    const world = io([agents([{ name: 'analyst', pane_id: 'p', agent_status: status }])])
+    const world = io([agents([{ name: 'analyst', pane_id: 'p', agent_status: status }, { name: 'analyst-assess', pane_id: 'q', agent_status: status }])])
     const answer = await dispatch(world.team, { ...call(), effort: 'high' })
     expect(answer.ok).toBe(false)
     expect(answer.text).toContain('effort high (pinned), not applied: reused agent keeps its start effort')
@@ -379,4 +381,190 @@ test('astra dispatch caps pinned, Jev and default efforts in start flags, answer
   } finally {
     Object.assign(spec, original)
   }
+})
+
+test('reviewer refuses an undispatched slug or a working or blocked developer before any effect', async () => {
+  const missing = io([])
+  expect((await dispatch(missing.team, { role: 'reviewer', slug: 'fix' })).text).toContain('delivery: not_sent (no developer')
+  expect(missing.calls).toEqual([])
+  expect(missing.writes).toEqual([])
+  for (const status of ['working', 'blocked']) {
+    const w = io([agents([{ name: 'dev-fix', pane_id: 'dev', agent_status: status }])])
+    w.tasks.set('developer:/repo:fix', { cwd: '/wt/fix', task: 'Original task' })
+    const answer = await dispatch(w.team, { role: 'reviewer', slug: 'fix' })
+    expect(answer.text).toContain(`delivery: not_sent (dev-fix is ${status})`)
+    expect(w.calls).toEqual([['herdr', 'agent', 'list']])
+    expect(w.writes).toEqual([])
+  }
+})
+
+test('reviewer builds its brief from the recorded developer task and always uses architect model with xhigh without Jev', async () => {
+  const w = io([[['git'], text('/wt/fix\n')], ...freshTeam])
+  await dispatch(w.team, { role: 'developer', task: 'Build the original feature', cwd: '/wt/fix', slug: 'fix', effort: 'high' })
+  const reviewer = fakeRun([[['mkdir'], text('')], agents([{ name: 'dev-fix', pane_id: 'dev', agent_status: 'done' }]),
+    [['herdr', 'pane', 'split'], ok({ pane: { pane_id: 'review' } })], [['herdr', 'agent', 'start'], ok({})], [['herdr', 'agent', 'prompt'], ok({})]])
+  w.team.run = reviewer.run
+  w.team.settings = async () => { throw new Error('review must not read Jev settings') }
+  const answer = await dispatch(w.team, { role: 'reviewer', slug: 'fix', task: 'Focus on errors', effort: 'low', cwd: '/ignored' })
+  expect(answer.text).toContain('agent: architect-fix')
+  expect(answer.text).toContain('effort xhigh (review-policy)')
+  expect(answer.text).toContain('/fix-reviewer.md')
+  const start = reviewer.calls.find(c => c[2] === 'start')!
+  expect(start).toContain(SPECS.architect.model)
+  expect(start).toContain('model_reasoning_effort="xhigh"')
+  expect(start).toContain('sandbox_workspace_write.writable_roots=[]')
+  const prompt = reviewer.calls.find(c => c[2] === 'prompt')![4]!
+  for (const text of ['/wt/fix', 'Build the original feature', 'Focus on errors', '/fix-developer.md', 'git status --short', 'git diff --staged', 'every untracked file', 'AGENTS.md', 'verdict: accept | changes_needed', 'risk: low | high', '- <severity> <file>:<line>']) expect(prompt).toContain(text)
+  expect(reviewer.calls.find(c => c[2] === 'split')).toContain('/home/u/.claude/codex-team/reports')
+  expect(w.logs.filter(line => line.includes('Jev'))).toHaveLength(0)
+  expect(JSON.parse(w.writes[w.writes.length - 1]!.text)).toMatchObject({ role: 'reviewer', source: 'review-policy', expected: null, effort: 'xhigh' })
+})
+
+test('reviewer without extra task keeps the existing Astra cap and reused startup effort', async () => {
+  const spec = SPECS.architect, original = spec.model
+  try {
+    Object.assign(spec, { model: 'gpt-6-astra' })
+    const w = io([agents([{ name: 'architect-fix', pane_id: 'review', agent_status: 'idle' }]), [['herdr', 'agent', 'prompt'], ok({})]])
+    w.tasks.set('developer:/repo:fix', { cwd: '/wt/fix', task: 'Original task' })
+    const answer = await dispatch(w.team, { role: 'reviewer', slug: 'fix' })
+    expect(answer.text).toContain('effort high (review-policy), capped at high')
+    expect(answer.text).toContain('not applied: reused agent keeps its start effort')
+    expect(w.calls.some(c => c[2] === 'start')).toBe(false)
+  } finally { Object.assign(spec, { model: original }) }
+})
+
+test('developer followups keep the original task and cannot move the recorded slug to another worktree', async () => {
+  const w = io([[['git'], text('/wt/fix\n')], ...freshTeam])
+  await dispatch(w.team, { role: 'developer', slug: 'fix', cwd: '/wt/fix', task: 'Original task', effort: 'high' })
+  await dispatch(w.team, { role: 'developer', slug: 'fix', cwd: '/wt/fix', task: 'Fix review findings', effort: 'high' })
+  expect(w.tasks.get('developer:/repo:fix')).toEqual({ cwd: '/wt/fix', task: 'Original task' })
+  w.team.run = fakeRun([[['mkdir'], text('')], [['git'], text('/wt/other\n')]]).run
+  expect((await dispatch(w.team, { role: 'developer', slug: 'fix', cwd: '/wt/other', task: 'Move', effort: 'high' })).text).toContain('another worktree')
+})
+
+test('dispatch publishes the plan after delivery and uses the actual fallback analyst in its decision', async () => {
+  const w = io([agents([{ name: 'analyst', pane_id: 'home', agent_status: 'working' }, { name: 'dev-fix', pane_id: 'fix' }]),
+    [['herdr', 'pane', 'split'], ok({ pane: { pane_id: 'new' } })], [['herdr', 'agent', 'start'], ok({})], [['herdr', 'agent', 'prompt'], ok({})]])
+  const roots: string[] = []
+  w.team.publish = async root => { roots.push(root); expect(w.calls.some(c => c[2] === 'prompt')).toBe(true) }
+  const answer = await dispatch(w.team, { role: 'analyst', slug: 'fix', task: 'Inspect', effort: 'low' })
+  expect(answer.text).toContain('agent: analyst-fix')
+  expect(roots).toEqual(['/repo'])
+  for (const write of w.writes) expect(JSON.parse(write.text).agent).toBe('analyst-fix')
+})
+
+test('a developer prompt refused before delivery does not authorize reviewer while an unknown delivery keeps its record', async () => {
+  for (const [code, kept] of [['agent_blocked', false], ['agent_prompt_stalled', true]] as const) {
+    const w = io([[['git'], text('/wt/fix\n')], agents([]), [['herdr', 'tab', 'create'], ok({ root_pane: { pane_id: 'dev' } })],
+      [['herdr', 'agent', 'start'], ok({})], [['herdr', 'agent', 'prompt'], fail(code)]])
+    await dispatch(w.team, { role: 'developer', slug: 'fix', cwd: '/wt/fix', task: 'Original task', effort: 'high' })
+    expect(w.tasks.has('developer:/repo:fix')).toBe(kept)
+  }
+})
+
+test('a publisher failure leaves confirmed dispatch delivery intact with one log line', async () => {
+  const w = io(freshTeam)
+  w.team.publish = async () => { throw new Error('unexpected publisher failure') }
+  const answer = await dispatch(w.team, { role: 'analyst', slug: 'fix', task: 'Inspect', effort: 'high' })
+  expect(answer.text).toContain('delivery: confirmed')
+  expect(w.logs).toEqual(['codex-team: dagr not published (publication failed)'])
+})
+
+test('reviewer rechecks done to working or blocked on the delivery listing before pane, startup or prompt effects', async () => {
+  for (const status of ['working', 'blocked']) {
+    const w = io([[['herdr', 'agent', 'list'], () => ok({ agents: [{ name: 'dev-fix', workspace_id: 'w1', pane_id: 'dev', agent_status: ++listed === 1 ? 'done' : status }] })],
+      [['herdr', 'pane', 'split'], ok({ pane: { pane_id: 'review' } })], [['herdr', 'agent', 'start'], ok({})], [['herdr', 'agent', 'prompt'], ok({})]])
+    let listed = 0
+    w.tasks.set('developer:/repo:fix', { cwd: '/wt/fix', task: 'Original task' })
+    const answer = await dispatch(w.team, { role: 'reviewer', slug: 'fix' })
+    expect(answer.text).toContain(`delivery: not_sent (dev-fix is ${status})`)
+    expect(w.calls.filter(call => call[0] === 'herdr')).toEqual([['herdr', 'agent', 'list'], ['herdr', 'agent', 'list']])
+    expect(w.tasks.get('developer:/repo:fix')).toEqual({ cwd: '/wt/fix', task: 'Original task' })
+  }
+})
+
+/** A live in-memory agent list: startup/prompt effects are reflected on the next listing. */
+function liveWorld() {
+  const w = io([])
+  const live: { name: string; workspace_id: string; pane_id: string; cwd?: string; agent_status: string }[] = []
+  const calls: string[][] = []
+  const panes = new Map<string, string>()
+  let nextPane = 0
+  w.team.run = async argv => {
+    calls.push([...argv])
+    if (argv[0] === 'mkdir') return text('')
+    if (argv[0] === 'git') return text(argv[2]! + '\n')
+    if (argv[2] === 'list') return ok({ agents: live.map(agent => ({ ...agent })) })
+    if (argv[2] === 'create' || argv[2] === 'split') {
+      const pane = `w1:p${++nextPane}`
+      panes.set(pane, argv[argv.indexOf('--cwd') + 1]!)
+      return ok(argv[2] === 'create' ? { root_pane: { pane_id: pane } } : { pane: { pane_id: pane } })
+    }
+    if (argv[2] === 'start') {
+      const pane = argv[argv.indexOf('--pane') + 1]!
+      live.push({ name: argv[3]!, workspace_id: 'w1', pane_id: pane, cwd: panes.get(pane), agent_status: 'idle' })
+      return ok({})
+    }
+    if (argv[2] === 'prompt') { live.find(agent => agent.name === argv[3])!.agent_status = 'working'; return ok({}) }
+    throw new Error('unexpected command')
+  }
+  return { ...w, calls, live }
+}
+
+test('concurrent developer and fallback analyst dispatches create one task tab without interleaving', async () => {
+  const w = liveWorld()
+  w.live.push({ name: 'analyst', workspace_id: 'w1', pane_id: 'home', agent_status: 'working' })
+  const [dev, analyst] = await Promise.all([
+    dispatch(w.team, { role: 'developer', slug: 'fix', cwd: '/wt/fix', task: 'Build', effort: 'high' }),
+    dispatch(w.team, { role: 'analyst', slug: 'fix', task: 'Inspect', effort: 'low' }),
+  ])
+  expect(dev.text).toContain('delivery: confirmed')
+  expect(analyst.text).toContain('agent: analyst-fix')
+  expect(analyst.text).toContain('delivery: confirmed')
+  expect(w.calls.filter(call => call[2] === 'create').map(call => call[call.indexOf('--label') + 1])).toEqual(['codex · fix'])
+  expect(w.calls.find(call => call[2] === 'split')).toContain(w.live.find(agent => agent.name === 'dev-fix')!.pane_id)
+  const prompts = w.calls.map((call, index) => ({ call, index })).filter(({ call }) => call[2] === 'prompt')
+  const lists = w.calls.map((call, index) => ({ call, index })).filter(({ call }) => call[2] === 'list')
+  expect(lists[1]!.index).toBeGreaterThan(prompts[0]!.index)
+})
+
+test('concurrent shared analyst and architect dispatches create one home tab', async () => {
+  const w = liveWorld()
+  const answers = await Promise.all([
+    dispatch(w.team, { role: 'analyst', slug: 'docs', task: 'Inspect', effort: 'low' }),
+    dispatch(w.team, { role: 'architect', slug: 'design', task: 'Design', effort: 'high' }),
+  ])
+  expect(answers.every(answer => answer.ok)).toBe(true)
+  expect(w.calls.filter(call => call[2] === 'create').map(call => call[call.indexOf('--label') + 1])).toEqual(['codex team'])
+  expect(w.calls.filter(call => call[2] === 'split')).toHaveLength(1)
+})
+
+test('a concurrent not_sent preserves the first developer task record and only the creator cleans up a refused prompt', async () => {
+  const w = liveWorld()
+  const deleted: string[] = []
+  w.team.store.delete = async key => { deleted.push(key); w.tasks.delete(key) }
+  const [first, second] = await Promise.all([
+    dispatch(w.team, { role: 'developer', slug: 'fix', cwd: '/wt/fix', task: 'Original task', effort: 'high' }),
+    dispatch(w.team, { role: 'developer', slug: 'fix', cwd: '/wt/fix', task: 'Followup', effort: 'high' }),
+  ])
+  expect(first.text).toContain('delivery: confirmed')
+  expect(second.text).toContain('delivery: not_sent (agent busy)')
+  expect(w.tasks.get('developer:/repo:fix')).toEqual({ cwd: '/wt/fix', task: 'Original task' })
+  expect(deleted).toEqual([])
+  const refused = io([[['git'], text('/wt/new\n')], agents([]), [['herdr', 'tab', 'create'], ok({ root_pane: { pane_id: 'dev' } })],
+    [['herdr', 'agent', 'start'], ok({})], [['herdr', 'agent', 'prompt'], fail('agent_blocked')]])
+  await dispatch(refused.team, { role: 'developer', slug: 'new', cwd: '/wt/new', task: 'New task', effort: 'high' })
+  expect(refused.tasks.has('developer:/repo:new')).toBe(false)
+})
+
+test('a failed dispatch does not poison the global queue for a later call', async () => {
+  const broken = io([]), next = io(freshTeam)
+  broken.team.root = async () => { throw new Error('cannot read root') }
+  const results = await Promise.allSettled([
+    dispatch(broken.team, { role: 'analyst', slug: 'broken', task: 'Inspect', effort: 'high' }),
+    dispatch(next.team, { role: 'analyst', slug: 'next', task: 'Inspect', effort: 'high' }),
+  ])
+  expect(results[0]!.status).toBe('rejected')
+  expect(results[1]!.status).toBe('fulfilled')
+  expect(next.calls.some(call => call[2] === 'prompt')).toBe(true)
 })

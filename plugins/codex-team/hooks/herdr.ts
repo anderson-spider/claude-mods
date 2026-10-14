@@ -2,13 +2,13 @@
 // After herdr-router (github.com/Qingswe/herdr-router, used with its author's permission): delivery is `confirmed`,
 // `unknown` or `not_sent`, and a prompt is never sent twice.
 
-export type RunResult = { exitCode: number; stdout: string; stderr: string }
+export type RunResult = { exitCode: number; stdout: string; stderr: string; isStdoutTruncated?: boolean; isStderrTruncated?: boolean }
 export type Run = (argv: readonly string[], init?: { timeoutMs?: number }) => Promise<RunResult>
 
 /** `confirmed`: the agent started working on it; `not_sent`: it never reached the agent; `unknown`: it may have. */
 export type PromptStatus = 'confirmed' | 'unknown' | 'not_sent'
 
-export type Listed = { name?: string; pane_id: string; cwd?: string; agent_status?: string }
+export type Listed = { name?: string; workspace_id: string; pane_id: string; cwd?: string; agent_status?: string }
 
 export type Delivery = {
   agent: string
@@ -31,7 +31,11 @@ export type DispatchInput = {
   codexArgs: readonly string[]
   prompt: string
   /** Called before writing the prompt, with whether this call started the agent, so its `unknown` record is accurate. */
-  beforeSend?: (started: boolean) => Promise<void>
+  beforeSend?: (started: boolean, name: string) => Promise<void>
+  /** An analyst uses its task-specific name when the shared analyst is busy. */
+  analystSlug?: string
+  /** Recheck on the delivery listing before any pane, startup or prompt effect. */
+  reviewDeveloper?: string
 }
 
 /** Herdr refuses a prompt above this; the router does the same. */
@@ -40,8 +44,13 @@ export const MAX_PROMPT_BYTES = 64 * 1024
 const START_TIMEOUT_MS = 60_000
 const PROMPT_TIMEOUT_MS = 15_000
 
-/** The team's agent names: the reusable roles and every `dev-<slug>`. */
-export const isTeamName = (name: string | undefined): boolean => name === 'analyst' || name === 'architect' || /^dev-/.test(name ?? '')
+/** The shared roles and named developer, reviewer and analyst task agents. */
+export const isTeamName = (name: string | undefined): boolean => name === 'analyst' || name === 'architect' || taskSlug(name) !== undefined
+
+/** Named task agents share only their own task's tab. */
+function taskSlug(name: string | undefined): string | undefined {
+  return name?.match(/^(?:dev|architect|analyst)-(.+)$/)?.[1]
+}
 
 const normal = (path: string | undefined) => (path ?? '').replace(/\/+$/, '')
 
@@ -70,12 +79,15 @@ export async function listAgents(run: Run): Promise<Listed[] | string> {
   return Array.isArray(agents) ? (agents as Listed[]) : 'agent list unreadable'
 }
 
-/** A pane for a new team agent: split beside a live team agent's pane, or a new tab when the team has none. */
+/** Split beside a live peer in the task/home group, or create that group's tab. */
 async function newPane(run: Run, input: DispatchInput, team: readonly Listed[]): Promise<string | { reason: string }> {
-  const anchor = team[0]?.pane_id
+  const slug = taskSlug(input.name)
+  const anchor = team.find(agent => agent.workspace_id === input.workspace && (slug === undefined
+    ? agent.name === 'analyst' || agent.name === 'architect'
+    : taskSlug(agent.name) === slug))?.pane_id
   const done = anchor
     ? await run(['herdr', 'pane', 'split', '--pane', anchor, '--direction', 'right', '--cwd', input.cwd, '--no-focus'])
-    : await run(['herdr', 'tab', 'create', '--workspace', input.workspace, '--cwd', input.cwd, '--label', 'codex team', '--no-focus'])
+    : await run(['herdr', 'tab', 'create', '--workspace', input.workspace, '--cwd', input.cwd, '--label', slug ? `codex · ${slug}` : 'codex team', '--no-focus'])
   if (done.exitCode !== 0) return { reason: errorOf(done) }
   const pane = anchor ? at(json(done.stdout), 'result', 'pane', 'pane_id') : at(json(done.stdout), 'result', 'root_pane', 'pane_id')
   return typeof pane === 'string' ? pane : { reason: 'no pane id in the answer' }
@@ -87,13 +99,28 @@ async function newPane(run: Run, input: DispatchInput, team: readonly Listed[]):
  * was not seen starting is `unknown`, and is never sent again.
  */
 export async function deliver(run: Run, input: DispatchInput): Promise<Delivery> {
-  const base = { agent: input.name, started: false, existed: false }
+  let base = { agent: input.name, started: false, existed: false }
   if (new TextEncoder().encode(input.prompt).length > MAX_PROMPT_BYTES) return { ...base, status: 'not_sent', reason: 'prompt over 64 KiB' }
 
   const agents = await listAgents(run)
   if (typeof agents === 'string') return { ...base, status: 'not_sent', reason: agents }
+  const shared = agents.find(agent => agent.name === input.name)
+  if (shared && shared.workspace_id !== input.workspace) {
+    return { ...base, existed: true, status: 'not_sent', reason: `${input.name} is live in another workspace` }
+  }
+  if (input.name === 'analyst' && input.analystSlug && ['working', 'blocked'].includes(shared?.agent_status ?? '')) {
+    input = { ...input, name: `analyst-${input.analystSlug}` }
+    base = { ...base, agent: input.name }
+  }
   const live = agents.find(agent => agent.name === input.name)
   base.existed = live !== undefined
+  if (live && live.workspace_id !== input.workspace) {
+    return { ...base, status: 'not_sent', reason: `${input.name} is live in another workspace` }
+  }
+  const developer = input.reviewDeveloper && agents.find(agent => agent.name === input.reviewDeveloper)
+  if (developer && ['working', 'blocked'].includes(developer.agent_status ?? '')) {
+    return { ...base, status: 'not_sent', reason: `${input.reviewDeveloper} is ${developer.agent_status}` }
+  }
 
   if (input.writes) {
     const other = agents.find(agent => agent.name !== input.name && isTeamName(agent.name) && agent.name?.startsWith('dev-') && normal(agent.cwd) === normal(input.cwd))
@@ -115,7 +142,7 @@ export async function deliver(run: Run, input: DispatchInput): Promise<Delivery>
     started = true
   }
 
-  await input.beforeSend?.(started)
+  await input.beforeSend?.(started, input.name)
   const sent = await run(
     ['herdr', 'agent', 'prompt', input.name, input.prompt, '--wait', '--until', 'working', '--until', 'blocked', '--timeout', String(PROMPT_TIMEOUT_MS)],
     { timeoutMs: PROMPT_TIMEOUT_MS + 10_000 },

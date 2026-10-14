@@ -1,6 +1,6 @@
 // The team's roles as data: the model, effort, sandbox and instructions each Codex agent starts with. Pure.
 
-export const ROLES = ['developer', 'analyst', 'architect'] as const
+export const ROLES = ['developer', 'analyst', 'architect', 'reviewer'] as const
 export type Role = (typeof ROLES)[number]
 
 export const EFFORTS = ['low', 'medium', 'high', 'xhigh'] as const
@@ -36,7 +36,7 @@ export type RoleSpec = {
 const REPORT_RULE =
   'When the task is done, or when you are blocked, write the report file named in the task, in the format it gives, and nothing else outside the task. '
 
-export const SPECS: Readonly<Record<Role, RoleSpec>> = {
+export const SPECS: Readonly<Record<Exclude<Role, 'reviewer'>, RoleSpec>> = {
   developer: {
     model: 'gpt-6.1-sol',
     effort: 'high',
@@ -68,11 +68,11 @@ export const SPECS: Readonly<Record<Role, RoleSpec>> = {
 
 /** An agent name Herdr accepts (`[a-z][a-z0-9_-]{0,31}`): the role's own for the reusable roles, `dev-<slug>` per task for the developer. */
 export function agentName(role: Role, slug: string): string {
-  return role === 'developer' ? `dev-${slug}` : role
+  return role === 'developer' ? `dev-${slug}` : role === 'reviewer' ? `architect-${slug}` : role
 }
 
-/** A task slug: lowercase letters, digits and hyphens, starting with a letter, at most 28 characters (so `dev-<slug>` fits Herdr's 32). */
-export const SLUG = /^[a-z][a-z0-9-]{0,27}$/
+/** At most 22 characters, so `architect-<slug>` fits Herdr's 32-character name limit. */
+export const SLUG = /^[a-z][a-z0-9-]{0,21}$/
 
 /** A TOML basic string: JSON's escaping is valid TOML for the characters it emits. */
 const toml = (value: string) => JSON.stringify(value)
