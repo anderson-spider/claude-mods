@@ -8,7 +8,5 @@ plugins/codex-computer-use/helper/run/
 # Saved `claude plugin validate --strict` output (mise run plugins:scan)
 .scan*/
 
-# superpowers output stays local
-docs/superpowers/
-.superpowers/
+# Local review and test reports (/ship, /live-test)
 .crew/
