@@ -22,11 +22,13 @@ The team works on its own Codex quota; you spend yours on judgement. For the res
 | `developer` | implementation and tests, left uncommitted; corrections after review | `dev-<slug>`, in the task tab `codex - <slug>`, working in the task worktree (`cwd`) |
 | `analyst` | investigation, documentation drafts | `analyst` in `codex - <slug>`, a fresh Codex per dispatch; `analyst-<slug>` in the task tab while the shared one is busy |
 | `architect` | design, trade-offs, ordered steps | `architect` in `codex - <slug>`, a fresh Codex per dispatch |
-| `reviewer` | the review of a finished developer task | `architect-<slug>` in the task tab, always `xhigh`; the plugin writes its brief |
+| `reviewer` | the review of a finished developer task | `architect-<slug>` in the task tab, a fresh session with a Jev-selected profile; the plugin writes its review brief |
 
 The table and plan owners use logical names. Dispatch also returns `Herdr: <effective-name>`, a stable workspace-specific name. Use that exact effective name for CLI `wait`, `get` and `read`; pass the logical name (`analyst`, `architect`, `analyst-<slug>`, `architect-<slug>` or `dev-<slug>`) to `finish`. In `w1`, for example, wait with `herdr agent wait d1r-fix` and finish with `{ agent: "dev-fix" }`. Names in another workspace are independent; a real effective-name collision is refused. Every tab uses exactly `codex - <main task>`, with the dispatch slug naming the main task. Shared roles get a new tab labelled `codex - <slug>` for their current dispatch; all creation uses `--no-focus`, and the tab closes with its last pane.
 
 Reports are under `~/.claude/codex-team/reports/<repository>/<workspace-token>/<slug>-<role>.md`, using the same token as the effective Herdr name. Use the exact `report:` path from the dispatch reply in `## Dispatches` and when reading results; equal roots and slugs in another workspace have a separate directory. The reviewer brief points to this workspace’s developer report.
+
+Every dispatch starts a fresh Codex session after safely retiring its idle/done predecessor; a working or blocked target refuses the dispatch. The same agent name and worktree may continue across tasks, but session memory does not. The worktree and uncommitted diff persist.
 
 Drafts from the analyst go to the developer to apply: one writer per worktree.
 
@@ -79,9 +81,9 @@ After `## Steps`, keep a `## Dispatches` section, one line per dispatch, written
 
 ## 3. Dispatch
 
-1. **Worktree (developer only).** Create it from the base branch beside the repository: `git worktree add -b <branch> ../<repo>-<slug> <base>`. Pass its absolute path as `cwd`; follow-ups on the same task reuse the same `slug` and `cwd`.
-2. **Brief.** Write `task` self-contained: the agent has none of this conversation. Name the goal, the files or area, the rules that apply, what done means (the checks that must pass) and what stays out of scope.
-3. **Call** `mcp__codex-team__dispatch` with `role`, `task` and `slug` (at most 22 characters), plus `cwd` for the developer. Pass `effort` only when the user asks for one; otherwise Jev or the role default decides.
+1. **Worktree (developer only).** Create it from the base branch beside the repository: `git worktree add -b <branch> ../<repo>-<slug> <base>`. Pass its absolute path as `cwd`; follow-ups on the same task keep the same `slug` and `cwd`, with a fresh Codex session each time.
+2. **Brief.** Write `task` self-contained: the agent has none of this conversation. Name the goal, the files or area, the rules that apply, what done means (the checks that must pass) and what stays out of scope. Follow-up briefs must also be self-contained: state the requested corrections and relevant context. The plugin reminds a previously dispatched developer to read its previous report and git diff in the persistent worktree.
+3. **Call** `mcp__codex-team__dispatch` with `role`, `task` and `slug` (at most 22 characters), plus `cwd` for the developer. Keep the role chosen for the work: it controls instructions and write permission. Let Jev choose the model and effort profile for each new session, with the complete role default pair on failure. Pass `model`, `effort`, `@profile` or dimension pins only when the user asks for them. Follow-ups start fresh sessions and select a new pair; requested pins apply at each startup. Reviewer uses Jev too, assessing the generated review brief, and accepts the same pins. Its fallback is Sol/high; the Astra cap still applies to any selected pair. Its instructions and report-only permissions stay fixed.
 4. **Delivery.** `confirmed`: go on. `unknown`: never send it again; check `herdr agent get <effective-name>` and wait. `not_sent`: fix the reason it gives, then dispatch again.
 5. **Wait in the background:** `herdr agent wait <effective-name> --timeout 3600000` with `run_in_background: true`, one per dispatched agent, using the reply’s effective name. Notifications come back one by one; handle each as it arrives.
 
@@ -92,7 +94,7 @@ Done: delivery `confirmed`, its wait running, the step `implementing`, its `## D
 ## 4. When an agent comes back
 
 1. Read its report (the path `dispatch` returned). Read the terminal (`herdr agent read <effective-name> --source recent-unwrapped --lines 80`) only when the report is missing or the agent is `blocked`; a `blocked` agent is asking for an approval or an answer: show the user what it asks.
-2. `blocked` or open `questions`: answer from the plan when it settles them, otherwise ask the user; then dispatch the answer to the same agent (same role and slug).
+2. `blocked` or open `questions`: answer from the plan when it settles them, otherwise ask the user. Resolve a blocked existing session in its pane and wait for it to become idle/done before another dispatch. Send any subsequent work as a self-contained brief with the same role and slug; it starts a fresh session.
 3. **Developer `done`:** dispatch `role: "reviewer"` with the same `slug` right away (add `task` only to point at a risk). Mark the step `verified (relatório do dev)` and add the review as its own step.
 4. **Reviewer back:** read `verdict`, `risk` and `findings`. Open the diff only at the lines a finding names, or wherever `risk: high`. Decide each finding (fix, defer with a reason, or reject with a reason). Send every fix back to the same developer as one brief, then review again. With `accept`, run the repository's done checks yourself in the worktree.
 5. **Analyst or architect `done`:** call `finish` on that agent (`analyst`, `architect` or `analyst-<slug>`) once its report is read; use the findings in the next brief; hand `drafts` to the developer. Cut a design to the simplest version that meets the request and tell the user what you cut.

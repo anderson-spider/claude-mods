@@ -5,7 +5,7 @@ import type { DispatchInput } from '../hooks/herdr'
 import { agents, fail, fakeRun, ok } from './fake-run'
 
 const input = (over: Partial<DispatchInput> = {}): DispatchInput => ({
-  name: 'analyst', slug: 'fix', writes: false, workspace: 'w1', cwd: '/r', codexArgs: ['-m', 'm'], prompt: 'do it', ...over,
+  name: 'analyst', slug: 'fix', writes: false, workspace: 'w1', cwd: '/r', startArgs: async () => ['-m', 'm'], prompt: 'do it', ...over,
 })
 const verbs = (calls: string[][]) => calls.map(call => call.slice(1, 3).join(' '))
 
@@ -25,11 +25,18 @@ test('a shared role gets its own current task tab even with another shared role 
   expect(calls[1]).toEqual(['herdr', 'tab', 'create', '--workspace', 'w1', '--cwd', '/r', '--label', 'codex - fix', '--no-focus'])
 })
 
-test('a live idle or done task agent is reused: no pane, no start, only the prompt', async () => {
-  for (const status of ['idle', 'done']) {
-    const { run, calls } = fakeRun([agents([{ name: effectiveName('analyst-fix', 'w1')!, pane_id: 'w1:p2', agent_status: status, cwd: '/r' }]), [['herdr', 'agent', 'prompt'], ok({})]])
-    expect(await deliver(run, input({ name: 'analyst-fix' }))).toEqual({ agent: 'analyst-fix', effectiveAgent: effectiveName('analyst-fix', 'w1'), pane: 'w1:p2', started: false, existed: true, status: 'confirmed' })
-    expect(verbs(calls)).toEqual(['agent list', 'agent prompt'])
+test('every idle or done team agent is retired before a fresh pane session and prompt', async () => {
+  for (const name of ['dev-fix', 'architect-fix', 'analyst-fix', 'analyst', 'architect']) for (const status of ['idle', 'done']) {
+    let retired = false
+    const w = fakeRun([agents([{ name: effectiveName(name, 'w1')!, pane_id: 'old', cwd: '/r', agent_status: status }]),
+      [['herdr', 'tab', 'create'], ok({ root_pane: { pane_id: 'new' } })], [['herdr', 'agent', 'start'], ok({})], [['herdr', 'agent', 'prompt'], ok({})]])
+    const run = async (argv: readonly string[]) => {
+      if (retired && argv[2] === 'list') { w.calls.push([...argv]); return ok({ agents: [] }) }
+      return w.run(argv)
+    }
+    expect(await deliver(run, input({ name, finishPrevious: async actual => { expect(actual).toBe(name); retired = true; return { closed: true, archived: true } } })))
+      .toEqual({ agent: name, effectiveAgent: effectiveName(name, 'w1'), pane: 'new', started: true, existed: false, status: 'confirmed' })
+    expect(verbs(w.calls)).toEqual(['agent list', 'agent list', 'tab create', 'agent start', 'agent prompt'])
   }
 })
 
@@ -52,15 +59,15 @@ test('one writer per directory: a second developer in the same worktree is refus
 })
 
 test('a prompt the agent was seen taking is confirmed; refused before writing is not_sent; anything else is unknown and never resent', async () => {
-  const live = agents([{ name: effectiveName('analyst-fix', 'w1')!, pane_id: 'w1:p2', agent_status: 'idle' }])
+  const fresh = [agents([]), [['herdr', 'tab', 'create'], ok({ root_pane: { pane_id: 'w1:p2' } })], [['herdr', 'agent', 'start'], ok({})]] as Parameters<typeof fakeRun>[0]
   for (const [answer, status] of [[fail('agent_blocked'), 'not_sent'], [fail('agent_not_found'), 'not_sent'], [fail('agent_prompt_stalled'), 'unknown'], [fail('timeout'), 'unknown']] as const) {
-    const { run, calls } = fakeRun([live, [['herdr', 'agent', 'prompt'], answer]])
+    const { run, calls } = fakeRun([...fresh, [['herdr', 'agent', 'prompt'], answer]])
     const delivered = await deliver(run, input({ name: 'analyst-fix' }))
     expect(delivered.status).toBe(status)
     expect(calls.filter(call => call[2] === 'prompt')).toHaveLength(1)
   }
-  const thrown = await deliver(async argv => { if (argv[2] === 'prompt') throw new Error('gone'); return ok({ agents: [{ name: effectiveName('analyst-fix', 'w1')!, workspace_id: 'w1', pane_id: 'p', agent_status: 'idle' }] }) }, input({ name: 'analyst-fix' }))
-  expect(thrown).toEqual({ agent: 'analyst-fix', effectiveAgent: effectiveName('analyst-fix', 'w1'), pane: 'p', started: false, existed: true, status: 'unknown', reason: 'prompt call failed' })
+  const thrown = await deliver(async argv => { if (argv[2] === 'prompt') throw new Error('gone'); return argv[2] === 'list' ? ok({ agents: [] }) : argv[2] === 'create' ? ok({ root_pane: { pane_id: 'p' } }) : ok({}) }, input({ name: 'analyst-fix' }))
+  expect(thrown).toEqual({ agent: 'analyst-fix', effectiveAgent: effectiveName('analyst-fix', 'w1'), pane: 'p', started: true, existed: false, status: 'unknown', reason: 'prompt call failed' })
 })
 
 test('beforeSend runs once, after the agent is ready and before the prompt', async () => {
@@ -70,11 +77,17 @@ test('beforeSend runs once, after the agent is ready and before the prompt', asy
   expect(order).toEqual(['start', 'record', 'prompt'])
 })
 
-test('beforeSend reports a reused agent as not started before the prompt', async () => {
+test('beforeSend records the fresh start after retiring a named predecessor', async () => {
   const order: string[] = []
-  const { run } = fakeRun([agents([{ name: effectiveName('analyst-fix', 'w1')!, pane_id: 'p', agent_status: 'idle' }]), [['herdr', 'agent', 'prompt'], () => (order.push('prompt'), ok({}))]])
-  await deliver(run, input({ name: 'analyst-fix', beforeSend: async started => { expect(started).toBe(false); order.push('record') } }))
-  expect(order).toEqual(['record', 'prompt'])
+  let retired = false
+  const w = fakeRun([agents([{ name: effectiveName('analyst-fix', 'w1')!, pane_id: 'old', agent_status: 'idle' }]),
+    [['herdr', 'tab', 'create'], ok({ root_pane: { pane_id: 'new' } })],
+    [['herdr', 'agent', 'start'], () => (order.push('start'), ok({}))], [['herdr', 'agent', 'prompt'], () => (order.push('prompt'), ok({}))]])
+  await deliver(async argv => retired && argv[2] === 'list' ? ok({ agents: [] }) : w.run(argv), input({
+    name: 'analyst-fix', finishPrevious: async () => { retired = true; order.push('finish'); return { closed: true, archived: true } },
+    beforeSend: async started => { expect(started).toBe(true); order.push('record') },
+  }))
+  expect(order).toEqual(['finish', 'start', 'record', 'prompt'])
 })
 
 test('a failed pane or start is not_sent with the Herdr code, and nothing is prompted', async () => {
@@ -126,11 +139,16 @@ test('a task without live peers creates its own tab even when other team agents 
   expect(w.calls[1]).toContain('--no-focus')
 })
 
-test('a busy or blocked shared analyst falls back to the task analyst and reuses its live pane', async () => {
+test('a busy shared analyst fallback retires its settled task analyst before a fresh session', async () => {
   for (const status of ['working', 'blocked']) {
-    const w = fakeRun([agents([{ name: effectiveName('analyst', 'w1')!, pane_id: 'home', agent_status: status }, { name: effectiveName('analyst-fix', 'w1')!, pane_id: 'fix', agent_status: 'done' }]), [['herdr', 'agent', 'prompt'], ok({})]])
-    expect(await deliver(w.run, input({ analystSlug: 'fix' }))).toMatchObject({ agent: 'analyst-fix', effectiveAgent: effectiveName('analyst-fix', 'w1'), pane: 'fix', existed: true, started: false })
-    expect(w.calls[1]?.[3]).toBe(effectiveName('analyst-fix', 'w1'))
+    let retired = false
+    const shared = { name: effectiveName('analyst', 'w1')!, workspace_id: 'w1', pane_id: 'home', agent_status: status }
+    const w = fakeRun([agents([shared, { name: effectiveName('analyst-fix', 'w1')!, pane_id: 'old', agent_status: 'done' }]),
+      [['herdr', 'tab', 'create'], ok({ root_pane: { pane_id: 'new' } })], [['herdr', 'agent', 'start'], ok({})], [['herdr', 'agent', 'prompt'], ok({})]])
+    expect(await deliver(async argv => retired && argv[2] === 'list' ? ok({ agents: [shared] }) : w.run(argv), input({ analystSlug: 'fix', finishPrevious: async name => {
+      expect(name).toBe('analyst-fix'); retired = true; return { closed: true, archived: true }
+    } }))).toMatchObject({ agent: 'analyst-fix', pane: 'new', existed: false, started: true })
+    expect(w.calls.find(c => c[2] === 'start')![3]).toBe(effectiveName('analyst-fix', 'w1'))
   }
 })
 
@@ -144,7 +162,7 @@ test('task and shared tabs anchor only inside the dispatch workspace', async () 
   }
 })
 
-test('a real effective name collision fails closed before reuse or startup including analyst fallback names', async () => {
+test('a real effective name collision fails closed before retirement or startup including analyst fallback names', async () => {
   for (const name of ['dev-fix', 'architect-fix', 'analyst', 'architect', 'analyst-fix']) {
     const peers = name === 'analyst-fix' ? [{ name: effectiveName('analyst', 'w1')!, workspace_id: 'w1', pane_id: 'w1:p1', agent_status: 'working' }] : []
     const w = fakeRun([agents([...peers, { name: effectiveName(name, 'w1'), workspace_id: 'w2', pane_id: 'w2:p1', agent_status: 'done' }]),
@@ -152,6 +170,79 @@ test('a real effective name collision fails closed before reuse or startup inclu
     const result = await deliver(w.run, input({ name: name === 'analyst-fix' ? 'analyst' : name, analystSlug: 'fix' }))
     expect(result).toMatchObject({ status: 'not_sent', existed: true, reason: expect.stringContaining('another workspace') })
     expect(verbs(w.calls)).toEqual(['agent list'])
+  }
+})
+
+test('startup selection is lazy once after guards and shared finish with the actual fallback name', async () => {
+  const order: string[] = []
+  const w = fakeRun([agents([{ name: effectiveName('analyst', 'w1')!, pane_id: 'home', agent_status: 'idle' }]),
+    [['herdr', 'tab', 'create'], () => { order.push('pane'); return ok({ root_pane: { pane_id: 'new' } }) }],
+    [['herdr', 'agent', 'start'], () => { order.push('start'); return ok({}) }], [['herdr', 'agent', 'prompt'], ok({})]])
+  const originalRun = w.run
+  let retired = false
+  await deliver(async (argv, init) => retired && argv[2] === 'list' ? ok({ agents: [] }) : originalRun(argv, init), input({
+    finishPrevious: async () => { order.push('finish'); retired = true; return { closed: true, archived: true } },
+    startArgs: async name => { order.push('assess:' + name); return ['-m', 'picked'] },
+  }))
+  expect(order).toEqual(['finish', 'assess:analyst', 'pane', 'start'])
+  const fallback = fakeRun([agents([{ name: effectiveName('analyst', 'w1')!, pane_id: 'home', agent_status: 'working' }]),
+    [['herdr', 'tab', 'create'], ok({ root_pane: { pane_id: 'task' } })], [['herdr', 'agent', 'start'], ok({})], [['herdr', 'agent', 'prompt'], ok({})]])
+  const names: string[] = []
+  await deliver(fallback.run, input({ analystSlug: 'fix', startArgs: async name => { names.push(name); return [] } }))
+  expect(names).toEqual(['analyst-fix'])
+})
+
+test('startup selection never runs for busy foreign writer conflicts or unavailable or failed finish', async () => {
+  const cases: { agents: Parameters<typeof agents>[0]; over?: Partial<DispatchInput> }[] = [
+    { agents: [{ name: effectiveName('dev-fix', 'w1')!, pane_id: 'p', cwd: '/r', agent_status: 'idle' }], over: { name: 'dev-fix', writes: true } },
+    { agents: [{ name: effectiveName('architect', 'w1')!, pane_id: 'p', agent_status: 'working' }], over: { name: 'architect' } },
+    { agents: [{ name: effectiveName('architect', 'w1')!, pane_id: 'p', agent_status: 'blocked' }], over: { name: 'architect' } },
+    { agents: [{ name: effectiveName('analyst', 'w1')!, pane_id: 'p', workspace_id: 'w2', agent_status: 'done' }] },
+    { agents: [{ name: effectiveName('dev-other', 'w1')!, pane_id: 'p', cwd: '/r' }], over: { name: 'dev-fix', writes: true } },
+    { agents: [{ name: effectiveName('dev-fix', 'w1')!, pane_id: 'p', cwd: '/other', agent_status: 'idle' }], over: { name: 'dev-fix', writes: true } },
+    { agents: [{ name: effectiveName('analyst', 'w1')!, pane_id: 'p', agent_status: 'idle' }], over: { finishPrevious: async () => ({ closed: true, archived: false }) } },
+  ]
+  cases.push({ agents: [], over: { prompt: 'x'.repeat(MAX_PROMPT_BYTES + 1) } })
+  for (const c of cases) {
+    const w = fakeRun([agents(c.agents), [['herdr', 'agent', 'prompt'], ok({})]])
+    let called = 0
+    await deliver(w.run, input({ ...c.over, startArgs: async () => { called++; return [] } }))
+    expect(called).toBe(0)
+  }
+})
+
+test('retirement failures and a reappearing name refuse every role without selection or a new prompt', async () => {
+  for (const name of ['dev-fix', 'architect-fix', 'analyst-fix', 'analyst', 'architect']) {
+    for (const reason of ['failed', 'reappeared']) {
+      let selected = 0
+      const w = fakeRun([agents([{ name: effectiveName(name, 'w1')!, pane_id: 'old', agent_status: 'done' }])])
+      const result = await deliver(w.run, input({ name,
+        finishPrevious: async () => ({ closed: true, archived: reason !== 'failed', reason: 'archive exit 9' }),
+        startArgs: async () => { selected++; return [] },
+      }))
+      expect(result.status).toBe('not_sent')
+      expect(result.reason).toBe(reason === 'failed' ? 'agent finish failed (archive exit 9)' : 'agent reappeared after finish')
+      expect(selected).toBe(0)
+      expect(w.calls.every(c => c[2] === 'list')).toBe(true)
+    }
+  }
+})
+
+test('post-retirement listing rechecks writer exclusivity and reviewer developer state before selection', async () => {
+  for (const kind of ['writer', 'reviewer'] as const) {
+    let retired = false, selected = 0
+    const name = kind === 'writer' ? 'dev-fix' : 'architect-fix'
+    const w = fakeRun([agents([{ name: effectiveName(name, 'w1')!, pane_id: 'old', agent_status: 'done', cwd: '/r' }])])
+    const result = await deliver(async argv => retired && argv[2] === 'list'
+      ? ok({ agents: [{ name: effectiveName(kind === 'writer' ? 'dev-other' : 'dev-fix', 'w1')!, workspace_id: 'w1', pane_id: 'other', cwd: '/r', agent_status: 'working' }] }) : w.run(argv), input({ name,
+      writes: kind === 'writer', reviewDeveloper: kind === 'reviewer' ? 'dev-fix' : undefined,
+      finishPrevious: async () => { retired = true; return { closed: true, archived: true } },
+      startArgs: async () => { selected++; return [] },
+    }))
+    expect(result.reason).toBe(kind === 'writer' ? 'dev-other already works in this directory' : 'dev-fix is working')
+    expect(result.status).toBe('not_sent')
+    expect(selected).toBe(0)
+    expect(w.calls.every(c => c[2] === 'list')).toBe(true)
   }
 })
 

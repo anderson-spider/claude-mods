@@ -1,4 +1,4 @@
-// The Jev client for effort routing. Pure: the HTTP call, the timer and the clock are injected and nothing here touches
+// The Jev client for profile routing. Pure: the HTTP call, the timer and the clock are injected and nothing here touches
 // `$`. Endpoint, body and answer shape are those of the TypeSafe SDK's `systemOne` (POST /v1/systemone, bearer key,
 // `{ model, state, questions }`, answers keyed by question id), checked live. `ask` resolves with the answers or throws a
 // JevFailure whose `reason` is typed; its message holds a status or a reason code, never a response body or the key.
@@ -107,7 +107,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
 
 /** The answers of a 2xx body; a body of another shape is `malformed` and is not retried. */
-export function parseBody(text: string): { answers: Answers } {
+export function parseBody(text: string, answerIds?: readonly string[]): { answers: Answers } {
   let data: unknown
   try {
     data = JSON.parse(text)
@@ -115,11 +115,12 @@ export function parseBody(text: string): { answers: Answers } {
     throw new JevFailure('malformed', 'response is not JSON')
   }
   if (!isRecord(data) || !isRecord(data.answers)) throw new JevFailure('malformed', 'response has no answers object')
-  for (const answer of Object.values(data.answers)) {
+  const answers = answerIds ? Object.fromEntries(Object.entries(data.answers).filter(([id]) => answerIds.includes(id))) : data.answers
+  for (const answer of Object.values(answers)) {
     if (!isRecord(answer)) throw new JevFailure('malformed', 'an answer is not an object')
   }
   // Metadata from the service can echo request details. Only the local pin is recorded.
-  return { answers: data.answers as Answers }
+  return { answers: answers as Answers }
 }
 
 /** `Retry-After` in seconds as milliseconds; undefined when absent or not a number. */
@@ -143,7 +144,7 @@ export function classifyFailure(error: unknown): { failure: JevFailure; counts: 
   return { failure, counts: !says }
 }
 
-export type JevOptions = { model: string; breaker?: Breaker; gate?: Gate; deadlineMs?: number; holdMs?: number }
+export type JevOptions = { model: string; breaker?: Breaker; gate?: Gate; deadlineMs?: number; holdMs?: number; answerIds?: readonly string[] }
 
 /** One call is one judgment. Throws a JevFailure, never anything else. */
 export function createJev(io: JevIo, key: string, opts: JevOptions): AskFn {
@@ -197,7 +198,7 @@ export function createJev(io: JevIo, key: string, opts: JevOptions): AskFn {
     if (opts.gate) cancelHold = io.timer(holdMs, release)
 
     try {
-      const reply = await attempts(tracked, init, deadline, left)
+      const reply = await attempts(tracked, init, deadline, left, opts.answerIds)
       opts.breaker?.success()
       return { ...reply, ms: Math.max(0, io.now() - started) }
     } catch (error) {
@@ -248,13 +249,13 @@ function retryPauseMs(out: Settled): number {
 }
 
 /** The first attempt and, while the one deadline allows, a single retry of a transient failure. */
-async function attempts(io: JevIo, init: JevInit, deadline: Promise<'timeout'>, left: () => number) {
+async function attempts(io: JevIo, init: JevInit, deadline: Promise<'timeout'>, left: () => number, answerIds?: readonly string[]) {
   for (let attempt = 0; ; attempt++) {
     const out = await once(io, init, deadline)
     if (out.kind === 'timeout') throw new JevFailure('timeout', 'deadline passed')
     if (out.kind === 'response') {
       const { status, text } = out.response
-      if (status >= 200 && status < 300) return parseBody(String(text ?? ''))
+      if (status >= 200 && status < 300) return parseBody(String(text ?? ''), answerIds)
     }
     const failure = attemptFailure(out)
     if (!isTransient(out) || attempt >= 1 || left() < RETRY_MIN_LEFT_MS) throw failure

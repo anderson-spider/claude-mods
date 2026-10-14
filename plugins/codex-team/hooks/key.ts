@@ -1,4 +1,4 @@
-// Adapted from crew's key check. Repository settings cannot choose the account receiving the user's task.
+// Repository settings cannot choose the account receiving the user's task.
 export type KeyIo = {
   /** Missing settings are undefined; unreadable settings reject. */
   settings: (source: 'project' | 'local') => Promise<{ env?: unknown } | undefined>

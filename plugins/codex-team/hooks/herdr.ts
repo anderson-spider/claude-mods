@@ -1,4 +1,4 @@
-// Starting or reusing a team agent in Herdr and handing it a task, over an injected command runner. Pure: no host access.
+// Starting a fresh team agent in Herdr and handing it a task, over an injected command runner. Pure: no host access.
 // After herdr-router (github.com/Qingswe/herdr-router, used with its author's permission): delivery is `confirmed`,
 // `unknown` or `not_sent`, and a prompt is never sent twice.
 import { effectiveName, logicalName, taskSlug } from './names'
@@ -32,7 +32,8 @@ export type DispatchInput = {
   writes: boolean
   workspace: string
   cwd: string
-  codexArgs: readonly string[]
+  /** Resolve startup flags only for a new session, after all guards and previous-agent retirement. */
+  startArgs: (name: string) => Promise<readonly string[]>
   prompt: string
   /** Called before writing the prompt, with whether this call started the agent, so its `unknown` record is accurate. */
   beforeSend?: (started: boolean, name: string) => Promise<void>
@@ -40,8 +41,8 @@ export type DispatchInput = {
   analystSlug?: string
   /** Recheck on the delivery listing before any pane, startup or prompt effect. */
   reviewDeveloper?: string
-  /** Dispatch retires an idle/done shared role before starting a fresh session. */
-  finishShared?: (name: string) => Promise<{ closed: boolean; archived: boolean; reason?: string }>
+  /** Dispatch retires the previous idle/done agent before starting a fresh session. */
+  finishPrevious?: (name: string) => Promise<{ closed: boolean; archived: boolean; reason?: string }>
 }
 
 /** Herdr refuses a prompt above this; the router does the same. */
@@ -92,7 +93,7 @@ async function newPane(run: Run, input: DispatchInput, team: readonly Listed[]):
 }
 
 /**
- * Hands `prompt` to the named agent, starting it first when it is not live. A busy or blocked agent, another developer
+ * Hands `prompt` to the named agent, retiring its settled predecessor and starting a fresh session. A busy or blocked agent, another developer
  * in the same directory, a failed start or a refused prompt is `not_sent`; a prompt that may have reached the agent but
  * was not seen starting is `unknown`, and is never sent again.
  */
@@ -114,43 +115,39 @@ export async function deliver(run: Run, input: DispatchInput): Promise<Delivery>
     name = effectiveName(input.name, input.workspace)!
     base = { ...base, agent: input.name, effectiveAgent: name }
   }
-  if ((input.name === 'analyst' || input.name === 'architect') && shared && ['idle', 'done'].includes(shared.agent_status ?? '')) {
-    if (!input.finishShared) return { ...base, existed: true, status: 'not_sent', reason: 'shared agent finish unavailable' }
-    const finished = await input.finishShared(input.name)
-    if (!finished.closed || !finished.archived) return { ...base, existed: true, status: 'not_sent', reason: `shared agent finish failed (${finished.reason ?? 'not archived'})` }
+  // Check both before retirement and after its fresh listing: a reviewer or writer may become busy meanwhile.
+  const guard = (listed: Listed[]): Delivery | undefined => {
+    const live = listed.find(agent => agent.name === name && agent.workspace_id === input.workspace)
+    base.existed = live !== undefined
+    if (collision(listed)) return { ...base, existed: true, status: 'not_sent', reason: `${input.name} is live in another workspace` }
+    const developer = input.reviewDeveloper && listed.find(agent => agent.workspace_id === input.workspace && agent.name === effectiveName(input.reviewDeveloper!, input.workspace))
+    if (developer && ['working', 'blocked'].includes(developer.agent_status ?? '')) return { ...base, status: 'not_sent', reason: `${input.reviewDeveloper} is ${developer.agent_status}` }
+    if (input.writes) {
+      const other = listed.find(agent => agent.workspace_id === input.workspace && agent.name !== name && logicalName(agent.name, input.workspace)?.startsWith('dev-') && normal(agent.cwd) === normal(input.cwd))
+      if (other) return { ...base, status: 'not_sent', reason: `${logicalName(other.name, input.workspace)} already works in this directory` }
+      if (live && normal(live.cwd) !== normal(input.cwd)) return { ...base, pane: live.pane_id, status: 'not_sent', reason: `${input.name} works in another directory` }
+    }
+    if (live && !['idle', 'done'].includes(live.agent_status ?? '')) return { ...base, pane: live.pane_id, status: 'not_sent', reason: live.agent_status === 'working' ? 'agent busy' : live.agent_status === 'blocked' ? 'agent blocked' : 'agent state is not idle or done' }
+  }
+  const guarded = guard(agents)
+  if (guarded) return guarded
+  if (agents.some(agent => agent.name === name && agent.workspace_id === input.workspace)) {
+    if (!input.finishPrevious) return { ...base, status: 'not_sent', reason: 'agent finish unavailable' }
+    const finished = await input.finishPrevious(input.name)
+    if (!finished.closed || !finished.archived) return { ...base, status: 'not_sent', reason: `agent finish failed (${finished.reason ?? 'not archived'})` }
     agents = await listAgents(run)
     if (typeof agents === 'string') return { ...base, status: 'not_sent', reason: agents }
-    if (agents.some(agent => agent.name === name)) return { ...base, existed: true, status: 'not_sent', reason: 'shared agent reappeared after finish' }
+    if (agents.some(agent => agent.name === name)) return { ...base, status: 'not_sent', reason: 'agent reappeared after finish' }
+    const changed = guard(agents)
+    if (changed) return changed
   }
-  const live = agents.find(agent => agent.name === name && agent.workspace_id === input.workspace)
-  base.existed = live !== undefined
-  if (collision(agents)) {
-    return { ...base, existed: true, status: 'not_sent', reason: `${input.name} is live in another workspace` }
-  }
-  const developer = input.reviewDeveloper && agents.find(agent => agent.workspace_id === input.workspace && agent.name === effectiveName(input.reviewDeveloper!, input.workspace))
-  if (developer && ['working', 'blocked'].includes(developer.agent_status ?? '')) {
-    return { ...base, status: 'not_sent', reason: `${input.reviewDeveloper} is ${developer.agent_status}` }
-  }
-
-  if (input.writes) {
-    const other = agents.find(agent => agent.workspace_id === input.workspace && agent.name !== name && logicalName(agent.name, input.workspace)?.startsWith('dev-') && normal(agent.cwd) === normal(input.cwd))
-    if (other) return { ...base, status: 'not_sent', reason: `${logicalName(other.name, input.workspace)} already works in this directory` }
-    if (live && normal(live.cwd) !== normal(input.cwd)) return { ...base, pane: live.pane_id, status: 'not_sent', reason: `${input.name} works in another directory` }
-  }
-
-  let pane = live?.pane_id
-  let started = false
-  if (live) {
-    if (live.agent_status === 'working') return { ...base, pane, status: 'not_sent', reason: 'agent busy' }
-    if (live.agent_status === 'blocked') return { ...base, pane, status: 'not_sent', reason: 'agent blocked' }
-  } else {
-    const made = await newPane(run, input, agents.filter(agent => agent.workspace_id === input.workspace && logicalName(agent.name, input.workspace) !== undefined))
-    if (typeof made !== 'string') return { ...base, status: 'not_sent', reason: made.reason }
-    pane = made
-    const start = await run(['herdr', 'agent', 'start', name, '--kind', 'codex', '--pane', made, '--timeout', String(START_TIMEOUT_MS), '--', ...input.codexArgs], { timeoutMs: START_TIMEOUT_MS + 10_000 })
-    if (start.exitCode !== 0) return { ...base, pane, started: false, status: 'not_sent', reason: errorOf(start) }
-    started = true
-  }
+  const args = await input.startArgs(input.name)
+  const made = await newPane(run, input, agents.filter(agent => agent.workspace_id === input.workspace && logicalName(agent.name, input.workspace) !== undefined))
+  if (typeof made !== 'string') return { ...base, status: 'not_sent', reason: made.reason }
+  const pane = made
+  const start = await run(['herdr', 'agent', 'start', name, '--kind', 'codex', '--pane', made, '--timeout', String(START_TIMEOUT_MS), '--', ...args], { timeoutMs: START_TIMEOUT_MS + 10_000 })
+  if (start.exitCode !== 0) return { ...base, pane, started: false, status: 'not_sent', reason: errorOf(start) }
+  const started = true
 
   await input.beforeSend?.(started, input.name)
   const sent = await run(

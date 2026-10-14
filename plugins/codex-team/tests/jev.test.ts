@@ -506,3 +506,15 @@ test('a 503 is retried once while the deadline allows', async () => {
   await createJev(h.io, KEY, OPTS)({}, {})
   expect(h.calls.length).toBe(2)
 })
+
+test('choice criteria pass through retries and requested answers discard hostile extra dimensions', async () => {
+  const probabilities = { docs: 0.6, research: 0.4 }
+  const h = harness([{ status: 503 }, { text: JSON.stringify({ model: KEY, raw: KEY, answers: { task_type: { probabilities, choice: 'ignored', metadata: KEY }, extra: KEY } }) }])
+  const questions = { task_type: { type: 'choice', criteria: { docs: 'Write documentation', research: 'Investigate' } } }
+  const reply = await createJev(h.io, KEY, { ...OPTS, answerIds: ['task_type'] })(questions, 'clean task')
+  expect(reply.answers.task_type).toMatchObject({ probabilities })
+  expect(Object.keys(reply.answers)).toEqual(['task_type'])
+  expect(h.calls).toHaveLength(2)
+  for (const call of h.calls) expect(JSON.parse(call.body)).toMatchObject({ questions })
+  expect(h.timers.filter(t => t.ms === JEV_DEADLINE_MS)).toHaveLength(1)
+})

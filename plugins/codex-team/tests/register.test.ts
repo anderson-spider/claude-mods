@@ -11,7 +11,7 @@ test('session start registers dispatch and finish with their typed input schemas
 
   expect(await started($, tools)).toEqual(['dispatch', 'finish'])
   const schema = tools[0]?.inputSchema as unknown as { properties: Record<string, unknown>; required: readonly string[] }
-  expect(Object.keys(schema.properties).sort()).toEqual(['cwd', 'effort', 'role', 'slug', 'task'])
+  expect(Object.keys(schema.properties).sort()).toEqual(['cwd', 'effort', 'model', 'role', 'slug', 'task'])
   expect([...schema.required].sort()).toEqual(['role', 'slug'])
   expect(tools[1]?.inputSchema).toMatchObject({ type: 'object', properties: { agent: { type: 'string' } }, required: ['agent'] })
 })
@@ -114,6 +114,43 @@ test('failed plan writes and successful unrelated writes do not publish and pres
   expect(await $.tool.call({ tool: 'Write', file_path: '/repo/.crew/plans/a.md', content: 'x' } as never)).toEqual(failed)
   expect(await $.tool.call({ tool: 'Write', file_path: '/repo/README.md', content: 'x' } as never)).toEqual({ result: 'saved' })
   expect(processes).toBe(0)
+})
+
+test('host sends four questions with choice criteria map and bypasses HTTP and settings for pins', async ($, on) => {
+  const w = dispatchWorld(on, 'test-key')
+  await started($, w.tools)
+  const schema = w.tools[0]!.inputSchema as unknown as { properties: Record<string, { enum?: string[] }> }
+  expect(schema.properties.model!.enum).toEqual(['gpt-6.1-sol', 'gpt-6-luna'])
+  await $.tool.call({ tool: DISPATCH, role: 'analyst', task: 'Task', slug: 'host' } as never)
+  const body = JSON.parse(w.requests[0]!.body!)
+  expect(Object.keys(body.questions)).toEqual(['difficulty', 'duration', 'scope', 'task_type'])
+  expect(body.questions.task_type).toMatchObject({ type: 'choice', criteria: { implement: 'Add new product behavior', docs: 'Write or update documentation' } })
+  expect(body.questions.task_type).not.toHaveProperty('options')
+  w.requests.length = 0; w.settings.length = 0
+  await $.tool.call({ tool: DISPATCH, role: 'analyst', model: 'gpt-6.1-sol', task: 'Task', slug: 'pin' } as never)
+  await $.tool.call({ tool: DISPATCH, role: 'analyst', task: 'Task !hard !quick !scope=1 !task_type=docs', slug: 'local' } as never)
+  expect(w.requests).toEqual([])
+  expect(w.settings).toEqual([])
+})
+
+test('reviewer routes its generated review brief through host Jev and accepts profile pins', async ($, on) => {
+  const w = dispatchWorld(on, 'test-key')
+  await started($, w.tools)
+  w.tasks.set('developer:w1:/repo:host', { cwd: '/wt/host', task: 'Build the recorded feature' })
+  const result = await $.tool.call({ tool: DISPATCH, role: 'reviewer', slug: 'host' } as never)
+  expect(result.result).toContain('model gpt-6-luna, effort low (jev)')
+  expect(w.settings).toEqual(['project', 'local'])
+  expect(w.requests).toHaveLength(1)
+  const body = JSON.parse(w.requests[0]!.body!)
+  expect(body.state).toContain("Review the developer's worktree: <path>.")
+  expect(body.state).toContain('Original task:\nBuild the recorded feature')
+  expect(body.state).toContain('git diff')
+  expect(body.state).not.toContain('/wt/host')
+  w.requests.length = 0; w.settings.length = 0
+  const pinned = await $.tool.call({ tool: DISPATCH, role: 'reviewer', slug: 'host', task: '@sol-high' } as never)
+  expect(pinned.result).toContain('model gpt-6.1-sol, effort high (pinned)')
+  expect(w.requests).toEqual([])
+  expect(w.settings).toEqual([])
 })
 
 test('Bash plan edits in the main session and subagents publish once after the result without inspecting the command', async ($, on) => {

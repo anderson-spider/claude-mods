@@ -8,6 +8,8 @@ import { createBreaker, createGate, JEV_DEADLINE_MS, JEV_URL, SLOT_HOLD_MS } fro
 import type { JevInit } from '../hooks/jev'
 import { JEV_MODEL } from '../hooks/effort'
 import { SPECS } from '../hooks/roles'
+import type { Role } from '../hooks/roles'
+import { fnv1a } from '../hooks/decisions'
 
 const ENV: Record<string, string> = { HERDR_ENV: '1', HERDR_WORKSPACE_ID: 'w1', HERDR_PANE_ID: 'lead', HOME: '/home/u' }
 
@@ -36,23 +38,24 @@ function io(rules: Rule[], env: Record<string, string | undefined> = ENV) {
 
 const freshTeam: Rule[] = [agents([]), [['herdr', 'tab', 'create'], ok({ root_pane: { pane_id: 'w1:p7' } })], [['herdr', 'agent', 'start'], ok({})], [['herdr', 'agent', 'prompt'], ok({})]]
 
-function settledShared(name: string, status: string, archiveExit = 0) {
+function settledAgent(name: string, status: string, archiveExit = 0, workspace = 'w1') {
   const uuid = '12345678-1234-1234-1234-123456789abc'
-  const agent = { name: effectiveName(name, 'w1'), agent: 'codex', workspace_id: 'w1', pane_id: 'old', agent_status: status, agent_session: { kind: 'id', source: 'herdr:codex', value: uuid } }
-  let listed = 0
+  const agent = { name: effectiveName(name, workspace)!, cwd: '/wt/task', agent: 'codex', workspace_id: workspace, pane_id: 'old', agent_status: status, agent_session: { kind: 'id', source: 'herdr:codex', value: uuid } }
+  let closed = false
   const w = io([
-    [['herdr', 'agent', 'list'], () => ok({ agents: ++listed <= 2 ? [agent] : [] })],
-    [['herdr', 'agent', 'get'], ok({ agent })], [['herdr', 'pane', 'close'], ok({})],
+    [['git'], text('/wt/task\n')],
+    [['herdr', 'agent', 'list'], () => ok({ agents: closed ? [] : [agent] })],
+    [['herdr', 'agent', 'get'], ok({ agent })], [['herdr', 'pane', 'close'], () => { closed = true; return ok({}) }],
     [['codex', 'archive'], { exitCode: archiveExit, stdout: 'private task content', stderr: 'private reason' }],
-    ...freshTeam.slice(1),
-  ])
+    [['herdr', 'tab', 'create'], ok({ root_pane: { pane_id: `${workspace}:p7` } })], ...freshTeam.slice(2),
+  ], { ...ENV, HERDR_WORKSPACE_ID: workspace })
   return { ...w, uuid }
 }
 
 test('shared idle or done analyst and architect are finished before a fresh start with this dispatch effort', async () => {
   for (const role of ['analyst', 'architect'] as const) {
     for (const status of ['idle', 'done']) {
-      const w = settledShared(role, status)
+      const w = settledAgent(role, status)
       w.team.now = async () => 1_000
       const answer = await dispatch(w.team, { role, task: 'private new task', slug: 'fresh', effort: 'low' })
       expect(answer.text).toContain(`agent: ${role} (pane w1:p7), started now`)
@@ -65,7 +68,7 @@ test('shared idle or done analyst and architect are finished before a fresh star
       expect(tab).toContain('--no-focus')
       expect(w.writes.map(write => JSON.parse(write.text))).toMatchObject([
         { action: 'finish', agent: role, uuid: w.uuid, closed: true, archived: true },
-        { effort: 'low', effortApplied: true, started: true }, { effort: 'low', effortApplied: true, started: true },
+        { selection: { effort: 'low' }, effortApplied: true, modelApplied: true, started: true }, { selection: { effort: 'low' }, effortApplied: true, modelApplied: true, started: true },
       ])
       expect(JSON.stringify(w.writes)).not.toContain('private')
       expect(w.writes[0]!.path).toMatch(/\.finish\.json$/)
@@ -75,9 +78,9 @@ test('shared idle or done analyst and architect are finished before a fresh star
 })
 
 test('a shared finish failure refuses dispatch without starting or prompting a replacement', async () => {
-  const w = settledShared('analyst', 'idle', 9)
+  const w = settledAgent('analyst', 'idle', 9)
   const answer = await dispatch(w.team, { role: 'analyst', slug: 'fresh', task: 'private task', effort: 'high' })
-  expect(answer.text).toContain('delivery: not_sent (shared agent finish failed (archive exit 9))')
+  expect(answer.text).toContain('delivery: not_sent (agent finish failed (archive exit 9))')
   expect(w.calls.some(call => call[2] === 'start' || call[2] === 'prompt')).toBe(false)
   expect(JSON.parse(w.writes[0]!.text)).toMatchObject({ action: 'finish', closed: true, archived: false, reason: 'archive exit 9' })
   expect(JSON.stringify([w.writes, answer])).not.toContain('private')
@@ -97,7 +100,7 @@ test('shared working or blocked analyst keeps its task fallback and architect re
 })
 
 test('finish shares the dispatch queue and logs closed and archived without task text', async () => {
-  const w = settledShared('analyst', 'idle')
+  const w = settledAgent('analyst', 'idle')
   // Explicit finish starts at get, so its first list is the ownership check and its second confirms exit.
   const originalRun = w.team.run
   let closed = false
@@ -194,7 +197,7 @@ test('bad input is refused before Herdr is asked anything', async () => {
     [{ role: 'analyst', task: '  ', slug: 's' }, 'task is empty'],
     [{ role: 'analyst', task: 't', slug: 'Bad Slug' }, 'slug must be'],
     [{ role: 'analyst', task: 't', slug: 'x'.repeat(23) }, 'slug must be'],
-    [{ role: 'analyst', task: 't', slug: 's', effort: 'max' }, 'effort must be one of'],
+    [{ role: 'analyst', task: 't', slug: 's', effort: 'max' }, 'invalid profile or pins'],
   ] as const) {
     const world = io(freshTeam)
     expect((await dispatch(world.team, call)).text).toContain(message)
@@ -212,7 +215,7 @@ test('the decision is logged as unknown before the prompt and with the outcome a
   expect(before.promptStatus).toBe('unknown')
   expect(before.effortApplied).toBe(true)
   expect(after.effortApplied).toBe(true)
-  expect(after).toMatchObject({ v: 2, role: 'architect', agent: 'architect', model: 'gpt-6.1-sol', effort: 'high', source: 'default', jevReason: 'no-key', expected: null, started: true, promptStatus: 'confirmed', reason: null })
+  expect(after).toMatchObject({ v: 3, role: 'architect', agent: 'architect', selection: { model: 'gpt-6.1-sol', effort: 'high', source: 'default' }, jevReason: 'no-key', expected: null, started: true, promptStatus: 'confirmed', reason: null })
   for (const write of world.writes) {
     expect(write.text).not.toContain('Secret')
     expect(write.text).not.toContain('/Users/me')
@@ -267,51 +270,67 @@ function assessedWorld(over: { key?: string; status?: number; body?: string; thr
   return { ...world, requests, timers }
 }
 
-const call = (role: 'developer' | 'analyst' | 'architect' = 'analyst') => ({ role, task: TASK, slug: 'assess', cwd: '/wt/task' })
+const call = (role: Role = 'analyst') => ({ role, task: TASK, slug: 'assess', cwd: '/wt/task' })
+function readyCall(world: { tasks: Map<string, unknown> }, role: Role = 'analyst') {
+  if (role === 'reviewer') world.tasks.set('developer:w1:/repo:assess', { cwd: '/wt/task', task: TASK })
+  return call(role)
+}
 function privateOutputs(world: ReturnType<typeof assessedWorld>, answer: { text: string }) {
   const output = JSON.stringify([world.writes.map(w => w.text), world.logs, answer.text])
   expect(output).not.toContain(KEY)
   expect(output).not.toContain(TASK)
 }
 
-test('Jev effort choices reach each role start flag, answer and v2 records', async () => {
-  for (const role of ['developer', 'architect', 'analyst'] as const) {
-    const cases = role === 'analyst'
-      ? [[0, 0, 0, 'low'], [0, 1, 0, 'medium'], [4, 3, 3, 'high']] as const
-      : [[0, 0, 0, 'medium'], [3, 1, 2, 'high'], [4, 3, 3, 'xhigh']] as const
-    for (const [difficulty, duration, scope, effort] of cases) {
+test('Jev profile choices reach every role start flag answer and v3 record', async () => {
+  for (const role of ['developer', 'architect', 'analyst', 'reviewer'] as const) {
+    for (const [difficulty, duration, scope, model, effort] of [[0, 0, 0, 'gpt-6-luna', 'low'], [3, 1, 2, 'gpt-6.1-sol', 'high'], [4, 3, 3, 'gpt-6.1-sol', 'xhigh']] as const) {
       const world = assessedWorld({ body: assessedBody({ [difficulty]: 1 }, { [duration]: 1 }, { [scope]: 1 }) })
-      const answer = await dispatch(world.team, call(role))
+      const answer = await dispatch(world.team, readyCall(world, role))
       expect(answer.ok).toBe(true)
-      expect(answer.text).toContain(`effort ${effort} (jev)`)
-      expect(world.calls.find(c => c[2] === 'start')).toContain(`model_reasoning_effort="${effort}"`)
-      expect(world.calls.find(c => c[2] === 'start')).toContain('service_tier="priority"')
-      for (const write of world.writes) expect(JSON.parse(write.text)).toMatchObject({ v: 2, source: 'jev', effort, jevModel: JEV_MODEL, expected: { difficulty, duration, scope }, jevReason: null })
+      expect(answer.text).toContain(`model ${model}, effort ${effort} (jev), applied at start`)
+      const start = world.calls.find(c => c[2] === 'start')!
+      expect(start).toContain(model)
+      expect(start).toContain(`model_reasoning_effort="${effort}"`)
+      expect(start).toContain('service_tier="priority"')
+      for (const write of world.writes) expect(JSON.parse(write.text)).toMatchObject({ v: 3, selection: { model, source: 'jev', effort }, jevModel: JEV_MODEL, jevAsked: true, modelApplied: true, effortApplied: true, expected: { difficulty, duration, scope }, jevReason: null })
       expect(world.requests).toHaveLength(1)
       privateOutputs(world, answer)
     }
   }
 })
 
-test('effortApplied and the role line distinguish newly started and reused agents for every effort source', async () => {
-  for (const source of ['default', 'pinned', 'jev'] as const) {
-    for (const reused of [false, true]) {
-      const world = assessedWorld({ ...(source === 'default' ? { key: undefined } : {}) })
-      const reuseRunner = fakeRun([
-        [['mkdir'], text('')],
-        agents([{ name: effectiveName('analyst', 'w1')!, pane_id: 'home', agent_status: 'working' }, { name: effectiveName('analyst-assess', 'w1')!, pane_id: 'w1:p1', agent_status: 'idle' }]),
-        [['herdr', 'agent', 'prompt'], ok({})],
-      ])
-      if (reused) world.team.run = reuseRunner.run
-      const effort = source === 'default' ? 'medium' : source === 'pinned' ? 'high' : 'low'
-      const answer = await dispatch(world.team, { ...call(), ...(source === 'pinned' ? { effort: 'high' } : {}) })
-      expect(answer.ok).toBe(true)
-      expect(answer.text.split('\n')[1]).toBe(`role: analyst, model gpt-6-luna, effort ${effort} (${source})${reused ? ', not applied: reused agent keeps its start effort' : ''}`)
-      expect(world.writes).toHaveLength(2)
-      for (const write of world.writes) expect(JSON.parse(write.text)).toMatchObject({ effortApplied: !reused, started: !reused, effort, source })
-      const calls = reused ? reuseRunner.calls : world.calls
-      expect(calls.some(c => c[2] === 'start')).toBe(!reused)
-      expect(calls.some(c => c[2] === 'restart' || c[2] === 'send-keys')).toBe(false)
+test('developer reviewer and task analyst followups retire prior sessions and apply fresh startup pins', async () => {
+  for (const role of ['developer', 'reviewer', 'analyst'] as const) {
+    const name = role === 'developer' ? 'dev-assess' : role === 'reviewer' ? 'architect-assess' : 'analyst-assess'
+    const w = settledAgent(name, 'done')
+    w.tasks.set('developer:w1:/repo:assess', { cwd: '/wt/task', task: 'Original task' })
+    const run = w.team.run
+    w.team.run = async (argv, init) => {
+      if (argv[0] === 'git') { w.calls.push([...argv]); return text('/wt/task\n') }
+      const result = await run(argv, init)
+      if (role === 'analyst' && argv[2] === 'list') {
+        const data = JSON.parse(result.stdout)
+        data.result.agents.push({ name: effectiveName('analyst', 'w1')!, workspace_id: 'w1', pane_id: 'home', agent_status: 'working' })
+        return { ...result, stdout: JSON.stringify(data) }
+      }
+      return result
+    }
+    const result = await dispatch(w.team, { role, slug: 'assess', cwd: '/wt/task', model: 'gpt-6-luna', effort: 'low', task: 'Continue @luna-low !hard' })
+    expect(result.ok).toBe(true)
+    expect(result.text).not.toContain('reused')
+    expect(result.text).not.toContain('pins ignored: reused')
+    expect(result.text).toContain('started now')
+    const selected = { model: 'gpt-6-luna', effort: 'low', source: 'pinned' }
+    expect(JSON.parse(w.writes[w.writes.length - 1]!.text)).toMatchObject({ selection: selected, modelApplied: true, effortApplied: true })
+    const verbs = w.calls.map(c => c.slice(0, 3).join(' '))
+    expect(verbs.indexOf('herdr pane close')).toBeLessThan(verbs.indexOf('herdr agent start'))
+    expect(w.calls.find(c => c[2] === 'get')![3]).toBe(effectiveName(name, 'w1'))
+    expect(w.calls.find(c => c[2] === 'start')![3]).toBe(effectiveName(name, 'w1'))
+    expect(w.calls.find(c => c[0] === 'codex')![2]).toBe(w.uuid)
+    const prompt = w.calls.find(c => c[2] === 'prompt')![4]!
+    if (role === 'developer') {
+      expect(prompt).toContain('read your previous report at /home/u/.claude/codex-team/reports/repo/1r/assess-developer.md and inspect the git diff in your worktree before continuing.')
+      expect(w.tasks.get('developer:w1:/repo:assess')).toEqual({ cwd: '/wt/task', task: 'Original task' })
     }
   }
 })
@@ -321,18 +340,18 @@ test('an agent that failed to start never records its chosen effort as applied',
   const answer = await dispatch(world.team, { ...call(), effort: 'high' })
   expect(answer.ok).toBe(false)
   expect(world.writes).toHaveLength(1)
-  expect(JSON.parse(world.writes[0]!.text)).toMatchObject({ effortApplied: false, started: false, promptStatus: 'not_sent' })
-  expect(answer.text).not.toContain('reused agent keeps its start effort')
+  expect(JSON.parse(world.writes[0]!.text)).toMatchObject({ modelApplied: false, effortApplied: false, started: false, promptStatus: 'not_sent', selection: { effort: 'high', source: 'pinned' } })
+  expect(answer.text).toContain('not applied: agent not started')
 })
 
-test('working and blocked live agents disclose unapplied effort even when dispatch is refused', async () => {
+test('working and blocked live agents refuse before profile selection', async () => {
   for (const [status, reason] of [['working', 'agent busy'], ['blocked', 'agent blocked']] as const) {
     const world = io([agents([{ name: effectiveName('analyst', 'w1')!, pane_id: 'p', agent_status: status }, { name: effectiveName('analyst-assess', 'w1')!, pane_id: 'q', agent_status: status }])])
     const answer = await dispatch(world.team, { ...call(), effort: 'high' })
     expect(answer.ok).toBe(false)
-    expect(answer.text).toContain('effort high (pinned), not applied: reused agent keeps its start effort')
+    expect(answer.text).toContain('model and effort not selected: agent not started')
     expect(answer.text).toContain(`delivery: not_sent (${reason})`)
-    expect(JSON.parse(world.writes[0]!.text)).toMatchObject({ effortApplied: false, started: false })
+    expect(JSON.parse(world.writes[0]!.text)).toMatchObject({ selection: null, modelApplied: false, effortApplied: false, started: false })
     expect(world.calls.filter(c => c[0] === 'herdr')).toEqual([['herdr', 'agent', 'list']])
   }
 })
@@ -346,12 +365,12 @@ test('pinned effort skips Jev and repository settings entirely', async () => {
   expect(settings).toBe(0)
   expect(world.requests).toEqual([])
   expect(world.logs).toEqual([])
-  expect(JSON.parse(world.writes[1]!.text)).toMatchObject({ expected: null, jevReason: null, source: 'pinned' })
+  expect(JSON.parse(world.writes[1]!.text)).toMatchObject({ expected: null, jevReason: null, selection: { source: 'pinned' } })
   privateOutputs(world, answer)
 })
 
 test('every Jev failure falls back to the role default with only a fixed reason', async () => {
-  for (const role of ['developer', 'architect', 'analyst'] as const) {
+  for (const role of ['developer', 'architect', 'analyst', 'reviewer'] as const) {
     for (const reason of ['no-key', 'bad-key', 'repo-declared-key', 'unreadable-settings', 'http', 'network', 'timeout', 'malformed', 'breaker', 'busy'] as const) {
       const world = assessedWorld({
         ...(reason === 'no-key' ? { key: undefined } : reason === 'bad-key' ? { key: 'a b' } : {}),
@@ -364,17 +383,17 @@ test('every Jev failure falls back to the role default with only a fixed reason'
       if (reason === 'unreadable-settings') world.team.settings = async () => { throw new Error(`${KEY} ${TASK}`) }
       if (reason === 'breaker') { world.team.breaker = createBreaker(() => 0, { failures: 1 }); world.team.breaker.failure() }
       if (reason === 'busy') { world.team.gate = createGate(1); world.team.gate.acquire() }
-      const pending = dispatch(world.team, call(role))
+      const pending = dispatch(world.team, readyCall(world, role))
       if (reason === 'timeout') {
         for (let tick = 0; tick < 40; tick++) await Promise.resolve()
         expect(world.requests).toHaveLength(1)
         world.timers.find(t => t.ms === JEV_DEADLINE_MS)!.fn()
       }
       const answer = await pending
-      const effort = role === 'analyst' ? 'medium' : 'high'
+      const effort = SPECS[role].effort
       expect(answer.text).toContain(`effort ${effort} (default)`)
       expect(world.logs).toEqual([`codex-team: Jev off (${reason}); using role default`])
-      expect(JSON.parse(world.writes[1]!.text)).toMatchObject({ v: 2, source: 'default', effort, expected: null, jevReason: reason })
+      expect(JSON.parse(world.writes[1]!.text)).toMatchObject({ v: 3, selection: { source: 'default', model: SPECS[role].model, effort: SPECS[role].effort }, expected: null, jevReason: reason })
       if (['no-key', 'bad-key', 'repo-declared-key', 'unreadable-settings', 'breaker', 'busy'].includes(reason)) expect(world.requests).toEqual([])
       privateOutputs(world, answer)
     }
@@ -455,7 +474,7 @@ test('fake HTTP preserves relative flag paths and quoted escapes while masking a
   expect(state).not.toContain('server')
 })
 
-test('astra dispatch caps pinned, Jev and default efforts in start flags, answers and decision records', async () => {
+test('astra dispatch caps pinned and default pairs while automatic profiles remain Sol or Luna', async () => {
   // Exercise a future Astra spec without changing the shipped roles; restore the fixture even when an assertion fails.
   const spec = SPECS.developer
   const original = { model: spec.model, effort: spec.effort }
@@ -465,11 +484,11 @@ test('astra dispatch caps pinned, Jev and default efforts in start flags, answer
       const world = assessedWorld({ ...(source === 'default' ? { key: undefined } : {}), body: assessedBody({ '4': 1 }, { '3': 1 }, { '3': 1 }) })
       const answer = await dispatch(world.team, { ...call('developer'), ...(source === 'pinned' ? { effort: 'xhigh' } : {}) })
       expect(answer.ok).toBe(true)
-      expect(answer.text).toContain(`effort high (${source}), capped at high: gpt-6-astra never runs above high`)
+      expect(answer.text).toContain(source === 'jev' ? 'model gpt-6.1-sol, effort xhigh (jev)' : `effort high (${source}), capped at high: gpt-6-astra never runs above high`)
       const start = world.calls.find(c => c[2] === 'start')!
-      expect(start).toContain('model_reasoning_effort="high"')
+      expect(start).toContain(`model_reasoning_effort="${source === 'jev' ? 'xhigh' : 'high'}"`)
       expect(start).toContain('service_tier="priority"')
-      for (const write of world.writes) expect(JSON.parse(write.text)).toMatchObject({ model: 'gpt-6-astra', effort: 'high', effortApplied: true, source })
+      for (const write of world.writes) expect(JSON.parse(write.text)).toMatchObject({ selection: { model: source === 'jev' ? 'gpt-6.1-sol' : 'gpt-6-astra', effort: source === 'jev' ? 'xhigh' : 'high', source }, effortApplied: true, modelApplied: true })
     }
   } finally {
     Object.assign(spec, original)
@@ -491,7 +510,7 @@ test('reviewer refuses an undispatched slug or a working or blocked developer be
   }
 })
 
-test('reviewer builds its brief from the recorded developer task and always uses architect model with xhigh without Jev', async () => {
+test('reviewer builds its recorded review brief and applies pinned effort with report-only permissions', async () => {
   const w = io([[['git'], text('/wt/fix\n')], ...freshTeam])
   await dispatch(w.team, { role: 'developer', task: 'Build the original feature', cwd: '/wt/fix', slug: 'fix', effort: 'high' })
   const reviewer = fakeRun([[['mkdir'], text('')], agents([{ name: effectiveName('dev-fix', 'w1')!, pane_id: 'dev', agent_status: 'done' }]),
@@ -500,30 +519,37 @@ test('reviewer builds its brief from the recorded developer task and always uses
   w.team.settings = async () => { throw new Error('review must not read Jev settings') }
   const answer = await dispatch(w.team, { role: 'reviewer', slug: 'fix', task: 'Focus on errors', effort: 'low', cwd: '/ignored' })
   expect(answer.text).toContain('agent: architect-fix')
-  expect(answer.text).toContain('effort xhigh (review-policy)')
+  expect(answer.text).toContain('effort low (pinned)')
   expect(answer.text).toContain('/fix-reviewer.md')
   const start = reviewer.calls.find(c => c[2] === 'start')!
-  expect(start).toContain(SPECS.architect.model)
-  expect(start).toContain('model_reasoning_effort="xhigh"')
+  expect(start).toContain(SPECS.reviewer.model)
+  expect(start).toContain('model_reasoning_effort="low"')
   expect(start).toContain('sandbox_workspace_write.writable_roots=[]')
   const prompt = reviewer.calls.find(c => c[2] === 'prompt')![4]!
   for (const text of ['/wt/fix', 'Build the original feature', 'Focus on errors', '/fix-developer.md', 'git status --short', 'git diff --staged', 'every untracked file', 'AGENTS.md', 'verdict: accept | changes_needed', 'risk: low | high', '- <severity> <file>:<line>']) expect(prompt).toContain(text)
   expect(reviewer.calls.find(c => c[2] === 'split')).toContain('/home/u/.claude/codex-team/reports')
   expect(w.logs.filter(line => line.includes('Jev'))).toHaveLength(0)
-  expect(JSON.parse(w.writes[w.writes.length - 1]!.text)).toMatchObject({ role: 'reviewer', source: 'review-policy', expected: null, effort: 'xhigh' })
+  expect(JSON.parse(w.writes[w.writes.length - 1]!.text)).toMatchObject({ role: 'reviewer', selection: { source: 'pinned', model: SPECS.reviewer.model, effort: 'low' }, expected: null })
 })
 
-test('reviewer without extra task keeps the existing Astra cap and reused startup effort', async () => {
-  const spec = SPECS.architect, original = spec.model
+test('reviewer followup falls back to its role default after safe retirement and honors the Astra cap', async () => {
+  const spec = SPECS.reviewer, original = { model: spec.model, effort: spec.effort }
   try {
-    Object.assign(spec, { model: 'gpt-6-astra' })
-    const w = io([agents([{ name: effectiveName('architect-fix', 'w1')!, pane_id: 'review', agent_status: 'idle' }]), [['herdr', 'agent', 'prompt'], ok({})]])
-    w.tasks.set('developer:w1:/repo:fix', { cwd: '/wt/fix', task: 'Original task' })
-    const answer = await dispatch(w.team, { role: 'reviewer', slug: 'fix' })
-    expect(answer.text).toContain('effort high (review-policy), capped at high')
-    expect(answer.text).toContain('not applied: reused agent keeps its start effort')
-    expect(w.calls.some(c => c[2] === 'start')).toBe(false)
-  } finally { Object.assign(spec, { model: original }) }
+    for (const [model, effort] of [['gpt-6.1-sol', 'high'], ['gpt-6-astra', 'xhigh']] as const) {
+      Object.assign(spec, { model, effort })
+      const w = settledAgent('architect-fix', 'idle')
+      w.tasks.set('developer:w1:/repo:fix', { cwd: '/wt/fix', task: 'Original task' })
+      const answer = await dispatch(w.team, { role: 'reviewer', slug: 'fix' })
+      expect(answer.text).toContain(`model ${model}, effort high (default)`)
+      if (model.includes('astra')) expect(answer.text).toContain('capped at high')
+      else expect(answer.text).not.toContain('capped at high')
+      expect(answer.text).toContain('started now')
+      const starts = w.calls.filter(c => c[2] === 'start')
+      expect(starts).toHaveLength(1)
+      expect(starts[0]).toContain('model_reasoning_effort="high"')
+      expect(JSON.parse(w.writes[w.writes.length - 1]!.text)).toMatchObject({ selection: { model, effort: 'high', source: 'default' } })
+    }
+  } finally { Object.assign(spec, original) }
 })
 
 test('developer followups keep the original task and cannot move the recorded slug to another worktree', async () => {
@@ -662,6 +688,211 @@ test('a failed dispatch does not poison the global queue for a later call', asyn
   expect(next.calls.some(call => call[2] === 'prompt')).toBe(true)
 })
 
+test('model effort and profile pins bypass settings and dimensional pins are ignored for explicit pairs', async () => {
+  for (const [fields, task, model, effort, profileId] of [
+    [{ model: 'gpt-6.1-sol' }, 'Task', 'gpt-6.1-sol', 'medium', 'sol-medium'],
+    [{ effort: 'xhigh' }, 'Task', 'gpt-6-luna', 'xhigh', null],
+    [{ model: 'gpt-6-luna', effort: 'low' }, 'Task', 'gpt-6-luna', 'low', 'luna-low'],
+    [{}, 'Task @sol-xhigh !quick', 'gpt-6.1-sol', 'xhigh', 'sol-xhigh'],
+    [{ model: 'gpt-6.1-sol', effort: 'high' }, 'Task @sol-high !hard', 'gpt-6.1-sol', 'high', 'sol-high'],
+  ] as const) {
+    const w = assessedWorld()
+    w.team.settings = async () => { throw new Error('must bypass settings') }
+    const answer = await dispatch(w.team, { ...call(), ...fields, task })
+    expect(answer.text).toContain(`model ${model}, effort ${effort} (pinned)`)
+    expect(w.requests).toEqual([])
+    expect(JSON.parse(w.writes[1]!.text)).toMatchObject({ selection: { model, effort, profileId, source: 'pinned', penalty: null }, jevAsked: false, dimensionsIgnored: task.includes('!') })
+    const prompt = w.calls.find(c => c[2] === 'prompt')![4]!
+    expect(prompt).not.toContain('@sol-')
+    expect(prompt).not.toContain('!quick')
+    expect(prompt).not.toContain('!hard')
+  }
+})
+
+test('all dimension pins score locally and partial pins ask only remaining questions after cleaning', async () => {
+  const local = assessedWorld()
+  local.team.settings = async () => { throw new Error('local pins must bypass settings') }
+  const answer = await dispatch(local.team, { ...call(), task: 'Task !hard !long !scope=3 !task_type=research' })
+  expect(answer.text).toContain('(override)')
+  expect(local.requests).toEqual([])
+  expect(JSON.parse(local.writes[1]!.text)).toMatchObject({ selection: { model: 'gpt-6.1-sol', effort: 'xhigh', source: 'override' }, pinsUsed: { dimensions: true }, expected: { difficulty: 3, duration: 3, scope: 3 }, taskType: { research: 1 }, jevAsked: false })
+  const partial = assessedWorld({ body: JSON.stringify({ answers: { duration: { probabilities: { '1': 1 } }, scope: { probabilities: { '2': 1 } }, task_type: { probabilities: { docs: 0.2, research: 0.2 } } } }) })
+  await dispatch(partial.team, { ...call(), task: 'Inspect /repo/src/a.ts !hard and docs' })
+  const body = JSON.parse(partial.requests[0]!.init.body)
+  expect(Object.keys(body.questions)).toEqual(['duration', 'scope', 'task_type'])
+  expect(body.state).toBe('Inspect src/a.ts  and docs')
+  const record = JSON.parse(partial.writes[1]!.text)
+  expect(record).toMatchObject({ pinsUsed: { dimensions: true }, taskTypePrior: false, taskType: { docs: 0.5, research: 0.5 }, expected: { difficulty: 3, duration: 1, scope: 2 } })
+  expect(JSON.stringify(partial.writes)).not.toContain('!hard')
+})
+
+test('invalid pins and directive-only tasks refuse before effects with fixed messages', async () => {
+  for (const fields of [{ task: 'Task @private' }, { task: 'Task !duration=9' }, { task: 'Task @luna-low', model: 'gpt-6.1-sol' }, { task: 'Task', model: '/private/model' }, { task: '@sol-high !hard' }]) {
+    const w = assessedWorld()
+    const answer = await dispatch(w.team, { ...call(), ...fields })
+    expect(answer.ok).toBe(false)
+    expect(answer.text).toBe('codex-team: ' + (fields.task === '@sol-high !hard' ? 'task is empty' : 'invalid profile or pins'))
+    expect(w.calls).toEqual([])
+    expect(w.writes).toEqual([])
+    expect(w.requests).toEqual([])
+  }
+})
+
+test('malformed choice falls back to the exact role pair and does not use dimension pins', async () => {
+  for (const role of ['developer', 'analyst', 'architect', 'reviewer'] as const) {
+    const w = assessedWorld({ body: JSON.stringify({ answers: { duration: { probabilities: { '3': 1 } }, scope: { probabilities: { '3': 1 } }, task_type: { probabilities: { unknown: 1 } } } }) })
+    await dispatch(w.team, { ...readyCall(w, role), task: 'Task !hard' })
+    expect(JSON.parse(w.writes[1]!.text)).toMatchObject({ selection: { model: SPECS[role].model, effort: SPECS[role].effort, source: 'default', penalty: null }, expected: null, taskType: null, pinsUsed: { dimensions: false }, dimensionsIgnored: true, jevReason: 'malformed' })
+  }
+})
+
+test('refused deliveries and failed shared finish never read settings or ask Jev', async () => {
+  for (const kind of ['busy', 'foreign', 'writer', 'finish'] as const) {
+    const w = kind === 'finish' ? settledAgent('architect', 'idle', 9) : assessedWorld()
+    if (kind !== 'finish') w.team.run = fakeRun([[['mkdir'], text('')], [['git'], text('/wt/task\n')], agents([
+      kind === 'writer' ? { name: effectiveName('dev-other', 'w1')!, pane_id: 'p', cwd: '/wt/task' }
+        : { name: effectiveName('architect', 'w1')!, pane_id: 'p', workspace_id: kind === 'foreign' ? 'w2' : 'w1', agent_status: 'working' },
+    ])]).run
+    let settings = 0, requests = 0
+    w.team.env = async () => ({ ...ENV, JEV_API_KEY: KEY })
+    w.team.settings = async () => { settings++; return {} }
+    w.team.jev.fetch = async () => { requests++; throw new Error('must not request') }
+    const result = await dispatch(w.team, { ...call(kind === 'writer' ? 'developer' : 'architect') })
+    expect(result.ok).toBe(false)
+    expect(settings).toBe(0)
+    expect(requests).toBe(0)
+    expect(JSON.parse(w.writes[w.writes.length - 1]!.text)).toMatchObject({ selection: null, jevAsked: false, modelApplied: false, effortApplied: false })
+  }
+})
+
+test('settled sessions choose fresh pairs only after archive and dispatch duration includes assessment', async () => {
+  for (const workspace of ['w6F', 'w6f']) for (const role of ['developer', 'analyst', 'architect', 'reviewer'] as const) {
+    const name = role === 'developer' ? 'dev-assess' : role === 'reviewer' ? 'architect-assess' : role
+    const w = settledAgent(name, 'done', 0, workspace)
+    if (role === 'developer' || role === 'reviewer') w.tasks.set(`developer:${workspace}:/repo:assess`, { cwd: '/wt/task', task: 'Original task' })
+    let clock = 1000, requests = 0
+    let activeCalls = w.calls
+    w.team.now = async () => clock
+    w.team.env = async () => ({ ...ENV, HERDR_WORKSPACE_ID: workspace, JEV_API_KEY: KEY })
+    w.team.jev.fetch = async () => {
+      expect(activeCalls.some(c => c[0] === 'codex' && c[1] === 'archive')).toBe(true)
+      clock += 75
+      return { status: 200, text: ++requests === 1 ? POINT : assessedBody({ '4': 1 }, { '3': 1 }, { '3': 1 }) }
+    }
+    await dispatch(w.team, call(role))
+    const first = JSON.parse(w.writes[w.writes.length - 1]!.text)
+    expect(first).toMatchObject({ effectiveAgent: effectiveName(name, workspace), selection: { model: 'gpt-6-luna', effort: 'low' }, durationMs: 75 })
+    expect(w.calls.find(c => c[2] === 'get')![3]).toBe(effectiveName(name, workspace))
+    expect(w.calls.find(c => c[2] === 'start')![3]).toBe(effectiveName(name, workspace))
+    // The next settled predecessor is retired by the same safe finish path.
+    const next = settledAgent(name, 'idle', 0, workspace)
+    w.team.run = next.team.run
+    activeCalls = next.calls
+    await dispatch(w.team, call(role))
+    const second = JSON.parse(w.writes[w.writes.length - 1]!.text)
+    expect(second).toMatchObject({ selection: { model: 'gpt-6.1-sol', effort: 'xhigh' }, durationMs: 75 })
+    expect(requests).toBe(2)
+  }
+})
+
+test('reviewer profile and structured pins apply with dimensional pins ignored only for explicit pairs', async () => {
+  for (const [fields, task, model, effort, profileId] of [
+    [{ model: 'gpt-6-luna' }, undefined, 'gpt-6-luna', 'high', 'luna-high'],
+    [{ effort: 'low' }, undefined, 'gpt-6.1-sol', 'low', null],
+    [{}, '@luna-low', 'gpt-6-luna', 'low', 'luna-low'],
+    [{ model: 'gpt-6.1-sol', effort: 'high' }, 'Focus @sol-high !hard', 'gpt-6.1-sol', 'high', 'sol-high'],
+  ] as const) {
+    const w = assessedWorld()
+    readyCall(w, 'reviewer')
+    w.team.settings = async () => { throw new Error('explicit pins must bypass settings') }
+    const answer = await dispatch(w.team, { role: 'reviewer', slug: 'assess', ...fields, task })
+    expect(answer.ok).toBe(true)
+    expect(answer.text).toContain(`model ${model}, effort ${effort} (pinned)`)
+    expect(answer.text).not.toContain('pins ignored')
+    expect(w.requests).toEqual([])
+    expect(JSON.parse(w.writes[1]!.text)).toMatchObject({ selection: { model, effort, source: 'pinned', profileId }, pinsUsed: { dimensions: false }, dimensionsIgnored: task?.includes('!hard') ?? false })
+    const start = w.calls.find(c => c[2] === 'start')!
+    expect(start).toContain('sandbox_workspace_write.writable_roots=[]')
+    expect(start).toContain(`developer_instructions=${JSON.stringify(SPECS.reviewer.instructions)}`)
+    const prompt = w.calls.find(c => c[2] === 'prompt')![4]!
+    expect(prompt).toContain('Original task:')
+    expect(prompt).toContain(TASK)
+    expect(prompt).not.toContain('@sol-high')
+    expect(prompt).not.toContain('@luna-low')
+  }
+})
+
+test('reviewer dimension pins score locally or ask Jev only remaining questions using the redacted review brief', async () => {
+  const local = assessedWorld()
+  readyCall(local, 'reviewer')
+  local.team.settings = async () => { throw new Error('local pins must bypass settings') }
+  const result = await dispatch(local.team, { role: 'reviewer', slug: 'assess', task: '!difficulty=0 !quick !scope=0 !task_type=review' })
+  expect(result.ok).toBe(true)
+  expect(local.requests).toEqual([])
+  expect(JSON.parse(local.writes[1]!.text)).toMatchObject({ selection: { model: 'gpt-6-luna', effort: 'low', source: 'override' }, taskType: { review: 1 }, pinsUsed: { dimensions: true } })
+  const partial = assessedWorld()
+  readyCall(partial, 'reviewer')
+  await dispatch(partial.team, { role: 'reviewer', slug: 'assess', task: 'Focus on failures !hard' })
+  const body = JSON.parse(partial.requests[0]!.init.body)
+  expect(Object.keys(body.questions)).toEqual(['duration', 'scope', 'task_type'])
+  for (const text of ["Review the developer's worktree: <path>.", 'Original task:', TASK, 'Developer report:', 'git diff', 'Additional review focus:', 'Focus on failures']) expect(body.state).toContain(text)
+  expect(body.state).not.toContain('!hard')
+  expect(body.state).not.toContain('/wt/task')
+  expect(body.state).not.toContain('/home/u')
+  expect(JSON.parse(partial.writes[1]!.text)).toMatchObject({ selection: { source: 'jev' }, expected: { difficulty: 3, duration: 0, scope: 0 }, pinsUsed: { dimensions: true } })
+})
+
+test('hostile assessment metadata never enters v3 and task hash uses text after directive removal', async () => {
+  const data = JSON.parse(POINT)
+  data.raw = KEY
+  data.answers.extra = KEY
+  data.answers.task_type = { probabilities: { docs: 0.3, research: 0.3 }, metadata: KEY, choice: '/private/path' }
+  const w = assessedWorld({ body: JSON.stringify(data) })
+  const result = await dispatch(w.team, { ...call(), task: 'Task @literal-in-code `!quick` !hard' })
+  // An unknown reserved mention is rejected; it cannot be sent or logged.
+  expect(result.text).toBe('codex-team: invalid profile or pins')
+  expect(w.requests).toEqual([])
+  const safe = assessedWorld({ body: JSON.stringify(data) })
+  await dispatch(safe.team, { ...call(), task: 'Task `@literal-in-code !quick` !hard' })
+  const record = JSON.parse(safe.writes[1]!.text)
+  expect(record).toMatchObject({ selection: { source: 'jev' }, taskType: { docs: 0.5, research: 0.5 }, expected: { difficulty: 3, duration: 0, scope: 0 } })
+  expect(record.taskHash).toBe(fnv1a('Task `@literal-in-code !quick` '))
+  expect(JSON.stringify(safe.writes)).not.toContain(KEY)
+  expect(JSON.stringify(safe.writes)).not.toContain('/private/path')
+  expect(JSON.stringify(safe.writes)).not.toContain('!hard')
+  expect(JSON.stringify(safe.writes)).not.toContain('startup')
+})
+
+test('working and blocked named predecessors refuse without retirement settings or Jev', async () => {
+  for (const role of ['developer', 'reviewer', 'analyst'] as const) for (const status of ['working', 'blocked']) {
+    const name = role === 'developer' ? 'dev-assess' : role === 'reviewer' ? 'architect-assess' : 'analyst-assess'
+    const w = settledAgent(name, status)
+    w.tasks.set('developer:w1:/repo:assess', { cwd: '/wt/task', task: 'Original task' })
+    const run = w.team.run
+    w.team.run = async (argv, init) => {
+      const result = await run(argv, init)
+      if (role === 'analyst' && argv[2] === 'list') {
+        const data = JSON.parse(result.stdout)
+        data.result.agents.push({ name: effectiveName('analyst', 'w1')!, workspace_id: 'w1', pane_id: 'home', agent_status: 'working' })
+        return { ...result, stdout: JSON.stringify(data) }
+      }
+      return result
+    }
+    let settings = 0, requests = 0
+    w.team.env = async () => ({ ...ENV, JEV_API_KEY: KEY })
+    w.team.settings = async () => { settings++; return {} }
+    w.team.jev.fetch = async () => { requests++; throw new Error('unexpected request') }
+    const result = await dispatch(w.team, { role, slug: 'assess', cwd: '/wt/task', task: 'Self-contained followup' })
+    expect(result.ok).toBe(false)
+    expect(result.text).toContain(status === 'working' ? 'delivery: not_sent (agent busy)' : 'delivery: not_sent (agent blocked)')
+    expect(settings).toBe(0)
+    expect(requests).toBe(0)
+    expect(w.calls.filter(c => c[0] === 'herdr').every(c => c[2] === 'list')).toBe(true)
+    expect(w.calls.some(c => c[0] === 'codex')).toBe(false)
+    expect(w.tasks.get('developer:w1:/repo:assess')).toEqual({ cwd: '/wt/task', task: 'Original task' })
+  }
+})
+
 test('foreign shared roles and equal developer or reviewer names do not block local dispatch', async () => {
   for (const role of ['analyst', 'architect', 'developer', 'reviewer'] as const) {
     const name = role === 'developer' ? 'dev-fix' : role === 'reviewer' ? 'architect-fix' : role
@@ -687,7 +918,7 @@ test('unknown delivery hints use the effective Herdr name while finish accepts o
   expect(answer.text).toContain('agent: analyst')
   expect(answer.text).toContain('herdr agent get n1r')
   expect(answer.text).toContain('herdr agent wait n1r')
-  const settled = settledShared('analyst', 'done')
+  const settled = settledAgent('analyst', 'done')
   const finished = await finish(settled.team, { agent: 'analyst' })
   expect(finished.text).toContain('agent: analyst (Herdr: n1r)')
   expect(settled.calls.find(call => call[2] === 'get')).toEqual(['herdr', 'agent', 'get', 'n1r'])
