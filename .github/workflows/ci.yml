@@ -28,21 +28,35 @@ jobs:
       - name: codex-computer-use helper tests
         run: node --test plugins/codex-computer-use/helper/test/*.test.mjs
 
-  # Neither command logs in or needs the typings Claude Code generates when it loads a plugin.
+  # Neither command logs in. The typings tsc needs are written by an interactive session, which starts without a login.
+  # The pinned row is the required `plugins` check; the latest row shows early what a newer CLI breaks and never fails
+  # the run.
   plugins:
+    name: ${{ matrix.cli == 'latest' && 'plugins-latest' || 'plugins' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    continue-on-error: ${{ matrix.cli == 'latest' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        cli: [pinned, latest]
     env:
       # The version the README says the repository is checked with; check-consistency fails when they differ.
       CLAUDE_CLI_PIN: 2.1.300
+      CLI: ${{ matrix.cli }}
       DISABLE_AUTOUPDATER: 1
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Install Claude Code
-        run: npm install --global "@anthropic-ai/claude-code@${CLAUDE_CLI_PIN}"
+      - name: Install Claude Code and TypeScript
+        run: |
+          version=$CLAUDE_CLI_PIN
+          [ "$CLI" = latest ] && version=latest
+          typescript=$(sed -n 's/^"npm:typescript" = "\(.*\)"$/\1/p' mise.toml)
+          npm install --global "@anthropic-ai/claude-code@${version}" "typescript@${typescript:?no TypeScript version in mise.toml}"
+          claude --version
       # Each step runs every plugin, then fails with the list of those that failed.
       - name: Validate the marketplace and every plugin
         run: |
@@ -61,7 +75,7 @@ jobs:
             claude plugin test "$source" || failed+=("$source")
           done
           if [ "${#failed[@]}" -gt 0 ]; then echo "test failed: ${failed[*]}" >&2; exit 1; fi
-      # The scaffold runs in a copy so the checkout stays clean. Its tsc is not run here: typings need an interactive session.
+      # The scaffold runs in a copy so the checkout stays clean.
       - name: Scaffold a sample plugin and check it
         run: |
           cp -R . "$RUNNER_TEMP/scaffold"
@@ -69,3 +83,20 @@ jobs:
           node scripts/new-plugin.mjs ci-sample "CI sample plugin."
           claude plugin validate --strict plugins/ci-sample
           claude plugin test plugins/ci-sample
+      # Same loop as `mise run plugins:types`, on Linux's `script`. A fresh runner has no login: onboarding and folder
+      # trust are marked done so the session starts and loads every plugin of the scaffold copy, ci-sample included.
+      - name: Type-check every plugin and the sample
+        working-directory: ${{ runner.temp }}/scaffold
+        run: |
+          node -e 'require("fs").writeFileSync(require("os").homedir() + "/.claude.json", JSON.stringify({ hasCompletedOnboarding: true, theme: "dark", projects: { [process.cwd()]: { hasTrustDialogAccepted: true } } }))'
+          args=()
+          for d in plugins/*/; do args+=(--plugin-dir "${d%/}"); done
+          ready() { for d in plugins/*/; do [ -f "${d}.claude-plugin/types/tsconfig.json" ] || return 1; done; }
+          { for _ in $(seq 120); do ready && break; sleep 1; done; sleep 2; printf '/exit\r'; } | script -q -e -c "claude ${args[*]}" /dev/null >/dev/null 2>&1 || true
+          ready || { echo "Claude Code did not write the typings" >&2; exit 1; }
+          failed=()
+          for d in plugins/*/; do
+            echo "==> tsc ${d%/}"
+            tsc -p "${d}tsconfig.json" || failed+=("${d%/}")
+          done
+          if [ "${#failed[@]}" -gt 0 ]; then echo "tsc failed: ${failed[*]}" >&2; exit 1; fi
