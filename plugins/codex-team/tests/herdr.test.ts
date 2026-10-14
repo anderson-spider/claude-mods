@@ -1,6 +1,6 @@
 import { effectiveName } from '../hooks/names'
 import { expect, test } from 'claude-code/testing'
-import { deliver, errorOf, isTeamName, MAX_PROMPT_BYTES } from '../hooks/herdr'
+import { deliver, errorOf, isTeamName, MAX_PROMPT_BYTES, paneLabel } from '../hooks/herdr'
 import type { DispatchInput } from '../hooks/herdr'
 import { agents, fail, fakeRun, ok } from './fake-run'
 
@@ -13,10 +13,11 @@ test('with no team agent alive, a shared role starts in a current task tab witho
   const { run, calls } = fakeRun([agents([{ name: 'other', pane_id: 'w1:p1' }]), [['herdr', 'tab', 'create'], ok({ root_pane: { pane_id: 'w1:p9' } })], [['herdr', 'agent', 'start'], ok({})], [['herdr', 'agent', 'prompt'], ok({})]])
 
   expect(await deliver(run, input())).toEqual({ agent: 'analyst', effectiveAgent: effectiveName('analyst', 'w1'), pane: 'w1:p9', started: true, existed: false, status: 'confirmed' })
-  expect(verbs(calls)).toEqual(['agent list', 'tab create', 'agent start', 'agent prompt'])
+  expect(verbs(calls)).toEqual(['agent list', 'tab create', 'agent start', 'pane rename', 'agent prompt'])
   expect(calls[1]).toEqual(['herdr', 'tab', 'create', '--workspace', 'w1', '--cwd', '/r', '--label', 'codex - fix', '--no-focus'])
   expect(calls[2]).toEqual(['herdr', 'agent', 'start', effectiveName('analyst', 'w1')!, '--kind', 'codex', '--pane', 'w1:p9', '--timeout', '60000', '--', '-m', 'm'])
-  expect(calls[3]).toEqual(['herdr', 'agent', 'prompt', effectiveName('analyst', 'w1')!, 'do it', '--wait', '--until', 'working', '--until', 'blocked', '--timeout', '15000'])
+  expect(calls[3]).toEqual(['herdr', 'pane', 'rename', 'w1:p9', 'analyst'])
+  expect(calls[4]).toEqual(['herdr', 'agent', 'prompt', effectiveName('analyst', 'w1')!, 'do it', '--wait', '--until', 'working', '--until', 'blocked', '--timeout', '15000'])
 })
 
 test('a shared role gets its own current task tab even with another shared role live', async () => {
@@ -36,7 +37,7 @@ test('every idle or done team agent is retired before a fresh pane session and p
     }
     expect(await deliver(run, input({ name, finishPrevious: async actual => { expect(actual).toBe(name); retired = true; return { closed: true, archived: true } } })))
       .toEqual({ agent: name, effectiveAgent: effectiveName(name, 'w1'), pane: 'new', started: true, existed: false, status: 'confirmed' })
-    expect(verbs(w.calls)).toEqual(['agent list', 'agent list', 'tab create', 'agent start', 'agent prompt'])
+    expect(verbs(w.calls)).toEqual(['agent list', 'agent list', 'tab create', 'agent start', 'pane rename', 'agent prompt'])
   }
 })
 
@@ -323,4 +324,12 @@ test('a typed startup refusal returns not_sent before any pane start or prompt',
     .toMatchObject({ status: 'not_sent', reason, started: false, existed: false })
   expect(w.calls).toEqual([['herdr', 'agent', 'list']])
   expect(recorded).toBe(false)
+})
+
+test('the pane shows the logical name with the started model and effort, and a refused rename changes nothing', async () => {
+  expect(paneLabel('dev-fix', ['-m', 'gpt-5.5-sol', '-c', 'model_reasoning_effort="high"', '-c', 'service_tier="priority"'])).toBe('dev-fix (gpt-5.5-sol/high)')
+  expect(paneLabel('analyst', ['-m', 'm'])).toBe('analyst')
+  const { run, calls } = fakeRun([agents([]), [['herdr', 'tab', 'create'], ok({ root_pane: { pane_id: 'w1:p9' } })], [['herdr', 'agent', 'start'], ok({})], [['herdr', 'pane', 'rename'], { exitCode: 1, stdout: '', stderr: 'no' }], [['herdr', 'agent', 'prompt'], ok({})]])
+  expect((await deliver(run, input())).status).toBe('confirmed')
+  expect(verbs(calls)).toEqual(['agent list', 'tab create', 'agent start', 'pane rename', 'agent prompt'])
 })
