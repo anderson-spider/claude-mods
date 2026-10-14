@@ -34,7 +34,7 @@ jobs:
     timeout-minutes: 15
     env:
       # The version the README says the repository is checked with; check-consistency fails when they differ.
-      CLAUDE_CLI_PIN: 2.1.296
+      CLAUDE_CLI_PIN: 2.1.300
       DISABLE_AUTOUPDATER: 1
     steps:
       - uses: actions/checkout@v4
