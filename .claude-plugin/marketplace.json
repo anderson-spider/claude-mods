@@ -18,11 +18,6 @@
       "description": "Control native Mac apps through Codex, with per-app approval and /codex-cu on|off."
     },
     {
-      "name": "codex-team",
-      "source": "./plugins/codex-team",
-      "description": "Dispatches Codex team agents (developer, analyst, architect) into named Herdr panes with confirmed delivery and short reports."
-    },
-    {
       "name": "git-master",
       "source": "./plugins/git-master",
       "description": "Registers git-master, a Haiku subagent for git work (status, branches, commits, rebase, push, pull and merge requests) that the session calls whenever a request is about git."
