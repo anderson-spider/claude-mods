@@ -9,4 +9,4 @@ plugins/codex-computer-use/helper/run/
 .scan*/
 
 # Local review and test reports (/ship, /live-test)
-.crew/
+.reports/

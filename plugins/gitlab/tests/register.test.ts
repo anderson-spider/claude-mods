@@ -197,3 +197,21 @@ test("an SSH alias remote uses its real host's token, found through ssh -G, and 
   expect(text(await $.tool.call({ tool: MR, action: 'get', iid: 7 } as never))).toMatch(/^The gitlab tokens option has no token for work\./)
   expect(sent).toHaveLength(1)
 })
+
+test('wait sleeps through a host process between polls, so the hook spends none of its own time', ON, async ($, on) => {
+  const pipelineUrl = `${WORK_API}/pipelines/90`
+  const running = { text: JSON.stringify({ id: 90, status: 'running', ref: 'main', sha: 'abcdef0123', web_url: 'u' }) }
+  const { runs } = world(on, {
+    api: {
+      [pipelineUrl]: [running, running, { text: JSON.stringify({ id: 90, status: 'success', ref: 'main', sha: 'abcdef0123', web_url: 'u' }) }],
+      [`${pipelineUrl}/jobs?scope%5B%5D=failed&per_page=100`]: { text: '[]' },
+      [`${pipelineUrl}/bridges?per_page=100`]: { text: '[]' },
+    },
+  })
+
+  const result = await $.tool.call({ tool: id('gitlab_pipeline'), action: 'wait', pipelineId: 90 } as never)
+
+  expect(result.isError).toBeUndefined()
+  expect(JSON.parse(text(result))).toMatchObject({ pipeline: { id: 90, status: 'success' }, finished: true, failed: [], downstream: [] })
+  expect(runs.filter((r) => r.startsWith('sleep'))).toEqual(['sleep 15', 'sleep 15'])
+})

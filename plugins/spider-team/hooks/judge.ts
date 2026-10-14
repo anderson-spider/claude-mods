@@ -21,3 +21,15 @@ export async function judgeAnswer(io: EffortIo, call: { answer: string; key?: st
     return nouls(answers, JUDGE_FLAGS)
   } catch (error) { return off(classifyFailure(error).failure.reason) }
 }
+
+// The `judgeEvery` option: 0 turns the judge off, 1 judges every completed run, N one in N. Anything that is not a finite
+// number keeps the default 1; a fraction rounds down and a negative is off.
+export function judgeEvery(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 1
+}
+// Counts the runs that would be judged and says which are due: the first, then one in `every`. The count lives in the
+// module, so a reload starts it over.
+export function createSampler(every: number): () => boolean {
+  let seen = 0
+  return () => every > 0 && seen++ % every === 0
+}

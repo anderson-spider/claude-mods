@@ -8,10 +8,9 @@ Marketplace of [Claude Code](https://claude.com/claude-code) plugins made by and
 | --- | --- |
 | [chatgpt](plugins/chatgpt/README.md) | Lets Claude ask your logged-in ChatGPT, or have it generate an image, in terminal-browser, Claude in Chrome or the Claude desktop app's built-in browser, and saves the result locally. |
 | [codex-computer-use](plugins/codex-computer-use/README.md) | Routes native Mac app control through Codex computer use from the ChatGPT app instead of Claude's own computer use, asking before each new app. |
-| [git-master](plugins/git-master/README.md) | Registers git-master, a Haiku subagent for git work (status, branches, commits, rebase, push, pull and merge requests) that the session calls whenever a request is about git. |
-| [gitlab](plugins/gitlab/README.md) | Opens, edits, comments on, reviews and (when asked, behind guards) merges GitLab merge requests, lists yours across projects, manages labels and runs and reads pipelines, jobs, artifacts and job errors, picking the host and its token from the git remote. |
+| [gitlab](plugins/gitlab/README.md) | Opens, edits, comments on, reviews and (when asked, behind guards) merges GitLab merge requests, lists yours across projects, lists open review threads, manages labels and runs, waits for and reads pipelines, jobs, artifacts and job errors, picking the host and its token from the git remote. |
 | [session-hud](plugins/session-hud/README.md) | A card above the prompt: model, context and cache; the five-hour and seven-day limits with their pace; the running subagents with their type, model and effort; what the last turn sent and added, edits and errors. |
-| [spider-team](plugins/spider-team/README.md) | Native Spider Team specialists with Jev model and effort routing. |
+| [spider-team](plugins/spider-team/README.md) | Read-only analyst, planner and reviewer subagents; Jev picks each one's model and effort from the task. |
 | [tailscale](plugins/tailscale/README.md) | Lets Claude query and modify your tailnet through the Tailscale API, with the key in the sensitive `apiKey` plugin option. |
 
 Each plugin README covers its setup, what it reads, sends and saves, and what its tests do and do not prove. Read it before sending private context or granting write access.
@@ -24,7 +23,6 @@ Requires Claude Code v2.1.287 or later. The repository is checked with v2.1.300 
 /plugin marketplace add anderson-spider/claude-mods
 /plugin install chatgpt@spider-claude-mods
 /plugin install codex-computer-use@spider-claude-mods
-/plugin install git-master@spider-claude-mods
 /plugin install gitlab@spider-claude-mods
 /plugin install session-hud@spider-claude-mods
 /plugin install spider-team@spider-claude-mods
@@ -35,11 +33,10 @@ From a local copy: `/plugin marketplace add ~/dev/personal/claude-mods`.
 
 ### One step on a Mac
 
-`scripts/bootstrap.sh` adds the marketplace, installs or updates chatgpt, codex-computer-use and tailscale, and installs the codex-computer-use helper (a LaunchAgent). The repository is private, so it borrows the `gh` token:
+`scripts/bootstrap.sh` adds the marketplace, installs or updates chatgpt, codex-computer-use and tailscale, and installs the codex-computer-use helper (a LaunchAgent):
 
 ```
-curl -fsSL -H "Authorization: Bearer $(gh auth token)" -H 'Accept: application/vnd.github.raw' \
-  https://api.github.com/repos/anderson-spider/claude-mods/contents/scripts/bootstrap.sh | sh
+curl -fsSL https://raw.githubusercontent.com/anderson-spider/claude-mods/main/scripts/bootstrap.sh | sh
 ```
 
 Add `-s -- --check` after `sh` for a dry run, or `-s -- --only tailscale,chatgpt` to limit the plugins. It is safe to rerun, skips the helper when the ChatGPT app is missing and never sets secrets: use `claude plugin configure tailscale` for `apiKey`.

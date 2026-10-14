@@ -1,6 +1,8 @@
-// gitlab_pipeline: the pipelines of a merge request or branch, their jobs and artifacts, and running, retrying,
-// cancelling or playing them. Downloading artifacts is not offered: the answer gives their URL, never the token.
+// gitlab_pipeline: the pipelines of a merge request or branch, their jobs and artifacts, waiting for one to end, and
+// running, retrying, cancelling or playing them. Downloading artifacts is not offered: the answer gives their URL, never the token.
 import type { McpToolInputs } from 'claude-code'
+import { GitlabError } from './api'
+import { failureSnippet } from './joblog'
 import { InputError, NoMrError, bool, clip, id, items, json, more, mrIid, need, paging, str, writable, type Ctx } from './context'
 
 export type PipelineAction = McpToolInputs['mcp__gitlab__gitlab_pipeline']['action']
@@ -119,13 +121,16 @@ async function artifacts(ctx: Ctx, input: PipelineInput): Promise<string> {
   })
 }
 
+/** pipelineId, else the latest pipeline of the MR or ref, read with a page of one. */
+async function pipelineId(ctx: Ctx, input: PipelineInput): Promise<number> {
+  const given = id(input.pipelineId, 'pipelineId')
+  if (given !== undefined) return given
+  const { from, list } = await pipelines(ctx, { ...input, page: undefined, perPage: 1 })
+  return need(list[0]?.id, `${from} has no pipeline.`)
+}
+
 async function jobs(ctx: Ctx, input: PipelineInput): Promise<string> {
-  let pipeline = id(input.pipelineId, 'pipelineId')
-  if (pipeline === undefined) {
-    const { from, list } = await pipelines(ctx, { ...input, page: undefined, perPage: 1 })
-    pipeline = list[0]?.id
-    if (pipeline === undefined) throw new InputError(`${from} has no pipeline.`)
-  }
+  const pipeline = await pipelineId(ctx, input)
   const page = await ctx.api.page(`/pipelines/${pipeline}/jobs`, paging(input, 100))
   const all = items<Job>(page)
   const bridges = (await ctx.api.get(`/pipelines/${pipeline}/bridges`, { per_page: 100 })) as Bridge[]
@@ -150,6 +155,62 @@ async function jobs(ctx: Ctx, input: PipelineInput): Promise<string> {
   )
 }
 
+/** Statuses of a pipeline that has not ended yet; any other status is final. */
+const ACTIVE = new Set(['created', 'waiting_for_resource', 'preparing', 'waiting_for_callback', 'pending', 'running', 'scheduled'])
+export const POLL_MS = 15_000
+const WAIT_MINUTES = 10
+const MAX_WAIT_MINUTES = 30
+/** Failed jobs whose log excerpt a wait reads; the others are listed for gitlab_job_log. */
+const LOGGED_JOBS = 5
+
+/**
+ * Waits for a pipeline (pipelineId, else the latest of the MR or ref, fixed when the wait starts) to end, polling every
+ * `POLL_MS` for at most `minutes`, then answers its final state with each failed job and an excerpt of its log.
+ */
+async function wait(ctx: Ctx, input: PipelineInput): Promise<string> {
+  const minutes = id(input.minutes, 'minutes') ?? WAIT_MINUTES
+  if (minutes > MAX_WAIT_MINUTES) throw new InputError(`minutes is at most ${MAX_WAIT_MINUTES}.`)
+  const pid = await pipelineId(ctx, input)
+  const started = ctx.clock.now()
+  const deadline = started + minutes * 60_000
+  let p = (await ctx.api.get(`/pipelines/${pid}`)) as Pipeline
+  for (let left = deadline - ctx.clock.now(); ACTIVE.has(p.status) && left > 0; left = deadline - ctx.clock.now()) {
+    await ctx.clock.sleep(Math.min(POLL_MS, left))
+    p = (await ctx.api.get(`/pipelines/${pid}`)) as Pipeline
+  }
+  const waited = Math.round((ctx.clock.now() - started) / 1000)
+  if (ACTIVE.has(p.status)) {
+    return json({ pipeline: pipelineView(p), finished: false, waited, next: `still ${p.status} after ${minutes} min: call wait again to keep waiting` })
+  }
+  const failed = items<Job>(await ctx.api.page(`/pipelines/${pid}/jobs`, { 'scope[]': 'failed', per_page: 100 })).filter((j) => j.status === 'failed')
+  // the jobs that fail the pipeline come first: an allowed failure is only a warning
+  failed.sort((a, b) => Number(a.allow_failure ?? false) - Number(b.allow_failure ?? false))
+  const logged = await Promise.all(
+    failed.slice(0, LOGGED_JOBS).map(async (j) => {
+      try {
+        return { ...jobView(j), log: failureSnippet(await ctx.api.text(`/jobs/${j.id}/trace`)) }
+      } catch (err) {
+        if (!(err instanceof GitlabError)) throw err
+        return { ...jobView(j), log: `(log not readable: ${err.status})` }
+      }
+    }),
+  )
+  const bridges = (await ctx.api.get(`/pipelines/${pid}/bridges`, { per_page: 100 })) as Bridge[]
+  return clip(
+    json({
+      pipeline: pipelineView(p),
+      finished: true,
+      waited,
+      failed: [...logged, ...failed.slice(LOGGED_JOBS).map(jobView)],
+      downstream: bridges
+        .filter((b) => b.status === 'failed' || b.downstream_pipeline?.status === 'failed')
+        .map((b) => ({ name: b.name, status: b.status, pipeline: b.downstream_pipeline?.id, pipelineStatus: b.downstream_pipeline?.status })),
+      ...(failed.length > LOGGED_JOBS ? { more: 'read the other failed jobs with gitlab_job_log' } : {}),
+    }),
+    'read the failed jobs with gitlab_job_log',
+  )
+}
+
 export async function pipeline(ctx: Ctx, input: PipelineInput): Promise<string> {
   const action = input.action as PipelineAction
   switch (action) {
@@ -159,6 +220,8 @@ export async function pipeline(ctx: Ctx, input: PipelineInput): Promise<string> 
     }
     case 'jobs':
       return jobs(ctx, input)
+    case 'wait':
+      return wait(ctx, input)
     case 'run':
       return run(ctx, input)
     case 'artifacts':

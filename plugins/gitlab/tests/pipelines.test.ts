@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { pipeline, variables } from '../hooks/pipelines'
+import { POLL_MS, pipeline, variables } from '../hooks/pipelines'
 import { MR, THEIRS, fakeCtx, paged } from './fake-api'
 
 const P = (id: number, status: string) => ({ id, status, ref: 'feature/x', sha: 'abcdef0123', source: 'push', web_url: `u/${id}` })
@@ -175,4 +175,68 @@ test('artifacts lists a job artifacts with their expiry and gives URLs that carr
   })
   expect(JSON.parse(await pipeline(ctx, { action: 'artifacts', jobId: 6 }))).toEqual({ job: 6, name: 'lint', status: 'success', files: [] })
   await expect(pipeline(ctx, { action: 'artifacts' })).rejects.toThrow('artifacts needs jobId (from jobs).')
+})
+
+test('wait polls the latest pipeline every 15 seconds until it ends, then answers each failed job with an excerpt of its log, blocking ones first', async () => {
+  let polls = 0
+  const { ctx, calls, clock } = fakeCtx({
+    'GET /merge_requests': [MR],
+    'GET /merge_requests/7/pipelines': [P(90, 'running')],
+    'GET /pipelines/90': () => (++polls < 3 ? P(90, polls === 1 ? 'pending' : 'running') : P(90, 'failed')),
+    'GET /pipelines/90/jobs': [
+      { ...JOBS[1], id: 5, name: 'flaky', allow_failure: true },
+      JOBS[1],
+      { ...JOBS[1], id: 6, name: 'e2e' },
+    ],
+    'GET /jobs/5/trace': 'warning only',
+    'GET /jobs/2/trace': 'setup\nError: expected 1 to be 2\ndone',
+    'GET /pipelines/90/bridges': [
+      { name: 'deploy', stage: 'post', status: 'success', downstream_pipeline: { id: 95, status: 'failed' } },
+      { name: 'docs', stage: 'post', status: 'success', downstream_pipeline: { id: 97, status: 'success' } },
+    ],
+  })
+
+  const out = JSON.parse(await pipeline(ctx, { action: 'wait' }))
+
+  expect(clock.slept).toEqual([POLL_MS, POLL_MS])
+  expect(calls.find((c) => c.path === '/pipelines/90/jobs')?.query).toEqual({ 'scope[]': 'failed', per_page: 100 })
+  expect(out).toMatchObject({ pipeline: { id: 90, status: 'failed' }, finished: true, waited: 30 })
+  expect(out.failed.map((j: { name: string }) => j.name)).toEqual(['unit', 'e2e', 'flaky'])
+  expect(out.failed[0].log).toContain('    2| Error: expected 1 to be 2')
+  expect(out.failed[1].log).toBe('(log not readable: 404)')
+  expect(out.failed[2]).toMatchObject({ allowFailure: true, log: '    1| warning only' })
+  expect(out.downstream).toEqual([{ name: 'deploy', status: 'success', pipeline: 95, pipelineStatus: 'failed' }])
+})
+
+test('wait stops at its time limit with the pipeline still running, and refuses more than 30 minutes before any call', async () => {
+  const { ctx, clock, calls } = fakeCtx({ 'GET /pipelines/90': P(90, 'running') })
+
+  const out = JSON.parse(await pipeline(ctx, { action: 'wait', pipelineId: 90, minutes: 1 }))
+
+  expect(out).toEqual({
+    pipeline: { id: 90, status: 'running', ref: 'feature/x', sha: 'abcdef01', source: 'push', url: 'u/90' },
+    finished: false,
+    waited: 60,
+    next: 'still running after 1 min: call wait again to keep waiting',
+  })
+  expect(clock.slept).toEqual([POLL_MS, POLL_MS, POLL_MS, POLL_MS])
+  expect(calls.filter((c) => c.path === '/pipelines/90')).toHaveLength(5)
+
+  const before = calls.length
+  await expect(pipeline(ctx, { action: 'wait', pipelineId: 90, minutes: 31 })).rejects.toThrow('minutes is at most 30.')
+  expect(calls).toHaveLength(before)
+})
+
+test('wait reads the logs of the first five failed jobs and lists the rest for gitlab_job_log', async () => {
+  const failed = Array.from({ length: 7 }, (_, i) => ({ ...JOBS[1], id: 10 + i, name: `job${i}` }))
+  const routes: Record<string, unknown> = { 'GET /pipelines/90': P(90, 'failed'), 'GET /pipelines/90/jobs': failed, 'GET /pipelines/90/bridges': [] }
+  for (const j of failed) routes[`GET /jobs/${j.id}/trace`] = `error in ${j.name}`
+  const { ctx, calls, clock } = fakeCtx(routes as never)
+
+  const out = JSON.parse(await pipeline(ctx, { action: 'wait', pipelineId: 90 }))
+
+  expect(clock.slept).toEqual([])
+  expect(out.failed.map((j: { log?: string }) => j.log !== undefined)).toEqual([true, true, true, true, true, false, false])
+  expect(out.more).toBe('read the other failed jobs with gitlab_job_log')
+  expect(calls.filter((c) => c.path.endsWith('/trace'))).toHaveLength(5)
 })

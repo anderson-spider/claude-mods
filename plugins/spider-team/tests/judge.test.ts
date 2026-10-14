@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { judgeAnswer } from '../hooks/judge'
+import { createSampler, judgeAnswer, judgeEvery } from '../hooks/judge'
 import { createBreaker, createGate } from '../hooks/jev'
 import { JUDGE_FLAGS, JUDGE_QUESTIONS } from '../hooks/router'
 import { ports } from './host'
@@ -70,4 +70,11 @@ test('a Noul that is missing, not a number or outside 0..1 makes the whole judge
     expect(await judge(h, 'Done.')).toBeNull()
     expect(h.logs).toEqual(['spider-team: judge off (malformed)'])
   }
+})
+test('judgeEvery reads 0 as off, N as one in N, and anything not a number as every run', async () => {
+  expect([0, 1, 3, 2.9, -2, Number.NaN, Infinity, '3', undefined].map(judgeEvery)).toEqual([0, 1, 3, 2, 0, 1, 1, 1, 1])
+  const take = (every: number) => { const due = createSampler(every); return Array.from({ length: 7 }, () => due()) }
+  expect(take(1)).toEqual(Array(7).fill(true))
+  expect(take(3)).toEqual([true, false, false, true, false, false, true])
+  expect(take(0)).toEqual(Array(7).fill(false))
 })

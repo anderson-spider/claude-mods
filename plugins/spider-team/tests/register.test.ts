@@ -284,3 +284,28 @@ test('a failing judge opens only its own breaker: routing still asks Jev afterwa
   expect(h.logs).toContain('spider-team: judge off (breaker)')
   expect(h.ledger().filter(l => l.kind === 'decision').map(l => l.source)).toEqual(Array(6).fill('jev'))
 })
+test('by default the judge asks about every completed run', async ($, on) => {
+  const h = world(on); h.env.JEV_API_KEY = 'test-key'
+  on('tool.call', { tool: 'Agent' }, () => finished(`${ANSWER} done`) as never)
+  await started($)
+  for (let n = 0; n < 4; n++) await $.tool.call(call('planner', { tool_use_id: `toolu_s${n}` }) as never)
+  // The default judges every run: four routing requests and four judge requests.
+  expect(h.requests.filter(r => r.body.includes('"report"'))).toHaveLength(4)
+})
+test('judgeEvery 2 judges the first run and every second one after it', { options: { judgeEvery: 2 } }, async ($, on) => {
+  const h = world(on); h.env.JEV_API_KEY = 'test-key'
+  on('tool.call', { tool: 'Agent' }, () => finished(`${ANSWER} done`) as never)
+  await started($)
+  for (let n = 0; n < 4; n++) await $.tool.call(call('planner', { tool_use_id: `toolu_s${n}` }) as never)
+  expect(h.requests.filter(r => r.body.includes('"report"'))).toHaveLength(2)
+  expect(h.ledger().filter(l => l.kind === 'outcome').map(l => l.judge === null)).toEqual([false, true, false, true])
+})
+test('judgeEvery 0 sends no judge request and writes every outcome with judge null', { options: { judgeEvery: 0 } }, async ($, on) => {
+  const h = world(on); h.env.JEV_API_KEY = 'test-key'
+  on('tool.call', { tool: 'Agent' }, () => finished(`${ANSWER} done`) as never)
+  await started($)
+  for (let n = 0; n < 3; n++) await $.tool.call(call('planner', { tool_use_id: `toolu_o${n}` }) as never)
+  expect(h.requests).toHaveLength(3)
+  expect(h.ledger().filter(l => l.kind === 'outcome').map(l => l.judge)).toEqual([null, null, null])
+  expect(h.logs.some(l => l.includes('judge off'))).toBe(false)
+})

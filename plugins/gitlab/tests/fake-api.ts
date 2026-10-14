@@ -40,10 +40,12 @@ export function fakeCtx(routes: Record<string, Answer>, branch: string | null = 
     send: async (method, path, body) => answer({ method, path, body }),
     url: (path) => `https://gitlab.example.com/api/v4/projects/g%2Fp${path}`,
   }
-  const ctx: Ctx = makeCtx(api, async () => branch ?? undefined, foreign)
+  // a clock that only moves when the code sleeps
+  const clock = { at: 0, slept: [] as number[] }
+  const ctx: Ctx = makeCtx(api, async () => branch ?? undefined, { now: () => clock.at, sleep: async (ms) => void (clock.slept.push(ms), (clock.at += ms)) }, foreign)
   /** The calls that write (POST, PUT, DELETE). */
   const writes = () => calls.filter((c) => c.method !== 'GET')
-  return { ctx, calls, writes }
+  return { ctx, calls, writes, clock }
 }
 
 export const MR = {

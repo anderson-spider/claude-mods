@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { cleanLog, errorExcerpt, jobLog } from '../hooks/joblog'
+import { SNIPPET_CHARS, cleanLog, errorExcerpt, failureSnippet, jobLog } from '../hooks/joblog'
 import { fakeCtx } from './fake-api'
 
 const ESC = '\x1b'
@@ -61,4 +61,16 @@ test('errors mode heads the excerpt with the job and its failure reason; tail an
   await expect(jobLog(ctx, { jobId: 2, pattern: '(' })).rejects.toThrow('pattern is not a valid regular expression.')
   await expect(jobLog(ctx, { jobId: 2, mode: 'head' })).rejects.toThrow('mode must be errors, tail or full.')
   await expect(jobLog(ctx, {})).rejects.toThrow(/needs jobId/)
+})
+
+test('failureSnippet keeps the end of the error excerpt, cut at a line start', () => {
+  const log = Array.from({ length: 400 }, (_, i) => `error ${i + 1} ${'x'.repeat(30)}`).join('\n')
+  const snippet = failureSnippet(log)
+  const shown = snippet.split('\n')
+
+  expect(snippet.length).toBeLessThanOrEqual(SNIPPET_CHARS + 2)
+  expect(shown[0]).toBe('…')
+  expect(shown[1]).toMatch(/^\s+\d+\| error \d+ x+$/)
+  expect(shown.at(-1)).toBe(`  400| error 400 ${'x'.repeat(30)}`)
+  expect(failureSnippet('ok\nError: boom')).toBe('    1| ok\n    2| Error: boom')
 })
