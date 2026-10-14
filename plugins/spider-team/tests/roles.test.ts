@@ -25,7 +25,7 @@ test('the planner answers with one Markdown plan of steps, files, invariants and
 })
 test('the reviewer judges the lead checkout from the merge base, with uncommitted and untracked files, and blocks what it cannot see', () => {
   const prompt = SPECS.reviewer.prompt
-  expect(prompt).toContain('the commits from the merge base with the target branch named in the brief (git merge-base <target> HEAD) to HEAD, the staged and unstaged changes, and every untracked file listed by git status, read in full')
+  expect(prompt).toContain('the commits from the merge base with the target branch named in the brief (git merge-base <target> HEAD) to HEAD, the staged and unstaged changes, and every untracked file listed by git ls-files --others --exclude-standard, read in full')
   expect(prompt).toContain('Use read-only git commands only (status, log, diff, show, merge-base, ls-files).')
   expect(prompt).toContain('Judge the complete resulting diff, not only the latest fixes.')
   expect(prompt).toContain('If you cannot inspect any of these parts, answer BLOCKED and say which.')
