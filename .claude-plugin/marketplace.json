@@ -28,6 +28,11 @@
       "description": "Registers git-master, a Haiku subagent for git work (status, branches, commits, rebase, push, pull and merge requests) that the session calls whenever a request is about git."
     },
     {
+      "name": "gitlab",
+      "source": "./plugins/gitlab",
+      "description": "Work on GitLab merge requests and pipelines of the current repository, picking the host and token from its git remote."
+    },
+    {
       "name": "session-hud",
       "source": "./plugins/session-hud",
       "description": "A three-row card above the prompt: model, context, cache and cost; the five-hour and seven-day limits with their pace; the last turn, edits and errors."

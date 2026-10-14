@@ -17,6 +17,7 @@ Claude Code **function hooks mods** marketplace.
 - Native Mac app control through Codex: `plugins/codex-computer-use/AGENTS.md`.
 - Codex team in Herdr, led by the session (developer, analyst, architect): `plugins/codex-team/AGENTS.md`.
 - Git subagent on Haiku (git-master): `plugins/git-master/AGENTS.md`.
+- GitLab merge requests and pipelines of the current repository, host and token from its remote: `plugins/gitlab/AGENTS.md`.
 - Session card above the prompt (model, context, limits, the turn, edits and errors): `plugins/session-hud/AGENTS.md`.
 - Native Spider Team specialists: `plugins/spider-team/AGENTS.md`.
 - Tailscale API tools: `plugins/tailscale/AGENTS.md`.
