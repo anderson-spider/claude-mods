@@ -89,6 +89,8 @@ After `## Steps`, keep a `## Dispatches` section, one line per dispatch, written
 
 6. **Record** the dispatch as an `open` line in `## Dispatches` (logical agent, effective Herdr name, slug, report path, delivery).
 
+The `allowAstra` plugin option defaults to true and permits Astra pins and automatic `astra-high` only while its effective permission is on. Change it through `/config` or `/plugin`; user settings use `pluginConfigs["codex-team@spider-claude-mods"].options.allowAstra`. A project/local declaration or unreadable settings turns Astra off. Astra model/profile pins and effort-only pins inheriting Astra are refused with `codex-team: Astra is not allowed by the plugin configuration; nothing was started.` Pins bypass Jev and its key settings while Astra permission checks still apply. Treat this refusal as `not_sent`; revise the requested pin or configuration before dispatching again.
+
 Done: delivery `confirmed`, its wait running, the step `implementing`, its `## Dispatches` line open.
 
 ## 4. When an agent comes back

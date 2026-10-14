@@ -33,7 +33,7 @@ export type DispatchInput = {
   workspace: string
   cwd: string
   /** Resolve startup flags only for a new session, after all guards and previous-agent retirement. */
-  startArgs: (name: string) => Promise<readonly string[]>
+  startArgs: (name: string) => Promise<readonly string[] | { refusal: string }>
   prompt: string
   /** Called before writing the prompt, with whether this call started the agent, so its `unknown` record is accurate. */
   beforeSend?: (started: boolean, name: string) => Promise<void>
@@ -142,6 +142,7 @@ export async function deliver(run: Run, input: DispatchInput): Promise<Delivery>
     if (changed) return changed
   }
   const args = await input.startArgs(input.name)
+  if ('refusal' in args) return { ...base, status: 'not_sent', reason: args.refusal }
   const made = await newPane(run, input, agents.filter(agent => agent.workspace_id === input.workspace && logicalName(agent.name, input.workspace) !== undefined))
   if (typeof made !== 'string') return { ...base, status: 'not_sent', reason: made.reason }
   const pane = made

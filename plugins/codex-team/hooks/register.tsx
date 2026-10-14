@@ -26,8 +26,9 @@ function dagrIo($: Dollar): PublishIo {
 }
 
 /** The host access the team needs, built from one hook's `$`. */
-function teamIo($: Dollar): TeamIo {
+function teamIo($: Dollar, allowAstra: unknown): TeamIo {
   return {
+    allowAstra,
     run: async (argv, init) => {
       const done = await $.process.run(argv, { timeoutMs: init?.timeoutMs })
       return { exitCode: done.exitCode, stdout: done.stdout, stderr: done.stderr, isStdoutTruncated: done.isStdoutTruncated, isStderrTruncated: done.isStderrTruncated }
@@ -42,7 +43,7 @@ function teamIo($: Dollar): TeamIo {
     sleep: ms => $.clock.sleep(ms),
     settings: async source => {
       const settings = await $.settings.read({ source })
-      return { env: settings?.env }
+      return { env: settings?.env, pluginConfigs: settings?.pluginConfigs }
     },
     jev: {
       fetch: async (url, init) => {
@@ -66,7 +67,7 @@ function teamIo($: Dollar): TeamIo {
   }
 }
 
-export const register: Register = (on) => {
+export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     await $.tool.register({
       name: 'dispatch',
@@ -80,7 +81,7 @@ export const register: Register = (on) => {
           task: { type: 'string', description: 'Required except for reviewer: a self-contained brief. For reviewer, optional extra focus. Accepts @profile and !dimension=value pins outside code and quotes. Each dispatch starts a fresh session; followup briefs must be self-contained.' },
           slug: { type: 'string', description: 'Required task id: lowercase letters, digits and hyphens, at most 22 characters. Never truncated.' },
           cwd: { type: 'string', description: 'Developer only: the absolute path of the task worktree, never the repository itself.' },
-          model: { type: 'string', enum: ['gpt-6.1-sol', 'gpt-6-luna'], description: 'Pins model at a new session start for every role and skips Jev; omitted effort uses the role default.' },
+          model: { type: 'string', enum: ['gpt-6.1-sol', 'gpt-6-luna', 'gpt-6-astra'], description: 'Pins model at a new session start for every role and skips Jev; omitted effort uses the role default. Astra pins require allowAstra permission.' },
           effort: { type: 'string', enum: ['low', 'medium', 'high', 'xhigh'], description: 'Pins effort at a new session start for every role and skips Jev; omitted model uses the role default. Astra caps xhigh to high; each dispatch starts fresh.' },
         },
         required: ['role', 'slug'],
@@ -100,13 +101,13 @@ export const register: Register = (on) => {
 
   on('tool.call', { tool: 'mcp__codex-team__dispatch' }, async ($, e, next) => {
     if (!('tool' in e)) return next(e)
-    const answer = await dispatch(teamIo($), e).catch(() => ({ ok: false, text: 'codex-team: the dispatch failed unexpectedly; check `herdr agent list` before trying again.' }))
+    const answer = await dispatch(teamIo($, options.allowAstra), e).catch(() => ({ ok: false, text: 'codex-team: the dispatch failed unexpectedly; check `herdr agent list` before trying again.' }))
     return { result: answer.text }
   })
 
   on('tool.call', { tool: 'mcp__codex-team__finish' }, async ($, e, next) => {
     if (!('tool' in e)) return next(e)
-    const answer = await finish(teamIo($), e).catch(() => ({ ok: false, text: 'codex-team: finish failed unexpectedly; check `herdr agent list` before trying again.' }))
+    const answer = await finish(teamIo($, options.allowAstra), e).catch(() => ({ ok: false, text: 'codex-team: finish failed unexpectedly; check `herdr agent list` before trying again.' }))
     return { result: answer.text }
   })
 

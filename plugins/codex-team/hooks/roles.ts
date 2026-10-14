@@ -6,11 +6,11 @@ export type Role = (typeof ROLES)[number]
 export const EFFORTS = ['low', 'medium', 'high', 'xhigh'] as const
 export type Effort = (typeof EFFORTS)[number]
 
-export const MODELS = ['gpt-6.1-sol', 'gpt-6-luna'] as const
+export const MODELS = ['gpt-6.1-sol', 'gpt-6-luna', 'gpt-6-astra'] as const
 export type Model = (typeof MODELS)[number]
 export type ProfilePair = { model: string; effort: Effort }
 
-const isAstra = (model: string): boolean => model.toLowerCase().includes('astra')
+export const isAstra = (model: string): boolean => model.toLowerCase().includes('astra')
 
 /** The startup limit applies after any pinned, Jev or default choice, so flags and decision records agree. */
 export function startEffort(model: string, effort: Effort): { effort: Effort; reason: string | null } {
