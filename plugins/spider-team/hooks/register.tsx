@@ -1,13 +1,17 @@
 import type { BuiltinToolInputs, Hook, Register } from 'claude-code'
-import { SPECS, capEffort, roleOf } from './roles'
-import { assessProfile, INVALID_PINS, parsePins } from './effort'
+import { SPECS, roleOf } from './roles'
+import { defaultOf } from './router'
+import { assessRoute } from './effort'
 import type { EffortIo } from './effort'
 import { createBreaker, createGate } from './jev'
+import { afterAgentCall, afterTurn, appendLine, createPending, decisionLine, formatSummary, ledgerPath, parseLedger, readAll, summarize } from './ledger'
+import type { FileIo, Line, TurnEnd } from './ledger'
 
 type Dollar = Parameters<Hook<'session.start'>>[0]
 export const BASE_REF = 'spider-team: developer needs worktree.baseRef "head" in the merged settings so its worktree starts from your HEAD.'
-export const PINS = `spider-team: ${INVALID_PINS}.`
-export const EMPTY = 'spider-team: empty task after directives.'
+export const EMPTY = 'spider-team: empty task.'
+export const STATS_COMMAND = 'spider-team-stats'
+export const STATS_DESCRIPTION = 'Summarize the local spider-team routing records: runs, failures, duration, cost and Jev confidence per role and pair.'
 const breaker = createBreaker(() => Date.now())
 const gate = createGate()
 function io($: Dollar): EffortIo {
@@ -25,37 +29,82 @@ function io($: Dollar): EffortIo {
     log: text => $.ui.log(text, { to: 'debug' }),
   }
 }
+const files = ($: Dollar): FileIo => ({
+  exists: path => $.fs.exists(path),
+  read: async path => { const text = await $.fs.read(path); return typeof text === 'string' ? text : '' },
+  write: (path, text) => $.fs.write(path, text),
+})
+// The ledger is advisory: a failure to write or read it is one fixed debug line and never reaches the dispatch.
+async function observe($: Dollar, what: string, work: () => Promise<void>) {
+  try { await work() } catch { try { $.ui.log(`spider-team: ${what} not recorded`, { to: 'debug' }) } catch { /* Logging cannot change the host result. */ } }
+}
+async function record($: Dollar, what: string, line: Line) {
+  await observe($, what, async () => {
+    const home = await $.env.get('HOME')
+    if (home) await appendLine(files($), ledgerPath(home), line)
+  })
+}
+const stamp = () => new Date().toISOString()
+
 export const register: Register = on => {
+  // Background agents wait here for their turn.complete; module state of this load only, dropped on reload.
+  const background = createPending(200)
   on('session.start', async ($, e, next) => {
     await $.agent.register({ ...SPECS.analyst, name: 'analyst' })
     await $.agent.register({ ...SPECS.developer, name: 'developer' })
     await $.agent.register({ ...SPECS.reviewer, name: 'reviewer' })
     await $.agent.register({ ...SPECS.architect, name: 'architect' })
+    await $.command.register({ name: STATS_COMMAND, description: STATS_DESCRIPTION })
     return next(e)
   })
-  // Picks model and effort for a Spider role: pins, then Jev, then the role default. Effort never exceeds high.
+  // Picks model and effort for a Spider role: Jev through the router table and the role floor, else the role default. The
+  // call's own model and effort are overwritten. The decision and the outcome go to the local ledger; the result passes on as it came.
   on('tool.call', { tool: 'Agent' }, async ($, e, next) => {
     const call = e as BuiltinToolInputs['Agent'] & { tool_use_id: string }
     const role = roleOf(call.subagent_type)
     if (!role) return next(e)
-    let parsed
-    try { parsed = parsePins(call.prompt, { model: call.model, effort: call.effort }) } catch { return { deny: PINS } }
-    if (!parsed.task.trim()) return { deny: EMPTY }
+    if (!call.prompt.trim()) return { deny: EMPTY }
     if (role === 'developer') {
       const settings = await $.settings.read() as { worktree?: { baseRef?: string } }
       if (settings.worktree?.baseRef !== 'head') return { deny: BASE_REF }
     }
-    const choice = await assessProfile(io($), {
-      role, task: parsed.task, pins: parsed.pins,
+    const choice = await assessRoute(io($), {
+      role, task: call.prompt,
       home: await $.env.get('HOME') ?? '', root: await $.session.root(), key: await $.env.get('JEV_API_KEY'),
     })
-    const model = choice.model, effort = capEffort(choice.effort)
+    const model = choice.model, effort = choice.effort
     $.ui.log(`spider-team: ${role} → ${model}/${effort} (${choice.source})`, { to: 'debug' })
+    await record($, 'decision', decisionLine({ ts: stamp(), toolUseId: call.tool_use_id, role, choice }))
     // The pair shows beside the task in the transcript.
-    return next({ ...e, prompt: parsed.task, description: `${call.description} (${model}/${effort})`, model, effort })
+    const result = await next({ ...e, description: `${call.description} (${model}/${effort})`, model, effort })
+    await observe($, 'outcome', async () => {
+      const ended = afterAgentCall({ toolUseId: call.tool_use_id, role, pair: { model, effort } }, result, stamp())
+      if (!ended) return
+      if ('launched' in ended) background.add(ended.launched, { toolUseId: call.tool_use_id, role, pair: { model, effort } })
+      else await record($, 'outcome', ended.line)
+    })
+    return result
   }).catch(async ($, e, next) => {
-    // Routing is advisory: a failure before dispatch runs the call as asked, with the role's own model and effort.
-    try { $.ui.log('spider-team: routing failed; dispatching unchanged.', { to: 'debug' }) } catch { /* Never block dispatch on logging. */ }
-    return next(e)
+    // Routing is advisory: a failure before dispatch runs the call with the role's default pair, never the lead's.
+    if (next.called) return next(e)
+    try { $.ui.log('spider-team: routing failed; dispatching the role default.', { to: 'debug' }) } catch { /* Never block dispatch on logging. */ }
+    const call = e as BuiltinToolInputs['Agent']
+    let pair
+    try { const role = roleOf(call.subagent_type); pair = role && defaultOf(role) } catch { pair = undefined }
+    return pair ? next({ ...e, description: `${call.description} (${pair.model}/${pair.effort})`, model: pair.model, effort: pair.effort }) : next(e)
+  })
+  // A background agent ends here, with its duration and usage; the host result passes on as it came.
+  on('turn.complete', {}, async ($, e, next) => {
+    const result = await next(e)
+    const pending = e.agentId ? background.take(e.agentId) : undefined
+    if (pending) await record($, 'outcome', afterTurn(pending, e as TurnEnd, stamp()))
+    return result
+  })
+  on('command.run', { command: STATS_COMMAND }, async $ => {
+    try {
+      const home = await $.env.get('HOME')
+      if (!home) return { text: 'spider-team: no home directory, so no routing records.' }
+      return { text: formatSummary(summarize(parseLedger(await readAll(files($), ledgerPath(home))))) }
+    } catch { return { text: 'spider-team: the routing records could not be read.' } }
   })
 }

@@ -1,4 +1,4 @@
-// The Jev client for profile routing. Pure: the HTTP call, the timer and the clock are injected and nothing here touches
+// The Jev client for model and effort routing. Pure: the HTTP call, the timer and the clock are injected and nothing here touches
 // `$`. Endpoint, body and answer shape are those of the TypeSafe SDK's `systemOne` (POST /v1/systemone, bearer key,
 // `{ model, state, questions }`, answers keyed by question id), checked live. `ask` resolves with the answers or throws a
 // JevFailure whose `reason` is typed; its message holds a status or a reason code, never a response body or the key.

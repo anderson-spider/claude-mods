@@ -1,5 +1,5 @@
 // Shared fake ports and host boundary. No model calls or network requests run.
-import type { AgentSpec, On } from 'claude-code'
+import type { AgentSpec, CommandSpec, On } from 'claude-code'
 import { mock } from 'claude-code/testing'
 import type { EffortIo } from '../hooks/effort'
 import { createBreaker, createGate } from '../hooks/jev'
@@ -7,7 +7,7 @@ import { createBreaker, createGate } from '../hooks/jev'
 export function ports() {
   const requests: { url: string; body: string; headers: Record<string, string> }[] = [], logs: string[] = [], settingsReads: string[] = []
   const faults = { settings: false, http: 200 }
-  const answers: Record<string, unknown> = { difficulty: { probabilities: { '0': 1 } }, duration: { probabilities: { '0': 1 } }, scope: { probabilities: { '0': 1 } }, task_type: { probabilities: { research: 1 } } }
+  const answers: Record<string, unknown> = { difficulty: { probabilities: { '0': 1 } }, duration: { probabilities: { '0': 1 } } }
   const io: EffortIo & { home: string; root: string; key?: string; baseRef?: string } = {
     home: '/home/u', root: '/repo', baseRef: 'head',
     settings: async source => { settingsReads.push(source); if (faults.settings) throw new Error('settings unavailable'); return {} },
@@ -21,8 +21,14 @@ export function ports() {
 }
 
 export function world(on: On) {
-  const p = ports(), specs: AgentSpec[] = [], env: Record<string, string> = { HOME: '/home/u' }
+  const p = ports(), specs: AgentSpec[] = [], commands: CommandSpec[] = [], env: Record<string, string> = { HOME: '/home/u' }
+  // The local file system: every file the plugin writes, whole, by path.
+  const files = new Map<string, string>(), fsFaults = { read: false, write: false }, written: string[] = []
   mock.clock(on)
+  on('command.register', (_$, e) => { commands.push(e); return { value: { command: e.name } } })
+  on('fs.exists', (_$, e) => ({ value: files.has(e.path) }))
+  on('fs.read', (_$, e) => { if (fsFaults.read || !files.has(e.path)) throw new Error('read failed'); return { value: files.get(e.path)! } })
+  on('fs.write', (_$, e) => { if (fsFaults.write) throw new Error('write failed'); written.push(e.text); files.set(e.path, e.text); return { value: undefined } })
   on('agent.register', (_$, e) => { specs.push(e); return { value: { agent: `spider-team:${e.name}` } } })
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('session.root', () => ({ value: p.io.root }))
@@ -30,8 +36,11 @@ export function world(on: On) {
   on('settings.read', async (_$, e) => ({ value: e.source ? await p.io.settings(e.source as 'project' | 'local') : { worktree: { baseRef: p.io.baseRef } } }) as never)
   on('http.fetch', async (_$, e) => ({ value: { ...await p.io.jev.fetch(e.url, e.init as never), ok: true, headers: {} } }))
   on('ui.log', (_$, e) => { p.io.log(e.text); return { value: undefined } })
-  return { ...p, specs, env }
+  /** The ledger's lines in the order written: `files` holds the current text, `ledger()` parses it. */
+  const ledger = () => (files.get(LEDGER) ?? '').split('\n').filter(Boolean).map(line => JSON.parse(line) as Record<string, any>)
+  return { ...p, specs, commands, env, files, fsFaults, written, ledger }
 }
+export const LEDGER = '/home/u/.claude/spider-team/routes.jsonl'
 export async function started($: { session: { start: (e: never) => Promise<unknown> } }) {
   await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true } as never)
 }

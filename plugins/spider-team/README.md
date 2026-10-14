@@ -1,6 +1,6 @@
 # spider-team
 
-Four native Claude subagents, with optional Jev model and effort selection. The session stays the lead; the host owns spawning, background delivery and worktree cleanup.
+Four native Claude subagents, with Jev model and effort selection and local routing records. The session stays the lead; the host owns spawning, background delivery and worktree cleanup.
 
 ```text
 /plugin install spider-team --marketplace anderson-spider/claude-mods
@@ -10,14 +10,14 @@ Four native Claude subagents, with optional Jev model and effort selection. The 
 
 Invoke `/spider-team:using-spider-team` for the lead's workflow. Call the native `Agent` tool with one of these `subagent_type` values and a self-contained task:
 
-| Type | Default | Access |
-| --- | --- | --- |
-| `spider-team:analyst` | haiku / medium | Read and investigate. |
-| `spider-team:architect` | opus / high | Design changes and check invariants. |
-| `spider-team:developer` | sonnet / medium | Implement and test in its own worktree. |
-| `spider-team:reviewer` | sonnet / high | Review a developer worktree with read-only git commands. |
+| Type | Default | Floor | Access |
+| --- | --- | --- | --- |
+| `spider-team:analyst` | haiku / high | haiku / medium | Read and investigate. |
+| `spider-team:architect` | opus / medium | opus / low | Design changes and check invariants. |
+| `spider-team:developer` | sonnet / high | haiku / high | Implement, test and commit in its own worktree. |
+| `spider-team:reviewer` | opus / medium | opus / low | Review a developer's commits and worktree with read-only git commands. |
 
-Each agent is a plain registered definition: role prompt, tool allowlist, default model and effort. All inherit the project instructions and the lead's permission mode. Analyst and architect get Read, Grep, Glob, LSP and Skill; reviewer also gets Bash, which its prompt limits to read-only git inspection; developer gets Write, Edit and Bash. None of them can call Agent, SendMessage, ToolSearch or the worktree tools. Each ends with a short answer for the lead: the outcome, findings with file:line evidence, open questions and checks.
+Each agent is a plain registered definition: role prompt, tool allowlist, and the default model and effort. All inherit the project instructions and the lead's permission mode. Analyst and architect get Read, Grep, Glob, LSP and Skill; reviewer also gets Bash, which its prompt limits to read-only git inspection; developer gets Write, Edit and Bash. None of them can call Agent, SendMessage, ToolSearch or the worktree tools. Each ends with a short answer for the lead: the outcome, findings with file:line evidence, open questions and checks.
 
 Developer runs with `isolation: "worktree"` and requires the consuming project's merged settings to contain:
 
@@ -27,29 +27,56 @@ Developer runs with `isolation: "worktree"` and requires the consuming project's
 
 Without it the call is refused with that instruction, since the worktree would start from another base. The plugin does not change settings. Tracked uncommitted lead edits are absent from the worktree. Worktree isolation does not sandbox every Bash operation.
 
+### Commits
+
+The developer commits its work locally in its own worktree as cohesive Conventional Commits in English with no AI attribution lines. It never pushes and never commits on main, master, develop or a release branch (if its worktree is on one, it stops and says so). Its answer names the absolute worktree path, the branch, the base commit it started from, the SHAs of the commits it created and any uncommitted leftovers. The lead gives those to the reviewer, which reviews the `base..HEAD` range plus any uncommitted changes with read-only git commands, and then integrates the branch with `git merge --ff-only` or `git cherry-pick`.
+
 ## Model and effort
 
-A hook on the `Agent` tool picks the model and effort of the four Spider types; every other agent type passes untouched. Effort is capped at high from every source.
+A hook on the `Agent` tool picks the model and effort of the four Spider types; every other agent type passes untouched. One rule decides: Jev rates difficulty and duration, a fixed table maps them to a pair, and the role's floor lifts the pair if the table gives less. When Jev is unavailable or fails, the role default applies. Nothing else chooses the pair.
 
-- An explicit Agent `model` or `effort`, or a profile directive in the task, wins and skips Jev; omitted fields come from the role default. Model pins accept opus, sonnet and haiku; effort pins accept low, medium, high, xhigh and max, with xhigh/max sent as high. Other models and malformed or contradictory directives refuse the call.
-- Otherwise, with `JEV_API_KEY` in the user's environment, Jev assesses difficulty, duration, scope and task type, and the closest profile below is chosen. A project/local settings declaration of the key, even empty, or unreadable settings turn Jev off.
-- Otherwise, or when Jev fails, the role default applies. The chosen pair is appended to the call's description, so the transcript shows it beside the task. A failure inside the hook itself dispatches the call exactly as the lead wrote it.
-
-| Directive | Pair | Difficulty / duration / scope | Rank |
+| Difficulty \ duration | short | medium | long |
 | --- | --- | --- | --- |
-| `@haiku-low` | haiku / low | 0 / 0.3 / 0.5 | 1 |
-| `@haiku-medium` | haiku / medium | 1 / 0.9 / 1 | 2 |
-| `@haiku-high` | haiku / high | 1.5 / 1.5 / 1.5 | 3 |
-| `@sonnet-medium` | sonnet / medium | 2.5 / 1.5 / 2 | 4 |
-| `@sonnet-high` | sonnet / high | 3 / 2.2 / 3 | 5 |
-| `@opus-high` | opus / high | 4 / 3 / 3 | 6 |
+| trivial (0) | haiku / medium | haiku / medium | haiku / high |
+| easy (1) | haiku / high | haiku / high | haiku / xhigh |
+| moderate (2) | haiku / xhigh | sonnet / high | sonnet / high |
+| hard (3) | opus / low | opus / medium | opus / high |
+| expert (4) | opus / high | opus / high | opus / high |
 
-The profile points are policy priors, not measured prices or benchmarks. Dimension directives are `!difficulty=0..4`, `!duration=0..3`, `!scope=0..3` and `!task_type=implement|bugfix|refactor|review|research|docs|test`; `!hard` means difficulty 3, `!long` duration 3 and `!quick` duration 0. Complete dimension pins select locally; partial pins ask Jev only for the rest. Recognized directives are removed from the task; quoted, escaped and fenced text stays intact.
+Difficulty levels 0 to 4 are the difficulty question's criteria; duration levels 0 to 3 are the duration question's, grouped as 0 or 1 short, 2 medium and 3 long. The policy sits in `hooks/router.ts`: the two questions sent to Jev, the penalty weights below, the level labels, the duration groups, the table, the ladder, each role's floor and default, and the prices. A new model is an edit of `MODELS` in `hooks/roles.ts`, the ladder and the cells.
 
-Selection integrates expected penalties with under-capacity weight 4, over-capacity weight 0.5 and tolerance 0.5; dimension weights are 1, 1, 0.5 and 0.25, and lower rank breaks ties. Jev uses a fixed endpoint and model, one shared three-second deadline, bounded retries, a concurrency gate and a circuit breaker. The chosen pair goes to the debug log.
+The capacity ladder is the one ordered list of pairs the router may pick, weakest first:
+
+```text
+haiku/medium < haiku/high < haiku/xhigh < sonnet/high < opus/low < opus/medium < opus/high
+```
+
+Every table cell, floor and default must be an entry of the ladder, and the type-check fails otherwise. The routed pair is the stronger of the table's cell and the role's floor on the ladder; the default is used whenever Jev is off or fails, and is the model and effort of the registered definition. Defaults do not have to be table cells.
+
+For each dimension Jev returns a probability distribution, and the level is the integer that minimizes the expected penalty: missing capacity weighs 2, spare capacity weighs 1, and ties go to the lower level. Grouping the duration happens after its level is chosen.
+
+Why these cells, as a policy note and not a measured fact: Haiku 5.5 costs about a twentieth of Sonnet 5.5 per token and beats Sonnet at medium effort on merge-quality coding, so Sonnet at low and medium is dominated by Haiku at high and xhigh. Opus at low effort costs about what Sonnet at high does. Opus above high does not improve. Haiku is never run at low effort because it skips search and verification on long agentic prompts. Fable is left out for lack of data.
+
+- There are no pins and no directives. The `model` and `effort` fields of the `Agent` call choose nothing and are never refused: the hook overwrites them with the routed pair. Words in the task starting with an exclamation mark or an at sign are plain text that goes to Jev as written.
+- Jev is always asked both questions, difficulty and duration. It needs `JEV_API_KEY` in the user's environment. A project/local settings declaration of the key, even empty, unreadable settings, a timeout, a malformed answer or any other failure turns Jev off for that call, and the role default applies.
+- A task that is empty or only whitespace is refused.
+- The chosen pair is appended to the call's description, so the transcript shows it beside the task, and goes to the debug log. A failure inside the hook before dispatch runs the call with the role default pair, never with the lead's model and effort.
+
+Jev uses a fixed endpoint and model, one shared three-second deadline, bounded retries, a concurrency gate and a circuit breaker.
+
+## Local records and statistics
+
+The plugin appends JSON lines to `~/.claude/spider-team/routes.jsonl` (the directory is created if missing; past about two megabytes the file moves to `routes.1.jsonl`, which replaces the previous one). Two kinds of line:
+
+- A decision line, written when the pair is decided: time, tool use id, role, source (`jev` or `default`), the reason Jev was off, its latency, the levels and top probability of each dimension, the table's raw cell, whether the floor applied, and the final model and effort.
+- An outcome line: for a foreground call, from its result (resolved model, number of models used, status, duration, input, output, cache creation and cache read tokens, and a cost estimate from the list prices of October 2026: per million tokens, Haiku 0.10 input, 0.50 output, 0.125 cache write, 0.01 cache read, valid for prompts up to 100k tokens; Sonnet 2, 10, 2.50, 0.10; Opus 4, 20, 5, 0.20). For a background launch the line is written when that agent's turn completes, with its duration, usage and end reason. For the reviewer only the verdict word (APPROVED, CHANGES or BLOCKED) is kept from its answer.
+
+A line never holds the task, the prompt, an answer's text, a path, a branch name or a key. The records stay on this machine, are read by nothing but the stats command, and a failure to write one never changes a dispatch.
+
+`/spider-team-stats` prints a compact summary per role and per final pair: runs, failure rate (error, abort or refusal, plus CHANGES or BLOCKED for reviewer runs), median duration, total tokens and estimated cost; the share of default fallbacks with their reasons; the distribution of Jev's top confidence; and a duration check that compares the predicted duration group with the real duration (under 30 minutes short, 30 to 120 medium, over 120 long). The command is named `spider-team-stats` because a command name cannot hold a colon and `stats` belongs to the host.
 
 ## Privacy and validation
 
-Only the cleaned task goes to Jev: keys, secrets and paths are masked before the 4,000-character limit, and the key travels only in the Authorization header of the fixed endpoint. The plugin writes no files and keeps no session state.
+Only the redacted task goes to Jev: keys, secrets and paths are masked before the 4,000-character limit, and the key travels only in the Authorization header of the fixed endpoint. The one file the plugin writes is the local routing record above; it keeps no session state beyond a bounded in-memory map of background agents waiting for their end.
 
-The tests use a fake host and fake Jev; they prove the routing logic and wiring, not live model selection.
+The tests use a fake host, a fake file system and fake Jev; they prove the routing logic and wiring, not live model selection.
