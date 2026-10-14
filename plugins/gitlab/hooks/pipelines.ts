@@ -71,11 +71,14 @@ async function jobs(ctx: Ctx, input: PipelineInput): Promise<string> {
     json({
       pipeline,
       jobs: shown.map(jobView),
-      downstream: (failed ? bridges.filter((b) => b.status === 'failed') : bridges).map((b) => ({
+      // a trigger job without `strategy: mirror` succeeds once it starts the downstream pipeline, so its own status
+      // says nothing of that pipeline's: both are reported, and failedOnly keeps either failure
+      downstream: (failed ? bridges.filter((b) => b.status === 'failed' || b.downstream_pipeline?.status === 'failed') : bridges).map((b) => ({
         name: b.name,
         stage: b.stage,
         status: b.status,
         pipeline: b.downstream_pipeline?.id,
+        pipelineStatus: b.downstream_pipeline?.status,
       })),
     }),
     'pass failedOnly to read fewer jobs',

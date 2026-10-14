@@ -1,5 +1,6 @@
 // gitlab_mr_comment: read and write a merge request's discussions. Deleting a comment is not offered.
 import type { McpToolInputs } from 'claude-code'
+import { GitlabError } from './api'
 import { InputError, bool, clip, id, json, mrIid, need, str, type Ctx } from './context'
 
 export type CommentAction = McpToolInputs['mcp__gitlab__gitlab_mr_comment']['action']
@@ -41,6 +42,19 @@ function discussionId(value: unknown): string {
 
 const body = (input: CommentInput) => need(str(input.body), 'This action needs a body.')
 
+/** The file's paths before and after the change: a renamed file has two, and GitLab needs both. Either may be given. */
+async function diffPaths(ctx: Ctx, iid: number, path: string): Promise<{ old_path: string; new_path: string }> {
+  let diffs: { old_path: string; new_path: string }[] = []
+  try {
+    diffs = (await ctx.api.get(`/merge_requests/${iid}/diffs`, { per_page: 100 })) as typeof diffs
+  } catch (err) {
+    // an instance older than /diffs (GitLab 15.7): the path given serves as both
+    if (!(err instanceof GitlabError) || err.status !== 404) throw err
+  }
+  const file = diffs.find((d) => d.new_path === path) ?? diffs.find((d) => d.old_path === path)
+  return file ? { old_path: file.old_path, new_path: file.new_path } : { old_path: path, new_path: path }
+}
+
 async function line(ctx: Ctx, iid: number, input: CommentInput): Promise<string> {
   const path = need(str(input.path), 'line needs path, the file as the diff names it.')
   const newLine = id(input.line, 'line')
@@ -48,6 +62,7 @@ async function line(ctx: Ctx, iid: number, input: CommentInput): Promise<string>
   if (newLine === undefined && oldLine === undefined) throw new InputError('line needs line (new side) or oldLine (removed line), or both for an unchanged line.')
   const mr = (await ctx.api.get(`/merge_requests/${iid}`)) as { diff_refs?: { base_sha: string; start_sha: string; head_sha: string } }
   const refs = need(mr.diff_refs ?? undefined, 'GitLab gave no diff refs for this merge request yet; try again once its diff is ready.')
+  const paths = await diffPaths(ctx, iid, path)
   const d = (await ctx.api.send('POST', `/merge_requests/${iid}/discussions`, {
     body: body(input),
     position: {
@@ -55,8 +70,8 @@ async function line(ctx: Ctx, iid: number, input: CommentInput): Promise<string>
       base_sha: refs.base_sha,
       start_sha: refs.start_sha,
       head_sha: refs.head_sha,
-      new_path: path,
-      old_path: path,
+      new_path: paths.new_path,
+      old_path: paths.old_path,
       ...(newLine !== undefined ? { new_line: newLine } : {}),
       ...(oldLine !== undefined ? { old_line: oldLine } : {}),
     },

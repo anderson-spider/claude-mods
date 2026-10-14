@@ -27,12 +27,16 @@ test('list by ref skips the MR lookup, and an explicit iid without an MR is an e
   await expect(pipeline(ctx, { action: 'list', iid: 9 })).rejects.toThrow(/404/)
 })
 
-test('jobs read the latest pipeline by default, with downstream pipelines, and failedOnly keeps the failures', async () => {
+test('jobs read the latest pipeline by default, with downstream pipelines, and failedOnly keeps failed jobs and failed downstream pipelines', async () => {
   const { ctx } = fakeCtx({
     'GET /merge_requests': [MR],
     'GET /merge_requests/7/pipelines': [P(90, 'failed'), P(80, 'success')],
     'GET /pipelines/90/jobs': JOBS,
-    'GET /pipelines/90/bridges': [{ name: 'deploy', stage: 'post', status: 'failed', downstream_pipeline: { id: 95, status: 'failed' } }],
+    'GET /pipelines/90/bridges': [
+      { name: 'deploy', stage: 'post', status: 'failed', downstream_pipeline: { id: 95, status: 'failed' } },
+      { name: 'child', stage: 'post', status: 'success', downstream_pipeline: { id: 96, status: 'failed' } },
+      { name: 'docs', stage: 'post', status: 'success', downstream_pipeline: { id: 97, status: 'success' } },
+    ],
   })
 
   const out = JSON.parse(await pipeline(ctx, { action: 'jobs', failedOnly: true }))
@@ -40,7 +44,10 @@ test('jobs read the latest pipeline by default, with downstream pipelines, and f
   expect(out).toEqual({
     pipeline: 90,
     jobs: [{ id: 2, name: 'unit', stage: 'test', status: 'failed', seconds: 30, failure: 'script_failure', url: 'j/2' }],
-    downstream: [{ name: 'deploy', stage: 'post', status: 'failed', pipeline: 95 }],
+    downstream: [
+      { name: 'deploy', stage: 'post', status: 'failed', pipeline: 95, pipelineStatus: 'failed' },
+      { name: 'child', stage: 'post', status: 'success', pipeline: 96, pipelineStatus: 'failed' },
+    ],
   })
 })
 

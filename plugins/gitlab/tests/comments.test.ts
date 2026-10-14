@@ -58,9 +58,10 @@ test('comment, reply, edit, resolve and unresolve call their endpoints with the 
   ])
 })
 
-test('line comments on the diff at the MR head, with the new line, the old line or both', async () => {
+test('line comments on the diff at the MR head, with both paths of a renamed file and the new line, the old line or both', async () => {
   const { ctx, calls } = fakeCtx({
     'GET /merge_requests/7': MR,
+    'GET /merge_requests/7/diffs': [{ old_path: 'src/old.ts', new_path: 'src/a.ts' }],
     'POST /merge_requests/7/discussions': (c) => ({ id: 'ee', notes: [{ id: 12, body: c.body?.body, position: c.body?.position }] }),
   })
 
@@ -68,7 +69,7 @@ test('line comments on the diff at the MR head, with the new line, the old line 
 
   expect(calls.at(-1)?.body).toEqual({
     body: 'Why?',
-    position: { position_type: 'text', base_sha: 'b', start_sha: 's', head_sha: 'h', new_path: 'src/a.ts', old_path: 'src/a.ts', new_line: 12, old_line: 10 },
+    position: { position_type: 'text', base_sha: 'b', start_sha: 's', head_sha: 'h', new_path: 'src/a.ts', old_path: 'src/old.ts', new_line: 12, old_line: 10 },
   })
   await expect(comment(ctx, { action: 'line', iid: 7, path: 'a.ts', body: 'x' })).rejects.toThrow(/needs line/)
 })
