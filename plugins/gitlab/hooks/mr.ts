@@ -190,7 +190,10 @@ async function optional<T>(read: Promise<unknown>): Promise<T | undefined> {
 type Approvals = { approved?: boolean; approvals_left?: number; approved_by?: { user?: User }[] }
 type ApprovalState = { rules?: { name: string; approved?: boolean; approvals_required?: number; approved_by?: User[] }[] }
 
-/** Everything that decides whether the MR can be merged, and the reasons it cannot yet (`blockers`). */
+/**
+ * Everything that decides whether the MR can be merged, and the reasons it cannot yet (`blockers`). The pipeline is
+ * reported, not judged: `ci_must_pass` or `ci_still_running` in the merge status says when the project requires it.
+ */
 export function statusView(mr: Mr, approvals: Approvals | undefined, state: ApprovalState | undefined): Record<string, unknown> {
   const head = mr.head_pipeline ?? undefined
   const current = head?.sha !== undefined && mr.sha !== undefined ? head.sha === mr.sha : undefined
@@ -199,9 +202,7 @@ export function statusView(mr: Mr, approvals: Approvals | undefined, state: Appr
   if (mr.draft) blockers.push('draft')
   if (mr.has_conflicts) blockers.push('conflicts')
   if (mr.blocking_discussions_resolved === false) blockers.push('unresolved blocking discussions')
-  if (!head) blockers.push('no pipeline')
-  else if (head.status !== 'success') blockers.push(`pipeline ${head.status}`)
-  if (current === false) blockers.push('pipeline is not of the head commit')
+  // a pipeline blocks only where the project requires one to pass, which GitLab says through the merge status
   if ((approvals?.approvals_left ?? 0) > 0) blockers.push(`${approvals!.approvals_left} approvals missing`)
   const merge = mr.detailed_merge_status ?? mr.merge_status
   if (merge !== undefined && merge !== 'mergeable' && merge !== 'can_be_merged') blockers.push(`merge status ${merge}`)

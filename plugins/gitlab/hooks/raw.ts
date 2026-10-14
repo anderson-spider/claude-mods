@@ -8,6 +8,25 @@ export type RawInput = { [K in keyof McpToolInputs['mcp__gitlab__gitlab_api']]?:
 /** The prefixes a path may start with, each followed by `/`, `?` or the end. */
 export const PREFIXES = ['projects', 'merge_requests', 'groups', 'users', 'labels'] as const
 
+/**
+ * Subresources whose answers carry secrets (CI/CD variable values, even masked ones; access, deploy and trigger
+ * tokens; webhook and integration settings): refused anywhere in the path, since the token's mask covers only itself.
+ */
+export const SECRET_SEGMENTS = new Set([
+  'variables',
+  'secure_files',
+  'access_tokens',
+  'deploy_tokens',
+  'impersonation_tokens',
+  'personal_access_tokens',
+  'tokens',
+  'triggers',
+  'hooks',
+  'integrations',
+  'services',
+  'runners',
+])
+
 const SEGMENT = /^[\w.~%+:@-]+$/
 const QUERY = /^[\w.~%+:@,=&[\]-]*$/
 
@@ -29,6 +48,7 @@ export function apiPath(value: unknown): string {
   }
   // an encoded slash may hide a dot segment GitLab or a proxy would resolve: check the decoded path too
   if (decoded.split('/').some((s) => s === '.' || s === '..') || decoded.includes('\\')) throw new InputError('path may not contain . or .. segments.')
+  if (decoded.split('/').some((s) => SECRET_SEGMENTS.has(s.toLowerCase()))) throw new InputError('gitlab_api does not read variables, tokens, triggers, hooks, integrations or runners: their answers carry secrets.')
   return query ? `${path}?${query}` : path
 }
 

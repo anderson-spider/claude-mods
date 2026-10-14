@@ -213,18 +213,19 @@ test('status reports the merge state, the head pipeline against the head sha, ap
     pipeline: { id: 90, status: 'success', url: MR.head_pipeline.web_url, sha: 'b'.repeat(40), current: false },
     approvals: { approved: false, left: 1, by: ['cid'] },
     rules: [{ name: 'Code owners', approved: false, required: 2, by: ['cid'] }],
-    blockers: ['unresolved blocking discussions', 'pipeline is not of the head commit', '1 approvals missing'],
+    blockers: ['unresolved blocking discussions', '1 approvals missing'],
     url: MR.web_url,
   })
 })
 
-test('status leaves out approvals GitLab withholds (a free tier) and counts a missing pipeline as a blocker', async () => {
+test('status leaves out approvals GitLab withholds (a free tier) and blocks on a pipeline only when the merge status says so', async () => {
   const { ctx } = fakeCtx({ 'GET /merge_requests/7': { ...MR, head_pipeline: null } })
   const out = JSON.parse(await mr(ctx, { action: 'status', iid: 7 }))
   expect(out.approvals).toBeUndefined()
   expect(out.rules).toBeUndefined()
   expect(out.pipeline).toBeNull()
-  expect(out.blockers).toEqual(['no pipeline'])
+  expect(out.blockers).toEqual([])
+  expect(statusView({ ...MR, detailed_merge_status: 'ci_must_pass' } as never, undefined, undefined).blockers).toEqual(['merge status ci_must_pass'])
   expect(statusView({ ...MR, head_pipeline: { id: 1, status: 'success', sha: MR.sha } } as never, { approvals_left: 0 }, undefined).blockers).toEqual([])
 })
 

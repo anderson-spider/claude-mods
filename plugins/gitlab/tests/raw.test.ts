@@ -23,3 +23,10 @@ test('rawGet sends one GET of the checked path and says when there is a next pag
   expect(await rawGet(ctx, { path: 'projects/1/issues?per_page=2' })).toBe('[{"iid":1},{"iid":2}]\n(next page: 2; add page=2 to the query)')
   expect(calls.map((c) => c.method)).toEqual(['GET'])
 })
+
+test('apiPath refuses subresources that answer with secrets, anywhere in the path and encoded or not', () => {
+  for (const bad of ['projects/1/variables', 'projects/1/variables/KEY', 'groups/g/variables', 'projects/1/deploy_tokens', 'projects/1/triggers', 'projects/1/hooks', 'projects/1/integrations/slack', 'projects/1/access_tokens', 'users/1/impersonation_tokens', 'projects/1/secure_files', 'projects/1/runners', 'projects/1/Variables', 'projects/1%2Fvariables']) {
+    expect(() => apiPath(bad), bad).toThrow('gitlab_api does not read variables, tokens, triggers, hooks, integrations or runners: their answers carry secrets.')
+  }
+  expect(apiPath('projects/1/merge_requests?search=variables')).toBe('projects/1/merge_requests?search=variables')
+})
