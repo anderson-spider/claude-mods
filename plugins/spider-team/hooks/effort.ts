@@ -58,6 +58,12 @@ export function levelOf(dist: Record<string, number>): number {
   return best
 }
 
+/** Text that leaves for Jev: the key and then everything `redact` masks are removed from the whole text, then it is cut to `TASK_CHARS`. */
+export function clipped(text: string, key: string, ctx: { home: string; root: string }): string {
+  const redacted = redact(text.split(key).join(REDACTED), { home: ctx.home, root: ctx.root })
+  return redacted.length <= TASK_CHARS ? redacted : head(redacted, TASK_CHARS - 1)
+}
+
 export type EffortIo = KeyIo & { jev: JevIo; breaker: Breaker; gate: Gate; log: (text: string) => void }
 
 /** Jev rates difficulty and duration and the router table picks the pair; any failure keeps the role default. */
@@ -71,8 +77,7 @@ export async function assessRoute(io: EffortIo, call: { role: Role; task: string
   try {
     const access = await resolveAccess(io, call.key)
     if (access.key === undefined) return fallback(access.off)
-    const redacted = redact(call.task.split(access.key).join(REDACTED), { home: call.home, root: call.root })
-    const state = redacted.length <= TASK_CHARS ? redacted : head(redacted, TASK_CHARS - 1)
+    const state = clipped(call.task, access.key, call)
     const jev = { ...io.jev, fetch: (url: string, init: Parameters<JevIo['fetch']>[1]) => { if (!jevAsked) startedAt = io.jev.now(); jevAsked = true; return io.jev.fetch(url, init) } }
     const { answers } = await createJev(jev, access.key, { model: JEV_MODEL, breaker: io.breaker, gate: io.gate, answerIds: Object.keys(QUESTIONS) })(QUESTIONS, state)
     const dists = distributions(answers)

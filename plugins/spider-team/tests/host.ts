@@ -7,7 +7,11 @@ import { createBreaker, createGate } from '../hooks/jev'
 export function ports() {
   const requests: { url: string; body: string; headers: Record<string, string> }[] = [], logs: string[] = [], settingsReads: string[] = []
   const faults = { settings: false, http: 200 }
-  const answers: Record<string, unknown> = { difficulty: { probabilities: { '0': 1 } }, duration: { probabilities: { '0': 1 } } }
+  // One answer set serves both requests: routing reads difficulty and duration, the outcome judge its three Nouls.
+  const answers: Record<string, unknown> = {
+    difficulty: { probabilities: { '0': 1 } }, duration: { probabilities: { '0': 1 } },
+    finished: { type: 'noul', noul: 0.95 }, failingChecks: { type: 'noul', noul: 0.02 }, blocked: { type: 'noul', noul: 0.01 },
+  }
   const io: EffortIo & { home: string; root: string; key?: string; baseRef?: string } = {
     home: '/home/u', root: '/repo', baseRef: 'head',
     settings: async source => { settingsReads.push(source); if (faults.settings) throw new Error('settings unavailable'); return {} },

@@ -219,3 +219,58 @@ test('the stats command summarizes the local ledger, and says so when there is n
   h.fsFaults.read = false; delete h.env.HOME
   expect((await $.command.run({ command: STATS_COMMAND } as never)).text).toBe('no home directory, so no routing records.')
 })
+const ANSWER = 'ANSWER-TEXT-91c2'
+test('foreground and background outcomes carry the judge of the answer, and the host result passes on as it came', async ($, on) => {
+  const h = world(on); h.env.JEV_API_KEY = 'test-key'
+  const answer = finished(`${ANSWER} done, all checks pass`)
+  const results = [answer, { ref: 'r', text: MARKER, result: { status: 'async_launched', agentId: 'bg-j' } }]
+  on('tool.call', { tool: 'Agent' }, () => results.shift() as never)
+  on('turn.complete', (_$, e) => ({ text: e.answer }))
+  await started($)
+  expect(await $.tool.call(call('developer', { tool_use_id: 'toolu_f' }) as never)).toEqual(answer)
+  // Routing, then the judge: three Nouls with the answer as the only state.
+  expect(h.requests).toHaveLength(2)
+  const judged = JSON.parse(h.requests[1]!.body)
+  expect(Object.keys(judged.questions)).toEqual(['finished', 'failingChecks', 'blocked'])
+  expect(judged.state).toEqual({ report: { text: `${ANSWER} done, all checks pass` } })
+  expect(h.ledger()[1]).toMatchObject({ kind: 'outcome', tool_use_id: 'toolu_f', mode: 'foreground', status: 'completed', judge: { finished: 0.95, failingChecks: 0.02, blocked: 0.01 } })
+  // A background run is judged when its turn completes; the turn's result passes on unchanged.
+  h.answers.finished = { noul: 0.3 }; h.answers.blocked = { noul: 0.876 }
+  await $.tool.call(call('analyst', { tool_use_id: 'toolu_b' }) as never)
+  const done = { turnId: 't', agentId: 'bg-j', answer: `${ANSWER} I need a decision`, durationMs: 800, isAborted: false, reason: 'answer' }
+  expect(await $.turn.complete(done as never)).toEqual({ text: done.answer })
+  expect(h.requests).toHaveLength(4)
+  expect(JSON.parse(h.requests[3]!.body).state).toEqual({ report: { text: `${ANSWER} I need a decision` } })
+  expect(h.ledger()[3]).toMatchObject({ kind: 'outcome', tool_use_id: 'toolu_b', mode: 'background', judge: { finished: 0.3, failingChecks: 0.02, blocked: 0.88 } })
+  for (const text of [...h.files.values(), ...h.logs]) expect(text).not.toContain(ANSWER)
+})
+test('a judge failure still writes the outcome with judge null, unfinished runs are not judged, and no line or log holds the answer', async ($, on) => {
+  const h = world(on); h.env.JEV_API_KEY = 'test-key'
+  const results: unknown[] = [
+    finished(`${ANSWER} done`), finished(''), { ref: 'r', result: ANSWER, isError: true, text: ANSWER },
+    { result: { status: 'async_launched', agentId: 'bg-x' } }, finished(`${ANSWER} done`),
+  ]
+  on('tool.call', { tool: 'Agent' }, () => results.shift() as never)
+  on('turn.complete', (_$, e) => ({ text: e.answer }))
+  await started($)
+  // Jev answers routing but sends a Noul out of range: the judge is null and the outcome still goes in.
+  h.answers.blocked = { noul: 2 }
+  await $.tool.call(call('developer', { tool_use_id: 'toolu_m' }) as never)
+  expect(h.ledger()[1]).toMatchObject({ kind: 'outcome', status: 'completed', judge: null })
+  expect(h.logs).toContain('spider-team: judge off (malformed)')
+  expect(h.requests).toHaveLength(2)
+  // An empty answer, an error and an aborted background run are never sent to the judge.
+  await $.tool.call(call('developer', { tool_use_id: 'toolu_e' }) as never)
+  await $.tool.call(call('developer', { tool_use_id: 'toolu_x' }) as never)
+  await $.tool.call(call('developer', { tool_use_id: 'toolu_a' }) as never)
+  await $.turn.complete({ turnId: 't', agentId: 'bg-x', answer: ANSWER, durationMs: 9, isAborted: true, reason: 'aborted' } as never)
+  expect(h.requests).toHaveLength(5)
+  expect(h.ledger().filter(l => l.kind === 'outcome').map(l => [l.tool_use_id, l.status, l.judge])).toEqual([['toolu_m', 'completed', null], ['toolu_e', 'completed', null], ['toolu_x', 'error', null], ['toolu_a', 'aborted', null]])
+  // Without a key there is no judge request and the outcome is written with judge null.
+  delete h.env.JEV_API_KEY
+  await $.tool.call(call('developer', { tool_use_id: 'toolu_k' }) as never)
+  expect(h.requests).toHaveLength(5)
+  expect(h.ledger().at(-1)).toMatchObject({ kind: 'outcome', tool_use_id: 'toolu_k', judge: null })
+  expect(h.logs).toContain('spider-team: judge off (no-key)')
+  for (const text of [...h.written, ...h.files.values(), ...h.logs]) expect(text).not.toContain(ANSWER)
+})
