@@ -11,7 +11,7 @@ From about 155 columns the context and the two windows sit as three aligned bloc
 On the desktop app (and any surface that lays out by itself) the card is drawn with the surface's own layout instead of padded text, its bars a fixed 96 pixels:
 
 1. The dot, model, effort and running turn; the running agents at the right.
-2. The context bar with its tokens and, at the right, the last twelve turns as bars measured against the compaction window: grey for the context a turn began with, green for what it added, a dashed line where a compaction came between two turns; then the last turn in figures (`▲ +61k · 2.1k out`).
+2. The context bar with its tokens and, at the right, the last twelve turns as bars measured against the compaction window: grey for the context a turn began with, green for what it added, a dashed line on a turn a compaction the host reported came before or during; then the last turn in figures (`▲ +61k · 2.1k out`).
 3. The cache share and how long ago a request read or wrote it (`cache 96% · used 40s ago`); after a model switch, which is the only time the host names the cache's lifetime, also what is left of it (`1h TTL, 59m left`, or `expired`).
 4. The five-hour and seven-day windows on one line, each with its bar, tick, lead, time left and where the pace ends.
 5. The last turn's duration, the turns so far, edits and errors.

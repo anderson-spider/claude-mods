@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import type { SessionHudCard } from '../types'
-import { BAR_WIDTH, barSvg, cacheLine, cutBefore, desktopView, historySvg, lastTurnCells } from '../hooks/desktop'
-import type { Piece } from '../hooks/desktop'
+import { BAR_WIDTH, barSvg, cacheLine, desktopView, historySvg, lastTurnCells } from '../hooks/desktop'
+import type { Group, Piece } from '../hooks/desktop'
 
 const now = Date.parse('2026-10-13T12:00:00Z')
 const HOUR = 3_600_000
@@ -12,7 +12,8 @@ const card: SessionHudCard = {
   lastTurnMs: 70_000, edits: 4, errors: 0, turns: 12, output: 9_000, agents: [{ id: 'a', model: 'claude-haiku-4-5' }],
   history: [{ before: 120_000, after: 175_000, output: 1_000 }, { before: 175_000, after: 236_000, output: 2_100 }],
 }
-const text = (line: Piece[]) => line.map(piece => ('text' in piece ? piece.text : piece.kind === 'svg' ? `[${piece.alt}]` : ' | ')).join('')
+const piece = (part: Piece) => ('text' in part ? part.text : `[${part.alt}]`)
+const text = (line: Group[]) => line.map(group => (group === 'spacer' ? '|' : group.map(piece).join(''))).join(' ')
 
 test('the desktop card holds the head with the agents, the context with its history, the cache, both windows and the turn, and no money', () => {
   const lines = desktopView({ card, now, working: false, palette: 'mockup' }).map(text)
@@ -20,7 +21,7 @@ test('the desktop card holds the head with the agents, the context with its hist
     '● Opus 5.5 · medium | 1 agent: Haiku 4.5',
     'ctx [context 47% used] 47%  236k / 500k | [context of the last 2 turns]  ▲ +61k · 2k out',
     'cache 96% · used 40s ago',
-    '5h [5h 31% used] 31% ▲6  3h 44m · 100% in 2h 49m      7d [7d 19% used] 19%  5d 11h · ~86% at reset',
+    '5h [5h 31% used] 31% ▲6  3h 44m · 100% in 2h 49m 7d [7d 19% used] 19%  5d 11h · ~86% at reset',
     'last turn 1m · 12 turns · 4 edits · 0 errors',
   ])
   expect(lines.join('\n')).not.toContain('$')
@@ -44,9 +45,9 @@ test('a bar is a fixed width, lit to the percent and capped at 100, with the tic
   expect(barSvg(10, '#e5c07b', 'mockup', 0.25)).toContain('<rect x="24" y="0" width="1.5"')
 })
 
-test('the history stacks what each turn began with under what it added, against the window, and marks a compaction', () => {
-  const turns = [{ before: 100, after: 400, output: 10 }, { before: 50, after: 60, output: 5 }]
-  expect([cutBefore(turns, 0), cutBefore(turns, 1)]).toEqual([false, true])
+test('the history stacks what each turn began with under what it added, against the window, and marks a compaction the host reported', () => {
+  const turns = [{ before: 100, after: 400, output: 10 }, { before: 50, after: 60, output: 5, compacted: true as const }]
+  expect(historySvg([turns[0]!, { before: 50, after: 60, output: 5 }], 1_000, 'mockup')).not.toContain('<line')
   const chart = historySvg(turns, 1_000, 'mockup')
   // The newest turn sits at the right: slots 10 and 11 of twelve.
   expect(chart).toContain('<rect x="100" y="19.8" width="7" height="2.2" fill="#3d424b"/>')
@@ -59,6 +60,13 @@ test('the history stacks what each turn began with under what it added, against 
 test('malformed turns and a light theme never reach the drawing as numbers or the dark colours', () => {
   const lines = desktopView({ card: { ...card, history: [{ before: Number.NaN, after: 1, output: 1 }, null as never] }, now, palette: 'theme' })
   expect(lines.map(text).join('\n')).not.toMatch(/NaN|last \d+ turns/u)
-  const sources = lines.flat().filter((p): p is Extract<Piece, { kind: 'svg' }> => 'kind' in p && p.kind === 'svg').map(p => p.source).join('')
+  const sources = lines.flat().flatMap(group => (group === 'spacer' ? [] : group)).filter((p): p is Extract<Piece, { kind: 'svg' }> => 'kind' in p).map(p => p.source).join('')
   expect(sources).not.toContain('#34383f')
+})
+
+test('each window and each part of the context line is a group of its own, so a narrow card wraps between them', () => {
+  const lines = desktopView({ card, now, palette: 'mockup' })
+  expect(lines.map(line => line.length)).toEqual([3, 3, 1, 2, 1])
+  expect(lines[0]![1]).toBe('spacer')
+  expect(desktopView({ card: { ...card, history: [card.history[0]!] }, now, palette: 'mockup' }).map(text)[1]).toContain('[context of the last turn]')
 })

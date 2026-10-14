@@ -3,8 +3,8 @@
 /** One rate-limit window as the host reports it: `five_hour`, `seven_day` or a gateway's `spend_limit`. */
 export type SessionHudLimit = { kind: string; percentUsed: number; resetsAt?: string }
 
-/** One finished main-session turn's context: the prompt its first request sent, what the next request re-sends (the last prompt plus its output) and the tokens it generated. */
-export type SessionHudTurn = { before: number; after: number; output: number }
+/** One main-session turn's context: the prompt its first request sent, what the next request re-sends (the last prompt plus its output), the tokens it generated, and whether a compaction came before or during it. */
+export type SessionHudTurn = { before: number; after: number; output: number; compacted?: true }
 
 /** A subagent or teammate running now: its id (`agent.spawn`'s `agentId`) and, once reported, the model it runs on. */
 export type SessionHudAgent = { id: string; model?: string }
@@ -38,6 +38,8 @@ export type SessionHudCard = {
   history: SessionHudTurn[]
   /** The running main-session turn's context so far; absent between turns. */
   pending?: SessionHudTurn
+  /** A compaction ran since the last turn joined the history: the next one to join is marked. */
+  compacted?: true
   /** Successful Write, Edit and NotebookEdit calls of the main session. */
   edits: number
   /** Tool calls of the main session that ended in an error. */

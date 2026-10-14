@@ -1,11 +1,12 @@
 import { atom, read, update } from 'claude-code'
 import type { Hook, Register, Timer } from 'claude-code'
 import type { SessionHudCard } from '../types'
-import { EMPTY, agentBegan, agentEnded, agentStepped, began, completed, measured, reconciled, spawned, stepped, tooled, ttlSet, windowed } from './card'
+import { EMPTY, agentBegan, agentEnded, agentStepped, began, cacheUsed, compactedNow, completed, measured, reconciled, spawned, stepped, switched, timed, tooled, touchedCache, windowed } from './card'
 import type { Measured } from './card'
 import { paint, paletteOf } from './palette'
 import type { Palette } from './palette'
 import { desktopView } from './desktop'
+import type { Piece } from './desktop'
 import { cardView } from './view'
 import type { Segment } from './view'
 
@@ -98,9 +99,11 @@ export const register: Register = on => {
       void observe($, async () => { await update($, card, current => agentBegan(current, e.agentId)) })
       return next(e)
     }
+    // The context is cleared before the clock is read, so a step that lands meanwhile is not wiped.
     void observe($, async () => {
+      await update($, card, current => began(current))
       const time = await $.clock.now()
-      await update($, card, current => began(current, time))
+      await update($, card, current => timed(current, time))
       await update($, nowAtom, () => time)
       startFast($, held)
     })
@@ -108,7 +111,15 @@ export const register: Register = on => {
   })
   on('turn.step', {}, async function* ($, e, next) {
     const answer = yield* next(e)
-    if (e.agentId === undefined) void observe($, async () => { const time = await $.clock.now(); await update($, card, current => stepped(current, e.effort, answer.usage, time)) })
+    // The step lands before the clock is read, so the turn's completion cannot overtake it.
+    if (e.agentId === undefined) {
+      void observe($, async () => {
+        await update($, card, current => stepped(current, e.effort, answer.usage))
+        if (!touchedCache(answer.usage)) return
+        const time = await $.clock.now()
+        await update($, card, current => cacheUsed(current, time))
+      })
+    }
     else void observe($, async () => { await update($, card, current => agentStepped(current, e.agentId, typeof answer.usage?.model === 'string' ? answer.usage.model : e.model)) })
     return answer
   })
@@ -133,10 +144,16 @@ export const register: Register = on => {
     if (!e.agentId) void observe($, async () => { await update($, card, current => tooled(current, (e as { tool?: unknown }).tool, result)) })
     return result
   })
-  // A model switch is the only event that names the prompt cache's lifetime; the switch itself passes unchanged.
+  // A model switch is the only event that names the prompt cache's lifetime, and a switch to another model loses the cache; the switch passes unchanged.
   on('classic.PostModelSwitch', async ($, e, next) => {
     const result = await next(e)
-    void observe($, async () => { await update($, card, current => ttlSet(current, e.cache_ttl)) })
+    void observe($, async () => { await update($, card, current => switched(current, e.cache_ttl, e.from_model, e.to_model)) })
+    return result
+  })
+  // A compaction marks the turn it comes before (or during) in the history; the event passes unchanged.
+  on('classic.PostCompact', async ($, e, next) => {
+    const result = await next(e)
+    void observe($, async () => { await update($, card, current => compactedNow(current)) })
     return result
   })
   // A theme change repaints the card; the change itself is the person's and passes unchanged.
@@ -162,13 +179,15 @@ export const register: Register = on => {
         const lines = desktopView({ card: shown as SessionHudCard, now: time, working, palette })
         if (!lines.length) return next(e)
         const { Box, Text, Svg } = $.ui.resolve(e)
-        return <Box flexDirection="column" borderStyle="round" borderColor={paint(palette, 'frame').color ?? 'inactive'} paddingX={1} rowGap={0}>
-          {lines.map((pieces, at) => <Box key={`line-${at}`} flexDirection="row" alignItems="center" marginTop={at === lines.length - 1 && at > 0 ? 1 : 0}>
-            {pieces.map((piece, i) => 'text' in piece
-              ? <Text key={`p-${i}`} {...paint(palette, piece.style)}>{piece.text}</Text>
-              : piece.kind === 'svg'
-                ? <Svg key={`p-${i}`} source={piece.source} alt={piece.alt} width={piece.width} height={piece.height} />
-                : <Box key={`p-${i}`} flexGrow={1} />)}
+        const piece = (part: Piece, key: string) => ('text' in part
+          ? <Text key={key} {...paint(palette, part.style)}>{part.text}</Text>
+          : <Svg key={key} source={part.source} alt={part.alt} width={part.width} height={part.height} />)
+        // Each group wraps to the next row whole, so a narrow card breaks between parts, never inside one.
+        return <Box flexDirection="column" borderStyle="round" borderColor={paint(palette, 'frame').color ?? 'inactive'} paddingX={1}>
+          {lines.map((groups, at) => <Box key={`line-${at}`} flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={3} marginTop={at === lines.length - 1 && at > 0 ? 1 : 0}>
+            {groups.map((group, i) => group === 'spacer'
+              ? <Box key={`g-${i}`} flexGrow={1} />
+              : <Box key={`g-${i}`} flexDirection="row" alignItems="center" flexShrink={0}>{group.map((part, j) => piece(part, `p-${i}-${j}`))}</Box>)}
           </Box>)}
         </Box>
       }

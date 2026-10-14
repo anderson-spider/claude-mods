@@ -1,17 +1,20 @@
 // The card for a surface that lays out by itself (the desktop app, the editor, the phone): lines of text and small
 // drawings, aligned by the surface's flex layout instead of padding with spaces. Pure: no host access.
 import type { SessionHudCard, SessionHudTurn } from '../types'
+import { HISTORY } from './card'
 import type { Palette } from './palette'
 import { paceOf, span } from './usage'
-import { LABELS, agentCells, cacheCells, contextOf, finite, headCells, joined, seg, shownLimits, tokens, turnCells } from './view'
+import { LABELS, agentCells, cacheCells, contextOf, finite, headCells, seg, shownLimits, tokens, turnCells } from './view'
 import type { Row, Segment } from './view'
 
 /** A drawing on a line: an SVG document of a fixed size. */
 export type Drawing = { kind: 'svg'; source: string; alt: string; width: number; height: number }
-/** What a line holds: text, a drawing, or the room that pushes what follows to the right edge. */
-export type Piece = Segment | Drawing | { kind: 'spacer' }
-/** The card as lines, top to bottom; empty when there is nothing to show. */
-export type DesktopCard = Piece[][]
+/** What a group holds: text and drawings. */
+export type Piece = Segment | Drawing
+/** A part of a line kept whole: it wraps to the next row as a unit. A spacer is the room that pushes what follows to the right edge. */
+export type Group = Piece[] | 'spacer'
+/** The card as lines of groups, top to bottom; empty when there is nothing to show. */
+export type DesktopCard = Group[][]
 
 export type DesktopSnapshot = { card: SessionHudCard; now: number; working?: boolean; palette: Palette }
 
@@ -42,26 +45,24 @@ const SLOT = 7
 const PITCH = 10
 const CHART_HEIGHT = 22
 /** The history chart's width: one slot per kept turn. */
-export const CHART_WIDTH = 12 * PITCH - (PITCH - SLOT)
+export const CHART_WIDTH = HISTORY * PITCH - (PITCH - SLOT)
 
-/** A turn shrank the context when it began below where the one before it ended: a compaction (or a clear) came between. */
-export const cutBefore = (turns: readonly SessionHudTurn[], at: number): boolean => at > 0 && turns[at]!.before < turns[at - 1]!.after
 
 /**
  * The last turns as bars, the newest at the right: the grey part is the context the turn began with, the green part what
- * it added, a dashed line a compaction before it. Heights are against `window` when it is known, else against the fullest turn.
+ * it added, a dashed line a compaction before or during it (as the host reported it). Heights are against `window` when it is known, else against the fullest turn.
  */
 export function historySvg(turns: readonly SessionHudTurn[], window: number | undefined, palette: Palette): string {
   const ink = INK[palette]
   const scale = window !== undefined && window > 0 ? window : Math.max(1, ...turns.map(turn => turn.after))
   const height = (n: number) => px(Math.min(CHART_HEIGHT, Math.max(0, (n / scale) * CHART_HEIGHT)))
-  const first = 12 - turns.length
-  const parts = turns.map((turn, i) => {
+  const first = HISTORY - Math.min(HISTORY, turns.length)
+  const parts = turns.slice(-HISTORY).map((turn, i) => {
     const x = (first + i) * PITCH
     const kept = height(Math.min(turn.before, turn.after))
     const top = height(Math.max(turn.before, turn.after))
     const added = px(top - kept)
-    const cut = cutBefore(turns, i) ? `<line x1="${x - 1.5}" y1="0" x2="${x - 1.5}" y2="${CHART_HEIGHT}" stroke="${ink.cut}" stroke-width="1" stroke-dasharray="2 2"/>` : ''
+    const cut = turn.compacted === true ? `<line x1="${x - 1.5}" y1="0" x2="${x - 1.5}" y2="${CHART_HEIGHT}" stroke="${ink.cut}" stroke-width="1" stroke-dasharray="2 2"/>` : ''
     return cut + `<rect x="${x}" y="${px(CHART_HEIGHT - kept)}" width="${SLOT}" height="${kept}" fill="${ink.kept}"/>`
       + (added > 0 ? `<rect x="${x}" y="${px(CHART_HEIGHT - top)}" width="${SLOT}" height="${added}" fill="${ink.added}"/>` : '')
   })
@@ -114,34 +115,36 @@ function limitPieces(limit: SessionHudCard['limits'][number], now: number, palet
 
 /** The card for a laid-out surface: head and agents; the context with its history; the cache; the windows; the turn. */
 export function desktopView({ card, now, working = false, palette }: DesktopSnapshot): DesktopCard {
-  const lines: Piece[][] = []
+  const lines: Group[][] = []
   const head = headCells(card, now, working)
   const agents = agentCells(card)
-  if (head.length || agents.length) lines.push([...head, ...(agents.length ? [{ kind: 'spacer' } as const, ...agents] : [])])
+  if (head.length || agents.length) lines.push([...(head.length ? [head] : []), ...(agents.length ? ['spacer' as const, agents] : [])])
 
   const context = contextOf(card)
   const turns = (Array.isArray(card.history) ? card.history : []).filter(valid)
   const window = context?.window ?? (finite(card.contextWindow) && card.contextWindow > 0 ? card.contextWindow : undefined)
-  const contextLine: Piece[] = []
+  const contextLine: Group[] = []
   if (context) {
-    contextLine.push(seg('ctx ', 'secondary'),
+    const bar: Piece[] = [seg('ctx ', 'secondary'),
       { kind: 'svg', source: barSvg(context.percent, INK[palette].fill, palette), alt: `context ${context.percent}% used`, width: BAR_WIDTH, height: BAR_HEIGHT },
-      seg(` ${context.percent}%`, 'strong'))
-    if (context.used !== undefined && context.window !== undefined) contextLine.push(seg(`  ${tokens(context.used)} / ${tokens(context.window)}`, 'secondary'))
+      seg(` ${context.percent}%`, 'strong')]
+    if (context.used !== undefined && context.window !== undefined) bar.push(seg(`  ${tokens(context.used)} / ${tokens(context.window)}`, 'secondary'))
+    contextLine.push(bar)
   }
   if (turns.length) {
-    contextLine.push({ kind: 'spacer' },
-      { kind: 'svg', source: historySvg(turns, window, palette), alt: `context of the last ${turns.length} turns`, width: CHART_WIDTH, height: CHART_HEIGHT },
-      seg('  '), ...lastTurnCells(turns[turns.length - 1]!))
+    const shown = Math.min(HISTORY, turns.length)
+    contextLine.push('spacer', [
+      { kind: 'svg', source: historySvg(turns, window, palette), alt: `context of the last ${shown === 1 ? 'turn' : `${shown} turns`}`, width: CHART_WIDTH, height: CHART_HEIGHT },
+      seg('  '), ...lastTurnCells(turns[turns.length - 1]!)])
   }
   if (contextLine.length) lines.push(contextLine)
   const cache = cacheLine(card, now)
-  if (cache.length) lines.push(cache)
+  if (cache.length) lines.push([cache])
 
   const limits = shownLimits(card)
-  if (limits.length) lines.push(limits.flatMap((limit, at) => [...(at ? [seg('      ')] : []), ...limitPieces(limit, now, palette)]))
+  if (limits.length) lines.push(limits.map(limit => limitPieces(limit, now, palette)))
 
   if (!lines.length) return []
-  lines.push(joined([turnCells(card)]))
+  lines.push([turnCells(card)])
   return lines
 }
