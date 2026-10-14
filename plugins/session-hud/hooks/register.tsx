@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Hook, Register, Timer } from 'claude-code'
 import type { SessionHudCard } from '../types'
-import { EMPTY, began, completed, measured, stepped, tooled, windowed } from './card'
+import { EMPTY, agentBegan, agentEnded, agentStepped, began, completed, measured, reconciled, spawned, stepped, tooled, windowed } from './card'
 import type { Measured } from './card'
 import { paint, paletteOf } from './palette'
 import type { Palette } from './palette'
@@ -27,9 +27,19 @@ async function observe($: Dollar, action: () => Promise<void>): Promise<void> {
   }
 }
 
+/** The agents the host lists as idle or ended leave the card; asked only while the card shows some. */
+async function reconcile($: Dollar): Promise<void> {
+  if (!(await read($, card)).agents?.length) return
+  const list = await $.agent.list()
+  await update($, card, current => reconciled(current, list))
+}
+
 function ensureTicker($: Dollar, held: Held): void {
   if (held.ticker) return
-  held.ticker = $.clock.every(TICK_MS, () => { void observe($, async () => { const time = await $.clock.now(); await update($, nowAtom, () => time) }) })
+  held.ticker = $.clock.every(TICK_MS, () => {
+    void observe($, async () => { const time = await $.clock.now(); await update($, nowAtom, () => time) })
+    void observe($, () => reconcile($))
+  })
 }
 
 /** While a main-session turn runs its time is drawn in seconds, so the clock beats every second until it ends. */
@@ -82,8 +92,12 @@ export const register: Register = on => {
     })
     return next(e)
   })
-  // A main-session turn: its cost is what the session spent since it began.
+  // A main-session turn: its cost is what the session spent since it began. A subagent's or teammate's turn: it runs.
   on('turn.start', {}, async ($, e, next) => {
+    if (e.agentId !== undefined) {
+      void observe($, async () => { await update($, card, current => agentBegan(current, e.agentId)) })
+      return next(e)
+    }
     void observe($, async () => {
       held.baseline = (await read($, card)).cost
       const time = await $.clock.now()
@@ -95,15 +109,23 @@ export const register: Register = on => {
   })
   on('turn.step', {}, async function* ($, e, next) {
     const answer = yield* next(e)
-    if (!e.agentId) void observe($, async () => { await update($, card, current => stepped(current, e.effort, answer.usage)) })
+    if (e.agentId === undefined) void observe($, async () => { await update($, card, current => stepped(current, e.effort, answer.usage)) })
+    else void observe($, async () => { await update($, card, current => agentStepped(current, e.agentId, typeof answer.usage?.model === 'string' ? answer.usage.model : e.model)) })
     return answer
   })
   on('turn.complete', {}, ($, e, next) => {
-    if (!e.agentId) {
+    if (e.agentId === undefined) {
       stopFast(held)
       void observe($, async () => { await update($, card, current => completed(current, e.durationMs)) })
-    }
+      void observe($, () => reconcile($))
+    } else void observe($, async () => { await update($, card, current => agentEnded(current, e.agentId)) })
     return next(e)
+  })
+  // A started subagent runs on the model the spawn answers; the answer passes unchanged, and a refused or remote one is not tracked.
+  on('agent.spawn', {}, async ($, e, next) => {
+    const result = await next(e)
+    if (!result.deny && result.agentId !== undefined) void observe($, async () => { await update($, card, current => spawned(current, result.agentId, result.model)) })
+    return result
   })
   // After the result, which goes on exactly as it came: the main session's successful edits and its errors are counted.
   on('tool.call', async ($, e, next) => {

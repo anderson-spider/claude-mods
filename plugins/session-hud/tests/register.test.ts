@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { USAGE, band, flush, start, step, world } from './host'
+import { USAGE, band, flush, listed, start, step, world } from './host'
 
 test('the card draws the session as measured: model, effort, context, cache, cost, both windows and the turn', async ($, on) => {
   world(on)
@@ -106,4 +106,71 @@ test('a running turn shows its time, beating every second until it completes', a
   expect(drawn).toContain('last turn 3s')
   await idle.unmount()
   void clock
+})
+
+const drawnOf = async ($: { ui: { mount: (e: never) => Promise<{ findAll: (q: object) => Promise<{ text: string }[]>; unmount: () => Promise<void> }> } }) => {
+  const ui = await $.ui.mount(band())
+  const drawn = (await ui.findAll({ type: 'Text' })).map(found => found.text).join('\n')
+  await ui.unmount()
+  return drawn
+}
+
+test('a spawned subagent shows with its model until its turn completes, and the spawn answer goes on unchanged', async ($, on) => {
+  world(on)
+  await start($)
+  await flush()
+  expect(await $.agent.spawn({ prompt: 'private task', model: 'claude-haiku-4-5' } as never)).toEqual({ model: 'claude-haiku-4-5', agentId: 'agent-1' })
+  expect(await $.agent.spawn({ prompt: 'private task' } as never)).toEqual({ model: 'claude-sonnet-4-5', agentId: 'agent-2' })
+  await flush()
+  const both = await drawnOf($)
+  expect(both).toMatch(/2 agents: Haiku 4\.5 · Sonnet 4\.5 {3}0 edits/u)
+  expect(both).not.toContain('private')
+  await $.turn.start({ text: 'private task', turnId: 's1', agentId: 'agent-1' } as never)
+  await step($, 'agent-1')
+  await flush()
+  expect(await drawnOf($)).toContain('2 agents: Opus 5.5 · Sonnet 4.5')
+  await $.turn.complete({ turnId: 's1', agentId: 'agent-1', answer: 'private', durationMs: 1_000, isAborted: false, reason: 'answer' } as never)
+  await flush()
+  const one = await drawnOf($)
+  expect(one).toContain('1 agent: Sonnet 4.5   0 edits')
+  expect(one).not.toContain('last turn')
+})
+
+test('a subagent turn neither starts the main turn nor moves its cost baseline', async ($, on) => {
+  world(on)
+  await start($)
+  await flush()
+  await $.turn.start({ text: '', turnId: 's1', agentId: 'agent-9' } as never)
+  await flush()
+  const ui = await $.ui.mount(band())
+  expect((await ui.findAll({ type: 'Text' })).map(found => found.text).join('\n')).not.toContain('working')
+  expect((await ui.find({ type: 'Text', text: /^● $/u }))?.props).toMatchObject({ color: '#4fb383' })
+  await ui.unmount()
+  expect(await drawnOf($)).toContain('1 agent: ?')
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  await flush()
+  await $.session.measure({ ...USAGE, cost: { usd: 4.59 }, changed: ['cost'] } as never)
+  await $.turn.start({ text: '', turnId: 's2', agentId: 'agent-9' } as never)
+  await flush()
+  await $.session.measure({ ...USAGE, cost: { usd: 4.70 }, changed: ['cost'] } as never)
+  await flush()
+  expect(await drawnOf($)).toContain('+$0.27')
+})
+
+test('the agent list removes a subagent it shows completed, on the clock and after a main turn', async ($, on) => {
+  const { clock, roster } = world(on)
+  await start($)
+  await flush()
+  for (let i = 0; i < 3; i++) await $.agent.spawn({ prompt: 'task' } as never)
+  await flush()
+  expect(await drawnOf($)).toContain('3 agents: Sonnet 4.5 ×3')
+  roster.push(listed('agent-1', 'completed'), listed('agent-2', 'running'))
+  await clock.advance(30_000)
+  await flush()
+  expect(await drawnOf($)).toContain('2 agents: Sonnet 4.5 ×2')
+  roster.push(listed('agent-3', 'idle'))
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  await $.turn.complete({ turnId: 't1', answer: '', durationMs: 1_000, isAborted: false, reason: 'answer' } as never)
+  await flush()
+  expect(await drawnOf($)).toContain('1 agent: Sonnet 4.5   last turn 1s')
 })
