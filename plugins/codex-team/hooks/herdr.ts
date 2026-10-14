@@ -92,6 +92,13 @@ async function newPane(run: Run, input: DispatchInput, team: readonly Listed[]):
   return typeof pane === 'string' ? pane : { reason: 'no pane id in the answer' }
 }
 
+/** `dev-x (model/effort)` from the start argv's `-m` and `model_reasoning_effort`. */
+export function paneLabel(name: string, args: readonly string[]): string {
+  const model = args[args.indexOf('-m') + 1]
+  const effort = args.map(a => /^model_reasoning_effort="?([^"]*)"?$/.exec(a)?.[1]).find(Boolean)
+  return model && args.includes('-m') && effort ? `${name} (${model}/${effort})` : name
+}
+
 /**
  * Hands `prompt` to the named agent, retiring its settled predecessor and starting a fresh session. A busy or blocked agent, another developer
  * in the same directory, a failed start or a refused prompt is `not_sent`; a prompt that may have reached the agent but
@@ -149,6 +156,8 @@ export async function deliver(run: Run, input: DispatchInput): Promise<Delivery>
   const start = await run(['herdr', 'agent', 'start', name, '--kind', 'codex', '--pane', made, '--timeout', String(START_TIMEOUT_MS), '--', ...args], { timeoutMs: START_TIMEOUT_MS + 10_000 })
   if (start.exitCode !== 0) return { ...base, pane, started: false, status: 'not_sent', reason: errorOf(start) }
   const started = true
+  // Display only: the pane shows the logical name and the started pair; a refused rename changes nothing.
+  await run(['herdr', 'pane', 'rename', made, paneLabel(input.name, args)]).catch(() => undefined)
 
   await input.beforeSend?.(started, input.name)
   const sent = await run(

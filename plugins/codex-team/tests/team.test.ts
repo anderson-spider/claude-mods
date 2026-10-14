@@ -108,7 +108,7 @@ test('shared idle or done analyst and architect are finished before a fresh star
       expect(answer.text).toContain(`agent: ${role} (pane w1:p7), started now`)
       expect(answer.text).not.toContain('not applied')
       const commands = w.calls.filter(call => call[0] !== 'mkdir').map(call => call.slice(0, 3).join(' '))
-      expect(commands).toEqual(['herdr agent list', 'herdr agent get', 'herdr agent list', 'herdr pane close', 'herdr agent list', 'codex archive ' + w.uuid, 'herdr agent list', 'herdr tab create', 'herdr agent start', 'herdr agent prompt'])
+      expect(commands).toEqual(['herdr agent list', 'herdr agent get', 'herdr agent list', 'herdr pane close', 'herdr agent list', 'codex archive ' + w.uuid, 'herdr agent list', 'herdr tab create', 'herdr agent start', 'herdr pane rename', 'herdr agent prompt'])
       expect(w.calls.find(call => call[2] === 'start')).toContain('model_reasoning_effort="low"')
       const tab = w.calls.find(call => call[2] === 'create')!
       expect(tab[tab.indexOf('--label') + 1]).toBe('codex - fresh')
