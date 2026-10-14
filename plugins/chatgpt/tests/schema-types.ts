@@ -65,6 +65,12 @@ allOf<'a' | 'b'>()(...(['a'] as ('a' | 'b')[]))
 // @ts-expect-error an optional key listed as required
 ;({ type: 'object', properties: { text: T }, required: ['text'] }) satisfies SchemaFor<NoneRequired>
 
+// A number or boolean literal fails closed: its schema would need a `const` or `enum` the helper does not check.
+// @ts-expect-error a number literal union given as number
+;({ type: 'object', properties: { n: { type: 'number' } }, required: ['n'] }) satisfies SchemaFor<{ n: 1 | 2 }>
+// @ts-expect-error a boolean literal given as boolean
+;({ type: 'object', properties: { b: { type: 'boolean' } }, required: ['b'] }) satisfies SchemaFor<{ b: true }>
+
 // An object-typed property fails closed, whatever its schema.
 // @ts-expect-error an object property
 ;({ type: 'object', properties: { nested: { type: 'object' } }, required: ['nested'] }) satisfies SchemaFor<Nested>
