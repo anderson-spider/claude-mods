@@ -1,9 +1,10 @@
 // Local routing telemetry. Pure: record builders, the summarizer for /spider-team-stats and an append over injected file
-// access. A line holds ids, the roles, the pair, levels, probabilities, counts and a reviewer's verdict word; never the task,
-// the prompt, an answer, a path, a branch name or a key. Every field is projected one by one, so extra input cannot leak in.
+// access. A line holds ids, the roles, the pair, levels, probabilities, counts, a reviewer's verdict word and the judge's
+// three probabilities; never the task, the prompt, an answer, a path, a branch name or a key. Every field is projected one
+// by one, so extra input cannot leak in.
 import type { Distributions, Levels, Source } from './effort'
-import { CALIBRATION, DIFFICULTIES, DIMENSIONS, GROUP_OF_DURATION, LADDER, PRICES, QUESTIONS } from './router'
-import type { Dimension } from './router'
+import { CALIBRATION, DIFFICULTIES, DIMENSIONS, GROUP_OF_DURATION, JUDGE_FLAGS, judgedShort, LADDER, PRICES, QUESTIONS } from './router'
+import type { Dimension, Judge } from './router'
 import { MODELS, ROLES } from './roles'
 import type { Effort, Model, Pair, Role } from './roles'
 
@@ -25,6 +26,8 @@ export type OutcomeLine = {
   v: 1; kind: 'outcome'; ts: string; tool_use_id: string | null; role: Role; model: Model; effort: Effort; mode: 'foreground' | 'background'
   resolvedModel: string | null; modelsUsed: number | null; status: Status; aborted: boolean; durationMs: number | null
   tokens: Tokens | null; costUsd: number | null; verdict: Verdict | null
+  /** The outcome judge's probabilities, two decimals; null when not judged. Lines from before the field lack it. */
+  judge?: Judge | null
 }
 export type Line = DecisionLine | OutcomeLine
 
@@ -44,6 +47,18 @@ function distOf(dim: Dimension, probs: unknown): Record<string, number> {
   for (let level = 0; level < LEVEL_COUNT[dim]; level++) {
     const p = probs[String(level)]
     if (typeof p === 'number' && Number.isFinite(p) && p >= 0 && p <= 1) out[String(level)] = round(p, 2)
+  }
+  return out
+}
+
+/** The judge's three probabilities, each finite in 0..1 and rounded to two decimals; anything else, or a missing flag, is null. */
+export function judgeOf(value: unknown): Judge | null {
+  if (!record(value)) return null
+  const out = {} as Judge
+  for (const flag of JUDGE_FLAGS) {
+    const p = value[flag]
+    if (typeof p !== 'number' || !Number.isFinite(p) || p < 0 || p > 1) return null
+    out[flag] = round(p, 2)
   }
   return out
 }
@@ -90,8 +105,18 @@ function outcome(ctx: Context, ts: string, mode: OutcomeLine['mode'], fields: { 
     v: 1, kind: 'outcome', ts, tool_use_id: word(ctx.toolUseId, 80), role: ctx.role, model: ctx.pair.model, effort: ctx.pair.effort, mode,
     resolvedModel, modelsUsed: Array.isArray(fields.modelsUsed) ? fields.modelsUsed.length : null, status: fields.status, aborted: fields.aborted,
     durationMs: maybeCount(fields.durationMs), tokens: fields.tokens, costUsd: fields.tokens && costOf(modelFamily(resolvedModel) ?? ctx.pair.model, fields.tokens),
-    verdict: ctx.role === 'reviewer' ? verdictOf(fields.text) : null,
+    verdict: ctx.role === 'reviewer' ? verdictOf(fields.text) : null, judge: null,
   }
+}
+/**
+ * A finished outcome and the answer to judge: the final text of a completed run, else empty. The answer stays in memory for
+ * the judge and never goes into the line.
+ */
+export type Ended = { line: OutcomeLine; answer: string }
+const ended = (line: OutcomeLine, text: string): Ended => ({ line, answer: line.status === 'completed' && !line.aborted ? text : '' })
+/** The line with the judge's probabilities, projected one by one; a run that did not complete stays unjudged. */
+export function withJudge(line: OutcomeLine, judge: unknown): OutcomeLine {
+  return { ...line, judge: line.status === 'completed' && !line.aborted ? judgeOf(judge) : null }
 }
 const tokensOf = (usage: unknown): Tokens | null => record(usage)
   ? { input: count(usage.input_tokens), output: count(usage.output_tokens), cacheCreation: count(usage.cache_creation_input_tokens), cacheRead: count(usage.cache_read_input_tokens) } : null
@@ -105,21 +130,23 @@ const textOf = (r: Record<string, unknown>): string => {
  * What the `Agent` call returned: a finished foreground run is an outcome line, a background launch the agent id to
  * wait for, a refusal or anything unrecognized nothing.
  */
-export function afterAgentCall(ctx: Context, result: unknown, ts: string): { line: OutcomeLine } | { launched: string } | null {
+export function afterAgentCall(ctx: Context, result: unknown, ts: string): Ended | { launched: string } | null {
   if (!record(result) || typeof result.deny === 'string') return null
-  if (result.isError === true) return { line: outcome(ctx, ts, 'foreground', { resolvedModel: null, modelsUsed: null, status: 'error', aborted: false, durationMs: null, tokens: null, text: '' }) }
+  if (result.isError === true) return ended(outcome(ctx, ts, 'foreground', { resolvedModel: null, modelsUsed: null, status: 'error', aborted: false, durationMs: null, tokens: null, text: '' }), '')
   const r = result.result
   if (!record(r)) return null
   if (r.status === 'async_launched') return typeof r.agentId === 'string' && r.agentId ? { launched: r.agentId } : null
   if (r.status !== 'completed') return null
-  return { line: outcome(ctx, ts, 'foreground', { resolvedModel: r.resolvedModel, modelsUsed: r.modelsUsed, status: 'completed', aborted: false, durationMs: r.totalDurationMs, tokens: tokensOf(r.usage), text: textOf(r) }) }
+  const text = textOf(r)
+  return ended(outcome(ctx, ts, 'foreground', { resolvedModel: r.resolvedModel, modelsUsed: r.modelsUsed, status: 'completed', aborted: false, durationMs: r.totalDurationMs, tokens: tokensOf(r.usage), text }), text)
 }
 
 export type TurnEnd = { answer: string; durationMs: number; isAborted: boolean; reason: string; usage?: { model: string; input_tokens: number; output_tokens: number; cache_creation_input_tokens: number; cache_read_input_tokens: number } }
-/** A background agent's end: its `turn.complete`. The answer is read for a reviewer's verdict and dropped. */
-export function afterTurn(ctx: Context, turn: TurnEnd, ts: string): OutcomeLine {
+/** A background agent's end: its `turn.complete`. The answer is read for a reviewer's verdict and handed back only for the judge. */
+export function afterTurn(ctx: Context, turn: TurnEnd, ts: string): Ended {
   const status: Status = turn.isAborted || turn.reason === 'aborted' ? 'aborted' : turn.reason === 'error' ? 'error' : turn.reason === 'refusal' ? 'refusal' : 'completed'
-  return outcome(ctx, ts, 'background', { resolvedModel: turn.usage?.model ?? null, modelsUsed: null, status, aborted: status === 'aborted', durationMs: turn.durationMs, tokens: tokensOf(turn.usage), text: typeof turn.answer === 'string' ? turn.answer : '' })
+  const text = typeof turn.answer === 'string' ? turn.answer : ''
+  return ended(outcome(ctx, ts, 'background', { resolvedModel: turn.usage?.model ?? null, modelsUsed: null, status, aborted: status === 'aborted', durationMs: turn.durationMs, tokens: tokensOf(turn.usage), text }), text)
 }
 
 /** Background agents waiting for their `turn.complete`, oldest dropped past the limit. */
@@ -178,7 +205,8 @@ export function parseLedger(text: string): Line[] {
   return out
 }
 
-export type Group = { count: number; failures: number; medianMs: number | null; tokens: number; costUsd: number }
+/** `judged` counts the runs with a judge, `short` those of them judged short (`judgedShort`). */
+export type Group = { count: number; failures: number; medianMs: number | null; tokens: number; costUsd: number; judged: number; short: number }
 export type Summary = {
   decisions: number; outcomes: number
   /** Decisions of an older calibration, left out of `confidence` and `byPredictedTime`. */
@@ -200,6 +228,12 @@ export const failed = (line: OutcomeLine) => line.status !== 'completed' || line
 
 const calibrationOf = (line: DecisionLine) => line.calibration ?? 1
 
+// A line read back from the file is projected again, so a hand-edited judge cannot count.
+function shortShare(items: OutcomeLine[]) {
+  const judges = items.flatMap(i => { const j = judgeOf(i.judge); return j ? [j] : [] })
+  return { judged: judges.length, short: judges.filter(judgedShort).length }
+}
+
 export function summarize(lines: Line[]): Summary {
   const decisions = lines.filter((l): l is DecisionLine => l.kind === 'decision'), outcomes = lines.filter((l): l is OutcomeLine => l.kind === 'outcome')
   // Jev's confidence and the real time per predicted level judge the current questions and table only; runs and fallbacks count every line.
@@ -208,6 +242,7 @@ export function summarize(lines: Line[]): Summary {
     count: items.length, failures: items.filter(failed).length, medianMs: median(items.flatMap(i => i.durationMs === null ? [] : [i.durationMs])),
     tokens: items.reduce((n, i) => n + (i.tokens ? i.tokens.input + i.tokens.output + i.tokens.cacheCreation + i.tokens.cacheRead : 0), 0),
     costUsd: round(items.reduce((n, i) => n + (i.costUsd ?? 0), 0), 6),
+    ...shortShare(items),
   })
   const keyed = (key: (l: OutcomeLine) => string, order: string[]) => {
     const map = new Map<string, OutcomeLine[]>()
@@ -244,7 +279,7 @@ const span = (ms: number | null) => ms === null ? '-' : ms < 1000 ? `${Math.roun
 const tokensText = (n: number) => n < 1000 ? String(n) : n < 1_000_000 ? `${round(n / 1000, 1)}k` : `${round(n / 1_000_000, 2)}M`
 /** A duration criterion as a compact label: `15 minutes to 1 hour` is `15 min to 1 h`. */
 const shortLabel = (label: string) => label.split(':')[0]!.toLowerCase().replace(/ minutes?/g, ' min').replace(/ hours?/g, ' h').replace('more than', 'over')
-const row = (name: string, g: Group) => `  ${name.padEnd(16)} n=${g.count} fail=${pct(g.failures, g.count)} median=${span(g.medianMs)} tokens=${tokensText(g.tokens)} cost=$${g.costUsd.toFixed(4)}`
+const row = (name: string, g: Group) => `  ${name.padEnd(16)} n=${g.count} fail=${pct(g.failures, g.count)} short=${pct(g.short, g.judged)} judged=${g.judged} median=${span(g.medianMs)} tokens=${tokensText(g.tokens)} cost=$${g.costUsd.toFixed(4)}`
 
 export function formatSummary(s: Summary): string {
   // The host prefixes command output with the plugin name, so these texts do not repeat it.

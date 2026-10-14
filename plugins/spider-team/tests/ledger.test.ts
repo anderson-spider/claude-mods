@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { afterAgentCall, afterTurn, appendLine, costOf, createPending, decisionLine, formatSummary, ledgerPath, modelFamily, parseLedger, readAll, ROTATE_AT, rotatedPath, summarize, verdictOf } from '../hooks/ledger'
+import { afterAgentCall, afterTurn, appendLine, costOf, createPending, decisionLine, formatSummary, judgeOf, ledgerPath, modelFamily, parseLedger, readAll, ROTATE_AT, rotatedPath, summarize, verdictOf, withJudge } from '../hooks/ledger'
 import type { DecisionLine, FileIo, Line, OutcomeLine } from '../hooks/ledger'
 import type { Distributions } from '../hooks/effort'
 import { CALIBRATION } from '../hooks/router'
@@ -84,9 +84,10 @@ test('a finished foreground run becomes one outcome line with usage, cost and a 
   expect(ended).toEqual({ line: {
     v: 1, kind: 'outcome', ts: '2026-10-14T10:05:00.000Z', tool_use_id: 'toolu_1', role: 'reviewer', model: 'opus', effort: 'medium', mode: 'foreground',
     resolvedModel: 'claude-opus-5-5', modelsUsed: 1, status: 'completed', aborted: false, durationMs: 90_000,
-    tokens: { input: 1000, output: 500, cacheCreation: 2000, cacheRead: 10_000 }, costUsd: 0.026, verdict: 'CHANGES',
-  } })
-  expect(JSON.stringify(ended)).not.toContain(MARKER)
+    tokens: { input: 1000, output: 500, cacheCreation: 2000, cacheRead: 10_000 }, costUsd: 0.026, verdict: 'CHANGES', judge: null,
+  }, answer: `${MARKER}\nVerdict: CHANGES` })
+  // The answer is handed back for the judge only; the line holds none of it.
+  expect(JSON.stringify((ended as { line: OutcomeLine }).line)).not.toContain(MARKER)
   // Only a reviewer has a verdict; null cache counts are zero; an unknown resolved id costs by the routed family.
   const other = afterAgentCall(ctx('developer'), completed('Verdict: CHANGES', { resolvedModel: 'mystery', usage: { input_tokens: 1000, output_tokens: 500, cache_creation_input_tokens: null, cache_read_input_tokens: null } }), 't') as { line: OutcomeLine }
   expect(other.line).toMatchObject({ verdict: null, resolvedModel: 'mystery', tokens: { input: 1000, output: 500, cacheCreation: 0, cacheRead: 0 }, costUsd: 0.0140 })
@@ -97,7 +98,7 @@ test('a finished foreground run becomes one outcome line with usage, cost and a 
 })
 
 test('a tool error is an error outcome, a background launch is awaited, and a refusal or unknown shape writes nothing', () => {
-  expect(afterAgentCall(ctx('analyst'), { result: 'boom', isError: true, text: MARKER }, 't')).toMatchObject({ line: { status: 'error', tokens: null, costUsd: null, durationMs: null, verdict: null, mode: 'foreground' } })
+  expect(afterAgentCall(ctx('analyst'), { result: 'boom', isError: true, text: MARKER }, 't')).toEqual({ line: expect.objectContaining({ status: 'error', tokens: null, costUsd: null, durationMs: null, verdict: null, judge: null, mode: 'foreground' }), answer: '' })
   expect(afterAgentCall(ctx(), { result: { status: 'async_launched', agentId: 'bg-1', prompt: MARKER, description: MARKER, outputFile: `/tmp/${MARKER}` } }, 't')).toEqual({ launched: 'bg-1' })
   expect(afterAgentCall(ctx(), { result: { status: 'async_launched' } }, 't')).toBeNull()
   for (const value of [{ deny: 'no' }, { result: { status: 'remote_launched' } }, { result: 'text' }, 'text', null, undefined, 3]) expect(afterAgentCall(ctx(), value, 't')).toBeNull()
@@ -106,11 +107,31 @@ test('a tool error is an error outcome, a background launch is awaited, and a re
 test('a background end becomes an outcome line from its turn: duration, usage, reason, abort and the reviewer verdict', () => {
   const turn = { answer: `${MARKER} Verdict: BLOCKED`, durationMs: 5000, isAborted: false, reason: 'answer', usage: { model: 'claude-haiku-5-5', input_tokens: 1000, output_tokens: 500, cache_creation_input_tokens: 2000, cache_read_input_tokens: 10_000 } }
   const done = afterTurn(ctx(), turn, 't')
-  expect(done).toMatchObject({ mode: 'background', status: 'completed', aborted: false, durationMs: 5000, resolvedModel: 'claude-haiku-5-5', modelsUsed: null, costUsd: 0.0007, verdict: 'BLOCKED' })
-  expect(JSON.stringify(done)).not.toContain(MARKER)
-  expect(afterTurn(ctx('analyst'), { ...turn, isAborted: true, reason: 'aborted' }, 't')).toMatchObject({ status: 'aborted', aborted: true, verdict: null })
-  expect(afterTurn(ctx(), { answer: '', durationMs: 10, isAborted: false, reason: 'error' }, 't')).toMatchObject({ status: 'error', tokens: null, costUsd: null, verdict: null })
-  expect(afterTurn(ctx(), { answer: '', durationMs: 10, isAborted: false, reason: 'refusal' }, 't').status).toBe('refusal')
+  expect(done.line).toMatchObject({ mode: 'background', status: 'completed', aborted: false, durationMs: 5000, resolvedModel: 'claude-haiku-5-5', modelsUsed: null, costUsd: 0.0007, verdict: 'BLOCKED', judge: null })
+  expect(done.answer).toBe(turn.answer)
+  expect(JSON.stringify(done.line)).not.toContain(MARKER)
+  // A run that did not complete hands back no answer to judge.
+  expect(afterTurn(ctx('analyst'), { ...turn, isAborted: true, reason: 'aborted' }, 't')).toEqual({ line: expect.objectContaining({ status: 'aborted', aborted: true, verdict: null }), answer: '' })
+  expect(afterTurn(ctx('analyst'), { ...turn, isAborted: true }, 't').answer).toBe('')
+  expect(afterTurn(ctx(), { answer: MARKER, durationMs: 10, isAborted: false, reason: 'error' }, 't')).toEqual({ line: expect.objectContaining({ status: 'error', tokens: null, costUsd: null, verdict: null }), answer: '' })
+  expect(afterTurn(ctx(), { answer: MARKER, durationMs: 10, isAborted: false, reason: 'refusal' }, 't')).toEqual({ line: expect.objectContaining({ status: 'refusal' }), answer: '' })
+})
+
+test('the judge projects its three flags only, each a finite probability rounded to two decimals, and only a completed run keeps one', () => {
+  expect(judgeOf({ finished: 0.914, failingChecks: 0.005, blocked: 1, extra: 0.5, [MARKER]: 1, note: MARKER })).toEqual({ finished: 0.91, failingChecks: 0.01, blocked: 1 })
+  // One hostile, missing or out-of-range flag drops the whole judge: a partial judge cannot apply the short rule.
+  for (const bad of [{ finished: NaN, failingChecks: 0, blocked: 0 }, { finished: 1, failingChecks: Infinity, blocked: 0 }, { finished: 1, failingChecks: 0, blocked: 1.01 }, { finished: -0.1, failingChecks: 0, blocked: 0 },
+    { finished: '0.9', failingChecks: 0, blocked: 0 }, { finished: 1, failingChecks: 0 }, [0.9, 0, 0], MARKER, null, undefined, 1]) expect(judgeOf(bad)).toBeNull()
+  const completedLine = (afterAgentCall(ctx('developer'), completed('Done.'), 't') as { line: OutcomeLine }).line
+  const judgedLine = withJudge(completedLine, { finished: 0.876, failingChecks: 0.02, blocked: 0.1, text: MARKER })
+  expect(judgedLine.judge).toEqual({ finished: 0.88, failingChecks: 0.02, blocked: 0.1 })
+  expect(JSON.stringify(judgedLine)).not.toContain(MARKER)
+  expect(withJudge(completedLine, { finished: NaN, failingChecks: 0, blocked: 0 }).judge).toBeNull()
+  expect(withJudge(completedLine, null).judge).toBeNull()
+  // Error, refused and aborted runs are never judged, whatever is passed.
+  const judge = { finished: 1, failingChecks: 0, blocked: 0 }
+  for (const status of ['error', 'refusal', 'aborted'] as const) expect(withJudge({ ...completedLine, status, aborted: status === 'aborted' }, judge).judge).toBeNull()
+  expect(withJudge({ ...completedLine, aborted: true }, judge).judge).toBeNull()
 })
 
 test('the background map is bounded, drops the oldest and gives each agent once', () => {
@@ -167,11 +188,12 @@ const outcome = (id: string, role: OutcomeLine['role'], patch: Partial<OutcomeLi
   tokens: { input: 1000, output: 1000, cacheCreation: 0, cacheRead: 0 }, costUsd: 0.001, verdict: null, ...patch,
 })
 const MIN = 60_000
+const OK = { finished: 0.95, failingChecks: 0.02, blocked: 0.03 }
 const fixture: Line[] = [
-  decision('a1', 'analyst'), outcome('a1', 'analyst', { durationMs: 2 * MIN }),
+  decision('a1', 'analyst'), outcome('a1', 'analyst', { durationMs: 2 * MIN, judge: OK }),
   decision('a2', 'analyst', { levels: { difficulty: 1, duration: 3 }, top: { difficulty: 0.4, duration: 0.8 } }), outcome('a2', 'analyst', { durationMs: 5 * MIN, status: 'error', tokens: null, costUsd: null }),
-  decision('d1', 'developer', { levels: { difficulty: 2, duration: 2 }, model: 'sonnet', effort: 'high' }), outcome('d1', 'developer', { model: 'sonnet', effort: 'high', durationMs: 12 * MIN, costUsd: 0.04, tokens: { input: 5000, output: 5000, cacheCreation: 0, cacheRead: 0 } }),
-  decision('d2', 'developer', { source: 'default', jevReason: 'no-key', levels: null, top: null, cell: null, model: 'sonnet', effort: 'high' }), outcome('d2', 'developer', { model: 'sonnet', effort: 'high', mode: 'background', durationMs: 130 * MIN, costUsd: 0.06, tokens: { input: 5000, output: 5000, cacheCreation: 0, cacheRead: 0 } }),
+  decision('d1', 'developer', { levels: { difficulty: 2, duration: 2 }, model: 'sonnet', effort: 'high' }), outcome('d1', 'developer', { model: 'sonnet', effort: 'high', durationMs: 12 * MIN, costUsd: 0.04, tokens: { input: 5000, output: 5000, cacheCreation: 0, cacheRead: 0 }, judge: { ...OK, failingChecks: 0.9 } }),
+  decision('d2', 'developer', { source: 'default', jevReason: 'no-key', levels: null, top: null, cell: null, model: 'sonnet', effort: 'high' }), outcome('d2', 'developer', { model: 'sonnet', effort: 'high', mode: 'background', durationMs: 130 * MIN, costUsd: 0.06, tokens: { input: 5000, output: 5000, cacheCreation: 0, cacheRead: 0 }, judge: OK }),
   decision('r1', 'reviewer', { source: 'default', jevReason: 'http', levels: null, top: null, cell: null, model: 'opus', effort: 'medium' }), outcome('r1', 'reviewer', { model: 'opus', effort: 'medium', durationMs: 5 * MIN, verdict: 'CHANGES', costUsd: 0.1 }),
   decision('r2', 'reviewer', { source: 'default', jevReason: 'no-key', levels: null, top: null, cell: null, model: 'opus', effort: 'medium' }), outcome('r2', 'reviewer', { model: 'opus', effort: 'medium', durationMs: 3 * MIN, verdict: 'APPROVED', costUsd: 0.1 }),
   decision('x9', 'architect', { levels: { difficulty: 3, duration: 1 }, top: { difficulty: 0.5, duration: 0.7 }, model: 'opus', effort: 'low' }),
@@ -182,9 +204,9 @@ test('the summary counts runs, failures, medians, tokens, cost, fallbacks, confi
   expect([s.decisions, s.outcomes, s.olderCalibration]).toEqual([7, 6, 0])
   const role = Object.fromEntries(s.byRole.map(r => [r.key, r.group]))
   expect(s.byRole.map(r => r.key)).toEqual(['analyst', 'developer', 'reviewer'])
-  expect(role.analyst).toEqual({ count: 2, failures: 1, medianMs: 3.5 * MIN, tokens: 2000, costUsd: 0.001 })
-  expect(role.developer).toEqual({ count: 2, failures: 0, medianMs: 71 * MIN, tokens: 20_000, costUsd: 0.1 })
-  expect(role.reviewer).toMatchObject({ count: 2, failures: 1, medianMs: 4 * MIN, costUsd: 0.2 })
+  expect(role.analyst).toEqual({ count: 2, failures: 1, medianMs: 3.5 * MIN, tokens: 2000, costUsd: 0.001, judged: 1, short: 0 })
+  expect(role.developer).toEqual({ count: 2, failures: 0, medianMs: 71 * MIN, tokens: 20_000, costUsd: 0.1, judged: 2, short: 1 })
+  expect(role.reviewer).toMatchObject({ count: 2, failures: 1, medianMs: 4 * MIN, costUsd: 0.2, judged: 0, short: 0 })
   expect(s.byPair.map(p => [p.key, p.group.count])).toEqual([['haiku/high', 2], ['sonnet/high', 2], ['opus/medium', 2]])
   expect(s.fallback).toEqual({ count: 3, reasons: { 'no-key': 2, http: 1 } })
   // Top probabilities: difficulty 0.95, 0.4, 0.5 and the jev decision of d1 (0.95); duration 0.6, 0.8, 0.6, 0.7.
@@ -215,7 +237,7 @@ test('each predicted human-time level takes the median real duration of its outc
 
 test('the formatted summary is compact and names every part, and an empty ledger says so', () => {
   const text = formatSummary(summarize(fixture))
-  for (const part of ['7 decisions, 6 outcomes', 'By role', 'analyst', 'fail=50%', 'By final pair', 'opus/medium', 'Default fallbacks: 3 of 7 (43%): http 1, no-key 2', 'Jev top confidence', 'difficulty', 'median=0.72', '[1 / 1 / 0 / 2]', 'Real agent time by predicted human time (current calibration)', '  under 15 min   n=1 median=2m', '  15 min to 1 h  n=0 median=-', '  1 to 4 h       n=1 median=12m', '  over 4 h       n=1 median=5m']) expect(text).toContain(part)
+  for (const part of ['7 decisions, 6 outcomes', 'By role', 'analyst', 'fail=50%', 'short=50% judged=2', 'short=- judged=0', 'By final pair', 'opus/medium', 'Default fallbacks: 3 of 7 (43%): http 1, no-key 2', 'Jev top confidence', 'difficulty', 'median=0.72', '[1 / 1 / 0 / 2]', 'Real agent time by predicted human time (current calibration)', '  under 15 min   n=1 median=2m', '  15 min to 1 h  n=0 median=-', '  1 to 4 h       n=1 median=12m', '  over 4 h       n=1 median=5m']) expect(text).toContain(part)
   expect(text).not.toContain('/home')
   // The host prefixes command output with the plugin name; the summary does not repeat it.
   expect(text.startsWith('7 decisions, 6 outcomes (~/.claude/spider-team/routes.jsonl;')).toBe(true); expect(text).not.toContain('spider-team stats')
@@ -250,4 +272,28 @@ test('the Jev confidence and the real time per predicted level use only current-
   // Only older decisions: nothing to judge, every one named as left out.
   const onlyOld = summarize(older)
   expect([onlyOld.olderCalibration, onlyOld.confidence.difficulty.count, onlyOld.byPredictedTime.reduce((n, t) => n + t.count, 0)]).toEqual([3, 0, 0])
+})
+
+test('a run is judged short when not finished or a failing check or a block fires, and each row shows the short share of judged runs', () => {
+  const line = (id: string, judge: unknown, patch: Partial<OutcomeLine> = {}) => outcome(id, 'developer', { model: 'sonnet', effort: 'high', judge: judge as OutcomeLine['judge'], ...patch })
+  const lines: Line[] = [
+    line('ok', { finished: 0.9, failingChecks: 0.5, blocked: 0.5 }), // at the threshold nothing fires
+    line('unfinished', { finished: 0.49, failingChecks: 0, blocked: 0 }),
+    line('failing', { finished: 1, failingChecks: 0.51, blocked: 0 }),
+    line('blocked', { finished: 1, failingChecks: 0, blocked: 0.6 }),
+    line('finishedAtFire', { finished: 0.5, failingChecks: 0, blocked: 0 }),
+    // Not judged: no judge, a line from before the field, and a hand-edited one with a hostile value.
+    line('unjudged', null), line('old', undefined), line('edited', { finished: NaN, failingChecks: 0, blocked: 0 }),
+    line('errored', null, { status: 'error' }),
+  ]
+  const s = summarize(lines)
+  expect(s.byRole).toEqual([{ key: 'developer', group: expect.objectContaining({ count: 9, judged: 5, short: 3 }) }])
+  expect(s.byPair).toEqual([{ key: 'sonnet/high', group: expect.objectContaining({ judged: 5, short: 3 }) }])
+  // The failure rate is the status and the verdict only, as before.
+  expect(s.byRole[0]!.group.failures).toBe(1)
+  const text = formatSummary(s)
+  expect(text).toContain('  developer        n=9 fail=11% short=60% judged=5 median=1m')
+  expect(text).toContain('  sonnet/high      n=9 fail=11% short=60% judged=5 median=1m')
+  // A row with no judged run says so.
+  expect(formatSummary(summarize([line('none', null)]))).toContain('short=- judged=0')
 })

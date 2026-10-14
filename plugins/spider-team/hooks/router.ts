@@ -1,7 +1,8 @@
 // The whole routing policy in one place, pure data: the questions Jev answers, how its answers become levels, the
-// cost-benefit table those levels select, the capacity ladder, each role's floor and default, and the prices behind the
-// cost estimate. A new model means editing MODELS in roles.ts, the ladder and the cells here; tsc fails on a cell, floor
-// or default that is not a ladder entry and on a missing cell. effort.ts only carries it out.
+// cost-benefit table those levels select, the capacity ladder, each role's floor and default, the outcome judge's
+// questions and threshold, and the prices behind the cost estimate. A new model means editing MODELS in roles.ts, the
+// ladder and the cells here; tsc fails on a cell, floor or default that is not a ladder entry and on a missing cell.
+// effort.ts and judge.ts only carry it out.
 //
 // Policy note, not a measurement: Haiku 5.5 costs about 1/20 of Sonnet 5.5 per token and beats Sonnet medium on
 // merge-quality coding, so Sonnet low and medium are dominated by Haiku high and xhigh. Opus low costs about what Sonnet
@@ -80,6 +81,22 @@ export function routeOf(role: Role, difficulty: number, duration: number): { cel
   const cell = ROUTES[label][group], final = higher(cell, ROLE_POLICY[role].floor)
   return { cell: pairOf(cell), pair: pairOf(final), floorApplied: final !== cell }
 }
+
+// The outcome judge: three yes/no questions (Noul, a probability where high is yes) about an agent's final answer, one flaw
+// each, sent with the redacted answer as `report.text`. They label whether the routed pair was enough; they do not route, so
+// they leave CALIBRATION alone.
+export const JUDGE_FLAGS = ['finished', 'failingChecks', 'blocked'] as const
+export type JudgeFlag = (typeof JUDGE_FLAGS)[number]
+export type Judge = Record<JudgeFlag, number>
+export const JUDGE_QUESTIONS = {
+  finished: { type: 'noul', instructions: 'Does `report.text` say the agent completed everything it was asked to do?' },
+  failingChecks: { type: 'noul', instructions: 'Does `report.text` report a failing test, check or build that it left unresolved?' },
+  blocked: { type: 'noul', instructions: 'Does `report.text` say the agent stopped, was blocked, or needs help or a decision before the work can be finished?' },
+} as const satisfies Record<JudgeFlag, { type: 'noul'; instructions: string }>
+/** A flag fires past this probability. */
+export const JUDGE_FIRE = 0.5
+/** A run judged short of its task: not finished, or a failing check or a block left behind. */
+export const judgedShort = (judge: Judge): boolean => judge.finished < JUDGE_FIRE || judge.failingChecks > JUDGE_FIRE || judge.blocked > JUDGE_FIRE
 
 /** USD per million tokens, list prices as of October 2026 (Haiku prices are for prompts up to 100k tokens). */
 export type Price = { input: number; output: number; cacheWrite: number; cacheRead: number }
