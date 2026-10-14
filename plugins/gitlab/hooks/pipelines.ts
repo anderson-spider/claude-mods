@@ -1,6 +1,6 @@
 // gitlab_pipeline: the pipelines of a merge request or branch, their jobs, and retrying, cancelling or playing them.
 import type { McpToolInputs } from 'claude-code'
-import { InputError, bool, clip, id, json, mrIid, str, type Ctx } from './context'
+import { InputError, NoMrError, bool, clip, id, json, mrIid, str, type Ctx } from './context'
 
 export type PipelineAction = McpToolInputs['mcp__gitlab__gitlab_pipeline']['action']
 export type PipelineInput = { [K in keyof McpToolInputs['mcp__gitlab__gitlab_pipeline']]?: unknown }
@@ -47,7 +47,8 @@ async function pipelines(ctx: Ctx, input: PipelineInput): Promise<{ from: string
     try {
       iid = await mrIid(ctx, input.iid)
     } catch (err) {
-      if (input.iid !== undefined || !(err instanceof InputError)) throw err
+      // only a branch with no open MR falls back to the branch: two MRs of the branch, or a detached HEAD, are refused
+      if (input.iid !== undefined || !(err instanceof NoMrError)) throw err
     }
     if (iid !== undefined) return { from: `MR !${iid}`, list: (await ctx.api.get(`/merge_requests/${iid}/pipelines`, { per_page: 10 })) as Pipeline[] }
   }

@@ -10,6 +10,9 @@ export type Ctx = {
 /** A request the tool refuses before calling the API; its message goes to the model as is. */
 export class InputError extends Error {}
 
+/** No open MR has the current branch as its source: the one refusal a caller may answer with the branch itself. */
+export class NoMrError extends InputError {}
+
 export const MAX_CHARS = 60_000
 
 /** The text, cut at `MAX_CHARS` with a note saying how to ask for less. */
@@ -57,7 +60,7 @@ export async function mrIid(ctx: Ctx, iid: unknown): Promise<number> {
   if (!branch) throw new InputError('No iid was given and the current branch is unknown (detached HEAD). Pass iid.')
   const open = (await ctx.api.get('/merge_requests', { state: 'opened', source_branch: branch, per_page: 20 })) as MrRef[]
   const own = (Array.isArray(open) ? open : []).filter((mr) => mr.source_project_id === undefined || mr.source_project_id === mr.project_id)
-  if (own.length === 0) throw new InputError(`No open merge request has ${branch} as its source branch. Pass iid.`)
+  if (own.length === 0) throw new NoMrError(`No open merge request has ${branch} as its source branch. Pass iid.`)
   if (own.length > 1) throw new InputError(`Open merge requests ${own.map((mr) => `!${mr.iid}`).join(', ')} all have ${branch} as their source branch. Pass iid.`)
   return own[0]!.iid
 }

@@ -20,6 +20,13 @@ test('list prefers the open MR of the current branch, and falls back to the bran
   expect(noMr.calls.at(-1)?.query).toEqual({ ref: 'feature/x', per_page: 10 })
 })
 
+test('two open MRs of the branch are refused instead of falling back to the branch pipelines', async () => {
+  const own = { ...MR, project_id: 1, source_project_id: 1 }
+  const { ctx, calls } = fakeCtx({ 'GET /merge_requests': [own, { ...own, iid: 9 }], 'GET /pipelines': [P(91, 'running')] })
+  await expect(pipeline(ctx, { action: 'jobs' })).rejects.toThrow('Open merge requests !7, !9 all have feature/x as their source branch. Pass iid.')
+  expect(calls.map((c) => c.path)).toEqual(['/merge_requests'])
+})
+
 test('list by ref skips the MR lookup, and an explicit iid without an MR is an error', async () => {
   const { ctx, calls } = fakeCtx({ 'GET /pipelines': [] })
   await pipeline(ctx, { action: 'list', ref: 'main' })
