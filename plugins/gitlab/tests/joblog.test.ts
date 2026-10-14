@@ -32,6 +32,17 @@ test('errorExcerpt caps the match lines even when the matches merge into one ran
   expect(shown[299]).toBe('  300| error 300')
 })
 
+test('full mode stops formatting a huge log at the character cap and says it was cut', async () => {
+  const trace = Array.from({ length: 200_000 }, (_, i) => `line ${i + 1} ${'x'.repeat(40)}`).join('\n')
+  const { ctx } = fakeCtx({ 'GET /jobs/3': { name: 'big', status: 'success' }, 'GET /jobs/3/trace': trace })
+
+  const full = await jobLog(ctx, { jobId: 3, mode: 'full' })
+
+  expect(full.length).toBeLessThan(61_000)
+  expect(full).toContain('    1| line 1 ')
+  expect(full.endsWith('…(truncated; use mode errors or tail)')).toBe(true)
+})
+
 test('errors mode heads the excerpt with the job and its failure reason; tail and pattern work', async () => {
   const trace = ['$ npm test', 'ok 1', 'FAIL src/a.test.ts', 'expected 1', 'done'].join('\n')
   const { ctx } = fakeCtx({

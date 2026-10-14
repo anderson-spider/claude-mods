@@ -1,6 +1,6 @@
 // gitlab_job_log: a job's log, cleaned of terminal codes and cut to what explains a failure.
 import type { McpToolInputs } from 'claude-code'
-import { InputError, clip, id, need, str, type Ctx } from './context'
+import { InputError, MAX_CHARS, clip, id, need, str, type Ctx } from './context'
 
 export type LogInput = { [K in keyof McpToolInputs['mcp__gitlab__gitlab_job_log']]?: unknown }
 
@@ -26,6 +26,18 @@ export function cleanLog(raw: string): string[] {
 }
 
 const numbered = (lines: string[], from: number) => lines.map((l, i) => `${String(from + i + 1).padStart(5)}| ${l}`)
+
+/** The lines from `from`, numbered only until just past `MAX_CHARS`, so a huge log is not formatted whole only to be clipped. */
+function numberedWithin(lines: string[], from: number): string {
+  const out: string[] = []
+  let size = 0
+  for (let i = from; i < lines.length && size <= MAX_CHARS; i++) {
+    const line = `${String(i + 1).padStart(5)}| ${lines[i]}`
+    out.push(line)
+    size += line.length + 1
+  }
+  return out.join('\n')
+}
 
 /** The matching lines with `CONTEXT` lines around each (ranges merged, gaps marked), then the log's last lines. */
 export function errorExcerpt(lines: string[], match: RegExp): { text: string; matches: number } {
@@ -74,11 +86,11 @@ export async function jobLog(ctx: Ctx, input: LogInput): Promise<string> {
   const meta = (await ctx.api.get(`/jobs/${job}`)) as { name?: string; status?: string; failure_reason?: string; stage?: string }
   const lines = cleanLog(await ctx.api.text(`/jobs/${job}/trace`))
   const head = `Job ${job} ${meta.name ?? ''} (${meta.stage ?? '?'}): ${meta.status ?? '?'}${meta.failure_reason ? `, ${meta.failure_reason}` : ''}; ${lines.length} lines`
-  if (mode === 'full') return clip(`${head}\n${numbered(lines, 0).join('\n')}`, 'use mode errors or tail')
+  if (mode === 'full') return clip(`${head}\n${numberedWithin(lines, 0)}`, 'use mode errors or tail')
   if (mode === 'tail') {
     const n = id(input.lines, 'lines') ?? DEFAULT_TAIL
     const from = Math.max(0, lines.length - n)
-    return clip(`${head}\n${numbered(lines.slice(from), from).join('\n')}`, 'ask for fewer lines')
+    return clip(`${head}\n${numberedWithin(lines, from)}`, 'ask for fewer lines')
   }
   const { text, matches } = errorExcerpt(lines, match)
   return clip(`${head}; ${matches} matching lines, then the last ${Math.min(TAIL_WITH_ERRORS, lines.length)}\n${text}`, 'pass pattern to narrow it')
