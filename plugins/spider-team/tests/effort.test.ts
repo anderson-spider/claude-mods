@@ -13,29 +13,28 @@ test('two questions carry the difficulty and duration criteria and nothing else'
   expect(QUESTIONS.duration.instructions).toBe('How long would an experienced engineer who already knows this codebase need to finish this task?')
 })
 
-test('the level minimizes expected penalty with under-capacity weighted 1.25 and ties going lower', () => {
-  expect(POLICY).toEqual({ under: 1.25, over: 1 })
+test('the level minimizes expected penalty with over-capacity weighted 1.25 and ties going lower', () => {
+  expect(POLICY).toEqual({ under: 1, over: 1.25 })
   expect(levelOf({ '0': 1, '1': 0, '2': 0, '3': 0, '4': 0 })).toBe(0)
   expect(levelOf({ '0': 0, '1': 0, '2': 0, '3': 0, '4': 1 })).toBe(4)
-  // Even odds between 0 and 1: missing capacity costs more, so the higher level wins.
-  expect(levelOf({ '0': 0.5, '1': 0.5 })).toBe(1)
-  // Between adjacent levels the lower one wins from 5/9 (about 56%) of the weight. At 2:1 it needed two thirds, so 62% went up.
-  expect(levelOf({ '2': 0.62, '3': 0.38 })).toBe(2)
-  expect(levelOf({ '2': 0.65, '3': 0.35 })).toBe(2)
-  expect(levelOf({ '0': 2 / 3, '1': 1 / 3 })).toBe(0)
-  expect(levelOf({ '0': 0.7, '1': 0.3 })).toBe(0)
-  // The first live run's 57% on the lower level stays there; under 5/9 the higher level still wins.
+  // Even odds between 0 and 1: spare capacity costs more, so the cheaper level wins.
+  expect(levelOf({ '0': 0.5, '1': 0.5 })).toBe(0)
+  // A split judgment stays on the lower level: the higher one needs more than 5/9 (about 56%) of the weight.
   expect(levelOf({ '2': 0.57, '3': 0.43 })).toBe(2)
-  expect(levelOf({ '2': 0.55, '3': 0.45 })).toBe(3)
-  // Exactly 5/9 is a tie, which rounding keeps on the lower level despite the float error of 4/9 x 1.25.
-  expect(levelOf({ '0': 5 / 9, '1': 4 / 9 })).toBe(0)
-  expect(levelOf({ '2': 5 / 9, '3': 4 / 9 })).toBe(2)
-  // A tail that matters: a quarter of the weight on level 4 pulls past the middle only with half the weight there.
+  expect(levelOf({ '2': 0.47, '3': 0.53 })).toBe(2)
+  expect(levelOf({ '2': 0.45, '3': 0.55 })).toBe(2)
+  expect(levelOf({ '2': 0.4, '3': 0.6 })).toBe(3)
+  expect(levelOf({ '2': 0.03, '3': 0.83, '4': 0.14 })).toBe(3)
+  // Exactly 4/9 on the lower level is a tie, which rounding keeps on the lower level despite the float error of 4/9 x 1.25.
+  expect(levelOf({ '0': 4 / 9, '1': 5 / 9 })).toBe(0)
+  expect(levelOf({ '2': 4 / 9, '3': 5 / 9 })).toBe(2)
+  // A tail that matters: the top level wins only with most of the weight on it.
   expect(levelOf({ '0': 0.25, '2': 0.5, '4': 0.25 })).toBe(2)
-  expect(levelOf({ '0': 0.25, '2': 0.25, '4': 0.5 })).toBe(4)
-  // Ties among distant levels also go to the lowest; a little more on the high level breaks it.
-  expect(levelOf({ '0': 0.6, '3': 0.4 })).toBe(0)
-  expect(levelOf({ '0': 0.55, '3': 0.45 })).toBe(3)
+  expect(levelOf({ '0': 0.25, '2': 0.25, '4': 0.5 })).toBe(2)
+  expect(levelOf({ '0': 0.1, '2': 0.2, '4': 0.7 })).toBe(4)
+  // Distant levels: the low one keeps a 45% share; a clear majority on the high one moves it.
+  expect(levelOf({ '0': 0.45, '3': 0.55 })).toBe(0)
+  expect(levelOf({ '0': 0.3, '3': 0.7 })).toBe(3)
 })
 
 test('probabilities normalize omitted entries and invalid distributions fail closed', () => {
@@ -61,7 +60,8 @@ test('Jev levels select the pair from the table, grouping duration after the lev
     expect(h.requests).toHaveLength(1)
   }
   const h = ports(); h.answers.difficulty = { probabilities: { '1': 0.5, '2': 0.5 } }; h.answers.duration = { probabilities: { '1': 0.5, '2': 0.5 } }
-  expect(await ask(h)).toMatchObject({ model: 'sonnet', effort: 'high', levels: { difficulty: 2, duration: 2 } })
+  // An even split on both dimensions goes to the cheaper level of each: easy and short.
+  expect(await ask(h)).toMatchObject({ model: 'haiku', effort: 'high', levels: { difficulty: 1, duration: 1 } })
 })
 
 test('every assessment failure keeps the exact role fallback and logging failure changes nothing', async () => {
@@ -89,7 +89,7 @@ test('every assessment failure keeps the exact role fallback and logging failure
 test('the choice carries the raw cell, the floor result, the levels, the top probability and full distribution of each dimension and the Jev latency', async () => {
   const h = ports(); h.answers.difficulty = { probabilities: { '0': 0.75, '1': 0.25 } }; h.answers.duration = { probabilities: { '0': 1 } }
   let clock = 100; h.io.jev.now = () => (clock += 40)
-  // Difficulty 0 (a quarter on 1 still picks 0: 0.25 x 1.25 < 0.75 x 1), duration 0: the cell is haiku/medium and the developer floor lifts it.
+  // Difficulty 0 (a quarter on 1 still picks 0: 0.25 x 1 < 0.75 x 1.25), duration 0: the cell is haiku/medium and the developer floor lifts it.
   const choice = await ask(h, 'developer')
   expect(choice).toMatchObject({ model: 'haiku', effort: 'high', cell: { model: 'haiku', effort: 'medium' }, floorApplied: true, source: 'jev', levels: { difficulty: 0, duration: 0 }, top: { difficulty: 0.75, duration: 1 }, jevReason: null })
   // The distributions are the normalized ones, every level of each question, omitted levels at zero.
