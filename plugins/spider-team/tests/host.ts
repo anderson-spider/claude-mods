@@ -7,7 +7,7 @@ import { createBreaker, createGate } from '../hooks/jev'
 export function ports() {
   const requests: { url: string; body: string; headers: Record<string, string> }[] = [], logs: string[] = [], settingsReads: string[] = []
   const faults = { settings: false, http: 200 }
-  const answers: Record<string, unknown> = { difficulty: { probabilities: { '0': 1 } }, duration: { probabilities: { '0': 1 } }, scope: { probabilities: { '0': 1 } }, task_type: { probabilities: { research: 1 } } }
+  const answers: Record<string, unknown> = { difficulty: { probabilities: { '0': 1 } }, duration: { probabilities: { '0': 1 } } }
   const io: EffortIo & { home: string; root: string; key?: string; baseRef?: string } = {
     home: '/home/u', root: '/repo', baseRef: 'head',
     settings: async source => { settingsReads.push(source); if (faults.settings) throw new Error('settings unavailable'); return {} },

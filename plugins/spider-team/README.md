@@ -12,12 +12,12 @@ Invoke `/spider-team:using-spider-team` for the lead's workflow. Call the native
 
 | Type | Default | Access |
 | --- | --- | --- |
-| `spider-team:analyst` | haiku / medium | Read and investigate. |
-| `spider-team:architect` | opus / high | Design changes and check invariants. |
-| `spider-team:developer` | sonnet / medium | Implement and test in its own worktree. |
-| `spider-team:reviewer` | sonnet / high | Review a developer worktree with read-only git commands. |
+| `spider-team:analyst` | sonnet / medium | Read and investigate. |
+| `spider-team:architect` | opus / medium | Design changes and check invariants. |
+| `spider-team:developer` | sonnet / high | Implement and test in its own worktree. |
+| `spider-team:reviewer` | opus / low | Review a developer worktree with read-only git commands. |
 
-Each agent is a plain registered definition: role prompt, tool allowlist, default model and effort. All inherit the project instructions and the lead's permission mode. Analyst and architect get Read, Grep, Glob, LSP and Skill; reviewer also gets Bash, which its prompt limits to read-only git inspection; developer gets Write, Edit and Bash. None of them can call Agent, SendMessage, ToolSearch or the worktree tools. Each ends with a short answer for the lead: the outcome, findings with file:line evidence, open questions and checks.
+Each agent is a plain registered definition: role prompt, tool allowlist, default model and effort (a cell of the table below, so editing the table moves the default). All inherit the project instructions and the lead's permission mode. Analyst and architect get Read, Grep, Glob, LSP and Skill; reviewer also gets Bash, which its prompt limits to read-only git inspection; developer gets Write, Edit and Bash. None of them can call Agent, SendMessage, ToolSearch or the worktree tools. Each ends with a short answer for the lead: the outcome, findings with file:line evidence, open questions and checks.
 
 Developer runs with `isolation: "worktree"` and requires the consuming project's merged settings to contain:
 
@@ -29,24 +29,28 @@ Without it the call is refused with that instruction, since the worktree would s
 
 ## Model and effort
 
-A hook on the `Agent` tool picks the model and effort of the four Spider types; every other agent type passes untouched. Effort is capped at high from every source.
+A hook on the `Agent` tool picks the model and effort of the four Spider types; every other agent type passes untouched. Jev assesses only difficulty and duration, and a fixed table maps them to the pair.
 
-- An explicit Agent `model` or `effort`, or a profile directive in the task, wins and skips Jev; omitted fields come from the role default. Model pins accept opus, sonnet and haiku; effort pins accept low, medium, high, xhigh and max, with xhigh/max sent as high. Other models and malformed or contradictory directives refuse the call.
-- Otherwise, with `JEV_API_KEY` in the user's environment, Jev assesses difficulty, duration, scope and task type, and the closest profile below is chosen. A project/local settings declaration of the key, even empty, or unreadable settings turn Jev off.
-- Otherwise, or when Jev fails, the role default applies. The chosen pair is appended to the call's description, so the transcript shows it beside the task. A failure inside the hook itself dispatches the call exactly as the lead wrote it.
-
-| Directive | Pair | Difficulty / duration / scope | Rank |
+| Difficulty \ duration | short | medium | long |
 | --- | --- | --- | --- |
-| `@haiku-low` | haiku / low | 0 / 0.3 / 0.5 | 1 |
-| `@haiku-medium` | haiku / medium | 1 / 0.9 / 1 | 2 |
-| `@haiku-high` | haiku / high | 1.5 / 1.5 / 1.5 | 3 |
-| `@sonnet-medium` | sonnet / medium | 2.5 / 1.5 / 2 | 4 |
-| `@sonnet-high` | sonnet / high | 3 / 2.2 / 3 | 5 |
-| `@opus-high` | opus / high | 4 / 3 / 3 | 6 |
+| trivial (0) | haiku / low | haiku / low | haiku / medium |
+| easy (1) | sonnet / low | sonnet / medium | sonnet / medium |
+| moderate (2) | sonnet / medium | sonnet / high | sonnet / high |
+| hard (3) | opus / low | opus / medium | opus / high |
+| expert (4) | opus / high | fable / high | fable / high |
 
-The profile points are policy priors, not measured prices or benchmarks. Dimension directives are `!difficulty=0..4`, `!duration=0..3`, `!scope=0..3` and `!task_type=implement|bugfix|refactor|review|research|docs|test`; `!hard` means difficulty 3, `!long` duration 3 and `!quick` duration 0. Complete dimension pins select locally; partial pins ask Jev only for the rest. Recognized directives are removed from the task; quoted, escaped and fenced text stays intact.
+Difficulty levels 0 to 4 are the difficulty question's criteria; duration levels 0 to 3 are the duration question's, grouped as 0 or 1 short, 2 medium and 3 long. The table is fixed in `hooks/router.ts`, which also holds the level labels, the duration groups and each role's default cell; a new model is an edit of `MODELS` in `hooks/roles.ts` and of the cells, and the type-check fails on an unknown model or effort or a missing cell.
 
-Selection integrates expected penalties with under-capacity weight 4, over-capacity weight 0.5 and tolerance 0.5; dimension weights are 1, 1, 0.5 and 0.25, and lower rank breaks ties. Jev uses a fixed endpoint and model, one shared three-second deadline, bounded retries, a concurrency gate and a circuit breaker. The chosen pair goes to the debug log.
+For each dimension Jev returns a probability distribution, and the level is the integer that minimizes the expected penalty: missing capacity weighs 2, spare capacity weighs 1, and ties go to the lower level. Grouping the duration happens after its level is chosen.
+
+Why these cells, as a policy note and not a measured fact: in the published accuracy-versus-cost charts for Sonnet 5.5 and Opus 5.5, Opus at low effort costs about the same per task as Sonnet at high effort with similar results; Opus at medium looks like the best value for hard code; Opus above high stays flat or drops; Sonnet at max only pays off on long terminal runs and lowers merge quality. Haiku and Fable have no published numbers here, so they sit at the two ends.
+
+- An explicit Agent `model` (haiku, sonnet, opus or fable) or `effort` (low, medium, high, xhigh or max) is a pin. Each is independent and sent as given: a pinned lever skips Jev for that lever, both pinned skip Jev entirely, and nothing caps the effort. Other values refuse the call.
+- Directives in the task narrow the question: `!difficulty=0..4` and `!duration=0..3`, with `!hard` meaning difficulty 3, `!long` duration 3 and `!quick` duration 0. With both given, the table decides locally; with one, Jev is asked only for the other. Recognized directives are removed from the task; quoted, escaped and fenced text stays intact, and a word starting with an at sign is ordinary task text. Contradictory or unknown bang directives refuse the call.
+- Jev needs `JEV_API_KEY` in the user's environment. A project/local settings declaration of the key, even empty, or unreadable settings turn Jev off. When Jev is off or fails, an unpinned lever takes the role default.
+- The chosen pair is appended to the call's description, so the transcript shows it beside the task, and goes to the debug log. A failure inside the hook itself dispatches the call exactly as the lead wrote it.
+
+Jev uses a fixed endpoint and model, one shared three-second deadline, bounded retries, a concurrency gate and a circuit breaker.
 
 ## Privacy and validation
 

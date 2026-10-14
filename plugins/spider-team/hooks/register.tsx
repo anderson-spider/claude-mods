@@ -1,6 +1,6 @@
 import type { BuiltinToolInputs, Hook, Register } from 'claude-code'
-import { SPECS, capEffort, roleOf } from './roles'
-import { assessProfile, INVALID_PINS, parsePins } from './effort'
+import { SPECS, roleOf } from './roles'
+import { assessRoute, INVALID_PINS, parsePins } from './effort'
 import type { EffortIo } from './effort'
 import { createBreaker, createGate } from './jev'
 
@@ -33,7 +33,7 @@ export const register: Register = on => {
     await $.agent.register({ ...SPECS.architect, name: 'architect' })
     return next(e)
   })
-  // Picks model and effort for a Spider role: pins, then Jev, then the role default. Effort never exceeds high.
+  // Picks model and effort for a Spider role: pins, then Jev through the router table, then the role default.
   on('tool.call', { tool: 'Agent' }, async ($, e, next) => {
     const call = e as BuiltinToolInputs['Agent'] & { tool_use_id: string }
     const role = roleOf(call.subagent_type)
@@ -45,11 +45,11 @@ export const register: Register = on => {
       const settings = await $.settings.read() as { worktree?: { baseRef?: string } }
       if (settings.worktree?.baseRef !== 'head') return { deny: BASE_REF }
     }
-    const choice = await assessProfile(io($), {
+    const choice = await assessRoute(io($), {
       role, task: parsed.task, pins: parsed.pins,
       home: await $.env.get('HOME') ?? '', root: await $.session.root(), key: await $.env.get('JEV_API_KEY'),
     })
-    const model = choice.model, effort = capEffort(choice.effort)
+    const model = choice.model, effort = choice.effort
     $.ui.log(`spider-team: ${role} → ${model}/${effort} (${choice.source})`, { to: 'debug' })
     // The pair shows beside the task in the transcript.
     return next({ ...e, prompt: parsed.task, description: `${call.description} (${model}/${effort})`, model, effort })
