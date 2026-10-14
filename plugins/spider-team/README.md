@@ -24,7 +24,7 @@ The planner answers with one Markdown plan and writes no file: goal and scope; o
 
 ### Review
 
-The lead calls the reviewer before opening a pull or merge request, with the checkout path, the branch, the target branch, the acceptance criteria and the checks it ran. The reviewer reviews the commits from the merge base with the target branch (`git merge-base <target> HEAD`) to HEAD, the staged and unstaged changes and every untracked file, read in full, with read-only git commands (status, log, diff, show, merge-base, ls-files). It judges the complete resulting diff, not only the latest fixes, and answers BLOCKED, naming the part, when it cannot inspect any of them. Its verdict is APPROVED, CHANGES or BLOCKED.
+The lead calls the reviewer before opening a pull or merge request, with the checkout path, the branch, the target branch, the acceptance criteria and the checks it ran. The reviewer reviews the commits from the merge base with the target branch (`git merge-base <target> HEAD`) to HEAD, the staged and unstaged changes and every untracked file (`git ls-files --others --exclude-standard`), read in full, with read-only git commands (status, log, diff, show, merge-base, ls-files). It judges the complete resulting diff, not only the latest fixes, and answers BLOCKED, naming the part, when it cannot inspect any of them. Its verdict is APPROVED, CHANGES or BLOCKED.
 
 ## Model and effort
 

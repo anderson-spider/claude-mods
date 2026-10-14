@@ -177,6 +177,8 @@ test('parsing skips malformed and foreign lines, counts a repeated line once and
   const decision = JSON.stringify({ v: 1, kind: 'decision', ts: 't', tool_use_id: 'a', role: 'analyst', model: 'haiku', effort: 'high', source: 'default' })
   const retired = ['developer', 'architect'].map(role => JSON.stringify({ v: 1, kind: 'outcome', ts: 't', tool_use_id: role, role, model: 'opus', effort: 'medium' }))
   expect(parseLedger(retired.join('\n')).map(l => l.role)).toEqual(['developer', 'architect'])
+  // Each retired role is its own stats group: an old architect outcome is not counted as the planner.
+  expect(summarize(parseLedger(retired.join('\n'))).byRole.map(r => [r.key, r.group.count])).toEqual([['developer', 1], ['architect', 1]])
   const text = ['not json', '', decision, decision, JSON.stringify({ v: 2, kind: 'decision', role: 'analyst', model: 'haiku', effort: 'high' }), JSON.stringify({ v: 1, kind: 'other', role: 'analyst', model: 'haiku', effort: 'high' }), JSON.stringify({ v: 1, kind: 'outcome', role: 'nobody', model: 'haiku', effort: 'high' }), '[1]', '3'].join('\n')
   expect(parseLedger(text)).toHaveLength(1)
 })
