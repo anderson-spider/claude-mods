@@ -1,6 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { QUESTIONS } from '../hooks/effort'
-import { defaultOf, DIFFICULTIES, DURATION_GROUPS, GROUP_OF_DURATION, ROLE_CELLS, ROUTES, routeOf } from '../hooks/router'
+import { defaultOf, DIFFICULTIES, QUESTIONS, DURATION_GROUPS, GROUP_OF_DURATION, ROLE_CELLS, ROUTES, routeOf } from '../hooks/router'
 import { EFFORTS, MODELS, ROLES, SPECS } from '../hooks/roles'
 
 const TABLE: Record<(typeof DIFFICULTIES)[number], [string, string, string]> = {

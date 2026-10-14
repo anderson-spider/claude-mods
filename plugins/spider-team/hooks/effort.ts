@@ -1,34 +1,20 @@
-// Routing policy and assessment. Host access is injected; only redacted task text leaves the machine.
+// Assessment: asks Jev the router's questions and maps the answers through its table. Host access is injected; only redacted task text leaves the machine.
 import { classifyFailure, createJev, JevFailure } from './jev'
 import type { Answers, Breaker, Gate, JevFailureReason, JevIo } from './jev'
 import { resolveAccess } from './key'
 import type { KeyIo, Off } from './key'
 import { head, redact, REDACTED } from './redact'
-import { defaultOf, routeOf } from './router'
+import { defaultOf, DIMENSIONS, POLICY, QUESTIONS, routeOf } from './router'
+import type { Dimension } from './router'
 import type { Pair, Role } from './roles'
 
 export const JEV_MODEL = 'jev-1.13.0'
 export const TASK_CHARS = 4000
-export const DIMENSIONS = ['difficulty', 'duration'] as const
-export type Dimension = (typeof DIMENSIONS)[number]
 export type Levels = Record<Dimension, number>
 export type Distributions = Record<Dimension, Record<string, number>>
 export type JevReason = Off | JevFailureReason
 export type Source = 'jev' | 'default'
 export type Choice = Pair & { source: Source; jevAsked: boolean; levels: Levels | null; jevReason: JevReason | null }
-
-// Policy, not a measurement: a task that needs more than the pair gives costs twice what spare capacity does.
-export const POLICY = { under: 2, over: 1 } as const
-export const QUESTIONS = {
-  difficulty: {
-    type: 'score', instructions: 'How hard is this task for a capable coding agent?',
-    criteria: ['Trivial: a one-line or purely mechanical change', 'Easy: small, well-understood change in one place', 'Moderate: needs some understanding of the surrounding code', 'Hard: subtle logic, several interacting parts, or unclear root cause', 'Expert: architecture, concurrency, security, or deep domain reasoning'],
-  },
-  duration: {
-    type: 'score', instructions: 'How long will a coding agent need to finish this task?',
-    criteria: ['Under 5 minutes', '5 to 30 minutes', '30 to 120 minutes', 'Several hours or more'],
-  },
-} as const
 
 const round = (n: number) => Math.round(n * 1_000_000) / 1_000_000
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value)

@@ -1,6 +1,24 @@
-// The cost-benefit table: Jev's difficulty and duration levels select one model and effort. Pure data.
-// A new model means editing MODELS in roles.ts and the cells here; tsc fails on an unknown model or effort and on a missing cell.
+// The whole routing policy in one place, pure data: the questions Jev answers, how its answers become levels, the
+// cost-benefit table those levels select and each role's default cell. A new model means editing MODELS in roles.ts and
+// the cells here; tsc fails on an unknown model or effort and on a missing cell. effort.ts only carries it out.
 import type { Pair, Role } from './roles'
+
+export const DIMENSIONS = ['difficulty', 'duration'] as const
+export type Dimension = (typeof DIMENSIONS)[number]
+/** One request carries both questions; each criterion list is the level scale its answers use. */
+export const QUESTIONS = {
+  difficulty: {
+    type: 'score', instructions: 'How hard is this task for a capable coding agent?',
+    criteria: ['Trivial: a one-line or purely mechanical change', 'Easy: small, well-understood change in one place', 'Moderate: needs some understanding of the surrounding code', 'Hard: subtle logic, several interacting parts, or unclear root cause', 'Expert: architecture, concurrency, security, or deep domain reasoning'],
+  },
+  duration: {
+    type: 'score', instructions: 'How long will a coding agent need to finish this task?',
+    criteria: ['Under 5 minutes', '5 to 30 minutes', '30 to 120 minutes', 'Several hours or more'],
+  },
+} as const
+
+// Policy, not a measurement: a task that needs more than the pair gives costs twice what spare capacity does.
+export const POLICY = { under: 2, over: 1 } as const
 
 /** Difficulty levels 0..4, in the order of the difficulty question's criteria. */
 export const DIFFICULTIES = ['trivial', 'easy', 'moderate', 'hard', 'expert'] as const

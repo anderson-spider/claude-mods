@@ -39,7 +39,7 @@ A hook on the `Agent` tool picks the model and effort of the four Spider types; 
 | hard (3) | opus / low | opus / medium | opus / high |
 | expert (4) | opus / high | fable / high | fable / high |
 
-Difficulty levels 0 to 4 are the difficulty question's criteria; duration levels 0 to 3 are the duration question's, grouped as 0 or 1 short, 2 medium and 3 long. The table is fixed in `hooks/router.ts`, which also holds the level labels, the duration groups and each role's default cell; a new model is an edit of `MODELS` in `hooks/roles.ts` and of the cells, and the type-check fails on an unknown model or effort or a missing cell.
+Difficulty levels 0 to 4 are the difficulty question's criteria; duration levels 0 to 3 are the duration question's, grouped as 0 or 1 short, 2 medium and 3 long. The table is fixed in `hooks/router.ts`, which holds the whole routing policy in one file: the two questions sent to Jev, the penalty weights below, the level labels, the duration groups and each role's default cell; a new model is an edit of `MODELS` in `hooks/roles.ts` and of the cells, and the type-check fails on an unknown model or effort or a missing cell.
 
 For each dimension Jev returns a probability distribution, and the level is the integer that minimizes the expected penalty: missing capacity weighs 2, spare capacity weighs 1, and ties go to the lower level. Grouping the duration happens after its level is chosen.
 

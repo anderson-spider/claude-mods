@@ -1,5 +1,6 @@
 import { expect, test } from 'claude-code/testing'
-import { assessRoute, distributions, levelOf, QUESTIONS } from '../hooks/effort'
+import { assessRoute, distributions, levelOf } from '../hooks/effort'
+import { QUESTIONS } from '../hooks/router'
 import type { Answers } from '../hooks/jev'
 import { createBreaker, createGate } from '../hooks/jev'
 import { ports } from './host'
