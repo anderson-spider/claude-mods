@@ -88,7 +88,7 @@ for (const row of MCP) {
   })
 
   test(`${row.name}: the model's calls and other plugins' calls are never allowed`, () => {
-    for (const origin of ['engine', 'crew', 'chatgpt-evil', 'Chatgpt', '']) {
+    for (const origin of ['engine', 'other-plugin', 'chatgpt-evil', 'Chatgpt', '']) {
       for (const listing of row.listing) expect(allowed(origin, listing, {}, row.own)).toBe(false)
       expect(allowed(origin, 'navigate', { url: 'https://chatgpt.com/' }, row.own)).toBe(false)
       expect(allowed(origin, 'javascript_tool', script, row.own)).toBe(false)

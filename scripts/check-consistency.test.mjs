@@ -170,7 +170,7 @@ for (const { name, change, expected } of [
   },
   {
     name: "rule copied from another plugin: its paths frontmatter lists that plugin",
-    change: edit(".claude/rules/alpha.md", (text) => text.replace("plugins/alpha/**", "plugins/crew/**")),
+    change: edit(".claude/rules/alpha.md", (text) => text.replace("plugins/alpha/**", "plugins/other-plugin/**")),
     expected: ['alpha: .claude/rules/alpha.md paths frontmatter does not list "plugins/alpha/**"'],
   },
   {

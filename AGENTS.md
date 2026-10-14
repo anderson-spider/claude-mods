@@ -15,9 +15,8 @@ Claude Code **function hooks mods** marketplace.
 - ChatGPT browser tools: `plugins/chatgpt/AGENTS.md`.
 - Native Mac app control through Codex: `plugins/codex-computer-use/AGENTS.md`.
 - Codex team in Herdr, led by the session (developer, analyst, architect): `plugins/codex-team/AGENTS.md`.
-- Main-session helpers (planner, challenger, digger), Jev routing and Codex twins: `plugins/crew/AGENTS.md`.
 - Git subagent on Haiku (git-master): `plugins/git-master/AGENTS.md`.
-- Session card above the prompt (model, context, limits, the turn, the crew's row): `plugins/session-hud/AGENTS.md`.
+- Session card above the prompt (model, context, limits, the turn, edits and errors): `plugins/session-hud/AGENTS.md`.
 - Tailscale API tools: `plugins/tailscale/AGENTS.md`.
 - Release checks: `/release-plugin <plugin>` → `.claude/skills/release-plugin/SKILL.md`.
 - Real-session behavior: `/live-test <plugin>` → `.claude/skills/live-test/SKILL.md`.

@@ -1,9 +1,9 @@
 #!/bin/sh
 # One-step setup of this marketplace on a Mac: adds the marketplace, installs or updates the plugins and installs
-# the two Codex helpers (LaunchAgents) from the installed plugins. Safe to run again.
+# the codex-computer-use helper (a LaunchAgent) from the installed plugins. Safe to run again.
 #
 #   bootstrap.sh                     everything below
-#   bootstrap.sh --only crew,chatgpt only those plugins (and their helpers)
+#   bootstrap.sh --only tailscale,chatgpt only those plugins
 #   bootstrap.sh --check             prints what it would do and checks the prerequisites; changes nothing
 #
 # The repository is private, so fetch it with the GitHub token of `gh`:
@@ -11,12 +11,12 @@
 #     https://api.github.com/repos/anderson-spider/claude-mods/contents/scripts/bootstrap.sh | sh
 # Arguments go after `sh -s --`.
 #
-# Secrets are never handled here: set `jevKey` or `apiKey` yourself with `claude plugin configure <plugin>`.
+# Secrets are never handled here: set `apiKey` yourself with `claude plugin configure <plugin>`.
 set -eu
 
 MARKET=spider-claude-mods
 REPO=anderson-spider/claude-mods
-ALL="crew chatgpt codex-computer-use tailscale"
+ALL="chatgpt codex-computer-use tailscale"
 NODE=${BOOTSTRAP_NODE:-/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node}
 ONLY=
 CHECK=
@@ -70,12 +70,7 @@ done
 # The plugin's own folder holds its helper: the installer copies the code to ~/.claude/mcp and loads the LaunchAgent.
 helper() {
   name=$1
-  need=$2
   [ -x "$NODE" ] || { warn "$name helper skipped: $NODE is missing (install the ChatGPT desktop app)"; return 0; }
-  if [ "$need" = codex-login ]; then
-    command -v codex >/dev/null 2>&1 && [ -f "$HOME/.codex/auth.json" ] ||
-      { warn "$name helper skipped: no codex binary or no Codex login (install the Codex CLI and run \`codex login\`)"; return 0; }
-  fi
   if [ -n "$CHECK" ] && ! claude plugin list --json 2>/dev/null | grep -q "\"$name@$MARKET\""; then
     printf 'would: install the %s helper from the plugin once it is installed\n' "$name"
     return 0
@@ -89,15 +84,13 @@ helper() {
 
 for p in $PLUGINS; do
   case "$p" in
-    crew) helper crew codex-login ;;
-    codex-computer-use) helper codex-computer-use none ;;
+    codex-computer-use) helper codex-computer-use ;;
   esac
 done
 
 cat <<'EOF'
 
 done. Next:
-  - start a new Claude Code session (the crew twins register only at session start), or run /reload-plugins
-  - optional crew options: `claude plugin configure crew` (codexLogin, mode, jevKey)
+  - start a new Claude Code session, or run /reload-plugins
   - tailscale needs its apiKey: `claude plugin configure tailscale`
 EOF

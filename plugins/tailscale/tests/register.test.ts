@@ -313,7 +313,7 @@ test('an apiKey that the project or local settings declare is refused, and the k
 
 test('options of another plugin or another name in the repository settings do not refuse the key', ON, async ($, on) => {
   const { sent, tools } = world(on, {
-    project: { pluginConfigs: { tailscale: { options: { other: 1 } }, crew: { options: { apiKey: 'x' } }, tailscalex: { options: { apiKey: 'x' } } } },
+    project: { pluginConfigs: { tailscale: { options: { other: 1 } }, 'other-plugin': { options: { apiKey: 'x' } }, tailscalex: { options: { apiKey: 'x' } } } },
   })
   for (const name of await started($, tools)) {
     sent.length = 0

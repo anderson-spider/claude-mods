@@ -78,7 +78,7 @@ exit $status
 '''
 
 [tasks."plugins:test"]
-description = "Run the scripts and hooks tests, every plugin's tests, and the codex-computer-use and crew helpers' when the ChatGPT app's node is present"
+description = "Run the scripts and hooks tests, every plugin's tests, and the codex-computer-use helper tests when the ChatGPT app's node is present"
 run = '''
 #!/usr/bin/env bash
 set -euo pipefail
@@ -89,10 +89,8 @@ cua_node=/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node
 if [ -x "$cua_node" ]; then
   echo "==> codex-computer-use helper"
   "$cua_node" --test plugins/codex-computer-use/helper/test/*.test.mjs
-  echo "==> crew helper"
-  "$cua_node" --test plugins/crew/helper/test/*.test.mjs
 else
-  echo "==> helpers: skipped, $cua_node not found"
+  echo "==> codex-computer-use helper: skipped, $cua_node not found"
 fi
 '''
 
@@ -122,7 +120,7 @@ claude plugin list --json | node -e '
   const rows = JSON.parse(require("fs").readFileSync(0, "utf8")).filter(p => p.id.endsWith("@spider-claude-mods"))
   for (const p of rows) console.error(`${p.id} ${p.version} (${p.scope}${p.enabled ? "" : ", disabled"})`)
 '
-echo "done: run /reload-plugins in running sessions, or start a new one (crew twins register only in a new session)"
+echo "done: run /reload-plugins in running sessions, or start a new one"
 '''
 
 # Claude Code writes plugins/*/.claude-plugin/types/ only when an interactive session loads a plugin from its folder,

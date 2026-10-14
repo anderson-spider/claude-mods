@@ -5,10 +5,8 @@ export type Style = 'plain' | 'strong' | 'secondary' | 'model' | 'success' | 'wa
 export type Segment = { text: string; style: Style }
 export type Row = Segment[]
 
-/** What the card shows of the crew: running helpers and the open plans' totals with their running steps. */
-export type CrewSummary = { agents: number; done: number; running: number; left: number; steps: readonly string[] }
 /** Everything the card may read: prepared atoms, the clock and the width, never a host. */
-export type Snapshot = { card: SessionHudCard; crew?: CrewSummary; now: number; columns: number; working?: boolean }
+export type Snapshot = { card: SessionHudCard; now: number; columns: number; working?: boolean }
 /** The card as the screen draws it: the rows above the rule and the row under it; empty when there is nothing to show. */
 export type Card = { top: Row[]; bottom: Row[] }
 
@@ -193,57 +191,22 @@ function wideRows(card: SessionHudCard, now: number): Row[] {
   return rows
 }
 
-/** The row under the rule: the last turn, the crew's helpers, edits, errors and the turn's cost; the crew's plan on the right. */
-function turnRow(card: SessionHudCard, crew: CrewSummary | undefined, inner: number): Row {
+/** The row under the rule: the last turn, turn count, edits, errors and the turn's cost. */
+function turnRow(card: SessionHudCard, inner: number): Row {
   const parts: string[] = []
   if (card.lastTurnMs !== undefined) parts.push(`last turn ${span(card.lastTurnMs)}`)
   if (count(card.turns) > 0) parts.push(plural(count(card.turns), 'turn'))
-  if (crew) parts.push(plural(count(crew.agents), 'agent'))
   parts.push(plural(count(card.edits), 'edit'), plural(count(card.errors), 'error'))
   if (card.lastTurnCost !== undefined && Number.isFinite(card.lastTurnCost) && card.lastTurnCost >= 0) parts.push(`+${money(card.lastTurnCost)}`)
-  const right: Row = []
-  if (crew && count(crew.done) + count(crew.running) + count(crew.left) > 0) {
-    right.push(seg(`plan ${count(crew.done)} done · `, 'secondary'), seg(`${count(crew.running)} running`, count(crew.running) ? 'warning' : 'secondary'),
-      seg(` · ${count(crew.left)} left`, 'secondary'))
-    if (crew.steps.length) right.push(seg(`  ${crew.steps.join('  ')}`, 'warning'))
-  }
-  const left = [seg(parts.join(' · '), 'secondary')]
-  // Where the plan's words do not fit beside the turn, its counts shrink to done/running/left.
-  if (crew && right.length && cells(left) + cells(right) + 2 > widthOf(inner)) {
-    const steps = crew.steps.length ? [seg(`  ${crew.steps.join('  ')}`, 'warning')] : []
-    return spread(left, [seg(`plan ${count(crew.done)}/${count(crew.running)}/${count(crew.left)}`, 'secondary'), ...steps], inner)
-  }
-  return spread(left, right, inner)
+  return cutRow([seg(parts.join(' · '), 'secondary')], inner)
 }
 
 /** The card from one snapshot: rows sized to the band's width less the border and padding (four cells). */
-export function cardView({ card, crew, now, columns, working = false }: Snapshot): Card {
+export function cardView({ card, now, columns, working = false }: Snapshot): Card {
   const inner = widthOf(columns) - 4
   const wide = inner >= WIDE
   const top = [modelRow(card, now, working, inner, wide), ...(wide ? wideRows(card, now) : limitRows(card, now, inner))]
     .filter((row): row is Row => row !== undefined)
-  if (!top.length && !crew) return { top: [], bottom: [] }
-  return { top, bottom: [turnRow(card, crew, inner)] }
-}
-
-const STEP_ID = /^[A-Z][A-Z0-9]*[a-z]?$/
-const OWNER = /^(main|crew:[a-z]+(-codex)?)$/
-type CrewPlans = readonly ({ groups: readonly { done: number; running: number; left: number; steps: readonly { id: string; owner: string; state: string }[] }[] }
-  | { state: string })[]
-
-/** The crew's part of the card from its atoms: running crew helpers, the open plans' totals and the running steps by id and owner. */
-export function crewSummary(plans: CrewPlans, agents: readonly { type: string; status: string }[]): CrewSummary {
-  const summary = { agents: agents.filter(agent => agent.status === 'running' && agent.type.startsWith('crew:')).length, done: 0, running: 0, left: 0, steps: [] as string[] }
-  for (const plan of plans) {
-    if (!('groups' in plan)) continue
-    for (const group of plan.groups) {
-      summary.done += count(group.done)
-      summary.running += count(group.running)
-      summary.left += count(group.left)
-      for (const step of group.steps) {
-        if (step.state === 'implementing') summary.steps.push(`${STEP_ID.test(step.id) ? step.id : '?'} ${OWNER.test(step.owner) ? step.owner.replace(/^crew:/, '') : '?'}`)
-      }
-    }
-  }
-  return summary
+  if (!top.length) return { top: [], bottom: [] }
+  return { top, bottom: [turnRow(card, inner)] }
 }

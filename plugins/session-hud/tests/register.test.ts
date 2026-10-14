@@ -47,19 +47,25 @@ test('main-session edits and errors are counted after their result, which goes o
   await ui.unmount()
 })
 
-test('the crew row reads the crew atoms: running helpers, the plans totals and the running steps', async ($, on) => {
-  world(on, { crew: {
-    plans: [{ name: 'p', groups: [{ heading: 'h', done: 7, running: 1, left: 1, unknownStates: false,
-      steps: [{ id: 'L1', owner: 'main', after: [], state: 'implementing' }, { id: 'T1', owner: 'main', after: [], state: 'verified' }] }] }],
-    agents: [{ id: 'a', type: 'crew:digger', model: 'haiku', status: 'running' }, { id: 'b', type: 'general-purpose', model: 'x', status: 'running' }],
-  } })
+test('the card reads only its own state and background work does not make its dot busy', async ($, on) => {
+  world(on)
+  const plugins: string[] = []
+  on('state.get', (_$, e, next) => {
+    plugins.push(e.plugin)
+    if (e.plugin !== 'session-hud') throw new Error('unexpected foreign state')
+    return next(e)
+  })
   await start($)
   await flush()
-  const ui = await $.ui.mount(band())
+  plugins.length = 0
+  const ui = await $.ui.mount(band(110, false, true))
   const drawn = (await ui.findAll({ type: 'Text' })).map(found => found.text).join('\n')
-  expect(drawn).toContain('1 agent')
-  expect(drawn).toContain('plan 7 done · 1 running · 1 left')
-  expect(drawn).toContain('L1 main')
+  expect(drawn).toContain('Opus 5.5')
+  expect(drawn).toContain('0 edits · 0 errors')
+  expect(drawn).not.toMatch(/agent|plan|working/u)
+  expect((await ui.find({ type: 'Text', text: /^● $/u }))?.props).toMatchObject({ color: '#4fb383' })
+  expect(plugins.length).toBeGreaterThan(0)
+  expect(plugins.every(plugin => plugin === 'session-hud')).toBe(true)
   await ui.unmount()
 })
 
@@ -89,12 +95,12 @@ test('a running turn shows its time, beating every second until it completes', a
   await flush()
   await $.turn.start({ text: 'go', turnId: 't1' } as never)
   await flush()
-  const running = await $.ui.mount(band(110, false, true))
+  const running = await $.ui.mount(band())
   expect((await running.findAll({ type: 'Text' })).map(found => found.text).join('\n')).toContain('working 0s')
   await running.unmount()
   await $.turn.complete({ turnId: 't1', answer: '', durationMs: 3_000, isAborted: false, reason: 'answer' } as never)
   await flush()
-  const idle = await $.ui.mount(band())
+  const idle = await $.ui.mount(band(110, false, true))
   const drawn = (await idle.findAll({ type: 'Text' })).map(found => found.text).join('\n')
   expect(drawn).not.toContain('working')
   expect(drawn).toContain('last turn 3s')

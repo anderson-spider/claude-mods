@@ -8,14 +8,14 @@ const run = (input) => spawnSync(process.execPath, [hook], { input, encoding: "u
 
 for (const { name, cwd, file, blocked } of [
   { name: "a write to generated typings is blocked", cwd: "/repo", file: "plugins/tailscale/.claude-plugin/types/x.d.ts", blocked: true },
-  { name: "an absolute path to generated typings is blocked", cwd: "/elsewhere", file: "/repo/plugins/crew/.claude-plugin/types/tsconfig.json", blocked: true },
-  { name: "a relative path that climbs into generated typings is blocked", cwd: "/repo/plugins/crew/hooks", file: "../.claude-plugin/types/index.d.ts", blocked: true },
-  { name: "a Windows separator does not bypass the block", cwd: "/repo", file: "plugins\\crew\\.claude-plugin\\types\\index.d.ts", blocked: true },
-  { name: "a mixed-case path to generated typings is blocked", cwd: "/repo", file: "plugins/crew/.Claude-Plugin/TYPES/x.d.ts", blocked: true },
-  { name: "a path that leaves the typings folder again stays editable", cwd: "/repo", file: "plugins/crew/.claude-plugin/types/../plugin.json", blocked: false },
-  { name: "the hand-written typings of a plugin stay editable", cwd: "/repo", file: "plugins/crew/types/index.d.ts", blocked: false },
-  { name: "plugin sources stay editable", cwd: "/repo", file: "plugins/crew/hooks/register.tsx", blocked: false },
-  { name: "the plugin manifest stays editable", cwd: "/repo", file: "plugins/crew/.claude-plugin/plugin.json", blocked: false },
+  { name: "an absolute path to generated typings is blocked", cwd: "/elsewhere", file: "/repo/plugins/other-plugin/.claude-plugin/types/tsconfig.json", blocked: true },
+  { name: "a relative path that climbs into generated typings is blocked", cwd: "/repo/plugins/other-plugin/hooks", file: "../.claude-plugin/types/index.d.ts", blocked: true },
+  { name: "a Windows separator does not bypass the block", cwd: "/repo", file: "plugins\\other-plugin\\.claude-plugin\\types\\index.d.ts", blocked: true },
+  { name: "a mixed-case path to generated typings is blocked", cwd: "/repo", file: "plugins/other-plugin/.Claude-Plugin/TYPES/x.d.ts", blocked: true },
+  { name: "a path that leaves the typings folder again stays editable", cwd: "/repo", file: "plugins/other-plugin/.claude-plugin/types/../plugin.json", blocked: false },
+  { name: "the hand-written typings of a plugin stay editable", cwd: "/repo", file: "plugins/other-plugin/types/index.d.ts", blocked: false },
+  { name: "plugin sources stay editable", cwd: "/repo", file: "plugins/other-plugin/hooks/register.tsx", blocked: false },
+  { name: "the plugin manifest stays editable", cwd: "/repo", file: "plugins/other-plugin/.claude-plugin/plugin.json", blocked: false },
 ]) {
   test(name, () => {
     const result = run(JSON.stringify({ cwd, tool_input: { file_path: file } }));
