@@ -18,7 +18,7 @@ export const ROUTES: Readonly<Record<Difficulty, Readonly<Record<DurationGroup, 
   expert: { short: { model: 'opus', effort: 'high' }, medium: { model: 'fable', effort: 'high' }, long: { model: 'fable', effort: 'high' } },
 }
 
-/** Each role's typical task as a cell of the table: its default pair, used when no pin or Jev answer applies, moves with the table. */
+/** Each role's typical task as a cell of the table: its default pair, used when Jev gives no answer, moves with the table. */
 export const ROLE_CELLS: Readonly<Record<Role, { difficulty: Difficulty; group: DurationGroup }>> = {
   analyst: { difficulty: 'easy', group: 'medium' },
   developer: { difficulty: 'moderate', group: 'medium' },

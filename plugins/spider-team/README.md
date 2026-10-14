@@ -1,6 +1,6 @@
 # spider-team
 
-Four native Claude subagents, with optional Jev model and effort selection. The session stays the lead; the host owns spawning, background delivery and worktree cleanup.
+Four native Claude subagents, with Jev model and effort selection. The session stays the lead; the host owns spawning, background delivery and worktree cleanup.
 
 ```text
 /plugin install spider-team --marketplace anderson-spider/claude-mods
@@ -29,7 +29,7 @@ Without it the call is refused with that instruction, since the worktree would s
 
 ## Model and effort
 
-A hook on the `Agent` tool picks the model and effort of the four Spider types; every other agent type passes untouched. Jev assesses only difficulty and duration, and a fixed table maps them to the pair.
+A hook on the `Agent` tool picks the model and effort of the four Spider types; every other agent type passes untouched. One rule decides: Jev rates difficulty and duration, and a fixed table maps them to the pair. When Jev is unavailable or fails, the role default applies. Nothing else chooses the pair.
 
 | Difficulty \ duration | short | medium | long |
 | --- | --- | --- | --- |
@@ -45,15 +45,15 @@ For each dimension Jev returns a probability distribution, and the level is the 
 
 Why these cells, as a policy note and not a measured fact: in the published accuracy-versus-cost charts for Sonnet 5.5 and Opus 5.5, Opus at low effort costs about the same per task as Sonnet at high effort with similar results; Opus at medium looks like the best value for hard code; Opus above high stays flat or drops; Sonnet at max only pays off on long terminal runs and lowers merge quality. Haiku and Fable have no published numbers here, so they sit at the two ends.
 
-- An explicit Agent `model` (haiku, sonnet, opus or fable) or `effort` (low, medium, high, xhigh or max) is a pin. Each is independent and sent as given: a pinned lever skips Jev for that lever, both pinned skip Jev entirely, and nothing caps the effort. Other values refuse the call.
-- Directives in the task narrow the question: `!difficulty=0..4` and `!duration=0..3`, with `!hard` meaning difficulty 3, `!long` duration 3 and `!quick` duration 0. With both given, the table decides locally; with one, Jev is asked only for the other. Recognized directives are removed from the task; quoted, escaped and fenced text stays intact, and a word starting with an at sign is ordinary task text. Contradictory or unknown bang directives refuse the call.
-- Jev needs `JEV_API_KEY` in the user's environment. A project/local settings declaration of the key, even empty, or unreadable settings turn Jev off. When Jev is off or fails, an unpinned lever takes the role default.
+- There are no pins and no directives. The `model` and `effort` fields of the `Agent` call choose nothing and are never refused: the hook overwrites them with the routed pair. Words in the task starting with an exclamation mark or an at sign are plain text that goes to Jev as written.
+- Jev is always asked both questions, difficulty and duration. It needs `JEV_API_KEY` in the user's environment. A project/local settings declaration of the key, even empty, unreadable settings, a timeout, a malformed answer or any other failure turns Jev off for that call, and the role default applies.
+- A task that is empty or only whitespace is refused.
 - The chosen pair is appended to the call's description, so the transcript shows it beside the task, and goes to the debug log. A failure inside the hook itself dispatches the call exactly as the lead wrote it.
 
 Jev uses a fixed endpoint and model, one shared three-second deadline, bounded retries, a concurrency gate and a circuit breaker.
 
 ## Privacy and validation
 
-Only the cleaned task goes to Jev: keys, secrets and paths are masked before the 4,000-character limit, and the key travels only in the Authorization header of the fixed endpoint. The plugin writes no files and keeps no session state.
+Only the redacted task goes to Jev: keys, secrets and paths are masked before the 4,000-character limit, and the key travels only in the Authorization header of the fixed endpoint. The plugin writes no files and keeps no session state.
 
 The tests use a fake host and fake Jev; they prove the routing logic and wiring, not live model selection.
