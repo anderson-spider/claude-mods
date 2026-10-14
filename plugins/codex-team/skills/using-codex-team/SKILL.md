@@ -68,7 +68,7 @@ The pane reads this format and nothing else:
 - State: `queued`, `implementing`, `blocked` (the note names what unblocks it), `verified` (its acceptance was checked; the note says by what), `committed` (in an open or merged PR), `skipped`.
 - A deliverable ends with its PR step, owned by `git-master` (the subagent runs in your session, so the pane shows it on your pane).
 
-Update a step's `state:` the moment it changes: on dispatch, on return, on review, on merge.
+Update a step's `state:` the moment it changes: on dispatch, on return, on review, on merge. The pane follows plan edits made any way through Write/Edit or Bash, including sed, Python, heredocs, git checkouts and subagent shell calls; Bash with an unchanged plan does not republish.
 
 After `## Steps`, keep a `## Dispatches` section, one line per dispatch, written when you call `dispatch` and closed when you handle its return:
 

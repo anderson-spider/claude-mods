@@ -97,21 +97,34 @@ export const register: Register = (on) => {
     return next(e)
   })
 
-  on('tool.call', { tool: 'mcp__codex-team__dispatch' }, async ($, e) => {
+  on('tool.call', { tool: 'mcp__codex-team__dispatch' }, async ($, e, next) => {
+    if (!('tool' in e)) return next(e)
     const answer = await dispatch(teamIo($), e).catch(() => ({ ok: false, text: 'codex-team: the dispatch failed unexpectedly; check `herdr agent list` before trying again.' }))
     return { result: answer.text }
   })
 
-  on('tool.call', { tool: 'mcp__codex-team__finish' }, async ($, e) => {
+  on('tool.call', { tool: 'mcp__codex-team__finish' }, async ($, e, next) => {
+    if (!('tool' in e)) return next(e)
     const answer = await finish(teamIo($), e).catch(() => ({ ok: false, text: 'codex-team: finish failed unexpectedly; check `herdr agent list` before trying again.' }))
     return { result: answer.text }
   })
 
   on('tool.call', { tool: ['Write', 'Edit'] }, async ($, e, next) => {
     const result = await next(e)
-    if (!result.isError && result.deny === undefined) {
+    if (!result.isError && result.deny === undefined && 'file_path' in e) {
       const root = await $.session.root().catch(() => undefined)
       if (root && isPlanFile(e.file_path, root)) await publish(dagrIo($), root)
+    }
+    return result
+  })
+
+  on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
+    const result = await next(e)
+    try {
+      const root = await $.session.root()
+      await publish(dagrIo($), root, { ifChanged: true })
+    } catch {
+      try { $.ui.log('codex-team: dagr plan observation failed', { to: 'debug' }) } catch { /* Reporting cannot change the Bash result. */ }
     }
     return result
   })

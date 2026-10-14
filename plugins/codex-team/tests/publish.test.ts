@@ -12,7 +12,7 @@ function world(check: RunResult = text('[]')) {
   const io: PublishIo = {
     env: async () => ({ HERDR_ENV: '1', HERDR_PANE_ID: 'lead', HERDR_WORKSPACE_ID: 'w1' }), run,
     exists: async path => files.has(path) || [...files.keys()].some(file => file.startsWith(path + '/')),
-    list: async () => [{ name: 'old.md', kind: 'file', mtimeMs: 1 }, { name: 'new.md', kind: 'file', mtimeMs: 2 }],
+    list: async () => [{ name: 'old.md', kind: 'file', mtimeMs: 1, size: 7 }, { name: 'new.md', kind: 'file', mtimeMs: 2, size: PLAN.length }],
     read: async path => { if (!files.has(path)) throw new Error('missing'); return files.get(path)! },
     write: async (path, body) => { writes.push(path); files.set(path, body) },
     now: async () => Date.parse('2026-10-13T20:00:00Z'), log: line => { logs.push(line) },
@@ -95,7 +95,7 @@ test('dagr installed outside PATH is discovered under HOME without a fixed hash 
     const originalList = w.io.list
     w.io.env = async () => ({ HERDR_ENV: '1', HOME: home })
     w.io.list = async path => path.endsWith('/plugins/github')
-      ? [{ name: 'herdr-dagr-z-other', kind: 'dir', mtimeMs: 0 }, { name: 'unrelated', kind: 'dir', mtimeMs: 0 }, { name: 'herdr-dagr-a-new-hash', kind: 'dir', mtimeMs: 0 }]
+      ? [{ name: 'herdr-dagr-z-other', kind: 'dir', mtimeMs: 0, size: 0 }, { name: 'unrelated', kind: 'dir', mtimeMs: 0, size: 0 }, { name: 'herdr-dagr-a-new-hash', kind: 'dir', mtimeMs: 0, size: 0 }]
       : originalList(path)
     const originalRun = w.io.run
     w.io.run = async argv => {
@@ -160,4 +160,77 @@ test('publication maps effective names to logical owners only in the dispatch wo
   const document = JSON.parse(w.files.get('/repo/.dagr/run.json.tmp')!)
   expect(document.tasks[0]).toMatchObject({ owner: 'dev-fix', state: 'working', attempts: [{ locator: { pane: 'local' } }] })
   expect(document.tasks[1]).toMatchObject({ owner: 'analyst', state: 'blocked', attempts: [] })
+})
+
+test('an unchanged published plan needs only one listing with no reads, stats or processes', async () => {
+  const w = world(), publish = createPublisher()
+  await publish(w.io, '/repo')
+  const entries = await w.io.list('/repo/.crew/plans')
+  let lists = 0
+  w.io.list = async path => { expect(path).toBe('/repo/.crew/plans'); lists++; return entries }
+  w.io.read = w.io.exists = async () => { throw new Error('unchanged plans need no reads or stats') }
+  w.io.run = async () => { throw new Error('unchanged plans need no processes') }
+  w.writes.length = 0
+  await publish(w.io, '/repo', { ifChanged: true })
+  expect(lists).toBe(1)
+  expect(w.writes).toEqual([])
+  expect(w.logs).toEqual([])
+})
+
+test('path, mtime and size changes publish once through the same queue and only successful publications advance the fingerprint', async () => {
+  const w = world(), publish = createPublisher()
+  const entry = { name: 'new.md', kind: 'file', mtimeMs: 2, size: PLAN.length }
+  w.io.list = async () => [entry]
+  await publish(w.io, '/repo')
+  for (const field of ['path', 'mtime', 'size'] as const) {
+    if (field === 'path') { entry.name = 'other.md'; w.files.set('/repo/.crew/plans/other.md', PLAN) }
+    if (field === 'mtime') entry.mtimeMs++
+    if (field === 'size') entry.size++
+    const before = w.calls.filter(c => c[0] === 'mv').length
+    await Promise.all([publish(w.io, '/repo', { ifChanged: true }), publish(w.io, '/repo', { ifChanged: true })])
+    expect(w.calls.filter(c => c[0] === 'mv')).toHaveLength(before + 1)
+  }
+  entry.mtimeMs++
+  const original = w.io.run
+  w.io.run = async argv => argv[0] === 'mv' ? { ...text(''), exitCode: 1 } : original(argv)
+  await publish(w.io, '/repo', { ifChanged: true })
+  expect(w.logs).toHaveLength(1)
+  w.io.run = original
+  const before = w.calls.filter(c => c[0] === 'mv').length
+  await publish(w.io, '/repo', { ifChanged: true })
+  await publish(w.io, '/repo', { ifChanged: true })
+  expect(w.calls.filter(c => c[0] === 'mv')).toHaveLength(before + 1)
+})
+
+test('fingerprints are independent per root and plan observation skips absent directories and nonregular plans', async () => {
+  const w = world(), publish = createPublisher()
+  w.io.read = async path => path.endsWith('times.json') ? '{}' : PLAN
+  w.io.exists = async () => false
+  await publish(w.io, '/repo', { ifChanged: true })
+  await publish(w.io, '/other', { ifChanged: true })
+  expect(w.calls.filter(c => c[0] === 'mv')).toHaveLength(2)
+  w.calls.length = 0
+  w.writes.length = 0
+  w.io.list = async () => { throw new Error('directory absent') }
+  await publish(w.io, '/absent', { ifChanged: true })
+  w.io.list = async () => [
+    { name: 'link.md', kind: 'file', mtimeMs: 10, size: 1, isLink: true },
+    { name: 'dir.md', kind: 'dir', mtimeMs: 10, size: 1 },
+    { name: 'notes.txt', kind: 'file', mtimeMs: 10, size: 1 },
+  ]
+  await publish(w.io, '/empty', { ifChanged: true })
+  expect(w.calls).toEqual([])
+  expect(w.writes).toEqual([])
+  expect(w.logs).toEqual([])
+})
+
+test('changed plan observation publishes nothing when dagr is unavailable or outside Herdr', async () => {
+  const w = world(), publish = createPublisher()
+  w.io.run = async () => ({ ...text(''), exitCode: 127 })
+  await publish(w.io, '/repo', { ifChanged: true })
+  expect(w.writes).toEqual([])
+  w.io.env = async () => ({ HERDR_ENV: '0' })
+  w.io.list = async () => { throw new Error('outside Herdr must not list') }
+  await publish(w.io, '/repo', { ifChanged: true })
+  expect(w.writes).toEqual([])
 })

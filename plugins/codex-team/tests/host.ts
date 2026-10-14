@@ -67,3 +67,29 @@ export function dispatchWorld(on: On, key: string, declared?: 'project' | 'local
   on('ui.log', (_$, e) => { logs.push(e.text); return { value: undefined } })
   return { tools, calls, envReads, settings, requests, writes, logs }
 }
+
+/** Mutable plan metadata and publication failures for post-result observation tests. */
+export function planWorld(on: On) {
+  world(on)
+  const entry = { name: 'feature.md', kind: 'file' as const, mtimeMs: 1, size: 1, isLink: false }
+  const files = new Map<string, string>([['/repo/.crew/plans/feature.md', '## Steps\n### Feature\n- feature (main, after: —) Ship — state: implementing']])
+  const writes: string[] = [], calls: string[][] = [], lists: string[] = [], reads: string[] = [], logs: string[] = []
+  const faults: { at?: 'root' | 'list' | 'write' | 'check' | 'move'; log?: boolean } = {}
+  mock.clock(on)
+  on('env.get', (_$, e) => ({ value: e.name === 'HERDR_ENV' ? '1' : e.name === 'HERDR_PANE_ID' ? 'lead' : undefined }))
+  on('session.root', () => { if (faults.at === 'root') throw new Error('root failed'); return { value: '/repo' } })
+  on('fs.exists', (_$, e) => ({ value: e.path === '/repo/.crew/plans' || files.has(e.path) }))
+  on('fs.list', (_$, e) => { lists.push(e.path); if (faults.at === 'list') throw new Error('list failed'); return { value: [entry] } })
+  on('fs.read', (_$, e) => { reads.push(e.path); return { value: files.get(e.path)! } })
+  on('fs.write', (_$, e) => { if (faults.at === 'write') throw new Error('write failed'); writes.push(e.path); files.set(e.path, e.text); return { value: undefined } })
+  on('process.run', (_$, e) => {
+    calls.push([...e.argv])
+    const failed = faults.at === 'check' && e.argv[1] === 'check' || faults.at === 'move' && e.argv[0] === 'mv'
+    if (e.argv[0] === 'mv' && !failed) files.set(e.argv[2]!, files.get(e.argv[1]!)!)
+    const stdout = e.argv[0] === 'herdr' ? '{"result":{"agents":[]}}' : e.argv[1] === 'check' ? '[]' : ''
+    return { value: { exitCode: failed ? 1 : 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('ui.log', (_$, e) => { logs.push(e.text); if (faults.log) throw new Error('log failed'); return { value: undefined } })
+  on('tool.call', { tool: 'Write' }, () => ({ result: 'saved' }))
+  return { entry, files, writes, calls, lists, reads, logs, faults }
+}
