@@ -17,6 +17,7 @@ Claude Code **function hooks mods** marketplace.
 - Codex team in Herdr, led by the session (developer, analyst, architect): `plugins/codex-team/AGENTS.md`.
 - Git subagent on Haiku (git-master): `plugins/git-master/AGENTS.md`.
 - Session card above the prompt (model, context, limits, the turn, edits and errors): `plugins/session-hud/AGENTS.md`.
+- Native Spider Team specialists: `plugins/spider-team/AGENTS.md`.
 - Tailscale API tools: `plugins/tailscale/AGENTS.md`.
 - Release checks: `/release-plugin <plugin>` → `.claude/skills/release-plugin/SKILL.md`.
 - Real-session behavior: `/live-test <plugin>` → `.claude/skills/live-test/SKILL.md`.
