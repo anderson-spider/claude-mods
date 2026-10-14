@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { defaultOf, DIFFICULTIES, DURATION_GROUPS, GROUP_OF_DURATION, higher, LADDER, pairOf, PRICES, QUESTIONS, ROLE_POLICY, ROUTES, routeOf } from '../hooks/router'
+import { defaultOf, DIFFICULTIES, DURATION_GROUPS, GROUP_OF_DURATION, higher, LADDER, pairOf, POLICY, PRICES, QUESTIONS, ROLE_POLICY, ROUTES, routeOf } from '../hooks/router'
 import { EFFORTS, MODELS, ROLES, SPECS } from '../hooks/roles'
 
 const TABLE: Record<(typeof DIFFICULTIES)[number], [string, string, string]> = {
@@ -68,6 +68,17 @@ test('role floors and defaults are fixed and the registered definitions carry th
   })
   expect(ROLES.map(role => `${role} ${defaultOf(role).model}/${defaultOf(role).effort}`)).toEqual(['analyst haiku/high', 'developer sonnet/high', 'reviewer opus/medium', 'architect opus/medium'])
   for (const role of ROLES) expect([SPECS[role].model, SPECS[role].effort]).toEqual([defaultOf(role).model, defaultOf(role).effort])
+})
+
+test('the questions judge the work itself on a coding agent\'s time scale, not the length of the brief', () => {
+  expect(QUESTIONS.difficulty.instructions).toContain('Judge the work itself, not the length or detail of the brief')
+  expect(QUESTIONS.difficulty.instructions).toContain('a long list of constraints, checks or acceptance criteria does not make a task harder')
+  expect(QUESTIONS.difficulty.criteria).toEqual([
+    'Trivial: a one-line or purely mechanical change', 'Easy: small, well-understood change in one place', 'Moderate: needs some understanding of the surrounding code',
+    'Hard: subtle logic across several interacting parts, or a root cause still to be found', 'Expert: architecture, concurrency, security, or deep domain reasoning',
+  ])
+  expect(QUESTIONS.duration.criteria).toEqual(['Under 3 minutes', '3 to 10 minutes', '10 to 30 minutes', 'More than 30 minutes'])
+  expect(POLICY).toEqual({ under: 1.5, over: 1 })
 })
 
 test('the questions match the levels and the prices are the October 2026 list prices', () => {

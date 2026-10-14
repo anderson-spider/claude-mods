@@ -1,6 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import { afterAgentCall, afterTurn, appendLine, bucketOf, costOf, createPending, decisionLine, formatSummary, ledgerPath, modelFamily, parseLedger, readAll, ROTATE_AT, rotatedPath, summarize, verdictOf } from '../hooks/ledger'
 import type { DecisionLine, FileIo, Line, OutcomeLine } from '../hooks/ledger'
+import type { Distributions } from '../hooks/effort'
 
 const MARKER = 'SECRET-MARKER-7f3a'
 const ctx = (role: 'analyst' | 'developer' | 'reviewer' | 'architect' = 'reviewer', id = 'toolu_1') => ({ toolUseId: id, role, pair: { model: 'opus' as const, effort: 'medium' as const } })
@@ -25,17 +26,37 @@ const fakeFiles = () => {
 test('a decision line projects only the allowed fields and rounds the probabilities to two decimals', () => {
   const choice = {
     source: 'jev' as const, jevReason: null, jevMs: 412, levels: { difficulty: 2, duration: 1 }, top: { difficulty: 0.8349, duration: 0.5 },
+    dist: { difficulty: { '0': 0, '1': 0.0551, '2': 0.8349, '3': 0.11, '4': 0 }, duration: { '0': 0.25, '1': 0.5, '2': 0.25, '3': 0 } },
     cell: { model: 'haiku' as const, effort: 'xhigh' as const }, floorApplied: true, model: 'opus' as const, effort: 'low' as const,
     prompt: MARKER, task: MARKER, path: `/private/${MARKER}`,
   }
   const line = decisionLine({ ts: '2026-10-14T10:00:00.000Z', toolUseId: 'toolu_1', role: 'architect', choice })
   expect(line).toEqual({
     v: 1, kind: 'decision', ts: '2026-10-14T10:00:00.000Z', tool_use_id: 'toolu_1', role: 'architect', source: 'jev', jevReason: null, jevMs: 412,
-    levels: { difficulty: 2, duration: 1 }, top: { difficulty: 0.83, duration: 0.5 }, cell: 'haiku/xhigh', floorApplied: true, model: 'opus', effort: 'low',
+    levels: { difficulty: 2, duration: 1 }, top: { difficulty: 0.83, duration: 0.5 },
+    dist: { difficulty: { '0': 0, '1': 0.06, '2': 0.83, '3': 0.11, '4': 0 }, duration: { '0': 0.25, '1': 0.5, '2': 0.25, '3': 0 } },
+    cell: 'haiku/xhigh', floorApplied: true, model: 'opus', effort: 'low',
   })
   expect(JSON.stringify(line)).not.toContain(MARKER)
-  const fallback = decisionLine({ ts: 't', toolUseId: undefined, role: 'analyst', choice: { source: 'default', jevReason: 'no-key', jevMs: null, levels: null, top: null, cell: null, floorApplied: false, model: 'haiku', effort: 'high' } })
-  expect(fallback).toMatchObject({ tool_use_id: null, source: 'default', jevReason: 'no-key', jevMs: null, levels: null, top: null, cell: null })
+  const fallback = decisionLine({ ts: 't', toolUseId: undefined, role: 'analyst', choice: { source: 'default', jevReason: 'no-key', jevMs: null, levels: null, top: null, dist: null, cell: null, floorApplied: false, model: 'haiku', effort: 'high' } })
+  expect(fallback).toMatchObject({ tool_use_id: null, source: 'default', jevReason: 'no-key', jevMs: null, levels: null, top: null, dist: null, cell: null })
+})
+
+test('a decision line keeps each full distribution with only its level keys and finite probabilities', () => {
+  // Hostile input: a foreign dimension, keys that are not levels of the question, and values that are not finite probabilities.
+  const dist = {
+    difficulty: { '0': 0.004, '1': 0.006, '2': 0.57, '3': 0.42, '4': 0, '5': 0.3, '-1': 0.2, '1.5': 0.1, ' 2': 0.1, [MARKER]: 0.5, secret: 0.4 },
+    duration: { '0': NaN, '1': Infinity, '2': 1.5, '3': -0.1, x: 1, '01': 0.2 },
+    [MARKER]: { '0': 1 },
+  } as unknown as Distributions
+  const choice = { source: 'jev' as const, jevReason: null, jevMs: 5, levels: { difficulty: 2, duration: 0 }, top: { difficulty: 0.57, duration: 1 }, dist, cell: null, floorApplied: false, model: 'haiku' as const, effort: 'xhigh' as const }
+  const line = decisionLine({ ts: 't', toolUseId: 'toolu_d', role: 'analyst', choice })
+  expect(line.dist).toEqual({ difficulty: { '0': 0, '1': 0.01, '2': 0.57, '3': 0.42, '4': 0 }, duration: {} })
+  expect(Object.keys(line.dist!)).toEqual(['difficulty', 'duration'])
+  expect(JSON.stringify(line)).not.toContain(MARKER); expect(JSON.stringify(line)).not.toContain('secret')
+  // A distribution that is not an object projects to nothing; Jev not used is null.
+  expect(decisionLine({ ts: 't', toolUseId: 'x', role: 'analyst', choice: { ...choice, dist: { difficulty: MARKER, duration: [1] } as unknown as Distributions } }).dist).toEqual({ difficulty: {}, duration: {} })
+  expect(decisionLine({ ts: 't', toolUseId: 'x', role: 'analyst', choice: { ...choice, dist: null } }).dist).toBeNull()
 })
 
 test('only the verdict word of a reviewer answer is extracted', () => {
@@ -104,7 +125,7 @@ test('the background map is bounded, drops the oldest and gives each agent once'
 test('appends are serialized so concurrent lines all survive in order, and one failed append does not stop the next', async () => {
   const { files, io, faults } = fakeFiles(), path = ledgerPath('/home/u/')
   expect(path).toBe('/home/u/.claude/spider-team/routes.jsonl')
-  const line = (n: number): Line => ({ ...decisionLine({ ts: `t${n}`, toolUseId: `id${n}`, role: 'analyst', choice: { source: 'default', jevReason: null, jevMs: null, levels: null, top: null, cell: null, floorApplied: false, model: 'haiku', effort: 'high' } }) })
+  const line = (n: number): Line => ({ ...decisionLine({ ts: `t${n}`, toolUseId: `id${n}`, role: 'analyst', choice: { source: 'default', jevReason: null, jevMs: null, levels: null, top: null, dist: null, cell: null, floorApplied: false, model: 'haiku', effort: 'high' } }) })
   await Promise.all([1, 2, 3, 4].map(n => appendLine(io, path, line(n))))
   expect(files.get(path)!.split('\n').filter(Boolean).map(l => JSON.parse(l).ts)).toEqual(['t1', 't2', 't3', 't4'])
   faults.write = true
@@ -118,12 +139,12 @@ test('a ledger that cannot be read is never overwritten, and a full one moves to
   const { files, io, faults } = fakeFiles(), path = ledgerPath('/home/u')
   files.set(path, '{"keep":"me"}\n')
   faults.read = true
-  await expect(appendLine(io, path, decisionLine({ ts: 't', toolUseId: 'x', role: 'analyst', choice: { source: 'default', jevReason: null, jevMs: null, levels: null, top: null, cell: null, floorApplied: false, model: 'haiku', effort: 'high' } }))).rejects.toThrow('unreadable')
+  await expect(appendLine(io, path, decisionLine({ ts: 't', toolUseId: 'x', role: 'analyst', choice: { source: 'default', jevReason: null, jevMs: null, levels: null, top: null, dist: null, cell: null, floorApplied: false, model: 'haiku', effort: 'high' } }))).rejects.toThrow('unreadable')
   expect(files.get(path)).toBe('{"keep":"me"}\n')
   faults.read = false
   const big = `${'x'.repeat(ROTATE_AT)}\n`
   files.set(path, big)
-  await appendLine(io, path, decisionLine({ ts: 'new', toolUseId: 'y', role: 'analyst', choice: { source: 'default', jevReason: null, jevMs: null, levels: null, top: null, cell: null, floorApplied: false, model: 'haiku', effort: 'high' } }))
+  await appendLine(io, path, decisionLine({ ts: 'new', toolUseId: 'y', role: 'analyst', choice: { source: 'default', jevReason: null, jevMs: null, levels: null, top: null, dist: null, cell: null, floorApplied: false, model: 'haiku', effort: 'high' } }))
   expect(files.get(rotatedPath(path))).toBe(big)
   expect(files.get(path)!.split('\n').filter(Boolean)).toHaveLength(1)
   expect(await readAll(io, path)).toContain('"ts":"new"')
@@ -137,7 +158,7 @@ test('parsing skips malformed and foreign lines and counts a repeated line once'
 })
 
 const decision = (id: string, role: DecisionLine['role'], patch: Partial<DecisionLine> = {}): DecisionLine => ({
-  v: 1, kind: 'decision', ts: 't', tool_use_id: id, role, source: 'jev', jevReason: null, jevMs: 100, levels: { difficulty: 1, duration: 0 }, top: { difficulty: 0.95, duration: 0.6 },
+  v: 1, kind: 'decision', ts: 't', tool_use_id: id, role, source: 'jev', jevReason: null, jevMs: 100, levels: { difficulty: 1, duration: 0 }, top: { difficulty: 0.95, duration: 0.6 }, dist: null,
   cell: 'haiku/high', floorApplied: false, model: 'haiku', effort: 'high', ...patch,
 })
 const outcome = (id: string, role: OutcomeLine['role'], patch: Partial<OutcomeLine> = {}): OutcomeLine => ({
@@ -147,8 +168,8 @@ const outcome = (id: string, role: OutcomeLine['role'], patch: Partial<OutcomeLi
 const MIN = 60_000
 const fixture: Line[] = [
   decision('a1', 'analyst'), outcome('a1', 'analyst', { durationMs: 2 * MIN }),
-  decision('a2', 'analyst', { levels: { difficulty: 1, duration: 3 }, top: { difficulty: 0.4, duration: 0.8 } }), outcome('a2', 'analyst', { durationMs: 10 * MIN, status: 'error', tokens: null, costUsd: null }),
-  decision('d1', 'developer', { levels: { difficulty: 2, duration: 2 }, model: 'sonnet', effort: 'high' }), outcome('d1', 'developer', { model: 'sonnet', effort: 'high', durationMs: 31 * MIN, costUsd: 0.04, tokens: { input: 5000, output: 5000, cacheCreation: 0, cacheRead: 0 } }),
+  decision('a2', 'analyst', { levels: { difficulty: 1, duration: 3 }, top: { difficulty: 0.4, duration: 0.8 } }), outcome('a2', 'analyst', { durationMs: 5 * MIN, status: 'error', tokens: null, costUsd: null }),
+  decision('d1', 'developer', { levels: { difficulty: 2, duration: 2 }, model: 'sonnet', effort: 'high' }), outcome('d1', 'developer', { model: 'sonnet', effort: 'high', durationMs: 12 * MIN, costUsd: 0.04, tokens: { input: 5000, output: 5000, cacheCreation: 0, cacheRead: 0 } }),
   decision('d2', 'developer', { source: 'default', jevReason: 'no-key', levels: null, top: null, cell: null, model: 'sonnet', effort: 'high' }), outcome('d2', 'developer', { model: 'sonnet', effort: 'high', mode: 'background', durationMs: 130 * MIN, costUsd: 0.06, tokens: { input: 5000, output: 5000, cacheCreation: 0, cacheRead: 0 } }),
   decision('r1', 'reviewer', { source: 'default', jevReason: 'http', levels: null, top: null, cell: null, model: 'opus', effort: 'medium' }), outcome('r1', 'reviewer', { model: 'opus', effort: 'medium', durationMs: 5 * MIN, verdict: 'CHANGES', costUsd: 0.1 }),
   decision('r2', 'reviewer', { source: 'default', jevReason: 'no-key', levels: null, top: null, cell: null, model: 'opus', effort: 'medium' }), outcome('r2', 'reviewer', { model: 'opus', effort: 'medium', durationMs: 3 * MIN, verdict: 'APPROVED', costUsd: 0.1 }),
@@ -160,23 +181,26 @@ test('the summary counts runs, failures, medians, tokens, cost, fallbacks, confi
   expect([s.decisions, s.outcomes]).toEqual([7, 6])
   const role = Object.fromEntries(s.byRole.map(r => [r.key, r.group]))
   expect(s.byRole.map(r => r.key)).toEqual(['analyst', 'developer', 'reviewer'])
-  expect(role.analyst).toEqual({ count: 2, failures: 1, medianMs: 6 * MIN, tokens: 2000, costUsd: 0.001 })
-  expect(role.developer).toEqual({ count: 2, failures: 0, medianMs: 80.5 * MIN, tokens: 20_000, costUsd: 0.1 })
+  expect(role.analyst).toEqual({ count: 2, failures: 1, medianMs: 3.5 * MIN, tokens: 2000, costUsd: 0.001 })
+  expect(role.developer).toEqual({ count: 2, failures: 0, medianMs: 71 * MIN, tokens: 20_000, costUsd: 0.1 })
   expect(role.reviewer).toMatchObject({ count: 2, failures: 1, medianMs: 4 * MIN, costUsd: 0.2 })
   expect(s.byPair.map(p => [p.key, p.group.count])).toEqual([['haiku/high', 2], ['sonnet/high', 2], ['opus/medium', 2]])
   expect(s.fallback).toEqual({ count: 3, reasons: { 'no-key': 2, http: 1 } })
   // Top probabilities: difficulty 0.95, 0.4, 0.5 and the jev decision of d1 (0.95); duration 0.6, 0.8, 0.6, 0.7.
   expect(s.confidence.difficulty).toEqual({ count: 4, median: 0.725, buckets: [1, 1, 0, 2] })
   expect(s.confidence.duration).toEqual({ count: 4, median: 0.65, buckets: [0, 2, 2, 0] })
-  // Compared: a1 short->2m short, a2 long->10m short, d1 medium->31m medium; d2 and the reviewers have no levels, x9 has no outcome.
+  // Compared: a1 short->2m short, a2 long->5m short, d1 medium->12m medium; d2 and the reviewers have no levels, x9 has no outcome.
   expect(s.durationCheck).toEqual({ compared: 3, hits: 2, matrix: { short: { short: 1, medium: 0, long: 0 }, medium: { short: 0, medium: 1, long: 0 }, long: { short: 1, medium: 0, long: 0 } } })
-  expect([bucketOf(29 * MIN), bucketOf(30 * MIN), bucketOf(120 * MIN), bucketOf(121 * MIN)]).toEqual(['short', 'medium', 'medium', 'long'])
+  // Real buckets on an agent's scale: under 10 minutes short, 10 to 30 medium, over 30 long.
+  expect([bucketOf(9 * MIN), bucketOf(10 * MIN), bucketOf(30 * MIN), bucketOf(31 * MIN), bucketOf(130 * MIN)]).toEqual(['short', 'medium', 'medium', 'long', 'long'])
 })
 
 test('the formatted summary is compact and names every part, and an empty ledger says so', () => {
   const text = formatSummary(summarize(fixture))
-  for (const part of ['7 decisions, 6 outcomes', 'By role', 'analyst', 'fail=50%', 'By final pair', 'opus/medium', 'Default fallbacks: 3 of 7 (43%): http 1, no-key 2', 'Jev top confidence', 'difficulty', 'median=0.72', '[1 / 1 / 0 / 2]', 'Duration check', '2 of 3 in the predicted group (67%)', 'predicted long   -> short 1, medium 0, long 0']) expect(text).toContain(part)
+  for (const part of ['7 decisions, 6 outcomes', 'By role', 'analyst', 'fail=50%', 'By final pair', 'opus/medium', 'Default fallbacks: 3 of 7 (43%): http 1, no-key 2', 'Jev top confidence', 'difficulty', 'median=0.72', '[1 / 1 / 0 / 2]', 'Duration check, predicted group vs real (short <10m, medium 10-30m, long >30m)', '2 of 3 in the predicted group (67%)', 'predicted long   -> short 1, medium 0, long 0']) expect(text).toContain(part)
   expect(text).not.toContain('/home')
-  expect(formatSummary(summarize([]))).toBe('spider-team: no routing records yet in ~/.claude/spider-team/routes.jsonl.')
+  // The host prefixes command output with the plugin name; the summary does not repeat it.
+  expect(text.startsWith('7 decisions, 6 outcomes (~/.claude/spider-team/routes.jsonl;')).toBe(true); expect(text).not.toContain('spider-team stats')
+  expect(formatSummary(summarize([]))).toBe('no routing records yet in ~/.claude/spider-team/routes.jsonl.')
   expect(formatSummary(summarize([decision('only', 'analyst')]))).toContain('no outcomes yet')
 })

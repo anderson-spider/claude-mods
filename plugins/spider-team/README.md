@@ -43,7 +43,7 @@ A hook on the `Agent` tool picks the model and effort of the four Spider types; 
 | hard (3) | opus / low | opus / medium | opus / high |
 | expert (4) | opus / high | opus / high | opus / high |
 
-Difficulty levels 0 to 4 are the difficulty question's criteria; duration levels 0 to 3 are the duration question's, grouped as 0 or 1 short, 2 medium and 3 long. The policy sits in `hooks/router.ts`: the two questions sent to Jev, the penalty weights below, the level labels, the duration groups, the table, the ladder, each role's floor and default, and the prices. A new model is an edit of `MODELS` in `hooks/roles.ts`, the ladder and the cells.
+Difficulty levels 0 to 4 are the difficulty question's criteria: trivial (a one-line or purely mechanical change), easy (a small, well-understood change in one place), moderate (needs some understanding of the surrounding code), hard (subtle logic across several interacting parts, or a root cause still to be found) and expert (architecture, concurrency, security or deep domain reasoning). The question asks Jev to judge the work itself, not the length or detail of the brief: a long list of constraints, checks or acceptance criteria does not make a task harder. Duration levels 0 to 3 are on a coding agent's scale, not a person's: under 3 minutes, 3 to 10 minutes, 10 to 30 minutes and more than 30 minutes, grouped as 0 or 1 short, 2 medium and 3 long. The policy sits in `hooks/router.ts`: the two questions sent to Jev, the penalty weights below, the level labels, the duration groups, the table, the ladder, each role's floor and default, and the prices. A new model is an edit of `MODELS` in `hooks/roles.ts`, the ladder and the cells.
 
 The capacity ladder is the one ordered list of pairs the router may pick, weakest first:
 
@@ -53,7 +53,7 @@ haiku/medium < haiku/high < haiku/xhigh < sonnet/high < opus/low < opus/medium <
 
 Every table cell, floor and default must be an entry of the ladder, and the type-check fails otherwise. The routed pair is the stronger of the table's cell and the role's floor on the ladder; the default is used whenever Jev is off or fails, and is the model and effort of the registered definition. Defaults do not have to be table cells.
 
-For each dimension Jev returns a probability distribution, and the level is the integer that minimizes the expected penalty: missing capacity weighs 2, spare capacity weighs 1, and ties go to the lower level. Grouping the duration happens after its level is chosen.
+For each dimension Jev returns a probability distribution, and the level is the integer that minimizes the expected penalty: missing capacity weighs 1.5, spare capacity weighs 1, and ties go to the lower level. Between two adjacent levels the lower one wins once it holds at least 60% of their probability. Grouping the duration happens after its level is chosen.
 
 Why these cells, as a policy note and not a measured fact: Haiku 5.5 costs about a twentieth of Sonnet 5.5 per token and beats Sonnet at medium effort on merge-quality coding, so Sonnet at low and medium is dominated by Haiku at high and xhigh. Opus at low effort costs about what Sonnet at high does. Opus above high does not improve. Haiku is never run at low effort because it skips search and verification on long agentic prompts. Fable is left out for lack of data.
 
@@ -68,12 +68,12 @@ Jev uses a fixed endpoint and model, one shared three-second deadline, bounded r
 
 The plugin appends JSON lines to `~/.claude/spider-team/routes.jsonl` (the directory is created if missing; past about two megabytes the file moves to `routes.1.jsonl`, which replaces the previous one). Two kinds of line:
 
-- A decision line, written when the pair is decided: time, tool use id, role, source (`jev` or `default`), the reason Jev was off, its latency, the levels and top probability of each dimension, the table's raw cell, whether the floor applied, and the final model and effort.
+- A decision line, written when the pair is decided: time, tool use id, role, source (`jev` or `default`), the reason Jev was off, its latency, the levels, the top probability and the full distribution of each dimension (`dist`, every level's probability rounded to two decimals; null when Jev was not used), the table's raw cell, whether the floor applied, and the final model and effort.
 - An outcome line: for a foreground call, from its result (resolved model, number of models used, status, duration, input, output, cache creation and cache read tokens, and a cost estimate from the list prices of October 2026: per million tokens, Haiku 0.10 input, 0.50 output, 0.125 cache write, 0.01 cache read, valid for prompts up to 100k tokens; Sonnet 2, 10, 2.50, 0.10; Opus 4, 20, 5, 0.20). For a background launch the line is written when that agent's turn completes, with its duration, usage and end reason. For the reviewer only the verdict word (APPROVED, CHANGES or BLOCKED) is kept from its answer.
 
 A line never holds the task, the prompt, an answer's text, a path, a branch name or a key. The records stay on this machine, are read by nothing but the stats command, and a failure to write one never changes a dispatch.
 
-`/spider-team-stats` prints a compact summary per role and per final pair: runs, failure rate (error, abort or refusal, plus CHANGES or BLOCKED for reviewer runs), median duration, total tokens and estimated cost; the share of default fallbacks with their reasons; the distribution of Jev's top confidence; and a duration check that compares the predicted duration group with the real duration (under 30 minutes short, 30 to 120 medium, over 120 long). The command is named `spider-team-stats` because a command name cannot hold a colon and `stats` belongs to the host.
+`/spider-team-stats` prints a compact summary per role and per final pair: runs, failure rate (error, abort or refusal, plus CHANGES or BLOCKED for reviewer runs), median duration, total tokens and estimated cost; the share of default fallbacks with their reasons; the distribution of Jev's top confidence; and a duration check that compares the predicted duration group with the real duration (under 10 minutes short, 10 to 30 medium, over 30 long). The command is named `spider-team-stats` because a command name cannot hold a colon and `stats` belongs to the host.
 
 ## Privacy and validation
 

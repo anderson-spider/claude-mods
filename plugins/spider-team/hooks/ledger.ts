@@ -1,9 +1,9 @@
 // Local routing telemetry. Pure: record builders, the summarizer for /spider-team-stats and an append over injected file
 // access. A line holds ids, the roles, the pair, levels, probabilities, counts and a reviewer's verdict word; never the task,
 // the prompt, an answer, a path, a branch name or a key. Every field is projected one by one, so extra input cannot leak in.
-import type { Levels, Source } from './effort'
-import { GROUP_OF_DURATION, LADDER, PRICES } from './router'
-import type { DurationGroup } from './router'
+import type { Distributions, Levels, Source } from './effort'
+import { DIFFICULTIES, DIMENSIONS, GROUP_OF_DURATION, LADDER, PRICES } from './router'
+import type { Dimension, DurationGroup } from './router'
 import { MODELS, ROLES } from './roles'
 import type { Effort, Model, Pair, Role } from './roles'
 
@@ -18,7 +18,7 @@ export type Tokens = { input: number; output: number; cacheCreation: number; cac
 
 export type DecisionLine = {
   v: 1; kind: 'decision'; ts: string; tool_use_id: string | null; role: Role; source: Source; jevReason: string | null; jevMs: number | null
-  levels: Levels | null; top: Levels | null; cell: string | null; floorApplied: boolean; model: Model; effort: Effort
+  levels: Levels | null; top: Levels | null; dist: Distributions | null; cell: string | null; floorApplied: boolean; model: Model; effort: Effort
 }
 export type OutcomeLine = {
   v: 1; kind: 'outcome'; ts: string; tool_use_id: string | null; role: Role; model: Model; effort: Effort; mode: 'foreground' | 'background'
@@ -34,13 +34,28 @@ const round = (n: number, places: number) => { const k = 10 ** places; return Ma
 const word = (value: unknown, max: number) => typeof value === 'string' && /^[A-Za-z0-9._:-]+$/.test(value) && value.length <= max ? value : null
 const pairText = (pair: Pair) => `${pair.model}/${pair.effort}`
 
-export type DecisionInput = { ts: string; toolUseId: string | undefined; role: Role; choice: { source: Source; jevReason: string | null; jevMs: number | null; levels: Levels | null; top: Levels | null; cell: Pair | null; floorApplied: boolean; model: Model; effort: Effort } }
+/** The number of levels each dimension's question has: its distribution's keys are "0" up to one less. */
+const LEVEL_COUNT: Readonly<Record<Dimension, number>> = { difficulty: DIFFICULTIES.length, duration: GROUP_OF_DURATION.length }
+/** One distribution, key by key: only the dimension's level keys, each a finite probability rounded to two decimals. */
+function distOf(dim: Dimension, probs: unknown): Record<string, number> {
+  const out: Record<string, number> = {}
+  if (!record(probs)) return out
+  for (let level = 0; level < LEVEL_COUNT[dim]; level++) {
+    const p = probs[String(level)]
+    if (typeof p === 'number' && Number.isFinite(p) && p >= 0 && p <= 1) out[String(level)] = round(p, 2)
+  }
+  return out
+}
+
+export type DecisionInput = { ts: string; toolUseId: string | undefined; role: Role; choice: { source: Source; jevReason: string | null; jevMs: number | null; levels: Levels | null; top: Levels | null; dist: Distributions | null; cell: Pair | null; floorApplied: boolean; model: Model; effort: Effort } }
 export function decisionLine({ ts, toolUseId, role, choice }: DecisionInput): DecisionLine {
   const levels = choice.levels && { difficulty: choice.levels.difficulty, duration: choice.levels.duration }
   const top = choice.top && { difficulty: round(choice.top.difficulty, 2), duration: round(choice.top.duration, 2) }
+  const probs = choice.dist
+  const dist = probs && Object.fromEntries(DIMENSIONS.map(dim => [dim, distOf(dim, probs[dim])])) as Distributions
   return {
     v: 1, kind: 'decision', ts, tool_use_id: word(toolUseId, 80), role, source: choice.source, jevReason: word(choice.jevReason, 40), jevMs: maybeCount(choice.jevMs),
-    levels, top, cell: choice.cell && pairText(choice.cell), floorApplied: choice.floorApplied, model: choice.model, effort: choice.effort,
+    levels, top, dist, cell: choice.cell && pairText(choice.cell), floorApplied: choice.floorApplied, model: choice.model, effort: choice.effort,
   }
 }
 
@@ -178,8 +193,8 @@ const median = (values: number[]) => {
 }
 /** A failed run: it errored or was aborted or refused, or its reviewer asked for CHANGES or blocked. */
 export const failed = (line: OutcomeLine) => line.status !== 'completed' || line.aborted || line.verdict === 'CHANGES' || line.verdict === 'BLOCKED'
-const SHORT_MS = 30 * 60_000, MEDIUM_MS = 120 * 60_000
-/** The real duration bucket: under 30 minutes short, 30 to 120 medium, over 120 long. */
+const SHORT_MS = 10 * 60_000, MEDIUM_MS = 30 * 60_000
+/** The real duration bucket: under 10 minutes short, 10 to 30 medium, over 30 long. */
 export const bucketOf = (ms: number): DurationGroup => ms < SHORT_MS ? 'short' : ms <= MEDIUM_MS ? 'medium' : 'long'
 
 export function summarize(lines: Line[]): Summary {
@@ -227,8 +242,9 @@ const tokensText = (n: number) => n < 1000 ? String(n) : n < 1_000_000 ? `${roun
 const row = (name: string, g: Group) => `  ${name.padEnd(16)} n=${g.count} fail=${pct(g.failures, g.count)} median=${span(g.medianMs)} tokens=${tokensText(g.tokens)} cost=$${g.costUsd.toFixed(4)}`
 
 export function formatSummary(s: Summary): string {
-  if (!s.decisions && !s.outcomes) return 'spider-team: no routing records yet in ~/.claude/spider-team/routes.jsonl.'
-  const out = [`spider-team stats: ${s.decisions} decisions, ${s.outcomes} outcomes (~/.claude/spider-team/routes.jsonl; cost is an estimate from list prices)`]
+  // The host prefixes command output with the plugin name, so these texts do not repeat it.
+  if (!s.decisions && !s.outcomes) return 'no routing records yet in ~/.claude/spider-team/routes.jsonl.'
+  const out = [`${s.decisions} decisions, ${s.outcomes} outcomes (~/.claude/spider-team/routes.jsonl; cost is an estimate from list prices)`]
   out.push('By role', ...(s.byRole.length ? s.byRole.map(r => row(r.key, r.group)) : ['  no outcomes yet']))
   out.push('By final pair', ...(s.byPair.length ? s.byPair.map(r => row(r.key, r.group)) : ['  no outcomes yet']))
   const reasons = Object.entries(s.fallback.reasons).sort(([a], [b]) => a.localeCompare(b)).map(([k, n]) => `${k} ${n}`).join(', ')
@@ -239,7 +255,7 @@ export function formatSummary(s: Summary): string {
     out.push(`  ${dim.padEnd(10)} n=${c.count} median=${c.median === null ? '-' : c.median.toFixed(2)} [${c.buckets.join(' / ')}]`)
   }
   const d = s.durationCheck
-  out.push(`Duration check, predicted group vs real (short <30m, medium 30-120m, long >120m): ${d.hits} of ${d.compared} in the predicted group (${pct(d.hits, d.compared)})`)
+  out.push(`Duration check, predicted group vs real (short <10m, medium 10-30m, long >30m): ${d.hits} of ${d.compared} in the predicted group (${pct(d.hits, d.compared)})`)
   for (const p of ['short', 'medium', 'long'] as const) out.push(`  predicted ${p.padEnd(6)} -> short ${d.matrix[p].short}, medium ${d.matrix[p].medium}, long ${d.matrix[p].long}`)
   return out.join('\n')
 }
