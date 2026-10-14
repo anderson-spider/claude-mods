@@ -39,7 +39,7 @@ declare module 'claude-code' {
       allowProtectedTarget?: boolean
     }
     mcp__gitlab__gitlab_mr_comment: {
-      action: 'list' | 'comment' | 'reply' | 'line' | 'edit' | 'resolve' | 'unresolve'
+      action: 'list' | 'unresolved' | 'comment' | 'reply' | 'line' | 'edit' | 'resolve' | 'unresolve'
       project?: string
       iid?: number
       body?: string
@@ -54,13 +54,14 @@ declare module 'claude-code' {
       allowOthers?: boolean
     }
     mcp__gitlab__gitlab_pipeline: {
-      action: 'list' | 'jobs' | 'run' | 'retry' | 'cancel' | 'play' | 'artifacts'
+      action: 'list' | 'jobs' | 'wait' | 'run' | 'retry' | 'cancel' | 'play' | 'artifacts'
       project?: string
       iid?: number
       ref?: string
       pipelineId?: number
       jobId?: number
       failedOnly?: boolean
+      minutes?: number
       variables?: string[]
       page?: number
       perPage?: number

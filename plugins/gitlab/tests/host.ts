@@ -9,13 +9,17 @@ type Settings = Record<string, unknown>
 /** The MCP name the host gives a tool this plugin registers. */
 export const id = (name: string) => `mcp__gitlab__${name}`
 
+type Answer = { status?: number; text: string }
+
 /**
  * A host whose repository has `remote` as origin on `branch`, whose settings are `project` and `local`, and whose
- * network answers `api[url]` (`{ status, text }`, 404 otherwise). Everything is mutable through `host` between calls.
+ * network answers `api[url]` (`{ status, text }`, or a list answered in turn with the last one repeated; 404
+ * otherwise). Everything is mutable through `host` between calls; `runs` records every process the plugin runs.
  */
-export function world(on: On, opts: { remote?: string; branch?: string; project?: Settings; local?: Settings; api?: Record<string, { status?: number; text: string }> } = {}) {
+export function world(on: On, opts: { remote?: string; branch?: string; project?: Settings; local?: Settings; api?: Record<string, Answer | Answer[]> } = {}) {
   const tools: Tool[] = []
   const sent: Sent[] = []
+  const runs: string[] = []
   const host = {
     remote: 'git@gitlab.example.com:team/app.git',
     branch: 'feature/x',
@@ -35,6 +39,7 @@ export function world(on: On, opts: { remote?: string; branch?: string; project?
   })
   on('process.run', (_$, e) => {
     const args = e.argv.join(' ')
+    runs.push(args)
     const out = (exitCode: number, stdout: string) => ({ value: { exitCode, stdout, stderr: '' } }) as never
     if (args === 'git remote get-url origin') return host.remote ? out(0, `${host.remote}\n`) : out(2, '')
     if (args === 'git remote') return out(0, '')
@@ -47,12 +52,13 @@ export function world(on: On, opts: { remote?: string; branch?: string; project?
   on('http.fetch', (_$, e) => {
     sent.push({ url: e.url, method: e.init?.method, headers: e.init?.headers, body: e.init?.body })
     if (host.fetchError) throw new Error(host.fetchError)
-    const answer = (host.api as Record<string, { status?: number; text: string }>)[e.url]
+    const listed = (host.api as Record<string, Answer | Answer[]>)[e.url]
+    const answer = Array.isArray(listed) ? (listed.length > 1 ? listed.shift() : listed[0]) : listed
     const status = answer ? (answer.status ?? 200) : 404
     return { value: { status, ok: status < 400, headers: {}, text: answer?.text ?? '{"message":"404 Not Found"}' } }
   })
 
-  return { tools, sent, host }
+  return { tools, sent, host, runs }
 }
 
 /** Starts the session, so the plugin registers its tools, and returns their names. */
