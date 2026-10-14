@@ -14,17 +14,20 @@ export type Dimension = (typeof DIMENSIONS)[number]
 /** One request carries both questions; each criterion list is the level scale its answers use. */
 export const QUESTIONS = {
   difficulty: {
-    type: 'score', instructions: 'How hard is this task for a capable coding agent?',
-    criteria: ['Trivial: a one-line or purely mechanical change', 'Easy: small, well-understood change in one place', 'Moderate: needs some understanding of the surrounding code', 'Hard: subtle logic, several interacting parts, or unclear root cause', 'Expert: architecture, concurrency, security, or deep domain reasoning'],
+    type: 'score',
+    instructions: 'How hard is this task for a capable coding agent? Judge the work itself, not the length or detail of the brief: a long list of constraints, checks or acceptance criteria does not make a task harder.',
+    criteria: ['Trivial: a one-line or purely mechanical change', 'Easy: small, well-understood change in one place', 'Moderate: needs some understanding of the surrounding code', 'Hard: subtle logic across several interacting parts, or a root cause still to be found', 'Expert: architecture, concurrency, security, or deep domain reasoning'],
   },
+  // On a coding agent's scale, not a person's: an agent finishes in minutes work that would take a person much longer.
   duration: {
     type: 'score', instructions: 'How long will a coding agent need to finish this task?',
-    criteria: ['Under 5 minutes', '5 to 30 minutes', '30 to 120 minutes', 'Several hours or more'],
+    criteria: ['Under 3 minutes', '3 to 10 minutes', '10 to 30 minutes', 'More than 30 minutes'],
   },
 } as const
 
-// Policy, not a measurement: a task that needs more than the pair gives costs twice what spare capacity does.
-export const POLICY = { under: 2, over: 1 } as const
+// Policy, not a measurement: a task that needs more than the pair gives costs 1.25 times what spare capacity does, so the
+// lower of two adjacent levels wins once it holds at least 5/9 (about 56%) of their weight.
+export const POLICY = { under: 1.25, over: 1 } as const
 
 /** Difficulty levels 0..4, in the order of the difficulty question's criteria. */
 export const DIFFICULTIES = ['trivial', 'easy', 'moderate', 'hard', 'expert'] as const

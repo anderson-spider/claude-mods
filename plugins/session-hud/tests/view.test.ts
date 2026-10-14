@@ -51,13 +51,45 @@ test('a window bar stops at thirty cells, its percent beside it, and the second 
 
 test('a wide card sets the context and both windows as three blocks, with the session rate and age, turns and output', () => {
   const card = view({ columns: 240, card: { ...full, contextWindow: 500_000, startedAt: now - 18 * 60_000, turns: 4, output: 12_000 } })
-  const [model, bars, ends, extra] = text(card.top)
+  const rows = text(card.top)
+  expect(rows).toHaveLength(3)
+  const [model, bars, ends] = rows
   expect(model).toMatch(/^● Opus 5\.5 · medium +session \$4\.59 · \$15\.30\/h · 18m$/u)
-  expect(bars).toMatch(/^ctx ━{30} 40% {12}5h {2}[━│]{30} 74% {12}7d {2}[━│]{30} 60% ▲10$/u)
-  expect(ends).toMatch(/^ {4}200k\/500k · 300k left +38m left · ~85% at reset +3d 12h left · 100% in 2d 8h$/u)
-  expect(extra).toBe('    cache 95% · out 12k')
+  expect(bars).toMatch(/^ctx ━{30} 40% {16}5h {2}[━│]{30} 74% {12}7d {2}[━│]{30} 60% ▲10$/u)
+  expect(ends).toMatch(/^ {4}200k\/500k · 300k left · cache 95% · out 12k {11}38m left · ~85% at reset +3d 12h left · 100% in 2d 8h$/u)
   expect(text(card.bottom)[0]).toMatch(/^last turn 5s · 4 turns · 2 edits · 1 error · /u)
   expect(card.top.every(row => row.reduce((n, s) => n + s.text.length, 0) <= 236)).toBe(true)
+})
+
+test('on a wide card the context tokens, cache and output share one line and the windows keep their columns', () => {
+  const columnsOf = (rows: string[]) => rows.slice(1).map(row => [row.indexOf('5h  ') >= 0 ? row.indexOf('5h  ') : row.indexOf('38m left'), row.indexOf('7d  ') >= 0 ? row.indexOf('7d  ') : row.indexOf('3d 12h left')])
+  const cases: SessionHudCard[] = [
+    { ...full, context: { tokens: 105_000, window: 1_000_000, percent: 11 }, contextWindow: 500_000, cache: 99, output: 73_000 },
+    { ...full, context: { tokens: 1_500_000, window: 1_000_000, percent: 150 }, cache: 100, output: 1_500_000 },
+    { ...full, context: { tokens: 1_400_000, window: 9_900_000, percent: 14 }, cache: 100, output: 12_300_000 },
+    { ...full, context: { tokens: 1_400_000, window: 9_900_000, percent: 14 }, cache: 100, output: 123_400_000 },
+    { ...full, output: 0, cache: undefined },
+  ]
+  const drawn = cases.map(card => text(cardView({ card, now, columns: 154 }).top))
+  expect(drawn[0]![2]).toMatch(/^ {4}105k\/500k · 395k left · cache 99% · out 73k +38m left/u)
+  expect(drawn[1]![2]).toMatch(/^ {4}1\.5M\/1M · 0 left · cache 100% · out 1\.5M +38m left/u)
+  expect(drawn[2]![2]).toMatch(/^ {4}1\.4M\/9\.9M · 8\.5M left · cache 100% · out 12\.3M {8}38m left/u)
+  expect(drawn[3]![2]).toMatch(/^ {4}1\.4M\/9\.9M · 8\.5M left · cache 100% · out 123\.… {8}38m left/u)
+  expect(drawn[4]![2]).toMatch(/^ {4}200k\/1M · 800k left +38m left/u)
+  for (const rows of drawn) {
+    expect(rows).toHaveLength(3)
+    expect(columnsOf(rows)).toEqual([[54, 104], [58, 108]])
+    expect(rows.every(row => row.length <= 150)).toBe(true)
+  }
+  expect(text(cardView({ card: full, now, columns: 153 }).top)[0]).toContain('ctx ━━━━━━━━')
+})
+
+test('on a wide card without the context tokens, cache and output take their own line under the bar', () => {
+  const [, bars, second] = text(cardView({ card: { ...full, context: { window: 1_000_000, percent: 44 }, output: 12_000 }, now, columns: 240 }).top)
+  expect(bars).toMatch(/^ctx ━{30} 44% {16}5h {2}/u)
+  expect(second).toMatch(/^ {4}cache 95% · out 12k {35}38m left/u)
+  const [, , bare] = text(cardView({ card: { ...full, context: { window: 1_000_000, percent: 44 }, cache: undefined }, now, columns: 240 }).top)
+  expect(bare).toMatch(/^ {58}38m left/u)
 })
 
 test('while a turn runs the dot turns yellow and the turn time counts; between turns it is green with no time', () => {

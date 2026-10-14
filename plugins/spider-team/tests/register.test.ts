@@ -122,7 +122,9 @@ test('a decision line and a foreground outcome line are written, and the host re
   const [decision, outcome] = h.ledger() as [Record<string, any>, Record<string, any>]
   expect(decision).toMatchObject({
     v: 1, kind: 'decision', tool_use_id: 'toolu_9', role: 'reviewer', source: 'jev', jevReason: null,
-    levels: { difficulty: 0, duration: 0 }, top: { difficulty: 1, duration: 1 }, cell: 'haiku/medium', floorApplied: true, model: 'opus', effort: 'low',
+    levels: { difficulty: 0, duration: 0 }, top: { difficulty: 1, duration: 1 },
+    dist: { difficulty: { '0': 1, '1': 0, '2': 0, '3': 0, '4': 0 }, duration: { '0': 1, '1': 0, '2': 0, '3': 0 } },
+    cell: 'haiku/medium', floorApplied: true, model: 'opus', effort: 'low',
   })
   expect(decision.jevMs).toBeGreaterThanOrEqual(0)
   expect(decision.ts).toMatch(/^\d{4}-\d\d-\d\dT[\d:.]+Z$/)
@@ -135,7 +137,7 @@ test('a decision line and a foreground outcome line are written, and the host re
   // A default fallback records its reason and no latency.
   delete h.env.JEV_API_KEY
   await $.tool.call(call('analyst', { tool_use_id: 'toolu_10' }) as never)
-  expect(h.ledger()[2]).toMatchObject({ kind: 'decision', source: 'default', jevReason: 'no-key', jevMs: null, levels: null, top: null, cell: null, floorApplied: false, model: 'haiku', effort: 'high' })
+  expect(h.ledger()[2]).toMatchObject({ kind: 'decision', source: 'default', jevReason: 'no-key', jevMs: null, levels: null, top: null, dist: null, cell: null, floorApplied: false, model: 'haiku', effort: 'high' })
 })
 test('a background launch is written when its turn completes, with the verdict from the final text', async ($, on) => {
   const h = world(on)
@@ -167,6 +169,8 @@ test('an aborted background agent is an aborted outcome', async ($, on) => {
 })
 test('no line ever holds the task, a prompt, an answer, a path, a branch or the key', async ($, on) => {
   const h = world(on); h.env.JEV_API_KEY = 'test-key'
+  // Jev's answers carry extra text beside the probabilities; only the projected numbers reach the line.
+  h.answers.difficulty = { probabilities: { '2': 0.6, '3': 0.4 }, reason: MARKER, [MARKER]: 1 }; h.answers.duration = { probabilities: { '1': 1 }, note: `/home/u/private/${MARKER}` }
   dispatched(on, finished(`${MARKER} Verdict: APPROVED`, { prompt: MARKER }))
   await started($)
   await $.tool.call(call('reviewer', { prompt: `Review ${MARKER} at /home/u/private/${MARKER} on branch feature/${MARKER} with test-key`, description: `Fixture ${MARKER}`, name: MARKER }) as never)
@@ -174,6 +178,7 @@ test('no line ever holds the task, a prompt, an answer, a path, a branch or the 
   for (const text of [...h.written, ...h.files.values()]) {
     expect(text).not.toContain(MARKER); expect(text).not.toContain('/private'); expect(text).not.toContain('/home/u/'); expect(text).not.toContain('test-key'); expect(text).not.toContain('Review')
   }
+  expect(h.ledger()[0]).toMatchObject({ source: 'jev', levels: { difficulty: 2, duration: 1 }, dist: { difficulty: { '0': 0, '1': 0, '2': 0.6, '3': 0.4, '4': 0 }, duration: { '0': 0, '1': 1, '2': 0, '3': 0 } } })
   expect(h.ledger()[1]).toMatchObject({ verdict: 'APPROVED' })
 })
 test('observation survives a failing ledger: the dispatch and its result are unchanged and one debug line names the miss', async ($, on) => {
@@ -204,13 +209,13 @@ test('a refused or failed Agent result writes no outcome and passes on', async (
 })
 test('the stats command summarizes the local ledger, and says so when there is none or it cannot be read', async ($, on) => {
   const h = world(on); dispatched(on, finished('Verdict: APPROVED')); await started($)
-  expect((await $.command.run({ command: STATS_COMMAND } as never)).text).toBe('spider-team: no routing records yet in ~/.claude/spider-team/routes.jsonl.')
+  expect((await $.command.run({ command: STATS_COMMAND } as never)).text).toBe('no routing records yet in ~/.claude/spider-team/routes.jsonl.')
   await $.tool.call(call('reviewer', { tool_use_id: 'toolu_s' }) as never)
   const text = (await $.command.run({ command: STATS_COMMAND, args: 'ignored' } as never)).text!
-  expect(text).toContain('1 decisions, 1 outcomes'); expect(text).toContain('reviewer'); expect(text).toContain('opus/medium'); expect(text).toContain('Default fallbacks: 1 of 1')
+  expect(text.startsWith('1 decisions, 1 outcomes')).toBe(true); expect(text).toContain('reviewer'); expect(text).toContain('opus/medium'); expect(text).toContain('Default fallbacks: 1 of 1')
   expect(text).not.toContain('/home/u')
   h.fsFaults.read = true
-  expect((await $.command.run({ command: STATS_COMMAND } as never)).text).toBe('spider-team: the routing records could not be read.')
+  expect((await $.command.run({ command: STATS_COMMAND } as never)).text).toBe('the routing records could not be read.')
   h.fsFaults.read = false; delete h.env.HOME
-  expect((await $.command.run({ command: STATS_COMMAND } as never)).text).toBe('spider-team: no home directory, so no routing records.')
+  expect((await $.command.run({ command: STATS_COMMAND } as never)).text).toBe('no home directory, so no routing records.')
 })

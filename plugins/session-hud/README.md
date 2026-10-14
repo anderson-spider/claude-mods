@@ -6,7 +6,7 @@ A three-row card above the prompt:
 2. The five-hour and seven-day limits, side by side: a bar of at most thirty cells lit to the percent used with a tick at the time passed, `▲N` for the points above an even pace, the time left and where the pace ends (`~85% at reset`, or `100% in 2d 7h` when it runs out first).
 3. The subagents and teammates running a turn now, grouped by model (`3 agents: Sonnet 4.5 ×2 · Haiku 4.5`, `?` for a model not yet reported), left out when none runs; then the last turn's duration, the turns so far, the session's edits and errors and what the last turn cost.
 
-From about 150 columns the context and the two windows sit as three aligned blocks under the first row: each with a thirty-cell bar, and the context's block adds the tokens left in the window, the cache share and the output tokens.
+From about 155 columns the context and the two windows sit as three aligned blocks under the first row: each with a thirty-cell bar over one line of figures, the context's line holding its tokens, the tokens left in the window, the cache share and the output tokens.
 
 ```text
 /plugin install session-hud --marketplace anderson-spider/claude-mods

@@ -100,11 +100,12 @@ export const register: Register = on => {
     if (pending) await record($, 'outcome', afterTurn(pending, e as TurnEnd, stamp()))
     return result
   })
+  // The host prefixes command output with the plugin name, so the texts below do not repeat it.
   on('command.run', { command: STATS_COMMAND }, async $ => {
     try {
       const home = await $.env.get('HOME')
-      if (!home) return { text: 'spider-team: no home directory, so no routing records.' }
+      if (!home) return { text: 'no home directory, so no routing records.' }
       return { text: formatSummary(summarize(parseLedger(await readAll(files($), ledgerPath(home))))) }
-    } catch { return { text: 'spider-team: the routing records could not be read.' } }
+    } catch { return { text: 'the routing records could not be read.' } }
   })
 }

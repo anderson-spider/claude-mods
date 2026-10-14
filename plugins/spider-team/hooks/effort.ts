@@ -16,9 +16,10 @@ export type JevReason = Off | JevFailureReason
 export type Source = 'jev' | 'default'
 /**
  * The routed pair with what led to it: the table's raw cell, whether the role floor lifted it, the chosen levels, the
- * highest probability of each dimension's distribution (`top`, the model's confidence) and the Jev latency when it was asked.
+ * highest probability of each dimension's distribution (`top`, the model's confidence), the normalized distributions
+ * themselves (`dist`) and the Jev latency when it was asked.
  */
-export type Choice = Pair & { source: Source; jevAsked: boolean; levels: Levels | null; top: Levels | null; cell: Pair | null; floorApplied: boolean; jevReason: JevReason | null; jevMs: number | null }
+export type Choice = Pair & { source: Source; jevAsked: boolean; levels: Levels | null; top: Levels | null; dist: Distributions | null; cell: Pair | null; floorApplied: boolean; jevReason: JevReason | null; jevMs: number | null }
 
 const round = (n: number) => Math.round(n * 1_000_000) / 1_000_000
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value)
@@ -43,7 +44,10 @@ export function distributions(answers: Answers): Distributions {
   return out
 }
 
-/** The level with the lowest expected penalty, under-capacity weighted twice over-capacity; ties go to the lower level. */
+/**
+ * The level with the lowest expected penalty, with the router's weights for under- and over-capacity; ties go to the lower
+ * level. Costs are rounded before comparing, so a non-integer weight's float error cannot break a tie.
+ */
 export function levelOf(dist: Record<string, number>): number {
   const levels = Object.keys(dist).map(Number).sort((a, b) => a - b)
   let best = levels[0]!, lowest = Infinity
@@ -62,7 +66,7 @@ export async function assessRoute(io: EffortIo, call: { role: Role; task: string
   const elapsed = () => { try { return jevAsked && startedAt !== null ? Math.max(0, io.jev.now() - startedAt) : null } catch { return null } }
   const fallback = (jevReason: JevReason): Choice => {
     try { io.log(`spider-team: Jev off (${jevReason}); using role default`) } catch { /* Logging cannot change the role fallback. */ }
-    return { ...defaultOf(call.role), source: 'default', jevAsked, levels: null, top: null, cell: null, floorApplied: false, jevReason, jevMs: elapsed() }
+    return { ...defaultOf(call.role), source: 'default', jevAsked, levels: null, top: null, dist: null, cell: null, floorApplied: false, jevReason, jevMs: elapsed() }
   }
   try {
     const access = await resolveAccess(io, call.key)
@@ -75,6 +79,6 @@ export async function assessRoute(io: EffortIo, call: { role: Role; task: string
     const levels = { difficulty: levelOf(dists.difficulty), duration: levelOf(dists.duration) }
     const top = { difficulty: Math.max(...Object.values(dists.difficulty)), duration: Math.max(...Object.values(dists.duration)) }
     const routed = routeOf(call.role, levels.difficulty, levels.duration)
-    return { ...routed.pair, source: 'jev', jevAsked, levels, top, cell: routed.cell, floorApplied: routed.floorApplied, jevReason: null, jevMs: elapsed() }
+    return { ...routed.pair, source: 'jev', jevAsked, levels, top, dist: { difficulty: dists.difficulty, duration: dists.duration }, cell: routed.cell, floorApplied: routed.floorApplied, jevReason: null, jevMs: elapsed() }
   } catch (error) { return fallback(classifyFailure(error).failure.reason) }
 }
