@@ -1,25 +1,27 @@
 import { expect, test } from 'claude-code/testing'
 import { agentName, codexArgs, SLUG, SPECS, startEffort } from '../hooks/roles'
 
-test('every role and model starts with the priority service tier including luna, sol and astra', () => {
+test('Fast adds the priority service tier for every role and model including luna, sol and astra, and is off by default', () => {
   for (const spec of Object.values(SPECS)) {
     for (const model of ['gpt-6-luna', 'gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-ASTRA', 'another-model']) {
-      const args = codexArgs(spec, { model, effort: spec.effort }, [])
-      expect(args).toContain(model)
-      expect(args).toContain('service_tier="priority"')
-      expect(args.filter(arg => arg.startsWith('service_tier='))).toHaveLength(1)
+      const fast = codexArgs(spec, { model, effort: spec.effort }, [], true)
+      expect(fast).toContain(model)
+      expect(fast.filter(arg => arg.startsWith('service_tier='))).toEqual(['service_tier="priority"'])
+      for (const off of [codexArgs(spec, { model, effort: spec.effort }, [], false), codexArgs(spec, { model, effort: spec.effort }, [])]) {
+        expect(off.filter(arg => arg.startsWith('service_tier='))).toEqual([])
+        expect(fast.filter(arg => !off.includes(arg))).toEqual(['service_tier="priority"'])
+      }
     }
   }
 })
 
-test('astra caps xhigh at high with priority and other models retain their effort', () => {
+test('astra caps xhigh at high and other models retain their effort', () => {
   for (const base of Object.values(SPECS)) {
     for (const model of ['gpt-6-astra', 'gpt-6.1-sol-astra', 'gpt-6-ASTRA']) {
       const spec = { ...base, model, effort: 'xhigh' as const }
       const args = codexArgs(spec, { model, effort: 'xhigh' }, [])
       expect(args).toContain('model_reasoning_effort="high"')
       expect(args).not.toContain('model_reasoning_effort="xhigh"')
-      expect(args).toContain('service_tier="priority"')
       for (const effort of ['low', 'medium', 'high'] as const) expect(codexArgs(spec, { model, effort }, [])).toContain(`model_reasoning_effort="${effort}"`)
     }
     expect(codexArgs(base, { model: base.model, effort: 'xhigh' }, [])).toContain('model_reasoning_effort="xhigh"')

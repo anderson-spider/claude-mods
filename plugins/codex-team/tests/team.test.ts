@@ -197,7 +197,7 @@ test('an analyst task starts the analyst in the reports directory, read-only on 
   expect(start.slice(0, 4)).toEqual(['herdr', 'agent', 'start', effectiveName('analyst', 'w1')!])
   expect(start).toContain('gpt-6-luna')
   expect(start).toContain('model_reasoning_effort="medium"')
-  expect(start).toContain('service_tier="priority"')
+  expect(start.some(arg => arg.startsWith('service_tier='))).toBe(false)
   expect(start).toContain('sandbox_workspace_write.writable_roots=[]')
   const tab = world.calls.find(call => call[2] === 'create')!
   expect(tab).toContain('/home/u/.claude/codex-team/reports')
@@ -338,7 +338,7 @@ test('Jev profile choices reach every role start flag answer and v3 record', asy
       const start = world.calls.find(c => c[2] === 'start')!
       expect(start).toContain(model)
       expect(start).toContain(`model_reasoning_effort="${effort}"`)
-      expect(start).toContain('service_tier="priority"')
+      expect(start.some(arg => arg.startsWith('service_tier='))).toBe(false)
       for (const write of world.writes) expect(JSON.parse(write.text)).toMatchObject({ v: 3, selection: { model, source: 'jev', effort }, jevModel: JEV_MODEL, jevAsked: true, modelApplied: true, effortApplied: true, expected: { difficulty, duration, scope }, jevReason: null })
       expect(world.requests).toHaveLength(1)
       privateOutputs(world, answer)
@@ -535,7 +535,7 @@ test('authorized Astra dispatch caps pinned and default pairs and permits expert
       expect(answer.text).toContain(source === 'jev' ? 'model gpt-6-astra, effort high (jev)' : `effort high (${source}), capped at high: gpt-6-astra never runs above high`)
       const start = world.calls.find(c => c[2] === 'start')!
       expect(start).toContain('model_reasoning_effort="high"')
-      expect(start).toContain('service_tier="priority"')
+      expect(start.some(arg => arg.startsWith('service_tier='))).toBe(false)
       for (const write of world.writes) expect(JSON.parse(write.text)).toMatchObject({ selection: { model: 'gpt-6-astra', effort: 'high', source }, effortApplied: true, modelApplied: true })
     }
   } finally {
@@ -1057,7 +1057,7 @@ test('authorized Astra Jev local and explicit pairs agree in startup answer and 
       const start = w.calls.find(c => c[2] === 'start')!
       expect(start).toContain('gpt-6-astra')
       expect(start).toContain('model_reasoning_effort="high"')
-      expect(start).toContain('service_tier="priority"')
+      expect(start.some(arg => arg.startsWith('service_tier='))).toBe(false)
       expect(start).toContain(`developer_instructions=${JSON.stringify(SPECS[role].instructions)}`)
       expect(start).toContain(role === 'developer' ? 'sandbox_workspace_write.writable_roots=["/home/u/.claude/codex-team/reports"]' : 'sandbox_workspace_write.writable_roots=[]')
       for (const write of w.writes) expect(JSON.parse(write.text)).toMatchObject({ v: 3, selection: { model: 'gpt-6-astra', effort: 'high', source }, started: true, modelApplied: true, effortApplied: true })
@@ -1110,4 +1110,23 @@ test('Jev Astra selection is capped defensively and revoked permission refuses b
   expect(revoked.calls.filter(c => c[0] === 'herdr')).toEqual([['herdr', 'agent', 'list']])
   expect(JSON.parse(revoked.writes[0]!.text)).toMatchObject({ selection: { model: 'gpt-6-astra', effort: 'high', source: 'jev' }, started: false, modelApplied: false, effortApplied: false, promptStatus: 'not_sent', reason: ASTRA_REFUSAL })
   expect(published).toBe(true)
+})
+
+test('Fast mode follows the plugin option unless the dispatch chooses, and a malformed choice refuses before any effect', async () => {
+  for (const [option, choice, on, source] of [
+    [undefined, undefined, false, 'plugin option'], [true, undefined, true, 'plugin option'], ['true', undefined, false, 'plugin option'],
+    [false, true, true, 'dispatch'], [true, false, false, 'dispatch'],
+  ] as const) {
+    const world = io(freshTeam)
+    world.team.fast = option
+    const answer = await dispatch(world.team, { role: 'analyst', task: 'Find X', slug: 'find-x', ...(choice === undefined ? {} : { fast: choice }) })
+    expect(answer.ok).toBe(true)
+    expect(answer.text).toContain(`fast: ${on ? 'on' : 'off'} (${source})`)
+    const start = world.calls.find(call => call[2] === 'start')!
+    expect(start.filter(arg => arg.startsWith('service_tier='))).toEqual(on ? ['service_tier="priority"'] : [])
+  }
+  const world = io(freshTeam)
+  expect(await dispatch(world.team, { role: 'analyst', task: 'Find X', slug: 'find-x', fast: 'yes' })).toEqual({ ok: false, text: 'codex-team: fast must be true or false' })
+  expect(world.calls).toEqual([])
+  expect(world.writes).toEqual([])
 })

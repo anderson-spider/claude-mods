@@ -26,9 +26,10 @@ function dagrIo($: Dollar): PublishIo {
 }
 
 /** The host access the team needs, built from one hook's `$`. */
-function teamIo($: Dollar, allowAstra: unknown): TeamIo {
+function teamIo($: Dollar, allowAstra: unknown, fast: unknown): TeamIo {
   return {
     allowAstra,
+    fast,
     run: async (argv, init) => {
       const done = await $.process.run(argv, { timeoutMs: init?.timeoutMs })
       return { exitCode: done.exitCode, stdout: done.stdout, stderr: done.stderr, isStdoutTruncated: done.isStdoutTruncated, isStderrTruncated: done.isStderrTruncated }
@@ -83,6 +84,7 @@ export const register: Register = (on, options) => {
           cwd: { type: 'string', description: 'Developer only: the absolute path of the task worktree, never the repository itself.' },
           model: { type: 'string', enum: ['gpt-6.1-sol', 'gpt-6-luna', 'gpt-6-astra'], description: 'Pins model at a new session start for every role and skips Jev; omitted effort uses the role default. Astra pins require allowAstra permission.' },
           effort: { type: 'string', enum: ['low', 'medium', 'high', 'xhigh'], description: 'Pins effort at a new session start for every role and skips Jev; omitted model uses the role default. Astra caps xhigh to high; each dispatch starts fresh.' },
+          fast: { type: 'boolean', description: 'Fast mode (the priority service tier) for this dispatch: true turns it on, false off; omitted uses the fast plugin option (off by default).' },
         },
         required: ['role', 'slug'],
       } satisfies SchemaFor<McpToolInputs['mcp__codex-team__dispatch']>,
@@ -101,13 +103,13 @@ export const register: Register = (on, options) => {
 
   on('tool.call', { tool: 'mcp__codex-team__dispatch' }, async ($, e, next) => {
     if (!('tool' in e)) return next(e)
-    const answer = await dispatch(teamIo($, options.allowAstra), e).catch(() => ({ ok: false, text: 'codex-team: the dispatch failed unexpectedly; check `herdr agent list` before trying again.' }))
+    const answer = await dispatch(teamIo($, options.allowAstra, options.fast), e).catch(() => ({ ok: false, text: 'codex-team: the dispatch failed unexpectedly; check `herdr agent list` before trying again.' }))
     return { result: answer.text }
   })
 
   on('tool.call', { tool: 'mcp__codex-team__finish' }, async ($, e, next) => {
     if (!('tool' in e)) return next(e)
-    const answer = await finish(teamIo($, options.allowAstra), e).catch(() => ({ ok: false, text: 'codex-team: finish failed unexpectedly; check `herdr agent list` before trying again.' }))
+    const answer = await finish(teamIo($, options.allowAstra, options.fast), e).catch(() => ({ ok: false, text: 'codex-team: finish failed unexpectedly; check `herdr agent list` before trying again.' }))
     return { result: answer.text }
   })
 

@@ -12,16 +12,16 @@ Requires [Herdr](https://herdr.dev) (the session must run in a Herdr pane) and t
 
 Type `/codex-team:using-codex-team`. Outside Herdr it says it cannot be used and stops; inside, the session becomes the team's tech lead until it ends: it splits each request into tasks, hands each one to a role, waits for the agents in the background and reviews what comes back.
 
-`mcp__codex-team__dispatch` `{ role, slug, task?, cwd?, model?, effort? }` hands one task to one agent. `slug` is required, starts with a lowercase letter, contains only lowercase letters, digits and hyphens, and has at most 22 characters; longer slugs are refused without truncation. `task` is required for developer, analyst and architect; for reviewer it is optional extra focus:
+`mcp__codex-team__dispatch` `{ role, slug, task?, cwd?, model?, effort?, fast? }` hands one task to one agent. `slug` is required, starts with a lowercase letter, contains only lowercase letters, digits and hyphens, and has at most 22 characters; longer slugs are refused without truncation. `task` is required for developer, analyst and architect; for reviewer it is optional extra focus:
 
 | Role | Agent | Works in | Fallback pair and permissions |
 | --- | --- | --- | --- |
-| `developer` | `dev-<slug>` | the task worktree (`cwd`, never the repository itself) | `gpt-6.1-sol`, default effort `high`, Fast (`priority`); may write the worktree and the reports, and leaves changes uncommitted |
-| `analyst` | `analyst`, or `analyst-<slug>` when the shared analyst is working or blocked | the reports directory; reads the repository | `gpt-6-luna`, default effort `medium`, Fast (`priority`); writes only reports |
-| `architect` | `architect` | the reports directory; reads the repository | `gpt-6.1-sol`, default effort `high`, Fast (`priority`); writes only reports |
-| `reviewer` | `architect-<slug>` | the reports directory; reads the recorded developer worktree | `gpt-6.1-sol`, default effort `high`, Fast (`priority`); writes only the reviewer report |
+| `developer` | `dev-<slug>` | the task worktree (`cwd`, never the repository itself) | `gpt-6.1-sol`, default effort `high`; may write the worktree and the reports, and leaves changes uncommitted |
+| `analyst` | `analyst`, or `analyst-<slug>` when the shared analyst is working or blocked | the reports directory; reads the repository | `gpt-6-luna`, default effort `medium`; writes only reports |
+| `architect` | `architect` | the reports directory; reads the repository | `gpt-6.1-sol`, default effort `high`; writes only reports |
+| `reviewer` | `architect-<slug>` | the reports directory; reads the recorded developer worktree | `gpt-6.1-sol`, default effort `high`; writes only the reviewer report |
 
-Fast is Codex's `priority` service tier, set at startup with `-c service_tier="priority"` for every model, including Luna, Sol and Astra. Astra never starts above effort `high`: higher pinned or default choices are capped at `high`, the answer explains the cap, and the decision records the capped effort. Role defaults stay Sol/Luna; Astra is available through permitted pins and automatic profiles.
+Fast mode is Codex's `priority` service tier, set at startup with `-c service_tier="priority"` for any model, including Luna, Sol and Astra. It is off unless chosen: a dispatch's `fast: true` or `fast: false` decides for that agent, and an omitted `fast` follows the `fast` plugin option (**Fast mode** in `/config` or `/plugin` → Installed → codex-team → Configure options; user settings path `pluginConfigs["codex-team@spider-claude-mods"].options.fast`), which defaults to false. Off means no `service_tier` flag, so Codex uses its own configuration. A `fast` value that is not a boolean is refused before anything starts. The answer has a `fast: on|off (dispatch|plugin option)` line. Astra never starts above effort `high`: higher pinned or default choices are capped at `high`, the answer explains the cap, and the decision records the capped effort. Role defaults stay Sol/Luna; Astra is available through permitted pins and automatic profiles.
 
 `allowAstra` is a boolean plugin option, enabled by default. Change **Allow Astra** in `/config` or `/plugin` → Installed → codex-team → Configure options. In user `settings.json`, its path is `pluginConfigs["codex-team@spider-claude-mods"].options.allowAstra`:
 
