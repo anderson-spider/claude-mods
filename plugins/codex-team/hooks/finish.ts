@@ -3,9 +3,11 @@ import { errorOf, isTeamName, listAgents } from './herdr'
 import { effectiveName, taskSlug } from './names'
 import { SLUG } from './roles'
 import type { Listed, Run } from './herdr'
+import { codexUuid } from './auto-close'
 
 export type Finish = { agent: string; effectiveAgent: string; uuid: string | null; pane?: string; tab?: string; closed: boolean; archived: boolean; reason?: string }
-type Input = { agent: string; workspace: string; leadPane: string | undefined }
+export type FinishGuard = { expected?: { pane: string; uuid: string }; current?: () => boolean }
+type Input = { agent: string; workspace: string; leadPane: string | undefined } & FinishGuard
 type Agent = Listed & { tab_id?: string; agent?: string; agent_session?: { kind?: string; source?: string; value?: string } }
 
 function result(text: string): Record<string, unknown> | undefined {
@@ -20,6 +22,7 @@ export async function finishAgent(run: Run, sleep: (ms: number) => Promise<void>
   if (!isTeamName(input.agent)) return refuse('agent must be a Codex team name')
   if (!name) return refuse('workspace id cannot fit a Herdr name')
   if (!input.leadPane) return refuse('HERDR_PANE_ID is not set')
+  if (input.current && !input.current()) return refuse('expected agent changed')
   const got = await run(['herdr', 'agent', 'get', name], { timeoutMs: 2_000 }).catch(() => undefined)
   if (!got) return refuse('agent get failed')
   if (got.exitCode !== 0) return refuse(errorOf(got))
@@ -30,6 +33,7 @@ export async function finishAgent(run: Run, sleep: (ms: number) => Promise<void>
   if (agent.pane_id === input.leadPane) return refuse('cannot close the lead pane')
   const session = agent.agent_session
   if (agent.agent !== 'codex' || session?.kind !== 'id' || session.source !== 'herdr:codex' || typeof session.value !== 'string' || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(session.value)) return refuse('Codex session uuid unavailable')
+  if (input.expected && (input.expected.pane !== agent.pane_id || input.expected.uuid !== session.value)) return refuse('expected agent changed')
   finished.uuid = session.value
   finished.pane = agent.pane_id
 
@@ -54,7 +58,8 @@ export async function finishAgent(run: Run, sleep: (ms: number) => Promise<void>
   const live = local.find(live => live.name === name)
   if (!live || live.pane_id !== agent.pane_id || live.workspace_id !== input.workspace || local.some(other => other.pane_id === agent.pane_id && other.name !== name)) return refuse('pane no longer hosts that agent')
   if (!['idle', 'done'].includes(live.agent_status ?? '')) return refuse('agent is no longer idle or done')
-  const closed = await run(['herdr', 'pane', 'close', agent.pane_id], { timeoutMs: 2_000 }).catch(() => undefined)
+  if (codexUuid(live) !== session.value || (input.current && !input.current())) return refuse('expected agent changed')
+  const closed = await closePane(run, agent.pane_id)
   if (!closed || closed.exitCode !== 0) return refuse(closed ? errorOf(closed) : 'pane close failed')
   finished.closed = true
   for (let poll = 0; poll < 10; poll++) {
@@ -68,4 +73,26 @@ export async function finishAgent(run: Run, sleep: (ms: number) => Promise<void>
     if (poll < 9) await sleep(250)
   }
   return refuse('agent exit timed out; archive not attempted')
+}
+
+const closePane = (run: Run, pane: string) => run(['herdr', 'pane', 'close', pane], { timeoutMs: 2_000 }).catch(() => undefined)
+
+/** Roll back only the empty terminal created by this dispatch; tabs disappear with their last pane. */
+export async function finishEmptyPane(run: Run, input: Input & { pane: string; terminal: string }): Promise<Finish> {
+  const base: Finish = { agent: input.agent, effectiveAgent: effectiveName(input.agent, input.workspace) ?? '', uuid: null, closed: false, archived: false }
+  const refused = (): Finish => ({ ...base, reason: 'startup pane cleanup refused' })
+  if (!base.effectiveAgent || !input.leadPane || input.pane === input.leadPane) return refused()
+  const empty = async () => {
+    const got = await run(['herdr', 'pane', 'get', input.pane], { timeoutMs: 2_000 })
+    const pane = result(got.stdout)?.pane as { pane_id?: string; workspace_id?: string; terminal_id?: string; agent?: unknown; agent_session?: unknown } | undefined
+    return got.exitCode === 0 && !got.isStdoutTruncated && pane?.pane_id === input.pane && pane.workspace_id === input.workspace
+      && pane.terminal_id === input.terminal && !pane.agent && !pane.agent_session
+  }
+  try {
+    if (!await empty()) return refused()
+    const agents = await listAgents(run, { timeoutMs: 2_000 })
+    if (typeof agents === 'string' || agents.some(agent => agent.workspace_id === input.workspace && agent.pane_id === input.pane) || !await empty()) return refused()
+    const closed = await closePane(run, input.pane)
+    return closed?.exitCode === 0 ? { ...base, pane: input.pane, closed: true } : { ...base, reason: 'startup pane cleanup failed' }
+  } catch { return { ...base, reason: 'startup pane cleanup failed' } }
 }

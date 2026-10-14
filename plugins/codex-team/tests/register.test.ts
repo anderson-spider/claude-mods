@@ -1,8 +1,10 @@
 import { effectiveName } from '../hooks/names'
 import { expect, test } from 'claude-code/testing'
-import { dispatchWorld, id, planWorld, started, world } from './host'
+import { dispatchWorld, id, planWorld, scopedHost, started, world } from './host'
+import { register } from '../hooks/register'
 import { JEV_MODEL } from '../hooks/effort'
 import { fakeRun, ok } from './fake-run'
+import { lifecycle, COMPLETE, UUID } from './lifecycle'
 
 const DISPATCH = id('dispatch')
 
@@ -313,4 +315,141 @@ test('host unreadable settings refuse an Astra pin with the fixed message', { op
   expect(w.calls).toEqual([])
   expect(w.requests).toEqual([])
   expect(w.writes).toEqual([])
+})
+
+test('the timer is armed inside the dispatch hook and finishes after dispatch returns', async () => {
+  const fake = lifecycle(), host = scopedHost(register, fake.io)
+  await host.call('session.start', { cwd: '/proj' })
+  expect(host.armed).toEqual([])
+  const answer = await host.call('tool.call', { tool: DISPATCH, role: 'analyst', slug: 'fix', task: 'inspect', effort: 'low' }) as { result: string }
+  expect(answer.result).toContain('delivery: confirmed')
+  expect(host.invalid).toEqual([])
+  expect(host.armed).toEqual(['tool.call'])
+  fake.state.agents[0]!.agent_status = 'done'
+  const path = '/home/u/.claude/codex-team/reports/repo/1r/fix-analyst.md'
+  fake.put(path)
+  await host.tick()
+  expect(fake.calls.filter(call => call[2] === 'close')).toEqual([['herdr', 'pane', 'close', 'w1:p1']])
+  expect(fake.calls[fake.calls.length - 1]).toEqual(['codex', 'archive', UUID])
+  expect(JSON.parse(fake.writes[fake.writes.length - 1]!.text)).toMatchObject({ trigger: 'report', closed: true, archived: true })
+  expect(host.invalid).toEqual([])
+  expect(host.timers()).toEqual({ active: 0, max: 1 })
+})
+
+test('a session.start host is never used to arm or rearm the report timer', async () => {
+  const fake = lifecycle(), host = scopedHost(register, fake.io)
+  for (const end of ['session.start', 'session.end']) {
+    await host.call('session.start', { cwd: '/proj' })
+    await host.call('tool.call', { tool: DISPATCH, role: 'developer', cwd: '/wt/fix', slug: 'fix', task: 'implement', effort: 'low' })
+    await host.call('tool.call', { tool: DISPATCH, role: 'architect', slug: 'other', task: 'design', effort: 'low' })
+    expect(host.timers()).toEqual({ active: 1, max: 1 })
+    fake.state.agents[0]!.agent_status = 'done'
+    fake.state.time += 2_000
+    fake.put('/home/u/.claude/codex-team/reports/repo/1r/fix-developer.md')
+    await host.tick()
+    expect(fake.state.agents.map(agent => agent.name)).toEqual([effectiveName('architect', 'w1')])
+    expect(host.invalid).toEqual([])
+    expect(host.timers()).toEqual({ active: 1, max: 1 })
+    await host.call(end, { cwd: '/proj', sessionId: 'test' })
+    expect(host.timers()).toEqual({ active: 0, max: 1 })
+    const count = fake.calls.length
+    await host.tick(); await host.tick()
+    expect(fake.calls).toHaveLength(count)
+    fake.state.agents = []
+  }
+  await host.call('session.start', { cwd: '/proj' })
+  for (const slug of ['first', 'rearmed']) {
+    await host.call('tool.call', { tool: DISPATCH, role: 'analyst', slug, task: 'inspect', effort: 'low' })
+    fake.state.agents[0]!.agent_status = 'done'
+    if (slug === 'rearmed') fake.state.archiveExit = 7
+    fake.state.time += 2_000
+    const path = `/home/u/.claude/codex-team/reports/repo/1r/${slug}-analyst.md`
+    fake.put(path)
+    await host.tick()
+    expect(fake.state.agents).toEqual([])
+    expect(host.timers()).toEqual({ active: 0, max: 1 })
+  }
+  expect(host.armed).toEqual(['tool.call', 'tool.call', 'tool.call', 'tool.call'])
+  expect(host.invalid).toEqual([])
+  expect(fake.logs).toContain('codex-team: report finish archive pending')
+})
+
+test('the host timer finishes after dispatch returns without overlapping ticks', async ($, on) => {
+  const fake = lifecycle()
+  const w = dispatchWorld(on, '', undefined, fake.io.run)
+  await started($, w.tools)
+  const answer = await $.tool.call({ tool: DISPATCH, role: 'analyst', slug: 'fix', task: 'inspect', effort: 'low' } as never)
+  expect(answer.result).toContain('delivery: confirmed')
+  fake.state.agents[0]!.agent_status = 'done'
+  const path = '/home/u/.claude/codex-team/reports/repo/1r/fix-analyst.md'
+  w.files.set(path, { text: COMPLETE, stat: { kind: 'file', isLink: false, size: COMPLETE.length, mtimeMs: 1 } })
+  let release!: () => void
+  w.faults.beforeRead = () => new Promise<void>(resolve => { release = resolve })
+  await w.clock.advance(2_000)
+  expect(typeof release).toBe('function')
+  const listed = fake.calls.filter(call => call[2] === 'list').length
+  await w.clock.advance(4_000)
+  expect(fake.calls.filter(call => call[2] === 'list').length).toBe(listed)
+  w.faults.beforeRead = undefined; release(); await w.clock.settle()
+  expect(fake.calls.filter(call => call[2] === 'close')).toEqual([['herdr', 'pane', 'close', 'w1:p1']])
+  expect(fake.calls[fake.calls.length - 1]).toEqual(['codex', 'archive', UUID])
+  expect(JSON.parse(w.writes[w.writes.length - 1]!)).toMatchObject({ trigger: 'report', closed: true, archived: true })
+  const count = fake.calls.length
+  await w.clock.advance(4_000)
+  expect(fake.calls).toHaveLength(count)
+})
+
+test('session end and reload invalidate pending auto finish', async ($, on) => {
+  const fake = lifecycle(), w = dispatchWorld(on, '', undefined, fake.io.run)
+  await started($, w.tools)
+  for (const end of ['reload', 'end']) {
+    await $.tool.call({ tool: DISPATCH, role: 'analyst', slug: 'fix', task: 'inspect', effort: 'low' } as never)
+    fake.state.agents[0]!.agent_status = 'done'
+    w.files.set('/home/u/.claude/codex-team/reports/repo/1r/fix-analyst.md', { text: COMPLETE, stat: { kind: 'file', isLink: false, size: COMPLETE.length, mtimeMs: w.clock.now() + 1 } })
+    let release!: () => void
+    w.faults.beforeRead = () => new Promise<void>(resolve => { release = resolve })
+    await w.clock.advance(2_000)
+    expect(typeof release).toBe('function')
+    w.faults.beforeRead = undefined
+    if (end === 'reload') await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true } as never)
+    else await $.session.end({ reason: 'other', sessionId: 'test', resume: {} } as never)
+    release(); await w.clock.settle()
+    fake.state.agents[0]!.agent_status = 'done'
+    await w.clock.advance(4_000)
+    expect(fake.calls.some(call => call[2] === 'close')).toBe(false)
+    fake.state.agents = []; w.files.clear()
+  }
+})
+
+test('session start and reload preserve unknown deliveries with stale or fresh complete reports', async ($, on) => {
+  const fake = lifecycle(), runner = fake.io.run
+  const w = dispatchWorld(on, '', undefined, async (argv, init) => {
+    const result = await runner(argv, init)
+    return argv[2] === 'prompt' ? { exitCode: 1, stdout: '', stderr: '{"error":{"code":"timeout"}}' } : result
+  })
+  for (const fresh of [false, true]) {
+    fake.calls.length = 0; w.writes.length = 0; fake.state.agents = []
+    const path = '/home/u/.claude/codex-team/reports/repo/1r/fix-analyst.md'
+    const live = { name: effectiveName('analyst', 'w1')!, workspace_id: 'w1', pane_id: 'existing', agent_status: 'idle', agent: 'codex', agent_session: { kind: 'id', source: 'herdr:codex', value: UUID } }
+    w.files.set(path, { text: COMPLETE, stat: { kind: 'file', isLink: false, size: COMPLETE.length, mtimeMs: 0 } })
+    fake.state.agents.push(live)
+    await started($, w.tools)
+    expect(fake.state.agents).toEqual([live])
+    expect(fake.calls).toEqual([])
+    fake.state.agents = []
+    const answer = await $.tool.call({ tool: DISPATCH, role: 'analyst', slug: 'fix', task: 'inspect', effort: 'low' } as never)
+    expect(answer.result).toContain('delivery: unknown')
+    const delivered = fake.state.agents[0]!
+    expect(delivered.agent_session?.value).toBe(UUID)
+    delivered.agent_status = 'idle'
+    if (fresh) w.files.get(path)!.stat.mtimeMs = w.clock.now() + 1
+    const calls = fake.calls.length
+    await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true } as never)
+    await w.clock.advance(4_000)
+    expect(fake.calls).toHaveLength(calls)
+    expect(fake.state.agents).toEqual([delivered])
+    expect(fake.calls.filter(call => call[2] === 'prompt')).toHaveLength(1)
+    expect(fake.calls.some(call => call[2] === 'close' || call[0] === 'codex')).toBe(false)
+    expect(w.writes.map(body => JSON.parse(body)).some(record => record.action === 'finish')).toBe(false)
+  }
 })

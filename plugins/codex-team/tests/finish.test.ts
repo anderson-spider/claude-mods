@@ -1,6 +1,6 @@
 import { effectiveName } from '../hooks/names'
 import { expect, test } from 'claude-code/testing'
-import { finishAgent } from '../hooks/finish'
+import { finishAgent, finishEmptyPane } from '../hooks/finish'
 import { fakeRun, fail, ok, text } from './fake-run'
 import type { Rule } from './fake-run'
 
@@ -50,6 +50,33 @@ test('finish rechecks exact pane ownership and settled state before any close', 
   ]) {
     const w = fakeRun([[['herdr', 'agent', 'get'], ok({ agent })], tabs, [['herdr', 'agent', 'list'], ok({ agents: live })]])
     expect(await finishAgent(w.run, sleep, input)).toMatchObject({ closed: false, archived: false })
+    expect(w.calls.some(call => call[2] === 'close' || call[0] === 'codex')).toBe(false)
+  }
+})
+
+test('finish refuses a changed expected uuid before pane closure', async () => {
+  for (const changedAt of ['get', 'list', 'guard']) {
+    const changed = { ...agent, agent_session: { ...agent.agent_session, value: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' } }
+    let checks = 0
+    const w = fakeRun([[['herdr', 'agent', 'get'], ok({ agent: changedAt === 'get' ? changed : agent })], tabs,
+      [['herdr', 'agent', 'list'], ok({ agents: [changedAt === 'list' ? changed : agent] })]])
+    expect(await finishAgent(w.run, sleep, { ...input, expected: { pane: agent.pane_id, uuid }, current: () => changedAt !== 'guard' || ++checks < 2 }))
+      .toMatchObject({ closed: false, archived: false, reason: 'expected agent changed' })
+    expect(w.calls.some(call => call[2] === 'close')).toBe(false)
+  }
+})
+
+test('startup rollback protects lead occupied foreign and replaced terminals before close', async () => {
+  for (const fault of ['lead', 'occupied', 'foreign', 'terminal', 'late-agent', 'late-terminal', 'list-failure', 'get-failure']) {
+    let gets = 0
+    const w = fakeRun([
+      [['herdr', 'pane', 'get'], () => {
+        const late = ++gets === 2
+        return fault === 'get-failure' ? fail('pane_not_found') : ok({ pane: { pane_id: fault === 'lead' ? 'lead' : 'new', workspace_id: fault === 'foreign' ? 'w2' : 'w1', terminal_id: fault === 'terminal' || fault === 'late-terminal' && late ? 'changed' : 'terminal', agent: fault === 'occupied' || fault === 'late-agent' && late ? 'codex' : null } })
+      }],
+      [['herdr', 'agent', 'list'], fault === 'list-failure' ? text('private output') : ok({ agents: [] })],
+    ])
+    expect(await finishEmptyPane(w.run, { ...input, pane: fault === 'lead' ? 'lead' : 'new', terminal: 'terminal' })).toMatchObject({ closed: false, uuid: null, archived: false })
     expect(w.calls.some(call => call[2] === 'close' || call[0] === 'codex')).toBe(false)
   }
 })

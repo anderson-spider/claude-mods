@@ -21,18 +21,18 @@ The team works on its own Codex quota; you spend yours on judgement. For the res
 | --- | --- | --- |
 | `developer` | implementation and tests, left uncommitted; corrections after review | `dev-<slug>`, in the task tab `codex - <slug>`, working in the task worktree (`cwd`) |
 | `analyst` | investigation, documentation drafts | `analyst` in `codex - <slug>`, a fresh Codex per dispatch; `analyst-<slug>` in the task tab while the shared one is busy |
-| `architect` | design, trade-offs, ordered steps | `architect` in `codex - <slug>`, a fresh Codex per dispatch |
+| `architect` | design, trade-offs, ordered steps | `architect` in `codex - <slug>`, a fresh Codex per dispatch; `architect-<slug>` while the shared one is busy |
 | `reviewer` | the review of a finished developer task | `architect-<slug>` in the task tab, a fresh session with a Jev-selected profile; the plugin writes its review brief |
 
 The table and plan owners use logical names. Dispatch also returns `Herdr: <effective-name>`, a stable workspace-specific name. Use that exact effective name for CLI `wait`, `get` and `read`; pass the logical name (`analyst`, `architect`, `analyst-<slug>`, `architect-<slug>` or `dev-<slug>`) to `finish`. In `w1`, for example, wait with `herdr agent wait d1r-fix` and finish with `{ agent: "dev-fix" }`. Names in another workspace are independent; a real effective-name collision is refused. Every tab uses exactly `codex - <main task>`, with the dispatch slug naming the main task. Shared roles get a new tab labelled `codex - <slug>` for their current dispatch; all creation uses `--no-focus`, and the tab closes with its last pane.
 
 Reports are under `~/.claude/codex-team/reports/<repository>/<workspace-token>/<slug>-<role>.md`, using the same token as the effective Herdr name. Use the exact `report:` path from the dispatch reply in `## Dispatches` and when reading results; equal roots and slugs in another workspace have a separate directory. The reviewer brief points to this workspace’s developer report.
 
-Every dispatch starts a fresh Codex session after safely retiring its idle/done predecessor; a working or blocked target refuses the dispatch. The same agent name and worktree may continue across tasks, but session memory does not. The worktree and uncommitted diff persist.
+Only agents dispatched with confirmed delivery by the current module session close and archive automatically once settled with a fresh complete role report. Every dispatch starts a fresh session after safely retiring its idle/done predecessor; busy shared analyst/architect use task fallbacks and busy named targets refuse dispatch. The same agent name and worktree may continue across tasks, but session memory does not. The worktree and uncommitted diff persist.
 
 Drafts from the analyst go to the developer to apply: one writer per worktree.
 
-`mcp__codex-team__finish` with `{ agent }` ends a settled agent: it closes its pane (the task tab goes with its last pane) and archives its Codex session. It refuses an agent that is working or blocked.
+`mcp__codex-team__finish` with `{ agent }` provides recovery for a settled agent: it closes its pane (the task tab goes with its last pane) and archives its Codex session. It refuses an agent that is working or blocked. Complete partial reports, questions or failed checks permit automatic delivery closure; decide them from the file. Blocked reports remain open. Worktrees and developer context persist. Session end cancels observation. Reload or lead exit drops pending automatic closes; use explicit `finish` for settled agents needing recovery. Unknown delivery never authorizes closing or resending on your own. There is no durable helper after the lead host exits.
 
 ## 1. Start or resume
 
@@ -40,7 +40,7 @@ Run this on activation, and again whenever you lose the thread (after a compacti
 
 1. Read the active plan: the newest `.crew/plans/*.md`. Its `## Dispatches` section (step 6 of Dispatch) is your memory of what is out.
 2. Run `herdr agent list`, filter to `HERDR_WORKSPACE_ID`, and reconcile: every `## Dispatches` line still open names its agent and report; read the reports that came back since, and handle them (section 4). An `unknown` delivery stays unknown: check `herdr agent get <effective-name>`, never resend.
-3. Start a background `herdr agent wait <effective-name>` for every open dispatch whose agent is still live and has none running.
+3. For each open dispatch, read its report and finish receipt if the agent disappeared. `agent_not_found` after auto closure is expected; never resend an unknown delivery. Start a background wait only for an agent still live with no wait running.
 4. Open the plan pane when it is not open, pointed at the session root (the directory holding `.crew/`, never the shell's current directory): `herdr plugin pane open --plugin herdr-dagr --entrypoint dagr --placement split --direction right --target-pane "$HERDR_PANE_ID" --cwd <root> --env DAGR_RUN=<root>/.dagr/run.json --no-focus`. The plugin keeps `.dagr/run.json` current from the plan; `.dagr/` stays out of git.
 
 Done: every open `## Dispatches` line has either a report you handled or a live agent with its wait running.
@@ -66,7 +66,7 @@ The pane reads this format and nothing else:
 
 - Each `###` heading with steps is a deliverable, shown as `T1`, `T2`… in plan order with its title.
 - Step ids are descriptive kebab-case (`jev-client`, `fast-mode`, `pr-jev`), unique in the plan.
-- Owner is who really does the step: `main` (you), `dev-<slug>`, `analyst`, `analyst-<slug>`, `architect`, `architect-<slug>`, `git-master`. When the plugin falls back to `analyst-<slug>`, change the owner to the agent that really took it.
+- Owner is who really does the step: `main` (you), `dev-<slug>`, `analyst`, `analyst-<slug>`, `architect`, `architect-<slug>`, `git-master`. When the plugin falls back to `analyst-<slug>` or `architect-<slug>`, change the owner to the agent that really took it.
 - State: `queued`, `implementing`, `blocked` (the note names what unblocks it), `verified` (its acceptance was checked; the note says by what), `committed` (in an open or merged PR), `skipped`.
 - A deliverable ends with its PR step, owned by `git-master` (the subagent runs in your session, so the pane shows it on your pane).
 
@@ -82,10 +82,10 @@ After `## Steps`, keep a `## Dispatches` section, one line per dispatch, written
 ## 3. Dispatch
 
 1. **Worktree (developer only).** Create it from the base branch beside the repository: `git worktree add -b <branch> ../<repo>-<slug> <base>`. Pass its absolute path as `cwd`; follow-ups on the same task keep the same `slug` and `cwd`, with a fresh Codex session each time.
-2. **Brief.** Write `task` self-contained: the agent has none of this conversation. Name the goal, the files or area, the rules that apply, what done means (the checks that must pass) and what stays out of scope. Follow-up briefs must also be self-contained: state the requested corrections and relevant context. The plugin reminds a previously dispatched developer to read its previous report and git diff in the persistent worktree.
+2. **Brief.** Write `task` self-contained: the agent has none of this conversation. Name the goal, the files or area, the rules that apply, what done means (the checks that must pass) and what stays out of scope. Follow-up briefs must also be self-contained: state the requested corrections and relevant context. The plugin reminds a previously dispatched developer to read its previous report, git diff in the persistent worktree and branch git log.
 3. **Call** `mcp__codex-team__dispatch` with `role`, `task` and `slug` (at most 22 characters), plus `cwd` for the developer. Keep the role chosen for the work: it controls instructions and write permission. Let Jev choose the model and effort profile for each new session, with the complete role default pair on failure. Pass `model`, `effort`, `@profile` or dimension pins only when the user asks for them. Follow-ups start fresh sessions and select a new pair; requested pins apply at each startup. Reviewer uses Jev too, assessing the generated review brief, and accepts the same pins. Its fallback is Sol/high; the Astra cap still applies to any selected pair. Its instructions and report-only permissions stay fixed.
 4. **Delivery.** `confirmed`: go on. `unknown`: never send it again; check `herdr agent get <effective-name>` and wait. `not_sent`: fix the reason it gives, then dispatch again.
-5. **Wait in the background:** `herdr agent wait <effective-name> --timeout 3600000` with `run_in_background: true`, one per dispatched agent, using the reply’s effective name. Notifications come back one by one; handle each as it arrives.
+5. **Watch delivery:** independent tasks with distinct slugs may run in parallel. For a still-live agent, wait in the background: `herdr agent wait <effective-name> --timeout 3600000` with `run_in_background: true`, one per dispatched agent, using the reply’s effective name. Notifications come back one by one; handle each as it arrives. If wait/get returns `agent_not_found`, read the report and finish receipt; closure does not mean report acceptance.
 
 6. **Record** the dispatch as an `open` line in `## Dispatches` (logical agent, effective Herdr name, slug, report path, delivery).
 
@@ -93,7 +93,7 @@ The `allowAstra` plugin option defaults to true and permits Astra pins and autom
 
 Fast mode (Codex's `priority` service tier) is off unless chosen. Pass `fast: true` or `fast: false` in a dispatch to decide for that agent; without it, the `fast` plugin option (default false, set through `/config` or `/plugin`) decides. Use it when the user asks for Fast on a task, or turns it on for the team.
 
-Done: delivery `confirmed`, its wait running, the step `implementing`, its `## Dispatches` line open.
+Done: delivery `confirmed`, its report handled or live agent watched, the step updated, its `## Dispatches` line recorded.
 
 ## 4. When an agent comes back
 
@@ -101,13 +101,13 @@ Done: delivery `confirmed`, its wait running, the step `implementing`, its `## D
 2. `blocked` or open `questions`: answer from the plan when it settles them, otherwise ask the user. Resolve a blocked existing session in its pane and wait for it to become idle/done before another dispatch. Send any subsequent work as a self-contained brief with the same role and slug; it starts a fresh session.
 3. **Developer `done`:** dispatch `role: "reviewer"` with the same `slug` right away (add `task` only to point at a risk). Mark the step `verified (relatório do dev)` and add the review as its own step.
 4. **Reviewer back:** read `verdict`, `risk` and `findings`. Open the diff only at the lines a finding names, or wherever `risk: high`. Decide each finding (fix, defer with a reason, or reject with a reason). Send every fix back to the same developer as one brief, then review again. With `accept`, run the repository's done checks yourself in the worktree.
-5. **Analyst or architect `done`:** call `finish` on that agent (`analyst`, `architect` or `analyst-<slug>`) once its report is read; use the findings in the next brief; hand `drafts` to the developer. Cut a design to the simplest version that meets the request and tell the user what you cut.
+5. **Analyst or architect `done`:** use the findings in the next brief; hand `drafts` to the developer. Cut a design to the simplest version that meets the request and tell the user what you cut.
 
 Close the `## Dispatches` line of every report you handle.
 
 Done, by role:
 
-- analyst or architect: report read, every question answered or asked to the user, findings carried into a step or a brief, the agent finished;
+- analyst or architect: report read, every question answered or asked to the user, findings carried into a step or a brief;
 - reviewer: verdict read and every finding decided (a `changes_needed` review is done once its fixes are dispatched);
 - developer task: the last review is `accept` and the done checks pass in your own run.
 - your own steps (`main`, `git-master`): the step's action happened and you saw its result (a PR link, a merge state, a passing check).
@@ -117,6 +117,6 @@ Done, by role:
 1. **PR.** Codex's sandbox keeps `.git` read-only, so git work is yours through the `git-master:git-master` subagent: give it the worktree, the branch, the base, the paths to stage, the commit message and the PR title in Conventional Commits, the description you wrote, and the repository's PR rules. Tell the user the PR link.
 2. **CI and merge.** Watch the checks. When the user has asked you to merge in this session, merge with `--match-head-commit <reviewed sha>` once CI passes; otherwise ask.
 3. **After the merge.** Update the main checkout, reinstall the changed plugins (the repository's update task), and tell the user to run `/reload-plugins`: a reload is theirs to do.
-4. **Close the task.** With the user's ok, call `finish` on each agent of the task (`dev-<slug>`, `architect-<slug>`, any `analyst-<slug>`); the tab closes with the last one and every session is archived. Then remove the worktree (`git worktree remove <path>`). A `finish` refusal names the agent still working: wait for it, never force it. Mark the PR step `committed`.
+4. **Close the task.** Verify automatic finish receipts and use `finish` only for a settled agent needing recovery; wait for busy/blocked agents. With the user's ok, remove the worktree (`git worktree remove <path>`); worktree cleanup is separate from session closure. Mark the PR step `committed`.
 
 Done for a deliverable: merged, reinstalled, the user told to reload, its tab closed or kept by the user's choice, every step closed in the plan.

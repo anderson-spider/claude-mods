@@ -1,6 +1,6 @@
 import { effectiveName } from '../hooks/names'
 import { expect, test } from 'claude-code/testing'
-import { deliver, errorOf, isTeamName, MAX_PROMPT_BYTES, paneLabel } from '../hooks/herdr'
+import { deliver, errorOf, isTeamName, listAgents, MAX_PROMPT_BYTES, paneLabel } from '../hooks/herdr'
 import type { DispatchInput } from '../hooks/herdr'
 import { agents, fail, fakeRun, ok } from './fake-run'
 
@@ -8,6 +8,14 @@ const input = (over: Partial<DispatchInput> = {}): DispatchInput => ({
   name: 'analyst', slug: 'fix', writes: false, workspace: 'w1', cwd: '/r', startArgs: async () => ['-m', 'm'], prompt: 'do it', ...over,
 })
 const verbs = (calls: string[][]) => calls.map(call => call.slice(1, 3).join(' '))
+
+test('agent listings accept nullable unnamed agents without adopting them as team members', async () => {
+  const w = fakeRun([agents([{ name: null, pane_id: 'other' }])])
+  expect(await listAgents(w.run)).toEqual([{ name: undefined, pane_id: 'other', workspace_id: 'w1' }])
+  const dispatched = fakeRun([agents([{ name: null, pane_id: 'other' }]), [['herdr', 'tab', 'create'], ok({ root_pane: { pane_id: 'new' } })], [['herdr', 'agent', 'start'], ok({})], [['herdr', 'agent', 'prompt'], ok({})]])
+  expect((await deliver(dispatched.run, input())).status).toBe('confirmed')
+  expect(dispatched.calls.some(call => call[2] === 'split' || call[2] === 'close')).toBe(false)
+})
 
 test('with no team agent alive, a shared role starts in a current task tab without focus, then gets the prompt', async () => {
   const { run, calls } = fakeRun([agents([{ name: 'other', pane_id: 'w1:p1' }]), [['herdr', 'tab', 'create'], ok({ root_pane: { pane_id: 'w1:p9' } })], [['herdr', 'agent', 'start'], ok({})], [['herdr', 'agent', 'prompt'], ok({})]])
@@ -332,4 +340,36 @@ test('the pane shows the logical name with the started model and effort, and a r
   const { run, calls } = fakeRun([agents([]), [['herdr', 'tab', 'create'], ok({ root_pane: { pane_id: 'w1:p9' } })], [['herdr', 'agent', 'start'], ok({})], [['herdr', 'pane', 'rename'], { exitCode: 1, stdout: '', stderr: 'no' }], [['herdr', 'agent', 'prompt'], ok({})]])
   expect((await deliver(run, input())).status).toBe('confirmed')
   expect(verbs(calls)).toEqual(['agent list', 'tab create', 'agent start', 'pane rename', 'agent prompt'])
+})
+
+test('fresh pane startup retries only agent_pane_busy in the same terminal before any prompt', async () => {
+  let time = 0, attempts = 0, selections = 0
+  const sleeps: number[] = []
+  const w = fakeRun([agents([]), [['herdr', 'tab', 'create'], ok({ root_pane: { pane_id: 'new', terminal_id: 'terminal' } })],
+    [['herdr', 'pane', 'get'], ok({ pane: { pane_id: 'new', terminal_id: 'terminal', workspace_id: 'w1', agent: null } })],
+    [['herdr', 'agent', 'start'], () => ++attempts < 3 ? fail('agent_pane_busy') : ok({})], [['herdr', 'agent', 'prompt'], ok({})]])
+  const result = await deliver(w.run, input({ now: async () => time, sleep: async ms => { sleeps.push(ms); time += ms }, startArgs: async () => { selections++; return ['-m', 'fixed'] } }))
+  expect(result.status).toBe('confirmed')
+  expect(sleeps).toEqual([250, 250])
+  expect(selections).toBe(1)
+  expect(w.calls.filter(call => call[2] === 'create')).toHaveLength(1)
+  expect(w.calls.filter(call => call[2] === 'prompt')).toHaveLength(1)
+  const starts = w.calls.filter(call => call[2] === 'start')
+  expect(starts).toEqual([starts[0], starts[0], starts[0]])
+  expect(w.calls[w.calls.length - 1]![2]).toBe('prompt')
+})
+
+test('startup retries stop on terminal replacement deadline and every other error', async () => {
+  for (const fault of ['terminal', 'workspace', 'agent', 'deadline', 'agent_name_in_use', 'timeout', 'unreadable', 'exception', 'truncated']) {
+    let time = 0, starts = 0
+    const w = fakeRun([agents([]), [['herdr', 'tab', 'create'], ok({ root_pane: { pane_id: 'new', terminal_id: 'terminal' } })],
+      [['herdr', 'pane', 'get'], ok({ pane: { pane_id: 'new', terminal_id: fault === 'terminal' ? 'replacement' : 'terminal', workspace_id: fault === 'workspace' ? 'w2' : 'w1', agent: fault === 'agent' ? 'codex' : null } })],
+      [['herdr', 'agent', 'start'], () => { starts++; if (fault === 'exception') throw new Error('private'); if (fault === 'unreadable') return { exitCode: 1, stdout: 'private output', stderr: '' }; if (fault === 'truncated') return { ...fail('agent_pane_busy'), isStderrTruncated: true }; return fail(['agent_name_in_use', 'timeout'].includes(fault) ? fault : 'agent_pane_busy') }]])
+    const result = await deliver(w.run, input({ now: async () => time, sleep: async ms => { time += ms } }))
+    expect(result.status).toBe('not_sent')
+    expect(starts).toBe(fault === 'deadline' ? 20 : 1)
+    expect(time).toBeLessThanOrEqual(5_000)
+    expect(w.calls.some(call => call[2] === 'prompt')).toBe(false)
+    expect(JSON.stringify(result)).not.toContain('private')
+  }
 })

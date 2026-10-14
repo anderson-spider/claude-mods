@@ -1,15 +1,18 @@
 import type { Hook, McpToolInputs, Register } from 'claude-code'
 import type { SchemaFor } from './schema'
-import { dispatch, finish } from './team'
+import { autoFinish, dispatch, finish } from './team'
 import type { TeamIo } from './team'
 import { createBreaker, createGate } from './jev'
 import { createPublisher, isPlanFile } from './publish'
 import type { PublishIo } from './publish'
+import { createAutoCloser } from './auto-close'
+import type { AutoCloser, AutoCloseIo } from './auto-close'
 
 type Dollar = Parameters<Hook<'session.start'>>[0]
 const breaker = createBreaker(() => Date.now())
 const gate = createGate()
 const publish = createPublisher()
+let autoCloser: AutoCloser | undefined
 
 /** All DAG host calls stay visible to the engine in this entry module. */
 function dagrIo($: Dollar): PublishIo {
@@ -65,16 +68,44 @@ function teamIo($: Dollar, allowAstra: unknown, fast: unknown): TeamIo {
     log: text => $.ui.log(text, { to: 'debug' }),
     store: { get: key => $.store.get(key), set: (key, value) => $.store.set(key, value), delete: key => $.store.delete(key) },
     publish: root => publish(dagrIo($), root),
+    reports: {
+      stat: async path => {
+        try { return await $.fs.stat(path) } catch (error) {
+          if (!await $.fs.exists(path)) return undefined
+          throw error
+        }
+      },
+      read: path => $.fs.read(path),
+    },
+    autoCloser,
   }
+}
+
+function closerIo($: Dollar, allowAstra: unknown, fast: unknown): AutoCloseIo {
+  const io = teamIo($, allowAstra, fast)
+  return {
+    ...io.reports!, run: io.run, log: io.log,
+    timer: (ms, fn) => { const timer = $.clock.every(ms, fn); return () => timer.cancel() },
+    finish: (entry, current) => autoFinish(teamIo($, allowAstra, fast), entry, current),
+  }
+}
+
+function dispatchIo($: Dollar, allowAstra: unknown, fast: unknown): TeamIo {
+  const io = teamIo($, allowAstra, fast), closer = autoCloser
+  // Tracking runs before this dispatch hook returns; each rearm uses its live host.
+  if (closer) io.autoCloser = { ...closer, track: entry => closer.track(entry, closerIo($, allowAstra, fast)) }
+  return io
 }
 
 export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
+    autoCloser?.stop()
+    autoCloser = createAutoCloser()
     await $.tool.register({
       name: 'dispatch',
       description:
         'Hands a task to a Codex team agent in Herdr: developer, analyst, architect, or reviewer (reviews the recorded developer task; task is optional extra focus). ' +
-        'Every dispatch starts a fresh session after safely finishing its idle/done predecessor in this workspace; working/blocked targets are refused. Jev chooses model and effort for every role, using the review brief for reviewer. Roles retain their instructions and write permissions. All tabs use codex - <slug>. Herdr names are workspace-specific; use the effective name returned for wait/get. A busy shared analyst falls back to analyst-<slug>. Delivery: confirmed, unknown (never resend), or not_sent. Publishes the active crew plan to Dagr when available. Only inside Herdr.',
+        'Every dispatch starts a fresh session after safely finishing its idle/done predecessor in this workspace. Busy shared analyst/architect use their task fallback. Confirmed agents close and archive after a fresh complete report; read the file and finish receipt if wait/get says agent_not_found. Independent slugs run in parallel. Jev chooses model and effort for every role, using the review brief for reviewer. Roles retain their instructions and write permissions. All tabs use codex - <slug>. Herdr names are workspace-specific. Delivery: confirmed, unknown (never resend), or not_sent. Publishes the active crew plan to Dagr when available. Only inside Herdr.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -91,7 +122,7 @@ export const register: Register = (on, options) => {
     })
     await $.tool.register({
       name: 'finish',
-      description: 'Closes an idle or done Codex team agent in this workspace, then archives its session after it exits. Refuses busy, blocked, foreign agents and the lead pane. Finishing the last pane also removes its task tab.',
+      description: 'Recovery: closes an idle or done Codex team agent in this workspace, then archives its session after it exits. Complete reports normally trigger this automatically. Refuses busy, blocked, foreign agents and the lead pane. Finishing the last pane also removes its task tab.',
       inputSchema: {
         type: 'object',
         properties: { agent: { type: 'string', description: 'Logical team agent name (resolved in this workspace): analyst, architect, analyst-<slug>, architect-<slug> or dev-<slug>.' } },
@@ -101,9 +132,15 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
+  on('session.end', (_$, e, next) => {
+    autoCloser?.stop()
+    autoCloser = undefined
+    return next(e)
+  })
+
   on('tool.call', { tool: 'mcp__codex-team__dispatch' }, async ($, e, next) => {
     if (!('tool' in e)) return next(e)
-    const answer = await dispatch(teamIo($, options.allowAstra, options.fast), e).catch(() => ({ ok: false, text: 'codex-team: the dispatch failed unexpectedly; check `herdr agent list` before trying again.' }))
+    const answer = await dispatch(dispatchIo($, options.allowAstra, options.fast), e).catch(() => ({ ok: false, text: 'codex-team: the dispatch failed unexpectedly; check `herdr agent list` before trying again.' }))
     return { result: answer.text }
   })
 

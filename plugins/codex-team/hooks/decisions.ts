@@ -33,7 +33,7 @@ export type DecisionRecord = {
   durationMs: number
 }
 
-export type FinishRecord = { v: 2; action: 'finish'; ts: string; agent: string; effectiveAgent: string; uuid: string | null; closed: boolean; archived: boolean; reason: string | null }
+export type FinishRecord = { v: 2; action: 'finish'; trigger?: 'report'; ts: string; agent: string; effectiveAgent: string; uuid: string | null; closed: boolean; archived: boolean; reason: string | null }
 
 /** FNV-1a, 32 bits, as 8 hex digits: matches one task to another without keeping the text. Not a cryptographic hash. */
 export function fnv1a(text: string): string {
@@ -52,7 +52,7 @@ export function decisionPath(home: string, ts: string, agent: string): string {
 
 /** Project nested metadata explicitly so extra service or caller fields cannot enter the log. */
 export function decisionData(record: DecisionRecord | FinishRecord): DecisionRecord | FinishRecord {
-  if ('action' in record) return { v: 2, action: 'finish', ts: record.ts, agent: record.agent, effectiveAgent: record.effectiveAgent, uuid: record.uuid, closed: record.closed, archived: record.archived, reason: record.reason }
+  if ('action' in record) return { v: 2, action: 'finish', ...(record.trigger === 'report' ? { trigger: 'report' as const } : {}), ts: record.ts, agent: record.agent, effectiveAgent: record.effectiveAgent, uuid: record.uuid, closed: record.closed, archived: record.archived, reason: record.reason }
   const selection = record.selection
   return {
     v: 3, ts: record.ts, role: record.role, agent: record.agent, effectiveAgent: record.effectiveAgent,
