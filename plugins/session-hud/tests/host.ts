@@ -35,10 +35,12 @@ export function world(on: On, opts: { theme?: string; window?: number; denySpawn
   on('turn.complete', () => ({ text: 'done' }) as never)
   on('classic.PostModelSwitch', () => ({}) as never)
   on('classic.PostCompact', () => ({}) as never)
-  // Opus answers with 95% of its input cached and 5 output tokens; any other model as named, uncached, with 700.
+  // Opus answers with 95% of its input cached and 5 output tokens, each request reading 100 more cached tokens than the
+  // one before; any other model as named, uncached, with 700.
+  let opus = 0
   on('turn.step', async function* (_$, e) {
     const usage = e.model === 'claude-opus-5-5'
-      ? { model: e.model, input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 950, cache_creation_input_tokens: 40 }
+      ? { model: e.model, input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 950 + 100 * opus++, cache_creation_input_tokens: 40 }
       : { model: e.model, input_tokens: 1_000, output_tokens: 700, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
     return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage } as never
   })

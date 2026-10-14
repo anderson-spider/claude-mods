@@ -66,7 +66,26 @@ test('the agent list removes the agents it shows idle or ended, keeps the ones i
   expect(reconciled(card, [])).toBe(card)
 })
 
-test('a turn keeps its first prompt and its last prompt plus output, and joins the history when it ends, the last twelve kept', () => {
+test('a spawn names the type, a step the model and effort; a part that is not a name keeps what was known', () => {
+  const one = spawned(EMPTY, 'a1', 'claude-opus-5-5', 'spider-team:reviewer')
+  expect(one.agents).toEqual([{ id: 'a1', model: 'claude-opus-5-5', type: 'spider-team:reviewer' }])
+  const withEffort = agentStepped(one, 'a1', 'claude-opus-5-5', 'high')
+  expect(withEffort.agents).toEqual([{ id: 'a1', model: 'claude-opus-5-5', type: 'spider-team:reviewer', effort: 'high' }])
+  expect(agentStepped(withEffort, 'a1', 'claude-opus-5-5', 'high')).toBe(withEffort)
+  expect(agentStepped(withEffort, 'a1', undefined, 3)).toBe(withEffort)
+  expect(spawned(withEffort, 'a1', undefined, 42)).toBe(withEffort)
+})
+
+test('the agent list names the type of a running agent without one, never replaces a known type, and leaves the card as it was when it has nothing to add', () => {
+  const card = spawned(spawned(EMPTY, 'typed', 'haiku', 'Explore'), 'bare', 'haiku')
+  const list = [{ id: 'typed', status: 'running', type: 'general-purpose' }, { id: 'bare', status: 'running', type: 'Plan' }]
+  expect(reconciled(card, list).agents).toEqual([{ id: 'typed', model: 'haiku', type: 'Explore' }, { id: 'bare', model: 'haiku', type: 'Plan' }])
+  const named = reconciled(card, list)
+  expect(reconciled(named, list)).toBe(named)
+  expect(reconciled(card, [{ id: 'bare', status: 'running', type: 7 }])).toBe(card)
+})
+
+test('a turn keeps its first prompt and its last prompt plus output, and joins the history when it ends, the last two kept', () => {
   const usage = (input: number, read: number, output: number) =>
     ({ model: 'claude-opus-5-5', input_tokens: input, output_tokens: output, cache_read_input_tokens: read, cache_creation_input_tokens: 0 })
   const running = stepped(stepped(began(EMPTY), 'high', usage(100, 1_000, 50)), 'high', usage(400, 1_100, 30))

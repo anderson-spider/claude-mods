@@ -1,7 +1,7 @@
 {
   "name": "session-hud",
-  "version": "0.5.0",
-  "description": "A card above the prompt: model, context and cache; the five-hour and seven-day limits with their pace; the running subagents, the last turn, edits and errors; the context of the last turns.",
+  "version": "0.6.0",
+  "description": "A card above the prompt: model, context and cache; the five-hour and seven-day limits with their pace; the running subagents with their type, model and effort; what the last turn sent and added, edits and errors.",
   "author": {
     "name": "anderson-spider"
   },

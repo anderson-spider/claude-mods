@@ -1,7 +1,8 @@
 import { expect, test } from 'claude-code/testing'
+import type { Engine } from 'claude-code/testing'
 import { USAGE, band, flush, listed, start, step, world } from './host'
 
-test('the card draws the session as measured: model, effort, context, cache, both windows and the turn, and no money; the terminal draws the history as cells and cuts what does not fit', async ($, on) => {
+test('the card draws the session as measured: model, effort, context, cache, both windows and the turn, and no money; the terminal draws no drawing and cuts what does not fit', async ($, on) => {
   world(on)
   await start($)
   await flush()
@@ -22,8 +23,8 @@ test('the card draws the session as measured: model, effort, context, cache, bot
   expect(drawn).not.toContain('$')
   expect(drawn).not.toContain('private')
   expect((await ui.find({ type: 'Text', text: /^Opus 5\.5$/ }))?.props).toMatchObject({ color: '#d97757', bold: true })
-  expect(drawn).toContain('▲ +5 · 5 out')
-  expect((await ui.findAll({ type: 'Raster' })).map(found => found.props)).toEqual([expect.objectContaining({ columns: 24, rows: 2 })])
+  expect(drawn).toContain('▲ +5 in turn · 5 out')
+  expect(drawn).not.toContain('sent')
   expect(await ui.findAll({ type: 'Svg' })).toEqual([])
   expect((await ui.find({ type: 'Text', text: /^Opus 5\.5$/ }))?.props).toMatchObject({ wrap: 'truncate-end' })
   await ui.unmount()
@@ -118,20 +119,20 @@ const drawnOf = async ($: { ui: { mount: (e: never) => Promise<{ findAll: (q: ob
   return drawn
 }
 
-test('a spawned subagent shows with its model until its turn completes, and the spawn answer goes on unchanged', async ($, on) => {
+test('a spawned subagent shows with its type, model and effort until its turn completes, and the spawn answer goes on unchanged', async ($, on) => {
   world(on)
   await start($)
   await flush()
-  expect(await $.agent.spawn({ prompt: 'private task', model: 'claude-haiku-4-5' } as never)).toEqual({ model: 'claude-haiku-4-5', agentId: 'agent-1' })
+  expect(await $.agent.spawn({ prompt: 'private task', description: 'private', subagentType: 'Explore', model: 'claude-haiku-4-5' } as never)).toEqual({ model: 'claude-haiku-4-5', agentId: 'agent-1' })
   expect(await $.agent.spawn({ prompt: 'private task' } as never)).toEqual({ model: 'claude-sonnet-4-5', agentId: 'agent-2' })
   await flush()
   const both = await drawnOf($)
-  expect(both).toContain('2 agents: Haiku 4.5 · Sonnet 4.5')
+  expect(both).toContain('2 agents: Explore Haiku 4.5, Sonnet 4.5')
   expect(both).not.toContain('private')
   await $.turn.start({ text: 'private task', turnId: 's1', agentId: 'agent-1' } as never)
   await step($, 'agent-1')
   await flush()
-  expect(await drawnOf($)).toContain('2 agents: Opus 5.5 · Sonnet 4.5')
+  expect(await drawnOf($)).toContain('2 agents: Explore Opus 5.5 · medium, Sonnet 4.5')
   await $.turn.complete({ turnId: 's1', agentId: 'agent-1', answer: 'private', durationMs: 1_000, isAborted: false, reason: 'answer' } as never)
   await flush()
   const one = await drawnOf($)
@@ -153,7 +154,7 @@ test('a subagent turn does not start the main turn', async ($, on) => {
   expect(await drawnOf($)).toContain('1 agent: ?')
 })
 
-test('the agent list removes a subagent it shows completed, on the clock and after a main turn', async ($, on) => {
+test('the agent list removes a subagent it shows completed, on the clock and after a main turn, and names the type it lists', async ($, on) => {
   const { clock, roster } = world(on)
   await start($)
   await flush()
@@ -163,13 +164,13 @@ test('the agent list removes a subagent it shows completed, on the clock and aft
   roster.push(listed('agent-1', 'completed'), listed('agent-2', 'running'))
   await clock.advance(30_000)
   await flush()
-  expect(await drawnOf($)).toContain('2 agents: Sonnet 4.5 ×2')
+  expect(await drawnOf($)).toContain('2 agents: general-purpose Sonnet 4.5, Sonnet 4.5')
   roster.push(listed('agent-3', 'idle'))
   await $.turn.start({ text: 'go', turnId: 't1' } as never)
   await $.turn.complete({ turnId: 't1', answer: '', durationMs: 1_000, isAborted: false, reason: 'answer' } as never)
   await flush()
   const last = await drawnOf($)
-  expect(last).toContain('1 agent: Sonnet 4.5')
+  expect(last).toContain('1 agent: general-purpose Sonnet 4.5')
   expect(last).toContain('last turn 1s')
 })
 
@@ -186,13 +187,13 @@ test('a subagent step answered by another model leaves the main session model, e
   const drawn = await drawnOf($)
   expect(drawn).toMatch(/^● Opus 5\.5 · medium · working/u)
   expect(drawn).toContain('cache 95%')
-  expect(drawn).not.toMatch(/low|cache 0%/u)
+  expect(drawn).toContain('1 agent: Haiku 4.5 · low')
+  expect(drawn).not.toMatch(/cache 0%/u)
   await $.turn.complete({ turnId: 't1', answer: '', durationMs: 1_000, isAborted: false, reason: 'answer' } as never)
   await flush()
   const done = await drawnOf($)
-  expect(done).toContain('▲ +5 · 5 out')
+  expect(done).toContain('▲ +5 in turn · 5 out')
   expect(done).not.toContain('705')
-  expect(drawn).toContain('1 agent: Haiku 4.5')
 })
 
 test('a refused spawn passes its deny unchanged and tracks nothing', async ($, on) => {
@@ -204,7 +205,7 @@ test('a refused spawn passes its deny unchanged and tracks nothing', async ($, o
   expect(await drawnOf($)).not.toContain('agent')
 })
 
-test('on the desktop the card is laid out as lines with short drawn bars, the turn history and the cache lifetime a model switch names', async ($, on) => {
+test('on the desktop the card is laid out as lines with short drawn bars, the last turn and the cache lifetime a model switch names', async ($, on) => {
   world(on)
   await start($)
   await flush()
@@ -221,51 +222,55 @@ test('on the desktop the card is laid out as lines with short drawn bars, the tu
   expect(drawn).toContain('cache 95%')
   expect(drawn).toContain(' · used 0s ago')
   expect(drawn).toContain(' · 1h TTL, 1h 0m left')
-  expect(drawn).toContain('▲ +5 · 5 out')
+  expect(drawn).toContain('▲ +5 in turn · 5 out')
   expect(drawn).toContain('last turn 5s · 1 turn')
   expect(drawn).not.toMatch(/private|\$/u)
   const drawings = await ui.findAll({ type: 'Svg' })
   expect(drawings.map(found => (found.props as { alt: string }).alt))
-    .toEqual(['context 20% used', 'context of the last turn', '5h 74% used', '7d 60% used'])
-  expect(drawings.map(found => (found.props as { width: number }).width)).toEqual([96, 117, 96, 96])
+    .toEqual(['context 20% used', '5h 74% used', '7d 60% used'])
+  expect(drawings.map(found => (found.props as { width: number }).width)).toEqual([96, 96, 96])
   await ui.unmount()
 })
 
-test('a compaction the host reports dashes the next turn in the history, and a switch to another model forgets the cache use', async ($, on) => {
+/** Two main-session turns, with `between` run after the first; the card as drawn after the second. */
+const twoTurns = async ($: Engine, between: () => Promise<unknown>) => {
+  for (const turnId of ['t1', 't2']) {
+    await $.turn.start({ text: 'go', turnId } as never)
+    await flush()
+    await step($)
+    await $.turn.complete({ turnId, answer: '', durationMs: 1_000, isAborted: false, reason: 'answer' } as never)
+    await flush()
+    if (turnId === 't1') await between()
+  }
+  return drawnOf($)
+}
+
+test("what was sent at a turn's start shows once the turn before it is known, and a switch to another model forgets the cache use", async ($, on) => {
   world(on)
   await start($)
   await flush()
-  await $.classic.PostCompact({ trigger: 'auto', compact_summary: 'private summary' } as never)
-  await $.turn.start({ text: 'go', turnId: 't1' } as never)
-  await flush()
-  await step($)
-  await $.turn.complete({ turnId: 't1', answer: '', durationMs: 1_000, isAborted: false, reason: 'answer' } as never)
-  await flush()
+  // The second turn begins at 1,100 tokens, 95 above where the first ended (1,005).
+  expect(await twoTurns($, async () => undefined)).toContain('+95 sent · ▲ +5 in turn · 5 out')
   await $.classic.PostModelSwitch({ from_model: 'claude-opus-5-5', to_model: 'claude-sonnet-4-5', requested_model: 'sonnet', source: 'command',
     context_tokens: 0, prompt_cache_warm: true, cache_ttl: '5m', estimated_cache_write_usd: 0, pricing: 'catalog' } as never)
   await flush()
-  const ui = await $.ui.mount({ ...(band() as object), surface: 'desktop' } as never)
-  const chart = (await ui.findAll({ type: 'Svg' })).map(found => (found.props as { source: string; alt: string })).find(svg => svg.alt.startsWith('context of'))
-  expect(chart?.source).toContain('stroke-dasharray="2 2"')
-  const drawn = (await ui.findAll({ type: 'Text' })).map(found => found.text).join('')
+  const drawn = await drawnOf($)
   expect(drawn).toContain('cache 95%')
-  expect(drawn).not.toMatch(/used .* ago|TTL|private/u)
-  await ui.unmount()
+  expect(drawn).not.toMatch(/used .* ago|TTL/u)
 })
 
-test('a subagent compaction leaves the main history unmarked', async ($, on) => {
+test("after a compaction the host reports, what was sent at the next turn's start is not known", async ($, on) => {
   world(on)
   await start($)
   await flush()
-  await $.classic.PostCompact({ trigger: 'auto', compact_summary: '', agent_id: 'agent-9' } as never)
-  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  const compacted = await twoTurns($, () => $.classic.PostCompact({ trigger: 'auto', compact_summary: 'private summary' } as never))
+  expect(compacted).toContain('▲ +5 in turn · 5 out')
+  expect(compacted).not.toMatch(/sent|private/u)
+})
+
+test('a subagent compaction leaves the main turns unmarked', async ($, on) => {
+  world(on)
+  await start($)
   await flush()
-  await step($)
-  await $.turn.complete({ turnId: 't1', answer: '', durationMs: 1_000, isAborted: false, reason: 'answer' } as never)
-  await flush()
-  const ui = await $.ui.mount({ ...(band() as object), surface: 'desktop' } as never)
-  const chart = (await ui.findAll({ type: 'Svg' })).map(found => (found.props as { source: string; alt: string })).find(svg => svg.alt.startsWith('context of'))
-  expect(chart).toBeDefined()
-  expect(chart?.source).not.toContain('stroke-dasharray')
-  await ui.unmount()
+  expect(await twoTurns($, () => $.classic.PostCompact({ trigger: 'auto', compact_summary: '', agent_id: 'agent-9' } as never))).toContain('+95 sent')
 })

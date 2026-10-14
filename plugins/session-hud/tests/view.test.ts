@@ -48,17 +48,20 @@ test('a spend limit and malformed figures never reach the screen as numbers', ()
   expect(shownLimits(card).map(limit => limit.kind)).toEqual(['five_hour', 'seven_day'])
 })
 
-test('the running agents are grouped by model, the most first; none running draws nothing', () => {
+test('the running agents are grouped by type, model and effort, the most first; none running draws nothing', () => {
   const sonnet = 'claude-sonnet-4-5', haiku = 'claude-haiku-4-5-20251001'
   const row = (agents: SessionHudCard['agents']) => agentCells({ ...full, agents })
-  expect(text(row([{ id: 'a', model: sonnet }, { id: 'b', model: haiku }, { id: 'c', model: sonnet }]))).toBe('3 agents: Sonnet 4.5 ×2 · Haiku 4.5')
+  expect(text(row([{ id: 'a', model: sonnet }, { id: 'b', model: haiku }, { id: 'c', model: sonnet }]))).toBe('3 agents: Sonnet 4.5 ×2, Haiku 4.5')
   expect(text(row([{ id: 'a', model: 'claude-opus-5-5' }]))).toBe('1 agent: Opus 5.5')
-  expect(text(row([{ id: 'a', model: haiku }, { id: 'b', model: sonnet }]))).toBe('2 agents: Haiku 4.5 · Sonnet 4.5')
+  expect(text(row([{ id: 'a', model: haiku }, { id: 'b', model: sonnet }]))).toBe('2 agents: Haiku 4.5, Sonnet 4.5')
   expect(row([{ id: 'a', model: sonnet }]).filter(s => s.style === 'model').map(s => s.text)).toEqual(['Sonnet 4.5'])
+  expect(text(row([{ id: 'a', type: 'spider-team:reviewer', model: 'claude-opus-5-5', effort: 'high' }, { id: 'b', type: 'spider-team:reviewer', model: 'claude-opus-5-5', effort: 'high' },
+    { id: 'c', type: 'Explore', model: haiku, effort: 'medium' }]))).toBe('3 agents: spider-team:reviewer Opus 5.5 · high ×2, Explore Haiku 4.5 · medium')
   expect(row([])).toEqual([])
 })
 
-test('an agent whose model is unknown or not a Claude id is drawn as ?', () => {
+test('an agent whose model or type is unknown or not a name is drawn as ?, and an unknown effort is left out', () => {
   const drawn = text(agentCells({ ...full, agents: [{ id: 'a' }, { id: 'b', model: '/Users/me/secret' }, { id: 'c', model: 'claude-sonnet-4-5' }] }))
-  expect(drawn).toBe('3 agents: ? ×2 · Sonnet 4.5')
+  expect(drawn).toBe('3 agents: ? ×2, Sonnet 4.5')
+  expect(text(agentCells({ ...full, agents: [{ id: 'a', type: '/Users/me secret', model: 'claude-sonnet-4-5', effort: 'loud' }] }))).toBe('1 agent: ? Sonnet 4.5')
 })

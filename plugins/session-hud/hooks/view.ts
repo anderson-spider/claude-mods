@@ -2,7 +2,7 @@
 import type { SessionHudCard } from '../types'
 import { WINDOW_MS, span } from './usage'
 
-export type Style = 'plain' | 'strong' | 'secondary' | 'model' | 'success' | 'warning' | 'bar' | 'track' | 'tick' | 'frame'
+export type Style = 'plain' | 'strong' | 'secondary' | 'model' | 'success' | 'warning' | 'sent' | 'bar' | 'track' | 'tick' | 'frame'
 export type Segment = { text: string; style: Style }
 export type Row = Segment[]
 
@@ -55,18 +55,30 @@ export const LABELS: Readonly<Record<string, string>> = { five_hour: '5h', seven
 export const shownLimits = (card: SessionHudCard): SessionHudCard['limits'] => card.limits
   .filter(limit => WINDOW_MS[limit.kind] !== undefined && LABELS[limit.kind] !== undefined)
   .sort((a, b) => WINDOW_MS[a.kind]! - WINDOW_MS[b.kind]!).slice(0, 2)
-/** The running agents grouped by model, the most first, then by name: `3 agents: Sonnet 4.5 ×2 · Haiku 4.5`; empty when none runs. */
+/** An agent type as the card names it (`Explore`, `spider-team:reviewer`); anything else is `?`, so no other text reaches the screen. */
+const TYPE = /^[A-Za-z0-9][\w.:@-]{0,63}$/
+export const typeName = (type: string | undefined): string | undefined => (type === undefined ? undefined : TYPE.test(type) ? type : '?')
+
+/**
+ * The running agents grouped by type, model and effort, the most first, then by name:
+ * `3 agents: spider-team:reviewer Opus 5.5 · high ×2, Explore Haiku 4.5`; a part the host has not reported is left out,
+ * an unknown model is `?`; empty when none runs.
+ */
 export function agentCells(card: SessionHudCard): Row {
   const agents = Array.isArray(card.agents) ? card.agents : []
   if (!agents.length) return []
-  const groups = new Map<string, number>()
+  const groups = new Map<string, { row: Row; n: number }>()
   for (const agent of agents) {
-    const name = modelName(typeof agent?.model === 'string' ? agent.model : undefined) ?? '?'
-    groups.set(name, (groups.get(name) ?? 0) + 1)
+    const type = typeName(typeof agent?.type === 'string' ? agent.type : undefined)
+    const model = modelName(typeof agent?.model === 'string' ? agent.model : undefined) ?? '?'
+    const effort = typeof agent?.effort === 'string' && EFFORTS.has(agent.effort) ? agent.effort : undefined
+    const key = [type ?? '', model, effort ?? ''].join('|')
+    const row: Row = [...(type ? [seg(`${type} `)] : []), seg(model, 'model'), ...(effort ? [seg(` · ${effort}`, 'secondary')] : [])]
+    groups.set(key, { row, n: (groups.get(key)?.n ?? 0) + 1 })
   }
-  const sorted = [...groups].sort(([a, m], [b, n]) => n - m || (a < b ? -1 : a > b ? 1 : 0))
+  const sorted = [...groups].sort(([a, { n: m }], [b, { n }]) => n - m || (a < b ? -1 : a > b ? 1 : 0))
   return [seg(`${plural(agents.length, 'agent')}: `, 'secondary'),
-    ...joined(sorted.map(([name, n]) => [seg(name, 'model'), ...(n > 1 ? [seg(` ×${n}`, 'secondary')] : [])]))]
+    ...joined(sorted.map(([, { row, n }]) => [...row, ...(n > 1 ? [seg(` ×${n}`, 'secondary')] : [])]), ', ')]
 }
 
 /** The last turn, turn count, edits and errors: `last turn 5s · 4 turns · 2 edits · 1 error`. */
