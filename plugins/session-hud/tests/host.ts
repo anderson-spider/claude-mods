@@ -17,8 +17,8 @@ export const USAGE = {
   cost: { usd: 4.43 },
 }
 
-/** A host with the session's model, usage, theme and clock; a spawn starts `agent-1`, `agent-2`... on its `model` (Sonnet 4.5 when none), and `roster` is what `$.agent.list()` answers. */
-export function world(on: On, opts: { theme?: string; window?: number } = {}) {
+/** A host with the session's model, usage, theme and clock; a spawn (refused with `denySpawn`) starts `agent-1`, `agent-2`... on its `model` (Sonnet 4.5 when none), and `roster` is what `$.agent.list()` answers. */
+export function world(on: On, opts: { theme?: string; window?: number; denySpawn?: string } = {}) {
   const roster: AgentInfo[] = []
   let spawns = 0
   // `mock.clock` registers `clock.now` itself and the engine refuses a second one: the test's own reads NOW.
@@ -33,11 +33,14 @@ export function world(on: On, opts: { theme?: string; window?: number } = {}) {
   on('session.measure', (_$, e) => ({ changed: e.changed }))
   on('turn.start', (_$, e) => ({ turnId: e.turnId }))
   on('turn.complete', () => ({ text: 'done' }) as never)
+  // Opus answers with 95% of its input cached and 5 output tokens; any other model as named, uncached, with 700.
   on('turn.step', async function* (_$, e) {
-    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn',
-      usage: { model: 'claude-opus-5-5', input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 950, cache_creation_input_tokens: 40 } } as never
+    const usage = e.model === 'claude-opus-5-5'
+      ? { model: e.model, input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 950, cache_creation_input_tokens: 40 }
+      : { model: e.model, input_tokens: 1_000, output_tokens: 700, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage } as never
   })
-  on('agent.spawn', (_$, e) => ({ model: e.model ?? 'claude-sonnet-4-5', agentId: `agent-${++spawns}` }))
+  on('agent.spawn', (_$, e) => (opts.denySpawn !== undefined ? { deny: opts.denySpawn } : { model: e.model ?? 'claude-sonnet-4-5', agentId: `agent-${++spawns}` }))
   on('agent.list', () => ({ value: roster }))
   return { clock, roster }
 }
@@ -53,9 +56,9 @@ export const band = (columns = 110, hasSurvey = false, isWorking = false) => ({
   props: { hasSurvey, isWorking, maxRows: 20, bodyColumns: columns, scroll: { offset: 0, bodyRows: 20 }, view: {} },
 }) as never
 
-/** A main-session step (or a subagent's, with `agentId`), run to its result. */
-export const step = async ($: Engine, agentId?: string) => {
-  const stream = $.turn.step({ turnId: 't1', index: 0, model: 'claude-opus-5-5', effort: 'medium', messageCount: 1, ...(agentId ? { agentId } : {}) } as never)
+/** A main-session step (or a subagent's, with `agentId`) on `model` at `effort`, run to its result. */
+export const step = async ($: Engine, agentId?: string, model = 'claude-opus-5-5', effort = 'medium') => {
+  const stream = $.turn.step({ turnId: 't1', index: 0, model, effort, messageCount: 1, ...(agentId ? { agentId } : {}) } as never)
   let item = await stream.next()
   while (!item.done) item = await stream.next()
   return item.value

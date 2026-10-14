@@ -86,8 +86,9 @@ export const spawned = (card: SessionHudCard, agentId: unknown, model: unknown):
 /** An agent's turn began: a resumed agent or a teammate waking runs again, its model unknown until it steps. */
 export const agentBegan = (card: SessionHudCard, agentId: unknown): SessionHudCard => tracked(card, agentId, undefined)
 
-/** An agent's step: the model that answered (`usage.model`, else the one the request named) is the one it runs on. */
-export const agentStepped = (card: SessionHudCard, agentId: unknown, model: unknown): SessionHudCard => tracked(card, agentId, model)
+/** A tracked agent's step: the model that answered (`usage.model`, else the one the request named) is the one it runs on. A step adds no agent: one enters through its spawn or its turn's start, which the host skips together with its steps, so a late step cannot bring back an agent that ended. */
+export const agentStepped = (card: SessionHudCard, agentId: unknown, model: unknown): SessionHudCard =>
+  agentsOf(card).some(agent => agent.id === agentId) ? tracked(card, agentId, model) : card
 
 /** An agent's turn ended: it no longer runs (a teammate goes idle until its next turn). */
 export function agentEnded(card: SessionHudCard, agentId: unknown): SessionHudCard {

@@ -40,7 +40,7 @@ test('a turn keeps its duration and counts; an edit or an error counts, a refuse
   expect(tooled(EMPTY, 'Read', {})).toEqual(EMPTY)
 })
 
-test('a spawned agent runs on its model; a turn start adds one unknown, a step names the model that answered, its end removes it', () => {
+test('a spawned agent runs on its model; a turn start adds one unknown, a step names the model that answered and adds none, its end removes it', () => {
   const one = spawned(EMPTY, 'a1', 'claude-sonnet-4-5')
   expect(one.agents).toEqual([{ id: 'a1', model: 'claude-sonnet-4-5' }])
   expect(spawned(one, 'a1', 'haiku').agents).toEqual([{ id: 'a1', model: 'haiku' }])
@@ -48,7 +48,8 @@ test('a spawned agent runs on its model; a turn start adds one unknown, a step n
   const two = agentBegan(one, 'a2')
   expect(two.agents).toEqual([{ id: 'a1', model: 'claude-sonnet-4-5' }, { id: 'a2' }])
   expect(agentStepped(two, 'a2', 'claude-haiku-4-5').agents).toEqual([{ id: 'a1', model: 'claude-sonnet-4-5' }, { id: 'a2', model: 'claude-haiku-4-5' }])
-  expect(agentStepped(two, 'a3', 'claude-opus-5-5').agents).toContainEqual({ id: 'a3', model: 'claude-opus-5-5' })
+  expect(agentStepped(two, 'a3', 'claude-opus-5-5')).toBe(two)
+  expect(agentStepped(agentEnded(two, 'a2'), 'a2', 'claude-haiku-4-5').agents).toEqual([{ id: 'a1', model: 'claude-sonnet-4-5' }])
   expect(agentStepped(two, 'a1', undefined)).toBe(two)
   expect(agentEnded(two, 'a1').agents).toEqual([{ id: 'a2' }])
   expect(agentEnded(two, 'gone')).toBe(two)

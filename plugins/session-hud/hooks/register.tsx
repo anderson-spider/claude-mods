@@ -121,7 +121,8 @@ export const register: Register = on => {
     } else void observe($, async () => { await update($, card, current => agentEnded(current, e.agentId)) })
     return next(e)
   })
-  // A started subagent runs on the model the spawn answers; the answer passes unchanged, and a refused or remote one is not tracked.
+  // A started agent runs on the model the spawn answers; the answer passes unchanged, and a refused spawn or one with no `agentId` is not tracked.
+  // The input names no remote run: a remote workflow agent (internal builds only) that answers with an id stays until a list shows it ended.
   on('agent.spawn', {}, async ($, e, next) => {
     const result = await next(e)
     if (!result.deny && result.agentId !== undefined) void observe($, async () => { await update($, card, current => spawned(current, result.agentId, result.model)) })
