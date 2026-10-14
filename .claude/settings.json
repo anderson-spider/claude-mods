@@ -30,6 +30,11 @@
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/scripts/ensure-plugin-types.mjs\"",
             "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/cloud-setup.mjs\"",
+            "timeout": 300
           }
         ]
       }
