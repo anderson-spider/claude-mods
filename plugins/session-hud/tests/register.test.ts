@@ -256,6 +256,7 @@ test('a subagent compaction leaves the main history unmarked', async ($, on) => 
   await flush()
   const ui = await $.ui.mount({ ...(band() as object), surface: 'desktop' } as never)
   const chart = (await ui.findAll({ type: 'Svg' })).map(found => (found.props as { source: string; alt: string })).find(svg => svg.alt.startsWith('context of'))
+  expect(chart).toBeDefined()
   expect(chart?.source).not.toContain('stroke-dasharray')
   await ui.unmount()
 })
