@@ -2,7 +2,7 @@
 // decision. Pure: every host access is injected.
 import { saveDecision, fnv1a } from './decisions'
 import type { DecisionRecord } from './decisions'
-import { assessProfile, INVALID_PINS, JEV_MODEL, parsePins } from './effort'
+import { assessProfile, INVALID_PINS, JEV_MODEL, parsePins, pinnedPair } from './effort'
 import type { EffortIo, ProfileChoice } from './effort'
 import { effectiveName, workspaceToken } from './names'
 import { deliver, isTeamName, listAgents } from './herdr'
@@ -12,8 +12,11 @@ import { ROLES, SLUG, SPECS, agentName, codexArgs, startEffort } from './roles'
 import type { Role } from './roles'
 import { finishAgent } from './finish'
 import type { Finish } from './finish'
+import { ASTRA_REFUSAL, modelAllowed, resolveAllowAstra } from './model-policy'
+import type { ModelPolicyIo } from './model-policy'
 
-export type TeamIo = EffortIo & {
+export type TeamIo = EffortIo & ModelPolicyIo & {
+  allowAstra?: unknown
   run: Run
   /** The engine requires each environment variable name to be literal. */
   env: () => Promise<{ HERDR_ENV?: string; HERDR_WORKSPACE_ID?: string; HERDR_PANE_ID?: string; HOME?: string; JEV_API_KEY?: string }>
@@ -106,6 +109,10 @@ async function dispatchTask(io: TeamIo, input: Input): Promise<Answer> {
   try { parsed = parsePins((input.task as string | undefined) ?? '', input) } catch { return refuse(INVALID_PINS) }
   if (role !== 'reviewer' && !parsed.task.trim()) return refuse('task is empty')
   const { pins } = parsed
+  const explicit = pinnedPair(role, pins)
+  if (explicit && !modelAllowed(explicit.model, false) && !await resolveAllowAstra(io, io.allowAstra)) {
+    return { ok: false, text: ASTRA_REFUSAL }
+  }
 
   const home = env.HOME
   if (!home || !home.startsWith('/')) return refuse('HOME is not an absolute path')
@@ -164,10 +171,13 @@ async function dispatchTask(io: TeamIo, input: Input): Promise<Answer> {
     workspace,
     cwd,
     startArgs: async () => {
-      const selected = await assessProfile(io, { role, task, key: env.JEV_API_KEY, home, root: repo, pins })
+      const allowAstra = explicit ? false : await resolveAllowAstra(io, io.allowAstra)
+      const selected = await assessProfile(io, { role, task, key: env.JEV_API_KEY, home, root: repo, pins, allowAstra })
       const capped = startEffort(selected.model, selected.effort)
       assessed.capReason = capped.reason
       assessed.choice = { ...selected, effort: capped.effort }
+      // Re-read permission at the last boundary, outside the assessment catch that restores role defaults.
+      if (!modelAllowed(assessed.choice.model, false) && !await resolveAllowAstra(io, io.allowAstra)) return { refusal: ASTRA_REFUSAL }
       return codexArgs(spec, assessed.choice, roots)
     },
     prompt: brief({ role, slug: input.slug, repo: role === 'reviewer' ? original!.cwd : repo, cwd, task, report, followup: role === 'developer' && original !== undefined }),
@@ -186,6 +196,7 @@ async function dispatchTask(io: TeamIo, input: Input): Promise<Answer> {
   if (createdRecord && delivery.status === 'not_sent') await io.store.delete(key)
   await saveDecision(io, home, record(delivery, await io.now()))
   if (io.publish) await io.publish(repo).catch(() => io.log('codex-team: dagr not published (publication failed)'))
+  if (delivery.reason === ASTRA_REFUSAL) return { ok: false, text: ASTRA_REFUSAL }
 
   const lines = [
     `agent: ${delivery.agent}${delivery.pane ? ` (pane ${delivery.pane})` : ''}${delivery.started ? ', started now' : delivery.existed ? ', previous agent found' : ', not started'}`,

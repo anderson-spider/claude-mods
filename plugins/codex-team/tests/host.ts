@@ -28,7 +28,7 @@ export async function started($: { session: { start: (e: never) => Promise<unkno
 }
 
 /** A dispatch's host boundary, including environment, settings, HTTP, clock and runner. No real requests or commands. */
-export function dispatchWorld(on: On, key: string, declared?: 'project' | 'local', runner?: Run) {
+export function dispatchWorld(on: On, key: string, declared?: 'project' | 'local', runner?: Run, over: { settings?: (source?: string) => unknown; body?: string } = {}) {
   const { tools } = world(on)
   const settings: string[] = []
   const envReads: string[] = []
@@ -53,11 +53,11 @@ export function dispatchWorld(on: On, key: string, declared?: 'project' | 'local
   on('session.root', () => ({ value: '/repo' }))
   on('settings.read', (_$, e) => {
     settings.push(e.source ?? 'merged')
-    return { value: e.source === declared ? { env: { JEV_API_KEY: key } } : {} } as never
+    return { value: over.settings ? over.settings(e.source) : e.source === declared ? { env: { JEV_API_KEY: key } } : {} } as never
   })
   on('http.fetch', (_$, e) => {
     requests.push({ url: e.url, body: e.init?.body, headers: e.init?.headers })
-    return { value: { status: 200, ok: true, headers: {}, text: JSON.stringify({ answers: {
+    return { value: { status: 200, ok: true, headers: {}, text: over.body ?? JSON.stringify({ answers: {
       difficulty: { probabilities: { '0': 1 } }, duration: { probabilities: { '0': 1 } }, scope: { probabilities: { '0': 1 } }, task_type: { probabilities: { research: 1 } },
     } }) } }
   })

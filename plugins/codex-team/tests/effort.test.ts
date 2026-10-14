@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { choose, distributions, INVALID_PINS, parsePins, penalty, PROFILES, QUESTIONS, TASK_TYPES } from '../hooks/effort'
+import { choose, distributions, INVALID_PINS, parsePins, penalty, permittedProfiles, PROFILES, QUESTIONS, TASK_TYPES } from '../hooks/effort'
 import type { Distributions, Profile } from '../hooks/effort'
 import type { Answers } from '../hooks/jev'
 
@@ -7,13 +7,45 @@ const point = (difficulty: number, duration: number, scope: number, task_type = 
   difficulty: { probabilities: { [difficulty]: 1 } }, duration: { probabilities: { [duration]: 1 } }, scope: { probabilities: { [scope]: 1 } }, task_type: { probabilities: { [task_type]: 1 } },
 })
 
-test('one profile table reaches all six profiles regardless of role', () => {
+test('one profile table reaches all seven profiles regardless of role', () => {
   const reached = new Set<string>()
   for (let d = 0; d <= 4; d++) for (let t = 0; t <= 3; t++) for (let s = 0; s <= 3; s++) reached.add(choose(point(d, t, s)).profile.id)
   expect([...reached].sort()).toEqual(PROFILES.map(p => p.id).sort())
   expect(choose(point(0, 0, 0)).profile.id).toBe('luna-low')
   expect(choose(point(3, 1, 2)).profile.id).toBe('sol-high')
-  expect(choose(point(4, 3, 3)).profile.id).toBe('sol-xhigh')
+  expect(choose(point(4, 3, 3)).profile.id).toBe('astra-high')
+})
+
+test('Astra permission filters before scoring and preserves the six existing policy profiles', () => {
+  const existing = permittedProfiles(false)
+  expect(existing.map(p => [p.id, p.model, p.effort, p.point, p.rank, p.affinity])).toEqual([
+    ['sol-medium', 'gpt-6.1-sol', 'medium', { difficulty: 2.57, duration: 0.9, scope: 1 }, 4, { '*': 1, research: 0.9, docs: 0.9 }],
+    ['sol-high', 'gpt-6.1-sol', 'high', { difficulty: 2.86, duration: 1.5, scope: 2 }, 5, { '*': 1, research: 0.9, docs: 0.9 }],
+    ['sol-xhigh', 'gpt-6.1-sol', 'xhigh', { difficulty: 3, duration: 2.2, scope: 3 }, 6, { '*': 1, research: 0.9, docs: 0.9 }],
+    ['luna-low', 'gpt-6-luna', 'low', { difficulty: 0, duration: 0.3, scope: 0.5 }, 1, { '*': 0.8, research: 1, docs: 1 }],
+    ['luna-medium', 'gpt-6-luna', 'medium', { difficulty: 0, duration: 0.9, scope: 0.5 }, 2, { '*': 0.8, research: 1, docs: 1 }],
+    ['luna-high', 'gpt-6-luna', 'high', { difficulty: 0.43, duration: 1.5, scope: 0.5 }, 3, { '*': 0.8, research: 1, docs: 1 }],
+  ])
+  expect(PROFILES[6]).toMatchObject({ id: 'astra-high', point: { difficulty: 4, duration: 2.2, scope: 3 }, rank: 7, affinity: existing[0]!.affinity })
+  const reached = new Set<string>()
+  for (let d = 0; d <= 4; d++) for (let t = 0; t <= 3; t++) for (let s = 0; s <= 3; s++) {
+    const dist = point(d, t, s)
+    const off = choose(dist, existing).profile.id
+    reached.add(off)
+    const on = choose(dist, permittedProfiles(true)).profile.id
+    if (on === 'astra-high') expect(d).toBe(4)
+    else expect(on).toBe(off)
+  }
+  expect([...reached].sort()).toEqual(existing.map(p => p.id).sort())
+  expect(choose(point(4, 3, 3), existing).profile.id).toBe('sol-xhigh')
+  // A tie against even an earlier policy point still loses to the existing lower rank.
+  expect(choose(point(4, 3, 3), [{ ...PROFILES[6]!, id: 'sol-tie', rank: 6 }, PROFILES[6]!]).profile.id).toBe('sol-tie')
+})
+
+test('Astra model and astra-high profile pins are accepted without an astra-xhigh profile', () => {
+  expect(parsePins('Task', { model: 'gpt-6-astra', effort: 'xhigh' }).pins).toEqual({ model: 'gpt-6-astra', effort: 'xhigh', dimensions: {} })
+  expect(parsePins('Task @astra-high', { model: 'gpt-6-astra', effort: 'high' }).pins.profileId).toBe('astra-high')
+  expect(() => parsePins('Task @astra-xhigh')).toThrow(INVALID_PINS)
 })
 
 test('penalty integrates distribution tails and rounds each dimension and total to four places', () => {
@@ -25,7 +57,8 @@ test('penalty integrates distribution tails and rounds each dimension and total 
   // D=4.25, duration=4.0833, scope=2.0417: round dimensions before adding.
   expect(penalty(profile, fractional)).toBe(10.375)
   const tail = { ...point(0, 0, 0), difficulty: { '0': 0.25, '4': 0.75 } }
-  expect(choose(tail).profile.id).toBe('sol-high')
+  expect(choose(tail, permittedProfiles(false)).profile.id).toBe('sol-high')
+  expect(choose(tail, permittedProfiles(true)).profile.id).toBe('astra-high')
 })
 
 test('choice penalty uses exact affinity then wildcard then default one', () => {

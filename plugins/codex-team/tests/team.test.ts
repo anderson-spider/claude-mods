@@ -6,8 +6,9 @@ import { agents, fail, fakeRun, ok, text } from './fake-run'
 import type { Rule } from './fake-run'
 import { createBreaker, createGate, JEV_DEADLINE_MS, JEV_URL, SLOT_HOLD_MS } from '../hooks/jev'
 import type { JevInit } from '../hooks/jev'
-import { JEV_MODEL } from '../hooks/effort'
+import { JEV_MODEL, PROFILES } from '../hooks/effort'
 import { SPECS } from '../hooks/roles'
+import { ASTRA_REFUSAL } from '../hooks/model-policy'
 import type { Role } from '../hooks/roles'
 import { fnv1a } from '../hooks/decisions'
 
@@ -37,6 +38,52 @@ function io(rules: Rule[], env: Record<string, string | undefined> = ENV) {
 }
 
 const freshTeam: Rule[] = [agents([]), [['herdr', 'tab', 'create'], ok({ root_pane: { pane_id: 'w1:p7' } })], [['herdr', 'agent', 'start'], ok({})], [['herdr', 'agent', 'prompt'], ok({})]]
+
+test('disallowed Astra model profile and inherited effort pins refuse before any mutation or Jev', async () => {
+  for (const role of ['developer', 'analyst', 'architect', 'reviewer'] as const) {
+    for (const fields of [{ model: 'gpt-6-astra' }, { task: 'Task @astra-high' }]) {
+      for (const allowAstra of [false, undefined, 'true', true]) {
+        const w = io([])
+        w.team.allowAstra = allowAstra
+        // A repository declaration refuses even an effective true option.
+        w.team.settings = async () => ({ pluginConfigs: { 'codex-team@inline': { options: { allowAstra: true } } } })
+        expect(await dispatch(w.team, { role, slug: 'refuse', task: 'Task', ...fields })).toEqual({ ok: false, text: ASTRA_REFUSAL })
+        expect(w.calls).toEqual([])
+        expect(w.writes).toEqual([])
+        expect(w.tasks.size).toBe(0)
+      }
+    }
+  }
+  const spec = SPECS.developer, original = { model: spec.model, effort: spec.effort }
+  try {
+    spec.model = 'future-ASTRA-model'
+    const w = io([])
+    expect(await dispatch(w.team, { role: 'developer', slug: 'refuse', task: 'Task', effort: 'high' })).toEqual({ ok: false, text: ASTRA_REFUSAL })
+    expect(w.calls).toEqual([])
+  } finally { Object.assign(spec, original) }
+})
+
+test('lazy Astra refusal becomes not_sent with no pane prompt context or applied flags', async () => {
+  const spec = SPECS.developer, original = { model: spec.model, effort: spec.effort }
+  try {
+    Object.assign(spec, { model: 'future-ASTRA-model', effort: 'xhigh' })
+    // Default can inherit a future Astra spec; permission changes may also revoke an accepted model pin.
+    for (const pin of [false, true]) {
+      const w = io([[['git'], text('/wt/task\n')], agents([])])
+      let reads = 0
+      w.team.allowAstra = pin
+      w.team.settings = async () => {
+        if (++reads > 2) throw new Error('configuration became unreadable')
+        return {}
+      }
+      expect(await dispatch(w.team, { role: 'developer', slug: 'refuse', task: 'Task', cwd: '/wt/task', ...(pin ? { model: 'gpt-6-astra' } : {}) })).toEqual({ ok: false, text: ASTRA_REFUSAL })
+      expect(w.calls.filter(c => c[0] === 'herdr')).toEqual([['herdr', 'agent', 'list']])
+      expect(w.tasks.size).toBe(0)
+      expect(w.writes).toHaveLength(1)
+      expect(JSON.parse(w.writes[0]!.text)).toMatchObject({ v: 3, started: false, modelApplied: false, effortApplied: false, promptStatus: 'not_sent', reason: ASTRA_REFUSAL })
+    }
+  } finally { Object.assign(spec, original) }
+})
 
 function settledAgent(name: string, status: string, archiveExit = 0, workspace = 'w1') {
   const uuid = '12345678-1234-1234-1234-123456789abc'
@@ -474,7 +521,7 @@ test('fake HTTP preserves relative flag paths and quoted escapes while masking a
   expect(state).not.toContain('server')
 })
 
-test('astra dispatch caps pinned and default pairs while automatic profiles remain Sol or Luna', async () => {
+test('authorized Astra dispatch caps pinned and default pairs and permits expert automatic selection', async () => {
   // Exercise a future Astra spec without changing the shipped roles; restore the fixture even when an assertion fails.
   const spec = SPECS.developer
   const original = { model: spec.model, effort: spec.effort }
@@ -482,13 +529,14 @@ test('astra dispatch caps pinned and default pairs while automatic profiles rema
     Object.assign(spec, { model: 'gpt-6-astra', effort: 'xhigh' })
     for (const source of ['pinned', 'jev', 'default'] as const) {
       const world = assessedWorld({ ...(source === 'default' ? { key: undefined } : {}), body: assessedBody({ '4': 1 }, { '3': 1 }, { '3': 1 }) })
+      world.team.allowAstra = true
       const answer = await dispatch(world.team, { ...call('developer'), ...(source === 'pinned' ? { effort: 'xhigh' } : {}) })
       expect(answer.ok).toBe(true)
-      expect(answer.text).toContain(source === 'jev' ? 'model gpt-6.1-sol, effort xhigh (jev)' : `effort high (${source}), capped at high: gpt-6-astra never runs above high`)
+      expect(answer.text).toContain(source === 'jev' ? 'model gpt-6-astra, effort high (jev)' : `effort high (${source}), capped at high: gpt-6-astra never runs above high`)
       const start = world.calls.find(c => c[2] === 'start')!
-      expect(start).toContain(`model_reasoning_effort="${source === 'jev' ? 'xhigh' : 'high'}"`)
+      expect(start).toContain('model_reasoning_effort="high"')
       expect(start).toContain('service_tier="priority"')
-      for (const write of world.writes) expect(JSON.parse(write.text)).toMatchObject({ selection: { model: source === 'jev' ? 'gpt-6.1-sol' : 'gpt-6-astra', effort: source === 'jev' ? 'xhigh' : 'high', source }, effortApplied: true, modelApplied: true })
+      for (const write of world.writes) expect(JSON.parse(write.text)).toMatchObject({ selection: { model: 'gpt-6-astra', effort: 'high', source }, effortApplied: true, modelApplied: true })
     }
   } finally {
     Object.assign(spec, original)
@@ -538,6 +586,7 @@ test('reviewer followup falls back to its role default after safe retirement and
     for (const [model, effort] of [['gpt-6.1-sol', 'high'], ['gpt-6-astra', 'xhigh']] as const) {
       Object.assign(spec, { model, effort })
       const w = settledAgent('architect-fix', 'idle')
+      w.team.allowAstra = true
       w.tasks.set('developer:w1:/repo:fix', { cwd: '/wt/fix', task: 'Original task' })
       const answer = await dispatch(w.team, { role: 'reviewer', slug: 'fix' })
       expect(answer.text).toContain(`model ${model}, effort high (default)`)
@@ -688,7 +737,7 @@ test('a failed dispatch does not poison the global queue for a later call', asyn
   expect(next.calls.some(call => call[2] === 'prompt')).toBe(true)
 })
 
-test('model effort and profile pins bypass settings and dimensional pins are ignored for explicit pairs', async () => {
+test('model effort and profile pins bypass Jev key settings and dimensional pins are ignored for explicit pairs', async () => {
   for (const [fields, task, model, effort, profileId] of [
     [{ model: 'gpt-6.1-sol' }, 'Task', 'gpt-6.1-sol', 'medium', 'sol-medium'],
     [{ effort: 'xhigh' }, 'Task', 'gpt-6-luna', 'xhigh', null],
@@ -975,4 +1024,90 @@ test('equal roots and slugs in different workspaces get distinct report paths in
     }
   }
   expect(seen.size).toBe(8)
+})
+
+test('Astra off keeps Jev enabled and filters expert automatic and fully pinned local candidates', async () => {
+  for (const local of [false, true]) for (const role of ['developer', 'analyst', 'architect', 'reviewer'] as const) {
+    const w = assessedWorld({ body: assessedBody({ '4': 1 }, { '3': 1 }, { '3': 1 }) })
+    w.team.allowAstra = true
+    // This does not declare a Jev key: only Astra must be disabled.
+    w.team.settings = async () => ({ pluginConfigs: { 'codex-team': { options: { allowAstra: false } } } })
+    const answer = await dispatch(w.team, { ...readyCall(w, role), ...(local ? { task: 'Task !difficulty=4 !duration=3 !scope=3 !task_type=implement' } : {}) })
+    expect(answer.ok).toBe(true)
+    expect(answer.text).toContain(`model gpt-6.1-sol, effort xhigh (${local ? 'override' : 'jev'})`)
+    expect(w.requests).toHaveLength(local ? 0 : 1)
+    expect(w.calls.find(c => c[2] === 'start')).not.toContain('gpt-6-astra')
+    expect(JSON.parse(w.writes[1]!.text)).toMatchObject({ selection: { model: 'gpt-6.1-sol', effort: 'xhigh' }, jevAsked: !local, modelApplied: true, effortApplied: true })
+  }
+})
+
+test('authorized Astra Jev local and explicit pairs agree in startup answer and decision for every role', async () => {
+  for (const role of ['developer', 'analyst', 'architect', 'reviewer'] as const) {
+    for (const route of ['jev', 'local', 'model', 'profile'] as const) {
+      const w = assessedWorld({ body: assessedBody({ '4': 1 }, { '3': 1 }, { '3': 1 }) })
+      w.team.allowAstra = true
+      const fields = route === 'model' ? { model: 'gpt-6-astra', effort: 'xhigh' }
+        : route === 'profile' ? { task: 'Task @astra-high' }
+          : route === 'local' ? { task: 'Task !difficulty=4 !duration=3 !scope=3 !task_type=implement' } : {}
+      const answer = await dispatch(w.team, { ...readyCall(w, role), ...fields })
+      const source = route === 'jev' ? 'jev' : route === 'local' ? 'override' : 'pinned'
+      expect(answer.ok).toBe(true)
+      expect(answer.text).toContain(`model gpt-6-astra, effort high (${source})`)
+      if (route === 'model') expect(answer.text).toContain('capped at high')
+      const start = w.calls.find(c => c[2] === 'start')!
+      expect(start).toContain('gpt-6-astra')
+      expect(start).toContain('model_reasoning_effort="high"')
+      expect(start).toContain('service_tier="priority"')
+      expect(start).toContain(`developer_instructions=${JSON.stringify(SPECS[role].instructions)}`)
+      expect(start).toContain(role === 'developer' ? 'sandbox_workspace_write.writable_roots=["/home/u/.claude/codex-team/reports"]' : 'sandbox_workspace_write.writable_roots=[]')
+      for (const write of w.writes) expect(JSON.parse(write.text)).toMatchObject({ v: 3, selection: { model: 'gpt-6-astra', effort: 'high', source }, started: true, modelApplied: true, effortApplied: true })
+      expect(w.requests).toHaveLength(route === 'jev' ? 1 : 0)
+      expect(w.calls.find(c => c[2] === 'prompt')![4]).not.toContain('@astra-high')
+    }
+  }
+})
+
+test('Astra followup pins recheck permission before retiring developer or reviewer predecessors', async () => {
+  for (const role of ['developer', 'reviewer'] as const) for (const allowed of [true, false]) {
+    const w = settledAgent(role === 'developer' ? 'dev-fix' : 'architect-fix', 'done')
+    w.team.allowAstra = allowed
+    w.tasks.set('developer:w1:/repo:fix', { cwd: '/wt/task', task: 'Original task' })
+    const answer = await dispatch(w.team, { role, slug: 'fix', cwd: '/wt/task', task: 'Continue @astra-high' })
+    if (!allowed) {
+      expect(answer).toEqual({ ok: false, text: ASTRA_REFUSAL })
+      expect(w.calls).toEqual([])
+      expect(w.writes).toEqual([])
+    } else {
+      expect(answer.text).toContain('model gpt-6-astra, effort high (pinned)')
+      expect(w.calls.findIndex(c => c[0] === 'codex')).toBeLessThan(w.calls.findIndex(c => c[2] === 'start'))
+      expect(JSON.parse(w.writes[w.writes.length - 1]!.text)).toMatchObject({ selection: { model: 'gpt-6-astra', effort: 'high' }, modelApplied: true, effortApplied: true })
+    }
+    expect(w.tasks.get('developer:w1:/repo:fix')).toEqual({ cwd: '/wt/task', task: 'Original task' })
+  }
+})
+
+
+test('Jev Astra selection is capped defensively and revoked permission refuses before pane creation', async () => {
+  const profile = PROFILES.find(p => p.id === 'astra-high')!, effort = profile.effort
+  try {
+    // Simulate a future policy error: the shared startup cap must still align flags, answer and record.
+    profile.effort = 'xhigh'
+    const w = assessedWorld({ body: assessedBody({ '4': 1 }, { '3': 1 }, { '3': 1 }) })
+    w.team.allowAstra = true
+    const answer = await dispatch(w.team, call())
+    expect(answer.text).toContain('model gpt-6-astra, effort high (jev), capped at high')
+    expect(w.calls.find(c => c[2] === 'start')).toContain('model_reasoning_effort="high"')
+    for (const write of w.writes) expect(JSON.parse(write.text)).toMatchObject({ selection: { model: 'gpt-6-astra', effort: 'high', source: 'jev' }, started: true, modelApplied: true, effortApplied: true })
+  } finally { profile.effort = effort }
+  const revoked = assessedWorld({ body: assessedBody({ '4': 1 }, { '3': 1 }, { '3': 1 }) })
+  revoked.team.allowAstra = true
+  let reads = 0
+  revoked.team.settings = async () => ++reads <= 4 ? {} : { pluginConfigs: { 'codex-team@inline': { options: { allowAstra: false } } } }
+  let published = false
+  revoked.team.publish = async () => { published = true }
+  expect(await dispatch(revoked.team, call())).toEqual({ ok: false, text: ASTRA_REFUSAL })
+  expect(revoked.requests).toHaveLength(1)
+  expect(revoked.calls.filter(c => c[0] === 'herdr')).toEqual([['herdr', 'agent', 'list']])
+  expect(JSON.parse(revoked.writes[0]!.text)).toMatchObject({ selection: { model: 'gpt-6-astra', effort: 'high', source: 'jev' }, started: false, modelApplied: false, effortApplied: false, promptStatus: 'not_sent', reason: ASTRA_REFUSAL })
+  expect(published).toBe(true)
 })

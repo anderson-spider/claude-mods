@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { agentName, codexArgs, SLUG, SPECS } from '../hooks/roles'
+import { agentName, codexArgs, SLUG, SPECS, startEffort } from '../hooks/roles'
 
 test('every role and model starts with the priority service tier including luna, sol and astra', () => {
   for (const spec of Object.values(SPECS)) {
@@ -36,10 +36,10 @@ test('task slugs stop at 22 characters without truncation and reviewers use the 
 test('profile pairs change only model and effort flags while the role keeps instructions sandbox and roots', () => {
   for (const spec of Object.values(SPECS)) {
     const baseline = codexArgs(spec, spec, ['/reports']).filter((_, i) => i !== 1 && i !== 3)
-    for (const model of ['gpt-6.1-sol', 'gpt-6-luna']) for (const effort of ['low', 'medium', 'high', 'xhigh'] as const) {
+    for (const model of ['gpt-6.1-sol', 'gpt-6-luna', 'gpt-6-astra']) for (const effort of ['low', 'medium', 'high', 'xhigh'] as const) {
       const args = codexArgs(spec, { model, effort }, ['/reports'])
       expect(args[1]).toBe(model)
-      expect(args[3]).toBe(`model_reasoning_effort="${effort}"`)
+      expect(args[3]).toBe(`model_reasoning_effort="${startEffort(model, effort).effort}"`)
       expect(args.filter((_, i) => i !== 1 && i !== 3)).toEqual(baseline)
     }
   }

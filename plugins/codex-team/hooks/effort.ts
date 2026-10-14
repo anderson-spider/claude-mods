@@ -6,6 +6,7 @@ import type { KeyIo, Off } from './key'
 import { head, redact, REDACTED } from './redact'
 import { EFFORTS, MODELS, SPECS } from './roles'
 import type { Effort, Model, ProfilePair, Role } from './roles'
+import { modelAllowed } from './model-policy'
 
 export const JEV_MODEL = 'jev-1.13.0'
 export const TASK_CHARS = 4000
@@ -41,7 +42,10 @@ export const PROFILES: readonly Profile[] = [
   { id: 'luna-low', model: 'gpt-6-luna', effort: 'low', point: { difficulty: 0, duration: 0.3, scope: 0.5 }, rank: 1, affinity: luna },
   { id: 'luna-medium', model: 'gpt-6-luna', effort: 'medium', point: { difficulty: 0, duration: 0.9, scope: 0.5 }, rank: 2, affinity: luna },
   { id: 'luna-high', model: 'gpt-6-luna', effort: 'high', point: { difficulty: 0.43, duration: 1.5, scope: 0.5 }, rank: 3, affinity: luna },
+  // Policy priors: expert difficulty, Sol affinities and last rank; these are not measured performance or prices.
+  { id: 'astra-high', model: 'gpt-6-astra', effort: 'high', point: { difficulty: 4, duration: 2.2, scope: 3 }, rank: 7, affinity: sol },
 ]
+export const permittedProfiles = (allowAstra: boolean): readonly Profile[] => PROFILES.filter(p => modelAllowed(p.model, allowAstra))
 export const QUESTIONS = {
   difficulty: {
     type: 'score', instructions: 'How hard is this task for a capable coding agent?',
@@ -182,12 +186,20 @@ export function choose(dists: Distributions, profiles: readonly Profile[] = PROF
 export type EffortIo = KeyIo & { jev: JevIo; breaker: Breaker; gate: Gate; log: (text: string) => void }
 export const emptyAssessment = { jevAsked: false, expected: null, taskType: null, taskTypePrior: false, jevReason: null, dimensionsUsed: false } as const
 
-export async function assessProfile(io: EffortIo, call: { role: Role; task: string; key?: string; home: string; root: string; pins: Pins }): Promise<ProfileChoice> {
+/** An explicit pair includes omitted fields inherited from the role, including effort-only pins. */
+export function pinnedPair(role: Role, pins: Pins): ProfilePair | undefined {
+  const explicit = pins.profileId ? PROFILES.find(p => p.id === pins.profileId)! : undefined
+  const spec = SPECS[role]
+  return explicit || pins.model !== undefined || pins.effort !== undefined
+    ? { model: explicit?.model ?? pins.model ?? spec.model, effort: explicit?.effort ?? pins.effort ?? spec.effort } : undefined
+}
+
+export async function assessProfile(io: EffortIo, call: { role: Role; task: string; key?: string; home: string; root: string; pins: Pins; allowAstra: boolean }): Promise<ProfileChoice> {
   const { pins } = call
   const spec = SPECS[call.role]
-  const explicit = pins.profileId ? PROFILES.find(p => p.id === pins.profileId)! : undefined
-  if (explicit || pins.model !== undefined || pins.effort !== undefined) {
-    const model = explicit?.model ?? pins.model ?? spec.model, effort = explicit?.effort ?? pins.effort ?? spec.effort
+  const explicit = pinnedPair(call.role, pins)
+  if (explicit) {
+    const { model, effort } = explicit
     return { ...emptyAssessment, model, effort, profileId: PROFILES.find(p => p.model === model && p.effort === effort)?.id ?? null, source: 'pinned', penalty: null }
   }
   const local = Object.keys(QUESTIONS).every(dim => pins.dimensions[dim as keyof DimensionPins] !== undefined)
@@ -208,7 +220,7 @@ export async function assessProfile(io: EffortIo, call: { role: Role; task: stri
       answers = (await createJev(jev, access.key, { model: JEV_MODEL, breaker: io.breaker, gate: io.gate, answerIds: Object.keys(questions) })(questions, state)).answers
     }
     const dists = distributions(answers, pins.dimensions)
-    const selected = choose(dists)
+    const selected = choose(dists, permittedProfiles(call.allowAstra))
     const expected = Object.fromEntries(DIMENSIONS.map(dim => [dim, Math.round(Object.entries(dists[dim]).reduce((sum, [level, p]) => sum + Number(level) * p, 0) * 10) / 10])) as Levels
     return { ...emptyAssessment, model: selected.profile.model, effort: selected.profile.effort, profileId: selected.profile.id, penalty: selected.penalty, source: local ? 'override' : 'jev', jevAsked, expected, taskType: dists.task_type, taskTypePrior: pins.dimensions.task_type === undefined && !Object.hasOwn(answers, 'task_type'), dimensionsUsed: Object.keys(pins.dimensions).length > 0 }
   } catch (error) { return fallback(classifyFailure(error).failure.reason) }

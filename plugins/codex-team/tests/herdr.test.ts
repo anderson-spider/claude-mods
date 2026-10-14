@@ -314,3 +314,13 @@ test('every shared and named agent tab uses exactly codex dash and the main task
     }
   }
 })
+
+test('a typed startup refusal returns not_sent before any pane start or prompt', async () => {
+  const w = fakeRun([agents([])])
+  let recorded = false
+  const reason = 'codex-team: Astra is not allowed by the plugin configuration; nothing was started.'
+  expect(await deliver(w.run, input({ startArgs: async () => ({ refusal: reason }), beforeSend: async () => { recorded = true } })))
+    .toMatchObject({ status: 'not_sent', reason, started: false, existed: false })
+  expect(w.calls).toEqual([['herdr', 'agent', 'list']])
+  expect(recorded).toBe(false)
+})

@@ -55,7 +55,7 @@ test('the host reads literal JEV_API_KEY, checks both settings sources and route
   const answer = await $.tool.call({ tool: DISPATCH, role: 'analyst', task, slug: 'host' } as never)
   expect(answer.result).toContain('effort low (jev)')
   expect(w.envReads).toContain('JEV_API_KEY')
-  expect(w.settings).toEqual(['project', 'local'])
+  expect(w.settings).toEqual(['project', 'local', 'project', 'local'])
   expect(w.requests).toHaveLength(1)
   expect(w.requests[0]?.headers?.Authorization).toBe(`Bearer ${key}`)
   expect(JSON.parse(w.requests[0]!.body!)).toMatchObject({ model: JEV_MODEL, state: 'Read <path> and <email>' })
@@ -116,11 +116,11 @@ test('failed plan writes and successful unrelated writes do not publish and pres
   expect(processes).toBe(0)
 })
 
-test('host sends four questions with choice criteria map and bypasses HTTP and settings for pins', async ($, on) => {
+test('host sends four questions with choice criteria map and Sol pins bypass HTTP and Jev key settings', async ($, on) => {
   const w = dispatchWorld(on, 'test-key')
   await started($, w.tools)
   const schema = w.tools[0]!.inputSchema as unknown as { properties: Record<string, { enum?: string[] }> }
-  expect(schema.properties.model!.enum).toEqual(['gpt-6.1-sol', 'gpt-6-luna'])
+  expect(schema.properties.model!.enum).toEqual(['gpt-6.1-sol', 'gpt-6-luna', 'gpt-6-astra'])
   await $.tool.call({ tool: DISPATCH, role: 'analyst', task: 'Task', slug: 'host' } as never)
   const body = JSON.parse(w.requests[0]!.body!)
   expect(Object.keys(body.questions)).toEqual(['difficulty', 'duration', 'scope', 'task_type'])
@@ -130,7 +130,7 @@ test('host sends four questions with choice criteria map and bypasses HTTP and s
   await $.tool.call({ tool: DISPATCH, role: 'analyst', model: 'gpt-6.1-sol', task: 'Task', slug: 'pin' } as never)
   await $.tool.call({ tool: DISPATCH, role: 'analyst', task: 'Task !hard !quick !scope=1 !task_type=docs', slug: 'local' } as never)
   expect(w.requests).toEqual([])
-  expect(w.settings).toEqual([])
+  expect(w.settings).toEqual(['project', 'local'])
 })
 
 test('reviewer routes its generated review brief through host Jev and accepts profile pins', async ($, on) => {
@@ -139,7 +139,7 @@ test('reviewer routes its generated review brief through host Jev and accepts pr
   w.tasks.set('developer:w1:/repo:host', { cwd: '/wt/host', task: 'Build the recorded feature' })
   const result = await $.tool.call({ tool: DISPATCH, role: 'reviewer', slug: 'host' } as never)
   expect(result.result).toContain('model gpt-6-luna, effort low (jev)')
-  expect(w.settings).toEqual(['project', 'local'])
+  expect(w.settings).toEqual(['project', 'local', 'project', 'local'])
   expect(w.requests).toHaveLength(1)
   const body = JSON.parse(w.requests[0]!.body!)
   expect(body.state).toContain("Review the developer's worktree: <path>.")
@@ -220,4 +220,77 @@ test('a debug logging failure cannot throw into the observed Bash result', async
   on('tool.call', { tool: 'Bash' }, () => receipt as never)
   expect(await $.tool.call({ tool: 'Bash', command: 'echo ok' } as never)).toEqual(receipt)
   expect(w.logs).toEqual(['codex-team: dagr plan observation failed'])
+})
+
+for (const allowAstra of [true, false]) {
+  test(`host allowAstra ${allowAstra} controls Astra model and profile pins`, { options: { allowAstra } }, async ($, on) => {
+    const w = dispatchWorld(on, 'test-key')
+    await started($, w.tools)
+    for (const fields of [{ model: 'gpt-6-astra', effort: 'xhigh', task: 'Task' }, { task: 'Task @astra-high' }]) {
+      const answer = await $.tool.call({ tool: DISPATCH, role: 'analyst', slug: 'astra', ...fields } as never)
+      if (allowAstra) {
+        expect(answer.result).toContain('model gpt-6-astra, effort high (pinned)')
+        expect(w.calls.find(c => c[2] === 'start')).toContain('model_reasoning_effort="high"')
+        expect(JSON.parse(w.writes[w.writes.length - 1]!)).toMatchObject({ selection: { model: 'gpt-6-astra', effort: 'high' }, started: true, modelApplied: true, effortApplied: true })
+      } else {
+        expect(answer.result).toBe('codex-team: Astra is not allowed by the plugin configuration; nothing was started.')
+        expect(w.calls).toEqual([])
+        expect(w.writes).toEqual([])
+      }
+      expect(w.requests).toEqual([])
+    }
+  })
+}
+
+test('manifest default allowAstra permits Astra through the host', async ($, on) => {
+  const w = dispatchWorld(on, 'test-key')
+  await started($, w.tools)
+  const answer = await $.tool.call({ tool: DISPATCH, role: 'analyst', slug: 'astra', task: 'Task @astra-high' } as never)
+  expect(answer.result).toContain('model gpt-6-astra, effort high (pinned)')
+  expect(w.settings).toEqual(['project', 'local', 'project', 'local'])
+  expect(w.requests).toEqual([])
+})
+
+for (const source of ['project', 'local'] as const) {
+  test(`host ${source} Astra declaration refuses Astra while Jev remains enabled`, { options: { allowAstra: true } }, async ($, on) => {
+    const w = dispatchWorld(on, 'test-key', undefined, undefined, {
+      settings: current => current === source ? { pluginConfigs: { 'codex-team@spider-claude-mods': { options: { allowAstra: null } } } } : {},
+      body: JSON.stringify({ answers: {
+        difficulty: { probabilities: { '4': 1 } }, duration: { probabilities: { '3': 1 } }, scope: { probabilities: { '3': 1 } },
+      } }),
+    })
+    await started($, w.tools)
+    const pinned = await $.tool.call({ tool: DISPATCH, role: 'analyst', slug: 'astra', task: 'Task @astra-high' } as never)
+    expect(pinned.result).toBe('codex-team: Astra is not allowed by the plugin configuration; nothing was started.')
+    expect(w.calls).toEqual([])
+    const automatic = await $.tool.call({ tool: DISPATCH, role: 'analyst', slug: 'sol', task: 'Task' } as never)
+    expect(automatic.result).toContain('model gpt-6.1-sol, effort xhigh (jev)')
+    expect(JSON.parse(w.writes[w.writes.length - 1]!)).toMatchObject({ jevAsked: true, selection: { model: 'gpt-6.1-sol', effort: 'xhigh' } })
+  })
+}
+
+
+for (const allowAstra of [true, false]) {
+  test(`host allowAstra ${allowAstra} filters expert Jev selection before scoring`, { options: { allowAstra } }, async ($, on) => {
+    const w = dispatchWorld(on, 'test-key', undefined, undefined, { body: JSON.stringify({ answers: {
+      difficulty: { probabilities: { '4': 1 } }, duration: { probabilities: { '3': 1 } }, scope: { probabilities: { '3': 1 } },
+    } }) })
+    await started($, w.tools)
+    const answer = await $.tool.call({ tool: DISPATCH, role: 'analyst', slug: 'expert', task: 'Task' } as never)
+    const model = allowAstra ? 'gpt-6-astra' : 'gpt-6.1-sol', effort = allowAstra ? 'high' : 'xhigh'
+    expect(answer.result).toContain(`model ${model}, effort ${effort} (jev)`)
+    expect(w.requests).toHaveLength(1)
+    expect(w.calls.find(c => c[2] === 'start')).toContain(model)
+    expect(JSON.parse(w.writes[w.writes.length - 1]!)).toMatchObject({ selection: { model, effort }, jevAsked: true, modelApplied: true, effortApplied: true })
+  })
+}
+
+test('host unreadable settings refuse an Astra pin with the fixed message', { options: { allowAstra: true } }, async ($, on) => {
+  const w = dispatchWorld(on, 'test-key', undefined, undefined, { settings: () => { throw new Error('private failure') } })
+  await started($, w.tools)
+  const answer = await $.tool.call({ tool: DISPATCH, role: 'analyst', slug: 'astra', model: 'gpt-6-astra', task: 'Task' } as never)
+  expect(answer.result).toBe('codex-team: Astra is not allowed by the plugin configuration; nothing was started.')
+  expect(w.calls).toEqual([])
+  expect(w.requests).toEqual([])
+  expect(w.writes).toEqual([])
 })

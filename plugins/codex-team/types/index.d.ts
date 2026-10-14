@@ -10,7 +10,7 @@ declare module 'claude-code' {
       slug: string
       cwd?: string
       effort?: 'low' | 'medium' | 'high' | 'xhigh'
-      model?: 'gpt-6.1-sol' | 'gpt-6-luna'
+      model?: 'gpt-6.1-sol' | 'gpt-6-luna' | 'gpt-6-astra'
     }
   }
 }
