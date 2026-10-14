@@ -20,10 +20,10 @@ export function ports() {
   return { io, requests, logs, settingsReads, faults, answers }
 }
 
-export function world(on: On) {
+export function world(on: On, provider = 'spider-team') {
   const p = ports(), specs: AgentSpec[] = [], env: Record<string, string> = { HOME: '/home/u' }
   mock.clock(on)
-  on('agent.register', (_$, e) => { specs.push(e); return { value: { agent: `spider-team:${e.name}` } } })
+  on('agent.register', (_$, e) => { specs.push(e); return { value: { agent: `${provider}:${e.name}` } } })
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('session.root', () => ({ value: p.io.root }))
   on('env.get', (_$, e) => ({ value: env[e.name] }))
