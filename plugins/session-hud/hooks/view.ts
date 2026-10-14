@@ -2,7 +2,7 @@
 import type { SessionHudCard } from '../types'
 import { WINDOW_MS, span } from './usage'
 
-export type Style = 'plain' | 'strong' | 'secondary' | 'model' | 'success' | 'warning' | 'sent' | 'bar' | 'track' | 'tick' | 'frame'
+export type Style = 'plain' | 'strong' | 'secondary' | 'model' | 'success' | 'warning' | 'danger' | 'sent' | 'bar' | 'track' | 'tick' | 'frame'
 export type Segment = { text: string; style: Style }
 export type Row = Segment[]
 

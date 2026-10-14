@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import type { SessionHudCard } from '../types'
-import { BAR_CELLS, BAR_WIDTH, barCells, barSvg, cacheLine, lastTurnCells, layoutView, sentOf } from '../hooks/layout'
+import { BAR_CELLS, BAR_WIDTH, CONTEXT_ALERT, barCells, barSvg, cacheLine, lastTurnCells, layoutView, sentOf } from '../hooks/layout'
 import type { Draw, Group, Piece } from '../hooks/layout'
 
 const now = Date.parse('2026-10-13T12:00:00Z')
@@ -94,4 +94,29 @@ test('the last turn says what was sent at its start, what it added and its outpu
   expect(figures({ before: 20_000, after: 30_000, output: 900, compacted: true }, previous)).toBe('▲ +10k in turn · 900 out')
   expect(sentOf({ before: 90_000, after: 95_000, output: 1 }, previous)).toBeUndefined()
   expect(figures({ before: 400_000, after: 20_000, output: 900 })).toBe('▼ −380k · 900 out')
+})
+
+test('from 85% of the compaction window the context bar and percent turn to the alert colour on every surface', () => {
+  expect(CONTEXT_ALERT).toBe(85)
+  const ctx = (tokensUsed: number, draw: Draw, palette: 'mockup' | 'theme' = 'mockup') =>
+    layoutView({ card: { ...card, context: { tokens: tokensUsed, window: 1_000_000, percent: 0 } }, now, palette, draw })[1]![0] as Piece[]
+  const svgOf = (pieces: Piece[]) => pieces.filter((p): p is Extract<Piece, { kind: 'svg' }> => 'kind' in p)[0]!
+  const percentOf = (pieces: Piece[]) => pieces.find(p => 'text' in p && /^ \d+%$/u.test(p.text)) as { text: string; style: string }
+
+  const calm = ctx(420_000, 'svg')
+  expect(svgOf(calm).source).toContain('#4fb383')
+  expect(svgOf(calm).alt).toBe('context 84% used')
+  expect(percentOf(calm)).toEqual({ text: ' 84%', style: 'strong' })
+
+  const near = ctx(425_000, 'svg')
+  expect(svgOf(near).source).toContain('#e06c75')
+  expect(svgOf(near).source).not.toContain('#4fb383')
+  expect(svgOf(near).alt).toBe('context 85% used, near compaction')
+  expect(percentOf(near)).toEqual({ text: ' 85%', style: 'danger' })
+  expect(svgOf(ctx(425_000, 'svg', 'theme')).source).toContain('#c53030')
+
+  const cells = ctx(470_000, 'cells')
+  expect(cells.filter(p => 'text' in p && p.text.includes('━')).map(p => (p as { style: string }).style)).toEqual(['danger', 'track'])
+  expect(percentOf(cells)).toEqual({ text: ' 94%', style: 'danger' })
+  expect(ctx(420_000, 'cells').some(p => 'style' in p && p.style === 'danger')).toBe(false)
 })
