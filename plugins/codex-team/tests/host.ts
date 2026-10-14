@@ -58,14 +58,14 @@ export function dispatchWorld(on: On, key: string, declared?: 'project' | 'local
   on('http.fetch', (_$, e) => {
     requests.push({ url: e.url, body: e.init?.body, headers: e.init?.headers })
     return { value: { status: 200, ok: true, headers: {}, text: JSON.stringify({ answers: {
-      difficulty: { probabilities: { '0': 1 } }, duration: { probabilities: { '0': 1 } }, scope: { probabilities: { '0': 1 } },
+      difficulty: { probabilities: { '0': 1 } }, duration: { probabilities: { '0': 1 } }, scope: { probabilities: { '0': 1 } }, task_type: { probabilities: { research: 1 } },
     } }) } }
   })
   on('process.run', async (_$, e) => ({ value: { ...await (runner ?? run)(e.argv), isStdoutTruncated: false, isStderrTruncated: false } }))
   on('fs.exists', () => ({ value: false }))
   on('fs.write', (_$, e) => { writes.push(e.text); return { value: undefined } })
   on('ui.log', (_$, e) => { logs.push(e.text); return { value: undefined } })
-  return { tools, calls, envReads, settings, requests, writes, logs }
+  return { tools, calls, envReads, settings, requests, writes, logs, tasks }
 }
 
 /** Mutable plan metadata and publication failures for post-result observation tests. */

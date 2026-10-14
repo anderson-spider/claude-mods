@@ -72,15 +72,16 @@ export const register: Register = (on) => {
       name: 'dispatch',
       description:
         'Hands a task to a Codex team agent in Herdr: developer, analyst, architect, or reviewer (reviews the recorded developer task; task is optional extra focus). ' +
-        'Task agents are reused in codex - <slug> tabs; shared analyst/architect are one-shot in codex - <slug> tabs and are finished before their next dispatch. Herdr names are workspace-specific; use the effective name returned for wait/get. A busy shared analyst falls back to analyst-<slug>. Delivery: confirmed, unknown (never resend), or not_sent. Publishes the active crew plan to Dagr when available. Only inside Herdr.',
+        'Every dispatch starts a fresh session after safely finishing its idle/done predecessor in this workspace; working/blocked targets are refused. Jev chooses model and effort for every role, using the review brief for reviewer. Roles retain their instructions and write permissions. All tabs use codex - <slug>. Herdr names are workspace-specific; use the effective name returned for wait/get. A busy shared analyst falls back to analyst-<slug>. Delivery: confirmed, unknown (never resend), or not_sent. Publishes the active crew plan to Dagr when available. Only inside Herdr.',
       inputSchema: {
         type: 'object',
         properties: {
           role: { type: 'string', enum: ['developer', 'analyst', 'architect', 'reviewer'], description: 'Who does the task.' },
-          task: { type: 'string', description: 'Required except for reviewer: a self-contained brief. For reviewer, optional extra focus.' },
+          task: { type: 'string', description: 'Required except for reviewer: a self-contained brief. For reviewer, optional extra focus. Accepts @profile and !dimension=value pins outside code and quotes. Each dispatch starts a fresh session; followup briefs must be self-contained.' },
           slug: { type: 'string', description: 'Required task id: lowercase letters, digits and hyphens, at most 22 characters. Never truncated.' },
           cwd: { type: 'string', description: 'Developer only: the absolute path of the task worktree, never the repository itself.' },
-          effort: { type: 'string', enum: ['low', 'medium', 'high', 'xhigh'], description: 'Pins effort and skips Jev, except reviewer always chooses xhigh (Astra caps to high).' },
+          model: { type: 'string', enum: ['gpt-6.1-sol', 'gpt-6-luna'], description: 'Pins model at a new session start for every role and skips Jev; omitted effort uses the role default.' },
+          effort: { type: 'string', enum: ['low', 'medium', 'high', 'xhigh'], description: 'Pins effort at a new session start for every role and skips Jev; omitted model uses the role default. Astra caps xhigh to high; each dispatch starts fresh.' },
         },
         required: ['role', 'slug'],
       } satisfies SchemaFor<McpToolInputs['mcp__codex-team__dispatch']>,

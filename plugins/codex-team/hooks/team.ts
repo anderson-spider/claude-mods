@@ -1,15 +1,15 @@
-// The `dispatch` tool's work: check the call, pick the agent, its directory and effort, deliver the brief and log the
+// The `dispatch` tool's work: check the call, pick the agent, its directory and startup profile, deliver the brief and log the
 // decision. Pure: every host access is injected.
 import { saveDecision, fnv1a } from './decisions'
 import type { DecisionRecord } from './decisions'
-import { assessEffort, JEV_MODEL } from './effort'
-import type { EffortIo } from './effort'
+import { assessProfile, INVALID_PINS, JEV_MODEL, parsePins } from './effort'
+import type { EffortIo, ProfileChoice } from './effort'
 import { effectiveName, workspaceToken } from './names'
 import { deliver, isTeamName, listAgents } from './herdr'
 import type { Delivery, Run } from './herdr'
 import { brief, reportPath, reviewTask } from './report'
-import { EFFORTS, ROLES, SLUG, SPECS, agentName, codexArgs, startEffort } from './roles'
-import type { Effort, Role } from './roles'
+import { ROLES, SLUG, SPECS, agentName, codexArgs, startEffort } from './roles'
+import type { Role } from './roles'
 import { finishAgent } from './finish'
 import type { Finish } from './finish'
 
@@ -51,7 +51,7 @@ async function developerDir(io: TeamIo, repo: string, cwd: unknown): Promise<{ c
   return { cwd: toplevel }
 }
 
-type Input = { role?: unknown; task?: unknown; slug?: unknown; cwd?: unknown; effort?: unknown }
+type Input = { role?: unknown; task?: unknown; slug?: unknown; cwd?: unknown; effort?: unknown; model?: unknown }
 let dispatchQueue: Promise<void> = Promise.resolve()
 
 /** One queue for the entire plugin: context reads and all delivery effects run without interleaving. */
@@ -72,7 +72,7 @@ async function finishInWorkspace(io: TeamIo, env: Awaited<ReturnType<TeamIo['env
   return result
 }
 
-/** Explicit finish shares dispatch's queue and automatic shared-agent retirement. */
+/** Explicit finish shares dispatch's queue and automatic previous-agent retirement. */
 export function finish(io: TeamIo, input: { agent?: unknown }): Promise<Answer> {
   return queued(async () => {
     const env = await io.env().catch(() => ({}) as Awaited<ReturnType<TeamIo['env']>>)
@@ -102,7 +102,10 @@ async function dispatchTask(io: TeamIo, input: Input): Promise<Answer> {
   if (role !== 'reviewer' && (typeof input.task !== 'string' || !input.task.trim())) return refuse('task is empty')
   if (input.task !== undefined && typeof input.task !== 'string') return refuse('task must be text')
   if (typeof input.slug !== 'string' || !SLUG.test(input.slug)) return refuse('slug must be lowercase letters, digits and hyphens, starting with a letter, at most 22 characters')
-  if (input.effort !== undefined && !EFFORTS.includes(input.effort as Effort)) return refuse(`effort must be one of ${EFFORTS.join(', ')}`)
+  let parsed: ReturnType<typeof parsePins>
+  try { parsed = parsePins((input.task as string | undefined) ?? '', input) } catch { return refuse(INVALID_PINS) }
+  if (role !== 'reviewer' && !parsed.task.trim()) return refuse('task is empty')
+  const { pins } = parsed
 
   const home = env.HOME
   if (!home || !home.startsWith('/')) return refuse('HOME is not an absolute path')
@@ -111,7 +114,7 @@ async function dispatchTask(io: TeamIo, input: Input): Promise<Answer> {
   const report = reportPath(reports, repo, token, input.slug, role)
   const key = `developer:${workspace}:${repo}:${input.slug}`
   const original = role === 'developer' || role === 'reviewer' ? developerTask(await io.store.get(key)) : undefined
-  let task = (input.task as string | undefined) ?? ''
+  let task = parsed.task
   if (role === 'reviewer') {
     if (!original) return refuse('delivery: not_sent (no developer was dispatched for this slug)')
     const agents = await listAgents(io.run)
@@ -123,10 +126,7 @@ async function dispatchTask(io: TeamIo, input: Input): Promise<Answer> {
   const made = await io.run(['mkdir', '-p', report.slice(0, report.lastIndexOf('/'))])
   if (made.exitCode !== 0) return refuse('the reports directory could not be created')
 
-  const spec = role === 'reviewer' ? {
-    ...SPECS.architect,
-    instructions: 'You are the reviewer of a team led by another agent. Review the recorded developer task against the complete uncommitted worktree and its AGENTS.md rules. Write only the named reviewer report; leave the repository untouched.',
-  } : SPECS[role]
+  const spec = SPECS[role]
   let cwd = reports
   let roots: string[] = []
   if (spec.writes) {
@@ -137,18 +137,19 @@ async function dispatchTask(io: TeamIo, input: Input): Promise<Answer> {
     roots = [reports]
   }
 
-  const selected = role === 'reviewer'
-    ? { effort: 'xhigh' as const, source: 'review-policy' as const, jevModel: JEV_MODEL, expected: null, jevReason: null }
-    : await assessEffort(io, { role, task, key: env.JEV_API_KEY, home, root: repo, pinned: input.effort as Effort | undefined })
-  const capped = startEffort(spec.model, selected.effort)
-  const choice = { ...selected, effort: capped.effort }
-  const { effort, source } = choice
+  const assessed: { choice: ProfileChoice | null; capReason: string | null } = { choice: null, capReason: null }
   const name = agentName(role, input.slug)
   const started = await io.now()
   const ts = new Date(started).toISOString()
   const record = (delivery: Delivery, at: number): DecisionRecord => ({
-    v: 2, ts, role, agent: delivery.agent, effectiveAgent: delivery.effectiveAgent, model: spec.model, ...choice, taskHash: fnv1a(task),
-    effortApplied: delivery.started,
+    v: 3, ts, role, agent: delivery.agent, effectiveAgent: delivery.effectiveAgent,
+    selection: assessed.choice ? { model: assessed.choice.model, effort: assessed.choice.effort, profileId: assessed.choice.profileId, source: assessed.choice.source, penalty: assessed.choice.penalty } : null,
+    jevModel: assessed.choice?.jevAsked ? JEV_MODEL : null,
+    jevAsked: assessed.choice?.jevAsked ?? false,
+    expected: assessed.choice?.expected ?? null, taskType: assessed.choice?.taskType ?? null, taskTypePrior: assessed.choice?.taskTypePrior ?? false, jevReason: assessed.choice?.jevReason ?? null,
+    pins, pinsUsed: { model: assessed.choice?.source === 'pinned' && pins.model !== undefined, effort: assessed.choice?.source === 'pinned' && pins.effort !== undefined, profile: assessed.choice?.source === 'pinned' && pins.profileId !== undefined, dimensions: assessed.choice?.dimensionsUsed ?? false },
+    dimensionsIgnored: Object.keys(pins.dimensions).length > 0 && !assessed.choice?.dimensionsUsed,
+    taskHash: fnv1a(task), modelApplied: delivery.started, effortApplied: delivery.started,
     started: delivery.started, promptStatus: delivery.status, reason: delivery.reason ?? null, durationMs: Math.max(0, at - started),
   })
 
@@ -157,13 +158,19 @@ async function dispatchTask(io: TeamIo, input: Input): Promise<Answer> {
     name,
     slug: input.slug,
     analystSlug: role === 'analyst' ? input.slug : undefined,
-    finishShared: agent => finishInWorkspace(io, env, agent),
+    finishPrevious: agent => finishInWorkspace(io, env, agent),
     reviewDeveloper: role === 'reviewer' ? `dev-${input.slug}` : undefined,
     writes: spec.writes,
     workspace,
     cwd,
-    codexArgs: codexArgs(spec, effort, roots),
-    prompt: brief({ role, slug: input.slug, repo: role === 'reviewer' ? original!.cwd : repo, cwd, task, report }),
+    startArgs: async () => {
+      const selected = await assessProfile(io, { role, task, key: env.JEV_API_KEY, home, root: repo, pins })
+      const capped = startEffort(selected.model, selected.effort)
+      assessed.capReason = capped.reason
+      assessed.choice = { ...selected, effort: capped.effort }
+      return codexArgs(spec, assessed.choice, roots)
+    },
+    prompt: brief({ role, slug: input.slug, repo: role === 'reviewer' ? original!.cwd : repo, cwd, task, report, followup: role === 'developer' && original !== undefined }),
     // `unknown` is on disk before the prompt can reach the agent, so a crash never leaves a sent task unrecorded.
     beforeSend: async (started, agent) => {
       if (role === 'developer' && !original) {
@@ -181,8 +188,10 @@ async function dispatchTask(io: TeamIo, input: Input): Promise<Answer> {
   if (io.publish) await io.publish(repo).catch(() => io.log('codex-team: dagr not published (publication failed)'))
 
   const lines = [
-    `agent: ${delivery.agent}${delivery.pane ? ` (pane ${delivery.pane})` : ''}${delivery.started ? ', started now' : delivery.existed ? delivery.status === 'not_sent' ? ', already live' : ', reused' : ', not started'}`,
-    `role: ${role}, model ${spec.model}, effort ${effort} (${source})${capped.reason ? `, ${capped.reason}` : ''}${delivery.existed ? ', not applied: reused agent keeps its start effort' : ''}`,
+    `agent: ${delivery.agent}${delivery.pane ? ` (pane ${delivery.pane})` : ''}${delivery.started ? ', started now' : delivery.existed ? ', previous agent found' : ', not started'}`,
+    assessed.choice
+      ? `role: ${role}, model ${assessed.choice.model}, effort ${assessed.choice.effort} (${assessed.choice.source})${assessed.capReason ? `, ${assessed.capReason}` : ''}, ${delivery.started ? 'applied at start' : 'not applied: agent not started'}`
+      : `role: ${role}, model and effort not selected: agent not started`,
     `delivery: ${delivery.status}${delivery.reason ? ` (${delivery.reason})` : ''}`,
     `report: ${report}`,
     `Herdr: ${delivery.effectiveAgent}`,

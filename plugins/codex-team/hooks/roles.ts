@@ -1,10 +1,14 @@
-// The team's roles as data: the model, effort, sandbox and instructions each Codex agent starts with. Pure.
+// The team's role defaults, permissions, instructions and agent names. Pure.
 
 export const ROLES = ['developer', 'analyst', 'architect', 'reviewer'] as const
 export type Role = (typeof ROLES)[number]
 
 export const EFFORTS = ['low', 'medium', 'high', 'xhigh'] as const
 export type Effort = (typeof EFFORTS)[number]
+
+export const MODELS = ['gpt-6.1-sol', 'gpt-6-luna'] as const
+export type Model = (typeof MODELS)[number]
+export type ProfilePair = { model: string; effort: Effort }
 
 const isAstra = (model: string): boolean => model.toLowerCase().includes('astra')
 
@@ -27,7 +31,7 @@ export type RoleSpec = {
 const REPORT_RULE =
   'When the task is done, or when you are blocked, write the report file named in the task, in the format it gives, and nothing else outside the task. '
 
-export const SPECS: Readonly<Record<Exclude<Role, 'reviewer'>, RoleSpec>> = {
+export const SPECS: Readonly<Record<Role, RoleSpec>> = {
   developer: {
     model: 'gpt-6.1-sol',
     effort: 'high',
@@ -55,6 +59,12 @@ export const SPECS: Readonly<Record<Exclude<Role, 'reviewer'>, RoleSpec>> = {
       'You never change the repository. ' +
       REPORT_RULE,
   },
+  reviewer: {
+    model: 'gpt-6.1-sol',
+    effort: 'high',
+    writes: false,
+    instructions: 'You are the reviewer of a team led by another agent. Review the recorded developer task against the complete uncommitted worktree and its AGENTS.md rules. Write only the named reviewer report; leave the repository untouched.',
+  },
 }
 
 /** Shared roles use their own names; task agents keep their name across followups. */
@@ -73,10 +83,10 @@ const toml = (value: string) => JSON.stringify(value)
  * instructions. `writableRoots` adds directories beyond the working directory (the reports directory, for the developer).
  * Codex keeps every `.git` read-only under this sandbox, so no role can commit.
  */
-export function codexArgs(spec: RoleSpec, effort: Effort, writableRoots: readonly string[]): string[] {
+export function codexArgs(spec: RoleSpec, profile: ProfilePair, writableRoots: readonly string[]): string[] {
   return [
-    '-m', spec.model,
-    '-c', `model_reasoning_effort=${toml(startEffort(spec.model, effort).effort)}`,
+    '-m', profile.model,
+    '-c', `model_reasoning_effort=${toml(startEffort(profile.model, profile.effort).effort)}`,
     '-c', 'service_tier="priority"',
     '-s', 'workspace-write',
     '-a', 'never',

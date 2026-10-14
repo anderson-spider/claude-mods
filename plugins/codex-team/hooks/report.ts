@@ -24,11 +24,12 @@ export function reportPath(root: string, repo: string, token: string, slug: stri
 }
 
 /** The prompt sent to the agent: the task, where it runs, and the report it must write. */
-export function brief(input: { role: Role; slug: string; repo: string; cwd: string; task: string; report: string }): string {
+export function brief(input: { role: Role; slug: string; repo: string; cwd: string; task: string; report: string; followup?: boolean }): string {
   return [
     `Task \`${input.slug}\` for the ${input.role}.`,
     `Repository: ${input.repo}. Your working directory: ${input.cwd}.`,
     '',
+    ...(input.role === 'developer' && input.followup ? [`This is a fresh session for a previously dispatched task: read your previous report at ${input.report} and inspect the git diff in your worktree before continuing.`] : []),
     input.task.trim(),
     '',
     `When you finish, or if you are blocked, write ${input.report} (create its directory if needed) in exactly this Markdown format, keeping it short:`,
