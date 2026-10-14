@@ -10,7 +10,7 @@
 import type { Effort, Model, Pair, Role } from './roles'
 
 // Tags each decision line so the stats compare Jev only under one policy: bump it whenever QUESTIONS, POLICY or the table change.
-export const CALIBRATION = 2
+export const CALIBRATION = 3
 
 export const DIMENSIONS = ['difficulty', 'duration'] as const
 export type Dimension = (typeof DIMENSIONS)[number]
@@ -21,10 +21,10 @@ export const QUESTIONS = {
     instructions: 'How hard is this task for a capable coding agent? Judge the work itself, not the length or detail of the brief: a long list of constraints, checks or acceptance criteria does not make a task harder.',
     criteria: ['Trivial: a one-line or purely mechanical change', 'Easy: small, well-understood change in one place', 'Moderate: needs some understanding of the surrounding code', 'Hard: subtle logic across several interacting parts, or a root cause still to be found', 'Expert: architecture, concurrency, security, or deep domain reasoning'],
   },
-  // On a coding agent's scale, not a person's: an agent finishes in minutes work that would take a person much longer.
+  // Human-expert time, the standard scale (the SWE-bench Verified buckets): Jev cannot estimate a coding agent's own time.
   duration: {
-    type: 'score', instructions: 'How long will a coding agent need to finish this task?',
-    criteria: ['Under 3 minutes', '3 to 10 minutes', '10 to 30 minutes', 'More than 30 minutes'],
+    type: 'score', instructions: 'How long would an experienced engineer who already knows this codebase need to finish this task?',
+    criteria: ['Under 15 minutes', '15 minutes to 1 hour', '1 to 4 hours', 'More than 4 hours'],
   },
 } as const
 
@@ -37,7 +37,7 @@ export const DIFFICULTIES = ['trivial', 'easy', 'moderate', 'hard', 'expert'] as
 export type Difficulty = (typeof DIFFICULTIES)[number]
 export const DURATION_GROUPS = ['short', 'medium', 'long'] as const
 export type DurationGroup = (typeof DURATION_GROUPS)[number]
-/** The group of each duration level 0..3 of the duration question: 0 and 1 are short, 2 medium, 3 long. */
+/** The group of each human-time level 0..3 of the duration question: 0 and 1 are short, 2 medium, 3 long. */
 export const GROUP_OF_DURATION: readonly DurationGroup[] = ['short', 'short', 'medium', 'long']
 
 /**
