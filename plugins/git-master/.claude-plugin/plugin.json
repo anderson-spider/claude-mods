@@ -1,8 +1,0 @@
-{
-  "name": "git-master",
-  "version": "0.1.0",
-  "description": "Registers git-master, a Haiku subagent for git work (status, branches, commits, rebase, push, pull and merge requests) that the session calls whenever a request is about git.",
-  "author": {
-    "name": "anderson-spider"
-  }
-}

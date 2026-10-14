@@ -6,9 +6,8 @@
 #   bootstrap.sh --only tailscale,chatgpt only those plugins
 #   bootstrap.sh --check             prints what it would do and checks the prerequisites; changes nothing
 #
-# The repository is private, so fetch it with the GitHub token of `gh`:
-#   curl -fsSL -H "Authorization: Bearer $(gh auth token)" -H 'Accept: application/vnd.github.raw' \
-#     https://api.github.com/repos/anderson-spider/claude-mods/contents/scripts/bootstrap.sh | sh
+# Run it straight from GitHub:
+#   curl -fsSL https://raw.githubusercontent.com/anderson-spider/claude-mods/main/scripts/bootstrap.sh | sh
 # Arguments go after `sh -s --`.
 #
 # Secrets are never handled here: set `apiKey` yourself with `claude plugin configure <plugin>`.
