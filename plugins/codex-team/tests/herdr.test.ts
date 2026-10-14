@@ -25,10 +25,10 @@ test('a new agent splits beside a live team agent, to the right and without focu
   expect(calls[1]).toEqual(['herdr', 'pane', 'split', '--pane', 'w1:p3', '--direction', 'right', '--cwd', '/r', '--no-focus'])
 })
 
-test('a live idle or done agent is reused: no pane, no start, only the prompt', async () => {
+test('a live idle or done task agent is reused: no pane, no start, only the prompt', async () => {
   for (const status of ['idle', 'done']) {
-    const { run, calls } = fakeRun([agents([{ name: 'analyst', pane_id: 'w1:p2', agent_status: status, cwd: '/r' }]), [['herdr', 'agent', 'prompt'], ok({})]])
-    expect(await deliver(run, input())).toEqual({ agent: 'analyst', pane: 'w1:p2', started: false, existed: true, status: 'confirmed' })
+    const { run, calls } = fakeRun([agents([{ name: 'analyst-fix', pane_id: 'w1:p2', agent_status: status, cwd: '/r' }]), [['herdr', 'agent', 'prompt'], ok({})]])
+    expect(await deliver(run, input({ name: 'analyst-fix' }))).toEqual({ agent: 'analyst-fix', pane: 'w1:p2', started: false, existed: true, status: 'confirmed' })
     expect(verbs(calls)).toEqual(['agent list', 'agent prompt'])
   }
 })
@@ -52,15 +52,15 @@ test('one writer per directory: a second developer in the same worktree is refus
 })
 
 test('a prompt the agent was seen taking is confirmed; refused before writing is not_sent; anything else is unknown and never resent', async () => {
-  const live = agents([{ name: 'analyst', pane_id: 'w1:p2', agent_status: 'idle' }])
+  const live = agents([{ name: 'analyst-fix', pane_id: 'w1:p2', agent_status: 'idle' }])
   for (const [answer, status] of [[fail('agent_blocked'), 'not_sent'], [fail('agent_not_found'), 'not_sent'], [fail('agent_prompt_stalled'), 'unknown'], [fail('timeout'), 'unknown']] as const) {
     const { run, calls } = fakeRun([live, [['herdr', 'agent', 'prompt'], answer]])
-    const delivered = await deliver(run, input())
+    const delivered = await deliver(run, input({ name: 'analyst-fix' }))
     expect(delivered.status).toBe(status)
     expect(calls.filter(call => call[2] === 'prompt')).toHaveLength(1)
   }
-  const thrown = await deliver(async argv => { if (argv[2] === 'prompt') throw new Error('gone'); return ok({ agents: [{ name: 'analyst', workspace_id: 'w1', pane_id: 'p', agent_status: 'idle' }] }) }, input())
-  expect(thrown).toEqual({ agent: 'analyst', pane: 'p', started: false, existed: true, status: 'unknown', reason: 'prompt call failed' })
+  const thrown = await deliver(async argv => { if (argv[2] === 'prompt') throw new Error('gone'); return ok({ agents: [{ name: 'analyst-fix', workspace_id: 'w1', pane_id: 'p', agent_status: 'idle' }] }) }, input({ name: 'analyst-fix' }))
+  expect(thrown).toEqual({ agent: 'analyst-fix', pane: 'p', started: false, existed: true, status: 'unknown', reason: 'prompt call failed' })
 })
 
 test('beforeSend runs once, after the agent is ready and before the prompt', async () => {
@@ -72,8 +72,8 @@ test('beforeSend runs once, after the agent is ready and before the prompt', asy
 
 test('beforeSend reports a reused agent as not started before the prompt', async () => {
   const order: string[] = []
-  const { run } = fakeRun([agents([{ name: 'analyst', pane_id: 'p', agent_status: 'idle' }]), [['herdr', 'agent', 'prompt'], () => (order.push('prompt'), ok({}))]])
-  await deliver(run, input({ beforeSend: async started => { expect(started).toBe(false); order.push('record') } }))
+  const { run } = fakeRun([agents([{ name: 'analyst-fix', pane_id: 'p', agent_status: 'idle' }]), [['herdr', 'agent', 'prompt'], () => (order.push('prompt'), ok({}))]])
+  await deliver(run, input({ name: 'analyst-fix', beforeSend: async started => { expect(started).toBe(false); order.push('record') } }))
   expect(order).toEqual(['record', 'prompt'])
 })
 

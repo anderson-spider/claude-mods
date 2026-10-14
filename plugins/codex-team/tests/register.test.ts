@@ -1,16 +1,39 @@
 import { expect, test } from 'claude-code/testing'
 import { dispatchWorld, id, started, world } from './host'
 import { JEV_MODEL } from '../hooks/effort'
+import { fakeRun, ok } from './fake-run'
 
 const DISPATCH = id('dispatch')
 
-test('session start registers the dispatch tool with its role, task, slug, cwd and effort', async ($, on) => {
+test('session start registers dispatch and finish with their typed input schemas', async ($, on) => {
   const { tools } = world(on)
 
-  expect(await started($, tools)).toEqual(['dispatch'])
+  expect(await started($, tools)).toEqual(['dispatch', 'finish'])
   const schema = tools[0]?.inputSchema as unknown as { properties: Record<string, unknown>; required: readonly string[] }
   expect(Object.keys(schema.properties).sort()).toEqual(['cwd', 'effort', 'role', 'slug', 'task'])
   expect([...schema.required].sort()).toEqual(['role', 'slug'])
+  expect(tools[1]?.inputSchema).toMatchObject({ type: 'object', properties: { agent: { type: 'string' } }, required: ['agent'] })
+})
+
+test('finish closes and archives through the host and logs only lifecycle metadata', async ($, on) => {
+  const uuid = '12345678-1234-1234-1234-123456789abc'
+  const agent = { name: 'analyst', agent: 'codex', workspace_id: 'w1', pane_id: 'worker', agent_status: 'done', agent_session: { kind: 'id', source: 'herdr:codex', value: uuid } }
+  let lists = 0
+  const fake = fakeRun([
+    [['herdr', 'agent', 'get'], ok({ agent })],
+    [['herdr', 'agent', 'list'], () => ok({ agents: ++lists === 1 ? [agent] : [] })],
+    [['herdr', 'pane', 'close'], ok({})], [['codex', 'archive'], ok({})],
+  ])
+  const w = dispatchWorld(on, 'test-key', undefined, fake.run)
+  await started($, w.tools)
+  const answer = await $.tool.call({ tool: id('finish'), agent: 'analyst' } as never)
+  expect(answer.result).toContain('closed: pane worker')
+  expect(answer.result).toContain('archived: yes')
+  expect(fake.calls[fake.calls.length - 1]).toEqual(['codex', 'archive', uuid])
+  expect(JSON.parse(w.writes[0]!)).toMatchObject({ action: 'finish', agent: 'analyst', uuid, closed: true, archived: true })
+  expect(w.requests).toEqual([])
+  expect(w.settings).toEqual([])
+  expect(w.envReads).toContain('HERDR_PANE_ID')
 })
 
 test('outside Herdr the tool call answers that the team cannot be used, through the host', async ($, on) => {

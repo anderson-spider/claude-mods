@@ -6,9 +6,6 @@ export type Role = (typeof ROLES)[number]
 export const EFFORTS = ['low', 'medium', 'high', 'xhigh'] as const
 export type Effort = (typeof EFFORTS)[number]
 
-/** Fast is Codex's priority service tier; unlisted models stay on their default tier. */
-export const FAST_MODELS = ['gpt-6-luna', 'gpt-6.1-sol'] as const
-
 const isAstra = (model: string): boolean => model.toLowerCase().includes('astra')
 
 /** The startup limit applies after any pinned, Jev or default choice, so flags and decision records agree. */
@@ -17,12 +14,6 @@ export function startEffort(model: string, effort: Effort): { effort: Effort; re
     return { effort: 'high', reason: 'capped at high: gpt-6-astra never runs above high' }
   }
   return { effort, reason: null }
-}
-
-function fastCapable(model: string): boolean {
-  // Astra must never use Fast, even if a future model is accidentally added to the allowlist.
-  if (isAstra(model)) return false
-  return FAST_MODELS.some(allowed => allowed === model)
 }
 
 export type RoleSpec = {
@@ -66,7 +57,7 @@ export const SPECS: Readonly<Record<Exclude<Role, 'reviewer'>, RoleSpec>> = {
   },
 }
 
-/** An agent name Herdr accepts (`[a-z][a-z0-9_-]{0,31}`): the role's own for the reusable roles, `dev-<slug>` per task for the developer. */
+/** Shared roles use their own names; task agents keep their name across followups. */
 export function agentName(role: Role, slug: string): string {
   return role === 'developer' ? `dev-${slug}` : role === 'reviewer' ? `architect-${slug}` : role
 }
@@ -86,7 +77,7 @@ export function codexArgs(spec: RoleSpec, effort: Effort, writableRoots: readonl
   return [
     '-m', spec.model,
     '-c', `model_reasoning_effort=${toml(startEffort(spec.model, effort).effort)}`,
-    ...(fastCapable(spec.model) ? ['-c', 'service_tier="priority"'] : []),
+    '-c', 'service_tier="priority"',
     '-s', 'workspace-write',
     '-a', 'never',
     '-c', 'sandbox_workspace_write.network_access=true',
