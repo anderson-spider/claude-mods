@@ -80,7 +80,7 @@ test('the questions judge the work itself and ask for human-expert time, not the
   // Human-expert time, the SWE-bench Verified buckets: Jev cannot estimate a coding agent's own time.
   expect(QUESTIONS.duration.instructions).toBe('How long would an experienced engineer who already knows this codebase need to finish this task?')
   expect(QUESTIONS.duration.criteria).toEqual(['Under 15 minutes: a mechanical edit or a one-line fix', '15 minutes to 1 hour: a small change in one or two files with its tests', '1 to 4 hours: a feature or fix across several files, with tests and docs', 'More than 4 hours: a new subsystem, a migration, or an investigation with no known cause'])
-  expect(POLICY).toEqual({ under: 1.25, over: 1 })
+  expect(POLICY).toEqual({ under: 1, over: 1.25 })
 })
 
 test('the questions match the levels and the prices are the October 2026 list prices', () => {
@@ -94,9 +94,9 @@ test('the questions match the levels and the prices are the October 2026 list pr
   })
 })
 
-test('the calibration that tags each decision line is 3', () => {
+test('the calibration that tags each decision line is 4', () => {
   // Bump it with any change to QUESTIONS, POLICY or ROUTES; the stats judge Jev only under the current one.
-  expect(CALIBRATION).toBe(3)
+  expect(CALIBRATION).toBe(4)
 })
 
 test('the judge asks three yes/no questions about report.text, one flaw each, and a run is short below 0.5 finished or above 0.5 on a flaw', () => {
@@ -111,7 +111,7 @@ test('the judge asks three yes/no questions about report.text, one flaw each, an
   expect(judgedShort({ finished: 0.49, failingChecks: 0, blocked: 0 })).toBe(true)
   expect(judgedShort({ finished: 1, failingChecks: 0.51, blocked: 0 })).toBe(true)
   expect(judgedShort({ finished: 1, failingChecks: 0, blocked: 0.51 })).toBe(true)
-  // The judge does not route: its questions are not routing questions and leave the calibration at 3.
+  // The judge does not route: its questions are not routing questions and leave the calibration as it is.
   for (const flag of JUDGE_FLAGS) expect(Object.keys(QUESTIONS)).not.toContain(flag)
-  expect(CALIBRATION).toBe(3)
+  expect(CALIBRATION).toBe(4)
 })

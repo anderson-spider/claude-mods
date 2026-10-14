@@ -11,7 +11,7 @@
 import type { Effort, Model, Pair, Role } from './roles'
 
 // Tags each decision line so the stats compare Jev only under one policy: bump it whenever QUESTIONS, POLICY or the table change.
-export const CALIBRATION = 3
+export const CALIBRATION = 4
 
 export const DIMENSIONS = ['difficulty', 'duration'] as const
 export type Dimension = (typeof DIMENSIONS)[number]
@@ -29,9 +29,9 @@ export const QUESTIONS = {
   },
 } as const
 
-// Policy, not a measurement: a task that needs more than the pair gives costs 1.25 times what spare capacity does, so the
-// lower of two adjacent levels wins once it holds at least 5/9 (about 56%) of their weight.
-export const POLICY = { under: 1.25, over: 1 } as const
+// Policy, not a measurement: spending matters more than headroom, so spare capacity costs 1.25 times what missing capacity
+// does, and the higher of two adjacent levels wins only once it holds more than 5/9 (about 56%) of their weight.
+export const POLICY = { under: 1, over: 1.25 } as const
 
 /** Difficulty levels 0..4, in the order of the difficulty question's criteria. */
 export const DIFFICULTIES = ['trivial', 'easy', 'moderate', 'hard', 'expert'] as const
