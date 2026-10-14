@@ -74,6 +74,20 @@ test('line comments on the diff at the MR head, with both paths of a renamed fil
   await expect(comment(ctx, { action: 'line', iid: 7, path: 'a.ts', body: 'x' })).rejects.toThrow(/needs line/)
 })
 
+test('line finds a renamed file past the first page of the diff', async () => {
+  const filler = Array.from({ length: 100 }, (_, i) => ({ old_path: `f${i}.ts`, new_path: `f${i}.ts` }))
+  const { ctx, calls } = fakeCtx({
+    'GET /merge_requests/7': MR,
+    'GET /merge_requests/7/diffs': (c) => (c.query?.page === 1 ? filler : [{ old_path: 'src/old.ts', new_path: 'src/a.ts' }]),
+    'POST /merge_requests/7/discussions': { id: 'ee', notes: [{ id: 12, body: 'x' }] },
+  })
+
+  await comment(ctx, { action: 'line', iid: 7, path: 'src/a.ts', line: 3, body: 'x' })
+
+  expect(calls.filter((c) => c.path.endsWith('/diffs')).map((c) => c.query?.page)).toEqual([1, 2])
+  expect((calls.at(-1)?.body?.position as { old_path: string }).old_path).toBe('src/old.ts')
+})
+
 test('a discussion id that is not hex, a missing body and an unknown action are refused before any write', async () => {
   const { ctx, calls } = fakeCtx({})
   await expect(comment(ctx, { action: 'resolve', iid: 7, discussionId: '../../x' })).rejects.toThrow('discussionId is not a GitLab discussion id.')

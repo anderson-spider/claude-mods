@@ -33,6 +33,8 @@ export function discussionView(d: Discussion): Record<string, unknown> | undefin
 }
 
 const DISCUSSION = /^[0-9a-f]{1,64}$/i
+/** At most this many pages of 100 files are read to find a renamed file's paths. */
+const DIFF_PAGES = 50
 
 function discussionId(value: unknown): string {
   const d = need(str(value), 'This action needs discussionId (from list).')
@@ -44,15 +46,21 @@ const body = (input: CommentInput) => need(str(input.body), 'This action needs a
 
 /** The file's paths before and after the change: a renamed file has two, and GitLab needs both. Either may be given. */
 async function diffPaths(ctx: Ctx, iid: number, path: string): Promise<{ old_path: string; new_path: string }> {
-  let diffs: { old_path: string; new_path: string }[] = []
-  try {
-    diffs = (await ctx.api.get(`/merge_requests/${iid}/diffs`, { per_page: 100 })) as typeof diffs
-  } catch (err) {
-    // an instance older than /diffs (GitLab 15.7): the path given serves as both
-    if (!(err instanceof GitlabError) || err.status !== 404) throw err
+  // the diff is paged: read pages until the file shows up or a short page ends the list
+  for (let page = 1; page <= DIFF_PAGES; page++) {
+    let diffs: { old_path: string; new_path: string }[]
+    try {
+      diffs = (await ctx.api.get(`/merge_requests/${iid}/diffs`, { per_page: 100, page })) as typeof diffs
+    } catch (err) {
+      // an instance older than /diffs (GitLab 15.7): the path given serves as both
+      if (err instanceof GitlabError && err.status === 404) break
+      throw err
+    }
+    const file = diffs.find((d) => d.new_path === path) ?? diffs.find((d) => d.old_path === path)
+    if (file) return { old_path: file.old_path, new_path: file.new_path }
+    if (diffs.length < 100) break
   }
-  const file = diffs.find((d) => d.new_path === path) ?? diffs.find((d) => d.old_path === path)
-  return file ? { old_path: file.old_path, new_path: file.new_path } : { old_path: path, new_path: path }
+  return { old_path: path, new_path: path }
 }
 
 async function line(ctx: Ctx, iid: number, input: CommentInput): Promise<string> {
