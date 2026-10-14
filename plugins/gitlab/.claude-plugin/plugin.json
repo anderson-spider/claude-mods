@@ -1,0 +1,16 @@
+{
+  "name": "gitlab",
+  "version": "0.1.0",
+  "description": "Work on GitLab merge requests and pipelines of the current repository, picking the host and token from its git remote.",
+  "author": {
+    "name": "anderson-spider"
+  },
+  "userConfig": {
+    "tokens": {
+      "type": "string",
+      "title": "GitLab tokens",
+      "description": "host=token pairs separated by commas, one per GitLab you use (gitlab.com=glpat-..., gitlab.example.com=glpat-...). Each token is sent only to its own host, picked from the repository's git remote. Needs the api scope; leave it out of repository settings, which would make the plugin refuse it.",
+      "sensitive": true
+    }
+  }
+}
