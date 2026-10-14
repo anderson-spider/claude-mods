@@ -20,10 +20,10 @@ export function ports() {
   return { io, requests, logs, settingsReads, faults, answers }
 }
 
-export function world(on: On, provider = 'spider-team') {
+export function world(on: On) {
   const p = ports(), specs: AgentSpec[] = [], env: Record<string, string> = { HOME: '/home/u' }
   mock.clock(on)
-  on('agent.register', (_$, e) => { specs.push(e); return { value: { agent: `${provider}:${e.name}` } } })
+  on('agent.register', (_$, e) => { specs.push(e); return { value: { agent: `spider-team:${e.name}` } } })
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('session.root', () => ({ value: p.io.root }))
   on('env.get', (_$, e) => ({ value: env[e.name] }))
@@ -36,3 +36,13 @@ export async function started($: { session: { start: (e: never) => Promise<unkno
   await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true } as never)
 }
 export const call = (role = 'analyst', patch = {}) => ({ tool: 'Agent', tool_use_id: 'dispatch-1', description: 'Fixture', subagent_type: `spider-team:${role}`, prompt: 'Private task', ...patch })
+// The native path after dispatch: the host spawns the subagent under its provider, then runs its turns.
+export const MARKETPLACE = { plugin: 'spider-team@spider-claude-mods', tier: 'user' }
+export const spawn = (tool_use_id: string, subagentType: string, model: string, provider = MARKETPLACE) => ({ tool_use_id, prompt: 'Private task', description: 'Fixture', subagentType, provider, model, parentModel: 'opus', background: false, fork: false })
+export const step = (agentId: string, model: string, effort: string) => ({ agentId, turnId: agentId, index: 0, messageCount: 1, model, effort })
+export const inference = async function* (_$: unknown, e: { turnId: string; index: number }) {
+  return { turnId: e.turnId, index: e.index, answer: 'native answer', toolUses: [], stopReason: 'end_turn' as const, usage: null }
+}
+export async function drain(stream: AsyncGenerator<unknown, { answer: string }, unknown>) {
+  for (;;) { const r = await stream.next(); if (r.done) return r.value }
+}
