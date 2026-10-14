@@ -150,10 +150,10 @@ export const register: Register = on => {
     void observe($, async () => { await update($, card, current => switched(current, e.cache_ttl, e.from_model, e.to_model)) })
     return result
   })
-  // A compaction marks the turn it comes before (or during) in the history; the event passes unchanged.
+  // A main-session compaction marks the turn it comes before (or during) in the history; a subagent's (`agent_id`) does not; the event passes unchanged.
   on('classic.PostCompact', async ($, e, next) => {
     const result = await next(e)
-    void observe($, async () => { await update($, card, current => compactedNow(current)) })
+    if (e.agent_id === undefined) void observe($, async () => { await update($, card, current => compactedNow(current)) })
     return result
   })
   // A theme change repaints the card; the change itself is the person's and passes unchanged.
