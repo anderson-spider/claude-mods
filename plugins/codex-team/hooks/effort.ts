@@ -91,7 +91,7 @@ export function penalty(point: Levels, dists: Distributions): number {
     pen + p * (under * Math.max(0, Number(level) - point[dim] - tolerance) + over * Math.max(0, point[dim] - Number(level) - tolerance)), 0)), 0))
 }
 
-export function choose(role: Role, dists: Distributions): Effort {
+export function choose(role: Exclude<Role, 'reviewer'>, dists: Distributions): Effort {
   const candidates = POLICY.candidates[role === 'analyst' ? 'luna' : 'sol']
   let best: Effort = candidates[0].effort
   let lowest = Infinity
@@ -105,7 +105,7 @@ export function choose(role: Role, dists: Distributions): Effort {
 
 export type EffortIo = KeyIo & { jev: JevIo; breaker: Breaker; gate: Gate; log: (text: string) => void }
 
-export async function assessEffort(io: EffortIo, call: { role: Role; task: string; key?: string; home: string; root: string; pinned?: Effort }): Promise<EffortChoice> {
+export async function assessEffort(io: EffortIo, call: { role: Exclude<Role, 'reviewer'>; task: string; key?: string; home: string; root: string; pinned?: Effort }): Promise<EffortChoice> {
   const base = { jevModel: JEV_MODEL, expected: null, jevReason: null } as const
   if (call.pinned !== undefined) return { ...base, effort: call.pinned, source: 'pinned' }
   const fallback = (jevReason: JevReason): EffortChoice => {

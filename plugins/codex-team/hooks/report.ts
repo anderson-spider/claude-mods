@@ -3,6 +3,19 @@ import type { Role } from './roles'
 
 /** The report's fields, in order: the lead reads only this file. */
 export const REPORT_FIELDS = ['status', 'summary', 'files', 'checks', 'blockers', 'questions', 'drafts'] as const
+export const REVIEW_FIELDS = ['verdict', 'risk', 'findings', 'checks'] as const
+
+/** The reviewer gets the recorded developer task and worktree, never caller-supplied replacements. */
+export function reviewTask(input: { cwd: string; task: string; report: string }, focus?: string): string {
+  return [
+    `Review the developer's worktree: ${input.cwd}.`,
+    `Original task:\n${input.task}`,
+    `Developer report: ${input.report}`,
+    'Read the repository AGENTS.md and any applicable nested rules. Review `git status --short`, `git diff`, `git diff --staged` and every untracked file against the original task and those rules.',
+    'Report concrete failure scenarios with file and line references and a fix. Use accept when there are no actionable findings and leave the findings list empty then. Write only the reviewer report; leave the worktree untouched.',
+    ...(focus?.trim() ? [`Additional review focus:\n${focus.trim()}`] : []),
+  ].join('\n\n')
+}
 
 /** `<reports root>/<repository name>/<slug>-<role>.md`. */
 export function reportPath(root: string, repo: string, slug: string, role: Role): string {
@@ -21,13 +34,21 @@ export function brief(input: { role: Role; slug: string; repo: string; cwd: stri
     `When you finish, or if you are blocked, write ${input.report} (create its directory if needed) in exactly this Markdown format, keeping it short:`,
     '',
     '```',
-    'status: done | blocked | partial',
-    'summary: at most five lines',
-    'files: the paths you changed, one per line, or none',
-    'checks: each command you ran and its result (pass or fail), one per line',
-    'blockers: what stops you, or none',
-    'questions: what the lead must decide, or none',
-    'drafts: text for the developer to apply (analyst only), or none',
+    ...(input.role === 'reviewer' ? [
+      'verdict: accept | changes_needed',
+      'risk: low | high',
+      'findings:',
+      '- <severity> <file>:<line> <failure scenario> -> <fix>',
+      'checks: each command you ran and its result (pass or fail), one per line',
+    ] : [
+      'status: done | blocked | partial',
+      'summary: at most five lines',
+      'files: the paths you changed, one per line, or none',
+      'checks: each command you ran and its result (pass or fail), one per line',
+      'blockers: what stops you, or none',
+      'questions: what the lead must decide, or none',
+      'drafts: text for the developer to apply (analyst only), or none',
+    ]),
     '```',
     '',
     'Then stop and wait for the next task.',

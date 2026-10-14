@@ -4,8 +4,8 @@ export {}
 declare module 'claude-code' {
   interface McpToolInputs {
     'mcp__codex-team__dispatch': {
-      role: 'developer' | 'analyst' | 'architect'
-      task: string
+      role: 'developer' | 'analyst' | 'architect' | 'reviewer'
+      task?: string
       slug: string
       cwd?: string
       effort?: 'low' | 'medium' | 'high' | 'xhigh'

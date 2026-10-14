@@ -5,7 +5,7 @@ import type { PromptStatus } from './herdr'
 import type { JevReason, Levels } from './effort'
 
 /** Where the effort came from: Jev, the role's default, or the call's own `effort`. */
-export type EffortSource = 'jev' | 'default' | 'pinned'
+export type EffortSource = 'jev' | 'default' | 'pinned' | 'review-policy'
 
 export type DecisionRecord = {
   v: 2

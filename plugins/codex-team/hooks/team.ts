@@ -2,11 +2,11 @@
 // decision. Pure: every host access is injected.
 import { saveDecision, fnv1a } from './decisions'
 import type { DecisionRecord } from './decisions'
-import { assessEffort } from './effort'
+import { assessEffort, JEV_MODEL } from './effort'
 import type { EffortIo } from './effort'
-import { deliver } from './herdr'
+import { deliver, listAgents } from './herdr'
 import type { Delivery, Run } from './herdr'
-import { brief, reportPath } from './report'
+import { brief, reportPath, reviewTask } from './report'
 import { EFFORTS, ROLES, SLUG, SPECS, agentName, codexArgs, startEffort } from './roles'
 import type { Effort, Role } from './roles'
 
@@ -19,6 +19,8 @@ export type TeamIo = EffortIo & {
   now: () => Promise<number>
   write: (path: string, text: string) => Promise<void>
   log: (text: string) => void
+  store: { get: (key: string) => Promise<unknown>; set: (key: string, value: unknown) => Promise<void>; delete: (key: string) => Promise<void> }
+  publish?: (root: string) => Promise<void>
 }
 
 export const NOT_IN_HERDR = 'codex-team can only be used inside a Herdr pane (HERDR_ENV=1); nothing was started.'
@@ -26,6 +28,14 @@ export const NOT_IN_HERDR = 'codex-team can only be used inside a Herdr pane (HE
 export type Answer = { ok: boolean; text: string }
 
 const refuse = (text: string): Answer => ({ ok: false, text: `codex-team: ${text}` })
+
+type DeveloperTask = { cwd: string; task: string }
+function developerTask(value: unknown): DeveloperTask | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const record = value as Partial<DeveloperTask>
+  return typeof record.cwd === 'string' && record.cwd.startsWith('/') && typeof record.task === 'string'
+    ? { cwd: record.cwd, task: record.task } : undefined
+}
 
 /** The developer's directory: a git worktree other than the repository itself. */
 async function developerDir(io: TeamIo, repo: string, cwd: unknown): Promise<{ cwd: string } | string> {
@@ -37,8 +47,17 @@ async function developerDir(io: TeamIo, repo: string, cwd: unknown): Promise<{ c
   return { cwd: toplevel }
 }
 
-/** Answers one `dispatch` call. Never throws: every failure is the answer's text. */
-export async function dispatch(io: TeamIo, input: { role?: unknown; task?: unknown; slug?: unknown; cwd?: unknown; effort?: unknown }): Promise<Answer> {
+type Input = { role?: unknown; task?: unknown; slug?: unknown; cwd?: unknown; effort?: unknown }
+let dispatchQueue: Promise<void> = Promise.resolve()
+
+/** One queue for the entire plugin: context reads and all delivery effects run without interleaving. */
+export function dispatch(io: TeamIo, input: Input): Promise<Answer> {
+  const result = dispatchQueue.then(() => dispatchTask(io, input))
+  dispatchQueue = result.then(() => undefined, () => undefined)
+  return result
+}
+
+async function dispatchTask(io: TeamIo, input: Input): Promise<Answer> {
   const env = await io.env().catch(() => ({}) as Awaited<ReturnType<TeamIo['env']>>)
   if (env.HERDR_ENV !== '1') return { ok: false, text: NOT_IN_HERDR }
   const workspace = env.HERDR_WORKSPACE_ID
@@ -46,8 +65,9 @@ export async function dispatch(io: TeamIo, input: { role?: unknown; task?: unkno
 
   const role = ROLES.find(r => r === input.role)
   if (!role) return refuse(`role must be one of ${ROLES.join(', ')}`)
-  if (typeof input.task !== 'string' || !input.task.trim()) return refuse('task is empty')
-  if (typeof input.slug !== 'string' || !SLUG.test(input.slug)) return refuse('slug must be lowercase letters, digits and hyphens, starting with a letter, at most 28 characters')
+  if (role !== 'reviewer' && (typeof input.task !== 'string' || !input.task.trim())) return refuse('task is empty')
+  if (input.task !== undefined && typeof input.task !== 'string') return refuse('task must be text')
+  if (typeof input.slug !== 'string' || !SLUG.test(input.slug)) return refuse('slug must be lowercase letters, digits and hyphens, starting with a letter, at most 22 characters')
   if (input.effort !== undefined && !EFFORTS.includes(input.effort as Effort)) return refuse(`effort must be one of ${EFFORTS.join(', ')}`)
 
   const home = env.HOME
@@ -55,20 +75,37 @@ export async function dispatch(io: TeamIo, input: { role?: unknown; task?: unkno
   const repo = (await io.root()).replace(/\/+$/, '')
   const reports = `${home.replace(/\/+$/, '')}/.claude/codex-team/reports`
   const report = reportPath(reports, repo, input.slug, role)
+  const key = `developer:${repo}:${input.slug}`
+  const original = role === 'developer' || role === 'reviewer' ? developerTask(await io.store.get(key)) : undefined
+  let task = (input.task as string | undefined) ?? ''
+  if (role === 'reviewer') {
+    if (!original) return refuse('delivery: not_sent (no developer was dispatched for this slug)')
+    const agents = await listAgents(io.run)
+    if (typeof agents === 'string') return refuse(`delivery: not_sent (${agents})`)
+    const dev = agents.find(agent => agent.name === `dev-${input.slug}`)
+    if (dev && ['working', 'blocked'].includes(dev.agent_status ?? '')) return refuse(`delivery: not_sent (dev-${input.slug} is ${dev.agent_status})`)
+    task = reviewTask({ ...original, report: reportPath(reports, repo, input.slug, 'developer') }, task)
+  }
   const made = await io.run(['mkdir', '-p', report.slice(0, report.lastIndexOf('/'))])
   if (made.exitCode !== 0) return refuse('the reports directory could not be created')
 
-  const spec = SPECS[role]
+  const spec = role === 'reviewer' ? {
+    ...SPECS.architect,
+    instructions: 'You are the reviewer of a team led by another agent. Review the recorded developer task against the complete uncommitted worktree and its AGENTS.md rules. Write only the named reviewer report; leave the repository untouched.',
+  } : SPECS[role]
   let cwd = reports
   let roots: string[] = []
   if (spec.writes) {
     const dir = await developerDir(io, repo, input.cwd)
     if (typeof dir === 'string') return refuse(dir)
     cwd = dir.cwd
+    if (original && original.cwd !== cwd) return refuse('this slug was dispatched in another worktree; use a new slug')
     roots = [reports]
   }
 
-  const selected = await assessEffort(io, { role, task: input.task, key: env.JEV_API_KEY, home, root: repo, pinned: input.effort as Effort | undefined })
+  const selected = role === 'reviewer'
+    ? { effort: 'xhigh' as const, source: 'review-policy' as const, jevModel: JEV_MODEL, expected: null, jevReason: null }
+    : await assessEffort(io, { role, task, key: env.JEV_API_KEY, home, root: repo, pinned: input.effort as Effort | undefined })
   const capped = startEffort(spec.model, selected.effort)
   const choice = { ...selected, effort: capped.effort }
   const { effort, source } = choice
@@ -76,27 +113,39 @@ export async function dispatch(io: TeamIo, input: { role?: unknown; task?: unkno
   const started = await io.now()
   const ts = new Date(started).toISOString()
   const record = (delivery: Delivery, at: number): DecisionRecord => ({
-    v: 2, ts, role, agent: name, model: spec.model, ...choice, taskHash: fnv1a(input.task as string),
+    v: 2, ts, role, agent: delivery.agent, model: spec.model, ...choice, taskHash: fnv1a(task),
     effortApplied: delivery.started,
     started: delivery.started, promptStatus: delivery.status, reason: delivery.reason ?? null, durationMs: Math.max(0, at - started),
   })
 
+  let createdRecord = false
   const delivery = await deliver(io.run, {
     name,
+    analystSlug: role === 'analyst' ? input.slug : undefined,
+    reviewDeveloper: role === 'reviewer' ? `dev-${input.slug}` : undefined,
     writes: spec.writes,
     workspace,
     cwd,
     codexArgs: codexArgs(spec, effort, roots),
-    prompt: brief({ role, slug: input.slug, repo, cwd, task: input.task, report }),
+    prompt: brief({ role, slug: input.slug, repo: role === 'reviewer' ? original!.cwd : repo, cwd, task, report }),
     // `unknown` is on disk before the prompt can reach the agent, so a crash never leaves a sent task unrecorded.
-    beforeSend: async started => {
-      await saveDecision(io, home, record({ agent: name, started, existed: !started, status: 'unknown' }, await io.now()))
+    beforeSend: async (started, agent) => {
+      if (role === 'developer' && !original) {
+        await io.store.set(key, { cwd, task })
+        createdRecord = true
+      }
+      await saveDecision(io, home, record({ agent, started, existed: !started, status: 'unknown' }, await io.now()))
     },
+  }).catch(async error => {
+    if (createdRecord) await io.store.delete(key)
+    throw error
   })
+  if (createdRecord && delivery.status === 'not_sent') await io.store.delete(key)
   await saveDecision(io, home, record(delivery, await io.now()))
+  if (io.publish) await io.publish(repo).catch(() => io.log('codex-team: dagr not published (publication failed)'))
 
   const lines = [
-    `agent: ${delivery.agent}${delivery.pane ? ` (pane ${delivery.pane})` : ''}${delivery.started ? ', started now' : delivery.existed ? ', reused' : ', not started'}`,
+    `agent: ${delivery.agent}${delivery.pane ? ` (pane ${delivery.pane})` : ''}${delivery.started ? ', started now' : delivery.existed ? delivery.status === 'not_sent' ? ', already live' : ', reused' : ', not started'}`,
     `role: ${role}, model ${spec.model}, effort ${effort} (${source})${capped.reason ? `, ${capped.reason}` : ''}${delivery.existed ? ', not applied: reused agent keeps its start effort' : ''}`,
     `delivery: ${delivery.status}${delivery.reason ? ` (${delivery.reason})` : ''}`,
     `report: ${report}`,

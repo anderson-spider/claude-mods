@@ -18,4 +18,4 @@ export function fakeRun(rules: Rule[]): { run: Run; calls: string[][] } {
   return { run, calls }
 }
 
-export const agents = (list: unknown[]): Rule => [['herdr', 'agent', 'list'], ok({ agents: list })]
+export const agents = (list: unknown[]): Rule => [['herdr', 'agent', 'list'], ok({ agents: list.map(agent => ({ workspace_id: 'w1', ...(agent as Record<string, unknown>) })) })]

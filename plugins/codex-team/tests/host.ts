@@ -35,11 +35,15 @@ export function dispatchWorld(on: On, key: string, declared?: 'project' | 'local
   const writes: string[] = []
   const logs: string[] = []
   const { run, calls } = fakeRun([
-    [['mkdir'], text('')], agents([]),
+    [['mkdir'], text('')], [['dagr', '--version'], text('dagr 0.3.1')], agents([]),
     [['herdr', 'tab', 'create'], ok({ root_pane: { pane_id: 'w1:p1' } })],
     [['herdr', 'agent', 'start'], ok({})], [['herdr', 'agent', 'prompt'], ok({})],
   ])
   mock.clock(on)
+  const tasks = new Map<string, unknown>()
+  on('store.get', (_$, e) => ({ value: tasks.get(e.key) }))
+  on('store.delete', (_$, e) => { tasks.delete(e.key); return { value: undefined } })
+  on('store.set', (_$, e) => { tasks.set(e.key, e.value); return { value: undefined } })
   on('env.get', (_$, e) => {
     envReads.push(e.name)
     const env: Record<string, string> = { HOME: '/home/u', HERDR_ENV: '1', HERDR_WORKSPACE_ID: 'w1', JEV_API_KEY: key }
@@ -57,6 +61,7 @@ export function dispatchWorld(on: On, key: string, declared?: 'project' | 'local
     } }) } }
   })
   on('process.run', async (_$, e) => ({ value: { ...await run(e.argv), isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('fs.exists', () => ({ value: false }))
   on('fs.write', (_$, e) => { writes.push(e.text); return { value: undefined } })
   on('ui.log', (_$, e) => { logs.push(e.text); return { value: undefined } })
   return { tools, calls, envReads, settings, requests, writes, logs }

@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { codexArgs, FAST_MODELS, SPECS } from '../hooks/roles'
+import { agentName, codexArgs, FAST_MODELS, SLUG, SPECS } from '../hooks/roles'
 
 test('every fast-capable role starts with the priority service tier', () => {
   expect(FAST_MODELS).toEqual(['gpt-6-luna', 'gpt-6.1-sol'])
@@ -36,4 +36,11 @@ test('astra caps xhigh at high without a service tier and other models retain th
     }
     expect(codexArgs(base, 'xhigh', [])).toContain('model_reasoning_effort="xhigh"')
   }
+})
+
+test('task slugs stop at 22 characters without truncation and reviewers use the architect name', () => {
+  expect(SLUG.test('s'.repeat(22))).toBe(true)
+  expect(SLUG.test('s'.repeat(23))).toBe(false)
+  expect(agentName('reviewer', 's'.repeat(22))).toHaveLength(32)
+  expect(agentName('reviewer', 'fix')).toBe('architect-fix')
 })

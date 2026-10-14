@@ -19,10 +19,10 @@ test('with no team agent alive, the first agent starts in a new team tab without
 })
 
 test('a new agent splits beside a live team agent, to the right and without focus', async () => {
-  const { run, calls } = fakeRun([agents([{ name: 'architect', pane_id: 'w2:p3' }]), [['herdr', 'pane', 'split'], ok({ pane: { pane_id: 'w2:p4' } })], [['herdr', 'agent', 'start'], ok({})], [['herdr', 'agent', 'prompt'], ok({})]])
+  const { run, calls } = fakeRun([agents([{ name: 'architect', pane_id: 'w1:p3' }]), [['herdr', 'pane', 'split'], ok({ pane: { pane_id: 'w1:p4' } })], [['herdr', 'agent', 'start'], ok({})], [['herdr', 'agent', 'prompt'], ok({})]])
 
-  expect((await deliver(run, input())).pane).toBe('w2:p4')
-  expect(calls[1]).toEqual(['herdr', 'pane', 'split', '--pane', 'w2:p3', '--direction', 'right', '--cwd', '/r', '--no-focus'])
+  expect((await deliver(run, input())).pane).toBe('w1:p4')
+  expect(calls[1]).toEqual(['herdr', 'pane', 'split', '--pane', 'w1:p3', '--direction', 'right', '--cwd', '/r', '--no-focus'])
 })
 
 test('a live idle or done agent is reused: no pane, no start, only the prompt', async () => {
@@ -59,7 +59,7 @@ test('a prompt the agent was seen taking is confirmed; refused before writing is
     expect(delivered.status).toBe(status)
     expect(calls.filter(call => call[2] === 'prompt')).toHaveLength(1)
   }
-  const thrown = await deliver(async argv => { if (argv[2] === 'prompt') throw new Error('gone'); return ok({ agents: [{ name: 'analyst', pane_id: 'p', agent_status: 'idle' }] }) }, input())
+  const thrown = await deliver(async argv => { if (argv[2] === 'prompt') throw new Error('gone'); return ok({ agents: [{ name: 'analyst', workspace_id: 'w1', pane_id: 'p', agent_status: 'idle' }] }) }, input())
   expect(thrown).toEqual({ agent: 'analyst', pane: 'p', started: false, existed: true, status: 'unknown', reason: 'prompt call failed' })
 })
 
@@ -100,4 +100,57 @@ test('errors keep only a Herdr code, never the message text', () => {
 test('the team is the analyst, the architect and every dev-<slug>', () => {
   expect(['analyst', 'architect', 'dev-x'].every(isTeamName)).toBe(true)
   expect(['claude', 'implementer', undefined, 'developer'].some(isTeamName)).toBe(false)
+})
+
+test('task tabs anchor only to live agents of the same slug and shared roles stay in the home tab', async () => {
+  const list = agents([
+    { name: 'analyst', pane_id: 'home' }, { name: 'dev-other', pane_id: 'other' },
+    { name: 'analyst-fix', pane_id: 'fix' },
+  ])
+  for (const name of ['dev-fix', 'architect-fix']) {
+    const w = fakeRun([list, [['herdr', 'pane', 'split'], ok({ pane: { pane_id: 'new' } })], [['herdr', 'agent', 'start'], ok({})], [['herdr', 'agent', 'prompt'], ok({})]])
+    await deliver(w.run, input({ name }))
+    expect(w.calls[1]).toContain('fix')
+    expect(w.calls[1]).toContain('--no-focus')
+  }
+  const w = fakeRun([list, [['herdr', 'pane', 'split'], ok({ pane: { pane_id: 'new' } })], [['herdr', 'agent', 'start'], ok({})], [['herdr', 'agent', 'prompt'], ok({})]])
+  await deliver(w.run, input({ name: 'architect' }))
+  expect(w.calls[1]).toContain('home')
+})
+
+test('a task without live peers creates its own tab even when other team agents are live', async () => {
+  const w = fakeRun([agents([{ name: 'architect', pane_id: 'home' }, { name: 'dev-other', pane_id: 'other' }]),
+    [['herdr', 'tab', 'create'], ok({ root_pane: { pane_id: 'new' } })], [['herdr', 'agent', 'start'], ok({})], [['herdr', 'agent', 'prompt'], ok({})]])
+  await deliver(w.run, input({ name: 'dev-fix', writes: true }))
+  expect(w.calls[1]).toContain('codex · fix')
+  expect(w.calls[1]).toContain('--no-focus')
+})
+
+test('a busy or blocked shared analyst falls back to the task analyst and reuses its live pane', async () => {
+  for (const status of ['working', 'blocked']) {
+    const w = fakeRun([agents([{ name: 'analyst', pane_id: 'home', agent_status: status }, { name: 'analyst-fix', pane_id: 'fix', agent_status: 'done' }]), [['herdr', 'agent', 'prompt'], ok({})]])
+    expect(await deliver(w.run, input({ analystSlug: 'fix' }))).toMatchObject({ agent: 'analyst-fix', pane: 'fix', existed: true, started: false })
+    expect(w.calls[1]?.[3]).toBe('analyst-fix')
+  }
+})
+
+test('task and home tabs anchor only inside the dispatch workspace', async () => {
+  for (const [name, peer, label] of [['dev-fix', 'architect-fix', 'codex · fix'], ['analyst', 'architect', 'codex team']]) {
+    const w = fakeRun([agents([{ name: peer, workspace_id: 'w2', pane_id: 'w2:p1' }]),
+      [['herdr', 'tab', 'create'], ok({ root_pane: { pane_id: 'w1:p2' } })], [['herdr', 'agent', 'start'], ok({})], [['herdr', 'agent', 'prompt'], ok({})]])
+    expect((await deliver(w.run, input({ name }))).status).toBe('confirmed')
+    expect(w.calls[1]).toEqual(['herdr', 'tab', 'create', '--workspace', 'w1', '--cwd', '/r', '--label', label!, '--no-focus'])
+    expect(w.calls.some(call => call[2] === 'split')).toBe(false)
+  }
+})
+
+test('a target name live in another workspace is refused without reuse or startup including analyst fallback names', async () => {
+  for (const name of ['dev-fix', 'architect-fix', 'analyst', 'architect', 'analyst-fix']) {
+    const peers = name === 'analyst-fix' ? [{ name: 'analyst', workspace_id: 'w1', pane_id: 'w1:p1', agent_status: 'working' }] : []
+    const w = fakeRun([agents([...peers, { name, workspace_id: 'w2', pane_id: 'w2:p1', agent_status: 'done' }]),
+      [['herdr', 'agent', 'prompt'], ok({})]])
+    const result = await deliver(w.run, input({ name: name === 'analyst-fix' ? 'analyst' : name, analystSlug: 'fix' }))
+    expect(result).toMatchObject({ status: 'not_sent', existed: true, reason: expect.stringContaining('another workspace') })
+    expect(verbs(w.calls)).toEqual(['agent list'])
+  }
 })
