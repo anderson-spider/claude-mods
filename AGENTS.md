@@ -32,7 +32,7 @@ Project skills (`.claude/skills/`):
 - Tool inputs: each `mcp__<plugin>__<name>` entry in `types/index.d.ts` must match its `inputSchema` (`SchemaFor`, `hooks/schema.ts`, identical in every plugin and in `scripts/plugin-template/`).
 - Typings: loading a plugin writes its git-ignored `.claude-plugin/types/`, which its `tsconfig.json` extends (`noEmit` is required). The SessionStart hook copies complete snapshots from the main checkout when they match the running Claude Code version; otherwise run `mise run plugins:types [name]`. Regenerate after changing MCP integrations: cached `claude-code-mcp` declarations reflect the main checkout's last connected tools.
 - Project hooks (`.claude/settings.json` → `.claude/hooks/`): `block-generated-types` denies Write/Edit of generated typings (hand-written `types/index.d.ts` stays editable); `typecheck-plugin` type-checks the plugin owning an edited `.ts`/`.tsx`; `cloud-setup` (SessionStart, Claude Code cloud sessions only) installs mise from npm, runs `mise install` and puts its shims on the session's PATH. A hook script declares its event and matcher on its first line (`// PreToolUse (Edit|Write): why`), and `check-consistency` fails unless the settings wire it with `node "$CLAUDE_PROJECT_DIR/.claude/hooks/<file>"`.
-- Scripts in `scripts/` have a `*.test.mjs` beside them, except `update-plugins.mjs`.
+- Scripts in `scripts/` have a `*.test.mjs` beside them.
 
 ## Done for a plugin change
 
@@ -49,7 +49,7 @@ Project skills (`.claude/skills/`):
 
 ## CI
 
-`.github/workflows/ci.yml` runs the consistency and bump checks, the script and helper tests, and `validate --strict` plus `test` for every marketplace plugin and a scaffolded `ci-sample`, with the Claude Code CLI at `CLAUDE_CLI_PIN`. That pin must equal the version the root README says the repository is checked with. CI has no login and no typings, so `tsc` runs only locally.
+`.github/workflows/ci.yml` runs the consistency and bump checks, the script and helper tests, and `validate --strict` plus `test` for every marketplace plugin and a scaffolded `ci-sample`, then generates the typings in a session without login and runs `tsc` on each plugin and the sample, with the Claude Code CLI at `CLAUDE_CLI_PIN`. That pin must equal the version the root README says the repository is checked with. The same job runs again on the latest CLI as `plugins-latest`, which may fail without failing the run: it shows what a newer CLI breaks before the pin moves. The required checks are `checks` and `plugins`.
 
 ## Conventions
 
