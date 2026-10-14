@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import { comment, discussionView } from '../hooks/comments'
-import { MR, fakeCtx } from './fake-api'
+import { MR, THEIRS, fakeCtx, paged } from './fake-api'
 
 const thread = (id: string, resolved: boolean) => ({
   id,
@@ -15,8 +15,8 @@ test('list shows each discussion with its place, authors and resolved state, wit
     'GET /merge_requests/7/discussions': [thread('aa', false), thread('bb', true), { id: 'cc', notes: [{ id: 3, body: 'added 1 commit', system: true }] }],
   })
 
-  const all = JSON.parse(await comment(ctx, { action: 'list', iid: 7 }))
-  const open = JSON.parse(await comment(ctx, { action: 'list', iid: 7, unresolvedOnly: true }))
+  const all = JSON.parse(await comment(ctx, { action: 'list', iid: 7 })).discussions
+  const open = JSON.parse(await comment(ctx, { action: 'list', iid: 7, unresolvedOnly: true })).discussions
 
   expect(all.map((d: { id: string }) => d.id)).toEqual(['aa', 'bb'])
   expect(all[0]).toEqual({
@@ -35,8 +35,16 @@ test('a general discussion has no place and no resolved state when it is not res
   expect(discussionView({ id: 'dd', notes: [{ id: 4, body: 'hi' }] })).toEqual({ id: 'dd', notes: [{ id: 4, body: 'hi' }] })
 })
 
+test('list reads the page asked for and says when GitLab has more', async () => {
+  const { ctx, calls } = fakeCtx({ 'GET /merge_requests/7/discussions': paged([thread('aa', false)], 3) })
+  expect(JSON.parse(await comment(ctx, { action: 'list', iid: 7, page: 2, perPage: 50 })).next).toBe(3)
+  expect(calls[0]?.query).toEqual({ per_page: 50, page: 2 })
+  await expect(comment(ctx, { action: 'list', iid: 7, perPage: 101 })).rejects.toThrow('perPage is at most 100.')
+})
+
 test('comment, reply, edit, resolve and unresolve call their endpoints with the body', async () => {
-  const { ctx, calls } = fakeCtx({
+  const { ctx, writes } = fakeCtx({
+    'GET /merge_requests/7': MR,
     'POST /merge_requests/7/notes': { id: 10 },
     'POST /merge_requests/7/discussions/aa/notes': { id: 11 },
     'PUT /merge_requests/7/notes/11': {},
@@ -49,7 +57,7 @@ test('comment, reply, edit, resolve and unresolve call their endpoints with the 
   expect(await comment(ctx, { action: 'resolve', iid: 7, discussionId: 'aa' })).toBe('Discussion aa resolved.')
   await comment(ctx, { action: 'unresolve', iid: 7, discussionId: 'aa' })
 
-  expect(calls.map((c) => [c.method, c.path, c.body])).toEqual([
+  expect(writes().map((c) => [c.method, c.path, c.body])).toEqual([
     ['POST', '/merge_requests/7/notes', { body: 'LGTM' }],
     ['POST', '/merge_requests/7/discussions/aa/notes', { body: 'Fixed' }],
     ['PUT', '/merge_requests/7/notes/11', { body: 'Fixed in abc' }],
@@ -86,6 +94,31 @@ test('line finds a renamed file past the first page of the diff', async () => {
 
   expect(calls.filter((c) => c.path.endsWith('/diffs')).map((c) => c.query?.page)).toEqual([1, 2])
   expect((calls.at(-1)?.body?.position as { old_path: string }).old_path).toBe('src/old.ts')
+})
+
+test("every write on someone else's MR is refused without allowOthers, and goes through with it", async () => {
+  const { ctx, writes } = fakeCtx({
+    'GET /merge_requests/7': THEIRS,
+    'POST /merge_requests/7/notes': { id: 10 },
+    'PUT /merge_requests/7/discussions/aa': {},
+  })
+  const refused = "MR !7 is by bob, not by the token's user (ann). Writing on someone else's MR needs allowOthers: true; pass it only when the user asked for it."
+
+  for (const input of [
+    { action: 'comment', body: 'x' },
+    { action: 'reply', discussionId: 'aa', body: 'x' },
+    { action: 'line', path: 'a.ts', line: 1, body: 'x' },
+    { action: 'edit', noteId: 3, body: 'x' },
+    { action: 'resolve', discussionId: 'aa' },
+    { action: 'unresolve', discussionId: 'aa' },
+  ]) {
+    await expect(comment(ctx, { iid: 7, ...input }), input.action).rejects.toThrow(refused)
+  }
+  expect(writes()).toEqual([])
+
+  expect(await comment(ctx, { action: 'comment', iid: 7, body: 'x', allowOthers: true })).toBe('{"note":10}')
+  await comment(ctx, { action: 'resolve', iid: 7, discussionId: 'aa', allowOthers: true })
+  expect(writes().map((c) => c.path)).toEqual(['/merge_requests/7/notes', '/merge_requests/7/discussions/aa'])
 })
 
 test('a discussion id that is not hex, a missing body and an unknown action are refused before any write', async () => {

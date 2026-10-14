@@ -16,7 +16,16 @@ export const id = (name: string) => `mcp__gitlab__${name}`
 export function world(on: On, opts: { remote?: string; branch?: string; project?: Settings; local?: Settings; api?: Record<string, { status?: number; text: string }> } = {}) {
   const tools: Tool[] = []
   const sent: Sent[] = []
-  const host = { remote: 'git@gitlab.example.com:team/app.git', branch: 'feature/x', api: {}, ...opts, settingsFail: false, fetchError: undefined as string | undefined }
+  const host = {
+    remote: 'git@gitlab.example.com:team/app.git',
+    branch: 'feature/x',
+    api: {},
+    ...opts,
+    settingsFail: false,
+    fetchError: undefined as string | undefined,
+    /** What `ssh -G <alias>` prints as its hostname line, per alias; ssh fails for any other. */
+    ssh: {} as Record<string, string>,
+  }
 
   on('tool.register', (_$, e) => (tools.push(e as unknown as Tool), { value: { tool: id(e.name) } }))
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
@@ -30,6 +39,9 @@ export function world(on: On, opts: { remote?: string; branch?: string; project?
     if (args === 'git remote get-url origin') return host.remote ? out(0, `${host.remote}\n`) : out(2, '')
     if (args === 'git remote') return out(0, '')
     if (args === 'git rev-parse --abbrev-ref HEAD') return out(0, `${host.branch}\n`)
+    const alias = /^ssh -G (\S+)$/.exec(args)?.[1]
+    if (alias && host.ssh[alias]) return out(0, `user git\nhostname ${host.ssh[alias]}\nport 22\n`)
+    if (alias) return out(255, '')
     return out(1, '')
   })
   on('http.fetch', (_$, e) => {

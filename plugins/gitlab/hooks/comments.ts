@@ -1,7 +1,7 @@
-// gitlab_mr_comment: read and write a merge request's discussions. Deleting a comment is not offered.
+// gitlab_mr_comment: read and write a merge request's discussions; writes only on the token's own MR unless allowOthers. Deleting a comment is not offered.
 import type { McpToolInputs } from 'claude-code'
 import { GitlabError } from './api'
-import { InputError, bool, clip, id, json, mrIid, need, str, type Ctx } from './context'
+import { InputError, bool, clip, id, items, json, more, mrIid, need, paging, str, writable, type Ctx, type User } from './context'
 
 export type CommentAction = McpToolInputs['mcp__gitlab__gitlab_mr_comment']['action']
 export type CommentInput = { [K in keyof McpToolInputs['mcp__gitlab__gitlab_mr_comment']]?: unknown }
@@ -63,16 +63,23 @@ async function diffPaths(ctx: Ctx, iid: number, path: string): Promise<{ old_pat
   return { old_path: path, new_path: path }
 }
 
-async function line(ctx: Ctx, iid: number, input: CommentInput): Promise<string> {
+type Mr = { author?: User; diff_refs?: { base_sha: string; start_sha: string; head_sha: string } }
+type Spot = { path: string; newLine?: number; oldLine?: number }
+
+/** Where a line comment goes, checked before anything is read or written. */
+function spot(input: CommentInput): Spot {
   const path = need(str(input.path), 'line needs path, the file as the diff names it.')
   const newLine = id(input.line, 'line')
   const oldLine = id(input.oldLine, 'oldLine')
   if (newLine === undefined && oldLine === undefined) throw new InputError('line needs line (new side) or oldLine (removed line), or both for an unchanged line.')
-  const mr = (await ctx.api.get(`/merge_requests/${iid}`)) as { diff_refs?: { base_sha: string; start_sha: string; head_sha: string } }
+  return { path, newLine, oldLine }
+}
+
+async function line(ctx: Ctx, iid: number, mr: Mr, at: Spot, text: string): Promise<string> {
   const refs = need(mr.diff_refs ?? undefined, 'GitLab gave no diff refs for this merge request yet; try again once its diff is ready.')
-  const paths = await diffPaths(ctx, iid, path)
+  const paths = await diffPaths(ctx, iid, at.path)
   const d = (await ctx.api.send('POST', `/merge_requests/${iid}/discussions`, {
-    body: body(input),
+    body: text,
     position: {
       position_type: 'text',
       base_sha: refs.base_sha,
@@ -80,8 +87,8 @@ async function line(ctx: Ctx, iid: number, input: CommentInput): Promise<string>
       head_sha: refs.head_sha,
       new_path: paths.new_path,
       old_path: paths.old_path,
-      ...(newLine !== undefined ? { new_line: newLine } : {}),
-      ...(oldLine !== undefined ? { old_line: oldLine } : {}),
+      ...(at.newLine !== undefined ? { new_line: at.newLine } : {}),
+      ...(at.oldLine !== undefined ? { old_line: at.oldLine } : {}),
     },
   })) as Discussion
   return json(discussionView(d))
@@ -92,35 +99,35 @@ export async function comment(ctx: Ctx, input: CommentInput): Promise<string> {
   if (!['list', 'comment', 'reply', 'line', 'edit', 'resolve', 'unresolve'].includes(action)) {
     throw new InputError(`Unknown action: ${String(input.action)}.`)
   }
+  // the inputs a write needs are checked before any request
+  const d = action === 'reply' || action === 'resolve' || action === 'unresolve' ? discussionId(input.discussionId) : undefined
+  const note = action === 'edit' ? need(id(input.noteId, 'noteId'), 'edit needs noteId (from list).') : undefined
+  const at = action === 'line' ? spot(input) : undefined
+  const text = action === 'comment' || action === 'reply' || action === 'line' || action === 'edit' ? body(input) : ''
   const iid = await mrIid(ctx, input.iid)
+  if (action === 'list') {
+    const page = await ctx.api.page(`/merge_requests/${iid}/discussions`, paging(input, 100))
+    const views = items<Discussion>(page).map(discussionView).filter((v) => v !== undefined)
+    const shown = bool(input.unresolvedOnly) ? views.filter((v) => v.resolved === false) : views
+    return clip(json({ discussions: shown, ...more(page) }), 'pass unresolvedOnly or a smaller perPage')
+  }
+  // every other action writes: only on the token's own MR unless allowOthers
+  const mr = await writable<Mr>(ctx, iid, input.allowOthers)
   switch (action) {
-    case 'list': {
-      const all = (await ctx.api.get(`/merge_requests/${iid}/discussions`, { per_page: 100 })) as Discussion[]
-      const views = all.map(discussionView).filter((v) => v !== undefined)
-      const shown = bool(input.unresolvedOnly) ? views.filter((v) => v.resolved === false) : views
-      return clip(json(shown), 'pass unresolvedOnly to read fewer discussions')
-    }
-    case 'comment': {
-      const note = (await ctx.api.send('POST', `/merge_requests/${iid}/notes`, { body: body(input) })) as Note
-      return json({ note: note.id })
-    }
+    case 'comment':
+      return json({ note: ((await ctx.api.send('POST', `/merge_requests/${iid}/notes`, { body: text })) as Note).id })
     case 'reply': {
-      const d = discussionId(input.discussionId)
-      const note = (await ctx.api.send('POST', `/merge_requests/${iid}/discussions/${d}/notes`, { body: body(input) })) as Note
-      return json({ discussion: d, note: note.id })
+      const added = (await ctx.api.send('POST', `/merge_requests/${iid}/discussions/${d}/notes`, { body: text })) as Note
+      return json({ discussion: d, note: added.id })
     }
     case 'line':
-      return line(ctx, iid, input)
-    case 'edit': {
-      const note = need(id(input.noteId, 'noteId'), 'edit needs noteId (from list).')
-      await ctx.api.send('PUT', `/merge_requests/${iid}/notes/${note}`, { body: body(input) })
+      return line(ctx, iid, mr, at!, text)
+    case 'edit':
+      await ctx.api.send('PUT', `/merge_requests/${iid}/notes/${note}`, { body: text })
       return `Note ${note} edited.`
-    }
     case 'resolve':
-    case 'unresolve': {
-      const d = discussionId(input.discussionId)
+    case 'unresolve':
       await ctx.api.send('PUT', `/merge_requests/${iid}/discussions/${d}`, { resolved: action === 'resolve' })
       return `Discussion ${d} ${action}d.`
-    }
   }
 }

@@ -3,7 +3,8 @@
 /** Runs `git <args>` in the session's directory. */
 export type Git = (args: string[]) => Promise<{ exitCode: number; stdout: string }>
 
-export type Location = { host: string; project: string }
+/** Where a remote points; `ssh` marks an SSH remote, whose host may be an alias from ~/.ssh/config. */
+export type Location = { host: string; project: string; ssh?: true }
 
 /** A host name (an https remote may carry a port): what may follow `https://` without changing the host. */
 const HOST = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*(:\d{1,5})?$/
@@ -18,6 +19,7 @@ export function parseRemote(url: string): Location | undefined {
   const text = url.trim()
   let host: string
   let path: string
+  let ssh = false
   const scp = /^(?:[^@/\s]+@)?([^:/\s]+):(?!\/)(.+)$/.exec(text)
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(text)) {
     let parsed: URL
@@ -28,19 +30,44 @@ export function parseRemote(url: string): Location | undefined {
     }
     const scheme = parsed.protocol.replace(/:$/, '').toLowerCase()
     if (scheme === 'https' || scheme === 'http') host = parsed.host
-    else if (scheme === 'ssh' || scheme === 'git+ssh') host = parsed.hostname
-    else return undefined
+    else if (scheme === 'ssh' || scheme === 'git+ssh') {
+      host = parsed.hostname
+      ssh = true
+    } else return undefined
     path = decodeURIComponent(parsed.pathname)
   } else if (scp) {
     host = scp[1]!
     path = scp[2]!
+    ssh = true
   } else {
     return undefined
   }
   host = host.toLowerCase()
   const project = path.replace(/^\/+/, '').replace(/\/+$/, '').replace(/\.git$/, '')
   if (!HOST.test(host) || !PROJECT.test(project) || project.split('/').some((s) => /^\.+$/.test(s))) return undefined
-  return { host, project }
+  return ssh ? { host, project, ssh: true } : { host, project }
+}
+
+/** A project path the model names (`group/sub/project`): the same shape as a remote's, never a URL or another host. */
+export function projectPath(value: string): string | undefined {
+  const project = value.trim().replace(/^\/+|\/+$/g, '')
+  return PROJECT.test(project) && !project.split('/').some((s) => /^\.+$/.test(s)) ? project : undefined
+}
+
+/** Runs `ssh <args>`; only `ssh -G <host>`, which prints the resolved configuration and connects nowhere. */
+export type Ssh = (args: string[]) => Promise<{ exitCode: number; stdout: string }>
+
+/**
+ * The real host an SSH alias names (`Host work` with `HostName gitlab.example.com` in ~/.ssh/config), read from
+ * `ssh -G`; undefined when ssh fails or names no valid host. The alias itself comes back for a host with no alias.
+ */
+export async function sshHostname(ssh: Ssh, alias: string): Promise<string | undefined> {
+  if (!HOST.test(alias) || alias.includes(':')) return undefined
+  const out = await ssh(['-G', alias]).catch(() => undefined)
+  if (!out || out.exitCode !== 0) return undefined
+  const line = out.stdout.split('\n').find((l) => /^hostname\s/i.test(l))
+  const name = line?.replace(/^hostname\s+/i, '').trim().toLowerCase()
+  return name && HOST.test(name) && !name.includes(':') ? name : undefined
 }
 
 export const NO_REMOTE =
