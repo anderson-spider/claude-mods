@@ -5,10 +5,8 @@ import { EMPTY, agentBegan, agentEnded, agentStepped, began, cacheUsed, compacte
 import type { Measured } from './card'
 import { paint, paletteOf } from './palette'
 import type { Palette } from './palette'
-import { desktopView } from './desktop'
-import type { Piece } from './desktop'
-import { cardView } from './view'
-import type { Segment } from './view'
+import { layoutView } from './layout'
+import type { Drawing, Piece } from './layout'
 
 type Dollar = Parameters<Hook<'session.start'>>[0]
 
@@ -173,33 +171,26 @@ export const register: Register = on => {
     if (e.props.hasSurvey) return next(e)
     try {
       const [shown, time, palette] = await Promise.all([read($, card), read($, nowAtom), read($, paletteAtom)])
-      const columns = e.props.bodyColumns
-      const working = shown.turnStartedAt !== undefined
-      if (e.surface !== 'terminal') {
-        const lines = desktopView({ card: shown as SessionHudCard, now: time, working, palette })
-        if (!lines.length) return next(e)
-        const { Box, Text, Svg } = $.ui.resolve(e)
-        const piece = (part: Piece, key: string) => ('text' in part
-          ? <Text key={key} {...paint(palette, part.style)}>{part.text}</Text>
-          : <Svg key={key} source={part.source} alt={part.alt} width={part.width} height={part.height} />)
-        // Each group wraps to the next row whole, so a narrow card breaks between parts, never inside one.
-        return <Box flexDirection="column" borderStyle="round" borderColor={paint(palette, 'frame').color ?? 'inactive'} paddingX={1}>
-          {lines.map((groups, at) => <Box key={`line-${at}`} flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={3} marginTop={at === lines.length - 1 && at > 0 ? 1 : 0}>
-            {groups.map((group, i) => group === 'spacer'
-              ? <Box key={`g-${i}`} flexGrow={1} />
-              : <Box key={`g-${i}`} flexDirection="row" alignItems="center" flexShrink={0}>{group.map((part, j) => piece(part, `p-${i}-${j}`))}</Box>)}
-          </Box>)}
-        </Box>
-      }
-      const view = cardView({ card: shown as SessionHudCard, now: time, columns, working })
-      if (!view.top.length && !view.bottom.length) return next(e)
-      const { Box, Text } = $.ui.resolve(e)
-      const line = (row: Segment[], key: string) => <Text key={key} wrap="truncate">{row.map((part, at) =>
-        <Text key={`${key}-${at}`} {...paint(palette, part.style)}>{part.text}</Text>)}</Text>
-      return <Box width={columns} flexDirection="column" borderStyle="round" borderColor={paint(palette, 'frame').color ?? 'inactive'} paddingX={1}>
-        {view.top.map((row, at) => line(row, `top-${at}`))}
-        <Text key="rule" {...paint(palette, 'track')}>{'─'.repeat(Math.max(0, columns - 4))}</Text>
-        {view.bottom.map((row, at) => line(row, `bottom-${at}`))}
+      const terminal = e.surface === 'terminal'
+      const lines = layoutView({ card: shown as SessionHudCard, now: time, working: shown.turnStartedAt !== undefined, palette, draw: terminal ? 'cells' : 'svg' })
+      if (!lines.length) return next(e)
+      const ui = $.ui.resolve(e)
+      const { Box, Text } = ui
+      // The terminal has `Raster` and no `Svg`; every other surface the reverse.
+      const drawing = (part: Drawing, key: string) => (part.kind === 'raster'
+        ? ('Raster' in ui ? <ui.Raster key={part.key} columns={part.columns} rows={part.rows} cells={part.cells} /> : null)
+        : ('Svg' in ui ? <ui.Svg key={key} source={part.source} alt={part.alt} width={part.width} height={part.height} /> : null))
+      // In a terminal too narrow for a whole group, the group shrinks and its text is cut at the edge instead of breaking the frame.
+      const piece = (part: Piece, key: string) => ('text' in part
+        ? <Text key={key} {...paint(palette, part.style)} {...(terminal ? { wrap: 'truncate-end' as const } : {})}>{part.text}</Text>
+        : drawing(part, key))
+      // Each group wraps to the next row whole, so a narrow card breaks between parts, never inside one.
+      return <Box {...(terminal ? { width: e.props.bodyColumns } : {})} flexDirection="column" borderStyle="round" borderColor={paint(palette, 'frame').color ?? 'inactive'} paddingX={1}>
+        {lines.map((groups, at) => <Box key={`line-${at}`} flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={3} marginTop={at === lines.length - 1 && at > 0 ? 1 : 0}>
+          {groups.map((group, i) => group === 'spacer'
+            ? <Box key={`g-${i}`} flexGrow={1} />
+            : <Box key={`g-${i}`} flexDirection="row" alignItems="center" flexShrink={terminal ? 1 : 0}>{group.map((part, j) => piece(part, `p-${i}-${j}`))}</Box>)}
+        </Box>)}
       </Box>
     } catch {
       $.ui.log('session-hud: render failed', { to: 'debug' })

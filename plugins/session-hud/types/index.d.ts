@@ -27,8 +27,6 @@ export type SessionHudCard = {
   cacheTtl?: '5m' | '1h'
   /** Main-session turns completed since the plugin loaded. */
   turns: number
-  /** Output tokens of the main session's steps since the plugin loaded. */
-  output: number
   limits: SessionHudLimit[]
   /** When the running main-session turn began, in epoch milliseconds; absent between turns. */
   turnStartedAt?: number

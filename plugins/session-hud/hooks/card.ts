@@ -2,7 +2,7 @@
 import type { SessionHudAgent, SessionHudCard, SessionHudLimit, SessionHudTurn } from '../types'
 import { cacheShare } from './usage'
 
-export const EMPTY: SessionHudCard = { limits: [], edits: 0, errors: 0, turns: 0, output: 0, agents: [], history: [] }
+export const EMPTY: SessionHudCard = { limits: [], edits: 0, errors: 0, turns: 0, agents: [], history: [] }
 
 /** The turns the card keeps: the history chart draws one bar each. */
 export const HISTORY = 12
@@ -35,7 +35,7 @@ export const touchedCache = (usage: StepUsage | null): boolean =>
 /** The prompt cache was read or written at `at`. */
 export const cacheUsed = (card: SessionHudCard, at: unknown): SessionHudCard => (finite(at) ? { ...card, cacheUsedAt: at } : card)
 
-/** A main-session step: its effort and, from its usage, the model that answered, the cache share, its output tokens and the running turn's context (the first prompt, the last prompt plus its output). */
+/** A main-session step: its effort and, from its usage, the model that answered, the cache share and the running turn's context (the first prompt, the last prompt plus its output). */
 export function stepped(card: SessionHudCard, effort: unknown, usage: StepUsage | null): SessionHudCard {
   const next = { ...card }
   if (typeof effort === 'string') next.effort = effort
@@ -44,7 +44,6 @@ export function stepped(card: SessionHudCard, effort: unknown, usage: StepUsage 
     const share = cacheShare(usage)
     if (share !== undefined) next.cache = share
     const output = count(usage.output_tokens) ? usage.output_tokens : undefined
-    if (output !== undefined) next.output = card.output + output
     const { input_tokens: input, cache_read_input_tokens: read, cache_creation_input_tokens: written } = usage
     if (count(input) && count(read) && count(written) && output !== undefined) {
       const prompt = input + read + written
