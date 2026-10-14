@@ -1,4 +1,4 @@
-// A scripted `herdr`/`git` runner: each call is recorded, and answered by the first rule whose prefix matches its argv.
+// A scripted `herdr`/`git`/`codex` runner: each call is recorded and answered by its first matching prefix rule.
 import type { Run, RunResult } from '../hooks/herdr'
 
 export type Rule = [prefix: readonly string[], answer: RunResult | ((argv: readonly string[]) => RunResult)]

@@ -3,6 +3,7 @@
 export {}
 declare module 'claude-code' {
   interface McpToolInputs {
+    'mcp__codex-team__finish': { agent: string }
     'mcp__codex-team__dispatch': {
       role: 'developer' | 'analyst' | 'architect' | 'reviewer'
       task?: string

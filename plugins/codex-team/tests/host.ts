@@ -2,6 +2,7 @@
 import type { On } from 'claude-code'
 import { expect, mock } from 'claude-code/testing'
 import { agents, fakeRun, ok, text } from './fake-run'
+import type { Run } from '../hooks/herdr'
 
 export type Tool = { name: string; description: string; inputSchema: { properties: Record<string, { description?: string }> } }
 
@@ -27,7 +28,7 @@ export async function started($: { session: { start: (e: never) => Promise<unkno
 }
 
 /** A dispatch's host boundary, including environment, settings, HTTP, clock and runner. No real requests or commands. */
-export function dispatchWorld(on: On, key: string, declared?: 'project' | 'local') {
+export function dispatchWorld(on: On, key: string, declared?: 'project' | 'local', runner?: Run) {
   const { tools } = world(on)
   const settings: string[] = []
   const envReads: string[] = []
@@ -46,7 +47,7 @@ export function dispatchWorld(on: On, key: string, declared?: 'project' | 'local
   on('store.set', (_$, e) => { tasks.set(e.key, e.value); return { value: undefined } })
   on('env.get', (_$, e) => {
     envReads.push(e.name)
-    const env: Record<string, string> = { HOME: '/home/u', HERDR_ENV: '1', HERDR_WORKSPACE_ID: 'w1', JEV_API_KEY: key }
+    const env: Record<string, string> = { HOME: '/home/u', HERDR_ENV: '1', HERDR_WORKSPACE_ID: 'w1', HERDR_PANE_ID: 'lead', JEV_API_KEY: key }
     return { value: env[e.name] }
   })
   on('session.root', () => ({ value: '/repo' }))
@@ -60,7 +61,7 @@ export function dispatchWorld(on: On, key: string, declared?: 'project' | 'local
       difficulty: { probabilities: { '0': 1 } }, duration: { probabilities: { '0': 1 } }, scope: { probabilities: { '0': 1 } },
     } }) } }
   })
-  on('process.run', async (_$, e) => ({ value: { ...await run(e.argv), isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('process.run', async (_$, e) => ({ value: { ...await (runner ?? run)(e.argv), isStdoutTruncated: false, isStderrTruncated: false } }))
   on('fs.exists', () => ({ value: false }))
   on('fs.write', (_$, e) => { writes.push(e.text); return { value: undefined } })
   on('ui.log', (_$, e) => { logs.push(e.text); return { value: undefined } })

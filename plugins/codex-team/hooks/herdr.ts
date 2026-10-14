@@ -1,6 +1,7 @@
 // Starting or reusing a team agent in Herdr and handing it a task, over an injected command runner. Pure: no host access.
 // After herdr-router (github.com/Qingswe/herdr-router, used with its author's permission): delivery is `confirmed`,
 // `unknown` or `not_sent`, and a prompt is never sent twice.
+import { SLUG } from './roles'
 
 export type RunResult = { exitCode: number; stdout: string; stderr: string; isStdoutTruncated?: boolean; isStderrTruncated?: boolean }
 export type Run = (argv: readonly string[], init?: { timeoutMs?: number }) => Promise<RunResult>
@@ -36,6 +37,8 @@ export type DispatchInput = {
   analystSlug?: string
   /** Recheck on the delivery listing before any pane, startup or prompt effect. */
   reviewDeveloper?: string
+  /** Dispatch retires an idle/done shared role before starting a fresh session. */
+  finishShared?: (name: string) => Promise<{ closed: boolean; archived: boolean; reason?: string }>
 }
 
 /** Herdr refuses a prompt above this; the router does the same. */
@@ -49,7 +52,8 @@ export const isTeamName = (name: string | undefined): boolean => name === 'analy
 
 /** Named task agents share only their own task's tab. */
 function taskSlug(name: string | undefined): string | undefined {
-  return name?.match(/^(?:dev|architect|analyst)-(.+)$/)?.[1]
+  const slug = name?.match(/^(?:dev|architect|analyst)-(.+)$/)?.[1]
+  return slug && SLUG.test(slug) ? slug : undefined
 }
 
 const normal = (path: string | undefined) => (path ?? '').replace(/\/+$/, '')
@@ -72,11 +76,12 @@ export function errorOf(done: RunResult): string {
 const at = (value: unknown, ...keys: string[]): unknown =>
   keys.reduce<unknown>((node, key) => (node && typeof node === 'object' ? (node as Record<string, unknown>)[key] : undefined), value)
 
-export async function listAgents(run: Run): Promise<Listed[] | string> {
-  const done = await run(['herdr', 'agent', 'list'])
+export async function listAgents(run: Run, init?: { timeoutMs?: number }): Promise<Listed[] | string> {
+  const done = await run(['herdr', 'agent', 'list'], init)
   if (done.exitCode !== 0) return errorOf(done)
   const agents = at(json(done.stdout), 'result', 'agents')
-  return Array.isArray(agents) ? (agents as Listed[]) : 'agent list unreadable'
+  return !done.isStdoutTruncated && Array.isArray(agents) && agents.every(agent => agent && typeof agent.workspace_id === 'string' && typeof agent.pane_id === 'string' && (agent.name === undefined || typeof agent.name === 'string'))
+    ? (agents as Listed[]) : 'agent list unreadable'
 }
 
 /** Split beside a live peer in the task/home group, or create that group's tab. */
@@ -102,7 +107,7 @@ export async function deliver(run: Run, input: DispatchInput): Promise<Delivery>
   let base = { agent: input.name, started: false, existed: false }
   if (new TextEncoder().encode(input.prompt).length > MAX_PROMPT_BYTES) return { ...base, status: 'not_sent', reason: 'prompt over 64 KiB' }
 
-  const agents = await listAgents(run)
+  let agents = await listAgents(run)
   if (typeof agents === 'string') return { ...base, status: 'not_sent', reason: agents }
   const shared = agents.find(agent => agent.name === input.name)
   if (shared && shared.workspace_id !== input.workspace) {
@@ -111,6 +116,14 @@ export async function deliver(run: Run, input: DispatchInput): Promise<Delivery>
   if (input.name === 'analyst' && input.analystSlug && ['working', 'blocked'].includes(shared?.agent_status ?? '')) {
     input = { ...input, name: `analyst-${input.analystSlug}` }
     base = { ...base, agent: input.name }
+  }
+  if ((input.name === 'analyst' || input.name === 'architect') && shared && ['idle', 'done'].includes(shared.agent_status ?? '')) {
+    if (!input.finishShared) return { ...base, existed: true, status: 'not_sent', reason: 'shared agent finish unavailable' }
+    const finished = await input.finishShared(input.name)
+    if (!finished.closed || !finished.archived) return { ...base, existed: true, status: 'not_sent', reason: `shared agent finish failed (${finished.reason ?? 'not archived'})` }
+    agents = await listAgents(run)
+    if (typeof agents === 'string') return { ...base, status: 'not_sent', reason: agents }
+    if (agents.some(agent => agent.name === input.name)) return { ...base, existed: true, status: 'not_sent', reason: 'shared agent reappeared after finish' }
   }
   const live = agents.find(agent => agent.name === input.name)
   base.existed = live !== undefined

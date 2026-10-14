@@ -20,11 +20,13 @@ The team works on its own Codex quota; you spend yours on judgement. For the res
 | Role | Hand it | Agent and tab |
 | --- | --- | --- |
 | `developer` | implementation and tests, left uncommitted; corrections after review | `dev-<slug>`, in the task tab `codex · <slug>`, working in the task worktree (`cwd`) |
-| `analyst` | investigation, documentation drafts | `analyst` in the `codex team` tab; `analyst-<slug>` in the task tab while the shared one is busy |
-| `architect` | design, trade-offs, ordered steps | `architect` in the `codex team` tab |
+| `analyst` | investigation, documentation drafts | `analyst` in the `codex team` tab, a fresh Codex per dispatch; `analyst-<slug>` in the task tab while the shared one is busy |
+| `architect` | design, trade-offs, ordered steps | `architect` in the `codex team` tab, a fresh Codex per dispatch |
 | `reviewer` | the review of a finished developer task | `architect-<slug>` in the task tab, always `xhigh`; the plugin writes its brief |
 
 Drafts from the analyst go to the developer to apply: one writer per worktree.
+
+`mcp__codex-team__finish` with `{ agent }` ends a settled agent: it closes its pane (the task tab goes with its last pane) and archives its Codex session. It refuses an agent that is working or blocked.
 
 ## 1. Start or resume
 
@@ -89,13 +91,13 @@ Done: delivery `confirmed`, its wait running, the step `implementing`, its `## D
 2. `blocked` or open `questions`: answer from the plan when it settles them, otherwise ask the user; then dispatch the answer to the same agent (same role and slug).
 3. **Developer `done`:** dispatch `role: "reviewer"` with the same `slug` right away (add `task` only to point at a risk). Mark the step `verified (relatório do dev)` and add the review as its own step.
 4. **Reviewer back:** read `verdict`, `risk` and `findings`. Open the diff only at the lines a finding names, or wherever `risk: high`. Decide each finding (fix, defer with a reason, or reject with a reason). Send every fix back to the same developer as one brief, then review again. With `accept`, run the repository's done checks yourself in the worktree.
-5. **Analyst or architect `done`:** use the findings in the next brief; hand `drafts` to the developer. Cut a design to the simplest version that meets the request and tell the user what you cut.
+5. **Analyst or architect `done`:** call `finish` on that agent (`analyst`, `architect` or `analyst-<slug>`) once its report is read; use the findings in the next brief; hand `drafts` to the developer. Cut a design to the simplest version that meets the request and tell the user what you cut.
 
 Close the `## Dispatches` line of every report you handle.
 
 Done, by role:
 
-- analyst or architect: report read, every question answered or asked to the user, findings carried into a step or a brief;
+- analyst or architect: report read, every question answered or asked to the user, findings carried into a step or a brief, the agent finished;
 - reviewer: verdict read and every finding decided (a `changes_needed` review is done once its fixes are dispatched);
 - developer task: the last review is `accept` and the done checks pass in your own run.
 - your own steps (`main`, `git-master`): the step's action happened and you saw its result (a PR link, a merge state, a passing check).
@@ -105,6 +107,6 @@ Done, by role:
 1. **PR.** Codex's sandbox keeps `.git` read-only, so git work is yours through the `git-master:git-master` subagent: give it the worktree, the branch, the base, the paths to stage, the commit message and the PR title in Conventional Commits, the description you wrote, and the repository's PR rules. Tell the user the PR link.
 2. **CI and merge.** Watch the checks. When the user has asked you to merge in this session, merge with `--match-head-commit <reviewed sha>` once CI passes; otherwise ask.
 3. **After the merge.** Update the main checkout, reinstall the changed plugins (the repository's update task), and tell the user to run `/reload-plugins`: a reload is theirs to do.
-4. **Close the task.** With the user's ok, close the task tab `codex · <slug>` (`herdr tab close <tab id>`) once every agent in it is idle or done, and remove the worktree. Mark the PR step `committed`.
+4. **Close the task.** With the user's ok, call `finish` on each agent of the task (`dev-<slug>`, `architect-<slug>`, any `analyst-<slug>`); the tab closes with the last one and every session is archived. Then remove the worktree (`git worktree remove <path>`). A `finish` refusal names the agent still working: wait for it, never force it. Mark the PR step `committed`.
 
 Done for a deliverable: merged, reinstalled, the user told to reload, its tab closed or kept by the user's choice, every step closed in the plan.

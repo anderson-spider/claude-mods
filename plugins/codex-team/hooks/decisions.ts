@@ -1,5 +1,5 @@
-// One small JSON file per dispatch, so effort choices can be revisited from data. Pure: the write is injected. A record
-// holds names, counts and a hash of the task, never the task, a key or a path.
+// Small dispatch/finish decision records. Pure: the write is injected. Only lifecycle metadata and task hashes,
+// never task text, keys, paths or command output.
 import type { Effort, Role } from './roles'
 import type { PromptStatus } from './herdr'
 import type { JevReason, Levels } from './effort'
@@ -29,6 +29,8 @@ export type DecisionRecord = {
   durationMs: number
 }
 
+export type FinishRecord = { v: 2; action: 'finish'; ts: string; agent: string; uuid: string | null; closed: boolean; archived: boolean; reason: string | null }
+
 /** FNV-1a, 32 bits, as 8 hex digits: matches one task to another without keeping the text. Not a cryptographic hash. */
 export function fnv1a(text: string): string {
   let hash = 0x811c9dc5
@@ -45,7 +47,8 @@ export function decisionPath(home: string, ts: string, agent: string): string {
 }
 
 /** Writes the record; a failure is one log line and never reaches the caller. */
-export async function saveDecision(io: { write: (path: string, text: string) => Promise<void>; log: (text: string) => void }, home: string | undefined, record: DecisionRecord): Promise<void> {
+export async function saveDecision(io: { write: (path: string, text: string) => Promise<void>; log: (text: string) => void }, home: string | undefined, record: DecisionRecord | FinishRecord): Promise<void> {
   if (!home) return io.log('codex-team: decision not logged (no home)')
-  await io.write(decisionPath(home, record.ts, record.agent), `${JSON.stringify(record)}\n`).catch(() => io.log('codex-team: decision not logged (write failed)'))
+  const path = decisionPath(home, record.ts, record.agent)
+  await io.write('action' in record ? path.replace(/\.json$/, '.finish.json') : path, `${JSON.stringify(record)}\n`).catch(() => io.log('codex-team: decision not logged (write failed)'))
 }

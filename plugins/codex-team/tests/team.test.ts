@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { dispatch, NOT_IN_HERDR } from '../hooks/team'
+import { dispatch, finish, NOT_IN_HERDR } from '../hooks/team'
 import type { TeamIo } from '../hooks/team'
 import { agents, fail, fakeRun, ok, text } from './fake-run'
 import type { Rule } from './fake-run'
@@ -8,7 +8,7 @@ import type { JevInit } from '../hooks/jev'
 import { JEV_MODEL } from '../hooks/effort'
 import { SPECS } from '../hooks/roles'
 
-const ENV: Record<string, string> = { HERDR_ENV: '1', HERDR_WORKSPACE_ID: 'w1', HOME: '/home/u' }
+const ENV: Record<string, string> = { HERDR_ENV: '1', HERDR_WORKSPACE_ID: 'w1', HERDR_PANE_ID: 'lead', HOME: '/home/u' }
 
 function io(rules: Rule[], env: Record<string, string | undefined> = ENV) {
   const { run, calls } = fakeRun([[['mkdir'], text('')], ...rules])
@@ -19,7 +19,8 @@ function io(rules: Rule[], env: Record<string, string | undefined> = ENV) {
   const team: TeamIo = {
     run,
     store: { get: async key => tasks.get(key), set: async (key, value) => { tasks.set(key, value) }, delete: async key => { tasks.delete(key) } },
-    env: async () => ({ HERDR_ENV: env.HERDR_ENV, HERDR_WORKSPACE_ID: env.HERDR_WORKSPACE_ID, HOME: env.HOME, JEV_API_KEY: env.JEV_API_KEY }),
+    env: async () => ({ HERDR_ENV: env.HERDR_ENV, HERDR_WORKSPACE_ID: env.HERDR_WORKSPACE_ID, HERDR_PANE_ID: env.HERDR_PANE_ID, HOME: env.HOME, JEV_API_KEY: env.JEV_API_KEY }),
+    sleep: async () => {},
     settings: async () => undefined,
     jev: { fetch: async () => { throw new Error('unexpected fetch') }, timer: () => () => {}, now: () => clock },
     breaker: createBreaker(() => clock),
@@ -33,6 +34,94 @@ function io(rules: Rule[], env: Record<string, string | undefined> = ENV) {
 }
 
 const freshTeam: Rule[] = [agents([]), [['herdr', 'tab', 'create'], ok({ root_pane: { pane_id: 'w1:p7' } })], [['herdr', 'agent', 'start'], ok({})], [['herdr', 'agent', 'prompt'], ok({})]]
+
+function settledShared(name: string, status: string, archiveExit = 0) {
+  const uuid = '12345678-1234-1234-1234-123456789abc'
+  const agent = { name, agent: 'codex', workspace_id: 'w1', pane_id: 'old', agent_status: status, agent_session: { kind: 'id', source: 'herdr:codex', value: uuid } }
+  let listed = 0
+  const w = io([
+    [['herdr', 'agent', 'list'], () => ok({ agents: ++listed <= 2 ? [agent] : [] })],
+    [['herdr', 'agent', 'get'], ok({ agent })], [['herdr', 'pane', 'close'], ok({})],
+    [['codex', 'archive'], { exitCode: archiveExit, stdout: 'private task content', stderr: 'private reason' }],
+    ...freshTeam.slice(1),
+  ])
+  return { ...w, uuid }
+}
+
+test('shared idle or done analyst and architect are finished before a fresh start with this dispatch effort', async () => {
+  for (const role of ['analyst', 'architect'] as const) {
+    for (const status of ['idle', 'done']) {
+      const w = settledShared(role, status)
+      w.team.now = async () => 1_000
+      const answer = await dispatch(w.team, { role, task: 'private new task', slug: 'fresh', effort: 'low' })
+      expect(answer.text).toContain(`agent: ${role} (pane w1:p7), started now`)
+      expect(answer.text).not.toContain('not applied')
+      const commands = w.calls.filter(call => call[0] !== 'mkdir').map(call => call.slice(0, 3).join(' '))
+      expect(commands).toEqual(['herdr agent list', 'herdr agent get', 'herdr agent list', 'herdr pane close', 'herdr agent list', 'codex archive ' + w.uuid, 'herdr agent list', 'herdr tab create', 'herdr agent start', 'herdr agent prompt'])
+      expect(w.calls.find(call => call[2] === 'start')).toContain('model_reasoning_effort="low"')
+      expect(w.writes.map(write => JSON.parse(write.text))).toMatchObject([
+        { action: 'finish', agent: role, uuid: w.uuid, closed: true, archived: true },
+        { effort: 'low', effortApplied: true, started: true }, { effort: 'low', effortApplied: true, started: true },
+      ])
+      expect(JSON.stringify(w.writes)).not.toContain('private')
+      expect(w.writes[0]!.path).toMatch(/\.finish\.json$/)
+      expect(new Set(w.writes.map(write => write.path)).size).toBe(2)
+    }
+  }
+})
+
+test('a shared finish failure refuses dispatch without starting or prompting a replacement', async () => {
+  const w = settledShared('analyst', 'idle', 9)
+  const answer = await dispatch(w.team, { role: 'analyst', slug: 'fresh', task: 'private task', effort: 'high' })
+  expect(answer.text).toContain('delivery: not_sent (shared agent finish failed (archive exit 9))')
+  expect(w.calls.some(call => call[2] === 'start' || call[2] === 'prompt')).toBe(false)
+  expect(JSON.parse(w.writes[0]!.text)).toMatchObject({ action: 'finish', closed: true, archived: false, reason: 'archive exit 9' })
+  expect(JSON.stringify([w.writes, answer])).not.toContain('private')
+})
+
+test('shared working or blocked analyst keeps its task fallback and architect remains busy', async () => {
+  for (const status of ['working', 'blocked']) {
+    const w = io([agents([{ name: 'analyst', pane_id: 'home', agent_status: status }]), ...freshTeam.slice(1)])
+    const answer = await dispatch(w.team, { role: 'analyst', slug: 'busy', task: 'Inspect', effort: 'low' })
+    expect(answer.text).toContain('agent: analyst-busy')
+    expect(w.calls.find(call => call[2] === 'create')).toContain('codex · busy')
+    expect(w.calls.some(call => call[2] === 'get' || call[2] === 'close' || call[0] === 'codex')).toBe(false)
+    const architect = io([agents([{ name: 'architect', pane_id: 'home', agent_status: status }])])
+    expect((await dispatch(architect.team, { role: 'architect', slug: 'busy', task: 'Design', effort: 'high' })).ok).toBe(false)
+    expect(architect.calls.filter(call => call[0] === 'herdr')).toEqual([['herdr', 'agent', 'list']])
+  }
+})
+
+test('finish shares the dispatch queue and logs closed and archived without task text', async () => {
+  const w = settledShared('analyst', 'idle')
+  // Explicit finish starts at get, so its first list is the ownership check and its second confirms exit.
+  const originalRun = w.team.run
+  let closed = false
+  w.team.run = async (argv, init) => {
+    if (argv[2] === 'close') closed = true
+    if (argv[2] === 'list' && closed) { w.calls.push([...argv]); return ok({ agents: [] }) }
+    return originalRun(argv, init)
+  }
+  const [finished, dispatched] = await Promise.all([
+    finish(w.team, { agent: 'analyst' }),
+    dispatch(w.team, { role: 'architect', slug: 'next', task: 'private task', effort: 'high' }),
+  ])
+  expect(finished.text).toContain('closed: pane old')
+  expect(finished.text).toContain('archived: yes')
+  expect(dispatched.ok).toBe(true)
+  const archive = w.calls.findIndex(call => call[0] === 'codex')
+  expect(w.calls.findIndex(call => call[0] === 'mkdir')).toBeGreaterThan(archive)
+  expect(JSON.parse(w.writes[0]!.text)).toMatchObject({ action: 'finish', agent: 'analyst', uuid: w.uuid, closed: true, archived: true })
+  expect(JSON.stringify(w.writes)).not.toContain('private')
+  const outside = io([], { HERDR_ENV: '0' })
+  expect(await finish(outside.team, { agent: 'analyst' })).toEqual({ ok: false, text: NOT_IN_HERDR })
+  expect(outside.calls).toEqual([])
+  expect(outside.writes).toEqual([])
+  const invalid = io([])
+  expect((await finish(invalid.team, { agent: 'private arbitrary task text' })).ok).toBe(false)
+  expect(invalid.calls).toEqual([])
+  expect(invalid.writes).toEqual([])
+})
 
 test('outside Herdr the tool says it cannot be used and runs nothing, writes nothing', async () => {
   for (const env of [{ ...ENV, HERDR_ENV: undefined }, { ...ENV, HERDR_ENV: '0' }]) {
@@ -127,7 +216,7 @@ test('the decision is logged as unknown before the prompt and with the outcome a
 })
 
 test('a delivery that may have reached the agent says not to resend; one that did not says to fix and retry', async () => {
-  const unknown = io([agents([{ name: 'analyst', pane_id: 'p', agent_status: 'idle' }]), [['herdr', 'agent', 'prompt'], fail('agent_prompt_stalled')]])
+  const unknown = io([agents([]), [['herdr', 'tab', 'create'], ok({ root_pane: { pane_id: 'p' } })], [['herdr', 'agent', 'start'], ok({})], [['herdr', 'agent', 'prompt'], fail('agent_prompt_stalled')]])
   const said = await dispatch(unknown.team, { role: 'analyst', task: 't', slug: 's' })
   expect(said.text).toContain('delivery: unknown (agent_prompt_stalled)')
   expect(said.text).toContain('do not send it again')
@@ -206,7 +295,7 @@ test('effortApplied and the role line distinguish newly started and reused agent
       const world = assessedWorld({ ...(source === 'default' ? { key: undefined } : {}) })
       const reuseRunner = fakeRun([
         [['mkdir'], text('')],
-        agents([{ name: 'analyst', pane_id: 'w1:p1', agent_status: 'idle' }]),
+        agents([{ name: 'analyst', pane_id: 'home', agent_status: 'working' }, { name: 'analyst-assess', pane_id: 'w1:p1', agent_status: 'idle' }]),
         [['herdr', 'agent', 'prompt'], ok({})],
       ])
       if (reused) world.team.run = reuseRunner.run
@@ -375,7 +464,7 @@ test('astra dispatch caps pinned, Jev and default efforts in start flags, answer
       expect(answer.text).toContain(`effort high (${source}), capped at high: gpt-6-astra never runs above high`)
       const start = world.calls.find(c => c[2] === 'start')!
       expect(start).toContain('model_reasoning_effort="high"')
-      expect(start.some(arg => arg.includes('service_tier'))).toBe(false)
+      expect(start).toContain('service_tier="priority"')
       for (const write of world.writes) expect(JSON.parse(write.text)).toMatchObject({ model: 'gpt-6-astra', effort: 'high', effortApplied: true, source })
     }
   } finally {

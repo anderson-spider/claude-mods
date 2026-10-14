@@ -1,6 +1,6 @@
 import type { Hook, McpToolInputs, Register } from 'claude-code'
 import type { SchemaFor } from './schema'
-import { dispatch } from './team'
+import { dispatch, finish } from './team'
 import type { TeamIo } from './team'
 import { createBreaker, createGate } from './jev'
 import { createPublisher, isPlanFile } from './publish'
@@ -35,9 +35,11 @@ function teamIo($: Dollar): TeamIo {
     env: async () => ({
       HERDR_ENV: await $.env.get('HERDR_ENV'),
       HERDR_WORKSPACE_ID: await $.env.get('HERDR_WORKSPACE_ID'),
+      HERDR_PANE_ID: await $.env.get('HERDR_PANE_ID'),
       HOME: await $.env.get('HOME'),
       JEV_API_KEY: await $.env.get('JEV_API_KEY'),
     }),
+    sleep: ms => $.clock.sleep(ms),
     settings: async source => {
       const settings = await $.settings.read({ source })
       return { env: settings?.env }
@@ -70,7 +72,7 @@ export const register: Register = (on) => {
       name: 'dispatch',
       description:
         'Hands a task to a Codex team agent in Herdr: developer, analyst, architect, or reviewer (reviews the recorded developer task; task is optional extra focus). ' +
-        'Task agents use a codex · <slug> tab; shared analyst/architect use codex team. A busy shared analyst falls back to analyst-<slug>. Delivery: confirmed, unknown (never resend), or not_sent. Publishes the active crew plan to Dagr when available. Only inside Herdr.',
+        'Task agents are reused in codex · <slug> tabs; shared analyst/architect are one-shot in codex team and are finished before their next dispatch. A busy shared analyst falls back to analyst-<slug>. Delivery: confirmed, unknown (never resend), or not_sent. Publishes the active crew plan to Dagr when available. Only inside Herdr.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -83,11 +85,25 @@ export const register: Register = (on) => {
         required: ['role', 'slug'],
       } satisfies SchemaFor<McpToolInputs['mcp__codex-team__dispatch']>,
     })
+    await $.tool.register({
+      name: 'finish',
+      description: 'Closes an idle or done Codex team agent in this workspace, then archives its session after it exits. Refuses busy, blocked, foreign agents and the lead pane. Finishing the last pane also removes its task tab.',
+      inputSchema: {
+        type: 'object',
+        properties: { agent: { type: 'string', description: 'Team agent name: analyst, architect, analyst-<slug>, architect-<slug> or dev-<slug>.' } },
+        required: ['agent'],
+      } satisfies SchemaFor<McpToolInputs['mcp__codex-team__finish']>,
+    })
     return next(e)
   })
 
   on('tool.call', { tool: 'mcp__codex-team__dispatch' }, async ($, e) => {
     const answer = await dispatch(teamIo($), e).catch(() => ({ ok: false, text: 'codex-team: the dispatch failed unexpectedly; check `herdr agent list` before trying again.' }))
+    return { result: answer.text }
+  })
+
+  on('tool.call', { tool: 'mcp__codex-team__finish' }, async ($, e) => {
+    const answer = await finish(teamIo($), e).catch(() => ({ ok: false, text: 'codex-team: finish failed unexpectedly; check `herdr agent list` before trying again.' }))
     return { result: answer.text }
   })
 

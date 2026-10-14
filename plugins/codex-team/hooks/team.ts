@@ -4,16 +4,19 @@ import { saveDecision, fnv1a } from './decisions'
 import type { DecisionRecord } from './decisions'
 import { assessEffort, JEV_MODEL } from './effort'
 import type { EffortIo } from './effort'
-import { deliver, listAgents } from './herdr'
+import { deliver, isTeamName, listAgents } from './herdr'
 import type { Delivery, Run } from './herdr'
 import { brief, reportPath, reviewTask } from './report'
 import { EFFORTS, ROLES, SLUG, SPECS, agentName, codexArgs, startEffort } from './roles'
 import type { Effort, Role } from './roles'
+import { finishAgent } from './finish'
+import type { Finish } from './finish'
 
 export type TeamIo = EffortIo & {
   run: Run
   /** The engine requires each environment variable name to be literal. */
-  env: () => Promise<{ HERDR_ENV?: string; HERDR_WORKSPACE_ID?: string; HOME?: string; JEV_API_KEY?: string }>
+  env: () => Promise<{ HERDR_ENV?: string; HERDR_WORKSPACE_ID?: string; HERDR_PANE_ID?: string; HOME?: string; JEV_API_KEY?: string }>
+  sleep: (ms: number) => Promise<void>
   /** The session's project root: the repository the team works on. */
   root: () => Promise<string>
   now: () => Promise<number>
@@ -52,9 +55,36 @@ let dispatchQueue: Promise<void> = Promise.resolve()
 
 /** One queue for the entire plugin: context reads and all delivery effects run without interleaving. */
 export function dispatch(io: TeamIo, input: Input): Promise<Answer> {
-  const result = dispatchQueue.then(() => dispatchTask(io, input))
+  return queued(() => dispatchTask(io, input))
+}
+
+function queued<T>(action: () => Promise<T>): Promise<T> {
+  const result = dispatchQueue.then(action)
   dispatchQueue = result.then(() => undefined, () => undefined)
   return result
+}
+
+async function finishInWorkspace(io: TeamIo, env: Awaited<ReturnType<TeamIo['env']>>, agent: string): Promise<Finish> {
+  const ts = new Date(await io.now()).toISOString()
+  const result = await finishAgent(io.run, io.sleep, { agent, workspace: env.HERDR_WORKSPACE_ID!, leadPane: env.HERDR_PANE_ID })
+  await saveDecision(io, env.HOME, { v: 2, action: 'finish', ts, agent, uuid: result.uuid, closed: result.closed, archived: result.archived, reason: result.reason ?? null })
+  return result
+}
+
+/** Explicit finish shares dispatch's queue and automatic shared-agent retirement. */
+export function finish(io: TeamIo, input: { agent?: unknown }): Promise<Answer> {
+  return queued(async () => {
+    const env = await io.env().catch(() => ({}) as Awaited<ReturnType<TeamIo['env']>>)
+    if (env.HERDR_ENV !== '1') return { ok: false, text: NOT_IN_HERDR }
+    if (!env.HERDR_WORKSPACE_ID) return refuse('HERDR_WORKSPACE_ID is not set')
+    if (typeof input.agent !== 'string' || !isTeamName(input.agent)) return refuse('agent must be a Codex team name')
+    const result = await finishInWorkspace(io, env, input.agent)
+    return { ok: result.archived, text: [
+      `agent: ${result.agent}`,
+      `closed: ${result.closed ? `pane ${result.pane}${result.tab ? ` and task tab ${result.tab}` : ''}` : 'nothing'}`,
+      `archived: ${result.archived ? 'yes' : 'no'}${result.reason ? ` (${result.reason})` : ''}`,
+    ].join('\n') }
+  })
 }
 
 async function dispatchTask(io: TeamIo, input: Input): Promise<Answer> {
@@ -122,6 +152,7 @@ async function dispatchTask(io: TeamIo, input: Input): Promise<Answer> {
   const delivery = await deliver(io.run, {
     name,
     analystSlug: role === 'analyst' ? input.slug : undefined,
+    finishShared: agent => finishInWorkspace(io, env, agent),
     reviewDeveloper: role === 'reviewer' ? `dev-${input.slug}` : undefined,
     writes: spec.writes,
     workspace,
