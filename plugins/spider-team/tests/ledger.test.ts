@@ -251,6 +251,34 @@ test('the formatted summary is compact and names every part, and an empty ledger
   expect(text).not.toContain('older calibrations')
 })
 
+test('the routed pairs are priced against the role default on the same tokens, per current role and in total', () => {
+  const M = { input: 1_000_000, output: 0, cacheCreation: 0, cacheRead: 0 }
+  const lines: Line[] = [
+    outcome('v1', 'analyst', { model: 'sonnet', effort: 'high', tokens: M }), outcome('v2', 'analyst', { model: 'haiku', effort: 'medium', tokens: M }),
+    outcome('v3', 'analyst', { model: 'opus', effort: 'low', tokens: null, costUsd: null, status: 'error' }),
+    outcome('v4', 'planner', { model: 'opus', effort: 'high', tokens: M }),
+    outcome('v5', 'reviewer', { model: 'opus', effort: 'medium', tokens: M }), outcome('v6', 'reviewer', { model: 'sonnet', effort: 'high', tokens: M }),
+    // A retired role has no default to compare with.
+    outcome('v7', 'developer', { model: 'opus', effort: 'high', tokens: M }),
+  ]
+  const s = summarize(lines)
+  // Defaults: analyst haiku/high, planner and reviewer opus/medium. An effort change on the same model prices as no difference.
+  expect(s.vsDefault).toEqual([
+    { key: 'analyst', versus: { count: 2, below: 1, same: 0, above: 1, routedUsd: 2.1, defaultUsd: 0.2 } },
+    { key: 'planner', versus: { count: 1, below: 0, same: 0, above: 1, routedUsd: 4, defaultUsd: 4 } },
+    { key: 'reviewer', versus: { count: 2, below: 1, same: 1, above: 0, routedUsd: 6, defaultUsd: 8 } },
+    { key: 'total', versus: { count: 5, below: 2, same: 1, above: 2, routedUsd: 12.1, defaultUsd: 12.2 } },
+  ])
+  expect(formatSummary(s)).toContain([
+    'Jev vs role default (same tokens priced at each model; an effort change alone prices as no difference)',
+    '  analyst    n=2 below=1 same=0 above=1 routed=$2.1000 default=$0.2000 extra=$1.9000 (950%)',
+    '  planner    n=1 below=0 same=0 above=1 routed=$4.0000 default=$4.0000 saved=$0.0000 (0%)',
+    '  reviewer   n=2 below=1 same=1 above=0 routed=$6.0000 default=$8.0000 saved=$2.0000 (25%)',
+    '  total      n=5 below=2 same=1 above=2 routed=$12.1000 default=$12.2000 saved=$0.1000 (1%)',
+  ].join('\n'))
+  expect(formatSummary(summarize([decision('only', 'analyst')]))).toContain('  total      n=0 below=0 same=0 above=0 routed=$0.0000 default=$0.0000 saved=$0.0000 (-)')
+})
+
 test('the Jev confidence and the real time per predicted level use only current-calibration decisions, and a line without one is calibration 1', () => {
   // Older decisions: one written before the field existed (calibration 1) and one tagged with an older number, each with its outcome.
   const { calibration: _, ...untagged } = decision('o1', 'analyst', { levels: { difficulty: 1, duration: 3 }, top: { difficulty: 0.1, duration: 0.1 } })

@@ -3,7 +3,7 @@
 // three probabilities; never the task, the prompt, an answer, a path, a branch name or a key. Every field is projected one
 // by one, so extra input cannot leak in.
 import type { Distributions, Levels, Source } from './effort'
-import { CALIBRATION, DIFFICULTIES, DIMENSIONS, GROUP_OF_DURATION, JUDGE_FLAGS, judgedShort, LADDER, PRICES, QUESTIONS } from './router'
+import { CALIBRATION, defaultOf, DIFFICULTIES, DIMENSIONS, GROUP_OF_DURATION, JUDGE_FLAGS, judgedShort, LADDER, PRICES, QUESTIONS } from './router'
 import type { Dimension, Judge } from './router'
 import { MODELS, RETIRED_ROLES, ROLES } from './roles'
 import type { Effort, LedgerRole, Model, Pair, Role } from './roles'
@@ -219,7 +219,15 @@ export type Summary = {
   confidence: Record<'difficulty' | 'duration', { count: number; median: number | null; buckets: [number, number, number, number] }>
   /** For each predicted human-time level 0..3 of current-calibration decisions joined to their outcomes: the count and the median real agent duration. */
   byPredictedTime: { count: number; medianMs: number | null }[]
+  /** Per current role, then `total`: what the routed pairs cost against the role default (`vsDefault`). */
+  vsDefault: { key: string; versus: Versus }[]
 }
+/**
+ * Runs with usage whose routed pair is below, at or above the role default on the ladder (an off-ladder pair counts in none),
+ * and the same tokens priced at the routed model and at the default model. Effort changes how many tokens a run spends, and
+ * a run's tokens at another effort are unknown, so an effort change alone prices as no difference.
+ */
+export type Versus = { count: number; below: number; same: number; above: number; routedUsd: number; defaultUsd: number }
 const BUCKET_EDGES = [0.5, 0.7, 0.9] as const
 const median = (values: number[]) => {
   if (!values.length) return null
@@ -273,8 +281,27 @@ export function summarize(lines: Line[]): Summary {
   return {
     decisions: decisions.length, outcomes: outcomes.length, olderCalibration: decisions.length - current.length,
     byRole: keyed(l => l.role, [...LEDGER_ROLES]), byPair: keyed(l => `${l.model}/${l.effort}`, [...LADDER]),
-    fallback: { count: defaults.length, reasons }, confidence, byPredictedTime,
+    fallback: { count: defaults.length, reasons }, confidence, byPredictedTime, vsDefault: versusDefault(outcomes),
   }
+}
+
+const RUNGS: readonly string[] = LADDER
+// The retired roles have no default to compare with; a run without usage has nothing to price.
+function versusDefault(outcomes: OutcomeLine[]): Summary['vsDefault'] {
+  const empty = (): Versus => ({ count: 0, below: 0, same: 0, above: 0, routedUsd: 0, defaultUsd: 0 })
+  const byRole = new Map(ROLES.map(role => [role, empty()])), total = empty()
+  for (const o of outcomes) {
+    const v = byRole.get(o.role as Role)
+    if (!v || !o.tokens) continue
+    const fallback = defaultOf(o.role as Role), rung = RUNGS.indexOf(pairText(o)), base = RUNGS.indexOf(pairText(fallback))
+    const routed = costOf(o.model, o.tokens) ?? 0, standard = costOf(fallback.model, o.tokens) ?? 0
+    for (const t of [v, total]) {
+      t.count++; t.routedUsd += routed; t.defaultUsd += standard
+      if (rung >= 0) t[rung < base ? 'below' : rung > base ? 'above' : 'same']++
+    }
+  }
+  const rounded = (v: Versus): Versus => ({ ...v, routedUsd: round(v.routedUsd, 6), defaultUsd: round(v.defaultUsd, 6) })
+  return [...[...byRole].map(([key, v]) => ({ key, versus: rounded(v) })), { key: 'total', versus: rounded(total) }]
 }
 
 const pct = (n: number, total: number) => total ? `${Math.round(100 * n / total)}%` : '-'
@@ -303,5 +330,12 @@ export function formatSummary(s: Summary): string {
     const t = s.byPredictedTime[level]
     out.push(`  ${shortLabel(label).padEnd(14)} n=${t?.count ?? 0} median=${span(t?.medianMs ?? null)}`)
   })
+  out.push("Jev vs role default (same tokens priced at each model; an effort change alone prices as no difference)")
+  for (const { key, versus: v } of s.vsDefault) out.push(`  ${key.padEnd(10)} n=${v.count} below=${v.below} same=${v.same} above=${v.above} routed=$${v.routedUsd.toFixed(4)} default=$${v.defaultUsd.toFixed(4)} ${saving(v)}`)
   return out.join('\n')
+}
+/** `saved=` when the routed pairs cost less than the defaults would have, `extra=` when more, with the share of the default cost. */
+function saving(v: Versus): string {
+  const delta = round(v.defaultUsd - v.routedUsd, 6)
+  return `${delta < 0 ? 'extra' : 'saved'}=$${Math.abs(delta).toFixed(4)} (${v.defaultUsd ? `${Math.round(100 * Math.abs(delta) / v.defaultUsd)}%` : '-'})`
 }
