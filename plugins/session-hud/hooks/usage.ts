@@ -1,4 +1,4 @@
-// Pure figures for the card: a rate-limit window's pace, the cache share, spans of time and money. No host access.
+// Pure figures for the card: a rate-limit window's pace, the cache share, and spans of time. No host access.
 
 const HOUR = 3_600_000
 /** How long each window the host names lasts; a window not listed has no pace. */
@@ -57,9 +57,4 @@ export function span(ms: number): string {
   const hours = Math.floor(minutes / 60)
   if (hours < 24) return `${hours}h ${minutes % 60}m`
   return `${Math.floor(hours / 24)}d ${hours % 24}h`
-}
-
-/** Dollars with cents: `$4.59`; a non-finite or negative amount is `?`. */
-export function money(usd: number): string {
-  return Number.isFinite(usd) && usd >= 0 ? `$${usd.toFixed(2)}` : '?'
 }

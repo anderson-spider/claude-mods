@@ -33,6 +33,8 @@ export function world(on: On, opts: { theme?: string; window?: number; denySpawn
   on('session.measure', (_$, e) => ({ changed: e.changed }))
   on('turn.start', (_$, e) => ({ turnId: e.turnId }))
   on('turn.complete', () => ({ text: 'done' }) as never)
+  on('classic.PostModelSwitch', () => ({}) as never)
+  on('classic.PostCompact', () => ({}) as never)
   // Opus answers with 95% of its input cached and 5 output tokens; any other model as named, uncached, with 700.
   on('turn.step', async function* (_$, e) {
     const usage = e.model === 'claude-opus-5-5'

@@ -1,5 +1,5 @@
 import type { SessionHudCard } from '../types'
-import { WINDOW_MS, money, paceOf, span } from './usage'
+import { WINDOW_MS, paceOf, span } from './usage'
 
 export type Style = 'plain' | 'strong' | 'secondary' | 'model' | 'success' | 'warning' | 'bar' | 'track' | 'tick' | 'frame'
 export type Segment = { text: string; style: Style }
@@ -10,7 +10,7 @@ export type Snapshot = { card: SessionHudCard; now: number; columns: number; wor
 /** The card as the screen draws it: the rows above the rule and the row under it; empty when there is nothing to show. */
 export type Card = { top: Row[]; bottom: Row[] }
 
-const seg = (text: string, style: Style = 'plain'): Segment => ({ text, style })
+export const seg = (text: string, style: Style = 'plain'): Segment => ({ text, style })
 const cells = (row: Row) => row.reduce((n, part) => n + part.text.length, 0)
 const widthOf = (columns: number) => Math.max(4, Math.floor(Number.isFinite(columns) ? columns : 60))
 const count = (n: number) => (Number.isSafeInteger(n) && n >= 0 ? n : 0)
@@ -30,14 +30,6 @@ function cutRow(row: Row, columns: number): Row {
   return out
 }
 
-/** `left` at the start and `right` against the edge; when both do not fit, one row cut to the width. */
-function spread(left: Row, right: Row, columns: number): Row {
-  const room = widthOf(columns) - cells(left) - cells(right)
-  if (!right.length) return cutRow(left, columns)
-  if (room < 2) return cutRow([...left, seg('  '), ...right], columns)
-  return [...left, seg(' '.repeat(room)), ...right]
-}
-
 const FAMILY = /^claude-(opus|sonnet|haiku|fable)-([0-9]{1,2}(?:-[0-9]{1,2})*)(?:-[0-9]{8})?$/
 const ALIAS = /^(opus|sonnet|haiku|fable)$/
 /** A Claude model as the card names it, `claude-opus-5-5` as `Opus 5.5`; anything else is `?`, so no other text reaches the screen. */
@@ -52,13 +44,13 @@ const EFFORTS: ReadonlySet<string> = new Set(['low', 'medium', 'high', 'xhigh', 
 
 const BAR = 8
 /** A token count as the card writes it: `440k`, `1M`, `1.5M`. */
-function tokens(n: number): string {
+export function tokens(n: number): string {
   if (n >= 1_000_000) return `${Number((n / 1_000_000).toFixed(1))}M`
   return n >= 1000 ? `${Math.round(n / 1000)}k` : String(Math.round(n))
 }
-const finite = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n)
+export const finite = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n)
 /** The context's figures: the last input against the window the host compacts at when it is known (a smaller `autoCompactWindow`), else the host's own percent of the model's window. */
-function contextOf(card: SessionHudCard): { percent: number; used?: number; window?: number } | undefined {
+export function contextOf(card: SessionHudCard): { percent: number; used?: number; window?: number } | undefined {
   const used = card.context?.tokens
   const window = finite(card.contextWindow) && card.contextWindow > 0 ? card.contextWindow : card.context?.window
   if (finite(used) && used >= 0 && finite(window) && window > 0) return { percent: Math.max(0, Math.round((used / window) * 100)), used, window }
@@ -79,35 +71,32 @@ function contextCells(card: SessionHudCard): Row {
   return row
 }
 const outputCells = (card: SessionHudCard): Row => (count(card.output) > 0 ? [seg(`out ${tokens(card.output)}`, 'secondary')] : [])
-const cacheCells = (card: SessionHudCard): Row => (card.cache !== undefined && Number.isFinite(card.cache) ? [seg(`cache ${Math.round(card.cache)}%`, 'secondary')] : [])
+export const cacheCells = (card: SessionHudCard): Row => (card.cache !== undefined && Number.isFinite(card.cache) ? [seg(`cache ${Math.round(card.cache)}%`, 'secondary')] : [])
 /** Segments joined with ` · `, empty parts dropped. */
-const joined = (parts: Row[], gap = ' · '): Row => parts.filter(part => part.length).flatMap((part, at) => (at ? [seg(gap, 'secondary'), ...part] : part))
+export const joined = (parts: Row[], gap = ' · '): Row => parts.filter(part => part.length).flatMap((part, at) => (at ? [seg(gap, 'secondary'), ...part] : part))
 
-/** The session's cost, its hourly rate once a minute has passed, and its age: `session $0.43 · $1.70/h · 18m`. */
-function costCells(card: SessionHudCard, now: number): Row {
-  if (card.cost === undefined) return []
-  const row: Row = [seg('session ', 'secondary'), seg(money(card.cost), 'strong')]
-  const age = finite(card.startedAt) && finite(now) ? now - card.startedAt : undefined
-  if (age !== undefined && age >= 60_000) row.push(seg(` · ${money(card.cost / (age / 3_600_000))}/h · ${span(age)}`, 'secondary'))
-  return row
-}
-
-/** The first row: the dot (yellow with the turn's time while one runs), the model and its effort; on a narrow card the context, cache and output too; the session's cost on the right. */
-function modelRow(card: SessionHudCard, now: number, working: boolean, inner: number, wide: boolean): Row | undefined {
+/** The dot (yellow with the turn's time while one runs), the model and its effort; empty before the model is known. */
+export function headCells(card: SessionHudCard, now: number, working: boolean): Row {
   const name = modelName(card.model)
-  const head: Row = []
-  if (name !== undefined) {
-    head.push(seg('● ', working ? 'warning' : 'success'), seg(name, 'model'))
-    if (card.effort !== undefined && EFFORTS.has(card.effort)) head.push(seg(` · ${card.effort}`, 'secondary'))
-    if (working && finite(card.turnStartedAt) && finite(now)) head.push(seg(` · working ${span(Math.max(0, now - card.turnStartedAt))}`, 'warning'))
-  }
-  const left = wide ? head : joined([head, contextCells(card), cacheCells(card), outputCells(card)], '   ')
-  const right = costCells(card, now)
-  if (!left.length && !right.length) return undefined
-  return spread(left, right, inner)
+  if (name === undefined) return []
+  const head: Row = [seg('● ', working ? 'warning' : 'success'), seg(name, 'model')]
+  if (card.effort !== undefined && EFFORTS.has(card.effort)) head.push(seg(` · ${card.effort}`, 'secondary'))
+  if (working && finite(card.turnStartedAt) && finite(now)) head.push(seg(` · working ${span(Math.max(0, now - card.turnStartedAt))}`, 'warning'))
+  return head
 }
 
-const LABELS: Readonly<Record<string, string>> = { five_hour: '5h', seven_day: '7d' }
+/** The first row: the head; on a narrow card the context, cache and output too. */
+function modelRow(card: SessionHudCard, now: number, working: boolean, inner: number, wide: boolean): Row | undefined {
+  const head = headCells(card, now, working)
+  const left = wide ? head : joined([head, contextCells(card), cacheCells(card), outputCells(card)], '   ')
+  return left.length ? cutRow(left, inner) : undefined
+}
+
+export const LABELS: Readonly<Record<string, string>> = { five_hour: '5h', seven_day: '7d' }
+/** The windows the card draws, the shorter first, at most two. */
+export const shownLimits = (card: SessionHudCard): SessionHudCard['limits'] => card.limits
+  .filter(limit => WINDOW_MS[limit.kind] !== undefined && LABELS[limit.kind] !== undefined)
+  .sort((a, b) => WINDOW_MS[a.kind]! - WINDOW_MS[b.kind]!).slice(0, 2)
 /** A window's bar is at most this long, so the percent stays beside it on a wide terminal. */
 const LIMIT_BAR = 30
 /** A window's block at its widest: label, bar, ` 100%` and ` ▲100`; the second window starts right after it. */
@@ -140,8 +129,7 @@ function limitLines(limit: SessionHudCard['limits'][number], now: number, width:
 
 /** The windows side by side where two fit (a gap of four between, the second no further than one block in), one under the other where they do not. */
 function limitRows(card: SessionHudCard, now: number, inner: number): Row[] {
-  const limits = card.limits.filter(limit => WINDOW_MS[limit.kind] !== undefined && LABELS[limit.kind] !== undefined)
-    .sort((a, b) => WINDOW_MS[a.kind]! - WINDOW_MS[b.kind]!)
+  const limits = shownLimits(card)
   if (!limits.length) return []
   const half = Math.floor((inner - 4) / 2)
   if (limits.length < 2 || half < 34) return limits.flatMap(limit => limitLines(limit, now, inner))
@@ -175,8 +163,7 @@ function contextBlock(card: SessionHudCard): Row[] {
 
 /** A wide card: the context and the windows as three aligned blocks, each window at a fixed column. */
 function wideRows(card: SessionHudCard, now: number): Row[] {
-  const limits = card.limits.filter(limit => WINDOW_MS[limit.kind] !== undefined && LABELS[limit.kind] !== undefined)
-    .sort((a, b) => WINDOW_MS[a.kind]! - WINDOW_MS[b.kind]!).slice(0, 2)
+  const limits = shownLimits(card)
   const context = contextBlock(card)
   const blocks = [...(context.length ? [{ lines: context, width: CONTEXT_BLOCK }] : []),
     ...limits.map(limit => ({ lines: limitLines(limit, now, LIMIT_BLOCK), width: LIMIT_BLOCK }))]
@@ -195,7 +182,7 @@ function wideRows(card: SessionHudCard, now: number): Row[] {
 }
 
 /** The running agents grouped by model, the most first, then by name: `3 agents: Sonnet 4.5 ×2 · Haiku 4.5`; empty when none runs. */
-function agentCells(card: SessionHudCard): Row {
+export function agentCells(card: SessionHudCard): Row {
   const agents = Array.isArray(card.agents) ? card.agents : []
   if (!agents.length) return []
   const groups = new Map<string, number>()
@@ -208,14 +195,18 @@ function agentCells(card: SessionHudCard): Row {
     ...joined(sorted.map(([name, n]) => [seg(name, 'model'), ...(n > 1 ? [seg(` ×${n}`, 'secondary')] : [])]))]
 }
 
-/** The row under the rule: the running agents, then the last turn, turn count, edits, errors and the turn's cost. */
-function turnRow(card: SessionHudCard, inner: number): Row {
+/** The last turn, turn count, edits and errors: `last turn 5s · 4 turns · 2 edits · 1 error`. */
+export function turnCells(card: SessionHudCard): Row {
   const parts: string[] = []
   if (card.lastTurnMs !== undefined) parts.push(`last turn ${span(card.lastTurnMs)}`)
   if (count(card.turns) > 0) parts.push(plural(count(card.turns), 'turn'))
   parts.push(plural(count(card.edits), 'edit'), plural(count(card.errors), 'error'))
-  if (card.lastTurnCost !== undefined && Number.isFinite(card.lastTurnCost) && card.lastTurnCost >= 0) parts.push(`+${money(card.lastTurnCost)}`)
-  return cutRow(joined([agentCells(card), [seg(parts.join(' · '), 'secondary')]], '   '), inner)
+  return [seg(parts.join(' · '), 'secondary')]
+}
+
+/** The row under the rule: the running agents, then the turn's figures. */
+function turnRow(card: SessionHudCard, inner: number): Row {
+  return cutRow(joined([agentCells(card), turnCells(card)], '   '), inner)
 }
 
 /** The card from one snapshot: rows sized to the band's width less the border and padding (four cells). */
