@@ -17,8 +17,8 @@ export const USAGE = {
   cost: { usd: 4.43 },
 }
 
-/** A host with the session's model, usage, theme and clock; `crew` answers the crew's HUD atoms when given. */
-export function world(on: On, opts: { theme?: string; window?: number; crew?: { plans: unknown[]; agents: unknown[] } } = {}) {
+/** A host with the session's model, usage, theme and clock. */
+export function world(on: On, opts: { theme?: string; window?: number } = {}) {
   // `mock.clock` registers `clock.now` itself and the engine refuses a second one: the test's own reads NOW.
   const clock = mock.clock(((name: string, ...rest: unknown[]) => (name === 'clock.now' ? undefined : (on as (...a: unknown[]) => unknown)(name, ...rest))) as unknown as On)
   on('clock.now', () => ({ value: NOW }))
@@ -35,11 +35,6 @@ export function world(on: On, opts: { theme?: string; window?: number; crew?: { 
     return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn',
       usage: { model: 'claude-opus-5-5', input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 950, cache_creation_input_tokens: 40 } } as never
   })
-  if (opts.crew) {
-    const crew = opts.crew
-    on('state.get', (_$, e, next) => (e.plugin === 'crew' && (e.key === 'plans' || e.key === 'agents')
-      ? { value: { value: crew[e.key], version: 1 } } : next(e)) as never)
-  }
   return { clock }
 }
 

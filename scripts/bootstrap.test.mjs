@@ -10,7 +10,7 @@ const script = fileURLToPath(new URL("./bootstrap.sh", import.meta.url));
 const MARKET = "spider-claude-mods";
 
 // A `claude` that logs every call and keeps the marketplace and plugin lists in files, a `uname` that says Darwin.
-function world({ installed = [], marketplace = false, login = false } = {}) {
+function world({ installed = [], marketplace = false } = {}) {
   const root = mkdtempSync(join(tmpdir(), "bootstrap-"));
   const bin = join(root, "bin");
   const home = join(root, "home");
@@ -49,12 +49,6 @@ esac
   const node = join(root, "node");
   writeFileSync(node, "#!/bin/sh\n");
   for (const f of [join(bin, "claude"), join(bin, "uname"), node]) chmodSync(f, 0o755);
-  if (login) {
-    mkdirSync(join(home, ".codex"));
-    writeFileSync(join(home, ".codex", "auth.json"), "{}");
-    writeFileSync(join(bin, "codex"), "#!/bin/sh\n");
-    chmodSync(join(bin, "codex"), 0o755);
-  }
   const run = (...args) => {
     const result = spawnSync("sh", [script, ...args], {
       encoding: "utf8",
@@ -75,7 +69,7 @@ test("--check prints the steps and changes nothing", () => {
     assert.equal(r.status, 0, r.stderr);
     assert.deepEqual(mutating(r.calls), []);
     assert.match(r.stdout, /would: claude plugin marketplace add anderson-spider\/claude-mods/);
-    for (const p of ["crew", "chatgpt", "codex-computer-use", "tailscale"]) {
+    for (const p of ["chatgpt", "codex-computer-use", "tailscale"]) {
       assert.match(r.stdout, new RegExp(`would: claude plugin install ${p}@${MARKET} --scope user`));
     }
   } finally {
@@ -90,31 +84,26 @@ test("a fresh machine: marketplace added, every plugin installed, the helper of 
     assert.equal(r.status, 0, r.stderr);
     assert.deepEqual(mutating(r.calls), [
       "claude plugin marketplace add anderson-spider/claude-mods",
-      `claude plugin install crew@${MARKET} --scope user`,
       `claude plugin install chatgpt@${MARKET} --scope user`,
       `claude plugin install codex-computer-use@${MARKET} --scope user`,
       `claude plugin install tailscale@${MARKET} --scope user`,
       "codex-computer-use-helper",
     ]);
-    // No Codex login in this home: the crew helper is skipped with a reason, not failed.
-    assert.match(r.stderr, /crew helper skipped: no codex binary or no Codex login/);
   } finally {
     rmSync(w.root, { recursive: true, force: true });
   }
 });
 
-test("a second run updates what is installed and runs both helpers when the Codex login exists", () => {
-  const w = world({ installed: ["crew", "chatgpt", "codex-computer-use", "tailscale"], marketplace: true, login: true });
+test("a second run updates what is installed and runs the codex-computer-use helper", () => {
+  const w = world({ installed: ["chatgpt", "codex-computer-use", "tailscale"], marketplace: true });
   try {
     const r = w.run();
     assert.equal(r.status, 0, r.stderr);
     assert.deepEqual(mutating(r.calls), [
       `claude plugin marketplace update ${MARKET}`,
-      `claude plugin update crew@${MARKET} --scope user`,
       `claude plugin update chatgpt@${MARKET} --scope user`,
       `claude plugin update codex-computer-use@${MARKET} --scope user`,
       `claude plugin update tailscale@${MARKET} --scope user`,
-      "crew-helper",
       "codex-computer-use-helper",
     ]);
   } finally {

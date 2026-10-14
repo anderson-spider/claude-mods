@@ -73,7 +73,7 @@ The plugin writes one version-2 record per dispatch to `~/.claude/codex-team/dec
 
 ## Credits
 
-The delivery states, the never-resend rule, the Codex start flags and the effort assessment/scoring follow [herdr-router](https://github.com/Qingswe/herdr-router), used with its author's permission. Jev's client and redaction are copied from the [crew](../crew/README.md) plugin, with no cross-plugin runtime imports.
+The delivery states, the never-resend rule, the Codex start flags and the effort assessment/scoring follow [herdr-router](https://github.com/Qingswe/herdr-router), used with its author's permission. Jev's client and redaction are copied from the former crew plugin, with no cross-plugin runtime imports.
 
 ## Tests
 

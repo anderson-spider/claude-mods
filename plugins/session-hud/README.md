@@ -4,7 +4,7 @@ A three-row card above the prompt:
 
 1. A dot, green between turns and yellow with the running turn's time (`working 12s`) while one runs; the model and its effort; the context bar with its tokens (`88% · 440k/500k`), measured against the window the session compacts at (an `autoCompactWindow` smaller than the model's limit counts); the share of the input read from the prompt cache; the output tokens; and the session's cost, its hourly rate and age (`session $4.59 · $15.30/h · 18m`).
 2. The five-hour and seven-day limits, side by side: a bar of at most thirty cells lit to the percent used with a tick at the time passed, `▲N` for the points above an even pace, the time left and where the pace ends (`~85% at reset`, or `100% in 2d 7h` when it runs out first).
-3. The last turn's duration, the turns so far, the crew's running helpers, the session's edits and errors and what the last turn cost; on the right, the crew's open plans (`done`, `running`, `left`) and the running steps.
+3. The last turn's duration, the turns so far, the session's edits and errors and what the last turn cost.
 
 From about 150 columns the context and the two windows sit as three aligned blocks under the first row: each with a thirty-cell bar, and the context's block adds the tokens left in the window, the cache share and the output tokens.
 
@@ -12,11 +12,11 @@ From about 150 columns the context and the two windows sit as three aligned bloc
 /plugin install session-hud --marketplace anderson-spider/claude-mods
 ```
 
-It requires the crew plugin, which no longer draws above the prompt itself; `/crew-hud` still opens the crew's pane. Under a dark or automatic theme the card uses the design's colours; under a light or ANSI theme it keeps the theme's. A survey takes the band while it is open.
+Under a dark or automatic theme the card uses the design's colours; under a light or ANSI theme it keeps the theme's. A survey takes the band while it is open.
 
 ## Privacy
 
-Everything comes from the session itself: the host's usage figures, the model that answered, the main session's tool results (only whether an edit succeeded or a call failed) and the crew's prepared plan and helper state. Nothing is sent anywhere, and no prompt, answer, tool input or path reaches the screen.
+Everything comes from the session itself: the host's usage figures, the model that answered, the main session's tool results (only whether an edit succeeded or a call failed). Nothing is sent anywhere, and no prompt, answer, tool input or path reaches the screen.
 
 ## Tests
 

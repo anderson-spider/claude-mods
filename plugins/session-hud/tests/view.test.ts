@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import type { SessionHudCard } from '../types'
-import { cardView, modelName, type CrewSummary, type Snapshot } from '../hooks/view'
+import { cardView, modelName, type Snapshot } from '../hooks/view'
 
 const now = Date.parse('2026-10-13T12:00:00Z')
 const HOUR = 3_600_000
@@ -10,17 +10,16 @@ const full: SessionHudCard = {
   limits: [{ kind: 'seven_day', percentUsed: 60, resetsAt: at(84 * HOUR) }, { kind: 'five_hour', percentUsed: 74, resetsAt: at(38 * 60_000) }],
   lastTurnMs: 5_000, lastTurnCost: 0.16, edits: 2, errors: 1, turns: 0, output: 0,
 }
-const crew: CrewSummary = { agents: 1, done: 7, running: 1, left: 1, steps: ['L1 main'] }
-const view = (changes: Partial<Snapshot> = {}) => cardView({ card: full, crew, now, columns: 110, ...changes })
+const view = (changes: Partial<Snapshot> = {}) => cardView({ card: full, now, columns: 110, ...changes })
 const text = (rows: { text: string }[][]) => rows.map(row => row.map(s => s.text).join(''))
 
-test('the card is three rows wide: model, context, cache and cost; both windows side by side; the turn and the plan', () => {
+test('the card is three rows wide: model, context, cache and cost; both windows side by side; the turn, edits, errors and cost', () => {
   const card = view()
   const [model, bars, ends] = text(card.top)
   expect(model).toMatch(/^● Opus 5\.5 · medium {3}ctx ━{8} 20% · 200k\/1M {3}cache 95% +session \$4\.59$/u)
   expect(bars).toMatch(/^5h {2}━+│━+ 74% +7d {2}━+│━+ 60% ▲10$/u)
   expect(ends).toMatch(/^ {4}38m left · ~85% at reset +3d 12h left · 100% in 2d 8h$/u)
-  expect(text(card.bottom)).toEqual([expect.stringMatching(/^last turn 5s · 1 agent · 2 edits · 1 error · \+\$0\.16 +plan 7 done · 1 running · 1 left {2}L1 main$/u)])
+  expect(text(card.bottom)).toEqual([expect.stringMatching(/^last turn 5s · 2 edits · 1 error · \+\$0\.16$/u)])
   expect([...card.top, ...card.bottom].every(row => row.reduce((n, s) => n + s.text.length, 0) <= 106)).toBe(true)
 })
 
@@ -57,7 +56,7 @@ test('a wide card sets the context and both windows as three blocks, with the se
   expect(bars).toMatch(/^ctx ━{30} 40% {12}5h {2}[━│]{30} 74% {12}7d {2}[━│]{30} 60% ▲10$/u)
   expect(ends).toMatch(/^ {4}200k\/500k · 300k left +38m left · ~85% at reset +3d 12h left · 100% in 2d 8h$/u)
   expect(extra).toBe('    cache 95% · out 12k')
-  expect(text(card.bottom)[0]).toMatch(/^last turn 5s · 4 turns · 1 agent · /u)
+  expect(text(card.bottom)[0]).toMatch(/^last turn 5s · 4 turns · 2 edits · 1 error · /u)
   expect(card.top.every(row => row.reduce((n, s) => n + s.text.length, 0) <= 236)).toBe(true)
 })
 
@@ -70,10 +69,10 @@ test('while a turn runs the dot turns yellow and the turn time counts; between t
   expect(text([idle])[0]).not.toContain('working')
 })
 
-test('a narrow card stacks the windows and shrinks the plan to its counts', () => {
+test('a narrow card stacks the windows and keeps the turn figures within its width', () => {
   const card = view({ columns: 70 })
   expect(text(card.top).map(line => line.slice(0, 4))).toEqual(['● Op', '5h  ', '    ', '7d  ', '    '])
-  expect(text(card.bottom)[0]).toMatch(/plan 7\/1\/1/u)
+  expect(text(card.bottom)[0]).toBe('last turn 5s · 2 edits · 1 error · +$0.16')
   expect([...card.top, ...card.bottom].every(row => row.reduce((n, s) => n + s.text.length, 0) <= 66)).toBe(true)
 })
 
@@ -83,8 +82,6 @@ test('what the host has not reported is left out instead of drawn as zero', () =
   const early = cardView({ card: { model: 'claude-opus-5-5', limits: [], edits: 0, errors: 0, turns: 0, output: 0 }, now, columns: 110 })
   expect(text(early.top)).toEqual(['● Opus 5.5'])
   expect(text(early.bottom)).toEqual(['0 edits · 0 errors'])
-  const noCrew = cardView({ card: full, now, columns: 110 })
-  expect(text(noCrew.bottom)[0]).toBe('last turn 5s · 2 edits · 1 error · +$0.16')
 })
 
 test('only Claude model ids reach the screen, named by family and version', () => {

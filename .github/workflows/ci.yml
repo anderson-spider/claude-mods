@@ -27,8 +27,6 @@ jobs:
         run: node --test scripts/*.test.mjs
       - name: codex-computer-use helper tests
         run: node --test plugins/codex-computer-use/helper/test/*.test.mjs
-      - name: crew helper tests
-        run: node --test plugins/crew/helper/test/*.test.mjs
 
   # Neither command logs in or needs the typings Claude Code generates when it loads a plugin.
   plugins:

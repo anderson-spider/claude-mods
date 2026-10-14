@@ -1,11 +1,11 @@
 import { atom, read, update } from 'claude-code'
-import type { Hook, PluginState, Register, Timer } from 'claude-code'
+import type { Hook, Register, Timer } from 'claude-code'
 import type { SessionHudCard } from '../types'
 import { EMPTY, began, completed, measured, stepped, tooled, windowed } from './card'
 import type { Measured } from './card'
 import { paint, paletteOf } from './palette'
 import type { Palette } from './palette'
-import { cardView, crewSummary } from './view'
+import { cardView } from './view'
 import type { Segment } from './view'
 
 type Dollar = Parameters<Hook<'session.start'>>[0]
@@ -13,9 +13,6 @@ type Dollar = Parameters<Hook<'session.start'>>[0]
 const card = atom({ plugin: 'session-hud', key: 'card' } as const, EMPTY)
 const nowAtom = atom({ plugin: 'session-hud', key: 'now' } as const, 0)
 const paletteAtom = atom({ plugin: 'session-hud', key: 'palette' } as const, 'theme' as Palette)
-// The crew's prepared HUD atoms, read only: the crew is a dependency and owns them.
-const crewPlans = atom({ plugin: 'crew', key: 'plans' } as const, [] as PluginState['crew']['plans'])
-const crewAgents = atom({ plugin: 'crew', key: 'agents' } as const, [] as PluginState['crew']['agents'])
 
 /** The time left in a window is drawn in minutes: a tick every 30 s keeps it current without redrawing on every second. */
 const TICK_MS = 30_000
@@ -130,9 +127,9 @@ export const register: Register = on => {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
     try {
-      const [shown, time, palette, plans, agents] = await Promise.all([read($, card), read($, nowAtom), read($, paletteAtom), read($, crewPlans), read($, crewAgents)])
+      const [shown, time, palette] = await Promise.all([read($, card), read($, nowAtom), read($, paletteAtom)])
       const columns = e.props.bodyColumns
-      const view = cardView({ card: shown as SessionHudCard, crew: crewSummary(plans, agents), now: time, columns, working: e.props.isWorking })
+      const view = cardView({ card: shown as SessionHudCard, now: time, columns, working: shown.turnStartedAt !== undefined })
       if (!view.top.length && !view.bottom.length) return next(e)
       const { Box, Text } = $.ui.resolve(e)
       const line = (row: Segment[], key: string) => <Text key={key} wrap="truncate">{row.map((part, at) =>
