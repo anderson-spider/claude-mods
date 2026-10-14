@@ -11,7 +11,7 @@ test('session start registers dispatch and finish with their typed input schemas
 
   expect(await started($, tools)).toEqual(['dispatch', 'finish'])
   const schema = tools[0]?.inputSchema as unknown as { properties: Record<string, unknown>; required: readonly string[] }
-  expect(Object.keys(schema.properties).sort()).toEqual(['cwd', 'effort', 'model', 'role', 'slug', 'task'])
+  expect(Object.keys(schema.properties).sort()).toEqual(['cwd', 'effort', 'fast', 'model', 'role', 'slug', 'task'])
   expect([...schema.required].sort()).toEqual(['role', 'slug'])
   expect(tools[1]?.inputSchema).toMatchObject({ type: 'object', properties: { agent: { type: 'string' } }, required: ['agent'] })
 })
@@ -241,6 +241,26 @@ for (const allowAstra of [true, false]) {
     }
   })
 }
+
+test('manifest default fast is off and the host option or a dispatch choice turns Fast mode on', async ($, on) => {
+  const w = dispatchWorld(on, 'test-key')
+  await started($, w.tools)
+  const off = await $.tool.call({ tool: DISPATCH, role: 'analyst', slug: 'slow', task: 'Task @luna-low' } as never)
+  expect(off.result).toContain('fast: off (plugin option)')
+  const on1 = await $.tool.call({ tool: DISPATCH, role: 'analyst', slug: 'quick', task: 'Task @luna-low', fast: true } as never)
+  expect(on1.result).toContain('fast: on (dispatch)')
+  const starts = w.calls.filter(call => call[2] === 'start').map(call => call.filter(arg => arg.startsWith('service_tier=')))
+  expect(starts).toEqual([[], ['service_tier="priority"']])
+})
+
+test('host fast option starts agents in Fast mode unless the dispatch turns it off', { options: { fast: true } }, async ($, on) => {
+  const w = dispatchWorld(on, 'test-key')
+  await started($, w.tools)
+  expect((await $.tool.call({ tool: DISPATCH, role: 'analyst', slug: 'quick', task: 'Task @luna-low' } as never)).result).toContain('fast: on (plugin option)')
+  expect((await $.tool.call({ tool: DISPATCH, role: 'analyst', slug: 'slow', task: 'Task @luna-low', fast: false } as never)).result).toContain('fast: off (dispatch)')
+  const starts = w.calls.filter(call => call[2] === 'start').map(call => call.filter(arg => arg.startsWith('service_tier=')))
+  expect(starts).toEqual([['service_tier="priority"'], []])
+})
 
 test('manifest default allowAstra permits Astra through the host', async ($, on) => {
   const w = dispatchWorld(on, 'test-key')

@@ -17,6 +17,8 @@ import type { ModelPolicyIo } from './model-policy'
 
 export type TeamIo = EffortIo & ModelPolicyIo & {
   allowAstra?: unknown
+  /** The `fast` plugin option: only true starts agents on the priority service tier when a dispatch does not choose. */
+  fast?: unknown
   run: Run
   /** The engine requires each environment variable name to be literal. */
   env: () => Promise<{ HERDR_ENV?: string; HERDR_WORKSPACE_ID?: string; HERDR_PANE_ID?: string; HOME?: string; JEV_API_KEY?: string }>
@@ -54,7 +56,7 @@ async function developerDir(io: TeamIo, repo: string, cwd: unknown): Promise<{ c
   return { cwd: toplevel }
 }
 
-type Input = { role?: unknown; task?: unknown; slug?: unknown; cwd?: unknown; effort?: unknown; model?: unknown }
+type Input = { role?: unknown; task?: unknown; slug?: unknown; cwd?: unknown; effort?: unknown; model?: unknown; fast?: unknown }
 let dispatchQueue: Promise<void> = Promise.resolve()
 
 /** One queue for the entire plugin: context reads and all delivery effects run without interleaving. */
@@ -105,6 +107,8 @@ async function dispatchTask(io: TeamIo, input: Input): Promise<Answer> {
   if (role !== 'reviewer' && (typeof input.task !== 'string' || !input.task.trim())) return refuse('task is empty')
   if (input.task !== undefined && typeof input.task !== 'string') return refuse('task must be text')
   if (typeof input.slug !== 'string' || !SLUG.test(input.slug)) return refuse('slug must be lowercase letters, digits and hyphens, starting with a letter, at most 22 characters')
+  if (input.fast !== undefined && typeof input.fast !== 'boolean') return refuse('fast must be true or false')
+  const fast = typeof input.fast === 'boolean' ? input.fast : io.fast === true
   let parsed: ReturnType<typeof parsePins>
   try { parsed = parsePins((input.task as string | undefined) ?? '', input) } catch { return refuse(INVALID_PINS) }
   if (role !== 'reviewer' && !parsed.task.trim()) return refuse('task is empty')
@@ -178,7 +182,7 @@ async function dispatchTask(io: TeamIo, input: Input): Promise<Answer> {
       assessed.choice = { ...selected, effort: capped.effort }
       // Re-read permission at the last boundary, outside the assessment catch that restores role defaults.
       if (!modelAllowed(assessed.choice.model, false) && !await resolveAllowAstra(io, io.allowAstra)) return { refusal: ASTRA_REFUSAL }
-      return codexArgs(spec, assessed.choice, roots)
+      return codexArgs(spec, assessed.choice, roots, fast)
     },
     prompt: brief({ role, slug: input.slug, repo: role === 'reviewer' ? original!.cwd : repo, cwd, task, report, followup: role === 'developer' && original !== undefined }),
     // `unknown` is on disk before the prompt can reach the agent, so a crash never leaves a sent task unrecorded.
@@ -203,6 +207,7 @@ async function dispatchTask(io: TeamIo, input: Input): Promise<Answer> {
     assessed.choice
       ? `role: ${role}, model ${assessed.choice.model}, effort ${assessed.choice.effort} (${assessed.choice.source})${assessed.capReason ? `, ${assessed.capReason}` : ''}, ${delivery.started ? 'applied at start' : 'not applied: agent not started'}`
       : `role: ${role}, model and effort not selected: agent not started`,
+    `fast: ${fast ? 'on' : 'off'} (${typeof input.fast === 'boolean' ? 'dispatch' : 'plugin option'})${delivery.started ? '' : ', not applied: agent not started'}`,
     `delivery: ${delivery.status}${delivery.reason ? ` (${delivery.reason})` : ''}`,
     `report: ${report}`,
     `Herdr: ${delivery.effectiveAgent}`,

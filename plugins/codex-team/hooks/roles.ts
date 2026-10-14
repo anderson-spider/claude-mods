@@ -79,15 +79,15 @@ export const SLUG = /^[a-z][a-z0-9-]{0,21}$/
 const toml = (value: string) => JSON.stringify(value)
 
 /**
- * The `codex` arguments for a role: model, effort, a workspace-write sandbox with the network, no approvals, the role's
+ * The `codex` arguments for a role: model, effort, Fast (the `priority` service tier) only when `fast`, a workspace-write sandbox with the network, no approvals, the role's
  * instructions. `writableRoots` adds directories beyond the working directory (the reports directory, for the developer).
  * Codex keeps every `.git` read-only under this sandbox, so no role can commit.
  */
-export function codexArgs(spec: RoleSpec, profile: ProfilePair, writableRoots: readonly string[]): string[] {
+export function codexArgs(spec: RoleSpec, profile: ProfilePair, writableRoots: readonly string[], fast = false): string[] {
   return [
     '-m', profile.model,
     '-c', `model_reasoning_effort=${toml(startEffort(profile.model, profile.effort).effort)}`,
-    '-c', 'service_tier="priority"',
+    ...(fast ? ['-c', 'service_tier="priority"'] : []),
     '-s', 'workspace-write',
     '-a', 'never',
     '-c', 'sandbox_workspace_write.network_access=true',

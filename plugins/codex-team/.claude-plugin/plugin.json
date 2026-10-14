@@ -1,6 +1,6 @@
 {
   "name": "codex-team",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "description": "Dispatches Codex team agents (developer, analyst, architect) into named Herdr panes with confirmed delivery and short reports.",
   "author": {
     "name": "anderson-spider"
@@ -11,6 +11,13 @@
       "title": "Allow Astra",
       "description": "Allow Codex team agents to use Astra. Astra never runs above high effort.",
       "default": true,
+      "sensitive": false
+    },
+    "fast": {
+      "type": "boolean",
+      "title": "Fast mode",
+      "description": "Start Codex team agents in Fast mode (the priority service tier) unless a dispatch chooses otherwise.",
+      "default": false,
       "sensitive": false
     }
   }
