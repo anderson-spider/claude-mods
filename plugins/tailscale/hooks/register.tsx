@@ -1,38 +1,10 @@
 import type { EngineInterface, McpToolInputs, Register } from 'claude-code'
 import { WRITE_METHODS, call, type Request } from './api'
 import { OFF_TEXT, resolveKey, type KeyIo } from './key'
+import { allOf, type SchemaFor } from './schema'
 
 const PATH_HELP =
   'API path under https://api.tailscale.com/api/v2, starting with "/". "-" is the default tailnet (/tailnet/-/devices).'
-
-/** Every ordering of the union `U`, so a tuple of this type lists each member exactly once. Factorial: meant for up to ~6 members. */
-type Permutations<U, A = U> = [U] extends [never] ? [] : A extends unknown ? [A, ...Permutations<Exclude<U, A>>] : never
-
-type RequiredKeys<T> = { [K in keyof T]-?: {} extends Pick<T, K> ? never : K }[keyof T]
-
-/** The JSON Schema of one property, tied to the type `V` of the same property in `McpToolInputs`. A union of literals needs an `enum` listing each member once. */
-type PropertySchema<V> = { description?: string } & (unknown extends V
-  ? unknown
-  : [V] extends [string]
-    ? string extends V
-      ? { type: 'string' }
-      : { type: 'string'; enum: Permutations<V> }
-    : [V] extends [readonly (infer I)[]]
-      ? { type: 'array'; items: PropertySchema<I> }
-      : never)
-
-/**
- * Ties a tool's `inputSchema` to its `McpToolInputs` entry in types/index.d.ts: `satisfies SchemaFor<McpToolInputs[...]>`
- * fails tsc when the schema has a property the type lacks or omits one, when `required` is not exactly the type's
- * required keys (any order), when a property's `type` or `items` disagrees, or when a literal union lacks an `enum`
- * with exactly its members (any order). A property type the helper does not know (number, boolean, object) fails
- * closed. Descriptions and the `fields`/`body` semantics are not checked. Permutations: up to ~6 keys or members.
- */
-type SchemaFor<T> = {
-  type: 'object'
-  properties: { [K in keyof T]-?: PropertySchema<Required<T>[K]> }
-  required: Permutations<RequiredKeys<T>>
-}
 
 /** Shapes a call's output for the host: the result of a custom tool is a string, and `isError` is set only when true (the host rejects `false`). */
 function reply(out: { text: string; isError: boolean }): { result: string } | { result: string; isError: true } {
@@ -87,7 +59,7 @@ export const register: Register = (on, options) => {
       inputSchema: {
         type: 'object',
         properties: {
-          method: { type: 'string', enum: [...WRITE_METHODS] },
+          method: { type: 'string', enum: allOf<McpToolInputs['mcp__tailscale__tailscale_write']['method']>()(...WRITE_METHODS) },
           path: { type: 'string', description: PATH_HELP },
           body: { description: 'JSON object or string; non-JSON strings are sent as HuJSON.' },
           ifMatch: {

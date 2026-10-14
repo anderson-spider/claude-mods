@@ -8,6 +8,13 @@ const TYPES_TSCONFIG = './.claude-plugin/types/tsconfig.json'
 const HOOK_COMMAND = file => `node "$CLAUDE_PROJECT_DIR/.claude/hooks/${file}"`
 // A project hook script declares its event and matcher on its first line: `// PreToolUse (Edit|Write): why`.
 const HOOK_HEADER = /^\/\/ (\w+)(?: \(([^)]*)\))?:/
+// The SchemaFor files: each plugin path with the template file it copies byte for byte (neither has a placeholder). A
+// plugin with hooks/schema.ts carries both.
+const TEMPLATE_DIR = fileURLToPath(new URL('./plugin-template/', import.meta.url))
+const SHARED_FILES = [
+  ['hooks/schema.ts', 'hooks/schema.ts.tmpl'],
+  ['tests/schema-types.ts', 'tests/schema-types.ts.tmpl'],
+]
 
 const readText = path => readFileSync(path, 'utf8')
 const readJson = path => JSON.parse(readText(path))
@@ -226,6 +233,15 @@ function checkPlugin(root, entry, marketplace, rootDocs, errors) {
     // Further fields (`disable-model-invocation`) may follow the description.
     const front = /^---\nname: (.+)\ndescription: (.+)\n(?:[\w-]+: .+\n)*---\n/.exec(text)
     if (front?.[1] !== skill) fail(`${file} is missing or its frontmatter does not name "${skill}"`)
+  }
+
+  // One SchemaFor everywhere: a plugin's copy may not drift from the template the scaffold writes.
+  if (existsSync(join(dir, 'hooks/schema.ts'))) {
+    for (const [file, template] of SHARED_FILES) {
+      const source = `scripts/plugin-template/${template}`
+      if (!existsSync(join(dir, file))) fail(`${file} is missing (copy ${source})`)
+      else if (readText(join(dir, file)) !== readText(join(TEMPLATE_DIR, template))) fail(`${file} differs from ${source} (copy the template)`)
+    }
   }
 
   checkCitedTests(dir, fail)
