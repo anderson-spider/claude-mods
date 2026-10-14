@@ -6,7 +6,7 @@ import type { JevInit, JevIo, JevOptions } from '../hooks/jev'
 const KEY = ['sk-test-', 'abcdefghijklmnopqrstuvwx'].join('')
 const BODY = JSON.stringify({
   model: 'jev-1.13.0',
-  answers: { difficulty: { probabilities: { '0': 0.9, '1': 0.1 } }, duration: { probabilities: { '1': 1 } }, scope: { probabilities: { '0': 1 } } },
+  answers: { difficulty: { probabilities: { '0': 0.9, '1': 0.1 } }, duration: { probabilities: { '1': 1 } } },
 })
 const OPTS: JevOptions = { model: 'jev-1.13.0' }
 

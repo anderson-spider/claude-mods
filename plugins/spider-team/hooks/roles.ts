@@ -1,8 +1,8 @@
-import { defaultOf } from './router'
 // Roles own permissions and instructions; routing changes only model and effort.
+import { defaultOf } from './router'
 export const ROLES = ['analyst', 'developer', 'reviewer', 'architect'] as const
 export type Role = typeof ROLES[number]
-// Capacity order, weakest first: the router's range is a slice of this list.
+// Capacity order, weakest first. The router table in router.ts is typed against these lists.
 export const MODELS = ['haiku', 'sonnet', 'opus', 'fable'] as const
 export type Model = typeof MODELS[number]
 export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
