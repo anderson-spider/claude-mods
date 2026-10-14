@@ -243,7 +243,7 @@ const pct = (n: number, total: number) => total ? `${Math.round(100 * n / total)
 const span = (ms: number | null) => ms === null ? '-' : ms < 1000 ? `${Math.round(ms)}ms` : ms < 60_000 ? `${round(ms / 1000, 1)}s` : ms < 3_600_000 ? `${Math.round(ms / 60_000)}m` : `${round(ms / 3_600_000, 1)}h`
 const tokensText = (n: number) => n < 1000 ? String(n) : n < 1_000_000 ? `${round(n / 1000, 1)}k` : `${round(n / 1_000_000, 2)}M`
 /** A duration criterion as a compact label: `15 minutes to 1 hour` is `15 min to 1 h`. */
-const shortLabel = (label: string) => label.toLowerCase().replace(/ minutes?/g, ' min').replace(/ hours?/g, ' h').replace('more than', 'over')
+const shortLabel = (label: string) => label.split(':')[0]!.toLowerCase().replace(/ minutes?/g, ' min').replace(/ hours?/g, ' h').replace('more than', 'over')
 const row = (name: string, g: Group) => `  ${name.padEnd(16)} n=${g.count} fail=${pct(g.failures, g.count)} median=${span(g.medianMs)} tokens=${tokensText(g.tokens)} cost=$${g.costUsd.toFixed(4)}`
 
 export function formatSummary(s: Summary): string {

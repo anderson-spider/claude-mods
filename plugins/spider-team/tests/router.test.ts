@@ -74,12 +74,12 @@ test('the questions judge the work itself and ask for human-expert time, not the
   expect(QUESTIONS.difficulty.instructions).toContain('Judge the work itself, not the length or detail of the brief')
   expect(QUESTIONS.difficulty.instructions).toContain('a long list of constraints, checks or acceptance criteria does not make a task harder')
   expect(QUESTIONS.difficulty.criteria).toEqual([
-    'Trivial: a one-line or purely mechanical change', 'Easy: small, well-understood change in one place', 'Moderate: needs some understanding of the surrounding code',
-    'Hard: subtle logic across several interacting parts, or a root cause still to be found', 'Expert: architecture, concurrency, security, or deep domain reasoning',
+    'Trivial: a one-line or purely mechanical change, such as a rename, a typo, a constant or a version bump', 'Easy: small, well-understood change in one place, such as adjusting one layout line or adding a field to an output, with its test', 'Moderate: needs some understanding of the surrounding code, such as a small feature across two or three files or a bug whose cause is known',
+    'Hard: subtle logic across several interacting parts, or a root cause still to be found, such as an ordering or race bug or a refactor that must keep several contracts', 'Expert: architecture, concurrency, security, or deep domain reasoning, such as a new protocol, a security boundary or a redesign across modules',
   ])
   // Human-expert time, the SWE-bench Verified buckets: Jev cannot estimate a coding agent's own time.
   expect(QUESTIONS.duration.instructions).toBe('How long would an experienced engineer who already knows this codebase need to finish this task?')
-  expect(QUESTIONS.duration.criteria).toEqual(['Under 15 minutes', '15 minutes to 1 hour', '1 to 4 hours', 'More than 4 hours'])
+  expect(QUESTIONS.duration.criteria).toEqual(['Under 15 minutes: a mechanical edit or a one-line fix', '15 minutes to 1 hour: a small change in one or two files with its tests', '1 to 4 hours: a feature or fix across several files, with tests and docs', 'More than 4 hours: a new subsystem, a migration, or an investigation with no known cause'])
   expect(POLICY).toEqual({ under: 1.25, over: 1 })
 })
 
