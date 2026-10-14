@@ -1,7 +1,4 @@
 {
-  "worktree": {
-    "baseRef": "head"
-  },
   "hooks": {
     "PreToolUse": [
       {

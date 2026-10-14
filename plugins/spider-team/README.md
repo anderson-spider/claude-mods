@@ -1,6 +1,6 @@
 # spider-team
 
-Four native Claude subagents, with Jev model and effort selection and local routing records. The session stays the lead; the host owns spawning, background delivery and worktree cleanup.
+Three native read-only Claude subagents (analyst, planner, reviewer), with Jev model and effort selection and local routing records. The session is the lead and the only one that writes code: it implements, tests and commits one task at a time, and calls the agents to investigate, plan and review. The host owns spawning and background delivery.
 
 ```text
 /plugin install spider-team --marketplace anderson-spider/claude-mods
@@ -13,27 +13,22 @@ Invoke `/spider-team:using-spider-team` for the lead's workflow. Call the native
 | Type | Default | Floor | Access |
 | --- | --- | --- | --- |
 | `spider-team:analyst` | haiku / high | haiku / medium | Read and investigate. |
-| `spider-team:architect` | opus / medium | opus / low | Design changes and check invariants. |
-| `spider-team:developer` | sonnet / high | haiku / high | Implement, test and commit in its own worktree. |
-| `spider-team:reviewer` | opus / medium | opus / low | Review a developer's commits and worktree with read-only git commands. |
+| `spider-team:planner` | opus / medium | opus / low | Plan a change as Markdown steps, invariants and acceptance checks. |
+| `spider-team:reviewer` | opus / medium | opus / low | Review the lead's branch and uncommitted changes with read-only git commands. |
 
-Each agent is a plain registered definition: role prompt, tool allowlist, and the default model and effort. All inherit the project instructions and the lead's permission mode. Analyst and architect get Read, Grep, Glob, LSP and Skill; reviewer also gets Bash, which its prompt limits to read-only git inspection; developer gets Write, Edit and Bash. None of them can call Agent, SendMessage, ToolSearch or the worktree tools. Each ends with a short answer for the lead: the outcome, findings with file:line evidence, open questions and checks.
+Each agent is a plain registered definition: role prompt, tool allowlist, and the default model and effort. All inherit the project instructions and the lead's permission mode. Analyst and planner get Read, Grep, Glob, LSP and Skill; reviewer also gets Bash, which its prompt limits to read-only git inspection. None of them can write files or call Agent, SendMessage, ToolSearch or the worktree tools, and none runs in a worktree. Each ends with a short answer for the lead: the outcome, findings with file:line evidence, open questions and checks.
 
-Developer runs with `isolation: "worktree"` and requires the consuming project's merged settings to contain:
+### Planner
 
-```json
-{ "worktree": { "baseRef": "head" } }
-```
+The planner answers with one Markdown plan and writes no file: goal and scope; ordered steps, each with the files it touches; the invariants to preserve, including authentication, schema and API contracts; an acceptance checklist of commands to run with their expected results; and assumptions or blockers. It names only paths, commands and host features it verified and marks anything it could not verify. The lead saves the plan when the task needs it; there is no other plan or run file.
 
-Without it the call is refused with that instruction, since the worktree would start from another base. The plugin does not change settings. Tracked uncommitted lead edits are absent from the worktree. Worktree isolation does not sandbox every Bash operation.
+### Review
 
-### Commits
-
-The developer commits its work locally in its own worktree as cohesive Conventional Commits in English with no AI attribution lines. It never pushes and never commits on main, master, develop or a release branch (if its worktree is on one, it stops and says so). Its answer names the absolute worktree path, the branch, the base commit it started from, the SHAs of the commits it created and any uncommitted leftovers. The lead gives those to the reviewer, which reviews the `base..HEAD` range plus any uncommitted changes with read-only git commands, and then integrates the branch with `git merge --ff-only` or `git cherry-pick`.
+The lead calls the reviewer before opening a pull or merge request, with the checkout path, the branch, the target branch, the acceptance criteria and the checks it ran. The reviewer reviews the commits from the merge base with the target branch (`git merge-base <target> HEAD`) to HEAD, the staged and unstaged changes and every untracked file, read in full, with read-only git commands (status, log, diff, show, merge-base, ls-files). It judges the complete resulting diff, not only the latest fixes, and answers BLOCKED, naming the part, when it cannot inspect any of them. Its verdict is APPROVED, CHANGES or BLOCKED.
 
 ## Model and effort
 
-A hook on the `Agent` tool picks the model and effort of the four Spider types; every other agent type passes untouched. One rule decides: Jev rates difficulty and duration, a fixed table maps them to a pair, and the role's floor lifts the pair if the table gives less. When Jev is unavailable or fails, the role default applies. Nothing else chooses the pair.
+A hook on the `Agent` tool picks the model and effort of the three Spider types; every other agent type, including the retired `spider-team:developer` and `spider-team:architect`, passes untouched. One rule decides: Jev rates difficulty and duration, a fixed table maps them to a pair, and the role's floor lifts the pair if the table gives less. When Jev is unavailable or fails, the role default applies. Nothing else chooses the pair.
 
 | Difficulty \ duration | short | medium | long |
 | --- | --- | --- | --- |
@@ -68,10 +63,10 @@ Jev uses a fixed endpoint and model, one shared three-second deadline, bounded r
 
 The plugin appends JSON lines to `~/.claude/spider-team/routes.jsonl` (the directory is created if missing; past about two megabytes the file moves to `routes.1.jsonl`, which replaces the previous one). Two kinds of line:
 
-- A decision line, written when the pair is decided: the calibration it was made under (`calibration`, a number bumped whenever the questions, the penalty weights or the table change; a line without it is calibration 1), time, tool use id, role, source (`jev` or `default`), the reason Jev was off, its latency, the levels, the top probability and the full distribution of each dimension (`dist`, every level's probability rounded to two decimals; null when Jev was not used), the table's raw cell, whether the floor applied, and the final model and effort.
+- A decision line, written when the pair is decided: the calibration it was made under (`calibration`, a number bumped whenever the questions, the penalty weights, the table or the role floors change; a line without it is calibration 1), time, tool use id, role, source (`jev` or `default`), the reason Jev was off, its latency, the levels, the top probability and the full distribution of each dimension (`dist`, every level's probability rounded to two decimals; null when Jev was not used), the table's raw cell, whether the floor applied, and the final model and effort.
 - An outcome line: for a foreground call, from its result (resolved model, number of models used, status, duration, input, output, cache creation and cache read tokens, and a cost estimate from the list prices of October 2026: per million tokens, Haiku 0.10 input, 0.50 output, 0.125 cache write, 0.01 cache read, valid for prompts up to 100k tokens; Sonnet 2, 10, 2.50, 0.10; Opus 4, 20, 5, 0.20). For a background launch the line is written when that agent's turn completes, with its duration, usage and end reason. For the reviewer only the verdict word (APPROVED, CHANGES or BLOCKED) is kept from its answer. Every outcome line also has `judge`, from the outcome judge below.
 
-A line never holds the task, the prompt, an answer's text, a path, a branch name or a key. The records stay on this machine, are read by nothing but the stats command, and a failure to write one never changes a dispatch.
+Lines of the retired developer and architect roles still parse and keep their own groups in the stats. A line never holds the task, the prompt, an answer's text, a path, a branch name or a key. The records stay on this machine, are read by nothing but the stats command, and a failure to write one never changes a dispatch.
 
 `/spider-team-stats` prints a compact summary per role and per final pair: runs, failure rate (error, abort or refusal, plus CHANGES or BLOCKED for reviewer runs), `short=` the share of judged runs the judge found short (`-` when none was judged) and `judged=` how many were judged, median duration, total tokens and estimated cost; the share of default fallbacks with their reasons; the distribution of Jev's top confidence; and, for each predicted human-time level, how many current-calibration runs it was joined to and their median real agent duration. The Jev confidence and that section use only decisions of the current calibration, and one line says how many decisions from older calibrations they left out (no line when there are none); the per-role and per-pair groups and the fallback share count every record. The command is named `spider-team-stats` because a command name cannot hold a colon and `stats` belongs to the host.
 

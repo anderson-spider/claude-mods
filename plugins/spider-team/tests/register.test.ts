@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import { call, drain, inference, LEDGER, spawn, started, step, world } from './host'
 import { SPECS } from '../hooks/roles'
-import { BASE_REF, EMPTY, STATS_COMMAND, STATS_DESCRIPTION } from '../hooks/register'
+import { EMPTY, STATS_COMMAND, STATS_DESCRIPTION } from '../hooks/register'
 
 const MARKER = 'SECRET-MARKER-7f3a'
 function dispatched(on: Parameters<typeof world>[0], answer: unknown = { result: 'native answer' }) {
@@ -18,9 +18,9 @@ const finished = (text: string, patch = {}) => ({
   },
 })
 
-test('session start registers the four native agents and the stats command, and no tools', async ($, on) => {
+test('session start registers the three native agents and the stats command, and no tools', async ($, on) => {
   const h = world(on); await started($)
-  expect(h.specs.map(s => s.name)).toEqual(['analyst', 'developer', 'reviewer', 'architect'])
+  expect(h.specs.map(s => s.name)).toEqual(['analyst', 'planner', 'reviewer'])
   for (const spec of h.specs) expect(spec).toEqual(SPECS[spec.name as keyof typeof SPECS])
   expect(h.commands).toEqual([{ name: STATS_COMMAND, description: STATS_DESCRIPTION }])
   expect(STATS_COMMAND).toBe('spider-team-stats')
@@ -37,17 +37,17 @@ test('Jev picks the pair for a Spider role, shown in its description, and other 
 })
 test('a model or effort from the lead is overwritten by the Jev pair, or by the role default without a key', async ($, on) => {
   const h = world(on), received = dispatched(on); await started($)
-  await $.tool.call(call('architect', { model: 'fable', effort: 'max' }) as never)
+  await $.tool.call(call('planner', { model: 'fable', effort: 'max' }) as never)
   expect(received[0]).toMatchObject({ model: 'opus', effort: 'medium', description: 'Fixture (opus/medium)' })
   await $.tool.call(call('analyst', { model: 'gpt', effort: 'ultra' }) as never)
   expect(received[1]).toMatchObject({ model: 'haiku', effort: 'high' })
   expect(h.requests).toHaveLength(0)
   h.env.JEV_API_KEY = 'test-key'
-  // Difficulty 0 and duration 0 is haiku/medium for the analyst, and the developer floor lifts it to haiku/high, whatever the lead asked for.
+  // Difficulty 0 and duration 0 is haiku/medium for the analyst, and the planner floor lifts it to opus/low, whatever the lead asked for.
   await $.tool.call(call('analyst', { model: 'fable', effort: 'max' }) as never)
   expect(received[2]).toMatchObject({ model: 'haiku', effort: 'medium', description: 'Fixture (haiku/medium)' })
-  await $.tool.call(call('developer', { model: 'opus' }) as never)
-  expect(received[3]).toMatchObject({ model: 'haiku', effort: 'high' })
+  await $.tool.call(call('planner', { model: 'haiku' }) as never)
+  expect(received[3]).toMatchObject({ model: 'opus', effort: 'low' })
   expect(h.requests).toHaveLength(2)
 })
 test('Jev is asked both questions and bang and at-sign words reach it as written', async ($, on) => {
@@ -78,36 +78,36 @@ test('a default spawn of every role from a marketplace install runs natively wit
     return { result: 'native answer' } as never
   })
   await started($)
-  const roles = ['analyst', 'developer', 'reviewer', 'architect'] as const
+  const roles = ['analyst', 'planner', 'reviewer'] as const
   for (const role of roles) {
     const answer = await $.tool.call(call(role, { tool_use_id: role }) as never)
     expect(answer).not.toHaveProperty('deny'); expect(answer).toHaveProperty('result', 'native answer')
   }
   expect(answers).toEqual(roles.map(() => 'native answer'))
-  expect(received.map(r => [r.subagent_type, r.model, r.effort])).toEqual([['spider-team:analyst', 'haiku', 'high'], ['spider-team:developer', 'sonnet', 'high'], ['spider-team:reviewer', 'opus', 'medium'], ['spider-team:architect', 'opus', 'medium']])
+  expect(received.map(r => [r.subagent_type, r.model, r.effort])).toEqual([['spider-team:analyst', 'haiku', 'high'], ['spider-team:planner', 'opus', 'medium'], ['spider-team:reviewer', 'opus', 'medium']])
   expect(h.requests).toHaveLength(0)
 })
-test('empty tasks and a developer without baseRef head are refused before dispatch', async ($, on) => {
+test('empty tasks are refused before dispatch, and the retired developer and architect pass untouched', async ($, on) => {
   const h = world(on), received = dispatched(on); await started($)
   for (const prompt of ['', ' \n\t ']) expect((await $.tool.call(call('analyst', { prompt }) as never)).deny).toBe(EMPTY)
-  h.io.baseRef = 'main'
-  expect((await $.tool.call(call('developer') as never)).deny).toBe(BASE_REF)
   expect(received).toHaveLength(0)
   expect(h.written).toHaveLength(0)
-  h.io.baseRef = 'head'
-  await $.tool.call(call('developer') as never)
-  expect(received[0]).toMatchObject({ model: 'sonnet', effort: 'high' }); expect(received[0]).not.toHaveProperty('isolation')
+  for (const role of ['developer', 'architect']) {
+    const retired = call(role, { model: 'fable', effort: 'max', prompt: '' })
+    await $.tool.call(retired as never); expect(received.at(-1)).toEqual(retired)
+  }
+  expect(h.written).toHaveLength(0)
 })
 test('a routing failure dispatches the role default once, never the lead model and effort, and writes no record', async ($, on) => {
   const h = world(on), received = dispatched(on); await started($)
   Object.defineProperty(h.io, 'root', { get: () => { throw new Error('root unavailable') } })
-  for (const role of ['analyst', 'developer', 'reviewer', 'architect'] as const) {
+  for (const role of ['analyst', 'planner', 'reviewer'] as const) {
     const e = call(role, { model: 'opus', effort: 'max', tool_use_id: role })
     expect(await $.tool.call(e as never)).toHaveProperty('result', 'native answer')
-    const model = role === 'developer' ? 'sonnet' : role === 'analyst' ? 'haiku' : 'opus', effort = role === 'reviewer' || role === 'architect' ? 'medium' : 'high'
+    const model = role === 'analyst' ? 'haiku' : 'opus', effort = role === 'analyst' ? 'high' : 'medium'
     expect(received.at(-1)).toEqual({ ...e, model, effort, description: `Fixture (${model}/${effort})` })
   }
-  expect(received).toHaveLength(4)
+  expect(received).toHaveLength(3)
   expect(h.written).toHaveLength(0)
   expect(h.logs).toContain('spider-team: routing failed; dispatching the role default.')
 })
@@ -163,7 +163,7 @@ test('an aborted background agent is an aborted outcome', async ($, on) => {
   dispatched(on, { result: { status: 'async_launched', agentId: 'bg-2' } })
   on('turn.complete', (_$, e) => ({ text: e.answer }))
   await started($)
-  await $.tool.call(call('developer', { tool_use_id: 'toolu_a' }) as never)
+  await $.tool.call(call('planner', { tool_use_id: 'toolu_a' }) as never)
   await $.turn.complete({ turnId: 't', agentId: 'bg-2', answer: '', durationMs: 900, isAborted: true, reason: 'aborted' } as never)
   expect(h.ledger()[1]).toMatchObject({ kind: 'outcome', status: 'aborted', aborted: true, verdict: null, tokens: null })
 })
@@ -227,7 +227,7 @@ test('foreground and background outcomes carry the judge of the answer, and the 
   on('tool.call', { tool: 'Agent' }, () => results.shift() as never)
   on('turn.complete', (_$, e) => ({ text: e.answer }))
   await started($)
-  expect(await $.tool.call(call('developer', { tool_use_id: 'toolu_f' }) as never)).toEqual(answer)
+  expect(await $.tool.call(call('planner', { tool_use_id: 'toolu_f' }) as never)).toEqual(answer)
   // Routing, then the judge: three Nouls with the answer as the only state.
   expect(h.requests).toHaveLength(2)
   const judged = JSON.parse(h.requests[1]!.body)
@@ -255,20 +255,20 @@ test('a judge failure still writes the outcome with judge null, unfinished runs 
   await started($)
   // Jev answers routing but sends a Noul out of range: the judge is null and the outcome still goes in.
   h.answers.blocked = { noul: 2 }
-  await $.tool.call(call('developer', { tool_use_id: 'toolu_m' }) as never)
+  await $.tool.call(call('planner', { tool_use_id: 'toolu_m' }) as never)
   expect(h.ledger()[1]).toMatchObject({ kind: 'outcome', status: 'completed', judge: null })
   expect(h.logs).toContain('spider-team: judge off (malformed)')
   expect(h.requests).toHaveLength(2)
   // An empty answer, an error and an aborted background run are never sent to the judge.
-  await $.tool.call(call('developer', { tool_use_id: 'toolu_e' }) as never)
-  await $.tool.call(call('developer', { tool_use_id: 'toolu_x' }) as never)
-  await $.tool.call(call('developer', { tool_use_id: 'toolu_a' }) as never)
+  await $.tool.call(call('planner', { tool_use_id: 'toolu_e' }) as never)
+  await $.tool.call(call('planner', { tool_use_id: 'toolu_x' }) as never)
+  await $.tool.call(call('planner', { tool_use_id: 'toolu_a' }) as never)
   await $.turn.complete({ turnId: 't', agentId: 'bg-x', answer: ANSWER, durationMs: 9, isAborted: true, reason: 'aborted' } as never)
   expect(h.requests).toHaveLength(5)
   expect(h.ledger().filter(l => l.kind === 'outcome').map(l => [l.tool_use_id, l.status, l.judge])).toEqual([['toolu_m', 'completed', null], ['toolu_e', 'completed', null], ['toolu_x', 'error', null], ['toolu_a', 'aborted', null]])
   // Without a key there is no judge request and the outcome is written with judge null.
   delete h.env.JEV_API_KEY
-  await $.tool.call(call('developer', { tool_use_id: 'toolu_k' }) as never)
+  await $.tool.call(call('planner', { tool_use_id: 'toolu_k' }) as never)
   expect(h.requests).toHaveLength(5)
   expect(h.ledger().at(-1)).toMatchObject({ kind: 'outcome', tool_use_id: 'toolu_k', judge: null })
   expect(h.logs).toContain('spider-team: judge off (no-key)')
@@ -280,7 +280,7 @@ test('a failing judge opens only its own breaker: routing still asks Jev afterwa
   await started($)
   const fetch = h.io.jev.fetch
   h.io.jev.fetch = async (url, init) => (init.body.includes('"report"') ? { status: 401, text: '' } : fetch(url, init))
-  for (let n = 0; n < 6; n++) await $.tool.call(call('developer', { tool_use_id: `toolu_j${n}` }) as never)
+  for (let n = 0; n < 6; n++) await $.tool.call(call('planner', { tool_use_id: `toolu_j${n}` }) as never)
   expect(h.logs).toContain('spider-team: judge off (breaker)')
   expect(h.ledger().filter(l => l.kind === 'decision').map(l => l.source)).toEqual(Array(6).fill('jev'))
 })

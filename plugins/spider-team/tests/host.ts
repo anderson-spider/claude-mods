@@ -12,8 +12,8 @@ export function ports() {
     difficulty: { probabilities: { '0': 1 } }, duration: { probabilities: { '0': 1 } },
     finished: { type: 'noul', noul: 0.95 }, failingChecks: { type: 'noul', noul: 0.02 }, blocked: { type: 'noul', noul: 0.01 },
   }
-  const io: EffortIo & { home: string; root: string; key?: string; baseRef?: string } = {
-    home: '/home/u', root: '/repo', baseRef: 'head',
+  const io: EffortIo & { home: string; root: string; key?: string } = {
+    home: '/home/u', root: '/repo',
     settings: async source => { settingsReads.push(source); if (faults.settings) throw new Error('settings unavailable'); return {} },
     breaker: createBreaker(() => 0), gate: createGate(), log: text => { logs.push(text) },
     jev: {
@@ -37,7 +37,7 @@ export function world(on: On) {
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('session.root', () => ({ value: p.io.root }))
   on('env.get', (_$, e) => ({ value: env[e.name] }))
-  on('settings.read', async (_$, e) => ({ value: e.source ? await p.io.settings(e.source as 'project' | 'local') : { worktree: { baseRef: p.io.baseRef } } }) as never)
+  on('settings.read', async (_$, e) => ({ value: e.source ? await p.io.settings(e.source as 'project' | 'local') : {} }) as never)
   on('http.fetch', async (_$, e) => ({ value: { ...await p.io.jev.fetch(e.url, e.init as never), ok: true, headers: {} } }))
   on('ui.log', (_$, e) => { p.io.log(e.text); return { value: undefined } })
   /** The ledger's lines in the order written: `files` holds the current text, `ledger()` parses it. */

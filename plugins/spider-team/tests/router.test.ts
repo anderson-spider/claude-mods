@@ -53,20 +53,20 @@ test('duration levels 0 and 1 are short, 2 medium and 3 long, and the floor lift
   expect(GROUP_OF_DURATION).toEqual(['short', 'short', 'medium', 'long'])
   DIFFICULTIES.forEach((difficulty, d) => GROUP_OF_DURATION.forEach((group, t) => expect(routeOf('analyst', d, t).cell).toEqual(pairOf(ROUTES[difficulty][group]))))
   expect(routeOf('analyst', 4, 1)).toEqual({ cell: { model: 'opus', effort: 'high' }, pair: { model: 'opus', effort: 'high' }, floorApplied: false })
-  // Trivial and short is haiku/medium: the analyst's floor keeps it, the developer's and the opus roles' lift it.
+  // Trivial and short is haiku/medium: the analyst's floor keeps it, the opus roles' floors lift it.
   expect(routeOf('analyst', 0, 0)).toEqual({ cell: { model: 'haiku', effort: 'medium' }, pair: { model: 'haiku', effort: 'medium' }, floorApplied: false })
-  expect(routeOf('developer', 0, 0)).toEqual({ cell: { model: 'haiku', effort: 'medium' }, pair: { model: 'haiku', effort: 'high' }, floorApplied: true })
+  expect(routeOf('planner', 0, 0)).toEqual({ cell: { model: 'haiku', effort: 'medium' }, pair: { model: 'opus', effort: 'low' }, floorApplied: true })
   expect(routeOf('reviewer', 2, 0)).toEqual({ cell: { model: 'haiku', effort: 'xhigh' }, pair: { model: 'opus', effort: 'low' }, floorApplied: true })
-  expect(routeOf('architect', 3, 0)).toEqual({ cell: { model: 'opus', effort: 'low' }, pair: { model: 'opus', effort: 'low' }, floorApplied: false })
+  expect(routeOf('planner', 3, 0)).toEqual({ cell: { model: 'opus', effort: 'low' }, pair: { model: 'opus', effort: 'low' }, floorApplied: false })
   for (const [d, t] of [[-1, 0], [5, 0], [0, -1], [0, 4], [1.5, 0]]) expect(() => routeOf('analyst', d!, t!)).toThrow('level out of range')
 })
 
 test('role floors and defaults are fixed and the registered definitions carry the defaults', () => {
   expect(ROLE_POLICY).toEqual({
-    analyst: { floor: 'haiku/medium', default: 'haiku/high' }, developer: { floor: 'haiku/high', default: 'sonnet/high' },
-    architect: { floor: 'opus/low', default: 'opus/medium' }, reviewer: { floor: 'opus/low', default: 'opus/medium' },
+    analyst: { floor: 'haiku/medium', default: 'haiku/high' }, planner: { floor: 'opus/low', default: 'opus/medium' },
+    reviewer: { floor: 'opus/low', default: 'opus/medium' },
   })
-  expect(ROLES.map(role => `${role} ${defaultOf(role).model}/${defaultOf(role).effort}`)).toEqual(['analyst haiku/high', 'developer sonnet/high', 'reviewer opus/medium', 'architect opus/medium'])
+  expect(ROLES.map(role => `${role} ${defaultOf(role).model}/${defaultOf(role).effort}`)).toEqual(['analyst haiku/high', 'planner opus/medium', 'reviewer opus/medium'])
   for (const role of ROLES) expect([SPECS[role].model, SPECS[role].effort]).toEqual([defaultOf(role).model, defaultOf(role).effort])
 })
 
@@ -94,9 +94,9 @@ test('the questions match the levels and the prices are the October 2026 list pr
   })
 })
 
-test('the calibration that tags each decision line is 4', () => {
-  // Bump it with any change to QUESTIONS, POLICY or ROUTES; the stats judge Jev only under the current one.
-  expect(CALIBRATION).toBe(4)
+test('the calibration that tags each decision line is 5', () => {
+  // Bump it with any change to QUESTIONS, POLICY, ROUTES or the roles' floors; the stats judge Jev only under the current one.
+  expect(CALIBRATION).toBe(5)
 })
 
 test('the judge asks three yes/no questions about report.text, one flaw each, and a run is short below 0.5 finished or above 0.5 on a flaw', () => {
@@ -113,5 +113,5 @@ test('the judge asks three yes/no questions about report.text, one flaw each, an
   expect(judgedShort({ finished: 1, failingChecks: 0, blocked: 0.51 })).toBe(true)
   // The judge does not route: its questions are not routing questions and leave the calibration as it is.
   for (const flag of JUDGE_FLAGS) expect(Object.keys(QUESTIONS)).not.toContain(flag)
-  expect(CALIBRATION).toBe(4)
+  expect(CALIBRATION).toBe(5)
 })

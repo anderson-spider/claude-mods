@@ -10,8 +10,8 @@
 // verification on long agentic prompts. Fable is out for lack of data.
 import type { Effort, Model, Pair, Role } from './roles'
 
-// Tags each decision line so the stats compare Jev only under one policy: bump it whenever QUESTIONS, POLICY or the table change.
-export const CALIBRATION = 4
+// Tags each decision line so the stats compare Jev only under one policy: bump it whenever QUESTIONS, POLICY, the table or the role floors change.
+export const CALIBRATION = 5
 
 export const DIMENSIONS = ['difficulty', 'duration'] as const
 export type Dimension = (typeof DIMENSIONS)[number]
@@ -68,8 +68,7 @@ export const ROUTES: Readonly<Record<Difficulty, Readonly<Record<DurationGroup, 
  */
 export const ROLE_POLICY: Readonly<Record<Role, { floor: Rung; default: Rung }>> = {
   analyst: { floor: 'haiku/medium', default: 'haiku/high' },
-  developer: { floor: 'haiku/high', default: 'sonnet/high' },
-  architect: { floor: 'opus/low', default: 'opus/medium' },
+  planner: { floor: 'opus/low', default: 'opus/medium' },
   reviewer: { floor: 'opus/low', default: 'opus/medium' },
 }
 export const defaultOf = (role: Role): Pair => pairOf(ROLE_POLICY[role].default)

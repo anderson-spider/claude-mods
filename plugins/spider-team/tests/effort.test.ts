@@ -89,16 +89,16 @@ test('every assessment failure keeps the exact role fallback and logging failure
 test('the choice carries the raw cell, the floor result, the levels, the top probability and full distribution of each dimension and the Jev latency', async () => {
   const h = ports(); h.answers.difficulty = { probabilities: { '0': 0.75, '1': 0.25 } }; h.answers.duration = { probabilities: { '0': 1 } }
   let clock = 100; h.io.jev.now = () => (clock += 40)
-  // Difficulty 0 (a quarter on 1 still picks 0: 0.25 x 1 < 0.75 x 1.25), duration 0: the cell is haiku/medium and the developer floor lifts it.
-  const choice = await ask(h, 'developer')
-  expect(choice).toMatchObject({ model: 'haiku', effort: 'high', cell: { model: 'haiku', effort: 'medium' }, floorApplied: true, source: 'jev', levels: { difficulty: 0, duration: 0 }, top: { difficulty: 0.75, duration: 1 }, jevReason: null })
+  // Difficulty 0 (a quarter on 1 still picks 0: 0.25 x 1 < 0.75 x 1.25), duration 0: the cell is haiku/medium and the planner floor lifts it.
+  const choice = await ask(h, 'planner')
+  expect(choice).toMatchObject({ model: 'opus', effort: 'low', cell: { model: 'haiku', effort: 'medium' }, floorApplied: true, source: 'jev', levels: { difficulty: 0, duration: 0 }, top: { difficulty: 0.75, duration: 1 }, jevReason: null })
   // The distributions are the normalized ones, every level of each question, omitted levels at zero.
   expect(choice.dist).toEqual({ difficulty: { '0': 0.75, '1': 0.25, '2': 0, '3': 0, '4': 0 }, duration: { '0': 1, '1': 0, '2': 0, '3': 0 } })
   expect(typeof choice.jevMs).toBe('number')
   const again = ports(); again.answers.difficulty = { probabilities: { '3': 1 } }; again.answers.duration = { probabilities: { '3': 1 } }
   expect(await ask(again, 'reviewer')).toMatchObject({ model: 'opus', effort: 'high', cell: { model: 'opus', effort: 'high' }, floorApplied: false })
   const low = ports(); low.answers.difficulty = { probabilities: { '2': 1 } }; low.answers.duration = { probabilities: { '0': 1 } }
-  expect(await ask(low, 'architect')).toMatchObject({ model: 'opus', effort: 'low', cell: { model: 'haiku', effort: 'xhigh' }, floorApplied: true })
+  expect(await ask(low, 'planner')).toMatchObject({ model: 'opus', effort: 'low', cell: { model: 'haiku', effort: 'xhigh' }, floorApplied: true })
 })
 test('assessment masks the whole task before clipping and sends only redacted task state', async () => {
   const h = ports(), key = 'private-test-key'
