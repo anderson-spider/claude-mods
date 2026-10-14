@@ -33,6 +33,11 @@
       "description": "A three-row card above the prompt: model, context, cache and cost; the five-hour and seven-day limits with their pace; the last turn, edits and errors."
     },
     {
+      "name": "spider-team",
+      "source": "./plugins/spider-team",
+      "description": "Native Spider Team specialists with Jev model and effort routing."
+    },
+    {
       "name": "tailscale",
       "source": "./plugins/tailscale",
       "description": "Read or change your tailnet through the Tailscale API using the apiKey plugin option."

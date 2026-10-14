@@ -11,6 +11,7 @@ Marketplace of [Claude Code](https://claude.com/claude-code) plugins made by and
 | [codex-team](plugins/codex-team/README.md) | Dispatches Fast Codex developers, analysts, architects and reviewers into Herdr tabs labelled `codex - <slug>` with workspace-specific names, delivery status and short reports; every dispatch starts a fresh session after retiring its settled predecessor and `finish` closes and archives settled agents; publishes the active plan to Dagr after Write/Edit and shell edits. Optional Jev assessment, enabled with `JEV_API_KEY`, selects a Sol, Luna or permitted Astra model and effort profile for every role, including reviewers; `allowAstra` is enabled by default and configurable through `/config` or `/plugin`; `/codex-team:using-codex-team` makes the session their tech lead. |
 | [git-master](plugins/git-master/README.md) | Registers git-master, a Haiku subagent for git work (status, branches, commits, rebase, push, pull and merge requests) that the session calls whenever a request is about git. |
 | [session-hud](plugins/session-hud/README.md) | A three-row card above the prompt: model, context, cache and cost; the five-hour and seven-day limits with their pace; the last turn, edits and errors. |
+| [spider-team](plugins/spider-team/README.md) | Native Spider Team specialists with Jev model and effort routing. |
 | [tailscale](plugins/tailscale/README.md) | Lets Claude query and modify your tailnet through the Tailscale API, with the key in the sensitive `apiKey` plugin option. |
 
 ## Install
@@ -24,6 +25,7 @@ Inside Claude Code, add the marketplace and install the plugin:
 /plugin install codex-team@spider-claude-mods
 /plugin install git-master@spider-claude-mods
 /plugin install session-hud@spider-claude-mods
+/plugin install spider-team@spider-claude-mods
 /plugin install tailscale@spider-claude-mods
 ```
 

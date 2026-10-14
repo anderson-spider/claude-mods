@@ -1,0 +1,9 @@
+{
+  "name": "spider-team",
+  "version": "0.1.3",
+  "description": "Native Spider Team specialists with Jev model and effort routing.",
+  "author": {
+    "name": "anderson-spider"
+  },
+  "types": "./types/index.d.ts"
+}
