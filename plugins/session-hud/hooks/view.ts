@@ -155,34 +155,37 @@ function limitRows(card: SessionHudCard, now: number, inner: number): Row[] {
   return rows
 }
 
+/** The context's block at its widest: the indent, `9.9M/9.9M`, ` · 9.9M left`, ` · cache 100%` and ` · out 12.3M`; longer figures are cut. */
+const CONTEXT_BLOCK = 4 + 9 + 12 + 13 + 12
 /** Three blocks fit side by side from this inner width: the context, then each window, a gap of four between. */
-const WIDE = 3 * LIMIT_BLOCK + 8
+const WIDE = CONTEXT_BLOCK + 2 * LIMIT_BLOCK + 8
 
-/** The context as a block like a window's: its bar, then its tokens and what is left of the window, then cache and output. */
+/** The context as a block like a window's: its bar, then its tokens, what is left of the window, cache and output on one line. */
 function contextBlock(card: SessionHudCard): Row[] {
   const context = contextOf(card)
   const lines: Row[] = []
   if (context) lines.push([seg('ctx ', 'secondary'), ...contextBar(context.percent, LIMIT_BAR), seg(` ${context.percent}%`, 'strong')])
-  if (context?.used !== undefined && context.window !== undefined) {
-    lines.push([seg('    '), seg(`${tokens(context.used)}/${tokens(context.window)}`, 'secondary'),
-      seg(` · ${tokens(Math.max(0, context.window - context.used))} left`, 'secondary')])
-  }
-  const extra = joined([cacheCells(card), outputCells(card)])
-  if (extra.length) lines.push([seg('    '), ...extra])
-  return lines
+  const figures = context?.used !== undefined && context.window !== undefined
+    ? [seg(`${tokens(context.used)}/${tokens(context.window)}`, 'secondary'), seg(` · ${tokens(Math.max(0, context.window - context.used))} left`, 'secondary')]
+    : []
+  const second = joined([figures, cacheCells(card), outputCells(card)])
+  if (second.length) lines.push([seg('    '), ...second])
+  return lines.map(line => cutRow(line, CONTEXT_BLOCK))
 }
 
-/** A wide card: the context and the windows as three aligned blocks. */
+/** A wide card: the context and the windows as three aligned blocks, each window at a fixed column. */
 function wideRows(card: SessionHudCard, now: number): Row[] {
   const limits = card.limits.filter(limit => WINDOW_MS[limit.kind] !== undefined && LABELS[limit.kind] !== undefined)
     .sort((a, b) => WINDOW_MS[a.kind]! - WINDOW_MS[b.kind]!).slice(0, 2)
-  const blocks = [contextBlock(card), ...limits.map(limit => limitLines(limit, now, LIMIT_BLOCK))].filter(block => block.length)
+  const context = contextBlock(card)
+  const blocks = [...(context.length ? [{ lines: context, width: CONTEXT_BLOCK }] : []),
+    ...limits.map(limit => ({ lines: limitLines(limit, now, LIMIT_BLOCK), width: LIMIT_BLOCK }))]
   const rows: Row[] = []
-  for (let i = 0; i < Math.max(0, ...blocks.map(block => block.length)); i++) {
+  for (let i = 0; i < Math.max(0, ...blocks.map(block => block.lines.length)); i++) {
     const row: Row = []
     blocks.forEach((block, at) => {
-      const part = block[i] ?? []
-      if (at < blocks.length - 1) row.push(...part, seg(' '.repeat(LIMIT_BLOCK - cells(part) + 4)))
+      const part = block.lines[i] ?? []
+      if (at < blocks.length - 1) row.push(...part, seg(' '.repeat(block.width - cells(part) + 4)))
       else row.push(...part)
     })
     while (row.length && !row[row.length - 1]!.text.trim()) row.pop()
