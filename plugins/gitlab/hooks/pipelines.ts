@@ -1,7 +1,7 @@
 // gitlab_pipeline: the pipelines of a merge request or branch, their jobs and artifacts, and running, retrying,
 // cancelling or playing them. Downloading artifacts is not offered: the answer gives their URL, never the token.
 import type { McpToolInputs } from 'claude-code'
-import { InputError, NoMrError, bool, clip, id, items, json, more, mrIid, need, paging, str, strings, writable, type Ctx } from './context'
+import { InputError, NoMrError, bool, clip, id, items, json, more, mrIid, need, paging, str, writable, type Ctx } from './context'
 
 export type PipelineAction = McpToolInputs['mcp__gitlab__gitlab_pipeline']['action']
 export type PipelineInput = { [K in keyof McpToolInputs['mcp__gitlab__gitlab_pipeline']]?: unknown }
@@ -78,7 +78,8 @@ const VARIABLE = /^([A-Za-z_][A-Za-z0-9_]{0,254})=([\s\S]*)$/
 
 /** `KEY=value` strings as GitLab's pipeline variables. */
 export function variables(value: unknown): { key: string; value: string; variable_type: 'env_var' }[] | undefined {
-  const list = strings(value)
+  // not `strings`, which trims: a value's leading or trailing spaces are part of it
+  const list = Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string' && v.trim() !== '') : undefined
   if (!list?.length) return undefined
   return list.map((v) => {
     const m = VARIABLE.exec(v)

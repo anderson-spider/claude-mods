@@ -129,6 +129,10 @@ test('run without an MR for the branch starts a pipeline of the branch, and vari
   expect(writes()[0]?.body).toEqual({ ref: 'feature/x' })
   await expect(pipeline(ctx, { action: 'run', iid: 7, variables: ['A=1'] })).rejects.toThrow(/variables apply only to a ref pipeline/)
   await expect(pipeline(ctx, { action: 'run', iid: 7, ref: 'main' })).rejects.toThrow('run takes iid or ref, not both.')
+  expect(variables(['PASSWORD=secret ', 'PAD=  x'])).toEqual([
+    { key: 'PASSWORD', value: 'secret ', variable_type: 'env_var' },
+    { key: 'PAD', value: '  x', variable_type: 'env_var' },
+  ])
   expect(() => variables(['1BAD=x'])).toThrow('variables are KEY=value strings, the key letters, digits and underscores.')
   expect(() => variables(['NOEQUALS'])).toThrow(/KEY=value/)
 })
