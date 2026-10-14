@@ -9,10 +9,21 @@ test('without iid every action works on the open MR of the current branch', asyn
 
   const out = JSON.parse(await mr(ctx, { action: 'get' }))
 
-  expect(calls[0]).toEqual({ method: 'GET', path: '/merge_requests', query: { state: 'opened', source_branch: 'feature/x', per_page: 2 } })
+  expect(calls[0]).toEqual({ method: 'GET', path: '/merge_requests', query: { state: 'opened', source_branch: 'feature/x', per_page: 20 } })
   expect(out.iid).toBe(7)
   expect(out.description).toBe('Body')
   expect(out.pipeline).toEqual({ id: 90, status: 'failed' })
+})
+
+test('without iid a fork MR of the same branch is ignored, and two MRs of the branch are refused, not guessed', async () => {
+  const fork = { ...MR, iid: 8, project_id: 1, source_project_id: 99 }
+  const own = { ...MR, project_id: 1, source_project_id: 1 }
+  const single = fakeCtx({ [OPEN_FOR_BRANCH]: [fork, own], 'GET /merge_requests/7': MR })
+  expect(JSON.parse(await mr(single.ctx, { action: 'get' })).iid).toBe(7)
+
+  const two = fakeCtx({ [OPEN_FOR_BRANCH]: [own, { ...own, iid: 9, target_branch: 'release' }] })
+  await expect(mr(two.ctx, { action: 'approve' })).rejects.toThrow('Open merge requests !7, !9 all have feature/x as their source branch. Pass iid.')
+  expect(two.calls.map((c) => c.method)).toEqual(['GET'])
 })
 
 test('without iid and without an open MR for the branch the call says to pass iid', async () => {
@@ -106,4 +117,16 @@ test('approve, unapprove and rebase call their endpoints, and merge is not an ac
 test('diff falls back to /changes on a GitLab older than /diffs', async () => {
   const { ctx } = fakeCtx({ 'GET /merge_requests/7/changes': { changes: [{ old_path: 'a', new_path: 'a', diff: '+x\n', new_file: true }] } })
   expect(await mr(ctx, { action: 'diff', iid: 7 })).toBe('MR !7: 1 of 1 files\n=== a (new)\n+x\n')
+})
+
+test('diff says when GitLab omitted a file for being too large or collapsed instead of showing it blank', async () => {
+  const { ctx } = fakeCtx({
+    'GET /merge_requests/7/diffs': [
+      { old_path: 'big.json', new_path: 'big.json', diff: '', too_large: true },
+      { old_path: 'gen.ts', new_path: 'gen.ts', diff: '', collapsed: true },
+    ],
+  })
+  const text = await mr(ctx, { action: 'diff', iid: 7 })
+  expect(text).toContain('=== big.json\n(diff omitted by GitLab: too large; open the MR in the browser)')
+  expect(text).toContain('=== gen.ts\n(diff omitted by GitLab: collapsed; open the MR in the browser)')
 })

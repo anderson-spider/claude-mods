@@ -44,18 +44,22 @@ export function need<T>(value: T | undefined, message: string): T {
   return value
 }
 
-type MrRef = { iid: number; title?: string; web_url?: string }
+type MrRef = { iid: number; project_id?: number; source_project_id?: number }
 
-/** The merge request `iid` names, or the open one whose source is the current branch. */
+/**
+ * The merge request `iid` names, or the one open MR whose source is the current branch in this project. A fork's MR
+ * with a branch of the same name is not it, and two candidates (one branch, two targets) are refused, never guessed.
+ */
 export async function mrIid(ctx: Ctx, iid: unknown): Promise<number> {
   const given = id(iid, 'iid')
   if (given !== undefined) return given
   const branch = await ctx.branch()
   if (!branch) throw new InputError('No iid was given and the current branch is unknown (detached HEAD). Pass iid.')
-  const open = (await ctx.api.get('/merge_requests', { state: 'opened', source_branch: branch, per_page: 2 })) as MrRef[]
-  const first = Array.isArray(open) ? open[0] : undefined
-  if (!first) throw new InputError(`No open merge request has ${branch} as its source branch. Pass iid.`)
-  return first.iid
+  const open = (await ctx.api.get('/merge_requests', { state: 'opened', source_branch: branch, per_page: 20 })) as MrRef[]
+  const own = (Array.isArray(open) ? open : []).filter((mr) => mr.source_project_id === undefined || mr.source_project_id === mr.project_id)
+  if (own.length === 0) throw new InputError(`No open merge request has ${branch} as its source branch. Pass iid.`)
+  if (own.length > 1) throw new InputError(`Open merge requests ${own.map((mr) => `!${mr.iid}`).join(', ')} all have ${branch} as their source branch. Pass iid.`)
+  return own[0]!.iid
 }
 
 /** User ids for usernames; `@me` (or `me`) is the token's own user. */

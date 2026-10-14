@@ -25,6 +25,13 @@ test('errorExcerpt shows each match with three lines around it, merged, then the
   expect(shown.filter((l) => /^\s+\d+\|/.test(l))).toHaveLength(9 + 30)
 })
 
+test('errorExcerpt caps the match lines even when the matches merge into one range spanning the log', () => {
+  const lines = Array.from({ length: 5000 }, (_, i) => `error ${i + 1}`)
+  const shown = errorExcerpt(lines, /error/).text.split('\n')
+  expect(shown.filter((l) => /^\s+\d+\|/.test(l))).toHaveLength(300 + 30)
+  expect(shown[299]).toBe('  300| error 300')
+})
+
 test('errors mode heads the excerpt with the job and its failure reason; tail and pattern work', async () => {
   const trace = ['$ npm test', 'ok 1', 'FAIL src/a.test.ts', 'expected 1', 'done'].join('\n')
   const { ctx } = fakeCtx({

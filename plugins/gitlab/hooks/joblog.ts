@@ -49,7 +49,8 @@ export function errorExcerpt(lines: string[], match: RegExp): { text: string; ma
       out.push('  …(more matches; pass pattern to narrow them)')
       break
     }
-    const stop = Math.min(end, tailStart)
+    // merged ranges can span most of a noisy log, so the budget bounds each slice, not only the next range
+    const stop = Math.min(end, tailStart, start + MAX_MATCH_LINES - shown)
     out.push(...numbered(lines.slice(start, stop), start), '  …')
     shown += stop - start
   }

@@ -127,7 +127,16 @@ async function update(ctx: Ctx, input: MrInput): Promise<string> {
   return json(summary((await ctx.api.send('PUT', `/merge_requests/${iid}`, body)) as Mr))
 }
 
-type Diff = { old_path: string; new_path: string; diff: string; new_file?: boolean; deleted_file?: boolean; renamed_file?: boolean }
+type Diff = {
+  old_path: string
+  new_path: string
+  diff: string
+  new_file?: boolean
+  deleted_file?: boolean
+  renamed_file?: boolean
+  too_large?: boolean
+  collapsed?: boolean
+}
 
 async function diff(ctx: Ctx, input: MrInput): Promise<string> {
   const iid = await mrIid(ctx, input.iid)
@@ -145,7 +154,9 @@ async function diff(ctx: Ctx, input: MrInput): Promise<string> {
     .map((d) => {
       const head = d.renamed_file ? `${d.old_path} → ${d.new_path}` : d.new_path
       const tag = d.new_file ? ' (new)' : d.deleted_file ? ' (deleted)' : ''
-      return `=== ${head}${tag}\n${d.diff}`
+      // past GitLab's diff limits a file comes back with an empty diff: say so, never show it as unchanged
+      const omitted = !d.diff && (d.too_large || d.collapsed) ? `(diff omitted by GitLab: ${d.too_large ? 'too large' : 'collapsed'}; open the MR in the browser)\n` : ''
+      return `=== ${head}${tag}\n${omitted || d.diff}`
     })
     .join('\n')
   return clip(`MR !${iid}: ${chosen.length} of ${diffs.length} files\n${text}`, 'pass files to read fewer files')
