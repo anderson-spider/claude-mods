@@ -6,9 +6,18 @@ export {}
 declare module 'claude-code' {
   interface McpToolInputs {
     mcp__gitlab__gitlab_mr: {
-      action: 'list' | 'get' | 'create' | 'update' | 'diff' | 'commits' | 'approve' | 'unapprove' | 'rebase'
+      action: 'list' | 'get' | 'status' | 'create' | 'update' | 'diff' | 'commits' | 'approve' | 'unapprove' | 'rebase' | 'merge'
+      project?: string
       iid?: number
       state?: 'opened' | 'merged' | 'closed' | 'all'
+      scope?: 'created_by_me' | 'assigned_to_me' | 'all'
+      author?: string
+      assignee?: string
+      reviewer?: string
+      search?: string
+      allProjects?: boolean
+      page?: number
+      perPage?: number
       title?: string
       description?: string
       sourceBranch?: string
@@ -16,6 +25,7 @@ declare module 'claude-code' {
       labels?: string[]
       addLabels?: string[]
       removeLabels?: string[]
+      createMissingLabels?: boolean
       assignees?: string[]
       reviewers?: string[]
       draft?: boolean
@@ -23,9 +33,14 @@ declare module 'claude-code' {
       removeSourceBranch?: boolean
       squash?: boolean
       files?: string[]
+      sha?: string
+      whenPipelineSucceeds?: boolean
+      allowOthers?: boolean
+      allowProtectedTarget?: boolean
     }
     mcp__gitlab__gitlab_mr_comment: {
       action: 'list' | 'comment' | 'reply' | 'line' | 'edit' | 'resolve' | 'unresolve'
+      project?: string
       iid?: number
       body?: string
       discussionId?: string
@@ -34,20 +49,42 @@ declare module 'claude-code' {
       line?: number
       oldLine?: number
       unresolvedOnly?: boolean
+      page?: number
+      perPage?: number
+      allowOthers?: boolean
     }
     mcp__gitlab__gitlab_pipeline: {
-      action: 'list' | 'jobs' | 'retry' | 'cancel' | 'play'
+      action: 'list' | 'jobs' | 'run' | 'retry' | 'cancel' | 'play' | 'artifacts'
+      project?: string
       iid?: number
       ref?: string
       pipelineId?: number
       jobId?: number
       failedOnly?: boolean
+      variables?: string[]
+      page?: number
+      perPage?: number
+      allowOthers?: boolean
     }
     mcp__gitlab__gitlab_job_log: {
       jobId: number
+      project?: string
       mode?: 'errors' | 'tail' | 'full'
       lines?: number
       pattern?: string
+    }
+    mcp__gitlab__gitlab_label: {
+      action: 'list' | 'create'
+      project?: string
+      name?: string
+      color?: string
+      description?: string
+      search?: string
+      page?: number
+      perPage?: number
+    }
+    mcp__gitlab__gitlab_user: {
+      username?: string
     }
   }
 }

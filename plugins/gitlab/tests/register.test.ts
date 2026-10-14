@@ -16,17 +16,20 @@ const CALLS: Record<string, Record<string, unknown>> = {
   gitlab_mr_comment: { action: 'list', iid: 7 },
   gitlab_pipeline: { action: 'list', iid: 7 },
   gitlab_job_log: { jobId: 2 },
+  gitlab_label: { action: 'list' },
+  gitlab_user: {},
 }
 const call = (name: string) => ({ tool: id(name), ...CALLS[name] }) as never
 const text = (result: { result?: unknown }) => String(result.result)
 
-test('session start registers the four tools and no merge action', ON, async ($, on) => {
+test('session start registers the six tools, with a guarded merge and no generic API tool', ON, async ($, on) => {
   const { tools } = world(on)
 
   expect(await started($, tools)).toEqual(Object.keys(CALLS))
   const mr = tools.find((t) => t.name === 'gitlab_mr')!
-  expect((mr.inputSchema.properties.action as { enum?: string[] }).enum).not.toContain('merge')
-  expect(mr.description).toContain('Merging is not offered.')
+  expect((mr.inputSchema.properties.action as { enum?: string[] }).enum).toContain('merge')
+  expect(mr.description).toContain('merge (only when the user asks; iid and head sha required')
+  for (const tool of tools.filter((t) => t.name !== 'gitlab_user')) expect(Object.keys(tool.inputSchema.properties), tool.name).toContain('project')
 })
 
 test('each tool keeps its tool and schema descriptions within the prompt budget', ON, async ($, on) => {
@@ -99,7 +102,7 @@ test('API errors and failed calls are error results naming the project, and no o
 
   const denied = await $.tool.call({ tool: MR, action: 'get', iid: 7 } as never)
   expect(denied.isError).toBe(true)
-  expect(text(denied)).toBe('GitLab answered 403 for team/app: 403 Forbidden')
+  expect(text(denied)).toBe("GitLab answered 403 for team/app: 403 Forbidden. The token's user may have no access to team/app.")
   results.push(text(denied))
   for (const name of names) results.push(text(await $.tool.call(call(name))))
   host.fetchError = 'connection reset'
@@ -112,14 +115,24 @@ test('API errors and failed calls are error results naming the project, and no o
   }
 })
 
+const OWN_MR = JSON.stringify({ iid: 7, title: 't', state: 'opened', source_branch: 'feature/x', target_branch: 'main', author: { id: 1, username: 'ann' }, web_url: 'u' })
+const USER = 'https://gitlab.example.com/api/v4/user'
+
 test('the token goes only in the PRIVATE-TOKEN header, and writes send JSON', ON, async ($, on) => {
-  const { sent } = world(on, { api: { [`${WORK_API}/merge_requests/7/notes`]: { text: '{"id":5}' } } })
+  const { sent } = world(on, {
+    api: { [USER]: { text: '{"id":1,"username":"ann"}' }, [`${WORK_API}/merge_requests/7`]: { text: OWN_MR }, [`${WORK_API}/merge_requests/7/notes`]: { text: '{"id":5}' } },
+  })
 
   const result = await $.tool.call({ tool: id('gitlab_mr_comment'), action: 'comment', iid: 7, body: 'LGTM' } as never)
 
   expect(text(result)).toBe('{"note":5}')
-  expect(sent).toHaveLength(1)
-  expect(sent[0]).toEqual({
+  expect(sent.map((s) => [s.method, s.url])).toEqual([
+    ['GET', `${WORK_API}/merge_requests/7`],
+    ['GET', USER],
+    ['POST', `${WORK_API}/merge_requests/7/notes`],
+  ])
+  for (const s of sent) expect(s.headers?.['PRIVATE-TOKEN']).toBe(WORK)
+  expect(sent[2]).toEqual({
     url: `${WORK_API}/merge_requests/7/notes`,
     method: 'POST',
     headers: { 'PRIVATE-TOKEN': WORK, Accept: 'application/json', 'Content-Type': 'application/json' },
@@ -139,14 +152,48 @@ test('an answer that echoes the token, error or not, reaches the model with the 
   world(on, {
     api: {
       [`${WORK_API}/merge_requests/7`]: { status: 401, text: JSON.stringify({ message: `invalid token ${WORK}` }) },
-      [`${WORK_API}/merge_requests/7/notes`]: { text: JSON.stringify({ id: 5 }) },
-      [`${WORK_API}/merge_requests/7/discussions?per_page=100`]: { text: JSON.stringify([{ id: 'aa', notes: [{ id: 1, body: `pasted ${WORK}` }] }]) },
+      [`${WORK_API}/merge_requests/7/discussions?per_page=100&page=1`]: { text: JSON.stringify([{ id: 'aa', notes: [{ id: 1, body: `pasted ${WORK}` }] }]) },
     },
   })
 
   const denied = text(await $.tool.call({ tool: MR, action: 'get', iid: 7 } as never))
   const listed = text(await $.tool.call({ tool: id('gitlab_mr_comment'), action: 'list', iid: 7 } as never))
 
-  expect(denied).toBe('GitLab answered 401 for team/app: invalid token [token]')
+  expect(denied).toBe('GitLab answered 401 for team/app: invalid token [token]. The token for gitlab.example.com was refused (expired or revoked?). Replace it in the plugin options (/plugin, gitlab, configure).')
   expect(listed).toContain('pasted [token]')
+})
+
+test('project switches to another project on the same host with the same token, and a URL or another host is refused unsent', ON, async ($, on) => {
+  const other = 'https://gitlab.example.com/api/v4/projects/luizalabs%2Fmobile%2Fmegazord'
+  const { sent } = world(on, { api: { [`${other}/merge_requests/3`]: { text: MR_JSON } } })
+
+  const ok = await $.tool.call({ tool: MR, action: 'get', iid: 3, project: 'luizalabs/mobile/megazord' } as never)
+  expect(ok.isError).toBeUndefined()
+  expect(sent.map((s) => [s.url, s.headers?.['PRIVATE-TOKEN']])).toEqual([[`${other}/merge_requests/3`, WORK]])
+
+  for (const project of ['https://gitlab.com/anderson-spider/tools', 'gitlab.com:anderson-spider/tools', 'app', 7]) {
+    const refused = await $.tool.call({ tool: MR, action: 'get', iid: 3, project } as never)
+    expect(refused.isError, String(project)).toBe(true)
+    expect(text(refused)).toBe("project must be a project path on gitlab.example.com (group/project), not a URL: the token goes only to the remote's host.")
+  }
+  expect(sent).toHaveLength(1)
+})
+
+test("an SSH alias remote uses its real host's token, found through ssh -G, and an unresolved alias says so", ON, async ($, on) => {
+  const { sent, host } = world(on, { remote: 'git@work:team/app.git', api: { [`${WORK_API}/merge_requests/7`]: { text: MR_JSON } } })
+  host.ssh.work = 'gitlab.example.com'
+
+  const ok = await $.tool.call({ tool: MR, action: 'get', iid: 7 } as never)
+  expect(ok.isError).toBeUndefined()
+  expect(sent.map((s) => [s.url, s.headers?.['PRIVATE-TOKEN']])).toEqual([[`${WORK_API}/merge_requests/7`, WORK]])
+
+  host.ssh.work = 'gitlab.other.org'
+  expect(text(await $.tool.call({ tool: MR, action: 'get', iid: 7 } as never))).toBe(
+    "The remote's host work is an SSH alias for gitlab.other.org. The gitlab tokens option has no token for gitlab.other.org. Add gitlab.other.org=<token> in the plugin options (/plugin, gitlab, configure).",
+  )
+  host.remote = 'git@nowhere:team/app.git'
+  expect(text(await $.tool.call({ tool: MR, action: 'get', iid: 7 } as never))).toMatch(/If nowhere is an SSH alias from ~\/\.ssh\/config, ssh -G could not resolve it/)
+  host.remote = 'https://work/team/app.git'
+  expect(text(await $.tool.call({ tool: MR, action: 'get', iid: 7 } as never))).toMatch(/^The gitlab tokens option has no token for work\./)
+  expect(sent).toHaveLength(1)
 })

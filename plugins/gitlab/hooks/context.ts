@@ -1,10 +1,33 @@
-// What every tool shares: the API of the repository's project, the current branch, input checks and output size.
-import type { Api } from './api'
+// What every tool shares: the API of the chosen project, the current branch, the token's user, input checks, paging,
+// the guard on other people's merge requests and output size.
+import type { Api, Page, Query } from './api'
+
+export type User = { id?: number; username?: string }
 
 export type Ctx = {
   api: Api
-  /** The checked-out branch, or undefined on a detached HEAD. */
+  /** The checked-out branch, or undefined on a detached HEAD or when `project` names another project. */
   branch: () => Promise<string | undefined>
+  /** The token's own user, read once per call. */
+  me: () => Promise<{ id: number; username?: string }>
+  /** `project` named a project other than the remote's, so the current branch says nothing about it. */
+  foreign: boolean
+}
+
+/** A context whose `me` reads `/user` at most once; with `foreign`, the branch is never read. */
+export function makeCtx(api: Api, branch: () => Promise<string | undefined>, foreign = false): Ctx {
+  let me: Promise<{ id: number; username?: string }> | undefined
+  return {
+    api,
+    foreign,
+    branch: foreign ? async () => undefined : branch,
+    me: () =>
+      (me ??= (async () => {
+        const user = (await api.root('/user')) as User
+        if (typeof user?.id !== 'number') throw new InputError('GitLab did not say which user the token belongs to.')
+        return { id: user.id, username: typeof user.username === 'string' ? user.username : undefined }
+      })()),
+  }
 }
 
 /** A request the tool refuses before calling the API; its message goes to the model as is. */
@@ -47,6 +70,22 @@ export function need<T>(value: T | undefined, message: string): T {
   return value
 }
 
+/** GitLab's largest page. */
+export const MAX_PER_PAGE = 100
+
+/** `page` and `perPage` in GitLab's names; `perPage` defaults to `fallback` and is at most 100. */
+export function paging(input: { page?: unknown; perPage?: unknown }, fallback: number): Query {
+  const per = id(input.perPage, 'perPage') ?? fallback
+  if (per > MAX_PER_PAGE) throw new InputError(`perPage is at most ${MAX_PER_PAGE}.`)
+  return { per_page: per, page: id(input.page, 'page') ?? 1 }
+}
+
+/** A page's items as an array (an answer that is not a list counts as empty). */
+export const items = <T>(page: Page): T[] => (Array.isArray(page.data) ? (page.data as T[]) : [])
+
+/** `next` for an answer: the page to ask for when GitLab says there is more. */
+export const more = (page: Page): { next?: number } => (page.next === undefined ? {} : { next: page.next })
+
 type MrRef = { iid: number; project_id?: number; source_project_id?: number }
 
 /**
@@ -56,13 +95,38 @@ type MrRef = { iid: number; project_id?: number; source_project_id?: number }
 export async function mrIid(ctx: Ctx, iid: unknown): Promise<number> {
   const given = id(iid, 'iid')
   if (given !== undefined) return given
+  if (ctx.foreign) throw new InputError('Pass iid: project names another project, so the current branch is not used.')
   const branch = await ctx.branch()
   if (!branch) throw new InputError('No iid was given and the current branch is unknown (detached HEAD). Pass iid.')
   const open = (await ctx.api.get('/merge_requests', { state: 'opened', source_branch: branch, per_page: 20 })) as MrRef[]
   const own = (Array.isArray(open) ? open : []).filter((mr) => mr.source_project_id === undefined || mr.source_project_id === mr.project_id)
-  if (own.length === 0) throw new NoMrError(`No open merge request has ${branch} as its source branch. Pass iid.`)
+  if (own.length === 0) throw new NoMrError(`No open merge request has ${branch} as its source branch. Pass iid, or open one with gitlab_mr create.`)
   if (own.length > 1) throw new InputError(`Open merge requests ${own.map((mr) => `!${mr.iid}`).join(', ')} all have ${branch} as their source branch. Pass iid.`)
   return own[0]!.iid
+}
+
+/**
+ * The merge request, read so a write can check whose it is: one whose author is not the token's user is refused
+ * unless `allowOthers` is true, which the model passes only when the user asked to write on a colleague's MR.
+ */
+export async function writable<T extends { author?: User }>(ctx: Ctx, iid: number, allowOthers: unknown): Promise<T> {
+  const mr = (await ctx.api.get(`/merge_requests/${iid}`)) as T
+  if (bool(allowOthers) === true) return mr
+  const me = await ctx.me()
+  if (mr.author?.id !== me.id) {
+    const by = mr.author?.username ? `by ${mr.author.username}` : 'not yours'
+    throw new InputError(
+      `MR !${iid} is ${by}, not by the token's user${me.username ? ` (${me.username})` : ''}. Writing on someone else's MR needs allowOthers: true; pass it only when the user asked for it.`,
+    )
+  }
+  return mr
+}
+
+/** A username for a filter; `@me` (or `me`) is the token's own user. */
+export async function username(ctx: Ctx, raw: string): Promise<string> {
+  const name = raw.trim().replace(/^@/, '')
+  if (name !== 'me') return name
+  return need((await ctx.me()).username, 'GitLab did not say which user the token belongs to.')
 }
 
 /** User ids for usernames; `@me` (or `me`) is the token's own user. */
@@ -71,9 +135,7 @@ export async function userIds(ctx: Ctx, names: string[]): Promise<number[]> {
   for (const raw of names) {
     const name = raw.replace(/^@/, '')
     if (name === 'me') {
-      const me = (await ctx.api.root('/user')) as { id?: unknown }
-      if (typeof me?.id !== 'number') throw new InputError('GitLab did not say which user the token belongs to.')
-      ids.push(me.id)
+      ids.push((await ctx.me()).id)
       continue
     }
     const found = (await ctx.api.root('/users', { username: name })) as { id: number }[]

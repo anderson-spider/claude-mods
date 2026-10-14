@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
-import { pipeline } from '../hooks/pipelines'
-import { MR, fakeCtx } from './fake-api'
+import { pipeline, variables } from '../hooks/pipelines'
+import { MR, THEIRS, fakeCtx, paged } from './fake-api'
 
 const P = (id: number, status: string) => ({ id, status, ref: 'feature/x', sha: 'abcdef0123', source: 'push', web_url: `u/${id}` })
 const JOBS = [
@@ -17,7 +17,7 @@ test('list prefers the open MR of the current branch, and falls back to the bran
 
   const noMr = fakeCtx({ 'GET /merge_requests': [], 'GET /pipelines': [P(91, 'running')] })
   expect(JSON.parse(await pipeline(noMr.ctx, { action: 'list' })).from).toBe('feature/x')
-  expect(noMr.calls.at(-1)?.query).toEqual({ ref: 'feature/x', per_page: 10 })
+  expect(noMr.calls.at(-1)?.query).toEqual({ ref: 'feature/x', per_page: 10, page: 1 })
 })
 
 test('two open MRs of the branch are refused instead of falling back to the branch pipelines', async () => {
@@ -72,4 +72,107 @@ test('retry and cancel act on a job or a pipeline, play only on a job', async ()
   expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(['POST /jobs/2/retry', 'POST /pipelines/90/cancel', 'POST /jobs/4/play'])
   await expect(pipeline(ctx, { action: 'retry' })).rejects.toThrow('retry needs jobId or pipelineId.')
   await expect(pipeline(ctx, { action: 'play', pipelineId: 90 })).rejects.toThrow('play needs the jobId of a manual job.')
+})
+
+test('list reads the page asked for and says when there are more pipelines', async () => {
+  const { ctx, calls } = fakeCtx({ 'GET /pipelines': paged([P(91, 'running')], 3) })
+  expect(JSON.parse(await pipeline(ctx, { action: 'list', ref: 'main', page: 2, perPage: 30 })).next).toBe(3)
+  expect(calls[0]?.query).toEqual({ ref: 'main', per_page: 30, page: 2 })
+})
+
+test('jobs read the page asked for, after finding the latest pipeline with a page of one', async () => {
+  const { ctx, calls } = fakeCtx({
+    'GET /merge_requests/7/pipelines': [P(90, 'failed')],
+    'GET /pipelines/90/jobs': paged(JOBS, 2),
+    'GET /pipelines/90/bridges': [],
+  })
+  expect(JSON.parse(await pipeline(ctx, { action: 'jobs', iid: 7, perPage: 2 })).next).toBe(2)
+  expect(calls.map((c) => [c.path, c.query])).toEqual([
+    ['/merge_requests/7/pipelines', { per_page: 1, page: 1 }],
+    ['/pipelines/90/jobs', { per_page: 2, page: 1 }],
+    ['/pipelines/90/bridges', { per_page: 100 }],
+  ])
+})
+
+test('run starts a merge request pipeline for the iid or the current branch MR, and a ref pipeline with variables', async () => {
+  const { ctx, writes } = fakeCtx({
+    'GET /merge_requests': [MR],
+    'GET /merge_requests/7': MR,
+    'POST /merge_requests/7/pipelines': P(100, 'created'),
+    'POST /pipeline': P(101, 'created'),
+  })
+
+  expect(JSON.parse(await pipeline(ctx, { action: 'run' })).from).toBe('MR !7')
+  await pipeline(ctx, { action: 'run', iid: 7 })
+  const byRef = JSON.parse(await pipeline(ctx, { action: 'run', ref: 'main', variables: ['DEPLOY=staging', 'NOTE=a=b'] }))
+
+  expect(byRef).toEqual({ from: 'main', pipeline: { id: 101, status: 'created', ref: 'feature/x', sha: 'abcdef01', source: 'push', url: 'u/101' } })
+  expect(writes().map((c) => [c.path, c.body])).toEqual([
+    ['/merge_requests/7/pipelines', undefined],
+    ['/merge_requests/7/pipelines', undefined],
+    [
+      '/pipeline',
+      {
+        ref: 'main',
+        variables: [
+          { key: 'DEPLOY', value: 'staging', variable_type: 'env_var' },
+          { key: 'NOTE', value: 'a=b', variable_type: 'env_var' },
+        ],
+      },
+    ],
+  ])
+})
+
+test('run without an MR for the branch starts a pipeline of the branch, and variables never go to an MR pipeline', async () => {
+  const { ctx, writes } = fakeCtx({ 'GET /merge_requests': [], 'POST /pipeline': P(101, 'created') })
+  expect(JSON.parse(await pipeline(ctx, { action: 'run' })).from).toBe('feature/x')
+  expect(writes()[0]?.body).toEqual({ ref: 'feature/x' })
+  await expect(pipeline(ctx, { action: 'run', iid: 7, variables: ['A=1'] })).rejects.toThrow(/variables apply only to a ref pipeline/)
+  await expect(pipeline(ctx, { action: 'run', iid: 7, ref: 'main' })).rejects.toThrow('run takes iid or ref, not both.')
+  expect(variables(['PASSWORD=secret ', 'PAD=  x'])).toEqual([
+    { key: 'PASSWORD', value: 'secret ', variable_type: 'env_var' },
+    { key: 'PAD', value: '  x', variable_type: 'env_var' },
+  ])
+  expect(() => variables(['1BAD=x'])).toThrow('variables are KEY=value strings, the key letters, digits and underscores.')
+  expect(() => variables(['NOEQUALS'])).toThrow(/KEY=value/)
+})
+
+test("run of a merge request pipeline on someone else's MR needs allowOthers", async () => {
+  const { ctx, writes } = fakeCtx({ 'GET /merge_requests/7': THEIRS, 'POST /merge_requests/7/pipelines': P(100, 'created') })
+  await expect(pipeline(ctx, { action: 'run', iid: 7 })).rejects.toThrow(/allowOthers: true/)
+  expect(writes()).toEqual([])
+  await pipeline(ctx, { action: 'run', iid: 7, allowOthers: true })
+  expect(writes()).toHaveLength(1)
+})
+
+test('artifacts lists a job artifacts with their expiry and gives URLs that carry no token', async () => {
+  const { ctx } = fakeCtx({
+    'GET /jobs/5': {
+      ...JOBS[0],
+      id: 5,
+      web_url: 'https://gitlab.example.com/g/p/-/jobs/5',
+      artifacts: [
+        { file_type: 'archive', filename: 'artifacts.zip', size: 2048 },
+        { file_type: 'junit', filename: 'junit.xml.gz', size: 300 },
+      ],
+      artifacts_file: { filename: 'artifacts.zip', size: 2048 },
+      artifacts_expire_at: '2026-11-01T00:00:00Z',
+    },
+    'GET /jobs/6': { ...JOBS[0], id: 6, artifacts: [] },
+  })
+
+  expect(JSON.parse(await pipeline(ctx, { action: 'artifacts', jobId: 5 }))).toEqual({
+    job: 5,
+    name: 'lint',
+    status: 'success',
+    expires: '2026-11-01T00:00:00Z',
+    files: [
+      { type: 'archive', name: 'artifacts.zip', size: 2048 },
+      { type: 'junit', name: 'junit.xml.gz', size: 300 },
+    ],
+    download: 'https://gitlab.example.com/api/v4/projects/g%2Fp/jobs/5/artifacts',
+    browse: 'https://gitlab.example.com/g/p/-/jobs/5/artifacts/browse',
+  })
+  expect(JSON.parse(await pipeline(ctx, { action: 'artifacts', jobId: 6 }))).toEqual({ job: 6, name: 'lint', status: 'success', files: [] })
+  await expect(pipeline(ctx, { action: 'artifacts' })).rejects.toThrow('artifacts needs jobId (from jobs).')
 })
