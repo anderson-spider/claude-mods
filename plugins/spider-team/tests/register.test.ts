@@ -274,3 +274,13 @@ test('a judge failure still writes the outcome with judge null, unfinished runs 
   expect(h.logs).toContain('spider-team: judge off (no-key)')
   for (const text of [...h.written, ...h.files.values(), ...h.logs]) expect(text).not.toContain(ANSWER)
 })
+test('a failing judge opens only its own breaker: routing still asks Jev afterwards', async ($, on) => {
+  const h = world(on); h.env.JEV_API_KEY = 'test-key'
+  on('tool.call', { tool: 'Agent' }, () => finished(`${ANSWER} done`) as never)
+  await started($)
+  const fetch = h.io.jev.fetch
+  h.io.jev.fetch = async (url, init) => (init.body.includes('"report"') ? { status: 401, text: '' } : fetch(url, init))
+  for (let n = 0; n < 6; n++) await $.tool.call(call('developer', { tool_use_id: `toolu_j${n}` }) as never)
+  expect(h.logs).toContain('spider-team: judge off (breaker)')
+  expect(h.ledger().filter(l => l.kind === 'decision').map(l => l.source)).toEqual(Array(6).fill('jev'))
+})

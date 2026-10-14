@@ -13,9 +13,11 @@ export const BASE_REF = 'spider-team: developer needs worktree.baseRef "head" in
 export const EMPTY = 'spider-team: empty task.'
 export const STATS_COMMAND = 'spider-team-stats'
 export const STATS_DESCRIPTION = 'Summarize the local spider-team routing records: runs, failures, judged short runs, duration, cost and Jev confidence per role and pair.'
-const breaker = createBreaker(() => Date.now())
-const gate = createGate()
-function io($: Dollar): EffortIo {
+// Routing and the outcome judge each have their own breaker and gate, so a slow or failing judge never turns routing off.
+type Pool = Pick<EffortIo, 'breaker' | 'gate'>
+const routing: Pool = { breaker: createBreaker(() => Date.now()), gate: createGate() }
+const judging: Pool = { breaker: createBreaker(() => Date.now()), gate: createGate() }
+function io($: Dollar, pool: Pool = routing): EffortIo {
   return {
     settings: async (source: 'project' | 'local') => ({ env: (await $.settings.read({ source })).env }),
     jev: {
@@ -26,7 +28,7 @@ function io($: Dollar): EffortIo {
       timer: (ms, fn) => { const h = $.clock.after(ms, fn); return () => h.cancel() },
       now: () => Date.now(),
     },
-    breaker, gate,
+    breaker: pool.breaker, gate: pool.gate,
     log: text => $.ui.log(text, { to: 'debug' }),
   }
 }
@@ -49,7 +51,7 @@ async function record($: Dollar, what: string, line: Line) {
 async function judged($: Dollar, { line, answer }: Ended): Promise<OutcomeLine> {
   if (!answer.trim()) return line
   try {
-    const judge = await judgeAnswer(io($), { answer, home: await $.env.get('HOME') ?? '', root: await $.session.root(), key: await $.env.get('JEV_API_KEY') })
+    const judge = await judgeAnswer(io($, judging), { answer, home: await $.env.get('HOME') ?? '', root: await $.session.root(), key: await $.env.get('JEV_API_KEY') })
     return withJudge(line, judge)
   } catch { return line }
 }
