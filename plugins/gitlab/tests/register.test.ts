@@ -134,3 +134,19 @@ test('a refused input is an error result before any request', ON, async ($, on) 
   expect(text(result)).toBe('iid must be a positive integer.')
   expect(sent).toEqual([])
 })
+
+test('an answer that echoes the token, error or not, reaches the model with the token masked', ON, async ($, on) => {
+  world(on, {
+    api: {
+      [`${WORK_API}/merge_requests/7`]: { status: 401, text: JSON.stringify({ message: `invalid token ${WORK}` }) },
+      [`${WORK_API}/merge_requests/7/notes`]: { text: JSON.stringify({ id: 5 }) },
+      [`${WORK_API}/merge_requests/7/discussions?per_page=100`]: { text: JSON.stringify([{ id: 'aa', notes: [{ id: 1, body: `pasted ${WORK}` }] }]) },
+    },
+  })
+
+  const denied = text(await $.tool.call({ tool: MR, action: 'get', iid: 7 } as never))
+  const listed = text(await $.tool.call({ tool: id('gitlab_mr_comment'), action: 'list', iid: 7 } as never))
+
+  expect(denied).toBe('GitLab answered 401 for team/app: invalid token [token]')
+  expect(listed).toContain('pasted [token]')
+})

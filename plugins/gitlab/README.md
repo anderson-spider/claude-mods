@@ -23,7 +23,7 @@ Not covered: SSH host aliases from `~/.ssh/config` (the remote must name the rea
 
 ## Privacy
 
-Tokens come only from the `tokens` option, never from tool input or the environment. Each token is sent only to the host it is paired with, in the `PRIVATE-TOKEN` header, and never appears in a result or error. On every call the plugin reads the project and local settings; if either declares `tokens` for this plugin, or the settings cannot be read, the call is refused and nothing is sent. A remote URL is never echoed, since an https remote can carry a password. The plugin runs `git remote` and `git rev-parse` in the session's directory and sends requests only to the remote's GitLab host.
+Tokens come only from the `tokens` option, never from tool input or the environment. Each token is sent only to the host it is paired with, in the `PRIVATE-TOKEN` header; if an answer echoes it (a proxy's error page, a pasted comment), it reaches the model as `[token]`. On every call the plugin reads the project and local settings; if either declares `tokens` for this plugin, or the settings cannot be read, the call is refused and nothing is sent. A remote URL is never echoed, since an https remote can carry a password. The plugin runs `git remote` and `git rev-parse` in the session's directory and sends requests only to the remote's GitLab host.
 
 ## Tests
 

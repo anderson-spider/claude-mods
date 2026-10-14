@@ -51,12 +51,14 @@ async function run(
   if (access.off !== undefined) return reply(offText(access.off, where.host), true)
   // $.http.fetch is wrapped, not passed as a value: the engine's validate rejects the latter.
   const api = gitlab((url, init) => $.http.fetch(url, init), where.host, where.project, access.token)
+  // an answer can echo what the request carried (a proxy's error page, a fetch error), so the token is masked in every output
+  const masked = (text: string, isError = false) => reply(text.split(access.token).join('[token]'), isError)
   try {
-    return reply(await tool({ api, branch: () => currentBranch(git) }, input))
+    return masked(await tool({ api, branch: () => currentBranch(git) }, input))
   } catch (err) {
-    if (err instanceof InputError) return reply(err.message, true)
-    if (err instanceof GitlabError) return reply(`GitLab answered ${err.status} for ${where.project}: ${err.message}`, true)
-    return reply(`Call to ${where.host} failed: ${err instanceof Error ? err.message : String(err)}`, true)
+    if (err instanceof InputError) return masked(err.message, true)
+    if (err instanceof GitlabError) return masked(`GitLab answered ${err.status} for ${where.project}: ${err.message}`, true)
+    return masked(`Call to ${where.host} failed: ${err instanceof Error ? err.message : String(err)}`, true)
   }
 }
 
