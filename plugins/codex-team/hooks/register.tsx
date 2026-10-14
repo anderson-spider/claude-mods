@@ -1,5 +1,5 @@
 import type { Hook, McpToolInputs, Register } from 'claude-code'
-import type { SchemaFor } from './schema'
+import { allOf, type SchemaFor } from './schema'
 import { autoFinish, dispatch, finish } from './team'
 import type { TeamIo } from './team'
 import { createBreaker, createGate } from './jev'
@@ -109,12 +109,12 @@ export const register: Register = (on, options) => {
       inputSchema: {
         type: 'object',
         properties: {
-          role: { type: 'string', enum: ['developer', 'analyst', 'architect', 'reviewer'], description: 'Who does the task.' },
+          role: { type: 'string', enum: allOf<McpToolInputs['mcp__codex-team__dispatch']['role']>()('developer', 'analyst', 'architect', 'reviewer'), description: 'Who does the task.' },
           task: { type: 'string', description: 'Required except for reviewer: a self-contained brief. For reviewer, optional extra focus. Accepts @profile and !dimension=value pins outside code and quotes. Each dispatch starts a fresh session; followup briefs must be self-contained.' },
           slug: { type: 'string', description: 'Required task id: lowercase letters, digits and hyphens, at most 22 characters. Never truncated.' },
           cwd: { type: 'string', description: 'Developer only: the absolute path of the task worktree, never the repository itself.' },
-          model: { type: 'string', enum: ['gpt-6.1-sol', 'gpt-6-luna', 'gpt-6-astra'], description: 'Pins model at a new session start for every role and skips Jev; omitted effort uses the role default. Astra pins require allowAstra permission.' },
-          effort: { type: 'string', enum: ['low', 'medium', 'high', 'xhigh'], description: 'Pins effort at a new session start for every role and skips Jev; omitted model uses the role default. Astra caps xhigh to high; each dispatch starts fresh.' },
+          model: { type: 'string', enum: allOf<McpToolInputs['mcp__codex-team__dispatch']['model']>()('gpt-6.1-sol', 'gpt-6-luna', 'gpt-6-astra'), description: 'Pins model at a new session start for every role and skips Jev; omitted effort uses the role default. Astra pins require allowAstra permission.' },
+          effort: { type: 'string', enum: allOf<McpToolInputs['mcp__codex-team__dispatch']['effort']>()('low', 'medium', 'high', 'xhigh'), description: 'Pins effort at a new session start for every role and skips Jev; omitted model uses the role default. Astra caps xhigh to high; each dispatch starts fresh.' },
           fast: { type: 'boolean', description: 'Fast mode (the priority service tier) for this dispatch: true turns it on, false off; omitted uses the fast plugin option (off by default).' },
         },
         required: ['role', 'slug'],

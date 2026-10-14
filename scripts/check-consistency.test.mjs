@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,6 +14,12 @@ const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 const script = fileURLToPath(new URL("./check-consistency.mjs", import.meta.url));
 const json = (value) => JSON.stringify(value, null, 2);
 const COMMAND = (file) => `node "$CLAUDE_PROJECT_DIR/.claude/hooks/${file}"`;
+const TEMPLATE = (file) => readFileSync(join(repoRoot, "scripts/plugin-template", file), "utf8");
+/** Gives alpha the shared SchemaFor files as exact copies of the template. */
+const withSchema = (files) => {
+  files["plugins/alpha/hooks/schema.ts"] = TEMPLATE("hooks/schema.ts.tmpl");
+  files["plugins/alpha/tests/schema-types.ts"] = TEMPLATE("tests/schema-types.ts.tmpl");
+};
 
 /** A minimal repository with one plugin, "alpha", that passes every check. Tests change one file at a time. */
 function baseFiles() {
@@ -105,6 +111,10 @@ test("the repository passes every check", () => {
 
 test("the fixture repository passes every check", (t) => {
   assert.deepEqual(problems(t), []);
+});
+
+test("a plugin whose SchemaFor files are exact copies of the template passes", (t) => {
+  assert.deepEqual(problems(t, withSchema), []);
 });
 
 test("the command prints one line per problem and exits 1, or prints ok", (t) => {
@@ -341,6 +351,30 @@ for (const { name, change, expected } of [
     name: "a cited test file that does not exist",
     change: edit("plugins/alpha/AGENTS.md", (text) => text + "- See `tests/missing.test.ts` (`a name`).\n"),
     expected: ["alpha: AGENTS.md cites tests/missing.test.ts, which does not exist"],
+  },
+  {
+    name: "a hooks/schema.ts that differs from the template",
+    change: (files) => {
+      withSchema(files);
+      files["plugins/alpha/hooks/schema.ts"] = files["plugins/alpha/hooks/schema.ts"].replace("enum: AllOf<V>", "enum: readonly V[]");
+    },
+    expected: ["alpha: hooks/schema.ts differs from scripts/plugin-template/hooks/schema.ts.tmpl (copy the template)"],
+  },
+  {
+    name: "type tests that differ from the template",
+    change: (files) => {
+      withSchema(files);
+      files["plugins/alpha/tests/schema-types.ts"] += "\n";
+    },
+    expected: ["alpha: tests/schema-types.ts differs from scripts/plugin-template/tests/schema-types.ts.tmpl (copy the template)"],
+  },
+  {
+    name: "a hooks/schema.ts without its type tests",
+    change: (files) => {
+      withSchema(files);
+      delete files["plugins/alpha/tests/schema-types.ts"];
+    },
+    expected: ["alpha: tests/schema-types.ts is missing (copy scripts/plugin-template/tests/schema-types.ts.tmpl)"],
   },
 ]) {
   test(`fails: ${name}`, (t) => {
