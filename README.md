@@ -50,7 +50,7 @@ To use a local copy instead of GitHub, pass the folder path:
 
 The plugins here are function hooks mods, a Claude Code API still in early access that may change between versions.
 
-Requires Claude Code v2.1.287 or later, the first version that runs mods without an opt-in flag ([mods overview](https://code.claude.com/docs/en/plugins/mods)); tailscale's sensitive `apiKey` is a `userConfig` option, for which no separate minimum was found beyond that floor. The repository is checked with v2.1.296 (`claude --version`). The mods reference marks host calls that need a later version; the plugins have not been audited against those marks.
+Requires Claude Code v2.1.287 or later, the first version that runs mods without an opt-in flag ([mods overview](https://code.claude.com/docs/en/plugins/mods)); tailscale's sensitive `apiKey` is a `userConfig` option, for which no separate minimum was found beyond that floor. The repository is checked with v2.1.300 (`claude --version`). The mods reference marks host calls that need a later version; the plugins have not been audited against those marks.
 
 See [Privacy and permissions](docs/PRIVACY.md) for what each plugin reads and saves, and [Verification](docs/VERIFICATION.md) for what the tests cover and what they do not.
 
