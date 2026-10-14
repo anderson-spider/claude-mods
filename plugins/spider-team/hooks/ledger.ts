@@ -5,8 +5,8 @@
 import type { Distributions, Levels, Source } from './effort'
 import { CALIBRATION, DIFFICULTIES, DIMENSIONS, GROUP_OF_DURATION, JUDGE_FLAGS, judgedShort, LADDER, PRICES, QUESTIONS } from './router'
 import type { Dimension, Judge } from './router'
-import { MODELS, ROLES } from './roles'
-import type { Effort, Model, Pair, Role } from './roles'
+import { MODELS, RETIRED_ROLES, ROLES } from './roles'
+import type { Effort, LedgerRole, Model, Pair, Role } from './roles'
 
 export const LEDGER_FILE = '.claude/spider-team/routes.jsonl'
 /** Under the host's 4 MiB read limit: past this the current file moves to the one rotated generation. */
@@ -19,11 +19,11 @@ export type Tokens = { input: number; output: number; cacheCreation: number; cac
 
 // `calibration` is the router's CALIBRATION when the line was written; lines from before the field existed lack it and are calibration 1.
 export type DecisionLine = {
-  v: 1; kind: 'decision'; calibration?: number; ts: string; tool_use_id: string | null; role: Role; source: Source; jevReason: string | null; jevMs: number | null
+  v: 1; kind: 'decision'; calibration?: number; ts: string; tool_use_id: string | null; role: LedgerRole; source: Source; jevReason: string | null; jevMs: number | null
   levels: Levels | null; top: Levels | null; dist: Distributions | null; cell: string | null; floorApplied: boolean; model: Model; effort: Effort
 }
 export type OutcomeLine = {
-  v: 1; kind: 'outcome'; ts: string; tool_use_id: string | null; role: Role; model: Model; effort: Effort; mode: 'foreground' | 'background'
+  v: 1; kind: 'outcome'; ts: string; tool_use_id: string | null; role: LedgerRole; model: Model; effort: Effort; mode: 'foreground' | 'background'
   resolvedModel: string | null; modelsUsed: number | null; status: Status; aborted: boolean; durationMs: number | null
   tokens: Tokens | null; costUsd: number | null; verdict: Verdict | null
   /** The outcome judge's probabilities, two decimals; null when not judged. Lines from before the field lack it. */
@@ -191,6 +191,9 @@ export async function readAll(io: FileIo, path: string): Promise<string> {
   return texts.join('\n')
 }
 
+// Lines of retired roles still parse, so their history keeps its own groups.
+const LEDGER_ROLES: readonly LedgerRole[] = [...ROLES, ...RETIRED_ROLES]
+
 /** Parses ledger text, oldest first; lines that are not a known record are skipped, repeated lines count once. */
 export function parseLedger(text: string): Line[] {
   const out: Line[] = [], seen = new Set<string>()
@@ -199,7 +202,7 @@ export function parseLedger(text: string): Line[] {
     seen.add(raw)
     let value: unknown
     try { value = JSON.parse(raw) } catch { continue }
-    if (!record(value) || value.v !== 1 || !ROLES.includes(value.role as Role) || !MODELS.includes(value.model as Model) || typeof value.effort !== 'string') continue
+    if (!record(value) || value.v !== 1 || !LEDGER_ROLES.includes(value.role as LedgerRole) || !MODELS.includes(value.model as Model) || typeof value.effort !== 'string') continue
     if (value.kind === 'decision' || value.kind === 'outcome') out.push(value as unknown as Line)
   }
   return out
@@ -269,7 +272,7 @@ export function summarize(lines: Line[]): Summary {
   const byPredictedTime = times.map(t => ({ count: t.length, medianMs: median(t) }))
   return {
     decisions: decisions.length, outcomes: outcomes.length, olderCalibration: decisions.length - current.length,
-    byRole: keyed(l => l.role, [...ROLES]), byPair: keyed(l => `${l.model}/${l.effort}`, [...LADDER]),
+    byRole: keyed(l => l.role, [...LEDGER_ROLES]), byPair: keyed(l => `${l.model}/${l.effort}`, [...LADDER]),
     fallback: { count: defaults.length, reasons }, confidence, byPredictedTime,
   }
 }

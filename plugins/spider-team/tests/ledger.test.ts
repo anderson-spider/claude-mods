@@ -5,7 +5,7 @@ import type { Distributions } from '../hooks/effort'
 import { CALIBRATION } from '../hooks/router'
 
 const MARKER = 'SECRET-MARKER-7f3a'
-const ctx = (role: 'analyst' | 'developer' | 'reviewer' | 'architect' = 'reviewer', id = 'toolu_1') => ({ toolUseId: id, role, pair: { model: 'opus' as const, effort: 'medium' as const } })
+const ctx = (role: 'analyst' | 'planner' | 'reviewer' = 'reviewer', id = 'toolu_1') => ({ toolUseId: id, role, pair: { model: 'opus' as const, effort: 'medium' as const } })
 const completed = (text: string, patch = {}) => ({
   ref: 'r', text: MARKER, result: {
     agentId: 'a1', status: 'completed', prompt: MARKER, resolvedModel: 'claude-opus-5-5', modelsUsed: ['claude-opus-5-5'], totalToolUseCount: 3, totalDurationMs: 90_000, totalTokens: 13_500,
@@ -31,9 +31,9 @@ test('a decision line projects only the allowed fields and rounds the probabilit
     cell: { model: 'haiku' as const, effort: 'xhigh' as const }, floorApplied: true, model: 'opus' as const, effort: 'low' as const,
     prompt: MARKER, task: MARKER, path: `/private/${MARKER}`,
   }
-  const line = decisionLine({ ts: '2026-10-14T10:00:00.000Z', toolUseId: 'toolu_1', role: 'architect', choice })
+  const line = decisionLine({ ts: '2026-10-14T10:00:00.000Z', toolUseId: 'toolu_1', role: 'planner', choice })
   expect(line).toEqual({
-    v: 1, kind: 'decision', calibration: CALIBRATION, ts: '2026-10-14T10:00:00.000Z', tool_use_id: 'toolu_1', role: 'architect', source: 'jev', jevReason: null, jevMs: 412,
+    v: 1, kind: 'decision', calibration: CALIBRATION, ts: '2026-10-14T10:00:00.000Z', tool_use_id: 'toolu_1', role: 'planner', source: 'jev', jevReason: null, jevMs: 412,
     levels: { difficulty: 2, duration: 1 }, top: { difficulty: 0.83, duration: 0.5 },
     dist: { difficulty: { '0': 0, '1': 0.06, '2': 0.83, '3': 0.11, '4': 0 }, duration: { '0': 0.25, '1': 0.5, '2': 0.25, '3': 0 } },
     cell: 'haiku/xhigh', floorApplied: true, model: 'opus', effort: 'low',
@@ -89,7 +89,7 @@ test('a finished foreground run becomes one outcome line with usage, cost and a 
   // The answer is handed back for the judge only; the line holds none of it.
   expect(JSON.stringify((ended as { line: OutcomeLine }).line)).not.toContain(MARKER)
   // Only a reviewer has a verdict; null cache counts are zero; an unknown resolved id costs by the routed family.
-  const other = afterAgentCall(ctx('developer'), completed('Verdict: CHANGES', { resolvedModel: 'mystery', usage: { input_tokens: 1000, output_tokens: 500, cache_creation_input_tokens: null, cache_read_input_tokens: null } }), 't') as { line: OutcomeLine }
+  const other = afterAgentCall(ctx('planner'), completed('Verdict: CHANGES', { resolvedModel: 'mystery', usage: { input_tokens: 1000, output_tokens: 500, cache_creation_input_tokens: null, cache_read_input_tokens: null } }), 't') as { line: OutcomeLine }
   expect(other.line).toMatchObject({ verdict: null, resolvedModel: 'mystery', tokens: { input: 1000, output: 500, cacheCreation: 0, cacheRead: 0 }, costUsd: 0.0140 })
   expect(afterAgentCall(ctx(), completed('x', { resolvedModel: `has space ${MARKER}` }), 't')).toMatchObject({ line: { resolvedModel: null } })
   // The handback report stands in for content.
@@ -122,7 +122,7 @@ test('the judge projects its three flags only, each a finite probability rounded
   // One hostile, missing or out-of-range flag drops the whole judge: a partial judge cannot apply the short rule.
   for (const bad of [{ finished: NaN, failingChecks: 0, blocked: 0 }, { finished: 1, failingChecks: Infinity, blocked: 0 }, { finished: 1, failingChecks: 0, blocked: 1.01 }, { finished: -0.1, failingChecks: 0, blocked: 0 },
     { finished: '0.9', failingChecks: 0, blocked: 0 }, { finished: 1, failingChecks: 0 }, [0.9, 0, 0], MARKER, null, undefined, 1]) expect(judgeOf(bad)).toBeNull()
-  const completedLine = (afterAgentCall(ctx('developer'), completed('Done.'), 't') as { line: OutcomeLine }).line
+  const completedLine = (afterAgentCall(ctx('planner'), completed('Done.'), 't') as { line: OutcomeLine }).line
   const judgedLine = withJudge(completedLine, { finished: 0.876, failingChecks: 0.02, blocked: 0.1, text: MARKER })
   expect(judgedLine.judge).toEqual({ finished: 0.88, failingChecks: 0.02, blocked: 0.1 })
   expect(JSON.stringify(judgedLine)).not.toContain(MARKER)
@@ -173,8 +173,10 @@ test('a ledger that cannot be read is never overwritten, and a full one moves to
   expect(rotatedPath(path)).toBe('/home/u/.claude/spider-team/routes.1.jsonl')
 })
 
-test('parsing skips malformed and foreign lines and counts a repeated line once', () => {
+test('parsing skips malformed and foreign lines, counts a repeated line once and keeps the retired developer and architect lines', () => {
   const decision = JSON.stringify({ v: 1, kind: 'decision', ts: 't', tool_use_id: 'a', role: 'analyst', model: 'haiku', effort: 'high', source: 'default' })
+  const retired = ['developer', 'architect'].map(role => JSON.stringify({ v: 1, kind: 'outcome', ts: 't', tool_use_id: role, role, model: 'opus', effort: 'medium' }))
+  expect(parseLedger(retired.join('\n')).map(l => l.role)).toEqual(['developer', 'architect'])
   const text = ['not json', '', decision, decision, JSON.stringify({ v: 2, kind: 'decision', role: 'analyst', model: 'haiku', effort: 'high' }), JSON.stringify({ v: 1, kind: 'other', role: 'analyst', model: 'haiku', effort: 'high' }), JSON.stringify({ v: 1, kind: 'outcome', role: 'nobody', model: 'haiku', effort: 'high' }), '[1]', '3'].join('\n')
   expect(parseLedger(text)).toHaveLength(1)
 })
@@ -203,7 +205,8 @@ test('the summary counts runs, failures, medians, tokens, cost, fallbacks, confi
   const s = summarize(fixture)
   expect([s.decisions, s.outcomes, s.olderCalibration]).toEqual([7, 6, 0])
   const role = Object.fromEntries(s.byRole.map(r => [r.key, r.group]))
-  expect(s.byRole.map(r => r.key)).toEqual(['analyst', 'developer', 'reviewer'])
+  // The retired developer's lines keep their own group, after the current roles.
+  expect(s.byRole.map(r => r.key)).toEqual(['analyst', 'reviewer', 'developer'])
   expect(role.analyst).toEqual({ count: 2, failures: 1, medianMs: 3.5 * MIN, tokens: 2000, costUsd: 0.001, judged: 1, short: 0 })
   expect(role.developer).toEqual({ count: 2, failures: 0, medianMs: 71 * MIN, tokens: 20_000, costUsd: 0.1, judged: 2, short: 1 })
   expect(role.reviewer).toMatchObject({ count: 2, failures: 1, medianMs: 4 * MIN, costUsd: 0.2, judged: 0, short: 0 })

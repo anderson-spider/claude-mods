@@ -9,7 +9,6 @@ import { afterAgentCall, afterTurn, appendLine, createPending, decisionLine, for
 import type { Ended, FileIo, Line, OutcomeLine, TurnEnd } from './ledger'
 
 type Dollar = Parameters<Hook<'session.start'>>[0]
-export const BASE_REF = 'spider-team: developer needs worktree.baseRef "head" in the merged settings so its worktree starts from your HEAD.'
 export const EMPTY = 'spider-team: empty task.'
 export const STATS_COMMAND = 'spider-team-stats'
 export const STATS_DESCRIPTION = 'Summarize the local spider-team routing records: runs, failures, judged short runs, duration, cost and Jev confidence per role and pair.'
@@ -62,9 +61,8 @@ export const register: Register = on => {
   const background = createPending(200)
   on('session.start', async ($, e, next) => {
     await $.agent.register({ ...SPECS.analyst, name: 'analyst' })
-    await $.agent.register({ ...SPECS.developer, name: 'developer' })
+    await $.agent.register({ ...SPECS.planner, name: 'planner' })
     await $.agent.register({ ...SPECS.reviewer, name: 'reviewer' })
-    await $.agent.register({ ...SPECS.architect, name: 'architect' })
     await $.command.register({ name: STATS_COMMAND, description: STATS_DESCRIPTION })
     return next(e)
   })
@@ -75,10 +73,6 @@ export const register: Register = on => {
     const role = roleOf(call.subagent_type)
     if (!role) return next(e)
     if (!call.prompt.trim()) return { deny: EMPTY }
-    if (role === 'developer') {
-      const settings = await $.settings.read() as { worktree?: { baseRef?: string } }
-      if (settings.worktree?.baseRef !== 'head') return { deny: BASE_REF }
-    }
     const choice = await assessRoute(io($), {
       role, task: call.prompt,
       home: await $.env.get('HOME') ?? '', root: await $.session.root(), key: await $.env.get('JEV_API_KEY'),
