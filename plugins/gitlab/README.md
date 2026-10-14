@@ -12,7 +12,7 @@ Set the `tokens` plugin option (a sensitive field, kept in secure storage) from 
 
 The project is the `origin` remote (or the first remote when there is no `origin`), in SSH (`git@host:group/project.git`, `ssh://git@host:port/group/project.git`) or https form. An SSH remote that names a host alias from `~/.ssh/config` (`git@work:group/project.git`) is resolved with `ssh -G`, which reads the configuration and connects nowhere, and the real host's token is used; an alias that cannot be resolved is reported as such. The API is always `https://<host>/api/v4`. Without an `iid`, a merge request action works on the open merge request whose source is the current branch.
 
-Every tool except `gitlab_api` takes `project`, the path of another project on the same host (`group/subgroup/project`), which then replaces the remote's project. It is a path, never a URL, so the token never goes to another host. With `project`, actions on a merge request need `iid`: the current branch belongs to the remote's project.
+Every tool takes `project`, the path of another project on the same host (`group/subgroup/project`), which then replaces the remote's project. It is a path, never a URL, so the token never goes to another host. With `project`, actions on a merge request need `iid`: the current branch belongs to the remote's project.
 
 - `mcp__gitlab__gitlab_mr`:
   - `list`: by `state`, branches, `author`, `assignee`, `reviewer` (usernames or `@me`), `labels`, `search` and `scope` (`created_by_me`, `assigned_to_me`, `all`). `allProjects: true` lists across every project on the host (GitLab's own default there is your own MRs; a people filter widens it to `all`) and names each item's project in `ref` (`group/project!7`).
@@ -25,9 +25,8 @@ Every tool except `gitlab_api` takes `project`, the path of another project on t
 - `mcp__gitlab__gitlab_pipeline`: `list` the pipelines of a merge request (the current branch's by default) or of a ref; `jobs` of a pipeline (the latest by default) with its downstream pipelines and an option for failed jobs only; `run` a merge request pipeline (`iid`, or the current branch's MR) or a pipeline of `ref` (the current branch when it has no MR) with `variables` as `KEY=value`; `retry` or `cancel` a job or a pipeline; `play` a manual job; `artifacts` of a job (type, name, size, expiry) with the download and browse URLs, which carry no token. Downloading them is left to you.
 - `mcp__gitlab__gitlab_job_log`: a job's log without terminal colours or section markers. `errors` (the default) shows the lines that look like errors, or match `pattern`, with three lines around each, then the last 30 lines; `tail` the last `lines` lines (100 by default); `full` the whole log, cut at 60,000 characters.
 - `mcp__gitlab__gitlab_label`: `list` the project's labels, its groups' included (name, colour, description; `search`); `create` one (`name`, `color` default `#428BCA`, `description`), which answers the existing label when the name is taken.
-- `mcp__gitlab__gitlab_api`: a read-only way out for reads the other tools lack. It sends one GET of a path relative to `/api/v4` that starts with `projects`, `merge_requests`, `groups`, `users` or `labels`, with project paths URL-encoded and a query allowed. `.` and `..` segments, plain or encoded, are refused, and so are subresources whose answers carry secrets (`variables`, `secure_files`, access, deploy, impersonation and personal access tokens, `triggers`, `hooks`, `integrations`, `services`, `runners`), since the output mask covers only the plugin's own token. The answer is cut at 60,000 characters. There is no POST, PUT or DELETE through it.
 
-Answers are compact JSON with the fields worth reading, not GitLab's full objects. Lists take `page` and `perPage` (at most 100) and answer `next` when GitLab has another page. The defaults are 20 merge requests, 10 pipelines, and 100 jobs, discussions, diff files, commits or labels. `gitlab_api` says the next page under its answer.
+Answers are compact JSON with the fields worth reading, not GitLab's full objects. Lists take `page` and `perPage` (at most 100) and answer `next` when GitLab has another page. The defaults are 20 merge requests, 10 pipelines, and 100 jobs, discussions, diff files, commits or labels.
 
 ### Guards
 
@@ -38,7 +37,7 @@ Answers are compact JSON with the fields worth reading, not GitLab's full object
 
 A refused call names the project and GitLab's status and message, then what to do. A 401 means the token was refused (expired or revoked); a 403 on a write usually means the token lacks the `api` scope or the user's role does not allow it; a 404 means the project or the number is wrong, or the user cannot see it. A missing token names the host to add, and a missing label names the label.
 
-Not covered: a GitLab served under a path (`https://example.com/gitlab`), and OAuth tokens.
+There is no generic API tool: every call goes through an action built for it, so the token cannot be used for reads or writes the plugin does not name. Not covered: a GitLab served under a path (`https://example.com/gitlab`), and OAuth tokens.
 
 ## Privacy
 

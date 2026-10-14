@@ -7,7 +7,6 @@ import { jobLog } from './joblog'
 import { label } from './labels'
 import { mr } from './mr'
 import { pipeline } from './pipelines'
-import { rawGet } from './raw'
 import { currentBranch, locate, projectPath, sshHostname, type Git, type Ssh } from './remote'
 import { allOf, type SchemaFor } from './schema'
 import { offText, resolveToken, type TokenIo } from './tokens'
@@ -233,20 +232,6 @@ export const register: Register = (on, options) => {
         required: ['action'],
       } satisfies SchemaFor<Inputs['mcp__gitlab__gitlab_label']>,
     })
-    await $.tool.register({
-      name: 'gitlab_api',
-      description:
-        "Read-only GitLab API on the current repo's host, for reads the other gitlab tools lack: one GET of a path " +
-        'relative to /api/v4 starting with projects, merge_requests, groups, users or labels (project paths ' +
-        'URL-encoded, query allowed). The answer is cut at 60k characters.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          path: { type: 'string', description: 'Like projects/group%2Fapp/merge_requests?state=opened.' },
-        },
-        required: ['path'],
-      } satisfies SchemaFor<Inputs['mcp__gitlab__gitlab_api']>,
-    })
     return next(e)
   })
 
@@ -255,5 +240,4 @@ export const register: Register = (on, options) => {
   on('tool.call', { tool: 'mcp__gitlab__gitlab_pipeline' }, async ($, e) => run($, pipeline, e, options.tokens)).catch(failed)
   on('tool.call', { tool: 'mcp__gitlab__gitlab_job_log' }, async ($, e) => run($, jobLog, e, options.tokens)).catch(failed)
   on('tool.call', { tool: 'mcp__gitlab__gitlab_label' }, async ($, e) => run($, label, e, options.tokens)).catch(failed)
-  on('tool.call', { tool: 'mcp__gitlab__gitlab_api' }, async ($, e) => run($, rawGet, e, options.tokens)).catch(failed)
 }

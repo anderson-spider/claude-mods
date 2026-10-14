@@ -17,20 +17,18 @@ const CALLS: Record<string, Record<string, unknown>> = {
   gitlab_pipeline: { action: 'list', iid: 7 },
   gitlab_job_log: { jobId: 2 },
   gitlab_label: { action: 'list' },
-  gitlab_api: { path: 'projects/1' },
 }
 const call = (name: string) => ({ tool: id(name), ...CALLS[name] }) as never
 const text = (result: { result?: unknown }) => String(result.result)
 
-test('session start registers the six tools, with a guarded merge and a read-only API tool', ON, async ($, on) => {
+test('session start registers the five tools, with a guarded merge and no generic API tool', ON, async ($, on) => {
   const { tools } = world(on)
 
   expect(await started($, tools)).toEqual(Object.keys(CALLS))
   const mr = tools.find((t) => t.name === 'gitlab_mr')!
   expect((mr.inputSchema.properties.action as { enum?: string[] }).enum).toContain('merge')
   expect(mr.description).toContain('merge (only when the user asks; iid and head sha required')
-  expect(Object.keys(tools.find((t) => t.name === 'gitlab_api')!.inputSchema.properties)).toEqual(['path'])
-  for (const tool of tools.filter((t) => t.name !== 'gitlab_api')) expect(Object.keys(tool.inputSchema.properties), tool.name).toContain('project')
+  for (const tool of tools) expect(Object.keys(tool.inputSchema.properties), tool.name).toContain('project')
 })
 
 test('each tool keeps its tool and schema descriptions within the prompt budget', ON, async ($, on) => {
@@ -197,15 +195,4 @@ test("an SSH alias remote uses its real host's token, found through ssh -G, and 
   host.remote = 'https://work/team/app.git'
   expect(text(await $.tool.call({ tool: MR, action: 'get', iid: 7 } as never))).toMatch(/^The gitlab tokens option has no token for work\./)
   expect(sent).toHaveLength(1)
-})
-
-test('gitlab_api reads with GET on the remote host and refuses a path outside its allowlist before sending', ON, async ($, on) => {
-  const { sent } = world(on, { api: { 'https://gitlab.example.com/api/v4/projects/team%2Fapp/issues?state=opened': { text: `[{"iid":1,"note":"${WORK}"}]` } } })
-
-  const ok = await $.tool.call({ tool: id('gitlab_api'), path: 'projects/team%2Fapp/issues?state=opened' } as never)
-  const refused = await $.tool.call({ tool: id('gitlab_api'), path: 'https://evil.example/projects/1' } as never)
-
-  expect(text(ok)).toBe('[{"iid":1,"note":"[token]"}]')
-  expect(refused.isError).toBe(true)
-  expect(sent.map((s) => [s.method, s.url])).toEqual([['GET', 'https://gitlab.example.com/api/v4/projects/team%2Fapp/issues?state=opened']])
 })

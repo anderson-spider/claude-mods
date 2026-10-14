@@ -17,7 +17,7 @@ export const ME = { id: 1, username: 'ann' }
 /**
  * A context on branch `branch` (null: a detached HEAD) whose API answers `routes[`${method} ${path}`]` (a value or a
  * function of the call); an unknown route is a 404. `GET ROOT/user` answers `ME` unless a route says otherwise. Paths
- * under the API root are prefixed `ROOT`, `raw` paths `RAW/`.
+ * under the API root are prefixed `ROOT`.
  */
 export function fakeCtx(routes: Record<string, Answer>, branch: string | null = 'feature/x', foreign = false) {
   const calls: Call[] = []
@@ -37,10 +37,6 @@ export function fakeCtx(routes: Record<string, Answer>, branch: string | null = 
     get: async (path, query) => data(answer({ method: 'GET', path, query })),
     page: async (path, query) => page(answer({ method: 'GET', path, query })),
     text: async (path) => String(answer({ method: 'GET', path })),
-    raw: async (pathAndQuery) => {
-      const a = page(answer({ method: 'GET', path: `RAW/${pathAndQuery}` }))
-      return { text: typeof a.data === 'string' ? a.data : JSON.stringify(a.data), next: a.next }
-    },
     send: async (method, path, body) => answer({ method, path, body }),
     url: (path) => `https://gitlab.example.com/api/v4/projects/g%2Fp${path}`,
   }

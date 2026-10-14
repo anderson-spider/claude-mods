@@ -83,8 +83,5 @@ declare module 'claude-code' {
       page?: number
       perPage?: number
     }
-    mcp__gitlab__gitlab_api: {
-      path: string
-    }
   }
 }

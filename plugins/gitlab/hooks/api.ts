@@ -1,6 +1,5 @@
 // The GitLab REST API (v4) of one host and project. Pure: fetch is injected. Every path is built here from checked
-// ids and the encoded project path, never taken from the model, so a call cannot leave its host or its project. The
-// one exception, `raw`, takes a read-only path that `apiPath` (gitlab_api) has already checked against its allowlist.
+// ids and the encoded project path, never taken from the model, so a call cannot leave its host or its project.
 
 export type FetchResponse = { status: number; ok: boolean; text: string; headers?: Record<string, string> }
 export type Fetch = (url: string, init: { method: string; headers: Record<string, string>; body?: string }) => Promise<FetchResponse>
@@ -32,8 +31,6 @@ export type Api = {
   page: (path: string, query?: Query) => Promise<Page>
   /** GET under the project, as text (a job log). */
   text: (path: string) => Promise<string>
-  /** GET a path (with its query) already checked by `apiPath`, relative to the API root, as text. */
-  raw: (pathAndQuery: string) => Promise<{ text: string; next?: number }>
   /** POST, PUT or DELETE under the project with a JSON body. */
   send: (method: 'POST' | 'PUT' | 'DELETE', path: string, body?: Record<string, unknown>) => Promise<unknown>
   /** The URL of a path under the project, for the model to show; it carries no token. */
@@ -85,10 +82,6 @@ export function gitlab(fetch: Fetch, host: string, project: string, token: strin
     get: async (path, query) => json(await request('GET', projectBase + path + search(query))),
     page: async (path, query) => page(await request('GET', projectBase + path + search(query))),
     text: async (path) => (await request('GET', projectBase + path)).text,
-    raw: async (pathAndQuery) => {
-      const res = await request('GET', `${base}/${pathAndQuery}`)
-      return { text: res.text, next: nextPage(res.headers) }
-    },
     send: async (method, path, body) => json(await request(method, projectBase + path, body)),
     url: (path) => projectBase + path,
   }
