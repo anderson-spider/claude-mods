@@ -7,10 +7,9 @@ Claude Code **function hooks mods** marketplace. User-facing setup is in [README
 - Plugin work: read `plugins/<name>/AGENTS.md`; `.claude/rules/<name>.md` imports it for that subtree. Keep plugin guidance there: a plugin-root `CLAUDE.md` draws a validation warning.
 - ChatGPT browser tools: `plugins/chatgpt/AGENTS.md`.
 - Native Mac app control through Codex: `plugins/codex-computer-use/AGENTS.md`.
-- Git subagent on Haiku (git-master): `plugins/git-master/AGENTS.md`.
 - GitLab merge requests and pipelines of the current repository: `plugins/gitlab/AGENTS.md`.
 - Session card above the prompt: `plugins/session-hud/AGENTS.md`.
-- Native Spider Team specialists: `plugins/spider-team/AGENTS.md`.
+- Read-only analyst, planner and reviewer subagents with Jev routing (spider-team): `plugins/spider-team/AGENTS.md`.
 - Tailscale API tools: `plugins/tailscale/AGENTS.md`.
 - Hooks authoring or debugging: load the `plugin-authoring` skill first. The `claude-code` module is host-provided, not on npm.
 

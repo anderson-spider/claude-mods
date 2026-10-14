@@ -42,7 +42,7 @@ Treat pane claims as hypotheses; confirm each against the records:
 - Plugin records: consult its AGENTS.md for locations and fields.
 - Debug-only hooks: start with `--debug-file <scratchpad>/<name>.log` and read it.
 
-Compare every scenario with the root README and plugin AGENTS.md, recording mismatches even when the plugin works. Write a report under `.crew/` only if `git check-ignore -q .crew` succeeds; otherwise keep the report out of the repository. Finish when every scenario's outcome has supporting paths/fields or pane lines captured before closing.
+Compare every scenario with the root README and plugin AGENTS.md, recording mismatches even when the plugin works. Write a report under `.reports/` only if `git check-ignore -q .reports` succeeds; otherwise keep the report out of the repository. Finish when every scenario's outcome has supporting paths/fields or pane lines captured before closing.
 
 ## 4. Close and report
 
