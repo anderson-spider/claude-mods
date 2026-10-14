@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import { USAGE, band, flush, listed, start, step, world } from './host'
 
-test('the card draws the session as measured: model, effort, context, cache, cost, both windows and the turn', async ($, on) => {
+test('the card draws the session as measured: model, effort, context, cache, both windows and the turn, and no money', async ($, on) => {
   world(on)
   await start($)
   await flush()
@@ -17,10 +17,9 @@ test('the card draws the session as measured: model, effort, context, cache, cos
   expect(drawn).toContain(' · medium')
   expect(drawn).toContain(' 20%')
   expect(drawn).toContain('cache 95%')
-  expect(drawn).toContain('$4.59')
   expect(drawn).toContain('38m left')
   expect(drawn).toContain('last turn 5s')
-  expect(drawn).toContain('+$0.16')
+  expect(drawn).not.toContain('$')
   expect(drawn).not.toContain('private')
   expect((await ui.find({ type: 'Text', text: /^Opus 5\.5$/ }))?.props).toMatchObject({ color: '#d97757', bold: true })
   await ui.unmount()
@@ -136,7 +135,7 @@ test('a spawned subagent shows with its model until its turn completes, and the 
   expect(one).not.toContain('last turn')
 })
 
-test('a subagent turn neither starts the main turn nor moves its cost baseline', async ($, on) => {
+test('a subagent turn does not start the main turn', async ($, on) => {
   world(on)
   await start($)
   await flush()
@@ -147,14 +146,6 @@ test('a subagent turn neither starts the main turn nor moves its cost baseline',
   expect((await ui.find({ type: 'Text', text: /^● $/u }))?.props).toMatchObject({ color: '#4fb383' })
   await ui.unmount()
   expect(await drawnOf($)).toContain('1 agent: ?')
-  await $.turn.start({ text: 'go', turnId: 't1' } as never)
-  await flush()
-  await $.session.measure({ ...USAGE, cost: { usd: 4.59 }, changed: ['cost'] } as never)
-  await $.turn.start({ text: '', turnId: 's2', agentId: 'agent-9' } as never)
-  await flush()
-  await $.session.measure({ ...USAGE, cost: { usd: 4.70 }, changed: ['cost'] } as never)
-  await flush()
-  expect(await drawnOf($)).toContain('+$0.27')
 })
 
 test('the agent list removes a subagent it shows completed, on the clock and after a main turn', async ($, on) => {
@@ -202,4 +193,31 @@ test('a refused spawn passes its deny unchanged and tracks nothing', async ($, o
   expect(await $.agent.spawn({ prompt: 'task' } as never)).toEqual({ deny: 'no agents here' })
   await flush()
   expect(await drawnOf($)).not.toContain('agent')
+})
+
+test('on the desktop the card is laid out as lines with short drawn bars, the turn history and the cache lifetime a model switch names', async ($, on) => {
+  world(on)
+  await start($)
+  await flush()
+  await $.classic.PostModelSwitch({ from_model: 'claude-sonnet-4-5', to_model: 'claude-opus-5-5', requested_model: 'opus', source: 'command',
+    context_tokens: 0, prompt_cache_warm: true, cache_ttl: '1h', estimated_cache_write_usd: 0, pricing: 'catalog' } as never)
+  await $.turn.start({ text: 'private prompt', turnId: 't1' } as never)
+  await flush()
+  await step($)
+  await $.turn.complete({ turnId: 't1', answer: 'private', durationMs: 5_000, isAborted: false, reason: 'answer' } as never)
+  await flush()
+  const ui = await $.ui.mount({ ...(band() as object), surface: 'desktop' } as never)
+  const drawn = (await ui.findAll({ type: 'Text' })).map(found => found.text).join('\n')
+  expect(drawn).toContain('Opus 5.5')
+  expect(drawn).toContain('cache 95%')
+  expect(drawn).toContain(' · used 0s ago')
+  expect(drawn).toContain(' · 1h TTL, 1h 0m left')
+  expect(drawn).toContain('▲ +5\n · 5 out')
+  expect(drawn).toContain('last turn 5s · 1 turn')
+  expect(drawn).not.toMatch(/private|\$/u)
+  const drawings = await ui.findAll({ type: 'Svg' })
+  expect(drawings.map(found => (found.props as { alt: string }).alt))
+    .toEqual(['context 20% used', 'context of the last 1 turns', '5h 74% used', '7d 60% used'])
+  expect(drawings.map(found => (found.props as { width: number }).width)).toEqual([96, 117, 96, 96])
+  await ui.unmount()
 })

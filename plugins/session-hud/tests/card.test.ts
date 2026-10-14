@@ -1,12 +1,12 @@
 import { expect, test } from 'claude-code/testing'
-import { EMPTY, agentBegan, agentEnded, agentStepped, began, completed, measured, reconciled, spawned, stepped, tooled, windowed } from '../hooks/card'
+import { EMPTY, HISTORY, agentBegan, agentEnded, agentStepped, began, completed, measured, reconciled, spawned, stepped, tooled, ttlSet, windowed } from '../hooks/card'
 
-test('a measurement keeps the context, the readable windows and the cost; the turn cost runs from the baseline', () => {
+test('a measurement keeps the context and the readable windows, and nothing of a cost', () => {
   const card = measured(EMPTY, { context: { tokens: 10, window: 100, percent: 10 }, cost: { usd: 1.5 },
-    rateLimits: [{ kind: 'five_hour', percentUsed: 12, resetsAt: '2026-10-13T13:00:00Z' }, { kind: 'seven_day', percentUsed: Number.NaN }] }, 1.25)
-  expect(card).toEqual({ ...EMPTY, context: { tokens: 10, window: 100, percent: 10 }, cost: 1.5, lastTurnCost: 0.25,
+    rateLimits: [{ kind: 'five_hour', percentUsed: 12, resetsAt: '2026-10-13T13:00:00Z' }, { kind: 'seven_day', percentUsed: Number.NaN }] } as never)
+  expect(card).toEqual({ ...EMPTY, context: { tokens: 10, window: 100, percent: 10 },
     limits: [{ kind: 'five_hour', percentUsed: 12, resetsAt: '2026-10-13T13:00:00Z' }] })
-  expect(measured(card, { context: { window: 100 }, rateLimits: [] }, undefined)).toMatchObject({ cost: 1.5, lastTurnCost: 0.25, limits: [] })
+  expect(measured(card, { context: { window: 100 }, rateLimits: [] })).toMatchObject({ context: { window: 100 }, limits: [] })
 })
 
 test('a step brings the effort, the model that answered and the cache share; a step without usage keeps them', () => {
@@ -15,8 +15,7 @@ test('a step brings the effort, the model that answered and the cache share; a s
   expect(stepped(card, 3, null)).toEqual(card)
 })
 
-test('the session start is kept from a measurement, and each step adds its output tokens', () => {
-  expect(measured(EMPTY, { context: { window: 100 }, rateLimits: [], startedAt: 1_000 }, undefined)).toMatchObject({ startedAt: 1_000 })
+test('each step adds its output tokens', () => {
   const usage = { model: 'claude-opus-5-5', input_tokens: 1, output_tokens: 300, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
   expect(stepped(stepped(EMPTY, 'high', usage), 'high', usage).output).toBe(600)
   expect(stepped(EMPTY, 'high', { ...usage, output_tokens: Number.NaN }).output).toBe(0)
@@ -71,4 +70,29 @@ test('the agent list removes the agents it shows idle or ended, keeps the ones i
     { id: 'done', status: 'completed' }, { id: 'fail', status: 'failed' }, { id: 'kill', status: 'killed' }, { id: 'new', status: 'running' }]
   expect(reconciled(card, list).agents.map(agent => agent.id)).toEqual(['run', 'wait', 'flow'])
   expect(reconciled(card, [])).toBe(card)
+})
+
+test('a turn keeps its first prompt and its last prompt plus output, and joins the history when it ends, the last twelve kept', () => {
+  const usage = (input: number, read: number, output: number) =>
+    ({ model: 'claude-opus-5-5', input_tokens: input, output_tokens: output, cache_read_input_tokens: read, cache_creation_input_tokens: 0 })
+  const running = stepped(stepped(began(EMPTY, 1), 'high', usage(100, 1_000, 50), 2), 'high', usage(400, 1_100, 30), 3)
+  expect(running.pending).toEqual({ before: 1_100, after: 1_530, output: 80 })
+  const done = completed(running, 10)
+  expect(done.history).toEqual([{ before: 1_100, after: 1_530, output: 80 }])
+  expect(done.pending).toBeUndefined()
+  expect(completed(began(done, 4), 10).history).toHaveLength(1)
+  let card = EMPTY
+  for (let i = 0; i < HISTORY + 3; i++) card = completed(stepped(began(card, i), 'high', usage(i, 0, 1), i), 1)
+  expect(card.history).toHaveLength(HISTORY)
+  expect(card.history[0]!.before).toBe(3)
+  expect(stepped(EMPTY, 'high', { ...usage(1, 1, 1), output_tokens: Number.NaN }).pending).toBeUndefined()
+})
+
+test('a step that reads or writes the cache marks when, and only a 5m or 1h lifetime is kept', () => {
+  const read = { model: 'claude-opus-5-5', input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 10, cache_creation_input_tokens: 0 }
+  expect(stepped(EMPTY, 'high', read, 42).cacheUsedAt).toBe(42)
+  expect(stepped(EMPTY, 'high', { ...read, cache_read_input_tokens: 0 }, 42).cacheUsedAt).toBeUndefined()
+  expect(stepped(EMPTY, 'high', read).cacheUsedAt).toBeUndefined()
+  expect(ttlSet(EMPTY, '1h').cacheTtl).toBe('1h')
+  expect(ttlSet(EMPTY, '2h')).toBe(EMPTY)
 })

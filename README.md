@@ -10,7 +10,7 @@ Marketplace of [Claude Code](https://claude.com/claude-code) plugins made by and
 | [codex-computer-use](plugins/codex-computer-use/README.md) | Routes native Mac app control through Codex computer use from the ChatGPT app instead of Claude's own computer use, asking before each new app. |
 | [git-master](plugins/git-master/README.md) | Registers git-master, a Haiku subagent for git work (status, branches, commits, rebase, push, pull and merge requests) that the session calls whenever a request is about git. |
 | [gitlab](plugins/gitlab/README.md) | Opens, edits, comments on, reviews and (when asked, behind guards) merges GitLab merge requests, lists yours across projects, manages labels and runs and reads pipelines, jobs, artifacts and job errors, picking the host (gitlab.com or self-managed) and its token from the git remote. |
-| [session-hud](plugins/session-hud/README.md) | A three-row card above the prompt: model, context, cache and cost; the five-hour and seven-day limits with their pace; the running subagents, the last turn, edits and errors. |
+| [session-hud](plugins/session-hud/README.md) | A card above the prompt: model, context and cache; the five-hour and seven-day limits with their pace; the running subagents, the last turn, edits and errors; on the desktop, the context of the last turns. |
 | [spider-team](plugins/spider-team/README.md) | Native Spider Team specialists with Jev model and effort routing. |
 | [tailscale](plugins/tailscale/README.md) | Lets Claude query and modify your tailnet through the Tailscale API, with the key in the sensitive `apiKey` plugin option. |
 

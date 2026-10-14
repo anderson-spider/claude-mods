@@ -1,10 +1,11 @@
 import { atom, read, update } from 'claude-code'
 import type { Hook, Register, Timer } from 'claude-code'
 import type { SessionHudCard } from '../types'
-import { EMPTY, agentBegan, agentEnded, agentStepped, began, completed, measured, reconciled, spawned, stepped, tooled, windowed } from './card'
+import { EMPTY, agentBegan, agentEnded, agentStepped, began, completed, measured, reconciled, spawned, stepped, tooled, ttlSet, windowed } from './card'
 import type { Measured } from './card'
 import { paint, paletteOf } from './palette'
 import type { Palette } from './palette'
+import { desktopView } from './desktop'
 import { cardView } from './view'
 import type { Segment } from './view'
 
@@ -17,8 +18,8 @@ const paletteAtom = atom({ plugin: 'session-hud', key: 'palette' } as const, 'th
 /** The time left in a window is drawn in minutes: a tick every 30 s keeps it current without redrawing on every second. */
 const TICK_MS = 30_000
 
-/** What the module keeps between events: the clock's timers and the cost when the main session's turn began. */
-type Held = { ticker?: Timer; fast?: Timer; baseline?: number }
+/** What the module keeps between events: the clock's timers. */
+type Held = { ticker?: Timer; fast?: Timer }
 
 /** Observation never changes what the host answered: a failure is one debug line. */
 async function observe($: Dollar, action: () => Promise<void>): Promise<void> {
@@ -59,10 +60,9 @@ async function readWindow($: Dollar): Promise<void> {
 }
 
 /** The session's first figures: its model, the usage the status line has, the theme and the clock. */
-async function prime($: Dollar, held: Held): Promise<void> {
+async function prime($: Dollar): Promise<void> {
   const [model, usage, time] = await Promise.all([$.session.model(), $.session.usage(), $.clock.now()])
-  await update($, card, () => ({ ...measured(EMPTY, usage as Measured, undefined), model }))
-  held.baseline = usage.cost?.usd
+  await update($, card, () => ({ ...measured(EMPTY, usage as Measured), model }))
   await update($, nowAtom, () => time)
   const theme = await $.config.list().then(rows => rows.find(row => row.key === 'theme')?.value, () => undefined)
   await update($, paletteAtom, () => paletteOf(theme))
@@ -74,7 +74,7 @@ export const register: Register = on => {
 
   on('session.start', {}, async ($, e, next) => {
     const started = await next(e)
-    void observe($, async () => { ensureTicker($, held); await prime($, held) })
+    void observe($, async () => { ensureTicker($, held); await prime($) })
     return started
   })
   on('session.end', {}, (_$, e, next) => {
@@ -87,19 +87,18 @@ export const register: Register = on => {
     void observe($, async () => {
       ensureTicker($, held)
       const time = await $.clock.now()
-      await update($, card, current => measured(current, e as Measured, held.baseline))
+      await update($, card, current => measured(current, e as Measured))
       await update($, nowAtom, () => time)
     })
     return next(e)
   })
-  // A main-session turn: its cost is what the session spent since it began. A subagent's or teammate's turn: it runs.
+  // A main-session turn: it starts the clock and its context afresh. A subagent's or teammate's turn: it runs.
   on('turn.start', {}, async ($, e, next) => {
     if (e.agentId !== undefined) {
       void observe($, async () => { await update($, card, current => agentBegan(current, e.agentId)) })
       return next(e)
     }
     void observe($, async () => {
-      held.baseline = (await read($, card)).cost
       const time = await $.clock.now()
       await update($, card, current => began(current, time))
       await update($, nowAtom, () => time)
@@ -109,7 +108,7 @@ export const register: Register = on => {
   })
   on('turn.step', {}, async function* ($, e, next) {
     const answer = yield* next(e)
-    if (e.agentId === undefined) void observe($, async () => { await update($, card, current => stepped(current, e.effort, answer.usage)) })
+    if (e.agentId === undefined) void observe($, async () => { const time = await $.clock.now(); await update($, card, current => stepped(current, e.effort, answer.usage, time)) })
     else void observe($, async () => { await update($, card, current => agentStepped(current, e.agentId, typeof answer.usage?.model === 'string' ? answer.usage.model : e.model)) })
     return answer
   })
@@ -134,6 +133,12 @@ export const register: Register = on => {
     if (!e.agentId) void observe($, async () => { await update($, card, current => tooled(current, (e as { tool?: unknown }).tool, result)) })
     return result
   })
+  // A model switch is the only event that names the prompt cache's lifetime; the switch itself passes unchanged.
+  on('classic.PostModelSwitch', async ($, e, next) => {
+    const result = await next(e)
+    void observe($, async () => { await update($, card, current => ttlSet(current, e.cache_ttl)) })
+    return result
+  })
   // A theme change repaints the card; the change itself is the person's and passes unchanged.
   on('config.set', { key: 'theme' }, async ($, e, next) => {
     const result = await next(e)
@@ -152,7 +157,22 @@ export const register: Register = on => {
     try {
       const [shown, time, palette] = await Promise.all([read($, card), read($, nowAtom), read($, paletteAtom)])
       const columns = e.props.bodyColumns
-      const view = cardView({ card: shown as SessionHudCard, now: time, columns, working: shown.turnStartedAt !== undefined })
+      const working = shown.turnStartedAt !== undefined
+      if (e.surface !== 'terminal') {
+        const lines = desktopView({ card: shown as SessionHudCard, now: time, working, palette })
+        if (!lines.length) return next(e)
+        const { Box, Text, Svg } = $.ui.resolve(e)
+        return <Box flexDirection="column" borderStyle="round" borderColor={paint(palette, 'frame').color ?? 'inactive'} paddingX={1} rowGap={0}>
+          {lines.map((pieces, at) => <Box key={`line-${at}`} flexDirection="row" alignItems="center" marginTop={at === lines.length - 1 && at > 0 ? 1 : 0}>
+            {pieces.map((piece, i) => 'text' in piece
+              ? <Text key={`p-${i}`} {...paint(palette, piece.style)}>{piece.text}</Text>
+              : piece.kind === 'svg'
+                ? <Svg key={`p-${i}`} source={piece.source} alt={piece.alt} width={piece.width} height={piece.height} />
+                : <Box key={`p-${i}`} flexGrow={1} />)}
+          </Box>)}
+        </Box>
+      }
+      const view = cardView({ card: shown as SessionHudCard, now: time, columns, working })
       if (!view.top.length && !view.bottom.length) return next(e)
       const { Box, Text } = $.ui.resolve(e)
       const line = (row: Segment[], key: string) => <Text key={key} wrap="truncate">{row.map((part, at) =>

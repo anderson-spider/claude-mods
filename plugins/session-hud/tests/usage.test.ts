@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { cacheShare, money, paceOf, span } from '../hooks/usage'
+import { cacheShare, paceOf, span } from '../hooks/usage'
 
 const now = Date.parse('2026-10-13T12:00:00Z')
 const at = (ms: number) => new Date(now + ms).toISOString()
@@ -36,7 +36,6 @@ test('the cache share is the read part of the whole input', () => {
   expect(cacheShare({ input_tokens: -1, cache_read_input_tokens: 5, cache_creation_input_tokens: 0 })).toBeUndefined()
 })
 
-test('spans and money read as the card writes them', () => {
+test('spans read as the card writes them', () => {
   expect([span(5_000), span(38 * 60_000), span(296 * 60_000), span(84 * HOUR), span(-1)]).toEqual(['5s', '38m', '4h 56m', '3d 12h', '?'])
-  expect([money(4.594), money(0.16), money(Number.NaN)]).toEqual(['$4.59', '$0.16', '?'])
 })

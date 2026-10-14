@@ -3,6 +3,9 @@
 /** One rate-limit window as the host reports it: `five_hour`, `seven_day` or a gateway's `spend_limit`. */
 export type SessionHudLimit = { kind: string; percentUsed: number; resetsAt?: string }
 
+/** One finished main-session turn's context: the prompt its first request sent, what the next request re-sends (the last prompt plus its output) and the tokens it generated. */
+export type SessionHudTurn = { before: number; after: number; output: number }
+
 /** A subagent or teammate running now: its id (`agent.spawn`'s `agentId`) and, once reported, the model it runs on. */
 export type SessionHudAgent = { id: string; model?: string }
 
@@ -18,10 +21,10 @@ export type SessionHudCard = {
   contextWindow?: number
   /** The share of the main session's last input read from the prompt cache, 0 to 100. */
   cache?: number
-  /** US dollars the session has cost so far. */
-  cost?: number
-  /** When the session's figures count from (its first launch when resumed), in epoch milliseconds. */
-  startedAt?: number
+  /** When a main-session request last read or wrote the prompt cache, in epoch milliseconds. */
+  cacheUsedAt?: number
+  /** How long the prompt cache keeps an entry, as the host last reported it (only a model switch reports it). */
+  cacheTtl?: '5m' | '1h'
   /** Main-session turns completed since the plugin loaded. */
   turns: number
   /** Output tokens of the main session's steps since the plugin loaded. */
@@ -31,8 +34,10 @@ export type SessionHudCard = {
   turnStartedAt?: number
   /** How long the main session's last turn took, in milliseconds. */
   lastTurnMs?: number
-  /** What the session cost between the measurements around the last turn, in US dollars. */
-  lastTurnCost?: number
+  /** The last finished main-session turns, oldest first, at most `HISTORY`. */
+  history: SessionHudTurn[]
+  /** The running main-session turn's context so far; absent between turns. */
+  pending?: SessionHudTurn
   /** Successful Write, Edit and NotebookEdit calls of the main session. */
   edits: number
   /** Tool calls of the main session that ended in an error. */
