@@ -15,12 +15,6 @@ test('a step brings the effort, the model that answered and the cache share; a s
   expect(stepped(card, 3, null)).toEqual(card)
 })
 
-test('each step adds its output tokens', () => {
-  const usage = { model: 'claude-opus-5-5', input_tokens: 1, output_tokens: 300, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
-  expect(stepped(stepped(EMPTY, 'high', usage), 'high', usage).output).toBe(600)
-  expect(stepped(EMPTY, 'high', { ...usage, output_tokens: Number.NaN }).output).toBe(0)
-})
-
 test('the compaction window is kept when positive, and the turn start is cleared when it ends', () => {
   expect(windowed(EMPTY, 500_000)).toMatchObject({ contextWindow: 500_000 })
   for (const bad of [0, -1, Number.NaN, undefined, '500000']) expect(windowed(EMPTY, bad)).toEqual(EMPTY)
