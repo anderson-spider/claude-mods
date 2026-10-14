@@ -191,14 +191,28 @@ function wideRows(card: SessionHudCard, now: number): Row[] {
   return rows
 }
 
-/** The row under the rule: the last turn, turn count, edits, errors and the turn's cost. */
+/** The running agents grouped by model, the most first, then by name: `3 agents: Sonnet 4.5 ×2 · Haiku 4.5`; empty when none runs. */
+function agentCells(card: SessionHudCard): Row {
+  const agents = Array.isArray(card.agents) ? card.agents : []
+  if (!agents.length) return []
+  const groups = new Map<string, number>()
+  for (const agent of agents) {
+    const name = modelName(typeof agent?.model === 'string' ? agent.model : undefined) ?? '?'
+    groups.set(name, (groups.get(name) ?? 0) + 1)
+  }
+  const sorted = [...groups].sort(([a, m], [b, n]) => n - m || (a < b ? -1 : a > b ? 1 : 0))
+  return [seg(`${plural(agents.length, 'agent')}: `, 'secondary'),
+    ...joined(sorted.map(([name, n]) => [seg(name, 'model'), ...(n > 1 ? [seg(` ×${n}`, 'secondary')] : [])]))]
+}
+
+/** The row under the rule: the running agents, then the last turn, turn count, edits, errors and the turn's cost. */
 function turnRow(card: SessionHudCard, inner: number): Row {
   const parts: string[] = []
   if (card.lastTurnMs !== undefined) parts.push(`last turn ${span(card.lastTurnMs)}`)
   if (count(card.turns) > 0) parts.push(plural(count(card.turns), 'turn'))
   parts.push(plural(count(card.edits), 'edit'), plural(count(card.errors), 'error'))
   if (card.lastTurnCost !== undefined && Number.isFinite(card.lastTurnCost) && card.lastTurnCost >= 0) parts.push(`+${money(card.lastTurnCost)}`)
-  return cutRow([seg(parts.join(' · '), 'secondary')], inner)
+  return cutRow(joined([agentCells(card), [seg(parts.join(' · '), 'secondary')]], '   '), inner)
 }
 
 /** The card from one snapshot: rows sized to the band's width less the border and padding (four cells). */

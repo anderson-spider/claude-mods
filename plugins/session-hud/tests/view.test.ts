@@ -8,7 +8,7 @@ const at = (ms: number) => new Date(now + ms).toISOString()
 const full: SessionHudCard = {
   model: 'claude-opus-5-5', effort: 'medium', context: { tokens: 200_000, window: 1_000_000, percent: 20 }, cache: 95, cost: 4.59,
   limits: [{ kind: 'seven_day', percentUsed: 60, resetsAt: at(84 * HOUR) }, { kind: 'five_hour', percentUsed: 74, resetsAt: at(38 * 60_000) }],
-  lastTurnMs: 5_000, lastTurnCost: 0.16, edits: 2, errors: 1, turns: 0, output: 0,
+  lastTurnMs: 5_000, lastTurnCost: 0.16, edits: 2, errors: 1, turns: 0, output: 0, agents: [],
 }
 const view = (changes: Partial<Snapshot> = {}) => cardView({ card: full, now, columns: 110, ...changes })
 const text = (rows: { text: string }[][]) => rows.map(row => row.map(s => s.text).join(''))
@@ -77,9 +77,9 @@ test('a narrow card stacks the windows and keeps the turn figures within its wid
 })
 
 test('what the host has not reported is left out instead of drawn as zero', () => {
-  const bare = cardView({ card: { limits: [], edits: 0, errors: 0, turns: 0, output: 0 }, now, columns: 110 })
+  const bare = cardView({ card: { limits: [], edits: 0, errors: 0, turns: 0, output: 0, agents: [] }, now, columns: 110 })
   expect(bare).toEqual({ top: [], bottom: [] })
-  const early = cardView({ card: { model: 'claude-opus-5-5', limits: [], edits: 0, errors: 0, turns: 0, output: 0 }, now, columns: 110 })
+  const early = cardView({ card: { model: 'claude-opus-5-5', limits: [], edits: 0, errors: 0, turns: 0, output: 0, agents: [] }, now, columns: 110 })
   expect(text(early.top)).toEqual(['● Opus 5.5'])
   expect(text(early.bottom)).toEqual(['0 edits · 0 errors'])
 })
@@ -98,4 +98,26 @@ test('a spend limit and malformed figures never reach the screen as numbers', ()
   const all = [...text(card.top), ...text(card.bottom)].join('\n')
   expect(all).not.toMatch(/NaN|spend|1\.5|-1/u)
   expect(all).toContain('0 edits · 0 errors')
+})
+
+test('the running agents lead the turn row, grouped by model, the most first; none running draws nothing', () => {
+  const sonnet = 'claude-sonnet-4-5', haiku = 'claude-haiku-4-5-20251001'
+  const row = (agents: SessionHudCard['agents'], columns = 110) => view({ columns, card: { ...full, agents } }).bottom[0]!
+  expect(text([row([{ id: 'a', model: sonnet }, { id: 'b', model: haiku }, { id: 'c', model: sonnet }])])[0])
+    .toBe('3 agents: Sonnet 4.5 ×2 · Haiku 4.5   last turn 5s · 2 edits · 1 error · +$0.16')
+  expect(text([row([{ id: 'a', model: 'claude-opus-5-5' }])])[0]).toMatch(/^1 agent: Opus 5\.5 {3}last turn/u)
+  expect(text([row([{ id: 'a', model: haiku }, { id: 'b', model: sonnet }])])[0]).toMatch(/^2 agents: Haiku 4\.5 · Sonnet 4\.5 {3}/u)
+  expect(row([{ id: 'a', model: sonnet }]).filter(s => s.style === 'model').map(s => s.text)).toEqual(['Sonnet 4.5'])
+  expect(text([row([])])[0]).toBe('last turn 5s · 2 edits · 1 error · +$0.16')
+  expect(view({ card: { ...full, agents: [{ id: 'a', model: sonnet }] } }).top).toEqual(view().top)
+})
+
+test('an agent whose model is unknown or not a Claude id is drawn as ?, and a narrow card cuts the row to its width', () => {
+  const agents = [{ id: 'a' }, { id: 'b', model: '/Users/me/secret' }, { id: 'c', model: 'claude-sonnet-4-5' }]
+  const [wide] = text(view({ card: { ...full, agents } }).bottom)
+  expect(wide).toMatch(/^3 agents: \? ×2 · Sonnet 4\.5 {3}last turn/u)
+  expect(wide).not.toContain('secret')
+  const narrow = view({ columns: 40, card: { ...full, agents } }).bottom[0]!
+  expect(narrow.reduce((n, s) => n + s.text.length, 0)).toBeLessThanOrEqual(36)
+  expect(text([narrow])[0]).toMatch(/^3 agents: \? ×2 · Sonnet 4\.5 .*…$/u)
 })

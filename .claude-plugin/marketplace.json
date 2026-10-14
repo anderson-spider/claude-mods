@@ -35,7 +35,7 @@
     {
       "name": "session-hud",
       "source": "./plugins/session-hud",
-      "description": "A three-row card above the prompt: model, context, cache and cost; the five-hour and seven-day limits with their pace; the last turn, edits and errors."
+      "description": "A three-row card above the prompt: model, context, cache and cost; the five-hour and seven-day limits with their pace; the running subagents, the last turn, edits and errors."
     },
     {
       "name": "spider-team",

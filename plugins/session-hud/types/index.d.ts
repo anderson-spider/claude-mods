@@ -3,6 +3,9 @@
 /** One rate-limit window as the host reports it: `five_hour`, `seven_day` or a gateway's `spend_limit`. */
 export type SessionHudLimit = { kind: string; percentUsed: number; resetsAt?: string }
 
+/** A subagent or teammate running now: its id (`agent.spawn`'s `agentId`) and, once reported, the model it runs on. */
+export type SessionHudAgent = { id: string; model?: string }
+
 /** Everything the card draws, observed after the fact; a field the host has not reported yet is absent. */
 export type SessionHudCard = {
   /** The model id the main session's last response reported, or the session's model before one. */
@@ -34,6 +37,8 @@ export type SessionHudCard = {
   edits: number
   /** Tool calls of the main session that ended in an error. */
   errors: number
+  /** The subagents and teammates running a turn now, in the order they were seen; empty when none runs. */
+  agents: SessionHudAgent[]
 }
 
 declare module 'claude-code' {
