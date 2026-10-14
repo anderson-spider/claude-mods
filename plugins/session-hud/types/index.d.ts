@@ -6,8 +6,8 @@ export type SessionHudLimit = { kind: string; percentUsed: number; resetsAt?: st
 /** One main-session turn's context: the prompt its first request sent, what the next request re-sends (the last prompt plus its output), the tokens it generated, and whether a compaction came before or during it. */
 export type SessionHudTurn = { before: number; after: number; output: number; compacted?: true }
 
-/** A subagent or teammate running now: its id (`agent.spawn`'s `agentId`) and, once reported, the model it runs on. */
-export type SessionHudAgent = { id: string; model?: string }
+/** A subagent or teammate running now: its id (`agent.spawn`'s `agentId`) and, once reported, the model it runs on, the effort its last step asked for and the agent type it was spawned as. */
+export type SessionHudAgent = { id: string; model?: string; effort?: string; type?: string }
 
 /** Everything the card draws, observed after the fact; a field the host has not reported yet is absent. */
 export type SessionHudCard = {

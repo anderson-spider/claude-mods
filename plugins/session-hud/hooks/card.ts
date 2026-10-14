@@ -4,8 +4,8 @@ import { cacheShare } from './usage'
 
 export const EMPTY: SessionHudCard = { limits: [], edits: 0, errors: 0, turns: 0, agents: [], history: [] }
 
-/** The turns the card keeps: the history chart draws one bar each. */
-export const HISTORY = 12
+/** The turns the card keeps: the last one in figures, and the one before it for what was sent in between. */
+export const HISTORY = 2
 
 /** What the host measures: the context and the rate-limit windows (`session.measure`, `$.session.usage()`). */
 export type Measured = {
@@ -98,25 +98,30 @@ export function tooled(card: SessionHudCard, tool: unknown, result: { isError?: 
 const named = (s: unknown): s is string => typeof s === 'string' && s.length > 0
 const agentsOf = (card: SessionHudCard): SessionHudAgent[] => (Array.isArray(card.agents) ? card.agents : [])
 
-/** The agent `id` is tracked, with `model` when it is one; a known model is kept when this one is not. */
-function tracked(card: SessionHudCard, id: unknown, model: unknown): SessionHudCard {
+type Known = { model?: unknown; effort?: unknown; type?: unknown }
+
+/** The agent `id` is tracked; each of `model`, `effort` and `type` that is a name replaces what was known, and one that is not keeps it. */
+function tracked(card: SessionHudCard, id: unknown, known: Known): SessionHudCard {
   if (!named(id)) return card
   const agents = agentsOf(card)
   const at = agents.findIndex(agent => agent.id === id)
-  if (at < 0) return { ...card, agents: [...agents, named(model) ? { id, model } : { id }] }
-  if (!named(model) || agents[at]!.model === model) return card
-  return { ...card, agents: agents.map((agent, i) => (i === at ? { id, model } : agent)) }
+  const old: SessionHudAgent = at < 0 ? { id } : agents[at]!
+  const next: SessionHudAgent = { ...old }
+  for (const key of ['model', 'effort', 'type'] as const) if (named(known[key])) next[key] = known[key]
+  if (at < 0) return { ...card, agents: [...agents, next] }
+  if (next.model === old.model && next.effort === old.effort && next.type === old.type) return card
+  return { ...card, agents: agents.map((agent, i) => (i === at ? next : agent)) }
 }
 
-/** A subagent started (`agent.spawn`'s `agentId` and `model`): it runs on that model. */
-export const spawned = (card: SessionHudCard, agentId: unknown, model: unknown): SessionHudCard => tracked(card, agentId, model)
+/** A subagent started (`agent.spawn`'s `agentId`, the `model` it answers and the `subagentType` asked for): it runs as that type on that model. */
+export const spawned = (card: SessionHudCard, agentId: unknown, model: unknown, type?: unknown): SessionHudCard => tracked(card, agentId, { model, type })
 
 /** An agent's turn began: a resumed agent or a teammate waking runs again, its model unknown until it steps. */
-export const agentBegan = (card: SessionHudCard, agentId: unknown): SessionHudCard => tracked(card, agentId, undefined)
+export const agentBegan = (card: SessionHudCard, agentId: unknown): SessionHudCard => tracked(card, agentId, {})
 
-/** A tracked agent's step: the model that answered (`usage.model`, else the one the request named) is the one it runs on. A step adds no agent: one enters through its spawn or its turn's start, which the host skips together with its steps, so a late step cannot bring back an agent that ended. */
-export const agentStepped = (card: SessionHudCard, agentId: unknown, model: unknown): SessionHudCard =>
-  agentsOf(card).some(agent => agent.id === agentId) ? tracked(card, agentId, model) : card
+/** A tracked agent's step: the model that answered (`usage.model`, else the one the request named) is the one it runs on, at the effort the request asked for. A step adds no agent: one enters through its spawn or its turn's start, which the host skips together with its steps, so a late step cannot bring back an agent that ended. */
+export const agentStepped = (card: SessionHudCard, agentId: unknown, model: unknown, effort?: unknown): SessionHudCard =>
+  agentsOf(card).some(agent => agent.id === agentId) ? tracked(card, agentId, { model, effort }) : card
 
 /** An agent's turn ended: it no longer runs (a teammate goes idle until its next turn). */
 export function agentEnded(card: SessionHudCard, agentId: unknown): SessionHudCard {
@@ -126,9 +131,13 @@ export function agentEnded(card: SessionHudCard, agentId: unknown): SessionHudCa
 
 const STOPPED: ReadonlySet<string> = new Set(['idle', 'completed', 'failed', 'killed'])
 
-/** `$.agent.list()`'s word on each agent: one it lists as idle or ended no longer runs. One it does not list (a workflow's) stays; the list adds none. */
-export function reconciled(card: SessionHudCard, list: readonly { id: unknown; status: unknown }[]): SessionHudCard {
+/** `$.agent.list()`'s word on each agent: one it lists as idle or ended no longer runs, and one still running gets the type it lists when its own is unknown. One it does not list (a workflow's) stays; the list adds none. */
+export function reconciled(card: SessionHudCard, list: readonly { id: unknown; status: unknown; type?: unknown }[]): SessionHudCard {
   const stopped = new Set(list.filter(info => named(info.id) && typeof info.status === 'string' && STOPPED.has(info.status)).map(info => info.id))
   const agents = agentsOf(card)
-  return agents.some(agent => stopped.has(agent.id)) ? { ...card, agents: agents.filter(agent => !stopped.has(agent.id)) } : card
+  const typed = agents.filter(agent => !stopped.has(agent.id)).map(agent => {
+    const listed = agent.type === undefined ? list.find(info => info.id === agent.id && named(info.type)) : undefined
+    return listed ? { ...agent, type: listed.type as string } : agent
+  })
+  return typed.length === agents.length && typed.every((agent, i) => agent === agents[i]) ? card : { ...card, agents: typed }
 }

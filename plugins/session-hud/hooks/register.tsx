@@ -118,7 +118,7 @@ export const register: Register = on => {
         await update($, card, current => cacheUsed(current, time))
       })
     }
-    else void observe($, async () => { await update($, card, current => agentStepped(current, e.agentId, typeof answer.usage?.model === 'string' ? answer.usage.model : e.model)) })
+    else void observe($, async () => { await update($, card, current => agentStepped(current, e.agentId, typeof answer.usage?.model === 'string' ? answer.usage.model : e.model, e.effort)) })
     return answer
   })
   on('turn.complete', {}, ($, e, next) => {
@@ -129,11 +129,11 @@ export const register: Register = on => {
     } else void observe($, async () => { await update($, card, current => agentEnded(current, e.agentId)) })
     return next(e)
   })
-  // A started agent runs on the model the spawn answers; the answer passes unchanged, and a refused spawn or one with no `agentId` is not tracked.
+  // A started agent runs on the model the spawn answers, as the type it asked for; the answer passes unchanged, and a refused spawn or one with no `agentId` is not tracked.
   // The input names no remote run: a remote workflow agent (internal builds only) that answers with an id stays until a list shows it ended.
   on('agent.spawn', {}, async ($, e, next) => {
     const result = await next(e)
-    if (!result.deny && result.agentId !== undefined) void observe($, async () => { await update($, card, current => spawned(current, result.agentId, result.model)) })
+    if (!result.deny && result.agentId !== undefined) void observe($, async () => { await update($, card, current => spawned(current, result.agentId, result.model, e.subagentType)) })
     return result
   })
   // After the result, which goes on exactly as it came: the main session's successful edits and its errors are counted.
@@ -176,10 +176,8 @@ export const register: Register = on => {
       if (!lines.length) return next(e)
       const ui = $.ui.resolve(e)
       const { Box, Text } = ui
-      // The terminal has `Raster` and no `Svg`; every other surface the reverse.
-      const drawing = (part: Drawing, key: string) => (part.kind === 'raster'
-        ? ('Raster' in ui ? <ui.Raster key={part.key} columns={part.columns} rows={part.rows} cells={part.cells} /> : null)
-        : ('Svg' in ui ? <ui.Svg key={key} source={part.source} alt={part.alt} width={part.width} height={part.height} /> : null))
+      // Only a graphical surface gets drawings; the terminal, which has no `Svg`, draws its bars as text.
+      const drawing = (part: Drawing, key: string) => ('Svg' in ui ? <ui.Svg key={key} source={part.source} alt={part.alt} width={part.width} height={part.height} /> : null)
       // In a terminal too narrow for a whole group, the group shrinks and its text is cut at the edge instead of breaking the frame.
       const piece = (part: Piece, key: string) => ('text' in part
         ? <Text key={key} {...paint(palette, part.style)} {...(terminal ? { wrap: 'truncate-end' as const } : {})}>{part.text}</Text>
