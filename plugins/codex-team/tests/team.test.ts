@@ -1,3 +1,4 @@
+import { effectiveName } from '../hooks/names'
 import { expect, test } from 'claude-code/testing'
 import { dispatch, finish, NOT_IN_HERDR } from '../hooks/team'
 import type { TeamIo } from '../hooks/team'
@@ -37,7 +38,7 @@ const freshTeam: Rule[] = [agents([]), [['herdr', 'tab', 'create'], ok({ root_pa
 
 function settledShared(name: string, status: string, archiveExit = 0) {
   const uuid = '12345678-1234-1234-1234-123456789abc'
-  const agent = { name, agent: 'codex', workspace_id: 'w1', pane_id: 'old', agent_status: status, agent_session: { kind: 'id', source: 'herdr:codex', value: uuid } }
+  const agent = { name: effectiveName(name, 'w1'), agent: 'codex', workspace_id: 'w1', pane_id: 'old', agent_status: status, agent_session: { kind: 'id', source: 'herdr:codex', value: uuid } }
   let listed = 0
   const w = io([
     [['herdr', 'agent', 'list'], () => ok({ agents: ++listed <= 2 ? [agent] : [] })],
@@ -59,6 +60,9 @@ test('shared idle or done analyst and architect are finished before a fresh star
       const commands = w.calls.filter(call => call[0] !== 'mkdir').map(call => call.slice(0, 3).join(' '))
       expect(commands).toEqual(['herdr agent list', 'herdr agent get', 'herdr agent list', 'herdr pane close', 'herdr agent list', 'codex archive ' + w.uuid, 'herdr agent list', 'herdr tab create', 'herdr agent start', 'herdr agent prompt'])
       expect(w.calls.find(call => call[2] === 'start')).toContain('model_reasoning_effort="low"')
+      const tab = w.calls.find(call => call[2] === 'create')!
+      expect(tab[tab.indexOf('--label') + 1]).toBe('codex - fresh')
+      expect(tab).toContain('--no-focus')
       expect(w.writes.map(write => JSON.parse(write.text))).toMatchObject([
         { action: 'finish', agent: role, uuid: w.uuid, closed: true, archived: true },
         { effort: 'low', effortApplied: true, started: true }, { effort: 'low', effortApplied: true, started: true },
@@ -81,12 +85,12 @@ test('a shared finish failure refuses dispatch without starting or prompting a r
 
 test('shared working or blocked analyst keeps its task fallback and architect remains busy', async () => {
   for (const status of ['working', 'blocked']) {
-    const w = io([agents([{ name: 'analyst', pane_id: 'home', agent_status: status }]), ...freshTeam.slice(1)])
+    const w = io([agents([{ name: effectiveName('analyst', 'w1')!, pane_id: 'home', agent_status: status }]), ...freshTeam.slice(1)])
     const answer = await dispatch(w.team, { role: 'analyst', slug: 'busy', task: 'Inspect', effort: 'low' })
     expect(answer.text).toContain('agent: analyst-busy')
-    expect(w.calls.find(call => call[2] === 'create')).toContain('codex · busy')
+    expect(w.calls.find(call => call[2] === 'create')).toContain('codex - busy')
     expect(w.calls.some(call => call[2] === 'get' || call[2] === 'close' || call[0] === 'codex')).toBe(false)
-    const architect = io([agents([{ name: 'architect', pane_id: 'home', agent_status: status }])])
+    const architect = io([agents([{ name: effectiveName('architect', 'w1')!, pane_id: 'home', agent_status: status }])])
     expect((await dispatch(architect.team, { role: 'architect', slug: 'busy', task: 'Design', effort: 'high' })).ok).toBe(false)
     expect(architect.calls.filter(call => call[0] === 'herdr')).toEqual([['herdr', 'agent', 'list']])
   }
@@ -138,9 +142,9 @@ test('an analyst task starts the analyst in the reports directory, read-only on 
 
   expect(answer.ok).toBe(true)
   expect(answer.text).toContain('delivery: confirmed')
-  expect(answer.text).toContain('report: /home/u/.claude/codex-team/reports/repo/find-x-analyst.md')
+  expect(answer.text).toContain('report: /home/u/.claude/codex-team/reports/repo/1r/find-x-analyst.md')
   const start = world.calls.find(call => call[2] === 'start')!
-  expect(start.slice(0, 4)).toEqual(['herdr', 'agent', 'start', 'analyst'])
+  expect(start.slice(0, 4)).toEqual(['herdr', 'agent', 'start', effectiveName('analyst', 'w1')!])
   expect(start).toContain('gpt-6-luna')
   expect(start).toContain('model_reasoning_effort="medium"')
   expect(start).toContain('service_tier="priority"')
@@ -150,7 +154,7 @@ test('an analyst task starts the analyst in the reports directory, read-only on 
   const prompt = world.calls.find(call => call[2] === 'prompt')![4]
   expect(prompt).toContain('Repository: /repo.')
   expect(prompt).toContain('Find X')
-  expect(prompt).toContain('/home/u/.claude/codex-team/reports/repo/find-x-analyst.md')
+  expect(prompt).toContain('/home/u/.claude/codex-team/reports/repo/1r/find-x-analyst.md')
 })
 
 test('the developer works in its worktree and may write only there and in the reports, never in the git directory', async () => {
@@ -204,7 +208,7 @@ test('the decision is logged as unknown before the prompt and with the outcome a
 
   expect(world.writes).toHaveLength(2)
   const [before, after] = world.writes.map(write => JSON.parse(write.text))
-  expect(world.writes[0]?.path).toMatch(/^\/home\/u\/\.claude\/codex-team\/decisions\/.+-architect\.json$/)
+  expect(world.writes[0]?.path).toMatch(/^\/home\/u\/\.claude\/codex-team\/decisions\/.+-a1r\.json$/)
   expect(before.promptStatus).toBe('unknown')
   expect(before.effortApplied).toBe(true)
   expect(after.effortApplied).toBe(true)
@@ -221,7 +225,7 @@ test('a delivery that may have reached the agent says not to resend; one that di
   expect(said.text).toContain('delivery: unknown (agent_prompt_stalled)')
   expect(said.text).toContain('do not send it again')
 
-  const busy = io([agents([{ name: 'analyst', pane_id: 'p', agent_status: 'working' }, { name: 'analyst-s', pane_id: 'q', agent_status: 'working' }])])
+  const busy = io([agents([{ name: effectiveName('analyst', 'w1')!, pane_id: 'p', agent_status: 'working' }, { name: effectiveName('analyst-s', 'w1')!, pane_id: 'q', agent_status: 'working' }])])
   const refused = await dispatch(busy.team, { role: 'analyst', task: 't', slug: 's' })
   expect(refused).toEqual({ ok: false, text: expect.stringContaining('delivery: not_sent (agent busy)') })
 })
@@ -295,7 +299,7 @@ test('effortApplied and the role line distinguish newly started and reused agent
       const world = assessedWorld({ ...(source === 'default' ? { key: undefined } : {}) })
       const reuseRunner = fakeRun([
         [['mkdir'], text('')],
-        agents([{ name: 'analyst', pane_id: 'home', agent_status: 'working' }, { name: 'analyst-assess', pane_id: 'w1:p1', agent_status: 'idle' }]),
+        agents([{ name: effectiveName('analyst', 'w1')!, pane_id: 'home', agent_status: 'working' }, { name: effectiveName('analyst-assess', 'w1')!, pane_id: 'w1:p1', agent_status: 'idle' }]),
         [['herdr', 'agent', 'prompt'], ok({})],
       ])
       if (reused) world.team.run = reuseRunner.run
@@ -323,7 +327,7 @@ test('an agent that failed to start never records its chosen effort as applied',
 
 test('working and blocked live agents disclose unapplied effort even when dispatch is refused', async () => {
   for (const [status, reason] of [['working', 'agent busy'], ['blocked', 'agent blocked']] as const) {
-    const world = io([agents([{ name: 'analyst', pane_id: 'p', agent_status: status }, { name: 'analyst-assess', pane_id: 'q', agent_status: status }])])
+    const world = io([agents([{ name: effectiveName('analyst', 'w1')!, pane_id: 'p', agent_status: status }, { name: effectiveName('analyst-assess', 'w1')!, pane_id: 'q', agent_status: status }])])
     const answer = await dispatch(world.team, { ...call(), effort: 'high' })
     expect(answer.ok).toBe(false)
     expect(answer.text).toContain('effort high (pinned), not applied: reused agent keeps its start effort')
@@ -478,8 +482,8 @@ test('reviewer refuses an undispatched slug or a working or blocked developer be
   expect(missing.calls).toEqual([])
   expect(missing.writes).toEqual([])
   for (const status of ['working', 'blocked']) {
-    const w = io([agents([{ name: 'dev-fix', pane_id: 'dev', agent_status: status }])])
-    w.tasks.set('developer:/repo:fix', { cwd: '/wt/fix', task: 'Original task' })
+    const w = io([agents([{ name: effectiveName('dev-fix', 'w1')!, pane_id: 'dev', agent_status: status }])])
+    w.tasks.set('developer:w1:/repo:fix', { cwd: '/wt/fix', task: 'Original task' })
     const answer = await dispatch(w.team, { role: 'reviewer', slug: 'fix' })
     expect(answer.text).toContain(`delivery: not_sent (dev-fix is ${status})`)
     expect(w.calls).toEqual([['herdr', 'agent', 'list']])
@@ -490,7 +494,7 @@ test('reviewer refuses an undispatched slug or a working or blocked developer be
 test('reviewer builds its brief from the recorded developer task and always uses architect model with xhigh without Jev', async () => {
   const w = io([[['git'], text('/wt/fix\n')], ...freshTeam])
   await dispatch(w.team, { role: 'developer', task: 'Build the original feature', cwd: '/wt/fix', slug: 'fix', effort: 'high' })
-  const reviewer = fakeRun([[['mkdir'], text('')], agents([{ name: 'dev-fix', pane_id: 'dev', agent_status: 'done' }]),
+  const reviewer = fakeRun([[['mkdir'], text('')], agents([{ name: effectiveName('dev-fix', 'w1')!, pane_id: 'dev', agent_status: 'done' }]),
     [['herdr', 'pane', 'split'], ok({ pane: { pane_id: 'review' } })], [['herdr', 'agent', 'start'], ok({})], [['herdr', 'agent', 'prompt'], ok({})]])
   w.team.run = reviewer.run
   w.team.settings = async () => { throw new Error('review must not read Jev settings') }
@@ -513,8 +517,8 @@ test('reviewer without extra task keeps the existing Astra cap and reused startu
   const spec = SPECS.architect, original = spec.model
   try {
     Object.assign(spec, { model: 'gpt-6-astra' })
-    const w = io([agents([{ name: 'architect-fix', pane_id: 'review', agent_status: 'idle' }]), [['herdr', 'agent', 'prompt'], ok({})]])
-    w.tasks.set('developer:/repo:fix', { cwd: '/wt/fix', task: 'Original task' })
+    const w = io([agents([{ name: effectiveName('architect-fix', 'w1')!, pane_id: 'review', agent_status: 'idle' }]), [['herdr', 'agent', 'prompt'], ok({})]])
+    w.tasks.set('developer:w1:/repo:fix', { cwd: '/wt/fix', task: 'Original task' })
     const answer = await dispatch(w.team, { role: 'reviewer', slug: 'fix' })
     expect(answer.text).toContain('effort high (review-policy), capped at high')
     expect(answer.text).toContain('not applied: reused agent keeps its start effort')
@@ -526,13 +530,13 @@ test('developer followups keep the original task and cannot move the recorded sl
   const w = io([[['git'], text('/wt/fix\n')], ...freshTeam])
   await dispatch(w.team, { role: 'developer', slug: 'fix', cwd: '/wt/fix', task: 'Original task', effort: 'high' })
   await dispatch(w.team, { role: 'developer', slug: 'fix', cwd: '/wt/fix', task: 'Fix review findings', effort: 'high' })
-  expect(w.tasks.get('developer:/repo:fix')).toEqual({ cwd: '/wt/fix', task: 'Original task' })
+  expect(w.tasks.get('developer:w1:/repo:fix')).toEqual({ cwd: '/wt/fix', task: 'Original task' })
   w.team.run = fakeRun([[['mkdir'], text('')], [['git'], text('/wt/other\n')]]).run
   expect((await dispatch(w.team, { role: 'developer', slug: 'fix', cwd: '/wt/other', task: 'Move', effort: 'high' })).text).toContain('another worktree')
 })
 
 test('dispatch publishes the plan after delivery and uses the actual fallback analyst in its decision', async () => {
-  const w = io([agents([{ name: 'analyst', pane_id: 'home', agent_status: 'working' }, { name: 'dev-fix', pane_id: 'fix' }]),
+  const w = io([agents([{ name: effectiveName('analyst', 'w1')!, pane_id: 'home', agent_status: 'working' }, { name: effectiveName('dev-fix', 'w1')!, pane_id: 'fix' }]),
     [['herdr', 'pane', 'split'], ok({ pane: { pane_id: 'new' } })], [['herdr', 'agent', 'start'], ok({})], [['herdr', 'agent', 'prompt'], ok({})]])
   const roots: string[] = []
   w.team.publish = async root => { roots.push(root); expect(w.calls.some(c => c[2] === 'prompt')).toBe(true) }
@@ -547,7 +551,7 @@ test('a developer prompt refused before delivery does not authorize reviewer whi
     const w = io([[['git'], text('/wt/fix\n')], agents([]), [['herdr', 'tab', 'create'], ok({ root_pane: { pane_id: 'dev' } })],
       [['herdr', 'agent', 'start'], ok({})], [['herdr', 'agent', 'prompt'], fail(code)]])
     await dispatch(w.team, { role: 'developer', slug: 'fix', cwd: '/wt/fix', task: 'Original task', effort: 'high' })
-    expect(w.tasks.has('developer:/repo:fix')).toBe(kept)
+    expect(w.tasks.has('developer:w1:/repo:fix')).toBe(kept)
   }
 })
 
@@ -561,14 +565,14 @@ test('a publisher failure leaves confirmed dispatch delivery intact with one log
 
 test('reviewer rechecks done to working or blocked on the delivery listing before pane, startup or prompt effects', async () => {
   for (const status of ['working', 'blocked']) {
-    const w = io([[['herdr', 'agent', 'list'], () => ok({ agents: [{ name: 'dev-fix', workspace_id: 'w1', pane_id: 'dev', agent_status: ++listed === 1 ? 'done' : status }] })],
+    const w = io([[['herdr', 'agent', 'list'], () => ok({ agents: [{ name: effectiveName('dev-fix', 'w1')!, workspace_id: 'w1', pane_id: 'dev', agent_status: ++listed === 1 ? 'done' : status }] })],
       [['herdr', 'pane', 'split'], ok({ pane: { pane_id: 'review' } })], [['herdr', 'agent', 'start'], ok({})], [['herdr', 'agent', 'prompt'], ok({})]])
     let listed = 0
-    w.tasks.set('developer:/repo:fix', { cwd: '/wt/fix', task: 'Original task' })
+    w.tasks.set('developer:w1:/repo:fix', { cwd: '/wt/fix', task: 'Original task' })
     const answer = await dispatch(w.team, { role: 'reviewer', slug: 'fix' })
     expect(answer.text).toContain(`delivery: not_sent (dev-fix is ${status})`)
     expect(w.calls.filter(call => call[0] === 'herdr')).toEqual([['herdr', 'agent', 'list'], ['herdr', 'agent', 'list']])
-    expect(w.tasks.get('developer:/repo:fix')).toEqual({ cwd: '/wt/fix', task: 'Original task' })
+    expect(w.tasks.get('developer:w1:/repo:fix')).toEqual({ cwd: '/wt/fix', task: 'Original task' })
   }
 })
 
@@ -602,7 +606,7 @@ function liveWorld() {
 
 test('concurrent developer and fallback analyst dispatches create one task tab without interleaving', async () => {
   const w = liveWorld()
-  w.live.push({ name: 'analyst', workspace_id: 'w1', pane_id: 'home', agent_status: 'working' })
+  w.live.push({ name: effectiveName('analyst', 'w1')!, workspace_id: 'w1', pane_id: 'home', agent_status: 'working' })
   const [dev, analyst] = await Promise.all([
     dispatch(w.team, { role: 'developer', slug: 'fix', cwd: '/wt/fix', task: 'Build', effort: 'high' }),
     dispatch(w.team, { role: 'analyst', slug: 'fix', task: 'Inspect', effort: 'low' }),
@@ -610,22 +614,22 @@ test('concurrent developer and fallback analyst dispatches create one task tab w
   expect(dev.text).toContain('delivery: confirmed')
   expect(analyst.text).toContain('agent: analyst-fix')
   expect(analyst.text).toContain('delivery: confirmed')
-  expect(w.calls.filter(call => call[2] === 'create').map(call => call[call.indexOf('--label') + 1])).toEqual(['codex · fix'])
-  expect(w.calls.find(call => call[2] === 'split')).toContain(w.live.find(agent => agent.name === 'dev-fix')!.pane_id)
+  expect(w.calls.filter(call => call[2] === 'create').map(call => call[call.indexOf('--label') + 1])).toEqual(['codex - fix'])
+  expect(w.calls.find(call => call[2] === 'split')).toContain(w.live.find(agent => agent.name === effectiveName('dev-fix', 'w1'))!.pane_id)
   const prompts = w.calls.map((call, index) => ({ call, index })).filter(({ call }) => call[2] === 'prompt')
   const lists = w.calls.map((call, index) => ({ call, index })).filter(({ call }) => call[2] === 'list')
   expect(lists[1]!.index).toBeGreaterThan(prompts[0]!.index)
 })
 
-test('concurrent shared analyst and architect dispatches create one home tab', async () => {
+test('concurrent shared analyst and architect dispatches create separate current task tabs', async () => {
   const w = liveWorld()
   const answers = await Promise.all([
     dispatch(w.team, { role: 'analyst', slug: 'docs', task: 'Inspect', effort: 'low' }),
     dispatch(w.team, { role: 'architect', slug: 'design', task: 'Design', effort: 'high' }),
   ])
   expect(answers.every(answer => answer.ok)).toBe(true)
-  expect(w.calls.filter(call => call[2] === 'create').map(call => call[call.indexOf('--label') + 1])).toEqual(['codex team'])
-  expect(w.calls.filter(call => call[2] === 'split')).toHaveLength(1)
+  expect(w.calls.filter(call => call[2] === 'create').map(call => call[call.indexOf('--label') + 1])).toEqual(['codex - docs', 'codex - design'])
+  expect(w.calls.filter(call => call[2] === 'split')).toHaveLength(0)
 })
 
 test('a concurrent not_sent preserves the first developer task record and only the creator cleans up a refused prompt', async () => {
@@ -638,12 +642,12 @@ test('a concurrent not_sent preserves the first developer task record and only t
   ])
   expect(first.text).toContain('delivery: confirmed')
   expect(second.text).toContain('delivery: not_sent (agent busy)')
-  expect(w.tasks.get('developer:/repo:fix')).toEqual({ cwd: '/wt/fix', task: 'Original task' })
+  expect(w.tasks.get('developer:w1:/repo:fix')).toEqual({ cwd: '/wt/fix', task: 'Original task' })
   expect(deleted).toEqual([])
   const refused = io([[['git'], text('/wt/new\n')], agents([]), [['herdr', 'tab', 'create'], ok({ root_pane: { pane_id: 'dev' } })],
     [['herdr', 'agent', 'start'], ok({})], [['herdr', 'agent', 'prompt'], fail('agent_blocked')]])
   await dispatch(refused.team, { role: 'developer', slug: 'new', cwd: '/wt/new', task: 'New task', effort: 'high' })
-  expect(refused.tasks.has('developer:/repo:new')).toBe(false)
+  expect(refused.tasks.has('developer:w1:/repo:new')).toBe(false)
 })
 
 test('a failed dispatch does not poison the global queue for a later call', async () => {
@@ -656,4 +660,88 @@ test('a failed dispatch does not poison the global queue for a later call', asyn
   expect(results[0]!.status).toBe('rejected')
   expect(results[1]!.status).toBe('fulfilled')
   expect(next.calls.some(call => call[2] === 'prompt')).toBe(true)
+})
+
+test('foreign shared roles and equal developer or reviewer names do not block local dispatch', async () => {
+  for (const role of ['analyst', 'architect', 'developer', 'reviewer'] as const) {
+    const name = role === 'developer' ? 'dev-fix' : role === 'reviewer' ? 'architect-fix' : role
+    const w = io([agents([
+      { name: effectiveName(name, 'w2'), workspace_id: 'w2', pane_id: 'foreign', cwd: '/wt/fix', agent_status: 'working' },
+      { name: 'analyst', workspace_id: 'w2', pane_id: 'legacy', agent_status: 'working' },
+      { name: effectiveName('dev-fix', 'w2'), workspace_id: 'w2', pane_id: 'foreign-dev', agent_status: 'blocked' },
+    ]), [['git'], text('/wt/fix\n')], ...freshTeam.slice(1)])
+    if (role === 'reviewer') w.tasks.set('developer:w1:/repo:fix', { cwd: '/wt/fix', task: 'Original' })
+    const answer = await dispatch(w.team, { role, slug: 'fix', cwd: '/wt/fix', task: 'Inspect', effort: 'high' })
+    expect(answer.ok).toBe(true)
+    expect(answer.text).toContain(`agent: ${name}`)
+    expect(answer.text).toContain(`Herdr: ${effectiveName(name, 'w1')}`)
+    expect(answer.text).toContain(`herdr agent wait ${effectiveName(name, 'w1')}`)
+    expect(w.calls.some(call => call[2] === 'split' || call[2] === 'get')).toBe(false)
+    expect(JSON.parse(w.writes[w.writes.length - 1]!.text)).toMatchObject({ agent: name, effectiveAgent: effectiveName(name, 'w1'), promptStatus: 'confirmed' })
+  }
+})
+
+test('unknown delivery hints use the effective Herdr name while finish accepts only the logical name', async () => {
+  const w = io([agents([]), ...freshTeam.slice(1, 3), [['herdr', 'agent', 'prompt'], fail('agent_prompt_stalled')]])
+  const answer = await dispatch(w.team, { role: 'analyst', slug: 'fix', task: 'Inspect', effort: 'low' })
+  expect(answer.text).toContain('agent: analyst')
+  expect(answer.text).toContain('herdr agent get n1r')
+  expect(answer.text).toContain('herdr agent wait n1r')
+  const settled = settledShared('analyst', 'done')
+  const finished = await finish(settled.team, { agent: 'analyst' })
+  expect(finished.text).toContain('agent: analyst (Herdr: n1r)')
+  expect(settled.calls.find(call => call[2] === 'get')).toEqual(['herdr', 'agent', 'get', 'n1r'])
+  const invalid = io([])
+  expect((await finish(invalid.team, { agent: 'n1r' })).ok).toBe(false)
+  expect(invalid.calls).toEqual([])
+})
+
+test('workspace-specific developer context and decision paths do not cross with equal roots slugs and timestamps', async () => {
+  const a = io([[['git'], text('/wt/a\n')], ...freshTeam], { ...ENV, HERDR_WORKSPACE_ID: 'w6F' })
+  const b = io([[['git'], text('/wt/b\n')], ...freshTeam], { ...ENV, HERDR_WORKSPACE_ID: 'w6f' })
+  b.team.store = a.team.store
+  for (const w of [a, b]) w.team.now = async () => 1000
+  expect((await dispatch(a.team, { role: 'developer', slug: 'fix', cwd: '/wt/a', task: 'A', effort: 'high' })).ok).toBe(true)
+  // A stored task alone never authorizes a reviewer in B.
+  const unauthorized = await dispatch(b.team, { role: 'reviewer', slug: 'fix' })
+  expect(unauthorized.text).toContain('no developer was dispatched')
+  expect(b.calls).toEqual([])
+  expect((await dispatch(b.team, { role: 'developer', slug: 'fix', cwd: '/wt/b', task: 'B', effort: 'high' })).ok).toBe(true)
+  expect(a.tasks.get('developer:w6F:/repo:fix')).toEqual({ cwd: '/wt/a', task: 'A' })
+  expect(a.tasks.get('developer:w6f:/repo:fix')).toEqual({ cwd: '/wt/b', task: 'B' })
+  expect(a.writes[0]!.path).not.toBe(b.writes[0]!.path)
+})
+
+test('unsupported workspace ids refuse dispatch and finish before any IO effect', async () => {
+  for (const workspace of ['W1', 'wzzzzzzz']) {
+    const w = io([], { ...ENV, HERDR_WORKSPACE_ID: workspace })
+    expect((await dispatch(w.team, { role: 'analyst', slug: 'fix', task: 'Inspect' })).ok).toBe(false)
+    expect((await finish(w.team, { agent: 'analyst' })).ok).toBe(false)
+    expect(w.calls).toEqual([])
+    expect(w.writes).toEqual([])
+  }
+})
+
+test('equal roots and slugs in different workspaces get distinct report paths in every reply and brief', async () => {
+  const seen = new Set<string>()
+  for (const [workspace, token] of [['w6F', '39j'], ['w6f', '3a9']] as const) {
+    const w = io([[['git'], text(`/wt/${workspace}\n`)], ...freshTeam], { ...ENV, HERDR_WORKSPACE_ID: workspace })
+    for (const role of ['developer', 'analyst', 'architect', 'reviewer'] as const) {
+      const answer = await dispatch(w.team, { role, slug: 'fix', task: `Task in ${workspace}`, cwd: `/wt/${workspace}`, effort: 'high' })
+      expect(answer.ok).toBe(true)
+      const expected = `/home/u/.claude/codex-team/reports/repo/${token}/fix-${role}.md`
+      const prompt = w.calls.filter(call => call[2] === 'prompt').slice(-1)[0]![4]!
+      expect(answer.text).toContain(`report: ${expected}`)
+      expect(prompt).toContain(`write ${expected} (create its directory if needed)`)
+      expect(w.calls.filter(call => call[0] === 'mkdir').slice(-1)[0]).toEqual(['mkdir', '-p', `/home/u/.claude/codex-team/reports/repo/${token}`])
+      expect(seen.has(expected)).toBe(false)
+      seen.add(expected)
+      if (role === 'reviewer') {
+        expect(prompt).toContain(`Developer report: /home/u/.claude/codex-team/reports/repo/${token}/fix-developer.md`)
+        expect(prompt).not.toContain(`/repo/${workspace === 'w6F' ? '3a9' : '39j'}/`)
+        expect(prompt).toContain(`Task in ${workspace}`)
+      }
+    }
+  }
+  expect(seen.size).toBe(8)
 })

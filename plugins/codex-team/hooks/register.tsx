@@ -14,7 +14,7 @@ const publish = createPublisher()
 /** All DAG host calls stay visible to the engine in this entry module. */
 function dagrIo($: Dollar): PublishIo {
   return {
-    env: async () => ({ HERDR_ENV: await $.env.get('HERDR_ENV'), HERDR_PANE_ID: await $.env.get('HERDR_PANE_ID'), DAGR_BIN: await $.env.get('DAGR_BIN'), HOME: await $.env.get('HOME') }),
+    env: async () => ({ HERDR_ENV: await $.env.get('HERDR_ENV'), HERDR_PANE_ID: await $.env.get('HERDR_PANE_ID'), HERDR_WORKSPACE_ID: await $.env.get('HERDR_WORKSPACE_ID'), DAGR_BIN: await $.env.get('DAGR_BIN'), HOME: await $.env.get('HOME') }),
     run: (argv, init) => $.process.run(argv, { timeoutMs: init?.timeoutMs }),
     list: path => $.fs.list(path),
     exists: path => $.fs.exists(path),
@@ -72,7 +72,7 @@ export const register: Register = (on) => {
       name: 'dispatch',
       description:
         'Hands a task to a Codex team agent in Herdr: developer, analyst, architect, or reviewer (reviews the recorded developer task; task is optional extra focus). ' +
-        'Task agents are reused in codex · <slug> tabs; shared analyst/architect are one-shot in codex team and are finished before their next dispatch. A busy shared analyst falls back to analyst-<slug>. Delivery: confirmed, unknown (never resend), or not_sent. Publishes the active crew plan to Dagr when available. Only inside Herdr.',
+        'Task agents are reused in codex - <slug> tabs; shared analyst/architect are one-shot in codex - <slug> tabs and are finished before their next dispatch. Herdr names are workspace-specific; use the effective name returned for wait/get. A busy shared analyst falls back to analyst-<slug>. Delivery: confirmed, unknown (never resend), or not_sent. Publishes the active crew plan to Dagr when available. Only inside Herdr.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -90,7 +90,7 @@ export const register: Register = (on) => {
       description: 'Closes an idle or done Codex team agent in this workspace, then archives its session after it exits. Refuses busy, blocked, foreign agents and the lead pane. Finishing the last pane also removes its task tab.',
       inputSchema: {
         type: 'object',
-        properties: { agent: { type: 'string', description: 'Team agent name: analyst, architect, analyst-<slug>, architect-<slug> or dev-<slug>.' } },
+        properties: { agent: { type: 'string', description: 'Logical team agent name (resolved in this workspace): analyst, architect, analyst-<slug>, architect-<slug> or dev-<slug>.' } },
         required: ['agent'],
       } satisfies SchemaFor<McpToolInputs['mcp__codex-team__finish']>,
     })

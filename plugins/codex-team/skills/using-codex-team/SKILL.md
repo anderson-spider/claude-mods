@@ -19,10 +19,14 @@ The team works on its own Codex quota; you spend yours on judgement. For the res
 
 | Role | Hand it | Agent and tab |
 | --- | --- | --- |
-| `developer` | implementation and tests, left uncommitted; corrections after review | `dev-<slug>`, in the task tab `codex · <slug>`, working in the task worktree (`cwd`) |
-| `analyst` | investigation, documentation drafts | `analyst` in the `codex team` tab, a fresh Codex per dispatch; `analyst-<slug>` in the task tab while the shared one is busy |
-| `architect` | design, trade-offs, ordered steps | `architect` in the `codex team` tab, a fresh Codex per dispatch |
+| `developer` | implementation and tests, left uncommitted; corrections after review | `dev-<slug>`, in the task tab `codex - <slug>`, working in the task worktree (`cwd`) |
+| `analyst` | investigation, documentation drafts | `analyst` in `codex - <slug>`, a fresh Codex per dispatch; `analyst-<slug>` in the task tab while the shared one is busy |
+| `architect` | design, trade-offs, ordered steps | `architect` in `codex - <slug>`, a fresh Codex per dispatch |
 | `reviewer` | the review of a finished developer task | `architect-<slug>` in the task tab, always `xhigh`; the plugin writes its brief |
+
+The table and plan owners use logical names. Dispatch also returns `Herdr: <effective-name>`, a stable workspace-specific name. Use that exact effective name for CLI `wait`, `get` and `read`; pass the logical name (`analyst`, `architect`, `analyst-<slug>`, `architect-<slug>` or `dev-<slug>`) to `finish`. In `w1`, for example, wait with `herdr agent wait d1r-fix` and finish with `{ agent: "dev-fix" }`. Names in another workspace are independent; a real effective-name collision is refused. Every tab uses exactly `codex - <main task>`, with the dispatch slug naming the main task. Shared roles get a new tab labelled `codex - <slug>` for their current dispatch; all creation uses `--no-focus`, and the tab closes with its last pane.
+
+Reports are under `~/.claude/codex-team/reports/<repository>/<workspace-token>/<slug>-<role>.md`, using the same token as the effective Herdr name. Use the exact `report:` path from the dispatch reply in `## Dispatches` and when reading results; equal roots and slugs in another workspace have a separate directory. The reviewer brief points to this workspace’s developer report.
 
 Drafts from the analyst go to the developer to apply: one writer per worktree.
 
@@ -33,8 +37,8 @@ Drafts from the analyst go to the developer to apply: one writer per worktree.
 Run this on activation, and again whenever you lose the thread (after a compaction, a reload or a long pause), before any other action:
 
 1. Read the active plan: the newest `.crew/plans/*.md`. Its `## Dispatches` section (step 6 of Dispatch) is your memory of what is out.
-2. Run `herdr agent list` and reconcile: every `## Dispatches` line still open names its agent and report; read the reports that came back since, and handle them (section 4). An `unknown` delivery stays unknown: check `herdr agent get <agent>`, never resend.
-3. Start a background `herdr agent wait` for every open dispatch whose agent is still live and has none running.
+2. Run `herdr agent list`, filter to `HERDR_WORKSPACE_ID`, and reconcile: every `## Dispatches` line still open names its agent and report; read the reports that came back since, and handle them (section 4). An `unknown` delivery stays unknown: check `herdr agent get <effective-name>`, never resend.
+3. Start a background `herdr agent wait <effective-name>` for every open dispatch whose agent is still live and has none running.
 4. Open the plan pane when it is not open, pointed at the session root (the directory holding `.crew/`, never the shell's current directory): `herdr plugin pane open --plugin herdr-dagr --entrypoint dagr --placement split --direction right --target-pane "$HERDR_PANE_ID" --cwd <root> --env DAGR_RUN=<root>/.dagr/run.json --no-focus`. The plugin keeps `.dagr/run.json` current from the plan; `.dagr/` stays out of git.
 
 Done: every open `## Dispatches` line has either a report you handled or a live agent with its wait running.
@@ -69,7 +73,7 @@ Update a step's `state:` the moment it changes: on dispatch, on return, on revie
 After `## Steps`, keep a `## Dispatches` section, one line per dispatch, written when you call `dispatch` and closed when you handle its return:
 
 ```markdown
-- <step-id>: <agent> slug=<slug> report=<path> delivery=<status> — open|closed (<outcome>)
+- <step-id>: <logical-agent> herdr=<effective-name> slug=<slug> report=<path> delivery=<status> — open|closed (<outcome>)
 ```
 
 
@@ -78,16 +82,16 @@ After `## Steps`, keep a `## Dispatches` section, one line per dispatch, written
 1. **Worktree (developer only).** Create it from the base branch beside the repository: `git worktree add -b <branch> ../<repo>-<slug> <base>`. Pass its absolute path as `cwd`; follow-ups on the same task reuse the same `slug` and `cwd`.
 2. **Brief.** Write `task` self-contained: the agent has none of this conversation. Name the goal, the files or area, the rules that apply, what done means (the checks that must pass) and what stays out of scope.
 3. **Call** `mcp__codex-team__dispatch` with `role`, `task` and `slug` (at most 22 characters), plus `cwd` for the developer. Pass `effort` only when the user asks for one; otherwise Jev or the role default decides.
-4. **Delivery.** `confirmed`: go on. `unknown`: never send it again; check `herdr agent get <agent>` and wait. `not_sent`: fix the reason it gives, then dispatch again.
-5. **Wait in the background:** `herdr agent wait <agent> --timeout 3600000` with `run_in_background: true`, one per dispatched agent. Notifications come back one by one; handle each as it arrives.
+4. **Delivery.** `confirmed`: go on. `unknown`: never send it again; check `herdr agent get <effective-name>` and wait. `not_sent`: fix the reason it gives, then dispatch again.
+5. **Wait in the background:** `herdr agent wait <effective-name> --timeout 3600000` with `run_in_background: true`, one per dispatched agent, using the reply’s effective name. Notifications come back one by one; handle each as it arrives.
 
-6. **Record** the dispatch as an `open` line in `## Dispatches` (agent, slug, report path, delivery).
+6. **Record** the dispatch as an `open` line in `## Dispatches` (logical agent, effective Herdr name, slug, report path, delivery).
 
 Done: delivery `confirmed`, its wait running, the step `implementing`, its `## Dispatches` line open.
 
 ## 4. When an agent comes back
 
-1. Read its report (the path `dispatch` returned). Read the terminal (`herdr agent read <agent> --source recent-unwrapped --lines 80`) only when the report is missing or the agent is `blocked`; a `blocked` agent is asking for an approval or an answer: show the user what it asks.
+1. Read its report (the path `dispatch` returned). Read the terminal (`herdr agent read <effective-name> --source recent-unwrapped --lines 80`) only when the report is missing or the agent is `blocked`; a `blocked` agent is asking for an approval or an answer: show the user what it asks.
 2. `blocked` or open `questions`: answer from the plan when it settles them, otherwise ask the user; then dispatch the answer to the same agent (same role and slug).
 3. **Developer `done`:** dispatch `role: "reviewer"` with the same `slug` right away (add `task` only to point at a risk). Mark the step `verified (relatório do dev)` and add the review as its own step.
 4. **Reviewer back:** read `verdict`, `risk` and `findings`. Open the diff only at the lines a finding names, or wherever `risk: high`. Decide each finding (fix, defer with a reason, or reject with a reason). Send every fix back to the same developer as one brief, then review again. With `accept`, run the repository's done checks yourself in the worktree.

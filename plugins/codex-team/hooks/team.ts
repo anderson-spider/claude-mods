@@ -4,6 +4,7 @@ import { saveDecision, fnv1a } from './decisions'
 import type { DecisionRecord } from './decisions'
 import { assessEffort, JEV_MODEL } from './effort'
 import type { EffortIo } from './effort'
+import { effectiveName, workspaceToken } from './names'
 import { deliver, isTeamName, listAgents } from './herdr'
 import type { Delivery, Run } from './herdr'
 import { brief, reportPath, reviewTask } from './report'
@@ -67,7 +68,7 @@ function queued<T>(action: () => Promise<T>): Promise<T> {
 async function finishInWorkspace(io: TeamIo, env: Awaited<ReturnType<TeamIo['env']>>, agent: string): Promise<Finish> {
   const ts = new Date(await io.now()).toISOString()
   const result = await finishAgent(io.run, io.sleep, { agent, workspace: env.HERDR_WORKSPACE_ID!, leadPane: env.HERDR_PANE_ID })
-  await saveDecision(io, env.HOME, { v: 2, action: 'finish', ts, agent, uuid: result.uuid, closed: result.closed, archived: result.archived, reason: result.reason ?? null })
+  await saveDecision(io, env.HOME, { v: 2, action: 'finish', ts, agent, effectiveAgent: result.effectiveAgent, uuid: result.uuid, closed: result.closed, archived: result.archived, reason: result.reason ?? null })
   return result
 }
 
@@ -77,10 +78,11 @@ export function finish(io: TeamIo, input: { agent?: unknown }): Promise<Answer> 
     const env = await io.env().catch(() => ({}) as Awaited<ReturnType<TeamIo['env']>>)
     if (env.HERDR_ENV !== '1') return { ok: false, text: NOT_IN_HERDR }
     if (!env.HERDR_WORKSPACE_ID) return refuse('HERDR_WORKSPACE_ID is not set')
+    if (!workspaceToken(env.HERDR_WORKSPACE_ID)) return refuse('workspace id cannot fit a Herdr name')
     if (typeof input.agent !== 'string' || !isTeamName(input.agent)) return refuse('agent must be a Codex team name')
     const result = await finishInWorkspace(io, env, input.agent)
     return { ok: result.archived, text: [
-      `agent: ${result.agent}`,
+      `agent: ${result.agent} (Herdr: ${result.effectiveAgent})`,
       `closed: ${result.closed ? `pane ${result.pane}${result.tab ? ` and task tab ${result.tab}` : ''}` : 'nothing'}`,
       `archived: ${result.archived ? 'yes' : 'no'}${result.reason ? ` (${result.reason})` : ''}`,
     ].join('\n') }
@@ -92,6 +94,8 @@ async function dispatchTask(io: TeamIo, input: Input): Promise<Answer> {
   if (env.HERDR_ENV !== '1') return { ok: false, text: NOT_IN_HERDR }
   const workspace = env.HERDR_WORKSPACE_ID
   if (!workspace) return refuse('HERDR_WORKSPACE_ID is not set')
+  const token = workspaceToken(workspace)
+  if (!token) return refuse('workspace id cannot fit a Herdr name')
 
   const role = ROLES.find(r => r === input.role)
   if (!role) return refuse(`role must be one of ${ROLES.join(', ')}`)
@@ -104,17 +108,17 @@ async function dispatchTask(io: TeamIo, input: Input): Promise<Answer> {
   if (!home || !home.startsWith('/')) return refuse('HOME is not an absolute path')
   const repo = (await io.root()).replace(/\/+$/, '')
   const reports = `${home.replace(/\/+$/, '')}/.claude/codex-team/reports`
-  const report = reportPath(reports, repo, input.slug, role)
-  const key = `developer:${repo}:${input.slug}`
+  const report = reportPath(reports, repo, token, input.slug, role)
+  const key = `developer:${workspace}:${repo}:${input.slug}`
   const original = role === 'developer' || role === 'reviewer' ? developerTask(await io.store.get(key)) : undefined
   let task = (input.task as string | undefined) ?? ''
   if (role === 'reviewer') {
     if (!original) return refuse('delivery: not_sent (no developer was dispatched for this slug)')
     const agents = await listAgents(io.run)
     if (typeof agents === 'string') return refuse(`delivery: not_sent (${agents})`)
-    const dev = agents.find(agent => agent.name === `dev-${input.slug}`)
+    const dev = agents.find(agent => agent.workspace_id === workspace && agent.name === effectiveName(`dev-${input.slug}`, workspace))
     if (dev && ['working', 'blocked'].includes(dev.agent_status ?? '')) return refuse(`delivery: not_sent (dev-${input.slug} is ${dev.agent_status})`)
-    task = reviewTask({ ...original, report: reportPath(reports, repo, input.slug, 'developer') }, task)
+    task = reviewTask({ ...original, report: reportPath(reports, repo, token, input.slug, 'developer') }, task)
   }
   const made = await io.run(['mkdir', '-p', report.slice(0, report.lastIndexOf('/'))])
   if (made.exitCode !== 0) return refuse('the reports directory could not be created')
@@ -143,7 +147,7 @@ async function dispatchTask(io: TeamIo, input: Input): Promise<Answer> {
   const started = await io.now()
   const ts = new Date(started).toISOString()
   const record = (delivery: Delivery, at: number): DecisionRecord => ({
-    v: 2, ts, role, agent: delivery.agent, model: spec.model, ...choice, taskHash: fnv1a(task),
+    v: 2, ts, role, agent: delivery.agent, effectiveAgent: delivery.effectiveAgent, model: spec.model, ...choice, taskHash: fnv1a(task),
     effortApplied: delivery.started,
     started: delivery.started, promptStatus: delivery.status, reason: delivery.reason ?? null, durationMs: Math.max(0, at - started),
   })
@@ -151,6 +155,7 @@ async function dispatchTask(io: TeamIo, input: Input): Promise<Answer> {
   let createdRecord = false
   const delivery = await deliver(io.run, {
     name,
+    slug: input.slug,
     analystSlug: role === 'analyst' ? input.slug : undefined,
     finishShared: agent => finishInWorkspace(io, env, agent),
     reviewDeveloper: role === 'reviewer' ? `dev-${input.slug}` : undefined,
@@ -165,7 +170,7 @@ async function dispatchTask(io: TeamIo, input: Input): Promise<Answer> {
         await io.store.set(key, { cwd, task })
         createdRecord = true
       }
-      await saveDecision(io, home, record({ agent, started, existed: !started, status: 'unknown' }, await io.now()))
+      await saveDecision(io, home, record({ agent, effectiveAgent: effectiveName(agent, workspace)!, started, existed: !started, status: 'unknown' }, await io.now()))
     },
   }).catch(async error => {
     if (createdRecord) await io.store.delete(key)
@@ -180,10 +185,11 @@ async function dispatchTask(io: TeamIo, input: Input): Promise<Answer> {
     `role: ${role}, model ${spec.model}, effort ${effort} (${source})${capped.reason ? `, ${capped.reason}` : ''}${delivery.existed ? ', not applied: reused agent keeps its start effort' : ''}`,
     `delivery: ${delivery.status}${delivery.reason ? ` (${delivery.reason})` : ''}`,
     `report: ${report}`,
+    `Herdr: ${delivery.effectiveAgent}`,
     delivery.status === 'confirmed'
-      ? `next: \`herdr agent wait ${delivery.agent}\`, then read the report.`
+      ? `next: \`herdr agent wait ${delivery.effectiveAgent}\`, then read the report.`
       : delivery.status === 'unknown'
-        ? `next: do not send it again; check with \`herdr agent get ${delivery.agent}\` and \`herdr agent wait ${delivery.agent}\`.`
+        ? `next: do not send it again; check with \`herdr agent get ${delivery.effectiveAgent}\` and \`herdr agent wait ${delivery.effectiveAgent}\`.`
         : 'next: fix the cause, then dispatch again.',
   ]
   return { ok: delivery.status !== 'not_sent', text: lines.join('\n') }

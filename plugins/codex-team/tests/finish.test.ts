@@ -1,19 +1,20 @@
+import { effectiveName } from '../hooks/names'
 import { expect, test } from 'claude-code/testing'
 import { finishAgent } from '../hooks/finish'
 import { fakeRun, fail, ok, text } from './fake-run'
 import type { Rule } from './fake-run'
 
 const uuid = '12345678-1234-1234-1234-123456789abc'
-const agent = { name: 'dev-fix', agent: 'codex', workspace_id: 'w1', pane_id: 'worker', tab_id: 'task', agent_status: 'done', agent_session: { kind: 'id', source: 'herdr:codex', value: uuid } }
+const agent = { name: effectiveName('dev-fix', 'w1')!, agent: 'codex', workspace_id: 'w1', pane_id: 'worker', tab_id: 'task', agent_status: 'done', agent_session: { kind: 'id', source: 'herdr:codex', value: uuid } }
 const input = { agent: 'dev-fix', workspace: 'w1', leadPane: 'lead' }
 const sleep = async (_ms: number) => {}
-const tabs: Rule = [['herdr', 'tab', 'list'], ok({ tabs: [{ tab_id: 'task', workspace_id: 'w1', label: 'codex · fix', pane_count: 1 }] })]
+const tabs: Rule = [['herdr', 'tab', 'list'], ok({ tabs: [{ tab_id: 'task', workspace_id: 'w1', label: 'codex - fix', pane_count: 1 }] })]
 
 test('finish refuses working, blocked, unknown, foreign and non-team agents without closing or archiving', async () => {
   for (const status of ['working', 'blocked', 'unknown']) {
     const w = fakeRun([[['herdr', 'agent', 'get'], ok({ agent: { ...agent, agent_status: status } })]])
     expect(await finishAgent(w.run, sleep, input)).toMatchObject({ closed: false, archived: false, reason: expect.stringContaining('agent') })
-    expect(w.calls).toEqual([['herdr', 'agent', 'get', 'dev-fix']])
+    expect(w.calls).toEqual([['herdr', 'agent', 'get', effectiveName('dev-fix', 'w1')!]])
   }
   const foreign = fakeRun([[['herdr', 'agent', 'get'], ok({ agent: { ...agent, workspace_id: 'w2' } })]])
   expect((await finishAgent(foreign.run, sleep, input)).reason).toBe('agent is live in another workspace')
@@ -62,9 +63,9 @@ test('finish closes only the agent pane and its last task tab, waits for exit, t
     [['herdr', 'pane', 'close'], ok({ pane_id: 'worker', type: 'pane_closed' })],
     [['codex', 'archive'], text('archived')],
   ])
-  expect(await finishAgent(w.run, async ms => { sleeps.push(ms) }, input)).toEqual({ agent: 'dev-fix', uuid, pane: 'worker', tab: 'task', closed: true, archived: true })
+  expect(await finishAgent(w.run, async ms => { sleeps.push(ms) }, input)).toEqual({ agent: 'dev-fix', effectiveAgent: effectiveName('dev-fix', 'w1'), uuid, pane: 'worker', tab: 'task', closed: true, archived: true })
   expect(w.calls).toEqual([
-    ['herdr', 'agent', 'get', 'dev-fix'], ['herdr', 'tab', 'list', '--workspace', 'w1'],
+    ['herdr', 'agent', 'get', effectiveName('dev-fix', 'w1')!], ['herdr', 'tab', 'list', '--workspace', 'w1'],
     ['herdr', 'agent', 'list'], ['herdr', 'pane', 'close', 'worker'],
     ['herdr', 'agent', 'list'], ['herdr', 'agent', 'list'], ['codex', 'archive', uuid],
   ])
@@ -73,10 +74,10 @@ test('finish closes only the agent pane and its last task tab, waits for exit, t
 
 test('finish preserves sibling panes and reports no tab closure when the task tab has another pane', async () => {
   let listed = 0
-  const peer = { ...agent, name: 'architect-fix', pane_id: 'peer' }
+  const peer = { ...agent, name: effectiveName('architect-fix', 'w1')!, pane_id: 'peer' }
   const w = fakeRun([
     [['herdr', 'agent', 'get'], ok({ agent })],
-    [['herdr', 'tab', 'list'], ok({ tabs: [{ tab_id: 'task', workspace_id: 'w1', label: 'codex · fix', pane_count: 2 }] })],
+    [['herdr', 'tab', 'list'], ok({ tabs: [{ tab_id: 'task', workspace_id: 'w1', label: 'codex - fix', pane_count: 2 }] })],
     [['herdr', 'agent', 'list'], () => ok({ agents: ++listed === 1 ? [agent, peer] : [peer] })],
     [['herdr', 'pane', 'close'], ok({})], [['codex', 'archive'], ok({})],
   ])
@@ -133,5 +134,43 @@ test('finish fails closed on unreadable listings, failed close and missing agent
     const w = fakeRun([[['herdr', 'agent', 'get'], ok({ agent })], tabs, [['herdr', 'agent', 'list'], unreadable]])
     expect((await finishAgent(w.run, sleep, input)).reason).toBe('agent list unreadable')
     expect(w.calls.some(call => call[2] === 'close' || call[0] === 'codex')).toBe(false)
+  }
+})
+
+test('finish resolves logical names and touches only this workspace agent and session', async () => {
+  for (const logical of ['analyst', 'architect', 'dev-fix', 'architect-fix', 'analyst-fix']) {
+    const shared = logical === 'analyst' || logical === 'architect'
+    const local = { ...agent, name: effectiveName(logical, 'w1'), tab_id: shared ? undefined : 'task' }
+    // Pane strings may coincide in mocked listings; ownership and exit checks are workspace-local.
+    const foreign = { ...agent, name: effectiveName(logical, 'w2'), workspace_id: 'w2', agent_session: { ...agent.agent_session, value: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' } }
+    let listed = 0
+    const w = fakeRun([
+      [['herdr', 'agent', 'get', effectiveName(logical, 'w1')!], ok({ agent: local })], tabs,
+      [['herdr', 'agent', 'list'], () => ok({ agents: ++listed === 1 ? [foreign, local] : [foreign] })],
+      [['herdr', 'pane', 'close'], ok({})], [['codex', 'archive'], ok({})],
+    ])
+    expect(await finishAgent(w.run, sleep, { ...input, agent: logical })).toMatchObject({ agent: logical, effectiveAgent: effectiveName(logical, 'w1'), archived: true })
+    expect(w.calls.filter(call => call[2] === 'get')).toEqual([['herdr', 'agent', 'get', effectiveName(logical, 'w1')!]])
+    expect(w.calls.filter(call => call[0] === 'codex')).toEqual([['codex', 'archive', uuid]])
+  }
+})
+
+test('finish refuses a real effective name collision even when the local agent is listed first', async () => {
+  const w = fakeRun([[['herdr', 'agent', 'get'], ok({ agent })], tabs,
+    [['herdr', 'agent', 'list'], ok({ agents: [agent, { ...agent, workspace_id: 'w2', pane_id: 'foreign' }] })]])
+  expect((await finishAgent(w.run, sleep, input)).reason).toBe('agent is live in another workspace')
+  expect(w.calls.some(call => call[2] === 'close' || call[0] === 'codex')).toBe(false)
+})
+
+test('finishing a shared role closes its last current task tab through pane closure', async () => {
+  for (const logical of ['analyst', 'architect']) {
+    const shared = { ...agent, name: effectiveName(logical, 'w1') }
+    let listed = 0
+    const w = fakeRun([[['herdr', 'agent', 'get'], ok({ agent: shared })],
+      [['herdr', 'tab', 'list'], ok({ tabs: [{ tab_id: 'task', workspace_id: 'w1', label: 'codex - fix', pane_count: 1 }] })],
+      [['herdr', 'agent', 'list'], () => ok({ agents: ++listed === 1 ? [shared] : [] })],
+      [['herdr', 'pane', 'close'], ok({})], [['codex', 'archive'], ok({})]])
+    expect(await finishAgent(w.run, sleep, { ...input, agent: logical })).toMatchObject({ tab: 'task', closed: true, archived: true })
+    expect(w.calls.filter(call => call[2] === 'close')).toEqual([['herdr', 'pane', 'close', 'worker']])
   }
 })
