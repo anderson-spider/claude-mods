@@ -43,7 +43,7 @@ const ask = (h: ReturnType<typeof ports>, role: (typeof ROLES)[number] = 'analys
   assessRoute(h.io, { role, task: 'Task', home: h.io.home, root: h.io.root, key: key ?? undefined })
 
 test('Jev levels select the pair from the table, grouping duration after the level is chosen', async () => {
-  const cases: [number, number, string][] = [[0, 0, 'haiku/low'], [0, 1, 'haiku/low'], [0, 2, 'haiku/low'], [0, 3, 'haiku/medium'], [1, 0, 'sonnet/low'], [2, 3, 'sonnet/high'], [3, 1, 'opus/low'], [4, 1, 'opus/high'], [4, 2, 'fable/high'], [4, 3, 'fable/high']]
+  const cases: [number, number, string][] = [[0, 0, 'haiku/medium'], [0, 1, 'haiku/medium'], [0, 2, 'haiku/medium'], [0, 3, 'haiku/high'], [1, 0, 'haiku/high'], [1, 3, 'haiku/xhigh'], [2, 0, 'haiku/xhigh'], [2, 3, 'sonnet/high'], [3, 1, 'opus/low'], [4, 1, 'opus/high'], [4, 2, 'opus/high'], [4, 3, 'opus/high']]
   for (const [difficulty, duration, pair] of cases) {
     const h = ports(); h.answers.difficulty = { probabilities: { [difficulty]: 1 } }; h.answers.duration = { probabilities: { [duration]: 1 } }
     const choice = await ask(h)
@@ -74,8 +74,21 @@ test('every assessment failure keeps the exact role fallback and logging failure
     }
     h.io.log = () => { throw new Error('logging failed') }
     const choice = await ask(h, role, key ?? null)
-    expect(choice).toMatchObject({ model: SPECS[role].model, effort: SPECS[role].effort, source: 'default', jevReason: reason, levels: null, jevAsked: reason === 'http' || reason === 'malformed' || reason === 'network' || reason === 'timeout' })
+    const asked = reason === 'http' || reason === 'malformed' || reason === 'network' || reason === 'timeout'
+    expect(choice).toMatchObject({ model: SPECS[role].model, effort: SPECS[role].effort, source: 'default', jevReason: reason, levels: null, top: null, cell: null, floorApplied: false, jevAsked: asked, jevMs: asked ? 0 : null })
   }
+})
+test('the choice carries the raw cell, the floor result, the levels, the top probability of each dimension and the Jev latency', async () => {
+  const h = ports(); h.answers.difficulty = { probabilities: { '0': 0.75, '1': 0.25 } }; h.answers.duration = { probabilities: { '0': 1 } }
+  let clock = 100; h.io.jev.now = () => (clock += 40)
+  // Difficulty 0 (a quarter on 1 still picks 0: 0.25 x 2 < 0.75 x 1), duration 0: the cell is haiku/medium and the developer floor lifts it.
+  const choice = await ask(h, 'developer')
+  expect(choice).toMatchObject({ model: 'haiku', effort: 'high', cell: { model: 'haiku', effort: 'medium' }, floorApplied: true, source: 'jev', levels: { difficulty: 0, duration: 0 }, top: { difficulty: 0.75, duration: 1 }, jevReason: null })
+  expect(typeof choice.jevMs).toBe('number')
+  const again = ports(); again.answers.difficulty = { probabilities: { '3': 1 } }; again.answers.duration = { probabilities: { '3': 1 } }
+  expect(await ask(again, 'reviewer')).toMatchObject({ model: 'opus', effort: 'high', cell: { model: 'opus', effort: 'high' }, floorApplied: false })
+  const low = ports(); low.answers.difficulty = { probabilities: { '2': 1 } }; low.answers.duration = { probabilities: { '0': 1 } }
+  expect(await ask(low, 'architect')).toMatchObject({ model: 'opus', effort: 'low', cell: { model: 'haiku', effort: 'xhigh' }, floorApplied: true })
 })
 test('assessment masks the whole task before clipping and sends only redacted task state', async () => {
   const h = ports(), key = 'private-test-key'

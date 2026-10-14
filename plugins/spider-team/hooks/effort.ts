@@ -14,7 +14,11 @@ export type Levels = Record<Dimension, number>
 export type Distributions = Record<Dimension, Record<string, number>>
 export type JevReason = Off | JevFailureReason
 export type Source = 'jev' | 'default'
-export type Choice = Pair & { source: Source; jevAsked: boolean; levels: Levels | null; jevReason: JevReason | null }
+/**
+ * The routed pair with what led to it: the table's raw cell, whether the role floor lifted it, the chosen levels, the
+ * highest probability of each dimension's distribution (`top`, the model's confidence) and the Jev latency when it was asked.
+ */
+export type Choice = Pair & { source: Source; jevAsked: boolean; levels: Levels | null; top: Levels | null; cell: Pair | null; floorApplied: boolean; jevReason: JevReason | null; jevMs: number | null }
 
 const round = (n: number) => Math.round(n * 1_000_000) / 1_000_000
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value)
@@ -54,20 +58,23 @@ export type EffortIo = KeyIo & { jev: JevIo; breaker: Breaker; gate: Gate; log: 
 
 /** Jev rates difficulty and duration and the router table picks the pair; any failure keeps the role default. */
 export async function assessRoute(io: EffortIo, call: { role: Role; task: string; key?: string; home: string; root: string }): Promise<Choice> {
-  let jevAsked = false
+  let jevAsked = false, startedAt: number | null = null
+  const elapsed = () => { try { return jevAsked && startedAt !== null ? Math.max(0, io.jev.now() - startedAt) : null } catch { return null } }
   const fallback = (jevReason: JevReason): Choice => {
     try { io.log(`spider-team: Jev off (${jevReason}); using role default`) } catch { /* Logging cannot change the role fallback. */ }
-    return { ...defaultOf(call.role), source: 'default', jevAsked, levels: null, jevReason }
+    return { ...defaultOf(call.role), source: 'default', jevAsked, levels: null, top: null, cell: null, floorApplied: false, jevReason, jevMs: elapsed() }
   }
   try {
     const access = await resolveAccess(io, call.key)
     if (access.key === undefined) return fallback(access.off)
     const redacted = redact(call.task.split(access.key).join(REDACTED), { home: call.home, root: call.root })
     const state = redacted.length <= TASK_CHARS ? redacted : head(redacted, TASK_CHARS - 1)
-    const jev = { ...io.jev, fetch: (url: string, init: Parameters<JevIo['fetch']>[1]) => { jevAsked = true; return io.jev.fetch(url, init) } }
+    const jev = { ...io.jev, fetch: (url: string, init: Parameters<JevIo['fetch']>[1]) => { if (!jevAsked) startedAt = io.jev.now(); jevAsked = true; return io.jev.fetch(url, init) } }
     const { answers } = await createJev(jev, access.key, { model: JEV_MODEL, breaker: io.breaker, gate: io.gate, answerIds: Object.keys(QUESTIONS) })(QUESTIONS, state)
     const dists = distributions(answers)
     const levels = { difficulty: levelOf(dists.difficulty), duration: levelOf(dists.duration) }
-    return { ...routeOf(levels.difficulty, levels.duration), source: 'jev', jevAsked, levels, jevReason: null }
+    const top = { difficulty: Math.max(...Object.values(dists.difficulty)), duration: Math.max(...Object.values(dists.duration)) }
+    const routed = routeOf(call.role, levels.difficulty, levels.duration)
+    return { ...routed.pair, source: 'jev', jevAsked, levels, top, cell: routed.cell, floorApplied: routed.floorApplied, jevReason: null, jevMs: elapsed() }
   } catch (error) { return fallback(classifyFailure(error).failure.reason) }
 }

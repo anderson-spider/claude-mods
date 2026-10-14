@@ -1,7 +1,13 @@
 // The whole routing policy in one place, pure data: the questions Jev answers, how its answers become levels, the
-// cost-benefit table those levels select and each role's default cell. A new model means editing MODELS in roles.ts and
-// the cells here; tsc fails on an unknown model or effort and on a missing cell. effort.ts only carries it out.
-import type { Pair, Role } from './roles'
+// cost-benefit table those levels select, the capacity ladder, each role's floor and default, and the prices behind the
+// cost estimate. A new model means editing MODELS in roles.ts, the ladder and the cells here; tsc fails on a cell, floor
+// or default that is not a ladder entry and on a missing cell. effort.ts only carries it out.
+//
+// Policy note, not a measurement: Haiku 5.5 costs about 1/20 of Sonnet 5.5 per token and beats Sonnet medium on
+// merge-quality coding, so Sonnet low and medium are dominated by Haiku high and xhigh. Opus low costs about what Sonnet
+// high does, and Opus above high does not improve. Haiku never runs at low effort because it skips search and
+// verification on long agentic prompts. Fable is out for lack of data.
+import type { Effort, Model, Pair, Role } from './roles'
 
 export const DIMENSIONS = ['difficulty', 'duration'] as const
 export type Dimension = (typeof DIMENSIONS)[number]
@@ -28,26 +34,51 @@ export type DurationGroup = (typeof DURATION_GROUPS)[number]
 /** The group of each duration level 0..3 of the duration question: 0 and 1 are short, 2 medium, 3 long. */
 export const GROUP_OF_DURATION: readonly DurationGroup[] = ['short', 'short', 'medium', 'long']
 
-export const ROUTES: Readonly<Record<Difficulty, Readonly<Record<DurationGroup, Pair>>>> = {
-  trivial: { short: { model: 'haiku', effort: 'low' }, medium: { model: 'haiku', effort: 'low' }, long: { model: 'haiku', effort: 'medium' } },
-  easy: { short: { model: 'sonnet', effort: 'low' }, medium: { model: 'sonnet', effort: 'medium' }, long: { model: 'sonnet', effort: 'medium' } },
-  moderate: { short: { model: 'sonnet', effort: 'medium' }, medium: { model: 'sonnet', effort: 'high' }, long: { model: 'sonnet', effort: 'high' } },
-  hard: { short: { model: 'opus', effort: 'low' }, medium: { model: 'opus', effort: 'medium' }, long: { model: 'opus', effort: 'high' } },
-  expert: { short: { model: 'opus', effort: 'high' }, medium: { model: 'fable', effort: 'high' }, long: { model: 'fable', effort: 'high' } },
+/**
+ * Capacity order, weakest first. The only pairs the router may pick: every table cell, floor and default is a rung, so
+ * tsc fails on anything else.
+ */
+export const LADDER = ['haiku/medium', 'haiku/high', 'haiku/xhigh', 'sonnet/high', 'opus/low', 'opus/medium', 'opus/high'] as const satisfies readonly `${Model}/${Effort}`[]
+export type Rung = (typeof LADDER)[number]
+export const pairOf = (rung: Rung): Pair => {
+  const [model, effort] = rung.split('/') as [Model, Effort]
+  return { model, effort }
+}
+/** The stronger of two rungs; on equal capacity the first. */
+export const higher = (a: Rung, b: Rung): Rung => LADDER.indexOf(b) > LADDER.indexOf(a) ? b : a
+
+export const ROUTES: Readonly<Record<Difficulty, Readonly<Record<DurationGroup, Rung>>>> = {
+  trivial: { short: 'haiku/medium', medium: 'haiku/medium', long: 'haiku/high' },
+  easy: { short: 'haiku/high', medium: 'haiku/high', long: 'haiku/xhigh' },
+  moderate: { short: 'haiku/xhigh', medium: 'sonnet/high', long: 'sonnet/high' },
+  hard: { short: 'opus/low', medium: 'opus/medium', long: 'opus/high' },
+  expert: { short: 'opus/high', medium: 'opus/high', long: 'opus/high' },
 }
 
-/** Each role's typical task as a cell of the table: its default pair, used when Jev gives no answer, moves with the table. */
-export const ROLE_CELLS: Readonly<Record<Role, { difficulty: Difficulty; group: DurationGroup }>> = {
-  analyst: { difficulty: 'easy', group: 'medium' },
-  developer: { difficulty: 'moderate', group: 'medium' },
-  reviewer: { difficulty: 'hard', group: 'short' },
-  architect: { difficulty: 'hard', group: 'medium' },
+/**
+ * A role's floor (the routed pair is never weaker than it) and its default (used when Jev is off or fails, and by the
+ * registered definition; it need not be a table cell).
+ */
+export const ROLE_POLICY: Readonly<Record<Role, { floor: Rung; default: Rung }>> = {
+  analyst: { floor: 'haiku/medium', default: 'haiku/high' },
+  developer: { floor: 'haiku/high', default: 'sonnet/high' },
+  architect: { floor: 'opus/low', default: 'opus/medium' },
+  reviewer: { floor: 'opus/low', default: 'opus/medium' },
 }
-export const defaultOf = (role: Role): Pair => ROUTES[ROLE_CELLS[role].difficulty][ROLE_CELLS[role].group]
+export const defaultOf = (role: Role): Pair => pairOf(ROLE_POLICY[role].default)
 
-/** The pair for a difficulty level 0..4 and a duration level 0..3. */
-export function routeOf(difficulty: number, duration: number): Pair {
+/** What a difficulty level 0..4 and a duration level 0..3 select for a role: the table's cell and the pair after the floor. */
+export function routeOf(role: Role, difficulty: number, duration: number): { cell: Pair; pair: Pair; floorApplied: boolean } {
   const label = DIFFICULTIES[difficulty], group = GROUP_OF_DURATION[duration]
   if (!label || !group) throw new Error('level out of range')
-  return ROUTES[label][group]
+  const cell = ROUTES[label][group], final = higher(cell, ROLE_POLICY[role].floor)
+  return { cell: pairOf(cell), pair: pairOf(final), floorApplied: final !== cell }
+}
+
+/** USD per million tokens, list prices as of October 2026 (Haiku prices are for prompts up to 100k tokens). */
+export type Price = { input: number; output: number; cacheWrite: number; cacheRead: number }
+export const PRICES: Readonly<Record<Model, Price>> = {
+  haiku: { input: 0.10, output: 0.50, cacheWrite: 0.125, cacheRead: 0.01 },
+  sonnet: { input: 2, output: 10, cacheWrite: 2.50, cacheRead: 0.10 },
+  opus: { input: 4, output: 20, cacheWrite: 5, cacheRead: 0.20 },
 }
