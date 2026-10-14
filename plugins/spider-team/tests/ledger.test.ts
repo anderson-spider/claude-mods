@@ -1,7 +1,8 @@
 import { expect, test } from 'claude-code/testing'
-import { afterAgentCall, afterTurn, appendLine, bucketOf, costOf, createPending, decisionLine, formatSummary, ledgerPath, modelFamily, parseLedger, readAll, ROTATE_AT, rotatedPath, summarize, verdictOf } from '../hooks/ledger'
+import { afterAgentCall, afterTurn, appendLine, costOf, createPending, decisionLine, formatSummary, ledgerPath, modelFamily, parseLedger, readAll, ROTATE_AT, rotatedPath, summarize, verdictOf } from '../hooks/ledger'
 import type { DecisionLine, FileIo, Line, OutcomeLine } from '../hooks/ledger'
 import type { Distributions } from '../hooks/effort'
+import { CALIBRATION } from '../hooks/router'
 
 const MARKER = 'SECRET-MARKER-7f3a'
 const ctx = (role: 'analyst' | 'developer' | 'reviewer' | 'architect' = 'reviewer', id = 'toolu_1') => ({ toolUseId: id, role, pair: { model: 'opus' as const, effort: 'medium' as const } })
@@ -32,7 +33,7 @@ test('a decision line projects only the allowed fields and rounds the probabilit
   }
   const line = decisionLine({ ts: '2026-10-14T10:00:00.000Z', toolUseId: 'toolu_1', role: 'architect', choice })
   expect(line).toEqual({
-    v: 1, kind: 'decision', ts: '2026-10-14T10:00:00.000Z', tool_use_id: 'toolu_1', role: 'architect', source: 'jev', jevReason: null, jevMs: 412,
+    v: 1, kind: 'decision', calibration: CALIBRATION, ts: '2026-10-14T10:00:00.000Z', tool_use_id: 'toolu_1', role: 'architect', source: 'jev', jevReason: null, jevMs: 412,
     levels: { difficulty: 2, duration: 1 }, top: { difficulty: 0.83, duration: 0.5 },
     dist: { difficulty: { '0': 0, '1': 0.06, '2': 0.83, '3': 0.11, '4': 0 }, duration: { '0': 0.25, '1': 0.5, '2': 0.25, '3': 0 } },
     cell: 'haiku/xhigh', floorApplied: true, model: 'opus', effort: 'low',
@@ -158,7 +159,7 @@ test('parsing skips malformed and foreign lines and counts a repeated line once'
 })
 
 const decision = (id: string, role: DecisionLine['role'], patch: Partial<DecisionLine> = {}): DecisionLine => ({
-  v: 1, kind: 'decision', ts: 't', tool_use_id: id, role, source: 'jev', jevReason: null, jevMs: 100, levels: { difficulty: 1, duration: 0 }, top: { difficulty: 0.95, duration: 0.6 }, dist: null,
+  v: 1, kind: 'decision', calibration: CALIBRATION, ts: 't', tool_use_id: id, role, source: 'jev', jevReason: null, jevMs: 100, levels: { difficulty: 1, duration: 0 }, top: { difficulty: 0.95, duration: 0.6 }, dist: null,
   cell: 'haiku/high', floorApplied: false, model: 'haiku', effort: 'high', ...patch,
 })
 const outcome = (id: string, role: OutcomeLine['role'], patch: Partial<OutcomeLine> = {}): OutcomeLine => ({
@@ -176,9 +177,9 @@ const fixture: Line[] = [
   decision('x9', 'architect', { levels: { difficulty: 3, duration: 1 }, top: { difficulty: 0.5, duration: 0.7 }, model: 'opus', effort: 'low' }),
 ]
 
-test('the summary counts runs, failures, medians, tokens, cost, fallbacks, confidence and the duration check', () => {
+test('the summary counts runs, failures, medians, tokens, cost, fallbacks, confidence and the real time per predicted level', () => {
   const s = summarize(fixture)
-  expect([s.decisions, s.outcomes]).toEqual([7, 6])
+  expect([s.decisions, s.outcomes, s.olderCalibration]).toEqual([7, 6, 0])
   const role = Object.fromEntries(s.byRole.map(r => [r.key, r.group]))
   expect(s.byRole.map(r => r.key)).toEqual(['analyst', 'developer', 'reviewer'])
   expect(role.analyst).toEqual({ count: 2, failures: 1, medianMs: 3.5 * MIN, tokens: 2000, costUsd: 0.001 })
@@ -189,18 +190,64 @@ test('the summary counts runs, failures, medians, tokens, cost, fallbacks, confi
   // Top probabilities: difficulty 0.95, 0.4, 0.5 and the jev decision of d1 (0.95); duration 0.6, 0.8, 0.6, 0.7.
   expect(s.confidence.difficulty).toEqual({ count: 4, median: 0.725, buckets: [1, 1, 0, 2] })
   expect(s.confidence.duration).toEqual({ count: 4, median: 0.65, buckets: [0, 2, 2, 0] })
-  // Compared: a1 short->2m short, a2 long->5m short, d1 medium->12m medium; d2 and the reviewers have no levels, x9 has no outcome.
-  expect(s.durationCheck).toEqual({ compared: 3, hits: 2, matrix: { short: { short: 1, medium: 0, long: 0 }, medium: { short: 0, medium: 1, long: 0 }, long: { short: 1, medium: 0, long: 0 } } })
-  // Real buckets on an agent's scale: under 10 minutes short, 10 to 30 medium, over 30 long.
-  expect([bucketOf(9 * MIN), bucketOf(10 * MIN), bucketOf(30 * MIN), bucketOf(31 * MIN), bucketOf(130 * MIN)]).toEqual(['short', 'medium', 'medium', 'long', 'long'])
+  // Joined to an outcome: a1 level 0 -> 2m, d1 level 2 -> 12m, a2 level 3 -> 5m; d2 and the reviewers have no levels, x9 has no outcome.
+  expect(s.byPredictedTime).toEqual([{ count: 1, medianMs: 2 * MIN }, { count: 0, medianMs: null }, { count: 1, medianMs: 12 * MIN }, { count: 1, medianMs: 5 * MIN }])
+})
+
+test('each predicted human-time level takes the median real duration of its outcomes, ignoring runs without a duration', () => {
+  const lines: Line[] = [
+    decision('p1', 'analyst'), outcome('p1', 'analyst', { durationMs: 2 * MIN }),
+    decision('p2', 'analyst'), outcome('p2', 'analyst', { durationMs: 4 * MIN }),
+    decision('p3', 'analyst'), outcome('p3', 'analyst', { durationMs: null }),
+    decision('p4', 'developer', { levels: { difficulty: 3, duration: 1 } }), outcome('p4', 'developer', { durationMs: 90 * MIN }),
+    decision('p5', 'developer', { levels: { difficulty: 3, duration: 3 } }), outcome('p5', 'developer', { durationMs: 20 * 1000 }),
+    outcome('orphan', 'developer', { durationMs: 9 * MIN }),
+  ]
+  expect(summarize(lines).byPredictedTime).toEqual([{ count: 2, medianMs: 3 * MIN }, { count: 1, medianMs: 90 * MIN }, { count: 0, medianMs: null }, { count: 1, medianMs: 20_000 }])
+  expect(formatSummary(summarize(lines))).toContain([
+    'Real agent time by predicted human time (current calibration)',
+    '  under 15 min   n=2 median=3m',
+    '  15 min to 1 h  n=1 median=1.5h',
+    '  1 to 4 h       n=0 median=-',
+    '  over 4 h       n=1 median=20s',
+  ].join('\n'))
 })
 
 test('the formatted summary is compact and names every part, and an empty ledger says so', () => {
   const text = formatSummary(summarize(fixture))
-  for (const part of ['7 decisions, 6 outcomes', 'By role', 'analyst', 'fail=50%', 'By final pair', 'opus/medium', 'Default fallbacks: 3 of 7 (43%): http 1, no-key 2', 'Jev top confidence', 'difficulty', 'median=0.72', '[1 / 1 / 0 / 2]', 'Duration check, predicted group vs real (short <10m, medium 10-30m, long >30m)', '2 of 3 in the predicted group (67%)', 'predicted long   -> short 1, medium 0, long 0']) expect(text).toContain(part)
+  for (const part of ['7 decisions, 6 outcomes', 'By role', 'analyst', 'fail=50%', 'By final pair', 'opus/medium', 'Default fallbacks: 3 of 7 (43%): http 1, no-key 2', 'Jev top confidence', 'difficulty', 'median=0.72', '[1 / 1 / 0 / 2]', 'Real agent time by predicted human time (current calibration)', '  under 15 min   n=1 median=2m', '  15 min to 1 h  n=0 median=-', '  1 to 4 h       n=1 median=12m', '  over 4 h       n=1 median=5m']) expect(text).toContain(part)
   expect(text).not.toContain('/home')
   // The host prefixes command output with the plugin name; the summary does not repeat it.
   expect(text.startsWith('7 decisions, 6 outcomes (~/.claude/spider-team/routes.jsonl;')).toBe(true); expect(text).not.toContain('spider-team stats')
   expect(formatSummary(summarize([]))).toBe('no routing records yet in ~/.claude/spider-team/routes.jsonl.')
   expect(formatSummary(summarize([decision('only', 'analyst')]))).toContain('no outcomes yet')
+  expect(text).not.toContain('older calibrations')
+})
+
+test('the Jev confidence and the real time per predicted level use only current-calibration decisions, and a line without one is calibration 1', () => {
+  // Older decisions: one written before the field existed (calibration 1) and one tagged with an older number, each with its outcome.
+  const { calibration: _, ...untagged } = decision('o1', 'analyst', { levels: { difficulty: 1, duration: 3 }, top: { difficulty: 0.1, duration: 0.1 } })
+  const older: Line[] = [
+    untagged as DecisionLine, outcome('o1', 'analyst', { durationMs: 2 * MIN }),
+    decision('o2', 'developer', { calibration: CALIBRATION - 1, levels: { difficulty: 2, duration: 3 }, top: { difficulty: 0.3, duration: 0.2 }, model: 'sonnet', effort: 'high' }),
+    outcome('o2', 'developer', { model: 'sonnet', effort: 'high', durationMs: 4 * MIN, status: 'error' }),
+    decision('o3', 'reviewer', { calibration: CALIBRATION - 1, source: 'default', jevReason: 'timeout', levels: null, top: null, cell: null, model: 'opus', effort: 'medium' }),
+  ]
+  const base = summarize(fixture), mixed = summarize([...older, ...fixture])
+  expect(mixed.olderCalibration).toBe(3)
+  // Only the current decisions count in Jev's confidence and the real time per predicted level.
+  expect(mixed.confidence).toEqual(base.confidence)
+  expect(mixed.byPredictedTime).toEqual(base.byPredictedTime)
+  // Runs, the role and pair groups and the fallback share count every line, whatever its calibration.
+  expect([mixed.decisions, mixed.outcomes]).toEqual([10, 8])
+  expect(Object.fromEntries(mixed.byRole.map(r => [r.key, r.group.count]))).toEqual({ analyst: 3, developer: 3, reviewer: 2 })
+  expect(Object.fromEntries(mixed.byRole.map(r => [r.key, r.group.failures]))).toMatchObject({ developer: 1 })
+  expect(mixed.fallback).toEqual({ count: 4, reasons: { 'no-key': 2, http: 1, timeout: 1 } })
+  const text = formatSummary(mixed)
+  expect(text).toContain('Default fallbacks: 4 of 10 (40%)')
+  expect(text).toContain('Left out of the Jev confidence and the real time per predicted level: 3 decisions from older calibrations')
+  expect(text.indexOf('older calibrations')).toBeLessThan(text.indexOf('Jev top confidence'))
+  // Only older decisions: nothing to judge, every one named as left out.
+  const onlyOld = summarize(older)
+  expect([onlyOld.olderCalibration, onlyOld.confidence.difficulty.count, onlyOld.byPredictedTime.reduce((n, t) => n + t.count, 0)]).toEqual([3, 0, 0])
 })

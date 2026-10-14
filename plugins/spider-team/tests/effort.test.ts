@@ -10,7 +10,7 @@ test('two questions carry the difficulty and duration criteria and nothing else'
   expect(Object.keys(QUESTIONS)).toEqual(['difficulty', 'duration'])
   expect([QUESTIONS.difficulty.criteria.length, QUESTIONS.duration.criteria.length]).toEqual([5, 4])
   expect(QUESTIONS.difficulty.instructions).toBe('How hard is this task for a capable coding agent? Judge the work itself, not the length or detail of the brief: a long list of constraints, checks or acceptance criteria does not make a task harder.')
-  expect(QUESTIONS.duration.instructions).toBe('How long will a coding agent need to finish this task?')
+  expect(QUESTIONS.duration.instructions).toBe('How long would an experienced engineer who already knows this codebase need to finish this task?')
 })
 
 test('the level minimizes expected penalty with under-capacity weighted 1.25 and ties going lower', () => {

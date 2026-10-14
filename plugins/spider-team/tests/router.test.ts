@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { defaultOf, DIFFICULTIES, DURATION_GROUPS, GROUP_OF_DURATION, higher, LADDER, pairOf, POLICY, PRICES, QUESTIONS, ROLE_POLICY, ROUTES, routeOf } from '../hooks/router'
+import { CALIBRATION, defaultOf, DIFFICULTIES, DURATION_GROUPS, GROUP_OF_DURATION, higher, LADDER, pairOf, POLICY, PRICES, QUESTIONS, ROLE_POLICY, ROUTES, routeOf } from '../hooks/router'
 import { EFFORTS, MODELS, ROLES, SPECS } from '../hooks/roles'
 
 const TABLE: Record<(typeof DIFFICULTIES)[number], [string, string, string]> = {
@@ -70,14 +70,16 @@ test('role floors and defaults are fixed and the registered definitions carry th
   for (const role of ROLES) expect([SPECS[role].model, SPECS[role].effort]).toEqual([defaultOf(role).model, defaultOf(role).effort])
 })
 
-test('the questions judge the work itself on a coding agent\'s time scale, not the length of the brief', () => {
+test('the questions judge the work itself and ask for human-expert time, not the length of the brief', () => {
   expect(QUESTIONS.difficulty.instructions).toContain('Judge the work itself, not the length or detail of the brief')
   expect(QUESTIONS.difficulty.instructions).toContain('a long list of constraints, checks or acceptance criteria does not make a task harder')
   expect(QUESTIONS.difficulty.criteria).toEqual([
-    'Trivial: a one-line or purely mechanical change', 'Easy: small, well-understood change in one place', 'Moderate: needs some understanding of the surrounding code',
-    'Hard: subtle logic across several interacting parts, or a root cause still to be found', 'Expert: architecture, concurrency, security, or deep domain reasoning',
+    'Trivial: a one-line or purely mechanical change, such as a rename, a typo, a constant or a version bump', 'Easy: small, well-understood change in one place, such as adjusting one layout line or adding a field to an output, with its test', 'Moderate: needs some understanding of the surrounding code, such as a small feature across two or three files or a bug whose cause is known',
+    'Hard: subtle logic across several interacting parts, or a root cause still to be found, such as an ordering or race bug or a refactor that must keep several contracts', 'Expert: architecture, concurrency, security, or deep domain reasoning, such as a new protocol, a security boundary or a redesign across modules',
   ])
-  expect(QUESTIONS.duration.criteria).toEqual(['Under 3 minutes', '3 to 10 minutes', '10 to 30 minutes', 'More than 30 minutes'])
+  // Human-expert time, the SWE-bench Verified buckets: Jev cannot estimate a coding agent's own time.
+  expect(QUESTIONS.duration.instructions).toBe('How long would an experienced engineer who already knows this codebase need to finish this task?')
+  expect(QUESTIONS.duration.criteria).toEqual(['Under 15 minutes: a mechanical edit or a one-line fix', '15 minutes to 1 hour: a small change in one or two files with its tests', '1 to 4 hours: a feature or fix across several files, with tests and docs', 'More than 4 hours: a new subsystem, a migration, or an investigation with no known cause'])
   expect(POLICY).toEqual({ under: 1.25, over: 1 })
 })
 
@@ -90,4 +92,9 @@ test('the questions match the levels and the prices are the October 2026 list pr
     sonnet: { input: 2, output: 10, cacheWrite: 2.50, cacheRead: 0.10 },
     opus: { input: 4, output: 20, cacheWrite: 5, cacheRead: 0.20 },
   })
+})
+
+test('the calibration that tags each decision line is 3', () => {
+  // Bump it with any change to QUESTIONS, POLICY or ROUTES; the stats judge Jev only under the current one.
+  expect(CALIBRATION).toBe(3)
 })
