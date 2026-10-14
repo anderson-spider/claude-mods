@@ -20,10 +20,13 @@ export type Draw = 'svg' | 'cells'
 export type LayoutSnapshot = { card: SessionHudCard; now: number; working?: boolean; palette: Palette; draw: Draw }
 
 /** The drawing colours: the design's on a dark theme, darker ones that read on a light one. */
-const INK: Record<Palette, { track: string; fill: string; bar: string; tick: string }> = {
-  mockup: { track: '#34383f', fill: '#4fb383', bar: '#e5c07b', tick: '#e6e6e6' },
-  theme: { track: '#d5d8dd', fill: '#2f8f5f', bar: '#b7791f', tick: '#1d1f23' },
+const INK: Record<Palette, { track: string; fill: string; alert: string; bar: string; tick: string }> = {
+  mockup: { track: '#34383f', fill: '#4fb383', alert: '#e06c75', bar: '#e5c07b', tick: '#e6e6e6' },
+  theme: { track: '#d5d8dd', fill: '#2f8f5f', alert: '#c53030', bar: '#b7791f', tick: '#1d1f23' },
 }
+
+/** From this percent of the compaction window the context is drawn in the alert colour: time for a manual `/compact`. */
+export const CONTEXT_ALERT = 85
 
 /** A usage bar is this many pixels wide, whatever the card's width. */
 export const BAR_WIDTH = 96
@@ -119,9 +122,10 @@ export function layoutView({ card, now, working = false, palette, draw }: Layout
   const turns = (Array.isArray(card.history) ? card.history : []).filter(valid)
   const contextLine: Group[] = []
   if (context) {
-    const drawn: Piece[] = draw === 'cells' ? barCells(context.percent, 'success')
-      : [{ kind: 'svg', source: barSvg(context.percent, INK[palette].fill, palette), alt: `context ${context.percent}% used`, width: BAR_WIDTH, height: BAR_HEIGHT }]
-    const bar: Piece[] = [seg('ctx ', 'secondary'), ...drawn, seg(` ${context.percent}%`, 'strong')]
+    const near = context.percent >= CONTEXT_ALERT
+    const drawn: Piece[] = draw === 'cells' ? barCells(context.percent, near ? 'danger' : 'success')
+      : [{ kind: 'svg', source: barSvg(context.percent, near ? INK[palette].alert : INK[palette].fill, palette), alt: `context ${context.percent}% used${near ? ', near compaction' : ''}`, width: BAR_WIDTH, height: BAR_HEIGHT }]
+    const bar: Piece[] = [seg('ctx ', 'secondary'), ...drawn, seg(` ${context.percent}%`, near ? 'danger' : 'strong')]
     if (context.used !== undefined && context.window !== undefined) bar.push(seg(`  ${tokens(context.used)} / ${tokens(context.window)}`, 'secondary'))
     contextLine.push(bar)
   }
