@@ -25,9 +25,9 @@ export const QUESTIONS = {
   },
 } as const
 
-// Policy, not a measurement: a task that needs more than the pair gives costs 1.5 times what spare capacity does, so the
-// lower of two adjacent levels wins once it holds at least 60% of their weight.
-export const POLICY = { under: 1.5, over: 1 } as const
+// Policy, not a measurement: a task that needs more than the pair gives costs 1.25 times what spare capacity does, so the
+// lower of two adjacent levels wins once it holds at least 5/9 (about 56%) of their weight.
+export const POLICY = { under: 1.25, over: 1 } as const
 
 /** Difficulty levels 0..4, in the order of the difficulty question's criteria. */
 export const DIFFICULTIES = ['trivial', 'easy', 'moderate', 'hard', 'expert'] as const

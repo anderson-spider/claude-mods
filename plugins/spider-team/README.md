@@ -53,7 +53,7 @@ haiku/medium < haiku/high < haiku/xhigh < sonnet/high < opus/low < opus/medium <
 
 Every table cell, floor and default must be an entry of the ladder, and the type-check fails otherwise. The routed pair is the stronger of the table's cell and the role's floor on the ladder; the default is used whenever Jev is off or fails, and is the model and effort of the registered definition. Defaults do not have to be table cells.
 
-For each dimension Jev returns a probability distribution, and the level is the integer that minimizes the expected penalty: missing capacity weighs 1.5, spare capacity weighs 1, and ties go to the lower level. Between two adjacent levels the lower one wins once it holds at least 60% of their probability. Grouping the duration happens after its level is chosen.
+For each dimension Jev returns a probability distribution, and the level is the integer that minimizes the expected penalty: missing capacity weighs 1.25, spare capacity weighs 1, and ties go to the lower level. Between two adjacent levels the lower one wins once it holds at least 5/9 (about 56%) of their probability. Grouping the duration happens after its level is chosen.
 
 Why these cells, as a policy note and not a measured fact: Haiku 5.5 costs about a twentieth of Sonnet 5.5 per token and beats Sonnet at medium effort on merge-quality coding, so Sonnet at low and medium is dominated by Haiku at high and xhigh. Opus at low effort costs about what Sonnet at high does. Opus above high does not improve. Haiku is never run at low effort because it skips search and verification on long agentic prompts. Fable is left out for lack of data.
 

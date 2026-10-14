@@ -78,7 +78,7 @@ test('the questions judge the work itself on a coding agent\'s time scale, not t
     'Hard: subtle logic across several interacting parts, or a root cause still to be found', 'Expert: architecture, concurrency, security, or deep domain reasoning',
   ])
   expect(QUESTIONS.duration.criteria).toEqual(['Under 3 minutes', '3 to 10 minutes', '10 to 30 minutes', 'More than 30 minutes'])
-  expect(POLICY).toEqual({ under: 1.5, over: 1 })
+  expect(POLICY).toEqual({ under: 1.25, over: 1 })
 })
 
 test('the questions match the levels and the prices are the October 2026 list prices', () => {

@@ -13,24 +13,23 @@ test('two questions carry the difficulty and duration criteria and nothing else'
   expect(QUESTIONS.duration.instructions).toBe('How long will a coding agent need to finish this task?')
 })
 
-test('the level minimizes expected penalty with under-capacity weighted 1.5 and ties going lower', () => {
-  expect(POLICY).toEqual({ under: 1.5, over: 1 })
+test('the level minimizes expected penalty with under-capacity weighted 1.25 and ties going lower', () => {
+  expect(POLICY).toEqual({ under: 1.25, over: 1 })
   expect(levelOf({ '0': 1, '1': 0, '2': 0, '3': 0, '4': 0 })).toBe(0)
   expect(levelOf({ '0': 0, '1': 0, '2': 0, '3': 0, '4': 1 })).toBe(4)
   // Even odds between 0 and 1: missing capacity costs more, so the higher level wins.
   expect(levelOf({ '0': 0.5, '1': 0.5 })).toBe(1)
-  // Between adjacent levels the lower one wins from 60% of the weight. At 2:1 it needed two thirds, so 62% went up.
+  // Between adjacent levels the lower one wins from 5/9 (about 56%) of the weight. At 2:1 it needed two thirds, so 62% went up.
   expect(levelOf({ '2': 0.62, '3': 0.38 })).toBe(2)
   expect(levelOf({ '2': 0.65, '3': 0.35 })).toBe(2)
   expect(levelOf({ '0': 2 / 3, '1': 1 / 3 })).toBe(0)
   expect(levelOf({ '0': 0.7, '1': 0.3 })).toBe(0)
-  // Below 60% the higher level still wins: the first live run's 57% on the lower level goes up under either weighting.
-  expect(levelOf({ '2': 0.57, '3': 0.43 })).toBe(3)
-  expect(levelOf({ '0': 0.59, '1': 0.41 })).toBe(1)
-  // Exactly 60% is a tie. Unrounded, 0.4 x 1.5 is 0.6000000000000001 and the higher level would win; rounding keeps it low.
-  expect(0.4 * 1.5).toBeGreaterThan(0.6)
-  expect(levelOf({ '0': 0.6, '1': 0.4 })).toBe(0)
-  expect(levelOf({ '2': 0.6, '3': 0.4 })).toBe(2)
+  // The first live run's 57% on the lower level stays there; under 5/9 the higher level still wins.
+  expect(levelOf({ '2': 0.57, '3': 0.43 })).toBe(2)
+  expect(levelOf({ '2': 0.55, '3': 0.45 })).toBe(3)
+  // Exactly 5/9 is a tie, which rounding keeps on the lower level despite the float error of 4/9 x 1.25.
+  expect(levelOf({ '0': 5 / 9, '1': 4 / 9 })).toBe(0)
+  expect(levelOf({ '2': 5 / 9, '3': 4 / 9 })).toBe(2)
   // A tail that matters: a quarter of the weight on level 4 pulls past the middle only with half the weight there.
   expect(levelOf({ '0': 0.25, '2': 0.5, '4': 0.25 })).toBe(2)
   expect(levelOf({ '0': 0.25, '2': 0.25, '4': 0.5 })).toBe(4)
@@ -90,7 +89,7 @@ test('every assessment failure keeps the exact role fallback and logging failure
 test('the choice carries the raw cell, the floor result, the levels, the top probability and full distribution of each dimension and the Jev latency', async () => {
   const h = ports(); h.answers.difficulty = { probabilities: { '0': 0.75, '1': 0.25 } }; h.answers.duration = { probabilities: { '0': 1 } }
   let clock = 100; h.io.jev.now = () => (clock += 40)
-  // Difficulty 0 (a quarter on 1 still picks 0: 0.25 x 1.5 < 0.75 x 1), duration 0: the cell is haiku/medium and the developer floor lifts it.
+  // Difficulty 0 (a quarter on 1 still picks 0: 0.25 x 1.25 < 0.75 x 1), duration 0: the cell is haiku/medium and the developer floor lifts it.
   const choice = await ask(h, 'developer')
   expect(choice).toMatchObject({ model: 'haiku', effort: 'high', cell: { model: 'haiku', effort: 'medium' }, floorApplied: true, source: 'jev', levels: { difficulty: 0, duration: 0 }, top: { difficulty: 0.75, duration: 1 }, jevReason: null })
   // The distributions are the normalized ones, every level of each question, omitted levels at zero.
