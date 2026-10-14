@@ -17,10 +17,10 @@ export function reviewTask(input: { cwd: string; task: string; report: string },
   ].join('\n\n')
 }
 
-/** `<reports root>/<repository name>/<slug>-<role>.md`. */
-export function reportPath(root: string, repo: string, slug: string, role: Role): string {
+/** `<reports root>/<repository name>/<workspace token>/<slug>-<role>.md`; token is validated by dispatch. */
+export function reportPath(root: string, repo: string, token: string, slug: string, role: Role): string {
   const name = repo.replace(/\/+$/, '').split('/').pop() || 'repo'
-  return `${root.replace(/\/+$/, '')}/${name}/${slug}-${role}.md`
+  return `${root.replace(/\/+$/, '')}/${name}/${token}/${slug}-${role}.md`
 }
 
 /** The prompt sent to the agent: the task, where it runs, and the report it must write. */

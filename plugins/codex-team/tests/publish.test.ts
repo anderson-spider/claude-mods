@@ -10,7 +10,7 @@ function world(check: RunResult = text('[]')) {
   const files = new Map<string, string>([['/repo/.crew/plans/new.md', PLAN], ['/repo/.crew/plans/old.md', 'invalid'], ['/repo/.dagr/run.json', 'old run']])
   const writes: string[] = [], logs: string[] = []
   const io: PublishIo = {
-    env: async () => ({ HERDR_ENV: '1', HERDR_PANE_ID: 'lead' }), run,
+    env: async () => ({ HERDR_ENV: '1', HERDR_PANE_ID: 'lead', HERDR_WORKSPACE_ID: 'w1' }), run,
     exists: async path => files.has(path) || [...files.keys()].some(file => file.startsWith(path + '/')),
     list: async () => [{ name: 'old.md', kind: 'file', mtimeMs: 1 }, { name: 'new.md', kind: 'file', mtimeMs: 2 }],
     read: async path => { if (!files.has(path)) throw new Error('missing'); return files.get(path)! },
@@ -145,4 +145,19 @@ test('publication serializes candidates per root and retains first observations 
   await Promise.all([publish(w.io, '/repo'), publish(w.io, '/repo')])
   expect(maximum).toBe(1)
   expect(w.calls.filter(c => c[0] === 'mv')).toHaveLength(2)
+})
+
+test('publication maps effective names to logical owners only in the dispatch workspace', async () => {
+  const w = world()
+  w.files.set('/repo/.crew/plans/new.md', '## Steps\n### Work\n- local (dev-fix, after: —) Build — state: implementing\n- foreign (analyst, after: —) Inspect — state: implementing')
+  const run = w.io.run
+  w.io.run = async argv => argv[0] === 'herdr' ? text(JSON.stringify({ result: { agents: [
+    { name: 'd1r-fix', workspace_id: 'w1', pane_id: 'local' },
+    { name: 'd1s-fix', workspace_id: 'w2', pane_id: 'foreign-dev' },
+    { name: 'n1s', workspace_id: 'w2', pane_id: 'foreign-analyst' },
+  ] } })) : run(argv)
+  await publishDagr(w.io, '/repo')
+  const document = JSON.parse(w.files.get('/repo/.dagr/run.json.tmp')!)
+  expect(document.tasks[0]).toMatchObject({ owner: 'dev-fix', state: 'working', attempts: [{ locator: { pane: 'local' } }] })
+  expect(document.tasks[1]).toMatchObject({ owner: 'analyst', state: 'blocked', attempts: [] })
 })

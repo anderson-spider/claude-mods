@@ -62,7 +62,7 @@ export function agentName(role: Role, slug: string): string {
   return role === 'developer' ? `dev-${slug}` : role === 'reviewer' ? `architect-${slug}` : role
 }
 
-/** At most 22 characters, so `architect-<slug>` fits Herdr's 32-character name limit. */
+/** At most 22 characters; effective names reserve ten characters for role, workspace and separator. */
 export const SLUG = /^[a-z][a-z0-9-]{0,21}$/
 
 /** A TOML basic string: JSON's escaping is valid TOML for the characters it emits. */

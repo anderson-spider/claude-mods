@@ -1,3 +1,4 @@
+import { effectiveName } from '../hooks/names'
 import { expect, test } from 'claude-code/testing'
 import { dispatchWorld, id, started, world } from './host'
 import { JEV_MODEL } from '../hooks/effort'
@@ -17,7 +18,7 @@ test('session start registers dispatch and finish with their typed input schemas
 
 test('finish closes and archives through the host and logs only lifecycle metadata', async ($, on) => {
   const uuid = '12345678-1234-1234-1234-123456789abc'
-  const agent = { name: 'analyst', agent: 'codex', workspace_id: 'w1', pane_id: 'worker', agent_status: 'done', agent_session: { kind: 'id', source: 'herdr:codex', value: uuid } }
+  const agent = { name: effectiveName('analyst', 'w1')!, agent: 'codex', workspace_id: 'w1', pane_id: 'worker', agent_status: 'done', agent_session: { kind: 'id', source: 'herdr:codex', value: uuid } }
   let lists = 0
   const fake = fakeRun([
     [['herdr', 'agent', 'get'], ok({ agent })],

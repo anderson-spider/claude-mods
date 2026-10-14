@@ -12,6 +12,7 @@ export type DecisionRecord = {
   ts: string
   role: Role
   agent: string
+  effectiveAgent: string
   model: string
   effort: Effort
   /** True only when this dispatch started the agent with the chosen effort. */
@@ -29,7 +30,7 @@ export type DecisionRecord = {
   durationMs: number
 }
 
-export type FinishRecord = { v: 2; action: 'finish'; ts: string; agent: string; uuid: string | null; closed: boolean; archived: boolean; reason: string | null }
+export type FinishRecord = { v: 2; action: 'finish'; ts: string; agent: string; effectiveAgent: string; uuid: string | null; closed: boolean; archived: boolean; reason: string | null }
 
 /** FNV-1a, 32 bits, as 8 hex digits: matches one task to another without keeping the text. Not a cryptographic hash. */
 export function fnv1a(text: string): string {
@@ -49,6 +50,6 @@ export function decisionPath(home: string, ts: string, agent: string): string {
 /** Writes the record; a failure is one log line and never reaches the caller. */
 export async function saveDecision(io: { write: (path: string, text: string) => Promise<void>; log: (text: string) => void }, home: string | undefined, record: DecisionRecord | FinishRecord): Promise<void> {
   if (!home) return io.log('codex-team: decision not logged (no home)')
-  const path = decisionPath(home, record.ts, record.agent)
+  const path = decisionPath(home, record.ts, record.effectiveAgent)
   await io.write('action' in record ? path.replace(/\.json$/, '.finish.json') : path, `${JSON.stringify(record)}\n`).catch(() => io.log('codex-team: decision not logged (write failed)'))
 }

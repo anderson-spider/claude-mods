@@ -1,7 +1,8 @@
 // Starting or reusing a team agent in Herdr and handing it a task, over an injected command runner. Pure: no host access.
 // After herdr-router (github.com/Qingswe/herdr-router, used with its author's permission): delivery is `confirmed`,
 // `unknown` or `not_sent`, and a prompt is never sent twice.
-import { SLUG } from './roles'
+import { effectiveName, logicalName, taskSlug } from './names'
+export { isTeamName } from './names'
 
 export type RunResult = { exitCode: number; stdout: string; stderr: string; isStdoutTruncated?: boolean; isStderrTruncated?: boolean }
 export type Run = (argv: readonly string[], init?: { timeoutMs?: number }) => Promise<RunResult>
@@ -13,6 +14,7 @@ export type Listed = { name?: string; workspace_id: string; pane_id: string; cwd
 
 export type Delivery = {
   agent: string
+  effectiveAgent: string
   pane?: string
   /** Whether this call started the agent (and its pane). */
   started: boolean
@@ -25,6 +27,7 @@ export type Delivery = {
 
 export type DispatchInput = {
   name: string
+  slug: string
   /** The developer's rule: no other developer may work in the same directory. */
   writes: boolean
   workspace: string
@@ -46,15 +49,6 @@ export const MAX_PROMPT_BYTES = 64 * 1024
 
 const START_TIMEOUT_MS = 60_000
 const PROMPT_TIMEOUT_MS = 15_000
-
-/** The shared roles and named developer, reviewer and analyst task agents. */
-export const isTeamName = (name: string | undefined): boolean => name === 'analyst' || name === 'architect' || taskSlug(name) !== undefined
-
-/** Named task agents share only their own task's tab. */
-function taskSlug(name: string | undefined): string | undefined {
-  const slug = name?.match(/^(?:dev|architect|analyst)-(.+)$/)?.[1]
-  return slug && SLUG.test(slug) ? slug : undefined
-}
 
 const normal = (path: string | undefined) => (path ?? '').replace(/\/+$/, '')
 
@@ -84,15 +78,14 @@ export async function listAgents(run: Run, init?: { timeoutMs?: number }): Promi
     ? (agents as Listed[]) : 'agent list unreadable'
 }
 
-/** Split beside a live peer in the task/home group, or create that group's tab. */
+/** Task peers share a tab; one-shot shared roles get a fresh current task tab without label state. */
 async function newPane(run: Run, input: DispatchInput, team: readonly Listed[]): Promise<string | { reason: string }> {
   const slug = taskSlug(input.name)
-  const anchor = team.find(agent => agent.workspace_id === input.workspace && (slug === undefined
-    ? agent.name === 'analyst' || agent.name === 'architect'
-    : taskSlug(agent.name) === slug))?.pane_id
+  const anchor = slug === undefined ? undefined : team.find(agent => agent.workspace_id === input.workspace
+    && taskSlug(logicalName(agent.name, input.workspace)) === slug)?.pane_id
   const done = anchor
     ? await run(['herdr', 'pane', 'split', '--pane', anchor, '--direction', 'right', '--cwd', input.cwd, '--no-focus'])
-    : await run(['herdr', 'tab', 'create', '--workspace', input.workspace, '--cwd', input.cwd, '--label', slug ? `codex · ${slug}` : 'codex team', '--no-focus'])
+    : await run(['herdr', 'tab', 'create', '--workspace', input.workspace, '--cwd', input.cwd, '--label', `codex - ${slug ?? input.slug}`, '--no-focus'])
   if (done.exitCode !== 0) return { reason: errorOf(done) }
   const pane = anchor ? at(json(done.stdout), 'result', 'pane', 'pane_id') : at(json(done.stdout), 'result', 'root_pane', 'pane_id')
   return typeof pane === 'string' ? pane : { reason: 'no pane id in the answer' }
@@ -104,18 +97,22 @@ async function newPane(run: Run, input: DispatchInput, team: readonly Listed[]):
  * was not seen starting is `unknown`, and is never sent again.
  */
 export async function deliver(run: Run, input: DispatchInput): Promise<Delivery> {
-  let base = { agent: input.name, started: false, existed: false }
+  let name = effectiveName(input.name, input.workspace)
+  let base = { agent: input.name, effectiveAgent: name ?? '', started: false, existed: false }
+  if (!name) return { ...base, status: 'not_sent', reason: 'workspace id or team name cannot fit a Herdr name' }
   if (new TextEncoder().encode(input.prompt).length > MAX_PROMPT_BYTES) return { ...base, status: 'not_sent', reason: 'prompt over 64 KiB' }
 
   let agents = await listAgents(run)
   if (typeof agents === 'string') return { ...base, status: 'not_sent', reason: agents }
-  const shared = agents.find(agent => agent.name === input.name)
-  if (shared && shared.workspace_id !== input.workspace) {
+  const collision = (listed: readonly Listed[]) => listed.some(agent => agent.name === name && agent.workspace_id !== input.workspace)
+  if (collision(agents)) {
     return { ...base, existed: true, status: 'not_sent', reason: `${input.name} is live in another workspace` }
   }
+  const shared = agents.find(agent => agent.name === name && agent.workspace_id === input.workspace)
   if (input.name === 'analyst' && input.analystSlug && ['working', 'blocked'].includes(shared?.agent_status ?? '')) {
     input = { ...input, name: `analyst-${input.analystSlug}` }
-    base = { ...base, agent: input.name }
+    name = effectiveName(input.name, input.workspace)!
+    base = { ...base, agent: input.name, effectiveAgent: name }
   }
   if ((input.name === 'analyst' || input.name === 'architect') && shared && ['idle', 'done'].includes(shared.agent_status ?? '')) {
     if (!input.finishShared) return { ...base, existed: true, status: 'not_sent', reason: 'shared agent finish unavailable' }
@@ -123,21 +120,21 @@ export async function deliver(run: Run, input: DispatchInput): Promise<Delivery>
     if (!finished.closed || !finished.archived) return { ...base, existed: true, status: 'not_sent', reason: `shared agent finish failed (${finished.reason ?? 'not archived'})` }
     agents = await listAgents(run)
     if (typeof agents === 'string') return { ...base, status: 'not_sent', reason: agents }
-    if (agents.some(agent => agent.name === input.name)) return { ...base, existed: true, status: 'not_sent', reason: 'shared agent reappeared after finish' }
+    if (agents.some(agent => agent.name === name)) return { ...base, existed: true, status: 'not_sent', reason: 'shared agent reappeared after finish' }
   }
-  const live = agents.find(agent => agent.name === input.name)
+  const live = agents.find(agent => agent.name === name && agent.workspace_id === input.workspace)
   base.existed = live !== undefined
-  if (live && live.workspace_id !== input.workspace) {
-    return { ...base, status: 'not_sent', reason: `${input.name} is live in another workspace` }
+  if (collision(agents)) {
+    return { ...base, existed: true, status: 'not_sent', reason: `${input.name} is live in another workspace` }
   }
-  const developer = input.reviewDeveloper && agents.find(agent => agent.name === input.reviewDeveloper)
+  const developer = input.reviewDeveloper && agents.find(agent => agent.workspace_id === input.workspace && agent.name === effectiveName(input.reviewDeveloper!, input.workspace))
   if (developer && ['working', 'blocked'].includes(developer.agent_status ?? '')) {
     return { ...base, status: 'not_sent', reason: `${input.reviewDeveloper} is ${developer.agent_status}` }
   }
 
   if (input.writes) {
-    const other = agents.find(agent => agent.name !== input.name && isTeamName(agent.name) && agent.name?.startsWith('dev-') && normal(agent.cwd) === normal(input.cwd))
-    if (other) return { ...base, status: 'not_sent', reason: `${other.name} already works in this directory` }
+    const other = agents.find(agent => agent.workspace_id === input.workspace && agent.name !== name && logicalName(agent.name, input.workspace)?.startsWith('dev-') && normal(agent.cwd) === normal(input.cwd))
+    if (other) return { ...base, status: 'not_sent', reason: `${logicalName(other.name, input.workspace)} already works in this directory` }
     if (live && normal(live.cwd) !== normal(input.cwd)) return { ...base, pane: live.pane_id, status: 'not_sent', reason: `${input.name} works in another directory` }
   }
 
@@ -147,17 +144,17 @@ export async function deliver(run: Run, input: DispatchInput): Promise<Delivery>
     if (live.agent_status === 'working') return { ...base, pane, status: 'not_sent', reason: 'agent busy' }
     if (live.agent_status === 'blocked') return { ...base, pane, status: 'not_sent', reason: 'agent blocked' }
   } else {
-    const made = await newPane(run, input, agents.filter(agent => isTeamName(agent.name)))
+    const made = await newPane(run, input, agents.filter(agent => agent.workspace_id === input.workspace && logicalName(agent.name, input.workspace) !== undefined))
     if (typeof made !== 'string') return { ...base, status: 'not_sent', reason: made.reason }
     pane = made
-    const start = await run(['herdr', 'agent', 'start', input.name, '--kind', 'codex', '--pane', made, '--timeout', String(START_TIMEOUT_MS), '--', ...input.codexArgs], { timeoutMs: START_TIMEOUT_MS + 10_000 })
+    const start = await run(['herdr', 'agent', 'start', name, '--kind', 'codex', '--pane', made, '--timeout', String(START_TIMEOUT_MS), '--', ...input.codexArgs], { timeoutMs: START_TIMEOUT_MS + 10_000 })
     if (start.exitCode !== 0) return { ...base, pane, started: false, status: 'not_sent', reason: errorOf(start) }
     started = true
   }
 
   await input.beforeSend?.(started, input.name)
   const sent = await run(
-    ['herdr', 'agent', 'prompt', input.name, input.prompt, '--wait', '--until', 'working', '--until', 'blocked', '--timeout', String(PROMPT_TIMEOUT_MS)],
+    ['herdr', 'agent', 'prompt', name, input.prompt, '--wait', '--until', 'working', '--until', 'blocked', '--timeout', String(PROMPT_TIMEOUT_MS)],
     { timeoutMs: PROMPT_TIMEOUT_MS + 10_000 },
   ).catch(() => undefined)
   if (!sent) return { ...base, pane, started, status: 'unknown', reason: 'prompt call failed' }

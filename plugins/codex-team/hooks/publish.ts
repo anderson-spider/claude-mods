@@ -3,10 +3,11 @@ import { buildDagr } from './dagr'
 import type { Times } from './dagr'
 import { parsePlan, PlanError } from './plan'
 import { listAgents } from './herdr'
+import { logicalName } from './names'
 import type { Run } from './herdr'
 
 export type PublishIo = {
-  env: () => Promise<{ HERDR_ENV?: string; HERDR_PANE_ID?: string; DAGR_BIN?: string; HOME?: string }>
+  env: () => Promise<{ HERDR_ENV?: string; HERDR_PANE_ID?: string; HERDR_WORKSPACE_ID?: string; DAGR_BIN?: string; HOME?: string }>
   run: Run
   list: (path: string) => Promise<readonly { name: string; kind: string; mtimeMs: number; isLink?: boolean }[]>
   exists: (path: string) => Promise<boolean>
@@ -77,7 +78,8 @@ export async function publishDagr(io: PublishIo, root: string): Promise<void> {
     }
     const agents = await listAgents(io.run)
     if (typeof agents === 'string') throw new Error()
-    const built = buildDagr(plan, times, { now: new Date(await io.now()).toISOString(), agents, pane: env.HERDR_PANE_ID })
+    const built = buildDagr(plan, times, { now: new Date(await io.now()).toISOString(), agents: agents.filter(agent => agent.workspace_id === env.HERDR_WORKSPACE_ID)
+      .map(agent => ({ ...agent, name: logicalName(agent.name, env.HERDR_WORKSPACE_ID!) })), pane: env.HERDR_PANE_ID })
     await io.write(`${out}.tmp`, `${JSON.stringify(built.document, null, 2)}\n`)
     const check = await io.run([binary, 'check', `${out}.tmp`, '--strict', '--json'])
     failure = 'validation failed'
