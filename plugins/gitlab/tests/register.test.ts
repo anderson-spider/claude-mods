@@ -17,18 +17,19 @@ const CALLS: Record<string, Record<string, unknown>> = {
   gitlab_pipeline: { action: 'list', iid: 7 },
   gitlab_job_log: { jobId: 2 },
   gitlab_label: { action: 'list' },
+  gitlab_user: {},
 }
 const call = (name: string) => ({ tool: id(name), ...CALLS[name] }) as never
 const text = (result: { result?: unknown }) => String(result.result)
 
-test('session start registers the five tools, with a guarded merge and no generic API tool', ON, async ($, on) => {
+test('session start registers the six tools, with a guarded merge and no generic API tool', ON, async ($, on) => {
   const { tools } = world(on)
 
   expect(await started($, tools)).toEqual(Object.keys(CALLS))
   const mr = tools.find((t) => t.name === 'gitlab_mr')!
   expect((mr.inputSchema.properties.action as { enum?: string[] }).enum).toContain('merge')
   expect(mr.description).toContain('merge (only when the user asks; iid and head sha required')
-  for (const tool of tools) expect(Object.keys(tool.inputSchema.properties), tool.name).toContain('project')
+  for (const tool of tools.filter((t) => t.name !== 'gitlab_user')) expect(Object.keys(tool.inputSchema.properties), tool.name).toContain('project')
 })
 
 test('each tool keeps its tool and schema descriptions within the prompt budget', ON, async ($, on) => {

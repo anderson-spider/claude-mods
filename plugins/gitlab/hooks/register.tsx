@@ -10,6 +10,7 @@ import { pipeline } from './pipelines'
 import { currentBranch, locate, projectPath, sshHostname, type Git, type Ssh } from './remote'
 import { allOf, type SchemaFor } from './schema'
 import { offText, resolveToken, type TokenIo } from './tokens'
+import { user } from './users'
 
 type Inputs = McpToolInputs
 
@@ -232,6 +233,17 @@ export const register: Register = (on, options) => {
         required: ['action'],
       } satisfies SchemaFor<Inputs['mcp__gitlab__gitlab_label']>,
     })
+    await $.tool.register({
+      name: 'gitlab_user',
+      description: "A user of the current repo's GitLab host: the token's own user by default (or @me), else the one with username.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          username: { type: 'string', description: 'Default: the token owner.' },
+        },
+        required: [],
+      } satisfies SchemaFor<Inputs['mcp__gitlab__gitlab_user']>,
+    })
     return next(e)
   })
 
@@ -240,4 +252,5 @@ export const register: Register = (on, options) => {
   on('tool.call', { tool: 'mcp__gitlab__gitlab_pipeline' }, async ($, e) => run($, pipeline, e, options.tokens)).catch(failed)
   on('tool.call', { tool: 'mcp__gitlab__gitlab_job_log' }, async ($, e) => run($, jobLog, e, options.tokens)).catch(failed)
   on('tool.call', { tool: 'mcp__gitlab__gitlab_label' }, async ($, e) => run($, label, e, options.tokens)).catch(failed)
+  on('tool.call', { tool: 'mcp__gitlab__gitlab_user' }, async ($, e) => run($, user, e, options.tokens)).catch(failed)
 }
