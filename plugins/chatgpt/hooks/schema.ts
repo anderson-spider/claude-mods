@@ -17,14 +17,19 @@ type HasDuplicate<A extends readonly unknown[]> = A extends readonly [infer H, .
 
 /**
  * The JSON Schema of one property, tied to the type `V` of the same property in `McpToolInputs`. A union of string
- * literals needs an `enum` built with `allOf`; a number may be `number` or `integer`; an object fails closed.
+ * literals needs an `enum` built with `allOf`; a number may be `number` or `integer`; a number or boolean literal and
+ * an object fail closed.
  */
 type PropertySchema<V> = { description?: string } & (unknown extends V
   ? unknown
   : [V] extends [boolean]
-    ? { type: 'boolean' }
+    ? boolean extends V
+      ? { type: 'boolean' }
+      : never
     : [V] extends [number]
-      ? { type: 'number' } | { type: 'integer' }
+      ? number extends V
+        ? { type: 'number' } | { type: 'integer' }
+        : never
       : [V] extends [string]
         ? string extends V
           ? { type: 'string' }
@@ -38,7 +43,7 @@ type PropertySchema<V> = { description?: string } & (unknown extends V
  * fails tsc when the schema has a property the type lacks or omits one, when `required` is not exactly the type's
  * required keys (any order; it may be omitted or `[]` when the type has none), when a property's `type` or `items`
  * disagrees, or when a literal union's `enum` is not the `allOf` of exactly its members. A property type the helper
- * does not know (object) fails closed. Descriptions are not checked.
+ * does not know (a number or boolean literal, an object) fails closed. Descriptions are not checked.
  */
 export type SchemaFor<T> = {
   type: 'object'
