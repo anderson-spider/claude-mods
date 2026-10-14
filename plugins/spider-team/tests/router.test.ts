@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { defaultOf, DIFFICULTIES, DURATION_GROUPS, GROUP_OF_DURATION, higher, LADDER, pairOf, POLICY, PRICES, QUESTIONS, ROLE_POLICY, ROUTES, routeOf } from '../hooks/router'
+import { CALIBRATION, defaultOf, DIFFICULTIES, DURATION_GROUPS, GROUP_OF_DURATION, higher, LADDER, pairOf, POLICY, PRICES, QUESTIONS, ROLE_POLICY, ROUTES, routeOf } from '../hooks/router'
 import { EFFORTS, MODELS, ROLES, SPECS } from '../hooks/roles'
 
 const TABLE: Record<(typeof DIFFICULTIES)[number], [string, string, string]> = {
@@ -90,4 +90,9 @@ test('the questions match the levels and the prices are the October 2026 list pr
     sonnet: { input: 2, output: 10, cacheWrite: 2.50, cacheRead: 0.10 },
     opus: { input: 4, output: 20, cacheWrite: 5, cacheRead: 0.20 },
   })
+})
+
+test('the calibration that tags each decision line is 2', () => {
+  // Bump it with any change to QUESTIONS, POLICY or ROUTES; the stats judge Jev only under the current one.
+  expect(CALIBRATION).toBe(2)
 })

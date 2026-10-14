@@ -9,6 +9,9 @@
 // verification on long agentic prompts. Fable is out for lack of data.
 import type { Effort, Model, Pair, Role } from './roles'
 
+// Tags each decision line so the stats compare Jev only under one policy: bump it whenever QUESTIONS, POLICY or the table change.
+export const CALIBRATION = 2
+
 export const DIMENSIONS = ['difficulty', 'duration'] as const
 export type Dimension = (typeof DIMENSIONS)[number]
 /** One request carries both questions; each criterion list is the level scale its answers use. */

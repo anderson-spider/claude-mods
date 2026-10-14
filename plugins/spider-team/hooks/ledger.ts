@@ -2,7 +2,7 @@
 // access. A line holds ids, the roles, the pair, levels, probabilities, counts and a reviewer's verdict word; never the task,
 // the prompt, an answer, a path, a branch name or a key. Every field is projected one by one, so extra input cannot leak in.
 import type { Distributions, Levels, Source } from './effort'
-import { DIFFICULTIES, DIMENSIONS, GROUP_OF_DURATION, LADDER, PRICES } from './router'
+import { CALIBRATION, DIFFICULTIES, DIMENSIONS, GROUP_OF_DURATION, LADDER, PRICES } from './router'
 import type { Dimension, DurationGroup } from './router'
 import { MODELS, ROLES } from './roles'
 import type { Effort, Model, Pair, Role } from './roles'
@@ -16,8 +16,9 @@ export const STATUSES = ['completed', 'error', 'aborted', 'refusal'] as const
 export type Status = (typeof STATUSES)[number]
 export type Tokens = { input: number; output: number; cacheCreation: number; cacheRead: number }
 
+// `calibration` is the router's CALIBRATION when the line was written; lines from before the field existed lack it and are calibration 1.
 export type DecisionLine = {
-  v: 1; kind: 'decision'; ts: string; tool_use_id: string | null; role: Role; source: Source; jevReason: string | null; jevMs: number | null
+  v: 1; kind: 'decision'; calibration?: number; ts: string; tool_use_id: string | null; role: Role; source: Source; jevReason: string | null; jevMs: number | null
   levels: Levels | null; top: Levels | null; dist: Distributions | null; cell: string | null; floorApplied: boolean; model: Model; effort: Effort
 }
 export type OutcomeLine = {
@@ -54,7 +55,7 @@ export function decisionLine({ ts, toolUseId, role, choice }: DecisionInput): De
   const probs = choice.dist
   const dist = probs && Object.fromEntries(DIMENSIONS.map(dim => [dim, distOf(dim, probs[dim])])) as Distributions
   return {
-    v: 1, kind: 'decision', ts, tool_use_id: word(toolUseId, 80), role, source: choice.source, jevReason: word(choice.jevReason, 40), jevMs: maybeCount(choice.jevMs),
+    v: 1, kind: 'decision', calibration: CALIBRATION, ts, tool_use_id: word(toolUseId, 80), role, source: choice.source, jevReason: word(choice.jevReason, 40), jevMs: maybeCount(choice.jevMs),
     levels, top, dist, cell: choice.cell && pairText(choice.cell), floorApplied: choice.floorApplied, model: choice.model, effort: choice.effort,
   }
 }
@@ -180,6 +181,8 @@ export function parseLedger(text: string): Line[] {
 export type Group = { count: number; failures: number; medianMs: number | null; tokens: number; costUsd: number }
 export type Summary = {
   decisions: number; outcomes: number
+  /** Decisions of an older calibration, left out of `confidence` and `durationCheck`. */
+  olderCalibration: number
   byRole: { key: string; group: Group }[]; byPair: { key: string; group: Group }[]
   fallback: { count: number; reasons: Record<string, number> }
   confidence: Record<'difficulty' | 'duration', { count: number; median: number | null; buckets: [number, number, number, number] }>
@@ -197,8 +200,12 @@ const SHORT_MS = 10 * 60_000, MEDIUM_MS = 30 * 60_000
 /** The real duration bucket: under 10 minutes short, 10 to 30 medium, over 30 long. */
 export const bucketOf = (ms: number): DurationGroup => ms < SHORT_MS ? 'short' : ms <= MEDIUM_MS ? 'medium' : 'long'
 
+const calibrationOf = (line: DecisionLine) => line.calibration ?? 1
+
 export function summarize(lines: Line[]): Summary {
   const decisions = lines.filter((l): l is DecisionLine => l.kind === 'decision'), outcomes = lines.filter((l): l is OutcomeLine => l.kind === 'outcome')
+  // Jev's confidence and the duration check judge the current questions and table only; runs and fallbacks count every line.
+  const current = decisions.filter(d => calibrationOf(d) === CALIBRATION)
   const group = (items: OutcomeLine[]): Group => ({
     count: items.length, failures: items.filter(failed).length, medianMs: median(items.flatMap(i => i.durationMs === null ? [] : [i.durationMs])),
     tokens: items.reduce((n, i) => n + (i.tokens ? i.tokens.input + i.tokens.output + i.tokens.cacheCreation + i.tokens.cacheRead : 0), 0),
@@ -214,13 +221,13 @@ export function summarize(lines: Line[]): Summary {
   for (const d of defaults) { const reason = word(d.jevReason, 40) ?? 'unknown'; reasons[reason] = (reasons[reason] ?? 0) + 1 }
   const confidence = {} as Summary['confidence']
   for (const dim of ['difficulty', 'duration'] as const) {
-    const tops = decisions.flatMap(d => d.top && typeof d.top[dim] === 'number' ? [d.top[dim]] : [])
+    const tops = current.flatMap(d => d.top && typeof d.top[dim] === 'number' ? [d.top[dim]] : [])
     const buckets: [number, number, number, number] = [0, 0, 0, 0]
     for (const t of tops) buckets[t < BUCKET_EDGES[0] ? 0 : t < BUCKET_EDGES[1] ? 1 : t < BUCKET_EDGES[2] ? 2 : 3]++
     confidence[dim] = { count: tops.length, median: median(tops), buckets }
   }
   const matrix = Object.fromEntries((['short', 'medium', 'long'] as const).map(p => [p, { short: 0, medium: 0, long: 0 }])) as Summary['durationCheck']['matrix']
-  const byId = new Map(decisions.flatMap(d => d.tool_use_id && d.levels ? [[d.tool_use_id, d] as const] : []))
+  const byId = new Map(current.flatMap(d => d.tool_use_id && d.levels ? [[d.tool_use_id, d] as const] : []))
   let compared = 0, hits = 0
   for (const o of outcomes) {
     const d = o.tool_use_id ? byId.get(o.tool_use_id) : undefined
@@ -230,7 +237,7 @@ export function summarize(lines: Line[]): Summary {
     matrix[predicted][actual]++; compared++; if (predicted === actual) hits++
   }
   return {
-    decisions: decisions.length, outcomes: outcomes.length,
+    decisions: decisions.length, outcomes: outcomes.length, olderCalibration: decisions.length - current.length,
     byRole: keyed(l => l.role, [...ROLES]), byPair: keyed(l => `${l.model}/${l.effort}`, [...LADDER]),
     fallback: { count: defaults.length, reasons }, confidence, durationCheck: { compared, hits, matrix },
   }
@@ -249,6 +256,7 @@ export function formatSummary(s: Summary): string {
   out.push('By final pair', ...(s.byPair.length ? s.byPair.map(r => row(r.key, r.group)) : ['  no outcomes yet']))
   const reasons = Object.entries(s.fallback.reasons).sort(([a], [b]) => a.localeCompare(b)).map(([k, n]) => `${k} ${n}`).join(', ')
   out.push(`Default fallbacks: ${s.fallback.count} of ${s.decisions} (${pct(s.fallback.count, s.decisions)})${reasons ? `: ${reasons}` : ''}`)
+  if (s.olderCalibration) out.push(`Left out of the Jev confidence and the duration check: ${s.olderCalibration} decisions from older calibrations`)
   out.push('Jev top confidence (<0.5 / 0.5-0.7 / 0.7-0.9 / 0.9+)')
   for (const dim of ['difficulty', 'duration'] as const) {
     const c = s.confidence[dim]
