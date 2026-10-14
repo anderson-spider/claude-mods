@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { call, started, world } from './host'
+import { call, drain, inference, spawn, started, step, world } from './host'
 import { SPECS } from '../hooks/roles'
 import { BASE_REF, EMPTY, PINS } from '../hooks/register'
 
@@ -32,6 +32,31 @@ test('without a key the role default applies and pins skip Jev with effort cappe
   expect(received[1]).toMatchObject({ model: 'opus', effort: 'high' })
   await $.tool.call(call('analyst', { prompt: 'Private task @sonnet-high' }) as never)
   expect(received[2]).toMatchObject({ model: 'sonnet', effort: 'high' }); expect(String(received[2]!.prompt).trim()).toBe('Private task')
+  expect(h.requests).toHaveLength(0)
+})
+// Regression: a marketplace install names the provider spider-team@<marketplace>, and an identity check on the
+// spawn and the subagent's turns once refused every default spawn. Run that native path under that provider.
+test('a default spawn of every role from a marketplace install runs natively with its role default', async ($, on) => {
+  const h = world(on), received: Record<string, unknown>[] = [], answers: string[] = []
+  on('turn.step', inference)
+  on('agent.spawn', async (_$, e) => {
+    answers.push((await drain($.turn.step(step(e.tool_use_id, e.model as string, 'medium') as never) as never)).answer)
+    return { agentId: e.tool_use_id, model: e.model }
+  })
+  on('tool.call', { tool: 'Agent' }, async (_$, e) => {
+    const c = e as unknown as { tool_use_id: string; subagent_type: string; model: string }
+    received.push(e as never)
+    await $.agent.spawn(spawn(c.tool_use_id, c.subagent_type, c.model) as never)
+    return { result: 'native answer' } as never
+  })
+  await started($)
+  const roles = ['analyst', 'developer', 'reviewer', 'architect'] as const
+  for (const role of roles) {
+    const answer = await $.tool.call(call(role, { tool_use_id: role }) as never)
+    expect(answer).not.toHaveProperty('deny'); expect(answer).toHaveProperty('result', 'native answer')
+  }
+  expect(answers).toEqual(roles.map(() => 'native answer'))
+  expect(received.map(r => [r.subagent_type, r.model, r.effort])).toEqual(roles.map(role => [`spider-team:${role}`, SPECS[role].model, SPECS[role].effort]))
   expect(h.requests).toHaveLength(0)
 })
 test('invalid pins, empty tasks and a developer without baseRef head are refused before dispatch', async ($, on) => {
