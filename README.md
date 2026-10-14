@@ -8,7 +8,7 @@ Marketplace of [Claude Code](https://claude.com/claude-code) plugins made by and
 | --- | --- |
 | [chatgpt](plugins/chatgpt/README.md) | Lets Claude ask your logged-in ChatGPT, or have it generate an image, in terminal-browser, Claude in Chrome or the Claude desktop app's built-in browser, and saves the result locally. |
 | [codex-computer-use](plugins/codex-computer-use/README.md) | Routes native Mac app control through Codex computer use from the ChatGPT app instead of Claude's own computer use, asking before each new app. |
-| [gitlab](plugins/gitlab/README.md) | Opens, edits, comments on, reviews and (when asked, behind guards) merges GitLab merge requests, lists yours across projects, manages labels and runs and reads pipelines, jobs, artifacts and job errors, picking the host and its token from the git remote. |
+| [gitlab](plugins/gitlab/README.md) | Opens, edits, comments on, reviews and (when asked, behind guards) merges GitLab merge requests, lists yours across projects, lists open review threads, manages labels and runs, waits for and reads pipelines, jobs, artifacts and job errors, picking the host and its token from the git remote. |
 | [session-hud](plugins/session-hud/README.md) | A card above the prompt: model, context and cache; the five-hour and seven-day limits with their pace; the running subagents with their type, model and effort; what the last turn sent and added, edits and errors. |
 | [spider-team](plugins/spider-team/README.md) | Read-only analyst, planner and reviewer subagents; Jev picks each one's model and effort from the task. |
 | [tailscale](plugins/tailscale/README.md) | Lets Claude query and modify your tailnet through the Tailscale API, with the key in the sensitive `apiKey` plugin option. |

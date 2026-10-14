@@ -70,6 +70,18 @@ export function errorExcerpt(lines: string[], match: RegExp): { text: string; ma
   return { text: out.join('\n'), matches }
 }
 
+/** At most this many characters of a failed job's log go into a pipeline wait's answer. */
+export const SNIPPET_CHARS = 3_000
+
+/** A short excerpt of why a job failed: the end of its error excerpt, which holds the last matches and the log's last lines. */
+export function failureSnippet(raw: string): string {
+  const { text } = errorExcerpt(cleanLog(raw), ERROR_LINE)
+  if (text.length <= SNIPPET_CHARS) return text
+  // cut at a line start, so no numbered line is shown half
+  const cut = text.slice(-SNIPPET_CHARS)
+  return `…\n${cut.slice(cut.indexOf('\n') + 1)}`
+}
+
 export async function jobLog(ctx: Ctx, input: LogInput): Promise<string> {
   const job = need(id(input.jobId, 'jobId'), 'gitlab_job_log needs jobId (from gitlab_pipeline jobs).')
   const mode = str(input.mode) ?? 'errors'

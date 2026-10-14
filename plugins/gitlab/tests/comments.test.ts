@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { comment, discussionView } from '../hooks/comments'
+import { comment, discussionView, unresolvedView } from '../hooks/comments'
 import { MR, THEIRS, fakeCtx, paged } from './fake-api'
 
 const thread = (id: string, resolved: boolean) => ({
@@ -127,4 +127,42 @@ test('a discussion id that is not hex, a missing body and an unknown action are 
   await expect(comment(ctx, { action: 'comment', iid: 7 })).rejects.toThrow('This action needs a body.')
   await expect(comment(ctx, { action: 'delete', iid: 7 })).rejects.toThrow('Unknown action: delete.')
   expect(calls).toEqual([])
+})
+
+test('unresolved reads every page and answers each open thread with its place, author, ask and last reply', async () => {
+  const lone = { id: 'cc', notes: [{ id: 5, body: 'Why?', resolvable: true, resolved: false, author: { username: 'cid' } }] }
+  const general = { id: 'dd', notes: [{ id: 6, body: 'LGTM' }] }
+  const { ctx, calls, writes } = fakeCtx({
+    'GET /merge_requests/7/discussions': (call: { query?: { page?: number } }) =>
+      call.query?.page === 1 ? paged([thread('aa', false), thread('bb', true)], 2) : paged([lone, general]),
+  })
+
+  const out = JSON.parse(await comment(ctx, { action: 'unresolved', iid: 7 }))
+
+  expect(out).toEqual({
+    unresolved: [
+      { id: 'aa', at: { path: 'a.ts', line: 4 }, author: 'ann', body: 'Rename this', replies: 1, last: { id: 2, author: 'bob', body: 'Done' } },
+      { id: 'cc', author: 'cid', body: 'Why?', replies: 0 },
+    ],
+  })
+  expect(calls.map((c) => c.query)).toEqual([
+    { per_page: 100, page: 1 },
+    { per_page: 100, page: 2 },
+  ])
+  expect(writes()).toEqual([])
+})
+
+test('unresolved stops after twenty pages and says where to go on, and cuts long bodies', async () => {
+  const { ctx, calls } = fakeCtx({
+    'GET /merge_requests/7/discussions': (call: { query?: { page?: number } }) => paged([thread(`a${call.query?.page}`, false)], (call.query?.page ?? 1) + 1),
+  })
+
+  const out = JSON.parse(await comment(ctx, { action: 'unresolved', iid: 7 }))
+
+  expect(calls).toHaveLength(20)
+  expect(out.unresolved).toHaveLength(20)
+  expect(out.next).toBe(21)
+  expect(out.note).toBe('stopped after 2000 discussions: list from page 21 with unresolvedOnly')
+  const long = { id: 'ee', notes: [{ id: 7, body: 'x'.repeat(2000), resolvable: true, resolved: false }] }
+  expect((unresolvedView(long)?.body as string).length).toBe(1501)
 })

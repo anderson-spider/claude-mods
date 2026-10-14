@@ -18,9 +18,11 @@ const MR_ACTIONS = allOf<Inputs['mcp__gitlab__gitlab_mr']['action']>()(
   'list', 'get', 'status', 'create', 'update', 'diff', 'commits', 'approve', 'unapprove', 'rebase', 'merge',
 )
 const COMMENT_ACTIONS = allOf<Inputs['mcp__gitlab__gitlab_mr_comment']['action']>()(
-  'list', 'comment', 'reply', 'line', 'edit', 'resolve', 'unresolve',
+  'list', 'unresolved', 'comment', 'reply', 'line', 'edit', 'resolve', 'unresolve',
 )
-const PIPELINE_ACTIONS = allOf<Inputs['mcp__gitlab__gitlab_pipeline']['action']>()('list', 'jobs', 'run', 'retry', 'cancel', 'play', 'artifacts')
+const PIPELINE_ACTIONS = allOf<Inputs['mcp__gitlab__gitlab_pipeline']['action']>()(
+  'list', 'jobs', 'wait', 'run', 'retry', 'cancel', 'play', 'artifacts',
+)
 
 const IID = { type: 'integer', description: 'MR !iid. Default: the open MR of the current branch.' } as const
 const NAMES = { type: 'array', items: { type: 'string' } } as const
@@ -85,7 +87,14 @@ async function run(
   const masked = (text: string, isError = false) => reply(text.split(access.token).join('[token]'), isError)
   const foreign = project.toLowerCase() !== where.project.toLowerCase()
   try {
-    return masked(await tool(makeCtx(api, () => currentBranch(git), foreign), input))
+    const clock = {
+      now: () => Date.now(),
+      // a host process waits without spending the hook's own time, as a timer would
+      sleep: async (ms: number) => {
+        await $.process.run(['sleep', String(ms / 1000)], { timeoutMs: ms + 5_000 })
+      },
+    }
+    return masked(await tool(makeCtx(api, () => currentBranch(git), clock, foreign), input))
   } catch (err) {
     if (err instanceof InputError) return masked(err.message, true)
     if (err instanceof GitlabError) return masked(errorText(err, project, host), true)
@@ -147,7 +156,8 @@ export const register: Register = (on, options) => {
     await $.tool.register({
       name: 'gitlab_mr_comment',
       description:
-        'Discussions of a merge request: list (ids, authors, file/line, resolved; next = more pages), comment, reply ' +
+        'Discussions of a merge request: list (ids, authors, file/line, resolved; next = more pages), unresolved (every ' +
+        'open thread: place, author, ask, last reply), comment, reply ' +
         'to a discussion, line (a diff comment on path at line, or oldLine for a removed line), edit a note, resolve, ' +
         'unresolve. Writes on MRs by others are refused without allowOthers.',
       inputSchema: {
@@ -174,7 +184,8 @@ export const register: Register = (on, options) => {
       name: 'gitlab_pipeline',
       description:
         "Pipelines of a merge request (iid, or the current branch's MR) or of a ref: list; jobs of a pipeline " +
-        '(default the latest) with downstream pipelines; run (an MR pipeline, or a ref pipeline with variables); ' +
+        '(default the latest) with downstream pipelines; wait for one to end (at most minutes; failed jobs with log ' +
+        'excerpts); run (an MR pipeline, or a ref pipeline with variables); ' +
         'retry or cancel a job or pipeline; play a manual job; artifacts of a job (names, sizes, URL). ' +
         'Read a failed job with gitlab_job_log.',
       inputSchema: {
@@ -187,6 +198,7 @@ export const register: Register = (on, options) => {
           pipelineId: { type: 'integer' },
           jobId: { type: 'integer' },
           failedOnly: { type: 'boolean', description: 'jobs: only failed jobs.' },
+          minutes: { type: 'integer', description: 'wait: at most this long (default 10, max 30).' },
           variables: { ...NAMES, description: 'run with ref: KEY=value.' },
           page: PAGE,
           perPage: PER_PAGE,

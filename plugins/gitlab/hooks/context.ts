@@ -4,6 +4,9 @@ import type { Api, Page, Query } from './api'
 
 export type User = { id?: number; username?: string }
 
+/** The wall clock and a wait that does not spend the hook's own time (the host runs it as a process). */
+export type Clock = { now: () => number; sleep: (ms: number) => Promise<void> }
+
 export type Ctx = {
   api: Api
   /** The checked-out branch, or undefined on a detached HEAD or when `project` names another project. */
@@ -12,14 +15,16 @@ export type Ctx = {
   me: () => Promise<{ id: number; username?: string }>
   /** `project` named a project other than the remote's, so the current branch says nothing about it. */
   foreign: boolean
+  clock: Clock
 }
 
 /** A context whose `me` reads `/user` at most once; with `foreign`, the branch is never read. */
-export function makeCtx(api: Api, branch: () => Promise<string | undefined>, foreign = false): Ctx {
+export function makeCtx(api: Api, branch: () => Promise<string | undefined>, clock: Clock, foreign = false): Ctx {
   let me: Promise<{ id: number; username?: string }> | undefined
   return {
     api,
     foreign,
+    clock,
     branch: foreign ? async () => undefined : branch,
     me: () =>
       (me ??= (async () => {
