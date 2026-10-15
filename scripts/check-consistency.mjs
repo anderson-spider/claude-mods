@@ -16,6 +16,10 @@ const SHARED_FILES = [
   ['tests/schema-types.ts', 'tests/schema-types.ts.tmpl'],
 ]
 
+// A plugin rule points at the plugin's AGENTS.md instead of importing it: Claude Code resolves an `@` import in a
+// `paths` rule when the session starts, so an import would load every plugin's AGENTS.md before any file is touched.
+export const ruleLine = name => `Read \`plugins/${name}/AGENTS.md\` before changing files under \`plugins/${name}/\`.`
+
 const readText = path => readFileSync(path, 'utf8')
 const readJson = path => JSON.parse(readText(path))
 const listDir = (path, keep) => (existsSync(path) ? readdirSync(path, { withFileTypes: true }).filter(keep).map(entry => entry.name) : [])
@@ -217,7 +221,9 @@ function checkPlugin(root, entry, marketplace, rootDocs, errors) {
   if (!existsSync(rule)) fail(`.claude/rules/${name}.md is missing`)
   else {
     const text = readText(rule)
-    if (!text.split('\n').includes(`@../../plugins/${name}/AGENTS.md`)) fail(`.claude/rules/${name}.md does not import @../../plugins/${name}/AGENTS.md`)
+    const lines = text.split(/\r?\n/)
+    if (!lines.includes(ruleLine(name))) fail(`.claude/rules/${name}.md does not have the line "${ruleLine(name)}"`)
+    if (lines.some(line => line.startsWith('@'))) fail(`.claude/rules/${name}.md has an @ import, which loads at session start; point at the file instead`)
     if (!rulePaths(text).includes(`plugins/${name}/**`)) fail(`.claude/rules/${name}.md paths frontmatter does not list "plugins/${name}/**"`)
   }
 

@@ -27,11 +27,11 @@ function fixture(t) {
     "plugins/mid/tsconfig.json": json({ extends: "./.claude-plugin/types/tsconfig.json", compilerOptions: { noEmit: true } }),
     "plugins/mid/README.md": "# mid\n",
     "plugins/mid/AGENTS.md": "# mid\n",
-    ".claude/rules/mid.md": '---\npaths:\n  - "plugins/mid/**"\n---\n\n@../../plugins/mid/AGENTS.md\n',
+    ".claude/rules/mid.md": '---\npaths:\n  - "plugins/mid/**"\n---\n\nRead `plugins/mid/AGENTS.md` before changing files under `plugins/mid/`.\n',
     "AGENTS.md": [
       "## Where to look",
       "",
-      "- Plugin work: read `plugins/<name>/AGENTS.md`; `.claude/rules/<name>.md` imports it.",
+      "- Plugin work: read `plugins/<name>/AGENTS.md`; `.claude/rules/<name>.md` points at it.",
       "- Mid things: `plugins/mid/AGENTS.md`.",
       "- Release checks: `/release-plugin <plugin>`.",
       "",
@@ -87,7 +87,7 @@ test("the entries land in sorted places with the format of the existing ones", (
     [
       "## Where to look",
       "",
-      "- Plugin work: read `plugins/<name>/AGENTS.md`; `.claude/rules/<name>.md` imports it.",
+      "- Plugin work: read `plugins/<name>/AGENTS.md`; `.claude/rules/<name>.md` points at it.",
       "- aardvark: `plugins/aardvark/AGENTS.md`.",
       "- Mid things: `plugins/mid/AGENTS.md`.",
       "- zeta: `plugins/zeta/AGENTS.md`.",
@@ -114,7 +114,7 @@ test("the entries land in sorted places with the format of the existing ones", (
   );
   assert.equal(
     readFileSync(join(root, ".claude/rules/zeta.md"), "utf8"),
-    '---\npaths:\n  - "plugins/zeta/**"\n---\n\n@../../plugins/zeta/AGENTS.md\n',
+    '---\npaths:\n  - "plugins/zeta/**"\n---\n\nRead `plugins/zeta/AGENTS.md` before changing files under `plugins/zeta/`.\n',
   );
 });
 

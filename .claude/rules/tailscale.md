@@ -3,4 +3,4 @@ paths:
   - "plugins/tailscale/**"
 ---
 
-@../../plugins/tailscale/AGENTS.md
+Read `plugins/tailscale/AGENTS.md` before changing files under `plugins/tailscale/`.

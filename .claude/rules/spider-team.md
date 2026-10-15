@@ -3,4 +3,4 @@ paths:
   - "plugins/spider-team/**"
 ---
 
-@../../plugins/spider-team/AGENTS.md
+Read `plugins/spider-team/AGENTS.md` before changing files under `plugins/spider-team/`.
