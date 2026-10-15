@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Hook, Register, Timer } from 'claude-code'
 import type { SessionHudCard } from '../types'
-import { EMPTY, agentBegan, agentEnded, agentStepped, began, cacheUsed, compactedNow, completed, measured, reconciled, spawned, stepped, switched, timed, tooled, touchedCache, windowed } from './card'
+import { EMPTY, agentBegan, agentEnded, agentStepped, agentUsed, began, cacheUsed, compactedNow, completed, measured, reconciled, spawned, stepped, switched, timed, tooled, touchedCache, windowed } from './card'
 import type { Measured } from './card'
 import { paint, paletteOf } from './palette'
 import type { Palette } from './palette'
@@ -118,7 +118,8 @@ export const register: Register = on => {
         await update($, card, current => cacheUsed(current, time))
       })
     }
-    else void observe($, async () => { await update($, card, current => agentStepped(current, e.agentId, typeof answer.usage?.model === 'string' ? answer.usage.model : e.model, e.effort)) })
+    // Every agent step counts toward the agents' total, a step of an agent the card does not show included.
+    else void observe($, async () => { await update($, card, current => agentUsed(agentStepped(current, e.agentId, typeof answer.usage?.model === 'string' ? answer.usage.model : e.model, e.effort), answer.usage)) })
     return answer
   })
   on('turn.complete', {}, ($, e, next) => {

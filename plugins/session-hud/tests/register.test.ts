@@ -196,6 +196,28 @@ test('a subagent step answered by another model leaves the main session model, e
   expect(done).not.toContain('705')
 })
 
+test('the tokens every agent step processed add up on the head line, after the agent ends, and main-session steps add none', async ($, on) => {
+  world(on)
+  await start($)
+  await flush()
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  await step($)
+  await flush()
+  expect(await drawnOf($)).not.toContain('agents used')
+  await $.agent.spawn({ prompt: 'task', model: 'claude-haiku-4-5' } as never)
+  await $.turn.start({ text: '', turnId: 's1', agentId: 'agent-1' } as never)
+  await step($, 'agent-1', 'claude-haiku-4-5')
+  await step($, 'agent-1', 'claude-haiku-4-5')
+  await flush()
+  expect(await drawnOf($)).toContain('1 agent: Haiku 4.5 · mediumagents used 3k tokens')
+  await $.turn.complete({ turnId: 's1', agentId: 'agent-1', answer: '', durationMs: 1_000, isAborted: false, reason: 'answer' } as never)
+  await step($, 'agent-7', 'claude-sonnet-4-5')
+  await flush()
+  const after = await drawnOf($)
+  expect(after).not.toContain('1 agent:')
+  expect(after).toContain('agents used 5k tokens')
+})
+
 test('a refused spawn passes its deny unchanged and tracks nothing', async ($, on) => {
   world(on, { denySpawn: 'no agents here' })
   await start($)

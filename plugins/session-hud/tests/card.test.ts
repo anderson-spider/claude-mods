@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { EMPTY, HISTORY, agentBegan, agentEnded, agentStepped, began, cacheUsed, compactedNow, completed, measured, reconciled, spawned, stepped, switched, timed, tooled, touchedCache, windowed } from '../hooks/card'
+import { EMPTY, HISTORY, agentBegan, agentEnded, agentStepped, agentUsed, began, cacheUsed, compactedNow, completed, measured, reconciled, spawned, stepped, switched, timed, tooled, touchedCache, windowed } from '../hooks/card'
 
 test('a measurement keeps the context and the readable windows, and nothing of a cost', () => {
   const card = measured(EMPTY, { context: { tokens: 10, window: 100, percent: 10 }, cost: { usd: 1.5 },
@@ -120,4 +120,13 @@ test('a compaction marks the next turn to join the history, once, and waits thro
   expect(marked.history).toEqual([{ before: 10, after: 11, output: 1, compacted: true }])
   expect(marked.compacted).toBeUndefined()
   expect(completed(stepped(began(marked), 'high', usage), 1).history[1]).toEqual({ before: 10, after: 11, output: 1 })
+})
+
+test('every agent step adds what its request processed to the agents total, and usage that is not a count adds nothing', () => {
+  const usage = { model: 'claude-haiku-4-5', input_tokens: 1_000, output_tokens: 700, cache_read_input_tokens: 300, cache_creation_input_tokens: 0 }
+  const once = agentUsed(EMPTY, usage)
+  expect(once).toEqual({ ...EMPTY, agentTokens: 2_000 })
+  expect(agentUsed(once, { ...usage, output_tokens: undefined })).toMatchObject({ agentTokens: 3_300 })
+  expect(agentUsed(once, null)).toBe(once)
+  for (const bad of [-1, Number.NaN, '5']) expect(agentUsed(once, { ...usage, input_tokens: bad } as never)).toBe(once)
 })

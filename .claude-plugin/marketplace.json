@@ -25,7 +25,7 @@
     {
       "name": "session-hud",
       "source": "./plugins/session-hud",
-      "description": "A card above the prompt: model, context and cache; the five-hour and seven-day limits with their pace; the running subagents with their type, model and effort; what the last turn sent and added, edits and errors."
+      "description": "A card above the prompt: model, context and cache; the five-hour and seven-day limits with their pace; the running subagents with their type, model and effort, and the tokens they used; what the last turn sent and added, edits and errors."
     },
     {
       "name": "spider-team",

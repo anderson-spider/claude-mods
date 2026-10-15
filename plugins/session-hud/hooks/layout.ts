@@ -3,7 +3,7 @@
 import type { SessionHudCard, SessionHudTurn } from '../types'
 import type { Palette } from './palette'
 import { paceOf, span } from './usage'
-import { LABELS, agentCells, cacheCells, contextOf, finite, headCells, seg, shownLimits, tokens, turnCells } from './view'
+import { LABELS, agentCells, agentTokenCells, cacheCells, contextOf, finite, headCells, seg, shownLimits, tokens, turnCells } from './view'
 import type { Row, Segment, Style } from './view'
 
 /** A drawing on a line: an SVG document of a fixed size; the terminal, which has no `Svg`, draws none. */
@@ -111,12 +111,12 @@ function limitPieces(limit: SessionHudCard['limits'][number], now: number, palet
   return pieces
 }
 
-/** The card: head and agents; the context with the last turn in figures; the cache; the windows; the turn. */
+/** The card: head, agents and what they used; the context with the last turn in figures; the cache; the windows; the turn. */
 export function layoutView({ card, now, working = false, palette, draw }: LayoutSnapshot): CardLines {
   const lines: Group[][] = []
   const head = headCells(card, now, working)
-  const agents = agentCells(card)
-  if (head.length || agents.length) lines.push([...(head.length ? [head] : []), ...(agents.length ? ['spacer' as const, agents] : [])])
+  const right = [agentCells(card), agentTokenCells(card)].filter(group => group.length)
+  if (head.length || right.length) lines.push([...(head.length ? [head] : []), ...(right.length ? ['spacer' as const, ...right] : [])])
 
   const context = contextOf(card)
   const turns = (Array.isArray(card.history) ? card.history : []).filter(valid)

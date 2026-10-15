@@ -123,6 +123,15 @@ export const agentBegan = (card: SessionHudCard, agentId: unknown): SessionHudCa
 export const agentStepped = (card: SessionHudCard, agentId: unknown, model: unknown, effort?: unknown): SessionHudCard =>
   agentsOf(card).some(agent => agent.id === agentId) ? tracked(card, agentId, { model, effort }) : card
 
+/** A subagent or teammate step, tracked or not: the tokens its request processed (input, cache read and written, output) join the session's agent total; usage with a part that is not a count adds nothing. */
+export function agentUsed(card: SessionHudCard, usage: StepUsage | null): SessionHudCard {
+  if (!usage) return card
+  const parts = [usage.input_tokens, usage.cache_read_input_tokens, usage.cache_creation_input_tokens, usage.output_tokens ?? 0]
+  if (!parts.every(count)) return card
+  const total = (count(card.agentTokens) ? card.agentTokens : 0) + parts.reduce((a, b) => a + b, 0)
+  return { ...card, agentTokens: total }
+}
+
 /** An agent's turn ended: it no longer runs (a teammate goes idle until its next turn). */
 export function agentEnded(card: SessionHudCard, agentId: unknown): SessionHudCard {
   const agents = agentsOf(card)

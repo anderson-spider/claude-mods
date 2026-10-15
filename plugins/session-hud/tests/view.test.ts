@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import type { SessionHudCard } from '../types'
-import { agentCells, cacheCells, contextOf, headCells, modelName, shownLimits, turnCells } from '../hooks/view'
+import { agentCells, agentTokenCells, cacheCells, contextOf, headCells, modelName, shownLimits, turnCells } from '../hooks/view'
 import type { Row } from '../hooks/view'
 
 const now = Date.parse('2026-10-13T12:00:00Z')
@@ -64,4 +64,10 @@ test('an agent whose model or type is unknown or not a name is drawn as ?, and a
   const drawn = text(agentCells({ ...full, agents: [{ id: 'a' }, { id: 'b', model: '/Users/me/secret' }, { id: 'c', model: 'claude-sonnet-4-5' }] }))
   expect(drawn).toBe('3 agents: ? ×2, Sonnet 4.5')
   expect(text(agentCells({ ...full, agents: [{ id: 'a', type: '/Users/me secret', model: 'claude-sonnet-4-5', effort: 'loud' }] }))).toBe('1 agent: ? Sonnet 4.5')
+})
+
+test('what the agents used is a token total, left out before any usage and never drawn from a malformed figure', () => {
+  expect(text(agentTokenCells({ ...full, agentTokens: 1_234_567 }))).toBe('agents used 1.2M tokens')
+  expect(text(agentTokenCells({ ...full, agentTokens: 42_000 }))).toBe('agents used 42k tokens')
+  for (const bad of [undefined, 0, -5, Number.NaN, '9000']) expect(agentTokenCells({ ...full, agentTokens: bad } as never)).toEqual([])
 })
