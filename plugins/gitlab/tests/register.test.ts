@@ -164,10 +164,10 @@ test('an answer that echoes the token, error or not, reaches the model with the 
 })
 
 test('project switches to another project on the same host with the same token, and a URL or another host is refused unsent', ON, async ($, on) => {
-  const other = 'https://gitlab.example.com/api/v4/projects/luizalabs%2Fmobile%2Fmegazord'
+  const other = 'https://gitlab.example.com/api/v4/projects/group%2Fsub%2Fapp'
   const { sent } = world(on, { api: { [`${other}/merge_requests/3`]: { text: MR_JSON } } })
 
-  const ok = await $.tool.call({ tool: MR, action: 'get', iid: 3, project: 'luizalabs/mobile/megazord' } as never)
+  const ok = await $.tool.call({ tool: MR, action: 'get', iid: 3, project: 'group/sub/app' } as never)
   expect(ok.isError).toBeUndefined()
   expect(sent.map((s) => [s.url, s.headers?.['PRIVATE-TOKEN']])).toEqual([[`${other}/merge_requests/3`, WORK]])
 

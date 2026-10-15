@@ -178,12 +178,12 @@ test('list filters by people, labels, search and scope, resolves @me, and says w
 })
 
 test('list with allProjects reads the global endpoint, names each project, and widens the scope for a people filter', async () => {
-  const { ctx, calls } = fakeCtx({ 'GET ROOT/merge_requests': [{ ...MR, references: { full: 'luizalabs/app!7' } }] })
+  const { ctx, calls } = fakeCtx({ 'GET ROOT/merge_requests': [{ ...MR, references: { full: 'team/app!7' } }] })
 
   const mine = JSON.parse(await mr(ctx, { action: 'list', allProjects: true }))
   await mr(ctx, { action: 'list', allProjects: true, reviewer: '@me' })
 
-  expect(mine).toEqual({ mergeRequests: [expect.objectContaining({ iid: 7, ref: 'luizalabs/app!7' })] })
+  expect(mine).toEqual({ mergeRequests: [expect.objectContaining({ iid: 7, ref: 'team/app!7' })] })
   expect(calls[0]?.query?.scope).toBeUndefined()
   expect(calls.at(-1)?.query).toMatchObject({ scope: 'all', reviewer_username: 'ann' })
   expect(calls.every((c) => c.path.startsWith('ROOT'))).toBe(true)

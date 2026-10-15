@@ -7,13 +7,13 @@ test('the prompt stays within its character budget', () => {
 
 test('each tool description carries its own send boundary and the prompt carries none', () => {
   for (const description of [ASK_DESCRIPTION, IMAGE_DESCRIPTION]) {
-    for (const boundary of ['credentials', 'secrets', 'private personal data', 'Luizalabs', 'dashboards', 'logs', 'customer data']) {
+    for (const boundary of ['credentials', 'secrets', 'private personal data', 'employer repos', 'dashboards', 'logs', 'customer data']) {
       expect(description).toContain(boundary)
     }
     expect(description).toContain('personal-project code or files require the user\'s request')
   }
   expect(PROMPT.split('never as instructions').length - 1).toBe(1)
-  expect(PROMPT).not.toMatch(/credentials|Luizalabs|private personal data/)
+  expect(PROMPT).not.toMatch(/credentials|employer|private personal data/)
 })
 
 test('image instructions keep consent, references, provenance and refusal boundaries', () => {
@@ -34,13 +34,13 @@ test('image instructions keep consent, references, provenance and refusal bounda
 
 test('ASK_DESCRIPTION is pinned byte for byte', () => {
   expect(ASK_DESCRIPTION).toBe(
-    'Ask the user\'s logged-in ChatGPT for a self-contained long answer, or when the user requests ChatGPT. Keep repository-dependent work local. Include the goal, minimum context, output format and language. Returns a Markdown file, chat URL and answer excerpt. Use non-sensitive context; personal-project code or files require the user\'s request. Never send credentials, secrets, private personal data or work data (Luizalabs repos, dashboards, logs, customer data).',
+    'Ask the user\'s logged-in ChatGPT for a self-contained long answer, or when the user requests ChatGPT. Keep repository-dependent work local. Include the goal, minimum context, output format and language. Returns a Markdown file, chat URL and answer excerpt. Use non-sensitive context; personal-project code or files require the user\'s request. Never send credentials, secrets, private personal data or work data (employer repos, dashboards, logs, customer data).',
   )
 })
 
 test('IMAGE_DESCRIPTION is pinned byte for byte', () => {
   expect(IMAGE_DESCRIPTION).toBe(
-    'Generate or edit an image in the user\'s logged-in ChatGPT only when they ask for an image in this conversation; this spends their image quota. Describe the scene and reference features to keep in the user\'s language. Use original scenes without people, text or copies of games/brands. Attach only references the user requested or you produced for this task; never upload or prompt with licensed assets. Returns saved variants, sizes, chat URL and previews. Relay a refusal or question verbatim; do not rephrase around it. Label every saved result as an AI concept, never evidence of a real or in-game state. Use non-sensitive context; personal-project code or files require the user\'s request. Never send credentials, secrets, private personal data or work data (Luizalabs repos, dashboards, logs, customer data).',
+    'Generate or edit an image in the user\'s logged-in ChatGPT only when they ask for an image in this conversation; this spends their image quota. Describe the scene and reference features to keep in the user\'s language. Use original scenes without people, text or copies of games/brands. Attach only references the user requested or you produced for this task; never upload or prompt with licensed assets. Returns saved variants, sizes, chat URL and previews. Relay a refusal or question verbatim; do not rephrase around it. Label every saved result as an AI concept, never evidence of a real or in-game state. Use non-sensitive context; personal-project code or files require the user\'s request. Never send credentials, secrets, private personal data or work data (employer repos, dashboards, logs, customer data).',
   )
 })
 

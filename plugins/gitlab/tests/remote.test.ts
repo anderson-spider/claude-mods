@@ -48,7 +48,7 @@ test('currentBranch is undefined on a detached HEAD or a failure', async () => {
 })
 
 test('projectPath takes a group/project path and refuses URLs, hosts and dot segments', () => {
-  expect(projectPath(' luizalabs/plataforma-mobile/megazord/ ')).toBe('luizalabs/plataforma-mobile/megazord')
+  expect(projectPath(' group/sub-group/app/ ')).toBe('group/sub-group/app')
   for (const bad of ['app', 'https://gitlab.com/a/b', 'gitlab.com:a/b', 'git@h:a/b', 'a/../b', 'a/b?x=1', 'a b/c', '']) {
     expect(projectPath(bad), bad).toBeUndefined()
   }
