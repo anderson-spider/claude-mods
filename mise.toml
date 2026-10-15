@@ -42,7 +42,9 @@ run = '''
 set -euo pipefail
 echo "==> scripts and hooks"
 node --test scripts/*.test.mjs
-for p in plugins/*/; do echo "==> $(basename "$p")"; claude plugin test "${p%/}"; done
+for p in plugins/*/; do
+  if [ -f "${p}hooks/hooks.json" ]; then echo "==> $(basename "$p")"; claude plugin test "${p%/}"; else echo "==> $(basename "$p"): skipped, skills only"; fi
+done
 cua_node=/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node
 if [ -x "$cua_node" ]; then
   echo "==> codex-computer-use helper"
@@ -94,9 +96,11 @@ set -euo pipefail
 name=${usage_name:-}
 if [ -n "$name" ]; then
   [[ "$name" =~ ^[a-z][a-z0-9-]*$ && -d "plugins/$name" ]] || { echo "no such plugin: $name" >&2; exit 1; }
+  [ -f "plugins/$name/tsconfig.json" ] || { echo "$name ships skills only and has no typings" >&2; exit 1; }
   dirs=("plugins/$name/")
 else
-  dirs=(plugins/*/)
+  dirs=()
+  for d in plugins/*/; do [ -f "${d}tsconfig.json" ] && dirs+=("$d"); done
 fi
 args=()
 for d in "${dirs[@]}"; do args+=(--plugin-dir "${d%/}"); done
