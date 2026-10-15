@@ -29,7 +29,7 @@ Requires Claude Code v2.1.287 or later. The repository is checked with v2.1.300 
 /plugin install tailscale@spider-claude-mods
 ```
 
-From a local copy: `/plugin marketplace add ~/dev/personal/claude-mods`.
+From a local copy: `/plugin marketplace add /path/to/claude-mods`.
 
 ### One step on a Mac
 
@@ -48,6 +48,8 @@ From the main checkout, `mise run update:all` pulls `main` (fast-forward only, c
 ## Contributing
 
 Rules for changing the code, the done definition and the project skills are in [AGENTS.md](AGENTS.md). Setup: `mise install`.
+
+Pull requests from forks run CI without secrets and are merged only after a maintainer reads the whole diff: the code runs on every installed copy. Use placeholders, never real hosts, project names, paths or tokens, in code, tests and examples. Report vulnerabilities privately as [SECURITY.md](SECURITY.md) describes.
 
 Load a plugin from its folder so edits reload automatically, with `claude --plugin-dir plugins/<name>` or in `~/.claude/settings.json`:
 

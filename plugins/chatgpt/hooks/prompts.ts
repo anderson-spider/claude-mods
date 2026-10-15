@@ -1,6 +1,6 @@
 const BOUNDARIES =
   'Use non-sensitive context; personal-project code or files require the user\'s request. ' +
-  'Never send credentials, secrets, private personal data or work data (Luizalabs repos, dashboards, logs, customer data).'
+  'Never send credentials, secrets, private personal data or work data (employer repos, dashboards, logs, customer data).'
 
 export const ASK_DESCRIPTION =
   'Ask the user\'s logged-in ChatGPT for a self-contained long answer, or when the user requests ChatGPT. ' +
