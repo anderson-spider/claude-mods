@@ -71,6 +71,8 @@ jobs:
         run: |
           failed=()
           for source in $(node -p "require('./.claude-plugin/marketplace.json').plugins.map(p => p.source).join(' ')"); do
+            # A skills-only plugin has no hooks module for `claude plugin test` to load.
+            [ -f "$source/hooks/hooks.json" ] || { echo "==> test $source: skipped, skills only"; continue; }
             echo "==> test $source"
             claude plugin test "$source" || failed+=("$source")
           done
@@ -89,13 +91,16 @@ jobs:
         working-directory: ${{ runner.temp }}/scaffold
         run: |
           node -e 'require("fs").writeFileSync(require("os").homedir() + "/.claude.json", JSON.stringify({ hasCompletedOnboarding: true, theme: "dark", projects: { [process.cwd()]: { hasTrustDialogAccepted: true } } }))'
+          # Only plugins with a tsconfig.json get typings; a skills-only plugin has no TypeScript.
+          typed=()
+          for d in plugins/*/; do [ -f "${d}tsconfig.json" ] && typed+=("$d"); done
           args=()
-          for d in plugins/*/; do args+=(--plugin-dir "${d%/}"); done
-          ready() { for d in plugins/*/; do [ -f "${d}.claude-plugin/types/tsconfig.json" ] || return 1; done; }
+          for d in "${typed[@]}"; do args+=(--plugin-dir "${d%/}"); done
+          ready() { for d in "${typed[@]}"; do [ -f "${d}.claude-plugin/types/tsconfig.json" ] || return 1; done; }
           { for _ in $(seq 120); do ready && break; sleep 1; done; sleep 2; printf '/exit\r'; } | script -q -e -c "claude ${args[*]}" /dev/null >/dev/null 2>&1 || true
           ready || { echo "Claude Code did not write the typings" >&2; exit 1; }
           failed=()
-          for d in plugins/*/; do
+          for d in "${typed[@]}"; do
             echo "==> tsc ${d%/}"
             tsc -p "${d}tsconfig.json" || failed+=("${d%/}")
           done

@@ -1,0 +1,9 @@
+{
+  "name": "git-cleanup",
+  "version": "0.1.0",
+  "description": "List stale worktrees and merged or orphaned branches in any git repository, then delete only what you approve.",
+  "author": {
+    "name": "anderson-spider"
+  },
+  "license": "MIT"
+}

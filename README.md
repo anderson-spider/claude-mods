@@ -8,6 +8,7 @@ Marketplace of [Claude Code](https://claude.com/claude-code) plugins made by and
 | --- | --- |
 | [chatgpt](plugins/chatgpt/README.md) | Lets Claude ask your logged-in ChatGPT, or have it generate an image, in terminal-browser, Claude in Chrome or the Claude desktop app's built-in browser, and saves the result locally. |
 | [codex-computer-use](plugins/codex-computer-use/README.md) | Routes native Mac app control through Codex computer use from the ChatGPT app instead of Claude's own computer use, asking before each new app. |
+| [git-cleanup](plugins/git-cleanup/README.md) | A skill that lists stale worktrees and merged or orphaned branches of any repository and deletes only what you approve, never protected branches. |
 | [gitlab](plugins/gitlab/README.md) | Opens, edits, comments on, reviews and (when asked, behind guards) merges GitLab merge requests, lists yours across projects, lists open review threads, manages labels and runs, waits for and reads pipelines, jobs, artifacts and job errors, picking the host and its token from the git remote. |
 | [session-hud](plugins/session-hud/README.md) | A card above the prompt: model, context and cache; the five-hour and seven-day limits with their pace; the running subagents with their type, model and effort, and the tokens they used; what the last turn sent and added, edits and errors. |
 | [spider-team](plugins/spider-team/README.md) | Read-only analyst, planner and reviewer subagents; Jev picks each one's model and effort from the task. |
@@ -23,6 +24,7 @@ Requires Claude Code v2.1.287 or later. The repository is checked with v2.1.300 
 /plugin marketplace add anderson-spider/claude-mods
 /plugin install chatgpt@spider-claude-mods
 /plugin install codex-computer-use@spider-claude-mods
+/plugin install git-cleanup@spider-claude-mods
 /plugin install gitlab@spider-claude-mods
 /plugin install session-hud@spider-claude-mods
 /plugin install spider-team@spider-claude-mods

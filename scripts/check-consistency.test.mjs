@@ -497,6 +497,26 @@ for (const { name, change, expected } of [
   });
 }
 
+/** Turns alpha into a plugin that ships skills only: no hooks module and no typings. */
+const skillsOnly = (files) => {
+  delete files["plugins/alpha/hooks/hooks.json"];
+  delete files["plugins/alpha/tsconfig.json"];
+};
+
+test("a plugin with neither hooks nor tsconfig.json passes when it ships a skill", (t) => {
+  assert.deepEqual(problems(t, skillsOnly), []);
+});
+
+test("a plugin with neither hooks nor tsconfig.json and no skill is reported", (t) => {
+  assert.deepEqual(
+    problems(t, (files) => {
+      skillsOnly(files);
+      delete files["plugins/alpha/skills/s/SKILL.md"];
+    }),
+    ["alpha: has no hooks/hooks.json and no skill under skills/"],
+  );
+});
+
 test("hook wiring accepts the matcher alternatives in any order and a hook beside others", (t) => {
   const found = problems(
     t,

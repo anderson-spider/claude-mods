@@ -192,7 +192,11 @@ function checkPlugin(root, entry, marketplace, rootDocs, errors) {
   if (!/^\d+\.\d+\.\d+$/.test(plugin.version ?? '')) fail(`invalid version "${plugin.version}"`)
   if (typeof plugin.description !== 'string' || !plugin.description.trim()) fail('plugin.json has no description')
   else if (plugin.description !== entry.description) fail('marketplace.json description differs from plugin.json (copy the plugin.json text)')
-  if (!existsSync(join(dir, 'hooks/hooks.json'))) fail('hooks/hooks.json is missing')
+  // A plugin with neither hooks/ nor tsconfig.json ships skills only: it needs a skill, and no hooks module or typings.
+  const skillsOnly = !existsSync(join(dir, 'hooks')) && !existsSync(join(dir, 'tsconfig.json'))
+  if (skillsOnly) {
+    if (!listDir(join(dir, 'skills'), e => e.isDirectory()).length) fail('has no hooks/hooks.json and no skill under skills/')
+  } else if (!existsSync(join(dir, 'hooks/hooks.json'))) fail('hooks/hooks.json is missing')
   else {
     try {
       readJson(join(dir, 'hooks/hooks.json'))
@@ -202,8 +206,8 @@ function checkPlugin(root, entry, marketplace, rootDocs, errors) {
   }
 
   // The plugin's TypeScript checks against the typings Claude Code generates when it loads the plugin.
-  if (!existsSync(join(dir, 'tsconfig.json'))) fail('tsconfig.json is missing')
-  else {
+  if (!skillsOnly && !existsSync(join(dir, 'tsconfig.json'))) fail('tsconfig.json is missing')
+  else if (!skillsOnly) {
     try {
       const config = readJson(join(dir, 'tsconfig.json'))
       if (config.extends !== TYPES_TSCONFIG) fail(`tsconfig.json must extend "${TYPES_TSCONFIG}"`)

@@ -18,6 +18,11 @@
       "description": "Control native Mac apps through Codex, with per-app approval and /codex-cu on|off."
     },
     {
+      "name": "git-cleanup",
+      "source": "./plugins/git-cleanup",
+      "description": "List stale worktrees and merged or orphaned branches in any git repository, then delete only what you approve."
+    },
+    {
       "name": "gitlab",
       "source": "./plugins/gitlab",
       "description": "Work on GitLab merge requests and pipelines of the current repository, picking the host and token from its git remote."
