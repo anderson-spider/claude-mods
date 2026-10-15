@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { BACKENDS, OWN_CALLS, ownCallAllowed } from '../hooks/backends'
+import { BACKENDS, OWN_CALLS, backendsFor, ownCallAllowed } from '../hooks/backends'
 import { BUILTIN, BUILTIN_SERVER } from '../hooks/builtin-browser'
 import { CHROME, CHROME_SERVER } from '../hooks/chrome-browser'
 import { ask } from '../hooks/ask'
@@ -41,6 +41,11 @@ test('the backends are tried in a fixed order, and every MCP one has a row in th
   const servers = BACKENDS.flatMap(backend => ('server' in backend ? [backend.server] : []))
   expect(servers).toEqual(MCP.map(row => row.server))
   expect(OWN_CALLS.map(call => call.prefix)).toEqual(MCP.map(row => `mcp__${row.server}__`))
+})
+
+test('inside the desktop app the built-in browser comes first; any other entrypoint keeps the fixed order', () => {
+  expect(backendsFor('claude-desktop').map(backend => backend.name)).toEqual([BUILTIN, TERMINAL_BROWSER, CHROME])
+  for (const entrypoint of ['cli', 'sdk-ts', undefined]) expect(backendsFor(entrypoint)).toEqual(BACKENDS)
 })
 
 test("every backend's setup advice is the one its row pins, in the order the chooser strings them together", async () => {
