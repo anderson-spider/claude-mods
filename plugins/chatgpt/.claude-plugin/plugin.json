@@ -1,10 +1,11 @@
 {
   "name": "chatgpt",
-  "version": "0.9.17",
+  "version": "0.9.18",
   "description": "Ask ChatGPT or generate requested images in a logged-in browser; save results locally.",
   "author": {
     "name": "anderson-spider"
   },
+  "license": "MIT",
   "userConfig": {
     "foregroundMinutes": {
       "type": "number",

@@ -70,7 +70,7 @@ export function scaffoldPlugin(root, name, description) {
 
   const values = { name, id: name.replaceAll('-', '_'), description: summary }
   const created = {
-    [join('plugins', name, '.claude-plugin/plugin.json')]: `${JSON.stringify({ name, version: '0.1.0', description: summary, author: { name: 'anderson-spider' } }, null, 2)}\n`,
+    [join('plugins', name, '.claude-plugin/plugin.json')]: `${JSON.stringify({ name, version: '0.1.0', description: summary, author: { name: 'anderson-spider' }, license: 'MIT' }, null, 2)}\n`,
     [join('.claude/rules', `${name}.md`)]: `---\npaths:\n  - "plugins/${name}/**"\n---\n\n@../../plugins/${name}/AGENTS.md\n`,
   }
   for (const file of filesUnder(TEMPLATE_DIR)) {

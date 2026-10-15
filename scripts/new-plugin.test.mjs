@@ -124,7 +124,7 @@ test("the plugin files carry the name, its tool id and the description, with no 
   const dir = join(root, "plugins/my-tool");
   const plugin = JSON.parse(readFileSync(join(dir, ".claude-plugin/plugin.json"), "utf8"));
 
-  assert.deepEqual(plugin, { name: "my-tool", version: "0.1.0", description: "Does my thing.", author: { name: "anderson-spider" } });
+  assert.deepEqual(plugin, { name: "my-tool", version: "0.1.0", description: "Does my thing.", author: { name: "anderson-spider" }, license: "MIT" });
   assert.deepEqual(JSON.parse(readFileSync(join(dir, "hooks/hooks.json"), "utf8")), { modules: ["./register.tsx"] });
   assert.equal(JSON.parse(readFileSync(join(dir, "tsconfig.json"), "utf8")).extends, "./.claude-plugin/types/tsconfig.json");
   const register = readFileSync(join(dir, "hooks/register.tsx"), "utf8");

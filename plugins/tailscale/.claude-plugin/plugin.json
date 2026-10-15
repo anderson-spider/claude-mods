@@ -1,10 +1,11 @@
 {
   "name": "tailscale",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "description": "Read or change your tailnet through the Tailscale API using the apiKey plugin option.",
   "author": {
     "name": "anderson-spider"
   },
+  "license": "MIT",
   "userConfig": {
     "apiKey": {
       "type": "string",

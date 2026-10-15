@@ -68,3 +68,7 @@ Load a plugin from its folder so edits reload automatically, with `claude --plug
 `/reload-plugins` and `claude plugin details` report `0 hooks` for every plugin here, because they count only `hooks.json` command hooks and these plugins ship hooks modules. `claude plugin validate plugins/<name>` lists a module's events and `$` calls; a module that fails to load leaves a line in `claude --debug`.
 
 Unit tests run against host fakes: a Claude Code update can break a plugin without a test failing here. Use `/live-test <plugin>` for real-session checks.
+
+## License
+
+[MIT](LICENSE).
