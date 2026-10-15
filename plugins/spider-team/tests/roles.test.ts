@@ -34,3 +34,10 @@ test('the reviewer judges the lead checkout from the merge base, with uncommitte
 test('only exact role names are recognized, and the retired developer and architect are not Spider roles', () => {
   for (const type of ['fork', 'analyst', 'other:analyst', 'spider-team:planner-extra', 'spider-team:developer', 'spider-team:architect', undefined]) expect(roleOf(type)).toBeUndefined()
 })
+test('every role stays in the brief\'s scope and hands back the outcome, evidence, limitations, checks and next steps without narrative', () => {
+  for (const role of ROLES) {
+    const prompt = SPECS[role].prompt
+    expect(prompt).toContain('when the brief is unclear or the task is out of reach, say so instead of guessing')
+    expect(prompt).toContain('the outcome first, then findings with file:line evidence, limitations and open questions, the checks you ran and the next steps the lead needs. No preamble, process narrative or repeated context.')
+  }
+})

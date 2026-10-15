@@ -330,7 +330,7 @@ export function formatSummary(s: Summary): string {
     const t = s.byPredictedTime[level]
     out.push(`  ${shortLabel(label).padEnd(14)} n=${t?.count ?? 0} median=${span(t?.medianMs ?? null)}`)
   })
-  out.push("Jev vs role default (same tokens priced at each model; an effort change alone prices as no difference)")
+  out.push("Jev vs role default (a price comparison, not measured savings: the same tokens priced at each model; an effort change alone prices as no difference)")
   for (const { key, versus: v } of s.vsDefault) out.push(`  ${key.padEnd(10)} n=${v.count} below=${v.below} same=${v.same} above=${v.above} routed=$${v.routedUsd.toFixed(4)} default=$${v.defaultUsd.toFixed(4)} ${saving(v)}`)
   return out.join('\n')
 }
