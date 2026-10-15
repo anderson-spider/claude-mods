@@ -23,6 +23,13 @@ jobs:
       - name: Plugins with changed shipped files bumped their version
         if: github.event_name == 'pull_request'
         run: node scripts/check-version-bump.mjs "origin/${{ github.base_ref }}"
+      # A squash merge copies commit trailers into main, so the PR's commits, title and body carry no AI attribution.
+      - name: No AI attribution in the PR
+        if: github.event_name == 'pull_request'
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: node scripts/check-attribution.mjs "origin/${{ github.base_ref }}"
       - name: Script and hook tests
         run: node --test scripts/*.test.mjs
       - name: codex-computer-use helper tests

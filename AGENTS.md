@@ -49,7 +49,7 @@ Project skills (`.claude/skills/`):
 
 ## CI
 
-`.github/workflows/ci.yml` runs the consistency and bump checks, the script and helper tests, and `validate --strict` plus `test` for every marketplace plugin and a scaffolded `ci-sample`, then generates the typings in a session without login and runs `tsc` on each plugin and the sample, with the Claude Code CLI at `CLAUDE_CLI_PIN`. That pin must equal the version the root README says the repository is checked with. The same job runs again on the latest CLI as `plugins-latest`, which may fail without failing the run: it shows what a newer CLI breaks before the pin moves. The required checks are `checks` and `plugins`.
+`.github/workflows/ci.yml` runs the consistency and bump checks, the attribution check (`scripts/check-attribution.mjs`: no AI co-author, session or "Generated with" line in the PR's commits, title or body), the script and helper tests, and `validate --strict` plus `test` for every marketplace plugin and a scaffolded `ci-sample`, then generates the typings in a session without login and runs `tsc` on each plugin and the sample, with the Claude Code CLI at `CLAUDE_CLI_PIN`. That pin must equal the version the root README says the repository is checked with. The same job runs again on the latest CLI as `plugins-latest`, which may fail without failing the run: it shows what a newer CLI breaks before the pin moves. The required checks are `checks` and `plugins`.
 
 ## Conventions
 
