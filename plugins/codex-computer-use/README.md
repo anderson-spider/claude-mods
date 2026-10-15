@@ -43,3 +43,7 @@ Each Claude session/subagent gets a persistent Codex session. App ownership last
 Plugin tests use the test host and injected clocks; helper tests use fake dependencies, an isolated installation and a fake MCP server. They cover routing, approvals/deadlines, ownership, protocol contracts and installer flags without touching installed run/state directories. No end-to-end run of the real desktop-control runtime is established by these tests.
 
 For the module map and check commands, see [AGENTS.md](AGENTS.md).
+
+## Credits
+
+Inspired by [claude-mods-computer-use-threads](https://github.com/promptadvisers/claude-mods-computer-use-threads) by Prompt Advisers (MIT). The idea of routing Claude's desktop control through Codex computer use, the `/codex-cu` command and the guidance this plugin gives Claude for driving Codex follow that project; the code here was written separately.

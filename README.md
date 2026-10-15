@@ -73,6 +73,13 @@ Load a plugin from its folder so edits reload automatically, with `claude --plug
 
 Unit tests run against host fakes: a Claude Code update can break a plugin without a test failing here. Use `/live-test <plugin>` for real-session checks.
 
+## Acknowledgments
+
+These projects inspired plugins in this marketplace:
+
+- [claude-mods-computer-use-threads](https://github.com/promptadvisers/claude-mods-computer-use-threads) by Prompt Advisers: the Codex computer-use bridge behind [codex-computer-use](plugins/codex-computer-use/README.md).
+- [JevFlow](https://github.com/Parth1811/JevFlow) by Parth Patil: the Jev outcome judge behind [spider-team](plugins/spider-team/README.md).
+
 ## License
 
 [MIT](LICENSE).
