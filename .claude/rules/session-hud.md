@@ -3,4 +3,4 @@ paths:
   - "plugins/session-hud/**"
 ---
 
-@../../plugins/session-hud/AGENTS.md
+Read `plugins/session-hud/AGENTS.md` before changing files under `plugins/session-hud/`.

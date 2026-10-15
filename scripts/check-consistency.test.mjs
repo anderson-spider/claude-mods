@@ -5,9 +5,10 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { checkRepo, citedTests, declaredTests } from "./check-consistency.mjs";
+import { checkRepo, citedTests, declaredTests, ruleLine } from "./check-consistency.mjs";
 
 const RULE_FRONT = '---\npaths:\n  - "plugins/alpha/**"\n---\n\n';
+const POINTER = ruleLine("alpha");
 const IMPORT = "@../../plugins/alpha/AGENTS.md";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -48,7 +49,7 @@ function baseFiles() {
     ].join("\n"),
     "plugins/alpha/tests/beta.test.ts": "test.skip('only in beta', () => {})\n",
     "plugins/alpha/skills/s/SKILL.md": "---\nname: s\ndescription: A skill.\n---\nBody\n",
-    ".claude/rules/alpha.md": `${RULE_FRONT}${IMPORT}\n`,
+    ".claude/rules/alpha.md": `${RULE_FRONT}${POINTER}\n`,
     "AGENTS.md": "# AGENTS.md\n\n- Alpha things: `plugins/alpha/AGENTS.md`.\n",
     "README.md": [
       "| Plugin | What it does |",
@@ -159,24 +160,24 @@ for (const { name, change, expected } of [
   },
   { name: "rule file missing", change: edit(".claude/rules/alpha.md", () => undefined), expected: ["alpha: .claude/rules/alpha.md is missing"] },
   {
-    name: "rule that imports another file",
-    change: edit(".claude/rules/alpha.md", () => `${RULE_FRONT}@../../plugins/beta/AGENTS.md\n`),
-    expected: ["alpha: .claude/rules/alpha.md does not import @../../plugins/alpha/AGENTS.md"],
+    name: "rule that points at another plugin",
+    change: edit(".claude/rules/alpha.md", () => `${RULE_FRONT}${ruleLine("beta")}\n`),
+    expected: ["alpha: .claude/rules/alpha.md does not have the line \"Read `plugins/alpha/AGENTS.md` before changing files under `plugins/alpha/`.\""],
   },
   {
-    name: "rule that only mentions the import inside a sentence",
-    change: edit(".claude/rules/alpha.md", () => `${RULE_FRONT}Read ${IMPORT} first.\n`),
-    expected: ["alpha: .claude/rules/alpha.md does not import @../../plugins/alpha/AGENTS.md"],
+    name: "rule that imports the AGENTS.md, which loads it at session start",
+    change: edit(".claude/rules/alpha.md", () => `${RULE_FRONT}${IMPORT}\n`),
+    expected: ["alpha: .claude/rules/alpha.md does not have the line \"Read `plugins/alpha/AGENTS.md` before changing files under `plugins/alpha/`.\"", "alpha: .claude/rules/alpha.md has an @ import, which loads at session start; point at the file instead"],
   },
   {
-    name: "rule whose import has a prefix",
-    change: edit(".claude/rules/alpha.md", () => `${RULE_FRONT}- ${IMPORT}\n`),
-    expected: ["alpha: .claude/rules/alpha.md does not import @../../plugins/alpha/AGENTS.md"],
+    name: "rule that imports the AGENTS.md beside the pointer",
+    change: edit(".claude/rules/alpha.md", () => `${RULE_FRONT}${POINTER}\n${IMPORT}\n`),
+    expected: ["alpha: .claude/rules/alpha.md has an @ import, which loads at session start; point at the file instead"],
   },
   {
-    name: "rule whose import names a longer path",
-    change: edit(".claude/rules/alpha.md", () => `${RULE_FRONT}${IMPORT}.old\n`),
-    expected: ["alpha: .claude/rules/alpha.md does not import @../../plugins/alpha/AGENTS.md"],
+    name: "rule whose pointer has a prefix",
+    change: edit(".claude/rules/alpha.md", () => `${RULE_FRONT}- ${POINTER}\n`),
+    expected: ["alpha: .claude/rules/alpha.md does not have the line \"Read `plugins/alpha/AGENTS.md` before changing files under `plugins/alpha/`.\""],
   },
   {
     name: "rule copied from another plugin: its paths frontmatter lists that plugin",
@@ -185,7 +186,7 @@ for (const { name, change, expected } of [
   },
   {
     name: "rule without paths frontmatter",
-    change: edit(".claude/rules/alpha.md", () => `${IMPORT}\n`),
+    change: edit(".claude/rules/alpha.md", () => `${POINTER}\n`),
     expected: ['alpha: .claude/rules/alpha.md paths frontmatter does not list "plugins/alpha/**"'],
   },
   {
@@ -195,7 +196,7 @@ for (const { name, change, expected } of [
   },
   {
     name: "rule whose plugin glob sits in the body, not the frontmatter",
-    change: edit(".claude/rules/alpha.md", () => `---\npaths:\n  - "other/**"\n---\n\n- "plugins/alpha/**"\n${IMPORT}\n`),
+    change: edit(".claude/rules/alpha.md", () => `---\npaths:\n  - "other/**"\n---\n\n- "plugins/alpha/**"\n${POINTER}\n`),
     expected: ['alpha: .claude/rules/alpha.md paths frontmatter does not list "plugins/alpha/**"'],
   },
   {
@@ -733,7 +734,7 @@ for (const { name, change, expected } of [
   },
   {
     name: "a rule whose plugin glob sits under another frontmatter key",
-    change: edit(".claude/rules/alpha.md", () => `---\nglobs:\n  - "plugins/alpha/**"\npaths:\n  - "other/**"\n---\n\n${IMPORT}\n`),
+    change: edit(".claude/rules/alpha.md", () => `---\nglobs:\n  - "plugins/alpha/**"\npaths:\n  - "other/**"\n---\n\n${POINTER}\n`),
     expected: ['alpha: .claude/rules/alpha.md paths frontmatter does not list "plugins/alpha/**"'],
   },
   {
@@ -809,7 +810,7 @@ test("the pin is found in any workflow file, and a repository with no workflow, 
 
 test("a rule can list its plugin glob in the one-line forms or among others", (t) => {
   for (const front of ['paths: "plugins/alpha/**"', 'paths: ["x/**", "plugins/alpha/**"]', 'paths:\n  - "x/**"\n  - plugins/alpha/**\nother: 1']) {
-    assert.deepEqual(problems(t, edit(".claude/rules/alpha.md", () => `---\n${front}\n---\n\n${IMPORT}\n`)), [], front);
+    assert.deepEqual(problems(t, edit(".claude/rules/alpha.md", () => `---\n${front}\n---\n\n${POINTER}\n`)), [], front);
   }
 });
 

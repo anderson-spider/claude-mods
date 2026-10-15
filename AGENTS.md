@@ -4,7 +4,7 @@ Claude Code **function hooks mods** marketplace. User-facing setup is in [README
 
 ## Where to look
 
-- Plugin work: read `plugins/<name>/AGENTS.md`; `.claude/rules/<name>.md` imports it for that subtree. Keep plugin guidance there: a plugin-root `CLAUDE.md` draws a validation warning.
+- Plugin work: read `plugins/<name>/AGENTS.md`; `.claude/rules/<name>.md` tells a session to read it once a file in that subtree is touched (a pointer, not an `@` import: Claude Code resolves imports in a `paths` rule at session start). Keep plugin guidance there: a plugin-root `CLAUDE.md` draws a validation warning.
 - ChatGPT browser tools: `plugins/chatgpt/AGENTS.md`.
 - Native Mac app control through Codex: `plugins/codex-computer-use/AGENTS.md`.
 - GitLab merge requests and pipelines of the current repository: `plugins/gitlab/AGENTS.md`.
@@ -44,7 +44,7 @@ Project skills (`.claude/skills/`):
 ## Adding or removing a plugin
 
 - `mise run plugin:new <name> [description]` scaffolds from `scripts/plugin-template/` and generates the typings. Names are lowercase words joined by hyphens, 26 characters at most (so `mcp__<name>__<tool>` fits in 64). The scaffold has a sample tool, pure logic with its test and the host fake `tests/host.ts`: replace the sample, fill the texts, run the done checks. Template changes keep `scripts/new-plugin.test.mjs` passing.
-- `node scripts/check-consistency.mjs` is the checklist: manifest and marketplace entry with the same description, `tsconfig.json`, `AGENTS.md`, `README.md`, `.claude/rules/<name>.md` (importing the plugin's AGENTS.md, `plugins/<name>/**` in `paths`), the backticked `plugins/<name>/AGENTS.md` under "Where to look" here, the root README table row and install line, and the template copies of `hooks/schema.ts` and `tests/schema-types.ts`. It fails on orphans (a plugin directory or rule file with no marketplace entry; other rules go in a subdirectory of `.claude/rules/`).
+- `node scripts/check-consistency.mjs` is the checklist: manifest and marketplace entry with the same description, `tsconfig.json`, `AGENTS.md`, `README.md`, `.claude/rules/<name>.md` (the line pointing at the plugin's AGENTS.md and no `@` import, `plugins/<name>/**` in `paths`), the backticked `plugins/<name>/AGENTS.md` under "Where to look" here, the root README table row and install line, and the template copies of `hooks/schema.ts` and `tests/schema-types.ts`. It fails on orphans (a plugin directory or rule file with no marketplace entry; other rules go in a subdirectory of `.claude/rules/`).
 - Cite tests in a plugin AGENTS.md as `` `tests/<file>.test.ts` (`name`, `name`) `` or `` `tests/<file>.test.ts`: `name` `` (same for `helper/test/<file>.test.mjs`); the check fails on a missing file or undeclared name. A backticked support file under `tests/` or `helper/test/` must exist.
 
 ## CI

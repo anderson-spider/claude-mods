@@ -3,4 +3,4 @@ paths:
   - "plugins/gitlab/**"
 ---
 
-@../../plugins/gitlab/AGENTS.md
+Read `plugins/gitlab/AGENTS.md` before changing files under `plugins/gitlab/`.

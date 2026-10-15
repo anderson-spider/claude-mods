@@ -3,4 +3,4 @@ paths:
   - "plugins/chatgpt/**"
 ---
 
-@../../plugins/chatgpt/AGENTS.md
+Read `plugins/chatgpt/AGENTS.md` before changing files under `plugins/chatgpt/`.
