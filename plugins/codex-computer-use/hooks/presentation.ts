@@ -43,7 +43,7 @@ export const toAnswer = (reply: CallResult): ToolAnswer => {
     case 'unreachable':
       return {
         result: withNotes(
-          'The codex-cu helper is not running and could not be started. Check that the ChatGPT app with Codex computer use is installed, then run the plugin\'s helper/install.sh (once installed, also at ~/.claude/mcp/codex-cu/install.sh). Do not fall back to another desktop-control route.',
+          `The codex-cu helper is not running and could not be started. Tell the person to check that the ChatGPT app with Codex computer use is installed, then to install or restart the helper with: ${INSTALL_HELPER}. Do not run it yourself and do not fall back to another desktop-control route.`,
           [reply.message],
         ),
         isError: true,
@@ -68,12 +68,17 @@ export const forgetText = (app: string, reply: ForgetReply | Failure) => {
   ].join('\n')
 }
 
+/** The one-step helper install (also restarts it), as the plugin README gives it. */
+export const INSTALL_HELPER =
+  'curl -fsSL https://raw.githubusercontent.com/anderson-spider/claude-mods/main/scripts/bootstrap.sh | sh -s -- --only codex-computer-use'
+
 /** What `/codex-cu status` tells the person. */
 export const statusReport = (enabled: boolean, reply: StatusReply | Failure): string => {
   const lines = [`Route: ${enabled ? 'Codex computer use (on)' : "Claude's own computer use (off)"}`]
 
   if (reply.status === 'unreachable' || reply.status === 'error') {
     lines.push(`Helper: not reachable (${reply.message})`)
+    if (reply.status === 'unreachable') lines.push(`Install or restart it: ${INSTALL_HELPER}`)
   } else {
     lines.push(`Helper: ${reply.version ?? '?'} running, ${reply.callers?.length ?? 0} Codex session(s)`)
     lines.push(`Auto-approve: ${reply.settings?.autoApprove === true ? 'on (no questions)' : 'off (asks first)'}`)

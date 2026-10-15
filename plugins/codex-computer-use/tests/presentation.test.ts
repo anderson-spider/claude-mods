@@ -5,6 +5,7 @@ import {
   ASK_HINT,
   ASK_LABELS,
   BRIDGE_OFF,
+  INSTALL_HELPER,
   TOO_MANY_ROUNDS,
   approvalWaitText,
   askBody,
@@ -29,6 +30,13 @@ test('toAnswer words busy, denied and ok replies', () => {
   expect(toAnswer({ status: 'ok', isError: false, content: [{ type: 'text', text: '100' }], notes: [] })).toEqual({ result: '100' })
 })
 
+test('toAnswer gives the install command when the helper is not running', () => {
+  const answer = toAnswer({ status: 'unreachable', message: 'no socket' })
+  expect(answer.isError).toBe(true)
+  expect(answer.result).toContain(INSTALL_HELPER)
+  expect(answer.result).toContain('no socket')
+})
+
 test('forgetText words a forgotten app, a failure, and an ok reply that names no app', () => {
   expect(forgetText('Grapher', { status: 'ok', bundleId: 'com.x', helper: true, codex: 'removed' })).toBe([
     'codex-cu: Grapher (com.x) is no longer always allowed; its next use asks again.',
@@ -39,9 +47,9 @@ test('forgetText words a forgotten app, a failure, and an ok reply that names no
   expect(forgetText('X', { status: 'ok' } as never)).toBe('codex-cu: could not forget X: {"status":"ok"}')
 })
 
-test('statusReport preserves unreachable and error reports', () => {
+test('statusReport preserves unreachable and error reports, with the install command only when nothing listens', () => {
   expect(statusReport(true, { status: 'unreachable', message: 'no socket' })).toBe(
-    'Route: Codex computer use (on)\nHelper: not reachable (no socket)',
+    `Route: Codex computer use (on)\nHelper: not reachable (no socket)\nInstall or restart it: ${INSTALL_HELPER}`,
   )
   expect(statusReport(false, { status: 'error', message: 'bad reply' })).toBe(
     'Route: Claude\'s own computer use (off)\nHelper: not reachable (bad reply)',
