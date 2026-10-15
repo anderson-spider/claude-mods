@@ -1,10 +1,11 @@
 {
   "name": "gitlab",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Work on GitLab merge requests and pipelines of the current repository, picking the host and token from its git remote.",
   "author": {
     "name": "anderson-spider"
   },
+  "license": "MIT",
   "userConfig": {
     "tokens": {
       "type": "string",
