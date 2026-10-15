@@ -44,6 +44,8 @@ export type SessionHudCard = {
   errors: number
   /** The subagents and teammates running a turn now, in the order they were seen; empty when none runs. */
   agents: SessionHudAgent[]
+  /** The tokens every subagent and teammate request processed since the plugin loaded (input, cache read and written, output); absent before one reported usage. */
+  agentTokens?: number
 }
 
 declare module 'claude-code' {

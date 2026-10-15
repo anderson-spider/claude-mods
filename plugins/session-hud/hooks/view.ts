@@ -81,6 +81,10 @@ export function agentCells(card: SessionHudCard): Row {
     ...joined(sorted.map(([, { row, n }]) => [...row, ...(n > 1 ? [seg(` ×${n}`, 'secondary')] : [])]), ', ')]
 }
 
+/** What the subagents and teammates processed since the plugin loaded: `agents used 1.2M tokens`; empty before any reported usage. */
+export const agentTokenCells = (card: SessionHudCard): Row =>
+  finite(card.agentTokens) && card.agentTokens > 0 ? [seg('agents used ', 'secondary'), seg(tokens(card.agentTokens), 'strong'), seg(' tokens', 'secondary')] : []
+
 /** The last turn, turn count, edits and errors: `last turn 5s · 4 turns · 2 edits · 1 error`. */
 export function turnCells(card: SessionHudCard): Row {
   const parts: string[] = []
