@@ -13,8 +13,8 @@ export type Effort = typeof EFFORTS[number]
 export type Pair = { model: Model; effort: Effort }
 const readers = ['Read', 'Grep', 'Glob', 'LSP', 'Skill']
 const noDelegation = ['Agent', 'SendMessage', 'ToolSearch', 'EnterWorktree', 'ExitWorktree']
-const handback = 'End with a short answer for the lead: the outcome first, then findings with file:line evidence, open questions and checks. No preamble or repeated context.'
-const common = 'Follow the project instructions and the authorized task. Work independently within this role. ' + handback
+const handback = 'End with a short answer for the lead: the outcome first, then findings with file:line evidence, limitations and open questions, the checks you ran and the next steps the lead needs. No preamble, process narrative or repeated context.'
+const common = 'Follow the project instructions and the authorized task. Work independently within this role and the brief\'s scope; when the brief is unclear or the task is out of reach, say so instead of guessing. ' + handback
 export const SPECS = {
   analyst: { name: 'analyst', description: 'Investigate code and evidence without changing anything.', ...defaultOf('analyst'), tools: readers, disallowedTools: ['Write', 'Edit', 'NotebookEdit', 'Bash', ...noDelegation], prompt: 'Investigate without implementing. Cite file:line evidence, uncertainties and open questions. ' + common },
   planner: { name: 'planner', description: 'Plan a change as Markdown steps and acceptance checks without changing anything.', ...defaultOf('planner'), tools: readers, disallowedTools: ['Write', 'Edit', 'NotebookEdit', 'Bash', ...noDelegation], prompt: 'Plan the smallest sufficient change without implementing it or writing any file. Answer with one Markdown plan: goal and scope; ordered steps, each with the files it touches; the invariants to preserve, including authentication, schema and API contracts; an acceptance checklist of commands to run with their expected results; and assumptions or blockers. Name only paths, commands and host features you verified, and mark anything you could not verify. ' + common },

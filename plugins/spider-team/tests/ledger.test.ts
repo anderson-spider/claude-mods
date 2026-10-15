@@ -270,7 +270,7 @@ test('the routed pairs are priced against the role default on the same tokens, p
     { key: 'total', versus: { count: 5, below: 2, same: 1, above: 2, routedUsd: 12.1, defaultUsd: 12.2 } },
   ])
   expect(formatSummary(s)).toContain([
-    'Jev vs role default (same tokens priced at each model; an effort change alone prices as no difference)',
+    'Jev vs role default (a price comparison, not measured savings: the same tokens priced at each model; an effort change alone prices as no difference)',
     '  analyst    n=2 below=1 same=0 above=1 routed=$2.1000 default=$0.2000 extra=$1.9000 (950%)',
     '  planner    n=1 below=0 same=0 above=1 routed=$4.0000 default=$4.0000 saved=$0.0000 (0%)',
     '  reviewer   n=2 below=1 same=1 above=0 routed=$6.0000 default=$8.0000 saved=$2.0000 (25%)',
