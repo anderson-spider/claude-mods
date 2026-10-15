@@ -1,6 +1,6 @@
 // Local routing telemetry. Pure: record builders, the summarizer for /spider-team-stats and an append over injected file
 // access. A line holds ids, the roles, the pair, levels, probabilities, counts, a reviewer's verdict word and the judge's
-// three probabilities; never the task, the prompt, an answer, a path, a branch name or a key. Every field is projected one
+// three probabilities, and the length in characters of the brief and of the answer; never the task, the prompt, an answer, a path, a branch name or a key. Every field is projected one
 // by one, so extra input cannot leak in.
 import type { Distributions, Levels, Source } from './effort'
 import { CALIBRATION, defaultOf, DIFFICULTIES, DIMENSIONS, GROUP_OF_DURATION, JUDGE_FLAGS, judgedShort, LADDER, PRICES, QUESTIONS } from './router'
@@ -21,6 +21,8 @@ export type Tokens = { input: number; output: number; cacheCreation: number; cac
 export type DecisionLine = {
   v: 1; kind: 'decision'; calibration?: number; ts: string; tool_use_id: string | null; role: LedgerRole; source: Source; jevReason: string | null; jevMs: number | null
   levels: Levels | null; top: Levels | null; dist: Distributions | null; cell: string | null; floorApplied: boolean; model: Model; effort: Effort
+  /** The brief's length in characters, never its text; lines from before the field lack it. */
+  briefChars?: number | null
 }
 export type OutcomeLine = {
   v: 1; kind: 'outcome'; ts: string; tool_use_id: string | null; role: LedgerRole; model: Model; effort: Effort; mode: 'foreground' | 'background'
@@ -28,6 +30,8 @@ export type OutcomeLine = {
   tokens: Tokens | null; costUsd: number | null; verdict: Verdict | null
   /** The outcome judge's probabilities, two decimals; null when not judged. Lines from before the field lack it. */
   judge?: Judge | null
+  /** The final answer's length in characters, what the lead reads back, never its text; null when the run did not complete. Lines from before the field lack it. */
+  answerChars?: number | null
 }
 export type Line = DecisionLine | OutcomeLine
 
@@ -63,8 +67,8 @@ export function judgeOf(value: unknown): Judge | null {
   return out
 }
 
-export type DecisionInput = { ts: string; toolUseId: string | undefined; role: Role; choice: { source: Source; jevReason: string | null; jevMs: number | null; levels: Levels | null; top: Levels | null; dist: Distributions | null; cell: Pair | null; floorApplied: boolean; model: Model; effort: Effort } }
-export function decisionLine({ ts, toolUseId, role, choice }: DecisionInput): DecisionLine {
+export type DecisionInput = { ts: string; toolUseId: string | undefined; role: Role; briefChars?: number; choice: { source: Source; jevReason: string | null; jevMs: number | null; levels: Levels | null; top: Levels | null; dist: Distributions | null; cell: Pair | null; floorApplied: boolean; model: Model; effort: Effort } }
+export function decisionLine({ ts, toolUseId, role, briefChars, choice }: DecisionInput): DecisionLine {
   const levels = choice.levels && { difficulty: choice.levels.difficulty, duration: choice.levels.duration }
   const top = choice.top && { difficulty: round(choice.top.difficulty, 2), duration: round(choice.top.duration, 2) }
   const probs = choice.dist
@@ -72,6 +76,7 @@ export function decisionLine({ ts, toolUseId, role, choice }: DecisionInput): De
   return {
     v: 1, kind: 'decision', calibration: CALIBRATION, ts, tool_use_id: word(toolUseId, 80), role, source: choice.source, jevReason: word(choice.jevReason, 40), jevMs: maybeCount(choice.jevMs),
     levels, top, dist, cell: choice.cell && pairText(choice.cell), floorApplied: choice.floorApplied, model: choice.model, effort: choice.effort,
+    briefChars: maybeCount(briefChars),
   }
 }
 
@@ -106,6 +111,7 @@ function outcome(ctx: Context, ts: string, mode: OutcomeLine['mode'], fields: { 
     resolvedModel, modelsUsed: Array.isArray(fields.modelsUsed) ? fields.modelsUsed.length : null, status: fields.status, aborted: fields.aborted,
     durationMs: maybeCount(fields.durationMs), tokens: fields.tokens, costUsd: fields.tokens && costOf(modelFamily(resolvedModel) ?? ctx.pair.model, fields.tokens),
     verdict: ctx.role === 'reviewer' ? verdictOf(fields.text) : null, judge: null,
+    answerChars: fields.status === 'completed' && !fields.aborted ? fields.text.length : null,
   }
 }
 /**
@@ -221,7 +227,11 @@ export type Summary = {
   byPredictedTime: { count: number; medianMs: number | null }[]
   /** Per current role, then `total`: what the routed pairs cost against the role default (`vsDefault`). */
   vsDefault: { key: string; versus: Versus }[]
+  /** Per role with a measured line: the brief and answer lengths in characters. */
+  sizes: { key: string; brief: Spread; answer: Spread }[]
 }
+/** How many lines measured a length, and its median and 90th percentile (nearest rank). */
+export type Spread = { count: number; median: number | null; p90: number | null }
 /**
  * Runs with usage whose routed pair is below, at or above the role default on the ladder (an off-ladder pair counts in none),
  * and the same tokens priced at the routed model and at the default model. Effort changes how many tokens a run spends, and
@@ -233,6 +243,10 @@ const median = (values: number[]) => {
   if (!values.length) return null
   const sorted = [...values].sort((a, b) => a - b), mid = sorted.length >> 1
   return round(sorted.length % 2 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2, 6)
+}
+const spread = (values: number[]): Spread => {
+  const sorted = [...values].sort((a, b) => a - b)
+  return { count: sorted.length, median: median(sorted), p90: sorted.length ? sorted[Math.ceil(0.9 * sorted.length) - 1]! : null }
 }
 /** A failed run: it errored or was aborted or refused, or its reviewer asked for CHANGES or blocked. */
 export const failed = (line: OutcomeLine) => line.status !== 'completed' || line.aborted || line.verdict === 'CHANGES' || line.verdict === 'BLOCKED'
@@ -281,8 +295,17 @@ export function summarize(lines: Line[]): Summary {
   return {
     decisions: decisions.length, outcomes: outcomes.length, olderCalibration: decisions.length - current.length,
     byRole: keyed(l => l.role, [...LEDGER_ROLES]), byPair: keyed(l => `${l.model}/${l.effort}`, [...LADDER]),
-    fallback: { count: defaults.length, reasons }, confidence, byPredictedTime, vsDefault: versusDefault(outcomes),
+    fallback: { count: defaults.length, reasons }, confidence, byPredictedTime, vsDefault: versusDefault(outcomes), sizes: sizesOf(decisions, outcomes),
   }
+}
+
+// A line read back from the file counts only a whole, non-negative length; lines from before the fields count in neither.
+function sizesOf(decisions: DecisionLine[], outcomes: OutcomeLine[]): Summary['sizes'] {
+  const lengths = (lines: Line[], role: string, of: (l: Line) => unknown) => lines.flatMap(l => { const n = of(l); return l.role === role && typeof n === 'number' && Number.isInteger(n) && n >= 0 ? [n] : [] })
+  return LEDGER_ROLES.flatMap(role => {
+    const brief = spread(lengths(decisions, role, l => (l as DecisionLine).briefChars)), answer = spread(lengths(outcomes, role, l => (l as OutcomeLine).answerChars))
+    return brief.count || answer.count ? [{ key: role, brief, answer }] : []
+  })
 }
 
 const RUNGS: readonly string[] = LADDER
@@ -332,8 +355,12 @@ export function formatSummary(s: Summary): string {
   })
   out.push("Jev vs role default (a price comparison, not measured savings: the same tokens priced at each model; an effort change alone prices as no difference)")
   for (const { key, versus: v } of s.vsDefault) out.push(`  ${key.padEnd(10)} n=${v.count} below=${v.below} same=${v.same} above=${v.above} routed=$${v.routedUsd.toFixed(4)} default=$${v.defaultUsd.toFixed(4)} ${saving(v)}`)
+  out.push('Brief and answer length in characters (median / p90)')
+  if (!s.sizes.length) out.push('  not measured yet')
+  for (const { key, brief, answer } of s.sizes) out.push(`  ${key.padEnd(10)} brief=${sizeText(brief)} answer=${sizeText(answer)}`)
   return out.join('\n')
 }
+const sizeText = (s: Spread) => s.count ? `${Math.round(s.median!)} / ${s.p90} (n=${s.count})` : '-'
 /** `saved=` when the routed pairs cost less than the defaults would have, `extra=` when more, with the share of the default cost. */
 function saving(v: Versus): string {
   const delta = round(v.defaultUsd - v.routedUsd, 6)

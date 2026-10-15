@@ -1,5 +1,5 @@
 // Shared fake ports and host boundary. No model calls or network requests run.
-import type { AgentSpec, CommandSpec, On } from 'claude-code'
+import type { AgentInfo, AgentSpec, CommandSpec, On } from 'claude-code'
 import { mock } from 'claude-code/testing'
 import type { EffortIo } from '../hooks/effort'
 import { createBreaker, createGate } from '../hooks/jev'
@@ -28,6 +28,8 @@ export function world(on: On) {
   const p = ports(), specs: AgentSpec[] = [], commands: CommandSpec[] = [], env: Record<string, string> = { HOME: '/home/u' }
   // The local file system: every file the plugin writes, whole, by path.
   const files = new Map<string, string>(), fsFaults = { read: false, write: false }, written: string[] = []
+  // What `$.agent.list()` answers, and how many times it was asked; `agents.fail` makes it throw.
+  const agents = { roster: [] as AgentInfo[], lists: 0, fail: false }
   mock.clock(on)
   on('command.register', (_$, e) => { commands.push(e); return { value: { command: e.name } } })
   on('fs.exists', (_$, e) => ({ value: files.has(e.path) }))
@@ -40,10 +42,13 @@ export function world(on: On) {
   on('settings.read', async (_$, e) => ({ value: e.source ? await p.io.settings(e.source as 'project' | 'local') : {} }) as never)
   on('http.fetch', async (_$, e) => ({ value: { ...await p.io.jev.fetch(e.url, e.init as never), ok: true, headers: {} } }))
   on('ui.log', (_$, e) => { p.io.log(e.text); return { value: undefined } })
+  on('agent.list', () => { agents.lists++; if (agents.fail) throw new Error('list failed'); return { value: agents.roster } })
   /** The ledger's lines in the order written: `files` holds the current text, `ledger()` parses it. */
   const ledger = () => (files.get(LEDGER) ?? '').split('\n').filter(Boolean).map(line => JSON.parse(line) as Record<string, any>)
-  return { ...p, specs, commands, env, files, fsFaults, written, ledger }
+  return { ...p, specs, commands, env, files, fsFaults, written, ledger, agents }
 }
+/** An agent as `$.agent.list()` lists it. */
+export const listed = (id: string, type: string): AgentInfo => ({ id, type, status: 'running', description: 'Fixture' })
 export const LEDGER = '/home/u/.claude/spider-team/routes.jsonl'
 export async function started($: { session: { start: (e: never) => Promise<unknown> } }) {
   await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true } as never)
@@ -58,4 +63,12 @@ export const inference = async function* (_$: unknown, e: { turnId: string; inde
 }
 export async function drain(stream: AsyncGenerator<unknown, { answer: string }, unknown>) {
   for (;;) { const r = await stream.next(); if (r.done) return r.value }
+}
+const timers = globalThis as unknown as { setTimeout: (run: () => void, ms: number) => unknown }
+const pause = () => new Promise<void>(resolve => timers.setTimeout(resolve, 0))
+/** A host call, then time for the outcome work it left running (the judge and the outcome line), so a test reads the ledger whole. */
+export async function settle<T>(call: Promise<T>): Promise<T> {
+  const result = await call
+  for (let i = 0; i < 20; i++) await pause()
+  return result
 }

@@ -4,6 +4,7 @@ import { defaultOf } from './router'
 import { assessRoute } from './effort'
 import type { EffortIo } from './effort'
 import { createBreaker, createGate } from './jev'
+import { createRoleCache, readOnlyGit, refusal, UNCHECKED } from './guard'
 import { createSampler, judgeAnswer, judgeEvery } from './judge'
 import { afterAgentCall, afterTurn, appendLine, createPending, decisionLine, formatSummary, ledgerPath, parseLedger, readAll, summarize, withJudge } from './ledger'
 import type { Ended, FileIo, Line, OutcomeLine, TurnEnd } from './ledger'
@@ -56,11 +57,18 @@ async function judged($: Dollar, { line, answer }: Ended, due: () => boolean): P
   } catch { return line }
 }
 const stamp = () => new Date().toISOString()
+// The agent list names each agent's type; a Spider role's id is cached with its role, any other agent's with null. An id
+// the list does not name yet is asked again next time.
+async function roleOfAgent($: Dollar, agentId: string, cache: ReturnType<typeof createRoleCache>) {
+  if (!cache.has(agentId)) for (const agent of await $.agent.list()) cache.set(agent.id, roleOf(agent.type) ?? null)
+  return cache.get(agentId) ?? null
+}
 
 export const register: Register = (on, options) => {
   const due = createSampler(judgeEvery(options.judgeEvery))
   // Background agents wait here for their turn.complete; module state of this load only, dropped on reload.
   const background = createPending(200)
+  const agents = createRoleCache(200)
   on('session.start', async ($, e, next) => {
     await $.agent.register({ ...SPECS.analyst, name: 'analyst' })
     await $.agent.register({ ...SPECS.planner, name: 'planner' })
@@ -72,6 +80,8 @@ export const register: Register = (on, options) => {
   // would need a second hook rewriting every `turn.step` of the agent, and the outcome comes from this call's result.
   // Picks model and effort for a Spider role: Jev through the router table and the role floor, else the role default. The
   // call's own model and effort are overwritten. The decision and the outcome go to the local ledger; the result passes on as it came.
+  // The outcome, with its judge, is written once the result has gone back, so the lead never waits on the judge; a reload
+  // drops one still running, which the advisory ledger can afford.
   on('tool.call', { tool: 'Agent' }, async ($, e, next) => {
     const call = e as BuiltinToolInputs['Agent'] & { tool_use_id: string }
     const role = roleOf(call.subagent_type)
@@ -83,14 +93,14 @@ export const register: Register = (on, options) => {
     })
     const model = choice.model, effort = choice.effort
     $.ui.log(`spider-team: ${role} → ${model}/${effort} (${choice.source})`, { to: 'debug' })
-    await record($, 'decision', decisionLine({ ts: stamp(), toolUseId: call.tool_use_id, role, choice }))
+    await record($, 'decision', decisionLine({ ts: stamp(), toolUseId: call.tool_use_id, role, briefChars: call.prompt.length, choice }))
     // The pair shows beside the task in the transcript.
     const result = await next({ ...e, description: `${call.description} (${model}/${effort})`, model, effort })
     await observe($, 'outcome', async () => {
       const ended = afterAgentCall({ toolUseId: call.tool_use_id, role, pair: { model, effort } }, result, stamp())
       if (!ended) return
       if ('launched' in ended) background.add(ended.launched, { toolUseId: call.tool_use_id, role, pair: { model, effort } })
-      else await record($, 'outcome', await judged($, ended, due))
+      else void observe($, 'outcome', async () => record($, 'outcome', await judged($, ended, due)))
     })
     return result
   }).catch(async ($, e, next) => {
@@ -102,13 +112,22 @@ export const register: Register = (on, options) => {
     try { const role = roleOf(call.subagent_type); pair = role && defaultOf(role) } catch { pair = undefined }
     return pair ? next({ ...e, description: `${call.description} (${pair.model}/${pair.effort})`, model: pair.model, effort: pair.effort }) : next(e)
   })
-  // A background agent ends here, with its duration, usage and judged answer; the host result passes on as it came.
+  // A background agent ends here, with its duration, usage and judged answer, written after the host result passes on as it came.
   on('turn.complete', {}, async ($, e, next) => {
     const result = await next(e)
     const pending = e.agentId ? background.take(e.agentId) : undefined
-    if (pending) await record($, 'outcome', await judged($, afterTurn(pending, e as TurnEnd, stamp()), due))
+    if (pending) void observe($, 'outcome', async () => record($, 'outcome', await judged($, afterTurn(pending, e as TurnEnd, stamp()), due)))
     return result
   })
+  // Spider roles run Bash for read-only git only, enforced here rather than trusted to the prompt: a command from a Spider
+  // agent's loop that is not one read-only git command is refused. The main loop and other agents pass untouched. When the
+  // agent cannot be told, the command is refused, so a failure never lets a Spider role run an unchecked command.
+  on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
+    if (!e.agentId) return next(e)
+    const role = await roleOfAgent($, e.agentId, agents)
+    if (!role || readOnlyGit((e as BuiltinToolInputs['Bash']).command)) return next(e)
+    return { deny: refusal(role) }
+  }).catch(async ($, e, next) => (next.called ? next(e) : { deny: UNCHECKED }))
   // The host prefixes command output with the plugin name, so the texts below do not repeat it.
   on('command.run', { command: STATS_COMMAND }, async $ => {
     try {

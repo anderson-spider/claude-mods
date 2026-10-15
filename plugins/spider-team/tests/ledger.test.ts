@@ -31,16 +31,18 @@ test('a decision line projects only the allowed fields and rounds the probabilit
     cell: { model: 'haiku' as const, effort: 'xhigh' as const }, floorApplied: true, model: 'opus' as const, effort: 'low' as const,
     prompt: MARKER, task: MARKER, path: `/private/${MARKER}`,
   }
-  const line = decisionLine({ ts: '2026-10-14T10:00:00.000Z', toolUseId: 'toolu_1', role: 'planner', choice })
+  const line = decisionLine({ ts: '2026-10-14T10:00:00.000Z', toolUseId: 'toolu_1', role: 'planner', briefChars: 1234, choice })
   expect(line).toEqual({
     v: 1, kind: 'decision', calibration: CALIBRATION, ts: '2026-10-14T10:00:00.000Z', tool_use_id: 'toolu_1', role: 'planner', source: 'jev', jevReason: null, jevMs: 412,
     levels: { difficulty: 2, duration: 1 }, top: { difficulty: 0.83, duration: 0.5 },
     dist: { difficulty: { '0': 0, '1': 0.06, '2': 0.83, '3': 0.11, '4': 0 }, duration: { '0': 0.25, '1': 0.5, '2': 0.25, '3': 0 } },
-    cell: 'haiku/xhigh', floorApplied: true, model: 'opus', effort: 'low',
+    cell: 'haiku/xhigh', floorApplied: true, model: 'opus', effort: 'low', briefChars: 1234,
   })
   expect(JSON.stringify(line)).not.toContain(MARKER)
   const fallback = decisionLine({ ts: 't', toolUseId: undefined, role: 'analyst', choice: { source: 'default', jevReason: 'no-key', jevMs: null, levels: null, top: null, dist: null, cell: null, floorApplied: false, model: 'haiku', effort: 'high' } })
-  expect(fallback).toMatchObject({ tool_use_id: null, source: 'default', jevReason: 'no-key', jevMs: null, levels: null, top: null, dist: null, cell: null })
+  expect(fallback).toMatchObject({ tool_use_id: null, source: 'default', jevReason: 'no-key', jevMs: null, levels: null, top: null, dist: null, cell: null, briefChars: null })
+  // The brief's length is a count only: anything that is not one is null.
+  for (const briefChars of [NaN, -1, Infinity]) expect(decisionLine({ ts: 't', toolUseId: 'x', role: 'analyst', briefChars, choice }).briefChars).toBeNull()
 })
 
 test('a decision line keeps each full distribution with only its level keys and finite probabilities', () => {
@@ -85,6 +87,7 @@ test('a finished foreground run becomes one outcome line with usage, cost and a 
     v: 1, kind: 'outcome', ts: '2026-10-14T10:05:00.000Z', tool_use_id: 'toolu_1', role: 'reviewer', model: 'opus', effort: 'medium', mode: 'foreground',
     resolvedModel: 'claude-opus-5-5', modelsUsed: 1, status: 'completed', aborted: false, durationMs: 90_000,
     tokens: { input: 1000, output: 500, cacheCreation: 2000, cacheRead: 10_000 }, costUsd: 0.026, verdict: 'CHANGES', judge: null,
+    answerChars: `${MARKER}\nVerdict: CHANGES`.length,
   }, answer: `${MARKER}\nVerdict: CHANGES` })
   // The answer is handed back for the judge only; the line holds none of it.
   expect(JSON.stringify((ended as { line: OutcomeLine }).line)).not.toContain(MARKER)
@@ -98,7 +101,7 @@ test('a finished foreground run becomes one outcome line with usage, cost and a 
 })
 
 test('a tool error is an error outcome, a background launch is awaited, and a refusal or unknown shape writes nothing', () => {
-  expect(afterAgentCall(ctx('analyst'), { result: 'boom', isError: true, text: MARKER }, 't')).toEqual({ line: expect.objectContaining({ status: 'error', tokens: null, costUsd: null, durationMs: null, verdict: null, judge: null, mode: 'foreground' }), answer: '' })
+  expect(afterAgentCall(ctx('analyst'), { result: 'boom', isError: true, text: MARKER }, 't')).toEqual({ line: expect.objectContaining({ status: 'error', tokens: null, costUsd: null, durationMs: null, verdict: null, judge: null, answerChars: null, mode: 'foreground' }), answer: '' })
   expect(afterAgentCall(ctx(), { result: { status: 'async_launched', agentId: 'bg-1', prompt: MARKER, description: MARKER, outputFile: `/tmp/${MARKER}` } }, 't')).toEqual({ launched: 'bg-1' })
   expect(afterAgentCall(ctx(), { result: { status: 'async_launched' } }, 't')).toBeNull()
   for (const value of [{ deny: 'no' }, { result: { status: 'remote_launched' } }, { result: 'text' }, 'text', null, undefined, 3]) expect(afterAgentCall(ctx(), value, 't')).toBeNull()
@@ -107,7 +110,7 @@ test('a tool error is an error outcome, a background launch is awaited, and a re
 test('a background end becomes an outcome line from its turn: duration, usage, reason, abort and the reviewer verdict', () => {
   const turn = { answer: `${MARKER} Verdict: BLOCKED`, durationMs: 5000, isAborted: false, reason: 'answer', usage: { model: 'claude-haiku-5-5', input_tokens: 1000, output_tokens: 500, cache_creation_input_tokens: 2000, cache_read_input_tokens: 10_000 } }
   const done = afterTurn(ctx(), turn, 't')
-  expect(done.line).toMatchObject({ mode: 'background', status: 'completed', aborted: false, durationMs: 5000, resolvedModel: 'claude-haiku-5-5', modelsUsed: null, costUsd: 0.0007, verdict: 'BLOCKED', judge: null })
+  expect(done.line).toMatchObject({ mode: 'background', status: 'completed', aborted: false, durationMs: 5000, resolvedModel: 'claude-haiku-5-5', modelsUsed: null, costUsd: 0.0007, verdict: 'BLOCKED', judge: null, answerChars: turn.answer.length })
   expect(done.answer).toBe(turn.answer)
   expect(JSON.stringify(done.line)).not.toContain(MARKER)
   // A run that did not complete hands back no answer to judge.
@@ -249,6 +252,29 @@ test('the formatted summary is compact and names every part, and an empty ledger
   expect(formatSummary(summarize([]))).toBe('no routing records yet in ~/.claude/spider-team/routes.jsonl.')
   expect(formatSummary(summarize([decision('only', 'analyst')]))).toContain('no outcomes yet')
   expect(text).not.toContain('older calibrations')
+})
+
+test('the brief and answer lengths per role are a median and p90 in characters, and lines without them count in neither', () => {
+  const lines: Line[] = [
+    ...[100, 200, 300, 400, 500, 600, 700, 800, 900, 1000].map((n, i) => decision(`b${i}`, 'analyst', { briefChars: n })),
+    ...[50, 150, 250].map((n, i) => outcome(`b${i}`, 'analyst', { answerChars: n })),
+    outcome('b9', 'analyst', { answerChars: null, status: 'error' }),
+    // Lines from before the fields, and hand-edited ones, measure nothing.
+    decision('old', 'analyst'), decision('bad', 'analyst', { briefChars: -4 }), outcome('odd', 'analyst', { answerChars: 1.5 }),
+    decision('r1', 'reviewer', { briefChars: 2000 }),
+    decision('p1', 'planner'), outcome('p1', 'planner'),
+  ]
+  const s = summarize(lines)
+  expect(s.sizes).toEqual([
+    { key: 'analyst', brief: { count: 10, median: 550, p90: 900 }, answer: { count: 3, median: 150, p90: 250 } },
+    { key: 'reviewer', brief: { count: 1, median: 2000, p90: 2000 }, answer: { count: 0, median: null, p90: null } },
+  ])
+  expect(formatSummary(s)).toContain([
+    'Brief and answer length in characters (median / p90)',
+    '  analyst    brief=550 / 900 (n=10) answer=150 / 250 (n=3)',
+    '  reviewer   brief=2000 / 2000 (n=1) answer=-',
+  ].join('\n'))
+  expect(formatSummary(summarize([decision('only', 'analyst')]))).toContain('Brief and answer length in characters (median / p90)\n  not measured yet')
 })
 
 test('the routed pairs are priced against the role default on the same tokens, per current role and in total', () => {

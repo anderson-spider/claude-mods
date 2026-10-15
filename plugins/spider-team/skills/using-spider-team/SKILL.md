@@ -20,9 +20,9 @@ Revisit the choice when new evidence appears. Never call every agent by default.
 
 | Type | Use it to | Access |
 | --- | --- | --- |
-| `spider-team:analyst` | Answer one question about code, history or evidence, cheaply. | Read-only. |
+| `spider-team:analyst` | Answer one question about code, history or evidence, cheaply. | Read-only plus read-only git. |
 | `spider-team:planner` | Plan a change across several files or contracts (authentication, schema, API) as one Markdown plan with an acceptance checklist. | Read-only. |
-| `spider-team:reviewer` | Review your branch and uncommitted changes and give APPROVED, CHANGES or BLOCKED. | Read-only plus git inspection. |
+| `spider-team:reviewer` | Review your branch and uncommitted changes and give APPROVED, CHANGES or BLOCKED. | Read-only plus read-only git. |
 
 None of them writes files or delegates further.
 
@@ -35,7 +35,7 @@ Each call answers one question or produces one bounded deliverable. Delegate onl
 - the allowed scope and the constraints;
 - the answer format you need.
 
-Run at most two agents at once by default, fewer if the environment sets a lower limit; go beyond only for independent fronts with a concrete gain. Send independent calls in one message so they run in parallel, and keep doing independent work while a background agent runs: a background launch is not completion, so wait for its result before relying on it. Drop an agent whose question no longer matters.
+Run at most two agents at once by default, fewer if the environment sets a lower limit; go beyond only for independent fronts with a concrete gain. Send independent calls in one message so they run in parallel, and keep doing independent work while a background agent runs: a background launch is not completion, so wait for its result before relying on it. Drop an agent whose question no longer matters. For a follow-up on the same subject, continue the agent with `SendMessage` to its agent id, which keeps what it already read; start another only for an independent question.
 
 ## Verify what comes back
 
@@ -64,4 +64,4 @@ Work autonomously within your permissions; ask only for a decision or an authori
 
 ## Model and effort
 
-Leave `model` and `effort` out of the `Agent` call: they are ignored and overwritten. When `JEV_API_KEY` is in the user's environment, Jev rates the task's difficulty and duration, a fixed table maps them to a pair (haiku/medium for trivial work up to opus/high for expert work) and the role's floor lifts a pair that is too weak (analyst haiku/medium, planner and reviewer opus/low). Otherwise, or when Jev fails, the role default applies: analyst haiku/high, planner opus/medium, reviewer opus/medium. Write the brief for Jev to judge the work itself: the scope, the evidence and how hard and long the work is. The README has the table. `/spider-team-stats` summarizes the local routing records (runs, failures, the share of runs Jev judged short of their task, duration, estimated cost, Jev confidence).
+Leave `model` and `effort` out of the `Agent` call: routing overwrites them from the brief, so describe the work itself (scope, evidence, how hard and long it is). The README has the table; `/spider-team-stats` summarizes past runs.

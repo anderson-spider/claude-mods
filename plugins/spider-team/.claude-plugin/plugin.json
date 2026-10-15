@@ -1,6 +1,6 @@
 {
   "name": "spider-team",
-  "version": "0.9.1",
+  "version": "0.10.0",
   "description": "Read-only analyst, planner and reviewer subagents; Jev picks each one's model and effort from the task.",
   "author": {
     "name": "anderson-spider"
