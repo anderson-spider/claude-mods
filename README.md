@@ -33,6 +33,8 @@ Requires Claude Code v2.1.287 or later. The repository is checked with v2.1.300 
 
 From a local copy: `/plugin marketplace add /path/to/claude-mods`.
 
+codex-computer-use also needs a local helper on the Mac: follow [its install steps](plugins/codex-computer-use/README.md#install), or use the one-step setup below.
+
 ### One step on a Mac
 
 `scripts/bootstrap.sh` adds the marketplace, installs or updates chatgpt, codex-computer-use and tailscale, and installs the codex-computer-use helper (a LaunchAgent):

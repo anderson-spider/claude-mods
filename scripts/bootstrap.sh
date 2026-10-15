@@ -87,9 +87,10 @@ for p in $PLUGINS; do
   esac
 done
 
-cat <<'EOF'
-
-done. Next:
-  - start a new Claude Code session, or run /reload-plugins
-  - tailscale needs its apiKey: `claude plugin configure tailscale`
-EOF
+printf '\ndone. Next:\n  - start a new Claude Code session, or run /reload-plugins\n'
+for p in $PLUGINS; do
+  case "$p" in
+    codex-computer-use) echo '  - codex-computer-use: `/codex-cu status` should report the helper running' ;;
+    tailscale) echo '  - tailscale needs its apiKey: `claude plugin configure tailscale`' ;;
+  esac
+done

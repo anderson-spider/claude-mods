@@ -117,6 +117,12 @@ test("--only limits the plugins, and an unknown name or flag is refused before a
     const only = w.run("--only", "tailscale");
     assert.equal(only.status, 0, only.stderr);
     assert.deepEqual(mutating(only.calls), [`claude plugin marketplace update ${MARKET}`, `claude plugin install tailscale@${MARKET} --scope user`]);
+    assert.match(only.stdout, /tailscale needs its apiKey/);
+    assert.doesNotMatch(only.stdout, /codex-cu status/);
+    const cu = w.run("--only", "codex-computer-use");
+    assert.equal(cu.status, 0, cu.stderr);
+    assert.match(cu.stdout, /`\/codex-cu status` should report the helper running/);
+    assert.doesNotMatch(cu.stdout, /tailscale/);
     const unknown = w.run("--only", "nope");
     assert.equal(unknown.status, 1);
     assert.match(unknown.stderr, /unknown plugin 'nope'/);

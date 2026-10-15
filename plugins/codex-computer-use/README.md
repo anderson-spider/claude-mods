@@ -2,19 +2,47 @@
 
 Control native Mac apps through Codex computer use, bundled with the ChatGPT desktop app. Claude chooses the task; Codex clicks/types in the background without taking over your mouse.
 
-```text
-/plugin install codex-computer-use --marketplace anderson-spider/claude-mods
-```
+It has two parts: the plugin, installed in Claude Code, and a local helper (a per-user LaunchAgent) that talks to Codex. The plugin does nothing until the helper is installed.
 
-## Setup
+## Requirements
 
-Requires macOS and the ChatGPT app with Codex Computer Use enabled. From a repository checkout:
+- macOS.
+- The [ChatGPT desktop app](https://openai.com/chatgpt/download/) with Computer Use turned on in Codex. The helper runs on the Node.js bundled with it.
+- Claude Code; see the version in the [root README](../../README.md#install).
+
+## Install
+
+One command installs the plugin and the helper, and also updates both later:
 
 ```sh
-plugins/codex-computer-use/helper/install.sh
+curl -fsSL https://raw.githubusercontent.com/anderson-spider/claude-mods/main/scripts/bootstrap.sh | sh -s -- --only codex-computer-use
 ```
 
-This installs the helper at `~/.claude/mcp/codex-cu` and loads its LaunchAgent; rerun after helper updates. `--check` checks prerequisites without installing. For removal, run `plugins/codex-computer-use/helper/uninstall.sh` with no arguments: it removes the LaunchAgent and retains code, approvals and logs. Neither script edits Claude settings.
+Add `--check` after `--only codex-computer-use` for a dry run that changes nothing. Then start a new Claude Code session, or run `/reload-plugins`, and check it with `/codex-cu status`, which should report `Helper: <version> running`.
+
+Step by step instead:
+
+1. In Claude Code:
+
+   ```text
+   /plugin marketplace add anderson-spider/claude-mods
+   /plugin install codex-computer-use@spider-claude-mods
+   ```
+
+2. From a clone of the repository, install the helper:
+
+   ```sh
+   plugins/codex-computer-use/helper/install.sh
+   ```
+
+The helper goes to `~/.claude/mcp/codex-cu` and starts at login. Rerun the install after updating the plugin so the helper matches it. `install.sh --check` only checks the prerequisites. Neither script edits Claude settings.
+
+To remove it, run `~/.claude/mcp/codex-cu/uninstall.sh`: it unloads the LaunchAgent and keeps the code, approvals and logs. Then `/plugin uninstall codex-computer-use@spider-claude-mods`.
+
+## Troubleshooting
+
+- `/codex-cu status` says `Helper: not reachable`: the helper is missing or stopped. Rerun the install command above; it prints what is missing, such as the ChatGPT app.
+- The plugin starts with the route on, so Claude's own desktop tools stay blocked while the helper is down. `/codex-cu off` gives them back until the helper works.
 
 ## Use
 

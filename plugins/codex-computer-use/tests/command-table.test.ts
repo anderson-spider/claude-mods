@@ -3,6 +3,7 @@ import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 
 import { HELP, parseCommand } from '../hooks/commands'
+import { INSTALL_HELPER } from '../hooks/presentation'
 import { ran } from './helpers'
 
 // Characterization of `/codex-cu`: how every input parses, the exact HELP text,
@@ -138,7 +139,7 @@ test('an answer that is not JSON is an error, not an absent helper: no start is 
 test('a kickstart that fails returns the first reply without polling', async ($, on) => {
   const { fetches, runs } = commandWorld(on, { reachableAt: -1, kickstartExit: 1 })
 
-  expect((await run($, 'status')).text).toBe('Route: Codex computer use (on)\nHelper: not reachable (codex-computer-use: $.http.fetch: attempt 1)')
+  expect((await run($, 'status')).text).toBe(`Route: Codex computer use (on)\nHelper: not reachable (codex-computer-use: $.http.fetch: attempt 1)\nInstall or restart it: ${INSTALL_HELPER}`)
   expect(fetches()).toBe(1)
   expect(runs).toEqual([['/usr/bin/id', '-u'], ['/bin/launchctl', 'kickstart', 'gui/501/com.anderson-spider.codex-cu']])
 })
@@ -157,7 +158,7 @@ for (const n of [1, 2, 7, 20]) {
 test('a helper that never starts gives the first reply after twenty polls', async ($, on) => {
   const { fetches, runs } = commandWorld(on, { reachableAt: -1 })
 
-  expect((await run($, 'status')).text).toBe('Route: Codex computer use (on)\nHelper: not reachable (codex-computer-use: $.http.fetch: attempt 1)')
+  expect((await run($, 'status')).text).toBe(`Route: Codex computer use (on)\nHelper: not reachable (codex-computer-use: $.http.fetch: attempt 1)\nInstall or restart it: ${INSTALL_HELPER}`)
   expect(fetches()).toBe(21)
   expect(runs.filter(argv => argv[0] === 'sleep')).toEqual(Array.from({ length: 20 }, () => ['sleep', '0.25']))
   expect(runs).toHaveLength(22)
