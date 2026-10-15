@@ -8,7 +8,7 @@ import { askCommandAnswer, errorText, imageCommandAnswer } from './presentation'
 import { PROMPT } from './prompts'
 import { DOCTOR_COMMAND_DESCRIPTION, TOOLS } from './tool-schemas'
 import { type Candidate, chooseBrowser } from './chooser'
-import { BACKENDS, ownCallAllowed } from './backends'
+import { type Backend, backendsFor, ownCallAllowed } from './backends'
 import { type McpCall, type McpHost, mcpCallOf } from './mcp-call'
 import type { BrowserDeps } from './page-browser'
 import { bytesOf } from './upload'
@@ -58,8 +58,13 @@ function callOf($: EngineInterface, server: string): McpCall {
   return call
 }
 
-// BACKENDS, each opened only when the chooser gets to it.
-function candidatesOf($: EngineInterface): Candidate[] {
+// The backends in this session's order (see backendsFor).
+async function backendsOf($: EngineInterface): Promise<Backend[]> {
+  return backendsFor(await $.env.get('CLAUDE_CODE_ENTRYPOINT'))
+}
+
+// The backends, each opened only when the chooser gets to it.
+function candidatesOf($: EngineInterface, backends: Backend[]): Candidate[] {
   const run = processOf($)
   // Waits go through a host process, which does not use up the hook's clock budget as a timer would.
   const deps = (server: string): BrowserDeps => ({
@@ -70,7 +75,7 @@ function candidatesOf($: EngineInterface): Candidate[] {
     },
     now: () => Date.now(),
   })
-  return BACKENDS.map(backend =>
+  return backends.map(backend =>
     'server' in backend
       ? { name: backend.name, hint: backend.hint, open: () => backend.open(deps(backend.server)) }
       : { name: backend.name, hint: backend.hint, open: () => backend.open(run) },
@@ -79,7 +84,7 @@ function candidatesOf($: EngineInterface): Candidate[] {
 
 // Picks the backend, and starts the plugin's tab afresh when it differs from the one that opened that tab.
 async function pickBrowser($: EngineInterface): Promise<{ browser: Browser; name: string } | string> {
-  const chosen = await chooseBrowser(candidatesOf($))
+  const chosen = await chooseBrowser(candidatesOf($, await backendsOf($)))
   if (typeof chosen === 'string') return chosen
   if (tabOwner !== chosen.name) {
     tab.id = undefined
@@ -114,7 +119,7 @@ async function perform($: EngineInterface, request: Request, timeoutMs: number, 
     async () => {
       onStart?.()
       try {
-        return await performRequest(requestDeps($), request, { progress: status, tab, timeoutMs, backends: BACKENDS.map(({ name }) => name) })
+        return await performRequest(requestDeps($), request, { progress: status, tab, timeoutMs, backends: (await backendsOf($)).map(({ name }) => name) })
       } catch (error) {
         const text = `The browser failed: ${errorText(error)}`
         return { ok: false, text, error: text }

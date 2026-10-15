@@ -15,9 +15,10 @@ export type Backend =
   | McpBackend
 
 /**
- * The backends in the order the plugin tries them, and the only place that lists them: the chooser's advice, the
- * "not ready" advice and the plugin's own-call allow below all read this list. A new MCP backend is a spec here (or
- * in a module of its own, like the two below) and its row in `tests/backends.test.ts`.
+ * The backends in the order the plugin tries them outside the desktop app (see `backendsFor`), and the only place
+ * that lists them: the chooser's advice, the "not ready" advice and the plugin's own-call allow below all read this
+ * list. A new MCP backend is a spec here (or in a module of its own, like the two below) and its row in
+ * `tests/backends.test.ts`.
  */
 export const BACKENDS: Backend[] = [
   {
@@ -28,6 +29,16 @@ export const BACKENDS: Backend[] = [
   mcpBackend(CHROME_SPEC),
   mcpBackend(BUILTIN_SPEC),
 ]
+
+/** What the Claude desktop app sets `CLAUDE_CODE_ENTRYPOINT` to. */
+export const DESKTOP_ENTRYPOINT = 'claude-desktop'
+
+/** BACKENDS in the order to try them in a session started from `entrypoint`: inside the desktop app, its built-in browser first. */
+export function backendsFor(entrypoint: string | undefined): Backend[] {
+  if (entrypoint !== DESKTOP_ENTRYPOINT) return BACKENDS
+  const builtin = (backend: Backend) => backend.name === BUILTIN_SPEC.name
+  return [...BACKENDS.filter(builtin), ...BACKENDS.filter(backend => !builtin(backend))]
+}
 
 export type OwnCall = { prefix: string; stays: (tool: string, input: unknown, tabId: string | undefined) => boolean }
 

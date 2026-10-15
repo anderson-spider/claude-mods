@@ -52,6 +52,8 @@ type WorldState = PageScript & {
   /** `fs.write` refuses with this text. */
   writeError?: string
   tmpdir: string | undefined
+  /** What `CLAUDE_CODE_ENTRYPOINT` holds. */
+  entrypoint?: string
 }
 
 function world(on: On, init: Partial<WorldState> = {}) {
@@ -201,7 +203,7 @@ function world(on: On, init: Partial<WorldState> = {}) {
     return ran(0)
   })
 
-  on('env.get', (_$, e) => ({ value: e.name === 'TMPDIR' ? state.tmpdir : undefined }))
+  on('env.get', (_$, e) => ({ value: e.name === 'TMPDIR' ? state.tmpdir : e.name === 'CLAUDE_CODE_ENTRYPOINT' ? state.entrypoint : undefined }))
   on('fs.stat', (_$, e) => {
     log.push(`stat ${e.path}`)
     return { value: { kind: 'file' as const, size: 12, mtimeMs: 0, isLink: false } }
@@ -828,7 +830,7 @@ test('the first backend that works is used and the ones after it are not touched
   ])
 })
 
-test('the built-in browser is the last resort and is driven with its own tab ids', async ($, on) => {
+test('outside the desktop app the built-in browser is the last resort and is driven with its own tab ids', async ($, on) => {
   const w = world(on, { chrome: 'down', builtin: 'ok' })
 
   const answer = await commandRun($, 'chatgpt-doctor')
@@ -845,6 +847,25 @@ test('the built-in browser is the last resort and is driven with its own tab ids
     'js wait b1',
     'js doctor b1',
   ])
+})
+
+test('inside the desktop app the built-in browser is tried first, before Chrome or terminal-browser', async ($, on) => {
+  const w = world(on, { entrypoint: 'claude-desktop', terminal: 'ok', builtin: 'ok' })
+
+  const answer = await commandRun($, 'chatgpt-doctor')
+
+  expect(answer.text?.split('\n')[0]).toBe("✓ browser: the Claude app's built-in browser")
+  expect(steps(w.log)[0]).toBe('mcp Claude_Browser/tabs_context')
+  expect(steps(w.log).some(step => step.includes('claude-in-chrome') || step.startsWith('process terminal-browser'))).toBe(false)
+})
+
+test('inside the desktop app a down built-in browser falls back to the usual order', async ($, on) => {
+  const w = world(on, { entrypoint: 'claude-desktop' })
+
+  const answer = await commandRun($, 'chatgpt-doctor')
+
+  expect(answer.text?.split('\n')[0]).toBe('✓ browser: Claude in Chrome')
+  expect(steps(w.log).slice(0, 3)).toEqual(['mcp Claude_Browser/tabs_context', 'tool mcp__Claude_Browser__tabs_context', 'process terminal-browser ls'])
 })
 
 test('the plugin tab is forgotten when another backend is chosen, so a tab id is never used in the wrong backend', async ($, on) => {
