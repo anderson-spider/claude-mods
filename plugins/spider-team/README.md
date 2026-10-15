@@ -89,3 +89,7 @@ The outcome line keeps only the three probabilities, rounded to two decimals, as
 Two texts go to Jev, both redacted the same way: the task, for routing, and a completed agent's final answer, for the outcome judge. In each, the key, secrets and paths are masked across the whole text before it is cut to the 4,000-character limit, and the answer is the judge's only state. The key travels only in the Authorization header of the fixed endpoint. Neither the answer, its redacted form nor Jev's reply is written to the records or the debug log. The one file the plugin writes is the local routing record above; it keeps no session state beyond two bounded in-memory maps: background agents waiting for their end, and the role of each agent the Bash guard has looked up.
 
 The tests use a fake host, a fake file system and fake Jev; they prove the routing and judging logic and wiring, not live model selection or live judgments.
+
+## Credits
+
+Inspired by [JevFlow](https://github.com/Parth1811/JevFlow) by Parth Patil (MIT), which asks Jev whether an agent's work is really done. The outcome judge follows that idea, and the Jev client began as a port of JevFlow's `jev_client.py` before it was rewritten for the TypeSafe endpoint.
