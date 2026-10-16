@@ -1,0 +1,22 @@
+{
+  "name": "coolify",
+  "version": "0.1.0",
+  "description": "Read or change your Coolify instance (projects, applications, deployments) through its API, using the url and apiKey plugin options.",
+  "author": {
+    "name": "anderson-spider"
+  },
+  "license": "MIT",
+  "userConfig": {
+    "url": {
+      "type": "string",
+      "title": "Coolify URL",
+      "description": "Your instance's https address, such as https://coolify.example.com (or https://app.coolify.io for Coolify Cloud). The apiKey is sent only there. Leave it out of repository settings, which would make the plugin refuse it."
+    },
+    "apiKey": {
+      "type": "string",
+      "title": "Coolify API token",
+      "description": "A token from Keys & Tokens > API tokens. Give it only the permissions you want Claude to have (read, deploy, write) and leave out read:sensitive. Leave it out of repository settings, which would make the plugin refuse it.",
+      "sensitive": true
+    }
+  }
+}

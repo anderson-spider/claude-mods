@@ -19,7 +19,7 @@ set -eu
 MARKET=spider-claude-mods
 REPO=${BOOTSTRAP_SOURCE:-anderson-spider/claude-mods}
 # Every plugin of the marketplace; check-consistency keeps this list equal to marketplace.json.
-ALL="chatgpt codex-computer-use git-cleanup gitlab session-hud spider-team tailscale"
+ALL="chatgpt codex-computer-use coolify git-cleanup gitlab session-hud spider-team tailscale"
 NODE=${BOOTSTRAP_NODE:-/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node}
 ONLY=
 CHECK=
@@ -100,6 +100,7 @@ printf '\ndone. Next:\n  - start a new Claude Code session, or run /reload-plugi
 for p in $PLUGINS; do
   case "$p" in
     codex-computer-use) echo '  - codex-computer-use: `/codex-cu status` should report the helper running' ;;
+    coolify) echo '  - coolify needs its url and apiKey: `claude plugin configure coolify`' ;;
     gitlab) echo '  - gitlab needs its tokens (host=token pairs): `claude plugin configure gitlab`' ;;
     tailscale) echo '  - tailscale needs its apiKey: `claude plugin configure tailscale`' ;;
   esac
