@@ -5,8 +5,11 @@ plugins/*/.claude-plugin/types/
 plugins/codex-computer-use/helper/state/
 plugins/codex-computer-use/helper/run/
 
-# Saved `claude plugin validate --strict` output (mise run plugins:scan)
+# Saved `claude plugin validate --strict` output (npm run plugins:scan)
 .scan*/
 
 # Local review and test reports (/ship, /live-test)
 .reports/
+
+# Development tools installed by npm ci
+node_modules/

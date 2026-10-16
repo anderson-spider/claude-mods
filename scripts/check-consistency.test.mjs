@@ -720,37 +720,41 @@ for (const { name, change, expected } of [
   });
 }
 
-const CI_YML = (pin) => `jobs:\n  plugins:\n    env:\n      # note\n      CLAUDE_CLI_PIN: ${pin}\n      OTHER: 1\n`;
-const WITH_PIN = (ci, readmeSuffix = "The repository is checked with v2.1.296 (`claude --version`).") => (files) => {
-  files[".github/workflows/ci.yml"] = ci;
+const PACKAGE = (pin) => JSON.stringify({ private: true, devDependencies: { "@anthropic-ai/claude-code": pin, typescript: "7.0.2" } });
+const WITH_PIN = (pin, readmeSuffix = "The repository is checked with v2.1.296 (`claude --version`).") => (files) => {
+  if (pin !== undefined) files["package.json"] = PACKAGE(pin);
   files["README.md"] += `\n${readmeSuffix}\n`;
 };
 
-test("the CI CLI pin passes when the README says the repository is checked with that version", (t) => {
-  assert.deepEqual(problems(t, WITH_PIN(CI_YML("2.1.296"))), []);
-  assert.deepEqual(problems(t, WITH_PIN(CI_YML('"2.1.296"'))), []);
+test("the package.json CLI pin passes when the README says the repository is checked with that version", (t) => {
+  assert.deepEqual(problems(t, WITH_PIN("2.1.296")), []);
+});
+
+test("a repository with no CLI pin and no README version skips the check", (t) => {
+  assert.deepEqual(problems(t), []);
+  assert.deepEqual(problems(t, (files) => { files["package.json"] = JSON.stringify({ private: true }); }), []);
 });
 
 for (const { name, change, expected } of [
   {
     name: "a pin that differs from the README",
-    change: WITH_PIN(CI_YML("2.1.300")),
-    expected: ['.github/workflows/ci.yml: CLAUDE_CLI_PIN is 2.1.300, but README.md says the repository is checked with v2.1.296'],
+    change: WITH_PIN("2.1.300"),
+    expected: ['package.json: "@anthropic-ai/claude-code" is 2.1.300, but README.md says the repository is checked with v2.1.296'],
   },
   {
     name: "a pin when the README states no version",
-    change: WITH_PIN(CI_YML("2.1.296"), "Nothing about versions."),
-    expected: ['.github/workflows/ci.yml: CLAUDE_CLI_PIN is 2.1.296, but README.md says the repository is checked with no version ("checked with vX.Y.Z")'],
+    change: WITH_PIN("2.1.296", "Nothing about versions."),
+    expected: ['package.json: "@anthropic-ai/claude-code" is 2.1.296, but README.md says the repository is checked with no version ("checked with vX.Y.Z")'],
   },
   {
-    name: "a workflow without the pin line",
-    change: WITH_PIN("jobs: {}\n"),
-    expected: [".github/workflows/ci.yml: no CLAUDE_CLI_PIN: <version> line"],
+    name: "a README version with no package.json",
+    change: WITH_PIN(undefined),
+    expected: ['package.json: no devDependencies "@anthropic-ai/claude-code" version'],
   },
   {
-    name: "a pin under another variable name",
-    change: WITH_PIN(CI_YML("2.1.296").replace("CLAUDE_CLI_PIN", "CLAUDE_CODE_VERSION")),
-    expected: [".github/workflows/ci.yml: no CLAUDE_CLI_PIN: <version> line"],
+    name: "a range instead of an exact pin",
+    change: WITH_PIN("^2.1.296"),
+    expected: ['package.json: "@anthropic-ai/claude-code" is ^2.1.296; pin an exact version'],
   },
   {
     name: "a rule whose plugin glob sits under another frontmatter key",
@@ -770,63 +774,6 @@ for (const { name, change, expected } of [
   });
 }
 
-for (const { name, change, expected } of [
-  {
-    name: "a pin in a workflow other than ci.yml that differs from the README",
-    change: (files) => {
-      files[".github/workflows/release.yaml"] = CI_YML("2.1.300");
-      files["README.md"] += "\nThe repository is checked with v2.1.296.\n";
-    },
-    expected: [".github/workflows/release.yaml: CLAUDE_CLI_PIN is 2.1.300, but README.md says the repository is checked with v2.1.296"],
-  },
-  {
-    name: "a pin elsewhere when the README states no version, with no ci.yml",
-    change: (files) => {
-      files[".github/workflows/release.yml"] = CI_YML("2.1.296");
-    },
-    expected: [".github/workflows/release.yml: CLAUDE_CLI_PIN is 2.1.296, but README.md says the repository is checked with no version"],
-  },
-  {
-    name: "a README version with no ci.yml and no pin in any workflow",
-    change: (files) => {
-      files[".github/workflows/release.yml"] = "jobs: {}\n";
-      files["README.md"] += "\nThe repository is checked with v2.1.296.\n";
-    },
-    expected: [".github/workflows: no CLAUDE_CLI_PIN: <version> line"],
-  },
-  {
-    name: "a README version with no workflow at all",
-    change: (files) => {
-      files["README.md"] += "\nThe repository is checked with v2.1.296.\n";
-    },
-    expected: [".github/workflows: no CLAUDE_CLI_PIN: <version> line"],
-  },
-  {
-    name: "a ci.yml without the pin when the README states no version",
-    change: (files) => {
-      files[".github/workflows/ci.yml"] = "jobs: {}\n";
-    },
-    expected: [".github/workflows/ci.yml: no CLAUDE_CLI_PIN: <version> line"],
-  },
-]) {
-  test(`fails: ${name}`, (t) => {
-    const found = problems(t, change);
-    assert.equal(found.length, expected.length, found.join("\n") || "(no problems)");
-    expected.forEach((line, i) => assert.ok(found[i].includes(line), `expected "${line}" in "${found[i]}"`));
-  });
-}
-
-test("the pin is found in any workflow file, and a repository with no workflow, pin or README version skips the check", (t) => {
-  assert.deepEqual(
-    problems(t, (files) => {
-      files[".github/workflows/release.yml"] = CI_YML("2.1.296");
-      files[".github/workflows/ci.yml"] = "jobs: {}\n";
-      files["README.md"] += "\nThe repository is checked with v2.1.296.\n";
-    }),
-    [],
-  );
-  assert.deepEqual(problems(t), []);
-});
 
 test("a rule can list its plugin glob in the one-line forms or among others", (t) => {
   for (const front of ['paths: "plugins/alpha/**"', 'paths: ["x/**", "plugins/alpha/**"]', 'paths:\n  - "x/**"\n  - plugins/alpha/**\nother: 1']) {

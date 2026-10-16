@@ -22,6 +22,7 @@ export const ruleLine = name => `Read \`plugins/${name}/AGENTS.md\` before chang
 
 const readText = path => readFileSync(path, 'utf8')
 const readJson = path => JSON.parse(readText(path))
+const CLI_PACKAGE = '@anthropic-ai/claude-code'
 const listDir = (path, keep) => (existsSync(path) ? readdirSync(path, { withFileTypes: true }).filter(keep).map(entry => entry.name) : [])
 const escapeRegex = text => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 // A rule's `paths` frontmatter lists the globs that load it: a `paths:` key with `  - "plugins/<name>/**"` items, or a
@@ -118,22 +119,17 @@ export function citedTests(markdown) {
   return { cites, referenced }
 }
 
-// CI installs the Claude Code CLI at `CLAUDE_CLI_PIN`, set in a workflow file; the README says which version the
-// repository is checked with. Skipped only for a repository with no ci.yml, no pin in any workflow and no README version.
+// package.json pins the Claude Code CLI that `npm ci` installs for the tasks and the required CI check; the README says
+// which version the repository is checked with. Skipped only when neither states a version.
 function checkCliPin(root, errors) {
-  const workflows = listDir(join(root, '.github/workflows'), e => e.isFile() && /\.ya?ml$/.test(e.name)).sort()
-  const pins = workflows.flatMap(file => {
-    const pin = /^\s*CLAUDE_CLI_PIN:\s*["']?([\w.-]+)["']?\s*$/m.exec(readText(join(root, '.github/workflows', file)))?.[1]
-    return pin ? [{ file: `.github/workflows/${file}`, pin }] : []
-  })
+  const manifest = join(root, 'package.json')
+  const pin = existsSync(manifest) ? readJson(manifest).devDependencies?.[CLI_PACKAGE] : undefined
   const readme = join(root, 'README.md')
   const checked = existsSync(readme) ? /checked with v(\d+(?:\.\d+)*)/.exec(readText(readme))?.[1] : undefined
-  const hasCi = workflows.includes('ci.yml')
-  if (!hasCi && !pins.length && !checked) return
-  if (!pins.length) errors.push(`${hasCi ? '.github/workflows/ci.yml' : '.github/workflows'}: no CLAUDE_CLI_PIN: <version> line`)
-  for (const { file, pin } of pins) {
-    if (pin !== checked) errors.push(`${file}: CLAUDE_CLI_PIN is ${pin}, but README.md says the repository is checked with ${checked ? `v${checked}` : 'no version ("checked with vX.Y.Z")'}`)
-  }
+  if (!pin && !checked) return
+  if (!pin) errors.push(`package.json: no devDependencies "${CLI_PACKAGE}" version`)
+  else if (!/^\d+\.\d+\.\d+$/.test(pin)) errors.push(`package.json: "${CLI_PACKAGE}" is ${pin}; pin an exact version`)
+  else if (pin !== checked) errors.push(`package.json: "${CLI_PACKAGE}" is ${pin}, but README.md says the repository is checked with ${checked ? `v${checked}` : 'no version ("checked with vX.Y.Z")'}`)
 }
 
 // Each project hook script is wired under the event and matcher its header declares, with its exact command.
@@ -269,7 +265,7 @@ export function checkRepo(root = '.') {
 
   for (const entry of marketplace.plugins) checkPlugin(root, entry, marketplace, rootDocs, errors)
 
-  // The reverse direction: whatever the globs in mise would validate must be listed, and a rule needs its plugin.
+  // The reverse direction: every plugin directory the tasks would validate must be listed, and a rule needs its plugin.
   for (const dir of listDir(join(root, 'plugins'), e => e.isDirectory())) {
     if (listed.has(dir)) continue
     // Claude Code writes the git-ignored typings into a plugin that is loaded, and they outlive its removal.

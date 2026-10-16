@@ -20,11 +20,19 @@ const tsconfig = join(root, "plugins", plugin, "tsconfig.json");
 // SessionStart reuses compatible typings from the main checkout; without them tsc only reports noise.
 if (!existsSync(tsconfig)) process.exit(0);
 if (!existsSync(join(root, "plugins", plugin, ".claude-plugin/types/tsconfig.json"))) {
-  console.error(`typecheck skipped for plugins/${plugin}: typings missing; run mise run plugins:types (SessionStart reuses matching main-checkout typings when available)`);
+  console.error(`typecheck skipped for plugins/${plugin}: typings missing; run npm run plugins:types (SessionStart reuses matching main-checkout typings when available)`);
   process.exit(0);
 }
 
-const run = spawnSync("mise", ["exec", "--", "tsc", "-p", tsconfig, "--noEmit"], {
+// The TypeScript package-lock.json pins, which `npm ci` installs: this checkout's, else the main checkout's, since a
+// fresh worktree has no node_modules.
+const main = spawnSync("git", ["worktree", "list", "--porcelain"], { cwd: root, encoding: "utf8", timeout: 5_000 }).stdout?.match(/^worktree (.+)$/m)?.[1];
+const tsc = [root, main].filter(Boolean).map((dir) => join(dir, "node_modules/.bin/tsc")).find((path) => existsSync(path));
+if (!tsc) {
+  console.error(`typecheck skipped for plugins/${plugin}: TypeScript is not installed; run npm ci`);
+  process.exit(0);
+}
+const run = spawnSync(tsc, ["-p", tsconfig, "--noEmit"], {
   cwd: root,
   encoding: "utf8",
   timeout: 90_000,
