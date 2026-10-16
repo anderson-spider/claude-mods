@@ -31,16 +31,6 @@ jobs:
   # Neither command logs in. The typings tsc needs are written by an interactive session, which starts without a login.
   # The pinned row, with the CLI package.json pins, is the required `plugins` check; the latest row shows early what a
   # newer CLI breaks and never fails the run.
-  # A new user's install on a clean Linux machine: bootstrap.sh from this checkout, then every plugin loads in a session
-  # without login (scripts/install-test/).
-  install:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install the marketplace on a clean machine
-        run: bash scripts/tasks/install-test.sh
-
   plugins:
     name: ${{ matrix.cli == 'latest' && 'plugins-latest' || 'plugins' }}
     runs-on: ubuntu-latest
@@ -114,3 +104,13 @@ jobs:
             tsc -p "${d}tsconfig.json" || failed+=("${d%/}")
           done
           if [ "${#failed[@]}" -gt 0 ]; then echo "tsc failed: ${failed[*]}" >&2; exit 1; fi
+
+  # A new user's install on a clean Linux machine: bootstrap.sh from this checkout, then every plugin loads in a session
+  # without login (scripts/install-test/).
+  install:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the marketplace on a clean machine
+        run: bash scripts/tasks/install-test.sh
