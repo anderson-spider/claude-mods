@@ -2,6 +2,8 @@
 # npm run plugins:test — the scripts and hooks tests, every plugin's tests, and the codex-computer-use helper tests
 # when the ChatGPT app's node is present.
 set -euo pipefail
+. scripts/tasks/lib.sh
+use_pinned_tools
 echo "==> scripts and hooks"
 node --test scripts/*.test.mjs
 for p in plugins/*/; do

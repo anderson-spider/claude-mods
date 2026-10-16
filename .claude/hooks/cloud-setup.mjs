@@ -15,8 +15,8 @@ export function setup({ env = process.env, root = rootDir, run = spawnSync, appe
   // the node_modules its own claude runs from, so an installed tree that matches package.json is kept.
   const installed = ok(["ls", "--silent"]);
   if (!installed && !ok(["ci"])) return "cloud setup failed: npm ci did not finish";
-  // The local bin first on PATH, so plain claude and tsc are the pinned versions, as `npm run` sees them.
-  if (env.CLAUDE_ENV_FILE) append(env.CLAUDE_ENV_FILE, `export PATH="${join(root, "node_modules/.bin")}:$PATH"\n`);
+  // The local bin last on PATH: plain tsc is the pinned one, while claude stays the session's own.
+  if (env.CLAUDE_ENV_FILE) append(env.CLAUDE_ENV_FILE, `export PATH="$PATH:${join(root, "node_modules/.bin")}"\n`);
   return "cloud setup: npm tools installed (package-lock.json)";
 }
 
