@@ -24,8 +24,8 @@ const NO_KEY = { options: { url: URL_OPTION } }
 
 type Settings = Record<string, unknown>
 
-/** A host with a fake Coolify API behind `http.fetch` and the repository's settings (`project`, `local`) behind `settings.read`; `settingsFail` makes them unreadable. */
-function world(on: On, opts: { project?: Settings; local?: Settings; text?: string; status?: number; fetchError?: string } = {}) {
+/** A host with a fake Coolify API behind `http.fetch` and the user's and repository's settings (`user`, `project`, `local`) behind `settings.read`; `settingsFail` makes them unreadable. */
+function world(on: On, opts: { user?: Settings; project?: Settings; local?: Settings; text?: string; status?: number; fetchError?: string } = {}) {
   const sent: Sent[] = []
   const tools: Tool[] = []
   /** Mutable, so one test can change the repository's settings or the API's answer between calls. */
@@ -33,7 +33,7 @@ function world(on: On, opts: { project?: Settings; local?: Settings; text?: stri
 
   on('settings.read', (_$, e) => {
     if (host.settingsFail) throw new Error('settings unreadable')
-    return { value: (e.source === 'project' ? host.project : e.source === 'local' ? host.local : undefined) ?? {} } as never
+    return { value: (e.source === 'user' ? host.user : e.source === 'project' ? host.project : e.source === 'local' ? host.local : undefined) ?? {} } as never
   })
   on('tool.register', (_$, e) => (tools.push(e as unknown as Tool), { value: { tool: id(e.name) } }))
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
@@ -267,6 +267,16 @@ test('a url or apiKey that the project or local settings declare is refused, and
     }
   }
   expect(sent).toEqual([])
+})
+
+test('project settings that repeat the user settings, as with Claude opened in the home folder, do not refuse the call', ON, async ($, on) => {
+  const home = { pluginConfigs: { 'coolify@spider-claude-mods': { options: { url: URL_OPTION } } } }
+  const { sent, tools } = world(on, { user: home, project: home })
+  for (const name of await started($, tools)) {
+    sent.length = 0
+    expect((await $.tool.call(CALLS[name]!.input('/projects') as never)).isError, name).toBeUndefined()
+    expect(sent.map((s) => s.url), name).toEqual(['https://coolify.example.com/api/v1/projects'])
+  }
 })
 
 test('options of another plugin or another name in the repository settings do not refuse the call', ON, async ($, on) => {

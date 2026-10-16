@@ -1,6 +1,6 @@
 {
   "name": "coolify",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Read or change your Coolify instance (projects, applications, deployments) through its API, using the url and apiKey plugin options.",
   "author": {
     "name": "anderson-spider"
