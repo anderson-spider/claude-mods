@@ -18,6 +18,11 @@
       "description": "Control native Mac apps through Codex, with per-app approval and /codex-cu on|off."
     },
     {
+      "name": "coolify",
+      "source": "./plugins/coolify",
+      "description": "Read or change your Coolify instance (projects, applications, deployments) through its API, using the url and apiKey plugin options."
+    },
+    {
       "name": "git-cleanup",
       "source": "./plugins/git-cleanup",
       "description": "List stale worktrees and merged or orphaned branches in any git repository, then delete only what you approve."
