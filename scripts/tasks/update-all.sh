@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # npm run update:all — from the main checkout: pull main and update every installed plugin.
 set -euo pipefail
+. scripts/tasks/lib.sh
+use_own_claude
 if [ "$(git rev-parse --path-format=absolute --git-dir)" != "$(git rev-parse --path-format=absolute --git-common-dir)" ]; then
   echo "run update:all from the main checkout, not a worktree" >&2
   exit 1

@@ -23,11 +23,11 @@ test("outside a cloud session nothing runs and nothing is said", () => {
   assert.deepEqual(f.writes, []);
 });
 
-test("in a cloud session npm ci installs the pinned tools and puts the local bin on PATH", () => {
+test("in a cloud session npm ci installs the pinned tools and puts the local bin last on PATH", () => {
   const f = fake(["npm ls --silent"]);
   assert.equal(setup({ env: REMOTE, root: "/repo", run: f.run, append: f.append }), "cloud setup: npm tools installed (package-lock.json)");
   assert.deepEqual(f.calls, ["npm ls --silent", "npm ci"]);
-  assert.deepEqual(f.writes, [["/env", 'export PATH="/repo/node_modules/.bin:$PATH"\n']]);
+  assert.deepEqual(f.writes, [["/env", 'export PATH="$PATH:/repo/node_modules/.bin"\n']]);
 });
 
 test("an installed tree is kept, so a nested session does not reinstall the CLI it runs from", () => {

@@ -2,7 +2,10 @@
 # npm run plugins:types [-- <name>] — generate the claude-code typings one plugin's (or every plugin's) tsconfig.json extends.
 # Claude Code writes plugins/*/.claude-plugin/types/ only when an interactive session loads a plugin from its folder,
 # so this opens one on a pseudo-terminal with the plugin (or every plugin) and exits once each has its typings.
+# It runs your own claude: the typings carry its version, which ensure-plugin-types matches against your sessions.
 set -euo pipefail
+. scripts/tasks/lib.sh
+use_own_claude
 name=${1:-}
 if [ -n "$name" ]; then
   [[ "$name" =~ ^[a-z][a-z0-9-]*$ && -d "plugins/$name" ]] || { echo "no such plugin: $name" >&2; exit 1; }

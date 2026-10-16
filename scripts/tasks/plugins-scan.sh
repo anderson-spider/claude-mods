@@ -4,6 +4,8 @@
 # PR can diff it: run this, `mv .scan .scan.before`, change the code, run it again and `diff -r .scan.before .scan`.
 # The repository path is stripped so the files compare across worktrees. Neither directory is committed.
 set -euo pipefail
+. scripts/tasks/lib.sh
+use_pinned_tools
 mkdir -p .scan
 status=0
 for p in plugins/*/; do

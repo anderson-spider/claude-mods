@@ -24,9 +24,11 @@ if (!existsSync(join(root, "plugins", plugin, ".claude-plugin/types/tsconfig.jso
   process.exit(0);
 }
 
-// The TypeScript package-lock.json pins; `npm ci` installs it.
-const tsc = join(root, "node_modules/.bin/tsc");
-if (!existsSync(tsc)) {
+// The TypeScript package-lock.json pins, which `npm ci` installs: this checkout's, else the main checkout's, since a
+// fresh worktree has no node_modules.
+const main = spawnSync("git", ["worktree", "list", "--porcelain"], { cwd: root, encoding: "utf8", timeout: 5_000 }).stdout?.match(/^worktree (.+)$/m)?.[1];
+const tsc = [root, main].filter(Boolean).map((dir) => join(dir, "node_modules/.bin/tsc")).find((path) => existsSync(path));
+if (!tsc) {
   console.error(`typecheck skipped for plugins/${plugin}: TypeScript is not installed; run npm ci`);
   process.exit(0);
 }
