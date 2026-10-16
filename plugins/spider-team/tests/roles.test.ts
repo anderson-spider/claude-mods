@@ -24,8 +24,8 @@ test('the analyst and the reviewer are told the read-only git commands the guard
   expect(SPECS.analyst.prompt).toContain('For history, read the git log, blame and diffs.')
   expect(SPECS.analyst.description).toBe('Investigate code, git history and evidence without changing anything.')
 })
-test('the analyst answer has a word cap, and the planner steps and reviewer findings take one line each', () => {
-  expect(SPECS.analyst.prompt).toContain('Keep the answer under about 250 words unless the brief asks for another format.')
+test('the analyst answer leads with the finding, and the planner steps and reviewer findings take one line each', () => {
+  expect(SPECS.analyst.prompt).toContain('Lead with the finding, then its evidence and open questions, unless the brief asks for another format.')
   expect(SPECS.planner.prompt).toContain('ordered steps, one line each with the files it touches')
   expect(SPECS.reviewer.prompt).toContain('Report actionable findings, one per line with its file:line, and risk with a verdict')
 })

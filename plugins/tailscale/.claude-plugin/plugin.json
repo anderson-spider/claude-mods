@@ -1,6 +1,6 @@
 {
   "name": "tailscale",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "description": "Read or change your tailnet through the Tailscale API using the apiKey plugin option.",
   "author": {
     "name": "anderson-spider"

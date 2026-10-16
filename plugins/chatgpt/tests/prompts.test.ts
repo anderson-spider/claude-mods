@@ -34,7 +34,7 @@ test('image instructions keep consent, references, provenance and refusal bounda
 
 test('ASK_DESCRIPTION is pinned byte for byte', () => {
   expect(ASK_DESCRIPTION).toBe(
-    'Ask the user\'s logged-in ChatGPT for a self-contained long answer, or when the user requests ChatGPT. Keep repository-dependent work local. Include the goal, minimum context, output format and language. Returns a Markdown file, chat URL and answer excerpt. Use non-sensitive context; personal-project code or files require the user\'s request. Never send credentials, secrets, private personal data or work data (employer repos, dashboards, logs, customer data).',
+    'Ask the user\'s logged-in ChatGPT for a self-contained long answer, or when the user requests ChatGPT. Keep repository-dependent work local. Include the goal, minimum context, output format and language. Returns a Markdown file, chat URL and answer excerpt; past the foreground wait it is an error naming the background job that saves the answer. Use non-sensitive context; personal-project code or files require the user\'s request. Never send credentials, secrets, private personal data or work data (employer repos, dashboards, logs, customer data).',
   )
 })
 

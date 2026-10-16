@@ -36,7 +36,7 @@ Project skills (`.claude/skills/`):
 
 ## Done for a plugin change
 
-1. `claude plugin validate --strict plugins/<name>` and `claude plugin test plugins/<name>` pass.
+1. `claude plugin validate --strict plugins/<name>` passes, and `claude plugin test plugins/<name>` passes unless the plugin ships only skills.
 2. `node scripts/check-consistency.mjs` passes.
 3. `version` in `plugin.json` is bumped if a shipped file changed: anything under `plugins/<name>/` except `tests/`, `helper/test/`, `docs/`, `*.test.*` and the root `*.md` files. `node scripts/check-version-bump.mjs <base-ref>` enforces it.
 4. The root README and the plugin's AGENTS.md match the new behavior.
@@ -50,7 +50,7 @@ Project skills (`.claude/skills/`):
 
 ## CI
 
-`.github/workflows/ci.yml` runs the consistency and bump checks, the script and helper tests, and `validate --strict` plus `test` for every marketplace plugin and a scaffolded `ci-sample`, then generates the typings in a session without login and runs `tsc` on each plugin and the sample, with the Claude Code CLI at `CLAUDE_CLI_PIN`. That pin must equal the version the root README says the repository is checked with. The same job runs again on the latest CLI as `plugins-latest`, which may fail without failing the run: it shows what a newer CLI breaks before the pin moves. The required checks are `checks` and `plugins`.
+`.github/workflows/ci.yml` runs the consistency and bump checks, the script and helper tests, and `validate --strict` for every marketplace plugin and a scaffolded `ci-sample`, plus `test` for each one with hooks, then generates the typings in a session without login and runs `tsc` on each plugin and the sample, with the Claude Code CLI at `CLAUDE_CLI_PIN`. That pin must equal the version the root README says the repository is checked with. The same job runs again on the latest CLI as `plugins-latest`, which may fail without failing the run: it shows what a newer CLI breaks before the pin moves. The required checks are `checks` and `plugins`.
 
 ## Conventions
 

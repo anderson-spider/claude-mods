@@ -5,7 +5,7 @@ const BOUNDARIES =
 export const ASK_DESCRIPTION =
   'Ask the user\'s logged-in ChatGPT for a self-contained long answer, or when the user requests ChatGPT. ' +
   'Keep repository-dependent work local. Include the goal, minimum context, output format and language. ' +
-  'Returns a Markdown file, chat URL and answer excerpt. ' +
+  'Returns a Markdown file, chat URL and answer excerpt; past the foreground wait it is an error naming the background job that saves the answer. ' +
   BOUNDARIES
 
 export const IMAGE_DESCRIPTION =

@@ -113,7 +113,8 @@ export const register: Register = (on, options) => {
         "Merge requests of the current repo's GitLab project. list (filters; allProjects: every project; next = more " +
         'pages), get, status (pipeline, approvals, discussions, conflicts, blockers), diff, commits, create, update, ' +
         'approve, unapprove, rebase, merge (only when the user asks; iid and head sha required; refused for drafts, ' +
-        'conflicts, blocking discussions, protected targets other than main/master/develop). Labels must exist unless ' +
+        'conflicts, blocking discussions, release* or protected targets besides main/master/develop unless ' +
+        'allowProtectedTarget). Labels must exist unless ' +
         'createMissingLabels. Writes on MRs by others are refused without allowOthers.',
       inputSchema: {
         type: 'object',
@@ -146,7 +147,7 @@ export const register: Register = (on, options) => {
           squash: { type: 'boolean' },
           files: { ...NAMES, description: 'diff: paths containing these.' },
           sha: { type: 'string', description: 'merge: full head sha from status.' },
-          whenPipelineSucceeds: { type: 'boolean' },
+          whenPipelineSucceeds: { type: 'boolean', description: 'merge: auto-merge on pipeline success.' },
           allowOthers: ALLOW_OTHERS,
           allowProtectedTarget: { type: 'boolean' },
         },
@@ -156,8 +157,8 @@ export const register: Register = (on, options) => {
     await $.tool.register({
       name: 'gitlab_mr_comment',
       description:
-        'Discussions of a merge request: list (ids, authors, file/line, resolved; next = more pages), unresolved (every ' +
-        'open thread: place, author, ask, last reply), comment, reply ' +
+        'Discussions of a merge request: list (ids, authors, file/line, resolved; next = more pages), unresolved (open ' +
+        'threads: place, author, ask, last reply; up to 2,000 discussions), comment, reply ' +
         'to a discussion, line (a diff comment on path at line, or oldLine for a removed line), edit a note, resolve, ' +
         'unresolve. Writes on MRs by others are refused without allowOthers.',
       inputSchema: {
