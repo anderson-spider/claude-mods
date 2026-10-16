@@ -21,7 +21,7 @@ export const PROMPT = (bridge: string) =>
 export const DESCRIPTION = [
   'Control native macOS apps through Codex background clicks/typing without taking over the mouse.',
   'Runs JavaScript with top-level await in this caller\'s persistent cua_repl session.',
-  'First call after start/reset: only `await cua.getState();` or `let app = await cua.getApp("<App name or bundle id>");`; read its API documentation before continuing.',
+  'First call after start/reset: one documented entry call, such as `await cua.getState();` or `let app = await cua.getApp("<App name or bundle id>");`; read its API documentation before continuing.',
   'New apps ask the person; refusals are final and busy apps wait for their lease.',
 ].join(' ')
 

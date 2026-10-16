@@ -35,7 +35,7 @@ export const register: Register = (on, options) => {
     await $.tool.register({
       name: 'tailscale_get',
       description:
-        'Read the Tailscale API with GET. Lists are unpaginated; use fields to limit output. ' +
+        'Read the Tailscale API with GET. Lists are unpaginated and answers past 60,000 characters are cut, so use fields to limit output. ' +
         'Secret fields (*Key, *Secret, *Token) are filtered. For ACL edits, GET /tailnet/-/acl first and keep its ETag.',
       inputSchema: {
         type: 'object',

@@ -28,7 +28,7 @@ test('routing instructions keep consent, fresh state and private-input guardrail
   expect(prompt).toContain('passwords and payment details to the person; never type them')
   expect(prompt).toContain('Share private screen content only when the task needs it')
   expect(denyOwn('bridge')).toContain('Report bridge failures; do not switch desktop-control routes')
-  expect(DESCRIPTION).toContain('First call after start/reset: only')
+  expect(DESCRIPTION).toContain('First call after start/reset: one documented entry call')
   expect(DESCRIPTION).toContain('read its API documentation before continuing')
 })
 

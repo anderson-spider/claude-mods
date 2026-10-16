@@ -10,7 +10,7 @@ Drive the plugin in `$ARGUMENTS` in a second Claude session; audit its records h
 
 ## 0. Preconditions
 
-Check `HERDR_ENV=1` and `plugins/<name>/.claude-plugin/plugin.json`; if either is missing, report it (list available plugins for an unknown name) and stop. Proceed when `claude plugin validate plugins/<name>` and `claude plugin test plugins/<name>` both pass; otherwise report their results and stop.
+Check `HERDR_ENV=1` and `plugins/<name>/.claude-plugin/plugin.json`; if either is missing, report it (list available plugins for an unknown name) and stop. Proceed when `claude plugin validate --strict plugins/<name>` and `claude plugin test plugins/<name>` both pass; otherwise report their results and stop.
 
 ## 1. Session
 
