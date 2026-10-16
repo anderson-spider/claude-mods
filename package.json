@@ -14,7 +14,8 @@
     "plugins:update": "bash scripts/tasks/plugins-update.sh",
     "update:all": "bash scripts/tasks/update-all.sh",
     "plugins:types": "bash scripts/tasks/plugins-types.sh",
-    "plugin:new": "bash scripts/tasks/plugin-new.sh"
+    "plugin:new": "bash scripts/tasks/plugin-new.sh",
+    "install:test": "bash scripts/tasks/install-test.sh"
   },
   "devDependencies": {
     "@anthropic-ai/claude-code": "2.1.301",

@@ -1,0 +1,24 @@
+name: Feature request
+description: Ask for a change to a plugin, or for a new one.
+labels: [enhancement]
+body:
+  - type: input
+    id: plugin
+    attributes:
+      label: Plugin
+      description: The plugin's name, or `new` for a new plugin.
+      placeholder: gitlab
+    validations:
+      required: true
+  - type: textarea
+    id: need
+    attributes:
+      label: What you want to do
+      description: The task you are trying to get done and where the plugin falls short today.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: Proposed change
+      description: Optional. How you picture it working.

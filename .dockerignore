@@ -1,0 +1,8 @@
+# The install test copies the checkout as its marketplace source: leave out what a fresh clone does not have.
+.git
+node_modules
+plugins/*/.claude-plugin/types
+plugins/codex-computer-use/helper/state
+plugins/codex-computer-use/helper/run
+.scan*
+.reports

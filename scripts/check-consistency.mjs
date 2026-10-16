@@ -132,6 +132,17 @@ function checkCliPin(root, errors) {
   else if (pin !== checked) errors.push(`package.json: "${CLI_PACKAGE}" is ${pin}, but README.md says the repository is checked with ${checked ? `v${checked}` : 'no version ("checked with vX.Y.Z")'}`)
 }
 
+// scripts/bootstrap.sh runs from a bare download, so it lists the plugins itself; the list must match the marketplace.
+function checkBootstrap(root, names, errors) {
+  const script = join(root, 'scripts/bootstrap.sh')
+  if (!existsSync(script)) return
+  const all = /^ALL="([^"]*)"$/m.exec(readText(script))?.[1]
+  if (all === undefined) return errors.push('scripts/bootstrap.sh: no ALL="<plugins>" line')
+  const listed = all.split(/\s+/).filter(Boolean).sort().join(' ')
+  const expected = [...names].sort().join(' ')
+  if (listed !== expected) errors.push(`scripts/bootstrap.sh: ALL lists "${listed}", but marketplace.json has "${expected}"`)
+}
+
 // Each project hook script is wired under the event and matcher its header declares, with its exact command.
 function checkHooks(root, errors) {
   const settingsPath = join(root, '.claude/settings.json')
@@ -278,6 +289,7 @@ export function checkRepo(root = '.') {
   }
 
   checkCliPin(root, errors)
+  checkBootstrap(root, listed, errors)
   checkHooks(root, errors)
   return { errors, count: marketplace.plugins.length }
 }

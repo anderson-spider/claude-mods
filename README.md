@@ -35,19 +35,26 @@ From a local copy: `/plugin marketplace add /path/to/claude-mods`.
 
 codex-computer-use also needs a local helper on the Mac: follow [its install steps](plugins/codex-computer-use/README.md#install), or use the one-step setup below.
 
-### One step on a Mac
+### One step
 
-`scripts/bootstrap.sh` adds the marketplace, installs or updates chatgpt, codex-computer-use and tailscale, and installs the codex-computer-use helper (a LaunchAgent):
+`scripts/bootstrap.sh` adds the marketplace and installs or updates every plugin. On macOS it also installs the codex-computer-use helper (a LaunchAgent); on Linux it leaves codex-computer-use out, since that plugin controls native Mac apps:
 
 ```
 curl -fsSL https://raw.githubusercontent.com/anderson-spider/claude-mods/main/scripts/bootstrap.sh | sh
 ```
 
-Add `-s -- --check` after `sh` for a dry run, or `-s -- --only tailscale,chatgpt` to limit the plugins. It is safe to rerun, skips the helper when the ChatGPT app is missing and never sets secrets: use `claude plugin configure tailscale` for `apiKey`.
+Add `-s -- --check` after `sh` for a dry run, or `-s -- --only tailscale,chatgpt` to limit the plugins. It is safe to rerun, skips the helper when the ChatGPT app is missing and never sets secrets: use `claude plugin configure gitlab` for its `tokens` and `claude plugin configure tailscale` for its `apiKey`.
 
 ### Update
 
-From the main checkout, `npm run update:all` pulls `main` (fast-forward only, clean tree), reinstalls the pinned tools and updates every installed plugin; then run `/reload-plugins` or start a new session.
+Refresh the marketplace, then update each plugin you installed; run `/reload-plugins` or start a new session afterwards:
+
+```
+claude plugin marketplace update spider-claude-mods
+claude plugin update <plugin>@spider-claude-mods
+```
+
+Rerunning the one-step command does both for every plugin. From the main checkout, `npm run update:all` pulls `main` (fast-forward only, clean tree), reinstalls the pinned tools and updates every installed plugin; then run `/reload-plugins` or start a new session.
 
 ## Contributing
 
@@ -71,6 +78,7 @@ Load a plugin from its folder so edits reload automatically, with `claude --plug
 | `npm run plugins:scan` | Save each plugin's `validate --strict` output under `.scan/` to diff before and after a refactor. |
 | `npm run plugins:update` | Refresh the marketplace and update every installed plugin in its own scope. |
 | `npm run update:all` | Pull `main`, run `npm ci` and `plugins:update` (main checkout only). |
+| `npm run install:test` | Install the marketplace from the checkout on a clean Linux image (Docker) as a new user would, and check that every plugin loads. |
 
 `/reload-plugins` and `claude plugin details` report `0 hooks` for every plugin here, because they count only `hooks.json` command hooks and these plugins ship hooks modules. `claude plugin validate plugins/<name>` lists a module's events and `$` calls; a module that fails to load leaves a line in `claude --debug`.
 

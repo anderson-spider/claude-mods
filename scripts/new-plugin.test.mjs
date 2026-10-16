@@ -237,7 +237,7 @@ test("writes nothing when the README has a table but no install block", (t) => {
 test("the real root files take a new plugin that then passes its own checks", (t) => {
   const root = mkdtempSync(join(tmpdir(), "new-plugin-real-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  for (const file of [".claude-plugin/marketplace.json", "AGENTS.md", "README.md"]) {
+  for (const file of [".claude-plugin/marketplace.json", "AGENTS.md", "README.md", "scripts/bootstrap.sh"]) {
     mkdirSync(dirname(join(root, file)), { recursive: true });
     cpSync(join(repoRoot, file), join(root, file));
   }
@@ -289,4 +289,20 @@ test("the command scaffolds into NEW_PLUGIN_ROOT and prints the next step", (t) 
   assert.ok(existsSync(join(root, "plugins/fresh-kit/hooks/register.tsx")));
   assert.deepEqual(checkRepo(root).errors, []);
   assert.ok(!existsSync(join(repoRoot, "plugins/fresh-kit")));
+});
+
+test("the bootstrap plugin list takes the new plugin in marketplace order, and a list it cannot find writes nothing", (t) => {
+  const root = fixture(t);
+  mkdirSync(join(root, "scripts"));
+  writeFileSync(join(root, "scripts/bootstrap.sh"), '#!/bin/sh\nALL="mid"\n');
+  scaffoldPlugin(root, "alpha");
+  assert.equal(readFileSync(join(root, "scripts/bootstrap.sh"), "utf8"), '#!/bin/sh\nALL="alpha mid"\n');
+  assert.deepEqual(checkRepo(root).errors.filter((line) => line.startsWith("scripts/bootstrap.sh")), []);
+
+  const other = fixture(t);
+  mkdirSync(join(other, "scripts"));
+  writeFileSync(join(other, "scripts/bootstrap.sh"), "#!/bin/sh\nPLUGINS=mid\n");
+  const before = listing(other);
+  assert.throws(() => scaffoldPlugin(other, "alpha"), /scripts\/bootstrap\.sh: no ALL="<plugins>" line/);
+  assert.deepEqual(listing(other), before);
 });

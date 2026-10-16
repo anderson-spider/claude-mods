@@ -2,7 +2,8 @@
 // Run: npm run plugin:new -- <name> [description]   (or: node scripts/new-plugin.mjs <name> [description])
 // `scaffoldPlugin(root, name, description)` is the pure core. It checks everything, then writes, so a refusal leaves no file.
 // What it writes: plugins/<name>/ from scripts/plugin-template/, the marketplace entry, .claude/rules/<name>.md, the
-// plugin's line in the root AGENTS.md "Where to look" list, and the root README table row and install line.
+// plugin's line in the root AGENTS.md "Where to look" list, the root README table row and install line, and the plugin
+// list of scripts/bootstrap.sh when the repository has one.
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -89,6 +90,13 @@ export function scaffoldPlugin(root, name, description) {
   }
   const withRow = insertSorted(readText(readmePath), /^\| \[([a-z0-9-]+)\]\(plugins\/[^)]*\) \|/, name, `| [${name}](plugins/${name}/README.md) | ${summary.replaceAll('|', '\\|')} |`, 'README.md plugin table')
   edited['README.md'] = insertSorted(withRow, new RegExp(`^/plugin install ([a-z0-9-]+)@${market.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`), name, `/plugin install ${name}@${market}`, 'README.md install block')
+
+  const bootstrapPath = join(root, 'scripts/bootstrap.sh')
+  if (existsSync(bootstrapPath)) {
+    const text = readText(bootstrapPath)
+    if (!/^ALL="[^"]*"$/m.test(text)) throw new Error('scripts/bootstrap.sh: no ALL="<plugins>" line')
+    edited['scripts/bootstrap.sh'] = text.replace(/^ALL="[^"]*"$/m, `ALL="${marketplace.plugins.map(entry => entry.name).join(' ')}"`)
+  }
 
   for (const [path, text] of Object.entries({ ...created, ...edited })) {
     mkdirSync(dirname(join(root, path)), { recursive: true })

@@ -791,3 +791,17 @@ test("a .DS_Store beside the generated typings keeps the delete-the-directory hi
     ["plugins/ghost: no marketplace.json entry (only the generated .claude-plugin/types/ is left; delete the directory)"],
   );
 });
+
+test("the bootstrap plugin list matches the marketplace, in any order", (t) => {
+  assert.deepEqual(problems(t, (files) => { files["scripts/bootstrap.sh"] = '#!/bin/sh\nALL="alpha"\n'; }), []);
+});
+
+for (const { name, script, expected } of [
+  { name: "a bootstrap list missing a plugin", script: 'ALL=""', expected: 'scripts/bootstrap.sh: ALL lists "", but marketplace.json has "alpha"' },
+  { name: "a bootstrap list with an unknown plugin", script: 'ALL="alpha ghost"', expected: 'scripts/bootstrap.sh: ALL lists "alpha ghost", but marketplace.json has "alpha"' },
+  { name: "a bootstrap script without its list", script: "PLUGINS=alpha", expected: 'scripts/bootstrap.sh: no ALL="<plugins>" line' },
+]) {
+  test(`fails: ${name}`, (t) => {
+    assert.deepEqual(problems(t, (files) => { files["scripts/bootstrap.sh"] = `#!/bin/sh\n${script}\n`; }), [expected]);
+  });
+}

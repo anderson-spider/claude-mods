@@ -1,21 +1,25 @@
 #!/bin/sh
-# One-step setup of this marketplace on a Mac: adds the marketplace, installs or updates the plugins and installs
-# the codex-computer-use helper (a LaunchAgent) from the installed plugins. Safe to run again.
+# One-step setup of this marketplace: adds it, installs or updates every plugin and, on macOS, installs the
+# codex-computer-use helper (a LaunchAgent) from the installed plugin. Elsewhere codex-computer-use, which controls
+# native Mac apps, is left out. Safe to run again.
 #
 #   bootstrap.sh                     everything below
 #   bootstrap.sh --only tailscale,chatgpt only those plugins
 #   bootstrap.sh --check             prints what it would do and checks the prerequisites; changes nothing
 #
+# BOOTSTRAP_SOURCE replaces the GitHub repository as the marketplace source (a local checkout, for a test install).
+#
 # Run it straight from GitHub:
 #   curl -fsSL https://raw.githubusercontent.com/anderson-spider/claude-mods/main/scripts/bootstrap.sh | sh
 # Arguments go after `sh -s --`.
 #
-# Secrets are never handled here: set `apiKey` yourself with `claude plugin configure <plugin>`.
+# Secrets are never handled here: set them yourself with `claude plugin configure <plugin>`.
 set -eu
 
 MARKET=spider-claude-mods
-REPO=anderson-spider/claude-mods
-ALL="chatgpt codex-computer-use tailscale"
+REPO=${BOOTSTRAP_SOURCE:-anderson-spider/claude-mods}
+# Every plugin of the marketplace; check-consistency keeps this list equal to marketplace.json.
+ALL="chatgpt codex-computer-use git-cleanup gitlab session-hud spider-team tailscale"
 NODE=${BOOTSTRAP_NODE:-/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node}
 ONLY=
 CHECK=
@@ -37,16 +41,21 @@ act() {
   if [ -n "$CHECK" ]; then printf 'would: %s\n' "$*"; else "$@"; fi
 }
 
-[ "$(uname -s)" = Darwin ] || fail "macOS only: the helpers are launchd LaunchAgents"
 command -v claude >/dev/null 2>&1 || fail "claude is not on PATH; install Claude Code first"
+MAC=
+[ "$(uname -s)" = Darwin ] && MAC=1
 
 if [ -n "$ONLY" ]; then
   PLUGINS=$(printf '%s' "$ONLY" | tr ',' ' ')
   for p in $PLUGINS; do
     case " $ALL " in *" $p "*) ;; *) fail "unknown plugin '$p' (one of: $ALL)" ;; esac
+    [ -n "$MAC" ] || [ "$p" != codex-computer-use ] || fail "codex-computer-use controls native Mac apps: macOS only"
   done
-else
+elif [ -n "$MAC" ]; then
   PLUGINS=$ALL
+else
+  PLUGINS=$(printf '%s' "$ALL" | sed 's/ *codex-computer-use//')
+  say "codex-computer-use left out: it controls native Mac apps"
 fi
 
 say "marketplace $MARKET"
@@ -91,6 +100,7 @@ printf '\ndone. Next:\n  - start a new Claude Code session, or run /reload-plugi
 for p in $PLUGINS; do
   case "$p" in
     codex-computer-use) echo '  - codex-computer-use: `/codex-cu status` should report the helper running' ;;
+    gitlab) echo '  - gitlab needs its tokens (host=token pairs): `claude plugin configure gitlab`' ;;
     tailscale) echo '  - tailscale needs its apiKey: `claude plugin configure tailscale`' ;;
   esac
 done
