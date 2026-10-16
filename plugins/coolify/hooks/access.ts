@@ -1,12 +1,13 @@
 // Where the Coolify instance and its API token come from. Pure: the settings read is injected.
 // The `url` and `apiKey` options are the only sources. Either one declared by the repository's own settings (project or
-// local) refuses the call: a repository that set the url could send the user's token to a host it controls, and one
-// that set the key would choose the account. Settings that cannot be read refuse the call as well. No message carries
-// a value.
+// local) with a value the user's settings do not give it refuses the call: a repository that set the url could send the
+// user's token to a host it controls, and one that set the key would choose the account. The same value as the user's is
+// not a choice of the repository: with Claude opened in the home folder, the project settings are the user's own
+// ~/.claude/settings.json. Settings that cannot be read refuse the call as well. No message carries a value.
 
 export type AccessIo = {
   /** One settings source's `pluginConfigs`; rejects when it cannot be read. */
-  settings: (source: 'project' | 'local') => Promise<{ pluginConfigs?: unknown } | undefined>
+  settings: (source: 'user' | 'project' | 'local') => Promise<{ pluginConfigs?: unknown } | undefined>
 }
 
 export type Off = 'no-key' | 'bad-key' | 'no-url' | 'bad-url' | 'unreadable' | 'repo-option'
@@ -60,13 +61,26 @@ export function checkUrl(value: unknown): { base: string; off?: undefined } | { 
   return { base: url.origin + API_PATH }
 }
 
-/** Whether a settings source's `pluginConfigs` give this plugin a value for any of `options`. */
-export function declaresOption(configs: unknown, plugin: string, options: readonly string[]): boolean {
-  if (!configs || typeof configs !== 'object') return false
+/** The values a settings source's `pluginConfigs` give this plugin for `options`, under its name or name@marketplace. */
+export function declaredOptions(configs: unknown, plugin: string, options: readonly string[]): Map<string, unknown[]> {
+  const found = new Map<string, unknown[]>()
+  if (!configs || typeof configs !== 'object') return found
   for (const [name, value] of Object.entries(configs)) {
     if (name !== plugin && !name.startsWith(`${plugin}@`)) continue
     const declared = (value as { options?: unknown } | null | undefined)?.options
-    if (declared && typeof declared === 'object' && options.some((o) => Object.hasOwn(declared, o))) return true
+    if (!declared || typeof declared !== 'object') continue
+    for (const option of options) {
+      if (Object.hasOwn(declared, option)) found.set(option, [...(found.get(option) ?? []), (declared as Record<string, unknown>)[option]])
+    }
+  }
+  return found
+}
+
+/** Whether `repo` declares an option value that `user` does not declare: a value only the repository chose. */
+export function repoChose(repo: Map<string, unknown[]>, user: Map<string, unknown[]>): boolean {
+  for (const [option, values] of repo) {
+    const own = new Set((user.get(option) ?? []).map((v) => JSON.stringify(v)))
+    if (values.some((v) => !own.has(JSON.stringify(v)))) return true
   }
   return false
 }
@@ -79,11 +93,13 @@ export async function resolveAccess(io: AccessIo, options: { url?: unknown; apiK
   if (key.key === undefined) return { off: key.off }
   const url = checkUrl(options.url)
   if (url.base === undefined) return { off: url.off }
+  const OPTION_NAMES = ['url', 'apiKey'] as const
   let declared = false
   try {
+    const user = declaredOptions((await io.settings('user'))?.pluginConfigs, 'coolify', OPTION_NAMES)
     for (const source of ['project', 'local'] as const) {
       const settings = await io.settings(source)
-      if (declaresOption(settings?.pluginConfigs, 'coolify', ['url', 'apiKey'])) declared = true
+      if (repoChose(declaredOptions(settings?.pluginConfigs, 'coolify', OPTION_NAMES), user)) declared = true
     }
   } catch {
     return { off: 'unreadable' }

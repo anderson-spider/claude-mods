@@ -1,9 +1,9 @@
 import { expect, test } from 'claude-code/testing'
-import { OFF_TEXT, checkKey, checkUrl, declaresOption, resolveAccess, type AccessIo } from '../hooks/access'
+import { OFF_TEXT, checkKey, checkUrl, declaredOptions, repoChose, resolveAccess, type AccessIo } from '../hooks/access'
 
 const KEY = '1|coolify-test-token'
 const URL_OPTION = 'https://coolify.example.com'
-const io = (sources: Partial<Record<'project' | 'local', { pluginConfigs?: unknown }>> = {}): AccessIo => ({
+const io = (sources: Partial<Record<'user' | 'project' | 'local', { pluginConfigs?: unknown }>> = {}): AccessIo => ({
   settings: async (source) => sources[source],
 })
 
@@ -45,11 +45,24 @@ test('checkUrl refuses a missing url, plain http, credentials, another path, a q
   }
 })
 
-test('declaresOption matches the plugin name or name@marketplace only, for any listed option', () => {
-  expect(declaresOption({ 'coolify@m': { options: { apiKey: '' } } }, 'coolify', ['url', 'apiKey'])).toBe(true)
-  expect(declaresOption({ coolify: { options: { url: 'https://evil.com' } } }, 'coolify', ['url', 'apiKey'])).toBe(true)
-  expect(declaresOption({ coolifyx: { options: { apiKey: 'x' } } }, 'coolify', ['url', 'apiKey'])).toBe(false)
-  expect(declaresOption({ coolify: { options: { other: 1 } } }, 'coolify', ['url', 'apiKey'])).toBe(false)
+test('declaredOptions collects the values under the plugin name or name@marketplace only', () => {
+  const found = declaredOptions(
+    { 'coolify@m': { options: { apiKey: '' } }, coolify: { options: { url: 'https://a' } }, coolifyx: { options: { url: 'x' } }, other: 1 },
+    'coolify',
+    ['url', 'apiKey'],
+  )
+  expect([...found]).toEqual([['apiKey', ['']], ['url', ['https://a']]])
+  expect(declaredOptions({ coolify: { options: { other: 1 } } }, 'coolify', ['url']).size).toBe(0)
+  expect(declaredOptions(undefined, 'coolify', ['url']).size).toBe(0)
+})
+
+test('repoChose is true only for a value the user settings do not declare', () => {
+  const user = new Map([['url', ['https://mine']]])
+  expect(repoChose(new Map(), user)).toBe(false)
+  expect(repoChose(new Map([['url', ['https://mine']]]), user)).toBe(false)
+  expect(repoChose(new Map([['url', ['https://evil']]]), user)).toBe(true)
+  expect(repoChose(new Map([['url', ['https://mine', 'https://evil']]]), user)).toBe(true)
+  expect(repoChose(new Map([['apiKey', ['k']]]), user)).toBe(true)
 })
 
 test('resolveAccess reads settings only when both options are valid', async () => {
@@ -60,7 +73,7 @@ test('resolveAccess reads settings only when both options are valid', async () =
   expect(await resolveAccess(counting, { apiKey: KEY, url: 'http://coolify.example.com' })).toEqual({ off: 'bad-url' })
   expect(reads).toBe(0)
   expect(await resolveAccess(counting, { apiKey: KEY, url: URL_OPTION })).toEqual({ key: KEY, base: 'https://coolify.example.com/api/v1' })
-  expect(reads).toBe(2)
+  expect(reads).toBe(3)
 })
 
 test('resolveAccess refuses a url or key the repository declares, and unreadable settings', async () => {
@@ -70,6 +83,18 @@ test('resolveAccess refuses a url or key the repository declares, and unreadable
   expect(await resolveAccess(io({ project: url }), options)).toEqual({ off: 'repo-option' })
   expect(await resolveAccess(io({ local: key }), options)).toEqual({ off: 'repo-option' })
   expect(await resolveAccess({ settings: async () => Promise.reject(new Error('x')) }, options)).toEqual({ off: 'unreadable' })
+  expect(await resolveAccess({ settings: async (s) => (s === 'user' ? Promise.reject(new Error('x')) : undefined) }, options)).toEqual({ off: 'unreadable' })
+})
+
+test('resolveAccess accepts project settings that repeat the user settings, as with Claude opened in the home folder', async () => {
+  const options = { apiKey: KEY, url: URL_OPTION }
+  const home = { pluginConfigs: { 'coolify@spider-claude-mods': { options: { url: URL_OPTION } } } }
+  const expected = { key: KEY, base: 'https://coolify.example.com/api/v1' }
+  expect(await resolveAccess(io({ user: home, project: home }), options)).toEqual(expected)
+  const evil = { pluginConfigs: { coolify: { options: { url: 'https://evil.example' } } } }
+  expect(await resolveAccess(io({ user: home, project: evil }), options)).toEqual({ off: 'repo-option' })
+  const key = { pluginConfigs: { coolify: { options: { url: URL_OPTION, apiKey: 'repo-key' } } } }
+  expect(await resolveAccess(io({ user: home, local: key }), options)).toEqual({ off: 'repo-option' })
 })
 
 test('no refusal text names a value, and each one points at an option or the settings', () => {

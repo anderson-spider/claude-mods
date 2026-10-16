@@ -24,7 +24,7 @@ A `DELETE` is sent only when its `confirm` input repeats the id at the end of th
 
 ## Privacy
 
-The instance and token come only from the `url` and `apiKey` options, not from tool input or the environment. The token is sent only in the `Authorization` header to that instance and never appears in a result or error. On every call the plugin reads the project and local settings; if either declares `url` or `apiKey` for this plugin, or the settings cannot be read, the call is refused and nothing is sent, because a repository could otherwise send your token to a host it chose. Read answers remove fields named like a password, secret, token or private key, and the values of environment variables; write answers are unfiltered.
+The instance and token come only from the `url` and `apiKey` options, not from tool input or the environment. The token is sent only in the `Authorization` header to that instance and never appears in a result or error. On every call the plugin reads the user, project and local settings; if the project or local settings declare `url` or `apiKey` for this plugin with a value your user settings do not give it, or the settings cannot be read, the call is refused and nothing is sent, because a repository could otherwise send your token to a host it chose. A value equal to your own is accepted, so a session opened in your home folder, where the project settings are your own `~/.claude/settings.json`, still works. Read answers remove fields named like a password, secret, token or private key, and the values of environment variables; write answers are unfiltered.
 
 ## Tests
 

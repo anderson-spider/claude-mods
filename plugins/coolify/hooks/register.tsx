@@ -11,7 +11,7 @@ function reply(out: { text: string; isError: boolean }): { result: string } | { 
   return out.isError ? { result: out.text, isError: true as const } : { result: out.text }
 }
 
-/** The repository's settings, which decide whether the url and apiKey options may be used. */
+/** The user's and the repository's settings, which decide whether the url and apiKey options may be used. */
 function accessIo($: EngineInterface): AccessIo {
   return {
     settings: async (source) => {
