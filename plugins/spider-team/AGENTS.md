@@ -24,4 +24,4 @@ Usage/privacy: [README.md](README.md). Lead workflow: `skills/using-spider-team/
 
 ## Checks
 
-[Root commands](../../AGENTS.md#commands); type-check with `mise exec -- tsc -p plugins/spider-team/tsconfig.json`.
+[Root commands](../../AGENTS.md#commands); type-check with `npx tsc -p plugins/spider-team/tsconfig.json`.

@@ -18,7 +18,7 @@ Each plugin README covers its setup, what it reads, sends and saves, and what it
 
 ## Install
 
-Requires Claude Code v2.1.287 or later. The repository is checked with v2.1.300 (`claude --version`).
+Requires Claude Code v2.1.287 or later. The repository is checked with v2.1.301 (`claude --version`).
 
 ```
 /plugin marketplace add anderson-spider/claude-mods
@@ -47,11 +47,11 @@ Add `-s -- --check` after `sh` for a dry run, or `-s -- --only tailscale,chatgpt
 
 ### Update
 
-From the main checkout, `mise run update:all` pulls `main` (fast-forward only, clean tree) and updates every installed plugin; then run `/reload-plugins` or start a new session.
+From the main checkout, `npm run update:all` pulls `main` (fast-forward only, clean tree), reinstalls the pinned tools and updates every installed plugin; then run `/reload-plugins` or start a new session.
 
 ## Contributing
 
-Rules for changing the code, the done definition and the project skills are in [AGENTS.md](AGENTS.md). Setup: `mise install`.
+Rules for changing the code, the done definition and the project skills are in [AGENTS.md](AGENTS.md). Setup: Node 24 (`.nvmrc`), then `npm ci`, which installs the pinned Claude Code CLI and TypeScript; `npm run` puts them first on PATH.
 
 Pull requests from forks run CI without secrets and are merged only after a maintainer reads the whole diff: the code runs on every installed copy. Use placeholders, never real hosts, project names, paths or tokens, in code, tests and examples. Report vulnerabilities privately as [SECURITY.md](SECURITY.md) describes.
 
@@ -63,13 +63,13 @@ Load a plugin from its folder so edits reload automatically, with `claude --plug
 
 | Task | What it does |
 | --- | --- |
-| `mise run plugin:new <name> [description]` | Scaffold a plugin that passes the consistency checks, then generate its typings. |
-| `mise run plugins:types [name]` | Generate the `claude-code` typings a plugin's `tsconfig.json` extends. |
-| `mise run plugins:validate` | `validate --strict` the marketplace and every plugin, then `check-consistency`. |
-| `mise run plugins:test` | Script tests, every plugin's tests and, with the ChatGPT app installed, the codex-computer-use helper tests. |
-| `mise run plugins:scan` | Save each plugin's `validate --strict` output under `.scan/` to diff before and after a refactor. |
-| `mise run plugins:update` | Refresh the marketplace and update every installed plugin in its own scope. |
-| `mise run update:all` | Pull `main` and run `plugins:update` (main checkout only). |
+| `npm run plugin:new -- <name> [description]` | Scaffold a plugin that passes the consistency checks, then generate its typings. |
+| `npm run plugins:types [-- <name>]` | Generate the `claude-code` typings a plugin's `tsconfig.json` extends. |
+| `npm run plugins:validate` | `validate --strict` the marketplace and every plugin, then `check-consistency`. |
+| `npm run plugins:test` | Script tests, every plugin's tests and, with the ChatGPT app installed, the codex-computer-use helper tests. |
+| `npm run plugins:scan` | Save each plugin's `validate --strict` output under `.scan/` to diff before and after a refactor. |
+| `npm run plugins:update` | Refresh the marketplace and update every installed plugin in its own scope. |
+| `npm run update:all` | Pull `main`, run `npm ci` and `plugins:update` (main checkout only). |
 
 `/reload-plugins` and `claude plugin details` report `0 hooks` for every plugin here, because they count only `hooks.json` command hooks and these plugins ship hooks modules. `claude plugin validate plugins/<name>` lists a module's events and `$` calls; a module that fails to load leaves a line in `claude --debug`.
 

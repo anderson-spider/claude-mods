@@ -20,11 +20,17 @@ const tsconfig = join(root, "plugins", plugin, "tsconfig.json");
 // SessionStart reuses compatible typings from the main checkout; without them tsc only reports noise.
 if (!existsSync(tsconfig)) process.exit(0);
 if (!existsSync(join(root, "plugins", plugin, ".claude-plugin/types/tsconfig.json"))) {
-  console.error(`typecheck skipped for plugins/${plugin}: typings missing; run mise run plugins:types (SessionStart reuses matching main-checkout typings when available)`);
+  console.error(`typecheck skipped for plugins/${plugin}: typings missing; run npm run plugins:types (SessionStart reuses matching main-checkout typings when available)`);
   process.exit(0);
 }
 
-const run = spawnSync("mise", ["exec", "--", "tsc", "-p", tsconfig, "--noEmit"], {
+// The TypeScript package-lock.json pins; `npm ci` installs it.
+const tsc = join(root, "node_modules/.bin/tsc");
+if (!existsSync(tsc)) {
+  console.error(`typecheck skipped for plugins/${plugin}: TypeScript is not installed; run npm ci`);
+  process.exit(0);
+}
+const run = spawnSync(tsc, ["-p", tsconfig, "--noEmit"], {
   cwd: root,
   encoding: "utf8",
   timeout: 90_000,

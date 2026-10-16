@@ -24,15 +24,15 @@ Project skills (`.claude/skills/`):
 
 ## Commands
 
-`mise install` once; `mise tasks` lists the tasks and `mise tasks info <task>` their arguments. `mise.toml` owns tool versions and task commands. Plugin-specific checks are in each plugin's AGENTS.md.
+Node 24 (`.nvmrc`; any version manager that reads it works), then `npm ci` once. `package.json` and its lockfile own the tool versions (the Claude Code CLI and TypeScript, exact) and name the tasks; `npm run` lists them and runs them with `node_modules/.bin` first on PATH. Task bodies live in `scripts/tasks/`; pass arguments after `--` (`npm run plugins:types -- gitlab`). Run `tsc` and `claude` through `npm run` or `npx` to get the pinned versions. Plugin-specific checks are in each plugin's AGENTS.md.
 
 ## Code rules
 
 - Registration: one entry module (`register.tsx`) in `hooks.json`. Keep `on(...)` and `$.noun.method(...)` calls visible to the engine's source analysis: pass `$` only to a top-level function in the same file, never across an import. Subfolder registrars may own their hooks and `$` calls; pure modules take injected host access. Tests mirror modules.
 - Tool inputs: each `mcp__<plugin>__<name>` entry in `types/index.d.ts` must match its `inputSchema` (`SchemaFor`, `hooks/schema.ts`, identical in every plugin and in `scripts/plugin-template/`).
-- Typings: loading a plugin writes its git-ignored `.claude-plugin/types/`, which its `tsconfig.json` extends (`noEmit` is required). The SessionStart hook copies complete snapshots from the main checkout when they match the running Claude Code version; otherwise run `mise run plugins:types [name]`. Regenerate after changing MCP integrations: cached `claude-code-mcp` declarations reflect the main checkout's last connected tools.
-- Project hooks (`.claude/settings.json` → `.claude/hooks/`): `block-generated-types` denies Write/Edit of generated typings (hand-written `types/index.d.ts` stays editable); `typecheck-plugin` type-checks the plugin owning an edited `.ts`/`.tsx`; `cloud-setup` (SessionStart, Claude Code cloud sessions only) installs mise from npm, runs `mise install` and puts its shims on the session's PATH. A hook script declares its event and matcher on its first line (`// PreToolUse (Edit|Write): why`), and `check-consistency` fails unless the settings wire it with `node "$CLAUDE_PROJECT_DIR/.claude/hooks/<file>"`.
-- Scripts in `scripts/` have a `*.test.mjs` beside them.
+- Typings: loading a plugin writes its git-ignored `.claude-plugin/types/`, which its `tsconfig.json` extends (`noEmit` is required). The SessionStart hook copies complete snapshots from the main checkout when they match the running Claude Code version; otherwise run `npm run plugins:types [-- <name>]`. Regenerate after changing MCP integrations: cached `claude-code-mcp` declarations reflect the main checkout's last connected tools.
+- Project hooks (`.claude/settings.json` → `.claude/hooks/`): `block-generated-types` denies Write/Edit of generated typings (hand-written `types/index.d.ts` stays editable); `typecheck-plugin` type-checks the plugin owning an edited `.ts`/`.tsx`; `cloud-setup` (SessionStart, Claude Code cloud sessions only) runs `npm ci` and puts `node_modules/.bin` first on the session's PATH. A hook script declares its event and matcher on its first line (`// PreToolUse (Edit|Write): why`), and `check-consistency` fails unless the settings wire it with `node "$CLAUDE_PROJECT_DIR/.claude/hooks/<file>"`.
+- Scripts in `scripts/` have a `*.test.mjs` beside them; the task shells in `scripts/tasks/` are thin wrappers over them and the `claude` CLI, without tests of their own.
 
 ## Done for a plugin change
 
@@ -43,18 +43,18 @@ Project skills (`.claude/skills/`):
 
 ## Adding or removing a plugin
 
-- `mise run plugin:new <name> [description]` scaffolds from `scripts/plugin-template/` and generates the typings. Names are lowercase words joined by hyphens, 26 characters at most (so `mcp__<name>__<tool>` fits in 64). The scaffold has a sample tool, pure logic with its test and the host fake `tests/host.ts`: replace the sample, fill the texts, run the done checks. Template changes keep `scripts/new-plugin.test.mjs` passing.
-- A plugin that ships only skills has no `hooks/` and no `tsconfig.json`: write its manifest, `skills/<name>/SKILL.md`, docs and rule by hand. `claude plugin test` and `tsc` skip it (CI and the mise tasks), and check-consistency requires a skill instead.
+- `npm run plugin:new -- <name> [description]` scaffolds from `scripts/plugin-template/` and generates the typings. Names are lowercase words joined by hyphens, 26 characters at most (so `mcp__<name>__<tool>` fits in 64). The scaffold has a sample tool, pure logic with its test and the host fake `tests/host.ts`: replace the sample, fill the texts, run the done checks. Template changes keep `scripts/new-plugin.test.mjs` passing.
+- A plugin that ships only skills has no `hooks/` and no `tsconfig.json`: write its manifest, `skills/<name>/SKILL.md`, docs and rule by hand. `claude plugin test` and `tsc` skip it (CI and the npm tasks), and check-consistency requires a skill instead.
 - `node scripts/check-consistency.mjs` is the checklist: manifest and marketplace entry with the same description, `tsconfig.json`, `AGENTS.md`, `README.md`, `.claude/rules/<name>.md` (the line pointing at the plugin's AGENTS.md and no `@` import, `plugins/<name>/**` in `paths`), the backticked `plugins/<name>/AGENTS.md` under "Where to look" here, the root README table row and install line, and the template copies of `hooks/schema.ts` and `tests/schema-types.ts`. It fails on orphans (a plugin directory or rule file with no marketplace entry; other rules go in a subdirectory of `.claude/rules/`).
 - Cite tests in a plugin AGENTS.md as `` `tests/<file>.test.ts` (`name`, `name`) `` or `` `tests/<file>.test.ts`: `name` `` (same for `helper/test/<file>.test.mjs`); the check fails on a missing file or undeclared name. A backticked support file under `tests/` or `helper/test/` must exist.
 
 ## CI
 
-`.github/workflows/ci.yml` runs the consistency and bump checks, the script and helper tests, and `validate --strict` for every marketplace plugin and a scaffolded `ci-sample`, plus `test` for each one with hooks, then generates the typings in a session without login and runs `tsc` on each plugin and the sample, with the Claude Code CLI at `CLAUDE_CLI_PIN`. That pin must equal the version the root README says the repository is checked with. The same job runs again on the latest CLI as `plugins-latest`, which may fail without failing the run: it shows what a newer CLI breaks before the pin moves. The required checks are `checks` and `plugins`.
+`.github/workflows/ci.yml` runs the consistency and bump checks, the script and helper tests, and `validate --strict` for every marketplace plugin and a scaffolded `ci-sample`, plus `test` for each one with hooks, then generates the typings in a session without login and runs `tsc` on each plugin and the sample, with the Claude Code CLI that `package.json` pins and `npm ci` installs. That exact version must equal the one the root README says the repository is checked with (`check-consistency`). Node comes from `.nvmrc`. The same job runs again on the latest CLI as `plugins-latest`, which may fail without failing the run: it shows what a newer CLI breaks before the pin moves. The required checks are `checks` and `plugins`.
 
 ## Conventions
 
 - README, docs, code comments and user-facing plugin messages in English.
 - Conventional Commits in English for commits and PR titles; English PR descriptions (`.github/pull_request_template.md`).
-- Refactor PRs diff `mise run plugins:scan` output before and after.
+- Refactor PRs diff `npm run plugins:scan` output before and after.
 - Docs describe current behavior and how to use or contribute; history lives in git, and a rule explaining one line of code goes in a comment there.

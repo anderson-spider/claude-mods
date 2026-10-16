@@ -29,7 +29,22 @@ for (const { name, file, config, warning } of [
     assert.equal(result.status, 0);
     assert.equal(result.stdout, "");
     assert.equal(result.stderr, warning
-      ? "typecheck skipped for plugins/example: typings missing; run mise run plugins:types (SessionStart reuses matching main-checkout typings when available)\n"
+      ? "typecheck skipped for plugins/example: typings missing; run npm run plugins:types (SessionStart reuses matching main-checkout typings when available)\n"
       : "");
   });
 }
+
+test("present typings without an installed TypeScript warn without blocking the edit", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "typecheck-plugin-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const plugin = join(root, "plugins/example");
+  mkdirSync(join(plugin, ".claude-plugin/types"), { recursive: true });
+  writeFileSync(join(plugin, "tsconfig.json"), "{}");
+  writeFileSync(join(plugin, ".claude-plugin/types/tsconfig.json"), "{}");
+  const result = spawnSync(process.execPath, [hook], {
+    input: JSON.stringify({ cwd: root, tool_input: { file_path: join(root, "plugins/example/hooks/register.tsx") } }),
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0);
+  assert.equal(result.stderr, "typecheck skipped for plugins/example: TypeScript is not installed; run npm ci\n");
+});

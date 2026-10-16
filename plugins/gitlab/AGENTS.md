@@ -10,4 +10,4 @@ Usage/privacy: [README.md](README.md).
 - Labels an MR is about to get must exist: a missing one is refused by name unless `createMissingLabels: true` creates it first, so GitLab never makes one silently (`tests/mr.test.ts`).
 - Token: one per host, sent only to the remote's host (or the real host of its SSH alias) in `PRIVATE-TOKEN` and masked as `[token]` in any answer that echoes it; refused when the repository's settings declare `tokens` or cannot be read; never in an output; `project` is a path on that host, never a URL (`tests/register.test.ts`). A remote URL is never echoed (`tests/remote.test.ts`).
 - Tests mirror modules; `tests/fake-api.ts` is the fake API for tool tests (`paged` for a next page, `ME` the token's user, `THEIRS` an MR by someone else) and `tests/host.ts` the host fake (`world`, `started`).
-- Checks: [root commands](../../AGENTS.md#commands); type-check with `mise exec -- tsc -p plugins/gitlab/tsconfig.json`.
+- Checks: [root commands](../../AGENTS.md#commands); type-check with `npx tsc -p plugins/gitlab/tsconfig.json`.

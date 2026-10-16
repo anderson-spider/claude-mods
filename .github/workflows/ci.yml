@@ -17,7 +17,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version-file: .nvmrc
       - name: Marketplace and plugin manifests agree
         run: node scripts/check-consistency.mjs
       - name: Plugins with changed shipped files bumped their version
@@ -29,8 +29,8 @@ jobs:
         run: node --test plugins/codex-computer-use/helper/test/*.test.mjs
 
   # Neither command logs in. The typings tsc needs are written by an interactive session, which starts without a login.
-  # The pinned row is the required `plugins` check; the latest row shows early what a newer CLI breaks and never fails
-  # the run.
+  # The pinned row, with the CLI package.json pins, is the required `plugins` check; the latest row shows early what a
+  # newer CLI breaks and never fails the run.
   plugins:
     name: ${{ matrix.cli == 'latest' && 'plugins-latest' || 'plugins' }}
     runs-on: ubuntu-latest
@@ -41,22 +41,21 @@ jobs:
       matrix:
         cli: [pinned, latest]
     env:
-      # The version the README says the repository is checked with; check-consistency fails when they differ.
-      CLAUDE_CLI_PIN: 2.1.300
       CLI: ${{ matrix.cli }}
       DISABLE_AUTOUPDATER: 1
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version-file: .nvmrc
+          cache: npm
+      # npm ci installs the pinned CLI and TypeScript; the latest row swaps in the newest CLI without touching the lockfile.
       - name: Install Claude Code and TypeScript
         run: |
-          version=$CLAUDE_CLI_PIN
-          [ "$CLI" = latest ] && version=latest
-          typescript=$(sed -n 's/^"npm:typescript" = "\(.*\)"$/\1/p' mise.toml)
-          npm install --global "@anthropic-ai/claude-code@${version}" "typescript@${typescript:?no TypeScript version in mise.toml}"
-          claude --version
+          npm ci
+          [ "$CLI" = latest ] && npm install --no-save @anthropic-ai/claude-code@latest
+          echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"
+          node_modules/.bin/claude --version
       # Each step runs every plugin, then fails with the list of those that failed.
       - name: Validate the marketplace and every plugin
         run: |
@@ -85,7 +84,7 @@ jobs:
           node scripts/new-plugin.mjs ci-sample "CI sample plugin."
           claude plugin validate --strict plugins/ci-sample
           claude plugin test plugins/ci-sample
-      # Same loop as `mise run plugins:types`, on Linux's `script`. A fresh runner has no login: onboarding and folder
+      # Same loop as `npm run plugins:types`, on Linux's `script`. A fresh runner has no login: onboarding and folder
       # trust are marked done so the session starts and loads every plugin of the scaffold copy, ci-sample included.
       - name: Type-check every plugin and the sample
         working-directory: ${{ runner.temp }}/scaffold

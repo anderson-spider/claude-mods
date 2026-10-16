@@ -1,5 +1,5 @@
 // Creates a plugin that passes scripts/check-consistency.mjs, so the only edits left are the text to fill in.
-// Run: mise run plugin:new <name> [description]   (or: node scripts/new-plugin.mjs <name> [description])
+// Run: npm run plugin:new -- <name> [description]   (or: node scripts/new-plugin.mjs <name> [description])
 // `scaffoldPlugin(root, name, description)` is the pure core. It checks everything, then writes, so a refusal leaves no file.
 // What it writes: plugins/<name>/ from scripts/plugin-template/, the marketplace entry, .claude/rules/<name>.md, the
 // plugin's line in the root AGENTS.md "Where to look" list, and the root README table row and install line.
@@ -105,7 +105,7 @@ if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.me
     if (extra.length) throw new Error('usage: node scripts/new-plugin.mjs <name> [description]')
     const { created, edited } = scaffoldPlugin(root, name, description)
     console.log(`created ${created.length} files for plugins/${name} and edited ${edited.join(', ')}`)
-    console.log(`next: replace the sample tool; fill in the description (a placeholder when none was given), the README text, and the "Where to look" label in AGENTS.md (the scaffold uses the plugin name there); then make sure plugins/${name}/.claude-plugin/types exists (mise run plugins:types ${name})`)
+    console.log(`next: replace the sample tool; fill in the description (a placeholder when none was given), the README text, and the "Where to look" label in AGENTS.md (the scaffold uses the plugin name there); then make sure plugins/${name}/.claude-plugin/types exists (npm run plugins:types -- ${name})`)
   } catch (error) {
     console.error(`plugin:new: ${error.message}`)
     process.exit(1)

@@ -1,0 +1,22 @@
+{
+  "name": "claude-mods",
+  "private": true,
+  "description": "Development tools and tasks for the claude-mods marketplace; the plugins themselves do not use npm.",
+  "license": "MIT",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "plugins:validate": "bash scripts/tasks/plugins-validate.sh",
+    "plugins:scan": "bash scripts/tasks/plugins-scan.sh",
+    "plugins:test": "bash scripts/tasks/plugins-test.sh",
+    "plugins:update": "node scripts/update-plugins.mjs",
+    "update:all": "bash scripts/tasks/update-all.sh",
+    "plugins:types": "bash scripts/tasks/plugins-types.sh",
+    "plugin:new": "bash scripts/tasks/plugin-new.sh"
+  },
+  "devDependencies": {
+    "@anthropic-ai/claude-code": "2.1.301",
+    "typescript": "7.0.2"
+  }
+}
