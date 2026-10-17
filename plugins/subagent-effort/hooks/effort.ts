@@ -1,9 +1,9 @@
 // The routing policy and the assessment: the question Jev answers, how its answer becomes an effort, and the call that
 // asks it. Host access is injected; only redacted task text leaves the machine. Any failure picks no effort, so the
-// agent runs at its usual effort, exactly as without the plugin.
+// call goes as it came, exactly as without the plugin.
 import type { BuiltinToolInputs } from 'claude-code'
 import { classifyFailure, createJev, JevFailure } from './jev'
-import type { Answers, Breaker, Gate, JevFailureReason, JevIo } from './jev'
+import type { Answers, Breaker, Gate, JevFailureReason, JevIo, JevUsage } from './jev'
 import { resolveAccess } from './key'
 import type { KeyIo, Off } from './key'
 import { head, redact, REDACTED } from './redact'
@@ -13,6 +13,13 @@ export type Effort = NonNullable<BuiltinToolInputs['Agent']['effort']>
 export const CALIBRATION = 1
 export const JEV_MODEL = 'jev-1.13.0'
 export const TASK_CHARS = 4000
+/**
+ * USD per million input tokens of a Jev call; output tokens are free. The published rate as of October 2026, from gateway
+ * docs rather than a TypeSafe invoice, so the cost it gives is an estimate.
+ */
+export const JEV_INPUT_USD_PER_MTOK = 0.042
+/** The estimated USD cost of one Jev call from the tokens it reported, to nine decimals. */
+export const jevCostOf = (usage: JevUsage): number => Math.round(usage.input * JEV_INPUT_USD_PER_MTOK * 1000) / 1_000_000_000
 
 /** The effort of each level of the question, in the order of its criteria. `max` is never picked. */
 export const EFFORTS = ['low', 'medium', 'high', 'xhigh'] as const satisfies readonly Effort[]
@@ -37,9 +44,10 @@ export const POLICY = { under: 1, over: 1.25 } as const
 export type JevReason = Off | JevFailureReason
 /**
  * What routing decided: the effort Jev's answer selects (null when Jev was off or failed), the highest probability of its
- * distribution (`top`, the model's confidence), why Jev was not used and how long it took when asked.
+ * distribution (`top`, the model's confidence), why Jev was not used, how long it took when asked and the tokens it
+ * reported (null when it reported none or failed).
  */
-export type Choice = { effort: Effort | null; level: number | null; top: number | null; jevReason: JevReason | null; jevMs: number | null }
+export type Choice = { effort: Effort | null; level: number | null; top: number | null; jevReason: JevReason | null; jevMs: number | null; jevTokens: JevUsage | null }
 
 const round = (n: number) => Math.round(n * 1_000_000) / 1_000_000
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value)
@@ -84,16 +92,16 @@ export async function assessEffort(io: EffortIo, call: { task: string; key?: str
   let startedAt: number | null = null
   const elapsed = () => { try { return startedAt !== null ? Math.max(0, io.jev.now() - startedAt) : null } catch { return null } }
   const off = (jevReason: JevReason): Choice => {
-    try { io.log(`subagent-effort: Jev off (${jevReason}); the agent runs at its usual effort`) } catch { /* Logging cannot change the dispatch. */ }
-    return { effort: null, level: null, top: null, jevReason, jevMs: elapsed() }
+    try { io.log(`subagent-effort: Jev off (${jevReason}); the call goes as it came`) } catch { /* Logging cannot change the dispatch. */ }
+    return { effort: null, level: null, top: null, jevReason, jevMs: elapsed(), jevTokens: null }
   }
   try {
     const access = await resolveAccess(io, call.key)
     if (access.key === undefined) return off(access.off)
     const state = clipped(call.task, access.key, call)
     const jev = { ...io.jev, fetch: (url: string, init: Parameters<JevIo['fetch']>[1]) => { startedAt ??= io.jev.now(); return io.jev.fetch(url, init) } }
-    const { answers } = await createJev(jev, access.key, { model: JEV_MODEL, breaker: io.breaker, gate: io.gate, answerIds: Object.keys(QUESTION) })(QUESTION, state)
+    const { answers, usage } = await createJev(jev, access.key, { model: JEV_MODEL, breaker: io.breaker, gate: io.gate, answerIds: Object.keys(QUESTION) })(QUESTION, state)
     const dist = distribution(answers), level = levelOf(dist)
-    return { effort: EFFORTS[level]!, level, top: Math.max(...Object.values(dist)), jevReason: null, jevMs: elapsed() }
+    return { effort: EFFORTS[level]!, level, top: Math.max(...Object.values(dist)), jevReason: null, jevMs: elapsed(), jevTokens: usage }
   } catch (error) { return off(classifyFailure(error).failure.reason) }
 }

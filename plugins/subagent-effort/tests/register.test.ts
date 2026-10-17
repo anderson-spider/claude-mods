@@ -73,7 +73,7 @@ test('when Jev is off the call goes as it came, with one toast per reason in thi
   const h = world(on), received = dispatched(on); await started($)
   await settle($.tool.call(call() as never)); await settle($.tool.call(call() as never))
   expect(received).toEqual([call(), call()])
-  expect(h.toasts).toEqual([`Jev off (no-key): ${OFF_TEXT['no-key']} Subagents run at their usual effort.`])
+  expect(h.toasts).toEqual([`Jev off (no-key): ${OFF_TEXT['no-key']} Subagent calls go as they came.`])
   h.env.JEV_API_KEY = 'has space'
   await settle($.tool.call(call() as never))
   expect(h.toasts).toHaveLength(2); expect(h.toasts[1]).toContain('Jev off (bad-key)')
@@ -99,7 +99,7 @@ test('a decision line and a foreground outcome line are written, and the host re
   dispatched(on, answer); await started($)
   expect(await settle($.tool.call(call({ tool_use_id: 'toolu_1' }) as never))).toEqual(answer)
   expect(h.ledger()).toEqual([
-    { v: 1, kind: 'decision', calibration: 1, ts: expect.any(String), tool_use_id: 'toolu_1', agentType: 'Explore', briefChars: 12, source: 'jev', received: null, effort: 'low', level: 0, top: 0.8, jevReason: null, jevMs: expect.any(Number) },
+    { v: 1, kind: 'decision', calibration: 1, ts: expect.any(String), tool_use_id: 'toolu_1', agentType: 'Explore', briefChars: 12, source: 'jev', received: null, effort: 'low', level: 0, top: 0.8, jevReason: null, jevMs: expect.any(Number), jevTokens: { input: 300, output: 20 }, jevCostUsd: 0.0000126 },
     { v: 1, kind: 'outcome', ts: expect.any(String), tool_use_id: 'toolu_1', agentType: 'Explore', effort: 'low', mode: 'foreground', resolvedModel: 'claude-haiku-5-5', status: 'completed', durationMs: 42_000, tokens: 1650 },
   ])
 })
@@ -161,7 +161,7 @@ test('the stats command checks Jev access the way routing does, summarizes the r
   h.env.JEV_API_KEY = 'test-key'
   await settle($.tool.call(call() as never))
   const text = (await $.command.run({ command: STATS_COMMAND } as never) as { text: string }).text
-  expect(text).toBe('Jev access in this session: ok.\n1 decisions: Jev 1, Jev off 0.\nhaiku/low: 1 runs, median 42s and 2k tokens')
+  expect(text).toMatch(/^Jev access in this session: ok\.\n1 decisions: Jev 1, Jev off 0\.\nJev calls: 1, median \d+ms, 300 input and 20 output tokens, about \$0\.0000 \(estimated\)\.\nhaiku\/low: 1 runs, median 42s and 2k tokens$/)
   expect(text).not.toContain('test-key')
   h.fsFaults.read = true
   expect((await $.command.run({ command: STATS_COMMAND } as never) as { text: string }).text).toBe('Jev access in this session: ok.\nthe routing records could not be read.')

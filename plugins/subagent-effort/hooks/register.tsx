@@ -55,7 +55,7 @@ async function accessLine($: Dollar): Promise<string> {
 function warnOff($: Dollar, reason: unknown, warned: Set<string>) {
   if (!isOff(reason) || warned.has(reason)) return
   warned.add(reason)
-  try { $.ui.toast(`Jev off (${reason}): ${OFF_TEXT[reason]} Subagents run at their usual effort.`, { timeoutMs: 10_000 }) } catch { /* A toast cannot change the dispatch. */ }
+  try { $.ui.toast(`Jev off (${reason}): ${OFF_TEXT[reason]} Subagent calls go as they came.`, { timeoutMs: 10_000 }) } catch { /* A toast cannot change the dispatch. */ }
 }
 // The outcome is written after the result has gone back; a background launch waits for its turn.complete.
 async function dispatched($: Dollar, ctx: Context, result: unknown, background: ReturnType<typeof createPending>) {

@@ -100,14 +100,24 @@ export function createGate(max = MAX_CONCURRENT): Gate {
 // --- Client ---
 
 export type Answers = Record<string, Record<string, unknown>>
-export type JevReply = { answers: Answers; ms: number }
+/** The tokens Jev reports it processed for one call; null when the response carries no usable `usage`. */
+export type JevUsage = { input: number; output: number }
+export type JevReply = { answers: Answers; usage: JevUsage | null; ms: number }
 export type AskFn = (questions: unknown, state: unknown) => Promise<JevReply>
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
 
-/** The answers of a 2xx body; a body of another shape is `malformed` and is not retried. */
-export function parseBody(text: string, answerIds?: readonly string[]): { answers: Answers } {
+const tokenCount = (value: unknown) => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.round(value) : null
+/** The two token counts of a `usage` object, projected one by one; anything else is null. */
+function usageOf(value: unknown): JevUsage | null {
+  if (!isRecord(value)) return null
+  const input = tokenCount(value.input_tokens), output = tokenCount(value.output_tokens)
+  return input === null || output === null ? null : { input, output }
+}
+
+/** The answers and token usage of a 2xx body; a body of another shape is `malformed` and is not retried. */
+export function parseBody(text: string, answerIds?: readonly string[]): { answers: Answers; usage: JevUsage | null } {
   let data: unknown
   try {
     data = JSON.parse(text)
@@ -119,8 +129,8 @@ export function parseBody(text: string, answerIds?: readonly string[]): { answer
   for (const answer of Object.values(answers)) {
     if (!isRecord(answer)) throw new JevFailure('malformed', 'an answer is not an object')
   }
-  // Metadata from the service can echo request details. Only the local pin is recorded.
-  return { answers: answers as Answers }
+  // Metadata from the service can echo request details: only the answers and the two token counts are kept.
+  return { answers: answers as Answers, usage: usageOf(data.usage) }
 }
 
 /** `Retry-After` in seconds as milliseconds; undefined when absent or not a number. */

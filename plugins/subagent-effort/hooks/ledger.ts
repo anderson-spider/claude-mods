@@ -1,8 +1,8 @@
 // Local routing records. Pure: line builders, the summary for /subagent-effort-stats and an append over injected file
-// access. A line holds ids, the agent type, the effort, Jev's confidence and latency, counts and the brief's length in
+// access. A line holds ids, the agent type, the effort, Jev's confidence, latency, tokens and cost, counts and the brief's length in
 // characters; never the task, the prompt, an answer, a path or a key. Every field is projected one by one, so extra
 // input cannot leak in.
-import { CALIBRATION, EFFORTS } from './effort'
+import { CALIBRATION, EFFORTS, jevCostOf } from './effort'
 import type { Choice, Effort } from './effort'
 
 export const LEDGER_FILE = '.claude/subagent-effort/routes.jsonl'
@@ -15,10 +15,15 @@ export const STATUSES = ['completed', 'error', 'aborted', 'refusal'] as const
 export type Status = (typeof STATUSES)[number]
 const ALL_EFFORTS: readonly Effort[] = [...EFFORTS, 'max']
 
-/** `received` is the effort the call came with, `effort` the one the agent runs with; null is the agent's usual effort. */
+/**
+ * `received` is the effort the call came with, `effort` the one the agent runs with; null is the agent's usual effort. The
+ * Jev fields are the routing call's own: its latency, the tokens it reported and their estimated cost, apart from the
+ * subagent's duration and tokens on the outcome line.
+ */
 export type DecisionLine = {
   v: 1; kind: 'decision'; calibration: number; ts: string; tool_use_id: string | null; agentType: string | null; briefChars: number | null
   source: Source; received: Effort | null; effort: Effort | null; level: number | null; top: number | null; jevReason: string | null; jevMs: number | null
+  jevTokens: { input: number; output: number } | null; jevCostUsd: number | null
 }
 export type OutcomeLine = {
   v: 1; kind: 'outcome'; ts: string; tool_use_id: string | null; agentType: string | null; effort: Effort | null; mode: 'foreground' | 'background'
@@ -33,12 +38,19 @@ const round2 = (n: number) => Math.round(n * 100) / 100
 const word = (value: unknown, max: number) => typeof value === 'string' && /^[A-Za-z0-9._:-]+$/.test(value) && value.length <= max ? value : null
 const effortOf = (value: unknown): Effort | null => ALL_EFFORTS.includes(value as Effort) ? value as Effort : null
 
+// The two counts, projected one by one, and the estimated cost from them; null without both.
+function jevSpend(usage: unknown): Pick<DecisionLine, 'jevTokens' | 'jevCostUsd'> {
+  const input = record(usage) ? maybeCount(usage.input) : null, output = record(usage) ? maybeCount(usage.output) : null
+  if (input === null || output === null) return { jevTokens: null, jevCostUsd: null }
+  return { jevTokens: { input, output }, jevCostUsd: jevCostOf({ input, output }) }
+}
+
 export type DecisionInput = { ts: string; toolUseId: string | undefined; agentType: string; briefChars: number; source: Source; received: Effort | null; effort: Effort | null; choice?: Choice }
 export function decisionLine({ ts, toolUseId, agentType, briefChars, source, received, effort, choice }: DecisionInput): DecisionLine {
   return {
     v: 1, kind: 'decision', calibration: CALIBRATION, ts, tool_use_id: word(toolUseId, 80), agentType: word(agentType, 80), briefChars: maybeCount(briefChars),
     source, received: effortOf(received), effort: effortOf(effort), level: maybeCount(choice?.level), top: typeof choice?.top === 'number' && Number.isFinite(choice.top) ? round2(choice.top) : null,
-    jevReason: word(choice?.jevReason, 40), jevMs: maybeCount(choice?.jevMs),
+    jevReason: word(choice?.jevReason, 40), jevMs: maybeCount(choice?.jevMs), ...jevSpend(choice?.jevTokens),
   }
 }
 
@@ -143,14 +155,17 @@ const median = (values: number[]) => {
 
 export type Group = { key: string; runs: number; failures: number; medianMs: number | null; medianTokens: number | null }
 /** `overridden` counts Jev decisions that replaced a different effort the call came with. */
-export type Summary = { decisions: number; bySource: Record<Source, number>; overridden: number; offReasons: Record<string, number>; olderCalibration: number; groups: Group[] }
+/** The routing calls to Jev, apart from the subagents: how many were asked, their median latency, tokens and estimated cost. */
+export type JevSpend = { asked: number; medianMs: number | null; inputTokens: number; outputTokens: number; costUsd: number }
+export type Summary = { decisions: number; bySource: Record<Source, number>; overridden: number; offReasons: Record<string, number>; olderCalibration: number; jev: JevSpend; groups: Group[] }
 /**
- * Decisions per source, the explicit efforts Jev replaced and why Jev was off; outcomes grouped by model family and effort (`haiku/low`, `opus/usual` when
+ * Decisions per source, the explicit efforts Jev replaced, why Jev was off and what its calls cost; outcomes grouped by model family and effort (`haiku/low`, `opus/usual` when
  * no effort was set), with failures and the median duration and tokens. Decisions of an older calibration are counted apart.
  */
 export function summarize(lines: Line[]): Summary {
   const bySource = { jev: 0, off: 0 } as Record<Source, number>, offReasons: Record<string, number> = {}
   let decisions = 0, olderCalibration = 0, overridden = 0
+  const jevMs: number[] = [], jev: JevSpend = { asked: 0, medianMs: null, inputTokens: 0, outputTokens: 0, costUsd: 0 }
   const groups = new Map<string, OutcomeLine[]>()
   for (const line of lines) {
     if (line.kind === 'decision') {
@@ -158,6 +173,8 @@ export function summarize(lines: Line[]): Summary {
       bySource[line.source]++
       if (line.calibration !== CALIBRATION) olderCalibration++
       if (line.source === 'jev' && line.received && line.received !== line.effort) overridden++
+      if (line.jevMs !== null) { jev.asked++; jevMs.push(line.jevMs) }
+      if (line.jevTokens) { jev.inputTokens += line.jevTokens.input; jev.outputTokens += line.jevTokens.output; jev.costUsd += line.jevCostUsd ?? 0 }
       if (line.source === 'off') offReasons[line.jevReason ?? '?'] = (offReasons[line.jevReason ?? '?'] ?? 0) + 1
       continue
     }
@@ -165,7 +182,7 @@ export function summarize(lines: Line[]): Summary {
     groups.set(key, [...groups.get(key) ?? [], line])
   }
   return {
-    decisions, bySource, overridden, offReasons, olderCalibration,
+    decisions, bySource, overridden, offReasons, olderCalibration, jev: { ...jev, medianMs: median(jevMs), costUsd: Math.round(jev.costUsd * 1e9) / 1e9 },
     groups: [...groups].sort(([a], [b]) => a.localeCompare(b)).map(([key, runs]) => ({
       key, runs: runs.length, failures: runs.filter(r => r.status !== 'completed').length,
       medianMs: median(runs.flatMap(r => r.durationMs ?? [])), medianTokens: median(runs.flatMap(r => r.tokens ?? [])),
@@ -180,6 +197,7 @@ export function formatSummary(s: Summary): string {
   if (!s.decisions && !s.groups.length) return 'no routing records yet.'
   const off = Object.entries(s.offReasons).map(([reason, n]) => `${reason} ×${n}`).join(', ')
   const head = `${s.decisions} decisions: Jev ${s.bySource.jev}${s.overridden ? ` (${s.overridden} replacing the call's effort)` : ''}, Jev off ${s.bySource.off}${off ? ` (${off})` : ''}${s.olderCalibration ? `; ${s.olderCalibration} from an older calibration` : ''}.`
+  const asked = s.jev.asked ? [`Jev calls: ${s.jev.asked}, median ${s.jev.medianMs === null ? '?' : `${Math.round(s.jev.medianMs)}ms`}, ${tokens(s.jev.inputTokens)} input and ${tokens(s.jev.outputTokens)} output tokens, about $${s.jev.costUsd.toFixed(4)} (estimated).`] : []
   const rows = s.groups.map(g => `${g.key}: ${g.runs} runs${g.failures ? `, ${g.failures} failed` : ''}, median ${seconds(g.medianMs)} and ${tokens(g.medianTokens)} tokens`)
-  return [head, ...rows].join('\n')
+  return [head, ...asked, ...rows].join('\n')
 }

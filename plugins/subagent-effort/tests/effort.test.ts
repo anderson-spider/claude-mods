@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { assessEffort, distribution, EFFORTS, levelOf, POLICY, QUESTION } from '../hooks/effort'
+import { assessEffort, distribution, EFFORTS, JEV_INPUT_USD_PER_MTOK, jevCostOf, levelOf, POLICY, QUESTION } from '../hooks/effort'
 import type { Answers } from '../hooks/jev'
 import { createBreaker, createGate } from '../hooks/jev'
 import { ports } from './host'
@@ -38,10 +38,10 @@ test('probabilities normalize omitted entries and invalid distributions fail clo
 const ask = (h: ReturnType<typeof ports>, key: string | null = 'test-key') =>
   assessEffort(h.io, { task: 'Task', home: h.io.home, root: h.io.root, key: key ?? undefined })
 
-test('each level of Jev answer selects its effort, with its confidence and latency', async () => {
+test('each level of Jev answer selects its effort, with its confidence, latency and reported tokens', async () => {
   for (const [level, effort] of EFFORTS.entries()) {
     const h = ports(); h.answers.reasoning = { probabilities: { [level]: 1 } }
-    expect(await ask(h)).toEqual({ effort, level, top: 1, jevReason: null, jevMs: 0 })
+    expect(await ask(h)).toEqual({ effort, level, top: 1, jevReason: null, jevMs: 0, jevTokens: { input: 300, output: 20 } })
     expect(Object.keys(JSON.parse(h.requests[0]!.body).questions)).toEqual(['reasoning'])
     expect(h.requests).toHaveLength(1)
   }
@@ -50,6 +50,16 @@ test('each level of Jev answer selects its effort, with its confidence and laten
   const choice = await ask(h)
   expect(choice).toMatchObject({ effort: 'medium', level: 1, top: 0.75 })
   expect(choice.jevMs).toBeGreaterThan(0)
+  // A response without usage still routes; its tokens are unknown.
+  const bare = ports(); bare.usage.value = undefined
+  expect(await ask(bare)).toMatchObject({ effort: 'low', jevTokens: null })
+})
+
+test('the estimated Jev cost charges input tokens only, at the published rate', () => {
+  expect(JEV_INPUT_USD_PER_MTOK).toBe(0.042)
+  expect(jevCostOf({ input: 1_000_000, output: 500 })).toBe(0.042)
+  expect(jevCostOf({ input: 308, output: 19 })).toBe(0.000012936)
+  expect(jevCostOf({ input: 0, output: 99 })).toBe(0)
 })
 
 test('every assessment failure picks no effort, names the reason, and a logging failure changes nothing', async () => {
@@ -70,7 +80,7 @@ test('every assessment failure picks no effort, names the reason, and a logging 
     }
     h.io.log = () => { throw new Error('logging failed') }
     const asked = reason === 'http' || reason === 'malformed' || reason === 'network' || reason === 'timeout'
-    expect(await ask(h, key ?? null)).toEqual({ effort: null, level: null, top: null, jevReason: reason, jevMs: asked ? 0 : null })
+    expect(await ask(h, key ?? null)).toEqual({ effort: null, level: null, top: null, jevReason: reason, jevMs: asked ? 0 : null, jevTokens: null })
   }
 })
 

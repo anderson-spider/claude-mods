@@ -207,7 +207,15 @@ test('a slot is held until the request settles, so a burst against a hanging Jev
 
 test('response metadata is discarded even when it echoes the key', () => {
   const body = (model: unknown) => JSON.stringify({ model, answers: {} })
-  for (const value of ['jev-1.13.0', KEY, `Bearer ${KEY}`, '', 7]) expect(parseBody(body(value))).toEqual({ answers: {} })
+  for (const value of ['jev-1.13.0', KEY, `Bearer ${KEY}`, '', 7]) expect(parseBody(body(value))).toEqual({ answers: {}, usage: null })
+})
+
+test('the reported usage keeps only its two token counts, and any other shape is null', () => {
+  const body = (usage: unknown) => JSON.stringify({ answers: {}, usage })
+  expect(parseBody(body({ input_tokens: 308, output_tokens: 19, note: KEY }))).toEqual({ answers: {}, usage: { input: 308, output: 19 } })
+  for (const usage of [undefined, null, KEY, [], {}, { input_tokens: 1 }, { input_tokens: -1, output_tokens: 1 }, { input_tokens: '1', output_tokens: 1 }, { input_tokens: 1, output_tokens: NaN }]) {
+    expect(parseBody(body(usage)).usage).toBeNull()
+  }
 })
 
 test('a slot is released after the hold ceiling even when its fetch never settles', async () => {

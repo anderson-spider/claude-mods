@@ -8,16 +8,18 @@ export function ports() {
   const requests: { url: string; body: string; headers: Record<string, string> }[] = [], logs: string[] = [], settingsReads: string[] = []
   const faults = { settings: false, http: 200 }
   const answers: Record<string, unknown> = { reasoning: { probabilities: { '0': 1 } } }
+  // The usage Jev reports with its answers; `usage.value = undefined` drops it from the response.
+  const usage: { value?: unknown } = { value: { input_tokens: 300, output_tokens: 20 } }
   const io: EffortIo & { home: string; root: string; key?: string } = {
     home: '/home/u', root: '/repo',
     settings: async source => { settingsReads.push(source); if (faults.settings) throw new Error('settings unavailable'); return {} },
     breaker: createBreaker(() => 0), gate: createGate(), log: text => { logs.push(text) },
     jev: {
       now: () => 0, timer: (ms, fn) => { let cancelled = false; if (ms < 3000) void Promise.resolve().then(() => { if (!cancelled) fn() }); return () => { cancelled = true } },
-      fetch: async (url, init) => { requests.push({ url, ...init }); return { status: faults.http, text: JSON.stringify({ answers }) } },
+      fetch: async (url, init) => { requests.push({ url, ...init }); return { status: faults.http, text: JSON.stringify({ answers, usage: usage.value }) } },
     },
   }
-  return { io, requests, logs, settingsReads, faults, answers }
+  return { io, requests, logs, settingsReads, faults, answers, usage }
 }
 
 export function world(on: On) {
