@@ -11,13 +11,11 @@ Check the plugins in `$ARGUMENTS` against the done definition in root `AGENTS.md
 
 ## Steps
 
-0. **Base**: fetch `origin main`; record dirty/untracked paths under each plugin. Review the working-tree diff against `origin/main` plus untracked files. The version script compares `HEAD`, so compare dirty versions manually in step 4. Finish with every changed and untracked plugin path accounted for.
-1. **Validate**: run `claude plugin validate --strict plugins/<name>`; record its result.
-2. **Tests**: run `claude plugin test plugins/<name>` and the plugin-specific automated checks in its AGENTS.md (Tests/Checks: helper and type-check commands). Record every result or skipped prerequisite; live scenarios belong to `/live-test`.
-3. **Consistency**: run `node scripts/check-consistency.mjs`; record its result.
-4. **Version**: run `node scripts/check-version-bump.mjs origin/main`. For a flagged or dirty plugin, compare its manifest version with `git show origin/main:plugins/<name>/.claude-plugin/plugin.json`; finish with the root version rule assessed for every such plugin.
-5. **Docs**: compare every behavior change in the diff/untracked files with the root README's plugin section and that plugin's AGENTS.md; finish with each change matched to docs or a named mismatch.
-6. **Inputs**: for every changed tool `inputSchema`, verify matching `types/index.d.ts`; finish with each match recorded, or mark this step not applicable.
+0. **Base**: fetch `origin main`; record dirty/untracked paths under each plugin. Review the working-tree diff against `origin/main` plus untracked files. Finish with every changed and untracked plugin path accounted for.
+1. **Checks**: run `npm run check -- <name>` for each plugin: the version bump, `validate --strict`, consistency, tests and type-check, with the pinned CLI. Record each `=== <step>` section's result and the closing `check passed`/`check failed` line. Also run any automated check the plugin's AGENTS.md names beyond these; live scenarios belong to `/live-test`.
+2. **Version**: the bump step compares `HEAD` with `origin/main`, so it misses uncommitted changes. For a flagged or dirty plugin, compare its manifest version with `git show origin/main:plugins/<name>/.claude-plugin/plugin.json`; finish with the root version rule assessed for every such plugin.
+3. **Docs**: compare every behavior change in the diff/untracked files with the root README's plugin section and that plugin's AGENTS.md; finish with each change matched to docs or a named mismatch.
+4. **Inputs**: for every changed tool `inputSchema`, verify matching `types/index.d.ts`; finish with each match recorded, or mark this step not applicable.
 
 ## Report
 
