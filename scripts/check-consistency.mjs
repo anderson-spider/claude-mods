@@ -1,5 +1,7 @@
 // The executable checklist for adding, changing or removing a plugin. Run: node scripts/check-consistency.mjs
-// It prints one line per problem and exits 1, or prints `ok: N plugins`. `checkRepo(root)` is the pure core.
+// It prints one line per problem and exits 1, or prints `ok: N plugins` (and `, M unlisted`). `checkRepo(root)` is the pure core.
+// An unlisted plugin (`.claude-plugin/unlisted.json`) is checked like any other but kept out of the marketplace, the
+// root README and bootstrap.sh, so it is not offered for install while it is validated.
 import { existsSync, readdirSync, readFileSync, realpathSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -184,7 +186,7 @@ function checkCitedTests(dir, fail) {
   }
 }
 
-function checkPlugin(root, entry, marketplace, rootDocs, errors) {
+function checkPlugin(root, entry, marketplace, rootDocs, errors, listed = true) {
   const name = entry.name
   const dir = join(root, entry.source)
   const fail = message => errors.push(`${name}: ${message}`)
@@ -198,7 +200,7 @@ function checkPlugin(root, entry, marketplace, rootDocs, errors) {
   if (plugin.name !== name) fail(`plugin.json name is "${plugin.name}"`)
   if (!/^\d+\.\d+\.\d+$/.test(plugin.version ?? '')) fail(`invalid version "${plugin.version}"`)
   if (typeof plugin.description !== 'string' || !plugin.description.trim()) fail('plugin.json has no description')
-  else if (plugin.description !== entry.description) fail('marketplace.json description differs from plugin.json (copy the plugin.json text)')
+  else if (listed && plugin.description !== entry.description) fail('marketplace.json description differs from plugin.json (copy the plugin.json text)')
   // A plugin with neither hooks/ nor tsconfig.json ships skills only: it needs a skill, and no hooks module or typings.
   const skillsOnly = !existsSync(join(dir, 'hooks')) && !existsSync(join(dir, 'tsconfig.json'))
   if (skillsOnly) {
@@ -240,8 +242,14 @@ function checkPlugin(root, entry, marketplace, rootDocs, errors) {
 
   if (!rootDocs.agents.includes(`\`plugins/${name}/AGENTS.md\``)) fail(`root AGENTS.md does not cite \`plugins/${name}/AGENTS.md\``)
   const row = new RegExp(`^\\| \\[${escapeRegex(name)}\\]\\(plugins/${escapeRegex(name)}(?:/README\\.md)?\\) \\|`, 'm')
-  if (!row.test(rootDocs.readme)) fail(`root README.md has no table row whose first cell links plugins/${name}`)
-  if (!rootDocs.readme.includes(`/plugin install ${name}@${marketplace.name}`)) fail(`root README.md has no "/plugin install ${name}@${marketplace.name}" line`)
+  const install = rootDocs.readme.includes(`/plugin install ${name}@${marketplace.name}`)
+  if (listed) {
+    if (!row.test(rootDocs.readme)) fail(`root README.md has no table row whose first cell links plugins/${name}`)
+    if (!install) fail(`root README.md has no "/plugin install ${name}@${marketplace.name}" line`)
+  } else {
+    if (row.test(rootDocs.readme)) fail('is unlisted, but the root README.md table still has its row')
+    if (install) fail(`is unlisted, but the root README.md still has "/plugin install ${name}@${marketplace.name}"`)
+  }
 
   // Each skill is skills/<name>/SKILL.md whose frontmatter names the directory and describes it.
   for (const skill of listDir(join(dir, 'skills'), () => true)) {
@@ -264,7 +272,25 @@ function checkPlugin(root, entry, marketplace, rootDocs, errors) {
   checkCitedTests(dir, fail)
 }
 
-/** Every problem found in the repository at `root`, one line each, plus the number of marketplace plugins. */
+// The plugins kept out of the marketplace while they are validated: a JSON array of names, the file optional.
+function readUnlisted(root, errors) {
+  const file = join(root, '.claude-plugin/unlisted.json')
+  if (!existsSync(file)) return []
+  let names
+  try {
+    names = readJson(file)
+  } catch {
+    errors.push('.claude-plugin/unlisted.json is not valid JSON')
+    return []
+  }
+  if (!Array.isArray(names) || !names.every(name => typeof name === 'string' && /^[a-z][a-z0-9-]*$/.test(name))) {
+    errors.push('.claude-plugin/unlisted.json must be an array of plugin names')
+    return []
+  }
+  return [...new Set(names)]
+}
+
+/** Every problem found in the repository at `root`, one line each, plus the number of marketplace and unlisted plugins. */
 export function checkRepo(root = '.') {
   const errors = []
   const marketplace = readJson(join(root, '.claude-plugin/marketplace.json'))
@@ -273,32 +299,38 @@ export function checkRepo(root = '.') {
     readme: existsSync(join(root, 'README.md')) ? readText(join(root, 'README.md')) : '',
   }
   const listed = new Set(marketplace.plugins.map(entry => entry.name))
+  const unlisted = readUnlisted(root, errors)
+  const known = new Set([...listed, ...unlisted])
 
   for (const entry of marketplace.plugins) checkPlugin(root, entry, marketplace, rootDocs, errors)
+  for (const name of unlisted) {
+    if (listed.has(name)) errors.push(`.claude-plugin/unlisted.json: ${name} is also in marketplace.json; keep it in one of them`)
+    else checkPlugin(root, { name, source: `./plugins/${name}` }, marketplace, rootDocs, errors, false)
+  }
 
   // The reverse direction: every plugin directory the tasks would validate must be listed, and a rule needs its plugin.
   for (const dir of listDir(join(root, 'plugins'), e => e.isDirectory())) {
-    if (listed.has(dir)) continue
+    if (known.has(dir)) continue
     // Claude Code writes the git-ignored typings into a plugin that is loaded, and they outlive its removal.
     const leftover = onlyGeneratedTypes(join(root, 'plugins', dir))
     errors.push(`plugins/${dir}: no marketplace.json entry${leftover ? ' (only the generated .claude-plugin/types/ is left; delete the directory)' : ''}`)
   }
   for (const file of listDir(join(root, '.claude/rules'), e => e.isFile() && e.name.endsWith('.md'))) {
     const rule = file.slice(0, -3)
-    if (!listed.has(rule)) errors.push(`.claude/rules/${file}: no marketplace.json entry for plugin "${rule}" (a rule that is not a plugin's goes in a subdirectory of .claude/rules/)`)
+    if (!known.has(rule)) errors.push(`.claude/rules/${file}: no marketplace.json entry for plugin "${rule}" (a rule that is not a plugin's goes in a subdirectory of .claude/rules/)`)
   }
 
   checkCliPin(root, errors)
   checkBootstrap(root, listed, errors)
   checkHooks(root, errors)
-  return { errors, count: marketplace.plugins.length }
+  return { errors, count: marketplace.plugins.length, unlisted: unlisted.length }
 }
 
 if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const { errors, count } = checkRepo('.')
+  const { errors, count, unlisted } = checkRepo('.')
   if (errors.length) {
     console.error(errors.join('\n'))
     process.exit(1)
   }
-  console.log(`ok: ${count} plugins`)
+  console.log(`ok: ${count} plugins${unlisted ? `, ${unlisted} unlisted` : ''}`)
 }

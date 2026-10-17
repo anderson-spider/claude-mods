@@ -805,3 +805,88 @@ for (const { name, script, expected } of [
     assert.deepEqual(problems(t, (files) => { files["scripts/bootstrap.sh"] = `#!/bin/sh\n${script}\n`; }), [expected]);
   });
 }
+
+/** Moves alpha out of the marketplace into unlisted.json, with its README row and install line gone. */
+const unlistAlpha = (files) => {
+  files[".claude-plugin/marketplace.json"] = json({ name: "market", plugins: [] });
+  files[".claude-plugin/unlisted.json"] = json(["alpha"]);
+  files["README.md"] = "# market\n";
+};
+
+test("an unlisted plugin passes without a marketplace entry, README row or install line, and is counted apart", (t) => {
+  const files = baseFiles();
+  unlistAlpha(files);
+  const root = writeTree(t, files);
+  const { errors, count, unlisted } = checkRepo(root);
+  assert.deepEqual(errors, []);
+  assert.equal(count, 0);
+  assert.equal(unlisted, 1);
+  const run = spawnSync(process.execPath, [script], { cwd: root, encoding: "utf8" });
+  assert.equal(run.stdout, "ok: 0 plugins, 1 unlisted\n");
+});
+
+for (const { name, change, expected } of [
+  {
+    name: "an unlisted plugin is still checked like a listed one",
+    change: (files) => {
+      unlistAlpha(files);
+      delete files["plugins/alpha/AGENTS.md"];
+      delete files[".claude/rules/alpha.md"];
+    },
+    expected: ["alpha: AGENTS.md is missing", "alpha: .claude/rules/alpha.md is missing"],
+  },
+  {
+    name: "an unlisted plugin with a README row and install line",
+    change: (files) => {
+      const readme = files["README.md"];
+      unlistAlpha(files);
+      files["README.md"] = readme;
+    },
+    expected: [
+      "alpha: is unlisted, but the root README.md table still has its row",
+      'alpha: is unlisted, but the root README.md still has "/plugin install alpha@market"',
+    ],
+  },
+  {
+    name: "a plugin both in the marketplace and unlisted",
+    change: (files) => {
+      files[".claude-plugin/unlisted.json"] = json(["alpha"]);
+    },
+    expected: [".claude-plugin/unlisted.json: alpha is also in marketplace.json; keep it in one of them"],
+  },
+  {
+    name: "an unlisted name with no plugin directory",
+    change: (files) => {
+      files[".claude-plugin/unlisted.json"] = json(["ghost"]);
+    },
+    expected: ["ghost: ./plugins/ghost is missing"],
+  },
+  {
+    name: "an unlisted.json that is not an array of names",
+    change: (files) => {
+      files[".claude-plugin/unlisted.json"] = json({ plugins: ["alpha"] });
+    },
+    expected: [".claude-plugin/unlisted.json must be an array of plugin names"],
+  },
+  {
+    name: "an unlisted.json that is not JSON",
+    change: (files) => {
+      files[".claude-plugin/unlisted.json"] = "[alpha";
+    },
+    expected: [".claude-plugin/unlisted.json is not valid JSON"],
+  },
+]) {
+  test(`unlisted: ${name}`, (t) => {
+    assert.deepEqual(problems(t, change), expected);
+  });
+}
+
+test("bootstrap.sh lists only the marketplace plugins, not the unlisted ones", (t) => {
+  assert.deepEqual(
+    problems(t, (files) => {
+      unlistAlpha(files);
+      files["scripts/bootstrap.sh"] = 'ALL="alpha"\n';
+    }),
+    ['scripts/bootstrap.sh: ALL lists "alpha", but marketplace.json has ""'],
+  );
+});

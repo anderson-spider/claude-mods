@@ -61,7 +61,7 @@ esac
   return { run, root };
 }
 
-const ALL = ["chatgpt", "codex-computer-use", "coolify", "gitlab", "session-hud", "spider-team", "tailscale"];
+const ALL = ["chatgpt", "codex-computer-use", "coolify", "gitlab", "session-hud", "tailscale"];
 const mutating = calls => calls.filter(c => /plugin (install|update|marketplace add|marketplace update)|-helper/.test(c));
 
 test("--check prints the steps and changes nothing", () => {
