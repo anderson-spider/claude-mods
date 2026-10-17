@@ -20,7 +20,7 @@ Project skills (`.claude/skills/`):
 | --- | --- |
 | `/release-plugin <plugin>` | Check a plugin against the done definition below; changes nothing. |
 | `/live-test <plugin>` | Drive the plugin in a second session (needs herdr) when unit tests cannot prove the change. |
-| `/ship` | Checks, review, PR, approved merge and plugin update for the current branch. |
+| `/ship` | Checks, review, PR, approved merge, plugin update and local sync to `main` for the current branch. |
 
 ## Commands
 
