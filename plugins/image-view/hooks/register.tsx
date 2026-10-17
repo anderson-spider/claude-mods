@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { PastedImage } from '../types'
-import { READ_COLUMNS, READ_ROWS, blockCells, drawsPictures, fitCells, fitRow, imageNumbers, pngSize, readImagePath } from './layout'
+import { READ_COLUMNS, READ_ROWS, blockCells, drawsPictures, fileName, fitCells, fitRow, imageNumbers, pngSize, readImagePath } from './layout'
 import type { Size } from './layout'
 import { decodeThumb, fromBase64 } from './png'
 import type { Thumb } from './png'
@@ -172,6 +172,13 @@ async function snapshot($: EngineInterface, id: string, source: string): Promise
   return { path, size }
 }
 
+// Opens the image in the system's default viewer: the file Claude read while it is there, else the row's snapshot.
+async function openImage($: EngineInterface, source: string, snapshotPath: string) {
+  const path = (await $.fs.exists(source)) ? source : snapshotPath
+  const opened = await $.process.run(['open', path]).catch(() => ({ exitCode: 1 }))
+  if (opened.exitCode !== 0) await $.process.run(['xdg-open', path]).catch(() => undefined)
+}
+
 /** The preview of a Read call's image; undefined while it is being made, and the row is redrawn once it is. */
 function previewFor($: EngineInterface, id: string, source: string): Preview | null | undefined {
   if (previews.has(id)) return previews.get(id)
@@ -219,18 +226,19 @@ export const register: Register = on => {
     const row = await next(e)
     if (!preview) return row
 
-    const { Box, Image, Raster } = $.ui.resolve(e)
+    const { Box, Button, Image, Raster } = $.ui.resolve(e)
     const { columns, rows } = fitCells(preview.size, READ_ROWS, READ_COLUMNS)
     const thumb = thumbs.get(preview.path)
     return (
       <Box flexDirection="column">
         {row}
-        <Box paddingLeft={2}>
+        <Box paddingLeft={2} flexDirection="column">
           {thumb ? (
             <Raster key={`read-${e.props.tool_use_id}`} columns={columns} rows={rows} cells={blockCells(thumb, columns, rows)} />
           ) : (
             <Image key={`read-${e.props.tool_use_id}`} source={{ file: preview.path, format: 'png' }} columns={columns} rows={rows} alt={source} />
           )}
+          <Button key={`open-${e.props.tool_use_id}`} plain label={`↗ ${fileName(source)}`} onPress={() => void openImage($, source, preview.path)} />
         </Box>
       </Box>
     )

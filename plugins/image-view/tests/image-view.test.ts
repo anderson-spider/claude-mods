@@ -388,7 +388,7 @@ test('only a Read of an image file is an image Claude read', () => {
   expect(readImagePath('Bash', { file_path: '/shots/compare.png' })).toBeUndefined()
   expect(readImagePath('Read', null)).toBeUndefined()
   // A read image is drawn larger than a prompt tile.
-  expect(fitCells({ width: 1600, height: 900 }, READ_ROWS, READ_COLUMNS)).toEqual({ columns: 50, rows: 14 })
+  expect(fitCells({ width: 1600, height: 900 }, READ_ROWS, READ_COLUMNS)).toEqual({ columns: 36, rows: 10 })
 })
 
 const READ_ROW = (id: string, file_path: string, more: Record<string, unknown> = {}) => ({
@@ -413,7 +413,8 @@ for (const [name, env, drawn] of [
       return ran(e.argv[0] === 'id' ? '501\n' : '')
     })
     on('session.id', () => ({ value: `sess-read-${drawn}` }))
-    on('fs.exists', () => ({ value: false }))
+    // The file Claude read is still there; its snapshot is not made yet.
+    on('fs.exists', (_, e) => ({ value: e.path === '/shots/compare.png' }))
     on('fs.read', () => ({ value: { base64: drawn === 'Raster' ? RGBA : pngHead(1600, 900) } }))
     on('ui.render', () => ({ type: 'Text', props: {}, children: ['Read compare.png'] }))
     await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
@@ -429,7 +430,12 @@ for (const [name, env, drawn] of [
     expect(await ui.find({ type: 'Text', text: 'Read compare.png' })).toBeDefined()
     const picture = await ui.find({ type: drawn })
     expect(picture).toBeDefined()
-    if (drawn === 'Image') expect(picture?.props).toMatchObject({ source: { file: snapshot, format: 'png' }, columns: 50, rows: 14 })
+    if (drawn === 'Image') expect(picture?.props).toMatchObject({ source: { file: snapshot, format: 'png' }, columns: 36, rows: 10 })
+    // The file name under the picture opens the file in the default viewer.
+    expect(await ui.find({ type: 'Button' })).toBeDefined()
+    await ui.press({ key: `open-${id}` })
+    for (let i = 0; i < 20; i++) await Promise.resolve()
+    expect(runs).toContainEqual(['open', '/shots/compare.png'])
     await ui.unmount()
   })
 }

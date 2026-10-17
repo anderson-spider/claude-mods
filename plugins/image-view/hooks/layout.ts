@@ -4,8 +4,8 @@ export type Cells = { columns: number; rows: number }
 const TILE_ROWS = 6
 const MAX_COLUMNS = 32
 // An image Claude reads is drawn under its row in the transcript, larger than a prompt tile: it is there to be looked at.
-export const READ_ROWS = 14
-export const READ_COLUMNS = 64
+export const READ_ROWS = 10
+export const READ_COLUMNS = 45
 const MIN_COLUMNS = 4
 // A terminal cell is about twice as tall as it is wide.
 const CELL_ASPECT = 2
@@ -30,6 +30,11 @@ export function readImagePath(tool: string, input: unknown): string | undefined 
   if (tool !== 'Read' || typeof input !== 'object' || input === null) return undefined
   const path = (input as { file_path?: unknown }).file_path
   return typeof path === 'string' && IMAGE_FILE.test(path) ? path : undefined
+}
+
+/** The last part of a path, for a label. */
+export function fileName(path: string): string {
+  return path.split(/[\\/]/).pop() || path
 }
 
 /** Width and height from a PNG's IHDR chunk, or null when the bytes aren't a PNG. */
