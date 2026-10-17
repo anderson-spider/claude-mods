@@ -7,6 +7,7 @@
     "node": ">=24"
   },
   "scripts": {
+    "check": "bash scripts/tasks/check.sh",
     "plugins:validate": "bash scripts/tasks/plugins-validate.sh",
     "plugins:scan": "bash scripts/tasks/plugins-scan.sh",
     "plugins:test": "bash scripts/tasks/plugins-test.sh",

@@ -26,3 +26,8 @@ use_own_claude() {
   PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -v '/node_modules/\.bin$' | paste -sd: -)
   command -v claude >/dev/null || { echo "claude is not on PATH outside node_modules: install Claude Code" >&2; exit 1; }
 }
+
+# A plugin named on the command line: lowercase words joined by hyphens, with a folder under plugins/.
+require_plugin() {
+  [[ "$1" =~ ^[a-z][a-z0-9-]*$ && -d "plugins/$1" ]] || { echo "no such plugin: $1" >&2; exit 1; }
+}
