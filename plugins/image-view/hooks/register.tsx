@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { PastedImage } from '../types'
-import { READ_COLUMNS, READ_ROWS, blockCells, drawsPictures, fileName, fitCells, fitRow, imageNumbers, pngSize, readImagePath } from './layout'
+import { READ_COLUMNS, READ_ROWS, READ_THUMB_PIXELS, blockCells, drawsPictures, fileName, fitCells, fitRow, imageNumbers, pngSize, readImagePath } from './layout'
 import type { Size } from './layout'
 import { decodeThumb, fromBase64 } from './png'
 import type { Thumb } from './png'
@@ -136,8 +136,8 @@ async function show($: EngineInterface, draft: string) {
   written = json
 }
 
-// The images Claude read, by the Read call's id: a PNG snapshot of the file as it was then, so a file written again
-// later (a render that overwrites its output) leaves the earlier rows as they were. null when it can't be drawn.
+// The images Claude read, by the Read call's id: a small PNG thumbnail of the file as it was then, so a file written
+// again later (a render that overwrites its output) leaves the earlier rows as they were. null when it can't be drawn.
 type Preview = { path: string; size: Size | null }
 const previews = new Map<string, Preview | null>()
 const pending = new Set<string>()
@@ -150,7 +150,7 @@ async function snapshot($: EngineInterface, id: string, source: string): Promise
     if (await $.fs.exists(out)) path = out
     else {
       const { exitCode } = await $.process
-        .run(['sips', '-s', 'format', 'png', '-Z', '1600', source, '--out', out])
+        .run(['sips', '-s', 'format', 'png', '-Z', String(READ_THUMB_PIXELS), source, '--out', out])
         .catch(() => ({ exitCode: 1 }))
       if (exitCode === 0) path = out
     }

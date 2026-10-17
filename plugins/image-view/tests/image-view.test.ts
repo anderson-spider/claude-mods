@@ -387,8 +387,8 @@ test('only a Read of an image file is an image Claude read', () => {
   expect(readImagePath('Read', { file_path: '/src/main.ts' })).toBeUndefined()
   expect(readImagePath('Bash', { file_path: '/shots/compare.png' })).toBeUndefined()
   expect(readImagePath('Read', null)).toBeUndefined()
-  // A read image is drawn larger than a prompt tile.
-  expect(fitCells({ width: 1600, height: 900 }, READ_ROWS, READ_COLUMNS)).toEqual({ columns: 36, rows: 10 })
+  // A read image is a thumbnail, its box at most READ_ROWS by READ_COLUMNS.
+  expect(fitCells({ width: 1600, height: 900 }, READ_ROWS, READ_COLUMNS)).toEqual({ columns: 25, rows: 7 })
 })
 
 const READ_ROW = (id: string, file_path: string, more: Record<string, unknown> = {}) => ({
@@ -425,12 +425,12 @@ for (const [name, env, drawn] of [
     for (let i = 0; i < 20; i++) await Promise.resolve()
 
     const snapshot = `/tmp/claude-501/image-view-read-sess-read-${drawn}-${id}.png`
-    expect(runs).toContainEqual(['sips', '-s', 'format', 'png', '-Z', '1600', '/shots/compare.png', '--out', snapshot])
+    expect(runs).toContainEqual(['sips', '-s', 'format', 'png', '-Z', '480', '/shots/compare.png', '--out', snapshot])
     const ui = await $.ui.mount({ ...READ_ROW(id, '/shots/compare.png'), surface: 'terminal' })
     expect(await ui.find({ type: 'Text', text: 'Read compare.png' })).toBeDefined()
     const picture = await ui.find({ type: drawn })
     expect(picture).toBeDefined()
-    if (drawn === 'Image') expect(picture?.props).toMatchObject({ source: { file: snapshot, format: 'png' }, columns: 36, rows: 10 })
+    if (drawn === 'Image') expect(picture?.props).toMatchObject({ source: { file: snapshot, format: 'png' }, columns: 25, rows: 7 })
     // The file name under the picture opens the file in the default viewer.
     expect(await ui.find({ type: 'Button' })).toBeDefined()
     await ui.press({ key: `open-${id}` })

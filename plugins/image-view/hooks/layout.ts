@@ -3,9 +3,11 @@ export type Cells = { columns: number; rows: number }
 
 const TILE_ROWS = 6
 const MAX_COLUMNS = 32
-// An image Claude reads is drawn under its row in the transcript, larger than a prompt tile: it is there to be looked at.
-export const READ_ROWS = 10
-export const READ_COLUMNS = 45
+// An image Claude reads is drawn under its row in the transcript as a thumbnail; its file name opens the full image.
+export const READ_ROWS = 7
+export const READ_COLUMNS = 32
+// The longest side of a read image's thumbnail file, in pixels: enough for READ_COLUMNS cells on a dense display.
+export const READ_THUMB_PIXELS = 480
 const MIN_COLUMNS = 4
 // A terminal cell is about twice as tall as it is wide.
 const CELL_ASPECT = 2
