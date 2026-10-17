@@ -12,7 +12,7 @@ export const isOff = (reason: unknown): reason is Off => (OFFS as readonly unkno
 export const OFF_TEXT: Record<Off, string> = {
   'no-key': 'JEV_API_KEY is not set in this Claude Code process. Set it where Claude Code inherits it (your shell profile for the terminal, `launchctl setenv` for the macOS desktop app) and restart Claude Code.',
   'bad-key': 'JEV_API_KEY is not a valid key (printable characters, no spaces). Set it again and restart Claude Code.',
-  'unreadable-settings': 'The project or local settings could not be read, so JEV_API_KEY is not used.',
+  'unreadable-settings': 'The project or local settings could not be read, so JEV_API_KEY is not used. Fix .claude/settings.json or .claude/settings.local.json so each is valid JSON.',
   'repo-declared-key': 'The project or local settings declare JEV_API_KEY, so it is not used. Remove it from the repository settings and keep it in your own environment.',
 }
 export type Access = { key: string; off?: undefined } | { key?: undefined; off: Off }
