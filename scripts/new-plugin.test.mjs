@@ -247,9 +247,11 @@ test("the real root files take a new plugin that then passes its own checks", (t
   const names = (file) => JSON.parse(readFileSync(file, "utf8")).plugins.map((entry) => entry.name);
   const expected = [...names(join(repoRoot, ".claude-plugin/marketplace.json")), "scratch-demo"].sort();
   assert.deepEqual(names(join(root, ".claude-plugin/marketplace.json")), expected);
-  // the new line sits among the existing plugin lines, which stay sorted by name
+  // the new line sits among the existing plugin lines, which stay sorted by name; AGENTS.md also cites unlisted plugins
+  const unlistedFile = join(repoRoot, ".claude-plugin/unlisted.json");
+  const unlisted = existsSync(unlistedFile) ? JSON.parse(readFileSync(unlistedFile, "utf8")) : [];
   const cited = readFileSync(join(root, "AGENTS.md"), "utf8").matchAll(/^- [^\n]*`plugins\/([a-z0-9-]+)\/AGENTS\.md`\.$/gm);
-  assert.deepEqual([...cited].map((match) => match[1]), expected);
+  assert.deepEqual([...cited].map((match) => match[1]), [...expected, ...unlisted].sort());
   const installs = readFileSync(join(root, "README.md"), "utf8").matchAll(/^\/plugin install ([a-z0-9-]+)@/gm);
   assert.deepEqual([...installs].map((match) => match[1]), expected);
 });

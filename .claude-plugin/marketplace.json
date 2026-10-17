@@ -33,11 +33,6 @@
       "description": "A card above the prompt: model, context and cache; the five-hour and seven-day limits with their pace; the running subagents with their type, model and effort, and the tokens they used; what the last turn sent and added, edits and errors."
     },
     {
-      "name": "spider-team",
-      "source": "./plugins/spider-team",
-      "description": "Read-only analyst, planner and reviewer subagents; Jev picks each one's model and effort from the task."
-    },
-    {
       "name": "tailscale",
       "source": "./plugins/tailscale",
       "description": "Read or change your tailnet through the Tailscale API using the apiKey plugin option."

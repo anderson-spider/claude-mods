@@ -56,12 +56,12 @@ jobs:
           [ "$CLI" = latest ] && npm install --no-save @anthropic-ai/claude-code@latest
           echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"
           node_modules/.bin/claude --version
-      # Each step runs every plugin, then fails with the list of those that failed.
+      # Each step runs every plugin, the unlisted ones included, then fails with the list of those that failed.
       - name: Validate the marketplace and every plugin
         run: |
           failed=()
           claude plugin validate --strict . || failed+=(marketplace)
-          for source in $(node -p "require('./.claude-plugin/marketplace.json').plugins.map(p => p.source).join(' ')"); do
+          for source in $(node -p "const r = p => require('./.claude-plugin/' + p); [...r('marketplace.json').plugins.map(p => p.source), ...(require('fs').existsSync('.claude-plugin/unlisted.json') ? r('unlisted.json').map(n => './plugins/' + n) : [])].join(' ')"); do
             echo "==> validate $source"
             claude plugin validate --strict "$source" || failed+=("$source")
           done
@@ -69,7 +69,7 @@ jobs:
       - name: Test every plugin
         run: |
           failed=()
-          for source in $(node -p "require('./.claude-plugin/marketplace.json').plugins.map(p => p.source).join(' ')"); do
+          for source in $(node -p "const r = p => require('./.claude-plugin/' + p); [...r('marketplace.json').plugins.map(p => p.source), ...(require('fs').existsSync('.claude-plugin/unlisted.json') ? r('unlisted.json').map(n => './plugins/' + n) : [])].join(' ')"); do
             # A skills-only plugin has no hooks module for `claude plugin test` to load.
             [ -f "$source/hooks/hooks.json" ] || { echo "==> test $source: skipped, skills only"; continue; }
             echo "==> test $source"

@@ -11,7 +11,6 @@ Marketplace of [Claude Code](https://claude.com/claude-code) plugins made by and
 | [coolify](plugins/coolify/README.md) | Lets Claude read your Coolify instance and create, deploy or delete projects and resources through its API, with the instance in the `url` option and the token in the sensitive `apiKey` option. |
 | [gitlab](plugins/gitlab/README.md) | Opens, edits, comments on, reviews and (when asked, behind guards) merges GitLab merge requests, lists yours across projects, lists open review threads, manages labels and runs, waits for and reads pipelines, jobs, artifacts and job errors, picking the host and its token from the git remote. |
 | [session-hud](plugins/session-hud/README.md) | A card above the prompt: model, context and cache; the five-hour and seven-day limits with their pace; the running subagents with their type, model and effort, and the tokens they used; what the last turn sent and added, edits and errors. |
-| [spider-team](plugins/spider-team/README.md) | Read-only analyst, planner and reviewer subagents; Jev picks each one's model and effort from the task. |
 | [tailscale](plugins/tailscale/README.md) | Lets Claude query and modify your tailnet through the Tailscale API, with the key in the sensitive `apiKey` plugin option. |
 
 Each plugin README covers its setup, what it reads, sends and saves, and what its tests do and do not prove. Read it before sending private context or granting write access.
@@ -27,7 +26,6 @@ Requires Claude Code v2.1.287 or later. The repository is checked with v2.1.301 
 /plugin install coolify@spider-claude-mods
 /plugin install gitlab@spider-claude-mods
 /plugin install session-hud@spider-claude-mods
-/plugin install spider-team@spider-claude-mods
 /plugin install tailscale@spider-claude-mods
 ```
 

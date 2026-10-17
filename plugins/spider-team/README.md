@@ -2,8 +2,10 @@
 
 Three native read-only Claude subagents (analyst, planner, reviewer), with Jev model and effort selection and local routing records. The session is the lead and the only one that writes code: it implements, tests and commits one task at a time, and calls the agents to investigate, plan and review. The host owns spawning and background delivery.
 
+Unlisted while it is validated: the marketplace does not offer it. Load it from a checkout of the repository:
+
 ```text
-/plugin install spider-team --marketplace anderson-spider/claude-mods
+claude --plugin-dir /path/to/claude-mods/plugins/spider-team
 ```
 
 ## Delegate
