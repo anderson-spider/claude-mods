@@ -1,5 +1,5 @@
 // The host fake the plugin's tests share: the session's model, usage and theme, the clock, the agents, and the band to mount.
-import type { AgentInfo, On } from 'claude-code'
+import type { AgentInfo, On, RenderElement } from 'claude-code'
 import { mock } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
@@ -46,8 +46,13 @@ export function world(on: On, opts: { theme?: string; window?: number; denySpawn
   })
   on('agent.spawn', (_$, e) => (opts.denySpawn !== undefined ? { deny: opts.denySpawn } : { model: e.model ?? 'claude-sonnet-4-5', agentId: `agent-${++spawns}` }))
   on('agent.list', () => ({ value: roster }))
+  // What draws beneath the card in the band: another plugin's tree, such as a row of suggestions.
+  on('ui.render', { component: 'AbovePrompt' }, () => BENEATH)
   return { clock, roster }
 }
+
+/** The band's tree beneath the card. */
+export const BENEATH: RenderElement = { type: 'Text', props: {}, children: ['beneath'] }
 
 /** An agent as `$.agent.list()` lists it. */
 export const listed = (id: string, status: AgentInfo['status']): AgentInfo => ({ id, status, type: 'general-purpose', description: 'Fixture' })

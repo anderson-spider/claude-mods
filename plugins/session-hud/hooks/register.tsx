@@ -167,14 +167,16 @@ export const register: Register = on => {
     if (!result.deny) void observe($, () => readWindow($))
     return result
   })
-  // Reads prepared atoms only, never a host; a survey keeps the band, and a failure draws nothing of ours.
+  // Reads prepared atoms only, never a host; a survey keeps the band, and a failure draws nothing of ours. What draws
+  // beneath (another plugin's band) is always asked and kept under the card, never replaced by it.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    if (e.props.hasSurvey) return next(e)
+    const below = await next(e)
+    if (e.props.hasSurvey) return below
     try {
       const [shown, time, palette] = await Promise.all([read($, card), read($, nowAtom), read($, paletteAtom)])
       const terminal = e.surface === 'terminal'
       const lines = layoutView({ card: shown as SessionHudCard, now: time, working: shown.turnStartedAt !== undefined, palette, draw: terminal ? 'cells' : 'svg' })
-      if (!lines.length) return next(e)
+      if (!lines.length) return below
       const ui = $.ui.resolve(e)
       const { Box, Text } = ui
       // Only a graphical surface gets drawings; the terminal, which has no `Svg`, draws its bars as text.
@@ -184,16 +186,17 @@ export const register: Register = on => {
         ? <Text key={key} {...paint(palette, part.style)} {...(terminal ? { wrap: 'truncate-end' as const } : {})}>{part.text}</Text>
         : drawing(part, key))
       // Each group wraps to the next row whole, so a narrow card breaks between parts, never inside one.
-      return <Box {...(terminal ? { width: e.props.bodyColumns } : {})} flexDirection="column" borderStyle="round" borderColor={paint(palette, 'frame').color ?? 'inactive'} paddingX={1}>
+      const drawn = <Box {...(terminal ? { width: e.props.bodyColumns } : {})} flexDirection="column" borderStyle="round" borderColor={paint(palette, 'frame').color ?? 'inactive'} paddingX={1}>
         {lines.map((groups, at) => <Box key={`line-${at}`} flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={3} marginTop={at === lines.length - 1 && at > 0 ? 1 : 0}>
           {groups.map((group, i) => group === 'spacer'
             ? <Box key={`g-${i}`} flexGrow={1} />
             : <Box key={`g-${i}`} flexDirection="row" alignItems="center" flexShrink={terminal ? 1 : 0}>{group.map((part, j) => piece(part, `p-${i}-${j}`))}</Box>)}
         </Box>)}
       </Box>
+      return <Box flexDirection="column">{drawn}{below}</Box>
     } catch {
       $.ui.log('session-hud: render failed', { to: 'debug' })
-      return next(e)
+      return below
     }
   })
 }
