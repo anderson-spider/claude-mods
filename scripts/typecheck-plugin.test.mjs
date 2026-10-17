@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -79,5 +79,6 @@ test("a worktree without node_modules type-checks with the main checkout's TypeS
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stderr, "");
   assert.ok(existsSync(marker));
-  assert.equal(readFileSync(marker, "utf8").trim(), worktree);
+  // tmpdir() may be a symlink (macOS /var -> /private/var); the fake tsc records the resolved one.
+  assert.equal(realpathSync(readFileSync(marker, "utf8").trim()), realpathSync(worktree));
 });
