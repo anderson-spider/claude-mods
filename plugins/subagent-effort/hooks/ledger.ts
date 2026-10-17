@@ -191,13 +191,21 @@ export function summarize(lines: Line[]): Summary {
 }
 
 const seconds = (ms: number | null) => ms === null ? '?' : `${Math.round(ms / 1000)}s`
+/**
+ * US dollars with two significant digits after the leading zeros, and never fewer than two decimals: a Jev call costs
+ * a few millionths of a dollar, which a fixed number of decimals would show as zero.
+ */
+export function usd(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return '$0'
+  return `$${n.toFixed(Math.max(2, Math.ceil(-Math.log10(n)) + 1))}`
+}
 const tokens = (n: number | null) => n === null ? '?' : n >= 1_000_000 ? `${round2(n / 1_000_000)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n)
 /** The summary as text, one line per group; the host prefixes the plugin name. */
 export function formatSummary(s: Summary): string {
   if (!s.decisions && !s.groups.length) return 'no routing records yet.'
   const off = Object.entries(s.offReasons).map(([reason, n]) => `${reason} ×${n}`).join(', ')
   const head = `${s.decisions} decisions: Jev ${s.bySource.jev}${s.overridden ? ` (${s.overridden} replacing the call's effort)` : ''}, Jev off ${s.bySource.off}${off ? ` (${off})` : ''}${s.olderCalibration ? `; ${s.olderCalibration} from an older calibration` : ''}.`
-  const asked = s.jev.asked ? [`Jev calls: ${s.jev.asked}, median ${s.jev.medianMs === null ? '?' : `${Math.round(s.jev.medianMs)}ms`}, ${tokens(s.jev.inputTokens)} input and ${tokens(s.jev.outputTokens)} output tokens, about $${s.jev.costUsd.toFixed(4)} (estimated).`] : []
+  const asked = s.jev.asked ? [`Jev calls: ${s.jev.asked}, median ${s.jev.medianMs === null ? '?' : `${Math.round(s.jev.medianMs)}ms`}, ${tokens(s.jev.inputTokens)} input and ${tokens(s.jev.outputTokens)} output tokens, about ${usd(s.jev.costUsd)} (estimated).`] : []
   const rows = s.groups.map(g => `${g.key}: ${g.runs} runs${g.failures ? `, ${g.failures} failed` : ''}, median ${seconds(g.medianMs)} and ${tokens(g.medianTokens)} tokens`)
   return [head, ...asked, ...rows].join('\n')
 }

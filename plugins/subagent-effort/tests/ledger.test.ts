@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { afterAgentCall, afterTurn, appendLine, decisionLine, familyOf, formatSummary, parseLedger, readAll, ROTATE_AT, rotatedPath, summarize } from '../hooks/ledger'
+import { afterAgentCall, afterTurn, appendLine, decisionLine, familyOf, formatSummary, parseLedger, readAll, ROTATE_AT, rotatedPath, summarize, usd } from '../hooks/ledger'
 import type { FileIo, Line } from '../hooks/ledger'
 
 const ctx = { toolUseId: 'toolu_1', agentType: 'Explore', effort: 'medium' as const }
@@ -60,7 +60,12 @@ test('the summary groups outcomes by model family and effort, and counts decisio
     { key: 'haiku/low', runs: 2, failures: 1, medianMs: 20_000, medianTokens: 3000 },
     { key: 'opus/usual', runs: 1, failures: 0, medianMs: 60_000, medianTokens: 1_500_000 },
   ])
-  expect(formatSummary(summary)).toBe('4 decisions: Jev 3 (1 replacing the call\'s effort), Jev off 1 (no-key ×1); 1 from an older calibration.\nJev calls: 3, median 200ms, 3M input and 60 output tokens, about $0.1260 (estimated).\nhaiku/low: 2 runs, 1 failed, median 20s and 3k tokens\nopus/usual: 1 runs, median 60s and 1.5M tokens')
+  expect(formatSummary(summary)).toBe('4 decisions: Jev 3 (1 replacing the call\'s effort), Jev off 1 (no-key ×1); 1 from an older calibration.\nJev calls: 3, median 200ms, 3M input and 60 output tokens, about $0.13 (estimated).\nhaiku/low: 2 runs, 1 failed, median 20s and 3k tokens\nopus/usual: 1 runs, median 60s and 1.5M tokens')
   expect(formatSummary(summarize([]))).toBe('no routing records yet.')
   expect([familyOf('claude-fable-5-1'), familyOf(null), familyOf('gpt')]).toEqual(['fable', '?', '?'])
+})
+
+test('a dollar amount keeps two significant digits however small, and at least two decimals', () => {
+  expect([usd(0.000042966), usd(0.0000126), usd(0.00000043), usd(0.126), usd(1.5), usd(12.345)]).toEqual(['$0.000043', '$0.000013', '$0.00000043', '$0.13', '$1.50', '$12.35'])
+  expect([usd(0), usd(-1), usd(NaN), usd(Infinity)]).toEqual(['$0', '$0', '$0', '$0'])
 })
