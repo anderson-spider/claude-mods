@@ -77,10 +77,23 @@ test('a survey keeps the band, and a light theme paints with theme keys', async 
   world(on, { theme: 'light' })
   await start($)
   await flush()
-  // Yielding to the survey leaves the band to the engine beneath, which a test has none of.
-  await expect($.ui.mount(band(110, true))).rejects.toThrow(/no implementation for ui.render/u)
+  // Yielding to the survey leaves the band to what draws beneath.
+  const survey = await $.ui.mount(band(110, true))
+  expect((await survey.findAll({ type: 'Text' })).map(found => found.text)).toEqual(['beneath'])
+  await survey.unmount()
   const ui = await $.ui.mount(band())
   expect((await ui.find({ type: 'Text', text: /^Opus 5\.5$/ }))?.props).toMatchObject({ color: 'claude', bold: true })
+  await ui.unmount()
+})
+
+test('what draws beneath the band stays under the card', async ($, on) => {
+  world(on)
+  await start($)
+  await flush()
+  const ui = await $.ui.mount(band())
+  const texts = (await ui.findAll({ type: 'Text' })).map(found => found.text)
+  expect(texts.at(-1)).toBe('beneath')
+  expect(texts.indexOf('Opus 5.5')).toBeLessThan(texts.length - 1)
   await ui.unmount()
 })
 

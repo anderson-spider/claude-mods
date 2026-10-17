@@ -14,7 +14,7 @@ The bars keep a fixed size whatever the card's width: 96 pixels drawn as SVG on 
 /plugin install session-hud --marketplace anderson-spider/claude-mods
 ```
 
-Under a dark or automatic theme the card uses the design's colours; under a light or ANSI theme it keeps the theme's. A survey takes the band while it is open.
+Under a dark or automatic theme the card uses the design's colours; under a light or ANSI theme it keeps the theme's. A survey takes the band while it is open. Another plugin that draws in the same band, such as next-steps with its suggestions, shows under the card.
 
 ## Privacy
 
