@@ -6,13 +6,14 @@ import type { EffortIo } from './effort'
 import { createBreaker, createGate } from './jev'
 import { createRoleCache, readOnlyGit, refusal, UNCHECKED } from './guard'
 import { createSampler, judgeAnswer, judgeEvery } from './judge'
+import { isOff, OFF_TEXT, resolveAccess } from './key'
 import { afterAgentCall, afterTurn, appendLine, createPending, decisionLine, formatSummary, ledgerPath, parseLedger, readAll, summarize, withJudge } from './ledger'
 import type { Ended, FileIo, Line, OutcomeLine, TurnEnd } from './ledger'
 
 type Dollar = Parameters<Hook<'session.start'>>[0]
 export const EMPTY = 'spider-team: empty task.'
 export const STATS_COMMAND = 'spider-team-stats'
-export const STATS_DESCRIPTION = 'Summarize the local spider-team routing records: runs, failures, judged short runs, duration, cost and Jev confidence per role and pair.'
+export const STATS_DESCRIPTION = 'Summarize the local spider-team routing records: runs, failures, judged short runs, duration, cost and Jev confidence per role and pair, and whether Jev is reachable in this session.'
 // Routing and the outcome judge each have their own breaker and gate, so a slow or failing judge never turns routing off.
 type Pool = Pick<EffortIo, 'breaker' | 'gate'>
 const routing: Pool = { breaker: createBreaker(() => Date.now()), gate: createGate() }
@@ -57,6 +58,19 @@ async function judged($: Dollar, { line, answer }: Ended, due: () => boolean): P
   } catch { return line }
 }
 const stamp = () => new Date().toISOString()
+// Whether this process can reach Jev now, checked the way routing checks it; the ledger only tells what past calls saw.
+async function accessLine($: Dollar): Promise<string> {
+  try {
+    const access = await resolveAccess(io($), await $.env.get('JEV_API_KEY'))
+    return access.key !== undefined ? 'Jev access in this session: ok.' : `Jev access in this session: off (${access.off}). ${OFF_TEXT[access.off]}`
+  } catch { return 'Jev access in this session: could not be checked.' }
+}
+// A configuration problem turns Jev off until the person fixes it, so it is shown once per reason in this load, not per call.
+function warnOff($: Dollar, reason: unknown, warned: Set<string>) {
+  if (!isOff(reason) || warned.has(reason)) return
+  warned.add(reason)
+  try { $.ui.toast(`Jev off (${reason}): ${OFF_TEXT[reason]} Spider agents run at their role defaults.`, { timeoutMs: 10_000 }) } catch { /* A toast cannot change the dispatch. */ }
+}
 // The agent list names each agent's type; a Spider role's id is cached with its role, any other agent's with null. An id
 // the list does not name yet is asked again next time.
 async function roleOfAgent($: Dollar, agentId: string, cache: ReturnType<typeof createRoleCache>) {
@@ -69,6 +83,7 @@ export const register: Register = (on, options) => {
   // Background agents wait here for their turn.complete; module state of this load only, dropped on reload.
   const background = createPending(200)
   const agents = createRoleCache(200)
+  const warned = new Set<string>()
   on('session.start', async ($, e, next) => {
     await $.agent.register({ ...SPECS.analyst, name: 'analyst' })
     await $.agent.register({ ...SPECS.planner, name: 'planner' })
@@ -93,9 +108,11 @@ export const register: Register = (on, options) => {
     })
     const model = choice.model, effort = choice.effort
     $.ui.log(`spider-team: ${role} → ${model}/${effort} (${choice.source})`, { to: 'debug' })
+    warnOff($, choice.jevReason, warned)
     await record($, 'decision', decisionLine({ ts: stamp(), toolUseId: call.tool_use_id, role, briefChars: call.prompt.length, choice }))
-    // The pair shows beside the task in the transcript.
-    const result = await next({ ...e, description: `${call.description} (${model}/${effort})`, model, effort })
+    // The pair shows beside the task in the transcript, with the reason when Jev was off.
+    const why = choice.source === 'default' && choice.jevReason ? `, default: ${choice.jevReason}` : ''
+    const result = await next({ ...e, description: `${call.description} (${model}/${effort}${why})`, model, effort })
     await observe($, 'outcome', async () => {
       const ended = afterAgentCall({ toolUseId: call.tool_use_id, role, pair: { model, effort } }, result, stamp())
       if (!ended) return
@@ -131,9 +148,10 @@ export const register: Register = (on, options) => {
   // The host prefixes command output with the plugin name, so the texts below do not repeat it.
   on('command.run', { command: STATS_COMMAND }, async $ => {
     try {
+      const access = await accessLine($)
       const home = await $.env.get('HOME')
-      if (!home) return { text: 'no home directory, so no routing records.' }
-      return { text: formatSummary(summarize(parseLedger(await readAll(files($), ledgerPath(home))))) }
+      if (!home) return { text: `${access}\nno home directory, so no routing records.` }
+      try { return { text: `${access}\n${formatSummary(summarize(parseLedger(await readAll(files($), ledgerPath(home)))))}` } } catch { return { text: `${access}\nthe routing records could not be read.` } }
     } catch { return { text: 'the routing records could not be read.' } }
   })
 }

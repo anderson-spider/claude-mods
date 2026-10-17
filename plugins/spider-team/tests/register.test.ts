@@ -3,6 +3,7 @@ import { call, drain, inference, LEDGER, listed, settle, spawn, started, step, w
 import { SPECS } from '../hooks/roles'
 import { EMPTY, STATS_COMMAND, STATS_DESCRIPTION } from '../hooks/register'
 import { refusal, UNCHECKED } from '../hooks/guard'
+import { OFF_TEXT } from '../hooks/key'
 
 const MARKER = 'SECRET-MARKER-7f3a'
 function dispatched(on: Parameters<typeof world>[0], answer: unknown = { result: 'native answer' }) {
@@ -39,7 +40,7 @@ test('Jev picks the pair for a Spider role, shown in its description, and other 
 test('a model or effort from the lead is overwritten by the Jev pair, or by the role default without a key', async ($, on) => {
   const h = world(on), received = dispatched(on); await started($)
   await settle($.tool.call(call('planner', { model: 'fable', effort: 'max' }) as never))
-  expect(received[0]).toMatchObject({ model: 'opus', effort: 'medium', description: 'Fixture (opus/medium)' })
+  expect(received[0]).toMatchObject({ model: 'opus', effort: 'medium', description: 'Fixture (opus/medium, default: no-key)' })
   await settle($.tool.call(call('analyst', { model: 'gpt', effort: 'ultra' }) as never))
   expect(received[1]).toMatchObject({ model: 'haiku', effort: 'high' })
   expect(h.requests).toHaveLength(0)
@@ -210,15 +211,44 @@ test('a refused or failed Agent result writes no outcome and passes on', async (
 })
 test('the stats command summarizes the local ledger, and says so when there is none or it cannot be read', async ($, on) => {
   const h = world(on); dispatched(on, finished('Verdict: APPROVED')); await started($)
-  expect((await $.command.run({ command: STATS_COMMAND } as never)).text).toBe('no routing records yet in ~/.claude/spider-team/routes.jsonl.')
+  const off = `Jev access in this session: off (no-key). ${OFF_TEXT['no-key']}`
+  expect((await $.command.run({ command: STATS_COMMAND } as never)).text).toBe(`${off}\nno routing records yet in ~/.claude/spider-team/routes.jsonl.`)
   await settle($.tool.call(call('reviewer', { tool_use_id: 'toolu_s' }) as never))
   const text = (await $.command.run({ command: STATS_COMMAND, args: 'ignored' } as never)).text!
-  expect(text.startsWith('1 decisions, 1 outcomes')).toBe(true); expect(text).toContain('reviewer'); expect(text).toContain('opus/medium'); expect(text).toContain('Default fallbacks: 1 of 1')
+  expect(text.startsWith(`${off}\n1 decisions, 1 outcomes`)).toBe(true); expect(text).toContain('reviewer'); expect(text).toContain('opus/medium'); expect(text).toContain('Default fallbacks: 1 of 1')
   expect(text).not.toContain('/home/u')
   h.fsFaults.read = true
-  expect((await $.command.run({ command: STATS_COMMAND } as never)).text).toBe('the routing records could not be read.')
+  expect((await $.command.run({ command: STATS_COMMAND } as never)).text).toBe(`${off}\nthe routing records could not be read.`)
   h.fsFaults.read = false; delete h.env.HOME
-  expect((await $.command.run({ command: STATS_COMMAND } as never)).text).toBe('no home directory, so no routing records.')
+  expect((await $.command.run({ command: STATS_COMMAND } as never)).text).toBe(`${off}\nno home directory, so no routing records.`)
+})
+test('the stats command checks Jev access in this session the way routing does, and never prints the key', async ($, on) => {
+  const h = world(on); await started($)
+  const first = async () => (await $.command.run({ command: STATS_COMMAND } as never)).text!.split('\n')[0]
+  h.env.JEV_API_KEY = 'test-key'
+  expect(await first()).toBe('Jev access in this session: ok.')
+  h.env.JEV_API_KEY = 'two words'
+  expect(await first()).toBe(`Jev access in this session: off (bad-key). ${OFF_TEXT['bad-key']}`)
+  h.env.JEV_API_KEY = 'test-key'; h.faults.settings = true
+  expect(await first()).toBe(`Jev access in this session: off (unreadable-settings). ${OFF_TEXT['unreadable-settings']}`)
+  for (const text of [await first(), ...h.logs]) expect(text).not.toContain('test-key')
+})
+test('a key problem shows one toast per reason in this load and the reason beside the pair; a Jev failure shows none', async ($, on) => {
+  const h = world(on), received = dispatched(on); await started($)
+  await settle($.tool.call(call('analyst', { tool_use_id: 't1' }) as never))
+  await settle($.tool.call(call('reviewer', { tool_use_id: 't2' }) as never))
+  expect(h.toasts).toEqual([`Jev off (no-key): ${OFF_TEXT['no-key']} Spider agents run at their role defaults.`])
+  expect(received.map(e => e.description)).toEqual(['Fixture (haiku/high, default: no-key)', 'Fixture (opus/medium, default: no-key)'])
+  h.env.JEV_API_KEY = 'two words'
+  await settle($.tool.call(call('analyst', { tool_use_id: 't3' }) as never))
+  expect(h.toasts).toHaveLength(2); expect(h.toasts[1]).toContain('Jev off (bad-key)')
+  h.env.JEV_API_KEY = 'test-key'; h.answers.difficulty = { probabilities: { '9': 1 } }
+  await settle($.tool.call(call('analyst', { tool_use_id: 't4' }) as never))
+  expect(h.toasts).toHaveLength(2)
+  expect(received.at(-1)!.description).toBe('Fixture (haiku/high, default: malformed)')
+  h.answers.difficulty = { probabilities: { '0': 1 } }
+  await settle($.tool.call(call('analyst', { tool_use_id: 't5' }) as never))
+  expect(received.at(-1)!.description).toBe('Fixture (haiku/medium)')
 })
 const ANSWER = 'ANSWER-TEXT-91c2'
 test('foreground and background outcomes carry the judge of the answer, and the host result passes on as it came', async ($, on) => {
