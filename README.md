@@ -10,7 +10,7 @@ Marketplace of [Claude Code](https://claude.com/claude-code) plugins made by and
 | [codex-computer-use](plugins/codex-computer-use/README.md) | Routes native Mac app control through Codex computer use from the ChatGPT app instead of Claude's own computer use, asking before each new app. |
 | [coolify](plugins/coolify/README.md) | Lets Claude read your Coolify instance and create, deploy or delete projects and resources through its API, with the instance in the `url` option and the token in the sensitive `apiKey` option. |
 | [gitlab](plugins/gitlab/README.md) | Opens, edits, comments on, reviews and (when asked, behind guards) merges GitLab merge requests, lists yours across projects, lists open review threads, manages labels and runs, waits for and reads pipelines, jobs, artifacts and job errors, picking the host and its token from the git remote. |
-| [image-view](plugins/image-view/README.md) | Shows images in the terminal: thumbnails of what you paste above the prompt, and each image Claude reads under its row in the transcript, as the desktop app does. |
+| [image-preview](plugins/image-preview/README.md) | Shows images in the terminal: thumbnails of what you paste above the prompt, and each image Claude reads under its row in the transcript, as the desktop app does. |
 | [session-hud](plugins/session-hud/README.md) | A card above the prompt: model, context and cache; the five-hour and seven-day limits with their pace; the running subagents with their type, model and effort, and the tokens they used; what the last turn sent and added, edits and errors. |
 | [tailscale](plugins/tailscale/README.md) | Lets Claude query and modify your tailnet through the Tailscale API, with the key in the sensitive `apiKey` plugin option. |
 
@@ -26,7 +26,7 @@ Requires Claude Code v2.1.287 or later. The repository is checked with v2.1.301 
 /plugin install codex-computer-use@spider-claude-mods
 /plugin install coolify@spider-claude-mods
 /plugin install gitlab@spider-claude-mods
-/plugin install image-view@spider-claude-mods
+/plugin install image-preview@spider-claude-mods
 /plugin install session-hud@spider-claude-mods
 /plugin install tailscale@spider-claude-mods
 ```
@@ -90,7 +90,7 @@ Unit tests run against host fakes: a Claude Code update can break a plugin witho
 These projects inspired or are the base of plugins in this marketplace:
 
 - [claude-mods-computer-use-threads](https://github.com/promptadvisers/claude-mods-computer-use-threads) by Prompt Advisers: the Codex computer-use bridge behind [codex-computer-use](plugins/codex-computer-use/README.md).
-- [claude-image-view](https://github.com/jarrodwatts/claude-image-view) by Jarrod Watts (MIT): [image-view](plugins/image-view/README.md) is a copy of it with fixes.
+- [claude-image-view](https://github.com/jarrodwatts/claude-image-view) by Jarrod Watts (MIT): [image-preview](plugins/image-preview/README.md) is a copy of it with fixes.
 - [JevFlow](https://github.com/Parth1811/JevFlow) by Parth Patil: the Jev outcome judge behind [spider-team](plugins/spider-team/README.md).
 
 ## License

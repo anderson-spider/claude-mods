@@ -96,10 +96,10 @@ type Env = Readonly<Record<string, string | undefined>>
  * background session, and only when the terminal is kitty or Ghostty (it goes by the terminal's
  * name, so other kitty-protocol terminals such as WezTerm still get the `alt` text). A terminal that names itself
  * in TERM_PROGRAM decides, even when it runs inside kitty or Ghostty and inherits their variables (Herdr in Ghostty).
- * `CLAUDE_IMAGE_VIEW_RENDERER` overrides the guess: `image` for the picture, `blocks` for colored half blocks.
+ * `CLAUDE_IMAGE_PREVIEW_RENDERER` overrides the guess: `image` for the picture, `blocks` for colored half blocks.
  */
 export function drawsPictures(env: Env): boolean {
-  const forced = env.CLAUDE_IMAGE_VIEW_RENDERER
+  const forced = env.CLAUDE_IMAGE_PREVIEW_RENDERER
   if (forced === 'image' || forced === 'blocks') return forced === 'image'
   if (env.CLAUDE_CODE_FORCE_TERMINAL_IMAGES) return true
   if (env.TMUX || env.STY || env.CLAUDE_CODE_SESSION_KIND === 'bg') return false

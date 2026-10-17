@@ -59,7 +59,7 @@ test('a row too wide even at one row keeps the tiles that fit beside a +N label'
 })
 
 const BAND = {
-  plugin: 'image-view',
+  plugin: 'image-preview',
   component: 'AbovePrompt',
   requestId: 'above-prompt',
   viewport: { columns: 120, rows: 40 },
@@ -195,7 +195,7 @@ test('a webp paste is converted to PNG once and drawn from the converted file', 
   const clock = mock.clock(on)
   const session = '/tmp/claude-501/-work/sess-1'
   const dir = `${session}/images`
-  const out = `${session}/image-view-1.png`
+  const out = `${session}/image-preview-1.png`
   const draft = 'see [Image #1]'
   const entry = { size: 0, mtimeMs: 0, isLink: false }
   const converted = new Set<string>()
@@ -310,11 +310,11 @@ test('real pictures only where Claude Code draws them: kitty and Ghostty, or whe
   const herdrInGhostty = { TERM: 'xterm-256color', TERM_PROGRAM: 'herdr', GHOSTTY_RESOURCES_DIR: '/Applications/Ghostty.app/Contents/Resources/ghostty' }
   expect(drawsPictures(herdrInGhostty)).toBe(false)
   expect(drawsPictures({ TERM_PROGRAM: 'vscode', KITTY_WINDOW_ID: '4' })).toBe(false)
-  expect(drawsPictures({ ...herdrInGhostty, CLAUDE_IMAGE_VIEW_RENDERER: 'image' })).toBe(true)
+  expect(drawsPictures({ ...herdrInGhostty, CLAUDE_IMAGE_PREVIEW_RENDERER: 'image' })).toBe(true)
   expect(drawsPictures({ TERM_PROGRAM: 'kitty', KITTY_WINDOW_ID: '4' })).toBe(true)
   // An override beats guessing from the environment.
-  expect(drawsPictures({ TERM_PROGRAM: 'iTerm.app', CLAUDE_IMAGE_VIEW_RENDERER: 'image' })).toBe(true)
-  expect(drawsPictures({ TERM: 'xterm-kitty', CLAUDE_IMAGE_VIEW_RENDERER: 'blocks' })).toBe(false)
+  expect(drawsPictures({ TERM_PROGRAM: 'iTerm.app', CLAUDE_IMAGE_PREVIEW_RENDERER: 'image' })).toBe(true)
+  expect(drawsPictures({ TERM: 'xterm-kitty', CLAUDE_IMAGE_PREVIEW_RENDERER: 'blocks' })).toBe(false)
 })
 
 for (const [name, env, drawn, notDrawn] of [
@@ -392,7 +392,7 @@ test('only a Read of an image file is an image Claude read', () => {
 })
 
 const READ_ROW = (id: string, file_path: string, more: Record<string, unknown> = {}) => ({
-  plugin: 'image-view' as const,
+  plugin: 'image-preview' as const,
   component: 'ToolUse' as const,
   requestId: id,
   viewport: { columns: 120, rows: 40 },
@@ -424,7 +424,7 @@ for (const [name, env, drawn] of [
     await (await $.ui.mount({ ...READ_ROW(id, '/shots/compare.png'), surface: 'terminal' })).unmount()
     for (let i = 0; i < 20; i++) await Promise.resolve()
 
-    const snapshot = `/tmp/claude-501/image-view-read-sess-read-${drawn}-${id}.png`
+    const snapshot = `/tmp/claude-501/image-preview-read-sess-read-${drawn}-${id}.png`
     expect(runs).toContainEqual(['sips', '-s', 'format', 'png', '-Z', '480', '/shots/compare.png', '--out', snapshot])
     const ui = await $.ui.mount({ ...READ_ROW(id, '/shots/compare.png'), surface: 'terminal' })
     expect(await ui.find({ type: 'Text', text: 'Read compare.png' })).toBeDefined()
@@ -477,7 +477,7 @@ test('a folded run of reads opens when it holds an image, and stays folded other
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
   const call = (tool: string, file_path: string) => ({ tool, input: { file_path }, isRunning: false, isErrored: false, isInterrupted: false })
   const group = (calls: unknown[]) => ({
-    plugin: 'image-view',
+    plugin: 'image-preview',
     component: 'ToolGroup',
     requestId: 'group',
     surface: 'terminal',

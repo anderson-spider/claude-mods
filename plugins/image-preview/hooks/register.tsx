@@ -11,7 +11,7 @@ import type { Thumb } from './png'
 // so the draft is polled instead.
 const POLL_MS = 200
 
-const images = atom({ plugin: 'image-view', key: 'images' } as const, [] as PastedImage[])
+const images = atom({ plugin: 'image-preview', key: 'images' } as const, [] as PastedImage[])
 
 let tmpRoot: string | undefined
 let found: { sessionId: string; dir: string } | undefined
@@ -43,7 +43,7 @@ async function canDrawPictures($: EngineInterface): Promise<boolean> {
       GHOSTTY_RESOURCES_DIR: await $.env.get('GHOSTTY_RESOURCES_DIR'),
       CLAUDE_CODE_FORCE_TERMINAL_IMAGES: await $.env.get('CLAUDE_CODE_FORCE_TERMINAL_IMAGES'),
       CLAUDE_CODE_SESSION_KIND: await $.env.get('CLAUDE_CODE_SESSION_KIND'),
-      CLAUDE_IMAGE_VIEW_RENDERER: await $.env.get('CLAUDE_IMAGE_VIEW_RENDERER'),
+      CLAUDE_IMAGE_PREVIEW_RENDERER: await $.env.get('CLAUDE_IMAGE_PREVIEW_RENDERER'),
     })
   }
   return pictures
@@ -82,12 +82,12 @@ async function imagesDir($: EngineInterface): Promise<string | undefined> {
 }
 
 // Pastes are cached as <n>.png or <n>.webp (or another format), but the terminal only
-// decodes PNG, so anything else is converted once to <session>/image-view-<n>.png.
+// decodes PNG, so anything else is converted once to <session>/image-preview-<n>.png.
 // sips ships with macOS only, so on Linux a non-PNG paste still shows "no preview".
 async function pngFor($: EngineInterface, dir: string, n: number): Promise<string | undefined> {
   const png = `${dir}/${n}.png`
   if (await $.fs.exists(png)) return png
-  const out = `${dir.replace(/\/images$/, '')}/image-view-${n}.png`
+  const out = `${dir.replace(/\/images$/, '')}/image-preview-${n}.png`
   if (await $.fs.exists(out)) return out
   const entries = await $.fs.list(dir).catch(() => [])
   const source = entries.find(entry => entry.kind === 'file' && entry.name.startsWith(`${n}.`))
@@ -146,7 +146,7 @@ async function snapshot($: EngineInterface, id: string, source: string): Promise
   tmpRoot ??= await tempRoot($)
   let path: string | undefined
   if (tmpRoot !== undefined) {
-    const out = `${tmpRoot}/image-view-read-${await $.session.id()}-${id.replace(/[^\w-]/g, '')}.png`
+    const out = `${tmpRoot}/image-preview-read-${await $.session.id()}-${id.replace(/[^\w-]/g, '')}.png`
     if (await $.fs.exists(out)) path = out
     else {
       const { exitCode } = await $.process
