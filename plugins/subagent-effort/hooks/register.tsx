@@ -76,28 +76,23 @@ export const register: Register = on => {
     return next(e)
   })
   // Sets the effort of every native subagent call from Jev's rating of the task, and only the effort: the model stays the
-  // call's or the definition's. A fork is left alone (the host ignores its effort), an effort already in the call is kept
-  // (the person asked for it), and when Jev is off or fails the call goes as it came, so the agent runs at its usual effort.
+  // call's or the definition's. Jev is the authority: its effort replaces one the call came with. A fork is left alone (the
+  // host ignores its effort), and when Jev is off or fails the call goes as it came, its own effort included.
   on('tool.call', { tool: 'Agent' }, async ($, e, next) => {
     const call = e as BuiltinToolInputs['Agent'] & { tool_use_id: string }
     const agentType = call.subagent_type || DEFAULT_TYPE
     if (agentType === 'fork' || typeof call.prompt !== 'string' || !call.prompt.trim()) return next(e)
-    const base = { ts: stamp(), toolUseId: call.tool_use_id, agentType, briefChars: call.prompt.length }
-    if (call.effort) {
-      await record($, 'decision', decisionLine({ ...base, source: 'call', effort: call.effort }))
-      const result = await next(e)
-      await dispatched($, { toolUseId: call.tool_use_id, agentType, effort: call.effort }, result, background)
-      return result
-    }
+    const received: Effort | null = call.effort ?? null
     const choice = await assessEffort(io($), {
       task: call.prompt, home: await $.env.get('HOME') ?? '', root: await $.session.root(), key: await $.env.get('JEV_API_KEY'),
     })
-    const effort: Effort | null = choice.effort
-    $.ui.log(`subagent-effort: ${agentType} → ${effort ?? `usual (${choice.jevReason})`}`, { to: 'debug' })
+    const effort: Effort | null = choice.effort ?? received
+    $.ui.log(`subagent-effort: ${agentType} → ${choice.effort ?? `as it came (${choice.jevReason})`}`, { to: 'debug' })
     warnOff($, choice.jevReason, warned)
-    await record($, 'decision', decisionLine({ ...base, source: effort ? 'jev' : 'off', effort, choice }))
-    // The effort shows beside the task in the transcript.
-    const result = await next(effort ? { ...e, description: `${call.description} (${effort})`, effort } : e)
+    await record($, 'decision', decisionLine({ ts: stamp(), toolUseId: call.tool_use_id, agentType, briefChars: call.prompt.length, source: choice.effort ? 'jev' : 'off', received, effort, choice }))
+    // The effort shows beside the task in the transcript, with the one it replaced.
+    const was = received && received !== choice.effort ? `, was ${received}` : ''
+    const result = await next(choice.effort ? { ...e, description: `${call.description} (${choice.effort}${was})`, effort: choice.effort } : e)
     await dispatched($, { toolUseId: call.tool_use_id, agentType, effort }, result, background)
     return result
   }).catch(async ($, e, next) => {

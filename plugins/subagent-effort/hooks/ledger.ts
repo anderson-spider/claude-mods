@@ -8,16 +8,17 @@ import type { Choice, Effort } from './effort'
 export const LEDGER_FILE = '.claude/subagent-effort/routes.jsonl'
 /** Under the host's 4 MiB read limit: past this the current file moves to the one rotated generation. */
 export const ROTATE_AT = 2_000_000
-/** Who set the effort: Jev, the call itself (the person asked for it), or nobody because Jev was off or failed. */
-export const SOURCES = ['jev', 'call', 'off'] as const
+/** Who decided the effort: Jev, or nobody because Jev was off or failed and the call went as it came. */
+export const SOURCES = ['jev', 'off'] as const
 export type Source = (typeof SOURCES)[number]
 export const STATUSES = ['completed', 'error', 'aborted', 'refusal'] as const
 export type Status = (typeof STATUSES)[number]
 const ALL_EFFORTS: readonly Effort[] = [...EFFORTS, 'max']
 
+/** `received` is the effort the call came with, `effort` the one the agent runs with; null is the agent's usual effort. */
 export type DecisionLine = {
   v: 1; kind: 'decision'; calibration: number; ts: string; tool_use_id: string | null; agentType: string | null; briefChars: number | null
-  source: Source; effort: Effort | null; level: number | null; top: number | null; jevReason: string | null; jevMs: number | null
+  source: Source; received: Effort | null; effort: Effort | null; level: number | null; top: number | null; jevReason: string | null; jevMs: number | null
 }
 export type OutcomeLine = {
   v: 1; kind: 'outcome'; ts: string; tool_use_id: string | null; agentType: string | null; effort: Effort | null; mode: 'foreground' | 'background'
@@ -32,11 +33,11 @@ const round2 = (n: number) => Math.round(n * 100) / 100
 const word = (value: unknown, max: number) => typeof value === 'string' && /^[A-Za-z0-9._:-]+$/.test(value) && value.length <= max ? value : null
 const effortOf = (value: unknown): Effort | null => ALL_EFFORTS.includes(value as Effort) ? value as Effort : null
 
-export type DecisionInput = { ts: string; toolUseId: string | undefined; agentType: string; briefChars: number; source: Source; effort: Effort | null; choice?: Choice }
-export function decisionLine({ ts, toolUseId, agentType, briefChars, source, effort, choice }: DecisionInput): DecisionLine {
+export type DecisionInput = { ts: string; toolUseId: string | undefined; agentType: string; briefChars: number; source: Source; received: Effort | null; effort: Effort | null; choice?: Choice }
+export function decisionLine({ ts, toolUseId, agentType, briefChars, source, received, effort, choice }: DecisionInput): DecisionLine {
   return {
     v: 1, kind: 'decision', calibration: CALIBRATION, ts, tool_use_id: word(toolUseId, 80), agentType: word(agentType, 80), briefChars: maybeCount(briefChars),
-    source, effort: effortOf(effort), level: maybeCount(choice?.level), top: typeof choice?.top === 'number' && Number.isFinite(choice.top) ? round2(choice.top) : null,
+    source, received: effortOf(received), effort: effortOf(effort), level: maybeCount(choice?.level), top: typeof choice?.top === 'number' && Number.isFinite(choice.top) ? round2(choice.top) : null,
     jevReason: word(choice?.jevReason, 40), jevMs: maybeCount(choice?.jevMs),
   }
 }
@@ -141,20 +142,22 @@ const median = (values: number[]) => {
 }
 
 export type Group = { key: string; runs: number; failures: number; medianMs: number | null; medianTokens: number | null }
-export type Summary = { decisions: number; bySource: Record<Source, number>; offReasons: Record<string, number>; olderCalibration: number; groups: Group[] }
+/** `overridden` counts Jev decisions that replaced a different effort the call came with. */
+export type Summary = { decisions: number; bySource: Record<Source, number>; overridden: number; offReasons: Record<string, number>; olderCalibration: number; groups: Group[] }
 /**
- * Decisions per source and why Jev was off; outcomes grouped by model family and effort (`haiku/low`, `opus/usual` when
+ * Decisions per source, the explicit efforts Jev replaced and why Jev was off; outcomes grouped by model family and effort (`haiku/low`, `opus/usual` when
  * no effort was set), with failures and the median duration and tokens. Decisions of an older calibration are counted apart.
  */
 export function summarize(lines: Line[]): Summary {
-  const bySource = { jev: 0, call: 0, off: 0 } as Record<Source, number>, offReasons: Record<string, number> = {}
-  let decisions = 0, olderCalibration = 0
+  const bySource = { jev: 0, off: 0 } as Record<Source, number>, offReasons: Record<string, number> = {}
+  let decisions = 0, olderCalibration = 0, overridden = 0
   const groups = new Map<string, OutcomeLine[]>()
   for (const line of lines) {
     if (line.kind === 'decision') {
       decisions++
       bySource[line.source]++
       if (line.calibration !== CALIBRATION) olderCalibration++
+      if (line.source === 'jev' && line.received && line.received !== line.effort) overridden++
       if (line.source === 'off') offReasons[line.jevReason ?? '?'] = (offReasons[line.jevReason ?? '?'] ?? 0) + 1
       continue
     }
@@ -162,7 +165,7 @@ export function summarize(lines: Line[]): Summary {
     groups.set(key, [...groups.get(key) ?? [], line])
   }
   return {
-    decisions, bySource, offReasons, olderCalibration,
+    decisions, bySource, overridden, offReasons, olderCalibration,
     groups: [...groups].sort(([a], [b]) => a.localeCompare(b)).map(([key, runs]) => ({
       key, runs: runs.length, failures: runs.filter(r => r.status !== 'completed').length,
       medianMs: median(runs.flatMap(r => r.durationMs ?? [])), medianTokens: median(runs.flatMap(r => r.tokens ?? [])),
@@ -176,7 +179,7 @@ const tokens = (n: number | null) => n === null ? '?' : n >= 1_000_000 ? `${roun
 export function formatSummary(s: Summary): string {
   if (!s.decisions && !s.groups.length) return 'no routing records yet.'
   const off = Object.entries(s.offReasons).map(([reason, n]) => `${reason} ×${n}`).join(', ')
-  const head = `${s.decisions} decisions: Jev ${s.bySource.jev}, set by the call ${s.bySource.call}, Jev off ${s.bySource.off}${off ? ` (${off})` : ''}${s.olderCalibration ? `; ${s.olderCalibration} from an older calibration` : ''}.`
+  const head = `${s.decisions} decisions: Jev ${s.bySource.jev}${s.overridden ? ` (${s.overridden} replacing the call's effort)` : ''}, Jev off ${s.bySource.off}${off ? ` (${off})` : ''}${s.olderCalibration ? `; ${s.olderCalibration} from an older calibration` : ''}.`
   const rows = s.groups.map(g => `${g.key}: ${g.runs} runs${g.failures ? `, ${g.failures} failed` : ''}, median ${seconds(g.medianMs)} and ${tokens(g.medianTokens)} tokens`)
   return [head, ...rows].join('\n')
 }

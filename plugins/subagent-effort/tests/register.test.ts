@@ -37,17 +37,36 @@ test('Jev sets the effort of any native agent type, shown in its description, an
   expect(h.ledger().filter(l => l.kind === 'decision').map(l => l.agentType)).toEqual(['Explore', 'general-purpose'])
 })
 
-test('an effort already in the call is kept and recorded as the call\'s, and a fork or an empty task passes untouched', async ($, on) => {
+test('Jev replaces an effort the call came with, shows the one it replaced, and leaves the model alone', async ($, on) => {
   const h = world(on), received = dispatched(on); h.env.JEV_API_KEY = 'test-key'
   await started($)
-  const asked = call({ effort: 'max' })
+  const asked = call({ effort: 'max', model: 'opus', tool_use_id: 'toolu_max' })
+  await settle($.tool.call(asked as never))
+  expect(received[0]).toEqual({ ...asked, effort: 'low', description: 'Fixture (low, was max)' })
+  // Jev picking the effort the call already had names no replacement.
+  await settle($.tool.call(call({ effort: 'low', tool_use_id: 'toolu_low' }) as never))
+  expect(received[1]).toMatchObject({ effort: 'low', description: 'Fixture (low)' })
+  expect(h.requests).toHaveLength(2)
+  expect(h.ledger().map(l => [l.tool_use_id, l.source, l.received, l.effort])).toEqual([['toolu_max', 'jev', 'max', 'low'], ['toolu_low', 'jev', 'low', 'low']])
+})
+
+test('when Jev is off or fails, an effort the call came with goes as it came and is recorded as received and applied', async ($, on) => {
+  const h = world(on), received = dispatched(on); await started($)
+  const asked = call({ effort: 'high', tool_use_id: 'toolu_off' })
   await settle($.tool.call(asked as never)); expect(received[0]).toEqual(asked)
-  const fork = call({ subagent_type: 'fork' })
-  await settle($.tool.call(fork as never)); expect(received[1]).toEqual(fork)
+  h.env.JEV_API_KEY = 'test-key'; h.faults.http = 401
+  await settle($.tool.call(asked as never)); expect(received[1]).toEqual(asked)
+  expect(h.ledger().map(l => [l.source, l.jevReason, l.received, l.effort])).toEqual([['off', 'no-key', 'high', 'high'], ['off', 'http', 'high', 'high']])
+})
+
+test('a fork or an empty task passes untouched, unrouted and unrecorded', async ($, on) => {
+  const h = world(on), received = dispatched(on); h.env.JEV_API_KEY = 'test-key'
+  await started($)
+  const fork = call({ subagent_type: 'fork', effort: 'max' })
+  await settle($.tool.call(fork as never)); expect(received[0]).toEqual(fork)
   const empty = call({ prompt: '  ' })
-  await settle($.tool.call(empty as never)); expect(received[2]).toEqual(empty)
-  expect(h.requests).toHaveLength(0)
-  expect(h.ledger().map(l => [l.kind, l.source, l.effort])).toEqual([['decision', 'call', 'max']])
+  await settle($.tool.call(empty as never)); expect(received[1]).toEqual(empty)
+  expect(h.requests).toHaveLength(0); expect(h.written).toHaveLength(0)
 })
 
 test('when Jev is off the call goes as it came, with one toast per reason in this load', async ($, on) => {
@@ -80,7 +99,7 @@ test('a decision line and a foreground outcome line are written, and the host re
   dispatched(on, answer); await started($)
   expect(await settle($.tool.call(call({ tool_use_id: 'toolu_1' }) as never))).toEqual(answer)
   expect(h.ledger()).toEqual([
-    { v: 1, kind: 'decision', calibration: 1, ts: expect.any(String), tool_use_id: 'toolu_1', agentType: 'Explore', briefChars: 12, source: 'jev', effort: 'low', level: 0, top: 0.8, jevReason: null, jevMs: expect.any(Number) },
+    { v: 1, kind: 'decision', calibration: 1, ts: expect.any(String), tool_use_id: 'toolu_1', agentType: 'Explore', briefChars: 12, source: 'jev', received: null, effort: 'low', level: 0, top: 0.8, jevReason: null, jevMs: expect.any(Number) },
     { v: 1, kind: 'outcome', ts: expect.any(String), tool_use_id: 'toolu_1', agentType: 'Explore', effort: 'low', mode: 'foreground', resolvedModel: 'claude-haiku-5-5', status: 'completed', durationMs: 42_000, tokens: 1650 },
   ])
 })
@@ -142,7 +161,7 @@ test('the stats command checks Jev access the way routing does, summarizes the r
   h.env.JEV_API_KEY = 'test-key'
   await settle($.tool.call(call() as never))
   const text = (await $.command.run({ command: STATS_COMMAND } as never) as { text: string }).text
-  expect(text).toBe('Jev access in this session: ok.\n1 decisions: Jev 1, set by the call 0, Jev off 0.\nhaiku/low: 1 runs, median 42s and 2k tokens')
+  expect(text).toBe('Jev access in this session: ok.\n1 decisions: Jev 1, Jev off 0.\nhaiku/low: 1 runs, median 42s and 2k tokens')
   expect(text).not.toContain('test-key')
   h.fsFaults.read = true
   expect((await $.command.run({ command: STATS_COMMAND } as never) as { text: string }).text).toBe('Jev access in this session: ok.\nthe routing records could not be read.')
