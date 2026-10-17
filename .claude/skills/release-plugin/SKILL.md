@@ -11,11 +11,10 @@ Check the plugins in `$ARGUMENTS` against the done definition in root `AGENTS.md
 
 ## Steps
 
-0. **Base**: fetch `origin main`; record dirty/untracked paths under each plugin. Review the working-tree diff against `origin/main` plus untracked files. Finish with every changed and untracked plugin path accounted for.
-1. **Checks**: run `npm run check -- <name>` for each plugin: the version bump, `validate --strict`, consistency, tests and type-check, with the pinned CLI. Record each `=== <step>` section's result and the closing `check passed`/`check failed` line. Also run any automated check the plugin's AGENTS.md names beyond these; live scenarios belong to `/live-test`.
-2. **Version**: the bump step compares `HEAD` with `origin/main`, so it misses uncommitted changes. For a flagged or dirty plugin, compare its manifest version with `git show origin/main:plugins/<name>/.claude-plugin/plugin.json`; finish with the root version rule assessed for every such plugin.
-3. **Docs**: compare every behavior change in the diff/untracked files with the root README's plugin section and that plugin's AGENTS.md; finish with each change matched to docs or a named mismatch.
-4. **Inputs**: for every changed tool `inputSchema`, verify matching `types/index.d.ts`; finish with each match recorded, or mark this step not applicable.
+0. **Base**: fetch `origin main`; record dirty/untracked paths under each plugin. Review the working-tree diff against `origin/main` plus untracked files. When no path under the selected plugins differs from `origin/main`, report that there is nothing to release and stop, unless the user asks for the checks anyway. Finish with every changed and untracked plugin path accounted for.
+1. **Checks**: run `npm run check -- <name>` for each plugin: the version bump (uncommitted changes included), `validate --strict`, consistency, tests and type-check, with the pinned CLI. Record each `=== <step>` section's result and the closing `check passed`/`check failed` line. Also run any automated check the plugin's AGENTS.md names beyond these; live scenarios belong to `/live-test`.
+2. **Docs**: compare every behavior change in the diff/untracked files with the root README's plugin section and that plugin's AGENTS.md; finish with each change matched to docs or a named mismatch.
+3. **Inputs**: for every changed tool `inputSchema`, verify matching `types/index.d.ts`; finish with each match recorded, or mark this step not applicable.
 
 ## Report
 

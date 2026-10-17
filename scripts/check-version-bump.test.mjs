@@ -162,13 +162,14 @@ function fixtureRepo(t) {
     git("commit", "-q", "-m", "move");
   };
   const run = (...args) => spawnSync(process.execPath, [script, ...args], { cwd: root, encoding: "utf8" });
-  return { write, manifest, commit, move, run };
+  const runIn = (dir, ...args) => spawnSync(process.execPath, [script, ...args], { cwd: join(root, dir), encoding: "utf8" });
+  return { write, manifest, commit, move, run, runIn };
 }
 
 test("the command exits 2 with usage when no base ref is given", (t) => {
   const result = fixtureRepo(t).run();
   assert.equal(result.status, 2);
-  assert.equal(result.stderr, "usage: node scripts/check-version-bump.mjs <base-ref>\n");
+  assert.equal(result.stderr, "usage: node scripts/check-version-bump.mjs <base-ref> [--worktree]\n");
 });
 
 test("the command passes when only tests and docs changed", (t) => {
@@ -229,3 +230,44 @@ for (const { name, from, to, plugin } of [
     assert.match(result.stderr, new RegExp(`^${plugin}: shipped files changed but version is still `, "m"));
   });
 }
+
+test("the command exits 2 on an unknown option", (t) => {
+  const result = fixtureRepo(t).run("main", "--staged");
+  assert.equal(result.status, 2);
+});
+
+test("an uncommitted change without a bump fails only with --worktree", (t) => {
+  const repo = fixtureRepo(t);
+  repo.write("plugins/alpha/hooks/register.tsx", "export const a = 1;\n");
+  assert.equal(repo.run("main").status, 0);
+  const result = repo.run("main", "--worktree");
+  assert.equal(result.status, 1);
+  assert.equal(result.stderr, "alpha: shipped files changed but version is still 1.0.0 (bump it in plugins/alpha/.claude-plugin/plugin.json)\n");
+});
+
+test("--worktree counts an untracked shipped file and reads an uncommitted bump from disk", (t) => {
+  const repo = fixtureRepo(t);
+  repo.write("plugins/beta/skills/new/SKILL.md", "new\n");
+  assert.equal(repo.run("main", "--worktree").status, 1);
+  repo.write("plugins/beta/.claude-plugin/plugin.json", repo.manifest("beta", "2.1.0"));
+  const result = repo.run("main", "--worktree");
+  assert.equal(result.status, 0);
+  assert.equal(result.stdout, "ok: every plugin with changed shipped files bumped its version\n");
+});
+
+test("--worktree still counts committed changes on the branch", (t) => {
+  const repo = fixtureRepo(t);
+  repo.write("plugins/alpha/types/index.d.ts", "export {};\n");
+  repo.commit();
+  assert.equal(repo.run("main", "--worktree").status, 1);
+});
+
+test("--worktree from a subdirectory still sees untracked files elsewhere and reads the manifest from the root", (t) => {
+  const repo = fixtureRepo(t);
+  repo.write("plugins/beta/skills/new/SKILL.md", "new\n");
+  const failed = repo.runIn("plugins/alpha", "main", "--worktree");
+  assert.equal(failed.status, 1);
+  assert.match(failed.stderr, /^beta: shipped files changed but version is still 2\.0\.0 /);
+  repo.write("plugins/beta/.claude-plugin/plugin.json", repo.manifest("beta", "2.1.0"));
+  assert.equal(repo.runIn("plugins/alpha", "main", "--worktree").status, 0);
+});

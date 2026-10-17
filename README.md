@@ -72,7 +72,7 @@ Load a plugin from its folder so edits reload automatically, with `claude --plug
 | --- | --- |
 | `npm run plugin:new -- <name> [description]` | Scaffold a plugin that passes the consistency checks, then generate its typings. |
 | `npm run plugins:types [-- <name>]` | Generate the `claude-code` typings a plugin's `tsconfig.json` extends. |
-| `npm run check [-- <name>]` | The required CI checks in one run: the version bump against `origin/main` as last fetched, then `plugins:validate`, `plugins:test` and `typecheck`, for every plugin or one. Every step runs, and a summary names the failed ones. |
+| `npm run check [-- <name>]` | The required CI checks in one run: the version bump of committed and uncommitted changes against `origin/main` as last fetched, then `plugins:validate`, `plugins:test` and `typecheck`, for every plugin or one. Every step runs, and a summary names the failed ones. |
 | `npm run plugins:validate [-- <name>]` | `validate --strict` the marketplace and every plugin, or one plugin, then `check-consistency`. |
 | `npm run typecheck [-- <name>]` | Run the pinned `tsc` on one plugin, or every plugin with TypeScript; the typings must exist (`plugins:types`). |
 | `npm run plugins:test [-- <name>]` | Script tests, every plugin's tests and, with the ChatGPT app installed, the codex-computer-use helper tests; with a name, only that plugin's tests. |
