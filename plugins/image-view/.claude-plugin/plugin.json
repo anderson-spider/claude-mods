@@ -1,0 +1,22 @@
+{
+  "name": "image-view",
+  "version": "0.2.1",
+  "description": "See the images you paste into Claude Code: thumbnails above the prompt instead of bare [Image #1] tags",
+  "author": {
+    "name": "Jarrod Watts",
+    "url": "https://github.com/jarrodwatts"
+  },
+  "homepage": "https://github.com/anderson-spider/claude-mods/tree/main/plugins/image-view",
+  "repository": "https://github.com/anderson-spider/claude-mods",
+  "license": "MIT",
+  "keywords": [
+    "images",
+    "paste",
+    "preview",
+    "thumbnails",
+    "mod",
+    "terminal",
+    "claude-code"
+  ],
+  "types": "./types/index.d.ts"
+}

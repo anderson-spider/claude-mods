@@ -61,7 +61,8 @@ esac
   return { run, root };
 }
 
-const ALL = ["chatgpt", "codex-computer-use", "coolify", "gitlab", "session-hud", "tailscale"];
+// The plugin list bootstrap.sh installs; check-consistency keeps it equal to marketplace.json.
+const ALL = /^ALL="([^"]*)"$/m.exec(readFileSync(script, "utf8"))[1].split(" ");
 const mutating = calls => calls.filter(c => /plugin (install|update|marketplace add|marketplace update)|-helper/.test(c));
 
 test("--check prints the steps and changes nothing", () => {

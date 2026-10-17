@@ -28,6 +28,11 @@
       "description": "Work on GitLab merge requests and pipelines of the current repository, picking the host and token from its git remote."
     },
     {
+      "name": "image-view",
+      "source": "./plugins/image-view",
+      "description": "See the images you paste into Claude Code: thumbnails above the prompt instead of bare [Image #1] tags"
+    },
+    {
       "name": "session-hud",
       "source": "./plugins/session-hud",
       "description": "A card above the prompt: model, context and cache; the five-hour and seven-day limits with their pace; the running subagents with their type, model and effort, and the tokens they used; what the last turn sent and added, edits and errors."
