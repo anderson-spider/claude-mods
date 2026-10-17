@@ -3,6 +3,9 @@ export type Cells = { columns: number; rows: number }
 
 const TILE_ROWS = 6
 const MAX_COLUMNS = 32
+// An image Claude reads is drawn under its row in the transcript, larger than a prompt tile: it is there to be looked at.
+export const READ_ROWS = 14
+export const READ_COLUMNS = 64
 const MIN_COLUMNS = 4
 // A terminal cell is about twice as tall as it is wide.
 const CELL_ASPECT = 2
@@ -20,6 +23,15 @@ export function imageNumbers(draft: string): number[] {
   return [...seen]
 }
 
+const IMAGE_FILE = /\.(png|jpe?g|webp|gif|heic|tiff?|bmp)$/i
+
+/** The image a Read call opens, by its `file_path` extension; undefined for any other call. */
+export function readImagePath(tool: string, input: unknown): string | undefined {
+  if (tool !== 'Read' || typeof input !== 'object' || input === null) return undefined
+  const path = (input as { file_path?: unknown }).file_path
+  return typeof path === 'string' && IMAGE_FILE.test(path) ? path : undefined
+}
+
 /** Width and height from a PNG's IHDR chunk, or null when the bytes aren't a PNG. */
 export function pngSize(base64: string): Size | null {
   // 24 bytes cover the signature and IHDR's width and height; 32 base64 chars decode to exactly 24.
@@ -32,14 +44,14 @@ export function pngSize(base64: string): Size | null {
   return width > 0 && height > 0 ? { width, height } : null
 }
 
-/** A picture box `rows` tall that keeps the picture's aspect ratio. */
-export function fitCells(size: Size | null, tileRows = TILE_ROWS): Cells {
+/** A picture box `rows` tall, at most `maxColumns` wide, that keeps the picture's aspect ratio. */
+export function fitCells(size: Size | null, tileRows = TILE_ROWS, maxColumns = MAX_COLUMNS): Cells {
   const { width, height } = size ?? FALLBACK
   let rows = tileRows
   let columns = Math.round((rows * CELL_ASPECT * width) / height)
-  if (columns > MAX_COLUMNS) {
-    columns = MAX_COLUMNS
-    rows = Math.max(1, Math.round((MAX_COLUMNS * height) / (CELL_ASPECT * width)))
+  if (columns > maxColumns) {
+    columns = maxColumns
+    rows = Math.max(1, Math.round((maxColumns * height) / (CELL_ASPECT * width)))
   }
   return { columns: Math.max(MIN_COLUMNS, columns), rows: Math.min(rows, tileRows) }
 }

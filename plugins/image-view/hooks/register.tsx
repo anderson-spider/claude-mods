@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { PastedImage } from '../types'
-import { blockCells, drawsPictures, fitRow, imageNumbers, pngSize } from './layout'
+import { READ_COLUMNS, READ_ROWS, blockCells, drawsPictures, fitCells, fitRow, imageNumbers, pngSize, readImagePath } from './layout'
 import type { Size } from './layout'
 import { decodeThumb, fromBase64 } from './png'
 import type { Thumb } from './png'
@@ -136,6 +136,58 @@ async function show($: EngineInterface, draft: string) {
   written = json
 }
 
+// The images Claude read, by the Read call's id: a PNG snapshot of the file as it was then, so a file written again
+// later (a render that overwrites its output) leaves the earlier rows as they were. null when it can't be drawn.
+type Preview = { path: string; size: Size | null }
+const previews = new Map<string, Preview | null>()
+const pending = new Set<string>()
+
+async function snapshot($: EngineInterface, id: string, source: string): Promise<Preview | null> {
+  tmpRoot ??= await tempRoot($)
+  let path: string | undefined
+  if (tmpRoot !== undefined) {
+    const out = `${tmpRoot}/image-view-read-${await $.session.id()}-${id.replace(/[^\w-]/g, '')}.png`
+    if (await $.fs.exists(out)) path = out
+    else {
+      const { exitCode } = await $.process
+        .run(['sips', '-s', 'format', 'png', '-Z', '1600', source, '--out', out])
+        .catch(() => ({ exitCode: 1 }))
+      if (exitCode === 0) path = out
+    }
+  }
+  // Without sips (Linux) a PNG is drawn from the file itself; any other format can't be.
+  path ??= /\.png$/i.test(source) ? source : undefined
+  if (path === undefined) return null
+  const base64 = await $.fs.read(path, { as: 'bytes' }).then(
+    bytes => bytes.base64,
+    () => undefined,
+  )
+  const size = base64 === undefined ? null : pngSize(base64)
+  if (base64 !== undefined && size === null) return null
+  if (!(await canDrawPictures($))) {
+    const thumb = base64 === undefined ? null : decodeThumb(fromBase64(base64))
+    if (thumb === null) return null
+    thumbs.set(path, thumb)
+  }
+  return { path, size }
+}
+
+/** The preview of a Read call's image; undefined while it is being made, and the row is redrawn once it is. */
+function previewFor($: EngineInterface, id: string, source: string): Preview | null | undefined {
+  if (previews.has(id)) return previews.get(id)
+  if (!pending.has(id)) {
+    pending.add(id)
+    void snapshot($, id, source)
+      .catch(() => null)
+      .then(preview => {
+        previews.set(id, preview)
+        pending.delete(id)
+        $.ui.invalidate('ui.render')
+      })
+  }
+  return undefined
+}
+
 async function check($: EngineInterface) {
   if (isChecking) return
   isChecking = true
@@ -151,6 +203,37 @@ export const register: Register = on => {
     pictures = undefined
     $.clock.every(POLL_MS, () => check($))
     return next(e)
+  })
+
+  // A folded run of reads (`Read 3 files`) opens when it holds an image, so each image gets its own row.
+  on('ui.render', { component: 'ToolGroup' }, async ($, e, next) => {
+    if (e.surface !== 'terminal' || e.props.isExpanded) return next(e)
+    const hasImage = e.props.calls.some(call => !call.isRunning && !call.isErrored && readImagePath(call.tool, call.input))
+    return hasImage ? next({ ...e, props: { ...e.props, isExpanded: true } }) : next(e)
+  })
+
+  on('ui.render', { component: 'ToolUse' }, async ($, e, next) => {
+    const source = readImagePath(e.props.tool, e.props.input)
+    if (e.surface !== 'terminal' || source === undefined || e.props.isRunning || e.props.isErrored || e.props.isInterrupted) return next(e)
+    const preview = previewFor($, e.props.tool_use_id, source)
+    const row = await next(e)
+    if (!preview) return row
+
+    const { Box, Image, Raster } = $.ui.resolve(e)
+    const { columns, rows } = fitCells(preview.size, READ_ROWS, READ_COLUMNS)
+    const thumb = thumbs.get(preview.path)
+    return (
+      <Box flexDirection="column">
+        {row}
+        <Box paddingLeft={2}>
+          {thumb ? (
+            <Raster key={`read-${e.props.tool_use_id}`} columns={columns} rows={rows} cells={blockCells(thumb, columns, rows)} />
+          ) : (
+            <Image key={`read-${e.props.tool_use_id}`} source={{ file: preview.path, format: 'png' }} columns={columns} rows={rows} alt={source} />
+          )}
+        </Box>
+      </Box>
+    )
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {

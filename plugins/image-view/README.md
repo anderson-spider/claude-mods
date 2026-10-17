@@ -1,8 +1,8 @@
 # image-view
 
-Shows the images you paste into Claude Code as thumbnails above the prompt, instead of bare `[Image #1]` tags.
+Shows images in the terminal, as the desktop app does: thumbnails of the images you paste above the prompt, instead of bare `[Image #1]` tags, and each image Claude reads (a screenshot, a render to compare) drawn under its `Read` row in the transcript.
 
-Based on [claude-image-view](https://github.com/jarrodwatts/claude-image-view) by Jarrod Watts, under the MIT license (see [LICENSE](LICENSE)). This copy draws half-block thumbnails in a terminal that runs inside Ghostty or kitty but is not one of them, such as Herdr, where the original shows only the `[Image #n]` text.
+Based on [claude-image-view](https://github.com/jarrodwatts/claude-image-view) by Jarrod Watts, under the MIT license (see [LICENSE](LICENSE)). This copy adds the images Claude reads, and draws half blocks instead of the `[Image #n]` text in a terminal that runs inside Ghostty or kitty but is not one of them.
 
 ```text
 /plugin install image-view@spider-claude-mods
@@ -29,6 +29,8 @@ Paste one or more images and a row of thumbnails sits above the prompt, each lab
 - The row always fits: tiles shrink to the space above the prompt, and a row with too many ends with `+N`.
 - Sending the prompt, or deleting the tags, clears the row.
 
+When Claude opens an image with the `Read` tool, the picture is drawn under that row, up to 14 rows by 64 columns, and stays in the transcript. A folded run of reads (`Read 3 files`) opens when it holds an image, so each one shows. The picture is a snapshot taken when it is first drawn, so a file written again later (a render that overwrites its output) leaves earlier rows as they were.
+
 ## How it works
 
 Claude Code saves every pasted image as `<tmp>/<project>/<session>/images/<n>.<ext>` and puts an `[Image #n]` tag in the prompt.
@@ -37,6 +39,7 @@ Claude Code saves every pasted image as `<tmp>/<project>/<session>/images/<n>.<e
 2. For each tag it finds the cached file. The terminal draws PNG only, so on macOS any other format is converted once with `sips` to `<session>/image-view-<n>.png`. The size comes from the PNG header.
 3. Where Claude Code draws real pictures it uses Claude Code's `Image` element, and the terminal reads the file itself.
 4. Anywhere else the mod decodes the PNG, averages it down and draws it in colored half blocks (`▀`) with the `Raster` element.
+5. For a `Read` of an image file it redraws the tool's row with the picture under it. On macOS the file is copied once per read with `sips` to `<tmp>/image-view-read-<session>-<call>.png`, scaled to at most 1600 pixels; without `sips` a PNG is drawn from the file itself and other formats are not drawn.
 
 ## Terminal support
 
@@ -50,11 +53,13 @@ Claude Code decides whether a terminal gets real pictures, by the terminal's nam
 | Inside tmux or screen | Half blocks |
 | Background sessions | Half blocks, or real pictures with `CLAUDE_CODE_FORCE_TERMINAL_IMAGES=1` |
 
+Herdr with `kitty_graphics` turned on draws real pictures, but Claude Code does not trust it by name: set `CLAUDE_CODE_FORCE_TERMINAL_IMAGES=1` (below) to get them there.
+
 `CLAUDE_IMAGE_VIEW_RENDERER` overrides the guess: `image` for real pictures, `blocks` for half blocks. `CLAUDE_CODE_FORCE_TERMINAL_IMAGES=1` makes Claude Code draw pictures in any terminal; set it only where the terminal supports the kitty protocol's Unicode placeholders.
 
 ## What it reads, runs and writes
 
-Local only, no network requests. It reads the prompt box, lists Claude Code's temp folder to find the session's image cache, and reads each pasted image (up to Claude Code's 4 MiB read limit). It runs `id -u` once on macOS and Linux to find that folder, and `sips` for a non-PNG paste on macOS, writing one PNG into the session's temp folder. It reads a few terminal variables (`TERM`, `TERM_PROGRAM`, `TMUX`, `GHOSTTY_RESOURCES_DIR` and similar) to choose the thumbnail kind. `claude plugin validate plugins/image-view` lists every event it hooks and call it makes.
+Local only, no network requests. It reads the prompt box, lists Claude Code's temp folder to find the session's image cache, and reads each pasted image (up to Claude Code's 4 MiB read limit). For each image Claude reads it reads that file and, on macOS, writes one PNG snapshot into Claude Code's temp folder. It runs `id -u` once on macOS and Linux to find that folder, and `sips` for a non-PNG paste and for each read image on macOS. It reads a few terminal variables (`TERM`, `TERM_PROGRAM`, `TMUX`, `GHOSTTY_RESOURCES_DIR` and similar) to choose the thumbnail kind. `claude plugin validate plugins/image-view` lists every event it hooks and call it makes.
 
 ## Requirements
 
@@ -73,4 +78,4 @@ The Claude desktop app previews pasted images itself, so the mod draws nothing t
 
 ## Tests
 
-`claude plugin test plugins/image-view` runs the layout, PNG decoding and renderer choice, and the band against a fake host: a paste found in the temp folder, conversion, the half-block path and the `+N` row. They do not prove what a given terminal draws; that needs a paste in that terminal.
+`claude plugin test plugins/image-view` runs the layout, PNG decoding and renderer choice, the band against a fake host (a paste found in the temp folder, conversion, the half-block path, the `+N` row) and the transcript rows (a read image drawn from its snapshot or in half blocks, rows left alone, a folded run opened). They do not prove what a given terminal draws; that needs a paste or a read in that terminal.

@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { blockCells, drawsPictures, fitCells, fitRow, imageNumbers, pngSize } from '../hooks/layout'
+import { READ_COLUMNS, READ_ROWS, blockCells, drawsPictures, fitCells, fitRow, imageNumbers, pngSize, readImagePath } from '../hooks/layout'
 import { decodeThumb, fromBase64 } from '../hooks/png'
 
 function pngHead(width: number, height: number): string {
@@ -380,3 +380,106 @@ for (const [platform, env, root] of [
     expect(listed[0]).toBe(root)
   })
 }
+
+test('only a Read of an image file is an image Claude read', () => {
+  expect(readImagePath('Read', { file_path: '/shots/compare.PNG' })).toBe('/shots/compare.PNG')
+  expect(readImagePath('Read', { file_path: '/shots/frame.webp', offset: 1 })).toBe('/shots/frame.webp')
+  expect(readImagePath('Read', { file_path: '/src/main.ts' })).toBeUndefined()
+  expect(readImagePath('Bash', { file_path: '/shots/compare.png' })).toBeUndefined()
+  expect(readImagePath('Read', null)).toBeUndefined()
+  // A read image is drawn larger than a prompt tile.
+  expect(fitCells({ width: 1600, height: 900 }, READ_ROWS, READ_COLUMNS)).toEqual({ columns: 50, rows: 14 })
+})
+
+const READ_ROW = (id: string, file_path: string, more: Record<string, unknown> = {}) => ({
+  plugin: 'image-view' as const,
+  component: 'ToolUse' as const,
+  requestId: id,
+  viewport: { columns: 120, rows: 40 },
+  props: { tool_use_id: id, tool: 'Read', input: { file_path }, isRunning: false, isErrored: false, isInterrupted: false, output: {}, ...more },
+})
+
+for (const [name, env, drawn] of [
+  ['an image Claude reads is drawn under its row, from a snapshot of the file', GHOSTTY, 'Image'],
+  ['an image Claude reads is drawn in colored blocks where pictures are not drawn', { TERM_PROGRAM: 'Apple_Terminal' }, 'Raster'],
+] as const) {
+  test(name, async ($, on) => {
+    const runs: string[][] = []
+    on('session.start', () => ({ cwd: '/work' }))
+    on('prompt.read', () => ({ value: { text: '', cursor: 0 } }))
+    on('env.get', (_, e) => ({ value: (env as Record<string, string>)[e.name] }))
+    on('process.run', (_, e) => {
+      runs.push([...e.argv])
+      return ran(e.argv[0] === 'id' ? '501\n' : '')
+    })
+    on('session.id', () => ({ value: `sess-read-${drawn}` }))
+    on('fs.exists', () => ({ value: false }))
+    on('fs.read', () => ({ value: { base64: drawn === 'Raster' ? RGBA : pngHead(1600, 900) } }))
+    on('ui.render', () => ({ type: 'Text', props: {}, children: ['Read compare.png'] }))
+    await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+
+    const id = `toolu_${drawn}`
+    // The first draw starts the snapshot and shows the row alone; the row is drawn again once the snapshot is made.
+    await (await $.ui.mount({ ...READ_ROW(id, '/shots/compare.png'), surface: 'terminal' })).unmount()
+    for (let i = 0; i < 20; i++) await Promise.resolve()
+
+    const snapshot = `/tmp/claude-501/image-view-read-sess-read-${drawn}-${id}.png`
+    expect(runs).toContainEqual(['sips', '-s', 'format', 'png', '-Z', '1600', '/shots/compare.png', '--out', snapshot])
+    const ui = await $.ui.mount({ ...READ_ROW(id, '/shots/compare.png'), surface: 'terminal' })
+    expect(await ui.find({ type: 'Text', text: 'Read compare.png' })).toBeDefined()
+    const picture = await ui.find({ type: drawn })
+    expect(picture).toBeDefined()
+    if (drawn === 'Image') expect(picture?.props).toMatchObject({ source: { file: snapshot, format: 'png' }, columns: 50, rows: 14 })
+    await ui.unmount()
+  })
+}
+
+test('a read that is running, failed or is not an image draws the row alone', async ($, on) => {
+  on('session.start', () => ({ cwd: '/work' }))
+  on('prompt.read', () => ({ value: { text: '', cursor: 0 } }))
+  on('env.get', (_, e) => ({ value: GHOSTTY[e.name] }))
+  on('process.run', () => ran('501\n'))
+  on('session.id', () => ({ value: 'sess-plain' }))
+  on('fs.exists', () => ({ value: false }))
+  on('fs.read', () => ({ value: { base64: pngHead(800, 400) } }))
+  on('ui.render', () => ({ type: 'Text', props: {}, children: ['engine row'] }))
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+
+  for (const [id, path, more] of [
+    ['toolu_running', '/shots/a.png', { isRunning: true }],
+    ['toolu_failed', '/shots/b.png', { isErrored: true }],
+    ['toolu_text', '/src/main.ts', {}],
+  ] as const) {
+    const first = await $.ui.mount({ ...READ_ROW(id, path, more), surface: 'terminal' })
+    await first.unmount()
+    for (let i = 0; i < 20; i++) await Promise.resolve()
+    const ui = await $.ui.mount({ ...READ_ROW(id, path, more), surface: 'terminal' })
+    expect(await ui.find({ type: 'Image' })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: 'engine row' })).toBeDefined()
+    await ui.unmount()
+  }
+})
+
+test('a folded run of reads opens when it holds an image, and stays folded otherwise', async ($, on) => {
+  const seen: boolean[] = []
+  on('session.start', () => ({ cwd: '/work' }))
+  on('prompt.read', () => ({ value: { text: '', cursor: 0 } }))
+  on('ui.render', (_, e) => {
+    seen.push((e.props as { isExpanded: boolean }).isExpanded)
+    return { type: 'Text', props: {}, children: ['group'] }
+  })
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  const call = (tool: string, file_path: string) => ({ tool, input: { file_path }, isRunning: false, isErrored: false, isInterrupted: false })
+  const group = (calls: unknown[]) => ({
+    plugin: 'image-view',
+    component: 'ToolGroup',
+    requestId: 'group',
+    surface: 'terminal',
+    viewport: { columns: 120, rows: 40 },
+    props: { calls, isActive: false, isExpanded: false },
+  })
+
+  await (await $.ui.mount(group([call('Read', '/src/a.ts'), call('Read', '/shots/b.png')]) as never)).unmount()
+  await (await $.ui.mount(group([call('Read', '/src/a.ts'), call('Grep', '/src')]) as never)).unmount()
+  expect(seen).toEqual([true, false])
+})

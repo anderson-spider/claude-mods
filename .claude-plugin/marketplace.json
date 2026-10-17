@@ -30,7 +30,7 @@
     {
       "name": "image-view",
       "source": "./plugins/image-view",
-      "description": "See the images you paste into Claude Code: thumbnails above the prompt instead of bare [Image #1] tags"
+      "description": "See images in the terminal: thumbnails of what you paste above the prompt, and each image Claude reads drawn under its row in the transcript"
     },
     {
       "name": "session-hud",

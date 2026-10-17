@@ -1,7 +1,7 @@
 {
   "name": "image-view",
-  "version": "0.2.1",
-  "description": "See the images you paste into Claude Code: thumbnails above the prompt instead of bare [Image #1] tags",
+  "version": "0.3.0",
+  "description": "See images in the terminal: thumbnails of what you paste above the prompt, and each image Claude reads drawn under its row in the transcript",
   "author": {
     "name": "Jarrod Watts",
     "url": "https://github.com/jarrodwatts"
