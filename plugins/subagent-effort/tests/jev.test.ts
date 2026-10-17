@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { JEV_DEADLINE_MS, JEV_URL, JevFailure, MAX_CONCURRENT, SLOT_HOLD_MS, classifyFailure, createBreaker, createGate, createJev, nouls, parseBody } from '../hooks/jev'
+import { JEV_DEADLINE_MS, JEV_URL, JevFailure, MAX_CONCURRENT, SLOT_HOLD_MS, classifyFailure, createBreaker, createGate, createJev, parseBody } from '../hooks/jev'
 import type { JevInit, JevIo, JevOptions } from '../hooks/jev'
 
 // A key-shaped fixture is assembled at runtime so no source literal matches a secret scanner.
@@ -207,7 +207,15 @@ test('a slot is held until the request settles, so a burst against a hanging Jev
 
 test('response metadata is discarded even when it echoes the key', () => {
   const body = (model: unknown) => JSON.stringify({ model, answers: {} })
-  for (const value of ['jev-1.13.0', KEY, `Bearer ${KEY}`, '', 7]) expect(parseBody(body(value))).toEqual({ answers: {} })
+  for (const value of ['jev-1.13.0', KEY, `Bearer ${KEY}`, '', 7]) expect(parseBody(body(value))).toEqual({ answers: {}, usage: null })
+})
+
+test('the reported usage keeps only its two token counts, and any other shape is null', () => {
+  const body = (usage: unknown) => JSON.stringify({ answers: {}, usage })
+  expect(parseBody(body({ input_tokens: 308, output_tokens: 19, note: KEY }))).toEqual({ answers: {}, usage: { input: 308, output: 19 } })
+  for (const usage of [undefined, null, KEY, [], {}, { input_tokens: 1 }, { input_tokens: -1, output_tokens: 1 }, { input_tokens: '1', output_tokens: 1 }, { input_tokens: 1, output_tokens: NaN }]) {
+    expect(parseBody(body(usage)).usage).toBeNull()
+  }
 })
 
 test('a slot is released after the hold ceiling even when its fetch never settles', async () => {
@@ -517,13 +525,4 @@ test('choice criteria pass through retries and requested answers discard hostile
   expect(h.calls).toHaveLength(2)
   for (const call of h.calls) expect(JSON.parse(call.body)).toMatchObject({ questions })
   expect(h.timers.filter(t => t.ms === JEV_DEADLINE_MS)).toHaveLength(1)
-})
-
-test('Noul probabilities are read id by id, and one missing, non-finite or out-of-range value is malformed', () => {
-  expect(nouls({ a: { type: 'noul', noul: 0.95 }, b: { noul: 0 }, c: { noul: 1 }, extra: { noul: 0.5 } }, ['a', 'b', 'c'])).toEqual({ a: 0.95, b: 0, c: 1 })
-  for (const bad of [{}, { noul: '0.5' }, { noul: NaN }, { noul: Infinity }, { noul: -0.01 }, { noul: 1.01 }, { noul: null }]) {
-    expect(() => nouls({ a: { noul: 0.5 }, b: bad }, ['a', 'b'])).toThrow('invalid noul')
-  }
-  expect(() => nouls({ a: { noul: 0.5 } }, ['a', 'b'])).toThrow('invalid noul')
-  try { nouls({}, ['a']) } catch (error) { expect(error).toBeInstanceOf(JevFailure); expect((error as JevFailure).reason).toBe('malformed') }
 })

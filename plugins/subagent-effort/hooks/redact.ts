@@ -1,7 +1,7 @@
 // Redaction for text that leaves the machine: paths, secrets and email addresses.
 // Pure and total: it never throws and the same input always gives the same output. Every pattern is linear on hostile
 // input (bounded quantifiers, a boundary group instead of a scan from each position), because the text is agent output.
-// Over-redaction is the safe side: a lost word costs the judge little, a leaked credential costs the person a lot.
+// Over-redaction is the safe side: a lost word costs the rating little, a leaked credential costs the person a lot.
 
 export type RedactContext = {
   /** The person's home directory, e.g. `/Users/me`; becomes `~`. */

@@ -1,7 +1,6 @@
-// The Jev client for model and effort routing and the outcome judge. Pure: the HTTP call, the timer and the clock are
-// injected and nothing here touches `$`. Endpoint, body and answer shape are those of the TypeSafe SDK's `systemOne`
-// (POST /v1/systemone, bearer key, `{ model, state, questions }`, answers keyed by question id, a Noul's as `noul`),
-// checked live. `ask` resolves with the answers or throws a
+// The Jev client for effort routing. Pure: the HTTP call, the timer and the clock are injected and nothing here touches
+// `$`. Endpoint, body and answer shape are those of the TypeSafe SDK's `systemOne` (POST /v1/systemone, bearer key,
+// `{ model, state, questions }`, answers keyed by question id), checked live. `ask` resolves with the answers or throws a
 // JevFailure whose `reason` is typed; its message holds a status or a reason code, never a response body or the key.
 
 export const JEV_URL = 'https://api.typesafe.ai/v1/systemone'
@@ -101,14 +100,24 @@ export function createGate(max = MAX_CONCURRENT): Gate {
 // --- Client ---
 
 export type Answers = Record<string, Record<string, unknown>>
-export type JevReply = { answers: Answers; ms: number }
+/** The tokens Jev reports it processed for one call; null when the response carries no usable `usage`. */
+export type JevUsage = { input: number; output: number }
+export type JevReply = { answers: Answers; usage: JevUsage | null; ms: number }
 export type AskFn = (questions: unknown, state: unknown) => Promise<JevReply>
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
 
-/** The answers of a 2xx body; a body of another shape is `malformed` and is not retried. */
-export function parseBody(text: string, answerIds?: readonly string[]): { answers: Answers } {
+const tokenCount = (value: unknown) => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.round(value) : null
+/** The two token counts of a `usage` object, projected one by one; anything else is null. */
+function usageOf(value: unknown): JevUsage | null {
+  if (!isRecord(value)) return null
+  const input = tokenCount(value.input_tokens), output = tokenCount(value.output_tokens)
+  return input === null || output === null ? null : { input, output }
+}
+
+/** The answers and token usage of a 2xx body; a body of another shape is `malformed` and is not retried. */
+export function parseBody(text: string, answerIds?: readonly string[]): { answers: Answers; usage: JevUsage | null } {
   let data: unknown
   try {
     data = JSON.parse(text)
@@ -120,19 +129,8 @@ export function parseBody(text: string, answerIds?: readonly string[]): { answer
   for (const answer of Object.values(answers)) {
     if (!isRecord(answer)) throw new JevFailure('malformed', 'an answer is not an object')
   }
-  // Metadata from the service can echo request details. Only the local pin is recorded.
-  return { answers: answers as Answers }
-}
-
-/** The Noul probability (`noul`, high is yes) of each id, checked one by one: a missing or non-finite value, or one outside 0..1, is `malformed`. */
-export function nouls<Id extends string>(answers: Answers, ids: readonly Id[]): Record<Id, number> {
-  const out = {} as Record<Id, number>
-  for (const id of ids) {
-    const p = answers[id]?.noul
-    if (typeof p !== 'number' || !Number.isFinite(p) || p < 0 || p > 1) throw new JevFailure('malformed', 'invalid noul')
-    out[id] = p
-  }
-  return out
+  // Metadata from the service can echo request details: only the answers and the two token counts are kept.
+  return { answers: answers as Answers, usage: usageOf(data.usage) }
 }
 
 /** `Retry-After` in seconds as milliseconds; undefined when absent or not a number. */
