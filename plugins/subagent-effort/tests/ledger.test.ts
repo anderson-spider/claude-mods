@@ -1,0 +1,63 @@
+import { expect, test } from 'claude-code/testing'
+import { afterAgentCall, afterTurn, appendLine, decisionLine, familyOf, formatSummary, parseLedger, readAll, ROTATE_AT, rotatedPath, summarize } from '../hooks/ledger'
+import type { FileIo, Line } from '../hooks/ledger'
+
+const ctx = { toolUseId: 'toolu_1', agentType: 'Explore', effort: 'medium' as const }
+const ts = '2026-10-17T00:00:00.000Z'
+
+test('a decision line projects each field and drops anything that is not a plain word or a count', () => {
+  expect(decisionLine({ ts, toolUseId: 'bad id/with path', agentType: 'Explore', briefChars: 12.4, source: 'jev', effort: 'high', choice: { effort: 'high', level: 2, top: 0.876, jevReason: null, jevMs: 210 } }))
+    .toEqual({ v: 1, kind: 'decision', calibration: 1, ts, tool_use_id: null, agentType: 'Explore', briefChars: 12, source: 'jev', effort: 'high', level: 2, top: 0.88, jevReason: null, jevMs: 210 })
+  expect(decisionLine({ ts, toolUseId: 'toolu_2', agentType: 'plugin:agent', briefChars: 3, source: 'off', effort: null, choice: { effort: null, level: null, top: null, jevReason: 'no-key', jevMs: null } }))
+    .toMatchObject({ agentType: 'plugin:agent', source: 'off', effort: null, level: null, top: null, jevReason: 'no-key' })
+})
+
+test('the Agent result becomes a foreground outcome, a background launch, or nothing for a refusal or an unknown shape', () => {
+  const usage = { input_tokens: 1, output_tokens: 2, cache_creation_input_tokens: 3, cache_read_input_tokens: 4 }
+  expect(afterAgentCall(ctx, { result: { status: 'completed', resolvedModel: 'claude-sonnet-5-5', totalDurationMs: 1500, usage } }, ts))
+    .toEqual({ v: 1, kind: 'outcome', ts, tool_use_id: 'toolu_1', agentType: 'Explore', effort: 'medium', mode: 'foreground', resolvedModel: 'claude-sonnet-5-5', status: 'completed', durationMs: 1500, tokens: 10 })
+  expect(afterAgentCall(ctx, { isError: true }, ts)).toMatchObject({ status: 'error', tokens: null, durationMs: null })
+  expect(afterAgentCall(ctx, { result: { status: 'async_launched', agentId: 'bg' } }, ts)).toEqual({ launched: 'bg' })
+  for (const result of [{ deny: 'no' }, null, 'text', { result: 'text' }, { result: { status: 'async_launched' } }, { result: { status: 'teammate_spawned' } }]) expect(afterAgentCall(ctx, result, ts)).toBeNull()
+})
+
+test('a background turn end is an outcome with its status from the reason', () => {
+  const turn = { durationMs: 900, isAborted: false, reason: 'answer', usage: { model: 'claude-opus-5-5', input_tokens: 1, output_tokens: 1, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 } }
+  expect(afterTurn(ctx, turn, ts)).toMatchObject({ mode: 'background', status: 'completed', durationMs: 900, tokens: 2, resolvedModel: 'claude-opus-5-5' })
+  expect(afterTurn(ctx, { ...turn, isAborted: true }, ts).status).toBe('aborted')
+  expect(afterTurn(ctx, { ...turn, reason: 'error' }, ts).status).toBe('error')
+  expect(afterTurn(ctx, { durationMs: 1, isAborted: false, reason: 'refusal' }, ts)).toMatchObject({ status: 'refusal', tokens: null, resolvedModel: null })
+})
+
+function memory(): FileIo & { files: Map<string, string> } {
+  const files = new Map<string, string>()
+  return { files, exists: async p => files.has(p), read: async p => files.get(p)!, write: async (p, t) => { files.set(p, t) } }
+}
+
+test('appends keep every line, rotate past the limit, and readAll joins both generations', async () => {
+  const io = memory(), path = '/h/.claude/subagent-effort/routes.jsonl'
+  const line = decisionLine({ ts, toolUseId: 'a', agentType: 'Explore', briefChars: 1, source: 'call', effort: 'low' })
+  await Promise.all([appendLine(io, path, line), appendLine(io, path, line)])
+  expect(io.files.get(path)!.split('\n').filter(Boolean)).toHaveLength(2)
+  io.files.set(path, 'x'.repeat(ROTATE_AT))
+  await appendLine(io, path, line)
+  expect(io.files.get(rotatedPath(path))).toBe('x'.repeat(ROTATE_AT) + '\n')
+  expect(parseLedger(await readAll(io, path))).toEqual([line])
+})
+
+test('the summary groups outcomes by model family and effort and counts decisions per source', () => {
+  const decision = (source: 'jev' | 'call' | 'off', jevReason: string | null = null) => decisionLine({ ts, toolUseId: 'a', agentType: 'Explore', briefChars: 1, source, effort: source === 'off' ? null : 'low', choice: { effort: null, level: null, top: null, jevReason: jevReason as never, jevMs: null } })
+  const run = (effort: 'low' | null, model: string, durationMs: number, tokens: number, status: 'completed' | 'error' = 'completed') => ({ ...afterAgentCall({ ...ctx, effort }, { result: { status: 'completed', resolvedModel: model, totalDurationMs: durationMs, usage: { input_tokens: tokens } } }, ts) as Line, status })
+  const lines: Line[] = [decision('jev'), decision('call'), decision('off', 'no-key'), { ...decision('jev'), calibration: 0 },
+    run('low', 'claude-haiku-5-5', 10_000, 2000), run('low', 'claude-haiku-5-5', 30_000, 4000, 'error'), run(null, 'claude-opus-5-5', 60_000, 1_500_000)]
+  const text = parseLedger(lines.map(l => JSON.stringify(l)).join('\n') + '\nnot json\n{"v":1,"kind":"decision","source":"x","effort":null}')
+  const summary = summarize(text)
+  expect(summary).toMatchObject({ decisions: 4, bySource: { jev: 2, call: 1, off: 1 }, offReasons: { 'no-key': 1 }, olderCalibration: 1 })
+  expect(summary.groups).toEqual([
+    { key: 'haiku/low', runs: 2, failures: 1, medianMs: 20_000, medianTokens: 3000 },
+    { key: 'opus/usual', runs: 1, failures: 0, medianMs: 60_000, medianTokens: 1_500_000 },
+  ])
+  expect(formatSummary(summary)).toBe('4 decisions: Jev 2, set by the call 1, Jev off 1 (no-key ×1); 1 from an older calibration.\nhaiku/low: 2 runs, 1 failed, median 20s and 3k tokens\nopus/usual: 1 runs, median 60s and 1.5M tokens')
+  expect(formatSummary(summarize([]))).toBe('no routing records yet.')
+  expect([familyOf('claude-fable-5-1'), familyOf(null), familyOf('gpt')]).toEqual(['fable', '?', '?'])
+})

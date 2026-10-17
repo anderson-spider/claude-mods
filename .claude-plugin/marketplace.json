@@ -38,6 +38,11 @@
       "description": "A card above the prompt: model, context and cache; the five-hour and seven-day limits with their pace; the running subagents with their type, model and effort, and the tokens they used; what the last turn sent and added, edits and errors."
     },
     {
+      "name": "subagent-effort",
+      "source": "./plugins/subagent-effort",
+      "description": "Sets the reasoning effort of every native subagent call from Jev's rating of its task, leaving the model as it was, and keeps local records to compare efforts."
+    },
+    {
       "name": "tailscale",
       "source": "./plugins/tailscale",
       "description": "Read or change your tailnet through the Tailscale API using the apiKey plugin option."
