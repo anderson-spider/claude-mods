@@ -161,7 +161,7 @@ test('the stats command checks Jev access the way routing does, summarizes the r
   h.env.JEV_API_KEY = 'test-key'
   await settle($.tool.call(call() as never))
   const text = (await $.command.run({ command: STATS_COMMAND } as never) as { text: string }).text
-  expect(text).toMatch(/^Jev access in this session: ok\.\n1 decisions: Jev 1, Jev off 0\.\nJev calls: 1, median \d+ms, 300 input and 20 output tokens, about \$0\.0000 \(estimated\)\.\nhaiku\/low: 1 runs, median 42s and 2k tokens$/)
+  expect(text).toMatch(/^Jev access in this session: ok\.\n1 decisions: Jev 1, Jev off 0\.\nJev calls: 1, median \d+ms, 300 input and 20 output tokens, about \$0\.000013 \(estimated\)\.\nhaiku\/low: 1 runs, median 42s and 2k tokens$/)
   expect(text).not.toContain('test-key')
   h.fsFaults.read = true
   expect((await $.command.run({ command: STATS_COMMAND } as never) as { text: string }).text).toBe('Jev access in this session: ok.\nthe routing records could not be read.')
