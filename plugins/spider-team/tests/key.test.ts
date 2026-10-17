@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { checkKey, repoDeclares, resolveAccess } from '../hooks/key'
+import { checkKey, isOff, OFF_TEXT, OFFS, repoDeclares, resolveAccess } from '../hooks/key'
 import type { KeyIo } from '../hooks/key'
 
 const KEY = ['key-', 'test', '-0123456789'].join('')
@@ -43,4 +43,9 @@ test('any repository env declaration of JEV_API_KEY is refused', async () => {
   }
   expect(await repoDeclares(io({ project: { env: { OTHER: KEY } } }))).toBe(false)
   expect(await repoDeclares(io({ local: { env: Object.create({ JEV_API_KEY: KEY }) } }))).toBe(false)
+})
+test('each configuration reason has a fix text naming JEV_API_KEY, and Jev failures are not configuration reasons', () => {
+  expect(Object.keys(OFF_TEXT).sort()).toEqual([...OFFS].sort())
+  for (const off of OFFS) { expect(isOff(off)).toBe(true); expect(OFF_TEXT[off]).toContain('JEV_API_KEY') }
+  for (const reason of ['timeout', 'http', 'breaker', 'config', null, undefined, 7]) expect(isOff(reason)).toBe(false)
 })

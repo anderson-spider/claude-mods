@@ -42,10 +42,13 @@ export function world(on: On) {
   on('settings.read', async (_$, e) => ({ value: e.source ? await p.io.settings(e.source as 'project' | 'local') : {} }) as never)
   on('http.fetch', async (_$, e) => ({ value: { ...await p.io.jev.fetch(e.url, e.init as never), ok: true, headers: {} } }))
   on('ui.log', (_$, e) => { p.io.log(e.text); return { value: undefined } })
+  // Each toast's text, in the order shown.
+  const toasts: string[] = []
+  on('ui.toast', (_$, e) => { toasts.push(e.text); return { value: undefined } })
   on('agent.list', () => { agents.lists++; if (agents.fail) throw new Error('list failed'); return { value: agents.roster } })
   /** The ledger's lines in the order written: `files` holds the current text, `ledger()` parses it. */
   const ledger = () => (files.get(LEDGER) ?? '').split('\n').filter(Boolean).map(line => JSON.parse(line) as Record<string, any>)
-  return { ...p, specs, commands, env, files, fsFaults, written, ledger, agents }
+  return { ...p, specs, commands, env, files, fsFaults, written, ledger, agents, toasts }
 }
 /** An agent as `$.agent.list()` lists it. */
 export const listed = (id: string, type: string): AgentInfo => ({ id, type, status: 'running', description: 'Fixture' })
