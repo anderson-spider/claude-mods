@@ -14,5 +14,5 @@
 
 ## Checklist
 
-- [ ] `version` bumped in the plugin's `plugin.json` if any shipped file changed (anything under `plugins/<name>/` except tests, docs and the root `*.md` files)
+- [ ] `version` bumped in the plugin's `plugin.json` if any shipped file changed (`npm run check` reports the plugins that need it)
 - [ ] README/AGENTS.md updated if needed
