@@ -309,3 +309,25 @@ test('a subagent compaction leaves the main turns unmarked', async ($, on) => {
   await flush()
   expect(await twoTurns($, () => $.classic.PostCompact({ trigger: 'auto', compact_summary: '', agent_id: 'agent-9' } as never))).toContain('+95 sent')
 })
+
+test('with cacheTtl the card shows what is left of the cache from the first turn', { options: { cacheTtl: '1h' } }, async ($, on) => {
+  world(on)
+  await start($)
+  await flush()
+  await step($)
+  await flush()
+  const ui = await $.ui.mount(band())
+  expect((await ui.findAll({ type: 'Text' })).map(found => found.text).join('')).toContain(' · 1h TTL, 1h 0m left')
+  await ui.unmount()
+})
+
+test('without cacheTtl the lifetime waits for a model switch', async ($, on) => {
+  world(on)
+  await start($)
+  await flush()
+  await step($)
+  await flush()
+  const ui = await $.ui.mount(band())
+  expect((await ui.findAll({ type: 'Text' })).map(found => found.text).join('')).not.toContain('TTL')
+  await ui.unmount()
+})

@@ -20,6 +20,9 @@ const TICK_MS = 30_000
 /** What the module keeps between events: the clock's timers. */
 type Held = { ticker?: Timer; fast?: Timer }
 
+/** The `cacheTtl` option: `5m` or `1h` names the lifetime until the host reports one; `off` or anything else leaves it to the host. */
+const ttlOf = (value: unknown): '5m' | '1h' | undefined => (value === '5m' || value === '1h' ? value : undefined)
+
 /** Observation never changes what the host answered: a failure is one debug line. */
 async function observe($: Dollar, action: () => Promise<void>): Promise<void> {
   try { await action() } catch {
@@ -59,21 +62,22 @@ async function readWindow($: Dollar): Promise<void> {
 }
 
 /** The session's first figures: its model, the usage the status line has, the theme and the clock. */
-async function prime($: Dollar): Promise<void> {
+async function prime($: Dollar, ttl: '5m' | '1h' | undefined): Promise<void> {
   const [model, usage, time] = await Promise.all([$.session.model(), $.session.usage(), $.clock.now()])
-  await update($, card, () => ({ ...measured(EMPTY, usage as Measured), model }))
+  await update($, card, () => ({ ...measured(EMPTY, usage as Measured), model, ...(ttl ? { cacheTtl: ttl } : {}) }))
   await update($, nowAtom, () => time)
   const theme = await $.config.list().then(rows => rows.find(row => row.key === 'theme')?.value, () => undefined)
   await update($, paletteAtom, () => paletteOf(theme))
   await readWindow($)
 }
 
-export const register: Register = on => {
+export const register: Register = (on, options) => {
   const held: Held = {}
+  const ttl = ttlOf((options as Record<string, unknown> | undefined)?.cacheTtl)
 
   on('session.start', {}, async ($, e, next) => {
     const started = await next(e)
-    void observe($, async () => { ensureTicker($, held); await prime($) })
+    void observe($, async () => { ensureTicker($, held); await prime($, ttl) })
     return started
   })
   on('session.end', {}, (_$, e, next) => {
