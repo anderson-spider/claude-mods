@@ -4,7 +4,7 @@ import { ASK_DESCRIPTION, IMAGE_DESCRIPTION } from './prompts'
 import type { Request } from './model'
 import type { SchemaFor } from './schema'
 
-// The default as the menu labels it ("Medium"); the README repeats this text by hand.
+// The default as the menu labels it ("Medium"); the README repeats this text by hand, and scripts/check-consistency.mjs compares them.
 const DEFAULT_EFFORT = DEFAULT_CHOICE.effort[0]!.toUpperCase() + DEFAULT_CHOICE.effort.slice(1)
 
 // `as const` keeps each `type` a literal, which the SchemaFor check below needs.

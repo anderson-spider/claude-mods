@@ -890,3 +890,35 @@ test("bootstrap.sh lists only the marketplace plugins, not the unlisted ones", (
     ['scripts/bootstrap.sh: ALL lists "alpha", but marketplace.json has ""'],
   );
 });
+
+// The chatgpt README names the default model by hand; the schema text builds it from DEFAULT_CHOICE.
+const CHATGPT_DEFAULT = (readme, source = "export const DEFAULT_CHOICE = { model: 'GPT-6', effort: 'medium' } satisfies Choice\n") => (files) => {
+  files["plugins/chatgpt/hooks/conversation.ts"] = source;
+  files["plugins/chatgpt/README.md"] = readme;
+};
+const defaultProblems = (t, change) => problems(t, change).filter((line) => line.includes("DEFAULT_CHOICE"));
+
+test("the chatgpt README passes when it names DEFAULT_CHOICE's model at its effort, capitalized", (t) => {
+  assert.deepEqual(defaultProblems(t, CHATGPT_DEFAULT("Without a model, a new chat uses GPT-6 at Medium effort.\n")), []);
+});
+
+test("a repository without the chatgpt plugin skips the DEFAULT_CHOICE check", (t) => {
+  assert.deepEqual(defaultProblems(t), []);
+});
+
+for (const { name, change, expected } of [
+  {
+    name: "a README that names another default",
+    change: CHATGPT_DEFAULT("Without a model, a new chat uses GPT-5 at High effort.\n"),
+    expected: 'plugins/chatgpt/README.md: does not say "GPT-6 at Medium effort", the default that DEFAULT_CHOICE in hooks/conversation.ts picks',
+  },
+  {
+    name: "a DEFAULT_CHOICE the check cannot read",
+    change: CHATGPT_DEFAULT("GPT-6 at Medium effort\n", "export const DEFAULT_CHOICE = pick()\n"),
+    expected: "plugins/chatgpt/hooks/conversation.ts: no DEFAULT_CHOICE = { model: '…', effort: '…' } literal to check the README against",
+  },
+]) {
+  test(`chatgpt default: ${name}`, (t) => {
+    assert.deepEqual(defaultProblems(t, change), [expected]);
+  });
+}
