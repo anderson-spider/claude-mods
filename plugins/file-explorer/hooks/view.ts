@@ -7,31 +7,31 @@ import { iconOf } from './icons'
 import type { Row } from './tree'
 
 export type Tone =
-  | 'text' | 'dim' | 'accent'
+  | 'text' | 'dim' | 'accent' | 'selection'
   | ActivityKind
   | 'gitM' | 'gitA' | 'gitD' | 'gitR' | 'gitU' | 'gitQ'
 
 /**
- * One run of text in a row: its tone's colour, and bold, dim, inverse or shimmering (a light passing over it). A
+ * One run of text in a row: its tone's colour, a background, and bold, dim or shimmering (a light passing over it). A
  * shimmer's `g` holds its colours from the rest of the name to the light's centre; without it the light is drawn in
  * `c` by intensity alone.
  */
-export type Segment = { t: string; c?: string; b?: true; d?: true; i?: true; s?: true; g?: string[] }
+export type Segment = { t: string; c?: string; bg?: string; b?: true; d?: true; s?: true; g?: string[] }
 
 // `auto` follows the person's Claude Code theme through theme keys; `dark` and `light` are fixed colours.
 const PALETTES: Record<Config['theme'], Record<Tone, string>> = {
   auto: {
-    text: 'text', dim: 'inactive', accent: 'suggestion',
+    text: 'text', dim: 'inactive', accent: 'suggestion', selection: 'subtle',
     read: 'suggestion', searched: 'permission', modified: 'warning', created: 'success', removed: 'error', committed: 'merged',
     gitM: 'warning', gitA: 'success', gitD: 'error', gitR: 'suggestion', gitU: 'error', gitQ: 'success',
   },
   dark: {
-    text: '#d4d4d4', dim: '#7f848e', accent: '#61afef',
+    text: '#d4d4d4', dim: '#7f848e', accent: '#61afef', selection: '#2c313a',
     read: '#61afef', searched: '#c678dd', modified: '#e5c07b', created: '#98c379', removed: '#e06c75', committed: '#56b6c2',
     gitM: '#e5c07b', gitA: '#98c379', gitD: '#e06c75', gitR: '#61afef', gitU: '#e06c75', gitQ: '#98c379',
   },
   light: {
-    text: '#1f2328', dim: '#59636e', accent: '#0550ae',
+    text: '#1f2328', dim: '#59636e', accent: '#0550ae', selection: '#e6ebf1',
     read: '#0550ae', searched: '#8250df', modified: '#9a6700', created: '#1a7f37', removed: '#cf222e', committed: '#0e7490',
     gitM: '#9a6700', gitA: '#1a7f37', gitD: '#cf222e', gitR: '#0550ae', gitU: '#cf222e', gitQ: '#1a7f37',
   },
@@ -147,16 +147,17 @@ export function rowSegments(row: Row, state: RowState, { columns, config, now }:
 
   if (config.mtime && row.kind === 'file' && row.mtimeMs > 0) date.push({ t: ` ${age(now - row.mtimeMs).padStart(AGE_WIDTH)}`, c: c('dim') })
 
-  return fit(left, [right, date], columns, state.isCursor)
+  // The cursor's row gets a soft background, so a shimmer on it still reads; the footer names it too.
+  const line = fit(left, [right, date], columns)
+  return state.isCursor ? line.map(one => ({ ...one, bg: c('selection') })) : line
 }
 
 const widthOf = (segments: readonly Segment[]) => segments.reduce((sum, one) => sum + width(one.t), 0)
 
 /**
- * `left` cut and padded so that the right-hand columns end at `columns`; the cursor row is drawn inverse across the
- * width. The columns are given most wanted first: the last that does not leave the name 8 cells is dropped first.
+ * `left` cut and padded so that the right-hand columns end at `columns`. The columns are given most wanted first: the last that does not leave the name 8 cells is dropped first.
  */
-function fit(left: Segment[], sides: readonly Segment[][], columns: number, isCursor: boolean): Segment[] {
+function fit(left: Segment[], sides: readonly Segment[][], columns: number): Segment[] {
   let kept = sides.length
   while (kept > 0 && columns - widthOf(sides.slice(0, kept).flat()) < 8) kept--
   const tail = sides.slice(0, kept).flat()
@@ -169,8 +170,7 @@ function fit(left: Segment[], sides: readonly Segment[][], columns: number, isCu
     shown.push({ ...one, t })
   }
   const used = widthOf(shown) + widthOf(tail)
-  const line = [...shown, { t: ' '.repeat(Math.max(0, columns - used)) }, ...tail]
-  return isCursor ? line.map(one => ({ ...one, i: true as const })) : line
+  return [...shown, { t: ' '.repeat(Math.max(0, columns - used)) }, ...tail]
 }
 
 /** The branch line: name, ahead and behind its upstream, and the lines changed in all. */

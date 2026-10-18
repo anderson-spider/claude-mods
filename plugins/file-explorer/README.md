@@ -11,7 +11,8 @@ The functional reference was [claude-code-filetree](https://github.com/data-gobl
 ## What you see
 
 ```text
-▾ claude-mods ⎇ main ↑1 2 changed      up · last file · collapse · dotfiles
+                         up · last file · collapse · dotfiles
+▾ claude-mods ⎇ main ↑1 2 changed +14 -3
 / search files
   ▾ plugins/                          2M
     ▸ chatgpt/
@@ -20,16 +21,20 @@ The functional reference was [claude-code-filetree](https://github.com/data-gobl
       ◇ view.ts                 +2 -0 M         3m
 • ▸ scripts/
   ≡ README.md                            yesterday
+
+selected: plugins/file-explorer/hooks/register.tsx
 ● edited plugins/file-explorer/hooks/register.tsx 3s
 ● read README.md 1m
+
 j: ↓ k: ↑ h: ← l: → o: open s: find a: @ref r: ↻
 ```
 
-- **Header**: the folder, its branch, how far ahead (`↑`) and behind (`↓`) its upstream it is (or `(no upstream)`), how many files changed and the lines added and removed. Outside a repository there is no branch line. At the right, buttons: `up` opens the folder above (pinned, as `/file-explorer <folder>`; `/file-explorer <folder>` goes back), `last file` opens the tree to the last file Claude touched, `collapse` closes every folder, and `dotfiles` shows or hides them (drawn full while shown). The pane's frame has its own close control. A pane too narrow for them leaves them out.
+- **Header**: the folder, its branch, how far ahead (`↑`) and behind (`↓`) its upstream it is (or `(no upstream)`), how many files changed and the lines added and removed. Outside a repository there is no branch line. Above it, right-aligned on a row of their own, buttons: `up` opens the folder above (pinned, as `/file-explorer <folder>`; `/file-explorer <folder>` goes back), `last file` opens the tree to the last file Claude touched, `collapse` closes every folder, and `dotfiles` shows or hides them (drawn full while shown). The pane's frame has its own close control. A pane too narrow for them leaves them out.
 - **Rows**: folders first, then files, sorted by name (or extension, or newest first). Dotfiles are hidden until you press `.`. Folders named in the ignore list (`node_modules`, `dist`, `.venv`...) are drawn dim and left out of search.
 - **Modified**: at the right edge of each file, how long ago it was modified: `now`, `3m`, `2h`, `yesterday`, `4d`, `3w`, `5mo`, `2y` (yesterday is 24 to 48 hours ago). In a narrow pane it goes before the git columns do; `mtime: false` hides it.
 - **Git**: a file shows its letter (`M` modified, `A` added, `D` deleted, `R` renamed, `?` untracked, `U` conflicted) and, for tracked changes, `+added -removed`. A folder shows how many changed files lie under it, in the colour of the strongest change.
 - **Claude's activity**: a dot in the first column, coloured by what Claude did: read, found by Grep or Glob, edited, created, removed, or part of the commit it just made. For about 2.7 seconds after each touch a light runs across the name in that colour, and the dot stays for two minutes. A Write, Edit, MultiEdit or NotebookEdit shows already while it runs: the file carries the edited dot and shimmers, and the tree opens to it when following. With the fixed `dark` and `light` themes the light is a gradient of the colour; with `auto`, whose colours a mod cannot read, it goes from dim to bold in the one colour. A collapsed folder with a touched file somewhere inside shows a dim `•`. The last two touches are listed in the footer.
+- **Selected**: the row the keys act on has a soft background, and the line under the tree names it (`selected: path`).
 - **Follow**: when Claude reads, edits or creates a file, the tree opens down to it and the cursor moves there. Searches do not move the tree.
 
 ## Open it

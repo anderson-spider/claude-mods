@@ -46,7 +46,7 @@ const Rows: ClientModule<RowsProps, { live: Live }> = (props, surface) => {
       const color = one.g?.[step] ?? one.c
       const bold = (one.g ? step === 3 : step >= 2) ? true : undefined
       const dim = !one.g && step === 0 ? true : undefined
-      return <Text color={color} bold={bold} dimColor={dim} inverse={one.i}>{char}</Text>
+      return <Text color={color} backgroundColor={one.bg} bold={bold} dimColor={dim}>{char}</Text>
     })
   }
 
@@ -55,7 +55,7 @@ const Rows: ClientModule<RowsProps, { live: Live }> = (props, surface) => {
       {props.lines.map(line => (
         <Text wrap="truncate-end">
           {line.map(one => (one.s ? shimmer(one) : (
-            <Text color={one.c} bold={one.b} dimColor={one.d} inverse={one.i}>{one.t}</Text>
+            <Text color={one.c} backgroundColor={one.bg} bold={one.b} dimColor={one.d}>{one.t}</Text>
           )))}
         </Text>
       ))}

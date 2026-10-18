@@ -17,10 +17,12 @@ test('a row fills its width exactly, the git side at the right edge, a long name
   expect(text(rowSegments(row('name.ts'), state, { columns: 12, config: DEFAULTS, now: 0 }))).toBe('  ◇ name.ts ')
 })
 
-test('the cursor row is inverse across the width; a touch shimmers in its tone, off without animations', () => {
+test('the cursor row gets a soft background across the width; a touch shimmers in its tone, off without animations', () => {
   const flashing = { hasMarkBelow: false, isCursor: true, mark: { kind: 'modified' as const, isFlashing: true } }
   const segments = rowSegments(row('a.ts'), flashing, { columns: 20, config: DEFAULTS, now: 0 })
-  expect(segments.every(one => one.i)).toBe(true)
+  expect(segments.every(one => one.bg === 'subtle')).toBe(true)
+  expect(rowSegments(row('a.ts'), flashing, { columns: 20, config: { ...DEFAULTS, theme: 'dark' }, now: 0 })[0]?.bg).toBe('#2c313a')
+  expect(rowSegments(row('a.ts'), { ...flashing, isCursor: false }, { columns: 20, config: DEFAULTS, now: 0 }).some(one => one.bg)).toBe(false)
   // The auto theme names theme keys, so its light is drawn by intensity: no colour steps.
   expect(segments.find(one => one.t === 'a.ts')).toMatchObject({ c: 'warning', s: true })
   expect(segments.find(one => one.t === 'a.ts')?.g).toBeUndefined()

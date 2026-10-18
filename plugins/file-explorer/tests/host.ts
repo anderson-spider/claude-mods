@@ -129,7 +129,7 @@ export const pane = (columns = 40, rows = 20): MountTarget<'terminal', 'Pane'> =
   props: { title: 'Files', isFocused: true, bodyColumns: columns, placement: 'dock', scroll: { offset: 0, bodyRows: rows }, view: {} },
 })
 
-type Segment = { t: string; c?: string; b?: true; d?: true; i?: true; s?: true }
+type Segment = { t: string; c?: string; b?: true; d?: true; s?: true }
 
 const linesOf = async (ui: Mounted<'terminal', 'Pane'>) =>
   ((await ui.find({ type: 'Client' }))?.props.props as { lines?: Segment[][] } | undefined)?.lines ?? []
@@ -139,8 +139,8 @@ const textOf = (line: Segment[]) => line.map(one => one.t).join('').trimEnd()
 /** The tree rows the pane drew, as text. */
 export const rows = async (ui: Mounted<'terminal', 'Pane'>) => (await linesOf(ui)).map(textOf)
 
-/** The row the cursor is on (drawn inverse), as text. */
-export const cursor = async (ui: Mounted<'terminal', 'Pane'>) => (await linesOf(ui)).filter(line => line.every(one => one.i)).map(textOf)[0]
+/** The row the keys act on, as the footer names it: its path from the root. */
+export const cursor = async (ui: Mounted<'terminal', 'Pane'>) => (await ui.find({ type: 'Text', text: /^selected: / }))?.text.slice('selected: '.length)
 
 /** The segments of the row whose text holds `name`. */
 export const segmentsOf = async (ui: Mounted<'terminal', 'Pane'>, name: string) =>
