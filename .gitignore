@@ -11,6 +11,9 @@ plugins/codex-computer-use/helper/run/
 # Local review and test reports (/ship, /live-test)
 .reports/
 
+# Local state of the superpowers skills (brainstorm server, sdd)
+.superpowers/
+
 # Development tools installed by npm ci
 node_modules/
 
