@@ -20,6 +20,9 @@ const TICK_MS = 30_000
 /** What the module keeps between events: the clock's timers. */
 type Held = { ticker?: Timer; fast?: Timer }
 
+/** The `cacheTtl` option: `5m` or `1h` names the lifetime the card draws until the host reports one; `off` or anything else leaves it to the host. Resolved at render, so a changed option (which reloads the module) shows at once and never overwrites the host's. */
+const ttlOf = (value: unknown): '5m' | '1h' | undefined => (value === '5m' || value === '1h' ? value : undefined)
+
 /** Observation never changes what the host answered: a failure is one debug line. */
 async function observe($: Dollar, action: () => Promise<void>): Promise<void> {
   try { await action() } catch {
@@ -58,22 +61,25 @@ async function readWindow($: Dollar): Promise<void> {
   await update($, card, current => windowed(current, usage.context.breakdown?.rawMaxTokens))
 }
 
-/** The session's first figures: its model, the usage the status line has, the theme and the clock. */
-async function prime($: Dollar): Promise<void> {
+/** The session's figures: its model, the usage the status line has, the theme and the clock. The card the state holds stays: at the first load it is empty, and a reload (an option change runs `session.start` again) keeps what the session observed, which no event would bring back. */
+async function prime($: Dollar, held: Held): Promise<void> {
   const [model, usage, time] = await Promise.all([$.session.model(), $.session.usage(), $.clock.now()])
-  await update($, card, () => ({ ...measured(EMPTY, usage as Measured), model }))
+  const primed = await update($, card, current => ({ ...measured(current, usage as Measured), model }))
+  // A reload during a main-session turn starts the one-second clock the turn had.
+  if (primed.turnStartedAt !== undefined) startFast($, held)
   await update($, nowAtom, () => time)
   const theme = await $.config.list().then(rows => rows.find(row => row.key === 'theme')?.value, () => undefined)
   await update($, paletteAtom, () => paletteOf(theme))
   await readWindow($)
 }
 
-export const register: Register = on => {
+export const register: Register = (on, options) => {
   const held: Held = {}
+  const ttl = ttlOf((options as Record<string, unknown> | undefined)?.cacheTtl)
 
   on('session.start', {}, async ($, e, next) => {
     const started = await next(e)
-    void observe($, async () => { ensureTicker($, held); await prime($) })
+    void observe($, async () => { ensureTicker($, held); await prime($, held) })
     return started
   })
   on('session.end', {}, (_$, e, next) => {
@@ -175,7 +181,8 @@ export const register: Register = on => {
     try {
       const [shown, time, palette] = await Promise.all([read($, card), read($, nowAtom), read($, paletteAtom)])
       const terminal = e.surface === 'terminal'
-      const lines = layoutView({ card: shown as SessionHudCard, now: time, working: shown.turnStartedAt !== undefined, palette, draw: terminal ? 'cells' : 'svg' })
+      const drawnCard = (shown.cacheTtl === undefined && ttl ? { ...shown, cacheTtl: ttl } : shown) as SessionHudCard
+      const lines = layoutView({ card: drawnCard, now: time, working: shown.turnStartedAt !== undefined, palette, draw: terminal ? 'cells' : 'svg' })
       if (!lines.length) return below
       const ui = $.ui.resolve(e)
       const { Box, Text } = ui

@@ -1,6 +1,6 @@
 ---
 name: spider-team
-description: Run a task as its owner with a tiered crew - understand, plan tasks with dependencies, delegate what earns it to spider-team agents, review every result against the real diff, verify, deliver.
+description: Run a task as its owner with a tiered crew - understand, plan tasks with dependencies, delegate every code change to spider-team agents, review every result against the real diff, verify, deliver.
 disable-model-invocation: true
 argument-hint: <task> | on | off | brainstorm <topic>
 ---
@@ -16,17 +16,23 @@ Arguments: $ARGUMENTS
 - **`brainstorm <topic>`**: Understand and Plan the topic into a backlog, show it, refine it with the user, and execute nothing until the user says to go; then the run goes on from Investigate. Inside session mode, the backlog joins the session's list.
 - **`off`**: close session mode (Session mode). Without one open, say so and stop.
 
-You are **Main**, the owner of this run. You plan, decide, implement what you can do well yourself, review every result and deliver. Workers are tools you aim, never owners: a worker's "done" is a claim, and only your review turns it into an accepted task.
+You are **Main**, the owner of this run. You plan, decide the design, review every result and deliver. You never implement: every code change comes from a tier. The one exception is in Review: a design fix or a one-line correction, when a return would cost more than the fix. Workers are tools you aim, never owners: a worker's "done" is a claim, and only your review turns it into an accepted task.
 
 ## Phases
 
 Each phase ends on its exit; move on only when the exit holds.
 
-1. **Understand.** Read the project's instructions (`CLAUDE.md`, `AGENTS.md`), the code the task touches, its tests and the history that explains it. Exit: you can state the goal, its constraints and how it will be verified. Ask the user only when the request admits more than one reading.
-2. **Plan.** Break the work into tasks `T1..Tn`, each with a title, an owner (`main`, `explore` or a tier), `after` (the tasks it needs accepted first) and acceptance criteria. Small or tightly coupled work stays with `main`: delegate only when a task is self-contained and a tier does it as well for less. Exit: the plan is shown to the user and published (Reporting).
+1. **Understand.** Read the project's instructions (`CLAUDE.md`, `AGENTS.md`), the code the task touches, its tests and the history that explains it. Exit: you can state the goal, its constraints and how it will be verified. Ask the user only when the request admits more than one reading. A request to build a new project or app, run from an empty working directory (nothing but `.git` and dotfiles), is a new project: follow [new-project.md](new-project.md) before Plan. Any other request in an empty directory takes the normal flow.
+2. **Plan.** Break the work into tasks `T1..Tn`, each with a title, an owner (`main`, `explore` or a tier), `after` (the tasks it needs accepted first) and acceptance criteria. Owner `main` is only for a task that changes no code: a decision, a design, a mockup, a question for the user. Every task that changes code goes to a tier. Exit: the plan is shown to the user and published (Reporting).
 3. **Investigate.** Run independent read-only questions in parallel (the built-in `Explore` agent, or a tier for a deep one). Exit: every open question the plan depends on has an answer with file and line evidence.
-4. **Execute.** Take tasks whose `after` tasks are accepted. Implement `main` tasks yourself; delegate the rest (Delegation). Writers never run in parallel on overlapping files. Exit: every planned task is in review or accepted.
-5. **Review.** For each finished task, read the real diff and rerun its checks yourself, then decide: **accept** (`completed`), **return** with a precise brief (back to `running`, at most two returns), **escalate** to a higher tier or to `main`, or **fail** it. To escalate while a return is left, replan the task with the new owner and return it. After the second return, fail it and append a new task with the higher owner and the same criteria, and point the `after` of the tasks that waited on it to the new id. Exit: every task is accepted, failed or cancelled.
+4. **Execute.** Take tasks whose `after` tasks are accepted. Run the `main` tasks (decisions and design) yourself; delegate the rest (Delegation). While workers run, edit no code: prepare the next briefs or the review checklist. Writers never run in parallel on overlapping files. Exit: every planned task is in review or accepted.
+5. **Review.** For each finished task:
+   - Read the real diff against the brief and check for scope creep, missing parts, silent assumptions, deviations from the decided design, unhandled edge cases and error paths, broken invariants, regressions in neighbouring code and missing verification. Rerun the brief's checks yourself.
+   - Then decide: **accept** (`completed`), **return** with a precise brief (back to `running`, at most two returns), **escalate** to a higher tier, or **fail** it. You take over only through the exception in your role.
+   - A worker's open question comes back answered in the return brief: a visual question decided by you, a product or scope question by the user when the request does not settle it.
+   - To escalate while a return is left, replan the task with the new owner and return it. After the second return, fail it and append a new task with the higher owner and the same criteria, and point the `after` of the tasks that waited on it to the new id.
+
+   Exit: every task is accepted, failed or cancelled.
 6. **Verify.** Run the project's full checks (tests, types, lint, build, its own validation) and read the output. Exit: all green, or each failure fixed or reported with its output.
 7. **Complete.** Publish `finished`, then report to the user: what was delivered, which tasks each tier ran, what was verified and how, and anything left open.
 
@@ -53,7 +59,11 @@ The tier picks the model; the effort is the default the subagent-effort plugin m
 | `spider-team:spider-sonnet` | `sonnet` | `high` | standard feature work |
 | `spider-team:spider-haiku` | `haiku` | `high` | mechanical edits, builds, tests |
 
-Pick the cheapest tier that gets the task right the first time; a return costs more than the step up.
+Pick the cheapest tier that gets the task right the first time; a return costs more than the step up. When unsure between two tiers, take the higher one. Fable is a reserve tier: pick it only for clearly the hardest logic or a bug that survived an Opus investigation; otherwise take Opus. When what an investigation finds can change the plan, make it two tasks: a read-only investigation, then the implementation planned from its findings.
+
+## Design
+
+Visual decisions are yours: layout, visual hierarchy, copy users read, interaction flow, colour, type and spacing; product and scope questions the request leaves open go to the user. Settle them before delegating and write them into the brief as concrete specs (structure, states, spacing and type, the components to reuse). Show a new screen or flow, or an ambiguous one, to the user as a mockup and take their reaction before any code. Review the visual result yourself (screenshot, preview or simulator); a design task is accepted only on what you saw. With no way to see it, ask the user to check it before accepting.
 
 ## Delegation
 

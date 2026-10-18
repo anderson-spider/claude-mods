@@ -125,6 +125,22 @@ test('a running turn shows its time, beating every second until it completes', a
   void clock
 })
 
+test('a reload during a running turn keeps the turn and its time beating every second', async ($, on) => {
+  const { clock } = world(on, { moving: true })
+  await start($)
+  await flush()
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  await flush()
+  // A reload loads a fresh module, holding none of the clocks the turn started, and `session.start` runs again.
+  await $.session.end({ reason: 'other', sessionId: 's1' } as never)
+  await start($)
+  await flush()
+  await clock.advance(2_000)
+  const ui = await $.ui.mount(band())
+  expect((await ui.findAll({ type: 'Text' })).map(found => found.text).join('')).toContain('working 2s')
+  await ui.unmount()
+})
+
 const drawnOf = async ($: { ui: { mount: (e: never) => Promise<{ findAll: (q: object) => Promise<{ text: string }[]>; unmount: () => Promise<void> }> } }) => {
   const ui = await $.ui.mount(band())
   const drawn = (await ui.findAll({ type: 'Text' })).map(found => found.text).join('')
@@ -308,4 +324,59 @@ test('a subagent compaction leaves the main turns unmarked', async ($, on) => {
   await start($)
   await flush()
   expect(await twoTurns($, () => $.classic.PostCompact({ trigger: 'auto', compact_summary: '', agent_id: 'agent-9' } as never))).toContain('+95 sent')
+})
+
+test('with cacheTtl the card shows what is left of the cache from the first turn', { options: { cacheTtl: '1h' } }, async ($, on) => {
+  world(on)
+  await start($)
+  await flush()
+  await step($)
+  await flush()
+  const ui = await $.ui.mount(band())
+  expect((await ui.findAll({ type: 'Text' })).map(found => found.text).join('')).toContain(' · 1h TTL, 1h 0m left')
+  await ui.unmount()
+})
+
+test("a model switch's lifetime replaces the cacheTtl option's", { options: { cacheTtl: '1h' } }, async ($, on) => {
+  world(on)
+  await start($)
+  await flush()
+  await $.classic.PostModelSwitch({ from_model: 'claude-opus-5-5', to_model: 'claude-opus-5-5', requested_model: 'opus', source: 'command',
+    context_tokens: 0, prompt_cache_warm: true, cache_ttl: '5m', estimated_cache_write_usd: 0, pricing: 'catalog' } as never)
+  await step($)
+  await flush()
+  const ui = await $.ui.mount(band())
+  const drawn = (await ui.findAll({ type: 'Text' })).map(found => found.text).join('')
+  expect(drawn).toContain(' · 5m TTL, 5m left')
+  expect(drawn).not.toContain('1h TTL')
+  await ui.unmount()
+})
+
+test("a reload after a model switch keeps the host's lifetime and the cache's last use over the cacheTtl option", { options: { cacheTtl: '1h' } }, async ($, on) => {
+  world(on)
+  await start($)
+  await flush()
+  await $.classic.PostModelSwitch({ from_model: 'claude-opus-5-5', to_model: 'claude-opus-5-5', requested_model: 'opus', source: 'command',
+    context_tokens: 0, prompt_cache_warm: true, cache_ttl: '5m', estimated_cache_write_usd: 0, pricing: 'catalog' } as never)
+  await step($)
+  await flush()
+  // A changed option reloads the plugin, and `session.start` runs again.
+  await start($)
+  await flush()
+  const ui = await $.ui.mount(band())
+  const drawn = (await ui.findAll({ type: 'Text' })).map(found => found.text).join('')
+  expect(drawn).toContain(' · used 0s ago · 5m TTL, 5m left')
+  expect(drawn).not.toContain('1h TTL')
+  await ui.unmount()
+})
+
+test('without cacheTtl the lifetime waits for a model switch', async ($, on) => {
+  world(on)
+  await start($)
+  await flush()
+  await step($)
+  await flush()
+  const ui = await $.ui.mount(band())
+  expect((await ui.findAll({ type: 'Text' })).map(found => found.text).join('')).not.toContain('TTL')
+  await ui.unmount()
 })
