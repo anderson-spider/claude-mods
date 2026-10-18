@@ -8,6 +8,7 @@ Claude Code **function hooks mods** marketplace. User-facing setup is in [README
 - ChatGPT browser tools: `plugins/chatgpt/AGENTS.md`.
 - Native Mac app control through Codex: `plugins/codex-computer-use/AGENTS.md`.
 - Coolify API tools (projects, applications, deployments): `plugins/coolify/AGENTS.md`.
+- File tree pane with git status and Claude's activity: `plugins/file-explorer/AGENTS.md`.
 - GitLab merge requests and pipelines of the current repository: `plugins/gitlab/AGENTS.md`.
 - Thumbnails of pasted images above the prompt: `plugins/image-preview/AGENTS.md`.
 - Session card above the prompt: `plugins/session-hud/AGENTS.md`.
