@@ -10,7 +10,7 @@ import { head, redact, REDACTED } from './redact'
 
 export type Effort = NonNullable<BuiltinToolInputs['Agent']['effort']>
 // Tags each decision line so the stats compare Jev only under one policy: bump it whenever QUESTION, EFFORTS or POLICY change.
-export const CALIBRATION = 1
+export const CALIBRATION = 2
 export const JEV_MODEL = 'jev-1.13.0'
 export const TASK_CHARS = 4000
 /**
@@ -27,10 +27,10 @@ export const EFFORTS = ['low', 'medium', 'high', 'xhigh'] as const satisfies rea
 export const QUESTION = {
   reasoning: {
     type: 'score',
-    instructions: 'How much reasoning does a capable coding agent need to do this delegated task well? Judge the work itself, not the length or detail of the brief: a long list of constraints, checks or output rules does not make a task harder.',
+    instructions: 'How much reasoning does a capable coding agent need to do this delegated task well? Judge the work itself, not the length or detail of the brief: a long list of constraints, checks or output rules does not make a task harder. Breadth is not depth: asking for a very thorough survey, covering many files or listing many items makes a task longer, not harder; rate the hardest reasoning step the task needs.',
     criteria: [
       'A lookup or mechanical step with a clear answer, such as finding a file or symbol, listing where something is used, reading one function, or running a known command and reporting its output',
-      'A bounded investigation or change in one area, such as tracing one call path, summarizing a module, or a small edit with its test',
+      'A bounded investigation or change in one area, such as tracing one call path, summarizing a module, mapping or inventorying the code of one area however thoroughly, or a small edit with its test',
       'Reasoning across several interacting parts or toward a cause still to be found, such as debugging a failure, reviewing a change across several files, or planning a change that must keep existing contracts',
       'Architecture, security, concurrency or deep domain reasoning, such as designing a protocol, auditing a security boundary, or a redesign across modules',
     ],

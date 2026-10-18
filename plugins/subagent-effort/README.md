@@ -18,12 +18,12 @@ A hook on the `Agent` tool runs before each dispatch:
 - **Fork** (`subagent_type: "fork"`) or an empty task: passed untouched. The host ignores a fork's effort anyway.
 - **Jev off or failing**: the call goes as it came, its own effort included, or the agent's usual effort when it has none, exactly as without the plugin.
 
-The question asks Jev to judge the work itself, not the length of the brief. Its four levels are the efforts:
+The question asks Jev to judge the work itself, not the length of the brief or its breadth: a very thorough survey of many files is longer, not harder. Its four levels are the efforts:
 
 | Effort | Typical task |
 | --- | --- |
 | `low` | A lookup or mechanical step: find a file or symbol, list usages, read one function, run a known command. |
-| `medium` | A bounded investigation or change in one area: trace one call path, summarize a module, a small edit with its test. |
+| `medium` | A bounded investigation or change in one area: trace one call path, summarize a module, map or inventory one area's code however thoroughly, a small edit with its test. |
 | `high` | Reasoning across several parts or toward an unknown cause: debug a failure, review a multi-file change, plan a change that keeps contracts. |
 | `xhigh` | Architecture, security, concurrency or deep domain reasoning. |
 

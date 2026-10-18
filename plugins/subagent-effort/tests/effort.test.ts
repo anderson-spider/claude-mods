@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { assessEffort, distribution, EFFORTS, JEV_INPUT_USD_PER_MTOK, jevCostOf, levelOf, POLICY, QUESTION } from '../hooks/effort'
+import { assessEffort, CALIBRATION, distribution, EFFORTS, JEV_INPUT_USD_PER_MTOK, jevCostOf, levelOf, POLICY, QUESTION } from '../hooks/effort'
 import type { Answers } from '../hooks/jev'
 import { createBreaker, createGate } from '../hooks/jev'
 import { ports } from './host'
@@ -9,6 +9,9 @@ test('one question with one criterion per effort, from low to xhigh, and never m
   expect(EFFORTS).toEqual(['low', 'medium', 'high', 'xhigh'])
   expect(QUESTION.reasoning.criteria).toHaveLength(EFFORTS.length)
   expect(QUESTION.reasoning.instructions).toContain('Judge the work itself, not the length or detail of the brief')
+  expect(QUESTION.reasoning.instructions).toContain('Breadth is not depth')
+  expect(QUESTION.reasoning.criteria[1]).toContain('mapping or inventorying the code of one area however thoroughly')
+  expect(CALIBRATION).toBe(2)
 })
 
 test('the level minimizes expected penalty with spare effort weighted 1.25 and ties going lower', () => {
