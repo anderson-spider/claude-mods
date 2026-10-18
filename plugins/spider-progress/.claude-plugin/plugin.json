@@ -1,0 +1,80 @@
+{
+  "name": "spider-progress",
+  "version": "0.1.0",
+  "description": "Progress band under the session card and an agents pane for spider-team runs and any subagent",
+  "author": {
+    "name": "anderson-spider"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/anderson-spider/claude-mods/tree/main/plugins/spider-progress",
+  "repository": "https://github.com/anderson-spider/claude-mods",
+  "keywords": [
+    "progress",
+    "agents",
+    "subagents",
+    "pane",
+    "mod",
+    "claude-code"
+  ],
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "language": {
+      "type": "string",
+      "title": "Language",
+      "description": "auto follows the Claude Code language setting, then the system locale; pt-BR or en fix it.",
+      "options": [
+        "auto",
+        "pt-BR",
+        "en"
+      ],
+      "default": "auto"
+    },
+    "autoOpen": {
+      "type": "string",
+      "title": "Open the agents pane",
+      "description": "team: when a spider-team run starts; any: when any subagent starts; off: only with /spider-agents.",
+      "options": [
+        "team",
+        "any",
+        "off"
+      ],
+      "default": "team"
+    },
+    "showCost": {
+      "type": "boolean",
+      "title": "Show estimated cost",
+      "description": "Estimated from token counts and a dated price table; never a bill.",
+      "default": true
+    },
+    "showTokens": {
+      "type": "boolean",
+      "title": "Show tokens",
+      "description": "Input, output and cache tokens per agent and in total.",
+      "default": true
+    },
+    "showContext": {
+      "type": "boolean",
+      "title": "Show context",
+      "description": "How full each agent's context window is, when the window is known.",
+      "default": true
+    },
+    "animations": {
+      "type": "boolean",
+      "title": "Animations",
+      "description": "A spinner beside running agents; off keeps a fixed mark.",
+      "default": true
+    },
+    "compactMode": {
+      "type": "boolean",
+      "title": "Compact pane",
+      "description": "Start the pane with one line per agent ('c' in the pane toggles it).",
+      "default": false
+    },
+    "historyLimit": {
+      "type": "number",
+      "title": "Agents kept",
+      "description": "How many agents the pane remembers (20 to 1000); the oldest finished ones go first.",
+      "default": 200
+    }
+  }
+}

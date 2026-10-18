@@ -12,6 +12,7 @@ Claude Code **function hooks mods** marketplace. User-facing setup is in [README
 - GitLab merge requests and pipelines of the current repository: `plugins/gitlab/AGENTS.md`.
 - Thumbnails of pasted images above the prompt: `plugins/image-preview/AGENTS.md`.
 - Session card above the prompt: `plugins/session-hud/AGENTS.md`.
+- spider-progress: `plugins/spider-progress/AGENTS.md`.
 - Jev-routed reasoning effort for native subagent calls: `plugins/subagent-effort/AGENTS.md`.
 - Tailscale API tools: `plugins/tailscale/AGENTS.md`.
 - Hooks authoring or debugging: load the `plugin-authoring` skill first. The `claude-code` module is host-provided, not on npm.

@@ -43,6 +43,11 @@
       "description": "A card above the prompt: model, context and cache; the five-hour and seven-day limits with their pace; the running subagents with their type, model and effort, and the tokens they used; what the last turn sent and added, edits and errors."
     },
     {
+      "name": "spider-progress",
+      "source": "./plugins/spider-progress",
+      "description": "Progress band under the session card and an agents pane for spider-team runs and any subagent"
+    },
+    {
       "name": "subagent-effort",
       "source": "./plugins/subagent-effort",
       "description": "Sets the reasoning effort of every native subagent call from Jev's rating of its task, leaving the model as it was, and keeps local records to compare efforts."

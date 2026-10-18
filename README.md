@@ -13,6 +13,7 @@ Marketplace of [Claude Code](https://claude.com/claude-code) plugins made by and
 | [gitlab](plugins/gitlab/README.md) | Opens, edits, comments on, reviews and (when asked, behind guards) merges GitLab merge requests, lists yours across projects, lists open review threads, manages labels and runs, waits for and reads pipelines, jobs, artifacts and job errors, picking the host and its token from the git remote. |
 | [image-preview](plugins/image-preview/README.md) | Shows images in the terminal: thumbnails of what you paste above the prompt, and each image Claude reads under its row in the transcript, as the desktop app does. |
 | [session-hud](plugins/session-hud/README.md) | A card above the prompt: model, context and cache; the five-hour and seven-day limits with their pace; the running subagents with their type, model and effort, and the tokens they used; what the last turn sent and added, edits and errors. |
+| [spider-progress](plugins/spider-progress/README.md) | Progress band under the session card and an agents pane for spider-team runs and any subagent |
 | [subagent-effort](plugins/subagent-effort/README.md) | Sets the reasoning effort of every native subagent call from Jev's rating of its task, leaving the model as it was, and keeps local records to compare efforts. |
 | [tailscale](plugins/tailscale/README.md) | Lets Claude query and modify your tailnet through the Tailscale API, with the key in the sensitive `apiKey` plugin option. |
 
@@ -31,6 +32,7 @@ Requires Claude Code v2.1.287 or later. The repository is checked with v2.1.301 
 /plugin install gitlab@spider-claude-mods
 /plugin install image-preview@spider-claude-mods
 /plugin install session-hud@spider-claude-mods
+/plugin install spider-progress@spider-claude-mods
 /plugin install subagent-effort@spider-claude-mods
 /plugin install tailscale@spider-claude-mods
 ```
