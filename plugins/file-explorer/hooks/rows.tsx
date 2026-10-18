@@ -6,8 +6,9 @@ import type { Segment } from './view'
 
 export type RowsProps = { lines: Segment[][] }
 
-/** A shimmer frame lasts this long; the light moves one cell a frame. */
+/** A shimmer frame lasts this long, and the light moves this many cells a frame. */
 const FRAME_MS = 90
+const SPEED = 1.6
 /** Cells of dark on each side of the name the light runs through before it starts again. */
 const GAP = 4
 
@@ -34,13 +35,19 @@ const Rows: ClientModule<RowsProps, { live: Live }> = (props, surface) => {
   live.isShimmering = props.lines.some(line => line.some(one => one.s))
   const phase = live.phase
 
-  // The light: the cell under it and its neighbours bright, the rest of the name dim.
+  // The light: four steps from the rest of the name (0) to its centre (3), in the segment's colours where it has them,
+  // else in its one colour from dim to bold.
   const shimmer = (one: Segment) => {
     const chars = [...one.t]
-    const center = (phase % (chars.length + 2 * GAP)) - GAP
-    return chars.map((char, i) => (
-      <Text color={one.c} bold={Math.abs(i - center) <= 1 ? true : undefined} dimColor={Math.abs(i - center) > 1 ? true : undefined} inverse={one.i}>{char}</Text>
-    ))
+    const center = ((phase * SPEED) % (chars.length + 2 * GAP)) - GAP
+    return chars.map((char, i) => {
+      const d = Math.abs(i - center)
+      const step = d < 0.8 ? 3 : d < 1.8 ? 2 : d < 2.8 ? 1 : 0
+      const color = one.g?.[step] ?? one.c
+      const bold = (one.g ? step === 3 : step >= 2) ? true : undefined
+      const dim = !one.g && step === 0 ? true : undefined
+      return <Text color={color} bold={bold} dimColor={dim} inverse={one.i}>{char}</Text>
+    })
   }
 
   return (

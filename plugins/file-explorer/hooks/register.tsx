@@ -435,9 +435,9 @@ async function startWriting($: Dollar, held: Held, path: string): Promise<void> 
   if (held.config.follow && view.mode === 'tree') await reveal($, held, path)
 }
 
-type HeaderAction = 'up' | 'reveal' | 'hidden' | 'collapse' | 'close'
+type HeaderAction = 'up' | 'reveal' | 'hidden' | 'collapse'
 
-/** The header's buttons: the root's parent, the last file Claude touched, every folder closed, dotfiles, close. */
+/** The header's buttons: the root's parent, the last file Claude touched, every folder closed, dotfiles. */
 async function headerAction($: Dollar, held: Held, action: HeaderAction, surface: string): Promise<void> {
   const view = await read($, viewAtom)
   switch (action) {
@@ -454,20 +454,18 @@ async function headerAction($: Dollar, held: Held, action: HeaderAction, surface
     case 'hidden': return press($, held, '.', surface)
     case 'collapse':
       await update($, viewAtom, ({ preview: _, ...current }): ExplorerView => ({ ...collapseAll(current), mode: 'tree', query: '', hits: [], hitCursor: 0 }))
-      return
-    case 'close':
-      await $.ui.close({ id: PANE })
   }
 }
 
-// Words, not glyphs: the API has no tooltip to explain an icon. Refresh is in the footer (`r`).
+// Words, not glyphs: the API has no tooltip to explain an icon. Refresh is in the footer (`r`), and the pane's own
+// frame carries a close control on every surface.
 const HEADER: readonly { action: HeaderAction; label: string }[] = [
   { action: 'up', label: 'up' },
   { action: 'reveal', label: 'last file' },
   { action: 'collapse', label: 'collapse' },
   { action: 'hidden', label: 'dotfiles' },
-  { action: 'close', label: '✕' },
 ]
+const HEADER_WIDTH = HEADER.reduce((sum, one) => sum + one.label.length, 0) + 3 * (HEADER.length - 1)
 
 const KEYS: readonly { hotkey: string; label: string }[] = [
   { hotkey: 'j', label: '↓' }, { hotkey: 'k', label: '↑' }, { hotkey: 'h', label: '←' }, { hotkey: 'l', label: '→' },
@@ -702,17 +700,13 @@ export const register: Register = (on, options) => {
       )
     }
 
-    // The desktop app draws its own close control on the pane; only the terminal needs ours.
-    const header = HEADER.filter(one => one.action !== 'close' || e.surface === 'terminal')
-    const headerWidth = header.reduce((sum, one) => sum + one.label.length, 0) + 3 * (header.length - 1)
-
     return (
       <Box flexDirection="column">
         <Box flexDirection="row" gap={1}>
           <Box flexGrow={1}><Text wrap="truncate-end">{paint(title)}</Text></Box>
-          {columns >= headerWidth + 12 ? (
+          {columns >= HEADER_WIDTH + 12 ? (
             <Box flexDirection="row" gap={1}>
-              {header.flatMap((one, i) => [
+              {HEADER.flatMap((one, i) => [
                 ...(i > 0 ? [<Text dimColor>·</Text>] : []),
                 <Button
                   key={`head-${one.action}`}

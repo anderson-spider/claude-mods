@@ -5,8 +5,8 @@ import { resolve } from './paths'
 export type ActivityKind = FileExplorerActivityKind
 export type Activity = FileExplorerActivity
 
-/** How long a touched row flashes, and how long it keeps its mark and stays in the footer. */
-export const FLASH_MS = 1500
+/** How long a touched row shimmers, and how long it keeps its mark and stays in the footer. */
+export const FLASH_MS = 2700
 export const MARK_MS = 120_000
 /** The most activities kept, and the most search hits one Grep or Glob marks. */
 export const MAX_ACTIVITY = 200

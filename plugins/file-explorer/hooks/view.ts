@@ -11,8 +11,12 @@ export type Tone =
   | ActivityKind
   | 'gitM' | 'gitA' | 'gitD' | 'gitR' | 'gitU' | 'gitQ'
 
-/** One run of text in a row: its tone's colour, and bold, dim, inverse or shimmering (a light passing over it). */
-export type Segment = { t: string; c?: string; b?: true; d?: true; i?: true; s?: true }
+/**
+ * One run of text in a row: its tone's colour, and bold, dim, inverse or shimmering (a light passing over it). A
+ * shimmer's `g` holds its colours from the rest of the name to the light's centre; without it the light is drawn in
+ * `c` by intensity alone.
+ */
+export type Segment = { t: string; c?: string; b?: true; d?: true; i?: true; s?: true; g?: string[] }
 
 // `auto` follows the person's Claude Code theme through theme keys; `dark` and `light` are fixed colours.
 const PALETTES: Record<Config['theme'], Record<Tone, string>> = {
@@ -34,6 +38,29 @@ const PALETTES: Record<Config['theme'], Record<Tone, string>> = {
 }
 
 export const colorOf = (tone: Tone, theme: Config['theme']) => PALETTES[theme][tone]
+
+/** `a` moved `t` of the way to `b`, both `#rrggbb`. */
+function mix(a: string, b: string, t: number): string {
+  const channel = (hex: string, i: number) => parseInt(hex.slice(1 + i * 2, 3 + i * 2), 16)
+  return `#${[0, 1, 2].map(i => Math.round(channel(a, i) + (channel(b, i) - channel(a, i)) * t).toString(16).padStart(2, '0')).join('')}`
+}
+
+// A fixed theme's shimmer runs from the tone sunk into the background to the tone lit toward the text's extreme.
+const SHIMMER_ENDS: Record<'dark' | 'light', { base: string; light: string }> = {
+  dark: { base: '#282c34', light: '#ffffff' },
+  light: { base: '#ffffff', light: '#000000' },
+}
+
+/**
+ * A shimmer's colours in `tone`, rest of the name first, centre last. The `auto` theme names theme keys, whose colours
+ * a mod cannot read, so it has none and the light is drawn by intensity.
+ */
+export function shimmerOf(tone: Tone, theme: Config['theme']): string[] | undefined {
+  if (theme === 'auto') return undefined
+  const color = PALETTES[theme][tone]
+  const ends = SHIMMER_ENDS[theme]
+  return [mix(color, ends.base, 0.45), color, mix(color, ends.light, 0.35), mix(color, ends.light, 0.7)]
+}
 
 const GIT_TONE: Record<GitCode, Tone> = { M: 'gitM', A: 'gitA', D: 'gitD', R: 'gitR', U: 'gitU', '?': 'gitQ' }
 
@@ -96,8 +123,12 @@ export function rowSegments(row: Row, state: RowState, { columns, config, now }:
       : state.git ? GIT_TONE[state.git]
       : row.kind === 'dir' ? 'accent' : 'text'
     const name: Segment = { t: row.name + (row.kind === 'dir' ? '/' : ''), c: c(nameTone) }
-    if (flash) name.b = true
-    if (state.isEditing && config.animations) name.s = true
+    // A touch shimmers for a moment, and a write for as long as it runs, in the touch's tone.
+    if (mark && (flash || (state.isEditing && config.animations))) {
+      name.s = true
+      const gradient = shimmerOf(mark.kind, config.theme)
+      if (gradient) name.g = gradient
+    }
     if (row.isIgnored || state.git === 'D') name.d = true
     left.push(name)
     if (row.isLink) left.push({ t: ' ↪', c: c('dim') })

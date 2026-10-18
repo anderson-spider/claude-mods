@@ -1,6 +1,6 @@
 {
   "name": "file-explorer",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "File tree pane that follows Claude's reads, edits and searches, with git status, search, preview and path references",
   "author": {
     "name": "anderson-spider"
@@ -26,7 +26,7 @@
     "animations": {
       "type": "boolean",
       "title": "Flash touched files",
-      "description": "Flash a file's name when Claude touches it and shimmer it while Claude writes it; off keeps only the coloured mark.",
+      "description": "Shimmer a file's name for a moment when Claude touches it, and while Claude writes it; off keeps only the coloured mark.",
       "default": true
     },
     "showHidden": {
