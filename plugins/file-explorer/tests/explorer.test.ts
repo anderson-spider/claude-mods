@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import type { FileExplorerView } from '../types'
 import { DEFAULTS } from '../hooks/config'
-import { EMPTY_VIEW, navigate, revealed, rowStates, settled, treeRows, viewAt } from '../hooks/explorer'
+import { EMPTY_VIEW, collapseAll, navigate, revealed, rowStates, settled, treeRows, viewAt } from '../hooks/explorer'
 import { listingOf } from '../hooks/tree'
 import type { Entry } from '../hooks/tree'
 
@@ -45,7 +45,7 @@ test('a file hands its effect on: Enter activates, Space previews, e edits, a me
 
 test('a hit in search reveals; revealing expands every folder down to the file and leaves search', () => {
   const searching = { ...at('/p/a.ts'), mode: 'search' as const, hits: ['src/x.ts'], hitCursor: 0 }
-  expect(navigate(searching, [{ path: '/p/src/x.ts', name: 'src/x.ts', depth: 0, kind: 'file', isLink: false, isOpen: false, isIgnored: false }], 'return', 10).effect)
+  expect(navigate(searching, [{ path: '/p/src/x.ts', name: 'src/x.ts', depth: 0, kind: 'file', isLink: false, isOpen: false, isIgnored: false, mtimeMs: 0 }], 'return', 10).effect)
     .toEqual({ kind: 'reveal', path: '/p/src/x.ts' })
   expect(revealed(searching, '/p/src/x.ts')).toMatchObject({ mode: 'tree', cursor: '/p/src/x.ts', expanded: ['/p/src'] })
   expect(revealed(searching, '/elsewhere/x.ts')).toBe(searching)
@@ -67,4 +67,16 @@ test('row states carry marks, git letters and the dot of a collapsed folder with
   }, '/p', 10)
   expect(states[0]).toEqual({ hasMarkBelow: true, isCursor: false })
   expect(states[1]).toEqual({ hasMarkBelow: false, isCursor: true, git: 'M', lines: { added: 1, removed: 0 } })
+})
+
+test('collapsing every folder moves the cursor to the top-level row it was under', () => {
+  const deep = { ...at('/p/src/lib/x.ts', ['/p/src', '/p/src/lib']), top: 4 }
+  expect(collapseAll(deep)).toMatchObject({ expanded: [], cursor: '/p/src', top: 0 })
+  expect(collapseAll(at('/p/a.ts', ['/p/src'])).cursor).toBe('/p/a.ts')
+})
+
+test('a file being written is marked as such, and its collapsed folder shows the dot', () => {
+  const view = at('/p/a.ts')
+  const states = rowStates(rowsOf(view), 0, [], null, '/p', 0, ['/p/src/x.ts', '/p/a.ts'])
+  expect(states.map(one => [one.isEditing ?? false, one.hasMarkBelow])).toEqual([[false, true], [true, false]])
 })

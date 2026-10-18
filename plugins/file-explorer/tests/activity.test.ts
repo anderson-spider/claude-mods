@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { FLASH_MS, MARK_MS, MAX_ACTIVITY, MAX_SEARCH_MARKS, commandsOf, marksAt, nextFlashEnd, recorded, shellEffects, touchedBy } from '../hooks/activity'
+import { FLASH_MS, MARK_MS, MAX_ACTIVITY, MAX_SEARCH_MARKS, commandsOf, marksAt, nextFlashEnd, recorded, shellEffects, touchedBy, writing } from '../hooks/activity'
 
 test('a command line splits into simple commands at separators, quotes kept whole', () => {
   expect(commandsOf(`git commit -m "a; b" && rm 'my file' | cat; echo x\\ y`)).toEqual([
@@ -50,4 +50,12 @@ test('marks flash for a moment, stay for a while, then go; one timer is due at t
   expect(nextFlashEnd(list, 1000)).toBe(FLASH_MS)
   expect(nextFlashEnd(list, FLASH_MS)).toBe(1000 + FLASH_MS)
   expect(nextFlashEnd(list, 1000 + FLASH_MS)).toBeUndefined()
+})
+
+test('a write names the file it is about to change before it runs; other tools name none', () => {
+  expect(writing('Edit', { file_path: 'src/a.ts' }, '/p')).toBe('/p/src/a.ts')
+  expect(writing('Write', { file_path: '/p/b.md' }, '/p')).toBe('/p/b.md')
+  expect(writing('NotebookEdit', { notebook_path: 'n.ipynb' }, '/p')).toBe('/p/n.ipynb')
+  expect(writing('Read', { file_path: '/p/b.md' }, '/p')).toBeUndefined()
+  expect(writing('Edit', {}, '/p')).toBeUndefined()
 })

@@ -26,7 +26,7 @@ export function treeRows(view: ExplorerView, dirs: Readonly<Record<string, Listi
 
 /** The search hits as rows: each relative path at depth 0, a directory when the index says so. */
 export function hitRows(view: ExplorerView, isDir: (rel: string) => boolean): Row[] {
-  return view.hits.map(rel => ({ path: join(view.root, rel), name: rel, depth: 0, kind: isDir(rel) ? 'dir' : 'file', isLink: false, isOpen: false, isIgnored: false }))
+  return view.hits.map(rel => ({ path: join(view.root, rel), name: rel, depth: 0, kind: isDir(rel) ? 'dir' : 'file', isLink: false, isOpen: false, isIgnored: false, mtimeMs: 0 }))
 }
 
 /** Every directory above a marked path, so a collapsed one shows that something under it was touched. */
@@ -37,13 +37,17 @@ export function markedDirs(root: string, marks: ReadonlyMap<string, unknown>): S
 }
 
 /** Each row's mark, git state and cursor, as `rowSegments` draws them. */
-export function rowStates(rows: readonly Row[], cursor: number, activity: readonly Activity[], git: GitStatus | null, root: string, now: number): RowState[] {
+export function rowStates(
+  rows: readonly Row[], cursor: number, activity: readonly Activity[], git: GitStatus | null, root: string, now: number,
+  editing: readonly string[] = [],
+): RowState[] {
   const marks = marksAt(activity, now)
-  const below = markedDirs(root, marks)
+  const below = markedDirs(root, new Map<string, unknown>([...marks, ...editing.map(path => [path, true] as const)]))
   return rows.map((row, index) => {
     const state: RowState = { hasMarkBelow: row.kind === 'dir' && !row.isOpen && below.has(row.path), isCursor: index === cursor }
     const mark = marks.get(row.path)
     if (mark) state.mark = mark
+    if (editing.includes(row.path)) state.isEditing = true
     const code = git?.files[row.path]
     if (code) state.git = code
     const lines = git?.lines[row.path]
@@ -127,6 +131,12 @@ function expand(view: ExplorerView, dir: string): Step {
 /** The view with `dir` and every directory under it collapsed. */
 export function collapse(view: ExplorerView, dir: string): ExplorerView {
   return { ...view, expanded: view.expanded.filter(one => !isInside(dir, one)), cursor: dir }
+}
+
+/** Every directory closed, the cursor moved up to the top-level row it was under. */
+export function collapseAll(view: ExplorerView): ExplorerView {
+  const top = view.cursor === null ? null : ancestors(view.root, view.cursor).find(dir => parent(dir) === view.root) ?? view.cursor
+  return { ...view, expanded: [], cursor: top, top: 0 }
 }
 
 function toParent(view: ExplorerView, rows: readonly Row[], path: string, height: number): Step {

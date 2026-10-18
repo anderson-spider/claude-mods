@@ -11,24 +11,25 @@ The functional reference was [claude-code-filetree](https://github.com/data-gobl
 ## What you see
 
 ```text
-▾ claude-mods ⎇ main ↑1 2 changed +14 -3
+▾ claude-mods ⎇ main ↑1 2 changed +14 -3           ↑ ◎ ↻ ○ ⊟ ✕
 / search files
   ▾ plugins/                          2M
     ▸ chatgpt/
 ●   ▾ file-explorer/                  2M
-●     ◇ register.tsx           +12 -3 M
-      ◇ view.ts                 +2 -0 M
+●     ◇ register.tsx           +12 -3 M        now
+      ◇ view.ts                 +2 -0 M         3m
 • ▸ scripts/
-  ≡ README.md
+  ≡ README.md                            yesterday
 ● edited plugins/file-explorer/hooks/register.tsx 3s
 ● read README.md 1m
 j: ↓ k: ↑ h: ← l: → o: open s: find a: @ref r: ↻
 ```
 
-- **Header**: the folder, its branch, how far ahead (`↑`) and behind (`↓`) its upstream it is (or `(no upstream)`), how many files changed and the lines added and removed. Outside a repository there is no branch line.
+- **Header**: the folder, its branch, how far ahead (`↑`) and behind (`↓`) its upstream it is (or `(no upstream)`), how many files changed and the lines added and removed. Outside a repository there is no branch line. At the right, buttons: `↑` the folder above (pinned, as `/file-explorer <folder>`), `◎` the last file Claude touched, `↻` refresh, `○`/`◉` dotfiles hidden or shown, `⊟` close every folder, `✕` close the pane. A pane narrower than 24 columns leaves them out.
 - **Rows**: folders first, then files, sorted by name (or extension, or newest first). Dotfiles are hidden until you press `.`. Folders named in the ignore list (`node_modules`, `dist`, `.venv`...) are drawn dim and left out of search.
+- **Modified**: at the right edge of each file, how long ago it was modified: `now`, `3m`, `2h`, `yesterday`, `4d`, `3w`, `5mo`, `2y` (yesterday is 24 to 48 hours ago). In a narrow pane it goes before the git columns do; `mtime: false` hides it.
 - **Git**: a file shows its letter (`M` modified, `A` added, `D` deleted, `R` renamed, `?` untracked, `U` conflicted) and, for tracked changes, `+added -removed`. A folder shows how many changed files lie under it, in the colour of the strongest change.
-- **Claude's activity**: a dot in the first column, coloured by what Claude did: read, found by Grep or Glob, edited, created, removed, or part of the commit it just made. The name flashes in bold for a moment and the dot stays for two minutes. A collapsed folder with a touched file somewhere inside shows a dim `•`. The last two touches are listed in the footer.
+- **Claude's activity**: a dot in the first column, coloured by what Claude did: read, found by Grep or Glob, edited, created, removed, or part of the commit it just made. The name flashes in bold for a moment and the dot stays for two minutes. While a Write, Edit, MultiEdit or NotebookEdit call is running, the file already carries the edited dot and a light runs across its name; the tree opens to it when following. A collapsed folder with a touched file somewhere inside shows a dim `•`. The last two touches are listed in the footer.
 - **Follow**: when Claude reads, edits or creates a file, the tree opens down to it and the cursor moves there. Searches do not move the tree.
 
 ## Open it
@@ -92,6 +93,7 @@ Change them in `/config` (they appear under the plugin) or in `settings.json`:
         "follow": true,
         "animations": true,
         "showHidden": false,
+        "mtime": true,
         "ignore": ".git,node_modules,dist,build,target,.next,.venv,__pycache__,coverage",
         "sort": "name",
         "enterAction": "preview",
@@ -111,8 +113,9 @@ Change them in `/config` (they appear under the plugin) or in `settings.json`:
 | --- | --- | --- |
 | `autoOpen` | `true` | Open the pane at session start (where the terminal has room). |
 | `follow` | `true` | Open the tree to the files Claude reads, edits and creates. |
-| `animations` | `true` | Flash a touched name; `false` keeps only the dot. |
+| `animations` | `true` | Flash a touched name and shimmer one being written; `false` keeps only the dot. |
 | `showHidden` | `false` | Start with dotfiles shown. |
+| `mtime` | `true` | Show how long ago each file was modified. |
 | `ignore` | see above | Comma-separated names drawn dim and left out of search. |
 | `sort` | `name` | `name`, `type` (extension) or `modified` (newest first); folders always first. |
 | `enterAction` | `preview` | `preview` or `editor`: what Enter and a double click do on a file. |
@@ -132,6 +135,7 @@ A value outside its choices reads as the default.
 - After each finished tool call it reads the call's input and result. A call that may change files (Write, Edit, MultiEdit, NotebookEdit, Bash) also re-reads the shown folders whose modification time moved, then runs git once, 300 ms after the last change. Refused or failed calls are ignored.
 - Git runs by argument list with no shell: `status --porcelain` and, in `full` mode, `diff --numstat HEAD`. It runs with `--no-optional-locks`, so it never holds `.git/index.lock` against Claude's own `git add` or `commit`, and with `core.fsmonitor` off and no external diff or textconv, so a repository's config cannot make it run a command. It runs again when `.git/index` or `.git/HEAD` changes (Claude Code's file watcher), so a commit or checkout made in another terminal shows too.
 - Changes made outside Claude to files in open folders are picked up by a check of those folders' modification times every `refreshSeconds` while the pane is open. Claude Code gives a mod no folder watcher, and this is the cheapest check that works on every platform.
+- The shimmer runs in the rows' own drawing module on the surface's frame clock, and draws a frame only while a row shimmers; no hook runs per frame. The modified ages are drawn again once a minute while the pane is open.
 - Timers stop when the session ends; a `/clear` keeps them, since the process goes on.
 
 Measured by `tests/performance.test.ts` on a development laptop: about 13 ms to lay out 20,000 open rows, 11 ms to rank 50,000 paths, 19 ms to read a git status of 20,000 files, about 2 ms of observation per tool call, and 10 ms from a key to a redrawn 2,000-row folder.

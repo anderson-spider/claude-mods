@@ -1,26 +1,55 @@
 // The tree rows' surface module: paints the segments register.tsx laid out and hands keys and clicks back to it.
-// It keeps no tree state of its own, so a redraw from the hooks module is always the truth.
+// It keeps no tree state of its own, so a redraw from the hooks module is always the truth. The one thing it animates
+// itself is the shimmer of a file Claude is writing, on the surface's frame clock, so no hook runs per frame.
 import type { ClientModule } from 'claude-code'
 import type { Segment } from './view'
 
 export type RowsProps = { lines: Segment[][] }
 
-const Rows: ClientModule<RowsProps, true> = (props, surface) => {
+/** A shimmer frame lasts this long; the light moves one cell a frame. */
+const FRAME_MS = 90
+/** Cells of dark on each side of the name the light runs through before it starts again. */
+const GAP = 4
+
+type Live = { phase: number; isShimmering: boolean }
+
+const Rows: ClientModule<RowsProps, { live: Live }> = (props, surface) => {
   const { Box, Text } = surface.elements
-  if (surface.state === undefined) {
+  let live = surface.state?.live
+  if (live === undefined) {
+    const fresh: Live = { phase: 0, isShimmering: false }
+    live = fresh
     surface.onKey(key => surface.post({ key: key.key, ...(key.ctrl ? { ctrl: true } : {}), ...(key.shift ? { shift: true } : {}), ...(key.meta ? { meta: true } : {}) }))
     surface.onPointer(event => {
       if (event.type === 'down' && event.button === 'left') surface.post({ click: event.y })
     })
-    surface.setState(true)
+    // Ticks cost nothing while no row shimmers: the frame is drawn again only when one does.
+    surface.every(FRAME_MS, () => {
+      if (!fresh.isShimmering) return
+      fresh.phase++
+      surface.setState({ live: fresh })
+    })
+    surface.setState({ live: fresh })
   }
+  live.isShimmering = props.lines.some(line => line.some(one => one.s))
+  const phase = live.phase
+
+  // The light: the cell under it and its neighbours bright, the rest of the name dim.
+  const shimmer = (one: Segment) => {
+    const chars = [...one.t]
+    const center = (phase % (chars.length + 2 * GAP)) - GAP
+    return chars.map((char, i) => (
+      <Text color={one.c} bold={Math.abs(i - center) <= 1 ? true : undefined} dimColor={Math.abs(i - center) > 1 ? true : undefined} inverse={one.i}>{char}</Text>
+    ))
+  }
+
   return (
     <Box flexDirection="column">
       {props.lines.map(line => (
         <Text wrap="truncate-end">
-          {line.map(one => (
+          {line.map(one => (one.s ? shimmer(one) : (
             <Text color={one.c} bold={one.b} dimColor={one.d} inverse={one.i}>{one.t}</Text>
-          ))}
+          )))}
         </Text>
       ))}
     </Box>

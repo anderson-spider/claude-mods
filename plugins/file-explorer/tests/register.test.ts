@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { ROOT, cursor, key, pane, rows, segmentsOf, start, world } from './host'
+import { NOW, ROOT, cursor, key, pane, rows, segmentsOf, start, world } from './host'
 
 const FILES = ['src/', 'src/app.ts', 'src/lib/', 'src/lib/util.ts', 'README.md', '.env', 'node_modules/', 'node_modules/x.js', 'docs/', 'docs/guide.md']
 const TOP = ['  ▸ docs/', '  ▸ node_modules/', '  ▸ src/', '  ≡ README.md']
@@ -371,5 +371,74 @@ test('a /clear keeps the background check running; a subagent mention moves noth
   expect(await rows(ui)).toContain('  ≡ later.md')
   await $.prompt.mention({ mention: 'src/app.ts', path: `${ROOT}/src/app.ts`, agentId: 'agent-1' } as never)
   expect(await cursor(ui)).toBe('  ▸ docs/')
+  await ui.unmount()
+})
+
+test('a file shimmers while Claude writes it, opened to in the tree; the shimmer ends with the call and the mark stays', async ($, on) => {
+  world(on, FILES)
+  let mounted: Parameters<typeof segmentsOf>[0] | undefined
+  let during: { t: string; s?: true }[] | undefined
+  on('tool.call', async () => {
+    if (mounted) during = await segmentsOf(mounted, 'util.ts')
+    return { result: {} } as never
+  })
+  await start($)
+  const ui = await $.ui.mount(pane())
+  mounted = ui
+  await $.tool.call({ tool: 'Edit', file_path: `${ROOT}/src/lib/util.ts`, old_string: 'a', new_string: 'b' } as never)
+  expect(during?.find(one => one.t === 'util.ts')?.s).toBe(true)
+  expect((await segmentsOf(ui, 'util.ts'))?.find(one => one.t === 'util.ts')?.s).toBeUndefined()
+  expect(await cursor(ui)).toBe('●     ◇ util.ts')
+  await ui.unmount()
+})
+
+test('a refused write leaves no shimmer behind', async ($, on) => {
+  world(on, FILES)
+  on('tool.call', () => ({ deny: 'no' }) as never)
+  await start($)
+  const ui = await $.ui.mount(pane())
+  await $.tool.call({ tool: 'Write', file_path: `${ROOT}/README.md`, content: 'x' } as never)
+  expect((await segmentsOf(ui, 'README.md'))?.some(one => one.s)).toBe(false)
+  expect((await rows(ui)).at(-1)).toBe('  ≡ README.md')
+  await ui.unmount()
+})
+
+test('the modified column reads each file\'s age and moves on with the clock while the pane is open', async ($, on) => {
+  const w = world(on, FILES)
+  w.touch('README.md', NOW - 3 * 60_000)
+  await start($)
+  const ui = await $.ui.mount(pane())
+  expect((await rows(ui)).at(-1)).toMatch(/README\.md +3m$/)
+  await w.clock.advance(60_000)
+  expect((await rows(ui)).at(-1)).toMatch(/README\.md +4m$/)
+  await ui.unmount()
+})
+
+test('the header buttons go up a folder, reveal the last file Claude touched, close every folder and close the pane', async ($, on) => {
+  const w = world(on, FILES)
+  on('tool.call', () => ({ result: {} }) as never)
+  await start($)
+  const ui = await $.ui.mount(pane())
+
+  await ui.press({ key: 'head-reveal' })
+  expect(await ui.find({ type: 'Text', text: 'Claude has not touched a file here yet.' })).toBeDefined()
+  await $.tool.call({ tool: 'Read', file_path: `${ROOT}/src/lib/util.ts` } as never)
+  await ui.press({ key: 'head-collapse' })
+  expect(await rows(ui)).toEqual(['  ▸ docs/', '  ▸ node_modules/', '• ▸ src/', '  ≡ README.md'])
+  expect(await cursor(ui)).toBe('• ▸ src/')
+  await ui.press({ key: 'head-reveal' })
+  expect(await cursor(ui)).toBe('●     ◇ util.ts')
+
+  await ui.press({ key: 'head-hidden' })
+  expect(await rows(ui)).toContain('  ◫ .env')
+  // The fake disk holds only the project, so the folder above it reads empty; the title names it.
+  await ui.press({ key: 'head-up' })
+  expect(await ui.find({ type: 'Text', text: /^▾ \/ $/ })).toBeDefined()
+  await ui.press({ key: 'head-up' })
+  expect(await ui.find({ type: 'Text', text: 'Already at the top.' })).toBeDefined()
+
+  expect(w.opened).toContain('file-explorer')
+  await ui.press({ key: 'head-close' })
+  expect(w.opened).not.toContain('file-explorer')
   await ui.unmount()
 })
