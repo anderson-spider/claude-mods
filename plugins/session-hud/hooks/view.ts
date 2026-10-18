@@ -55,13 +55,13 @@ export const LABELS: Readonly<Record<string, string>> = { five_hour: '5h', seven
 export const shownLimits = (card: SessionHudCard): SessionHudCard['limits'] => card.limits
   .filter(limit => WINDOW_MS[limit.kind] !== undefined && LABELS[limit.kind] !== undefined)
   .sort((a, b) => WINDOW_MS[a.kind]! - WINDOW_MS[b.kind]!).slice(0, 2)
-/** An agent type as the card names it (`Explore`, `spider-team:reviewer`); anything else is `?`, so no other text reaches the screen. */
+/** An agent type as the card names it (`Explore`, `codex:codex-rescue`); anything else is `?`, so no other text reaches the screen. */
 const TYPE = /^[A-Za-z0-9][\w.:@-]{0,63}$/
 export const typeName = (type: string | undefined): string | undefined => (type === undefined ? undefined : TYPE.test(type) ? type : '?')
 
 /**
  * The running agents grouped by type, model and effort, the most first, then by name:
- * `3 agents: spider-team:reviewer Opus 5.5 · high ×2, Explore Haiku 4.5`; a part the host has not reported is left out,
+ * `3 agents: codex:codex-rescue Opus 5.5 · high ×2, Explore Haiku 4.5`; a part the host has not reported is left out,
  * an unknown model is `?`; empty when none runs.
  */
 export function agentCells(card: SessionHudCard): Row {

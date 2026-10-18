@@ -67,10 +67,10 @@ test('the agent list removes the agents it shows idle or ended, keeps the ones i
 })
 
 test('a spawn names the type, a step the model and effort; a part that is not a name keeps what was known', () => {
-  const one = spawned(EMPTY, 'a1', 'claude-opus-5-5', 'spider-team:reviewer')
-  expect(one.agents).toEqual([{ id: 'a1', model: 'claude-opus-5-5', type: 'spider-team:reviewer' }])
+  const one = spawned(EMPTY, 'a1', 'claude-opus-5-5', 'codex:codex-rescue')
+  expect(one.agents).toEqual([{ id: 'a1', model: 'claude-opus-5-5', type: 'codex:codex-rescue' }])
   const withEffort = agentStepped(one, 'a1', 'claude-opus-5-5', 'high')
-  expect(withEffort.agents).toEqual([{ id: 'a1', model: 'claude-opus-5-5', type: 'spider-team:reviewer', effort: 'high' }])
+  expect(withEffort.agents).toEqual([{ id: 'a1', model: 'claude-opus-5-5', type: 'codex:codex-rescue', effort: 'high' }])
   expect(agentStepped(withEffort, 'a1', 'claude-opus-5-5', 'high')).toBe(withEffort)
   expect(agentStepped(withEffort, 'a1', undefined, 3)).toBe(withEffort)
   expect(spawned(withEffort, 'a1', undefined, 42)).toBe(withEffort)
