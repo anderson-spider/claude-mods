@@ -1,7 +1,6 @@
 import { expect, test } from 'claude-code/testing'
-import type { SpiderAgent } from '../types'
-import type { SpiderRun } from '../types'
-import { agentEnded, agentStepped, agentsOfRun, capped, resumed, spawned, stepReported } from '../hooks/agents'
+import type { SpiderAgent, SpiderRun } from '../types'
+import { agentEnded, agentStepped, answeredModel, agentsOfRun, capped, resumed, spawned, stepReported } from '../hooks/agents'
 import { STEP_BRIEF, TIERS, briefed, taskIdOf, tierOf } from '../hooks/tiers'
 
 const BRIEF = 'spider-task: T3\nRead the auth module.'
@@ -106,4 +105,28 @@ test('the run counts agents started while it was open and workers its tasks list
   ] }
   expect(agentsOfRun(run, list).map(a => a.agentId)).toEqual(['resumed', 'during'])
   expect(agentsOfRun({ ...run, finishedAt: undefined, phase: 'execute' }, list).map(a => a.agentId)).toEqual(['resumed', 'during', 'late'])
+})
+
+test('usage summed at the turn end uses the base price card, never the long-prompt one', () => {
+  // Several 30K requests of a Haiku 5.5 agent sum past 100K tokens; no one of them did.
+  const summed = { input_tokens: 150_000, output_tokens: 0, model: 'claude-haiku-5-5' }
+  const [ended] = agentEnded(spawn(), 'a1', 'answer', 50, summed)
+  expect(Math.round(ended!.costUsd! * 1e6) / 1e6).toBe(0.015)
+  const [stepped] = agentStepped(spawn(), 'a1', { usage: { input_tokens: 150_000, model: 'claude-haiku-5-5' } }, 10)
+  expect(Math.round(stepped!.costUsd! * 1e6) / 1e6).toBe(0.075)
+})
+
+test('answeredModel prefers the model the usage names, else the fallback', () => {
+  expect(answeredModel({ model: 'claude-opus-5-5' }, 'x')).toBe('claude-opus-5-5')
+  expect(answeredModel({ input_tokens: 1 }, 'x')).toBe('x')
+  expect(answeredModel({ model: 3 }, 'x')).toBe('x')
+  expect(answeredModel(null, 'x')).toBe('x')
+  expect(answeredModel(undefined, undefined)).toBeUndefined()
+})
+
+test('the run counts an agent that started exactly when it opened or when it finished', () => {
+  const at = (agentId: string, now: number, list: SpiderAgent[]) => spawned(list, { agentId, type: 'Explore', prompt: 'Find it.', now }, 200)
+  const list = at('after', 801, at('end', 800, at('start', 100, at('before', 99, []))))
+  const run: SpiderRun = { runId: 'r', title: 'Auth', phase: 'complete', startedAt: 100, finishedAt: 800, tasks: [] }
+  expect(agentsOfRun(run, list).map(a => a.agentId)).toEqual(['start', 'end'])
 })

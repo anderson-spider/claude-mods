@@ -1,6 +1,6 @@
 {
   "name": "spider-progress",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Progress band under the session card and an agents pane for spider-team runs and any subagent",
   "author": {
     "name": "anderson-spider"

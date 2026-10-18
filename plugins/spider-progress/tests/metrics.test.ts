@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import type { SpiderAgent, SpiderMain } from '../types'
-import { ZERO, addUsage, costOf, formatCost, formatDuration, formatTokens, mainUsed, totalsOf, usageOf } from '../hooks/metrics'
+import { ZERO, addUsage, costOf, formatCost, formatDuration, formatTokens, hasTokens, mainUsed, totalsOf, usageOf } from '../hooks/metrics'
 import { priceOf } from '../hooks/prices'
 
 const near = (v: number | undefined) => (v === undefined ? v : Math.round(v * 1e6) / 1e6)
@@ -22,6 +22,11 @@ test('cost applies input, output, cache read and cache write rates separately', 
   expect(near(costOf('claude-haiku-5-5', U(100_000, 100_000)))).toBe(near(0.06))
   expect(near(costOf('claude-sonnet-5-5', U(1_000_000, 0)))).toBe(near(2))
   expect(near(costOf('claude-fable-5-1', U(0, 0, 1_000_000)))).toBe(near(0.25))
+})
+
+test('hasTokens is true when any count is positive', () => {
+  expect(hasTokens(ZERO)).toBe(false)
+  expect(hasTokens(U(0, 0, 0, 1))).toBe(true)
 })
 
 test('malformed usage is null and adds nothing', () => {
@@ -47,6 +52,10 @@ test('formatting: tokens, estimated cost and N/A, durations', () => {
   expect(formatTokens(950)).toBe('950')
   expect(formatTokens(183_400)).toBe('183.4K')
   expect(formatTokens(1_200_000)).toBe('1.2M')
+  expect(formatTokens(999_949)).toBe('999.9K')
+  expect(formatTokens(999_950)).toBe('1.0M')
+  expect(formatTokens(999_999)).toBe('1.0M')
+  expect(formatCost({ usage: U(0, 0), costPartial: false }, 'n/d')).toBe('n/d')
   expect(formatCost({ usage: U(0, 0), costUsd: 2.144, costPartial: false })).toBe('~$2.14')
   expect(formatCost({ usage: U(0, 0), costUsd: 2.144, costPartial: true })).toBe('~$2.14+')
   expect(formatCost({ usage: U(0, 0), costPartial: true })).toBe('N/A')
@@ -60,6 +69,8 @@ test('Haiku 5.5 above a 100K-token prompt uses its long-prompt rates', () => {
   expect(near(costOf('claude-haiku-5-5', U(100_000, 1_000_000)))).toBe(near(0.01 + 0.5))
   expect(near(costOf('claude-haiku-5-5', U(200_000, 1_000_000)))).toBe(near(0.1 + 2.5))
   expect(near(costOf('claude-haiku-5-5', U(50_000, 0, 60_000)))).toBe(near(0.025 + 0.003))
+  // Summed over several requests, the usage is priced on the base card however large the sum.
+  expect(near(costOf('claude-haiku-5-5', U(200_000, 1_000_000), false))).toBe(near(0.02 + 0.5))
 })
 
 test("Main's request adds usage and cost; an unpriced request with no tokens leaves the cost whole", () => {

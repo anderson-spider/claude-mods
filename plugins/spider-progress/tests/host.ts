@@ -2,6 +2,7 @@
 import type { On, RenderElement } from 'claude-code'
 import { expect, mock } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
+import type { PluginState } from 'claude-code'
 
 export type Tool = { name: string; description: string; inputSchema: { properties: Record<string, { description?: string }> } }
 
@@ -13,9 +14,17 @@ export const id = (name: string) => `mcp__spider-progress__${name}`
 /** What draws beneath this plugin's band: another plugin's tree. */
 export const BENEATH: RenderElement = { type: 'Text', props: {}, children: ['beneath'] }
 
-/** A host recording tools, panes and spawned prompts; a spawn starts `agent-1`, `agent-2`... on the model it names, and a resume keeps its id. `broken.clock` makes the clock throw. */
-export function world(on: On, opts: { language?: string; env?: Record<string, string>; broken?: { clock: boolean } } = {}) {
+/**
+ * A host recording tools, panes, spawned prompts and debug logs; a spawn starts `agent-1`, `agent-2`... on the model it names,
+ * and a resume keeps its id. `broken.clock` makes the clock throw and `broken.settings` the settings read; `spawnTakes` is how
+ * long the host takes to answer a spawn on the mock clock; `answeredBy` is the model a step's usage names; `context.window` is
+ * the window the host measures; `stored` holds the plugin's state as last written.
+ */
+export function world(on: On, opts: { language?: string; env?: Record<string, string>; broken?: { clock?: boolean; settings?: boolean }; spawnTakes?: number; answeredBy?: string } = {}) {
   const tools: Tool[] = []
+  const logs: string[] = []
+  const context = { window: 500_000 }
+  const stored: { [K in keyof PluginState['spider-progress']]?: PluginState['spider-progress'][K] } = {}
   const opened: string[] = []
   const prompts: string[] = []
   let spawns = 0
@@ -31,18 +40,31 @@ export function world(on: On, opts: { language?: string; env?: Record<string, st
   on('ui.open', (_$, e) => (opened.includes(e.id) || opened.push(e.id), { value: { isPlaced: true } }) as never)
   on('ui.close', (_$, e) => (opened.splice(opened.indexOf(e.id), 1), { value: undefined }) as never)
   on('ui.panes', () => ({ value: opened.map(pane => ({ id: pane, title: 'Spider agents' })) }) as never)
-  on('ui.log', () => ({ value: undefined }))
-  on('settings.read', () => ({ value: opts.language ? { language: opts.language } : {} }) as never)
+  on('state.set', async (_$, e, next) => {
+    const result = await next(e)
+    if ((result as unknown as { value?: { isSet?: boolean } }).value?.isSet && e.plugin === 'spider-progress') (stored as Record<string, unknown>)[e.key] = e.value
+    return result
+  })
+  on('ui.log', (_$, e) => (logs.push(e.text), { value: undefined }))
+  on('settings.read', () => {
+    // A throwing hook would be skipped for the kit's default; settings that are not an object make the read fail in the plugin.
+    if (opts.broken?.settings) return { value: null } as never
+    return { value: opts.language ? { language: opts.language } : {} } as never
+  })
   on('env.get', (_$, e) => ({ value: opts.env?.[e.name] }))
-  on('session.usage', () => ({ value: { context: { tokens: 1, window: 500_000, percent: 0, breakdown: { rawMaxTokens: 500_000 } }, rateLimits: [] } }) as never)
-  on('agent.spawn', (_$, e) => (prompts.push(e.prompt), { model: e.model ?? 'claude-sonnet-5-5', agentId: e.resume?.agentId ?? `agent-${++spawns}` }))
+  on('session.usage', () => ({ value: { context: { tokens: 1, window: context.window, percent: 0, breakdown: { rawMaxTokens: context.window } }, rateLimits: [] } }) as never)
+  on('agent.spawn', async (_$, e) => {
+    prompts.push(e.prompt)
+    if (opts.spawnTakes) await clock.sleep(opts.spawnTakes)
+    return { model: e.model ?? 'claude-sonnet-5-5', agentId: e.resume?.agentId ?? `agent-${++spawns}` }
+  })
   on('turn.step', async function* (_$, e) {
-    const usage = { model: e.model, input_tokens: 1_000, output_tokens: 100, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
+    const usage = { model: opts.answeredBy ?? e.model, input_tokens: 1_000, output_tokens: 100, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
     return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage } as never
   })
   on('turn.complete', () => ({ text: 'done' }) as never)
   on('ui.render', { component: 'AbovePrompt' }, () => BENEATH)
-  return { tools, opened, prompts, clock }
+  return { tools, opened, prompts, clock, logs, context, stored }
 }
 
 export async function started($: Engine, tools: Tool[]): Promise<string[]> {

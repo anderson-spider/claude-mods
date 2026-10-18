@@ -9,6 +9,13 @@ test('langOf follows the option, then settings, then the locale, else English', 
   expect(langOf('auto', undefined, { LC_ALL: '', LC_MESSAGES: 'pt_BR', LANG: 'en_US' })).toBe('pt-BR')
   expect(langOf('auto', undefined, { LANG: 'de_DE.UTF-8' })).toBe('en')
   expect(langOf('auto')).toBe('en')
+  expect(langOf('auto', 'Brazilian Portuguese')).toBe('pt-BR')
+  expect(langOf('auto', 'portugues')).toBe('pt-BR')
+  expect(langOf('auto', 'pt')).toBe('pt-BR')
+  expect(langOf('auto', 'pt-BR')).toBe('pt-BR')
+  expect(langOf('auto', undefined, { LANG: 'pt_BR.UTF-8' })).toBe('pt-BR')
+  expect(langOf('auto', 'Spanish (Latin America)')).toBe('en')
+  expect(langOf('auto', 'ptolemaic')).toBe('en')
 })
 
 test('both languages have the same keys', () => {

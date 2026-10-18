@@ -49,7 +49,8 @@ export const STRINGS: Record<Lang, Strings> = {
 
 export const t = (lang: Lang): Strings => STRINGS[lang]
 
-const PORTUGUESE = /^(pt\b|pt[_-]|portugu)/i
+// `portugu` anywhere ("Brazilian Portuguese", "Português"), or a `pt` code (pt, pt-BR, pt_BR.UTF-8).
+const PORTUGUESE = /portugu|^pt\b|^pt[_-]/i
 
 /** The option when fixed; on `auto`, the Claude Code language setting when set, else the first locale variable set, else English. */
 export function langOf(option: SpiderConfig['language'], settingsLanguage?: string, env: { LC_ALL?: string; LC_MESSAGES?: string; LANG?: string } = {}): Lang {

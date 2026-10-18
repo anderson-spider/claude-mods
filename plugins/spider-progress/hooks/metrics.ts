@@ -1,5 +1,6 @@
 // Token usage as the host reports it, its estimated cost and the figures the band and pane print.
 import type { SpiderAgent, SpiderMain, SpiderUsage } from '../types'
+import { STRINGS } from './i18n'
 import { priceOf } from './prices'
 
 export const ZERO: SpiderUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
@@ -22,9 +23,15 @@ export function usageOf(raw: unknown): SpiderUsage | null {
 export const addUsage = (a: SpiderUsage, b: SpiderUsage): SpiderUsage =>
   ({ input: a.input + b.input, output: a.output + b.output, cacheRead: a.cacheRead + b.cacheRead, cacheWrite: a.cacheWrite + b.cacheWrite })
 
-/** The estimated USD cost of `u` on `model`; undefined when the model has no price. */
-export function costOf(model: string | undefined, u: SpiderUsage): number | undefined {
-  const price = model ? priceOf(model, u.input + u.cacheRead + u.cacheWrite) : undefined
+/** Whether `u` counted any token. */
+export const hasTokens = (u: SpiderUsage): boolean => Object.values(u).some(n => n > 0)
+
+/**
+ * The estimated USD cost of `u` on `model`; undefined when the model has no price. A long-prompt card applies only to
+ * one request's usage: `u` summed over several requests (`oneRequest` false) says nothing of any one prompt's size.
+ */
+export function costOf(model: string | undefined, u: SpiderUsage, oneRequest = true): number | undefined {
+  const price = model ? priceOf(model, oneRequest ? u.input + u.cacheRead + u.cacheWrite : 0) : undefined
   if (!price) return undefined
   return (u.input * price.input + u.output * price.output + u.cacheRead * price.cacheRead + u.cacheWrite * price.cacheWrite) / 1_000_000
 }
@@ -37,7 +44,7 @@ export function mainUsed(main: SpiderMain, model: string | undefined, raw: unkno
   const cost = costOf(model, u)
   return {
     ...next, usage: addUsage(main.usage, u), contextTokens: u.input + u.cacheRead + u.cacheWrite,
-    ...(cost !== undefined ? { costUsd: (main.costUsd ?? 0) + cost } : Object.values(u).some(n => n > 0) ? { costPartial: true as const } : {}),
+    ...(cost !== undefined ? { costUsd: (main.costUsd ?? 0) + cost } : hasTokens(u) ? { costPartial: true as const } : {}),
   }
 }
 
@@ -50,7 +57,7 @@ const totalOf = (parts: { usage: SpiderUsage; costUsd?: number; costPartial?: tr
   for (const part of parts) {
     usage = addUsage(usage, part.usage)
     if (part.costUsd !== undefined) costUsd = (costUsd ?? 0) + part.costUsd
-    if (part.costPartial || (part.costUsd === undefined && Object.values(part.usage).some(n => n > 0))) costPartial = true
+    if (part.costPartial || (part.costUsd === undefined && hasTokens(part.usage))) costPartial = true
   }
   return { usage, ...(costUsd !== undefined ? { costUsd } : {}), costPartial }
 }
@@ -61,13 +68,14 @@ export function totalsOf(main: SpiderMain, agents: SpiderAgent[]): { main: Total
 }
 
 export function formatTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  // A value that rounds up to the next unit (999_950 → 1000.0K) is written in that unit.
+  if (n >= 999_950) return `${(n / 1_000_000).toFixed(1)}M`
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
   return String(Math.round(n))
 }
 
-/** `~$2.14`, with `+` when part of the usage ran on a model with no price, or `N/A` when none had one. */
-export const formatCost = (t: Totals): string => (t.costUsd === undefined ? 'N/A' : `~$${t.costUsd.toFixed(2)}${t.costPartial ? '+' : ''}`)
+/** `~$2.14`, with `+` when part of the usage ran on a model with no price, or `na` when none had one. */
+export const formatCost = (t: Totals, na = STRINGS.en.na): string => (t.costUsd === undefined ? na : `~$${t.costUsd.toFixed(2)}${t.costPartial ? '+' : ''}`)
 
 export function formatDuration(ms: number): string {
   const s = Math.max(0, Math.floor(ms / 1000))
