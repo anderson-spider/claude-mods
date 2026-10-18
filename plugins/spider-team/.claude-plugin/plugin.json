@@ -1,6 +1,6 @@
 {
   "name": "spider-team",
-  "version": "0.12.0",
+  "version": "0.13.0",
   "description": "/spider-team: the session plans, delegates to four tiered agents (Fable, Opus, Sonnet, Haiku), reviews every result and ships it",
   "author": {
     "name": "anderson-spider"
