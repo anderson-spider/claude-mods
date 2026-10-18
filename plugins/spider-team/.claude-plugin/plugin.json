@@ -1,0 +1,12 @@
+{
+  "name": "spider-team",
+  "version": "0.1.0",
+  "description": "/spider-team: the session plans, delegates to four tiered agents (Fable, Opus, Sonnet, Haiku), reviews every result and ships it",
+  "author": {
+    "name": "anderson-spider"
+  },
+  "homepage": "https://github.com/anderson-spider/claude-mods/tree/main/plugins/spider-team",
+  "repository": "https://github.com/anderson-spider/claude-mods",
+  "license": "MIT",
+  "keywords": ["skill", "orchestration", "subagents", "agents", "claude-code"]
+}
