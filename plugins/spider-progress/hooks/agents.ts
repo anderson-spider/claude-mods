@@ -1,7 +1,7 @@
 // Every subagent the host reports, keyed by its `agentId`: what it was spawned as, the usage of each of its requests,
 // the steps it reported itself and how it ended. Pure: the clock is injected.
 import type { SpiderAgent, SpiderRun } from '../types'
-import { addUsage, costOf, usageOf, ZERO } from './metrics'
+import { addUsage, costOf, hasTokens, usageOf, ZERO } from './metrics'
 import { TIERS, taskIdOf, tierOf } from './tiers'
 
 const NOTE_MAX = 200
@@ -35,24 +35,29 @@ export function resumed(list: SpiderAgent[], agentId: string, now: number): Spid
   return replace(list, agent, { ...rest, status: 'running', lastUpdate: now })
 }
 
+/** The model a usage report says answered, else `fallback`. */
+export const answeredModel = (usage: unknown, fallback: string | undefined): string | undefined => {
+  const model = (usage as { model?: unknown } | null | undefined)?.model
+  return typeof model === 'string' ? model : fallback
+}
+
 /**
  * One request's usage, from a step or from the turn's end: the model that answered, its tokens and their cost. The
  * turn's end sums every request of the turn, so it says nothing of the context and leaves it unknown.
  */
 function used(agent: SpiderAgent, model: string | undefined, raw: unknown, now: number, oneRequest = true): SpiderAgent {
   const u = usageOf(raw)
-  const answered = typeof (raw as { model?: unknown } | null)?.model === 'string' ? (raw as { model: string }).model : model
+  const answered = answeredModel(raw, model)
   const next: SpiderAgent = { ...agent, lastUpdate: now, ...(answered ? { model: answered } : {}) }
   if (!u) return next
-  const cost = costOf(answered, u)
-  const tokens = Object.values(u).some(n => n > 0)
+  const cost = costOf(answered, u, oneRequest)
   return {
     ...next,
     usage: addUsage(agent.usage, u),
     requests: agent.requests + 1,
     ...(oneRequest ? { contextTokens: u.input + u.cacheRead + u.cacheWrite } : {}),
     ...(cost !== undefined ? { costUsd: (agent.costUsd ?? 0) + cost } : {}),
-    ...(cost === undefined && tokens ? { costPartial: true as const } : {}),
+    ...(cost === undefined && hasTokens(u) ? { costPartial: true as const } : {}),
   }
 }
 
@@ -100,7 +105,8 @@ export function agentsOfRun(run: SpiderRun, list: SpiderAgent[]): SpiderAgent[] 
 
 /** At most `limit` agents: the oldest finished go first, and a running agent is never dropped. */
 export function capped(list: SpiderAgent[], limit: number): SpiderAgent[] {
-  let extra = list.length - limit
+  const extra = list.length - limit
   if (extra <= 0) return list
-  return list.filter(a => (extra > 0 && a.status !== 'running' ? (extra--, false) : true))
+  const dropped = new Set(list.filter(a => a.status !== 'running').slice(0, extra))
+  return list.filter(a => !dropped.has(a))
 }

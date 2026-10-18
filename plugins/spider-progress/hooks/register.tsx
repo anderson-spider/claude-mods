@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
-import type { Hook, McpToolInputs, Register, Timer } from 'claude-code'
+import type { Hook, McpToolInputs, Register, RenderElement, Timer } from 'claude-code'
 import type { SpiderAgent, SpiderMain, SpiderPanel, SpiderPhase, SpiderRun } from '../types'
-import { agentEnded, agentStepped, agentsOfRun, resumed, spawned, stepReported } from './agents'
+import { agentEnded, agentStepped, agentsOfRun, answeredModel, resumed, spawned, stepReported } from './agents'
 import { bandLines } from './band'
 import { configOf } from './config'
 import type { SpiderConfig } from './config'
@@ -23,6 +23,10 @@ const panelAtom = atom({ plugin: 'spider-progress', key: 'panel' } as const, { o
 const nowAtom = atom({ plugin: 'spider-progress', key: 'now' } as const, 0)
 
 const PANE = 'spider-agents'
+/** The narrowest pane the layout is drawn for; a narrower one truncates it. */
+const PANE_MIN_COLUMNS = 20
+/** How much of an error message a debug line keeps. */
+const ERROR_MAX = 200
 const PHASES = allOf<SpiderPhase>()('understand', 'plan', 'investigate', 'execute', 'review', 'verify', 'complete', 'cancelled', 'failed')
 
 // Objects, which SchemaFor does not type (their McpToolInputs entries are `unknown`): state.ts checks what arrives.
@@ -75,10 +79,17 @@ const PAINT: Record<Style, { color?: string; bold?: boolean; dimColor?: boolean 
   barEmpty: { color: 'subtle' },
 }
 
+const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error)).slice(0, ERROR_MAX)
+
+/** One debug line, with the error's message when there is one; reporting never throws. */
+function debug($: Dollar, text: string, error?: unknown): void {
+  try { $.ui.log(error === undefined ? text : `${text}: ${messageOf(error)}`, { to: 'debug' }) } catch { /* Reporting cannot change the observed result. */ }
+}
+
 /** Observation never changes what the host answered: a failure is one debug line. */
 async function observe($: Dollar, action: () => Promise<void>): Promise<void> {
-  try { await action() } catch {
-    try { $.ui.log('spider-progress: observation failed', { to: 'debug' }) } catch { /* Reporting cannot change the observed result. */ }
+  try { await action() } catch (error) {
+    debug($, 'spider-progress: observation failed', error)
   }
 }
 
@@ -166,10 +177,11 @@ export const register: Register = (on, options) => {
       } satisfies SchemaFor<McpToolInputs['mcp__spider-progress__step']>,
     })
     await $.command.register({ name: PANE, description: 'Toggle the spider agents pane (open or close it)', argumentHint: '[open|close]' })
+    // Each step on its own, so an unreadable language or state never leaves the session without its clock.
+    await observe($, () => readLanguage($, held))
+    if (held.invalid.length) debug($, `spider-progress: invalid options fall back to defaults: ${held.invalid.join(', ')}`)
+    await observe($, () => reset($, held))
     await observe($, async () => {
-      await readLanguage($, held)
-      if (held.invalid.length) $.ui.log(`spider-progress: invalid options fall back to defaults: ${held.invalid.join(', ')}`, { to: 'debug' })
-      await reset($, held)
       ensureTicker($, held)
       const time = await $.clock.now()
       await update($, nowAtom, () => time)
@@ -202,7 +214,8 @@ export const register: Register = (on, options) => {
       })
       if (isNew && held.config.autoOpen === 'team') await observe($, async () => { await openPane($, held, false) })
       return { result: text }
-    } catch {
+    } catch (error) {
+      debug($, 'spider-progress: progress failed', error)
       return { result: 'error: the run could not be updated; go on with the work' }
     }
   })
@@ -217,7 +230,8 @@ export const register: Register = (on, options) => {
         return reported.list
       })
       return { result: text }
-    } catch {
+    } catch (error) {
+      debug($, 'spider-progress: step failed', error)
       return { result: 'error: the step could not be recorded; go on with the work' }
     }
   })
@@ -226,11 +240,14 @@ export const register: Register = (on, options) => {
   // names a task starts that task. A resume keeps its prompt (the host ignores a rewrite) and runs its agent again.
   // autoOpen any opens the pane when an agent starts with none running, so a pane closed mid-work stays closed.
   on('agent.spawn', async ($, e, next) => {
+    // The agent starts when its spawn is asked, not when the host answers; a clock failure is the observation's to log.
+    const asked = $.clock.now()
+    asked.catch(() => undefined)
     const result = await next(e.resume ? e : { ...e, prompt: briefed(e.prompt, e.subagentType) })
     if (result.deny || result.agentId === undefined) return result
     const agentId = result.agentId
     void observe($, async () => {
-      const now = await $.clock.now()
+      const now = await asked
       let idle = false
       await update($, agentsAtom, list => {
         idle = !list.some(agent => agent.status === 'running')
@@ -239,11 +256,15 @@ export const register: Register = (on, options) => {
       const taskId = taskIdOf(e.prompt)
       if (taskId) await update($, runAtom, run => (run && !isOver(run) ? bindWorker(run, taskId, agentId) : run))
       const early = held.early.get(agentId)
-      if (early) { held.early.delete(agentId); await endAgent($, agentId, early) }
+      // An ending heard before this start belongs to an earlier turn of the agent.
+      if (early) { held.early.delete(agentId); if (early.now >= now) await endAgent($, agentId, early) }
       if (held.config.autoOpen === 'any' && idle) await openPane($, held, false)
     })
     return result
-  }).catch((_$, e, next) => next(e))
+  }).catch(($, e, next) => {
+    debug($, `spider-progress: spawn hook failed: ${next.error.message ?? next.error.kind}`)
+    return next(e)
+  })
 
   on('turn.step', async function* ($, e, next) {
     const answer = yield* next(e)
@@ -254,7 +275,7 @@ export const register: Register = (on, options) => {
         await update($, agentsAtom, list => agentStepped(list, agentId, { model: e.model, ...(typeof e.effort === 'string' ? { effort: e.effort } : {}), usage: answer.usage }, now))
         return
       }
-      const model = typeof answer.usage?.model === 'string' ? answer.usage.model : e.model
+      const model = answeredModel(answer.usage, e.model)
       await update($, mainAtom, main => mainUsed(main, model, answer.usage))
     })
     return answer
@@ -266,8 +287,9 @@ export const register: Register = (on, options) => {
       if (e.agentId === undefined) return readWindow($)
       const agentId = e.agentId
       const ending: Ending = { reason: e.reason, now: await $.clock.now(), usage: (e as { usage?: unknown }).usage }
-      if ((await read($, agentsAtom)).some(agent => agent.agentId === agentId)) return endAgent($, agentId, ending)
-      // The spawn is recorded after the host answers it, so a quick failure can end the agent first.
+      if ((await read($, agentsAtom)).some(agent => agent.agentId === agentId && agent.status === 'running')) return endAgent($, agentId, ending)
+      // The spawn is recorded after the host answers it, so a quick failure can end the agent first, and a resumed agent
+      // can end while its row still reads as ended: the spawn's observation applies the ending once the row runs.
       held.early.set(agentId, ending)
       for (const id of held.early.keys()) if (held.early.size > EARLY_MAX) held.early.delete(id)
     })
@@ -307,21 +329,27 @@ export const register: Register = (on, options) => {
         </Box>
       </Box>
       return <Box flexDirection="column">{drawn}{below}</Box>
-    } catch {
-      $.ui.log('spider-progress: band render failed', { to: 'debug' })
+    } catch (error) {
+      debug($, 'spider-progress: band render failed', error)
       return below
     }
   })
 
+  // A failure draws one dim line instead of failing the pane.
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const [run, agents, main, panel, now] = await Promise.all([read($, runAtom), read($, agentsAtom), read($, mainAtom), read($, panelAtom), read($, nowAtom)])
-    const { Box, Text, Button } = $.ui.resolve(e)
-    const s = t(held.lang)
-    const lines = paneLines({ run, agents, main, config: held.config, compact: panel.compact, columns: Math.max(20, e.props.bodyColumns), lang: held.lang, now: now || (await $.clock.now()), frame: Math.floor(now / 1000) })
-    const flip = () => void observe($, async () => { await update($, panelAtom, current => ({ ...current, compact: !current.compact })) })
-    return <Box flexDirection="column">
-      <Button key="spider-compact" plain hotkey="c" label={panel.compact ? s.pane.expanded : s.pane.compact} onPress={flip} />
-      {lines.map((line, i) => <Text key={`line-${i}`} wrap="truncate-end">{line.length ? line.map((piece, j) => <Text key={`p-${i}-${j}`} {...PAINT[piece.style]}>{piece.text}</Text>) : ' '}</Text>)}
-    </Box>
+    try {
+      const [run, agents, main, panel, now] = await Promise.all([read($, runAtom), read($, agentsAtom), read($, mainAtom), read($, panelAtom), read($, nowAtom)])
+      const { Box, Text, Button } = $.ui.resolve(e)
+      const s = t(held.lang)
+      const lines = paneLines({ run, agents, main, config: held.config, compact: panel.compact, columns: Math.max(PANE_MIN_COLUMNS, e.props.bodyColumns), lang: held.lang, now: now || (await $.clock.now()), frame: Math.floor(now / 1000) })
+      const flip = () => void observe($, async () => { await update($, panelAtom, current => ({ ...current, compact: !current.compact })) })
+      return <Box flexDirection="column">
+        <Button key="spider-compact" plain hotkey="c" label={panel.compact ? s.pane.expanded : s.pane.compact} onPress={flip} />
+        {lines.map((line, i) => <Text key={`line-${i}`} wrap="truncate-end">{line.length ? line.map((piece, j) => <Text key={`p-${i}-${j}`} {...PAINT[piece.style]}>{piece.text}</Text>) : ' '}</Text>)}
+      </Box>
+    } catch (error) {
+      debug($, 'spider-progress: pane render failed', error)
+      return { type: 'Text', props: { dimColor: true }, children: [t(held.lang).na] } satisfies RenderElement
+    }
   })
 }

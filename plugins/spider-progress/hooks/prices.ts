@@ -1,11 +1,9 @@
 // List prices in USD per million tokens, for an estimate only: the host reports token counts, never money.
-// Source: the Claude API reference's model table (cached 2026-10-06) for input, output and the cache reads it lists
+// Source: the Claude API reference's model table (cached 2026-10-06; prices as of that date) for input, output and the cache reads it lists
 // (Fable 5.1, Opus 5.5, Sonnet 5.5); other cache rates use its stated multipliers, reads at 0.1x and 5-minute writes at
 // 1.25x input. The host does not say which cache lifetime a request wrote, so writes are priced at the 5-minute rate and
 // the estimate is a lower bound. Haiku 5.5 has a second rate card for a prompt (input plus cache) above 100K tokens. An
 // unlisted model has no price.
-
-export const PRICES_AS_OF = '2026-10-06'
 
 export type Price = { input: number; output: number; cacheRead: number; cacheWrite: number }
 type Row = { match: RegExp; long?: Price } & Price

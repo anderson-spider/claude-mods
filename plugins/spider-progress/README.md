@@ -17,7 +17,7 @@ Options (`/plugin` → spider-progress, or `pluginConfigs` in settings): `langua
 
 ## What it shows and what it does not
 
-Everything comes from the session: the host's per-request token counts, the model and effort each request reported, how each agent's turn ended, and what spider-team and its workers report through the two tools. A figure the host never reported reads `N/A`.
+Everything comes from the session: the host's per-request token counts, the model and effort each request reported, how each agent's turn ended, and what spider-team and its workers report through this plugin's `progress` and `step` tools. A figure the host never reported reads `N/A`.
 
 - **Cost** is an estimate from token counts and a dated list-price table (`hooks/prices.ts`), with cache writes at the 5-minute rate: a lower bound, never a bill. A model the table does not list has no cost.
 - **Context** is a percent only for the main session, whose window the host reports; a subagent shows its context in tokens.

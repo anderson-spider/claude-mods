@@ -136,6 +136,28 @@ test('tasks a cancelled run leaves open stay in the count, unlike tasks a replan
   expect(progressOf(run)).toEqual({ accepted: 1, total: 3, percent: 33 })
 })
 
+test('a task Main cancelled before the run was cancelled stays out of the total', () => {
+  const asked = set(start(), 'T1', 'cancelled').run!
+  const run = applyProgress(asked, { cancelled: true }, ctx()).run!
+  expect(run.tasks.map(t => [t.id, t.state, t.cancelledWithRun])).toEqual([['T1', 'cancelled', undefined], ['T2', 'cancelled', true], ['T3', 'cancelled', true]])
+  expect(progressOf(run)).toEqual({ accepted: 0, total: 2, percent: 0 })
+})
+
+test('new tasks from one replan do not share their errors or agentIds', () => {
+  const [a, b] = start().tasks
+  expect(a!.errors).not.toBe(b!.errors)
+  expect(a!.agentIds).not.toBe(b!.agentIds)
+  let run = bindWorker(start(), 'T1', 'agent-1')
+  run = workerEnded(run, 'T1', 'agent-1', false, 'timed out')
+  expect(run.tasks[0]).toMatchObject({ errors: ['timed out'], agentIds: ['agent-1'] })
+  expect(run.tasks.slice(1).map(t => [t.errors, t.agentIds])).toEqual([[[], []], [[], []]])
+})
+
+test('a worker error is cut to the text limit', () => {
+  const run = workerEnded(bindWorker(start(), 'T1', 'agent-1'), 'T1', 'agent-1', false, 'e'.repeat(5_000))
+  expect(run.tasks[0]!.errors[0]!.length).toBe(LIMITS.text)
+})
+
 test('junk input is bounded, unknown deps dropped and a cycle refused', () => {
   const many = Array.from({ length: 500 }, (_, i) => ({ id: `T${i + 1}`, title: 'x'.repeat(400), owner: 'main', after: ['T999', 7] }))
   const run = applyProgress(null, { title: 'y'.repeat(400), tasks: many }, ctx()).run!
@@ -167,7 +189,7 @@ test('a worker that the task does not list moves nothing', () => {
 
 test('a refusal names a long task id cut short', () => {
   const { text } = set(start(), `T${'x'.repeat(5_000)}`, 'running')
-  expect(text.length).toBeLessThanOrEqual(40)
+  expect(text.length).toBeLessThanOrEqual('refused: no task '.length + LIMITS.id)
   expect(text).toContain('…')
 })
 

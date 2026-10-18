@@ -4,6 +4,8 @@
 export type Style = 'plain' | 'title' | 'dim' | 'accent' | 'ok' | 'warn' | 'error' | 'bar' | 'barEmpty'
 export type Piece = { text: string; style: Style }
 
+const LIT_RUN = 4 // cells lit in the moving stretch of an indeterminate bar
+
 export const SPINNER = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'] as const
 
 export const p = (text: string, style: Style = 'plain'): Piece => ({ text, style })
@@ -47,7 +49,7 @@ export function modelName(model: string | undefined): string | undefined {
 export function bar(percent: number | undefined, width: number, frame: number): Piece[] {
   if (width <= 0) return []
   if (percent === undefined) {
-    const run = Math.min(4, width)
+    const run = Math.min(LIT_RUN, width)
     const at = frame % width
     const lit = Array.from({ length: width }, (_, i) => (i - at + width) % width < run)
     return lit.map(on => p(on ? '━' : '░', on ? 'bar' : 'barEmpty')).reduce<Piece[]>((acc, piece) => {

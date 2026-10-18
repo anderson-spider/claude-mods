@@ -3,7 +3,7 @@
 import type { SpiderOwner, SpiderPhase, SpiderRun, SpiderTask, SpiderTaskState } from '../types'
 import { cut } from './text'
 
-export const LIMITS = { title: 120, tasks: 100, after: 20, text: 500 } as const
+export const LIMITS = { title: 120, tasks: 100, after: 20, text: 500, id: 20 } as const
 /** The first try plus two returns from review; then Main escalates or fails the task. */
 export const MAX_ATTEMPTS = 3
 const MAX_ERRORS = 5
@@ -89,7 +89,8 @@ function cycleOf(tasks: Planned[]): string[] | undefined {
   return undefined
 }
 
-const FRESH = { state: 'pending' as const, attempts: 1, errors: [], agentIds: [] }
+/** A new task's progress; a call builds its own arrays, so no two tasks share them. */
+const fresh = () => ({ state: 'pending' as const, attempts: 1, errors: [] as string[], agentIds: [] as string[] })
 
 /**
  * A replan: kept ids keep their progress and take the new plan, new and re-added cancelled ids start pending, dropped
@@ -97,10 +98,11 @@ const FRESH = { state: 'pending' as const, attempts: 1, errors: [], agentIds: []
  */
 function replanned(run: SpiderRun, planned: Planned[]): SpiderTask[] {
   const old = new Map(run.tasks.map(t => [t.id, t]))
-  const kept = planned.map(p => {
+  const kept = planned.map((p): SpiderTask => {
     const was = old.get(p.id)
-    const { criteria: _gone, ...base }: Partial<SpiderTask> = was && was.state !== 'cancelled' ? was : FRESH
-    return { ...base, ...p, id: p.id } as SpiderTask
+    if (!was || was.state === 'cancelled') return { ...fresh(), ...p }
+    const { criteria: _gone, ...carried } = was
+    return { ...carried, ...p }
   })
   const dropped = run.tasks.filter(t => !planned.some(p => p.id === t.id)).map(t => (t.state === 'cancelled' ? t : { ...t, state: 'cancelled' as const }))
   return [...kept, ...dropped].slice(0, LIMITS.tasks)
@@ -112,7 +114,7 @@ function moved(run: SpiderRun, raw: unknown): SpiderRun {
   if (state === 'blocked') refuse('blocked is derived, not set')
   if (!STATES.includes(state as SpiderTaskState)) refuse(`state must be one of ${STATES.join(', ')}`)
   const at = run.tasks.findIndex(t => t.id === raw.id)
-  if (at < 0) refuse(`no task ${cut(String(raw.id), 20)}`)
+  if (at < 0) refuse(`no task ${cut(String(raw.id), LIMITS.id)}`)
   const task = run.tasks[at]!
   const to = state as SpiderTaskState
   const evidence = text(raw.evidence, LIMITS.text)
@@ -132,7 +134,7 @@ function moved(run: SpiderRun, raw: unknown): SpiderRun {
   return { ...run, tasks: run.tasks.map((t, i) => (i === at ? next : t)) }
 }
 
-const withError = (task: SpiderTask, error: string): SpiderTask => ({ ...task, errors: [...task.errors, error.slice(0, LIMITS.text)].slice(-MAX_ERRORS) })
+const withError = (task: SpiderTask, error: string): SpiderTask => ({ ...task, errors: [...task.errors, error].slice(-MAX_ERRORS) })
 
 function closed(run: SpiderRun, phase: SpiderPhase, now: number): SpiderRun {
   const tasks = phase === 'cancelled' ? run.tasks.map(t => (TERMINAL.has(t.state) ? t : { ...t, state: 'cancelled' as const, cancelledWithRun: true as const })) : run.tasks
@@ -147,14 +149,14 @@ function closed(run: SpiderRun, phase: SpiderPhase, now: number): SpiderRun {
 export function applyProgress(run: SpiderRun | null, input: Record<string, unknown>, ctx: { now: number; newRunId: () => string }): { run: SpiderRun | null; text: string } {
   try {
     const title = text(input.title, LIMITS.title)
+    const begin = (name: string): SpiderRun => ({ runId: ctx.newRunId(), title: name, phase: 'plan', startedAt: ctx.now, tasks: [] })
     let next: SpiderRun
-    const starts = !!title && (!run || title !== run.title || (isOver(run) && input.tasks !== undefined))
-    if (!run && !title) return refuse('no run; start one with a title')
-    if (starts) next = { runId: ctx.newRunId(), title: title!, phase: 'plan', startedAt: ctx.now, tasks: [] }
-    else if (isOver(run!)) {
-      const { accepted, total } = progressOf(run!)
-      return { run, text: `ok: the run is over · ${accepted}/${total} tasks accepted · ${run!.phase}` }
-    } else next = run!
+    if (run === null) next = title ? begin(title) : refuse('no run; start one with a title')
+    else if (title && (title !== run.title || (isOver(run) && input.tasks !== undefined))) next = begin(title)
+    else if (isOver(run)) {
+      const { accepted, total } = progressOf(run)
+      return { run, text: `ok: the run is over · ${accepted}/${total} tasks accepted · ${run.phase}` }
+    } else next = run
     if (input.tasks !== undefined) {
       const tasks = replanned(next, plannedOf(input.tasks))
       if (JSON.stringify(tasks) !== JSON.stringify(next.tasks)) next = { ...next, tasks }
@@ -192,6 +194,6 @@ export function bindWorker(run: SpiderRun, taskId: string, agentId: string): Spi
 export function workerEnded(run: SpiderRun, taskId: string, agentId: string, ok: boolean, error?: string): SpiderRun {
   const task = run.tasks.find(t => t.id === taskId)
   if (!task || !task.agentIds.includes(agentId)) return run
-  const next = ok ? (task.state === 'running' ? { ...task, state: 'reviewing' as const } : task) : withError(task, error ?? 'the worker ended without an answer')
+  const next = ok ? (task.state === 'running' ? { ...task, state: 'reviewing' as const } : task) : withError(task, text(error, LIMITS.text) ?? 'the worker ended without an answer')
   return next === task ? run : { ...run, tasks: run.tasks.map(t => (t === task ? next : t)) }
 }

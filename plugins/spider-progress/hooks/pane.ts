@@ -43,9 +43,15 @@ const COLUMNS: Column[] = [
   { width: 9, key: 'steps', head: s => s.column.steps, cell: (a, _v, s) => p(a.steps ? `${a.steps.done}/${a.steps.total}${a.steps.total ? ` ${Math.round((a.steps.done / a.steps.total) * 100)}%` : ''}` : s.na) },
   { width: 7, key: 'tokens', head: s => s.column.tokens, cell: (a, _v, s) => p(a.requests ? formatTokens(tokensOf(a)) : s.na), shown: c => c.showTokens },
   { width: 8, key: 'context', head: s => s.column.context, cell: (a, _v, s) => p(contextOf(a, s.na)), shown: c => c.showContext },
-  { width: 8, key: 'cost', head: s => s.column.cost, cell: a => p(formatCost({ usage: a.usage, ...(a.costUsd !== undefined ? { costUsd: a.costUsd } : {}), costPartial: !!a.costPartial })), shown: c => c.showCost },
+  { width: 8, key: 'cost', head: s => s.column.cost, cell: (a, _v, s) => p(formatCost({ usage: a.usage, ...(a.costUsd !== undefined ? { costUsd: a.costUsd } : {}), costPartial: !!a.costPartial }, s.na)), shown: c => c.showCost },
   { width: 8, key: 'time', head: s => s.column.time, cell: (a, v) => p(formatDuration((a.endedAt ?? v.now) - a.startedAt)) },
 ]
+
+// The header bar's width range, and the label and number columns of the totals rows.
+const BAR_MIN = 10
+const BAR_MAX = 40
+const TOTALS_LABEL = 12
+const TOTALS_NUMBER = 10
 
 const COMPACT: ReadonlySet<Column['key']> = new Set(['agent', 'status', 'steps', 'time'])
 
@@ -57,7 +63,7 @@ function header(v: PaneView, s: Strings): Piece[][] {
   const tail = ` ${percent === undefined ? '' : `${percent}% · `}${accepted}/${total}`
   return [
     [p(v.run.title, 'title'), p(` · ${s.phase[v.run.phase]}`, 'dim')],
-    [...bar(percent, Math.max(10, Math.min(40, v.columns - tail.length)), v.config.animations ? v.frame : 0), p(tail, 'title')],
+    [...bar(percent, Math.max(BAR_MIN, Math.min(BAR_MAX, v.columns - tail.length)), v.config.animations ? v.frame : 0), p(tail, 'title')],
   ]
 }
 
@@ -92,9 +98,9 @@ function totals(v: PaneView, s: Strings): Piece[][] {
   if (!config.showTokens && !config.showCost && !config.showContext) return []
   const all = totalsOf(v.main, v.agents)
   const row = (label: string, total: typeof all.main, context?: string) => [
-    p(pad(label, 12), 'title'),
-    ...(config.showTokens ? [p(pad(formatTokens(tokensOf(total)), 10))] : []),
-    ...(config.showCost ? [p(pad(formatCost(total), 10))] : []),
+    p(pad(label, TOTALS_LABEL), 'title'),
+    ...(config.showTokens ? [p(pad(formatTokens(tokensOf(total)), TOTALS_NUMBER))] : []),
+    ...(config.showCost ? [p(pad(formatCost(total, s.na), TOTALS_NUMBER))] : []),
     ...(config.showContext && context ? [p(context)] : []),
   ]
   return [[p(s.pane.totals, 'dim')], row(s.pane.main, all.main, contextOf(v.main, s.na)), row(s.pane.subagents, all.agents), row(s.pane.session, all.session)]
