@@ -641,7 +641,7 @@ export const register: Register = (on, options) => {
     const c = (tone: Parameters<typeof colorOf>[0]) => colorOf(tone, config.theme)
     const table = $.ui.resolve(e)
     const { Box, Text, Button } = table
-    const paint = (segments: readonly Segment[]) => segments.map(one => <Text color={one.c} bold={one.b} dimColor={one.d} inverse={one.i}>{one.t}</Text>)
+    const paint = (segments: readonly Segment[]) => segments.map(one => <Text color={one.c} backgroundColor={one.bg} bold={one.b} dimColor={one.d}>{one.t}</Text>)
 
     const title: Segment[] = [
       { t: `${iconOf('', 'dir', true, false, config.icons)} ${base(view.root) || view.root} `, c: c('accent'), b: true },
@@ -665,7 +665,10 @@ export const register: Register = (on, options) => {
 
     const recent = activity.slice(0, RECENT).filter(one => now - one.at < 3_600_000)
     const keyRows = Math.ceil(KEYS_WIDTH / columns)
-    const height = Math.max(3, e.props.scroll.bodyRows - 2 - recent.length - (view.note ? 1 : 0) - keyRows)
+    const hasButtons = columns >= HEADER_WIDTH
+    // Rows around the tree: the buttons, the title, the search field, a blank row, the selected line, a blank row
+    // before the keys.
+    const height = Math.max(3, e.props.scroll.bodyRows - (hasButtons ? 1 : 0) - 5 - recent.length - (view.note ? 1 : 0) - keyRows)
     held.height = height
     const rows = await currentRows($, held, view)
     const cursor = cursorIndex(view, rows)
@@ -673,6 +676,11 @@ export const register: Register = (on, options) => {
     const shown = rows.slice(top, top + height)
     const states = rowStates(shown, cursor - top, activity, git, view.root, now, editing)
     const lines = shown.map((row, i) => rowSegments(row, states[i] ?? { hasMarkBelow: false, isCursor: false }, { columns, config, now }))
+    // The footer names the row the keys act on, in full where the tree cuts it.
+    const selected = rows[cursor]
+    const selectedName = !selected ? undefined
+      : selected.kind === 'more' || selected.kind === 'loading' ? selected.name.trim()
+      : relative(view.root, selected.path) || selected.name
     if (rows.length === 0) {
       const empty = view.mode === 'search' ? (view.query ? 'No match.' : 'Type to search every file.') : 'Empty folder.'
       lines.push([{ t: ` ${empty}`, c: c('dim') }])
@@ -702,10 +710,10 @@ export const register: Register = (on, options) => {
 
     return (
       <Box flexDirection="column">
-        <Box flexDirection="row" gap={1}>
-          <Box flexGrow={1}><Text wrap="truncate-end">{paint(title)}</Text></Box>
-          {columns >= HEADER_WIDTH + 12 ? (
-            <Box flexDirection="row" gap={1}>
+        {/* The buttons have the top row to themselves, right-aligned, above the folder and its branch. */}
+        {hasButtons ? (
+          <Box flexDirection="row" justifyContent="flex-end">
+            <Box key="head-buttons" flexDirection="row" flexShrink={0} gap={1}>
               {HEADER.flatMap((one, i) => [
                 ...(i > 0 ? [<Text dimColor>·</Text>] : []),
                 <Button
@@ -718,10 +726,13 @@ export const register: Register = (on, options) => {
                 />,
               ])}
             </Box>
-          ) : null}
-        </Box>
+          </Box>
+        ) : null}
+        <Text wrap="truncate-end">{paint(title)}</Text>
         {search}
         {tree}
+        <Box height={1} />
+        {selectedName ? <Text wrap="truncate-start">{paint([{ t: 'selected: ', c: c('dim') }, { t: selectedName, c: c('text') }])}</Text> : null}
         {recent.map(one => (
           <Text wrap="truncate-end">{paint([
             { t: '● ', c: c(one.kind) },
@@ -731,7 +742,7 @@ export const register: Register = (on, options) => {
           ])}</Text>
         ))}
         {view.note ? <Text wrap="truncate-end" color={c('dim')}>{view.note}</Text> : null}
-        <Box flexDirection="row" flexWrap="wrap" gap={1}>
+        <Box flexDirection="row" flexWrap="wrap" gap={1} marginTop={1}>
           {KEYS.map(one => (
             <Button key={`key-${one.hotkey}`} plain hotkey={one.hotkey} label={one.label} onPress={() => void observe($, () => press($, held, one.hotkey === 's' ? '/' : one.hotkey, e.surface))} />
           ))}
