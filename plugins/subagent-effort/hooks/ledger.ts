@@ -54,8 +54,8 @@ export function decisionLine({ ts, toolUseId, agentType, briefChars, source, rec
   }
 }
 
-/** What an outcome line needs from its decision. */
-export type Context = { toolUseId: string | undefined; agentType: string; effort: Effort | null }
+/** What an outcome line needs from its decision; `background` and `model` are what the call asked for (null: no model named). */
+export type Context = { toolUseId: string | undefined; agentType: string; effort: Effort | null; background: boolean; model: string | null }
 
 function outcome(ctx: Context, ts: string, mode: OutcomeLine['mode'], fields: { resolvedModel: unknown; status: Status; durationMs: unknown; usage: unknown }): OutcomeLine {
   return {
@@ -76,12 +76,12 @@ const PERMISSION_DENIED = 'Permission for this action was denied'
 export function afterAgentCall(ctx: Context, result: unknown, ts: string): OutcomeLine | { launched: string } | null {
   if (!record(result) || typeof result.deny === 'string') return null
   if (result.isError === true && typeof result.text === 'string' && result.text.startsWith(PERMISSION_DENIED)) return null
-  if (result.isError === true) return outcome(ctx, ts, 'foreground', { resolvedModel: null, status: 'error', durationMs: null, usage: null })
+  if (result.isError === true) return outcome(ctx, ts, ctx.background ? 'background' : 'foreground', { resolvedModel: ctx.model, status: 'error', durationMs: null, usage: null })
   const r = result.result
   if (!record(r)) return null
   if (r.status === 'async_launched') return typeof r.agentId === 'string' && r.agentId ? { launched: r.agentId } : null
   if (r.status !== 'completed') return null
-  return outcome(ctx, ts, 'foreground', { resolvedModel: r.resolvedModel, status: 'completed', durationMs: r.totalDurationMs, usage: r.usage })
+  return outcome(ctx, ts, 'foreground', { resolvedModel: r.resolvedModel ?? ctx.model, status: 'completed', durationMs: r.totalDurationMs, usage: r.usage })
 }
 
 export type TurnEnd = { durationMs: number; isAborted: boolean; reason: string; usage?: { model: string } }

@@ -104,6 +104,16 @@ test('a decision line and a foreground outcome line are written, and the host re
   ])
 })
 
+test('an error of a call run in background, flagged true or "true", is written as a background outcome', async ($, on) => {
+  const h = world(on); h.env.JEV_API_KEY = 'test-key'
+  dispatched(on, { ref: 'r', text: 'the agent failed', result: 'the agent failed', isError: true }); await started($)
+  await settle($.tool.call(call({ tool_use_id: 'toolu_t', run_in_background: true }) as never))
+  await settle($.tool.call(call({ tool_use_id: 'toolu_s', run_in_background: 'true' }) as never))
+  await settle($.tool.call(call({ tool_use_id: 'toolu_f' }) as never))
+  expect(h.ledger().filter(l => l.kind === 'outcome').map(l => [l.tool_use_id, l.mode, l.status]))
+    .toEqual([['toolu_t', 'background', 'error'], ['toolu_s', 'background', 'error'], ['toolu_f', 'foreground', 'error']])
+})
+
 test('a background launch is written when its turn completes, once, and other turns write nothing', async ($, on) => {
   const h = world(on); h.env.JEV_API_KEY = 'test-key'
   const launched = { ref: 'r', text: MARKER, result: { status: 'async_launched', agentId: 'bg-1', prompt: MARKER } }

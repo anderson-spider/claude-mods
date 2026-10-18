@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 import { afterAgentCall, afterTurn, appendLine, decisionLine, familyOf, formatSummary, parseLedger, readAll, ROTATE_AT, rotatedPath, summarize, usd } from '../hooks/ledger'
 import type { FileIo, Line } from '../hooks/ledger'
 
-const ctx = { toolUseId: 'toolu_1', agentType: 'Explore', effort: 'medium' as const }
+const ctx = { toolUseId: 'toolu_1', agentType: 'Explore', effort: 'medium' as const, background: false, model: null }
 const ts = '2026-10-17T00:00:00.000Z'
 
 test('a decision line projects each field and drops anything that is not a plain word or a count', () => {
@@ -16,7 +16,12 @@ test('the Agent result becomes a foreground outcome, a background launch, or not
   const usage = { input_tokens: 1, output_tokens: 2, cache_creation_input_tokens: 3, cache_read_input_tokens: 4 }
   expect(afterAgentCall(ctx, { result: { status: 'completed', resolvedModel: 'claude-sonnet-5-5', totalDurationMs: 1500, usage } }, ts))
     .toEqual({ v: 1, kind: 'outcome', ts, tool_use_id: 'toolu_1', agentType: 'Explore', effort: 'medium', mode: 'foreground', resolvedModel: 'claude-sonnet-5-5', status: 'completed', durationMs: 1500, tokens: 10 })
-  expect(afterAgentCall(ctx, { isError: true }, ts)).toMatchObject({ status: 'error', tokens: null, durationMs: null })
+  expect(afterAgentCall(ctx, { isError: true }, ts)).toMatchObject({ status: 'error', mode: 'foreground', resolvedModel: null, tokens: null, durationMs: null })
+  // Without a resolved model the call's own model stands in; an error of a background call keeps its mode.
+  const asked = { ...ctx, background: true, model: 'sonnet' }
+  expect(afterAgentCall(asked, { isError: true }, ts)).toMatchObject({ status: 'error', mode: 'background', resolvedModel: 'sonnet' })
+  expect(afterAgentCall({ ...asked, background: false }, { result: { status: 'completed', totalDurationMs: 1, usage } }, ts)).toMatchObject({ mode: 'foreground', resolvedModel: 'sonnet' })
+  expect(afterAgentCall(asked, { result: { status: 'completed', resolvedModel: 'claude-opus-5-5', totalDurationMs: 1, usage } }, ts)).toMatchObject({ resolvedModel: 'claude-opus-5-5' })
   expect(afterAgentCall(ctx, { result: { status: 'async_launched', agentId: 'bg' } }, ts)).toEqual({ launched: 'bg' })
   // A call the permission check denied never ran, like a hook's deny.
   const denied = { isError: true, text: 'Permission for this action was denied by the Claude Code auto mode classifier. Reason: [Auto-Mode Bypass].' }
