@@ -27,6 +27,14 @@ export function spawned(list: SpiderAgent[], a: { agentId: string; type?: string
   return capped([...list, agent], limit)
 }
 
+/** A resumed agent (SendMessage, a teammate's wake) runs again under its id, with its usage and steps kept. */
+export function resumed(list: SpiderAgent[], agentId: string, now: number): SpiderAgent[] {
+  const agent = list.find(a => a.agentId === agentId && a.status !== 'running')
+  if (!agent) return list
+  const { endedAt: _ended, ...rest } = agent
+  return replace(list, agent, { ...rest, status: 'running', lastUpdate: now })
+}
+
 /** One request's usage, from a step or from the turn's end: the model that answered, its tokens and their cost. */
 function used(agent: SpiderAgent, model: string | undefined, raw: unknown, now: number): SpiderAgent {
   const u = usageOf(raw)

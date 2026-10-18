@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Hook, McpToolInputs, Register, Timer } from 'claude-code'
 import type { SpiderAgent, SpiderMain, SpiderPanel, SpiderPhase, SpiderRun } from '../types'
-import { agentEnded, agentStepped, spawned, stepReported } from './agents'
+import { agentEnded, agentStepped, resumed, spawned, stepReported } from './agents'
 import { bandLines } from './band'
 import { configOf } from './config'
 import type { SpiderConfig } from './config'
@@ -176,7 +176,7 @@ export const register: Register = (on, options) => {
   })
 
   on('tool.call', { tool: 'mcp__spider-progress__progress' }, async ($, e) => {
-    if ((e as { agentId?: string }).agentId) return { result: 'refused: only the main session reports the run' }
+    if ((e as { agentId?: string }).agentId !== undefined) return { result: 'refused: only the main session reports the run' }
     try {
       const now = await $.clock.now()
       let text = ''
@@ -210,14 +210,14 @@ export const register: Register = (on, options) => {
   })
 
   // A spider-team worker's brief gets the step request appended; every spawned agent is tracked, and one whose brief
-  // names a task starts that task.
+  // names a task starts that task. A resume keeps its prompt (the host ignores a rewrite) and runs its agent again.
   on('agent.spawn', async ($, e, next) => {
-    const result = await next({ ...e, prompt: briefed(e.prompt, e.subagentType) })
+    const result = await next(e.resume ? e : { ...e, prompt: briefed(e.prompt, e.subagentType) })
     if (result.deny || result.agentId === undefined) return result
     const agentId = result.agentId
     void observe($, async () => {
       const now = await $.clock.now()
-      await update($, agentsAtom, list => spawned(list, { agentId, type: e.subagentType, model: result.model, prompt: e.prompt, now }, held.config.historyLimit))
+      await update($, agentsAtom, list => (e.resume && list.some(agent => agent.agentId === agentId) ? resumed(list, agentId, now) : spawned(list, { agentId, type: e.subagentType, model: result.model, prompt: e.prompt, now }, held.config.historyLimit)))
       const taskId = taskIdOf(e.prompt)
       if (taskId) await update($, runAtom, run => (run && !isOver(run) ? bindWorker(run, taskId, agentId) : run))
       if (held.config.autoOpen === 'any' || (held.config.autoOpen === 'team' && tierOf(e.subagentType))) await openPane($, held, false)
@@ -256,7 +256,7 @@ export const register: Register = (on, options) => {
       const now = await $.clock.now()
       await update($, agentsAtom, list => agentEnded(list, agentId, e.reason, now, (e as { usage?: unknown }).usage))
       const taskId = (await read($, agentsAtom)).find(agent => agent.agentId === agentId)?.taskId
-      if (taskId) await update($, runAtom, run => (run && !isOver(run) ? workerEnded(run, taskId, e.reason === 'answer', `the worker ended: ${e.reason}`) : run))
+      if (taskId) await update($, runAtom, run => (run && !isOver(run) ? workerEnded(run, taskId, agentId, e.reason === 'answer', `the worker ended: ${e.reason}`) : run))
     })
     return result
   })
@@ -278,7 +278,7 @@ export const register: Register = (on, options) => {
       if (!run || panel.dismissedRunId === run.runId) return below
       const { Box, Text, Button } = $.ui.resolve(e)
       const running = agents.filter(agent => agent.status === 'running').length
-      const lines = bandLines({ run, running, columns: e.props.bodyColumns, lang: held.lang, frame: Math.floor(now / 1000), animations: held.config.animations })
+      const lines = bandLines({ run, running, agents: agents.length, columns: e.props.bodyColumns, lang: held.lang, frame: Math.floor(now / 1000), animations: held.config.animations })
       const text = (line: Piece[], key: string) => <Text key={key} wrap="truncate-end">{line.map((piece, i) => <Text key={`${key}-${i}`} {...PAINT[piece.style]}>{piece.text}</Text>)}</Text>
       const dismiss = () => void observe($, async () => { await update($, panelAtom, current => ({ ...current, dismissedRunId: run.runId })) })
       const drawn = <Box flexDirection="column" width={e.props.bodyColumns}>

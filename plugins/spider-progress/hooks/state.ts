@@ -85,16 +85,21 @@ function cycleOf(tasks: Planned[]): string[] | undefined {
   return undefined
 }
 
-/** A replan: kept ids keep their progress and take the new plan, new ids start pending, dropped open ones are cancelled. */
+const FRESH = { state: 'pending' as const, attempts: 1, errors: [], agentIds: [] }
+
+/**
+ * A replan: kept ids keep their progress and take the new plan, new and re-added cancelled ids start pending, dropped
+ * ids are cancelled. Dropped tasks are kept for the pane only while the list stays within the task limit.
+ */
 function replanned(run: SpiderRun, planned: Planned[]): SpiderTask[] {
   const old = new Map(run.tasks.map(t => [t.id, t]))
   const kept = planned.map(p => {
     const was = old.get(p.id)
-    const { criteria: _gone, ...base } = was ?? { state: 'pending' as const, attempts: 1, errors: [], agentIds: [] }
+    const { criteria: _gone, ...base }: Partial<SpiderTask> = was && was.state !== 'cancelled' ? was : FRESH
     return { ...base, ...p, id: p.id } as SpiderTask
   })
-  const dropped = run.tasks.filter(t => !planned.some(p => p.id === t.id)).map(t => (TERMINAL.has(t.state) ? t : { ...t, state: 'cancelled' as const }))
-  return [...kept, ...dropped]
+  const dropped = run.tasks.filter(t => !planned.some(p => p.id === t.id)).map(t => (t.state === 'cancelled' ? t : { ...t, state: 'cancelled' as const }))
+  return [...kept, ...dropped].slice(0, LIMITS.tasks)
 }
 
 function moved(run: SpiderRun, raw: unknown): SpiderRun {
@@ -131,31 +136,31 @@ function closed(run: SpiderRun, phase: SpiderPhase, now: number): SpiderRun {
 }
 
 /**
- * One `progress` call from Main, applied whole or not at all: a title starts a run when none is open (and renames an
- * open one), `tasks` replans, `phase` moves the run, `task` moves one task, `finished` or `cancelled` closes the run.
- * The text is the tool's result.
+ * One `progress` call from Main, applied whole or not at all: a title starts a run when none is open or when it differs
+ * from the open run's (the old run is left behind), `tasks` replans, `task` moves one task, `phase` moves the run,
+ * `finished` or `cancelled` closes it. A call for a closed run that starts none is ignored. The text is the tool's result.
  */
 export function applyProgress(run: SpiderRun | null, input: Record<string, unknown>, ctx: { now: number; newRunId: () => string }): { run: SpiderRun | null; text: string } {
   try {
     const title = text(input.title, LIMITS.title)
     let next: SpiderRun
-    if (!run || isOver(run)) {
-      if (!title) return refuse(run ? 'the run is over; start a new one with a new title' : 'no run; start one with a title')
-      next = { runId: ctx.newRunId(), title, phase: 'plan', startedAt: ctx.now, tasks: [] }
-    } else next = title && title !== run.title ? { ...run, title } : run
+    const starts = !!title && (!run || title !== run.title || (isOver(run) && input.tasks !== undefined))
+    if (!run && !title) return refuse('no run; start one with a title')
+    if (starts) next = { runId: ctx.newRunId(), title: title!, phase: 'plan', startedAt: ctx.now, tasks: [] }
+    else if (isOver(run!)) {
+      const { accepted, total } = progressOf(run!)
+      return { run, text: `ok: the run is over · ${accepted}/${total} tasks accepted · ${run!.phase}` }
+    } else next = run!
     if (input.tasks !== undefined) {
       const tasks = replanned(next, plannedOf(input.tasks))
       if (JSON.stringify(tasks) !== JSON.stringify(next.tasks)) next = { ...next, tasks }
     }
+    if (input.task !== undefined) next = moved(next, input.task)
     if (input.phase !== undefined) {
       const phase = input.phase as SpiderPhase
       if (WORKING.includes(phase)) { if (phase !== next.phase) next = { ...next, phase } }
       else if (ENDING.includes(phase)) next = closed(next, phase, ctx.now)
       else refuse(`phase must be one of ${[...WORKING, ...ENDING].join(', ')}`)
-    }
-    if (input.task !== undefined) {
-      if (isOver(next)) refuse('the run is over; start a new one with a new title')
-      next = moved(next, input.task)
     }
     if (input.cancelled === true && !isOver(next)) next = closed(next, 'cancelled', ctx.now)
     if (input.finished === true && !isOver(next)) next = closed(next, 'complete', ctx.now)
@@ -175,10 +180,13 @@ export function bindWorker(run: SpiderRun, taskId: string, agentId: string): Spi
   return { ...run, tasks: run.tasks.map(t => (t === task ? next : t)) }
 }
 
-/** A worker on `taskId` ended: an answer sends a running task to review; a failure is recorded and waits for Main. */
-export function workerEnded(run: SpiderRun, taskId: string, ok: boolean, error?: string): SpiderRun {
+/**
+ * A worker on `taskId` ended: an answer sends a running task to review; a failure is recorded and waits for Main. A
+ * task that does not list the worker, such as a later run's task with the same id, is left alone.
+ */
+export function workerEnded(run: SpiderRun, taskId: string, agentId: string, ok: boolean, error?: string): SpiderRun {
   const task = run.tasks.find(t => t.id === taskId)
-  if (!task) return run
+  if (!task || !task.agentIds.includes(agentId)) return run
   const next = ok ? (task.state === 'running' ? { ...task, state: 'reviewing' as const } : task) : withError(task, error ?? 'the worker ended without an answer')
   return next === task ? run : { ...run, tasks: run.tasks.map(t => (t === task ? next : t)) }
 }

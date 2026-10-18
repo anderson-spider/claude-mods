@@ -6,7 +6,7 @@ import type { Piece } from '../hooks/text'
 const task = (id: string, state: SpiderTask['state']): SpiderTask => ({ id, title: id, owner: 'main', after: [], state, attempts: 1, errors: [], agentIds: [] })
 const RUN: SpiderRun = { runId: 'r', title: 'Implement authentication', phase: 'review', startedAt: 0, tasks: [task('T1', 'completed'), task('T2', 'completed'), task('T3', 'running'), task('T4', 'pending')] }
 const text = (line: Piece[] | undefined) => (line ?? []).map(p => p.text).join('')
-const draw = (over: Partial<Parameters<typeof bandLines>[0]> = {}) => bandLines({ run: RUN, running: 3, columns: 60, lang: 'en', frame: 0, animations: false, ...over })
+const draw = (over: Partial<Parameters<typeof bandLines>[0]> = {}) => bandLines({ run: RUN, running: 3, agents: 3, columns: 60, lang: 'en', frame: 0, animations: false, ...over })
 
 test('the band shows title, bar with percent and phase · accepted/total · agents', () => {
   const lines = draw()
@@ -42,4 +42,13 @@ test('a running agent shows a spinner only with animations on, and a finished or
   expect(text(draw({ animations: true, running: 0 })[2]).startsWith('Review')).toBe(true)
   expect(draw({ run: { ...RUN, phase: 'complete' } })[2]![0]!.style).toBe('ok')
   expect(draw({ run: { ...RUN, phase: 'failed' } })[2]![0]!.style).toBe('error')
+})
+
+test('the status line leaves room for the buttons and cuts the phase before the counts', () => {
+  const tasks = Array.from({ length: 12 }, (_, i) => task(`T${i + 1}`, 'pending'))
+  for (const [lang, phase] of [['pt-BR', 'investigate'], ['pt-BR', 'execute'], ['en', 'investigate']] as const) {
+    const line = text(draw({ columns: 40, lang, running: 3, agents: 3, run: { ...RUN, phase, tasks } })[2])
+    expect([...line].length).toBeLessThanOrEqual(40 - [...'×3 ✕'].length)
+    expect(line).toMatch(/0\/12 (tarefas|tasks) · 3 (agentes|agents)$/)
+  }
 })

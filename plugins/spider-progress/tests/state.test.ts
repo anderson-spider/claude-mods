@@ -64,6 +64,22 @@ test("a replan keeps kept ids' state, cancels dropped ones and the percent ignor
   expect(progressOf(run)).toEqual({ accepted: 1, total: 2, percent: 50 })
 })
 
+test('a replan cancels every dropped task, restarts a re-added cancelled one and keeps at most the task limit', () => {
+  let run = set(start(), 'T2', 'failed').run!
+  run = applyProgress(run, { tasks: [{ id: 'T1', title: 'Read', owner: 'main' }, { id: 'T3', title: 'Docs', owner: 'haiku' }] }, ctx()).run!
+  expect(run.tasks.find(t => t.id === 'T2')!.state).toBe('cancelled')
+  run = set(set(run, 'T1', 'completed').run, 'T3', 'completed').run!
+  expect(progressOf(run)).toEqual({ accepted: 2, total: 2, percent: 100 })
+  run = applyProgress(run, { tasks: [{ id: 'T1', title: 'Read', owner: 'main' }, { id: 'T2', title: 'Build again', owner: 'opus' }, { id: 'T3', title: 'Docs', owner: 'haiku' }] }, ctx()).run!
+  expect(run.tasks.find(t => t.id === 'T2')).toMatchObject({ state: 'pending', attempts: 1, title: 'Build again' })
+  expect(set(run, 'T2', 'running').text).toBe('ok: 2/3 tasks accepted · plan')
+  const many = (from: number) => Array.from({ length: LIMITS.tasks }, (_, i) => ({ id: `T${from + i}`, title: 'x', owner: 'main' }))
+  let big = applyProgress(null, { title: 'Big', tasks: many(1) }, ctx()).run!
+  big = applyProgress(big, { tasks: many(101) }, ctx()).run!
+  expect(big.tasks.length).toBe(LIMITS.tasks)
+  expect(progressOf(big).total).toBe(LIMITS.tasks)
+})
+
 test('progress is undefined without tasks and counts only completed', () => {
   const empty = applyProgress(null, { title: 'Bare' }, ctx()).run!
   expect(progressOf(empty)).toEqual({ accepted: 0, total: 0 })
@@ -71,11 +87,29 @@ test('progress is undefined without tasks and counts only completed', () => {
   expect(progressOf(run)).toEqual({ accepted: 0, total: 3, percent: 0 })
 })
 
-test('finished closes the run and later calls for it are refused', () => {
+test('finished closes the run and later calls for it are ignored with ok', () => {
   const run = applyProgress(start(), { finished: true }, ctx()).run!
   expect(run.phase).toBe('complete')
   expect(run.finishedAt).toBe(1_000)
-  expect(set(run, 'T1', 'running').text).toBe('refused: the run is over; start a new one with a new title')
+  expect(set(run, 'T1', 'running')).toEqual({ run, text: 'ok: the run is over · 0/3 tasks accepted · complete' })
+  expect(applyProgress(run, { finished: true }, ctx())).toEqual({ run, text: 'ok: the run is over · 0/3 tasks accepted · complete' })
+  expect(applyProgress(run, { title: 'Auth', finished: true }, ctx()).run).toBe(run)
+})
+
+test('the complete phase then finished closes once, and a task sent with the closing phase is applied first', () => {
+  const closed = applyProgress(start(), { phase: 'complete' }, ctx()).run!
+  expect(applyProgress(closed, { finished: true }, ctx()).text).toBe('ok: the run is over · 0/3 tasks accepted · complete')
+  const run = set(start(), 'T1', 'running').run!
+  const both = applyProgress(run, { task: { id: 'T1', state: 'completed' }, phase: 'complete' }, ctx())
+  expect(both.text).toBe('ok: 1/3 tasks accepted · complete')
+})
+
+test('a different title on an open run starts a new run and leaves the old tasks behind', () => {
+  const old = set(set(start(), 'T1', 'running').run, 'T1', 'completed').run!
+  const { run, text } = applyProgress(old, { title: 'Billing', phase: 'plan', tasks: [{ id: 'T1', title: 'Read', owner: 'main' }, { id: 'T2', title: 'Pay', owner: 'opus' }] }, { now: 9_000, newRunId: () => 'run-new' })
+  expect(run).toMatchObject({ runId: 'run-new', title: 'Billing', startedAt: 9_000 })
+  expect(run!.tasks.map(t => [t.id, t.state, t.agentIds, t.evidence])).toEqual([['T1', 'pending', [], undefined], ['T2', 'pending', [], undefined]])
+  expect(text).toBe('ok: 0/2 tasks accepted · plan')
 })
 
 test('after finished a new title starts a new run', () => {
@@ -109,9 +143,15 @@ test('junk input is bounded, unknown deps dropped and a cycle refused', () => {
 test('bindWorker moves a pending task to running; workerEnded moves it to reviewing or records the error', () => {
   let run = bindWorker(start(), 'T3', 'agent-1')
   expect(run.tasks[2]).toMatchObject({ state: 'running', agentIds: ['agent-1'] })
-  run = workerEnded(run, 'T3', false, 'timed out')
+  run = workerEnded(run, 'T3', 'agent-1', false, 'timed out')
   expect(run.tasks[2]).toMatchObject({ state: 'running', errors: ['timed out'] })
-  run = workerEnded(run, 'T3', true)
+  run = workerEnded(run, 'T3', 'agent-1', true)
   expect(run.tasks[2]!.state).toBe('reviewing')
   expect(bindWorker(run, 'T9', 'agent-2')).toEqual(run)
+})
+
+test('a worker that the task does not list moves nothing', () => {
+  const run = bindWorker(start(), 'T1', 'agent-new')
+  expect(workerEnded(run, 'T1', 'agent-old', true)).toBe(run)
+  expect(workerEnded(run, 'T1', 'agent-old', false, 'crashed')).toBe(run)
 })

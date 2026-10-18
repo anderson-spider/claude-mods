@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import type { SpiderAgent } from '../types'
-import { agentEnded, agentStepped, capped, spawned, stepReported } from '../hooks/agents'
+import { agentEnded, agentStepped, capped, resumed, spawned, stepReported } from '../hooks/agents'
 import { STEP_BRIEF, TIERS, briefed, taskIdOf, tierOf } from '../hooks/tiers'
 
 const BRIEF = 'spider-task: T3\nRead the auth module.'
@@ -79,4 +79,14 @@ test('briefed appends the step brief once', () => {
   expect(briefed('do it', 'spider-team:spider-opus')).toBe(`do it${STEP_BRIEF}`)
   expect(briefed(`do it${STEP_BRIEF}`, 'spider-team:spider-opus')).toBe(`do it${STEP_BRIEF}`)
   expect(briefed('do it', 'Explore')).toBe('do it')
+})
+
+test('a resumed agent runs again with its usage kept and reports steps again', () => {
+  const ended = agentEnded(agentStepped(spawn(), 'a1', { usage: USAGE }, 10), 'a1', 'answer', 50)
+  const [again] = resumed(ended, 'a1', 70)
+  expect(again).toMatchObject({ status: 'running', lastUpdate: 70, requests: 1, usage: { input: 1_000 } })
+  expect(again!.endedAt).toBeUndefined()
+  expect(stepReported([again!], 'a1', { done: 1, total: 2 }, 80).text).toBe('ok: 1/2')
+  expect(resumed(spawn(), 'a1', 70)).toEqual(spawn())
+  expect(resumed(ended, 'zz', 70)).toBe(ended)
 })

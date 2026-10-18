@@ -13,7 +13,7 @@ export const id = (name: string) => `mcp__spider-progress__${name}`
 /** What draws beneath this plugin's band: another plugin's tree. */
 export const BENEATH: RenderElement = { type: 'Text', props: {}, children: ['beneath'] }
 
-/** A host recording tools, panes and spawned prompts; a spawn starts `agent-1`, `agent-2`... on the model it names. */
+/** A host recording tools, panes and spawned prompts; a spawn starts `agent-1`, `agent-2`... on the model it names, and a resume keeps its id. */
 export function world(on: On, opts: { language?: string; env?: Record<string, string> } = {}) {
   const tools: Tool[] = []
   const opened: string[] = []
@@ -32,7 +32,7 @@ export function world(on: On, opts: { language?: string; env?: Record<string, st
   on('settings.read', () => ({ value: opts.language ? { language: opts.language } : {} }) as never)
   on('env.get', (_$, e) => ({ value: opts.env?.[e.name] }))
   on('session.usage', () => ({ value: { context: { tokens: 1, window: 500_000, percent: 0, breakdown: { rawMaxTokens: 500_000 } }, rateLimits: [] } }) as never)
-  on('agent.spawn', (_$, e) => (prompts.push(e.prompt), { model: e.model ?? 'claude-sonnet-5-5', agentId: `agent-${++spawns}` }))
+  on('agent.spawn', (_$, e) => (prompts.push(e.prompt), { model: e.model ?? 'claude-sonnet-5-5', agentId: e.resume?.agentId ?? `agent-${++spawns}` }))
   on('turn.step', async function* (_$, e) {
     const usage = { model: e.model, input_tokens: 1_000, output_tokens: 100, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
     return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage } as never
