@@ -170,6 +170,18 @@ test('an ask whose answer loses its connection ends at once as timed out, with t
   })
 })
 
+test('an ask whose connection dropped ends as timed out even when the stop button is gone and the part holds', async () => {
+  const { browser } = fakeBrowser({
+    tabs: [],
+    pages: [{ turns: turns(0) }, { turns: turns(1), stop: true, length: 3 }, { turns: turns(1), length: 3, interrupted: true }],
+    markdown: 'par',
+  })
+  const h = harness(browser)
+  const outcome = await performRequest(h.deps, { kind: 'ask', input: { prompt: 'hi' }, filePaths: [], out: '/out/partial.md' }, { pollMs: 0 })
+
+  expect(outcome).toMatchObject({ ok: false, error: 'ChatGPT lost the connection while answering; the answer may still finish at https://chatgpt.com/c/abc.', timedOut: true })
+})
+
 test('saving an answer whose connection dropped keeps waiting for it', async () => {
   const { browser } = fakeBrowser({
     tabs: ['seed'],
@@ -180,6 +192,16 @@ test('saving an answer whose connection dropped keeps waiting for it', async () 
   const outcome = await performRequest(h.deps, { kind: 'ask', input: { prompt: 'hi', chatUrl: 'https://chatgpt.com/c/abc', saveOnly: true }, filePaths: [] }, { pollMs: 0, tab: { id: 'seed' } })
 
   expect(outcome.ok).toBe(true)
+})
+
+test('saving an answer whose connection dropped keeps waiting even when the stop button is gone and the part holds', async () => {
+  const dropped = { href: 'https://chatgpt.com/c/abc', turns: turns(1), length: 3, interrupted: true }
+  const { browser } = fakeBrowser({ tabs: ['seed'], pages: [dropped, dropped], markdown: 'par' })
+  const h = harness(browser)
+  const outcome = await performRequest(h.deps, { kind: 'ask', input: { prompt: 'hi', chatUrl: 'https://chatgpt.com/c/abc', saveOnly: true }, filePaths: [] }, { pollMs: 0, timeoutMs: -1, tab: { id: 'seed' } })
+
+  // Still waiting when the time runs out: the part is never saved as the answer.
+  expect(outcome).toMatchObject({ ok: false, timedOut: true })
 })
 
 test('an ask whose prompt the page refuses answers the send text, with the page url and no file', async () => {
@@ -244,6 +266,18 @@ test('an ask with a model that is not on the menu answers the offered models and
     ok: false,
     text: 'Could not pick the model "gpt-9": no such entry. The menu offers: latest.',
     error: 'Could not pick the model "gpt-9": no such entry. The menu offers: latest.',
+  })
+})
+
+test('an ask whose model row is gone by the click closes the menu, sets no effort and sends nothing', async () => {
+  const { browser, calls } = fakeBrowser({ tabs: ['seed'], pages: [{}], markdown: '', menu: fakeMenu(['GPT-6'], 'GPT-6', { effort: 'high', gone: true }) })
+  const h = harness(browser)
+  const outcome = await performRequest(h.deps, { kind: 'ask', input: { prompt: 'hi' }, filePaths: [] }, { pollMs: 0, timeoutMs: -1, tab: { id: 'seed' } })
+
+  expect(calls).toEqual(['tabs', 'navigate seed https://chatgpt.com/', 'model rows seed', 'model click seed', 'model close seed'])
+  expect(outcome).toMatchObject({
+    ok: false,
+    error: 'Could not pick the model "GPT-6": its menu entry was gone by the click.',
   })
 })
 

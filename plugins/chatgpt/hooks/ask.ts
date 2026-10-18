@@ -22,7 +22,8 @@ export async function ask(browser: Browser, input: AskInput, options: AskOptions
     pollMs,
     timeoutMs,
     // A dropped stream ends the run at once, timed out so the chat can be saved later; saving it waits instead.
-    until: (p, settled) => (settled ? 'answer' : !input.saveOnly && p.interrupted && isNewTurn(p, known) && 'interrupted'),
+    // It wins over `settled`: a dropped stream's part can hold its length after the stop button goes.
+    until: (p, settled) => (p.interrupted && isNewTurn(p, known) ? !input.saveOnly && 'interrupted' : settled && 'answer'),
     // The new exchange shows up before its answer has text: until then the run still waits.
     onPoll: p => progress(isNewTurn(p, known) && p.length > 0 ? `receiving (${p.length} chars)` : 'waiting for the answer'),
   })
