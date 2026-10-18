@@ -18,7 +18,9 @@ test('the Agent result becomes a foreground outcome, a background launch, or not
     .toEqual({ v: 1, kind: 'outcome', ts, tool_use_id: 'toolu_1', agentType: 'Explore', effort: 'medium', mode: 'foreground', resolvedModel: 'claude-sonnet-5-5', status: 'completed', durationMs: 1500, tokens: 10 })
   expect(afterAgentCall(ctx, { isError: true }, ts)).toMatchObject({ status: 'error', tokens: null, durationMs: null })
   expect(afterAgentCall(ctx, { result: { status: 'async_launched', agentId: 'bg' } }, ts)).toEqual({ launched: 'bg' })
-  for (const result of [{ deny: 'no' }, null, 'text', { result: 'text' }, { result: { status: 'async_launched' } }, { result: { status: 'teammate_spawned' } }]) expect(afterAgentCall(ctx, result, ts)).toBeNull()
+  // A call the permission check denied never ran, like a hook's deny.
+  const denied = { isError: true, text: 'Permission for this action was denied by the Claude Code auto mode classifier. Reason: [Auto-Mode Bypass].' }
+  for (const result of [{ deny: 'no' }, denied, null, 'text', { result: 'text' }, { result: { status: 'async_launched' } }, { result: { status: 'teammate_spawned' } }]) expect(afterAgentCall(ctx, result, ts)).toBeNull()
 })
 
 test('a background turn end is an outcome with its status from the reason', () => {
