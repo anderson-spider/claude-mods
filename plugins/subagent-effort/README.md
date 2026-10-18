@@ -38,7 +38,7 @@ Each decision records the effort the call came with and the one the agent runs w
 ## Privacy
 
 - **Sent to Jev** (`api.typesafe.ai`): the task text of each routed call, after paths under your home and the repository, email addresses, the key itself and secret-looking values are masked, cut to 4000 characters. Nothing is sent for a fork, an empty task, or when the key is missing.
-- **Saved locally** in `~/.claude/subagent-effort/routes.jsonl` (one rotated generation past about 2 MB): ids, the agent type, the effort the call came with and the one applied, who decided it, Jev's confidence, latency, reported tokens and estimated cost, the brief's length in characters, and for each finished run its resolved model, status, duration and token count. Never the task, the prompt, the answer, a path or the key.
+- **Saved locally** in `~/.claude/subagent-effort/routes.jsonl` (one rotated generation past about 2 MB): ids, the agent type, the effort the call came with and the one applied, who decided it, Jev's confidence, latency, reported tokens and estimated cost, the brief's length in characters, and for each finished run its resolved model (the model the call named when the host reports none), status, duration and token count. Never the task, the prompt, the answer, a path or the key.
 
 ## Tests
 

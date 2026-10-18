@@ -93,7 +93,9 @@ export const register: Register = on => {
     // The effort shows beside the task in the transcript, with the one it replaced.
     const was = received && received !== choice.effort ? `, was ${received}` : ''
     const result = await next(choice.effort ? { ...e, description: `${call.description} (${choice.effort}${was})`, effort: choice.effort } : e)
-    await dispatched($, { toolUseId: call.tool_use_id, agentType, effort }, result, background)
+    // `run_in_background` is not in this host's Agent typing, and a call may send it as the string "true".
+    const runInBackground = (e as { run_in_background?: unknown }).run_in_background
+    await dispatched($, { toolUseId: call.tool_use_id, agentType, effort, background: runInBackground === true || runInBackground === 'true', model: call.model ?? null }, result, background)
     return result
   }).catch(async ($, e, next) => {
     // Routing is advisory: a failure before dispatch runs the call as it came.
