@@ -3,7 +3,7 @@ import type { Browser, Outcome, Request, RequestDeps } from '../hooks/model'
 import { createJobs, performRequest, runNow, taskQueue } from '../hooks/runner'
 import { askCommandAnswer, imageCommandAnswer, NOTICE } from '../hooks/presentation'
 import { inputFor, sendScript, stateScript } from '../hooks/scripts'
-import { fakeBrowser, fakeImageBrowser, printed } from './fake-page'
+import { fakeBrowser, fakeImageBrowser, fakeMenu, scriptKind, turns } from './fake-page'
 
 // Characterization of the ask and image flows end to end, through the runner: run start, submit, waiting,
 // saved files, errors, job records and every text the user or the model reads. The expectations are what the
@@ -36,17 +36,17 @@ function harness(browser: Browser, options: { previews?: boolean } = {}) {
   return { deps, writes, runs }
 }
 
-const ASK_SETTLED = [{ count: 0 }, { count: 1, length: 5 }, { count: 1, length: 5 }]
+const ASK_SETTLED = [{ turns: turns(0) }, { turns: turns(1), length: 5 }, { turns: turns(1), length: 5 }]
 
 test('an ask run starts in the plugin tab, sends, waits for the settled answer and saves it at out', async () => {
   const { browser, calls } = fakeBrowser({
     tabs: ['seed'],
     pages: [
-      { count: 2 },
-      { count: 2, stop: true },
-      { count: 3, stop: true, length: 10 },
-      { count: 3, stop: false, length: 40 },
-      { count: 3, stop: false, length: 40 },
+      { turns: turns(2) },
+      { turns: turns(2), stop: true },
+      { turns: turns(3), stop: true, length: 10 },
+      { turns: turns(3), stop: false, length: 40 },
+      { turns: turns(3), stop: false, length: 40 },
     ],
     markdown: '## Answer',
   })
@@ -59,8 +59,8 @@ test('an ask run starts in the plugin tab, sends, waits for the settled answer a
     progress: text => progress.push(text),
   })
 
-  expect(calls).toEqual(['tabs', 'navigate seed https://chatgpt.com/', 'send seed', 'read seed'])
-  expect(progress).toEqual(['opening chatgpt.com', 'waiting for the answer', 'waiting for the answer', 'receiving (10 chars)', 'receiving (40 chars)'])
+  expect(calls).toEqual(['tabs', 'navigate seed https://chatgpt.com/', 'model rows seed', 'model click seed', 'model rows seed', 'model close seed', 'send seed', 'read seed'])
+  expect(progress).toEqual(['opening chatgpt.com', 'picking GPT-6', 'waiting for the answer', 'waiting for the answer', 'receiving (10 chars)', 'receiving (40 chars)'])
   expect(h.writes).toEqual([{ path: '/out/answer.md', text: '<!-- https://chatgpt.com/c/abc -->\n\n## Answer\n' }])
   expect(h.runs).toEqual([])
   expect(outcome).toEqual({
@@ -85,7 +85,7 @@ test('an ask without out saves under TMPDIR/chatgpt with a timestamp and a slug 
 test('an ask with saveOnly saves the chat\'s last answer, sends nothing and says the chat it came from', async () => {
   const { browser, calls } = fakeBrowser({
     tabs: [],
-    pages: [{ count: 4, stop: true, length: 10 }, { count: 4, stop: true, length: 30 }, { count: 4, length: 50 }, { count: 4, length: 50 }],
+    pages: [{ turns: turns(4), stop: true, length: 10 }, { turns: turns(4), stop: true, length: 30 }, { turns: turns(4), length: 50 }, { turns: turns(4), length: 50 }],
     markdown: 'the long answer',
   })
   const h = harness(browser)
@@ -120,7 +120,7 @@ test('an ask whose answer is empty says the page layout changed and saves nothin
 test('an ask refused by a limit answers the stop text with its url and saves nothing', async () => {
   const { browser } = fakeBrowser({
     tabs: [],
-    pages: [{ count: 0 }, { count: 0, blocker: "You've reached your message limit" }],
+    pages: [{ turns: turns(0) }, { turns: turns(0), blocker: "You've reached your message limit" }],
     markdown: '',
   })
   const h = harness(browser)
@@ -136,7 +136,7 @@ test('an ask refused by a limit answers the stop text with its url and saves not
 })
 
 test('an ask that times out keeps the streamed part in a file and says the chat may still finish', async () => {
-  const { browser } = fakeBrowser({ tabs: [], pages: [{ count: 0 }, { count: 1, stop: true, length: 3 }], markdown: 'par' })
+  const { browser } = fakeBrowser({ tabs: [], pages: [{ turns: turns(0) }, { turns: turns(1), stop: true, length: 3 }], markdown: 'par' })
   const h = harness(browser)
   const outcome = await performRequest(h.deps, { kind: 'ask', input: { prompt: 'hi' }, filePaths: [], out: '/out/partial.md' }, { pollMs: 0, timeoutMs: -1 })
 
@@ -204,10 +204,7 @@ test('an ask with an invalid chatUrl, or saveOnly without one, answers its error
 })
 
 test('an ask with a model that is not on the menu answers the offered models and sends nothing', async () => {
-  const { browser, calls } = fakeBrowser({ tabs: ['seed'], pages: [{}], markdown: '' })
-  const js = browser.js
-  browser.js = async (tabId, code) =>
-    code.includes('Selecionar modelo') ? printed({ picked: false, reason: 'no such entry', offered: ['latest'] }) : js(tabId, code)
+  const { browser, calls } = fakeBrowser({ tabs: ['seed'], pages: [{}], markdown: '', menu: fakeMenu(['Latest'], 'Latest') })
   const h = harness(browser)
   const outcome = await performRequest(h.deps, { kind: 'ask', input: { prompt: 'hi', model: 'gpt-9' }, filePaths: [] }, { pollMs: 0, tab: { id: 'seed' } })
 
@@ -217,6 +214,169 @@ test('an ask with a model that is not on the menu answers the offered models and
     text: 'Could not pick the model "gpt-9": no such entry. The menu offers: latest.',
     error: 'Could not pick the model "gpt-9": no such entry. The menu offers: latest.',
   })
+})
+
+test('an ask with a model reads the menu again after the attachments and sends only while that model is checked', async () => {
+  const { browser, calls } = fakeBrowser({ tabs: ['seed'], pages: ASK_SETTLED, markdown: 'ok' })
+  const h = harness(browser)
+  const outcome = await performRequest(
+    h.deps,
+    { kind: 'ask', input: { prompt: 'hi', model: 'GPT-5.6 Sol' }, filePaths: ['/x/notes.md'], out: '/out/a.md' },
+    { pollMs: 0, tab: { id: 'seed' } },
+  )
+
+  expect(calls).toEqual([
+    'tabs',
+    'navigate seed https://chatgpt.com/',
+    'model rows seed',
+    'model click seed',
+    `upload seed ${inputFor('text/markdown')} /x/notes.md`,
+    'model rows seed',
+    'model close seed',
+    'send seed',
+    'read seed',
+  ])
+  expect(outcome).toMatchObject({ ok: true, paths: ['/out/a.md'] })
+})
+
+test('an ask whose model menu shows another model checked before the send sends nothing and says which', async () => {
+  // The click does not take: the page keeps GPT-6 checked.
+  const { browser, calls } = fakeBrowser({ tabs: ['seed'], pages: [{}], markdown: '', menu: fakeMenu(['GPT-6', 'GPT-5.6 Sol'], 'GPT-6', { stuck: true }) })
+  const h = harness(browser)
+  const outcome = await performRequest(h.deps, { kind: 'ask', input: { prompt: 'hi', model: 'GPT-5.6 Sol' }, filePaths: [] }, { pollMs: 0, tab: { id: 'seed' } })
+
+  expect(calls).toEqual(['tabs', 'navigate seed https://chatgpt.com/', 'model rows seed', 'model click seed', 'model rows seed', 'model close seed'])
+  expect(h.writes).toEqual([])
+  expect(outcome).toEqual({
+    ok: false,
+    text: 'The model menu shows "gpt-6" checked instead of "GPT-5.6 Sol"; the prompt was not sent.',
+    error: 'The model menu shows "gpt-6" checked instead of "GPT-5.6 Sol"; the prompt was not sent.',
+    chatUrl: 'https://chatgpt.com/',
+  })
+})
+
+test('an ask picks and checks a GPT model by its version whether the menu names the row "GPT-6" or only "6"', async () => {
+  // Each menu as one rollout of chatgpt.com names its rows, the label asked for, and the row that ends up checked.
+  const cases = [
+    { rows: ['6', 'GPT-5.6 Sol'], model: 'GPT-6', checked: '6' },
+    { rows: ['6', 'GPT-5.6 Sol'], model: 'gpt 6', checked: '6' },
+    { rows: ['GPT-6', 'GPT-5.6 Sol'], model: '6', checked: 'GPT-6' },
+    { rows: ['6', 'GPT-5.6 Sol'], model: 'GPT-5.6 Sol', checked: 'GPT-5.6 Sol' },
+    { rows: ['6', 'GPT-5.6 Sol'], model: '5.6', checked: 'GPT-5.6 Sol' },
+  ]
+  for (const { rows, model, checked } of cases) {
+    const menu = fakeMenu(rows, rows.find(row => row !== checked)!)
+    const { browser, calls } = fakeBrowser({ tabs: ['seed'], pages: ASK_SETTLED, markdown: 'ok', menu })
+    const h = harness(browser)
+    const outcome = await performRequest(h.deps, { kind: 'ask', input: { prompt: 'hi', model }, filePaths: [] }, { pollMs: 0, tab: { id: 'seed' } })
+
+    expect({ model, outcome: outcome.ok, checked: menu.checked() }).toEqual({ model, outcome: true, checked })
+    expect(calls).toEqual(['tabs', 'navigate seed https://chatgpt.com/', 'model rows seed', 'model click seed', 'model rows seed', 'model close seed', 'send seed', 'read seed'])
+  }
+})
+
+test('an ask with a GPT version the menu does not have offers the rows as the menu names them and sends nothing', async () => {
+  const menu = fakeMenu(['6', 'GPT-5.6 Sol'], '6')
+  const { browser, calls } = fakeBrowser({ tabs: ['seed'], pages: [{}], markdown: '', menu })
+  const h = harness(browser)
+  const outcome = await performRequest(h.deps, { kind: 'ask', input: { prompt: 'hi', model: 'GPT-7' }, filePaths: [] }, { pollMs: 0, tab: { id: 'seed' } })
+
+  expect(calls).toEqual(['tabs', 'navigate seed https://chatgpt.com/', 'model rows seed', 'model close seed'])
+  expect(menu.checked()).toBe('6')
+  expect(outcome).toMatchObject({ ok: false, error: 'Could not pick the model "GPT-7": no such entry. The menu offers: 6, gpt-5.6 sol.' })
+})
+
+test('an ask that names no model picks GPT-6 at medium effort on a new chat, walking the slider from where it stands', async () => {
+  // Each start: the checked row and effort, and the slider steps it takes to reach medium.
+  const cases = [
+    { checked: 'GPT-5.6 Sol', effort: 'high', steps: ['model effort seed'] },
+    { checked: '6', effort: 'none', steps: ['model effort seed'] },
+    { checked: '6', effort: 'medium', steps: [] },
+  ]
+  for (const { checked, effort, steps } of cases) {
+    const menu = fakeMenu(['6', 'GPT-5.6 Sol'], checked, { effort })
+    const { browser, calls } = fakeBrowser({ tabs: ['seed'], pages: ASK_SETTLED, markdown: 'ok', menu })
+    const h = harness(browser)
+    const progress: string[] = []
+    const outcome = await performRequest(h.deps, { kind: 'ask', input: { prompt: 'hi' }, filePaths: [] }, { pollMs: 0, tab: { id: 'seed' }, progress: text => progress.push(text) })
+
+    expect({ start: [checked, effort], ok: outcome.ok, model: menu.checked(), effort: menu.effort() }).toEqual({ start: [checked, effort], ok: true, model: '6', effort: 'medium' })
+    expect(calls).toEqual(['tabs', 'navigate seed https://chatgpt.com/', 'model rows seed', 'model click seed', ...steps, 'model rows seed', 'model close seed', 'send seed', 'read seed'])
+    expect(progress.slice(0, 3)).toEqual(['opening chatgpt.com', 'picking GPT-6', steps.length ? 'setting the effort to medium' : 'waiting for the answer'])
+  }
+})
+
+test('an ask whose effort slider cannot reach medium says what it offers, closes the menu and sends nothing', async () => {
+  const cases = [
+    { menu: fakeMenu(['6'], '6', { effort: 'high', stuckEffort: true }), error: 'Could not set the effort "medium": the slider offers high.' },
+    { menu: fakeMenu(['6'], '6', { efforts: ['low', 'high'], effort: 'high' }), error: 'Could not set the effort "medium": the slider offers high, low.' },
+  ]
+  for (const { menu, error } of cases) {
+    const { browser, calls } = fakeBrowser({ tabs: ['seed'], pages: [{}], markdown: '', menu })
+    const h = harness(browser)
+    const outcome = await performRequest(h.deps, { kind: 'ask', input: { prompt: 'hi' }, filePaths: [] }, { pollMs: 0, tab: { id: 'seed' } })
+
+    expect(outcome).toMatchObject({ ok: false, error })
+    expect(calls.at(-1)).toBe('model close seed')
+    expect(calls.some(call => call.startsWith('send'))).toBe(false)
+  }
+})
+
+test('an ask that names a model leaves its effort as it is, and a follow-up in a chat picks nothing', async () => {
+  const menu = fakeMenu(['6', 'GPT-5.6 Sol'], '6', { effort: 'high' })
+  const named = fakeBrowser({ tabs: ['seed'], pages: ASK_SETTLED, markdown: 'ok', menu })
+  const outcome = await performRequest(harness(named.browser).deps, { kind: 'ask', input: { prompt: 'hi', model: 'GPT-5.6 Sol' }, filePaths: [] }, { pollMs: 0, tab: { id: 'seed' } })
+  expect(outcome.ok).toBe(true)
+  expect(named.calls.some(call => call === 'model effort seed')).toBe(false)
+  expect([menu.checked(), menu.effort()]).toEqual(['GPT-5.6 Sol', 'high'])
+
+  const followUp = fakeBrowser({ tabs: ['seed'], pages: [{ turns: turns(1) }, { turns: turns(2), length: 3 }, { turns: turns(2), length: 3 }], markdown: 'ok' })
+  const next = await performRequest(harness(followUp.browser).deps, { kind: 'ask', input: { prompt: 'more', chatUrl: 'https://chatgpt.com/c/abc' }, filePaths: [] }, { pollMs: 0, tab: { id: 'seed' } })
+  expect(next.ok).toBe(true)
+  expect(followUp.calls.some(call => call.startsWith('model'))).toBe(false)
+})
+
+test('an ask whose effort moved off medium before the send sends nothing and says which effort shows', async () => {
+  const menu = fakeMenu(['6'], '6', { effort: 'high' })
+  const { browser, calls } = fakeBrowser({ tabs: ['seed'], pages: [{}], markdown: '', menu })
+  // Something moves the slider back up between the walk and the check.
+  const js = browser.js
+  let reads = 0
+  browser.js = async (tabId, code) => {
+    if (scriptKind(code) === 'model rows' && ++reads === 2) menu.step('"ArrowRight"')
+    return js(tabId, code)
+  }
+  const h = harness(browser)
+  const outcome = await performRequest(h.deps, { kind: 'ask', input: { prompt: 'hi' }, filePaths: [] }, { pollMs: 0, tab: { id: 'seed' } })
+
+  expect(calls.some(call => call.startsWith('send'))).toBe(false)
+  expect(outcome).toMatchObject({ ok: false, error: 'The model menu shows the effort "high" instead of "medium"; the prompt was not sent.' })
+})
+
+test('an ask waits for the exchange it added, not for an old one the chat remounts while it streams', async () => {
+  const { browser, calls } = fakeBrowser({
+    tabs: ['seed'],
+    pages: [
+      { turns: ['a', 'b'], length: 30 },
+      // An old exchange remounts above the others: one more on the page, its last one still known.
+      { turns: ['old', 'a', 'b'], length: 30 },
+      { turns: ['old', 'a', 'b'], length: 30 },
+      { turns: ['old', 'a', 'b', 'mine'], length: 7 },
+      { turns: ['old', 'a', 'b', 'mine'], length: 7 },
+    ],
+    markdown: 'my answer',
+  })
+  const h = harness(browser)
+  const progress: string[] = []
+  const outcome = await performRequest(h.deps, { kind: 'ask', input: { prompt: 'hi' }, filePaths: [], out: '/out/a.md' }, {
+    pollMs: 0,
+    tab: { id: 'seed' },
+    progress: text => progress.push(text),
+  })
+
+  expect(calls).toEqual(['tabs', 'navigate seed https://chatgpt.com/', 'model rows seed', 'model click seed', 'model rows seed', 'model close seed', 'send seed', 'read seed'])
+  expect(progress).toEqual(['opening chatgpt.com', 'picking GPT-6', 'waiting for the answer', 'waiting for the answer', 'waiting for the answer', 'receiving (7 chars)'])
+  expect(outcome).toMatchObject({ ok: true, markdown: 'my answer' })
 })
 
 test('an image run attaches the reference, sends, waits for the image and saves it with its preview', async () => {
@@ -229,7 +389,7 @@ test('an image run attaches the reference, sends, waits for the image and saves 
   })
 
   expect(calls).toEqual(['navigate https://chatgpt.com/', `upload ${inputFor('image/png')} /x/ref.png`, 'attach', 'send', 'image'])
-  expect(progress).toEqual(['opening chatgpt.com', `attaching ${REFERENCE.name}`, 'waiting for the image', 'generating the image', 'generating the image', 'saving the image'])
+  expect(progress).toEqual(['opening chatgpt.com', 'picking GPT-6', `attaching ${REFERENCE.name}`, 'waiting for the image', 'generating the image', 'generating the image', 'saving the image'])
   expect(h.runs).toEqual([
     ['mkdir', '-p', '/out'],
     ['openssl', 'base64', '-d', '-A', '-out', '/out/lamp.png'],
@@ -265,7 +425,7 @@ test('an image without a preview keeps the file note, and every variant is saved
 })
 
 test('an image answered with text is a refusal: the plugin error comes first, then ChatGPT\'s words', async () => {
-  const { browser, calls } = fakeImageBrowser({ shots: [{}, { count: 1, length: 20 }, { count: 1, length: 20 }], base64: '', text: 'I cannot create that image.' })
+  const { browser, calls } = fakeImageBrowser({ shots: [{}, { turns: turns(1), length: 20 }, { turns: turns(1), length: 20 }], base64: '', text: 'I cannot create that image.' })
   const h = harness(browser)
   const outcome = await performRequest(h.deps, { kind: 'image', input: { prompt: 'a logo' }, filePaths: [] }, { pollMs: 0 })
 
@@ -400,7 +560,7 @@ test('the job records: a finished ask and image each toast, send a notice withou
 })
 
 test('a foreground ask that outlives its wait continues as a saveOnly job, and the answer says so', async () => {
-  const { browser } = fakeBrowser({ tabs: [], pages: [{ count: 0 }, { count: 1, stop: true, length: 3 }], markdown: 'par' })
+  const { browser } = fakeBrowser({ tabs: [], pages: [{ turns: turns(0) }, { turns: turns(1), stop: true, length: 3 }], markdown: 'par' })
   const h = harness(browser)
   const request: Request = { kind: 'ask', input: { prompt: 'long', model: undefined }, filePaths: ['/ref.md'], out: '/out/long.md' }
   const started: Request[] = []

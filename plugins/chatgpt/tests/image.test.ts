@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import { generateImage } from '../hooks/image'
 import { CHUNK_CHARS, inputFor } from '../hooks/scripts'
-import { fakeImageBrowser } from './fake-page'
+import { fakeImageBrowser, turns } from './fake-page'
 
 test('generateImage uploads the reference by path, waits for a finished image and reads it back', async () => {
   const reference = { name: 'ref.png', type: 'image/png', path: '/x/ref.png' }
@@ -21,7 +21,7 @@ test('generateImage uploads the reference by path, waits for a finished image an
 
 test('generateImage returns the text when ChatGPT answers without an image', async () => {
   const { browser, calls } = fakeImageBrowser({
-    shots: [{}, { count: 1, length: 20 }, { count: 1, length: 20 }],
+    shots: [{}, { turns: turns(1), length: 20 }, { turns: turns(1), length: 20 }],
     base64: '',
     text: 'I cannot create that image.',
   })

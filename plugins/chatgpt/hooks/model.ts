@@ -62,7 +62,9 @@ export type PageState = {
   composer: boolean
   login: boolean
   stop: boolean
-  count: number
+  /** The key of each exchange in the chat, in page order. */
+  turns: string[]
+  /** The length of the last answer in the chat's last exchange. */
   length: number
   images: number
   blocker: string

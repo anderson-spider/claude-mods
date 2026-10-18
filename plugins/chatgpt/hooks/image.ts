@@ -15,7 +15,7 @@ export async function generateImage(browser: Browser, input: AskInput, options: 
 // Saving what the chat holds: wait while it still generates, then take the last image.
 async function saveLastImage({ browser, tabId, start, pollMs, timeoutMs, progress }: OpenRun): Promise<ImageResult> {
   const { end, page: state } = await watch(browser, tabId, start, {
-    before: start.count,
+    known: start.turns,
     pollMs,
     timeoutMs,
     until: p => !p.stop && 'finished',
@@ -35,7 +35,7 @@ async function generateNew(run: OpenRun, input: AskInput): Promise<ImageResult> 
 
   progress('waiting for the image')
   const { end, page: state } = await watch(browser, tabId, start, {
-    before: start.count,
+    known: start.turns,
     pollMs,
     timeoutMs,
     until: (p, settled) => (p.images > start.images && !p.stop ? 'image' : settled && 'text'),
