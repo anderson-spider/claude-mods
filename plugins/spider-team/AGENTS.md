@@ -3,7 +3,8 @@
 Usage: [README.md](README.md).
 
 - Skills only: no `hooks/`, no `tsconfig.json`, so `claude plugin test` and `tsc` skip it; `claude plugin validate --strict plugins/spider-team` is its check.
-- `skills/spider-team/SKILL.md`: the run Main owns (seven phases, each ending on its exit), the tier table, the brief format and the `progress` calls. User-invoked only (`disable-model-invocation: true`).
+- `skills/spider-team/SKILL.md`: the run Main owns (seven phases, each ending on its exit), the modes its first argument picks (`<task>`, `on`, `off`, `brainstorm <topic>`), session mode, the tier table, the brief format and the `progress` calls. User-invoked only (`disable-model-invocation: true`).
+- Session mode keeps one spider-progress run open across messages: appending is a replan with the whole list, and a different `title` would start a new run, so Main sends the title only at `on`.
 - `agents/spider-{fable,opus,sonnet,haiku}.md`: one body per tier, frontmatter `model` only. The default effort travels in each Agent call, so subagent-effort's Jev can replace it.
 - Contracts with spider-progress, which `plugins/spider-progress/hooks/tiers.ts` and `hooks/state.ts` read:
   - Agents are called namespaced, `spider-team:spider-<tier>`; the bare name does not resolve for a plugin agent.

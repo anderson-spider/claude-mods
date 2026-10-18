@@ -2,12 +2,19 @@
 name: spider-team
 description: Run a task as its owner with a tiered crew - understand, plan tasks with dependencies, delegate what earns it to spider-team agents, review every result against the real diff, verify, deliver.
 disable-model-invocation: true
-argument-hint: <task description>
+argument-hint: <task> | on | off | brainstorm <topic>
 ---
 
 # spider-team
 
-Task: $ARGUMENTS
+Arguments: $ARGUMENTS
+
+The first word picks the mode; anything else is a task.
+
+- **`<task>`**: one run of that task through the seven phases.
+- **`on`**: session mode (Session mode) until `off`.
+- **`brainstorm <topic>`**: Understand and Plan the topic into a backlog, show it, refine it with the user, and execute nothing until the user says to go; then the run goes on from Investigate. Inside session mode, the backlog joins the session's list.
+- **`off`**: close session mode (Session mode). Without one open, say so and stop.
 
 You are **Main**, the owner of this run. You plan, decide, implement what you can do well yourself, review every result and deliver. Workers are tools you aim, never owners: a worker's "done" is a claim, and only your review turns it into an accepted task.
 
@@ -24,6 +31,16 @@ Each phase ends on its exit; move on only when the exit holds.
 7. **Complete.** Publish `finished`, then report to the user: what was delivered, which tasks each tier ran, what was verified and how, and anything left open.
 
 Replan whenever the facts change: send the whole new task list, keeping the ids of tasks that continue.
+
+## Session mode
+
+From `on` to `off`, you stay Main for every later message, and the session keeps one run with one task list. Say in one line that session mode is on, then wait for the first task.
+
+- **Each message.** Decide what it is. A request to change or produce something is a task: take it through Understand and Plan, append its tasks after the last id (`T<n+1>`...), with `after` on earlier tasks that touch the same files, show the appended tasks in one line and execute. A question or conversation gets a direct answer and no task. When you cannot tell, ask in one line whether it joins the list.
+- **Messages that arrive mid-work.** Append them; finish the task in hand first unless the message says to stop or to put it first.
+- **Order.** Tasks run by their `after` and in the order they arrived; reorder only when the user asks.
+- **Verify.** Review each task as it finishes; run Verify each time the list drains, report what that batch delivered, and stay open for the next message without publishing `finished`.
+- **`off`.** Finish or cancel the open tasks as the user says, run Verify, then Complete for the whole session.
 
 ## Tiers
 
@@ -62,3 +79,4 @@ When the tool `mcp__spider-progress__progress` exists (load it with ToolSearch i
 - After each review decision: `{ task: { id, state: "completed", evidence } }`, `{ task: { id, state: "running" } }` to return it, `{ task: { id, state: "failed", error } }`.
 - On a replan: `{ tasks: [...] }` with the whole list.
 - At the end: `{ finished: true }`, or `{ cancelled: true }` when the user stops the run.
+- In session mode: start the run at `on` with `{ title }`, then append by sending the whole list (the earlier tasks keep their state) and move the phase back to `execute` when new tasks arrive. Never send another title while the run is open: a different title starts a new run. A run holds 100 tasks; past that, publish `finished` and start the next one with the title plus a number.
