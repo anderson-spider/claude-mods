@@ -1,6 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import type { SpiderAgent } from '../types'
-import { agentEnded, agentStepped, capped, resumed, spawned, stepReported } from '../hooks/agents'
+import type { SpiderRun } from '../types'
+import { agentEnded, agentStepped, agentsOfRun, capped, resumed, spawned, stepReported } from '../hooks/agents'
 import { STEP_BRIEF, TIERS, briefed, taskIdOf, tierOf } from '../hooks/tiers'
 
 const BRIEF = 'spider-task: T3\nRead the auth module.'
@@ -95,4 +96,14 @@ test('usage taken from the turn end leaves the context unknown, since it sums ev
   const [agent] = agentEnded(spawn(), 'a1', 'answer', 50, USAGE)
   expect(agent!.usage.input).toBe(1_000)
   expect(agent!.contextTokens).toBeUndefined()
+})
+
+test('the run counts agents started while it was open and workers its tasks list, never older or later ones', () => {
+  const at = (agentId: string, now: number, list: SpiderAgent[]) => spawned(list, { agentId, type: 'Explore', prompt: 'Find it.', now }, 200)
+  const list = at('late', 900, at('during', 500, at('resumed', 50, at('before', 10, []))))
+  const run: SpiderRun = { runId: 'r', title: 'Auth', phase: 'complete', startedAt: 100, finishedAt: 800, tasks: [
+    { id: 'T1', title: 'Read', owner: 'sonnet', after: [], state: 'completed', attempts: 1, errors: [], agentIds: ['resumed'] },
+  ] }
+  expect(agentsOfRun(run, list).map(a => a.agentId)).toEqual(['resumed', 'during'])
+  expect(agentsOfRun({ ...run, finishedAt: undefined, phase: 'execute' }, list).map(a => a.agentId)).toEqual(['resumed', 'during', 'late'])
 })

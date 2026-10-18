@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Hook, McpToolInputs, Register, Timer } from 'claude-code'
 import type { SpiderAgent, SpiderMain, SpiderPanel, SpiderPhase, SpiderRun } from '../types'
-import { agentEnded, agentStepped, resumed, spawned, stepReported } from './agents'
+import { agentEnded, agentStepped, agentsOfRun, resumed, spawned, stepReported } from './agents'
 import { bandLines } from './band'
 import { configOf } from './config'
 import type { SpiderConfig } from './config'
@@ -290,8 +290,9 @@ export const register: Register = (on, options) => {
       const [run, agents, panel, now] = await Promise.all([read($, runAtom), read($, agentsAtom), read($, panelAtom), read($, nowAtom)])
       if (!run || panel.dismissedRunId === run.runId) return below
       const { Box, Text, Button } = $.ui.resolve(e)
-      const running = agents.filter(agent => agent.status === 'running').length
-      const lines = bandLines({ run, running, agents: agents.length, columns: e.props.bodyColumns, lang: held.lang, frame: Math.floor(now / 1000), animations: held.config.animations })
+      const ours = agentsOfRun(run, agents)
+      const running = ours.filter(agent => agent.status === 'running').length
+      const lines = bandLines({ run, running, agents: ours.length, columns: e.props.bodyColumns, lang: held.lang, frame: Math.floor(now / 1000), animations: held.config.animations })
       const text = (line: Piece[], key: string) => <Text key={key} wrap="truncate-end">{line.map((piece, i) => <Text key={`${key}-${i}`} {...PAINT[piece.style]}>{piece.text}</Text>)}</Text>
       const dismiss = () => void observe($, async () => { await update($, panelAtom, current => ({ ...current, dismissedRunId: run.runId })) })
       const drawn = <Box flexDirection="column" width={e.props.bodyColumns}>
@@ -300,7 +301,7 @@ export const register: Register = (on, options) => {
         <Box flexDirection="row">
           {text(lines[2]!, 'status')}
           <Box flexGrow={1} />
-          <Button key="spider-pane" plain label={`×${agents.length}`} onPress={() => void observe($, async () => { await togglePane($, held) })} />
+          <Button key="spider-pane" plain label={`×${ours.length}`} onPress={() => void observe($, async () => { await togglePane($, held) })} />
           <Text> </Text>
           <Button key="spider-dismiss" plain label="✕" onPress={dismiss} />
         </Box>

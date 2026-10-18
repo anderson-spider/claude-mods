@@ -1,6 +1,6 @@
 // Every subagent the host reports, keyed by its `agentId`: what it was spawned as, the usage of each of its requests,
 // the steps it reported itself and how it ended. Pure: the clock is injected.
-import type { SpiderAgent } from '../types'
+import type { SpiderAgent, SpiderRun } from '../types'
 import { addUsage, costOf, usageOf, ZERO } from './metrics'
 import { TIERS, taskIdOf, tierOf } from './tiers'
 
@@ -90,6 +90,12 @@ export function agentEnded(list: SpiderAgent[], agentId: string, reason: string,
   const status = reason === 'answer' ? 'done' : reason === 'aborted' ? 'cancelled' : 'failed'
   const base = agent.requests === 0 && usage !== undefined ? used(agent, agent.model, usage, now, false) : agent
   return replace(list, agent, { ...base, status, endedAt: now, lastUpdate: now })
+}
+
+/** The run's agents: those started while it was open, and the workers its tasks list, resumed ones included. */
+export function agentsOfRun(run: SpiderRun, list: SpiderAgent[]): SpiderAgent[] {
+  const bound = new Set(run.tasks.flatMap(t => t.agentIds))
+  return list.filter(a => bound.has(a.agentId) || (a.startedAt >= run.startedAt && a.startedAt <= (run.finishedAt ?? Infinity)))
 }
 
 /** At most `limit` agents: the oldest finished go first, and a running agent is never dropped. */

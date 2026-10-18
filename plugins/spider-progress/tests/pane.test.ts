@@ -87,3 +87,14 @@ test('the task list shows blocked in warning, failed with its error and accepted
   expect(line('T5')).toBeUndefined()
   expect(line('T6')!.map(x => x.text).join('')).toBe('T6 Task T6 · sonnet · cancelled')
 })
+
+test("the run's agents come first and the session's other agents follow under their own label", () => {
+  const before = { ...EXPLORE, agentId: 'a0', startedAt: -5_000 }
+  const rows = all(draw({ agents: [before, OPUS] })).split('\n')
+  const at = (text: string) => rows.findIndex(r => r.includes(text))
+  expect(at('spider-opus')).toBeLessThan(at('OTHER AGENTS'))
+  expect(at('OTHER AGENTS')).toBeLessThan(at('Explore'))
+  expect(all(draw())).not.toContain('OTHER AGENTS')
+  expect(all(draw({ run: null, agents: [before] }))).not.toContain('OTHER AGENTS')
+  expect(all(draw({ agents: [before], lang: 'pt-BR' }))).toContain('OUTROS AGENTES')
+})
