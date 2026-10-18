@@ -55,8 +55,8 @@ test('the running agents are grouped by type, model and effort, the most first; 
   expect(text(row([{ id: 'a', model: 'claude-opus-5-5' }]))).toBe('1 agent: Opus 5.5')
   expect(text(row([{ id: 'a', model: haiku }, { id: 'b', model: sonnet }]))).toBe('2 agents: Haiku 4.5, Sonnet 4.5')
   expect(row([{ id: 'a', model: sonnet }]).filter(s => s.style === 'model').map(s => s.text)).toEqual(['Sonnet 4.5'])
-  expect(text(row([{ id: 'a', type: 'spider-team:reviewer', model: 'claude-opus-5-5', effort: 'high' }, { id: 'b', type: 'spider-team:reviewer', model: 'claude-opus-5-5', effort: 'high' },
-    { id: 'c', type: 'Explore', model: haiku, effort: 'medium' }]))).toBe('3 agents: spider-team:reviewer Opus 5.5 · high ×2, Explore Haiku 4.5 · medium')
+  expect(text(row([{ id: 'a', type: 'codex:codex-rescue', model: 'claude-opus-5-5', effort: 'high' }, { id: 'b', type: 'codex:codex-rescue', model: 'claude-opus-5-5', effort: 'high' },
+    { id: 'c', type: 'Explore', model: haiku, effort: 'medium' }]))).toBe('3 agents: codex:codex-rescue Opus 5.5 · high ×2, Explore Haiku 4.5 · medium')
   expect(row([])).toEqual([])
 })
 
