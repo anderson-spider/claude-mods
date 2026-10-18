@@ -13,14 +13,17 @@ export const id = (name: string) => `mcp__spider-progress__${name}`
 /** What draws beneath this plugin's band: another plugin's tree. */
 export const BENEATH: RenderElement = { type: 'Text', props: {}, children: ['beneath'] }
 
-/** A host recording tools, panes and spawned prompts; a spawn starts `agent-1`, `agent-2`... on the model it names, and a resume keeps its id. */
-export function world(on: On, opts: { language?: string; env?: Record<string, string> } = {}) {
+/** A host recording tools, panes and spawned prompts; a spawn starts `agent-1`, `agent-2`... on the model it names, and a resume keeps its id. `broken.clock` makes the clock throw. */
+export function world(on: On, opts: { language?: string; env?: Record<string, string>; broken?: { clock: boolean } } = {}) {
   const tools: Tool[] = []
   const opened: string[] = []
   const prompts: string[] = []
   let spawns = 0
   const clock = mock.clock(((name: string, ...rest: unknown[]) => (name === 'clock.now' ? undefined : (on as (...a: unknown[]) => unknown)(name, ...rest))) as unknown as On)
-  on('clock.now', () => ({ value: clock.now() + NOW }))
+  on('clock.now', () => {
+    if (opts.broken?.clock) throw new Error('the clock is down')
+    return { value: clock.now() + NOW }
+  })
   on('tool.register', (_$, e) => (tools.push(e as unknown as Tool), { value: { tool: id(e.name) } }))
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('session.end', () => ({ sessionId: 's1' }) as never)

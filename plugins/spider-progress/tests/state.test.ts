@@ -155,3 +155,16 @@ test('a worker that the task does not list moves nothing', () => {
   expect(workerEnded(run, 'T1', 'agent-old', true)).toBe(run)
   expect(workerEnded(run, 'T1', 'agent-old', false, 'crashed')).toBe(run)
 })
+
+test('a refusal names a long task id cut short', () => {
+  const { text } = set(start(), `T${'x'.repeat(5_000)}`, 'running')
+  expect(text.length).toBeLessThanOrEqual(40)
+  expect(text).toContain('…')
+})
+
+test('a plan longer than the task limit keeps the first tasks and says so', () => {
+  const many = Array.from({ length: 150 }, (_, i) => ({ id: `T${i + 1}`, title: 'x', owner: 'main' }))
+  const { run, text } = applyProgress(null, { title: 'Big', tasks: many }, ctx())
+  expect(run!.tasks.length).toBe(LIMITS.tasks)
+  expect(text).toBe(`ok: 0/${LIMITS.tasks} tasks accepted · plan · only the first ${LIMITS.tasks} tasks were kept`)
+})

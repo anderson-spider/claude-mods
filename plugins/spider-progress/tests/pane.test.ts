@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import type { SpiderAgent, SpiderMain, SpiderRun } from '../types'
+import type { SpiderAgent, SpiderMain, SpiderRun, SpiderTask } from '../types'
 import { DEFAULTS } from '../hooks/config'
 import { paneLines } from '../hooks/pane'
 import type { Piece } from '../hooks/text'
@@ -25,7 +25,7 @@ test('the expanded pane lists agents with model, planned → actual effort, step
   expect(out).toContain('spider-opus')
   expect(out).toContain('Opus 5.5')
   expect(out).toContain('high → medium')
-  expect(out).toContain('2/5')
+  expect(out).toContain('2/5 40%')
   expect(out).toContain('183.4K')
   expect(out).toContain('42.0K')
   expect(out).toContain('~$0.05')
@@ -62,4 +62,27 @@ test('without a run the pane still lists agents', () => {
   expect(out).toContain('No spider-team run')
   expect(out).toContain('spider-opus')
   expect(all(draw({ run: null, agents: [], lang: 'pt-BR' }))).toContain('Nenhum agente')
+})
+
+test('with animations off the bar stands still and a running agent keeps a fixed mark', () => {
+  const off = { ...DEFAULTS, animations: false }
+  const open = { ...RUN, tasks: [] }
+  expect(all(draw({ run: open, frame: 3, config: off }))).toBe(all(draw({ run: open, frame: 0, config: off })))
+  expect(all(draw({ config: off }))).toContain('● running')
+})
+
+test('the task list shows blocked in warning, failed with its error and accepted with its evidence, never cancelled', () => {
+  const task = (id: string, state: SpiderTask['state'], over: Partial<SpiderTask> = {}): SpiderTask => ({ id, title: `Task ${id}`, owner: 'sonnet', after: [], state, attempts: 1, errors: [], agentIds: [], ...over })
+  const run: SpiderRun = { ...RUN, tasks: [
+    task('T1', 'completed', { evidence: 'tests pass' }), task('T2', 'pending', { after: ['T3'] }), task('T3', 'failed', { errors: ['old', 'timed out'] }),
+    task('T4', 'running', { agentIds: ['a1'] }), task('T5', 'cancelled'),
+  ] }
+  const lines = draw({ run })
+  const line = (id: string) => lines.find(l => l[0]?.text === `${id} Task ${id}`)
+  expect(line('T1')!.map(x => x.text).join('')).toBe('T1 Task T1 · sonnet · accepted · tests pass')
+  expect(line('T2')!.some(x => x.style === 'warn' && x.text.includes('blocked'))).toBe(true)
+  expect(line('T3')!.some(x => x.style === 'error' && x.text.includes('failed'))).toBe(true)
+  expect(line('T3')!.map(x => x.text).join('')).toContain('timed out')
+  expect(line('T4')!.map(x => x.text).join('')).toBe('T4 Task T4 · sonnet · running (2/5)')
+  expect(line('T5')).toBeUndefined()
 })

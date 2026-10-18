@@ -32,7 +32,7 @@
     "autoOpen": {
       "type": "string",
       "title": "Open the agents pane",
-      "description": "team: when a spider-team run starts; any: when any subagent starts; off: only with /spider-agents.",
+      "description": "team: when a spider-team run starts; any: when a subagent starts with none running; off: only with /spider-agents.",
       "options": [
         "team",
         "any",

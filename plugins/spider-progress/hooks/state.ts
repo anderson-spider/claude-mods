@@ -1,6 +1,7 @@
 // A spider-team run and its tasks: what Main's `progress` calls set, checked against a transition table, and the two
 // facts host events may add (a worker started on a task, a worker ended). Pure: the clock and the run id are injected.
 import type { SpiderOwner, SpiderPhase, SpiderRun, SpiderTask, SpiderTaskState } from '../types'
+import { cut } from './text'
 
 export const LIMITS = { title: 120, tasks: 100, after: 20, text: 500 } as const
 /** The first try plus two returns from review; then Main escalates or fails the task. */
@@ -108,7 +109,7 @@ function moved(run: SpiderRun, raw: unknown): SpiderRun {
   if (state === 'blocked') refuse('blocked is derived, not set')
   if (!STATES.includes(state as SpiderTaskState)) refuse(`state must be one of ${STATES.join(', ')}`)
   const at = run.tasks.findIndex(t => t.id === raw.id)
-  if (at < 0) refuse(`no task ${String(raw.id)}`)
+  if (at < 0) refuse(`no task ${cut(String(raw.id), 20)}`)
   const task = run.tasks[at]!
   const to = state as SpiderTaskState
   const evidence = text(raw.evidence, LIMITS.text)
@@ -165,7 +166,8 @@ export function applyProgress(run: SpiderRun | null, input: Record<string, unkno
     if (input.cancelled === true && !isOver(next)) next = closed(next, 'cancelled', ctx.now)
     if (input.finished === true && !isOver(next)) next = closed(next, 'complete', ctx.now)
     const { accepted, total } = progressOf(next)
-    return { run: next, text: `ok: ${accepted}/${total} tasks accepted · ${next.phase}` }
+    const kept = Array.isArray(input.tasks) && input.tasks.length > LIMITS.tasks ? ` · only the first ${LIMITS.tasks} tasks were kept` : ''
+    return { run: next, text: `ok: ${accepted}/${total} tasks accepted · ${next.phase}${kept}` }
   } catch (error) {
     if (error instanceof Refusal) return { run, text: `refused: ${error.message}` }
     throw error

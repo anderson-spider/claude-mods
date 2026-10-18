@@ -7,12 +7,12 @@ import { configOf } from './config'
 import type { SpiderConfig } from './config'
 import { langOf, t } from './i18n'
 import type { Lang } from './i18n'
-import { ZERO, addUsage, costOf, usageOf } from './metrics'
+import { ZERO, mainUsed } from './metrics'
 import { paneLines } from './pane'
 import { allOf, type SchemaFor } from './schema'
 import { applyProgress, bindWorker, isOver, workerEnded } from './state'
 import type { Piece, Style } from './text'
-import { briefed, taskIdOf, tierOf } from './tiers'
+import { briefed, taskIdOf } from './tiers'
 
 type Dollar = Parameters<Hook<'session.start'>>[0]
 
@@ -27,7 +27,7 @@ const PHASES = allOf<SpiderPhase>()('understand', 'plan', 'investigate', 'execut
 
 // Objects, which SchemaFor does not type (their McpToolInputs entries are `unknown`): state.ts checks what arrives.
 const TASKS_SCHEMA = {
-  description: 'The whole plan. Ids you keep keep their state; dropped open ids are cancelled.',
+  description: 'The whole plan. Ids you keep keep their state; dropped ids are cancelled.',
   type: 'array',
   items: {
     type: 'object',
@@ -54,8 +54,13 @@ const TASK_SCHEMA = {
   required: ['id', 'state'],
 }
 
-/** What the module keeps between events: the options, the language and the clock's timer. */
-type Held = { config: SpiderConfig; invalid: string[]; lang: Lang; ticker?: Timer }
+type Ending = { reason: string; now: number; usage?: unknown }
+
+/** What the module keeps between events: the options, the language, the clock's timer and endings heard before their spawn. */
+type Held = { config: SpiderConfig; invalid: string[]; lang: Lang; ticker?: Timer; early: Map<string, Ending> }
+
+/** Engine forks end without a spawn too, so only the latest few endings wait for one. */
+const EARLY_MAX = 20
 
 /** Theme keys only, so the band and the pane follow the person's Claude Code theme. */
 const PAINT: Record<Style, { color?: string; bold?: boolean; dimColor?: boolean }> = {
@@ -113,14 +118,22 @@ function ensureTicker($: Dollar, held: Held): void {
 }
 
 async function reset($: Dollar, held: Held): Promise<void> {
+  held.early.clear()
   await update($, runAtom, () => null)
   await update($, agentsAtom, () => [])
   await update($, mainAtom, () => ({ usage: ZERO }))
   await update($, panelAtom, () => ({ open: false, compact: held.config.compactMode }))
 }
 
+/** An agent's turn ended: its row ends, and a worker's task moves as its ending says. */
+async function endAgent($: Dollar, agentId: string, ending: Ending): Promise<void> {
+  await update($, agentsAtom, list => agentEnded(list, agentId, ending.reason, ending.now, ending.usage))
+  const taskId = (await read($, agentsAtom)).find(agent => agent.agentId === agentId)?.taskId
+  if (taskId) await update($, runAtom, run => (run && !isOver(run) ? workerEnded(run, taskId, agentId, ending.reason === 'answer', `the worker ended: ${ending.reason}`) : run))
+}
+
 export const register: Register = (on, options) => {
-  const held: Held = { ...configOf((options ?? {}) as Record<string, unknown>), lang: 'en' }
+  const held: Held = { ...configOf((options ?? {}) as Record<string, unknown>), lang: 'en', early: new Map() }
 
   on('session.start', async ($, e, next) => {
     await $.tool.register({
@@ -129,7 +142,7 @@ export const register: Register = (on, options) => {
       inputSchema: {
         type: 'object',
         properties: {
-          title: { type: 'string', description: 'The run title; a new title after a closed run starts a new run.' },
+          title: { type: 'string', description: 'The run title; a title other than the current run\'s starts a new run.' },
           phase: { type: 'string', enum: PHASES, description: 'The phase the run is in now.' },
           tasks: TASKS_SCHEMA,
           task: TASK_SCHEMA,
@@ -211,16 +224,23 @@ export const register: Register = (on, options) => {
 
   // A spider-team worker's brief gets the step request appended; every spawned agent is tracked, and one whose brief
   // names a task starts that task. A resume keeps its prompt (the host ignores a rewrite) and runs its agent again.
+  // autoOpen any opens the pane when an agent starts with none running, so a pane closed mid-work stays closed.
   on('agent.spawn', async ($, e, next) => {
     const result = await next(e.resume ? e : { ...e, prompt: briefed(e.prompt, e.subagentType) })
     if (result.deny || result.agentId === undefined) return result
     const agentId = result.agentId
     void observe($, async () => {
       const now = await $.clock.now()
-      await update($, agentsAtom, list => (e.resume && list.some(agent => agent.agentId === agentId) ? resumed(list, agentId, now) : spawned(list, { agentId, type: e.subagentType, model: result.model, prompt: e.prompt, now }, held.config.historyLimit)))
+      let idle = false
+      await update($, agentsAtom, list => {
+        idle = !list.some(agent => agent.status === 'running')
+        return e.resume && list.some(agent => agent.agentId === agentId) ? resumed(list, agentId, now) : spawned(list, { agentId, type: e.subagentType, model: result.model, prompt: e.prompt, now }, held.config.historyLimit)
+      })
       const taskId = taskIdOf(e.prompt)
       if (taskId) await update($, runAtom, run => (run && !isOver(run) ? bindWorker(run, taskId, agentId) : run))
-      if (held.config.autoOpen === 'any' || (held.config.autoOpen === 'team' && tierOf(e.subagentType))) await openPane($, held, false)
+      const early = held.early.get(agentId)
+      if (early) { held.early.delete(agentId); await endAgent($, agentId, early) }
+      if (held.config.autoOpen === 'any' && idle) await openPane($, held, false)
     })
     return result
   }).catch((_$, e, next) => next(e))
@@ -234,16 +254,8 @@ export const register: Register = (on, options) => {
         await update($, agentsAtom, list => agentStepped(list, agentId, { model: e.model, ...(typeof e.effort === 'string' ? { effort: e.effort } : {}), usage: answer.usage }, now))
         return
       }
-      const u = usageOf(answer.usage)
       const model = typeof answer.usage?.model === 'string' ? answer.usage.model : e.model
-      await update($, mainAtom, main => {
-        if (!u) return { ...main, model }
-        const cost = costOf(model, u)
-        return {
-          ...main, model, usage: addUsage(main.usage, u), contextTokens: u.input + u.cacheRead + u.cacheWrite,
-          ...(cost !== undefined ? { costUsd: (main.costUsd ?? 0) + cost } : { costPartial: true as const }),
-        }
-      })
+      await update($, mainAtom, main => mainUsed(main, model, answer.usage))
     })
     return answer
   })
@@ -253,10 +265,11 @@ export const register: Register = (on, options) => {
     void observe($, async () => {
       if (e.agentId === undefined) return readWindow($)
       const agentId = e.agentId
-      const now = await $.clock.now()
-      await update($, agentsAtom, list => agentEnded(list, agentId, e.reason, now, (e as { usage?: unknown }).usage))
-      const taskId = (await read($, agentsAtom)).find(agent => agent.agentId === agentId)?.taskId
-      if (taskId) await update($, runAtom, run => (run && !isOver(run) ? workerEnded(run, taskId, agentId, e.reason === 'answer', `the worker ended: ${e.reason}`) : run))
+      const ending: Ending = { reason: e.reason, now: await $.clock.now(), usage: (e as { usage?: unknown }).usage }
+      if ((await read($, agentsAtom)).some(agent => agent.agentId === agentId)) return endAgent($, agentId, ending)
+      // The spawn is recorded after the host answers it, so a quick failure can end the agent first.
+      held.early.set(agentId, ending)
+      for (const id of held.early.keys()) if (held.early.size > EARLY_MAX) held.early.delete(id)
     })
     return result
   })

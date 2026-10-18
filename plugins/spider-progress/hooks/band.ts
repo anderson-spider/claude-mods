@@ -21,7 +21,7 @@ export function bandLines(v: BandView): Piece[][] {
   const head = `${s.team} · `
   const title = [p(head, 'accent'), p(cut(v.run.title, v.columns - cells(head)), 'title')]
   const label = percent === undefined ? '' : ` ${percent}%`
-  const barLine = [...bar(percent, v.columns - cells(label), v.frame), ...(label ? [p(label, 'title')] : [])]
+  const barLine = [...bar(percent, v.columns - cells(label), v.animations ? v.frame : 0), ...(label ? [p(label, 'title')] : [])]
   const spin = v.animations && v.running > 0 ? [p(`${SPINNER[v.frame % SPINNER.length]} `, 'accent')] : []
   const counts = ` · ${accepted}/${total} ${s.tasks} · ${v.running} ${v.running === 1 ? s.agent : s.agents}`
   const width = v.columns - cells(`×${v.agents} ✕`)

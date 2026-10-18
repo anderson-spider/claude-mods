@@ -90,3 +90,9 @@ test('a resumed agent runs again with its usage kept and reports steps again', (
   expect(resumed(spawn(), 'a1', 70)).toEqual(spawn())
   expect(resumed(ended, 'zz', 70)).toBe(ended)
 })
+
+test('usage taken from the turn end leaves the context unknown, since it sums every request of the turn', () => {
+  const [agent] = agentEnded(spawn(), 'a1', 'answer', 50, USAGE)
+  expect(agent!.usage.input).toBe(1_000)
+  expect(agent!.contextTokens).toBeUndefined()
+})

@@ -35,8 +35,11 @@ export function resumed(list: SpiderAgent[], agentId: string, now: number): Spid
   return replace(list, agent, { ...rest, status: 'running', lastUpdate: now })
 }
 
-/** One request's usage, from a step or from the turn's end: the model that answered, its tokens and their cost. */
-function used(agent: SpiderAgent, model: string | undefined, raw: unknown, now: number): SpiderAgent {
+/**
+ * One request's usage, from a step or from the turn's end: the model that answered, its tokens and their cost. The
+ * turn's end sums every request of the turn, so it says nothing of the context and leaves it unknown.
+ */
+function used(agent: SpiderAgent, model: string | undefined, raw: unknown, now: number, oneRequest = true): SpiderAgent {
   const u = usageOf(raw)
   const answered = typeof (raw as { model?: unknown } | null)?.model === 'string' ? (raw as { model: string }).model : model
   const next: SpiderAgent = { ...agent, lastUpdate: now, ...(answered ? { model: answered } : {}) }
@@ -47,7 +50,7 @@ function used(agent: SpiderAgent, model: string | undefined, raw: unknown, now: 
     ...next,
     usage: addUsage(agent.usage, u),
     requests: agent.requests + 1,
-    contextTokens: u.input + u.cacheRead + u.cacheWrite,
+    ...(oneRequest ? { contextTokens: u.input + u.cacheRead + u.cacheWrite } : {}),
     ...(cost !== undefined ? { costUsd: (agent.costUsd ?? 0) + cost } : {}),
     ...(cost === undefined && tokens ? { costPartial: true as const } : {}),
   }
@@ -85,7 +88,7 @@ export function agentEnded(list: SpiderAgent[], agentId: string, reason: string,
   const agent = list.find(a => a.agentId === agentId && a.status === 'running')
   if (!agent) return list
   const status = reason === 'answer' ? 'done' : reason === 'aborted' ? 'cancelled' : 'failed'
-  const base = agent.requests === 0 && usage !== undefined ? used(agent, agent.model, usage, now) : agent
+  const base = agent.requests === 0 && usage !== undefined ? used(agent, agent.model, usage, now, false) : agent
   return replace(list, agent, { ...base, status, endedAt: now, lastUpdate: now })
 }
 

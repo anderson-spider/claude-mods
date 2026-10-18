@@ -96,7 +96,7 @@ test('/spider-agents toggles, open opens, close closes', { options: { autoOpen: 
   expect(opened).toEqual([])
 })
 
-test('autoOpen team opens on a new run', async ($, on) => {
+test('autoOpen team opens on a new run only, so a closed pane stays closed for its workers', async ($, on) => {
   const { tools, opened } = world(on)
   await started($, tools)
   await spawn($, 'Find the router.', 'Explore')
@@ -105,12 +105,26 @@ test('autoOpen team opens on a new run', async ($, on) => {
   await call($, 'progress', PLAN)
   await flush()
   expect(opened).toEqual(['spider-agents'])
+  await run($, 'close')
+  await spawn($, 'spider-task: T1\nBuild the login form.')
+  await flush()
+  expect(opened).toEqual([])
 })
 
-test('autoOpen any opens on any spawn', { options: { autoOpen: 'any' } }, async ($, on) => {
+test('autoOpen any opens when a subagent starts with none running, and a closed pane stays closed while they run', { options: { autoOpen: 'any' } }, async ($, on) => {
   const { tools, opened } = world(on)
   await started($, tools)
-  await spawn($, 'Find the router.', 'Explore')
+  const first = await spawn($, 'Find the router.', 'Explore')
+  await flush()
+  expect(opened).toEqual(['spider-agents'])
+  await run($, 'close')
+  const second = await spawn($, 'Find the views.', 'Explore')
+  await flush()
+  expect(opened).toEqual([])
+  await end($, first.agentId!)
+  await end($, second.agentId!)
+  await flush()
+  await spawn($, 'Find the tests.', 'Explore')
   await flush()
   expect(opened).toEqual(['spider-agents'])
 })
@@ -170,4 +184,29 @@ test('a resumed worker keeps its prompt, runs again and sends its task back to r
   const ui = await $.ui.mount(pane())
   expect(await drawn(ui)).toMatch(/T1 Build login · opus · reviewing/)
   await ui.unmount()
+})
+
+test('an ending heard before its spawn is recorded leaves no running row', async ($, on) => {
+  const { tools } = world(on)
+  await started($, tools)
+  await call($, 'progress', PLAN)
+  await end($, 'agent-1', 'error')
+  await flush()
+  await spawn($, 'spider-task: T1\nBuild the login form.')
+  await flush()
+  const ui = await $.ui.mount(pane())
+  const text = await drawn(ui)
+  expect(text).toMatch(/spider-opus.*failed/)
+  expect(text).not.toMatch(/spider-opus.*running/)
+  expect(text).toMatch(/T1 Build login · opus · running · the worker ended: error/)
+  await ui.unmount()
+})
+
+test('an exception inside a tool returns text', async ($, on) => {
+  const broken = { clock: false }
+  const { tools } = world(on, { broken })
+  await started($, tools)
+  broken.clock = true
+  expect(await call($, 'progress', PLAN)).toBe('error: the run could not be updated; go on with the work')
+  expect(await call($, 'step', { done: 1, total: 2 }, 'agent-1')).toBe('error: the step could not be recorded; go on with the work')
 })

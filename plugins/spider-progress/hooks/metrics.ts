@@ -24,9 +24,21 @@ export const addUsage = (a: SpiderUsage, b: SpiderUsage): SpiderUsage =>
 
 /** The estimated USD cost of `u` on `model`; undefined when the model has no price. */
 export function costOf(model: string | undefined, u: SpiderUsage): number | undefined {
-  const price = model ? priceOf(model) : undefined
+  const price = model ? priceOf(model, u.input + u.cacheRead + u.cacheWrite) : undefined
   if (!price) return undefined
   return (u.input * price.input + u.output * price.output + u.cacheRead * price.cacheRead + u.cacheWrite * price.cacheWrite) / 1_000_000
+}
+
+/** Main's request: the model that answered, its usage and cost; an unpriced request marks the cost partial only when it used tokens. */
+export function mainUsed(main: SpiderMain, model: string | undefined, raw: unknown): SpiderMain {
+  const u = usageOf(raw)
+  const next = { ...main, ...(model ? { model } : {}) }
+  if (!u) return next
+  const cost = costOf(model, u)
+  return {
+    ...next, usage: addUsage(main.usage, u), contextTokens: u.input + u.cacheRead + u.cacheWrite,
+    ...(cost !== undefined ? { costUsd: (main.costUsd ?? 0) + cost } : Object.values(u).some(n => n > 0) ? { costPartial: true as const } : {}),
+  }
 }
 
 export type Totals = { usage: SpiderUsage; costUsd?: number; costPartial: boolean }

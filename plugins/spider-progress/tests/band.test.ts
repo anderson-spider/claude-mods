@@ -52,3 +52,9 @@ test('the status line leaves room for the buttons and cuts the phase before the 
     expect(line).toMatch(/0\/12 (tarefas|tasks) · 3 (agentes|agents)$/)
   }
 })
+
+test('with animations off the indeterminate bar stands still', () => {
+  const open = { ...RUN, phase: 'plan' as const, tasks: [] }
+  expect(text(draw({ run: open, frame: 7 })[1])).toBe(text(draw({ run: open, frame: 0 })[1]))
+  expect(text(draw({ run: open, frame: 7, animations: true })[1])).not.toBe(text(draw({ run: open, frame: 0, animations: true })[1]))
+})

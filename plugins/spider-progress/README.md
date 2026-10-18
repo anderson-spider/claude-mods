@@ -9,11 +9,11 @@ A band under the session card that follows a [spider-team](../spider-team/README
 ## Use
 
 - **Band**: while a spider-team run is open, three lines above the prompt: the run's title; a bar of the tasks the session accepted after review (no percent before the plan has tasks); the phase, accepted/total tasks and running agents. `×N` toggles the pane, `✕` hides the band until the next run.
-- **Pane**: `/spider-agents` toggles it, `/spider-agents open` opens or focuses it, `/spider-agents close` closes it. Each agent shows its tier icon, model, effort (planned → actual when they differ), status, steps it reported, tokens, context, estimated cost and time; then the tasks in flight and the totals of the session's main thread, its subagents and the whole session. `c` switches between compact and expanded.
+- **Pane**: `/spider-agents` toggles it, `/spider-agents open` opens or focuses it, `/spider-agents close` closes it. Each agent shows its tier icon, model, effort (planned → actual when they differ), status, steps it reported with their percent, tokens, context, estimated cost and time; then the run's tasks (blocked in yellow, failed in red with the last error, accepted with their evidence) and the totals of the session's main thread, its subagents and the whole session. `c` switches between compact and expanded.
 - **Without spider-team** the pane still lists every subagent; the band stays hidden.
 - **With session-hud** the band sits right under its card when spider-progress comes after session-hud in your settings, which a later install does; listed before it, the band draws above the card.
 
-Options (`/plugin` → spider-progress, or `pluginConfigs` in settings): `language` (`auto`, `pt-BR`, `en`), `autoOpen` (`team`, `any`, `off`), `showCost`, `showTokens`, `showContext`, `animations`, `compactMode`, `historyLimit` (20 to 1000). An invalid value falls back to its default.
+Options (`/plugin` → spider-progress, or `pluginConfigs` in settings): `language` (`auto`, `pt-BR`, `en`), `autoOpen` (`team` opens the pane when a run starts, `any` when a subagent starts with none running, `off`; a pane you close stays closed for the agents already at work), `showCost`, `showTokens`, `showContext`, `animations`, `compactMode`, `historyLimit` (20 to 1000). An invalid value falls back to its default.
 
 ## What it shows and what it does not
 

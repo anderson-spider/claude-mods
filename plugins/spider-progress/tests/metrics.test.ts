@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import type { SpiderAgent, SpiderMain } from '../types'
-import { addUsage, costOf, formatCost, formatDuration, formatTokens, totalsOf, usageOf } from '../hooks/metrics'
+import { ZERO, addUsage, costOf, formatCost, formatDuration, formatTokens, mainUsed, totalsOf, usageOf } from '../hooks/metrics'
 import { priceOf } from '../hooks/prices'
 
 const near = (v: number | undefined) => (v === undefined ? v : Math.round(v * 1e6) / 1e6)
@@ -19,7 +19,7 @@ test('cost applies input, output, cache read and cache write rates separately', 
   expect(near(costOf('claude-opus-5-5', U(0, 0, 1_000_000)))).toBe(near(0.2))
   expect(near(costOf('claude-opus-5-5', U(0, 0, 0, 1_000_000)))).toBe(near(5))
   expect(near(costOf('claude-opus-5-5[1m]', U(500_000, 100_000, 2_000_000, 0)))).toBe(near(2 + 2 + 0.4))
-  expect(near(costOf('claude-haiku-5-5', U(1_000_000, 1_000_000)))).toBe(near(0.6))
+  expect(near(costOf('claude-haiku-5-5', U(100_000, 100_000)))).toBe(near(0.06))
   expect(near(costOf('claude-sonnet-5-5', U(1_000_000, 0)))).toBe(near(2))
   expect(near(costOf('claude-fable-5-1', U(0, 0, 1_000_000)))).toBe(near(0.25))
 })
@@ -53,4 +53,20 @@ test('formatting: tokens, estimated cost and N/A, durations', () => {
   expect(formatDuration(272_000)).toBe('04:32')
   expect(formatDuration(3_723_000)).toBe('1:02:03')
   expect(formatDuration(-5)).toBe('00:00')
+})
+
+test('Haiku 5.5 above a 100K-token prompt uses its long-prompt rates', () => {
+  // $0.10 / $0.50 up to a 100K-token prompt (input plus cache), $0.50 / $2.50 above it.
+  expect(near(costOf('claude-haiku-5-5', U(100_000, 1_000_000)))).toBe(near(0.01 + 0.5))
+  expect(near(costOf('claude-haiku-5-5', U(200_000, 1_000_000)))).toBe(near(0.1 + 2.5))
+  expect(near(costOf('claude-haiku-5-5', U(50_000, 0, 60_000)))).toBe(near(0.025 + 0.003))
+})
+
+test("Main's request adds usage and cost; an unpriced request with no tokens leaves the cost whole", () => {
+  const priced = mainUsed({ usage: ZERO }, 'claude-opus-5-5', { input_tokens: 1_000_000 })
+  expect(priced).toMatchObject({ model: 'claude-opus-5-5', costUsd: 4, contextTokens: 1_000_000 })
+  const empty = mainUsed(priced, 'gpt-9', { input_tokens: 0, output_tokens: 0 })
+  expect(empty.costPartial).toBeUndefined()
+  expect(mainUsed(priced, 'gpt-9', { input_tokens: 10 }).costPartial).toBe(true)
+  expect(mainUsed(priced, 'claude-sonnet-5-5', null)).toEqual({ ...priced, model: 'claude-sonnet-5-5' })
 })
