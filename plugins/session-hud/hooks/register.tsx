@@ -61,15 +61,12 @@ async function readWindow($: Dollar): Promise<void> {
   await update($, card, current => windowed(current, usage.context.breakdown?.rawMaxTokens))
 }
 
-/** The session's first figures: its model, the usage the status line has, the theme and the clock. A reload (an option change runs `session.start` again) keeps the cache's share, its last use and the lifetime the host reported, which only the next step or switch would bring back. */
-async function prime($: Dollar): Promise<void> {
+/** The session's figures: its model, the usage the status line has, the theme and the clock. The card the state holds stays: at the first load it is empty, and a reload (an option change runs `session.start` again) keeps what the session observed, which no event would bring back. */
+async function prime($: Dollar, held: Held): Promise<void> {
   const [model, usage, time] = await Promise.all([$.session.model(), $.session.usage(), $.clock.now()])
-  await update($, card, current => ({
-    ...measured(EMPTY, usage as Measured), model,
-    ...(current.cache !== undefined ? { cache: current.cache } : {}),
-    ...(current.cacheTtl !== undefined ? { cacheTtl: current.cacheTtl } : {}),
-    ...(current.cacheUsedAt !== undefined ? { cacheUsedAt: current.cacheUsedAt } : {}),
-  }))
+  const primed = await update($, card, current => ({ ...measured(current, usage as Measured), model }))
+  // A reload during a main-session turn starts the one-second clock the turn had.
+  if (primed.turnStartedAt !== undefined) startFast($, held)
   await update($, nowAtom, () => time)
   const theme = await $.config.list().then(rows => rows.find(row => row.key === 'theme')?.value, () => undefined)
   await update($, paletteAtom, () => paletteOf(theme))
@@ -82,7 +79,7 @@ export const register: Register = (on, options) => {
 
   on('session.start', {}, async ($, e, next) => {
     const started = await next(e)
-    void observe($, async () => { ensureTicker($, held); await prime($) })
+    void observe($, async () => { ensureTicker($, held); await prime($, held) })
     return started
   })
   on('session.end', {}, (_$, e, next) => {
