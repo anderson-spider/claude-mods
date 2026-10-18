@@ -1,6 +1,6 @@
 ---
 name: spider-fable
-description: Hardest logic and bugs: deep reasoning on a self-contained brief from spider-team. Use only through /spider-team.
+description: "Hardest logic and bugs: deep reasoning on a self-contained brief from spider-team. Use only through /spider-team."
 model: fable
 ---
 

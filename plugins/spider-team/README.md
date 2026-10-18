@@ -25,7 +25,7 @@ To stop retyping the command, turn on session mode:
 | Agent | Model | Default effort | For |
 | --- | --- | --- | --- |
 | `spider-fable` | Fable | high | the hardest logic and bugs |
-| `spider-opus` | Opus | high (xhigh for unfamiliar code) | delicate or hard changes |
+| `spider-opus` | Opus | high (xhigh for unfamiliar code or an unclear root cause) | delicate or hard changes |
 | `spider-sonnet` | Sonnet | high | standard feature work |
 | `spider-haiku` | Haiku | high | mechanical edits, builds, tests |
 

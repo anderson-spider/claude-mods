@@ -9,7 +9,7 @@ argument-hint: <task> | on | off | brainstorm <topic>
 
 Arguments: $ARGUMENTS
 
-The first word picks the mode; anything else is a task.
+`on` or `off` as the whole argument, or `brainstorm` as the first word, picks the mode; anything else is a task, including one that starts with `on` or `off`.
 
 - **`<task>`**: one run of that task through the seven phases.
 - **`on`**: session mode (Session mode) until `off`.
@@ -26,7 +26,7 @@ Each phase ends on its exit; move on only when the exit holds.
 2. **Plan.** Break the work into tasks `T1..Tn`, each with a title, an owner (`main`, `explore` or a tier), `after` (the tasks it needs accepted first) and acceptance criteria. Small or tightly coupled work stays with `main`: delegate only when a task is self-contained and a tier does it as well for less. Exit: the plan is shown to the user and published (Reporting).
 3. **Investigate.** Run independent read-only questions in parallel (the built-in `Explore` agent, or a tier for a deep one). Exit: every open question the plan depends on has an answer with file and line evidence.
 4. **Execute.** Take tasks whose `after` tasks are accepted. Implement `main` tasks yourself; delegate the rest (Delegation). Writers never run in parallel on overlapping files. Exit: every planned task is in review or accepted.
-5. **Review.** For each finished task, read the real diff and rerun its checks yourself, then decide: **accept** (`completed`), **return** with a precise brief (back to `running`, at most two returns), **escalate** to a higher tier or to `main`, or **fail** it. Exit: every task is accepted, failed or cancelled.
+5. **Review.** For each finished task, read the real diff and rerun its checks yourself, then decide: **accept** (`completed`), **return** with a precise brief (back to `running`, at most two returns), **escalate** to a higher tier or to `main`, or **fail** it. To escalate while a return is left, replan the task with the new owner and return it. After the second return, fail it and append a new task with the higher owner and the same criteria, and point the `after` of the tasks that waited on it to the new id. Exit: every task is accepted, failed or cancelled.
 6. **Verify.** Run the project's full checks (tests, types, lint, build, its own validation) and read the output. Exit: all green, or each failure fixed or reported with its output.
 7. **Complete.** Publish `finished`, then report to the user: what was delivered, which tasks each tier ran, what was verified and how, and anything left open.
 
@@ -73,8 +73,8 @@ The first line `spider-task: T<n>` stays exactly as written: it ties the worker 
 
 When the tool `mcp__spider-progress__progress` exists (load it with ToolSearch if it is deferred), publish the run with it; when it does not, skip reporting and carry on. A refused call says why: fix the call or carry on; reporting never blocks the work.
 
-- After the plan: `{ title, phase: "plan", tasks: [{ id, title, owner, after, criteria }] }`.
-- At each phase change: `{ phase }`.
+- After the plan: `{ title, phase: "plan", tasks: [{ id, title, owner, after, criteria }] }`. The title is a short name for the task (in session mode, for the session's subject), kept the same for the whole run.
+- At each phase change: `{ phase }`. The phases `complete`, `cancelled` and `failed` close the run as `finished` does, so send them only at the end; in session mode, not before `off`.
 - When you start a `main` task: `{ task: { id, state: "running" } }`.
 - After each review decision: `{ task: { id, state: "completed", evidence } }`, `{ task: { id, state: "running" } }` to return it, `{ task: { id, state: "failed", error } }`.
 - On a replan: `{ tasks: [...] }` with the whole list.
