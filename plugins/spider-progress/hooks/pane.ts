@@ -5,7 +5,7 @@ import type { SpiderConfig } from './config'
 import type { Lang, Strings } from './i18n'
 import { t } from './i18n'
 import { formatCost, formatDuration, formatTokens, totalsOf } from './metrics'
-import { effectiveState, progressOf } from './state'
+import { effectiveState, isPlanned, progressOf } from './state'
 import { SPINNER, bar, fit, modelName, p, pad } from './text'
 import type { Piece, Style } from './text'
 
@@ -65,9 +65,9 @@ function agentRows(v: PaneView, s: Strings, columns: Column[]): Piece[][] {
   return v.agents.map(a => columns.map(c => padded(c.cell(a, v, s), c.width + 1)))
 }
 
-/** Every task but the cancelled: its state (blocked in warning, failed in error), its worker's steps, then its last error or, once accepted, its evidence. */
+/** Every planned task: its state (blocked in warning, failed in error), its worker's steps, then its last error or, once accepted, its evidence. */
 function taskRows(v: PaneView, s: Strings): Piece[][] {
-  const shown = (v.run?.tasks ?? []).filter(task => task.state !== 'cancelled')
+  const shown = (v.run?.tasks ?? []).filter(isPlanned)
   if (!shown.length) return []
   return [[p(s.pane.tasks, 'dim')], ...shown.map(task => {
     const state = effectiveState(v.run!, task)
