@@ -125,6 +125,22 @@ test('a running turn shows its time, beating every second until it completes', a
   void clock
 })
 
+test('a reload during a running turn keeps the turn and its time beating every second', async ($, on) => {
+  const { clock } = world(on, { moving: true })
+  await start($)
+  await flush()
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  await flush()
+  // A reload loads a fresh module, holding none of the clocks the turn started, and `session.start` runs again.
+  await $.session.end({ reason: 'other', sessionId: 's1' } as never)
+  await start($)
+  await flush()
+  await clock.advance(2_000)
+  const ui = await $.ui.mount(band())
+  expect((await ui.findAll({ type: 'Text' })).map(found => found.text).join('')).toContain('working 2s')
+  await ui.unmount()
+})
+
 const drawnOf = async ($: { ui: { mount: (e: never) => Promise<{ findAll: (q: object) => Promise<{ text: string }[]>; unmount: () => Promise<void> }> } }) => {
   const ui = await $.ui.mount(band())
   const drawn = (await ui.findAll({ type: 'Text' })).map(found => found.text).join('')

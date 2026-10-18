@@ -17,14 +17,15 @@ export const USAGE = {
   cost: { usd: 4.43 },
 }
 
-/** A host with the session's model, usage, theme and clock; a spawn (refused with `denySpawn`) starts `agent-1`, `agent-2`... on its `model` (Sonnet 4.5 when none), and `roster` is what `$.agent.list()` answers. */
-export function world(on: On, opts: { theme?: string; window?: number; denySpawn?: string } = {}) {
+/** A host with the session's model, usage, theme and clock (stopped at NOW, or moving with the test's advances when `moving`); a spawn (refused with `denySpawn`) starts `agent-1`, `agent-2`... on its `model` (Sonnet 4.5 when none), and `roster` is what `$.agent.list()` answers. */
+export function world(on: On, opts: { theme?: string; window?: number; denySpawn?: string; moving?: boolean } = {}) {
   const roster: AgentInfo[] = []
   let spawns = 0
   // `mock.clock` registers `clock.now` itself and the engine refuses a second one: the test's own reads NOW.
-  const clock = mock.clock(((name: string, ...rest: unknown[]) => (name === 'clock.now' ? undefined : (on as (...a: unknown[]) => unknown)(name, ...rest))) as unknown as On)
-  on('clock.now', () => ({ value: NOW }))
+  const clock = mock.clock(((name: string, ...rest: unknown[]) => (name === 'clock.now' ? undefined : (on as (...a: unknown[]) => unknown)(name, ...rest))) as unknown as On, { now: NOW })
+  on('clock.now', () => ({ value: opts.moving ? clock.now() : NOW }))
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  on('session.end', (_$, e) => ({ sessionId: e.sessionId }))
   on('session.model', () => ({ value: 'claude-opus-5-5' }))
   on('session.usage', (_$, e) => ({ value: (e as { breakdown?: string }).breakdown
     ? { ...USAGE, context: { ...USAGE.context, breakdown: { rawMaxTokens: opts.window ?? 1_000_000 } } } : USAGE }) as never)
