@@ -1,6 +1,6 @@
 # spider-team
 
-`/spider-team <task>` makes the session the owner of a task: it understands it, plans tasks with dependencies, investigates, delegates what earns it to four tiered agents, reviews every result against the real diff, verifies and delivers. Workers only claim they are done; a task counts once the session has reviewed it.
+`/spider-team <task>` makes the session the owner of a task: it understands it, plans tasks with dependencies, investigates, delegates every code change to four tiered agents, reviews every result against the real diff, verifies and delivers. Workers only claim they are done; a task counts once the session has reviewed it.
 
 ```text
 /plugin install spider-team --marketplace anderson-spider/claude-mods
@@ -12,7 +12,7 @@
 /spider-team add rate limiting to the public API
 ```
 
-The run goes through Understand, Plan, Investigate, Execute, Review, Verify and Complete. Small or tightly coupled work stays with the session; read-only questions run in parallel; writers never touch the same files at once.
+The run goes through Understand, Plan, Investigate, Execute, Review, Verify and Complete. The session never writes code itself: every change goes to a tier and comes back through review. Read-only questions run in parallel; writers never touch the same files at once.
 
 Asked to build a new project from an empty directory, the run starts it: it writes `docs/SPEC.md`, `docs/PLAN.md`, a short `AGENTS.md` and `filemap.md`, and delegates nothing until you approve the spec and the plan. Visual decisions stay with the session, which shows new screens as mockups first and reviews what was built itself; product questions the request leaves open go to you.
 
