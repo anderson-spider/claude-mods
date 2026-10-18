@@ -2,7 +2,7 @@
 
 A greenfield run: the request is to build a new project or app, and the working directory is empty. Workers see only files, so the spec lives in files, and the user approves it before any task is delegated.
 
-1. **Git.** Without a repository, run `git init` and add a `.gitignore` for the stack. Commit the docs below as soon as they are written, before approval, then after each accepted task.
+1. **Git.** Without a repository, run `git init` and add a `.gitignore` for the stack. This flow commits on its own, without waiting to be asked: the docs below as soon as they are written, again after edits from the user's feedback, then after each accepted task.
 2. **Questions.** Ask in one batch what the request does not settle: platform and stack, users, the MVP boundary, non-goals, hard constraints (deadline, hosting, accounts).
 3. **`docs/SPEC.md`.** Goals, non-goals, stack with versions, modules and what each owns, data model, external integrations, key user flows, and what done means for the MVP.
 4. **`docs/PLAN.md`.** The tasks `T1..Tn` as Plan defines them, each with a one-paragraph brief. `T1` is the scaffold: the code structure, dependencies and the build, test, run and lint commands, since the docs of this list already exist. Its brief requires that the commands in `AGENTS.md` and the entries in `filemap.md` match what it built, updating both where they differ, and Review checks it. It runs alone.
