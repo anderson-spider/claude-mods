@@ -61,10 +61,15 @@ async function readWindow($: Dollar): Promise<void> {
   await update($, card, current => windowed(current, usage.context.breakdown?.rawMaxTokens))
 }
 
-/** The session's first figures: its model, the usage the status line has, the theme and the clock. */
+/** The session's first figures: its model, the usage the status line has, the theme and the clock. A reload (an option change runs `session.start` again) keeps the cache's share, its last use and the lifetime the host reported, which only the next step or switch would bring back. */
 async function prime($: Dollar): Promise<void> {
   const [model, usage, time] = await Promise.all([$.session.model(), $.session.usage(), $.clock.now()])
-  await update($, card, () => ({ ...measured(EMPTY, usage as Measured), model }))
+  await update($, card, current => ({
+    ...measured(EMPTY, usage as Measured), model,
+    ...(current.cache !== undefined ? { cache: current.cache } : {}),
+    ...(current.cacheTtl !== undefined ? { cacheTtl: current.cacheTtl } : {}),
+    ...(current.cacheUsedAt !== undefined ? { cacheUsedAt: current.cacheUsedAt } : {}),
+  }))
   await update($, nowAtom, () => time)
   const theme = await $.config.list().then(rows => rows.find(row => row.key === 'theme')?.value, () => undefined)
   await update($, paletteAtom, () => paletteOf(theme))
