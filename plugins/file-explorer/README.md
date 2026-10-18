@@ -11,7 +11,7 @@ The functional reference was [claude-code-filetree](https://github.com/data-gobl
 ## What you see
 
 ```text
-▾ claude-mods ⎇ main ↑1 2 changed +14 -3           ↑ ◎ ↻ ○ ⊟ ✕
+▾ claude-mods ⎇ main ↑1 2 changed  up · last file · collapse · dotfiles · ✕
 / search files
   ▾ plugins/                          2M
     ▸ chatgpt/
@@ -25,7 +25,7 @@ The functional reference was [claude-code-filetree](https://github.com/data-gobl
 j: ↓ k: ↑ h: ← l: → o: open s: find a: @ref r: ↻
 ```
 
-- **Header**: the folder, its branch, how far ahead (`↑`) and behind (`↓`) its upstream it is (or `(no upstream)`), how many files changed and the lines added and removed. Outside a repository there is no branch line. At the right, buttons: `↑` the folder above (pinned, as `/file-explorer <folder>`), `◎` the last file Claude touched, `↻` refresh, `○`/`◉` dotfiles hidden or shown, `⊟` close every folder, `✕` close the pane. A pane narrower than 24 columns leaves them out.
+- **Header**: the folder, its branch, how far ahead (`↑`) and behind (`↓`) its upstream it is (or `(no upstream)`), how many files changed and the lines added and removed. Outside a repository there is no branch line. At the right, buttons: `up` opens the folder above (pinned, as `/file-explorer <folder>`; `/file-explorer <folder>` goes back), `last file` opens the tree to the last file Claude touched, `collapse` closes every folder, `dotfiles` shows or hides them (drawn full while shown), and `✕` closes the pane in the terminal (the desktop app has its own close control). A pane too narrow for them leaves them out.
 - **Rows**: folders first, then files, sorted by name (or extension, or newest first). Dotfiles are hidden until you press `.`. Folders named in the ignore list (`node_modules`, `dist`, `.venv`...) are drawn dim and left out of search.
 - **Modified**: at the right edge of each file, how long ago it was modified: `now`, `3m`, `2h`, `yesterday`, `4d`, `3w`, `5mo`, `2y` (yesterday is 24 to 48 hours ago). In a narrow pane it goes before the git columns do; `mtime: false` hides it.
 - **Git**: a file shows its letter (`M` modified, `A` added, `D` deleted, `R` renamed, `?` untracked, `U` conflicted) and, for tracked changes, `+added -removed`. A folder shows how many changed files lie under it, in the colour of the strongest change.

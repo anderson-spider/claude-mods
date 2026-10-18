@@ -1,6 +1,6 @@
 {
   "name": "file-explorer",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "File tree pane that follows Claude's reads, edits and searches, with git status, search, preview and path references",
   "author": {
     "name": "anderson-spider"

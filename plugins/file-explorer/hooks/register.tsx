@@ -435,9 +435,9 @@ async function startWriting($: Dollar, held: Held, path: string): Promise<void> 
   if (held.config.follow && view.mode === 'tree') await reveal($, held, path)
 }
 
-type HeaderAction = 'up' | 'reveal' | 'refresh' | 'hidden' | 'collapse' | 'close'
+type HeaderAction = 'up' | 'reveal' | 'hidden' | 'collapse' | 'close'
 
-/** The header's buttons: the root's parent, the last file Claude touched, refresh, dotfiles, every folder closed, close. */
+/** The header's buttons: the root's parent, the last file Claude touched, every folder closed, dotfiles, close. */
 async function headerAction($: Dollar, held: Held, action: HeaderAction, surface: string): Promise<void> {
   const view = await read($, viewAtom)
   switch (action) {
@@ -451,7 +451,6 @@ async function headerAction($: Dollar, held: Held, action: HeaderAction, surface
       if (!last) return note($, 'Claude has not touched a file here yet.')
       return reveal($, held, last.path)
     }
-    case 'refresh': return press($, held, 'r', surface)
     case 'hidden': return press($, held, '.', surface)
     case 'collapse':
       await update($, viewAtom, ({ preview: _, ...current }): ExplorerView => ({ ...collapseAll(current), mode: 'tree', query: '', hits: [], hitCursor: 0 }))
@@ -461,16 +460,14 @@ async function headerAction($: Dollar, held: Held, action: HeaderAction, surface
   }
 }
 
-const HEADER: readonly { action: HeaderAction; label: (showHidden: boolean) => string }[] = [
-  { action: 'up', label: () => '↑' },
-  { action: 'reveal', label: () => '◎' },
-  { action: 'refresh', label: () => '↻' },
-  { action: 'hidden', label: showHidden => (showHidden ? '◉' : '○') },
-  { action: 'collapse', label: () => '⊟' },
-  { action: 'close', label: () => '✕' },
+// Words, not glyphs: the API has no tooltip to explain an icon. Refresh is in the footer (`r`).
+const HEADER: readonly { action: HeaderAction; label: string }[] = [
+  { action: 'up', label: 'up' },
+  { action: 'reveal', label: 'last file' },
+  { action: 'collapse', label: 'collapse' },
+  { action: 'hidden', label: 'dotfiles' },
+  { action: 'close', label: '✕' },
 ]
-// Each one-glyph Button and the space between them.
-const HEADER_WIDTH = HEADER.length * 2
 
 const KEYS: readonly { hotkey: string; label: string }[] = [
   { hotkey: 'j', label: '↓' }, { hotkey: 'k', label: '↑' }, { hotkey: 'h', label: '←' }, { hotkey: 'l', label: '→' },
@@ -705,22 +702,27 @@ export const register: Register = (on, options) => {
       )
     }
 
+    // The desktop app draws its own close control on the pane; only the terminal needs ours.
+    const header = HEADER.filter(one => one.action !== 'close' || e.surface === 'terminal')
+    const headerWidth = header.reduce((sum, one) => sum + one.label.length, 0) + 3 * (header.length - 1)
+
     return (
       <Box flexDirection="column">
         <Box flexDirection="row" gap={1}>
           <Box flexGrow={1}><Text wrap="truncate-end">{paint(title)}</Text></Box>
-          {columns >= HEADER_WIDTH + 12 ? (
+          {columns >= headerWidth + 12 ? (
             <Box flexDirection="row" gap={1}>
-              {HEADER.map(one => (
+              {header.flatMap((one, i) => [
+                ...(i > 0 ? [<Text dimColor>·</Text>] : []),
                 <Button
                   key={`head-${one.action}`}
                   plain
-                  dimColor
-                  label={one.label(view.showHidden)}
-                  {...(one.action === 'close' ? { role: 'dismiss' as const } : {})}
+                  // `dotfiles` is drawn full while they are shown, dim while hidden, as the other buttons rest.
+                  dimColor={!(one.action === 'hidden' && view.showHidden)}
+                  label={one.label}
                   onPress={() => void observe($, () => headerAction($, held, one.action, e.surface))}
-                />
-              ))}
+                />,
+              ])}
             </Box>
           ) : null}
         </Box>

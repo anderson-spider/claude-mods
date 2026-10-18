@@ -418,7 +418,7 @@ test('the header buttons go up a folder, reveal the last file Claude touched, cl
   const w = world(on, FILES)
   on('tool.call', () => ({ result: {} }) as never)
   await start($)
-  const ui = await $.ui.mount(pane())
+  const ui = await $.ui.mount(pane(60))
 
   await ui.press({ key: 'head-reveal' })
   expect(await ui.find({ type: 'Text', text: 'Claude has not touched a file here yet.' })).toBeDefined()
@@ -441,4 +441,17 @@ test('the header buttons go up a folder, reveal the last file Claude touched, cl
   await ui.press({ key: 'head-close' })
   expect(w.opened).not.toContain('file-explorer')
   await ui.unmount()
+})
+
+test('the header buttons are words; the desktop app, which draws its own close control, gets no close button of ours', async ($, on) => {
+  world(on, FILES)
+  await start($)
+  const terminal = await $.ui.mount(pane(60))
+  expect((await terminal.find({ type: 'Button', key: 'head-reveal' }))?.text).toBe('last file')
+  expect(await terminal.find({ type: 'Button', key: 'head-close' })).toBeDefined()
+  await terminal.unmount()
+  const desktop = await $.ui.mount({ ...pane(60), surface: 'desktop' } as never)
+  expect(await desktop.find({ type: 'Button', key: 'head-reveal' })).toBeDefined()
+  expect(await desktop.find({ type: 'Button', key: 'head-close' })).toBeUndefined()
+  await desktop.unmount()
 })
