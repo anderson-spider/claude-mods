@@ -182,7 +182,9 @@ export const register: Register = (on, options) => {
       const [shown, time, palette] = await Promise.all([read($, card), read($, nowAtom), read($, paletteAtom)])
       const terminal = e.surface === 'terminal'
       const drawnCard = (shown.cacheTtl === undefined && ttl ? { ...shown, cacheTtl: ttl } : shown) as SessionHudCard
-      const lines = layoutView({ card: drawnCard, now: time, working: shown.turnStartedAt !== undefined, palette, draw: terminal ? 'cells' : 'svg' })
+      // The card's own turn says it is the main session's; the host's `isWorking` drops one whose completion never reached the card.
+      const working = shown.turnStartedAt !== undefined && e.props.isWorking
+      const lines = layoutView({ card: drawnCard, now: time, working, palette, draw: terminal ? 'cells' : 'svg' })
       if (!lines.length) return below
       const ui = $.ui.resolve(e)
       const { Box, Text } = ui

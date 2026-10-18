@@ -112,7 +112,7 @@ test('a running turn shows its time, beating every second until it completes', a
   await flush()
   await $.turn.start({ text: 'go', turnId: 't1' } as never)
   await flush()
-  const running = await $.ui.mount(band())
+  const running = await $.ui.mount(band(110, false, true))
   expect((await running.findAll({ type: 'Text' })).map(found => found.text).join('')).toContain('working 0s')
   await running.unmount()
   await $.turn.complete({ turnId: 't1', answer: '', durationMs: 3_000, isAborted: false, reason: 'answer' } as never)
@@ -136,13 +136,29 @@ test('a reload during a running turn keeps the turn and its time beating every s
   await start($)
   await flush()
   await clock.advance(2_000)
-  const ui = await $.ui.mount(band())
+  const ui = await $.ui.mount(band(110, false, true))
   expect((await ui.findAll({ type: 'Text' })).map(found => found.text).join('')).toContain('working 2s')
   await ui.unmount()
 })
 
+test('a turn the card holds shows as running only while the host says a turn runs', async ($, on) => {
+  world(on)
+  await start($)
+  await flush()
+  // A turn whose completion never reached the card, as when it ended while the plugin was disabled.
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  await flush()
+  const idle = await $.ui.mount(band(110, false, false))
+  expect((await idle.findAll({ type: 'Text' })).map(found => found.text).join('')).not.toContain('working')
+  expect((await idle.find({ type: 'Text', text: /^● $/u }))?.props).toMatchObject({ color: '#4fb383' })
+  await idle.unmount()
+  const busy = await $.ui.mount(band(110, false, true))
+  expect((await busy.findAll({ type: 'Text' })).map(found => found.text).join('')).toContain('working 0s')
+  await busy.unmount()
+})
+
 const drawnOf = async ($: { ui: { mount: (e: never) => Promise<{ findAll: (q: object) => Promise<{ text: string }[]>; unmount: () => Promise<void> }> } }) => {
-  const ui = await $.ui.mount(band())
+  const ui = await $.ui.mount(band(110, false, true))
   const drawn = (await ui.findAll({ type: 'Text' })).map(found => found.text).join('')
   await ui.unmount()
   return drawn
