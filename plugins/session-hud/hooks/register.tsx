@@ -20,7 +20,7 @@ const TICK_MS = 30_000
 /** What the module keeps between events: the clock's timers. */
 type Held = { ticker?: Timer; fast?: Timer }
 
-/** The `cacheTtl` option: `5m` or `1h` names the lifetime until the host reports one; `off` or anything else leaves it to the host. */
+/** The `cacheTtl` option: `5m` or `1h` names the lifetime the card draws until the host reports one; `off` or anything else leaves it to the host. Resolved at render, so a changed option (which reloads the module) shows at once and never overwrites the host's. */
 const ttlOf = (value: unknown): '5m' | '1h' | undefined => (value === '5m' || value === '1h' ? value : undefined)
 
 /** Observation never changes what the host answered: a failure is one debug line. */
@@ -62,9 +62,9 @@ async function readWindow($: Dollar): Promise<void> {
 }
 
 /** The session's first figures: its model, the usage the status line has, the theme and the clock. */
-async function prime($: Dollar, ttl: '5m' | '1h' | undefined): Promise<void> {
+async function prime($: Dollar): Promise<void> {
   const [model, usage, time] = await Promise.all([$.session.model(), $.session.usage(), $.clock.now()])
-  await update($, card, () => ({ ...measured(EMPTY, usage as Measured), model, ...(ttl ? { cacheTtl: ttl } : {}) }))
+  await update($, card, () => ({ ...measured(EMPTY, usage as Measured), model }))
   await update($, nowAtom, () => time)
   const theme = await $.config.list().then(rows => rows.find(row => row.key === 'theme')?.value, () => undefined)
   await update($, paletteAtom, () => paletteOf(theme))
@@ -77,7 +77,7 @@ export const register: Register = (on, options) => {
 
   on('session.start', {}, async ($, e, next) => {
     const started = await next(e)
-    void observe($, async () => { ensureTicker($, held); await prime($, ttl) })
+    void observe($, async () => { ensureTicker($, held); await prime($) })
     return started
   })
   on('session.end', {}, (_$, e, next) => {
@@ -179,7 +179,8 @@ export const register: Register = (on, options) => {
     try {
       const [shown, time, palette] = await Promise.all([read($, card), read($, nowAtom), read($, paletteAtom)])
       const terminal = e.surface === 'terminal'
-      const lines = layoutView({ card: shown as SessionHudCard, now: time, working: shown.turnStartedAt !== undefined, palette, draw: terminal ? 'cells' : 'svg' })
+      const drawnCard = (shown.cacheTtl === undefined && ttl ? { ...shown, cacheTtl: ttl } : shown) as SessionHudCard
+      const lines = layoutView({ card: drawnCard, now: time, working: shown.turnStartedAt !== undefined, palette, draw: terminal ? 'cells' : 'svg' })
       if (!lines.length) return below
       const ui = $.ui.resolve(e)
       const { Box, Text } = ui

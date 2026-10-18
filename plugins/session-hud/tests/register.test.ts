@@ -321,6 +321,21 @@ test('with cacheTtl the card shows what is left of the cache from the first turn
   await ui.unmount()
 })
 
+test("a model switch's lifetime replaces the cacheTtl option's", { options: { cacheTtl: '1h' } }, async ($, on) => {
+  world(on)
+  await start($)
+  await flush()
+  await $.classic.PostModelSwitch({ from_model: 'claude-opus-5-5', to_model: 'claude-opus-5-5', requested_model: 'opus', source: 'command',
+    context_tokens: 0, prompt_cache_warm: true, cache_ttl: '5m', estimated_cache_write_usd: 0, pricing: 'catalog' } as never)
+  await step($)
+  await flush()
+  const ui = await $.ui.mount(band())
+  const drawn = (await ui.findAll({ type: 'Text' })).map(found => found.text).join('')
+  expect(drawn).toContain(' · 5m TTL, 5m left')
+  expect(drawn).not.toContain('1h TTL')
+  await ui.unmount()
+})
+
 test('without cacheTtl the lifetime waits for a model switch', async ($, on) => {
   world(on)
   await start($)

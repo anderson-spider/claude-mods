@@ -23,7 +23,7 @@ export type SessionHudCard = {
   cache?: number
   /** When a main-session request last read or wrote the prompt cache, in epoch milliseconds. */
   cacheUsedAt?: number
-  /** How long the prompt cache keeps an entry: the `cacheTtl` option until the host reports one (only a model switch does). */
+  /** How long the prompt cache keeps an entry, as the host last reported it (only a model switch reports it); the render falls back to the `cacheTtl` option. */
   cacheTtl?: '5m' | '1h'
   /** Main-session turns completed since the plugin loaded. */
   turns: number
