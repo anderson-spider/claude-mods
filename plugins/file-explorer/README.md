@@ -33,7 +33,7 @@ j: ↓ k: ↑ h: ← l: → o: open s: find a: @ref r: ↻
 
 ## Open it
 
-In the terminal, the pane docks beside the transcript in the fullscreen layout (`/tui fullscreen`). Claude Code opens it at session start when the terminal is at least 144 columns wide, and seats it from 110 columns once you have opened it yourself. The desktop app docks panes too and runs the same rows module, but this mod has been checked there only by its tests, not in the app.
+In the terminal, the pane docks beside the transcript in the fullscreen layout (`/tui fullscreen`). Claude Code opens it at session start when the terminal is at least 144 columns wide, and seats it from 110 columns once you have opened it yourself. The desktop app docks panes too and runs the same rows module.
 
 | Command | Does |
 | --- | --- |
@@ -117,7 +117,7 @@ Change them in `/config` (they appear under the plugin) or in `settings.json`:
 | `sort` | `name` | `name`, `type` (extension) or `modified` (newest first); folders always first. |
 | `enterAction` | `preview` | `preview` or `editor`: what Enter and a double click do on a file. |
 | `editor` | empty | A command with `{path}`, `{dir}`, `{line}`; empty opens the default app. |
-| `icons` | `unicode` | `nerd` for Nerd Font glyphs (needs a patched font), `unicode` otherwise. |
+| `icons` | `unicode` | `nerd` for Nerd Font glyphs in the terminal (needs a patched font), `unicode` otherwise. The desktop app and other surfaces draw with their own font and always get `unicode`. |
 | `theme` | `auto` | `auto` follows the Claude Code theme; `dark` and `light` are fixed palettes. |
 | `git` | `full` | `full` (letters and lines), `status` (letters only) or `off`. |
 | `search` | `fuzzy` | `fuzzy` or `substring`. |

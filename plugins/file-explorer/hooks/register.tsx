@@ -573,7 +573,8 @@ export const register: Register = (on, options) => {
     const activity = await read($, activityAtom)
     await read($, tickAtom)
     const now = await $.clock.now()
-    const { config } = held
+    // Nerd Font glyphs need the person's patched terminal font; every other surface draws with a font of its own.
+    const config = e.surface === 'terminal' ? held.config : { ...held.config, icons: 'unicode' as const }
     const columns = Math.max(10, e.props.bodyColumns)
     const c = (tone: Parameters<typeof colorOf>[0]) => colorOf(tone, config.theme)
     const table = $.ui.resolve(e)

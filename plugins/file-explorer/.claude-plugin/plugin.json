@@ -1,6 +1,6 @@
 {
   "name": "file-explorer",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "File tree pane that follows Claude's reads, edits and searches, with git status, search, preview and path references",
   "author": {
     "name": "anderson-spider"
@@ -64,7 +64,7 @@
     "icons": {
       "type": "string",
       "title": "Icons",
-      "description": "Nerd Font glyphs (needs a patched font) or plain Unicode.",
+      "description": "Nerd Font glyphs in the terminal (needs a patched font) or plain Unicode. Other surfaces always use Unicode.",
       "options": ["unicode", "nerd"],
       "default": "unicode"
     },
