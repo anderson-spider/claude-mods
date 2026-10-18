@@ -303,6 +303,17 @@ test('a settings value outside its choices reads as the default', { options: { s
   await ui.unmount()
 })
 
+test('Nerd Font icons draw in the terminal alone; the desktop app, with a font of its own, gets the Unicode set', { options: { icons: 'nerd' } }, async ($, on) => {
+  world(on, FILES)
+  await start($)
+  const terminal = await $.ui.mount(pane())
+  expect(await rows(terminal)).not.toEqual(TOP)
+  await terminal.unmount()
+  const desktop = await $.ui.mount({ ...pane(), surface: 'desktop' } as never)
+  expect(await rows(desktop as never)).toEqual(TOP)
+  await desktop.unmount()
+})
+
 test('on a surface without a rows module the rows are text and the hotkeys still move', async ($, on) => {
   world(on, FILES)
   await start($)
