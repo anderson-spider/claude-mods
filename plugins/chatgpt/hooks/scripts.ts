@@ -7,6 +7,25 @@ export const LOGIN = `(!!document.querySelector('[data-testid=login-button]') ||
 const STOP = `(!!document.querySelector('[data-testid=stop-button]') || [...document.querySelectorAll('button')].some(b => /^(Parar|Stop)/i.test(b.getAttribute('aria-label') || '')))`
 const MODEL_BUTTON = `([...document.querySelectorAll('button')].find(b => /^(Selecionar modelo|Select model|Model selector)/i.test(b.getAttribute('aria-label') || '')) || document.querySelector('[data-testid=model-switcher-dropdown-button]'))`
 const ANSWERS = `[...document.querySelectorAll('[data-markdown-text-style]')]`
+// Defines `name` (a model row's name: its first line of text, without the note under it, case and
+// spacing ignored) and `rows`, the model rows of the open menu in order; the effort controls are other items.
+const MODEL_ROWS = `
+const norm = t => (t || '').toLowerCase().replace(/\\s+/g, ' ').trim();
+const name = i => norm(i.querySelector('[data-menu-row-content] .truncate')?.textContent || (i.innerText || '').split('\\n')[0]);
+const rows = [...document.querySelectorAll('[role=menuitemradio], [role=option]')].filter(i => name(i));`
+// The effort the model button shows (`data-selected-reasoning-effort`: none, medium, high…, the same in every
+// UI language) and where the open menu's effort slider stands; `at` is null when the menu has no slider.
+const EFFORT = `(() => {
+  const slider = document.querySelector('[data-reasoning-slider] [role=slider]');
+  const value = attribute => (slider && slider.getAttribute(attribute) !== null ? Number(slider.getAttribute(attribute)) : null);
+  return { effort: ${MODEL_BUTTON}?.dataset.selectedReasoningEffort || '', at: value('aria-valuenow'), min: value('aria-valuemin'), max: value('aria-valuemax') };
+})()`
+// One element per exchange (the question and its answer), keyed by the question's message id. The
+// key stays while ChatGPT re-renders or remounts the exchange, so a run binds its answer to the
+// exchange it added rather than to a count of answers on the page.
+const TURNS = `[...document.querySelectorAll('[data-turn-key]')]`
+// The answers in the chat's last exchange.
+const LAST_ANSWERS = `[...(${TURNS}.pop()?.querySelectorAll('[data-markdown-text-style]') || [])]`
 // A generated image: a large picture whose alt says so ("Imagem 1 gerada",
 // "Generated image 1"); an attached reference has its file name instead.
 export const GENERATED = `[...document.querySelectorAll('main img')].filter(i => i.naturalWidth > 500 && /gerad|generated/i.test(i.alt || ''))`
@@ -31,13 +50,13 @@ const BLOCKER = `(() => {
 export function stateScript(waitMs: number): string {
   return `
 ${sleep(waitMs)}
-const answers = ${ANSWERS};
+const answers = ${LAST_ANSWERS};
 return JSON.stringify({
   href: location.href,
   composer: !!${COMPOSER},
   login: ${LOGIN},
   stop: ${STOP},
-  count: answers.length,
+  turns: ${TURNS}.map(t => t.dataset.turnKey),
   length: (answers.pop()?.innerText || '').length,
   images: ${GENERATED}.length,
   blocker: ${BLOCKER},
@@ -47,31 +66,51 @@ return JSON.stringify({
 // The model menu's button renders a moment after the composer, so whatever uses it waits for it first.
 export const MODEL_READY = `!!${MODEL_BUTTON}`
 
-// Opens the model menu and clicks the model whose name starts with `label`
-// (case and spacing ignored); answers the names on offer when none does. Only
-// the menu's model rows count (its effort controls are other items), and a
-// row's name is its first line of text, without the note under it.
-export function modelScript(label: string): string {
-  return `
-const norm = t => (t || '').toLowerCase().replace(/\\s+/g, ' ').trim();
-const want = norm(${JSON.stringify(label)});
+// Opens the model menu unless it is open already (picking a row leaves it open, and a click then would
+// close it), and answers its model rows in order, each by name and whether it is the checked one, and the
+// effort; `found` is false when there is no menu. The menu stays open for the next script.
+export const MODEL_ROWS_SCRIPT = `
 let button = null;
 for (let i = 0; i < 20 && !button; i++) {
   button = ${MODEL_BUTTON};
   if (!button) await new Promise(r => setTimeout(r, 250));
 }
-if (!button) return JSON.stringify({ picked: false, reason: 'model menu not found', offered: [] }); else {
-  button.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
-  button.click();
-  await new Promise(r => setTimeout(r, 800));
-  const name = i => norm(i.querySelector('[data-menu-row-content] .truncate')?.textContent || (i.innerText || '').split('\\n')[0]);
-  const items = [...document.querySelectorAll('[role=menuitemradio], [role=option]')].filter(i => name(i));
-  const item = items.find(i => name(i) === want) || items.find(i => name(i).startsWith(want));
-  if (item) item.click(); else document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-  await new Promise(r => setTimeout(r, 400));
-  return JSON.stringify(item ? { picked: true } : { picked: false, reason: 'no such entry', offered: items.map(name) });
+if (!button) return JSON.stringify({ found: false, rows: [] }); else {
+  if (button.getAttribute('aria-expanded') !== 'true') {
+    button.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+    button.click();
+    await new Promise(r => setTimeout(r, 800));
+  }
+  ${MODEL_ROWS}
+  return JSON.stringify({ found: true, rows: rows.map(i => ({ name: name(i), checked: i.getAttribute('aria-checked') === 'true' })), effort: ${EFFORT} });
 }`
+
+// Clicks the model row at `index` of the open menu, in the order MODEL_ROWS_SCRIPT answers them, and answers
+// the effort the model picked comes with.
+export function modelClickScript(index: number): string {
+  return `${MODEL_ROWS}
+const row = rows[${index}];
+if (row) row.click();
+await new Promise(r => setTimeout(r, 400));
+return JSON.stringify({ clicked: !!row, effort: ${EFFORT} });`
 }
+
+// Moves the open menu's effort slider one step with its arrow key and answers the effort it reached.
+export function effortStepScript(key: 'ArrowLeft' | 'ArrowRight'): string {
+  return `
+const item = document.querySelector('[data-reasoning-slider]');
+if (item) {
+  item.focus();
+  item.dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(key)}, bubbles: true, cancelable: true }));
+  await new Promise(r => setTimeout(r, 500));
+}
+return JSON.stringify(${EFFORT});`
+}
+
+export const MODEL_CLOSE_SCRIPT = `
+document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+await new Promise(r => setTimeout(r, 300));
+return JSON.stringify({ closed: true });`
 
 export function sendScript(prompt: string): string {
   // Every flow reaches chatgpt.com first (prepare checks it); this keeps the prompt off any other page.
@@ -192,7 +231,7 @@ function block(el) {
   return convert(el);
 }
 function convert(root) { return [...root.childNodes].map(block).join(''); }
-const last = ${ANSWERS}.pop();
+const last = ${LAST_ANSWERS}.pop();
 return JSON.stringify({
   url: location.href,
   markdown: last ? convert(last).replace(/\\n{3,}/g, '\\n\\n').trim() : '',
@@ -278,6 +317,7 @@ return JSON.stringify({
   fileInput: inputs.some(i => !i.accept),
   model: !!${MODEL_BUTTON},
   answers: ${ANSWERS}.length,
+  turns: ${TURNS}.length,
   images: ${GENERATED}.length,
   codeBlocks: all('[data-markdown-copy=code-block], pre').length,
   blocker: ${BLOCKER},

@@ -3,7 +3,7 @@ import { expect, test } from 'claude-code/testing'
 import { ASK_DESCRIPTION, IMAGE_DESCRIPTION, PROMPT } from '../hooks/prompts'
 import { JOBS_DESCRIPTION, ASK_COMMAND_DESCRIPTION, IMAGE_COMMAND_DESCRIPTION, DOCTOR_COMMAND_DESCRIPTION } from '../hooks/tool-schemas'
 import type { PageState } from '../hooks/model'
-import { fakePage, printed, scriptKind, type PageScript } from './fake-page'
+import { fakePage, printed, scriptKind, turns, type PageScript } from './fake-page'
 import { register } from '../hooks/register'
 import { withNote } from './mcp-helpers'
 
@@ -65,7 +65,7 @@ function world(on: On, init: Partial<WorldState> = {}) {
     chromeTabs: [],
     builtin: 'down',
     builtinTabs: [],
-    pages: [{ count: 0 }, { count: 1, length: 5 }, { count: 1, length: 5 }],
+    pages: [{ turns: turns(0) }, { turns: turns(1), length: 5 }, { turns: turns(1), length: 5 }],
     markdown: '## Answer',
     sent: true,
     waitFalse: 0,
@@ -383,14 +383,14 @@ test('every registered tool and command keeps its name, description and input sc
       description:
         "Ask the user's logged-in ChatGPT for a self-contained long answer, or when the user requests ChatGPT. Keep repository-dependent work local. Include the goal, minimum context, output format and language. Returns a Markdown file, chat URL and answer excerpt; past the foreground wait it is an error naming the background job that saves the answer. Use non-sensitive context; personal-project code or files require the user's request. Never send credentials, secrets, private personal data or work data (employer repos, dashboards, logs, customer data).",
       schema:
-        '{"type":"object","properties":{"prompt":{"type":"string","description":"Self-contained question."},"chatUrl":{"type":"string","description":"Continue the chat URL returned by an earlier call; omit for a new chat."},"model":{"type":"string","description":"New-chat model label prefix from the current menu; unknown labels return the available choices."},"files":{"type":"array","items":{"type":"string"},"description":"Absolute attachment paths; at most 4 MiB per file."},"wait":{"type":"boolean","description":"Default true. false starts a background job; completion sends a message. Use jobs to check it."},"saveOnly":{"type":"boolean","description":"Save the last answer in chatUrl after streaming finishes; sends nothing."},"out":{"type":"string","description":"Absolute Markdown output path."},"maxChars":{"type":"number","description":"Inline excerpt length; default 3000. The file keeps the full answer."}},"required":["prompt"]}',
+        '{"type":"object","properties":{"prompt":{"type":"string","description":"Self-contained question."},"chatUrl":{"type":"string","description":"Continue the chat URL returned by an earlier call; omit for a new chat."},"model":{"type":"string","description":"New-chat model label prefix from the current menu; omit it and a new chat uses GPT-6 at Medium effort. Unknown labels return the available choices."},"files":{"type":"array","items":{"type":"string"},"description":"Absolute attachment paths; at most 4 MiB per file."},"wait":{"type":"boolean","description":"Default true. false starts a background job; completion sends a message. Use jobs to check it."},"saveOnly":{"type":"boolean","description":"Save the last answer in chatUrl after streaming finishes; sends nothing."},"out":{"type":"string","description":"Absolute Markdown output path."},"maxChars":{"type":"number","description":"Inline excerpt length; default 3000. The file keeps the full answer."}},"required":["prompt"]}',
     },
     {
       name: 'image',
       description:
         "Generate or edit an image in the user's logged-in ChatGPT only when they ask for an image in this conversation; this spends their image quota. Describe the scene and reference features to keep in the user's language. Use original scenes without people, text or copies of games/brands. Attach only references the user requested or you produced for this task; never upload or prompt with licensed assets. Returns saved variants, sizes, chat URL and previews. Relay a refusal or question verbatim; do not rephrase around it. Label every saved result as an AI concept, never evidence of a real or in-game state. Use non-sensitive context; personal-project code or files require the user's request. Never send credentials, secrets, private personal data or work data (employer repos, dashboards, logs, customer data).",
       schema:
-        '{"type":"object","properties":{"prompt":{"type":"string","description":"Self-contained image request."},"reference":{"type":"string","description":"Absolute PNG/JPEG/WebP/GIF reference path; at most 4 MiB."},"chatUrl":{"type":"string","description":"Continue the chat URL returned by an earlier call; omit for a new chat."},"model":{"type":"string","description":"New-chat model label prefix from the current menu; unknown labels return the available choices."},"files":{"type":"array","items":{"type":"string"},"description":"Absolute attachment paths; at most 4 MiB per file."},"wait":{"type":"boolean","description":"Default true. false starts a background job; completion sends a message. Use jobs to check it."},"saveOnly":{"type":"boolean","description":"Save the last image in chatUrl after generation; sends nothing, spends no quota. prompt names the file."},"out":{"type":"string","description":"Absolute image output path; variants add -1, -2."}},"required":["prompt"]}',
+        '{"type":"object","properties":{"prompt":{"type":"string","description":"Self-contained image request."},"reference":{"type":"string","description":"Absolute PNG/JPEG/WebP/GIF reference path; at most 4 MiB."},"chatUrl":{"type":"string","description":"Continue the chat URL returned by an earlier call; omit for a new chat."},"model":{"type":"string","description":"New-chat model label prefix from the current menu; omit it and a new chat uses GPT-6 at Medium effort. Unknown labels return the available choices."},"files":{"type":"array","items":{"type":"string"},"description":"Absolute attachment paths; at most 4 MiB per file."},"wait":{"type":"boolean","description":"Default true. false starts a background job; completion sends a message. Use jobs to check it."},"saveOnly":{"type":"boolean","description":"Save the last image in chatUrl after generation; sends nothing, spends no quota. prompt names the file."},"out":{"type":"string","description":"Absolute image output path; variants add -1, -2."}},"required":["prompt"]}',
     },
     {
       name: 'jobs',
@@ -485,6 +485,10 @@ test('an ask runs on the first backend that works, saves the answer under TMPDIR
     'mcp claude-in-chrome/navigate',
     'js wait 7',
     'js state 7',
+    'js model rows 7',
+    'js model click 7',
+    'js model rows 7',
+    'js model close 7',
     'js send 7',
     'js state 7',
     'js state 7',
@@ -492,6 +496,7 @@ test('an ask runs on the first backend that works, saves the answer under TMPDIR
   ])
   expect(w.statuses).toEqual([
     'ChatGPT: opening chatgpt.com',
+    'ChatGPT: picking GPT-6',
     'ChatGPT: waiting for the answer',
     'ChatGPT: receiving (5 chars)',
     undefined,
@@ -501,7 +506,7 @@ test('an ask runs on the first backend that works, saves the answer under TMPDIR
 test('a second request goes on in the same tab of the same backend, with no new tab', async ($, on) => {
   const w = world(on)
   await toolCall($, 'ask', { prompt: 'first' })
-  w.setPages([{ count: 1 }, { count: 2, length: 3 }, { count: 2, length: 3 }])
+  w.setPages([{ turns: turns(1) }, { turns: turns(2), length: 3 }, { turns: turns(2), length: 3 }])
   const from = w.log.length
 
   const again = await toolCall($, 'ask', { prompt: 'second', chatUrl: 'https://chatgpt.com/c/abc' })
@@ -566,7 +571,7 @@ test(
   { options: { foregroundMinutes: 0.001 } },
   async ($, on) => {
     // The page never shows an answer while the foreground waits; once its partial answer is read back, the chat has one.
-    const w = world(on, { pages: [{ count: 0 }], pagesAfterRead: [{ count: 1, length: 9 }] })
+    const w = world(on, { pages: [{ turns: turns(0) }], pagesAfterRead: [{ turns: turns(1), length: 9 }] })
 
     const answer = await toolCall($, 'ask', { prompt: 'slow one' })
 
@@ -597,7 +602,7 @@ test('a failure while a request runs is answered as the browser failing, and the
 
 test('requests take turns: the second waits for the first and says it is queued', async ($, on) => {
   const w = world(on, {
-    pages: [{ count: 0 }, { count: 1, length: 5 }, { count: 1, length: 5 }, { count: 1 }, { count: 2, length: 7 }, { count: 2, length: 7 }],
+    pages: [{ turns: turns(0) }, { turns: turns(1), length: 5 }, { turns: turns(1), length: 5 }, { turns: turns(1) }, { turns: turns(2), length: 7 }, { turns: turns(2), length: 7 }],
   })
 
   const [first, second] = await Promise.all([toolCall($, 'ask', { prompt: 'first' }), toolCall($, 'ask', { prompt: 'second' })])
@@ -634,6 +639,7 @@ test('an image request saves each image at out, through the host, and answers wi
   expect(w.stdins).toEqual([IMAGE_BASE64])
   expect(w.statuses).toEqual([
     'ChatGPT: opening chatgpt.com',
+    'ChatGPT: picking GPT-6',
     'ChatGPT: waiting for the image',
     'ChatGPT: saving the image',
     undefined,
@@ -752,6 +758,7 @@ test('/chatgpt-doctor trims its argument as a chat URL, opens it and also checks
   expect(answer.text).toBe(
     [
       ...DOCTOR_REPORT,
+      '✓ exchanges: 2 found ([data-turn-key]): answers are bound to them',
       '✓ answers: 3 found ([data-markdown-text-style])',
       '✓ generated images: 1 found',
       '✓ code blocks: 2 found',

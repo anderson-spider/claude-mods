@@ -11,7 +11,7 @@ const COMMON_PROPERTIES = {
   },
   model: {
     type: 'string',
-    description: 'New-chat model label prefix from the current menu; unknown labels return the available choices.',
+    description: 'New-chat model label prefix from the current menu; omit it and a new chat uses GPT-6 at Medium effort. Unknown labels return the available choices.',
   },
   files: {
     type: 'array',

@@ -2,28 +2,28 @@ import { expect, test } from 'claude-code/testing'
 import { ask } from '../hooks/ask'
 import { isChatUrl } from '../hooks/tab'
 import { inputFor } from '../hooks/scripts'
-import { fakeBrowser, printed } from './fake-page'
+import { fakeBrowser, fakeMenu, printed, turns } from './fake-page'
 
 test('ask reuses the plugin\'s tab, starts a new chat and waits until the answer settles', async () => {
   const { browser, calls } = fakeBrowser({
     tabs: ['seed'],
     pages: [
-      { count: 2 },
-      { count: 2, stop: true },
-      { count: 3, stop: true, length: 10 },
-      { count: 3, stop: false, length: 40 },
-      { count: 3, stop: false, length: 40 },
+      { turns: turns(2) },
+      { turns: turns(2), stop: true },
+      { turns: turns(3), stop: true, length: 10 },
+      { turns: turns(3), stop: false, length: 40 },
+      { turns: turns(3), stop: false, length: 40 },
     ],
     markdown: '## Answer',
   })
   const result = await ask(browser, { prompt: 'hi' }, { pollMs: 0, tab: { id: 'seed' } })
 
   expect(result).toEqual({ ok: true, url: 'https://chatgpt.com/c/abc', markdown: '## Answer' })
-  expect(calls).toEqual(['tabs', 'navigate seed https://chatgpt.com/', 'send seed', 'read seed'])
+  expect(calls).toEqual(['tabs', 'navigate seed https://chatgpt.com/', 'model rows seed', 'model click seed', 'model rows seed', 'model close seed', 'send seed', 'read seed'])
 })
 
 test('ask opens a tab of its own when it has none or its tab is gone', async () => {
-  const settled = [{ count: 0 }, { count: 1, length: 5 }, { count: 1, length: 5 }]
+  const settled = [{ turns: turns(0) }, { turns: turns(1), length: 5 }, { turns: turns(1), length: 5 }]
   const none = fakeBrowser({ tabs: [], pages: settled, markdown: 'a' })
   await ask(none.browser, { prompt: 'hi' }, { pollMs: 0 })
   expect(none.calls[0]).toBe('open https://chatgpt.com/')
@@ -34,7 +34,7 @@ test('ask opens a tab of its own when it has none or its tab is gone', async () 
 })
 
 test('ask leaves the user\'s own chatgpt tab alone and keeps its tab for the next request', async () => {
-  const settled = [{ count: 0 }, { count: 1, length: 5 }, { count: 1, length: 5 }]
+  const settled = [{ turns: turns(0) }, { turns: turns(1), length: 5 }, { turns: turns(1), length: 5 }]
   const first = fakeBrowser({ tabs: ['seed'], pages: settled, markdown: 'a' })
   const tab = {}
   await ask(first.browser, { prompt: 'hi' }, { pollMs: 0, tab })
@@ -49,7 +49,7 @@ test('ask leaves the user\'s own chatgpt tab alone and keeps its tab for the nex
 test('ask continues the chat at chatUrl', async () => {
   const { browser, calls } = fakeBrowser({
     tabs: ['seed'],
-    pages: [{ count: 1 }, { count: 2, length: 3 }, { count: 2, length: 3 }],
+    pages: [{ turns: turns(1) }, { turns: turns(2), length: 3 }, { turns: turns(2), length: 3 }],
     markdown: 'ok',
   })
   await ask(browser, { prompt: 'more', chatUrl: 'https://chatgpt.com/c/6ac52f21-493c' }, { pollMs: 0, tab: { id: 'seed' } })
@@ -122,7 +122,7 @@ test('ask reports a prompt it could not send', async () => {
 test('ask gives up after the timeout and returns what streamed so far', async () => {
   const { browser } = fakeBrowser({
     tabs: ['seed'],
-    pages: [{ count: 0 }, { count: 1, stop: true, length: 10 }],
+    pages: [{ turns: turns(0) }, { turns: turns(1), stop: true, length: 10 }],
     markdown: 'partial',
   })
   const result = await ask(browser, { prompt: 'hi' }, { pollMs: 0, timeoutMs: -1 })
@@ -134,15 +134,11 @@ test('ask gives up after the timeout and returns what streamed so far', async ()
 test('ask picks the model and attaches files by path where the browser uploads', async () => {
   const { browser, calls } = fakeBrowser({
     tabs: ['seed'],
-    pages: [{ count: 0 }, { count: 1, length: 5 }, { count: 1, length: 5 }],
+    pages: [{ turns: turns(0) }, { turns: turns(1), length: 5 }, { turns: turns(1), length: 5 }],
     markdown: 'ok',
   })
   const js = browser.js
   browser.js = async (tabId, code) => {
-    if (code.includes('Selecionar modelo')) {
-      calls.push('model')
-      return printed({ picked: true })
-    }
     if (code.includes('attachment did not show up')) {
       calls.push('chip')
       return printed({ attached: true })
@@ -156,19 +152,19 @@ test('ask picks the model and attaches files by path where the browser uploads',
   expect(calls).toEqual([
     'tabs',
     'navigate seed https://chatgpt.com/',
-    'model',
+    'model rows seed',
+    'model click seed',
     `upload seed ${inputFor('text/markdown')} /x/notes.md`,
     'chip',
+    'model rows seed',
+    'model close seed',
     'send seed',
     'read seed',
   ])
 })
 
 test('ask names the models on offer when the one asked for is missing, and sends nothing', async () => {
-  const { browser, calls } = fakeBrowser({ tabs: [], pages: [{}], markdown: '' })
-  const js = browser.js
-  browser.js = async (tabId, code) =>
-    code.includes('Selecionar modelo') ? printed({ picked: false, reason: 'no such entry', offered: ['latest', 'gpt-5.6 sol'] }) : js(tabId, code)
+  const { browser, calls } = fakeBrowser({ tabs: [], pages: [{}], markdown: '', menu: fakeMenu(['Latest', 'GPT-5.6 Sol'], 'Latest') })
   const result = await ask(browser, { prompt: 'hi', model: 'gpt-9' }, { pollMs: 0 })
 
   expect(!result.ok && result.error).toContain('The menu offers: latest, gpt-5.6 sol')
@@ -178,7 +174,7 @@ test('ask names the models on offer when the one asked for is missing, and sends
 test('ask with saveOnly waits for a streaming answer and saves it without sending', async () => {
   const { browser, calls } = fakeBrowser({
     tabs: [],
-    pages: [{ count: 4, stop: true, length: 10 }, { count: 4, stop: true, length: 30 }, { count: 4, length: 50 }, { count: 4, length: 50 }],
+    pages: [{ turns: turns(4), stop: true, length: 10 }, { turns: turns(4), stop: true, length: 30 }, { turns: turns(4), length: 50 }, { turns: turns(4), length: 50 }],
     markdown: 'the long answer',
   })
   const chatUrl = 'https://chatgpt.com/c/abc-1'
@@ -194,13 +190,13 @@ test('ask with saveOnly waits for a streaming answer and saves it without sendin
 test('ask stops at a usage limit and marks a timeout that may still finish', async () => {
   const limited = fakeBrowser({
     tabs: [],
-    pages: [{ count: 0 }, { count: 0, blocker: "You've reached your message limit" }],
+    pages: [{ turns: turns(0) }, { turns: turns(0), blocker: "You've reached your message limit" }],
     markdown: '',
   })
   const stopped = await ask(limited.browser, { prompt: 'hi' }, { pollMs: 0 })
   expect(!stopped.ok && stopped.error).toContain('reached your message limit')
 
-  const slow = fakeBrowser({ tabs: [], pages: [{ count: 0 }, { count: 1, stop: true, length: 3 }], markdown: 'par' })
+  const slow = fakeBrowser({ tabs: [], pages: [{ turns: turns(0) }, { turns: turns(1), stop: true, length: 3 }], markdown: 'par' })
   const late = await ask(slow.browser, { prompt: 'hi' }, { pollMs: 0, timeoutMs: -1 })
   expect(!late.ok && late.timedOut).toBe(true)
 })

@@ -14,6 +14,7 @@ type Doctor = {
   fileInput: boolean
   model: boolean
   answers: number
+  turns: number
   images: number
   codeBlocks: number
   blocker: string
@@ -46,6 +47,7 @@ export async function diagnose(browser: Pick<Browser, 'name' | 'tabs' | 'openTab
   ]
   if (chatUrl !== undefined) {
     checks.push(
+      { name: 'exchanges', ok: page.turns > 0, detail: `${page.turns} found ([data-turn-key]): answers are bound to them` },
       { name: 'answers', ok: page.answers > 0, detail: `${page.answers} found ([data-markdown-text-style])` },
       { name: 'generated images', ok: true, detail: `${page.images} found` },
       { name: 'code blocks', ok: true, detail: `${page.codeBlocks} found` },

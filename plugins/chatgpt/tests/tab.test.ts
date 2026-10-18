@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 import type { Browser, PageState, TabHolder } from '../hooks/model'
 import { blocked, chatUrlError, findTab, LOAD_MS, pageStateOf, prepare } from '../hooks/tab'
 import { COMPOSER, LANDED, LOGIN } from '../hooks/scripts'
-import { fakeBrowser, printed } from './fake-page'
+import { fakeBrowser, printed, turns } from './fake-page'
 
 // Every browser call a tab test makes, in order, with the waits it asked for.
 function recording(options: { tabs: string[]; pages?: Partial<PageState>[]; markdown?: string }) {
@@ -117,13 +117,13 @@ test('prepare on a page outside chatgpt.com is not ready, whatever the composer 
 })
 
 test('prepare refuses a chat that is still answering, unless the run is saving it', async () => {
-  const busy = recording({ tabs: ['seed'], pages: [{ stop: true, count: 2 }] })
+  const busy = recording({ tabs: ['seed'], pages: [{ stop: true, turns: turns(2) }] })
   const refused = await prepare(busy.browser, {}, { progress: () => {}, tab: { id: 'seed' }, backends: [] })
   expect(refused).toEqual({ ok: false, url: 'https://chatgpt.com/', error: 'ChatGPT is still answering in that chat; wait and try again.' })
 
-  const saving = recording({ tabs: ['seed'], pages: [{ stop: true, count: 2 }] })
+  const saving = recording({ tabs: ['seed'], pages: [{ stop: true, turns: turns(2) }] })
   const accepted = await prepare(saving.browser, {}, { progress: () => {}, tab: { id: 'seed' }, busy: true, backends: [] })
-  expect(accepted).toMatchObject({ ok: true, tabId: 'seed', page: { stop: true, count: 2 } })
+  expect(accepted).toMatchObject({ ok: true, tabId: 'seed', page: { stop: true, turns: turns(2) } })
 })
 
 test('blocked quotes a blocker on the page and says nothing without one', () => {

@@ -1,6 +1,6 @@
 import type { AskInput, AskOptions, Browser, PageState } from './model'
 import { blocked, isChatUrl, prepare } from './tab'
-import { chipScript, inputFor, modelScript, parseOutput, READ_SCRIPT, sendScript, stateScript } from './scripts'
+import { chipScript, effortStepScript, inputFor, MODEL_CLOSE_SCRIPT, MODEL_ROWS_SCRIPT, modelClickScript, parseOutput, READ_SCRIPT, sendScript, stateScript } from './scripts'
 
 /** A blocker that ends a run at once (a limit, a verification), not just any dialog. */
 export function isHardBlocker(text: string): boolean {
@@ -41,19 +41,91 @@ export async function openRun(
 export async function submit(run: OpenRun, input: AskInput): Promise<{ ok: false; url: string; error: string } | undefined> {
   const failed = await compose(run.browser, run.tabId, input, run.progress)
   if (failed) return { ok: false, url: run.start.href, error: failed }
+  const choice = choiceOf(input)
+  const wrong = choice ? await checkModel(run.browser, run.tabId, choice) : undefined
+  if (wrong) return { ok: false, url: run.start.href, error: wrong }
   const sent = await send(run.browser, run.tabId, input.prompt)
   if (!sent.ok) return { ok: false, url: run.start.href, error: sent.text }
   return undefined
 }
 
-// Picks the model and attaches the files, in that order; an error string stops the run.
+/** A model to pick by its menu label, and the effort to set on it; without `effort`, the model keeps the one it comes with. */
+export type Choice = { model: string; effort?: string }
+
+/** What a new chat runs with when the request names no model. */
+export const DEFAULT_CHOICE: Choice = { model: 'GPT-6', effort: 'medium' }
+
+/** What a run picks before it sends: the model asked for, else the default on a new chat; nothing on a chat that goes on. */
+export function choiceOf(input: AskInput): Choice | undefined {
+  if (input.model) return { model: input.model }
+  return input.chatUrl === undefined ? DEFAULT_CHOICE : undefined
+}
+
+/** The effort the model button shows and where the effort slider stands; `at` is null without a slider. */
+type Effort = { effort: string; at: number | null; min: number | null; max: number | null }
+
+type ModelRows = { found: boolean; rows: { name: string; checked: boolean }[]; effort: Effort }
+
+// What a model is matched by: one rollout of chatgpt.com names a row "GPT-6" and another only "6", so a
+// "GPT" before the version number is not part of it.
+const modelKey = (name: string) =>
+  name
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^gpt[-\s]?(?=\d)/, '')
+
+/** The index of the row `label` names among the menu's row names: the one named exactly, else the first whose name starts with it; -1 for none. */
+export function modelRow(names: readonly string[], label: string): number {
+  const want = modelKey(label)
+  const keys = names.map(modelKey)
+  const exact = keys.indexOf(want)
+  return exact >= 0 ? exact : keys.findIndex(key => key.startsWith(want))
+}
+
+// Moves the effort slider to `effort`: down to its first step, then up one step at a time until the button
+// shows it. The efforts a model offers differ, so the slider is walked rather than its steps named; a step
+// that does not move it ends the walk. The error, or undefined once it shows `effort`.
+async function setEffort(browser: Pick<Browser, 'js'>, tabId: string, effort: string, start: Effort, progress: (text: string) => void): Promise<string | undefined> {
+  if (start.effort === effort) return undefined
+  progress(`setting the effort to ${effort}`)
+  if (start.at === null || start.min === null || start.max === null) return `Could not set the effort "${effort}": the model menu has no effort slider.`
+  const seen = [start.effort]
+  let state = start
+  for (const key of ['ArrowLeft', 'ArrowRight'] as const) {
+    const end = key === 'ArrowLeft' ? start.min : start.max
+    while (state.at !== null && state.at !== end) {
+      const next = parseOutput<Effort>(await browser.js(tabId, effortStepScript(key)))
+      if (next.effort === effort) return undefined
+      if (!seen.includes(next.effort)) seen.push(next.effort)
+      if (next.at === state.at) break
+      state = next
+    }
+  }
+  return `Could not set the effort "${effort}": the slider offers ${seen.join(', ')}.`
+}
+
+// Picks the model and its effort, then attaches the files, in that order; an error string stops the run.
 export async function compose(browser: Pick<Browser, 'js' | 'upload'>, tabId: string, input: AskInput, progress: (text: string) => void): Promise<string | undefined> {
-  if (input.model) {
-    progress(`picking ${input.model}`)
-    const picked = parseOutput<{ picked: boolean; reason?: string; offered?: string[] }>(await browser.js(tabId, modelScript(input.model)))
-    if (!picked.picked) {
-      const offered = picked.offered?.length ? ` The menu offers: ${picked.offered.join(', ')}.` : ''
-      return `Could not pick the model "${input.model}": ${picked.reason}.${offered}`
+  const choice = choiceOf(input)
+  if (choice) {
+    progress(`picking ${choice.model}`)
+    const menu = parseOutput<ModelRows>(await browser.js(tabId, MODEL_ROWS_SCRIPT))
+    if (!menu.found) return `Could not pick the model "${choice.model}": model menu not found.`
+    const names = menu.rows.map(row => row.name)
+    const index = modelRow(names, choice.model)
+    if (index < 0) {
+      await browser.js(tabId, MODEL_CLOSE_SCRIPT)
+      const offered = names.length ? ` The menu offers: ${names.join(', ')}.` : ''
+      return `Could not pick the model "${choice.model}": no such entry.${offered}`
+    }
+    const picked = parseOutput<{ clicked: boolean; effort: Effort }>(await browser.js(tabId, modelClickScript(index)))
+    if (choice.effort) {
+      const failed = await setEffort(browser, tabId, choice.effort, picked.effort, progress)
+      if (failed) {
+        await browser.js(tabId, MODEL_CLOSE_SCRIPT)
+        return failed
+      }
     }
   }
   for (const file of input.files ?? []) {
@@ -61,6 +133,22 @@ export async function compose(browser: Pick<Browser, 'js' | 'upload'>, tabId: st
     await browser.upload(tabId, inputFor(file.type), [file])
     const attached = parseOutput<{ attached: boolean; reason?: string }>(await browser.js(tabId, chipScript(file.name)))
     if (!attached.attached) return `Could not attach ${file.name}: ${attached.reason}.`
+  }
+  return undefined
+}
+
+// Whether the model menu still has the choice's model checked, and its effort when it names one, read again
+// just before the prompt goes; the error otherwise.
+export async function checkModel(browser: Pick<Browser, 'js'>, tabId: string, choice: Choice): Promise<string | undefined> {
+  const menu = parseOutput<ModelRows>(await browser.js(tabId, MODEL_ROWS_SCRIPT))
+  if (menu.found) await browser.js(tabId, MODEL_CLOSE_SCRIPT)
+  const checked = menu.rows.findIndex(row => row.checked)
+  if (checked < 0 || checked !== modelRow(menu.rows.map(row => row.name), choice.model)) {
+    const shown = checked >= 0 ? `"${menu.rows[checked]!.name}" checked` : 'no model checked'
+    return `The model menu shows ${shown} instead of "${choice.model}"; the prompt was not sent.`
+  }
+  if (choice.effort && menu.effort?.effort !== choice.effort) {
+    return `The model menu shows the effort "${menu.effort?.effort ?? ''}" instead of "${choice.effort}"; the prompt was not sent.`
   }
   return undefined
 }
@@ -78,9 +166,15 @@ export async function readAnswer(browser: Pick<Browser, 'js'>, tabId: string): P
   return { url: read.url, markdown: read.markdown || read.text }
 }
 
+/** Whether the chat's last exchange is one `known` does not hold: the run's own. */
+export function isNewTurn(page: PageState, known: readonly string[]): boolean {
+  const last = page.turns.at(-1)
+  return last !== undefined && !known.includes(last)
+}
+
 type Watch<E extends string> = {
-  /** How many answers the chat had before this run; a later one is the run's. */
-  before: number
+  /** The chat's exchanges before this run: a last exchange outside them is the run's. */
+  known: readonly string[]
   pollMs: number
   timeoutMs: number
   /** How the run ended, or false while it goes on; `settled` is a new answer whose length held across two reads. */
@@ -99,9 +193,9 @@ export async function watch<E extends string>(
 ): Promise<{ end: E | 'blocked' | 'timeout'; page: PageState }> {
   const started = Date.now()
   const script = stateScript(o.pollMs)
-  const lengthOf = (p: PageState) => (p.count > o.before ? p.length : -1)
+  const lengthOf = (p: PageState) => (isNewTurn(p, o.known) ? p.length : -1)
   let lastLength = lengthOf(page)
-  const settledOf = (p: PageState) => p.count > o.before && !p.stop && p.length > 0 && p.length === lastLength
+  const settledOf = (p: PageState) => isNewTurn(p, o.known) && !p.stop && p.length > 0 && p.length === lastLength
   let end = o.until(page, settledOf(page))
   while (!end) {
     page = parseOutput<PageState>(await browser.js(tabId, script))
