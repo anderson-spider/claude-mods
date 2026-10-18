@@ -14,7 +14,7 @@
 
 The run goes through Understand, Plan, Investigate, Execute, Review, Verify and Complete. Small or tightly coupled work stays with the session; read-only questions run in parallel; writers never touch the same files at once.
 
-In an empty directory the run starts a new project: it writes `docs/SPEC.md`, `docs/PLAN.md`, a short `AGENTS.md` and `filemap.md`, and delegates nothing until you approve the spec and the plan. Visual and product decisions stay with the session, which shows new screens as mockups first and reviews what was built itself.
+Asked to build a new project from an empty directory, the run starts it: it writes `docs/SPEC.md`, `docs/PLAN.md`, a short `AGENTS.md` and `filemap.md`, and delegates nothing until you approve the spec and the plan. Visual decisions stay with the session, which shows new screens as mockups first and reviews what was built itself; product questions the request leaves open go to you.
 
 To stop retyping the command, turn on session mode:
 
