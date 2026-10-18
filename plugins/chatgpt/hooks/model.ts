@@ -68,6 +68,8 @@ export type PageState = {
   length: number
   images: number
   blocker: string
+  /** The chat's last exchange shows that ChatGPT lost the connection while it answered. */
+  interrupted: boolean
 }
 
 export type Image = { base64: string; type: string; width: number; height: number; alt: string }

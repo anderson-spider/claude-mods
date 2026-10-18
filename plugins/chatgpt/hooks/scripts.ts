@@ -47,6 +47,10 @@ const BLOCKER = `(() => {
   return error ? error.innerText.trim().replace(/\\s+/g, ' ').slice(0, ${BLOCKER_MAX}) : '';
 })()`
 
+// The status line ChatGPT shows in an exchange whose stream dropped ("Connection interrupted. Waiting for
+// the complete answer", "Conexão interrompida…"): its class names it in every UI language, the text is the fallback.
+const INTERRUPTED = `[...(${TURNS}.pop()?.querySelectorAll('[role=status]') || [])].some(s => !!s.querySelector('.text-chatgpt-recovery') || /connection interrupted|conexão interrompida/i.test(s.innerText || ''))`
+
 export function stateScript(waitMs: number): string {
   return `
 ${sleep(waitMs)}
@@ -60,6 +64,7 @@ return JSON.stringify({
   length: (answers.pop()?.innerText || '').length,
   images: ${GENERATED}.length,
   blocker: ${BLOCKER},
+  interrupted: ${INTERRUPTED},
 })`
 }
 

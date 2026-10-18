@@ -211,6 +211,11 @@ export async function watch<E extends string>(
 
 export const stopped = (page: PageState) => ({ ok: false as const, url: page.href, error: `ChatGPT stopped: "${page.blocker}".` })
 
+// A run whose stream dropped at `url`: timed out, since ChatGPT may still finish the answer there.
+export function interrupted(url: string) {
+  return { ok: false as const, url, timedOut: isChatUrl(url), error: `ChatGPT lost the connection while answering; the answer may still finish at ${url}.` }
+}
+
 // A run that ran out of time at `url`; `timedOut` when the chat may still finish there.
 export function unfinished(url: string, page: PageState, timeoutMs: number, what: string, doing: string) {
   return {

@@ -151,6 +151,37 @@ test('an ask that times out keeps the streamed part in a file and says the chat 
   })
 })
 
+test('an ask whose answer loses its connection ends at once as timed out, with the chat url and the part so far', async () => {
+  const { browser } = fakeBrowser({
+    tabs: [],
+    pages: [{ turns: turns(0) }, { turns: turns(1), stop: true, length: 3 }, { turns: turns(1), stop: true, length: 3, interrupted: true }, { turns: turns(1), length: 9 }],
+    markdown: 'par',
+  })
+  const h = harness(browser)
+  const outcome = await performRequest(h.deps, { kind: 'ask', input: { prompt: 'hi' }, filePaths: [], out: '/out/partial.md' }, { pollMs: 0 })
+
+  expect(outcome).toEqual({
+    ok: false,
+    text: 'ChatGPT lost the connection while answering; the answer may still finish at https://chatgpt.com/c/abc.\nPartial answer saved to /out/partial.md.',
+    error: 'ChatGPT lost the connection while answering; the answer may still finish at https://chatgpt.com/c/abc.',
+    chatUrl: 'https://chatgpt.com/c/abc',
+    paths: ['/out/partial.md'],
+    timedOut: true,
+  })
+})
+
+test('saving an answer whose connection dropped keeps waiting for it', async () => {
+  const { browser } = fakeBrowser({
+    tabs: ['seed'],
+    pages: [{ href: 'https://chatgpt.com/c/abc', turns: turns(1), stop: true, length: 3, interrupted: true }, { href: 'https://chatgpt.com/c/abc', turns: turns(1), length: 9 }],
+    markdown: 'full text',
+  })
+  const h = harness(browser)
+  const outcome = await performRequest(h.deps, { kind: 'ask', input: { prompt: 'hi', chatUrl: 'https://chatgpt.com/c/abc', saveOnly: true }, filePaths: [] }, { pollMs: 0, tab: { id: 'seed' } })
+
+  expect(outcome.ok).toBe(true)
+})
+
 test('an ask whose prompt the page refuses answers the send text, with the page url and no file', async () => {
   const { browser } = fakeBrowser({ tabs: ['seed'], pages: [{}], markdown: '', sent: false })
   const h = harness(browser)
@@ -351,6 +382,26 @@ test('an ask whose effort moved off medium before the send sends nothing and say
 
   expect(calls.some(call => call.startsWith('send'))).toBe(false)
   expect(outcome).toMatchObject({ ok: false, error: 'The model menu shows the effort "high" instead of "medium"; the prompt was not sent.' })
+})
+
+test('an ask says it is receiving only once the exchange it added holds text', async () => {
+  const { browser } = fakeBrowser({
+    tabs: ['seed'],
+    pages: [
+      { turns: turns(1) },
+      // The new exchange shows up before its answer has any text.
+      { turns: turns(2), stop: true, length: 0 },
+      { turns: turns(2), stop: true, length: 4 },
+      { turns: turns(2), length: 4 },
+    ],
+    markdown: 'PONG',
+  })
+  const h = harness(browser)
+  const progress: string[] = []
+  const outcome = await performRequest(h.deps, { kind: 'ask', input: { prompt: 'hi' }, filePaths: [] }, { pollMs: 0, tab: { id: 'seed' }, progress: text => progress.push(text) })
+
+  expect(outcome.ok).toBe(true)
+  expect(progress).toEqual(['opening chatgpt.com', 'picking GPT-6', 'waiting for the answer', 'waiting for the answer', 'receiving (4 chars)'])
 })
 
 test('an ask waits for the exchange it added, not for an old one the chat remounts while it streams', async () => {
