@@ -1,5 +1,5 @@
 import type { AskInput, AskOptions, AskResult, Browser } from './model'
-import { isNewTurn, openRun, readAnswer, stopped, submit, unfinished, watch } from './conversation'
+import { interrupted, isNewTurn, openRun, readAnswer, stopped, submit, unfinished, watch } from './conversation'
 
 // The ask flow's noun for the saveOnly guard, and its poll interval.
 const ASK = { noun: 'answer', pollMs: 3000 }
@@ -21,14 +21,17 @@ export async function ask(browser: Browser, input: AskInput, options: AskOptions
     known,
     pollMs,
     timeoutMs,
-    until: (_page, settled) => settled && 'answer',
-    onPoll: p => progress(isNewTurn(p, known) ? `receiving (${p.length} chars)` : 'waiting for the answer'),
+    // A dropped stream ends the run at once, timed out so the chat can be saved later; saving it waits instead.
+    until: (p, settled) => (settled ? 'answer' : !input.saveOnly && p.interrupted && isNewTurn(p, known) && 'interrupted'),
+    // The new exchange shows up before its answer has text: until then the run still waits.
+    onPoll: p => progress(isNewTurn(p, known) && p.length > 0 ? `receiving (${p.length} chars)` : 'waiting for the answer'),
   })
   if (watched.end === 'blocked') return stopped(watched.page)
-  if (watched.end === 'timeout') {
+  if (watched.end === 'timeout' || watched.end === 'interrupted') {
     const partial = await readAnswer(browser, tabId)
     const markdown = isNewTurn(watched.page, known) ? partial.markdown : undefined
-    return { ...unfinished(partial.url, watched.page, timeoutMs, 'complete answer', 'streaming'), markdown }
+    const ended = watched.end === 'interrupted' ? interrupted(partial.url) : unfinished(partial.url, watched.page, timeoutMs, 'complete answer', 'streaming')
+    return { ...ended, markdown }
   }
 
   const { url, markdown } = await readAnswer(browser, tabId)

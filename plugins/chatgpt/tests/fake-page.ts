@@ -6,7 +6,7 @@ import type { Browser, PageState } from '../hooks/model'
 export const printed = (value: unknown) => `${JSON.stringify(JSON.stringify(value))}\n`
 
 /** The state poll of a settled page on a fresh chat. */
-export const basePage: PageState = { href: 'https://chatgpt.com/', composer: true, login: false, stop: false, turns: [], length: 0, images: 0, blocker: '' }
+export const basePage: PageState = { href: 'https://chatgpt.com/', composer: true, login: false, stop: false, turns: [], length: 0, images: 0, blocker: '', interrupted: false }
 
 /** The keys of a chat's first `count` exchanges: a page with one more holds a new one. */
 export const turns = (count: number) => Array.from({ length: count }, (_, i) => `turn-${i + 1}`)
