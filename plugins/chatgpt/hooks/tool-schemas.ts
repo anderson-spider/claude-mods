@@ -1,7 +1,11 @@
 import type { McpToolInputs } from 'claude-code'
+import { DEFAULT_CHOICE } from './conversation'
 import { ASK_DESCRIPTION, IMAGE_DESCRIPTION } from './prompts'
 import type { Request } from './model'
 import type { SchemaFor } from './schema'
+
+// The default as the menu labels it ("Medium"); the README repeats this text by hand.
+const DEFAULT_EFFORT = DEFAULT_CHOICE.effort[0]!.toUpperCase() + DEFAULT_CHOICE.effort.slice(1)
 
 // `as const` keeps each `type` a literal, which the SchemaFor check below needs.
 const COMMON_PROPERTIES = {
@@ -11,7 +15,7 @@ const COMMON_PROPERTIES = {
   },
   model: {
     type: 'string',
-    description: 'New-chat model label prefix from the current menu; omit it and a new chat uses GPT-6 at Medium effort. Unknown labels return the available choices.',
+    description: `New-chat model label prefix from the current menu; omit it and a new chat uses ${DEFAULT_CHOICE.model} at ${DEFAULT_EFFORT} effort. Unknown labels return the available choices.`,
   },
   files: {
     type: 'array',

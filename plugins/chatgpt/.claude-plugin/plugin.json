@@ -1,6 +1,6 @@
 {
   "name": "chatgpt",
-  "version": "0.10.2",
+  "version": "0.10.3",
   "description": "Ask ChatGPT or generate requested images in a logged-in browser; save results locally.",
   "author": {
     "name": "anderson-spider"

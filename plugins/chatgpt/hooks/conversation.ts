@@ -53,7 +53,7 @@ export async function submit(run: OpenRun, input: AskInput): Promise<{ ok: false
 export type Choice = { model: string; effort?: string }
 
 /** What a new chat runs with when the request names no model. */
-export const DEFAULT_CHOICE: Choice = { model: 'GPT-6', effort: 'medium' }
+export const DEFAULT_CHOICE = { model: 'GPT-6', effort: 'medium' } satisfies Choice
 
 /** What a run picks before it sends: the model asked for, else the default on a new chat; nothing on a chat that goes on. */
 export function choiceOf(input: AskInput): Choice | undefined {
