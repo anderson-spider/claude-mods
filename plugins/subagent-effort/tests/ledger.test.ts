@@ -7,7 +7,7 @@ const ts = '2026-10-17T00:00:00.000Z'
 
 test('a decision line projects each field and drops anything that is not a plain word or a count', () => {
   expect(decisionLine({ ts, toolUseId: 'bad id/with path', agentType: 'Explore', briefChars: 12.4, source: 'jev', received: 'max', effort: 'high', choice: { effort: 'high', level: 2, top: 0.876, jevReason: null, jevMs: 210, jevTokens: { input: 308.4, output: 19 } } }))
-    .toEqual({ v: 1, kind: 'decision', calibration: 1, ts, tool_use_id: null, agentType: 'Explore', briefChars: 12, source: 'jev', received: 'max', effort: 'high', level: 2, top: 0.88, jevReason: null, jevMs: 210, jevTokens: { input: 308, output: 19 }, jevCostUsd: 0.000012936 })
+    .toEqual({ v: 1, kind: 'decision', calibration: 2, ts, tool_use_id: null, agentType: 'Explore', briefChars: 12, source: 'jev', received: 'max', effort: 'high', level: 2, top: 0.88, jevReason: null, jevMs: 210, jevTokens: { input: 308, output: 19 }, jevCostUsd: 0.000012936 })
   expect(decisionLine({ ts, toolUseId: 'toolu_2', agentType: 'plugin:agent', briefChars: 3, source: 'off', received: null, effort: null, choice: { effort: null, level: null, top: null, jevReason: 'no-key', jevMs: null, jevTokens: null } }))
     .toMatchObject({ jevTokens: null, jevCostUsd: null, agentType: 'plugin:agent', source: 'off', received: null, effort: null, level: null, top: null, jevReason: 'no-key' })
 })
