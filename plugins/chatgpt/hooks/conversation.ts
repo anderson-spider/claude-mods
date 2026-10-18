@@ -120,6 +120,11 @@ export async function compose(browser: Pick<Browser, 'js' | 'upload'>, tabId: st
       return `Could not pick the model "${choice.model}": no such entry.${offered}`
     }
     const picked = parseOutput<{ clicked: boolean; effort: Effort }>(await browser.js(tabId, modelClickScript(index)))
+    // The menu changed between reading and clicking: its effort belongs to the model still checked.
+    if (!picked.clicked) {
+      await browser.js(tabId, MODEL_CLOSE_SCRIPT)
+      return `Could not pick the model "${choice.model}": its menu entry was gone by the click.`
+    }
     if (choice.effort) {
       const failed = await setEffort(browser, tabId, choice.effort, picked.effort, progress)
       if (failed) {

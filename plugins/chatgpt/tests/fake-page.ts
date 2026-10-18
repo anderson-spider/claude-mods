@@ -151,12 +151,12 @@ export function fakePage(script: PageScript) {
  * The model menu, with its rows named as the page shows them and `checked` the selected one, and its effort
  * slider over `efforts` (none, medium, high by default) standing at `effort` (medium by default). `stuck` makes
  * a click leave the checked row as it was, and `stuckEffort` an arrow key leave the slider, as a page that did
- * not take them.
+ * not take them; `gone` makes the clicked row missing, as a menu that changed between reading and clicking.
  */
 export function fakeMenu(
   rows: string[],
   checked: string,
-  options: { stuck?: boolean; efforts?: string[]; effort?: string; stuckEffort?: boolean } = {},
+  options: { stuck?: boolean; efforts?: string[]; effort?: string; stuckEffort?: boolean; gone?: boolean } = {},
 ) {
   const norm = (name: string) => name.toLowerCase().replace(/\s+/g, ' ').trim()
   const efforts = options.efforts ?? ['none', 'medium', 'high']
@@ -165,7 +165,7 @@ export function fakeMenu(
   return {
     rows: () => ({ found: true, rows: rows.map(row => ({ name: norm(row), checked: row === checked })), effort: effort() }),
     click: (code: string) => {
-      const row = rows[Number(/rows\[(\d+)\]/.exec(code)?.[1])]
+      const row = options.gone ? undefined : rows[Number(/rows\[(\d+)\]/.exec(code)?.[1])]
       if (row && !options.stuck) checked = row
       return { clicked: row !== undefined, effort: effort() }
     },
