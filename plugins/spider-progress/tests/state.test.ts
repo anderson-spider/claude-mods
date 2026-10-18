@@ -127,6 +127,15 @@ test('cancelled sets every open task cancelled and the phase cancelled', () => {
   expect(run.tasks.map(t => t.state)).toEqual(['completed', 'cancelled', 'cancelled'])
 })
 
+test('tasks a cancelled run leaves open stay in the count, unlike tasks a replan dropped', () => {
+  let run = applyProgress(set(start(), 'T1', 'completed').run, { tasks: PLAN.tasks.slice(0, 2) }, ctx()).run!
+  const { run: over, text } = applyProgress(run, { cancelled: true }, ctx())
+  expect(text).toBe('ok: 1/2 tasks accepted · cancelled')
+  expect(progressOf(over!)).toEqual({ accepted: 1, total: 2, percent: 50 })
+  run = applyProgress(set(start(), 'T1', 'completed').run, { phase: 'cancelled' }, ctx()).run!
+  expect(progressOf(run)).toEqual({ accepted: 1, total: 3, percent: 33 })
+})
+
 test('junk input is bounded, unknown deps dropped and a cycle refused', () => {
   const many = Array.from({ length: 500 }, (_, i) => ({ id: `T${i + 1}`, title: 'x'.repeat(400), owner: 'main', after: ['T999', 7] }))
   const run = applyProgress(null, { title: 'y'.repeat(400), tasks: many }, ctx()).run!

@@ -71,11 +71,11 @@ test('with animations off the bar stands still and a running agent keeps a fixed
   expect(all(draw({ config: off }))).toContain('● running')
 })
 
-test('the task list shows blocked in warning, failed with its error and accepted with its evidence, never cancelled', () => {
+test('the task list shows blocked in warning, failed with its error and accepted with its evidence, cancelled only with the run', () => {
   const task = (id: string, state: SpiderTask['state'], over: Partial<SpiderTask> = {}): SpiderTask => ({ id, title: `Task ${id}`, owner: 'sonnet', after: [], state, attempts: 1, errors: [], agentIds: [], ...over })
   const run: SpiderRun = { ...RUN, tasks: [
     task('T1', 'completed', { evidence: 'tests pass' }), task('T2', 'pending', { after: ['T3'] }), task('T3', 'failed', { errors: ['old', 'timed out'] }),
-    task('T4', 'running', { agentIds: ['a1'] }), task('T5', 'cancelled'),
+    task('T4', 'running', { agentIds: ['a1'] }), task('T5', 'cancelled'), task('T6', 'cancelled', { cancelledWithRun: true }),
   ] }
   const lines = draw({ run })
   const line = (id: string) => lines.find(l => l[0]?.text === `${id} Task ${id}`)
@@ -85,4 +85,5 @@ test('the task list shows blocked in warning, failed with its error and accepted
   expect(line('T3')!.map(x => x.text).join('')).toContain('timed out')
   expect(line('T4')!.map(x => x.text).join('')).toBe('T4 Task T4 · sonnet · running (2/5)')
   expect(line('T5')).toBeUndefined()
+  expect(line('T6')!.map(x => x.text).join('')).toBe('T6 Task T6 · sonnet · cancelled')
 })

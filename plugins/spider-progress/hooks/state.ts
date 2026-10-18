@@ -36,9 +36,12 @@ export function effectiveState(run: SpiderRun, task: SpiderTask): SpiderTaskStat
   return task.after.every(id => run.tasks.find(t => t.id === id)?.state === 'completed') ? 'pending' : 'blocked'
 }
 
-/** Tasks Main accepted against the tasks still planned (cancelled ones leave the count); no percent without tasks. */
+/** A task in the plan: a cancelled one leaves it, unless the run's cancellation is what cancelled it. */
+export const isPlanned = (task: SpiderTask): boolean => task.state !== 'cancelled' || task.cancelledWithRun === true
+
+/** Tasks Main accepted against the tasks still planned; no percent without tasks. */
 export function progressOf(run: SpiderRun): { accepted: number; total: number; percent?: number } {
-  const planned = run.tasks.filter(t => t.state !== 'cancelled')
+  const planned = run.tasks.filter(isPlanned)
   const accepted = planned.filter(t => t.state === 'completed').length
   return planned.length ? { accepted, total: planned.length, percent: Math.round((accepted / planned.length) * 100) } : { accepted, total: 0 }
 }
@@ -132,7 +135,7 @@ function moved(run: SpiderRun, raw: unknown): SpiderRun {
 const withError = (task: SpiderTask, error: string): SpiderTask => ({ ...task, errors: [...task.errors, error.slice(0, LIMITS.text)].slice(-MAX_ERRORS) })
 
 function closed(run: SpiderRun, phase: SpiderPhase, now: number): SpiderRun {
-  const tasks = phase === 'cancelled' ? run.tasks.map(t => (TERMINAL.has(t.state) ? t : { ...t, state: 'cancelled' as const })) : run.tasks
+  const tasks = phase === 'cancelled' ? run.tasks.map(t => (TERMINAL.has(t.state) ? t : { ...t, state: 'cancelled' as const, cancelledWithRun: true as const })) : run.tasks
   return { ...run, phase, finishedAt: now, tasks }
 }
 

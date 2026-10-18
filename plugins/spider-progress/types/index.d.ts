@@ -21,6 +21,8 @@ export type SpiderTask = {
   evidence?: string
   errors: string[]
   agentIds: string[]
+  /** Cancelled because the run was cancelled while it was open, so it still counts in the plan. */
+  cancelledWithRun?: true
 }
 
 export type SpiderRun = { runId: string; title: string; phase: SpiderPhase; startedAt: number; finishedAt?: number; tasks: SpiderTask[] }
