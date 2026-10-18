@@ -63,7 +63,7 @@ export function world(on: On, files: readonly string[], opts: { git?: Git; draft
   on('session.end', () => ({ sessionId: 's1' }) as never)
   on('command.register', () => ({ value: undefined }) as never)
   on('ui.open', (_$, e) => (opened.push(e.id), { value: { isPlaced: true } }) as never)
-  on('ui.close', (_$, e) => (opened.splice(0, opened.length, ...opened.filter(id => id !== e.id)), { value: undefined }) as never)
+  on('ui.close', () => ({ value: undefined }) as never)
   on('ui.panes', () => ({ value: opened.map(id => ({ id, title: 'Files' })) }) as never)
   on('ui.focus', () => ({ value: {} }) as never)
   on('ui.log', () => ({ value: undefined }))

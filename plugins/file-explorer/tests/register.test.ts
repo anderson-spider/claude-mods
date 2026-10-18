@@ -71,7 +71,7 @@ test("Claude's read is marked and followed into collapsed folders; the tool's re
   expect(result).toMatchObject(answer)
   expect(await cursor(ui)).toBe('●     ◇ util.ts')
   expect(await rows(ui)).toContain('    ▾ lib/')
-  expect((await segmentsOf(ui, 'util.ts'))?.find(one => one.t === 'util.ts')?.b).toBe(true)
+  expect((await segmentsOf(ui, 'util.ts'))?.find(one => one.t === 'util.ts')?.s).toBe(true)
   await ui.unmount()
 })
 
@@ -104,7 +104,7 @@ test('with animations off a touched name never flashes, and the mark stays', { o
   await start($)
   const ui = await $.ui.mount(pane())
   await $.tool.call({ tool: 'Read', file_path: `${ROOT}/README.md` } as never)
-  expect((await segmentsOf(ui, 'README.md'))?.find(one => one.t === 'README.md')?.b).toBeUndefined()
+  expect((await segmentsOf(ui, 'README.md'))?.find(one => one.t === 'README.md')?.s).toBeUndefined()
   expect(await cursor(ui)).toBe('● ≡ README.md')
   await ui.unmount()
 })
@@ -117,8 +117,11 @@ test('a flash ends on its own timer, with no tree or git read again', async ($, 
   const ui = await $.ui.mount(pane())
   await $.tool.call({ tool: 'Read', file_path: `${ROOT}/README.md` } as never)
   const runs = w.runs.length
+  expect((await segmentsOf(ui, 'README.md'))?.find(one => one.t === 'README.md')?.s).toBe(true)
   await w.clock.advance(2000)
-  expect((await segmentsOf(ui, 'README.md'))?.find(one => one.t === 'README.md')?.b).toBeUndefined()
+  expect((await segmentsOf(ui, 'README.md'))?.find(one => one.t === 'README.md')?.s).toBe(true)
+  await w.clock.advance(1000)
+  expect((await segmentsOf(ui, 'README.md'))?.find(one => one.t === 'README.md')?.s).toBeUndefined()
   expect(await cursor(ui)).toBe('● ≡ README.md')
   expect(w.runs.length).toBe(runs)
   await ui.unmount()
@@ -374,8 +377,8 @@ test('a /clear keeps the background check running; a subagent mention moves noth
   await ui.unmount()
 })
 
-test('a file shimmers while Claude writes it, opened to in the tree; the shimmer ends with the call and the mark stays', async ($, on) => {
-  world(on, FILES)
+test('a file shimmers while Claude writes it, opened to in the tree, and for a moment after; then the mark stays', async ($, on) => {
+  const w = world(on, FILES)
   let mounted: Parameters<typeof segmentsOf>[0] | undefined
   let during: { t: string; s?: true }[] | undefined
   on('tool.call', async () => {
@@ -387,6 +390,8 @@ test('a file shimmers while Claude writes it, opened to in the tree; the shimmer
   mounted = ui
   await $.tool.call({ tool: 'Edit', file_path: `${ROOT}/src/lib/util.ts`, old_string: 'a', new_string: 'b' } as never)
   expect(during?.find(one => one.t === 'util.ts')?.s).toBe(true)
+  expect((await segmentsOf(ui, 'util.ts'))?.find(one => one.t === 'util.ts')?.s).toBe(true)
+  await w.clock.advance(3000)
   expect((await segmentsOf(ui, 'util.ts'))?.find(one => one.t === 'util.ts')?.s).toBeUndefined()
   expect(await cursor(ui)).toBe('●     ◇ util.ts')
   await ui.unmount()
@@ -414,7 +419,7 @@ test('the modified column reads each file\'s age and moves on with the clock whi
   await ui.unmount()
 })
 
-test('the header buttons go up a folder, reveal the last file Claude touched, close every folder and close the pane', async ($, on) => {
+test('the header buttons go up a folder, reveal the last file Claude touched and close every folder', async ($, on) => {
   const w = world(on, FILES)
   on('tool.call', () => ({ result: {} }) as never)
   await start($)
@@ -436,22 +441,14 @@ test('the header buttons go up a folder, reveal the last file Claude touched, cl
   expect(await ui.find({ type: 'Text', text: /^▾ \/ $/ })).toBeDefined()
   await ui.press({ key: 'head-up' })
   expect(await ui.find({ type: 'Text', text: 'Already at the top.' })).toBeDefined()
-
-  expect(w.opened).toContain('file-explorer')
-  await ui.press({ key: 'head-close' })
-  expect(w.opened).not.toContain('file-explorer')
   await ui.unmount()
 })
 
-test('the header buttons are words; the desktop app, which draws its own close control, gets no close button of ours', async ($, on) => {
+test('the header buttons are words, with no close button: the pane\'s frame has its own', async ($, on) => {
   world(on, FILES)
   await start($)
-  const terminal = await $.ui.mount(pane(60))
-  expect((await terminal.find({ type: 'Button', key: 'head-reveal' }))?.text).toBe('last file')
-  expect(await terminal.find({ type: 'Button', key: 'head-close' })).toBeDefined()
-  await terminal.unmount()
-  const desktop = await $.ui.mount({ ...pane(60), surface: 'desktop' } as never)
-  expect(await desktop.find({ type: 'Button', key: 'head-reveal' })).toBeDefined()
-  expect(await desktop.find({ type: 'Button', key: 'head-close' })).toBeUndefined()
-  await desktop.unmount()
+  const ui = await $.ui.mount(pane(60))
+  expect((await ui.find({ type: 'Button', key: 'head-reveal' }))?.text).toBe('last file')
+  expect(await ui.find({ type: 'Button', key: 'head-close' })).toBeUndefined()
+  await ui.unmount()
 })

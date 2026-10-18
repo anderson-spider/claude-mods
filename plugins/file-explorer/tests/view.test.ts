@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 import { DEFAULTS } from '../hooks/config'
 import { iconOf } from '../hooks/icons'
 import type { Row } from '../hooks/tree'
-import { age, ago, branchSegments, cut, rowSegments, width } from '../hooks/view'
+import { age, ago, branchSegments, cut, rowSegments, shimmerOf, width } from '../hooks/view'
 
 const row = (name: string, extra: Partial<Row> = {}): Row => ({ path: `/p/${name}`, name, depth: 0, kind: 'file', isLink: false, isOpen: false, isIgnored: false, mtimeMs: 0, ...extra })
 const text = (segments: { t: string }[]) => segments.map(one => one.t).join('')
@@ -17,14 +17,15 @@ test('a row fills its width exactly, the git side at the right edge, a long name
   expect(text(rowSegments(row('name.ts'), state, { columns: 12, config: DEFAULTS, now: 0 }))).toBe('  ◇ name.ts ')
 })
 
-test('the cursor row is inverse across the width; a flash is bold in its tone, off without animations', () => {
+test('the cursor row is inverse across the width; a touch shimmers in its tone, off without animations', () => {
   const flashing = { hasMarkBelow: false, isCursor: true, mark: { kind: 'modified' as const, isFlashing: true } }
   const segments = rowSegments(row('a.ts'), flashing, { columns: 20, config: DEFAULTS, now: 0 })
   expect(segments.every(one => one.i)).toBe(true)
-  expect(segments.find(one => one.t === 'a.ts')).toMatchObject({ c: 'warning', b: true })
-  expect(segments.find(one => one.t === 'a.ts')?.b).toBe(true)
+  // The auto theme names theme keys, so its light is drawn by intensity: no colour steps.
+  expect(segments.find(one => one.t === 'a.ts')).toMatchObject({ c: 'warning', s: true })
+  expect(segments.find(one => one.t === 'a.ts')?.g).toBeUndefined()
   const calm = rowSegments(row('a.ts'), flashing, { columns: 20, config: { ...DEFAULTS, animations: false }, now: 0 })
-  expect(calm.find(one => one.t === 'a.ts')?.b).toBeUndefined()
+  expect(calm.find(one => one.t === 'a.ts')?.s).toBeUndefined()
   expect(calm[0]).toMatchObject({ t: '●', c: 'warning' })
 })
 
@@ -87,4 +88,12 @@ test('a file Claude is writing carries the edited mark and shimmers, a still nam
   const still = rowSegments(row('a.ts'), writing, { columns: 20, config: { ...DEFAULTS, animations: false }, now: 0 })
   expect(still[0]).toMatchObject({ t: '●', c: 'warning' })
   expect(still.find(one => one.t === 'a.ts')?.s).toBeUndefined()
+})
+
+test('a fixed theme shimmers in four steps of the tone, from sunk in the background to lit toward the text', () => {
+  expect(shimmerOf('modified', 'dark')).toEqual(['#907d5b', '#e5c07b', '#eed6a9', '#f7ecd7'])
+  expect(shimmerOf('read', 'light')).toEqual(['#769fd2', '#0550ae', '#033471', '#021834'])
+  expect(shimmerOf('read', 'auto')).toBeUndefined()
+  const lit = rowSegments(row('a.ts'), { hasMarkBelow: false, isCursor: false, mark: { kind: 'read', isFlashing: true } }, { columns: 20, config: { ...DEFAULTS, theme: 'dark' }, now: 0 })
+  expect(lit.find(one => one.t === 'a.ts')?.g).toEqual(shimmerOf('read', 'dark'))
 })
