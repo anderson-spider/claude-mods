@@ -1,6 +1,6 @@
 {
   "name": "subagent-effort",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Sets the reasoning effort of every native subagent call from Jev's rating of its task, leaving the model as it was, and keeps local records to compare efforts.",
   "author": {
     "name": "anderson-spider"

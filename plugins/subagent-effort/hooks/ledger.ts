@@ -67,12 +67,15 @@ function outcome(ctx: Context, ts: string, mode: OutcomeLine['mode'], fields: { 
 const tokensOf = (usage: unknown): number | null => record(usage)
   ? count(usage.input_tokens) + count(usage.output_tokens) + count(usage.cache_creation_input_tokens) + count(usage.cache_read_input_tokens) : null
 
+/** How the host's error text starts when the permission check denied the call, so it never ran. */
+const PERMISSION_DENIED = 'Permission for this action was denied'
 /**
  * What the `Agent` call returned: a finished foreground run is an outcome line, a background launch the agent id to
- * wait for, a refusal or anything unrecognized nothing.
+ * wait for, a refusal, a permission denial or anything unrecognized nothing.
  */
 export function afterAgentCall(ctx: Context, result: unknown, ts: string): OutcomeLine | { launched: string } | null {
   if (!record(result) || typeof result.deny === 'string') return null
+  if (result.isError === true && typeof result.text === 'string' && result.text.startsWith(PERMISSION_DENIED)) return null
   if (result.isError === true) return outcome(ctx, ts, 'foreground', { resolvedModel: null, status: 'error', durationMs: null, usage: null })
   const r = result.result
   if (!record(r)) return null
