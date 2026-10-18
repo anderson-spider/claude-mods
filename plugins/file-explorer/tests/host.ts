@@ -4,9 +4,10 @@ import { mock } from 'claude-code/testing'
 import type { Engine, Mounted, MountTarget } from 'claude-code/testing'
 
 export const ROOT = '/proj'
-const NOW = Date.parse('2026-10-18T12:00:00Z')
+export const NOW = Date.parse('2026-10-18T12:00:00Z')
 
-type Node = { kind: 'file' | 'dir'; text: string; mtimeMs: number; link?: string }
+// `mtimeMs` counts a folder's changes, so a refresh sees them; a file reports `modifiedAt`, set by `touch`, else none.
+type Node = { kind: 'file' | 'dir'; text: string; mtimeMs: number; modifiedAt?: number; link?: string }
 
 /** What git answers: absent, the folder is no repository. */
 export type Git = { top: string; status: string; numstat?: string; lsFiles?: string; show?: string }
@@ -44,6 +45,11 @@ export function world(on: On, files: readonly string[], opts: { git?: Git; draft
     const dir = tree.get(parentOf(path))
     if (dir) dir.mtimeMs++
   }
+  /** Sets when a file was last modified (ms since the epoch). */
+  const touch = (name: string, at: number) => {
+    const node = tree.get(`${ROOT}/${name}`)
+    if (node) node.modifiedAt = at
+  }
   files.forEach(add)
   const target = (path: string) => {
     const node = tree.get(path)
@@ -57,7 +63,7 @@ export function world(on: On, files: readonly string[], opts: { git?: Git; draft
   on('session.end', () => ({ sessionId: 's1' }) as never)
   on('command.register', () => ({ value: undefined }) as never)
   on('ui.open', (_$, e) => (opened.push(e.id), { value: { isPlaced: true } }) as never)
-  on('ui.close', () => ({ value: undefined }) as never)
+  on('ui.close', (_$, e) => (opened.splice(0, opened.length, ...opened.filter(id => id !== e.id)), { value: undefined }) as never)
   on('ui.panes', () => ({ value: opened.map(id => ({ id, title: 'Files' })) }) as never)
   on('ui.focus', () => ({ value: {} }) as never)
   on('ui.log', () => ({ value: undefined }))
@@ -75,7 +81,7 @@ export function world(on: On, files: readonly string[], opts: { git?: Git; draft
     if (target(dir)?.kind !== 'dir') return { deny: `ENOENT: ${dir}` } as never
     const real = tree.get(dir)?.link ?? dir
     const entries = [...tree.entries()].filter(([path]) => path !== real && parentOf(path) === real).map(([path, node]) => ({
-      name: path.slice(real.length + 1), kind: node.link ? 'other' : node.kind, size: node.text.length, mtimeMs: node.kind === 'file' ? node.mtimeMs : 0, isLink: Boolean(node.link),
+      name: path.slice(real.length + 1), kind: node.link ? 'other' : node.kind, size: node.text.length, mtimeMs: node.kind === 'file' ? node.modifiedAt ?? 0 : 0, isLink: Boolean(node.link),
     }))
     return { value: entries } as never
   })
@@ -112,7 +118,7 @@ export function world(on: On, files: readonly string[], opts: { git?: Git; draft
     }
   })
 
-  return { tree, add, remove, runs, gitRuns, opened, copies, fills, reads, prompt, git, clock }
+  return { tree, add, remove, touch, runs, gitRuns, opened, copies, fills, reads, prompt, git, clock }
 }
 
 export const start = ($: Engine, cwd = ROOT) => $.session.start({ cwd, surface: 'terminal', isInteractive: true } as never)
@@ -123,7 +129,7 @@ export const pane = (columns = 40, rows = 20): MountTarget<'terminal', 'Pane'> =
   props: { title: 'Files', isFocused: true, bodyColumns: columns, placement: 'dock', scroll: { offset: 0, bodyRows: rows }, view: {} },
 })
 
-type Segment = { t: string; c?: string; b?: true; d?: true; i?: true }
+type Segment = { t: string; c?: string; b?: true; d?: true; i?: true; s?: true }
 
 const linesOf = async (ui: Mounted<'terminal', 'Pane'>) =>
   ((await ui.find({ type: 'Client' }))?.props.props as { lines?: Segment[][] } | undefined)?.lines ?? []

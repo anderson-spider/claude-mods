@@ -124,6 +124,12 @@ export function touchedBy(tool: string, input: ToolInput, result: unknown, cwd: 
   }
 }
 
+/** The file a Write, Edit, MultiEdit or NotebookEdit call is about to write, before it runs; undefined for any other call. */
+export function writing(tool: string, input: ToolInput, cwd: string): string | undefined {
+  const path = tool === 'NotebookEdit' ? text(input.notebook_path) : ['Write', 'Edit', 'MultiEdit'].includes(tool) ? text(input.file_path) : undefined
+  return path ? resolve(cwd, path) : undefined
+}
+
 /** The newest activity per path first, the list held to `MAX_ACTIVITY`. */
 export function recorded(list: readonly Activity[], added: readonly Activity[]): Activity[] {
   const fresh = new Set(added.map(one => one.path))

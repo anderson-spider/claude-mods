@@ -1,11 +1,11 @@
 import { atom, read, update } from 'claude-code'
 import type { Hook, Register, Timer } from 'claude-code'
 import type { FileExplorerPreview as Preview, FileExplorerView as ExplorerView } from '../types'
-import { nextFlashEnd, recorded, shellEffects, touchedBy } from './activity'
+import { nextFlashEnd, recorded, shellEffects, touchedBy, writing } from './activity'
 import type { Activity } from './activity'
 import { configOf } from './config'
 import type { Config } from './config'
-import { EMPTY_VIEW, collapse, cursorIndex, hitRows, navigate, revealed, rowStates, settled, treeRows, viewAt } from './explorer'
+import { EMPTY_VIEW, collapse, collapseAll, cursorIndex, hitRows, navigate, revealed, rowStates, settled, treeRows, viewAt } from './explorer'
 import type { Effect } from './explorer'
 import { parseNumstat, parseStatus, rollUp, totals } from './git'
 import type { GitStatus } from './git'
@@ -29,6 +29,7 @@ const dirsAtom = atom({ plugin: 'file-explorer', key: 'dirs' } as const, {} as R
 const gitAtom = atom({ plugin: 'file-explorer', key: 'git' } as const, null as GitStatus | null)
 const activityAtom = atom({ plugin: 'file-explorer', key: 'activity' } as const, [] as Activity[])
 const tickAtom = atom({ plugin: 'file-explorer', key: 'tick' } as const, 0)
+const editingAtom = atom({ plugin: 'file-explorer', key: 'editing' } as const, [] as string[])
 
 /** Git and the index wait this long after the last change before they run, so a burst of edits costs one run. */
 const GIT_DEBOUNCE_MS = 300
@@ -48,6 +49,8 @@ const CHANGING = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Bash'])
  * `git add` or `commit`, and no fsmonitor, so a repository's config cannot make a read run a command of its own.
  */
 const GIT = ['git', '--no-optional-locks', '-c', 'core.fsmonitor=false'] as const
+/** While the pane is open, the modified column's ages are drawn again this often. */
+const AGES_MS = 60_000
 
 /** What the module keeps between events: timers, caches and the last drawn size. A reload starts it over. */
 type Held = {
@@ -63,6 +66,7 @@ type Held = {
   gitBusy: boolean
   gitAgain: boolean
   refresh?: Timer
+  ages?: Timer
   flash?: Timer
   lastClick?: { index: number; at: number }
 }
@@ -424,6 +428,50 @@ async function click($: Dollar, held: Held, y: number, surface: string): Promise
   } else if (isDouble) await press($, held, 'return', surface)
 }
 
+/** Marks the file a write is about to change, and opens the tree to it when following, so its row shimmers while it runs. */
+async function startWriting($: Dollar, held: Held, path: string): Promise<void> {
+  await update($, editingAtom, list => (list.includes(path) ? list : [...list, path]))
+  const view = await read($, viewAtom)
+  if (held.config.follow && view.mode === 'tree') await reveal($, held, path)
+}
+
+type HeaderAction = 'up' | 'reveal' | 'refresh' | 'hidden' | 'collapse' | 'close'
+
+/** The header's buttons: the root's parent, the last file Claude touched, refresh, dotfiles, every folder closed, close. */
+async function headerAction($: Dollar, held: Held, action: HeaderAction, surface: string): Promise<void> {
+  const view = await read($, viewAtom)
+  switch (action) {
+    case 'up': {
+      const up = parent(view.root)
+      if (up === view.root) return note($, 'Already at the top.')
+      return setRoot($, held, up, true)
+    }
+    case 'reveal': {
+      const last = (await read($, activityAtom)).find(one => one.kind !== 'removed' && isInside(view.root, one.path) && one.path !== view.root)
+      if (!last) return note($, 'Claude has not touched a file here yet.')
+      return reveal($, held, last.path)
+    }
+    case 'refresh': return press($, held, 'r', surface)
+    case 'hidden': return press($, held, '.', surface)
+    case 'collapse':
+      await update($, viewAtom, ({ preview: _, ...current }): ExplorerView => ({ ...collapseAll(current), mode: 'tree', query: '', hits: [], hitCursor: 0 }))
+      return
+    case 'close':
+      await $.ui.close({ id: PANE })
+  }
+}
+
+const HEADER: readonly { action: HeaderAction; label: (showHidden: boolean) => string }[] = [
+  { action: 'up', label: () => '↑' },
+  { action: 'reveal', label: () => '◎' },
+  { action: 'refresh', label: () => '↻' },
+  { action: 'hidden', label: showHidden => (showHidden ? '◉' : '○') },
+  { action: 'collapse', label: () => '⊟' },
+  { action: 'close', label: () => '✕' },
+]
+// Each one-glyph Button and the space between them.
+const HEADER_WIDTH = HEADER.length * 2
+
 const KEYS: readonly { hotkey: string; label: string }[] = [
   { hotkey: 'j', label: '↓' }, { hotkey: 'k', label: '↑' }, { hotkey: 'h', label: '←' }, { hotkey: 'l', label: '→' },
   { hotkey: 'o', label: 'open' }, { hotkey: 's', label: 'find' }, { hotkey: 'a', label: '@ref' }, { hotkey: 'r', label: '↻' },
@@ -443,6 +491,8 @@ export const register: Register = (on, options) => {
       argumentHint: '[folder|close|refresh|hidden]',
     })
     await observe($, async () => {
+      // A write that was running when the module reloaded ends unseen: its row must not shimmer on.
+      await update($, editingAtom, () => [])
       const view = await read($, viewAtom)
       const root = normalize(e.cwd)
       // A reload keeps the view the host holds, its folders read again so a changed sort applies; a new session, or
@@ -456,6 +506,12 @@ export const register: Register = (on, options) => {
           if ((await $.ui.panes()).some(pane => pane.id === PANE)) await refreshDirs($, held, false)
         }))
       }
+      // The modified column says `3m` or `2h`: redraw it as time passes, only while the pane is open.
+      if (held.config.mtime) {
+        held.ages = $.clock.every(AGES_MS, () => void observe($, async () => {
+          if ((await $.ui.panes()).some(pane => pane.id === PANE)) await update($, tickAtom, n => n + 1)
+        }))
+      }
       if (held.config.autoOpen) void $.ui.open({ id: PANE, title: TITLE })
     })
     return next(e)
@@ -465,6 +521,7 @@ export const register: Register = (on, options) => {
     // A /clear or a resume goes on in this process, and no session.start follows to start the timers again.
     if (e.reason === 'clear' || String(e.reason) === 'resume') return next(e)
     held.refresh?.cancel()
+    held.ages?.cancel()
     held.gitTimer?.cancel()
     held.flash?.cancel()
     return next(e)
@@ -523,9 +580,18 @@ export const register: Register = (on, options) => {
   }).catch((_$, e, next) => next(e))
 
   on('tool.call', async ($, e, next) => {
-    const result = await next(e)
-    if (result.deny !== undefined || result.isError) return result
     const tool = String(e.tool)
+    const root = (await read($, viewAtom)).root
+    const target = root ? writing(tool, e as unknown as Record<string, unknown>, root) : undefined
+    const path = target && isInside(root, target) ? target : undefined
+    if (path) await observe($, () => startWriting($, held, path))
+    let result: Awaited<ReturnType<typeof next>>
+    try {
+      result = await next(e)
+    } finally {
+      if (path) await observe($, async () => { await update($, editingAtom, list => list.filter(one => one !== path)) })
+    }
+    if (result.deny !== undefined || result.isError) return result
     if (CHANGING.has(tool) || ['Read', 'Grep', 'Glob'].includes(tool)) {
       await observe($, () => touched($, held, tool, e as unknown as Record<string, unknown>, result.result, result.isReadOnly === true))
     }
@@ -571,6 +637,7 @@ export const register: Register = (on, options) => {
     const view = await read($, viewAtom)
     const git = await read($, gitAtom)
     const activity = await read($, activityAtom)
+    const editing = await read($, editingAtom)
     await read($, tickAtom)
     const now = await $.clock.now()
     // Nerd Font glyphs need the person's patched terminal font; every other surface draws with a font of its own.
@@ -609,8 +676,8 @@ export const register: Register = (on, options) => {
     const cursor = cursorIndex(view, rows)
     const top = scrollTop(view.top, cursor, height, rows.length)
     const shown = rows.slice(top, top + height)
-    const states = rowStates(shown, cursor - top, activity, git, view.root, now)
-    const lines = shown.map((row, i) => rowSegments(row, states[i] ?? { hasMarkBelow: false, isCursor: false }, { columns, config }))
+    const states = rowStates(shown, cursor - top, activity, git, view.root, now, editing)
+    const lines = shown.map((row, i) => rowSegments(row, states[i] ?? { hasMarkBelow: false, isCursor: false }, { columns, config, now }))
     if (rows.length === 0) {
       const empty = view.mode === 'search' ? (view.query ? 'No match.' : 'Type to search every file.') : 'Empty folder.'
       lines.push([{ t: ` ${empty}`, c: c('dim') }])
@@ -640,7 +707,23 @@ export const register: Register = (on, options) => {
 
     return (
       <Box flexDirection="column">
-        <Text wrap="truncate-end">{paint(title)}</Text>
+        <Box flexDirection="row" gap={1}>
+          <Box flexGrow={1}><Text wrap="truncate-end">{paint(title)}</Text></Box>
+          {columns >= HEADER_WIDTH + 12 ? (
+            <Box flexDirection="row" gap={1}>
+              {HEADER.map(one => (
+                <Button
+                  key={`head-${one.action}`}
+                  plain
+                  dimColor
+                  label={one.label(view.showHidden)}
+                  {...(one.action === 'close' ? { role: 'dismiss' as const } : {})}
+                  onPress={() => void observe($, () => headerAction($, held, one.action, e.surface))}
+                />
+              ))}
+            </Box>
+          ) : null}
+        </Box>
         {search}
         {tree}
         {recent.map(one => (

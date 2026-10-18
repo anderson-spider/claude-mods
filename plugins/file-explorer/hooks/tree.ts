@@ -16,6 +16,8 @@ export type Row = {
   isLink: boolean
   isOpen: boolean
   isIgnored: boolean
+  /** The entry's modification time (ms since the epoch); 0 for a row with none. */
+  mtimeMs: number
 }
 
 /** The most entries one listing keeps; a directory larger than this shows a `… N more` row. */
@@ -77,7 +79,7 @@ export function flatten(root: string, dirs: Readonly<Record<string, Listing>>, e
   const walk = (dir: string, depth: number) => {
     const listing = dirs[dir]
     if (!listing) {
-      rows.push({ path: `${dir}/…`, name: 'loading…', depth, kind: 'loading', isLink: false, isOpen: false, isIgnored: false })
+      rows.push({ path: `${dir}/…`, name: 'loading…', depth, kind: 'loading', isLink: false, isOpen: false, isIgnored: false, mtimeMs: 0 })
       return
     }
     for (const entry of listing.entries) {
@@ -85,11 +87,11 @@ export function flatten(root: string, dirs: Readonly<Record<string, Listing>>, e
       if (!options.showHidden && isHiddenName(entry.name)) continue
       const path = join(dir, entry.name)
       const isOpen = entry.kind === 'dir' && expanded.has(path)
-      rows.push({ path, name: entry.name, depth, kind: entry.kind, isLink: entry.isLink, isOpen, isIgnored: ignored.has(entry.name) })
+      rows.push({ path, name: entry.name, depth, kind: entry.kind, isLink: entry.isLink, isOpen, isIgnored: ignored.has(entry.name), mtimeMs: entry.mtimeMs })
       if (isOpen && depth + 1 < MAX_DEPTH) walk(path, depth + 1)
     }
     if (listing.omitted > 0 && rows.length < MAX_ROWS) {
-      rows.push({ path: `${dir}/…more`, name: `… ${listing.omitted} more`, depth, kind: 'more', isLink: false, isOpen: false, isIgnored: false })
+      rows.push({ path: `${dir}/…more`, name: `… ${listing.omitted} more`, depth, kind: 'more', isLink: false, isOpen: false, isIgnored: false, mtimeMs: 0 })
     }
   }
   walk(root, 0)

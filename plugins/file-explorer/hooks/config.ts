@@ -13,6 +13,7 @@ export type Config = {
   follow: boolean
   animations: boolean
   showHidden: boolean
+  mtime: boolean
   ignore: readonly string[]
   sort: (typeof SORTS)[number]
   enterAction: (typeof ENTER_ACTIONS)[number]
@@ -31,6 +32,7 @@ export const DEFAULTS: Config = {
   follow: true,
   animations: true,
   showHidden: false,
+  mtime: true,
   ignore: DEFAULT_IGNORE,
   sort: 'name',
   enterAction: 'preview',
@@ -58,6 +60,7 @@ export function configOf(options: Record<string, unknown> | undefined): Config {
     follow: bool(o.follow, DEFAULTS.follow),
     animations: bool(o.animations, DEFAULTS.animations),
     showHidden: bool(o.showHidden, DEFAULTS.showHidden),
+    mtime: bool(o.mtime, DEFAULTS.mtime),
     ignore,
     sort: pick(SORTS, o.sort, DEFAULTS.sort),
     enterAction: pick(ENTER_ACTIONS, o.enterAction, DEFAULTS.enterAction),

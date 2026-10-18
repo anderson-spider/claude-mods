@@ -2,38 +2,38 @@ import { expect, test } from 'claude-code/testing'
 import { DEFAULTS } from '../hooks/config'
 import { iconOf } from '../hooks/icons'
 import type { Row } from '../hooks/tree'
-import { ago, branchSegments, cut, rowSegments, width } from '../hooks/view'
+import { age, ago, branchSegments, cut, rowSegments, width } from '../hooks/view'
 
-const row = (name: string, extra: Partial<Row> = {}): Row => ({ path: `/p/${name}`, name, depth: 0, kind: 'file', isLink: false, isOpen: false, isIgnored: false, ...extra })
+const row = (name: string, extra: Partial<Row> = {}): Row => ({ path: `/p/${name}`, name, depth: 0, kind: 'file', isLink: false, isOpen: false, isIgnored: false, mtimeMs: 0, ...extra })
 const text = (segments: { t: string }[]) => segments.map(one => one.t).join('')
 
 test('a row fills its width exactly, the git side at the right edge, a long name cut with an ellipsis', () => {
   const state = { hasMarkBelow: false, isCursor: false, git: 'M' as const, lines: { added: 12, removed: 3 } }
-  const drawn = text(rowSegments(row('a-very-long-file-name-indeed.ts'), state, { columns: 30, config: DEFAULTS }))
+  const drawn = text(rowSegments(row('a-very-long-file-name-indeed.ts'), state, { columns: 30, config: DEFAULTS, now: 0 }))
   expect(width(drawn)).toBe(30)
   expect(drawn.endsWith(' +12 -3 M')).toBe(true)
   expect(drawn).toContain('…')
   // Too narrow for both: the name keeps the room and the git side goes.
-  expect(text(rowSegments(row('name.ts'), state, { columns: 12, config: DEFAULTS }))).toBe('  ◇ name.ts ')
+  expect(text(rowSegments(row('name.ts'), state, { columns: 12, config: DEFAULTS, now: 0 }))).toBe('  ◇ name.ts ')
 })
 
 test('the cursor row is inverse across the width; a flash is bold in its tone, off without animations', () => {
   const flashing = { hasMarkBelow: false, isCursor: true, mark: { kind: 'modified' as const, isFlashing: true } }
-  const segments = rowSegments(row('a.ts'), flashing, { columns: 20, config: DEFAULTS })
+  const segments = rowSegments(row('a.ts'), flashing, { columns: 20, config: DEFAULTS, now: 0 })
   expect(segments.every(one => one.i)).toBe(true)
   expect(segments.find(one => one.t === 'a.ts')).toMatchObject({ c: 'warning', b: true })
   expect(segments.find(one => one.t === 'a.ts')?.b).toBe(true)
-  const calm = rowSegments(row('a.ts'), flashing, { columns: 20, config: { ...DEFAULTS, animations: false } })
+  const calm = rowSegments(row('a.ts'), flashing, { columns: 20, config: { ...DEFAULTS, animations: false }, now: 0 })
   expect(calm.find(one => one.t === 'a.ts')?.b).toBeUndefined()
   expect(calm[0]).toMatchObject({ t: '●', c: 'warning' })
 })
 
 test('fixed themes paint hex colours and auto paints theme keys', () => {
   const state = { hasMarkBelow: false, isCursor: false, git: 'A' as const }
-  expect(rowSegments(row('a.ts'), state, { columns: 20, config: { ...DEFAULTS, theme: 'dark' } }).at(-1)?.c).toBe('#98c379')
-  expect(rowSegments(row('a.ts'), state, { columns: 20, config: { ...DEFAULTS, theme: 'light' } }).at(-1)?.c).toBe('#1a7f37')
-  expect(rowSegments(row('a.ts'), state, { columns: 20, config: DEFAULTS }).at(-1)?.c).toBe('success')
-  expect(rowSegments(row('a.ts'), state, { columns: 20, config: { ...DEFAULTS, git: 'off' } }).some(one => one.t.includes('A'))).toBe(false)
+  expect(rowSegments(row('a.ts'), state, { columns: 20, config: { ...DEFAULTS, theme: 'dark' }, now: 0 }).at(-1)?.c).toBe('#98c379')
+  expect(rowSegments(row('a.ts'), state, { columns: 20, config: { ...DEFAULTS, theme: 'light' }, now: 0 }).at(-1)?.c).toBe('#1a7f37')
+  expect(rowSegments(row('a.ts'), state, { columns: 20, config: DEFAULTS, now: 0 }).at(-1)?.c).toBe('success')
+  expect(rowSegments(row('a.ts'), state, { columns: 20, config: { ...DEFAULTS, git: 'off' }, now: 0 }).some(one => one.t.includes('A'))).toBe(false)
 })
 
 test('icons follow the set: Nerd Font glyphs by name and extension, plain Unicode otherwise', () => {
@@ -58,4 +58,33 @@ test('cuts and ages', () => {
   expect(cut('abc', 4)).toBe('abc')
   expect(cut('abc', 0)).toBe('')
   expect([ago(500), ago(12_000), ago(240_000), ago(7_200_000)]).toEqual(['now', '12s', '4m', '2h'])
+})
+
+test('a file shows how long ago it was modified at the right edge, dropped before git when the row is narrow', () => {
+  const now = 10 * 86_400_000
+  const recent = row('a.ts', { mtimeMs: now - 3 * 60_000 })
+  const plain = { hasMarkBelow: false, isCursor: false }
+  const changed = { ...plain, git: 'M' as const }
+  expect(text(rowSegments(recent, plain, { columns: 30, config: DEFAULTS, now })).endsWith('        3m')).toBe(true)
+  expect(text(rowSegments(recent, changed, { columns: 30, config: DEFAULTS, now })).endsWith(' M        3m')).toBe(true)
+  expect(text(rowSegments(recent, changed, { columns: 18, config: DEFAULTS, now }))).toMatch(/a\.ts +M$/)
+  expect(text(rowSegments(recent, plain, { columns: 30, config: { ...DEFAULTS, mtime: false }, now })).trimEnd()).toBe('  ◇ a.ts')
+  expect(text(rowSegments(row('src', { kind: 'dir', mtimeMs: now }), plain, { columns: 30, config: DEFAULTS, now })).trimEnd()).toBe('  ▸ src/')
+})
+
+test('ages read now, minutes, hours, yesterday, days, weeks, months and years', () => {
+  const minute = 60_000
+  const day = 1440 * minute
+  expect([0, 3 * minute, 2 * 60 * minute, day + minute, 4 * day, 21 * day, 150 * day, 800 * day].map(age))
+    .toEqual(['now', '3m', '2h', 'yesterday', '4d', '3w', '5mo', '2y'])
+})
+
+test('a file Claude is writing carries the edited mark and shimmers, a still name without animations', () => {
+  const writing = { hasMarkBelow: false, isCursor: false, isEditing: true }
+  const lit = rowSegments(row('a.ts'), writing, { columns: 20, config: DEFAULTS, now: 0 })
+  expect(lit[0]).toMatchObject({ t: '●', c: 'warning' })
+  expect(lit.find(one => one.t === 'a.ts')).toMatchObject({ c: 'warning', s: true })
+  const still = rowSegments(row('a.ts'), writing, { columns: 20, config: { ...DEFAULTS, animations: false }, now: 0 })
+  expect(still[0]).toMatchObject({ t: '●', c: 'warning' })
+  expect(still.find(one => one.t === 'a.ts')?.s).toBeUndefined()
 })

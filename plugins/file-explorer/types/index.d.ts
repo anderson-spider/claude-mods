@@ -56,8 +56,10 @@ declare module 'claude-code' {
       dirs: Record<string, FileExplorerListing>
       git: FileExplorerGit | null
       activity: FileExplorerActivity[]
-      /** Moves on when a flash ends, so the pane redraws without polling the tree. */
+      /** Moves on when a flash ends or the ages are due again, so the pane redraws without polling the tree. */
       tick: number
+      /** The files a write of Claude's is changing now, absolute; their rows shimmer until it ends. */
+      editing: string[]
     }
   }
 }

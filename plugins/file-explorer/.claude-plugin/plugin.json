@@ -1,6 +1,6 @@
 {
   "name": "file-explorer",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "File tree pane that follows Claude's reads, edits and searches, with git status, search, preview and path references",
   "author": {
     "name": "anderson-spider"
@@ -26,7 +26,7 @@
     "animations": {
       "type": "boolean",
       "title": "Flash touched files",
-      "description": "Flash a file's name for a moment when Claude touches it; off keeps only the coloured mark.",
+      "description": "Flash a file's name when Claude touches it and shimmer it while Claude writes it; off keeps only the coloured mark.",
       "default": true
     },
     "showHidden": {
@@ -34,6 +34,12 @@
       "title": "Show hidden files",
       "description": "Start with dotfiles shown (\".\" in the pane toggles them).",
       "default": false
+    },
+    "mtime": {
+      "type": "boolean",
+      "title": "Modified column",
+      "description": "Show how long ago each file was modified (3m, 2h, yesterday) at the right of its row.",
+      "default": true
     },
     "ignore": {
       "type": "string",

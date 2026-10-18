@@ -11,8 +11,8 @@ export type Tone =
   | ActivityKind
   | 'gitM' | 'gitA' | 'gitD' | 'gitR' | 'gitU' | 'gitQ'
 
-/** One run of text in a row: its tone's colour, and bold, dim or inverse. */
-export type Segment = { t: string; c?: string; b?: true; d?: true; i?: true }
+/** One run of text in a row: its tone's colour, and bold, dim, inverse or shimmering (a light passing over it). */
+export type Segment = { t: string; c?: string; b?: true; d?: true; i?: true; s?: true }
 
 // `auto` follows the person's Claude Code theme through theme keys; `dark` and `light` are fixed colours.
 const PALETTES: Record<Config['theme'], Record<Tone, string>> = {
@@ -60,20 +60,28 @@ export type RowState = {
   git?: GitCode
   lines?: { added: number; removed: number }
   dirGit?: { code: GitCode; count: number }
+  /** Claude is writing this file now. */
+  isEditing?: boolean
   isCursor: boolean
 }
 
-export type RowContext = { columns: number; config: Config }
+export type RowContext = { columns: number; config: Config; now: number }
+
+/** The modified column's width: its longest age, `yesterday`. */
+const AGE_WIDTH = 9
 
 /** One tree row as segments filling exactly `columns` cells. */
-export function rowSegments(row: Row, state: RowState, { columns, config }: RowContext): Segment[] {
+export function rowSegments(row: Row, state: RowState, { columns, config, now }: RowContext): Segment[] {
   const c = (tone: Tone) => colorOf(tone, config.theme)
-  const flash = config.animations && state.mark?.isFlashing === true
+  // A file Claude is writing carries the edited mark until the write ends and its own mark replaces it.
+  const mark = state.isEditing ? { kind: 'modified' as const, isFlashing: false } : state.mark
+  const flash = config.animations && mark?.isFlashing === true
   const left: Segment[] = []
   const right: Segment[] = []
+  const date: Segment[] = []
 
   // Column 0: Claude's mark, then a space (a dot in its tone), or a dim one for a mark inside a collapsed directory.
-  if (state.mark) left.push({ t: '●', c: c(state.mark.kind) })
+  if (mark) left.push({ t: '●', c: c(mark.kind) })
   else if (state.hasMarkBelow) left.push({ t: '•', c: c('dim') })
   else left.push({ t: ' ' })
   left.push({ t: ' '.repeat(1 + row.depth * 2) })
@@ -82,13 +90,14 @@ export function rowSegments(row: Row, state: RowState, { columns, config }: RowC
     left.push({ t: row.name, c: c('dim'), d: true })
   } else {
     const icon = iconOf(row.name, row.kind, row.isOpen, row.isLink, config.icons)
-    const tone: Tone = state.mark ? state.mark.kind : row.kind === 'dir' ? 'accent' : 'dim'
+    const tone: Tone = mark ? mark.kind : row.kind === 'dir' ? 'accent' : 'dim'
     left.push({ t: `${icon} `, c: c(tone) })
-    const nameTone: Tone = flash && state.mark ? state.mark.kind
+    const nameTone: Tone = (flash || state.isEditing) && mark ? mark.kind
       : state.git ? GIT_TONE[state.git]
       : row.kind === 'dir' ? 'accent' : 'text'
     const name: Segment = { t: row.name + (row.kind === 'dir' ? '/' : ''), c: c(nameTone) }
     if (flash) name.b = true
+    if (state.isEditing && config.animations) name.s = true
     if (row.isIgnored || state.git === 'D') name.d = true
     left.push(name)
     if (row.isLink) left.push({ t: ' ↪', c: c('dim') })
@@ -105,16 +114,22 @@ export function rowSegments(row: Row, state: RowState, { columns, config }: RowC
     }
   }
 
-  return fit(left, right, columns, state.isCursor)
+  if (config.mtime && row.kind === 'file' && row.mtimeMs > 0) date.push({ t: ` ${age(now - row.mtimeMs).padStart(AGE_WIDTH)}`, c: c('dim') })
+
+  return fit(left, [right, date], columns, state.isCursor)
 }
 
-/** `left` cut and padded so that `right` ends at `columns`; the cursor row is drawn inverse across the width. */
-function fit(left: Segment[], right: Segment[], columns: number, isCursor: boolean): Segment[] {
-  // A right side that does not leave the name 8 cells is dropped rather than drawn over it.
-  const fullRight = right.reduce((sum, one) => sum + width(one.t), 0)
-  const tail = columns - fullRight >= 8 ? right : []
-  const rightWidth = tail === right ? fullRight : 0
-  let room = Math.max(0, columns - rightWidth)
+const widthOf = (segments: readonly Segment[]) => segments.reduce((sum, one) => sum + width(one.t), 0)
+
+/**
+ * `left` cut and padded so that the right-hand columns end at `columns`; the cursor row is drawn inverse across the
+ * width. The columns are given most wanted first: the last that does not leave the name 8 cells is dropped first.
+ */
+function fit(left: Segment[], sides: readonly Segment[][], columns: number, isCursor: boolean): Segment[] {
+  let kept = sides.length
+  while (kept > 0 && columns - widthOf(sides.slice(0, kept).flat()) < 8) kept--
+  const tail = sides.slice(0, kept).flat()
+  let room = Math.max(0, columns - widthOf(tail))
   const shown: Segment[] = []
   for (const one of left) {
     if (room <= 0) break
@@ -122,7 +137,7 @@ function fit(left: Segment[], right: Segment[], columns: number, isCursor: boole
     room -= width(t)
     shown.push({ ...one, t })
   }
-  const used = shown.reduce((sum, one) => sum + width(one.t), 0) + tail.reduce((sum, one) => sum + width(one.t), 0)
+  const used = widthOf(shown) + widthOf(tail)
   const line = [...shown, { t: ' '.repeat(Math.max(0, columns - used)) }, ...tail]
   return isCursor ? line.map(one => ({ ...one, i: true as const })) : line
 }
@@ -145,6 +160,21 @@ export function branchSegments(git: GitStatus | undefined, totals: { added: numb
     }
   }
   return parts
+}
+
+/** How long ago a file was modified: `now`, `3m`, `2h`, `yesterday`, `4d`, `3w`, `5mo`, `2y`. */
+export function age(ms: number): string {
+  const minutes = Math.floor(ms / 60_000)
+  const hours = Math.floor(ms / 3_600_000)
+  const days = Math.floor(ms / 86_400_000)
+  if (minutes < 1) return 'now'
+  if (hours < 1) return `${minutes}m`
+  if (days < 1) return `${hours}h`
+  if (days < 2) return 'yesterday'
+  if (days < 7) return `${days}d`
+  if (days < 35) return `${Math.floor(days / 7)}w`
+  if (days < 365) return `${Math.floor(days / 30)}mo`
+  return `${Math.floor(days / 365)}y`
 }
 
 /** A short age: `now`, `12s`, `4m`, `2h`. */
