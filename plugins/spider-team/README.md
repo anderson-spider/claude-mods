@@ -14,6 +14,14 @@
 
 The run goes through Understand, Plan, Investigate, Execute, Review, Verify and Complete. Small or tightly coupled work stays with the session; read-only questions run in parallel; writers never touch the same files at once.
 
+To stop retyping the command, turn on session mode:
+
+| Command | What it does |
+| --- | --- |
+| `/spider-team on` | Every later message that asks for a change becomes tasks appended to one list, executed in order; questions are answered without a task, and an unclear message gets a one-line question. Messages sent while it works join the list. Verify runs each time the list drains. |
+| `/spider-team brainstorm <topic>` | Plans the topic into a backlog and waits: refine it in the conversation, then say go. In session mode the backlog joins the list. |
+| `/spider-team off` | Finishes or cancels the open tasks as you say, verifies and closes the run. |
+
 | Agent | Model | Default effort | For |
 | --- | --- | --- | --- |
 | `spider-fable` | Fable | high | the hardest logic and bugs |
