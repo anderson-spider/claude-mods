@@ -145,7 +145,7 @@ test('a turn the card holds shows as running only while the host says a turn run
   world(on)
   await start($)
   await flush()
-  // A turn whose completion never reached the card, as when it ended while the plugin was disabled.
+  // A turn whose completion never reached the card: the card still holds it, and the host runs no turn.
   await $.turn.start({ text: 'go', turnId: 't1' } as never)
   await flush()
   const idle = await $.ui.mount(band(110, false, false))
