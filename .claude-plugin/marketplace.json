@@ -23,6 +23,11 @@
       "description": "Read or change your Coolify instance (projects, applications, deployments) through its API, using the url and apiKey plugin options."
     },
     {
+      "name": "file-explorer",
+      "source": "./plugins/file-explorer",
+      "description": "File tree pane that follows Claude's reads, edits and searches, with git status, search, preview and path references"
+    },
+    {
       "name": "gitlab",
       "source": "./plugins/gitlab",
       "description": "Work on GitLab merge requests and pipelines of the current repository, picking the host and token from its git remote."

@@ -1,0 +1,99 @@
+{
+  "name": "file-explorer",
+  "version": "0.1.0",
+  "description": "File tree pane that follows Claude's reads, edits and searches, with git status, search, preview and path references",
+  "author": {
+    "name": "anderson-spider"
+  },
+  "homepage": "https://github.com/anderson-spider/claude-mods/tree/main/plugins/file-explorer",
+  "repository": "https://github.com/anderson-spider/claude-mods",
+  "license": "MIT",
+  "keywords": ["files", "tree", "explorer", "git", "pane", "mod", "claude-code"],
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "autoOpen": {
+      "type": "boolean",
+      "title": "Open at session start",
+      "description": "Open the pane when a session starts; the terminal seats it from 144 columns, else /file-explorer opens it.",
+      "default": true
+    },
+    "follow": {
+      "type": "boolean",
+      "title": "Follow Claude",
+      "description": "Expand the tree to each file Claude reads, edits or creates and move the cursor there.",
+      "default": true
+    },
+    "animations": {
+      "type": "boolean",
+      "title": "Flash touched files",
+      "description": "Flash a file's name for a moment when Claude touches it; off keeps only the coloured mark.",
+      "default": true
+    },
+    "showHidden": {
+      "type": "boolean",
+      "title": "Show hidden files",
+      "description": "Start with dotfiles shown (\".\" in the pane toggles them).",
+      "default": false
+    },
+    "ignore": {
+      "type": "string",
+      "title": "Ignored names",
+      "description": "Comma-separated folder or file names drawn dimmed and left out of search and the search walk.",
+      "default": ".git,node_modules,dist,build,target,.next,.venv,__pycache__,coverage"
+    },
+    "sort": {
+      "type": "string",
+      "title": "Sort",
+      "description": "Order inside a folder, folders first: by name, by extension, or newest first.",
+      "options": ["name", "type", "modified"],
+      "default": "name"
+    },
+    "enterAction": {
+      "type": "string",
+      "title": "Enter on a file",
+      "description": "What Enter or a double click does on a file: preview it in the pane, or open it in the editor.",
+      "options": ["preview", "editor"],
+      "default": "preview"
+    },
+    "editor": {
+      "type": "string",
+      "title": "Editor command",
+      "description": "Command that opens a file, run without a shell: {path}, {dir} and {line} are filled in (code -g {path}:{line}). Empty opens the default app.",
+      "default": ""
+    },
+    "icons": {
+      "type": "string",
+      "title": "Icons",
+      "description": "Nerd Font glyphs (needs a patched font) or plain Unicode.",
+      "options": ["unicode", "nerd"],
+      "default": "unicode"
+    },
+    "theme": {
+      "type": "string",
+      "title": "Colours",
+      "description": "auto follows the Claude Code theme; dark and light are fixed palettes.",
+      "options": ["auto", "dark", "light"],
+      "default": "auto"
+    },
+    "git": {
+      "type": "string",
+      "title": "Git indicators",
+      "description": "full: status letters and lines added and removed; status: letters only; off: no git.",
+      "options": ["full", "status", "off"],
+      "default": "full"
+    },
+    "search": {
+      "type": "string",
+      "title": "Search",
+      "description": "fuzzy matches the letters in order; substring needs them together.",
+      "options": ["fuzzy", "substring"],
+      "default": "fuzzy"
+    },
+    "refreshSeconds": {
+      "type": "number",
+      "title": "Background check (seconds)",
+      "description": "While the pane is open, how often shown folders are checked for changes made outside Claude; 0 turns it off.",
+      "default": 5
+    }
+  }
+}
