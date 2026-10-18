@@ -64,6 +64,24 @@ test('the band draws above what the band below returns, and nothing without a ru
   await ui.unmount()
 })
 
+test('the band counts only the agents of the current run', async ($, on) => {
+  const { tools, clock } = world(on)
+  await started($, tools)
+  await spawn($, 'Find the router.', 'Explore')
+  await flush()
+  await clock.advance(1_000)
+  await call($, 'progress', PLAN)
+  let ui = await $.ui.mount(band())
+  expect(await drawn(ui)).toContain('0/1 tasks · 0 agents')
+  await ui.unmount()
+  await clock.advance(1_000)
+  await spawn($, 'spider-task: T1\nBuild the login form.')
+  await flush()
+  ui = await $.ui.mount(band())
+  expect(await drawn(ui)).toContain('0/1 tasks · 1 agent\n')
+  await ui.unmount()
+})
+
 test('dismiss hides the band until a new run', async ($, on) => {
   const { tools } = world(on)
   await started($, tools)

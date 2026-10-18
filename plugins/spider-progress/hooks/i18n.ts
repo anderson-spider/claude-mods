@@ -12,7 +12,7 @@ export type Strings = {
   phase: Record<SpiderPhase, string>
   status: Record<SpiderAgent['status'], string>
   task: { pending: string; blocked: string; running: string; reviewing: string; completed: string; failed: string; cancelled: string }
-  pane: { title: string; noRun: string; noAgents: string; tasks: string; totals: string; main: string; subagents: string; session: string; compact: string; expanded: string }
+  pane: { title: string; noRun: string; noAgents: string; others: string; tasks: string; totals: string; main: string; subagents: string; session: string; compact: string; expanded: string }
   column: { agent: string; model: string; effort: string; status: string; steps: string; tokens: string; context: string; cost: string; time: string }
   command: { opened: string; waits: string; closed: string; usage: string }
   na: string
@@ -27,7 +27,7 @@ export const STRINGS: Record<Lang, Strings> = {
     phase: { understand: 'Understand', plan: 'Plan', investigate: 'Investigate', execute: 'Execute', review: 'Review', verify: 'Verify', complete: 'Complete', cancelled: 'Cancelled', failed: 'Failed' },
     status: { running: 'running', done: 'done', failed: 'failed', cancelled: 'cancelled' },
     task: { pending: 'pending', blocked: 'blocked', running: 'running', reviewing: 'reviewing', completed: 'accepted', failed: 'failed', cancelled: 'cancelled' },
-    pane: { title: 'Spider agents', noRun: 'No spider-team run', noAgents: 'No agents yet', tasks: 'TASKS', totals: 'TOTALS', main: 'Main', subagents: 'Subagents', session: 'Session', compact: 'compact', expanded: 'expanded' },
+    pane: { title: 'Spider agents', noRun: 'No spider-team run', noAgents: 'No agents yet', others: 'OTHER AGENTS', tasks: 'TASKS', totals: 'TOTALS', main: 'Main', subagents: 'Subagents', session: 'Session', compact: 'compact', expanded: 'expanded' },
     column: { agent: 'AGENT', model: 'MODEL', effort: 'EFFORT', status: 'STATUS', steps: 'STEPS', tokens: 'TOKENS', context: 'CONTEXT', cost: 'COST', time: 'TIME' },
     command: { opened: 'Agents pane open.', waits: 'The agents pane waits for room:', closed: 'Agents pane closed.', usage: 'Usage: /spider-agents [open|close]' },
     na: 'N/A',
@@ -40,7 +40,7 @@ export const STRINGS: Record<Lang, Strings> = {
     phase: { understand: 'Entender', plan: 'Planejar', investigate: 'Investigar', execute: 'Executar', review: 'Revisão', verify: 'Verificar', complete: 'Concluído', cancelled: 'Cancelado', failed: 'Falhou' },
     status: { running: 'rodando', done: 'concluído', failed: 'falhou', cancelled: 'cancelado' },
     task: { pending: 'pendente', blocked: 'bloqueada', running: 'rodando', reviewing: 'em revisão', completed: 'aceita', failed: 'falhou', cancelled: 'cancelada' },
-    pane: { title: 'Agentes spider', noRun: 'Nenhuma execução do spider-team', noAgents: 'Nenhum agente ainda', tasks: 'TAREFAS', totals: 'TOTAIS', main: 'Main', subagents: 'Subagentes', session: 'Sessão', compact: 'compacto', expanded: 'expandido' },
+    pane: { title: 'Agentes spider', noRun: 'Nenhuma execução do spider-team', noAgents: 'Nenhum agente ainda', others: 'OUTROS AGENTES', tasks: 'TAREFAS', totals: 'TOTAIS', main: 'Main', subagents: 'Subagentes', session: 'Sessão', compact: 'compacto', expanded: 'expandido' },
     column: { agent: 'AGENTE', model: 'MODELO', effort: 'EFFORT', status: 'ESTADO', steps: 'PASSOS', tokens: 'TOKENS', context: 'CONTEXTO', cost: 'CUSTO', time: 'TEMPO' },
     command: { opened: 'Painel de agentes aberto.', waits: 'O painel de agentes espera espaço:', closed: 'Painel de agentes fechado.', usage: 'Uso: /spider-agents [open|close]' },
     na: 'N/A',

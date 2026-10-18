@@ -1,6 +1,7 @@
 // The /spider-agents pane: the run's header and bar, a row per agent, the run's tasks and the usage totals of Main, the
 // subagents and the session. Values the host never reported read N/A. Pure.
 import type { SpiderAgent, SpiderMain, SpiderRun, SpiderTask } from '../types'
+import { agentsOfRun } from './agents'
 import type { SpiderConfig } from './config'
 import type { Lang, Strings } from './i18n'
 import { t } from './i18n'
@@ -60,9 +61,14 @@ function header(v: PaneView, s: Strings): Piece[][] {
   ]
 }
 
+/** A row per agent: the run's first, then the session's others under their label; without a run, every agent. */
 function agentRows(v: PaneView, s: Strings, columns: Column[]): Piece[][] {
   if (!v.agents.length) return [[p(s.pane.noAgents, 'dim')]]
-  return v.agents.map(a => columns.map(c => padded(c.cell(a, v, s), c.width + 1)))
+  const row = (a: SpiderAgent) => columns.map(c => padded(c.cell(a, v, s), c.width + 1))
+  if (!v.run) return v.agents.map(row)
+  const ours = agentsOfRun(v.run, v.agents)
+  const others = v.agents.filter(a => !ours.includes(a))
+  return [...ours.map(row), ...(others.length ? [[p(s.pane.others, 'dim')], ...others.map(row)] : [])]
 }
 
 /** Every planned task: its state (blocked in warning, failed in error), its worker's steps, then its last error or, once accepted, its evidence. */
