@@ -120,7 +120,7 @@ test('the plan is a tree with counts: blocked tasks name what they wait for, fai
     task('T4', 'running', { agentIds: ['a1'], after: ['T1'] }), task('T5', 'cancelled'), task('T6', 'cancelled', { cancelledWithRun: true }),
   ] }
   const plan = section('plan', { run })!
-  expect(all([plan.aside])).toBe('1 accepted / 1 running / 1 left / 1 failed')
+  expect(all([plan.aside])).toBe('1 accepted / 1 running / 1 left / 1 failed / 1 cancelled')
   const rows = all(plan.lines).split('\n')
   expect(rows[0]).toBe('✓ T1 Task T1  worker · accepted')
   expect(rows[1]).toBe('│  tests pass')
@@ -171,4 +171,19 @@ test('the timeline draws a bar per agent in the last 15 minutes, with an axis an
   expect(all([lines[2]!])).toMatch(/−15m.*−10m.*−5m.*now$/)
   expect(all([lines[3]!])).toContain('running')
   expect(section('timeline', { now: 60 * 60_000, agents: [old] })).toBeUndefined()
+})
+
+test('tasks the run cancelled stay counted, and a failed agent keeps its reason and age at 110 columns', () => {
+  const run: SpiderRun = { ...RUN, phase: 'cancelled', tasks: [{ ...RUN.tasks[0]!, state: 'cancelled', cancelledWithRun: true }] }
+  expect(all([section('plan', { run })!.aside])).toBe('0 accepted / 0 running / 0 left / 1 cancelled')
+  const failed: SpiderAgent = { ...WORKER, contextWindow: undefined, status: 'failed', endReason: 'max_tokens', endedAt: 92_000 }
+  const row = all([section('recent', { agents: [failed] })!.lines[0]!])
+  expect(row).toContain('max_tokens  3 min ago')
+  const busy = section('running', { columns: 100, agents: [{ ...WORKER, contextWindow: undefined }] })!.lines
+  expect(all(busy)).toContain('~$0.05')
+})
+
+test('with a run but only outside agents the pane does not claim there are none', () => {
+  const before = { ...EXPLORE, agentId: 'a0', startedAt: -5_000 }
+  expect(paneModel(view({ agents: [before] })).sections.map(s => s.key)).not.toContain('running')
 })

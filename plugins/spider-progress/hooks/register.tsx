@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Hook, McpToolInputs, Register, RenderElement, Timer } from 'claude-code'
 import type { SpiderAgent, SpiderMain, SpiderPanel, SpiderPhase, SpiderRun } from '../types'
-import { agentEnded, agentStepped, agentsOfRun, answeredModel, resumed, spawned, stepReported, toolUsed } from './agents'
+import { agentEnded, agentStepped, agentsOfRun, answeredModel, resumed, spawned, stepReported, toolName, toolUsed } from './agents'
 import { bandLine } from './band'
 import { configOf } from './config'
 import type { SpiderConfig } from './config'
@@ -236,15 +236,17 @@ export const register: Register = (on, options) => {
     }
   })
 
-  // Every tool a subagent calls is its activity; the answer goes back unchanged, and a call that throws is not counted.
+  // Every tool a subagent calls through this hook is its activity; the answer goes back unchanged, and a call that
+  // throws is not counted. Tools hooks above this one answer never reach it.
   on('tool.call', async ($, e, next) => {
     const result = await next(e)
     const agentId = (e as { agentId?: string }).agentId
-    if (agentId !== undefined) {
+    const tool = (e as { tool: string }).tool
+    if (agentId !== undefined && toolName(tool)) {
       const failed = result.deny !== undefined || result.isError === true
       void observe($, async () => {
         const now = await $.clock.now()
-        await update($, agentsAtom, list => toolUsed(list, agentId, (e as { tool: string }).tool, failed, now))
+        await update($, agentsAtom, list => toolUsed(list, agentId, tool, failed, now))
       })
     }
     return result
@@ -359,7 +361,7 @@ export const register: Register = (on, options) => {
         {text(model.header, 'header')}
         {model.sections.map(section => <Box key={`section-${section.key}`} flexDirection="column" borderStyle="round" borderColor={section.border} paddingX={1} width={columns}>
           <Box key={`title-${section.key}`} flexDirection="row" width={columns - FRAME}>
-            <Text key={`name-${section.key}`} bold color={section.border === 'subtle' || section.border === 'inactive' ? 'inactive' : section.border}>{section.title}</Text>
+            <Text key={`name-${section.key}`} wrap="truncate-end" bold color={section.border === 'subtle' || section.border === 'inactive' ? 'inactive' : section.border}>{section.title}</Text>
             <Box flexGrow={1} />
             {text(section.aside, `aside-${section.key}`)}
           </Box>

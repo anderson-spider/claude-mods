@@ -4,6 +4,7 @@
 // renderer draws each section in a box of its border colour.
 import type { SpiderAgent, SpiderMain, SpiderRun, SpiderTask } from '../types'
 import { agentsOfRun } from './agents'
+import { planCounts } from './band'
 import type { SpiderConfig } from './config'
 import type { Lang, Strings } from './i18n'
 import { counted, fill, t } from './i18n'
@@ -21,8 +22,6 @@ export type PaneModel = { header: Piece[]; sections: Section[]; footer: Piece[] 
 
 /** Cells a section's border and padding take from the pane's width. */
 export const FRAME = 4
-/** The inner width from which an agent's figures fit on its first line. */
-const WIDE = 96
 /** Finished agents a section lists before it counts the rest. */
 const LISTED = 6
 /** Agents the timeline draws, the latest started. */
@@ -101,30 +100,30 @@ function activityLine(a: SpiderAgent, s: Strings): Piece[] | null {
 
 /** A running agent: identity and time, its figures on the same line when wide or on the next, then its activity. */
 function runningRows(a: SpiderAgent, v: PaneView, s: Strings, inner: number, cols: Columns): Piece[][] {
-  const wide = inner >= WIDE
   const time = p(pad(formatDuration(v.now - a.startedAt), 7))
   const figs = joined(figures(a, v, s), p('  '))
   if (v.compact) return [[...identity(a, v, cols, false), time]]
-  const head = wide ? [...identity(a, v, cols, true), time, ...figs] : [...identity(a, v, cols, false), p(modelOf(a), 'dim')]
-  const rows = [head]
-  if (!wide) {
-    const right = formatDuration(v.now - a.startedAt)
-    const gap = inner - width(head) - cells(right)
-    if (gap > 0) head.push(p(' '.repeat(gap)), p(right))
-    if (figs.length) rows.push([p('   '), ...figs])
-  }
+  const wideHead = [...identity(a, v, cols, true), time, ...figs]
   const activity = activityLine(a, s)
-  return activity ? [...rows, activity] : rows
+  const after = activity ? [activity] : []
+  if (width(wideHead) <= inner) return [wideHead, ...after]
+  const head = [...identity(a, v, cols, false), p(modelOf(a), 'dim')]
+  const right = formatDuration(v.now - a.startedAt)
+  const gap = inner - width(head) - cells(right)
+  if (gap > 0) head.push(p(' '.repeat(gap)), p(right))
+  return [head, ...(figs.length ? [[p('   '), ...figs]] : []), ...after]
 }
 
-/** A finished agent on one line: identity, duration, figures when wide, then when it ended and why it failed. */
+/** A finished agent on one line: identity, duration, why it failed and when it ended, then its figures where they fit. */
 function finishedRow(a: SpiderAgent, v: PaneView, s: Strings, inner: number, cols: Columns): Piece[] {
   if (a.status === 'running') return runningRows(a, v, s, inner, cols)[0]!
-  const wide = inner >= WIDE && !v.compact
   const ended = a.endedAt ?? v.now
+  const duration = p(pad(formatDuration(ended - a.startedAt), 7))
   const tail = [...(a.endReason ? [p(a.endReason, 'error'), p('  ')] : []), p(ago(v.now - ended, s), 'dim')]
-  const figs = wide ? figures(a, v, s) : []
-  return [...identity(a, v, cols, wide), p(pad(formatDuration(ended - a.startedAt), 7)), ...(figs.length ? [...joined(figs, p('  ')), p('  ')] : []), ...tail]
+  const base = [...identity(a, v, cols, true), duration, ...tail]
+  if (v.compact || width(base) > inner) return [...identity(a, v, cols, false), duration, ...tail]
+  const figs = figures(a, v, s)
+  return figs.length ? [...base, p('  '), ...joined(figs, p('  '))] : base
 }
 
 /** The name and model columns, as wide as the longest of the agents drawn. */
@@ -138,17 +137,6 @@ const latestEnded = (agents: SpiderAgent[]) => [...agents].sort((a, b) => (b.end
 function listed(agents: SpiderAgent[], s: Strings, row: (a: SpiderAgent) => Piece[]): Piece[][] {
   const extra = agents.length - LISTED
   return [...agents.slice(0, LISTED).map(row), ...(extra > 0 ? [[p(`  ${fill(s.pane.more, extra)}`, 'dim')]] : [])]
-}
-
-/** The plan's counts: accepted, running or in review, left, and failed when any did. */
-function planCounts(run: SpiderRun, s: Strings): Piece[] {
-  const states = run.tasks.filter(isPlanned).map(task => effectiveState(run, task))
-  const count = (...of: string[]) => states.filter(state => of.includes(state)).length
-  const failed = count('failed')
-  return [
-    p(`${counted(count('completed'), s.counts.acceptedOne, s.counts.accepted)} / `, 'dim'), p(`${count('running', 'reviewing')} ${s.counts.running}`, 'warn'),
-    p(` / ${counted(count('pending', 'blocked'), s.counts.leftOne, s.counts.left)}`, 'dim'), ...(failed ? [p(` / ${counted(failed, s.counts.failedOne, s.counts.failed)}`, 'error')] : []),
-  ]
 }
 
 const TASK_MARK: Record<SpiderTask['state'] | 'blocked', Piece> = {
@@ -213,9 +201,12 @@ function timelineLines(agents: SpiderAgent[], v: PaneView, s: Strings, inner: nu
   })
   const axis = Array.from({ length: span }, () => ' ')
   const mark = (text: string, col: number) => [...text].forEach((ch, i) => { if (col + i < span) axis[col + i] = ch })
+  // Every label only where the four fit apart; else the two ends.
   mark('−15m', 0)
-  mark('−10m', Math.round(span / 3) - 2)
-  mark('−5m', Math.round((2 * span) / 3) - 2)
+  if (span >= 30) {
+    mark('−10m', Math.round(span / 3) - 2)
+    mark('−5m', Math.round((2 * span) / 3) - 2)
+  }
   mark(s.pane.now, span - cells(s.pane.now))
   const legend = [p('━', 'ok'), p(` ${s.counts.running}   `, 'dim'), p('━', 'dim'), p(` ${s.pane.finished}   `, 'dim'), p('━', 'error'), p(` ${s.status.failed}`, 'dim')]
   return [...rows, [p(' '.repeat(label + 1)), p(axis.join(''), 'dim')], [p(' '.repeat(label + 1)), ...legend]]
@@ -259,10 +250,10 @@ export function paneModel(v: PaneView): PaneModel {
   const others = v.run ? v.agents.filter(a => !ours.includes(a)) : []
   const cols = columnsOf(v.agents)
   const sections: Section[] = []
-  if (v.run) sections.push({ key: 'plan', border: 'suggestion', title: s.pane.plan, aside: planCounts(v.run, s), lines: v.compact ? [] : planLines(v.run, v, s, inner) })
+  if (v.run) sections.push({ key: 'plan', border: 'suggestion', title: s.pane.plan, aside: planCounts(v.run, v.lang), lines: v.compact ? [] : planLines(v.run, v, s, inner) })
   const running = ours.filter(a => a.status === 'running')
   const finished = latestEnded(ours.filter(a => a.status !== 'running'))
-  if (running.length || !ours.length) {
+  if (running.length || (!ours.length && !others.length)) {
     sections.push({
       key: 'running', border: 'success', title: `${s.pane.running} · ${running.length}`, aside: [],
       lines: running.length ? running.flatMap(a => runningRows(a, v, s, inner, cols)) : [[p(s.pane.noAgents, 'dim')]],

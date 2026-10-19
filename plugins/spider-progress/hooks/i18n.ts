@@ -6,10 +6,9 @@ export type Lang = 'en' | 'pt-BR'
 
 export type Strings = {
   team: string
-  tasks: string
   agent: string
   agents: string
-  counts: { accepted: string; acceptedOne: string; running: string; left: string; leftOne: string; failed: string; failedOne: string; recent: string; recentOne: string }
+  counts: { accepted: string; acceptedOne: string; running: string; left: string; leftOne: string; failed: string; failedOne: string; cancelled: string; cancelledOne: string; recent: string; recentOne: string }
   phase: Record<SpiderPhase, string>
   status: Record<SpiderAgent['status'], string>
   task: { pending: string; blocked: string; running: string; reviewing: string; completed: string; failed: string; cancelled: string }
@@ -31,10 +30,9 @@ export const fill = (text: string, n: number | string): string => text.replace('
 export const STRINGS: Record<Lang, Strings> = {
   en: {
     team: 'spider',
-    tasks: 'tasks',
     agent: 'agent',
     agents: 'agents',
-    counts: { accepted: 'accepted', acceptedOne: 'accepted', running: 'running', left: 'left', leftOne: 'left', failed: 'failed', failedOne: 'failed', recent: 'recent', recentOne: 'recent' },
+    counts: { accepted: 'accepted', acceptedOne: 'accepted', running: 'running', left: 'left', leftOne: 'left', failed: 'failed', failedOne: 'failed', cancelled: 'cancelled', cancelledOne: 'cancelled', recent: 'recent', recentOne: 'recent' },
     phase: { understand: 'Understand', plan: 'Plan', investigate: 'Investigate', execute: 'Execute', review: 'Review', verify: 'Verify', complete: 'Complete', cancelled: 'Cancelled', failed: 'Failed' },
     status: { running: 'running', done: 'done', failed: 'failed', cancelled: 'cancelled' },
     task: { pending: 'pending', blocked: 'blocked', running: 'running', reviewing: 'reviewing', completed: 'accepted', failed: 'failed', cancelled: 'cancelled' },
@@ -48,10 +46,9 @@ export const STRINGS: Record<Lang, Strings> = {
   },
   'pt-BR': {
     team: 'spider',
-    tasks: 'tarefas',
     agent: 'agente',
     agents: 'agentes',
-    counts: { accepted: 'aceitas', acceptedOne: 'aceita', running: 'rodando', left: 'faltam', leftOne: 'falta', failed: 'falharam', failedOne: 'falhou', recent: 'recentes', recentOne: 'recente' },
+    counts: { accepted: 'aceitas', acceptedOne: 'aceita', running: 'rodando', left: 'faltam', leftOne: 'falta', failed: 'falharam', failedOne: 'falhou', cancelled: 'canceladas', cancelledOne: 'cancelada', recent: 'recentes', recentOne: 'recente' },
     phase: { understand: 'Entender', plan: 'Planejar', investigate: 'Investigar', execute: 'Executar', review: 'Revisão', verify: 'Verificar', complete: 'Concluído', cancelled: 'Cancelado', failed: 'Falhou' },
     status: { running: 'rodando', done: 'concluído', failed: 'falhou', cancelled: 'cancelado' },
     task: { pending: 'pendente', blocked: 'bloqueada', running: 'rodando', reviewing: 'em revisão', completed: 'aceita', failed: 'falhou', cancelled: 'cancelada' },

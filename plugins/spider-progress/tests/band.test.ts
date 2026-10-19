@@ -41,3 +41,8 @@ test('a running agent shows a spinner only with animations on', () => {
   expect(draw({ animations: true, frame: 1 })[0]!.text).toBe('⠙')
   expect(draw({ animations: false, frame: 1 })[0]!.text).toBe('●')
 })
+
+test('tasks the run cancelled stay in the band counts', () => {
+  const run: SpiderRun = { ...RUN, phase: 'cancelled', tasks: [task('T1', 'completed'), { ...task('T2', 'cancelled'), cancelledWithRun: true }, task('T3', 'cancelled')] }
+  expect(text(draw({ run, running: 0 }))).toBe('– spider · 1 accepted / 0 running / 0 left / 1 cancelled │ 0 agents')
+})

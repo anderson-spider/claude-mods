@@ -8,7 +8,7 @@ A band under the session card that follows a [spider-team](../spider-team/README
 
 ## Use
 
-- **Band**: while a spider-team run is open, one line above the prompt: a mark (a spinner while agents run, then ✓, ✗ or – once the run ends), the plan's counts (accepted / running or in review / left, and failed when any; a task a replan drops leaves the count, one a cancelled run leaves open stays in it), the tasks in progress with their owners and the run's running agents with the latest tool one of them called. A narrow band drops the tool, then the tasks. `×N`, the run's agents, toggles the pane; `✕` hides the band until the next run.
+- **Band**: while a spider-team run is open, one line above the prompt: a mark (a spinner while agents run, then ✓, ✗ or – once the run ends), the plan's counts (accepted / running or in review / left, then failed and cancelled with the run when any; a task a replan drops or Main cancels leaves the counts), the tasks in progress with their owners and the run's running agents with the latest tool one of them called. A narrow band drops the tool, then the tasks. `×N`, the run's agents, toggles the pane; `✕` hides the band until the next run.
 - **Pane**: `/spider-agents` toggles it, `/spider-agents open` opens or focuses it, `/spider-agents close` closes it. A header with the run's title and phase and how many agents run and finished, then bordered sections in your theme's colours:
   - **Plan**: the tasks as a tree (a task hangs under the last task it comes after) with owner and state, the agent on it and its steps, what a blocked task waits for, a failed task's last error and an accepted task's evidence.
   - **Running**: each running agent with its task, model and effort (planned → actual when they differ; planned is spider-team's default for the role, since the host does not report the effort a call asked for, so a role effort set in spider-team's options or a rating from subagent-effort shows as a change), time, context, steps, tokens sent and received and estimated cost, then what it is on: its last step note, its latest tools, its call count and its failed calls. A wide pane keeps the figures on the agent's line; a narrow one moves them to the next.
@@ -25,7 +25,7 @@ Options (`/plugin` → spider-progress, or `pluginConfigs` in settings): `langua
 
 ## What it shows and what it does not
 
-Everything comes from the session: the host's per-request token counts, the model and effort each request reported, how each agent's turn ended, and what spider-team and its workers report through this plugin's `progress` and `step` tools. A figure the host never reported is left out (the totals read `N/A`). The pane counts the tools each subagent calls and whether they failed.
+Everything comes from the session: the host's per-request token counts, the model and effort each request reported, how each agent's turn ended, and what spider-team and its workers report through this plugin's `progress` and `step` tools. A figure the host never reported is left out (the totals read `N/A`). The pane counts the tools each subagent calls and whether they failed, except calls another plugin's hook answers before this one sees them.
 
 - **Cost** is an estimate from token counts and a dated list-price table (`hooks/prices.ts`), with cache writes at the 5-minute rate: a lower bound, never a bill. A model the table does not list has no cost.
 - **Context** is a percent only for the main session, whose window the host reports; a subagent shows its context in tokens.

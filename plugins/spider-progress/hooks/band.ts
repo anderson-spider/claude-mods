@@ -20,6 +20,21 @@ function markOf(v: BandView): Piece {
   return p('●', 'dim')
 }
 
+/** The plan's counts: accepted, running or in review, left, then failed and closed with the run when any. */
+export function planCounts(run: SpiderRun, lang: Lang): Piece[] {
+  const s = t(lang)
+  const states = run.tasks.filter(isPlanned).map(task => effectiveState(run, task))
+  const count = (...of: string[]) => states.filter(state => of.includes(state)).length
+  const failed = count('failed')
+  const cancelled = count('cancelled')
+  return [
+    p(`${counted(count('completed'), s.counts.acceptedOne, s.counts.accepted)} / `, 'dim'), p(`${count('running', 'reviewing')} ${s.counts.running}`, 'warn'),
+    p(` / ${counted(count('pending', 'blocked'), s.counts.leftOne, s.counts.left)}`, 'dim'),
+    ...(failed ? [p(` / ${counted(failed, s.counts.failedOne, s.counts.failed)}`, 'error')] : []),
+    ...(cancelled ? [p(` / ${counted(cancelled, s.counts.cancelledOne, s.counts.cancelled)}`, 'dim')] : []),
+  ]
+}
+
 /**
  * One line measured to `columns`, leaving room for the `×N ✕` buttons drawn beside it:
  * `● spider · 2 accepted / 1 running / 3 left │ T3 main  T4 worker │ 2 agents · Grep`. A narrow band drops the latest
@@ -28,12 +43,7 @@ function markOf(v: BandView): Piece {
 export function bandLine(v: BandView): Piece[] {
   const s = t(v.lang)
   const states = v.run.tasks.filter(isPlanned).map(task => ({ task, state: effectiveState(v.run, task) }))
-  const count = (...of: string[]) => states.filter(({ state }) => of.includes(state)).length
-  const failed = count('failed')
-  const counts = [
-    p(`${counted(count('completed'), s.counts.acceptedOne, s.counts.accepted)} / `, 'dim'), p(`${count('running', 'reviewing')} ${s.counts.running}`, 'warn'),
-    p(` / ${counted(count('pending', 'blocked'), s.counts.leftOne, s.counts.left)}`, 'dim'), ...(failed ? [p(` / ${counted(failed, s.counts.failedOne, s.counts.failed)}`, 'error')] : []),
-  ]
+  const counts = planCounts(v.run, v.lang)
   const active = states.filter(({ state }) => state === 'running' || state === 'reviewing').map(({ task }) => `${task.id} ${task.owner}`)
   const agents = [p(`${v.running} ${v.running === 1 ? s.agent : s.agents}`), ...(v.lastTool && v.running ? [p(` · ${v.lastTool}`, 'dim')] : [])]
   const head = [markOf(v), p(' '), p(s.team, 'accent'), p(' · ', 'dim')]
