@@ -39,7 +39,7 @@ test('probabilities normalize omitted entries and invalid distributions fail clo
 })
 
 const ask = (h: ReturnType<typeof ports>, key: string | null = 'test-key') =>
-  assessEffort(h.io, { task: 'Task', home: h.io.home, root: h.io.root, key: key ?? undefined })
+  assessEffort(h.io, { task: 'Task', home: h.io.home, root: h.io.root, keys: { env: key ?? undefined } })
 
 test('each level of Jev answer selects its effort, with its confidence, latency and reported tokens', async () => {
   for (const [level, effort] of EFFORTS.entries()) {
@@ -90,7 +90,7 @@ test('every assessment failure picks no effort, names the reason, and a logging 
 test('assessment masks the whole task before clipping and sends only redacted task state', async () => {
   const h = ports(), key = 'private-test-key'
   const task = 'Review /home/u/private/project/file.ts ' + key.repeat(700) + ' tail'
-  expect((await assessEffort(h.io, { task, home: h.io.home, root: h.io.root, key })).effort).toBe('low')
+  expect((await assessEffort(h.io, { task, home: h.io.home, root: h.io.root, keys: { option: key } })).effort).toBe('low')
   const request = h.requests[0]!, state = JSON.parse(request.body).state as string
   expect(state.length).toBeLessThanOrEqual(4000); expect(state).not.toContain(key); expect(state).not.toContain('/home/u/private')
   expect(request.headers.Authorization).toBe(`Bearer ${key}`)

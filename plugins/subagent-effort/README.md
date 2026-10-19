@@ -8,7 +8,7 @@ Sets the reasoning effort of every native subagent call from Jev's rating of its
 
 ## Setup
 
-Set `JEV_API_KEY` where Claude Code inherits it (your shell profile for the terminal, `launchctl setenv` for the macOS desktop app) and restart Claude Code. A key declared in a repository's `.claude/settings.json` or `.claude/settings.local.json` is refused, so a repository cannot choose the account that receives your tasks. Without a usable key, subagent calls go as they came and a toast says why, once per reason per load.
+Set the `apiKey` plugin option (a sensitive field, kept in secure storage) from the plugin's configuration in `/plugin`, in your user options. When the option is not set, the plugin uses `JEV_API_KEY` from the environment: set it where Claude Code inherits it (your shell profile for the terminal, `launchctl setenv` for the macOS desktop app) and restart Claude Code. A malformed option is reported, not replaced by the environment. A key that a repository's `.claude/settings.json` or `.claude/settings.local.json` declares for the source in use (`pluginConfigs` with this plugin's `apiKey`, or `env` with `JEV_API_KEY`) is refused, so a repository cannot choose the account that receives your tasks. Without a usable key, subagent calls go as they came and a toast says why, once per reason per load.
 
 ## How it routes
 
