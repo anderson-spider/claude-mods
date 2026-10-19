@@ -4,7 +4,6 @@
 // renderer draws each section in a box of its border colour.
 import type { SpiderAgent, SpiderMain, SpiderRun, SpiderTask } from '../types'
 import { agentsOfRun } from './agents'
-import { planCounts } from './band'
 import type { SpiderConfig } from './config'
 import type { Lang, Strings } from './i18n'
 import { counted, fill, t } from './i18n'
@@ -136,6 +135,21 @@ const latestEnded = (agents: SpiderAgent[]) => [...agents].sort((a, b) => (b.end
 function listed(agents: SpiderAgent[], s: Strings, row: (a: SpiderAgent) => Piece[]): Piece[][] {
   const extra = agents.length - LISTED
   return [...agents.slice(0, LISTED).map(row), ...(extra > 0 ? [[p(`  ${fill(s.pane.more, extra)}`, 'dim')]] : [])]
+}
+
+/** The plan's counts: accepted, running or in review, left, then failed and closed with the run when any. */
+export function planCounts(run: SpiderRun, lang: Lang): Piece[] {
+  const s = t(lang)
+  const states = run.tasks.filter(isPlanned).map(task => effectiveState(run, task))
+  const count = (...of: string[]) => states.filter(state => of.includes(state)).length
+  const failed = count('failed')
+  const cancelled = count('cancelled')
+  return [
+    p(`${counted(count('completed'), s.counts.acceptedOne, s.counts.accepted)} / `, 'dim'), p(`${count('running', 'reviewing')} ${s.counts.running}`, 'warn'),
+    p(` / ${counted(count('pending', 'blocked'), s.counts.leftOne, s.counts.left)}`, 'dim'),
+    ...(failed ? [p(` / ${counted(failed, s.counts.failedOne, s.counts.failed)}`, 'error')] : []),
+    ...(cancelled ? [p(` / ${counted(cancelled, s.counts.cancelledOne, s.counts.cancelled)}`, 'dim')] : []),
+  ]
 }
 
 const TASK_MARK: Record<SpiderTask['state'] | 'blocked', Piece> = {

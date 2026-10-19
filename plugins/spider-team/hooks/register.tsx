@@ -1,8 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Hook, McpToolInputs, Register, RenderElement, Timer } from 'claude-code'
 import type { SpiderAgent, SpiderMain, SpiderPanel, SpiderPhase, SpiderRun } from '../types'
-import { agentEnded, agentStepped, agentsOfRun, answeredModel, resumed, spawned, stepReported, toolName, toolUsed } from './agents'
-import { bandLine } from './band'
+import { agentEnded, agentStepped, answeredModel, resumed, spawned, stepReported, toolName, toolUsed } from './agents'
 import { configOf } from './config'
 import type { SpiderConfig } from './config'
 import { langOf, t } from './i18n'
@@ -66,7 +65,7 @@ type Held = { config: SpiderConfig; invalid: string[]; lang: Lang; ticker?: Time
 /** Engine forks end without a spawn too, so only the latest few endings wait for one. */
 const EARLY_MAX = 20
 
-/** Theme keys only, so the band and the pane follow the person's Claude Code theme. */
+/** Theme keys only, so the pane follows the person's Claude Code theme. */
 const PAINT: Record<Style, { color?: string; weight?: 'bold'; dimColor?: boolean }> = {
   plain: {},
   title: { weight: 'bold' },
@@ -318,33 +317,6 @@ export const register: Register = (on, options) => {
     if (arg === 'open') return { text: await openPane($, held, true) }
     if (arg === 'close') return { text: await closePane($, held) }
     return { text: t(held.lang).command.usage }
-  })
-
-  // Reads prepared atoms only; a survey keeps the band, a failure draws nothing of ours, and what draws beneath stays.
-  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    const below = await next(e)
-    if (e.props.hasSurvey) return below
-    try {
-      const [run, agents, panel, now] = await Promise.all([read($, runAtom), read($, agentsAtom), read($, panelAtom), read($, nowAtom)])
-      if (!run || panel.dismissedRunId === run.runId) return below
-      const { Box, Text, Button } = $.ui.resolve(e)
-      const ours = agentsOfRun(run, agents)
-      const active = ours.filter(agent => agent.status === 'running')
-      const lastTool = [...active].sort((a, b) => b.lastUpdate - a.lastUpdate).find(agent => agent.activity)?.activity?.tools.at(-1)
-      const line = bandLine({ run, running: active.length, agents: ours.length, ...(lastTool ? { lastTool } : {}), columns: e.props.bodyColumns, lang: held.lang, frame: Math.floor(now / 1000), animations: held.config.animations })
-      const dismiss = () => void observe($, async () => { await update($, panelAtom, current => ({ ...current, dismissedRunId: run.runId })) })
-      const drawn = <Box flexDirection="row" width={e.props.bodyColumns}>
-        <Text key="band" mono wrap="truncate-end">{line.map((piece, i) => <Text key={`band-${i}`} {...PAINT[piece.style]}>{piece.text}</Text>)}</Text>
-        <Box flexGrow={1} />
-        <Button key="spider-pane" plain label={`×${ours.length}`} onPress={() => void observe($, async () => { await togglePane($, held) })} />
-        <Text> </Text>
-        <Button key="spider-dismiss" plain label="✕" onPress={dismiss} />
-      </Box>
-      return <Box flexDirection="column">{drawn}{below}</Box>
-    } catch (error) {
-      debug($, 'spider-team: band render failed', error)
-      return below
-    }
   })
 
   // A failure draws one dim line instead of failing the pane.

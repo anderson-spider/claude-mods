@@ -1,4 +1,4 @@
-// What the band and the pane draw: runs of text with a style the renderer maps to theme colours, and the helpers that
+// What the pane draws: runs of text with a style the renderer maps to theme colours, and the helpers that
 // fit them to a width. Pure.
 
 export type Style = 'plain' | 'title' | 'dim' | 'accent' | 'ok' | 'warn' | 'error' | 'bar' | 'barEmpty'
