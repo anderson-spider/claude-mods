@@ -70,7 +70,6 @@ const PAINT: Record<Style, { color?: string; weight?: 'bold'; dimColor?: boolean
   plain: {},
   title: { weight: 'bold' },
   dim: { dimColor: true },
-  accent: { color: 'claude' },
   ok: { color: 'success' },
   warn: { color: 'warning' },
   error: { color: 'error', weight: 'bold' },
